@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>用户管理</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+      body { font-family: 'IBM Plex Sans', ui-sans-serif, system-ui; }
+    </style>
+  </head>
+  <body class="min-h-screen bg-slate-50 text-slate-900">
+    <main class="max-w-6xl mx-auto px-6 py-10">
+      <header class="flex items-center justify-between">
+        <div>
+          <h1 class="text-2xl font-semibold">用户管理</h1>
+          <p class="text-sm text-slate-500">共 <%= users.length %> 位用户</p>
+        </div>
+        <a href="/admin/dashboard" class="rounded-xl border border-slate-200 px-4 py-2 text-sm">返回</a>
+      </header>
+
+      <div class="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-100 text-left text-xs uppercase tracking-widest text-slate-500">
+            <tr>
+              <th class="px-4 py-3">邮箱</th>
+              <th class="px-4 py-3">Telegram</th>
+              <th class="px-4 py-3">容器状态</th>
+              <th class="px-4 py-3">最近活跃</th>
+              <th class="px-4 py-3"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <% users.forEach((user) => { %>
+              <tr class="border-t border-slate-100">
+                <td class="px-4 py-3"><%= user.google_email %></td>
+                <td class="px-4 py-3">@<%= user.telegram_username || '未知' %></td>
+                <td class="px-4 py-3"><%= user.container_status %></td>
+                <td class="px-4 py-3"><%= user.last_active_at %></td>
+                <td class="px-4 py-3 text-right">
+                  <a href="/admin/users/<%= user.id %>" class="text-slate-900 underline">详情</a>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
+    </main>
+  </body>
+</html>
