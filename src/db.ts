@@ -6,6 +6,8 @@ import { config } from './config.js';
 import type {
   AdminSessionView,
   AdminUserRecord,
+  AuthAllowlistKind,
+  AuthAllowlistRecord,
   CreateUserInput,
   MessageLogRecord,
   OauthSessionRecord,
@@ -72,6 +74,14 @@ db.exec(`
     session_token TEXT UNIQUE NOT NULL,
     expires_at TIMESTAMP NOT NULL,
     FOREIGN KEY (admin_id) REFERENCES admin_users(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS auth_allowlist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL CHECK (kind IN ('domain', 'email')),
+    value TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (kind, value)
   );
 `);
 
@@ -269,6 +279,35 @@ export const deleteAdminSession = (sessionToken: string): void => {
 
 export const purgeExpiredAdminSessions = (): void => {
   db.prepare<[string]>('DELETE FROM admin_sessions WHERE expires_at <= ?').run(nowIso());
+};
+
+export const listAuthAllowlist = (kind?: AuthAllowlistKind): AuthAllowlistRecord[] => {
+  if (kind) {
+    return db
+      .prepare<[AuthAllowlistKind], AuthAllowlistRecord>(
+        'SELECT * FROM auth_allowlist WHERE kind = ? ORDER BY created_at ASC, id ASC'
+      )
+      .all(kind);
+  }
+
+  return db
+    .prepare<[], AuthAllowlistRecord>('SELECT * FROM auth_allowlist ORDER BY created_at ASC, id ASC')
+    .all();
+};
+
+export const createAuthAllowlistEntry = (kind: AuthAllowlistKind, value: string): AuthAllowlistRecord | undefined => {
+  db.prepare<[AuthAllowlistKind, string]>(`
+    INSERT OR IGNORE INTO auth_allowlist (kind, value)
+    VALUES (?, ?)
+  `).run(kind, value);
+
+  return db
+    .prepare<[AuthAllowlistKind, string], AuthAllowlistRecord>('SELECT * FROM auth_allowlist WHERE kind = ? AND value = ?')
+    .get(kind, value);
+};
+
+export const deleteAuthAllowlistEntryById = (id: number): void => {
+  db.prepare<[number]>('DELETE FROM auth_allowlist WHERE id = ?').run(id);
 };
 
 export const createGatewayToken = (): string => randomToken(24);

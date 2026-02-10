@@ -5,8 +5,8 @@ Telegram-based AI assistant backend for pinai.io team members.
 Current runtime model:
 - One shared Telegram bot (name is user-defined, e.g. `@YourTeamAssistantBot`)
 - One OpenClaw Docker container per Telegram user
-- Backend talks to each container via OpenClaw HTTP API (RESTful)
-- No backend WebSocket bridge for proactive push events
+- Backend talks to each container via OpenClaw Gateway WS RPC (`chat.send`, `chat`, `agent` events)
+- Telegram supports text, image input, voice input (transcription), and media/file output
 
 ## Quick Start
 
@@ -99,14 +99,20 @@ Notes:
 - `GET /auth/google/callback` - OAuth callback
 - `GET /admin` - Admin login
 - `GET /admin/dashboard` - Admin dashboard
+- `GET /admin/auth` - Admin auth allowlist settings
 - `GET /health` - Health check
 
 ## Environment Notes
 
 - Telegram bot username is not fixed; use any bot created in BotFather and set its token in `TELEGRAM_BOT_TOKEN`.
 - `OPENCLAW_API_KEY` is required (container OpenClaw gateway token/auth).
-- `OPENCLAW_HTTP_PATH` defaults to `/v1/chat/completions` (OpenAI-compatible mode).
-- `OPENCLAW_HTTP_MODE` defaults to `openai`.
 - `BRAVE_API_KEY` is optional; if set, it is injected into user containers.
+- `ELEVENLABS_API_KEY` (or `XI_API_KEY`) enables:
+  - voice message transcription (Telegram -> text)
+  - TTS voice replies via OpenClaw `tts.convert`
+- `OPENAI_API_KEY` is optional fallback for voice transcription and OpenClaw TTS fallback provider.
+- `AUTH_ALLOWED_DOMAINS` controls default allowed email domains (comma-separated), default is `pinai.io`.
+- `AUTH_ALLOWED_EMAILS` controls default allowed full email addresses (comma-separated).
+- Admin can add/remove extra allowed domains and emails in `/admin/auth` without redeploy.
 - Container ports are allocated from `CONTAINER_PORT_START` to `CONTAINER_PORT_END`.
 - Docker socket access is required for container lifecycle management.

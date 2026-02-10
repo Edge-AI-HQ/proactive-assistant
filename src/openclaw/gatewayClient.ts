@@ -18,7 +18,8 @@ interface GatewayResponse {
 export interface GatewayEvent {
   type: 'event';
   event: string;
-  payload?: JsonObject;
+  payload?: unknown;
+  seq?: number;
 }
 
 export interface GatewayCloseInfo {
@@ -36,19 +37,21 @@ export interface GatewayClientOptions {
   clientVersion?: string;
   platform?: string;
   mode?: string;
-  caps?: unknown[];
-  commands?: unknown[];
+  caps?: string[];
+  commands?: string[];
   permissions?: JsonObject;
   userAgent?: string;
   locale?: string;
   onHello?: (hello: JsonObject) => void;
   onClose?: (info: GatewayCloseInfo) => void;
   onEvent?: (event: GatewayEvent) => void;
+  onGap?: (info: { expected: number; received: number }) => void;
 }
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
+  expectFinal: boolean;
 }
 
 interface HelloWaiter {
@@ -77,30 +80,40 @@ const toGatewayEvent = (value: unknown): GatewayEvent | null => {
   if (!isRecord(value)) return null;
   if (value.type !== 'event') return null;
   if (typeof value.event !== 'string') return null;
-  const payload = isRecord(value.payload) ? value.payload : undefined;
-  if (payload) {
-    return { type: 'event', event: value.event, payload };
+
+  const event: GatewayEvent = {
+    type: 'event',
+    event: value.event
+  };
+
+  if (Object.hasOwn(value, 'payload')) {
+    event.payload = value.payload;
   }
-  return { type: 'event', event: value.event };
+  if (typeof value.seq === 'number') {
+    event.seq = value.seq;
+  }
+
+  return event;
 };
 
 const toGatewayResponse = (value: unknown): GatewayResponse | null => {
   if (!isRecord(value)) return null;
   if (value.type !== 'res') return null;
   if (typeof value.id !== 'string' || typeof value.ok !== 'boolean') return null;
-  let error: GatewayErrorPayload | undefined;
-  if (isRecord(value.error) && typeof value.error.message === 'string') {
-    error = { message: value.error.message };
-  }
+
   const response: GatewayResponse = {
     type: 'res',
     id: value.id,
-    ok: value.ok,
-    payload: value.payload
+    ok: value.ok
   };
-  if (error) {
-    response.error = error;
+
+  if (Object.hasOwn(value, 'payload')) {
+    response.payload = value.payload;
   }
+  if (isRecord(value.error) && typeof value.error.message === 'string') {
+    response.error = { message: value.error.message };
+  }
+
   return response;
 };
 
@@ -113,7 +126,7 @@ export class GatewayClient {
 
   private closed = false;
 
-  private backoffMs = 800;
+  private backoffMs = 1000;
 
   private connectSent = false;
 
@@ -126,6 +139,8 @@ export class GatewayClient {
   private readonly helloWaiters = new Set<HelloWaiter>();
 
   private readonly instanceId = crypto.randomUUID();
+
+  private lastSeq: number | null = null;
 
   constructor(opts: GatewayClientOptions) {
     this.opts = opts;
@@ -150,7 +165,11 @@ export class GatewayClient {
 
   private connect(): void {
     if (this.closed) return;
-    this.ws = new WebSocket(this.opts.url);
+
+    this.ws = new WebSocket(this.opts.url, {
+      maxPayload: 25 * 1024 * 1024
+    });
+
     this.ws.on('open', () => this.queueConnect());
     this.ws.on('message', (data: RawData) => this.handleMessage(String(data ?? '')));
     this.ws.on('close', (code: number, reasonBuffer: Buffer) => {
@@ -167,8 +186,8 @@ export class GatewayClient {
   private scheduleReconnect(): void {
     if (this.closed) return;
     const delay = this.backoffMs;
-    this.backoffMs = Math.min(this.backoffMs * 1.7, 15000);
-    setTimeout(() => this.connect(), delay);
+    this.backoffMs = Math.min(this.backoffMs * 2, 30000);
+    setTimeout(() => this.connect(), delay).unref();
   }
 
   private flushPending(error: Error): void {
@@ -250,7 +269,7 @@ export class GatewayClient {
 
     try {
       const hello = await this.request<JsonObject>('connect', payload);
-      this.backoffMs = 800;
+      this.backoffMs = 1000;
       this.hello = hello ?? {};
       for (const waiter of this.helloWaiters) {
         clearTimeout(waiter.timer);
@@ -271,13 +290,20 @@ export class GatewayClient {
     const event = toGatewayEvent(data);
     if (event) {
       if (event.event === 'connect.challenge') {
-        const nonce = event.payload?.nonce;
-        if (typeof nonce === 'string') {
-          this.connectNonce = nonce;
+        if (isRecord(event.payload) && typeof event.payload.nonce === 'string') {
+          this.connectNonce = event.payload.nonce;
         }
         this.sendConnect().catch(() => {});
         return;
       }
+
+      if (typeof event.seq === 'number') {
+        if (this.lastSeq !== null && event.seq > this.lastSeq + 1) {
+          this.opts.onGap?.({ expected: this.lastSeq + 1, received: event.seq });
+        }
+        this.lastSeq = event.seq;
+      }
+
       this.opts.onEvent?.(event);
       return;
     }
@@ -287,6 +313,15 @@ export class GatewayClient {
 
     const pending = this.pending.get(response.id);
     if (!pending) return;
+
+    const status =
+      isRecord(response.payload) && typeof response.payload.status === 'string'
+        ? response.payload.status
+        : null;
+    if (pending.expectFinal && status === 'accepted') {
+      return;
+    }
+
     this.pending.delete(response.id);
 
     if (response.ok) {
@@ -297,18 +332,27 @@ export class GatewayClient {
     pending.reject(new Error(response.error?.message ?? 'request failed'));
   }
 
-  request<T = unknown>(method: string, params: JsonObject): Promise<T> {
+  request<T = unknown>(
+    method: string,
+    params: JsonObject,
+    opts?: { expectFinal?: boolean }
+  ): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error('gateway not connected'));
     }
+
     const id = crypto.randomUUID();
     const payload = { type: 'req', id, method, params };
+    const expectFinal = opts?.expectFinal === true;
+
     const promise = new Promise<T>((resolve, reject) => {
       this.pending.set(id, {
         resolve: (value: unknown) => resolve(value as T),
-        reject: (reason: Error) => reject(reason)
+        reject: (reason: Error) => reject(reason),
+        expectFinal
       });
     });
+
     this.ws.send(JSON.stringify(payload));
     return promise;
   }

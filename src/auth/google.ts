@@ -3,6 +3,7 @@ import { Strategy as GoogleStrategy, type Profile } from 'passport-google-oauth2
 import type { Application, NextFunction, Request, Response } from 'express';
 import type { Bot, Context } from 'grammy';
 import { config } from '../config.js';
+import { isEmailAllowedForAuth, normalizeEmail } from './allowlist.js';
 import {
   consumeOauthSession,
   createGatewayToken,
@@ -21,7 +22,7 @@ interface AuthUserSuccess {
 }
 
 interface AuthUserError {
-  error: 'forbidden_domain' | 'missing_email';
+  error: 'forbidden_email' | 'missing_email';
   email?: string;
 }
 
@@ -31,13 +32,11 @@ const isAuthUser = (value: unknown): value is AuthUser => {
   if (!value || typeof value !== 'object') return false;
   if ('error' in value) {
     const errorValue = (value as { error?: unknown }).error;
-    return errorValue === 'forbidden_domain' || errorValue === 'missing_email';
+    return errorValue === 'forbidden_email' || errorValue === 'missing_email';
   }
   const maybe = value as { email?: unknown; googleId?: unknown };
   return typeof maybe.email === 'string' && typeof maybe.googleId === 'string';
 };
-
-const isAllowedDomain = (email: string): boolean => email.toLowerCase().endsWith('@pinai.io');
 
 const renderSimplePage = (res: Response, title: string, message: string): void => {
   res.status(200).send(`<!doctype html><html><head><meta charset="utf-8"><title>${title}</title></head><body style="font-family:ui-sans-serif,system-ui;max-width:680px;margin:40px auto;padding:16px;">
@@ -75,12 +74,13 @@ const ensurePassport = (): void => {
             return;
           }
 
-          if (!isAllowedDomain(email)) {
-            done(null, { error: 'forbidden_domain', email });
+          const normalizedEmail = normalizeEmail(email);
+          if (!isEmailAllowedForAuth(normalizedEmail)) {
+            done(null, { error: 'forbidden_email', email: normalizedEmail });
             return;
           }
 
-          done(null, { email, googleId: profile.id });
+          done(null, { email: normalizedEmail, googleId: profile.id });
         } catch (error: unknown) {
           done(error);
         }
@@ -130,8 +130,8 @@ export const registerAuthRoutes = (app: Application, bot?: Bot<Context>): void =
       }
 
       if ('error' in rawUser) {
-        if (rawUser.error === 'forbidden_domain') {
-          renderSimplePage(res, '登录失败', '仅支持 @pinai.io 邮箱登录。');
+        if (rawUser.error === 'forbidden_email') {
+          renderSimplePage(res, '登录失败', '当前邮箱不在允许列表中，请联系管理员添加后重试。');
           return;
         }
 
@@ -158,7 +158,8 @@ export const registerAuthRoutes = (app: Application, bot?: Bot<Context>): void =
         return;
       }
 
-      const existingByGoogle = getUserByGoogleId(rawUser.googleId) || getUserByGoogleEmail(rawUser.email);
+      const normalizedEmail = normalizeEmail(rawUser.email);
+      const existingByGoogle = getUserByGoogleId(rawUser.googleId) || getUserByGoogleEmail(normalizedEmail);
       if (existingByGoogle && existingByGoogle.telegram_user_id !== session.telegram_user_id) {
         renderSimplePage(res, '登录失败', '该 Google 账号已绑定其他 Telegram 用户。');
         return;
@@ -172,7 +173,7 @@ export const registerAuthRoutes = (app: Application, bot?: Bot<Context>): void =
         record = createUser({
           telegram_user_id: session.telegram_user_id,
           telegram_username: session.telegram_username,
-          google_email: rawUser.email,
+          google_email: normalizedEmail,
           google_id: rawUser.googleId,
           container_id: containerNameForUser(session.telegram_user_id),
           container_port: containerPort,
@@ -182,7 +183,7 @@ export const registerAuthRoutes = (app: Application, bot?: Bot<Context>): void =
       } else {
         record = updateUser(session.telegram_user_id, {
           telegram_username: session.telegram_username || record.telegram_username,
-          google_email: rawUser.email,
+          google_email: normalizedEmail,
           google_id: rawUser.googleId
         });
       }

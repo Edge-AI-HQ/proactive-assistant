@@ -12,6 +12,12 @@ const toBool = (value: string | undefined, fallback = false): boolean => {
   return ['1', 'true', 'yes', 'on'].includes(value.toLowerCase());
 };
 
+const toCsvList = (value: string | undefined): string[] =>
+  (value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+
 const ensureLeadingSlash = (value: string): string => (value.startsWith('/') ? value : `/${value}`);
 
 const port = toInt(process.env.PORT, 3000);
@@ -33,16 +39,25 @@ export const config: Config = {
     clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
     callbackUrl: process.env.GOOGLE_CALLBACK_URL || `${publicBaseUrl}/auth/google/callback`
   },
+  auth: {
+    allowedDomains: toCsvList(process.env.AUTH_ALLOWED_DOMAINS || 'pinai.io'),
+    allowedEmails: toCsvList(process.env.AUTH_ALLOWED_EMAILS || '')
+  },
   openclaw: {
     image: process.env.OPENCLAW_IMAGE || 'pinai-openclaw:latest',
     gatewayPort: toInt(process.env.OPENCLAW_GATEWAY_PORT, 18789),
     httpPath: ensureLeadingSlash(process.env.OPENCLAW_HTTP_PATH || '/v1/chat/completions'),
-    httpMode: process.env.OPENCLAW_HTTP_MODE || 'openai',
     wsPath: wsPathRaw === '/' ? '/' : ensureLeadingSlash(wsPathRaw || '/'),
     apiKey: process.env.OPENCLAW_API_KEY || '',
     braveApiKey: process.env.BRAVE_API_KEY || ''
   },
   anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
+  openaiApiKey: process.env.OPENAI_API_KEY || '',
+  elevenLabs: {
+    apiKey: process.env.ELEVENLABS_API_KEY || process.env.XI_API_KEY || '',
+    baseUrl: process.env.ELEVENLABS_BASE_URL || 'https://api.elevenlabs.io',
+    sttModel: process.env.ELEVENLABS_STT_MODEL || 'scribe_v1'
+  },
   admin: {
     username: process.env.ADMIN_USERNAME || 'admin',
     passwordHash: process.env.ADMIN_PASSWORD_HASH || '',

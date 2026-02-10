@@ -1,5 +1,3 @@
-export type OpenClawHttpMode = 'openai' | string;
-
 export interface UserRecord {
   id: number;
   telegram_user_id: number;
@@ -50,6 +48,15 @@ export interface AdminSessionView extends AdminSessionRecord {
   admin_username: string;
 }
 
+export type AuthAllowlistKind = 'domain' | 'email';
+
+export interface AuthAllowlistRecord {
+  id: number;
+  kind: AuthAllowlistKind;
+  value: string;
+  created_at: string;
+}
+
 export interface CreateUserInput {
   telegram_user_id: number;
   telegram_username?: string | null;
@@ -89,16 +96,25 @@ export interface Config {
     clientSecret: string;
     callbackUrl: string;
   };
+  auth: {
+    allowedDomains: string[];
+    allowedEmails: string[];
+  };
   openclaw: {
     image: string;
     gatewayPort: number;
     httpPath: string;
-    httpMode: OpenClawHttpMode;
     wsPath: string;
     apiKey: string;
     braveApiKey: string;
   };
   anthropicApiKey: string;
+  openaiApiKey: string;
+  elevenLabs: {
+    apiKey: string;
+    baseUrl: string;
+    sttModel: string;
+  };
   admin: {
     username: string;
     passwordHash: string;

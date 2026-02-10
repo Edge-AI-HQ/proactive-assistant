@@ -19,6 +19,13 @@ interface DockerStatusCodeError {
   statusCode?: number;
 }
 
+interface UserContainerDirs {
+  configDir: string;
+  dataDir: string;
+  tmpDir: string;
+  workspaceDir: string;
+}
+
 const isRecord = (value: unknown): value is UnknownRecord => {
   return typeof value === 'object' && value !== null;
 };
@@ -57,22 +64,20 @@ const ensureOpenclawConfig = (configDir: string): string => {
           chatCompletions: { enabled: true }
         }
       }
+    },
+    messages: {
+      tts: {
+        auto: 'off',
+        provider: 'elevenlabs'
+      }
     }
   };
 
   if (fs.existsSync(configPath)) {
     try {
       const existing = JSON.parse(fs.readFileSync(configPath, 'utf8')) as unknown;
-      if (isRecord(existing)) {
-        const gateway = isRecord(existing.gateway) ? existing.gateway : null;
-        const auth = gateway && isRecord(gateway.auth) ? gateway.auth : null;
-        const controlUi = gateway && isRecord(gateway.controlUi) ? gateway.controlUi : null;
-        const matches =
-          auth?.token === payload.gateway.auth.token &&
-          gateway?.port === payload.gateway.port &&
-          gateway?.bind === payload.gateway.bind &&
-          controlUi?.allowInsecureAuth === true;
-        if (matches) return configPath;
+      if (isRecord(existing) && JSON.stringify(existing) === JSON.stringify(payload)) {
+        return configPath;
       }
     } catch {
       // fall through to rewrite config
@@ -143,6 +148,44 @@ export const sanitizeAllCronStores = (): void => {
 
 export const containerNameForUser = (telegramUserId: number): string => `openclaw-user-${telegramUserId}`;
 
+export const getUserContainerDirs = (telegramUserId: number): UserContainerDirs => {
+  const baseDir = path.join(process.cwd(), 'data', `user-${telegramUserId}`);
+  return {
+    configDir: path.join(baseDir, 'config'),
+    dataDir: path.join(baseDir, 'data'),
+    tmpDir: path.join(baseDir, 'tmp'),
+    workspaceDir: path.join(baseDir, 'workspace')
+  };
+};
+
+export const sanitizeUserCronStore = (telegramUserId: number): void => {
+  const { dataDir } = getUserContainerDirs(telegramUserId);
+  if (!fs.existsSync(dataDir)) return;
+  sanitizeCronStore(dataDir);
+};
+
+export const resolveContainerPathForUser = (telegramUserId: number, containerPath: string): string | null => {
+  if (!path.isAbsolute(containerPath)) return null;
+  const dirs = getUserContainerDirs(telegramUserId);
+
+  if (containerPath === '/app/data' || containerPath.startsWith('/app/data/')) {
+    const relative = path.relative('/app/data', containerPath);
+    return path.join(dirs.dataDir, relative);
+  }
+
+  if (containerPath === '/tmp' || containerPath.startsWith('/tmp/')) {
+    const relative = path.relative('/tmp', containerPath);
+    return path.join(dirs.tmpDir, relative);
+  }
+
+  if (containerPath === '/root/.openclaw/workspace' || containerPath.startsWith('/root/.openclaw/workspace/')) {
+    const relative = path.relative('/root/.openclaw/workspace', containerPath);
+    return path.join(dirs.workspaceDir, relative);
+  }
+
+  return null;
+};
+
 export const allocatePort = (): number => {
   const used = new Set(listUsedPorts());
   for (let port = config.container.portStart; port <= config.container.portEnd; port += 1) {
@@ -197,20 +240,69 @@ const resolveContainer = async (
   }
 };
 
+const findBindSource = (binds: string[] | undefined, target: string): string | null => {
+  if (!Array.isArray(binds)) return null;
+  for (const bind of binds) {
+    const parts = bind.split(':');
+    if (parts.length < 2) continue;
+    const source = parts[0];
+    const containerTarget = parts[1];
+    if (containerTarget === target && source) {
+      return source;
+    }
+  }
+  return null;
+};
+
 export const ensureUserContainer = async (
   user: Pick<UserRecord, 'telegram_user_id' | 'container_id' | 'container_port'>
 ): Promise<{ container: Dockerode.Container; ready: boolean }> => {
   const containerName = containerNameForUser(user.telegram_user_id);
   let container = await resolveContainer(user.container_id, containerName);
 
-  const dataDir = path.join(process.cwd(), 'data');
-  const userConfigDir = path.join(dataDir, `user-${user.telegram_user_id}`, 'config');
-  const userDataDir = path.join(dataDir, `user-${user.telegram_user_id}`, 'data');
+  const userDirs = getUserContainerDirs(user.telegram_user_id);
+  const userConfigDir = userDirs.configDir;
+  const userDataDir = userDirs.dataDir;
+  const userTmpDir = userDirs.tmpDir;
+  const userWorkspaceDir = userDirs.workspaceDir;
 
   ensureDir(userConfigDir);
   ensureDir(userDataDir);
+  ensureDir(userTmpDir);
+  ensureDir(userWorkspaceDir);
   ensureOpenclawConfig(userConfigDir);
   sanitizeCronStore(userDataDir);
+
+  if (container) {
+    const inspect = await container.inspect();
+    const binds = inspect?.HostConfig?.Binds;
+    const expectedBinds: Array<{ target: string; source: string }> = [
+      { target: '/app/config', source: userConfigDir },
+      { target: '/app/data', source: userDataDir },
+      { target: '/tmp', source: userTmpDir },
+      { target: '/root/.openclaw/workspace', source: userWorkspaceDir }
+    ];
+    const needsBindMigration = expectedBinds.some(({ target, source }) => {
+      const mountedSource = findBindSource(binds, target);
+      return mountedSource !== source;
+    });
+
+    if (needsBindMigration) {
+      try {
+        if (inspect.State?.Status === 'running') {
+          await container.stop();
+        }
+      } catch {
+        // continue with forced remove
+      }
+      await container.remove({ force: true });
+      container = null;
+      await updateUser(user.telegram_user_id, {
+        container_status: 'creating',
+        container_id: ''
+      });
+    }
+  }
 
   if (!container) {
     container = await docker.createContainer({
@@ -218,6 +310,10 @@ export const ensureUserContainer = async (
       Image: config.openclaw.image,
       Env: [
         `ANTHROPIC_API_KEY=${config.anthropicApiKey}`,
+        ...(config.openaiApiKey ? [`OPENAI_API_KEY=${config.openaiApiKey}`] : []),
+        ...(config.elevenLabs.apiKey ? [`ELEVENLABS_API_KEY=${config.elevenLabs.apiKey}`] : []),
+        ...(config.elevenLabs.apiKey ? [`XI_API_KEY=${config.elevenLabs.apiKey}`] : []),
+        ...(config.elevenLabs.baseUrl ? [`ELEVENLABS_BASE_URL=${config.elevenLabs.baseUrl}`] : []),
         `OPENCLAW_API_KEY=${config.openclaw.apiKey}`,
         ...(config.openclaw.braveApiKey ? [`BRAVE_API_KEY=${config.openclaw.braveApiKey}`] : []),
         `OPENCLAW_USER_ID=${user.telegram_user_id}`,
@@ -234,7 +330,12 @@ export const ensureUserContainer = async (
         PortBindings: {
           [`${config.openclaw.gatewayPort}/tcp`]: [{ HostPort: String(user.container_port) }]
         },
-        Binds: [`${userConfigDir}:/app/config`, `${userDataDir}:/app/data`],
+        Binds: [
+          `${userConfigDir}:/app/config`,
+          `${userDataDir}:/app/data`,
+          `${userTmpDir}:/tmp`,
+          `${userWorkspaceDir}:/root/.openclaw/workspace`
+        ],
         Memory: config.container.memoryMb * 1024 * 1024,
         CpuShares: config.container.cpuShares
       }
