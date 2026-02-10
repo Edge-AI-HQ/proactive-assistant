@@ -1,5 +1,8 @@
 import fs from 'node:fs';
+import { execFile } from 'node:child_process';
+import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { InputFile, type Context } from 'grammy';
 import { getUserContainerDirs, resolveContainerPathForUser } from '../docker/manager.js';
 import type { UserRecord } from '../types.js';
@@ -15,6 +18,8 @@ const AUDIO_AS_VOICE_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
 const MAX_TEXT_CHUNK = 3900;
 const MAX_ARTIFACTS_PER_REPLY = 8;
 const MAX_TEXT_PREVIEW_BYTES = 200_000;
+const VOICE_TRANSCODE_TIMEOUT_MS = 45_000;
+const FORCE_AUDIO_AS_VOICE = true;
 const TELEGRAM_PARSE_ERROR_RE = /can't parse entities|parse entities|find end of the entity/i;
 
 type TelegramUser = Pick<UserRecord, 'telegram_user_id' | 'container_port' | 'container_id'>;
@@ -22,7 +27,15 @@ type TelegramUser = Pick<UserRecord, 'telegram_user_id' | 'container_port' | 'co
 interface ParsedReplyDirectives {
   text: string;
   wantsVoice: boolean;
+  mediaSources: string[];
 }
+
+interface PreparedVoiceFile {
+  file: InputFile;
+  cleanup: () => Promise<void>;
+}
+
+const execFileAsync = promisify(execFile);
 
 const isUrl = (value: string): boolean => /^https?:\/\//i.test(value);
 
@@ -62,14 +75,114 @@ const normalizeArtifactValue = (raw: string): string => {
     .replace(/[`"'}),\].;:!?<>]+$/, '');
 };
 
-const parseReplyDirectives = (rawText: string): ParsedReplyDirectives => {
-  const wantsVoice = AUDIO_AS_VOICE_MARKER_RE.test(rawText);
-  const text = rawText.replace(AUDIO_AS_VOICE_RE, '').trim();
+const maybeUnwrapQuoted = (value: string): string => {
+  if (value.length < 2) return value;
+  const first = value[0];
+  const last = value[value.length - 1];
+  if (first !== last) return value;
+  if (first !== '"' && first !== "'" && first !== '`') return value;
+  return value.slice(1, -1);
+};
+
+const parseMediaDirectives = (rawText: string): { text: string; mediaSources: string[] } => {
+  const lines = rawText.split(/\r?\n/);
+  const kept: string[] = [];
+  const mediaSources: string[] = [];
+
+  for (const line of lines) {
+    const mediaLine = line.match(/^\s*MEDIA:\s*(.+?)\s*$/i);
+    if (!mediaLine) {
+      kept.push(line);
+      continue;
+    }
+
+    const payload = mediaLine[1]?.trim() ?? '';
+    if (!payload) {
+      continue;
+    }
+
+    const source = normalizeArtifactValue(maybeUnwrapQuoted(payload));
+    if (!source) {
+      kept.push(line);
+      continue;
+    }
+
+    mediaSources.push(source.startsWith('file://') ? source.slice('file://'.length) : source);
+  }
 
   return {
-    text,
-    wantsVoice
+    text: kept.join('\n').trim(),
+    mediaSources
   };
+};
+
+const parseReplyDirectives = (rawText: string): ParsedReplyDirectives => {
+  const wantsVoice = AUDIO_AS_VOICE_MARKER_RE.test(rawText);
+  const withoutAudioTag = rawText.replace(AUDIO_AS_VOICE_RE, '').trim();
+  const parsedMedia = parseMediaDirectives(withoutAudioTag);
+
+  return {
+    text: parsedMedia.text,
+    wantsVoice,
+    mediaSources: parsedMedia.mediaSources
+  };
+};
+
+const prepareVoiceFile = async (hostPath: string): Promise<PreparedVoiceFile | null> => {
+  if (isVoiceCompatibleAudio(hostPath)) {
+    return {
+      file: new InputFile(hostPath),
+      cleanup: async () => undefined
+    };
+  }
+
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'pinai-voice-'));
+  const outputPath = path.join(tempDir, `${path.parse(hostPath).name}-${Date.now()}.ogg`);
+
+  try {
+    await execFileAsync(
+      'ffmpeg',
+      [
+        '-y',
+        '-i',
+        hostPath,
+        '-vn',
+        '-ac',
+        '1',
+        '-ar',
+        '48000',
+        '-c:a',
+        'libopus',
+        '-b:a',
+        '48k',
+        outputPath
+      ],
+      {
+        timeout: VOICE_TRANSCODE_TIMEOUT_MS
+      }
+    );
+
+    const stats = await fs.promises.stat(outputPath);
+    if (stats.size <= 0) {
+      throw new Error('ffmpeg produced empty voice file');
+    }
+
+    return {
+      file: new InputFile(outputPath),
+      cleanup: async () => {
+        await fs.promises.rm(tempDir, {
+          recursive: true,
+          force: true
+        });
+      }
+    };
+  } catch {
+    await fs.promises.rm(tempDir, {
+      recursive: true,
+      force: true
+    });
+    return null;
+  }
 };
 
 const sendTextReply = async (ctx: Context, text: string): Promise<void> => {
@@ -216,7 +329,7 @@ const sendRemoteArtifact = async (
   }
 
   if (isAudioPath(source)) {
-    if (asVoice && isVoiceCompatibleAudio(source)) {
+    if (asVoice) {
       await ctx.replyWithVoice(source).catch(async () => {
         await ctx.replyWithAudio(source).catch(async () => {
           await ctx.reply(source);
@@ -250,13 +363,21 @@ const sendLocalArtifact = async (
   }
 
   if (isAudioPath(hostPath)) {
-    if (asVoice && isVoiceCompatibleAudio(hostPath)) {
-      await ctx.replyWithVoice(new InputFile(hostPath)).catch(async () => {
-        await ctx.replyWithAudio(new InputFile(hostPath));
-      });
-    } else {
-      await ctx.replyWithAudio(new InputFile(hostPath));
+    if (asVoice) {
+      const preparedVoice = await prepareVoiceFile(hostPath);
+      if (preparedVoice) {
+        try {
+          await ctx.replyWithVoice(preparedVoice.file);
+          return true;
+        } catch {
+          await ctx.replyWithAudio(new InputFile(hostPath));
+          return true;
+        } finally {
+          await preparedVoice.cleanup().catch(() => undefined);
+        }
+      }
     }
+    await ctx.replyWithAudio(new InputFile(hostPath));
     return true;
   }
 
@@ -300,8 +421,12 @@ export const deliverOpenClawReply = async (
 
   for (const message of replyMessages) {
     const parsed = parseReplyDirectives(message.text ?? '');
-    const wantsVoice = Boolean(message.audioAsVoice || parsed.wantsVoice);
-    const artifacts = dedupeArtifacts(messageArtifacts(message));
+    const wantsVoice = FORCE_AUDIO_AS_VOICE || Boolean(message.audioAsVoice || parsed.wantsVoice);
+    const parsedArtifacts: ArtifactReference[] = parsed.mediaSources.map((source) => ({
+      source,
+      kind: 'media'
+    }));
+    const artifacts = dedupeArtifacts([...messageArtifacts(message), ...parsedArtifacts]);
 
     if (parsed.text) {
       const textChunks = chunkText(parsed.text);
@@ -329,7 +454,7 @@ export const deliverOpenClawReply = async (
   );
 
   for (const artifact of trailingArtifacts.slice(0, MAX_ARTIFACTS_PER_REPLY)) {
-    const ok = await sendArtifact(ctx, user, artifact).catch(() => false);
+    const ok = await sendArtifact(ctx, user, artifact, { asVoice: FORCE_AUDIO_AS_VOICE }).catch(() => false);
     delivered = delivered || ok;
   }
   if (trailingArtifacts.length > MAX_ARTIFACTS_PER_REPLY) {
