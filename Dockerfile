@@ -6,7 +6,7 @@ COPY package.json package-lock.json* ./
 RUN npm ci
 
 COPY . .
-RUN npm run build && npm prune --omit=dev
+RUN mkdir -p /app/public && npm run build && npm prune --omit=dev
 
 FROM node:20-slim
 
