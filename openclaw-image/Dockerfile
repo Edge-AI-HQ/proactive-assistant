@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g openclaw@latest
+RUN npm install -g openclaw@2026.2.9
 
 WORKDIR /app
 

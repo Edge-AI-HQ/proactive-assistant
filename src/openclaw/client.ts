@@ -51,6 +51,7 @@ interface PendingRun {
   textBuffer: string;
   artifacts: Map<string, ArtifactReference>;
   onDelta?: (text: string) => void;
+  lastDeltaText?: string;
   error?: Error;
 }
 
@@ -276,7 +277,10 @@ const handleChatPayload = (session: GatewaySession, payload: unknown): void => {
       if (!pending.textBuffer || text.length >= pending.textBuffer.length) {
         pending.textBuffer = text;
       }
-      pending.onDelta?.(text);
+      if (text !== pending.lastDeltaText) {
+        pending.lastDeltaText = text;
+        pending.onDelta?.(text);
+      }
       return;
     }
 

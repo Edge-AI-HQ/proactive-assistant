@@ -30,6 +30,11 @@ interface ParsedReplyDirectives {
   mediaSources: string[];
 }
 
+interface DeliverOpenClawReplyOptions {
+  skipText?: boolean;
+  suppressEmptyFallback?: boolean;
+}
+
 interface PreparedVoiceFile {
   file: InputFile;
   cleanup: () => Promise<void>;
@@ -413,7 +418,8 @@ const sendArtifact = async (
 export const deliverOpenClawReply = async (
   ctx: Context,
   user: TelegramUser,
-  reply: OpenClawChatReply
+  reply: OpenClawChatReply,
+  options?: DeliverOpenClawReplyOptions
 ): Promise<void> => {
   const replyMessages = toReplyMessages(reply);
   let delivered = false;
@@ -428,7 +434,7 @@ export const deliverOpenClawReply = async (
     }));
     const artifacts = dedupeArtifacts([...messageArtifacts(message), ...parsedArtifacts]);
 
-    if (parsed.text) {
+    if (parsed.text && !options?.skipText) {
       const textChunks = chunkText(parsed.text);
       for (const chunk of textChunks) {
         await sendTextReply(ctx, chunk);
@@ -462,7 +468,7 @@ export const deliverOpenClawReply = async (
     delivered = true;
   }
 
-  if (!delivered) {
+  if (!delivered && !options?.suppressEmptyFallback) {
     await ctx.reply('(empty response)');
   }
 };

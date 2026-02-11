@@ -16,11 +16,13 @@ import {
 import { renderTelegramHtmlFromMarkdown } from './format.js';
 import { type ParsedTelegramInput, parseTelegramInput } from './input.js';
 import { deliverOpenClawReply } from './delivery.js';
+import { createTelegramTextStream } from './stream.js';
 
 const loginRequiredMessage = 'Please login first. Send /start to get the Google login link.';
 const MEDIA_GROUP_TIMEOUT_MS = 500;
 const TELEGRAM_PARSE_ERROR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const MAX_TEXT_CHUNK = 3900;
+const TELEGRAM_STREAM_THROTTLE_MS = 800;
 
 type QueuedTask = () => Promise<void>;
 
@@ -184,6 +186,13 @@ const processContexts = async (contexts: Context[]): Promise<void> => {
     if (!parsedInput) return;
 
     const stopTyping = startTypingLoop(primaryCtx);
+    let typingStopped = false;
+    const stopTypingOnce = (): void => {
+      if (typingStopped) return;
+      typingStopped = true;
+      stopTyping();
+    };
+    let textStream: ReturnType<typeof createTelegramTextStream> | null = null;
 
     try {
       logMessage(telegramUserId, 'incoming', parsedInput.text);
@@ -191,23 +200,53 @@ const processContexts = async (contexts: Context[]): Promise<void> => {
 
       const { ready } = await ensureUserContainer(user);
       if (!ready) {
-        stopTyping();
+        stopTypingOnce();
         await primaryCtx.reply('AI assistant is unavailable. Please retry later.');
         return;
       }
 
+      textStream = createTelegramTextStream({
+        ctx: primaryCtx,
+        throttleMs: TELEGRAM_STREAM_THROTTLE_MS,
+        maxChars: MAX_TEXT_CHUNK,
+        onFirstRender: stopTypingOnce,
+        onWarn: (message) => {
+          console.warn(message);
+        }
+      });
+
       const reply = await sendChatToOpenClaw(user, {
         text: parsedInput.text,
-        attachments: parsedInput.attachments
+        attachments: parsedInput.attachments,
+        onDelta: (text) => {
+          textStream?.update(text);
+        }
       });
       sanitizeUserCronStore(user.telegram_user_id);
       logMessage(telegramUserId, 'outgoing', reply.text);
 
-      stopTyping();
+      const streamResult = await textStream.finalize(reply.text);
+      stopTypingOnce();
+
+      if (streamResult.overflowed) {
+        await textStream.discard().catch(() => undefined);
+        await deliverOpenClawReply(primaryCtx, user, reply);
+        return;
+      }
+
+      if (streamResult.streamed) {
+        await deliverOpenClawReply(primaryCtx, user, reply, {
+          skipText: true,
+          suppressEmptyFallback: true
+        });
+        return;
+      }
+
       await deliverOpenClawReply(primaryCtx, user, reply);
     } catch (error: unknown) {
       console.error('Message routing error', error);
-      stopTyping();
+      textStream?.stop();
+      stopTypingOnce();
       await primaryCtx.reply('Assistant unavailable. Restarting your container...');
 
       try {
