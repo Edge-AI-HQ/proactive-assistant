@@ -23,6 +23,9 @@ pnpm-debug.log*
 api_key_env
 !.env.example
 
+# Vercel
+.vercel
+
 # Tooling cache
 .eslintcache
 .cache/
@@ -41,3 +44,9 @@ Thumbs.db
 # Project-specific local files
 .claude/
 product_specs/
+
+# Payment module specific
+openclaw-cloud-payment/.env
+openclaw-cloud-payment/.vercel
+openclaw-cloud-payment/node_modules
+openclaw-cloud-payment/test-*.html

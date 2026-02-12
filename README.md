@@ -1,5 +1,20 @@
 # PIN AI Assistant
 
+Telegram-based AI assistant platform with integrated payment system.
+
+## 📦 Project Components
+
+This repository contains two services:
+
+1. **Container Service** (main directory) - Internal team tool for managing OpenClaw containers
+2. **Payment Service** (`openclaw-cloud-payment/`) - Public payment gateway for OpenClaw subscriptions
+
+See [PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md) for detailed architecture documentation.
+
+---
+
+## Container Service
+
 Telegram-based AI assistant backend for pinai.io team members.
 
 Current runtime model:
