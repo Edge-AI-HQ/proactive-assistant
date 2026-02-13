@@ -43,7 +43,7 @@ const escapeFileBlockContent = (value: string): string =>
   value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 const truncateExtractedText = (value: string): string => {
-  const normalized = value.replace(/\u0000/g, '').trim();
+  const normalized = value.replaceAll('\u0000', '').trim();
   if (normalized.length <= MAX_EXTRACTED_CHARS) return normalized;
   return `${normalized.slice(0, MAX_EXTRACTED_CHARS)}\n[truncated]`;
 };

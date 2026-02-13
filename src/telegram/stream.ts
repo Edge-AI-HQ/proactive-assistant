@@ -1,10 +1,10 @@
 import type { Context } from 'grammy';
 import { renderTelegramHtmlFromMarkdown } from './format.js';
+import { MAX_TEXT_CHUNK, TELEGRAM_PARSE_ERROR_RE } from './constants.js';
 
 const TELEGRAM_EDIT_NOOP_ERROR_RE = /message is not modified/i;
-const TELEGRAM_PARSE_ERROR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const DEFAULT_THROTTLE_MS = 500;
-const DEFAULT_MAX_CHARS = 3900;
+const DEFAULT_MAX_CHARS = MAX_TEXT_CHUNK;
 
 export interface TelegramStreamFinalizeResult {
   streamed: boolean;

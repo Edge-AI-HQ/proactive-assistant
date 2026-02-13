@@ -1,124 +1,21 @@
-import crypto from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
 import type { Context } from 'grammy';
-import { getUserContainerDirs } from '../docker/manager.js';
 import type { OpenClawAttachment } from '../openclaw/client.js';
 import { buildAgentFileBlockFromInbound } from './mediaUnderstanding.js';
-
-const IMAGE_ATTACHMENT_MAX_BYTES = 5_000_000;
-const FILE_DOWNLOAD_TIMEOUT_MS = 90_000;
-
-type DownloadedTelegramFile = {
-  buffer: Buffer;
-  filePath: string;
-  fileName: string;
-  contentType?: string;
-};
+import {
+  type DownloadedTelegramFile,
+  downloadTelegramFile,
+  ensureInboundMediaPath,
+  isRecord,
+  shouldIncludeImageAttachment,
+  toImageAttachment
+} from './inputFileHelpers.js';
 
 type InboundMediaKind = 'image' | 'audio' | 'video' | 'document' | 'sticker';
-
-interface StoredInboundFile {
-  hostPath: string;
-  containerPath: string;
-}
 
 export interface ParsedTelegramInput {
   text: string;
   attachments: OpenClawAttachment[];
 }
-
-const inferFileName = (filePath: string, fallback: string): string => {
-  const name = filePath.split('/').at(-1);
-  if (typeof name === 'string' && name.trim()) return name;
-  return fallback;
-};
-
-const sanitizeFileName = (name: string): string => {
-  const cleaned = name.replace(/[^a-zA-Z0-9._-]+/g, '-');
-  return cleaned.length > 0 ? cleaned.slice(0, 120) : `file-${Date.now()}`;
-};
-
-const ensureInboundMediaPath = async (
-  telegramUserId: number,
-  fileName: string,
-  buffer: Buffer
-): Promise<StoredInboundFile> => {
-  const dirs = getUserContainerDirs(telegramUserId);
-  const inboundDir = path.join(dirs.tmpDir, 'telegram-inbound');
-  await fs.promises.mkdir(inboundDir, { recursive: true });
-
-  const safeFileName = sanitizeFileName(fileName);
-  const uniqueFile = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}-${safeFileName}`;
-  const hostPath = path.join(inboundDir, uniqueFile);
-  await fs.promises.writeFile(hostPath, buffer);
-
-  return {
-    hostPath,
-    containerPath: `/tmp/telegram-inbound/${uniqueFile}`
-  };
-};
-
-const downloadTelegramFile = async (
-  botToken: string,
-  fileId: string,
-  fallbackName: string
-): Promise<DownloadedTelegramFile> => {
-  const fileInfoResponse = await fetch(
-    `https://api.telegram.org/bot${botToken}/getFile?file_id=${encodeURIComponent(fileId)}`,
-    {
-      signal: AbortSignal.timeout(30_000)
-    }
-  );
-
-  const fileInfoJson: unknown = await fileInfoResponse.json().catch(() => null);
-  const filePath =
-    typeof fileInfoJson === 'object' &&
-    fileInfoJson !== null &&
-    'result' in fileInfoJson &&
-    typeof (fileInfoJson as Record<string, unknown>).result === 'object' &&
-    (fileInfoJson as { result?: { file_path?: string } }).result?.file_path
-      ? (fileInfoJson as { result: { file_path: string } }).result.file_path
-      : null;
-
-  if (!fileInfoResponse.ok || !filePath) {
-    throw new Error(`Failed to get Telegram file path for ${fileId}`);
-  }
-
-  const fileResponse = await fetch(`https://api.telegram.org/file/bot${botToken}/${filePath}`, {
-    signal: AbortSignal.timeout(FILE_DOWNLOAD_TIMEOUT_MS)
-  });
-  if (!fileResponse.ok) {
-    throw new Error(`Failed to download Telegram file ${filePath}`);
-  }
-
-  const arrayBuffer = await fileResponse.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-
-  const downloaded: DownloadedTelegramFile = {
-    buffer,
-    filePath,
-    fileName: inferFileName(filePath, fallbackName)
-  };
-  const contentType = fileResponse.headers.get('content-type');
-  if (typeof contentType === 'string' && contentType) {
-    downloaded.contentType = contentType;
-  }
-  return downloaded;
-};
-
-const toImageAttachment = (file: DownloadedTelegramFile, mimeType?: string): OpenClawAttachment => {
-  return {
-    type: 'image',
-    mimeType: mimeType || file.contentType || 'image/jpeg',
-    fileName: file.fileName,
-    content: file.buffer.toString('base64')
-  };
-};
-
-const isRecord = (value: unknown): value is Record<string, unknown> => {
-  return typeof value === 'object' && value !== null;
-};
 
 const pushForwardedMediaText = (lines: string[], kind: InboundMediaKind, containerPath: string): void => {
   lines.push(`<media:${kind}>`);
@@ -156,10 +53,8 @@ export const parseTelegramInput = async (
     const stored = await ensureInboundMediaPath(telegramUserId, file.fileName, file.buffer);
     pushForwardedMediaText(mediaHints, kind, stored.containerPath);
 
-    if (opts?.includeImageAttachment) {
-      if (file.buffer.length <= IMAGE_ATTACHMENT_MAX_BYTES) {
-        attachments.push(toImageAttachment(file, opts.imageMimeType));
-      }
+    if (opts?.includeImageAttachment && shouldIncludeImageAttachment(file)) {
+      attachments.push(toImageAttachment(file, opts.imageMimeType));
     }
 
     if (opts?.includeFileBlock) {
@@ -167,10 +62,12 @@ export const parseTelegramInput = async (
         hostPath: stored.hostPath,
         fileName: file.fileName
       };
+
       const resolvedMimeType = opts.mimeType || file.contentType;
       if (resolvedMimeType) {
         fileBlockInput.mimeType = resolvedMimeType;
       }
+
       const fileBlock = await buildAgentFileBlockFromInbound(fileBlockInput);
       if (fileBlock) {
         mediaHints.push(fileBlock);
@@ -217,12 +114,12 @@ export const parseTelegramInput = async (
       includeImageAttachment: isImageDocument,
       includeFileBlock: !isImageDocument
     };
+
     if (mimeType) {
       registerOptions.mimeType = mimeType;
-    }
-    if (mimeType) {
       registerOptions.imageMimeType = mimeType;
     }
+
     await registerFile(downloaded, isImageDocument ? 'image' : 'document', registerOptions);
   }
 
