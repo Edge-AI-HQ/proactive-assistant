@@ -1,7 +1,7 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const botUsername = process.env.TELEGRAM_BOT_USERNAME || 'YOUR_BOT_USERNAME';
+  const botUsername = 'PINAIPaymentTestBot';
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`
