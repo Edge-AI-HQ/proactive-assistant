@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { Bot, type Context } from 'grammy';
 import { config } from '../config.js';
 import {
@@ -11,6 +12,7 @@ import {
   dropOpenClawSession,
   sendChatToOpenClaw,
   setOpenClawCronEventHandler,
+  type OpenClawChatReply,
   type OpenClawCronFinishedEvent
 } from '../openclaw/client.js';
 import { renderTelegramHtmlFromMarkdown } from './format.js';
@@ -23,6 +25,14 @@ const MEDIA_GROUP_TIMEOUT_MS = 500;
 const TELEGRAM_PARSE_ERROR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const MAX_TEXT_CHUNK = 3900;
 const TELEGRAM_STREAM_THROTTLE_MS = 800;
+const OPENCLAW_CHAT_TIMEOUT_MS = 120_000;
+const OPENCLAW_RETRY_LIMIT = 1;
+const OPENCLAW_TIMEOUT_ERROR_RE = /chat timeout|request timeout|connect timeout|gateway connect timeout/i;
+const OPENCLAW_TRANSIENT_ERROR_RE =
+  /gateway (not connected|closed|disconnected)|send failed|socket hang up|econnreset|econnrefused|ehostunreach|etimedout|econnaborted/i;
+const TELEGRAM_DELIVERY_ERROR_RE =
+  /ETELEGRAM|message is not modified|can't parse entities|Too Many Requests|Forbidden: bot was blocked|chat not found/i;
+const MEDIA_DIRECTIVE_RE = /[ \t]*MEDIA:\s*[^\n\r]*/gi;
 
 type QueuedTask = () => Promise<void>;
 
@@ -63,6 +73,78 @@ const chunkText = (text: string): string[] => {
   }
 
   return chunks.filter(Boolean);
+};
+
+const toError = (error: unknown): Error => {
+  if (error instanceof Error) return error;
+  return new Error(String(error));
+};
+
+const isOpenClawTimeoutError = (error: Error): boolean => OPENCLAW_TIMEOUT_ERROR_RE.test(error.message);
+
+const isOpenClawTransientError = (error: Error): boolean => OPENCLAW_TRANSIENT_ERROR_RE.test(error.message);
+
+const isOpenClawRecoverableError = (error: Error): boolean => {
+  return isOpenClawTimeoutError(error) || isOpenClawTransientError(error);
+};
+
+const isTelegramDeliveryError = (error: Error): boolean => TELEGRAM_DELIVERY_ERROR_RE.test(error.message);
+
+const stripMediaDirectivesFromText = (text: string): string => {
+  if (!text) return '';
+  return text
+    .replace(MEDIA_DIRECTIVE_RE, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trimEnd();
+};
+
+const createReplyStream = (ctx: Context, stopTypingOnce: () => void): ReturnType<typeof createTelegramTextStream> => {
+  return createTelegramTextStream({
+    ctx,
+    throttleMs: TELEGRAM_STREAM_THROTTLE_MS,
+    maxChars: MAX_TEXT_CHUNK,
+    onFirstRender: stopTypingOnce,
+    onWarn: (message) => {
+      console.warn(message);
+    }
+  });
+};
+
+const finalizeStreamedReply = async (
+  ctx: Context,
+  user: {
+    telegram_user_id: number;
+    container_port: number;
+    container_id: string;
+  },
+  reply: OpenClawChatReply,
+  textStream: ReturnType<typeof createTelegramTextStream>
+): Promise<void> => {
+  let streamResult: Awaited<ReturnType<typeof textStream.finalize>>;
+  try {
+    streamResult = await textStream.finalize(stripMediaDirectivesFromText(reply.text));
+  } catch (error: unknown) {
+    console.warn('Telegram stream finalize failed', error);
+    textStream.stop();
+    await deliverOpenClawReply(ctx, user, reply);
+    return;
+  }
+
+  if (streamResult.overflowed) {
+    await textStream.discard().catch(() => undefined);
+    await deliverOpenClawReply(ctx, user, reply);
+    return;
+  }
+
+  if (streamResult.streamed) {
+    await deliverOpenClawReply(ctx, user, reply, {
+      skipText: true,
+      suppressEmptyFallback: true
+    });
+    return;
+  }
+
+  await deliverOpenClawReply(ctx, user, reply);
 };
 
 const sendBotText = async (bot: Bot<Context>, chatId: number, text: string): Promise<void> => {
@@ -205,52 +287,80 @@ const processContexts = async (contexts: Context[]): Promise<void> => {
         return;
       }
 
-      textStream = createTelegramTextStream({
-        ctx: primaryCtx,
-        throttleMs: TELEGRAM_STREAM_THROTTLE_MS,
-        maxChars: MAX_TEXT_CHUNK,
-        onFirstRender: stopTypingOnce,
-        onWarn: (message) => {
-          console.warn(message);
-        }
-      });
+      textStream = createReplyStream(primaryCtx, stopTypingOnce);
+      let reply: OpenClawChatReply | null = null;
+      let lastChatError: Error | null = null;
 
-      const reply = await sendChatToOpenClaw(user, {
-        text: parsedInput.text,
-        attachments: parsedInput.attachments,
-        onDelta: (text) => {
-          textStream?.update(text);
+      for (let attempt = 0; attempt <= OPENCLAW_RETRY_LIMIT; attempt += 1) {
+        const requestId = crypto.randomUUID();
+        try {
+          reply = await sendChatToOpenClaw(user, {
+            text: parsedInput.text,
+            attachments: parsedInput.attachments,
+            timeoutMs: OPENCLAW_CHAT_TIMEOUT_MS,
+            idempotencyKey: requestId,
+            onDelta: (text) => {
+              textStream?.update(stripMediaDirectivesFromText(text));
+            }
+          });
+          break;
+        } catch (error: unknown) {
+          const normalizedError = toError(error);
+          lastChatError = normalizedError;
+          const canRetry = attempt < OPENCLAW_RETRY_LIMIT && isOpenClawRecoverableError(normalizedError);
+          if (!canRetry) {
+            throw normalizedError;
+          }
+
+          console.warn(`OpenClaw chat transient error, retrying once: ${normalizedError.message}`);
+          dropOpenClawSession(telegramUserId);
+          if (textStream) {
+            await textStream.discard().catch(() => undefined);
+          }
+
+          const recovery = await ensureUserContainer(user);
+          if (!recovery.ready) {
+            throw normalizedError;
+          }
+
+          textStream = createReplyStream(primaryCtx, stopTypingOnce);
         }
-      });
+      }
+
+      if (!reply) {
+        throw lastChatError ?? new Error('OpenClaw response missing');
+      }
+
       sanitizeUserCronStore(user.telegram_user_id);
       logMessage(telegramUserId, 'outgoing', reply.text);
 
-      const streamResult = await textStream.finalize(reply.text);
       stopTypingOnce();
-
-      if (streamResult.overflowed) {
-        await textStream.discard().catch(() => undefined);
-        await deliverOpenClawReply(primaryCtx, user, reply);
-        return;
-      }
-
-      if (streamResult.streamed) {
-        await deliverOpenClawReply(primaryCtx, user, reply, {
-          skipText: true,
-          suppressEmptyFallback: true
-        });
-        return;
-      }
-
-      await deliverOpenClawReply(primaryCtx, user, reply);
+      await finalizeStreamedReply(primaryCtx, user, reply, textStream);
     } catch (error: unknown) {
-      console.error('Message routing error', error);
+      const normalizedError = toError(error);
+      console.error('Message routing error', normalizedError);
       textStream?.stop();
       stopTypingOnce();
+      dropOpenClawSession(telegramUserId);
+
+      if (isOpenClawTimeoutError(normalizedError)) {
+        await primaryCtx.reply('Assistant response timed out. Session was reset, please retry.');
+        return;
+      }
+
+      if (isOpenClawTransientError(normalizedError)) {
+        await primaryCtx.reply('Assistant is temporarily unavailable. Session was reset, please retry.');
+        return;
+      }
+
+      if (isTelegramDeliveryError(normalizedError)) {
+        console.error('Telegram delivery error', normalizedError);
+        return;
+      }
+
       await primaryCtx.reply('Assistant unavailable. Restarting your container...');
 
       try {
-        dropOpenClawSession(telegramUserId);
         await restartUserContainer(user);
         await primaryCtx.reply('Container restarted. Please retry your message.');
       } catch (restartError: unknown) {

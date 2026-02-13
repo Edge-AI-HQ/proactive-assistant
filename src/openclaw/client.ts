@@ -5,6 +5,7 @@ import { extractArtifactReferences, type ArtifactReference } from './artifacts.j
 import { GatewayClient, type GatewayEvent } from './gatewayClient.js';
 
 const CHAT_TIMEOUT_MS = 90_000;
+const ABORT_TIMEOUT_MS = 5_000;
 
 type OpenClawUser = Pick<UserRecord, 'telegram_user_id' | 'container_port' | 'container_id'>;
 
@@ -19,6 +20,9 @@ export interface OpenClawChatRequest {
   text: string;
   attachments?: OpenClawAttachment[];
   timeoutMs?: number;
+  idempotencyKey?: string;
+  sessionKey?: string;
+  extraParams?: Record<string, unknown>;
   onDelta?: (text: string) => void;
 }
 
@@ -46,13 +50,24 @@ export interface OpenClawCronFinishedEvent {
   runAtMs?: number;
 }
 
+interface CompletionGate {
+  promise: Promise<void>;
+  resolve: () => void;
+  settled: boolean;
+}
+
 interface PendingRun {
+  runId: string;
   timer: NodeJS.Timeout;
+  keyAliases: Set<string>;
   textBuffer: string;
   artifacts: Map<string, ArtifactReference>;
+  messages: OpenClawReplyMessage[];
+  completion: CompletionGate;
   onDelta?: (text: string) => void;
   lastDeltaText?: string;
   error?: Error;
+  finalPayload?: unknown;
 }
 
 interface GatewaySession {
@@ -63,6 +78,7 @@ interface GatewaySession {
 }
 
 type CronEventHandler = (event: OpenClawCronFinishedEvent) => void | Promise<void>;
+type ChatState = 'delta' | 'final' | 'error' | 'aborted';
 
 const CRON_EVENT_DEDUPE_TTL_MS = 10 * 60_000;
 const sessions = new Map<number, GatewaySession>();
@@ -73,11 +89,50 @@ const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null;
 };
 
+const asNonEmptyString = (value: unknown): string | null => {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+};
+
+const toError = (error: unknown): Error => {
+  if (error instanceof Error) return error;
+  return new Error(String(error));
+};
+
+const isTimeoutError = (error: Error): boolean => /timeout/i.test(error.message);
+
+const normalizeTimeoutMs = (value: number | undefined, fallback: number): number => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.max(1000, Math.trunc(value));
+};
+
+const createCompletionGate = (): CompletionGate => {
+  let resolvePromise: () => void = () => undefined;
+  const gate: CompletionGate = {
+    promise: new Promise<void>((resolve) => {
+      resolvePromise = resolve;
+    }),
+    resolve: () => {
+      if (gate.settled) return;
+      gate.settled = true;
+      resolvePromise();
+    },
+    settled: false
+  };
+  return gate;
+};
+
 const extractChatText = (message: unknown): string | null => {
   if (typeof message === 'string') {
     return message;
   }
   if (!isRecord(message)) return null;
+
+  if (typeof message.text === 'string') {
+    return message.text;
+  }
+  if (typeof message.delta === 'string') {
+    return message.delta;
+  }
 
   const content = message.content;
   if (typeof content === 'string') {
@@ -88,12 +143,124 @@ const extractChatText = (message: unknown): string | null => {
       .map((part) => {
         if (!isRecord(part)) return null;
         if (typeof part.text === 'string') return part.text;
+        if (typeof part.delta === 'string') return part.delta;
         return null;
       })
       .filter((part): part is string => typeof part === 'string');
     return parts.length > 0 ? parts.join('\n') : null;
   }
+  if (isRecord(content)) {
+    if (typeof content.text === 'string') return content.text;
+    if (typeof content.delta === 'string') return content.delta;
+  }
+
   return null;
+};
+
+const extractRunId = (payload: unknown): string | null => {
+  if (!isRecord(payload)) return null;
+  const candidates: unknown[] = [payload.runId, payload.idempotencyKey, payload.clientRunId, payload.run_id];
+  for (const candidate of candidates) {
+    const value = asNonEmptyString(candidate);
+    if (value) return value;
+  }
+  return null;
+};
+
+const extractPayloadText = (payload: Record<string, unknown>): string | null => {
+  const directCandidates: unknown[] = [payload.delta, payload.text, payload.final];
+  for (const candidate of directCandidates) {
+    const value = asNonEmptyString(candidate);
+    if (value) return value;
+  }
+
+  const messageText = extractChatText(payload.message);
+  if (messageText) return messageText;
+
+  const data = isRecord(payload.data) ? payload.data : null;
+  if (!data) return null;
+
+  const nestedCandidates: unknown[] = [data.delta, data.text, data.final];
+  for (const candidate of nestedCandidates) {
+    const value = asNonEmptyString(candidate);
+    if (value) return value;
+  }
+
+  const nestedMessageText = extractChatText(data.message);
+  if (nestedMessageText) return nestedMessageText;
+
+  return null;
+};
+
+const extractPayloadError = (payload: Record<string, unknown>): string | null => {
+  const direct = asNonEmptyString(payload.errorMessage) ?? asNonEmptyString(payload.error);
+  if (direct) return direct;
+
+  const data = isRecord(payload.data) ? payload.data : null;
+  if (!data) return null;
+
+  return asNonEmptyString(data.errorMessage) ?? asNonEmptyString(data.error);
+};
+
+const resolveChatState = (payload: Record<string, unknown>): ChatState | null => {
+  const state = asNonEmptyString(payload.state)?.toLowerCase();
+  if (state === 'delta' || state === 'final' || state === 'error' || state === 'aborted') {
+    return state;
+  }
+
+  const stream = asNonEmptyString(payload.stream)?.toLowerCase();
+  if (stream === 'error') return 'error';
+
+  const data = isRecord(payload.data) ? payload.data : null;
+  const lifecycleStatus = asNonEmptyString(data?.status)?.toLowerCase();
+  if (stream === 'lifecycle' && lifecycleStatus) {
+    if (['done', 'completed', 'complete', 'finished', 'ok'].includes(lifecycleStatus)) {
+      return 'final';
+    }
+    if (['error', 'failed'].includes(lifecycleStatus)) {
+      return 'error';
+    }
+    if (['aborted', 'cancelled'].includes(lifecycleStatus)) {
+      return 'aborted';
+    }
+  }
+
+  if (stream === 'assistant' && extractPayloadText(payload)) {
+    return 'delta';
+  }
+
+  return null;
+};
+
+const mergeDeltaText = (existing: string, incoming: string): string => {
+  const next = incoming.trimEnd();
+  if (!next) return existing;
+  if (!existing) return next;
+
+  if (next === existing) return existing;
+  if (next.startsWith(existing)) return next;
+  if (existing.startsWith(next)) return next.length >= existing.length * 0.8 ? next : existing;
+  if (existing.endsWith(next)) return existing;
+
+  const looksLikeSnapshot =
+    next.length >= 120 && (next.includes('\n') || next.startsWith('#') || next.includes('|'));
+  if (looksLikeSnapshot) {
+    return next;
+  }
+
+  const maxOverlap = Math.min(existing.length, next.length);
+  let overlap = 0;
+  for (let size = maxOverlap; size >= 1; size -= 1) {
+    if (existing.slice(-size) === next.slice(0, size)) {
+      overlap = size;
+      break;
+    }
+  }
+  if (overlap > 0) {
+    return `${existing}${next.slice(overlap)}`;
+  }
+
+  return `${existing}${next}`;
 };
 
 const cleanupRecentCronEvents = (now: number): void => {
@@ -174,15 +341,64 @@ const toReplyMessage = (value: unknown): OpenClawReplyMessage | null => {
   return Object.keys(message).length ? message : null;
 };
 
-const toReplyMessages = (value: unknown): OpenClawReplyMessage[] => {
-  if (!isRecord(value)) return [];
-  const result = isRecord(value.result) ? value.result : null;
-  if (!result || !Array.isArray(result.payloads)) return [];
+const replyMessageKey = (message: OpenClawReplyMessage): string => {
+  const text = message.text?.trim() ?? '';
+  const mediaUrl = message.mediaUrl?.trim() ?? '';
+  const mediaUrls = (message.mediaUrls ?? []).map((item) => item.trim()).filter(Boolean).join('|');
+  const voice = message.audioAsVoice === true ? '1' : '0';
+  return `${text}\n${mediaUrl}\n${mediaUrls}\n${voice}`;
+};
 
-  const messages = result.payloads
-    .map((item: unknown) => toReplyMessage(item))
+const dedupeReplyMessages = (messages: OpenClawReplyMessage[]): OpenClawReplyMessage[] => {
+  const map = new Map<string, OpenClawReplyMessage>();
+  for (const message of messages) {
+    const key = replyMessageKey(message);
+    if (!key.trim()) continue;
+    if (!map.has(key)) {
+      map.set(key, message);
+    }
+  }
+  return Array.from(map.values());
+};
+
+const collectReplyNodes = (value: unknown): unknown[] => {
+  if (!isRecord(value)) return [];
+
+  const result = isRecord(value.result) ? value.result : null;
+  const nodes: unknown[] = [];
+
+  const collectArray = (candidate: unknown): void => {
+    if (!Array.isArray(candidate)) return;
+    nodes.push(...candidate);
+  };
+
+  collectArray(value.payloads);
+  collectArray(value.messages);
+  if (isRecord(value.message)) {
+    nodes.push(value.message);
+  }
+
+  if (result) {
+    collectArray(result.payloads);
+    collectArray(result.messages);
+    if (isRecord(result.message)) {
+      nodes.push(result.message);
+    }
+  }
+
+  return nodes;
+};
+
+const toReplyMessages = (value: unknown): OpenClawReplyMessage[] => {
+  const messages = collectReplyNodes(value)
+    .map((item) => toReplyMessage(item))
     .filter((item): item is OpenClawReplyMessage => Boolean(item));
-  return messages;
+  return dedupeReplyMessages(messages);
+};
+
+const appendPendingMessages = (pending: PendingRun, messages: OpenClawReplyMessage[]): void => {
+  if (!messages.length) return;
+  pending.messages = dedupeReplyMessages([...pending.messages, ...messages]);
 };
 
 const artifactsFromReplyMessages = (messages: OpenClawReplyMessage[]): ArtifactReference[] => {
@@ -213,104 +429,128 @@ const composeReplyText = (messages: OpenClawReplyMessage[], fallbackText: string
   return fallbackText.trim() || '（无响应内容）';
 };
 
-const resolveSession = (user: OpenClawUser): GatewaySession => {
-  if (!config.openclaw.apiKey) {
-    throw new Error('OPENCLAW_API_KEY is required for WebSocket RPC.');
-  }
-
-  const existing = getSession(user.telegram_user_id);
-  if (existing && existing.user.container_port === user.container_port) {
-    existing.user = user;
-    return existing;
-  }
-
-  if (existing) {
-    existing.client.stop();
-    sessions.delete(user.telegram_user_id);
-  }
-
-  const client = new GatewayClient({
-    url: buildWsUrl(user),
-    token: config.openclaw.apiKey,
-    role: 'operator',
-    scopes: ['operator.admin'],
-    clientName: 'gateway-client',
-    mode: 'backend',
-    userAgent: 'pinai-telegram-bot',
-    locale: 'en-US',
-    caps: ['tool-events'],
-    onEvent: (event) => handleGatewayEvent(user.telegram_user_id, event)
-  });
-
-  const session: GatewaySession = {
-    user,
-    client,
-    pending: new Map<string, PendingRun>(),
-    sessionKey: `telegram:dm:${user.telegram_user_id}`
-  };
-
-  sessions.set(user.telegram_user_id, session);
-  client.start();
-  return session;
+const attachPendingRun = (session: GatewaySession, pending: PendingRun, runId: string): void => {
+  const normalized = runId.trim();
+  if (!normalized) return;
+  session.pending.set(normalized, pending);
+  pending.keyAliases.add(normalized);
+  pending.runId = normalized;
 };
 
-const settlePending = (
-  pendingMap: Map<string, PendingRun>,
-  runId: string,
-  handler: (pending: PendingRun) => void
-): void => {
-  const pending = pendingMap.get(runId);
-  if (!pending) return;
-  handler(pending);
+const detachPendingRun = (session: GatewaySession, pending: PendingRun): void => {
+  for (const alias of pending.keyAliases) {
+    if (session.pending.get(alias) === pending) {
+      session.pending.delete(alias);
+    }
+  }
+  pending.keyAliases.clear();
+};
+
+const markPendingDelta = (pending: PendingRun, text: string): void => {
+  const merged = mergeDeltaText(pending.textBuffer, text);
+  if (merged === pending.textBuffer) return;
+  pending.textBuffer = merged;
+
+  if (pending.textBuffer !== pending.lastDeltaText) {
+    pending.lastDeltaText = pending.textBuffer;
+    pending.onDelta?.(pending.textBuffer);
+  }
+};
+
+const markPendingFinal = (pending: PendingRun, text: string): void => {
+  const finalText = text.trimEnd();
+  if (!finalText) return;
+
+  if (finalText.length >= pending.textBuffer.length || finalText.startsWith(pending.textBuffer)) {
+    pending.textBuffer = finalText;
+  }
+
+  if (pending.textBuffer !== pending.lastDeltaText) {
+    pending.lastDeltaText = pending.textBuffer;
+    pending.onDelta?.(pending.textBuffer);
+  }
+};
+
+const settlePendingCompletion = (pending: PendingRun): void => {
+  pending.completion.resolve();
 };
 
 const handleChatPayload = (session: GatewaySession, payload: unknown): void => {
   if (!isRecord(payload)) return;
 
-  const runId = typeof payload.runId === 'string' ? payload.runId : null;
-  const state = typeof payload.state === 'string' ? payload.state : '';
-  const text = extractChatText(payload.message);
+  const runId = extractRunId(payload);
   if (!runId) return;
 
-  settlePending(session.pending, runId, (pending) => {
-    if (state === 'delta' && text) {
-      if (!pending.textBuffer || text.length >= pending.textBuffer.length) {
-        pending.textBuffer = text;
-      }
-      if (text !== pending.lastDeltaText) {
-        pending.lastDeltaText = text;
-        pending.onDelta?.(text);
-      }
-      return;
-    }
+  const pending = session.pending.get(runId);
+  if (!pending) return;
 
-    if (state === 'final' && text) {
-      pending.textBuffer = text;
-      return;
-    }
+  const state = resolveChatState(payload);
+  const text = extractPayloadText(payload);
+  if (state === 'delta' && text) {
+    markPendingDelta(pending, text);
+  } else if (state === 'final' && text) {
+    markPendingFinal(pending, text);
+  }
 
-    if (state === 'error') {
-      const errorMessage = typeof payload.errorMessage === 'string' ? payload.errorMessage : 'chat error';
-      pending.error = new Error(errorMessage);
-      return;
-    }
+  appendPendingMessages(pending, toReplyMessages(payload));
+  addArtifactsToPending(pending, extractArtifactReferences(payload));
 
-    if (state === 'aborted') {
-      pending.error = new Error('chat aborted');
-    }
-  });
+  if (state === 'error') {
+    pending.error = new Error(extractPayloadError(payload) ?? 'chat error');
+    pending.finalPayload = payload;
+    settlePendingCompletion(pending);
+    return;
+  }
+
+  if (state === 'aborted') {
+    pending.error = new Error(extractPayloadError(payload) ?? 'chat aborted');
+    pending.finalPayload = payload;
+    settlePendingCompletion(pending);
+    return;
+  }
+
+  if (state === 'final') {
+    pending.finalPayload = payload;
+    settlePendingCompletion(pending);
+  }
 };
 
 const handleAgentPayload = (session: GatewaySession, payload: unknown): void => {
   if (!isRecord(payload)) return;
-  const runId = typeof payload.runId === 'string' ? payload.runId : null;
+
+  const runId = extractRunId(payload);
   if (!runId) return;
 
-  settlePending(session.pending, runId, (pending) => {
-    const artifacts = extractArtifactReferences(payload);
-    if (!artifacts.length) return;
-    addArtifactsToPending(pending, artifacts);
+  const pending = session.pending.get(runId);
+  if (!pending) return;
+
+  const sanitizedMessages = toReplyMessages(payload).map((message) => {
+    const mediaOnly: OpenClawReplyMessage = {};
+    if (message.mediaUrl) mediaOnly.mediaUrl = message.mediaUrl;
+    if (message.mediaUrls?.length) mediaOnly.mediaUrls = message.mediaUrls;
+    if (message.audioAsVoice === true) mediaOnly.audioAsVoice = true;
+    if (message.channelData) mediaOnly.channelData = message.channelData;
+    return Object.keys(mediaOnly).length > 0 ? mediaOnly : null;
   });
+  appendPendingMessages(
+    pending,
+    sanitizedMessages.filter((message): message is OpenClawReplyMessage => message !== null)
+  );
+  addArtifactsToPending(pending, extractArtifactReferences(payload));
+
+  const state = resolveChatState(payload);
+  if (state === 'error') {
+    pending.error = new Error(extractPayloadError(payload) ?? 'agent error');
+    pending.finalPayload = payload;
+    settlePendingCompletion(pending);
+    return;
+  }
+
+  if (state === 'aborted') {
+    pending.error = new Error(extractPayloadError(payload) ?? 'agent aborted');
+    pending.finalPayload = payload;
+    settlePendingCompletion(pending);
+  }
 };
 
 const handleCronPayload = (telegramUserId: number, payload: unknown): void => {
@@ -385,6 +625,83 @@ const normalizeAttachments = (attachments: OpenClawAttachment[] | undefined): Op
     .filter((item) => typeof item.content === 'string' && item.content.length > 0);
 };
 
+const buildChatSendParams = (args: {
+  sessionKey: string;
+  message: string;
+  runId: string;
+  timeoutMs: number;
+  attachments: OpenClawAttachment[];
+  extraParams?: Record<string, unknown>;
+}): Record<string, unknown> => {
+  const params: Record<string, unknown> = {
+    sessionKey: args.sessionKey,
+    message: args.message,
+    deliver: false,
+    timeoutMs: args.timeoutMs,
+    idempotencyKey: args.runId
+  };
+
+  if (args.attachments.length) {
+    params.attachments = args.attachments;
+  }
+
+  if (args.extraParams) {
+    Object.assign(params, args.extraParams);
+  }
+
+  return params;
+};
+
+const bestEffortAbortRun = async (session: GatewaySession, runId: string, sessionKey: string): Promise<void> => {
+  try {
+    await session.client.request('chat.abort', { sessionKey, runId }, { timeoutMs: ABORT_TIMEOUT_MS });
+  } catch {
+    // Best effort cleanup only.
+  }
+};
+
+const resolveSession = (user: OpenClawUser): GatewaySession => {
+  if (!config.openclaw.apiKey) {
+    throw new Error('OPENCLAW_API_KEY is required for WebSocket RPC.');
+  }
+
+  const existing = getSession(user.telegram_user_id);
+  if (existing && existing.user.container_port === user.container_port) {
+    existing.user = user;
+    return existing;
+  }
+
+  if (existing) {
+    existing.client.stop();
+    sessions.delete(user.telegram_user_id);
+  }
+
+  const client = new GatewayClient({
+    url: buildWsUrl(user),
+    token: config.openclaw.apiKey,
+    role: 'operator',
+    scopes: ['operator.admin'],
+    clientName: 'gateway-client',
+    mode: 'backend',
+    userAgent: 'pinai-telegram-bot',
+    locale: 'en-US',
+    caps: ['tool-events'],
+    onEvent: (event) => handleGatewayEvent(user.telegram_user_id, event),
+    requestTimeoutMs: CHAT_TIMEOUT_MS + 15_000
+  });
+
+  const session: GatewaySession = {
+    user,
+    client,
+    pending: new Map<string, PendingRun>(),
+    sessionKey: `telegram:dm:${user.telegram_user_id}`
+  };
+
+  sessions.set(user.telegram_user_id, session);
+  client.start();
+  return session;
+};
+
 export const sendChatToOpenClaw = async (
   user: OpenClawUser,
   request: OpenClawChatRequest
@@ -398,9 +715,11 @@ export const sendChatToOpenClaw = async (
   const session = resolveSession(user);
   await session.client.waitForHello();
 
-  const runId = crypto.randomUUID();
-  const timeoutMs = request.timeoutMs ?? CHAT_TIMEOUT_MS;
-  let rejectTimeout: ((error: Error) => void) | undefined;
+  const timeoutMs = normalizeTimeoutMs(request.timeoutMs, CHAT_TIMEOUT_MS);
+  const runId = asNonEmptyString(request.idempotencyKey) ?? crypto.randomUUID();
+  const sessionKey = asNonEmptyString(request.sessionKey) ?? session.sessionKey;
+
+  let rejectTimeout: ((error: Error) => void) | null = null;
   const timeoutPromise = new Promise<never>((_, reject) => {
     rejectTimeout = (error: Error) => reject(error);
   });
@@ -410,51 +729,84 @@ export const sendChatToOpenClaw = async (
   timeoutHandle.unref();
 
   const pending: PendingRun = {
+    runId,
     timer: timeoutHandle,
+    keyAliases: new Set<string>(),
     textBuffer: '',
-    artifacts: new Map<string, ArtifactReference>()
+    artifacts: new Map<string, ArtifactReference>(),
+    messages: [],
+    completion: createCompletionGate()
   };
   if (request.onDelta) pending.onDelta = request.onDelta;
-  session.pending.set(runId, pending);
+
+  attachPendingRun(session, pending, runId);
 
   try {
-    const params: Record<string, unknown> = {
-      sessionKey: session.sessionKey,
+    const chatSendArgs: {
+      sessionKey: string;
+      message: string;
+      runId: string;
+      timeoutMs: number;
+      attachments: OpenClawAttachment[];
+      extraParams?: Record<string, unknown>;
+    } = {
+      sessionKey,
       message,
-      channel: 'telegram',
-      to: String(user.telegram_user_id),
-      deliver: false,
-      timeout: timeoutMs,
-      idempotencyKey: runId
+      runId: pending.runId,
+      timeoutMs,
+      attachments
     };
-    if (attachments.length) {
-      params.attachments = attachments;
+    if (request.extraParams) {
+      chatSendArgs.extraParams = request.extraParams;
+    }
+    const params = buildChatSendParams(chatSendArgs);
+    const ackPayload = await Promise.race([
+      session.client.request<Record<string, unknown>>('chat.send', params, {
+        timeoutMs: Math.min(timeoutMs, 20_000)
+      }),
+      timeoutPromise
+    ]);
+
+    const ackRunId = extractRunId(ackPayload);
+    if (ackRunId) {
+      attachPendingRun(session, pending, ackRunId);
     }
 
-    const rpcPromise = session.client.request<Record<string, unknown>>('agent', params, {
-      expectFinal: true
-    });
-    const finalPayload = await Promise.race([rpcPromise, timeoutPromise]);
+    await Promise.race([pending.completion.promise, timeoutPromise]);
+    const finalPayload = pending.finalPayload ?? ackPayload;
 
     if (pending.error) {
       throw pending.error;
     }
 
-    const messages = toReplyMessages(finalPayload);
+    const payloadMessages = toReplyMessages(finalPayload);
+    const messages = dedupeReplyMessages([...pending.messages, ...payloadMessages]);
+
     const eventArtifacts = Array.from(pending.artifacts.values());
+    const payloadArtifacts = dedupeArtifacts(extractArtifactReferences(finalPayload));
     const messageArtifacts = artifactsFromReplyMessages(messages);
-    const artifacts = dedupeArtifacts([...eventArtifacts, ...messageArtifacts]);
+    const artifacts = dedupeArtifacts([...eventArtifacts, ...payloadArtifacts, ...messageArtifacts]);
+
     const text = composeReplyText(messages, pending.textBuffer);
 
     return {
-      runId,
+      runId: pending.runId,
       text,
       artifacts,
       messages
     };
+  } catch (error: unknown) {
+    const normalizedError = toError(error);
+    pending.error = normalizedError;
+
+    if (isTimeoutError(normalizedError)) {
+      await bestEffortAbortRun(session, pending.runId, sessionKey);
+    }
+
+    throw normalizedError;
   } finally {
     clearTimeout(timeoutHandle);
-    session.pending.delete(runId);
+    detachPendingRun(session, pending);
   }
 };
 
@@ -465,6 +817,7 @@ export const dropOpenClawSession = (telegramUserId: number): void => {
   for (const [, pending] of session.pending) {
     clearTimeout(pending.timer);
     pending.error = new Error('gateway session dropped');
+    settlePendingCompletion(pending);
   }
   session.pending.clear();
   session.client.stop();

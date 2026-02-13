@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import WebSocket, { type RawData } from 'ws';
 
 type JsonObject = Record<string, unknown>;
+type GatewayConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'stopped';
 
 interface GatewayErrorPayload {
   message?: string;
@@ -46,12 +47,23 @@ export interface GatewayClientOptions {
   onClose?: (info: GatewayCloseInfo) => void;
   onEvent?: (event: GatewayEvent) => void;
   onGap?: (info: { expected: number; received: number }) => void;
+  onConnectError?: (error: Error) => void;
+  onStateChange?: (state: GatewayConnectionState) => void;
+  connectDelayMs?: number;
+  connectTimeoutMs?: number;
+  requestTimeoutMs?: number;
+  initialBackoffMs?: number;
+  maxBackoffMs?: number;
 }
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
   expectFinal: boolean;
+  method: string;
+  timer: NodeJS.Timeout | null;
+  signal?: AbortSignal;
+  abortHandler?: () => void;
 }
 
 interface HelloWaiter {
@@ -63,6 +75,11 @@ interface HelloWaiter {
 const DEFAULT_PROTOCOL = 3;
 const DEFAULT_ROLE = 'operator';
 const DEFAULT_SCOPES = ['operator.admin'];
+const DEFAULT_INITIAL_BACKOFF_MS = 1000;
+const DEFAULT_MAX_BACKOFF_MS = 30_000;
+const DEFAULT_CONNECT_DELAY_MS = 750;
+const DEFAULT_CONNECT_TIMEOUT_MS = 12_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
 const isRecord = (value: unknown): value is JsonObject => {
   return typeof value === 'object' && value !== null;
@@ -74,6 +91,15 @@ const safeJsonParse = (raw: string): unknown => {
   } catch {
     return null;
   }
+};
+
+const rawDataToString = (raw: RawData): string => {
+  if (typeof raw === 'string') return raw;
+  if (Buffer.isBuffer(raw)) return raw.toString('utf8');
+  if (Array.isArray(raw)) {
+    return Buffer.concat(raw).toString('utf8');
+  }
+  return Buffer.from(raw).toString('utf8');
 };
 
 const toGatewayEvent = (value: unknown): GatewayEvent | null => {
@@ -124,15 +150,17 @@ export class GatewayClient {
 
   private readonly pending = new Map<string, PendingRequest>();
 
-  private closed = false;
+  private closed = true;
 
-  private backoffMs = 1000;
+  private state: GatewayConnectionState = 'idle';
+
+  private backoffMs: number;
 
   private connectSent = false;
 
   private connectTimer: NodeJS.Timeout | null = null;
 
-  private connectNonce: string | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
 
   private hello: JsonObject | null = null;
 
@@ -144,17 +172,25 @@ export class GatewayClient {
 
   constructor(opts: GatewayClientOptions) {
     this.opts = opts;
+    this.backoffMs = Math.max(100, opts.initialBackoffMs ?? DEFAULT_INITIAL_BACKOFF_MS);
   }
 
   start(): void {
+    if (!this.closed && (this.ws || this.reconnectTimer !== null)) return;
     this.closed = false;
+    this.transitionState('connecting');
     this.connect();
   }
 
   stop(): void {
+    if (this.closed) return;
     this.closed = true;
-    this.ws?.close();
+    this.clearReconnectTimer();
+    this.clearConnectTimer();
+    this.transitionState('stopped');
+    const active = this.ws;
     this.ws = null;
+    active?.close();
     this.flushPending(new Error('gateway client stopped'));
     this.resetHello();
   }
@@ -165,36 +201,60 @@ export class GatewayClient {
 
   private connect(): void {
     if (this.closed) return;
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
 
-    this.ws = new WebSocket(this.opts.url, {
+    const socket = new WebSocket(this.opts.url, {
       maxPayload: 25 * 1024 * 1024
     });
+    this.ws = socket;
 
-    this.ws.on('open', () => this.queueConnect());
-    this.ws.on('message', (data: RawData) => this.handleMessage(String(data ?? '')));
-    this.ws.on('close', (code: number, reasonBuffer: Buffer) => {
-      const reason = String(reasonBuffer ?? Buffer.from(''));
+    socket.on('open', () => {
+      if (this.ws !== socket) return;
+      this.transitionState('connected');
+      this.queueConnect();
+    });
+    socket.on('message', (data: RawData) => {
+      if (this.ws !== socket) return;
+      this.handleMessage(rawDataToString(data));
+    });
+    socket.on('close', (code: number, reasonBuffer: Buffer) => {
+      if (this.ws !== socket) return;
+      const reason = reasonBuffer.toString('utf8');
       this.ws = null;
+      this.clearConnectTimer();
       this.resetHello();
       this.flushPending(new Error(`gateway closed (${code}): ${reason || 'no reason'}`));
       this.opts.onClose?.({ code, reason });
       this.scheduleReconnect();
     });
-    this.ws.on('error', () => {});
+    socket.on('error', (error: Error) => {
+      if (this.ws !== socket) return;
+      this.opts.onConnectError?.(error);
+    });
   }
 
   private scheduleReconnect(): void {
     if (this.closed) return;
+    if (this.reconnectTimer !== null) return;
+
+    this.transitionState('reconnecting');
     const delay = this.backoffMs;
-    this.backoffMs = Math.min(this.backoffMs * 2, 30000);
-    setTimeout(() => this.connect(), delay).unref();
+    this.backoffMs = Math.min(this.backoffMs * 2, this.opts.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.closed) return;
+      this.transitionState('connecting');
+      this.connect();
+    }, delay);
+    this.reconnectTimer.unref();
   }
 
   private flushPending(error: Error): void {
-    for (const [, pending] of this.pending) {
-      pending.reject(error);
+    for (const [id] of this.pending) {
+      this.rejectPending(id, error);
     }
-    this.pending.clear();
   }
 
   private resetHello(): void {
@@ -208,6 +268,12 @@ export class GatewayClient {
 
   async waitForHello(timeoutMs = 12000): Promise<JsonObject> {
     if (this.hello) return this.hello;
+    if (this.closed) {
+      return Promise.reject(new Error('gateway client stopped'));
+    }
+    const effectiveTimeout = Number.isFinite(timeoutMs)
+      ? Math.max(100, Math.trunc(timeoutMs))
+      : this.opts.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
     return new Promise<JsonObject>((resolve, reject) => {
       const entry: HelloWaiter = {
         resolve,
@@ -215,28 +281,30 @@ export class GatewayClient {
         timer: setTimeout(() => {
           this.helloWaiters.delete(entry);
           reject(new Error('gateway connect timeout'));
-        }, timeoutMs)
+        }, effectiveTimeout)
       };
       this.helloWaiters.add(entry);
+      entry.timer.unref();
     });
   }
 
   private queueConnect(): void {
-    this.connectNonce = null;
     this.connectSent = false;
-    if (this.connectTimer !== null) clearTimeout(this.connectTimer);
+    this.clearConnectTimer();
+    const connectDelayMs = Math.max(0, this.opts.connectDelayMs ?? DEFAULT_CONNECT_DELAY_MS);
     this.connectTimer = setTimeout(() => {
       this.sendConnect().catch(() => {});
-    }, 750);
+    }, connectDelayMs);
+    this.connectTimer.unref();
   }
 
   private async sendConnect(): Promise<void> {
     if (this.connectSent) return;
-    this.connectSent = true;
-    if (this.connectTimer !== null) {
-      clearTimeout(this.connectTimer);
-      this.connectTimer = null;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error('gateway not connected');
     }
+    this.connectSent = true;
+    this.clearConnectTimer();
 
     const auth = this.opts.token
       ? { token: this.opts.token }
@@ -268,8 +336,10 @@ export class GatewayClient {
     };
 
     try {
-      const hello = await this.request<JsonObject>('connect', payload);
-      this.backoffMs = 1000;
+      const hello = await this.request<JsonObject>('connect', payload, {
+        timeoutMs: this.opts.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS
+      });
+      this.backoffMs = Math.max(100, this.opts.initialBackoffMs ?? DEFAULT_INITIAL_BACKOFF_MS);
       this.hello = hello ?? {};
       for (const waiter of this.helloWaiters) {
         clearTimeout(waiter.timer);
@@ -290,9 +360,6 @@ export class GatewayClient {
     const event = toGatewayEvent(data);
     if (event) {
       if (event.event === 'connect.challenge') {
-        if (isRecord(event.payload) && typeof event.payload.nonce === 'string') {
-          this.connectNonce = event.payload.nonce;
-        }
         this.sendConnect().catch(() => {});
         return;
       }
@@ -322,38 +389,116 @@ export class GatewayClient {
       return;
     }
 
-    this.pending.delete(response.id);
-
     if (response.ok) {
-      pending.resolve(response.payload);
+      this.resolvePending(response.id, response.payload);
       return;
     }
 
-    pending.reject(new Error(response.error?.message ?? 'request failed'));
+    this.rejectPending(response.id, new Error(response.error?.message ?? 'request failed'));
   }
 
   request<T = unknown>(
     method: string,
-    params: JsonObject,
-    opts?: { expectFinal?: boolean }
+    params: JsonObject = {},
+    opts?: { expectFinal?: boolean; timeoutMs?: number; signal?: AbortSignal }
   ): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error('gateway not connected'));
     }
 
     const id = crypto.randomUUID();
-    const payload = { type: 'req', id, method, params };
+    const frame = { type: 'req', id, method, params };
     const expectFinal = opts?.expectFinal === true;
+    const timeoutMsRaw = opts?.timeoutMs ?? this.opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    const timeoutMs =
+      Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0 ? Math.trunc(timeoutMsRaw) : DEFAULT_REQUEST_TIMEOUT_MS;
+    const signal = opts?.signal;
+    const abortError = signal?.aborted ? new Error(`gateway request aborted: ${method}`) : null;
+    if (abortError) {
+      return Promise.reject(abortError);
+    }
 
     const promise = new Promise<T>((resolve, reject) => {
-      this.pending.set(id, {
+      const entry: PendingRequest = {
         resolve: (value: unknown) => resolve(value as T),
         reject: (reason: Error) => reject(reason),
-        expectFinal
-      });
+        expectFinal,
+        method,
+        timer: null
+      };
+
+      if (signal) {
+        const abortHandler = () => {
+          this.rejectPending(id, new Error(`gateway request aborted: ${method}`));
+        };
+        signal.addEventListener('abort', abortHandler, { once: true });
+        entry.signal = signal;
+        entry.abortHandler = abortHandler;
+      }
+
+      entry.timer = setTimeout(() => {
+        this.rejectPending(id, new Error(`gateway request timeout after ${timeoutMs}ms: ${method}`));
+      }, timeoutMs);
+      entry.timer.unref();
+      this.pending.set(id, entry);
     });
 
-    this.ws.send(JSON.stringify(payload));
+    try {
+      this.ws.send(JSON.stringify(frame), (error?: Error) => {
+        if (!error) return;
+        this.rejectPending(id, new Error(`gateway send failed: ${error.message}`));
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.rejectPending(id, new Error(`gateway send failed: ${message}`));
+    }
+
     return promise;
+  }
+
+  private resolvePending(id: string, payload: unknown): void {
+    const pending = this.pending.get(id);
+    if (!pending) return;
+    this.pending.delete(id);
+    this.cleanupPending(pending);
+    pending.resolve(payload);
+  }
+
+  private rejectPending(id: string, error: Error): void {
+    const pending = this.pending.get(id);
+    if (!pending) return;
+    this.pending.delete(id);
+    this.cleanupPending(pending);
+    pending.reject(error);
+  }
+
+  private cleanupPending(pending: PendingRequest): void {
+    if (pending.timer !== null) {
+      clearTimeout(pending.timer);
+      pending.timer = null;
+    }
+    if (pending.signal && pending.abortHandler) {
+      pending.signal.removeEventListener('abort', pending.abortHandler);
+      delete pending.abortHandler;
+      delete pending.signal;
+    }
+  }
+
+  private clearConnectTimer(): void {
+    if (this.connectTimer === null) return;
+    clearTimeout(this.connectTimer);
+    this.connectTimer = null;
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer === null) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+  }
+
+  private transitionState(nextState: GatewayConnectionState): void {
+    if (this.state === nextState) return;
+    this.state = nextState;
+    this.opts.onStateChange?.(nextState);
   }
 }
