@@ -122,10 +122,22 @@ export interface Config {
     sessionTtlHours: number;
   };
   container: {
+    runtime: 'docker' | 'fly';
     portStart: number;
     portEnd: number;
     memoryMb: number;
     cpuShares: number;
+  };
+  fly: {
+    apiBaseUrl: string;
+    apiToken: string;
+    appName: string;
+    region: string;
+    volumeSizeGb: number;
+    volumeNamePrefix: string;
+    machineCpus: number;
+    gatewayProbe: boolean;
+    gatewayProbeTimeoutMs: number;
   };
   featureFlags: {
     allowMissingSecrets: boolean;

@@ -12,6 +12,9 @@ FROM node:20-slim
 
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg poppler-utils \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY --from=build /app/package.json /app/package-lock.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist

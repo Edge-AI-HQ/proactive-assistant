@@ -4,6 +4,7 @@ import type { Socket } from 'node:net';
 import httpProxy from 'http-proxy';
 import { config } from '../config.js';
 import { getUserByTelegramId } from '../db.js';
+import { resolveGatewayTargetForUser } from '../docker/manager.js';
 
 const proxy = httpProxy.createProxyServer({ ws: true, xfwd: true });
 
@@ -80,9 +81,17 @@ export const registerGatewayRoutes = (app: Application): void => {
     url.pathname = url.pathname.replace(prefix, '') || '/';
     url.searchParams.delete('token');
     req.url = `${url.pathname}${url.search}`;
+    let target;
+    try {
+      target = resolveGatewayTargetForUser(user);
+    } catch (error: unknown) {
+      console.error('Gateway target resolve error', error);
+      res.status(502).send('Gateway unavailable');
+      return;
+    }
 
     proxy.web(req, res, {
-      target: `http://127.0.0.1:${user.container_port}`,
+      target: target.httpBaseUrl,
       changeOrigin: true,
       headers: openclawAuthHeaders
     });
@@ -118,8 +127,17 @@ export const registerGatewayWsProxy = (server: Server): void => {
     }
 
     req.url = `${config.openclaw.wsPath}`;
+    let target;
+    try {
+      target = resolveGatewayTargetForUser(user);
+    } catch (error: unknown) {
+      console.error('Gateway WS target resolve error', error);
+      socket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+      socket.destroy();
+      return;
+    }
     proxy.ws(req, socket, head, {
-      target: `ws://127.0.0.1:${user.container_port}`,
+      target: target.wsBaseUrl,
       changeOrigin: true,
       headers: openclawAuthHeaders
     });

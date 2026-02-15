@@ -19,7 +19,16 @@ import { TelegramStreamProgress } from './streamProgress.js';
 import { startTypingLoop } from './typing.js';
 import { TelegramUserQueue } from './userQueue.js';
 
+const ATTACHMENT_CHAT_TIMEOUT_MS = 240_000;
+
 const userQueue = new TelegramUserQueue();
+
+const resolveChatTimeoutMs = (text: string, attachmentCount: number): number => {
+  if (attachmentCount > 0 || /<file\s/i.test(text)) {
+    return ATTACHMENT_CHAT_TIMEOUT_MS;
+  }
+  return OPENCLAW_CHAT_TIMEOUT_MS;
+};
 
 export const processContexts = async (contexts: Context[]): Promise<void> => {
   const primaryCtx = pickPrimaryContext(contexts);
@@ -68,16 +77,18 @@ export const processContexts = async (contexts: Context[]): Promise<void> => {
 
       textStream = createReplyStream(primaryCtx, stopTypingOnce);
       streamProgress = new TelegramStreamProgress();
+      let runtimeUser = getUserByTelegramId(telegramUserId) ?? user;
+      const timeoutMs = resolveChatTimeoutMs(parsedInput.text, parsedInput.attachments.length);
       let reply: OpenClawChatReply | null = null;
       let lastChatError: Error | null = null;
 
       for (let attempt = 0; attempt <= OPENCLAW_RETRY_LIMIT; attempt += 1) {
         const requestId = crypto.randomUUID();
         try {
-          reply = await sendChatToOpenClaw(user, {
+          reply = await sendChatToOpenClaw(runtimeUser, {
             text: parsedInput.text,
             attachments: parsedInput.attachments,
-            timeoutMs: OPENCLAW_CHAT_TIMEOUT_MS,
+            timeoutMs,
             idempotencyKey: requestId,
             onDelta: (text) => {
               const nextText = streamProgress.apply(stripMediaDirectivesFromText(text));
@@ -101,10 +112,11 @@ export const processContexts = async (contexts: Context[]): Promise<void> => {
             await textStream.discard().catch(() => undefined);
           }
 
-          const recovery = await ensureUserContainer(user);
+          const recovery = await ensureUserContainer(runtimeUser);
           if (!recovery.ready) {
             throw normalizedError;
           }
+          runtimeUser = getUserByTelegramId(telegramUserId) ?? runtimeUser;
 
           textStream = createReplyStream(primaryCtx, stopTypingOnce);
           streamProgress = new TelegramStreamProgress();
@@ -115,11 +127,11 @@ export const processContexts = async (contexts: Context[]): Promise<void> => {
         throw lastChatError ?? new Error('OpenClaw response missing');
       }
 
-      sanitizeUserCronStore(user.telegram_user_id);
+      sanitizeUserCronStore(runtimeUser.telegram_user_id);
       logMessage(telegramUserId, 'outgoing', reply.text);
 
       stopTypingOnce();
-      await finalizeStreamedReply(primaryCtx, user, reply, textStream);
+      await finalizeStreamedReply(primaryCtx, runtimeUser, reply, textStream);
     } catch (error: unknown) {
       const normalizedError = toError(error);
       console.error('Message routing error', normalizedError);
@@ -145,7 +157,8 @@ export const processContexts = async (contexts: Context[]): Promise<void> => {
       await primaryCtx.reply('Assistant unavailable. Restarting your container...');
 
       try {
-        await restartUserContainer(user);
+        const runtimeUser = getUserByTelegramId(telegramUserId) ?? user;
+        await restartUserContainer(runtimeUser);
         await primaryCtx.reply('Container restarted. Please retry your message.');
       } catch (restartError: unknown) {
         console.error('Container restart failed', restartError);

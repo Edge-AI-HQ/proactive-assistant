@@ -6,8 +6,19 @@ import type Dockerode from 'dockerode';
 import { config } from '../config.js';
 import { listUsedPorts, updateUser, updateUserById } from '../db.js';
 import type { UserRecord } from '../types.js';
+import {
+  ensureUserMachine,
+  getUserMachineLogs,
+  getUserMachineStatus,
+  resolveFlyGatewayTarget,
+  restartUserMachine,
+  stopUserMachine,
+  type GatewayTarget
+} from './fly.js';
 
 const docker = new Docker();
+
+const isFlyRuntime = (): boolean => config.container.runtime === 'fly';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -134,6 +145,7 @@ const sanitizeCronStore = (userDataDir: string): void => {
 };
 
 export const sanitizeAllCronStores = (): void => {
+  if (isFlyRuntime()) return;
   const dataDir = path.join(process.cwd(), 'data');
   if (!fs.existsSync(dataDir)) return;
 
@@ -159,12 +171,14 @@ export const getUserContainerDirs = (telegramUserId: number): UserContainerDirs 
 };
 
 export const sanitizeUserCronStore = (telegramUserId: number): void => {
+  if (isFlyRuntime()) return;
   const { dataDir } = getUserContainerDirs(telegramUserId);
   if (!fs.existsSync(dataDir)) return;
   sanitizeCronStore(dataDir);
 };
 
 export const resolveContainerPathForUser = (telegramUserId: number, containerPath: string): string | null => {
+  if (isFlyRuntime()) return null;
   if (!path.isAbsolute(containerPath)) return null;
   const dirs = getUserContainerDirs(telegramUserId);
 
@@ -217,6 +231,21 @@ const waitForPort = (port: number, timeoutMs = 30000): Promise<boolean> =>
     tryConnect();
   });
 
+export const resolveGatewayTargetForUser = (
+  user: Pick<UserRecord, 'telegram_user_id' | 'container_id' | 'container_port'>
+): GatewayTarget => {
+  if (isFlyRuntime()) {
+    return resolveFlyGatewayTarget(user);
+  }
+
+  return {
+    host: '127.0.0.1',
+    port: user.container_port,
+    httpBaseUrl: `http://127.0.0.1:${user.container_port}`,
+    wsBaseUrl: `ws://127.0.0.1:${user.container_port}`
+  };
+};
+
 const resolveContainer = async (
   containerId: string | null | undefined,
   fallbackName: string
@@ -256,7 +285,11 @@ const findBindSource = (binds: string[] | undefined, target: string): string | n
 
 export const ensureUserContainer = async (
   user: Pick<UserRecord, 'telegram_user_id' | 'container_id' | 'container_port'>
-): Promise<{ container: Dockerode.Container; ready: boolean }> => {
+): Promise<{ containerId: string; ready: boolean }> => {
+  if (isFlyRuntime()) {
+    return ensureUserMachine(user);
+  }
+
   const containerName = containerNameForUser(user.telegram_user_id);
   let container = await resolveContainer(user.container_id, containerName);
 
@@ -364,12 +397,17 @@ export const ensureUserContainer = async (
     container_status: ready ? 'running' : 'error'
   });
 
-  return { container, ready };
+  return { containerId: container.id, ready };
 };
 
 export const restartUserContainer = async (
   user: Pick<UserRecord, 'telegram_user_id' | 'container_id'>
 ): Promise<void> => {
+  if (isFlyRuntime()) {
+    await restartUserMachine(user);
+    return;
+  }
+
   const containerName = containerNameForUser(user.telegram_user_id);
   const container = await resolveContainer(user.container_id, containerName);
   if (!container) throw new Error('Container not found');
@@ -380,6 +418,11 @@ export const restartUserContainer = async (
 export const stopUserContainer = async (
   user: Pick<UserRecord, 'telegram_user_id' | 'container_id'>
 ): Promise<void> => {
+  if (isFlyRuntime()) {
+    await stopUserMachine(user);
+    return;
+  }
+
   const containerName = containerNameForUser(user.telegram_user_id);
   const container = await resolveContainer(user.container_id, containerName);
   if (!container) throw new Error('Container not found');
@@ -390,6 +433,10 @@ export const stopUserContainer = async (
 export const getUserContainerStatus = async (
   user: Pick<UserRecord, 'telegram_user_id' | 'container_id'>
 ): Promise<string> => {
+  if (isFlyRuntime()) {
+    return getUserMachineStatus(user);
+  }
+
   const containerName = containerNameForUser(user.telegram_user_id);
   const container = await resolveContainer(user.container_id, containerName);
   if (!container) return 'missing';
@@ -403,6 +450,10 @@ export const getUserContainerLogs = async (
   user: Pick<UserRecord, 'telegram_user_id' | 'container_id'>,
   tail = 200
 ): Promise<string> => {
+  if (isFlyRuntime()) {
+    return getUserMachineLogs(user, tail);
+  }
+
   const containerName = containerNameForUser(user.telegram_user_id);
   const container = await resolveContainer(user.container_id, containerName);
   if (!container) return '';

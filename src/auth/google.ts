@@ -193,27 +193,29 @@ export const registerAuthRoutes = (app: Application, bot?: Bot<Context>): void =
         return;
       }
 
-      if (bot) {
-        await bot.api.sendMessage(session.telegram_user_id, '登录成功！正在为您准备专属AI助手... ⏳');
-      }
+      renderSimplePage(res, '登录成功', '您已成功登录，可以返回 Telegram 继续使用。');
 
-      try {
-        const { ready } = await ensureUserContainer(record);
-        if (bot) {
-          if (ready) {
-            await bot.api.sendMessage(session.telegram_user_id, '您的AI助手已就绪！现在可以开始对话了 ✅');
-          } else {
+      void (async () => {
+        try {
+          if (bot) {
+            await bot.api.sendMessage(session.telegram_user_id, '登录成功！正在为您准备专属AI助手... ⏳');
+          }
+
+          const { ready } = await ensureUserContainer(record);
+          if (bot) {
+            if (ready) {
+              await bot.api.sendMessage(session.telegram_user_id, '您的AI助手已就绪！现在可以开始对话了 ✅');
+            } else {
+              await bot.api.sendMessage(session.telegram_user_id, '容器启动失败，请联系管理员 ❌');
+            }
+          }
+        } catch (error: unknown) {
+          console.error('Container init error', error);
+          if (bot) {
             await bot.api.sendMessage(session.telegram_user_id, '容器启动失败，请联系管理员 ❌');
           }
         }
-      } catch (error: unknown) {
-        console.error('Container init error', error);
-        if (bot) {
-          await bot.api.sendMessage(session.telegram_user_id, '容器启动失败，请联系管理员 ❌');
-        }
-      }
-
-      renderSimplePage(res, '登录成功', '您已成功登录，可以返回 Telegram 继续使用。');
+      })();
     })(req, res, next);
   });
 };
