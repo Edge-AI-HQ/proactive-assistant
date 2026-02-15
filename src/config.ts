@@ -65,10 +65,22 @@ export const config: Config = {
     sessionTtlHours: toInt(process.env.ADMIN_SESSION_TTL_HOURS, 12)
   },
   container: {
+    runtime: process.env.CONTAINER_RUNTIME === 'fly' ? 'fly' : 'docker',
     portStart: toInt(process.env.CONTAINER_PORT_START, 20000),
     portEnd: toInt(process.env.CONTAINER_PORT_END, 22000),
     memoryMb: toInt(process.env.CONTAINER_MEMORY_MB, 2048),
     cpuShares: toInt(process.env.CONTAINER_CPU_SHARES, 512)
+  },
+  fly: {
+    apiBaseUrl: process.env.FLY_API_BASE_URL || 'https://api.machines.dev/v1',
+    apiToken: process.env.FLY_API_TOKEN || '',
+    appName: process.env.FLY_APP_NAME || '',
+    region: process.env.FLY_REGION || 'iad',
+    volumeSizeGb: toInt(process.env.FLY_VOLUME_SIZE_GB, 20),
+    volumeNamePrefix: process.env.FLY_VOLUME_NAME_PREFIX || 'openclaw-user',
+    machineCpus: toInt(process.env.FLY_MACHINE_CPUS, 1),
+    gatewayProbe: toBool(process.env.FLY_GATEWAY_PROBE, true),
+    gatewayProbeTimeoutMs: toInt(process.env.FLY_GATEWAY_PROBE_TIMEOUT_MS, 120000)
   },
   featureFlags: {
     allowMissingSecrets: toBool(process.env.ALLOW_MISSING_SECRETS, false)

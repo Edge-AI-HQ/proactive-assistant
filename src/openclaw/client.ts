@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { config } from '../config.js';
+import { resolveGatewayTargetForUser } from '../docker/manager.js';
 import type { UserRecord } from '../types.js';
 import { extractArtifactReferences, type ArtifactReference } from './artifacts.js';
 import { GatewayClient, type GatewayEvent } from './gatewayClient.js';
@@ -283,7 +284,8 @@ const emitCronFinishedEvent = (event: OpenClawCronFinishedEvent): void => {
 };
 
 const buildWsUrl = (user: OpenClawUser): string => {
-  return `ws://127.0.0.1:${user.container_port}${config.openclaw.wsPath}`;
+  const target = resolveGatewayTargetForUser(user);
+  return `${target.wsBaseUrl}${config.openclaw.wsPath}`;
 };
 
 const getSession = (telegramUserId: number): GatewaySession | undefined => {

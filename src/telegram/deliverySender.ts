@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { InputFile, type Context } from 'grammy';
+import { config } from '../config.js';
+import { fetchFlyMachineArtifact } from '../docker/fly.js';
 import { type ArtifactReference } from '../openclaw/artifacts.js';
 import { renderTelegramHtmlFromMarkdown } from './format.js';
 import { TELEGRAM_PARSE_ERROR_RE } from './constants.js';
@@ -28,6 +30,14 @@ interface PreparedVoiceFile {
 }
 
 const execFileAsync = promisify(execFile);
+
+const sanitizeTempFileName = (value: string): string => {
+  const base = path.basename(value).replace(/[^a-zA-Z0-9._-]+/g, '-');
+  if (!base || base === '.' || base === '..') {
+    return `artifact-${Date.now()}`;
+  }
+  return base.slice(0, 120);
+};
 
 const prepareVoiceFile = async (hostPath: string): Promise<PreparedVoiceFile | null> => {
   if (isVoiceCompatibleAudio(hostPath)) {
@@ -206,7 +216,27 @@ export const sendArtifact = async (
   }
 
   const hostPath = resolveHostPath(user.telegram_user_id, source);
-  if (!hostPath) return false;
-  if (!fs.existsSync(hostPath)) return false;
-  return sendLocalArtifact(ctx, hostPath, asVoice);
+  if (hostPath && fs.existsSync(hostPath)) {
+    return sendLocalArtifact(ctx, hostPath, asVoice);
+  }
+
+  if (config.container.runtime !== 'fly') {
+    return false;
+  }
+
+  const artifactFile = await fetchFlyMachineArtifact(user, source).catch(() => null);
+  if (!artifactFile) return false;
+
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'pinai-fly-artifact-'));
+  const tempPath = path.join(tempDir, sanitizeTempFileName(artifactFile.fileName));
+  await fs.promises.writeFile(tempPath, artifactFile.buffer);
+
+  try {
+    return await sendLocalArtifact(ctx, tempPath, asVoice);
+  } finally {
+    await fs.promises.rm(tempDir, {
+      recursive: true,
+      force: true
+    });
+  }
 };

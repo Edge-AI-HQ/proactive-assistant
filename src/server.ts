@@ -49,8 +49,10 @@ app.post('/webhook/telegram', async (req: Request, res: Response) => {
       }
     }
 
-    await bot.handleUpdate(req.body);
     res.sendStatus(200);
+    void bot.handleUpdate(req.body).catch((error: unknown) => {
+      console.error('Telegram webhook async handling error', error);
+    });
   } catch (error: unknown) {
     console.error('Telegram webhook error', error);
     res.sendStatus(500);

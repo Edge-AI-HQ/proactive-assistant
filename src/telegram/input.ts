@@ -1,4 +1,5 @@
 import type { Context } from 'grammy';
+import { config } from '../config.js';
 import type { OpenClawAttachment } from '../openclaw/client.js';
 import { buildAgentFileBlockFromInbound } from './mediaUnderstanding.js';
 import {
@@ -20,6 +21,21 @@ export interface ParsedTelegramInput {
 const pushForwardedMediaText = (lines: string[], kind: InboundMediaKind, containerPath: string): void => {
   lines.push(`<media:${kind}>`);
   lines.push(`MEDIA: ${containerPath}`);
+};
+
+const buildFileBlockForInbound = async (
+  stored: { hostPath: string },
+  file: DownloadedTelegramFile,
+  mimeType?: string
+): Promise<string | null> => {
+  const fileBlockInput: { hostPath: string; fileName: string; mimeType?: string } = {
+    hostPath: stored.hostPath,
+    fileName: file.fileName
+  };
+  if (mimeType) {
+    fileBlockInput.mimeType = mimeType;
+  }
+  return buildAgentFileBlockFromInbound(fileBlockInput);
 };
 
 export const parseTelegramInput = async (
@@ -50,6 +66,37 @@ export const parseTelegramInput = async (
       mimeType?: string;
     }
   ): Promise<void> => {
+    const resolvedMimeType = opts?.mimeType || file.contentType;
+
+    if (config.container.runtime === 'fly') {
+      if (opts?.includeFileBlock) {
+        const stored = await ensureInboundMediaPath(telegramUserId, file.fileName, file.buffer);
+        const fileBlock = await buildFileBlockForInbound(stored, file, resolvedMimeType);
+        if (fileBlock) {
+          mediaHints.push(fileBlock);
+          return;
+        }
+      }
+
+      const mimeType = resolvedMimeType || 'application/octet-stream';
+      const normalizedMimeType = mimeType.toLowerCase();
+      const type: OpenClawAttachment['type'] =
+        opts?.includeImageAttachment || kind === 'image' || kind === 'sticker' || normalizedMimeType.startsWith('image/')
+          ? 'image'
+          : kind === 'audio' || normalizedMimeType.startsWith('audio/')
+            ? 'audio'
+            : kind === 'video' || normalizedMimeType.startsWith('video/')
+              ? 'video'
+              : 'file';
+      attachments.push({
+        type,
+        mimeType,
+        fileName: file.fileName,
+        content: file.buffer.toString('base64')
+      });
+      return;
+    }
+
     const stored = await ensureInboundMediaPath(telegramUserId, file.fileName, file.buffer);
     pushForwardedMediaText(mediaHints, kind, stored.containerPath);
 
@@ -58,17 +105,7 @@ export const parseTelegramInput = async (
     }
 
     if (opts?.includeFileBlock) {
-      const fileBlockInput: { hostPath: string; fileName: string; mimeType?: string } = {
-        hostPath: stored.hostPath,
-        fileName: file.fileName
-      };
-
-      const resolvedMimeType = opts.mimeType || file.contentType;
-      if (resolvedMimeType) {
-        fileBlockInput.mimeType = resolvedMimeType;
-      }
-
-      const fileBlock = await buildAgentFileBlockFromInbound(fileBlockInput);
+      const fileBlock = await buildFileBlockForInbound(stored, file, resolvedMimeType);
       if (fileBlock) {
         mediaHints.push(fileBlock);
       }
