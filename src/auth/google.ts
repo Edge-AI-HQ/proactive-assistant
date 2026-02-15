@@ -5,7 +5,10 @@ import type { Bot, Context } from 'grammy';
 import { config } from '../config.js';
 import { isEmailAllowedForAuth, normalizeEmail } from './allowlist.js';
 import {
+  consumeGatewayOauthSession,
   consumeOauthSession,
+  createGatewayOauthSession,
+  createGatewaySession,
   createGatewayToken,
   createUser,
   getOauthSession,
@@ -41,6 +44,37 @@ const isAuthUser = (value: unknown): value is AuthUser => {
 const renderSimplePage = (res: Response, title: string, message: string): void => {
   res.status(200).send(`<!doctype html><html><head><meta charset="utf-8"><title>${title}</title></head><body style="font-family:ui-sans-serif,system-ui;max-width:680px;margin:40px auto;padding:16px;">
   <h2>${title}</h2><p>${message}</p></body></html>`);
+};
+
+const GATEWAY_SESSION_TTL_HOURS = 12;
+
+const gatewayBasePath = (telegramUserId: number): string => `/gateway/${telegramUserId}`;
+
+const sanitizeGatewayNextPath = (telegramUserId: number, value: unknown): string => {
+  const fallback = gatewayBasePath(telegramUserId);
+  if (typeof value !== 'string') return fallback;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('/') || trimmed.includes('\r') || trimmed.includes('\n')) return fallback;
+  const base = gatewayBasePath(telegramUserId);
+  if (trimmed === base || trimmed.startsWith(`${base}/`)) {
+    return trimmed;
+  }
+  return fallback;
+};
+
+const setGatewaySessionCookie = (
+  res: Response,
+  telegramUserId: number,
+  sessionToken: string,
+  expiresAt: string
+): void => {
+  res.cookie('gateway_sid', sessionToken, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: config.nodeEnv === 'production',
+    path: gatewayBasePath(telegramUserId),
+    expires: new Date(expiresAt)
+  });
 };
 
 let strategyReady = false;
@@ -116,6 +150,32 @@ export const registerAuthRoutes = (app: Application, bot?: Bot<Context>): void =
     })(req, res, next);
   });
 
+  app.get('/auth/google/gateway', (req: Request, res: Response, next: NextFunction) => {
+    const rawUserId = req.query.user_id;
+    const userId =
+      typeof rawUserId === 'string' && /^\d+$/.test(rawUserId) ? Number.parseInt(rawUserId, 10) : Number.NaN;
+
+    if (!Number.isFinite(userId)) {
+      renderSimplePage(res, '访问失败', '无效的用户标识。请返回 Telegram 重新获取入口。');
+      return;
+    }
+
+    const user = getUserByTelegramId(userId);
+    if (!user) {
+      renderSimplePage(res, '访问失败', '用户不存在或尚未完成绑定。请先在 Telegram 完成登录。');
+      return;
+    }
+
+    const nextPath = sanitizeGatewayNextPath(user.telegram_user_id, req.query.next);
+    const { stateToken } = createGatewayOauthSession(user.telegram_user_id, nextPath);
+
+    passport.authenticate('google', {
+      scope: ['profile', 'email'],
+      state: stateToken,
+      session: false
+    })(req, res, next);
+  });
+
   app.get('/auth/google/callback', (req: Request, res: Response, next: NextFunction) => {
     passport.authenticate('google', { session: false }, async (err: unknown, rawUser: unknown) => {
       if (err) {
@@ -147,9 +207,36 @@ export const registerAuthRoutes = (app: Application, bot?: Bot<Context>): void =
         return;
       }
 
+      const gatewaySession = consumeGatewayOauthSession(state);
+      if (gatewaySession) {
+        if ('error' in rawUser) {
+          renderSimplePage(res, '登录失败', '认证失败，请稍后再试。');
+          return;
+        }
+
+        const user = getUserByTelegramId(gatewaySession.telegram_user_id);
+        if (!user) {
+          renderSimplePage(res, '登录失败', '用户不存在或尚未完成绑定。');
+          return;
+        }
+
+        const normalizedEmail = normalizeEmail(rawUser.email);
+        const emailMatches = normalizeEmail(user.google_email) === normalizedEmail;
+        const googleIdMatches = user.google_id === rawUser.googleId;
+        if (!emailMatches && !googleIdMatches) {
+          renderSimplePage(res, '登录失败', '当前 Google 账号与该 Telegram 用户不匹配。');
+          return;
+        }
+
+        const { sessionToken, expiresAt } = createGatewaySession(user.telegram_user_id, GATEWAY_SESSION_TTL_HOURS);
+        setGatewaySessionCookie(res, user.telegram_user_id, sessionToken, expiresAt);
+        res.redirect(sanitizeGatewayNextPath(user.telegram_user_id, gatewaySession.next_path));
+        return;
+      }
+
       const session = consumeOauthSession(state);
       if (!session) {
-        renderSimplePage(res, '登录失败', '登录链接已过期，请回到 Telegram 重新发送 /start。');
+        renderSimplePage(res, '登录失败', '登录链接已过期，请重新发起登录。');
         return;
       }
 

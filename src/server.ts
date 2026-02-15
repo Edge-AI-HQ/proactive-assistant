@@ -6,8 +6,14 @@ import cookieParser from 'cookie-parser';
 import { config, validateConfig } from './config.js';
 import { registerAuthRoutes } from './auth/google.js';
 import { registerAdminRoutes } from './admin/routes.js';
-import { cleanupExpiredOauthSessions, purgeExpiredAdminSessions } from './db.js';
+import {
+  cleanupExpiredGatewayOauthSessions,
+  cleanupExpiredGatewaySessions,
+  cleanupExpiredOauthSessions,
+  purgeExpiredAdminSessions
+} from './db.js';
 import { sanitizeAllCronStores } from './docker/manager.js';
+import { registerGatewayRoutes, registerGatewayWsProxy } from './gateway/routes.js';
 import { buildBot } from './telegram/bot.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -61,6 +67,7 @@ app.post('/webhook/telegram', async (req: Request, res: Response) => {
 
 registerAuthRoutes(app, bot);
 registerAdminRoutes(app);
+registerGatewayRoutes(app);
 
 app.get('/health', (req: Request, res: Response) => {
   void req;
@@ -74,10 +81,13 @@ app.get('/', (req: Request, res: Response) => {
 
 setInterval(() => {
   cleanupExpiredOauthSessions();
+  cleanupExpiredGatewayOauthSessions();
+  cleanupExpiredGatewaySessions();
   purgeExpiredAdminSessions();
 }, 5 * 60 * 1000);
 
 const server = http.createServer(app);
+registerGatewayWsProxy(server);
 server.listen(config.port, () => {
   console.log(`PIN AI Assistant listening on :${config.port}`);
 });

@@ -43,7 +43,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
       return;
     }
 
-    const url = `${config.publicBaseUrl}/gateway/${user.telegram_user_id}?token=${user.gateway_token}`;
+    const url = `${config.publicBaseUrl}/gateway/${user.telegram_user_id}`;
     await ctx.reply(`Your Gateway URL:\n${url}`);
   });
 
