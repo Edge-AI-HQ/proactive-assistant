@@ -9,6 +9,8 @@ import type {
   AuthAllowlistKind,
   AuthAllowlistRecord,
   CreateUserInput,
+  GatewayOauthSessionRecord,
+  GatewaySessionRecord,
   MessageLogRecord,
   OauthSessionRecord,
   UserMutableFields,
@@ -52,6 +54,23 @@ db.exec(`
     expires_at TIMESTAMP NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS gateway_oauth_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_user_id BIGINT NOT NULL,
+    state_token TEXT UNIQUE NOT NULL,
+    next_path TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS gateway_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_user_id BIGINT NOT NULL,
+    session_token TEXT UNIQUE NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS message_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_user_id BIGINT NOT NULL,
@@ -83,6 +102,12 @@ db.exec(`
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (kind, value)
   );
+
+  CREATE INDEX IF NOT EXISTS idx_gateway_oauth_sessions_expires_at
+    ON gateway_oauth_sessions (expires_at);
+
+  CREATE INDEX IF NOT EXISTS idx_gateway_sessions_expires_at
+    ON gateway_sessions (expires_at);
 `);
 
 const nowIso = (): string => new Date().toISOString();
@@ -117,6 +142,55 @@ export const consumeOauthSession = (stateToken: string): OauthSessionRecord | nu
 
 export const cleanupExpiredOauthSessions = (): void => {
   db.prepare<[string]>('DELETE FROM oauth_sessions WHERE expires_at <= ?').run(nowIso());
+};
+
+export const createGatewayOauthSession = (
+  telegramUserId: number,
+  nextPath: string
+): { stateToken: string; expiresAt: string } => {
+  const stateToken = randomToken(24);
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  db.prepare<[number, string, string, string]>(`
+    INSERT INTO gateway_oauth_sessions (telegram_user_id, state_token, next_path, expires_at)
+    VALUES (?, ?, ?, ?)
+  `).run(telegramUserId, stateToken, nextPath, expiresAt);
+  return { stateToken, expiresAt };
+};
+
+export const consumeGatewayOauthSession = (stateToken: string): GatewayOauthSessionRecord | null => {
+  const session = db.prepare<[string, string], GatewayOauthSessionRecord>(`
+    SELECT * FROM gateway_oauth_sessions WHERE state_token = ? AND expires_at > ?
+  `).get(stateToken, nowIso());
+  if (!session) return null;
+  db.prepare<[string]>('DELETE FROM gateway_oauth_sessions WHERE state_token = ?').run(stateToken);
+  return session;
+};
+
+export const cleanupExpiredGatewayOauthSessions = (): void => {
+  db.prepare<[string]>('DELETE FROM gateway_oauth_sessions WHERE expires_at <= ?').run(nowIso());
+};
+
+export const createGatewaySession = (
+  telegramUserId: number,
+  ttlHours: number
+): { sessionToken: string; expiresAt: string } => {
+  const sessionToken = randomToken(32);
+  const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000).toISOString();
+  db.prepare<[number, string, string]>(`
+    INSERT INTO gateway_sessions (telegram_user_id, session_token, expires_at)
+    VALUES (?, ?, ?)
+  `).run(telegramUserId, sessionToken, expiresAt);
+  return { sessionToken, expiresAt };
+};
+
+export const getGatewaySession = (sessionToken: string): GatewaySessionRecord | undefined => {
+  return db.prepare<[string, string], GatewaySessionRecord>(`
+    SELECT * FROM gateway_sessions WHERE session_token = ? AND expires_at > ?
+  `).get(sessionToken, nowIso());
+};
+
+export const cleanupExpiredGatewaySessions = (): void => {
+  db.prepare<[string]>('DELETE FROM gateway_sessions WHERE expires_at <= ?').run(nowIso());
 };
 
 export const getUserByTelegramId = (telegramUserId: number): UserRecord | undefined => {

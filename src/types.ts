@@ -21,6 +21,23 @@ export interface OauthSessionRecord {
   expires_at: string;
 }
 
+export interface GatewayOauthSessionRecord {
+  id: number;
+  telegram_user_id: number;
+  state_token: string;
+  next_path: string;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface GatewaySessionRecord {
+  id: number;
+  telegram_user_id: number;
+  session_token: string;
+  created_at: string;
+  expires_at: string;
+}
+
 export interface MessageLogRecord {
   id: number;
   telegram_user_id: number;
