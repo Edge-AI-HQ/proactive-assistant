@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import type { Context } from 'grammy';
 import { config } from '../config.js';
-import { getUserByTelegramId, logMessage, touchUser } from '../db.js';
+import { getUserByTelegramId, logMessage, recordTokenUsage, touchUser } from '../db.js';
 import { ensureUserContainer, restartUserContainer, sanitizeUserCronStore } from '../docker/manager.js';
 import { dropOpenClawSession, sendChatToOpenClaw, type OpenClawChatReply } from '../openclaw/client.js';
 import { LOGIN_REQUIRED_MESSAGE, OPENCLAW_CHAT_TIMEOUT_MS, OPENCLAW_RETRY_LIMIT } from './constants.js';
@@ -28,6 +28,41 @@ const resolveChatTimeoutMs = (text: string, attachmentCount: number): number => 
     return ATTACHMENT_CHAT_TIMEOUT_MS;
   }
   return OPENCLAW_CHAT_TIMEOUT_MS;
+};
+
+const buildTelegramIdempotencyKey = (ctx: Context): string => {
+  const chatId = ctx.chat?.id;
+  const messageId = ctx.msg?.message_id;
+  if (typeof chatId === 'number' && Number.isFinite(chatId) && typeof messageId === 'number') {
+    return `tg:${Math.trunc(chatId)}:${Math.trunc(messageId)}`;
+  }
+
+  const updateId = (ctx.update as { update_id?: unknown }).update_id;
+  if (typeof chatId === 'number' && Number.isFinite(chatId) && typeof updateId === 'number') {
+    return `tg:${Math.trunc(chatId)}:u:${Math.trunc(updateId)}`;
+  }
+
+  return `tg:fallback:${crypto.randomUUID()}`;
+};
+
+const persistUsageLedger = (telegramUserId: number, reply: OpenClawChatReply): void => {
+  if (!reply.usage) return;
+
+  const usage = reply.usage;
+  recordTokenUsage({
+    telegram_user_id: telegramUserId,
+    session_key: reply.sessionKey,
+    run_id: reply.runId,
+    idempotency_key: reply.idempotencyKey || reply.runId,
+    provider: usage.provider ?? null,
+    model: usage.model ?? null,
+    input_tokens: usage.inputTokens,
+    output_tokens: usage.outputTokens,
+    cache_read_tokens: usage.cacheReadTokens,
+    cache_write_tokens: usage.cacheWriteTokens,
+    total_tokens: usage.totalTokens,
+    cost_usd: usage.costUsd ?? 0
+  });
 };
 
 export const processContexts = async (contexts: Context[]): Promise<void> => {
@@ -79,17 +114,17 @@ export const processContexts = async (contexts: Context[]): Promise<void> => {
       streamProgress = new TelegramStreamProgress();
       let runtimeUser = getUserByTelegramId(telegramUserId) ?? user;
       const timeoutMs = resolveChatTimeoutMs(parsedInput.text, parsedInput.attachments.length);
+      const idempotencyKey = buildTelegramIdempotencyKey(primaryCtx);
       let reply: OpenClawChatReply | null = null;
       let lastChatError: Error | null = null;
 
       for (let attempt = 0; attempt <= OPENCLAW_RETRY_LIMIT; attempt += 1) {
-        const requestId = crypto.randomUUID();
         try {
           reply = await sendChatToOpenClaw(runtimeUser, {
             text: parsedInput.text,
             attachments: parsedInput.attachments,
             timeoutMs,
-            idempotencyKey: requestId,
+            idempotencyKey,
             onDelta: (text) => {
               const nextText = streamProgress.apply(stripMediaDirectivesFromText(text));
               if (nextText) {
@@ -129,6 +164,11 @@ export const processContexts = async (contexts: Context[]): Promise<void> => {
 
       sanitizeUserCronStore(runtimeUser.telegram_user_id);
       logMessage(telegramUserId, 'outgoing', reply.text);
+      try {
+        persistUsageLedger(runtimeUser.telegram_user_id, reply);
+      } catch (usageError: unknown) {
+        console.error('Usage ledger persistence failed', usageError);
+      }
 
       stopTypingOnce();
       await finalizeStreamedReply(primaryCtx, runtimeUser, reply, textStream);

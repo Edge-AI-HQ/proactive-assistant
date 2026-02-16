@@ -11,9 +11,13 @@ import {
   ensureAdminUser,
   getAdminByUsername,
   getAdminSession,
+  getUsageOverview,
+  getUserUsageTotals,
   getUserById,
+  listTokenUsageLedgerByUser,
   listRecentLogs,
-  listUsers
+  listUsers,
+  listUsersWithUsage
 } from '../db.js';
 import { getUserContainerLogs, restartUserContainer, stopUserContainer } from '../docker/manager.js';
 
@@ -119,12 +123,18 @@ export const registerAdminRoutes = (app: Application): void => {
   });
 
   app.get('/admin/dashboard', adminAuth, (req: Request, res: Response) => {
-    const users = listUsers();
+    const users = listUsersWithUsage();
     const running = users.filter((user) => user.container_status === 'running').length;
+    const usage = getUsageOverview();
+    const activeUsageUsers = users
+      .filter((user) => user.total_tokens > 0)
+      .sort((a, b) => b.total_tokens - a.total_tokens)
+      .slice(0, 20);
 
     const stats = {
       totalUsers: users.length,
       runningContainers: running,
+      usage,
       uptime: os.uptime(),
       loadAvg: os.loadavg().map((value) => value.toFixed(2)),
       memory: {
@@ -134,7 +144,7 @@ export const registerAdminRoutes = (app: Application): void => {
     };
 
     const admin = req.adminSession?.admin_username ?? config.admin.username;
-    res.render('admin/dashboard', { stats, admin });
+    res.render('admin/dashboard', { stats, admin, activeUsageUsers });
   });
 
   app.get('/admin/auth', adminAuth, (req: Request, res: Response) => {
@@ -181,7 +191,7 @@ export const registerAdminRoutes = (app: Application): void => {
 
   app.get('/admin/users', adminAuth, (req: Request, res: Response) => {
     void req;
-    const users = listUsers();
+    const users = listUsersWithUsage();
     res.render('admin/users', { users });
   });
 
@@ -193,7 +203,9 @@ export const registerAdminRoutes = (app: Application): void => {
     }
 
     const logs = await getUserContainerLogs(user);
-    res.render('admin/user_detail', { user, logs });
+    const usage = getUserUsageTotals(user.telegram_user_id);
+    const usageLogs = listTokenUsageLedgerByUser(user.telegram_user_id, 100);
+    res.render('admin/user_detail', { user, logs, usage, usageLogs });
   });
 
   app.post('/admin/users/:user_id/restart', adminAuth, async (req: Request, res: Response) => {
@@ -227,9 +239,11 @@ export const registerAdminRoutes = (app: Application): void => {
   app.get('/admin/stats', adminAuth, (req: Request, res: Response) => {
     void req;
     const users = listUsers();
+    const usage = getUsageOverview();
     res.json({
       totalUsers: users.length,
-      runningContainers: users.filter((user) => user.container_status === 'running').length
+      runningContainers: users.filter((user) => user.container_status === 'running').length,
+      usage
     });
   });
 };
