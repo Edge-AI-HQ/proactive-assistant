@@ -1,4 +1,3 @@
-export const LOGIN_REQUIRED_MESSAGE = 'Please login first. Send /start to get the Google login link.';
 export const MEDIA_GROUP_TIMEOUT_MS = 500;
 export const MAX_TEXT_CHUNK = 3900;
 export const TELEGRAM_STREAM_THROTTLE_MS = 800;

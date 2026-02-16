@@ -6,13 +6,9 @@ import { config } from './config.js';
 import type {
   AdminSessionView,
   AdminUserRecord,
-  AuthAllowlistKind,
-  AuthAllowlistRecord,
   CreateUserInput,
-  GatewayOauthSessionRecord,
   GatewaySessionRecord,
   MessageLogRecord,
-  OauthSessionRecord,
   TokenUsageLedgerInput,
   TokenUsageLedgerRecord,
   UsageOverviewRecord,
@@ -40,32 +36,12 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_user_id BIGINT UNIQUE NOT NULL,
     telegram_username TEXT,
-    google_email TEXT UNIQUE NOT NULL,
-    google_id TEXT UNIQUE NOT NULL,
     container_id TEXT UNIQUE NOT NULL,
     container_port INTEGER UNIQUE NOT NULL,
     container_status TEXT DEFAULT 'creating',
     gateway_token TEXT UNIQUE NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_active_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS oauth_sessions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    telegram_user_id BIGINT NOT NULL,
-    telegram_username TEXT,
-    state_token TEXT UNIQUE NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS gateway_oauth_sessions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    telegram_user_id BIGINT NOT NULL,
-    state_token TEXT UNIQUE NOT NULL,
-    next_path TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS gateway_sessions (
@@ -100,14 +76,6 @@ db.exec(`
     FOREIGN KEY (admin_id) REFERENCES admin_users(id)
   );
 
-  CREATE TABLE IF NOT EXISTS auth_allowlist (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind TEXT NOT NULL CHECK (kind IN ('domain', 'email')),
-    value TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (kind, value)
-  );
-
   CREATE TABLE IF NOT EXISTS token_usage_ledger (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_user_id BIGINT NOT NULL,
@@ -137,11 +105,14 @@ db.exec(`
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   );
 
-  CREATE INDEX IF NOT EXISTS idx_gateway_oauth_sessions_expires_at
-    ON gateway_oauth_sessions (expires_at);
-
   CREATE INDEX IF NOT EXISTS idx_gateway_sessions_expires_at
     ON gateway_sessions (expires_at);
+
+  CREATE INDEX IF NOT EXISTS idx_gateway_sessions_user_created
+    ON gateway_sessions (telegram_user_id, created_at DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_message_logs_user_created
+    ON message_logs (telegram_user_id, created_at DESC);
 
   CREATE INDEX IF NOT EXISTS idx_token_usage_ledger_user_created
     ON token_usage_ledger (telegram_user_id, created_at DESC);
@@ -150,65 +121,102 @@ db.exec(`
     ON token_usage_ledger (run_id);
 `);
 
+interface TableColumnInfo {
+  name: string;
+}
+
+const safeIdentifier = (value: string): string => {
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value)) {
+    throw new Error(`Unsafe SQL identifier: ${value}`);
+  }
+  return value;
+};
+
+const hasTable = (name: string): boolean => {
+  return Boolean(
+    db
+      .prepare<[string], { name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(name)
+  );
+};
+
+const listTableColumns = (tableName: string): string[] => {
+  const safe = safeIdentifier(tableName);
+  return db
+    .prepare<[], TableColumnInfo>(`PRAGMA table_info(${safe})`)
+    .all()
+    .map((row) => row.name);
+};
+
+const migrateUsersToTelegramSchema = (): void => {
+  if (!hasTable('users')) return;
+
+  const columns = new Set(listTableColumns('users'));
+  const hasLegacyGoogleColumns = columns.has('google_email') || columns.has('google_id');
+  if (!hasLegacyGoogleColumns) return;
+
+  const runMigration = db.transaction(() => {
+    db.exec(`
+      DROP TABLE IF EXISTS users_migrated;
+
+      CREATE TABLE users_migrated (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        telegram_user_id BIGINT UNIQUE NOT NULL,
+        telegram_username TEXT,
+        container_id TEXT UNIQUE NOT NULL,
+        container_port INTEGER UNIQUE NOT NULL,
+        container_status TEXT DEFAULT 'creating',
+        gateway_token TEXT UNIQUE NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_active_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      INSERT INTO users_migrated (
+        id,
+        telegram_user_id,
+        telegram_username,
+        container_id,
+        container_port,
+        container_status,
+        gateway_token,
+        created_at,
+        last_active_at
+      )
+      SELECT
+        id,
+        telegram_user_id,
+        telegram_username,
+        container_id,
+        container_port,
+        container_status,
+        gateway_token,
+        created_at,
+        last_active_at
+      FROM users;
+
+      DROP TABLE users;
+      ALTER TABLE users_migrated RENAME TO users;
+    `);
+  });
+
+  runMigration();
+  console.info('[db] Migrated users table to Telegram-only schema.');
+};
+
+const cleanupLegacyAuthTables = (): void => {
+  db.exec(`
+    DROP TABLE IF EXISTS oauth_sessions;
+    DROP TABLE IF EXISTS gateway_oauth_sessions;
+    DROP TABLE IF EXISTS auth_allowlist;
+  `);
+};
+
+migrateUsersToTelegramSchema();
+cleanupLegacyAuthTables();
+
 const nowIso = (): string => new Date().toISOString();
 
 const randomToken = (size = 24): string => crypto.randomBytes(size).toString('hex');
-
-export const createOauthSession = (
-  telegramUserId: number,
-  telegramUsername?: string | null
-): { stateToken: string; expiresAt: string } => {
-  const stateToken = randomToken(24);
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-  db.prepare<[number, string | null, string, string]>(`
-    INSERT INTO oauth_sessions (telegram_user_id, telegram_username, state_token, expires_at)
-    VALUES (?, ?, ?, ?)
-  `).run(telegramUserId, telegramUsername || null, stateToken, expiresAt);
-  return { stateToken, expiresAt };
-};
-
-export const getOauthSession = (stateToken: string): OauthSessionRecord | undefined => {
-  return db.prepare<[string, string], OauthSessionRecord>(`
-    SELECT * FROM oauth_sessions WHERE state_token = ? AND expires_at > ?
-  `).get(stateToken, nowIso());
-};
-
-export const consumeOauthSession = (stateToken: string): OauthSessionRecord | null => {
-  const session = getOauthSession(stateToken);
-  if (!session) return null;
-  db.prepare<[string]>('DELETE FROM oauth_sessions WHERE state_token = ?').run(stateToken);
-  return session;
-};
-
-export const cleanupExpiredOauthSessions = (): void => {
-  db.prepare<[string]>('DELETE FROM oauth_sessions WHERE expires_at <= ?').run(nowIso());
-};
-
-export const createGatewayOauthSession = (
-  telegramUserId: number,
-  nextPath: string
-): { stateToken: string; expiresAt: string } => {
-  const stateToken = randomToken(24);
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-  db.prepare<[number, string, string, string]>(`
-    INSERT INTO gateway_oauth_sessions (telegram_user_id, state_token, next_path, expires_at)
-    VALUES (?, ?, ?, ?)
-  `).run(telegramUserId, stateToken, nextPath, expiresAt);
-  return { stateToken, expiresAt };
-};
-
-export const consumeGatewayOauthSession = (stateToken: string): GatewayOauthSessionRecord | null => {
-  const session = db.prepare<[string, string], GatewayOauthSessionRecord>(`
-    SELECT * FROM gateway_oauth_sessions WHERE state_token = ? AND expires_at > ?
-  `).get(stateToken, nowIso());
-  if (!session) return null;
-  db.prepare<[string]>('DELETE FROM gateway_oauth_sessions WHERE state_token = ?').run(stateToken);
-  return session;
-};
-
-export const cleanupExpiredGatewayOauthSessions = (): void => {
-  db.prepare<[string]>('DELETE FROM gateway_oauth_sessions WHERE expires_at <= ?').run(nowIso());
-};
 
 export const createGatewaySession = (
   telegramUserId: number,
@@ -241,39 +249,25 @@ export const getUserById = (id: number): UserRecord | undefined => {
   return db.prepare<[number], UserRecord>('SELECT * FROM users WHERE id = ?').get(id);
 };
 
-export const getUserByGoogleId = (googleId: string): UserRecord | undefined => {
-  return db.prepare<[string], UserRecord>('SELECT * FROM users WHERE google_id = ?').get(googleId);
-};
-
-export const getUserByGoogleEmail = (googleEmail: string): UserRecord | undefined => {
-  return db.prepare<[string], UserRecord>('SELECT * FROM users WHERE google_email = ?').get(googleEmail);
-};
-
 export const listUsers = (): UserRecord[] => {
   return db.prepare<[], UserRecord>('SELECT * FROM users ORDER BY created_at DESC').all();
 };
 
 export const createUser = (user: CreateUserInput): UserRecord | undefined => {
-  const stmt = db.prepare<
-    [number, string | null, string, string, string, number, string, string, string]
-  >(`
+  const stmt = db.prepare<[number, string | null, string, number, string, string, string]>(`
     INSERT INTO users (
       telegram_user_id,
       telegram_username,
-      google_email,
-      google_id,
       container_id,
       container_port,
       container_status,
       gateway_token,
       last_active_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
   stmt.run(
     user.telegram_user_id,
     user.telegram_username || null,
-    user.google_email,
-    user.google_id,
     user.container_id,
     user.container_port,
     user.container_status || 'creating',
@@ -593,35 +587,6 @@ export const deleteAdminSession = (sessionToken: string): void => {
 
 export const purgeExpiredAdminSessions = (): void => {
   db.prepare<[string]>('DELETE FROM admin_sessions WHERE expires_at <= ?').run(nowIso());
-};
-
-export const listAuthAllowlist = (kind?: AuthAllowlistKind): AuthAllowlistRecord[] => {
-  if (kind) {
-    return db
-      .prepare<[AuthAllowlistKind], AuthAllowlistRecord>(
-        'SELECT * FROM auth_allowlist WHERE kind = ? ORDER BY created_at ASC, id ASC'
-      )
-      .all(kind);
-  }
-
-  return db
-    .prepare<[], AuthAllowlistRecord>('SELECT * FROM auth_allowlist ORDER BY created_at ASC, id ASC')
-    .all();
-};
-
-export const createAuthAllowlistEntry = (kind: AuthAllowlistKind, value: string): AuthAllowlistRecord | undefined => {
-  db.prepare<[AuthAllowlistKind, string]>(`
-    INSERT OR IGNORE INTO auth_allowlist (kind, value)
-    VALUES (?, ?)
-  `).run(kind, value);
-
-  return db
-    .prepare<[AuthAllowlistKind, string], AuthAllowlistRecord>('SELECT * FROM auth_allowlist WHERE kind = ? AND value = ?')
-    .get(kind, value);
-};
-
-export const deleteAuthAllowlistEntryById = (id: number): void => {
-  db.prepare<[number]>('DELETE FROM auth_allowlist WHERE id = ?').run(id);
 };
 
 export const createGatewayToken = (): string => randomToken(24);

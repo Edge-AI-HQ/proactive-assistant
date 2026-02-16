@@ -4,7 +4,7 @@ import { config } from '../config.js';
 import { getUserByTelegramId, logMessage, recordTokenUsage, touchUser } from '../db.js';
 import { ensureUserContainer, restartUserContainer, sanitizeUserCronStore } from '../docker/manager.js';
 import { dropOpenClawSession, sendChatToOpenClaw, type OpenClawChatReply } from '../openclaw/chatSessionService.js';
-import { LOGIN_REQUIRED_MESSAGE, OPENCLAW_CHAT_TIMEOUT_MS, OPENCLAW_RETRY_LIMIT } from './constants.js';
+import { OPENCLAW_CHAT_TIMEOUT_MS, OPENCLAW_RETRY_LIMIT } from './constants.js';
 import {
   isOpenClawRecoverableError,
   isOpenClawTimeoutError,
@@ -12,6 +12,7 @@ import {
   isTelegramDeliveryError,
   toError
 } from './errors.js';
+import { ensureTelegramUser } from './identity.js';
 import { parseInputsFromContexts, pickPrimaryContext } from './contextInput.js';
 import { createReplyStream, finalizeStreamedReply } from './replyFlow.js';
 import { stripMediaDirectivesFromText } from './text.js';
@@ -73,11 +74,7 @@ export const processContexts = async (contexts: Context[]): Promise<void> => {
   if (!telegramUserId) return;
 
   await userQueue.enqueue(telegramUserId, async () => {
-    const user = getUserByTelegramId(telegramUserId);
-    if (!user) {
-      await primaryCtx.reply(LOGIN_REQUIRED_MESSAGE);
-      return;
-    }
+    const user = ensureTelegramUser(telegramUserId, primaryCtx.from?.username ?? null);
 
     const parsedInput = await parseInputsFromContexts(contexts, config.telegram.token, telegramUserId).catch(
       async (error: unknown) => {

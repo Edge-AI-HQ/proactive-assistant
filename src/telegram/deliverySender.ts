@@ -7,9 +7,8 @@ import { InputFile, type Context } from 'grammy';
 import { config } from '../config.js';
 import { fetchFlyMachineArtifact } from '../docker/fly.js';
 import { type ArtifactReference } from '../openclaw/artifactReferences.js';
-import { renderTelegramHtmlFromMarkdown } from './format.js';
-import { TELEGRAM_PARSE_ERROR_RE } from './constants.js';
 import { chunkTelegramText } from './text.js';
+import { sendMarkdownText } from './textSender.js';
 import type { TelegramDeliveryUser } from './deliveryTypes.js';
 import {
   isAudioPath,
@@ -97,19 +96,7 @@ const prepareVoiceFile = async (hostPath: string): Promise<PreparedVoiceFile | n
 };
 
 export const sendTextReply = async (ctx: Context, text: string): Promise<void> => {
-  const html = renderTelegramHtmlFromMarkdown(text);
-  try {
-    await ctx.reply(html, {
-      parse_mode: 'HTML'
-    });
-    return;
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!TELEGRAM_PARSE_ERROR_RE.test(message)) {
-      throw error;
-    }
-  }
-  await ctx.reply(text);
+  await sendMarkdownText((payload, options) => ctx.reply(payload, options), text);
 };
 
 const previewTextFile = async (ctx: Context, filePath: string): Promise<void> => {

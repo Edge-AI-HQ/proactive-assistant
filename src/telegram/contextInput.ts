@@ -19,12 +19,9 @@ export const parseInputsFromContexts = async (
   botToken: string,
   telegramUserId: number
 ): Promise<ParsedTelegramInput | null> => {
-  const parsedInputs: ParsedTelegramInput[] = [];
-
-  for (const ctx of contexts) {
-    const parsed = await parseTelegramInput(ctx, botToken, telegramUserId);
-    if (parsed) parsedInputs.push(parsed);
-  }
+  const parsedInputs = (
+    await Promise.all(contexts.map((ctx) => parseTelegramInput(ctx, botToken, telegramUserId)))
+  ).filter((parsed): parsed is ParsedTelegramInput => Boolean(parsed));
 
   return mergeParsedInputs(parsedInputs);
 };

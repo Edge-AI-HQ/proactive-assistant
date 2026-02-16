@@ -70,9 +70,9 @@ npm start
 - `npm start` - run compiled output (`dist/server.js`)
 - `npm run lint` - lint TypeScript source
 
-## ngrok Setup (Local Webhook + OAuth)
+## ngrok Setup (Local Webhook + Telegram Login)
 
-When running locally, Telegram webhook and Google OAuth callback need a public HTTPS URL.
+When running locally, Telegram webhook and Telegram login callback need a public HTTPS URL.
 
 1. Start ngrok for local port `3000`
 ```bash
@@ -82,39 +82,32 @@ ngrok http 3000
 2. Update `.env` using your ngrok domain (example below)
 ```bash
 PUBLIC_BASE_URL=https://your-subdomain.ngrok-free.app
-GOOGLE_CALLBACK_URL=https://your-subdomain.ngrok-free.app/auth/google/callback
+TELEGRAM_BOT_USERNAME=YourTeamAssistantBot
 ```
 
-3. In Google Cloud Console, OAuth Client -> Authorized redirect URIs, add exactly:
-```text
-https://your-subdomain.ngrok-free.app/auth/google/callback
-```
-`invalid_grant` is almost always caused by mismatch here.
-
-4. Set Telegram webhook to your ngrok URL
+3. Set Telegram webhook to your ngrok URL
 ```bash
 curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
   -d "url=https://your-subdomain.ngrok-free.app/webhook/telegram" \
   -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
 ```
 
-5. Verify webhook status
+4. Verify webhook status
 ```bash
 curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getWebhookInfo"
 ```
 
 Notes:
 - If `TELEGRAM_WEBHOOK_SECRET` is set in `.env`, you must send the same value in `setWebhook` (`secret_token`).
-- Changing ngrok URL requires re-running `setWebhook` and updating Google redirect URI.
+- Changing ngrok URL requires re-running `setWebhook`.
 
 ## Key Endpoints
 
 - `POST /webhook/telegram` - Telegram updates
-- `GET /auth/google` - OAuth entry
-- `GET /auth/google/callback` - OAuth callback
+- `GET /auth/telegram/gateway` - Telegram login page for Gateway UI
+- `GET /auth/telegram/callback` - Telegram login callback
 - `GET /admin` - Admin login
 - `GET /admin/dashboard` - Admin dashboard
-- `GET /admin/auth` - Admin auth allowlist settings
 - `GET /health` - Health check
 
 ## Environment Notes
@@ -126,8 +119,6 @@ Notes:
   - voice message transcription (Telegram -> text)
   - TTS voice replies via OpenClaw `tts.convert`
 - `OPENAI_API_KEY` is optional fallback for voice transcription and OpenClaw TTS fallback provider.
-- `AUTH_ALLOWED_DOMAINS` controls default allowed email domains (comma-separated), default is `pinai.io`.
-- `AUTH_ALLOWED_EMAILS` controls default allowed full email addresses (comma-separated).
-- Admin can add/remove extra allowed domains and emails in `/admin/auth` without redeploy.
+- `TELEGRAM_BOT_USERNAME` is used by the Telegram login widget for Gateway UI web auth.
 - Container ports are allocated from `CONTAINER_PORT_START` to `CONTAINER_PORT_END`.
 - Docker socket access is required for container lifecycle management.

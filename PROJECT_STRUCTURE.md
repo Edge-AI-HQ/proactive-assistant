@@ -10,7 +10,7 @@ PIN-AI-ASSISTANT/
 │   ├── server.ts                 # Main server entry
 │   ├── docker/                   # Docker container management
 │   ├── telegram/                 # Telegram bot implementation
-│   ├── auth/                     # Google OAuth authentication
+│   ├── auth/                     # Telegram web login authentication
 │   ├── admin/                    # Admin dashboard
 │   └── db.ts                     # SQLite database
 │
@@ -43,13 +43,13 @@ PIN-AI-ASSISTANT/
 - SQLite database
 - Dockerode (Docker API)
 - Grammy (Telegram bot)
-- Google OAuth
 
 **Deployment:** VPS/Cloud server with Docker access
 
 **Key Features:**
 - One OpenClaw container per user
-- Google OAuth authentication (internal team)
+- Telegram ID based identity
+- Telegram login required for Gateway UI web access
 - Admin dashboard
 - Container lifecycle management
 - Port allocation (20000-22000)
@@ -189,13 +189,13 @@ app.post('/api/provision-container', async (req, res) => {
 
 ```sql
 users (
-  id, telegram_user_id, google_email, google_id,
+  id, telegram_user_id, telegram_username,
   container_id, container_port, container_status,
   gateway_token, created_at, last_active_at
 )
 
-oauth_sessions (
-  id, telegram_user_id, state_token, expires_at
+gateway_sessions (
+  id, telegram_user_id, session_token, expires_at
 )
 
 message_logs (
@@ -204,10 +204,6 @@ message_logs (
 
 admin_users (
   id, username, password_hash, email, created_at
-)
-
-auth_allowlist (
-  id, kind, value, created_at
 )
 ```
 
@@ -235,7 +231,7 @@ payment_events (
 
 ## 🔐 Security Notes
 
-- Container Service uses Google OAuth for internal team access
+- Container Service uses Telegram login for Gateway web access
 - Payment Service uses Stripe for public user payments
 - Both services have separate authentication mechanisms
 - API keys should be used for inter-service communication

@@ -4,12 +4,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import cookieParser from 'cookie-parser';
 import { config, validateConfig } from './config.js';
-import { registerAuthRoutes } from './auth/google.js';
+import { registerAuthRoutes } from './auth/telegram.js';
 import { registerAdminRoutes } from './admin/routes.js';
 import {
-  cleanupExpiredGatewayOauthSessions,
   cleanupExpiredGatewaySessions,
-  cleanupExpiredOauthSessions,
   purgeExpiredAdminSessions
 } from './db.js';
 import { sanitizeAllCronStores } from './docker/manager.js';
@@ -32,6 +30,7 @@ if (missing.length) {
 
 const app = express();
 app.disable('x-powered-by');
+app.set('trust proxy', true);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
@@ -80,8 +79,6 @@ app.get('/', (req: Request, res: Response) => {
 });
 
 setInterval(() => {
-  cleanupExpiredOauthSessions();
-  cleanupExpiredGatewayOauthSessions();
   cleanupExpiredGatewaySessions();
   purgeExpiredAdminSessions();
 }, 5 * 60 * 1000);

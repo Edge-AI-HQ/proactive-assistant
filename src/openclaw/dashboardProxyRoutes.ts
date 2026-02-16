@@ -52,7 +52,7 @@ const rejectUpgrade = (socket: Socket, statusLine: string): void => {
 const gatewayBasePath = (telegramUserId: number): string => `/gateway/${telegramUserId}`;
 
 const gatewayLoginPath = (telegramUserId: number, nextPath: string): string => {
-  return `/auth/google/gateway?user_id=${telegramUserId}&next=${encodeURIComponent(nextPath)}`;
+  return `/auth/telegram/gateway?user_id=${telegramUserId}&next=${encodeURIComponent(nextPath)}`;
 };
 
 const ensureGatewayContainerReady = async (

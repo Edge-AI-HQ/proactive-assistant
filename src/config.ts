@@ -12,12 +12,6 @@ const toBool = (value: string | undefined, fallback = false): boolean => {
   return ['1', 'true', 'yes', 'on'].includes(value.toLowerCase());
 };
 
-const toCsvList = (value: string | undefined): string[] =>
-  (value || '')
-    .split(',')
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
-
 const ensureLeadingSlash = (value: string): string => (value.startsWith('/') ? value : `/${value}`);
 
 const port = toInt(process.env.PORT, 3000);
@@ -32,16 +26,8 @@ export const config: Config = {
   databasePath: process.env.DATABASE_PATH || path.join(process.cwd(), 'data', 'db.sqlite'),
   telegram: {
     token: process.env.TELEGRAM_BOT_TOKEN || '',
-    webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || ''
-  },
-  google: {
-    clientId: process.env.GOOGLE_CLIENT_ID || '',
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
-    callbackUrl: process.env.GOOGLE_CALLBACK_URL || `${publicBaseUrl}/auth/google/callback`
-  },
-  auth: {
-    allowedDomains: toCsvList(process.env.AUTH_ALLOWED_DOMAINS || 'pinai.io'),
-    allowedEmails: toCsvList(process.env.AUTH_ALLOWED_EMAILS || '')
+    webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || '',
+    botUsername: process.env.TELEGRAM_BOT_USERNAME || ''
   },
   openclaw: {
     image: process.env.OPENCLAW_IMAGE || 'pinai-openclaw:latest',
@@ -88,9 +74,7 @@ export const config: Config = {
 };
 
 export const requiredSecrets: RequiredSecret[] = [
-  ['TELEGRAM_BOT_TOKEN', config.telegram.token],
-  ['GOOGLE_CLIENT_ID', config.google.clientId],
-  ['GOOGLE_CLIENT_SECRET', config.google.clientSecret]
+  ['TELEGRAM_BOT_TOKEN', config.telegram.token]
 ];
 
 export const validateConfig = (): string[] => {

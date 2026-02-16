@@ -1,18 +1,26 @@
-import { Bot, type Context } from 'grammy';
+import { Bot, InlineKeyboard, type Context } from 'grammy';
 import { config } from '../config.js';
-import { createOauthSession, getUserByTelegramId } from '../db.js';
-import { LOGIN_REQUIRED_MESSAGE } from './constants.js';
+import { ensureUserContainer } from '../docker/manager.js';
+import { ensureTelegramUser } from './identity.js';
 
 const commandList = [
-  { command: 'start', description: 'Get Google login link' },
-  { command: 'gateway', description: 'Get your Gateway URL' },
+  { command: 'start', description: 'Initialize your assistant' },
+  { command: 'gateway', description: 'Open your Gateway' },
   { command: 'help', description: 'Show available commands' }
 ] as const;
 
 const commandText = (): string => commandList.map((item) => `/${item.command} - ${item.description}`).join('\n');
 
-const welcomeMessage = (loginUrl: string): string =>
-  `Welcome to PIN AI Assistant.\n\nSign in with Google first:\n${loginUrl}`;
+const welcomeMessage = (): string =>
+  'Welcome to PIN AI Assistant.\n\nYour Telegram ID is now your global user ID. You can start chatting right away.';
+
+const isHttpsPublicBaseUrl = (): boolean => {
+  try {
+    return new URL(config.publicBaseUrl).protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
 
 export const registerTelegramCommands = (bot: Bot<Context>): void => {
   bot.api.setMyCommands(commandList).catch((error: unknown) => {
@@ -23,10 +31,22 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
 
-    const telegramUsername = ctx.from?.username;
-    const { stateToken } = createOauthSession(telegramUserId, telegramUsername);
-    const loginUrl = `${config.publicBaseUrl}/auth/google?state=${stateToken}`;
-    await ctx.reply(welcomeMessage(loginUrl));
+    const telegramUsername = ctx.from?.username ?? null;
+    const user = ensureTelegramUser(telegramUserId, telegramUsername);
+    await ctx.reply(welcomeMessage());
+    await ctx.reply('Preparing your dedicated assistant container...');
+
+    try {
+      const { ready } = await ensureUserContainer(user);
+      if (ready) {
+        await ctx.reply('Your assistant is ready. Send me any message to start.');
+      } else {
+        await ctx.reply('Container startup is in progress. Please retry in a moment.');
+      }
+    } catch (error: unknown) {
+      console.error('Container init from /start failed', error);
+      await ctx.reply('Container startup failed. Please contact admin.');
+    }
   });
 
   bot.command('help', async (ctx) => {
@@ -37,14 +57,31 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
 
-    const user = getUserByTelegramId(telegramUserId);
-    if (!user) {
-      await ctx.reply(LOGIN_REQUIRED_MESSAGE);
-      return;
+    const user = ensureTelegramUser(telegramUserId, ctx.from?.username ?? null);
+    const gatewayPath = `/gateway/${user.telegram_user_id}`;
+    const supportsLoginUrl = isHttpsPublicBaseUrl();
+    const keyboard = new InlineKeyboard();
+    if (supportsLoginUrl) {
+      const callbackUrl = new URL('/auth/telegram/callback', config.publicBaseUrl);
+      callbackUrl.searchParams.set('user_id', String(user.telegram_user_id));
+      callbackUrl.searchParams.set('next', gatewayPath);
+      keyboard.login('Open Gateway', {
+        url: callbackUrl.toString(),
+        request_write_access: true
+      });
+    } else {
+      const url = `${config.publicBaseUrl}${gatewayPath}`;
+      keyboard.url('Open Gateway', url);
     }
 
-    const url = `${config.publicBaseUrl}/gateway/${user.telegram_user_id}`;
-    await ctx.reply(`Your Gateway URL:\n${url}`);
+    await ctx.reply(
+      supportsLoginUrl
+        ? 'Open your personal Gateway dashboard.'
+        : 'Open your personal Gateway dashboard. For one-tap Telegram login, set PUBLIC_BASE_URL to an HTTPS URL.',
+      {
+        reply_markup: keyboard
+      }
+    );
   });
 
   bot.hears(/^\s*\/\s*$/, async (ctx) => {

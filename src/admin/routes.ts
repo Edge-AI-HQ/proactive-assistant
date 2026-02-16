@@ -1,13 +1,10 @@
 import bcrypt from 'bcryptjs';
 import os from 'node:os';
 import type { Application, NextFunction, Request, Response } from 'express';
-import { getAuthPolicySnapshot, isValidDomain, isValidEmail, normalizeDomain, normalizeEmail } from '../auth/allowlist.js';
 import { config } from '../config.js';
 import {
   createAdminSession,
-  createAuthAllowlistEntry,
   deleteAdminSession,
-  deleteAuthAllowlistEntryById,
   ensureAdminUser,
   getAdminByUsername,
   getAdminSession,
@@ -57,22 +54,6 @@ const parseLoginBody = (body: unknown): { username: string; password: string } =
     username: typeof record.username === 'string' ? record.username : '',
     password: typeof record.password === 'string' ? record.password : ''
   };
-};
-
-const parseTextField = (body: unknown, field: string): string => {
-  if (!body || typeof body !== 'object') return '';
-  const value = (body as Record<string, unknown>)[field];
-  return typeof value === 'string' ? value : '';
-};
-
-const parseNotice = (query: Request['query'], key: string): string | null => {
-  const value = query[key];
-  return typeof value === 'string' && value.length > 0 ? value : null;
-};
-
-const redirectAuthSettings = (res: Response, params: Record<string, string>): void => {
-  const query = new URLSearchParams(params).toString();
-  res.redirect(query ? `/admin/auth?${query}` : '/admin/auth');
 };
 
 export const registerAdminRoutes = (app: Application): void => {
@@ -145,48 +126,6 @@ export const registerAdminRoutes = (app: Application): void => {
 
     const admin = req.adminSession?.admin_username ?? config.admin.username;
     res.render('admin/dashboard', { stats, admin, activeUsageUsers });
-  });
-
-  app.get('/admin/auth', adminAuth, (req: Request, res: Response) => {
-    const notice = parseNotice(req.query, 'notice');
-    const error = parseNotice(req.query, 'error');
-    const policy = getAuthPolicySnapshot();
-    res.render('admin/auth', { policy, notice, error });
-  });
-
-  app.post('/admin/auth/domains', adminAuth, (req: Request, res: Response) => {
-    const domainInput = parseTextField(req.body, 'domain');
-    const domain = normalizeDomain(domainInput);
-    if (!domain || !isValidDomain(domain)) {
-      redirectAuthSettings(res, { error: '域名格式不正确，请输入类似 gmail.com' });
-      return;
-    }
-
-    createAuthAllowlistEntry('domain', domain);
-    redirectAuthSettings(res, { notice: `已允许域名：${domain}` });
-  });
-
-  app.post('/admin/auth/emails', adminAuth, (req: Request, res: Response) => {
-    const emailInput = parseTextField(req.body, 'email');
-    const email = normalizeEmail(emailInput);
-    if (!email || !isValidEmail(email)) {
-      redirectAuthSettings(res, { error: '邮箱格式不正确，请输入完整邮箱地址' });
-      return;
-    }
-
-    createAuthAllowlistEntry('email', email);
-    redirectAuthSettings(res, { notice: `已允许邮箱：${email}` });
-  });
-
-  app.post('/admin/auth/entries/:entry_id/delete', adminAuth, (req: Request, res: Response) => {
-    const entryId = Number(req.params.entry_id);
-    if (!Number.isInteger(entryId) || entryId <= 0) {
-      redirectAuthSettings(res, { error: '条目 ID 无效' });
-      return;
-    }
-
-    deleteAuthAllowlistEntryById(entryId);
-    redirectAuthSettings(res, { notice: '条目已删除' });
   });
 
   app.get('/admin/users', adminAuth, (req: Request, res: Response) => {

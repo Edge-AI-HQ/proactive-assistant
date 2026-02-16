@@ -32,7 +32,7 @@ PIN-AI-ASSISTANT/
 │   ├── server.ts
 │   ├── docker/manager.ts             # Docker container management
 │   ├── telegram/bot.ts               # Telegram bot
-│   ├── auth/google.ts                # Google OAuth
+│   ├── auth/telegram.ts              # Telegram Gateway login auth
 │   ├── admin/routes.ts               # Admin dashboard
 │   └── db.ts                         # SQLite database
 │
@@ -179,11 +179,10 @@ case 'checkout.session.completed':
 ## 📊 Database Schemas
 
 ### Container Service (SQLite)
-- `users` - User accounts with Google OAuth
-- `oauth_sessions` - OAuth flow state
+- `users` - User accounts keyed by Telegram ID
+- `gateway_sessions` - Gateway web session state
 - `message_logs` - Chat history
 - `admin_users` - Admin accounts
-- `auth_allowlist` - Email whitelist
 
 ### Payment Service (Supabase/PostgreSQL)
 - `payment_sessions` - One-time payment tokens

@@ -58,6 +58,29 @@ const messageArtifacts = (message: OpenClawReplyMessage): ArtifactReference[] =>
   return artifacts;
 };
 
+const sendArtifactsWithLimit = async (
+  ctx: Context,
+  user: TelegramDeliveryUser,
+  artifacts: ArtifactReference[],
+  options: { asVoice: boolean; deliveredSources?: Set<string> }
+): Promise<boolean> => {
+  let delivered = false;
+  for (const artifact of artifacts.slice(0, MAX_ARTIFACTS_PER_REPLY)) {
+    const ok = await sendArtifact(ctx, user, artifact, { asVoice: options.asVoice }).catch(() => false);
+    if (!ok) continue;
+    delivered = true;
+    options.deliveredSources?.add(normalizeArtifactSource(artifact.source));
+  }
+
+  const hiddenCount = artifacts.length - MAX_ARTIFACTS_PER_REPLY;
+  if (hiddenCount > 0) {
+    await ctx.reply(`There are ${hiddenCount} more artifacts not shown.`);
+    delivered = true;
+  }
+
+  return delivered;
+};
+
 export const deliverOpenClawReply = async (
   ctx: Context,
   user: TelegramDeliveryUser,
@@ -85,32 +108,21 @@ export const deliverOpenClawReply = async (
       }
     }
 
-    for (const artifact of artifacts.slice(0, MAX_ARTIFACTS_PER_REPLY)) {
-      const ok = await sendArtifact(ctx, user, artifact, { asVoice: wantsVoice }).catch(() => false);
-      if (!ok) continue;
-      delivered = true;
-      deliveredSources.add(normalizeArtifactSource(artifact.source));
-    }
-
-    if (artifacts.length > MAX_ARTIFACTS_PER_REPLY) {
-      await ctx.reply(`There are ${artifacts.length - MAX_ARTIFACTS_PER_REPLY} more artifacts not shown.`);
-      delivered = true;
-    }
+    delivered =
+      (await sendArtifactsWithLimit(ctx, user, artifacts, {
+        asVoice: wantsVoice,
+        deliveredSources
+      })) || delivered;
   }
 
   const trailingArtifacts = dedupeArtifacts(
     reply.artifacts.filter((artifact) => !deliveredSources.has(normalizeArtifactSource(artifact.source)))
   );
 
-  for (const artifact of trailingArtifacts.slice(0, MAX_ARTIFACTS_PER_REPLY)) {
-    const ok = await sendArtifact(ctx, user, artifact, { asVoice: FORCE_AUDIO_AS_VOICE }).catch(() => false);
-    delivered = delivered || ok;
-  }
-
-  if (trailingArtifacts.length > MAX_ARTIFACTS_PER_REPLY) {
-    await ctx.reply(`There are ${trailingArtifacts.length - MAX_ARTIFACTS_PER_REPLY} more artifacts not shown.`);
-    delivered = true;
-  }
+  delivered =
+    (await sendArtifactsWithLimit(ctx, user, trailingArtifacts, {
+      asVoice: FORCE_AUDIO_AS_VOICE
+    })) || delivered;
 
   if (!delivered && !options?.suppressEmptyFallback) {
     await ctx.reply('(empty response)');

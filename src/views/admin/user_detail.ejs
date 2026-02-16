@@ -53,7 +53,7 @@
       <header class="flex items-center justify-between">
         <div>
           <h1 class="text-2xl font-semibold">用户详情</h1>
-          <p class="text-sm text-slate-500"><%= user.google_email %></p>
+          <p class="text-sm text-slate-500">Telegram ID: <%= user.telegram_user_id %> / @<%= user.telegram_username || '未知' %></p>
         </div>
         <a href="/admin/users" class="rounded-xl border border-slate-200 px-4 py-2 text-sm">返回</a>
       </header>
