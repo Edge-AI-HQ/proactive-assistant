@@ -3,7 +3,7 @@ import type { Context } from 'grammy';
 import { config } from '../config.js';
 import { getUserByTelegramId, logMessage, recordTokenUsage, touchUser } from '../db.js';
 import { ensureUserContainer, restartUserContainer, sanitizeUserCronStore } from '../docker/manager.js';
-import { dropOpenClawSession, sendChatToOpenClaw, type OpenClawChatReply } from '../openclaw/client.js';
+import { dropOpenClawSession, sendChatToOpenClaw, type OpenClawChatReply } from '../openclaw/chatSessionService.js';
 import { LOGIN_REQUIRED_MESSAGE, OPENCLAW_CHAT_TIMEOUT_MS, OPENCLAW_RETRY_LIMIT } from './constants.js';
 import {
   isOpenClawRecoverableError,

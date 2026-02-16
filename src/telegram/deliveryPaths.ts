@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { getUserContainerDirs, resolveContainerPathForUser } from '../docker/manager.js';
-import { looksLikeContainerPath } from '../openclaw/artifacts.js';
+import { looksLikeContainerPath } from '../openclaw/artifactReferences.js';
 
 export const isUrl = (value: string): boolean => /^https?:\/\//i.test(value);
 

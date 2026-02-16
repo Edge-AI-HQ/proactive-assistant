@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { InputFile, type Context } from 'grammy';
 import { config } from '../config.js';
 import { fetchFlyMachineArtifact } from '../docker/fly.js';
-import { type ArtifactReference } from '../openclaw/artifacts.js';
+import { type ArtifactReference } from '../openclaw/artifactReferences.js';
 import { renderTelegramHtmlFromMarkdown } from './format.js';
 import { TELEGRAM_PARSE_ERROR_RE } from './constants.js';
 import { chunkTelegramText } from './text.js';

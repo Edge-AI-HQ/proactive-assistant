@@ -1,6 +1,6 @@
 import type { Context } from 'grammy';
 import { config } from '../config.js';
-import type { OpenClawAttachment } from '../openclaw/client.js';
+import type { OpenClawAttachment } from '../openclaw/chatSessionService.js';
 import { buildAgentFileBlockFromInbound } from './mediaUnderstanding.js';
 import {
   type DownloadedTelegramFile,

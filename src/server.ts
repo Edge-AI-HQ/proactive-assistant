@@ -13,7 +13,7 @@ import {
   purgeExpiredAdminSessions
 } from './db.js';
 import { sanitizeAllCronStores } from './docker/manager.js';
-import { registerGatewayRoutes, registerGatewayWsProxy } from './gateway/routes.js';
+import { registerDashboardProxyRoutes, registerDashboardWsProxy } from './gateway/dashboardProxyRoutes.js';
 import { buildBot } from './telegram/bot.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -67,7 +67,7 @@ app.post('/webhook/telegram', async (req: Request, res: Response) => {
 
 registerAuthRoutes(app, bot);
 registerAdminRoutes(app);
-registerGatewayRoutes(app);
+registerDashboardProxyRoutes(app);
 
 app.get('/health', (req: Request, res: Response) => {
   void req;
@@ -87,7 +87,7 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 
 const server = http.createServer(app);
-registerGatewayWsProxy(server);
+registerDashboardWsProxy(server);
 server.listen(config.port, () => {
   console.log(`PIN AI Assistant listening on :${config.port}`);
 });

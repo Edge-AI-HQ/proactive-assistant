@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getUserContainerDirs } from '../docker/manager.js';
-import type { OpenClawAttachment } from '../openclaw/client.js';
+import type { OpenClawAttachment } from '../openclaw/chatSessionService.js';
 
 const IMAGE_ATTACHMENT_MAX_BYTES = 5_000_000;
 const FILE_DOWNLOAD_TIMEOUT_MS = 90_000;

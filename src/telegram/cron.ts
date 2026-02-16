@@ -1,5 +1,5 @@
 import { Bot, type Context } from 'grammy';
-import { setOpenClawCronEventHandler, type OpenClawCronFinishedEvent } from '../openclaw/client.js';
+import { setOpenClawCronEventHandler, type OpenClawCronFinishedEvent } from '../openclaw/chatSessionService.js';
 import { renderTelegramHtmlFromMarkdown } from './format.js';
 import { TELEGRAM_PARSE_ERROR_RE } from './constants.js';
 import { chunkTelegramText } from './text.js';

@@ -23,10 +23,18 @@ const toArtifact = (source: string): ArtifactReference | null => {
   };
 };
 
-const upsertArtifact = (store: Map<string, ArtifactReference>, artifact: ArtifactReference): void => {
-  const existing = store.get(artifact.source);
-  if (!existing || (existing.kind === 'file' && artifact.kind === 'media')) {
-    store.set(artifact.source, artifact);
+export const upsertArtifactReference = (store: Map<string, ArtifactReference>, artifact: ArtifactReference): void => {
+  const source = cleanSource(artifact.source);
+  if (!source) return;
+
+  const normalized: ArtifactReference = {
+    source,
+    kind: artifact.kind === 'media' ? 'media' : 'file'
+  };
+
+  const existing = store.get(normalized.source);
+  if (!existing || (existing.kind === 'file' && normalized.kind === 'media')) {
+    store.set(normalized.source, normalized);
   }
 };
 
@@ -35,14 +43,14 @@ const collectFromNode = (node: unknown, store: Map<string, ArtifactReference>): 
 
   if (typeof node.mediaUrl === 'string') {
     const artifact = toArtifact(node.mediaUrl);
-    if (artifact) upsertArtifact(store, artifact);
+    if (artifact) upsertArtifactReference(store, artifact);
   }
 
   if (Array.isArray(node.mediaUrls)) {
     for (const entry of node.mediaUrls) {
       if (typeof entry !== 'string') continue;
       const artifact = toArtifact(entry);
-      if (artifact) upsertArtifact(store, artifact);
+      if (artifact) upsertArtifactReference(store, artifact);
     }
   }
 
@@ -62,6 +70,14 @@ const collectFromNode = (node: unknown, store: Map<string, ArtifactReference>): 
 export const extractArtifactReferences = (value: unknown): ArtifactReference[] => {
   const store = new Map<string, ArtifactReference>();
   collectFromNode(value, store);
+  return Array.from(store.values());
+};
+
+export const dedupeArtifactReferences = (artifacts: ArtifactReference[]): ArtifactReference[] => {
+  const store = new Map<string, ArtifactReference>();
+  for (const artifact of artifacts) {
+    upsertArtifactReference(store, artifact);
+  }
   return Array.from(store.values());
 };
 

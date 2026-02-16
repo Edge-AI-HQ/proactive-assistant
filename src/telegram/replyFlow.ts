@@ -1,5 +1,5 @@
 import type { Context } from 'grammy';
-import type { OpenClawChatReply } from '../openclaw/client.js';
+import type { OpenClawChatReply } from '../openclaw/chatSessionService.js';
 import { deliverOpenClawReply } from './delivery.js';
 import { MAX_TEXT_CHUNK, TELEGRAM_STREAM_THROTTLE_MS } from './constants.js';
 import { createTelegramTextStream } from './stream.js';

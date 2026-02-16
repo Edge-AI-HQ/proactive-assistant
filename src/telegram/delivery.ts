@@ -2,8 +2,8 @@ import { type Context } from 'grammy';
 import {
   type OpenClawChatReply,
   type OpenClawReplyMessage
-} from '../openclaw/client.js';
-import { type ArtifactReference } from '../openclaw/artifacts.js';
+} from '../openclaw/chatSessionService.js';
+import { type ArtifactReference } from '../openclaw/artifactReferences.js';
 import { parseReplyDirectives, normalizeArtifactSource } from './deliveryDirectives.js';
 import { sendArtifact, sendTextReply } from './deliverySender.js';
 import { chunkTelegramText } from './text.js';

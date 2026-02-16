@@ -1,7 +1,7 @@
-# GatewayClient 接口说明
+# GatewayRpcClient 接口说明
 
 ## 1. 作用
-`GatewayClient` 是一个轻量的 WebSocket RPC 客户端，负责和 OpenClaw Gateway 建立长连接并调用 RPC 方法。
+`GatewayRpcClient` 是一个轻量的 WebSocket RPC 客户端，负责和 OpenClaw Gateway 建立长连接并调用 RPC 方法。
 
 在当前项目中，它主要用于：
 - 发起 `connect` 握手
@@ -9,7 +9,7 @@
 - 订阅 `chat` / `agent` / `cron` 等事件
 - 在断线时自动重连并清理挂起请求
 
-实现文件：`src/openclaw/gatewayClient.ts`
+实现文件：`src/openclaw/wsRpcClient.ts`
 
 ## 2. 协议模型
 客户端按网关协议收发三类帧：
@@ -24,8 +24,8 @@
 特殊事件：
 - `connect.challenge`: 收到后触发 `sendConnect()`，完成正式握手。
 
-## 3. GatewayClientOptions
-构造参数（`new GatewayClient(opts)`）：
+## 3. GatewayRpcClientOptions
+构造参数（`new GatewayRpcClient(opts)`）：
 
 - 连接与认证
   - `url: string`（必填）
@@ -107,9 +107,9 @@
 ## 7. 最小使用示例
 
 ```ts
-import { GatewayClient } from './gatewayClient.js';
+import { GatewayRpcClient } from './wsRpcClient.js';
 
-const client = new GatewayClient({
+const client = new GatewayRpcClient({
   url: 'ws://127.0.0.1:18789/',
   token: process.env.OPENCLAW_API_KEY,
   onEvent: (evt) => {
@@ -133,8 +133,8 @@ console.log(res.runId);
 
 ## 8. 在本项目中的调用关系
 
-- `src/openclaw/client.ts`
-  - 负责基于 `GatewayClient` 封装业务会话
+- `src/openclaw/chatSessionService.ts`
+  - 负责基于 `GatewayRpcClient` 封装业务会话
   - 维护每个 Telegram 用户的 gateway session
   - 聚合 `chat/agent/cron` 事件，最终产出 `OpenClawChatReply`
 - `src/telegram/bot.ts`

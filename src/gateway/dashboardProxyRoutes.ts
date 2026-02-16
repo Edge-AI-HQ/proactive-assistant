@@ -44,6 +44,11 @@ const readCookieFromIncoming = (req: IncomingMessage, name: string): string | un
   return undefined;
 };
 
+const rejectUpgrade = (socket: Socket, statusLine: string): void => {
+  socket.write(`HTTP/1.1 ${statusLine}\r\n\r\n`);
+  socket.destroy();
+};
+
 const gatewayBasePath = (telegramUserId: number): string => `/gateway/${telegramUserId}`;
 
 const gatewayLoginPath = (telegramUserId: number, nextPath: string): string => {
@@ -66,6 +71,15 @@ const ensureGatewayContainerReady = async (
 
   warmupInFlight.set(userId, job);
   return job;
+};
+
+const ensureDashboardProxyContainerReady = async (
+  user: Pick<UserRecord, 'telegram_user_id' | 'container_id' | 'container_port' | 'container_status'>
+): Promise<boolean> => {
+  if (user.container_status === 'running') {
+    return true;
+  }
+  return ensureGatewayContainerReady(user);
 };
 
 const resolveGatewayUser = (userIdParam: string): UserRecord | null => {
@@ -158,7 +172,7 @@ const renderGatewayBootstrapPage = (
 </html>`);
 };
 
-export const registerGatewayRoutes = (app: Application): void => {
+export const registerDashboardProxyRoutes = (app: Application): void => {
   app.get('/gateway/:user_id', requireGatewaySession, async (req: Request, res: Response) => {
     const user = req.gatewayUser;
     if (!user) {
@@ -196,12 +210,10 @@ export const registerGatewayRoutes = (app: Application): void => {
     }
 
     try {
-      if (user.container_status !== 'running') {
-        const ready = await ensureGatewayContainerReady(user);
-        if (!ready) {
-          res.status(503).send('Gateway is starting. Please retry in a few seconds.');
-          return;
-        }
+      const ready = await ensureDashboardProxyContainerReady(user);
+      if (!ready) {
+        res.status(503).send('Gateway is starting. Please retry in a few seconds.');
+        return;
       }
     } catch (error: unknown) {
       console.error('Gateway warmup failed', error);
@@ -211,7 +223,8 @@ export const registerGatewayRoutes = (app: Application): void => {
 
     const prefix = `/gateway/${user.telegram_user_id}/proxy`;
     const url = new URL(req.originalUrl, 'http://localhost');
-    url.pathname = url.pathname.replace(prefix, '') || '/';
+    const pathAfterPrefix = url.pathname.startsWith(prefix) ? url.pathname.slice(prefix.length) : url.pathname;
+    url.pathname = pathAfterPrefix || '/';
     url.searchParams.delete('token');
     req.url = `${url.pathname}${url.search}`;
 
@@ -244,7 +257,7 @@ export const registerGatewayRoutes = (app: Application): void => {
   });
 };
 
-export const registerGatewayWsProxy = (server: Server): void => {
+export const registerDashboardWsProxy = (server: Server): void => {
   server.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const match = url.pathname.match(/^\/gateway\/(\d+)\/ws$/);
@@ -256,31 +269,25 @@ export const registerGatewayWsProxy = (server: Server): void => {
       const sessionToken = readCookieFromIncoming(req, 'gateway_sid');
 
       if (!user || !sessionToken) {
-        socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
-        socket.destroy();
+        rejectUpgrade(socket, '403 Forbidden');
         return;
       }
 
       const session = getGatewaySession(sessionToken);
       if (!session || session.telegram_user_id !== user.telegram_user_id) {
-        socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
-        socket.destroy();
+        rejectUpgrade(socket, '403 Forbidden');
         return;
       }
 
       try {
-        if (user.container_status !== 'running') {
-          const ready = await ensureGatewayContainerReady(user);
-          if (!ready) {
-            socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n');
-            socket.destroy();
-            return;
-          }
+        const ready = await ensureDashboardProxyContainerReady(user);
+        if (!ready) {
+          rejectUpgrade(socket, '503 Service Unavailable');
+          return;
         }
       } catch (error: unknown) {
         console.error('Gateway WS warmup failed', error);
-        socket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n');
-        socket.destroy();
+        rejectUpgrade(socket, '502 Bad Gateway');
         return;
       }
 
@@ -290,8 +297,7 @@ export const registerGatewayWsProxy = (server: Server): void => {
         target = resolveGatewayTargetForUser(user);
       } catch (error: unknown) {
         console.error('Gateway WS target resolve error', error);
-        socket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n');
-        socket.destroy();
+        rejectUpgrade(socket, '502 Bad Gateway');
         return;
       }
 
@@ -302,8 +308,7 @@ export const registerGatewayWsProxy = (server: Server): void => {
       });
     })().catch((error: unknown) => {
       console.error('Gateway WS upgrade error', error);
-      socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
-      socket.destroy();
+      rejectUpgrade(socket, '500 Internal Server Error');
     });
   });
 };

@@ -2,33 +2,33 @@ import crypto from 'node:crypto';
 import WebSocket, { type RawData } from 'ws';
 
 type JsonObject = Record<string, unknown>;
-type GatewayConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'stopped';
+type GatewayRpcConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'stopped';
 
-interface GatewayErrorPayload {
+interface GatewayRpcErrorPayload {
   message?: string;
 }
 
-interface GatewayResponse {
+interface GatewayRpcResponse {
   type: 'res';
   id: string;
   ok: boolean;
   payload?: unknown;
-  error?: GatewayErrorPayload;
+  error?: GatewayRpcErrorPayload;
 }
 
-export interface GatewayEvent {
+export interface GatewayRpcEvent {
   type: 'event';
   event: string;
   payload?: unknown;
   seq?: number;
 }
 
-export interface GatewayCloseInfo {
+export interface GatewayRpcCloseInfo {
   code: number;
   reason: string;
 }
 
-export interface GatewayClientOptions {
+export interface GatewayRpcClientOptions {
   url: string;
   token?: string;
   password?: string;
@@ -44,11 +44,11 @@ export interface GatewayClientOptions {
   userAgent?: string;
   locale?: string;
   onHello?: (hello: JsonObject) => void;
-  onClose?: (info: GatewayCloseInfo) => void;
-  onEvent?: (event: GatewayEvent) => void;
+  onClose?: (info: GatewayRpcCloseInfo) => void;
+  onEvent?: (event: GatewayRpcEvent) => void;
   onGap?: (info: { expected: number; received: number }) => void;
   onConnectError?: (error: Error) => void;
-  onStateChange?: (state: GatewayConnectionState) => void;
+  onStateChange?: (state: GatewayRpcConnectionState) => void;
   connectDelayMs?: number;
   connectTimeoutMs?: number;
   requestTimeoutMs?: number;
@@ -102,12 +102,12 @@ const rawDataToString = (raw: RawData): string => {
   return Buffer.from(raw).toString('utf8');
 };
 
-const toGatewayEvent = (value: unknown): GatewayEvent | null => {
+const toGatewayRpcEvent = (value: unknown): GatewayRpcEvent | null => {
   if (!isRecord(value)) return null;
   if (value.type !== 'event') return null;
   if (typeof value.event !== 'string') return null;
 
-  const event: GatewayEvent = {
+  const event: GatewayRpcEvent = {
     type: 'event',
     event: value.event
   };
@@ -122,12 +122,12 @@ const toGatewayEvent = (value: unknown): GatewayEvent | null => {
   return event;
 };
 
-const toGatewayResponse = (value: unknown): GatewayResponse | null => {
+const toGatewayRpcResponse = (value: unknown): GatewayRpcResponse | null => {
   if (!isRecord(value)) return null;
   if (value.type !== 'res') return null;
   if (typeof value.id !== 'string' || typeof value.ok !== 'boolean') return null;
 
-  const response: GatewayResponse = {
+  const response: GatewayRpcResponse = {
     type: 'res',
     id: value.id,
     ok: value.ok
@@ -143,8 +143,8 @@ const toGatewayResponse = (value: unknown): GatewayResponse | null => {
   return response;
 };
 
-export class GatewayClient {
-  private readonly opts: GatewayClientOptions;
+export class GatewayRpcClient {
+  private readonly opts: GatewayRpcClientOptions;
 
   private ws: WebSocket | null = null;
 
@@ -152,7 +152,7 @@ export class GatewayClient {
 
   private closed = true;
 
-  private state: GatewayConnectionState = 'idle';
+  private state: GatewayRpcConnectionState = 'idle';
 
   private backoffMs: number;
 
@@ -170,7 +170,7 @@ export class GatewayClient {
 
   private lastSeq: number | null = null;
 
-  constructor(opts: GatewayClientOptions) {
+  constructor(opts: GatewayRpcClientOptions) {
     this.opts = opts;
     this.backoffMs = Math.max(100, opts.initialBackoffMs ?? DEFAULT_INITIAL_BACKOFF_MS);
   }
@@ -357,7 +357,7 @@ export class GatewayClient {
   private handleMessage(raw: string): void {
     const data = safeJsonParse(raw);
 
-    const event = toGatewayEvent(data);
+    const event = toGatewayRpcEvent(data);
     if (event) {
       if (event.event === 'connect.challenge') {
         this.sendConnect().catch(() => {});
@@ -375,7 +375,7 @@ export class GatewayClient {
       return;
     }
 
-    const response = toGatewayResponse(data);
+    const response = toGatewayRpcResponse(data);
     if (!response) return;
 
     const pending = this.pending.get(response.id);
@@ -496,7 +496,7 @@ export class GatewayClient {
     this.reconnectTimer = null;
   }
 
-  private transitionState(nextState: GatewayConnectionState): void {
+  private transitionState(nextState: GatewayRpcConnectionState): void {
     if (this.state === nextState) return;
     this.state = nextState;
     this.opts.onStateChange?.(nextState);

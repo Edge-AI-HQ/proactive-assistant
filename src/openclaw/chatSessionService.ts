@@ -2,8 +2,13 @@ import crypto from 'node:crypto';
 import { config } from '../config.js';
 import { resolveGatewayTargetForUser } from '../docker/manager.js';
 import type { UserRecord } from '../types.js';
-import { extractArtifactReferences, type ArtifactReference } from './artifacts.js';
-import { GatewayClient, type GatewayEvent } from './gatewayClient.js';
+import {
+  dedupeArtifactReferences,
+  extractArtifactReferences,
+  upsertArtifactReference,
+  type ArtifactReference
+} from './artifactReferences.js';
+import { GatewayRpcClient, type GatewayRpcEvent } from './wsRpcClient.js';
 
 const CHAT_TIMEOUT_MS = 90_000;
 const ABORT_TIMEOUT_MS = 5_000;
@@ -95,7 +100,7 @@ interface PendingRun {
 
 interface GatewaySession {
   user: OpenClawUser;
-  client: GatewayClient;
+  client: GatewayRpcClient;
   sessionKey: string;
   pending: Map<string, PendingRun>;
   modelCosts: Map<string, OpenClawModelCost>;
@@ -454,26 +459,7 @@ const getSession = (telegramUserId: number): GatewaySession | undefined => {
 };
 
 const addArtifactsToPending = (pending: PendingRun, artifacts: ArtifactReference[]): void => {
-  artifacts.forEach((artifact) => {
-    const existing = pending.artifacts.get(artifact.source);
-    if (!existing || (existing.kind === 'file' && artifact.kind === 'media')) {
-      pending.artifacts.set(artifact.source, artifact);
-    }
-  });
-};
-
-const dedupeArtifacts = (artifacts: ArtifactReference[]): ArtifactReference[] => {
-  const map = new Map<string, ArtifactReference>();
-  artifacts.forEach((artifact) => {
-    const source = artifact.source?.trim();
-    if (!source) return;
-
-    const existing = map.get(source);
-    if (!existing || (existing.kind === 'file' && artifact.kind === 'media')) {
-      map.set(source, { source, kind: artifact.kind });
-    }
-  });
-  return Array.from(map.values());
+  artifacts.forEach((artifact) => upsertArtifactReference(pending.artifacts, artifact));
 };
 
 const toReplyMessage = (value: unknown): OpenClawReplyMessage | null => {
@@ -581,7 +567,7 @@ const artifactsFromReplyMessages = (messages: OpenClawReplyMessage[]): ArtifactR
       });
     });
   });
-  return dedupeArtifacts(artifacts);
+  return dedupeArtifactReferences(artifacts);
 };
 
 const composeReplyText = (messages: OpenClawReplyMessage[], fallbackText: string): string => {
@@ -782,7 +768,7 @@ const handleCronPayload = (telegramUserId: number, payload: unknown): void => {
   emitCronFinishedEvent(event);
 };
 
-const handleGatewayEvent = (telegramUserId: number, event: GatewayEvent): void => {
+const handleGatewayRpcEvent = (telegramUserId: number, event: GatewayRpcEvent): void => {
   if (!event || typeof event.event !== 'string') return;
   const session = getSession(telegramUserId);
   if (!session) return;
@@ -891,7 +877,7 @@ const resolveSession = (user: OpenClawUser): GatewaySession => {
     sessions.delete(user.telegram_user_id);
   }
 
-  const client = new GatewayClient({
+  const client = new GatewayRpcClient({
     url: buildWsUrl(user),
     token: config.openclaw.apiKey,
     role: 'operator',
@@ -901,7 +887,7 @@ const resolveSession = (user: OpenClawUser): GatewaySession => {
     userAgent: 'pinai-telegram-bot',
     locale: 'en-US',
     caps: ['tool-events'],
-    onEvent: (event) => handleGatewayEvent(user.telegram_user_id, event),
+    onEvent: (event) => handleGatewayRpcEvent(user.telegram_user_id, event),
     requestTimeoutMs: CHAT_TIMEOUT_MS + 15_000
   });
 
@@ -1003,9 +989,9 @@ export const sendChatToOpenClaw = async (
     const messages = dedupeReplyMessages([...pending.messages, ...payloadMessages]);
 
     const eventArtifacts = Array.from(pending.artifacts.values());
-    const payloadArtifacts = dedupeArtifacts(extractArtifactReferences(finalPayload));
+    const payloadArtifacts = dedupeArtifactReferences(extractArtifactReferences(finalPayload));
     const messageArtifacts = artifactsFromReplyMessages(messages);
-    const artifacts = dedupeArtifacts([...eventArtifacts, ...payloadArtifacts, ...messageArtifacts]);
+    const artifacts = dedupeArtifactReferences([...eventArtifacts, ...payloadArtifacts, ...messageArtifacts]);
 
     const text = composeReplyText(messages, pending.textBuffer);
     const usage = await attachEstimatedCost(session, extractUsageSummary(finalPayload));
