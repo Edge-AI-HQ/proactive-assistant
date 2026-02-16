@@ -29,6 +29,8 @@
               <th class="px-4 py-3">邮箱</th>
               <th class="px-4 py-3">Telegram</th>
               <th class="px-4 py-3">容器状态</th>
+              <th class="px-4 py-3">累计 Token</th>
+              <th class="px-4 py-3">累计费用</th>
               <th class="px-4 py-3">最近活跃</th>
               <th class="px-4 py-3"></th>
             </tr>
@@ -39,6 +41,8 @@
                 <td class="px-4 py-3"><%= user.google_email %></td>
                 <td class="px-4 py-3">@<%= user.telegram_username || '未知' %></td>
                 <td class="px-4 py-3"><%= user.container_status %></td>
+                <td class="px-4 py-3"><%= Number(user.total_tokens || 0).toLocaleString('en-US') %></td>
+                <td class="px-4 py-3">$<%= Number(user.total_cost_usd || 0).toFixed(4) %></td>
                 <td class="px-4 py-3"><%= user.last_active_at %></td>
                 <td class="px-4 py-3 text-right">
                   <a href="/admin/users/<%= user.id %>" class="text-slate-900 underline">详情</a>

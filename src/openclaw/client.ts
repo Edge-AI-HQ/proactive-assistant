@@ -7,6 +7,7 @@ import { GatewayClient, type GatewayEvent } from './gatewayClient.js';
 
 const CHAT_TIMEOUT_MS = 90_000;
 const ABORT_TIMEOUT_MS = 5_000;
+const MODEL_COST_CACHE_TTL_MS = 10 * 60_000;
 
 type OpenClawUser = Pick<UserRecord, 'telegram_user_id' | 'container_port' | 'container_id'>;
 
@@ -29,9 +30,12 @@ export interface OpenClawChatRequest {
 
 export interface OpenClawChatReply {
   runId: string;
+  idempotencyKey: string;
+  sessionKey: string;
   text: string;
   artifacts: ArtifactReference[];
   messages: OpenClawReplyMessage[];
+  usage?: OpenClawUsageSummary;
 }
 
 export interface OpenClawReplyMessage {
@@ -49,6 +53,24 @@ export interface OpenClawCronFinishedEvent {
   summary?: string;
   error?: string;
   runAtMs?: number;
+}
+
+export interface OpenClawUsageSummary {
+  provider?: string;
+  model?: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  costUsd?: number;
+}
+
+interface OpenClawModelCost {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
 }
 
 interface CompletionGate {
@@ -76,6 +98,8 @@ interface GatewaySession {
   client: GatewayClient;
   sessionKey: string;
   pending: Map<string, PendingRun>;
+  modelCosts: Map<string, OpenClawModelCost>;
+  modelCostsFetchedAt: number;
 }
 
 type CronEventHandler = (event: OpenClawCronFinishedEvent) => void | Promise<void>;
@@ -104,6 +128,143 @@ const isTimeoutError = (error: Error): boolean => /timeout/i.test(error.message)
 const normalizeTimeoutMs = (value: number | undefined, fallback: number): number => {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
   return Math.max(1000, Math.trunc(value));
+};
+
+const normalizeTokenCount = (value: unknown): number => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+  return Math.max(0, Math.trunc(value));
+};
+
+const normalizeUsd = (value: unknown): number | undefined => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return Math.max(0, value);
+};
+
+const extractUsageField = (usage: Record<string, unknown>, keys: string[]): number => {
+  for (const key of keys) {
+    if (!Object.hasOwn(usage, key)) continue;
+    return normalizeTokenCount(usage[key]);
+  }
+  return 0;
+};
+
+const extractUsageSummary = (payload: unknown): OpenClawUsageSummary | null => {
+  if (!isRecord(payload)) return null;
+  const result = isRecord(payload.result) ? payload.result : null;
+  const meta = result && isRecord(result.meta) ? result.meta : null;
+  const agentMeta = meta && isRecord(meta.agentMeta) ? meta.agentMeta : null;
+  if (!agentMeta) return null;
+
+  const rawUsage = isRecord(agentMeta.usage) ? agentMeta.usage : null;
+  if (!rawUsage) return null;
+
+  const inputTokens = extractUsageField(rawUsage, ['input', 'inputTokens', 'input_tokens', 'promptTokens', 'prompt_tokens']);
+  const outputTokens = extractUsageField(rawUsage, [
+    'output',
+    'outputTokens',
+    'output_tokens',
+    'completionTokens',
+    'completion_tokens'
+  ]);
+  const cacheReadTokens = extractUsageField(rawUsage, ['cacheRead', 'cache_read', 'cache_read_input_tokens']);
+  const cacheWriteTokens = extractUsageField(rawUsage, ['cacheWrite', 'cache_write', 'cache_creation_input_tokens']);
+  const totalTokensRaw = extractUsageField(rawUsage, ['total', 'totalTokens', 'total_tokens']);
+  const totalTokens = totalTokensRaw || inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
+
+  if (totalTokens <= 0 && inputTokens <= 0 && outputTokens <= 0 && cacheReadTokens <= 0 && cacheWriteTokens <= 0) {
+    return null;
+  }
+
+  const provider = asNonEmptyString(agentMeta.provider);
+  const model = asNonEmptyString(agentMeta.model);
+  const summary: OpenClawUsageSummary = {
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    totalTokens
+  };
+  if (provider) summary.provider = provider;
+  if (model) summary.model = model;
+  return summary;
+};
+
+const modelCostKey = (provider: string, model: string): string => {
+  return `${provider.toLowerCase()}:${model.toLowerCase()}`;
+};
+
+const parseModelCostsFromConfigSnapshot = (snapshot: unknown): Map<string, OpenClawModelCost> => {
+  const parsed = new Map<string, OpenClawModelCost>();
+  if (!isRecord(snapshot)) return parsed;
+
+  const configSnapshot = isRecord(snapshot.config) ? snapshot.config : null;
+  const modelsConfig = configSnapshot && isRecord(configSnapshot.models) ? configSnapshot.models : null;
+  const providers = modelsConfig && isRecord(modelsConfig.providers) ? modelsConfig.providers : null;
+  if (!providers) return parsed;
+
+  for (const [provider, providerConfig] of Object.entries(providers)) {
+    if (!isRecord(providerConfig)) continue;
+    if (!Array.isArray(providerConfig.models)) continue;
+    for (const modelConfig of providerConfig.models) {
+      if (!isRecord(modelConfig)) continue;
+      const modelId = asNonEmptyString(modelConfig.id);
+      if (!modelId) continue;
+      const costConfig = isRecord(modelConfig.cost) ? modelConfig.cost : null;
+      if (!costConfig) continue;
+
+      const input = normalizeUsd(costConfig.input);
+      const output = normalizeUsd(costConfig.output);
+      const cacheRead = normalizeUsd(costConfig.cacheRead);
+      const cacheWrite = normalizeUsd(costConfig.cacheWrite);
+      if (
+        input === undefined ||
+        output === undefined ||
+        cacheRead === undefined ||
+        cacheWrite === undefined
+      ) {
+        continue;
+      }
+
+      parsed.set(modelCostKey(provider, modelId), {
+        input,
+        output,
+        cacheRead,
+        cacheWrite
+      });
+    }
+  }
+
+  return parsed;
+};
+
+const loadModelCosts = async (session: GatewaySession): Promise<Map<string, OpenClawModelCost>> => {
+  const now = Date.now();
+  if (now - session.modelCostsFetchedAt < MODEL_COST_CACHE_TTL_MS) {
+    return session.modelCosts;
+  }
+
+  session.modelCostsFetchedAt = now;
+  try {
+    const snapshot = await session.client.request<unknown>('config.get', {}, { timeoutMs: 12_000 });
+    const parsed = parseModelCostsFromConfigSnapshot(snapshot);
+    if (parsed.size > 0) {
+      session.modelCosts = parsed;
+    }
+  } catch (error: unknown) {
+    console.warn('OpenClaw model cost fetch failed', error);
+  }
+
+  return session.modelCosts;
+};
+
+const estimateUsageCostUsd = (usage: OpenClawUsageSummary, cost: OpenClawModelCost): number => {
+  const total =
+    usage.inputTokens * cost.input +
+    usage.outputTokens * cost.output +
+    usage.cacheReadTokens * cost.cacheRead +
+    usage.cacheWriteTokens * cost.cacheWrite;
+  if (!Number.isFinite(total) || total <= 0) return 0;
+  return total / 1_000_000;
 };
 
 const createCompletionGate = (): CompletionGate => {
@@ -439,6 +600,35 @@ const attachPendingRun = (session: GatewaySession, pending: PendingRun, runId: s
   pending.runId = normalized;
 };
 
+const resolvePendingRun = (
+  session: GatewaySession,
+  runId: string,
+  payload: Record<string, unknown>
+): PendingRun | null => {
+  const direct = session.pending.get(runId);
+  if (direct) {
+    return direct;
+  }
+
+  const sessionKey = asNonEmptyString(payload.sessionKey);
+  if (sessionKey && sessionKey !== session.sessionKey) {
+    return null;
+  }
+
+  const uniquePending = new Set<PendingRun>(session.pending.values());
+  if (uniquePending.size !== 1) {
+    return null;
+  }
+
+  const first = uniquePending.values().next();
+  if (first.done) {
+    return null;
+  }
+  const candidate = first.value;
+  attachPendingRun(session, candidate, runId);
+  return candidate;
+};
+
 const detachPendingRun = (session: GatewaySession, pending: PendingRun): void => {
   for (const alias of pending.keyAliases) {
     if (session.pending.get(alias) === pending) {
@@ -483,7 +673,7 @@ const handleChatPayload = (session: GatewaySession, payload: unknown): void => {
   const runId = extractRunId(payload);
   if (!runId) return;
 
-  const pending = session.pending.get(runId);
+  const pending = resolvePendingRun(session, runId, payload);
   if (!pending) return;
 
   const state = resolveChatState(payload);
@@ -523,7 +713,7 @@ const handleAgentPayload = (session: GatewaySession, payload: unknown): void => 
   const runId = extractRunId(payload);
   if (!runId) return;
 
-  const pending = session.pending.get(runId);
+  const pending = resolvePendingRun(session, runId, payload);
   if (!pending) return;
 
   const sanitizedMessages = toReplyMessages(payload).map((message) => {
@@ -627,7 +817,7 @@ const normalizeAttachments = (attachments: OpenClawAttachment[] | undefined): Op
     .filter((item) => typeof item.content === 'string' && item.content.length > 0);
 };
 
-const buildChatSendParams = (args: {
+const buildAgentRequestParams = (args: {
   sessionKey: string;
   message: string;
   runId: string;
@@ -635,11 +825,12 @@ const buildChatSendParams = (args: {
   attachments: OpenClawAttachment[];
   extraParams?: Record<string, unknown>;
 }): Record<string, unknown> => {
+  const timeoutSeconds = Math.max(1, Math.ceil(args.timeoutMs / 1000));
   const params: Record<string, unknown> = {
     sessionKey: args.sessionKey,
     message: args.message,
     deliver: false,
-    timeoutMs: args.timeoutMs,
+    timeout: timeoutSeconds,
     idempotencyKey: args.runId
   };
 
@@ -652,6 +843,28 @@ const buildChatSendParams = (args: {
   }
 
   return params;
+};
+
+const attachEstimatedCost = async (
+  session: GatewaySession,
+  usage: OpenClawUsageSummary | null
+): Promise<OpenClawUsageSummary | undefined> => {
+  if (!usage) return undefined;
+  if (!usage.provider || !usage.model) {
+    return usage;
+  }
+
+  const costs = await loadModelCosts(session);
+  const cost = costs.get(modelCostKey(usage.provider, usage.model));
+  if (!cost) {
+    return usage;
+  }
+
+  const costUsd = estimateUsageCostUsd(usage, cost);
+  return {
+    ...usage,
+    costUsd
+  };
 };
 
 const bestEffortAbortRun = async (session: GatewaySession, runId: string, sessionKey: string): Promise<void> => {
@@ -696,7 +909,9 @@ const resolveSession = (user: OpenClawUser): GatewaySession => {
     user,
     client,
     pending: new Map<string, PendingRun>(),
-    sessionKey: `telegram:dm:${user.telegram_user_id}`
+    sessionKey: `telegram:dm:${user.telegram_user_id}`,
+    modelCosts: new Map<string, OpenClawModelCost>(),
+    modelCostsFetchedAt: 0
   };
 
   sessions.set(user.telegram_user_id, session);
@@ -718,7 +933,7 @@ export const sendChatToOpenClaw = async (
   await session.client.waitForHello();
 
   const timeoutMs = normalizeTimeoutMs(request.timeoutMs, CHAT_TIMEOUT_MS);
-  const runId = asNonEmptyString(request.idempotencyKey) ?? crypto.randomUUID();
+  const idempotencyKey = asNonEmptyString(request.idempotencyKey) ?? crypto.randomUUID();
   const sessionKey = asNonEmptyString(request.sessionKey) ?? session.sessionKey;
 
   let rejectTimeout: ((error: Error) => void) | null = null;
@@ -731,7 +946,7 @@ export const sendChatToOpenClaw = async (
   timeoutHandle.unref();
 
   const pending: PendingRun = {
-    runId,
+    runId: idempotencyKey,
     timer: timeoutHandle,
     keyAliases: new Set<string>(),
     textBuffer: '',
@@ -741,10 +956,10 @@ export const sendChatToOpenClaw = async (
   };
   if (request.onDelta) pending.onDelta = request.onDelta;
 
-  attachPendingRun(session, pending, runId);
+  attachPendingRun(session, pending, idempotencyKey);
 
   try {
-    const chatSendArgs: {
+    const agentRequestArgs: {
       sessionKey: string;
       message: string;
       runId: string;
@@ -759,23 +974,26 @@ export const sendChatToOpenClaw = async (
       attachments
     };
     if (request.extraParams) {
-      chatSendArgs.extraParams = request.extraParams;
+      agentRequestArgs.extraParams = request.extraParams;
     }
-    const params = buildChatSendParams(chatSendArgs);
-    const ackPayload = await Promise.race([
-      session.client.request<Record<string, unknown>>('chat.send', params, {
-        timeoutMs: Math.min(timeoutMs, 20_000)
+    const params = buildAgentRequestParams(agentRequestArgs);
+    const finalResponse = await Promise.race([
+      session.client.request<Record<string, unknown>>('agent', params, {
+        expectFinal: true,
+        timeoutMs: timeoutMs + 30_000
       }),
       timeoutPromise
     ]);
 
-    const ackRunId = extractRunId(ackPayload);
-    if (ackRunId) {
-      attachPendingRun(session, pending, ackRunId);
+    const finalRunId = extractRunId(finalResponse);
+    if (finalRunId) {
+      attachPendingRun(session, pending, finalRunId);
     }
+    pending.finalPayload = finalResponse;
+    settlePendingCompletion(pending);
 
     await Promise.race([pending.completion.promise, timeoutPromise]);
-    const finalPayload = pending.finalPayload ?? ackPayload;
+    const finalPayload = pending.finalPayload ?? finalResponse;
 
     if (pending.error) {
       throw pending.error;
@@ -790,13 +1008,20 @@ export const sendChatToOpenClaw = async (
     const artifacts = dedupeArtifacts([...eventArtifacts, ...payloadArtifacts, ...messageArtifacts]);
 
     const text = composeReplyText(messages, pending.textBuffer);
+    const usage = await attachEstimatedCost(session, extractUsageSummary(finalPayload));
 
-    return {
+    const reply: OpenClawChatReply = {
       runId: pending.runId,
+      idempotencyKey,
+      sessionKey,
       text,
       artifacts,
       messages
     };
+    if (usage) {
+      reply.usage = usage;
+    }
+    return reply;
   } catch (error: unknown) {
     const normalizedError = toError(error);
     pending.error = normalizedError;

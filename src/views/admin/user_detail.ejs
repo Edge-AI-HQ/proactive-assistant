@@ -10,6 +10,42 @@
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
       body { font-family: 'IBM Plex Sans', ui-sans-serif, system-ui; }
+      .hint-wrap { position: relative; display: inline-flex; align-items: center; }
+      .hint-dot {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        border-radius: 9999px;
+        border: 1px solid #94a3b8;
+        color: #475569;
+        font-size: 10px;
+        font-weight: 600;
+        line-height: 1;
+        cursor: help;
+        margin-left: 6px;
+        background: #f8fafc;
+      }
+      .hint-box {
+        position: absolute;
+        z-index: 20;
+        left: 22px;
+        top: 50%;
+        transform: translateY(-50%);
+        min-width: 280px;
+        max-width: 360px;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid #cbd5e1;
+        background: #ffffff;
+        color: #0f172a;
+        font-size: 12px;
+        line-height: 1.4;
+        box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+        display: none;
+      }
+      .hint-wrap:hover .hint-box { display: block; }
     </style>
   </head>
   <body class="min-h-screen bg-slate-50 text-slate-900">
@@ -21,6 +57,13 @@
         </div>
         <a href="/admin/users" class="rounded-xl border border-slate-200 px-4 py-2 text-sm">返回</a>
       </header>
+
+      <%
+        const userInputTokens = Number(usage.input_tokens || 0);
+        const userCacheReadTokens = Number(usage.cache_read_tokens || 0);
+        const userTotalReadTokens = userInputTokens + userCacheReadTokens;
+        const userCacheReadRate = userTotalReadTokens > 0 ? (userCacheReadTokens / userTotalReadTokens) * 100 : 0;
+      %>
 
       <section class="mt-6 grid gap-4 md:grid-cols-3">
         <div class="rounded-2xl border border-slate-200 bg-white p-4">
@@ -35,7 +78,53 @@
           <p class="text-xs uppercase tracking-widest text-slate-400">Gateway Token</p>
           <p class="mt-2 text-xs break-all"><%= user.gateway_token %></p>
         </div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-4">
+          <p class="text-xs uppercase tracking-widest text-slate-400">累计 Token</p>
+          <p class="mt-2 text-lg font-semibold"><%= Number(usage.total_tokens || 0).toLocaleString('en-US') %></p>
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-4">
+          <p class="text-xs uppercase tracking-widest text-slate-400">累计费用 USD</p>
+          <p class="mt-2 text-lg font-semibold">$<%= Number(usage.total_cost_usd || 0).toFixed(4) %></p>
+        </div>
       </section>
+
+      <section class="mt-4 grid gap-4 md:grid-cols-4">
+        <div class="rounded-2xl border border-slate-200 bg-white p-4">
+          <p class="text-xs uppercase tracking-widest text-slate-400">Input Tokens</p>
+          <p class="mt-2 text-lg font-semibold"><%= Number(usage.input_tokens || 0).toLocaleString('en-US') %></p>
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-4">
+          <p class="text-xs uppercase tracking-widest text-slate-400">
+            <span class="hint-wrap">
+              MODEL OUTPUT TOKENS
+              <span class="hint-dot">?</span>
+              <span class="hint-box">
+                Model Output Tokens 是模型生成输出（含工具调用相关模型输出），不等于上下文处理量。Cache Read/Write 是上下文缓存读写量，通常会更大。
+              </span>
+            </span>
+          </p>
+          <p class="mt-2 text-lg font-semibold"><%= Number(usage.output_tokens || 0).toLocaleString('en-US') %></p>
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-4">
+          <p class="text-xs uppercase tracking-widest text-slate-400">Cache Read Tokens</p>
+          <p class="mt-2 text-lg font-semibold"><%= Number(usage.cache_read_tokens || 0).toLocaleString('en-US') %></p>
+          <p class="mt-1 text-xs text-slate-500">Read Cache Rate: <%= userCacheReadRate.toFixed(2) %>%</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-4">
+          <p class="text-xs uppercase tracking-widest text-slate-400">Cache Write Tokens</p>
+          <p class="mt-2 text-lg font-semibold"><%= Number(usage.cache_write_tokens || 0).toLocaleString('en-US') %></p>
+        </div>
+      </section>
+
+      <% if ((usage.total_tokens || 0) > 0 && Number(usage.total_cost_usd || 0) === 0) { %>
+        <section class="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+          <p class="text-sm font-medium text-amber-900">该用户费用当前为 0（仅 token 已入账）</p>
+          <p class="mt-1 text-xs text-amber-800">
+            该会话模型价格未命中，系统无法估算 USD。补充模型
+            <code class="rounded bg-amber-100 px-1">cost</code> 配置后会继续累计费用。
+          </p>
+        </section>
+      <% } %>
 
       <section class="mt-6 flex flex-wrap gap-3">
         <form method="POST" action="/admin/users/<%= user.id %>/restart">
@@ -44,6 +133,52 @@
         <form method="POST" action="/admin/users/<%= user.id %>/stop">
           <button class="rounded-xl border border-slate-200 px-4 py-2 text-sm">停止容器</button>
         </form>
+      </section>
+
+      <section class="mt-8 rounded-2xl border border-slate-200 bg-white p-6">
+        <h2 class="text-lg font-semibold">最近 Token 计费流水</h2>
+        <% if (usageLogs.length === 0) { %>
+          <p class="mt-4 text-sm text-slate-500">暂无计费记录</p>
+        <% } else { %>
+          <div class="mt-4 overflow-auto">
+            <table class="w-full text-sm">
+              <thead class="bg-slate-100 text-left text-xs uppercase tracking-widest text-slate-500">
+                <tr>
+                  <th class="px-3 py-2">时间</th>
+                  <th class="px-3 py-2">Run ID</th>
+                  <th class="px-3 py-2">模型</th>
+                  <th class="px-3 py-2">Model Output</th>
+                  <th class="px-3 py-2">Cache Read</th>
+                  <th class="px-3 py-2">Cache Write</th>
+                  <th class="px-3 py-2">Total</th>
+                  <th class="px-3 py-2">Read Cache Rate</th>
+                  <th class="px-3 py-2">费用</th>
+                </tr>
+              </thead>
+              <tbody>
+                <% usageLogs.forEach((entry) => { %>
+                  <% 
+                    const rowInput = Number(entry.input_tokens || 0);
+                    const rowCacheRead = Number(entry.cache_read_tokens || 0);
+                    const rowTotalRead = rowInput + rowCacheRead;
+                    const rowCacheReadRate = rowTotalRead > 0 ? (rowCacheRead / rowTotalRead) * 100 : 0;
+                  %>
+                  <tr class="border-t border-slate-100">
+                    <td class="px-3 py-2"><%= entry.created_at %></td>
+                    <td class="px-3 py-2 font-mono text-xs"><%= entry.run_id %></td>
+                    <td class="px-3 py-2"><%= entry.provider || '-' %> / <%= entry.model || '-' %></td>
+                    <td class="px-3 py-2"><%= Number(entry.output_tokens || 0).toLocaleString('en-US') %></td>
+                    <td class="px-3 py-2"><%= Number(entry.cache_read_tokens || 0).toLocaleString('en-US') %></td>
+                    <td class="px-3 py-2"><%= Number(entry.cache_write_tokens || 0).toLocaleString('en-US') %></td>
+                    <td class="px-3 py-2"><%= Number(entry.total_tokens || 0).toLocaleString('en-US') %></td>
+                    <td class="px-3 py-2"><%= rowCacheReadRate.toFixed(2) %>%</td>
+                    <td class="px-3 py-2">$<%= Number(entry.cost_usd || 0).toFixed(4) %></td>
+                  </tr>
+                <% }) %>
+              </tbody>
+            </table>
+          </div>
+        <% } %>
       </section>
 
       <section class="mt-8 rounded-2xl border border-slate-200 bg-white p-6">

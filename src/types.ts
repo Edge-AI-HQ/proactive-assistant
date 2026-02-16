@@ -98,6 +98,67 @@ export type UserMutableFields = Partial<
   >
 >;
 
+export interface TokenUsageLedgerInput {
+  telegram_user_id: number;
+  session_key: string;
+  run_id: string;
+  idempotency_key: string;
+  provider?: string | null;
+  model?: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+}
+
+export interface TokenUsageLedgerRecord {
+  id: number;
+  telegram_user_id: number;
+  session_key: string;
+  run_id: string;
+  idempotency_key: string;
+  provider: string | null;
+  model: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  created_at: string;
+}
+
+export interface UserUsageTotalsRecord {
+  telegram_user_id: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  updated_at: string;
+}
+
+export interface UserWithUsageRecord extends UserRecord {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  total_tokens: number;
+  total_cost_usd: number;
+}
+
+export interface UsageOverviewRecord {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  total_tokens: number;
+  total_cost_usd: number;
+}
+
 export interface Config {
   nodeEnv: string;
   port: number;
