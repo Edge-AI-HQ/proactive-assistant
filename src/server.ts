@@ -13,7 +13,7 @@ import {
   purgeExpiredAdminSessions
 } from './db.js';
 import { sanitizeAllCronStores } from './docker/manager.js';
-import { registerDashboardProxyRoutes, registerDashboardWsProxy } from './gateway/dashboardProxyRoutes.js';
+import { registerDashboardProxyRoutes, registerDashboardWsProxy } from './openclaw/dashboardProxyRoutes.js';
 import { buildBot } from './telegram/bot.js';
 
 const __filename = fileURLToPath(import.meta.url);
