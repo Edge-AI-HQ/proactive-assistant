@@ -4,8 +4,8 @@ import net from 'node:net';
 import Docker from 'dockerode';
 import type Dockerode from 'dockerode';
 import { config } from '../config.js';
-import { listUsedPorts, updateUser, updateUserById } from '../db.js';
-import type { UserRecord } from '../types.js';
+import { listUsedPorts, updateAssistant, updateUser, updateUserById } from '../db.js';
+import type { AssistantRecord, UserRecord } from '../types.js';
 import {
   ensureUserMachine,
   getUserMachineLogs,
@@ -37,6 +37,17 @@ interface UserContainerDirs {
   workspaceDir: string;
 }
 
+type AssistantRuntimeRef = Pick<
+  AssistantRecord,
+  | 'id'
+  | 'owner_telegram_user_id'
+  | 'assistant_bot_id'
+  | 'assistant_bot_token'
+  | 'container_name'
+  | 'container_id'
+  | 'container_port'
+>;
+
 const isRecord = (value: unknown): value is UnknownRecord => {
   return typeof value === 'object' && value !== null;
 };
@@ -51,52 +62,182 @@ const ensureDir = (dirPath: string): void => {
   }
 };
 
-const ensureOpenclawConfig = (configDir: string): string => {
+const isBoolean = (value: unknown): value is boolean => typeof value === 'boolean';
+
+const hasDesiredGatewayConfig = (value: unknown): boolean => {
+  if (!isRecord(value)) return false;
+  const auth = isRecord(value.auth) ? value.auth : null;
+  const controlUi = isRecord(value.controlUi) ? value.controlUi : null;
+  const http = isRecord(value.http) ? value.http : null;
+  const endpoints = http && isRecord(http.endpoints) ? http.endpoints : null;
+  const chatCompletions = endpoints && isRecord(endpoints.chatCompletions) ? endpoints.chatCompletions : null;
+
+  return (
+    value.mode === 'local' &&
+    value.port === config.openclaw.gatewayPort &&
+    value.bind === 'lan' &&
+    auth?.mode === 'token' &&
+    auth?.token === config.openclaw.apiKey &&
+    controlUi?.allowInsecureAuth === true &&
+    chatCompletions?.enabled === true
+  );
+};
+
+const hasDesiredTtsConfig = (value: unknown): boolean => {
+  if (!isRecord(value)) return false;
+  return value.auto === 'off' && value.provider === 'elevenlabs';
+};
+
+const hasDesiredTelegramChannelConfig = (
+  value: unknown,
+  assistantBotToken: string
+): boolean => {
+  if (!isRecord(value)) return false;
+  const actions = isRecord(value.actions) ? value.actions : null;
+  const allowFrom = Array.isArray(value.allowFrom) ? value.allowFrom : null;
+  const groupAllowFrom = Array.isArray(value.groupAllowFrom) ? value.groupAllowFrom : null;
+  const groups = isRecord(value.groups) ? value.groups : null;
+  const wildcardGroup = groups && isRecord(groups['*']) ? groups['*'] : null;
+  const allowFromHasWildcard = Boolean(allowFrom?.some((entry) => String(entry).trim() === '*'));
+
+  return (
+    value.enabled === true &&
+    value.dmPolicy === 'open' &&
+    value.botToken === assistantBotToken &&
+    allowFromHasWildcard &&
+    groupAllowFrom?.length === 0 &&
+    value.groupPolicy === 'open' &&
+    wildcardGroup?.requireMention === true &&
+    value.streamMode === 'partial' &&
+    isBoolean(actions?.sendMessage) &&
+    actions.sendMessage === true &&
+    isBoolean(actions?.deleteMessage) &&
+    actions.deleteMessage === false &&
+    isBoolean(actions?.sticker) &&
+    actions.sticker === true
+  );
+};
+
+const withDesiredGatewayConfig = (root: UnknownRecord): void => {
+  root.gateway = {
+    mode: 'local',
+    port: config.openclaw.gatewayPort,
+    bind: 'lan',
+    auth: {
+      mode: 'token',
+      token: config.openclaw.apiKey
+    },
+    controlUi: {
+      allowInsecureAuth: true
+    },
+    http: {
+      endpoints: {
+        chatCompletions: { enabled: true }
+      }
+    }
+  };
+};
+
+const withDesiredTtsConfig = (root: UnknownRecord): void => {
+  const existingMessages = isRecord(root.messages) ? root.messages : {};
+  root.messages = {
+    ...existingMessages,
+    tts: {
+      auto: 'off',
+      provider: 'elevenlabs'
+    }
+  };
+};
+
+const withDesiredTelegramChannelConfig = (
+  root: UnknownRecord,
+  assistantBotToken: string
+): void => {
+  const existingChannels = isRecord(root.channels) ? root.channels : {};
+  root.channels = {
+    ...existingChannels,
+    telegram: {
+      enabled: true,
+      dmPolicy: 'open',
+      botToken: assistantBotToken,
+      allowFrom: ['*'],
+      groupAllowFrom: [],
+      groupPolicy: 'open',
+      groups: {
+        '*': {
+          requireMention: true
+        }
+      },
+      streamMode: 'partial',
+      actions: {
+        sendMessage: true,
+        deleteMessage: false,
+        sticker: true
+      }
+    }
+  };
+};
+
+const stripTelegramChannelConfig = (root: UnknownRecord): void => {
+  if (!isRecord(root.channels)) return;
+  const nextChannels: UnknownRecord = { ...root.channels };
+  if (!Object.hasOwn(nextChannels, 'telegram')) return;
+  delete nextChannels.telegram;
+  if (Object.keys(nextChannels).length === 0) {
+    delete root.channels;
+    return;
+  }
+  root.channels = nextChannels;
+};
+
+const ensureOpenclawConfig = (
+  configDir: string,
+  assistantBotToken?: string | null
+): { configPath: string; changed: boolean } => {
   const configPath = path.join(configDir, 'openclaw.json');
 
   if (!config.openclaw.apiKey) {
     throw new Error('OPENCLAW_API_KEY is required to start OpenClaw gateway with LAN binding.');
   }
 
-  const payload = {
-    gateway: {
-      mode: 'local',
-      port: config.openclaw.gatewayPort,
-      bind: 'lan',
-      auth: {
-        mode: 'token',
-        token: config.openclaw.apiKey
-      },
-      controlUi: {
-        allowInsecureAuth: true
-      },
-      http: {
-        endpoints: {
-          chatCompletions: { enabled: true }
-        }
-      }
-    },
-    messages: {
-      tts: {
-        auto: 'off',
-        provider: 'elevenlabs'
-      }
-    }
-  };
-
-  if (fs.existsSync(configPath)) {
+  const normalizedAssistantBotToken = (assistantBotToken || '').trim();
+  const existingRaw = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
+  const existingParsed = (() => {
+    if (!existingRaw) return {};
     try {
-      const existing = JSON.parse(fs.readFileSync(configPath, 'utf8')) as unknown;
-      if (isRecord(existing) && JSON.stringify(existing) === JSON.stringify(payload)) {
-        return configPath;
-      }
+      const parsed = JSON.parse(existingRaw) as unknown;
+      return isRecord(parsed) ? parsed : {};
     } catch {
-      // fall through to rewrite config
+      return {};
     }
+  })();
+
+  const hasGateway = hasDesiredGatewayConfig(existingParsed.gateway);
+  const existingMessages = isRecord(existingParsed.messages) ? existingParsed.messages : null;
+  const hasTts = hasDesiredTtsConfig(existingMessages?.tts);
+  const existingChannels = isRecord(existingParsed.channels) ? existingParsed.channels : null;
+  const hasTelegramChannel = normalizedAssistantBotToken
+    ? hasDesiredTelegramChannelConfig(existingChannels?.telegram, normalizedAssistantBotToken)
+    : !Object.hasOwn(existingChannels ?? {}, 'telegram');
+
+  if (hasGateway && hasTts && hasTelegramChannel) {
+    return { configPath, changed: false };
   }
 
-  fs.writeFileSync(configPath, JSON.stringify(payload, null, 2));
-  return configPath;
+  const next: UnknownRecord = { ...existingParsed };
+  withDesiredGatewayConfig(next);
+  withDesiredTtsConfig(next);
+  if (normalizedAssistantBotToken) {
+    withDesiredTelegramChannelConfig(next, normalizedAssistantBotToken);
+  } else {
+    stripTelegramChannelConfig(next);
+  }
+
+  const changed = JSON.stringify(existingParsed) !== JSON.stringify(next);
+  if (changed) {
+    fs.writeFileSync(configPath, JSON.stringify(next, null, 2));
+  }
+  return { configPath, changed };
 };
 
 const parseCronStore = (raw: string): ParsedCronStore | null => {
@@ -151,17 +292,18 @@ export const sanitizeAllCronStores = (): void => {
 
   const entries = fs.readdirSync(dataDir, { withFileTypes: true });
   entries.forEach((entry) => {
-    if (!entry.isDirectory() || !entry.name.startsWith('user-')) return;
-    const userDataDir = path.join(dataDir, entry.name, 'data');
-    if (!fs.existsSync(userDataDir)) return;
-    sanitizeCronStore(userDataDir);
+    if (!entry.isDirectory()) return;
+    const runtimeDataDir = path.join(dataDir, entry.name, 'data');
+    if (!fs.existsSync(runtimeDataDir)) return;
+    sanitizeCronStore(runtimeDataDir);
   });
 };
 
 export const containerNameForUser = (telegramUserId: number): string => `openclaw-user-${telegramUserId}`;
+export const containerNameForAssistant = (assistantBotId: number): string => `openclaw-assistant-${assistantBotId}`;
 
-export const getUserContainerDirs = (telegramUserId: number): UserContainerDirs => {
-  const baseDir = path.join(process.cwd(), 'data', `user-${telegramUserId}`);
+const buildContainerDirs = (scopeDirName: string): UserContainerDirs => {
+  const baseDir = path.join(process.cwd(), 'data', scopeDirName);
   return {
     configDir: path.join(baseDir, 'config'),
     dataDir: path.join(baseDir, 'data'),
@@ -170,9 +312,24 @@ export const getUserContainerDirs = (telegramUserId: number): UserContainerDirs 
   };
 };
 
+export const getUserContainerDirs = (telegramUserId: number): UserContainerDirs => {
+  return buildContainerDirs(`user-${telegramUserId}`);
+};
+
+export const getAssistantContainerDirs = (assistantBotId: number): UserContainerDirs => {
+  return buildContainerDirs(`assistant-${assistantBotId}`);
+};
+
 export const sanitizeUserCronStore = (telegramUserId: number): void => {
   if (isFlyRuntime()) return;
   const { dataDir } = getUserContainerDirs(telegramUserId);
+  if (!fs.existsSync(dataDir)) return;
+  sanitizeCronStore(dataDir);
+};
+
+export const sanitizeAssistantCronStore = (assistantBotId: number): void => {
+  if (isFlyRuntime()) return;
+  const { dataDir } = getAssistantContainerDirs(assistantBotId);
   if (!fs.existsSync(dataDir)) return;
   sanitizeCronStore(dataDir);
 };
@@ -283,8 +440,18 @@ const findBindSource = (binds: string[] | undefined, target: string): string | n
   return null;
 };
 
+const findEnvValue = (envVars: string[] | undefined, key: string): string | null => {
+  if (!Array.isArray(envVars)) return null;
+  const prefix = `${key}=`;
+  for (const variable of envVars) {
+    if (!variable.startsWith(prefix)) continue;
+    return variable.slice(prefix.length);
+  }
+  return null;
+};
+
 export const ensureUserContainer = async (
-  user: Pick<UserRecord, 'telegram_user_id' | 'container_id' | 'container_port'>
+  user: Pick<UserRecord, 'telegram_user_id' | 'container_id' | 'container_port' | 'assistant_bot_token'>
 ): Promise<{ containerId: string; ready: boolean }> => {
   if (isFlyRuntime()) {
     return ensureUserMachine(user);
@@ -303,8 +470,9 @@ export const ensureUserContainer = async (
   ensureDir(userDataDir);
   ensureDir(userTmpDir);
   ensureDir(userWorkspaceDir);
-  ensureOpenclawConfig(userConfigDir);
+  const { changed: configChanged } = ensureOpenclawConfig(userConfigDir, user.assistant_bot_token);
   sanitizeCronStore(userDataDir);
+  let shouldRestartForConfig = false;
 
   if (container) {
     const inspect = await container.inspect();
@@ -319,8 +487,10 @@ export const ensureUserContainer = async (
       const mountedSource = findBindSource(binds, target);
       return mountedSource !== source;
     });
+    const legacyTelegramBotToken = findEnvValue(inspect?.Config?.Env, 'TELEGRAM_BOT_TOKEN');
+    const needsEnvMigration = typeof legacyTelegramBotToken === 'string' && legacyTelegramBotToken.length > 0;
 
-    if (needsBindMigration) {
+    if (needsBindMigration || needsEnvMigration) {
       try {
         if (inspect.State?.Status === 'running') {
           await container.stop();
@@ -334,6 +504,8 @@ export const ensureUserContainer = async (
         container_status: 'creating',
         container_id: ''
       });
+    } else if (configChanged && inspect.State?.Status === 'running') {
+      shouldRestartForConfig = true;
     }
   }
 
@@ -389,12 +561,141 @@ export const ensureUserContainer = async (
         throw error;
       }
     }
+  } else if (shouldRestartForConfig) {
+    await container.restart();
   }
 
   const ready = await waitForPort(user.container_port, 30000);
 
   await updateUser(user.telegram_user_id, {
     container_status: ready ? 'running' : 'error'
+  });
+
+  return { containerId: container.id, ready };
+};
+
+export const ensureAssistantContainer = async (
+  assistant: AssistantRuntimeRef
+): Promise<{ containerId: string; ready: boolean }> => {
+  if (isFlyRuntime()) {
+    throw new Error('Fly runtime assistant provisioning is not supported.');
+  }
+
+  const fallbackContainerName = containerNameForAssistant(assistant.assistant_bot_id);
+  const containerName = assistant.container_name?.trim() || fallbackContainerName;
+  let container = await resolveContainer(assistant.container_id, containerName);
+
+  const assistantDirs = getAssistantContainerDirs(assistant.assistant_bot_id);
+  const assistantConfigDir = assistantDirs.configDir;
+  const assistantDataDir = assistantDirs.dataDir;
+  const assistantTmpDir = assistantDirs.tmpDir;
+  const assistantWorkspaceDir = assistantDirs.workspaceDir;
+
+  ensureDir(assistantConfigDir);
+  ensureDir(assistantDataDir);
+  ensureDir(assistantTmpDir);
+  ensureDir(assistantWorkspaceDir);
+  const { changed: configChanged } = ensureOpenclawConfig(assistantConfigDir, assistant.assistant_bot_token);
+  sanitizeCronStore(assistantDataDir);
+  let shouldRestartForConfig = false;
+
+  if (container) {
+    const inspect = await container.inspect();
+    const binds = inspect?.HostConfig?.Binds;
+    const expectedBinds: Array<{ target: string; source: string }> = [
+      { target: '/app/config', source: assistantConfigDir },
+      { target: '/app/data', source: assistantDataDir },
+      { target: '/tmp', source: assistantTmpDir },
+      { target: '/root/.openclaw/workspace', source: assistantWorkspaceDir }
+    ];
+    const needsBindMigration = expectedBinds.some(({ target, source }) => {
+      const mountedSource = findBindSource(binds, target);
+      return mountedSource !== source;
+    });
+    const legacyTelegramBotToken = findEnvValue(inspect?.Config?.Env, 'TELEGRAM_BOT_TOKEN');
+    const needsEnvMigration = typeof legacyTelegramBotToken === 'string' && legacyTelegramBotToken.length > 0;
+
+    if (needsBindMigration || needsEnvMigration) {
+      try {
+        if (inspect.State?.Status === 'running') {
+          await container.stop();
+        }
+      } catch {
+        // continue with forced remove
+      }
+      await container.remove({ force: true });
+      container = null;
+      await updateAssistant(assistant.id, {
+        container_status: 'creating',
+        container_id: '',
+        container_name: containerName
+      });
+    } else if (configChanged && inspect.State?.Status === 'running') {
+      shouldRestartForConfig = true;
+    }
+  }
+
+  if (!container) {
+    container = await docker.createContainer({
+      name: containerName,
+      Image: config.openclaw.image,
+      Env: [
+        `ANTHROPIC_API_KEY=${config.anthropicApiKey}`,
+        ...(config.openaiApiKey ? [`OPENAI_API_KEY=${config.openaiApiKey}`] : []),
+        ...(config.elevenLabs.apiKey ? [`ELEVENLABS_API_KEY=${config.elevenLabs.apiKey}`] : []),
+        ...(config.elevenLabs.apiKey ? [`XI_API_KEY=${config.elevenLabs.apiKey}`] : []),
+        ...(config.elevenLabs.baseUrl ? [`ELEVENLABS_BASE_URL=${config.elevenLabs.baseUrl}`] : []),
+        `OPENCLAW_API_KEY=${config.openclaw.apiKey}`,
+        ...(config.openclaw.braveApiKey ? [`BRAVE_API_KEY=${config.openclaw.braveApiKey}`] : []),
+        `OPENCLAW_USER_ID=assistant-${assistant.assistant_bot_id}`,
+        `OPENCLAW_GATEWAY_PORT=${config.openclaw.gatewayPort}`,
+        `OPENCLAW_GATEWAY_TOKEN=${config.openclaw.apiKey}`,
+        'OPENCLAW_CONFIG_PATH=/app/config/openclaw.json',
+        'OPENCLAW_STATE_DIR=/app/data'
+      ],
+      ExposedPorts: {
+        [`${config.openclaw.gatewayPort}/tcp`]: {}
+      },
+      HostConfig: {
+        RestartPolicy: { Name: 'unless-stopped' },
+        PortBindings: {
+          [`${config.openclaw.gatewayPort}/tcp`]: [{ HostPort: String(assistant.container_port) }]
+        },
+        Binds: [
+          `${assistantConfigDir}:/app/config`,
+          `${assistantDataDir}:/app/data`,
+          `${assistantTmpDir}:/tmp`,
+          `${assistantWorkspaceDir}:/root/.openclaw/workspace`
+        ],
+        Memory: config.container.memoryMb * 1024 * 1024,
+        CpuShares: config.container.cpuShares
+      }
+    });
+
+    await updateAssistant(assistant.id, {
+      container_status: 'creating',
+      container_id: container.id,
+      container_name: containerName
+    });
+  }
+
+  const inspect = await container.inspect();
+  if (inspect.State.Status !== 'running') {
+    try {
+      await container.start();
+    } catch (error: unknown) {
+      if (!isStatusCodeError(error) || error.statusCode !== 304) {
+        throw error;
+      }
+    }
+  } else if (shouldRestartForConfig) {
+    await container.restart();
+  }
+
+  const ready = await waitForPort(assistant.container_port, 30000);
+  await updateAssistant(assistant.id, {
+    container_status: ready ? 'running' : 'error',
+    container_name: containerName
   });
 
   return { containerId: container.id, ready };

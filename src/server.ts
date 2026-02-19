@@ -1,5 +1,4 @@
 import express, { type Request, type Response } from 'express';
-import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import cookieParser from 'cookie-parser';
@@ -11,7 +10,6 @@ import {
   purgeExpiredAdminSessions
 } from './db.js';
 import { sanitizeAllCronStores } from './docker/manager.js';
-import { registerDashboardProxyRoutes, registerDashboardWsProxy } from './openclaw/dashboardProxyRoutes.js';
 import { buildBot } from './telegram/bot.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -66,7 +64,6 @@ app.post('/webhook/telegram', async (req: Request, res: Response) => {
 
 registerAuthRoutes(app, bot);
 registerAdminRoutes(app);
-registerDashboardProxyRoutes(app);
 
 app.get('/health', (req: Request, res: Response) => {
   void req;
@@ -83,8 +80,6 @@ setInterval(() => {
   purgeExpiredAdminSessions();
 }, 5 * 60 * 1000);
 
-const server = http.createServer(app);
-registerDashboardWsProxy(server);
-server.listen(config.port, () => {
+app.listen(config.port, () => {
   console.log(`PIN AI Assistant listening on :${config.port}`);
 });

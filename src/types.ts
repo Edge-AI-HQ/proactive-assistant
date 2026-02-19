@@ -6,8 +6,25 @@ export interface UserRecord {
   container_port: number;
   container_status: string;
   gateway_token: string;
+  assistant_bot_token: string | null;
+  assistant_bot_username: string | null;
+  assistant_webhook_secret: string | null;
   created_at: string;
   last_active_at: string;
+}
+
+export interface AssistantRecord {
+  id: number;
+  owner_telegram_user_id: number;
+  assistant_bot_id: number;
+  assistant_bot_token: string;
+  assistant_bot_username: string;
+  container_name: string;
+  container_id: string;
+  container_port: number;
+  container_status: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface GatewaySessionRecord {
@@ -52,6 +69,20 @@ export interface CreateUserInput {
   container_port: number;
   container_status?: string;
   gateway_token: string;
+  assistant_bot_token?: string | null;
+  assistant_bot_username?: string | null;
+  assistant_webhook_secret?: string | null;
+}
+
+export interface CreateAssistantInput {
+  owner_telegram_user_id: number;
+  assistant_bot_id: number;
+  assistant_bot_token: string;
+  assistant_bot_username: string;
+  container_name: string;
+  container_id: string;
+  container_port: number;
+  container_status?: string;
 }
 
 export type UserMutableFields = Partial<
@@ -62,6 +93,21 @@ export type UserMutableFields = Partial<
     | 'container_port'
     | 'container_status'
     | 'gateway_token'
+    | 'assistant_bot_token'
+    | 'assistant_bot_username'
+    | 'assistant_webhook_secret'
+  >
+>;
+
+export type AssistantMutableFields = Partial<
+  Pick<
+    AssistantRecord,
+    | 'assistant_bot_token'
+    | 'assistant_bot_username'
+    | 'container_name'
+    | 'container_id'
+    | 'container_port'
+    | 'container_status'
   >
 >;
 
