@@ -4,8 +4,11 @@ import crypto from 'node:crypto';
 import Database from 'better-sqlite3';
 import { config } from './config.js';
 import type {
+  AssistantMutableFields,
+  AssistantRecord,
   AdminSessionView,
   AdminUserRecord,
+  CreateAssistantInput,
   CreateUserInput,
   GatewaySessionRecord,
   MessageLogRecord,
@@ -40,8 +43,25 @@ db.exec(`
     container_port INTEGER UNIQUE NOT NULL,
     container_status TEXT DEFAULT 'creating',
     gateway_token TEXT UNIQUE NOT NULL,
+    assistant_bot_token TEXT,
+    assistant_bot_username TEXT,
+    assistant_webhook_secret TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_active_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS assistants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_telegram_user_id BIGINT NOT NULL,
+    assistant_bot_id BIGINT UNIQUE NOT NULL,
+    assistant_bot_token TEXT UNIQUE NOT NULL,
+    assistant_bot_username TEXT UNIQUE NOT NULL,
+    container_name TEXT UNIQUE NOT NULL,
+    container_id TEXT UNIQUE NOT NULL,
+    container_port INTEGER UNIQUE NOT NULL,
+    container_status TEXT DEFAULT 'creating',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   );
 
   CREATE TABLE IF NOT EXISTS gateway_sessions (
@@ -114,11 +134,22 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_message_logs_user_created
     ON message_logs (telegram_user_id, created_at DESC);
 
+  CREATE INDEX IF NOT EXISTS idx_assistants_owner_created
+    ON assistants (owner_telegram_user_id, created_at DESC);
+
   CREATE INDEX IF NOT EXISTS idx_token_usage_ledger_user_created
     ON token_usage_ledger (telegram_user_id, created_at DESC);
 
   CREATE INDEX IF NOT EXISTS idx_token_usage_ledger_run_id
     ON token_usage_ledger (run_id);
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_users_assistant_bot_token_unique
+    ON users (assistant_bot_token)
+    WHERE assistant_bot_token IS NOT NULL AND assistant_bot_token != '';
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_users_assistant_bot_username_unique
+    ON users (assistant_bot_username)
+    WHERE assistant_bot_username IS NOT NULL AND assistant_bot_username != '';
 `);
 
 interface TableColumnInfo {
@@ -167,6 +198,9 @@ const migrateUsersToTelegramSchema = (): void => {
         container_port INTEGER UNIQUE NOT NULL,
         container_status TEXT DEFAULT 'creating',
         gateway_token TEXT UNIQUE NOT NULL,
+        assistant_bot_token TEXT,
+        assistant_bot_username TEXT,
+        assistant_webhook_secret TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         last_active_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
@@ -179,6 +213,9 @@ const migrateUsersToTelegramSchema = (): void => {
         container_port,
         container_status,
         gateway_token,
+        assistant_bot_token,
+        assistant_bot_username,
+        assistant_webhook_secret,
         created_at,
         last_active_at
       )
@@ -190,6 +227,9 @@ const migrateUsersToTelegramSchema = (): void => {
         container_port,
         container_status,
         gateway_token,
+        NULL,
+        NULL,
+        NULL,
         created_at,
         last_active_at
       FROM users;
@@ -203,6 +243,78 @@ const migrateUsersToTelegramSchema = (): void => {
   console.info('[db] Migrated users table to Telegram-only schema.');
 };
 
+const ensureUsersAssistantBotColumns = (): void => {
+  if (!hasTable('users')) return;
+
+  const columns = new Set(listTableColumns('users'));
+  const migrationStatements: string[] = [];
+
+  if (!columns.has('assistant_bot_token')) {
+    migrationStatements.push('ALTER TABLE users ADD COLUMN assistant_bot_token TEXT');
+  }
+  if (!columns.has('assistant_bot_username')) {
+    migrationStatements.push('ALTER TABLE users ADD COLUMN assistant_bot_username TEXT');
+  }
+  if (!columns.has('assistant_webhook_secret')) {
+    migrationStatements.push('ALTER TABLE users ADD COLUMN assistant_webhook_secret TEXT');
+  }
+
+  if (migrationStatements.length) {
+    const runMigration = db.transaction(() => {
+      migrationStatements.forEach((statement) => db.exec(statement));
+    });
+    runMigration();
+  }
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_assistant_bot_token_unique
+      ON users (assistant_bot_token)
+      WHERE assistant_bot_token IS NOT NULL AND assistant_bot_token != '';
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_assistant_bot_username_unique
+      ON users (assistant_bot_username)
+      WHERE assistant_bot_username IS NOT NULL AND assistant_bot_username != '';
+  `);
+};
+
+const migrateLegacyUserAssistants = (): void => {
+  if (!hasTable('users') || !hasTable('assistants')) return;
+
+  db.exec(`
+    INSERT OR IGNORE INTO assistants (
+      owner_telegram_user_id,
+      assistant_bot_id,
+      assistant_bot_token,
+      assistant_bot_username,
+      container_name,
+      container_id,
+      container_port,
+      container_status,
+      created_at,
+      updated_at
+    )
+    SELECT
+      users.telegram_user_id AS owner_telegram_user_id,
+      CAST(substr(users.assistant_bot_token, 1, instr(users.assistant_bot_token, ':') - 1) AS INTEGER) AS assistant_bot_id,
+      users.assistant_bot_token,
+      COALESCE(NULLIF(users.assistant_bot_username, ''), 'legacy_bot_' || users.telegram_user_id) AS assistant_bot_username,
+      COALESCE(NULLIF(users.container_id, ''), 'openclaw-assistant-' || users.telegram_user_id) AS container_name,
+      users.container_id,
+      users.container_port,
+      COALESCE(NULLIF(users.container_status, ''), 'creating') AS container_status,
+      COALESCE(users.created_at, CURRENT_TIMESTAMP) AS created_at,
+      COALESCE(users.last_active_at, CURRENT_TIMESTAMP) AS updated_at
+    FROM users
+    WHERE
+      users.assistant_bot_token IS NOT NULL
+      AND users.assistant_bot_token != ''
+      AND instr(users.assistant_bot_token, ':') > 1
+      AND users.container_port IS NOT NULL
+      AND users.container_id IS NOT NULL
+      AND users.container_id != '';
+  `);
+};
+
 const cleanupLegacyAuthTables = (): void => {
   db.exec(`
     DROP TABLE IF EXISTS oauth_sessions;
@@ -212,6 +324,8 @@ const cleanupLegacyAuthTables = (): void => {
 };
 
 migrateUsersToTelegramSchema();
+ensureUsersAssistantBotColumns();
+migrateLegacyUserAssistants();
 cleanupLegacyAuthTables();
 
 const nowIso = (): string => new Date().toISOString();
@@ -249,12 +363,99 @@ export const getUserById = (id: number): UserRecord | undefined => {
   return db.prepare<[number], UserRecord>('SELECT * FROM users WHERE id = ?').get(id);
 };
 
+export const getAssistantById = (id: number): AssistantRecord | undefined => {
+  return db.prepare<[number], AssistantRecord>('SELECT * FROM assistants WHERE id = ?').get(id);
+};
+
+export const getAssistantByBotToken = (assistantBotToken: string): AssistantRecord | undefined => {
+  return db
+    .prepare<[string], AssistantRecord>('SELECT * FROM assistants WHERE assistant_bot_token = ?')
+    .get(assistantBotToken);
+};
+
+export const getAssistantByBotId = (assistantBotId: number): AssistantRecord | undefined => {
+  return db
+    .prepare<[number], AssistantRecord>('SELECT * FROM assistants WHERE assistant_bot_id = ?')
+    .get(assistantBotId);
+};
+
+export const listAssistantsByOwnerTelegramId = (ownerTelegramUserId: number): AssistantRecord[] => {
+  return db
+    .prepare<[number], AssistantRecord>(`
+      SELECT *
+      FROM assistants
+      WHERE owner_telegram_user_id = ?
+      ORDER BY created_at DESC, id DESC
+    `)
+    .all(ownerTelegramUserId);
+};
+
+export const createAssistant = (assistant: CreateAssistantInput): AssistantRecord | undefined => {
+  db.prepare<
+    [number, number, string, string, string, string, number, string, string]
+  >(`
+    INSERT INTO assistants (
+      owner_telegram_user_id,
+      assistant_bot_id,
+      assistant_bot_token,
+      assistant_bot_username,
+      container_name,
+      container_id,
+      container_port,
+      container_status,
+      updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    assistant.owner_telegram_user_id,
+    assistant.assistant_bot_id,
+    assistant.assistant_bot_token,
+    assistant.assistant_bot_username,
+    assistant.container_name,
+    assistant.container_id,
+    assistant.container_port,
+    assistant.container_status || 'creating',
+    nowIso()
+  );
+
+  return getAssistantByBotId(assistant.assistant_bot_id);
+};
+
+const assistantColumnsAndValues = (
+  fields: AssistantMutableFields
+): { columns: (keyof AssistantMutableFields)[]; values: unknown[] } => {
+  const columns = Object.keys(fields) as (keyof AssistantMutableFields)[];
+  return {
+    columns,
+    values: columns.map((column) => fields[column])
+  };
+};
+
+export const updateAssistant = (id: number, fields: AssistantMutableFields): AssistantRecord | undefined => {
+  const { columns, values } = assistantColumnsAndValues(fields);
+  if (!columns.length) return getAssistantById(id);
+  const assignments = columns.map((column) => `${String(column)} = ?`).join(', ');
+  db.prepare(`UPDATE assistants SET ${assignments}, updated_at = ? WHERE id = ?`).run(...values, nowIso(), id);
+  return getAssistantById(id);
+};
+
+export const getUserByAssistantBotToken = (assistantBotToken: string): UserRecord | undefined => {
+  return db.prepare<[string], UserRecord>('SELECT * FROM users WHERE assistant_bot_token = ?').get(assistantBotToken);
+};
+
+export const getUserByAssistantBotUsername = (assistantBotUsername: string): UserRecord | undefined => {
+  return db
+    .prepare<[string], UserRecord>('SELECT * FROM users WHERE assistant_bot_username = ?')
+    .get(assistantBotUsername);
+};
+
 export const listUsers = (): UserRecord[] => {
   return db.prepare<[], UserRecord>('SELECT * FROM users ORDER BY created_at DESC').all();
 };
 
 export const createUser = (user: CreateUserInput): UserRecord | undefined => {
-  const stmt = db.prepare<[number, string | null, string, number, string, string, string]>(`
+  const stmt = db.prepare<
+    [number, string | null, string, number, string, string, string | null, string | null, string | null, string]
+  >(`
     INSERT INTO users (
       telegram_user_id,
       telegram_username,
@@ -262,8 +463,11 @@ export const createUser = (user: CreateUserInput): UserRecord | undefined => {
       container_port,
       container_status,
       gateway_token,
+      assistant_bot_token,
+      assistant_bot_username,
+      assistant_webhook_secret,
       last_active_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   stmt.run(
     user.telegram_user_id,
@@ -272,6 +476,9 @@ export const createUser = (user: CreateUserInput): UserRecord | undefined => {
     user.container_port,
     user.container_status || 'creating',
     user.gateway_token,
+    user.assistant_bot_token || null,
+    user.assistant_bot_username || null,
+    user.assistant_webhook_secret || null,
     nowIso()
   );
   return getUserByTelegramId(user.telegram_user_id);
@@ -315,7 +522,16 @@ export const updateUserById = (id: number, fields: UserMutableFields): UserRecor
 
 export const listUsedPorts = (): number[] => {
   return db
-    .prepare<[], { container_port: number }>('SELECT container_port FROM users')
+    .prepare<[], { container_port: number }>(`
+      SELECT container_port
+      FROM users
+      WHERE container_port > 0
+        AND COALESCE(container_status, '') != 'idle'
+      UNION
+      SELECT container_port
+      FROM assistants
+      WHERE container_port > 0
+    `)
     .all()
     .map((row) => row.container_port);
 };

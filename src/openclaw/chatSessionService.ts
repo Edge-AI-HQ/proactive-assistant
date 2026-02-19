@@ -51,15 +51,6 @@ export interface OpenClawReplyMessage {
   channelData?: Record<string, unknown>;
 }
 
-export interface OpenClawCronFinishedEvent {
-  telegramUserId: number;
-  jobId: string;
-  status: 'ok' | 'error' | 'skipped';
-  summary?: string;
-  error?: string;
-  runAtMs?: number;
-}
-
 export interface OpenClawUsageSummary {
   provider?: string;
   model?: string;
@@ -107,13 +98,9 @@ interface GatewaySession {
   modelCostsFetchedAt: number;
 }
 
-type CronEventHandler = (event: OpenClawCronFinishedEvent) => void | Promise<void>;
 type ChatState = 'delta' | 'final' | 'error' | 'aborted';
 
-const CRON_EVENT_DEDUPE_TTL_MS = 10 * 60_000;
 const sessions = new Map<number, GatewaySession>();
-const recentCronEvents = new Map<string, number>();
-let cronEventHandler: CronEventHandler | null = null;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null;
@@ -430,25 +417,6 @@ const mergeDeltaText = (existing: string, incoming: string): string => {
   return `${existing}${next}`;
 };
 
-const cleanupRecentCronEvents = (now: number): void => {
-  for (const [key, ts] of recentCronEvents) {
-    if (now - ts > CRON_EVENT_DEDUPE_TTL_MS) {
-      recentCronEvents.delete(key);
-    }
-  }
-};
-
-const normalizeCronStatus = (value: unknown): OpenClawCronFinishedEvent['status'] | null => {
-  return value === 'ok' || value === 'error' || value === 'skipped' ? value : null;
-};
-
-const emitCronFinishedEvent = (event: OpenClawCronFinishedEvent): void => {
-  if (!cronEventHandler) return;
-  Promise.resolve(cronEventHandler(event)).catch((error: unknown) => {
-    console.error('Cron event handler failed', error);
-  });
-};
-
 const buildWsUrl = (user: OpenClawUser): string => {
   const target = resolveGatewayTargetForUser(user);
   return `${target.wsBaseUrl}${config.openclaw.wsPath}`;
@@ -731,43 +699,6 @@ const handleAgentPayload = (session: GatewaySession, payload: unknown): void => 
   }
 };
 
-const handleCronPayload = (telegramUserId: number, payload: unknown): void => {
-  if (!isRecord(payload)) return;
-  if (payload.action !== 'finished') return;
-
-  const jobId = typeof payload.jobId === 'string' ? payload.jobId.trim() : '';
-  const status = normalizeCronStatus(payload.status);
-  if (!jobId || !status) return;
-
-  const summary = typeof payload.summary === 'string' ? payload.summary.trim() : '';
-  const errorMessage = typeof payload.error === 'string' ? payload.error.trim() : '';
-  if (!summary && !(status === 'error' && errorMessage)) return;
-
-  const runAtMs =
-    typeof payload.runAtMs === 'number' && Number.isFinite(payload.runAtMs)
-      ? Math.trunc(payload.runAtMs)
-      : undefined;
-
-  const dedupeSource = `${summary}\n${errorMessage}`;
-  const digest = crypto.createHash('sha1').update(dedupeSource).digest('hex');
-  const dedupeKey = `${telegramUserId}:${jobId}:${runAtMs ?? 0}:${status}:${digest}`;
-  const now = Date.now();
-  cleanupRecentCronEvents(now);
-  if (recentCronEvents.has(dedupeKey)) return;
-  recentCronEvents.set(dedupeKey, now);
-
-  const event: OpenClawCronFinishedEvent = {
-    telegramUserId,
-    jobId,
-    status
-  };
-  if (summary) event.summary = summary;
-  if (errorMessage) event.error = errorMessage;
-  if (runAtMs !== undefined) event.runAtMs = runAtMs;
-
-  emitCronFinishedEvent(event);
-};
-
 const handleGatewayRpcEvent = (telegramUserId: number, event: GatewayRpcEvent): void => {
   if (!event || typeof event.event !== 'string') return;
   const session = getSession(telegramUserId);
@@ -780,11 +711,6 @@ const handleGatewayRpcEvent = (telegramUserId: number, event: GatewayRpcEvent): 
 
   if (event.event === 'agent') {
     handleAgentPayload(session, event.payload);
-    return;
-  }
-
-  if (event.event === 'cron') {
-    handleCronPayload(telegramUserId, event.payload);
   }
 };
 
@@ -1035,8 +961,4 @@ export const dropOpenClawSession = (telegramUserId: number): void => {
   session.pending.clear();
   session.client.stop();
   sessions.delete(telegramUserId);
-};
-
-export const setOpenClawCronEventHandler = (handler: CronEventHandler | null): void => {
-  cronEventHandler = handler;
 };

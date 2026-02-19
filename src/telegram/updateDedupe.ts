@@ -77,8 +77,8 @@ const buildUpdateKey = (ctx: Context): string | null => {
   return null;
 };
 
-export const shouldSkipDuplicateUpdate = (ctx: Context): boolean => {
+export const shouldSkipDuplicateUpdate = (ctx: Context, namespace = 'default'): boolean => {
   const key = buildUpdateKey(ctx);
   if (!key) return false;
-  return dedupe.checkAndMark(key);
+  return dedupe.checkAndMark(`${namespace}:${key}`);
 };

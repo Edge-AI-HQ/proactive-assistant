@@ -5,7 +5,7 @@ import { config } from '../config.js';
 import { updateUser } from '../db.js';
 import type { UserRecord } from '../types.js';
 
-type UserRuntimeRef = Pick<UserRecord, 'telegram_user_id' | 'container_id' | 'container_port'>;
+type UserRuntimeRef = Pick<UserRecord, 'telegram_user_id' | 'container_id' | 'container_port' | 'assistant_bot_token'>;
 
 export interface GatewayTarget {
   host: string;
@@ -41,6 +41,7 @@ interface FlyMachine {
   events?: FlyMachineEvent[];
   config?: {
     image?: string;
+    env?: Record<string, string>;
     init?: {
       exec?: string[];
     };
@@ -183,7 +184,7 @@ const artifactCandidatesForSource = (rawSource: string): string[] => {
   return candidates;
 };
 
-const quoteForShell = (value: string): string => `'${value.replace(/'/g, `'\"'\"'`)}'`;
+const quoteForShell = (value: string): string => `'${value.replace(/'/g, `'"'"'`)}'`;
 
 const buildArtifactResolveScript = (candidates: string[]): string => {
   const quotedCandidates = candidates.map((item) => quoteForShell(item)).join(' ');
@@ -513,7 +514,9 @@ const resolveFromMachine = (machineId: string, privateIp?: string): GatewayTarge
   return toGatewayTarget(host);
 };
 
-export const resolveFlyGatewayTarget = (user: UserRuntimeRef): GatewayTarget => {
+export const resolveFlyGatewayTarget = (
+  user: Pick<UserRecord, 'telegram_user_id' | 'container_id'>
+): GatewayTarget => {
   const parsed = parseFlyContainerRef(user.container_id);
   if (!parsed?.machineId) {
     throw new Error(`Missing Fly machine ID for user ${user.telegram_user_id}`);
@@ -523,7 +526,7 @@ export const resolveFlyGatewayTarget = (user: UserRuntimeRef): GatewayTarget => 
 
 export const resolveFlyUserRuntimeRef = async (
   telegramUserId: number
-): Promise<Pick<UserRecord, 'telegram_user_id' | 'container_id' | 'container_port'> | null> => {
+): Promise<Pick<UserRecord, 'telegram_user_id' | 'container_id' | 'container_port' | 'assistant_bot_token'> | null> => {
   if (!isFlyConfigured()) return null;
 
   const machines = await listMachines();
@@ -534,7 +537,8 @@ export const resolveFlyUserRuntimeRef = async (
     telegram_user_id: telegramUserId,
     container_id: encodeFlyContainerRef(machine.id, machine.private_ip),
     // Not used by Fly runtime, but required by shared user runtime type.
-    container_port: 0
+    container_port: 0,
+    assistant_bot_token: null
   };
 };
 
@@ -702,9 +706,16 @@ const normalizeMachineState = (machine: FlyMachine): string => {
   return state || 'unknown';
 };
 
-const machineNeedsRecreate = (machine: FlyMachine, latestAppDeployAtMs: number | null): boolean => {
+const machineNeedsRecreate = (
+  machine: FlyMachine,
+  latestAppDeployAtMs: number | null
+): boolean => {
   const configuredImage = machine.config?.image?.trim();
   if (configuredImage && configuredImage !== config.openclaw.image) {
+    return true;
+  }
+
+  if (machine.config?.env?.TELEGRAM_BOT_TOKEN) {
     return true;
   }
 
@@ -742,6 +753,7 @@ const resolveMachine = async (
 };
 
 const createMachine = async (user: UserRuntimeRef): Promise<FlyMachine> => {
+  const normalizedAssistantBotToken = (user.assistant_bot_token || '').trim();
   const openclawConfig = {
     gateway: {
       mode: 'local',
@@ -769,7 +781,32 @@ const createMachine = async (user: UserRuntimeRef): Promise<FlyMachine> => {
         auto: 'off',
         provider: 'elevenlabs'
       }
-    }
+    },
+    ...(normalizedAssistantBotToken
+      ? {
+          channels: {
+            telegram: {
+              enabled: true,
+              dmPolicy: 'open',
+              botToken: normalizedAssistantBotToken,
+              allowFrom: ['*'],
+              groupAllowFrom: [],
+              groupPolicy: 'open',
+              groups: {
+                '*': {
+                  requireMention: true
+                }
+              },
+              streamMode: 'partial',
+              actions: {
+                sendMessage: true,
+                deleteMessage: false,
+                sticker: true
+              }
+            }
+          }
+        }
+      : {})
   };
 
   const env: Record<string, string> = {
@@ -790,7 +827,6 @@ const createMachine = async (user: UserRuntimeRef): Promise<FlyMachine> => {
   }
   if (config.elevenLabs.baseUrl) env.ELEVENLABS_BASE_URL = config.elevenLabs.baseUrl;
   if (config.openclaw.braveApiKey) env.BRAVE_API_KEY = config.openclaw.braveApiKey;
-
   const bootstrapCommand = [
     'mkdir -p /app/data/workspace /app/data/tmp /app/data/config /root/.openclaw',
     'if [ -n "$OPENCLAW_CONFIG_JSON" ]; then printf "%s" "$OPENCLAW_CONFIG_JSON" > "$OPENCLAW_CONFIG_PATH"; fi',

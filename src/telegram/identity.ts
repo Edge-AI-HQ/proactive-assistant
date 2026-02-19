@@ -1,5 +1,5 @@
 import { createGatewayToken, createUser, getUserByTelegramId, updateUser } from '../db.js';
-import { allocatePort, containerNameForUser } from '../docker/manager.js';
+import { containerNameForUser } from '../docker/manager.js';
 import type { UserRecord } from '../types.js';
 
 const normalizeUsername = (value: string | null | undefined): string | null => {
@@ -21,15 +21,15 @@ export const ensureTelegramUser = (
     return existing;
   }
 
-  const containerPort = allocatePort();
+  const containerPortPlaceholder = -Math.abs(Math.trunc(telegramUserId));
 
   try {
     const created = createUser({
       telegram_user_id: telegramUserId,
       telegram_username: normalizedUsername,
       container_id: containerNameForUser(telegramUserId),
-      container_port: containerPort,
-      container_status: 'creating',
+      container_port: containerPortPlaceholder,
+      container_status: 'idle',
       gateway_token: createGatewayToken()
     });
 

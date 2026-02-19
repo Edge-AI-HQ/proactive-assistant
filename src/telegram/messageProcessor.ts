@@ -19,6 +19,7 @@ import { stripMediaDirectivesFromText } from './text.js';
 import { TelegramStreamProgress } from './streamProgress.js';
 import { startTypingLoop } from './typing.js';
 import { TelegramUserQueue } from './userQueue.js';
+import type { UserRecord } from '../types.js';
 
 const ATTACHMENT_CHAT_TIMEOUT_MS = 240_000;
 
@@ -66,17 +67,27 @@ const persistUsageLedger = (telegramUserId: number, reply: OpenClawChatReply): v
   });
 };
 
-export const processContexts = async (contexts: Context[]): Promise<void> => {
+interface ProcessContextOptions {
+  runtimeUser?: UserRecord;
+  ownerTelegramUserId?: number;
+  botToken?: string;
+}
+
+export const processContexts = async (contexts: Context[], options: ProcessContextOptions = {}): Promise<void> => {
   const primaryCtx = pickPrimaryContext(contexts);
   if (!primaryCtx) return;
 
-  const telegramUserId = primaryCtx.from?.id;
-  if (!telegramUserId) return;
+  const ownerTelegramUserId = options.ownerTelegramUserId ?? primaryCtx.from?.id;
+  if (!ownerTelegramUserId) return;
 
-  await userQueue.enqueue(telegramUserId, async () => {
-    const user = ensureTelegramUser(telegramUserId, primaryCtx.from?.username ?? null);
+  await userQueue.enqueue(ownerTelegramUserId, async () => {
+    const user =
+      options.runtimeUser && options.runtimeUser.telegram_user_id === ownerTelegramUserId
+        ? options.runtimeUser
+        : ensureTelegramUser(ownerTelegramUserId, primaryCtx.from?.username ?? null);
+    const sourceBotToken = options.botToken || config.telegram.token;
 
-    const parsedInput = await parseInputsFromContexts(contexts, config.telegram.token, telegramUserId).catch(
+    const parsedInput = await parseInputsFromContexts(contexts, sourceBotToken, ownerTelegramUserId).catch(
       async (error: unknown) => {
         const message = error instanceof Error ? error.message : 'Failed to parse Telegram input.';
         await primaryCtx.reply(message);
@@ -97,8 +108,8 @@ export const processContexts = async (contexts: Context[]): Promise<void> => {
     let streamProgress = new TelegramStreamProgress();
 
     try {
-      logMessage(telegramUserId, 'incoming', parsedInput.text);
-      touchUser(telegramUserId);
+      logMessage(ownerTelegramUserId, 'incoming', parsedInput.text);
+      touchUser(ownerTelegramUserId);
 
       const { ready } = await ensureUserContainer(user);
       if (!ready) {
@@ -109,7 +120,7 @@ export const processContexts = async (contexts: Context[]): Promise<void> => {
 
       textStream = createReplyStream(primaryCtx, stopTypingOnce);
       streamProgress = new TelegramStreamProgress();
-      let runtimeUser = getUserByTelegramId(telegramUserId) ?? user;
+      let runtimeUser = getUserByTelegramId(ownerTelegramUserId) ?? user;
       const timeoutMs = resolveChatTimeoutMs(parsedInput.text, parsedInput.attachments.length);
       const idempotencyKey = buildTelegramIdempotencyKey(primaryCtx);
       let reply: OpenClawChatReply | null = null;
@@ -139,7 +150,7 @@ export const processContexts = async (contexts: Context[]): Promise<void> => {
           }
 
           console.warn(`OpenClaw chat transient error, retrying once: ${normalizedError.message}`);
-          dropOpenClawSession(telegramUserId);
+          dropOpenClawSession(ownerTelegramUserId);
           if (textStream) {
             await textStream.discard().catch(() => undefined);
           }
@@ -148,7 +159,7 @@ export const processContexts = async (contexts: Context[]): Promise<void> => {
           if (!recovery.ready) {
             throw normalizedError;
           }
-          runtimeUser = getUserByTelegramId(telegramUserId) ?? runtimeUser;
+          runtimeUser = getUserByTelegramId(ownerTelegramUserId) ?? runtimeUser;
 
           textStream = createReplyStream(primaryCtx, stopTypingOnce);
           streamProgress = new TelegramStreamProgress();
@@ -160,7 +171,7 @@ export const processContexts = async (contexts: Context[]): Promise<void> => {
       }
 
       sanitizeUserCronStore(runtimeUser.telegram_user_id);
-      logMessage(telegramUserId, 'outgoing', reply.text);
+      logMessage(ownerTelegramUserId, 'outgoing', reply.text);
       try {
         persistUsageLedger(runtimeUser.telegram_user_id, reply);
       } catch (usageError: unknown) {
@@ -174,7 +185,7 @@ export const processContexts = async (contexts: Context[]): Promise<void> => {
       console.error('Message routing error', normalizedError);
       textStream?.stop();
       stopTypingOnce();
-      dropOpenClawSession(telegramUserId);
+      dropOpenClawSession(ownerTelegramUserId);
 
       if (isOpenClawTimeoutError(normalizedError)) {
         await primaryCtx.reply('Assistant response timed out. Session was reset, please retry.');
@@ -194,7 +205,7 @@ export const processContexts = async (contexts: Context[]): Promise<void> => {
       await primaryCtx.reply('Assistant unavailable. Restarting your container...');
 
       try {
-        const runtimeUser = getUserByTelegramId(telegramUserId) ?? user;
+        const runtimeUser = getUserByTelegramId(ownerTelegramUserId) ?? user;
         await restartUserContainer(runtimeUser);
         await primaryCtx.reply('Container restarted. Please retry your message.');
       } catch (restartError: unknown) {
