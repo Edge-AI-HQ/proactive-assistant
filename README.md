@@ -1,157 +1,115 @@
-# PIN AI Assistant
+# PIN AI Assistant Monorepo
 
-Telegram-based AI assistant platform with integrated payment system.
+Telegram-based assistant platform with container orchestration, per-assistant LiteLLM key management, and Stripe payment stack.
 
-## 📦 Project Components
+## Repository Layout
 
-This repository contains two services:
-
-1. **Container Service** (main directory) - Internal team tool for managing OpenClaw containers
-2. **Payment Service** (`openclaw-cloud-payment/`) - Public payment gateway for OpenClaw subscriptions
-
-See [PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md) for detailed architecture documentation.
-LiteLLM key/billing module design: [LITELLM_MODULE_DESIGN.md](./LITELLM_MODULE_DESIGN.md).
-
----
-
-## Container Service
-
-Telegram-based AI assistant backend for pinai.io team members.
-
-Current runtime model:
-- One shared Telegram bot (name is user-defined, e.g. `@YourTeamAssistantBot`)
-- One OpenClaw Docker container per Telegram user
-- Backend talks to each container via OpenClaw Gateway WS RPC (`chat.send`, `chat`, `agent` events)
-- Telegram supports text, image input, voice input (transcription), and media/file output
+- `apps/pinclaw-bot` - Telegram onboarding bot + admin dashboard + control-plane app
+- `apps/payment-gateway` - Vercel landing pages + payment test bot app (calls infra payment API)
+- `infra/container-manager` - Container runtime package + OpenClaw image (`@pin-ai/infra-container-manager`)
+- `infra/litellm` - LiteLLM package + config/docs (`@pin-ai/infra-litellm`)
+- `infra/supabase` - Shared Supabase package + migrations (`@pin-ai/infra-supabase`)
+- `infra/payment` - Vercel payment backend API (`@pin-ai/infra-payment`)
 
 ## Quick Start
 
-1. Install dependencies
+1. Install dependencies (workspace root)
 ```bash
 npm install
 ```
 
-2. Build OpenClaw image (once)
+2. Configure environment
 ```bash
-docker build -t pinai-openclaw:latest ./openclaw-image
+cp apps/pinclaw-bot/.env.example apps/pinclaw-bot/.env
 ```
 
-3. Configure environment
+Optional module-specific templates:
+- `apps/payment-gateway/.env.example`
+- `infra/litellm/.env.example`
+
+Required for master app:
+- `TELEGRAM_BOT_TOKEN`
+- `SUPABASE_DB_URL`
+
+3. Build OpenClaw image (once)
 ```bash
-cp .env.example .env
+docker build -t pinai-openclaw:latest ./infra/container-manager/images/openclaw
 ```
 
-4. Generate admin password hash
-```bash
-npm run hash-password -- "your-password"
-```
-Copy the output into `ADMIN_PASSWORD_HASH`.
-
-5. Start server
+4. Run master bot API
 ```bash
 npm run dev
 ```
 
-6. Type check and build
+5. Type-check and build
 ```bash
 npm run type-check
 npm run build
 ```
 
-7. Run compiled server (production-like local run)
+## Payment Stack
+
+Run landing app locally:
 ```bash
-npm start
+npm run dev:payment
 ```
 
-## LiteLLM Server Quick Start
-
-If you want this repository to host LiteLLM locally:
-
-1. Set LiteLLM vars in `.env`:
+Run payment backend locally:
 ```bash
-LITELLM_ENABLED=true
-LITELLM_MASTER_KEY=<strong-random-secret>
-LITELLM_SALT_KEY=<strong-random-secret>
-LITELLM_KEY_ENCRYPTION_SECRET=<strong-random-secret>
+npm run dev:payment-backend
 ```
 
-2. Start LiteLLM + Postgres:
+Pinclaw/payment-gateway to payment-backend env:
+- `PAYMENT_GATEWAY_ENABLED=true` (pinclaw-bot)
+- `PAYMENT_GATEWAY_BASE_URL=<infra-payment-base-url>` (pinclaw-bot)
+- `PAYMENT_GATEWAY_INTERNAL_API_KEY=<shared-secret>` (pinclaw-bot)
+- `PAYMENT_BACKEND_BASE_URL=<infra-payment-base-url>` (payment-gateway app)
+- `PAYMENT_BACKEND_API_KEY=<shared-secret>` (payment-gateway app)
+- `PAYMENT_SERVICE_API_KEY=<shared-secret>` (infra/payment)
+- `PAYMENT_LANDING_BASE_URL=<apps-payment-gateway-base-url>` (infra/payment)
+
+## LiteLLM (Supabase Postgres)
+
+Set in `infra/litellm/.env`:
+- `SUPABASE_DB_URL` (recommended: include `?sslmode=require`)
+- `LITELLM_MASTER_KEY`
+- `LITELLM_SALT_KEY` (required for LiteLLM container)
+- provider keys (`ANTHROPIC_API_KEY` and/or `OPENAI_API_KEY`)
+
+Set in `apps/pinclaw-bot/.env`:
+- `LITELLM_ENABLED=true`
+- `LITELLM_MASTER_KEY` (must match `infra/litellm/.env`)
+- `LITELLM_KEY_ENCRYPTION_SECRET`
+- `LITELLM_BASE_URL` / `LITELLM_CONTAINER_BASE_URL` as needed
+
+Start / restart LiteLLM:
 ```bash
-docker compose --profile litellm up -d litellm-db litellm
+npm run litellm:restart
 ```
 
-3. Detailed server setup:
-- See `litellm/README.md`
-- See `litellm/litellm_config.yaml`
-
-## TypeScript Workflow
-
-- `npm run dev` - run with `tsx` from source (`src/server.ts`)
-- `npm run type-check` - strict type check without emit
-- `npm run build` - compile TypeScript to `dist/`
-- `npm start` - run compiled output (`dist/server.js`)
-- `npm run lint` - lint TypeScript source
-
-## ngrok Setup (Local Webhook + Telegram Login)
-
-When running locally, Telegram webhook and Telegram login callback need a public HTTPS URL.
-
-1. Start ngrok for local port `3000`
+Clean up old local helper DB container (one-time if it exists):
 ```bash
-ngrok http 3000
+npm run litellm:cleanup-local-db
 ```
 
-2. Update `.env` using your ngrok domain (example below)
+Verify LiteLLM container is using Supabase URL:
 ```bash
-PUBLIC_BASE_URL=https://your-subdomain.ngrok-free.app
-TELEGRAM_BOT_USERNAME=YourTeamAssistantBot
+npm run litellm:verify-db-env
 ```
 
-3. Set Telegram webhook to your ngrok URL
-```bash
-curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
-  -d "url=https://your-subdomain.ngrok-free.app/webhook/telegram" \
-  -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
-```
+## Master Bot Endpoints
 
-4. Verify webhook status
-```bash
-curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getWebhookInfo"
-```
+- `POST /webhook/telegram`
+- `GET /auth/telegram/gateway`
+- `GET /auth/telegram/callback`
+- `GET /admin`
+- `GET /admin/dashboard`
+- `GET /health`
 
-Notes:
-- If `TELEGRAM_WEBHOOK_SECRET` is set in `.env`, you must send the same value in `setWebhook` (`secret_token`).
-- Changing ngrok URL requires re-running `setWebhook`.
+## Database
 
-## Key Endpoints
+Unified schema setup guide:
+- `infra/supabase/SETUP.md`
+- `infra/supabase/migrations/001_unified_schema.sql`
 
-- `POST /webhook/telegram` - Telegram updates
-- `GET /auth/telegram/gateway` - Telegram login page for Gateway UI
-- `GET /auth/telegram/callback` - Telegram login callback
-- `GET /admin` - Admin login
-- `GET /admin/dashboard` - Admin dashboard
-- `GET /health` - Health check
-
-## Environment Notes
-
-- Telegram bot username is not fixed; use any bot created in BotFather and set its token in `TELEGRAM_BOT_TOKEN`.
-- `OPENCLAW_API_KEY` is required (container OpenClaw gateway token/auth).
-- `BRAVE_API_KEY` is optional; if set, it is injected into user containers.
-- `ELEVENLABS_API_KEY` (or `XI_API_KEY`) enables:
-  - voice message transcription (Telegram -> text)
-  - TTS voice replies via OpenClaw `tts.convert`
-- `OPENAI_API_KEY` is optional fallback for voice transcription and OpenClaw TTS fallback provider.
-- LiteLLM mode (`LITELLM_ENABLED=true`) provisions one virtual key per assistant bot and maps all keys to the same Telegram owner as a shared LiteLLM `user_id`.
-- In LiteLLM mode you must set:
-  - `LITELLM_BASE_URL`
-  - `LITELLM_CONTAINER_BASE_URL`
-  - `LITELLM_MASTER_KEY`
-  - `LITELLM_KEY_ENCRYPTION_SECRET`
-- Assistant container `openclaw.json` is auto-synced to use `models.providers.litellm` and default model `litellm/<id>`.
-- `LITELLM_OPENCLAW_DEFAULT_MODEL` controls the default `litellm/<id>` model in container config.
-- `LITELLM_BASE_URL` is used by this service (key provisioning/billing sync); `LITELLM_CONTAINER_BASE_URL` is written into assistant `openclaw.json` for model traffic.
-- In LiteLLM mode, assistant containers only receive `LITELLM_API_KEY` (virtual key); upstream provider keys like `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `ANTHROPIC_API_KEY` are not injected.
-- LiteLLM spend is synced on an interval (`LITELLM_SYNC_INTERVAL_MS`) and can be manually refreshed from Admin Dashboard.
-- `TELEGRAM_BOT_USERNAME` is used by the Telegram login widget for Gateway UI web auth.
-- Container ports are allocated from `CONTAINER_PORT_START` to `CONTAINER_PORT_END`.
-- Docker socket access is required for container lifecycle management.
+Schema management is migration-only (no runtime auto-create in app startup).

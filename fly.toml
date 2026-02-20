@@ -2,7 +2,7 @@ app = "pinclaw-prod"
 primary_region = "iad"
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = "apps/pinclaw-bot/Dockerfile"
 
 [env]
   NODE_ENV = "production"
