@@ -1,0 +1,27 @@
+{
+  "name": "@pin-ai/infra-litellm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "type-check": "tsc -p tsconfig.json --noEmit",
+    "service:up": "cd ../.. && docker compose --profile litellm up -d litellm",
+    "service:restart": "cd ../.. && docker compose --profile litellm up -d --force-recreate litellm",
+    "service:logs": "cd ../.. && docker compose --profile litellm logs -f --tail=120 litellm",
+    "service:cleanup-local-db": "cd ../.. && docker rm -f pin-ai-litellm-db >/dev/null 2>&1 || true",
+    "service:verify-db-env": "cd ../.. && docker inspect pin-ai-litellm --format '{{range .Config.Env}}{{println .}}{{end}}' | rg '^SUPABASE_DB_URL='"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  }
+}
