@@ -8,6 +8,7 @@ import { listUsedPorts, updateAssistant, updateUser, updateUserById } from '../d
 import { resolveAssistantLiteLLMEnv } from '../litellm/service.js';
 import type { AssistantRecord, UserRecord } from '../types.js';
 import {
+  ensureAssistantMachine,
   ensureUserMachine,
   getUserMachineLogs,
   getUserMachineStatus,
@@ -749,7 +750,12 @@ export const ensureAssistantContainer = async (
   assistant: AssistantRuntimeRef
 ): Promise<{ containerId: string; ready: boolean }> => {
   if (isFlyRuntime()) {
-    throw new Error('Fly runtime assistant provisioning is not supported.');
+    try {
+      return await ensureAssistantMachine(assistant);
+    } catch (error: unknown) {
+      await updateAssistant(assistant.id, { container_status: 'error' });
+      throw error;
+    }
   }
 
   const fallbackContainerName = containerNameForAssistant(assistant.assistant_bot_id);

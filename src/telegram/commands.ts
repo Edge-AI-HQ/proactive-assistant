@@ -21,6 +21,10 @@ const commandList = [
 
 const BOT_USERNAME_SUFFIX = '_PIN_Claw_Bot';
 const TELEGRAM_BOT_TOKEN_PATTERN = /^\d{6,}:[A-Za-z0-9_-]{20,}$/;
+const TOKEN_ALREADY_TAKEN_MESSAGE = [
+  '🙈 Ohhh~ This token is already bound to another user!',
+  'Please double-check and try again~'
+].join('\n');
 
 const commandText = (): string => commandList.map((item) => `/${item.command} - ${item.description}`).join('\n');
 
@@ -39,21 +43,21 @@ const suggestBotUsername = (ctx: Context): string => {
 
 const welcomeMessage = (suggestedBotUsername: string): string =>
   [
-    '欢迎使用 PIN Claw 引导 Bot。',
+    '🐾 Welcome to PIN Claw Guide Bot~ ✨',
     '',
-    '请按以下流程创建你自己的 Telegram Assistant Bot：',
-    '1) 打开 @BotFather，发送 /newbot 创建新 bot。',
-    `2) 可参考用户名：${suggestedBotUsername}（最终以 BotFather 校验为准）。`,
-    '3) 获得 token 后，在这里发送：',
+    "Let's set up your very own Telegram Assistant! It's super easy 💕",
+    '🌸 Step 1 — Open @BotFather and send /newbot to create your new bot~',
+    `🎀 Step 2 — Pick a cute username! Try something like: ${suggestedBotUsername} (BotFather has the final say though 🫣)`,
+    '🍰 Step 3 — Got your token? Send it right here:',
     '/create_pin_claw_assistant <YOUR_BOT_TOKEN>',
-    '4) 后端会创建并绑定你的 OpenClaw container。',
+    "🪄 Step 4 — Sit back and relax~ We'll set up your OpenClaw container in a blink ✧˖°",
     '',
-    '提示：token 是敏感信息，请勿分享给他人。'
+    "🔐 Psst~ Your token is a secret! Keep it safe and don't share it with anyone 🤫"
   ].join('\n');
 
 const assistantsListMessage = (assistants: AssistantRecord[]): string => {
   if (!assistants.length) {
-    return '你还没有创建任何 assistant bot。发送 /create_pin_claw_assistant <YOUR_BOT_TOKEN> 开始创建。';
+    return "🧸 You haven't created any assistant bot yet~ Send /create_pin_claw_assistant <YOUR_BOT_TOKEN> to get started! 🌷";
   }
 
   const lines = assistants.map((assistant, index) => {
@@ -69,8 +73,9 @@ const parseAssistantToken = (text: string | undefined): string | null => {
   const withoutCommand = trimmed.replace(/^\/create_pin_claw_assistant(?:@\w+)?/i, '').trim();
   if (!withoutCommand) return null;
   const candidate = withoutCommand.replace(/^token(?:_id)?\s*[:=]\s*/i, '').trim();
-  if (!TELEGRAM_BOT_TOKEN_PATTERN.test(candidate)) return null;
-  return candidate;
+  const normalized = candidate.replace(/\s+/g, '');
+  if (!TELEGRAM_BOT_TOKEN_PATTERN.test(normalized)) return null;
+  return normalized;
 };
 
 interface AssistantBotIdentity {
@@ -154,11 +159,14 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     if (!token) {
       await ctx.reply(
         [
-          '命令格式不正确，请使用：',
+          "🫧 Oops~ The command format isn't quite right 🥺",
+          'Please use it like this 👇🏻',
           '/create_pin_claw_assistant <YOUR_BOT_TOKEN>',
           '',
-          '示例：',
-          '/create_pin_claw_assistant 123456789:ABCDefghIJKLmnopQRSTuvwxYZ'
+          '🍡 Example:',
+          '/create_pin_claw_assistant 123456789:ABCDefghIJKLmnopQRSTuvwxYZ',
+          '',
+          'Try again~ You got this! 💪🏻✨'
         ].join('\n')
       );
       return;
@@ -172,11 +180,11 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     ensureTelegramUser(telegramUserId, ctx.from?.username ?? null);
     const existingOwner = getAssistantByBotToken(token);
     if (existingOwner && existingOwner.owner_telegram_user_id !== telegramUserId) {
-      await ctx.reply('这个 token 已绑定到其他用户，请确认后再试。');
+      await ctx.reply(TOKEN_ALREADY_TAKEN_MESSAGE);
       return;
     }
 
-    await ctx.reply('正在校验 bot token，并准备创建 OpenClaw container，请稍候...');
+    await ctx.reply('Verifying:\n🔍 Checking your bot token now~ Please wait a moment 🫧✨');
 
     try {
       const botIdentity = await validateAssistantBotToken(token);
@@ -188,27 +196,26 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
 
       await ctx.reply(
         [
-          `绑定成功：@${botIdentity.username}`,
-          `你的 bot 已直连 OpenClaw container：https://t.me/${botIdentity.username}`,
+          `Success: https://t.me/${botIdentity.username}`,
+          '🎉 Yay~ Binding successful! 💕',
+          `Your bot @${botIdentity.username} is now connected to OpenClaw~ 🪄`,
           ...(config.litellm.enabled
             ? [
                 assistantWithLiteLLM.litellm_key_alias
-                  ? `已分配独立 LiteLLM key：${assistantWithLiteLLM.litellm_key_alias}`
-                  : '已启用独立 LiteLLM key。'
+                  ? `🔐 LiteLLM key assigned: ${assistantWithLiteLLM.litellm_key_alias}`
+                  : '🔐 LiteLLM dedicated key is enabled.'
               ]
             : []),
-          ready ? 'Container 已就绪。' : 'Container 正在启动中，通常几十秒后可用。',
-          `你当前共有 ${latestAssistants.length} 个 assistant bot。`
+          ready
+            ? '✅ Container is ready now~ You can chat with it right away! ✨'
+            : '🐣 Container is starting up — usually ready in a few seconds! Hang tight~',
+          `🧸 You currently have ${latestAssistants.length} assistant bot${latestAssistants.length === 1 ? '' : 's'}!`
         ].join('\n')
       );
     } catch (error: unknown) {
       console.error('Assistant bot setup failed', error);
       if (error instanceof Error && error.message === 'ASSISTANT_BOT_ALREADY_OWNED') {
-        await ctx.reply('这个 bot 已绑定到其他用户，请使用你自己的 bot token。');
-        return;
-      }
-      if (error instanceof Error && error.message.includes('Fly runtime assistant provisioning is not supported')) {
-        await ctx.reply('当前部署模式暂不支持自动创建 assistant container，请联系管理员切换到 Docker runtime。');
+        await ctx.reply(TOKEN_ALREADY_TAKEN_MESSAGE);
         return;
       }
       if (error instanceof Error && error.message.toLowerCase().includes('litellm')) {

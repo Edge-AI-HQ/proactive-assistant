@@ -96,6 +96,10 @@ export const config: Config = {
     baseUrl: process.env.ELEVENLABS_BASE_URL || 'https://api.elevenlabs.io',
     sttModel: process.env.ELEVENLABS_STT_MODEL || 'scribe_v1'
   },
+  supabase: {
+    url: process.env.SUPABASE_URL || '',
+    serviceKey: process.env.SUPABASE_SERVICE_KEY || ''
+  },
   admin: {
     username: process.env.ADMIN_USERNAME || 'admin',
     passwordHash: process.env.ADMIN_PASSWORD_HASH || '',
@@ -119,10 +123,6 @@ export const config: Config = {
     machineCpus: toInt(process.env.FLY_MACHINE_CPUS, 1),
     gatewayProbe: toBool(process.env.FLY_GATEWAY_PROBE, true),
     gatewayProbeTimeoutMs: toInt(process.env.FLY_GATEWAY_PROBE_TIMEOUT_MS, 120000)
-  },
-  supabase: {
-    url: process.env.SUPABASE_URL || '',
-    serviceKey: process.env.SUPABASE_SERVICE_KEY || ''
   },
   featureFlags: {
     allowMissingSecrets: toBool(process.env.ALLOW_MISSING_SECRETS, false)
