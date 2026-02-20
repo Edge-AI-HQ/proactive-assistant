@@ -6,17 +6,20 @@ import {
   createAdminSession,
   deleteAdminSession,
   ensureAdminUser,
+  getLiteLLMUsageOverview,
   getAdminByUsername,
   getAdminSession,
   getUsageOverview,
   getUserUsageTotals,
   getUserById,
+  listAssistantsByOwnerTelegramId,
   listTokenUsageLedgerByUser,
   listRecentLogs,
   listUsers,
   listUsersWithUsage
 } from '../db.js';
 import { getUserContainerLogs, restartUserContainer, stopUserContainer } from '../docker/manager.js';
+import { syncLiteLLMBilling } from '../litellm/service.js';
 
 const adminAuth = (req: Request, res: Response, next: NextFunction): void => {
   const token = req.cookies?.admin_session as string | undefined;
@@ -107,15 +110,19 @@ export const registerAdminRoutes = (app: Application): void => {
     const users = listUsersWithUsage();
     const running = users.filter((user) => user.container_status === 'running').length;
     const usage = getUsageOverview();
+    const litellm = getLiteLLMUsageOverview();
     const activeUsageUsers = users
       .filter((user) => user.total_tokens > 0)
       .sort((a, b) => b.total_tokens - a.total_tokens)
       .slice(0, 20);
 
+    const litellmSyncMessage = typeof req.query.litellm_sync === 'string' ? req.query.litellm_sync.trim() : '';
+
     const stats = {
       totalUsers: users.length,
       runningContainers: running,
       usage,
+      litellm,
       uptime: os.uptime(),
       loadAvg: os.loadavg().map((value) => value.toFixed(2)),
       memory: {
@@ -125,7 +132,19 @@ export const registerAdminRoutes = (app: Application): void => {
     };
 
     const admin = req.adminSession?.admin_username ?? config.admin.username;
-    res.render('admin/dashboard', { stats, admin, activeUsageUsers });
+    res.render('admin/dashboard', { stats, admin, activeUsageUsers, litellmSyncMessage });
+  });
+
+  app.post('/admin/litellm/sync', adminAuth, async (req: Request, res: Response) => {
+    void req;
+    try {
+      const result = await syncLiteLLMBilling();
+      const message = `LiteLLM sync completed: synced=${result.synced}, failed=${result.failed}`;
+      res.redirect(`/admin/dashboard?litellm_sync=${encodeURIComponent(message)}`);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      res.redirect(`/admin/dashboard?litellm_sync=${encodeURIComponent(`LiteLLM sync failed: ${message}`)}`);
+    }
   });
 
   app.get('/admin/users', adminAuth, (req: Request, res: Response) => {
@@ -144,7 +163,8 @@ export const registerAdminRoutes = (app: Application): void => {
     const logs = await getUserContainerLogs(user);
     const usage = getUserUsageTotals(user.telegram_user_id);
     const usageLogs = listTokenUsageLedgerByUser(user.telegram_user_id, 100);
-    res.render('admin/user_detail', { user, logs, usage, usageLogs });
+    const assistants = listAssistantsByOwnerTelegramId(user.telegram_user_id);
+    res.render('admin/user_detail', { user, logs, usage, usageLogs, assistants });
   });
 
   app.post('/admin/users/:user_id/restart', adminAuth, async (req: Request, res: Response) => {
@@ -179,10 +199,12 @@ export const registerAdminRoutes = (app: Application): void => {
     void req;
     const users = listUsers();
     const usage = getUsageOverview();
+    const litellm = getLiteLLMUsageOverview();
     res.json({
       totalUsers: users.length,
       runningContainers: users.filter((user) => user.container_status === 'running').length,
-      usage
+      usage,
+      litellm
     });
   });
 };

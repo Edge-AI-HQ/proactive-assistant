@@ -10,6 +10,7 @@ This repository contains two services:
 2. **Payment Service** (`openclaw-cloud-payment/`) - Public payment gateway for OpenClaw subscriptions
 
 See [PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md) for detailed architecture documentation.
+LiteLLM key/billing module design: [LITELLM_MODULE_DESIGN.md](./LITELLM_MODULE_DESIGN.md).
 
 ---
 
@@ -61,6 +62,27 @@ npm run build
 ```bash
 npm start
 ```
+
+## LiteLLM Server Quick Start
+
+If you want this repository to host LiteLLM locally:
+
+1. Set LiteLLM vars in `.env`:
+```bash
+LITELLM_ENABLED=true
+LITELLM_MASTER_KEY=<strong-random-secret>
+LITELLM_SALT_KEY=<strong-random-secret>
+LITELLM_KEY_ENCRYPTION_SECRET=<strong-random-secret>
+```
+
+2. Start LiteLLM + Postgres:
+```bash
+docker compose --profile litellm up -d litellm-db litellm
+```
+
+3. Detailed server setup:
+- See `litellm/README.md`
+- See `litellm/litellm_config.yaml`
 
 ## TypeScript Workflow
 
@@ -119,6 +141,17 @@ Notes:
   - voice message transcription (Telegram -> text)
   - TTS voice replies via OpenClaw `tts.convert`
 - `OPENAI_API_KEY` is optional fallback for voice transcription and OpenClaw TTS fallback provider.
+- LiteLLM mode (`LITELLM_ENABLED=true`) provisions one virtual key per assistant bot and maps all keys to the same Telegram owner as a shared LiteLLM `user_id`.
+- In LiteLLM mode you must set:
+  - `LITELLM_BASE_URL`
+  - `LITELLM_CONTAINER_BASE_URL`
+  - `LITELLM_MASTER_KEY`
+  - `LITELLM_KEY_ENCRYPTION_SECRET`
+- Assistant container `openclaw.json` is auto-synced to use `models.providers.litellm` and default model `litellm/<id>`.
+- `LITELLM_OPENCLAW_DEFAULT_MODEL` controls the default `litellm/<id>` model in container config.
+- `LITELLM_BASE_URL` is used by this service (key provisioning/billing sync); `LITELLM_CONTAINER_BASE_URL` is written into assistant `openclaw.json` for model traffic.
+- In LiteLLM mode, assistant containers only receive `LITELLM_API_KEY` (virtual key); upstream provider keys like `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `ANTHROPIC_API_KEY` are not injected.
+- LiteLLM spend is synced on an interval (`LITELLM_SYNC_INTERVAL_MS`) and can be manually refreshed from Admin Dashboard.
 - `TELEGRAM_BOT_USERNAME` is used by the Telegram login widget for Gateway UI web auth.
 - Container ports are allocated from `CONTAINER_PORT_START` to `CONTAINER_PORT_END`.
 - Docker socket access is required for container lifecycle management.

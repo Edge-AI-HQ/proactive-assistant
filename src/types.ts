@@ -2,6 +2,8 @@ export interface UserRecord {
   id: number;
   telegram_user_id: number;
   telegram_username: string | null;
+  litellm_user_id: string | null;
+  litellm_user_alias: string | null;
   container_id: string;
   container_port: number;
   container_status: string;
@@ -19,6 +21,16 @@ export interface AssistantRecord {
   assistant_bot_id: number;
   assistant_bot_token: string;
   assistant_bot_username: string;
+  litellm_user_id: string | null;
+  litellm_key_alias: string | null;
+  litellm_virtual_key_encrypted: string | null;
+  litellm_key_last4: string | null;
+  litellm_spend_usd: number;
+  litellm_budget_usd: number | null;
+  litellm_budget_duration: string | null;
+  litellm_rpm_limit: number | null;
+  litellm_tpm_limit: number | null;
+  litellm_last_synced_at: string | null;
   container_name: string;
   container_id: string;
   container_port: number;
@@ -65,6 +77,8 @@ export interface AdminSessionView extends AdminSessionRecord {
 export interface CreateUserInput {
   telegram_user_id: number;
   telegram_username?: string | null;
+  litellm_user_id?: string | null;
+  litellm_user_alias?: string | null;
   container_id: string;
   container_port: number;
   container_status?: string;
@@ -79,6 +93,16 @@ export interface CreateAssistantInput {
   assistant_bot_id: number;
   assistant_bot_token: string;
   assistant_bot_username: string;
+  litellm_user_id?: string | null;
+  litellm_key_alias?: string | null;
+  litellm_virtual_key_encrypted?: string | null;
+  litellm_key_last4?: string | null;
+  litellm_spend_usd?: number;
+  litellm_budget_usd?: number | null;
+  litellm_budget_duration?: string | null;
+  litellm_rpm_limit?: number | null;
+  litellm_tpm_limit?: number | null;
+  litellm_last_synced_at?: string | null;
   container_name: string;
   container_id: string;
   container_port: number;
@@ -89,6 +113,8 @@ export type UserMutableFields = Partial<
   Pick<
     UserRecord,
     | 'telegram_username'
+    | 'litellm_user_id'
+    | 'litellm_user_alias'
     | 'container_id'
     | 'container_port'
     | 'container_status'
@@ -104,6 +130,16 @@ export type AssistantMutableFields = Partial<
     AssistantRecord,
     | 'assistant_bot_token'
     | 'assistant_bot_username'
+    | 'litellm_user_id'
+    | 'litellm_key_alias'
+    | 'litellm_virtual_key_encrypted'
+    | 'litellm_key_last4'
+    | 'litellm_spend_usd'
+    | 'litellm_budget_usd'
+    | 'litellm_budget_duration'
+    | 'litellm_rpm_limit'
+    | 'litellm_tpm_limit'
+    | 'litellm_last_synced_at'
     | 'container_name'
     | 'container_id'
     | 'container_port'
@@ -172,6 +208,12 @@ export interface UsageOverviewRecord {
   total_cost_usd: number;
 }
 
+export interface LiteLLMUsageOverviewRecord {
+  assistants_with_keys: number;
+  assistants_over_budget: number;
+  total_spend_usd: number;
+}
+
 export interface Config {
   nodeEnv: string;
   port: number;
@@ -190,6 +232,24 @@ export interface Config {
     wsPath: string;
     apiKey: string;
     braveApiKey: string;
+  };
+  litellm: {
+    enabled: boolean;
+    baseUrl: string;
+    containerBaseUrl: string;
+    masterKey: string;
+    keyEncryptionSecret: string;
+    requestTimeoutMs: number;
+    syncIntervalMs: number;
+    userIdPrefix: string;
+    keyAliasPrefix: string;
+    defaultBudgetUsd: number | null;
+    defaultBudgetDuration: string;
+    defaultRpmLimit: number | null;
+    defaultTpmLimit: number | null;
+    allowedModels: string[];
+    openclawDefaultModel: string;
+    allowProviderFallback: boolean;
   };
   anthropicApiKey: string;
   openaiApiKey: string;
@@ -221,6 +281,10 @@ export interface Config {
     machineCpus: number;
     gatewayProbe: boolean;
     gatewayProbeTimeoutMs: number;
+  };
+  supabase: {
+    url: string;
+    serviceKey: string;
   };
   featureFlags: {
     allowMissingSecrets: boolean;

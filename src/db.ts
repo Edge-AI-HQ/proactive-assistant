@@ -11,6 +11,7 @@ import type {
   CreateAssistantInput,
   CreateUserInput,
   GatewaySessionRecord,
+  LiteLLMUsageOverviewRecord,
   MessageLogRecord,
   TokenUsageLedgerInput,
   TokenUsageLedgerRecord,
@@ -39,6 +40,8 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_user_id BIGINT UNIQUE NOT NULL,
     telegram_username TEXT,
+    litellm_user_id TEXT,
+    litellm_user_alias TEXT,
     container_id TEXT UNIQUE NOT NULL,
     container_port INTEGER UNIQUE NOT NULL,
     container_status TEXT DEFAULT 'creating',
@@ -56,6 +59,16 @@ db.exec(`
     assistant_bot_id BIGINT UNIQUE NOT NULL,
     assistant_bot_token TEXT UNIQUE NOT NULL,
     assistant_bot_username TEXT UNIQUE NOT NULL,
+    litellm_user_id TEXT,
+    litellm_key_alias TEXT,
+    litellm_virtual_key_encrypted TEXT,
+    litellm_key_last4 TEXT,
+    litellm_spend_usd REAL NOT NULL DEFAULT 0,
+    litellm_budget_usd REAL,
+    litellm_budget_duration TEXT,
+    litellm_rpm_limit INTEGER,
+    litellm_tpm_limit INTEGER,
+    litellm_last_synced_at TIMESTAMP,
     container_name TEXT UNIQUE NOT NULL,
     container_id TEXT UNIQUE NOT NULL,
     container_port INTEGER UNIQUE NOT NULL,
@@ -137,6 +150,12 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_assistants_owner_created
     ON assistants (owner_telegram_user_id, created_at DESC);
 
+  CREATE INDEX IF NOT EXISTS idx_assistants_litellm_key_alias
+    ON assistants (litellm_key_alias);
+
+  CREATE INDEX IF NOT EXISTS idx_assistants_litellm_user_id
+    ON assistants (litellm_user_id);
+
   CREATE INDEX IF NOT EXISTS idx_token_usage_ledger_user_created
     ON token_usage_ledger (telegram_user_id, created_at DESC);
 
@@ -150,6 +169,10 @@ db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_users_assistant_bot_username_unique
     ON users (assistant_bot_username)
     WHERE assistant_bot_username IS NOT NULL AND assistant_bot_username != '';
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_users_litellm_user_id_unique
+    ON users (litellm_user_id)
+    WHERE litellm_user_id IS NOT NULL AND litellm_user_id != '';
 `);
 
 interface TableColumnInfo {
@@ -194,6 +217,8 @@ const migrateUsersToTelegramSchema = (): void => {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         telegram_user_id BIGINT UNIQUE NOT NULL,
         telegram_username TEXT,
+        litellm_user_id TEXT,
+        litellm_user_alias TEXT,
         container_id TEXT UNIQUE NOT NULL,
         container_port INTEGER UNIQUE NOT NULL,
         container_status TEXT DEFAULT 'creating',
@@ -209,6 +234,8 @@ const migrateUsersToTelegramSchema = (): void => {
         id,
         telegram_user_id,
         telegram_username,
+        litellm_user_id,
+        litellm_user_alias,
         container_id,
         container_port,
         container_status,
@@ -223,6 +250,8 @@ const migrateUsersToTelegramSchema = (): void => {
         id,
         telegram_user_id,
         telegram_username,
+        NULL,
+        NULL,
         container_id,
         container_port,
         container_status,
@@ -258,6 +287,12 @@ const ensureUsersAssistantBotColumns = (): void => {
   if (!columns.has('assistant_webhook_secret')) {
     migrationStatements.push('ALTER TABLE users ADD COLUMN assistant_webhook_secret TEXT');
   }
+  if (!columns.has('litellm_user_id')) {
+    migrationStatements.push('ALTER TABLE users ADD COLUMN litellm_user_id TEXT');
+  }
+  if (!columns.has('litellm_user_alias')) {
+    migrationStatements.push('ALTER TABLE users ADD COLUMN litellm_user_alias TEXT');
+  }
 
   if (migrationStatements.length) {
     const runMigration = db.transaction(() => {
@@ -274,6 +309,63 @@ const ensureUsersAssistantBotColumns = (): void => {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_assistant_bot_username_unique
       ON users (assistant_bot_username)
       WHERE assistant_bot_username IS NOT NULL AND assistant_bot_username != '';
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_litellm_user_id_unique
+      ON users (litellm_user_id)
+      WHERE litellm_user_id IS NOT NULL AND litellm_user_id != '';
+  `);
+};
+
+const ensureAssistantsLiteLLMColumns = (): void => {
+  if (!hasTable('assistants')) return;
+
+  const columns = new Set(listTableColumns('assistants'));
+  const migrationStatements: string[] = [];
+
+  if (!columns.has('litellm_user_id')) {
+    migrationStatements.push('ALTER TABLE assistants ADD COLUMN litellm_user_id TEXT');
+  }
+  if (!columns.has('litellm_key_alias')) {
+    migrationStatements.push('ALTER TABLE assistants ADD COLUMN litellm_key_alias TEXT');
+  }
+  if (!columns.has('litellm_virtual_key_encrypted')) {
+    migrationStatements.push('ALTER TABLE assistants ADD COLUMN litellm_virtual_key_encrypted TEXT');
+  }
+  if (!columns.has('litellm_key_last4')) {
+    migrationStatements.push('ALTER TABLE assistants ADD COLUMN litellm_key_last4 TEXT');
+  }
+  if (!columns.has('litellm_spend_usd')) {
+    migrationStatements.push('ALTER TABLE assistants ADD COLUMN litellm_spend_usd REAL NOT NULL DEFAULT 0');
+  }
+  if (!columns.has('litellm_budget_usd')) {
+    migrationStatements.push('ALTER TABLE assistants ADD COLUMN litellm_budget_usd REAL');
+  }
+  if (!columns.has('litellm_budget_duration')) {
+    migrationStatements.push('ALTER TABLE assistants ADD COLUMN litellm_budget_duration TEXT');
+  }
+  if (!columns.has('litellm_rpm_limit')) {
+    migrationStatements.push('ALTER TABLE assistants ADD COLUMN litellm_rpm_limit INTEGER');
+  }
+  if (!columns.has('litellm_tpm_limit')) {
+    migrationStatements.push('ALTER TABLE assistants ADD COLUMN litellm_tpm_limit INTEGER');
+  }
+  if (!columns.has('litellm_last_synced_at')) {
+    migrationStatements.push('ALTER TABLE assistants ADD COLUMN litellm_last_synced_at TIMESTAMP');
+  }
+
+  if (migrationStatements.length) {
+    const runMigration = db.transaction(() => {
+      migrationStatements.forEach((statement) => db.exec(statement));
+    });
+    runMigration();
+  }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_assistants_litellm_key_alias
+      ON assistants (litellm_key_alias);
+
+    CREATE INDEX IF NOT EXISTS idx_assistants_litellm_user_id
+      ON assistants (litellm_user_id);
   `);
 };
 
@@ -325,6 +417,7 @@ const cleanupLegacyAuthTables = (): void => {
 
 migrateUsersToTelegramSchema();
 ensureUsersAssistantBotColumns();
+ensureAssistantsLiteLLMColumns();
 migrateLegacyUserAssistants();
 cleanupLegacyAuthTables();
 
@@ -390,26 +483,88 @@ export const listAssistantsByOwnerTelegramId = (ownerTelegramUserId: number): As
     .all(ownerTelegramUserId);
 };
 
+export const listAssistants = (): AssistantRecord[] => {
+  return db
+    .prepare<[], AssistantRecord>(`
+      SELECT *
+      FROM assistants
+      ORDER BY created_at DESC, id DESC
+    `)
+    .all();
+};
+
+export const listAssistantsWithLiteLLMKey = (): AssistantRecord[] => {
+  return db
+    .prepare<[], AssistantRecord>(`
+      SELECT *
+      FROM assistants
+      WHERE litellm_virtual_key_encrypted IS NOT NULL
+        AND litellm_virtual_key_encrypted != ''
+      ORDER BY updated_at DESC, id DESC
+    `)
+    .all();
+};
+
 export const createAssistant = (assistant: CreateAssistantInput): AssistantRecord | undefined => {
   db.prepare<
-    [number, number, string, string, string, string, number, string, string]
+    [
+      number,
+      number,
+      string,
+      string,
+      string | null,
+      string | null,
+      string | null,
+      string | null,
+      number,
+      number | null,
+      string | null,
+      number | null,
+      number | null,
+      string | null,
+      string,
+      string,
+      number,
+      string,
+      string
+    ]
   >(`
     INSERT INTO assistants (
       owner_telegram_user_id,
       assistant_bot_id,
       assistant_bot_token,
       assistant_bot_username,
+      litellm_user_id,
+      litellm_key_alias,
+      litellm_virtual_key_encrypted,
+      litellm_key_last4,
+      litellm_spend_usd,
+      litellm_budget_usd,
+      litellm_budget_duration,
+      litellm_rpm_limit,
+      litellm_tpm_limit,
+      litellm_last_synced_at,
       container_name,
       container_id,
       container_port,
       container_status,
       updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     assistant.owner_telegram_user_id,
     assistant.assistant_bot_id,
     assistant.assistant_bot_token,
     assistant.assistant_bot_username,
+    assistant.litellm_user_id || null,
+    assistant.litellm_key_alias || null,
+    assistant.litellm_virtual_key_encrypted || null,
+    assistant.litellm_key_last4 || null,
+    assistant.litellm_spend_usd ?? 0,
+    assistant.litellm_budget_usd ?? null,
+    assistant.litellm_budget_duration || null,
+    assistant.litellm_rpm_limit ?? null,
+    assistant.litellm_tpm_limit ?? null,
+    assistant.litellm_last_synced_at || null,
     assistant.container_name,
     assistant.container_id,
     assistant.container_port,
@@ -454,11 +609,26 @@ export const listUsers = (): UserRecord[] => {
 
 export const createUser = (user: CreateUserInput): UserRecord | undefined => {
   const stmt = db.prepare<
-    [number, string | null, string, number, string, string, string | null, string | null, string | null, string]
+    [
+      number,
+      string | null,
+      string | null,
+      string | null,
+      string,
+      number,
+      string,
+      string,
+      string | null,
+      string | null,
+      string | null,
+      string
+    ]
   >(`
     INSERT INTO users (
       telegram_user_id,
       telegram_username,
+      litellm_user_id,
+      litellm_user_alias,
       container_id,
       container_port,
       container_status,
@@ -467,11 +637,13 @@ export const createUser = (user: CreateUserInput): UserRecord | undefined => {
       assistant_bot_username,
       assistant_webhook_secret,
       last_active_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   stmt.run(
     user.telegram_user_id,
     user.telegram_username || null,
+    user.litellm_user_id || null,
+    user.litellm_user_alias || null,
     user.container_id,
     user.container_port,
     user.container_status || 'creating',
@@ -752,6 +924,41 @@ export const getUsageOverview = (): UsageOverviewRecord => {
     cache_write_tokens: row?.cache_write_tokens ?? 0,
     total_tokens: row?.total_tokens ?? 0,
     total_cost_usd: row?.total_cost_usd ?? 0
+  };
+};
+
+export const getLiteLLMUsageOverview = (): LiteLLMUsageOverviewRecord => {
+  const row = db
+    .prepare<
+      [],
+      {
+        assistants_with_keys: number;
+        assistants_over_budget: number;
+        total_spend_usd: number;
+      }
+    >(`
+      SELECT
+        COUNT(*) AS assistants_with_keys,
+        SUM(
+          CASE
+            WHEN litellm_budget_usd IS NOT NULL
+             AND litellm_budget_usd > 0
+             AND COALESCE(litellm_spend_usd, 0) >= litellm_budget_usd
+            THEN 1
+            ELSE 0
+          END
+        ) AS assistants_over_budget,
+        COALESCE(SUM(COALESCE(litellm_spend_usd, 0)), 0) AS total_spend_usd
+      FROM assistants
+      WHERE litellm_virtual_key_encrypted IS NOT NULL
+        AND litellm_virtual_key_encrypted != ''
+    `)
+    .get();
+
+  return {
+    assistants_with_keys: row?.assistants_with_keys ?? 0,
+    assistants_over_budget: row?.assistants_over_budget ?? 0,
+    total_spend_usd: row?.total_spend_usd ?? 0
   };
 };
 
