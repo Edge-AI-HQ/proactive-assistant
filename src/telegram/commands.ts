@@ -8,6 +8,7 @@ import {
   updateAssistant
 } from '../db.js';
 import { allocatePort, containerNameForAssistant, ensureAssistantContainer } from '../docker/manager.js';
+import { ensureLiteLLMKeyForAssistant } from '../litellm/service.js';
 import { ensureTelegramUser } from './identity.js';
 import type { AssistantRecord } from '../types.js';
 
@@ -180,7 +181,8 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     try {
       const botIdentity = await validateAssistantBotToken(token);
       const assistant = ensureAssistantRecord(telegramUserId, botIdentity, token);
-      const { ready } = await ensureAssistantContainer(assistant);
+      const assistantWithLiteLLM = await ensureLiteLLMKeyForAssistant(telegramUserId, assistant);
+      const { ready } = await ensureAssistantContainer(assistantWithLiteLLM);
       await deleteAssistantBotWebhook(token);
       const latestAssistants = listAssistantsByOwnerTelegramId(telegramUserId);
 
@@ -188,6 +190,13 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
         [
           `绑定成功：@${botIdentity.username}`,
           `你的 bot 已直连 OpenClaw container：https://t.me/${botIdentity.username}`,
+          ...(config.litellm.enabled
+            ? [
+                assistantWithLiteLLM.litellm_key_alias
+                  ? `已分配独立 LiteLLM key：${assistantWithLiteLLM.litellm_key_alias}`
+                  : '已启用独立 LiteLLM key。'
+              ]
+            : []),
           ready ? 'Container 已就绪。' : 'Container 正在启动中，通常几十秒后可用。',
           `你当前共有 ${latestAssistants.length} 个 assistant bot。`
         ].join('\n')
@@ -200,6 +209,10 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
       }
       if (error instanceof Error && error.message.includes('Fly runtime assistant provisioning is not supported')) {
         await ctx.reply('当前部署模式暂不支持自动创建 assistant container，请联系管理员切换到 Docker runtime。');
+        return;
+      }
+      if (error instanceof Error && error.message.toLowerCase().includes('litellm')) {
+        await ctx.reply('LiteLLM key 分配失败，请稍后重试或联系管理员检查 LiteLLM 服务。');
         return;
       }
       await ctx.reply('创建失败。请确认 token 正确、bot 可用，并稍后重试。');

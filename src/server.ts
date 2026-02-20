@@ -10,6 +10,7 @@ import {
   purgeExpiredAdminSessions
 } from './db.js';
 import { sanitizeAllCronStores } from './docker/manager.js';
+import { startLiteLLMBillingSyncLoop } from './litellm/service.js';
 import { buildBot } from './telegram/bot.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -41,6 +42,7 @@ const bot = buildBot();
 await bot.init();
 
 sanitizeAllCronStores();
+startLiteLLMBillingSyncLoop();
 
 app.post('/webhook/telegram', async (req: Request, res: Response) => {
   try {

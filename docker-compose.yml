@@ -6,6 +6,11 @@ services:
     container_name: pin-ai-assistant
     restart: unless-stopped
     env_file: .env
+    environment:
+      # When running with `--profile litellm`, service-to-service traffic should use compose DNS.
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL_IN_DOCKER:-http://litellm:4000}
+      # Assistant containers are launched by Docker API and must reach LiteLLM via host-published port.
+      LITELLM_CONTAINER_BASE_URL: ${LITELLM_CONTAINER_BASE_URL:-http://host.docker.internal:4000}
     ports:
       - "3000:3000"
     volumes:
@@ -17,3 +22,42 @@ services:
     build:
       context: ./openclaw-image
     image: pinai-openclaw:latest
+
+  litellm-db:
+    profiles: ["litellm"]
+    image: postgres:16-alpine
+    container_name: pin-ai-litellm-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${LITELLM_POSTGRES_USER:-litellm}
+      POSTGRES_PASSWORD: ${LITELLM_POSTGRES_PASSWORD:-litellm_change_me}
+      POSTGRES_DB: ${LITELLM_POSTGRES_DB:-litellm}
+    volumes:
+      - ./data/litellm/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${LITELLM_POSTGRES_USER:-litellm} -d ${LITELLM_POSTGRES_DB:-litellm}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  litellm:
+    profiles: ["litellm"]
+    image: docker.litellm.ai/berriai/litellm:main-stable
+    container_name: pin-ai-litellm
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${LITELLM_POSTGRES_USER:-litellm}:${LITELLM_POSTGRES_PASSWORD:-litellm_change_me}@litellm-db:5432/${LITELLM_POSTGRES_DB:-litellm}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./litellm/litellm_config.yaml:/app/config.yaml:ro
+    command: [ "--config", "/app/config.yaml", "--port", "4000", "--num_workers", "2" ]
+    depends_on:
+      litellm-db:
+        condition: service_healthy

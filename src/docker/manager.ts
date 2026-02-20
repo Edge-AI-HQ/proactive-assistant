@@ -5,6 +5,7 @@ import Docker from 'dockerode';
 import type Dockerode from 'dockerode';
 import { config } from '../config.js';
 import { listUsedPorts, updateAssistant, updateUser, updateUserById } from '../db.js';
+import { resolveAssistantLiteLLMEnv } from '../litellm/service.js';
 import type { AssistantRecord, UserRecord } from '../types.js';
 import {
   ensureUserMachine,
@@ -43,6 +44,16 @@ type AssistantRuntimeRef = Pick<
   | 'owner_telegram_user_id'
   | 'assistant_bot_id'
   | 'assistant_bot_token'
+  | 'litellm_user_id'
+  | 'litellm_key_alias'
+  | 'litellm_virtual_key_encrypted'
+  | 'litellm_key_last4'
+  | 'litellm_spend_usd'
+  | 'litellm_budget_usd'
+  | 'litellm_budget_duration'
+  | 'litellm_rpm_limit'
+  | 'litellm_tpm_limit'
+  | 'litellm_last_synced_at'
   | 'container_name'
   | 'container_id'
   | 'container_port'
@@ -61,6 +72,40 @@ const ensureDir = (dirPath: string): void => {
     fs.mkdirSync(dirPath, { recursive: true });
   }
 };
+
+const toEnvList = (env: Record<string, string>): string[] =>
+  Object.entries(env).map(([key, value]) => `${key}=${value}`);
+
+const buildProviderEnv = (): Record<string, string> => {
+  const env: Record<string, string> = {
+    ANTHROPIC_API_KEY: config.anthropicApiKey
+  };
+  if (config.openaiApiKey) {
+    env.OPENAI_API_KEY = config.openaiApiKey;
+  }
+  return env;
+};
+
+const buildAssistantModelEnv = (assistant: AssistantRuntimeRef): Record<string, string> => {
+  const litellmEnv = resolveAssistantLiteLLMEnv(assistant);
+  if (!litellmEnv) {
+    return buildProviderEnv();
+  }
+
+  return { ...litellmEnv };
+};
+
+const hasEnvKey = (envVars: string[] | undefined, key: string): boolean => {
+  return findEnvValue(envVars, key) !== null;
+};
+
+const ASSISTANT_FORBIDDEN_PROVIDER_ENV_KEYS = [
+  'OPENAI_API_KEY',
+  'OPENAI_BASE_URL',
+  'OPENAI_API_BASE',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_BASE_URL'
+] as const;
 
 const isBoolean = (value: unknown): value is boolean => typeof value === 'boolean';
 
@@ -115,6 +160,95 @@ const hasDesiredTelegramChannelConfig = (
     actions.deleteMessage === false &&
     isBoolean(actions?.sticker) &&
     actions.sticker === true
+  );
+};
+
+const normalizeLiteLLMModelId = (value: string): string => value.trim().replace(/^litellm\//i, '');
+
+const normalizeLiteLLMBaseUrlForOpenClaw = (value: string): string => {
+  const trimmed = value.trim().replace(/\/+$/, '');
+  return trimmed.endsWith('/v1') ? trimmed.slice(0, -3) : trimmed;
+};
+
+const inferReasoningByModelId = (id: string): boolean => {
+  const normalized = id.toLowerCase();
+  return (
+    normalized.includes('thinking') ||
+    normalized.includes('reason') ||
+    normalized.includes('r1') ||
+    normalized.startsWith('o1') ||
+    normalized.startsWith('o3') ||
+    normalized.startsWith('o4')
+  );
+};
+
+const buildLiteLLMModelIds = (): string[] => {
+  const ids: string[] = [];
+  const pushUnique = (candidate: string): void => {
+    const normalized = normalizeLiteLLMModelId(candidate);
+    if (!normalized) return;
+    if (!ids.includes(normalized)) ids.push(normalized);
+  };
+
+  pushUnique(config.litellm.openclawDefaultModel);
+  config.litellm.allowedModels.forEach((model) => pushUnique(model));
+
+  if (!ids.length) {
+    ids.push('claude-opus-4-6');
+  }
+
+  return ids;
+};
+
+const buildLiteLLMPrimaryModelRef = (): string => `litellm/${buildLiteLLMModelIds()[0]}`;
+
+const buildLiteLLMFallbackModelRefs = (): string[] => buildLiteLLMModelIds().slice(1).map((id) => `litellm/${id}`);
+
+const buildLiteLLMProviderConfig = (): UnknownRecord => {
+  const modelIds = buildLiteLLMModelIds();
+  return {
+    baseUrl: normalizeLiteLLMBaseUrlForOpenClaw(config.litellm.containerBaseUrl),
+    apiKey: '${LITELLM_API_KEY}',
+    api: 'openai-completions',
+    models: modelIds.map((id) => ({
+      id,
+      name: id,
+      reasoning: inferReasoningByModelId(id),
+      input: ['text', 'image'],
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0
+      },
+      contextWindow: 200000,
+      maxTokens: 64000
+    }))
+  };
+};
+
+const hasDesiredLiteLLMModelConfig = (root: UnknownRecord): boolean => {
+  const modelsRoot = isRecord(root.models) ? root.models : null;
+  const providers = modelsRoot && isRecord(modelsRoot.providers) ? modelsRoot.providers : null;
+  const currentProvider = providers && isRecord(providers.litellm) ? providers.litellm : null;
+
+  const agents = isRecord(root.agents) ? root.agents : null;
+  const defaults = agents && isRecord(agents.defaults) ? agents.defaults : null;
+  const model = defaults && isRecord(defaults.model) ? defaults.model : null;
+  const currentPrimary = typeof model?.primary === 'string' ? model.primary : '';
+  const currentFallbacks = Array.isArray(model?.fallbacks)
+    ? model.fallbacks.map((item) => String(item))
+    : [];
+
+  const expectedPrimary = buildLiteLLMPrimaryModelRef();
+  const expectedFallbacks = buildLiteLLMFallbackModelRefs();
+  const expectedProvider = buildLiteLLMProviderConfig();
+
+  return (
+    currentProvider !== null &&
+    JSON.stringify(currentProvider) === JSON.stringify(expectedProvider) &&
+    currentPrimary === expectedPrimary &&
+    JSON.stringify(currentFallbacks) === JSON.stringify(expectedFallbacks)
   );
 };
 
@@ -190,9 +324,41 @@ const stripTelegramChannelConfig = (root: UnknownRecord): void => {
   root.channels = nextChannels;
 };
 
+const withDesiredLiteLLMModelConfig = (root: UnknownRecord): void => {
+  const existingModels = isRecord(root.models) ? root.models : {};
+  const existingProviders = isRecord(existingModels.providers) ? existingModels.providers : {};
+  root.models = {
+    ...existingModels,
+    providers: {
+      ...existingProviders,
+      litellm: buildLiteLLMProviderConfig()
+    }
+  };
+
+  const existingAgents = isRecord(root.agents) ? root.agents : {};
+  const existingDefaults = isRecord(existingAgents.defaults) ? existingAgents.defaults : {};
+  const nextModel: UnknownRecord = {
+    primary: buildLiteLLMPrimaryModelRef()
+  };
+
+  const fallbackRefs = buildLiteLLMFallbackModelRefs();
+  if (fallbackRefs.length) {
+    nextModel.fallbacks = fallbackRefs;
+  }
+
+  root.agents = {
+    ...existingAgents,
+    defaults: {
+      ...existingDefaults,
+      model: nextModel
+    }
+  };
+};
+
 const ensureOpenclawConfig = (
   configDir: string,
-  assistantBotToken?: string | null
+  assistantBotToken?: string | null,
+  enableLiteLLMModelRouting = false
 ): { configPath: string; changed: boolean } => {
   const configPath = path.join(configDir, 'openclaw.json');
 
@@ -219,8 +385,11 @@ const ensureOpenclawConfig = (
   const hasTelegramChannel = normalizedAssistantBotToken
     ? hasDesiredTelegramChannelConfig(existingChannels?.telegram, normalizedAssistantBotToken)
     : !Object.hasOwn(existingChannels ?? {}, 'telegram');
+  const hasLiteLLMModelConfig = !enableLiteLLMModelRouting || !config.litellm.enabled
+    ? true
+    : hasDesiredLiteLLMModelConfig(existingParsed);
 
-  if (hasGateway && hasTts && hasTelegramChannel) {
+  if (hasGateway && hasTts && hasTelegramChannel && hasLiteLLMModelConfig) {
     return { configPath, changed: false };
   }
 
@@ -231,6 +400,9 @@ const ensureOpenclawConfig = (
     withDesiredTelegramChannelConfig(next, normalizedAssistantBotToken);
   } else {
     stripTelegramChannelConfig(next);
+  }
+  if (enableLiteLLMModelRouting && config.litellm.enabled) {
+    withDesiredLiteLLMModelConfig(next);
   }
 
   const changed = JSON.stringify(existingParsed) !== JSON.stringify(next);
@@ -470,7 +642,7 @@ export const ensureUserContainer = async (
   ensureDir(userDataDir);
   ensureDir(userTmpDir);
   ensureDir(userWorkspaceDir);
-  const { changed: configChanged } = ensureOpenclawConfig(userConfigDir, user.assistant_bot_token);
+  const { changed: configChanged } = ensureOpenclawConfig(userConfigDir, user.assistant_bot_token, false);
   sanitizeCronStore(userDataDir);
   let shouldRestartForConfig = false;
 
@@ -514,8 +686,7 @@ export const ensureUserContainer = async (
       name: containerName,
       Image: config.openclaw.image,
       Env: [
-        `ANTHROPIC_API_KEY=${config.anthropicApiKey}`,
-        ...(config.openaiApiKey ? [`OPENAI_API_KEY=${config.openaiApiKey}`] : []),
+        ...toEnvList(buildProviderEnv()),
         ...(config.elevenLabs.apiKey ? [`ELEVENLABS_API_KEY=${config.elevenLabs.apiKey}`] : []),
         ...(config.elevenLabs.apiKey ? [`XI_API_KEY=${config.elevenLabs.apiKey}`] : []),
         ...(config.elevenLabs.baseUrl ? [`ELEVENLABS_BASE_URL=${config.elevenLabs.baseUrl}`] : []),
@@ -595,7 +766,8 @@ export const ensureAssistantContainer = async (
   ensureDir(assistantDataDir);
   ensureDir(assistantTmpDir);
   ensureDir(assistantWorkspaceDir);
-  const { changed: configChanged } = ensureOpenclawConfig(assistantConfigDir, assistant.assistant_bot_token);
+  const assistantModelEnv = buildAssistantModelEnv(assistant);
+  const { changed: configChanged } = ensureOpenclawConfig(assistantConfigDir, assistant.assistant_bot_token, true);
   sanitizeCronStore(assistantDataDir);
   let shouldRestartForConfig = false;
 
@@ -614,8 +786,16 @@ export const ensureAssistantContainer = async (
     });
     const legacyTelegramBotToken = findEnvValue(inspect?.Config?.Env, 'TELEGRAM_BOT_TOKEN');
     const needsEnvMigration = typeof legacyTelegramBotToken === 'string' && legacyTelegramBotToken.length > 0;
+    const usesLiteLLMModelEnv = Object.hasOwn(assistantModelEnv, 'LITELLM_API_KEY');
+    const needsModelEnvMigration = Object.entries(assistantModelEnv).some(([key, expectedValue]) => {
+      const currentValue = findEnvValue(inspect?.Config?.Env, key);
+      return currentValue !== expectedValue;
+    });
+    const needsSecretPruneForLiteLLM = usesLiteLLMModelEnv
+      ? ASSISTANT_FORBIDDEN_PROVIDER_ENV_KEYS.some((key) => hasEnvKey(inspect?.Config?.Env, key))
+      : false;
 
-    if (needsBindMigration || needsEnvMigration) {
+    if (needsBindMigration || needsEnvMigration || needsModelEnvMigration || needsSecretPruneForLiteLLM) {
       try {
         if (inspect.State?.Status === 'running') {
           await container.stop();
@@ -640,8 +820,7 @@ export const ensureAssistantContainer = async (
       name: containerName,
       Image: config.openclaw.image,
       Env: [
-        `ANTHROPIC_API_KEY=${config.anthropicApiKey}`,
-        ...(config.openaiApiKey ? [`OPENAI_API_KEY=${config.openaiApiKey}`] : []),
+        ...toEnvList(assistantModelEnv),
         ...(config.elevenLabs.apiKey ? [`ELEVENLABS_API_KEY=${config.elevenLabs.apiKey}`] : []),
         ...(config.elevenLabs.apiKey ? [`XI_API_KEY=${config.elevenLabs.apiKey}`] : []),
         ...(config.elevenLabs.baseUrl ? [`ELEVENLABS_BASE_URL=${config.elevenLabs.baseUrl}`] : []),

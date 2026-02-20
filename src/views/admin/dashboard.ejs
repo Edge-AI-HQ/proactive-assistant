@@ -61,6 +61,12 @@
         </form>
       </header>
 
+      <% if (litellmSyncMessage) { %>
+        <section class="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+          <p class="text-sm text-slate-700"><%= litellmSyncMessage %></p>
+        </section>
+      <% } %>
+
       <%
         const inputTokens = Number(stats.usage.input_tokens || 0);
         const cacheReadTokens = Number(stats.usage.cache_read_tokens || 0);
@@ -68,7 +74,7 @@
         const cacheReadRate = totalReadTokens > 0 ? (cacheReadTokens / totalReadTokens) * 100 : 0;
       %>
 
-      <section class="mt-8 grid gap-4 md:grid-cols-5">
+      <section class="mt-8 grid gap-4 md:grid-cols-6">
         <div class="rounded-2xl border border-slate-200 bg-white p-4">
           <p class="text-xs uppercase tracking-widest text-slate-400">用户数</p>
           <p class="mt-2 text-2xl font-semibold"><%= stats.totalUsers %></p>
@@ -88,6 +94,14 @@
         <div class="rounded-2xl border border-slate-200 bg-white p-4">
           <p class="text-xs uppercase tracking-widest text-slate-400">总费用 USD</p>
           <p class="mt-2 text-2xl font-semibold">$<%= Number(stats.usage.total_cost_usd || 0).toFixed(4) %></p>
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-4">
+          <p class="text-xs uppercase tracking-widest text-slate-400">LiteLLM Spend</p>
+          <p class="mt-2 text-2xl font-semibold">$<%= Number(stats.litellm.total_spend_usd || 0).toFixed(4) %></p>
+          <p class="mt-1 text-xs text-slate-500">
+            keys: <%= Number(stats.litellm.assistants_with_keys || 0) %>,
+            over budget: <%= Number(stats.litellm.assistants_over_budget || 0) %>
+          </p>
         </div>
       </section>
 
@@ -140,6 +154,11 @@
           <div class="mt-4 space-y-3">
             <a class="block rounded-xl border border-slate-200 px-4 py-3 text-sm" href="/admin/users">用户管理</a>
             <a class="block rounded-xl border border-slate-200 px-4 py-3 text-sm" href="/admin/logs">系统日志</a>
+            <form method="POST" action="/admin/litellm/sync">
+              <button class="w-full rounded-xl border border-slate-200 px-4 py-3 text-left text-sm">
+                同步 LiteLLM 计费
+              </button>
+            </form>
           </div>
         </div>
       </section>
