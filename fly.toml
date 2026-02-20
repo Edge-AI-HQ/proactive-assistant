@@ -1,4 +1,4 @@
-app = "openclaw-holy-forest-701"
+app = "pinclaw-prod"
 primary_region = "iad"
 
 [build]
@@ -8,7 +8,7 @@ primary_region = "iad"
   NODE_ENV = "production"
   PORT = "3000"
   CONTAINER_RUNTIME = "fly"
-  FLY_APP_NAME = "openclaw-holy-forest-701"
+  FLY_APP_NAME = "pinclaw-prod"
   FLY_REGION = "iad"
 
 [http_service]

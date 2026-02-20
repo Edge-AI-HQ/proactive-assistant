@@ -2,10 +2,19 @@ import net from 'node:net';
 import path from 'node:path';
 import WebSocket from 'ws';
 import { config } from '../config.js';
-import { updateUser } from '../db.js';
-import type { UserRecord } from '../types.js';
+import { updateAssistant, updateUser } from '../db.js';
+import type { AssistantRecord, UserRecord } from '../types.js';
 
 type UserRuntimeRef = Pick<UserRecord, 'telegram_user_id' | 'container_id' | 'container_port' | 'assistant_bot_token'>;
+type AssistantRuntimeRef = Pick<
+  AssistantRecord,
+  | 'id'
+  | 'assistant_bot_id'
+  | 'assistant_bot_token'
+  | 'container_name'
+  | 'container_id'
+  | 'container_port'
+>;
 
 export interface GatewayTarget {
   host: string;
@@ -45,6 +54,10 @@ interface FlyMachine {
     init?: {
       exec?: string[];
     };
+    guest?: {
+      cpus?: number;
+      memory_mb?: number;
+    };
   };
 }
 
@@ -82,6 +95,31 @@ const FLY_ARTIFACT_SIZE_HEADER = '__PINAI_SIZE__:';
 const FLY_ARTIFACT_CHUNK_BYTES = 1024 * 1024;
 const FLY_ARTIFACT_EXEC_RETRIES = 4;
 const FLY_DEPLOY_SYNC_CACHE_TTL_MS = 30_000;
+const FLY_MANIFEST_ACCEPT_HEADER = [
+  'application/vnd.oci.image.index.v1+json',
+  'application/vnd.oci.image.manifest.v1+json',
+  'application/vnd.docker.distribution.manifest.list.v2+json',
+  'application/vnd.docker.distribution.manifest.v2+json'
+].join(', ');
+
+interface RegistryAuthChallenge {
+  realm: string;
+  service?: string;
+  scope?: string;
+}
+
+interface ParsedImageDigestRef {
+  registry: string;
+  repository: string;
+  digest: string;
+}
+
+interface MachineCreateArgs {
+  machineName: string;
+  openclawUserId: string;
+  assistantBotToken?: string | null;
+  ensureVolume: () => Promise<FlyVolume>;
+}
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -113,7 +151,7 @@ const parseFlyContainerRef = (value: string | null | undefined): { machineId: st
     return privateIp ? { machineId, privateIp } : { machineId };
   }
 
-  if (value.startsWith('openclaw-user-')) return null;
+  if (value.startsWith('openclaw-user-') || value.startsWith('openclaw-assistant-')) return null;
   return { machineId: value };
 };
 
@@ -121,7 +159,9 @@ const encodeFlyContainerRef = (machineId: string, privateIp?: string): string =>
   privateIp ? `${FLY_REF_PREFIX}${machineId}|${privateIp}` : `${FLY_REF_PREFIX}${machineId}`;
 
 const containerNameForUser = (telegramUserId: number): string => `openclaw-user-${telegramUserId}`;
+const containerNameForAssistant = (assistantBotId: number): string => `openclaw-assistant-${assistantBotId}`;
 const isUserMachineName = (name: string | undefined): boolean => Boolean(name?.startsWith('openclaw-user-'));
+const isAssistantMachineName = (name: string | undefined): boolean => Boolean(name?.startsWith('openclaw-assistant-'));
 
 const toTimestampMs = (value: string | undefined): number | null => {
   if (!value) return null;
@@ -135,6 +175,194 @@ let latestAppDeployCache:
       expiresAt: number;
     }
   | null = null;
+let ensureImagePullablePromise: Promise<void> | null = null;
+
+const parseRegistryAuthChallenge = (rawHeader: string | null): RegistryAuthChallenge | null => {
+  if (!rawHeader) return null;
+  const trimmed = rawHeader.trim();
+  if (!trimmed.toLowerCase().startsWith('bearer ')) return null;
+
+  const params = trimmed.slice('bearer '.length);
+  const entries = Array.from(params.matchAll(/([a-zA-Z_][a-zA-Z0-9_-]*)="([^"]*)"/g));
+  if (!entries.length) return null;
+
+  const parsed: Partial<RegistryAuthChallenge> = {};
+  entries.forEach((match) => {
+    const key = match[1];
+    const value = match[2];
+    if (!key || value === undefined) return;
+    const lowerKey = key.toLowerCase();
+    if (lowerKey === 'realm') parsed.realm = value;
+    if (lowerKey === 'service') parsed.service = value;
+    if (lowerKey === 'scope') parsed.scope = value;
+  });
+
+  if (!parsed.realm) return null;
+  return parsed as RegistryAuthChallenge;
+};
+
+const parseImageDigestRef = (rawImage: string): ParsedImageDigestRef | null => {
+  const image = rawImage.trim();
+  const atIndex = image.lastIndexOf('@');
+  if (atIndex <= 0) return null;
+
+  const digest = image.slice(atIndex + 1).toLowerCase();
+  if (!/^sha256:[a-f0-9]{64}$/.test(digest)) return null;
+
+  const imageWithoutDigest = image.slice(0, atIndex).trim();
+  if (!imageWithoutDigest) return null;
+
+  const firstSlash = imageWithoutDigest.indexOf('/');
+  const firstSegment = firstSlash >= 0 ? imageWithoutDigest.slice(0, firstSlash) : imageWithoutDigest;
+  const hasExplicitRegistry = firstSegment.includes('.') || firstSegment.includes(':') || firstSegment === 'localhost';
+
+  const registry = hasExplicitRegistry ? firstSegment.toLowerCase() : 'registry-1.docker.io';
+  let repository = hasExplicitRegistry ? imageWithoutDigest.slice(firstSlash + 1) : imageWithoutDigest;
+  if (!repository) return null;
+
+  const lastSlash = repository.lastIndexOf('/');
+  const lastColon = repository.lastIndexOf(':');
+  if (lastColon > lastSlash) {
+    repository = repository.slice(0, lastColon);
+  }
+
+  if (!repository) return null;
+  if (registry === 'registry-1.docker.io' && !repository.includes('/')) {
+    repository = `library/${repository}`;
+  }
+
+  return { registry, repository, digest };
+};
+
+const encodeRepositoryPath = (repository: string): string =>
+  repository
+    .split('/')
+    .filter((segment) => segment.length > 0)
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+
+const registryAuthHeaderCandidates = (registry: string): Array<string | null> => {
+  const flyToken = config.fly.apiToken.trim();
+  if (!flyToken) return [null];
+
+  if (registry === 'registry.fly.io' || registry.endsWith('.fly.io')) {
+    const basicValue = Buffer.from(`x:${flyToken}`).toString('base64');
+    return [`Bearer ${flyToken}`, `Basic ${basicValue}`, null];
+  }
+
+  return [null];
+};
+
+const requestRegistryAccessToken = async (
+  challenge: RegistryAuthChallenge,
+  registry: string
+): Promise<string | null> => {
+  const tokenUrl = new URL(challenge.realm);
+  if (challenge.service) tokenUrl.searchParams.set('service', challenge.service);
+  if (challenge.scope) tokenUrl.searchParams.set('scope', challenge.scope);
+
+  const authHeaders = registryAuthHeaderCandidates(registry);
+  for (const authHeader of authHeaders) {
+    const response = await fetch(tokenUrl, {
+      headers: {
+        ...(authHeader ? { Authorization: authHeader } : {})
+      }
+    });
+
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        continue;
+      }
+      continue;
+    }
+
+    const payload = (await response.json()) as { token?: string; access_token?: string };
+    const token = (payload.token || payload.access_token || '').trim();
+    if (token) return token;
+  }
+
+  return null;
+};
+
+const assertImageDigestPullable = async (imageRef: ParsedImageDigestRef): Promise<void> => {
+  const manifestUrl = `https://${imageRef.registry}/v2/${encodeRepositoryPath(imageRef.repository)}/manifests/${imageRef.digest}`;
+
+  const requestManifest = async (authHeader: string | null): Promise<Response> => {
+    const headers: Record<string, string> = {
+      Accept: FLY_MANIFEST_ACCEPT_HEADER
+    };
+    if (authHeader) headers.Authorization = authHeader;
+
+    const head = await fetch(manifestUrl, { method: 'HEAD', headers });
+    if (head.status !== 405) {
+      return head;
+    }
+
+    return fetch(manifestUrl, { method: 'GET', headers });
+  };
+
+  const authHeaders = registryAuthHeaderCandidates(imageRef.registry);
+  let lastStatus: number | null = null;
+  let challenge: RegistryAuthChallenge | null = null;
+
+  for (const authHeader of authHeaders) {
+    const response = await requestManifest(authHeader);
+    lastStatus = response.status;
+    if (response.ok) return;
+    if (response.status === 404) {
+      throw new Error(`OPENCLAW_IMAGE digest not found in registry: ${config.openclaw.image}`);
+    }
+    if (response.status === 401) {
+      challenge = parseRegistryAuthChallenge(response.headers.get('www-authenticate'));
+    }
+  }
+
+  if (challenge) {
+    const registryToken = await requestRegistryAccessToken(challenge, imageRef.registry);
+    if (registryToken) {
+      const retryResponse = await requestManifest(`Bearer ${registryToken}`);
+      if (retryResponse.ok) return;
+      if (retryResponse.status === 404) {
+        throw new Error(`OPENCLAW_IMAGE digest not found in registry: ${config.openclaw.image}`);
+      }
+      lastStatus = retryResponse.status;
+    }
+  }
+
+  throw new Error(
+    `Failed to validate OPENCLAW_IMAGE digest pullability (${config.openclaw.image}). Registry returned status ${
+      lastStatus ?? 'unknown'
+    }.`
+  );
+};
+
+const validateFlyImageDigest = async (): Promise<void> => {
+  if (config.container.runtime !== 'fly') return;
+
+  const imageRef = parseImageDigestRef(config.openclaw.image);
+  if (!imageRef) {
+    throw new Error(
+      'When CONTAINER_RUNTIME=fly, OPENCLAW_IMAGE must be digest-pinned (example: registry.fly.io/<app>@sha256:<64-hex>).'
+    );
+  }
+
+  await assertImageDigestPullable(imageRef);
+};
+
+export const ensureFlyOpenclawImageDigestPullable = async (): Promise<void> => {
+  if (config.container.runtime !== 'fly') return;
+  if (ensureImagePullablePromise) return ensureImagePullablePromise;
+
+  const pending = validateFlyImageDigest().catch((error: unknown) => {
+    if (ensureImagePullablePromise === pending) {
+      ensureImagePullablePromise = null;
+    }
+    throw error;
+  });
+
+  ensureImagePullablePromise = pending;
+  return pending;
+};
 
 const isAllowedArtifactPath = (value: string): boolean => {
   return (
@@ -339,6 +567,13 @@ const isVolumeAlreadyExists = (error: unknown): boolean => {
   return flyErrorMessage(error).includes('exists') || flyErrorMessage(error).includes('name');
 };
 
+const isInsufficientResourcesError = (error: unknown): boolean => {
+  if (!(error instanceof FlyApiError)) return false;
+  if (error.status !== 409 && error.status !== 412) return false;
+  const message = flyErrorMessage(error);
+  return message.includes('insufficient resources') || message.includes('insufficient memory');
+};
+
 const appPath = (): string => `/apps/${encodeURIComponent(config.fly.appName)}`;
 
 const listMachines = async (): Promise<FlyMachine[]> => {
@@ -355,7 +590,7 @@ const getLatestAppDeployTimestampMs = async (): Promise<number | null> => {
   let latest: number | null = null;
 
   machines.forEach((machine) => {
-    if (isUserMachineName(machine.name)) return;
+    if (isUserMachineName(machine.name) || isAssistantMachineName(machine.name)) return;
     const machineUpdatedAtMs = toTimestampMs(machine.updated_at) ?? toTimestampMs(machine.created_at);
     if (machineUpdatedAtMs === null) return;
     if (latest === null || machineUpdatedAtMs > latest) {
@@ -427,9 +662,13 @@ const isVolumeReady = (volume: FlyVolume): boolean => {
   return state === 'created' || state === 'ready';
 };
 
-const buildVolumeName = (telegramUserId: number): string => {
+const sanitizeVolumePrefix = (value: string): string => {
+  return value.replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+};
+
+const buildUserVolumeName = (telegramUserId: number): string => {
   const rawPrefix = (config.fly.volumeNamePrefix || 'openclaw_user').toLowerCase();
-  const sanitizedPrefix = rawPrefix.replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') || 'openclaw_user';
+  const sanitizedPrefix = sanitizeVolumePrefix(rawPrefix) || 'openclaw_user';
   const suffix = String(telegramUserId).replace(/[^0-9]/g, '') || '0';
   const maxPrefixLength = Math.max(1, 30 - suffix.length - 1);
   const prefix = sanitizedPrefix.slice(0, maxPrefixLength).replace(/^_+|_+$/g, '') || 'u';
@@ -437,8 +676,18 @@ const buildVolumeName = (telegramUserId: number): string => {
   return candidate.slice(0, 30);
 };
 
-const ensureVolume = async (telegramUserId: number): Promise<FlyVolume> => {
-  const name = buildVolumeName(telegramUserId);
+const buildAssistantVolumeName = (assistantBotId: number): string => {
+  const rawPrefix = (config.fly.volumeNamePrefix || 'openclaw_user').toLowerCase();
+  const withAssistantSuffix = `${rawPrefix}_assistant`;
+  const sanitizedPrefix = sanitizeVolumePrefix(withAssistantSuffix) || 'openclaw_assistant';
+  const suffix = String(assistantBotId).replace(/[^0-9]/g, '') || '0';
+  const maxPrefixLength = Math.max(1, 30 - suffix.length - 1);
+  const prefix = sanitizedPrefix.slice(0, maxPrefixLength).replace(/^_+|_+$/g, '') || 'a';
+  const candidate = `${prefix}_${suffix}`;
+  return candidate.slice(0, 30);
+};
+
+const ensureNamedVolume = async (name: string): Promise<FlyVolume> => {
   const selectPreferredVolume = (volumes: FlyVolume[]): FlyVolume | null => {
     const candidates = volumes.filter((item) => item.name === name);
     if (!candidates.length) return null;
@@ -496,6 +745,14 @@ const ensureVolume = async (telegramUserId: number): Promise<FlyVolume> => {
 
   if (created) return created;
   throw new Error(`Fly volume ${name} is not ready`);
+};
+
+const ensureUserVolume = async (telegramUserId: number): Promise<FlyVolume> => {
+  return ensureNamedVolume(buildUserVolumeName(telegramUserId));
+};
+
+const ensureAssistantVolume = async (assistantBotId: number): Promise<FlyVolume> => {
+  return ensureNamedVolume(buildAssistantVolumeName(assistantBotId));
 };
 
 const toGatewayTarget = (host: string): GatewayTarget => {
@@ -706,12 +963,70 @@ const normalizeMachineState = (machine: FlyMachine): string => {
   return state || 'unknown';
 };
 
+const normalizeAssistantToken = (value: string | null | undefined): string => (value || '').trim();
+
+const extractConfiguredAssistantBotToken = (machine: FlyMachine): string => {
+  const rawConfig = machine.config?.env?.OPENCLAW_CONFIG_JSON;
+  if (typeof rawConfig !== 'string' || !rawConfig.trim()) return '';
+  try {
+    const parsed = JSON.parse(rawConfig) as unknown;
+    const channels =
+      parsed && typeof parsed === 'object' && 'channels' in parsed
+        ? (parsed as { channels?: unknown }).channels
+        : null;
+    if (!channels || typeof channels !== 'object') return '';
+    const telegram = 'telegram' in channels ? (channels as { telegram?: unknown }).telegram : null;
+    if (!telegram || typeof telegram !== 'object') return '';
+    const token = 'botToken' in telegram ? (telegram as { botToken?: unknown }).botToken : null;
+    return typeof token === 'string' ? token.trim() : '';
+  } catch {
+    return '';
+  }
+};
+
+const extractConfiguredAssistantPluginEnabled = (machine: FlyMachine): boolean => {
+  const rawConfig = machine.config?.env?.OPENCLAW_CONFIG_JSON;
+  if (typeof rawConfig !== 'string' || !rawConfig.trim()) return false;
+  try {
+    const parsed = JSON.parse(rawConfig) as unknown;
+    if (!parsed || typeof parsed !== 'object') return false;
+    const plugins = 'plugins' in parsed ? (parsed as { plugins?: unknown }).plugins : null;
+    if (!plugins || typeof plugins !== 'object') return false;
+    const entries = 'entries' in plugins ? (plugins as { entries?: unknown }).entries : null;
+    if (!entries || typeof entries !== 'object') return false;
+    const telegram = 'telegram' in entries ? (entries as { telegram?: unknown }).telegram : null;
+    if (!telegram || typeof telegram !== 'object') return false;
+    return (telegram as { enabled?: unknown }).enabled === true;
+  } catch {
+    return false;
+  }
+};
+
 const machineNeedsRecreate = (
   machine: FlyMachine,
-  latestAppDeployAtMs: number | null
+  latestAppDeployAtMs: number | null,
+  desiredAssistantBotToken?: string | null
 ): boolean => {
   const configuredImage = machine.config?.image?.trim();
   if (configuredImage && configuredImage !== config.openclaw.image) {
+    return true;
+  }
+  const configuredMemoryMb = machine.config?.guest?.memory_mb;
+  if (typeof configuredMemoryMb === 'number' && configuredMemoryMb !== config.container.memoryMb) {
+    return true;
+  }
+  const configuredCpus = machine.config?.guest?.cpus;
+  if (typeof configuredCpus === 'number' && configuredCpus !== Math.max(1, config.fly.machineCpus)) {
+    return true;
+  }
+
+  const configuredAssistantBotToken = extractConfiguredAssistantBotToken(machine);
+  const desiredToken = normalizeAssistantToken(desiredAssistantBotToken);
+  if (configuredAssistantBotToken !== desiredToken) {
+    return true;
+  }
+  const desiredAssistantPluginEnabled = desiredToken.length > 0;
+  if (extractConfiguredAssistantPluginEnabled(machine) !== desiredAssistantPluginEnabled) {
     return true;
   }
 
@@ -735,10 +1050,8 @@ const machineNeedsRecreate = (
   return machineUpdatedAtMs < latestAppDeployAtMs;
 };
 
-const resolveMachine = async (
-  user: Pick<UserRecord, 'telegram_user_id' | 'container_id'>
-): Promise<FlyMachine | null> => {
-  const ref = parseFlyContainerRef(user.container_id);
+const resolveMachineByRef = async (containerId: string | null | undefined, fallbackNames: string[]): Promise<FlyMachine | null> => {
+  const ref = parseFlyContainerRef(containerId);
   if (ref?.machineId) {
     try {
       return await getMachine(ref.machineId);
@@ -747,13 +1060,34 @@ const resolveMachine = async (
     }
   }
 
+  const fallbackNameSet = new Set(fallbackNames.map((item) => item.trim()).filter(Boolean));
+  if (!fallbackNameSet.size) return null;
   const machines = await listMachines();
-  const byName = machines.find((machine) => machine.name === containerNameForUser(user.telegram_user_id));
+  const byName = machines.find((machine) => machine.name && fallbackNameSet.has(machine.name));
   return byName ?? null;
 };
 
-const createMachine = async (user: UserRuntimeRef): Promise<FlyMachine> => {
-  const normalizedAssistantBotToken = (user.assistant_bot_token || '').trim();
+const resolveUserMachine = async (user: Pick<UserRecord, 'telegram_user_id' | 'container_id'>): Promise<FlyMachine | null> => {
+  return resolveMachineByRef(user.container_id, [containerNameForUser(user.telegram_user_id)]);
+};
+
+const resolveAssistantMachineName = (assistant: AssistantRuntimeRef): string => {
+  return assistant.container_name?.trim() || containerNameForAssistant(assistant.assistant_bot_id);
+};
+
+const resolveAssistantMachine = async (assistant: AssistantRuntimeRef): Promise<FlyMachine | null> => {
+  const fallbackNames = Array.from(
+    new Set(
+      [assistant.container_name?.trim(), containerNameForAssistant(assistant.assistant_bot_id)].filter(
+        (value): value is string => Boolean(value)
+      )
+    )
+  );
+  return resolveMachineByRef(assistant.container_id, fallbackNames);
+};
+
+const createMachine = async (args: MachineCreateArgs): Promise<FlyMachine> => {
+  const normalizedAssistantBotToken = normalizeAssistantToken(args.assistantBotToken);
   const openclawConfig = {
     gateway: {
       mode: 'local',
@@ -804,6 +1138,13 @@ const createMachine = async (user: UserRuntimeRef): Promise<FlyMachine> => {
                 sticker: true
               }
             }
+          },
+          plugins: {
+            entries: {
+              telegram: {
+                enabled: true
+              }
+            }
           }
         }
       : {})
@@ -811,7 +1152,7 @@ const createMachine = async (user: UserRuntimeRef): Promise<FlyMachine> => {
 
   const env: Record<string, string> = {
     OPENCLAW_API_KEY: config.openclaw.apiKey,
-    OPENCLAW_USER_ID: String(user.telegram_user_id),
+    OPENCLAW_USER_ID: args.openclawUserId,
     OPENCLAW_GATEWAY_PORT: String(config.openclaw.gatewayPort),
     OPENCLAW_GATEWAY_TOKEN: config.openclaw.apiKey,
     OPENCLAW_CONFIG_PATH: '/app/data/config/openclaw.json',
@@ -835,11 +1176,11 @@ const createMachine = async (user: UserRuntimeRef): Promise<FlyMachine> => {
     'exec openclaw gateway --bind loopback'
   ].join(' && ');
 
-  const machineName = containerNameForUser(user.telegram_user_id);
+  const machineName = args.machineName;
   let lastError: unknown = null;
 
   for (let attempt = 1; attempt <= FLY_CREATE_RETRIES; attempt += 1) {
-    const volume = await ensureVolume(user.telegram_user_id);
+    const volume = await args.ensureVolume();
 
     try {
       return await flyRequest<FlyMachine>('POST', `${appPath()}/machines`, {
@@ -871,6 +1212,11 @@ const createMachine = async (user: UserRuntimeRef): Promise<FlyMachine> => {
         if (existing) return existing;
       }
 
+      if (isInsufficientResourcesError(error) && attempt < FLY_CREATE_RETRIES) {
+        await sleep(1000 * attempt);
+        continue;
+      }
+
       if (!isVolumeNotFoundError(error) || attempt >= FLY_CREATE_RETRIES) {
         throw error;
       }
@@ -882,7 +1228,25 @@ const createMachine = async (user: UserRuntimeRef): Promise<FlyMachine> => {
   throw lastError instanceof Error ? lastError : new Error('Fly machine creation failed');
 };
 
-const persistMachineRef = async (userId: number, machine: FlyMachine): Promise<string> => {
+const createUserMachine = async (user: UserRuntimeRef): Promise<FlyMachine> => {
+  return createMachine({
+    machineName: containerNameForUser(user.telegram_user_id),
+    openclawUserId: String(user.telegram_user_id),
+    assistantBotToken: user.assistant_bot_token,
+    ensureVolume: () => ensureUserVolume(user.telegram_user_id)
+  });
+};
+
+const createAssistantMachine = async (assistant: AssistantRuntimeRef): Promise<FlyMachine> => {
+  return createMachine({
+    machineName: resolveAssistantMachineName(assistant),
+    openclawUserId: `assistant-${assistant.assistant_bot_id}`,
+    assistantBotToken: assistant.assistant_bot_token,
+    ensureVolume: () => ensureAssistantVolume(assistant.assistant_bot_id)
+  });
+};
+
+const persistUserMachineRef = async (userId: number, machine: FlyMachine): Promise<string> => {
   const encoded = encodeFlyContainerRef(machine.id, machine.private_ip);
   await updateUser(userId, {
     container_id: encoded
@@ -890,14 +1254,25 @@ const persistMachineRef = async (userId: number, machine: FlyMachine): Promise<s
   return encoded;
 };
 
-const ensureInFlight = new Map<number, Promise<{ containerId: string; ready: boolean }>>();
+const persistAssistantMachineRef = async (assistantId: number, fallbackName: string, machine: FlyMachine): Promise<string> => {
+  const encoded = encodeFlyContainerRef(machine.id, machine.private_ip);
+  await updateAssistant(assistantId, {
+    container_id: encoded,
+    container_name: machine.name?.trim() || fallbackName
+  });
+  return encoded;
+};
+
+const ensureUserInFlight = new Map<number, Promise<{ containerId: string; ready: boolean }>>();
+const ensureAssistantInFlight = new Map<number, Promise<{ containerId: string; ready: boolean }>>();
 
 const runEnsureUserMachine = async (user: UserRuntimeRef): Promise<{ containerId: string; ready: boolean }> => {
   if (!config.openclaw.apiKey) {
     throw new Error('OPENCLAW_API_KEY is required to start OpenClaw on Fly runtime.');
   }
+  await ensureFlyOpenclawImageDigestPullable();
 
-  let machine = await resolveMachine(user);
+  let machine = await resolveUserMachine(user);
   if (machine) {
     const previous = machine;
     machine = await getMachine(machine.id);
@@ -915,7 +1290,7 @@ const runEnsureUserMachine = async (user: UserRuntimeRef): Promise<{ containerId
       console.warn('Failed to resolve latest app deployment timestamp', error);
     }
 
-    if (machineNeedsRecreate(machine, latestAppDeployAtMs)) {
+    if (machineNeedsRecreate(machine, latestAppDeployAtMs, user.assistant_bot_token)) {
       await destroyMachine(machine.id);
       machine = null;
       await updateUser(user.telegram_user_id, {
@@ -926,7 +1301,7 @@ const runEnsureUserMachine = async (user: UserRuntimeRef): Promise<{ containerId
   }
 
   if (!machine) {
-    machine = await createMachine(user);
+    machine = await createUserMachine(user);
   }
 
   let currentState = normalizeMachineState(machine);
@@ -935,7 +1310,7 @@ const runEnsureUserMachine = async (user: UserRuntimeRef): Promise<{ containerId
       container_status: 'creating',
       container_id: ''
     });
-    machine = await createMachine(user);
+    machine = await createUserMachine(user);
     currentState = normalizeMachineState(machine);
   }
 
@@ -948,7 +1323,7 @@ const runEnsureUserMachine = async (user: UserRuntimeRef): Promise<{ containerId
     new Set(['started', 'running', 'stopped', 'destroyed']),
     FLY_MACHINE_WAIT_TIMEOUT_MS
   );
-  const containerId = await persistMachineRef(user.telegram_user_id, startedMachine);
+  const containerId = await persistUserMachineRef(user.telegram_user_id, startedMachine);
   const status = normalizeMachineState(startedMachine);
 
   let ready = status === 'running';
@@ -967,21 +1342,118 @@ const runEnsureUserMachine = async (user: UserRuntimeRef): Promise<{ containerId
 
 export const ensureUserMachine = async (user: UserRuntimeRef): Promise<{ containerId: string; ready: boolean }> => {
   const key = user.telegram_user_id;
-  const existing = ensureInFlight.get(key);
+  const existing = ensureUserInFlight.get(key);
   if (existing) return existing;
 
   const job = runEnsureUserMachine(user).finally(() => {
-    if (ensureInFlight.get(key) === job) {
-      ensureInFlight.delete(key);
+    if (ensureUserInFlight.get(key) === job) {
+      ensureUserInFlight.delete(key);
     }
   });
 
-  ensureInFlight.set(key, job);
+  ensureUserInFlight.set(key, job);
+  return job;
+};
+
+const runEnsureAssistantMachine = async (
+  assistant: AssistantRuntimeRef
+): Promise<{ containerId: string; ready: boolean }> => {
+  if (!config.openclaw.apiKey) {
+    throw new Error('OPENCLAW_API_KEY is required to start OpenClaw on Fly runtime.');
+  }
+  await ensureFlyOpenclawImageDigestPullable();
+
+  const fallbackName = resolveAssistantMachineName(assistant);
+  let machine = await resolveAssistantMachine(assistant);
+  if (machine) {
+    const previous = machine;
+    machine = await getMachine(machine.id);
+    if (!machine.updated_at && previous.updated_at) {
+      machine.updated_at = previous.updated_at;
+    }
+    if (!machine.created_at && previous.created_at) {
+      machine.created_at = previous.created_at;
+    }
+
+    let latestAppDeployAtMs: number | null = null;
+    try {
+      latestAppDeployAtMs = await getLatestAppDeployTimestampMs();
+    } catch (error: unknown) {
+      console.warn('Failed to resolve latest app deployment timestamp', error);
+    }
+
+    if (machineNeedsRecreate(machine, latestAppDeployAtMs, assistant.assistant_bot_token)) {
+      await destroyMachine(machine.id);
+      machine = null;
+      await updateAssistant(assistant.id, {
+        container_status: 'creating',
+        container_id: '',
+        container_name: fallbackName
+      });
+    }
+  }
+
+  if (!machine) {
+    machine = await createAssistantMachine(assistant);
+  }
+
+  let currentState = normalizeMachineState(machine);
+  if (currentState === 'missing') {
+    await updateAssistant(assistant.id, {
+      container_status: 'creating',
+      container_id: '',
+      container_name: fallbackName
+    });
+    machine = await createAssistantMachine(assistant);
+    currentState = normalizeMachineState(machine);
+  }
+
+  if (currentState !== 'running') {
+    await startMachine(machine.id);
+  }
+
+  const startedMachine = await waitForMachineState(
+    machine.id,
+    new Set(['started', 'running', 'stopped', 'destroyed']),
+    FLY_MACHINE_WAIT_TIMEOUT_MS
+  );
+  const containerId = await persistAssistantMachineRef(assistant.id, fallbackName, startedMachine);
+  const status = normalizeMachineState(startedMachine);
+
+  let ready = status === 'running';
+  if (ready && config.fly.gatewayProbe) {
+    const target = resolveFromMachine(startedMachine.id, startedMachine.private_ip);
+    const portReady = await waitForPort(target.host, target.port, config.fly.gatewayProbeTimeoutMs);
+    ready = portReady ? await waitForGatewayHello(target.host, target.port, config.fly.gatewayProbeTimeoutMs) : false;
+  }
+
+  await updateAssistant(assistant.id, {
+    container_status: ready ? 'running' : 'error',
+    container_name: startedMachine.name?.trim() || fallbackName
+  });
+
+  return { containerId, ready };
+};
+
+export const ensureAssistantMachine = async (
+  assistant: AssistantRuntimeRef
+): Promise<{ containerId: string; ready: boolean }> => {
+  const key = assistant.id;
+  const existing = ensureAssistantInFlight.get(key);
+  if (existing) return existing;
+
+  const job = runEnsureAssistantMachine(assistant).finally(() => {
+    if (ensureAssistantInFlight.get(key) === job) {
+      ensureAssistantInFlight.delete(key);
+    }
+  });
+
+  ensureAssistantInFlight.set(key, job);
   return job;
 };
 
 export const restartUserMachine = async (user: Pick<UserRecord, 'telegram_user_id' | 'container_id'>): Promise<void> => {
-  const machine = await resolveMachine(user);
+  const machine = await resolveUserMachine(user);
   if (!machine) throw new Error('Fly machine not found');
 
   const currentState = normalizeMachineState(machine);
@@ -991,7 +1463,7 @@ export const restartUserMachine = async (user: Pick<UserRecord, 'telegram_user_i
   } else if (currentState === 'creating') {
     const settled = await waitForMachineState(machine.id, new Set(['started', 'running', 'stopped']), 45_000);
     if (normalizeMachineState(settled) === 'running') {
-      await persistMachineRef(user.telegram_user_id, settled);
+      await persistUserMachineRef(user.telegram_user_id, settled);
       await updateUser(user.telegram_user_id, { container_status: 'running' });
       return;
     }
@@ -1000,19 +1472,19 @@ export const restartUserMachine = async (user: Pick<UserRecord, 'telegram_user_i
   await startMachine(machine.id);
 
   const startedMachine = await waitForMachineState(machine.id, new Set(['started', 'running']), FLY_MACHINE_WAIT_TIMEOUT_MS);
-  await persistMachineRef(user.telegram_user_id, startedMachine);
+  await persistUserMachineRef(user.telegram_user_id, startedMachine);
   await updateUser(user.telegram_user_id, { container_status: 'running' });
 };
 
 export const stopUserMachine = async (user: Pick<UserRecord, 'telegram_user_id' | 'container_id'>): Promise<void> => {
-  const machine = await resolveMachine(user);
+  const machine = await resolveUserMachine(user);
   if (!machine) throw new Error('Fly machine not found');
   await stopMachine(machine.id);
   await updateUser(user.telegram_user_id, { container_status: 'stopped' });
 };
 
 export const getUserMachineStatus = async (user: Pick<UserRecord, 'telegram_user_id' | 'container_id'>): Promise<string> => {
-  const machine = await resolveMachine(user);
+  const machine = await resolveUserMachine(user);
   if (!machine) return 'missing';
 
   const status = normalizeMachineState(machine);
@@ -1147,7 +1619,7 @@ export const getUserMachineLogs = async (
   user: Pick<UserRecord, 'telegram_user_id' | 'container_id'>,
   tail = 200
 ): Promise<string> => {
-  const machine = await resolveMachine(user);
+  const machine = await resolveUserMachine(user);
   if (!machine) return '';
 
   const detail = await getMachine(machine.id);

@@ -11,6 +11,7 @@ import {
 } from './db.js';
 import { sanitizeAllCronStores } from './docker/manager.js';
 import { startLiteLLMBillingSyncLoop } from './litellm/service.js';
+import { ensureFlyOpenclawImageDigestPullable } from './docker/fly.js';
 import { buildBot } from './telegram/bot.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -37,6 +38,10 @@ app.use(cookieParser());
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, '..', 'src', 'views'));
 app.use('/public', express.static(path.join(__dirname, '..', 'public')));
+
+if (config.container.runtime === 'fly') {
+  await ensureFlyOpenclawImageDigestPullable();
+}
 
 const bot = buildBot();
 await bot.init();

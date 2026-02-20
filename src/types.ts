@@ -258,6 +258,10 @@ export interface Config {
     baseUrl: string;
     sttModel: string;
   };
+  supabase: {
+    url: string;
+    serviceKey: string;
+  };
   admin: {
     username: string;
     passwordHash: string;
@@ -281,10 +285,6 @@ export interface Config {
     machineCpus: number;
     gatewayProbe: boolean;
     gatewayProbeTimeoutMs: number;
-  };
-  supabase: {
-    url: string;
-    serviceKey: string;
   };
   featureFlags: {
     allowMissingSecrets: boolean;
