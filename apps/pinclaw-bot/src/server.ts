@@ -5,6 +5,7 @@ import cookieParser from 'cookie-parser';
 import { config, validateConfig } from './config.js';
 import { registerAuthRoutes } from './auth/telegram.js';
 import { registerAdminRoutes } from './admin/routes.js';
+import { registerGatewayRoutes, registerGatewayWsProxy } from './gateway/routes.js';
 import {
   cleanupExpiredGatewaySessions,
   purgeExpiredAdminSessions
@@ -70,6 +71,7 @@ app.post('/webhook/telegram', async (req: Request, res: Response) => {
 });
 
 registerAuthRoutes(app, bot);
+registerGatewayRoutes(app);
 registerAdminRoutes(app);
 
 app.get('/health', (req: Request, res: Response) => {
@@ -91,6 +93,8 @@ setInterval(() => {
   });
 }, 5 * 60 * 1000);
 
-app.listen(config.port, () => {
+const server = app.listen(config.port, () => {
   console.log(`PIN AI Assistant listening on :${config.port}`);
 });
+
+registerGatewayWsProxy(server);

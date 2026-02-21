@@ -19,7 +19,7 @@ const parseBody = (
   const record = body as Record<string, unknown>;
 
   const telegramUserId = String(record.telegram_user_id ?? '').trim();
-  if (!telegramUserId) return null;
+  if (!/^\d+$/.test(telegramUserId)) return null;
 
   const telegramUsernameRaw = record.telegram_username;
   const telegramUsername =

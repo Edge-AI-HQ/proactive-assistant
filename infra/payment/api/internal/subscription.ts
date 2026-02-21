@@ -15,7 +15,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   }
 
   const telegramUserId = typeof req.query.telegram_user_id === 'string' ? req.query.telegram_user_id.trim() : '';
-  if (!telegramUserId) {
+  if (!/^\d+$/.test(telegramUserId)) {
     res.status(400).json({ error: 'telegram_user_id is required' });
     return;
   }

@@ -1,7 +1,8 @@
-import { Bot, type Context } from 'grammy';
+import { Bot, InlineKeyboard, type Context } from 'grammy';
 import { config } from '../config.js';
 import {
   createAssistant,
+  createGatewaySession,
   getAssistantByBotId,
   getAssistantByBotToken,
   listAssistantsByOwnerTelegramId,
@@ -17,16 +18,25 @@ const commandList = [
   { command: 'start', description: 'Start onboarding to create your own assistant bot' },
   { command: 'create_pin_claw_assistant', description: 'Bind your BotFather token and provision assistant' },
   { command: 'list_pin_claw_assistants', description: 'Show all assistant bots you created' },
+  { command: 'gateway', description: 'Open OpenClaw dashboard for one of your bots' },
   { command: 'payment_link', description: 'Generate subscription payment link' },
   { command: 'help', description: 'Show available commands' }
 ] as const;
 
 const BOT_USERNAME_SUFFIX = '_PIN_Claw_Bot';
 const TELEGRAM_BOT_TOKEN_PATTERN = /^\d{6,}:[A-Za-z0-9_-]{20,}$/;
+const GATEWAY_LINK_SESSION_TTL_HOURS = 12;
+const DEFAULT_NGROK_API_URL = 'http://127.0.0.1:4040/api/tunnels';
+const NGROK_TUNNEL_CACHE_MS = 30_000;
 const TOKEN_ALREADY_TAKEN_MESSAGE = [
   '🙈 Ohhh~ This token is already bound to another user!',
   'Please double-check and try again~'
 ].join('\n');
+
+let ngrokOriginCache: { expiresAt: number; value: URL | null } = {
+  expiresAt: 0,
+  value: null
+};
 
 const commandText = (): string => commandList.map((item) => `/${item.command} - ${item.description}`).join('\n');
 
@@ -153,6 +163,138 @@ const safeCreatePaymentLink = async (telegramUserId: number, telegramUsername: s
   }
 };
 
+const resolvePublicOrigin = (): URL | null => {
+  try {
+    return new URL(config.publicBaseUrl);
+  } catch {
+    return null;
+  }
+};
+
+const isLocalhostHost = (hostname: string): boolean => {
+  const normalized = hostname.trim().toLowerCase();
+  return (
+    normalized === 'localhost' ||
+    normalized === '127.0.0.1' ||
+    normalized === '::1' ||
+    normalized === '[::1]' ||
+    normalized.endsWith('.localhost')
+  );
+};
+
+const isTelegramInlineUrlAllowed = (url: URL): boolean => {
+  if (url.protocol !== 'https:') return false;
+  if (!url.hostname.trim()) return false;
+  if (isLocalhostHost(url.hostname)) return false;
+  return true;
+};
+
+const toOriginUrl = (url: URL): URL => new URL(url.origin);
+
+const resolveNgrokPublicOriginFromEnv = (): URL | null => {
+  const candidates = [process.env.NGROK_PUBLIC_URL, process.env.NGROK_URL, process.env.NGROK_TUNNEL_URL];
+  for (const raw of candidates) {
+    if (!raw?.trim()) continue;
+    try {
+      const parsed = new URL(raw);
+      if (isTelegramInlineUrlAllowed(parsed)) {
+        return toOriginUrl(parsed);
+      }
+    } catch {
+      // ignore invalid candidate and continue
+    }
+  }
+  return null;
+};
+
+const resolveNgrokPublicOriginFromApi = async (): Promise<URL | null> => {
+  const now = Date.now();
+  if (ngrokOriginCache.expiresAt > now) {
+    return ngrokOriginCache.value;
+  }
+
+  let resolved: URL | null = null;
+  const apiUrl = process.env.NGROK_API_URL?.trim() || DEFAULT_NGROK_API_URL;
+
+  try {
+    const response = await fetch(apiUrl, {
+      method: 'GET',
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(1500)
+    });
+    if (response.ok) {
+      const payload = (await response.json()) as {
+        tunnels?: Array<{ public_url?: string; proto?: string }>;
+      };
+      for (const tunnel of payload.tunnels || []) {
+        if (tunnel.proto !== 'https' || !tunnel.public_url) continue;
+        try {
+          const parsed = new URL(tunnel.public_url);
+          if (!isTelegramInlineUrlAllowed(parsed)) continue;
+          resolved = toOriginUrl(parsed);
+          break;
+        } catch {
+          // ignore malformed tunnel url
+        }
+      }
+    }
+  } catch {
+    // ngrok api may be unavailable in non-dev environments
+  }
+
+  ngrokOriginCache = {
+    expiresAt: now + NGROK_TUNNEL_CACHE_MS,
+    value: resolved
+  };
+  return resolved;
+};
+
+const resolveGatewayPublicOrigin = async (): Promise<URL | null> => {
+  const configured = resolvePublicOrigin();
+  if (configured && isTelegramInlineUrlAllowed(configured)) {
+    return toOriginUrl(configured);
+  }
+
+  const ngrokFromEnv = resolveNgrokPublicOriginFromEnv();
+  if (ngrokFromEnv) {
+    return ngrokFromEnv;
+  }
+
+  const ngrokFromApi = await resolveNgrokPublicOriginFromApi();
+  if (ngrokFromApi) {
+    return ngrokFromApi;
+  }
+
+  return null;
+};
+
+const buildAssistantGatewayUrl = (
+  publicOrigin: string,
+  telegramUserId: number,
+  assistantId: number,
+  sessionToken?: string
+): string => {
+  const url = new URL(`/gateway/${telegramUserId}/bot/${assistantId}`, publicOrigin);
+  if (sessionToken) {
+    url.searchParams.set('gateway_sid', sessionToken);
+  }
+  return url.toString();
+};
+
+const buildAssistantGatewayLinksText = (
+  assistants: AssistantRecord[],
+  publicOrigin: string,
+  telegramUserId: number,
+  sessionToken?: string
+): string => {
+  return assistants
+    .map(
+      (assistant, index) =>
+        `${index + 1}. @${assistant.assistant_bot_username} (${assistant.container_status || 'unknown'})\n${buildAssistantGatewayUrl(publicOrigin, telegramUserId, assistant.id, sessionToken)}`
+    )
+    .join('\n\n');
+};
+
 export const registerTelegramCommands = (bot: Bot<Context>): void => {
   bot.api.setMyCommands(commandList).catch((error: unknown) => {
     console.error('Failed to set bot commands', error);
@@ -264,6 +406,72 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     await ensureTelegramUser(telegramUserId, ctx.from?.username ?? null);
     const assistants = await listAssistantsByOwnerTelegramId(telegramUserId);
     await ctx.reply(assistantsListMessage(assistants));
+  });
+
+  bot.command('gateway', async (ctx) => {
+    const telegramUserId = ctx.from?.id;
+    if (!telegramUserId) return;
+    await ensureTelegramUser(telegramUserId, ctx.from?.username ?? null);
+    const assistants = await listAssistantsByOwnerTelegramId(telegramUserId);
+
+    if (!assistants.length) {
+      await ctx.reply('你还没有可用的 assistant bot。请先使用 /create_pin_claw_assistant 创建。');
+      return;
+    }
+
+    const publicBase = await resolveGatewayPublicOrigin();
+    if (!publicBase) {
+      await ctx.reply(
+        [
+          '未检测到可用的公网 HTTPS 地址，暂时无法生成 Gateway 按钮。',
+          '请配置 PUBLIC_BASE_URL 或 NGROK_PUBLIC_URL 为你的 ngrok HTTPS 域名后重试。'
+        ].join('\n')
+      );
+      return;
+    }
+
+    const publicOrigin = publicBase.origin;
+    let sessionToken: string | null = null;
+    try {
+      const session = await createGatewaySession(telegramUserId, GATEWAY_LINK_SESSION_TTL_HOURS);
+      sessionToken = session.sessionToken;
+    } catch (error: unknown) {
+      console.error('Failed to create gateway session for command', {
+        telegramUserId,
+        error: error instanceof Error ? error.message : String(error || '')
+      });
+      await ctx.reply('Gateway 登录会话创建失败，请稍后重试。');
+      return;
+    }
+
+    const keyboard = new InlineKeyboard();
+    for (const assistant of assistants) {
+      const buttonLabel = `@${assistant.assistant_bot_username} (${assistant.container_status || 'unknown'})`;
+      const url = buildAssistantGatewayUrl(publicOrigin, telegramUserId, assistant.id, sessionToken);
+      keyboard.url(buttonLabel, url).row();
+    }
+
+    try {
+      await ctx.reply('请选择要打开的 bot：', {
+        reply_markup: keyboard
+      });
+    } catch (error: unknown) {
+      console.error('Failed to send gateway inline keyboard', {
+        telegramUserId,
+        publicOrigin,
+        error: error instanceof Error ? error.message : String(error || '')
+      });
+
+      const links = buildAssistantGatewayLinksText(assistants, publicOrigin, telegramUserId, sessionToken);
+      await ctx.reply(
+        [
+          'Gateway 按钮发送失败，已回退为纯文本链接。',
+          `当前 Gateway 地址=${publicOrigin}`,
+          '',
+          links
+        ].join('\n')
+      );
+    }
   });
 
   bot.command('payment_link', async (ctx) => {

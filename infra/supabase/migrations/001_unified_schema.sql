@@ -9,27 +9,26 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Core tables (master bot + runtime control)
+-- Core identity
 CREATE TABLE IF NOT EXISTS users (
   id BIGSERIAL PRIMARY KEY,
-  telegram_user_id BIGINT UNIQUE NOT NULL,
+  telegram_user_id BIGINT UNIQUE NOT NULL CHECK (telegram_user_id > 0),
   telegram_username TEXT,
   litellm_user_id TEXT,
   litellm_user_alias TEXT,
-  container_id TEXT UNIQUE NOT NULL,
-  container_port BIGINT UNIQUE NOT NULL,
-  container_status TEXT NOT NULL DEFAULT 'creating',
   gateway_token TEXT UNIQUE NOT NULL,
   assistant_bot_token TEXT,
   assistant_bot_username TEXT,
   assistant_webhook_secret TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   last_active_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Assistant control plane (no container state duplication)
 CREATE TABLE IF NOT EXISTS assistants (
   id BIGSERIAL PRIMARY KEY,
-  owner_telegram_user_id BIGINT NOT NULL,
+  owner_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   assistant_bot_id BIGINT UNIQUE NOT NULL,
   assistant_bot_token TEXT UNIQUE NOT NULL,
   assistant_bot_username TEXT UNIQUE NOT NULL,
@@ -37,34 +36,67 @@ CREATE TABLE IF NOT EXISTS assistants (
   litellm_key_alias TEXT,
   litellm_virtual_key_encrypted TEXT,
   litellm_key_last4 TEXT,
-  litellm_spend_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
-  litellm_budget_usd DOUBLE PRECISION,
+  litellm_spend_usd NUMERIC(18, 6) NOT NULL DEFAULT 0,
+  litellm_budget_usd NUMERIC(18, 6),
   litellm_budget_duration TEXT,
   litellm_rpm_limit INTEGER,
   litellm_tpm_limit INTEGER,
   litellm_last_synced_at TIMESTAMPTZ,
-  container_name TEXT UNIQUE NOT NULL,
-  container_id TEXT UNIQUE NOT NULL,
-  container_port INTEGER UNIQUE NOT NULL,
-  container_status TEXT NOT NULL DEFAULT 'creating',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS gateway_sessions (
+-- Unified runtime state for both user and assistant containers/machines
+CREATE TABLE IF NOT EXISTS runtime_instances (
   id BIGSERIAL PRIMARY KEY,
-  telegram_user_id BIGINT NOT NULL,
-  session_token TEXT UNIQUE NOT NULL,
+  owner_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  assistant_id BIGINT REFERENCES assistants(id) ON DELETE CASCADE,
+  scope TEXT NOT NULL CHECK (scope IN ('user', 'assistant')),
+  runtime_provider TEXT NOT NULL CHECK (runtime_provider IN ('docker', 'fly')),
+  container_name TEXT NOT NULL,
+  runtime_ref TEXT,
+  host_port BIGINT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'creating' CHECK (status IN ('creating', 'running', 'stopped', 'error', 'idle', 'missing')),
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  expires_at TIMESTAMPTZ NOT NULL
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (
+    (scope = 'user' AND assistant_id IS NULL)
+    OR
+    (scope = 'assistant' AND assistant_id IS NOT NULL)
+  )
 );
 
-CREATE TABLE IF NOT EXISTS message_logs (
+CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_user_scope_unique
+  ON runtime_instances(owner_user_id)
+  WHERE scope = 'user';
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_assistant_scope_unique
+  ON runtime_instances(assistant_id)
+  WHERE assistant_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_container_name_unique
+  ON runtime_instances(container_name);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_runtime_ref_unique
+  ON runtime_instances(runtime_ref)
+  WHERE runtime_ref IS NOT NULL AND runtime_ref <> '';
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_host_port_unique
+  ON runtime_instances(host_port);
+
+-- Sessions and admin
+CREATE TABLE IF NOT EXISTS user_sessions (
   id BIGSERIAL PRIMARY KEY,
-  telegram_user_id BIGINT NOT NULL,
-  direction TEXT,
-  message_text TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  session_type TEXT NOT NULL CHECK (session_type IN ('gateway', 'payment')),
+  session_token TEXT UNIQUE NOT NULL,
+  telegram_username_snapshot TEXT,
+  used BOOLEAN NOT NULL DEFAULT FALSE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (session_type <> 'gateway' OR (used = FALSE AND used_at IS NULL))
 );
 
 CREATE TABLE IF NOT EXISTS admin_users (
@@ -83,87 +115,56 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS token_usage_ledger (
-  id BIGSERIAL PRIMARY KEY,
-  telegram_user_id BIGINT NOT NULL,
-  session_key TEXT NOT NULL,
-  run_id TEXT NOT NULL,
-  idempotency_key TEXT NOT NULL,
-  provider TEXT,
-  model TEXT,
-  input_tokens INTEGER NOT NULL DEFAULT 0,
-  output_tokens INTEGER NOT NULL DEFAULT 0,
-  cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-  cache_write_tokens INTEGER NOT NULL DEFAULT 0,
-  total_tokens INTEGER NOT NULL DEFAULT 0,
-  cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (telegram_user_id, idempotency_key)
-);
-
-CREATE TABLE IF NOT EXISTS user_usage_totals (
-  telegram_user_id BIGINT PRIMARY KEY,
-  input_tokens INTEGER NOT NULL DEFAULT 0,
-  output_tokens INTEGER NOT NULL DEFAULT 0,
-  cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-  cache_write_tokens INTEGER NOT NULL DEFAULT 0,
-  total_tokens INTEGER NOT NULL DEFAULT 0,
-  total_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- Billing tables (payment gateway)
-CREATE TABLE IF NOT EXISTS payment_sessions (
-  id BIGSERIAL PRIMARY KEY,
-  token TEXT UNIQUE NOT NULL,
-  telegram_user_id TEXT NOT NULL,
-  telegram_username TEXT,
-  used BOOLEAN NOT NULL DEFAULT FALSE,
-  expires_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
 CREATE TABLE IF NOT EXISTS user_subscriptions (
   id BIGSERIAL PRIMARY KEY,
-  telegram_user_id TEXT UNIQUE NOT NULL,
-  telegram_username TEXT,
+  user_id BIGINT UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   stripe_customer_id TEXT NOT NULL,
   stripe_subscription_id TEXT,
-  docker_container_id TEXT,
-  docker_port INTEGER,
-  docker_url TEXT,
+  plan_id TEXT,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('active', 'paused', 'canceled', 'pending')),
+  cancel_at_period_end BOOLEAN NOT NULL DEFAULT FALSE,
   current_period_start TIMESTAMPTZ,
   current_period_end TIMESTAMPTZ,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_subscriptions_stripe_subscription_unique
+  ON user_subscriptions(stripe_subscription_id)
+  WHERE stripe_subscription_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS payment_events (
   id BIGSERIAL PRIMARY KEY,
-  telegram_user_id TEXT,
+  user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
   stripe_event_id TEXT UNIQUE NOT NULL,
   event_type TEXT NOT NULL,
   amount INTEGER,
   currency TEXT,
   status TEXT,
+  processing_status TEXT NOT NULL DEFAULT 'processing' CHECK (processing_status IN ('processing', 'processed', 'failed')),
+  error_message TEXT,
   raw_data JSONB,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS container_logs (
-  id BIGSERIAL PRIMARY KEY,
-  telegram_user_id TEXT NOT NULL,
-  container_id TEXT NOT NULL,
-  action TEXT NOT NULL CHECK (action IN ('created', 'started', 'stopped', 'removed', 'error')),
-  message TEXT,
+  processed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Triggers
+DROP TRIGGER IF EXISTS update_users_updated_at ON users;
+CREATE TRIGGER update_users_updated_at
+  BEFORE UPDATE ON users
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+
 DROP TRIGGER IF EXISTS update_assistants_updated_at ON assistants;
 CREATE TRIGGER update_assistants_updated_at
   BEFORE UPDATE ON assistants
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_runtime_instances_updated_at ON runtime_instances;
+CREATE TRIGGER update_runtime_instances_updated_at
+  BEFORE UPDATE ON runtime_instances
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at_column();
 
@@ -176,52 +177,43 @@ CREATE TRIGGER update_user_subscriptions_updated_at
 -- Indexes
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_assistant_bot_token_unique
   ON users (assistant_bot_token)
-  WHERE assistant_bot_token IS NOT NULL AND assistant_bot_token != '';
+  WHERE assistant_bot_token IS NOT NULL AND assistant_bot_token <> '';
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_assistant_bot_username_unique
   ON users (assistant_bot_username)
-  WHERE assistant_bot_username IS NOT NULL AND assistant_bot_username != '';
+  WHERE assistant_bot_username IS NOT NULL AND assistant_bot_username <> '';
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_litellm_user_id_unique
   ON users (litellm_user_id)
-  WHERE litellm_user_id IS NOT NULL AND litellm_user_id != '';
+  WHERE litellm_user_id IS NOT NULL AND litellm_user_id <> '';
 
-CREATE INDEX IF NOT EXISTS idx_gateway_sessions_expires_at ON gateway_sessions(expires_at);
-CREATE INDEX IF NOT EXISTS idx_gateway_sessions_user_created ON gateway_sessions(telegram_user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_message_logs_user_created ON message_logs(telegram_user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_assistants_owner_created ON assistants(owner_telegram_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_users_last_active_at ON users(last_active_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_user_created ON user_sessions(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_type_expires ON user_sessions(session_type, expires_at);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_payment_expires_unused ON user_sessions(expires_at)
+  WHERE session_type = 'payment' AND used = FALSE;
+CREATE INDEX IF NOT EXISTS idx_assistants_owner_created ON assistants(owner_user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_assistants_litellm_key_alias ON assistants(litellm_key_alias);
 CREATE INDEX IF NOT EXISTS idx_assistants_litellm_user_id ON assistants(litellm_user_id);
+CREATE INDEX IF NOT EXISTS idx_runtime_instances_owner_scope ON runtime_instances(owner_user_id, scope);
+CREATE INDEX IF NOT EXISTS idx_runtime_instances_status ON runtime_instances(status);
 CREATE INDEX IF NOT EXISTS idx_admin_sessions_admin_id ON admin_sessions(admin_id);
 CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires_at ON admin_sessions(expires_at);
-CREATE INDEX IF NOT EXISTS idx_token_usage_ledger_user_created ON token_usage_ledger(telegram_user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_token_usage_ledger_run_id ON token_usage_ledger(run_id);
-CREATE INDEX IF NOT EXISTS idx_payment_token ON payment_sessions(token);
-CREATE INDEX IF NOT EXISTS idx_payment_expires ON payment_sessions(expires_at);
-CREATE INDEX IF NOT EXISTS idx_payment_used ON payment_sessions(used);
-CREATE INDEX IF NOT EXISTS idx_stripe_customer ON user_subscriptions(stripe_customer_id);
-CREATE INDEX IF NOT EXISTS idx_stripe_subscription ON user_subscriptions(stripe_subscription_id);
-CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON user_subscriptions(status);
-CREATE INDEX IF NOT EXISTS idx_payment_telegram_user ON payment_events(telegram_user_id);
-CREATE INDEX IF NOT EXISTS idx_payment_event_type ON payment_events(event_type);
-CREATE INDEX IF NOT EXISTS idx_payment_created_at ON payment_events(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_container_telegram_user ON container_logs(telegram_user_id);
-CREATE INDEX IF NOT EXISTS idx_container_id ON container_logs(container_id);
-CREATE INDEX IF NOT EXISTS idx_container_action ON container_logs(action);
+CREATE INDEX IF NOT EXISTS idx_user_subscriptions_status ON user_subscriptions(status);
+CREATE INDEX IF NOT EXISTS idx_user_subscriptions_customer ON user_subscriptions(stripe_customer_id);
+CREATE INDEX IF NOT EXISTS idx_payment_events_user_created ON payment_events(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_payment_events_type_created ON payment_events(event_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_payment_events_processing_status ON payment_events(processing_status);
 
 -- RLS + service-role policies
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE assistants ENABLE ROW LEVEL SECURITY;
-ALTER TABLE gateway_sessions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE message_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE runtime_instances ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE admin_users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE admin_sessions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE token_usage_ledger ENABLE ROW LEVEL SECURITY;
-ALTER TABLE user_usage_totals ENABLE ROW LEVEL SECURITY;
-ALTER TABLE payment_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_subscriptions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payment_events ENABLE ROW LEVEL SECURITY;
-ALTER TABLE container_logs ENABLE ROW LEVEL SECURITY;
 
 DO $$
 DECLARE
@@ -230,16 +222,12 @@ BEGIN
   FOREACH t IN ARRAY ARRAY[
     'users',
     'assistants',
-    'gateway_sessions',
-    'message_logs',
+    'runtime_instances',
+    'user_sessions',
     'admin_users',
     'admin_sessions',
-    'token_usage_ledger',
-    'user_usage_totals',
-    'payment_sessions',
     'user_subscriptions',
-    'payment_events',
-    'container_logs'
+    'payment_events'
   ]
   LOOP
     IF NOT EXISTS (

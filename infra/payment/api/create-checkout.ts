@@ -92,7 +92,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await db.upsertUserSubscription({
         telegram_user_id: user_id,
         telegram_username: username ?? undefined,
-        stripe_customer_id: customerId
+        stripe_customer_id: customerId,
+        plan_id: plan
       });
     }
 

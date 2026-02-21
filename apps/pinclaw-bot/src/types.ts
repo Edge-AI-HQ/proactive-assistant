@@ -47,14 +47,6 @@ export interface GatewaySessionRecord {
   expires_at: string;
 }
 
-export interface MessageLogRecord {
-  id: number;
-  telegram_user_id: number;
-  direction: string | null;
-  message_text: string | null;
-  created_at: string;
-}
-
 export interface AdminUserRecord {
   id: number;
   username: string;
@@ -105,7 +97,7 @@ export interface CreateAssistantInput {
   litellm_last_synced_at?: string | null;
   container_name: string;
   container_id: string;
-  container_port: number;
+  container_port?: number;
   container_status?: string;
 }
 
@@ -146,67 +138,6 @@ export type AssistantMutableFields = Partial<
     | 'container_status'
   >
 >;
-
-export interface TokenUsageLedgerInput {
-  telegram_user_id: number;
-  session_key: string;
-  run_id: string;
-  idempotency_key: string;
-  provider?: string | null;
-  model?: string | null;
-  input_tokens: number;
-  output_tokens: number;
-  cache_read_tokens: number;
-  cache_write_tokens: number;
-  total_tokens: number;
-  cost_usd: number;
-}
-
-export interface TokenUsageLedgerRecord {
-  id: number;
-  telegram_user_id: number;
-  session_key: string;
-  run_id: string;
-  idempotency_key: string;
-  provider: string | null;
-  model: string | null;
-  input_tokens: number;
-  output_tokens: number;
-  cache_read_tokens: number;
-  cache_write_tokens: number;
-  total_tokens: number;
-  cost_usd: number;
-  created_at: string;
-}
-
-export interface UserUsageTotalsRecord {
-  telegram_user_id: number;
-  input_tokens: number;
-  output_tokens: number;
-  cache_read_tokens: number;
-  cache_write_tokens: number;
-  total_tokens: number;
-  total_cost_usd: number;
-  updated_at: string;
-}
-
-export interface UserWithUsageRecord extends UserRecord {
-  input_tokens: number;
-  output_tokens: number;
-  cache_read_tokens: number;
-  cache_write_tokens: number;
-  total_tokens: number;
-  total_cost_usd: number;
-}
-
-export interface UsageOverviewRecord {
-  input_tokens: number;
-  output_tokens: number;
-  cache_read_tokens: number;
-  cache_write_tokens: number;
-  total_tokens: number;
-  total_cost_usd: number;
-}
 
 export interface LiteLLMUsageOverviewRecord {
   assistants_with_keys: number;

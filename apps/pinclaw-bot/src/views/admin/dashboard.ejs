@@ -11,42 +11,6 @@
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
       body { font-family: 'IBM Plex Sans', ui-sans-serif, system-ui; }
-      .hint-wrap { position: relative; display: inline-flex; align-items: center; }
-      .hint-dot {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 16px;
-        height: 16px;
-        border-radius: 9999px;
-        border: 1px solid #94a3b8;
-        color: #475569;
-        font-size: 10px;
-        font-weight: 600;
-        line-height: 1;
-        cursor: help;
-        margin-left: 6px;
-        background: #f8fafc;
-      }
-      .hint-box {
-        position: absolute;
-        z-index: 20;
-        left: 22px;
-        top: 50%;
-        transform: translateY(-50%);
-        min-width: 280px;
-        max-width: 360px;
-        padding: 8px 10px;
-        border-radius: 10px;
-        border: 1px solid #cbd5e1;
-        background: #ffffff;
-        color: #0f172a;
-        font-size: 12px;
-        line-height: 1.4;
-        box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
-        display: none;
-      }
-      .hint-wrap:hover .hint-box { display: block; }
     </style>
   </head>
   <body class="min-h-screen bg-slate-50 text-slate-900">
@@ -67,14 +31,7 @@
         </section>
       <% } %>
 
-      <%
-        const inputTokens = Number(stats.usage.input_tokens || 0);
-        const cacheReadTokens = Number(stats.usage.cache_read_tokens || 0);
-        const totalReadTokens = inputTokens + cacheReadTokens;
-        const cacheReadRate = totalReadTokens > 0 ? (cacheReadTokens / totalReadTokens) * 100 : 0;
-      %>
-
-      <section class="mt-8 grid gap-4 md:grid-cols-6">
+      <section class="mt-8 grid gap-4 md:grid-cols-4">
         <div class="rounded-2xl border border-slate-200 bg-white p-4">
           <p class="text-xs uppercase tracking-widest text-slate-400">用户数</p>
           <p class="mt-2 text-2xl font-semibold"><%= stats.totalUsers %></p>
@@ -88,58 +45,8 @@
           <p class="mt-2 text-lg font-semibold"><%= stats.loadAvg.join(' / ') %></p>
         </div>
         <div class="rounded-2xl border border-slate-200 bg-white p-4">
-          <p class="text-xs uppercase tracking-widest text-slate-400">总 Token</p>
-          <p class="mt-2 text-2xl font-semibold"><%= Number(stats.usage.total_tokens || 0).toLocaleString('en-US') %></p>
-        </div>
-        <div class="rounded-2xl border border-slate-200 bg-white p-4">
-          <p class="text-xs uppercase tracking-widest text-slate-400">总费用 USD</p>
-          <p class="mt-2 text-2xl font-semibold">$<%= Number(stats.usage.total_cost_usd || 0).toFixed(4) %></p>
-        </div>
-        <div class="rounded-2xl border border-slate-200 bg-white p-4">
-          <p class="text-xs uppercase tracking-widest text-slate-400">LiteLLM Spend</p>
-          <p class="mt-2 text-2xl font-semibold">$<%= Number(stats.litellm.total_spend_usd || 0).toFixed(4) %></p>
-          <p class="mt-1 text-xs text-slate-500">
-            keys: <%= Number(stats.litellm.assistants_with_keys || 0) %>,
-            over budget: <%= Number(stats.litellm.assistants_over_budget || 0) %>
-          </p>
-        </div>
-      </section>
-
-      <% if ((stats.usage.total_tokens || 0) > 0 && Number(stats.usage.total_cost_usd || 0) === 0) { %>
-        <section class="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
-          <p class="text-sm font-medium text-amber-900">费用当前为 0（仅 token 已入账）</p>
-          <p class="mt-1 text-xs text-amber-800">
-            当前模型价格表未命中，系统无法估算 USD。需要在 OpenClaw 配置里补充
-            <code class="rounded bg-amber-100 px-1">models.providers[].models[].cost</code>。
-          </p>
-        </section>
-      <% } %>
-
-      <section class="mt-6 grid gap-4 md:grid-cols-4">
-        <div class="rounded-2xl border border-slate-200 bg-white p-4">
-          <p class="text-xs uppercase tracking-widest text-slate-400">Input Tokens</p>
-          <p class="mt-2 text-xl font-semibold"><%= Number(stats.usage.input_tokens || 0).toLocaleString('en-US') %></p>
-        </div>
-        <div class="rounded-2xl border border-slate-200 bg-white p-4">
-          <p class="text-xs uppercase tracking-widest text-slate-400">
-            <span class="hint-wrap">
-              MODEL OUTPUT TOKENS
-              <span class="hint-dot">?</span>
-              <span class="hint-box">
-                Model Output Tokens 是模型生成输出（含工具调用相关模型输出），不等于上下文处理量。Cache Read/Write 是上下文缓存读写量，通常会更大。
-              </span>
-            </span>
-          </p>
-          <p class="mt-2 text-xl font-semibold"><%= Number(stats.usage.output_tokens || 0).toLocaleString('en-US') %></p>
-        </div>
-        <div class="rounded-2xl border border-slate-200 bg-white p-4">
-          <p class="text-xs uppercase tracking-widest text-slate-400">Cache Read Tokens</p>
-          <p class="mt-2 text-xl font-semibold"><%= Number(stats.usage.cache_read_tokens || 0).toLocaleString('en-US') %></p>
-          <p class="mt-1 text-xs text-slate-500">Read Cache Rate: <%= cacheReadRate.toFixed(2) %>%</p>
-        </div>
-        <div class="rounded-2xl border border-slate-200 bg-white p-4">
-          <p class="text-xs uppercase tracking-widest text-slate-400">Cache Write Tokens</p>
-          <p class="mt-2 text-xl font-semibold"><%= Number(stats.usage.cache_write_tokens || 0).toLocaleString('en-US') %></p>
+          <p class="text-xs uppercase tracking-widest text-slate-400">运行时长</p>
+          <p class="mt-2 text-lg font-semibold"><%= Math.floor(Number(stats.uptime || 0) / 3600) %>h</p>
         </div>
       </section>
 
@@ -149,66 +56,23 @@
           <canvas id="memoryChart" class="mt-4"></canvas>
         </div>
         <div class="rounded-2xl border border-slate-200 bg-white p-6">
-          <h2 class="text-lg font-semibold">快速入口</h2>
-          <p class="mt-2 text-xs text-slate-500">当前系统为 Telegram-only 登录模式。</p>
-          <div class="mt-4 space-y-3">
-            <a class="block rounded-xl border border-slate-200 px-4 py-3 text-sm" href="/admin/users">用户管理</a>
-            <a class="block rounded-xl border border-slate-200 px-4 py-3 text-sm" href="/admin/logs">系统日志</a>
-            <form method="POST" action="/admin/litellm/sync">
-              <button class="w-full rounded-xl border border-slate-200 px-4 py-3 text-left text-sm">
-                同步 LiteLLM 计费
-              </button>
-            </form>
-          </div>
+          <h2 class="text-lg font-semibold">LiteLLM 概览</h2>
+          <p class="mt-3 text-sm text-slate-700">有密钥的 Assistant: <strong><%= Number(stats.litellm.assistants_with_keys || 0) %></strong></p>
+          <p class="mt-1 text-sm text-slate-700">超预算 Assistant: <strong><%= Number(stats.litellm.assistants_over_budget || 0) %></strong></p>
+          <p class="mt-1 text-sm text-slate-700">总 Spend: <strong>$<%= Number(stats.litellm.total_spend_usd || 0).toFixed(4) %></strong></p>
+          <form class="mt-4" method="POST" action="/admin/litellm/sync">
+            <button class="rounded-xl border border-slate-200 px-4 py-2 text-sm">
+              同步 LiteLLM 计费
+            </button>
+          </form>
         </div>
       </section>
 
       <section class="mt-8 rounded-2xl border border-slate-200 bg-white p-6">
-        <h2 class="text-lg font-semibold">用户 Token 明细（Top 20）</h2>
-        <% if (!activeUsageUsers.length) { %>
-          <p class="mt-4 text-sm text-slate-500">暂无使用数据</p>
-        <% } else { %>
-          <div class="mt-4 overflow-auto">
-            <table class="w-full text-sm">
-              <thead class="bg-slate-100 text-left text-xs uppercase tracking-widest text-slate-500">
-                <tr>
-                  <th class="px-3 py-2">用户</th>
-                  <th class="px-3 py-2">Total</th>
-                  <th class="px-3 py-2">Input</th>
-                  <th class="px-3 py-2">Model Output</th>
-                  <th class="px-3 py-2">Cache Read</th>
-                  <th class="px-3 py-2">Cache Write</th>
-                  <th class="px-3 py-2">Read Cache Rate</th>
-                  <th class="px-3 py-2">费用 USD</th>
-                </tr>
-              </thead>
-              <tbody>
-                <% activeUsageUsers.forEach((user) => { %>
-                  <% 
-                    const userInput = Number(user.input_tokens || 0);
-                    const userCacheRead = Number(user.cache_read_tokens || 0);
-                    const userTotalRead = userInput + userCacheRead;
-                    const userCacheReadRate = userTotalRead > 0 ? (userCacheRead / userTotalRead) * 100 : 0;
-                  %>
-                  <tr class="border-t border-slate-100">
-                    <td class="px-3 py-2">
-                      <a class="underline" href="/admin/users/<%= user.id %>">
-                        @<%= user.telegram_username || user.telegram_user_id %>
-                      </a>
-                    </td>
-                    <td class="px-3 py-2"><%= Number(user.total_tokens || 0).toLocaleString('en-US') %></td>
-                    <td class="px-3 py-2"><%= Number(user.input_tokens || 0).toLocaleString('en-US') %></td>
-                    <td class="px-3 py-2"><%= Number(user.output_tokens || 0).toLocaleString('en-US') %></td>
-                    <td class="px-3 py-2"><%= Number(user.cache_read_tokens || 0).toLocaleString('en-US') %></td>
-                    <td class="px-3 py-2"><%= Number(user.cache_write_tokens || 0).toLocaleString('en-US') %></td>
-                    <td class="px-3 py-2"><%= userCacheReadRate.toFixed(2) %>%</td>
-                    <td class="px-3 py-2">$<%= Number(user.total_cost_usd || 0).toFixed(4) %></td>
-                  </tr>
-                <% }) %>
-              </tbody>
-            </table>
-          </div>
-        <% } %>
+        <h2 class="text-lg font-semibold">快速入口</h2>
+        <div class="mt-4 space-y-3">
+          <a class="block rounded-xl border border-slate-200 px-4 py-3 text-sm" href="/admin/users">用户管理</a>
+        </div>
       </section>
     </main>
     <script>
