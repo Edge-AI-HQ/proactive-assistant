@@ -10,7 +10,7 @@ import {
 } from '../db.js';
 import { allocatePort, containerNameForAssistant, ensureAssistantContainer } from '../modules/container/manager.js';
 import { ensureLiteLLMKeyForAssistant } from '../modules/litellm/service.js';
-import { createPaymentSessionForUser, isPaymentGatewayEnabled } from '../modules/payment/client.js';
+import { createPaymentSessionForUser, isPaymentEnabled } from '../modules/payment/client.js';
 import { ensureTelegramUser } from './identity.js';
 import type { AssistantRecord } from '../types.js';
 
@@ -19,7 +19,7 @@ const commandList = [
   { command: 'create_pin_claw_assistant', description: 'Bind your BotFather token and provision assistant' },
   { command: 'list_pin_claw_assistants', description: 'Show all assistant bots you created' },
   { command: 'gateway', description: 'Open OpenClaw dashboard for one of your bots' },
-  { command: 'payment_link', description: 'Generate subscription payment link' },
+  { command: 'subscribe', description: 'Open subscription checkout plans' },
   { command: 'help', description: 'Show available commands' }
 ] as const;
 
@@ -150,7 +150,7 @@ const ensureAssistantRecord = async (
 };
 
 const safeCreatePaymentLink = async (telegramUserId: number, telegramUsername: string | null): Promise<string | null> => {
-  if (!isPaymentGatewayEnabled()) return null;
+  if (!isPaymentEnabled()) return null;
   try {
     const session = await createPaymentSessionForUser(telegramUserId, telegramUsername);
     return session?.subscribe_url ?? null;
@@ -474,14 +474,14 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     }
   });
 
-  bot.command('payment_link', async (ctx) => {
+  bot.command('subscribe', async (ctx) => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
     const telegramUsername = ctx.from?.username ?? null;
     await ensureTelegramUser(telegramUserId, telegramUsername);
 
-    if (!isPaymentGatewayEnabled()) {
-      await ctx.reply('Payment gateway is not configured yet. Please contact the admin.');
+    if (!isPaymentEnabled()) {
+      await ctx.reply('Payment service is not configured yet. Please contact the admin.');
       return;
     }
 
@@ -491,7 +491,10 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
       return;
     }
 
-    await ctx.reply(`💳 Your payment link:\n${paymentLink}`);
+    const keyboard = new InlineKeyboard().url('💳 Open subscription plans', paymentLink);
+    await ctx.reply('Choose your subscription plan:', {
+      reply_markup: keyboard
+    });
   });
 
   bot.command('help', async (ctx) => {

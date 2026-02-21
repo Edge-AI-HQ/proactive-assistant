@@ -1,4 +1,14 @@
 {
+  "framework": null,
+  "devCommand": "",
+  "installCommand": "npm install",
   "buildCommand": "echo 'No build needed for serverless functions'",
-  "ignoreCommand": "bash -c 'git diff HEAD^ HEAD --quiet -- . && exit 1 || exit 0'"
+  "outputDirectory": ".",
+  "ignoreCommand": "bash -c 'git diff HEAD^ HEAD --quiet -- . && exit 1 || exit 0'",
+  "crons": [
+    {
+      "path": "/api/internal/credits-maintenance",
+      "schedule": "5 * * * *"
+    }
+  ]
 }

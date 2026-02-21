@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { db } from '../../lib/db.js';
 import { verifyInternalApiKey } from '../../lib/internalAuth.js';
-import { readLandingBaseUrl } from '../../lib/urls.js';
+import { readPaymentPublicBaseUrl } from '../../lib/publicBaseUrl.js';
 
 const defaultTtlSeconds = 60 * 60;
 
@@ -53,6 +53,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   try {
     const token = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + payload.ttlSeconds * 1000).toISOString();
+    const subscribeUrl = `${readPaymentPublicBaseUrl(req)}/api/subscribe?token=${encodeURIComponent(token)}`;
 
     await db.createPaymentSession({
       token,
@@ -60,9 +61,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       telegram_username: payload.telegramUsername ?? undefined,
       expires_at: expiresAt
     });
-
-    const landingBaseUrl = readLandingBaseUrl(req);
-    const subscribeUrl = `${landingBaseUrl}/api/subscribe?token=${encodeURIComponent(token)}`;
 
     res.status(200).json({
       token,

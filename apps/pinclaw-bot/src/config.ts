@@ -131,10 +131,10 @@ export const config: Config = {
     dbUrl: process.env.SUPABASE_DB_URL || ''
   },
   payment: {
-    enabled: toBool(process.env.PAYMENT_GATEWAY_ENABLED, false),
-    baseUrl: stripTrailingSlash(toTrimmed(process.env.PAYMENT_GATEWAY_BASE_URL)),
-    internalApiKey: toTrimmed(process.env.PAYMENT_GATEWAY_INTERNAL_API_KEY),
-    requestTimeoutMs: toInt(process.env.PAYMENT_GATEWAY_REQUEST_TIMEOUT_MS, 10000)
+    enabled: toBool(process.env.PAYMENT_ENABLED, false),
+    baseUrl: stripTrailingSlash(toTrimmed(process.env.PAYMENT_SERVICE_BASE_URL)),
+    internalApiKey: toTrimmed(process.env.PAYMENT_SERVICE_API_KEY),
+    requestTimeoutMs: toInt(process.env.PAYMENT_REQUEST_TIMEOUT_MS, 10000)
   },
   admin: {
     username: process.env.ADMIN_USERNAME || 'admin',
@@ -179,8 +179,8 @@ export const requiredSecrets: RequiredSecret[] = (() => {
 
   if (config.payment.enabled) {
     secrets.push(
-      ['PAYMENT_GATEWAY_BASE_URL', config.payment.baseUrl],
-      ['PAYMENT_GATEWAY_INTERNAL_API_KEY', config.payment.internalApiKey]
+      ['PAYMENT_SERVICE_BASE_URL', config.payment.baseUrl],
+      ['PAYMENT_SERVICE_API_KEY', config.payment.internalApiKey]
     );
   }
 

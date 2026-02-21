@@ -1,26 +1,20 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import Stripe from 'stripe';
 import { db } from '../lib/db.js';
-import { readLandingBaseUrl } from '../lib/urls.js';
+import { readPaymentPublicBaseUrl } from '../lib/publicBaseUrl.js';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2023-10-16',
+  apiVersion: '2023-10-16'
 });
 
-// 套餐配置
-const PLANS = {
-  basic: {
-    priceId: process.env.STRIPE_PRICE_ID_BASIC || process.env.STRIPE_PRICE_ID!,
-    name: 'Basic',
-  },
-  pro: {
-    priceId: process.env.STRIPE_PRICE_ID_PRO!,
-    name: 'Pro',
-  },
-  max: {
-    priceId: process.env.STRIPE_PRICE_ID_MAX!,
-    name: 'Max',
-  },
+type CheckoutBody = {
+  token?: string;
+  plan?: string;
+};
+
+const normalizePlanCode = (value: string | undefined): string => {
+  const trimmed = (value || '').trim().toLowerCase();
+  return trimmed || 'basic';
 };
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -29,110 +23,97 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { token, plan = 'basic' } = req.body as { token?: string; plan?: keyof typeof PLANS };
+    const body = (req.body || {}) as CheckoutBody;
+    const token = String(body.token || '').trim();
+    const planCode = normalizePlanCode(body.plan);
+    const landingBaseUrl = readPaymentPublicBaseUrl(req);
 
     if (!token) {
       return res.status(400).json({ error: 'Token is required' });
     }
 
-    // 验证并获取 token 信息
     const session = await db.getPaymentSessionByToken(token);
     if (!session) {
       return res.status(404).json({ error: 'Invalid token' });
     }
 
-    // 检查是否已使用
     if (session.used) {
       return res.status(400).json({ error: 'Token already used' });
     }
 
-    // 检查是否过期
     if (new Date(session.expires_at) < new Date()) {
       return res.status(400).json({ error: 'Token expired' });
     }
 
-    // 验证套餐
-    if (!PLANS[plan]) {
+    const selectedPlan = await db.getPlanByCode(planCode);
+    if (!selectedPlan || !selectedPlan.is_active) {
       return res.status(400).json({ error: 'Invalid plan' });
     }
 
-    const selectedPlan = PLANS[plan];
-    const user_id = session.telegram_user_id;
-    const username = session.telegram_username;
+    const telegramUserId = session.telegram_user_id;
+    const telegramUsername = session.telegram_username;
 
-    // 检查是否已有客户
-    const existingSub = await db.getSubscriptionByTelegramId(user_id);
+    const existingSub = await db.getSubscriptionByTelegramId(telegramUserId);
     let customerId = existingSub?.stripe_customer_id ?? null;
 
-    // 如果有客户 ID，验证它在 Stripe 中是否存在
     if (customerId) {
       try {
-        await stripe.customers.retrieve(customerId);
-        console.log(`Using existing customer: ${customerId}`);
-      } catch (error: any) {
-        // 客户不存在（可能是切换了 Stripe 账户），创建新客户
-        console.log(`Customer ${customerId} not found, creating new one`);
+        const customer = await stripe.customers.retrieve(customerId);
+        if ('deleted' in customer && customer.deleted) {
+          customerId = null;
+        }
+      } catch {
         customerId = null;
       }
     }
 
-    // 如果没有客户或客户不存在，创建新客户
     if (!customerId) {
       const customer = await stripe.customers.create({
         metadata: {
-          telegram_user_id: user_id,
-          telegram_username: username || '',
-        },
+          telegram_user_id: telegramUserId,
+          telegram_username: telegramUsername || ''
+        }
       });
 
       customerId = customer.id;
-      console.log(`Created new customer: ${customerId}`);
-
-      // 更新数据库
       await db.upsertUserSubscription({
-        telegram_user_id: user_id,
-        telegram_username: username ?? undefined,
+        telegram_user_id: telegramUserId,
+        telegram_username: telegramUsername ?? undefined,
         stripe_customer_id: customerId,
-        plan_id: plan
+        plan_id: selectedPlan.plan_code
       });
     }
 
-    const landingBaseUrl = readLandingBaseUrl(req);
-
-    // 创建 Checkout Session
     const checkoutSession = await stripe.checkout.sessions.create({
       customer: customerId,
       mode: 'subscription',
       line_items: [
         {
-          price: selectedPlan.priceId,
-          quantity: 1,
-        },
+          price: selectedPlan.stripe_price_id,
+          quantity: 1
+        }
       ],
       success_url: `${landingBaseUrl}/api/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${landingBaseUrl}/api/subscribe?token=${token}`,
       metadata: {
-        telegram_user_id: user_id,
-        telegram_username: username || '',
-        plan: plan,
-        payment_token: token,
+        telegram_user_id: telegramUserId,
+        telegram_username: telegramUsername || '',
+        plan: selectedPlan.plan_code,
+        payment_token: token
       },
       subscription_data: {
         metadata: {
-          telegram_user_id: user_id,
-          telegram_username: username || '',
-          plan: plan,
-        },
-      },
+          telegram_user_id: telegramUserId,
+          telegram_username: telegramUsername || '',
+          plan: selectedPlan.plan_code
+        }
+      }
     });
 
-    // 注意：不在这里标记 token 为已使用
-    // Token 将在支付成功后（webhook 收到 checkout.session.completed）才标记为已使用
-    // 这样用户可以多次尝试支付，直到成功或 token 过期
-
     res.status(200).json({ url: checkoutSession.url });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
     console.error('Create checkout error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: message });
   }
 }

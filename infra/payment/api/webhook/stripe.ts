@@ -1,6 +1,7 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import Stripe from 'stripe';
-import { db } from '../../lib/db.js';
+import { db, type UserSubscription } from '../../lib/db.js';
+import { reconcileWalletUsageFromLiteLLM, syncLiteLLMBudgetForWallet } from '../../lib/litellmBillingSync.js';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2023-10-16'
@@ -71,27 +72,66 @@ const extractStatus = (payload: unknown): string | undefined => {
   return undefined;
 };
 
-const nextBillingText = (date: Date): string =>
-  date.toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric'
-  });
+const readSubscriptionPriceId = (subscription: Stripe.Subscription): string | null => {
+  const firstItem = subscription.items.data[0];
+  if (!firstItem) return null;
+  return firstItem.price?.id || null;
+};
 
-async function sendTelegramMessage(chatId: string, text: string): Promise<void> {
-  try {
-    await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text
-      })
-    });
-  } catch (error) {
-    console.error('Failed to send Telegram notification:', error);
+const readInvoicePriceId = (invoice: Stripe.Invoice): string | null => {
+  for (const line of invoice.lines.data) {
+    if (line.price?.id) return line.price.id;
   }
-}
+  return null;
+};
+
+const readInvoicePeriodEnd = (invoice: Stripe.Invoice): Date | null => {
+  let latestEnd = 0;
+  for (const line of invoice.lines.data) {
+    const end = line.period?.end;
+    if (typeof end === 'number' && Number.isFinite(end) && end > latestEnd) {
+      latestEnd = end;
+    }
+  }
+
+  if (latestEnd > 0) {
+    return new Date(latestEnd * 1000);
+  }
+
+  const fallback = invoice.period_end;
+  if (typeof fallback === 'number' && Number.isFinite(fallback)) {
+    return new Date(fallback * 1000);
+  }
+
+  return null;
+};
+
+const resolvePlanCodeFromSubscription = async (subscription: Stripe.Subscription): Promise<string | null> => {
+  const fromMetadata = subscription.metadata?.plan?.trim();
+  if (fromMetadata) return fromMetadata;
+
+  const priceId = readSubscriptionPriceId(subscription);
+  if (!priceId) return null;
+
+  const plan = await db.getPlanByStripePriceId(priceId);
+  return plan?.plan_code ?? null;
+};
+
+const resolvePlanCodeFromInvoice = async (
+  invoice: Stripe.Invoice,
+  subscription: UserSubscription | null
+): Promise<string | null> => {
+  const fromMetadata = invoice.metadata?.plan?.trim();
+  if (fromMetadata) return fromMetadata;
+
+  const priceId = readInvoicePriceId(invoice);
+  if (priceId) {
+    const byPrice = await db.getPlanByStripePriceId(priceId);
+    if (byPrice?.plan_code) return byPrice.plan_code;
+  }
+
+  return subscription?.plan_id ?? null;
+};
 
 async function handleCheckoutCompleted(session: Stripe.Checkout.Session): Promise<void> {
   const telegram_user_id = session.metadata?.telegram_user_id?.trim();
@@ -101,8 +141,6 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session): Promis
   if (!telegram_user_id) {
     throw new Error('checkout.session.completed missing metadata.telegram_user_id');
   }
-
-  console.log(`Checkout completed for user ${telegram_user_id}`);
 
   await db.upsertUserSubscription({
     telegram_user_id,
@@ -114,13 +152,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session): Promis
 
   if (payment_token) {
     await db.markPaymentSessionUsed(payment_token);
-    console.log(`Token ${payment_token.substring(0, 10)}... marked as used`);
   }
-
-  await sendTelegramMessage(
-    telegram_user_id,
-    '✅ Payment successful!\n\n🚀 We are creating your OpenClaw container now...\n\nYou will receive another message when it is ready.'
-  );
 }
 
 async function resolveTelegramUserIdForSubscription(subscription: Stripe.Subscription): Promise<string | null> {
@@ -154,13 +186,14 @@ async function syncSubscriptionFromStripe(subscription: Stripe.Subscription): Pr
   const periodStart = new Date(subscription.current_period_start * 1000);
   const periodEnd = new Date(subscription.current_period_end * 1000);
   const status = mapStripeSubscriptionStatus(subscription.status);
+  const planCode = await resolvePlanCodeFromSubscription(subscription);
 
   await db.upsertUserSubscription({
     telegram_user_id,
     telegram_username: subscription.metadata?.telegram_username,
     stripe_customer_id: customerId,
     stripe_subscription_id: subscription.id,
-    plan_id: typeof subscription.metadata?.plan === 'string' ? subscription.metadata.plan : undefined
+    plan_id: planCode ?? undefined
   });
 
   await db.updateSubscriptionStatus(
@@ -171,12 +204,87 @@ async function syncSubscriptionFromStripe(subscription: Stripe.Subscription): Pr
     Boolean(subscription.cancel_at_period_end)
   );
 
-  if (status === 'active') {
-    await sendTelegramMessage(
+  if (planCode) {
+    await db.upsertWalletPlanContext({
       telegram_user_id,
-      `🎉 Your OpenClaw container is ready!\n\n📦 Container Status: Active\n📅 Next billing: ${nextBillingText(periodEnd)}`
-    );
+      telegram_username: subscription.metadata?.telegram_username,
+      plan_id: planCode,
+      next_monthly_refresh_at: periodEnd
+    });
   }
+
+}
+
+const resolveSubscriptionFromInvoice = async (invoice: Stripe.Invoice): Promise<UserSubscription | null> => {
+  const subscriptionId = typeof invoice.subscription === 'string' ? invoice.subscription : invoice.subscription?.id;
+  if (subscriptionId) {
+    const bySub = await db.getSubscriptionByStripeSubscriptionId(subscriptionId);
+    if (bySub) return bySub;
+  }
+
+  const customerId = typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id;
+  if (customerId) {
+    const byCustomer = await db.getSubscriptionByStripeCustomerId(customerId);
+    if (byCustomer) return byCustomer;
+  }
+
+  const telegramUserId = invoice.metadata?.telegram_user_id?.trim();
+  if (telegramUserId) {
+    const byTelegram = await db.getSubscriptionByTelegramId(telegramUserId);
+    if (byTelegram) return byTelegram;
+  }
+
+  return null;
+};
+
+async function handleInvoicePaid(eventId: string, invoice: Stripe.Invoice): Promise<void> {
+  const subscription = await resolveSubscriptionFromInvoice(invoice);
+  if (!subscription?.telegram_user_id) {
+    console.warn('invoice.paid could not resolve subscription user', invoice.id || eventId);
+    return;
+  }
+
+  const planCode = await resolvePlanCodeFromInvoice(invoice, subscription);
+  if (!planCode) {
+    console.warn('invoice.paid missing plan code', {
+      invoiceId: invoice.id,
+      subscriptionId: subscription.stripe_subscription_id,
+      telegramUserId: subscription.telegram_user_id
+    });
+    return;
+  }
+
+  const periodEnd = readInvoicePeriodEnd(invoice) ?? (subscription.current_period_end ? new Date(subscription.current_period_end) : null);
+  if (!periodEnd || Number.isNaN(periodEnd.getTime())) {
+    console.warn('invoice.paid missing period end', invoice.id || eventId);
+    return;
+  }
+
+  await reconcileWalletUsageFromLiteLLM({
+    user_id: subscription.user_id,
+    telegram_user_id: subscription.telegram_user_id,
+    source: 'stripe_webhook',
+    marker: invoice.id || eventId
+  });
+
+  const refresh = await db.applyMonthlyCreditsRefresh({
+    telegram_user_id: subscription.telegram_user_id,
+    telegram_username: subscription.telegram_username,
+    plan_id: planCode,
+    next_monthly_refresh_at: periodEnd,
+    idempotency_key: `invoice_paid:${invoice.id || eventId}`,
+    source: 'stripe_webhook',
+    metadata: {
+      stripe_event_id: eventId,
+      stripe_invoice_id: invoice.id || null,
+      plan_code: planCode
+    }
+  });
+
+  if (refresh.wallet) {
+    await syncLiteLLMBudgetForWallet(refresh.wallet);
+  }
+
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -196,8 +304,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.error('Webhook signature verification failed:', message);
     return res.status(400).send(`Webhook Error: ${message}`);
   }
-
-  console.log('Received Stripe event:', event.type);
 
   const eventObject = event.data.object;
   const claim = await db.claimStripeEvent({
@@ -226,8 +332,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         await syncSubscriptionFromStripe(eventObject as Stripe.Subscription);
         break;
 
+      case 'invoice.paid':
+        await handleInvoicePaid(event.id, eventObject as Stripe.Invoice);
+        break;
+
       default:
-        console.log(`Unhandled event type: ${event.type}`);
         break;
     }
 

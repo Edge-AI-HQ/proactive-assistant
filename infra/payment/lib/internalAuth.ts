@@ -1,16 +1,11 @@
 import type { VercelRequest } from '@vercel/node';
 
 export const verifyInternalApiKey = (req: VercelRequest): { ok: true } | { ok: false; reason: string } => {
-  const expected = (
-    process.env.PAYMENT_SERVICE_API_KEY ||
-    process.env.PINCLAW_INTERNAL_API_KEY ||
-    process.env.PAYMENT_GATEWAY_INTERNAL_API_KEY ||
-    ''
-  ).trim();
+  const expected = (process.env.PAYMENT_SERVICE_API_KEY || '').trim();
   if (!expected) {
     return {
       ok: false,
-      reason: 'PAYMENT_SERVICE_API_KEY (or PINCLAW_INTERNAL_API_KEY/PAYMENT_GATEWAY_INTERNAL_API_KEY) is not configured'
+      reason: 'PAYMENT_SERVICE_API_KEY is not configured'
     };
   }
 

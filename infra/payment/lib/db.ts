@@ -4,8 +4,12 @@ import {
 } from '@pin-ai/infra-supabase';
 import {
   createPaymentStore,
+  type BillingPlan,
+  type CreditMutationResult,
   type PaymentSessionRecord,
   type PaymentStore,
+  type UserCreditWallet,
+  type UserIdentity,
   type UserSubscription
 } from './paymentStore.js';
 
@@ -14,4 +18,12 @@ const pool = createSupabasePool(dbUrl, { max: 8, idleTimeoutMillis: 30_000 });
 
 export const db: PaymentStore = createPaymentStore(pool);
 
-export type { PaymentSessionRecord, PaymentStore, UserSubscription };
+export type {
+  BillingPlan,
+  CreditMutationResult,
+  PaymentSessionRecord,
+  PaymentStore,
+  UserCreditWallet,
+  UserIdentity,
+  UserSubscription
+};

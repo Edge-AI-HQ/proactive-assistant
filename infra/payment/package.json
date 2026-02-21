@@ -7,9 +7,9 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "vercel dev",
+    "dev:vercel": "vercel dev --yes --listen 3001",
     "build": "echo 'No build needed for serverless functions'",
-    "deploy": "vercel --prod",
+    "deploy": "vercel --prod --yes",
     "type-check": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

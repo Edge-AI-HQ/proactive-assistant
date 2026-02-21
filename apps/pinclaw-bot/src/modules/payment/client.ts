@@ -6,6 +6,14 @@ interface PaymentSessionResponse {
   subscribe_url: string;
 }
 
+interface PaymentSessionApiResponse {
+  token: string;
+  expires_at: string;
+  subscribe_url?: string;
+}
+
+const stripTrailingSlash = (value: string): string => value.replace(/\/+$/, '');
+
 const requestTimeoutMs = (): number => Math.max(1000, config.payment.requestTimeoutMs);
 
 const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> => {
@@ -21,39 +29,44 @@ const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, timeoutMes
   }
 };
 
-const validateResponse = (value: unknown): PaymentSessionResponse => {
+const validateResponse = (value: unknown): PaymentSessionApiResponse => {
   if (!value || typeof value !== 'object') {
-    throw new Error('Payment gateway returned invalid payload');
+    throw new Error('Payment service returned invalid payload');
   }
 
   const data = value as Record<string, unknown>;
   const token = typeof data.token === 'string' ? data.token.trim() : '';
   const expiresAt = typeof data.expires_at === 'string' ? data.expires_at.trim() : '';
-  const subscribeUrl = typeof data.subscribe_url === 'string' ? data.subscribe_url.trim() : '';
+  const subscribeUrl = typeof data.subscribe_url === 'string' ? data.subscribe_url.trim() : undefined;
 
-  if (!token || !expiresAt || !subscribeUrl) {
-    throw new Error('Payment gateway payload missing token/expires_at/subscribe_url');
+  if (!token || !expiresAt) {
+    throw new Error('Payment service payload missing token/expires_at');
   }
 
-  return {
+  const result: PaymentSessionApiResponse = {
     token,
-    expires_at: expiresAt,
-    subscribe_url: subscribeUrl
+    expires_at: expiresAt
   };
+
+  if (subscribeUrl) {
+    result.subscribe_url = subscribeUrl;
+  }
+
+  return result;
 };
 
-export const isPaymentGatewayEnabled = (): boolean => config.payment.enabled;
+export const isPaymentEnabled = (): boolean => config.payment.enabled;
 
 export const createPaymentSessionForUser = async (
   telegramUserId: number,
   telegramUsername: string | null | undefined
 ): Promise<PaymentSessionResponse | null> => {
-  if (!isPaymentGatewayEnabled()) return null;
+  if (!isPaymentEnabled()) return null;
 
   const baseUrl = config.payment.baseUrl.trim();
   const apiKey = config.payment.internalApiKey.trim();
   if (!baseUrl || !apiKey) {
-    throw new Error('Payment gateway is enabled but PAYMENT_GATEWAY_BASE_URL or PAYMENT_GATEWAY_INTERNAL_API_KEY is missing.');
+    throw new Error('Payment is enabled but PAYMENT_SERVICE_BASE_URL/PAYMENT_SERVICE_API_KEY is missing.');
   }
 
   const response = await withTimeout(
@@ -69,7 +82,7 @@ export const createPaymentSessionForUser = async (
       })
     }),
     requestTimeoutMs(),
-    `Payment gateway request timed out after ${requestTimeoutMs()}ms`
+    `Payment service request timed out after ${requestTimeoutMs()}ms`
   );
 
   const payload = (await response.json()) as unknown;
@@ -78,8 +91,17 @@ export const createPaymentSessionForUser = async (
       payload && typeof payload === 'object' && typeof (payload as Record<string, unknown>).error === 'string'
         ? (payload as Record<string, unknown>).error
         : `HTTP ${response.status}`;
-    throw new Error(`Payment gateway request failed: ${detail}`);
+    throw new Error(`Payment service request failed: ${detail}`);
   }
 
-  return validateResponse(payload);
+  const session = validateResponse(payload);
+  const subscribeUrl =
+    session.subscribe_url?.trim() ||
+    `${stripTrailingSlash(baseUrl)}/api/subscribe?token=${encodeURIComponent(session.token)}`;
+
+  return {
+    token: session.token,
+    expires_at: session.expires_at,
+    subscribe_url: subscribeUrl
+  };
 };

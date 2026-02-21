@@ -115,12 +115,27 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS billing_plans (
+  plan_code TEXT PRIMARY KEY CHECK (plan_code IN ('basic', 'pro', 'max')),
+  display_name TEXT NOT NULL,
+  stripe_price_id TEXT UNIQUE NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'usd',
+  price_cents_monthly INTEGER NOT NULL CHECK (price_cents_monthly >= 0),
+  daily_refresh_credits INTEGER NOT NULL CHECK (daily_refresh_credits >= 0),
+  monthly_refresh_credits INTEGER NOT NULL CHECK (monthly_refresh_credits >= 0),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS user_subscriptions (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   stripe_customer_id TEXT NOT NULL,
   stripe_subscription_id TEXT,
-  plan_id TEXT,
+  plan_id TEXT REFERENCES billing_plans(plan_code),
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('active', 'paused', 'canceled', 'pending')),
   cancel_at_period_end BOOLEAN NOT NULL DEFAULT FALSE,
   current_period_start TIMESTAMPTZ,
@@ -133,6 +148,43 @@ CREATE TABLE IF NOT EXISTS user_subscriptions (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_subscriptions_stripe_subscription_unique
   ON user_subscriptions(stripe_subscription_id)
   WHERE stripe_subscription_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS user_credit_wallets (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  plan_code TEXT NOT NULL REFERENCES billing_plans(plan_code),
+  daily_credits_remaining INTEGER NOT NULL DEFAULT 0 CHECK (daily_credits_remaining >= 0),
+  monthly_credits_remaining INTEGER NOT NULL DEFAULT 0 CHECK (monthly_credits_remaining >= 0),
+  next_daily_refresh_at TIMESTAMPTZ NOT NULL,
+  next_monthly_refresh_at TIMESTAMPTZ NOT NULL,
+  last_litellm_spend_cents BIGINT NOT NULL DEFAULT 0 CHECK (last_litellm_spend_cents >= 0),
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS credit_ledger (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  event_type TEXT NOT NULL CHECK (
+    event_type IN (
+      'daily_refresh',
+      'monthly_refresh',
+      'usage_debit',
+      'plan_change',
+      'manual_adjust',
+      'wallet_init'
+    )
+  ),
+  delta_daily_credits INTEGER NOT NULL,
+  delta_monthly_credits INTEGER NOT NULL,
+  daily_credits_after INTEGER NOT NULL CHECK (daily_credits_after >= 0),
+  monthly_credits_after INTEGER NOT NULL CHECK (monthly_credits_after >= 0),
+  idempotency_key TEXT UNIQUE NOT NULL,
+  source TEXT NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
 CREATE TABLE IF NOT EXISTS payment_events (
   id BIGSERIAL PRIMARY KEY,
@@ -148,6 +200,45 @@ CREATE TABLE IF NOT EXISTS payment_events (
   processed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+INSERT INTO billing_plans (
+  plan_code,
+  display_name,
+  stripe_price_id,
+  currency,
+  price_cents_monthly,
+  daily_refresh_credits,
+  monthly_refresh_credits,
+  sort_order,
+  is_active
+) VALUES
+  ('basic', 'Basic', 'price_basic_test', 'usd', 2, 300, 4000, 10, TRUE),
+  ('pro', 'Pro', 'price_pro_test', 'usd', 4, 300, 8000, 20, TRUE),
+  ('max', 'Max', 'price_max_test', 'usd', 20, 300, 40000, 30, TRUE)
+ON CONFLICT (plan_code)
+DO UPDATE SET
+  display_name = EXCLUDED.display_name,
+  currency = EXCLUDED.currency,
+  price_cents_monthly = EXCLUDED.price_cents_monthly,
+  daily_refresh_credits = EXCLUDED.daily_refresh_credits,
+  monthly_refresh_credits = EXCLUDED.monthly_refresh_credits,
+  sort_order = EXCLUDED.sort_order,
+  is_active = EXCLUDED.is_active,
+  updated_at = NOW();
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'user_subscriptions_plan_id_fkey'
+  ) THEN
+    ALTER TABLE user_subscriptions
+      ADD CONSTRAINT user_subscriptions_plan_id_fkey
+      FOREIGN KEY (plan_id)
+      REFERENCES billing_plans(plan_code);
+  END IF;
+END $$;
 
 -- Triggers
 DROP TRIGGER IF EXISTS update_users_updated_at ON users;
@@ -171,6 +262,18 @@ CREATE TRIGGER update_runtime_instances_updated_at
 DROP TRIGGER IF EXISTS update_user_subscriptions_updated_at ON user_subscriptions;
 CREATE TRIGGER update_user_subscriptions_updated_at
   BEFORE UPDATE ON user_subscriptions
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_billing_plans_updated_at ON billing_plans;
+CREATE TRIGGER update_billing_plans_updated_at
+  BEFORE UPDATE ON billing_plans
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_user_credit_wallets_updated_at ON user_credit_wallets;
+CREATE TRIGGER update_user_credit_wallets_updated_at
+  BEFORE UPDATE ON user_credit_wallets
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at_column();
 
@@ -199,8 +302,15 @@ CREATE INDEX IF NOT EXISTS idx_runtime_instances_owner_scope ON runtime_instance
 CREATE INDEX IF NOT EXISTS idx_runtime_instances_status ON runtime_instances(status);
 CREATE INDEX IF NOT EXISTS idx_admin_sessions_admin_id ON admin_sessions(admin_id);
 CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires_at ON admin_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_billing_plans_active_order ON billing_plans(is_active, sort_order);
 CREATE INDEX IF NOT EXISTS idx_user_subscriptions_status ON user_subscriptions(status);
 CREATE INDEX IF NOT EXISTS idx_user_subscriptions_customer ON user_subscriptions(stripe_customer_id);
+CREATE INDEX IF NOT EXISTS idx_user_credit_wallets_next_daily ON user_credit_wallets(next_daily_refresh_at);
+CREATE INDEX IF NOT EXISTS idx_user_credit_wallets_next_monthly ON user_credit_wallets(next_monthly_refresh_at);
+CREATE INDEX IF NOT EXISTS idx_user_credit_wallets_plan_code ON user_credit_wallets(plan_code);
+CREATE INDEX IF NOT EXISTS idx_credit_ledger_user_created ON credit_ledger(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_credit_ledger_event_type_created ON credit_ledger(event_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_credit_ledger_source_created ON credit_ledger(source, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_payment_events_user_created ON payment_events(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_payment_events_type_created ON payment_events(event_type, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_payment_events_processing_status ON payment_events(processing_status);
@@ -212,7 +322,10 @@ ALTER TABLE runtime_instances ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE admin_users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE admin_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE billing_plans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_subscriptions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_credit_wallets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE credit_ledger ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payment_events ENABLE ROW LEVEL SECURITY;
 
 DO $$
@@ -226,7 +339,10 @@ BEGIN
     'user_sessions',
     'admin_users',
     'admin_sessions',
+    'billing_plans',
     'user_subscriptions',
+    'user_credit_wallets',
+    'credit_ledger',
     'payment_events'
   ]
   LOOP

@@ -5,11 +5,10 @@ Telegram-based assistant platform with container orchestration, per-assistant Li
 ## Repository Layout
 
 - `apps/pinclaw-bot` - Telegram onboarding bot + admin dashboard + control-plane app
-- `apps/payment-gateway` - Vercel landing pages + payment test bot app (calls infra payment API)
 - `infra/container-manager` - Container runtime package + OpenClaw image (`@pin-ai/infra-container-manager`)
 - `infra/litellm` - LiteLLM package + config/docs (`@pin-ai/infra-litellm`)
 - `infra/supabase` - Shared Supabase package + migrations (`@pin-ai/infra-supabase`)
-- `infra/payment` - Vercel payment backend API (`@pin-ai/infra-payment`)
+- `infra/payment` - Unified Vercel payment service (landing + checkout + webhooks) (`@pin-ai/infra-payment`)
 
 ## Quick Start
 
@@ -24,7 +23,6 @@ cp apps/pinclaw-bot/.env.example apps/pinclaw-bot/.env
 ```
 
 Optional module-specific templates:
-- `apps/payment-gateway/.env.example`
 - `infra/litellm/.env.example`
 
 Required for master app:
@@ -49,24 +47,18 @@ npm run build
 
 ## Payment Stack
 
-Run landing app locally:
+Run unified payment service locally:
 ```bash
 npm run dev:payment
 ```
+Default URL: `http://localhost:3001`
 
-Run payment backend locally:
-```bash
-npm run dev:payment-backend
-```
-
-Pinclaw/payment-gateway to payment-backend env:
-- `PAYMENT_GATEWAY_ENABLED=true` (pinclaw-bot)
-- `PAYMENT_GATEWAY_BASE_URL=<infra-payment-base-url>` (pinclaw-bot)
-- `PAYMENT_GATEWAY_INTERNAL_API_KEY=<shared-secret>` (pinclaw-bot)
-- `PAYMENT_BACKEND_BASE_URL=<infra-payment-base-url>` (payment-gateway app)
-- `PAYMENT_BACKEND_API_KEY=<shared-secret>` (payment-gateway app)
+Pinclaw-bot and payment service env:
+- `PAYMENT_ENABLED=true` (pinclaw-bot)
+- `PAYMENT_SERVICE_BASE_URL=<infra-payment-base-url>` (pinclaw-bot)
+- `PAYMENT_SERVICE_API_KEY=<shared-secret>` (pinclaw-bot)
 - `PAYMENT_SERVICE_API_KEY=<shared-secret>` (infra/payment)
-- `PAYMENT_LANDING_BASE_URL=<apps-payment-gateway-base-url>` (infra/payment)
+- `PAYMENT_PUBLIC_BASE_URL=<infra-payment-public-https-url>` (infra/payment, optional but recommended if internal URL differs from public URL)
 
 ## LiteLLM (Supabase Postgres)
 
