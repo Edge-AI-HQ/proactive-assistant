@@ -31,7 +31,7 @@ const assertLiteLLMRuntimeConfigured = (): void => {
   }
 };
 
-const buildLiteLLMUserId = (telegramUserId: number): string => `${config.litellm.userIdPrefix}${telegramUserId}`;
+const buildLiteLLMUserId = (userId: number): string => String(userId);
 
 const buildLiteLLMUserAlias = (telegramUserId: number, telegramUsername: string | null): string => {
   if (telegramUsername?.trim()) return `telegram:${telegramUserId}:@${telegramUsername.trim()}`;
@@ -82,7 +82,7 @@ export const ensureLiteLLMKeyForAssistant = async (
     throw new Error(`Cannot create LiteLLM identity: owner ${ownerTelegramUserId} not found`);
   }
 
-  const litellmUserId = owner.litellm_user_id?.trim() || assistant.litellm_user_id?.trim() || buildLiteLLMUserId(ownerTelegramUserId);
+  const litellmUserId = owner.litellm_user_id?.trim() || assistant.litellm_user_id?.trim() || buildLiteLLMUserId(owner.id);
   const litellmUserAlias =
     owner.litellm_user_alias?.trim() || buildLiteLLMUserAlias(ownerTelegramUserId, owner.telegram_username);
 
@@ -95,6 +95,7 @@ export const ensureLiteLLMKeyForAssistant = async (
       userAlias: litellmUserAlias,
       metadata: {
         source: 'pin-ai-assistant',
+        user_id: owner.id,
         telegram_user_id: ownerTelegramUserId,
         telegram_username: owner.telegram_username || null
       }
@@ -131,6 +132,7 @@ export const ensureLiteLLMKeyForAssistant = async (
     models: config.litellm.allowedModels,
     metadata: {
       source: 'pin-ai-assistant',
+      owner_user_id: owner.id,
       owner_telegram_user_id: ownerTelegramUserId,
       assistant_bot_id: assistant.assistant_bot_id,
       assistant_bot_username: assistant.assistant_bot_username
@@ -149,6 +151,7 @@ export const ensureLiteLLMKeyForAssistant = async (
         userAlias: litellmUserAlias,
         metadata: {
           source: 'pin-ai-assistant',
+          user_id: owner.id,
           telegram_user_id: ownerTelegramUserId,
           telegram_username: owner.telegram_username || null
         }

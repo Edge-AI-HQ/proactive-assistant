@@ -9,6 +9,7 @@ type JsonRecord = Record<string, unknown>;
 interface LiteLLMCreateUserInput {
   userId: string;
   userAlias: string;
+  maxBudgetUsd?: number | null;
   metadata?: JsonRecord;
 }
 
@@ -181,6 +182,13 @@ export const createLiteLLMUser = async (input: LiteLLMCreateUserInput): Promise<
     user_id: input.userId,
     user_alias: input.userAlias
   };
+  if (input.maxBudgetUsd !== null) {
+    const normalizedMaxBudget =
+      typeof input.maxBudgetUsd === 'number' && Number.isFinite(input.maxBudgetUsd)
+        ? Math.max(0, Number(input.maxBudgetUsd.toFixed(6)))
+        : 0;
+    body.max_budget = normalizedMaxBudget;
+  }
   if (input.metadata && Object.keys(input.metadata).length > 0) {
     body.metadata = input.metadata;
   }

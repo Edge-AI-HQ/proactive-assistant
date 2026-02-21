@@ -49,8 +49,8 @@ curl -sS -X POST http://localhost:4000/key/generate \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "user_id": "pinai-user-smoke",
-    "key_alias": "pinai-assistant-smoke",
+    "user_id": "1",
+    "key_alias": "claw-assistant-smoke",
     "max_budget": 5
   }'
 ```

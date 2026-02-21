@@ -19,8 +19,7 @@ const commandList = [
   { command: 'create_pin_claw_assistant', description: 'Bind your BotFather token and provision assistant' },
   { command: 'list_pin_claw_assistants', description: 'Show all assistant bots you created' },
   { command: 'gateway', description: 'Open OpenClaw dashboard for one of your bots' },
-  { command: 'subscribe', description: 'Open subscription checkout plans' },
-  { command: 'help', description: 'Show available commands' }
+  { command: 'subscribe', description: 'Open subscription checkout plans' }
 ] as const;
 
 const BOT_USERNAME_SUFFIX = '_PIN_Claw_Bot';
@@ -305,15 +304,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     if (!telegramUserId) return;
     const telegramUsername = ctx.from?.username ?? null;
     await ensureTelegramUser(telegramUserId, telegramUsername);
-    const assistants = await listAssistantsByOwnerTelegramId(telegramUserId);
-    const paymentLink = await safeCreatePaymentLink(telegramUserId, telegramUsername);
-
-    const sections = [welcomeMessage(suggestBotUsername(ctx)), '', assistantsListMessage(assistants)];
-    if (paymentLink) {
-      sections.push('', `💳 Payment subscription link: ${paymentLink}`);
-    }
-
-    await ctx.reply(sections.join('\n'));
+    await ctx.reply(welcomeMessage(suggestBotUsername(ctx)));
   });
 
   bot.command('create_pin_claw_assistant', async (ctx) => {
@@ -495,10 +486,6 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     await ctx.reply('Choose your subscription plan:', {
       reply_markup: keyboard
     });
-  });
-
-  bot.command('help', async (ctx) => {
-    await ctx.reply(`Available commands:\n${commandText()}`);
   });
 
   bot.hears(/^\s*\/\s*$/, async (ctx) => {

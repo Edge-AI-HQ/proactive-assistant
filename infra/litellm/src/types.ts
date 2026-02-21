@@ -6,7 +6,6 @@ export interface LiteLLMConfig {
   keyEncryptionSecret: string;
   requestTimeoutMs: number;
   syncIntervalMs: number;
-  userIdPrefix: string;
   keyAliasPrefix: string;
   defaultBudgetUsd: number | null;
   defaultBudgetDuration: string;
@@ -21,6 +20,7 @@ export interface LiteLLMRuntimeConfig {
 }
 
 export interface LiteLLMUserRecord {
+  id: number;
   telegram_user_id: number;
   telegram_username: string | null;
   litellm_user_id: string | null;

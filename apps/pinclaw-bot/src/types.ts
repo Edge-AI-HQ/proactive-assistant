@@ -168,7 +168,6 @@ export interface Config {
     keyEncryptionSecret: string;
     requestTimeoutMs: number;
     syncIntervalMs: number;
-    userIdPrefix: string;
     keyAliasPrefix: string;
     defaultBudgetUsd: number | null;
     defaultBudgetDuration: string;
