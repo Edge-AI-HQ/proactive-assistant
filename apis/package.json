@@ -27,7 +27,8 @@
     "http-proxy": "^1.18.1",
     "pg": "^8.13.3",
     "ws": "^8.18.0",
-    "stripe": "^14.10.0"
+    "stripe": "^14.10.0",
+    "@pin-ai/shared-types": "0.1.0"
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.7",

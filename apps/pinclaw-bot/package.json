@@ -19,7 +19,8 @@
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "grammy": "^1.31.0"
+    "grammy": "^1.31.0",
+    "@pin-ai/shared-types": "0.1.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
