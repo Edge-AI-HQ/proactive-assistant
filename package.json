@@ -6,29 +6,23 @@
     "npm": ">=10"
   },
   "workspaces": [
-    "apps/pinclaw-bot",
-    "infra/container-manager",
-    "infra/litellm",
-    "infra/supabase",
-    "infra/payment"
+    "apis",
+    "apps/pinclaw-bot"
   ],
   "scripts": {
-    "build:infra": "npm run build --workspace @pin-ai/infra-supabase && npm run build --workspace @pin-ai/infra-litellm && npm run build --workspace @pin-ai/infra-container-manager",
-    "type-check:infra": "npm run type-check --workspace @pin-ai/infra-supabase && npm run type-check --workspace @pin-ai/infra-litellm && npm run type-check --workspace @pin-ai/infra-container-manager",
-    "dev": "npm run build:infra && npm run dev --workspace @pin-ai/pinclaw-bot",
-    "build": "npm run build:infra && npm run build --workspace @pin-ai/pinclaw-bot",
-    "start": "npm run start --workspace @pin-ai/pinclaw-bot",
-    "type-check": "npm run type-check:infra && npm run type-check --workspace @pin-ai/pinclaw-bot",
-    "type-check:payment": "npm run type-check --workspace @pin-ai/infra-payment",
+    "dev": "npm run dev --workspace @pin-ai/apis",
+    "dev:bot": "npm run dev --workspace @pin-ai/pinclaw-bot",
+    "dev:api": "npm run dev --workspace @pin-ai/apis",
+    "build": "npm run build --workspace @pin-ai/apis && npm run build --workspace @pin-ai/pinclaw-bot",
+    "start": "npm run start --workspace @pin-ai/apis",
+    "start:bot": "npm run start --workspace @pin-ai/pinclaw-bot",
+    "type-check": "npm run type-check --workspace @pin-ai/apis && npm run type-check --workspace @pin-ai/pinclaw-bot",
     "lint": "npm run lint --workspace @pin-ai/pinclaw-bot",
     "hash-password": "npm run hash-password --workspace @pin-ai/pinclaw-bot --",
-    "dev:payment": "npm run dev:vercel --workspace @pin-ai/infra-payment",
-    "build:payment": "npm run build --workspace @pin-ai/infra-payment",
-    "deploy:payment": "npm run deploy --workspace @pin-ai/infra-payment",
-    "litellm:up": "npm run service:up --workspace @pin-ai/infra-litellm",
-    "litellm:restart": "npm run service:restart --workspace @pin-ai/infra-litellm",
-    "litellm:logs": "npm run service:logs --workspace @pin-ai/infra-litellm",
-    "litellm:cleanup-local-db": "npm run service:cleanup-local-db --workspace @pin-ai/infra-litellm",
-    "litellm:verify-db-env": "npm run service:verify-db-env --workspace @pin-ai/infra-litellm"
+    "litellm:up": "bash ops/litellm/litellm.sh up",
+    "litellm:restart": "bash ops/litellm/litellm.sh restart",
+    "litellm:logs": "bash ops/litellm/litellm.sh logs",
+    "litellm:cleanup-local-db": "bash ops/litellm/litellm.sh cleanup-local-db",
+    "litellm:verify-db-env": "bash ops/litellm/litellm.sh verify-db-env"
   }
 }

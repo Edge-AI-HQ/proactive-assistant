@@ -44,6 +44,7 @@ Thumbs.db
 # Project-specific local files
 .claude/
 product_specs/
+docs/
 
 # Payment module specific
 apps/master-bot-api/.env

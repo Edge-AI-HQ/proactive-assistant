@@ -4,6 +4,15 @@ export interface UserRecord {
   telegram_username: string | null;
   litellm_user_id: string | null;
   litellm_user_alias: string | null;
+  litellm_key_alias: string | null;
+  litellm_virtual_key_encrypted: string | null;
+  litellm_key_last4: string | null;
+  litellm_spend_usd: number;
+  litellm_budget_usd: number | null;
+  litellm_budget_duration: string | null;
+  litellm_rpm_limit: number | null;
+  litellm_tpm_limit: number | null;
+  litellm_last_synced_at: string | null;
   container_id: string;
   container_port: number;
   container_status: string;
@@ -47,32 +56,22 @@ export interface GatewaySessionRecord {
   expires_at: string;
 }
 
-export interface AdminUserRecord {
-  id: number;
-  username: string;
-  password_hash: string;
-  email: string | null;
-  created_at: string;
-}
-
-export interface AdminSessionRecord {
-  id: number;
-  admin_id: number;
-  session_token: string;
-  expires_at: string;
-}
-
-export interface AdminSessionView extends AdminSessionRecord {
-  admin_username: string;
-}
-
 export interface CreateUserInput {
   telegram_user_id: number;
   telegram_username?: string | null;
   litellm_user_id?: string | null;
   litellm_user_alias?: string | null;
-  container_id: string;
-  container_port: number;
+  litellm_key_alias?: string | null;
+  litellm_virtual_key_encrypted?: string | null;
+  litellm_key_last4?: string | null;
+  litellm_spend_usd?: number;
+  litellm_budget_usd?: number | null;
+  litellm_budget_duration?: string | null;
+  litellm_rpm_limit?: number | null;
+  litellm_tpm_limit?: number | null;
+  litellm_last_synced_at?: string | null;
+  container_id?: string;
+  container_port?: number;
   container_status?: string;
   gateway_token: string;
   assistant_bot_token?: string | null;
@@ -107,6 +106,15 @@ export type UserMutableFields = Partial<
     | 'telegram_username'
     | 'litellm_user_id'
     | 'litellm_user_alias'
+    | 'litellm_key_alias'
+    | 'litellm_virtual_key_encrypted'
+    | 'litellm_key_last4'
+    | 'litellm_spend_usd'
+    | 'litellm_budget_usd'
+    | 'litellm_budget_duration'
+    | 'litellm_rpm_limit'
+    | 'litellm_tpm_limit'
+    | 'litellm_last_synced_at'
     | 'container_id'
     | 'container_port'
     | 'container_status'
@@ -149,6 +157,11 @@ export interface Config {
   nodeEnv: string;
   port: number;
   publicBaseUrl: string;
+  backendApi: {
+    baseUrl: string;
+    internalApiKey: string;
+    requestTimeoutMs: number;
+  };
   telegram: {
     token: string;
     webhookSecret: string;
@@ -187,14 +200,6 @@ export interface Config {
   };
   payment: {
     enabled: boolean;
-    baseUrl: string;
-    internalApiKey: string;
-    requestTimeoutMs: number;
-  };
-  admin: {
-    username: string;
-    passwordHash: string;
-    sessionTtlHours: number;
   };
   container: {
     runtime: 'docker' | 'fly';

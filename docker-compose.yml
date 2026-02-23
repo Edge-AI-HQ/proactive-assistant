@@ -30,12 +30,12 @@ services:
     container_name: pin-ai-litellm
     restart: unless-stopped
     env_file:
-      # Infra service reads its own env file.
-      - ./infra/litellm/.env
+      # LiteLLM service reads its own runtime env.
+      - ./ops/litellm/.env
     ports:
       - "4000:4000"
     volumes:
-      - ./infra/litellm/litellm_config.yaml:/app/config.yaml:ro
+      - ./ops/litellm/litellm_config.yaml:/app/config.yaml:ro
     command: [ "--config", "/app/config.yaml", "--port", "4000", "--num_workers", "2" ]
 
 networks:

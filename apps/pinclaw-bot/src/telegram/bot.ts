@@ -19,7 +19,9 @@ export const buildBot = (): Bot<Context> => {
 
     const rawText = typeof ctx.message?.text === 'string' ? ctx.message.text.trim() : '';
     if (rawText.startsWith('/')) return;
-    await ctx.reply('这个 bot 只用于引导创建你的专属助手。请先输入 /start。');
+    await ctx.reply('<b>This bot is for assistant onboarding only.</b>\nPlease send /start first.', {
+      parse_mode: 'HTML'
+    });
   });
 
   bot.catch((err: unknown) => {

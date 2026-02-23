@@ -1,0 +1,77 @@
+import { getUserByTelegramId } from '../common/db/index.js';
+import { DomainError } from '../common/errors.js';
+import { deleteTelegramUser, ensureTelegramUser } from './service.js';
+import type { UserRecord } from '../../types.js';
+
+export interface EnsureTelegramUserInput {
+  telegramUserId: number;
+  telegramUsername: string | null;
+}
+
+const parsePositiveInt = (value: unknown): number | null => {
+  const raw = typeof value === 'string' ? value.trim() : typeof value === 'number' ? String(value) : '';
+  if (!/^\d+$/.test(raw)) return null;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) return null;
+  return parsed;
+};
+
+export const parseEnsureTelegramUserInput = (body: unknown): EnsureTelegramUserInput => {
+  if (!body || typeof body !== 'object') {
+    throw new DomainError('INVALID_INPUT', 'Invalid payload. provider=telegram and provider_user_id are required.');
+  }
+
+  const record = body as Record<string, unknown>;
+  const provider = typeof record.provider === 'string' ? record.provider.trim().toLowerCase() : 'telegram';
+  if (provider !== 'telegram') {
+    throw new DomainError('INVALID_INPUT', 'Invalid payload. provider=telegram and provider_user_id are required.');
+  }
+
+  const telegramUserId = parsePositiveInt(record.provider_user_id ?? record.telegram_user_id);
+  if (!telegramUserId) {
+    throw new DomainError('INVALID_INPUT', 'Invalid payload. provider=telegram and provider_user_id are required.');
+  }
+
+  const usernameRaw = record.provider_username ?? record.telegram_username;
+  const telegramUsername =
+    typeof usernameRaw === 'string' && usernameRaw.trim().length > 0 ? usernameRaw.trim() : null;
+
+  return { telegramUserId, telegramUsername };
+};
+
+export const parseTelegramUserIdParam = (value: unknown): number => {
+  const telegramUserId = parsePositiveInt(value);
+  if (!telegramUserId) {
+    throw new DomainError('INVALID_INPUT', 'Invalid telegram_user_id');
+  }
+  return telegramUserId;
+};
+
+export const ensureTelegramUserByInput = async (input: EnsureTelegramUserInput): Promise<UserRecord> => {
+  return ensureTelegramUser(input.telegramUserId, input.telegramUsername);
+};
+
+export const readTelegramUserById = async (telegramUserId: number): Promise<UserRecord> => {
+  const user = await getUserByTelegramId(telegramUserId);
+  if (!user) {
+    throw new DomainError('NOT_FOUND', 'User not found');
+  }
+  return user;
+};
+
+export const removeTelegramUserById = async (telegramUserId: number): Promise<UserRecord> => {
+  try {
+    const deleted = await deleteTelegramUser(telegramUserId);
+    if (!deleted) {
+      throw new DomainError('NOT_FOUND', 'User not found');
+    }
+    return deleted;
+  } catch (error: unknown) {
+    if (error instanceof DomainError) throw error;
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    if (message.includes('assistants')) {
+      throw new DomainError('CONFLICT', message, 409, error);
+    }
+    throw error;
+  }
+};
