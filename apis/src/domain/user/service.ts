@@ -42,7 +42,7 @@ const ensureUserLiteLLMKey = async (user: UserRecord): Promise<UserRecord> => {
     userId: litellmUserId,
     userAlias: litellmUserAlias,
     keyAlias: userKeyAlias,
-    maxBudgetUsd: config.litellm.defaultBudgetUsd ?? 0,
+    maxBudgetUsd: 0,
     metadata: {
       source: 'pin-ai-assistant-apis',
       user_id: user.id,

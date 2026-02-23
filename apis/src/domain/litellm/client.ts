@@ -125,8 +125,8 @@ const normalizeBudgetUsd = (value: number | null): number => {
 };
 
 const normalizeOptionalBudgetUsd = (value: number | null | undefined): number | null => {
-  if (value === undefined) return null;
-  return normalizeBudgetUsd(value ?? 0);
+  if (value === undefined || value === null) return null;
+  return normalizeBudgetUsd(value);
 };
 
 const apiUrl = (path: string): string => `${config.litellm.baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
@@ -295,13 +295,6 @@ const isAutoCreateKeyRejected = (error: unknown): boolean => {
   );
 };
 
-const updateLiteLLMKeyBudget = async (rawKey: string, maxBudgetUsd: number): Promise<void> => {
-  await requestJson('POST', '/key/update', {
-    key: rawKey,
-    max_budget: maxBudgetUsd
-  });
-};
-
 export const createLiteLLMUser = async (input: LiteLLMCreateUserInput): Promise<LiteLLMCreateUserResult> => {
   if (!isNonEmptyString(input.userId)) {
     throw new Error('LiteLLM user_id is required');
@@ -345,13 +338,6 @@ export const createLiteLLMUser = async (input: LiteLLMCreateUserInput): Promise<
       tpmLimit: readNumberFromRecords(records, ['tpm_limit']),
       raw: parsed
     };
-
-    // LiteLLM /user/new applies max_budget to user profile, but auto-created key can still be unlimited.
-    // Force-align key max_budget so dashboard/API show the expected per-key limit.
-    if (rawKey && normalizedMaxBudget !== null) {
-      await updateLiteLLMKeyBudget(rawKey, normalizedMaxBudget);
-      result.maxBudgetUsd = normalizedMaxBudget;
-    }
 
     return result;
   } catch (error: unknown) {
