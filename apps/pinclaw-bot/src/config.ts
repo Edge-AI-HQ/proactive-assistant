@@ -29,9 +29,8 @@ const findWorkspaceDir = (startDir: string): string => {
 const loadEnvFiles = (): void => {
   const moduleDir = path.dirname(fileURLToPath(import.meta.url));
   const workspaceDir = findWorkspaceDir(moduleDir);
-  const candidates = [path.join(workspaceDir, '.env'), path.join(workspaceDir, '.env.local')];
+  const candidates = [path.join(workspaceDir, '.env.local'), path.join(workspaceDir, '.env')];
 
-  // Only read env files from the pinclaw-bot workspace itself.
   // Existing process env still wins due override=false.
   for (const envPath of candidates) {
     if (!fs.existsSync(envPath)) continue;
@@ -81,8 +80,9 @@ const splitCsv = (value: string | undefined): string[] => {
 
 const stripTrailingSlash = (value: string): string => value.replace(/\/+$/, '');
 
-const port = toInt(process.env.PORT, 3000);
+const port = toInt(process.env.PORT, 3001);
 const publicBaseUrl = process.env.PUBLIC_BASE_URL || `http://localhost:${port}`;
+const backendApiBaseUrl = stripTrailingSlash(toTrimmed(process.env.BACKEND_API_BASE_URL, 'http://127.0.0.1:3000'));
 const liteLlmEnabled = toBool(process.env.LITELLM_ENABLED, true);
 const liteLlmBaseUrl = stripTrailingSlash(toTrimmed(process.env.LITELLM_BASE_URL, 'http://127.0.0.1:4000'));
 const liteLlmContainerBaseUrl = stripTrailingSlash(
@@ -93,6 +93,11 @@ export const config: Config = {
   nodeEnv: process.env.NODE_ENV || 'development',
   port,
   publicBaseUrl,
+  backendApi: {
+    baseUrl: backendApiBaseUrl,
+    internalApiKey: toTrimmed(process.env.API_INTERNAL_TOKEN),
+    requestTimeoutMs: toInt(process.env.BACKEND_API_REQUEST_TIMEOUT_MS, 10000)
+  },
   telegram: {
     token: process.env.TELEGRAM_BOT_TOKEN || '',
     webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || '',
@@ -112,9 +117,8 @@ export const config: Config = {
     keyEncryptionSecret: toTrimmed(process.env.LITELLM_KEY_ENCRYPTION_SECRET),
     requestTimeoutMs: toInt(process.env.LITELLM_REQUEST_TIMEOUT_MS, 15000),
     syncIntervalMs: toInt(process.env.LITELLM_SYNC_INTERVAL_MS, 300000),
-    userIdPrefix: toTrimmed(process.env.LITELLM_USER_ID_PREFIX, 'pinai-user-'),
-    keyAliasPrefix: toTrimmed(process.env.LITELLM_KEY_ALIAS_PREFIX, 'pinai-assistant-'),
-    defaultBudgetUsd: toNullableFloat(process.env.LITELLM_DEFAULT_BUDGET_USD),
+    keyAliasPrefix: toTrimmed(process.env.LITELLM_KEY_ALIAS_PREFIX, 'claw-assistant-'),
+    defaultBudgetUsd: toNullableFloat(process.env.LITELLM_DEFAULT_BUDGET_USD) ?? 0,
     defaultBudgetDuration: toTrimmed(process.env.LITELLM_DEFAULT_BUDGET_DURATION, '30d'),
     defaultRpmLimit: toNullableInt(process.env.LITELLM_DEFAULT_RPM_LIMIT),
     defaultTpmLimit: toNullableInt(process.env.LITELLM_DEFAULT_TPM_LIMIT),
@@ -131,15 +135,7 @@ export const config: Config = {
     dbUrl: process.env.SUPABASE_DB_URL || ''
   },
   payment: {
-    enabled: toBool(process.env.PAYMENT_ENABLED, false),
-    baseUrl: stripTrailingSlash(toTrimmed(process.env.PAYMENT_SERVICE_BASE_URL)),
-    internalApiKey: toTrimmed(process.env.PAYMENT_SERVICE_API_KEY),
-    requestTimeoutMs: toInt(process.env.PAYMENT_REQUEST_TIMEOUT_MS, 10000)
-  },
-  admin: {
-    username: process.env.ADMIN_USERNAME || 'admin',
-    passwordHash: process.env.ADMIN_PASSWORD_HASH || '',
-    sessionTtlHours: toInt(process.env.ADMIN_SESSION_TTL_HOURS, 12)
+    enabled: toBool(process.env.PAYMENT_ENABLED, false)
   },
   container: {
     runtime: process.env.CONTAINER_RUNTIME === 'fly' ? 'fly' : 'docker',
@@ -167,22 +163,8 @@ export const config: Config = {
 export const requiredSecrets: RequiredSecret[] = (() => {
   const secrets: RequiredSecret[] = [
     ['TELEGRAM_BOT_TOKEN', config.telegram.token],
-    ['SUPABASE_DB_URL', config.supabase.dbUrl]
+    ['BACKEND_API_BASE_URL', config.backendApi.baseUrl]
   ];
-
-  if (config.litellm.enabled) {
-    secrets.push(
-      ['LITELLM_MASTER_KEY', config.litellm.masterKey],
-      ['LITELLM_KEY_ENCRYPTION_SECRET', config.litellm.keyEncryptionSecret]
-    );
-  }
-
-  if (config.payment.enabled) {
-    secrets.push(
-      ['PAYMENT_SERVICE_BASE_URL', config.payment.baseUrl],
-      ['PAYMENT_SERVICE_API_KEY', config.payment.internalApiKey]
-    );
-  }
 
   return secrets;
 })();
