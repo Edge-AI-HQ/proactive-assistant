@@ -3,10 +3,7 @@ export {
   ensureLiteLLMKeyForAssistant,
   readAssistantLiteLLMVirtualKey,
   readUserLiteLLMVirtualKey,
-  resolveAssistantLiteLLMEnv,
-  syncAssistantLiteLLMBilling,
-  syncLiteLLMBilling,
-  startLiteLLMBillingSyncLoop
+  resolveAssistantLiteLLMEnv
 } from './service.js';
 export {
   createLiteLLMUser,

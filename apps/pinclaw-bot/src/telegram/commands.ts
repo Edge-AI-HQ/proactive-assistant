@@ -151,9 +151,9 @@ const safeCreatePaymentLink = async (telegramUserId: number, telegramUsername: s
   }
 };
 
-const resolvePublicOrigin = (): URL | null => {
+const resolveBackendApiOrigin = (): URL | null => {
   try {
-    return new URL(config.publicBaseUrl);
+    return new URL(config.backendApi.baseUrl);
   } catch {
     return null;
   }
@@ -178,7 +178,7 @@ const isTelegramInlineUrlAllowed = (url: URL): boolean => {
 };
 
 const resolveGatewayPublicOrigin = (): URL | null => {
-  const configured = resolvePublicOrigin();
+  const configured = resolveBackendApiOrigin();
   if (configured && isTelegramInlineUrlAllowed(configured)) {
     return new URL(configured.origin);
   }
@@ -346,7 +346,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
         ctx,
         [
           '<b>No public HTTPS URL is available.</b>',
-          'Set <code>PUBLIC_BASE_URL</code> to your public HTTPS domain and try again.'
+          'Set <code>BACKEND_API_BASE_URL</code> to your public HTTPS API domain and try again.'
         ].join('\n')
       );
       return;

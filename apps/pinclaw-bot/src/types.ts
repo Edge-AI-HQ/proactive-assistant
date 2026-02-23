@@ -17,9 +17,6 @@ export interface UserRecord {
   container_port: number;
   container_status: string;
   gateway_token: string;
-  assistant_bot_token: string | null;
-  assistant_bot_username: string | null;
-  assistant_webhook_secret: string | null;
   created_at: string;
   last_active_at: string;
 }
@@ -74,9 +71,6 @@ export interface CreateUserInput {
   container_port?: number;
   container_status?: string;
   gateway_token: string;
-  assistant_bot_token?: string | null;
-  assistant_bot_username?: string | null;
-  assistant_webhook_secret?: string | null;
 }
 
 export interface CreateAssistantInput {
@@ -119,9 +113,6 @@ export type UserMutableFields = Partial<
     | 'container_port'
     | 'container_status'
     | 'gateway_token'
-    | 'assistant_bot_token'
-    | 'assistant_bot_username'
-    | 'assistant_webhook_secret'
   >
 >;
 

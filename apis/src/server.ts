@@ -1,7 +1,6 @@
 import express, { type Request, type Response } from 'express';
 import cookieParser from 'cookie-parser';
 import { prepareContainerRuntime } from './domain/container/index.js';
-import { startLiteLLMBillingSyncLoop } from './domain/litellm/index.js';
 import { config, validateConfig } from './domain/common/config.js';
 import { cleanupExpiredGatewaySessions } from './domain/common/db/index.js';
 import { ensureInfraRuntimeConfigured } from './domain/common/infraRuntime.js';
@@ -17,7 +16,6 @@ if (missing.length) {
 ensureInfraRuntimeConfigured();
 
 await prepareContainerRuntime();
-startLiteLLMBillingSyncLoop();
 await validatePaymentPriceConsistencyOnStartup();
 
 const app = express();

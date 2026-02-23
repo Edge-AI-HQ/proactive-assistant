@@ -5,7 +5,6 @@ import { registerDashboardApiRoutes, registerDashboardRoutes, registerDashboardW
 import { registerUserRoutes } from './user_routes.js';
 import { registerClawAssistantRoutes } from './claw_assistant_routes.js';
 import { registerContainerRoutes } from './container_routes.js';
-import { registerMeterRoutes } from './meter_routes.js';
 import { registerPaymentRoutes, registerPaymentWebhookRoutes } from './payment_routes.js';
 
 export const registerRawBodyRoutes = (app: Application): void => {
@@ -19,7 +18,6 @@ export const registerHttpRoutes = (app: Application): void => {
   registerContainerRoutes(app);
   registerDashboardApiRoutes(app);
   registerPaymentRoutes(app);
-  registerMeterRoutes(app);
 
   registerAuthRoutes(app);
   registerDashboardRoutes(app);

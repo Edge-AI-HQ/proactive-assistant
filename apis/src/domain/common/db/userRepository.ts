@@ -24,10 +24,7 @@ const userDataColumns = [
   'litellm_rpm_limit',
   'litellm_tpm_limit',
   'litellm_last_synced_at',
-  'gateway_token',
-  'assistant_bot_token',
-  'assistant_bot_username',
-  'assistant_webhook_secret'
+  'gateway_token'
 ] as const;
 
 export const createGatewayToken = (): string => randomToken(24);
@@ -63,32 +60,6 @@ export const getUserByLiteLLMUserId = async (litellmUserId: string): Promise<Use
   const identity = await resolveUserByLiteLLMUserId(pool, litellmUserId);
   if (!identity) return undefined;
   return getUserById(identity.id);
-};
-
-export const getUserByAssistantBotToken = async (assistantBotToken: string): Promise<UserRecord | undefined> => {
-  await withSchema();
-  return fetchOne<UserRecord>(
-    pool,
-    `
-      SELECT ${userSelectColumns}
-      ${userFromClause}
-      WHERE users.assistant_bot_token = $1
-    `,
-    [assistantBotToken]
-  );
-};
-
-export const getUserByAssistantBotUsername = async (assistantBotUsername: string): Promise<UserRecord | undefined> => {
-  await withSchema();
-  return fetchOne<UserRecord>(
-    pool,
-    `
-      SELECT ${userSelectColumns}
-      ${userFromClause}
-      WHERE users.assistant_bot_username = $1
-    `,
-    [assistantBotUsername]
-  );
 };
 
 export const listUsers = async (): Promise<UserRecord[]> => {
@@ -127,17 +98,13 @@ export const createUser = async (user: CreateUserInput): Promise<UserRecord | un
           litellm_tpm_limit,
           litellm_last_synced_at,
           gateway_token,
-          assistant_bot_token,
-          assistant_bot_username,
-          assistant_webhook_secret,
           last_active_at,
           updated_at
         ) VALUES (
           $1, $2, $3, $4,
           $5, $6, $7, $8,
           $9, $10, $11, $12,
-          $13, $14, $15, $16,
-          $17, $18::timestamptz, $19::timestamptz
+          $13, $14, $15::timestamptz, $16::timestamptz
         )
         RETURNING id
       `,
@@ -156,9 +123,6 @@ export const createUser = async (user: CreateUserInput): Promise<UserRecord | un
         user.litellm_tpm_limit ?? null,
         user.litellm_last_synced_at ?? null,
         user.gateway_token,
-        user.assistant_bot_token ?? null,
-        user.assistant_bot_username ?? null,
-        user.assistant_webhook_secret ?? null,
         nowIso(),
         nowIso()
       ]

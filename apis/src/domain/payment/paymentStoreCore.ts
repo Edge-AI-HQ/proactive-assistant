@@ -23,47 +23,12 @@ export type QueryExecutor = {
 
 export const firstRow = <T>(rows: T[]): T | null => rows[0] ?? null;
 
-export const nextUtcMidnight = (from: Date): Date => {
-  const next = new Date(from);
-  next.setUTCHours(0, 0, 0, 0);
-  next.setUTCDate(next.getUTCDate() + 1);
-  return next;
-};
-
-export const clampNonNegativeInt = (value: number): number => {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.trunc(value));
-};
-
 export const toIsoOrNull = (value: Date | undefined): string | null => {
   if (!(value instanceof Date)) return null;
   const time = value.getTime();
   if (!Number.isFinite(time)) return null;
   return value.toISOString();
 };
-
-export const isUniqueViolation = (error: unknown, constraintName?: string): boolean => {
-  if (!error || typeof error !== 'object') return false;
-  const record = error as { code?: string; constraint?: string };
-  if (record.code !== '23505') return false;
-  if (!constraintName) return true;
-  return record.constraint === constraintName;
-};
-
-export async function withTransaction<T>(pool: Queryable, task: (client: QueryExecutor) => Promise<T>): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const result = await task(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (error: unknown) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
-}
 
 export interface UserSubscription {
   id: number;
@@ -112,27 +77,6 @@ export interface UserIdentity {
   litellm_user_alias: string | null;
 }
 
-export interface UserCreditWallet {
-  id: number;
-  user_id: number;
-  telegram_user_id: string;
-  telegram_username: string | null;
-  plan_code: string;
-  daily_credits_remaining: number;
-  monthly_credits_remaining: number;
-  next_daily_refresh_at: string;
-  next_monthly_refresh_at: string;
-  last_litellm_spend_cents: number;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface CreditMutationResult {
-  wallet: UserCreditWallet | null;
-  applied: boolean;
-  credits_increased: number;
-}
-
 export type StripeEventClaimResult = 'process' | 'skip';
 
 export const subscriptionSelectSql = `
@@ -155,25 +99,6 @@ export const subscriptionSelectSql = `
     ON users.id = user_subscriptions.user_id
 `;
 
-export const walletSelectSql = `
-  SELECT
-    user_credit_wallets.id,
-    user_credit_wallets.user_id,
-    users.telegram_user_id::text AS telegram_user_id,
-    users.telegram_username,
-    user_credit_wallets.plan_code,
-    user_credit_wallets.daily_credits_remaining,
-    user_credit_wallets.monthly_credits_remaining,
-    user_credit_wallets.next_daily_refresh_at,
-    user_credit_wallets.next_monthly_refresh_at,
-    user_credit_wallets.last_litellm_spend_cents,
-    user_credit_wallets.created_at,
-    user_credit_wallets.updated_at
-  FROM user_credit_wallets
-  JOIN users
-    ON users.id = user_credit_wallets.user_id
-`;
-
 export const billingPlanSelectSql = `
   SELECT
     plan_code,
@@ -187,21 +112,6 @@ export const billingPlanSelectSql = `
     is_active
   FROM billing_plans
 `;
-
-export const readWalletByUserId = async (
-  queryable: QueryExecutor,
-  userId: number,
-  forUpdate = false
-): Promise<UserCreditWallet | null> => {
-  const result = await queryable.query<UserCreditWallet>(
-    `${walletSelectSql}
-     WHERE user_credit_wallets.user_id = $1
-     ${forUpdate ? 'FOR UPDATE' : ''}
-     LIMIT 1`,
-    [userId]
-  );
-  return firstRow(result.rows);
-};
 
 export const readPlanByCode = async (queryable: QueryExecutor, planCode: string): Promise<BillingPlan | null> => {
   const result = await queryable.query<BillingPlan>(

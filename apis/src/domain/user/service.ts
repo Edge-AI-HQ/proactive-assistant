@@ -1,4 +1,4 @@
-import { createLiteLLMUser, encryptLiteLLMKey, generateLiteLLMKey } from '../litellm/index.js';
+import { createLiteLLMUser, encryptLiteLLMKey } from '../litellm/index.js';
 import { config } from '../common/config.js';
 import {
   createGatewayToken,
@@ -36,10 +36,13 @@ const ensureUserLiteLLMKey = async (user: UserRecord): Promise<UserRecord> => {
 
   const litellmUserId = user.litellm_user_id?.trim() || buildLiteLLMUserId(user.id);
   const litellmUserAlias = user.litellm_user_alias?.trim() || buildLiteLLMUserAlias(user.telegram_user_id, user.telegram_username);
+  const userKeyAlias = user.litellm_key_alias?.trim() || buildUserKeyAlias(user.id);
 
-  await createLiteLLMUser({
+  const created = await createLiteLLMUser({
     userId: litellmUserId,
     userAlias: litellmUserAlias,
+    keyAlias: userKeyAlias,
+    maxBudgetUsd: config.litellm.defaultBudgetUsd ?? 0,
     metadata: {
       source: 'pin-ai-assistant-apis',
       user_id: user.id,
@@ -60,34 +63,24 @@ const ensureUserLiteLLMKey = async (user: UserRecord): Promise<UserRecord> => {
   const hasVirtualKey = Boolean(workingUser.litellm_virtual_key_encrypted?.trim());
   if (hasVirtualKey && workingUser.litellm_key_alias?.trim()) return workingUser;
 
-  const generated = await generateLiteLLMKey({
-    userId: litellmUserId,
-    keyAlias: buildUserKeyAlias(workingUser.id),
-    maxBudgetUsd: config.litellm.defaultBudgetUsd,
-    budgetDuration: config.litellm.defaultBudgetDuration,
-    rpmLimit: config.litellm.defaultRpmLimit,
-    tpmLimit: config.litellm.defaultTpmLimit,
-    models: config.litellm.allowedModels,
-    metadata: {
-      source: 'pin-ai-assistant-apis',
-      owner_scope: 'shared-user-key',
-      owner_user_id: workingUser.id,
-      owner_telegram_user_id: workingUser.telegram_user_id
-    }
-  });
+  if (!created.rawKey) {
+    throw new Error(
+      `LiteLLM user ${litellmUserId} exists but no virtual key was returned. Rotate key in LiteLLM dashboard and re-run /start.`
+    );
+  }
 
-  const encrypted = encryptLiteLLMKey(generated.rawKey);
+  const encrypted = encryptLiteLLMKey(created.rawKey);
   const updated = await updateUser(workingUser.telegram_user_id, {
-    litellm_user_id: generated.userId ?? litellmUserId,
+    litellm_user_id: created.userId ?? litellmUserId,
     litellm_user_alias: litellmUserAlias,
-    litellm_key_alias: generated.keyAlias ?? buildUserKeyAlias(workingUser.id),
+    litellm_key_alias: created.keyAlias ?? userKeyAlias,
     litellm_virtual_key_encrypted: encrypted,
-    litellm_key_last4: keyLast4(generated.rawKey),
+    litellm_key_last4: keyLast4(created.rawKey),
     litellm_spend_usd: 0,
-    litellm_budget_usd: generated.maxBudgetUsd,
-    litellm_budget_duration: generated.budgetDuration ?? config.litellm.defaultBudgetDuration,
-    litellm_rpm_limit: generated.rpmLimit,
-    litellm_tpm_limit: generated.tpmLimit,
+    litellm_budget_usd: created.maxBudgetUsd,
+    litellm_budget_duration: created.budgetDuration ?? config.litellm.defaultBudgetDuration,
+    litellm_rpm_limit: created.rpmLimit,
+    litellm_tpm_limit: created.tpmLimit,
     litellm_last_synced_at: new Date().toISOString()
   });
 

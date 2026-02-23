@@ -5,10 +5,8 @@ import {
 import {
   createPaymentStore,
   type BillingPlan,
-  type CreditMutationResult,
   type PaymentSessionRecord,
   type PaymentStore,
-  type UserCreditWallet,
   type UserIdentity,
   type UserSubscription
 } from './paymentStore.js';
@@ -20,10 +18,8 @@ export const db: PaymentStore = createPaymentStore(pool);
 
 export type {
   BillingPlan,
-  CreditMutationResult,
   PaymentSessionRecord,
   PaymentStore,
-  UserCreditWallet,
   UserIdentity,
   UserSubscription
 };

@@ -1,26 +1,22 @@
 import {
   type BillingPlan,
-  type CreditMutationResult,
   type PaymentSessionRecord,
   type Queryable,
   type StripeEventClaimResult,
-  type UserCreditWallet,
   type UserIdentity,
   type UserSubscription
 } from './paymentStoreCore.js';
 import { createPaymentSessionStore } from './paymentStoreSession.js';
 import { createPlanStore } from './paymentStorePlan.js';
 import { createSubscriptionStore } from './paymentStoreSubscription.js';
-import { createWalletStore } from './paymentStoreWallet.js';
+import { createIdentityStore } from './paymentStoreIdentity.js';
 
 export type {
   BillingPlan,
-  CreditMutationResult,
   PaymentSessionRecord,
   QueryExecutor,
   Queryable,
   StripeEventClaimResult,
-  UserCreditWallet,
   UserIdentity,
   UserSubscription
 } from './paymentStoreCore.js';
@@ -80,37 +76,6 @@ export interface PaymentStore {
     litellm_budget_duration?: string | null;
     litellm_last_synced_at?: string | Date | null;
   }): Promise<UserIdentity>;
-  getWalletByUserId(user_id: number): Promise<UserCreditWallet | null>;
-  upsertWalletPlanContext(data: {
-    telegram_user_id: string;
-    telegram_username?: string | null;
-    plan_id: string;
-    next_monthly_refresh_at: Date;
-  }): Promise<UserCreditWallet>;
-  applyMonthlyCreditsRefresh(data: {
-    telegram_user_id: string;
-    telegram_username?: string | null;
-    plan_id: string;
-    next_monthly_refresh_at: Date;
-    idempotency_key: string;
-    source: string;
-    metadata?: unknown;
-  }): Promise<CreditMutationResult>;
-  listUsersDueDailyCreditRefresh(limit: number, now?: Date): Promise<Array<{ user_id: number }>>;
-  refreshDailyCreditsByUserId(data: {
-    user_id: number;
-    idempotency_key: string;
-    source: string;
-    now?: Date;
-    metadata?: unknown;
-  }): Promise<CreditMutationResult>;
-  applyUsageDebitByUserId(data: {
-    user_id: number;
-    litellm_spend_cents: number;
-    idempotency_key: string;
-    source: string;
-    metadata?: unknown;
-  }): Promise<CreditMutationResult>;
 }
 
 export const createPaymentStore = (pool: Queryable): PaymentStore => {
@@ -118,6 +83,6 @@ export const createPaymentStore = (pool: Queryable): PaymentStore => {
     ...createSubscriptionStore(pool),
     ...createPaymentSessionStore(pool),
     ...createPlanStore(pool),
-    ...createWalletStore(pool)
+    ...createIdentityStore(pool)
   };
 };

@@ -68,9 +68,6 @@ export const userSelectColumns = `
   COALESCE(user_runtime.host_port, -ABS(users.telegram_user_id)) AS container_port,
   COALESCE(user_runtime.status, 'idle') AS container_status,
   users.gateway_token,
-  users.assistant_bot_token,
-  users.assistant_bot_username,
-  users.assistant_webhook_secret,
   users.created_at,
   users.last_active_at
 `;

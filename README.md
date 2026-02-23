@@ -15,7 +15,7 @@ PIN AI Assistant 仓库说明文档。
 ├── apis/                     # 统一后端 API
 │   ├── src/
 │   │   ├── controller/       # HTTP/WS 路由注册
-│   │   └── domain/           # auth, user, claw-assistant, container, payment, meter, gateway
+│   │   └── domain/           # auth, user, claw-assistant, container, payment, gateway
 │   └── db/migrations/        # 数据库迁移 SQL
 ├── apps/pinclaw-bot/         # Telegram 引导 Bot 前端
 │   └── src/
@@ -29,7 +29,7 @@ PIN AI Assistant 仓库说明文档。
 
 - `apis` 监听默认 `:3000`
 - `pinclaw-bot` 监听默认 `:3001`
-- bot 通过 `BACKEND_API_BASE_URL` 调用 `apis`
+- bot 通过 `BACKEND_API_BASE_URL` 调用 `apis`，并基于该地址生成 `/gateway` 打开链接
 - `apis` 通过 `SUPABASE_DB_URL` 连接 Postgres
 - `apis` 通过 `LITELLM_BASE_URL` 调用独立部署的 LiteLLM
 - `apis` 根据 `CONTAINER_RUNTIME` 选择 Docker/Fly 运行 assistant 容器
@@ -66,11 +66,11 @@ PIN AI Assistant 仓库说明文档。
 
 必配：
 - `TELEGRAM_BOT_TOKEN`
-- `BACKEND_API_BASE_URL`（例如 `http://127.0.0.1:3000`）
+- `BACKEND_API_BASE_URL`（例如 `http://127.0.0.1:3000`；`/gateway` 链接也基于此地址生成）
 
 建议：
 - `API_INTERNAL_TOKEN`（若后端启用了 API 内部鉴权，必须与后端一致）
-- `PUBLIC_BASE_URL`（用于 `/gateway` 链接和 webhook 自动推断）
+- `PUBLIC_BASE_URL`（用于 bot webhook URL 自动推断）
 - `TELEGRAM_UPDATE_MODE=auto|webhook|polling`
 
 ### 3) 环境文件加载规则
@@ -93,6 +93,8 @@ PIN AI Assistant 仓库说明文档。
 5. `005_add_missing_litellm_columns.sql`
 6. `006_cleanup_user_runtime_instances.sql`
 7. `007_payment_event_ordering.sql`
+8. `008_remove_wallet_ledger_tables.sql`
+9. `009_drop_user_assistant_bot_columns.sql`
 
 ### Legacy DB（已有 users/assistants 表）
 
@@ -105,6 +107,8 @@ PIN AI Assistant 仓库说明文档。
 5. `004_drop_admin_schema.sql`
 6. `006_cleanup_user_runtime_instances.sql`
 7. `007_payment_event_ordering.sql`
+8. `008_remove_wallet_ledger_tables.sql`
+9. `009_drop_user_assistant_bot_columns.sql`
 
 ## 本地启动（推荐）
 
@@ -156,7 +160,7 @@ npm run litellm:up
 - `apis` 的多数 `/api/*` 业务接口通过 `x-api-key` 做内部鉴权（`API_INTERNAL_TOKEN`）。
 - 若 `apis` 未配置 `API_INTERNAL_TOKEN`，这些接口默认放行（开发模式友好）。
 - 但支付内部接口（`/api/payment/internal/*`）始终要求 `API_INTERNAL_TOKEN`。
-- `/api/payment/internal/credits-maintenance` 额外支持 `Authorization: Bearer <CRON_SECRET>`。
+- `/api/payment/internal/credits-maintenance` 额外支持 `Authorization: Bearer <CRON_SECRET>`，用于按订阅计划重同步 LiteLLM 预算。
 
 ## 主要接口（按模块）
 
@@ -194,18 +198,11 @@ npm run litellm:up
 - `GET /api/payment/internal/subscription`
 - `GET /api/payment/internal/payment-session-validate`
 - `POST /api/payment/internal/credits-maintenance`
+- `GET /api/payment/internal/credits-maintenance`
 - `GET /api/payment/subscribe`
 - `POST /api/payment/create-checkout`
 - `POST /api/payment/cancel-subscription`
 - `POST /api/payment/webhook/stripe`
-
-### Meter
-- `GET /api/meter/budget/:telegram_user_id`
-- `POST /api/meter/budget/:telegram_user_id`
-- `GET /api/meter/credit-status/:telegram_user_id`
-- `POST /api/meter/refresh/daily`
-- `POST /api/meter/refresh/monthly`
-- `POST /api/meter/webhook/litellm-budget-alert`
 
 ## Bot 命令（`apps/pinclaw-bot`）
 

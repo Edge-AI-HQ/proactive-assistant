@@ -4,6 +4,7 @@ import type { Request } from 'express';
 import { DomainError } from '../common/errors.js';
 import { db } from './db.js';
 import { getStripePriceIdForPlanCode } from './planCatalog.js';
+import { syncLiteLLMBudgetFromPlan } from './litellmBudget.js';
 import { readPaymentPublicBaseUrl } from './publicBaseUrl.js';
 import { mapStripeSubscriptionStatus } from './subscriptionSync.js';
 import { parseTelegramUserId, requireStripe } from './stripeClient.js';
@@ -314,20 +315,21 @@ export const createCheckoutSession = async (
 
       const switchedPeriodStart = parseUnixSecondsToDate(switched.current_period_start);
       const switchedPeriodEnd = parseUnixSecondsToDate(switched.current_period_end);
+      const switchedStatus = mapStripeSubscriptionStatus(switched.status);
       await db.updateSubscriptionStatus(
         telegramUserId,
-        mapStripeSubscriptionStatus(switched.status),
+        switchedStatus,
         switchedPeriodStart,
         switchedPeriodEnd,
         Boolean(switched.cancel_at_period_end)
       );
 
-      if (switchedPeriodEnd) {
-        await db.upsertWalletPlanContext({
+      if (switchedStatus === 'active') {
+        await syncLiteLLMBudgetFromPlan({
           telegram_user_id: telegramUserId,
           telegram_username: telegramUsername,
-          plan_id: selectedPlan.plan_code,
-          next_monthly_refresh_at: switchedPeriodEnd
+          plan_code: selectedPlan.plan_code,
+          source: 'checkout_plan_switch'
         });
       }
 
@@ -349,6 +351,12 @@ export const createCheckoutSession = async (
     };
     if (telegramUsername) upsertPayload.telegram_username = telegramUsername;
     await db.upsertUserSubscription(upsertPayload);
+    await syncLiteLLMBudgetFromPlan({
+      telegram_user_id: telegramUserId,
+      telegram_username: telegramUsername,
+      plan_code: selectedPlan.plan_code,
+      source: 'checkout_existing_subscription'
+    });
     await db.markPaymentSessionUsed(token);
     return { url: `${landingBaseUrl}/api/payment/success?mode=already_active` };
   }

@@ -9,8 +9,10 @@ type JsonRecord = Record<string, unknown>;
 interface LiteLLMCreateUserInput {
   userId: string;
   userAlias: string;
+  keyAlias?: string | null;
   maxBudgetUsd?: number | null;
   metadata?: JsonRecord;
+  autoCreateKey?: boolean;
 }
 
 interface LiteLLMUpdateUserInput {
@@ -57,6 +59,17 @@ export interface LiteLLMUserInfo {
   userId: string | null;
   userAlias: string | null;
   spendUsd: number | null;
+  maxBudgetUsd: number | null;
+  budgetDuration: string | null;
+  rpmLimit: number | null;
+  tpmLimit: number | null;
+  raw: unknown;
+}
+
+export interface LiteLLMCreateUserResult {
+  rawKey: string | null;
+  keyAlias: string | null;
+  userId: string | null;
   maxBudgetUsd: number | null;
   budgetDuration: string | null;
   rpmLimit: number | null;
@@ -267,7 +280,29 @@ const shouldFallbackToPost = (error: unknown): boolean => {
   );
 };
 
-export const createLiteLLMUser = async (input: LiteLLMCreateUserInput): Promise<void> => {
+const isAutoCreateKeyRejected = (error: unknown): boolean => {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  const mentionsField = message.includes('auto_create_key') || message.includes('auto create key');
+  if (!mentionsField) return false;
+  return (
+    message.includes('extra fields') ||
+    message.includes('not permitted') ||
+    message.includes('unexpected') ||
+    message.includes('validation') ||
+    message.includes('unknown') ||
+    message.includes('invalid')
+  );
+};
+
+const updateLiteLLMKeyBudget = async (rawKey: string, maxBudgetUsd: number): Promise<void> => {
+  await requestJson('POST', '/key/update', {
+    key: rawKey,
+    max_budget: maxBudgetUsd
+  });
+};
+
+export const createLiteLLMUser = async (input: LiteLLMCreateUserInput): Promise<LiteLLMCreateUserResult> => {
   if (!isNonEmptyString(input.userId)) {
     throw new Error('LiteLLM user_id is required');
   }
@@ -275,10 +310,15 @@ export const createLiteLLMUser = async (input: LiteLLMCreateUserInput): Promise<
     throw new Error('LiteLLM user_alias is required');
   }
 
+  const autoCreateKey = input.autoCreateKey ?? true;
   const body: JsonRecord = {
     user_id: input.userId,
-    user_alias: input.userAlias
+    user_alias: input.userAlias,
+    auto_create_key: autoCreateKey
   };
+  if (isNonEmptyString(input.keyAlias)) {
+    body.key_alias = input.keyAlias.trim();
+  }
 
   const normalizedMaxBudget = normalizeOptionalBudgetUsd(input.maxBudgetUsd);
   if (normalizedMaxBudget !== null) {
@@ -289,11 +329,51 @@ export const createLiteLLMUser = async (input: LiteLLMCreateUserInput): Promise<
   }
 
   try {
-    await requestJson('POST', '/user/new', body);
+    const parsed = await requestJson('POST', '/user/new', body);
+    const records = buildUserInfoRecords(parsed);
+    const payload = maybeNestedRecord(parsed, ['data', 'key_info']) ?? (isRecord(parsed) ? parsed : null);
+    const rawKey = payload ? readString(payload, ['key', 'token', 'virtual_key']) : null;
+    const result: LiteLLMCreateUserResult = {
+      rawKey,
+      keyAlias:
+        (payload ? readString(payload, ['key_alias', 'key_name']) : null) ??
+        readStringFromRecords(records, ['key_alias', 'key_name']),
+      userId: readStringFromRecords(records, ['user_id']) ?? input.userId,
+      maxBudgetUsd: readNumberFromRecords(records, ['max_budget', 'budget']) ?? normalizedMaxBudget,
+      budgetDuration: readStringFromRecords(records, ['budget_duration']),
+      rpmLimit: readNumberFromRecords(records, ['rpm_limit']),
+      tpmLimit: readNumberFromRecords(records, ['tpm_limit']),
+      raw: parsed
+    };
+
+    // LiteLLM /user/new applies max_budget to user profile, but auto-created key can still be unlimited.
+    // Force-align key max_budget so dashboard/API show the expected per-key limit.
+    if (rawKey && normalizedMaxBudget !== null) {
+      await updateLiteLLMKeyBudget(rawKey, normalizedMaxBudget);
+      result.maxBudgetUsd = normalizedMaxBudget;
+    }
+
+    return result;
   } catch (error: unknown) {
     if (!(error instanceof Error)) throw error;
     const lower = error.message.toLowerCase();
-    if (lower.includes('already') || lower.includes('exists') || lower.includes('duplicate')) return;
+    if (lower.includes('already') || lower.includes('exists') || lower.includes('duplicate')) {
+      return {
+        rawKey: null,
+        keyAlias: null,
+        userId: input.userId,
+        maxBudgetUsd: normalizedMaxBudget,
+        budgetDuration: null,
+        rpmLimit: null,
+        tpmLimit: null,
+        raw: null
+      };
+    }
+    if (!autoCreateKey && isAutoCreateKeyRejected(error)) {
+      throw new Error(
+        'LiteLLM /user/new rejected auto_create_key=false. Upgrade LiteLLM to keep one-key-per-user semantics.'
+      );
+    }
     throw error;
   }
 };

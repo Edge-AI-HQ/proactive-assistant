@@ -1,0 +1,132 @@
+import { createLiteLLMUser, isLiteLLMClientEnabled, updateLiteLLMUser } from '../litellm/client.js';
+import { db } from './db.js';
+
+type JsonRecord = Record<string, unknown>;
+
+const buildDefaultLiteLLMUserId = (userId: number): string => String(Math.max(0, Math.trunc(userId)));
+
+const buildDefaultLiteLLMAlias = (telegramUserId: string, telegramUsername: string | null): string => {
+  const username = (telegramUsername || '').trim();
+  return username ? `telegram:${telegramUserId}:@${username}` : `telegram:${telegramUserId}`;
+};
+
+const creditsToUsd = (credits: number): number => {
+  if (!Number.isFinite(credits)) return 0;
+  return Math.max(0, Number((credits / 100).toFixed(6)));
+};
+
+const planBudgetUsd = (dailyRefreshCredits: number, monthlyRefreshCredits: number): number => {
+  const daily = Number.isFinite(dailyRefreshCredits) ? Math.max(0, Math.trunc(dailyRefreshCredits)) : 0;
+  const monthly = Number.isFinite(monthlyRefreshCredits) ? Math.max(0, Math.trunc(monthlyRefreshCredits)) : 0;
+  return creditsToUsd(daily + monthly);
+};
+
+const normalizeBudgetUsd = (value: number): number => {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Number(value.toFixed(6)));
+};
+
+interface BudgetSyncInput {
+  telegram_user_id: string;
+  telegram_username?: string | null | undefined;
+  source: string;
+}
+
+type LiteLLMResolvedIdentity = NonNullable<Awaited<ReturnType<typeof db.getUserIdentityByTelegramId>>>;
+
+const resolveLiteLLMIdentity = async (
+  input: BudgetSyncInput
+): Promise<{ identity: LiteLLMResolvedIdentity; litellmUserId: string; litellmUserAlias: string } | null> => {
+  const identity = await db.getUserIdentityByTelegramId(input.telegram_user_id);
+  if (!identity) {
+    console.warn('[payment] skip litellm budget sync: user identity not found', {
+      telegramUserId: input.telegram_user_id,
+      source: input.source
+    });
+    return null;
+  }
+
+  const litellmUserId = (identity.litellm_user_id || '').trim() || buildDefaultLiteLLMUserId(identity.id);
+  const litellmUserAlias =
+    (identity.litellm_user_alias || '').trim() ||
+    buildDefaultLiteLLMAlias(input.telegram_user_id, input.telegram_username ?? identity.telegram_username);
+
+  return {
+    identity,
+    litellmUserId,
+    litellmUserAlias
+  };
+};
+
+export const syncLiteLLMBudgetAbsolute = async (
+  input: BudgetSyncInput & {
+    budget_usd: number;
+    metadata?: JsonRecord;
+  }
+): Promise<void> => {
+  if (!isLiteLLMClientEnabled()) return;
+
+  const resolved = await resolveLiteLLMIdentity(input);
+  if (!resolved) return;
+
+  const { identity, litellmUserId, litellmUserAlias } = resolved;
+  const targetBudgetUsd = normalizeBudgetUsd(input.budget_usd);
+
+  await createLiteLLMUser({
+    userId: litellmUserId,
+    userAlias: litellmUserAlias,
+    maxBudgetUsd: targetBudgetUsd,
+    autoCreateKey: false,
+    metadata: {
+      source: input.source,
+      telegram_user_id: input.telegram_user_id,
+      user_id: identity.id,
+      ...(input.metadata ?? {})
+    }
+  });
+
+  await updateLiteLLMUser({
+    userId: litellmUserId,
+    userAlias: litellmUserAlias,
+    maxBudgetUsd: targetBudgetUsd
+  });
+
+  await db.upsertUserLiteLLMIdentity({
+    telegram_user_id: input.telegram_user_id,
+    telegram_username: input.telegram_username ?? identity.telegram_username,
+    litellm_user_id: litellmUserId,
+    litellm_user_alias: litellmUserAlias,
+    litellm_budget_usd: targetBudgetUsd,
+    litellm_last_synced_at: new Date().toISOString()
+  });
+};
+
+export const syncLiteLLMBudgetFromPlan = async (input: {
+  telegram_user_id: string;
+  telegram_username?: string | null;
+  plan_code: string;
+  source: string;
+}): Promise<void> => {
+  if (!isLiteLLMClientEnabled()) return;
+
+  const plan = await db.getPlanByCode(input.plan_code);
+  if (!plan) {
+    console.warn('[payment] skip litellm budget sync: plan not found', {
+      telegramUserId: input.telegram_user_id,
+      planCode: input.plan_code,
+      source: input.source
+    });
+    return;
+  }
+
+  const targetBudgetUsd = planBudgetUsd(plan.daily_refresh_credits, plan.monthly_refresh_credits);
+  await syncLiteLLMBudgetAbsolute({
+    telegram_user_id: input.telegram_user_id,
+    telegram_username: input.telegram_username,
+    source: input.source,
+    budget_usd: targetBudgetUsd,
+    metadata: {
+      plan_code: input.plan_code
+    }
+  });
+};

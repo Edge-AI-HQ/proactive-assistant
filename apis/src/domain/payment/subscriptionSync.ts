@@ -1,6 +1,6 @@
 import Stripe from 'stripe';
 import { db, type UserSubscription } from './db.js';
-import { reconcileWalletUsageFromLiteLLM, syncLiteLLMBudgetForWallet } from './litellmBillingSync.js';
+import { syncLiteLLMBudgetAbsolute, syncLiteLLMBudgetFromPlan } from './litellmBudget.js';
 import { resolvePlanCodeFromStripePriceId } from './planCatalog.js';
 
 export const mapStripeSubscriptionStatus = (
@@ -40,27 +40,6 @@ const readInvoicePriceId = (invoice: Stripe.Invoice): string | null => {
   for (const line of invoice.lines.data) {
     if (line.price?.id) return line.price.id;
   }
-  return null;
-};
-
-const readInvoicePeriodEnd = (invoice: Stripe.Invoice): Date | null => {
-  let latestEnd = 0;
-  for (const line of invoice.lines.data) {
-    const end = line.period?.end;
-    if (typeof end === 'number' && Number.isFinite(end) && end > latestEnd) {
-      latestEnd = end;
-    }
-  }
-
-  if (latestEnd > 0) {
-    return new Date(latestEnd * 1000);
-  }
-
-  const fallback = invoice.period_end;
-  if (typeof fallback === 'number' && Number.isFinite(fallback)) {
-    return new Date(fallback * 1000);
-  }
-
   return null;
 };
 
@@ -204,27 +183,36 @@ export async function syncSubscriptionFromStripe(
     return;
   }
 
-  if (planCode && periodEnd) {
-    const walletPlanPayload: {
-      telegram_user_id: string;
-      plan_id: string;
-      next_monthly_refresh_at: Date;
-      telegram_username?: string | null;
-    } = {
+  const telegramUsername = payload.telegram_username ?? null;
+  if (status === 'active' && planCode) {
+    await syncLiteLLMBudgetFromPlan({
       telegram_user_id,
-      plan_id: planCode,
-      next_monthly_refresh_at: periodEnd
-    };
-    const username = subscription.metadata?.telegram_username;
-    if (typeof username === 'string') walletPlanPayload.telegram_username = username.trim() || null;
-    await db.upsertWalletPlanContext(walletPlanPayload);
-  } else if (planCode && !periodEnd) {
-    console.warn('Skipping wallet plan context update due to missing period end', {
-      subscriptionId: subscription.id,
-      telegramUserId: telegram_user_id,
-      status: subscription.status
+      telegram_username: telegramUsername,
+      plan_code: planCode,
+      source: 'stripe_subscription_sync'
     });
+    return;
   }
+
+  if (status !== 'active') {
+    await syncLiteLLMBudgetAbsolute({
+      telegram_user_id,
+      telegram_username: telegramUsername,
+      budget_usd: 0,
+      source: 'stripe_subscription_sync',
+      metadata: {
+        subscription_status: status,
+        plan_code: planCode
+      }
+    });
+    return;
+  }
+
+  console.warn('Skipping LiteLLM budget sync due to missing active plan code', {
+    subscriptionId: subscription.id,
+    telegramUserId: telegram_user_id,
+    status: subscription.status
+  });
 }
 
 const resolveSubscriptionFromInvoice = async (invoice: Stripe.Invoice): Promise<UserSubscription | null> => {
@@ -266,34 +254,10 @@ export async function handleInvoicePaid(eventId: string, invoice: Stripe.Invoice
     return;
   }
 
-  const periodEnd = readInvoicePeriodEnd(invoice) ?? (subscription.current_period_end ? new Date(subscription.current_period_end) : null);
-  if (!periodEnd || Number.isNaN(periodEnd.getTime())) {
-    console.warn('invoice.paid missing period end', invoice.id || eventId);
-    return;
-  }
-
-  await reconcileWalletUsageFromLiteLLM({
-    user_id: subscription.user_id,
-    telegram_user_id: subscription.telegram_user_id,
-    source: 'stripe_webhook',
-    marker: invoice.id || eventId
-  });
-
-  const refresh = await db.applyMonthlyCreditsRefresh({
+  await syncLiteLLMBudgetFromPlan({
     telegram_user_id: subscription.telegram_user_id,
     telegram_username: subscription.telegram_username,
-    plan_id: planCode,
-    next_monthly_refresh_at: periodEnd,
-    idempotency_key: `invoice_paid:${invoice.id || eventId}`,
-    source: 'stripe_webhook',
-    metadata: {
-      stripe_event_id: eventId,
-      stripe_invoice_id: invoice.id || null,
-      plan_code: planCode
-    }
+    plan_code: planCode,
+    source: 'stripe_invoice_paid'
   });
-
-  if (refresh.wallet) {
-    await syncLiteLLMBudgetForWallet(refresh.wallet);
-  }
 }
