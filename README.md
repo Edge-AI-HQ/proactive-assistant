@@ -46,7 +46,6 @@ PIN AI Assistant 仓库说明文档。
   - `LITELLM_BASE_URL`
   - `LITELLM_CONTAINER_BASE_URL`
   - `LITELLM_MASTER_KEY`
-  - `LITELLM_KEY_ENCRYPTION_SECRET`
 
 常用但按功能选配：
 - `OPENCLAW_API_KEY`
@@ -95,6 +94,8 @@ PIN AI Assistant 仓库说明文档。
 7. `007_payment_event_ordering.sql`
 8. `008_remove_wallet_ledger_tables.sql`
 9. `009_drop_user_assistant_bot_columns.sql`
+10. `010_remove_litellm_key_encryption.sql`
+11. `011_rename_litellm_virtual_key_column.sql`
 
 ### Legacy DB（已有 users/assistants 表）
 
@@ -109,6 +110,8 @@ PIN AI Assistant 仓库说明文档。
 7. `007_payment_event_ordering.sql`
 8. `008_remove_wallet_ledger_tables.sql`
 9. `009_drop_user_assistant_bot_columns.sql`
+10. `010_remove_litellm_key_encryption.sql`
+11. `011_rename_litellm_virtual_key_column.sql`
 
 ## 本地启动（推荐）
 

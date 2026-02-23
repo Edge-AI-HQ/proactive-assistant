@@ -21,8 +21,8 @@ export const getLiteLLMUsageOverview = async (): Promise<LiteLLMUsageOverviewRec
         )::int AS assistants_over_budget,
         COALESCE(SUM(COALESCE(assistants.litellm_spend_usd, 0)), 0) AS total_spend_usd
       FROM assistants
-      WHERE assistants.litellm_virtual_key_encrypted IS NOT NULL
-        AND assistants.litellm_virtual_key_encrypted != ''
+      WHERE assistants.litellm_virtual_key IS NOT NULL
+        AND assistants.litellm_virtual_key != ''
     `
   );
 

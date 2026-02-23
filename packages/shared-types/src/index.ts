@@ -5,7 +5,7 @@ export interface UserRecord {
   litellm_user_id: string | null;
   litellm_user_alias: string | null;
   litellm_key_alias: string | null;
-  litellm_virtual_key_encrypted: string | null;
+  litellm_virtual_key: string | null;
   litellm_key_last4: string | null;
   litellm_spend_usd: number;
   litellm_budget_usd: number | null;
@@ -29,7 +29,7 @@ export interface AssistantRecord {
   assistant_bot_username: string;
   litellm_user_id: string | null;
   litellm_key_alias: string | null;
-  litellm_virtual_key_encrypted: string | null;
+  litellm_virtual_key: string | null;
   litellm_key_last4: string | null;
   litellm_spend_usd: number;
   litellm_budget_usd: number | null;
@@ -65,7 +65,7 @@ export interface CreateUserInput {
   litellm_user_id?: string | null;
   litellm_user_alias?: string | null;
   litellm_key_alias?: string | null;
-  litellm_virtual_key_encrypted?: string | null;
+  litellm_virtual_key?: string | null;
   litellm_key_last4?: string | null;
   litellm_spend_usd?: number;
   litellm_budget_usd?: number | null;
@@ -86,7 +86,7 @@ export interface CreateAssistantInput {
   assistant_bot_username: string;
   litellm_user_id?: string | null;
   litellm_key_alias?: string | null;
-  litellm_virtual_key_encrypted?: string | null;
+  litellm_virtual_key?: string | null;
   litellm_key_last4?: string | null;
   litellm_spend_usd?: number;
   litellm_budget_usd?: number | null;
@@ -107,7 +107,7 @@ export type UserMutableFields = Partial<
     | 'litellm_user_id'
     | 'litellm_user_alias'
     | 'litellm_key_alias'
-    | 'litellm_virtual_key_encrypted'
+    | 'litellm_virtual_key'
     | 'litellm_key_last4'
     | 'litellm_spend_usd'
     | 'litellm_budget_usd'
@@ -129,7 +129,7 @@ export type AssistantMutableFields = Partial<
     | 'assistant_bot_username'
     | 'litellm_user_id'
     | 'litellm_key_alias'
-    | 'litellm_virtual_key_encrypted'
+    | 'litellm_virtual_key'
     | 'litellm_key_last4'
     | 'litellm_spend_usd'
     | 'litellm_budget_usd'
@@ -162,7 +162,6 @@ export interface LiteLLMConfig {
   baseUrl: string;
   containerBaseUrl: string;
   masterKey: string;
-  keyEncryptionSecret: string;
   requestTimeoutMs: number;
   syncIntervalMs: number;
   keyAliasPrefix: string;

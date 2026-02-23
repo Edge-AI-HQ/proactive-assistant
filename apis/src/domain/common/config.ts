@@ -114,7 +114,6 @@ export const config: Config = {
     baseUrl: liteLlmBaseUrl,
     containerBaseUrl: liteLlmContainerBaseUrl,
     masterKey: toTrimmed(process.env.LITELLM_MASTER_KEY),
-    keyEncryptionSecret: toTrimmed(process.env.LITELLM_KEY_ENCRYPTION_SECRET),
     requestTimeoutMs: toInt(process.env.LITELLM_REQUEST_TIMEOUT_MS, 15000),
     syncIntervalMs: toInt(process.env.LITELLM_SYNC_INTERVAL_MS, 300000),
     keyAliasPrefix: toTrimmed(process.env.LITELLM_KEY_ALIAS_PREFIX, 'claw-assistant-'),
@@ -175,10 +174,7 @@ export const requiredSecrets: RequiredSecret[] = (() => {
   ];
 
   if (config.litellm.enabled) {
-    secrets.push(
-      ['LITELLM_MASTER_KEY', config.litellm.masterKey],
-      ['LITELLM_KEY_ENCRYPTION_SECRET', config.litellm.keyEncryptionSecret]
-    );
+    secrets.push(['LITELLM_MASTER_KEY', config.litellm.masterKey]);
   }
 
   if (config.payment.enabled) {

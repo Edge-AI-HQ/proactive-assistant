@@ -15,7 +15,7 @@ export type AssistantContainerRuntimeRef = Pick<
   | 'assistant_bot_token'
   | 'litellm_user_id'
   | 'litellm_key_alias'
-  | 'litellm_virtual_key_encrypted'
+  | 'litellm_virtual_key'
   | 'litellm_key_last4'
   | 'litellm_spend_usd'
   | 'litellm_budget_usd'

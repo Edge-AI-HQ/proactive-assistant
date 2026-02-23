@@ -1,7 +1,6 @@
 import { getLiteLLMRuntime } from './runtime.js';
 import type { LiteLLMAssistantRecord, LiteLLMUserRecord } from './types.js';
 import { createLiteLLMUser } from './client.js';
-import { decryptLiteLLMKey } from './crypto.js';
 
 const config = new Proxy({} as { litellm: ReturnType<typeof getLiteLLMRuntime>['config']['litellm'] }, {
   get: (_target, prop) => getLiteLLMRuntime().config[prop as keyof ReturnType<typeof getLiteLLMRuntime>['config']]
@@ -23,7 +22,6 @@ const assertLiteLLMRuntimeConfigured = (): void => {
   const missing: string[] = [];
   if (!config.litellm.baseUrl.trim()) missing.push('LITELLM_BASE_URL');
   if (!config.litellm.masterKey.trim()) missing.push('LITELLM_MASTER_KEY');
-  if (!config.litellm.keyEncryptionSecret.trim()) missing.push('LITELLM_KEY_ENCRYPTION_SECRET');
 
   if (missing.length) {
     throw new Error(`LiteLLM is enabled but missing required config: ${missing.join(', ')}`);
@@ -37,40 +35,40 @@ const buildLiteLLMUserAlias = (telegramUserId: number, telegramUsername: string 
   return `telegram:${telegramUserId}`;
 };
 
-type AssistantLiteLLMRef = Pick<LiteLLMAssistantRecord, 'assistant_bot_id' | 'litellm_virtual_key_encrypted'>;
-type UserLiteLLMRef = Pick<LiteLLMUserRecord, 'telegram_user_id' | 'litellm_virtual_key_encrypted'>;
+type AssistantLiteLLMRef = Pick<LiteLLMAssistantRecord, 'assistant_bot_id' | 'litellm_virtual_key'>;
+type UserLiteLLMRef = Pick<LiteLLMUserRecord, 'telegram_user_id' | 'litellm_virtual_key'>;
 
 interface SharedLiteLLMKeyState {
   litellm_user_id: string;
   litellm_key_alias: string;
-  litellm_virtual_key_encrypted: string;
+  litellm_virtual_key: string;
   litellm_key_last4: string | null;
 }
 
 const toSharedKeyStateFromUser = (owner: LiteLLMUserRecord): SharedLiteLLMKeyState | null => {
-  const encrypted = owner.litellm_virtual_key_encrypted?.trim();
+  const key = owner.litellm_virtual_key?.trim();
   const userId = owner.litellm_user_id?.trim();
   const alias = owner.litellm_key_alias?.trim();
-  if (!encrypted || !userId || !alias) return null;
+  if (!key || !userId || !alias) return null;
 
   return {
     litellm_user_id: userId,
     litellm_key_alias: alias,
-    litellm_virtual_key_encrypted: encrypted,
+    litellm_virtual_key: key,
     litellm_key_last4: owner.litellm_key_last4
   };
 };
 
 const toSharedKeyStateFromAssistant = (assistant: LiteLLMAssistantRecord): SharedLiteLLMKeyState | null => {
-  const encrypted = assistant.litellm_virtual_key_encrypted?.trim();
+  const key = assistant.litellm_virtual_key?.trim();
   const userId = assistant.litellm_user_id?.trim();
   const alias = assistant.litellm_key_alias?.trim();
-  if (!encrypted || !userId || !alias) return null;
+  if (!key || !userId || !alias) return null;
 
   return {
     litellm_user_id: userId,
     litellm_key_alias: alias,
-    litellm_virtual_key_encrypted: encrypted,
+    litellm_virtual_key: key,
     litellm_key_last4: assistant.litellm_key_last4
   };
 };
@@ -79,7 +77,7 @@ const sameSharedKey = (assistant: LiteLLMAssistantRecord, shared: SharedLiteLLMK
   return (
     assistant.litellm_user_id === shared.litellm_user_id &&
     assistant.litellm_key_alias === shared.litellm_key_alias &&
-    (assistant.litellm_virtual_key_encrypted || '').trim() === shared.litellm_virtual_key_encrypted &&
+    (assistant.litellm_virtual_key || '').trim() === shared.litellm_virtual_key &&
     assistant.litellm_key_last4 === shared.litellm_key_last4
   );
 };
@@ -149,7 +147,7 @@ const ensureLiteLLMKeyForAssistantInternal = async (
 
   if (!shared) {
     const siblings = await listAssistantsByOwnerTelegramId(ownerTelegramUserId);
-    const siblingWithKey = siblings.find((item) => item.id !== assistant.id && item.litellm_virtual_key_encrypted?.trim());
+    const siblingWithKey = siblings.find((item) => item.id !== assistant.id && item.litellm_virtual_key?.trim());
     if (siblingWithKey) {
       shared = toSharedKeyStateFromAssistant(siblingWithKey);
     }
@@ -165,7 +163,7 @@ const ensureLiteLLMKeyForAssistantInternal = async (
     litellm_user_id: shared.litellm_user_id || litellmUserId,
     litellm_user_alias: litellmUserAlias,
     litellm_key_alias: shared.litellm_key_alias,
-    litellm_virtual_key_encrypted: shared.litellm_virtual_key_encrypted,
+    litellm_virtual_key: shared.litellm_virtual_key,
     litellm_key_last4: shared.litellm_key_last4
   });
 
@@ -176,7 +174,7 @@ const ensureLiteLLMKeyForAssistantInternal = async (
   const updated = await updateAssistant(assistant.id, {
     litellm_user_id: shared.litellm_user_id || litellmUserId,
     litellm_key_alias: shared.litellm_key_alias,
-    litellm_virtual_key_encrypted: shared.litellm_virtual_key_encrypted,
+    litellm_virtual_key: shared.litellm_virtual_key,
     litellm_key_last4: shared.litellm_key_last4
   });
 
@@ -199,17 +197,17 @@ export const ensureLiteLLMKeyForAssistant = async (
 export const readAssistantLiteLLMVirtualKey = (assistant: AssistantLiteLLMRef): string | null => {
   if (!isLiteLLMEnabled()) return null;
   assertLiteLLMRuntimeConfigured();
-  const encrypted = assistant.litellm_virtual_key_encrypted?.trim();
-  if (!encrypted) return null;
-  return decryptLiteLLMKey(encrypted);
+  const key = assistant.litellm_virtual_key?.trim();
+  if (!key) return null;
+  return key;
 };
 
 export const readUserLiteLLMVirtualKey = (user: UserLiteLLMRef): string | null => {
   if (!isLiteLLMEnabled()) return null;
   assertLiteLLMRuntimeConfigured();
-  const encrypted = user.litellm_virtual_key_encrypted?.trim();
-  if (!encrypted) return null;
-  return decryptLiteLLMKey(encrypted);
+  const key = user.litellm_virtual_key?.trim();
+  if (!key) return null;
+  return key;
 };
 
 export const resolveAssistantLiteLLMEnv = (assistant: AssistantLiteLLMRef): Record<string, string> | null => {

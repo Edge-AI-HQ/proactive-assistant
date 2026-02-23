@@ -14,7 +14,6 @@ export {
   isLiteLLMClientEnabled,
   updateLiteLLMUser
 } from './client.js';
-export { decryptLiteLLMKey, encryptLiteLLMKey } from './crypto.js';
 export type {
   LiteLLMAssistantRecord,
   LiteLLMConfig,

@@ -22,7 +22,7 @@ const assistantDataColumns = [
   'assistant_bot_username',
   'litellm_user_id',
   'litellm_key_alias',
-  'litellm_virtual_key_encrypted',
+  'litellm_virtual_key',
   'litellm_key_last4',
   'litellm_spend_usd',
   'litellm_budget_usd',
@@ -105,8 +105,8 @@ export const listAssistantsWithLiteLLMKey = async (): Promise<AssistantRecord[]>
     `
       SELECT ${assistantSelectColumns}
       ${assistantFromClause}
-      WHERE assistants.litellm_virtual_key_encrypted IS NOT NULL
-        AND assistants.litellm_virtual_key_encrypted != ''
+      WHERE assistants.litellm_virtual_key IS NOT NULL
+        AND assistants.litellm_virtual_key != ''
       ORDER BY assistants.updated_at DESC, assistants.id DESC
     `
   );
@@ -145,7 +145,7 @@ export const createAssistant = async (assistant: CreateAssistantInput): Promise<
           assistant_bot_username,
           litellm_user_id,
           litellm_key_alias,
-          litellm_virtual_key_encrypted,
+          litellm_virtual_key,
           litellm_key_last4,
           litellm_spend_usd,
           litellm_budget_usd,
@@ -169,7 +169,7 @@ export const createAssistant = async (assistant: CreateAssistantInput): Promise<
         assistant.assistant_bot_username,
         assistant.litellm_user_id ?? null,
         assistant.litellm_key_alias ?? null,
-        assistant.litellm_virtual_key_encrypted ?? null,
+        assistant.litellm_virtual_key ?? null,
         assistant.litellm_key_last4 ?? null,
         assistant.litellm_spend_usd ?? 0,
         assistant.litellm_budget_usd ?? null,

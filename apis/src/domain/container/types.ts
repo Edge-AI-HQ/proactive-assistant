@@ -28,11 +28,11 @@ export interface ContainerStateStore {
 }
 
 export type ReadAssistantLiteLLMVirtualKey = (
-  assistant: Pick<AssistantRecord, 'assistant_bot_id' | 'litellm_virtual_key_encrypted'>
+  assistant: Pick<AssistantRecord, 'assistant_bot_id' | 'litellm_virtual_key'>
 ) => string | null;
 
 export type ReadUserLiteLLMVirtualKey = (
-  user: Pick<UserRecord, 'telegram_user_id' | 'litellm_virtual_key_encrypted'>
+  user: Pick<UserRecord, 'telegram_user_id' | 'litellm_virtual_key'>
 ) => string | null;
 
 export interface ContainerManagerRuntime {

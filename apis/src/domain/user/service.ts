@@ -1,4 +1,4 @@
-import { createLiteLLMUser, encryptLiteLLMKey } from '../litellm/index.js';
+import { createLiteLLMUser, generateLiteLLMKey } from '../litellm/index.js';
 import { config } from '../common/config.js';
 import {
   createGatewayToken,
@@ -24,6 +24,7 @@ const buildLiteLLMUserAlias = (telegramUserId: number, telegramUsername: string 
 };
 
 const buildUserKeyAlias = (userId: number): string => `claw-user-${userId}`;
+const buildFallbackUserKeyAlias = (userId: number): string => `claw-user-${userId}-${Date.now().toString(36)}`;
 
 const keyLast4 = (value: string): string => {
   const raw = value.trim();
@@ -60,27 +61,54 @@ const ensureUserLiteLLMKey = async (user: UserRecord): Promise<UserRecord> => {
       })) ?? workingUser;
   }
 
-  const hasVirtualKey = Boolean(workingUser.litellm_virtual_key_encrypted?.trim());
+  const hasVirtualKey = Boolean(workingUser.litellm_virtual_key?.trim());
   if (hasVirtualKey && workingUser.litellm_key_alias?.trim()) return workingUser;
 
-  if (!created.rawKey) {
-    throw new Error(
-      `LiteLLM user ${litellmUserId} exists but no virtual key was returned. Rotate key in LiteLLM dashboard and re-run /start.`
-    );
+  let rawKey = created.rawKey;
+  let resolvedKeyAlias = created.keyAlias;
+  let resolvedUserId = created.userId;
+  let resolvedMaxBudgetUsd = created.maxBudgetUsd;
+  let resolvedBudgetDuration = created.budgetDuration;
+  let resolvedRpmLimit = created.rpmLimit;
+  let resolvedTpmLimit = created.tpmLimit;
+
+  if (!rawKey) {
+    const generated = await generateLiteLLMKey({
+      userId: litellmUserId,
+      keyAlias: buildFallbackUserKeyAlias(user.id),
+      maxBudgetUsd: 0,
+      budgetDuration: config.litellm.defaultBudgetDuration,
+      rpmLimit: config.litellm.defaultRpmLimit,
+      tpmLimit: config.litellm.defaultTpmLimit,
+      models: config.litellm.allowedModels,
+      metadata: {
+        source: 'pin-ai-assistant-apis',
+        user_id: user.id,
+        telegram_user_id: user.telegram_user_id,
+        telegram_username: user.telegram_username || null,
+        reason: 'existing-user-generate-key'
+      }
+    });
+    rawKey = generated.rawKey;
+    resolvedKeyAlias = generated.keyAlias;
+    resolvedUserId = generated.userId;
+    resolvedMaxBudgetUsd = generated.maxBudgetUsd;
+    resolvedBudgetDuration = generated.budgetDuration;
+    resolvedRpmLimit = generated.rpmLimit;
+    resolvedTpmLimit = generated.tpmLimit;
   }
 
-  const encrypted = encryptLiteLLMKey(created.rawKey);
   const updated = await updateUser(workingUser.telegram_user_id, {
-    litellm_user_id: created.userId ?? litellmUserId,
+    litellm_user_id: resolvedUserId ?? litellmUserId,
     litellm_user_alias: litellmUserAlias,
-    litellm_key_alias: created.keyAlias ?? userKeyAlias,
-    litellm_virtual_key_encrypted: encrypted,
-    litellm_key_last4: keyLast4(created.rawKey),
+    litellm_key_alias: resolvedKeyAlias ?? userKeyAlias,
+    litellm_virtual_key: rawKey,
+    litellm_key_last4: keyLast4(rawKey),
     litellm_spend_usd: 0,
-    litellm_budget_usd: created.maxBudgetUsd,
-    litellm_budget_duration: created.budgetDuration ?? config.litellm.defaultBudgetDuration,
-    litellm_rpm_limit: created.rpmLimit,
-    litellm_tpm_limit: created.tpmLimit,
+    litellm_budget_usd: resolvedMaxBudgetUsd,
+    litellm_budget_duration: resolvedBudgetDuration ?? config.litellm.defaultBudgetDuration,
+    litellm_rpm_limit: resolvedRpmLimit,
+    litellm_tpm_limit: resolvedTpmLimit,
     litellm_last_synced_at: new Date().toISOString()
   });
 
