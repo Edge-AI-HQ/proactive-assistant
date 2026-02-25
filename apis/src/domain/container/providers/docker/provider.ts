@@ -1,36 +1,38 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import net from 'node:net';
-import Docker from 'dockerode';
-import type Dockerode from 'dockerode';
-import { getContainerManagerRuntime } from '../../runtime.js';
+import fs from "node:fs";
+import path from "node:path";
+import net from "node:net";
+import Docker from "dockerode";
+import type Dockerode from "dockerode";
+import { getContainerManagerRuntime } from "../../runtime.js";
 import type {
   AssistantRecord,
   ContainerManagerConfig,
-  ReadAssistantLiteLLMVirtualKey
-} from '../../types.js';
+  ReadAssistantLiteLLMVirtualKey,
+} from "../../types.js";
 import type {
   AssistantContainerDestroyRef,
   AssistantContainerGatewayRef,
   AssistantContainerRuntimeRef,
   ContainerProvider,
-  GatewayTarget
-} from '../../contracts.js';
-import { containerNameForAssistant } from '../../naming.js';
-import { buildAssistantOpenclawConfig } from '../shared/openclaw_config.js';
-import { resolveAssistantLiteLLMApiKey as resolveAssistantLiteLLMApiKeyShared } from '../shared/assistant_litellm_key.js';
-import { DOCKER_FORBIDDEN_SECRET_ENV_KEYS } from '../shared/secret_env.js';
+  GatewayTarget,
+} from "../../contracts.js";
+import { containerNameForAssistant } from "../../naming.js";
+import { buildAssistantOpenclawConfig } from "../shared/openclaw_config.js";
+import { resolveAssistantLiteLLMApiKey as resolveAssistantLiteLLMApiKeyShared } from "../shared/assistant_litellm_key.js";
+import { DOCKER_FORBIDDEN_SECRET_ENV_KEYS } from "../shared/secret_env.js";
 
 const docker = new Docker();
 
 const config = new Proxy({} as ContainerManagerConfig, {
-  get: (_target, prop) => getContainerManagerRuntime().config[prop as keyof ContainerManagerConfig]
+  get: (_target, prop) =>
+    getContainerManagerRuntime().config[prop as keyof ContainerManagerConfig],
 });
 
 const updateAssistant = (id: number, fields: Partial<AssistantRecord>) =>
   getContainerManagerRuntime().store.updateAssistant(id, fields);
-const readAssistantLiteLLMVirtualKey: ReadAssistantLiteLLMVirtualKey = (assistant) =>
-  getContainerManagerRuntime().readAssistantLiteLLMVirtualKey(assistant);
+const readAssistantLiteLLMVirtualKey: ReadAssistantLiteLLMVirtualKey = (
+  assistant,
+) => getContainerManagerRuntime().readAssistantLiteLLMVirtualKey(assistant);
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -50,11 +52,11 @@ interface AssistantContainerDirs {
 }
 
 const isRecord = (value: unknown): value is UnknownRecord => {
-  return typeof value === 'object' && value !== null;
+  return typeof value === "object" && value !== null;
 };
 
 const isStatusCodeError = (value: unknown): value is DockerStatusCodeError => {
-  return isRecord(value) && typeof value.statusCode === 'number';
+  return isRecord(value) && typeof value.statusCode === "number";
 };
 
 const ensureDir = (dirPath: string): void => {
@@ -63,8 +65,14 @@ const ensureDir = (dirPath: string): void => {
   }
 };
 
-const resolveAssistantLiteLLMApiKey = (assistant: AssistantContainerRuntimeRef): string | null =>
-  resolveAssistantLiteLLMApiKeyShared(assistant, config.litellm.enabled, readAssistantLiteLLMVirtualKey);
+const resolveAssistantLiteLLMApiKey = (
+  assistant: AssistantContainerRuntimeRef,
+): string | null =>
+  resolveAssistantLiteLLMApiKeyShared(
+    assistant,
+    config.litellm.enabled,
+    readAssistantLiteLLMVirtualKey,
+  );
 
 const hasEnvKey = (envVars: string[] | undefined, key: string): boolean => {
   return findEnvValue(envVars, key) !== null;
@@ -73,7 +81,7 @@ const hasEnvKey = (envVars: string[] | undefined, key: string): boolean => {
 const mergeAssistantOpenclawConfig = (
   existingParsed: UnknownRecord,
   desired: UnknownRecord,
-  assistantBotToken: string
+  assistantBotToken: string,
 ): UnknownRecord => {
   const next: UnknownRecord = { ...existingParsed };
 
@@ -83,14 +91,14 @@ const mergeAssistantOpenclawConfig = (
   const desiredMessages = isRecord(desired.messages) ? desired.messages : {};
   next.messages = {
     ...existingMessages,
-    tts: desiredMessages.tts
+    tts: desiredMessages.tts,
   };
 
   const desiredTalk = isRecord(desired.talk) ? desired.talk : null;
   if (desiredTalk) {
     const existingTalk = isRecord(next.talk) ? next.talk : {};
     const mergedTalk: UnknownRecord = { ...existingTalk, ...desiredTalk };
-    if (Object.hasOwn(mergedTalk, 'baseUrl')) {
+    if (Object.hasOwn(mergedTalk, "baseUrl")) {
       delete mergedTalk.baseUrl;
     }
     next.talk = mergedTalk;
@@ -102,11 +110,11 @@ const mergeAssistantOpenclawConfig = (
     const desiredChannels = isRecord(desired.channels) ? desired.channels : {};
     next.channels = {
       ...existingChannels,
-      telegram: desiredChannels.telegram
+      telegram: desiredChannels.telegram,
     };
   } else if (isRecord(next.channels)) {
     const nextChannels: UnknownRecord = { ...next.channels };
-    if (Object.hasOwn(nextChannels, 'telegram')) {
+    if (Object.hasOwn(nextChannels, "telegram")) {
       delete nextChannels.telegram;
       if (Object.keys(nextChannels).length) {
         next.channels = nextChannels;
@@ -118,27 +126,35 @@ const mergeAssistantOpenclawConfig = (
 
   if (config.litellm.enabled) {
     const desiredModels = isRecord(desired.models) ? desired.models : {};
-    const desiredProviders = isRecord(desiredModels.providers) ? desiredModels.providers : {};
+    const desiredProviders = isRecord(desiredModels.providers)
+      ? desiredModels.providers
+      : {};
     const existingModels = isRecord(next.models) ? next.models : {};
-    const existingProviders = isRecord(existingModels.providers) ? existingModels.providers : {};
+    const existingProviders = isRecord(existingModels.providers)
+      ? existingModels.providers
+      : {};
     next.models = {
       ...existingModels,
       providers: {
         ...existingProviders,
-        litellm: desiredProviders.litellm
-      }
+        litellm: desiredProviders.litellm,
+      },
     };
 
     const desiredAgents = isRecord(desired.agents) ? desired.agents : {};
-    const desiredDefaults = isRecord(desiredAgents.defaults) ? desiredAgents.defaults : {};
+    const desiredDefaults = isRecord(desiredAgents.defaults)
+      ? desiredAgents.defaults
+      : {};
     const existingAgents = isRecord(next.agents) ? next.agents : {};
-    const existingDefaults = isRecord(existingAgents.defaults) ? existingAgents.defaults : {};
+    const existingDefaults = isRecord(existingAgents.defaults)
+      ? existingAgents.defaults
+      : {};
     next.agents = {
       ...existingAgents,
       defaults: {
         ...existingDefaults,
-        model: desiredDefaults.model
-      }
+        model: desiredDefaults.model,
+      },
     };
   }
 
@@ -149,10 +165,12 @@ const ensureOpenclawConfig = (
   configDir: string,
   gatewayToken: string,
   assistantBotToken?: string | null,
-  liteLlmApiKey?: string | null
+  liteLlmApiKey?: string | null,
 ): { configPath: string; changed: boolean } => {
-  const configPath = path.join(configDir, 'openclaw.json');
-  const existingRaw = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
+  const configPath = path.join(configDir, "openclaw.json");
+  const existingRaw = fs.existsSync(configPath)
+    ? fs.readFileSync(configPath, "utf8")
+    : "";
   const existingParsed = (() => {
     if (!existingRaw) return {};
     try {
@@ -165,12 +183,16 @@ const ensureOpenclawConfig = (
 
   const desired = buildAssistantOpenclawConfig(config, {
     gatewayToken,
-    gatewayBind: 'lan',
+    gatewayBind: "lan",
     assistantBotToken: assistantBotToken ?? null,
     liteLlmApiKey: liteLlmApiKey ?? null,
-    includeTelegramPlugin: false
+    includeTelegramPlugin: false,
   });
-  const next = mergeAssistantOpenclawConfig(existingParsed, desired, assistantBotToken || '');
+  const next = mergeAssistantOpenclawConfig(
+    existingParsed,
+    desired,
+    assistantBotToken || "",
+  );
 
   const changed = JSON.stringify(existingParsed) !== JSON.stringify(next);
   if (changed) {
@@ -190,10 +212,10 @@ const parseCronStore = (raw: string): ParsedCronStore | null => {
 };
 
 const sanitizeCronStore = (runtimeDataDir: string): void => {
-  const cronPath = path.join(runtimeDataDir, 'cron', 'jobs.json');
+  const cronPath = path.join(runtimeDataDir, "cron", "jobs.json");
   if (!fs.existsSync(cronPath)) return;
 
-  const parsed = parseCronStore(fs.readFileSync(cronPath, 'utf8'));
+  const parsed = parseCronStore(fs.readFileSync(cronPath, "utf8"));
   if (!parsed) return;
 
   let changed = false;
@@ -201,12 +223,16 @@ const sanitizeCronStore = (runtimeDataDir: string): void => {
     if (!isRecord(job)) return job;
     const next: UnknownRecord = { ...job };
 
-    if (isRecord(next.delivery) && next.delivery.mode !== 'none') {
-      next.delivery = { ...next.delivery, mode: 'none' };
+    if (isRecord(next.delivery) && next.delivery.mode !== "none") {
+      next.delivery = { ...next.delivery, mode: "none" };
       changed = true;
     }
 
-    if (isRecord(next.payload) && Object.hasOwn(next.payload, 'deliver') && next.payload.deliver !== false) {
+    if (
+      isRecord(next.payload) &&
+      Object.hasOwn(next.payload, "deliver") &&
+      next.payload.deliver !== false
+    ) {
       next.payload = { ...next.payload, deliver: false };
       changed = true;
     }
@@ -218,35 +244,37 @@ const sanitizeCronStore = (runtimeDataDir: string): void => {
 
   const updated = {
     ...parsed,
-    jobs
+    jobs,
   };
 
   fs.writeFileSync(cronPath, `${JSON.stringify(updated, null, 2)}\n`);
 };
 
 const buildContainerDirs = (scopeDirName: string): AssistantContainerDirs => {
-  const baseDir = path.join(process.cwd(), 'data', scopeDirName);
+  const baseDir = path.join(process.cwd(), "data", scopeDirName);
   return {
-    configDir: path.join(baseDir, 'config'),
-    dataDir: path.join(baseDir, 'data'),
-    tmpDir: path.join(baseDir, 'tmp'),
-    workspaceDir: path.join(baseDir, 'workspace')
+    configDir: path.join(baseDir, "config"),
+    dataDir: path.join(baseDir, "data"),
+    tmpDir: path.join(baseDir, "tmp"),
+    workspaceDir: path.join(baseDir, "workspace"),
   };
 };
 
-const getAssistantContainerDirs = (assistantBotId: number): AssistantContainerDirs => {
+const getAssistantContainerDirs = (
+  assistantBotId: number,
+): AssistantContainerDirs => {
   return buildContainerDirs(`assistant-${assistantBotId}`);
 };
 
 const prepareDockerRuntime = (): void => {
-  const dataDir = path.join(process.cwd(), 'data');
+  const dataDir = path.join(process.cwd(), "data");
   if (!fs.existsSync(dataDir)) return;
 
   const entries = fs.readdirSync(dataDir, { withFileTypes: true });
   entries.forEach((entry) => {
     if (!entry.isDirectory()) return;
-    if (!entry.name.startsWith('assistant-')) return;
-    const runtimeDataDir = path.join(dataDir, entry.name, 'data');
+    if (!entry.name.startsWith("assistant-")) return;
+    const runtimeDataDir = path.join(dataDir, entry.name, "data");
     if (!fs.existsSync(runtimeDataDir)) return;
     sanitizeCronStore(runtimeDataDir);
   });
@@ -257,12 +285,12 @@ const waitForPort = (port: number, timeoutMs = 30000): Promise<boolean> =>
     const start = Date.now();
 
     const tryConnect = (): void => {
-      const socket = net.createConnection({ host: '127.0.0.1', port }, () => {
+      const socket = net.createConnection({ host: "127.0.0.1", port }, () => {
         socket.end();
         resolve(true);
       });
 
-      socket.on('error', () => {
+      socket.on("error", () => {
         socket.destroy();
         if (Date.now() - start >= timeoutMs) {
           resolve(false);
@@ -276,19 +304,19 @@ const waitForPort = (port: number, timeoutMs = 30000): Promise<boolean> =>
   });
 
 const resolveDockerGatewayTargetForAssistant = (
-  assistant: AssistantContainerGatewayRef
+  assistant: AssistantContainerGatewayRef,
 ): GatewayTarget => {
   return {
-    host: '127.0.0.1',
+    host: "127.0.0.1",
     port: assistant.container_port,
     httpBaseUrl: `http://127.0.0.1:${assistant.container_port}`,
-    wsBaseUrl: `ws://127.0.0.1:${assistant.container_port}`
+    wsBaseUrl: `ws://127.0.0.1:${assistant.container_port}`,
   };
 };
 
 const resolveContainer = async (
   containerId: string | null | undefined,
-  fallbackName: string
+  fallbackName: string,
 ): Promise<Dockerode.Container | null> => {
   if (containerId) {
     try {
@@ -309,10 +337,13 @@ const resolveContainer = async (
   }
 };
 
-const findBindSource = (binds: string[] | undefined, target: string): string | null => {
+const findBindSource = (
+  binds: string[] | undefined,
+  target: string,
+): string | null => {
   if (!Array.isArray(binds)) return null;
   for (const bind of binds) {
-    const parts = bind.split(':');
+    const parts = bind.split(":");
     if (parts.length < 2) continue;
     const source = parts[0];
     const containerTarget = parts[1];
@@ -323,7 +354,10 @@ const findBindSource = (binds: string[] | undefined, target: string): string | n
   return null;
 };
 
-const findEnvValue = (envVars: string[] | undefined, key: string): string | null => {
+const findEnvValue = (
+  envVars: string[] | undefined,
+  key: string,
+): string | null => {
   if (!Array.isArray(envVars)) return null;
   const prefix = `${key}=`;
   for (const variable of envVars) {
@@ -335,10 +369,13 @@ const findEnvValue = (envVars: string[] | undefined, key: string): string | null
 
 const ensureAssistantDockerContainer = async (
   assistant: AssistantContainerRuntimeRef,
-  gatewayToken: string
+  gatewayToken: string,
 ): Promise<{ containerId: string; ready: boolean }> => {
-  const fallbackContainerName = containerNameForAssistant(assistant.assistant_bot_id);
-  const containerName = assistant.container_name?.trim() || fallbackContainerName;
+  const fallbackContainerName = containerNameForAssistant(
+    assistant.assistant_bot_id,
+  );
+  const containerName =
+    assistant.container_name?.trim() || fallbackContainerName;
   let container = await resolveContainer(assistant.container_id, containerName);
 
   const assistantDirs = getAssistantContainerDirs(assistant.assistant_bot_id);
@@ -356,7 +393,7 @@ const ensureAssistantDockerContainer = async (
     assistantConfigDir,
     gatewayToken,
     assistant.assistant_bot_token,
-    assistantLiteLLMApiKey
+    assistantLiteLLMApiKey,
   );
   sanitizeCronStore(assistantDataDir);
   let shouldRestartForConfig = false;
@@ -365,22 +402,29 @@ const ensureAssistantDockerContainer = async (
     const inspect = await container.inspect();
     const binds = inspect?.HostConfig?.Binds;
     const expectedBinds: Array<{ target: string; source: string }> = [
-      { target: '/app/config', source: assistantConfigDir },
-      { target: '/app/data', source: assistantDataDir },
-      { target: '/tmp', source: assistantTmpDir },
-      { target: '/root/.openclaw/workspace', source: assistantWorkspaceDir }
+      { target: "/app/config", source: assistantConfigDir },
+      { target: "/app/data", source: assistantDataDir },
+      { target: "/tmp", source: assistantTmpDir },
+      { target: "/root/.openclaw/workspace", source: assistantWorkspaceDir },
     ];
     const needsBindMigration = expectedBinds.some(({ target, source }) => {
       const mountedSource = findBindSource(binds, target);
       return mountedSource !== source;
     });
-    const legacyTelegramBotToken = findEnvValue(inspect?.Config?.Env, 'TELEGRAM_BOT_TOKEN');
-    const needsEnvMigration = typeof legacyTelegramBotToken === 'string' && legacyTelegramBotToken.length > 0;
-    const needsSecretEnvPrune = DOCKER_FORBIDDEN_SECRET_ENV_KEYS.some((key) => hasEnvKey(inspect?.Config?.Env, key));
+    const legacyTelegramBotToken = findEnvValue(
+      inspect?.Config?.Env,
+      "TELEGRAM_BOT_TOKEN",
+    );
+    const needsEnvMigration =
+      typeof legacyTelegramBotToken === "string" &&
+      legacyTelegramBotToken.length > 0;
+    const needsSecretEnvPrune = DOCKER_FORBIDDEN_SECRET_ENV_KEYS.some((key) =>
+      hasEnvKey(inspect?.Config?.Env, key),
+    );
 
     if (needsBindMigration || needsEnvMigration || needsSecretEnvPrune) {
       try {
-        if (inspect.State?.Status === 'running') {
+        if (inspect.State?.Status === "running") {
           await container.stop();
         }
       } catch {
@@ -389,11 +433,11 @@ const ensureAssistantDockerContainer = async (
       await container.remove({ force: true });
       container = null;
       await updateAssistant(assistant.id, {
-        container_status: 'creating',
-        container_id: '',
-        container_name: containerName
+        container_status: "creating",
+        container_id: "",
+        container_name: containerName,
       });
-    } else if (configChanged && inspect.State?.Status === 'running') {
+    } else if (configChanged && inspect.State?.Status === "running") {
       shouldRestartForConfig = true;
     }
   }
@@ -405,37 +449,39 @@ const ensureAssistantDockerContainer = async (
       Env: [
         `OPENCLAW_USER_ID=assistant-${assistant.assistant_bot_id}`,
         `OPENCLAW_GATEWAY_PORT=${config.openclaw.gatewayPort}`,
-        'OPENCLAW_CONFIG_PATH=/app/config/openclaw.json',
-        'OPENCLAW_STATE_DIR=/app/data'
+        "OPENCLAW_CONFIG_PATH=/app/config/openclaw.json",
+        "OPENCLAW_STATE_DIR=/app/data",
       ],
       ExposedPorts: {
-        [`${config.openclaw.gatewayPort}/tcp`]: {}
+        [`${config.openclaw.gatewayPort}/tcp`]: {},
       },
       HostConfig: {
-        RestartPolicy: { Name: 'unless-stopped' },
+        RestartPolicy: { Name: "unless-stopped" },
         PortBindings: {
-          [`${config.openclaw.gatewayPort}/tcp`]: [{ HostPort: String(assistant.container_port) }]
+          [`${config.openclaw.gatewayPort}/tcp`]: [
+            { HostPort: String(assistant.container_port) },
+          ],
         },
         Binds: [
           `${assistantConfigDir}:/app/config`,
           `${assistantDataDir}:/app/data`,
           `${assistantTmpDir}:/tmp`,
-          `${assistantWorkspaceDir}:/root/.openclaw/workspace`
+          `${assistantWorkspaceDir}:/root/.openclaw/workspace`,
         ],
         Memory: config.container.memoryMb * 1024 * 1024,
-        CpuShares: config.container.cpuShares
-      }
+        CpuShares: config.container.cpuShares,
+      },
     });
 
     await updateAssistant(assistant.id, {
-      container_status: 'creating',
+      container_status: "creating",
       container_id: container.id,
-      container_name: containerName
+      container_name: containerName,
     });
   }
 
   const inspect = await container.inspect();
-  if (inspect.State.Status !== 'running') {
+  if (inspect.State.Status !== "running") {
     try {
       await container.start();
     } catch (error: unknown) {
@@ -449,25 +495,31 @@ const ensureAssistantDockerContainer = async (
 
   const ready = await waitForPort(assistant.container_port, 30000);
   await updateAssistant(assistant.id, {
-    container_status: ready ? 'running' : 'error',
-    container_name: containerName
+    container_status: ready ? "running" : "error",
+    container_name: containerName,
   });
 
   return { containerId: container.id, ready };
 };
 
 const destroyAssistantDockerContainer = async (
-  assistant: AssistantContainerDestroyRef
+  assistant: AssistantContainerDestroyRef,
 ): Promise<{ deleted: boolean }> => {
-  const fallbackContainerName = containerNameForAssistant(assistant.assistant_bot_id);
-  const containerName = assistant.container_name?.trim() || fallbackContainerName;
+  const fallbackContainerName = containerNameForAssistant(
+    assistant.assistant_bot_id,
+  );
+  const containerName =
+    assistant.container_name?.trim() || fallbackContainerName;
 
-  const container = await resolveContainer(assistant.container_id, containerName);
+  const container = await resolveContainer(
+    assistant.container_id,
+    containerName,
+  );
   if (!container) {
     await updateAssistant(assistant.id, {
-      container_status: 'missing',
-      container_id: '',
-      container_name: containerName
+      container_status: "missing",
+      container_id: "",
+      container_name: containerName,
     });
     return { deleted: false };
   }
@@ -475,11 +527,14 @@ const destroyAssistantDockerContainer = async (
   let deleted = false;
   try {
     const inspect = await container.inspect();
-    if (inspect.State?.Status === 'running') {
+    if (inspect.State?.Status === "running") {
       try {
         await container.stop();
       } catch (error: unknown) {
-        if (!isStatusCodeError(error) || (error.statusCode !== 304 && error.statusCode !== 404)) {
+        if (
+          !isStatusCodeError(error) ||
+          (error.statusCode !== 304 && error.statusCode !== 404)
+        ) {
           throw error;
         }
       }
@@ -494,17 +549,64 @@ const destroyAssistantDockerContainer = async (
   }
 
   await updateAssistant(assistant.id, {
-    container_status: 'missing',
-    container_id: '',
-    container_name: containerName
+    container_status: "missing",
+    container_id: "",
+    container_name: containerName,
   });
 
   return { deleted };
+};
+
+const stopAssistantDockerContainer = async (
+  assistant: AssistantContainerDestroyRef,
+): Promise<{ stopped: boolean }> => {
+  const fallbackContainerName = containerNameForAssistant(
+    assistant.assistant_bot_id,
+  );
+  const containerName =
+    assistant.container_name?.trim() || fallbackContainerName;
+
+  const container = await resolveContainer(
+    assistant.container_id,
+    containerName,
+  );
+  if (!container) {
+    await updateAssistant(assistant.id, {
+      container_status: "missing",
+      container_id: "",
+      container_name: containerName,
+    });
+    return { stopped: false };
+  }
+
+  let stopped = false;
+  try {
+    const inspect = await container.inspect();
+    if (inspect.State?.Status === "running") {
+      await container.stop();
+      stopped = true;
+    }
+  } catch (error: unknown) {
+    if (
+      !isStatusCodeError(error) ||
+      (error.statusCode !== 304 && error.statusCode !== 404)
+    ) {
+      throw error;
+    }
+  }
+
+  await updateAssistant(assistant.id, {
+    container_status: "stopped",
+    container_name: containerName,
+  });
+
+  return { stopped };
 };
 
 export const dockerContainerProvider: ContainerProvider = {
   prepareRuntime: prepareDockerRuntime,
   ensureAssistantContainer: ensureAssistantDockerContainer,
   destroyAssistantContainer: destroyAssistantDockerContainer,
-  resolveGatewayTargetForAssistant: resolveDockerGatewayTargetForAssistant
+  stopAssistantContainer: stopAssistantDockerContainer,
+  resolveGatewayTargetForAssistant: resolveDockerGatewayTargetForAssistant,
 };
