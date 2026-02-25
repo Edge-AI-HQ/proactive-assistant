@@ -132,7 +132,7 @@ export const createAssistantWithoutContainer = async (
   // Update status to pending payment
   const finalAssistant =
     (await updateAssistant(assistantWithLiteLLM.id, {
-      container_status: "pending",
+      container_status: "stopped",
     })) ?? assistantWithLiteLLM;
 
   return {
