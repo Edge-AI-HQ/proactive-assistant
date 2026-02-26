@@ -261,8 +261,8 @@ export const createCheckoutSession = async (
 
   const existingSub = await db.getSubscriptionByTelegramId(telegramUserId);
   let customerId = existingSub?.stripe_customer_id ?? null;
-  let existingStripeSubscription: Stripe.Subscription | null = null;
 
+  // Validate existing customer in Stripe
   if (customerId) {
     try {
       const customer = await stripe.customers.retrieve(customerId);
@@ -274,6 +274,7 @@ export const createCheckoutSession = async (
     }
   }
 
+  // Create customer if needed
   if (!customerId) {
     const customer = await stripe.customers.create({
       metadata: {
@@ -281,154 +282,10 @@ export const createCheckoutSession = async (
         telegram_username: telegramUsername || "",
       },
     });
-
     customerId = customer.id;
-    const upsertPayload: {
-      telegram_user_id: string;
-      stripe_customer_id: string;
-      plan_id: string;
-      telegram_username?: string;
-    } = {
-      telegram_user_id: telegramUserId,
-      stripe_customer_id: customerId,
-      plan_id: selectedPlan.plan_code,
-    };
-    if (telegramUsername) upsertPayload.telegram_username = telegramUsername;
-    await db.upsertUserSubscription(upsertPayload);
   }
 
-  if (existingSub?.stripe_subscription_id) {
-    try {
-      const stripeSubscription = await stripe.subscriptions.retrieve(
-        existingSub.stripe_subscription_id,
-      );
-      if (isStripeSubscriptionOpen(stripeSubscription.status)) {
-        existingStripeSubscription = stripeSubscription;
-      }
-    } catch {
-      // If retrieve fails, we will fallback to customer-wide lookup below.
-    }
-  }
-
-  if (!existingStripeSubscription && customerId) {
-    try {
-      const candidates = await stripe.subscriptions.list({
-        customer: customerId,
-        status: "all",
-        limit: 20,
-      });
-      const openSub = candidates.data.find((item) =>
-        isStripeSubscriptionOpen(item.status),
-      );
-      if (openSub) {
-        existingStripeSubscription = openSub;
-      }
-    } catch {
-      // Ignore listing failures and fallback to creating a checkout session.
-    }
-  }
-
-  if (existingStripeSubscription && customerId) {
-    const subscriptionItemId = readCurrentSubscriptionItemId(
-      existingStripeSubscription,
-    );
-    const currentPriceId = readCurrentSubscriptionPriceId(
-      existingStripeSubscription,
-    );
-
-    if (!subscriptionItemId || !currentPriceId) {
-      throw new DomainError(
-        "INTERNAL",
-        "Existing subscription is missing a valid plan item",
-        500,
-      );
-    }
-
-    if (currentPriceId !== stripePriceId) {
-      const switched = await stripe.subscriptions.update(
-        existingStripeSubscription.id,
-        {
-          items: [{ id: subscriptionItemId, price: stripePriceId }],
-          proration_behavior: "create_prorations",
-          metadata: {
-            telegram_user_id: telegramUserId,
-            telegram_username: telegramUsername || "",
-            plan: selectedPlan.plan_code,
-          },
-        },
-      );
-
-      const upsertPayload: {
-        telegram_user_id: string;
-        stripe_customer_id: string;
-        stripe_subscription_id: string;
-        plan_id: string;
-        telegram_username?: string;
-      } = {
-        telegram_user_id: telegramUserId,
-        stripe_customer_id: customerId,
-        stripe_subscription_id: switched.id,
-        plan_id: selectedPlan.plan_code,
-      };
-      if (telegramUsername) upsertPayload.telegram_username = telegramUsername;
-      await db.upsertUserSubscription(upsertPayload);
-
-      const switchedPeriodStart = parseUnixSecondsToDate(
-        switched.current_period_start,
-      );
-      const switchedPeriodEnd = parseUnixSecondsToDate(
-        switched.current_period_end,
-      );
-      const switchedEndedAt = parseUnixSecondsToDate(switched.ended_at);
-      await db.updateSubscriptionStatus(
-        telegramUserId,
-        switched.status,
-        switchedPeriodStart,
-        switchedPeriodEnd,
-        Boolean(switched.cancel_at_period_end),
-        switchedEndedAt,
-        switched.status,
-      );
-
-      if (switched.status === "active" || switched.status === "trialing") {
-        await syncLiteLLMBudgetFromPlan({
-          telegram_user_id: telegramUserId,
-          telegram_username: telegramUsername,
-          plan_code: selectedPlan.plan_code,
-          source: "checkout_plan_switch",
-        });
-      }
-
-      await db.markPaymentSessionUsed(token);
-      return {
-        url: `${landingBaseUrl}/api/payment/success?mode=plan_switched`,
-      };
-    }
-
-    const upsertPayload: {
-      telegram_user_id: string;
-      stripe_customer_id: string;
-      stripe_subscription_id: string;
-      plan_id: string;
-      telegram_username?: string;
-    } = {
-      telegram_user_id: telegramUserId,
-      stripe_customer_id: customerId,
-      stripe_subscription_id: existingStripeSubscription.id,
-      plan_id: selectedPlan.plan_code,
-    };
-    if (telegramUsername) upsertPayload.telegram_username = telegramUsername;
-    await db.upsertUserSubscription(upsertPayload);
-    await syncLiteLLMBudgetFromPlan({
-      telegram_user_id: telegramUserId,
-      telegram_username: telegramUsername,
-      plan_code: selectedPlan.plan_code,
-      source: "checkout_existing_subscription",
-    });
-    await db.markPaymentSessionUsed(token);
-    return { url: `${landingBaseUrl}/api/payment/success?mode=already_active` };
-  }
-
+  // Always create checkout session - Stripe will handle subscription updates automatically
   let checkoutSession: Stripe.Checkout.Session;
   try {
     checkoutSession = await stripe.checkout.sessions.create(
