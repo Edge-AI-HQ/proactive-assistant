@@ -1,9 +1,66 @@
+const paymentPageLayoutStyles = `
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.60) 0%, rgba(249, 237, 250, 0.26) 7.25%, rgba(247, 231, 249, 0.35) 11.8%, rgba(244, 222, 246, 0.49) 19.12%, rgba(242, 215, 244, 0.60) 32.22%, rgba(246, 206, 216, 0.60) 48.33%, rgba(180, 202, 244, 0.60) 80.24%, rgba(220, 211, 241, 0.60) 88.99%, rgba(223, 212, 240, 0.00) 100%), #FFF;
+    min-height: 100vh;
+    padding: 40px 20px;
+    color: #1a1a1a;
+  }
+  .container { max-width: 1200px; margin: 0 auto; }
+  .header { text-align: center; margin-bottom: 40px; }
+  .header-icons {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 20px;
+    margin-bottom: 30px;
+  }
+  .header-icons img { height: 60px; width: auto; object-fit: contain; }
+  .header-icons .separator { font-size: 32px; color: #999; font-weight: 300; }
+  .header h1 { font-size: 42px; font-weight: 700; margin-bottom: 16px; line-height: 1.2; color: #000; }
+  .header p { font-size: 16px; color: #666; max-width: 700px; margin: 0 auto 20px; line-height: 1.6; }
+  .card {
+    background: white;
+    border-radius: 16px;
+    padding: 40px 32px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+    border: 2px solid rgba(225, 92, 230, 0.2);
+    max-width: 560px;
+    margin: 0 auto;
+  }
+  .card p { font-size: 16px; color: #333; line-height: 1.6; margin-bottom: 24px; }
+  .btn {
+    display: inline-block;
+    width: 100%;
+    padding: 16px 32px;
+    background: #E15CE6;
+    color: white;
+    border: none;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 600;
+    text-decoration: none;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 12px rgba(225, 92, 230, 0.3);
+  }
+  .btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(225, 92, 230, 0.4);
+    background: #C94DD4;
+    color: white;
+  }
+  .muted { color: #6b7280; font-size: 14px; }
+`;
+
 export const renderSuccessPage = (): string => {
   const username = (process.env.TELEGRAM_BOT_USERNAME || "")
     .trim()
     .replace(/^@/, "");
   const button = username
-    ? `<a class="button" href="https://t.me/${username}" target="_blank" rel="noopener">Return to Telegram</a>`
+    ? `<a class="btn" href="https://t.me/${username}" target="_blank" rel="noopener">Return to Telegram</a>`
     : `<p class="muted">Return to Telegram and continue with your bot.</p>`;
 
   return `<!doctype html>
@@ -11,19 +68,23 @@ export const renderSuccessPage = (): string => {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Subscription Active</title>
-    <style>
-      body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; padding: 24px; max-width: 680px; margin: 40px auto; }
-      .card { border: 1px solid #d0e6da; border-radius: 12px; padding: 24px; }
-      .button { display:inline-block; margin-top:12px; text-decoration:none; background:#2f6feb; color:#fff; padding:10px 16px; border-radius:8px; }
-      .muted { color:#6b7280; }
-    </style>
+    <title>Subscription Active - PIN AI</title>
+    <style>${paymentPageLayoutStyles}</style>
   </head>
   <body>
-    <div class="card">
-      <h1>Subscription Activated</h1>
-      <p>Your payment was completed successfully and credits are now managed by your active plan.</p>
-      ${button}
+    <div class="container">
+      <div class="header">
+        <div class="header-icons">
+          <img src="/logo_pinai.png" alt="PIN AI Logo">
+          <div class="separator">×</div>
+          <img src="/logo_openclaw.png" alt="OpenClaw Logo">
+        </div>
+        <h1>Subscription Activated</h1>
+      </div>
+      <div class="card">
+        <p>Your payment was completed successfully and credits are now managed by your active plan. Your assistant container will be ready shortly—you’ll get a message in Telegram when it’s running.</p>
+        ${button}
+      </div>
     </div>
   </body>
 </html>`;
@@ -34,7 +95,7 @@ export const renderCancelPage = (): string => {
     .trim()
     .replace(/^@/, "");
   const button = username
-    ? `<a class="button" href="https://t.me/${username}" target="_blank" rel="noopener">Back to Telegram</a>`
+    ? `<a class="btn" href="https://t.me/${username}" target="_blank" rel="noopener">Back to Telegram</a>`
     : `<p class="muted">No charge was made. Retry from Telegram anytime.</p>`;
 
   return `<!doctype html>
@@ -42,19 +103,23 @@ export const renderCancelPage = (): string => {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Payment Cancelled</title>
-    <style>
-      body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; padding: 24px; max-width: 680px; margin: 40px auto; }
-      .card { border: 1px solid #f2d2cc; border-radius: 12px; padding: 24px; }
-      .button { display:inline-block; margin-top:12px; text-decoration:none; background:#2f6feb; color:#fff; padding:10px 16px; border-radius:8px; }
-      .muted { color:#6b7280; }
-    </style>
+    <title>Payment Cancelled - PIN AI</title>
+    <style>${paymentPageLayoutStyles}</style>
   </head>
   <body>
-    <div class="card">
-      <h1>Checkout Cancelled</h1>
-      <p>No charge was made to your account.</p>
-      ${button}
+    <div class="container">
+      <div class="header">
+        <div class="header-icons">
+          <img src="/logo_pinai.png" alt="PIN AI Logo">
+          <div class="separator">×</div>
+          <img src="/logo_openclaw.png" alt="OpenClaw Logo">
+        </div>
+        <h1>Checkout Cancelled</h1>
+      </div>
+      <div class="card">
+        <p>No charge was made to your account. You can subscribe anytime from the guide bot in Telegram.</p>
+        ${button}
+      </div>
     </div>
   </body>
 </html>`;

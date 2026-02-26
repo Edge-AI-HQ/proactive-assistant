@@ -12,6 +12,7 @@ import {
   stopAssistantContainer,
   ensureAssistantContainer,
 } from "../container/index.js";
+import { sendTelegramMessage } from "../telegram/notify.js";
 
 const parseUnixSecondsToDate = (value: unknown): Date | null => {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
@@ -227,7 +228,8 @@ export async function syncSubscriptionFromStripe(
       source: "stripe_subscription_sync",
     });
 
-    // Start containers for pending/stopped assistants
+    // Start containers for pending/stopped assistants and notify user
+    const startedBotUsernames: string[] = [];
     try {
       const user = await getUserByTelegramId(Number(telegram_user_id));
       if (user) {
@@ -241,6 +243,7 @@ export async function syncSubscriptionFromStripe(
           ) {
             try {
               await ensureAssistantContainer(assistant, user.gateway_token);
+              startedBotUsernames.push(assistant.assistant_bot_username ?? `#${assistant.id}`);
               console.log(
                 `Started container for assistant ${assistant.id} after subscription sync`,
               );
@@ -255,6 +258,15 @@ export async function syncSubscriptionFromStripe(
             }
           }
         }
+      }
+      if (startedBotUsernames.length > 0) {
+        const list = startedBotUsernames
+          .map((u) => (u.startsWith("#") ? u : `@${u}`))
+          .join(", ");
+        await sendTelegramMessage(
+          Number(telegram_user_id),
+          `✅ <b>Container(s) ready</b>\n\nYour assistant bot(s) are now running: ${list}\n\nYou can open the Gateway link from the guide bot to start chatting.`,
+        );
       }
     } catch (error: unknown) {
       console.error("Failed to start containers after subscription sync", {

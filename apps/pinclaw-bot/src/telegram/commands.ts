@@ -313,8 +313,8 @@ const provisionAssistantFromToken = async (
             ? [`🔐 LiteLLM key assigned: ${assistant.litellm_key_alias}`]
             : []),
           "",
-          "⚠️ <b>Payment required:</b> Your container will be created after you subscribe to a plan.",
-          "Please contact support to complete payment setup.",
+          "⚠️ <b>Payment link unavailable.</b> Your container will be created after you subscribe.",
+          "Admin: ensure API_INTERNAL_TOKEN is set on both bot and API (same value), and API has PAYMENT_PUBLIC_BASE_URL. Check bot logs for «Failed to create payment link».",
           `🧸 You now have ${latestAssistants.length} assistant bot${latestAssistants.length === 1 ? "" : "s"}.`,
         ].join("\n"),
       );
