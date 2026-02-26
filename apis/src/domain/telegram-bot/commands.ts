@@ -185,7 +185,7 @@ const safeCreatePaymentLink = async (
       telegramUserId,
       status: error instanceof BackendApiError ? error.status : undefined,
       error: error instanceof Error ? error.message : String(error || ""),
-      hasApiInternalToken: Boolean(config.backendApi.internalApiKey.trim()),
+      hasApiInternalToken: Boolean(config.apiAuthToken.trim()),
       hint: isUnauthorized
         ? "Set bot API_INTERNAL_TOKEN to match apis API_INTERNAL_TOKEN."
         : undefined,
@@ -196,7 +196,7 @@ const safeCreatePaymentLink = async (
 
 const resolveBackendApiOrigin = (): URL | null => {
   try {
-    return new URL(config.backendApi.baseUrl);
+    return new URL(config.publicBaseUrl);
   } catch {
     return null;
   }
