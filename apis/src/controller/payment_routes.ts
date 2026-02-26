@@ -184,9 +184,9 @@ export const createPaymentRouter = (): Router => {
   });
 
   router.get('/success', (req: Request, res: Response) => {
-    void req;
+    const mode = typeof req.query.mode === 'string' ? req.query.mode : undefined;
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(renderSuccessPage());
+    res.send(renderSuccessPage(mode));
   });
 
   router.get('/cancel', (req: Request, res: Response) => {

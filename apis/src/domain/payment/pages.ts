@@ -55,7 +55,7 @@ const paymentPageLayoutStyles = `
   .muted { color: #6b7280; font-size: 14px; }
 `;
 
-export const renderSuccessPage = (): string => {
+export const renderSuccessPage = (mode?: string): string => {
   const username = (process.env.TELEGRAM_BOT_USERNAME || "")
     .trim()
     .replace(/^@/, "");
@@ -63,12 +63,16 @@ export const renderSuccessPage = (): string => {
     ? `<a class="btn" href="https://t.me/${username}" target="_blank" rel="noopener">Return to Telegram</a>`
     : `<p class="muted">Return to Telegram and continue with your bot.</p>`;
 
+  const isDowngrade = mode === "downgrade_scheduled";
+  const title = isDowngrade ? "Plan Change Scheduled" : "Subscription Activated";
+  const pageTitle = isDowngrade ? "Plan Changed - PIN AI" : "Subscription Active - PIN AI";
+
   return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Subscription Active - PIN AI</title>
+    <title>${pageTitle}</title>
     <style>${paymentPageLayoutStyles}</style>
   </head>
   <body>
@@ -79,10 +83,10 @@ export const renderSuccessPage = (): string => {
           <div class="separator">×</div>
           <img src="/logo_openclaw.png" alt="OpenClaw Logo">
         </div>
-        <h1>Subscription Activated</h1>
+        <h1>${title}</h1>
       </div>
       <div class="card">
-        <p>Your payment was completed successfully and credits are now managed by your active plan. Your assistant container will be ready shortly—you’ll get a message in Telegram when it’s running.</p>
+        <p>${isDowngrade ? "Your plan has been changed. The new plan will take effect at your next billing cycle. You will keep your current credits until then." : "Your payment was completed successfully and credits are now managed by your active plan. Your assistant container will be ready shortly."}</p>
         ${button}
       </div>
     </div>

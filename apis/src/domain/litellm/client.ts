@@ -456,6 +456,12 @@ export const getLiteLLMUserInfo = async (litellmUserId: string): Promise<LiteLLM
   };
 };
 
+export const resetLiteLLMUserSpend = async (litellmUserId: string): Promise<void> => {
+  const userId = litellmUserId.trim();
+  if (!userId) throw new Error('LiteLLM user_id is required');
+  await requestJson('POST', '/user/reset', { user_id: userId });
+};
+
 export const getLiteLLMUserSpendCents = async (litellmUserId: string): Promise<number | null> => {
   const info = await getLiteLLMUserInfo(litellmUserId);
   if (info.spendUsd === null) return null;
