@@ -100,9 +100,9 @@ export const listActivePlansForApi = async (): Promise<{
           priceId,
           description: `${name} subscription`,
           features: [
-            `${plan.daily_refresh_credits} credits daily refresh (non-cumulative)`,
-            `${plan.monthly_refresh_credits} credits monthly refresh (non-cumulative)`,
+            `${plan.monthly_refresh_credits} credits per month`,
             "100 credits = $1 usage budget",
+            "Credits reset each billing cycle",
           ],
           popular: plan.plan_code === "pro",
         };
@@ -221,10 +221,16 @@ export const assertSubscribeTokenUsable = async (
   }
 };
 
+export interface CheckoutResult {
+  url: string | null;
+  action?: "checkout" | "upgrade" | "downgrade";
+  message?: string;
+}
+
 export const createCheckoutSession = async (
   req: Request,
   body: { token?: string; plan?: string },
-): Promise<{ url: string | null }> => {
+): Promise<CheckoutResult> => {
   const stripe = requireStripe();
   const token = String(body.token || "").trim();
   const planCode =
@@ -262,7 +268,6 @@ export const createCheckoutSession = async (
   const existingSub = await db.getSubscriptionByTelegramId(telegramUserId);
   let customerId = existingSub?.stripe_customer_id ?? null;
 
-  // Validate existing customer in Stripe
   if (customerId) {
     try {
       const customer = await stripe.customers.retrieve(customerId);
@@ -274,7 +279,6 @@ export const createCheckoutSession = async (
     }
   }
 
-  // Create customer if needed
   if (!customerId) {
     const customer = await stripe.customers.create({
       metadata: {
@@ -285,19 +289,85 @@ export const createCheckoutSession = async (
     customerId = customer.id;
   }
 
-  // Always create checkout session - Stripe will handle subscription updates automatically
+  // --- Handle existing active subscription: upgrade / downgrade / same plan ---
+  if (existingSub?.stripe_subscription_id && existingSub.plan_id) {
+    const currentPlan = await db.getPlanByCode(existingSub.plan_id);
+    if (currentPlan) {
+      let stripeSubActive = false;
+      let stripeSubscription: Stripe.Subscription | null = null;
+      try {
+        stripeSubscription = await stripe.subscriptions.retrieve(existingSub.stripe_subscription_id);
+        stripeSubActive = isStripeSubscriptionOpen(stripeSubscription.status);
+      } catch { /* subscription may not exist in Stripe anymore */ }
+
+      if (stripeSubActive && stripeSubscription) {
+        if (selectedPlan.plan_code === currentPlan.plan_code) {
+          throw new DomainError("INVALID_INPUT", "You are already on this plan");
+        }
+
+        const isUpgrade = selectedPlan.price_cents_monthly > currentPlan.price_cents_monthly;
+
+        if (!isUpgrade) {
+          // DOWNGRADE: update price immediately with no proration.
+          // User keeps current credits for the rest of this period.
+          // Next invoice charges the lower price; invoice.paid resets spend + budget.
+          const subscriptionItemId = readCurrentSubscriptionItemId(stripeSubscription);
+          if (!subscriptionItemId) {
+            throw new DomainError("INTERNAL", "Could not determine subscription item for downgrade", 500);
+          }
+          await stripe.subscriptions.update(existingSub.stripe_subscription_id, {
+            items: [{ id: subscriptionItemId, price: stripePriceId }],
+            proration_behavior: "none",
+            metadata: {
+              telegram_user_id: telegramUserId,
+              telegram_username: telegramUsername || "",
+              plan: selectedPlan.plan_code,
+            },
+          });
+
+          await db.upsertUserSubscription({
+            telegram_user_id: telegramUserId,
+            stripe_customer_id: customerId,
+            stripe_subscription_id: existingSub.stripe_subscription_id,
+            plan_id: selectedPlan.plan_code,
+          });
+
+          console.log("[payment] Downgrade scheduled (next billing cycle)", {
+            telegramUserId,
+            from: currentPlan.plan_code,
+            to: selectedPlan.plan_code,
+          });
+
+          return {
+            url: `${landingBaseUrl}/api/payment/success?mode=downgrade_scheduled`,
+            action: "downgrade",
+            message: `Downgraded to ${selectedPlan.display_name}. New credits apply at next billing cycle.`,
+          };
+        }
+
+        // UPGRADE: cancel old subscription immediately (no refund), then create new checkout.
+        // New 30-day billing period starts fresh after payment.
+        console.log("[payment] Upgrade: canceling old subscription", {
+          telegramUserId,
+          from: currentPlan.plan_code,
+          to: selectedPlan.plan_code,
+          oldSubscriptionId: existingSub.stripe_subscription_id,
+        });
+
+        await stripe.subscriptions.cancel(existingSub.stripe_subscription_id);
+        // Fall through to create new checkout session below
+      }
+    }
+  }
+
+  // --- Create new checkout session (new subscription or upgrade) ---
   let checkoutSession: Stripe.Checkout.Session;
   try {
     checkoutSession = await stripe.checkout.sessions.create(
       {
         customer: customerId,
         mode: "subscription",
-        line_items: [
-          {
-            price: stripePriceId,
-            quantity: 1,
-          },
-        ],
+        line_items: [{ price: stripePriceId, quantity: 1 }],
         success_url: `${landingBaseUrl}/api/payment/success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${landingBaseUrl}/api/payment/subscribe?token=${token}`,
         metadata: {
@@ -314,9 +384,7 @@ export const createCheckoutSession = async (
           },
         },
       },
-      {
-        idempotencyKey: `checkout:${token}`,
-      },
+      { idempotencyKey: `checkout:${token}` },
     );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message.toLowerCase() : "";
@@ -330,7 +398,7 @@ export const createCheckoutSession = async (
     throw error;
   }
 
-  return { url: checkoutSession.url };
+  return { url: checkoutSession.url, action: "checkout" };
 };
 
 export const cancelStripeSubscription = async (

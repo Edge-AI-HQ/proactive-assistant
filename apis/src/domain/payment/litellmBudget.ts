@@ -1,4 +1,4 @@
-import { createLiteLLMUser, isLiteLLMClientEnabled, updateLiteLLMUser } from '../litellm/client.js';
+import { createLiteLLMUser, isLiteLLMClientEnabled, resetLiteLLMUserSpend, updateLiteLLMUser } from '../litellm/client.js';
 import { db } from './db.js';
 
 type JsonRecord = Record<string, unknown>;
@@ -61,6 +61,7 @@ export const syncLiteLLMBudgetAbsolute = async (
   input: BudgetSyncInput & {
     budget_usd: number;
     metadata?: JsonRecord;
+    reset_spend?: boolean;
   }
 ): Promise<void> => {
   if (!isLiteLLMClientEnabled()) return;
@@ -84,6 +85,18 @@ export const syncLiteLLMBudgetAbsolute = async (
     }
   });
 
+  if (input.reset_spend) {
+    try {
+      await resetLiteLLMUserSpend(litellmUserId);
+      console.log(`[payment] Reset LiteLLM spend for user ${litellmUserId} (source: ${input.source})`);
+    } catch (error: unknown) {
+      console.error('[payment] Failed to reset LiteLLM spend, continuing with budget update', {
+        userId: litellmUserId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
   await updateLiteLLMUser({
     userId: litellmUserId,
     userAlias: litellmUserAlias,
@@ -105,6 +118,7 @@ export const syncLiteLLMBudgetFromPlan = async (input: {
   telegram_username?: string | null;
   plan_code: string;
   source: string;
+  reset_spend?: boolean;
 }): Promise<void> => {
   if (!isLiteLLMClientEnabled()) return;
 
@@ -124,6 +138,7 @@ export const syncLiteLLMBudgetFromPlan = async (input: {
     telegram_username: input.telegram_username,
     source: input.source,
     budget_usd: targetBudgetUsd,
+    ...(input.reset_spend != null ? { reset_spend: input.reset_spend } : {}),
     metadata: {
       plan_code: input.plan_code
     }

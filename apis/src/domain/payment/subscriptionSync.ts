@@ -175,6 +175,28 @@ export async function syncSubscriptionFromStripe(
     payload.telegram_username = username.trim();
   if (planCode) payload.plan_id = planCode;
 
+  // During upgrade, the old subscription gets deleted while a new one is created.
+  // Don't let the old subscription's deleted/canceled event overwrite the newer one.
+  const inactiveStatuses: Stripe.Subscription.Status[] = [
+    "canceled",
+    "incomplete_expired",
+    "unpaid",
+  ];
+  if (inactiveStatuses.includes(status)) {
+    const existingDbSub = await db.getSubscriptionByTelegramId(telegram_user_id);
+    if (
+      existingDbSub?.stripe_subscription_id &&
+      existingDbSub.stripe_subscription_id !== subscription.id
+    ) {
+      console.log("Skipping upsert for old/canceled subscription (newer subscription exists)", {
+        oldSubscriptionId: subscription.id,
+        currentSubscriptionId: existingDbSub.stripe_subscription_id,
+        telegramUserId: telegram_user_id,
+      });
+      return;
+    }
+  }
+
   await db.upsertUserSubscription(payload);
 
   const applied = await db.updateSubscriptionStatus(
@@ -202,10 +224,6 @@ export async function syncSubscriptionFromStripe(
 
   const telegramUsername = payload.telegram_username ?? null;
 
-  // Determine if user should have service
-  // Service is provided if:
-  // 1. Status is active, trialing, or past_due (grace period)
-  // 2. If cancel_at_period_end is true, check if still within period
   const activeStatuses: Stripe.Subscription.Status[] = [
     "active",
     "trialing",
@@ -221,14 +239,8 @@ export async function syncSubscriptionFromStripe(
   const shouldProvideService = hasActiveStatus && isWithinPeriod && planCode;
 
   if (shouldProvideService) {
-    await syncLiteLLMBudgetFromPlan({
-      telegram_user_id,
-      telegram_username: telegramUsername,
-      plan_code: planCode!,
-      source: "stripe_subscription_sync",
-    });
-
-    // Start containers for pending/stopped assistants and notify user
+    // Start containers for pending/stopped assistants and notify user.
+    // Budget is NOT synced here — only on invoice.paid to prevent timing exploits.
     const startedBotUsernames: string[] = [];
     try {
       const user = await getUserByTelegramId(Number(telegram_user_id));
@@ -277,44 +289,53 @@ export async function syncSubscriptionFromStripe(
     return;
   }
 
-  // No service - stop containers and set budget to 0
-  await syncLiteLLMBudgetAbsolute({
-    telegram_user_id,
-    telegram_username: telegramUsername,
-    budget_usd: 0,
-    source: "stripe_subscription_sync",
-    metadata: {
-      subscription_status: status,
-      plan_code: planCode,
-      cancel_at_period_end: subscription.cancel_at_period_end,
-    },
-  });
+  // Inactive subscription — only zero out budget if this is the user's current subscription.
+  // During upgrade, the old subscription is canceled before the new one is created;
+  // we must not zero the budget if the DB already points to a different subscription.
+  const currentDbSub = await db.getSubscriptionByTelegramId(telegram_user_id);
+  const isCurrentSubscription =
+    !currentDbSub ||
+    !currentDbSub.stripe_subscription_id ||
+    currentDbSub.stripe_subscription_id === subscription.id;
 
-  // Stop all running containers
-  try {
-    const assistants = await listAssistantsByOwnerTelegramId(
-      Number(telegram_user_id),
-    );
-    for (const assistant of assistants) {
-      if (assistant.container_status === "running") {
-        await stopAssistantContainer(assistant);
-        console.log(
-          `Stopped container for assistant ${assistant.id} due to inactive subscription`,
-        );
+  if (isCurrentSubscription) {
+    await syncLiteLLMBudgetAbsolute({
+      telegram_user_id,
+      telegram_username: telegramUsername,
+      budget_usd: 0,
+      source: "stripe_subscription_sync",
+      metadata: {
+        subscription_status: status,
+        plan_code: planCode,
+        cancel_at_period_end: subscription.cancel_at_period_end,
+      },
+    });
+
+    try {
+      const assistants = await listAssistantsByOwnerTelegramId(
+        Number(telegram_user_id),
+      );
+      for (const assistant of assistants) {
+        if (assistant.container_status === "running") {
+          await stopAssistantContainer(assistant);
+          console.log(
+            `Stopped container for assistant ${assistant.id} due to inactive subscription`,
+          );
+        }
       }
+    } catch (error: unknown) {
+      console.error("Failed to stop containers for inactive subscription", {
+        telegramUserId: telegram_user_id,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
-  } catch (error: unknown) {
-    console.error("Failed to stop containers for inactive subscription", {
+  } else {
+    console.log("Skipping budget zeroing for old subscription (user has newer subscription)", {
+      oldSubscriptionId: subscription.id,
+      currentSubscriptionId: currentDbSub.stripe_subscription_id,
       telegramUserId: telegram_user_id,
-      error: error instanceof Error ? error.message : String(error),
     });
   }
-
-  console.warn("Skipping LiteLLM budget sync due to missing active plan code", {
-    subscriptionId: subscription.id,
-    telegramUserId: telegram_user_id,
-    status: subscription.status,
-  });
 }
 
 const resolveSubscriptionFromInvoice = async (
@@ -371,10 +392,19 @@ export async function handleInvoicePaid(
     return;
   }
 
+  // invoice.paid is the ONLY trigger for resetting spend and updating budget.
+  // This ensures credits are only granted after confirmed payment.
+  console.log("[payment] invoice.paid: resetting spend and syncing budget", {
+    invoiceId: invoice.id,
+    telegramUserId: subscription.telegram_user_id,
+    planCode,
+  });
+
   await syncLiteLLMBudgetFromPlan({
     telegram_user_id: subscription.telegram_user_id,
     telegram_username: subscription.telegram_username,
     plan_code: planCode,
     source: "stripe_invoice_paid",
+    reset_spend: true,
   });
 }
