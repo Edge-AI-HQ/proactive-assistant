@@ -3,7 +3,7 @@ app = 'pinclaw-api-dev'
 primary_region = 'sjc'
 
 [build]
-  dockerfile = 'apis/Dockerfile'
+  dockerfile = 'Dockerfile.apis'
   build-target = 'apis'
 
 [env]

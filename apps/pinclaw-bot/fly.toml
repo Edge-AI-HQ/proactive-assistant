@@ -3,7 +3,7 @@ app = 'pinclaw-dev'
 primary_region = 'sjc'
 
 [build]
-  dockerfile = 'apps/pinclaw-bot/Dockerfile'
+  dockerfile = 'Dockerfile.bot'
 
 [env]
   PORT = '3001'

@@ -2,22 +2,22 @@ FROM node:20-slim AS build
 
 WORKDIR /app
 
-# Copy root package files from parent directory
-COPY ../../package*.json ./
+# Copy root package files
+COPY package*.json ./
 
 # Copy workspace package files
-COPY package*.json ./apps/pinclaw-bot/
-COPY ../../packages/shared-types/package*.json ./packages/shared-types/
+COPY apps/pinclaw-bot/package*.json ./apps/pinclaw-bot/
+COPY packages/shared-types/package*.json ./packages/shared-types/
 
 # Install all dependencies (including workspaces)
 RUN npm ci
 
 # Copy shared-types source and build it first
-COPY ../../packages/shared-types ./packages/shared-types
+COPY packages/shared-types ./packages/shared-types
 RUN npm run build --workspace @pin-ai/shared-types
 
 # Copy bot source
-COPY . ./apps/pinclaw-bot
+COPY apps/pinclaw-bot ./apps/pinclaw-bot
 
 # Build the bot
 RUN npm run build --workspace @pin-ai/pinclaw-bot
