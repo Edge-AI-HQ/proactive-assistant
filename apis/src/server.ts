@@ -45,6 +45,23 @@ app.use(express.static(publicPath));
 
 registerHttpRoutes(app);
 
+// Telegram webhook endpoint (before other routes)
+const webhookPath = '/webhook/telegram';
+app.post(webhookPath, express.json(), (req: Request, res: Response) => {
+  // This will be initialized after server starts
+  const bot = (global as any).__telegramBot;
+  if (!bot) {
+    res.sendStatus(503);
+    return;
+  }
+  bot.handleUpdate(req.body)
+    .then(() => res.sendStatus(200))
+    .catch((error: unknown) => {
+      console.error('Telegram webhook error:', error);
+      res.sendStatus(500);
+    });
+});
+
 app.get("/health", (req: Request, res: Response) => {
   void req;
   res.json({
@@ -57,7 +74,7 @@ app.get("/health", (req: Request, res: Response) => {
 
 app.get("/", (req: Request, res: Response) => {
   void req;
-  res.send("PIN AI unified backend API is running.");
+  res.send("PIN  backend API is running.");
 });
 
 setInterval(
@@ -78,17 +95,28 @@ const server = app.listen(config.port, () => {
 
 registerWsRoutes(server);
 
-// Start Telegram bot
+// Start Telegram bot with webhook mode
 if (config.telegram.token) {
   const bot = buildBot();
-  bot.start({
+  (global as any).__telegramBot = bot;
+  
+  const webhookUrl = `${config.publicBaseUrl}${webhookPath}`;
+  
+  // Set webhook
+  const webhookOptions: any = {
     drop_pending_updates: true,
-    onStart: (botInfo) => {
-      console.log(`Telegram bot @${botInfo.username} started (polling mode)`);
-    },
-  }).catch((error: unknown) => {
-    console.error('Failed to start Telegram bot:', error);
-  });
+  };
+  if (config.telegram.webhookSecret) {
+    webhookOptions.secret_token = config.telegram.webhookSecret;
+  }
+  
+  bot.api.setWebhook(webhookUrl, webhookOptions)
+    .then(() => {
+      console.log(`Telegram bot webhook set to: ${webhookUrl}`);
+    })
+    .catch((error: unknown) => {
+      console.error('Failed to set webhook:', error);
+    });
 } else {
   console.warn('TELEGRAM_BOT_TOKEN not configured, bot will not start');
 }
