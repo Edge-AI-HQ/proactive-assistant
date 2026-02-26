@@ -184,8 +184,8 @@ npm run litellm:up
 ## Telegram Bot 命令（当前）
 
 - `/start`
-- `/create_claw_assistant`（兼容旧命令 `/create_pin_claw_assistant`）
-- `/list_claw_assistant`（兼容旧命令）
+- `/create_claw_assistant`
+- `/list_claw_assistant`
 - `/gateway`
 - `/cancel_subscription`
 
