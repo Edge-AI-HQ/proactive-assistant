@@ -15,10 +15,9 @@ const creditsToUsd = (credits: number): number => {
   return Math.max(0, Number((credits / 100).toFixed(6)));
 };
 
-const planBudgetUsd = (dailyRefreshCredits: number, monthlyRefreshCredits: number): number => {
-  const daily = Number.isFinite(dailyRefreshCredits) ? Math.max(0, Math.trunc(dailyRefreshCredits)) : 0;
+const planBudgetUsd = (monthlyRefreshCredits: number): number => {
   const monthly = Number.isFinite(monthlyRefreshCredits) ? Math.max(0, Math.trunc(monthlyRefreshCredits)) : 0;
-  return creditsToUsd(daily + monthly);
+  return creditsToUsd(monthly);
 };
 
 const normalizeBudgetUsd = (value: number): number => {
@@ -119,7 +118,7 @@ export const syncLiteLLMBudgetFromPlan = async (input: {
     return;
   }
 
-  const targetBudgetUsd = planBudgetUsd(plan.daily_refresh_credits, plan.monthly_refresh_credits);
+  const targetBudgetUsd = planBudgetUsd(plan.monthly_refresh_credits);
   await syncLiteLLMBudgetAbsolute({
     telegram_user_id: input.telegram_user_id,
     telegram_username: input.telegram_username,
