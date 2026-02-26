@@ -34,18 +34,7 @@ app.set("trust proxy", true);
 
 registerRawBodyRoutes(app);
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(cookieParser());
-
-// Serve static files from public directory
-const publicPath = path.join(process.cwd(), "public");
-console.log("Serving static files from:", publicPath);
-app.use(express.static(publicPath));
-
-registerHttpRoutes(app);
-
-// Telegram webhook endpoint (before other routes)
+// Telegram webhook endpoint (MUST be before express.json() middleware)
 const webhookPath = '/webhook/telegram';
 app.post(webhookPath, express.json(), (req: Request, res: Response) => {
   console.log('Received webhook request:', {
@@ -71,6 +60,17 @@ app.post(webhookPath, express.json(), (req: Request, res: Response) => {
       res.sendStatus(500);
     });
 });
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
+
+// Serve static files from public directory
+const publicPath = path.join(process.cwd(), "public");
+console.log("Serving static files from:", publicPath);
+app.use(express.static(publicPath));
+
+registerHttpRoutes(app);
 
 app.get("/health", (req: Request, res: Response) => {
   void req;
