@@ -3,7 +3,6 @@ import Stripe from "stripe";
 import type { Request } from "express";
 import { DomainError } from "../common/errors.js";
 import { db } from "./db.js";
-import { getStripePriceIdForPlanCode } from "./planCatalog.js";
 import { syncLiteLLMBudgetFromPlan } from "./litellmBudget.js";
 import { readPaymentPublicBaseUrl } from "./publicBaseUrl.js";
 import { parseTelegramUserId, requireStripe } from "./stripeClient.js";
@@ -36,12 +35,12 @@ const parseTtlSeconds = (value: unknown): number => {
     : 60 * 60;
 };
 
-const resolveStripePriceIdOrThrow = (planCode: string): string => {
-  const priceId = getStripePriceIdForPlanCode(planCode);
+const requireStripePriceId = (plan: { plan_code: string; stripe_price_id: string }): string => {
+  const priceId = (plan.stripe_price_id || "").trim();
   if (!priceId) {
     throw new DomainError(
       "INTERNAL",
-      `Missing Stripe price ID configuration for plan "${planCode}"`,
+      `Missing Stripe price ID for plan "${plan.plan_code}" (set in billing_plans.stripe_price_id)`,
       500,
     );
   }
@@ -88,24 +87,26 @@ export const listActivePlansForApi = async (): Promise<{
 }> => {
   const plans = await db.listActivePlans();
   return {
-    plans: plans.map((plan) => {
-      const name = plan.display_name.trim() || plan.plan_code;
-      const priceId = resolveStripePriceIdOrThrow(plan.plan_code);
+    plans: plans
+      .filter((plan) => (plan.stripe_price_id || "").trim())
+      .map((plan) => {
+        const name = plan.display_name.trim() || plan.plan_code;
+        const priceId = requireStripePriceId(plan);
 
-      return {
-        id: plan.plan_code,
-        name,
-        price: (plan.price_cents_monthly / 100).toFixed(2),
-        priceId,
-        description: `${name} subscription`,
-        features: [
-          `${plan.daily_refresh_credits} credits daily refresh (non-cumulative)`,
-          `${plan.monthly_refresh_credits} credits monthly refresh (non-cumulative)`,
-          "100 credits = $1 usage budget",
-        ],
-        popular: plan.plan_code === "pro",
-      };
-    }),
+        return {
+          id: plan.plan_code,
+          name,
+          price: (plan.price_cents_monthly / 100).toFixed(2),
+          priceId,
+          description: `${name} subscription`,
+          features: [
+            `${plan.daily_refresh_credits} credits daily refresh (non-cumulative)`,
+            `${plan.monthly_refresh_credits} credits monthly refresh (non-cumulative)`,
+            "100 credits = $1 usage budget",
+          ],
+          popular: plan.plan_code === "pro",
+        };
+      }),
   };
 };
 
@@ -253,7 +254,7 @@ export const createCheckoutSession = async (
   if (!selectedPlan || !selectedPlan.is_active) {
     throw new DomainError("INVALID_INPUT", "Invalid plan");
   }
-  const stripePriceId = resolveStripePriceIdOrThrow(selectedPlan.plan_code);
+  const stripePriceId = requireStripePriceId(selectedPlan);
 
   const telegramUserId = session.telegram_user_id;
   const telegramUsername = session.telegram_username;

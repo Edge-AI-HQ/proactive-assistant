@@ -1,6 +1,6 @@
 import { config } from '../common/config.js';
 import { db } from './db.js';
-import { getStripePriceIdForPlanCode, type PlanCode } from './planCatalog.js';
+import type { PlanCode } from './planCatalog.js';
 import { requireStripe } from './stripeClient.js';
 
 const orderedPlanCodes: PlanCode[] = ['basic', 'pro', 'max'];
@@ -14,15 +14,14 @@ export const validatePaymentPriceConsistencyOnStartup = async (): Promise<void> 
   const issues: string[] = [];
 
   for (const planCode of orderedPlanCodes) {
-    const configuredPriceId = getStripePriceIdForPlanCode(planCode);
     const dbPlan = planMap.get(planCode);
-
-    if (!configuredPriceId) {
-      issues.push(`Missing configured Stripe price id for plan ${planCode}`);
-      continue;
-    }
     if (!dbPlan) {
       issues.push(`Missing active DB billing plan row for plan ${planCode}`);
+      continue;
+    }
+    const configuredPriceId = (dbPlan.stripe_price_id || '').trim();
+    if (!configuredPriceId) {
+      issues.push(`Missing stripe_price_id for plan ${planCode} (set in billing_plans or run scripts/create-stripe-prices.mjs)`);
       continue;
     }
 

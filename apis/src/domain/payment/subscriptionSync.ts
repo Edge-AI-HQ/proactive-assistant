@@ -4,7 +4,6 @@ import {
   syncLiteLLMBudgetAbsolute,
   syncLiteLLMBudgetFromPlan,
 } from "./litellmBudget.js";
-import { resolvePlanCodeFromStripePriceId } from "./planCatalog.js";
 import {
   listAssistantsByOwnerTelegramId,
   getUserByTelegramId,
@@ -45,9 +44,6 @@ const resolvePlanCodeFromSubscription = async (
   const priceId = readSubscriptionPriceId(subscription);
   if (!priceId) return null;
 
-  const fromConfiguredPrice = resolvePlanCodeFromStripePriceId(priceId);
-  if (fromConfiguredPrice) return fromConfiguredPrice;
-
   const plan = await db.getPlanByStripePriceId(priceId);
   return plan?.plan_code ?? null;
 };
@@ -61,9 +57,6 @@ const resolvePlanCodeFromInvoice = async (
 
   const priceId = readInvoicePriceId(invoice);
   if (priceId) {
-    const fromConfiguredPrice = resolvePlanCodeFromStripePriceId(priceId);
-    if (fromConfiguredPrice) return fromConfiguredPrice;
-
     const byPrice = await db.getPlanByStripePriceId(priceId);
     if (byPrice?.plan_code) return byPrice.plan_code;
   }

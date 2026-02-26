@@ -180,11 +180,9 @@ export const requiredSecrets: RequiredSecret[] = (() => {
   if (config.payment.enabled) {
     secrets.push(
       ['STRIPE_SECRET_KEY', config.payment.stripeSecretKey],
-      ['STRIPE_PRICE_ID_BASIC', config.payment.stripePriceIdBasic],
-      ['STRIPE_PRICE_ID_PRO', config.payment.stripePriceIdPro],
-      ['STRIPE_PRICE_ID_MAX', config.payment.stripePriceIdMax],
       ['API_INTERNAL_TOKEN', config.apiAuthToken]
     );
+    // STRIPE_PRICE_ID_* 已废弃：价格从 billing_plans.stripe_price_id 读取
   }
 
   return secrets;

@@ -54,10 +54,9 @@ PIN AI Assistant 仓库说明文档。
 支付开启时（`PAYMENT_ENABLED=true`）：
 - `STRIPE_SECRET_KEY`
 - `STRIPE_WEBHOOK_SECRET`
-- `STRIPE_PRICE_ID_BASIC`
-- `STRIPE_PRICE_ID_PRO`
-- `STRIPE_PRICE_ID_MAX`
 - `API_INTERNAL_TOKEN`（支付内部接口强制要求）
+
+Stripe 套餐价格 ID 从数据库 `billing_plans.stripe_price_id` 读取，无需配置 `STRIPE_PRICE_ID_*`；首次可运行 `apis/scripts/create-stripe-prices.mjs` 创建并写入。
 
 ### 2) `apps/pinclaw-bot`（Telegram 前端）
 
