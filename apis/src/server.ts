@@ -48,14 +48,24 @@ registerHttpRoutes(app);
 // Telegram webhook endpoint (before other routes)
 const webhookPath = '/webhook/telegram';
 app.post(webhookPath, express.json(), (req: Request, res: Response) => {
+  console.log('Received webhook request:', {
+    headers: req.headers,
+    body: req.body,
+  });
+  
   // This will be initialized after server starts
   const bot = (global as any).__telegramBot;
   if (!bot) {
+    console.error('Bot not initialized yet');
     res.sendStatus(503);
     return;
   }
+  
   bot.handleUpdate(req.body)
-    .then(() => res.sendStatus(200))
+    .then(() => {
+      console.log('Webhook update processed successfully');
+      res.sendStatus(200);
+    })
     .catch((error: unknown) => {
       console.error('Telegram webhook error:', error);
       res.sendStatus(500);
@@ -90,7 +100,7 @@ setInterval(
 );
 
 const server = app.listen(config.port, () => {
-  console.log(`PIN AI unified backend listening on :${config.port}`);
+  console.log(`PINClaw backend listening on :${config.port}`);
 });
 
 registerWsRoutes(server);
