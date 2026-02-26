@@ -13,6 +13,7 @@ import {
   registerRawBodyRoutes,
   registerWsRoutes,
 } from "./controller/api_route_handler.js";
+import { buildBot } from "./domain/telegram-bot/bot.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -76,3 +77,18 @@ const server = app.listen(config.port, () => {
 });
 
 registerWsRoutes(server);
+
+// Start Telegram bot
+if (config.telegram.token) {
+  const bot = buildBot();
+  bot.start({
+    drop_pending_updates: true,
+    onStart: (botInfo) => {
+      console.log(`Telegram bot @${botInfo.username} started (polling mode)`);
+    },
+  }).catch((error: unknown) => {
+    console.error('Failed to start Telegram bot:', error);
+  });
+} else {
+  console.warn('TELEGRAM_BOT_TOKEN not configured, bot will not start');
+}

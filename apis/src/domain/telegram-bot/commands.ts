@@ -1,5 +1,5 @@
 import { Bot, InlineKeyboard, type Context } from "grammy";
-import { config } from "../config.js";
+import { config } from "../common/config.js";
 import {
   BackendApiError,
   createGatewaySessionViaApi,
@@ -10,8 +10,8 @@ import {
   isPaymentEnabled,
   listAssistantsByOwnerViaApi,
   provisionAssistantViaApi,
-} from "../client.js";
-import type { AssistantRecord } from "../types.js";
+} from "./client.js";
+import type { AssistantRecord } from "../../types.js";
 
 const CREATE_ASSISTANT_COMMAND = "create_claw_assistant";
 const LEGACY_CREATE_ASSISTANT_COMMAND = "create_pin_claw_assistant";
