@@ -42,6 +42,19 @@ app.post(webhookPath, express.json(), (req: Request, res: Response) => {
     body: req.body,
   });
   
+  // Verify webhook secret if configured
+  if (config.telegram.webhookSecret) {
+    const receivedSecret = req.headers['x-telegram-bot-api-secret-token'];
+    if (receivedSecret !== config.telegram.webhookSecret) {
+      console.error('Webhook secret mismatch!', {
+        expected: config.telegram.webhookSecret.substring(0, 10) + '...',
+        received: receivedSecret
+      });
+      res.sendStatus(403);
+      return;
+    }
+  }
+  
   // This will be initialized after server starts
   const bot = (global as any).__telegramBot;
   if (!bot) {
@@ -112,9 +125,11 @@ if (config.telegram.token) {
   // Initialize bot before storing globally
   bot.init()
     .then(() => {
+      console.log(`Telegram bot initialized: @${bot.botInfo.username}`);
       (global as any).__telegramBot = bot;
       
       const webhookUrl = `${config.publicBaseUrl}${webhookPath}`;
+      console.log(`Setting webhook to: ${webhookUrl}`);
       
       // Set webhook
       const webhookOptions: any = {
@@ -122,12 +137,27 @@ if (config.telegram.token) {
       };
       if (config.telegram.webhookSecret) {
         webhookOptions.secret_token = config.telegram.webhookSecret;
+        console.log('Webhook secret token will be configured');
       }
       
       return bot.api.setWebhook(webhookUrl, webhookOptions);
     })
-    .then(() => {
-      console.log(`Telegram bot webhook set to: ${config.publicBaseUrl}${webhookPath}`);
+    .then((result) => {
+      console.log('Telegram webhook set successfully:', result);
+      
+      // Verify webhook was set correctly
+      return bot.api.getWebhookInfo();
+    })
+    .then((info) => {
+      console.log('Webhook verification:', {
+        url: info.url,
+        pending_update_count: info.pending_update_count,
+        has_custom_certificate: info.has_custom_certificate
+      });
+      
+      if (info.url !== `${config.publicBaseUrl}${webhookPath}`) {
+        console.warn(`WARNING: Webhook URL mismatch! Expected ${config.publicBaseUrl}${webhookPath}, got ${info.url}`);
+      }
     })
     .catch((error: unknown) => {
       console.error('Failed to initialize or set webhook:', error);
