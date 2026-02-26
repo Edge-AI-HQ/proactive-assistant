@@ -1,6 +1,6 @@
 # Fly.io configuration for PIN AI Telegram Bot
 app = 'pinclaw-dev'
-primary_region = 'sjc'
+primary_region = 'iad'
 
 [build]
   dockerfile = 'Dockerfile'
