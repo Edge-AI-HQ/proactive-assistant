@@ -1,5 +1,5 @@
 import { Bot, type Context } from 'grammy';
-import { config } from '../config.js';
+import { config } from '../common/config.js';
 import { registerTelegramCommands } from './commands.js';
 import { shouldSkipDuplicateUpdate } from './updateDedupe.js';
 

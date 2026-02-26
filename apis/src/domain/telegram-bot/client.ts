@@ -1,5 +1,5 @@
-import { config } from "./config.js";
-import type { AssistantRecord, UserRecord } from "./types.js";
+import { config } from "../common/config.js";
+import type { AssistantRecord, UserRecord } from "../../types.js";
 
 export class BackendApiError extends Error {
   status: number;
@@ -14,7 +14,7 @@ export class BackendApiError extends Error {
 const stripTrailingSlash = (value: string): string => value.replace(/\/+$/, "");
 
 const requestTimeoutMs = (): number =>
-  Math.max(1000, config.backendApi.requestTimeoutMs);
+  Math.max(1000, config.payment.requestTimeoutMs);
 
 const withTimeout = async <T>(
   promise: Promise<T>,
@@ -34,11 +34,8 @@ const withTimeout = async <T>(
 };
 
 const baseUrl = (): string => {
-  const value = config.backendApi.baseUrl.trim();
-  if (!value) {
-    throw new Error("BACKEND_API_BASE_URL is missing");
-  }
-  return stripTrailingSlash(value);
+  // Bot now calls the same API server (itself), use localhost
+  return 'http://127.0.0.1:' + config.port;
 };
 
 const buildHeaders = (
@@ -52,7 +49,7 @@ const buildHeaders = (
     headers["Content-Type"] = "application/json";
   }
 
-  const token = (apiKeyOverride ?? config.backendApi.internalApiKey).trim();
+  const token = (apiKeyOverride ?? config.apiAuthToken).trim();
   if (token) {
     headers["x-api-key"] = token;
   }
@@ -220,7 +217,7 @@ export const createPaymentSessionViaApi = async (
 };
 
 export const isPaymentEnabled = (): boolean =>
-  Boolean(config.backendApi.baseUrl.trim());
+  Boolean(config.payment.stripeSecretKey.trim());
 
 export const createPaymentSessionForUser = async (
   telegramUserId: number,

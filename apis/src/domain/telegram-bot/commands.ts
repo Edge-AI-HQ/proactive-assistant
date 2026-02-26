@@ -1,5 +1,5 @@
 import { Bot, InlineKeyboard, type Context } from "grammy";
-import { config } from "../config.js";
+import { config } from "../common/config.js";
 import {
   BackendApiError,
   createGatewaySessionViaApi,
@@ -10,8 +10,8 @@ import {
   isPaymentEnabled,
   listAssistantsByOwnerViaApi,
   provisionAssistantViaApi,
-} from "../client.js";
-import type { AssistantRecord } from "../types.js";
+} from "./client.js";
+import type { AssistantRecord } from "../../types.js";
 
 const CREATE_ASSISTANT_COMMAND = "create_claw_assistant";
 const LEGACY_CREATE_ASSISTANT_COMMAND = "create_pin_claw_assistant";
@@ -185,7 +185,7 @@ const safeCreatePaymentLink = async (
       telegramUserId,
       status: error instanceof BackendApiError ? error.status : undefined,
       error: error instanceof Error ? error.message : String(error || ""),
-      hasApiInternalToken: Boolean(config.backendApi.internalApiKey.trim()),
+      hasApiInternalToken: Boolean(config.apiAuthToken.trim()),
       hint: isUnauthorized
         ? "Set bot API_INTERNAL_TOKEN to match apis API_INTERNAL_TOKEN."
         : undefined,
@@ -196,7 +196,7 @@ const safeCreatePaymentLink = async (
 
 const resolveBackendApiOrigin = (): URL | null => {
   try {
-    return new URL(config.backendApi.baseUrl);
+    return new URL(config.publicBaseUrl);
   } catch {
     return null;
   }
