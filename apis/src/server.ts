@@ -98,24 +98,29 @@ registerWsRoutes(server);
 // Start Telegram bot with webhook mode
 if (config.telegram.token) {
   const bot = buildBot();
-  (global as any).__telegramBot = bot;
   
-  const webhookUrl = `${config.publicBaseUrl}${webhookPath}`;
-  
-  // Set webhook
-  const webhookOptions: any = {
-    drop_pending_updates: true,
-  };
-  if (config.telegram.webhookSecret) {
-    webhookOptions.secret_token = config.telegram.webhookSecret;
-  }
-  
-  bot.api.setWebhook(webhookUrl, webhookOptions)
+  // Initialize bot before storing globally
+  bot.init()
     .then(() => {
-      console.log(`Telegram bot webhook set to: ${webhookUrl}`);
+      (global as any).__telegramBot = bot;
+      
+      const webhookUrl = `${config.publicBaseUrl}${webhookPath}`;
+      
+      // Set webhook
+      const webhookOptions: any = {
+        drop_pending_updates: true,
+      };
+      if (config.telegram.webhookSecret) {
+        webhookOptions.secret_token = config.telegram.webhookSecret;
+      }
+      
+      return bot.api.setWebhook(webhookUrl, webhookOptions);
+    })
+    .then(() => {
+      console.log(`Telegram bot webhook set to: ${config.publicBaseUrl}${webhookPath}`);
     })
     .catch((error: unknown) => {
-      console.error('Failed to set webhook:', error);
+      console.error('Failed to initialize or set webhook:', error);
     });
 } else {
   console.warn('TELEGRAM_BOT_TOKEN not configured, bot will not start');
