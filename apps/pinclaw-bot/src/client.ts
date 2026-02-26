@@ -220,7 +220,7 @@ export const createPaymentSessionViaApi = async (
 };
 
 export const isPaymentEnabled = (): boolean =>
-  config.payment.enabled && Boolean(config.backendApi.baseUrl.trim());
+  Boolean(config.backendApi.baseUrl.trim());
 
 export const createPaymentSessionForUser = async (
   telegramUserId: number,

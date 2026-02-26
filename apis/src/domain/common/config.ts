@@ -134,7 +134,6 @@ export const config: Config = {
     dbUrl: process.env.SUPABASE_DB_URL || ''
   },
   payment: {
-    enabled: toBool(process.env.PAYMENT_ENABLED, false),
     requestTimeoutMs: toInt(process.env.PAYMENT_REQUEST_TIMEOUT_MS, 10000),
     stripeSecretKey: toTrimmed(process.env.STRIPE_SECRET_KEY),
     stripeWebhookSecret: toTrimmed(process.env.STRIPE_WEBHOOK_SECRET),
@@ -177,13 +176,10 @@ export const requiredSecrets: RequiredSecret[] = (() => {
     secrets.push(['LITELLM_MASTER_KEY', config.litellm.masterKey]);
   }
 
-  if (config.payment.enabled) {
-    secrets.push(
-      ['STRIPE_SECRET_KEY', config.payment.stripeSecretKey],
-      ['API_INTERNAL_TOKEN', config.apiAuthToken]
-    );
-    // STRIPE_PRICE_ID_* 已废弃：价格从 billing_plans.stripe_price_id 读取
-  }
+  secrets.push(
+    ['STRIPE_SECRET_KEY', config.payment.stripeSecretKey],
+    ['API_INTERNAL_TOKEN', config.apiAuthToken]
+  );
 
   return secrets;
 })();

@@ -6,8 +6,6 @@ import { requireStripe } from './stripeClient.js';
 const orderedPlanCodes: PlanCode[] = ['basic', 'pro', 'max'];
 
 export const validatePaymentPriceConsistencyOnStartup = async (): Promise<void> => {
-  if (!config.payment.enabled) return;
-
   const stripe = requireStripe();
   const plans = await db.listActivePlans();
   const planMap = new Map(plans.map((plan) => [plan.plan_code, plan]));
