@@ -7,16 +7,11 @@ COPY package*.json ./
 
 # Copy workspace package files
 COPY apis/package*.json ./apis/
-COPY packages/shared-types/package*.json ./packages/shared-types/
 
-# Install all dependencies (including workspaces)
+# Install all dependencies
 RUN npm ci
 
-# Copy shared-types source and build it first
-COPY packages/shared-types ./packages/shared-types
-RUN npm run build --workspace @pin-ai/shared-types
-
-# Copy apis source
+# Copy apis source (types are now inside apis/src/types)
 COPY apis ./apis
 
 # Build the API

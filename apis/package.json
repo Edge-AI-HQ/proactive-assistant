@@ -20,7 +20,6 @@
     "litellm:verify-db-env": "cd .. && bash ops/litellm/litellm.sh verify-db-env"
   },
   "dependencies": {
-    "@pin-ai/shared-types": "0.1.0",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.6",
     "dockerode": "^4.0.2",

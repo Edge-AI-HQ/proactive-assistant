@@ -6,20 +6,13 @@
     "npm": ">=10"
   },
   "workspaces": [
-    "apis",
-    "apps/pinclaw-bot",
-    "packages/shared-types"
+    "apis"
   ],
   "scripts": {
     "dev": "npm run dev --workspace @pin-ai/apis",
-    "dev:bot": "npm run dev --workspace @pin-ai/pinclaw-bot",
-    "dev:api": "npm run dev --workspace @pin-ai/apis",
-    "build": "npm run build --workspace @pin-ai/shared-types && npm run build --workspace @pin-ai/apis && npm run build --workspace @pin-ai/pinclaw-bot",
+    "build": "npm run build --workspace @pin-ai/apis",
     "start": "npm run start --workspace @pin-ai/apis",
-    "start:bot": "npm run start --workspace @pin-ai/pinclaw-bot",
-    "type-check": "npm run type-check --workspace @pin-ai/shared-types && npm run type-check --workspace @pin-ai/apis && npm run type-check --workspace @pin-ai/pinclaw-bot",
-    "lint": "npm run lint --workspace @pin-ai/pinclaw-bot",
-    "hash-password": "npm run hash-password --workspace @pin-ai/pinclaw-bot --",
+    "type-check": "npm run type-check --workspace @pin-ai/apis",
     "litellm:up": "bash ops/litellm/litellm.sh up",
     "litellm:restart": "bash ops/litellm/litellm.sh restart",
     "litellm:logs": "bash ops/litellm/litellm.sh logs",

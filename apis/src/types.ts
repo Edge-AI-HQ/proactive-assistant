@@ -1,4 +1,4 @@
-import type { BasePaymentConfig, SharedConfig } from '@pin-ai/shared-types';
+import type { BasePaymentConfig, SharedConfig } from './types/index.js';
 
 export type {
   AssistantMutableFields,
@@ -11,7 +11,7 @@ export type {
   SharedConfig,
   UserMutableFields,
   UserRecord
-} from '@pin-ai/shared-types';
+} from './types/index.js';
 
 export interface ApiPaymentConfig extends BasePaymentConfig {
   requestTimeoutMs: number;

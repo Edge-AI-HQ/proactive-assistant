@@ -1,4 +1,4 @@
-import type { UserRecord } from '@pin-ai/shared-types';
+import type { UserRecord } from '../types/index.js';
 
 declare global {
   namespace Express {
