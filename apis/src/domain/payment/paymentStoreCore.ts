@@ -1,14 +1,14 @@
-import { lookupUserByTelegramId } from './userRegistry.js';
+import { lookupUserByTelegramId } from "./userRegistry.js";
 
 export type Queryable = {
   query: <T = Record<string, unknown>>(
     sql: string,
-    params?: unknown[]
+    params?: unknown[],
   ) => Promise<{ rows: T[]; rowCount: number | null }>;
   connect: () => Promise<{
     query: <T = Record<string, unknown>>(
       sql: string,
-      params?: unknown[]
+      params?: unknown[],
     ) => Promise<{ rows: T[]; rowCount: number | null }>;
     release: () => void;
   }>;
@@ -17,7 +17,7 @@ export type Queryable = {
 export type QueryExecutor = {
   query: <T = Record<string, unknown>>(
     sql: string,
-    params?: unknown[]
+    params?: unknown[],
   ) => Promise<{ rows: T[]; rowCount: number | null }>;
 };
 
@@ -38,10 +38,20 @@ export interface UserSubscription {
   stripe_customer_id: string;
   stripe_subscription_id?: string;
   plan_id?: string;
-  status: 'active' | 'paused' | 'canceled' | 'pending';
+  status:
+    | "incomplete"
+    | "incomplete_expired"
+    | "trialing"
+    | "active"
+    | "past_due"
+    | "canceled"
+    | "unpaid"
+    | "paused";
+  stripe_status?: string;
   cancel_at_period_end: boolean;
   current_period_start?: string;
   current_period_end?: string;
+  ended_at?: string;
   created_at: string;
   updated_at: string;
 }
@@ -77,7 +87,7 @@ export interface UserIdentity {
   litellm_user_alias: string | null;
 }
 
-export type StripeEventClaimResult = 'process' | 'skip';
+export type StripeEventClaimResult = "process" | "skip";
 
 export const subscriptionSelectSql = `
   SELECT
@@ -113,21 +123,24 @@ export const billingPlanSelectSql = `
   FROM billing_plans
 `;
 
-export const readPlanByCode = async (queryable: QueryExecutor, planCode: string): Promise<BillingPlan | null> => {
+export const readPlanByCode = async (
+  queryable: QueryExecutor,
+  planCode: string,
+): Promise<BillingPlan | null> => {
   const result = await queryable.query<BillingPlan>(
     `
       ${billingPlanSelectSql}
       WHERE plan_code = $1
       LIMIT 1
     `,
-    [planCode]
+    [planCode],
   );
   return firstRow(result.rows);
 };
 
 export const readUserIdentityByTelegramId = async (
   queryable: QueryExecutor,
-  telegramUserId: string
+  telegramUserId: string,
 ): Promise<UserIdentity | null> => {
   const user = await lookupUserByTelegramId(queryable, telegramUserId);
   if (!user) return null;
@@ -144,7 +157,7 @@ export const readUserIdentityByTelegramId = async (
       WHERE id = $1
       LIMIT 1
     `,
-    [user.id]
+    [user.id],
   );
 
   return firstRow(result.rows);

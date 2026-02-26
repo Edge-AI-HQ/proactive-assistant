@@ -1,11 +1,12 @@
-export { configureContainerManagerRuntime } from './runtime.js';
+export { configureContainerManagerRuntime } from "./runtime.js";
 export {
   destroyAssistantContainer,
   ensureAssistantContainer,
   prepareContainerRuntime,
-  resolveGatewayTargetForAssistant
-} from './service.js';
-export type { GatewayTarget } from './contracts.js';
+  resolveGatewayTargetForAssistant,
+  stopAssistantContainer,
+} from "./service.js";
+export type { GatewayTarget } from "./contracts.js";
 export type {
   AssistantMutableFields,
   AssistantRecord,
@@ -15,5 +16,5 @@ export type {
   ReadAssistantLiteLLMVirtualKey,
   ReadUserLiteLLMVirtualKey,
   UserMutableFields,
-  UserRecord
-} from './types.js';
+  UserRecord,
+} from "./types.js";
