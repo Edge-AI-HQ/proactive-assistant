@@ -74,7 +74,7 @@ app.get("/health", (req: Request, res: Response) => {
 
 app.get("/", (req: Request, res: Response) => {
   void req;
-  res.send("PIN  backend API is running.");
+  res.send("PINClaw backend API is running.");
 });
 
 setInterval(
