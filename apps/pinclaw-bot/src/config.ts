@@ -133,9 +133,7 @@ export const config: Config = {
   supabase: {
     dbUrl: process.env.SUPABASE_DB_URL || ''
   },
-  payment: {
-    enabled: toBool(process.env.PAYMENT_ENABLED, false)
-  },
+  payment: {},
   container: {
     runtime: process.env.CONTAINER_RUNTIME === 'fly' ? 'fly' : 'docker',
     portStart: toInt(process.env.CONTAINER_PORT_START, 20000),

@@ -4,12 +4,12 @@ import {
   type Queryable,
   type StripeEventClaimResult,
   type UserIdentity,
-  type UserSubscription
-} from './paymentStoreCore.js';
-import { createPaymentSessionStore } from './paymentStoreSession.js';
-import { createPlanStore } from './paymentStorePlan.js';
-import { createSubscriptionStore } from './paymentStoreSubscription.js';
-import { createIdentityStore } from './paymentStoreIdentity.js';
+  type UserSubscription,
+} from "./paymentStoreCore.js";
+import { createPaymentSessionStore } from "./paymentStoreSession.js";
+import { createPlanStore } from "./paymentStorePlan.js";
+import { createSubscriptionStore } from "./paymentStoreSubscription.js";
+import { createIdentityStore } from "./paymentStoreIdentity.js";
 
 export type {
   BillingPlan,
@@ -18,8 +18,8 @@ export type {
   Queryable,
   StripeEventClaimResult,
   UserIdentity,
-  UserSubscription
-} from './paymentStoreCore.js';
+  UserSubscription,
+} from "./paymentStoreCore.js";
 
 export interface PaymentStore {
   upsertUserSubscription(data: {
@@ -29,17 +29,33 @@ export interface PaymentStore {
     stripe_subscription_id?: string;
     plan_id?: string;
   }): Promise<UserSubscription>;
-  getSubscriptionByTelegramId(telegram_user_id: string): Promise<UserSubscription | null>;
-  getSubscriptionByStripeCustomerId(stripe_customer_id: string): Promise<UserSubscription | null>;
-  getSubscriptionByStripeSubscriptionId(stripe_subscription_id: string): Promise<UserSubscription | null>;
+  getSubscriptionByTelegramId(
+    telegram_user_id: string,
+  ): Promise<UserSubscription | null>;
+  getSubscriptionByStripeCustomerId(
+    stripe_customer_id: string,
+  ): Promise<UserSubscription | null>;
+  getSubscriptionByStripeSubscriptionId(
+    stripe_subscription_id: string,
+  ): Promise<UserSubscription | null>;
   updateSubscriptionStatus(
     telegram_user_id: string,
-    status: 'active' | 'paused' | 'canceled' | 'pending',
+    status:
+      | "incomplete"
+      | "incomplete_expired"
+      | "trialing"
+      | "active"
+      | "past_due"
+      | "canceled"
+      | "unpaid"
+      | "paused",
     period_start?: Date,
     period_end?: Date,
     cancel_at_period_end?: boolean,
+    ended_at?: Date,
+    stripe_status?: string,
     stripe_event_created?: number,
-    stripe_event_id?: string
+    stripe_event_id?: string,
   ): Promise<boolean>;
   claimStripeEvent(data: {
     telegram_user_id?: string;
@@ -51,7 +67,10 @@ export interface PaymentStore {
     raw_data?: unknown;
   }): Promise<StripeEventClaimResult>;
   markStripeEventProcessed(stripe_event_id: string): Promise<void>;
-  markStripeEventFailed(stripe_event_id: string, errorMessage: string): Promise<void>;
+  markStripeEventFailed(
+    stripe_event_id: string,
+    errorMessage: string,
+  ): Promise<void>;
   getActiveSubscriptions(): Promise<UserSubscription[]>;
   createPaymentSession(data: {
     token: string;
@@ -65,7 +84,9 @@ export interface PaymentStore {
   listActivePlans(): Promise<BillingPlan[]>;
   getPlanByCode(planCode: string): Promise<BillingPlan | null>;
   getPlanByStripePriceId(stripePriceId: string): Promise<BillingPlan | null>;
-  getUserIdentityByTelegramId(telegram_user_id: string): Promise<UserIdentity | null>;
+  getUserIdentityByTelegramId(
+    telegram_user_id: string,
+  ): Promise<UserIdentity | null>;
   upsertUserLiteLLMIdentity(data: {
     telegram_user_id: string;
     telegram_username?: string | null;
@@ -83,6 +104,6 @@ export const createPaymentStore = (pool: Queryable): PaymentStore => {
     ...createSubscriptionStore(pool),
     ...createPaymentSessionStore(pool),
     ...createPlanStore(pool),
-    ...createIdentityStore(pool)
+    ...createIdentityStore(pool),
   };
 };

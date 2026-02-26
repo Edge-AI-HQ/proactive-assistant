@@ -183,7 +183,7 @@ export interface SupabaseConfig {
 }
 
 export interface BasePaymentConfig {
-  enabled: boolean;
+  /** Reserved for extension. Payment is always on when Stripe is configured. */
 }
 
 export interface ContainerConfig {
