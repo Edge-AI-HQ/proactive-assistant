@@ -3,11 +3,12 @@ app = 'pinclaw-api-dev'
 primary_region = 'sjc'
 
 [build]
-  dockerfile = 'Dockerfile'
+  dockerfile = '../Dockerfile'
+  build-target = 'apis'
 
 [env]
   PORT = '3000'
-  NODE_ENV = 'production'
+  NODE_ENV = 'development'
   CONTAINER_RUNTIME = 'fly'
 
 [http_service]
