@@ -34,9 +34,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg poppler-
 
 COPY --from=build /app/apps/pinclaw-bot/package.json ./
 COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/packages/shared-types/dist ./node_modules/@pin-ai/shared-types/dist
+COPY --from=build /app/packages/shared-types/src ./node_modules/@pin-ai/shared-types/src
 COPY --from=build /app/apps/pinclaw-bot/dist ./dist
-COPY --from=build /app/apps/pinclaw-bot/src/views ./src/views
 
 RUN mkdir -p /app/public
 
