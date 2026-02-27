@@ -7,6 +7,7 @@ import { FLY_FORBIDDEN_SECRET_ENV_KEYS } from '../shared/secret_env.js';
 import {
   createMachine as createFlyMachine,
   createVolume,
+  destroyVolume,
   isInsufficientResourcesError,
   isMachineNameConflict,
   isVolumeAlreadyExists,
@@ -125,37 +126,44 @@ const waitForVolumeReady = async (name: string, expectedId?: string): Promise<Fl
   return null;
 };
 
-const ensureAssistantVolume = async (assistantBotId: number): Promise<FlyVolume> => {
+const ensureAssistantVolume = async (
+  assistantBotId: number,
+  region?: string
+): Promise<{ volume: FlyVolume; created: boolean }> => {
   const name = buildAssistantVolumeName(assistantBotId);
+  const targetRegion = (region ?? config.fly.region).toLowerCase();
 
   const volumes = await listVolumes();
-  const existing = selectPreferredVolume(name, volumes);
-  if (existing && isVolumeReady(existing)) return existing;
+  const sameRegion = targetRegion
+    ? volumes.filter((v) => (v.region ?? '').toLowerCase() === targetRegion)
+    : volumes;
+  const existing = selectPreferredVolume(name, sameRegion.length ? sameRegion : volumes);
+  if (existing && isVolumeReady(existing)) return { volume: existing, created: false };
 
   if (existing?.id) {
     const existingReady = await waitForVolumeReady(name, existing.id);
-    if (existingReady) return existingReady;
+    if (existingReady) return { volume: existingReady, created: false };
   }
 
   let created: FlyVolume | null = null;
   try {
-    created = await createVolume(name);
+    created = await createVolume(name, targetRegion);
   } catch (error: unknown) {
     if (!isVolumeAlreadyExists(error)) {
       throw error;
     }
   }
 
-  if (created && isVolumeReady(created)) return created;
+  if (created && isVolumeReady(created)) return { volume: created, created: true };
 
   const readyAfterCreate = await waitForVolumeReady(name, created?.id);
-  if (readyAfterCreate) return readyAfterCreate;
+  if (readyAfterCreate) return { volume: readyAfterCreate, created: true };
 
   const fallbackVolumes = await listVolumes();
   const fallback = selectPreferredVolume(name, fallbackVolumes);
-  if (fallback) return fallback;
+  if (fallback) return { volume: fallback, created: false };
 
-  if (created) return created;
+  if (created) return { volume: created, created: true };
   throw new Error(`Fly volume ${name} is not ready`);
 };
 
@@ -279,51 +287,72 @@ export const createAssistantMachine = async (args: AssistantMachineCreateArgs): 
     'exec openclaw gateway --bind loopback'
   ].join(' && ');
 
+  const regions = config.fly.regionFallbacks?.length
+    ? config.fly.regionFallbacks
+    : [config.fly.region];
   let lastError: unknown = null;
 
-  for (let attempt = 1; attempt <= FLY_CREATE_RETRIES; attempt += 1) {
-    const volume = await ensureAssistantVolume(args.assistantBotId);
+  for (let regionIndex = 0; regionIndex < regions.length; regionIndex += 1) {
+    const region = regions[regionIndex];
+    for (let attempt = 1; attempt <= FLY_CREATE_RETRIES; attempt += 1) {
+      const { volume, created } = await ensureAssistantVolume(args.assistantBotId, region);
 
-    try {
-      return await createFlyMachine({
-        name: args.machineName,
-        config: {
-          image: config.openclaw.image,
-          env,
-          guest: {
-            cpu_kind: 'shared',
-            cpus: Math.max(1, config.fly.machineCpus),
-            memory_mb: config.container.memoryMb
-          },
-          mounts: [{ volume: volume.id, path: '/app/data' }],
-          restart: {
-            policy: 'on-failure',
-            max_retries: 3
-          },
-          init: {
-            exec: ['sh', '-lc', bootstrapCommand]
+      try {
+        const machineBody = {
+          name: args.machineName,
+          region: volume.region ?? region,
+          config: {
+            image: config.openclaw.image,
+            env,
+            guest: {
+              cpu_kind: 'shared',
+              cpus: Math.max(1, config.fly.machineCpus),
+              memory_mb: config.container.memoryMb
+            },
+            mounts: [{ volume: volume.id, path: '/app/data' }],
+            restart: {
+              policy: 'on-failure',
+              max_retries: 3
+            },
+            init: {
+              exec: ['sh', '-lc', bootstrapCommand]
+            }
+          }
+        };
+        return await createFlyMachine(machineBody);
+      } catch (error: unknown) {
+        lastError = error;
+
+        if (isMachineNameConflict(error)) {
+          const machines = await listMachines();
+          const existing = machines.find((machine) => machine.name === args.machineName);
+          if (existing) return existing;
+        }
+
+        if (isInsufficientResourcesError(error)) {
+          if (created && regionIndex < regions.length - 1) {
+            try {
+              await destroyVolume(volume.id);
+            } catch {
+              /* ignore */
+            }
+            console.warn(
+              `Fly region ${region} insufficient resources, trying next: ${regions[regionIndex + 1]}`
+            );
+            break;
+          }
+          if (attempt < FLY_CREATE_RETRIES) {
+            await sleep(1000 * attempt);
+            continue;
           }
         }
-      });
-    } catch (error: unknown) {
-      lastError = error;
 
-      if (isMachineNameConflict(error)) {
-        const machines = await listMachines();
-        const existing = machines.find((machine) => machine.name === args.machineName);
-        if (existing) return existing;
-      }
+        if (!isVolumeNotFoundError(error) || attempt >= FLY_CREATE_RETRIES) {
+          throw error;
+        }
 
-      if (isInsufficientResourcesError(error) && attempt < FLY_CREATE_RETRIES) {
         await sleep(1000 * attempt);
-        continue;
       }
-
-      if (!isVolumeNotFoundError(error) || attempt >= FLY_CREATE_RETRIES) {
-        throw error;
-      }
-
-      await sleep(1000 * attempt);
     }
   }
 

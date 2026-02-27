@@ -133,12 +133,17 @@ export const listVolumes = async (): Promise<FlyVolume[]> => {
   return flyRequest<FlyVolume[]>('GET', `${appPath()}/volumes`);
 };
 
-export const createVolume = async (name: string): Promise<FlyVolume> => {
+export const createVolume = async (name: string, region?: string): Promise<FlyVolume> => {
+  const targetRegion = region ?? config.fly.region;
   return flyRequest<FlyVolume>('POST', `${appPath()}/volumes`, {
     name,
-    region: config.fly.region,
+    region: targetRegion,
     size_gb: config.fly.volumeSizeGb
   });
+};
+
+export const destroyVolume = async (volumeId: string): Promise<void> => {
+  await flyRequest<unknown>('DELETE', `${appPath()}/volumes/${encodeURIComponent(volumeId)}`);
 };
 
 export const createMachine = async (body: unknown): Promise<FlyMachine> => {

@@ -155,7 +155,12 @@ export const config: Config = {
     apiBaseUrl: process.env.FLY_API_BASE_URL || 'https://api.machines.dev/v1',
     apiToken: process.env.FLY_API_TOKEN || '',
     appName: process.env.FLY_APP_NAME || '',
-    region: process.env.FLY_REGION || 'iad',
+    /** 逗号分隔的 region 列表，资源不足时按顺序尝试；如 "yyz,cdg,lhr,gru" */
+    regionFallbacks: (() => {
+      const raw = (process.env.FLY_REGION || 'iad').split(',').map((r) => r.trim()).filter(Boolean);
+      return raw.length ? raw : ['iad'];
+    })(),
+    region: (process.env.FLY_REGION || 'iad').split(',')[0]?.trim() || 'iad',
     volumeSizeGb: toInt(process.env.FLY_VOLUME_SIZE_GB, 20),
     volumeNamePrefix: process.env.FLY_VOLUME_NAME_PREFIX || 'openclaw-user',
     machineCpus: toInt(process.env.FLY_MACHINE_CPUS, 1),
