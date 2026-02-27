@@ -1,6 +1,6 @@
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
-  # 与 apis 共用同一库，只配 DATABASE_URL 即可（Prisma 也用这个）
+  # 与 apis 共用同一库时，DATABASE_URL 须带 ?options=-c%20search_path%3Dlitellm，表会建在 litellm schema，不碰 public
   database_url: os.environ/DATABASE_URL
 
 litellm_settings:

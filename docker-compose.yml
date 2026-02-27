@@ -1,23 +1,4 @@
 services:
-  pin-ai-assistant:
-    build:
-      context: .
-      dockerfile: apps/pinclaw-bot/Dockerfile
-    container_name: pin-ai-assistant
-    restart: unless-stopped
-    env_file:
-      - ./apps/pinclaw-bot/.env
-    environment:
-      # Compose-local override when LiteLLM profile is enabled.
-      LITELLM_BASE_URL: http://litellm:4000
-      # Assistant containers are launched by Docker API and must reach LiteLLM via host-published port.
-      LITELLM_CONTAINER_BASE_URL: http://host.docker.internal:4000
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./data:/app/data
-      - /var/run/docker.sock:/var/run/docker.sock
-
   # Build the OpenClaw image for user containers
   openclaw-image:
     build:
@@ -36,7 +17,8 @@ services:
       - "4000:4000"
     volumes:
       - ./ops/litellm/litellm_config.yaml:/app/config.yaml:ro
-    command: [ "--config", "/app/config.yaml", "--port", "4000", "--num_workers", "2" ]
+    command:
+      ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "2"]
 
 networks:
   default:
