@@ -35,3 +35,20 @@ LiteLLM 启动时 Prisma 会同步 schema，若连到默认的 `public` schema �
 ### 用独立库
 
 若不想共用库，可新建一个库（如 Supabase 再建一个 project），`DATABASE_URL` 直接填该库连接串，无需加 `options`。
+
+## 常见问题
+
+### LiteLLM 报 "access_group_ids does not exist" 或 Fly 提示未监听 0.0.0.0:4000
+
+**原因：**
+1. **`DISABLE_SCHEMA_UPDATE=true`** 或 **`PRISMA_OFFLINE_MODE=true`**：这些环境变量会跳过 Prisma 迁移，导致新列未创建。
+2. Dockerfile 未指定 `--host 0.0.0.0`，LiteLLM 默认监听 `127.0.0.1`，Fly.io 无法访问。
+
+**处理：**
+1. 在 Fly secrets 里**删掉** `DISABLE_SCHEMA_UPDATE` 和 `PRISMA_OFFLINE_MODE`，让 LiteLLM 正常执行迁移。
+2. 若已跳过迁移，手动补列：
+   ```sql
+   ALTER TABLE litellm."LiteLLM_VerificationToken" 
+     ADD COLUMN IF NOT EXISTS "access_group_ids" TEXT[] DEFAULT '{}';
+   ```
+3. 确保 Dockerfile CMD 包含 `--host 0.0.0.0`（本仓库已修复）。
