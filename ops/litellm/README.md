@@ -38,17 +38,28 @@ LiteLLM 启动时 Prisma 会同步 schema，若连到默认的 `public` schema �
 
 ## 常见问题
 
-### LiteLLM 报 "access_group_ids does not exist" 或 Fly 提示未监听 0.0.0.0:4000
+### 401 Invalid proxy server token
+
+若 apis 调用 LiteLLM 管理接口报 401，说明 **apis 发的是虚拟 key (sk-xxx)，而不是 master key**。
+
+**处理：** 在 apis 的 `LITELLM_MASTER_KEY` 里填的值，必须与 LiteLLM 服务端环境变量 `LITELLM_MASTER_KEY` **完全一致**（即你在 LiteLLM 里配置的管理密钥）。不能填任何由 LiteLLM 生成的虚拟 key（sk- 开头）。
+
+### access_group_ids does not exist / Fly refused connection
+
+**症状：** LiteLLM 启动报 `access_group_ids` 不存在，或 Fly 提示 "not listening on 0.0.0.0:4000"。
 
 **原因：**
-1. **`DISABLE_SCHEMA_UPDATE=true`** 或 **`PRISMA_OFFLINE_MODE=true`**：这些环境变量会跳过 Prisma 迁移，导致新列未创建。
-2. Dockerfile 未指定 `--host 0.0.0.0`，LiteLLM 默认监听 `127.0.0.1`，Fly.io 无法访问。
+1. **`DISABLE_SCHEMA_UPDATE=true` 或 `PRISMA_OFFLINE_MODE=true`**：这些环境变量会**跳过 Prisma 的 schema 迁移**，导致新列（如 `access_group_ids`）未创建。
+2. **未监听 0.0.0.0**：Dockerfile 的 CMD 未指定 `--host 0.0.0.0`，LiteLLM 默认监听 `127.0.0.1`，Fly.io 无法访问。
 
 **处理：**
-1. 在 Fly secrets 里**删掉** `DISABLE_SCHEMA_UPDATE` 和 `PRISMA_OFFLINE_MODE`，让 LiteLLM 正常执行迁移。
-2. 若已跳过迁移，手动补列：
+1. **删除或设为 false**：在 Fly secrets 中删掉 `DISABLE_SCHEMA_UPDATE` 和 `PRISMA_OFFLINE_MODE`，或设为 `false`。
+   ```bash
+   fly secrets unset DISABLE_SCHEMA_UPDATE PRISMA_OFFLINE_MODE -a litellm-dev
+   ```
+2. **手动补列（若已跳过迁移）**：
    ```sql
    ALTER TABLE litellm."LiteLLM_VerificationToken" 
      ADD COLUMN IF NOT EXISTS "access_group_ids" TEXT[] DEFAULT '{}';
    ```
-3. 确保 Dockerfile CMD 包含 `--host 0.0.0.0`（本仓库已修复）。
+3. **确保监听 0.0.0.0**：Dockerfile 的 CMD 里加 `--host 0.0.0.0`（已在本仓库 Dockerfile 中修复）。
