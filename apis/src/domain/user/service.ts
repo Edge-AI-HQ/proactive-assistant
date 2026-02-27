@@ -1,4 +1,4 @@
-import { createLiteLLMUser, generateLiteLLMKey, updateLiteLLMKey, updateLiteLLMUser } from '../litellm/index.js';
+import { createLiteLLMUser, generateLiteLLMKey, updateLiteLLMUser } from '../litellm/index.js';
 import { config } from '../common/config.js';
 import {
   createGatewayToken,
@@ -73,11 +73,6 @@ const ensureUserLiteLLMKey = async (user: UserRecord): Promise<UserRecord> => {
         userId: litellmUserId,
         userAlias: litellmUserAlias,
         maxBudgetUsd: maxBudgetUsd ?? null
-      });
-      await updateLiteLLMKey({
-        key: workingUser.litellm_virtual_key!,
-        maxBudgetUsd: maxBudgetUsd ?? null,
-        budgetDuration: config.litellm.defaultBudgetDuration
       });
     } catch (err) {
       console.warn('[user] Failed to sync LiteLLM budget for existing key', {
