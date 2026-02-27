@@ -239,8 +239,27 @@ export async function syncSubscriptionFromStripe(
   const shouldProvideService = hasActiveStatus && isWithinPeriod && planCode;
 
   if (shouldProvideService) {
+    // Sync budget before starting containers — Stripe events can arrive out of order,
+    // so subscription.updated (active) may arrive before invoice.paid. Without this,
+    // the user would get Budget=0 and hit ExceededBudget on first message.
+    if (planCode) {
+      try {
+        await syncLiteLLMBudgetFromPlan({
+          telegram_user_id,
+          telegram_username: telegramUsername,
+          plan_code: planCode,
+          source: "subscription_sync_before_container",
+        });
+      } catch (err) {
+        console.warn("Budget sync before container start failed (invoice.paid will retry)", {
+          telegramUserId: telegram_user_id,
+          planCode,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     // Start containers for pending/stopped assistants asynchronously.
-    // Budget is NOT synced here — only on invoice.paid to prevent timing exploits.
     try {
       const user = await getUserByTelegramId(Number(telegram_user_id));
       if (user) {
