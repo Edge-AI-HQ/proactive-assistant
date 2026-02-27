@@ -44,22 +44,52 @@ LiteLLM 启动时 Prisma 会同步 schema，若连到默认的 `public` schema �
 
 **处理：** 在 apis 的 `LITELLM_MASTER_KEY` 里填的值，必须与 LiteLLM 服务端环境变量 `LITELLM_MASTER_KEY` **完全一致**（即你在 LiteLLM 里配置的管理密钥）。不能填任何由 LiteLLM 生成的虚拟 key（sk- 开头）。
 
-### access_group_ids does not exist / Fly refused connection
+### Prisma 迁移超时 / Fly refused connection
 
-**症状：** LiteLLM 启动报 `access_group_ids` 不存在，或 Fly 提示 "not listening on 0.0.0.0:4000"。
+**症状：** 部署时日志显示 "Running prisma migrate deploy" 后卡住，Fly 报错 "instance refused connection. is your app listening on 0.0.0.0:4000?"
 
 **原因：**
-1. **`DISABLE_SCHEMA_UPDATE=true` 或 `PRISMA_OFFLINE_MODE=true`**：这些环境变量会**跳过 Prisma 的 schema 迁移**，导致新列（如 `access_group_ids`）未创建。
-2. **未监听 0.0.0.0**：Dockerfile 未覆盖 ENTRYPOINT，导致官方镜像的 `prod_entrypoint.sh` 忽略 `--host` 参数。
+1. **Prisma 迁移耗时过长**：数据库连接慢、迁移任务多、或内存不足导致迁移超时
+2. **健康检查超时**：Fly 默认健康检查超时较短，Prisma 迁移未完成前服务无法响应
+
+**处理方案（按优先级）：**
+
+**1. 增加内存和超时配置**（推荐）：
+   - `fly.toml` 中已配置 4GB 内存和 60s grace period
+   - 如果还超时，可临时提升到 8GB：
+     ```bash
+     fly scale memory 8192 -a litellm-dev
+     ```
+
+**2. 跳过自动迁移**（适合数据库已初始化的情况）：
+   ```bash
+   fly secrets set DISABLE_SCHEMA_UPDATE=true -a litellm-dev
+   ```
+   ⚠️ 使用此选项前，确保数据库 schema 已是最新版本，否则会缺少必需的表/列
+
+**3. 手动执行迁移**（一次性操作）：
+   ```bash
+   # 在本地连接生产数据库执行迁移
+   DATABASE_URL="your-production-db-url" npx prisma migrate deploy
+   ```
+   然后设置 `DISABLE_SCHEMA_UPDATE=true` 跳过后续自动迁移
+
+**4. 检查数据库连接串**：
+   确保 `DATABASE_URL` 末尾包含 `?options=-c%20search_path%3Dlitellm`，避免操作错误的 schema
+
+### access_group_ids does not exist
+
+**症状：** LiteLLM 启动报 `access_group_ids` 列不存在
+
+**原因：** 设置了 `DISABLE_SCHEMA_UPDATE=true` 或 `PRISMA_OFFLINE_MODE=true` 跳过了迁移
 
 **处理：**
-1. **删除或设为 false**：
+1. 删除这些环境变量让 Prisma 自动迁移：
    ```bash
    fly secrets unset DISABLE_SCHEMA_UPDATE PRISMA_OFFLINE_MODE -a litellm-dev
    ```
-2. **手动补列（若已跳过迁移）**：
+2. 或手动补列：
    ```sql
    ALTER TABLE litellm."LiteLLM_VerificationToken" 
      ADD COLUMN IF NOT EXISTS "access_group_ids" TEXT[] DEFAULT '{}';
    ```
-3. **确保监听 0.0.0.0**：Dockerfile 里需同时设置 `ENTRYPOINT ["litellm"]` 和 `CMD ["--host", "0.0.0.0", ...]`（已在本仓库 Dockerfile 中修复）。
