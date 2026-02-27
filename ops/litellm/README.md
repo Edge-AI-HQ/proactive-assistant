@@ -1,5 +1,18 @@
 # LiteLLM 部署
 
+## 构建与发布
+
+**必须把 `ops/litellm` 作为构建上下文**，否则 Docker 找不到 `litellm_config.yaml`。
+
+- 在仓库根目录执行：
+  ```bash
+  fly deploy ./ops/litellm -a litellm-dev
+  ```
+- 或在 `ops/litellm` 目录下执行：
+  ```bash
+  cd ops/litellm && fly deploy -a litellm-dev
+  ```
+
 ## 与 apis 共用同一库（推荐）
 
 LiteLLM 启动时 Prisma 会同步 schema，若连到默认的 `public` schema 会**删掉库里不在其 schema 的表**（包括 apis 的 `users`、`assistants` 等）。所以共用一库时要用 **PostgreSQL schema 隔离**，让 LiteLLM 只用自己的 schema。
