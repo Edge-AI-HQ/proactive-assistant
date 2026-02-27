@@ -13,7 +13,7 @@ export async function sendTelegramMessage(
 ): Promise<{ ok: boolean; error?: string }> {
   const token = (config.telegram.token ?? "").trim();
   if (!token) {
-    console.warn("sendTelegramMessage skipped: TELEGRAM_BOT_TOKEN not set");
+    console.warn("sendTelegramMessage skipped: TELEGRAM_BOT_TOKEN not set ");
     return { ok: false, error: "TELEGRAM_BOT_TOKEN not set" };
   }
 
