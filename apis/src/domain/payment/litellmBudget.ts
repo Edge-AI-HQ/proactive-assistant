@@ -34,7 +34,8 @@ const normalizeBudgetUsd = (value: number): number => {
 
 /**
  * 以 LiteLLM 表为准解析 budget，不再依赖 users.litellm_budget_usd。
- * 优先级：LiteLLM 已有值 > 订阅计划 > 配置默认值
+ * 优先级：LiteLLM 已有值(>0) > 有效订阅的 plan > 配置默认值
+ * 订阅 status 非 active/trialing/past_due 时返回 0，与支付流程的「过期清零」一致。
  */
 export const resolveBudgetForUser = async (input: {
   litellm_user_id: string;
@@ -52,11 +53,17 @@ export const resolveBudgetForUser = async (input: {
   }
 
   const sub = await db.getSubscriptionByTelegramId(input.telegram_user_id);
-  if (sub?.plan_id) {
-    const plan = await db.getPlanByCode(sub.plan_id);
-    if (plan) {
-      const budget = planBudgetUsd(plan.monthly_refresh_credits);
-      if (budget > 0) return budget;
+  const activeStatuses = ['active', 'trialing', 'past_due'] as const;
+  if (sub) {
+    if (!activeStatuses.includes(sub.status as (typeof activeStatuses)[number])) {
+      return 0;
+    }
+    if (sub.plan_id) {
+      const plan = await db.getPlanByCode(sub.plan_id);
+      if (plan) {
+        const budget = planBudgetUsd(plan.monthly_refresh_credits);
+        if (budget > 0) return budget;
+      }
     }
   }
 

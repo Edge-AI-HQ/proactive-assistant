@@ -1,6 +1,6 @@
 import { ensureAssistantContainer } from '../container/index.js';
+import { ensureTelegramUser } from '../user/service.js';
 import { ensureLiteLLMKeyForAssistant } from '../litellm/index.js';
-import { getUserByTelegramId } from '../common/db/index.js';
 import type { AssistantRecord } from '../../types.js';
 
 const warmupInFlight = new Map<number, Promise<AssistantRecord | null>>();
@@ -11,11 +11,8 @@ export const ensureGatewayAssistantReady = async (assistant: AssistantRecord): P
   if (inFlight) return inFlight;
 
   const job = (async (): Promise<AssistantRecord | null> => {
+    const owner = await ensureTelegramUser(assistant.owner_telegram_user_id);
     const assistantWithKey = await ensureLiteLLMKeyForAssistant(assistant.owner_telegram_user_id, assistant);
-    const owner = await getUserByTelegramId(assistant.owner_telegram_user_id);
-    if (!owner) {
-      throw new Error(`Owner ${assistant.owner_telegram_user_id} not found for assistant ${assistant.id}`);
-    }
     const { containerId, ready } = await ensureAssistantContainer(assistantWithKey, owner.gateway_token);
     if (!ready) return null;
     return {
