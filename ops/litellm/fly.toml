@@ -21,6 +21,6 @@ app = 'litellm-dev'
     soft_limit = 80
 
 [[vm]]
-  memory = '1gb'
+  memory = '2gb'
   cpu_kind = 'shared'
   cpus = 2
