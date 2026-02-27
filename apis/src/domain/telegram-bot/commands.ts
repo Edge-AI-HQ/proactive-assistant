@@ -14,21 +14,10 @@ import {
 import type { AssistantRecord } from "../../types.js";
 
 const CREATE_ASSISTANT_COMMAND = "create_claw_assistant";
-const LEGACY_CREATE_ASSISTANT_COMMAND = "create_pin_claw_assistant";
 const LIST_ASSISTANT_COMMAND = "list_claw_assistant";
-const LEGACY_LIST_ASSISTANT_COMMAND = "list_pin_claw_assistant";
-const LEGACY_LIST_ASSISTANTS_COMMAND = "list_pin_claw_assistants";
 const PENDING_TOKEN_INPUT_TTL_MS = 10 * 60 * 1000;
 
 const pendingTokenInputByUserId = new Map<number, number>();
-const createCommandVariants = [
-  CREATE_ASSISTANT_COMMAND,
-  LEGACY_CREATE_ASSISTANT_COMMAND,
-];
-const createCommandPattern = new RegExp(
-  `^/(?:${createCommandVariants.join("|")})(?:@\\w+)?`,
-  "i",
-);
 
 const commandList = [
   {
@@ -37,7 +26,7 @@ const commandList = [
   },
   {
     command: CREATE_ASSISTANT_COMMAND,
-    description: "Bind your BotFather token and provision assistant",
+    description: "Start assistant setup (send your BotFather token next)",
   },
   {
     command: LIST_ASSISTANT_COMMAND,
@@ -114,10 +103,8 @@ const assistantsListMessage = (assistants: AssistantRecord[]): string => {
 
 const parseAssistantToken = (text: string | undefined): string | null => {
   if (!text) return null;
-  const trimmed = text.trim();
-  const withoutCommand = trimmed.replace(createCommandPattern, "").trim();
-  if (!withoutCommand) return null;
-  const candidate = withoutCommand
+  const candidate = text
+    .trim()
     .replace(/^token(?:_id)?\s*[:=]\s*/i, "")
     .trim();
   const normalized = candidate.replace(/\s+/g, "");
@@ -382,27 +369,17 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
 
-    const token = parseAssistantToken(ctx.message?.text);
-    if (!token) {
-      markTokenInputPending(telegramUserId);
-      await replyHtml(
-        ctx,
-        [
-          "<b>Please send your BotFather token in the next message.</b>",
-          "Example: <code>123456789:ABCDefghIJKLmnopQRSTuvwxYZ</code>",
-        ].join("\n"),
-      );
-      return;
-    }
-
-    const created = await provisionAssistantFromToken(ctx, token);
-    if (created) {
-      clearTokenInputPending(telegramUserId);
-    }
+    markTokenInputPending(telegramUserId);
+    await replyHtml(
+      ctx,
+      [
+        "<b>Please send your BotFather token in the next message.</b>",
+        "Example: <code>123456789:ABCDefghIJKLmnopQRSTuvwxYZ</code>",
+      ].join("\n"),
+    );
   };
 
   bot.command(CREATE_ASSISTANT_COMMAND, createAssistantCommandHandler);
-  bot.command(LEGACY_CREATE_ASSISTANT_COMMAND, createAssistantCommandHandler);
 
   const listAssistantCommandHandler = async (ctx: Context): Promise<void> => {
     const telegramUserId = ctx.from?.id;
@@ -413,8 +390,6 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
   };
 
   bot.command(LIST_ASSISTANT_COMMAND, listAssistantCommandHandler);
-  bot.command(LEGACY_LIST_ASSISTANT_COMMAND, listAssistantCommandHandler);
-  bot.command(LEGACY_LIST_ASSISTANTS_COMMAND, listAssistantCommandHandler);
 
   bot.command("gateway", async (ctx) => {
     const telegramUserId = ctx.from?.id;

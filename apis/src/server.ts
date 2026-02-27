@@ -37,11 +37,6 @@ registerRawBodyRoutes(app);
 // Telegram webhook endpoint (MUST be before express.json() middleware)
 const webhookPath = '/webhook/telegram';
 app.post(webhookPath, express.json(), (req: Request, res: Response) => {
-  console.log('Received webhook request:', {
-    headers: req.headers,
-    body: req.body,
-  });
-  
   // Verify webhook secret if configured
   if (config.telegram.webhookSecret) {
     const receivedSecret = req.headers['x-telegram-bot-api-secret-token'];
@@ -65,7 +60,6 @@ app.post(webhookPath, express.json(), (req: Request, res: Response) => {
   
   bot.handleUpdate(req.body)
     .then(() => {
-      console.log('Webhook update processed successfully');
       res.sendStatus(200);
     })
     .catch((error: unknown) => {
