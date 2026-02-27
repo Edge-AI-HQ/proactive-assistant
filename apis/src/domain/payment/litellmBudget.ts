@@ -3,6 +3,7 @@ import {
   getLiteLLMUserInfo,
   isLiteLLMClientEnabled,
   resetLiteLLMUserSpend,
+  updateLiteLLMKey,
   updateLiteLLMUser
 } from '../litellm/client.js';
 import { config } from '../common/config.js';
@@ -149,6 +150,18 @@ export const syncLiteLLMBudgetAbsolute = async (
     userAlias: litellmUserAlias,
     maxBudgetUsd: targetBudgetUsd
   });
+
+  const litellmKey = await db.getLiteLLMKeyByTelegramId(input.telegram_user_id);
+  if (litellmKey) {
+    try {
+      await updateLiteLLMKey({ key: litellmKey, maxBudgetUsd: targetBudgetUsd });
+    } catch (e) {
+      console.warn('[payment] key budget sync failed (non-fatal)', {
+        telegramUserId: input.telegram_user_id,
+        error: e instanceof Error ? e.message : String(e)
+      });
+    }
+  }
 
   await db.upsertUserLiteLLMIdentity({
     telegram_user_id: input.telegram_user_id,

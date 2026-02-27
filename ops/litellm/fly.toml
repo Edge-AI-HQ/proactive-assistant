@@ -1,0 +1,26 @@
+# LiteLLM Fly.io 部署配置
+# 与 apis 共用同一 Supabase 数据库，确保 budget 同步生效
+app = 'litellm-dev'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[env]
+  PORT = '4000'
+
+[http_service]
+  internal_port = 4000
+  force_https = true
+  auto_stop_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
+  [http_service.concurrency]
+    type = 'connections'
+    hard_limit = 100
+    soft_limit = 80
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 2

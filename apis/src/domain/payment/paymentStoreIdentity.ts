@@ -4,10 +4,20 @@ import { firstRow, readUserIdentityByTelegramId, type Queryable, type UserIdenti
 
 export const createIdentityStore = (
   pool: Queryable
-): Pick<PaymentStore, 'getUserIdentityByTelegramId' | 'upsertUserLiteLLMIdentity'> => {
+): Pick<PaymentStore, 'getUserIdentityByTelegramId' | 'getLiteLLMKeyByTelegramId' | 'upsertUserLiteLLMIdentity'> => {
   return {
     async getUserIdentityByTelegramId(telegram_user_id) {
       return readUserIdentityByTelegramId(pool, telegram_user_id);
+    },
+
+    async getLiteLLMKeyByTelegramId(telegram_user_id) {
+      const result = await pool.query<{ litellm_virtual_key: string | null }>(
+        `SELECT litellm_virtual_key FROM users WHERE telegram_user_id = $1::bigint AND litellm_virtual_key IS NOT NULL AND litellm_virtual_key != '' LIMIT 1`,
+        [telegram_user_id]
+      );
+      const row = firstRow(result.rows);
+      const key = row?.litellm_virtual_key?.trim();
+      return key || null;
     },
 
     async upsertUserLiteLLMIdentity(data) {

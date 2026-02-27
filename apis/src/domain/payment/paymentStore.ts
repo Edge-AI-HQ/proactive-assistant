@@ -87,6 +87,7 @@ export interface PaymentStore {
   getUserIdentityByTelegramId(
     telegram_user_id: string,
   ): Promise<UserIdentity | null>;
+  getLiteLLMKeyByTelegramId(telegram_user_id: string): Promise<string | null>;
   upsertUserLiteLLMIdentity(data: {
     telegram_user_id: string;
     telegram_username?: string | null;
