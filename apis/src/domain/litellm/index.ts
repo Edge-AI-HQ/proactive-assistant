@@ -12,6 +12,7 @@ export {
   getLiteLLMUserSpendCents,
   getLiteLLMVirtualKeyInfo,
   isLiteLLMClientEnabled,
+  updateLiteLLMKey,
   updateLiteLLMUser
 } from './client.js';
 export type {

@@ -432,6 +432,26 @@ export const generateLiteLLMKey = async (input: LiteLLMGenerateKeyInput): Promis
   };
 };
 
+export const updateLiteLLMKey = async (input: {
+  key: string;
+  maxBudgetUsd: number | null;
+  budgetDuration?: string | null;
+}): Promise<void> => {
+  const token = input.key.trim();
+  if (!token) throw new Error('LiteLLM key is required');
+
+  const body: JsonRecord = { key: token };
+  const normalizedMaxBudget = normalizeOptionalBudgetUsd(input.maxBudgetUsd);
+  if (normalizedMaxBudget !== null) {
+    body.max_budget = normalizedMaxBudget;
+  }
+  if (input.budgetDuration != null && typeof input.budgetDuration === 'string' && input.budgetDuration.trim()) {
+    body.budget_duration = input.budgetDuration.trim();
+  }
+
+  await requestJson('POST', '/key/update', body);
+};
+
 export const getLiteLLMUserInfo = async (litellmUserId: string): Promise<LiteLLMUserInfo> => {
   const userId = litellmUserId.trim();
   if (!userId) {

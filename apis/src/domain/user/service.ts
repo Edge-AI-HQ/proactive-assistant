@@ -1,4 +1,4 @@
-import { createLiteLLMUser, generateLiteLLMKey } from '../litellm/index.js';
+import { createLiteLLMUser, generateLiteLLMKey, updateLiteLLMKey, updateLiteLLMUser } from '../litellm/index.js';
 import { config } from '../common/config.js';
 import {
   createGatewayToken,
@@ -8,6 +8,7 @@ import {
   listAssistantsByOwnerTelegramId,
   updateUser
 } from '../common/db/index.js';
+import { resolveBudgetForUser } from '../payment/litellmBudget.js';
 import type { UserRecord } from '../../types.js';
 
 const normalizeUsername = (value: string | null | undefined): string | null => {
@@ -32,21 +33,16 @@ const keyLast4 = (value: string): string => {
   return raw.slice(-4);
 };
 
-const resolveBudgetForLiteLLM = (user: UserRecord): number | null => {
-  const fromUser = user.litellm_budget_usd;
-  if (fromUser != null && Number.isFinite(fromUser) && fromUser > 0) return fromUser;
-  const fromConfig = config.litellm.defaultBudgetUsd;
-  if (fromConfig != null && Number.isFinite(fromConfig) && fromConfig > 0) return fromConfig;
-  return null;
-};
-
 const ensureUserLiteLLMKey = async (user: UserRecord): Promise<UserRecord> => {
   if (!config.litellm.enabled) return user;
 
   const litellmUserId = user.litellm_user_id?.trim() || buildLiteLLMUserId(user.id);
   const litellmUserAlias = user.litellm_user_alias?.trim() || buildLiteLLMUserAlias(user.telegram_user_id, user.telegram_username);
   const userKeyAlias = user.litellm_key_alias?.trim() || buildUserKeyAlias(user.id);
-  const maxBudgetUsd = resolveBudgetForLiteLLM(user);
+  const maxBudgetUsd = await resolveBudgetForUser({
+    litellm_user_id: litellmUserId,
+    telegram_user_id: String(user.telegram_user_id)
+  });
 
   const created = await createLiteLLMUser({
     userId: litellmUserId,
@@ -71,7 +67,26 @@ const ensureUserLiteLLMKey = async (user: UserRecord): Promise<UserRecord> => {
   }
 
   const hasVirtualKey = Boolean(workingUser.litellm_virtual_key?.trim());
-  if (hasVirtualKey && workingUser.litellm_key_alias?.trim()) return workingUser;
+  if (hasVirtualKey && workingUser.litellm_key_alias?.trim()) {
+    try {
+      await updateLiteLLMUser({
+        userId: litellmUserId,
+        userAlias: litellmUserAlias,
+        maxBudgetUsd: maxBudgetUsd ?? null
+      });
+      await updateLiteLLMKey({
+        key: workingUser.litellm_virtual_key!,
+        maxBudgetUsd: maxBudgetUsd ?? null,
+        budgetDuration: config.litellm.defaultBudgetDuration
+      });
+    } catch (err) {
+      console.warn('[user] Failed to sync LiteLLM budget for existing key', {
+        userId: litellmUserId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+    return workingUser;
+  }
 
   let rawKey = created.rawKey;
   let resolvedKeyAlias = created.keyAlias;
@@ -114,7 +129,6 @@ const ensureUserLiteLLMKey = async (user: UserRecord): Promise<UserRecord> => {
     litellm_virtual_key: rawKey,
     litellm_key_last4: keyLast4(rawKey),
     litellm_spend_usd: 0,
-    litellm_budget_usd: resolvedMaxBudgetUsd,
     litellm_budget_duration: resolvedBudgetDuration ?? config.litellm.defaultBudgetDuration,
     litellm_rpm_limit: resolvedRpmLimit,
     litellm_tpm_limit: resolvedTpmLimit,

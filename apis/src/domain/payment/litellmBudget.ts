@@ -1,4 +1,11 @@
-import { createLiteLLMUser, isLiteLLMClientEnabled, resetLiteLLMUserSpend, updateLiteLLMUser } from '../litellm/client.js';
+import {
+  createLiteLLMUser,
+  getLiteLLMUserInfo,
+  isLiteLLMClientEnabled,
+  resetLiteLLMUserSpend,
+  updateLiteLLMUser
+} from '../litellm/client.js';
+import { config } from '../common/config.js';
 import { db } from './db.js';
 
 type JsonRecord = Record<string, unknown>;
@@ -23,6 +30,39 @@ const planBudgetUsd = (monthlyRefreshCredits: number): number => {
 const normalizeBudgetUsd = (value: number): number => {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Number(value.toFixed(6)));
+};
+
+/**
+ * 以 LiteLLM 表为准解析 budget，不再依赖 users.litellm_budget_usd。
+ * 优先级：LiteLLM 已有值 > 订阅计划 > 配置默认值
+ */
+export const resolveBudgetForUser = async (input: {
+  litellm_user_id: string;
+  telegram_user_id: string;
+}): Promise<number | null> => {
+  if (isLiteLLMClientEnabled()) {
+    try {
+      const info = await getLiteLLMUserInfo(input.litellm_user_id);
+      if (info.maxBudgetUsd != null && Number.isFinite(info.maxBudgetUsd) && info.maxBudgetUsd > 0) {
+        return info.maxBudgetUsd;
+      }
+    } catch {
+      // LiteLLM 用户可能尚未创建，继续尝试 plan
+    }
+  }
+
+  const sub = await db.getSubscriptionByTelegramId(input.telegram_user_id);
+  if (sub?.plan_id) {
+    const plan = await db.getPlanByCode(sub.plan_id);
+    if (plan) {
+      const budget = planBudgetUsd(plan.monthly_refresh_credits);
+      if (budget > 0) return budget;
+    }
+  }
+
+  const fromConfig = config.litellm.defaultBudgetUsd;
+  if (fromConfig != null && Number.isFinite(fromConfig) && fromConfig > 0) return fromConfig;
+  return null;
 };
 
 interface BudgetSyncInput {
@@ -108,7 +148,6 @@ export const syncLiteLLMBudgetAbsolute = async (
     telegram_username: input.telegram_username ?? identity.telegram_username,
     litellm_user_id: litellmUserId,
     litellm_user_alias: litellmUserAlias,
-    litellm_budget_usd: targetBudgetUsd,
     litellm_last_synced_at: new Date().toISOString()
   });
 };
