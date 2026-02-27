@@ -32,18 +32,27 @@ const keyLast4 = (value: string): string => {
   return raw.slice(-4);
 };
 
+const resolveBudgetForLiteLLM = (user: UserRecord): number | null => {
+  const fromUser = user.litellm_budget_usd;
+  if (fromUser != null && Number.isFinite(fromUser) && fromUser > 0) return fromUser;
+  const fromConfig = config.litellm.defaultBudgetUsd;
+  if (fromConfig != null && Number.isFinite(fromConfig) && fromConfig > 0) return fromConfig;
+  return null;
+};
+
 const ensureUserLiteLLMKey = async (user: UserRecord): Promise<UserRecord> => {
   if (!config.litellm.enabled) return user;
 
   const litellmUserId = user.litellm_user_id?.trim() || buildLiteLLMUserId(user.id);
   const litellmUserAlias = user.litellm_user_alias?.trim() || buildLiteLLMUserAlias(user.telegram_user_id, user.telegram_username);
   const userKeyAlias = user.litellm_key_alias?.trim() || buildUserKeyAlias(user.id);
+  const maxBudgetUsd = resolveBudgetForLiteLLM(user);
 
   const created = await createLiteLLMUser({
     userId: litellmUserId,
     userAlias: litellmUserAlias,
     keyAlias: userKeyAlias,
-    maxBudgetUsd: 0,
+    maxBudgetUsd: maxBudgetUsd ?? null,
     metadata: {
       source: 'pin-ai-assistant-apis',
       user_id: user.id,
@@ -76,7 +85,7 @@ const ensureUserLiteLLMKey = async (user: UserRecord): Promise<UserRecord> => {
     const generated = await generateLiteLLMKey({
       userId: litellmUserId,
       keyAlias: buildFallbackUserKeyAlias(user.id),
-      maxBudgetUsd: 0,
+      maxBudgetUsd: maxBudgetUsd ?? null,
       budgetDuration: config.litellm.defaultBudgetDuration,
       rpmLimit: config.litellm.defaultRpmLimit,
       tpmLimit: config.litellm.defaultTpmLimit,

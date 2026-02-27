@@ -266,43 +266,71 @@ export async function syncSubscriptionFromStripe(
           );
 
           // Fire-and-forget: create containers in background
+          const chatId = Number(telegram_user_id);
           void (async () => {
-            const results: { label: string; ok: boolean }[] = [];
-            for (const assistant of toStart) {
-              const label = assistant.assistant_bot_username ?? `#${assistant.id}`;
-              const displayLabel = label.startsWith("#") ? label : `@${label}`;
-              try {
-                await ensureAssistantContainer(assistant, user.gateway_token);
-                results.push({ label: displayLabel, ok: true });
-                console.log(
-                  `Started container for assistant ${assistant.id} after subscription sync`,
-                );
-              } catch (error: unknown) {
-                results.push({ label: displayLabel, ok: false });
-                console.error(
-                  `Failed to start container for assistant ${assistant.id}`,
-                  {
-                    assistantId: assistant.id,
-                    error: error instanceof Error ? error.message : String(error),
-                  },
+            try {
+              const results: { label: string; ok: boolean }[] = [];
+              for (const assistant of toStart) {
+                const label = assistant.assistant_bot_username ?? `#${assistant.id}`;
+                const displayLabel = label.startsWith("#") ? label : `@${label}`;
+                try {
+                  await ensureAssistantContainer(assistant, user.gateway_token);
+                  results.push({ label: displayLabel, ok: true });
+                  console.log(
+                    `Started container for assistant ${assistant.id} after subscription sync`,
+                  );
+                } catch (error: unknown) {
+                  results.push({ label: displayLabel, ok: false });
+                  console.error(
+                    `Failed to start container for assistant ${assistant.id}`,
+                    {
+                      assistantId: assistant.id,
+                      error: error instanceof Error ? error.message : String(error),
+                    },
+                  );
+                }
+              }
+              const succeeded = results.filter((r) => r.ok).map((r) => r.label);
+              const failed = results.filter((r) => !r.ok).map((r) => r.label);
+              const parts: string[] = [];
+              if (succeeded.length > 0) {
+                parts.push(
+                  `✅ <b>Container(s) ready</b>\n\n${succeeded.join(", ")}\n\nYou can open the Gateway link from the guide bot to start chatting.`,
                 );
               }
-            }
-            const succeeded = results.filter((r) => r.ok).map((r) => r.label);
-            const failed = results.filter((r) => !r.ok).map((r) => r.label);
-            const parts: string[] = [];
-            if (succeeded.length > 0) {
-              parts.push(
-                `✅ <b>Container(s) ready</b>\n\n${succeeded.join(", ")}\n\nYou can open the Gateway link from the guide bot to start chatting.`,
-              );
-            }
-            if (failed.length > 0) {
-              parts.push(
-                `❌ <b>Creation failed</b>\n\n${failed.join(", ")}\n\nPlease contact support.`,
-              );
-            }
-            if (parts.length > 0) {
-              await sendTelegramMessage(Number(telegram_user_id), parts.join("\n\n"));
+              if (failed.length > 0) {
+                parts.push(
+                  `❌ <b>Creation failed</b>\n\n${failed.join(", ")}\n\nPlease contact support.`,
+                );
+              }
+              if (parts.length > 0) {
+                const msg = parts.join("\n\n");
+                console.log("Sending container ready/failed notification", {
+                  chatId,
+                  succeededCount: succeeded.length,
+                  failedCount: failed.length,
+                });
+                const sendResult = await sendTelegramMessage(chatId, msg);
+                if (!sendResult.ok) {
+                  console.error("Failed to send container notification", {
+                    chatId,
+                    error: sendResult.error,
+                  });
+                }
+              }
+            } catch (err: unknown) {
+              console.error("Async container creation notification error", {
+                chatId,
+                error: err instanceof Error ? err.message : String(err),
+              });
+              try {
+                await sendTelegramMessage(
+                  chatId,
+                  "❌ Container creation completed but we couldn't send the status. Please check the guide bot for your Gateway link.",
+                );
+              } catch {
+                /* ignore */
+              }
             }
           })();
         }

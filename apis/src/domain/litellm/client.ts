@@ -343,7 +343,12 @@ export const createLiteLLMUser = async (input: LiteLLMCreateUserInput): Promise<
   } catch (error: unknown) {
     if (!(error instanceof Error)) throw error;
     const lower = error.message.toLowerCase();
-    if (lower.includes('already') || lower.includes('exists') || lower.includes('duplicate')) {
+    const isUserExistsConflict =
+      lower.includes('409') ||
+      lower.includes('already') ||
+      lower.includes('exists') ||
+      lower.includes('duplicate');
+    if (isUserExistsConflict) {
       return {
         rawKey: null,
         keyAlias: null,
