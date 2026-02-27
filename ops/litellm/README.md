@@ -35,3 +35,31 @@ LiteLLM 启动时 Prisma 会同步 schema，若连到默认的 `public` schema �
 ### 用独立库
 
 若不想共用库，可新建一个库（如 Supabase 再建一个 project），`DATABASE_URL` 直接填该库连接串，无需加 `options`。
+
+## 常见问题
+
+### 401 Invalid proxy server token
+
+若 apis 调用 LiteLLM 管理接口报 401，说明 **apis 发的是虚拟 key (sk-xxx)，而不是 master key**。
+
+**处理：** 在 apis 的 `LITELLM_MASTER_KEY` 里填的值，必须与 LiteLLM 服务端环境变量 `LITELLM_MASTER_KEY` **完全一致**（即你在 LiteLLM 里配置的管理密钥）。不能填任何由 LiteLLM 生成的虚拟 key（sk- 开头）。
+
+### access_group_ids does not exist / Fly refused connection
+
+**症状：** LiteLLM 启动报 `access_group_ids` 不存在，或 Fly 提示 "not listening on 0.0.0.0:4000"。
+
+**原因：**
+1. **`DISABLE_SCHEMA_UPDATE=true` 或 `PRISMA_OFFLINE_MODE=true`**：这些环境变量会**跳过 Prisma 的 schema 迁移**，导致新列（如 `access_group_ids`）未创建。
+2. **未监听 0.0.0.0**：Dockerfile 未覆盖 ENTRYPOINT，导致官方镜像的 `prod_entrypoint.sh` 忽略 `--host` 参数。
+
+**处理：**
+1. **删除或设为 false**：
+   ```bash
+   fly secrets unset DISABLE_SCHEMA_UPDATE PRISMA_OFFLINE_MODE -a litellm-dev
+   ```
+2. **手动补列（若已跳过迁移）**：
+   ```sql
+   ALTER TABLE litellm."LiteLLM_VerificationToken" 
+     ADD COLUMN IF NOT EXISTS "access_group_ids" TEXT[] DEFAULT '{}';
+   ```
+3. **确保监听 0.0.0.0**：Dockerfile 里需同时设置 `ENTRYPOINT ["litellm"]` 和 `CMD ["--host", "0.0.0.0", ...]`（已在本仓库 Dockerfile 中修复）。
