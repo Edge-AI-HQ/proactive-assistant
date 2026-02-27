@@ -48,7 +48,8 @@ const readAssistantLiteLLMVirtualKey: ReadAssistantLiteLLMVirtualKey = (
 ) => getContainerManagerRuntime().readAssistantLiteLLMVirtualKey(assistant);
 
 const FLY_REF_PREFIX = "fly:";
-const FLY_MACHINE_WAIT_TIMEOUT_MS = 120_000;
+// 20GB 加密 volume 格式化约需 5–6 分钟，超时需覆盖此时间
+const FLY_MACHINE_WAIT_TIMEOUT_MS = 360_000; // 6 分钟
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));

@@ -239,46 +239,73 @@ export async function syncSubscriptionFromStripe(
   const shouldProvideService = hasActiveStatus && isWithinPeriod && planCode;
 
   if (shouldProvideService) {
-    // Start containers for pending/stopped assistants and notify user.
+    // Start containers for pending/stopped assistants asynchronously.
     // Budget is NOT synced here — only on invoice.paid to prevent timing exploits.
-    const startedBotUsernames: string[] = [];
     try {
       const user = await getUserByTelegramId(Number(telegram_user_id));
       if (user) {
         const assistants = await listAssistantsByOwnerTelegramId(
           Number(telegram_user_id),
         );
-        for (const assistant of assistants) {
-          if (
-            assistant.container_status === "pending" ||
-            assistant.container_status === "stopped"
-          ) {
-            try {
-              await ensureAssistantContainer(assistant, user.gateway_token);
-              startedBotUsernames.push(assistant.assistant_bot_username ?? `#${assistant.id}`);
-              console.log(
-                `Started container for assistant ${assistant.id} after subscription sync`,
-              );
-            } catch (error: unknown) {
-              console.error(
-                `Failed to start container for assistant ${assistant.id}`,
-                {
-                  assistantId: assistant.id,
-                  error: error instanceof Error ? error.message : String(error),
-                },
+        const toStart = assistants.filter(
+          (a) =>
+            a.container_status === "pending" ||
+            a.container_status === "stopped",
+        );
+
+        if (toStart.length > 0) {
+          const listStr = toStart
+            .map((a) => {
+              const u = a.assistant_bot_username ?? `#${a.id}`;
+              return u.startsWith("#") ? u : `@${u}`;
+            })
+            .join(", ");
+          await sendTelegramMessage(
+            Number(telegram_user_id),
+            `⏳ <b>Creating container(s)</b>\n\n${listStr}\n\nStarting up, please wait. We'll notify you when ready.`,
+          );
+
+          // Fire-and-forget: create containers in background
+          void (async () => {
+            const results: { label: string; ok: boolean }[] = [];
+            for (const assistant of toStart) {
+              const label = assistant.assistant_bot_username ?? `#${assistant.id}`;
+              const displayLabel = label.startsWith("#") ? label : `@${label}`;
+              try {
+                await ensureAssistantContainer(assistant, user.gateway_token);
+                results.push({ label: displayLabel, ok: true });
+                console.log(
+                  `Started container for assistant ${assistant.id} after subscription sync`,
+                );
+              } catch (error: unknown) {
+                results.push({ label: displayLabel, ok: false });
+                console.error(
+                  `Failed to start container for assistant ${assistant.id}`,
+                  {
+                    assistantId: assistant.id,
+                    error: error instanceof Error ? error.message : String(error),
+                  },
+                );
+              }
+            }
+            const succeeded = results.filter((r) => r.ok).map((r) => r.label);
+            const failed = results.filter((r) => !r.ok).map((r) => r.label);
+            const parts: string[] = [];
+            if (succeeded.length > 0) {
+              parts.push(
+                `✅ <b>Container(s) ready</b>\n\n${succeeded.join(", ")}\n\nYou can open the Gateway link from the guide bot to start chatting.`,
               );
             }
-          }
+            if (failed.length > 0) {
+              parts.push(
+                `❌ <b>Creation failed</b>\n\n${failed.join(", ")}\n\nPlease contact support.`,
+              );
+            }
+            if (parts.length > 0) {
+              await sendTelegramMessage(Number(telegram_user_id), parts.join("\n\n"));
+            }
+          })();
         }
-      }
-      if (startedBotUsernames.length > 0) {
-        const list = startedBotUsernames
-          .map((u) => (u.startsWith("#") ? u : `@${u}`))
-          .join(", ");
-        await sendTelegramMessage(
-          Number(telegram_user_id),
-          `✅ <b>Container(s) ready</b>\n\nYour assistant bot(s) are now running: ${list}\n\nYou can open the Gateway link from the guide bot to start chatting.`,
-        );
       }
     } catch (error: unknown) {
       console.error("Failed to start containers after subscription sync", {
