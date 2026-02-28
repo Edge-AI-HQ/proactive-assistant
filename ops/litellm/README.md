@@ -2,6 +2,46 @@
 
 测试自动部署触发 v2。
 
+## 性能和扩展
+
+### 当前架构
+- **单进程模式**：每个 VM 运行单个 LiteLLM 进程
+- **水平扩展**：通过 Fly.io 自动扩展多个 VM 实例
+- **异步处理**：基于 Uvicorn/asyncio，单进程也能处理大量并发
+
+### 吞吐量配置
+```toml
+min_machines_running = 1        # 至少保持 1 个实例运行
+concurrency.soft_limit = 100    # 单个 VM 处理 100 个并发请求后启动新实例
+concurrency.hard_limit = 200    # 单个 VM 最多处理 200 个并发请求
+```
+
+### 为什么不用多进程（num_workers）
+- Worker 子进程启动后立即崩溃（可能是 Prisma 或数据库连接问题）
+- 单进程 + 多 VM 更稳定可靠
+- 异步 I/O 模型对 LLM API 调用（I/O 密集型）足够高效
+
+### 监控和调优
+```bash
+# 查看当前负载
+fly status -a litellm-dev
+
+# 查看实时日志
+fly logs -a litellm-dev
+
+# 手动扩展（如果需要）
+fly scale count 3 -a litellm-dev
+
+# 查看请求延迟
+fly metrics -a litellm-dev
+```
+
+### 何时需要优化
+如果出现以下情况，考虑增加资源：
+1. **请求排队时间 > 1秒** - 增加 VM 数量
+2. **CPU 使用率 > 80%** - 增加 CPU 核心数
+3. **内存使用率 > 80%** - 增加内存配置
+
 ## 版本管理
 
 **重要：** Dockerfile 使用固定版本标签（如 `v1.81.12-stable`）而不是滚动标签（如 `main-stable`），以避免自动更新导致数据库 schema 不一致。

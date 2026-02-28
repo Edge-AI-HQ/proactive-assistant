@@ -12,13 +12,21 @@ app = 'litellm-dev'
   internal_port = 4000
   force_https = true
   auto_stop_machines = true
-  min_machines_running = 0
+  auto_start_machines = true
+  min_machines_running = 1
   processes = ['app']
 
   [http_service.concurrency]
-    type = 'connections'
-    hard_limit = 100
-    soft_limit = 80
+    type = 'requests'
+    soft_limit = 100
+    hard_limit = 200
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/health"
 
 [[vm]]
   memory = '4gb'
