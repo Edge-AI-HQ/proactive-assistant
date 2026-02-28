@@ -1,5 +1,10 @@
 # LiteLLM 部署
 
+**重要配置：**
+- ✅ `DISABLE_SCHEMA_UPDATE=true` - 禁用自动迁移
+- ✅ `auto_stop_machines = false` - 保持服务持续运行
+- ✅ `--num_workers 2` - 多进程提高吞吐量
+
 ## 核心问题和解决方案
 
 ### 问题：Prisma 自动迁移导致启动缓慢和崩溃
