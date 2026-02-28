@@ -48,17 +48,16 @@ fly metrics -a litellm-dev
 
 ### 更新 LiteLLM 版本
 
-1. **修改 Dockerfile 版本号**：
-   ```dockerfile
-   FROM docker.litellm.ai/berriai/litellm:v1.81.12-stable
+**⚠️ 重要：按顺序执行以下步骤**
+
+1. **临时允许自动迁移**：
+   ```bash
+   fly secrets unset DISABLE_SCHEMA_UPDATE PRISMA_OFFLINE_MODE -a litellm-dev
    ```
 
-2. **同步数据库 schema**：
-   ```bash
-   # 在 Supabase SQL Editor 中执行 sync-schema.sql
-   # 或使用 psql：
-   psql "postgresql://postgres:PASSWORD@HOST:5432/postgres?options=-c%20search_path%3Dlitellm" \
-     -f ops/litellm/sync-schema.sql
+2. **修改 Dockerfile 版本号**：
+   ```dockerfile
+   FROM docker.litellm.ai/berriai/litellm:v1.XX.XX-stable
    ```
 
 3. **部署新版本**：
@@ -66,7 +65,24 @@ fly metrics -a litellm-dev
    fly deploy ./ops/litellm -a litellm-dev
    ```
 
-⚠️ **永远先同步 schema 再部署**，否则可能导致服务崩溃或数据不一致。
+4. **等待迁移完成** - 查看日志确认：
+   ```bash
+   fly logs -a litellm-dev
+   # 等待看到 "✅ Post-migration sanity check completed"
+   # 和 "INFO: Uvicorn running on http://0.0.0.0:4000"
+   ```
+
+5. **重新禁用自动迁移**（避免每次启动都运行迁移）：
+   ```bash
+   fly secrets set DISABLE_SCHEMA_UPDATE=true PRISMA_OFFLINE_MODE=true -a litellm-dev
+   ```
+
+### 为什么需要这些步骤
+
+- **DISABLE_SCHEMA_UPDATE=true**: 禁用 Prisma 自动迁移，避免启动时修改数据库
+- **PRISMA_OFFLINE_MODE=true**: 离线模式，避免尝试连接 Prisma 仓库
+- **更新时临时移除**: 允许新版本自动处理 schema 变更
+- **迁移完成后恢复**: 避免每次重启都运行迁移（提高启动速度，减少风险）
 
 ## 构建与发布
 
