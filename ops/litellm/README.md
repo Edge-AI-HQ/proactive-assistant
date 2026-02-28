@@ -1,6 +1,43 @@
 # LiteLLM 部署
 
-测试自动部署触发 v2。
+## 核心问题和解决方案
+
+### 问题：Prisma 自动迁移导致启动缓慢和崩溃
+
+**症状：**
+- 启动耗时 40+ 秒
+- 日志显示 `Running prisma migrate deploy` 和 `prisma migrate diff` 耗时很长
+- 服务不稳定，频繁崩溃（`asyncio.exceptions.CancelledError`）
+
+**根本原因：**
+Prisma 会自动识别 `DATABASE_URL` 环境变量，并在启动时执行：
+1. `prisma migrate deploy` - 应用待处理的迁移
+2. `prisma migrate diff` - 生成并应用 schema 差异（post-migration sanity check）
+
+这些操作即使在设置 `DISABLE_SCHEMA_UPDATE=true` 后仍会执行，因为这些环境变量不是 LiteLLM 官方支持的。
+
+**解决方案：使用自定义环境变量名**
+
+将 `DATABASE_URL` 改为 `LITELLM_DB_URL`，并在 `litellm_config.yaml` 中显式读取：
+
+```yaml
+general_settings:
+  database_url: os.environ/LITELLM_DB_URL
+```
+
+这样 Prisma 不会自动识别数据库连接，避免自动触发迁移检查。
+
+### 配置文件
+
+**ops/litellm/.env**（本地开发）：
+```env
+LITELLM_DB_URL=postgresql://postgres:PASSWORD@HOST:5432/postgres?schema=litellm
+```
+
+**Fly.io secrets**（生产环境）：
+```bash
+fly secrets set LITELLM_DB_URL='postgresql://postgres:PASSWORD@HOST:5432/postgres?schema=litellm' -a litellm-dev
+```
 
 ## 性能和扩展
 
@@ -42,17 +79,32 @@ fly metrics -a litellm-dev
 2. **CPU 使用率 > 80%** - 增加 CPU 核心数
 3. **内存使用率 > 80%** - 增加内存配置
 
+### 健康检查配置
+
+```toml
+[[http_service.checks]]
+  grace_period = "60s"  # 给予 60 秒启动时间
+  interval = "30s"
+  method = "GET"
+  timeout = "10s"
+  path = "/health"
+```
+
+健康检查的 `/health` 端点需要认证，所以会返回 401，但这不影响服务正常运行。
+
 ## 版本管理
 
 **重要：** Dockerfile 使用固定版本标签（如 `v1.81.12-stable`）而不是滚动标签（如 `main-stable`），以避免自动更新导致数据库 schema 不一致。
 
 ### 更新 LiteLLM 版本
 
+由于使用了 `LITELLM_DB_URL` 而非 `DATABASE_URL`，Prisma 不会自动运行迁移。更新版本时需要手动处理 schema 变更。
+
 **⚠️ 重要：按顺序执行以下步骤**
 
-1. **临时允许自动迁移**：
+1. **临时恢复 DATABASE_URL 以允许迁移**：
    ```bash
-   fly secrets unset DISABLE_SCHEMA_UPDATE PRISMA_OFFLINE_MODE -a litellm-dev
+   fly secrets set DATABASE_URL='postgresql://postgres:PASSWORD@HOST:5432/postgres?schema=litellm' -a litellm-dev
    ```
 
 2. **修改 Dockerfile 版本号**：
@@ -62,7 +114,9 @@ fly metrics -a litellm-dev
 
 3. **部署新版本**：
    ```bash
-   fly deploy ./ops/litellm -a litellm-dev
+   git add ops/litellm/Dockerfile
+   git commit -m "更新 LiteLLM 到 vX.XX.XX"
+   git push  # 触发自动部署
    ```
 
 4. **等待迁移完成** - 查看日志确认：
@@ -72,17 +126,17 @@ fly metrics -a litellm-dev
    # 和 "INFO: Uvicorn running on http://0.0.0.0:4000"
    ```
 
-5. **重新禁用自动迁移**（避免每次启动都运行迁移）：
+5. **移除 DATABASE_URL，恢复 LITELLM_DB_URL**：
    ```bash
-   fly secrets set DISABLE_SCHEMA_UPDATE=true PRISMA_OFFLINE_MODE=true -a litellm-dev
+   fly secrets unset DATABASE_URL -a litellm-dev
+   fly secrets set LITELLM_DB_URL='postgresql://postgres:PASSWORD@HOST:5432/postgres?schema=litellm' -a litellm-dev
    ```
 
 ### 为什么需要这些步骤
 
-- **DISABLE_SCHEMA_UPDATE=true**: 禁用 Prisma 自动迁移，避免启动时修改数据库
-- **PRISMA_OFFLINE_MODE=true**: 离线模式，避免尝试连接 Prisma 仓库
-- **更新时临时移除**: 允许新版本自动处理 schema 变更
-- **迁移完成后恢复**: 避免每次重启都运行迁移（提高启动速度，减少风险）
+- **LITELLM_DB_URL**: 自定义环境变量名，避免 Prisma 自动识别触发迁移检查
+- **更新时临时使用 DATABASE_URL**: 允许新版本自动处理 schema 变更
+- **迁移完成后恢复 LITELLM_DB_URL**: 避免每次重启都运行迁移（提高启动速度，减少崩溃风险）
 
 ## 构建与发布
 
@@ -99,7 +153,7 @@ fly metrics -a litellm-dev
 
 ## 与 apis 共用同一库（推荐）
 
-LiteLLM 启动时 Prisma 会同步 schema，若连到默认的 `public` schema 会**删掉库里不在其 schema 的表**（包括 apis 的 `users`、`assistants` 等）。所以共用一库时要用 **PostgreSQL schema 隔离**，让 LiteLLM 只用自己的 schema。
+LiteLLM 使用 **PostgreSQL schema 隔离**，与 apis 共用一个数据库但使用不同的 schema。
 
 ### 步骤（一次性）
 
@@ -108,19 +162,27 @@ LiteLLM 启动时 Prisma 会同步 schema，若连到默认的 `public` schema �
    CREATE SCHEMA IF NOT EXISTS litellm;
    ```
 
-2. **LiteLLM 的 `DATABASE_URL`** 用同一库连接串，并在**末尾**加上（注意保留原有 `?`/`&`）：
+2. **LiteLLM 的连接串** 使用 `?schema=litellm` 参数：
    ```
-   ?options=-c%20search_path%3Dlitellm
+   postgresql://postgres:PASSWORD@HOST:5432/postgres?schema=litellm
    ```
-   若连接串已有参数，用 `&` 接：`...?foo=bar&options=-c%20search_path%3Dlitellm`
 
 这样 LiteLLM 的表和 `_prisma_migrations` 都会建在 `litellm` schema，不会动 `public` 下的业务表。
 
 ### 用独立库
 
-若不想共用库，可新建一个库（如 Supabase 再建一个 project），`DATABASE_URL` 直接填该库连接串，无需加 `options`。
+若不想共用库，可新建一个库（如 Supabase 再建一个 project），连接串无需加 `?schema=litellm`。
 
 ## 常见问题
+
+### 启动缓慢或频繁崩溃
+
+**症状：** 
+- 启动耗时 40+ 秒
+- 日志显示 `prisma migrate diff` 耗时很长
+- 服务崩溃报 `asyncio.exceptions.CancelledError`
+
+**解决方案：** 使用 `LITELLM_DB_URL` 而非 `DATABASE_URL`（见上方"核心问题和解决方案"）
 
 ### 401 Invalid proxy server token
 
@@ -128,50 +190,11 @@ LiteLLM 启动时 Prisma 会同步 schema，若连到默认的 `public` schema �
 
 **处理：** 在 apis 的 `LITELLM_MASTER_KEY` 里填的值，必须与 LiteLLM 服务端环境变量 `LITELLM_MASTER_KEY` **完全一致**（即你在 LiteLLM 里配置的管理密钥）。不能填任何由 LiteLLM 生成的虚拟 key（sk- 开头）。
 
-### Prisma 迁移超时 / Worker 进程崩溃
+### Schema 不一致（历史问题，新部署已解决）
 
 **症状：** 
 - 部署时日志显示 "Running prisma migrate deploy" 后卡住
-- 或者服务已启动但不断报 "Child process died" 和 "prisma schema out of sync with db"
-
-**原因：**
-1. **Prisma 迁移耗时过长**：数据库连接慢、迁移任务多、或内存不足
-2. **Schema 不同步**：即使设置了 `DISABLE_SCHEMA_UPDATE=true`，LiteLLM 仍会检测 schema 差异并导致工作进程崩溃
-
-**解决方案：手动同步数据库 schema**
-
-1. **使用提供的 SQL 脚本**：
-   ```bash
-   # 在 Supabase Dashboard 的 SQL Editor 中执行 sync-schema.sql
-   # 或使用 psql 命令行：
-   psql "postgresql://postgres:PASSWORD@HOST:5432/postgres?options=-c%20search_path%3Dlitellm" \
-     -f ops/litellm/sync-schema.sql
-   ```
-
-2. **手动执行日志中的 SQL**（如果 schema 继续变化）：
-   - 查看 fly logs 中 "Required SQL commands:" 后列出的 SQL 语句
-   - 在 Supabase SQL Editor 中逐条执行（注意：需要手动加上 `litellm.` schema 前缀）
-
-3. **设置环境变量跳过自动迁移**（已设置）：
-   ```bash
-   fly secrets set DISABLE_SCHEMA_UPDATE=true PRISMA_OFFLINE_MODE=true -a litellm-dev
-   ```
-
-⚠️ **重要**：每次 LiteLLM 镜像更新后，如果 Prisma schema 有变化，需要重新执行一次 schema 同步
-
-### access_group_ids does not exist
-
-**症状：** LiteLLM 启动报 `access_group_ids` 列不存在
-
-**原因：** 设置了 `DISABLE_SCHEMA_UPDATE=true` 或 `PRISMA_OFFLINE_MODE=true` 跳过了迁移
+- 或者服务报 "prisma schema out of sync with db"
 
 **处理：**
-1. 删除这些环境变量让 Prisma 自动迁移：
-   ```bash
-   fly secrets unset DISABLE_SCHEMA_UPDATE PRISMA_OFFLINE_MODE -a litellm-dev
-   ```
-2. 或手动补列：
-   ```sql
-   ALTER TABLE litellm."LiteLLM_VerificationToken" 
-     ADD COLUMN IF NOT EXISTS "access_group_ids" TEXT[] DEFAULT '{}';
-   ```
+现在使用 `LITELLM_DB_URL`，Prisma 不会自动运行迁移。如果需要手动同步 schema，参考"版本管理"章节。
