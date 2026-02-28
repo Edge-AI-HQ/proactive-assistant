@@ -1,8 +1,34 @@
 # LiteLLM 部署
 
+## 版本管理
+
+**重要：** Dockerfile 使用固定版本标签（如 `v1.81.12-stable`）而不是滚动标签（如 `main-stable`），以避免自动更新导致数据库 schema 不一致。
+
+### 更新 LiteLLM 版本
+
+1. **修改 Dockerfile 版本号**：
+   ```dockerfile
+   FROM docker.litellm.ai/berriai/litellm:v1.81.12-stable
+   ```
+
+2. **同步数据库 schema**：
+   ```bash
+   # 在 Supabase SQL Editor 中执行 sync-schema.sql
+   # 或使用 psql：
+   psql "postgresql://postgres:PASSWORD@HOST:5432/postgres?options=-c%20search_path%3Dlitellm" \
+     -f ops/litellm/sync-schema.sql
+   ```
+
+3. **部署新版本**：
+   ```bash
+   fly deploy ./ops/litellm -a litellm-dev
+   ```
+
+⚠️ **永远先同步 schema 再部署**，否则可能导致服务崩溃或数据不一致。
+
 ## 构建与发布
 
-**必须把 `ops/litellm` 作为构建上下文**，否则 Docker 找不到 `litellm_config.yaml`。
+**必须把 `ops/litellm` 作为构建上下文**,否则 Docker 找不到 `litellm_config.yaml`。
 
 - 在仓库根目录执行：
   ```bash

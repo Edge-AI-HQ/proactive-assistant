@@ -1,4 +1,7 @@
-FROM docker.litellm.ai/berriai/litellm:main-stable
+# 固定版本避免自动更新导致 schema 不一致
+# 使用具体的稳定版本而不是滚动标签 main-stable
+# 更新版本前需要先同步数据库 schema（运行 sync-schema.sql）
+FROM docker.litellm.ai/berriai/litellm:v1.81.12-stable
 WORKDIR /app
 COPY litellm_config.yaml config.yaml
 EXPOSE 4000
