@@ -35,7 +35,7 @@ const withTimeout = async <T>(
 
 const baseUrl = (): string => {
   // Bot now calls the same API server (itself), use localhost
-  return 'http://127.0.0.1:' + config.port;
+  return "http://127.0.0.1:" + config.port;
 };
 
 const buildHeaders = (
@@ -238,10 +238,4 @@ export const cancelUserSubscription = async (
   return requestJson("POST", "/api/payment/cancel-subscription", {
     telegram_user_id: String(telegramUserId),
   });
-};
-
-export const deleteAssistantViaApi = async (
-  assistantId: number,
-): Promise<{ deleted: boolean }> => {
-  return requestJson("DELETE", `/api/claw-assistant/${assistantId}`);
 };
