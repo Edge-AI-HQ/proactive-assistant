@@ -344,6 +344,23 @@ const provisionAssistantFromToken = async (
       await replyHtml(ctx, TOKEN_ALREADY_TAKEN_MESSAGE);
       return false;
     }
+    if (
+      error instanceof Error &&
+      error.message === "USER_ALREADY_HAS_ASSISTANT"
+    ) {
+      await replyHtml(
+        ctx,
+        [
+          "⚠️ <b>You already have an assistant bot.</b>",
+          "",
+          "Currently, each user is limited to one assistant bot.",
+          "If you want to create a new one, please delete your existing assistant first using the /my_assistants command.",
+          "",
+          "💡 <b>Tip:</b> You can update your existing bot's token by using the same token in /create_assistant command.",
+        ].join("\n"),
+      );
+      return false;
+    }
     await replyHtml(
       ctx,
       "<b>Failed to create assistant.</b>\nPlease verify your token and backend API availability, then try again.",

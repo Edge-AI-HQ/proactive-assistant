@@ -93,6 +93,9 @@ export const provisionAssistantByInput = async (
     if (message === "ASSISTANT_BOT_ALREADY_OWNED") {
       throw new DomainError("CONFLICT", message, 409, error);
     }
+    if (message === "USER_ALREADY_HAS_ASSISTANT") {
+      throw new DomainError("CONFLICT", message, 409, error);
+    }
     throw error;
   }
 };
@@ -105,6 +108,9 @@ export const createAssistantWithoutContainerByInput = async (
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown error";
     if (message === "ASSISTANT_BOT_ALREADY_OWNED") {
+      throw new DomainError("CONFLICT", message, 409, error);
+    }
+    if (message === "USER_ALREADY_HAS_ASSISTANT") {
       throw new DomainError("CONFLICT", message, 409, error);
     }
     throw error;

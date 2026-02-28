@@ -56,6 +56,12 @@ const ensureAssistantRecord = async (
     throw new Error("ASSISTANT_BOT_ALREADY_OWNED");
   }
 
+  // 限制：一个用户只能创建一个 assistant
+  const existingAssistants = await listAssistantsByOwnerTelegramId(ownerTelegramUserId);
+  if (existingAssistants.length > 0) {
+    throw new Error("USER_ALREADY_HAS_ASSISTANT");
+  }
+
   const created = await createAssistant({
     owner_telegram_user_id: ownerTelegramUserId,
     assistant_bot_id: assistantBotId,
