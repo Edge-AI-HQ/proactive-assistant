@@ -239,3 +239,9 @@ export const cancelUserSubscription = async (
     telegram_user_id: String(telegramUserId),
   });
 };
+
+export const deleteAssistantViaApi = async (
+  assistantId: number,
+): Promise<{ deleted: boolean }> => {
+  return requestJson("DELETE", `/api/claw-assistant/${assistantId}`);
+};

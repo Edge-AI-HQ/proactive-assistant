@@ -6,6 +6,7 @@ import {
   createPaymentSessionForUser,
   createAssistantWithoutContainerViaApi,
   cancelUserSubscription,
+  deleteAssistantViaApi,
   ensureTelegramUserViaApi,
   isPaymentEnabled,
   listAssistantsByOwnerViaApi,
@@ -403,7 +404,42 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     if (!telegramUserId) return;
     await ensureTelegramUserViaApi(telegramUserId, ctx.from?.username ?? null);
     const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
-    await replyHtml(ctx, assistantsListMessage(assistants));
+    
+    if (!assistants.length) {
+      await replyHtml(
+        ctx,
+        "🧸 <b>No assistant bots yet.</b>\nSend <code>/create_claw_assistant</code> to get started.",
+      );
+      return;
+    }
+
+    // 由于限制一个用户只能有一个 assistant，直接显示这个 assistant
+    const assistant = assistants[0];
+    const keyboard = new InlineKeyboard()
+      .text("🗑 Delete Assistant", `delete_assistant:${assistant.id}`)
+      .row()
+      .text("📊 Manage Subscription", "manage_subscription")
+      .row()
+      .text("🔄 Refresh Status", "refresh_assistant_status");
+
+    await replyHtml(
+      ctx,
+      [
+        "<b>Your Assistant Bot</b>",
+        "",
+        `🤖 <b>Bot:</b> @${assistant.assistant_bot_username}`,
+        `🔗 <b>Link:</b> https://t.me/${assistant.assistant_bot_username}`,
+        `📊 <b>Status:</b> ${assistant.container_status || "unknown"}`,
+        ...(assistant.litellm_key_alias
+          ? [`🔐 <b>LiteLLM Key:</b> ${assistant.litellm_key_alias}`]
+          : []),
+        "",
+        "💡 <b>Actions:</b>",
+        "• Delete to create a new one",
+        "• Manage your subscription plan",
+      ].join("\n"),
+      { reply_markup: keyboard },
+    );
   };
 
   bot.command(LIST_ASSISTANT_COMMAND, listAssistantCommandHandler);
@@ -539,6 +575,266 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
           "<b>Failed to cancel subscription.</b>\nPlease try again later or contact support.",
         );
       }
+    }
+  });
+
+  // Callback query handlers for inline buttons
+  bot.callbackQuery(/^delete_assistant:(\d+)$/, async (ctx) => {
+    const telegramUserId = ctx.from?.id;
+    if (!telegramUserId) return;
+
+    const assistantId = parseInt(ctx.match[1], 10);
+    if (!assistantId) {
+      await ctx.answerCallbackQuery({ text: "Invalid assistant ID" });
+      return;
+    }
+
+    // 确认删除
+    const keyboard = new InlineKeyboard()
+      .text("⚠️ Yes, Delete", `confirm_delete:${assistantId}`)
+      .text("❌ Cancel", "cancel_delete");
+
+    await ctx.editMessageText(
+      [
+        "⚠️ <b>Confirm Deletion</b>",
+        "",
+        "Are you sure you want to delete this assistant?",
+        "",
+        "This will:",
+        "• Stop and destroy the container",
+        "• Remove the bot configuration",
+        "• Keep your subscription active (you can create a new assistant)",
+        "",
+        "<b>This action cannot be undone.</b>",
+      ].join("\n"),
+      {
+        parse_mode: "HTML",
+        reply_markup: keyboard,
+      },
+    );
+    await ctx.answerCallbackQuery();
+  });
+
+  bot.callbackQuery(/^confirm_delete:(\d+)$/, async (ctx) => {
+    const telegramUserId = ctx.from?.id;
+    if (!telegramUserId) return;
+
+    const assistantId = parseInt(ctx.match[1], 10);
+    if (!assistantId) {
+      await ctx.answerCallbackQuery({ text: "Invalid assistant ID" });
+      return;
+    }
+
+    await ctx.editMessageText("🔄 <b>Deleting assistant...</b>\nPlease wait.", {
+      parse_mode: "HTML",
+    });
+
+    try {
+      // 调用删除 API
+      const response = await deleteAssistantViaApi(assistantId);
+
+      if (response.deleted) {
+        await ctx.editMessageText(
+          [
+            "✅ <b>Assistant deleted successfully.</b>",
+            "",
+            "You can now create a new assistant using /create_claw_assistant",
+            "Your subscription remains active and will apply to your next assistant.",
+          ].join("\n"),
+          { parse_mode: "HTML" },
+        );
+      } else {
+        await ctx.editMessageText(
+          "<b>Failed to delete assistant.</b>\nThe assistant may have already been deleted.",
+          { parse_mode: "HTML" },
+        );
+      }
+    } catch (error: unknown) {
+      console.error("Failed to delete assistant", {
+        telegramUserId,
+        assistantId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await ctx.editMessageText(
+        "<b>Failed to delete assistant.</b>\nPlease try again later.",
+        { parse_mode: "HTML" },
+      );
+    }
+
+    await ctx.answerCallbackQuery();
+  });
+
+  bot.callbackQuery("cancel_delete", async (ctx) => {
+    await ctx.editMessageText("❌ <b>Deletion cancelled.</b>", {
+      parse_mode: "HTML",
+    });
+    await ctx.answerCallbackQuery({ text: "Cancelled" });
+  });
+
+  bot.callbackQuery("manage_subscription", async (ctx) => {
+    const telegramUserId = ctx.from?.id;
+    if (!telegramUserId) return;
+
+    const paymentLink = await safeCreatePaymentLink(
+      telegramUserId,
+      ctx.from?.username ?? null,
+    );
+
+    if (!paymentLink) {
+      await ctx.answerCallbackQuery({
+        text: "Payment link unavailable",
+        show_alert: true,
+      });
+      return;
+    }
+
+    const keyboard = new InlineKeyboard()
+      .url("💳 Manage Subscription", paymentLink)
+      .row()
+      .text("❌ Cancel Subscription", "confirm_cancel_subscription");
+
+    await ctx.editMessageText(
+      [
+        "📊 <b>Subscription Management</b>",
+        "",
+        "• <b>Upgrade/Downgrade:</b> Click the button below to change your plan",
+        "• <b>Cancel:</b> Cancel your subscription (stays active until period end)",
+        "",
+        "Your subscription applies to all your assistants.",
+      ].join("\n"),
+      {
+        parse_mode: "HTML",
+        reply_markup: keyboard,
+      },
+    );
+    await ctx.answerCallbackQuery();
+  });
+
+  bot.callbackQuery("confirm_cancel_subscription", async (ctx) => {
+    const keyboard = new InlineKeyboard()
+      .text("⚠️ Yes, Cancel Subscription", "do_cancel_subscription")
+      .text("❌ Keep Subscription", "keep_subscription");
+
+    await ctx.editMessageText(
+      [
+        "⚠️ <b>Confirm Subscription Cancellation</b>",
+        "",
+        "Are you sure you want to cancel your subscription?",
+        "",
+        "• Your subscription will remain active until the end of the current billing period",
+        "• After that, your containers will be stopped",
+        "• You can resubscribe anytime",
+        "",
+        "<b>Note:</b> This will not delete your assistant bot configuration.",
+      ].join("\n"),
+      {
+        parse_mode: "HTML",
+        reply_markup: keyboard,
+      },
+    );
+    await ctx.answerCallbackQuery();
+  });
+
+  bot.callbackQuery("do_cancel_subscription", async (ctx) => {
+    const telegramUserId = ctx.from?.id;
+    if (!telegramUserId) return;
+
+    await ctx.editMessageText("🔄 <b>Cancelling subscription...</b>", {
+      parse_mode: "HTML",
+    });
+
+    try {
+      const result = await cancelUserSubscription(telegramUserId);
+      const periodEnd = new Date(
+        result.current_period_end,
+      ).toLocaleDateString();
+      await ctx.editMessageText(
+        [
+          "✅ <b>Subscription cancelled successfully.</b>",
+          `Your subscription will remain active until <b>${periodEnd}</b>.`,
+          "After that, your containers will be stopped but not deleted.",
+          "You can resubscribe anytime to resume service.",
+        ].join("\n"),
+        { parse_mode: "HTML" },
+      );
+    } catch (error: unknown) {
+      console.error("Failed to cancel subscription", {
+        telegramUserId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      if (error instanceof BackendApiError && error.status === 404) {
+        await ctx.editMessageText(
+          "<b>No active subscription found.</b>\nYou don't have a subscription to cancel.",
+          { parse_mode: "HTML" },
+        );
+      } else {
+        await ctx.editMessageText(
+          "<b>Failed to cancel subscription.</b>\nPlease try again later or contact support.",
+          { parse_mode: "HTML" },
+        );
+      }
+    }
+
+    await ctx.answerCallbackQuery();
+  });
+
+  bot.callbackQuery("keep_subscription", async (ctx) => {
+    await ctx.editMessageText("✅ <b>Subscription kept active.</b>", {
+      parse_mode: "HTML",
+    });
+    await ctx.answerCallbackQuery({ text: "Subscription kept" });
+  });
+
+  bot.callbackQuery("refresh_assistant_status", async (ctx) => {
+    const telegramUserId = ctx.from?.id;
+    if (!telegramUserId) return;
+
+    try {
+      const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
+      if (!assistants.length) {
+        await ctx.answerCallbackQuery({
+          text: "No assistants found",
+          show_alert: true,
+        });
+        return;
+      }
+
+      const assistant = assistants[0];
+      const keyboard = new InlineKeyboard()
+        .text("🗑 Delete Assistant", `delete_assistant:${assistant.id}`)
+        .row()
+        .text("📊 Manage Subscription", "manage_subscription")
+        .row()
+        .text("🔄 Refresh Status", "refresh_assistant_status");
+
+      await ctx.editMessageText(
+        [
+          "<b>Your Assistant Bot</b>",
+          "",
+          `🤖 <b>Bot:</b> @${assistant.assistant_bot_username}`,
+          `🔗 <b>Link:</b> https://t.me/${assistant.assistant_bot_username}`,
+          `📊 <b>Status:</b> ${assistant.container_status || "unknown"}`,
+          ...(assistant.litellm_key_alias
+            ? [`🔐 <b>LiteLLM Key:</b> ${assistant.litellm_key_alias}`]
+            : []),
+          "",
+          "💡 <b>Actions:</b>",
+          "• Delete to create a new one",
+          "• Manage your subscription plan",
+        ].join("\n"),
+        {
+          parse_mode: "HTML",
+          reply_markup: keyboard,
+        },
+      );
+      await ctx.answerCallbackQuery({ text: "Status refreshed" });
+    } catch (error: unknown) {
+      console.error("Failed to refresh assistant status", error);
+      await ctx.answerCallbackQuery({
+        text: "Failed to refresh status",
+        show_alert: true,
+      });
     }
   });
 
