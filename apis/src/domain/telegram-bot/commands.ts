@@ -6,7 +6,6 @@ import {
   createPaymentSessionForUser,
   createAssistantWithoutContainerViaApi,
   cancelUserSubscription,
-  deleteAssistantViaApi,
   ensureTelegramUserViaApi,
   isPaymentEnabled,
   listAssistantsByOwnerViaApi,
@@ -355,9 +354,8 @@ const provisionAssistantFromToken = async (
           "⚠️ <b>You already have an assistant bot.</b>",
           "",
           "Currently, each user is limited to one assistant bot.",
-          "If you want to create a new one, please delete your existing assistant first using the /my_assistants command.",
           "",
-          "💡 <b>Tip:</b> You can update your existing bot's token by using the same token in /create_assistant command.",
+          "💡 <b>Tip:</b> You can update your existing bot's token by running /create_claw_assistant again with a new token.",
         ].join("\n"),
       );
       return false;
@@ -415,9 +413,12 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
 
     // 由于限制一个用户只能有一个 assistant，直接显示这个 assistant
     const assistant = assistants[0];
+    if (!assistant) {
+      await replyHtml(ctx, "❌ <b>Assistant not found.</b>");
+      return;
+    }
+
     const keyboard = new InlineKeyboard()
-      .text("🗑 Delete Assistant", `delete_assistant:${assistant.id}`)
-      .row()
       .text("📊 Manage Subscription", "manage_subscription")
       .row()
       .text("🔄 Refresh Status", "refresh_assistant_status");
@@ -434,9 +435,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
           ? [`🔐 <b>LiteLLM Key:</b> ${assistant.litellm_key_alias}`]
           : []),
         "",
-        "💡 <b>Actions:</b>",
-        "• Delete to create a new one",
-        "• Manage your subscription plan",
+        "💡 <b>Tip:</b> You can update your bot token by running /create_claw_assistant again.",
       ].join("\n"),
       { reply_markup: keyboard },
     );
@@ -579,98 +578,6 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
   });
 
   // Callback query handlers for inline buttons
-  bot.callbackQuery(/^delete_assistant:(\d+)$/, async (ctx) => {
-    const telegramUserId = ctx.from?.id;
-    if (!telegramUserId) return;
-
-    const assistantId = parseInt(ctx.match[1], 10);
-    if (!assistantId) {
-      await ctx.answerCallbackQuery({ text: "Invalid assistant ID" });
-      return;
-    }
-
-    // 确认删除
-    const keyboard = new InlineKeyboard()
-      .text("⚠️ Yes, Delete", `confirm_delete:${assistantId}`)
-      .text("❌ Cancel", "cancel_delete");
-
-    await ctx.editMessageText(
-      [
-        "⚠️ <b>Confirm Deletion</b>",
-        "",
-        "Are you sure you want to delete this assistant?",
-        "",
-        "This will:",
-        "• Stop and destroy the container",
-        "• Remove the bot configuration",
-        "• Keep your subscription active (you can create a new assistant)",
-        "",
-        "<b>This action cannot be undone.</b>",
-      ].join("\n"),
-      {
-        parse_mode: "HTML",
-        reply_markup: keyboard,
-      },
-    );
-    await ctx.answerCallbackQuery();
-  });
-
-  bot.callbackQuery(/^confirm_delete:(\d+)$/, async (ctx) => {
-    const telegramUserId = ctx.from?.id;
-    if (!telegramUserId) return;
-
-    const assistantId = parseInt(ctx.match[1], 10);
-    if (!assistantId) {
-      await ctx.answerCallbackQuery({ text: "Invalid assistant ID" });
-      return;
-    }
-
-    await ctx.editMessageText("🔄 <b>Deleting assistant...</b>\nPlease wait.", {
-      parse_mode: "HTML",
-    });
-
-    try {
-      // 调用删除 API
-      const response = await deleteAssistantViaApi(assistantId);
-
-      if (response.deleted) {
-        await ctx.editMessageText(
-          [
-            "✅ <b>Assistant deleted successfully.</b>",
-            "",
-            "You can now create a new assistant using /create_claw_assistant",
-            "Your subscription remains active and will apply to your next assistant.",
-          ].join("\n"),
-          { parse_mode: "HTML" },
-        );
-      } else {
-        await ctx.editMessageText(
-          "<b>Failed to delete assistant.</b>\nThe assistant may have already been deleted.",
-          { parse_mode: "HTML" },
-        );
-      }
-    } catch (error: unknown) {
-      console.error("Failed to delete assistant", {
-        telegramUserId,
-        assistantId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      await ctx.editMessageText(
-        "<b>Failed to delete assistant.</b>\nPlease try again later.",
-        { parse_mode: "HTML" },
-      );
-    }
-
-    await ctx.answerCallbackQuery();
-  });
-
-  bot.callbackQuery("cancel_delete", async (ctx) => {
-    await ctx.editMessageText("❌ <b>Deletion cancelled.</b>", {
-      parse_mode: "HTML",
-    });
-    await ctx.answerCallbackQuery({ text: "Cancelled" });
-  });
-
   bot.callbackQuery("manage_subscription", async (ctx) => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
@@ -801,9 +708,15 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
       }
 
       const assistant = assistants[0];
+      if (!assistant) {
+        await ctx.answerCallbackQuery({
+          text: "Assistant not found",
+          show_alert: true,
+        });
+        return;
+      }
+
       const keyboard = new InlineKeyboard()
-        .text("🗑 Delete Assistant", `delete_assistant:${assistant.id}`)
-        .row()
         .text("📊 Manage Subscription", "manage_subscription")
         .row()
         .text("🔄 Refresh Status", "refresh_assistant_status");
@@ -819,9 +732,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
             ? [`🔐 <b>LiteLLM Key:</b> ${assistant.litellm_key_alias}`]
             : []),
           "",
-          "💡 <b>Actions:</b>",
-          "• Delete to create a new one",
-          "• Manage your subscription plan",
+          "💡 <b>Tip:</b> You can update your bot token by running /create_claw_assistant again.",
         ].join("\n"),
         {
           parse_mode: "HTML",
