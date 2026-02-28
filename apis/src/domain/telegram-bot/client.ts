@@ -14,7 +14,7 @@ export class BackendApiError extends Error {
 const stripTrailingSlash = (value: string): string => value.replace(/\/+$/, "");
 
 const requestTimeoutMs = (): number =>
-  Math.max(1000, config.payment.requestTimeoutMs);
+  Math.max(1000, config.payment.telegramBotRequestTimeoutMs);
 
 const withTimeout = async <T>(
   promise: Promise<T>,

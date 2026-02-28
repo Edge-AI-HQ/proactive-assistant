@@ -135,6 +135,8 @@ export const config: Config = {
   },
   payment: {
     requestTimeoutMs: toInt(process.env.PAYMENT_REQUEST_TIMEOUT_MS, 10000),
+    /** Telegram bot API 调用超时（需要更长时间，因为包含容器创建） */
+    telegramBotRequestTimeoutMs: toInt(process.env.TELEGRAM_BOT_REQUEST_TIMEOUT_MS, 120000),
     stripeSecretKey: toTrimmed(process.env.STRIPE_SECRET_KEY),
     stripeWebhookSecret: toTrimmed(process.env.STRIPE_WEBHOOK_SECRET),
     stripePriceIdBasic: toTrimmed(process.env.STRIPE_PRICE_ID_BASIC),

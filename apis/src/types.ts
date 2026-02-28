@@ -15,6 +15,7 @@ export type {
 
 export interface ApiPaymentConfig extends BasePaymentConfig {
   requestTimeoutMs: number;
+  telegramBotRequestTimeoutMs: number;
   stripeSecretKey: string;
   stripeWebhookSecret: string;
   stripePriceIdBasic: string;
