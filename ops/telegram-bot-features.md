@@ -2,7 +2,33 @@
 
 ## 功能概览
 
-通过 Telegram bot，用户可以完整管理自己的 assistant 和订阅。
+通过 Telegram bot，用户可以管理自己的 assistant 和订阅。
+
+**重要变更：** 已移除删除 assistant 功能，原因见下方说明。
+
+## 为什么不能删除 Assistant？
+
+### Budget 追踪问题
+
+LiteLLM 的 budget 系统通过 `litellm_key` 追踪每个 assistant 的使用量：
+
+```
+User → Assistant → LiteLLM Key → Budget → Usage Records
+```
+
+如果删除 assistant 并重建：
+1. ❌ 旧的 budget 记录会丢失关联
+2. ❌ 历史 usage 数据无法追溯到新 assistant
+3. ❌ 月度使用量统计会重置
+4. ❌ 可能导致重复计费或计费丢失
+
+### 正确的做法
+
+✅ **更新现有 assistant 的 token**
+- 保持 budget 和 usage 的连续性
+- 历史记录完整保留
+- 订阅关系不变
+- LiteLLM key 不变
 
 ## 命令列表
 
@@ -16,12 +42,6 @@
 - 🔐 LiteLLM API Key 别名
 
 #### 交互按钮
-
-**🗑 Delete Assistant**
-- 删除当前 assistant
-- 需要二次确认
-- 删除后容器会被销毁
-- 订阅保持活跃（可创建新 assistant）
 
 **📊 Manage Subscription**
 - 打开订阅管理面板
@@ -57,47 +77,44 @@
 
 为 assistant 生成临时登录链接，打开 OpenClaw dashboard。
 
+## 如何更换 Assistant 的 Bot？
+
+**推荐方式：更新现有 assistant 的 token**
+
+1. 在 @BotFather 创建新 bot 或编辑现有 bot
+2. 获取新 bot 的 token
+3. 运行 `/create_claw_assistant`
+4. 发送新 token
+5. 系统会更新现有 assistant 到新 bot
+
+**优点：**
+- ✅ Budget 和 usage 历史完整保留
+- ✅ LiteLLM key 保持不变
+- ✅ 订阅无缝迁移
+- ✅ 不会中断计费追踪
+
+**注意：**
+- 旧 bot 的 webhook 会被移除
+- 新 bot 会继承所有配置和权限
+- 容器会重新创建（约 1-2 分钟）
+
 ## 删除 Assistant 流程
 
-### 步骤 1：打开管理界面
+**已移除此功能。** 原因：
 
-```
-/my_assistants
-```
+1. **Budget 追踪丢失**
+   - LiteLLM 通过 `litellm_key` 追踪 usage
+   - 删除 assistant 会断开 budget 关联
+   - 历史数据无法追溯
 
-### 步骤 2：点击删除按钮
+2. **计费风险**
+   - 月度使用量统计会重置
+   - 可能导致重复计费或计费丢失
+   - 影响订阅管理的准确性
 
-点击 "🗑 Delete Assistant" 按钮
-
-### 步骤 3：确认删除
-
-系统会显示确认对话框：
-
-```
-⚠️ 确认删除
-
-确定要删除这个 assistant 吗？
-
-这将：
-• 停止并销毁容器
-• 删除 bot 配置
-• 保持订阅活跃（可创建新 assistant）
-
-此操作不可撤销。
-```
-
-按钮选项：
-- **⚠️ Yes, Delete** - 确认删除
-- **❌ Cancel** - 取消操作
-
-### 步骤 4：删除完成
-
-```
-✅ Assistant 删除成功。
-
-你现在可以使用 /create_claw_assistant 创建新的 assistant。
-你的订阅保持活跃，将应用到下一个 assistant。
-```
+3. **推荐方案**
+   - 使用更新 token 的方式切换 bot
+   - 保持 budget 和 usage 的连续性
 
 ## 订阅管理流程
 
@@ -158,13 +175,19 @@
 
 ## 常见问题
 
+### Q: 为什么不能删除 assistant？
+
+**A:** 删除 assistant 会导致 budget 追踪丢失：
+- LiteLLM 通过 `litellm_key` 追踪每个 assistant 的 usage
+- 删除会断开 budget 和 assistant 的关联
+- 历史使用量数据无法追溯到新建的 assistant
+- 可能导致计费混乱或重复计费
+
+**推荐做法：** 通过更新 token 的方式切换 bot，这样可以保持 budget 和 usage 的连续性。
+
 ### Q: 删除 assistant 后订阅会取消吗？
 
-**A:** 不会。订阅是独立管理的。删除 assistant 后：
-- 订阅保持活跃
-- 可以立即创建新 assistant
-- 新 assistant 会自动使用现有订阅
-- 不需要重新支付
+**A:** 此功能已移除，不再支持删除 assistant。
 
 ### Q: 取消订阅后 assistant 会删除吗？
 
@@ -176,34 +199,29 @@
 
 ### Q: 如何更换 assistant 的 bot？
 
-**方式一（推荐）：** 更新现有 assistant
-1. 在 @BotFather 创建新 bot 或编辑现有 bot
+**推荐方式：** 更新现有 assistant 的 token
+1. 在 @BotFather 创建新 bot
 2. 获取新 bot 的 token
 3. 运行 `/create_claw_assistant`
 4. 发送新 token
 5. 系统会更新现有 assistant 到新 bot
 
-**方式二：** 删除后重建
-1. `/my_assistants` → 删除 assistant
-2. 等待删除完成
-3. `/create_claw_assistant` → 创建新 assistant
-4. 发送新 bot token
+**优点：**
+- Budget 和 usage 历史完整保留
+- LiteLLM key 保持不变
+- 订阅无缝迁移
 
 ### Q: 可以创建多个 assistant 吗？
 
 **A:** 目前不可以。限制为一个用户一个 assistant，原因：
 - 简化订阅和计费逻辑
+- 保持 budget 追踪的一致性
 - 避免用户混淆
 - 一个订阅对应一个 assistant
-- 如需多个 bot，建议使用多个 Telegram 账号
 
 ### Q: 删除 assistant 需要多久？
 
-**A:** 通常 10-30 秒，包括：
-1. 停止容器（5-10 秒）
-2. 删除 Fly machine（5-10 秒）
-3. 删除 volume（5-10 秒）
-4. 更新数据库记录（< 1 秒）
+**A:** 此功能已移除。如需更换 bot，请使用更新 token 的方式。
 
 ### Q: 取消订阅后可以重新订阅吗？
 
@@ -224,19 +242,21 @@
 
 ### Callback Query 处理
 
-- `delete_assistant:{id}` - 触发删除确认
-- `confirm_delete:{id}` - 确认删除
-- `cancel_delete` - 取消删除
 - `manage_subscription` - 打开订阅管理
 - `confirm_cancel_subscription` - 取消订阅确认
 - `do_cancel_subscription` - 执行取消
 - `keep_subscription` - 保持订阅
 - `refresh_assistant_status` - 刷新状态
 
+**已移除：**
+- ~~`delete_assistant:{id}`~~ - 删除功能已移除
+- ~~`confirm_delete:{id}`~~ - 删除功能已移除
+- ~~`cancel_delete`~~ - 删除功能已移除
+
 ### 用户体验设计
 
 **二次确认机制：**
-- 所有破坏性操作（删除、取消）都需要确认
+- 破坏性操作（取消订阅）需要确认
 - 确认对话框清楚说明后果
 - 提供取消选项
 
