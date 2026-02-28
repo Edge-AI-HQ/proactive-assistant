@@ -1,5 +1,7 @@
 # LiteLLM 部署
 
+测试自动部署触发。
+
 ## 版本管理
 
 **重要：** Dockerfile 使用固定版本标签（如 `v1.81.12-stable`）而不是滚动标签（如 `main-stable`），以避免自动更新导致数据库 schema 不一致。
