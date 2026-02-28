@@ -411,34 +411,33 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
       return;
     }
 
-    // 由于限制一个用户只能有一个 assistant，直接显示这个 assistant
-    const assistant = assistants[0];
-    if (!assistant) {
-      await replyHtml(ctx, "❌ <b>Assistant not found.</b>");
-      return;
+    // 显示所有 assistants
+    for (let i = 0; i < assistants.length; i++) {
+      const assistant = assistants[i];
+      if (!assistant) continue;
+
+      const keyboard = new InlineKeyboard()
+        .text("📊 Manage Subscription", "manage_subscription")
+        .row()
+        .text("🔄 Refresh Status", "refresh_assistant_status");
+
+      await replyHtml(
+        ctx,
+        [
+          `<b>Your Assistant Bot ${assistants.length > 1 ? `#${i + 1}` : ""}</b>`,
+          "",
+          `🤖 <b>Bot:</b> @${assistant.assistant_bot_username}`,
+          `🔗 <b>Link:</b> https://t.me/${assistant.assistant_bot_username}`,
+          `📊 <b>Status:</b> ${assistant.container_status || "unknown"}`,
+          ...(assistant.litellm_key_alias
+            ? [`🔐 <b>LiteLLM Key:</b> ${assistant.litellm_key_alias}`]
+            : []),
+          "",
+          "💡 <b>Tip:</b> You can update your bot token by running /create_claw_assistant again.",
+        ].join("\n"),
+        { reply_markup: keyboard },
+      );
     }
-
-    const keyboard = new InlineKeyboard()
-      .text("📊 Manage Subscription", "manage_subscription")
-      .row()
-      .text("🔄 Refresh Status", "refresh_assistant_status");
-
-    await replyHtml(
-      ctx,
-      [
-        "<b>Your Assistant Bot</b>",
-        "",
-        `🤖 <b>Bot:</b> @${assistant.assistant_bot_username}`,
-        `🔗 <b>Link:</b> https://t.me/${assistant.assistant_bot_username}`,
-        `📊 <b>Status:</b> ${assistant.container_status || "unknown"}`,
-        ...(assistant.litellm_key_alias
-          ? [`🔐 <b>LiteLLM Key:</b> ${assistant.litellm_key_alias}`]
-          : []),
-        "",
-        "💡 <b>Tip:</b> You can update your bot token by running /create_claw_assistant again.",
-      ].join("\n"),
-      { reply_markup: keyboard },
-    );
   };
 
   bot.command(LIST_ASSISTANT_COMMAND, listAssistantCommandHandler);
