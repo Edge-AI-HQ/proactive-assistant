@@ -8,5 +8,5 @@ EXPOSE 4000
 # 必须覆盖 ENTRYPOINT，否则 prod_entrypoint.sh 会忽略 --host 参数
 ENTRYPOINT ["litellm"]
 # 单进程模式：避免 worker 崩溃，通过 Fly.io 水平扩展提高吞吐量
-# 如果需要多进程，可以添加 --num_workers 1 或 2（但可能导致子进程崩溃）
-CMD ["--host", "0.0.0.0", "--port", "4000", "--config", "/app/config.yaml"]
+# 本地开发可以使用 --num_workers 2 提高吞吐量
+CMD ["--host", "0.0.0.0", "--port", "4000", "--config", "/app/config.yaml", "--num_workers", "2"]
