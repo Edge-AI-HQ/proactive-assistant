@@ -422,6 +422,8 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     if (!telegramUserId) return;
     const telegramUsername = ctx.from?.username ?? null;
     await ensureTelegramUserViaApi(telegramUserId, telegramUsername);
+    // 清除 token 输入状态（用户执行了其他命令）
+    await clearTokenInputPending(telegramUserId);
     await replyHtml(ctx, welcomeMessage(suggestBotUsername(ctx)));
   });
 
@@ -429,12 +431,15 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
 
+    // 标记等待 token 输入（10分钟有效期）
     await markTokenInputPending(telegramUserId);
     await replyHtml(
       ctx,
       [
         "<b>Please send your BotFather token in the next message.</b>",
         "Example: <code>123456789:ABCDefghIJKLmnopQRSTuvwxYZ</code>",
+        "",
+        "💡 <i>Tip: If you change your mind, just send any other command to cancel.</i>",
       ].join("\n"),
     );
   };
@@ -810,6 +815,8 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     }
 
     if (rawText.startsWith("/")) {
+      // 用户执行了其他命令，清除 token 输入状态
+      await clearTokenInputPending(telegramUserId);
       await next();
       return;
     }
@@ -828,7 +835,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
 
     const created = await provisionAssistantFromToken(ctx, token);
     if (created) {
-      clearTokenInputPending(telegramUserId);
+      await clearTokenInputPending(telegramUserId);
     }
   });
 };
