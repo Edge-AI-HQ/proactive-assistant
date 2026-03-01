@@ -97,6 +97,8 @@ fly metrics -a litellm-dev
 
 健康检查的 `/health` 端点需要认证，所以会返回 401，但这不影响服务正常运行。
 
+**重要：** `auto_stop_machines = false` 确保服务持续运行，不会自动停止。
+
 ## 版本管理
 
 **重要：** Dockerfile 使用固定版本标签（如 `v1.81.12-stable`）而不是滚动标签（如 `main-stable`），以避免自动更新导致数据库 schema 不一致。
