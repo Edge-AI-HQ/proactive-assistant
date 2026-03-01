@@ -430,6 +430,32 @@ const resolveSubscriptionFromInvoice = async (
     typeof invoice.subscription === "string"
       ? invoice.subscription
       : invoice.subscription?.id;
+
+  // 优先从 Stripe Subscription 的 metadata 解析（第一次付款时表里还没数据）
+  if (subscriptionId) {
+    try {
+      const stripeSub =
+        await requireStripe().subscriptions.retrieve(subscriptionId);
+      const telegramUserIdFromSub =
+        stripeSub.metadata?.telegram_user_id?.trim();
+      if (telegramUserIdFromSub) {
+        return {
+          telegram_user_id: telegramUserIdFromSub,
+          telegram_username:
+            stripeSub.metadata?.telegram_username?.trim() ?? null,
+          stripe_subscription_id: subscriptionId,
+          plan_id: stripeSub.metadata?.plan?.trim() ?? null,
+        };
+      }
+    } catch (err) {
+      console.warn("Failed to retrieve subscription from Stripe", {
+        subscriptionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // 其次从 subscription_periods 表解析（已有订阅的场景）
   if (subscriptionId) {
     const bySub =
       await db.getSubscriptionInfoByStripeSubscriptionId(subscriptionId);
@@ -446,6 +472,7 @@ const resolveSubscriptionFromInvoice = async (
     if (byCustomer) return byCustomer;
   }
 
+  // 最后尝试 invoice.metadata（兜底）
   const telegramUserId = invoice.metadata?.telegram_user_id?.trim();
   if (telegramUserId) {
     const current = await db.getCurrentPeriodByTelegramId(telegramUserId);
