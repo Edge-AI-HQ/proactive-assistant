@@ -56,17 +56,57 @@ const hashConfigSha256 = (raw: string): string => crypto.createHash('sha256').up
 
 const quoteForShell = (value: string): string => `'${value.replace(/'/g, `"'"'`)}'`;
 
+const resolveLiteLLMContainerBaseUrlForFly = (): string => {
+  const containerBaseUrl = config.litellm.containerBaseUrl.trim();
+  const liteLlmBaseUrl = config.litellm.baseUrl.trim();
+  if (!containerBaseUrl) return liteLlmBaseUrl;
+
+  const normalized = containerBaseUrl.toLowerCase();
+  const pointsToLocalBridge =
+    normalized.includes('host.docker.internal') ||
+    normalized.includes('127.0.0.1') ||
+    normalized.includes('localhost');
+
+  if (!pointsToLocalBridge) return containerBaseUrl;
+  return liteLlmBaseUrl || containerBaseUrl;
+};
+
 const buildAssistantOpenclawConfigPayload = (
   gatewayToken: string,
   assistantBotToken: string,
-  liteLlmApiKey: string | null
+  liteLlmApiKey: string | null,
+  webhookSecret?: string
 ): { config: UnknownRecord; json: string; hash: string } => {
-  const built = buildAssistantOpenclawConfig(config, {
+  const webhookUrl = process.env.TELEGRAM_ROUTER_WEBHOOK_URL || '';
+  const webhookPath = process.env.OPENCLAW_TELEGRAM_WEBHOOK_PATH || '/telegram-webhook';
+  const webhookHost = process.env.OPENCLAW_TELEGRAM_WEBHOOK_HOST || '0.0.0.0';
+  const webhookPortRaw = process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT || '8787';
+  const webhookPort = Number.parseInt(webhookPortRaw, 10);
+  const pluginPath =
+    process.env.OPENCLAW_TELEGRAM_ROUTER_PLUGIN_PATH ||
+    '/opt/pinai/plugins/telegram-router-proxy';
+  const openclawConfigContext = {
+    openclaw: config.openclaw,
+    elevenLabs: config.elevenLabs,
+    litellm: {
+      ...config.litellm,
+      containerBaseUrl: resolveLiteLLMContainerBaseUrlForFly()
+    }
+  };
+
+  const built = buildAssistantOpenclawConfig(openclawConfigContext, {
     gatewayToken,
     gatewayBind: 'loopback',
     assistantBotToken,
     liteLlmApiKey,
-    includeTelegramPlugin: true
+    includeTelegramPlugin: true,
+    telegramWebhookMode: true, // 启用 webhook 模式
+    telegramWebhookPort: Number.isFinite(webhookPort) ? webhookPort : 8787,
+    ...(webhookUrl ? { telegramWebhookUrl: webhookUrl } : {}),
+    ...(webhookSecret ? { telegramWebhookSecret: webhookSecret } : {}),
+    ...(webhookPath ? { telegramWebhookPath: webhookPath } : {}),
+    ...(webhookHost ? { telegramWebhookHost: webhookHost } : {}),
+    ...(pluginPath ? { telegramRouterPluginPath: pluginPath } : {})
   });
   const json = JSON.stringify(built);
   return {
@@ -216,10 +256,12 @@ export const shouldRecreateAssistantMachine = (
   }
 
   const desiredToken = normalizeAssistantToken(desiredAssistantBotToken);
+  const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET || '';
   const desiredConfigHash = buildAssistantOpenclawConfigPayload(
     desiredGatewayToken,
     desiredToken,
-    desiredLiteLLMApiKey || null
+    desiredLiteLLMApiKey || null,
+    webhookSecret
   ).hash;
 
   const currentEnv = machine.config?.env;
@@ -252,6 +294,7 @@ export const shouldRecreateAssistantMachine = (
   const joined = initExec.join(' ');
   const legacyConfig =
     !joined.includes('[fly-ipv6-proxy]') ||
+    !joined.includes('[fly-tg-webhook-ipv6-proxy]') ||
     !joined.includes('openclaw gateway --bind loopback');
   if (legacyConfig) return true;
 
@@ -265,15 +308,21 @@ export const shouldRecreateAssistantMachine = (
 
 export const createAssistantMachine = async (args: AssistantMachineCreateArgs): Promise<FlyMachine> => {
   const normalizedAssistantBotToken = normalizeAssistantToken(args.assistantBotToken);
+  const webhookPortRaw = process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT || '8787';
+  const webhookPort = Number.parseInt(webhookPortRaw, 10);
+  const normalizedWebhookPort = Number.isFinite(webhookPort) ? webhookPort : 8787;
+  const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET || '';
   const openclawPayload = buildAssistantOpenclawConfigPayload(
     args.gatewayToken,
     normalizedAssistantBotToken,
-    args.liteLlmApiKey
+    args.liteLlmApiKey,
+    webhookSecret
   );
 
   const env: Record<string, string> = {
     OPENCLAW_USER_ID: `assistant-${args.assistantBotId}`,
     OPENCLAW_GATEWAY_PORT: String(config.openclaw.gatewayPort),
+    OPENCLAW_TELEGRAM_WEBHOOK_PORT: String(normalizedWebhookPort),
     OPENCLAW_CONFIG_PATH: '/app/data/config/openclaw.json',
     OPENCLAW_STATE_DIR: '/app/data',
     PINAI_OPENCLAW_CONFIG_SHA256: openclawPayload.hash
@@ -284,6 +333,7 @@ export const createAssistantMachine = async (args: AssistantMachineCreateArgs): 
     `printf "%s" ${quoteForShell(openclawPayload.json)} > "$OPENCLAW_CONFIG_PATH"`,
     'ln -sfn /app/data/workspace /root/.openclaw/workspace',
     `node -e 'const net=require("net");const port=Number(process.env.OPENCLAW_GATEWAY_PORT||${config.openclaw.gatewayPort});const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});' >/tmp/fly-ipv6-proxy.log 2>&1 & sleep 0.2`,
+    `node -e 'const net=require("net");const port=Number(process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT||${normalizedWebhookPort});const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-tg-webhook-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-tg-webhook-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});' >/tmp/fly-tg-webhook-ipv6-proxy.log 2>&1 & sleep 0.2`,
     'exec openclaw gateway --bind loopback'
   ].join(' && ');
 

@@ -56,25 +56,57 @@ export const buildTalkConfigSection = (context: OpenclawConfigContext): UnknownR
   return { apiKey };
 };
 
-export const buildTelegramChannelConfigSection = (assistantBotToken: string): UnknownRecord => ({
-  enabled: true,
-  dmPolicy: 'open',
-  botToken: assistantBotToken,
-  allowFrom: ['*'],
-  groupAllowFrom: [],
-  groupPolicy: 'open',
-  groups: {
-    '*': {
-      requireMention: true
-    }
-  },
-  streamMode: 'partial',
-  actions: {
-    sendMessage: true,
-    deleteMessage: false,
-    sticker: true
+export const buildTelegramChannelConfigSection = (
+  assistantBotToken: string,
+  webhookConfig?: {
+    enabled?: boolean;
+    url?: string;
+    secret?: string;
+    path?: string;
+    host?: string;
+    port?: number;
   }
-});
+): UnknownRecord => {
+  const config: UnknownRecord = {
+    enabled: webhookConfig?.enabled ?? true,
+    dmPolicy: 'open',
+    botToken: assistantBotToken,
+    allowFrom: ['*'],
+    groupAllowFrom: [],
+    groupPolicy: 'open',
+    groups: {
+      '*': {
+        requireMention: true
+      }
+    },
+    streamMode: 'partial',
+    actions: {
+      sendMessage: true,
+      deleteMessage: false,
+      sticker: true
+    }
+  };
+
+  // Webhook 模式配置：保持 provider 启用，由 router 转发 update 到本地 listener
+  const webhookUrl = webhookConfig?.url?.trim();
+  if (webhookUrl) {
+    config.webhookUrl = webhookUrl;
+  }
+  if (webhookConfig?.secret?.trim()) {
+    config.webhookSecret = webhookConfig.secret.trim();
+  }
+  if (webhookConfig?.path?.trim()) {
+    config.webhookPath = webhookConfig.path.trim();
+  }
+  if (webhookConfig?.host?.trim()) {
+    config.webhookHost = webhookConfig.host.trim();
+  }
+  if (typeof webhookConfig?.port === 'number' && Number.isFinite(webhookConfig.port)) {
+    config.webhookPort = webhookConfig.port;
+  }
+
+  return config;
+};
 
 export const buildLiteLLMModelsSection = (
   context: OpenclawConfigContext,
@@ -111,6 +143,13 @@ interface BuildAssistantOpenclawConfigOptions {
   assistantBotToken?: string | null;
   liteLlmApiKey?: string | null;
   includeTelegramPlugin?: boolean;
+  telegramWebhookMode?: boolean;
+  telegramWebhookUrl?: string;
+  telegramWebhookSecret?: string;
+  telegramWebhookPath?: string;
+  telegramWebhookHost?: string;
+  telegramWebhookPort?: number;
+  telegramRouterPluginPath?: string;
 }
 
 export const buildAssistantOpenclawConfig = (
@@ -147,18 +186,57 @@ export const buildAssistantOpenclawConfig = (
   }
 
   if (normalizedAssistantBotToken) {
-    next.channels = {
-      telegram: buildTelegramChannelConfigSection(normalizedAssistantBotToken)
+    const telegramWebhookConfig = {
+      enabled: true,
+      ...(options.telegramWebhookMode && options.telegramWebhookUrl
+        ? { url: options.telegramWebhookUrl }
+        : {}),
+      ...(options.telegramWebhookMode && options.telegramWebhookSecret
+        ? { secret: options.telegramWebhookSecret }
+        : {}),
+      ...(options.telegramWebhookMode && options.telegramWebhookPath
+        ? { path: options.telegramWebhookPath }
+        : {}),
+      ...(options.telegramWebhookMode && options.telegramWebhookHost
+        ? { host: options.telegramWebhookHost }
+        : {}),
+      ...(options.telegramWebhookMode && typeof options.telegramWebhookPort === 'number'
+        ? { port: options.telegramWebhookPort }
+        : {})
     };
+
+    next.channels = {
+      telegram: buildTelegramChannelConfigSection(
+        normalizedAssistantBotToken,
+        telegramWebhookConfig
+      )
+    };
+
+    // 配置 plugins
+    const plugins: {
+      entries: Record<string, UnknownRecord>;
+      load?: { paths: string[] };
+    } = {
+      entries: {}
+    };
+
     if (options.includeTelegramPlugin) {
-      next.plugins = {
-        entries: {
-          telegram: {
-            enabled: true
-          }
-        }
-      };
+      plugins.entries.telegram = { enabled: true };
     }
+
+    // 如果启用 webhook 模式，加载路由代理 plugin
+    if (options.telegramWebhookMode) {
+      plugins.entries['telegram-router-proxy'] = {
+        enabled: true
+      };
+
+      const pluginPath = options.telegramRouterPluginPath?.trim();
+      if (pluginPath) {
+        plugins.load = { paths: [pluginPath] };
+      }
+    }
+
+    next.plugins = plugins;
   }
 
   return next;
