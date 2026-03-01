@@ -1,0 +1,6 @@
+{
+  "id": "telegram-router-proxy",
+  "name": "Telegram Router Proxy",
+  "description": "Proxy Telegram outbound API calls via the shared telegram-router service.",
+  "version": "0.1.0"
+}
