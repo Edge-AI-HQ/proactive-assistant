@@ -186,24 +186,23 @@ export const buildAssistantOpenclawConfig = (
   }
 
   if (normalizedAssistantBotToken) {
-    const telegramWebhookConfig = {
-      enabled: true,
-      ...(options.telegramWebhookMode && options.telegramWebhookUrl
-        ? { url: options.telegramWebhookUrl }
-        : {}),
-      ...(options.telegramWebhookMode && options.telegramWebhookSecret
-        ? { secret: options.telegramWebhookSecret }
-        : {}),
-      ...(options.telegramWebhookMode && options.telegramWebhookPath
-        ? { path: options.telegramWebhookPath }
-        : {}),
-      ...(options.telegramWebhookMode && options.telegramWebhookHost
-        ? { host: options.telegramWebhookHost }
-        : {}),
-      ...(options.telegramWebhookMode && typeof options.telegramWebhookPort === 'number'
-        ? { port: options.telegramWebhookPort }
-        : {})
-    };
+    const telegramWebhookConfig: Record<string, unknown> = { enabled: true };
+    if (options.telegramWebhookMode) {
+      const mapping: [string, unknown][] = [
+        ['url', options.telegramWebhookUrl],
+        ['secret', options.telegramWebhookSecret],
+        ['path', options.telegramWebhookPath],
+        ['host', options.telegramWebhookHost],
+        ['port', options.telegramWebhookPort]
+      ];
+      for (const [key, value] of mapping) {
+        const present =
+          (typeof value === 'string' && value.trim() !== '') || typeof value === 'number';
+        if (present) {
+          telegramWebhookConfig[key] = value;
+        }
+      }
+    }
 
     next.channels = {
       telegram: buildTelegramChannelConfigSection(

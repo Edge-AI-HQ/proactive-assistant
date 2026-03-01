@@ -4,19 +4,14 @@
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 
 const FETCH_PATCH_KEY = '__pinaiTelegramRouterFetchPatched__';
-const PROXYABLE_TELEGRAM_METHODS = new Set([
-  'sendMessage',
-  'sendPhoto',
-  'sendVideo',
-  'sendAnimation',
-  'sendAudio',
-  'sendVoice',
-  'sendDocument',
-  'sendMediaGroup',
-  'sendChatAction',
-  'editMessageText',
-  'deleteMessage',
-  'answerCallbackQuery'
+// Methods that should NOT be proxied (account-management / webhook-control actions)
+const NON_PROXYABLE_TELEGRAM_METHODS = new Set([
+  'setWebhook',
+  'deleteWebhook',
+  'getWebhookInfo',
+  'getMe',
+  'logOut',
+  'close'
 ]);
 
 const plugin = {
@@ -50,18 +45,27 @@ function installTelegramFetchProxy(api: OpenClawPluginApi, routerUrl: string) {
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     try {
-      if (typeof input === 'string' || input instanceof URL) {
-        const targetUrl = new URL(String(input));
+      const rawUrl =
+        typeof input === 'string' ? input
+        : input instanceof URL ? input.toString()
+        : input instanceof Request ? input.url
+        : null;
+
+      if (rawUrl) {
+        const targetUrl = new URL(rawUrl);
         const methodName = extractTelegramMethod(targetUrl);
-        if (methodName && PROXYABLE_TELEGRAM_METHODS.has(methodName)) {
+        if (methodName && !NON_PROXYABLE_TELEGRAM_METHODS.has(methodName)) {
           const proxyUrl = `${normalizedRouter}/api/telegram/${methodName}${targetUrl.search}`;
-          const headers = new Headers(init?.headers || {});
+          const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : {}));
           headers.delete('host');
           headers.delete('authorization');
-          return await originalFetch(proxyUrl, {
+
+          const effectiveInit: RequestInit = {
+            ...(input instanceof Request ? { method: input.method, body: input.body, redirect: input.redirect } : {}),
             ...init,
             headers
-          });
+          };
+          return await originalFetch(proxyUrl, effectiveInit);
         }
       }
     } catch (error) {

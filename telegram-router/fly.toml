@@ -1,5 +1,5 @@
 # Fly.io 部署配置
-app = 'pinclaw-telegram-router'
+app = 'pinclaw-telegram-router-dev'
 primary_region = 'iad'
 
 [build]

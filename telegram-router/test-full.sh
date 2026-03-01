@@ -92,6 +92,15 @@ else
     exit 1
 fi
 
+cleanup() {
+    echo ""
+    echo "🛑 停止服务..."
+    kill $ROUTER_PID $NGROK_PID 2>/dev/null || true
+    exit 0
+}
+
+trap cleanup INT TERM
+
 echo ""
 echo "================================"
 echo "✅ 测试环境已就绪！"
@@ -105,13 +114,3 @@ echo ""
 
 # 5. 实时显示日志
 tail -f /tmp/router.log
-
-# 清理函数
-cleanup() {
-    echo ""
-    echo "🛑 停止服务..."
-    kill $ROUTER_PID $NGROK_PID 2>/dev/null || true
-    exit 0
-}
-
-trap cleanup INT TERM

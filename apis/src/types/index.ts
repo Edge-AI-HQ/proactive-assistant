@@ -207,6 +207,14 @@ export interface FlyConfig {
   gatewayProbeTimeoutMs: number;
 }
 
+export interface TelegramRouterConfig {
+  webhookUrl: string;
+  webhookPath: string;
+  webhookHost: string;
+  webhookPort: number;
+  pluginPath: string;
+}
+
 export interface FeatureFlagsConfig {
   allowMissingSecrets: boolean;
 }
@@ -225,5 +233,6 @@ export interface SharedConfig {
   payment: BasePaymentConfig;
   container: ContainerConfig;
   fly: FlyConfig;
+  telegramRouter: TelegramRouterConfig;
   featureFlags: FeatureFlagsConfig;
 }

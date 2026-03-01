@@ -74,17 +74,10 @@ const resolveLiteLLMContainerBaseUrlForFly = (): string => {
 const buildAssistantOpenclawConfigPayload = (
   gatewayToken: string,
   assistantBotToken: string,
-  liteLlmApiKey: string | null,
-  webhookSecret?: string
+  liteLlmApiKey: string | null
 ): { config: UnknownRecord; json: string; hash: string } => {
-  const webhookUrl = process.env.TELEGRAM_ROUTER_WEBHOOK_URL || '';
-  const webhookPath = process.env.OPENCLAW_TELEGRAM_WEBHOOK_PATH || '/telegram-webhook';
-  const webhookHost = process.env.OPENCLAW_TELEGRAM_WEBHOOK_HOST || '0.0.0.0';
-  const webhookPortRaw = process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT || '8787';
-  const webhookPort = Number.parseInt(webhookPortRaw, 10);
-  const pluginPath =
-    process.env.OPENCLAW_TELEGRAM_ROUTER_PLUGIN_PATH ||
-    '/opt/pinai/plugins/telegram-router-proxy';
+  const { webhookUrl, webhookPath, webhookHost, webhookPort, pluginPath } = config.telegramRouter;
+  const webhookSecret = config.telegram.webhookSecret;
   const openclawConfigContext = {
     openclaw: config.openclaw,
     elevenLabs: config.elevenLabs,
@@ -100,8 +93,8 @@ const buildAssistantOpenclawConfigPayload = (
     assistantBotToken,
     liteLlmApiKey,
     includeTelegramPlugin: true,
-    telegramWebhookMode: true, // 启用 webhook 模式
-    telegramWebhookPort: Number.isFinite(webhookPort) ? webhookPort : 8787,
+    telegramWebhookMode: true,
+    telegramWebhookPort: webhookPort,
     ...(webhookUrl ? { telegramWebhookUrl: webhookUrl } : {}),
     ...(webhookSecret ? { telegramWebhookSecret: webhookSecret } : {}),
     ...(webhookPath ? { telegramWebhookPath: webhookPath } : {}),
@@ -256,12 +249,10 @@ export const shouldRecreateAssistantMachine = (
   }
 
   const desiredToken = normalizeAssistantToken(desiredAssistantBotToken);
-  const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET || '';
   const desiredConfigHash = buildAssistantOpenclawConfigPayload(
     desiredGatewayToken,
     desiredToken,
-    desiredLiteLLMApiKey || null,
-    webhookSecret
+    desiredLiteLLMApiKey || null
   ).hash;
 
   const currentEnv = machine.config?.env;
@@ -308,15 +299,11 @@ export const shouldRecreateAssistantMachine = (
 
 export const createAssistantMachine = async (args: AssistantMachineCreateArgs): Promise<FlyMachine> => {
   const normalizedAssistantBotToken = normalizeAssistantToken(args.assistantBotToken);
-  const webhookPortRaw = process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT || '8787';
-  const webhookPort = Number.parseInt(webhookPortRaw, 10);
-  const normalizedWebhookPort = Number.isFinite(webhookPort) ? webhookPort : 8787;
-  const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET || '';
+  const normalizedWebhookPort = config.telegramRouter.webhookPort;
   const openclawPayload = buildAssistantOpenclawConfigPayload(
     args.gatewayToken,
     normalizedAssistantBotToken,
-    args.liteLlmApiKey,
-    webhookSecret
+    args.liteLlmApiKey
   );
 
   const env: Record<string, string> = {

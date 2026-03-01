@@ -151,6 +151,16 @@ export const config: Config = {
     memoryMb: toInt(process.env.CONTAINER_MEMORY_MB, 2048),
     cpuShares: toInt(process.env.CONTAINER_CPU_SHARES, 512)
   },
+  telegramRouter: {
+    webhookUrl: toTrimmed(process.env.TELEGRAM_ROUTER_WEBHOOK_URL),
+    webhookPath: toTrimmed(process.env.OPENCLAW_TELEGRAM_WEBHOOK_PATH, '/telegram-webhook'),
+    webhookHost: toTrimmed(process.env.OPENCLAW_TELEGRAM_WEBHOOK_HOST, '0.0.0.0'),
+    webhookPort: toInt(process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT, 8787),
+    pluginPath: toTrimmed(
+      process.env.OPENCLAW_TELEGRAM_ROUTER_PLUGIN_PATH,
+      '/opt/pinai/plugins/telegram-router-proxy'
+    )
+  },
   fly: {
     apiBaseUrl: process.env.FLY_API_BASE_URL || 'https://api.machines.dev/v1',
     apiToken: process.env.FLY_API_TOKEN || '',
