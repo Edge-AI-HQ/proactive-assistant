@@ -25,6 +25,7 @@ export const createSubscriptionPeriodStore = (
   | "getSubscriptionInfoByStripeSubscriptionId"
   | "getSubscriptionInfoByStripeCustomerId"
   | "getUsersWithEndedSubscriptionNoCurrentPeriod"
+  | "updateSubscriptionCancelFlag"
   | "claimStripeEvent"
   | "markStripeEventProcessed"
   | "markStripeEventFailed"
@@ -243,6 +244,30 @@ export const createSubscriptionPeriodStore = (
           WHERE id = $1 AND budget_applied_at IS NULL
         `,
         [periodId],
+      );
+      return (result.rowCount ?? 0) > 0;
+    },
+
+    async updateSubscriptionCancelFlag(
+      stripe_subscription_id,
+      cancel_at_period_end,
+      status,
+    ) {
+      const updates = ["cancel_at_period_end = $2", "updated_at = NOW()"];
+      const params: any[] = [stripe_subscription_id, cancel_at_period_end];
+
+      if (status) {
+        updates.push("status = $3");
+        params.push(status);
+      }
+
+      const result = await pool.query(
+        `
+          UPDATE subscription_periods
+          SET ${updates.join(", ")}
+          WHERE stripe_subscription_id = $1
+        `,
+        params,
       );
       return (result.rowCount ?? 0) > 0;
     },

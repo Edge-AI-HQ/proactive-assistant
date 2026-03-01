@@ -189,6 +189,7 @@ export async function syncSubscriptionFromStripe(
     }
   }
 
+  // 如果有完整的 period 信息，upsert 整个周期
   if (periodStart && periodEnd && planCode) {
     try {
       await db.upsertSubscriptionPeriod({
@@ -209,6 +210,20 @@ export async function syncSubscriptionFromStripe(
       console.warn("[payment] subscription_periods upsert failed (non-fatal)", {
         subscriptionId: subscription.id,
         telegramUserId: telegram_user_id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  } else if (typeof subscription.cancel_at_period_end === "boolean") {
+    // 即使 period 为空，也更新 cancel_at_period_end 和 status（用于取消订阅）
+    try {
+      await db.updateSubscriptionCancelFlag(
+        subscription.id,
+        subscription.cancel_at_period_end,
+        status,
+      );
+    } catch (err) {
+      console.warn("[payment] update cancel_at_period_end failed (non-fatal)", {
+        subscriptionId: subscription.id,
         error: err instanceof Error ? err.message : String(err),
       });
     }

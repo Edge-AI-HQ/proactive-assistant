@@ -80,6 +80,11 @@ export interface PaymentStore {
   ): Promise<
     Array<{ telegram_user_id: string; telegram_username: string | null }>
   >;
+  updateSubscriptionCancelFlag(
+    stripe_subscription_id: string,
+    cancel_at_period_end: boolean,
+    status?: string,
+  ): Promise<boolean>;
   createPaymentSession(data: {
     token: string;
     telegram_user_id: string;
