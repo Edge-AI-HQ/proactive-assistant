@@ -17,8 +17,6 @@ const CREATE_ASSISTANT_COMMAND = "create_claw_assistant";
 const LIST_ASSISTANT_COMMAND = "list_claw_assistant";
 const PENDING_TOKEN_INPUT_TTL_MS = 10 * 60 * 1000;
 
-const pendingTokenInputByUserId = new Map<number, number>();
-
 const commandList = [
   {
     command: "start",
@@ -112,24 +110,49 @@ const parseAssistantToken = (text: string | undefined): string | null => {
   return normalized;
 };
 
-const markTokenInputPending = (telegramUserId: number): void => {
-  pendingTokenInputByUserId.set(telegramUserId, Date.now());
+// 使用数据库存储待处理动作（支持集群部署）
+import { pool } from "../common/db/core.js";
+
+const markTokenInputPending = async (telegramUserId: number): Promise<void> => {
+  const expiresAt = new Date(Date.now() + PENDING_TOKEN_INPUT_TTL_MS);
+
+  await pool.query(
+    `INSERT INTO user_pending_actions (user_id, action_type, expires_at)
+     SELECT id, 'token_input', $2
+     FROM users
+     WHERE telegram_user_id = $1
+     ON CONFLICT (user_id, action_type)
+     DO UPDATE SET expires_at = EXCLUDED.expires_at, created_at = NOW()`,
+    [telegramUserId, expiresAt],
+  );
 };
 
-const clearTokenInputPending = (telegramUserId: number): void => {
-  pendingTokenInputByUserId.delete(telegramUserId);
+const clearTokenInputPending = async (
+  telegramUserId: number,
+): Promise<void> => {
+  await pool.query(
+    `DELETE FROM user_pending_actions
+     WHERE user_id IN (SELECT id FROM users WHERE telegram_user_id = $1)
+       AND action_type = 'token_input'`,
+    [telegramUserId],
+  );
 };
 
-const isTokenInputPending = (telegramUserId: number): boolean => {
-  const createdAt = pendingTokenInputByUserId.get(telegramUserId);
-  if (!createdAt) return false;
+const isTokenInputPending = async (
+  telegramUserId: number,
+): Promise<boolean> => {
+  const result = await pool.query<{ exists: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM user_pending_actions upa
+       JOIN users u ON u.id = upa.user_id
+       WHERE u.telegram_user_id = $1
+         AND upa.action_type = 'token_input'
+         AND upa.expires_at > NOW()
+     ) as exists`,
+    [telegramUserId],
+  );
 
-  if (Date.now() - createdAt > PENDING_TOKEN_INPUT_TTL_MS) {
-    pendingTokenInputByUserId.delete(telegramUserId);
-    return false;
-  }
-
-  return true;
+  return result.rows[0]?.exists ?? false;
 };
 
 interface AssistantBotIdentity {
@@ -406,7 +429,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
 
-    markTokenInputPending(telegramUserId);
+    await markTokenInputPending(telegramUserId);
     await replyHtml(
       ctx,
       [
@@ -775,7 +798,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
 
   bot.on("message:text", async (ctx, next) => {
     const telegramUserId = ctx.from?.id;
-    if (!telegramUserId || !isTokenInputPending(telegramUserId)) {
+    if (!telegramUserId || !(await isTokenInputPending(telegramUserId))) {
       await next();
       return;
     }
