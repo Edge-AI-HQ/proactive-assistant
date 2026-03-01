@@ -89,6 +89,46 @@ export interface UserIdentity {
 
 export type StripeEventClaimResult = "process" | "skip";
 
+/** 订阅周期：每个 Stripe 计费周期一行；当前生效 = period_start <= now() < period_end */
+export interface SubscriptionPeriod {
+  id: number;
+  user_id: number;
+  telegram_user_id: string;
+  telegram_username: string | null;
+  stripe_subscription_id: string;
+  stripe_customer_id: string | null;
+  stripe_invoice_id: string | null;
+  period_start: string;
+  period_end: string;
+  plan_id: string;
+  status: string;
+  cancel_at_period_end: boolean;
+  budget_applied_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 当前生效周期视图：供 subscriptionGuard / checkout / litellmBudget 使用，与「按时间判定生效」一致 */
+export interface CurrentSubscriptionView {
+  telegram_user_id: string;
+  telegram_username: string | null;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string;
+  plan_id: string | null;
+  status: string;
+  cancel_at_period_end: boolean;
+  current_period_start: string;
+  current_period_end: string;
+}
+
+/** 从 Stripe 解析出的订阅方信息（用于 invoice 等） */
+export interface SubscriptionInfoByStripe {
+  telegram_user_id: string;
+  telegram_username: string | null;
+  stripe_subscription_id: string;
+  plan_id: string | null;
+}
+
 export const subscriptionSelectSql = `
   SELECT
     user_subscriptions.id,

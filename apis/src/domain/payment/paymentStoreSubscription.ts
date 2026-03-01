@@ -21,8 +21,13 @@ export const createSubscriptionStore = (
   | "markStripeEventProcessed"
   | "markStripeEventFailed"
   | "getActiveSubscriptions"
+  | "ensureUserForTelegram"
 > => {
   return {
+    async ensureUserForTelegram(telegram_user_id, telegram_username) {
+      return resolveOrCreateUser(pool, telegram_user_id, telegram_username);
+    },
+
     async upsertUserSubscription(data) {
       const user = await resolveOrCreateUser(
         pool,

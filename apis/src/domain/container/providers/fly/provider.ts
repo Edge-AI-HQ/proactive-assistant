@@ -22,6 +22,7 @@ import {
   isNotFoundError,
   listMachines,
   startMachine,
+  stopMachine,
 } from "./fly_client.js";
 import {
   formatHostForUrl,
@@ -402,6 +403,53 @@ const destroyAssistantFlyContainer = async (
   return { deleted: true };
 };
 
+const stopAssistantFlyContainer = async (
+  assistant: AssistantContainerDestroyRef,
+): Promise<{ stopped: boolean }> => {
+  const fallbackName =
+    assistant.container_name?.trim() ||
+    containerNameForAssistant(assistant.assistant_bot_id);
+  const machine = await resolveMachineByRef(assistant.container_id, [
+    fallbackName,
+    containerNameForAssistant(assistant.assistant_bot_id),
+  ]);
+
+  if (!machine) {
+    await updateAssistant(assistant.id, {
+      container_status: "missing",
+      container_id: "",
+      container_name: fallbackName,
+    });
+    return { stopped: false };
+  }
+
+  const state = normalizeMachineState(machine);
+  if (state === "stopped") {
+    await updateAssistant(assistant.id, { container_status: "stopped" });
+    return { stopped: false };
+  }
+
+  try {
+    await stopMachine(machine.id);
+  } catch (error: unknown) {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+    await updateAssistant(assistant.id, {
+      container_status: "missing",
+      container_id: "",
+      container_name: fallbackName,
+    });
+    return { stopped: false };
+  }
+
+  await updateAssistant(assistant.id, {
+    container_status: "stopped",
+    container_name: fallbackName,
+  });
+  return { stopped: true };
+};
+
 const prepareFlyRuntime = async (): Promise<void> => {
   await ensureFlyOpenclawImageDigestPullable();
 };
@@ -409,9 +457,7 @@ const prepareFlyRuntime = async (): Promise<void> => {
 export const flyContainerProvider: ContainerProvider = {
   prepareRuntime: prepareFlyRuntime,
   ensureAssistantContainer: ensureAssistantFlyContainer,
-  stopAssistantContainer: async () => {
-    throw new Error("Fly.io provider does not support stopping containers");
-  },
+  stopAssistantContainer: stopAssistantFlyContainer,
   destroyAssistantContainer: destroyAssistantFlyContainer,
   resolveGatewayTargetForAssistant: resolveFlyGatewayTargetForAssistant,
 };

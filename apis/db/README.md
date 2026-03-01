@@ -20,3 +20,8 @@ Legacy database upgrade (existing `users`/`assistants` tables):
 6. `007_payment_event_ordering.sql`
 7. `008_remove_wallet_ledger_tables.sql`
 8. `009_drop_user_assistant_bot_columns.sql`
+
+订阅周期表（在已有库上执行一次即可建表）：
+- `012_subscription_periods.sql` — 创建 `subscription_periods` 表（Stripe 计费周期 + 定时任务应用 LiteLLM budget）
+
+执行方式：用你的数据库客户端或 `psql` 连接 `SUPABASE_DB_URL` 对应的库，按顺序执行上述 SQL 文件内容。新建库按 Fresh 顺序跑；已有库按 Legacy 顺序跑，最后再执行 `012_subscription_periods.sql`。

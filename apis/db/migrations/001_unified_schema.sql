@@ -136,10 +136,14 @@ CREATE TABLE IF NOT EXISTS user_subscriptions (
   stripe_customer_id TEXT NOT NULL,
   stripe_subscription_id TEXT,
   plan_id TEXT REFERENCES billing_plans(plan_code),
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('active', 'paused', 'canceled', 'pending')),
+  status TEXT NOT NULL DEFAULT 'pending',
+  stripe_status TEXT,
   cancel_at_period_end BOOLEAN NOT NULL DEFAULT FALSE,
   current_period_start TIMESTAMPTZ,
   current_period_end TIMESTAMPTZ,
+  ended_at TIMESTAMPTZ,
+  last_stripe_event_created BIGINT,
+  last_stripe_event_id TEXT,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -148,6 +152,17 @@ CREATE TABLE IF NOT EXISTS user_subscriptions (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_subscriptions_stripe_subscription_unique
   ON user_subscriptions(stripe_subscription_id)
   WHERE stripe_subscription_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_user_subscriptions_last_stripe_event
+  ON user_subscriptions(last_stripe_event_created, last_stripe_event_id);
+
+CREATE INDEX IF NOT EXISTS idx_user_subscriptions_ended_at
+  ON user_subscriptions(ended_at)
+  WHERE ended_at IS NOT NULL;
+
+COMMENT ON COLUMN user_subscriptions.stripe_status IS 'Original Stripe subscription status for reference';
+COMMENT ON COLUMN user_subscriptions.ended_at IS 'Timestamp when subscription actually ended (from Stripe ended_at field)';
+COMMENT ON COLUMN user_subscriptions.cancel_at_period_end IS 'If true, subscription will cancel at current_period_end but service continues until then';
 
 CREATE TABLE IF NOT EXISTS user_credit_wallets (
   id BIGSERIAL PRIMARY KEY,
@@ -212,9 +227,9 @@ INSERT INTO billing_plans (
   sort_order,
   is_active
 ) VALUES
-  ('basic', 'Basic', 'price_1SzoXARuhUY2tIYEZ6BUQOHE', 'usd', 10, 300, 4000, 10, TRUE),
-  ('pro', 'Pro', 'price_1SzoYERuhUY2tIYEHXkcIljS', 'usd', 20, 300, 8000, 20, TRUE),
-  ('max', 'Max', 'price_1SzoYoRuhUY2tIYEsEGvaGBm', 'usd', 30, 300, 40000, 30, TRUE)
+  ('basic', 'Basic', 'price_1SzoXARuhUY2tIYEZ6BUQOHE', 'usd', 10, 0, 1000, 10, TRUE),
+  ('pro', 'Pro', 'price_1SzoYERuhUY2tIYEHXkcIljS', 'usd', 20, 0, 2000, 20, TRUE),
+  ('max', 'Max', 'price_1SzoYoRuhUY2tIYEsEGvaGBm', 'usd', 30, 0, 5000, 30, TRUE)
 ON CONFLICT (plan_code)
 DO UPDATE SET
   display_name = EXCLUDED.display_name,
@@ -225,6 +240,9 @@ DO UPDATE SET
   sort_order = EXCLUDED.sort_order,
   is_active = EXCLUDED.is_active,
   updated_at = NOW();
+
+COMMENT ON COLUMN billing_plans.daily_refresh_credits IS 'Deprecated - use monthly_refresh_credits only';
+COMMENT ON COLUMN billing_plans.monthly_refresh_credits IS 'Total credits allocated per month (1 credit ≈ $0.01 in API costs)';
 
 DO $$
 BEGIN

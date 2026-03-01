@@ -1,22 +1,29 @@
 import {
   type BillingPlan,
+  type CurrentSubscriptionView,
   type PaymentSessionRecord,
   type Queryable,
   type StripeEventClaimResult,
+  type SubscriptionInfoByStripe,
+  type SubscriptionPeriod,
   type UserIdentity,
   type UserSubscription,
 } from "./paymentStoreCore.js";
 import { createPaymentSessionStore } from "./paymentStoreSession.js";
 import { createPlanStore } from "./paymentStorePlan.js";
 import { createSubscriptionStore } from "./paymentStoreSubscription.js";
+import { createSubscriptionPeriodStore } from "./paymentStorePeriods.js";
 import { createIdentityStore } from "./paymentStoreIdentity.js";
 
 export type {
   BillingPlan,
+  CurrentSubscriptionView,
   PaymentSessionRecord,
   QueryExecutor,
   Queryable,
   StripeEventClaimResult,
+  SubscriptionInfoByStripe,
+  SubscriptionPeriod,
   UserIdentity,
   UserSubscription,
 } from "./paymentStoreCore.js";
@@ -72,6 +79,43 @@ export interface PaymentStore {
     errorMessage: string,
   ): Promise<void>;
   getActiveSubscriptions(): Promise<UserSubscription[]>;
+  ensureUserForTelegram(
+    telegram_user_id: string,
+    telegram_username?: string | null,
+  ): Promise<{
+    id: number;
+    telegram_user_id: string;
+    telegram_username: string | null;
+  }>;
+  upsertSubscriptionPeriod(data: {
+    telegram_user_id: string;
+    telegram_username?: string | null;
+    stripe_subscription_id: string;
+    stripe_customer_id?: string | null;
+    stripe_invoice_id?: string | null;
+    period_start: Date;
+    period_end: Date;
+    plan_id: string;
+    status?: string;
+    cancel_at_period_end?: boolean;
+  }): Promise<void>;
+  getPeriodsToApplyBudget(now?: Date): Promise<SubscriptionPeriod[]>;
+  markPeriodBudgetApplied(periodId: number): Promise<boolean>;
+  getCurrentPeriodByTelegramId(
+    telegram_user_id: string,
+    now?: Date,
+  ): Promise<CurrentSubscriptionView | null>;
+  getSubscriptionInfoByStripeSubscriptionId(
+    stripe_subscription_id: string,
+  ): Promise<SubscriptionInfoByStripe | null>;
+  getSubscriptionInfoByStripeCustomerId(
+    stripe_customer_id: string,
+  ): Promise<SubscriptionInfoByStripe | null>;
+  getUsersWithEndedSubscriptionNoCurrentPeriod(
+    now?: Date,
+  ): Promise<
+    Array<{ telegram_user_id: string; telegram_username: string | null }>
+  >;
   createPaymentSession(data: {
     token: string;
     telegram_user_id: string;
@@ -103,6 +147,7 @@ export interface PaymentStore {
 export const createPaymentStore = (pool: Queryable): PaymentStore => {
   return {
     ...createSubscriptionStore(pool),
+    ...createSubscriptionPeriodStore(pool),
     ...createPaymentSessionStore(pool),
     ...createPlanStore(pool),
     ...createIdentityStore(pool),
