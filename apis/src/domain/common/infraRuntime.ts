@@ -39,7 +39,9 @@ const containerManagerConfig: ContainerManagerConfig = {
   },
   elevenLabs: config.elevenLabs,
   container: config.container,
-  fly: config.fly
+  fly: config.fly,
+  telegram: config.telegram,
+  telegramRouter: config.telegramRouter
 };
 
 const litellmStore: LiteLLMStore = {

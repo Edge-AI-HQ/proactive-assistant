@@ -30,9 +30,11 @@ echo ""
 
 # 3. 创建 app (如果不存在)
 echo "📦 检查 Fly app..."
-if ! flyctl apps list | grep -q "pinclaw-telegram-router"; then
-    echo "创建新 app: pinclaw-telegram-router"
-    flyctl apps create pinclaw-telegram-router --org personal
+FLY_APP="${FLY_APP:-pinclaw-telegram-router-dev}"
+
+if ! flyctl apps list | grep -q "$FLY_APP"; then
+    echo "创建新 app: $FLY_APP"
+    flyctl apps create "$FLY_APP" --org personal
 else
     echo "✅ App 已存在"
 fi
@@ -45,14 +47,14 @@ flyctl secrets set \
   TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN}" \
   TELEGRAM_WEBHOOK_SECRET="${TELEGRAM_WEBHOOK_SECRET:?set TELEGRAM_WEBHOOK_SECRET}" \
   DATABASE_URL="${DATABASE_URL:?set DATABASE_URL}" \
-  -a pinclaw-telegram-router
+  -a "$FLY_APP"
 
 echo "✅ 环境变量已设置"
 echo ""
 
 # 5. 部署
 echo "🚀 部署到 Fly.io..."
-flyctl deploy -a pinclaw-telegram-router
+flyctl deploy -a "$FLY_APP"
 
 echo ""
 echo "================================"
@@ -60,7 +62,7 @@ echo "✅ 部署完成！"
 echo ""
 
 # 6. 获取 URL
-ROUTER_URL=$(flyctl info -a pinclaw-telegram-router | grep Hostname | awk '{print $2}')
+ROUTER_URL="${FLY_APP}.fly.dev"
 echo "📡 Router URL: https://${ROUTER_URL}"
 echo ""
 
@@ -83,6 +85,6 @@ echo ""
 echo "================================"
 echo "🎉 全部完成！"
 echo ""
-echo "📊 查看日志: flyctl logs -a pinclaw-telegram-router"
-echo "🔍 查看状态: flyctl status -a pinclaw-telegram-router"
+echo "📊 查看日志: flyctl logs -a $FLY_APP"
+echo "🔍 查看状态: flyctl status -a $FLY_APP"
 echo ""

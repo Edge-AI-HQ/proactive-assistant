@@ -1,10 +1,19 @@
 import { serve } from 'bun';
 import postgres from 'postgres';
 
-// 配置
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
-const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET!;
-const DATABASE_URL = process.env.DATABASE_URL!;
+const requireEnv = (name: string): string => {
+  const value = process.env[name];
+  if (!value) {
+    console.error(`❌ Missing required env: ${name}`);
+    process.exit(1);
+  }
+  return value;
+};
+
+const TELEGRAM_BOT_TOKEN = requireEnv('TELEGRAM_BOT_TOKEN');
+const WEBHOOK_SECRET = requireEnv('TELEGRAM_WEBHOOK_SECRET');
+const DATABASE_URL = requireEnv('DATABASE_URL');
+const PORT = Number.parseInt(process.env.PORT || '3001', 10);
 const OPENCLAW_TELEGRAM_WEBHOOK_PORT = Number.parseInt(
   process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT || '8787',
   10
@@ -13,16 +22,19 @@ const OPENCLAW_TELEGRAM_WEBHOOK_PATH = process.env.OPENCLAW_TELEGRAM_WEBHOOK_PAT
 const FLY_APP_NAME = process.env.OPENCLAW_FLY_APP_NAME || 'pinclaw-api-dev';
 const OPENCLAW_FALLBACK_PORT = Number.parseInt(process.env.OPENCLAW_GATEWAY_PORT || '18789', 10);
 
-// 初始化数据库连接
-const sql = postgres(DATABASE_URL);
+const sql = postgres(DATABASE_URL, {
+  max: 10,
+  idle_timeout: 30,
+  connect_timeout: 10
+});
 
 console.log('🚀 Telegram Router starting...');
-console.log('📡 Bot Token:', TELEGRAM_BOT_TOKEN ? '✓' : '✗');
-console.log('🔐 Webhook Secret:', WEBHOOK_SECRET ? '✓' : '✗');
-console.log('💾 Database:', DATABASE_URL ? '✓' : '✗');
+console.log('📡 Bot Token: ✓');
+console.log('🔐 Webhook Secret: ✓');
+console.log('💾 Database: ✓');
 
 serve({
-  port: process.env.PORT || 3001,
+  port: PORT,
   async fetch(req) {
     const url = new URL(req.url);
     console.log(`📥 ${req.method} ${url.pathname}`);
@@ -87,8 +99,12 @@ async function handleTelegramWebhook(req: Request) {
 
     console.log(`✅ Found container:`, container);
 
-    // 转发到 OpenClaw 容器
-    await forwardToOpenClaw(container, update);
+    const forwarded = await forwardToOpenClaw(container, update);
+    // Always return ok:true to Telegram to prevent redelivery — retries would
+    // duplicate messages in OpenClaw since it has no idempotency on update_id.
+    if (!forwarded) {
+      console.error(`❌ Forward ultimately failed for chat_id=${chatId}`);
+    }
 
     return jsonResponse({ ok: true });
 
@@ -158,7 +174,7 @@ async function handleTelegramApiProxy(req: Request, url: URL) {
 function extractChatId(update: any): number | null {
   return (
     update.message?.chat?.id ||
-    update.callback_query?.from?.id ||
+    update.callback_query?.message?.chat?.id ||
     update.channel_post?.chat?.id ||
     null
   );
@@ -219,7 +235,7 @@ async function findUserContainer(chatId: number) {
       JOIN users u ON a.owner_user_id = u.id
       WHERE u.telegram_user_id = ${chatId}
         AND r.status = 'running'
-      ORDER BY a.id
+      ORDER BY r.updated_at DESC NULLS LAST, a.id DESC
       LIMIT 1
     `;
 
@@ -240,16 +256,14 @@ async function findUserContainer(chatId: number) {
   }
 }
 
-async function forwardToOpenClaw(container: any, update: any) {
+async function forwardToOpenClaw(container: any, update: any): Promise<boolean> {
   try {
-    // 解析 Fly machine runtime ref
     const runtime = parseFlyRuntimeRef(container.container_id);
     if (!runtime?.machineId) {
       console.error(`Invalid container_id: ${container.container_id}`);
-      return;
+      return false;
     }
 
-    // 同时尝试 runtime_ref 私网 IPv6 与 machine DNS，兼容 Fly 内网路由差异
     const hostCandidates = [
       ...(runtime.privateIp ? [runtime.privateIp] : []),
       `${runtime.machineId}.vm.${FLY_APP_NAME}.internal`
@@ -279,7 +293,7 @@ async function forwardToOpenClaw(container: any, update: any) {
 
         if (response.ok) {
           console.log(`✅ Forwarded successfully via ${webhookUrl}`);
-          return;
+          return true;
         }
 
         const text = await response.text();
@@ -289,22 +303,27 @@ async function forwardToOpenClaw(container: any, update: any) {
         }
 
         console.error(`❌ Forward failed at ${webhookUrl}: ${response.status} - ${text}`);
-        return;
+        return false;
       } catch (error) {
         lastError = error;
         const errName = (error as { name?: string } | null)?.name || '';
-        if (errName === 'TimeoutError' && webhookUrl.includes(':8787/')) {
-          console.log(`✅ Forward accepted (timeout) via ${webhookUrl}`);
-          return;
+        // OpenClaw webhook handler may process synchronously and exceed the timeout;
+        // treat timeout on the webhook port as "probably accepted" to avoid dropping the update.
+        const isWebhookPort = webhookUrl.includes(`:${OPENCLAW_TELEGRAM_WEBHOOK_PORT}/`);
+        if (errName === 'TimeoutError' && isWebhookPort) {
+          console.warn(`⚠️ Forward timeout (assumed accepted) via ${webhookUrl}`);
+          return true;
         }
         console.warn(`⚠️  Forward connect error at ${webhookUrl}, trying next`);
       }
     }
 
     console.error('❌ Forward failed on all candidate endpoints', lastError);
+    return false;
 
   } catch (error) {
     console.error('❌ Forward error:', error);
+    return false;
   }
 }
 
@@ -475,4 +494,4 @@ function jsonResponse(data: any) {
   });
 }
 
-console.log('✅ Telegram Router listening on http://localhost:3001');
+console.log(`✅ Telegram Router listening on http://localhost:${PORT}`);
