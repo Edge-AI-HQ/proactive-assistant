@@ -13,15 +13,28 @@ const SYNC_LOCK_KEY = 319_902; // Advisory lock key for container state sync
 async function listAssistantsWithLimit(
   offset: number,
   limit: number,
-): Promise<AssistantRecord[]> {
-  const result = await pool.query<AssistantRecord>(
+): Promise<
+  Array<{
+    id: number;
+    assistant_bot_id: number;
+    container_status: string;
+    container_id: string;
+  }>
+> {
+  const result = await pool.query<{
+    id: number;
+    assistant_bot_id: number;
+    container_status: string;
+    container_id: string;
+  }>(
     `
       SELECT 
         assistants.id,
         assistants.assistant_bot_id,
-        assistants.container_status,
-        assistants.container_id
+        COALESCE(runtime_instances.status, 'creating') as container_status,
+        COALESCE(runtime_instances.runtime_ref, '') as container_id
       FROM assistants
+      LEFT JOIN runtime_instances ON runtime_instances.assistant_id = assistants.id
       ORDER BY assistants.id ASC
       LIMIT $1 OFFSET $2
     `,
