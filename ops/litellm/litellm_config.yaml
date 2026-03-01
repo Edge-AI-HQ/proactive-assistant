@@ -3,6 +3,8 @@ general_settings:
   # 使用 LITELLM_DB_URL 而非 DATABASE_URL，避免 Prisma 自动识别触发迁移检查
   # 与 apis 共用同一库时，须带 ?schema=litellm，表会建在 litellm schema，不碰 public
   database_url: os.environ/LITELLM_DB_URL
+  # 健康检查端点不需要认证
+  disable_auth_on_health: true
 
 litellm_settings:
   set_verbose: false
