@@ -426,10 +426,35 @@ export async function syncSubscriptionFromStripe(
 const resolveSubscriptionFromInvoice = async (
   invoice: Stripe.Invoice,
 ): Promise<SubscriptionInfoByStripe | null> => {
-  const subscriptionId =
-    typeof invoice.subscription === "string"
-      ? invoice.subscription
-      : invoice.subscription?.id;
+  // 按 Stripe API 优先级解析 subscription_id
+  let subscriptionId: string | undefined;
+
+  // 类型断言：Stripe TypeScript 定义可能不包含 parent 字段，但 API 实际返回
+  const invoiceWithParent = invoice as any;
+
+  // 1. invoice.parent.subscription_details.subscription (Stripe 新版 API)
+  const parentSub =
+    invoiceWithParent.parent?.subscription_details?.subscription;
+  if (typeof parentSub === "string" && parentSub.trim()) {
+    subscriptionId = parentSub;
+  }
+
+  // 2. invoice.subscription (旧版或直接展开的情况)
+  if (!subscriptionId) {
+    subscriptionId =
+      typeof invoice.subscription === "string"
+        ? invoice.subscription
+        : invoice.subscription?.id;
+  }
+
+  // 3. invoice.lines[0].parent.subscription_item_details.subscription (备选)
+  if (!subscriptionId) {
+    const lineParent = (invoice.lines?.data?.[0] as any)?.parent
+      ?.subscription_item_details?.subscription;
+    if (typeof lineParent === "string" && lineParent.trim()) {
+      subscriptionId = lineParent;
+    }
+  }
 
   // 优先从 Stripe Subscription 的 metadata 解析（第一次付款时表里还没数据）
   if (subscriptionId) {
@@ -472,20 +497,38 @@ const resolveSubscriptionFromInvoice = async (
     if (byCustomer) return byCustomer;
   }
 
-  // 从 invoice.metadata 尝试
-  let telegramUserId = invoice.metadata?.telegram_user_id?.trim();
-  let telegramUsername = invoice.metadata?.telegram_username?.trim() ?? null;
-  let planId = invoice.metadata?.plan?.trim() ?? null;
+  // 按优先级解析 metadata
+  let telegramUserId: string | undefined;
+  let telegramUsername: string | null = null;
+  let planId: string | null = null;
 
-  // 如果 invoice.metadata 为空，尝试从 invoice.lines[0].metadata 获取
+  // 1. invoice.parent.subscription_details.metadata (最准确)
+  const parentMetadata =
+    invoiceWithParent.parent?.subscription_details?.metadata;
+  if (parentMetadata?.telegram_user_id) {
+    telegramUserId = parentMetadata.telegram_user_id?.trim();
+    telegramUsername = parentMetadata.telegram_username?.trim() ?? null;
+    planId = parentMetadata.plan?.trim() ?? null;
+  }
+
+  // 2. invoice.lines[0].metadata (次选)
   if (!telegramUserId) {
     const firstLine = invoice.lines?.data?.[0];
     if (firstLine?.metadata) {
-      telegramUserId = firstLine.metadata.telegram_user_id?.trim();
+      telegramUserId = (firstLine.metadata as any).telegram_user_id?.trim();
       telegramUsername =
-        firstLine.metadata.telegram_username?.trim() ?? telegramUsername;
-      planId = firstLine.metadata.plan?.trim() ?? planId;
+        (firstLine.metadata as any).telegram_username?.trim() ??
+        telegramUsername;
+      planId = (firstLine.metadata as any).plan?.trim() ?? planId;
     }
+  }
+
+  // 3. invoice.metadata (可能为空)
+  if (!telegramUserId) {
+    telegramUserId = invoice.metadata?.telegram_user_id?.trim();
+    telegramUsername =
+      invoice.metadata?.telegram_username?.trim() ?? telegramUsername;
+    planId = invoice.metadata?.plan?.trim() ?? planId;
   }
 
   if (telegramUserId) {
