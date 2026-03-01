@@ -333,17 +333,30 @@ const provisionAssistantFromToken = async (
     return true;
   } catch (error: unknown) {
     console.error("Assistant bot setup failed", error);
+
+    // 检查 BackendApiError 且 status=409 的情况
     if (error instanceof BackendApiError && error.status === 409) {
+      // 根据错误消息内容判断具体原因
+      if (error.message.includes("USER_ALREADY_HAS_ASSISTANT")) {
+        await replyHtml(
+          ctx,
+          [
+            "⚠️ <b>You already have an assistant bot.</b>",
+            "",
+            "Currently, each user is limited to one assistant bot.",
+            "",
+            "💡 <b>Tip:</b> You can update your existing bot's token by running /create_claw_assistant again with a new token.",
+          ].join("\n"),
+        );
+        return false;
+      }
+
+      // Token 已被其他用户使用
       await replyHtml(ctx, TOKEN_ALREADY_TAKEN_MESSAGE);
       return false;
     }
-    if (
-      error instanceof Error &&
-      error.message === "ASSISTANT_BOT_ALREADY_OWNED"
-    ) {
-      await replyHtml(ctx, TOKEN_ALREADY_TAKEN_MESSAGE);
-      return false;
-    }
+
+    // 兼容直接抛出 Error 的情况（本地错误处理）
     if (
       error instanceof Error &&
       error.message === "USER_ALREADY_HAS_ASSISTANT"
@@ -358,6 +371,14 @@ const provisionAssistantFromToken = async (
           "💡 <b>Tip:</b> You can update your existing bot's token by running /create_claw_assistant again with a new token.",
         ].join("\n"),
       );
+      return false;
+    }
+
+    if (
+      error instanceof Error &&
+      error.message === "ASSISTANT_BOT_ALREADY_OWNED"
+    ) {
+      await replyHtml(ctx, TOKEN_ALREADY_TAKEN_MESSAGE);
       return false;
     }
     await replyHtml(
@@ -402,7 +423,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     if (!telegramUserId) return;
     await ensureTelegramUserViaApi(telegramUserId, ctx.from?.username ?? null);
     const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
-    
+
     if (!assistants.length) {
       await replyHtml(
         ctx,
