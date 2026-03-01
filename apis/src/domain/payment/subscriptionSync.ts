@@ -578,10 +578,24 @@ export async function handleInvoicePaid(
   }
 
   const stripeSubscriptionId = subscription.stripe_subscription_id;
-  const stripeSub =
-    await requireStripe().subscriptions.retrieve(stripeSubscriptionId);
-  const periodStart = parseUnixSecondsToDate(stripeSub.current_period_start);
-  const periodEnd = parseUnixSecondsToDate(stripeSub.current_period_end);
+
+  // 优先从 invoice.lines[0].period 获取周期（首次付款时 subscription 可能还是 incomplete 状态）
+  let periodStart: Date | null = null;
+  let periodEnd: Date | null = null;
+
+  const firstLine = invoice.lines?.data?.[0];
+  if (firstLine?.period?.start && firstLine?.period?.end) {
+    periodStart = parseUnixSecondsToDate(firstLine.period.start);
+    periodEnd = parseUnixSecondsToDate(firstLine.period.end);
+  }
+
+  // 回退到从 Stripe Subscription 获取
+  if (!periodStart || !periodEnd) {
+    const stripeSub =
+      await requireStripe().subscriptions.retrieve(stripeSubscriptionId);
+    periodStart = parseUnixSecondsToDate(stripeSub.current_period_start);
+    periodEnd = parseUnixSecondsToDate(stripeSub.current_period_end);
+  }
 
   if (!periodStart || !periodEnd) {
     console.warn("invoice.paid could not resolve period", {
