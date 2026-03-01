@@ -34,10 +34,6 @@ const commandList = [
     command: "gateway",
     description: "Open OpenClaw dashboard for one of your bots",
   },
-  {
-    command: "cancel_subscription",
-    description: "Cancel your subscription (stops at period end)",
-  },
 ] as const;
 
 const BOT_USERNAME_SUFFIX = "_PIN_Claw_Bot";
@@ -575,53 +571,6 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
           links,
         ].join("\n"),
       );
-    }
-  });
-
-  bot.command("cancel_subscription", async (ctx) => {
-    const telegramUserId = ctx.from?.id;
-    if (!telegramUserId) return;
-    await ensureTelegramUserViaApi(telegramUserId, ctx.from?.username ?? null);
-
-    if (!isPaymentEnabled()) {
-      await replyHtml(
-        ctx,
-        "<b>Payment service is not configured.</b>\nPlease contact the admin.",
-      );
-      return;
-    }
-
-    try {
-      const result = await cancelUserSubscription(telegramUserId);
-      const periodEnd = new Date(
-        result.current_period_end,
-      ).toLocaleDateString();
-      await replyHtml(
-        ctx,
-        [
-          "✅ <b>Subscription cancelled successfully.</b>",
-          `Your subscription will remain active until <b>${periodEnd}</b>.`,
-          "After that, your containers will be stopped but not deleted.",
-          "You can resubscribe anytime to resume service.",
-        ].join("\n"),
-      );
-    } catch (error: unknown) {
-      console.error("Failed to cancel subscription", {
-        telegramUserId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-
-      if (error instanceof BackendApiError && error.status === 404) {
-        await replyHtml(
-          ctx,
-          "<b>No active subscription found.</b>\nYou don't have a subscription to cancel.",
-        );
-      } else {
-        await replyHtml(
-          ctx,
-          "<b>Failed to cancel subscription.</b>\nPlease try again later or contact support.",
-        );
-      }
     }
   });
 
