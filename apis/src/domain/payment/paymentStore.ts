@@ -61,6 +61,7 @@ export interface PaymentStore {
     plan_id: string;
     status?: string;
     cancel_at_period_end?: boolean;
+    assistant_id?: number | null;
   }): Promise<void>;
   getPeriodsToApplyBudget(now?: Date): Promise<SubscriptionPeriod[]>;
   markPeriodBudgetApplied(periodId: number): Promise<boolean>;
