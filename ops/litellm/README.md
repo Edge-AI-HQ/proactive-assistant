@@ -3,7 +3,12 @@
 **重要配置：**
 - ✅ `DISABLE_SCHEMA_UPDATE=true` - 禁用自动迁移
 - ✅ `auto_stop_machines = false` - 保持服务持续运行
-- ✅ `--num_workers 2` - 多进程提高吞吐量
+- ⚠️ **不使用 `--num_workers`** - LiteLLM 官方推荐单进程模式
+
+**为什么不用多 worker？**
+- LiteLLM 存在内存泄漏，worker 进程会崩溃
+- 官方文档明确建议 Kubernetes/容器环境只用 1 worker
+- 正确的扩展方式：单进程 + 水平扩展（多机器）
 
 ## 核心问题和解决方案
 
