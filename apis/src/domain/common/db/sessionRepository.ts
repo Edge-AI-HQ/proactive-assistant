@@ -44,27 +44,25 @@ export const getGatewaySession = async (
     pool,
     `
       SELECT
-        user_sessions.id,
+        gateway_sessions.id,
         users.telegram_user_id,
-        user_sessions.session_token,
-        user_sessions.created_at,
-        user_sessions.expires_at
-      FROM user_sessions
+        gateway_sessions.session_token,
+        gateway_sessions.created_at,
+        gateway_sessions.expires_at
+      FROM gateway_sessions
       JOIN users
-        ON users.id = user_sessions.user_id
-      WHERE user_sessions.session_type = 'gateway'
-        AND user_sessions.session_token = $1
-        AND user_sessions.expires_at > $2::timestamptz
-        AND user_sessions.used = FALSE
+        ON users.id = gateway_sessions.user_id
+      WHERE gateway_sessions.session_token = $1
+        AND gateway_sessions.expires_at > NOW()
     `,
-    [sessionToken, nowIso()],
+    [sessionToken],
   );
 };
 
-export const cleanupExpiredGatewaySessions = async (): Promise<void> => {
+export const cleanupExpiredGatewaySessions = async (): Promise<number> => {
   await withSchema();
-  await pool.query(
-    "DELETE FROM user_sessions WHERE session_type = 'gateway' AND expires_at <= $1::timestamptz",
-    [nowIso()],
+  const result = await pool.query(
+    "DELETE FROM gateway_sessions WHERE expires_at < NOW() RETURNING id",
   );
+  return result.rowCount ?? 0;
 };
