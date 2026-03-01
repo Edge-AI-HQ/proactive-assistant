@@ -1,8 +1,10 @@
 # LiteLLM 部署
 
+**最后更新**: 2026-03-01 - fly.toml 配置已修复并同步
+
 **重要配置：**
 - ✅ `DISABLE_SCHEMA_UPDATE=true` - 禁用自动迁移
-- ✅ `auto_stop_machines = false` - 保持服务持续运行
+- ✅ `auto_stop_machines = false` - 保持服务持续运行  
 - ⚠️ **不使用 `--num_workers`** - LiteLLM 官方推荐单进程模式
 
 **为什么不用多 worker？**
