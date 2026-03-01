@@ -472,8 +472,22 @@ const resolveSubscriptionFromInvoice = async (
     if (byCustomer) return byCustomer;
   }
 
-  // 最后尝试 invoice.metadata（兜底）
-  const telegramUserId = invoice.metadata?.telegram_user_id?.trim();
+  // 从 invoice.metadata 尝试
+  let telegramUserId = invoice.metadata?.telegram_user_id?.trim();
+  let telegramUsername = invoice.metadata?.telegram_username?.trim() ?? null;
+  let planId = invoice.metadata?.plan?.trim() ?? null;
+
+  // 如果 invoice.metadata 为空，尝试从 invoice.lines[0].metadata 获取
+  if (!telegramUserId) {
+    const firstLine = invoice.lines?.data?.[0];
+    if (firstLine?.metadata) {
+      telegramUserId = firstLine.metadata.telegram_user_id?.trim();
+      telegramUsername =
+        firstLine.metadata.telegram_username?.trim() ?? telegramUsername;
+      planId = firstLine.metadata.plan?.trim() ?? planId;
+    }
+  }
+
   if (telegramUserId) {
     const current = await db.getCurrentPeriodByTelegramId(telegramUserId);
     if (current)
@@ -485,9 +499,9 @@ const resolveSubscriptionFromInvoice = async (
       };
     return {
       telegram_user_id: telegramUserId,
-      telegram_username: invoice.metadata?.telegram_username?.trim() ?? null,
+      telegram_username: telegramUsername,
       stripe_subscription_id: subscriptionId ?? "",
-      plan_id: null,
+      plan_id: planId,
     };
   }
 
