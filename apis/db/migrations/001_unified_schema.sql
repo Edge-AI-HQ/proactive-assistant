@@ -341,10 +341,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_users_litellm_user_id_unique
   WHERE litellm_user_id IS NOT NULL AND litellm_user_id <> '';
 
 CREATE INDEX IF NOT EXISTS idx_users_last_active_at ON users(last_active_at DESC);
-CREATE INDEX IF NOT EXISTS idx_user_sessions_user_created ON user_sessions(user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_user_sessions_type_expires ON user_sessions(session_type, expires_at);
-CREATE INDEX IF NOT EXISTS idx_user_sessions_payment_expires_unused ON user_sessions(expires_at)
-  WHERE session_type = 'payment' AND used = FALSE;
 CREATE INDEX IF NOT EXISTS idx_assistants_owner_created ON assistants(owner_user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_assistants_litellm_key_alias ON assistants(litellm_key_alias);
 CREATE INDEX IF NOT EXISTS idx_assistants_litellm_user_id ON assistants(litellm_user_id);
@@ -367,7 +363,8 @@ CREATE INDEX IF NOT EXISTS idx_payment_events_processing_status ON payment_event
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE assistants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE runtime_instances ENABLE ROW LEVEL SECURITY;
-ALTER TABLE user_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE gateway_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE payment_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE admin_users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE admin_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE billing_plans ENABLE ROW LEVEL SECURITY;
@@ -383,7 +380,8 @@ BEGIN
     'users',
     'assistants',
     'runtime_instances',
-    'user_sessions',
+    'gateway_sessions',
+    'payment_sessions',
     'admin_users',
     'admin_sessions',
     'billing_plans',
