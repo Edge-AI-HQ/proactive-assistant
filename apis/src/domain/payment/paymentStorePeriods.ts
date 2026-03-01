@@ -1,4 +1,4 @@
-import { lookupUserByTelegramId } from "./userRegistry.js";
+import { lookupUserByTelegramId, resolveOrCreateUser } from "./userRegistry.js";
 import type { PaymentStore } from "./paymentStore.js";
 import {
   firstRow,
@@ -25,6 +25,10 @@ export const createSubscriptionPeriodStore = (
   | "getSubscriptionInfoByStripeSubscriptionId"
   | "getSubscriptionInfoByStripeCustomerId"
   | "getUsersWithEndedSubscriptionNoCurrentPeriod"
+  | "claimStripeEvent"
+  | "markStripeEventProcessed"
+  | "markStripeEventFailed"
+  | "ensureUserForTelegram"
 > => {
   return {
     async upsertSubscriptionPeriod(data) {
@@ -238,6 +242,107 @@ export const createSubscriptionPeriodStore = (
         [periodId],
       );
       return (result.rowCount ?? 0) > 0;
+    },
+
+    async ensureUserForTelegram(telegram_user_id, telegram_username) {
+      return resolveOrCreateUser(pool, telegram_user_id, telegram_username);
+    },
+
+    async claimStripeEvent(data) {
+      const user = data.telegram_user_id
+        ? await resolveOrCreateUser(pool, data.telegram_user_id, undefined)
+        : null;
+
+      const insertResult = await pool.query<{ id: number }>(
+        `
+          INSERT INTO payment_events (
+            user_id,
+            stripe_event_id,
+            event_type,
+            amount,
+            currency,
+            status,
+            processing_status,
+            error_message,
+            raw_data
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, 'processing', NULL, $7::jsonb
+          )
+          ON CONFLICT (stripe_event_id) DO NOTHING
+          RETURNING id
+        `,
+        [
+          user?.id ?? null,
+          data.stripe_event_id,
+          data.event_type,
+          data.amount ?? null,
+          data.currency ?? null,
+          data.status ?? null,
+          JSON.stringify(data.raw_data ?? null),
+        ],
+      );
+
+      if ((insertResult.rowCount ?? 0) > 0) {
+        return "process";
+      }
+
+      const reclaim = await pool.query<{ id: number }>(
+        `
+          UPDATE payment_events
+          SET
+            user_id = COALESCE($2, user_id),
+            event_type = $3,
+            amount = $4,
+            currency = $5,
+            status = $6,
+            processing_status = 'processing',
+            error_message = NULL,
+            processed_at = NULL,
+            raw_data = $7::jsonb
+          WHERE stripe_event_id = $1
+            AND processing_status = 'failed'
+          RETURNING id
+        `,
+        [
+          data.stripe_event_id,
+          user?.id ?? null,
+          data.event_type,
+          data.amount ?? null,
+          data.currency ?? null,
+          data.status ?? null,
+          JSON.stringify(data.raw_data ?? null),
+        ],
+      );
+
+      return (reclaim.rowCount ?? 0) > 0 ? "process" : "skip";
+    },
+
+    async markStripeEventProcessed(stripe_event_id) {
+      await pool.query(
+        `
+          UPDATE payment_events
+          SET
+            processing_status = 'processed',
+            error_message = NULL,
+            processed_at = NOW()
+          WHERE stripe_event_id = $1
+        `,
+        [stripe_event_id],
+      );
+    },
+
+    async markStripeEventFailed(stripe_event_id, errorMessage) {
+      await pool.query(
+        `
+          UPDATE payment_events
+          SET
+            processing_status = 'failed',
+            error_message = $2,
+            processed_at = NOW()
+          WHERE stripe_event_id = $1
+        `,
+        [stripe_event_id, errorMessage],
+      );
     },
   };
 };
