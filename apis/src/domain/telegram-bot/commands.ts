@@ -446,6 +446,8 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
     await ensureTelegramUserViaApi(telegramUserId, ctx.from?.username ?? null);
+    // 清除 token 输入状态
+    await clearTokenInputPending(telegramUserId);
     const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
 
     if (!assistants.length) {
@@ -491,6 +493,8 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
     await ensureTelegramUserViaApi(telegramUserId, ctx.from?.username ?? null);
+    // 清除 token 输入状态
+    await clearTokenInputPending(telegramUserId);
     const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
 
     if (!assistants.length) {
@@ -601,7 +605,6 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
       [
         "📊 <b>Subscription Management</b>",
         "",
-        "• <b>Upgrade/Downgrade:</b> Click the button below to change your plan",
         "• <b>Cancel:</b> Cancel your subscription (stays active until period end)",
         "",
         "Your subscription applies to all your assistants.",
