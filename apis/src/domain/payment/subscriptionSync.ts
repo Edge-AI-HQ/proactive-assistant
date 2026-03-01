@@ -638,6 +638,97 @@ export async function handleInvoicePaid(
     plan_id: planCode,
     status: "active",
   });
+
+  // invoice.paid 后也启动容器（不依赖 subscription.updated，因为 period 可能为空）
+  try {
+    await syncLiteLLMBudgetFromPlan({
+      telegram_user_id: subscription.telegram_user_id,
+      telegram_username: subscription.telegram_username ?? null,
+      plan_code: planCode,
+      source: "invoice_paid_provision",
+    });
+  } catch (err) {
+    console.warn("[payment] invoice.paid budget sync failed", {
+      invoiceId: invoice.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // 启动容器（stopped/pending 的助理）
+  const user = await getUserByTelegramId(Number(subscription.telegram_user_id));
+  if (user) {
+    const assistants = await listAssistantsByOwnerTelegramId(
+      Number(subscription.telegram_user_id),
+    );
+    const toStart = assistants.filter(
+      (a) =>
+        a.container_status === "pending" || a.container_status === "stopped",
+    );
+
+    if (toStart.length > 0) {
+      const chatId = Number(subscription.telegram_user_id);
+      const listStr = toStart
+        .map((a) => {
+          const u = a.assistant_bot_username ?? `#${a.id}`;
+          return u.startsWith("#") ? u : `@${u}`;
+        })
+        .join(", ");
+
+      await sendTelegramMessage(
+        chatId,
+        `⏳ <b>Creating container(s)</b>\n\n${listStr}\n\nStarting up, please wait. We'll notify you when ready.`,
+      );
+
+      // 异步启动容器
+      void (async () => {
+        try {
+          const results: { label: string; ok: boolean }[] = [];
+          for (const assistant of toStart) {
+            const label =
+              assistant.assistant_bot_username ?? `#${assistant.id}`;
+            const displayLabel = label.startsWith("#") ? label : `@${label}`;
+            try {
+              await ensureAssistantContainer(assistant, user.gateway_token);
+              results.push({ label: displayLabel, ok: true });
+              console.log(
+                `[payment] Started container for assistant ${assistant.id} after invoice.paid`,
+              );
+            } catch (error: unknown) {
+              results.push({ label: displayLabel, ok: false });
+              console.error(
+                `[payment] Failed to start container for assistant ${assistant.id}`,
+                {
+                  assistantId: assistant.id,
+                  error: error instanceof Error ? error.message : String(error),
+                },
+              );
+            }
+          }
+
+          const succeeded = results.filter((r) => r.ok).map((r) => r.label);
+          const failed = results.filter((r) => !r.ok).map((r) => r.label);
+          const parts: string[] = [];
+
+          if (succeeded.length > 0) {
+            parts.push(
+              `✅ <b>Container(s) ready</b>\n\n${succeeded.join(", ")}\n\nYou can open the Gateway link from the guide bot to start chatting.`,
+            );
+          }
+          if (failed.length > 0) {
+            parts.push(
+              `❌ <b>Creation failed</b>\n\n${failed.join(", ")}\n\nPlease contact support.`,
+            );
+          }
+
+          if (parts.length > 0) {
+            await sendTelegramMessage(chatId, parts.join("\n\n"));
+          }
+        } catch (err) {
+          console.error("[payment] invoice.paid container startup failed", err);
+        }
+      })();
+    }
+  }
 }
 
 /**
