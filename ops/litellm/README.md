@@ -12,6 +12,28 @@
 - 官方文档明确建议 Kubernetes/容器环境只用 1 worker
 - 正确的扩展方式：单进程 + 水平扩展（多机器）
 
+## 快速更新配置(跳过构建)
+
+当 `fly deploy` 因 Depot builder 超时失败时，使用此方法快速更新 fly.toml 配置：
+
+```bash
+# 方法1: 使用脚本(推荐)
+cd ops/litellm
+./fly-update-config.sh
+
+# 方法2: 手动执行
+# 1. 获取当前镜像
+CURRENT_IMAGE=$(fly machines list -a litellm-dev --json | jq -r '.[0].image_ref.registry + "/" + .[0].image_ref.repository + ":" + .[0].image_ref.tag')
+
+# 2. 使用现有镜像重新部署，应用新配置
+fly deploy -a litellm-dev --image "$CURRENT_IMAGE" --strategy immediate
+
+# 3. 验证配置
+fly config show -a litellm-dev
+```
+
+**原理**: 跳过漫长的镜像构建过程，直接用现有镜像重新部署并应用 fly.toml 中的新配置。
+
 ## 核心问题和解决方案
 
 ### 问题：Prisma 自动迁移导致启动缓慢和崩溃
