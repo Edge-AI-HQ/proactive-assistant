@@ -319,33 +319,51 @@ const runEnsureAssistantMachine = async (
   );
   const status = normalizeMachineState(startedMachine);
 
-  let ready = status === "running";
-  if (ready && config.fly.gatewayProbe) {
-    const target = resolveFromMachine(
-      startedMachine.id,
-      startedMachine.private_ip,
-    );
-    const portReady = await waitForPort(
-      target.host,
-      target.port,
-      config.fly.gatewayProbeTimeoutMs,
-    );
-    ready = portReady
-      ? await waitForGatewayHello(
-          target.host,
-          target.port,
-          normalizedGatewayToken,
-          config.fly.gatewayProbeTimeoutMs,
-        )
-      : false;
-  }
-
+  // 乐观更新：machine 已启动，先标记为 creating
   await updateAssistant(assistant.id, {
-    container_status: ready ? "running" : "error",
+    container_status: status === "running" ? "creating" : status,
     container_name: startedMachine.name?.trim() || fallbackName,
   });
 
-  return { containerId, ready };
+  // 异步探测 gateway，成功后更新为 running
+  if (status === "running" && config.fly.gatewayProbe) {
+    void (async () => {
+      try {
+        const target = resolveFromMachine(
+          startedMachine.id,
+          startedMachine.private_ip,
+        );
+        const portReady = await waitForPort(
+          target.host,
+          target.port,
+          config.fly.gatewayProbeTimeoutMs,
+        );
+        const ready = portReady
+          ? await waitForGatewayHello(
+              target.host,
+              target.port,
+              normalizedGatewayToken,
+              config.fly.gatewayProbeTimeoutMs,
+            )
+          : false;
+
+        await updateAssistant(assistant.id, {
+          container_status: ready ? "running" : "error",
+        });
+      } catch (err) {
+        console.error(
+          `Async gateway probe failed for assistant ${assistant.id}`,
+          err,
+        );
+        await updateAssistant(assistant.id, {
+          container_status: "error",
+        });
+      }
+    })();
+  }
+
+  // 立即返回，不阻塞
+  return { containerId, ready: status === "running" };
 };
 
 const ensureAssistantFlyContainer = async (

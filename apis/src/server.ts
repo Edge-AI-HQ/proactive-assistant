@@ -3,6 +3,7 @@ import cookieParser from "cookie-parser";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { prepareContainerRuntime } from "./domain/container/index.js";
+import { syncContainerStates } from "./domain/container/syncContainerStates.js";
 import { config, validateConfig } from "./domain/common/config.js";
 import { cleanupExpiredGatewaySessions } from "./domain/common/db/index.js";
 import { ensureInfraRuntimeConfigured } from "./domain/common/infraRuntime.js";
@@ -106,6 +107,9 @@ setInterval(
     });
     void applySubscriptionPeriodBudgets().catch((error: unknown) => {
       console.error("Failed to apply subscription period budgets", error);
+    });
+    void syncContainerStates().catch((error: unknown) => {
+      console.error("Failed to sync container states", error);
     });
   },
   5 * 60 * 1000,
