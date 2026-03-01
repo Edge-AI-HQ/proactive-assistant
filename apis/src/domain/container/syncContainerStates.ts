@@ -19,8 +19,19 @@ export async function syncFlyContainerStates(): Promise<{
   }
 
   try {
-    const machines = await listMachines();
-    const assistants = await listAssistants();
+    // 一次性获取所有数据（避免 N+1 查询）
+    const [machines, assistants] = await Promise.all([
+      listMachines(),
+      listAssistants(),
+    ]);
+
+    // 构建 machine_id -> state 的 Map（O(1) 查找）
+    const machineStateMap = new Map<string, string>();
+    for (const machine of machines) {
+      if (machine.id) {
+        machineStateMap.set(machine.id, (machine.state || "").toLowerCase());
+      }
+    }
 
     let synced = 0;
     let errors = 0;
@@ -36,26 +47,14 @@ export async function syncFlyContainerStates(): Promise<{
         const machineId = containerId.replace(/^fly:/, "").split("|")[0];
         if (!machineId) continue;
 
-        // 查询 machine 实际状态
-        let machine;
-        try {
-          machine = await getMachine(machineId);
-        } catch (err) {
-          // Machine 不存在，标记为 missing
-          if (assistant.container_status !== "missing") {
-            await updateAssistant(assistant.id, {
-              container_status: "missing",
-            });
-            synced++;
-          }
-          continue;
-        }
-
-        // 映射 Fly machine state 到 DB status
-        const machineState = (machine.state || "").toLowerCase();
+        // 从 Map 中查找状态（不调用 API）
+        const machineState = machineStateMap.get(machineId);
         let expectedStatus: string;
 
-        if (machineState === "started" || machineState === "running") {
+        if (!machineState) {
+          // Machine 不在 Fly 上，可能被删除
+          expectedStatus = "missing";
+        } else if (machineState === "started" || machineState === "running") {
           expectedStatus = "running";
         } else if (machineState === "stopped") {
           expectedStatus = "stopped";
