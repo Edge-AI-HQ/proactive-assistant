@@ -688,11 +688,21 @@ export async function handleInvoicePaid(
               assistant.assistant_bot_username ?? `#${assistant.id}`;
             const displayLabel = label.startsWith("#") ? label : `@${label}`;
             try {
-              await ensureAssistantContainer(assistant, user.gateway_token);
-              results.push({ label: displayLabel, ok: true });
-              console.log(
-                `[payment] Started container for assistant ${assistant.id} after invoice.paid`,
+              const result = await ensureAssistantContainer(
+                assistant,
+                user.gateway_token,
               );
+              // ready=false 表示容器启动了但未就绪（探测中），算部分成功
+              results.push({ label: displayLabel, ok: result.ready });
+              if (result.ready) {
+                console.log(
+                  `[payment] Container ready for assistant ${assistant.id} after invoice.paid`,
+                );
+              } else {
+                console.log(
+                  `[payment] Container starting for assistant ${assistant.id}, probing in background`,
+                );
+              }
             } catch (error: unknown) {
               results.push({ label: displayLabel, ok: false });
               console.error(
@@ -716,7 +726,7 @@ export async function handleInvoicePaid(
           }
           if (failed.length > 0) {
             parts.push(
-              `❌ <b>Creation failed</b>\n\n${failed.join(", ")}\n\nPlease contact support.`,
+              `⏳ <b>Container(s) starting</b>\n\n${failed.join(", ")}\n\nProbing in background. You'll be notified when ready (usually 1-2 minutes).`,
             );
           }
 
