@@ -312,7 +312,10 @@ export const createAssistantMachine = async (args: AssistantMachineCreateArgs): 
     OPENCLAW_TELEGRAM_WEBHOOK_PORT: String(normalizedWebhookPort),
     OPENCLAW_CONFIG_PATH: '/app/data/config/openclaw.json',
     OPENCLAW_STATE_DIR: '/app/data',
-    PINAI_OPENCLAW_CONFIG_SHA256: openclawPayload.hash
+    PINAI_OPENCLAW_CONFIG_SHA256: openclawPayload.hash,
+    ...(config.telegramRouter.webhookUrl
+      ? { TELEGRAM_ROUTER_URL: config.telegramRouter.webhookUrl }
+      : {})
   };
 
   const bootstrapCommand = [
