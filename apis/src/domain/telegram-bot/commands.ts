@@ -310,7 +310,6 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
     await clearTokenInputPending(telegramUserId);
-    await replyHtml(ctx, "🔄 <b>Setting up your assistant...</b>");
     await provisionAssistantWithGuideBot(ctx);
   });
 
