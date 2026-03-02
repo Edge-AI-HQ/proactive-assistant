@@ -210,6 +210,32 @@ export const buildAssistantOpenclawConfig = (
         telegramWebhookConfig
       )
     };
+  } else if (options.telegramWebhookMode) {
+    // Quick Start mode: no dedicated bot token, but OpenClaw Doctor will
+    // auto-enable Telegram via TELEGRAM_BOT_TOKEN env. We still need to
+    // inject webhook params so it listens on the webhook port instead of
+    // falling back to polling (getUpdates).
+    const telegramChannel: UnknownRecord = {
+      enabled: true,
+      dmPolicy: 'pairing',
+      groupPolicy: 'allowlist',
+      streaming: 'off',
+    };
+    const webhookMapping: [string, string, unknown][] = [
+      ['webhookUrl', 'url', options.telegramWebhookUrl],
+      ['webhookSecret', 'secret', options.telegramWebhookSecret],
+      ['webhookPath', 'path', options.telegramWebhookPath],
+      ['webhookHost', 'host', options.telegramWebhookHost],
+      ['webhookPort', 'port', options.telegramWebhookPort],
+    ];
+    for (const [configKey, _label, value] of webhookMapping) {
+      const present =
+        (typeof value === 'string' && value.trim() !== '') || typeof value === 'number';
+      if (present) {
+        telegramChannel[configKey] = value;
+      }
+    }
+    next.channels = { telegram: telegramChannel };
   }
 
   // Plugin config is independent of assistantBotToken — OpenClaw's Doctor
