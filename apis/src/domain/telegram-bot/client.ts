@@ -205,6 +205,7 @@ export const createGatewaySessionViaApi = async (
 export const createPaymentSessionViaApi = async (
   telegramUserId: number,
   telegramUsername: string | null | undefined,
+  assistantId?: number,
 ): Promise<PaymentSessionResponse> => {
   return requestJson<PaymentSessionResponse>(
     "POST",
@@ -212,6 +213,7 @@ export const createPaymentSessionViaApi = async (
     {
       telegram_user_id: String(telegramUserId),
       telegram_username: telegramUsername || null,
+      assistant_id: assistantId,
     },
   );
 };
@@ -222,9 +224,14 @@ export const isPaymentEnabled = (): boolean =>
 export const createPaymentSessionForUser = async (
   telegramUserId: number,
   telegramUsername: string | null | undefined,
+  assistantId?: number,
 ): Promise<PaymentSessionResponse | null> => {
   if (!isPaymentEnabled()) return null;
-  return createPaymentSessionViaApi(telegramUserId, telegramUsername);
+  return createPaymentSessionViaApi(
+    telegramUserId,
+    telegramUsername,
+    assistantId,
+  );
 };
 
 export const cancelUserSubscription = async (

@@ -99,11 +99,13 @@ const isTokenInputPending = async (
 const safeCreatePaymentLink = async (
   telegramUserId: number,
   telegramUsername: string | null,
+  assistantId?: number,
 ): Promise<string | null> => {
   try {
     const session = await createPaymentSessionForUser(
       telegramUserId,
       telegramUsername,
+      assistantId,
     );
     return session?.subscribe_url ?? null;
   } catch (error: unknown) {
@@ -411,9 +413,14 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
 
+    // 获取用户的助理（限制只有一个）
+    const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
+    const assistantId = assistants[0]?.id;
+
     const paymentLink = await safeCreatePaymentLink(
       telegramUserId,
       ctx.from?.username ?? null,
+      assistantId,
     );
 
     if (!paymentLink) {
