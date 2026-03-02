@@ -2,5 +2,10 @@
   "name": "telegram-router-proxy",
   "version": "1.0.0",
   "type": "module",
-  "main": "index.ts"
+  "main": "index.ts",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
 }

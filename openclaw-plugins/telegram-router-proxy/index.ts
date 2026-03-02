@@ -2,6 +2,7 @@
 // 让 OpenClaw 通过路由服务发送 Telegram 消息
 
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
+import { emptyPluginConfigSchema } from 'openclaw/plugin-sdk';
 
 const FETCH_PATCH_KEY = '__pinaiTelegramRouterFetchPatched__';
 // Methods that should NOT be proxied (account-management / webhook-control actions)
@@ -18,6 +19,7 @@ const plugin = {
   id: 'telegram-router-proxy',
   name: 'Telegram Router Proxy',
   description: 'Proxy Telegram API calls through router service',
+  configSchema: emptyPluginConfigSchema(),
 
   register(api: OpenClawPluginApi) {
     const routerUrl = process.env.TELEGRAM_ROUTER_URL || 'http://host.docker.internal:3001';
