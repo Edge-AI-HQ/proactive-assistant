@@ -112,10 +112,10 @@ const requestJson = async <T>(
 
 export interface ProvisionAssistantInput {
   ownerTelegramUserId: number;
-  ownerTelegramUsername: string | null;
-  assistantBotId: number;
-  assistantBotToken: string;
-  assistantBotUsername: string;
+  ownerTelegramUsername?: string | null;
+  assistantBotId?: number | null;
+  assistantBotToken?: string | null;
+  assistantBotUsername?: string | null;
 }
 
 export interface ProvisionAssistantResponse {

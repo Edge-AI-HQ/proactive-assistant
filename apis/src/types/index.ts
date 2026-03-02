@@ -81,9 +81,9 @@ export interface CreateUserInput {
 
 export interface CreateAssistantInput {
   owner_telegram_user_id: number;
-  assistant_bot_id: number;
-  assistant_bot_token: string;
-  assistant_bot_username: string;
+  assistant_bot_id: number | null;
+  assistant_bot_token: string | null;
+  assistant_bot_username: string | null;
   litellm_user_id?: string | null;
   litellm_key_alias?: string | null;
   litellm_virtual_key?: string | null;
@@ -103,44 +103,45 @@ export interface CreateAssistantInput {
 export type UserMutableFields = Partial<
   Pick<
     UserRecord,
-    | 'telegram_username'
-    | 'litellm_user_id'
-    | 'litellm_user_alias'
-    | 'litellm_key_alias'
-    | 'litellm_virtual_key'
-    | 'litellm_key_last4'
-    | 'litellm_spend_usd'
-    | 'litellm_budget_usd'
-    | 'litellm_budget_duration'
-    | 'litellm_rpm_limit'
-    | 'litellm_tpm_limit'
-    | 'litellm_last_synced_at'
-    | 'container_id'
-    | 'container_port'
-    | 'container_status'
-    | 'gateway_token'
+    | "telegram_username"
+    | "litellm_user_id"
+    | "litellm_user_alias"
+    | "litellm_key_alias"
+    | "litellm_virtual_key"
+    | "litellm_key_last4"
+    | "litellm_spend_usd"
+    | "litellm_budget_usd"
+    | "litellm_budget_duration"
+    | "litellm_rpm_limit"
+    | "litellm_tpm_limit"
+    | "litellm_last_synced_at"
+    | "container_id"
+    | "container_port"
+    | "container_status"
+    | "gateway_token"
   >
 >;
 
 export type AssistantMutableFields = Partial<
   Pick<
     AssistantRecord,
-    | 'assistant_bot_token'
-    | 'assistant_bot_username'
-    | 'litellm_user_id'
-    | 'litellm_key_alias'
-    | 'litellm_virtual_key'
-    | 'litellm_key_last4'
-    | 'litellm_spend_usd'
-    | 'litellm_budget_usd'
-    | 'litellm_budget_duration'
-    | 'litellm_rpm_limit'
-    | 'litellm_tpm_limit'
-    | 'litellm_last_synced_at'
-    | 'container_name'
-    | 'container_id'
-    | 'container_port'
-    | 'container_status'
+    | "assistant_bot_id"
+    | "assistant_bot_token"
+    | "assistant_bot_username"
+    | "litellm_user_id"
+    | "litellm_key_alias"
+    | "litellm_virtual_key"
+    | "litellm_key_last4"
+    | "litellm_spend_usd"
+    | "litellm_budget_usd"
+    | "litellm_budget_duration"
+    | "litellm_rpm_limit"
+    | "litellm_tpm_limit"
+    | "litellm_last_synced_at"
+    | "container_name"
+    | "container_id"
+    | "container_port"
+    | "container_status"
   >
 >;
 
@@ -187,7 +188,7 @@ export interface BasePaymentConfig {
 }
 
 export interface ContainerConfig {
-  runtime: 'docker' | 'fly';
+  runtime: "docker" | "fly";
   portStart: number;
   portEnd: number;
   memoryMb: number;

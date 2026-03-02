@@ -195,39 +195,43 @@ const provisionAssistantWithGuideBot = async (
   const telegramUserId = ctx.from?.id;
   if (!telegramUserId) return false;
 
-  const guideBotId = ctx.me.id;
-  const guideBotUsername = ctx.me.username;
-  const guideBotToken = config.telegram.token;
-
   await ensureTelegramUserViaApi(telegramUserId, ctx.from?.username ?? null);
 
-  try {
-    await createAssistantWithoutContainerViaApi({
-      ownerTelegramUserId: telegramUserId,
-      ownerTelegramUsername: ctx.from?.username ?? null,
-      assistantBotId: guideBotId,
-      assistantBotToken: guideBotToken,
-      assistantBotUsername: guideBotUsername,
-    });
-  } catch (error: unknown) {
-    const is409 = error instanceof BackendApiError && error.status === 409;
-    const isLocalDup =
-      error instanceof Error && error.message === "USER_ALREADY_HAS_ASSISTANT";
+  // 检查用户是否已有助理
+  const existingAssistants = await listAssistantsByOwnerViaApi(telegramUserId);
 
-    if (!is409 && !isLocalDup) {
-      console.error("Assistant setup failed", error);
-      await replyHtml(
-        ctx,
-        "<b>Something went wrong.</b>\nPlease try again later.",
-      );
-      return false;
-    }
-    // User already has an assistant — fall through to show payment link
+  if (existingAssistants.length === 0) {
+    // 用户还没有助理，提供两种选择
+    const keyboard = new InlineKeyboard()
+      .text("🚀 Quick Start", "quick_start")
+      .row()
+      .text("🔧 Use Own Bot", "use_own_bot");
+
+    await replyHtml(
+      ctx,
+      [
+        "🤖 <b>Create Your AI Assistant</b>",
+        "",
+        "<b>Choose your setup method:</b>",
+        "",
+        "🚀 <b>Quick Start</b> (Recommended)",
+        "   • Start using immediately",
+        "   • Chat through this guide bot",
+        "   • Perfect for most users",
+        "",
+        "🔧 <b>Use Own Bot</b>",
+        "   • Create custom bot via @BotFather",
+        "   • Chat directly with your bot",
+        "   • Advanced customization",
+      ].join("\n"),
+      { reply_markup: keyboard },
+    );
+
+    return true;
   }
 
-  // 获取助理 ID（可能是刚创建的，或已存在的）
-  const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
-  const assistantId = assistants[0]?.id;
+  // 用户已有助理，获取 ID 并显示支付链接
+  const assistantId = existingAssistants[0]?.id;
 
   const paymentLink = await safeCreatePaymentLink(
     telegramUserId,
@@ -414,6 +418,131 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
   });
 
   // Callback query handlers for inline buttons
+
+  // Quick Start 模式：不绑定 bot，直接创建助理
+  bot.callbackQuery("quick_start", async (ctx) => {
+    const telegramUserId = ctx.from?.id;
+    if (!telegramUserId) return;
+
+    await ctx.editMessageText("🔄 <b>Setting up your assistant...</b>", {
+      parse_mode: "HTML",
+    });
+
+    try {
+      // 创建助理（不绑定 bot）
+      await createAssistantWithoutContainerViaApi({
+        ownerTelegramUserId: telegramUserId,
+        ownerTelegramUsername: ctx.from?.username ?? null,
+        // bot 字段留空 - Quick Start 模式
+      });
+
+      // 创建成功，生成支付链接
+      const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
+      const assistantId = assistants[0]?.id;
+
+      const paymentLink = await safeCreatePaymentLink(
+        telegramUserId,
+        ctx.from?.username ?? null,
+        assistantId,
+      );
+
+      if (!paymentLink) {
+        await ctx.editMessageText(
+          [
+            "✅ <b>Your assistant is registered.</b>",
+            "",
+            "⚠️ Payment is temporarily unavailable. Please try again shortly.",
+          ].join("\n"),
+          { parse_mode: "HTML" },
+        );
+        return;
+      }
+
+      const keyboard = new InlineKeyboard().url(
+        "💳 Subscribe to activate",
+        paymentLink,
+      );
+
+      await ctx.editMessageText(
+        [
+          "✅ <b>Assistant created successfully!</b>",
+          "",
+          "🚀 <b>Quick Start Mode</b>",
+          "   • Chat with me to use your assistant",
+          "   • No need to create separate bot",
+          "",
+          "💡 <b>Next step:</b> Subscribe to activate your assistant.",
+          "",
+          "After subscribing, your assistant will be ready to use!",
+        ].join("\n"),
+        {
+          parse_mode: "HTML",
+          reply_markup: keyboard,
+        },
+      );
+    } catch (error: unknown) {
+      const is409 = error instanceof BackendApiError && error.status === 409;
+      const isDup =
+        error instanceof Error &&
+        error.message === "USER_ALREADY_HAS_ASSISTANT";
+
+      if (is409 || isDup) {
+        await ctx.editMessageText(
+          [
+            "⚠️ <b>You already have an assistant</b>",
+            "",
+            "Send /list_claw_assistant to view your assistants.",
+          ].join("\n"),
+          { parse_mode: "HTML" },
+        );
+        return;
+      }
+
+      console.error("Quick start setup failed", error);
+      await ctx.editMessageText(
+        [
+          "❌ <b>Failed to create assistant</b>",
+          "",
+          "Please try again or contact support.",
+        ].join("\n"),
+        { parse_mode: "HTML" },
+      );
+    }
+
+    await ctx.answerCallbackQuery();
+  });
+
+  // Advanced 模式：提示用户创建自己的 bot
+  bot.callbackQuery("use_own_bot", async (ctx) => {
+    const telegramUserId = ctx.from?.id;
+    if (!telegramUserId) return;
+
+    await ctx.editMessageText(
+      [
+        "🔧 <b>Advanced Setup - Use Your Own Bot</b>",
+        "",
+        "To create a custom Telegram bot:",
+        "",
+        "1️⃣ Open @BotFather",
+        "2️⃣ Send /newbot",
+        "3️⃣ Follow instructions to create your bot",
+        "4️⃣ Copy the bot token (like <code>123456:ABC-DEF...</code>)",
+        "5️⃣ Send the token here",
+        "",
+        "⏱️ You have 10 minutes to send your bot token.",
+        "",
+        "<b>Benefits:</b>",
+        "• Chat directly with your own bot",
+        "• Custom bot name and avatar",
+        "• Also works through this guide bot",
+      ].join("\n"),
+      { parse_mode: "HTML" },
+    );
+
+    // 标记等待 token 输入（需要实现这个函数）
+    await ctx.answerCallbackQuery();
+  });
+
   bot.callbackQuery("manage_subscription", async (ctx) => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;

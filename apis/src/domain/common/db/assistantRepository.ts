@@ -1,10 +1,10 @@
-import { config } from '../config.js';
-import { containerNameForAssistant } from '../../container/naming.js';
+import { config } from "../config.js";
+import { containerNameForAssistant } from "../../container/naming.js";
 import type {
   AssistantMutableFields,
   AssistantRecord,
-  CreateAssistantInput
-} from '../../../types.js';
+  CreateAssistantInput,
+} from "../../../types.js";
 import {
   allocatePortInTransaction,
   assistantFromClause,
@@ -14,27 +14,35 @@ import {
   nowIso,
   pool,
   readAssistantRuntime,
-  withSchema
-} from './core.js';
+  withSchema,
+} from "./core.js";
 
 const assistantDataColumns = [
-  'assistant_bot_token',
-  'assistant_bot_username',
-  'litellm_user_id',
-  'litellm_key_alias',
-  'litellm_virtual_key',
-  'litellm_key_last4',
-  'litellm_spend_usd',
-  'litellm_budget_usd',
-  'litellm_budget_duration',
-  'litellm_rpm_limit',
-  'litellm_tpm_limit',
-  'litellm_last_synced_at'
+  "assistant_bot_id",
+  "assistant_bot_token",
+  "assistant_bot_username",
+  "litellm_user_id",
+  "litellm_key_alias",
+  "litellm_virtual_key",
+  "litellm_key_last4",
+  "litellm_spend_usd",
+  "litellm_budget_usd",
+  "litellm_budget_duration",
+  "litellm_rpm_limit",
+  "litellm_tpm_limit",
+  "litellm_last_synced_at",
 ] as const;
 
-const assistantRuntimeColumns = ['container_name', 'container_id', 'container_port', 'container_status'] as const;
+const assistantRuntimeColumns = [
+  "container_name",
+  "container_id",
+  "container_port",
+  "container_status",
+] as const;
 
-export const getAssistantById = async (id: number): Promise<AssistantRecord | undefined> => {
+export const getAssistantById = async (
+  id: number,
+): Promise<AssistantRecord | undefined> => {
   await withSchema();
   return fetchOne<AssistantRecord>(
     pool,
@@ -43,11 +51,13 @@ export const getAssistantById = async (id: number): Promise<AssistantRecord | un
       ${assistantFromClause}
       WHERE assistants.id = $1
     `,
-    [id]
+    [id],
   );
 };
 
-export const getAssistantByBotToken = async (assistantBotToken: string): Promise<AssistantRecord | undefined> => {
+export const getAssistantByBotToken = async (
+  assistantBotToken: string,
+): Promise<AssistantRecord | undefined> => {
   await withSchema();
   return fetchOne<AssistantRecord>(
     pool,
@@ -56,11 +66,13 @@ export const getAssistantByBotToken = async (assistantBotToken: string): Promise
       ${assistantFromClause}
       WHERE assistants.assistant_bot_token = $1
     `,
-    [assistantBotToken]
+    [assistantBotToken],
   );
 };
 
-export const getAssistantByBotId = async (assistantBotId: number): Promise<AssistantRecord | undefined> => {
+export const getAssistantByBotId = async (
+  assistantBotId: number,
+): Promise<AssistantRecord | undefined> => {
   await withSchema();
   return fetchOne<AssistantRecord>(
     pool,
@@ -69,11 +81,13 @@ export const getAssistantByBotId = async (assistantBotId: number): Promise<Assis
       ${assistantFromClause}
       WHERE assistants.assistant_bot_id = $1
     `,
-    [assistantBotId]
+    [assistantBotId],
   );
 };
 
-export const listAssistantsByOwnerTelegramId = async (ownerTelegramUserId: number): Promise<AssistantRecord[]> => {
+export const listAssistantsByOwnerTelegramId = async (
+  ownerTelegramUserId: number,
+): Promise<AssistantRecord[]> => {
   await withSchema();
   const result = await pool.query<AssistantRecord>(
     `
@@ -82,7 +96,7 @@ export const listAssistantsByOwnerTelegramId = async (ownerTelegramUserId: numbe
       WHERE owners.telegram_user_id = $1
       ORDER BY assistants.created_at DESC, assistants.id DESC
     `,
-    [ownerTelegramUserId]
+    [ownerTelegramUserId],
   );
   return result.rows;
 };
@@ -94,12 +108,14 @@ export const listAssistants = async (): Promise<AssistantRecord[]> => {
       SELECT ${assistantSelectColumns}
       ${assistantFromClause}
       ORDER BY assistants.created_at DESC, assistants.id DESC
-    `
+    `,
   );
   return result.rows;
 };
 
-export const listAssistantsWithLiteLLMKey = async (): Promise<AssistantRecord[]> => {
+export const listAssistantsWithLiteLLMKey = async (): Promise<
+  AssistantRecord[]
+> => {
   await withSchema();
   const result = await pool.query<AssistantRecord>(
     `
@@ -108,33 +124,44 @@ export const listAssistantsWithLiteLLMKey = async (): Promise<AssistantRecord[]>
       WHERE assistants.litellm_virtual_key IS NOT NULL
         AND assistants.litellm_virtual_key != ''
       ORDER BY assistants.updated_at DESC, assistants.id DESC
-    `
+    `,
   );
   return result.rows;
 };
 
-export const createAssistant = async (assistant: CreateAssistantInput): Promise<AssistantRecord | undefined> => {
+export const createAssistant = async (
+  assistant: CreateAssistantInput,
+): Promise<AssistantRecord | undefined> => {
   await withSchema();
 
   const client = await pool.connect();
   try {
-    await client.query('BEGIN');
+    await client.query("BEGIN");
 
     const ownerRow = await fetchOne<{ id: number }>(
       client,
-      'SELECT id FROM users WHERE telegram_user_id = $1 FOR UPDATE',
-      [assistant.owner_telegram_user_id]
+      "SELECT id FROM users WHERE telegram_user_id = $1 FOR UPDATE",
+      [assistant.owner_telegram_user_id],
     );
     if (!ownerRow) {
-      throw new Error(`Cannot create assistant: owner telegram user ${assistant.owner_telegram_user_id} not found`);
+      throw new Error(
+        `Cannot create assistant: owner telegram user ${assistant.owner_telegram_user_id} not found`,
+      );
     }
 
-    const containerName = assistant.container_name?.trim() || containerNameForAssistant(assistant.assistant_bot_id);
+    const containerName =
+      assistant.container_name?.trim() ||
+      (assistant.assistant_bot_id
+        ? containerNameForAssistant(assistant.assistant_bot_id)
+        : `assistant-${assistant.owner_telegram_user_id}`);
     const runtimeRef = assistant.container_id?.trim() || containerName;
     const requestedPort = Number.isFinite(assistant.container_port ?? NaN)
       ? Math.trunc(assistant.container_port as number)
       : 0;
-    const hostPort = requestedPort > 0 ? requestedPort : await allocatePortInTransaction(client);
+    const hostPort =
+      requestedPort > 0
+        ? requestedPort
+        : await allocatePortInTransaction(client);
 
     const assistantInsert = await client.query<{ id: number }>(
       `
@@ -177,13 +204,13 @@ export const createAssistant = async (assistant: CreateAssistantInput): Promise<
         assistant.litellm_rpm_limit ?? null,
         assistant.litellm_tpm_limit ?? null,
         assistant.litellm_last_synced_at ?? null,
-        nowIso()
-      ]
+        nowIso(),
+      ],
     );
 
     const assistantId = assistantInsert.rows[0]?.id;
     if (!assistantId) {
-      throw new Error('Failed to create assistant record');
+      throw new Error("Failed to create assistant record");
     }
 
     await client.query(
@@ -209,22 +236,25 @@ export const createAssistant = async (assistant: CreateAssistantInput): Promise<
         containerName,
         runtimeRef,
         hostPort,
-        assistant.container_status ?? 'creating'
-      ]
+        assistant.container_status ?? "creating",
+      ],
     );
 
-    await client.query('COMMIT');
+    await client.query("COMMIT");
 
     return getAssistantById(assistantId);
   } catch (error) {
-    await client.query('ROLLBACK');
+    await client.query("ROLLBACK");
     throw error;
   } finally {
     client.release();
   }
 };
 
-export const updateAssistant = async (id: number, fields: AssistantMutableFields): Promise<AssistantRecord | undefined> => {
+export const updateAssistant = async (
+  id: number,
+  fields: AssistantMutableFields,
+): Promise<AssistantRecord | undefined> => {
   await withSchema();
 
   const dataAssignments = buildAssignments(fields, assistantDataColumns);
@@ -236,7 +266,7 @@ export const updateAssistant = async (id: number, fields: AssistantMutableFields
 
   const client = await pool.connect();
   try {
-    await client.query('BEGIN');
+    await client.query("BEGIN");
 
     if (dataAssignments.sql) {
       const updatedAtIndex = dataAssignments.values.length + 1;
@@ -247,7 +277,7 @@ export const updateAssistant = async (id: number, fields: AssistantMutableFields
           SET ${dataAssignments.sql}, updated_at = $${updatedAtIndex}
           WHERE id = $${idIndex}
         `,
-        [...dataAssignments.values, nowIso(), id]
+        [...dataAssignments.values, nowIso(), id],
       );
     }
 
@@ -258,14 +288,22 @@ export const updateAssistant = async (id: number, fields: AssistantMutableFields
       }
 
       const nextContainerName =
-        (fields.container_name !== undefined ? String(fields.container_name || '').trim() : current.container_name) ||
+        (fields.container_name !== undefined
+          ? String(fields.container_name || "").trim()
+          : current.container_name) ||
         containerNameForAssistant(current.assistant_bot_id);
       const nextRuntimeRef =
-        (fields.container_id !== undefined ? String(fields.container_id || '').trim() : current.runtime_ref) || nextContainerName;
+        (fields.container_id !== undefined
+          ? String(fields.container_id || "").trim()
+          : current.runtime_ref) || nextContainerName;
       const nextHostPort =
-        fields.container_port !== undefined ? Math.trunc(Number(fields.container_port) || 0) : current.host_port;
+        fields.container_port !== undefined
+          ? Math.trunc(Number(fields.container_port) || 0)
+          : current.host_port;
       const nextStatus =
-        fields.container_status !== undefined ? String(fields.container_status || '').trim() || current.status : current.status;
+        fields.container_status !== undefined
+          ? String(fields.container_status || "").trim() || current.status
+          : current.status;
 
       await client.query(
         `
@@ -301,14 +339,14 @@ export const updateAssistant = async (id: number, fields: AssistantMutableFields
           nextRuntimeRef,
           nextHostPort,
           nextStatus,
-          nowIso()
-        ]
+          nowIso(),
+        ],
       );
     }
 
-    await client.query('COMMIT');
+    await client.query("COMMIT");
   } catch (error) {
-    await client.query('ROLLBACK');
+    await client.query("ROLLBACK");
     throw error;
   } finally {
     client.release();
@@ -317,11 +355,13 @@ export const updateAssistant = async (id: number, fields: AssistantMutableFields
   return getAssistantById(id);
 };
 
-export const deleteAssistantById = async (id: number): Promise<AssistantRecord | undefined> => {
+export const deleteAssistantById = async (
+  id: number,
+): Promise<AssistantRecord | undefined> => {
   await withSchema();
   const existing = await getAssistantById(id);
   if (!existing) return undefined;
 
-  await pool.query('DELETE FROM assistants WHERE id = $1', [id]);
+  await pool.query("DELETE FROM assistants WHERE id = $1", [id]);
   return existing;
 };

@@ -19,71 +19,69 @@ import type { AssistantRecord } from "../../types.js";
 export interface ProvisionAssistantInput {
   ownerTelegramUserId: number;
   ownerTelegramUsername?: string | null;
-  assistantBotId: number;
-  assistantBotToken: string;
-  assistantBotUsername: string;
+  assistantBotId?: number | null;
+  assistantBotToken?: string | null;
+  assistantBotUsername?: string | null;
 }
 
 const ensureAssistantRecord = async (
   ownerTelegramUserId: number,
-  assistantBotId: number,
-  assistantBotToken: string,
-  assistantBotUsername: string,
+  assistantBotId: number | null | undefined,
+  assistantBotToken: string | null | undefined,
+  assistantBotUsername: string | null | undefined,
 ): Promise<AssistantRecord> => {
-  const defaultContainerName = containerNameForAssistant(assistantBotId);
-  const existingByBotId = await getAssistantByBotId(assistantBotId);
-
-  if (existingByBotId) {
-    if (existingByBotId.owner_telegram_user_id !== ownerTelegramUserId) {
-      throw new Error("ASSISTANT_BOT_ALREADY_OWNED");
-    }
-
-    return (
-      (await updateAssistant(existingByBotId.id, {
-        assistant_bot_token: assistantBotToken,
-        assistant_bot_username: assistantBotUsername,
-        container_name:
-          existingByBotId.container_name?.trim() || defaultContainerName,
-      })) ?? existingByBotId
-    );
-  }
-
-  const existingByToken = await getAssistantByBotToken(assistantBotToken);
-  if (existingByToken) {
-    if (existingByToken.owner_telegram_user_id !== ownerTelegramUserId) {
-      throw new Error("ASSISTANT_BOT_ALREADY_OWNED");
-    }
-
-    // Token 属于当前用户，更新 bot_id 和 username
-    return (
-      (await updateAssistant(existingByToken.id, {
-        assistant_bot_token: assistantBotToken,
-        assistant_bot_username: assistantBotUsername,
-        container_name:
-          existingByToken.container_name?.trim() || defaultContainerName,
-      })) ?? existingByToken
-    );
-  }
-
   // 限制：一个用户只能创建一个 assistant
   const existingAssistants =
     await listAssistantsByOwnerTelegramId(ownerTelegramUserId);
+
   if (existingAssistants.length > 0) {
-    throw new Error("USER_ALREADY_HAS_ASSISTANT");
+    const existing = existingAssistants[0];
+    if (!existing) {
+      throw new Error("USER_ALREADY_HAS_ASSISTANT");
+    }
+
+    // 如果用户已有助理，允许更新 bot 信息（从 Quick Start 升级到 Advanced）
+    // 或者更新 bot token（重新绑定）
+    if (assistantBotId !== null && assistantBotId !== undefined) {
+      const defaultContainerName = containerNameForAssistant(assistantBotId);
+      return (
+        (await updateAssistant(existing.id, {
+          assistant_bot_id: assistantBotId,
+          assistant_bot_token:
+            assistantBotToken || existing.assistant_bot_token,
+          assistant_bot_username:
+            assistantBotUsername || existing.assistant_bot_username,
+          container_name:
+            existing.container_name?.trim() || defaultContainerName,
+        })) ?? existing
+      );
+    }
+
+    // 已有助理且不更新 bot 信息，直接返回
+    return existing;
   }
+
+  // 用户还没有助理，创建新的
+  // Quick Start 模式：assistantBotId = null
+  // Advanced 模式：assistantBotId = 具体值
+  const defaultContainerName = assistantBotId
+    ? containerNameForAssistant(assistantBotId)
+    : `assistant-${ownerTelegramUserId}`;
 
   const created = await createAssistant({
     owner_telegram_user_id: ownerTelegramUserId,
-    assistant_bot_id: assistantBotId,
-    assistant_bot_token: assistantBotToken,
-    assistant_bot_username: assistantBotUsername,
+    assistant_bot_id: assistantBotId ?? null,
+    assistant_bot_token: assistantBotToken ?? null,
+    assistant_bot_username: assistantBotUsername ?? null,
     container_name: defaultContainerName,
     container_id: defaultContainerName,
     container_status: "creating",
   });
 
   if (!created) {
-    throw new Error(`Failed to create assistant for bot ${assistantBotId}`);
+    throw new Error(
+      `Failed to create assistant for user ${ownerTelegramUserId}`,
+    );
   }
 
   return created;
@@ -99,9 +97,9 @@ export const provisionAssistant = async (
 
   const assistant = await ensureAssistantRecord(
     input.ownerTelegramUserId,
-    input.assistantBotId,
-    input.assistantBotToken,
-    input.assistantBotUsername,
+    input.assistantBotId ?? null,
+    input.assistantBotToken ?? null,
+    input.assistantBotUsername ?? null,
   );
 
   const assistantWithLiteLLM = await ensureLiteLLMKeyForAssistant(
@@ -135,9 +133,9 @@ export const createAssistantWithoutContainer = async (
 
   const assistant = await ensureAssistantRecord(
     input.ownerTelegramUserId,
-    input.assistantBotId,
-    input.assistantBotToken,
-    input.assistantBotUsername,
+    input.assistantBotId ?? null,
+    input.assistantBotToken ?? null,
+    input.assistantBotUsername ?? null,
   );
 
   const assistantWithLiteLLM = await ensureLiteLLMKeyForAssistant(
