@@ -132,8 +132,9 @@ if (config.telegram.token) {
       console.log(`Telegram bot initialized: @${bot.botInfo.username}`);
       (global as any).__telegramBot = bot;
 
-      const webhookUrl = `${config.publicBaseUrl}${webhookPath}`;
-      console.log(`Setting webhook to: ${webhookUrl}`);
+      const routerWebhookUrl = config.telegramRouter.webhookUrl;
+      const webhookUrl = routerWebhookUrl || `${config.publicBaseUrl}${webhookPath}`;
+      console.log(`Setting webhook to: ${webhookUrl}${routerWebhookUrl ? ' (via router)' : ' (direct)'}`);
 
       // Set webhook
       const webhookOptions: any = {

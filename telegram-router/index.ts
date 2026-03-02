@@ -20,6 +20,8 @@ const OPENCLAW_TELEGRAM_WEBHOOK_PORT = Number.parseInt(
 );
 const OPENCLAW_TELEGRAM_WEBHOOK_PATH = process.env.OPENCLAW_TELEGRAM_WEBHOOK_PATH || '/telegram-webhook';
 const FLY_APP_NAME = process.env.OPENCLAW_FLY_APP_NAME || 'pinclaw-api-dev';
+const GUIDE_BOT_WEBHOOK_URL = process.env.GUIDE_BOT_WEBHOOK_URL || '';
+const BOT_COMMANDS = new Set(['start', 'create_claw_assistant', 'list_claw_assistant', 'gateway', 'help']);
 
 const sql = postgres(DATABASE_URL, {
   max: 10,
@@ -83,6 +85,20 @@ async function handleTelegramWebhook(req: Request) {
 
     if (!chatId) {
       console.log('⚠️  No chat_id found in update');
+      return jsonResponse({ ok: true });
+    }
+
+    // Forward bot commands to the guide bot (APIs service) for handling
+    if (isBotCommand(update) && GUIDE_BOT_WEBHOOK_URL) {
+      console.log(`🤖 Forwarding command to guide bot: ${text}`);
+      await forwardToGuideBot(update);
+      return jsonResponse({ ok: true });
+    }
+
+    // Forward callback queries (inline button presses) to guide bot
+    if (update.callback_query && GUIDE_BOT_WEBHOOK_URL) {
+      console.log(`🤖 Forwarding callback_query to guide bot: ${update.callback_query.data}`);
+      await forwardToGuideBot(update);
       return jsonResponse({ ok: true });
     }
 
@@ -506,6 +522,32 @@ function decodeUtf8(data: Uint8Array): string | undefined {
     return new TextDecoder().decode(data);
   } catch {
     return undefined;
+  }
+}
+
+function isBotCommand(update: any): boolean {
+  const text: string = update.message?.text || '';
+  if (!text.startsWith('/')) return false;
+  const command = text.slice(1).split(/[\s@]/)[0]?.toLowerCase();
+  return BOT_COMMANDS.has(command || '');
+}
+
+async function forwardToGuideBot(update: any): Promise<void> {
+  try {
+    const response = await fetch(GUIDE_BOT_WEBHOOK_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Telegram-Bot-Api-Secret-Token': WEBHOOK_SECRET
+      },
+      body: JSON.stringify(update),
+      signal: AbortSignal.timeout(15000)
+    });
+    if (!response.ok) {
+      console.warn(`⚠️ Guide bot returned ${response.status}`);
+    }
+  } catch (error) {
+    console.error('❌ Forward to guide bot failed:', error);
   }
 }
 
