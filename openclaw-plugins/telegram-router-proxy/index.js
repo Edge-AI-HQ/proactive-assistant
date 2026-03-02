@@ -2,9 +2,13 @@
 // Proxy outbound Telegram API calls through the router service
 
 const FETCH_PATCH_KEY = '__pinaiTelegramRouterFetchPatched__';
-const NON_PROXYABLE_TELEGRAM_METHODS = new Set([
+
+const BLOCKED_TELEGRAM_METHODS = new Set([
   'setWebhook',
   'deleteWebhook',
+]);
+
+const PASSTHROUGH_TELEGRAM_METHODS = new Set([
   'getWebhookInfo',
   'getMe',
   'logOut',
@@ -25,7 +29,7 @@ const plugin = {
     const routerUrl = process.env.TELEGRAM_ROUTER_URL || 'http://host.docker.internal:3001';
 
     api.logger.info(`Telegram Router Proxy enabled: ${routerUrl}`);
-    api.logger.info('TRP_VERSION_20260302A');
+    api.logger.info('TRP_VERSION_20260302B');
     installTelegramFetchProxy(api, routerUrl);
   }
 };
@@ -53,18 +57,27 @@ function installTelegramFetchProxy(api, routerUrl) {
       if (rawUrl) {
         const targetUrl = new URL(rawUrl);
         const methodName = extractTelegramMethod(targetUrl);
-        if (methodName && !NON_PROXYABLE_TELEGRAM_METHODS.has(methodName)) {
-          const proxyUrl = `${normalizedRouter}/api/telegram/${methodName}${targetUrl.search}`;
-          const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : {}));
-          headers.delete('host');
-          headers.delete('authorization');
+        if (methodName) {
+          if (BLOCKED_TELEGRAM_METHODS.has(methodName)) {
+            api.logger.warn(`Blocked Telegram method from OpenClaw: ${methodName}`);
+            return new Response(JSON.stringify({ ok: true, result: true }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
+          if (!PASSTHROUGH_TELEGRAM_METHODS.has(methodName)) {
+            const proxyUrl = `${normalizedRouter}/api/telegram/${methodName}${targetUrl.search}`;
+            const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : {}));
+            headers.delete('host');
+            headers.delete('authorization');
 
-          const effectiveInit = {
-            ...(input instanceof Request ? { method: input.method, body: input.body, redirect: input.redirect } : {}),
-            ...init,
-            headers
-          };
-          return await originalFetch(proxyUrl, effectiveInit);
+            const effectiveInit = {
+              ...(input instanceof Request ? { method: input.method, body: input.body, redirect: input.redirect } : {}),
+              ...init,
+              headers
+            };
+            return await originalFetch(proxyUrl, effectiveInit);
+          }
         }
       }
     } catch (error) {

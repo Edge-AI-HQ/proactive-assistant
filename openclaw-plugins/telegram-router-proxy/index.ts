@@ -5,10 +5,16 @@ import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import { emptyPluginConfigSchema } from 'openclaw/plugin-sdk';
 
 const FETCH_PATCH_KEY = '__pinaiTelegramRouterFetchPatched__';
-// Methods that should NOT be proxied (account-management / webhook-control actions)
-const NON_PROXYABLE_TELEGRAM_METHODS = new Set([
+
+// Methods that must be blocked entirely (return fake success) to prevent
+// OpenClaw's built-in Telegram provider from clearing our external webhook.
+const BLOCKED_TELEGRAM_METHODS = new Set([
   'setWebhook',
   'deleteWebhook',
+]);
+
+// Methods that bypass the proxy and go directly to Telegram API.
+const PASSTHROUGH_TELEGRAM_METHODS = new Set([
   'getWebhookInfo',
   'getMe',
   'logOut',
@@ -25,7 +31,7 @@ const plugin = {
     const routerUrl = process.env.TELEGRAM_ROUTER_URL || 'http://host.docker.internal:3001';
 
     api.logger.info(`Telegram Router Proxy enabled: ${routerUrl}`);
-    api.logger.info('TRP_VERSION_20260228A');
+    api.logger.info('TRP_VERSION_20260302B');
     installTelegramFetchProxy(api, routerUrl);
   }
 };
@@ -56,18 +62,27 @@ function installTelegramFetchProxy(api: OpenClawPluginApi, routerUrl: string) {
       if (rawUrl) {
         const targetUrl = new URL(rawUrl);
         const methodName = extractTelegramMethod(targetUrl);
-        if (methodName && !NON_PROXYABLE_TELEGRAM_METHODS.has(methodName)) {
-          const proxyUrl = `${normalizedRouter}/api/telegram/${methodName}${targetUrl.search}`;
-          const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : {}));
-          headers.delete('host');
-          headers.delete('authorization');
+        if (methodName) {
+          if (BLOCKED_TELEGRAM_METHODS.has(methodName)) {
+            api.logger.warn(`Blocked Telegram method from OpenClaw: ${methodName}`);
+            return new Response(JSON.stringify({ ok: true, result: true }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
+          if (!PASSTHROUGH_TELEGRAM_METHODS.has(methodName)) {
+            const proxyUrl = `${normalizedRouter}/api/telegram/${methodName}${targetUrl.search}`;
+            const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : {}));
+            headers.delete('host');
+            headers.delete('authorization');
 
-          const effectiveInit: RequestInit = {
-            ...(input instanceof Request ? { method: input.method, body: input.body, redirect: input.redirect } : {}),
-            ...init,
-            headers
-          };
-          return await originalFetch(proxyUrl, effectiveInit);
+            const effectiveInit: RequestInit = {
+              ...(input instanceof Request ? { method: input.method, body: input.body, redirect: input.redirect } : {}),
+              ...init,
+              headers
+            };
+            return await originalFetch(proxyUrl, effectiveInit);
+          }
         }
       }
     } catch (error) {
