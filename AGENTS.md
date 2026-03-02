@@ -142,3 +142,36 @@ APIs 代码变更通过 **Git push → GitHub Actions** 自动部署到 `pinclaw
 - APIs 的 `image_digest_guard.ts` 在启动时校验 `OPENCLAW_IMAGE` 必须是 `registry.fly.io/<app>@sha256:<64-hex>` 格式，tag 格式（如 `:openclaw-with-plugin`）会导致 crash loop。
 - 如果 APIs 机器因 crash loop 达到最大重启次数而停止，修复 secret 后需手动 `flyctl machines start <id> -a pinclaw-api-dev`。
 - OpenClaw 代理插件使用黑名单机制（`NON_PROXYABLE_TELEGRAM_METHODS`），管理类方法如 `setWebhook`、`getMe` 不代理，其余消息类方法默认代理。
+
+## OpenClaw 容器冷启动性能
+
+### 瓶颈与优化
+
+OpenClaw 在 `shared-cpu-1x` 上冷启动慢的两大原因：
+
+1. **jiti 编译**：OpenClaw 内部使用 jiti（JIT TS→JS 编译器）加载模块，首次编译产生 ~14MB 缓存（`/tmp/jiti/`）。
+2. **Node V8 编译缓存**：Node.js 解析 JS 模块时生成 ~19MB V8 字节码缓存（`/tmp/node-compile-cache/`，3000+ 文件）。
+
+`/tmp/` 是临时文件系统，容器 destroy+create 后丢失。**每次冷启动都要重新编译，在单核上耗时 ~7 分钟。**
+
+**解决方案**：在 bootstrap command 中将缓存持久化到 volume（`/app/data/cache/`）：
+```
+mkdir -p /app/data/cache/jiti /app/data/cache/node-compile-cache
+ln -sfn /app/data/cache/jiti /tmp/jiti
+export NODE_COMPILE_CACHE=/app/data/cache/node-compile-cache
+```
+同时在 machine env 中设置 `NODE_COMPILE_CACHE=/app/data/cache/node-compile-cache`。
+
+**效果**：首次冷启动仍慢（写缓存），后续启动 ~3 分钟（缓存命中，跳过编译）。
+
+### 插件预编译
+
+`openclaw-plugins/telegram-router-proxy/` 同时保留 `index.ts`（源码）和 `index.js`（预编译）。`package.json` 的 `main` 和 `openclaw.extensions` 指向 `.js`，避免 OpenClaw 运行时编译 TS。修改插件后需同步更新 `.js` 文件。
+
+### 容器就绪探测注意事项
+
+bootstrap command 中的 IPv6 TCP proxy 在 OpenClaw 启动前就监听了 `[::]:8787` 和 `[::]:18789`。因此：
+- **TCP 端口探测不可靠**：proxy 总是接受连接，但 OpenClaw 可能还没就绪，转发会 ECONNRESET。
+- state sync 使用 **HTTP probe**（`POST /telegram-webhook`）代替 TCP probe，确保 OpenClaw 真正在处理请求。
+- fly-probe 使用 **WebSocket 协议级探测**（gateway hello），不受 TCP proxy 影响。
+- 只有 gateway（18789）和 webhook（8787）**两个端口都就绪**时才标记容器为 `running` 并通知用户。
