@@ -297,7 +297,7 @@ export async function syncSubscriptionFromStripe(
             .join(", ");
           await sendTelegramMessage(
             Number(telegram_user_id),
-            `⏳ <b>Creating container(s)</b>\n\n${listStr}\n\nStarting up, please wait. We'll notify you when ready.`,
+            `⏳ <b>Creating container(s)</b>\n\n${listStr}\n\nStarting up, please wait. First launch may take a few minutes — we'll notify you when ready.`,
           );
 
           // Fire-and-forget: create containers in background
@@ -334,7 +334,7 @@ export async function syncSubscriptionFromStripe(
               const parts: string[] = [];
               if (succeeded.length > 0) {
                 parts.push(
-                  `✅ <b>Container(s) ready</b>\n\n${succeeded.join(", ")}\n\nYou can open the Gateway link from the guide bot to start chatting.`,
+                  `✅ <b>Container(s) ready</b>\n\n${succeeded.join(", ")}\n\nYour assistant is warming up and will be fully ready in about a minute. You can start chatting now!`,
                 );
               }
               if (failed.length > 0) {
@@ -676,7 +676,7 @@ export async function handleInvoicePaid(
 
       await sendTelegramMessage(
         chatId,
-        `⏳ <b>Creating container(s)</b>\n\n${listStr}\n\nStarting up, please wait. We'll notify you when ready.`,
+        `⏳ <b>Creating container(s)</b>\n\n${listStr}\n\nStarting up, please wait. First launch may take a few minutes — we'll notify you when ready.`,
       );
 
       // 异步启动容器
@@ -721,12 +721,12 @@ export async function handleInvoicePaid(
 
           if (succeeded.length > 0) {
             parts.push(
-              `✅ <b>Container(s) ready</b>\n\n${succeeded.join(", ")}\n\nYou can open the Gateway link from the guide bot to start chatting.`,
+              `✅ <b>Container(s) ready</b>\n\n${succeeded.join(", ")}\n\nYour assistant is warming up and will be fully ready in about a minute. You can start chatting now!`,
             );
           }
           if (failed.length > 0) {
             parts.push(
-              `⏳ <b>Container(s) starting</b>\n\n${failed.join(", ")}\n\nProbing in background. You'll be notified when ready (usually 1-2 minutes).`,
+              `⏳ <b>Container(s) starting</b>\n\n${failed.join(", ")}\n\nStill warming up — first launch may take a few minutes. We'll notify you when ready.`,
             );
           }
 

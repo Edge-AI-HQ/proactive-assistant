@@ -121,9 +121,16 @@ async function handleTelegramWebhook(req: Request) {
     }
 
     if (userState.phase === 'container_starting') {
-      console.log(`⚠️ Container for chat_id ${chatId} is starting (status=${userState.runtimeStatus})`);
+      if (userState.container) {
+        console.log(`⚠️ Container for chat_id ${chatId} is ${userState.runtimeStatus} — attempting optimistic forward`);
+        const forwarded = await forwardToOpenClaw(userState.container, update);
+        if (forwarded) {
+          return jsonResponse({ ok: true });
+        }
+      }
+      console.log(`⚠️ Container for chat_id ${chatId} is starting (status=${userState.runtimeStatus}), forward not possible yet`);
       await sendTelegramMessage(chatId,
-        'Your assistant is starting up — please try again in a moment.'
+        'Your assistant is starting up — first launch may take a few minutes. Please try again shortly.'
       );
       return jsonResponse({ ok: true });
     }
@@ -134,7 +141,7 @@ async function handleTelegramWebhook(req: Request) {
     if (!forwarded) {
       console.error(`❌ Forward ultimately failed for chat_id=${chatId}`);
       await sendTelegramMessage(chatId,
-        'Your assistant is temporarily unavailable. Please try again shortly.'
+        'Your assistant is temporarily unavailable — it may still be starting up. Please try again in a minute or two.'
       );
     }
 
@@ -249,11 +256,13 @@ function truncateForLog(value: string, maxLen: number): string {
   return `${compact.slice(0, maxLen)}...`;
 }
 
+type ContainerInfo = { container_id: string; gateway_token: string; assistant_bot_id: string; runtime_provider: string };
+
 type UserState =
   | { phase: 'no_user' }
   | { phase: 'no_subscription' }
-  | { phase: 'container_starting'; runtimeStatus: string }
-  | { phase: 'running'; container: { container_id: string; gateway_token: string; assistant_bot_id: string; runtime_provider: string } };
+  | { phase: 'container_starting'; runtimeStatus: string; container?: ContainerInfo }
+  | { phase: 'running'; container: ContainerInfo };
 
 async function findUserState(chatId: number): Promise<UserState> {
   try {
@@ -293,7 +302,10 @@ async function findUserState(chatId: number): Promise<UserState> {
     }
 
     if (row.runtime_status !== 'running') {
-      return { phase: 'container_starting', runtimeStatus: row.runtime_status };
+      const partialContainer: ContainerInfo | undefined = row.runtime_ref
+        ? { container_id: row.runtime_ref, gateway_token: row.gateway_token, assistant_bot_id: row.assistant_bot_id, runtime_provider: row.runtime_provider }
+        : undefined;
+      return { phase: 'container_starting', runtimeStatus: row.runtime_status, container: partialContainer };
     }
 
     return {
