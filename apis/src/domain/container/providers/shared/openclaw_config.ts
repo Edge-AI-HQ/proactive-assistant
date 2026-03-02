@@ -217,7 +217,8 @@ export const buildAssistantOpenclawConfig = (
     // falling back to polling (getUpdates).
     const telegramChannel: UnknownRecord = {
       enabled: true,
-      dmPolicy: 'pairing',
+      dmPolicy: 'open',
+      allowFrom: ['*'],
       groupPolicy: 'allowlist',
       streaming: 'off',
     };
