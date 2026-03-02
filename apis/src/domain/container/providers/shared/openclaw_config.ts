@@ -210,31 +210,34 @@ export const buildAssistantOpenclawConfig = (
         telegramWebhookConfig
       )
     };
+  }
 
-    // 配置 plugins
-    const plugins: {
-      entries: Record<string, UnknownRecord>;
-      load?: { paths: string[] };
-    } = {
-      entries: {}
+  // Plugin config is independent of assistantBotToken — OpenClaw's Doctor
+  // auto-enables Telegram when it detects TELEGRAM_BOT_TOKEN in env, so the
+  // proxy plugin must always be loaded to prevent webhook/command mutations.
+  const plugins: {
+    entries: Record<string, UnknownRecord>;
+    load?: { paths: string[] };
+  } = {
+    entries: {}
+  };
+
+  if (options.includeTelegramPlugin) {
+    plugins.entries.telegram = { enabled: true };
+  }
+
+  if (options.telegramWebhookMode) {
+    plugins.entries['telegram-router-proxy'] = {
+      enabled: true
     };
 
-    if (options.includeTelegramPlugin) {
-      plugins.entries.telegram = { enabled: true };
+    const pluginPath = options.telegramRouterPluginPath?.trim();
+    if (pluginPath) {
+      plugins.load = { paths: [pluginPath] };
     }
+  }
 
-    // 如果启用 webhook 模式，加载路由代理 plugin
-    if (options.telegramWebhookMode) {
-      plugins.entries['telegram-router-proxy'] = {
-        enabled: true
-      };
-
-      const pluginPath = options.telegramRouterPluginPath?.trim();
-      if (pluginPath) {
-        plugins.load = { paths: [pluginPath] };
-      }
-    }
-
+  if (Object.keys(plugins.entries).length > 0) {
     next.plugins = plugins;
   }
 
