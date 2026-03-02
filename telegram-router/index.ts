@@ -20,7 +20,6 @@ const OPENCLAW_TELEGRAM_WEBHOOK_PORT = Number.parseInt(
 );
 const OPENCLAW_TELEGRAM_WEBHOOK_PATH = process.env.OPENCLAW_TELEGRAM_WEBHOOK_PATH || '/telegram-webhook';
 const FLY_APP_NAME = process.env.OPENCLAW_FLY_APP_NAME || 'pinclaw-api-dev';
-const OPENCLAW_FALLBACK_PORT = Number.parseInt(process.env.OPENCLAW_GATEWAY_PORT || '18789', 10);
 
 const sql = postgres(DATABASE_URL, {
   max: 10,
@@ -63,7 +62,9 @@ async function handleTelegramWebhook(req: Request) {
     // 验证 webhook secret
     const secretToken = req.headers.get('X-Telegram-Bot-Api-Secret-Token');
     if (secretToken !== WEBHOOK_SECRET) {
-      console.error('❌ Invalid webhook secret');
+      const received =
+        secretToken ? `${secretToken.slice(0, 8)}...(${secretToken.length})` : 'missing';
+      console.error(`❌ Invalid webhook secret (received=${received})`);
       return new Response('Unauthorized', { status: 401 });
     }
 
@@ -296,14 +297,10 @@ async function forwardToOpenClaw(container: any, update: any): Promise<boolean> 
           return true;
         }
 
-        const text = await response.text();
-        if (response.status === 404 || response.status === 405) {
-          console.warn(`⚠️  Endpoint not accepted (${response.status}) at ${webhookUrl}, trying next`);
-          continue;
-        }
-
-        console.error(`❌ Forward failed at ${webhookUrl}: ${response.status} - ${text}`);
-        return false;
+        const text = await response.text().catch(() => '');
+        console.warn(`⚠️  Forward rejected (${response.status}) at ${webhookUrl}: ${text.slice(0, 200)}`);
+        lastError = new Error(`HTTP ${response.status}: ${text.slice(0, 200)}`);
+        continue;
       } catch (error) {
         lastError = error;
         const errName = (error as { name?: string } | null)?.name || '';
@@ -314,7 +311,9 @@ async function forwardToOpenClaw(container: any, update: any): Promise<boolean> 
           console.warn(`⚠️ Forward timeout (assumed accepted) via ${webhookUrl}`);
           return true;
         }
-        console.warn(`⚠️  Forward connect error at ${webhookUrl}, trying next`);
+        const errMsg = error instanceof Error ? error.message : String(error);
+        const errCode = (error as { code?: string })?.code || '';
+        console.warn(`⚠️  Forward connect error at ${webhookUrl}: ${errCode || errName} ${errMsg.slice(0, 200)}`);
       }
     }
 
@@ -330,15 +329,10 @@ async function forwardToOpenClaw(container: any, update: any): Promise<boolean> 
 function buildWebhookCandidateUrls(targetHosts: string[]): string[] {
   const path = normalizeWebhookPath(OPENCLAW_TELEGRAM_WEBHOOK_PATH);
   const urls: string[] = [];
-  targetHosts.forEach((host) => {
+  for (const host of targetHosts) {
     const urlHost = formatHostForUrl(host);
-    urls.push(
-      `http://${urlHost}:${OPENCLAW_TELEGRAM_WEBHOOK_PORT}${path}`,
-      `http://${urlHost}:${OPENCLAW_FALLBACK_PORT}${path}`,
-      `http://${urlHost}:${OPENCLAW_FALLBACK_PORT}/telegram-webhook`,
-      `http://${urlHost}:${OPENCLAW_FALLBACK_PORT}/webhook/telegram`
-    );
-  });
+    urls.push(`http://${urlHost}:${OPENCLAW_TELEGRAM_WEBHOOK_PORT}${path}`);
+  }
   return [...new Set(urls)];
 }
 
