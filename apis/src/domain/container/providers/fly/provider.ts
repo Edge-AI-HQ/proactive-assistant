@@ -1,4 +1,5 @@
 import { getContainerManagerRuntime } from "../../runtime.js";
+import { sendTelegramMessage } from "../../../telegram/notify.js";
 import type {
   AssistantRecord,
   ContainerManagerConfig,
@@ -351,6 +352,21 @@ const runEnsureAssistantMachine = async (
         await updateAssistant(assistant.id, {
           container_status: ready ? "running" : "error",
         });
+
+        if (ready && assistant.owner_telegram_user_id) {
+          const label = assistant.assistant_bot_id
+            ? `@${assistant.assistant_bot_id}`
+            : `#${assistant.id}`;
+          console.log(
+            `[fly-probe] Gateway ready for assistant ${assistant.id}, notifying user ${assistant.owner_telegram_user_id}`,
+          );
+          await sendTelegramMessage(
+            Number(assistant.owner_telegram_user_id),
+            `✅ <b>Your assistant is ready!</b>\n\nYou can start chatting now.`,
+          ).catch((e) =>
+            console.warn(`[fly-probe] notify failed for assistant ${assistant.id}`, e),
+          );
+        }
       } catch (err) {
         console.error(
           `Async gateway probe failed for assistant ${assistant.id}`,
