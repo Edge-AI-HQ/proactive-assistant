@@ -335,30 +335,35 @@ const runEnsureAssistantMachine = async (
           startedMachine.id,
           startedMachine.private_ip,
         );
+        const probeTimeout = Math.max(config.fly.gatewayProbeTimeoutMs, 600_000);
         const portReady = await waitForPort(
           target.host,
           target.port,
-          config.fly.gatewayProbeTimeoutMs,
+          probeTimeout,
         );
-        const ready = portReady
+        const gatewayOk = portReady
           ? await waitForGatewayHello(
               target.host,
               target.port,
               normalizedGatewayToken,
-              config.fly.gatewayProbeTimeoutMs,
+              probeTimeout,
             )
           : false;
+
+        // Also wait for the Telegram webhook port (8787) to be reachable
+        const webhookPort = Number(process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT || "8787");
+        const webhookReady = gatewayOk
+          ? await waitForPort(target.host, webhookPort, 120_000)
+          : false;
+        const ready = gatewayOk && webhookReady;
 
         await updateAssistant(assistant.id, {
           container_status: ready ? "running" : "error",
         });
 
         if (ready && assistant.owner_telegram_user_id) {
-          const label = assistant.assistant_bot_id
-            ? `@${assistant.assistant_bot_id}`
-            : `#${assistant.id}`;
           console.log(
-            `[fly-probe] Gateway ready for assistant ${assistant.id}, notifying user ${assistant.owner_telegram_user_id}`,
+            `[fly-probe] Fully ready for assistant ${assistant.id}, notifying user ${assistant.owner_telegram_user_id}`,
           );
           await sendTelegramMessage(
             Number(assistant.owner_telegram_user_id),

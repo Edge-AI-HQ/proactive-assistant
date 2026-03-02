@@ -1,9 +1,22 @@
+import net from "node:net";
 import { config } from "../common/config.js";
 import { updateAssistant } from "../common/db/index.js";
 import { pool } from "../common/db/core.js";
 import { listMachines } from "./providers/fly/fly_client.js";
 import { sendTelegramMessage } from "../telegram/notify.js";
 import type { AssistantRecord } from "../../types/index.js";
+
+function quickTcpProbe(host: string, port: number, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host, port }, () => {
+      socket.end();
+      resolve(true);
+    });
+    socket.setTimeout(timeoutMs);
+    socket.on("timeout", () => { socket.destroy(); resolve(false); });
+    socket.on("error", () => { socket.destroy(); resolve(false); });
+  });
+}
 
 const SYNC_BATCH_SIZE = 500; // 每批处理 500 个，避免内存占用过大
 const SYNC_LOCK_KEY = 319_902; // Advisory lock key for container state sync
@@ -170,6 +183,23 @@ async function performStateSync(): Promise<{
 
           // 如果状态不一致，更新
           if (assistant.container_status !== expectedStatus) {
+            // When transitioning to running, probe the webhook port first
+            // to avoid notifying the user before OpenClaw is actually ready.
+            if (
+              expectedStatus === "running" &&
+              assistant.container_status !== "running"
+            ) {
+              const privateIp = containerId.split("|")[1]?.trim();
+              if (privateIp) {
+                const webhookPort = 8787;
+                const reachable = await quickTcpProbe(privateIp, webhookPort, 3000);
+                if (!reachable) {
+                  // Machine started but webhook not listening yet — skip this cycle
+                  continue;
+                }
+              }
+            }
+
             await updateAssistant(assistant.id, {
               container_status: expectedStatus,
             });
