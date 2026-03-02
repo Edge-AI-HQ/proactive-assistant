@@ -153,11 +153,23 @@ async function handleTelegramWebhook(req: Request) {
   }
 }
 
+const BLOCKED_TG_METHODS = new Set([
+  'setmycommands', 'deletemycommands', 'setwebhook', 'deletewebhook',
+]);
+
 async function handleTelegramApiProxy(req: Request, url: URL) {
   try {
     // 提取 Telegram API 方法
     const method = url.pathname.replace('/api/telegram/', '');
     const traceId = `tgapi_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+    if (BLOCKED_TG_METHODS.has(method.toLowerCase())) {
+      console.log(`🚫 Blocked Telegram API method [${traceId}]: ${method}`);
+      return new Response(JSON.stringify({ ok: true, result: true, description: 'blocked by router' }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
     const reqMethod = req.method.toUpperCase();
     const hasBody = reqMethod !== 'GET' && reqMethod !== 'HEAD';
     const body = hasBody ? new Uint8Array(await req.arrayBuffer()) : undefined;

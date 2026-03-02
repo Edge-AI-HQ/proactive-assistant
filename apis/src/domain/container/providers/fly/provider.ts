@@ -326,7 +326,8 @@ const runEnsureAssistantMachine = async (
   });
 
   // 异步探测 gateway，成功后更新为 running
-  if (status === "running" && config.fly.gatewayProbe) {
+  const probeInBackground = status === "running" && config.fly.gatewayProbe;
+  if (probeInBackground) {
     void (async () => {
       try {
         const target = resolveFromMachine(
@@ -362,8 +363,9 @@ const runEnsureAssistantMachine = async (
     })();
   }
 
-  // 立即返回，不阻塞
-  return { containerId, ready: status === "running" };
+  // When probe is running in background, report not-ready so callers
+  // don't prematurely tell the user the container is available.
+  return { containerId, ready: status === "running" && !probeInBackground };
 };
 
 const ensureAssistantFlyContainer = async (
