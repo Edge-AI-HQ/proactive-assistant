@@ -2,12 +2,18 @@
 set -euo pipefail
 
 # Usage: ./scripts/cleanup-user.sh <telegram_user_id>
+# DATABASE_URL="postgresql://postgres:REDACTED@db.ighqvjvsjpmbjdjfahvl.supabase.co:5432/postgres" bash scripts/cleanup-user.sh 6142814327
 # Destroys the user's Fly machine and deletes all DB records (cascade).
 # Requires: psql, flyctl
-# 用法 DATABASE_URL="postgresql://postgres:REDACTED@db.ighqvjvsjpmbjdjfahvl.supabase.co:5432/postgres" \
-  ./scripts/cleanup-user.sh 6142814327
+# 用法 DATABASE_URL="postgresql://postgres:REDACTED@db.ighqvjvsjpmbjdjfahvl.supabase.co:5432/postgres" ./scripts/cleanup-user.sh 6142814327
 
-TELEGRAM_USER_ID="${1:?Usage: $0 <telegram_user_id>}"
+AUTO_YES=false
+while getopts "y" opt; do
+  case "$opt" in y) AUTO_YES=true ;; *) ;; esac
+done
+shift $((OPTIND - 1))
+
+TELEGRAM_USER_ID="${1:?Usage: $0 [-y] <telegram_user_id>}"
 FLY_APP="${FLY_APP:-pinclaw-api-dev}"
 DATABASE_URL="${DATABASE_URL:?Set DATABASE_URL (Supabase postgres connection string)}"
 
@@ -38,10 +44,12 @@ echo "  runtime_ref:    ${RUNTIME_REF:-none}"
 echo "  status:         ${RUNTIME_STATUS:-none}"
 echo ""
 
-read -rp "⚠️  Destroy machine + delete all DB records? [y/N] " CONFIRM
-if [[ ! "$CONFIRM" =~ ^[yY]$ ]]; then
-  echo "Aborted."
-  exit 0
+if [ "$AUTO_YES" != true ]; then
+  read -rp "⚠️  Destroy machine + delete all DB records? [y/N] " CONFIRM
+  if [[ ! "$CONFIRM" =~ ^[yY]$ ]]; then
+    echo "Aborted."
+    exit 0
+  fi
 fi
 
 # Extract Fly machine ID from runtime_ref (format: fly:<machineId>|<ipv6>)

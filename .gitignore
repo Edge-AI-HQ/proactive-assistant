@@ -20,6 +20,9 @@ pnpm-debug.log*
 .env.test.local
 .env.production.local
 .env_pinai
+env.apis
+env.litellm
+env.pinclaw-bot
 api_key_env
 !.env.example
 
