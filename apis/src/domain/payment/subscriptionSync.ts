@@ -695,6 +695,17 @@ export async function handleInvoicePaid(
       Number(subscription.telegram_user_id),
     );
 
+    console.log(`[payment] invoice.paid container provisioning check:`, {
+      invoiceId: invoice.id,
+      telegramUserId: subscription.telegram_user_id,
+      assistantId: assistantId || "NULL",
+      totalAssistants: assistants.length,
+      assistantStatuses: assistants.map((a) => ({
+        id: a.id,
+        status: a.container_status,
+      })),
+    });
+
     // 如果有 assistant_id，只启动该助理；否则启动所有 stopped/pending 的助理（向后兼容）
     const toStart = assistantId
       ? assistants.filter(
@@ -708,6 +719,11 @@ export async function handleInvoicePaid(
             a.container_status === "pending" ||
             a.container_status === "stopped",
         );
+
+    console.log(`[payment] Containers to start: ${toStart.length}`, {
+      toStartIds: toStart.map((a) => a.id),
+      filterMode: assistantId ? "by_assistant_id" : "all_stopped_pending",
+    });
 
     if (toStart.length > 0) {
       const chatId = Number(subscription.telegram_user_id);
