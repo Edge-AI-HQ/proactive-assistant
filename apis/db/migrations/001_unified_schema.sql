@@ -26,12 +26,15 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 -- Assistant control plane (no container state duplication)
+-- Supports two creation modes:
+--   1. Quick Start: assistant_bot_id/token/username = NULL (user chats through guide bot)
+--   2. Advanced: assistant_bot_id/token/username = user's own bot (user can chat directly with own bot)
 CREATE TABLE IF NOT EXISTS assistants (
   id BIGSERIAL PRIMARY KEY,
   owner_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  assistant_bot_id BIGINT UNIQUE NOT NULL,
-  assistant_bot_token TEXT UNIQUE NOT NULL,
-  assistant_bot_username TEXT UNIQUE NOT NULL,
+  assistant_bot_id BIGINT,
+  assistant_bot_token TEXT,
+  assistant_bot_username TEXT,
   litellm_user_id TEXT,
   litellm_key_alias TEXT,
   litellm_virtual_key_encrypted TEXT,
@@ -43,8 +46,14 @@ CREATE TABLE IF NOT EXISTS assistants (
   litellm_tpm_limit INTEGER,
   litellm_last_synced_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- Allow same user to only bind one bot (but multiple users can have NULL for Quick Start)
+  CONSTRAINT assistants_owner_bot_unique UNIQUE NULLS NOT DISTINCT (owner_user_id, assistant_bot_id)
 );
+
+-- Indexes for bot lookups (only for non-NULL values)
+CREATE INDEX IF NOT EXISTS idx_assistants_bot_id ON assistants(assistant_bot_id) WHERE assistant_bot_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_assistants_bot_token ON assistants(assistant_bot_token) WHERE assistant_bot_token IS NOT NULL;
 
 -- Unified runtime state for both user and assistant containers/machines
 CREATE TABLE IF NOT EXISTS runtime_instances (
