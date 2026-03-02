@@ -41,12 +41,20 @@ export const parseProvisionAssistantInput = (
   if (!body || typeof body !== "object") {
     throw new DomainError(
       "INVALID_INPUT",
-      "Invalid payload. owner_telegram_user_id, assistant_bot_id, assistant_bot_token, assistant_bot_username are required.",
+      "Invalid payload. owner_telegram_user_id is required.",
     );
   }
   const record = body as Record<string, unknown>;
 
   const ownerTelegramUserId = parsePositiveInt(record.owner_telegram_user_id);
+  if (!ownerTelegramUserId) {
+    throw new DomainError(
+      "INVALID_INPUT",
+      "Invalid payload. owner_telegram_user_id is required.",
+    );
+  }
+
+  // Bot 字段现在是可选的（Quick Start 模式下为空）
   const assistantBotId = parsePositiveInt(record.assistant_bot_id);
   const assistantBotToken =
     typeof record.assistant_bot_token === "string"
@@ -62,24 +70,12 @@ export const parseProvisionAssistantInput = (
       ? record.owner_telegram_username.trim()
       : null;
 
-  if (
-    !ownerTelegramUserId ||
-    !assistantBotId ||
-    !assistantBotToken ||
-    !assistantBotUsername
-  ) {
-    throw new DomainError(
-      "INVALID_INPUT",
-      "Invalid payload. owner_telegram_user_id, assistant_bot_id, assistant_bot_token, assistant_bot_username are required.",
-    );
-  }
-
   return {
     ownerTelegramUserId,
     ownerTelegramUsername,
-    assistantBotId,
-    assistantBotToken,
-    assistantBotUsername,
+    assistantBotId: assistantBotId || null,
+    assistantBotToken: assistantBotToken || null,
+    assistantBotUsername: assistantBotUsername || null,
   };
 };
 
