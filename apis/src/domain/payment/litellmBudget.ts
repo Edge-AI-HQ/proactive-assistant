@@ -151,18 +151,29 @@ export const syncLiteLLMBudgetAbsolute = async (
   const { identity, litellmUserId, litellmUserAlias } = resolved;
   const targetBudgetUsd = normalizeBudgetUsd(input.budget_usd);
 
-  await createLiteLLMUser({
-    userId: litellmUserId,
-    userAlias: litellmUserAlias,
-    maxBudgetUsd: targetBudgetUsd,
-    autoCreateKey: false,
-    metadata: {
-      source: input.source,
-      telegram_user_id: input.telegram_user_id,
-      user_id: identity.id,
-      ...(input.metadata ?? {}),
-    },
-  });
+  // Only create user if it doesn't already exist to avoid 409 conflicts
+  let userExists = false;
+  try {
+    await getLiteLLMUserInfo(litellmUserId);
+    userExists = true;
+  } catch {
+    // User doesn't exist yet — will create below
+  }
+
+  if (!userExists) {
+    await createLiteLLMUser({
+      userId: litellmUserId,
+      userAlias: litellmUserAlias,
+      maxBudgetUsd: targetBudgetUsd,
+      autoCreateKey: false,
+      metadata: {
+        source: input.source,
+        telegram_user_id: input.telegram_user_id,
+        user_id: identity.id,
+        ...(input.metadata ?? {}),
+      },
+    });
+  }
 
   if (input.reset_spend) {
     try {

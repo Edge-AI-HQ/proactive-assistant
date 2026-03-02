@@ -484,7 +484,8 @@ export const getLiteLLMUserInfo = async (litellmUserId: string): Promise<LiteLLM
 export const resetLiteLLMUserSpend = async (litellmUserId: string): Promise<void> => {
   const userId = litellmUserId.trim();
   if (!userId) throw new Error('LiteLLM user_id is required');
-  await requestJson('POST', '/user/reset', { user_id: userId });
+  // /user/reset was removed in newer LiteLLM versions; use /user/update with spend=0
+  await requestJson('POST', '/user/update', { user_id: userId, spend: 0 });
 };
 
 export const getLiteLLMUserSpendCents = async (litellmUserId: string): Promise<number | null> => {
