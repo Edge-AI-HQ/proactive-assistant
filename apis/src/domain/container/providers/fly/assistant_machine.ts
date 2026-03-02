@@ -52,6 +52,15 @@ const toTimestampMs = (value: string | undefined): number | null => {
 
 const normalizeAssistantToken = (value: string | null | undefined): string => (value || '').trim();
 
+const extractOrigin = (urlStr: string): string => {
+  try {
+    const u = new URL(urlStr);
+    return u.origin;
+  } catch {
+    return urlStr;
+  }
+};
+
 const hashConfigSha256 = (raw: string): string => crypto.createHash('sha256').update(raw).digest('hex');
 
 const quoteForShell = (value: string): string => `'${value.replace(/'/g, `"'"'`)}'`;
@@ -314,7 +323,7 @@ export const createAssistantMachine = async (args: AssistantMachineCreateArgs): 
     OPENCLAW_STATE_DIR: '/app/data',
     PINAI_OPENCLAW_CONFIG_SHA256: openclawPayload.hash,
     ...(config.telegramRouter.webhookUrl
-      ? { TELEGRAM_ROUTER_URL: config.telegramRouter.webhookUrl }
+      ? { TELEGRAM_ROUTER_URL: extractOrigin(config.telegramRouter.webhookUrl) }
       : {})
   };
 
