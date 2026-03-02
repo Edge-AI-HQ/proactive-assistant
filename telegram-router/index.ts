@@ -86,25 +86,40 @@ async function handleTelegramWebhook(req: Request) {
       return jsonResponse({ ok: true });
     }
 
-    // 查询用户对应的容器
-    const container = await findUserContainer(chatId);
+    const userState = await findUserState(chatId);
 
-    if (!container) {
-      console.log(`❌ No container found for chat_id: ${chatId}`);
-      // 发送引导消息
+    if (userState.phase === 'no_user') {
+      console.log(`⚠️ No user record for chat_id: ${chatId}`);
       await sendTelegramMessage(chatId,
-        '👋 Welcome! Please create your assistant first.\n\nUse /create_claw_assistant to get started.'
+        'Welcome! Send /start to begin setting up your AI assistant.'
       );
       return jsonResponse({ ok: true });
     }
 
-    console.log(`✅ Found container:`, container);
+    if (userState.phase === 'no_subscription') {
+      console.log(`⚠️ User ${chatId} has assistant but no active container`);
+      await sendTelegramMessage(chatId,
+        'Your assistant is registered but not yet activated.\nPlease subscribe to start using it — send /create_claw_assistant for the payment link.'
+      );
+      return jsonResponse({ ok: true });
+    }
 
-    const forwarded = await forwardToOpenClaw(container, update);
-    // Always return ok:true to Telegram to prevent redelivery — retries would
-    // duplicate messages in OpenClaw since it has no idempotency on update_id.
+    if (userState.phase === 'container_starting') {
+      console.log(`⚠️ Container for chat_id ${chatId} is starting (status=${userState.runtimeStatus})`);
+      await sendTelegramMessage(chatId,
+        'Your assistant is starting up — please try again in a moment.'
+      );
+      return jsonResponse({ ok: true });
+    }
+
+    console.log(`✅ Found container:`, userState.container);
+
+    const forwarded = await forwardToOpenClaw(userState.container, update);
     if (!forwarded) {
       console.error(`❌ Forward ultimately failed for chat_id=${chatId}`);
+      await sendTelegramMessage(chatId,
+        'Your assistant is temporarily unavailable. Please try again shortly.'
+      );
     }
 
     return jsonResponse({ ok: true });
@@ -124,7 +139,8 @@ async function handleTelegramApiProxy(req: Request, url: URL) {
     const hasBody = reqMethod !== 'GET' && reqMethod !== 'HEAD';
     const body = hasBody ? new Uint8Array(await req.arrayBuffer()) : undefined;
     const bodyInfo = extractTelegramProxyBodyInfo(url, req.headers.get('content-type'), body);
-    const container = bodyInfo.chatId ? await findUserContainer(bodyInfo.chatId) : null;
+    const userState = bodyInfo.chatId ? await findUserState(bodyInfo.chatId) : null;
+    const container = userState?.phase === 'running' ? userState.container : null;
     const runtime = container?.container_id ? parseFlyRuntimeRef(container.container_id) : null;
     const sourceHint = req.headers.get('fly-client-ip')
       || req.headers.get('x-forwarded-for')
@@ -217,43 +233,66 @@ function truncateForLog(value: string, maxLen: number): string {
   return `${compact.slice(0, maxLen)}...`;
 }
 
-async function findUserContainer(chatId: number) {
+type UserState =
+  | { phase: 'no_user' }
+  | { phase: 'no_subscription' }
+  | { phase: 'container_starting'; runtimeStatus: string }
+  | { phase: 'running'; container: { container_id: string; gateway_token: string; assistant_bot_id: string; runtime_provider: string } };
+
+async function findUserState(chatId: number): Promise<UserState> {
   try {
     const result = await sql`
       SELECT
         a.id as assistant_id,
         a.assistant_bot_id,
-        a.assistant_bot_username,
         r.runtime_provider,
         r.runtime_ref,
-        r.host_port,
-        r.status,
+        r.status as runtime_status,
         u.gateway_token
-      FROM assistants a
+      FROM users u
+      LEFT JOIN assistants a ON a.owner_user_id = u.id
       LEFT JOIN runtime_instances r
         ON r.assistant_id = a.id
         AND r.scope = 'assistant'
-      JOIN users u ON a.owner_user_id = u.id
       WHERE u.telegram_user_id = ${chatId}
-        AND r.status = 'running'
-      ORDER BY r.updated_at DESC NULLS LAST, a.id DESC
+      ORDER BY
+        CASE WHEN r.status = 'running' THEN 0 ELSE 1 END,
+        r.updated_at DESC NULLS LAST,
+        a.id DESC
       LIMIT 1
     `;
 
     if (result.length === 0) {
-      return null;
+      return { phase: 'no_user' };
+    }
+
+    const row = result[0];
+
+    if (!row.assistant_id) {
+      return { phase: 'no_subscription' };
+    }
+
+    if (!row.runtime_ref || !row.runtime_status) {
+      return { phase: 'no_subscription' };
+    }
+
+    if (row.runtime_status !== 'running') {
+      return { phase: 'container_starting', runtimeStatus: row.runtime_status };
     }
 
     return {
-      container_id: result[0].runtime_ref,
-      gateway_token: result[0].gateway_token,
-      assistant_bot_id: result[0].assistant_bot_id,
-      runtime_provider: result[0].runtime_provider
+      phase: 'running',
+      container: {
+        container_id: row.runtime_ref,
+        gateway_token: row.gateway_token,
+        assistant_bot_id: row.assistant_bot_id,
+        runtime_provider: row.runtime_provider
+      }
     };
 
   } catch (error) {
     console.error('Database query error:', error);
-    return null;
+    return { phase: 'no_user' };
   }
 }
 

@@ -19,7 +19,7 @@ export const buildBot = (): Bot<Context> => {
 
     const rawText = typeof ctx.message?.text === 'string' ? ctx.message.text.trim() : '';
     if (rawText.startsWith('/')) return;
-    await ctx.reply('<b>This bot is for assistant onboarding only.</b>\nPlease send /start first.', {
+    await ctx.reply('Send /start to get started, or /create_claw_assistant to set up your AI assistant.', {
       parse_mode: 'HTML'
     });
   });

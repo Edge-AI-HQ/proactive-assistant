@@ -7,43 +7,33 @@ import {
   createAssistantWithoutContainerViaApi,
   cancelUserSubscription,
   ensureTelegramUserViaApi,
-  isPaymentEnabled,
   listAssistantsByOwnerViaApi,
-  provisionAssistantViaApi,
 } from "./client.js";
 import type { AssistantRecord } from "../../types.js";
 
 const CREATE_ASSISTANT_COMMAND = "create_claw_assistant";
 const LIST_ASSISTANT_COMMAND = "list_claw_assistant";
-const PENDING_TOKEN_INPUT_TTL_MS = 10 * 60 * 1000;
-
 const commandList = [
   {
     command: "start",
-    description: "Start onboarding to create your own assistant bot",
+    description: "Get started with your AI assistant",
   },
   {
     command: CREATE_ASSISTANT_COMMAND,
-    description: "Start assistant setup (send your BotFather token next)",
+    description: "Create your AI assistant",
   },
   {
     command: LIST_ASSISTANT_COMMAND,
-    description: "Show all assistant bots you created",
+    description: "Show your assistant status",
   },
   {
     command: "gateway",
-    description: "Open OpenClaw dashboard for one of your bots",
+    description: "Open OpenClaw dashboard",
   },
 ] as const;
 
-const BOT_USERNAME_SUFFIX = "_PIN_Claw_Bot";
-const TELEGRAM_BOT_TOKEN_PATTERN = /^\d{6,}:[A-Za-z0-9_-]{20,}$/;
 const GATEWAY_LINK_SESSION_TTL_HOURS = 12;
-const TOKEN_ALREADY_TAKEN_MESSAGE = [
-  "🙈 <b>Token already in use.</b>",
-  "This token is already bound to another account.",
-  "Please double-check and try again.",
-].join("\n");
+const TELEGRAM_BOT_TOKEN_PATTERN = /^\d{6,}:[A-Za-z0-9_-]{20,}$/;
 
 const commandText = (): string =>
   commandList
@@ -55,45 +45,14 @@ const replyHtml = (
   other?: Parameters<Context["reply"]>[1],
 ) => ctx.reply(text, { parse_mode: "HTML", ...(other || {}) });
 
-const normalizeBotUsernameBase = (value: string): string =>
-  value.replace(/[^a-zA-Z0-9_]/g, "");
-
-const suggestBotUsername = (ctx: Context): string => {
-  const maxLength = 32;
-  const baseMax = Math.max(1, maxLength - BOT_USERNAME_SUFFIX.length);
-  const source =
-    normalizeBotUsernameBase(ctx.from?.username || "") ||
-    normalizeBotUsernameBase(ctx.from?.first_name || "") ||
-    `User${ctx.from?.id ?? ""}`;
-  const base = source.slice(0, baseMax) || "User";
-  return `${base}${BOT_USERNAME_SUFFIX}`;
-};
-
-const welcomeMessage = (suggestedBotUsername: string): string =>
+const welcomeMessage = (): string =>
   [
-    "🐾 <b>Welcome to PIN Claw Guide Bot</b> ✨",
+    "🐾 <b>Welcome to PIN Claw!</b>",
     "",
-    "Let's set up your very own Telegram Assistant! It's super easy 💕",
-    "🌸 <b>Step 1</b> — Open @BotFather and send /newbot to create your new bot.",
-    `🎀 <b>Step 2</b> — Pick a username, for example: <code>${suggestedBotUsername}</code> (BotFather has the final say).`,
-    "🍰 <b>Step 3</b> — Send this command, then paste your token in the next message:",
-    "<code>/create_claw_assistant</code>",
-    "🪄 Sit back and relax~ We'll set up your OpenClaw container in a blink ✧˖°",
+    "Your personal AI assistant is just one step away.",
     "",
-    "🔐 <b>Security tip:</b> Keep your token private and never share it.",
+    "Send /create_claw_assistant to get started.",
   ].join("\n");
-
-const assistantsListMessage = (assistants: AssistantRecord[]): string => {
-  if (!assistants.length) {
-    return "🧸 <b>No assistant bots yet.</b>\nSend <code>/create_claw_assistant</code> to get started.";
-  }
-
-  const lines = assistants.map((assistant, index) => {
-    const username = assistant.assistant_bot_username;
-    return `${index + 1}. @${username} | status: ${assistant.container_status} | https://t.me/${username}`;
-  });
-  return ["<b>Your assistant bots:</b>", ...lines].join("\n");
-};
 
 const parseAssistantToken = (text: string | undefined): string | null => {
   if (!text) return null;
@@ -108,20 +67,6 @@ const parseAssistantToken = (text: string | undefined): string | null => {
 
 // 使用数据库存储待处理动作（支持集群部署）
 import { pool } from "../common/db/core.js";
-
-const markTokenInputPending = async (telegramUserId: number): Promise<void> => {
-  const expiresAt = new Date(Date.now() + PENDING_TOKEN_INPUT_TTL_MS);
-
-  await pool.query(
-    `INSERT INTO user_pending_actions (user_id, action_type, expires_at)
-     SELECT id, 'token_input', $2
-     FROM users
-     WHERE telegram_user_id = $1
-     ON CONFLICT (user_id, action_type)
-     DO UPDATE SET expires_at = EXCLUDED.expires_at, created_at = NOW()`,
-    [telegramUserId, expiresAt],
-  );
-};
 
 const clearTokenInputPending = async (
   telegramUserId: number,
@@ -149,29 +94,6 @@ const isTokenInputPending = async (
   );
 
   return result.rows[0]?.exists ?? false;
-};
-
-interface AssistantBotIdentity {
-  botId: number;
-  username: string;
-}
-
-const validateAssistantBotToken = async (
-  token: string,
-): Promise<AssistantBotIdentity> => {
-  const candidate = new Bot(token);
-  await candidate.init();
-  const botId = candidate.botInfo?.id;
-  const username = candidate.botInfo?.username?.trim();
-  if (!botId || !username) {
-    throw new Error("Token is valid but bot metadata is missing.");
-  }
-  return { botId, username };
-};
-
-const deleteAssistantBotWebhook = async (token: string): Promise<void> => {
-  const candidate = new Bot(token);
-  await candidate.api.deleteWebhook({ drop_pending_updates: true });
 };
 
 const safeCreatePaymentLink = async (
@@ -265,147 +187,76 @@ const buildAssistantGatewayLinksText = (
     .join("\n\n");
 };
 
-const provisionAssistantFromToken = async (
+const provisionAssistantWithGuideBot = async (
   ctx: Context,
-  token: string,
 ): Promise<boolean> => {
   const telegramUserId = ctx.from?.id;
   if (!telegramUserId) return false;
 
-  if (token === config.telegram.token) {
-    await replyHtml(
-      ctx,
-      "<b>This token belongs to the guide bot.</b>\nPlease use the token from the bot you created in @BotFather.",
-    );
-    return false;
-  }
+  const guideBotId = ctx.me.id;
+  const guideBotUsername = ctx.me.username;
+  const guideBotToken = config.telegram.token;
 
   await ensureTelegramUserViaApi(telegramUserId, ctx.from?.username ?? null);
-  await replyHtml(
-    ctx,
-    "🔍 <b>Verifying your bot token...</b>\nPlease wait a moment.",
-  );
 
   try {
-    const botIdentity = await validateAssistantBotToken(token);
-
-    // Create assistant without container - user needs to pay first
-    const created = await createAssistantWithoutContainerViaApi({
+    await createAssistantWithoutContainerViaApi({
       ownerTelegramUserId: telegramUserId,
       ownerTelegramUsername: ctx.from?.username ?? null,
-      assistantBotId: botIdentity.botId,
-      assistantBotToken: token,
-      assistantBotUsername: botIdentity.username,
+      assistantBotId: guideBotId,
+      assistantBotToken: guideBotToken,
+      assistantBotUsername: guideBotUsername,
     });
-    await deleteAssistantBotWebhook(token);
+  } catch (error: unknown) {
+    const is409 = error instanceof BackendApiError && error.status === 409;
+    const isLocalDup =
+      error instanceof Error && error.message === "USER_ALREADY_HAS_ASSISTANT";
 
-    const latestAssistants = await listAssistantsByOwnerViaApi(telegramUserId);
-    const assistant = created.assistant;
-
-    // Generate payment link
-    const paymentLink = await safeCreatePaymentLink(
-      telegramUserId,
-      ctx.from?.username ?? null,
-    );
-
-    if (!paymentLink) {
+    if (!is409 && !isLocalDup) {
+      console.error("Assistant setup failed", error);
       await replyHtml(
         ctx,
-        [
-          "✅ <b>Assistant registered successfully.</b>",
-          `Bot link: https://t.me/${botIdentity.username}`,
-          `Connected bot: @${botIdentity.username}`,
-          ...(assistant.litellm_key_alias
-            ? [`🔐 LiteLLM key assigned: ${assistant.litellm_key_alias}`]
-            : []),
-          "",
-          "⚠️ <b>Payment link unavailable.</b> Your container will be created after you subscribe.",
-          "Admin: ensure API_INTERNAL_TOKEN is set on both bot and API (same value), and API has PAYMENT_PUBLIC_BASE_URL. Check bot logs for «Failed to create payment link».",
-          `🧸 You now have ${latestAssistants.length} assistant bot${latestAssistants.length === 1 ? "" : "s"}.`,
-        ].join("\n"),
+        "<b>Something went wrong.</b>\nPlease try again later.",
       );
-      return true;
+      return false;
     }
+    // User already has an assistant — fall through to show payment link
+  }
 
-    const keyboard = new InlineKeyboard().url(
-      "💳 Subscribe to activate",
-      paymentLink,
-    );
+  const paymentLink = await safeCreatePaymentLink(
+    telegramUserId,
+    ctx.from?.username ?? null,
+  );
 
+  if (!paymentLink) {
     await replyHtml(
       ctx,
       [
-        "✅ <b>Assistant registered successfully.</b>",
-        `Bot link: https://t.me/${botIdentity.username}`,
-        `Connected bot: @${botIdentity.username}`,
-        ...(assistant.litellm_key_alias
-          ? [`🔐 LiteLLM key assigned: ${assistant.litellm_key_alias}`]
-          : []),
+        "✅ <b>Your assistant is registered.</b>",
         "",
-        "💡 <b>Next step:</b> Subscribe to a plan to activate your container.",
-        "Your assistant will be ready to use immediately after payment.",
-        `🧸 You now have ${latestAssistants.length} assistant bot${latestAssistants.length === 1 ? "" : "s"}.`,
+        "⚠️ Payment is temporarily unavailable. Please try again shortly.",
       ].join("\n"),
-      { reply_markup: keyboard },
     );
-
     return true;
-  } catch (error: unknown) {
-    console.error("Assistant bot setup failed", error);
-
-    // 检查 BackendApiError 且 status=409 的情况
-    if (error instanceof BackendApiError && error.status === 409) {
-      // 根据错误消息内容判断具体原因
-      if (error.message.includes("USER_ALREADY_HAS_ASSISTANT")) {
-        await replyHtml(
-          ctx,
-          [
-            "⚠️ <b>You already have an assistant bot.</b>",
-            "",
-            "Currently, each user is limited to one assistant bot.",
-            "",
-            "💡 <b>Tip:</b> You can update your existing bot's token by running /create_claw_assistant again with a new token.",
-          ].join("\n"),
-        );
-        return false;
-      }
-
-      // Token 已被其他用户使用
-      await replyHtml(ctx, TOKEN_ALREADY_TAKEN_MESSAGE);
-      return false;
-    }
-
-    // 兼容直接抛出 Error 的情况（本地错误处理）
-    if (
-      error instanceof Error &&
-      error.message === "USER_ALREADY_HAS_ASSISTANT"
-    ) {
-      await replyHtml(
-        ctx,
-        [
-          "⚠️ <b>You already have an assistant bot.</b>",
-          "",
-          "Currently, each user is limited to one assistant bot.",
-          "",
-          "💡 <b>Tip:</b> You can update your existing bot's token by running /create_claw_assistant again with a new token.",
-        ].join("\n"),
-      );
-      return false;
-    }
-
-    if (
-      error instanceof Error &&
-      error.message === "ASSISTANT_BOT_ALREADY_OWNED"
-    ) {
-      await replyHtml(ctx, TOKEN_ALREADY_TAKEN_MESSAGE);
-      return false;
-    }
-    await replyHtml(
-      ctx,
-      "<b>Failed to create assistant.</b>\nPlease verify your token and backend API availability, then try again.",
-    );
-    return false;
   }
+
+  const keyboard = new InlineKeyboard().url(
+    "💳 Subscribe to activate",
+    paymentLink,
+  );
+
+  await replyHtml(
+    ctx,
+    [
+      "✅ <b>Your assistant is ready!</b>",
+      "",
+      "Subscribe to a plan to activate it.",
+      "Your assistant will be available immediately after payment.",
+    ].join("\n"),
+    { reply_markup: keyboard },
+  );
+
+  return true;
 };
 
 export const registerTelegramCommands = (bot: Bot<Context>): void => {
@@ -416,49 +267,34 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
   bot.command("start", async (ctx) => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
-    const telegramUsername = ctx.from?.username ?? null;
-    await ensureTelegramUserViaApi(telegramUserId, telegramUsername);
-    // 清除 token 输入状态（用户执行了其他命令）
+    await ensureTelegramUserViaApi(telegramUserId, ctx.from?.username ?? null);
     await clearTokenInputPending(telegramUserId);
-    await replyHtml(ctx, welcomeMessage(suggestBotUsername(ctx)));
+    await replyHtml(ctx, welcomeMessage());
   });
 
-  const createAssistantCommandHandler = async (ctx: Context): Promise<void> => {
+  bot.command(CREATE_ASSISTANT_COMMAND, async (ctx) => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
+    await clearTokenInputPending(telegramUserId);
+    await replyHtml(ctx, "🔄 <b>Setting up your assistant...</b>");
+    await provisionAssistantWithGuideBot(ctx);
+  });
 
-    // 标记等待 token 输入（10分钟有效期）
-    await markTokenInputPending(telegramUserId);
-    await replyHtml(
-      ctx,
-      [
-        "<b>Please send your BotFather token in the next message.</b>",
-        "Example: <code>123456789:ABCDefghIJKLmnopQRSTuvwxYZ</code>",
-        "",
-        "💡 <i>Tip: If you change your mind, just send any other command to cancel.</i>",
-      ].join("\n"),
-    );
-  };
-
-  bot.command(CREATE_ASSISTANT_COMMAND, createAssistantCommandHandler);
-
-  const listAssistantCommandHandler = async (ctx: Context): Promise<void> => {
+  bot.command(LIST_ASSISTANT_COMMAND, async (ctx) => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
     await ensureTelegramUserViaApi(telegramUserId, ctx.from?.username ?? null);
-    // 清除 token 输入状态
     await clearTokenInputPending(telegramUserId);
     const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
 
     if (!assistants.length) {
       await replyHtml(
         ctx,
-        "🧸 <b>No assistant bots yet.</b>\nSend <code>/create_claw_assistant</code> to get started.",
+        "No assistant yet. Send /create_claw_assistant to get started.",
       );
       return;
     }
 
-    // 显示所有 assistants
     for (let i = 0; i < assistants.length; i++) {
       const assistant = assistants[i];
       if (!assistant) continue;
@@ -471,30 +307,22 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
       await replyHtml(
         ctx,
         [
-          `<b>Your Assistant Bot ${assistants.length > 1 ? `#${i + 1}` : ""}</b>`,
+          `<b>Your Assistant${assistants.length > 1 ? ` #${i + 1}` : ""}</b>`,
           "",
-          `🤖 <b>Bot:</b> @${assistant.assistant_bot_username}`,
-          `🔗 <b>Link:</b> https://t.me/${assistant.assistant_bot_username}`,
           `📊 <b>Status:</b> ${assistant.container_status || "unknown"}`,
           ...(assistant.litellm_key_alias
             ? [`🔐 <b>LiteLLM Key:</b> ${assistant.litellm_key_alias}`]
             : []),
-          "",
-          "💡 <b>Tip:</b> You can update your bot token by running /create_claw_assistant again.",
         ].join("\n"),
         { reply_markup: keyboard },
       );
     }
-  };
-
-  bot.command(LIST_ASSISTANT_COMMAND, listAssistantCommandHandler);
+  });
 
   bot.command("gateway", async (ctx) => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
     await ensureTelegramUserViaApi(telegramUserId, ctx.from?.username ?? null);
-    // 清除 token 输入状态
-    await clearTokenInputPending(telegramUserId);
     const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
 
     if (!assistants.length) {
@@ -723,16 +551,12 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
 
       await ctx.editMessageText(
         [
-          "<b>Your Assistant Bot</b>",
+          "<b>Your Assistant</b>",
           "",
-          `🤖 <b>Bot:</b> @${assistant.assistant_bot_username}`,
-          `🔗 <b>Link:</b> https://t.me/${assistant.assistant_bot_username}`,
           `📊 <b>Status:</b> ${assistant.container_status || "unknown"}`,
           ...(assistant.litellm_key_alias
             ? [`🔐 <b>LiteLLM Key:</b> ${assistant.litellm_key_alias}`]
             : []),
-          "",
-          "💡 <b>Tip:</b> You can update your bot token by running /create_claw_assistant again.",
         ].join("\n"),
         {
           parse_mode: "HTML",
@@ -760,34 +584,27 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
       return;
     }
 
-    const rawText = ctx.message.text.trim();
-    if (!rawText) {
-      await replyHtml(ctx, "Please send your BotFather token as plain text.");
-      return;
-    }
+    await clearTokenInputPending(telegramUserId);
 
+    const rawText = ctx.message.text.trim();
     if (rawText.startsWith("/")) {
-      // 用户执行了其他命令，清除 token 输入状态
-      await clearTokenInputPending(telegramUserId);
       await next();
       return;
     }
 
-    const token = parseAssistantToken(rawText);
-    if (!token) {
+    // Legacy compat: user pasted a bot token from old flow
+    if (parseAssistantToken(rawText)) {
       await replyHtml(
         ctx,
         [
-          "<b>This does not look like a valid BotFather token.</b>",
-          "Please resend it in this format: <code>123456789:ABCDefghIJKLmnopQRSTuvwxYZ</code>",
+          "No need to enter a bot token — we've simplified the setup!",
+          "",
+          "Send /create_claw_assistant to create your assistant directly.",
         ].join("\n"),
       );
       return;
     }
 
-    const created = await provisionAssistantFromToken(ctx, token);
-    if (created) {
-      await clearTokenInputPending(telegramUserId);
-    }
+    await next();
   });
 };
