@@ -54,7 +54,9 @@ const welcomeMessage = (): string =>
     "Send /create_claw_assistant to get started.",
   ].join("\n");
 
-const parseAssistantToken = (text: string | undefined): string | null => {
+const parseAssistantToken = (
+  text: string | undefined,
+): { token: string; id: number } | null => {
   if (!text) return null;
   const candidate = text
     .trim()
@@ -62,11 +64,32 @@ const parseAssistantToken = (text: string | undefined): string | null => {
     .trim();
   const normalized = candidate.replace(/\s+/g, "");
   if (!TELEGRAM_BOT_TOKEN_PATTERN.test(normalized)) return null;
-  return normalized;
+
+  // 从 token 中提取 bot ID (token 格式: 123456789:ABCdef...)
+  const parts = normalized.split(":");
+  const botId = Number.parseInt(parts[0] || "", 10);
+  if (!Number.isFinite(botId)) return null;
+
+  return { token: normalized, id: botId };
 };
 
 // 使用数据库存储待处理动作（支持集群部署）
 import { pool } from "../common/db/core.js";
+
+const markTokenInputPending = async (telegramUserId: number): Promise<void> => {
+  const PENDING_TOKEN_INPUT_TTL_MS = 10 * 60 * 1000; // 10分钟
+  const expiresAt = new Date(Date.now() + PENDING_TOKEN_INPUT_TTL_MS);
+
+  await pool.query(
+    `INSERT INTO user_pending_actions (user_id, action_type, expires_at)
+     SELECT id, 'token_input', $2
+     FROM users
+     WHERE telegram_user_id = $1
+     ON CONFLICT (user_id, action_type) 
+     DO UPDATE SET expires_at = EXCLUDED.expires_at, created_at = NOW()`,
+    [telegramUserId, expiresAt],
+  );
+};
 
 const clearTokenInputPending = async (
   telegramUserId: number,
@@ -539,7 +562,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
       { parse_mode: "HTML" },
     );
 
-    // 标记等待 token 输入（需要实现这个函数）
+    await markTokenInputPending(telegramUserId);
     await ctx.answerCallbackQuery();
   });
 
@@ -733,19 +756,116 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
       return;
     }
 
-    // Legacy compat: user pasted a bot token from old flow
-    if (parseAssistantToken(rawText)) {
+    // 处理用户输入的 bot token (Advanced 模式)
+    const tokenParsed = parseAssistantToken(rawText);
+    if (!tokenParsed) {
       await replyHtml(
         ctx,
         [
-          "No need to enter a bot token — we've simplified the setup!",
+          "❌ <b>Invalid bot token format</b>",
           "",
-          "Send /create_claw_assistant to create your assistant directly.",
+          "Bot tokens look like: <code>123456789:ABCdefGHIjklMNOpqrsTUVwxyz</code>",
+          "",
+          "Please:",
+          "• Get your token from @BotFather",
+          "• Copy the entire token",
+          "• Send it here",
+          "",
+          "Or send /create_claw_assistant to start over.",
         ].join("\n"),
       );
       return;
     }
 
-    await next();
+    // 创建助理
+    await replyHtml(ctx, "🔄 <b>Setting up your assistant...</b>");
+
+    try {
+      await createAssistantWithoutContainerViaApi({
+        ownerTelegramUserId: telegramUserId,
+        ownerTelegramUsername: ctx.from?.username ?? null,
+        assistantBotId: tokenParsed.id,
+        assistantBotToken: tokenParsed.token,
+        assistantBotUsername: "", // 会自动从 Telegram 获取
+      });
+
+      // 创建成功，生成支付链接
+      const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
+      const assistantId = assistants[0]?.id;
+
+      const paymentLink = await safeCreatePaymentLink(
+        telegramUserId,
+        ctx.from?.username ?? null,
+        assistantId,
+      );
+
+      if (!paymentLink) {
+        await replyHtml(
+          ctx,
+          [
+            "✅ <b>Your assistant is registered.</b>",
+            "",
+            "⚠️ Payment is temporarily unavailable. Please try again shortly.",
+          ].join("\n"),
+        );
+        return;
+      }
+
+      const keyboard = new InlineKeyboard().url(
+        "💳 Subscribe to activate",
+        paymentLink,
+      );
+
+      await replyHtml(
+        ctx,
+        [
+          "✅ <b>Assistant created successfully!</b>",
+          "",
+          `🤖 Bot ID: ${tokenParsed.id}`,
+          "",
+          "💡 <b>Next step:</b> Subscribe to activate your assistant.",
+          "",
+          "After subscribing, your assistant will be ready to use!",
+        ].join("\n"),
+        { reply_markup: keyboard },
+      );
+    } catch (error: unknown) {
+      const is409 = error instanceof BackendApiError && error.status === 409;
+      const isDup =
+        error instanceof Error &&
+        (error.message === "USER_ALREADY_HAS_ASSISTANT" ||
+          error.message === "ASSISTANT_BOT_ALREADY_OWNED");
+
+      if (is409 || isDup) {
+        await replyHtml(
+          ctx,
+          [
+            "⚠️ <b>Assistant already exists</b>",
+            "",
+            error.message === "ASSISTANT_BOT_ALREADY_OWNED"
+              ? "This bot is already being used by another user."
+              : "You already have an assistant registered.",
+            "",
+            "Send /list_claw_assistant to view your assistants.",
+          ].join("\n"),
+        );
+        return;
+      }
+
+      console.error("Failed to create assistant from token", error);
+      await replyHtml(
+        ctx,
+        [
+          "❌ <b>Failed to create assistant</b>",
+          "",
+          "Please make sure:",
+          "• The bot token is valid",
+          "• The bot exists in @BotFather",
+          "• The token has not been revoked",
+          "",
+          "Send /create_claw_assistant to try again.",
+        ].join("\n"),
+      );
+    }
   });
 };
