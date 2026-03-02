@@ -1,4 +1,3 @@
-import net from "node:net";
 import { config } from "../common/config.js";
 import { updateAssistant } from "../common/db/index.js";
 import { pool } from "../common/db/core.js";
@@ -6,16 +5,32 @@ import { listMachines } from "./providers/fly/fly_client.js";
 import { sendTelegramMessage } from "../telegram/notify.js";
 import type { AssistantRecord } from "../../types/index.js";
 
-function quickTcpProbe(host: string, port: number, timeoutMs: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = net.createConnection({ host, port }, () => {
-      socket.end();
-      resolve(true);
+/**
+ * Send a minimal HTTP request to verify the upstream is actually handling
+ * connections, not just a TCP proxy sitting in front of it.
+ * The IPv6 proxy we run in bootstrap always accepts TCP but will
+ * ECONNRESET if the real OpenClaw listener isn't up yet.
+ */
+function quickHttpProbe(host: string, port: number, path: string, timeoutMs: number): Promise<boolean> {
+  const urlHost = host.includes(":") ? `[${host}]` : host;
+  const url = `http://${urlHost}:${port}${path}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+    signal: controller.signal,
+  })
+    .then((res) => {
+      clearTimeout(timer);
+      // Any HTTP response (even 4xx) means the upstream is alive
+      return res.status > 0;
+    })
+    .catch(() => {
+      clearTimeout(timer);
+      return false;
     });
-    socket.setTimeout(timeoutMs);
-    socket.on("timeout", () => { socket.destroy(); resolve(false); });
-    socket.on("error", () => { socket.destroy(); resolve(false); });
-  });
 }
 
 const SYNC_BATCH_SIZE = 500; // 每批处理 500 个，避免内存占用过大
@@ -192,7 +207,7 @@ async function performStateSync(): Promise<{
               const privateIp = containerId.split("|")[1]?.trim();
               if (privateIp) {
                 const webhookPort = 8787;
-                const reachable = await quickTcpProbe(privateIp, webhookPort, 3000);
+                const reachable = await quickHttpProbe(privateIp, webhookPort, "/telegram-webhook", 3000);
                 if (!reachable) {
                   // Machine started but webhook not listening yet — skip this cycle
                   continue;
