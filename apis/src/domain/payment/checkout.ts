@@ -328,66 +328,11 @@ export const createCheckoutSession = async (
       }
 
       if (stripeSubActive && stripeSubscription) {
-        if (selectedPlan.plan_code === currentPlan.plan_code) {
-          throw new DomainError(
-            "INVALID_INPUT",
-            "You are already on this plan",
-          );
-        }
-
-        const isUpgrade =
-          selectedPlan.price_cents_monthly > currentPlan.price_cents_monthly;
-
-        if (!isUpgrade) {
-          // DOWNGRADE: update price immediately with no proration.
-          // User keeps current credits for the rest of this period.
-          // Next invoice charges the lower price; invoice.paid resets spend + budget.
-          const subscriptionItemId =
-            readCurrentSubscriptionItemId(stripeSubscription);
-          if (!subscriptionItemId) {
-            throw new DomainError(
-              "INTERNAL",
-              "Could not determine subscription item for downgrade",
-              500,
-            );
-          }
-          await stripe.subscriptions.update(
-            existingSub.stripe_subscription_id,
-            {
-              items: [{ id: subscriptionItemId, price: stripePriceId }],
-              proration_behavior: "none",
-              metadata: {
-                telegram_user_id: telegramUserId,
-                telegram_username: telegramUsername || "",
-                plan: selectedPlan.plan_code,
-              },
-            },
-          );
-
-          console.log("[payment] Downgrade scheduled (next billing cycle)", {
-            telegramUserId,
-            from: currentPlan.plan_code,
-            to: selectedPlan.plan_code,
-          });
-
-          return {
-            url: `${landingBaseUrl}/api/payment/success?mode=downgrade_scheduled`,
-            action: "downgrade",
-            message: `Downgraded to ${selectedPlan.display_name}. New credits apply at next billing cycle.`,
-          };
-        }
-
-        // UPGRADE: cancel old subscription immediately (no refund), then create new checkout.
-        // New 30-day billing period starts fresh after payment.
-        console.log("[payment] Upgrade: canceling old subscription", {
-          telegramUserId,
-          from: currentPlan.plan_code,
-          to: selectedPlan.plan_code,
-          oldSubscriptionId: existingSub.stripe_subscription_id,
-        });
-
-        await stripe.subscriptions.cancel(existingSub.stripe_subscription_id);
-        // Fall through to create new checkout session below
+        // 已有活跃订阅，暂不支持升降配
+        throw new DomainError(
+          "INVALID_INPUT",
+          `You already have an active ${currentPlan.display_name} subscription. Please manage your subscription through the bot's /my_subscription command.`,
+        );
       }
     }
   }

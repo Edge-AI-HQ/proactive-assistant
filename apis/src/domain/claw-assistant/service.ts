@@ -40,9 +40,16 @@ const ensureAssistantRecord = async (
       throw new Error("USER_ALREADY_HAS_ASSISTANT");
     }
 
-    // 如果用户已有助理，允许更新 bot 信息（从 Quick Start 升级到 Advanced）
-    // 或者更新 bot token（重新绑定）
+    // 如果用户已有助理，只允许以下情况：
+    // 1. 从 Quick Start 升级到 Advanced（传入了新的 bot ID）
+    // 2. 更新 Advanced 模式的 bot token
     if (assistantBotId !== null && assistantBotId !== undefined) {
+      // 如果已经绑定了同一个 bot，不允许重复绑定
+      if (existing.assistant_bot_id === assistantBotId) {
+        throw new Error("USER_ALREADY_HAS_ASSISTANT");
+      }
+
+      // 升级或更新 bot
       const defaultContainerName = containerNameForAssistant(assistantBotId);
       return (
         (await updateAssistant(existing.id, {
@@ -57,8 +64,8 @@ const ensureAssistantRecord = async (
       );
     }
 
-    // 已有助理且不更新 bot 信息，直接返回
-    return existing;
+    // 已有助理且没有传入新 bot（尝试重复创建 Quick Start）
+    throw new Error("USER_ALREADY_HAS_ASSISTANT");
   }
 
   // 用户还没有助理，创建新的
