@@ -63,8 +63,9 @@ function installTelegramFetchProxy(api, routerUrl) {
 
       if (rawUrl) {
         const targetUrl = new URL(rawUrl);
-        const methodName = extractTelegramMethod(targetUrl);
-        if (methodName) {
+        const telegramApiPath = extractTelegramApiPath(targetUrl);
+        if (telegramApiPath) {
+          const { methodName, botToken } = telegramApiPath;
           if (BLOCKED_TELEGRAM_METHODS.has(methodName)) {
             api.logger.warn(`Blocked Telegram method from OpenClaw: ${methodName}`);
             return new Response(JSON.stringify({ ok: true, result: true }), {
@@ -77,6 +78,7 @@ function installTelegramFetchProxy(api, routerUrl) {
             const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : {}));
             headers.delete('host');
             headers.delete('authorization');
+            headers.set('X-PinAI-Telegram-Bot-Token', botToken);
 
             const effectiveInit = {
               ...(input instanceof Request ? { method: input.method, body: input.body, redirect: input.redirect } : {}),
@@ -97,15 +99,20 @@ function installTelegramFetchProxy(api, routerUrl) {
   api.logger.info('Telegram fetch proxy patch installed');
 }
 
-function extractTelegramMethod(url) {
+function extractTelegramApiPath(url) {
   if (url.hostname !== 'api.telegram.org') {
     return null;
   }
-  const match = url.pathname.match(/^\/bot[^/]+\/([^/?#]+)/);
+  const match = url.pathname.match(/^\/bot([^/]+)\/([^/?#]+)/);
   if (!match) {
     return null;
   }
-  return match[1] || null;
+  const botToken = match[1] || '';
+  const methodName = match[2] || '';
+  if (!botToken || !methodName) {
+    return null;
+  }
+  return { methodName, botToken };
 }
 
 export default plugin;

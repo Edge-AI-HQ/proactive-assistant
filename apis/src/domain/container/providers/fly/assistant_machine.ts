@@ -86,6 +86,7 @@ const buildAssistantOpenclawConfigPayload = (
   liteLlmApiKey: string | null
 ): { config: UnknownRecord; json: string; hash: string } => {
   const { webhookUrl, webhookPath, webhookHost, webhookPort, pluginPath } = config.telegramRouter;
+  const privateWebhookPort = webhookPort + 1;
   const webhookSecret = config.telegram.webhookSecret;
   const openclawConfigContext = {
     openclaw: config.openclaw,
@@ -100,10 +101,12 @@ const buildAssistantOpenclawConfigPayload = (
     gatewayToken,
     gatewayBind: 'loopback',
     assistantBotToken,
+    publicBotToken: config.telegram.token,
     liteLlmApiKey,
     includeTelegramPlugin: true,
     telegramWebhookMode: true,
     telegramWebhookPort: webhookPort,
+    telegramPrivateWebhookPort: privateWebhookPort,
     ...(webhookUrl ? { telegramWebhookUrl: webhookUrl } : {}),
     ...(webhookSecret ? { telegramWebhookSecret: webhookSecret } : {}),
     ...(webhookPath ? { telegramWebhookPath: webhookPath } : {}),
@@ -309,6 +312,7 @@ export const shouldRecreateAssistantMachine = (
 export const createAssistantMachine = async (args: AssistantMachineCreateArgs): Promise<FlyMachine> => {
   const normalizedAssistantBotToken = normalizeAssistantToken(args.assistantBotToken);
   const normalizedWebhookPort = config.telegramRouter.webhookPort;
+  const normalizedPrivateWebhookPort = normalizedWebhookPort + 1;
   const openclawPayload = buildAssistantOpenclawConfigPayload(
     args.gatewayToken,
     normalizedAssistantBotToken,
@@ -319,6 +323,7 @@ export const createAssistantMachine = async (args: AssistantMachineCreateArgs): 
     OPENCLAW_USER_ID: `assistant-${args.assistantBotId}`,
     OPENCLAW_GATEWAY_PORT: String(config.openclaw.gatewayPort),
     OPENCLAW_TELEGRAM_WEBHOOK_PORT: String(normalizedWebhookPort),
+    OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT: String(normalizedPrivateWebhookPort),
     OPENCLAW_CONFIG_PATH: '/app/data/config/openclaw.json',
     OPENCLAW_STATE_DIR: '/app/data',
     NODE_COMPILE_CACHE: '/app/data/cache/node-compile-cache',
@@ -343,6 +348,7 @@ export const createAssistantMachine = async (args: AssistantMachineCreateArgs): 
     cacheBootstrap,
     `node -e 'const net=require("net");const port=Number(process.env.OPENCLAW_GATEWAY_PORT||${config.openclaw.gatewayPort});const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});' >/tmp/fly-ipv6-proxy.log 2>&1 & sleep 0.2`,
     `node -e 'const net=require("net");const port=Number(process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT||${normalizedWebhookPort});const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-tg-webhook-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-tg-webhook-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});' >/tmp/fly-tg-webhook-ipv6-proxy.log 2>&1 & sleep 0.2`,
+    `node -e 'const net=require("net");const port=Number(process.env.OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT||${normalizedPrivateWebhookPort});const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-tg-private-webhook-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-tg-private-webhook-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});' >/tmp/fly-tg-private-webhook-ipv6-proxy.log 2>&1 & sleep 0.2`,
     'exec openclaw gateway --bind loopback'
   ].join(' && ');
 

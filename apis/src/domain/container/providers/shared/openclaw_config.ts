@@ -9,6 +9,14 @@ import {
 export type GatewayBindMode = 'lan' | 'loopback';
 
 type OpenclawConfigContext = Pick<ContainerManagerConfig, 'openclaw' | 'litellm' | 'elevenLabs'>;
+type TelegramWebhookConfig = {
+  enabled?: boolean;
+  url?: string;
+  secret?: string;
+  path?: string;
+  host?: string;
+  port?: number;
+};
 
 export const buildGatewayConfigSection = (
   context: OpenclawConfigContext,
@@ -58,14 +66,7 @@ export const buildTalkConfigSection = (context: OpenclawConfigContext): UnknownR
 
 export const buildTelegramChannelConfigSection = (
   assistantBotToken: string,
-  webhookConfig?: {
-    enabled?: boolean;
-    url?: string;
-    secret?: string;
-    path?: string;
-    host?: string;
-    port?: number;
-  }
+  webhookConfig?: TelegramWebhookConfig
 ): UnknownRecord => {
   const config: UnknownRecord = {
     enabled: webhookConfig?.enabled ?? true,
@@ -141,6 +142,7 @@ interface BuildAssistantOpenclawConfigOptions {
   gatewayToken: string;
   gatewayBind: GatewayBindMode;
   assistantBotToken?: string | null;
+  publicBotToken?: string | null;
   liteLlmApiKey?: string | null;
   includeTelegramPlugin?: boolean;
   telegramWebhookMode?: boolean;
@@ -149,8 +151,23 @@ interface BuildAssistantOpenclawConfigOptions {
   telegramWebhookPath?: string;
   telegramWebhookHost?: string;
   telegramWebhookPort?: number;
+  telegramPrivateWebhookPort?: number;
   telegramRouterPluginPath?: string;
 }
+
+const normalizeWebhookPath = (value?: string): string => {
+  const trimmed = (value || '').trim();
+  if (!trimmed) return '/telegram-webhook';
+  return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+};
+
+const withWebhookConfig = (
+  base: TelegramWebhookConfig,
+  overrides: Partial<TelegramWebhookConfig>
+): TelegramWebhookConfig => ({
+  ...base,
+  ...overrides
+});
 
 export const buildAssistantOpenclawConfig = (
   context: OpenclawConfigContext,
@@ -162,6 +179,7 @@ export const buildAssistantOpenclawConfig = (
   }
 
   const normalizedAssistantBotToken = (options.assistantBotToken || '').trim();
+  const normalizedPublicBotToken = (options.publicBotToken || '').trim();
   const normalizedLiteLLMApiKey = (options.liteLlmApiKey || '').trim();
   if (context.litellm.enabled && !normalizedLiteLLMApiKey) {
     throw new Error('LiteLLM is enabled but no API key is available for OpenClaw config model routing.');
@@ -185,7 +203,64 @@ export const buildAssistantOpenclawConfig = (
     next.agents = liteLlmSections.agents;
   }
 
-  if (normalizedAssistantBotToken) {
+  const baseWebhookConfig: TelegramWebhookConfig = { enabled: true };
+  if (options.telegramWebhookMode) {
+    const normalizedWebhookPath = normalizeWebhookPath(options.telegramWebhookPath);
+    const normalizedPrivateWebhookPort =
+      typeof options.telegramPrivateWebhookPort === 'number' && Number.isFinite(options.telegramPrivateWebhookPort)
+        ? options.telegramPrivateWebhookPort
+        : typeof options.telegramWebhookPort === 'number' && Number.isFinite(options.telegramWebhookPort)
+          ? options.telegramWebhookPort + 1
+          : undefined;
+
+    baseWebhookConfig.path = normalizedWebhookPath;
+
+    if (options.telegramWebhookUrl?.trim()) {
+      baseWebhookConfig.url = options.telegramWebhookUrl.trim();
+    }
+    if (options.telegramWebhookSecret?.trim()) {
+      baseWebhookConfig.secret = options.telegramWebhookSecret.trim();
+    }
+    if (options.telegramWebhookHost?.trim()) {
+      baseWebhookConfig.host = options.telegramWebhookHost.trim();
+    }
+    if (
+      typeof options.telegramWebhookPort === 'number' &&
+      Number.isFinite(options.telegramWebhookPort)
+    ) {
+      baseWebhookConfig.port = options.telegramWebhookPort;
+    }
+
+    if (normalizedPublicBotToken && normalizedAssistantBotToken) {
+      const accounts: Record<string, UnknownRecord> = {};
+      accounts.default = buildTelegramChannelConfigSection(normalizedPublicBotToken, baseWebhookConfig);
+      accounts.private = buildTelegramChannelConfigSection(
+        normalizedAssistantBotToken,
+        withWebhookConfig(baseWebhookConfig, {
+          path: `${normalizedWebhookPath}/private`,
+          ...(typeof normalizedPrivateWebhookPort === 'number'
+            ? { port: normalizedPrivateWebhookPort }
+            : {})
+        })
+      );
+
+      next.channels = {
+        telegram: {
+          enabled: true,
+          dmPolicy: 'open',
+          allowFrom: ['*'],
+          groupPolicy: 'allowlist',
+          streaming: 'off',
+          accounts
+        }
+      };
+      next.session = {
+        dmScope: 'per-account-channel-peer'
+      };
+    }
+  }
+
+  if (!next.channels && normalizedAssistantBotToken) {
     const telegramWebhookConfig: Record<string, unknown> = { enabled: true };
     if (options.telegramWebhookMode) {
       const mapping: [string, unknown][] = [
@@ -210,7 +285,7 @@ export const buildAssistantOpenclawConfig = (
         telegramWebhookConfig
       )
     };
-  } else if (options.telegramWebhookMode) {
+  } else if (!next.channels && options.telegramWebhookMode) {
     // Quick Start mode: no dedicated bot token, but OpenClaw Doctor will
     // auto-enable Telegram via TELEGRAM_BOT_TOKEN env. We still need to
     // inject webhook params so it listens on the webhook port instead of

@@ -18,8 +18,16 @@ const OPENCLAW_TELEGRAM_WEBHOOK_PORT = Number.parseInt(
   process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT || "8787",
   10,
 );
+const OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT = Number.parseInt(
+  process.env.OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT ||
+    String(OPENCLAW_TELEGRAM_WEBHOOK_PORT + 1),
+  10,
+);
 const OPENCLAW_TELEGRAM_WEBHOOK_PATH =
   process.env.OPENCLAW_TELEGRAM_WEBHOOK_PATH || "/telegram-webhook";
+const OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PATH =
+  process.env.OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PATH ||
+  `${normalizeWebhookPath(OPENCLAW_TELEGRAM_WEBHOOK_PATH)}/private`;
 const FLY_APP_NAME = process.env.OPENCLAW_FLY_APP_NAME || "pinclaw-api-dev";
 const GUIDE_BOT_WEBHOOK_URL = process.env.GUIDE_BOT_WEBHOOK_URL || "";
 const BOT_COMMANDS = new Set([
@@ -52,9 +60,16 @@ serve({
       return new Response("OK", { status: 200 });
     }
 
-    // Telegram webhook 入口
-    if (url.pathname === "/webhook/telegram" && req.method === "POST") {
-      return handleTelegramWebhook(req);
+    // Telegram webhook 入口（public/private）
+    if (
+      (url.pathname === "/webhook/telegram" ||
+        url.pathname === "/webhook/telegram/public") &&
+      req.method === "POST"
+    ) {
+      return handleTelegramWebhook(req, "public");
+    }
+    if (url.pathname === "/webhook/telegram/private" && req.method === "POST") {
+      return handleTelegramWebhook(req, "private");
     }
 
     // Telegram API 代理（供 OpenClaw 发送消息）
@@ -66,7 +81,9 @@ serve({
   },
 });
 
-async function handleTelegramWebhook(req: Request) {
+type WebhookSource = "public" | "private";
+
+async function handleTelegramWebhook(req: Request, source: WebhookSource) {
   try {
     // 验证 webhook secret
     const secretToken = req.headers.get("X-Telegram-Bot-Api-Secret-Token");
@@ -88,7 +105,7 @@ async function handleTelegramWebhook(req: Request) {
     console.log(
       `📨 inbound ts=${nowIso} tg_time=${formatUnixTimestamp(telegramDate)} ` +
         `update_id=${update?.update_id ?? "n/a"} chat_id=${chatId ?? "n/a"} ` +
-        `user=${fromUser ?? "unknown"} text="${truncateForLog(text, 160)}"`,
+        `source=${source} user=${fromUser ?? "unknown"} text="${truncateForLog(text, 160)}"`,
     );
 
     if (!chatId) {
@@ -97,14 +114,14 @@ async function handleTelegramWebhook(req: Request) {
     }
 
     // Forward bot commands to the guide bot (APIs service) for handling
-    if (isBotCommand(update) && GUIDE_BOT_WEBHOOK_URL) {
+    if (source === "public" && isBotCommand(update) && GUIDE_BOT_WEBHOOK_URL) {
       console.log(`🤖 Forwarding command to guide bot: ${text}`);
       await forwardToGuideBot(update);
       return jsonResponse({ ok: true });
     }
 
     // Forward callback queries (inline button presses) to guide bot
-    if (update.callback_query && GUIDE_BOT_WEBHOOK_URL) {
+    if (source === "public" && update.callback_query && GUIDE_BOT_WEBHOOK_URL) {
       console.log(
         `🤖 Forwarding callback_query to guide bot: ${update.callback_query.data}`,
       );
@@ -118,7 +135,7 @@ async function handleTelegramWebhook(req: Request) {
       console.log(`⚠️ No user record for chat_id: ${chatId}`);
 
       // 如果有引导 bot，转发给它处理（可能是 token 输入等待注册流程）
-      if (GUIDE_BOT_WEBHOOK_URL) {
+      if (source === "public" && GUIDE_BOT_WEBHOOK_URL) {
         console.log(`🤖 Forwarding to guide bot for registration handling`);
         await forwardToGuideBot(update);
         return jsonResponse({ ok: true });
@@ -135,7 +152,7 @@ async function handleTelegramWebhook(req: Request) {
       console.log(`⚠️ User ${chatId} has assistant but no active container`);
 
       // 转发给引导 bot，让它处理 token 输入、支付链接等
-      if (GUIDE_BOT_WEBHOOK_URL) {
+      if (source === "public" && GUIDE_BOT_WEBHOOK_URL) {
         console.log(
           `🤖 Forwarding to guide bot for subscription/token handling`,
         );
@@ -155,7 +172,11 @@ async function handleTelegramWebhook(req: Request) {
         console.log(
           `⚠️ Container for chat_id ${chatId} is ${userState.runtimeStatus} — attempting optimistic forward`,
         );
-        const forwarded = await forwardToOpenClaw(userState.container, update);
+        const forwarded = await forwardToOpenClaw(
+          userState.container,
+          update,
+          source,
+        );
         if (forwarded) {
           return jsonResponse({ ok: true });
         }
@@ -172,7 +193,7 @@ async function handleTelegramWebhook(req: Request) {
 
     console.log(`✅ Found container:`, userState.container);
 
-    const forwarded = await forwardToOpenClaw(userState.container, update);
+    const forwarded = await forwardToOpenClaw(userState.container, update, source);
     if (!forwarded) {
       console.error(`❌ Forward ultimately failed for chat_id=${chatId}`);
       await sendTelegramMessage(
@@ -194,6 +215,14 @@ const BLOCKED_TG_METHODS = new Set([
   "setwebhook",
   "deletewebhook",
 ]);
+
+function resolveProxyBotToken(req: Request): string {
+  const headerToken = req.headers.get("X-PinAI-Telegram-Bot-Token")?.trim();
+  if (headerToken && /^[0-9]+:[A-Za-z0-9_-]{20,}$/.test(headerToken)) {
+    return headerToken;
+  }
+  return TELEGRAM_BOT_TOKEN;
+}
 
 async function handleTelegramApiProxy(req: Request, url: URL) {
   try {
@@ -243,8 +272,9 @@ async function handleTelegramApiProxy(req: Request, url: URL) {
         `source=${sourceHint} content_type=${bodyInfo.contentType} body_bytes=${body?.byteLength ?? 0}`,
     );
 
+    const botToken = resolveProxyBotToken(req);
     // 转发到 Telegram API
-    const telegramUrl = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}${url.search}`;
+    const telegramUrl = `https://api.telegram.org/bot${botToken}/${method}${url.search}`;
     const outgoingHeaders = new Headers();
     const contentType = req.headers.get("content-type");
     if (contentType) {
@@ -419,6 +449,7 @@ async function findUserState(chatId: number): Promise<UserState> {
 async function forwardToOpenClaw(
   container: any,
   update: any,
+  source: WebhookSource,
 ): Promise<boolean> {
   try {
     const runtime = parseFlyRuntimeRef(container.container_id);
@@ -431,9 +462,9 @@ async function forwardToOpenClaw(
       ...(runtime.privateIp ? [runtime.privateIp] : []),
       `${runtime.machineId}.vm.${FLY_APP_NAME}.internal`,
     ];
-    const candidateUrls = buildWebhookCandidateUrls(hostCandidates);
+    const candidateUrls = buildWebhookCandidateUrls(hostCandidates, source);
 
-    console.log(`🎯 Forwarding candidates:`);
+    console.log(`🎯 Forwarding candidates (source=${source}):`);
     candidateUrls.forEach((url) => console.log(`   - ${url}`));
     console.log(`   Machine ID: ${runtime.machineId}`);
     if (runtime.privateIp) {
@@ -449,6 +480,7 @@ async function forwardToOpenClaw(
           headers: {
             "Content-Type": "application/json",
             "X-Telegram-Bot-Api-Secret-Token": WEBHOOK_SECRET,
+            "X-PinAI-Source": source,
           },
           body: JSON.stringify(update),
           signal: AbortSignal.timeout(20000),
@@ -470,8 +502,12 @@ async function forwardToOpenClaw(
         const errName = (error as { name?: string } | null)?.name || "";
         // OpenClaw webhook handler may process synchronously and exceed the timeout;
         // treat timeout on the webhook port as "probably accepted" to avoid dropping the update.
+        const expectedWebhookPort =
+          source === "private"
+            ? OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT
+            : OPENCLAW_TELEGRAM_WEBHOOK_PORT;
         const isWebhookPort = webhookUrl.includes(
-          `:${OPENCLAW_TELEGRAM_WEBHOOK_PORT}/`,
+          `:${expectedWebhookPort}/`,
         );
         if (errName === "TimeoutError" && isWebhookPort) {
           console.warn(
@@ -495,12 +531,23 @@ async function forwardToOpenClaw(
   }
 }
 
-function buildWebhookCandidateUrls(targetHosts: string[]): string[] {
-  const path = normalizeWebhookPath(OPENCLAW_TELEGRAM_WEBHOOK_PATH);
+function buildWebhookCandidateUrls(
+  targetHosts: string[],
+  source: WebhookSource,
+): string[] {
+  const path = normalizeWebhookPath(
+    source === "private"
+      ? OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PATH
+      : OPENCLAW_TELEGRAM_WEBHOOK_PATH,
+  );
+  const port =
+    source === "private"
+      ? OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT
+      : OPENCLAW_TELEGRAM_WEBHOOK_PORT;
   const urls: string[] = [];
   for (const host of targetHosts) {
     const urlHost = formatHostForUrl(host);
-    urls.push(`http://${urlHost}:${OPENCLAW_TELEGRAM_WEBHOOK_PORT}${path}`);
+    urls.push(`http://${urlHost}:${port}${path}`);
   }
   return [...new Set(urls)];
 }

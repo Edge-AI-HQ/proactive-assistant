@@ -68,8 +68,9 @@ function installTelegramFetchProxy(api: OpenClawPluginApi, routerUrl: string) {
 
       if (rawUrl) {
         const targetUrl = new URL(rawUrl);
-        const methodName = extractTelegramMethod(targetUrl);
-        if (methodName) {
+        const telegramApiPath = extractTelegramApiPath(targetUrl);
+        if (telegramApiPath) {
+          const { methodName, botToken } = telegramApiPath;
           if (BLOCKED_TELEGRAM_METHODS.has(methodName)) {
             api.logger.warn(`Blocked Telegram method from OpenClaw: ${methodName}`);
             return new Response(JSON.stringify({ ok: true, result: true }), {
@@ -82,6 +83,7 @@ function installTelegramFetchProxy(api: OpenClawPluginApi, routerUrl: string) {
             const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : {}));
             headers.delete('host');
             headers.delete('authorization');
+            headers.set('X-PinAI-Telegram-Bot-Token', botToken);
 
             const effectiveInit: RequestInit = {
               ...(input instanceof Request ? { method: input.method, body: input.body, redirect: input.redirect } : {}),
@@ -102,15 +104,20 @@ function installTelegramFetchProxy(api: OpenClawPluginApi, routerUrl: string) {
   api.logger.info('Telegram fetch proxy patch installed');
 }
 
-function extractTelegramMethod(url: URL): string | null {
+function extractTelegramApiPath(url: URL): { methodName: string; botToken: string } | null {
   if (url.hostname !== 'api.telegram.org') {
     return null;
   }
-  const match = url.pathname.match(/^\/bot[^/]+\/([^/?#]+)/);
+  const match = url.pathname.match(/^\/bot([^/]+)\/([^/?#]+)/);
   if (!match) {
     return null;
   }
-  return match[1] || null;
+  const botToken = match[1] || '';
+  const methodName = match[2] || '';
+  if (!botToken || !methodName) {
+    return null;
+  }
+  return { methodName, botToken };
 }
 
 export default plugin;
