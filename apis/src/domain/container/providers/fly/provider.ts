@@ -201,8 +201,11 @@ const createAssistantMachine = async (
   gatewayToken: string,
   liteLlmApiKey = resolveAssistantLiteLLMApiKey(assistant),
 ): Promise<FlyMachine> => {
+  // Quick Start 模式下 assistant_bot_id 为 NULL，使用 assistant.id 作为标识
+  const botIdForContainer = assistant.assistant_bot_id ?? assistant.id;
+
   return provisionAssistantMachine({
-    assistantBotId: assistant.assistant_bot_id,
+    assistantBotId: botIdForContainer,
     machineName: resolveAssistantMachineName(assistant),
     gatewayToken,
     assistantBotToken: assistant.assistant_bot_token,
@@ -335,7 +338,10 @@ const runEnsureAssistantMachine = async (
           startedMachine.id,
           startedMachine.private_ip,
         );
-        const probeTimeout = Math.max(config.fly.gatewayProbeTimeoutMs, 600_000);
+        const probeTimeout = Math.max(
+          config.fly.gatewayProbeTimeoutMs,
+          600_000,
+        );
         const portReady = await waitForPort(
           target.host,
           target.port,
@@ -351,7 +357,9 @@ const runEnsureAssistantMachine = async (
           : false;
 
         // Also wait for the Telegram webhook port (8787) to be reachable
-        const webhookPort = Number(process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT || "8787");
+        const webhookPort = Number(
+          process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT || "8787",
+        );
         const webhookReady = gatewayOk
           ? await waitForPort(target.host, webhookPort, 120_000)
           : false;
@@ -369,7 +377,10 @@ const runEnsureAssistantMachine = async (
             Number(assistant.owner_telegram_user_id),
             `✅ <b>Your assistant is ready!</b>\n\nYou can start chatting now.`,
           ).catch((e) =>
-            console.warn(`[fly-probe] notify failed for assistant ${assistant.id}`, e),
+            console.warn(
+              `[fly-probe] notify failed for assistant ${assistant.id}`,
+              e,
+            ),
           );
         }
       } catch (err) {

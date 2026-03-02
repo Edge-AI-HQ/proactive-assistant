@@ -371,14 +371,15 @@ const ensureAssistantDockerContainer = async (
   assistant: AssistantContainerRuntimeRef,
   gatewayToken: string,
 ): Promise<{ containerId: string; ready: boolean }> => {
-  const fallbackContainerName = containerNameForAssistant(
-    assistant.assistant_bot_id,
-  );
+  // Quick Start 模式下 assistant_bot_id 为 NULL，使用 assistant.id 作为标识
+  const botIdForContainer = assistant.assistant_bot_id ?? assistant.id;
+
+  const fallbackContainerName = containerNameForAssistant(botIdForContainer);
   const containerName =
     assistant.container_name?.trim() || fallbackContainerName;
   let container = await resolveContainer(assistant.container_id, containerName);
 
-  const assistantDirs = getAssistantContainerDirs(assistant.assistant_bot_id);
+  const assistantDirs = getAssistantContainerDirs(botIdForContainer);
   const assistantConfigDir = assistantDirs.configDir;
   const assistantDataDir = assistantDirs.dataDir;
   const assistantTmpDir = assistantDirs.tmpDir;
@@ -447,7 +448,7 @@ const ensureAssistantDockerContainer = async (
       name: containerName,
       Image: config.openclaw.image,
       Env: [
-        `OPENCLAW_USER_ID=assistant-${assistant.assistant_bot_id}`,
+        `OPENCLAW_USER_ID=assistant-${botIdForContainer}`,
         `OPENCLAW_GATEWAY_PORT=${config.openclaw.gatewayPort}`,
         "OPENCLAW_CONFIG_PATH=/app/config/openclaw.json",
         "OPENCLAW_STATE_DIR=/app/data",
@@ -505,9 +506,8 @@ const ensureAssistantDockerContainer = async (
 const destroyAssistantDockerContainer = async (
   assistant: AssistantContainerDestroyRef,
 ): Promise<{ deleted: boolean }> => {
-  const fallbackContainerName = containerNameForAssistant(
-    assistant.assistant_bot_id,
-  );
+  const botIdForContainer = assistant.assistant_bot_id ?? assistant.id;
+  const fallbackContainerName = containerNameForAssistant(botIdForContainer);
   const containerName =
     assistant.container_name?.trim() || fallbackContainerName;
 
@@ -560,9 +560,8 @@ const destroyAssistantDockerContainer = async (
 const stopAssistantDockerContainer = async (
   assistant: AssistantContainerDestroyRef,
 ): Promise<{ stopped: boolean }> => {
-  const fallbackContainerName = containerNameForAssistant(
-    assistant.assistant_bot_id,
-  );
+  const botIdForContainer = assistant.assistant_bot_id ?? assistant.id;
+  const fallbackContainerName = containerNameForAssistant(botIdForContainer);
   const containerName =
     assistant.container_name?.trim() || fallbackContainerName;
 
