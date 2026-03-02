@@ -6,6 +6,12 @@ const FETCH_PATCH_KEY = '__pinaiTelegramRouterFetchPatched__';
 const BLOCKED_TELEGRAM_METHODS = new Set([
   'setWebhook',
   'deleteWebhook',
+  'setMyCommands',
+  'deleteMyCommands',
+  'setMyDescription',
+  'setMyShortDescription',
+  'setMyName',
+  'setChatMenuButton',
 ]);
 
 const PASSTHROUGH_TELEGRAM_METHODS = new Set([
@@ -29,7 +35,7 @@ const plugin = {
     const routerUrl = process.env.TELEGRAM_ROUTER_URL || 'http://host.docker.internal:3001';
 
     api.logger.info(`Telegram Router Proxy enabled: ${routerUrl}`);
-    api.logger.info('TRP_VERSION_20260302B');
+    api.logger.info('TRP_VERSION_20260302C');
     installTelegramFetchProxy(api, routerUrl);
   }
 };
