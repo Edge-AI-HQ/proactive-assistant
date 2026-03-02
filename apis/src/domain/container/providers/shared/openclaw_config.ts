@@ -161,6 +161,12 @@ const normalizeWebhookPath = (value?: string): string => {
   return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
 };
 
+const toPrivateWebhookUrl = (value?: string): string | undefined => {
+  const trimmed = (value || '').trim();
+  if (!trimmed) return undefined;
+  return trimmed.endsWith('/private') ? trimmed : `${trimmed.replace(/\/+$/, '')}/private`;
+};
+
 const withWebhookConfig = (
   base: TelegramWebhookConfig,
   overrides: Partial<TelegramWebhookConfig>
@@ -234,9 +240,11 @@ export const buildAssistantOpenclawConfig = (
     if (normalizedPublicBotToken && normalizedAssistantBotToken) {
       const accounts: Record<string, UnknownRecord> = {};
       accounts.default = buildTelegramChannelConfigSection(normalizedPublicBotToken, baseWebhookConfig);
+      const privateWebhookUrl = toPrivateWebhookUrl(baseWebhookConfig.url);
       accounts.private = buildTelegramChannelConfigSection(
         normalizedAssistantBotToken,
         withWebhookConfig(baseWebhookConfig, {
+          ...(privateWebhookUrl ? { url: privateWebhookUrl } : {}),
           path: `${normalizedWebhookPath}/private`,
           ...(typeof normalizedPrivateWebhookPort === 'number'
             ? { port: normalizedPrivateWebhookPort }

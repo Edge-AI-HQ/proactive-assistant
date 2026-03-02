@@ -14,6 +14,7 @@ import {
   updateAssistant,
 } from "../common/db/index.js";
 import { ensureTelegramUser } from "../user/service.js";
+import { setPrivateBotWebhook } from "../telegram/webhook.js";
 import type { AssistantRecord } from "../../types.js";
 
 export interface ProvisionAssistantInput {
@@ -23,6 +24,20 @@ export interface ProvisionAssistantInput {
   assistantBotToken?: string | null;
   assistantBotUsername?: string | null;
 }
+
+const ensurePrivateWebhookForAssistantToken = async (
+  assistantBotToken: string | null | undefined,
+): Promise<void> => {
+  const token = (assistantBotToken || "").trim();
+  if (!token) return;
+
+  const result = await setPrivateBotWebhook(token);
+  if (!result.ok) {
+    throw new Error(
+      `ASSISTANT_BOT_WEBHOOK_SETUP_FAILED: ${result.description || "unknown error"}`,
+    );
+  }
+};
 
 const ensureAssistantRecord = async (
   ownerTelegramUserId: number,
@@ -113,6 +128,7 @@ export const provisionAssistant = async (
     input.ownerTelegramUserId,
     assistant,
   );
+  await ensurePrivateWebhookForAssistantToken(assistantWithLiteLLM.assistant_bot_token);
   const { containerId, ready } = await ensureAssistantContainer(
     assistantWithLiteLLM,
     owner.gateway_token,
@@ -149,6 +165,7 @@ export const createAssistantWithoutContainer = async (
     input.ownerTelegramUserId,
     assistant,
   );
+  await ensurePrivateWebhookForAssistantToken(assistantWithLiteLLM.assistant_bot_token);
 
   // Update status to pending payment
   const finalAssistant =
