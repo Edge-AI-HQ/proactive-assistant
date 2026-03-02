@@ -1,5 +1,5 @@
-import { serve } from 'bun';
-import postgres from 'postgres';
+import { serve } from "bun";
+import postgres from "postgres";
 
 const requireEnv = (name: string): string => {
   const value = process.env[name];
@@ -10,29 +10,36 @@ const requireEnv = (name: string): string => {
   return value;
 };
 
-const TELEGRAM_BOT_TOKEN = requireEnv('TELEGRAM_BOT_TOKEN');
-const WEBHOOK_SECRET = requireEnv('TELEGRAM_WEBHOOK_SECRET');
-const DATABASE_URL = requireEnv('DATABASE_URL');
-const PORT = Number.parseInt(process.env.PORT || '3001', 10);
+const TELEGRAM_BOT_TOKEN = requireEnv("TELEGRAM_BOT_TOKEN");
+const WEBHOOK_SECRET = requireEnv("TELEGRAM_WEBHOOK_SECRET");
+const DATABASE_URL = requireEnv("DATABASE_URL");
+const PORT = Number.parseInt(process.env.PORT || "3001", 10);
 const OPENCLAW_TELEGRAM_WEBHOOK_PORT = Number.parseInt(
-  process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT || '8787',
-  10
+  process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT || "8787",
+  10,
 );
-const OPENCLAW_TELEGRAM_WEBHOOK_PATH = process.env.OPENCLAW_TELEGRAM_WEBHOOK_PATH || '/telegram-webhook';
-const FLY_APP_NAME = process.env.OPENCLAW_FLY_APP_NAME || 'pinclaw-api-dev';
-const GUIDE_BOT_WEBHOOK_URL = process.env.GUIDE_BOT_WEBHOOK_URL || '';
-const BOT_COMMANDS = new Set(['start', 'create_claw_assistant', 'list_claw_assistant', 'gateway', 'help']);
+const OPENCLAW_TELEGRAM_WEBHOOK_PATH =
+  process.env.OPENCLAW_TELEGRAM_WEBHOOK_PATH || "/telegram-webhook";
+const FLY_APP_NAME = process.env.OPENCLAW_FLY_APP_NAME || "pinclaw-api-dev";
+const GUIDE_BOT_WEBHOOK_URL = process.env.GUIDE_BOT_WEBHOOK_URL || "";
+const BOT_COMMANDS = new Set([
+  "start",
+  "create_claw_assistant",
+  "list_claw_assistant",
+  "gateway",
+  "help",
+]);
 
 const sql = postgres(DATABASE_URL, {
   max: 10,
   idle_timeout: 30,
-  connect_timeout: 10
+  connect_timeout: 10,
 });
 
-console.log('🚀 Telegram Router starting...');
-console.log('📡 Bot Token: ✓');
-console.log('🔐 Webhook Secret: ✓');
-console.log('💾 Database: ✓');
+console.log("🚀 Telegram Router starting...");
+console.log("📡 Bot Token: ✓");
+console.log("🔐 Webhook Secret: ✓");
+console.log("💾 Database: ✓");
 
 serve({
   port: PORT,
@@ -41,33 +48,34 @@ serve({
     console.log(`📥 ${req.method} ${url.pathname}`);
 
     // Health check
-    if (url.pathname === '/health') {
-      return new Response('OK', { status: 200 });
+    if (url.pathname === "/health") {
+      return new Response("OK", { status: 200 });
     }
 
     // Telegram webhook 入口
-    if (url.pathname === '/webhook/telegram' && req.method === 'POST') {
+    if (url.pathname === "/webhook/telegram" && req.method === "POST") {
       return handleTelegramWebhook(req);
     }
 
     // Telegram API 代理（供 OpenClaw 发送消息）
-    if (url.pathname.startsWith('/api/telegram/')) {
+    if (url.pathname.startsWith("/api/telegram/")) {
       return handleTelegramApiProxy(req, url);
     }
 
-    return new Response('Not Found', { status: 404 });
-  }
+    return new Response("Not Found", { status: 404 });
+  },
 });
 
 async function handleTelegramWebhook(req: Request) {
   try {
     // 验证 webhook secret
-    const secretToken = req.headers.get('X-Telegram-Bot-Api-Secret-Token');
+    const secretToken = req.headers.get("X-Telegram-Bot-Api-Secret-Token");
     if (secretToken !== WEBHOOK_SECRET) {
-      const received =
-        secretToken ? `${secretToken.slice(0, 8)}...(${secretToken.length})` : 'missing';
+      const received = secretToken
+        ? `${secretToken.slice(0, 8)}...(${secretToken.length})`
+        : "missing";
       console.error(`❌ Invalid webhook secret (received=${received})`);
-      return new Response('Unauthorized', { status: 401 });
+      return new Response("Unauthorized", { status: 401 });
     }
 
     const update = await req.json();
@@ -79,12 +87,12 @@ async function handleTelegramWebhook(req: Request) {
     const nowIso = new Date().toISOString();
     console.log(
       `📨 inbound ts=${nowIso} tg_time=${formatUnixTimestamp(telegramDate)} ` +
-      `update_id=${update?.update_id ?? 'n/a'} chat_id=${chatId ?? 'n/a'} ` +
-      `user=${fromUser ?? 'unknown'} text="${truncateForLog(text, 160)}"`
+        `update_id=${update?.update_id ?? "n/a"} chat_id=${chatId ?? "n/a"} ` +
+        `user=${fromUser ?? "unknown"} text="${truncateForLog(text, 160)}"`,
     );
 
     if (!chatId) {
-      console.log('⚠️  No chat_id found in update');
+      console.log("⚠️  No chat_id found in update");
       return jsonResponse({ ok: true });
     }
 
@@ -97,40 +105,67 @@ async function handleTelegramWebhook(req: Request) {
 
     // Forward callback queries (inline button presses) to guide bot
     if (update.callback_query && GUIDE_BOT_WEBHOOK_URL) {
-      console.log(`🤖 Forwarding callback_query to guide bot: ${update.callback_query.data}`);
+      console.log(
+        `🤖 Forwarding callback_query to guide bot: ${update.callback_query.data}`,
+      );
       await forwardToGuideBot(update);
       return jsonResponse({ ok: true });
     }
 
     const userState = await findUserState(chatId);
 
-    if (userState.phase === 'no_user') {
+    if (userState.phase === "no_user") {
       console.log(`⚠️ No user record for chat_id: ${chatId}`);
-      await sendTelegramMessage(chatId,
-        'Welcome! Send /start to begin setting up your AI assistant.'
+
+      // 如果有引导 bot，转发给它处理（可能是 token 输入等待注册流程）
+      if (GUIDE_BOT_WEBHOOK_URL) {
+        console.log(`🤖 Forwarding to guide bot for registration handling`);
+        await forwardToGuideBot(update);
+        return jsonResponse({ ok: true });
+      }
+
+      await sendTelegramMessage(
+        chatId,
+        "Welcome! Send /start to begin setting up your AI assistant.",
       );
       return jsonResponse({ ok: true });
     }
 
-    if (userState.phase === 'no_subscription') {
+    if (userState.phase === "no_subscription") {
       console.log(`⚠️ User ${chatId} has assistant but no active container`);
-      await sendTelegramMessage(chatId,
-        'Your assistant is registered but not yet activated.\nPlease subscribe to start using it — send /create_claw_assistant for the payment link.'
+
+      // 转发给引导 bot，让它处理 token 输入、支付链接等
+      if (GUIDE_BOT_WEBHOOK_URL) {
+        console.log(
+          `🤖 Forwarding to guide bot for subscription/token handling`,
+        );
+        await forwardToGuideBot(update);
+        return jsonResponse({ ok: true });
+      }
+
+      await sendTelegramMessage(
+        chatId,
+        "Your assistant is registered but not yet activated.\nPlease subscribe to start using it — send /create_claw_assistant for the payment link.",
       );
       return jsonResponse({ ok: true });
     }
 
-    if (userState.phase === 'container_starting') {
+    if (userState.phase === "container_starting") {
       if (userState.container) {
-        console.log(`⚠️ Container for chat_id ${chatId} is ${userState.runtimeStatus} — attempting optimistic forward`);
+        console.log(
+          `⚠️ Container for chat_id ${chatId} is ${userState.runtimeStatus} — attempting optimistic forward`,
+        );
         const forwarded = await forwardToOpenClaw(userState.container, update);
         if (forwarded) {
           return jsonResponse({ ok: true });
         }
       }
-      console.log(`⚠️ Container for chat_id ${chatId} is starting (status=${userState.runtimeStatus}), forward not possible yet`);
-      await sendTelegramMessage(chatId,
-        'Your assistant is starting up — first launch may take a few minutes. Please try again shortly.'
+      console.log(
+        `⚠️ Container for chat_id ${chatId} is starting (status=${userState.runtimeStatus}), forward not possible yet`,
+      );
+      await sendTelegramMessage(
+        chatId,
+        "Your assistant is starting up — first launch may take a few minutes. Please try again shortly.",
       );
       return jsonResponse({ ok: true });
     }
@@ -140,86 +175,106 @@ async function handleTelegramWebhook(req: Request) {
     const forwarded = await forwardToOpenClaw(userState.container, update);
     if (!forwarded) {
       console.error(`❌ Forward ultimately failed for chat_id=${chatId}`);
-      await sendTelegramMessage(chatId,
-        'Your assistant is temporarily unavailable — it may still be starting up. Please try again in a minute or two.'
+      await sendTelegramMessage(
+        chatId,
+        "Your assistant is temporarily unavailable — it may still be starting up. Please try again in a minute or two.",
       );
     }
 
     return jsonResponse({ ok: true });
-
   } catch (error) {
-    console.error('❌ Webhook error:', error);
-    return new Response('Internal Server Error', { status: 500 });
+    console.error("❌ Webhook error:", error);
+    return new Response("Internal Server Error", { status: 500 });
   }
 }
 
 const BLOCKED_TG_METHODS = new Set([
-  'setmycommands', 'deletemycommands', 'setwebhook', 'deletewebhook',
+  "setmycommands",
+  "deletemycommands",
+  "setwebhook",
+  "deletewebhook",
 ]);
 
 async function handleTelegramApiProxy(req: Request, url: URL) {
   try {
     // 提取 Telegram API 方法
-    const method = url.pathname.replace('/api/telegram/', '');
+    const method = url.pathname.replace("/api/telegram/", "");
     const traceId = `tgapi_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
     if (BLOCKED_TG_METHODS.has(method.toLowerCase())) {
       console.log(`🚫 Blocked Telegram API method [${traceId}]: ${method}`);
-      return new Response(JSON.stringify({ ok: true, result: true, description: 'blocked by router' }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          result: true,
+          description: "blocked by router",
+        }),
+        {
+          headers: { "Content-Type": "application/json" },
+        },
+      );
     }
 
     const reqMethod = req.method.toUpperCase();
-    const hasBody = reqMethod !== 'GET' && reqMethod !== 'HEAD';
+    const hasBody = reqMethod !== "GET" && reqMethod !== "HEAD";
     const body = hasBody ? new Uint8Array(await req.arrayBuffer()) : undefined;
-    const bodyInfo = extractTelegramProxyBodyInfo(url, req.headers.get('content-type'), body);
-    const userState = bodyInfo.chatId ? await findUserState(bodyInfo.chatId) : null;
-    const container = userState?.phase === 'running' ? userState.container : null;
-    const runtime = container?.container_id ? parseFlyRuntimeRef(container.container_id) : null;
-    const sourceHint = req.headers.get('fly-client-ip')
-      || req.headers.get('x-forwarded-for')
-      || req.headers.get('x-real-ip')
-      || 'unknown';
+    const bodyInfo = extractTelegramProxyBodyInfo(
+      url,
+      req.headers.get("content-type"),
+      body,
+    );
+    const userState = bodyInfo.chatId
+      ? await findUserState(bodyInfo.chatId)
+      : null;
+    const container =
+      userState?.phase === "running" ? userState.container : null;
+    const runtime = container?.container_id
+      ? parseFlyRuntimeRef(container.container_id)
+      : null;
+    const sourceHint =
+      req.headers.get("fly-client-ip") ||
+      req.headers.get("x-forwarded-for") ||
+      req.headers.get("x-real-ip") ||
+      "unknown";
 
     console.log(
-      `🔄 Proxying Telegram API [${traceId}] method=${method} chat_id=${bodyInfo.chatId ?? 'n/a'} ` +
-      `machine_id=${runtime?.machineId ?? 'unknown'} runtime_ref=${container?.container_id ?? 'unknown'} ` +
-      `source=${sourceHint} content_type=${bodyInfo.contentType} body_bytes=${body?.byteLength ?? 0}`
+      `🔄 Proxying Telegram API [${traceId}] method=${method} chat_id=${bodyInfo.chatId ?? "n/a"} ` +
+        `machine_id=${runtime?.machineId ?? "unknown"} runtime_ref=${container?.container_id ?? "unknown"} ` +
+        `source=${sourceHint} content_type=${bodyInfo.contentType} body_bytes=${body?.byteLength ?? 0}`,
     );
 
     // 转发到 Telegram API
     const telegramUrl = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}${url.search}`;
     const outgoingHeaders = new Headers();
-    const contentType = req.headers.get('content-type');
+    const contentType = req.headers.get("content-type");
     if (contentType) {
-      outgoingHeaders.set('content-type', contentType);
+      outgoingHeaders.set("content-type", contentType);
     }
     const response = await fetch(telegramUrl, {
       method: reqMethod,
       headers: outgoingHeaders,
-      body: body
+      body: body,
     });
 
     const result = new Uint8Array(await response.arrayBuffer());
     const responseMeta = parseTelegramApiResponseMeta(response, result);
     console.log(
-      `✅ Telegram API response [${traceId}] status=${response.status} ok=${responseMeta.ok ?? 'n/a'} ` +
-      `result_message_id=${responseMeta.resultMessageId ?? 'n/a'} ` +
-      `result_chat_id=${responseMeta.resultChatId ?? 'n/a'} ` +
-      `description=${responseMeta.description ?? 'n/a'}`
+      `✅ Telegram API response [${traceId}] status=${response.status} ok=${responseMeta.ok ?? "n/a"} ` +
+        `result_message_id=${responseMeta.resultMessageId ?? "n/a"} ` +
+        `result_chat_id=${responseMeta.resultChatId ?? "n/a"} ` +
+        `description=${responseMeta.description ?? "n/a"}`,
     );
 
     return new Response(result, {
       status: response.status,
       headers: {
-        'Content-Type': response.headers.get('content-type') || 'application/json'
-      }
+        "Content-Type":
+          response.headers.get("content-type") || "application/json",
+      },
     });
-
   } catch (error) {
-    console.error('❌ Telegram API proxy error:', error);
-    return new Response('Internal Server Error', { status: 500 });
+    console.error("❌ Telegram API proxy error:", error);
+    return new Response("Internal Server Error", { status: 500 });
   }
 }
 
@@ -233,9 +288,14 @@ function extractChatId(update: any): number | null {
 }
 
 function extractUpdateFromUser(update: any): string | null {
-  const from = update.message?.from || update.callback_query?.from || update.channel_post?.from;
+  const from =
+    update.message?.from ||
+    update.callback_query?.from ||
+    update.channel_post?.from;
   if (!from) return null;
-  return from.username || from.first_name || from.last_name || String(from.id || '');
+  return (
+    from.username || from.first_name || from.last_name || String(from.id || "")
+  );
 }
 
 function extractUpdateText(update: any): string {
@@ -243,38 +303,50 @@ function extractUpdateText(update: any): string {
     update.message?.text ||
     update.channel_post?.text ||
     update.callback_query?.data ||
-    ''
+    ""
   );
 }
 
 function extractUpdateDate(update: any): number | undefined {
-  const dateValue = update.message?.date || update.channel_post?.date || update.callback_query?.message?.date;
+  const dateValue =
+    update.message?.date ||
+    update.channel_post?.date ||
+    update.callback_query?.message?.date;
   return parseNumeric(dateValue);
 }
 
 function formatUnixTimestamp(unixSec?: number): string {
-  if (!unixSec) return 'n/a';
+  if (!unixSec) return "n/a";
   try {
     return new Date(unixSec * 1000).toISOString();
   } catch {
-    return 'n/a';
+    return "n/a";
   }
 }
 
 function truncateForLog(value: string, maxLen: number): string {
-  if (!value) return '';
-  const compact = value.replace(/\s+/g, ' ').trim();
+  if (!value) return "";
+  const compact = value.replace(/\s+/g, " ").trim();
   if (compact.length <= maxLen) return compact;
   return `${compact.slice(0, maxLen)}...`;
 }
 
-type ContainerInfo = { container_id: string; gateway_token: string; assistant_bot_id: string; runtime_provider: string };
+type ContainerInfo = {
+  container_id: string;
+  gateway_token: string;
+  assistant_bot_id: string;
+  runtime_provider: string;
+};
 
 type UserState =
-  | { phase: 'no_user' }
-  | { phase: 'no_subscription' }
-  | { phase: 'container_starting'; runtimeStatus: string; container?: ContainerInfo }
-  | { phase: 'running'; container: ContainerInfo };
+  | { phase: "no_user" }
+  | { phase: "no_subscription" }
+  | {
+      phase: "container_starting";
+      runtimeStatus: string;
+      container?: ContainerInfo;
+    }
+  | { phase: "running"; container: ContainerInfo };
 
 async function findUserState(chatId: number): Promise<UserState> {
   try {
@@ -300,43 +372,54 @@ async function findUserState(chatId: number): Promise<UserState> {
     `;
 
     if (result.length === 0) {
-      return { phase: 'no_user' };
+      return { phase: "no_user" };
     }
 
     const row = result[0];
 
     if (!row.assistant_id) {
-      return { phase: 'no_subscription' };
+      return { phase: "no_subscription" };
     }
 
     if (!row.runtime_ref || !row.runtime_status) {
-      return { phase: 'no_subscription' };
+      return { phase: "no_subscription" };
     }
 
-    if (row.runtime_status !== 'running') {
+    if (row.runtime_status !== "running") {
       const partialContainer: ContainerInfo | undefined = row.runtime_ref
-        ? { container_id: row.runtime_ref, gateway_token: row.gateway_token, assistant_bot_id: row.assistant_bot_id, runtime_provider: row.runtime_provider }
+        ? {
+            container_id: row.runtime_ref,
+            gateway_token: row.gateway_token,
+            assistant_bot_id: row.assistant_bot_id,
+            runtime_provider: row.runtime_provider,
+          }
         : undefined;
-      return { phase: 'container_starting', runtimeStatus: row.runtime_status, container: partialContainer };
+      return {
+        phase: "container_starting",
+        runtimeStatus: row.runtime_status,
+        container: partialContainer,
+      };
     }
 
     return {
-      phase: 'running',
+      phase: "running",
       container: {
         container_id: row.runtime_ref,
         gateway_token: row.gateway_token,
         assistant_bot_id: row.assistant_bot_id,
-        runtime_provider: row.runtime_provider
-      }
+        runtime_provider: row.runtime_provider,
+      },
     };
-
   } catch (error) {
-    console.error('Database query error:', error);
-    return { phase: 'no_user' };
+    console.error("Database query error:", error);
+    return { phase: "no_user" };
   }
 }
 
-async function forwardToOpenClaw(container: any, update: any): Promise<boolean> {
+async function forwardToOpenClaw(
+  container: any,
+  update: any,
+): Promise<boolean> {
   try {
     const runtime = parseFlyRuntimeRef(container.container_id);
     if (!runtime?.machineId) {
@@ -346,7 +429,7 @@ async function forwardToOpenClaw(container: any, update: any): Promise<boolean> 
 
     const hostCandidates = [
       ...(runtime.privateIp ? [runtime.privateIp] : []),
-      `${runtime.machineId}.vm.${FLY_APP_NAME}.internal`
+      `${runtime.machineId}.vm.${FLY_APP_NAME}.internal`,
     ];
     const candidateUrls = buildWebhookCandidateUrls(hostCandidates);
 
@@ -362,13 +445,13 @@ async function forwardToOpenClaw(container: any, update: any): Promise<boolean> 
     for (const webhookUrl of candidateUrls) {
       try {
         const response = await fetch(webhookUrl, {
-          method: 'POST',
+          method: "POST",
           headers: {
-            'Content-Type': 'application/json',
-            'X-Telegram-Bot-Api-Secret-Token': WEBHOOK_SECRET
+            "Content-Type": "application/json",
+            "X-Telegram-Bot-Api-Secret-Token": WEBHOOK_SECRET,
           },
           body: JSON.stringify(update),
-          signal: AbortSignal.timeout(20000)
+          signal: AbortSignal.timeout(20000),
         });
 
         if (response.ok) {
@@ -376,31 +459,38 @@ async function forwardToOpenClaw(container: any, update: any): Promise<boolean> 
           return true;
         }
 
-        const text = await response.text().catch(() => '');
-        console.warn(`⚠️  Forward rejected (${response.status}) at ${webhookUrl}: ${text.slice(0, 200)}`);
+        const text = await response.text().catch(() => "");
+        console.warn(
+          `⚠️  Forward rejected (${response.status}) at ${webhookUrl}: ${text.slice(0, 200)}`,
+        );
         lastError = new Error(`HTTP ${response.status}: ${text.slice(0, 200)}`);
         continue;
       } catch (error) {
         lastError = error;
-        const errName = (error as { name?: string } | null)?.name || '';
+        const errName = (error as { name?: string } | null)?.name || "";
         // OpenClaw webhook handler may process synchronously and exceed the timeout;
         // treat timeout on the webhook port as "probably accepted" to avoid dropping the update.
-        const isWebhookPort = webhookUrl.includes(`:${OPENCLAW_TELEGRAM_WEBHOOK_PORT}/`);
-        if (errName === 'TimeoutError' && isWebhookPort) {
-          console.warn(`⚠️ Forward timeout (assumed accepted) via ${webhookUrl}`);
+        const isWebhookPort = webhookUrl.includes(
+          `:${OPENCLAW_TELEGRAM_WEBHOOK_PORT}/`,
+        );
+        if (errName === "TimeoutError" && isWebhookPort) {
+          console.warn(
+            `⚠️ Forward timeout (assumed accepted) via ${webhookUrl}`,
+          );
           return true;
         }
         const errMsg = error instanceof Error ? error.message : String(error);
-        const errCode = (error as { code?: string })?.code || '';
-        console.warn(`⚠️  Forward connect error at ${webhookUrl}: ${errCode || errName} ${errMsg.slice(0, 200)}`);
+        const errCode = (error as { code?: string })?.code || "";
+        console.warn(
+          `⚠️  Forward connect error at ${webhookUrl}: ${errCode || errName} ${errMsg.slice(0, 200)}`,
+        );
       }
     }
 
-    console.error('❌ Forward failed on all candidate endpoints', lastError);
+    console.error("❌ Forward failed on all candidate endpoints", lastError);
     return false;
-
   } catch (error) {
-    console.error('❌ Forward error:', error);
+    console.error("❌ Forward error:", error);
     return false;
   }
 }
@@ -416,51 +506,53 @@ function buildWebhookCandidateUrls(targetHosts: string[]): string[] {
 }
 
 function normalizeWebhookPath(value: string): string {
-  const trimmed = (value || '').trim();
-  if (!trimmed) return '/telegram-webhook';
-  return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  const trimmed = (value || "").trim();
+  if (!trimmed) return "/telegram-webhook";
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
-function parseFlyRuntimeRef(runtimeRef: string): { machineId: string; privateIp?: string } | null {
+function parseFlyRuntimeRef(
+  runtimeRef: string,
+): { machineId: string; privateIp?: string } | null {
   if (!runtimeRef) return null;
-  if (!runtimeRef.startsWith('fly:')) {
+  if (!runtimeRef.startsWith("fly:")) {
     return { machineId: runtimeRef };
   }
 
   const payload = runtimeRef.slice(4);
-  const [machineId, privateIpRaw] = payload.split('|', 2);
+  const [machineId, privateIpRaw] = payload.split("|", 2);
   if (!machineId) return null;
   const privateIp = privateIpRaw?.trim();
   return privateIp ? { machineId, privateIp } : { machineId };
 }
 
 function formatHostForUrl(host: string): string {
-  if (!host.includes(':')) return host;
-  return host.startsWith('[') ? host : `[${host}]`;
+  if (!host.includes(":")) return host;
+  return host.startsWith("[") ? host : `[${host}]`;
 }
 
 function extractTelegramProxyBodyInfo(
   url: URL,
   contentType: string | null,
-  body?: Uint8Array
+  body?: Uint8Array,
 ): { chatId?: number; contentType: string } {
-  const normalizedType = (contentType || '').toLowerCase();
+  const normalizedType = (contentType || "").toLowerCase();
   let chatId: number | undefined;
 
-  if (url.searchParams.has('chat_id')) {
-    chatId = parseNumeric(url.searchParams.get('chat_id'));
+  if (url.searchParams.has("chat_id")) {
+    chatId = parseNumeric(url.searchParams.get("chat_id"));
   }
 
   if (!body || body.byteLength === 0) {
-    return { chatId, contentType: normalizedType || 'none' };
+    return { chatId, contentType: normalizedType || "none" };
   }
 
   const bodyText = decodeUtf8(body);
   if (!bodyText) {
-    return { chatId, contentType: normalizedType || 'binary' };
+    return { chatId, contentType: normalizedType || "binary" };
   }
 
-  if (normalizedType.includes('application/json')) {
+  if (normalizedType.includes("application/json")) {
     try {
       const parsed = JSON.parse(bodyText) as Record<string, unknown>;
       const maybeChatId = parseNumeric(parsed.chat_id);
@@ -471,16 +563,16 @@ function extractTelegramProxyBodyInfo(
     return { chatId, contentType: normalizedType };
   }
 
-  if (normalizedType.includes('application/x-www-form-urlencoded')) {
+  if (normalizedType.includes("application/x-www-form-urlencoded")) {
     const params = new URLSearchParams(bodyText);
-    const maybeChatId = parseNumeric(params.get('chat_id'));
+    const maybeChatId = parseNumeric(params.get("chat_id"));
     if (maybeChatId !== undefined) {
       chatId = maybeChatId;
     }
     return { chatId, contentType: normalizedType };
   }
 
-  if (normalizedType.includes('multipart/form-data')) {
+  if (normalizedType.includes("multipart/form-data")) {
     const maybeChatId = parseMultipartChatId(bodyText);
     if (maybeChatId !== undefined) {
       chatId = maybeChatId;
@@ -488,15 +580,22 @@ function extractTelegramProxyBodyInfo(
     return { chatId, contentType: normalizedType };
   }
 
-  return { chatId, contentType: normalizedType || 'text' };
+  return { chatId, contentType: normalizedType || "text" };
 }
 
 function parseTelegramApiResponseMeta(
   response: Response,
-  body: Uint8Array
-): { ok?: boolean; resultMessageId?: number; resultChatId?: number; description?: string } {
-  const contentType = (response.headers.get('content-type') || '').toLowerCase();
-  if (!contentType.includes('application/json')) {
+  body: Uint8Array,
+): {
+  ok?: boolean;
+  resultMessageId?: number;
+  resultChatId?: number;
+  description?: string;
+} {
+  const contentType = (
+    response.headers.get("content-type") || ""
+  ).toLowerCase();
+  if (!contentType.includes("application/json")) {
     return {};
   }
 
@@ -515,7 +614,7 @@ function parseTelegramApiResponseMeta(
       ok: parsed.ok,
       resultMessageId: parseNumeric(parsed.result?.message_id),
       resultChatId: parseNumeric(parsed.result?.chat?.id),
-      description: parsed.description
+      description: parsed.description,
     };
   } catch {
     return {};
@@ -533,8 +632,8 @@ function parseMultipartChatId(raw: string): number | undefined {
 }
 
 function parseNumeric(value: unknown): number | undefined {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value.trim()) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
     const n = Number(value);
     if (Number.isFinite(n)) return n;
   }
@@ -550,46 +649,49 @@ function decodeUtf8(data: Uint8Array): string | undefined {
 }
 
 function isBotCommand(update: any): boolean {
-  const text: string = update.message?.text || '';
-  if (!text.startsWith('/')) return false;
+  const text: string = update.message?.text || "";
+  if (!text.startsWith("/")) return false;
   const command = text.slice(1).split(/[\s@]/)[0]?.toLowerCase();
-  return BOT_COMMANDS.has(command || '');
+  return BOT_COMMANDS.has(command || "");
 }
 
 async function forwardToGuideBot(update: any): Promise<void> {
   try {
     const response = await fetch(GUIDE_BOT_WEBHOOK_URL, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
-        'X-Telegram-Bot-Api-Secret-Token': WEBHOOK_SECRET
+        "Content-Type": "application/json",
+        "X-Telegram-Bot-Api-Secret-Token": WEBHOOK_SECRET,
       },
       body: JSON.stringify(update),
-      signal: AbortSignal.timeout(15000)
+      signal: AbortSignal.timeout(15000),
     });
     if (!response.ok) {
       console.warn(`⚠️ Guide bot returned ${response.status}`);
     }
   } catch (error) {
-    console.error('❌ Forward to guide bot failed:', error);
+    console.error("❌ Forward to guide bot failed:", error);
   }
 }
 
 async function sendTelegramMessage(chatId: number, text: string) {
   try {
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text })
-    });
+    await fetch(
+      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, text }),
+      },
+    );
   } catch (error) {
-    console.error('Send message error:', error);
+    console.error("Send message error:", error);
   }
 }
 
 function jsonResponse(data: any) {
   return new Response(JSON.stringify(data), {
-    headers: { 'Content-Type': 'application/json' }
+    headers: { "Content-Type": "application/json" },
   });
 }
 
