@@ -321,16 +321,26 @@ export const createAssistantMachine = async (args: AssistantMachineCreateArgs): 
     OPENCLAW_TELEGRAM_WEBHOOK_PORT: String(normalizedWebhookPort),
     OPENCLAW_CONFIG_PATH: '/app/data/config/openclaw.json',
     OPENCLAW_STATE_DIR: '/app/data',
+    NODE_COMPILE_CACHE: '/app/data/cache/node-compile-cache',
     PINAI_OPENCLAW_CONFIG_SHA256: openclawPayload.hash,
     ...(config.telegramRouter.webhookUrl
       ? { TELEGRAM_ROUTER_URL: extractOrigin(config.telegramRouter.webhookUrl) }
       : {})
   };
 
+  // Persist jiti + Node compile caches on the volume so restarts skip
+  // the expensive cold-compile phase (~7 min → seconds).
+  const cacheBootstrap = [
+    'mkdir -p /app/data/cache/jiti /app/data/cache/node-compile-cache',
+    'ln -sfn /app/data/cache/jiti /tmp/jiti',
+    'export NODE_COMPILE_CACHE=/app/data/cache/node-compile-cache',
+  ].join(' && ');
+
   const bootstrapCommand = [
     'mkdir -p /app/data/workspace /app/data/tmp /app/data/config /root/.openclaw',
     `printf "%s" ${quoteForShell(openclawPayload.json)} > "$OPENCLAW_CONFIG_PATH"`,
     'ln -sfn /app/data/workspace /root/.openclaw/workspace',
+    cacheBootstrap,
     `node -e 'const net=require("net");const port=Number(process.env.OPENCLAW_GATEWAY_PORT||${config.openclaw.gatewayPort});const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});' >/tmp/fly-ipv6-proxy.log 2>&1 & sleep 0.2`,
     `node -e 'const net=require("net");const port=Number(process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT||${normalizedWebhookPort});const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-tg-webhook-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-tg-webhook-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});' >/tmp/fly-tg-webhook-ipv6-proxy.log 2>&1 & sleep 0.2`,
     'exec openclaw gateway --bind loopback'
