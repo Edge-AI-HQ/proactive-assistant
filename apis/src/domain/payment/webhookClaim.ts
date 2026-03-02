@@ -138,11 +138,33 @@ export const buildStripeEventClaimPayload = (
   const currency = extractCurrency(eventObject);
   const status = extractStatus(eventObject);
 
+  // 调试日志：记录提取结果
+  if (!telegramUserId) {
+    console.warn(
+      `[webhook] Failed to extract telegram_user_id from ${event.type}`,
+      {
+        stripe_event_id: event.id,
+        has_metadata: Boolean((eventObject as any)?.metadata),
+        metadata_keys: (eventObject as any)?.metadata
+          ? Object.keys((eventObject as any).metadata)
+          : [],
+        has_parent: Boolean((eventObject as any)?.parent),
+        has_lines: Boolean((eventObject as any)?.lines?.data?.length),
+      },
+    );
+  }
+
   if (telegramUserId) claimPayload.telegram_user_id = telegramUserId;
   if (assistantId !== undefined) claimPayload.assistant_id = assistantId;
   if (amount !== undefined) claimPayload.amount = amount;
   if (currency !== undefined) claimPayload.currency = currency;
   if (status !== undefined) claimPayload.status = status;
+
+  console.log(`[webhook] Claim payload for ${event.type}:`, {
+    stripe_event_id: event.id,
+    telegram_user_id: telegramUserId || "NULL",
+    assistant_id: assistantId !== undefined ? assistantId : "NULL",
+  });
 
   return claimPayload;
 };
