@@ -56,7 +56,6 @@ Telegram 相关（启用 bot / gateway 登录）：
 - 可选：`CRON_SECRET`（用于 internal 定时任务：credits-maintenance、apply-subscription-period-budgets）
 
 常用选配：
-- `OPENCLAW_API_KEY`
 - `LITELLM_BASE_URL` / `LITELLM_CONTAINER_BASE_URL`
 - `CONTAINER_RUNTIME=docker|fly`
 - `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `ELEVENLABS_API_KEY`

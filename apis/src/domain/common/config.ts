@@ -106,7 +106,6 @@ export const config: Config = {
   openclaw: {
     image: process.env.OPENCLAW_IMAGE || 'pinai-openclaw:latest',
     gatewayPort: toInt(process.env.OPENCLAW_GATEWAY_PORT, 18789),
-    apiKey: process.env.OPENCLAW_API_KEY || '',
     braveApiKey: process.env.BRAVE_API_KEY || ''
   },
   litellm: {

@@ -16,7 +16,6 @@ COPY openclaw-plugins/telegram-router-proxy/ /opt/pinai/plugins/telegram-router-
 VOLUME /app/config
 VOLUME /app/data
 
-ENV OPENCLAW_API_KEY=""
 ENV OPENCLAW_MODE="headless"
 ENV OPENCLAW_GATEWAY_PORT="18789"
 ENV OPENAI_API_KEY=""

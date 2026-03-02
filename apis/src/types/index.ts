@@ -154,7 +154,6 @@ export interface TelegramConfig {
 export interface OpenclawConfig {
   image: string;
   gatewayPort: number;
-  apiKey: string;
   braveApiKey: string;
 }
 

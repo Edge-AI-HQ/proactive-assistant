@@ -128,6 +128,68 @@ fly metrics -a litellm-dev
 
 **重要：** `auto_stop_machines = false` 确保服务持续运行，不会自动停止。
 
+## Locust 压测（支持 local/prod）
+
+已提供压测脚本与模板：
+- `ops/litellm/locustfile.py`
+- `ops/litellm/.env.loadtest.example`
+
+### 1) 安装 Locust
+
+```bash
+pip install locust
+```
+
+### 2) 准备压测配置
+
+```bash
+cp ops/litellm/.env.loadtest.example ops/litellm/.env.loadtest
+```
+
+可按需修改：
+- `LITELLM_LOADTEST_TARGET=local|prod`
+- `LITELLM_LOCAL_BASE_URL`（本地地址）
+- `LITELLM_PROD_BASE_URL`（云上地址）
+- `LITELLM_BASE_URL`（自定义地址，优先级最高）
+- `LITELLM_API_KEY`（目标服务开启鉴权时必填）
+- `LITELLM_MODEL`（建议 `fake-openai-endpoint`）
+
+### 3) 启动 Web UI 压测
+
+```bash
+set -a
+source ops/litellm/.env.loadtest
+set +a
+locust -f ops/litellm/locustfile.py
+```
+
+打开 `http://127.0.0.1:8089`，可参考：
+- Users: `100`
+- Ramp up (spawn rate): `10`
+- Host: 可留空（脚本会用环境变量自动选择 local/prod），也可手动覆盖
+
+### 4) 直接命令行（headless）
+
+本地：
+```bash
+set -a && source ops/litellm/.env.loadtest && set +a
+LITELLM_LOADTEST_TARGET=local \
+locust -f ops/litellm/locustfile.py --headless --users 100 --spawn-rate 10 --run-time 5m
+```
+
+云上：
+```bash
+set -a && source ops/litellm/.env.loadtest && set +a
+LITELLM_LOADTEST_TARGET=prod \
+locust -f ops/litellm/locustfile.py --headless --users 100 --spawn-rate 10 --run-time 5m
+```
+
+### 5) 默认压测行为
+
+- 默认只压 `GET /health/readiness`（权重 10）
+- 可通过 `LITELLM_ENABLE_CHAT_TEST=true` 打开 `POST /chat/completions`（权重 1）
+- `chat` 测试默认模型为 `fake-openai-endpoint`，避免产生真实模型费用
+
 ## 版本管理
 
 **重要：** Dockerfile 使用固定版本标签（如 `v1.81.12-stable`）而不是滚动标签（如 `main-stable`），以避免自动更新导致数据库 schema 不一致。
