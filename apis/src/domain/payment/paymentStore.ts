@@ -30,6 +30,7 @@ export type {
 export interface PaymentStore {
   claimStripeEvent(data: {
     telegram_user_id?: string;
+    assistant_id?: number;
     stripe_event_id: string;
     event_type: string;
     amount?: number;
@@ -89,6 +90,8 @@ export interface PaymentStore {
     token: string;
     telegram_user_id: string;
     telegram_username?: string;
+    assistant_id?: number | null;
+    plan_code?: string | null;
     expires_at: string;
   }): Promise<void>;
   getPaymentSessionByToken(token: string): Promise<PaymentSessionRecord | null>;

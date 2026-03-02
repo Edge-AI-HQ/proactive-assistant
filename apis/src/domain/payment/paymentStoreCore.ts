@@ -62,6 +62,8 @@ export interface PaymentSessionRecord {
   user_id: number;
   telegram_user_id: string;
   telegram_username: string | null;
+  assistant_id?: number | null;
+  plan_code?: string | null;
   used: boolean;
   expires_at: string;
   created_at: string;

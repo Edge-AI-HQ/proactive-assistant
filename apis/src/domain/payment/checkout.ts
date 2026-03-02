@@ -135,17 +135,29 @@ export const createInternalPaymentSession = async (
   const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
   const subscribeUrl = `${readPaymentPublicBaseUrl(req)}/api/payment/subscribe?token=${encodeURIComponent(token)}`;
 
+  // 解析 assistant_id（可选，用于助理级订阅）
+  const assistantId =
+    typeof body?.assistant_id === "number" && Number.isFinite(body.assistant_id)
+      ? Math.trunc(body.assistant_id)
+      : undefined;
+
   const sessionPayload: {
     token: string;
     telegram_user_id: string;
     expires_at: string;
     telegram_username?: string;
+    assistant_id?: number;
+    plan_code?: string;
   } = {
     token,
     telegram_user_id: telegramUserId,
     expires_at: expiresAt,
   };
   if (telegramUsername) sessionPayload.telegram_username = telegramUsername;
+  if (assistantId) sessionPayload.assistant_id = assistantId;
+  if (typeof body?.plan_code === "string" && body.plan_code.trim()) {
+    sessionPayload.plan_code = body.plan_code.trim();
+  }
   await db.createPaymentSession(sessionPayload);
 
   return {
@@ -387,12 +399,18 @@ export const createCheckoutSession = async (
           telegram_username: telegramUsername || "",
           plan: selectedPlan.plan_code,
           payment_token: token,
+          ...(session.assistant_id
+            ? { assistant_id: String(session.assistant_id) }
+            : {}),
         },
         subscription_data: {
           metadata: {
             telegram_user_id: telegramUserId,
             telegram_username: telegramUsername || "",
             plan: selectedPlan.plan_code,
+            ...(session.assistant_id
+              ? { assistant_id: String(session.assistant_id) }
+              : {}),
           },
         },
       },

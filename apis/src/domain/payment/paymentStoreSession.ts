@@ -28,13 +28,17 @@ export const createPaymentSessionStore = (
           INSERT INTO payment_sessions (
             user_id,
             session_token,
+            assistant_id,
+            plan_code,
             telegram_username_snapshot,
             expires_at
-          ) VALUES ($1, $2, $3, $4::timestamptz)
+          ) VALUES ($1, $2, $3, $4, $5, $6::timestamptz)
         `,
         [
           user.id,
           data.token,
+          data.assistant_id ?? null,
+          data.plan_code ?? null,
           normalizeUsername(data.telegram_username),
           data.expires_at,
         ],

@@ -285,6 +285,7 @@ export const createSubscriptionPeriodStore = (
         `
           INSERT INTO payment_events (
             user_id,
+            assistant_id,
             stripe_event_id,
             event_type,
             amount,
@@ -294,13 +295,14 @@ export const createSubscriptionPeriodStore = (
             error_message,
             raw_data
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, 'processing', NULL, $7::jsonb
+            $1, $2, $3, $4, $5, $6, $7, 'processing', NULL, $8::jsonb
           )
           ON CONFLICT (stripe_event_id) DO NOTHING
           RETURNING id
         `,
         [
           user?.id ?? null,
+          data.assistant_id ?? null,
           data.stripe_event_id,
           data.event_type,
           data.amount ?? null,
@@ -319,14 +321,15 @@ export const createSubscriptionPeriodStore = (
           UPDATE payment_events
           SET
             user_id = COALESCE($2, user_id),
-            event_type = $3,
-            amount = $4,
-            currency = $5,
-            status = $6,
+            assistant_id = COALESCE($3, assistant_id),
+            event_type = $4,
+            amount = $5,
+            currency = $6,
+            status = $7,
             processing_status = 'processing',
             error_message = NULL,
             processed_at = NULL,
-            raw_data = $7::jsonb
+            raw_data = $8::jsonb
           WHERE stripe_event_id = $1
             AND processing_status = 'failed'
           RETURNING id
@@ -334,6 +337,7 @@ export const createSubscriptionPeriodStore = (
         [
           data.stripe_event_id,
           user?.id ?? null,
+          data.assistant_id ?? null,
           data.event_type,
           data.amount ?? null,
           data.currency ?? null,
