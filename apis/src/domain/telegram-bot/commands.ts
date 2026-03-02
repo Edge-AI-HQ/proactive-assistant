@@ -225,9 +225,14 @@ const provisionAssistantWithGuideBot = async (
     // User already has an assistant — fall through to show payment link
   }
 
+  // 获取助理 ID（可能是刚创建的，或已存在的）
+  const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
+  const assistantId = assistants[0]?.id;
+
   const paymentLink = await safeCreatePaymentLink(
     telegramUserId,
     ctx.from?.username ?? null,
+    assistantId,
   );
 
   if (!paymentLink) {
