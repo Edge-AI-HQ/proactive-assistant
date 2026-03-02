@@ -136,10 +136,18 @@ export const createInternalPaymentSession = async (
   const subscribeUrl = `${readPaymentPublicBaseUrl(req)}/api/payment/subscribe?token=${encodeURIComponent(token)}`;
 
   // 解析 assistant_id（可选，用于助理级订阅）
-  const assistantId =
-    typeof body?.assistant_id === "number" && Number.isFinite(body.assistant_id)
-      ? Math.trunc(body.assistant_id)
-      : undefined;
+  let assistantId: number | undefined = undefined;
+  if (body?.assistant_id !== undefined && body?.assistant_id !== null) {
+    if (
+      typeof body.assistant_id === "number" &&
+      Number.isFinite(body.assistant_id)
+    ) {
+      assistantId = Math.trunc(body.assistant_id);
+    } else if (typeof body.assistant_id === "string") {
+      const parsed = Number.parseInt(body.assistant_id, 10);
+      if (Number.isFinite(parsed)) assistantId = parsed;
+    }
+  }
 
   const sessionPayload: {
     token: string;

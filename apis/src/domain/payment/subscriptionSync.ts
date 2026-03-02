@@ -189,6 +189,16 @@ export async function syncSubscriptionFromStripe(
     }
   }
 
+  // 提取 assistant_id（从 subscription.metadata）
+  let assistantId: number | undefined = undefined;
+  if (subscription.metadata?.assistant_id) {
+    const parsed = Number.parseInt(
+      String(subscription.metadata.assistant_id),
+      10,
+    );
+    if (Number.isFinite(parsed)) assistantId = parsed;
+  }
+
   // 如果有完整的 period 信息，upsert 整个周期
   if (periodStart && periodEnd && planCode) {
     try {
@@ -205,6 +215,7 @@ export async function syncSubscriptionFromStripe(
           typeof subscription.cancel_at_period_end === "boolean"
             ? subscription.cancel_at_period_end
             : false,
+        assistant_id: assistantId ?? null,
       });
     } catch (err) {
       console.warn("[payment] subscription_periods upsert failed (non-fatal)", {
@@ -282,11 +293,20 @@ export async function syncSubscriptionFromStripe(
         const assistants = await listAssistantsByOwnerTelegramId(
           Number(telegram_user_id),
         );
-        const toStart = assistants.filter(
-          (a) =>
-            a.container_status === "pending" ||
-            a.container_status === "stopped",
-        );
+
+        // 如果有 assistant_id，只启动该助理；否则启动所有 stopped/pending 的助理（向后兼容）
+        const toStart = assistantId
+          ? assistants.filter(
+              (a) =>
+                a.id === assistantId &&
+                (a.container_status === "pending" ||
+                  a.container_status === "stopped"),
+            )
+          : assistants.filter(
+              (a) =>
+                a.container_status === "pending" ||
+                a.container_status === "stopped",
+            );
 
         if (toStart.length > 0) {
           const listStr = toStart
@@ -620,9 +640,22 @@ export async function handleInvoicePaid(
     return;
   }
 
+  // 提取 assistant_id（优先从 lines[0].metadata，其次从 invoice.metadata）
+  let assistantId: number | undefined = undefined;
+  const firstLineMeta = firstLine?.metadata as any;
+  if (firstLineMeta?.assistant_id) {
+    const parsed = Number.parseInt(String(firstLineMeta.assistant_id), 10);
+    if (Number.isFinite(parsed)) assistantId = parsed;
+  }
+  if (!assistantId && invoice.metadata?.assistant_id) {
+    const parsed = Number.parseInt(String(invoice.metadata.assistant_id), 10);
+    if (Number.isFinite(parsed)) assistantId = parsed;
+  }
+
   console.log("[payment] invoice.paid: upserting subscription_periods", {
     invoiceId: invoice.id,
     telegramUserId: subscription.telegram_user_id,
+    assistantId,
     planCode,
     periodStart: periodStart.toISOString(),
     periodEnd: periodEnd.toISOString(),
@@ -637,6 +670,7 @@ export async function handleInvoicePaid(
     period_end: periodEnd,
     plan_id: planCode,
     status: "active",
+    assistant_id: assistantId ?? null,
   });
 
   // invoice.paid 后也启动容器（不依赖 subscription.updated，因为 period 可能为空）
@@ -654,16 +688,26 @@ export async function handleInvoicePaid(
     });
   }
 
-  // 启动容器（stopped/pending 的助理）
+  // 启动容器（仅启动与本次支付关联的助理）
   const user = await getUserByTelegramId(Number(subscription.telegram_user_id));
   if (user) {
     const assistants = await listAssistantsByOwnerTelegramId(
       Number(subscription.telegram_user_id),
     );
-    const toStart = assistants.filter(
-      (a) =>
-        a.container_status === "pending" || a.container_status === "stopped",
-    );
+
+    // 如果有 assistant_id，只启动该助理；否则启动所有 stopped/pending 的助理（向后兼容）
+    const toStart = assistantId
+      ? assistants.filter(
+          (a) =>
+            a.id === assistantId &&
+            (a.container_status === "pending" ||
+              a.container_status === "stopped"),
+        )
+      : assistants.filter(
+          (a) =>
+            a.container_status === "pending" ||
+            a.container_status === "stopped",
+        );
 
     if (toStart.length > 0) {
       const chatId = Number(subscription.telegram_user_id);
