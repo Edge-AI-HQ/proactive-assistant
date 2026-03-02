@@ -22,6 +22,7 @@ import {
   isNotFoundError,
   listMachines,
   startMachine,
+  stopMachine,
 } from "./fly_client.js";
 import {
   formatHostForUrl,
@@ -318,33 +319,51 @@ const runEnsureAssistantMachine = async (
   );
   const status = normalizeMachineState(startedMachine);
 
-  let ready = status === "running";
-  if (ready && config.fly.gatewayProbe) {
-    const target = resolveFromMachine(
-      startedMachine.id,
-      startedMachine.private_ip,
-    );
-    const portReady = await waitForPort(
-      target.host,
-      target.port,
-      config.fly.gatewayProbeTimeoutMs,
-    );
-    ready = portReady
-      ? await waitForGatewayHello(
-          target.host,
-          target.port,
-          normalizedGatewayToken,
-          config.fly.gatewayProbeTimeoutMs,
-        )
-      : false;
-  }
-
+  // 乐观更新：machine 已启动，先标记为 creating
   await updateAssistant(assistant.id, {
-    container_status: ready ? "running" : "error",
+    container_status: status === "running" ? "creating" : status,
     container_name: startedMachine.name?.trim() || fallbackName,
   });
 
-  return { containerId, ready };
+  // 异步探测 gateway，成功后更新为 running
+  if (status === "running" && config.fly.gatewayProbe) {
+    void (async () => {
+      try {
+        const target = resolveFromMachine(
+          startedMachine.id,
+          startedMachine.private_ip,
+        );
+        const portReady = await waitForPort(
+          target.host,
+          target.port,
+          config.fly.gatewayProbeTimeoutMs,
+        );
+        const ready = portReady
+          ? await waitForGatewayHello(
+              target.host,
+              target.port,
+              normalizedGatewayToken,
+              config.fly.gatewayProbeTimeoutMs,
+            )
+          : false;
+
+        await updateAssistant(assistant.id, {
+          container_status: ready ? "running" : "error",
+        });
+      } catch (err) {
+        console.error(
+          `Async gateway probe failed for assistant ${assistant.id}`,
+          err,
+        );
+        await updateAssistant(assistant.id, {
+          container_status: "error",
+        });
+      }
+    })();
+  }
+
+  // 立即返回，不阻塞
+  return { containerId, ready: status === "running" };
 };
 
 const ensureAssistantFlyContainer = async (
@@ -402,6 +421,53 @@ const destroyAssistantFlyContainer = async (
   return { deleted: true };
 };
 
+const stopAssistantFlyContainer = async (
+  assistant: AssistantContainerDestroyRef,
+): Promise<{ stopped: boolean }> => {
+  const fallbackName =
+    assistant.container_name?.trim() ||
+    containerNameForAssistant(assistant.assistant_bot_id);
+  const machine = await resolveMachineByRef(assistant.container_id, [
+    fallbackName,
+    containerNameForAssistant(assistant.assistant_bot_id),
+  ]);
+
+  if (!machine) {
+    await updateAssistant(assistant.id, {
+      container_status: "missing",
+      container_id: "",
+      container_name: fallbackName,
+    });
+    return { stopped: false };
+  }
+
+  const state = normalizeMachineState(machine);
+  if (state === "stopped") {
+    await updateAssistant(assistant.id, { container_status: "stopped" });
+    return { stopped: false };
+  }
+
+  try {
+    await stopMachine(machine.id);
+  } catch (error: unknown) {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+    await updateAssistant(assistant.id, {
+      container_status: "missing",
+      container_id: "",
+      container_name: fallbackName,
+    });
+    return { stopped: false };
+  }
+
+  await updateAssistant(assistant.id, {
+    container_status: "stopped",
+    container_name: fallbackName,
+  });
+  return { stopped: true };
+};
+
 const prepareFlyRuntime = async (): Promise<void> => {
   await ensureFlyOpenclawImageDigestPullable();
 };
@@ -409,9 +475,7 @@ const prepareFlyRuntime = async (): Promise<void> => {
 export const flyContainerProvider: ContainerProvider = {
   prepareRuntime: prepareFlyRuntime,
   ensureAssistantContainer: ensureAssistantFlyContainer,
-  stopAssistantContainer: async () => {
-    throw new Error("Fly.io provider does not support stopping containers");
-  },
+  stopAssistantContainer: stopAssistantFlyContainer,
   destroyAssistantContainer: destroyAssistantFlyContainer,
   resolveGatewayTargetForAssistant: resolveFlyGatewayTargetForAssistant,
 };

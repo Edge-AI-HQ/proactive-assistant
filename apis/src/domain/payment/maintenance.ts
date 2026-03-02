@@ -1,5 +1,5 @@
-import { db } from './db.js';
-import { syncLiteLLMBudgetFromPlan } from './litellmBudget.js';
+import { db } from "./db.js";
+import { syncLiteLLMBudgetFromPlan } from "./litellmBudget.js";
 
 interface RunPlanBudgetMaintenanceInput {
   limit: number;
@@ -17,17 +17,38 @@ interface PlanBudgetMaintenanceResult {
 }
 
 export const runPlanBudgetMaintenance = async (
-  input: RunPlanBudgetMaintenanceInput
+  input: RunPlanBudgetMaintenanceInput,
 ): Promise<PlanBudgetMaintenanceResult> => {
-  const activeSubscriptions = await db.getActiveSubscriptions();
-  const candidates = activeSubscriptions.slice(0, Math.max(1, Math.trunc(input.limit)));
+  // 从 subscription_periods 查询当前有生效周期的用户
+  const { pool } = await import("../common/db/core.js");
+  const result = await pool.query<{
+    telegram_user_id: string;
+    telegram_username: string | null;
+    plan_id: string;
+  }>(
+    `
+      SELECT DISTINCT
+        u.telegram_user_id::text AS telegram_user_id,
+        u.telegram_username,
+        sp.plan_id
+      FROM subscription_periods sp
+      JOIN users u ON u.id = sp.user_id
+      WHERE sp.period_start <= NOW()
+        AND sp.period_end > NOW()
+        AND sp.status IN ('active', 'trialing')
+      ORDER BY u.telegram_user_id
+      LIMIT $1
+    `,
+    [Math.max(1, Math.trunc(input.limit))],
+  );
 
+  const candidates = result.rows;
   let synced = 0;
   let skipped = 0;
   const errors: Array<{ telegram_user_id: string; message: string }> = [];
 
   for (const subscription of candidates) {
-    const planCode = (subscription.plan_id || '').trim();
+    const planCode = (subscription.plan_id || "").trim();
     if (!planCode) {
       skipped += 1;
       continue;
@@ -38,11 +59,11 @@ export const runPlanBudgetMaintenance = async (
         telegram_user_id: subscription.telegram_user_id,
         telegram_username: subscription.telegram_username,
         plan_code: planCode,
-        source: input.source
+        source: input.source,
       });
       synced += 1;
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
+      const message = error instanceof Error ? error.message : "Unknown error";
       errors.push({ telegram_user_id: subscription.telegram_user_id, message });
     }
   }
@@ -54,13 +75,15 @@ export const runPlanBudgetMaintenance = async (
     synced_to_litellm: synced,
     synced,
     skipped,
-    errors
+    errors,
   };
 };
 
-export const runCreditsMaintenance = async (limit: number): Promise<PlanBudgetMaintenanceResult> => {
+export const runCreditsMaintenance = async (
+  limit: number,
+): Promise<PlanBudgetMaintenanceResult> => {
   return runPlanBudgetMaintenance({
     limit,
-    source: 'credits_maintenance'
+    source: "credits_maintenance",
   });
 };

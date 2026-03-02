@@ -17,8 +17,6 @@ const CREATE_ASSISTANT_COMMAND = "create_claw_assistant";
 const LIST_ASSISTANT_COMMAND = "list_claw_assistant";
 const PENDING_TOKEN_INPUT_TTL_MS = 10 * 60 * 1000;
 
-const pendingTokenInputByUserId = new Map<number, number>();
-
 const commandList = [
   {
     command: "start",
@@ -35,10 +33,6 @@ const commandList = [
   {
     command: "gateway",
     description: "Open OpenClaw dashboard for one of your bots",
-  },
-  {
-    command: "cancel_subscription",
-    description: "Cancel your subscription (stops at period end)",
   },
 ] as const;
 
@@ -112,24 +106,49 @@ const parseAssistantToken = (text: string | undefined): string | null => {
   return normalized;
 };
 
-const markTokenInputPending = (telegramUserId: number): void => {
-  pendingTokenInputByUserId.set(telegramUserId, Date.now());
+// 使用数据库存储待处理动作（支持集群部署）
+import { pool } from "../common/db/core.js";
+
+const markTokenInputPending = async (telegramUserId: number): Promise<void> => {
+  const expiresAt = new Date(Date.now() + PENDING_TOKEN_INPUT_TTL_MS);
+
+  await pool.query(
+    `INSERT INTO user_pending_actions (user_id, action_type, expires_at)
+     SELECT id, 'token_input', $2
+     FROM users
+     WHERE telegram_user_id = $1
+     ON CONFLICT (user_id, action_type)
+     DO UPDATE SET expires_at = EXCLUDED.expires_at, created_at = NOW()`,
+    [telegramUserId, expiresAt],
+  );
 };
 
-const clearTokenInputPending = (telegramUserId: number): void => {
-  pendingTokenInputByUserId.delete(telegramUserId);
+const clearTokenInputPending = async (
+  telegramUserId: number,
+): Promise<void> => {
+  await pool.query(
+    `DELETE FROM user_pending_actions
+     WHERE user_id IN (SELECT id FROM users WHERE telegram_user_id = $1)
+       AND action_type = 'token_input'`,
+    [telegramUserId],
+  );
 };
 
-const isTokenInputPending = (telegramUserId: number): boolean => {
-  const createdAt = pendingTokenInputByUserId.get(telegramUserId);
-  if (!createdAt) return false;
+const isTokenInputPending = async (
+  telegramUserId: number,
+): Promise<boolean> => {
+  const result = await pool.query<{ exists: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM user_pending_actions upa
+       JOIN users u ON u.id = upa.user_id
+       WHERE u.telegram_user_id = $1
+         AND upa.action_type = 'token_input'
+         AND upa.expires_at > NOW()
+     ) as exists`,
+    [telegramUserId],
+  );
 
-  if (Date.now() - createdAt > PENDING_TOKEN_INPUT_TTL_MS) {
-    pendingTokenInputByUserId.delete(telegramUserId);
-    return false;
-  }
-
-  return true;
+  return result.rows[0]?.exists ?? false;
 };
 
 interface AssistantBotIdentity {
@@ -333,10 +352,47 @@ const provisionAssistantFromToken = async (
     return true;
   } catch (error: unknown) {
     console.error("Assistant bot setup failed", error);
+
+    // 检查 BackendApiError 且 status=409 的情况
     if (error instanceof BackendApiError && error.status === 409) {
+      // 根据错误消息内容判断具体原因
+      if (error.message.includes("USER_ALREADY_HAS_ASSISTANT")) {
+        await replyHtml(
+          ctx,
+          [
+            "⚠️ <b>You already have an assistant bot.</b>",
+            "",
+            "Currently, each user is limited to one assistant bot.",
+            "",
+            "💡 <b>Tip:</b> You can update your existing bot's token by running /create_claw_assistant again with a new token.",
+          ].join("\n"),
+        );
+        return false;
+      }
+
+      // Token 已被其他用户使用
       await replyHtml(ctx, TOKEN_ALREADY_TAKEN_MESSAGE);
       return false;
     }
+
+    // 兼容直接抛出 Error 的情况（本地错误处理）
+    if (
+      error instanceof Error &&
+      error.message === "USER_ALREADY_HAS_ASSISTANT"
+    ) {
+      await replyHtml(
+        ctx,
+        [
+          "⚠️ <b>You already have an assistant bot.</b>",
+          "",
+          "Currently, each user is limited to one assistant bot.",
+          "",
+          "💡 <b>Tip:</b> You can update your existing bot's token by running /create_claw_assistant again with a new token.",
+        ].join("\n"),
+      );
+      return false;
+    }
+
     if (
       error instanceof Error &&
       error.message === "ASSISTANT_BOT_ALREADY_OWNED"
@@ -362,6 +418,8 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     if (!telegramUserId) return;
     const telegramUsername = ctx.from?.username ?? null;
     await ensureTelegramUserViaApi(telegramUserId, telegramUsername);
+    // 清除 token 输入状态（用户执行了其他命令）
+    await clearTokenInputPending(telegramUserId);
     await replyHtml(ctx, welcomeMessage(suggestBotUsername(ctx)));
   });
 
@@ -369,12 +427,15 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
 
-    markTokenInputPending(telegramUserId);
+    // 标记等待 token 输入（10分钟有效期）
+    await markTokenInputPending(telegramUserId);
     await replyHtml(
       ctx,
       [
         "<b>Please send your BotFather token in the next message.</b>",
         "Example: <code>123456789:ABCDefghIJKLmnopQRSTuvwxYZ</code>",
+        "",
+        "💡 <i>Tip: If you change your mind, just send any other command to cancel.</i>",
       ].join("\n"),
     );
   };
@@ -385,8 +446,45 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
     await ensureTelegramUserViaApi(telegramUserId, ctx.from?.username ?? null);
+    // 清除 token 输入状态
+    await clearTokenInputPending(telegramUserId);
     const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
-    await replyHtml(ctx, assistantsListMessage(assistants));
+
+    if (!assistants.length) {
+      await replyHtml(
+        ctx,
+        "🧸 <b>No assistant bots yet.</b>\nSend <code>/create_claw_assistant</code> to get started.",
+      );
+      return;
+    }
+
+    // 显示所有 assistants
+    for (let i = 0; i < assistants.length; i++) {
+      const assistant = assistants[i];
+      if (!assistant) continue;
+
+      const keyboard = new InlineKeyboard()
+        .text("📊 Manage Subscription", "manage_subscription")
+        .row()
+        .text("🔄 Refresh Status", "refresh_assistant_status");
+
+      await replyHtml(
+        ctx,
+        [
+          `<b>Your Assistant Bot ${assistants.length > 1 ? `#${i + 1}` : ""}</b>`,
+          "",
+          `🤖 <b>Bot:</b> @${assistant.assistant_bot_username}`,
+          `🔗 <b>Link:</b> https://t.me/${assistant.assistant_bot_username}`,
+          `📊 <b>Status:</b> ${assistant.container_status || "unknown"}`,
+          ...(assistant.litellm_key_alias
+            ? [`🔐 <b>LiteLLM Key:</b> ${assistant.litellm_key_alias}`]
+            : []),
+          "",
+          "💡 <b>Tip:</b> You can update your bot token by running /create_claw_assistant again.",
+        ].join("\n"),
+        { reply_markup: keyboard },
+      );
+    }
   };
 
   bot.command(LIST_ASSISTANT_COMMAND, listAssistantCommandHandler);
@@ -395,6 +493,8 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
     await ensureTelegramUserViaApi(telegramUserId, ctx.from?.username ?? null);
+    // 清除 token 输入状态
+    await clearTokenInputPending(telegramUserId);
     const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
 
     if (!assistants.length) {
@@ -478,32 +578,91 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     }
   });
 
-  bot.command("cancel_subscription", async (ctx) => {
+  // Callback query handlers for inline buttons
+  bot.callbackQuery("manage_subscription", async (ctx) => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
-    await ensureTelegramUserViaApi(telegramUserId, ctx.from?.username ?? null);
 
-    if (!isPaymentEnabled()) {
-      await replyHtml(
-        ctx,
-        "<b>Payment service is not configured.</b>\nPlease contact the admin.",
-      );
+    const paymentLink = await safeCreatePaymentLink(
+      telegramUserId,
+      ctx.from?.username ?? null,
+    );
+
+    if (!paymentLink) {
+      await ctx.answerCallbackQuery({
+        text: "Payment link unavailable",
+        show_alert: true,
+      });
       return;
     }
+
+    const keyboard = new InlineKeyboard()
+      .url("💳 Manage Subscription", paymentLink)
+      .row()
+      .text("❌ Cancel Subscription", "confirm_cancel_subscription");
+
+    await ctx.editMessageText(
+      [
+        "📊 <b>Subscription Management</b>",
+        "",
+        "• <b>Cancel:</b> Cancel your subscription (stays active until period end)",
+        "",
+        "Your subscription applies to all your assistants.",
+      ].join("\n"),
+      {
+        parse_mode: "HTML",
+        reply_markup: keyboard,
+      },
+    );
+    await ctx.answerCallbackQuery();
+  });
+
+  bot.callbackQuery("confirm_cancel_subscription", async (ctx) => {
+    const keyboard = new InlineKeyboard()
+      .text("⚠️ Yes, Cancel Subscription", "do_cancel_subscription")
+      .text("❌ Keep Subscription", "keep_subscription");
+
+    await ctx.editMessageText(
+      [
+        "⚠️ <b>Confirm Subscription Cancellation</b>",
+        "",
+        "Are you sure you want to cancel your subscription?",
+        "",
+        "• Your subscription will remain active until the end of the current billing period",
+        "• After that, your containers will be stopped",
+        "• You can resubscribe anytime",
+        "",
+        "<b>Note:</b> This will not delete your assistant bot configuration.",
+      ].join("\n"),
+      {
+        parse_mode: "HTML",
+        reply_markup: keyboard,
+      },
+    );
+    await ctx.answerCallbackQuery();
+  });
+
+  bot.callbackQuery("do_cancel_subscription", async (ctx) => {
+    const telegramUserId = ctx.from?.id;
+    if (!telegramUserId) return;
+
+    await ctx.editMessageText("🔄 <b>Cancelling subscription...</b>", {
+      parse_mode: "HTML",
+    });
 
     try {
       const result = await cancelUserSubscription(telegramUserId);
       const periodEnd = new Date(
         result.current_period_end,
       ).toLocaleDateString();
-      await replyHtml(
-        ctx,
+      await ctx.editMessageText(
         [
           "✅ <b>Subscription cancelled successfully.</b>",
           `Your subscription will remain active until <b>${periodEnd}</b>.`,
           "After that, your containers will be stopped but not deleted.",
           "You can resubscribe anytime to resume service.",
         ].join("\n"),
+        { parse_mode: "HTML" },
       );
     } catch (error: unknown) {
       console.error("Failed to cancel subscription", {
@@ -512,16 +671,81 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
       });
 
       if (error instanceof BackendApiError && error.status === 404) {
-        await replyHtml(
-          ctx,
+        await ctx.editMessageText(
           "<b>No active subscription found.</b>\nYou don't have a subscription to cancel.",
+          { parse_mode: "HTML" },
         );
       } else {
-        await replyHtml(
-          ctx,
+        await ctx.editMessageText(
           "<b>Failed to cancel subscription.</b>\nPlease try again later or contact support.",
+          { parse_mode: "HTML" },
         );
       }
+    }
+
+    await ctx.answerCallbackQuery();
+  });
+
+  bot.callbackQuery("keep_subscription", async (ctx) => {
+    await ctx.editMessageText("✅ <b>Subscription kept active.</b>", {
+      parse_mode: "HTML",
+    });
+    await ctx.answerCallbackQuery({ text: "Subscription kept" });
+  });
+
+  bot.callbackQuery("refresh_assistant_status", async (ctx) => {
+    const telegramUserId = ctx.from?.id;
+    if (!telegramUserId) return;
+
+    try {
+      const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
+      if (!assistants.length) {
+        await ctx.answerCallbackQuery({
+          text: "No assistants found",
+          show_alert: true,
+        });
+        return;
+      }
+
+      const assistant = assistants[0];
+      if (!assistant) {
+        await ctx.answerCallbackQuery({
+          text: "Assistant not found",
+          show_alert: true,
+        });
+        return;
+      }
+
+      const keyboard = new InlineKeyboard()
+        .text("📊 Manage Subscription", "manage_subscription")
+        .row()
+        .text("🔄 Refresh Status", "refresh_assistant_status");
+
+      await ctx.editMessageText(
+        [
+          "<b>Your Assistant Bot</b>",
+          "",
+          `🤖 <b>Bot:</b> @${assistant.assistant_bot_username}`,
+          `🔗 <b>Link:</b> https://t.me/${assistant.assistant_bot_username}`,
+          `📊 <b>Status:</b> ${assistant.container_status || "unknown"}`,
+          ...(assistant.litellm_key_alias
+            ? [`🔐 <b>LiteLLM Key:</b> ${assistant.litellm_key_alias}`]
+            : []),
+          "",
+          "💡 <b>Tip:</b> You can update your bot token by running /create_claw_assistant again.",
+        ].join("\n"),
+        {
+          parse_mode: "HTML",
+          reply_markup: keyboard,
+        },
+      );
+      await ctx.answerCallbackQuery({ text: "Status refreshed" });
+    } catch (error: unknown) {
+      console.error("Failed to refresh assistant status", error);
+      await ctx.answerCallbackQuery({
+        text: "Failed to refresh status",
+        show_alert: true,
+      });
     }
   });
 
@@ -531,7 +755,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
 
   bot.on("message:text", async (ctx, next) => {
     const telegramUserId = ctx.from?.id;
-    if (!telegramUserId || !isTokenInputPending(telegramUserId)) {
+    if (!telegramUserId || !(await isTokenInputPending(telegramUserId))) {
       await next();
       return;
     }
@@ -543,6 +767,8 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     }
 
     if (rawText.startsWith("/")) {
+      // 用户执行了其他命令，清除 token 输入状态
+      await clearTokenInputPending(telegramUserId);
       await next();
       return;
     }
@@ -561,7 +787,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
 
     const created = await provisionAssistantFromToken(ctx, token);
     if (created) {
-      clearTokenInputPending(telegramUserId);
+      await clearTokenInputPending(telegramUserId);
     }
   });
 };

@@ -53,7 +53,7 @@ Telegram 相关（启用 bot / gateway 登录）：
 支付相关：
 - `STRIPE_WEBHOOK_SECRET`
 - `PAYMENT_PUBLIC_BASE_URL`（未配置时会基于请求推断）
-- 可选：`CRON_SECRET`（用于 credits-maintenance）
+- 可选：`CRON_SECRET`（用于 internal 定时任务：credits-maintenance、apply-subscription-period-budgets）
 
 常用选配：
 - `OPENCLAW_API_KEY`
@@ -135,7 +135,7 @@ npm run litellm:up
 - 通用 `/api/*` 业务接口使用 `x-api-key`（值为 `API_INTERNAL_TOKEN`）
 - 当 `API_INTERNAL_TOKEN` 未配置时，部分通用接口会放行（开发态友好）
 - 支付内部接口（`/api/payment/internal/*`）严格要求 `API_INTERNAL_TOKEN`
-- `/api/payment/internal/credits-maintenance` 额外支持 `Authorization: Bearer <CRON_SECRET>`
+- `/api/payment/internal/credits-maintenance` 与 `/api/payment/internal/apply-subscription-period-budgets` 额外支持 `Authorization: Bearer <CRON_SECRET>`
 
 ## 主要接口（按模块）
 
@@ -176,6 +176,7 @@ npm run litellm:up
 - `GET /api/payment/internal/payment-session-validate`
 - `POST /api/payment/internal/credits-maintenance`
 - `GET /api/payment/internal/credits-maintenance`
+- `POST /api/payment/internal/apply-subscription-period-budgets`（对「当前时间已进入且未应用」的订阅周期执行 LiteLLM reset spend + set budget；apis 进程内每 5 分钟也会自动执行，无需单独配 Fly.io 定时任务；此接口可供外部 cron 可选调用）
 - `GET /api/payment/subscribe`
 - `POST /api/payment/create-checkout`
 - `POST /api/payment/cancel-subscription`
@@ -201,6 +202,13 @@ npm run build
 - LiteLLM 仍是独立部署，不在 `apis` 进程内运行。
 - Docker runtime 需要可用 OpenClaw 镜像（默认 `OPENCLAW_IMAGE=pinai-openclaw:latest`）。
 - 若使用 webhook，`PUBLIC_BASE_URL` 必须可被 Telegram 访问。
+
+## 支付与订阅：事件与测试
+
+- **正常续费**：周期结束前 Stripe 自动扣款；成功→`invoice.paid`（重置 spend + 设 budget），失败→多次重试后 `customer.subscription.updated`（past_due/unpaid）→ 我们清零 budget 并停/毁该用户所有 assistant 容器（Docker 停、Fly 毁）。
+- **取消订阅（周期末）**：用户取消后 `cancel_at_period_end=true`，本期继续用；到 period_end 收到 `customer.subscription.updated` 或 `customer.subscription.deleted`（status=canceled）→ 同样清零 budget、停/毁容器。
+- **Gateway 校验**：访问 Gateway/Proxy/WS 前会校验订阅是否有效（`hasActiveSubscriptionForService`），过期或已取消且过 period_end 时返回 **402**，且不会启动新容器。
+- 测试：续费成功看 `invoice.paid` 与 LiteLLM budget；续费失败用测试卡 4000 0000 0000 0341 或 Stripe Dashboard 把 invoice 标失败；取消用 Dashboard 选 Cancel at period end；过期访问 Gateway 应得 402。详见 `apis/src/domain/payment/subscriptionSync.ts`、`subscriptionGuard.ts`、`webhook.ts`。
 
 ## 参考文档
 

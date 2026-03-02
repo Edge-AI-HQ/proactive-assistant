@@ -14,7 +14,7 @@ export class BackendApiError extends Error {
 const stripTrailingSlash = (value: string): string => value.replace(/\/+$/, "");
 
 const requestTimeoutMs = (): number =>
-  Math.max(1000, config.payment.requestTimeoutMs);
+  Math.max(1000, config.payment.telegramBotRequestTimeoutMs);
 
 const withTimeout = async <T>(
   promise: Promise<T>,
@@ -35,7 +35,7 @@ const withTimeout = async <T>(
 
 const baseUrl = (): string => {
   // Bot now calls the same API server (itself), use localhost
-  return 'http://127.0.0.1:' + config.port;
+  return "http://127.0.0.1:" + config.port;
 };
 
 const buildHeaders = (

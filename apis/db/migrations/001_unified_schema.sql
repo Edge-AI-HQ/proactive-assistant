@@ -86,18 +86,44 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_host_port_unique
   ON runtime_instances(host_port);
 
 -- Sessions and admin
-CREATE TABLE IF NOT EXISTS user_sessions (
+-- Gateway sessions: 用户访问助理 gateway 的认证会话
+CREATE TABLE IF NOT EXISTS gateway_sessions (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  session_type TEXT NOT NULL CHECK (session_type IN ('gateway', 'payment')),
+  assistant_id BIGINT REFERENCES assistants(id) ON DELETE CASCADE,
   session_token TEXT UNIQUE NOT NULL,
+  telegram_username_snapshot TEXT,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_gateway_sessions_user_id ON gateway_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_gateway_sessions_assistant_id ON gateway_sessions(assistant_id) WHERE assistant_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_gateway_sessions_expires_at ON gateway_sessions(expires_at);
+
+COMMENT ON TABLE gateway_sessions IS '用户访问助理 gateway 的认证会话';
+COMMENT ON COLUMN gateway_sessions.assistant_id IS '关联的助理 ID；NULL=用户级 session（可访问所有助理），非空=助理级 session（只能访问该助理）';
+
+-- Payment sessions: 支付流程的一次性 token
+CREATE TABLE IF NOT EXISTS payment_sessions (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  assistant_id BIGINT REFERENCES assistants(id) ON DELETE SET NULL,
+  session_token TEXT UNIQUE NOT NULL,
+  plan_code TEXT,
   telegram_username_snapshot TEXT,
   used BOOLEAN NOT NULL DEFAULT FALSE,
   expires_at TIMESTAMPTZ NOT NULL,
   used_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CHECK (session_type <> 'gateway' OR (used = FALSE AND used_at IS NULL))
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_payment_sessions_user_id ON payment_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_payment_sessions_assistant_id ON payment_sessions(assistant_id) WHERE assistant_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_payment_sessions_expires_at ON payment_sessions(expires_at);
+
+COMMENT ON TABLE payment_sessions IS '支付流程的一次性 token';
+COMMENT ON COLUMN payment_sessions.assistant_id IS '关联的助理 ID（可选）；未来支持为特定助理购买订阅';
 
 CREATE TABLE IF NOT EXISTS admin_users (
   id BIGSERIAL PRIMARY KEY,
@@ -130,24 +156,57 @@ CREATE TABLE IF NOT EXISTS billing_plans (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS user_subscriptions (
+-- 订阅周期表：每个计费周期一行，用于可追溯与幂等
+-- 当前生效周期 = period_start <= now() < period_end
+CREATE TABLE IF NOT EXISTS subscription_periods (
   id BIGSERIAL PRIMARY KEY,
-  user_id BIGINT UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  stripe_customer_id TEXT NOT NULL,
-  stripe_subscription_id TEXT,
-  plan_id TEXT REFERENCES billing_plans(plan_code),
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('active', 'paused', 'canceled', 'pending')),
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  assistant_id BIGINT REFERENCES assistants(id) ON DELETE CASCADE,
+  stripe_subscription_id TEXT NOT NULL,
+  stripe_customer_id TEXT,
+  stripe_invoice_id TEXT,
+  period_start TIMESTAMPTZ NOT NULL,
+  period_end TIMESTAMPTZ NOT NULL,
+  plan_id TEXT NOT NULL REFERENCES billing_plans(plan_code),
+  status TEXT NOT NULL DEFAULT 'active',
   cancel_at_period_end BOOLEAN NOT NULL DEFAULT FALSE,
-  current_period_start TIMESTAMPTZ,
-  current_period_end TIMESTAMPTZ,
-  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  budget_applied_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  CONSTRAINT subscription_periods_unique_sub_period
+    UNIQUE (stripe_subscription_id, period_start)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_user_subscriptions_stripe_subscription_unique
-  ON user_subscriptions(stripe_subscription_id)
-  WHERE stripe_subscription_id IS NOT NULL;
+-- 同一张发票只对应一个周期（幂等：重复 invoice.paid 不会重复插入）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_subscription_periods_stripe_invoice_id
+  ON subscription_periods (stripe_invoice_id)
+  WHERE stripe_invoice_id IS NOT NULL;
+
+-- 按 stripe_customer_id 解析用户（invoice/webhook）
+CREATE INDEX IF NOT EXISTS idx_subscription_periods_stripe_customer_id
+  ON subscription_periods (stripe_customer_id)
+  WHERE stripe_customer_id IS NOT NULL;
+
+-- 定时任务：查未应用且当前时间已进入的周期
+CREATE INDEX IF NOT EXISTS idx_subscription_periods_apply_budget
+  ON subscription_periods (period_start, period_end, budget_applied_at)
+  WHERE budget_applied_at IS NULL;
+
+-- 按用户 + 时间范围查当前生效周期
+CREATE INDEX IF NOT EXISTS idx_subscription_periods_user_period
+  ON subscription_periods (user_id, period_start, period_end);
+
+-- 按助理查询订阅（未来支持助理级订阅）
+CREATE INDEX IF NOT EXISTS idx_subscription_periods_assistant_id
+  ON subscription_periods (assistant_id)
+  WHERE assistant_id IS NOT NULL;
+
+COMMENT ON TABLE subscription_periods IS 'Stripe 订阅计费周期；当前生效 = period_start <= now() < period_end；LiteLLM 重置由定时任务在 period_start 后执行';
+COMMENT ON COLUMN subscription_periods.stripe_customer_id IS 'Stripe Customer ID，用于从 invoice/webhook 按 customer 解析 telegram_user_id';
+COMMENT ON COLUMN subscription_periods.stripe_invoice_id IS 'Stripe Invoice ID，用于幂等与追溯';
+COMMENT ON COLUMN subscription_periods.budget_applied_at IS 'NULL=未应用；非空=已对该周期执行 LiteLLM reset spend + set budget';
+COMMENT ON COLUMN subscription_periods.assistant_id IS '关联的助理 ID（可选）；支持未来每个助理独立订阅；当前为 NULL 表示用户级订阅';
 
 CREATE TABLE IF NOT EXISTS user_credit_wallets (
   id BIGSERIAL PRIMARY KEY,
@@ -189,6 +248,7 @@ CREATE TABLE IF NOT EXISTS credit_ledger (
 CREATE TABLE IF NOT EXISTS payment_events (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  assistant_id BIGINT REFERENCES assistants(id) ON DELETE SET NULL,
   stripe_event_id TEXT UNIQUE NOT NULL,
   event_type TEXT NOT NULL,
   amount INTEGER,
@@ -201,6 +261,12 @@ CREATE TABLE IF NOT EXISTS payment_events (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE INDEX IF NOT EXISTS idx_payment_events_assistant_id
+  ON payment_events (assistant_id)
+  WHERE assistant_id IS NOT NULL;
+
+COMMENT ON COLUMN payment_events.assistant_id IS '关联的助理 ID（可选）；用于追踪事件属于哪个助理的订阅';
+
 INSERT INTO billing_plans (
   plan_code,
   display_name,
@@ -212,9 +278,9 @@ INSERT INTO billing_plans (
   sort_order,
   is_active
 ) VALUES
-  ('basic', 'Basic', 'price_1SzoXARuhUY2tIYEZ6BUQOHE', 'usd', 10, 300, 4000, 10, TRUE),
-  ('pro', 'Pro', 'price_1SzoYERuhUY2tIYEHXkcIljS', 'usd', 20, 300, 8000, 20, TRUE),
-  ('max', 'Max', 'price_1SzoYoRuhUY2tIYEsEGvaGBm', 'usd', 30, 300, 40000, 30, TRUE)
+  ('basic', 'Basic', 'price_1SzoXARuhUY2tIYEZ6BUQOHE', 'usd', 10, 0, 1000, 10, TRUE),
+  ('pro', 'Pro', 'price_1SzoYERuhUY2tIYEHXkcIljS', 'usd', 20, 0, 2000, 20, TRUE),
+  ('max', 'Max', 'price_1SzoYoRuhUY2tIYEsEGvaGBm', 'usd', 30, 0, 5000, 30, TRUE)
 ON CONFLICT (plan_code)
 DO UPDATE SET
   display_name = EXCLUDED.display_name,
@@ -226,19 +292,8 @@ DO UPDATE SET
   is_active = EXCLUDED.is_active,
   updated_at = NOW();
 
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_constraint
-    WHERE conname = 'user_subscriptions_plan_id_fkey'
-  ) THEN
-    ALTER TABLE user_subscriptions
-      ADD CONSTRAINT user_subscriptions_plan_id_fkey
-      FOREIGN KEY (plan_id)
-      REFERENCES billing_plans(plan_code);
-  END IF;
-END $$;
+COMMENT ON COLUMN billing_plans.daily_refresh_credits IS 'Deprecated - use monthly_refresh_credits only';
+COMMENT ON COLUMN billing_plans.monthly_refresh_credits IS 'Total credits allocated per month (1 credit ≈ $0.01 in API costs)';
 
 -- Triggers
 DROP TRIGGER IF EXISTS update_users_updated_at ON users;
@@ -259,11 +314,6 @@ CREATE TRIGGER update_runtime_instances_updated_at
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at_column();
 
-DROP TRIGGER IF EXISTS update_user_subscriptions_updated_at ON user_subscriptions;
-CREATE TRIGGER update_user_subscriptions_updated_at
-  BEFORE UPDATE ON user_subscriptions
-  FOR EACH ROW
-  EXECUTE FUNCTION update_updated_at_column();
 
 DROP TRIGGER IF EXISTS update_billing_plans_updated_at ON billing_plans;
 CREATE TRIGGER update_billing_plans_updated_at
@@ -291,10 +341,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_users_litellm_user_id_unique
   WHERE litellm_user_id IS NOT NULL AND litellm_user_id <> '';
 
 CREATE INDEX IF NOT EXISTS idx_users_last_active_at ON users(last_active_at DESC);
-CREATE INDEX IF NOT EXISTS idx_user_sessions_user_created ON user_sessions(user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_user_sessions_type_expires ON user_sessions(session_type, expires_at);
-CREATE INDEX IF NOT EXISTS idx_user_sessions_payment_expires_unused ON user_sessions(expires_at)
-  WHERE session_type = 'payment' AND used = FALSE;
 CREATE INDEX IF NOT EXISTS idx_assistants_owner_created ON assistants(owner_user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_assistants_litellm_key_alias ON assistants(litellm_key_alias);
 CREATE INDEX IF NOT EXISTS idx_assistants_litellm_user_id ON assistants(litellm_user_id);
@@ -303,8 +349,6 @@ CREATE INDEX IF NOT EXISTS idx_runtime_instances_status ON runtime_instances(sta
 CREATE INDEX IF NOT EXISTS idx_admin_sessions_admin_id ON admin_sessions(admin_id);
 CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires_at ON admin_sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_billing_plans_active_order ON billing_plans(is_active, sort_order);
-CREATE INDEX IF NOT EXISTS idx_user_subscriptions_status ON user_subscriptions(status);
-CREATE INDEX IF NOT EXISTS idx_user_subscriptions_customer ON user_subscriptions(stripe_customer_id);
 CREATE INDEX IF NOT EXISTS idx_user_credit_wallets_next_daily ON user_credit_wallets(next_daily_refresh_at);
 CREATE INDEX IF NOT EXISTS idx_user_credit_wallets_next_monthly ON user_credit_wallets(next_monthly_refresh_at);
 CREATE INDEX IF NOT EXISTS idx_user_credit_wallets_plan_code ON user_credit_wallets(plan_code);
@@ -319,11 +363,11 @@ CREATE INDEX IF NOT EXISTS idx_payment_events_processing_status ON payment_event
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE assistants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE runtime_instances ENABLE ROW LEVEL SECURITY;
-ALTER TABLE user_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE gateway_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE payment_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE admin_users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE admin_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE billing_plans ENABLE ROW LEVEL SECURITY;
-ALTER TABLE user_subscriptions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_credit_wallets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE credit_ledger ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payment_events ENABLE ROW LEVEL SECURITY;
@@ -336,11 +380,12 @@ BEGIN
     'users',
     'assistants',
     'runtime_instances',
-    'user_sessions',
+    'gateway_sessions',
+    'payment_sessions',
     'admin_users',
     'admin_sessions',
     'billing_plans',
-    'user_subscriptions',
+    'subscription_periods',
     'user_credit_wallets',
     'credit_ledger',
     'payment_events'

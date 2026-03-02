@@ -49,11 +49,27 @@ const ensureAssistantRecord = async (
   }
 
   const existingByToken = await getAssistantByBotToken(assistantBotToken);
-  if (
-    existingByToken &&
-    existingByToken.owner_telegram_user_id !== ownerTelegramUserId
-  ) {
-    throw new Error("ASSISTANT_BOT_ALREADY_OWNED");
+  if (existingByToken) {
+    if (existingByToken.owner_telegram_user_id !== ownerTelegramUserId) {
+      throw new Error("ASSISTANT_BOT_ALREADY_OWNED");
+    }
+
+    // Token 属于当前用户，更新 bot_id 和 username
+    return (
+      (await updateAssistant(existingByToken.id, {
+        assistant_bot_token: assistantBotToken,
+        assistant_bot_username: assistantBotUsername,
+        container_name:
+          existingByToken.container_name?.trim() || defaultContainerName,
+      })) ?? existingByToken
+    );
+  }
+
+  // 限制：一个用户只能创建一个 assistant
+  const existingAssistants =
+    await listAssistantsByOwnerTelegramId(ownerTelegramUserId);
+  if (existingAssistants.length > 0) {
+    throw new Error("USER_ALREADY_HAS_ASSISTANT");
   }
 
   const created = await createAssistant({

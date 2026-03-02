@@ -4,18 +4,24 @@ import {
   isLiteLLMClientEnabled,
   resetLiteLLMUserSpend,
   updateLiteLLMKey,
-  updateLiteLLMUser
-} from '../litellm/client.js';
-import { config } from '../common/config.js';
-import { db } from './db.js';
+  updateLiteLLMUser,
+} from "../litellm/client.js";
+import { config } from "../common/config.js";
+import { db } from "./db.js";
 
 type JsonRecord = Record<string, unknown>;
 
-const buildDefaultLiteLLMUserId = (userId: number): string => String(Math.max(0, Math.trunc(userId)));
+const buildDefaultLiteLLMUserId = (userId: number): string =>
+  String(Math.max(0, Math.trunc(userId)));
 
-const buildDefaultLiteLLMAlias = (telegramUserId: string, telegramUsername: string | null): string => {
-  const username = (telegramUsername || '').trim();
-  return username ? `telegram:${telegramUserId}:@${username}` : `telegram:${telegramUserId}`;
+const buildDefaultLiteLLMAlias = (
+  telegramUserId: string,
+  telegramUsername: string | null,
+): string => {
+  const username = (telegramUsername || "").trim();
+  return username
+    ? `telegram:${telegramUserId}:@${username}`
+    : `telegram:${telegramUserId}`;
 };
 
 const creditsToUsd = (credits: number): number => {
@@ -24,7 +30,9 @@ const creditsToUsd = (credits: number): number => {
 };
 
 const planBudgetUsd = (monthlyRefreshCredits: number): number => {
-  const monthly = Number.isFinite(monthlyRefreshCredits) ? Math.max(0, Math.trunc(monthlyRefreshCredits)) : 0;
+  const monthly = Number.isFinite(monthlyRefreshCredits)
+    ? Math.max(0, Math.trunc(monthlyRefreshCredits))
+    : 0;
   return creditsToUsd(monthly);
 };
 
@@ -45,7 +53,11 @@ export const resolveBudgetForUser = async (input: {
   if (isLiteLLMClientEnabled()) {
     try {
       const info = await getLiteLLMUserInfo(input.litellm_user_id);
-      if (info.maxBudgetUsd != null && Number.isFinite(info.maxBudgetUsd) && info.maxBudgetUsd > 0) {
+      if (
+        info.maxBudgetUsd != null &&
+        Number.isFinite(info.maxBudgetUsd) &&
+        info.maxBudgetUsd > 0
+      ) {
         return info.maxBudgetUsd;
       }
     } catch {
@@ -53,14 +65,18 @@ export const resolveBudgetForUser = async (input: {
     }
   }
 
-  const sub = await db.getSubscriptionByTelegramId(input.telegram_user_id);
-  const activeStatuses = ['active', 'trialing', 'past_due'] as const;
-  if (sub) {
-    if (!activeStatuses.includes(sub.status as (typeof activeStatuses)[number])) {
+  const current = await db.getCurrentPeriodByTelegramId(input.telegram_user_id);
+  const activeStatuses = ["active", "trialing", "past_due"] as const;
+  if (current) {
+    if (
+      !activeStatuses.includes(
+        current.status as (typeof activeStatuses)[number],
+      )
+    ) {
       return 0;
     }
-    if (sub.plan_id) {
-      const plan = await db.getPlanByCode(sub.plan_id);
+    if (current.plan_id) {
+      const plan = await db.getPlanByCode(current.plan_id);
       if (plan) {
         const budget = planBudgetUsd(plan.monthly_refresh_credits);
         if (budget > 0) return budget;
@@ -69,7 +85,8 @@ export const resolveBudgetForUser = async (input: {
   }
 
   const fromConfig = config.litellm.defaultBudgetUsd;
-  if (fromConfig != null && Number.isFinite(fromConfig) && fromConfig > 0) return fromConfig;
+  if (fromConfig != null && Number.isFinite(fromConfig) && fromConfig > 0)
+    return fromConfig;
   return null;
 };
 
@@ -79,29 +96,43 @@ interface BudgetSyncInput {
   source: string;
 }
 
-type LiteLLMResolvedIdentity = NonNullable<Awaited<ReturnType<typeof db.getUserIdentityByTelegramId>>>;
+type LiteLLMResolvedIdentity = NonNullable<
+  Awaited<ReturnType<typeof db.getUserIdentityByTelegramId>>
+>;
 
 const resolveLiteLLMIdentity = async (
-  input: BudgetSyncInput
-): Promise<{ identity: LiteLLMResolvedIdentity; litellmUserId: string; litellmUserAlias: string } | null> => {
+  input: BudgetSyncInput,
+): Promise<{
+  identity: LiteLLMResolvedIdentity;
+  litellmUserId: string;
+  litellmUserAlias: string;
+} | null> => {
   const identity = await db.getUserIdentityByTelegramId(input.telegram_user_id);
   if (!identity) {
-    console.warn('[payment] skip litellm budget sync: user identity not found', {
-      telegramUserId: input.telegram_user_id,
-      source: input.source
-    });
+    console.warn(
+      "[payment] skip litellm budget sync: user identity not found",
+      {
+        telegramUserId: input.telegram_user_id,
+        source: input.source,
+      },
+    );
     return null;
   }
 
-  const litellmUserId = (identity.litellm_user_id || '').trim() || buildDefaultLiteLLMUserId(identity.id);
+  const litellmUserId =
+    (identity.litellm_user_id || "").trim() ||
+    buildDefaultLiteLLMUserId(identity.id);
   const litellmUserAlias =
-    (identity.litellm_user_alias || '').trim() ||
-    buildDefaultLiteLLMAlias(input.telegram_user_id, input.telegram_username ?? identity.telegram_username);
+    (identity.litellm_user_alias || "").trim() ||
+    buildDefaultLiteLLMAlias(
+      input.telegram_user_id,
+      input.telegram_username ?? identity.telegram_username,
+    );
 
   return {
     identity,
     litellmUserId,
-    litellmUserAlias
+    litellmUserAlias,
   };
 };
 
@@ -110,7 +141,7 @@ export const syncLiteLLMBudgetAbsolute = async (
     budget_usd: number;
     metadata?: JsonRecord;
     reset_spend?: boolean;
-  }
+  },
 ): Promise<void> => {
   if (!isLiteLLMClientEnabled()) return;
 
@@ -129,36 +160,44 @@ export const syncLiteLLMBudgetAbsolute = async (
       source: input.source,
       telegram_user_id: input.telegram_user_id,
       user_id: identity.id,
-      ...(input.metadata ?? {})
-    }
+      ...(input.metadata ?? {}),
+    },
   });
 
   if (input.reset_spend) {
     try {
       await resetLiteLLMUserSpend(litellmUserId);
-      console.log(`[payment] Reset LiteLLM spend for user ${litellmUserId} (source: ${input.source})`);
+      console.log(
+        `[payment] Reset LiteLLM spend for user ${litellmUserId} (source: ${input.source})`,
+      );
     } catch (error: unknown) {
-      console.error('[payment] Failed to reset LiteLLM spend, continuing with budget update', {
-        userId: litellmUserId,
-        error: error instanceof Error ? error.message : String(error)
-      });
+      console.error(
+        "[payment] Failed to reset LiteLLM spend, continuing with budget update",
+        {
+          userId: litellmUserId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
     }
   }
 
   await updateLiteLLMUser({
     userId: litellmUserId,
     userAlias: litellmUserAlias,
-    maxBudgetUsd: targetBudgetUsd
+    maxBudgetUsd: targetBudgetUsd,
   });
 
   const litellmKey = await db.getLiteLLMKeyByTelegramId(input.telegram_user_id);
   if (litellmKey) {
     try {
-      await updateLiteLLMKey({ key: litellmKey, maxBudgetUsd: targetBudgetUsd });
+      await updateLiteLLMKey({
+        key: litellmKey,
+        maxBudgetUsd: targetBudgetUsd,
+      });
     } catch (e) {
-      console.warn('[payment] key budget sync failed (non-fatal)', {
+      console.warn("[payment] key budget sync failed (non-fatal)", {
         telegramUserId: input.telegram_user_id,
-        error: e instanceof Error ? e.message : String(e)
+        error: e instanceof Error ? e.message : String(e),
       });
     }
   }
@@ -168,7 +207,7 @@ export const syncLiteLLMBudgetAbsolute = async (
     telegram_username: input.telegram_username ?? identity.telegram_username,
     litellm_user_id: litellmUserId,
     litellm_user_alias: litellmUserAlias,
-    litellm_last_synced_at: new Date().toISOString()
+    litellm_last_synced_at: new Date().toISOString(),
   });
 };
 
@@ -183,10 +222,10 @@ export const syncLiteLLMBudgetFromPlan = async (input: {
 
   const plan = await db.getPlanByCode(input.plan_code);
   if (!plan) {
-    console.warn('[payment] skip litellm budget sync: plan not found', {
+    console.warn("[payment] skip litellm budget sync: plan not found", {
       telegramUserId: input.telegram_user_id,
       planCode: input.plan_code,
-      source: input.source
+      source: input.source,
     });
     return;
   }
@@ -199,7 +238,7 @@ export const syncLiteLLMBudgetFromPlan = async (input: {
     budget_usd: targetBudgetUsd,
     ...(input.reset_spend != null ? { reset_spend: input.reset_spend } : {}),
     metadata: {
-      plan_code: input.plan_code
-    }
+      plan_code: input.plan_code,
+    },
   });
 };

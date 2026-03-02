@@ -35,7 +35,10 @@ const parseTtlSeconds = (value: unknown): number => {
     : 60 * 60;
 };
 
-const requireStripePriceId = (plan: { plan_code: string; stripe_price_id: string }): string => {
+const requireStripePriceId = (plan: {
+  plan_code: string;
+  stripe_price_id: string;
+}): string => {
   const priceId = (plan.stripe_price_id || "").trim();
   if (!priceId) {
     throw new DomainError(
@@ -155,13 +158,13 @@ export const createInternalPaymentSession = async (
 export const readInternalSubscription = async (
   telegramUserIdRaw: unknown,
 ): Promise<{
-  subscription: Awaited<ReturnType<typeof db.getSubscriptionByTelegramId>>;
+  subscription: Awaited<ReturnType<typeof db.getCurrentPeriodByTelegramId>>;
 }> => {
   const telegramUserId = parseTelegramUserId(telegramUserIdRaw);
   if (!telegramUserId) {
     throw new DomainError("INVALID_INPUT", "telegram_user_id is required");
   }
-  const subscription = await db.getSubscriptionByTelegramId(telegramUserId);
+  const subscription = await db.getCurrentPeriodByTelegramId(telegramUserId);
   return { subscription };
 };
 
@@ -265,7 +268,7 @@ export const createCheckoutSession = async (
   const telegramUserId = session.telegram_user_id;
   const telegramUsername = session.telegram_username;
 
-  const existingSub = await db.getSubscriptionByTelegramId(telegramUserId);
+  const existingSub = await db.getCurrentPeriodByTelegramId(telegramUserId);
   let customerId = existingSub?.stripe_customer_id ?? null;
 
   if (customerId) {
@@ -296,41 +299,50 @@ export const createCheckoutSession = async (
       let stripeSubActive = false;
       let stripeSubscription: Stripe.Subscription | null = null;
       try {
-        stripeSubscription = await stripe.subscriptions.retrieve(existingSub.stripe_subscription_id);
+        stripeSubscription = await stripe.subscriptions.retrieve(
+          existingSub.stripe_subscription_id,
+        );
         stripeSubActive = isStripeSubscriptionOpen(stripeSubscription.status);
-      } catch { /* subscription may not exist in Stripe anymore */ }
+      } catch {
+        /* subscription may not exist in Stripe anymore */
+      }
 
       if (stripeSubActive && stripeSubscription) {
         if (selectedPlan.plan_code === currentPlan.plan_code) {
-          throw new DomainError("INVALID_INPUT", "You are already on this plan");
+          throw new DomainError(
+            "INVALID_INPUT",
+            "You are already on this plan",
+          );
         }
 
-        const isUpgrade = selectedPlan.price_cents_monthly > currentPlan.price_cents_monthly;
+        const isUpgrade =
+          selectedPlan.price_cents_monthly > currentPlan.price_cents_monthly;
 
         if (!isUpgrade) {
           // DOWNGRADE: update price immediately with no proration.
           // User keeps current credits for the rest of this period.
           // Next invoice charges the lower price; invoice.paid resets spend + budget.
-          const subscriptionItemId = readCurrentSubscriptionItemId(stripeSubscription);
+          const subscriptionItemId =
+            readCurrentSubscriptionItemId(stripeSubscription);
           if (!subscriptionItemId) {
-            throw new DomainError("INTERNAL", "Could not determine subscription item for downgrade", 500);
+            throw new DomainError(
+              "INTERNAL",
+              "Could not determine subscription item for downgrade",
+              500,
+            );
           }
-          await stripe.subscriptions.update(existingSub.stripe_subscription_id, {
-            items: [{ id: subscriptionItemId, price: stripePriceId }],
-            proration_behavior: "none",
-            metadata: {
-              telegram_user_id: telegramUserId,
-              telegram_username: telegramUsername || "",
-              plan: selectedPlan.plan_code,
+          await stripe.subscriptions.update(
+            existingSub.stripe_subscription_id,
+            {
+              items: [{ id: subscriptionItemId, price: stripePriceId }],
+              proration_behavior: "none",
+              metadata: {
+                telegram_user_id: telegramUserId,
+                telegram_username: telegramUsername || "",
+                plan: selectedPlan.plan_code,
+              },
             },
-          });
-
-          await db.upsertUserSubscription({
-            telegram_user_id: telegramUserId,
-            stripe_customer_id: customerId,
-            stripe_subscription_id: existingSub.stripe_subscription_id,
-            plan_id: selectedPlan.plan_code,
-          });
+          );
 
           console.log("[payment] Downgrade scheduled (next billing cycle)", {
             telegramUserId,
@@ -415,7 +427,7 @@ export const cancelStripeSubscription = async (
     throw new DomainError("INVALID_INPUT", "telegram_user_id is required");
   }
 
-  const subscription = await db.getSubscriptionByTelegramId(telegramUserId);
+  const subscription = await db.getCurrentPeriodByTelegramId(telegramUserId);
   if (!subscription || !subscription.stripe_subscription_id) {
     throw new DomainError("NOT_FOUND", "Active subscription not found");
   }
@@ -425,17 +437,6 @@ export const cancelStripeSubscription = async (
     {
       cancel_at_period_end: true,
     },
-  );
-
-  const updatedEndedAt = parseUnixSecondsToDate(updated.ended_at);
-  await db.updateSubscriptionStatus(
-    telegramUserId,
-    updated.status,
-    new Date(updated.current_period_start * 1000),
-    new Date(updated.current_period_end * 1000),
-    true,
-    updatedEndedAt,
-    updated.status,
   );
 
   return {

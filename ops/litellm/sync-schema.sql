@@ -1,5 +1,13 @@
 -- 同步 LiteLLM Prisma schema 到数据库
 -- 在 litellm schema 下执行
+-- 
+-- 当前版本: v1.81.12-stable
+-- 更新 LiteLLM 版本时需要重新执行此脚本或查看 fly logs 中的 SQL 命令
+--
+-- 执行方式：
+-- 1. 在 Supabase SQL Editor 中直接执行
+-- 2. 或使用 psql：
+--    psql "postgresql://...?options=-c%20search_path%3Dlitellm" -f sync-schema.sql
 
 -- 添加缺失的列
 ALTER TABLE litellm."LiteLLM_DeletedTeamTable" 
