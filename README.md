@@ -87,7 +87,6 @@ Telegram 相关（启用 bot / gateway 登录）：
 12. `011_rename_litellm_virtual_key_column.sql`
 13. `012_fix_subscription_sync_schema.sql`
 14. `014_simplify_credits_to_monthly_only.sql`
-15. `019_add_vnc_and_pending_actions.sql` - ✅ 已执行到云端
 
 建议：
 - 新库或老库升级前先阅读 `apis/db/README.md`
