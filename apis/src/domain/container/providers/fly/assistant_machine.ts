@@ -392,17 +392,19 @@ export const createAssistantMachine = async (
     'grep -q "PINAI_REMINDER_POLICY_V1" /app/data/workspace/AGENTS.md || printf "\\n# PINAI_REMINDER_POLICY_V1\\n- For time-based reminders and scheduled follow-ups, ALWAYS use the cron tool (cron.add / cron.update / cron.run).\\n- NEVER use exec/process with sleep, while, timeout, or background shell jobs to simulate timers.\\n- For Telegram reminders, always send back to the same channel/account context where the user asked.\\n" >> /app/data/workspace/AGENTS.md',
   ].join(" && ");
 
-  // VNC setup: generate password, start TigerVNC with noVNC web interface
-  const vncBootstrap = [
-    "mkdir -p /app/data/vnc /root/.vnc",
-    "if [ ! -f /app/data/vnc/passwd ]; then echo 'pinai123' | vncpasswd -f > /app/data/vnc/passwd; chmod 600 /app/data/vnc/passwd; fi",
-    "ln -sf /app/data/vnc/passwd /root/.vnc/passwd",
-    "export DISPLAY=:1",
-    'printf "%s\\n" "#!/bin/sh" "unset SESSION_MANAGER" "unset DBUS_SESSION_BUS_ADDRESS" "exec startxfce4" > /root/.vnc/xstartup',
-    "chmod +x /root/.vnc/xstartup",
-    `vncserver :1 -geometry 1920x1080 -depth 24 -rfbport ${vncPort} -localhost no -SecurityTypes VncAuth >/tmp/tigervnc.log 2>&1`,
-    "sleep 2",
-  ].join(" && ");
+  // VNC setup: generate password, start TigerVNC in background
+  // VNC 服务启动放在后台，不阻塞主进程
+  const vncBootstrap = `(
+    mkdir -p /app/data/vnc /root/.vnc &&
+    if [ ! -f /app/data/vnc/passwd ]; then echo 'pinai123' | vncpasswd -f > /app/data/vnc/passwd; chmod 600 /app/data/vnc/passwd; fi &&
+    ln -sf /app/data/vnc/passwd /root/.vnc/passwd &&
+    export DISPLAY=:1 &&
+    printf "%s\\n" "#!/bin/sh" "unset SESSION_MANAGER" "unset DBUS_SESSION_BUS_ADDRESS" "exec startxfce4" > /root/.vnc/xstartup &&
+    chmod +x /root/.vnc/xstartup &&
+    vncserver :1 -geometry 1920x1080 -depth 24 -rfbport ${vncPort} -localhost yes -SecurityTypes VncAuth >/tmp/tigervnc.log 2>&1 &&
+    sleep 3 &&
+    node -e 'const net=require("net");const port=${vncPort};const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-vnc-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-vnc-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});'
+  ) >/tmp/vnc-bootstrap.log 2>&1 &`;
 
   const bootstrapCommand = [
     "mkdir -p /app/data/workspace /app/data/tmp /app/data/config /root/.openclaw",
@@ -410,11 +412,11 @@ export const createAssistantMachine = async (
     "ln -sfn /app/data/workspace /root/.openclaw/workspace",
     reminderPolicyBootstrap,
     cacheBootstrap,
+    // VNC 启动放在后台，不阻塞主进程（包含 VNC 服务器 + IPv6 代理）
     vncBootstrap,
     `node -e 'const net=require("net");const port=Number(process.env.OPENCLAW_GATEWAY_PORT||${config.openclaw.gatewayPort});const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});' >/tmp/fly-ipv6-proxy.log 2>&1 & sleep 0.2`,
     `node -e 'const net=require("net");const port=Number(process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT||${normalizedWebhookPort});const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-tg-webhook-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-tg-webhook-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});' >/tmp/fly-tg-webhook-ipv6-proxy.log 2>&1 & sleep 0.2`,
     `node -e 'const net=require("net");const port=Number(process.env.OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT||${normalizedPrivateWebhookPort});const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-tg-private-webhook-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-tg-private-webhook-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});' >/tmp/fly-tg-private-webhook-ipv6-proxy.log 2>&1 & sleep 0.2`,
-    `node -e 'const net=require("net");const port=${vncPort};const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-vnc-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-vnc-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});' >/tmp/fly-vnc-ipv6-proxy.log 2>&1 & sleep 0.2`,
     "exec openclaw gateway --bind loopback",
   ].join(" && ");
 
