@@ -421,12 +421,15 @@ const ensureAssistantFlyContainer = async (
 const destroyAssistantFlyContainer = async (
   assistant: AssistantContainerDestroyRef,
 ): Promise<{ deleted: boolean }> => {
+  // Quick Start 模式下 assistant_bot_id 为 NULL，使用 assistant.id 作为标识
+  const botIdForContainer = assistant.assistant_bot_id ?? assistant.id;
+
   const fallbackName =
     assistant.container_name?.trim() ||
-    containerNameForAssistant(assistant.assistant_bot_id);
+    containerNameForAssistant(botIdForContainer);
   const machine = await resolveMachineByRef(assistant.container_id, [
     fallbackName,
-    containerNameForAssistant(assistant.assistant_bot_id),
+    containerNameForAssistant(botIdForContainer),
   ]);
 
   if (!machine) {
@@ -458,12 +461,15 @@ const destroyAssistantFlyContainer = async (
 const stopAssistantFlyContainer = async (
   assistant: AssistantContainerDestroyRef,
 ): Promise<{ stopped: boolean }> => {
+  // Quick Start 模式下 assistant_bot_id 为 NULL，使用 assistant.id 作为标识
+  const botIdForContainer = assistant.assistant_bot_id ?? assistant.id;
+
   const fallbackName =
     assistant.container_name?.trim() ||
-    containerNameForAssistant(assistant.assistant_bot_id);
+    containerNameForAssistant(botIdForContainer);
   const machine = await resolveMachineByRef(assistant.container_id, [
     fallbackName,
-    containerNameForAssistant(assistant.assistant_bot_id),
+    containerNameForAssistant(botIdForContainer),
   ]);
 
   if (!machine) {
