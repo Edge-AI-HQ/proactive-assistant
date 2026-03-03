@@ -56,7 +56,7 @@ function installTelegramFetchProxy(api, routerUrl) {
 
   globalThis.fetch = async (input, init) => {
     try {
-      const patchedGatewayInit = await patchCronAddDeliveryAccountId(input, init);
+      const patchedGatewayInit = await patchCronAddDeliveryAccountId(input, init, api);
       if (patchedGatewayInit) {
         init = patchedGatewayInit;
       }
@@ -120,7 +120,7 @@ function extractTelegramApiPath(url) {
   return { methodName, botToken };
 }
 
-async function patchCronAddDeliveryAccountId(input, init) {
+async function patchCronAddDeliveryAccountId(input, init, api) {
   const rawUrl =
     typeof input === 'string' ? input
     : input instanceof URL ? input.toString()
@@ -194,14 +194,16 @@ async function patchCronAddDeliveryAccountId(input, init) {
     return null;
   }
   const existingTo = typeof delivery.to === 'string' ? delivery.to.trim() : '';
-  const nextTo = existingTo || (inferredPeerId ? `telegram:${inferredPeerId}` : '');
+  const inferredTo = inferredPeerId ? `telegram:${inferredPeerId}` : '';
+  const nextTo = inferredTo || existingTo;
   const nextMode = typeof delivery.mode === 'string' && delivery.mode.trim() ? delivery.mode : 'announce';
   const nextChannel =
     typeof delivery.channel === 'string' && delivery.channel.trim() ? delivery.channel : 'telegram';
-  const nextAccountId =
+  const existingAccountId =
     typeof delivery.accountId === 'string' && delivery.accountId.trim()
-      ? delivery.accountId
-      : inferredAccountId || undefined;
+      ? delivery.accountId.trim().toLowerCase()
+      : '';
+  const nextAccountId = inferredAccountId || existingAccountId || undefined;
 
   parsed.params = {
     ...job,
@@ -213,6 +215,9 @@ async function patchCronAddDeliveryAccountId(input, init) {
       ...(nextAccountId ? { accountId: nextAccountId } : {}),
     },
   };
+  api?.logger.info(
+    `[cron.add patch] sessionKey=${sessionKey || 'n/a'} accountId=${nextAccountId || 'n/a'} to=${nextTo || 'n/a'}`,
+  );
 
   const nextBody = JSON.stringify(parsed);
   return {

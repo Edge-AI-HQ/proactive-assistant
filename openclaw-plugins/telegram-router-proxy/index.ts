@@ -61,7 +61,7 @@ function installTelegramFetchProxy(api: OpenClawPluginApi, routerUrl: string) {
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     try {
-      const patchedGatewayInit = await patchCronAddDeliveryAccountId(input, init);
+      const patchedGatewayInit = await patchCronAddDeliveryAccountId(input, init, api);
       if (patchedGatewayInit) {
         init = patchedGatewayInit;
       }
@@ -128,6 +128,7 @@ function extractTelegramApiPath(url: URL): { methodName: string; botToken: strin
 async function patchCronAddDeliveryAccountId(
   input: RequestInfo | URL,
   init?: RequestInit,
+  api?: OpenClawPluginApi,
 ): Promise<RequestInit | null> {
   const rawUrl =
     typeof input === 'string' ? input
@@ -202,14 +203,16 @@ async function patchCronAddDeliveryAccountId(
     return null;
   }
   const existingTo = typeof delivery.to === 'string' ? delivery.to.trim() : '';
-  const nextTo = existingTo || (inferredPeerId ? `telegram:${inferredPeerId}` : '');
+  const inferredTo = inferredPeerId ? `telegram:${inferredPeerId}` : '';
+  const nextTo = inferredTo || existingTo;
   const nextMode = typeof delivery.mode === 'string' && delivery.mode.trim() ? delivery.mode : 'announce';
   const nextChannel =
     typeof delivery.channel === 'string' && delivery.channel.trim() ? delivery.channel : 'telegram';
-  const nextAccountId =
+  const existingAccountId =
     typeof delivery.accountId === 'string' && delivery.accountId.trim()
-      ? delivery.accountId
-      : inferredAccountId || undefined;
+      ? delivery.accountId.trim().toLowerCase()
+      : '';
+  const nextAccountId = inferredAccountId || existingAccountId || undefined;
 
   parsed.params = {
     ...job,
@@ -221,6 +224,9 @@ async function patchCronAddDeliveryAccountId(
       ...(nextAccountId ? { accountId: nextAccountId } : {}),
     },
   };
+  api?.logger.info(
+    `[cron.add patch] sessionKey=${sessionKey || 'n/a'} accountId=${nextAccountId || 'n/a'} to=${nextTo || 'n/a'}`,
+  );
 
   const nextBody = JSON.stringify(parsed);
   return {
