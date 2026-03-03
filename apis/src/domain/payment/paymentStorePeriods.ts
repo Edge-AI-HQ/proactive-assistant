@@ -14,6 +14,40 @@ export interface EndedSubscriptionUser {
   telegram_username: string | null;
 }
 
+const resolveValidAssistantId = async (
+  pool: Queryable,
+  assistantId: number | null | undefined,
+  source: string,
+): Promise<number | null> => {
+  if (
+    typeof assistantId !== "number" ||
+    !Number.isFinite(assistantId) ||
+    assistantId <= 0
+  ) {
+    return null;
+  }
+
+  const normalizedId = Math.trunc(assistantId);
+  const existsResult = await pool.query(
+    `
+      SELECT 1
+      FROM assistants
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [normalizedId],
+  );
+  if ((existsResult.rowCount ?? 0) > 0) {
+    return normalizedId;
+  }
+
+  console.warn("[payment] ignoring unknown assistant_id", {
+    source,
+    assistantId: normalizedId,
+  });
+  return null;
+};
+
 export const createSubscriptionPeriodStore = (
   pool: Queryable,
 ): Pick<
@@ -48,6 +82,11 @@ export const createSubscriptionPeriodStore = (
           "upsertSubscriptionPeriod requires valid period_start and period_end",
         );
       }
+      const assistantId = await resolveValidAssistantId(
+        pool,
+        data.assistant_id ?? null,
+        "upsertSubscriptionPeriod",
+      );
 
       await pool.query(
         `
@@ -84,7 +123,7 @@ export const createSubscriptionPeriodStore = (
           data.plan_id,
           data.status ?? "active",
           data.cancel_at_period_end === true,
-          data.assistant_id ?? null,
+          assistantId,
         ],
       );
     },
@@ -317,6 +356,11 @@ export const createSubscriptionPeriodStore = (
       const user = data.telegram_user_id
         ? await resolveOrCreateUser(pool, data.telegram_user_id, undefined)
         : null;
+      const assistantId = await resolveValidAssistantId(
+        pool,
+        data.assistant_id ?? null,
+        "claimStripeEvent",
+      );
 
       const insertResult = await pool.query<{ id: number }>(
         `
@@ -339,7 +383,7 @@ export const createSubscriptionPeriodStore = (
         `,
         [
           user?.id ?? null,
-          data.assistant_id ?? null,
+          assistantId,
           data.stripe_event_id,
           data.event_type,
           data.amount ?? null,
@@ -374,7 +418,7 @@ export const createSubscriptionPeriodStore = (
         [
           data.stripe_event_id,
           user?.id ?? null,
-          data.assistant_id ?? null,
+          assistantId,
           data.event_type,
           data.amount ?? null,
           data.currency ?? null,
