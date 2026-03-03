@@ -166,21 +166,17 @@ router.get("/vnc/:token", async (req, res) => {
       `);
     }
 
-    // 从 runtime_ref 提取机器 ID
+    // 从 runtime_ref 提取 IPv6 公网地址
     // 格式：fly:84e1e0b274d3d8|fdaa:48:2900:a7b:1b7:6e2f:ed88:2
-    const machineId = tokenRecord.runtime_ref
-      .split("|")[0]
-      ?.replace("fly:", "");
-    if (!machineId) {
-      return res.status(503).send("Invalid container reference");
+    const ipv6 = tokenRecord.runtime_ref.split("|")[1];
+    if (!ipv6) {
+      return res.status(503).send("Invalid container reference - no IPv6");
     }
 
     // 构建 VNC WebSocket URL
-    // 使用机器 ID 构建 Fly.io 内部 DNS 地址
-    const flyAppName = process.env.FLY_APP_NAME || "pinclaw-api-dev";
-    const vncHost = `${machineId}.vm.${flyAppName}.internal`;
-    const vncProxyPort = 8445; // IPv6 代理端口（避免与 VNC 服务器端口冲突）
-    const vncWsUrl = `wss://${vncHost}:${vncProxyPort}`;
+    // Fly.io 的 IPv6 地址是公网可访问的，直接连接
+    const vncProxyPort = 8445;
+    const vncWsUrl = `wss://[${ipv6}]:${vncProxyPort}`;
 
     // 返回 noVNC 客户端页面
     return res.send(`
