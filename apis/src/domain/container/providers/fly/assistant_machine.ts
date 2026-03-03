@@ -420,32 +420,7 @@ export const createAssistantMachine = async (
   ) >/tmp/vnc-bootstrap.log 2>&1 &`;
 
   // Playwright monkey-patch script to inject --no-sandbox args in container
-  const playwrightPatch = `
-try {
-  const Module = require('module');
-  const originalRequire = Module.prototype.require;
-  Module.prototype.require = function(id) {
-    const mod = originalRequire.apply(this, arguments);
-    if (id === 'playwright' || id === 'playwright-core') {
-      const browsers = ['chromium', 'firefox', 'webkit'];
-      browsers.forEach(browser => {
-        if (mod[browser] && mod[browser].launch) {
-          const originalLaunch = mod[browser].launch;
-          mod[browser].launch = function(options = {}) {
-            options.args = options.args || [];
-            const containerArgs = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'];
-            containerArgs.forEach(arg => {
-              if (!options.args.includes(arg)) options.args.push(arg);
-            });
-            return originalLaunch.call(this, options);
-          };
-        }
-      });
-    }
-    return mod;
-  };
-} catch (e) { /* ignore if playwright not used */ }
-`.trim();
+  const playwrightPatch = `try{const Module=require('module');const originalRequire=Module.prototype.require;Module.prototype.require=function(id){const mod=originalRequire.apply(this,arguments);if(id==='playwright'||id==='playwright-core'){const browsers=['chromium','firefox','webkit'];browsers.forEach(browser=>{if(mod[browser]&&mod[browser].launch){const originalLaunch=mod[browser].launch;mod[browser].launch=function(options={}){options.args=options.args||[];const containerArgs=['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage'];containerArgs.forEach(arg=>{if(!options.args.includes(arg))options.args.push(arg);});return originalLaunch.call(this,options);};}})}return mod;};}catch(e){}`;
 
   // 构建启动命令：前置准备 + 后台任务 + 主进程
   const setupCommands = [
