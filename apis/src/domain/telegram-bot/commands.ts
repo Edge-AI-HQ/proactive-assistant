@@ -264,7 +264,7 @@ const provisionAssistantWithGuideBot = async (
   );
 
   if (!paymentLink) {
-    // 可能已有活跃订阅或 payment 功能不可用
+    // 已有活跃订阅，提示使用管理命令
     await replyHtml(
       ctx,
       [
@@ -280,19 +280,28 @@ const provisionAssistantWithGuideBot = async (
     return true;
   }
 
-  // 没有活跃订阅，显示支付链接（重新订阅场景）
-  const keyboard = new InlineKeyboard().url(
-    "💳 Subscribe to activate",
-    paymentLink,
-  );
+  // 没有活跃订阅，允许重新选择创建模式（支持从 Quick Start 升级到 Own Bot）
+  const keyboard = new InlineKeyboard()
+    .text("🚀 Quick Start", "quick_start")
+    .row()
+    .text("🔧 Use Own Bot", "use_own_bot");
 
   await replyHtml(
     ctx,
     [
-      "✅ <b>Your assistant is ready!</b>",
+      "🤖 <b>Reactivate Your AI Assistant</b>",
       "",
-      "Subscribe to a plan to activate it.",
-      "Your assistant will be available immediately after payment.",
+      "Your assistant is registered but not active.",
+      "",
+      "<b>Choose your setup method:</b>",
+      "",
+      "🚀 <b>Quick Start</b>",
+      "   • Keep using this guide bot",
+      "   • Quick and simple",
+      "",
+      "🔧 <b>Use Own Bot</b>",
+      "   • Upgrade to your own bot",
+      "   • More customization",
     ].join("\n"),
     { reply_markup: keyboard },
   );
