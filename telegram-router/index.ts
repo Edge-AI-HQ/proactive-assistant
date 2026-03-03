@@ -35,6 +35,7 @@ const BOT_COMMANDS = new Set([
   "create_claw_assistant",
   "list_claw_assistant",
   "gateway",
+  "vnc_access",
   "help",
 ]);
 
@@ -196,7 +197,11 @@ async function handleTelegramWebhook(req: Request, source: WebhookSource) {
 
     console.log(`✅ Found container:`, userState.container);
 
-    const forwarded = await forwardToOpenClaw(userState.container, update, source);
+    const forwarded = await forwardToOpenClaw(
+      userState.container,
+      update,
+      source,
+    );
     if (!forwarded) {
       console.error(`❌ Forward ultimately failed for chat_id=${chatId}`);
       await sendFallbackMessageBySource(
@@ -537,9 +542,7 @@ async function forwardToOpenClaw(
           source === "private"
             ? OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT
             : OPENCLAW_TELEGRAM_WEBHOOK_PORT;
-        const isWebhookPort = webhookUrl.includes(
-          `:${expectedWebhookPort}/`,
-        );
+        const isWebhookPort = webhookUrl.includes(`:${expectedWebhookPort}/`);
         if (errName === "TimeoutError" && isWebhookPort) {
           console.warn(
             `⚠️ Forward timeout (assumed accepted) via ${webhookUrl}`,
