@@ -392,18 +392,6 @@ export const createAssistantMachine = async (
     'grep -q "PINAI_REMINDER_POLICY_V1" /app/data/workspace/AGENTS.md || printf "\\n# PINAI_REMINDER_POLICY_V1\\n- For time-based reminders and scheduled follow-ups, ALWAYS use the cron tool (cron.add / cron.update / cron.run).\\n- NEVER use exec/process with sleep, while, timeout, or background shell jobs to simulate timers.\\n- For Telegram reminders, always send back to the same channel/account context where the user asked.\\n" >> /app/data/workspace/AGENTS.md',
   ].join(" && ");
 
-  const cronCliGuardBootstrap = [
-    "if [ ! -f /usr/local/bin/openclaw.real ]; then cp /usr/local/bin/openclaw /usr/local/bin/openclaw.real; fi",
-    `printf "%s" '#!/bin/sh
-if [ "$1" = "cron" ] && { [ "$2" = "add" ] || [ "$2" = "create" ]; }; then
-  echo "PINAI policy: use the cron tool (gateway), not openclaw cron add/create via exec." >&2
-  exit 64
-fi
-exec /usr/local/bin/openclaw.real "$@"
-' > /usr/local/bin/openclaw`,
-    "chmod +x /usr/local/bin/openclaw",
-  ].join(" && ");
-
   // VNC setup: generate password, start TigerVNC with noVNC web interface
   const vncBootstrap = [
     "mkdir -p /app/data/vnc /root/.vnc",
@@ -421,7 +409,6 @@ exec /usr/local/bin/openclaw.real "$@"
     `printf "%s" ${quoteForShell(openclawPayload.json)} > "$OPENCLAW_CONFIG_PATH"`,
     "ln -sfn /app/data/workspace /root/.openclaw/workspace",
     reminderPolicyBootstrap,
-    cronCliGuardBootstrap,
     cacheBootstrap,
     vncBootstrap,
     `node -e 'const net=require("net");const port=Number(process.env.OPENCLAW_GATEWAY_PORT||${config.openclaw.gatewayPort});const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});' >/tmp/fly-ipv6-proxy.log 2>&1 & sleep 0.2`,
