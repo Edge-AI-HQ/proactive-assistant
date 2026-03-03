@@ -398,7 +398,7 @@ export const createAssistantMachine = async (
     "if [ ! -f /app/data/vnc/passwd ]; then echo 'pinai123' | vncpasswd -f > /app/data/vnc/passwd; chmod 600 /app/data/vnc/passwd; fi",
     "ln -sf /app/data/vnc/passwd /root/.vnc/passwd",
     "export DISPLAY=:1",
-    "cat > /root/.vnc/xstartup << 'XSTARTUP_EOF'\n#!/bin/sh\nunset SESSION_MANAGER\nunset DBUS_SESSION_BUS_ADDRESS\nexec startxfce4\nXSTARTUP_EOF",
+    "cat > /root/.vnc/xstartup << 'XSTARTUP_EOF'\n#!/bin/sh\nunset SESSION_MANAGER\nunset DBUS_SESSION_BUS_ADDRESS\nexec startxfce4\nXSTARTUP_EOF\n",
     "chmod +x /root/.vnc/xstartup",
     `vncserver :1 -geometry 1920x1080 -depth 24 -rfbport ${vncPort} -localhost no -SecurityTypes VncAuth >/tmp/tigervnc.log 2>&1`,
     "sleep 2",
