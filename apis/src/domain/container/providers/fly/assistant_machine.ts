@@ -361,6 +361,7 @@ export const createAssistantMachine = async (
   );
 
   const vncPort = 8444;
+  const vncProxyPort = 8445; // IPv6 代理使用不同端口避免冲突
   const env: Record<string, string> = {
     OPENCLAW_USER_ID: `assistant-${args.assistantBotId}`,
     OPENCLAW_GATEWAY_PORT: String(config.openclaw.gatewayPort),
@@ -373,6 +374,7 @@ export const createAssistantMachine = async (
     NODE_COMPILE_CACHE: "/app/data/cache/node-compile-cache",
     PINAI_OPENCLAW_CONFIG_SHA256: openclawPayload.hash,
     VNC_PORT: String(vncPort),
+    VNC_PROXY_PORT: String(vncProxyPort),
     DISPLAY: ":1",
     ...(config.telegramRouter.webhookUrl
       ? { TELEGRAM_ROUTER_URL: extractOrigin(config.telegramRouter.webhookUrl) }
@@ -393,7 +395,7 @@ export const createAssistantMachine = async (
   ].join(" && ");
 
   // VNC setup: generate password, start TigerVNC in background
-  // VNC 服务启动放在后台，不阻塞主进程
+  // VNC 监听 localhost，IPv6 代理使用不同端口（8445）避免冲突
   const vncBootstrap = `(
     mkdir -p /app/data/vnc /root/.vnc &&
     if [ ! -f /app/data/vnc/passwd ]; then echo 'pinai123' | vncpasswd -f > /app/data/vnc/passwd; chmod 600 /app/data/vnc/passwd; fi &&
@@ -403,7 +405,7 @@ export const createAssistantMachine = async (
     chmod +x /root/.vnc/xstartup &&
     vncserver :1 -geometry 1920x1080 -depth 24 -rfbport ${vncPort} -localhost yes -SecurityTypes VncAuth >/tmp/tigervnc.log 2>&1 &&
     sleep 3 &&
-    node -e 'const net=require("net");const port=${vncPort};const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-vnc-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-vnc-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});'
+    node -e 'const net=require("net");const vncPort=${vncPort};const proxyPort=${vncProxyPort};const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port:vncPort});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-vnc-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port:proxyPort,ipv6Only:true},()=>{console.log(\`[fly-vnc-ipv6-proxy] listening on [::]:$\{proxyPort} -> 127.0.0.1:$\{vncPort}\`);});'
   ) >/tmp/vnc-bootstrap.log 2>&1 &`;
 
   // 构建启动命令：前置准备 + 后台任务 + 主进程

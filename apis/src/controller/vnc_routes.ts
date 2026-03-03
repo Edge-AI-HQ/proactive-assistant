@@ -157,8 +157,8 @@ router.get("/vnc/:token", async (req, res) => {
     // 对于 Fly.io，使用机器名称构建内部 DNS 地址
     const machineName = `assistant-${container.bot_id}`;
     const vncHost = `${machineName}.internal`;
-    const vncPort = 8444;
-    const vncWsUrl = `wss://${vncHost}:${vncPort}`;
+    const vncProxyPort = 8445; // IPv6 代理端口（避免与 VNC 服务器端口冲突）
+    const vncWsUrl = `wss://${vncHost}:${vncProxyPort}`;
 
     // 返回 noVNC 客户端页面
     return res.send(`
