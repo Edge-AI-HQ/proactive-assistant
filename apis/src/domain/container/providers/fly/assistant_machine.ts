@@ -91,6 +91,12 @@ const buildAssistantOpenclawConfigPayload = (
 ): { config: UnknownRecord; json: string; hash: string } => {
   const { webhookUrl, webhookPath, webhookHost, webhookPort, pluginPath } =
     config.telegramRouter;
+  const normalizedWebhookUrl = webhookUrl.trim();
+  if (!normalizedWebhookUrl) {
+    throw new Error(
+      "telegramRouter.webhookUrl is required to keep OpenClaw in webhook mode",
+    );
+  }
   const privateWebhookPort = webhookPort + 1;
   const webhookSecret = config.telegram.webhookSecret;
   const openclawConfigContext = {
@@ -112,7 +118,7 @@ const buildAssistantOpenclawConfigPayload = (
     telegramWebhookMode: true,
     telegramWebhookPort: webhookPort,
     telegramPrivateWebhookPort: privateWebhookPort,
-    ...(webhookUrl ? { telegramWebhookUrl: webhookUrl } : {}),
+    telegramWebhookUrl: normalizedWebhookUrl,
     ...(webhookSecret ? { telegramWebhookSecret: webhookSecret } : {}),
     ...(webhookPath ? { telegramWebhookPath: webhookPath } : {}),
     ...(webhookHost ? { telegramWebhookHost: webhookHost } : {}),

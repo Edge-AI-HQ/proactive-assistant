@@ -153,7 +153,10 @@ export const config: Config = {
     cpuShares: toInt(process.env.CONTAINER_CPU_SHARES, 512)
   },
   telegramRouter: {
-    webhookUrl: toTrimmed(process.env.TELEGRAM_ROUTER_WEBHOOK_URL),
+    webhookUrl: toTrimmed(
+      process.env.TELEGRAM_ROUTER_WEBHOOK_URL,
+      `${stripTrailingSlash(publicBaseUrl)}/webhook/telegram`
+    ),
     webhookPath: toTrimmed(process.env.OPENCLAW_TELEGRAM_WEBHOOK_PATH, '/telegram-webhook'),
     webhookHost: toTrimmed(process.env.OPENCLAW_TELEGRAM_WEBHOOK_HOST, '0.0.0.0'),
     webhookPort: toInt(process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT, 8787),
