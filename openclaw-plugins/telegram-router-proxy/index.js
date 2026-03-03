@@ -56,7 +56,7 @@ function installTelegramFetchProxy(api, routerUrl) {
 
   globalThis.fetch = async (input, init) => {
     try {
-      const patchedGatewayInit = patchCronAddDeliveryAccountId(input, init);
+      const patchedGatewayInit = await patchCronAddDeliveryAccountId(input, init);
       if (patchedGatewayInit) {
         init = patchedGatewayInit;
       }
@@ -120,7 +120,7 @@ function extractTelegramApiPath(url) {
   return { methodName, botToken };
 }
 
-function patchCronAddDeliveryAccountId(input, init) {
+async function patchCronAddDeliveryAccountId(input, init) {
   const rawUrl =
     typeof input === 'string' ? input
     : input instanceof URL ? input.toString()
@@ -150,11 +150,22 @@ function patchCronAddDeliveryAccountId(input, init) {
     return null;
   }
 
+  let bodyText = '';
   const rawBody = init?.body;
-  if (typeof rawBody !== 'string' && !(rawBody instanceof Uint8Array)) {
+  if (typeof rawBody === 'string') {
+    bodyText = rawBody;
+  } else if (rawBody instanceof Uint8Array) {
+    bodyText = new TextDecoder().decode(rawBody);
+  } else if (input instanceof Request) {
+    try {
+      bodyText = await input.clone().text();
+    } catch {
+      bodyText = '';
+    }
+  }
+  if (!bodyText) {
     return null;
   }
-  const bodyText = typeof rawBody === 'string' ? rawBody : new TextDecoder().decode(rawBody);
 
   let parsed;
   try {
@@ -180,7 +191,12 @@ function patchCronAddDeliveryAccountId(input, init) {
   if (typeof delivery.accountId === 'string' && delivery.accountId.trim()) {
     return null;
   }
-  const sessionKey = typeof job.sessionKey === 'string' ? job.sessionKey : '';
+  const sessionKey =
+    typeof job.sessionKey === 'string'
+      ? job.sessionKey
+      : isRecord(job.payload) && typeof job.payload.sessionKey === 'string'
+        ? job.payload.sessionKey
+        : '';
   const inferredAccountId = inferAccountIdFromSessionKey(sessionKey);
   if (!inferredAccountId) {
     return null;
