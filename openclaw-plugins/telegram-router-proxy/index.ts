@@ -36,10 +36,10 @@ const plugin = {
   configSchema: emptyPluginConfigSchema(),
 
   register(api: OpenClawPluginApi) {
-    const routerUrl = process.env.TELEGRAM_ROUTER_URL || 'http://host.docker.internal:3001';
+    const routerUrl = process.env.TELEGRAM_ROUTER_URL || 'http://host.docker.internal:3000';
 
     api.logger.info(`Telegram Router Proxy enabled: ${routerUrl}`);
-    api.logger.info('TRP_VERSION_20260303A');
+    api.logger.info('TRP_VERSION_20260303B');
     installTelegramFetchProxy(api, routerUrl);
   }
 };
