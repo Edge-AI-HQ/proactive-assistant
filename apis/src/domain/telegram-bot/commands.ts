@@ -918,8 +918,58 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
         return;
       }
 
-      // 请求 VNC 访问令牌
+      // 检查容器状态，如果不存在则触发创建
       const baseUrl = config.publicBaseUrl || `http://localhost:${config.port}`;
+
+      // 如果容器不存在或未运行，尝试创建
+      if (!assistant.container_id || assistant.container_status !== "running") {
+        await replyHtml(ctx, "🔄 <b>Starting your assistant container...</b>");
+
+        try {
+          // 触发容器创建
+          const createResponse = await fetch(
+            `${baseUrl}/api/container/assistant/${assistant.id}/create`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "x-api-key": config.apiAuthToken || "",
+              },
+            },
+          );
+
+          if (!createResponse.ok) {
+            throw new Error("Failed to create container");
+          }
+
+          await replyHtml(
+            ctx,
+            [
+              "✅ <b>Container is being created</b>",
+              "",
+              "This may take 5-8 minutes for the first time.",
+              "",
+              "You'll receive a notification when it's ready.",
+              "",
+              "Then you can use /vnc_access to get remote desktop access.",
+            ].join("\n"),
+          );
+          return;
+        } catch (createError) {
+          console.error("Failed to create container:", createError);
+          await replyHtml(
+            ctx,
+            [
+              "❌ <b>Failed to start container</b>",
+              "",
+              "Please try again later or contact support.",
+            ].join("\n"),
+          );
+          return;
+        }
+      }
+
+      // 容器正在运行，请求 VNC 访问令牌
       const response = await fetch(
         `${baseUrl}/api/vnc/request-access/${assistant.id}`,
         {
@@ -937,14 +987,15 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
         };
         const errorMsg = errorData.error || "Failed to generate access link";
 
-        if (errorMsg === "Container not running") {
+        if (errorMsg.includes("Container")) {
           await replyHtml(
             ctx,
             [
-              "⚠️ <b>Container not running</b>",
+              "⚠️ <b>Container issue</b>",
               "",
-              "Your assistant container is not currently running.",
-              "Please start your assistant first, then try again.",
+              errorMsg,
+              "",
+              "Try the command again in a moment.",
             ].join("\n"),
           );
           return;
