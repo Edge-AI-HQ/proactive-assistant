@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Usage: DATABASE_URL="..." ./scripts/cleanup-user.sh [-y] <telegram_user_id>
- DATABASE_URL="postgresql://postgres:REDACTED@db.ighqvjvsjpmbjdjfahvl.supabase.co:5432/postgres" ./scripts/cleanup-user.sh 6142814327
+# DATABASE_URL="postgresql://postgres:REDACTED@db.ighqvjvsjpmbjdjfahvl.supabase.co:5432/postgres" ./scripts/cleanup-user.sh 6142814327
 # DATABASE_URL="postgresql://postgres:REDACTED@db.ighqvjvsjpmbjdjfahvl.supabase.co:5432/postgres" ./scripts/cleanup-user.sh 5572561504
 # Destroys the user's Fly machine and deletes all DB records (cascade).
 # Requires: psql, flyctl
