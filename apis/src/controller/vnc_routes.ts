@@ -31,9 +31,17 @@ router.post(
         return res.status(400).json({ error: "Invalid assistant ID" });
       }
 
-      // 验证 assistant 是否存在且属于当前用户
+      // 验证 assistant 是否存在并获取容器信息
       const assistantResult = await pool.query(
-        "SELECT id, owner_id, bot_id FROM assistants WHERE id = $1",
+        `SELECT 
+          a.id, 
+          a.owner_user_id, 
+          a.assistant_bot_id,
+          r.runtime_ref as container_id,
+          r.status as container_status
+         FROM assistants a
+         LEFT JOIN runtime_instances r ON r.assistant_id = a.id
+         WHERE a.id = $1`,
         [assistantId],
       );
 
@@ -49,16 +57,17 @@ router.post(
         "session_id=internal-telegram-bot",
       );
 
-      if (!isInternalCall && (!userId || assistant.owner_id !== userId)) {
+      if (!isInternalCall && (!userId || assistant.owner_user_id !== userId)) {
         return res.status(403).json({ error: "Access denied" });
       }
 
-      // 检查容器是否存在
-      // VNC 服务在容器启动时就会启动，所以只需要确认容器存在即可
-      if (!assistant.container_id) {
+      // 检查容器是否在运行
+      if (!assistant.container_id || assistant.container_status !== "running") {
         return res.status(400).json({
           error:
-            "Container not created yet. Please start your assistant first.",
+            assistant.container_status === "creating"
+              ? "Container is still starting. Please wait a moment."
+              : "Container not running. Please start your assistant first.",
         });
       }
 
@@ -96,11 +105,20 @@ router.get("/vnc/:token", async (req, res) => {
       return res.status(400).send("Invalid token");
     }
 
-    // 查询令牌
-    const result = await pool.query<VncAccessToken>(
-      `SELECT t.*, a.bot_id 
+    // 查询令牌和容器信息
+    const result = await pool.query<
+      VncAccessToken & {
+        runtime_ref: string | null;
+        container_status: string | null;
+      }
+    >(
+      `SELECT 
+        t.*,
+        r.runtime_ref,
+        r.status as container_status
        FROM vnc_access_tokens t
        JOIN assistants a ON t.assistant_id = a.id
+       LEFT JOIN runtime_instances r ON r.assistant_id = a.id
        WHERE t.token = $1`,
       [token],
     );
@@ -132,31 +150,35 @@ router.get("/vnc/:token", async (req, res) => {
       );
     }
 
-    // 获取容器详细信息（包含 IP 地址）
-    const containerResult = await pool.query(
-      `SELECT a.container_id, a.container_port, a.bot_id
-       FROM assistants a
-       WHERE a.bot_id = $1 AND a.container_id IS NOT NULL`,
-      [tokenRecord.bot_id],
-    );
-
-    if (!containerResult.rows.length) {
+    // 检查容器是否在运行
+    if (
+      !tokenRecord.runtime_ref ||
+      tokenRecord.container_status !== "running"
+    ) {
       return res.status(503).send(`
         <html>
           <body style="font-family: sans-serif; text-align: center; padding: 50px;">
             <h1>Container not available</h1>
             <p>The assistant container is not running. Please start your assistant first.</p>
+            <p>Status: ${tokenRecord.container_status || "not created"}</p>
           </body>
         </html>
       `);
     }
 
-    const container = containerResult.rows[0];
+    // 从 runtime_ref 提取机器 ID
+    // 格式：fly:84e1e0b274d3d8|fdaa:48:2900:a7b:1b7:6e2f:ed88:2
+    const machineId = tokenRecord.runtime_ref
+      .split("|")[0]
+      ?.replace("fly:", "");
+    if (!machineId) {
+      return res.status(503).send("Invalid container reference");
+    }
 
     // 构建 VNC WebSocket URL
-    // 对于 Fly.io，使用机器名称构建内部 DNS 地址
-    const machineName = `assistant-${container.bot_id}`;
-    const vncHost = `${machineName}.internal`;
+    // 使用机器 ID 构建 Fly.io 内部 DNS 地址
+    const flyAppName = process.env.FLY_APP_NAME || "pinclaw-api-dev";
+    const vncHost = `${machineId}.vm.${flyAppName}.internal`;
     const vncProxyPort = 8445; // IPv6 代理端口（避免与 VNC 服务器端口冲突）
     const vncWsUrl = `wss://${vncHost}:${vncProxyPort}`;
 
