@@ -2,6 +2,7 @@ import { Router, type Request } from "express";
 import crypto from "node:crypto";
 import net from "node:net";
 import type { Server } from "node:http";
+import { WebSocketServer } from "ws";
 import { pool } from "../domain/common/db/core.js";
 
 const router = Router();
@@ -316,8 +317,7 @@ router.get("/vnc/:token", async (req, res) => {
 
 // WebSocket 代理：将用户浏览器的 WebSocket 连接代理到容器 VNC 服务
 export const registerVncWebSocketProxy = (server: Server): void => {
-  const WebSocket = require("ws");
-  const wss = new WebSocket.Server({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true });
 
   server.on("upgrade", async (request: any, socket: any, head: any) => {
     const url = new URL(request.url, `http://${request.headers.host}`);
@@ -404,7 +404,8 @@ export const registerVncWebSocketProxy = (server: Server): void => {
         });
 
         upstream.on("data", (data: any) => {
-          if (ws.readyState === WebSocket.OPEN) {
+          if (ws.readyState === 1) {
+            // 1 = OPEN state
             ws.send(data);
           }
         });
