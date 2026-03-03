@@ -15,6 +15,7 @@ import {
   stopAssistantContainer,
   ensureAssistantContainer,
 } from "../container/index.js";
+import { ensureLiteLLMKeyForAssistant } from "../litellm/index.js";
 import { sendTelegramMessage } from "../telegram/notify.js";
 
 const parseUnixSecondsToDate = (value: unknown): Date | null => {
@@ -332,7 +333,14 @@ export async function syncSubscriptionFromStripe(
                   ? label
                   : `@${label}`;
                 try {
-                  await ensureAssistantContainer(assistant, user.gateway_token);
+                  const assistantWithLiteLLM = await ensureLiteLLMKeyForAssistant(
+                    Number(telegram_user_id),
+                    assistant,
+                  );
+                  await ensureAssistantContainer(
+                    assistantWithLiteLLM,
+                    user.gateway_token,
+                  );
                   results.push({ label: displayLabel, ok: true });
                   console.log(
                     `Started container for assistant ${assistant.id} after subscription sync`,
@@ -748,8 +756,12 @@ export async function handleInvoicePaid(
               assistant.assistant_bot_username ?? `#${assistant.id}`;
             const displayLabel = label.startsWith("#") ? label : `@${label}`;
             try {
-              const result = await ensureAssistantContainer(
+              const assistantWithLiteLLM = await ensureLiteLLMKeyForAssistant(
+                Number(subscription.telegram_user_id),
                 assistant,
+              );
+              const result = await ensureAssistantContainer(
+                assistantWithLiteLLM,
                 user.gateway_token,
               );
               // ready=false 表示容器启动了但未就绪（探测中），算部分成功
