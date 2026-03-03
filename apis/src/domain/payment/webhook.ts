@@ -43,6 +43,7 @@ export const processStripeEvent = async (
 
   try {
     const eventObject = event.data.object;
+    let skipped = false;
     switch (event.type) {
       case "checkout.session.completed":
         await handleCheckoutCompleted(eventObject as Stripe.Checkout.Session);
@@ -51,20 +52,30 @@ export const processStripeEvent = async (
       case "customer.subscription.created":
       case "customer.subscription.updated":
       case "customer.subscription.deleted": {
+        const subscription = eventObject as Stripe.Subscription;
         const eventCreated = normalizeEventCreated(event.created);
-        const eventContext =
+        const eventOrder =
           eventCreated === undefined
-            ? { event_id: event.id }
-            : { event_id: event.id, event_created: eventCreated };
-        await syncSubscriptionFromStripe(eventObject as Stripe.Subscription, {
-          ...eventContext,
-        });
+            ? "process"
+            : await db.claimSubscriptionEventOrder({
+                stripe_subscription_id: subscription.id,
+                event_created: eventCreated,
+                event_id: event.id,
+              });
+        if (eventOrder === "skip") {
+          skipped = true;
+          break;
+        }
+        await syncSubscriptionFromStripe(subscription);
         break;
       }
 
       case "invoice.paid":
-      case "invoice.payment_succeeded":
         await handleInvoicePaid(event.id, eventObject as Stripe.Invoice);
+        break;
+      case "invoice.payment_succeeded":
+        // invoice.paid is our single source of truth for provisioning/budget side effects.
+        skipped = true;
         break;
 
       default:
@@ -72,7 +83,7 @@ export const processStripeEvent = async (
     }
 
     await db.markStripeEventProcessed(event.id);
-    return { skipped: false };
+    return { skipped };
   } catch (error: unknown) {
     const message =
       error instanceof Error ? error.message : "Unknown webhook handler error";

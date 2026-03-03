@@ -54,6 +54,8 @@ export const createPaymentSessionStore = (
             payment_sessions.user_id,
             users.telegram_user_id::text AS telegram_user_id,
             COALESCE(payment_sessions.telegram_username_snapshot, users.telegram_username) AS telegram_username,
+            payment_sessions.assistant_id,
+            payment_sessions.plan_code,
             payment_sessions.used,
             payment_sessions.expires_at,
             payment_sessions.created_at

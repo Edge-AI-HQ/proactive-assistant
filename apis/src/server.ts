@@ -8,7 +8,6 @@ import { config, validateConfig } from "./domain/common/config.js";
 import { cleanupExpiredGatewaySessions } from "./domain/common/db/index.js";
 import { ensureInfraRuntimeConfigured } from "./domain/common/infraRuntime.js";
 import { db as paymentDb } from "./domain/payment/db.js";
-import { applySubscriptionPeriodBudgets } from "./domain/payment/subscriptionSync.js";
 import { validatePaymentPriceConsistencyOnStartup } from "./domain/payment/startupValidation.js";
 import {
   registerHttpRoutes,
@@ -71,9 +70,6 @@ setInterval(
     });
     void paymentDb.cleanupExpiredPaymentSessions().catch((error: unknown) => {
       console.error("Failed to cleanup payment sessions", error);
-    });
-    void applySubscriptionPeriodBudgets().catch((error: unknown) => {
-      console.error("Failed to apply subscription period budgets", error);
     });
     void syncContainerStates().catch((error: unknown) => {
       console.error("Failed to sync container states", error);

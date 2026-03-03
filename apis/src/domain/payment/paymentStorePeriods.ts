@@ -26,6 +26,7 @@ export const createSubscriptionPeriodStore = (
   | "getSubscriptionInfoByStripeCustomerId"
   | "getUsersWithEndedSubscriptionNoCurrentPeriod"
   | "updateSubscriptionCancelFlag"
+  | "claimSubscriptionEventOrder"
   | "claimStripeEvent"
   | "markStripeEventProcessed"
   | "markStripeEventFailed"
@@ -274,6 +275,42 @@ export const createSubscriptionPeriodStore = (
 
     async ensureUserForTelegram(telegram_user_id, telegram_username) {
       return resolveOrCreateUser(pool, telegram_user_id, telegram_username);
+    },
+
+    async claimSubscriptionEventOrder(data) {
+      const stripeSubscriptionId = data.stripe_subscription_id?.trim();
+      const eventId = data.event_id?.trim();
+      const eventCreated = Number.isFinite(data.event_created)
+        ? Math.max(0, Math.trunc(data.event_created))
+        : 0;
+      if (!stripeSubscriptionId || !eventId || eventCreated <= 0) {
+        return "process";
+      }
+
+      const result = await pool.query(
+        `
+          INSERT INTO stripe_subscription_event_watermarks (
+            stripe_subscription_id,
+            last_event_created,
+            last_event_id
+          )
+          VALUES ($1, $2, $3)
+          ON CONFLICT (stripe_subscription_id)
+          DO UPDATE SET
+            last_event_created = EXCLUDED.last_event_created,
+            last_event_id = EXCLUDED.last_event_id,
+            updated_at = NOW()
+          WHERE stripe_subscription_event_watermarks.last_event_created < EXCLUDED.last_event_created
+             OR (
+               stripe_subscription_event_watermarks.last_event_created = EXCLUDED.last_event_created
+               AND stripe_subscription_event_watermarks.last_event_id < EXCLUDED.last_event_id
+             )
+          RETURNING stripe_subscription_id
+        `,
+        [stripeSubscriptionId, eventCreated, eventId],
+      );
+
+      return (result.rowCount ?? 0) > 0 ? "process" : "skip";
     },
 
     async claimStripeEvent(data) {

@@ -117,10 +117,6 @@ async function resolveTelegramUserIdForSubscription(
 
 export async function syncSubscriptionFromStripe(
   subscription: Stripe.Subscription,
-  eventContext?: {
-    event_id?: string;
-    event_created?: number;
-  },
 ): Promise<void> {
   const telegram_user_id =
     await resolveTelegramUserIdForSubscription(subscription);

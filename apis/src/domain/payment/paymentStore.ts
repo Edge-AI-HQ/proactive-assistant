@@ -28,6 +28,11 @@ export type {
 } from "./paymentStoreCore.js";
 
 export interface PaymentStore {
+  claimSubscriptionEventOrder(data: {
+    stripe_subscription_id: string;
+    event_created: number;
+    event_id: string;
+  }): Promise<StripeEventClaimResult>;
   claimStripeEvent(data: {
     telegram_user_id?: string;
     assistant_id?: number;
