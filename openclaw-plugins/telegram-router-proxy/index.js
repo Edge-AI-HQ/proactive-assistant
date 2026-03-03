@@ -220,6 +220,9 @@ function isOpenClawGatewayRpc(url) {
 
 function inferAccountIdFromSessionKey(sessionKey) {
   const raw = (sessionKey || '').trim().toLowerCase();
+  if (raw === 'agent:main:main') {
+    return 'private';
+  }
   if (/^telegram:\d+$/.test(raw)) {
     return 'private';
   }
