@@ -73,7 +73,7 @@ Telegram 相关（启用 bot / gateway 登录）：
 迁移目录：`apis/db/migrations`
 
 当前迁移文件：
-1. `001_unified_schema.sql`
+1. `001_unified_schema.sql` - 核心 schema + billing（包含 VNC 和 pending actions）
 2. `002_litellm_identity_unification.sql`
 3. `003_user_litellm_shared_key.sql`
 4. `004_drop_admin_schema.sql`
@@ -87,6 +87,7 @@ Telegram 相关（启用 bot / gateway 登录）：
 12. `011_rename_litellm_virtual_key_column.sql`
 13. `012_fix_subscription_sync_schema.sql`
 14. `014_simplify_credits_to_monthly_only.sql`
+15. `019_add_vnc_and_pending_actions.sql` - ✅ 已执行到云端
 
 建议：
 - 新库或老库升级前先阅读 `apis/db/README.md`
@@ -181,12 +182,17 @@ npm run litellm:up
 - `POST /api/payment/cancel-subscription`
 - `POST /api/payment/webhook/stripe`
 
+### VNC Remote Desktop
+- `POST /api/vnc/request-access/:assistantId` - 生成 VNC 访问令牌（15 分钟有效期）
+- `GET /vnc/:token` - noVNC 客户端页面（WebSocket 连接到容器桌面）
+
 ## Telegram Bot 命令（当前）
 
 - `/start`
 - `/create_claw_assistant`
 - `/list_claw_assistant`
 - `/gateway`
+- `/vnc_access` - 获取远程桌面访问链接（用于浏览器密码输入、验证码等 GUI 交互）
 - `/cancel_subscription`
 
 ## 开发校验
@@ -196,11 +202,163 @@ npm run type-check
 npm run build
 ```
 
+## VNC 远程桌面功能
+
+OpenClaw 容器集成了 TigerVNC 远程桌面，允许用户通过浏览器访问容器的桌面环境，用于处理需要 GUI 交互的任务。
+
+### 架构
+
+- **VNC 服务器**: TigerVNC（端口 8444）
+- **桌面环境**: Xfce4（轻量级）
+- **浏览器**: Firefox ESR + Chromium
+- **前端**: noVNC（HTML5 VNC 客户端，通过 WebSocket 连接）
+
+### 使用流程
+
+1. 用户在 Telegram 发送 `/vnc_access` 命令
+2. Bot 生成临时访问链接（15 分钟有效期）
+3. 用户点击链接，浏览器加载 noVNC 客户端
+4. 自动连接到容器 VNC 服务（默认密码: `pinai123`）
+5. 进入 Xfce4 桌面，可以打开浏览器进行操作
+
+### 部署步骤
+
+1. **运行数据库迁移** ✅ 已完成
+```bash
+# 迁移已执行到云端数据库
+# psql $DATABASE_URL -f apis/db/migrations/019_add_vnc_and_pending_actions.sql
+```
+
+2. **重新构建 OpenClaw 镜像**
+```bash
+cat > .fly-openclaw-build.toml << 'EOF'
+app = 'pinclaw-api-dev'
+[build]
+  dockerfile = 'infra/container-manager/images/openclaw/Dockerfile'
+EOF
+
+flyctl deploy . \
+  --config .fly-openclaw-build.toml \
+  --build-only --push \
+  --image-label openclaw-vnc \
+  --remote-only --depot=false
+
+rm -f .fly-openclaw-build.toml
+```
+
+3. **更新 OpenClaw 镜像环境变量**
+```bash
+# 从构建输出获取 digest（格式: registry.fly.io/pinclaw-api-dev@sha256:xxxxx）
+flyctl secrets set \
+  OPENCLAW_IMAGE=registry.fly.io/pinclaw-api-dev@sha256:<digest> \
+  -a pinclaw-api-dev
+```
+
+4. **销毁现有容器**（用户下次启动时会自动使用新镜像）
+```bash
+flyctl machines list -a pinclaw-api-dev | grep assistant-
+flyctl machines destroy <machine-id> -a pinclaw-api-dev --force
+```
+
+### 安全特性
+
+- ✅ 临时访问令牌（15 分钟有效期）
+- ✅ 所有权验证（只有助理所有者可生成令牌）
+- ✅ 访问审计（记录访问时间和 IP）
+- ✅ 密码持久化（存储在 volume，重启后保留）
+- ⚠️ 默认密码 `pinai123`（建议后续支持自定义）
+
+### 故障排查
+
+**VNC 无法连接**:
+```bash
+# SSH 进入容器
+flyctl ssh console -a pinclaw-api-dev --machine <machine-id>
+
+# 查看日志
+cat /tmp/tigervnc.log
+cat /tmp/fly-vnc-ipv6-proxy.log
+
+# 检查进程和端口
+ps aux | grep vnc
+netstat -tlnp | grep 8444
+```
+
+**令牌过期**: 用户重新发送 `/vnc_access` 命令生成新链接
+
 ## 额外说明
 
 - LiteLLM 仍是独立部署，不在 `apis` 进程内运行。
 - Docker runtime 需要可用 OpenClaw 镜像（默认 `OPENCLAW_IMAGE=pinai-openclaw:latest`）。
 - 若使用 webhook，`PUBLIC_BASE_URL` 必须可被 Telegram 访问。
+- VNC 功能需要容器镜像包含桌面环境（见 `infra/container-manager/images/openclaw/Dockerfile`）。
+
+## OpenClaw 远程桌面 (VNC) 功能
+
+OpenClaw 容器集成了 TigerVNC 远程桌面，用户可以通过浏览器访问容器的桌面环境来处理需要 GUI 交互的任务。
+
+### 功能特性
+
+- **桌面环境**: Xfce4（轻量级）
+- **浏览器**: Firefox ESR + Chromium
+- **访问方式**: noVNC WebSocket 客户端（无需额外插件）
+- **默认密码**: `pinai123`
+- **分辨率**: 1920x1080 @ 24bit
+- **端口**: 8444（通过 IPv6 代理暴露）
+
+### 使用流程
+
+1. 用户在 Telegram 发送 `/vnc_access` 命令
+2. Bot 生成临时访问链接（15 分钟有效期）
+3. 用户点击链接打开 noVNC 客户端
+4. 自动连接到容器 VNC 服务（密码自动填充）
+5. 在桌面环境中打开浏览器，完成密码输入、验证码等操作
+
+### 安全机制
+
+- **临时令牌**: 64 字节随机 token，数据库存储
+- **有效期限**: 15 分钟自动过期
+- **所有权验证**: 仅助理所有者可生成访问链接
+- **审计日志**: 记录访问时间和 IP 地址
+- **网络隔离**: VNC 端口不直接暴露，通过 Fly.io 内部网络访问
+
+### 数据库迁移
+
+```sql
+-- 018_add_vnc_access_tokens.sql
+CREATE TABLE vnc_access_tokens (
+  id SERIAL PRIMARY KEY,
+  assistant_id INTEGER NOT NULL REFERENCES assistants(id),
+  token VARCHAR(64) NOT NULL UNIQUE,
+  expires_at TIMESTAMP NOT NULL,
+  used_at TIMESTAMP,
+  used_from_ip VARCHAR(45)
+);
+```
+
+### 部署步骤
+
+1. 运行数据库迁移 `018_add_vnc_access_tokens.sql`
+2. 重新构建 OpenClaw 镜像（包含 TigerVNC + Xfce4）
+3. 更新 `OPENCLAW_IMAGE` 环境变量（必须使用 `@sha256:` digest 格式）
+4. 销毁现有容器，用户下次启动时自动使用新镜像
+
+### 故障排查
+
+- **VNC 无法连接**: 检查容器日志 `/tmp/tigervnc.log` 和 IPv6 代理日志
+- **桌面未启动**: 检查 `/root/.vnc/xstartup` 权限和内容
+- **令牌过期**: 用户重新发送 `/vnc_access` 命令
+
+### 性能影响
+
+| 组件 | 内存占用 |
+|------|---------|
+| TigerVNC | ~20MB |
+| Xfce4 桌面 | ~80MB |
+| Firefox (空闲) | ~150MB |
+| **总计** | ~250MB |
+
+容器推荐内存: 1GB（OpenClaw 512MB + 桌面 250MB + 缓冲）
 
 ## 支付与订阅：事件与测试
 

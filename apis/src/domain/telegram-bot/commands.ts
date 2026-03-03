@@ -13,6 +13,7 @@ import type { AssistantRecord } from "../../types.js";
 
 const CREATE_ASSISTANT_COMMAND = "create_claw_assistant";
 const LIST_ASSISTANT_COMMAND = "list_claw_assistant";
+const VNC_ACCESS_COMMAND = "vnc_access";
 const commandList = [
   {
     command: "start",
@@ -29,6 +30,10 @@ const commandList = [
   {
     command: "gateway",
     description: "Open OpenClaw dashboard",
+  },
+  {
+    command: VNC_ACCESS_COMMAND,
+    description: "Access remote desktop for browser operations",
   },
 ] as const;
 
@@ -872,6 +877,117 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
           "• The token has not been revoked",
           "",
           "Send /create_claw_assistant to try again.",
+        ].join("\n"),
+      );
+    }
+  });
+
+  // VNC 远程桌面访问命令
+  bot.command(VNC_ACCESS_COMMAND, async (ctx) => {
+    const telegramUserId = ctx.from?.id;
+    if (!telegramUserId) {
+      await replyHtml(ctx, "❌ Unable to identify user.");
+      return;
+    }
+
+    try {
+      // 确保用户已注册
+      const user = await ensureTelegramUserViaApi(telegramUserId);
+
+      // 获取用户的助理列表
+      const assistants = await listAssistantsByOwnerViaApi(user.id);
+
+      if (!assistants.length) {
+        await replyHtml(
+          ctx,
+          [
+            "❌ <b>No assistant found</b>",
+            "",
+            "You need to create an assistant first.",
+            "",
+            "Send /create_claw_assistant to get started.",
+          ].join("\n"),
+        );
+        return;
+      }
+
+      // 使用第一个助理
+      const assistant = assistants[0];
+      if (!assistant) {
+        await replyHtml(ctx, "❌ No assistant available");
+        return;
+      }
+
+      // 请求 VNC 访问令牌
+      const baseUrl = config.publicBaseUrl || `http://localhost:${config.port}`;
+      const response = await fetch(
+        `${baseUrl}/api/vnc/request-access/${assistant.id}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: `session_id=internal-telegram-bot`,
+          },
+        },
+      );
+
+      if (!response.ok) {
+        const errorData = (await response.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        const errorMsg = errorData.error || "Failed to generate access link";
+
+        if (errorMsg === "Container not running") {
+          await replyHtml(
+            ctx,
+            [
+              "⚠️ <b>Container not running</b>",
+              "",
+              "Your assistant container is not currently running.",
+              "Please start your assistant first, then try again.",
+            ].join("\n"),
+          );
+          return;
+        }
+
+        throw new Error(errorMsg);
+      }
+
+      const vncData = (await response.json()) as {
+        url: string;
+        expiresAt: string;
+      };
+
+      const keyboard = new InlineKeyboard().url("🖥️ 打开远程桌面", vncData.url);
+
+      await replyHtml(
+        ctx,
+        [
+          "✅ <b>远程桌面访问链接已生成</b>",
+          "",
+          "点击下方按钮打开您助理的远程桌面。",
+          "",
+          "🔐 默认密码: <code>pinai123</code>",
+          "",
+          "⏱️ 链接有效期: 15 分钟",
+          "",
+          "💡 <b>用途:</b>",
+          "• 在浏览器中输入密码",
+          "• 完成验证码验证",
+          "• 处理需要 GUI 交互的任务",
+        ].join("\n"),
+        { reply_markup: keyboard },
+      );
+    } catch (error: unknown) {
+      console.error("VNC access command error:", error);
+      await replyHtml(
+        ctx,
+        [
+          "❌ <b>Failed to generate VNC access</b>",
+          "",
+          error instanceof Error ? error.message : "Unknown error occurred",
+          "",
+          "Please try again later.",
         ].join("\n"),
       );
     }

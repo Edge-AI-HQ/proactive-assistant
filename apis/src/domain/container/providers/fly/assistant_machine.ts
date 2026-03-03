@@ -1,9 +1,9 @@
-import crypto from 'node:crypto';
-import { getContainerManagerRuntime } from '../../runtime.js';
-import type { ContainerManagerConfig } from '../../types.js';
-import { isAssistantContainerName } from '../../naming.js';
-import { buildAssistantOpenclawConfig } from '../shared/openclaw_config.js';
-import { FLY_FORBIDDEN_SECRET_ENV_KEYS } from '../shared/secret_env.js';
+import crypto from "node:crypto";
+import { getContainerManagerRuntime } from "../../runtime.js";
+import type { ContainerManagerConfig } from "../../types.js";
+import { isAssistantContainerName } from "../../naming.js";
+import { buildAssistantOpenclawConfig } from "../shared/openclaw_config.js";
+import { FLY_FORBIDDEN_SECRET_ENV_KEYS } from "../shared/secret_env.js";
 import {
   createMachine as createFlyMachine,
   createVolume,
@@ -13,12 +13,13 @@ import {
   isVolumeAlreadyExists,
   isVolumeNotFoundError,
   listMachines,
-  listVolumes
-} from './fly_client.js';
-import type { FlyMachine, FlyVolume, UnknownRecord } from './types.js';
+  listVolumes,
+} from "./fly_client.js";
+import type { FlyMachine, FlyVolume, UnknownRecord } from "./types.js";
 
 const config = new Proxy({} as ContainerManagerConfig, {
-  get: (_target, prop) => getContainerManagerRuntime().config[prop as keyof ContainerManagerConfig]
+  get: (_target, prop) =>
+    getContainerManagerRuntime().config[prop as keyof ContainerManagerConfig],
 });
 
 const FLY_DEPLOY_SYNC_CACHE_TTL_MS = 30_000;
@@ -33,16 +34,16 @@ interface AssistantMachineCreateArgs {
   liteLlmApiKey: string | null;
 }
 
-let latestAppDeployCache:
-  | {
-      updatedAtMs: number | null;
-      expiresAt: number;
-    }
-  | null = null;
+let latestAppDeployCache: {
+  updatedAtMs: number | null;
+  expiresAt: number;
+} | null = null;
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
-const isAssistantMachineName = (name: string | undefined): boolean => isAssistantContainerName(name);
+const isAssistantMachineName = (name: string | undefined): boolean =>
+  isAssistantContainerName(name);
 
 const toTimestampMs = (value: string | undefined): number | null => {
   if (!value) return null;
@@ -50,7 +51,8 @@ const toTimestampMs = (value: string | undefined): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-const normalizeAssistantToken = (value: string | null | undefined): string => (value || '').trim();
+const normalizeAssistantToken = (value: string | null | undefined): string =>
+  (value || "").trim();
 
 const extractOrigin = (urlStr: string): string => {
   try {
@@ -61,9 +63,11 @@ const extractOrigin = (urlStr: string): string => {
   }
 };
 
-const hashConfigSha256 = (raw: string): string => crypto.createHash('sha256').update(raw).digest('hex');
+const hashConfigSha256 = (raw: string): string =>
+  crypto.createHash("sha256").update(raw).digest("hex");
 
-const quoteForShell = (value: string): string => `'${value.replace(/'/g, `"'"'`)}'`;
+const quoteForShell = (value: string): string =>
+  `'${value.replace(/'/g, `"'"'`)}'`;
 
 const resolveLiteLLMContainerBaseUrlForFly = (): string => {
   const containerBaseUrl = config.litellm.containerBaseUrl.trim();
@@ -72,9 +76,9 @@ const resolveLiteLLMContainerBaseUrlForFly = (): string => {
 
   const normalized = containerBaseUrl.toLowerCase();
   const pointsToLocalBridge =
-    normalized.includes('host.docker.internal') ||
-    normalized.includes('127.0.0.1') ||
-    normalized.includes('localhost');
+    normalized.includes("host.docker.internal") ||
+    normalized.includes("127.0.0.1") ||
+    normalized.includes("localhost");
 
   if (!pointsToLocalBridge) return containerBaseUrl;
   return liteLlmBaseUrl || containerBaseUrl;
@@ -83,9 +87,10 @@ const resolveLiteLLMContainerBaseUrlForFly = (): string => {
 const buildAssistantOpenclawConfigPayload = (
   gatewayToken: string,
   assistantBotToken: string,
-  liteLlmApiKey: string | null
+  liteLlmApiKey: string | null,
 ): { config: UnknownRecord; json: string; hash: string } => {
-  const { webhookUrl, webhookPath, webhookHost, webhookPort, pluginPath } = config.telegramRouter;
+  const { webhookUrl, webhookPath, webhookHost, webhookPort, pluginPath } =
+    config.telegramRouter;
   const privateWebhookPort = webhookPort + 1;
   const webhookSecret = config.telegram.webhookSecret;
   const openclawConfigContext = {
@@ -93,13 +98,13 @@ const buildAssistantOpenclawConfigPayload = (
     elevenLabs: config.elevenLabs,
     litellm: {
       ...config.litellm,
-      containerBaseUrl: resolveLiteLLMContainerBaseUrlForFly()
-    }
+      containerBaseUrl: resolveLiteLLMContainerBaseUrlForFly(),
+    },
   };
 
   const built = buildAssistantOpenclawConfig(openclawConfigContext, {
     gatewayToken,
-    gatewayBind: 'loopback',
+    gatewayBind: "loopback",
     assistantBotToken,
     publicBotToken: config.telegram.token,
     liteLlmApiKey,
@@ -111,36 +116,43 @@ const buildAssistantOpenclawConfigPayload = (
     ...(webhookSecret ? { telegramWebhookSecret: webhookSecret } : {}),
     ...(webhookPath ? { telegramWebhookPath: webhookPath } : {}),
     ...(webhookHost ? { telegramWebhookHost: webhookHost } : {}),
-    ...(pluginPath ? { telegramRouterPluginPath: pluginPath } : {})
+    ...(pluginPath ? { telegramRouterPluginPath: pluginPath } : {}),
   });
   const json = JSON.stringify(built);
   return {
     config: built,
     json,
-    hash: hashConfigSha256(json)
+    hash: hashConfigSha256(json),
   };
 };
 
 const sanitizeVolumePrefix = (value: string): string => {
-  return value.replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+  return value.replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
 };
 
 const buildAssistantVolumeName = (assistantBotId: number): string => {
-  const rawPrefix = (config.fly.volumeNamePrefix || 'pinclaw_assistant').toLowerCase();
-  const sanitizedPrefix = sanitizeVolumePrefix(rawPrefix) || 'pinclaw_assistant';
-  const suffix = String(assistantBotId).replace(/[^0-9]/g, '') || '0';
+  const rawPrefix = (
+    config.fly.volumeNamePrefix || "pinclaw_assistant"
+  ).toLowerCase();
+  const sanitizedPrefix =
+    sanitizeVolumePrefix(rawPrefix) || "pinclaw_assistant";
+  const suffix = String(assistantBotId).replace(/[^0-9]/g, "") || "0";
   const maxPrefixLength = Math.max(1, 30 - suffix.length - 1);
-  const prefix = sanitizedPrefix.slice(0, maxPrefixLength).replace(/^_+|_+$/g, '') || 'a';
+  const prefix =
+    sanitizedPrefix.slice(0, maxPrefixLength).replace(/^_+|_+$/g, "") || "a";
   return `${prefix}_${suffix}`.slice(0, 30);
 };
 
 const isVolumeReady = (volume: FlyVolume): boolean => {
-  const state = (volume.state || '').toLowerCase();
+  const state = (volume.state || "").toLowerCase();
   if (!state) return true;
-  return state === 'created' || state === 'ready';
+  return state === "created" || state === "ready";
 };
 
-const selectPreferredVolume = (name: string, volumes: FlyVolume[]): FlyVolume | null => {
+const selectPreferredVolume = (
+  name: string,
+  volumes: FlyVolume[],
+): FlyVolume | null => {
   const candidates = volumes.filter((item) => item.name === name);
   if (!candidates.length) return null;
 
@@ -158,12 +170,19 @@ const selectPreferredVolume = (name: string, volumes: FlyVolume[]): FlyVolume | 
   return candidates[0] ?? null;
 };
 
-const waitForVolumeReady = async (name: string, expectedId?: string): Promise<FlyVolume | null> => {
+const waitForVolumeReady = async (
+  name: string,
+  expectedId?: string,
+): Promise<FlyVolume | null> => {
   const startedAt = Date.now();
   while (Date.now() - startedAt < FLY_VOLUME_WAIT_TIMEOUT_MS) {
     const volumes = await listVolumes();
     const existing = selectPreferredVolume(name, volumes);
-    if (existing && (!expectedId || existing.id === expectedId) && isVolumeReady(existing)) {
+    if (
+      existing &&
+      (!expectedId || existing.id === expectedId) &&
+      isVolumeReady(existing)
+    ) {
       return existing;
     }
     await sleep(1000);
@@ -173,17 +192,21 @@ const waitForVolumeReady = async (name: string, expectedId?: string): Promise<Fl
 
 const ensureAssistantVolume = async (
   assistantBotId: number,
-  region?: string
+  region?: string,
 ): Promise<{ volume: FlyVolume; created: boolean }> => {
   const name = buildAssistantVolumeName(assistantBotId);
   const targetRegion = (region ?? config.fly.region).toLowerCase();
 
   const volumes = await listVolumes();
   const sameRegion = targetRegion
-    ? volumes.filter((v) => (v.region ?? '').toLowerCase() === targetRegion)
+    ? volumes.filter((v) => (v.region ?? "").toLowerCase() === targetRegion)
     : volumes;
-  const existing = selectPreferredVolume(name, sameRegion.length ? sameRegion : volumes);
-  if (existing && isVolumeReady(existing)) return { volume: existing, created: false };
+  const existing = selectPreferredVolume(
+    name,
+    sameRegion.length ? sameRegion : volumes,
+  );
+  if (existing && isVolumeReady(existing))
+    return { volume: existing, created: false };
 
   if (existing?.id) {
     const existingReady = await waitForVolumeReady(name, existing.id);
@@ -199,7 +222,8 @@ const ensureAssistantVolume = async (
     }
   }
 
-  if (created && isVolumeReady(created)) return { volume: created, created: true };
+  if (created && isVolumeReady(created))
+    return { volume: created, created: true };
 
   const readyAfterCreate = await waitForVolumeReady(name, created?.id);
   if (readyAfterCreate) return { volume: readyAfterCreate, created: true };
@@ -212,7 +236,9 @@ const ensureAssistantVolume = async (
   throw new Error(`Fly volume ${name} is not ready`);
 };
 
-export const getLatestAppDeployTimestampMs = async (): Promise<number | null> => {
+export const getLatestAppDeployTimestampMs = async (): Promise<
+  number | null
+> => {
   const now = Date.now();
   if (latestAppDeployCache && latestAppDeployCache.expiresAt > now) {
     return latestAppDeployCache.updatedAtMs;
@@ -223,7 +249,8 @@ export const getLatestAppDeployTimestampMs = async (): Promise<number | null> =>
 
   machines.forEach((machine) => {
     if (isAssistantMachineName(machine.name)) return;
-    const machineUpdatedAtMs = toTimestampMs(machine.updated_at) ?? toTimestampMs(machine.created_at);
+    const machineUpdatedAtMs =
+      toTimestampMs(machine.updated_at) ?? toTimestampMs(machine.created_at);
     if (machineUpdatedAtMs === null) return;
     if (latest === null || machineUpdatedAtMs > latest) {
       latest = machineUpdatedAtMs;
@@ -232,7 +259,7 @@ export const getLatestAppDeployTimestampMs = async (): Promise<number | null> =>
 
   latestAppDeployCache = {
     updatedAtMs: latest,
-    expiresAt: now + FLY_DEPLOY_SYNC_CACHE_TTL_MS
+    expiresAt: now + FLY_DEPLOY_SYNC_CACHE_TTL_MS,
   };
 
   return latest;
@@ -243,7 +270,7 @@ export const shouldRecreateAssistantMachine = (
   latestAppDeployAtMs: number | null,
   desiredGatewayToken: string,
   desiredAssistantBotToken?: string | null,
-  desiredLiteLLMApiKey?: string | null
+  desiredLiteLLMApiKey?: string | null,
 ): boolean => {
   const configuredImage = machine.config?.image?.trim();
   if (configuredImage && configuredImage !== config.openclaw.image) {
@@ -251,12 +278,18 @@ export const shouldRecreateAssistantMachine = (
   }
 
   const configuredMemoryMb = machine.config?.guest?.memory_mb;
-  if (typeof configuredMemoryMb === 'number' && configuredMemoryMb !== config.container.memoryMb) {
+  if (
+    typeof configuredMemoryMb === "number" &&
+    configuredMemoryMb !== config.container.memoryMb
+  ) {
     return true;
   }
 
   const configuredCpus = machine.config?.guest?.cpus;
-  if (typeof configuredCpus === 'number' && configuredCpus !== Math.max(1, config.fly.machineCpus)) {
+  if (
+    typeof configuredCpus === "number" &&
+    configuredCpus !== Math.max(1, config.fly.machineCpus)
+  ) {
     return true;
   }
 
@@ -264,12 +297,15 @@ export const shouldRecreateAssistantMachine = (
   const desiredConfigHash = buildAssistantOpenclawConfigPayload(
     desiredGatewayToken,
     desiredToken,
-    desiredLiteLLMApiKey || null
+    desiredLiteLLMApiKey || null,
   ).hash;
 
   const currentEnv = machine.config?.env;
   const currentConfigHash = currentEnv?.PINAI_OPENCLAW_CONFIG_SHA256;
-  if (typeof currentConfigHash !== 'string' || currentConfigHash.trim() !== desiredConfigHash) {
+  if (
+    typeof currentConfigHash !== "string" ||
+    currentConfigHash.trim() !== desiredConfigHash
+  ) {
     return true;
   }
 
@@ -280,72 +316,84 @@ export const shouldRecreateAssistantMachine = (
   if (currentEnv) {
     const hasSecretEnv = FLY_FORBIDDEN_SECRET_ENV_KEYS.some((key) => {
       const value = currentEnv[key];
-      return typeof value === 'string' && value.trim().length > 0;
+      return typeof value === "string" && value.trim().length > 0;
     });
     if (hasSecretEnv) {
       return true;
     }
   }
 
-  if (currentEnv?.OPENCLAW_CONFIG_PATH !== '/app/data/config/openclaw.json') {
+  if (currentEnv?.OPENCLAW_CONFIG_PATH !== "/app/data/config/openclaw.json") {
     return true;
   }
 
   const initExec = machine.config?.init?.exec;
   if (!Array.isArray(initExec) || initExec.length === 0) return false;
 
-  const joined = initExec.join(' ');
+  const joined = initExec.join(" ");
   const legacyConfig =
-    !joined.includes('[fly-ipv6-proxy]') ||
-    !joined.includes('[fly-tg-webhook-ipv6-proxy]') ||
-    !joined.includes('openclaw gateway --bind loopback');
+    !joined.includes("[fly-ipv6-proxy]") ||
+    !joined.includes("[fly-tg-webhook-ipv6-proxy]") ||
+    !joined.includes("openclaw gateway --bind loopback");
   if (legacyConfig) return true;
 
   if (latestAppDeployAtMs === null) return false;
 
-  const machineUpdatedAtMs = toTimestampMs(machine.updated_at) ?? toTimestampMs(machine.created_at);
+  const machineUpdatedAtMs =
+    toTimestampMs(machine.updated_at) ?? toTimestampMs(machine.created_at);
   if (machineUpdatedAtMs === null) return false;
 
   return machineUpdatedAtMs < latestAppDeployAtMs;
 };
 
-export const createAssistantMachine = async (args: AssistantMachineCreateArgs): Promise<FlyMachine> => {
-  const normalizedAssistantBotToken = normalizeAssistantToken(args.assistantBotToken);
+export const createAssistantMachine = async (
+  args: AssistantMachineCreateArgs,
+): Promise<FlyMachine> => {
+  const normalizedAssistantBotToken = normalizeAssistantToken(
+    args.assistantBotToken,
+  );
   const normalizedWebhookPort = config.telegramRouter.webhookPort;
   const normalizedPrivateWebhookPort = normalizedWebhookPort + 1;
   const openclawPayload = buildAssistantOpenclawConfigPayload(
     args.gatewayToken,
     normalizedAssistantBotToken,
-    args.liteLlmApiKey
+    args.liteLlmApiKey,
   );
 
+  const vncPort = 8444;
   const env: Record<string, string> = {
     OPENCLAW_USER_ID: `assistant-${args.assistantBotId}`,
     OPENCLAW_GATEWAY_PORT: String(config.openclaw.gatewayPort),
     OPENCLAW_TELEGRAM_WEBHOOK_PORT: String(normalizedWebhookPort),
-    OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT: String(normalizedPrivateWebhookPort),
-    OPENCLAW_CONFIG_PATH: '/app/data/config/openclaw.json',
-    OPENCLAW_STATE_DIR: '/app/data',
-    NODE_COMPILE_CACHE: '/app/data/cache/node-compile-cache',
+    OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT: String(
+      normalizedPrivateWebhookPort,
+    ),
+    OPENCLAW_CONFIG_PATH: "/app/data/config/openclaw.json",
+    OPENCLAW_STATE_DIR: "/app/data",
+    NODE_COMPILE_CACHE: "/app/data/cache/node-compile-cache",
     PINAI_OPENCLAW_CONFIG_SHA256: openclawPayload.hash,
+    VNC_PORT: String(vncPort),
+    DISPLAY: ":1",
     ...(config.telegramRouter.webhookUrl
       ? { TELEGRAM_ROUTER_URL: extractOrigin(config.telegramRouter.webhookUrl) }
-      : {})
+      : {}),
   };
 
   // Persist jiti + Node compile caches on the volume so restarts skip
   // the expensive cold-compile phase (~7 min → seconds).
   const cacheBootstrap = [
-    'mkdir -p /app/data/cache/jiti /app/data/cache/node-compile-cache',
-    'ln -sfn /app/data/cache/jiti /tmp/jiti',
-    'export NODE_COMPILE_CACHE=/app/data/cache/node-compile-cache',
-  ].join(' && ');
+    "mkdir -p /app/data/cache/jiti /app/data/cache/node-compile-cache",
+    "ln -sfn /app/data/cache/jiti /tmp/jiti",
+    "export NODE_COMPILE_CACHE=/app/data/cache/node-compile-cache",
+  ].join(" && ");
+
   const reminderPolicyBootstrap = [
-    'touch /app/data/workspace/AGENTS.md',
+    "touch /app/data/workspace/AGENTS.md",
     'grep -q "PINAI_REMINDER_POLICY_V1" /app/data/workspace/AGENTS.md || printf "\\n# PINAI_REMINDER_POLICY_V1\\n- For time-based reminders and scheduled follow-ups, ALWAYS use the cron tool (cron.add / cron.update / cron.run).\\n- NEVER use exec/process with sleep, while, timeout, or background shell jobs to simulate timers.\\n- For Telegram reminders, always send back to the same channel/account context where the user asked.\\n" >> /app/data/workspace/AGENTS.md',
-  ].join(' && ');
+  ].join(" && ");
+
   const cronCliGuardBootstrap = [
-    'if [ ! -f /usr/local/bin/openclaw.real ]; then cp /usr/local/bin/openclaw /usr/local/bin/openclaw.real; fi',
+    "if [ ! -f /usr/local/bin/openclaw.real ]; then cp /usr/local/bin/openclaw /usr/local/bin/openclaw.real; fi",
     `printf "%s" '#!/bin/sh
 if [ "$1" = "cron" ] && { [ "$2" = "add" ] || [ "$2" = "create" ]; }; then
   echo "PINAI policy: use the cron tool (gateway), not openclaw cron add/create via exec." >&2
@@ -353,21 +401,35 @@ if [ "$1" = "cron" ] && { [ "$2" = "add" ] || [ "$2" = "create" ]; }; then
 fi
 exec /usr/local/bin/openclaw.real "$@"
 ' > /usr/local/bin/openclaw`,
-    'chmod +x /usr/local/bin/openclaw',
-  ].join(' && ');
+    "chmod +x /usr/local/bin/openclaw",
+  ].join(" && ");
+
+  // VNC setup: generate password, start TigerVNC with noVNC web interface
+  const vncBootstrap = [
+    "mkdir -p /app/data/vnc /root/.vnc",
+    "if [ ! -f /app/data/vnc/passwd ]; then echo 'pinai123' | vncpasswd -f > /app/data/vnc/passwd; chmod 600 /app/data/vnc/passwd; fi",
+    "ln -sf /app/data/vnc/passwd /root/.vnc/passwd",
+    "export DISPLAY=:1",
+    "cat > /root/.vnc/xstartup << 'XSTARTUP_EOF'\n#!/bin/sh\nunset SESSION_MANAGER\nunset DBUS_SESSION_BUS_ADDRESS\nexec startxfce4\nXSTARTUP_EOF",
+    "chmod +x /root/.vnc/xstartup",
+    `vncserver :1 -geometry 1920x1080 -depth 24 -rfbport ${vncPort} -localhost no -SecurityTypes VncAuth >/tmp/tigervnc.log 2>&1`,
+    "sleep 2",
+  ].join(" && ");
 
   const bootstrapCommand = [
-    'mkdir -p /app/data/workspace /app/data/tmp /app/data/config /root/.openclaw',
+    "mkdir -p /app/data/workspace /app/data/tmp /app/data/config /root/.openclaw",
     `printf "%s" ${quoteForShell(openclawPayload.json)} > "$OPENCLAW_CONFIG_PATH"`,
-    'ln -sfn /app/data/workspace /root/.openclaw/workspace',
+    "ln -sfn /app/data/workspace /root/.openclaw/workspace",
     reminderPolicyBootstrap,
     cronCliGuardBootstrap,
     cacheBootstrap,
+    vncBootstrap,
     `node -e 'const net=require("net");const port=Number(process.env.OPENCLAW_GATEWAY_PORT||${config.openclaw.gatewayPort});const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});' >/tmp/fly-ipv6-proxy.log 2>&1 & sleep 0.2`,
     `node -e 'const net=require("net");const port=Number(process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT||${normalizedWebhookPort});const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-tg-webhook-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-tg-webhook-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});' >/tmp/fly-tg-webhook-ipv6-proxy.log 2>&1 & sleep 0.2`,
     `node -e 'const net=require("net");const port=Number(process.env.OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT||${normalizedPrivateWebhookPort});const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-tg-private-webhook-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-tg-private-webhook-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});' >/tmp/fly-tg-private-webhook-ipv6-proxy.log 2>&1 & sleep 0.2`,
-    'exec openclaw gateway --bind loopback'
-  ].join(' && ');
+    `node -e 'const net=require("net");const port=${vncPort};const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-vnc-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-vnc-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});' >/tmp/fly-vnc-ipv6-proxy.log 2>&1 & sleep 0.2`,
+    "exec openclaw gateway --bind loopback",
+  ].join(" && ");
 
   const regions = config.fly.regionFallbacks?.length
     ? config.fly.regionFallbacks
@@ -377,7 +439,10 @@ exec /usr/local/bin/openclaw.real "$@"
   for (let regionIndex = 0; regionIndex < regions.length; regionIndex += 1) {
     const region = regions[regionIndex];
     for (let attempt = 1; attempt <= FLY_CREATE_RETRIES; attempt += 1) {
-      const { volume, created } = await ensureAssistantVolume(args.assistantBotId, region);
+      const { volume, created } = await ensureAssistantVolume(
+        args.assistantBotId,
+        region,
+      );
 
       try {
         const machineBody = {
@@ -387,19 +452,19 @@ exec /usr/local/bin/openclaw.real "$@"
             image: config.openclaw.image,
             env,
             guest: {
-              cpu_kind: 'shared',
+              cpu_kind: "shared",
               cpus: Math.max(1, config.fly.machineCpus),
-              memory_mb: config.container.memoryMb
+              memory_mb: config.container.memoryMb,
             },
-            mounts: [{ volume: volume.id, path: '/app/data' }],
+            mounts: [{ volume: volume.id, path: "/app/data" }],
             restart: {
-              policy: 'on-failure',
-              max_retries: 3
+              policy: "on-failure",
+              max_retries: 3,
             },
             init: {
-              exec: ['sh', '-lc', bootstrapCommand]
-            }
-          }
+              exec: ["sh", "-lc", bootstrapCommand],
+            },
+          },
         };
         return await createFlyMachine(machineBody);
       } catch (error: unknown) {
@@ -407,7 +472,9 @@ exec /usr/local/bin/openclaw.real "$@"
 
         if (isMachineNameConflict(error)) {
           const machines = await listMachines();
-          const existing = machines.find((machine) => machine.name === args.machineName);
+          const existing = machines.find(
+            (machine) => machine.name === args.machineName,
+          );
           if (existing) return existing;
         }
 
@@ -419,7 +486,7 @@ exec /usr/local/bin/openclaw.real "$@"
               /* ignore */
             }
             console.warn(
-              `Fly region ${region} insufficient resources, trying next: ${regions[regionIndex + 1]}`
+              `Fly region ${region} insufficient resources, trying next: ${regions[regionIndex + 1]}`,
             );
             break;
           }
@@ -438,5 +505,7 @@ exec /usr/local/bin/openclaw.real "$@"
     }
   }
 
-  throw lastError instanceof Error ? lastError : new Error('Fly machine creation failed');
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Fly machine creation failed");
 };

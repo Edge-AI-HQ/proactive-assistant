@@ -276,6 +276,49 @@ CREATE INDEX IF NOT EXISTS idx_payment_events_assistant_id
 
 COMMENT ON COLUMN payment_events.assistant_id IS '关联的助理 ID（可选）；用于追踪事件属于哪个助理的订阅';
 
+-- User pending actions: 用于存储用户待处理的操作（支持集群部署）
+CREATE TABLE IF NOT EXISTS user_pending_actions (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  action_type TEXT NOT NULL CHECK (action_type IN ('token_input')),
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (user_id, action_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_pending_actions_user_id ON user_pending_actions(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_pending_actions_expires_at ON user_pending_actions(expires_at);
+
+COMMENT ON TABLE user_pending_actions IS '用户待处理操作状态（如等待输入 bot token）';
+
+-- VNC 访问令牌表：用于生成临时访问链接
+CREATE TABLE IF NOT EXISTS vnc_access_tokens (
+  id SERIAL PRIMARY KEY,
+  assistant_id INTEGER NOT NULL REFERENCES assistants(id) ON DELETE CASCADE,
+  token VARCHAR(64) NOT NULL UNIQUE,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMP NOT NULL,
+  used_at TIMESTAMP,
+  used_from_ip VARCHAR(45)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vnc_access_tokens_assistant_id ON vnc_access_tokens(assistant_id);
+CREATE INDEX IF NOT EXISTS idx_vnc_access_tokens_token ON vnc_access_tokens(token);
+CREATE INDEX IF NOT EXISTS idx_vnc_access_tokens_expires_at ON vnc_access_tokens(expires_at);
+
+COMMENT ON TABLE vnc_access_tokens IS 'VNC 远程桌面访问令牌，用于生成临时访问链接（15分钟有效期）';
+
+-- 自动清理过期的 VNC 访问令牌和待处理操作
+CREATE OR REPLACE FUNCTION cleanup_expired_vnc_tokens()
+RETURNS void AS $$
+BEGIN
+  DELETE FROM vnc_access_tokens WHERE expires_at < NOW() - INTERVAL '24 hours';
+  DELETE FROM user_pending_actions WHERE expires_at < NOW();
+END;
+$$ LANGUAGE plpgsql;
+
+COMMENT ON FUNCTION cleanup_expired_vnc_tokens IS '清理过期的 VNC 访问令牌（保留24小时）和待处理操作';
+
 INSERT INTO billing_plans (
   plan_code,
   display_name,
@@ -380,6 +423,8 @@ ALTER TABLE billing_plans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_credit_wallets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE credit_ledger ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payment_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_pending_actions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE vnc_access_tokens ENABLE ROW LEVEL SECURITY;
 
 DO $$
 DECLARE
@@ -397,7 +442,9 @@ BEGIN
     'subscription_periods',
     'user_credit_wallets',
     'credit_ledger',
-    'payment_events'
+    'payment_events',
+    'user_pending_actions',
+    'vnc_access_tokens'
   ]
   LOOP
     IF NOT EXISTS (
