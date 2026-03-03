@@ -271,25 +271,35 @@ router.get("/vnc/:token", async (req, res) => {
     const screenEl = document.getElementById('vnc-screen');
 
     try {
+      console.log('Connecting to VNC:', vncWsUrl);
+      
       const rfb = new RFB(screenEl, vncWsUrl, {
         credentials: { password: vncPassword },
         wsProtocols: ['binary']
       });
 
+      // 启用视图缩放和会话调整
       rfb.scaleViewport = true;
       rfb.resizeSession = true;
+      
+      // 启用所有交互功能
+      rfb.viewOnly = false; // 允许交互（默认就是 false，但明确设置）
+      rfb.focusOnClick = true; // 点击时聚焦
+      rfb.clipViewport = false; // 不裁剪视图
+      rfb.dragViewport = false; // 不拖动视图
 
       rfb.addEventListener('connect', () => {
         statusEl.style.display = 'none';
         screenEl.style.display = 'block';
-        console.log('VNC connected');
+        console.log('✅ VNC connected - 可以使用鼠标和键盘控制了');
       });
 
       rfb.addEventListener('disconnect', (e) => {
-        statusEl.innerHTML = '<p style="color: #ff6b6b;">连接已断开</p>';
+        const reason = e.detail?.clean ? '正常断开' : '异常断开';
+        statusEl.innerHTML = \`<p style="color: #ff6b6b;">连接已断开 (\${reason})</p><p style="font-size: 12px; margin-top: 10px;">请刷新页面重试</p>\`;
         statusEl.style.display = 'block';
         screenEl.style.display = 'none';
-        console.log('VNC disconnected:', e.detail);
+        console.error('VNC disconnected:', e.detail);
       });
 
       rfb.addEventListener('credentialsrequired', () => {
@@ -297,13 +307,17 @@ router.get("/vnc/:token", async (req, res) => {
       });
 
       rfb.addEventListener('securityfailure', (e) => {
-        statusEl.innerHTML = '<p style="color: #ff6b6b;">认证失败</p>';
+        statusEl.innerHTML = '<p style="color: #ff6b6b;">认证失败</p><p style="font-size: 12px;">密码: pinai123</p>';
         console.error('VNC security failure:', e.detail);
+      });
+
+      rfb.addEventListener('capabilities', (e) => {
+        console.log('VNC capabilities:', e.detail);
       });
 
     } catch (error) {
       console.error('VNC init error:', error);
-      statusEl.innerHTML = '<p style="color: #ff6b6b;">初始化失败</p>';
+      statusEl.innerHTML = \`<p style="color: #ff6b6b;">初始化失败</p><p style="font-size: 12px;">\${error}</p>\`;
     }
   </script>
 </body>
