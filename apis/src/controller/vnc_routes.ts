@@ -1,5 +1,7 @@
 import { Router, type Request } from "express";
 import crypto from "node:crypto";
+import net from "node:net";
+import type { Server } from "node:http";
 import { pool } from "../domain/common/db/core.js";
 
 const router = Router();
@@ -174,9 +176,10 @@ router.get("/vnc/:token", async (req, res) => {
     }
 
     // 构建 VNC WebSocket URL
-    // Fly.io 的 IPv6 地址是公网可访问的，直接连接
-    const vncProxyPort = 8445;
-    const vncWsUrl = `wss://[${ipv6}]:${vncProxyPort}`;
+    // 由于用户浏览器可能无法访问 Fly.io IPv6 地址，通过 APIs 服务代理
+    const publicHost = req.get("host") || "pinclaw-api-dev.fly.dev";
+    const protocol = req.protocol === "https" ? "wss" : "ws";
+    const vncWsUrl = `${protocol}://${publicHost}/vnc-ws/${token}`;
 
     // 返回 noVNC 客户端页面
     return res.send(`
@@ -310,5 +313,116 @@ router.get("/vnc/:token", async (req, res) => {
     return res.status(500).send("Internal server error");
   }
 });
+
+// WebSocket 代理：将用户浏览器的 WebSocket 连接代理到容器 VNC 服务
+export const registerVncWebSocketProxy = (server: Server): void => {
+  const WebSocket = require("ws");
+  const wss = new WebSocket.Server({ noServer: true });
+
+  server.on("upgrade", async (request: any, socket: any, head: any) => {
+    const url = new URL(request.url, `http://${request.headers.host}`);
+
+    // 只处理 /vnc-ws/:token 路径
+    const match = url.pathname.match(/^\/vnc-ws\/([a-f0-9]+)$/);
+    if (!match) {
+      return; // 让其他 WebSocket 处理器处理
+    }
+
+    const token = match[1];
+
+    try {
+      // 验证令牌并获取容器 IPv6 地址
+      const result = await pool.query<{
+        runtime_ref: string | null;
+        expires_at: Date;
+      }>(
+        `SELECT r.runtime_ref, t.expires_at
+         FROM vnc_access_tokens t
+         JOIN assistants a ON t.assistant_id = a.id
+         LEFT JOIN runtime_instances r ON r.assistant_id = a.id
+         WHERE t.token = $1 AND r.status = 'running'`,
+        [token],
+      );
+
+      if (!result.rows.length) {
+        console.warn(`[vnc-ws-proxy] Invalid or expired token: ${token}`);
+        socket.destroy();
+        return;
+      }
+
+      const record = result.rows[0];
+      if (!record) {
+        socket.destroy();
+        return;
+      }
+
+      if (new Date() > record.expires_at) {
+        console.warn(`[vnc-ws-proxy] Expired token: ${token}`);
+        socket.destroy();
+        return;
+      }
+
+      const ipv6 = record.runtime_ref?.split("|")[1];
+      if (!ipv6) {
+        console.error(`[vnc-ws-proxy] No IPv6 found for token: ${token}`);
+        socket.destroy();
+        return;
+      }
+
+      const vncProxyPort = 8445;
+
+      // 升级 WebSocket 连接
+      wss.handleUpgrade(request, socket, head, (ws: any) => {
+        console.log(
+          `[vnc-ws-proxy] WebSocket upgraded, connecting to [${ipv6}]:${vncProxyPort}`,
+        );
+
+        // 连接到容器的 VNC 代理
+        const upstream = net.connect({ host: ipv6, port: vncProxyPort });
+
+        upstream.on("connect", () => {
+          console.log(
+            `[vnc-ws-proxy] Connected to VNC at [${ipv6}]:${vncProxyPort}`,
+          );
+        });
+
+        upstream.on("error", (err: any) => {
+          console.error(
+            `[vnc-ws-proxy] Upstream connection error:`,
+            err.message,
+          );
+          ws.close();
+        });
+
+        upstream.on("close", () => {
+          ws.close();
+        });
+
+        // WebSocket → TCP 双向代理
+        ws.on("message", (data: any) => {
+          upstream.write(data);
+        });
+
+        upstream.on("data", (data: any) => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(data);
+          }
+        });
+
+        ws.on("close", () => {
+          upstream.destroy();
+        });
+
+        ws.on("error", (err: any) => {
+          console.error(`[vnc-ws-proxy] WebSocket error:`, err.message);
+          upstream.destroy();
+        });
+      });
+    } catch (error) {
+      console.error("[vnc-ws-proxy] Error during upgrade:", error);
+      socket.destroy();
+    }
+  });
+};
 
 export default router;
