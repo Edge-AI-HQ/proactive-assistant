@@ -253,17 +253,48 @@ const provisionAssistantWithGuideBot = async (
     return true;
   }
 
-  // 用户已有助理，提示使用其他命令
+  // 用户已有助理，检查是否有活跃订阅
+  const assistantId = existingAssistants[0]?.id;
+
+  // 尝试创建 payment session，如果失败说明已有活跃订阅
+  const paymentLink = await safeCreatePaymentLink(
+    telegramUserId,
+    ctx.from?.username ?? null,
+    assistantId,
+  );
+
+  if (!paymentLink) {
+    // 可能已有活跃订阅或 payment 功能不可用
+    await replyHtml(
+      ctx,
+      [
+        "✅ <b>You already have an assistant!</b>",
+        "",
+        "Use these commands to manage your assistant:",
+        "",
+        "📋 /list_claw_assistant - View your assistant",
+        "💳 /my_subscription - Manage subscription",
+        "🌐 /gateway - Open dashboard",
+      ].join("\n"),
+    );
+    return true;
+  }
+
+  // 没有活跃订阅，显示支付链接（重新订阅场景）
+  const keyboard = new InlineKeyboard().url(
+    "💳 Subscribe to activate",
+    paymentLink,
+  );
+
   await replyHtml(
     ctx,
     [
-      "✅ <b>You already have an assistant!</b>",
+      "✅ <b>Your assistant is ready!</b>",
       "",
-      "Use these commands to manage your assistant:",
-      "",
-      "📋 /list_claw_assistant - View your assistant",
-      "🌐 /gateway - Open dashboard",
+      "Subscribe to a plan to activate it.",
+      "Your assistant will be available immediately after payment.",
     ].join("\n"),
+    { reply_markup: keyboard },
   );
 
   return true;
