@@ -386,6 +386,9 @@ export const createAssistantMachine = async (
     VNC_PORT: String(vncPort),
     VNC_PROXY_PORT: String(vncProxyPort),
     DISPLAY: ":1",
+    // Playwright browser launch args for container environment
+    PLAYWRIGHT_CHROMIUM_ARGS:
+      "--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage",
     TELEGRAM_ROUTER_URL: routerOrigin,
   };
 
