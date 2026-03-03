@@ -396,6 +396,7 @@ export const createAssistantMachine = async (
 
   // VNC setup: generate password, start TigerVNC in background
   // VNC 监听 localhost，IPv6 代理使用不同端口（8445）避免冲突
+  // 降低分辨率和色深以减少延迟：1280x720 @ 16bit
   const vncBootstrap = `(
     mkdir -p /app/data/vnc /root/.vnc &&
     if [ ! -f /app/data/vnc/passwd ]; then echo 'pinai123' | vncpasswd -f > /app/data/vnc/passwd; chmod 600 /app/data/vnc/passwd; fi &&
@@ -403,7 +404,7 @@ export const createAssistantMachine = async (
     export DISPLAY=:1 &&
     printf "%s\\n" "#!/bin/sh" "unset SESSION_MANAGER" "unset DBUS_SESSION_BUS_ADDRESS" "exec startxfce4" > /root/.vnc/xstartup &&
     chmod +x /root/.vnc/xstartup &&
-    vncserver :1 -geometry 1920x1080 -depth 24 -rfbport ${vncPort} -localhost yes -SecurityTypes VncAuth >/tmp/tigervnc.log 2>&1 &&
+    vncserver :1 -geometry 1280x720 -depth 16 -rfbport ${vncPort} -localhost yes -SecurityTypes VncAuth >/tmp/tigervnc.log 2>&1 &&
     sleep 3 &&
     node -e 'const net=require("net");const vncPort=${vncPort};const proxyPort=${vncProxyPort};const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port:vncPort});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-vnc-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port:proxyPort,ipv6Only:true},()=>{console.log(\`[fly-vnc-ipv6-proxy] listening on [::]:$\{proxyPort} -> 127.0.0.1:$\{vncPort}\`);});'
   ) >/tmp/vnc-bootstrap.log 2>&1 &`;
