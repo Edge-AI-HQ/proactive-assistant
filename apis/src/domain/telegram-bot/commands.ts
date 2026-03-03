@@ -278,7 +278,6 @@ const provisionAssistantWithGuideBot = async (
         "Use these commands to manage your assistant:",
         "",
         "📋 /list_claw_assistant - View your assistant",
-        "💳 /my_subscription - Manage subscription",
         "🌐 /gateway - Open dashboard",
       ].join("\n"),
     );

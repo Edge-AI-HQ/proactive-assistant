@@ -331,7 +331,7 @@ export const createCheckoutSession = async (
         // 已有活跃订阅，暂不支持升降配
         throw new DomainError(
           "INVALID_INPUT",
-          `You already have an active ${currentPlan.display_name} subscription. Please manage your subscription through the bot's /my_subscription command.`,
+          `You already have an active ${currentPlan.display_name} subscription.`,
         );
       }
     }

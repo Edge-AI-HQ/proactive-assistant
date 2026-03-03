@@ -25,6 +25,11 @@ RUN apt-get update && apt-get install -y \
 
 RUN npm install -g openclaw@2026.2.25
 
+# Install Playwright for browser automation
+RUN npm install -g playwright@latest && \
+    npx playwright install --with-deps chromium && \
+    npx playwright install ffmpeg
+
 WORKDIR /app
 
 RUN mkdir -p /opt/pinai/plugins/telegram-router-proxy
