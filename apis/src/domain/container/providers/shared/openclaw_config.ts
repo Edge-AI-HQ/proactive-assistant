@@ -258,7 +258,7 @@ export const buildAssistantOpenclawConfig = (
           dmPolicy: 'open',
           allowFrom: ['*'],
           groupPolicy: 'allowlist',
-          streaming: 'off',
+          streaming: 'on',
           accounts
         }
       };
@@ -303,7 +303,7 @@ export const buildAssistantOpenclawConfig = (
       dmPolicy: 'open',
       allowFrom: ['*'],
       groupPolicy: 'allowlist',
-      streaming: 'off',
+      streaming: 'on',
     };
     const webhookMapping: [string, string, unknown][] = [
       ['webhookUrl', 'url', options.telegramWebhookUrl],
