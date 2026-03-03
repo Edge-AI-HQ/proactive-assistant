@@ -1,0 +1,3 @@
+app = 'pinclaw-api-dev'
+[build]
+ dockerfile = 'infra/container-manager/images/openclaw/Dockerfile'

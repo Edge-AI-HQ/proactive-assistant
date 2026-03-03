@@ -29,9 +29,9 @@ RUN npm install -g openclaw@2026.2.25
 RUN npm install -g playwright@latest && \
     npx playwright install --with-deps chromium && \
     npx playwright install ffmpeg && \
-    mv /root/.cache/ms-playwright/chromium-1208/chrome-linux/chrome /root/.cache/ms-playwright/chromium-1208/chrome-linux/chrome-bin && \
-    printf '#!/bin/sh\nexec "$(dirname "$0")/chrome-bin" --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage "$@"\n' > /root/.cache/ms-playwright/chromium-1208/chrome-linux/chrome && \
-    chmod +x /root/.cache/ms-playwright/chromium-1208/chrome-linux/chrome
+    mv /root/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome /root/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome-bin && \
+    printf '#!/bin/sh\nexec "$(dirname "$0")/chrome-bin" --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage "$@"\n' > /root/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome && \
+    chmod +x /root/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome
 
 WORKDIR /app
 
