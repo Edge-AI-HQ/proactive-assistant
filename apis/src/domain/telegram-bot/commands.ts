@@ -894,8 +894,8 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
       // 确保用户已注册
       const user = await ensureTelegramUserViaApi(telegramUserId);
 
-      // 获取用户的助理列表
-      const assistants = await listAssistantsByOwnerViaApi(user.id);
+      // 获取用户的助理列表（使用 telegram_user_id，不是内部 user.id）
+      const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
 
       if (!assistants.length) {
         await replyHtml(
