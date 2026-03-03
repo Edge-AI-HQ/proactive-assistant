@@ -177,18 +177,9 @@ async function patchCronAddDeliveryAccountId(input, init) {
     return null;
   }
   const job = parsed.params;
-  if (!isRecord(job.payload) || job.payload.kind !== 'agentTurn') {
-    return null;
-  }
-  if (!isRecord(job.delivery)) {
-    return null;
-  }
-  const delivery = job.delivery;
+  const delivery = isRecord(job.delivery) ? job.delivery : {};
   const mode = typeof delivery.mode === 'string' ? delivery.mode.trim().toLowerCase() : '';
   if (mode === 'none' || mode === 'webhook') {
-    return null;
-  }
-  if (typeof delivery.accountId === 'string' && delivery.accountId.trim()) {
     return null;
   }
   const sessionKey =
@@ -198,15 +189,28 @@ async function patchCronAddDeliveryAccountId(input, init) {
         ? job.payload.sessionKey
         : '';
   const inferredAccountId = inferAccountIdFromSessionKey(sessionKey);
-  if (!inferredAccountId) {
+  const inferredPeerId = inferPeerIdFromSessionKey(sessionKey);
+  if (!inferredAccountId && !inferredPeerId) {
     return null;
   }
+  const existingTo = typeof delivery.to === 'string' ? delivery.to.trim() : '';
+  const nextTo = existingTo || (inferredPeerId ? `telegram:${inferredPeerId}` : '');
+  const nextMode = typeof delivery.mode === 'string' && delivery.mode.trim() ? delivery.mode : 'announce';
+  const nextChannel =
+    typeof delivery.channel === 'string' && delivery.channel.trim() ? delivery.channel : 'telegram';
+  const nextAccountId =
+    typeof delivery.accountId === 'string' && delivery.accountId.trim()
+      ? delivery.accountId
+      : inferredAccountId || undefined;
 
   parsed.params = {
     ...job,
     delivery: {
       ...delivery,
-      accountId: inferredAccountId,
+      mode: nextMode,
+      channel: nextChannel,
+      ...(nextTo ? { to: nextTo } : {}),
+      ...(nextAccountId ? { accountId: nextAccountId } : {}),
     },
   };
 
@@ -268,6 +272,26 @@ function inferAccountIdFromSessionKey(sessionKey) {
     return candidate;
   }
   return null;
+}
+
+function inferPeerIdFromSessionKey(sessionKey) {
+  const raw = (sessionKey || '').trim().toLowerCase();
+  const tgMatch = raw.match(/^telegram:(\d+)$/);
+  if (tgMatch?.[1]) {
+    return tgMatch[1];
+  }
+  if (!raw.startsWith('agent:')) {
+    return null;
+  }
+  const parts = raw.split(':').filter(Boolean);
+  const markerIndex = parts.findIndex(
+    (part) => part === 'direct' || part === 'dm' || part === 'group' || part === 'channel',
+  );
+  if (markerIndex < 0 || markerIndex + 1 >= parts.length) {
+    return null;
+  }
+  const candidate = parts[markerIndex + 1]?.trim() || '';
+  return /^\d+$/.test(candidate) ? candidate : null;
 }
 
 function isRecord(value) {
