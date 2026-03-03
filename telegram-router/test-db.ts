@@ -1,6 +1,12 @@
 import postgres from 'postgres';
 
-const sql = postgres(process.env.DATABASE_URL!);
+const dbUrl = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
+if (!dbUrl) {
+  console.error("❌ Missing SUPABASE_DB_URL (or legacy DATABASE_URL)");
+  process.exit(1);
+}
+
+const sql = postgres(dbUrl);
 
 try {
   const result = await sql`SELECT COUNT(*) as count FROM users`;

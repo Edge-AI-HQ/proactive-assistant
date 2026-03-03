@@ -10,9 +10,26 @@ const requireEnv = (name: string): string => {
   return value;
 };
 
+const resolveEnv = (primary: string, fallback?: string): string => {
+  const direct = process.env[primary]?.trim();
+  if (direct) return direct;
+  if (fallback) {
+    const legacy = process.env[fallback]?.trim();
+    if (legacy) {
+      console.warn(`⚠️ Using deprecated env ${fallback}; please migrate to ${primary}`);
+      return legacy;
+    }
+  }
+  console.error(`❌ Missing required env: ${primary}${fallback ? ` (or ${fallback})` : ""}`);
+  process.exit(1);
+};
+
 const TELEGRAM_BOT_TOKEN = requireEnv("TELEGRAM_BOT_TOKEN");
-const WEBHOOK_SECRET = requireEnv("TELEGRAM_WEBHOOK_SECRET");
-const DATABASE_URL = requireEnv("DATABASE_URL");
+const TELEGRAM_WEBHOOK_SECRET = resolveEnv(
+  "TELEGRAM_WEBHOOK_SECRET",
+  "WEBHOOK_SECRET",
+);
+const SUPABASE_DB_URL = resolveEnv("SUPABASE_DB_URL", "DATABASE_URL");
 const PORT = Number.parseInt(process.env.PORT || "3001", 10);
 const OPENCLAW_TELEGRAM_WEBHOOK_PORT = Number.parseInt(
   process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT || "8787",
@@ -28,7 +45,8 @@ const OPENCLAW_TELEGRAM_WEBHOOK_PATH =
 const OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PATH =
   process.env.OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PATH ||
   `${normalizeWebhookPath(OPENCLAW_TELEGRAM_WEBHOOK_PATH)}/private`;
-const FLY_APP_NAME = process.env.OPENCLAW_FLY_APP_NAME || "pinclaw-api-dev";
+const FLY_APP_NAME =
+  process.env.FLY_APP_NAME || process.env.OPENCLAW_FLY_APP_NAME || "pinclaw-api-dev";
 const GUIDE_BOT_WEBHOOK_URL = process.env.GUIDE_BOT_WEBHOOK_URL || "";
 const BOT_COMMANDS = new Set([
   "start",
@@ -39,7 +57,7 @@ const BOT_COMMANDS = new Set([
   "help",
 ]);
 
-const sql = postgres(DATABASE_URL, {
+const sql = postgres(SUPABASE_DB_URL, {
   max: 10,
   idle_timeout: 30,
   connect_timeout: 10,
@@ -88,7 +106,7 @@ async function handleTelegramWebhook(req: Request, source: WebhookSource) {
   try {
     // 验证 webhook secret
     const secretToken = req.headers.get("X-Telegram-Bot-Api-Secret-Token");
-    if (secretToken !== WEBHOOK_SECRET) {
+    if (secretToken !== TELEGRAM_WEBHOOK_SECRET) {
       const received = secretToken
         ? `${secretToken.slice(0, 8)}...(${secretToken.length})`
         : "missing";
@@ -515,7 +533,7 @@ async function forwardToOpenClaw(
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "X-Telegram-Bot-Api-Secret-Token": WEBHOOK_SECRET,
+            "X-Telegram-Bot-Api-Secret-Token": TELEGRAM_WEBHOOK_SECRET,
             "X-PinAI-Source": source,
           },
           body: JSON.stringify(update),
@@ -742,7 +760,7 @@ async function forwardToGuideBot(update: any): Promise<void> {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Telegram-Bot-Api-Secret-Token": WEBHOOK_SECRET,
+        "X-Telegram-Bot-Api-Secret-Token": TELEGRAM_WEBHOOK_SECRET,
       },
       body: JSON.stringify(update),
       signal: AbortSignal.timeout(15000),

@@ -12,7 +12,7 @@
 ```bash
 cd telegram-router
 cp .env.example .env
-# 填写 TELEGRAM_BOT_TOKEN / TELEGRAM_WEBHOOK_SECRET / DATABASE_URL
+# 填写 TELEGRAM_BOT_TOKEN / TELEGRAM_WEBHOOK_SECRET / SUPABASE_DB_URL
 ```
 
 ### 2. 启动服务
@@ -46,7 +46,8 @@ fly apps create pinclaw-telegram-router-dev
 fly secrets set \
   TELEGRAM_BOT_TOKEN=<TELEGRAM_BOT_TOKEN> \
   TELEGRAM_WEBHOOK_SECRET=<TELEGRAM_WEBHOOK_SECRET> \
-  DATABASE_URL=postgresql://postgres:<PASSWORD>@<HOST>:5432/postgres \
+  SUPABASE_DB_URL=postgresql://postgres:<PASSWORD>@<HOST>:5432/postgres \
+  FLY_APP_NAME=pinclaw-api-dev \
   -a pinclaw-telegram-router-dev
 ```
 
@@ -98,4 +99,3 @@ fly logs -a pinclaw-api-dev
 - 命中 `https://api.telegram.org/bot.../<method>` 时，改写到 Router：
   - `http://<router>/api/telegram/<method>`
 - Router 再调用 Telegram 官方 API。
-

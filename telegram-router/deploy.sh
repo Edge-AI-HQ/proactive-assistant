@@ -43,10 +43,17 @@ echo ""
 
 # 4. 设置环境变量
 echo "🔧 设置环境变量..."
+SUPABASE_DB_URL_VALUE="${SUPABASE_DB_URL:-${DATABASE_URL:-}}"
+if [ -z "$SUPABASE_DB_URL_VALUE" ]; then
+  echo "❌ set SUPABASE_DB_URL (or legacy DATABASE_URL)"
+  exit 1
+fi
+
 flyctl secrets set \
   TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN}" \
   TELEGRAM_WEBHOOK_SECRET="${TELEGRAM_WEBHOOK_SECRET:?set TELEGRAM_WEBHOOK_SECRET}" \
-  DATABASE_URL="${DATABASE_URL:?set DATABASE_URL}" \
+  SUPABASE_DB_URL="$SUPABASE_DB_URL_VALUE" \
+  FLY_APP_NAME="${FLY_APP_NAME:-pinclaw-api-dev}" \
   -a "$FLY_APP"
 
 echo "✅ 环境变量已设置"

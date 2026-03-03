@@ -16,6 +16,7 @@ import {
   registerWsRoutes,
 } from "./controller/api_route_handler.js";
 import { buildBot } from "./domain/telegram-bot/bot.js";
+import { registerTelegramRouterRoutes } from "./domain/telegram-router/routes.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -35,41 +36,7 @@ app.disable("x-powered-by");
 app.set("trust proxy", true);
 
 registerRawBodyRoutes(app);
-
-// Telegram webhook endpoint (MUST be before express.json() middleware)
-const webhookPath = "/webhook/telegram";
-app.post(webhookPath, express.json(), (req: Request, res: Response) => {
-  // Verify webhook secret if configured
-  if (config.telegram.webhookSecret) {
-    const receivedSecret = req.headers["x-telegram-bot-api-secret-token"];
-    if (receivedSecret !== config.telegram.webhookSecret) {
-      console.error("Webhook secret mismatch!", {
-        expected: config.telegram.webhookSecret.substring(0, 10) + "...",
-        received: receivedSecret,
-      });
-      res.sendStatus(403);
-      return;
-    }
-  }
-
-  // This will be initialized after server starts
-  const bot = (global as any).__telegramBot;
-  if (!bot) {
-    console.error("Bot not initialized yet");
-    res.sendStatus(503);
-    return;
-  }
-
-  bot
-    .handleUpdate(req.body)
-    .then(() => {
-      res.sendStatus(200);
-    })
-    .catch((error: unknown) => {
-      console.error("Telegram webhook error:", error);
-      res.sendStatus(500);
-    });
-});
+registerTelegramRouterRoutes(app);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -124,6 +91,9 @@ registerWsRoutes(server);
 // Start Telegram bot with webhook mode
 if (config.telegram.token) {
   const bot = buildBot();
+  const webhookPath = "/webhook/telegram";
+  const expectedWebhookUrl =
+    config.telegramRouter.webhookUrl || `${config.publicBaseUrl}${webhookPath}`;
 
   // Initialize bot before storing globally
   bot
@@ -133,8 +103,7 @@ if (config.telegram.token) {
       (global as any).__telegramBot = bot;
 
       const routerWebhookUrl = config.telegramRouter.webhookUrl;
-      const webhookUrl = routerWebhookUrl || `${config.publicBaseUrl}${webhookPath}`;
-      console.log(`Setting webhook to: ${webhookUrl}${routerWebhookUrl ? ' (via router)' : ' (direct)'}`);
+      console.log(`Setting webhook to: ${expectedWebhookUrl}${routerWebhookUrl ? ' (via router)' : ' (direct)'}`);
 
       // Set webhook
       const webhookOptions: any = {
@@ -145,7 +114,7 @@ if (config.telegram.token) {
         console.log("Webhook secret token will be configured");
       }
 
-      return bot.api.setWebhook(webhookUrl, webhookOptions);
+      return bot.api.setWebhook(expectedWebhookUrl, webhookOptions);
     })
     .then((result) => {
       console.log("Telegram webhook set successfully:", result);
@@ -160,9 +129,9 @@ if (config.telegram.token) {
         has_custom_certificate: info.has_custom_certificate,
       });
 
-      if (info.url !== `${config.publicBaseUrl}${webhookPath}`) {
+      if (info.url !== expectedWebhookUrl) {
         console.warn(
-          `WARNING: Webhook URL mismatch! Expected ${config.publicBaseUrl}${webhookPath}, got ${info.url}`,
+          `WARNING: Webhook URL mismatch! Expected ${expectedWebhookUrl}, got ${info.url}`,
         );
       }
     })

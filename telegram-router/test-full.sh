@@ -31,8 +31,8 @@ if [ -z "$TELEGRAM_WEBHOOK_SECRET" ]; then
     exit 1
 fi
 
-if [ -z "$DATABASE_URL" ]; then
-    echo "❌ DATABASE_URL 未设置"
+if [ -z "$SUPABASE_DB_URL" ] && [ -z "$DATABASE_URL" ]; then
+    echo "❌ SUPABASE_DB_URL 未设置（兼容旧变量 DATABASE_URL）"
     exit 1
 fi
 

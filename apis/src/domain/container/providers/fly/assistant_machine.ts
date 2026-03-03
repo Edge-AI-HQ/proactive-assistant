@@ -362,6 +362,10 @@ export const createAssistantMachine = async (
 
   const vncPort = 8444;
   const vncProxyPort = 8445; // IPv6 代理使用不同端口避免冲突
+  const apisInternalPort = Number.parseInt(process.env.PORT || "3000", 10);
+  const routerOrigin = config.telegramRouter.webhookUrl
+    ? extractOrigin(config.telegramRouter.webhookUrl)
+    : `http://${config.fly.appName}.internal:${apisInternalPort}`;
   const env: Record<string, string> = {
     OPENCLAW_USER_ID: `assistant-${args.assistantBotId}`,
     OPENCLAW_GATEWAY_PORT: String(config.openclaw.gatewayPort),
@@ -376,9 +380,7 @@ export const createAssistantMachine = async (
     VNC_PORT: String(vncPort),
     VNC_PROXY_PORT: String(vncProxyPort),
     DISPLAY: ":1",
-    ...(config.telegramRouter.webhookUrl
-      ? { TELEGRAM_ROUTER_URL: extractOrigin(config.telegramRouter.webhookUrl) }
-      : {}),
+    TELEGRAM_ROUTER_URL: routerOrigin,
   };
 
   // Persist jiti + Node compile caches on the volume so restarts skip
