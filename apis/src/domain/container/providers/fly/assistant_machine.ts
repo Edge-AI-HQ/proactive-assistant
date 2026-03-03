@@ -386,9 +386,8 @@ export const createAssistantMachine = async (
     VNC_PORT: String(vncPort),
     VNC_PROXY_PORT: String(vncProxyPort),
     DISPLAY: ":1",
-    // Playwright browser launch args for container environment
-    PLAYWRIGHT_CHROMIUM_ARGS:
-      "--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage",
+    // Enable Playwright browser launch with container-safe args via patch script
+    NODE_OPTIONS: "--require /app/data/.playwright-patch.js",
     TELEGRAM_ROUTER_URL: routerOrigin,
   };
 
@@ -420,10 +419,39 @@ export const createAssistantMachine = async (
     node -e 'const net=require("net");const vncPort=${vncPort};const proxyPort=${vncProxyPort};const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port:vncPort});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-vnc-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port:proxyPort,ipv6Only:true},()=>{console.log(\`[fly-vnc-ipv6-proxy] listening on [::]:$\{proxyPort} -> 127.0.0.1:$\{vncPort}\`);});'
   ) >/tmp/vnc-bootstrap.log 2>&1 &`;
 
+  // Playwright monkey-patch script to inject --no-sandbox args in container
+  const playwrightPatch = `
+try {
+  const Module = require('module');
+  const originalRequire = Module.prototype.require;
+  Module.prototype.require = function(id) {
+    const mod = originalRequire.apply(this, arguments);
+    if (id === 'playwright' || id === 'playwright-core') {
+      const browsers = ['chromium', 'firefox', 'webkit'];
+      browsers.forEach(browser => {
+        if (mod[browser] && mod[browser].launch) {
+          const originalLaunch = mod[browser].launch;
+          mod[browser].launch = function(options = {}) {
+            options.args = options.args || [];
+            const containerArgs = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'];
+            containerArgs.forEach(arg => {
+              if (!options.args.includes(arg)) options.args.push(arg);
+            });
+            return originalLaunch.call(this, options);
+          };
+        }
+      });
+    }
+    return mod;
+  };
+} catch (e) { /* ignore if playwright not used */ }
+`.trim();
+
   // 构建启动命令：前置准备 + 后台任务 + 主进程
   const setupCommands = [
     "mkdir -p /app/data/workspace /app/data/tmp /app/data/config /root/.openclaw",
     `printf "%s" ${quoteForShell(openclawPayload.json)} > "$OPENCLAW_CONFIG_PATH"`,
+    `printf "%s" ${quoteForShell(playwrightPatch)} > /app/data/.playwright-patch.js`,
     "ln -sfn /app/data/workspace /root/.openclaw/workspace",
     reminderPolicyBootstrap,
     cacheBootstrap,
