@@ -266,15 +266,13 @@ router.get("/vnc/:token", async (req, res) => {
     import RFB from 'https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js';
 
     const vncWsUrl = ${JSON.stringify(vncWsUrl)};
-    const vncPassword = 'pinai123';
     const statusEl = document.getElementById('vnc-status');
     const screenEl = document.getElementById('vnc-screen');
 
     try {
       console.log('Connecting to VNC:', vncWsUrl);
-      
+
       const rfb = new RFB(screenEl, vncWsUrl, {
-        credentials: { password: vncPassword },
         wsProtocols: ['binary']
       });
 
@@ -307,7 +305,7 @@ router.get("/vnc/:token", async (req, res) => {
       });
 
       rfb.addEventListener('securityfailure', (e) => {
-        statusEl.innerHTML = '<p style="color: #ff6b6b;">认证失败</p><p style="font-size: 12px;">密码: pinai123</p>';
+        statusEl.innerHTML = '<p style="color: #ff6b6b;">VNC 认证失败</p><p style="font-size: 12px;">请刷新页面重试</p>';
         console.error('VNC security failure:', e.detail);
       });
 
