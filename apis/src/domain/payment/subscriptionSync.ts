@@ -415,8 +415,7 @@ export async function syncSubscriptionFromStripe(
   const currentPeriodForInactive =
     await db.getCurrentPeriodByTelegramId(telegram_user_id);
   const isCurrentSubscription =
-    !currentPeriodForInactive ||
-    currentPeriodForInactive.stripe_subscription_id === subscription.id;
+    currentPeriodForInactive?.stripe_subscription_id === subscription.id;
 
   if (isCurrentSubscription) {
     await syncLiteLLMBudgetAbsolute({
@@ -456,10 +455,11 @@ export async function syncSubscriptionFromStripe(
     }
   } else {
     console.log(
-      "Skipping budget zeroing for old subscription (user has newer subscription)",
+      "Skipping budget zeroing for non-current subscription (or no current period yet)",
       {
-        oldSubscriptionId: subscription.id,
-        currentSubscriptionId: currentPeriodForInactive?.stripe_subscription_id,
+        targetSubscriptionId: subscription.id,
+        currentSubscriptionId:
+          currentPeriodForInactive?.stripe_subscription_id ?? null,
         telegramUserId: telegram_user_id,
       },
     );
