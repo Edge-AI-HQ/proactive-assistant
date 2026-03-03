@@ -280,28 +280,19 @@ const provisionAssistantWithGuideBot = async (
     return true;
   }
 
-  // 没有活跃订阅，允许重新选择创建模式（支持从 Quick Start 升级到 Own Bot）
-  const keyboard = new InlineKeyboard()
-    .text("🚀 Quick Start", "quick_start")
-    .row()
-    .text("🔧 Use Own Bot", "use_own_bot");
+  // 有 assistant 但无活跃订阅，直接显示支付链接（重新订阅）
+  const keyboard = new InlineKeyboard().url(
+    "💳 Subscribe to activate",
+    paymentLink,
+  );
 
   await replyHtml(
     ctx,
     [
-      "🤖 <b>Reactivate Your AI Assistant</b>",
+      "✅ <b>Your assistant is ready!</b>",
       "",
-      "Your assistant is registered but not active.",
-      "",
-      "<b>Choose your setup method:</b>",
-      "",
-      "🚀 <b>Quick Start</b>",
-      "   • Keep using this guide bot",
-      "   • Quick and simple",
-      "",
-      "🔧 <b>Use Own Bot</b>",
-      "   • Upgrade to your own bot",
-      "   • More customization",
+      "Subscribe to a plan to activate it.",
+      "Your assistant will be available immediately after payment.",
     ].join("\n"),
     { reply_markup: keyboard },
   );

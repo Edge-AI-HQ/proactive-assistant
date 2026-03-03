@@ -50,36 +50,8 @@ const ensureAssistantRecord = async (
     await listAssistantsByOwnerTelegramId(ownerTelegramUserId);
 
   if (existingAssistants.length > 0) {
-    const existing = existingAssistants[0];
-    if (!existing) {
-      throw new Error("USER_ALREADY_HAS_ASSISTANT");
-    }
-
-    // 如果用户已有助理，只允许以下情况：
-    // 1. 从 Quick Start 升级到 Advanced（传入了新的 bot ID）
-    // 2. 更新 Advanced 模式的 bot token
-    if (assistantBotId !== null && assistantBotId !== undefined) {
-      // 如果已经绑定了同一个 bot，不允许重复绑定
-      if (existing.assistant_bot_id === assistantBotId) {
-        throw new Error("USER_ALREADY_HAS_ASSISTANT");
-      }
-
-      // 升级或更新 bot
-      const defaultContainerName = containerNameForAssistant(assistantBotId);
-      return (
-        (await updateAssistant(existing.id, {
-          assistant_bot_id: assistantBotId,
-          assistant_bot_token:
-            assistantBotToken || existing.assistant_bot_token,
-          assistant_bot_username:
-            assistantBotUsername || existing.assistant_bot_username,
-          container_name:
-            existing.container_name?.trim() || defaultContainerName,
-        })) ?? existing
-      );
-    }
-
-    // 已有助理且没有传入新 bot（尝试重复创建 Quick Start）
+    // 已有助理，不允许重复创建或更改模式
+    // 保持简单：一个用户一个 assistant，不支持升级/更换
     throw new Error("USER_ALREADY_HAS_ASSISTANT");
   }
 
@@ -128,7 +100,9 @@ export const provisionAssistant = async (
     input.ownerTelegramUserId,
     assistant,
   );
-  await ensurePrivateWebhookForAssistantToken(assistantWithLiteLLM.assistant_bot_token);
+  await ensurePrivateWebhookForAssistantToken(
+    assistantWithLiteLLM.assistant_bot_token,
+  );
   const { containerId, ready } = await ensureAssistantContainer(
     assistantWithLiteLLM,
     owner.gateway_token,
@@ -165,7 +139,9 @@ export const createAssistantWithoutContainer = async (
     input.ownerTelegramUserId,
     assistant,
   );
-  await ensurePrivateWebhookForAssistantToken(assistantWithLiteLLM.assistant_bot_token);
+  await ensurePrivateWebhookForAssistantToken(
+    assistantWithLiteLLM.assistant_bot_token,
+  );
 
   // Update status to pending payment
   const finalAssistant =
