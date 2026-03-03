@@ -141,7 +141,8 @@ async function handleTelegramWebhook(req: Request, source: WebhookSource) {
         return jsonResponse({ ok: true });
       }
 
-      await sendTelegramMessage(
+      await sendFallbackMessageBySource(
+        source,
         chatId,
         "Welcome! Send /start to begin setting up your AI assistant.",
       );
@@ -160,7 +161,8 @@ async function handleTelegramWebhook(req: Request, source: WebhookSource) {
         return jsonResponse({ ok: true });
       }
 
-      await sendTelegramMessage(
+      await sendFallbackMessageBySource(
+        source,
         chatId,
         "Your assistant is registered but not yet activated.\nPlease subscribe to start using it — send /create_claw_assistant for the payment link.",
       );
@@ -184,7 +186,8 @@ async function handleTelegramWebhook(req: Request, source: WebhookSource) {
       console.log(
         `⚠️ Container for chat_id ${chatId} is starting (status=${userState.runtimeStatus}), forward not possible yet`,
       );
-      await sendTelegramMessage(
+      await sendFallbackMessageBySource(
+        source,
         chatId,
         "Your assistant is starting up — first launch may take a few minutes. Please try again shortly.",
       );
@@ -196,7 +199,8 @@ async function handleTelegramWebhook(req: Request, source: WebhookSource) {
     const forwarded = await forwardToOpenClaw(userState.container, update, source);
     if (!forwarded) {
       console.error(`❌ Forward ultimately failed for chat_id=${chatId}`);
-      await sendTelegramMessage(
+      await sendFallbackMessageBySource(
+        source,
         chatId,
         "Your assistant is temporarily unavailable — it may still be starting up. Please try again in a minute or two.",
       );
@@ -216,12 +220,33 @@ const BLOCKED_TG_METHODS = new Set([
   "deletewebhook",
 ]);
 
+function extractBotIdFromToken(token: string): string {
+  const idx = token.indexOf(":");
+  if (idx <= 0) return "unknown";
+  const id = token.slice(0, idx);
+  return /^\d+$/.test(id) ? id : "unknown";
+}
+
 function resolveProxyBotToken(req: Request): string {
   const headerToken = req.headers.get("X-PinAI-Telegram-Bot-Token")?.trim();
   if (headerToken && /^[0-9]+:[A-Za-z0-9_-]{20,}$/.test(headerToken)) {
     return headerToken;
   }
   return TELEGRAM_BOT_TOKEN;
+}
+
+async function sendFallbackMessageBySource(
+  source: WebhookSource,
+  chatId: number,
+  text: string,
+): Promise<void> {
+  if (source === "private") {
+    console.warn(
+      `⚠️ Skip fallback sendMessage for private source (chat_id=${chatId}) to avoid cross-bot reply`,
+    );
+    return;
+  }
+  await sendTelegramMessage(chatId, text);
 }
 
 async function handleTelegramApiProxy(req: Request, url: URL) {
@@ -273,6 +298,12 @@ async function handleTelegramApiProxy(req: Request, url: URL) {
     );
 
     const botToken = resolveProxyBotToken(req);
+    const outboundBotId = extractBotIdFromToken(botToken);
+    console.log(
+      `🧭 Telegram proxy token route [${traceId}] bot_id=${outboundBotId} token_source=${
+        req.headers.get("X-PinAI-Telegram-Bot-Token") ? "header" : "env"
+      }`,
+    );
     // 转发到 Telegram API
     const telegramUrl = `https://api.telegram.org/bot${botToken}/${method}${url.search}`;
     const outgoingHeaders = new Headers();
