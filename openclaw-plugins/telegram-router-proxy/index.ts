@@ -233,33 +233,28 @@ function inferAccountIdFromSessionKey(sessionKey: string): string | null {
     return null;
   }
   const parts = raw.split(':').filter(Boolean);
-  if (parts.length < 6) {
-    return null;
-  }
   const rest = parts.slice(2);
-  const head = rest[0];
-  if (!head || head === 'main' || head === 'subagent' || head === 'acp') {
+  if (rest.length < 3) {
     return null;
   }
   const markerIndex = rest.findIndex(
     (part) => part === 'direct' || part === 'dm' || part === 'group' || part === 'channel',
   );
-  if (markerIndex < 2) {
+  if (markerIndex <= 0) {
     return null;
   }
-  const candidate = rest[1]?.trim();
+  const segment = rest.slice(0, markerIndex);
+  const candidate = segment[segment.length - 1]?.trim();
   if (!candidate) {
     return null;
   }
-  if (
-    candidate === 'direct' ||
-    candidate === 'dm' ||
-    candidate === 'group' ||
-    candidate === 'channel'
-  ) {
-    return null;
+  if (candidate === 'public') {
+    return 'default';
   }
-  return candidate;
+  if (candidate === 'default' || candidate === 'private') {
+    return candidate;
+  }
+  return null;
 }
 
 function isRecord(value: unknown): value is Record<string, any> {
