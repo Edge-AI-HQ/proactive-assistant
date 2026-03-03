@@ -2,6 +2,7 @@
 // Proxy outbound Telegram API calls through the router service
 
 const FETCH_PATCH_KEY = '__pinaiTelegramRouterFetchPatched__';
+const OPENCLAW_GATEWAY_PORT = Number.parseInt(process.env.OPENCLAW_GATEWAY_PORT || '18789', 10);
 
 const BLOCKED_TELEGRAM_METHODS = new Set([
   'setWebhook',
@@ -36,7 +37,7 @@ const plugin = {
     const routerUrl = process.env.TELEGRAM_ROUTER_URL || 'http://host.docker.internal:3001';
 
     api.logger.info(`Telegram Router Proxy enabled: ${routerUrl}`);
-    api.logger.info('TRP_VERSION_20260302D');
+    api.logger.info('TRP_VERSION_20260303A');
     installTelegramFetchProxy(api, routerUrl);
   }
 };
@@ -55,6 +56,10 @@ function installTelegramFetchProxy(api, routerUrl) {
 
   globalThis.fetch = async (input, init) => {
     try {
+      const patchedGatewayInit = patchCronAddDeliveryAccountId(input, init);
+      if (patchedGatewayInit) {
+        init = patchedGatewayInit;
+      }
       const rawUrl =
         typeof input === 'string' ? input
         : input instanceof URL ? input.toString()
@@ -113,6 +118,143 @@ function extractTelegramApiPath(url) {
     return null;
   }
   return { methodName, botToken };
+}
+
+function patchCronAddDeliveryAccountId(input, init) {
+  const rawUrl =
+    typeof input === 'string' ? input
+    : input instanceof URL ? input.toString()
+    : input instanceof Request ? input.url
+    : '';
+  if (!rawUrl) {
+    return null;
+  }
+  let targetUrl;
+  try {
+    targetUrl = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  if (!isOpenClawGatewayRpc(targetUrl)) {
+    return null;
+  }
+
+  const method =
+    (init?.method || (input instanceof Request ? input.method : 'GET')).trim().toUpperCase();
+  if (method !== 'POST') {
+    return null;
+  }
+  const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : {}));
+  const contentType = headers.get('content-type')?.toLowerCase() || '';
+  if (!contentType.includes('application/json')) {
+    return null;
+  }
+
+  const rawBody = init?.body;
+  if (typeof rawBody !== 'string' && !(rawBody instanceof Uint8Array)) {
+    return null;
+  }
+  const bodyText = typeof rawBody === 'string' ? rawBody : new TextDecoder().decode(rawBody);
+
+  let parsed;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch {
+    return null;
+  }
+  if (parsed.method !== 'cron.add' || !isRecord(parsed.params)) {
+    return null;
+  }
+  const job = parsed.params;
+  if (!isRecord(job.payload) || job.payload.kind !== 'agentTurn') {
+    return null;
+  }
+  if (!isRecord(job.delivery)) {
+    return null;
+  }
+  const delivery = job.delivery;
+  const mode = typeof delivery.mode === 'string' ? delivery.mode.trim().toLowerCase() : '';
+  if (mode === 'none' || mode === 'webhook') {
+    return null;
+  }
+  if (typeof delivery.accountId === 'string' && delivery.accountId.trim()) {
+    return null;
+  }
+  const sessionKey = typeof job.sessionKey === 'string' ? job.sessionKey : '';
+  const inferredAccountId = inferAccountIdFromSessionKey(sessionKey);
+  if (!inferredAccountId) {
+    return null;
+  }
+
+  parsed.params = {
+    ...job,
+    delivery: {
+      ...delivery,
+      accountId: inferredAccountId,
+    },
+  };
+
+  const nextBody = JSON.stringify(parsed);
+  return {
+    ...(input instanceof Request
+      ? { method: input.method, redirect: input.redirect, credentials: input.credentials }
+      : {}),
+    ...init,
+    headers,
+    body: nextBody,
+  };
+}
+
+function isOpenClawGatewayRpc(url) {
+  const host = url.hostname.toLowerCase();
+  const isLoopback = host === '127.0.0.1' || host === 'localhost' || host === '::1';
+  if (!isLoopback) {
+    return false;
+  }
+  const port = Number.parseInt(url.port || '', 10);
+  if (!Number.isFinite(port) || port !== OPENCLAW_GATEWAY_PORT) {
+    return false;
+  }
+  return url.pathname === '/rpc' || url.pathname === '/gateway' || url.pathname === '/gateway/rpc';
+}
+
+function inferAccountIdFromSessionKey(sessionKey) {
+  const raw = (sessionKey || '').trim().toLowerCase();
+  if (!raw.startsWith('agent:')) {
+    return null;
+  }
+  const parts = raw.split(':').filter(Boolean);
+  if (parts.length < 6) {
+    return null;
+  }
+  const rest = parts.slice(2);
+  const head = rest[0];
+  if (!head || head === 'main' || head === 'subagent' || head === 'acp') {
+    return null;
+  }
+  const markerIndex = rest.findIndex(
+    (part) => part === 'direct' || part === 'dm' || part === 'group' || part === 'channel',
+  );
+  if (markerIndex < 2) {
+    return null;
+  }
+  const candidate = rest[1]?.trim();
+  if (!candidate) {
+    return null;
+  }
+  if (
+    candidate === 'direct' ||
+    candidate === 'dm' ||
+    candidate === 'group' ||
+    candidate === 'channel'
+  ) {
+    return null;
+  }
+  return candidate;
+}
+
+function isRecord(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export default plugin;
