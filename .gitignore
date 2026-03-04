@@ -44,6 +44,10 @@ api_key_env
 .DS_Store
 Thumbs.db
 
+# Python cache
+__pycache__/
+*.py[cod]
+
 # Project-specific local files
 .claude/
 product_specs/
