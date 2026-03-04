@@ -6,7 +6,8 @@ import {
   parseEnsureTelegramUserInput,
   parseTelegramUserIdParam,
   readTelegramUserById,
-  removeTelegramUserById
+  removeTelegramUserById,
+  resetTelegramUserAccount
 } from '../domain/user/usecases.js';
 
 export const createUserRouter = (): Router => {
@@ -31,6 +32,20 @@ export const createUserRouter = (): Router => {
       const telegramUserId = parseTelegramUserIdParam(req.params.telegram_user_id);
       const user = await readTelegramUserById(telegramUserId);
       res.status(200).json({ user });
+    } catch (error: unknown) {
+      if (isDomainError(error)) {
+        res.status(error.status).json({ error: error.message });
+        return;
+      }
+      res.status(500).json({ error: domainErrorMessage(error) });
+    }
+  });
+
+  router.post('/:telegram_user_id/reset', requireApiAuth, async (req: Request<{ telegram_user_id: string }>, res: Response) => {
+    try {
+      const telegramUserId = parseTelegramUserIdParam(req.params.telegram_user_id);
+      const result = await resetTelegramUserAccount(telegramUserId);
+      res.status(200).json(result);
     } catch (error: unknown) {
       if (isDomainError(error)) {
         res.status(error.status).json({ error: error.message });

@@ -266,6 +266,12 @@ export const createPaymentSessionForUser = async (
   );
 };
 
+export const resetUserAccountViaApi = async (
+  telegramUserId: number,
+): Promise<{ ok: boolean }> => {
+  return requestJson("POST", `/api/user/${telegramUserId}/reset`);
+};
+
 export const cancelUserSubscription = async (
   telegramUserId: number,
 ): Promise<{

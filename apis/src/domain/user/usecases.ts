@@ -1,6 +1,9 @@
-import { getUserByTelegramId } from '../common/db/index.js';
+import { getUserByTelegramId, listAssistantsByOwnerTelegramId, deleteUserByTelegramId } from '../common/db/index.js';
 import { DomainError } from '../common/errors.js';
 import { deleteTelegramUser, ensureTelegramUser } from './service.js';
+import { removeAssistantById } from '../claw-assistant/service.js';
+import { cancelStripeSubscriptionImmediately } from '../payment/checkout.js';
+import { deleteLiteLLMKey, deleteLiteLLMUser, isLiteLLMClientEnabled } from '../litellm/index.js';
 import type { UserRecord } from '../../types.js';
 
 export interface EnsureTelegramUserInput {
@@ -57,6 +60,66 @@ export const readTelegramUserById = async (telegramUserId: number): Promise<User
     throw new DomainError('NOT_FOUND', 'User not found');
   }
   return user;
+};
+
+export const resetTelegramUserAccount = async (telegramUserId: number): Promise<{ ok: true }> => {
+  const user = await getUserByTelegramId(telegramUserId);
+  if (!user) {
+    throw new DomainError('NOT_FOUND', 'User not found');
+  }
+
+  // 1. Cancel Stripe subscription immediately
+  try {
+    await cancelStripeSubscriptionImmediately(String(telegramUserId));
+  } catch (error: unknown) {
+    console.warn('[reset_account] Failed to cancel Stripe subscription', {
+      telegramUserId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  // 2. Destroy all assistants (containers + DB records)
+  const assistants = await listAssistantsByOwnerTelegramId(telegramUserId);
+  for (const assistant of assistants) {
+    try {
+      await removeAssistantById(assistant.id);
+    } catch (error: unknown) {
+      console.warn('[reset_account] Failed to remove assistant', {
+        telegramUserId,
+        assistantId: assistant.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  // 3. Delete LiteLLM key and user (best-effort)
+  if (isLiteLLMClientEnabled()) {
+    try {
+      if (user.litellm_virtual_key) {
+        await deleteLiteLLMKey([user.litellm_virtual_key]);
+      }
+    } catch (error: unknown) {
+      console.warn('[reset_account] Failed to delete LiteLLM key', {
+        telegramUserId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    try {
+      if (user.litellm_user_id) {
+        await deleteLiteLLMUser([user.litellm_user_id]);
+      }
+    } catch (error: unknown) {
+      console.warn('[reset_account] Failed to delete LiteLLM user', {
+        telegramUserId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  // 4. Delete user record (cascades to subscription_periods, sessions, etc.)
+  await deleteUserByTelegramId(telegramUserId);
+
+  return { ok: true };
 };
 
 export const removeTelegramUserById = async (telegramUserId: number): Promise<UserRecord> => {
