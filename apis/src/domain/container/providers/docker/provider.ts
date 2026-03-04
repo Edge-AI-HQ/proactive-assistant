@@ -2,24 +2,26 @@ import fs from "node:fs";
 import path from "node:path";
 import net from "node:net";
 import Docker from "dockerode";
-import type Dockerode from "dockerode";
 import { getContainerManagerRuntime } from "../../runtime.js";
 import type {
-  AssistantRecord,
   ContainerManagerConfig,
   ReadAssistantLiteLLMVirtualKey,
 } from "../../types.js";
 import type {
-  AssistantContainerDestroyRef,
-  AssistantContainerGatewayRef,
-  AssistantContainerRuntimeRef,
-  ContainerProvider,
+  AssistantContainerParams,
+  ContainerRef,
+  ContainerRuntime,
+  ContainerState,
   GatewayTarget,
+  ProbeOptions,
 } from "../../contracts.js";
-import { containerNameForAssistant } from "../../naming.js";
 import { buildAssistantOpenclawConfig } from "../shared/openclaw_config.js";
 import { resolveAssistantLiteLLMApiKey as resolveAssistantLiteLLMApiKeyShared } from "../shared/assistant_litellm_key.js";
 import { DOCKER_FORBIDDEN_SECRET_ENV_KEYS } from "../shared/secret_env.js";
+
+// ---------------------------------------------------------------------------
+// Docker client & config proxy
+// ---------------------------------------------------------------------------
 
 const docker = new Docker();
 
@@ -28,11 +30,13 @@ const config = new Proxy({} as ContainerManagerConfig, {
     getContainerManagerRuntime().config[prop as keyof ContainerManagerConfig],
 });
 
-const updateAssistant = (id: number, fields: Partial<AssistantRecord>) =>
-  getContainerManagerRuntime().store.updateAssistant(id, fields);
 const readAssistantLiteLLMVirtualKey: ReadAssistantLiteLLMVirtualKey = (
   assistant,
 ) => getContainerManagerRuntime().readAssistantLiteLLMVirtualKey(assistant);
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -51,13 +55,15 @@ interface AssistantContainerDirs {
   workspaceDir: string;
 }
 
-const isRecord = (value: unknown): value is UnknownRecord => {
-  return typeof value === "object" && value !== null;
-};
+// ---------------------------------------------------------------------------
+// Utility helpers
+// ---------------------------------------------------------------------------
 
-const isStatusCodeError = (value: unknown): value is DockerStatusCodeError => {
-  return isRecord(value) && typeof value.statusCode === "number";
-};
+const isRecord = (value: unknown): value is UnknownRecord =>
+  typeof value === "object" && value !== null;
+
+const isStatusCodeError = (value: unknown): value is DockerStatusCodeError =>
+  isRecord(value) && typeof value.statusCode === "number";
 
 const ensureDir = (dirPath: string): void => {
   if (!fs.existsSync(dirPath)) {
@@ -65,141 +71,58 @@ const ensureDir = (dirPath: string): void => {
   }
 };
 
-const resolveAssistantLiteLLMApiKey = (
-  assistant: AssistantContainerRuntimeRef,
-): string | null =>
-  resolveAssistantLiteLLMApiKeyShared(
-    assistant,
-    config.litellm.enabled,
-    readAssistantLiteLLMVirtualKey,
-  );
+const hasEnvKey = (envVars: string[] | undefined, key: string): boolean =>
+  findEnvValue(envVars, key) !== null;
 
-const hasEnvKey = (envVars: string[] | undefined, key: string): boolean => {
-  return findEnvValue(envVars, key) !== null;
+const findEnvValue = (
+  envVars: string[] | undefined,
+  key: string,
+): string | null => {
+  if (!Array.isArray(envVars)) return null;
+  const prefix = `${key}=`;
+  for (const variable of envVars) {
+    if (!variable.startsWith(prefix)) continue;
+    return variable.slice(prefix.length);
+  }
+  return null;
 };
 
-const mergeAssistantOpenclawConfig = (
-  existingParsed: UnknownRecord,
-  desired: UnknownRecord,
-  assistantBotToken: string,
-): UnknownRecord => {
-  const next: UnknownRecord = { ...existingParsed };
+const findBindSource = (
+  binds: string[] | undefined,
+  target: string,
+): string | null => {
+  if (!Array.isArray(binds)) return null;
+  for (const bind of binds) {
+    const parts = bind.split(":");
+    if (parts.length < 2) continue;
+    const source = parts[0];
+    const containerTarget = parts[1];
+    if (containerTarget === target && source) return source;
+  }
+  return null;
+};
 
-  next.gateway = desired.gateway;
+// ---------------------------------------------------------------------------
+// Container directory management
+// ---------------------------------------------------------------------------
 
-  const existingMessages = isRecord(next.messages) ? next.messages : {};
-  const desiredMessages = isRecord(desired.messages) ? desired.messages : {};
-  next.messages = {
-    ...existingMessages,
-    tts: desiredMessages.tts,
+const buildContainerDirs = (scopeDirName: string): AssistantContainerDirs => {
+  const baseDir = path.join(process.cwd(), "data", scopeDirName);
+  return {
+    configDir: path.join(baseDir, "config"),
+    dataDir: path.join(baseDir, "data"),
+    tmpDir: path.join(baseDir, "tmp"),
+    workspaceDir: path.join(baseDir, "workspace"),
   };
-
-  const desiredTalk = isRecord(desired.talk) ? desired.talk : null;
-  if (desiredTalk) {
-    const existingTalk = isRecord(next.talk) ? next.talk : {};
-    const mergedTalk: UnknownRecord = { ...existingTalk, ...desiredTalk };
-    if (Object.hasOwn(mergedTalk, "baseUrl")) {
-      delete mergedTalk.baseUrl;
-    }
-    next.talk = mergedTalk;
-  }
-
-  const normalizedAssistantBotToken = assistantBotToken.trim();
-  if (normalizedAssistantBotToken) {
-    const existingChannels = isRecord(next.channels) ? next.channels : {};
-    const desiredChannels = isRecord(desired.channels) ? desired.channels : {};
-    next.channels = {
-      ...existingChannels,
-      telegram: desiredChannels.telegram,
-    };
-  } else if (isRecord(next.channels)) {
-    const nextChannels: UnknownRecord = { ...next.channels };
-    if (Object.hasOwn(nextChannels, "telegram")) {
-      delete nextChannels.telegram;
-      if (Object.keys(nextChannels).length) {
-        next.channels = nextChannels;
-      } else {
-        delete next.channels;
-      }
-    }
-  }
-
-  if (config.litellm.enabled) {
-    const desiredModels = isRecord(desired.models) ? desired.models : {};
-    const desiredProviders = isRecord(desiredModels.providers)
-      ? desiredModels.providers
-      : {};
-    const existingModels = isRecord(next.models) ? next.models : {};
-    const existingProviders = isRecord(existingModels.providers)
-      ? existingModels.providers
-      : {};
-    next.models = {
-      ...existingModels,
-      providers: {
-        ...existingProviders,
-        litellm: desiredProviders.litellm,
-      },
-    };
-
-    const desiredAgents = isRecord(desired.agents) ? desired.agents : {};
-    const desiredDefaults = isRecord(desiredAgents.defaults)
-      ? desiredAgents.defaults
-      : {};
-    const existingAgents = isRecord(next.agents) ? next.agents : {};
-    const existingDefaults = isRecord(existingAgents.defaults)
-      ? existingAgents.defaults
-      : {};
-    next.agents = {
-      ...existingAgents,
-      defaults: {
-        ...existingDefaults,
-        model: desiredDefaults.model,
-      },
-    };
-  }
-
-  return next;
 };
 
-const ensureOpenclawConfig = (
-  configDir: string,
-  gatewayToken: string,
-  assistantBotToken?: string | null,
-  liteLlmApiKey?: string | null,
-): { configPath: string; changed: boolean } => {
-  const configPath = path.join(configDir, "openclaw.json");
-  const existingRaw = fs.existsSync(configPath)
-    ? fs.readFileSync(configPath, "utf8")
-    : "";
-  const existingParsed = (() => {
-    if (!existingRaw) return {};
-    try {
-      const parsed = JSON.parse(existingRaw) as unknown;
-      return isRecord(parsed) ? parsed : {};
-    } catch {
-      return {};
-    }
-  })();
+const getAssistantContainerDirs = (
+  assistantBotId: number,
+): AssistantContainerDirs => buildContainerDirs(`assistant-${assistantBotId}`);
 
-  const desired = buildAssistantOpenclawConfig(config, {
-    gatewayToken,
-    gatewayBind: "lan",
-    assistantBotToken: assistantBotToken ?? null,
-    liteLlmApiKey: liteLlmApiKey ?? null,
-    includeTelegramPlugin: false,
-  });
-  const next = mergeAssistantOpenclawConfig(
-    existingParsed,
-    desired,
-    assistantBotToken || "",
-  );
-
-  const changed = JSON.stringify(existingParsed) !== JSON.stringify(next);
-  if (changed) {
-    fs.writeFileSync(configPath, JSON.stringify(next, null, 2));
-  }
-  return { configPath, changed };
-};
+// ---------------------------------------------------------------------------
+// Cron store sanitization
+// ---------------------------------------------------------------------------
 
 const parseCronStore = (raw: string): ParsedCronStore | null => {
   try {
@@ -241,30 +164,156 @@ const sanitizeCronStore = (runtimeDataDir: string): void => {
   });
 
   if (!changed) return;
-
-  const updated = {
-    ...parsed,
-    jobs,
-  };
-
-  fs.writeFileSync(cronPath, `${JSON.stringify(updated, null, 2)}\n`);
+  fs.writeFileSync(
+    cronPath,
+    `${JSON.stringify({ ...parsed, jobs }, null, 2)}\n`,
+  );
 };
 
-const buildContainerDirs = (scopeDirName: string): AssistantContainerDirs => {
-  const baseDir = path.join(process.cwd(), "data", scopeDirName);
-  return {
-    configDir: path.join(baseDir, "config"),
-    dataDir: path.join(baseDir, "data"),
-    tmpDir: path.join(baseDir, "tmp"),
-    workspaceDir: path.join(baseDir, "workspace"),
-  };
+// ---------------------------------------------------------------------------
+// OpenClaw config management
+// ---------------------------------------------------------------------------
+
+const mergeAssistantOpenclawConfig = (
+  existingParsed: UnknownRecord,
+  desired: UnknownRecord,
+  assistantBotToken: string,
+): UnknownRecord => {
+  const next: UnknownRecord = { ...existingParsed };
+
+  next.gateway = desired.gateway;
+
+  const existingMessages = isRecord(next.messages) ? next.messages : {};
+  const desiredMessages = isRecord(desired.messages) ? desired.messages : {};
+  next.messages = { ...existingMessages, tts: desiredMessages.tts };
+
+  const desiredTalk = isRecord(desired.talk) ? desired.talk : null;
+  if (desiredTalk) {
+    const existingTalk = isRecord(next.talk) ? next.talk : {};
+    const mergedTalk: UnknownRecord = { ...existingTalk, ...desiredTalk };
+    if (Object.hasOwn(mergedTalk, "baseUrl")) delete mergedTalk.baseUrl;
+    next.talk = mergedTalk;
+  }
+
+  const normalizedAssistantBotToken = assistantBotToken.trim();
+  if (normalizedAssistantBotToken) {
+    const existingChannels = isRecord(next.channels) ? next.channels : {};
+    const desiredChannels = isRecord(desired.channels) ? desired.channels : {};
+    next.channels = { ...existingChannels, telegram: desiredChannels.telegram };
+  } else if (isRecord(desired.channels)) {
+    // Quick Start mode (no dedicated bot token): take channels from desired
+    // config, which may include webhook listener settings.
+    next.channels = desired.channels;
+  } else if (isRecord(next.channels)) {
+    const nextChannels: UnknownRecord = { ...next.channels };
+    if (Object.hasOwn(nextChannels, "telegram")) {
+      delete nextChannels.telegram;
+      next.channels = Object.keys(nextChannels).length
+        ? nextChannels
+        : undefined;
+    }
+  }
+
+  // Always take plugins and session config from desired — these are generated
+  // fresh each time and include webhook-related plugins.
+  if (isRecord(desired.plugins)) {
+    next.plugins = desired.plugins;
+  }
+  if (isRecord(desired.session)) {
+    next.session = desired.session;
+  }
+
+  if (config.litellm.enabled) {
+    const desiredModels = isRecord(desired.models) ? desired.models : {};
+    const desiredProviders = isRecord(desiredModels.providers)
+      ? desiredModels.providers
+      : {};
+    const existingModels = isRecord(next.models) ? next.models : {};
+    const existingProviders = isRecord(existingModels.providers)
+      ? existingModels.providers
+      : {};
+    next.models = {
+      ...existingModels,
+      providers: { ...existingProviders, litellm: desiredProviders.litellm },
+    };
+
+    const desiredAgents = isRecord(desired.agents) ? desired.agents : {};
+    const desiredDefaults = isRecord(desiredAgents.defaults)
+      ? desiredAgents.defaults
+      : {};
+    const existingAgents = isRecord(next.agents) ? next.agents : {};
+    const existingDefaults = isRecord(existingAgents.defaults)
+      ? existingAgents.defaults
+      : {};
+    next.agents = {
+      ...existingAgents,
+      defaults: { ...existingDefaults, model: desiredDefaults.model },
+    };
+  }
+
+  return next;
 };
 
-const getAssistantContainerDirs = (
-  assistantBotId: number,
-): AssistantContainerDirs => {
-  return buildContainerDirs(`assistant-${assistantBotId}`);
+const ensureOpenclawConfig = (
+  configDir: string,
+  gatewayToken: string,
+  assistantBotToken?: string | null,
+  liteLlmApiKey?: string | null,
+): { configPath: string; changed: boolean } => {
+  const configPath = path.join(configDir, "openclaw.json");
+  const existingRaw = fs.existsSync(configPath)
+    ? fs.readFileSync(configPath, "utf8")
+    : "";
+  const existingParsed = (() => {
+    if (!existingRaw) return {};
+    try {
+      const parsed = JSON.parse(existingRaw) as unknown;
+      return isRecord(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  })();
+
+  const webhookPort = config.telegramRouter.webhookPort;
+  const privateWebhookPort = webhookPort + 1;
+  const webhookPath = config.telegramRouter.webhookPath;
+  const webhookHost = config.telegramRouter.webhookHost || "0.0.0.0";
+  const webhookSecret = config.telegram.webhookSecret;
+  const pluginPath = config.telegramRouter.pluginPath;
+  const webhookUrl = config.telegramRouter.webhookUrl.trim();
+
+  const desired = buildAssistantOpenclawConfig(config, {
+    gatewayToken,
+    gatewayBind: "lan",
+    assistantBotToken: assistantBotToken ?? null,
+    publicBotToken: config.telegram.token,
+    liteLlmApiKey: liteLlmApiKey ?? null,
+    includeTelegramPlugin: true,
+    telegramWebhookMode: true,
+    telegramWebhookPort: webhookPort,
+    telegramPrivateWebhookPort: privateWebhookPort,
+    telegramWebhookPath: webhookPath,
+    telegramWebhookHost: webhookHost,
+    ...(webhookUrl ? { telegramWebhookUrl: webhookUrl } : {}),
+    ...(webhookSecret ? { telegramWebhookSecret: webhookSecret } : {}),
+    ...(pluginPath ? { telegramRouterPluginPath: pluginPath } : {}),
+  });
+  const next = mergeAssistantOpenclawConfig(
+    existingParsed,
+    desired,
+    assistantBotToken || "",
+  );
+
+  const changed = JSON.stringify(existingParsed) !== JSON.stringify(next);
+  if (changed) {
+    fs.writeFileSync(configPath, JSON.stringify(next, null, 2));
+  }
+  return { configPath, changed };
 };
+
+// ---------------------------------------------------------------------------
+// Docker runtime preparation
+// ---------------------------------------------------------------------------
 
 const prepareDockerRuntime = (): void => {
   const dataDir = path.join(process.cwd(), "data");
@@ -280,7 +329,14 @@ const prepareDockerRuntime = (): void => {
   });
 };
 
-const waitForPort = (port: number, timeoutMs = 30000): Promise<boolean> =>
+// ---------------------------------------------------------------------------
+// Port probe
+// ---------------------------------------------------------------------------
+
+const waitForLocalPort = (
+  port: number,
+  timeoutMs = 30_000,
+): Promise<boolean> =>
   new Promise((resolve) => {
     const start = Date.now();
 
@@ -303,21 +359,14 @@ const waitForPort = (port: number, timeoutMs = 30000): Promise<boolean> =>
     tryConnect();
   });
 
-const resolveDockerGatewayTargetForAssistant = (
-  assistant: AssistantContainerGatewayRef,
-): GatewayTarget => {
-  return {
-    host: "127.0.0.1",
-    port: assistant.container_port,
-    httpBaseUrl: `http://127.0.0.1:${assistant.container_port}`,
-    wsBaseUrl: `ws://127.0.0.1:${assistant.container_port}`,
-  };
-};
+// ---------------------------------------------------------------------------
+// Internal: container resolution & state normalization
+// ---------------------------------------------------------------------------
 
-const resolveContainer = async (
+const resolveDockerContainer = async (
   containerId: string | null | undefined,
   fallbackName: string,
-): Promise<Dockerode.Container | null> => {
+): Promise<Docker.Container | null> => {
   if (containerId) {
     try {
       const container = docker.getContainer(containerId);
@@ -337,275 +386,343 @@ const resolveContainer = async (
   }
 };
 
-const findBindSource = (
-  binds: string[] | undefined,
-  target: string,
-): string | null => {
-  if (!Array.isArray(binds)) return null;
-  for (const bind of binds) {
-    const parts = bind.split(":");
-    if (parts.length < 2) continue;
-    const source = parts[0];
-    const containerTarget = parts[1];
-    if (containerTarget === target && source) {
-      return source;
+const normalizeDockerState = (status: string | undefined): ContainerState => {
+  const s = (status || "").toLowerCase();
+  if (s === "running") return "running";
+  if (s === "exited" || s === "dead") return "stopped";
+  if (s === "created" || s === "restarting") return "creating";
+  if (s === "removing") return "missing";
+  return "unknown";
+};
+
+const inspectToContainerRef = async (
+  container: Docker.Container,
+): Promise<ContainerRef> => {
+  const inspect = await container.inspect();
+  const envArr: string[] = inspect.Config?.Env || [];
+  const env: Record<string, string> = {};
+  for (const entry of envArr) {
+    const idx = entry.indexOf("=");
+    if (idx > 0) env[entry.slice(0, idx)] = entry.slice(idx + 1);
+  }
+
+  // Extract host ports from bindings
+  const portBindings = inspect.HostConfig?.PortBindings || {};
+  const metadata: Record<string, string> = {};
+
+  const extractHostPort = (containerPort: string): string => {
+    const bindings = portBindings[containerPort];
+    if (Array.isArray(bindings) && bindings.length > 0) {
+      const binding = bindings[0] as { HostPort?: string };
+      if (binding.HostPort) return binding.HostPort;
     }
-  }
-  return null;
-};
+    return "";
+  };
 
-const findEnvValue = (
-  envVars: string[] | undefined,
-  key: string,
-): string | null => {
-  if (!Array.isArray(envVars)) return null;
-  const prefix = `${key}=`;
-  for (const variable of envVars) {
-    if (!variable.startsWith(prefix)) continue;
-    return variable.slice(prefix.length);
-  }
-  return null;
-};
-
-const ensureAssistantDockerContainer = async (
-  assistant: AssistantContainerRuntimeRef,
-  gatewayToken: string,
-): Promise<{ containerId: string; ready: boolean }> => {
-  // Quick Start 模式下 assistant_bot_id 为 NULL，使用 assistant.id 作为标识
-  const botIdForContainer = assistant.assistant_bot_id ?? assistant.id;
-
-  const fallbackContainerName = containerNameForAssistant(botIdForContainer);
-  const containerName =
-    assistant.container_name?.trim() || fallbackContainerName;
-  let container = await resolveContainer(assistant.container_id, containerName);
-
-  const assistantDirs = getAssistantContainerDirs(botIdForContainer);
-  const assistantConfigDir = assistantDirs.configDir;
-  const assistantDataDir = assistantDirs.dataDir;
-  const assistantTmpDir = assistantDirs.tmpDir;
-  const assistantWorkspaceDir = assistantDirs.workspaceDir;
-
-  ensureDir(assistantConfigDir);
-  ensureDir(assistantDataDir);
-  ensureDir(assistantTmpDir);
-  ensureDir(assistantWorkspaceDir);
-  const assistantLiteLLMApiKey = resolveAssistantLiteLLMApiKey(assistant);
-  const { changed: configChanged } = ensureOpenclawConfig(
-    assistantConfigDir,
-    gatewayToken,
-    assistant.assistant_bot_token,
-    assistantLiteLLMApiKey,
+  metadata.hostPort = extractHostPort(`${config.openclaw.gatewayPort}/tcp`);
+  const webhookPort = config.telegramRouter.webhookPort;
+  metadata.webhookHostPort = extractHostPort(`${webhookPort}/tcp`);
+  metadata.privateWebhookHostPort = extractHostPort(
+    `${webhookPort + 1}/tcp`,
   );
-  sanitizeCronStore(assistantDataDir);
-  let shouldRestartForConfig = false;
 
-  if (container) {
-    const inspect = await container.inspect();
-    const binds = inspect?.HostConfig?.Binds;
-    const expectedBinds: Array<{ target: string; source: string }> = [
-      { target: "/app/config", source: assistantConfigDir },
-      { target: "/app/data", source: assistantDataDir },
-      { target: "/tmp", source: assistantTmpDir },
-      { target: "/root/.openclaw/workspace", source: assistantWorkspaceDir },
-    ];
-    const needsBindMigration = expectedBinds.some(({ target, source }) => {
-      const mountedSource = findBindSource(binds, target);
-      return mountedSource !== source;
-    });
-    const legacyTelegramBotToken = findEnvValue(
-      inspect?.Config?.Env,
-      "TELEGRAM_BOT_TOKEN",
-    );
-    const needsEnvMigration =
-      typeof legacyTelegramBotToken === "string" &&
-      legacyTelegramBotToken.length > 0;
-    const needsSecretEnvPrune = DOCKER_FORBIDDEN_SECRET_ENV_KEYS.some((key) =>
-      hasEnvKey(inspect?.Config?.Env, key),
-    );
+  return {
+    id: inspect.Id,
+    name: (inspect.Name || "").replace(/^\//, ""),
+    state: normalizeDockerState(inspect.State?.Status),
+    env,
+    image: inspect.Config?.Image,
+    metadata,
+  };
+};
 
-    if (needsBindMigration || needsEnvMigration || needsSecretEnvPrune) {
+// ---------------------------------------------------------------------------
+// ContainerRuntime implementation
+// ---------------------------------------------------------------------------
+
+export const dockerContainerRuntime: ContainerRuntime = {
+  name: "docker",
+
+  async prepare(): Promise<void> {
+    prepareDockerRuntime();
+  },
+
+  async findContainer(
+    currentRef: string | null,
+    fallbackNames: string[],
+  ): Promise<ContainerRef | null> {
+    // Try currentRef first
+    if (currentRef) {
       try {
-        if (inspect.State?.Status === "running") {
-          await container.stop();
-        }
+        const container = docker.getContainer(currentRef);
+        const inspect = await container.inspect();
+        if (inspect) return inspectToContainerRef(container);
       } catch {
-        // continue with forced remove
+        // fall through
       }
-      await container.remove({ force: true });
-      container = null;
-      await updateAssistant(assistant.id, {
-        container_status: "creating",
-        container_id: "",
-        container_name: containerName,
-      });
-    } else if (configChanged && inspect.State?.Status === "running") {
-      shouldRestartForConfig = true;
     }
-  }
 
-  if (!container) {
-    container = await docker.createContainer({
-      name: containerName,
+    // Try each fallback name
+    for (const name of fallbackNames) {
+      const trimmed = name.trim();
+      if (!trimmed) continue;
+      try {
+        const container = docker.getContainer(trimmed);
+        const inspect = await container.inspect();
+        if (inspect) return inspectToContainerRef(container);
+      } catch {
+        // continue
+      }
+    }
+
+    return null;
+  },
+
+  async createContainer(
+    params: AssistantContainerParams,
+  ): Promise<ContainerRef> {
+    const dirs = getAssistantContainerDirs(params.assistantBotId);
+    ensureDir(dirs.configDir);
+    ensureDir(dirs.dataDir);
+    ensureDir(dirs.tmpDir);
+    ensureDir(dirs.workspaceDir);
+
+    // Resolve LiteLLM key
+    const liteLlmApiKey = params.liteLlmApiKey;
+
+    ensureOpenclawConfig(
+      dirs.configDir,
+      params.gatewayToken,
+      params.assistantBotToken,
+      liteLlmApiKey,
+    );
+    sanitizeCronStore(dirs.dataDir);
+
+    const hostPort = params.containerPort
+      ? String(params.containerPort)
+      : "0";
+
+    const webhookPort = config.telegramRouter.webhookPort;
+    const privateWebhookPort = webhookPort + 1;
+    const webhookHostPort = params.containerPort
+      ? String(params.containerPort + 1)
+      : "0";
+    const privateWebhookHostPort = params.containerPort
+      ? String(params.containerPort + 2)
+      : "0";
+
+    // TELEGRAM_ROUTER_URL: where the telegram-router-proxy plugin forwards
+    // outbound Telegram API calls. In Docker, the APIs server runs on the host.
+    const apisPort = Number.parseInt(process.env.PORT || "3000", 10);
+    const telegramRouterUrl = `http://host.docker.internal:${apisPort}`;
+
+    const container = await docker.createContainer({
+      name: params.containerName,
       Image: config.openclaw.image,
       Env: [
-        `OPENCLAW_USER_ID=assistant-${botIdForContainer}`,
+        `OPENCLAW_USER_ID=assistant-${params.assistantBotId}`,
         `OPENCLAW_GATEWAY_PORT=${config.openclaw.gatewayPort}`,
+        `OPENCLAW_TELEGRAM_WEBHOOK_PORT=${webhookPort}`,
+        `OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT=${privateWebhookPort}`,
         "OPENCLAW_CONFIG_PATH=/app/config/openclaw.json",
         "OPENCLAW_STATE_DIR=/app/data",
+        "NODE_COMPILE_CACHE=/app/data/cache/node-compile-cache",
+        `TELEGRAM_ROUTER_URL=${telegramRouterUrl}`,
+        `TELEGRAM_BOT_TOKEN=${config.telegram.token}`,
       ],
       ExposedPorts: {
         [`${config.openclaw.gatewayPort}/tcp`]: {},
+        [`${webhookPort}/tcp`]: {},
+        [`${privateWebhookPort}/tcp`]: {},
       },
       HostConfig: {
         RestartPolicy: { Name: "unless-stopped" },
         PortBindings: {
-          [`${config.openclaw.gatewayPort}/tcp`]: [
-            { HostPort: String(assistant.container_port) },
-          ],
+          [`${config.openclaw.gatewayPort}/tcp`]: [{ HostPort: hostPort }],
+          [`${webhookPort}/tcp`]: [{ HostPort: webhookHostPort }],
+          [`${privateWebhookPort}/tcp`]: [{ HostPort: privateWebhookHostPort }],
         },
         Binds: [
-          `${assistantConfigDir}:/app/config`,
-          `${assistantDataDir}:/app/data`,
-          `${assistantTmpDir}:/tmp`,
-          `${assistantWorkspaceDir}:/root/.openclaw/workspace`,
+          `${dirs.configDir}:/app/config`,
+          `${dirs.dataDir}:/app/data`,
+          `${dirs.tmpDir}:/tmp`,
+          `${dirs.workspaceDir}:/root/.openclaw/workspace`,
         ],
         Memory: config.container.memoryMb * 1024 * 1024,
         CpuShares: config.container.cpuShares,
       },
     });
 
-    await updateAssistant(assistant.id, {
-      container_status: "creating",
-      container_id: container.id,
-      container_name: containerName,
-    });
-  }
+    return inspectToContainerRef(container);
+  },
 
-  const inspect = await container.inspect();
-  if (inspect.State.Status !== "running") {
+  async startContainer(containerId: string): Promise<ContainerRef> {
+    const container = docker.getContainer(containerId);
+    const inspect = await container.inspect();
+
+    if (inspect.State.Status !== "running") {
+      try {
+        await container.start();
+      } catch (error: unknown) {
+        if (!isStatusCodeError(error) || error.statusCode !== 304) throw error;
+      }
+    }
+
+    return inspectToContainerRef(container);
+  },
+
+  async stopContainer(containerId: string): Promise<void> {
+    const container = docker.getContainer(containerId);
     try {
-      await container.start();
+      await container.stop();
     } catch (error: unknown) {
-      if (!isStatusCodeError(error) || error.statusCode !== 304) {
+      if (
+        !isStatusCodeError(error) ||
+        (error.statusCode !== 304 && error.statusCode !== 404)
+      ) {
         throw error;
       }
     }
-  } else if (shouldRestartForConfig) {
-    await container.restart();
-  }
+  },
 
-  const ready = await waitForPort(assistant.container_port, 30000);
-  await updateAssistant(assistant.id, {
-    container_status: ready ? "running" : "error",
-    container_name: containerName,
-  });
-
-  return { containerId: container.id, ready };
-};
-
-const destroyAssistantDockerContainer = async (
-  assistant: AssistantContainerDestroyRef,
-): Promise<{ deleted: boolean }> => {
-  const botIdForContainer = assistant.assistant_bot_id ?? assistant.id;
-  const fallbackContainerName = containerNameForAssistant(botIdForContainer);
-  const containerName =
-    assistant.container_name?.trim() || fallbackContainerName;
-
-  const container = await resolveContainer(
-    assistant.container_id,
-    containerName,
-  );
-  if (!container) {
-    await updateAssistant(assistant.id, {
-      container_status: "missing",
-      container_id: "",
-      container_name: containerName,
-    });
-    return { deleted: false };
-  }
-
-  let deleted = false;
-  try {
-    const inspect = await container.inspect();
-    if (inspect.State?.Status === "running") {
-      try {
-        await container.stop();
-      } catch (error: unknown) {
-        if (
-          !isStatusCodeError(error) ||
-          (error.statusCode !== 304 && error.statusCode !== 404)
-        ) {
-          throw error;
+  async destroyContainer(containerId: string): Promise<void> {
+    const container = docker.getContainer(containerId);
+    try {
+      const inspect = await container.inspect();
+      if (inspect.State?.Status === "running") {
+        try {
+          await container.stop();
+        } catch (error: unknown) {
+          if (
+            !isStatusCodeError(error) ||
+            (error.statusCode !== 304 && error.statusCode !== 404)
+          ) {
+            throw error;
+          }
         }
+      }
+      await container.remove({ force: true });
+    } catch (error: unknown) {
+      if (!isStatusCodeError(error) || error.statusCode !== 404) throw error;
+    }
+  },
+
+  async listContainers(): Promise<ContainerRef[]> {
+    const containers = await docker.listContainers({ all: true });
+    return containers.map((info) => ({
+      id: info.Id,
+      name: (info.Names?.[0] || "").replace(/^\//, ""),
+      state: normalizeDockerState(info.State),
+      metadata: {},
+    }));
+  },
+
+  resolveGatewayTarget(ref: ContainerRef): GatewayTarget {
+    const hostPort = Number(ref.metadata.hostPort) || config.openclaw.gatewayPort;
+    return {
+      host: "127.0.0.1",
+      port: hostPort,
+      httpBaseUrl: `http://127.0.0.1:${hostPort}`,
+      wsBaseUrl: `ws://127.0.0.1:${hostPort}`,
+    };
+  },
+
+  async probeReady(
+    ref: ContainerRef,
+    options: ProbeOptions,
+  ): Promise<boolean> {
+    const hostPort = Number(ref.metadata.hostPort) || options.gatewayPort;
+    const gatewayReady = await waitForLocalPort(hostPort, options.timeoutMs);
+    if (!gatewayReady) return false;
+
+    // Also probe the webhook host port if exposed
+    const webhookHostPort = Number(ref.metadata.webhookHostPort);
+    if (webhookHostPort > 0) {
+      const webhookReady = await waitForLocalPort(webhookHostPort, 120_000);
+      if (!webhookReady) return false;
+    }
+
+    return true;
+  },
+
+  async needsRecreation(
+    ref: ContainerRef,
+    params: AssistantContainerParams,
+  ): Promise<boolean> {
+    let container: Docker.Container;
+    try {
+      container = docker.getContainer(ref.id);
+    } catch {
+      return true;
+    }
+
+    let inspect: Awaited<ReturnType<Docker.Container["inspect"]>>;
+    try {
+      inspect = await container.inspect();
+    } catch {
+      return true;
+    }
+
+    const dirs = getAssistantContainerDirs(params.assistantBotId);
+    const binds = inspect?.HostConfig?.Binds;
+    const expectedBinds: Array<{ target: string; source: string }> = [
+      { target: "/app/config", source: dirs.configDir },
+      { target: "/app/data", source: dirs.dataDir },
+      { target: "/tmp", source: dirs.tmpDir },
+      { target: "/root/.openclaw/workspace", source: dirs.workspaceDir },
+    ];
+    const needsBindMigration = expectedBinds.some(({ target, source }) => {
+      const mountedSource = findBindSource(binds, target);
+      return mountedSource !== source;
+    });
+    if (needsBindMigration) return true;
+
+    const legacyTelegramBotToken = findEnvValue(
+      inspect?.Config?.Env,
+      "TELEGRAM_BOT_TOKEN",
+    );
+    if (
+      typeof legacyTelegramBotToken === "string" &&
+      legacyTelegramBotToken.length > 0
+    ) {
+      return true;
+    }
+
+    // Recreate if webhook port is not exposed (legacy containers before webhook fix)
+    const webhookPort = config.telegramRouter.webhookPort;
+    const exposedPorts = inspect?.Config?.ExposedPorts || {};
+    if (!exposedPorts[`${webhookPort}/tcp`]) {
+      return true;
+    }
+
+    const needsSecretEnvPrune = DOCKER_FORBIDDEN_SECRET_ENV_KEYS.some((key) =>
+      hasEnvKey(inspect?.Config?.Env, key),
+    );
+    if (needsSecretEnvPrune) return true;
+
+    // Write updated config and check if restart is needed
+    const liteLlmApiKey = params.liteLlmApiKey;
+    const { changed } = ensureOpenclawConfig(
+      dirs.configDir,
+      params.gatewayToken,
+      params.assistantBotToken,
+      liteLlmApiKey,
+    );
+
+    // Config change doesn't need recreation — just a restart (handled by orchestrator)
+    // But we sanitize cron store as a side effect
+    sanitizeCronStore(dirs.dataDir);
+
+    // If config changed and container is running, orchestrator should restart
+    // We return false because recreation (destroy+create) is not needed
+    if (changed) {
+      // Restart the running container to pick up config changes
+      if (inspect.State?.Status === "running") {
+        await container.restart();
       }
     }
 
-    await container.remove({ force: true });
-    deleted = true;
-  } catch (error: unknown) {
-    if (!isStatusCodeError(error) || error.statusCode !== 404) {
-      throw error;
-    }
-  }
-
-  await updateAssistant(assistant.id, {
-    container_status: "missing",
-    container_id: "",
-    container_name: containerName,
-  });
-
-  return { deleted };
+    return false;
+  },
 };
 
-const stopAssistantDockerContainer = async (
-  assistant: AssistantContainerDestroyRef,
-): Promise<{ stopped: boolean }> => {
-  const botIdForContainer = assistant.assistant_bot_id ?? assistant.id;
-  const fallbackContainerName = containerNameForAssistant(botIdForContainer);
-  const containerName =
-    assistant.container_name?.trim() || fallbackContainerName;
-
-  const container = await resolveContainer(
-    assistant.container_id,
-    containerName,
-  );
-  if (!container) {
-    await updateAssistant(assistant.id, {
-      container_status: "missing",
-      container_id: "",
-      container_name: containerName,
-    });
-    return { stopped: false };
-  }
-
-  let stopped = false;
-  try {
-    const inspect = await container.inspect();
-    if (inspect.State?.Status === "running") {
-      await container.stop();
-      stopped = true;
-    }
-  } catch (error: unknown) {
-    if (
-      !isStatusCodeError(error) ||
-      (error.statusCode !== 304 && error.statusCode !== 404)
-    ) {
-      throw error;
-    }
-  }
-
-  await updateAssistant(assistant.id, {
-    container_status: "stopped",
-    container_name: containerName,
-  });
-
-  return { stopped };
-};
-
-export const dockerContainerProvider: ContainerProvider = {
-  prepareRuntime: prepareDockerRuntime,
-  ensureAssistantContainer: ensureAssistantDockerContainer,
-  destroyAssistantContainer: destroyAssistantDockerContainer,
-  stopAssistantContainer: stopAssistantDockerContainer,
-  resolveGatewayTargetForAssistant: resolveDockerGatewayTargetForAssistant,
-};

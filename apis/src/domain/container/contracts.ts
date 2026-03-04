@@ -1,11 +1,19 @@
 import type { AssistantRecord } from "./types.js";
 
+// ---------------------------------------------------------------------------
+// Gateway Target
+// ---------------------------------------------------------------------------
+
 export interface GatewayTarget {
   host: string;
   port: number;
   httpBaseUrl: string;
   wsBaseUrl: string;
 }
+
+// ---------------------------------------------------------------------------
+// Assistant record projections (used by callers of the public API)
+// ---------------------------------------------------------------------------
 
 export type AssistantContainerRuntimeRef = Pick<
   AssistantRecord,
@@ -38,19 +46,87 @@ export type AssistantContainerGatewayRef = Pick<
   "assistant_bot_id" | "container_id" | "container_port"
 >;
 
-export interface ContainerProvider {
-  prepareRuntime(): Promise<void> | void;
-  ensureAssistantContainer(
-    assistant: AssistantContainerRuntimeRef,
-    gatewayToken: string,
-  ): Promise<{ containerId: string; ready: boolean }>;
-  destroyAssistantContainer(
-    assistant: AssistantContainerDestroyRef,
-  ): Promise<{ deleted: boolean }>;
-  stopAssistantContainer(
-    assistant: AssistantContainerDestroyRef,
-  ): Promise<{ stopped: boolean }>;
-  resolveGatewayTargetForAssistant(
-    assistant: AssistantContainerGatewayRef,
-  ): GatewayTarget;
+// ---------------------------------------------------------------------------
+// ContainerRuntime — pure infrastructure abstraction (no DB, no notifications)
+// ---------------------------------------------------------------------------
+
+export type ContainerState =
+  | "running"
+  | "stopped"
+  | "creating"
+  | "missing"
+  | "error"
+  | "unknown";
+
+export interface ContainerRef {
+  /** Runtime-opaque identifier (e.g. "fly:machineId|ip" or a Docker container ID). */
+  id: string;
+  name: string;
+  state: ContainerState;
+  /** Container's current env vars — used by the orchestrator for drift detection. */
+  env?: Record<string, string> | undefined;
+  image?: string | undefined;
+  resources?: { memoryMb?: number; cpus?: number } | undefined;
+  createdAt?: string | undefined;
+  updatedAt?: string | undefined;
+  /** Runtime-specific data (Fly: privateIp, machineId; Docker: hostPort). */
+  metadata: Record<string, string>;
 }
+
+export interface AssistantContainerParams {
+  assistantBotId: number;
+  containerName: string;
+  gatewayToken: string;
+  assistantBotToken: string | null;
+  liteLlmApiKey: string | null;
+  /** Docker needs a pre-allocated host port. */
+  containerPort?: number;
+}
+
+export interface ProbeOptions {
+  timeoutMs: number;
+  gatewayToken?: string;
+  gatewayPort: number;
+  additionalPorts?: number[];
+}
+
+export interface ContainerRuntime {
+  readonly name: string;
+
+  /** One-time initialization (e.g. Fly image digest check, Docker cron sanitization). */
+  prepare(): Promise<void>;
+
+  /** Find an existing container by its runtime-specific ref or fallback names. */
+  findContainer(
+    currentRef: string | null,
+    fallbackNames: string[],
+  ): Promise<ContainerRef | null>;
+
+  /** Create a new container. Returns the created container ref. */
+  createContainer(params: AssistantContainerParams): Promise<ContainerRef>;
+
+  /** Start a stopped/created container. Waits until running or error. */
+  startContainer(containerId: string): Promise<ContainerRef>;
+
+  /** Stop a running container. */
+  stopContainer(containerId: string): Promise<void>;
+
+  /** Destroy a container permanently. */
+  destroyContainer(containerId: string): Promise<void>;
+
+  /** List all managed containers (for state sync). */
+  listContainers(): Promise<ContainerRef[]>;
+
+  /** Resolve gateway connectivity for a container. */
+  resolveGatewayTarget(ref: ContainerRef): GatewayTarget;
+
+  /** Pure infrastructure probe — no side effects. */
+  probeReady(ref: ContainerRef, options: ProbeOptions): Promise<boolean>;
+
+  /** Check if a container's config has drifted from desired params. */
+  needsRecreation(
+    ref: ContainerRef,
+    params: AssistantContainerParams,
+  ): Promise<boolean>;
+}
+

@@ -35,9 +35,14 @@ export type ReadUserLiteLLMVirtualKey = (
   user: Pick<UserRecord, 'telegram_user_id' | 'litellm_virtual_key'>
 ) => string | null;
 
+export interface ContainerNotifier {
+  notifyReady(telegramUserId: number): Promise<void>;
+}
+
 export interface ContainerManagerRuntime {
   config: ContainerManagerConfig;
   store: ContainerStateStore;
+  notifier: ContainerNotifier;
   readAssistantLiteLLMVirtualKey: ReadAssistantLiteLLMVirtualKey;
   readUserLiteLLMVirtualKey: ReadUserLiteLLMVirtualKey;
 }

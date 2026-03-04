@@ -13,6 +13,7 @@ type ContainerInfo = {
   gateway_token: string;
   assistant_bot_id: string | null;
   runtime_provider: string | null;
+  host_port: number | null;
 };
 
 type UserState =
@@ -265,6 +266,7 @@ async function findUserState(chatId: number): Promise<UserState> {
       runtime_provider: string | null;
       runtime_ref: string | null;
       runtime_status: string | null;
+      host_port: number | null;
       gateway_token: string;
     }>(
       `SELECT
@@ -273,6 +275,7 @@ async function findUserState(chatId: number): Promise<UserState> {
         r.runtime_provider,
         r.runtime_ref,
         r.status as runtime_status,
+        r.host_port,
         u.gateway_token
       FROM users u
       LEFT JOIN assistants a ON a.owner_user_id = u.id
@@ -307,6 +310,7 @@ async function findUserState(chatId: number): Promise<UserState> {
           gateway_token: row.gateway_token,
           assistant_bot_id: row.assistant_bot_id,
           runtime_provider: row.runtime_provider,
+          host_port: row.host_port ?? null,
         },
       };
     }
@@ -319,6 +323,7 @@ async function findUserState(chatId: number): Promise<UserState> {
         gateway_token: row.gateway_token,
         assistant_bot_id: row.assistant_bot_id,
         runtime_provider: row.runtime_provider,
+        host_port: row.host_port ?? null,
       },
     };
   } catch (error) {
@@ -359,14 +364,13 @@ function getAbnormalAssistantId(state: UserState): number | null {
 }
 
 async function forwardToOpenClaw(container: ContainerInfo, update: unknown, source: WebhookSource): Promise<boolean> {
-  const runtime = parseFlyRuntimeRef(container.container_id);
-  if (!runtime?.machineId) return false;
+  const candidateUrls =
+    container.runtime_provider === "docker"
+      ? buildDockerWebhookCandidateUrls(container, source)
+      : buildFlyWebhookCandidateUrls(container, source);
 
-  const hostCandidates = [
-    ...(runtime.privateIp ? [runtime.privateIp] : []),
-    `${runtime.machineId}.vm.${config.fly.appName}.internal`,
-  ];
-  const candidateUrls = buildWebhookCandidateUrls(hostCandidates, source);
+  if (!candidateUrls.length) return false;
+
   let lastError: unknown = null;
 
   for (const webhookUrl of candidateUrls) {
@@ -399,6 +403,31 @@ async function forwardToOpenClaw(container: ContainerInfo, update: unknown, sour
 
   console.error("❌ Forward failed on all candidate endpoints", lastError);
   return false;
+}
+
+function buildDockerWebhookCandidateUrls(container: ContainerInfo, source: WebhookSource): string[] {
+  const basePort = container.host_port;
+  if (!basePort || basePort <= 0) return [];
+
+  // Convention: gateway = host_port, webhook = host_port + 1, private webhook = host_port + 2
+  const webhookHostPort = source === "private" ? basePort + 2 : basePort + 1;
+  const path = normalizeWebhookPath(
+    source === "private"
+      ? `${normalizeWebhookPath(config.telegramRouter.webhookPath)}/private`
+      : config.telegramRouter.webhookPath,
+  );
+  return [`http://127.0.0.1:${webhookHostPort}${path}`];
+}
+
+function buildFlyWebhookCandidateUrls(container: ContainerInfo, source: WebhookSource): string[] {
+  const runtime = parseFlyRuntimeRef(container.container_id);
+  if (!runtime?.machineId) return [];
+
+  const hostCandidates = [
+    ...(runtime.privateIp ? [runtime.privateIp] : []),
+    `${runtime.machineId}.vm.${config.fly.appName}.internal`,
+  ];
+  return buildWebhookCandidateUrls(hostCandidates, source);
 }
 
 function buildWebhookCandidateUrls(targetHosts: string[], source: WebhookSource): string[] {
