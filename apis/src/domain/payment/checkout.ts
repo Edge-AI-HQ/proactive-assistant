@@ -5,7 +5,7 @@ import { DomainError } from "../common/errors.js";
 import { db } from "./db.js";
 import { syncLiteLLMBudgetFromPlan } from "./litellmBudget.js";
 import { readPaymentPublicBaseUrl } from "./publicBaseUrl.js";
-import { parseTelegramUserId, requireStripe } from "./stripeClient.js";
+import { parseTelegramUserId, requireStripe, stripe } from "./stripeClient.js";
 
 // Local mapping for checkout API backward compatibility
 const mapStripeSubscriptionStatus = (
@@ -387,7 +387,7 @@ export const createCheckoutSession = async (
 export const cancelStripeSubscriptionImmediately = async (
   telegramUserId: string,
 ): Promise<void> => {
-  const stripe = requireStripe();
+  if (!stripe) return;
   const subscription = await db.getCurrentPeriodByTelegramId(telegramUserId);
   if (!subscription?.stripe_subscription_id) return;
 
