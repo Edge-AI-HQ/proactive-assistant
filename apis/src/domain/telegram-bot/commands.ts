@@ -10,38 +10,20 @@ import {
   listAssistantsByOwnerViaApi,
 } from "./client.js";
 import type { AssistantRecord } from "../../types.js";
-
-const CREATE_ASSISTANT_COMMAND = "create_claw_assistant";
-const LIST_ASSISTANT_COMMAND = "list_claw_assistant";
-const VNC_ACCESS_COMMAND = "vnc_access";
-const commandList = [
-  {
-    command: "start",
-    description: "Get started with your AI assistant",
-  },
-  {
-    command: CREATE_ASSISTANT_COMMAND,
-    description: "Create your AI assistant",
-  },
-  {
-    command: LIST_ASSISTANT_COMMAND,
-    description: "Show your assistant status",
-  },
-  {
-    command: "gateway",
-    description: "Open OpenClaw dashboard",
-  },
-  {
-    command: VNC_ACCESS_COMMAND,
-    description: "Access remote desktop for browser operations",
-  },
-] as const;
+import {
+  CREATE_ASSISTANT_COMMAND,
+  GATEWAY_COMMAND,
+  LIST_ASSISTANT_COMMAND,
+  SUBSCRIBE_COMMAND,
+  VNC_ACCESS_COMMAND,
+  guideCommandList,
+} from "./guideCommandList.js";
 
 const GATEWAY_LINK_SESSION_TTL_HOURS = 12;
 const TELEGRAM_BOT_TOKEN_PATTERN = /^\d{6,}:[A-Za-z0-9_-]{20,}$/;
 
 const commandText = (): string =>
-  commandList
+  guideCommandList
     .map((item) => `/${item.command} - ${item.description}`)
     .join("\n");
 const replyHtml = (
@@ -340,7 +322,7 @@ const provisionAssistantWithGuideBot = async (
 };
 
 export const registerTelegramCommands = (bot: Bot<Context>): void => {
-  bot.api.setMyCommands(commandList).catch((error: unknown) => {
+  bot.api.setMyCommands(guideCommandList).catch((error: unknown) => {
     console.error("Failed to set bot commands", error);
   });
 
@@ -398,7 +380,60 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     }
   });
 
-  bot.command("gateway", async (ctx) => {
+  bot.command(SUBSCRIBE_COMMAND, async (ctx) => {
+    const telegramUserId = ctx.from?.id;
+    if (!telegramUserId) return;
+    await ensureTelegramUserViaApi(telegramUserId, ctx.from?.username ?? null);
+    await clearTokenInputPending(telegramUserId);
+
+    const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
+    if (!assistants.length) {
+      await replyHtml(
+        ctx,
+        [
+          "<b>No assistant yet.</b>",
+          `Please create one first with <code>/${CREATE_ASSISTANT_COMMAND}</code>.`,
+        ].join("\n"),
+      );
+      return;
+    }
+
+    const assistantId = assistants[0]?.id;
+    const paymentLink = await safeCreatePaymentLink(
+      telegramUserId,
+      ctx.from?.username ?? null,
+      assistantId,
+    );
+
+    if (!paymentLink) {
+      await replyHtml(
+        ctx,
+        [
+          "<b>Unable to open subscription page right now.</b>",
+          "If you already subscribed, send /list_claw_assistant to check status.",
+          "Otherwise, please try /subscribe again in a moment.",
+        ].join("\n"),
+      );
+      return;
+    }
+
+    const keyboard = new InlineKeyboard().url(
+      "💳 Subscribe / Manage Plan",
+      paymentLink,
+    );
+
+    await replyHtml(
+      ctx,
+      [
+        "<b>Subscription Center</b>",
+        "",
+        "Open the page below to subscribe, renew, or manage your plan.",
+      ].join("\n"),
+      { reply_markup: keyboard },
+    );
+  });
+
+  bot.command(GATEWAY_COMMAND, async (ctx) => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
     await ensureTelegramUserViaApi(telegramUserId, ctx.from?.username ?? null);
