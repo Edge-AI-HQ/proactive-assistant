@@ -9,6 +9,8 @@ primary_region = 'iad'
   PORT = '3000'
   NODE_ENV = 'production'
   CONTAINER_RUNTIME = 'fly'
+  LITELLM_BASE_URL = 'https://pinclaw-litellm-prod.fly.dev'
+  LITELLM_CONTAINER_BASE_URL = 'https://pinclaw-litellm-prod.fly.dev'
 
 [http_service]
   internal_port = 3000
