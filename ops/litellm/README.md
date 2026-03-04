@@ -288,6 +288,35 @@ LiteLLM 使用 **PostgreSQL schema 隔离**，与 apis 共用一个数据库但�
 
 **处理：** 在 apis 的 `LITELLM_MASTER_KEY` 里填的值，必须与 LiteLLM 服务端环境变量 `LITELLM_MASTER_KEY` **完全一致**（即你在 LiteLLM 里配置的管理密钥）。不能填任何由 LiteLLM 生成的虚拟 key（sk- 开头）。
 
+### 切 Volcengine/SEED 后仍回退到 Claude
+
+**典型症状：**
+- OpenClaw 日志显示主模型是 `litellm/volcengine/<endpoint_id>`，但会话仍跑到 Claude。
+- LiteLLM 日志出现：
+  - `Invalid model name passed in model=volcengine/<endpoint_id>`
+  - 或 `VolcengineException - The API key doesn't exist`
+
+**根因拆解：**
+1. 模型未注册到 LiteLLM，可用模型列表里找不到该 `volcengine/<endpoint_id>`，触发 fallback。
+2. 即使模型已注册，如果 `api_base` 区域不匹配（BytePlus 常见为 ap-southeast），也会鉴权失败并回退。
+
+**标准处理顺序：**
+1. 确保 LiteLLM 允许动态入库模型：
+   ```bash
+   fly secrets set STORE_MODEL_IN_DB='True' -a litellm-dev
+   ```
+2. 用 LiteLLM 管理接口注册模型（`/model/new`）。
+3. 立刻更新该模型的 `api_base` 到实际区域（如 `https://ark.ap-southeast.bytepluses.com/api/v3`，走 `/model/update`）。
+4. 在 apis 侧设置：
+   - `LITELLM_OPENCLAW_DEFAULT_MODEL=volcengine/<endpoint_id>`
+   - `LITELLM_ALLOWED_MODELS` 包含该模型
+5. 重建/ensure assistant machine，让新配置下发到 OpenClaw。
+
+**快速验证：**
+- `GET /v1/models` 能看到 `volcengine/<endpoint_id>`
+- `POST /chat/completions` 指定该模型返回 200
+- OpenClaw 不再出现 `Invalid model name` / `API key doesn't exist`
+
 ### Schema 不一致（历史问题，新部署已解决）
 
 **症状：** 
