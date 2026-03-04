@@ -23,7 +23,7 @@ RUN apt-get update && apt-get install -y \
     tigervnc-common \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g openclaw@2026.2.25
+RUN npm install -g openclaw@2026.3.2
 
 # Install Playwright for browser automation
 RUN npm install -g playwright@latest && \

@@ -87,7 +87,7 @@ export const buildTelegramChannelConfigSection = (
         requireMention: true,
       },
     },
-    streamMode: "partial",
+    streaming: "partial",
     actions: {
       sendMessage: true,
       deleteMessage: false,
