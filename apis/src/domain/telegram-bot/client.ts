@@ -134,6 +134,18 @@ export interface PaymentSessionResponse {
   subscribe_url: string;
 }
 
+export interface InternalSubscriptionView {
+  telegram_user_id: string;
+  telegram_username: string | null;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string;
+  plan_id: string | null;
+  status: string;
+  cancel_at_period_end: boolean;
+  current_period_start: string;
+  current_period_end: string;
+}
+
 export const ensureTelegramUserViaApi = async (
   telegramUserId: number,
   telegramUsername?: string | null,
@@ -215,6 +227,26 @@ export const createPaymentSessionViaApi = async (
       telegram_username: telegramUsername || null,
       assistant_id: assistantId,
     },
+  );
+};
+
+export const readInternalSubscriptionViaApi = async (
+  telegramUserId: number,
+): Promise<{ subscription: InternalSubscriptionView | null }> => {
+  const query = encodeURIComponent(String(telegramUserId));
+  return requestJson<{ subscription: InternalSubscriptionView | null }>(
+    "GET",
+    `/api/payment/internal/subscription?telegram_user_id=${query}`,
+  );
+};
+
+export const ensureAssistantContainerViaApi = async (
+  assistantId: number,
+): Promise<{ containerId: string; ready: boolean }> => {
+  return requestJson<{ containerId: string; ready: boolean }>(
+    "POST",
+    `/api/container/assistant/${assistantId}/create`,
+    {},
   );
 };
 

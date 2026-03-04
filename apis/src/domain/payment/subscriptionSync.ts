@@ -17,12 +17,23 @@ import {
 } from "../container/index.js";
 import { ensureLiteLLMKeyForAssistant } from "../litellm/index.js";
 import { sendTelegramMessage } from "../telegram/notify.js";
+import { createAssistantWithoutContainer } from "../claw-assistant/service.js";
+import { shouldEnsureAssistantRuntime } from "../claw-assistant/runtimeHealth.js";
 
 const parseUnixSecondsToDate = (value: unknown): Date | null => {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
   const parsed = new Date(value * 1000);
   if (!Number.isFinite(parsed.getTime())) return null;
   return parsed;
+};
+
+const isAssistantAlreadyExistsError = (error: unknown): boolean => {
+  if (error instanceof Error && error.message === "USER_ALREADY_HAS_ASSISTANT") {
+    return true;
+  }
+
+  if (!error || typeof error !== "object") return false;
+  return (error as { code?: string }).code === "23505";
 };
 
 const readSubscriptionPriceId = (
@@ -283,27 +294,36 @@ export async function syncSubscriptionFromStripe(
       }
     }
 
-    // Start containers for pending/stopped assistants asynchronously.
+    // Ensure runtime for assistants asynchronously (create assistant first if absent).
     try {
       const user = await getUserByTelegramId(Number(telegram_user_id));
       if (user) {
-        const assistants = await listAssistantsByOwnerTelegramId(
+        let assistants = await listAssistantsByOwnerTelegramId(
           Number(telegram_user_id),
         );
 
-        // 如果有 assistant_id，只启动该助理；否则启动所有 stopped/pending 的助理（向后兼容）
-        const toStart = assistantId
-          ? assistants.filter(
-              (a) =>
-                a.id === assistantId &&
-                (a.container_status === "pending" ||
-                  a.container_status === "stopped"),
-            )
-          : assistants.filter(
-              (a) =>
-                a.container_status === "pending" ||
-                a.container_status === "stopped",
-            );
+        if (assistants.length === 0) {
+          try {
+            await createAssistantWithoutContainer({
+              ownerTelegramUserId: Number(telegram_user_id),
+              ownerTelegramUsername: telegramUsername,
+            });
+          } catch (error: unknown) {
+            if (!isAssistantAlreadyExistsError(error)) {
+              throw error;
+            }
+          }
+          assistants = await listAssistantsByOwnerTelegramId(
+            Number(telegram_user_id),
+          );
+        }
+
+        const candidates = assistantId
+          ? assistants.filter((assistant) => assistant.id === assistantId)
+          : assistants;
+        const toStart = candidates.filter((assistant) =>
+          shouldEnsureAssistantRuntime(assistant.container_status),
+        );
 
         if (toStart.length > 0) {
           const listStr = toStart
@@ -695,9 +715,25 @@ export async function handleInvoicePaid(
   // 启动容器（仅启动与本次支付关联的助理）
   const user = await getUserByTelegramId(Number(subscription.telegram_user_id));
   if (user) {
-    const assistants = await listAssistantsByOwnerTelegramId(
+    let assistants = await listAssistantsByOwnerTelegramId(
       Number(subscription.telegram_user_id),
     );
+
+    if (assistants.length === 0) {
+      try {
+        await createAssistantWithoutContainer({
+          ownerTelegramUserId: Number(subscription.telegram_user_id),
+          ownerTelegramUsername: subscription.telegram_username ?? null,
+        });
+      } catch (error: unknown) {
+        if (!isAssistantAlreadyExistsError(error)) {
+          throw error;
+        }
+      }
+      assistants = await listAssistantsByOwnerTelegramId(
+        Number(subscription.telegram_user_id),
+      );
+    }
 
     console.log(`[payment] invoice.paid container provisioning check:`, {
       invoiceId: invoice.id,
@@ -710,23 +746,16 @@ export async function handleInvoicePaid(
       })),
     });
 
-    // 如果有 assistant_id，只启动该助理；否则启动所有 stopped/pending 的助理（向后兼容）
-    const toStart = assistantId
-      ? assistants.filter(
-          (a) =>
-            a.id === assistantId &&
-            (a.container_status === "pending" ||
-              a.container_status === "stopped"),
-        )
-      : assistants.filter(
-          (a) =>
-            a.container_status === "pending" ||
-            a.container_status === "stopped",
-        );
+    const candidates = assistantId
+      ? assistants.filter((assistant) => assistant.id === assistantId)
+      : assistants;
+    const toStart = candidates.filter((assistant) =>
+      shouldEnsureAssistantRuntime(assistant.container_status),
+    );
 
     console.log(`[payment] Containers to start: ${toStart.length}`, {
       toStartIds: toStart.map((a) => a.id),
-      filterMode: assistantId ? "by_assistant_id" : "all_stopped_pending",
+      filterMode: assistantId ? "by_assistant_id" : "all_non_running",
     });
 
     if (toStart.length > 0) {

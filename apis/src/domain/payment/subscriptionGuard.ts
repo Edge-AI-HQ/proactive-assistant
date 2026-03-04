@@ -1,6 +1,5 @@
 import { db } from "./db.js";
-
-const ACTIVE_STATUSES = ["active", "trialing", "past_due"] as const;
+import { isSubscriptionActiveForService } from "./subscriptionPolicy.js";
 
 /**
  * 判断用户当前是否应享受服务（可进 Gateway、可启动/使用容器）。
@@ -10,14 +9,5 @@ export async function hasActiveSubscriptionForService(
   telegramUserId: string,
 ): Promise<boolean> {
   const current = await db.getCurrentPeriodByTelegramId(telegramUserId);
-  if (!current?.plan_id) return false;
-
-  const status = current.status as (typeof ACTIVE_STATUSES)[number];
-  if (!ACTIVE_STATUSES.includes(status)) return false;
-
-  if (current.cancel_at_period_end && current.current_period_end) {
-    if (new Date(current.current_period_end) <= new Date()) return false;
-  }
-
-  return true;
+  return isSubscriptionActiveForService(current);
 }

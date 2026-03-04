@@ -2,14 +2,18 @@ import { Bot, InlineKeyboard, type Context } from "grammy";
 import { config } from "../common/config.js";
 import {
   BackendApiError,
+  ensureAssistantContainerViaApi,
   createGatewaySessionViaApi,
   createPaymentSessionForUser,
   createAssistantWithoutContainerViaApi,
   cancelUserSubscription,
   ensureTelegramUserViaApi,
   listAssistantsByOwnerViaApi,
+  readInternalSubscriptionViaApi,
 } from "./client.js";
 import type { AssistantRecord } from "../../types.js";
+import { shouldEnsureAssistantRuntime } from "../claw-assistant/runtimeHealth.js";
+import { isSubscriptionActiveForService } from "../payment/subscriptionPolicy.js";
 import {
   CREATE_ASSISTANT_COMMAND,
   GATEWAY_COMMAND,
@@ -204,19 +208,72 @@ const provisionAssistantWithGuideBot = async (
 ): Promise<boolean> => {
   const telegramUserId = ctx.from?.id;
   if (!telegramUserId) return false;
+  const telegramUsername = ctx.from?.username ?? null;
 
-  await ensureTelegramUserViaApi(telegramUserId, ctx.from?.username ?? null);
+  await ensureTelegramUserViaApi(telegramUserId, telegramUsername);
 
-  // 检查用户是否已有助理
-  const existingAssistants = await listAssistantsByOwnerViaApi(telegramUserId);
+  const [existingAssistants, subscriptionResult] = await Promise.all([
+    listAssistantsByOwnerViaApi(telegramUserId),
+    readInternalSubscriptionViaApi(telegramUserId),
+  ]);
+  const hasActiveSubscription = isSubscriptionActiveForService(
+    subscriptionResult.subscription,
+  );
 
-  if (existingAssistants.length === 0) {
-    await replyHtml(ctx, "🔄 <b>Setting up your assistant...</b>");
+  if (!hasActiveSubscription) {
+    const assistantId = existingAssistants[0]?.id;
+    const paymentLink = await safeCreatePaymentLink(
+      telegramUserId,
+      telegramUsername,
+      assistantId,
+    );
+
+    if (!paymentLink) {
+      await replyHtml(
+        ctx,
+        [
+          "⚠️ <b>Unable to open subscription page right now.</b>",
+          "",
+          "Please try /subscribe again in a moment.",
+        ].join("\n"),
+      );
+      return true;
+    }
+
+    const keyboard = new InlineKeyboard().url(
+      "💳 Subscribe to activate",
+      paymentLink,
+    );
+
+    await replyHtml(
+      ctx,
+      existingAssistants.length > 0
+        ? [
+            "✅ <b>Your assistant is registered.</b>",
+            "",
+            "Your subscription is inactive.",
+            "Please subscribe or renew to activate runtime.",
+          ].join("\n")
+        : [
+            "💳 <b>Subscription required</b>",
+            "",
+            "You don't have an active subscription yet.",
+            "After payment, we'll automatically create your assistant and start runtime.",
+          ].join("\n"),
+      { reply_markup: keyboard },
+    );
+    return true;
+  }
+
+  let assistant = existingAssistants[0];
+
+  if (!assistant) {
+    await replyHtml(ctx, "🔄 <b>Subscription active. Creating assistant...</b>");
 
     try {
       await createAssistantWithoutContainerViaApi({
         ownerTelegramUserId: telegramUserId,
-        ownerTelegramUsername: ctx.from?.username ?? null,
+        ownerTelegramUsername: telegramUsername,
       });
     } catch (error: unknown) {
       const is409 = error instanceof BackendApiError && error.status === 409;
@@ -237,86 +294,68 @@ const provisionAssistantWithGuideBot = async (
     }
 
     const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
-    const assistantId = assistants[0]?.id;
-    const paymentLink = await safeCreatePaymentLink(
-      telegramUserId,
-      ctx.from?.username ?? null,
-      assistantId,
-    );
-
-    if (!paymentLink) {
+    assistant = assistants[0];
+    if (!assistant) {
       await replyHtml(
         ctx,
         [
-          "✅ <b>Your assistant is registered.</b>",
+          "❌ <b>Failed to create assistant</b>",
           "",
-          "⚠️ Payment is temporarily unavailable. Please try again shortly.",
+          "Please try again later or contact support.",
         ].join("\n"),
       );
       return true;
     }
-
-    const keyboard = new InlineKeyboard().url(
-      "💳 Subscribe to activate",
-      paymentLink,
-    );
-
-    await replyHtml(
-      ctx,
-      [
-        "✅ <b>Assistant created successfully!</b>",
-        "",
-        "💡 <b>Next step:</b> Subscribe to activate your assistant.",
-        "After payment, we'll start creating your container automatically.",
-      ].join("\n"),
-      { reply_markup: keyboard },
-    );
-
-    return true;
   }
 
-  // 用户已有助理，检查是否有活跃订阅
-  const assistantId = existingAssistants[0]?.id;
-
-  // 尝试创建 payment session，如果失败说明已有活跃订阅
-  const paymentLink = await safeCreatePaymentLink(
-    telegramUserId,
-    ctx.from?.username ?? null,
-    assistantId,
-  );
-
-  if (!paymentLink) {
-    // 已有活跃订阅，提示使用管理命令
+  if (!shouldEnsureAssistantRuntime(assistant.container_status)) {
     await replyHtml(
       ctx,
       [
-        "✅ <b>You already have an assistant!</b>",
+        "✅ <b>Your assistant is already active.</b>",
         "",
-        "Use these commands to manage your assistant:",
-        "",
-        "📋 /list_claw_assistant - View your assistant",
+        "📋 /list_claw_assistant - View status",
         "🌐 /gateway - Open dashboard",
       ].join("\n"),
     );
     return true;
   }
 
-  // 有 assistant 但无活跃订阅，直接显示支付链接（重新订阅）
-  const keyboard = new InlineKeyboard().url(
-    "💳 Subscribe to activate",
-    paymentLink,
-  );
+  await replyHtml(ctx, "🔄 <b>Starting your assistant runtime...</b>");
 
-  await replyHtml(
-    ctx,
-    [
-      "✅ <b>Your assistant is ready!</b>",
-      "",
-      "Subscribe to a plan to activate it.",
-      "Your assistant will be available immediately after payment.",
-    ].join("\n"),
-    { reply_markup: keyboard },
-  );
+  try {
+    const runtime = await ensureAssistantContainerViaApi(assistant.id);
+    await replyHtml(
+      ctx,
+      runtime.ready
+        ? [
+            "✅ <b>Assistant is ready!</b>",
+            "",
+            "You can start chatting now.",
+            "Use /gateway for desktop workspace.",
+          ].join("\n")
+        : [
+            "⏳ <b>Assistant runtime is starting</b>",
+            "",
+            "First startup can take a few minutes.",
+            "We'll notify you when it's fully ready.",
+          ].join("\n"),
+    );
+  } catch (error: unknown) {
+    console.error("Failed to ensure assistant runtime", {
+      telegramUserId,
+      assistantId: assistant.id,
+      error: error instanceof Error ? error.message : String(error || ""),
+    });
+    await replyHtml(
+      ctx,
+      [
+        "❌ <b>Failed to start runtime</b>",
+        "",
+        "Please try again shortly or contact support.",
+      ].join("\n"),
+    );
+  }
 
   return true;
 };
@@ -387,17 +426,6 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     await clearTokenInputPending(telegramUserId);
 
     const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
-    if (!assistants.length) {
-      await replyHtml(
-        ctx,
-        [
-          "<b>No assistant yet.</b>",
-          `Please create one first with <code>/${CREATE_ASSISTANT_COMMAND}</code>.`,
-        ].join("\n"),
-      );
-      return;
-    }
-
     const assistantId = assistants[0]?.id;
     const paymentLink = await safeCreatePaymentLink(
       telegramUserId,
@@ -424,11 +452,17 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
 
     await replyHtml(
       ctx,
-      [
-        "<b>Subscription Center</b>",
-        "",
-        "Open the page below to subscribe, renew, or manage your plan.",
-      ].join("\n"),
+      assistants.length > 0
+        ? [
+            "<b>Subscription Center</b>",
+            "",
+            "Open the page below to subscribe, renew, or manage your plan.",
+          ].join("\n")
+        : [
+            "<b>Subscription Center</b>",
+            "",
+            "Subscribe first, then we'll automatically create your assistant.",
+          ].join("\n"),
       { reply_markup: keyboard },
     );
   });
@@ -522,97 +556,10 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
 
   // Callback query handlers for inline buttons
 
-  // Quick Start 模式：不绑定 bot，直接创建助理
+  // 兼容旧 quick_start callback：复用统一创建流程
   bot.callbackQuery("quick_start", async (ctx) => {
-    const telegramUserId = ctx.from?.id;
-    if (!telegramUserId) return;
-
-    await ctx.editMessageText("🔄 <b>Setting up your assistant...</b>", {
-      parse_mode: "HTML",
-    });
-
-    try {
-      // 创建助理（不绑定 bot）
-      await createAssistantWithoutContainerViaApi({
-        ownerTelegramUserId: telegramUserId,
-        ownerTelegramUsername: ctx.from?.username ?? null,
-        // bot 字段留空 - Quick Start 模式
-      });
-
-      // 创建成功，生成支付链接
-      const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
-      const assistantId = assistants[0]?.id;
-
-      const paymentLink = await safeCreatePaymentLink(
-        telegramUserId,
-        ctx.from?.username ?? null,
-        assistantId,
-      );
-
-      if (!paymentLink) {
-        await ctx.editMessageText(
-          [
-            "✅ <b>Your assistant is registered.</b>",
-            "",
-            "⚠️ Payment is temporarily unavailable. Please try again shortly.",
-          ].join("\n"),
-          { parse_mode: "HTML" },
-        );
-        return;
-      }
-
-      const keyboard = new InlineKeyboard().url(
-        "💳 Subscribe to activate",
-        paymentLink,
-      );
-
-      await ctx.editMessageText(
-        [
-          "✅ <b>Assistant created successfully!</b>",
-          "",
-          "🚀 <b>Quick Start Mode</b>",
-          "   • Chat with me to use your assistant",
-          "   • No need to create separate bot",
-          "",
-          "💡 <b>Next step:</b> Subscribe to activate your assistant.",
-          "",
-          "After subscribing, your assistant will be ready to use!",
-        ].join("\n"),
-        {
-          parse_mode: "HTML",
-          reply_markup: keyboard,
-        },
-      );
-    } catch (error: unknown) {
-      const is409 = error instanceof BackendApiError && error.status === 409;
-      const isDup =
-        error instanceof Error &&
-        error.message === "USER_ALREADY_HAS_ASSISTANT";
-
-      if (is409 || isDup) {
-        await ctx.editMessageText(
-          [
-            "⚠️ <b>You already have an assistant</b>",
-            "",
-            "Send /list_claw_assistant to view your assistants.",
-          ].join("\n"),
-          { parse_mode: "HTML" },
-        );
-        return;
-      }
-
-      console.error("Quick start setup failed", error);
-      await ctx.editMessageText(
-        [
-          "❌ <b>Failed to create assistant</b>",
-          "",
-          "Please try again or contact support.",
-        ].join("\n"),
-        { parse_mode: "HTML" },
-      );
-    }
-
     await ctx.answerCallbackQuery();
+    await provisionAssistantWithGuideBot(ctx);
   });
 
   // 兼容旧消息里的 callback，入口已在 v1 隐藏
@@ -836,6 +783,45 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
           "",
           "Or send /create_claw_assistant to start over.",
         ].join("\n"),
+      );
+      return;
+    }
+
+    const subscriptionResult = await readInternalSubscriptionViaApi(
+      telegramUserId,
+    );
+    const hasActiveSubscription = isSubscriptionActiveForService(
+      subscriptionResult.subscription,
+    );
+    if (!hasActiveSubscription) {
+      const paymentLink = await safeCreatePaymentLink(
+        telegramUserId,
+        ctx.from?.username ?? null,
+      );
+      if (!paymentLink) {
+        await replyHtml(
+          ctx,
+          [
+            "💳 <b>Subscription required</b>",
+            "",
+            "Please subscribe first, then create assistant again.",
+          ].join("\n"),
+        );
+        return;
+      }
+
+      const keyboard = new InlineKeyboard().url(
+        "💳 Subscribe to activate",
+        paymentLink,
+      );
+      await replyHtml(
+        ctx,
+        [
+          "💳 <b>Subscription required</b>",
+          "",
+          "Please subscribe first, then create assistant again.",
+        ].join("\n"),
+        { reply_markup: keyboard },
       );
       return;
     }
