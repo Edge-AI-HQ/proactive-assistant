@@ -418,6 +418,7 @@ export const createAssistantMachine = async (
   // 构建启动命令：前置准备 + 后台任务 + 主进程
   const setupCommands = [
     "mkdir -p /app/data/workspace /app/data/tmp /app/data/config /root/.openclaw",
+    "mkdir -p /dev/shm && mount -t tmpfs -o size=1G tmpfs /dev/shm 2>/dev/null || true",
     `printf "%s" ${quoteForShell(openclawPayload.json)} > "$OPENCLAW_CONFIG_PATH"`,
     "ln -sfn /app/data/workspace /root/.openclaw/workspace",
     reminderPolicyBootstrap,

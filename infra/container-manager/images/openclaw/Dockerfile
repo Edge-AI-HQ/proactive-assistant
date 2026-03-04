@@ -30,7 +30,7 @@ RUN npm install -g playwright@latest && \
     npx playwright install --with-deps chromium && \
     npx playwright install ffmpeg && \
     mv /root/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome /root/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome-bin && \
-    printf '#!/bin/sh\nexec "$(dirname "$0")/chrome-bin" --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage "$@"\n' > /root/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome && \
+    printf '#!/bin/sh\nexec "$(dirname "$0")/chrome-bin" --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --use-gl=swiftshader "$@"\n' > /root/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome && \
     chmod +x /root/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome
 
 WORKDIR /app
