@@ -2,6 +2,9 @@ import express, { type Application, type Request, type Response } from "express"
 import { pool } from "../common/db/core.js";
 import { config } from "../common/config.js";
 import { isGuideBotCommandText } from "./guideCommands.js";
+import { getAssistantById } from "../common/db/index.js";
+import { hasActiveSubscriptionForService } from "../payment/subscriptionGuard.js";
+import { ensureGatewayAssistantReady } from "../gateway/assistant_warmup.js";
 
 type WebhookSource = "public" | "private";
 
@@ -14,9 +17,14 @@ type ContainerInfo = {
 
 type UserState =
   | { phase: "no_user" }
-  | { phase: "no_subscription" }
-  | { phase: "container_starting"; runtimeStatus: string; container?: ContainerInfo }
-  | { phase: "running"; container: ContainerInfo };
+  | { phase: "no_subscription"; assistantId?: number }
+  | {
+      phase: "container_starting";
+      assistantId: number;
+      runtimeStatus: string;
+      container?: ContainerInfo;
+    }
+  | { phase: "running"; assistantId: number; container: ContainerInfo };
 
 const BLOCKED_TG_METHODS = new Set([
   "setmycommands",
@@ -89,7 +97,8 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
       return;
     }
 
-    const userState = await findUserState(chatId);
+    const userStateRaw = await findUserState(chatId);
+    const userState = await tryAutoRecoverRuntime(chatId, userStateRaw);
 
     if (userState.phase === "no_user") {
       if (source === "public") {
@@ -106,6 +115,20 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
     }
 
     if (userState.phase === "no_subscription") {
+      const hasActiveSubscription =
+        userState.assistantId !== undefined
+          ? await hasActiveSubscriptionForService(String(chatId))
+          : false;
+      if (hasActiveSubscription) {
+        await sendFallbackMessageBySource(
+          source,
+          chatId,
+          "Your assistant is temporarily unavailable — we're waking it up. Please try again shortly.",
+        );
+        res.status(200).json({ ok: true });
+        return;
+      }
+
       if (source === "public") {
         const handled = await forwardToGuideBot(update);
         if (!handled) {
@@ -269,11 +292,15 @@ async function findUserState(chatId: number): Promise<UserState> {
 
     const row = result.rows[0];
     if (!row) return { phase: "no_user" };
-    if (!row.assistant_id || !row.runtime_ref || !row.runtime_status) return { phase: "no_subscription" };
+    if (!row.assistant_id) return { phase: "no_subscription" };
+    if (!row.runtime_ref || !row.runtime_status) {
+      return { phase: "no_subscription", assistantId: row.assistant_id };
+    }
 
     if (row.runtime_status !== "running") {
       return {
         phase: "container_starting",
+        assistantId: row.assistant_id,
         runtimeStatus: row.runtime_status,
         container: {
           container_id: row.runtime_ref,
@@ -286,6 +313,7 @@ async function findUserState(chatId: number): Promise<UserState> {
 
     return {
       phase: "running",
+      assistantId: row.assistant_id,
       container: {
         container_id: row.runtime_ref,
         gateway_token: row.gateway_token,
@@ -297,6 +325,37 @@ async function findUserState(chatId: number): Promise<UserState> {
     console.error("Database query error:", error);
     return { phase: "no_user" };
   }
+}
+
+async function tryAutoRecoverRuntime(chatId: number, state: UserState): Promise<UserState> {
+  const assistantId = getAbnormalAssistantId(state);
+  if (!assistantId) return state;
+
+  const hasActiveSubscription = await hasActiveSubscriptionForService(String(chatId));
+  if (!hasActiveSubscription) return state;
+
+  const assistant = await getAssistantById(assistantId);
+  if (!assistant) return state;
+
+  try {
+    console.log(
+      `🔁 router auto-recover runtime chat_id=${chatId} assistant_id=${assistantId} phase=${state.phase}`,
+    );
+    await ensureGatewayAssistantReady(assistant);
+    return await findUserState(chatId);
+  } catch (error) {
+    console.warn(
+      `⚠️ router auto-recover failed chat_id=${chatId} assistant_id=${assistantId}`,
+      error,
+    );
+    return state;
+  }
+}
+
+function getAbnormalAssistantId(state: UserState): number | null {
+  if (state.phase === "container_starting") return state.assistantId;
+  if (state.phase === "no_subscription" && state.assistantId) return state.assistantId;
+  return null;
 }
 
 async function forwardToOpenClaw(container: ContainerInfo, update: unknown, source: WebhookSource): Promise<boolean> {
