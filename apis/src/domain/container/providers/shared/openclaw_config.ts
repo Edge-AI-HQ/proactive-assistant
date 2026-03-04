@@ -216,13 +216,6 @@ export const buildAssistantOpenclawConfig = (
     messages: {
       tts: buildTtsConfigSection(context),
     },
-    tools: {
-      elevated: {
-        allowFrom: {
-          telegram: ["*"],
-        },
-      },
-    },
   };
 
   const talk = buildTalkConfigSection(context);

@@ -918,8 +918,10 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     }
   });
 
-  // VNC 远程桌面访问命令
+  // VNC 远程桌面访问命令（暂时禁用）
   bot.command(VNC_ACCESS_COMMAND, async (ctx) => {
+    await replyHtml(ctx, "⚠️ 远程桌面功能暂时不可用。");
+    return;
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) {
       await replyHtml(ctx, "❌ Unable to identify user.");

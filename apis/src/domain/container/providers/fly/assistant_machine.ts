@@ -366,8 +366,6 @@ export const createAssistantMachine = async (
     args.liteLlmApiKey,
   );
 
-  const vncPort = 8444;
-  const vncProxyPort = 8445; // IPv6 代理使用不同端口避免冲突
   const apisInternalPort = Number.parseInt(process.env.PORT || "3000", 10);
   const routerOrigin = config.telegramRouter.webhookUrl
     ? extractOrigin(config.telegramRouter.webhookUrl)
@@ -383,9 +381,6 @@ export const createAssistantMachine = async (
     OPENCLAW_STATE_DIR: "/app/data",
     NODE_COMPILE_CACHE: "/app/data/cache/node-compile-cache",
     PINAI_OPENCLAW_CONFIG_SHA256: openclawPayload.hash,
-    VNC_PORT: String(vncPort),
-    VNC_PROXY_PORT: String(vncProxyPort),
-    DISPLAY: ":1",
     TELEGRAM_ROUTER_URL: routerOrigin,
   };
 
@@ -402,23 +397,9 @@ export const createAssistantMachine = async (
     'grep -q "PINAI_REMINDER_POLICY_V1" /app/data/workspace/AGENTS.md || printf "\\n# PINAI_REMINDER_POLICY_V1\\n- For time-based reminders and scheduled follow-ups, ALWAYS use the cron tool (cron.add / cron.update / cron.run).\\n- NEVER use exec/process with sleep, while, timeout, or background shell jobs to simulate timers.\\n- For Telegram reminders, always send back to the same channel/account context where the user asked.\\n" >> /app/data/workspace/AGENTS.md',
   ].join(" && ");
 
-  // VNC setup: start TigerVNC in background without password (SecurityTypes None)
-  // VNC 监听 localhost，IPv6 代理使用不同端口（8445）避免冲突
-  // 降低分辨率和色深以减少延迟：1280x720 @ 16bit
-  const vncBootstrap = `(
-    mkdir -p /app/data/vnc /root/.vnc &&
-    export DISPLAY=:1 &&
-    printf "%s\\n" "#!/bin/sh" "unset SESSION_MANAGER" "unset DBUS_SESSION_BUS_ADDRESS" "exec startxfce4" > /root/.vnc/xstartup &&
-    chmod +x /root/.vnc/xstartup &&
-    vncserver :1 -geometry 1280x720 -depth 16 -rfbport ${vncPort} -localhost yes -SecurityTypes None >/tmp/tigervnc.log 2>&1 &&
-    sleep 3 &&
-    node -e 'const net=require("net");const vncPort=${vncPort};const proxyPort=${vncProxyPort};const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port:vncPort});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-vnc-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port:proxyPort,ipv6Only:true},()=>{console.log(\`[fly-vnc-ipv6-proxy] listening on [::]:$\{proxyPort} -> 127.0.0.1:$\{vncPort}\`);});'
-  ) >/tmp/vnc-bootstrap.log 2>&1 &`;
-
   // 构建启动命令：前置准备 + 后台任务 + 主进程
   const setupCommands = [
     "mkdir -p /app/data/workspace /app/data/tmp /app/data/config /root/.openclaw",
-    "mkdir -p /dev/shm && mount -t tmpfs -o size=1G tmpfs /dev/shm 2>/dev/null || true",
     `printf "%s" ${quoteForShell(openclawPayload.json)} > "$OPENCLAW_CONFIG_PATH"`,
     "ln -sfn /app/data/workspace /root/.openclaw/workspace",
     reminderPolicyBootstrap,
@@ -426,8 +407,6 @@ export const createAssistantMachine = async (
   ].join(" && ");
 
   const backgroundTasks = [
-    // VNC 后台启动（已包含 & 结尾）
-    vncBootstrap,
     // IPv6 代理们（后台进程）
     `node -e 'const net=require("net");const port=Number(process.env.OPENCLAW_GATEWAY_PORT||${config.openclaw.gatewayPort});const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});' >/tmp/fly-ipv6-proxy.log 2>&1 &`,
     `node -e 'const net=require("net");const port=Number(process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT||${normalizedWebhookPort});const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-tg-webhook-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-tg-webhook-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});' >/tmp/fly-tg-webhook-ipv6-proxy.log 2>&1 &`,
