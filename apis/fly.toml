@@ -1,4 +1,4 @@
-# Fly.io configuration for PIN AI Backend API
+# Fly.io configuration for PIN AI Backend API (default/dev)
 app = 'pinclaw-api-dev'
 primary_region = 'iad'
 
@@ -20,8 +20,8 @@ primary_region = 'iad'
 
   [http_service.concurrency]
     type = 'connections'
-    hard_limit = 250
-    soft_limit = 200
+    hard_limit = 150
+    soft_limit = 100
 
 [[vm]]
   memory = '1gb'

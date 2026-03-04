@@ -1,10 +1,11 @@
 # LiteLLM 部署
 
-**最后更新**: 2026-03-01 - fly.toml 配置已修复并同步
+**最后更新**: 2026-03-02 - 已拆分 fly.dev.toml / fly.prod.toml
 
 **重要配置：**
 - ✅ `DISABLE_SCHEMA_UPDATE=true` - 禁用自动迁移
-- ✅ `auto_stop_machines = false` - 保持服务持续运行  
+- ✅ `prod` 使用 `auto_stop_machines = false` 保持服务持续运行
+- ✅ `dev` 也使用 `auto_stop_machines = false` + `min_machines_running = 1`，避免冷启动抖动
 - ⚠️ **不使用 `--num_workers`** - LiteLLM 官方推荐单进程模式
 
 **为什么不用多 worker？**
@@ -14,25 +15,28 @@
 
 ## 快速更新配置(跳过构建)
 
-当 `fly deploy` 因 Depot builder 超时失败时，使用此方法快速更新 fly.toml 配置：
+当 `fly deploy` 因 Depot builder 超时失败时，使用此方法快速更新 `fly.dev.toml` 配置：
 
 ```bash
 # 方法1: 使用脚本(推荐)
 cd ops/litellm
 ./fly-update-config.sh
 
-# 方法2: 手动执行
+# 方法2: 手动执行（在仓库根目录）
 # 1. 获取当前镜像
 CURRENT_IMAGE=$(fly machines list -a litellm-dev --json | jq -r '.[0].image_ref.registry + "/" + .[0].image_ref.repository + ":" + .[0].image_ref.tag')
 
 # 2. 使用现有镜像重新部署，应用新配置
-fly deploy -a litellm-dev --image "$CURRENT_IMAGE" --strategy immediate
+fly deploy -a litellm-dev --config ops/litellm/fly.dev.toml --image "$CURRENT_IMAGE" --strategy immediate
 
 # 3. 验证配置
 fly config show -a litellm-dev
+
+# prod 更新（脚本会自动选 fly.prod.toml）
+APP_NAME=pinclaw-litellm-prod ./ops/litellm/fly-update-config.sh
 ```
 
-**原理**: 跳过漫长的镜像构建过程，直接用现有镜像重新部署并应用 fly.toml 中的新配置。
+**原理**: 跳过漫长的镜像构建过程，直接用现有镜像重新部署并应用 `fly.dev.toml` 中的新配置。
 
 ## 核心问题和解决方案
 
@@ -242,11 +246,11 @@ locust -f ops/litellm/locustfile.py --headless --users 100 --spawn-rate 10 --run
 
 - 在仓库根目录执行：
   ```bash
-  fly deploy ./ops/litellm -a litellm-dev
+  fly deploy ./ops/litellm -c ops/litellm/fly.dev.toml -a litellm-dev
   ```
 - 或在 `ops/litellm` 目录下执行：
   ```bash
-  cd ops/litellm && fly deploy -a litellm-dev
+  cd ops/litellm && fly deploy -c fly.dev.toml -a litellm-dev
   ```
 
 ## 与 apis 共用同一库（推荐）
