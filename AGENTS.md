@@ -34,6 +34,11 @@ LiteLLM 本地命令：
 3. 只改文档：
 - `docs/` 默认被忽略，提交时需要 `git add -f docs/<file>`。
 
+## 生产环境硬性规则（必须遵守）
+- 生产环境（`pinclaw-api-prod`、`pinclaw-litellm-prod`）禁止直接执行任何 `flyctl` 命令。
+- 生产环境禁止直接执行任何数据库变更（含手动 SQL、`migrate`、`db push`、`schema` 变更）。
+- 所有生产变更必须走代码评审 + CI/CD 发布流程，不允许在终端临时“热修”。
+
 ## Telegram 路由运行规则（当前真相）
 消息流：
 ```text
