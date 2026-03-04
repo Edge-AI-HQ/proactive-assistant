@@ -60,6 +60,7 @@ export const createSubscriptionPeriodStore = (
   | "getSubscriptionInfoByStripeCustomerId"
   | "getUsersWithEndedSubscriptionNoCurrentPeriod"
   | "updateSubscriptionCancelFlag"
+  | "truncateSubscriptionPeriodsAt"
   | "claimSubscriptionEventOrder"
   | "claimStripeEvent"
   | "markStripeEventProcessed"
@@ -306,6 +307,34 @@ export const createSubscriptionPeriodStore = (
           UPDATE subscription_periods
           SET ${updates.join(", ")}
           WHERE stripe_subscription_id = $1
+        `,
+        params,
+      );
+      return (result.rowCount ?? 0) > 0;
+    },
+
+    async truncateSubscriptionPeriodsAt(stripe_subscription_id, ended_at, status) {
+      const endedAtIso = toIsoOrNull(ended_at);
+      if (!endedAtIso) return false;
+
+      const updates = [
+        "period_end = GREATEST(period_start, LEAST(period_end, $2::timestamptz))",
+        "cancel_at_period_end = false",
+        "updated_at = NOW()",
+      ];
+      const params: unknown[] = [stripe_subscription_id, endedAtIso];
+
+      if (status) {
+        updates.push("status = $3");
+        params.push(status);
+      }
+
+      const result = await pool.query(
+        `
+          UPDATE subscription_periods
+          SET ${updates.join(", ")}
+          WHERE stripe_subscription_id = $1
+            AND period_end > $2::timestamptz
         `,
         params,
       );

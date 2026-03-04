@@ -248,6 +248,28 @@ export async function syncSubscriptionFromStripe(
     }
   }
 
+  // Immediate cancellation: Stripe marks subscription as canceled now.
+  // Keep period table aligned by cutting any future period_end back to ended_at.
+  if (
+    status === "canceled" &&
+    subscription.cancel_at_period_end === false &&
+    endedAt
+  ) {
+    try {
+      await db.truncateSubscriptionPeriodsAt(subscription.id, endedAt, status);
+    } catch (err) {
+      console.warn(
+        "[payment] truncate subscription period_end on immediate cancellation failed (non-fatal)",
+        {
+          subscriptionId: subscription.id,
+          telegramUserId: telegram_user_id,
+          endedAt: endedAt.toISOString(),
+          error: err instanceof Error ? err.message : String(err),
+        },
+      );
+    }
+  }
+
   const telegramUsername = payload.telegram_username ?? null;
 
   // 「是否应提供服务」由当前时间落在的周期决定，与定时任务一致
