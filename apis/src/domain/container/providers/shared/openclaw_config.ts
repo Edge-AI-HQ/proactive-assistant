@@ -216,6 +216,24 @@ export const buildAssistantOpenclawConfig = (
     messages: {
       tts: buildTtsConfigSection(context),
     },
+    tools: {
+      browser: {
+        enabled: true,
+        timeout: 30000,
+      },
+      exec: {
+        enabled: true,
+        allowFrom: {
+          telegram: true,
+        },
+      },
+      elevated: {
+        enabled: true,
+        allowFrom: {
+          telegram: true,
+        },
+      },
+    },
   };
 
   const talk = buildTalkConfigSection(context);
