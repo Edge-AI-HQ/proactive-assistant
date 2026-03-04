@@ -18,6 +18,7 @@ import type {
 import { buildAssistantOpenclawConfig } from "../shared/openclaw_config.js";
 import { resolveAssistantLiteLLMApiKey as resolveAssistantLiteLLMApiKeyShared } from "../shared/assistant_litellm_key.js";
 import { DOCKER_FORBIDDEN_SECRET_ENV_KEYS } from "../shared/secret_env.js";
+import { config as appConfig } from "../../../common/config.js";
 
 // ---------------------------------------------------------------------------
 // Docker client & config proxy
@@ -297,6 +298,7 @@ const ensureOpenclawConfig = (
     ...(webhookUrl ? { telegramWebhookUrl: webhookUrl } : {}),
     ...(webhookSecret ? { telegramWebhookSecret: webhookSecret } : {}),
     ...(pluginPath ? { telegramRouterPluginPath: pluginPath } : {}),
+    controlOrigin: appConfig.publicBaseUrl,
   });
   const next = mergeAssistantOpenclawConfig(
     existingParsed,

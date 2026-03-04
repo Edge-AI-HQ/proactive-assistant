@@ -517,7 +517,8 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
 
     const keyboard = new InlineKeyboard();
     for (const assistant of assistants) {
-      const buttonLabel = `@${assistant.assistant_bot_username} (${assistant.container_status || "unknown"})`;
+      const botName = assistant.assistant_bot_username || assistant.container_name || `bot-${assistant.id}`;
+      const buttonLabel = `@${botName} (${assistant.container_status || "unknown"})`;
       const url = buildAssistantGatewayUrl(
         publicOrigin,
         telegramUserId,

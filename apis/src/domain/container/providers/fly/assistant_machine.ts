@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { getContainerManagerRuntime } from "../../runtime.js";
 import type { ContainerManagerConfig } from "../../types.js";
+import { config as appConfig } from "../../../common/config.js";
 import { isAssistantContainerName } from "../../naming.js";
 import { buildAssistantOpenclawConfig } from "../shared/openclaw_config.js";
 import { FLY_FORBIDDEN_SECRET_ENV_KEYS } from "../shared/secret_env.js";
@@ -123,6 +124,7 @@ const buildAssistantOpenclawConfigPayload = (
     ...(webhookPath ? { telegramWebhookPath: webhookPath } : {}),
     ...(webhookHost ? { telegramWebhookHost: webhookHost } : {}),
     ...(pluginPath ? { telegramRouterPluginPath: pluginPath } : {}),
+    controlOrigin: appConfig.publicBaseUrl,
   });
   const json = JSON.stringify(built);
   return {

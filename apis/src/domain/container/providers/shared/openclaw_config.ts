@@ -25,10 +25,20 @@ export const buildGatewayConfigSection = (
   context: OpenclawConfigContext,
   gatewayToken: string,
   bind: GatewayBindMode,
+  controlOrigin?: string,
 ): UnknownRecord => {
   const controlUi: UnknownRecord = {
     allowInsecureAuth: true,
+    // Disable device-identity / pairing checks — our APIs layer already
+    // authenticates dashboard sessions before proxying to the gateway.
+    dangerouslyDisableDeviceAuth: true,
   };
+
+  // Allow the APIs proxy origin so the Control UI accepts requests forwarded
+  // through the /gateway/.../proxy route regardless of bind mode.
+  if (controlOrigin) {
+    controlUi.allowedOrigins = [controlOrigin];
+  }
 
   // Non-loopback (LAN) binding requires explicit origin policy for Control UI.
   // Docker containers bind to 0.0.0.0 so the host can reach the gateway via
@@ -37,10 +47,16 @@ export const buildGatewayConfigSection = (
     controlUi.dangerouslyAllowHostHeaderOriginFallback = true;
   }
 
+  // Trust the APIs reverse proxy so the gateway accepts forwarded headers
+  // and treats proxied connections as local.
+  const trustedProxies =
+    bind === "loopback" ? ["127.0.0.0/8"] : ["0.0.0.0/0"];
+
   return {
     mode: "local",
     port: context.openclaw.gatewayPort,
     bind,
+    trustedProxies,
     auth: {
       mode: "token",
       token: gatewayToken,
@@ -174,6 +190,7 @@ interface BuildAssistantOpenclawConfigOptions {
   telegramWebhookPort?: number;
   telegramPrivateWebhookPort?: number;
   telegramRouterPluginPath?: string;
+  controlOrigin?: string;
 }
 
 const normalizeWebhookPath = (value?: string): string => {
@@ -223,6 +240,7 @@ export const buildAssistantOpenclawConfig = (
       context,
       normalizedGatewayToken,
       options.gatewayBind,
+      options.controlOrigin?.trim() || undefined,
     ),
     messages: {
       tts: buildTtsConfigSection(context),
