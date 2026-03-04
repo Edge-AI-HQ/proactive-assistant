@@ -25,23 +25,34 @@ export const buildGatewayConfigSection = (
   context: OpenclawConfigContext,
   gatewayToken: string,
   bind: GatewayBindMode,
-): UnknownRecord => ({
-  mode: "local",
-  port: context.openclaw.gatewayPort,
-  bind,
-  auth: {
-    mode: "token",
-    token: gatewayToken,
-  },
-  controlUi: {
+): UnknownRecord => {
+  const controlUi: UnknownRecord = {
     allowInsecureAuth: true,
-  },
-  http: {
-    endpoints: {
-      chatCompletions: { enabled: true },
+  };
+
+  // Non-loopback (LAN) binding requires explicit origin policy for Control UI.
+  // Docker containers bind to 0.0.0.0 so the host can reach the gateway via
+  // port mapping — use the Host-header fallback to avoid enumerating origins.
+  if (bind === "lan") {
+    controlUi.dangerouslyAllowHostHeaderOriginFallback = true;
+  }
+
+  return {
+    mode: "local",
+    port: context.openclaw.gatewayPort,
+    bind,
+    auth: {
+      mode: "token",
+      token: gatewayToken,
     },
-  },
-});
+    controlUi,
+    http: {
+      endpoints: {
+        chatCompletions: { enabled: true },
+      },
+    },
+  };
+};
 
 export const buildTtsConfigSection = (
   context: OpenclawConfigContext,
@@ -330,6 +341,7 @@ export const buildAssistantOpenclawConfig = (
     // falling back to polling (getUpdates).
     const telegramChannel: UnknownRecord = {
       enabled: true,
+      botToken: options.publicBotToken,
       dmPolicy: "open",
       allowFrom: ["*"],
       groupPolicy: "allowlist",
