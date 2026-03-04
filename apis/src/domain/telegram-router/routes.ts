@@ -1,6 +1,7 @@
 import express, { type Application, type Request, type Response } from "express";
 import { pool } from "../common/db/core.js";
 import { config } from "../common/config.js";
+import { isGuideBotCommandText } from "./guideCommands.js";
 
 type WebhookSource = "public" | "private";
 
@@ -16,15 +17,6 @@ type UserState =
   | { phase: "no_subscription" }
   | { phase: "container_starting"; runtimeStatus: string; container?: ContainerInfo }
   | { phase: "running"; container: ContainerInfo };
-
-const BOT_COMMANDS = new Set([
-  "start",
-  "create_claw_assistant",
-  "list_claw_assistant",
-  "gateway",
-  "vnc_access",
-  "help",
-]);
 
 const BLOCKED_TG_METHODS = new Set([
   "setmycommands",
@@ -467,9 +459,7 @@ function decodeUtf8(data: Uint8Array): string | undefined {
 
 function isBotCommand(update: any): boolean {
   const text: string = update?.message?.text || "";
-  if (!text.startsWith("/")) return false;
-  const command = text.slice(1).split(/[\s@]/)[0]?.toLowerCase();
-  return BOT_COMMANDS.has(command || "");
+  return isGuideBotCommandText(text);
 }
 
 function extractChatId(update: any): number | null {

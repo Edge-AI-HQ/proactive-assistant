@@ -190,6 +190,7 @@ npm run litellm:up
 - `/start`
 - `/create_claw_assistant`
 - `/list_claw_assistant`
+- `/subscribe` - 打开订阅/续费/套餐管理入口
 - `/gateway`
 - `/vnc_access` - 获取远程桌面访问链接（用于浏览器密码输入、验证码等 GUI 交互）
 - `/cancel_subscription`
