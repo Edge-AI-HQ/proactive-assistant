@@ -40,3 +40,8 @@ model_list:
     litellm_params:
       model: minimax/MiniMax-M2.5
       api_key: os.environ/MINIMAX_API_KEY
+
+  - model_name: seed-2-0
+    litellm_params:
+      model: volcengine/ep-20260304110144-6zwwz
+      api_key: os.environ/VOLCENGINE_API_KEY
