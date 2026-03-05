@@ -75,9 +75,6 @@ const extractOrigin = (urlStr: string): string => {
 const hashConfigSha256 = (raw: string): string =>
   crypto.createHash("sha256").update(raw).digest("hex");
 
-const quoteForShell = (value: string): string =>
-  `'${value.replace(/'/g, `"'"'`)}'`;
-
 const resolveLiteLLMContainerBaseUrlForFly = (): string => {
   const containerBaseUrl = config.litellm.containerBaseUrl.trim();
   const liteLlmBaseUrl = config.litellm.baseUrl.trim();
@@ -98,7 +95,7 @@ const buildAssistantOpenclawConfigPayload = (
   gatewayToken: string,
   assistantBotToken: string,
   liteLlmApiKey: string | null,
-): { config: UnknownRecord; json: string; hash: string } => {
+): { config: UnknownRecord; json: string; base64: string; hash: string } => {
   const { webhookUrl, webhookPath, webhookHost, webhookPort, pluginPath } =
     config.telegramRouter;
   const normalizedWebhookUrl = webhookUrl.trim();
@@ -144,6 +141,7 @@ const buildAssistantOpenclawConfigPayload = (
   return {
     config: built,
     json,
+    base64: Buffer.from(json, "utf8").toString("base64"),
     hash: hashConfigSha256(json),
   };
 };
@@ -395,6 +393,7 @@ export const createAssistantMachine = async (
       normalizedPrivateWebhookPort,
     ),
     OPENCLAW_CONFIG_PATH: "/app/data/config/openclaw.json",
+    OPENCLAW_CONFIG_B64: openclawPayload.base64,
     OPENCLAW_STATE_DIR: "/app/data",
     NODE_COMPILE_CACHE: "/app/data/cache/node-compile-cache",
     PINAI_OPENCLAW_CONFIG_SHA256: openclawPayload.hash,
@@ -418,7 +417,7 @@ export const createAssistantMachine = async (
   // 构建启动命令：前置准备 + 后台任务 + 主进程
   const setupCommands = [
     "mkdir -p /app/data/workspace /app/data/tmp /app/data/config /root/.openclaw",
-    `printf "%s" ${quoteForShell(openclawPayload.json)} > "$OPENCLAW_CONFIG_PATH"`,
+    'printf "%s" "$OPENCLAW_CONFIG_B64" | base64 -d > "$OPENCLAW_CONFIG_PATH"',
     "ln -sfn /app/data/workspace /root/.openclaw/workspace",
     reminderPolicyBootstrap,
     cacheBootstrap,
