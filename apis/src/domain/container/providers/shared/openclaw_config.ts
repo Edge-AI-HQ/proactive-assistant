@@ -165,10 +165,12 @@ interface BuildAssistantOpenclawConfigOptions {
   gatewayToken: string;
   gatewayBind: GatewayBindMode;
   assistantBotToken?: string | null;
+  quickStartSyntheticBotToken?: string | null;
   liteLlmApiKey?: string | null;
   includeTelegramPlugin?: boolean;
   telegramWebhookMode?: boolean;
   telegramWebhookUrl?: string;
+  telegramWebhookSecret?: string;
   telegramWebhookPath?: string;
   telegramWebhookHost?: string;
   telegramWebhookPort?: number;
@@ -211,6 +213,9 @@ export const buildAssistantOpenclawConfig = (
   }
 
   const normalizedAssistantBotToken = (options.assistantBotToken || "").trim();
+  const normalizedQuickStartSyntheticBotToken = (
+    options.quickStartSyntheticBotToken || ""
+  ).trim();
   const normalizedLiteLLMApiKey = (options.liteLlmApiKey || "").trim();
   if (context.litellm.enabled && !normalizedLiteLLMApiKey) {
     throw new Error(
@@ -263,6 +268,9 @@ export const buildAssistantOpenclawConfig = (
     if (options.telegramWebhookUrl?.trim()) {
       baseWebhookConfig.url = options.telegramWebhookUrl.trim();
     }
+    if (options.telegramWebhookSecret?.trim()) {
+      baseWebhookConfig.secret = options.telegramWebhookSecret.trim();
+    }
     if (options.telegramWebhookHost?.trim()) {
       baseWebhookConfig.host = options.telegramWebhookHost.trim();
     }
@@ -297,6 +305,7 @@ export const buildAssistantOpenclawConfig = (
     if (options.telegramWebhookMode) {
       const mapping: [string, unknown][] = [
         ["url", options.telegramWebhookUrl],
+        ["secret", options.telegramWebhookSecret],
         ["path", options.telegramWebhookPath],
         ["host", options.telegramWebhookHost],
         ["port", options.telegramWebhookPort],
@@ -315,6 +324,20 @@ export const buildAssistantOpenclawConfig = (
       telegram: buildTelegramChannelConfigSection(
         normalizedAssistantBotToken,
         telegramWebhookConfig,
+      ),
+    };
+  } else if (
+    !next.channels &&
+    options.telegramWebhookMode &&
+    normalizedQuickStartSyntheticBotToken
+  ) {
+    // Quick Start mode (no dedicated assistant token): enable Telegram channel
+    // with a non-sensitive synthetic token. Outbound Telegram requests are
+    // proxied by telegram-router-proxy and authenticated by APIs.
+    next.channels = {
+      telegram: buildTelegramChannelConfigSection(
+        normalizedQuickStartSyntheticBotToken,
+        baseWebhookConfig,
       ),
     };
   }

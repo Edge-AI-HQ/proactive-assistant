@@ -8,6 +8,10 @@ import {
   assertNoP0SecretsInConfig,
   assertNoP0SecretsInEnv,
 } from "../shared/secret_guard.js";
+import {
+  deriveAssistantWebhookSecret,
+  QUICKSTART_SYNTHETIC_BOT_TOKEN,
+} from "../shared/telegram_runtime_secret.js";
 import { FLY_FORBIDDEN_SECRET_ENV_KEYS } from "../shared/secret_env.js";
 import {
   createMachine as createFlyMachine,
@@ -90,6 +94,7 @@ const resolveLiteLLMContainerBaseUrlForFly = (): string => {
 };
 
 const buildAssistantOpenclawConfigPayload = (
+  assistantBotId: number,
   gatewayToken: string,
   assistantBotToken: string,
   liteLlmApiKey: string | null,
@@ -103,6 +108,11 @@ const buildAssistantOpenclawConfigPayload = (
     );
   }
   const privateWebhookPort = webhookPort + 1;
+  const webhookSecret = deriveAssistantWebhookSecret(
+    assistantBotId,
+    gatewayToken,
+    appConfig.apiAuthToken,
+  );
   const openclawConfigContext = {
     openclaw: config.openclaw,
     elevenLabs: config.elevenLabs,
@@ -116,12 +126,14 @@ const buildAssistantOpenclawConfigPayload = (
     gatewayToken,
     gatewayBind: "loopback",
     assistantBotToken,
+    quickStartSyntheticBotToken: QUICKSTART_SYNTHETIC_BOT_TOKEN,
     liteLlmApiKey,
     includeTelegramPlugin: true,
     telegramWebhookMode: true,
     telegramWebhookPort: webhookPort,
     telegramPrivateWebhookPort: privateWebhookPort,
     telegramWebhookUrl: normalizedWebhookUrl,
+    telegramWebhookSecret: webhookSecret,
     ...(webhookPath ? { telegramWebhookPath: webhookPath } : {}),
     ...(webhookHost ? { telegramWebhookHost: webhookHost } : {}),
     ...(pluginPath ? { telegramRouterPluginPath: pluginPath } : {}),
@@ -305,6 +317,7 @@ export const shouldRecreateAssistantMachine = (
 
   const desiredToken = normalizeAssistantToken(desiredAssistantBotToken);
   const desiredConfigHash = buildAssistantOpenclawConfigPayload(
+    Number(machine.name?.replace(/^assistant-/, "") || 0),
     desiredGatewayToken,
     desiredToken,
     desiredLiteLLMApiKey || null,
@@ -365,6 +378,7 @@ export const createAssistantMachine = async (
   const normalizedWebhookPort = config.telegramRouter.webhookPort;
   const normalizedPrivateWebhookPort = normalizedWebhookPort + 1;
   const openclawPayload = buildAssistantOpenclawConfigPayload(
+    args.assistantBotId,
     args.gatewayToken,
     normalizedAssistantBotToken,
     args.liteLlmApiKey,

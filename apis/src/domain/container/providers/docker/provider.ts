@@ -22,6 +22,10 @@ import {
   assertNoP0SecretsInConfig,
   assertNoP0SecretsInEnv,
 } from "../shared/secret_guard.js";
+import {
+  deriveAssistantWebhookSecret,
+  QUICKSTART_SYNTHETIC_BOT_TOKEN,
+} from "../shared/telegram_runtime_secret.js";
 import { config as appConfig } from "../../../common/config.js";
 
 // ---------------------------------------------------------------------------
@@ -261,6 +265,7 @@ const mergeAssistantOpenclawConfig = (
 
 const ensureOpenclawConfig = (
   configDir: string,
+  assistantBotId: number,
   gatewayToken: string,
   assistantBotToken?: string | null,
   liteLlmApiKey?: string | null,
@@ -283,6 +288,11 @@ const ensureOpenclawConfig = (
   const privateWebhookPort = webhookPort + 1;
   const webhookPath = config.telegramRouter.webhookPath;
   const webhookHost = config.telegramRouter.webhookHost || "0.0.0.0";
+  const webhookSecret = deriveAssistantWebhookSecret(
+    assistantBotId,
+    gatewayToken,
+    appConfig.apiAuthToken,
+  );
   const pluginPath = config.telegramRouter.pluginPath;
   const webhookUrl = config.telegramRouter.webhookUrl.trim();
 
@@ -290,6 +300,7 @@ const ensureOpenclawConfig = (
     gatewayToken,
     gatewayBind: "lan",
     assistantBotToken: assistantBotToken ?? null,
+    quickStartSyntheticBotToken: QUICKSTART_SYNTHETIC_BOT_TOKEN,
     liteLlmApiKey: liteLlmApiKey ?? null,
     includeTelegramPlugin: true,
     telegramWebhookMode: true,
@@ -297,6 +308,7 @@ const ensureOpenclawConfig = (
     telegramPrivateWebhookPort: privateWebhookPort,
     telegramWebhookPath: webhookPath,
     telegramWebhookHost: webhookHost,
+    telegramWebhookSecret: webhookSecret,
     ...(webhookUrl ? { telegramWebhookUrl: webhookUrl } : {}),
     ...(pluginPath ? { telegramRouterPluginPath: pluginPath } : {}),
     controlOrigin: appConfig.publicBaseUrl,
@@ -496,6 +508,7 @@ export const dockerContainerRuntime: ContainerRuntime = {
 
     ensureOpenclawConfig(
       dirs.configDir,
+      params.assistantBotId,
       params.gatewayToken,
       params.assistantBotToken,
       liteLlmApiKey,
@@ -709,6 +722,7 @@ export const dockerContainerRuntime: ContainerRuntime = {
     const liteLlmApiKey = params.liteLlmApiKey;
     const { changed } = ensureOpenclawConfig(
       dirs.configDir,
+      params.assistantBotId,
       params.gatewayToken,
       params.assistantBotToken,
       liteLlmApiKey,

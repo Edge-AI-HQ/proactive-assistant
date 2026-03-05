@@ -5,6 +5,10 @@ import {
   assertNoP0SecretsInConfig,
   assertNoP0SecretsInEnv,
 } from "./secret_guard.js";
+import {
+  QUICKSTART_SYNTHETIC_BOT_TOKEN,
+  deriveAssistantWebhookSecret,
+} from "./telegram_runtime_secret.js";
 import type { ContainerManagerConfig } from "../../types.js";
 
 const buildConfig = (): ContainerManagerConfig => ({
@@ -78,6 +82,33 @@ test("buildAssistantOpenclawConfig does not include platform secrets", () => {
   assert.equal(raw.includes(context.elevenLabs.apiKey), false);
 });
 
+test("quick start builds telegram channel with synthetic token + assistant secret", () => {
+  const context = buildConfig();
+  const assistantWebhookSecret = deriveAssistantWebhookSecret(
+    42,
+    "user-gateway-token",
+    "api-internal-token",
+  );
+  const openclaw = buildAssistantOpenclawConfig(context, {
+    gatewayToken: "user-gateway-token",
+    gatewayBind: "loopback",
+    assistantBotToken: null,
+    quickStartSyntheticBotToken: QUICKSTART_SYNTHETIC_BOT_TOKEN,
+    telegramWebhookMode: true,
+    telegramWebhookUrl: context.telegramRouter.webhookUrl,
+    telegramWebhookSecret: assistantWebhookSecret,
+    telegramWebhookPath: context.telegramRouter.webhookPath,
+    telegramWebhookHost: context.telegramRouter.webhookHost,
+    telegramWebhookPort: context.telegramRouter.webhookPort,
+    includeTelegramPlugin: true,
+  });
+  const raw = JSON.stringify(openclaw);
+  assert.equal(raw.includes(QUICKSTART_SYNTHETIC_BOT_TOKEN), true);
+  assert.equal(raw.includes(assistantWebhookSecret), true);
+  assert.equal(raw.includes(context.telegram.token), false);
+  assert.equal(raw.includes(context.telegram.webhookSecret), false);
+});
+
 test("assertNoP0SecretsInConfig rejects forbidden keys and values", () => {
   const context = buildConfig();
   assert.throws(
@@ -94,19 +125,31 @@ test("assertNoP0SecretsInConfig rejects forbidden keys and values", () => {
       ),
     /Forbidden secret value/i,
   );
+  assert.doesNotThrow(() =>
+    assertNoP0SecretsInConfig(
+      {
+        channels: {
+          telegram: {
+            webhookSecret: "assistant-scoped-secret",
+          },
+        },
+      },
+      context,
+    ),
+  );
   assert.throws(
     () =>
       assertNoP0SecretsInConfig(
         {
           channels: {
             telegram: {
-              webhookSecret: "abc",
+              webhookSecret: context.telegram.webhookSecret,
             },
           },
         },
         context,
       ),
-    /Forbidden secret key/i,
+    /Forbidden secret value/i,
   );
 });
 

@@ -5,10 +5,12 @@ import { isGuideBotCommandText } from "./guideCommands.js";
 import { getAssistantById } from "../common/db/index.js";
 import { hasActiveSubscriptionForService } from "../payment/subscriptionGuard.js";
 import { ensureGatewayAssistantReady } from "../gateway/assistant_warmup.js";
+import { deriveAssistantWebhookSecret } from "../container/providers/shared/telegram_runtime_secret.js";
 
 type WebhookSource = "public" | "private";
 
 type ContainerInfo = {
+  assistant_id: number;
   container_id: string;
   gateway_token: string;
   assistant_bot_id: string | null;
@@ -306,6 +308,7 @@ async function findUserState(chatId: number): Promise<UserState> {
         assistantId: row.assistant_id,
         runtimeStatus: row.runtime_status,
         container: {
+          assistant_id: row.assistant_id,
           container_id: row.runtime_ref,
           gateway_token: row.gateway_token,
           assistant_bot_id: row.assistant_bot_id,
@@ -319,6 +322,7 @@ async function findUserState(chatId: number): Promise<UserState> {
       phase: "running",
       assistantId: row.assistant_id,
       container: {
+        assistant_id: row.assistant_id,
         container_id: row.runtime_ref,
         gateway_token: row.gateway_token,
         assistant_bot_id: row.assistant_bot_id,
@@ -372,6 +376,11 @@ async function forwardToOpenClaw(container: ContainerInfo, update: unknown, sour
   if (!candidateUrls.length) return false;
 
   let lastError: unknown = null;
+  const assistantWebhookSecret = deriveAssistantWebhookSecret(
+    container.assistant_id,
+    container.gateway_token,
+    config.apiAuthToken,
+  );
 
   for (const webhookUrl of candidateUrls) {
     try {
@@ -379,7 +388,7 @@ async function forwardToOpenClaw(container: ContainerInfo, update: unknown, sour
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Telegram-Bot-Api-Secret-Token": config.telegram.webhookSecret,
+          "X-Telegram-Bot-Api-Secret-Token": assistantWebhookSecret,
           "X-PinAI-Source": source,
         },
         body: JSON.stringify(update),

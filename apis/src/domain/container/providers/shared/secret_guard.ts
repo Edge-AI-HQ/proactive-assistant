@@ -9,9 +9,6 @@ const FORBIDDEN_SECRET_KEYS = new Set(
   [
     "telegram_bot_token",
     "telegram.token",
-    "webhooksecret",
-    "telegramwebhooksecret",
-    "telegram.webhooksecret",
     "elevenlabs_api_key",
     "xi_api_key",
     "elevenlabs.apikey",
