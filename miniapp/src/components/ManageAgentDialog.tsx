@@ -35,7 +35,7 @@ const ManageAgentDialog = ({ open, onClose, planId, onChangePlan, onDeleteAccoun
 
   if (showDeleteConfirm) {
     return (
-      <div className="fixed inset-0 z-[9999] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+      <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center p-4 animate-fade-in">
         <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl animate-scale-in">
           <h3 className="text-lg font-bold text-foreground mb-2">Delete Account?</h3>
           <p className="text-sm text-foreground/70 mb-6">
@@ -43,20 +43,13 @@ const ManageAgentDialog = ({ open, onClose, planId, onChangePlan, onDeleteAccoun
           </p>
           <div className="flex gap-2.5">
             <button
-              onClick={() => {
-                setShowDeleteConfirm(false);
-                onClose();
-              }}
+              onClick={() => { setShowDeleteConfirm(false); onClose(); }}
               className="flex-1 px-4 py-2.5 bg-gray-100 text-gray-700 rounded-xl text-sm font-medium btn-press"
             >
               Cancel
             </button>
             <button
-              onClick={() => {
-                setShowDeleteConfirm(false);
-                onClose();
-                onDeleteAccount();
-              }}
+              onClick={() => { setShowDeleteConfirm(false); onClose(); onDeleteAccount(); }}
               className="flex-1 px-4 py-2.5 bg-red-500 text-white rounded-xl text-sm font-bold btn-press"
             >
               Delete
@@ -68,7 +61,7 @@ const ManageAgentDialog = ({ open, onClose, planId, onChangePlan, onDeleteAccoun
   }
 
   return (
-    <div className="fixed inset-0 z-[9999] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-fade-in">
+    <div className="fixed inset-0 z-[9999] bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-4 animate-fade-in">
       <div className="bg-white rounded-t-3xl sm:rounded-2xl p-0 max-w-sm w-full shadow-2xl animate-slide-up">
         <div className="p-5 pb-3">
           <h3 className="text-base font-bold text-foreground">Manage Agent</h3>
