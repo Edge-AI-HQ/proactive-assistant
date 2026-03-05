@@ -343,16 +343,30 @@ export const createCheckoutSession = async (
           throw new DomainError("INTERNAL", "Subscription item not found");
         }
 
+        // Build shared metadata with assistant_id so invoice.paid creates correct period
+        const sharedMetadata: Record<string, string> = {
+          telegram_user_id: telegramUserId,
+          telegram_username: telegramUsername || "",
+          plan: selectedPlan.plan_code,
+        };
+        if (session.assistant_id) {
+          sharedMetadata.assistant_id = String(session.assistant_id);
+        }
+
         if (newPriceAmount > currentPriceAmount) {
           // Upgrade: apply immediately with proration
+          // Also reset cancel_at_period_end — user is actively upgrading, so they want to continue
           await stripe.subscriptions.update(existingSub.stripe_subscription_id, {
             items: [{ id: subscriptionItem.id, price: stripePriceId }],
             proration_behavior: "always_invoice",
-            metadata: {
-              telegram_user_id: telegramUserId,
-              plan: selectedPlan.plan_code,
-            },
+            cancel_at_period_end: false,
+            metadata: sharedMetadata,
           });
+          // Also update DB period to reflect cancel_at_period_end=false
+          await db.updateSubscriptionCancelFlag(
+            existingSub.stripe_subscription_id,
+            false,
+          ).catch(() => {/* non-fatal */});
           await db.markPaymentSessionUsed(token);
           return {
             url: null,
@@ -360,15 +374,12 @@ export const createCheckoutSession = async (
             message: `Upgraded to ${selectedPlan.display_name}. Effective immediately.`,
           };
         } else {
-          // Downgrade: schedule for next billing cycle
+          // Downgrade: schedule for next billing cycle (no proration, no refund)
           await stripe.subscriptions.update(existingSub.stripe_subscription_id, {
             items: [{ id: subscriptionItem.id, price: stripePriceId }],
             proration_behavior: "none",
             billing_cycle_anchor: "unchanged" as const,
-            metadata: {
-              telegram_user_id: telegramUserId,
-              plan: selectedPlan.plan_code,
-            },
+            metadata: sharedMetadata,
           });
           await db.markPaymentSessionUsed(token);
           return {
