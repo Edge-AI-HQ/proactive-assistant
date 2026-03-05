@@ -964,7 +964,7 @@ export async function handleInvoicePaid(
  * 定时任务：对「当前时间已进入且尚未应用 budget」的周期执行 LiteLLM reset spend + set budget，并标记已应用；
  * 对「曾有周期但当前无生效周期」（如已取消且周期已结束）的用户清零 budget 并停容器。
  */
-export async function applySubscriptionPeriodBudgets(now?: Date): Promise<{
+async function applySubscriptionPeriodBudgetsCore(now?: Date): Promise<{
   processed: number;
   failed: number;
   errors: Array<{ periodId: number; error: string }>;
@@ -1111,7 +1111,7 @@ export async function applySubscriptionPeriodBudgetsWithLock(now?: Date): Promis
       return skippedResult("advisory_lock");
     }
 
-    return await applySubscriptionPeriodBudgets(now);
+    return await applySubscriptionPeriodBudgetsCore(now);
   } finally {
     if (gotAdvisoryLock) {
       try {
