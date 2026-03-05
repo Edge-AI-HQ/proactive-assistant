@@ -16,6 +16,15 @@ import type {
 import { containerNameForAssistant } from "./naming.js";
 import { resolveAssistantLiteLLMApiKey as resolveAssistantLiteLLMApiKeyShared } from "./providers/shared/assistant_litellm_key.js";
 
+const resolveTelegramWebhookPort = (): number =>
+  Number(process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT || "8787");
+
+const resolveTelegramWebhookPath = (): string => {
+  const raw = (process.env.OPENCLAW_TELEGRAM_WEBHOOK_PATH || "/telegram-webhook").trim();
+  if (!raw) return "/telegram-webhook";
+  return raw.startsWith("/") ? raw : `/${raw}`;
+};
+
 // ---------------------------------------------------------------------------
 // ContainerOrchestrator — owns all business logic, side effects, and state
 // ---------------------------------------------------------------------------
@@ -241,10 +250,13 @@ export class ContainerOrchestrator {
               assistant.container_status !== "running" &&
               container
             ) {
+              const webhookPort = resolveTelegramWebhookPort();
+              const webhookPath = resolveTelegramWebhookPath();
               const ready = await this.runtime.probeReady(container, {
                 timeoutMs: 3000,
                 gatewayPort: this.config.openclaw.gatewayPort,
-                additionalPorts: [8787],
+                additionalPorts: [webhookPort],
+                httpProbes: [{ port: webhookPort, path: webhookPath }],
               });
               if (!ready) continue; // Skip this cycle
             }
@@ -368,9 +380,8 @@ export class ContainerOrchestrator {
     gatewayToken: string,
   ): Promise<void> {
     try {
-      const webhookPort = Number(
-        process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT || "8787",
-      );
+      const webhookPort = resolveTelegramWebhookPort();
+      const webhookPath = resolveTelegramWebhookPath();
       const probeTimeoutMs = Math.max(
         this.config.fly?.gatewayProbeTimeoutMs ?? 120_000,
         600_000,
@@ -381,6 +392,7 @@ export class ContainerOrchestrator {
         gatewayToken,
         gatewayPort: this.config.openclaw.gatewayPort,
         additionalPorts: [webhookPort],
+        httpProbes: [{ port: webhookPort, path: webhookPath }],
       });
 
       await this.store.updateAssistant(assistant.id, {

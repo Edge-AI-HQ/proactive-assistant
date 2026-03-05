@@ -160,3 +160,35 @@ export const waitForGatewayHello = async (
   }
   return false;
 };
+
+export const waitForHttpReady = async (
+  host: string,
+  port: number,
+  path: string,
+  timeoutMs: number
+): Promise<boolean> => {
+  const startedAt = Date.now();
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  const url = `http://${formatHostForUrl(host)}:${port}${normalizedPath}`;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    timer.unref();
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+      if (response.status >= 100 && response.status < 600) {
+        return true;
+      }
+    } catch {
+      clearTimeout(timer);
+      // retry until timeout
+    }
+    await sleep(1000);
+  }
+  return false;
+};

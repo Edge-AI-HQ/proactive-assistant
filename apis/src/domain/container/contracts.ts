@@ -88,6 +88,7 @@ export interface ProbeOptions {
   gatewayToken?: string;
   gatewayPort: number;
   additionalPorts?: number[];
+  httpProbes?: Array<{ port: number; path: string }>;
 }
 
 export interface ContainerRuntime {
@@ -129,4 +130,3 @@ export interface ContainerRuntime {
     params: AssistantContainerParams,
   ): Promise<boolean>;
 }
-

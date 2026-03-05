@@ -20,6 +20,7 @@ import {
 import {
   formatHostForUrl,
   waitForGatewayHello,
+  waitForHttpReady,
   waitForPort,
 } from "./gateway_probe.js";
 import { ensureFlyOpenclawImageDigestPullable } from "./image_digest_guard.js";
@@ -298,7 +299,7 @@ export const flyContainerRuntime: ContainerRuntime = {
     options: ProbeOptions,
   ): Promise<boolean> {
     const host = resolveHostFromRef(ref);
-    const { timeoutMs, gatewayToken, gatewayPort, additionalPorts } = options;
+    const { timeoutMs, gatewayToken, gatewayPort, additionalPorts, httpProbes } = options;
 
     const portReady = await waitForPort(host, gatewayPort, timeoutMs);
     if (!portReady) return false;
@@ -316,6 +317,13 @@ export const flyContainerRuntime: ContainerRuntime = {
     if (additionalPorts?.length) {
       for (const port of additionalPorts) {
         const ok = await waitForPort(host, port, timeoutMs);
+        if (!ok) return false;
+      }
+    }
+
+    if (httpProbes?.length) {
+      for (const probe of httpProbes) {
+        const ok = await waitForHttpReady(host, probe.port, probe.path, timeoutMs);
         if (!ok) return false;
       }
     }
