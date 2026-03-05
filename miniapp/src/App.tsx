@@ -467,16 +467,7 @@ const App = () => {
           />
         </div>
 
-        {state.skills.supported && state.skills.items.length > 0 && (
-          <div className="px-4 mt-6">
-            <AgentSkills
-              skills={state.skills.items}
-              onInstall={installSkill}
-              onUninstall={uninstallSkill}
-              busy={busy}
-            />
-          </div>
-        )}
+        {/* Skills section temporarily hidden pending API key input support */}
 
         <div className="px-4 mt-6">
           <AgentInsights />
