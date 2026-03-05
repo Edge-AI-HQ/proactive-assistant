@@ -189,6 +189,35 @@ const buildAssistantGatewayUrl = (
   return url.toString();
 };
 
+const buildSubscriptionMiniAppUrl = (
+  publicOrigin: string,
+  telegramUserId: number,
+  sessionToken?: string,
+): string => {
+  const url = new URL(`/gateway/${telegramUserId}/mini`, publicOrigin);
+  if (sessionToken) {
+    url.searchParams.set("gateway_sid", sessionToken);
+  }
+  return url.toString();
+};
+
+const createSubscriptionEntryUrl = async (
+  telegramUserId: number,
+): Promise<string | null> => {
+  const publicBase = resolveGatewayPublicOrigin();
+  if (!publicBase) return null;
+
+  const session = await createGatewaySessionViaApi(
+    telegramUserId,
+    GATEWAY_LINK_SESSION_TTL_HOURS,
+  );
+  return buildSubscriptionMiniAppUrl(
+    publicBase.origin,
+    telegramUserId,
+    session.session_token,
+  );
+};
+
 const buildAssistantGatewayLinksText = (
   assistants: AssistantRecord[],
   publicOrigin: string,
@@ -222,11 +251,22 @@ const provisionAssistantWithGuideBot = async (
 
   if (!hasActiveSubscription) {
     const assistantId = existingAssistants[0]?.id;
-    const paymentLink = await safeCreatePaymentLink(
-      telegramUserId,
-      telegramUsername,
-      assistantId,
-    );
+    let paymentLink: string | null = null;
+    try {
+      paymentLink = await createSubscriptionEntryUrl(telegramUserId);
+    } catch (error: unknown) {
+      console.error("Failed to create mini app entry URL", {
+        telegramUserId,
+        error: error instanceof Error ? error.message : String(error || ""),
+      });
+    }
+    if (!paymentLink) {
+      paymentLink = await safeCreatePaymentLink(
+        telegramUserId,
+        telegramUsername,
+        assistantId,
+      );
+    }
 
     if (!paymentLink) {
       await replyHtml(
@@ -426,12 +466,24 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     await clearTokenInputPending(telegramUserId);
 
     const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
-    const assistantId = assistants[0]?.id;
-    const paymentLink = await safeCreatePaymentLink(
-      telegramUserId,
-      ctx.from?.username ?? null,
-      assistantId,
-    );
+
+    let paymentLink: string | null = null;
+    try {
+      paymentLink = await createSubscriptionEntryUrl(telegramUserId);
+    } catch (error: unknown) {
+      console.error("Failed to create subscription mini app URL", {
+        telegramUserId,
+        error: error instanceof Error ? error.message : String(error || ""),
+      });
+    }
+    if (!paymentLink) {
+      const assistantId = assistants[0]?.id;
+      paymentLink = await safeCreatePaymentLink(
+        telegramUserId,
+        ctx.from?.username ?? null,
+        assistantId,
+      );
+    }
 
     if (!paymentLink) {
       await replyHtml(
@@ -580,15 +632,24 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
 
-    // 获取用户的助理（限制只有一个）
-    const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
-    const assistantId = assistants[0]?.id;
-
-    const paymentLink = await safeCreatePaymentLink(
-      telegramUserId,
-      ctx.from?.username ?? null,
-      assistantId,
-    );
+    let paymentLink: string | null = null;
+    try {
+      paymentLink = await createSubscriptionEntryUrl(telegramUserId);
+    } catch (error: unknown) {
+      console.error("Failed to create subscription mini app URL (callback)", {
+        telegramUserId,
+        error: error instanceof Error ? error.message : String(error || ""),
+      });
+    }
+    if (!paymentLink) {
+      const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
+      const assistantId = assistants[0]?.id;
+      paymentLink = await safeCreatePaymentLink(
+        telegramUserId,
+        ctx.from?.username ?? null,
+        assistantId,
+      );
+    }
 
     if (!paymentLink) {
       await ctx.answerCallbackQuery({
@@ -607,6 +668,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
       [
         "📊 <b>Subscription Management</b>",
         "",
+        "• <b>Open Mini App:</b> Subscribe, upgrade, downgrade in one place",
         "• <b>Cancel:</b> Cancel your subscription (stays active until period end)",
         "",
         "Your subscription applies to all your assistants.",

@@ -20,6 +20,11 @@ import { containerNameForAssistant } from "../../naming.js";
 import { buildAssistantOpenclawConfig } from "../shared/openclaw_config.js";
 import { resolveAssistantLiteLLMApiKey as resolveAssistantLiteLLMApiKeyShared } from "../shared/assistant_litellm_key.js";
 import { DOCKER_FORBIDDEN_SECRET_ENV_KEYS } from "../shared/secret_env.js";
+import { readAssistantRuntimeMetadata } from "../../../common/db/index.js";
+import {
+  readSkillsConfigFromRuntimeMetadata,
+  toOpenclawSkillsPayload,
+} from "../../../skills/openclaw_skills.js";
 
 const docker = new Docker();
 
@@ -158,15 +163,22 @@ const mergeAssistantOpenclawConfig = (
     };
   }
 
+  if (isRecord(desired.skills)) {
+    next.skills = desired.skills;
+  } else if (Object.hasOwn(next, "skills")) {
+    delete next.skills;
+  }
+
   return next;
 };
 
-const ensureOpenclawConfig = (
+const ensureOpenclawConfig = async (
+  assistantId: number,
   configDir: string,
   gatewayToken: string,
   assistantBotToken?: string | null,
   liteLlmApiKey?: string | null,
-): { configPath: string; changed: boolean } => {
+): Promise<{ configPath: string; changed: boolean }> => {
   const configPath = path.join(configDir, "openclaw.json");
   const existingRaw = fs.existsSync(configPath)
     ? fs.readFileSync(configPath, "utf8")
@@ -181,12 +193,18 @@ const ensureOpenclawConfig = (
     }
   })();
 
+  const runtimeMetadata = await readAssistantRuntimeMetadata(assistantId);
+  const skillsConfig = toOpenclawSkillsPayload(
+    readSkillsConfigFromRuntimeMetadata(runtimeMetadata),
+  );
+
   const desired = buildAssistantOpenclawConfig(config, {
     gatewayToken,
     gatewayBind: "lan",
     assistantBotToken: assistantBotToken ?? null,
     liteLlmApiKey: liteLlmApiKey ?? null,
     includeTelegramPlugin: false,
+    skillsConfig,
   });
   const next = mergeAssistantOpenclawConfig(
     existingParsed,
@@ -390,7 +408,8 @@ const ensureAssistantDockerContainer = async (
   ensureDir(assistantTmpDir);
   ensureDir(assistantWorkspaceDir);
   const assistantLiteLLMApiKey = resolveAssistantLiteLLMApiKey(assistant);
-  const { changed: configChanged } = ensureOpenclawConfig(
+  const { changed: configChanged } = await ensureOpenclawConfig(
+    assistant.id,
     assistantConfigDir,
     gatewayToken,
     assistant.assistant_bot_token,

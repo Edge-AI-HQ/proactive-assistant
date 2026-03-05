@@ -1,5 +1,10 @@
 import { getContainerManagerRuntime } from "../../runtime.js";
 import { sendTelegramMessage } from "../../../telegram/notify.js";
+import { readAssistantRuntimeMetadata } from "../../../common/db/index.js";
+import {
+  readSkillsConfigFromRuntimeMetadata,
+  toOpenclawSkillsPayload,
+} from "../../../skills/openclaw_skills.js";
 import type {
   AssistantRecord,
   ContainerManagerConfig,
@@ -200,6 +205,7 @@ const createAssistantMachine = async (
   assistant: AssistantContainerRuntimeRef,
   gatewayToken: string,
   liteLlmApiKey = resolveAssistantLiteLLMApiKey(assistant),
+  skillsConfig?: Record<string, unknown> | null,
 ): Promise<FlyMachine> => {
   // Quick Start 模式下 assistant_bot_id 为 NULL，使用 assistant.id 作为标识
   const botIdForContainer = assistant.assistant_bot_id ?? assistant.id;
@@ -210,6 +216,7 @@ const createAssistantMachine = async (
     gatewayToken,
     assistantBotToken: assistant.assistant_bot_token,
     liteLlmApiKey,
+    ...(skillsConfig !== undefined ? { skillsConfig } : {}),
   });
 };
 
@@ -243,6 +250,10 @@ const runEnsureAssistantMachine = async (
   }
 
   const desiredLiteLLMApiKey = resolveAssistantLiteLLMApiKey(assistant);
+  const runtimeMetadata = await readAssistantRuntimeMetadata(assistant.id);
+  const desiredSkillsConfig = toOpenclawSkillsPayload(
+    readSkillsConfigFromRuntimeMetadata(runtimeMetadata),
+  );
   await ensureFlyOpenclawImageDigestPullable();
 
   const fallbackName = resolveAssistantMachineName(assistant);
@@ -272,6 +283,7 @@ const runEnsureAssistantMachine = async (
         normalizedGatewayToken,
         assistant.assistant_bot_token,
         desiredLiteLLMApiKey,
+        desiredSkillsConfig,
       )
     ) {
       await destroyMachine(machine.id);
@@ -289,6 +301,7 @@ const runEnsureAssistantMachine = async (
       assistant,
       normalizedGatewayToken,
       desiredLiteLLMApiKey,
+      desiredSkillsConfig,
     );
   }
 
@@ -303,6 +316,7 @@ const runEnsureAssistantMachine = async (
       assistant,
       normalizedGatewayToken,
       desiredLiteLLMApiKey,
+      desiredSkillsConfig,
     );
     currentState = normalizeMachineState(machine);
   }

@@ -163,6 +163,7 @@ interface BuildAssistantOpenclawConfigOptions {
   telegramWebhookPort?: number;
   telegramPrivateWebhookPort?: number;
   telegramRouterPluginPath?: string;
+  skillsConfig?: UnknownRecord | null;
 }
 
 const normalizeWebhookPath = (value?: string): string => {
@@ -230,6 +231,11 @@ export const buildAssistantOpenclawConfig = (
     );
     next.models = liteLlmSections.models;
     next.agents = liteLlmSections.agents;
+  }
+
+  const skillsConfig = options.skillsConfig;
+  if (skillsConfig && Object.keys(skillsConfig).length > 0) {
+    next.skills = skillsConfig;
   }
 
   const baseWebhookConfig: TelegramWebhookConfig = { enabled: true };

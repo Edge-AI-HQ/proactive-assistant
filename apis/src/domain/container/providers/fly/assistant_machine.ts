@@ -32,6 +32,7 @@ interface AssistantMachineCreateArgs {
   gatewayToken: string;
   assistantBotToken?: string | null;
   liteLlmApiKey: string | null;
+  skillsConfig?: UnknownRecord | null;
 }
 
 let latestAppDeployCache: {
@@ -88,6 +89,7 @@ const buildAssistantOpenclawConfigPayload = (
   gatewayToken: string,
   assistantBotToken: string,
   liteLlmApiKey: string | null,
+  skillsConfig?: UnknownRecord | null,
 ): { config: UnknownRecord; json: string; hash: string } => {
   const { webhookUrl, webhookPath, webhookHost, webhookPort, pluginPath } =
     config.telegramRouter;
@@ -123,6 +125,7 @@ const buildAssistantOpenclawConfigPayload = (
     ...(webhookPath ? { telegramWebhookPath: webhookPath } : {}),
     ...(webhookHost ? { telegramWebhookHost: webhookHost } : {}),
     ...(pluginPath ? { telegramRouterPluginPath: pluginPath } : {}),
+    ...(skillsConfig ? { skillsConfig } : {}),
   });
   const json = JSON.stringify(built);
   return {
@@ -277,6 +280,7 @@ export const shouldRecreateAssistantMachine = (
   desiredGatewayToken: string,
   desiredAssistantBotToken?: string | null,
   desiredLiteLLMApiKey?: string | null,
+  desiredSkillsConfig?: UnknownRecord | null,
 ): boolean => {
   const configuredImage = machine.config?.image?.trim();
   if (configuredImage && configuredImage !== config.openclaw.image) {
@@ -304,6 +308,7 @@ export const shouldRecreateAssistantMachine = (
     desiredGatewayToken,
     desiredToken,
     desiredLiteLLMApiKey || null,
+    desiredSkillsConfig,
   ).hash;
 
   const currentEnv = machine.config?.env;
@@ -364,6 +369,7 @@ export const createAssistantMachine = async (
     args.gatewayToken,
     normalizedAssistantBotToken,
     args.liteLlmApiKey,
+    args.skillsConfig,
   );
 
   const apisInternalPort = Number.parseInt(process.env.PORT || "3000", 10);

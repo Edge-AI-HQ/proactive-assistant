@@ -7,19 +7,33 @@ import {
 } from "express";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import type { Socket } from "node:net";
+import path from "node:path";
 import httpProxy from "http-proxy";
 import {
   getAssistantById,
   getGatewaySession,
   getUserByTelegramId,
+  readAssistantRuntimeMetadata,
+  setAssistantRuntimeMetadataKey,
 } from "../domain/common/db/index.js";
 import { domainErrorMessage, isDomainError } from "../domain/common/errors.js";
 import { requireApiAuth } from "../domain/common/httpAuth.js";
+import {
+  createAssistantWithoutContainerByInput,
+  listAssistantsByOwnerId,
+} from "../domain/claw-assistant/usecases.js";
 import { ensureGatewayAssistantReady } from "../domain/gateway/assistant_warmup.js";
 import {
   renderGatewayBootstrapPageHtml,
   resolveGatewayWsUrl,
 } from "../domain/gateway/pages.js";
+import {
+  cancelStripeSubscription,
+  createCheckoutSession,
+  createInternalPaymentSession,
+  listActivePlansForApi,
+  readInternalSubscription,
+} from "../domain/payment/checkout.js";
 import {
   buildOpenclawAuthHeaders,
   resolveAssistantGatewayTarget,
@@ -27,12 +41,26 @@ import {
 } from "../domain/gateway/proxy_orchestrator.js";
 import { createGatewaySessionByBody } from "../domain/gateway/session_api.js";
 import {
+  buildSkillViewList,
+  installSkillToConfig,
+  readSkillsConfigFromRuntimeMetadata,
+  SKILLS_METADATA_KEY,
+  uninstallSkillFromConfig,
+} from "../domain/skills/openclaw_skills.js";
+import {
   readCookieFromIncoming,
   requireGatewaySession,
   resolveGatewayAssistantForUser,
 } from "../domain/gateway/session_guard.js";
 import { hasActiveSubscriptionForService } from "../domain/payment/subscriptionGuard.js";
 import type { AssistantRecord } from "../types.js";
+
+const miniAppEntryPath = path.join(
+  process.cwd(),
+  "public",
+  "tg-subscription-mini",
+  "index.html",
+);
 
 const proxy = httpProxy.createProxyServer({ ws: true, xfwd: true });
 let proxyErrorHandlerBound = false;
@@ -115,6 +143,371 @@ export const createDashboardRouter = (): Router => {
       res.status(500).send("Dashboard session check failed.");
     });
   };
+
+  router.get(
+    "/gateway/:user_id/mini",
+    requireDashboardSession,
+    async (req: Request<{ user_id: string }>, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).send("Gateway user missing.");
+        return;
+      }
+
+      // Ensure authenticated user can only access their own route.
+      if (String(user.telegram_user_id) !== req.params.user_id) {
+        res.status(403).send("Forbidden");
+        return;
+      }
+
+      res.setHeader("Cache-Control", "no-store");
+      res.sendFile(miniAppEntryPath);
+    },
+  );
+
+  router.get(
+    "/gateway/:user_id/mini/state",
+    requireDashboardSession,
+    async (req: Request<{ user_id: string }>, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+      if (String(user.telegram_user_id) !== req.params.user_id) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      try {
+        const [assistants, subscriptionResult, plansResult] = await Promise.all([
+          listAssistantsByOwnerId(user.telegram_user_id),
+          readInternalSubscription(String(user.telegram_user_id)),
+          listActivePlansForApi(),
+        ]);
+
+        const assistant = assistants[0] ?? null;
+        const subscription = subscriptionResult.subscription;
+        const runtimeMetadata = assistant
+          ? await readAssistantRuntimeMetadata(assistant.id)
+          : {};
+        const skillsConfig = readSkillsConfigFromRuntimeMetadata(runtimeMetadata);
+        const skillViews = buildSkillViewList(skillsConfig);
+
+        res.status(200).json({
+          user: {
+            telegram_user_id: user.telegram_user_id,
+            telegram_username: user.telegram_username,
+          },
+          assistant: assistant
+            ? {
+                exists: true,
+                id: assistant.id,
+                username: assistant.assistant_bot_username ?? null,
+                status: assistant.container_status ?? "unknown",
+              }
+            : {
+                exists: false,
+              },
+          subscription: subscription
+            ? {
+                active: hasActiveSubscriptionForService(String(user.telegram_user_id)),
+                status: subscription.status,
+                plan_id: subscription.plan_id,
+                cancel_at_period_end: subscription.cancel_at_period_end,
+                current_period_end: subscription.current_period_end,
+              }
+            : {
+                active: false,
+                status: null,
+                plan_id: null,
+                cancel_at_period_end: false,
+                current_period_end: null,
+              },
+          plans: plansResult.plans,
+          skills: {
+            supported: Boolean(assistant),
+            message: assistant
+              ? "Install/uninstall will update OpenClaw skills config and trigger runtime refresh."
+              : "Create assistant first to manage skills.",
+            items: skillViews,
+            config: skillsConfig,
+          },
+        });
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
+    "/gateway/:user_id/mini/create-assistant",
+    requireDashboardSession,
+    async (req: Request<{ user_id: string }>, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+      if (String(user.telegram_user_id) !== req.params.user_id) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      try {
+        const existing = await listAssistantsByOwnerId(user.telegram_user_id);
+        if (existing.length > 0) {
+          res.status(200).json({ created: false, assistant: existing[0] });
+          return;
+        }
+
+        const result = await createAssistantWithoutContainerByInput({
+          ownerTelegramUserId: user.telegram_user_id,
+          ownerTelegramUsername: user.telegram_username,
+          assistantBotId: null,
+          assistantBotToken: null,
+          assistantBotUsername: null,
+        });
+
+        res.status(200).json({ created: true, assistant: result.assistant });
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          if (error.status === 409) {
+            const assistants = await listAssistantsByOwnerId(user.telegram_user_id);
+            if (assistants.length > 0) {
+              res.status(200).json({ created: false, assistant: assistants[0] });
+              return;
+            }
+          }
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
+    "/gateway/:user_id/mini/checkout",
+    requireDashboardSession,
+    async (
+      req: Request<{ user_id: string }, unknown, { plan?: string }>,
+      res: Response,
+    ) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+      if (String(user.telegram_user_id) !== req.params.user_id) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      try {
+        const plan = typeof req.body?.plan === "string" ? req.body.plan.trim().toLowerCase() : "";
+        if (!plan) {
+          res.status(400).json({ error: "plan is required" });
+          return;
+        }
+
+        const assistants = await listAssistantsByOwnerId(user.telegram_user_id);
+        const paymentSession = await createInternalPaymentSession(req, {
+          telegram_user_id: String(user.telegram_user_id),
+          telegram_username: user.telegram_username ?? undefined,
+          assistant_id: assistants[0]?.id,
+          plan_code: plan,
+        });
+        const checkout = await createCheckoutSession(req, {
+          token: paymentSession.token,
+          plan,
+        });
+
+        res.status(200).json(checkout);
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
+    "/gateway/:user_id/mini/skills/install",
+    requireDashboardSession,
+    async (
+      req: Request<{ user_id: string }, unknown, { skill_key?: string }>,
+      res: Response,
+    ) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+      if (String(user.telegram_user_id) !== req.params.user_id) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      const skillKey =
+        typeof req.body?.skill_key === "string" ? req.body.skill_key.trim() : "";
+      if (!skillKey) {
+        res.status(400).json({ error: "skill_key is required" });
+        return;
+      }
+
+      try {
+        const assistants = await listAssistantsByOwnerId(user.telegram_user_id);
+        const assistant = assistants[0];
+        if (!assistant) {
+          res.status(400).json({ error: "Assistant not found. Create assistant first." });
+          return;
+        }
+
+        const runtimeMetadata = await readAssistantRuntimeMetadata(assistant.id);
+        const currentConfig = readSkillsConfigFromRuntimeMetadata(runtimeMetadata);
+        const nextConfig = installSkillToConfig(currentConfig, skillKey);
+        await setAssistantRuntimeMetadataKey(
+          assistant.id,
+          SKILLS_METADATA_KEY,
+          nextConfig,
+        );
+
+        const hasActiveSubscription = await hasActiveSubscriptionForService(
+          String(user.telegram_user_id),
+        );
+        if (hasActiveSubscription) {
+          try {
+            await ensureGatewayAssistantReady(assistant);
+          } catch (error: unknown) {
+            console.warn("Skills install saved but runtime refresh failed", {
+              assistantId: assistant.id,
+              skillKey,
+              error: error instanceof Error ? error.message : String(error || ""),
+            });
+          }
+        }
+
+        res.status(200).json({
+          ok: true,
+          skill_key: skillKey,
+          skills: buildSkillViewList(nextConfig),
+          config: nextConfig,
+        });
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
+    "/gateway/:user_id/mini/skills/uninstall",
+    requireDashboardSession,
+    async (
+      req: Request<{ user_id: string }, unknown, { skill_key?: string }>,
+      res: Response,
+    ) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+      if (String(user.telegram_user_id) !== req.params.user_id) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      const skillKey =
+        typeof req.body?.skill_key === "string" ? req.body.skill_key.trim() : "";
+      if (!skillKey) {
+        res.status(400).json({ error: "skill_key is required" });
+        return;
+      }
+
+      try {
+        const assistants = await listAssistantsByOwnerId(user.telegram_user_id);
+        const assistant = assistants[0];
+        if (!assistant) {
+          res.status(400).json({ error: "Assistant not found. Create assistant first." });
+          return;
+        }
+
+        const runtimeMetadata = await readAssistantRuntimeMetadata(assistant.id);
+        const currentConfig = readSkillsConfigFromRuntimeMetadata(runtimeMetadata);
+        const nextConfig = uninstallSkillFromConfig(currentConfig, skillKey);
+        await setAssistantRuntimeMetadataKey(
+          assistant.id,
+          SKILLS_METADATA_KEY,
+          nextConfig,
+        );
+
+        const hasActiveSubscription = await hasActiveSubscriptionForService(
+          String(user.telegram_user_id),
+        );
+        if (hasActiveSubscription) {
+          try {
+            await ensureGatewayAssistantReady(assistant);
+          } catch (error: unknown) {
+            console.warn("Skills uninstall saved but runtime refresh failed", {
+              assistantId: assistant.id,
+              skillKey,
+              error: error instanceof Error ? error.message : String(error || ""),
+            });
+          }
+        }
+
+        res.status(200).json({
+          ok: true,
+          skill_key: skillKey,
+          skills: buildSkillViewList(nextConfig),
+          config: nextConfig,
+        });
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
+    "/gateway/:user_id/mini/cancel-subscription",
+    requireDashboardSession,
+    async (req: Request<{ user_id: string }>, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+      if (String(user.telegram_user_id) !== req.params.user_id) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      try {
+        const result = await cancelStripeSubscription(String(user.telegram_user_id));
+        res.status(200).json(result);
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
 
   router.get(
     "/gateway/:user_id/bot/:assistant_id",
