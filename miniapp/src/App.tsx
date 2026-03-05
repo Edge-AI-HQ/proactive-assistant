@@ -55,6 +55,7 @@ declare global {
         ready: () => void;
         expand: () => void;
         initData?: string;
+        openTelegramLink?: (url: string) => void;
         initDataUnsafe?: {
           user?: {
             id: number;
