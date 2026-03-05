@@ -198,6 +198,7 @@ export interface FlyConfig {
   apiBaseUrl: string;
   apiToken: string;
   appName: string;
+  assistantAppName: string;
   region: string;
   regionFallbacks: string[];
   volumeSizeGb: number;

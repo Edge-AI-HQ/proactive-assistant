@@ -116,3 +116,10 @@ flyctl secrets list -a pinclaw-api-dev | rg "TELEGRAM_ROUTER_WEBHOOK_URL|TELEGRA
 
 - 文档中不得保留 bot token、webhook secret、数据库连接串明文。
 - 如历史记录出现敏感值，需立即轮换并清理。
+
+## 开发经验（2026-03-05）
+
+- 不要把 OpenClaw 完整配置 JSON 内联到 Fly `init.exec` 命令中；Fly 启动日志会打印 `Preparing to run`，会泄露明文配置。
+- 容器启动改为 `OPENCLAW_CONFIG_B64` 注入，容器内再 `base64 -d` 落盘到 `OPENCLAW_CONFIG_PATH`，避免命令行明文。
+- 就绪判定不能只看 `running/port`；必须额外探测 Telegram webhook HTTP 可用（`webhookPort + webhookPath`），再对用户发送 ready 通知。
+- P0 校验口径固定：assistant 容器内不应出现 `telegram.token`、`telegram.webhookSecret`、`elevenlabs.apiKey` 明文。

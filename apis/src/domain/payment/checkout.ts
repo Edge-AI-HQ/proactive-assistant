@@ -5,7 +5,7 @@ import { DomainError } from "../common/errors.js";
 import { db } from "./db.js";
 import { syncLiteLLMBudgetFromPlan } from "./litellmBudget.js";
 import { readPaymentPublicBaseUrl } from "./publicBaseUrl.js";
-import { parseTelegramUserId, requireStripe } from "./stripeClient.js";
+import { parseTelegramUserId, requireStripe, stripe } from "./stripeClient.js";
 
 // Local mapping for checkout API backward compatibility
 const mapStripeSubscriptionStatus = (
@@ -382,6 +382,24 @@ export const createCheckoutSession = async (
   }
 
   return { url: checkoutSession.url, action: "checkout" };
+};
+
+export const cancelStripeSubscriptionImmediately = async (
+  telegramUserId: string,
+): Promise<void> => {
+  if (!stripe) return;
+  const subscription = await db.getCurrentPeriodByTelegramId(telegramUserId);
+  if (!subscription?.stripe_subscription_id) return;
+
+  try {
+    await stripe.subscriptions.cancel(subscription.stripe_subscription_id);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message.toLowerCase() : "";
+    if (message.includes("no such subscription") || message.includes("already been canceled")) {
+      return;
+    }
+    throw error;
+  }
 };
 
 export const cancelStripeSubscription = async (

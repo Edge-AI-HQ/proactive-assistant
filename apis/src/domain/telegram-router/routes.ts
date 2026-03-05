@@ -5,14 +5,17 @@ import { isGuideBotCommandText } from "./guideCommands.js";
 import { getAssistantById } from "../common/db/index.js";
 import { hasActiveSubscriptionForService } from "../payment/subscriptionGuard.js";
 import { ensureGatewayAssistantReady } from "../gateway/assistant_warmup.js";
+import { deriveAssistantWebhookSecret } from "../container/providers/shared/telegram_runtime_secret.js";
 
 type WebhookSource = "public" | "private";
 
 type ContainerInfo = {
+  assistant_id: number;
   container_id: string;
   gateway_token: string;
   assistant_bot_id: string | null;
   runtime_provider: string | null;
+  host_port: number | null;
 };
 
 type UserState =
@@ -44,6 +47,9 @@ export const registerTelegramRouterRoutes = (app: Application): void => {
     void handleTelegramWebhook(req, res, "private");
   });
 
+  app.all("/api/telegram/file/*", express.raw({ type: "*/*", limit: "50mb" }), (req, res) => {
+    void handleTelegramFileProxy(req, res);
+  });
   app.all("/api/telegram/:method", express.raw({ type: "*/*", limit: "50mb" }), (req, res) => {
     void handleTelegramApiProxy(req, res);
   });
@@ -231,9 +237,52 @@ async function handleTelegramApiProxy(req: Request, res: Response): Promise<void
   }
 }
 
+async function handleTelegramFileProxy(req: Request, res: Response): Promise<void> {
+  try {
+    const rawPath = String(req.params[0] || "").replace(/^\/+/, "");
+    if (!rawPath) {
+      res.status(400).json({ ok: false, description: "missing file path" });
+      return;
+    }
+    const traceId = `tgfile_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const reqMethod = req.method.toUpperCase();
+    const hasBody = reqMethod !== "GET" && reqMethod !== "HEAD";
+    const body = hasBody ? toBodyBytes(req) : undefined;
+    const proxyUrl = new URL(req.originalUrl, "http://localhost");
+
+    console.log(
+      `📦 Proxying Telegram file [${traceId}] method=${reqMethod} path=${rawPath} ` +
+        `content_type=${String(req.headers["content-type"] || "none")} body_bytes=${body?.byteLength ?? 0}`,
+    );
+
+    const botToken = resolveProxyBotToken(req);
+    const telegramUrl = `https://api.telegram.org/file/bot${botToken}/${rawPath}${proxyUrl.search}`;
+    const outgoingHeaders = new Headers();
+    const contentType = req.headers["content-type"] as string | undefined;
+    if (contentType) outgoingHeaders.set("content-type", contentType);
+
+    const requestInit: RequestInit = {
+      method: reqMethod,
+      headers: outgoingHeaders,
+    };
+    if (body) {
+      requestInit.body = body;
+    }
+
+    const response = await fetch(telegramUrl, requestInit);
+    const result = new Uint8Array(await response.arrayBuffer());
+    res.status(response.status);
+    res.setHeader("Content-Type", response.headers.get("content-type") || "application/octet-stream");
+    res.send(Buffer.from(result));
+  } catch (error) {
+    console.error("❌ Telegram file proxy error:", error);
+    res.status(500).send("Internal Server Error");
+  }
+}
+
 function resolveProxyBotToken(req: Request): string {
   const headerToken = String(req.headers["x-pinai-telegram-bot-token"] || "").trim();
-  if (headerToken && /^[0-9]+:[A-Za-z0-9_-]{20,}$/.test(headerToken)) return headerToken;
+  if (headerToken && /^[1-9][0-9]*:[A-Za-z0-9_-]{20,}$/.test(headerToken)) return headerToken;
   return config.telegram.token;
 }
 
@@ -265,6 +314,7 @@ async function findUserState(chatId: number): Promise<UserState> {
       runtime_provider: string | null;
       runtime_ref: string | null;
       runtime_status: string | null;
+      host_port: number | null;
       gateway_token: string;
     }>(
       `SELECT
@@ -273,6 +323,7 @@ async function findUserState(chatId: number): Promise<UserState> {
         r.runtime_provider,
         r.runtime_ref,
         r.status as runtime_status,
+        r.host_port,
         u.gateway_token
       FROM users u
       LEFT JOIN assistants a ON a.owner_user_id = u.id
@@ -303,10 +354,12 @@ async function findUserState(chatId: number): Promise<UserState> {
         assistantId: row.assistant_id,
         runtimeStatus: row.runtime_status,
         container: {
+          assistant_id: row.assistant_id,
           container_id: row.runtime_ref,
           gateway_token: row.gateway_token,
           assistant_bot_id: row.assistant_bot_id,
           runtime_provider: row.runtime_provider,
+          host_port: row.host_port ?? null,
         },
       };
     }
@@ -315,10 +368,12 @@ async function findUserState(chatId: number): Promise<UserState> {
       phase: "running",
       assistantId: row.assistant_id,
       container: {
+        assistant_id: row.assistant_id,
         container_id: row.runtime_ref,
         gateway_token: row.gateway_token,
         assistant_bot_id: row.assistant_bot_id,
         runtime_provider: row.runtime_provider,
+        host_port: row.host_port ?? null,
       },
     };
   } catch (error) {
@@ -359,15 +414,19 @@ function getAbnormalAssistantId(state: UserState): number | null {
 }
 
 async function forwardToOpenClaw(container: ContainerInfo, update: unknown, source: WebhookSource): Promise<boolean> {
-  const runtime = parseFlyRuntimeRef(container.container_id);
-  if (!runtime?.machineId) return false;
+  const candidateUrls =
+    container.runtime_provider === "docker"
+      ? buildDockerWebhookCandidateUrls(container, source)
+      : buildFlyWebhookCandidateUrls(container, source);
 
-  const hostCandidates = [
-    ...(runtime.privateIp ? [runtime.privateIp] : []),
-    `${runtime.machineId}.vm.${config.fly.appName}.internal`,
-  ];
-  const candidateUrls = buildWebhookCandidateUrls(hostCandidates, source);
+  if (!candidateUrls.length) return false;
+
   let lastError: unknown = null;
+  const assistantWebhookSecret = deriveAssistantWebhookSecret(
+    container.assistant_id,
+    container.gateway_token,
+    config.apiAuthToken,
+  );
 
   for (const webhookUrl of candidateUrls) {
     try {
@@ -375,7 +434,7 @@ async function forwardToOpenClaw(container: ContainerInfo, update: unknown, sour
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Telegram-Bot-Api-Secret-Token": config.telegram.webhookSecret,
+          "X-Telegram-Bot-Api-Secret-Token": assistantWebhookSecret,
           "X-PinAI-Source": source,
         },
         body: JSON.stringify(update),
@@ -399,6 +458,31 @@ async function forwardToOpenClaw(container: ContainerInfo, update: unknown, sour
 
   console.error("❌ Forward failed on all candidate endpoints", lastError);
   return false;
+}
+
+function buildDockerWebhookCandidateUrls(container: ContainerInfo, source: WebhookSource): string[] {
+  const basePort = container.host_port;
+  if (!basePort || basePort <= 0) return [];
+
+  // Convention: gateway = host_port, webhook = host_port + 1, private webhook = host_port + 2
+  const webhookHostPort = source === "private" ? basePort + 2 : basePort + 1;
+  const path = normalizeWebhookPath(
+    source === "private"
+      ? `${normalizeWebhookPath(config.telegramRouter.webhookPath)}/private`
+      : config.telegramRouter.webhookPath,
+  );
+  return [`http://127.0.0.1:${webhookHostPort}${path}`];
+}
+
+function buildFlyWebhookCandidateUrls(container: ContainerInfo, source: WebhookSource): string[] {
+  const runtime = parseFlyRuntimeRef(container.container_id);
+  if (!runtime?.machineId) return [];
+
+  const hostCandidates = [
+    ...(runtime.privateIp ? [runtime.privateIp] : []),
+    `${runtime.machineId}.vm.${config.fly.assistantAppName}.internal`,
+  ];
+  return buildWebhookCandidateUrls(hostCandidates, source);
 }
 
 function buildWebhookCandidateUrls(targetHosts: string[], source: WebhookSource): string[] {

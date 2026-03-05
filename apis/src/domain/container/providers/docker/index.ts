@@ -1,1 +1,1 @@
-export { dockerContainerProvider } from './provider.js';
+export { dockerContainerRuntime } from './provider.js';

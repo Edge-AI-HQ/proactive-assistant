@@ -18,7 +18,6 @@ const BLOCKED_TELEGRAM_METHODS = new Set([
 
 const PASSTHROUGH_TELEGRAM_METHODS = new Set([
   'getWebhookInfo',
-  'getMe',
   'logOut',
   'close'
 ]);
@@ -60,6 +59,10 @@ function installTelegramFetchProxy(api, routerUrl) {
       if (patchedGatewayInit) {
         init = patchedGatewayInit;
       }
+      const patchedLiteLLMInit = await patchLiteLLMVisionStreamOff(input, init, api);
+      if (patchedLiteLLMInit) {
+        init = patchedLiteLLMInit;
+      }
       const rawUrl =
         typeof input === 'string' ? input
         : input instanceof URL ? input.toString()
@@ -68,30 +71,27 @@ function installTelegramFetchProxy(api, routerUrl) {
 
       if (rawUrl) {
         const targetUrl = new URL(rawUrl);
-        const telegramApiPath = extractTelegramApiPath(targetUrl);
-        if (telegramApiPath) {
-          const { methodName, botToken } = telegramApiPath;
-          if (BLOCKED_TELEGRAM_METHODS.has(methodName)) {
-            api.logger.warn(`Blocked Telegram method from OpenClaw: ${methodName}`);
-            return new Response(JSON.stringify({ ok: true, result: true }), {
-              status: 200,
-              headers: { 'Content-Type': 'application/json' },
-            });
-          }
-          if (!PASSTHROUGH_TELEGRAM_METHODS.has(methodName)) {
+        const telegramTarget = extractTelegramTarget(targetUrl);
+        if (telegramTarget) {
+          if (telegramTarget.kind === 'method') {
+            const { methodName, botToken } = telegramTarget;
+            if (BLOCKED_TELEGRAM_METHODS.has(methodName)) {
+              api.logger.warn(`Blocked Telegram method from OpenClaw: ${methodName}`);
+              return new Response(JSON.stringify({ ok: true, result: true }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
+            if (PASSTHROUGH_TELEGRAM_METHODS.has(methodName)) {
+              return await originalFetch(input, init);
+            }
             const proxyUrl = `${normalizedRouter}/api/telegram/${methodName}${targetUrl.search}`;
-            const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : {}));
-            headers.delete('host');
-            headers.delete('authorization');
-            headers.set('X-PinAI-Telegram-Bot-Token', botToken);
-
-            const effectiveInit = {
-              ...(input instanceof Request ? { method: input.method, body: input.body, redirect: input.redirect } : {}),
-              ...init,
-              headers
-            };
+            const effectiveInit = buildProxyInit(input, init, botToken);
             return await originalFetch(proxyUrl, effectiveInit);
           }
+          const proxyUrl = `${normalizedRouter}/api/telegram/file/${telegramTarget.filePath}${targetUrl.search}`;
+          const effectiveInit = buildProxyInit(input, init, telegramTarget.botToken);
+          return await originalFetch(proxyUrl, effectiveInit);
         }
       }
     } catch (error) {
@@ -104,20 +104,41 @@ function installTelegramFetchProxy(api, routerUrl) {
   api.logger.info('Telegram fetch proxy patch installed');
 }
 
-function extractTelegramApiPath(url) {
+function buildProxyInit(input, init, botToken) {
+  const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : {}));
+  headers.delete('host');
+  headers.delete('authorization');
+  headers.set('X-PinAI-Telegram-Bot-Token', botToken);
+  return {
+    ...(input instanceof Request ? { method: input.method, body: input.body, redirect: input.redirect } : {}),
+    ...init,
+    headers,
+  };
+}
+
+function extractTelegramTarget(url) {
   if (url.hostname !== 'api.telegram.org') {
     return null;
   }
-  const match = url.pathname.match(/^\/bot([^/]+)\/([^/?#]+)/);
-  if (!match) {
+  const methodMatch = url.pathname.match(/^\/bot([^/]+)\/([^/?#]+)/);
+  if (methodMatch) {
+    const botToken = methodMatch[1] || '';
+    const methodName = methodMatch[2] || '';
+    if (!botToken || !methodName) {
+      return null;
+    }
+    return { kind: 'method', methodName, botToken };
+  }
+  const fileMatch = url.pathname.match(/^\/file\/bot([^/]+)\/(.+)$/);
+  if (!fileMatch) {
     return null;
   }
-  const botToken = match[1] || '';
-  const methodName = match[2] || '';
-  if (!botToken || !methodName) {
+  const botToken = fileMatch[1] || '';
+  const filePath = fileMatch[2] || '';
+  if (!botToken || !filePath) {
     return null;
   }
-  return { methodName, botToken };
+  return { kind: 'file', filePath, botToken };
 }
 
 async function patchCronAddDeliveryAccountId(input, init, api) {
@@ -228,6 +249,106 @@ async function patchCronAddDeliveryAccountId(input, init, api) {
     headers,
     body: nextBody,
   };
+}
+
+async function patchLiteLLMVisionStreamOff(input, init, api) {
+  const rawUrl =
+    typeof input === 'string' ? input
+    : input instanceof URL ? input.toString()
+    : input instanceof Request ? input.url
+    : '';
+  if (!rawUrl) {
+    return null;
+  }
+  let targetUrl;
+  try {
+    targetUrl = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  if (!isLiteLLMChatCompletions(targetUrl)) {
+    return null;
+  }
+  const method =
+    (init?.method || (input instanceof Request ? input.method : 'GET')).trim().toUpperCase();
+  if (method !== 'POST') {
+    return null;
+  }
+  const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : {}));
+  const contentType = headers.get('content-type')?.toLowerCase() || '';
+  if (!contentType.includes('application/json')) {
+    return null;
+  }
+
+  let bodyText = '';
+  const rawBody = init?.body;
+  if (typeof rawBody === 'string') {
+    bodyText = rawBody;
+  } else if (rawBody instanceof Uint8Array) {
+    bodyText = new TextDecoder().decode(rawBody);
+  } else if (input instanceof Request) {
+    try {
+      bodyText = await input.clone().text();
+    } catch {
+      bodyText = '';
+    }
+  }
+  if (!bodyText) {
+    return null;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch {
+    return null;
+  }
+  if (parsed.stream !== true || !hasImageMessages(parsed.messages)) {
+    return null;
+  }
+  parsed.stream = false;
+  const nextBody = JSON.stringify(parsed);
+  api?.logger.info('[litellm patch] disable stream for vision request');
+  return {
+    ...(input instanceof Request
+      ? { method: input.method, redirect: input.redirect, credentials: input.credentials }
+      : {}),
+    ...init,
+    headers,
+    body: nextBody,
+  };
+}
+
+function isLiteLLMChatCompletions(url) {
+  return /\/(v1\/)?chat\/completions$/.test(url.pathname);
+}
+
+function hasImageMessages(messages) {
+  if (!Array.isArray(messages)) {
+    return false;
+  }
+  for (const message of messages) {
+    if (!isRecord(message)) {
+      continue;
+    }
+    const content = message.content;
+    if (!Array.isArray(content)) {
+      continue;
+    }
+    for (const part of content) {
+      if (!isRecord(part)) {
+        continue;
+      }
+      const type = String(part.type || '').toLowerCase();
+      if (type === 'image_url' || type === 'input_image' || type === 'image') {
+        return true;
+      }
+      if (isRecord(part.image_url) || typeof part.image === 'string') {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function isOpenClawGatewayRpc(url) {

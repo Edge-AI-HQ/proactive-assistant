@@ -1,27 +1,14 @@
 import { getContainerManagerRuntime } from "../../runtime.js";
-import { sendTelegramMessage } from "../../../telegram/notify.js";
-import { readAssistantRuntimeMetadata } from "../../../common/db/index.js";
-import {
-  readSkillsConfigFromRuntimeMetadata,
-  toOpenclawSkillsPayload,
-} from "../../../skills/openclaw_skills.js";
+import type { ContainerManagerConfig } from "../../types.js";
 import type {
-  AssistantRecord,
-  ContainerManagerConfig,
-  ReadAssistantLiteLLMVirtualKey,
-} from "../../types.js";
-import type {
-  AssistantContainerDestroyRef,
-  AssistantContainerGatewayRef,
-  AssistantContainerRuntimeRef,
-  ContainerProvider,
+  AssistantContainerParams,
+  ContainerRef,
+  ContainerRuntime,
+  ContainerState,
   GatewayTarget,
+  ProbeOptions,
 } from "../../contracts.js";
-import {
-  containerNameForAssistant,
-  isAssistantContainerName,
-} from "../../naming.js";
-import { resolveAssistantLiteLLMApiKey as resolveAssistantLiteLLMApiKeyShared } from "../shared/assistant_litellm_key.js";
+import { isAssistantContainerName } from "../../naming.js";
 import {
   destroyMachine,
   getMachine,
@@ -33,6 +20,7 @@ import {
 import {
   formatHostForUrl,
   waitForGatewayHello,
+  waitForHttpReady,
   waitForPort,
 } from "./gateway_probe.js";
 import { ensureFlyOpenclawImageDigestPullable } from "./image_digest_guard.js";
@@ -43,23 +31,29 @@ import {
 } from "./assistant_machine.js";
 import type { FlyMachine } from "./types.js";
 
+// ---------------------------------------------------------------------------
+// Config proxy — lazily reads from the global runtime singleton
+// ---------------------------------------------------------------------------
+
 const config = new Proxy({} as ContainerManagerConfig, {
   get: (_target, prop) =>
     getContainerManagerRuntime().config[prop as keyof ContainerManagerConfig],
 });
 
-const updateAssistant = (id: number, fields: Partial<AssistantRecord>) =>
-  getContainerManagerRuntime().store.updateAssistant(id, fields);
-const readAssistantLiteLLMVirtualKey: ReadAssistantLiteLLMVirtualKey = (
-  assistant,
-) => getContainerManagerRuntime().readAssistantLiteLLMVirtualKey(assistant);
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
 const FLY_REF_PREFIX = "fly:";
-// 20GB 加密 volume 格式化约需 5–6 分钟，超时需覆盖此时间
-const FLY_MACHINE_WAIT_TIMEOUT_MS = 360_000; // 6 分钟
+/** 20GB encrypted volume formatting takes ~5-6 min; extend wait accordingly. */
+const FLY_MACHINE_WAIT_TIMEOUT_MS = 360_000;
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
+
+// ---------------------------------------------------------------------------
+// Fly ref encoding / decoding
+// ---------------------------------------------------------------------------
 
 const parseFlyContainerRef = (
   value: string | null | undefined,
@@ -88,70 +82,54 @@ const encodeFlyContainerRef = (
     ? `${FLY_REF_PREFIX}${machineId}|${privateIp}`
     : `${FLY_REF_PREFIX}${machineId}`;
 
-const resolveAssistantLiteLLMApiKey = (
-  assistant: AssistantContainerRuntimeRef,
-): string | null =>
-  resolveAssistantLiteLLMApiKeyShared(
-    assistant,
-    config.litellm.enabled,
-    readAssistantLiteLLMVirtualKey,
-  );
+// ---------------------------------------------------------------------------
+// Helpers: FlyMachine → ContainerRef conversion
+// ---------------------------------------------------------------------------
 
-const toGatewayTarget = (host: string): GatewayTarget => {
-  const urlHost = formatHostForUrl(host);
-  const port = config.openclaw.gatewayPort;
-  return {
-    host,
-    port,
-    httpBaseUrl: `http://${urlHost}:${port}`,
-    wsBaseUrl: `ws://${urlHost}:${port}`,
-  };
-};
-
-const resolveFromMachine = (
-  machineId: string,
-  privateIp?: string,
-): GatewayTarget => {
-  const host = privateIp || `${machineId}.vm.${config.fly.appName}.internal`;
-  return toGatewayTarget(host);
-};
-
-const resolveFlyGatewayTargetForAssistant = (
-  assistant: AssistantContainerGatewayRef,
-): GatewayTarget => {
-  const parsed = parseFlyContainerRef(assistant.container_id);
-  if (!parsed?.machineId) {
-    throw new Error(
-      `Missing Fly machine ID for assistant ${assistant.assistant_bot_id}`,
-    );
-  }
-  return resolveFromMachine(parsed.machineId, parsed.privateIp);
-};
-
-const waitForMachineState = async (
-  machineId: string,
-  desired: Set<string>,
-  timeoutMs = 45_000,
-): Promise<FlyMachine> => {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const machine = await getMachine(machineId);
-    const state = (machine.state || "").toLowerCase();
-    if (desired.has(state)) return machine;
-    if (state === "destroyed") return machine;
-    await sleep(1000);
-  }
-  return getMachine(machineId);
-};
-
-const normalizeMachineState = (machine: FlyMachine): string => {
+const normalizeMachineState = (machine: FlyMachine): ContainerState => {
   const state = (machine.state || "").toLowerCase();
   if (state === "started" || state === "running") return "running";
   if (state === "stopped") return "stopped";
   if (state === "created" || state === "starting") return "creating";
   if (state === "destroyed") return "missing";
-  return state || "unknown";
+  return (state || "unknown") as ContainerState;
 };
+
+const machineToContainerRef = (machine: FlyMachine): ContainerRef => {
+  const metadata: Record<string, string> = {};
+  if (machine.private_ip) metadata.privateIp = machine.private_ip;
+  metadata.machineId = machine.id;
+
+  // Preserve init.exec so needsRecreation can check it without re-fetching
+  const initExec = machine.config?.init?.exec;
+  if (Array.isArray(initExec) && initExec.length > 0) {
+    metadata.initExec = JSON.stringify(initExec);
+  }
+
+  const resources: ContainerRef["resources"] = {};
+  if (machine.config?.guest?.memory_mb != null) {
+    resources.memoryMb = machine.config.guest.memory_mb;
+  }
+  if (machine.config?.guest?.cpus != null) {
+    resources.cpus = machine.config.guest.cpus;
+  }
+
+  return {
+    id: encodeFlyContainerRef(machine.id, machine.private_ip),
+    name: machine.name?.trim() || "",
+    state: normalizeMachineState(machine),
+    env: machine.config?.env,
+    image: machine.config?.image?.trim(),
+    resources,
+    createdAt: machine.created_at,
+    updatedAt: machine.updated_at,
+    metadata,
+  };
+};
+
+// ---------------------------------------------------------------------------
+// Internal: machine resolution
+// ---------------------------------------------------------------------------
 
 const resolveMachineByRef = async (
   containerId: string | null | undefined,
@@ -172,364 +150,235 @@ const resolveMachineByRef = async (
   if (!fallbackNameSet.size) return null;
 
   const machines = await listMachines();
-  const byName = machines.find(
+  return machines.find(
     (machine) => machine.name && fallbackNameSet.has(machine.name),
-  );
-  return byName ?? null;
+  ) ?? null;
 };
 
-const resolveAssistantMachineName = (
-  assistant: AssistantContainerRuntimeRef,
-): string => {
-  return (
-    assistant.container_name?.trim() ||
-    containerNameForAssistant(assistant.assistant_bot_id)
-  );
-};
-
-const resolveAssistantMachine = async (
-  assistant: AssistantContainerRuntimeRef,
-): Promise<FlyMachine | null> => {
-  const fallbackNames = Array.from(
-    new Set(
-      [
-        assistant.container_name?.trim(),
-        containerNameForAssistant(assistant.assistant_bot_id),
-      ].filter((value): value is string => Boolean(value)),
-    ),
-  );
-  return resolveMachineByRef(assistant.container_id, fallbackNames);
-};
-
-const createAssistantMachine = async (
-  assistant: AssistantContainerRuntimeRef,
-  gatewayToken: string,
-  liteLlmApiKey = resolveAssistantLiteLLMApiKey(assistant),
-  skillsConfig?: Record<string, unknown> | null,
+const waitForMachineState = async (
+  machineId: string,
+  desired: Set<string>,
+  timeoutMs = 45_000,
 ): Promise<FlyMachine> => {
-  // Quick Start 模式下 assistant_bot_id 为 NULL，使用 assistant.id 作为标识
-  const botIdForContainer = assistant.assistant_bot_id ?? assistant.id;
-
-  return provisionAssistantMachine({
-    assistantBotId: botIdForContainer,
-    machineName: resolveAssistantMachineName(assistant),
-    gatewayToken,
-    assistantBotToken: assistant.assistant_bot_token,
-    liteLlmApiKey,
-    ...(skillsConfig !== undefined ? { skillsConfig } : {}),
-  });
-};
-
-const persistAssistantMachineRef = async (
-  assistantId: number,
-  fallbackName: string,
-  machine: FlyMachine,
-): Promise<string> => {
-  const encoded = encodeFlyContainerRef(machine.id, machine.private_ip);
-  await updateAssistant(assistantId, {
-    container_id: encoded,
-    container_name: machine.name?.trim() || fallbackName,
-  });
-  return encoded;
-};
-
-const ensureAssistantInFlight = new Map<
-  number,
-  Promise<{ containerId: string; ready: boolean }>
->();
-
-const runEnsureAssistantMachine = async (
-  assistant: AssistantContainerRuntimeRef,
-  gatewayToken: string,
-): Promise<{ containerId: string; ready: boolean }> => {
-  const normalizedGatewayToken = gatewayToken.trim();
-  if (!normalizedGatewayToken) {
-    throw new Error(
-      `Assistant ${assistant.assistant_bot_id} missing gateway_token.`,
-    );
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const machine = await getMachine(machineId);
+    const state = (machine.state || "").toLowerCase();
+    if (desired.has(state)) return machine;
+    if (state === "destroyed") return machine;
+    await sleep(1000);
   }
+  return getMachine(machineId);
+};
 
-  const desiredLiteLLMApiKey = resolveAssistantLiteLLMApiKey(assistant);
-  const runtimeMetadata = await readAssistantRuntimeMetadata(assistant.id);
-  const desiredSkillsConfig = toOpenclawSkillsPayload(
-    readSkillsConfigFromRuntimeMetadata(runtimeMetadata),
-  );
-  await ensureFlyOpenclawImageDigestPullable();
+// ---------------------------------------------------------------------------
+// Gateway target resolution
+// ---------------------------------------------------------------------------
 
-  const fallbackName = resolveAssistantMachineName(assistant);
-  let machine = await resolveAssistantMachine(assistant);
+const toGatewayTarget = (host: string, port: number): GatewayTarget => {
+  const urlHost = formatHostForUrl(host);
+  return {
+    host,
+    port,
+    httpBaseUrl: `http://${urlHost}:${port}`,
+    wsBaseUrl: `ws://${urlHost}:${port}`,
+  };
+};
 
-  if (machine) {
-    const previous = machine;
-    machine = await getMachine(machine.id);
-    if (!machine.updated_at && previous.updated_at) {
-      machine.updated_at = previous.updated_at;
+const resolveHostFromRef = (ref: ContainerRef): string => {
+  // Prefer metadata (set when ContainerRef comes from listContainers/findContainer)
+  const privateIp = ref.metadata.privateIp;
+  const machineId = ref.metadata.machineId;
+  if (privateIp) return privateIp;
+  if (machineId)
+    return `${machineId}.vm.${config.fly.assistantAppName}.internal`;
+
+  // Fallback: parse from ref.id (e.g. when built from a DB record by the orchestrator)
+  const parsed = parseFlyContainerRef(ref.id);
+  if (parsed?.privateIp) return parsed.privateIp;
+  if (parsed?.machineId)
+    return `${parsed.machineId}.vm.${config.fly.assistantAppName}.internal`;
+
+  throw new Error(`Cannot resolve Fly host for container ${ref.id}`);
+};
+
+// ---------------------------------------------------------------------------
+// ContainerRuntime implementation
+// ---------------------------------------------------------------------------
+
+export const flyContainerRuntime: ContainerRuntime = {
+  name: "fly",
+
+  async prepare(): Promise<void> {
+    await ensureFlyOpenclawImageDigestPullable();
+  },
+
+  async findContainer(
+    currentRef: string | null,
+    fallbackNames: string[],
+  ): Promise<ContainerRef | null> {
+    const machine = await resolveMachineByRef(currentRef, fallbackNames);
+    if (!machine) return null;
+
+    // Re-fetch to get latest state (listMachines may return stale data)
+    const fresh = await getMachine(machine.id);
+    if (!fresh.updated_at && machine.updated_at) {
+      fresh.updated_at = machine.updated_at;
     }
-    if (!machine.created_at && previous.created_at) {
-      machine.created_at = previous.created_at;
+    if (!fresh.created_at && machine.created_at) {
+      fresh.created_at = machine.created_at;
     }
+    return machineToContainerRef(fresh);
+  },
+
+  async createContainer(
+    params: AssistantContainerParams,
+  ): Promise<ContainerRef> {
+    const machine = await provisionAssistantMachine({
+      assistantBotId: params.assistantBotId,
+      machineName: params.containerName,
+      gatewayToken: params.gatewayToken,
+      assistantBotToken: params.assistantBotToken,
+      liteLlmApiKey: params.liteLlmApiKey,
+      ...(params.skillsConfig ? { skillsConfig: params.skillsConfig } : {}),
+    });
+    return machineToContainerRef(machine);
+  },
+
+  async startContainer(containerId: string): Promise<ContainerRef> {
+    const parsed = parseFlyContainerRef(containerId);
+    if (!parsed?.machineId) {
+      throw new Error(`Invalid Fly container ref: ${containerId}`);
+    }
+
+    await startMachine(parsed.machineId);
+
+    const machine = await waitForMachineState(
+      parsed.machineId,
+      new Set(["started", "running", "stopped", "destroyed"]),
+      FLY_MACHINE_WAIT_TIMEOUT_MS,
+    );
+    return machineToContainerRef(machine);
+  },
+
+  async stopContainer(containerId: string): Promise<void> {
+    const parsed = parseFlyContainerRef(containerId);
+    if (!parsed?.machineId) {
+      throw new Error(`Invalid Fly container ref: ${containerId}`);
+    }
+    try {
+      await stopMachine(parsed.machineId);
+    } catch (error: unknown) {
+      if (!isNotFoundError(error)) throw error;
+    }
+  },
+
+  async destroyContainer(containerId: string): Promise<void> {
+    const parsed = parseFlyContainerRef(containerId);
+    if (!parsed?.machineId) {
+      throw new Error(`Invalid Fly container ref: ${containerId}`);
+    }
+    try {
+      await destroyMachine(parsed.machineId);
+    } catch (error: unknown) {
+      if (!isNotFoundError(error)) throw error;
+    }
+  },
+
+  async listContainers(): Promise<ContainerRef[]> {
+    const machines = await listMachines();
+    return machines.map(machineToContainerRef);
+  },
+
+  resolveGatewayTarget(ref: ContainerRef): GatewayTarget {
+    const host = resolveHostFromRef(ref);
+    return toGatewayTarget(host, config.openclaw.gatewayPort);
+  },
+
+  async probeReady(
+    ref: ContainerRef,
+    options: ProbeOptions,
+  ): Promise<boolean> {
+    const host = resolveHostFromRef(ref);
+    const { timeoutMs, gatewayToken, gatewayPort, additionalPorts, httpProbes } = options;
+
+    const portReady = await waitForPort(host, gatewayPort, timeoutMs);
+    if (!portReady) return false;
+
+    if (gatewayToken) {
+      const gatewayOk = await waitForGatewayHello(
+        host,
+        gatewayPort,
+        gatewayToken,
+        timeoutMs,
+      );
+      if (!gatewayOk) return false;
+    }
+
+    if (additionalPorts?.length) {
+      for (const port of additionalPorts) {
+        const ok = await waitForPort(host, port, timeoutMs);
+        if (!ok) return false;
+      }
+    }
+
+    if (httpProbes?.length) {
+      for (const probe of httpProbes) {
+        const ok = await waitForHttpReady(host, probe.port, probe.path, timeoutMs);
+        if (!ok) return false;
+      }
+    }
+
+    return true;
+  },
+
+  async needsRecreation(
+    ref: ContainerRef,
+    params: AssistantContainerParams,
+  ): Promise<boolean> {
+    // Reconstruct a minimal FlyMachine from ContainerRef to reuse
+    // shouldRecreateAssistantMachine without an extra Fly API call.
+    const initExec = ref.metadata.initExec
+      ? (JSON.parse(ref.metadata.initExec) as string[])
+      : undefined;
+
+    const machineConfig: FlyMachine["config"] = {
+      guest: {
+        memory_mb: ref.resources?.memoryMb ?? 0,
+        cpus: ref.resources?.cpus ?? 0,
+      },
+    };
+    if (ref.image != null) machineConfig.image = ref.image;
+    if (ref.env != null) machineConfig.env = ref.env;
+    if (initExec) machineConfig.init = { exec: initExec };
+
+    const machine: FlyMachine = {
+      id: ref.metadata.machineId || "",
+      config: machineConfig,
+    };
+    if (ref.name) machine.name = ref.name;
+    if (ref.state) machine.state = ref.state;
+    if (ref.metadata.privateIp) machine.private_ip = ref.metadata.privateIp;
+    if (ref.createdAt) machine.created_at = ref.createdAt;
+    if (ref.updatedAt) machine.updated_at = ref.updatedAt;
 
     let latestAppDeployAtMs: number | null = null;
     try {
       latestAppDeployAtMs = await getLatestAppDeployTimestampMs();
     } catch (error: unknown) {
-      console.warn("Failed to resolve latest app deployment timestamp", error);
+      console.warn(
+        "Failed to resolve latest app deployment timestamp",
+        error,
+      );
     }
 
-    if (
-      shouldRecreateAssistantMachine(
-        machine,
-        latestAppDeployAtMs,
-        normalizedGatewayToken,
-        assistant.assistant_bot_token,
-        desiredLiteLLMApiKey,
-        desiredSkillsConfig,
-      )
-    ) {
-      await destroyMachine(machine.id);
-      machine = null;
-      await updateAssistant(assistant.id, {
-        container_status: "creating",
-        container_id: "",
-        container_name: fallbackName,
-      });
-    }
-  }
-
-  if (!machine) {
-    machine = await createAssistantMachine(
-      assistant,
-      normalizedGatewayToken,
-      desiredLiteLLMApiKey,
-      desiredSkillsConfig,
+    return shouldRecreateAssistantMachine(
+      machine,
+      latestAppDeployAtMs,
+      params.gatewayToken,
+      params.assistantBotToken,
+      params.liteLlmApiKey,
+      params.skillsConfig,
     );
-  }
-
-  let currentState = normalizeMachineState(machine);
-  if (currentState === "missing") {
-    await updateAssistant(assistant.id, {
-      container_status: "creating",
-      container_id: "",
-      container_name: fallbackName,
-    });
-    machine = await createAssistantMachine(
-      assistant,
-      normalizedGatewayToken,
-      desiredLiteLLMApiKey,
-      desiredSkillsConfig,
-    );
-    currentState = normalizeMachineState(machine);
-  }
-
-  if (currentState !== "running") {
-    await startMachine(machine.id);
-  }
-
-  const startedMachine = await waitForMachineState(
-    machine.id,
-    new Set(["started", "running", "stopped", "destroyed"]),
-    FLY_MACHINE_WAIT_TIMEOUT_MS,
-  );
-  const containerId = await persistAssistantMachineRef(
-    assistant.id,
-    fallbackName,
-    startedMachine,
-  );
-  const status = normalizeMachineState(startedMachine);
-
-  // 乐观更新：machine 已启动，先标记为 creating
-  await updateAssistant(assistant.id, {
-    container_status: status === "running" ? "creating" : status,
-    container_name: startedMachine.name?.trim() || fallbackName,
-  });
-
-  // 异步探测 gateway，成功后更新为 running
-  const probeInBackground = status === "running" && config.fly.gatewayProbe;
-  if (probeInBackground) {
-    void (async () => {
-      try {
-        const target = resolveFromMachine(
-          startedMachine.id,
-          startedMachine.private_ip,
-        );
-        const probeTimeout = Math.max(
-          config.fly.gatewayProbeTimeoutMs,
-          600_000,
-        );
-        const portReady = await waitForPort(
-          target.host,
-          target.port,
-          probeTimeout,
-        );
-        const gatewayOk = portReady
-          ? await waitForGatewayHello(
-              target.host,
-              target.port,
-              normalizedGatewayToken,
-              probeTimeout,
-            )
-          : false;
-
-        // Also wait for the Telegram webhook port (8787) to be reachable
-        const webhookPort = Number(
-          process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT || "8787",
-        );
-        const webhookReady = gatewayOk
-          ? await waitForPort(target.host, webhookPort, 120_000)
-          : false;
-        const ready = gatewayOk && webhookReady;
-
-        await updateAssistant(assistant.id, {
-          container_status: ready ? "running" : "error",
-        });
-
-        if (ready && assistant.owner_telegram_user_id) {
-          console.log(
-            `[fly-probe] Fully ready for assistant ${assistant.id}, notifying user ${assistant.owner_telegram_user_id}`,
-          );
-          await sendTelegramMessage(
-            Number(assistant.owner_telegram_user_id),
-            `✅ <b>Your assistant is ready!</b>\n\nYou can start chatting now.`,
-          ).catch((e) =>
-            console.warn(
-              `[fly-probe] notify failed for assistant ${assistant.id}`,
-              e,
-            ),
-          );
-        }
-      } catch (err) {
-        console.error(
-          `Async gateway probe failed for assistant ${assistant.id}`,
-          err,
-        );
-        await updateAssistant(assistant.id, {
-          container_status: "error",
-        });
-      }
-    })();
-  }
-
-  // When probe is running in background, report not-ready so callers
-  // don't prematurely tell the user the container is available.
-  return { containerId, ready: status === "running" && !probeInBackground };
-};
-
-const ensureAssistantFlyContainer = async (
-  assistant: AssistantContainerRuntimeRef,
-  gatewayToken: string,
-): Promise<{ containerId: string; ready: boolean }> => {
-  const key = assistant.id;
-  const existing = ensureAssistantInFlight.get(key);
-  if (existing) return existing;
-
-  const job = runEnsureAssistantMachine(assistant, gatewayToken).finally(() => {
-    if (ensureAssistantInFlight.get(key) === job) {
-      ensureAssistantInFlight.delete(key);
-    }
-  });
-
-  ensureAssistantInFlight.set(key, job);
-  return job;
-};
-
-const destroyAssistantFlyContainer = async (
-  assistant: AssistantContainerDestroyRef,
-): Promise<{ deleted: boolean }> => {
-  // Quick Start 模式下 assistant_bot_id 为 NULL，使用 assistant.id 作为标识
-  const botIdForContainer = assistant.assistant_bot_id ?? assistant.id;
-
-  const fallbackName =
-    assistant.container_name?.trim() ||
-    containerNameForAssistant(botIdForContainer);
-  const machine = await resolveMachineByRef(assistant.container_id, [
-    fallbackName,
-    containerNameForAssistant(botIdForContainer),
-  ]);
-
-  if (!machine) {
-    await updateAssistant(assistant.id, {
-      container_status: "missing",
-      container_id: "",
-      container_name: fallbackName,
-    });
-    return { deleted: false };
-  }
-
-  try {
-    await destroyMachine(machine.id);
-  } catch (error: unknown) {
-    if (!isNotFoundError(error)) {
-      throw error;
-    }
-  }
-
-  await updateAssistant(assistant.id, {
-    container_status: "missing",
-    container_id: "",
-    container_name: fallbackName,
-  });
-
-  return { deleted: true };
-};
-
-const stopAssistantFlyContainer = async (
-  assistant: AssistantContainerDestroyRef,
-): Promise<{ stopped: boolean }> => {
-  // Quick Start 模式下 assistant_bot_id 为 NULL，使用 assistant.id 作为标识
-  const botIdForContainer = assistant.assistant_bot_id ?? assistant.id;
-
-  const fallbackName =
-    assistant.container_name?.trim() ||
-    containerNameForAssistant(botIdForContainer);
-  const machine = await resolveMachineByRef(assistant.container_id, [
-    fallbackName,
-    containerNameForAssistant(botIdForContainer),
-  ]);
-
-  if (!machine) {
-    await updateAssistant(assistant.id, {
-      container_status: "missing",
-      container_id: "",
-      container_name: fallbackName,
-    });
-    return { stopped: false };
-  }
-
-  const state = normalizeMachineState(machine);
-  if (state === "stopped") {
-    await updateAssistant(assistant.id, { container_status: "stopped" });
-    return { stopped: false };
-  }
-
-  try {
-    await stopMachine(machine.id);
-  } catch (error: unknown) {
-    if (!isNotFoundError(error)) {
-      throw error;
-    }
-    await updateAssistant(assistant.id, {
-      container_status: "missing",
-      container_id: "",
-      container_name: fallbackName,
-    });
-    return { stopped: false };
-  }
-
-  await updateAssistant(assistant.id, {
-    container_status: "stopped",
-    container_name: fallbackName,
-  });
-  return { stopped: true };
-};
-
-const prepareFlyRuntime = async (): Promise<void> => {
-  await ensureFlyOpenclawImageDigestPullable();
-};
-
-export const flyContainerProvider: ContainerProvider = {
-  prepareRuntime: prepareFlyRuntime,
-  ensureAssistantContainer: ensureAssistantFlyContainer,
-  stopAssistantContainer: stopAssistantFlyContainer,
-  destroyAssistantContainer: destroyAssistantFlyContainer,
-  resolveGatewayTargetForAssistant: resolveFlyGatewayTargetForAssistant,
+  },
 };

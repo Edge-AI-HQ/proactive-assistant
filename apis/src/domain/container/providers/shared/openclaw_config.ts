@@ -25,50 +25,63 @@ export const buildGatewayConfigSection = (
   context: OpenclawConfigContext,
   gatewayToken: string,
   bind: GatewayBindMode,
-): UnknownRecord => ({
-  mode: "local",
-  port: context.openclaw.gatewayPort,
-  bind,
-  auth: {
-    mode: "token",
-    token: gatewayToken,
-  },
-  controlUi: {
-    allowInsecureAuth: true,
-  },
-  http: {
-    endpoints: {
-      chatCompletions: { enabled: true },
-    },
-  },
-});
-
-export const buildTtsConfigSection = (
-  context: OpenclawConfigContext,
+  controlOrigin?: string,
 ): UnknownRecord => {
-  const base: UnknownRecord = {
-    auto: "off",
-    provider: "elevenlabs",
+  const controlUi: UnknownRecord = {
+    allowInsecureAuth: true,
+    // Disable device-identity / pairing checks — our APIs layer already
+    // authenticates dashboard sessions before proxying to the gateway.
+    dangerouslyDisableDeviceAuth: true,
   };
 
-  const apiKey = context.elevenLabs.apiKey.trim();
-  if (!apiKey) return base;
-
-  const elevenlabs: UnknownRecord = { apiKey };
-  const baseUrl = context.elevenLabs.baseUrl.trim();
-  if (baseUrl) {
-    elevenlabs.baseUrl = baseUrl;
+  // Allow the APIs proxy origin so the Control UI accepts requests forwarded
+  // through the /gateway/.../proxy route regardless of bind mode.
+  if (controlOrigin) {
+    controlUi.allowedOrigins = [controlOrigin];
   }
-  base.elevenlabs = elevenlabs;
-  return base;
+
+  // Non-loopback (LAN) binding requires explicit origin policy for Control UI.
+  // Docker containers bind to 0.0.0.0 so the host can reach the gateway via
+  // port mapping — use the Host-header fallback to avoid enumerating origins.
+  if (bind === "lan") {
+    controlUi.dangerouslyAllowHostHeaderOriginFallback = true;
+  }
+
+  // Trust the APIs reverse proxy so the gateway accepts forwarded headers
+  // and treats proxied connections as local.
+  const trustedProxies =
+    bind === "loopback" ? ["127.0.0.0/8"] : ["0.0.0.0/0"];
+
+  return {
+    mode: "local",
+    port: context.openclaw.gatewayPort,
+    bind,
+    trustedProxies,
+    auth: {
+      mode: "token",
+      token: gatewayToken,
+    },
+    controlUi,
+    http: {
+      endpoints: {
+        chatCompletions: { enabled: true },
+      },
+    },
+  };
+};
+
+export const buildTtsConfigSection = (
+  _context: OpenclawConfigContext,
+): UnknownRecord => {
+  void _context;
+  return { auto: "off" };
 };
 
 export const buildTalkConfigSection = (
-  context: OpenclawConfigContext,
+  _context: OpenclawConfigContext,
 ): UnknownRecord | null => {
-  const apiKey = context.elevenLabs.apiKey.trim();
-  if (!apiKey) return null;
-  return { apiKey };
+  void _context;
+  return null;
 };
 
 export const buildTelegramChannelConfigSection = (
@@ -87,7 +100,10 @@ export const buildTelegramChannelConfigSection = (
         requireMention: true,
       },
     },
-    streaming: "partial",
+    // LiteLLM + vision providers can emit non-standard streaming chunks
+    // (e.g. missing id), which breaks OpenClaw mid-stream handling.
+    // Use non-streaming mode to keep Telegram image/file replies stable.
+    streaming: "off",
     actions: {
       sendMessage: true,
       deleteMessage: false,
@@ -152,7 +168,7 @@ interface BuildAssistantOpenclawConfigOptions {
   gatewayToken: string;
   gatewayBind: GatewayBindMode;
   assistantBotToken?: string | null;
-  publicBotToken?: string | null;
+  quickStartSyntheticBotToken?: string | null;
   liteLlmApiKey?: string | null;
   includeTelegramPlugin?: boolean;
   telegramWebhookMode?: boolean;
@@ -163,6 +179,7 @@ interface BuildAssistantOpenclawConfigOptions {
   telegramWebhookPort?: number;
   telegramPrivateWebhookPort?: number;
   telegramRouterPluginPath?: string;
+  controlOrigin?: string;
   skillsConfig?: UnknownRecord | null;
 }
 
@@ -200,7 +217,9 @@ export const buildAssistantOpenclawConfig = (
   }
 
   const normalizedAssistantBotToken = (options.assistantBotToken || "").trim();
-  const normalizedPublicBotToken = (options.publicBotToken || "").trim();
+  const normalizedQuickStartSyntheticBotToken = (
+    options.quickStartSyntheticBotToken || ""
+  ).trim();
   const normalizedLiteLLMApiKey = (options.liteLlmApiKey || "").trim();
   if (context.litellm.enabled && !normalizedLiteLLMApiKey) {
     throw new Error(
@@ -213,6 +232,7 @@ export const buildAssistantOpenclawConfig = (
       context,
       normalizedGatewayToken,
       options.gatewayBind,
+      options.controlOrigin?.trim() || undefined,
     ),
     messages: {
       tts: buildTtsConfigSection(context),
@@ -233,9 +253,8 @@ export const buildAssistantOpenclawConfig = (
     next.agents = liteLlmSections.agents;
   }
 
-  const skillsConfig = options.skillsConfig;
-  if (skillsConfig && Object.keys(skillsConfig).length > 0) {
-    next.skills = skillsConfig;
+  if (options.skillsConfig && Object.keys(options.skillsConfig).length > 0) {
+    next.skills = options.skillsConfig;
   }
 
   const baseWebhookConfig: TelegramWebhookConfig = { enabled: true };
@@ -270,35 +289,21 @@ export const buildAssistantOpenclawConfig = (
       baseWebhookConfig.port = options.telegramWebhookPort;
     }
 
-    if (normalizedPublicBotToken && normalizedAssistantBotToken) {
-      const accounts: Record<string, UnknownRecord> = {};
-      accounts.default = buildTelegramChannelConfigSection(
-        normalizedPublicBotToken,
-        baseWebhookConfig,
-      );
+    // Assistant-scoped token only. Platform-wide Telegram bot credentials
+    // must never be injected into user container config.
+    if (normalizedAssistantBotToken) {
       const privateWebhookUrl = toPrivateWebhookUrl(baseWebhookConfig.url);
-      accounts.private = buildTelegramChannelConfigSection(
-        normalizedAssistantBotToken,
-        withWebhookConfig(baseWebhookConfig, {
-          ...(privateWebhookUrl ? { url: privateWebhookUrl } : {}),
-          path: `${normalizedWebhookPath}/private`,
-          ...(typeof normalizedPrivateWebhookPort === "number"
-            ? { port: normalizedPrivateWebhookPort }
-            : {}),
-        }),
-      );
-
       next.channels = {
-        telegram: {
-          enabled: true,
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          groupPolicy: "allowlist",
-          accounts,
-        },
-      };
-      next.session = {
-        dmScope: "per-account-channel-peer",
+        telegram: buildTelegramChannelConfigSection(
+          normalizedAssistantBotToken,
+          withWebhookConfig(baseWebhookConfig, {
+            ...(privateWebhookUrl ? { url: privateWebhookUrl } : {}),
+            path: `${normalizedWebhookPath}/private`,
+            ...(typeof normalizedPrivateWebhookPort === "number"
+              ? { port: normalizedPrivateWebhookPort }
+              : {}),
+          }),
+        ),
       };
     }
   }
@@ -329,33 +334,20 @@ export const buildAssistantOpenclawConfig = (
         telegramWebhookConfig,
       ),
     };
-  } else if (!next.channels && options.telegramWebhookMode) {
-    // Quick Start mode: no dedicated bot token, but OpenClaw Doctor will
-    // auto-enable Telegram via TELEGRAM_BOT_TOKEN env. We still need to
-    // inject webhook params so it listens on the webhook port instead of
-    // falling back to polling (getUpdates).
-    const telegramChannel: UnknownRecord = {
-      enabled: true,
-      dmPolicy: "open",
-      allowFrom: ["*"],
-      groupPolicy: "allowlist",
+  } else if (
+    !next.channels &&
+    options.telegramWebhookMode &&
+    normalizedQuickStartSyntheticBotToken
+  ) {
+    // Quick Start mode (no dedicated assistant token): enable Telegram channel
+    // with a non-sensitive synthetic token. Outbound Telegram requests are
+    // proxied by telegram-router-proxy and authenticated by APIs.
+    next.channels = {
+      telegram: buildTelegramChannelConfigSection(
+        normalizedQuickStartSyntheticBotToken,
+        baseWebhookConfig,
+      ),
     };
-    const webhookMapping: [string, string, unknown][] = [
-      ["webhookUrl", "url", options.telegramWebhookUrl],
-      ["webhookSecret", "secret", options.telegramWebhookSecret],
-      ["webhookPath", "path", options.telegramWebhookPath],
-      ["webhookHost", "host", options.telegramWebhookHost],
-      ["webhookPort", "port", options.telegramWebhookPort],
-    ];
-    for (const [configKey, _label, value] of webhookMapping) {
-      const present =
-        (typeof value === "string" && value.trim() !== "") ||
-        typeof value === "number";
-      if (present) {
-        telegramChannel[configKey] = value;
-      }
-    }
-    next.channels = { telegram: telegramChannel };
   }
 
   // Plugin config is independent of assistantBotToken — OpenClaw's Doctor

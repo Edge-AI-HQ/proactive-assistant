@@ -357,7 +357,7 @@ export const registerVncWebSocketProxy = (server: Server): void => {
       );
 
       if (!result.rows.length) {
-        console.warn(`[vnc-ws-proxy] Invalid or expired token: ${token}`);
+        console.warn("[vnc-ws-proxy] Invalid or expired token");
         socket.destroy();
         return;
       }
@@ -369,14 +369,14 @@ export const registerVncWebSocketProxy = (server: Server): void => {
       }
 
       if (new Date() > record.expires_at) {
-        console.warn(`[vnc-ws-proxy] Expired token: ${token}`);
+        console.warn("[vnc-ws-proxy] Expired token");
         socket.destroy();
         return;
       }
 
       const ipv6 = record.runtime_ref?.split("|")[1];
       if (!ipv6) {
-        console.error(`[vnc-ws-proxy] No IPv6 found for token: ${token}`);
+        console.error("[vnc-ws-proxy] No IPv6 found for token");
         socket.destroy();
         return;
       }
