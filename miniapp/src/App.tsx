@@ -130,24 +130,36 @@ const App = () => {
     
     if (initData) {
       console.log('[MiniApp] ✓ Using Telegram initData for bootstrap');
-      console.log('[MiniApp] Calling /api/mini/bootstrap with init_data:', {
-        length: initData.length,
-        first50: initData.substring(0, 50),
+      
+      const requestBody = { init_data: initData };
+      console.log('[MiniApp] Preparing bootstrap request:', {
+        url: '/api/mini/bootstrap',
+        method: 'POST',
+        bodyKeys: Object.keys(requestBody),
+        initDataLength: initData.length,
+        initDataPreview: initData.substring(0, 50) + '...',
       });
       
-      const payload = await safeFetch<StatePayload>("/api/mini/bootstrap", {
-        method: "POST",
-        body: JSON.stringify({ init_data: initData }),
-      });
-      
-      console.log('[MiniApp] Bootstrap response:', {
-        hasAssistant: payload.assistant.exists,
-        hasSubscription: payload.subscription.active,
-        planId: payload.subscription.plan_id,
-      });
-      
-      hydrateState(payload);
-      return;
+      try {
+        const payload = await safeFetch<StatePayload>("/api/mini/bootstrap", {
+          method: "POST",
+          body: JSON.stringify(requestBody),
+        });
+        
+        console.log('[MiniApp] ✓ Bootstrap SUCCESS:', {
+          hasAssistant: payload.assistant.exists,
+          assistantId: payload.assistant.id,
+          hasSubscription: payload.subscription.active,
+          planId: payload.subscription.plan_id,
+          subscriptionStatus: payload.subscription.status,
+        });
+        
+        hydrateState(payload);
+        return;
+      } catch (error) {
+        console.error('[MiniApp] ✗ Bootstrap FAILED:', error);
+        throw error;
+      }
     }
 
     console.warn('[MiniApp] ✗ No initData available');
