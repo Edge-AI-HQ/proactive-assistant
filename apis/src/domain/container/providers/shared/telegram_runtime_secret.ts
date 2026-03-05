@@ -8,17 +8,15 @@ export const deriveAssistantWebhookSecret = (
   gatewayToken: string,
   apiInternalToken: string | null | undefined,
 ): string => {
-  const normalizedAssistantBotId = Number.isFinite(assistantBotId)
-    ? String(assistantBotId)
-    : "0";
+  void assistantBotId;
   const normalizedGatewayToken = (gatewayToken || "").trim();
   const normalizedApiInternalToken = (apiInternalToken || "").trim();
   const secretSalt =
     normalizedApiInternalToken ||
-    `pinai-fallback-${normalizedAssistantBotId}-${normalizedGatewayToken.slice(0, 8)}`;
+    `pinai-fallback-${normalizedGatewayToken.slice(0, 8)}`;
 
   return crypto
     .createHmac("sha256", secretSalt)
-    .update(`${normalizedAssistantBotId}:${normalizedGatewayToken}`)
+    .update(normalizedGatewayToken)
     .digest("hex");
 };
