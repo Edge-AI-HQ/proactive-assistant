@@ -370,10 +370,9 @@ export const createAssistantMachine = async (
     args.liteLlmApiKey,
   );
 
-  const apisInternalPort = Number.parseInt(process.env.PORT || "3000", 10);
   const routerOrigin = config.telegramRouter.webhookUrl
     ? extractOrigin(config.telegramRouter.webhookUrl)
-    : `http://${config.fly.appName}.internal:${apisInternalPort}`;
+    : extractOrigin(appConfig.publicBaseUrl);
   const env: Record<string, string> = {
     OPENCLAW_USER_ID: `assistant-${args.assistantBotId}`,
     OPENCLAW_GATEWAY_PORT: String(config.openclaw.gatewayPort),

@@ -28,6 +28,7 @@ const buildConfig = (): ContainerManagerConfig => ({
     apiBaseUrl: "https://api.machines.dev/v1",
     apiToken: "fly-token",
     appName: "pinclaw-api-dev",
+    assistantAppName: "pinclaw-assistant-dev",
     regionFallbacks: ["iad"],
     region: "iad",
     volumeSizeGb: 20,

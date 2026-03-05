@@ -189,13 +189,14 @@ const resolveHostFromRef = (ref: ContainerRef): string => {
   const privateIp = ref.metadata.privateIp;
   const machineId = ref.metadata.machineId;
   if (privateIp) return privateIp;
-  if (machineId) return `${machineId}.vm.${config.fly.appName}.internal`;
+  if (machineId)
+    return `${machineId}.vm.${config.fly.assistantAppName}.internal`;
 
   // Fallback: parse from ref.id (e.g. when built from a DB record by the orchestrator)
   const parsed = parseFlyContainerRef(ref.id);
   if (parsed?.privateIp) return parsed.privateIp;
   if (parsed?.machineId)
-    return `${parsed.machineId}.vm.${config.fly.appName}.internal`;
+    return `${parsed.machineId}.vm.${config.fly.assistantAppName}.internal`;
 
   throw new Error(`Cannot resolve Fly host for container ${ref.id}`);
 };
@@ -371,4 +372,3 @@ export const flyContainerRuntime: ContainerRuntime = {
     );
   },
 };
-

@@ -425,7 +425,7 @@ function buildFlyWebhookCandidateUrls(container: ContainerInfo, source: WebhookS
 
   const hostCandidates = [
     ...(runtime.privateIp ? [runtime.privateIp] : []),
-    `${runtime.machineId}.vm.${config.fly.appName}.internal`,
+    `${runtime.machineId}.vm.${config.fly.assistantAppName}.internal`,
   ];
   return buildWebhookCandidateUrls(hostCandidates, source);
 }
