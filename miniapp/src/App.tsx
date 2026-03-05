@@ -103,7 +103,15 @@ const App = () => {
 
   const bootstrap = async () => {
     const initData = window.Telegram?.WebApp?.initData?.trim() ?? "";
+    console.log('[MiniApp] Bootstrap', {
+      hasInitData: !!initData,
+      initDataLength: initData.length,
+      telegram: !!window.Telegram,
+      webApp: !!window.Telegram?.WebApp,
+    });
+    
     if (initData) {
+      console.log('[MiniApp] Using Telegram initData for bootstrap');
       const payload = await safeFetch<StatePayload>("/api/mini/bootstrap", {
         method: "POST",
         body: JSON.stringify({ init_data: initData }),
@@ -112,6 +120,7 @@ const App = () => {
       return;
     }
 
+    console.log('[MiniApp] No initData, trying to load existing session');
     await loadState();
   };
 
@@ -239,10 +248,29 @@ const App = () => {
   }
 
   if (error || !state) {
+    const isAuthError = error?.includes("401") || error?.includes("Unauthorized");
     return (
-      <div className="mx-auto w-full max-w-2xl p-5">
-        <div className="panel p-9 text-center text-sm text-red-700">
-          Load failed: {error}
+      <div className="min-h-screen bg-pin-gradient flex items-center justify-center p-5">
+        <div className="glass-card rounded-2xl p-6 max-w-md text-center">
+          <div className="w-16 h-16 rounded-full bg-destructive/10 flex items-center justify-center mx-auto mb-4">
+            <svg className="w-8 h-8 text-destructive" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+          </div>
+          <h2 className="text-lg font-bold text-foreground mb-2">
+            {isAuthError ? "Authentication Required" : "Load Failed"}
+          </h2>
+          <p className="text-sm text-foreground/70 mb-4">
+            {isAuthError 
+              ? "Please open this page in Telegram app" 
+              : error || "Unknown error"}
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="px-4 py-2 bg-foreground text-background rounded-xl text-sm font-medium btn-press"
+          >
+            Reload
+          </button>
         </div>
       </div>
     );
