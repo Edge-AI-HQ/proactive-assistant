@@ -44,13 +44,13 @@ const ChangePlanDialog = ({
           <div className="flex items-start gap-2">
             <span className="text-base leading-none mt-0.5">⬆️</span>
             <p className="text-xs text-foreground/70">
-              <span className="font-medium text-foreground">Upgrade</span> takes effect immediately with a prorated charge.
+              <span className="font-medium text-foreground">Upgrade</span> takes effect immediately. You'll be charged the price difference for the remaining period. No refund for the current plan.
             </p>
           </div>
           <div className="flex items-start gap-2">
             <span className="text-base leading-none mt-0.5">⬇️</span>
             <p className="text-xs text-foreground/70">
-              <span className="font-medium text-foreground">Downgrade</span> takes effect at the next billing cycle. No refunds.
+              <span className="font-medium text-foreground">Downgrade</span> takes effect at the start of the next billing cycle.
             </p>
           </div>
         </div>
