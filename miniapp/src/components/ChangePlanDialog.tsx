@@ -45,6 +45,29 @@ const ChangePlanDialog = ({
           </button>
         </div>
 
+        {/* Billing Rules */}
+        <div className="mb-4 rounded-xl bg-secondary/40 p-3.5 space-y-2">
+          <p className="text-xs font-semibold text-foreground">Billing Rules</p>
+          <div className="flex items-start gap-2">
+            <span className="text-base leading-none mt-0.5">⬆️</span>
+            <p className="text-xs text-foreground/70">
+              <span className="font-medium text-foreground">Upgrade</span> takes effect immediately. You'll be charged a prorated amount for the remainder of the current billing period.
+            </p>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="text-base leading-none mt-0.5">⬇️</span>
+            <p className="text-xs text-foreground/70">
+              <span className="font-medium text-foreground">Downgrade</span> takes effect at the next billing cycle. Your current plan remains active until then.
+            </p>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="text-base leading-none mt-0.5">🔄</span>
+            <p className="text-xs text-foreground/70">
+              No refunds are issued for unused time on downgrades.
+            </p>
+          </div>
+        </div>
+
         <div className="space-y-2.5 mb-4">
           {plans.map((plan) => {
             const selected = selectedPlan === plan.id;
