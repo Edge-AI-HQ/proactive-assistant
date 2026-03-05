@@ -193,8 +193,8 @@ const setMiniSessionCookie = (
 ): void => {
   res.cookie(miniSessionCookieName, sessionToken, {
     httpOnly: true,
-    sameSite: "lax",
-    secure: config.nodeEnv === "production",
+    sameSite: "none", // Required for Telegram WebApp (iframe/cross-site context)
+    secure: true, // Required when sameSite=none
     path: "/",
     expires: new Date(expiresAt),
   });
