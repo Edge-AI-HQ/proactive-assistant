@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import CreateAgentFlow from "./components/CreateAgentFlow";
 import TopStatus from "./components/TopStatus";
 import AgentCard from "./components/AgentCard";
-import AgentInsights from "./components/AgentInsights";
 import ChangePlanDialog from "./components/ChangePlanDialog";
+import VideoLanding from "./components/VideoLanding";
+import Toast from "./components/Toast";
 
 type Plan = {
   id: string;
@@ -103,6 +104,17 @@ const App = () => {
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
   const [busy, setBusy] = useState<string>("none");
   const [showChangePlan, setShowChangePlan] = useState(false);
+  const [showLanding, setShowLanding] = useState(
+    () => !sessionStorage.getItem("landing_seen"),
+  );
+  const [showOnboarding, setShowOnboarding] = useState(
+    () => !sessionStorage.getItem("onboarding_seen"),
+  );
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+
+  const showToast = (message: string, type: "success" | "error" = "error") => {
+    setToast({ message, type });
+  };
 
   const hydrateState = (payload: StatePayload): void => {
     setState(payload);
@@ -188,6 +200,8 @@ const App = () => {
     const platform = window.Telegram?.WebApp?.platform;
     if (platform === 'ios' || platform === 'android') {
       window.Telegram?.WebApp?.requestFullscreen?.();
+      // Telegram fullscreen adds close/settings buttons (~56px) below the safe area
+      document.documentElement.style.setProperty("--tg-top-offset", "56px");
     }
     setLoading(true);
     setError(null);
@@ -210,7 +224,7 @@ const App = () => {
       });
       await loadState();
     } catch (e) {
-      alert(`Create failed: ${e instanceof Error ? e.message : "unknown"}`);
+      showToast(`Create failed: ${e instanceof Error ? e.message : "unknown"}`);
     } finally {
       setBusy("none");
     }
@@ -226,7 +240,7 @@ const App = () => {
       });
       if (result.action === "upgrade" || result.action === "downgrade") {
         // Plan changed directly via Stripe subscription update — no redirect needed
-        alert(result.message ?? "Plan updated successfully.");
+        showToast(result.message ?? "Plan updated successfully.", "success");
         setBusy("none");
         await loadState();
         return;
@@ -234,9 +248,7 @@ const App = () => {
       if (!result.url) throw new Error("Unable to get checkout URL. Please try again.");
       window.location.href = result.url;
     } catch (e) {
-      alert(
-        `Unable to change plan: ${e instanceof Error ? e.message : "unknown"}`,
-      );
+      showToast(`Unable to change plan: ${e instanceof Error ? e.message : "unknown"}`);
       setBusy("none");
     }
   };
@@ -251,10 +263,10 @@ const App = () => {
         method: "POST",
         body: JSON.stringify({}),
       });
-      alert("Renewal canceled. Service remains active until period end.");
+      showToast("Renewal canceled. Service remains active until period end.", "success");
       await loadState();
     } catch (e) {
-      alert(`Cancel failed: ${e instanceof Error ? e.message : "unknown"}`);
+      showToast(`Cancel failed: ${e instanceof Error ? e.message : "unknown"}`);
       setBusy("none");
     }
   };
@@ -262,21 +274,14 @@ const App = () => {
   const handleDeleteAccount = async () => {
     setBusy("delete");
     try {
-      const telegramUserId = state?.user.telegram_user_id;
-      if (!telegramUserId) {
-        throw new Error("User ID not found");
-      }
-      
-      // Call reset account API
-      await safeFetch(`/api/reset-account/${telegramUserId}`, {
+      await safeFetch("/api/mini/reset-account", {
         method: "POST",
         body: JSON.stringify({}),
       });
-      
-      alert("Account deleted successfully. Redirecting...");
-      window.location.reload();
+      showToast("Account deleted successfully.", "success");
+      setTimeout(() => window.location.reload(), 1500);
     } catch (e) {
-      alert(`Delete failed: ${e instanceof Error ? e.message : "unknown"}`);
+      showToast(`Delete failed: ${e instanceof Error ? e.message : "unknown"}`);
       setBusy("none");
     }
   };
@@ -290,7 +295,7 @@ const App = () => {
       });
       await loadState();
     } catch (e) {
-      alert(`Install failed: ${e instanceof Error ? e.message : "unknown"}`);
+      showToast(`Install failed: ${e instanceof Error ? e.message : "unknown"}`);
       setBusy("none");
     }
   };
@@ -304,15 +309,18 @@ const App = () => {
       });
       await loadState();
     } catch (e) {
-      alert(`Uninstall failed: ${e instanceof Error ? e.message : "unknown"}`);
+      showToast(`Uninstall failed: ${e instanceof Error ? e.message : "unknown"}`);
       setBusy("none");
     }
   };
 
   if (loading) {
     return (
-      <div className="mx-auto w-full max-w-2xl p-5">
-        <div className="panel p-9 text-center text-sm text-muted">
+      <div
+        className="min-h-dvh bg-pin-gradient flex items-center justify-center p-5"
+        style={{ paddingTop: "calc(var(--safe-top) + 1.25rem)" }}
+      >
+        <div className="glass-card rounded-2xl p-9 text-center text-sm text-muted-foreground max-w-md w-full">
           Loading...
         </div>
       </div>
@@ -330,7 +338,10 @@ const App = () => {
   if (error || !state) {
     const isAuthError = error?.includes("401") || error?.includes("Unauthorized");
     return (
-      <div className="min-h-screen bg-pin-gradient flex items-center justify-center p-5">
+      <div
+        className="min-h-dvh bg-pin-gradient flex items-center justify-center p-5"
+        style={{ paddingTop: "calc(var(--safe-top) + 1.25rem)" }}
+      >
         <div className="glass-card rounded-2xl p-6 max-w-md text-center">
           <div className="w-16 h-16 rounded-full bg-destructive/10 flex items-center justify-center mx-auto mb-4">
             <svg className="w-8 h-8 text-destructive" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -341,8 +352,8 @@ const App = () => {
             {isAuthError ? "Authentication Required" : "Load Failed"}
           </h2>
           <p className="text-sm text-foreground/70 mb-4">
-            {isAuthError 
-              ? "Please open this page in Telegram app" 
+            {isAuthError
+              ? "Please open this page in Telegram app"
               : error || "Unknown error"}
           </p>
           <button
@@ -356,49 +367,50 @@ const App = () => {
     );
   }
 
-  // Show CreateAgentFlow directly when no assistant exists
-  if (!state.assistant.exists) {
-    return (
-      <CreateAgentFlow 
-        open={true} 
-        onClose={() => {}} // No close button for first-time users
-        onCreateSuccess={() => void loadState()}
-      />
-    );
+  // Onboarding flow for unpaid users: Landing → Features → Choose Plan
+  if (!state.subscription.active && showLanding) {
+    return <VideoLanding onGetStarted={() => { sessionStorage.setItem("landing_seen", "1"); setShowLanding(false); }} />;
   }
 
-  // Show subscription required page when assistant exists but no subscription
+  if (!state.subscription.active && showOnboarding) {
+    return <CreateAgentFlow onContinue={() => { sessionStorage.setItem("onboarding_seen", "1"); setShowOnboarding(false); }} />;
+  }
+
+  // Show subscription / choose plan page when not subscribed
   if (!state.subscription.active) {
     return (
-      <div className="min-h-screen bg-pin-gradient max-w-md mx-auto p-4 pb-8">
-        <section className="glass-card rounded-2xl p-6 mt-4 animate-fade-in">
+      <div
+        className="min-h-dvh bg-pin-gradient max-w-md mx-auto flex flex-col px-4"
+        style={{
+          paddingTop: "calc(var(--safe-top) + 1rem)",
+          paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1rem)",
+        }}
+      >
+        <section className="glass-card rounded-2xl p-5 animate-fade-in shrink-0">
           <span className="pill bg-foreground text-background">PIN AI MINI</span>
-          <h1 className="mt-4 font-heading text-2xl font-bold leading-[1.1] text-foreground">
-            Subscription Required
+          <h1 className="mt-3 font-heading text-xl font-bold leading-[1.1] text-foreground">
+            Choose Your Plan
           </h1>
-          <p className="mt-2 max-w-md text-sm text-foreground/70">
-            Subscribe first to unlock runtime controls and skills management.
+          <p className="mt-1.5 text-sm text-foreground/70">
+            Subscribe to unlock your AI agent.
           </p>
         </section>
 
-        <section className="glass-card rounded-2xl p-5 mt-3 animate-fade-in">
-          <div className="mb-4">
-            <h2 className="text-lg font-semibold text-foreground">Choose Plan</h2>
-          </div>
-          <div className="space-y-2.5">
+        <section className="glass-card rounded-2xl p-4 mt-3 animate-fade-in flex-1 flex flex-col min-h-0">
+          <div className="flex-1 space-y-2.5 overflow-y-auto min-h-0">
             {state.plans.map((plan) => {
               const selected = selectedPlan === plan.id;
               return (
                 <button
                   key={plan.id}
-                  className={`w-full rounded-xl p-4 text-left transition-all btn-press ${
-                    selected 
-                      ? "bg-white/60 border-2 border-primary shadow-lg" 
+                  className={`w-full rounded-xl p-3.5 text-left transition-all btn-press ${
+                    selected
+                      ? "bg-white/60 border-2 border-primary shadow-lg"
                       : "bg-white/30 border border-white/40 hover:bg-white/40"
                   }`}
                   onClick={() => setSelectedPlan(plan.id)}
                 >
-                  <div className="flex items-center justify-between gap-2 mb-1">
+                  <div className="flex items-center justify-between gap-2 mb-0.5">
                     <span className="text-base font-bold text-foreground">{plan.name}</span>
                     <span className="text-lg font-extrabold text-primary">
                       ${plan.price}<span className="text-sm font-normal text-muted-foreground">/mo</span>
@@ -411,7 +423,7 @@ const App = () => {
               );
             })}
           </div>
-          <div className="mt-4 space-y-2.5">
+          <div className="mt-3 shrink-0">
             <button
               className="w-full rounded-xl bg-foreground text-background px-4 py-3.5 text-sm font-bold shadow-lg btn-press disabled:opacity-50"
               onClick={() => void checkout()}
@@ -419,15 +431,10 @@ const App = () => {
             >
               {busy === "checkout" ? "Redirecting..." : "Continue to Checkout"}
             </button>
-            <button
-              className="w-full rounded-xl bg-secondary/60 text-foreground px-4 py-3 text-sm font-medium btn-press"
-              onClick={() => void loadState()}
-            >
-              Refresh
-            </button>
           </div>
         </section>
-        <div className="mt-4 text-center text-xs text-foreground/50">PIN AI</div>
+
+        <div className="mt-3 text-center text-xs text-foreground/50 shrink-0">PIN AI</div>
       </div>
     );
   }
@@ -435,10 +442,16 @@ const App = () => {
   // Show home page with agent when subscription is active
   if (state.assistant.exists) {
     return (
-      <div className="min-h-screen bg-pin-gradient max-w-md mx-auto pb-8">
+      <div
+        className="min-h-dvh bg-pin-gradient max-w-md mx-auto flex flex-col"
+        style={{
+          paddingTop: "var(--safe-top)",
+          paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1rem)",
+        }}
+      >
         <TopStatus hasAgent={true} />
 
-        <div className="px-4 mt-6 space-y-4">
+        <div className="px-4 mt-5 space-y-3 flex-1">
           <h2 className="text-base font-semibold text-foreground px-1">
             <span className="title-highlight">My Agent</span>
           </h2>
@@ -452,16 +465,10 @@ const App = () => {
           />
         </div>
 
-        {/* Skills section temporarily hidden pending API key input support */}
-
-        <div className="px-4 mt-6">
-          <AgentInsights />
-        </div>
-
-        <div className="px-4 mt-8 mb-4">
+        <div className="px-4 mt-auto pt-4">
           <a
             href="mailto:support@pinai.io"
-            className="glass-card rounded-2xl flex items-center justify-center gap-2 text-sm text-foreground font-medium py-3.5 hover:bg-secondary/50 transition-colors"
+            className="glass-card rounded-2xl flex items-center justify-center gap-2 text-sm text-foreground font-medium py-3 hover:bg-secondary/50 transition-colors"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
@@ -481,60 +488,68 @@ const App = () => {
           onCancel={cancelSubscription}
           busy={busy}
         />
+
+        <Toast message={toast?.message ?? null} type={toast?.type} onDismiss={() => setToast(null)} />
       </div>
     );
   }
 
   // Show subscription center when subscription is active but no assistant
   return (
-    <div className="min-h-screen bg-pin-gradient max-w-md mx-auto p-4 pb-8">
-      <section className="glass-card rounded-2xl p-6 mt-4 animate-fade-in">
+    <div
+      className="min-h-dvh bg-pin-gradient max-w-md mx-auto px-4 overflow-y-auto"
+      style={{
+        paddingTop: "calc(var(--safe-top) + 1rem)",
+        paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1rem)",
+      }}
+    >
+      <section className="glass-card rounded-2xl p-5 animate-fade-in">
         <span className="pill bg-foreground text-background">PIN AI</span>
-        <h1 className="mt-4 font-heading text-2xl font-bold leading-[1.1] text-foreground">
+        <h1 className="mt-3 font-heading text-xl font-bold leading-[1.1] text-foreground">
           Subscription Center
         </h1>
-        <p className="mt-2 max-w-md text-sm text-foreground/70">
+        <p className="mt-1.5 text-sm text-foreground/70">
           Your subscription is active. Create your assistant to get started.
         </p>
       </section>
 
-      <section className="glass-card rounded-2xl p-5 mt-3 animate-fade-in">
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <h2 className="text-lg font-semibold text-foreground">Runtime Status</h2>
+      <section className="glass-card rounded-2xl p-4 mt-3 animate-fade-in">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <h2 className="text-base font-semibold text-foreground">Runtime Status</h2>
           <span
             className={`pill text-xs ${state.subscription.active ? "bg-pin-mint/20 text-pin-mint-text" : "bg-amber-100 text-amber-700"}`}
           >
             {state.subscription.active ? "Active" : "Inactive"}
           </span>
         </div>
-        <div className="space-y-2">
-          <div className="text-sm text-foreground/80">
+        <div className="space-y-1.5 text-sm text-foreground/80">
+          <div>
             <span className="font-medium">Status:</span> {state.assistant.exists ? (state.assistant.status || "unknown") : "assistant not created"}
           </div>
-          <div className="text-sm text-foreground/80">
-            <span className="font-medium">Current plan:</span> {state.subscription.plan_id || "none"}
+          <div>
+            <span className="font-medium">Plan:</span> {state.subscription.plan_id || "none"}
           </div>
           {state.subscription.current_period_end ? (
-            <div className="text-sm text-foreground/80">
+            <div>
               <span className="font-medium">Period end:</span> {state.subscription.current_period_end}
             </div>
           ) : null}
           {state.subscription.cancel_at_period_end ? (
-            <div className="text-sm text-amber-600 font-medium mt-2">
-              ⚠️ Renewal canceled (service ends at period end)
+            <div className="text-sm text-amber-600 font-medium mt-1">
+              Renewal canceled (ends at period end)
             </div>
           ) : null}
         </div>
       </section>
 
       {!state.assistant.exists ? (
-        <section className="glass-card rounded-2xl p-5 mt-3 animate-fade-in">
-          <h2 className="text-lg font-semibold text-foreground mb-3">Create Assistant</h2>
-          <p className="text-sm text-foreground/70 mb-4">
+        <section className="glass-card rounded-2xl p-4 mt-3 animate-fade-in">
+          <h2 className="text-base font-semibold text-foreground mb-2">Create Assistant</h2>
+          <p className="text-sm text-foreground/70 mb-3">
             Subscription is active. Create your assistant to enable runtime and skills.
           </p>
           <button
-            className="w-full rounded-xl bg-foreground text-background px-4 py-3.5 text-sm font-bold shadow-lg btn-press disabled:opacity-50"
+            className="w-full rounded-xl bg-foreground text-background px-4 py-3 text-sm font-bold shadow-lg btn-press disabled:opacity-50"
             onClick={() => void createAssistant()}
             disabled={busy !== "none"}
           >
@@ -543,33 +558,33 @@ const App = () => {
         </section>
       ) : null}
 
-      <section className="glass-card rounded-2xl p-5 mt-3 animate-fade-in">
-        <div className="mb-4 flex items-center justify-between gap-2">
-          <h2 className="text-lg font-semibold text-foreground">Change Plan</h2>
+      <section className="glass-card rounded-2xl p-4 mt-3 animate-fade-in">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h2 className="text-base font-semibold text-foreground">Change Plan</h2>
           <span className="pill text-xs bg-secondary/60 text-foreground">Flexible</span>
         </div>
 
-        <div className="space-y-2.5">
+        <div className="space-y-2">
           {state.plans.map((plan) => {
             const selected = selectedPlan === plan.id;
             const current = state.subscription.plan_id === plan.id;
             return (
               <button
                 key={plan.id}
-                className={`w-full rounded-xl p-4 text-left transition-all btn-press ${
-                  selected 
-                    ? "bg-white/60 border-2 border-primary shadow-lg" 
+                className={`w-full rounded-xl p-3.5 text-left transition-all btn-press ${
+                  selected
+                    ? "bg-white/60 border-2 border-primary shadow-lg"
                     : "bg-white/30 border border-white/40 hover:bg-white/40"
                 }`}
                 onClick={() => setSelectedPlan(plan.id)}
               >
-                <div className="flex items-center justify-between gap-2 mb-1">
+                <div className="flex items-center justify-between gap-2 mb-0.5">
                   <div className="flex items-center gap-2">
-                    <span className="text-base font-bold text-foreground">{plan.name}</span>
-                    {current && <span className="text-xs px-2 py-0.5 rounded-full bg-pin-mint/20 text-pin-mint-text font-medium">Current</span>}
+                    <span className="text-sm font-bold text-foreground">{plan.name}</span>
+                    {current && <span className="text-[10px] px-2 py-0.5 rounded-full bg-pin-mint/20 text-pin-mint-text font-medium">Current</span>}
                   </div>
-                  <span className="text-lg font-extrabold text-primary">
-                    ${plan.price}<span className="text-sm font-normal text-muted-foreground">/mo</span>
+                  <span className="text-base font-extrabold text-primary">
+                    ${plan.price}<span className="text-xs font-normal text-muted-foreground">/mo</span>
                   </span>
                 </div>
                 <div className="text-xs text-foreground/60">
@@ -580,16 +595,16 @@ const App = () => {
           })}
         </div>
 
-        <div className="mt-4 space-y-2.5">
+        <div className="mt-3 space-y-2">
           <button
-            className="w-full rounded-xl bg-foreground text-background px-4 py-3.5 text-sm font-bold shadow-lg btn-press disabled:opacity-50"
+            className="w-full rounded-xl bg-foreground text-background px-4 py-3 text-sm font-bold shadow-lg btn-press disabled:opacity-50"
             onClick={() => void checkout()}
             disabled={busy !== "none" || !selectedPlan}
           >
             {busy === "checkout" ? "Redirecting..." : "Continue to Checkout"}
           </button>
           <button
-            className="w-full rounded-xl bg-secondary/60 text-foreground px-4 py-3 text-sm font-medium btn-press disabled:opacity-50"
+            className="w-full rounded-xl bg-secondary/60 text-foreground px-4 py-2.5 text-sm font-medium btn-press disabled:opacity-50"
             onClick={() => void cancelSubscription()}
             disabled={busy !== "none"}
           >
@@ -598,33 +613,33 @@ const App = () => {
         </div>
       </section>
 
-      <section className="glass-card rounded-2xl p-5 mt-3 animate-fade-in">
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <h2 className="text-lg font-semibold text-foreground">Skills</h2>
+      <section className="glass-card rounded-2xl p-4 mt-3 animate-fade-in">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <h2 className="text-base font-semibold text-foreground">Skills</h2>
           <span className={`pill text-xs ${state.skills.supported ? "bg-pin-mint/20 text-pin-mint-text" : "bg-amber-100 text-amber-700"}`}>
             {state.skills.supported ? "Enabled" : "Pending"}
           </span>
         </div>
-        <div className="text-sm text-foreground/70 mb-4">{state.skills.message}</div>
+        <div className="text-sm text-foreground/70 mb-3">{state.skills.message}</div>
         {state.skills.supported ? (
-          <div className="space-y-2.5">
+          <div className="space-y-2">
             {(state.skills.items || []).map((skill) => {
               const installing = busy === `skill-install:${skill.key}`;
               const uninstalling = busy === `skill-uninstall:${skill.key}`;
               return (
                 <div
                   key={skill.key}
-                  className="rounded-xl bg-white/30 border border-white/40 p-4"
+                  className="rounded-xl bg-white/30 border border-white/40 p-3.5"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1">
                       <div className="text-sm font-bold text-foreground">{skill.name}</div>
-                      <div className="mt-1 text-xs text-foreground/70">
+                      <div className="mt-0.5 text-xs text-foreground/70">
                         {skill.description}
                       </div>
-                      <div className="mt-1.5 text-[11px] text-foreground/50">
+                      <div className="mt-1 text-[11px] text-foreground/50">
                         {skill.key} · {skill.installed ? (
-                          <span className="text-pin-mint-text">✓ installed</span>
+                          <span className="text-pin-mint-text">installed</span>
                         ) : (
                           <span>not installed</span>
                         )}
@@ -655,7 +670,8 @@ const App = () => {
         ) : null}
       </section>
 
-      <div className="mt-4 text-center text-xs text-foreground/50">PIN AI</div>
+      <div className="mt-3 pb-1 text-center text-xs text-foreground/50">PIN AI</div>
+      <Toast message={toast?.message ?? null} type={toast?.type} onDismiss={() => setToast(null)} />
     </div>
   );
 };

@@ -252,7 +252,7 @@ export interface CheckoutResult {
 
 export const createCheckoutSession = async (
   req: Request,
-  body: { token?: string; plan?: string },
+  body: { token?: string; plan?: string; successUrl?: string },
 ): Promise<CheckoutResult> => {
   const stripe = requireStripe();
   const token = String(body.token || "").trim();
@@ -400,7 +400,7 @@ export const createCheckoutSession = async (
         customer: customerId,
         mode: "subscription",
         line_items: [{ price: stripePriceId, quantity: 1 }],
-        success_url: `${landingBaseUrl}/api/payment/success?session_id={CHECKOUT_SESSION_ID}`,
+        success_url: body.successUrl || `${landingBaseUrl}/api/payment/success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${landingBaseUrl}/api/payment/subscribe?token=${token}`,
         metadata: {
           telegram_user_id: telegramUserId,

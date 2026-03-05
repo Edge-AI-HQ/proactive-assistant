@@ -101,10 +101,11 @@ export const buildTelegramChannelConfigSection = (
         requireMention: true,
       },
     },
-    // LiteLLM + vision providers can emit non-standard streaming chunks
-    // (e.g. missing id), which breaks OpenClaw mid-stream handling.
-    // Use non-streaming mode to keep Telegram image/file replies stable.
-    streaming: "off",
+    // Use "partial" streaming so OpenClaw sends incremental drafts via
+    // sendMessageDraft (Bot API 9.3+) while generating, then finalises
+    // with sendMessage.  Vision requests are still forced non-stream by
+    // the telegram-router-proxy LiteLLM adapter to avoid broken chunks.
+    streaming: "partial",
     actions: {
       sendMessage: true,
       deleteMessage: false,
