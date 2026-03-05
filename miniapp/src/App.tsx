@@ -130,9 +130,10 @@ const App = () => {
       });
   }, []);
 
-  // Auto-show CreateAgentFlow for first-time users
+  // Auto-show CreateAgentFlow for first-time users (only if no assistant exists)
   useEffect(() => {
     if (state && !loading && !hasSeenIntro && !state.assistant.exists) {
+      console.log('[MiniApp] Auto-opening CreateAgentFlow for first-time user');
       setShowCreateFlow(true);
       setHasSeenIntro(true);
     }
@@ -221,10 +222,20 @@ const App = () => {
     return (
       <div className="mx-auto w-full max-w-2xl p-5">
         <div className="panel p-9 text-center text-sm text-muted">
-          Loading subscription center...
+          Loading...
         </div>
       </div>
     );
+  }
+
+  // Debug: log current state
+  if (state) {
+    console.log('[MiniApp] Current state:', {
+      hasAssistant: state.assistant.exists,
+      hasSubscription: state.subscription.active,
+      showCreateFlow,
+      hasSeenIntro,
+    });
   }
 
   if (error || !state) {
