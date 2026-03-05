@@ -3,6 +3,15 @@
 ## 当前架构（一句话）
 Telegram Router 已并入 `apis`，不存在独立 `telegram-router` 服务。所有 Telegram 入/出站统一走 `pinclaw-api-dev`。
 
+## 环境拓扑（2026-03-05）
+- Dev（当前生效）：
+  - APIs：`pinclaw-api-dev`
+  - Assistant 机器：`pinclaw-assistant-dev`（由 APIs 通过 `FLY_ASSISTANT_APP_NAME` 创建）
+  - LiteLLM：`pinclaw-litellm-dev`
+- Prod（规则口径）：
+  - 禁止在终端直接 `flyctl`/DB 变更，必须走评审 + CI/CD。
+  - Assistant 机器应与 APIs 隔离到独立 app（不要与 APIs 共用 app）。
+
 ## 快速定位（高频目录）
 - `apis/src/domain/telegram-router/`：Telegram 路由核心逻辑（入站 webhook + 出站 API 代理）。
 - `apis/src/domain/container/`：OpenClaw 机器创建/重建与 env 注入。
@@ -30,6 +39,7 @@ LiteLLM 本地命令：
 2. 改 `openclaw-plugins/` 或 OpenClaw 启动行为：
 - 必须重建并推送 OpenClaw 镜像；
 - 然后更新 `OPENCLAW_IMAGE`（必须 `@sha256:` 格式）。
+- 备注：插件改动不会随 APIs 部署自动进入用户容器，必须走镜像 digest 更新。
 
 3. 只改文档：
 - `docs/` 默认被忽略，提交时需要 `git add -f docs/<file>`。
@@ -51,17 +61,33 @@ OpenClaw -> telegram-router-proxy -> APIs(/api/telegram/:method) -> Telegram API
   - `TELEGRAM_ROUTER_WEBHOOK_URL`（建议为 APIs 的 `/webhook/telegram`）
   - `TELEGRAM_WEBHOOK_SECRET`
   - `OPENCLAW_IMAGE`（必须 digest）
+  - `FLY_ASSISTANT_APP_NAME`（dev 当前应为 `pinclaw-assistant-dev`）
 - OpenClaw machine env：
   - `TELEGRAM_ROUTER_URL`（应指向 APIs）
   - `OPENCLAW_TELEGRAM_WEBHOOK_PATH`
   - `OPENCLAW_TELEGRAM_ROUTER_PLUGIN_PATH`
   - `NODE_COMPILE_CACHE`
 
+## 泄露机制与防护（P0）
+- P0（平台级）：
+  - `telegram.token`（`TELEGRAM_BOT_TOKEN`）
+  - `telegram.webhookSecret`（`TELEGRAM_WEBHOOK_SECRET`）
+  - `elevenlabs.apiKey`（`ELEVENLABS_API_KEY` / `XI_API_KEY`）
+- 已落地防护：
+  - 用户容器禁止注入上述 P0 key/value（env + OpenClaw config 双层防护）。
+  - QuickStart 使用 synthetic bot token（`0:...`）+ assistant 级派生 webhook secret，不下发平台真实 token/secret。
+  - OpenClaw 启动不再把完整配置 JSON 内联在 `init.exec` 命令；改为 `OPENCLAW_CONFIG_B64` 容器内解码，避免 Fly `Preparing to run` 日志明文泄露。
+  - Assistant 机器与 APIs 分 app 运行，避免平台 secrets 被动注入到用户容器。
+- 验证口径（每次改动后至少抽查一次）：
+  - assistant 机内 `printenv` 不得出现上述 P0 非空值。
+  - `/app/data/config/openclaw.json` 不得出现上述 P0 key。
+
 ## 实战踩坑（已验证）
 1. `OPENCLAW_IMAGE` 用 tag 会 crash loop；必须 `registry.fly.io/<app>@sha256:<64hex>`。
 2. `TELEGRAM_ROUTER_WEBHOOK_URL` 缺失或空值，可能退化为 polling 或转发异常。
 3. OpenClaw 冷启动慢通常不是卡死，是 jiti/V8 缓存构建叠加 `shared-cpu-1x` throttle。
 4. TCP 端口通不代表 OpenClaw ready；应看 webhook/gateway 协议级探测日志。
+5. `container_status=running` 不等于 Telegram 可用；必须等待 webhook HTTP 真正可响应后再通知 ready。
 
 ## 冷启动优化（按优先级）
 1. 创建期升配（`shared-cpu-2x` 或 `performance-1x`），ready 后降配。
@@ -82,7 +108,7 @@ flyctl logs -a pinclaw-api-dev -n | rg "inbound ts=|Forward failed|Forwarded suc
 
 2. 看某台 machine 冷启动与就绪：
 ```bash
-flyctl logs -a pinclaw-api-dev -i <machine_id> -n | rg "pull|Machine started|TRP_VERSION|fetch proxy patch installed|Fully ready|telegram-webhook|ECONNRESET|502"
+flyctl logs -a pinclaw-assistant-dev -i <machine_id> -n | rg "pull|Machine started|TRP_VERSION|fetch proxy patch installed|Fully ready|telegram-webhook|ECONNRESET|502|webhook local listener"
 ```
 
 3. 检查关键 secrets：
