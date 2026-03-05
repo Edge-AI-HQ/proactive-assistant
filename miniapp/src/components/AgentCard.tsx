@@ -5,7 +5,26 @@ interface AgentCardProps {
   active: boolean;
 }
 
+const getStatusDisplay = (status: string): { text: string; color: string } => {
+  switch (status) {
+    case "running":
+      return { text: "Running", color: "text-pin-mint" };
+    case "creating":
+      return { text: "Setting up...", color: "text-amber-600" };
+    case "stopped":
+      return { text: "Stopped", color: "text-muted-foreground" };
+    case "error":
+      return { text: "Error", color: "text-destructive" };
+    case "missing":
+      return { text: "Initializing...", color: "text-amber-600" };
+    default:
+      return { text: "Unknown", color: "text-muted-foreground" };
+  }
+};
+
 const AgentCard = ({ username, status, planId, active }: AgentCardProps) => {
+  const statusDisplay = getStatusDisplay(status);
+  
   return (
     <div className={`rounded-2xl p-5 transition-all animate-fade-in ${active ? "bg-white/45 backdrop-blur-xl border border-white/60 shadow-[inset_0_1px_1px_hsl(0_0%_100%/0.5),0_4px_24px_-4px_hsl(270_30%_60%/0.1)]" : "bg-card shadow-sm"}`}>
       <div className="flex items-start gap-4">
@@ -44,25 +63,10 @@ const AgentCard = ({ username, status, planId, active }: AgentCardProps) => {
       <div className="mt-4 mb-4 glass-stat-box rounded-xl px-4 py-3">
         <div className="flex items-center justify-between">
           <span className="text-xs text-muted-foreground">Status</span>
-          <span className={`text-xs font-semibold flex items-center gap-1 ${
-            status === 'running' ? 'text-pin-mint' : 
-            status === 'missing' ? 'text-amber-600' : 
-            'text-muted-foreground'
-          }`}>
-            {status === 'missing' && (
-              <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-            )}
-            {status === 'missing' ? 'Starting...' : status || "unknown"}
+          <span className={`text-xs font-semibold ${statusDisplay.color}`}>
+            {statusDisplay.text}
           </span>
         </div>
-        {status === 'missing' && (
-          <div className="mt-2 text-xs text-amber-600/80">
-            Container is being created. This may take 1-2 minutes.
-          </div>
-        )}
       </div>
 
       {/* Action buttons */}
