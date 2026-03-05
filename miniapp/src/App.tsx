@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 type Plan = {
   id: string;
@@ -50,15 +50,11 @@ declare global {
       WebApp?: {
         ready: () => void;
         expand: () => void;
+        initData?: string;
       };
     };
   }
 }
-
-const getUserIdFromPath = (): string | null => {
-  const match = window.location.pathname.match(/^\/gateway\/(\d+)\/mini$/);
-  return match?.[1] ?? null;
-};
 
 const safeFetch = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(url, {
@@ -72,141 +68,180 @@ const safeFetch = async <T,>(url: string, init?: RequestInit): Promise<T> => {
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error((payload as { error?: string }).error || `HTTP ${response.status}`);
+    throw new Error(
+      (payload as { error?: string }).error || `HTTP ${response.status}`,
+    );
   }
 
   return payload as T;
 };
 
 const App = () => {
-  const userId = useMemo(getUserIdFromPath, []);
   const [state, setState] = useState<StatePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
   const [busy, setBusy] = useState<string>("none");
 
+  const hydrateState = (payload: StatePayload): void => {
+    setState(payload);
+    setSelectedPlan(
+      (prev) => prev ?? payload.subscription.plan_id ?? payload.plans[0]?.id ?? null,
+    );
+  };
+
   const loadState = async () => {
-    if (!userId) {
-      setError("无效入口：缺少 user_id。");
-      setLoading(false);
+    const payload = await safeFetch<StatePayload>("/api/mini/state");
+    hydrateState(payload);
+  };
+
+  const bootstrap = async () => {
+    const initData = window.Telegram?.WebApp?.initData?.trim() ?? "";
+    if (initData) {
+      const payload = await safeFetch<StatePayload>("/api/mini/bootstrap", {
+        method: "POST",
+        body: JSON.stringify({ init_data: initData }),
+      });
+      hydrateState(payload);
       return;
     }
 
-    setLoading(true);
-    setError(null);
-    try {
-      const payload = await safeFetch<StatePayload>(`/gateway/${userId}/mini/state`);
-      setState(payload);
-      setSelectedPlan((prev) => prev ?? payload.subscription.plan_id ?? payload.plans[0]?.id ?? null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "unknown error");
-    } finally {
-      setLoading(false);
-    }
+    await loadState();
   };
 
   useEffect(() => {
     window.Telegram?.WebApp?.ready?.();
     window.Telegram?.WebApp?.expand?.();
-    void loadState();
+    setLoading(true);
+    setError(null);
+
+    void bootstrap()
+      .catch((e: unknown) => {
+        setError(e instanceof Error ? e.message : "unknown error");
+      })
+      .finally(() => {
+        setLoading(false);
+      });
   }, []);
 
   const createAssistant = async () => {
-    if (!userId) return;
     setBusy("create");
     try {
-      await safeFetch(`/gateway/${userId}/mini/create-assistant`, {
+      await safeFetch("/api/mini/create-assistant", {
         method: "POST",
         body: JSON.stringify({}),
       });
       await loadState();
     } catch (e) {
-      alert(`创建失败：${e instanceof Error ? e.message : "unknown"}`);
+      alert(`Create failed: ${e instanceof Error ? e.message : "unknown"}`);
     } finally {
       setBusy("none");
     }
   };
 
   const checkout = async () => {
-    if (!userId || !selectedPlan) return;
+    if (!selectedPlan) return;
     setBusy("checkout");
     try {
-      const result = await safeFetch<{ url: string | null }>(`/gateway/${userId}/mini/checkout`, {
+      const result = await safeFetch<{ url: string | null }>("/api/mini/checkout", {
         method: "POST",
         body: JSON.stringify({ plan: selectedPlan }),
       });
       if (!result.url) throw new Error("missing checkout url");
       window.location.href = result.url;
     } catch (e) {
-      alert(`无法创建支付会话：${e instanceof Error ? e.message : "unknown"}`);
+      alert(
+        `Unable to create checkout session: ${e instanceof Error ? e.message : "unknown"}`,
+      );
       setBusy("none");
     }
   };
 
   const cancelSubscription = async () => {
-    if (!userId) return;
-    if (!window.confirm("确认取消续费？当前周期结束前仍可继续使用。")) return;
+    if (!window.confirm("Cancel renewal? Service remains active until period end.")) {
+      return;
+    }
     setBusy("cancel");
     try {
-      await safeFetch(`/gateway/${userId}/mini/cancel-subscription`, {
+      await safeFetch("/api/mini/cancel-subscription", {
         method: "POST",
         body: JSON.stringify({}),
       });
-      alert("已设置为取消续费。当前周期结束前仍可继续使用。");
+      alert("Renewal canceled. Service remains active until period end.");
       await loadState();
     } catch (e) {
-      alert(`取消续费失败：${e instanceof Error ? e.message : "unknown"}`);
+      alert(`Cancel failed: ${e instanceof Error ? e.message : "unknown"}`);
       setBusy("none");
     }
   };
 
   const installSkill = async (skillKey: string) => {
-    if (!userId) return;
     setBusy(`skill-install:${skillKey}`);
     try {
-      await safeFetch(`/gateway/${userId}/mini/skills/install`, {
+      await safeFetch("/api/mini/skills/install", {
         method: "POST",
         body: JSON.stringify({ skill_key: skillKey }),
       });
       await loadState();
     } catch (e) {
-      alert(`安装技能失败：${e instanceof Error ? e.message : "unknown"}`);
+      alert(`Install failed: ${e instanceof Error ? e.message : "unknown"}`);
       setBusy("none");
     }
   };
 
   const uninstallSkill = async (skillKey: string) => {
-    if (!userId) return;
     setBusy(`skill-uninstall:${skillKey}`);
     try {
-      await safeFetch(`/gateway/${userId}/mini/skills/uninstall`, {
+      await safeFetch("/api/mini/skills/uninstall", {
         method: "POST",
         body: JSON.stringify({ skill_key: skillKey }),
       });
       await loadState();
     } catch (e) {
-      alert(`卸载技能失败：${e instanceof Error ? e.message : "unknown"}`);
+      alert(`Uninstall failed: ${e instanceof Error ? e.message : "unknown"}`);
       setBusy("none");
     }
   };
 
   if (loading) {
-    return <div className="mx-auto w-full max-w-2xl p-5"><div className="panel p-9 text-center text-sm text-muted">正在加载订阅中心...</div></div>;
+    return (
+      <div className="mx-auto w-full max-w-2xl p-5">
+        <div className="panel p-9 text-center text-sm text-muted">
+          Loading subscription center...
+        </div>
+      </div>
+    );
   }
 
   if (error || !state) {
-    return <div className="mx-auto w-full max-w-2xl p-5"><div className="panel p-9 text-center text-sm text-red-700">加载失败：{error}</div></div>;
+    return (
+      <div className="mx-auto w-full max-w-2xl p-5">
+        <div className="panel p-9 text-center text-sm text-red-700">
+          Load failed: {error}
+        </div>
+      </div>
+    );
   }
 
   if (!state.assistant.exists) {
     return (
       <div className="relative mx-auto w-full max-w-2xl p-4 pb-8">
-        <div className="pointer-events-none fixed inset-0 opacity-[0.06]" style={{ backgroundImage: "radial-gradient(#000 0.7px, transparent 0.7px)", backgroundSize: "3px 3px" }} />
+        <div
+          className="pointer-events-none fixed inset-0 opacity-[0.06]"
+          style={{
+            backgroundImage: "radial-gradient(#000 0.7px, transparent 0.7px)",
+            backgroundSize: "3px 3px",
+          }}
+        />
         <section className="panel relative overflow-hidden p-5">
           <span className="pill bg-ink text-white">PIN AI MINI</span>
-          <h1 className="mt-3 font-heading text-[30px] leading-[1.1]">创建你的 Bot</h1>
-          <p className="mt-2 max-w-md text-sm text-muted">检测到你还没有创建 Assistant。先完成 /create 初始化，再进入订阅与管理。</p>
+          <h1 className="mt-3 font-heading text-[30px] leading-[1.1]">
+            Create Your Bot
+          </h1>
+          <p className="mt-2 max-w-md text-sm text-muted">
+            No assistant was found. Run /create first, then return here for
+            subscription and skills management.
+          </p>
         </section>
 
         <section className="panel mt-3 p-4">
@@ -214,7 +249,8 @@ const App = () => {
             <h2 className="font-heading text-xl">/create</h2>
           </div>
           <p className="text-sm text-muted">
-            创建 Assistant 记录后即可进入订阅管理页；订阅生效后会启动对应容器能力。
+            Once an assistant record exists, this page unlocks subscription and
+            runtime controls.
           </p>
           <div className="mt-3 grid gap-2">
             <button
@@ -222,10 +258,13 @@ const App = () => {
               onClick={() => void createAssistant()}
               disabled={busy !== "none"}
             >
-              {busy === "create" ? "创建中..." : "一键创建并继续"}
+              {busy === "create" ? "Creating..." : "Create and Continue"}
             </button>
-            <button className="w-full rounded-xl border border-dashed border-ink/10 px-4 py-3 text-sm font-semibold text-muted" onClick={() => void loadState()}>
-              刷新状态
+            <button
+              className="w-full rounded-xl border border-dashed border-ink/10 px-4 py-3 text-sm font-semibold text-muted"
+              onClick={() => void loadState()}
+            >
+              Refresh
             </button>
           </div>
         </section>
@@ -236,34 +275,55 @@ const App = () => {
 
   return (
     <div className="relative mx-auto w-full max-w-2xl p-4 pb-8">
-      <div className="pointer-events-none fixed inset-0 opacity-[0.06]" style={{ backgroundImage: "radial-gradient(#000 0.7px, transparent 0.7px)", backgroundSize: "3px 3px" }} />
+      <div
+        className="pointer-events-none fixed inset-0 opacity-[0.06]"
+        style={{
+          backgroundImage: "radial-gradient(#000 0.7px, transparent 0.7px)",
+          backgroundSize: "3px 3px",
+        }}
+      />
       <section className="panel relative overflow-hidden p-5">
         <span className="pill bg-ink text-white">PIN AI V3</span>
-        <h1 className="mt-3 font-heading text-[30px] leading-[1.1]">Subscription Center</h1>
-        <p className="mt-2 max-w-md text-sm text-muted">你已创建 Assistant，可以在这里订阅、升级或降级计划。</p>
+        <h1 className="mt-3 font-heading text-[30px] leading-[1.1]">
+          Subscription Center
+        </h1>
+        <p className="mt-2 max-w-md text-sm text-muted">
+          Your assistant is ready. Subscribe, upgrade, downgrade, and manage
+          skills here.
+        </p>
       </section>
 
       <section className="panel mt-3 p-4">
         <div className="mb-2 flex items-center justify-between gap-2">
-          <h2 className="font-heading text-xl">容器状态</h2>
-          <span className={`pill ${state.subscription.active ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>
-            {state.subscription.active ? "订阅生效中" : "未订阅或已过期"}
+          <h2 className="font-heading text-xl">Runtime Status</h2>
+          <span
+            className={`pill ${state.subscription.active ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}
+          >
+            {state.subscription.active ? "Active" : "Inactive"}
           </span>
         </div>
-        <div className="text-sm text-muted">状态：{state.assistant.status || "unknown"}</div>
-        <div className="mt-1 text-xs text-muted">当前计划：{state.subscription.plan_id || "none"}</div>
+        <div className="text-sm text-muted">
+          Status: {state.assistant.status || "unknown"}
+        </div>
+        <div className="mt-1 text-xs text-muted">
+          Current plan: {state.subscription.plan_id || "none"}
+        </div>
         {state.subscription.current_period_end ? (
-          <div className="mt-1 text-xs text-muted">到期时间：{state.subscription.current_period_end}</div>
+          <div className="mt-1 text-xs text-muted">
+            Period end: {state.subscription.current_period_end}
+          </div>
         ) : null}
         {state.subscription.cancel_at_period_end ? (
-          <div className="mt-1 text-xs text-amber-700">已设置取消续费（到期后停用）</div>
+          <div className="mt-1 text-xs text-amber-700">
+            Renewal canceled (service ends at period end).
+          </div>
         ) : null}
       </section>
 
       <section className="panel mt-3 p-4">
         <div className="mb-3 flex items-center justify-between gap-2">
-          <h2 className="font-heading text-xl">变更订阅</h2>
-          <span className="pill bg-ink/10 text-ink">可随时调整</span>
+          <h2 className="font-heading text-xl">Change Plan</h2>
+          <span className="pill bg-ink/10 text-ink">Flexible</span>
         </div>
 
         <div className="grid gap-2">
@@ -278,11 +338,13 @@ const App = () => {
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-sm font-bold">{plan.name}</span>
-                  <span className="text-sm font-extrabold text-primary">${plan.price}/mo</span>
+                  <span className="text-sm font-extrabold text-primary">
+                    ${plan.price}/mo
+                  </span>
                 </div>
                 <div className="mt-1 text-xs text-muted">
                   {plan.features.slice(0, 2).join(" · ")}
-                  {current ? " · 当前计划" : ""}
+                  {current ? " · current" : ""}
                 </div>
               </button>
             );
@@ -295,14 +357,14 @@ const App = () => {
             onClick={() => void checkout()}
             disabled={busy !== "none" || !selectedPlan}
           >
-            {busy === "checkout" ? "跳转中..." : "继续到支付"}
+            {busy === "checkout" ? "Redirecting..." : "Continue to Checkout"}
           </button>
           <button
             className="w-full rounded-xl bg-ink/10 px-4 py-3 text-sm font-semibold text-ink disabled:opacity-60"
             onClick={() => void cancelSubscription()}
             disabled={busy !== "none"}
           >
-            {busy === "cancel" ? "处理中..." : "取消续费"}
+            {busy === "cancel" ? "Processing..." : "Cancel Renewal"}
           </button>
         </div>
       </section>
@@ -310,7 +372,9 @@ const App = () => {
       <section className="panel mt-3 p-4">
         <div className="mb-2 flex items-center justify-between gap-2">
           <h2 className="font-heading text-xl">Skills</h2>
-          <span className="pill bg-ink/10 text-ink">{state.skills.supported ? "Enabled" : "Pending"}</span>
+          <span className="pill bg-ink/10 text-ink">
+            {state.skills.supported ? "Enabled" : "Pending"}
+          </span>
         </div>
         <div className="text-sm text-muted">{state.skills.message}</div>
         {state.skills.supported ? (
@@ -319,11 +383,16 @@ const App = () => {
               const installing = busy === `skill-install:${skill.key}`;
               const uninstalling = busy === `skill-uninstall:${skill.key}`;
               return (
-                <div key={skill.key} className="rounded-xl border border-ink/10 bg-white p-3">
+                <div
+                  key={skill.key}
+                  className="rounded-xl border border-ink/10 bg-white p-3"
+                >
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="text-sm font-bold">{skill.name}</div>
-                      <div className="mt-1 text-xs text-muted">{skill.description}</div>
+                      <div className="mt-1 text-xs text-muted">
+                        {skill.description}
+                      </div>
                       <div className="mt-1 text-[11px] text-muted">
                         key: {skill.key} · {skill.installed ? "installed" : "not installed"}
                       </div>
@@ -334,7 +403,7 @@ const App = () => {
                         onClick={() => void uninstallSkill(skill.key)}
                         disabled={busy !== "none"}
                       >
-                        {uninstalling ? "卸载中..." : "卸载"}
+                        {uninstalling ? "Removing..." : "Remove"}
                       </button>
                     ) : (
                       <button
@@ -342,7 +411,7 @@ const App = () => {
                         onClick={() => void installSkill(skill.key)}
                         disabled={busy !== "none"}
                       >
-                        {installing ? "安装中..." : "安装"}
+                        {installing ? "Installing..." : "Install"}
                       </button>
                     )}
                   </div>

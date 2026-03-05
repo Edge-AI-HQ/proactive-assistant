@@ -193,31 +193,16 @@ const buildAssistantGatewayUrl = (
 
 const buildSubscriptionMiniAppUrl = (
   publicOrigin: string,
-  telegramUserId: number,
-  sessionToken?: string,
 ): string => {
-  const url = new URL(`/gateway/${telegramUserId}/mini`, publicOrigin);
-  if (sessionToken) {
-    url.searchParams.set("gateway_sid", sessionToken);
-  }
-  return url.toString();
+  return new URL("/mini", publicOrigin).toString();
 };
 
 const createSubscriptionEntryUrl = async (
-  telegramUserId: number,
+  _telegramUserId: number,
 ): Promise<string | null> => {
   const publicBase = resolveGatewayPublicOrigin();
   if (!publicBase) return null;
-
-  const session = await createGatewaySessionViaApi(
-    telegramUserId,
-    GATEWAY_LINK_SESSION_TTL_HOURS,
-  );
-  return buildSubscriptionMiniAppUrl(
-    publicBase.origin,
-    telegramUserId,
-    session.session_token,
-  );
+  return buildSubscriptionMiniAppUrl(publicBase.origin);
 };
 
 const buildAssistantGatewayLinksText = (
