@@ -5,6 +5,7 @@ import TopStatus from "./components/TopStatus";
 import AgentCard from "./components/AgentCard";
 import AgentSkills from "./components/AgentSkills";
 import AgentInsights from "./components/AgentInsights";
+import ChangePlanDialog from "./components/ChangePlanDialog";
 
 type Plan = {
   id: string;
@@ -102,6 +103,7 @@ const App = () => {
   const [busy, setBusy] = useState<string>("none");
   const [showCreateFlow, setShowCreateFlow] = useState(false);
   const [hasSeenIntro, setHasSeenIntro] = useState(false);
+  const [showChangePlan, setShowChangePlan] = useState(false);
 
   const hydrateState = (payload: StatePayload): void => {
     setState(payload);
@@ -252,6 +254,28 @@ const App = () => {
       await loadState();
     } catch (e) {
       alert(`Cancel failed: ${e instanceof Error ? e.message : "unknown"}`);
+      setBusy("none");
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    setBusy("delete");
+    try {
+      const telegramUserId = state?.user.telegram_user_id;
+      if (!telegramUserId) {
+        throw new Error("User ID not found");
+      }
+      
+      // Call reset account API
+      await safeFetch(`/api/reset-account/${telegramUserId}`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      
+      alert("Account deleted successfully. Redirecting...");
+      window.location.reload();
+    } catch (e) {
+      alert(`Delete failed: ${e instanceof Error ? e.message : "unknown"}`);
       setBusy("none");
     }
   };
@@ -424,6 +448,8 @@ const App = () => {
             status={state.assistant.status || "unknown"}
             planId={state.subscription.plan_id}
             active={state.subscription.active}
+            onChangePlan={() => setShowChangePlan(true)}
+            onDeleteAccount={handleDeleteAccount}
           />
         </div>
 
@@ -453,6 +479,18 @@ const App = () => {
             Contact Us
           </a>
         </div>
+
+        <ChangePlanDialog
+          open={showChangePlan}
+          onClose={() => setShowChangePlan(false)}
+          plans={state.plans}
+          currentPlanId={state.subscription.plan_id}
+          selectedPlan={selectedPlan}
+          onSelectPlan={setSelectedPlan}
+          onCheckout={checkout}
+          onCancel={cancelSubscription}
+          busy={busy}
+        />
       </div>
     );
   }
