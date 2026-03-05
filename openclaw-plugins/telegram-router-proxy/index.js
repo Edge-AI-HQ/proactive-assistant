@@ -88,11 +88,29 @@ function installTelegramFetchProxy(api, routerUrl) {
             }
             const proxyUrl = `${normalizedRouter}/api/telegram/${methodName}${targetUrl.search}`;
             const effectiveInit = buildProxyInit(input, init, botToken);
-            return await originalFetch(proxyUrl, effectiveInit);
+            try {
+              const resp = await originalFetch(proxyUrl, effectiveInit);
+              api.logger.info(`Proxied Telegram method ${methodName} -> ${resp.status}`);
+              return resp;
+            } catch (proxyErr) {
+              api.logger.error(`Proxy fetch failed for ${methodName} via ${normalizedRouter}: ${String(proxyErr)}`);
+              return new Response(JSON.stringify({ ok: false, description: `proxy unreachable: ${String(proxyErr)}` }), {
+                status: 502,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
           }
           const proxyUrl = `${normalizedRouter}/api/telegram/file/${telegramTarget.filePath}${targetUrl.search}`;
           const effectiveInit = buildProxyInit(input, init, telegramTarget.botToken);
-          return await originalFetch(proxyUrl, effectiveInit);
+          try {
+            return await originalFetch(proxyUrl, effectiveInit);
+          } catch (proxyErr) {
+            api.logger.error(`Proxy file fetch failed via ${normalizedRouter}: ${String(proxyErr)}`);
+            return new Response(JSON.stringify({ ok: false, description: `proxy unreachable: ${String(proxyErr)}` }), {
+              status: 502,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
         }
       }
     } catch (error) {

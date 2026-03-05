@@ -565,6 +565,7 @@ export const dockerContainerRuntime: ContainerRuntime = {
       },
       HostConfig: {
         RestartPolicy: { Name: "unless-stopped" },
+        ExtraHosts: ["host.docker.internal:host-gateway"],
         PortBindings: {
           [`${config.openclaw.gatewayPort}/tcp`]: [{ HostPort: hostPort }],
           [`${webhookPort}/tcp`]: [{ HostPort: webhookHostPort }],

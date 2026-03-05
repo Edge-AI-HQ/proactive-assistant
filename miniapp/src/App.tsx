@@ -55,6 +55,8 @@ declare global {
       WebApp?: {
         ready: () => void;
         expand: () => void;
+        requestFullscreen: () => void;
+        platform?: string;
         close: () => void;
         initData?: string;
         openTelegramLink?: (url: string) => void;
@@ -183,6 +185,10 @@ const App = () => {
   useEffect(() => {
     window.Telegram?.WebApp?.ready?.();
     window.Telegram?.WebApp?.expand?.();
+    const platform = window.Telegram?.WebApp?.platform;
+    if (platform === 'ios' || platform === 'android') {
+      window.Telegram?.WebApp?.requestFullscreen?.();
+    }
     setLoading(true);
     setError(null);
 
