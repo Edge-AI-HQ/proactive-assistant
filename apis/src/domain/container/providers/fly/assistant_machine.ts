@@ -4,6 +4,10 @@ import type { ContainerManagerConfig } from "../../types.js";
 import { config as appConfig } from "../../../common/config.js";
 import { isAssistantContainerName } from "../../naming.js";
 import { buildAssistantOpenclawConfig } from "../shared/openclaw_config.js";
+import {
+  assertNoP0SecretsInConfig,
+  assertNoP0SecretsInEnv,
+} from "../shared/secret_guard.js";
 import { FLY_FORBIDDEN_SECRET_ENV_KEYS } from "../shared/secret_env.js";
 import {
   createMachine as createFlyMachine,
@@ -99,7 +103,6 @@ const buildAssistantOpenclawConfigPayload = (
     );
   }
   const privateWebhookPort = webhookPort + 1;
-  const webhookSecret = config.telegram.webhookSecret;
   const openclawConfigContext = {
     openclaw: config.openclaw,
     elevenLabs: config.elevenLabs,
@@ -113,19 +116,18 @@ const buildAssistantOpenclawConfigPayload = (
     gatewayToken,
     gatewayBind: "loopback",
     assistantBotToken,
-    publicBotToken: config.telegram.token,
     liteLlmApiKey,
     includeTelegramPlugin: true,
     telegramWebhookMode: true,
     telegramWebhookPort: webhookPort,
     telegramPrivateWebhookPort: privateWebhookPort,
     telegramWebhookUrl: normalizedWebhookUrl,
-    ...(webhookSecret ? { telegramWebhookSecret: webhookSecret } : {}),
     ...(webhookPath ? { telegramWebhookPath: webhookPath } : {}),
     ...(webhookHost ? { telegramWebhookHost: webhookHost } : {}),
     ...(pluginPath ? { telegramRouterPluginPath: pluginPath } : {}),
     controlOrigin: appConfig.publicBaseUrl,
   });
+  assertNoP0SecretsInConfig(built, config);
   const json = JSON.stringify(built);
   return {
     config: built,
@@ -385,6 +387,7 @@ export const createAssistantMachine = async (
     PINAI_OPENCLAW_CONFIG_SHA256: openclawPayload.hash,
     TELEGRAM_ROUTER_URL: routerOrigin,
   };
+  assertNoP0SecretsInEnv(env, config);
 
   // Persist jiti + Node compile caches on the volume so restarts skip
   // the expensive cold-compile phase (~7 min → seconds).

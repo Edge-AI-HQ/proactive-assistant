@@ -18,6 +18,10 @@ import type {
 import { buildAssistantOpenclawConfig } from "../shared/openclaw_config.js";
 import { resolveAssistantLiteLLMApiKey as resolveAssistantLiteLLMApiKeyShared } from "../shared/assistant_litellm_key.js";
 import { DOCKER_FORBIDDEN_SECRET_ENV_KEYS } from "../shared/secret_env.js";
+import {
+  assertNoP0SecretsInConfig,
+  assertNoP0SecretsInEnv,
+} from "../shared/secret_guard.js";
 import { config as appConfig } from "../../../common/config.js";
 
 // ---------------------------------------------------------------------------
@@ -279,7 +283,6 @@ const ensureOpenclawConfig = (
   const privateWebhookPort = webhookPort + 1;
   const webhookPath = config.telegramRouter.webhookPath;
   const webhookHost = config.telegramRouter.webhookHost || "0.0.0.0";
-  const webhookSecret = config.telegram.webhookSecret;
   const pluginPath = config.telegramRouter.pluginPath;
   const webhookUrl = config.telegramRouter.webhookUrl.trim();
 
@@ -287,7 +290,6 @@ const ensureOpenclawConfig = (
     gatewayToken,
     gatewayBind: "lan",
     assistantBotToken: assistantBotToken ?? null,
-    publicBotToken: config.telegram.token,
     liteLlmApiKey: liteLlmApiKey ?? null,
     includeTelegramPlugin: true,
     telegramWebhookMode: true,
@@ -296,7 +298,6 @@ const ensureOpenclawConfig = (
     telegramWebhookPath: webhookPath,
     telegramWebhookHost: webhookHost,
     ...(webhookUrl ? { telegramWebhookUrl: webhookUrl } : {}),
-    ...(webhookSecret ? { telegramWebhookSecret: webhookSecret } : {}),
     ...(pluginPath ? { telegramRouterPluginPath: pluginPath } : {}),
     controlOrigin: appConfig.publicBaseUrl,
   });
@@ -305,6 +306,7 @@ const ensureOpenclawConfig = (
     desired,
     assistantBotToken || "",
   );
+  assertNoP0SecretsInConfig(next, config);
 
   const changed = JSON.stringify(existingParsed) !== JSON.stringify(next);
   if (changed) {
@@ -517,21 +519,22 @@ export const dockerContainerRuntime: ContainerRuntime = {
     // outbound Telegram API calls. In Docker, the APIs server runs on the host.
     const apisPort = Number.parseInt(process.env.PORT || "3000", 10);
     const telegramRouterUrl = `http://host.docker.internal:${apisPort}`;
+    const containerEnv: Record<string, string> = {
+      OPENCLAW_USER_ID: `assistant-${params.assistantBotId}`,
+      OPENCLAW_GATEWAY_PORT: String(config.openclaw.gatewayPort),
+      OPENCLAW_TELEGRAM_WEBHOOK_PORT: String(webhookPort),
+      OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT: String(privateWebhookPort),
+      OPENCLAW_CONFIG_PATH: "/app/config/openclaw.json",
+      OPENCLAW_STATE_DIR: "/app/data",
+      NODE_COMPILE_CACHE: "/app/data/cache/node-compile-cache",
+      TELEGRAM_ROUTER_URL: telegramRouterUrl,
+    };
+    assertNoP0SecretsInEnv(containerEnv, config);
 
     const container = await docker.createContainer({
       name: params.containerName,
       Image: config.openclaw.image,
-      Env: [
-        `OPENCLAW_USER_ID=assistant-${params.assistantBotId}`,
-        `OPENCLAW_GATEWAY_PORT=${config.openclaw.gatewayPort}`,
-        `OPENCLAW_TELEGRAM_WEBHOOK_PORT=${webhookPort}`,
-        `OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT=${privateWebhookPort}`,
-        "OPENCLAW_CONFIG_PATH=/app/config/openclaw.json",
-        "OPENCLAW_STATE_DIR=/app/data",
-        "NODE_COMPILE_CACHE=/app/data/cache/node-compile-cache",
-        `TELEGRAM_ROUTER_URL=${telegramRouterUrl}`,
-        `TELEGRAM_BOT_TOKEN=${config.telegram.token}`,
-      ],
+      Env: Object.entries(containerEnv).map(([key, value]) => `${key}=${value}`),
       ExposedPorts: {
         [`${config.openclaw.gatewayPort}/tcp`]: {},
         [`${webhookPort}/tcp`]: {},
@@ -727,4 +730,3 @@ export const dockerContainerRuntime: ContainerRuntime = {
     return false;
   },
 };
-
