@@ -100,7 +100,10 @@ export const buildTelegramChannelConfigSection = (
         requireMention: true,
       },
     },
-    streaming: "partial",
+    // LiteLLM + vision providers can emit non-standard streaming chunks
+    // (e.g. missing id), which breaks OpenClaw mid-stream handling.
+    // Use non-streaming mode to keep Telegram image/file replies stable.
+    streaming: "off",
     actions: {
       sendMessage: true,
       deleteMessage: false,
