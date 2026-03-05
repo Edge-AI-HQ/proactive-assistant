@@ -87,6 +87,7 @@ const App = () => {
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
   const [busy, setBusy] = useState<string>("none");
   const [showCreateFlow, setShowCreateFlow] = useState(false);
+  const [hasSeenIntro, setHasSeenIntro] = useState(false);
 
   const hydrateState = (payload: StatePayload): void => {
     setState(payload);
@@ -128,6 +129,14 @@ const App = () => {
         setLoading(false);
       });
   }, []);
+
+  // Auto-show CreateAgentFlow for first-time users
+  useEffect(() => {
+    if (state && !loading && !hasSeenIntro && !state.assistant.exists) {
+      setShowCreateFlow(true);
+      setHasSeenIntro(true);
+    }
+  }, [state, loading, hasSeenIntro]);
 
   const createAssistant = async () => {
     setBusy("create");
