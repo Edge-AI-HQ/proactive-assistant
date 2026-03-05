@@ -223,7 +223,7 @@ const App = () => {
     );
   }
 
-  if (!state.assistant.exists) {
+  if (!state.subscription.active) {
     return (
       <div className="relative mx-auto w-full max-w-2xl p-4 pb-8">
         <div
@@ -236,29 +236,47 @@ const App = () => {
         <section className="panel relative overflow-hidden p-5">
           <span className="pill bg-ink text-white">PIN AI MINI</span>
           <h1 className="mt-3 font-heading text-[30px] leading-[1.1]">
-            Create Your Bot
+            Subscription Required
           </h1>
           <p className="mt-2 max-w-md text-sm text-muted">
-            No assistant was found. Run /create first, then return here for
-            subscription and skills management.
+            Subscribe first to unlock the full V3 workspace, runtime controls,
+            and skills management.
           </p>
         </section>
 
         <section className="panel mt-3 p-4">
           <div className="mb-3 flex items-center justify-between gap-2">
-            <h2 className="font-heading text-xl">/create</h2>
+            <h2 className="font-heading text-xl">Choose Plan</h2>
           </div>
-          <p className="text-sm text-muted">
-            Once an assistant record exists, this page unlocks subscription and
-            runtime controls.
-          </p>
+          <div className="grid gap-2">
+            {state.plans.map((plan) => {
+              const selected = selectedPlan === plan.id;
+              return (
+                <button
+                  key={plan.id}
+                  className={`rounded-2xl border bg-white p-3 text-left ${selected ? "border-primary/50 ring-2 ring-primary/10" : "border-ink/10"}`}
+                  onClick={() => setSelectedPlan(plan.id)}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-bold">{plan.name}</span>
+                    <span className="text-sm font-extrabold text-primary">
+                      ${plan.price}/mo
+                    </span>
+                  </div>
+                  <div className="mt-1 text-xs text-muted">
+                    {plan.features.slice(0, 2).join(" · ")}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
           <div className="mt-3 grid gap-2">
             <button
               className="w-full rounded-xl bg-primary px-4 py-3 text-sm font-bold text-[#fff9f6] shadow-[0_10px_22px_rgba(235,74,39,0.3)] disabled:opacity-60"
-              onClick={() => void createAssistant()}
-              disabled={busy !== "none"}
+              onClick={() => void checkout()}
+              disabled={busy !== "none" || !selectedPlan}
             >
-              {busy === "create" ? "Creating..." : "Create and Continue"}
+              {busy === "checkout" ? "Redirecting..." : "Continue to Checkout"}
             </button>
             <button
               className="w-full rounded-xl border border-dashed border-ink/10 px-4 py-3 text-sm font-semibold text-muted"
@@ -268,7 +286,7 @@ const App = () => {
             </button>
           </div>
         </section>
-        <div className="mt-2 text-center text-xs text-muted">PIN AI · create</div>
+        <div className="mt-2 text-center text-xs text-muted">PIN AI · subscribe</div>
       </div>
     );
   }
@@ -303,7 +321,7 @@ const App = () => {
           </span>
         </div>
         <div className="text-sm text-muted">
-          Status: {state.assistant.status || "unknown"}
+          Status: {state.assistant.exists ? (state.assistant.status || "unknown") : "assistant not created"}
         </div>
         <div className="mt-1 text-xs text-muted">
           Current plan: {state.subscription.plan_id || "none"}
@@ -319,6 +337,26 @@ const App = () => {
           </div>
         ) : null}
       </section>
+
+      {!state.assistant.exists ? (
+        <section className="panel mt-3 p-4">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h2 className="font-heading text-xl">Create Assistant</h2>
+          </div>
+          <p className="text-sm text-muted">
+            Subscription is active. Create your assistant to enable runtime and skills.
+          </p>
+          <div className="mt-3 grid gap-2">
+            <button
+              className="w-full rounded-xl bg-primary px-4 py-3 text-sm font-bold text-[#fff9f6] shadow-[0_10px_22px_rgba(235,74,39,0.3)] disabled:opacity-60"
+              onClick={() => void createAssistant()}
+              disabled={busy !== "none"}
+            >
+              {busy === "create" ? "Creating..." : "Create Assistant"}
+            </button>
+          </div>
+        </section>
+      ) : null}
 
       <section className="panel mt-3 p-4">
         <div className="mb-3 flex items-center justify-between gap-2">
