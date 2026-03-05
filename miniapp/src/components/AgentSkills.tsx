@@ -1,5 +1,3 @@
-import { useState } from "react";
-
 interface Skill {
   key: string;
   name: string;
@@ -36,7 +34,6 @@ const AgentSkills = ({ skills, onInstall, onUninstall, busy }: AgentSkillsProps)
         {displaySkills.map((skill) => {
           const installing = busy === `skill-install:${skill.key}`;
           const uninstalling = busy === `skill-uninstall:${skill.key}`;
-          
           return (
             <div
               key={skill.key}

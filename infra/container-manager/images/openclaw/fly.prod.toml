@@ -1,0 +1,16 @@
+# OpenClaw 镜像构建配置 - Prod
+# 从仓库根目录执行：
+#   flyctl deploy -c infra/container-manager/images/openclaw/fly.prod.toml --build-only
+# 构建完成后更新 secret：
+#   flyctl secrets set OPENCLAW_IMAGE="registry.fly.io/pinclaw-prod@sha256:<digest>" -a pinclaw-api-prod
+
+app = 'pinclaw-prod'
+primary_region = 'iad'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1

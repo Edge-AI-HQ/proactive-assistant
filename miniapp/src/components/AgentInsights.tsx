@@ -1,20 +1,8 @@
 const insights = [
-  {
-    icon: "🧠",
-    text: "Resolved 3 schedule conflicts automatically"
-  },
-  {
-    icon: "⏱️",
-    text: "Saved ~4.5h on routine emails & follow-ups"
-  },
-  {
-    icon: "📅",
-    text: "2 meetings tomorrow, 1 deadline Fri — prep ready"
-  },
-  {
-    icon: "📈",
-    text: "Task completion rate up 18% vs last week"
-  },
+  { icon: "🧠", text: "Resolved 3 schedule conflicts automatically" },
+  { icon: "⏱️", text: "Saved ~4.5h on routine emails & follow-ups" },
+  { icon: "📅", text: "2 meetings tomorrow, 1 deadline Fri — prep ready" },
+  { icon: "📈", text: "Task completion rate up 18% vs last week" },
 ];
 
 const AgentInsights = () => {

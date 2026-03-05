@@ -1,9 +1,7 @@
 import { useEffect, useState } from "react";
 import CreateAgentFlow from "./components/CreateAgentFlow";
-import CreateAgentCTA from "./components/CreateAgentCTA";
 import TopStatus from "./components/TopStatus";
 import AgentCard from "./components/AgentCard";
-import AgentSkills from "./components/AgentSkills";
 import AgentInsights from "./components/AgentInsights";
 import ChangePlanDialog from "./components/ChangePlanDialog";
 
@@ -57,6 +55,7 @@ declare global {
       WebApp?: {
         ready: () => void;
         expand: () => void;
+        close: () => void;
         initData?: string;
         openTelegramLink?: (url: string) => void;
         initDataUnsafe?: {
@@ -101,8 +100,6 @@ const App = () => {
   const [loading, setLoading] = useState(true);
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
   const [busy, setBusy] = useState<string>("none");
-  const [showCreateFlow, setShowCreateFlow] = useState(false);
-  const [hasSeenIntro, setHasSeenIntro] = useState(false);
   const [showChangePlan, setShowChangePlan] = useState(false);
 
   const hydrateState = (payload: StatePayload): void => {
@@ -198,15 +195,6 @@ const App = () => {
       });
   }, []);
 
-  // No longer needed - we'll show CreateAgentFlow directly in the render
-  // useEffect(() => {
-  //   if (state && !loading && !hasSeenIntro && !state.assistant.exists) {
-  //     console.log('[MiniApp] Auto-opening CreateAgentFlow for first-time user');
-  //     setShowCreateFlow(true);
-  //     setHasSeenIntro(true);
-  //   }
-  // }, [state, loading, hasSeenIntro]);
-
   const createAssistant = async () => {
     setBusy("create");
     try {
@@ -230,16 +218,14 @@ const App = () => {
         method: "POST",
         body: JSON.stringify({ plan: selectedPlan }),
       });
-      
       if (result.action === "upgrade" || result.action === "downgrade") {
-        // Plan changed directly via Stripe subscription update (no redirect needed)
+        // Plan changed directly via Stripe subscription update — no redirect needed
         alert(result.message ?? "Plan updated successfully.");
         setBusy("none");
         await loadState();
         return;
       }
-      
-      if (!result.url) throw new Error("missing checkout url");
+      if (!result.url) throw new Error("Unable to get checkout URL. Please try again.");
       window.location.href = result.url;
     } catch (e) {
       alert(
@@ -332,8 +318,6 @@ const App = () => {
     console.log('[MiniApp] Current state:', {
       hasAssistant: state.assistant.exists,
       hasSubscription: state.subscription.active,
-      showCreateFlow,
-      hasSeenIntro,
     });
   }
 
@@ -462,16 +446,7 @@ const App = () => {
           />
         </div>
 
-        {state.skills.supported && state.skills.items.length > 0 && (
-          <div className="px-4 mt-6">
-            <AgentSkills
-              skills={state.skills.items}
-              onInstall={installSkill}
-              onUninstall={uninstallSkill}
-              busy={busy}
-            />
-          </div>
-        )}
+        {/* Skills section temporarily hidden pending API key input support */}
 
         <div className="px-4 mt-6">
           <AgentInsights />

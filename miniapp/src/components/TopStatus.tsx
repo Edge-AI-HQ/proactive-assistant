@@ -8,10 +8,12 @@ const TopStatus = ({ hasAgent = false }: TopStatusProps) => {
     <div className="glass-card rounded-2xl p-5 mx-4 mt-4 animate-fade-in">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-[52px] h-[52px] rounded-full bg-gradient-to-br from-primary to-pin-lavender flex items-center justify-center shadow-md">
-            <svg className="w-7 h-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
+          <div className="avatar-ring-glow" style={{ width: 56, height: 56 }}>
+            <img
+              src="/tg-subscription-mini/avatar-pinai.png"
+              alt="PIN AI"
+              className="w-[52px] h-[52px] rounded-full object-cover shadow-md"
+            />
           </div>
           <div>
             <h1 className="text-base font-semibold text-foreground">
