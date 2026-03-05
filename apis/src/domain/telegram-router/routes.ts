@@ -236,7 +236,7 @@ async function handleTelegramApiProxy(req: Request, res: Response): Promise<void
 
 function resolveProxyBotToken(req: Request): string {
   const headerToken = String(req.headers["x-pinai-telegram-bot-token"] || "").trim();
-  if (headerToken && /^[0-9]+:[A-Za-z0-9_-]{20,}$/.test(headerToken)) return headerToken;
+  if (headerToken && /^[1-9][0-9]*:[A-Za-z0-9_-]{20,}$/.test(headerToken)) return headerToken;
   return config.telegram.token;
 }
 
