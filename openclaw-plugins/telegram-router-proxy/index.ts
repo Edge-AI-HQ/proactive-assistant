@@ -5,6 +5,7 @@ import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import { emptyPluginConfigSchema } from 'openclaw/plugin-sdk';
 
 const FETCH_PATCH_KEY = '__pinaiTelegramRouterFetchPatched__';
+const LITELLM_STREAM_ADAPTER_HEADER = 'x-pinai-litellm-stream-adapter';
 const OPENCLAW_GATEWAY_PORT = Number.parseInt(process.env.OPENCLAW_GATEWAY_PORT || '18789', 10);
 
 // Methods blocked entirely (return fake success) to prevent OpenClaw's
@@ -102,7 +103,12 @@ function installTelegramFetchProxy(api: OpenClawPluginApi, routerUrl: string) {
     } catch (error) {
       api.logger.error(`Telegram fetch proxy rewrite failed: ${String(error)}`);
     }
-    return await originalFetch(input as RequestInfo, init);
+    const { nextInit, shouldAdaptLiteLLMStream } = consumeLiteLLMStreamAdapterMarker(input, init);
+    const response = await originalFetch(input as RequestInfo, nextInit);
+    if (shouldAdaptLiteLLMStream) {
+      return await adaptLiteLLMNonStreamResponseToSse(response, api);
+    }
+    return response;
   }) as typeof fetch;
 
   g[FETCH_PATCH_KEY] = true;
@@ -323,6 +329,7 @@ async function patchLiteLLMVisionStreamOff(
     return null;
   }
   parsed.stream = false;
+  headers.set(LITELLM_STREAM_ADAPTER_HEADER, '1');
   const nextBody = JSON.stringify(parsed);
   api?.logger.info('[litellm patch] disable stream for vision request');
   return {
@@ -365,6 +372,121 @@ function hasImageMessages(messages: unknown): boolean {
     }
   }
   return false;
+}
+
+function consumeLiteLLMStreamAdapterMarker(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): { nextInit: RequestInit | undefined; shouldAdaptLiteLLMStream: boolean } {
+  const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : {}));
+  const marker = headers.get(LITELLM_STREAM_ADAPTER_HEADER) === '1';
+  if (!marker) {
+    return { nextInit: init, shouldAdaptLiteLLMStream: false };
+  }
+  headers.delete(LITELLM_STREAM_ADAPTER_HEADER);
+  const nextInit: RequestInit = {
+    ...(input instanceof Request ? { method: input.method, body: input.body, redirect: input.redirect } : {}),
+    ...init,
+    headers,
+  };
+  return { nextInit, shouldAdaptLiteLLMStream: true };
+}
+
+async function adaptLiteLLMNonStreamResponseToSse(
+  response: Response,
+  api?: OpenClawPluginApi,
+): Promise<Response> {
+  if (!response.ok) {
+    return response;
+  }
+  const contentType = response.headers.get('content-type')?.toLowerCase() || '';
+  if (contentType.includes('text/event-stream')) {
+    return response;
+  }
+  const raw = await response.text();
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return new Response(raw, {
+      status: response.status,
+      headers: response.headers,
+    });
+  }
+  const content = extractLiteLLMMessageText(parsed);
+  if (!content) {
+    return new Response(raw, {
+      status: response.status,
+      headers: response.headers,
+    });
+  }
+  const created = Math.floor(Date.now() / 1000);
+  const id = typeof parsed.id === 'string' && parsed.id.trim() ? parsed.id.trim() : `chatcmpl_${Date.now()}`;
+  const model = typeof parsed.model === 'string' ? parsed.model : '';
+  const firstChunk = {
+    id,
+    object: 'chat.completion.chunk',
+    created,
+    model,
+    choices: [
+      {
+        index: 0,
+        delta: { content },
+        finish_reason: null,
+      },
+    ],
+  };
+  const lastChunk = {
+    id,
+    object: 'chat.completion.chunk',
+    created,
+    model,
+    choices: [
+      {
+        index: 0,
+        delta: {},
+        finish_reason: 'stop',
+      },
+    ],
+  };
+  const sse =
+    `data: ${JSON.stringify(firstChunk)}\n\n` +
+    `data: ${JSON.stringify(lastChunk)}\n\n` +
+    'data: [DONE]\n\n';
+  api?.logger.info('[litellm patch] adapted non-stream completion to SSE');
+  return new Response(sse, {
+    status: response.status,
+    headers: {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache',
+    },
+  });
+}
+
+function extractLiteLLMMessageText(payload: Record<string, unknown>): string {
+  const choices = Array.isArray(payload.choices) ? payload.choices : [];
+  if (!choices.length || !isRecord(choices[0])) {
+    return '';
+  }
+  const message = isRecord(choices[0].message) ? choices[0].message : null;
+  if (!message) {
+    return '';
+  }
+  const content = message.content;
+  if (typeof content === 'string') {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return '';
+  }
+  const parts: string[] = [];
+  for (const part of content) {
+    if (!isRecord(part)) continue;
+    if (typeof part.text === 'string' && part.text) {
+      parts.push(part.text);
+    }
+  }
+  return parts.join('');
 }
 
 function isOpenClawGatewayRpc(url: URL): boolean {

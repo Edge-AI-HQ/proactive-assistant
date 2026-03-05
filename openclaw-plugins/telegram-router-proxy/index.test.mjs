@@ -96,7 +96,11 @@ test('disables stream for litellm vision chat completions', async () => {
   const calls = [];
   globalThis.fetch = async (input, init) => {
     calls.push({ input: String(input), init });
-    return new Response(JSON.stringify({ id: 'ok', choices: [] }), {
+    return new Response(JSON.stringify({
+      id: 'chatcmpl-test',
+      model: 'minimax-m2.5',
+      choices: [{ message: { role: 'assistant', content: 'image ok' } }],
+    }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });
@@ -107,7 +111,7 @@ test('disables stream for litellm vision chat completions', async () => {
 
   try {
     plugin.register(api);
-    await globalThis.fetch('https://litellm-dev.fly.dev/v1/chat/completions', {
+    const response = await globalThis.fetch('https://litellm-dev.fly.dev/v1/chat/completions', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -129,6 +133,10 @@ test('disables stream for litellm vision chat completions', async () => {
     assert.equal(calls[0]?.input, 'https://litellm-dev.fly.dev/v1/chat/completions');
     const body = JSON.parse(String(calls[0]?.init?.body || '{}'));
     assert.equal(body.stream, false);
+    const responseText = await response.text();
+    assert.match(response.headers.get('content-type') || '', /text\/event-stream/i);
+    assert.match(responseText, /chat\.completion\.chunk/);
+    assert.match(responseText, /\[DONE\]/);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalRouter === undefined) {
