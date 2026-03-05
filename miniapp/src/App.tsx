@@ -57,6 +57,7 @@ declare global {
       WebApp?: {
         ready: () => void;
         expand: () => void;
+        close: () => void;
         initData?: string;
         openTelegramLink?: (url: string) => void;
         initDataUnsafe?: {

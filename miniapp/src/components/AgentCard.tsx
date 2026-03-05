@@ -32,10 +32,10 @@ const AgentCard = ({ username, status, planId, active, onChangePlan, onDeleteAcc
   const statusDisplay = getStatusDisplay(status);
 
   const handleChat = () => {
-    if (!username) return;
-    if (window.Telegram?.WebApp) {
-      window.Telegram.WebApp.openTelegramLink?.(`https://t.me/${username}`);
-    } else {
+    // Close the mini app — returns user to Telegram where they can chat with the bot
+    if (window.Telegram?.WebApp?.close) {
+      window.Telegram.WebApp.close();
+    } else if (username) {
       window.open(`https://t.me/${username}`, "_blank");
     }
   };
