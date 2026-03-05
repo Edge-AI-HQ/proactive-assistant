@@ -334,6 +334,7 @@ export const createSubscriptionPeriodStore = (
           UPDATE subscription_periods
           SET ${updates.join(", ")}
           WHERE stripe_subscription_id = $1
+            AND period_start < $2::timestamptz
             AND period_end > $2::timestamptz
         `,
         params,
