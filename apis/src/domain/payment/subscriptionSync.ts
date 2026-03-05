@@ -292,7 +292,15 @@ export async function syncSubscriptionFromStripe(
   const shouldProvideService =
     hasActiveStatus && isWithinPeriod && (currentPeriod?.plan_id ?? planCode);
 
-  if (shouldProvideService) {
+  // Do NOT trigger container creation/restart when the subscription event is
+  // a cancel_at_period_end update. The user still has service until period end,
+  // but we should not restart a crashed container as a side effect of cancellation.
+  // Container restarts should only happen on new subscriptions (invoice.paid).
+  const isCancellationEvent =
+    typeof subscription.cancel_at_period_end === "boolean" &&
+    subscription.cancel_at_period_end === true;
+
+  if (shouldProvideService && !isCancellationEvent) {
     // Sync budget before starting containers — Stripe events can arrive out of order,
     // so subscription.updated (active) may arrive before invoice.paid. Without this,
     // the user would get Budget=0 and hit ExceededBudget on first message.
