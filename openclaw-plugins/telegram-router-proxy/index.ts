@@ -24,7 +24,6 @@ const BLOCKED_TELEGRAM_METHODS = new Set([
 // Methods that bypass the proxy and go directly to Telegram API.
 const PASSTHROUGH_TELEGRAM_METHODS = new Set([
   'getWebhookInfo',
-  'getMe',
   'logOut',
   'close'
 ]);

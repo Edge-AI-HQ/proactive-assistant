@@ -18,7 +18,6 @@ const BLOCKED_TELEGRAM_METHODS = new Set([
 
 const PASSTHROUGH_TELEGRAM_METHODS = new Set([
   'getWebhookInfo',
-  'getMe',
   'logOut',
   'close'
 ]);
