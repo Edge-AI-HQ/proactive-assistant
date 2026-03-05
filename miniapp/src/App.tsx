@@ -3,6 +3,8 @@ import CreateAgentFlow from "./components/CreateAgentFlow";
 import CreateAgentCTA from "./components/CreateAgentCTA";
 import TopStatus from "./components/TopStatus";
 import AgentCard from "./components/AgentCard";
+import AgentSkills from "./components/AgentSkills";
+import AgentInsights from "./components/AgentInsights";
 
 type Plan = {
   id: string;
@@ -419,10 +421,25 @@ const App = () => {
           </h2>
           <AgentCard
             username={state.assistant.username || null}
-            status={state.assistant.status || "未知"}
+            status={state.assistant.status || "unknown"}
             planId={state.subscription.plan_id}
             active={state.subscription.active}
           />
+        </div>
+
+        {state.skills.supported && state.skills.items.length > 0 && (
+          <div className="px-4 mt-6">
+            <AgentSkills
+              skills={state.skills.items}
+              onInstall={installSkill}
+              onUninstall={uninstallSkill}
+              busy={busy}
+            />
+          </div>
+        )}
+
+        <div className="px-4 mt-6">
+          <AgentInsights />
         </div>
 
         <div className="px-4 mt-8 mb-4">

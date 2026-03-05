@@ -30,11 +30,11 @@ const AgentCard = ({ username, status, planId, active }: AgentCardProps) => {
       <div className="flex items-start gap-4">
         <div className="relative shrink-0">
           <div className="avatar-ring-glow" style={{ width: 56, height: 56 }}>
-            <div className="w-[52px] h-[52px] rounded-full bg-gradient-to-br from-primary to-pin-lavender flex items-center justify-center shadow-md">
-              <svg className="w-7 h-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
-            </div>
+            <img 
+              src="/tg-subscription-mini/avatar-pinai.png" 
+              alt="PIN AI" 
+              className="w-[52px] h-[52px] rounded-full object-cover shadow-md"
+            />
           </div>
         </div>
         <div className="flex-1 min-w-0">
