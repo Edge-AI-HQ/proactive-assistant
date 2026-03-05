@@ -130,10 +130,22 @@ const App = () => {
     
     if (initData) {
       console.log('[MiniApp] ✓ Using Telegram initData for bootstrap');
+      console.log('[MiniApp] Calling /api/mini/bootstrap with init_data:', {
+        length: initData.length,
+        first50: initData.substring(0, 50),
+      });
+      
       const payload = await safeFetch<StatePayload>("/api/mini/bootstrap", {
         method: "POST",
         body: JSON.stringify({ init_data: initData }),
       });
+      
+      console.log('[MiniApp] Bootstrap response:', {
+        hasAssistant: payload.assistant.exists,
+        hasSubscription: payload.subscription.active,
+        planId: payload.subscription.plan_id,
+      });
+      
       hydrateState(payload);
       return;
     }
