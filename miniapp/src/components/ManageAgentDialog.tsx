@@ -61,8 +61,8 @@ const ManageAgentDialog = ({ open, onClose, planId, onChangePlan, onDeleteAccoun
   }
 
   return (
-    <div className="fixed inset-0 z-[9999] bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-4 animate-fade-in">
-      <div className="bg-white rounded-t-3xl sm:rounded-2xl p-0 max-w-sm w-full shadow-2xl animate-slide-up">
+    <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center p-4 animate-fade-in">
+      <div className="bg-white rounded-2xl p-0 max-w-sm w-full shadow-2xl animate-scale-in">
         <div className="p-5 pb-3">
           <h3 className="text-base font-bold text-foreground">Manage Agent</h3>
           <p className="text-xs text-muted-foreground mt-1">Configure your agent settings</p>

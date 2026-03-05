@@ -24,8 +24,8 @@ const ChangePlanDialog = ({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[9999] bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-4 animate-fade-in">
-      <div className="bg-white rounded-t-3xl sm:rounded-2xl p-5 max-w-md w-full max-h-[85vh] overflow-y-auto shadow-2xl animate-slide-up">
+    <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center p-4 animate-fade-in">
+      <div className="bg-white rounded-2xl p-5 max-w-md w-full max-h-[85vh] overflow-y-auto shadow-2xl animate-scale-in">
         <div className="mb-4 flex items-center justify-between">
           <div>
             <h3 className="text-lg font-bold text-foreground">Change Plan</h3>
