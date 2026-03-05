@@ -134,6 +134,11 @@
     @apply transition-all active:scale-[0.97] active:shadow-sm;
   }
 
+  .btn-dark {
+    background-color: #111827;
+    color: #ffffff;
+  }
+
   /* Title highlight marker */
   .title-highlight {
     position: relative;

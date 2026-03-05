@@ -88,7 +88,7 @@ const ChangePlanDialog = ({
 
         <div className="space-y-2.5">
           <button
-            className="w-full rounded-xl bg-gray-900 text-white px-4 py-3.5 text-sm font-bold shadow-lg btn-press disabled:opacity-50"
+            className="w-full rounded-xl btn-dark px-4 py-3.5 text-sm font-bold shadow-lg btn-press disabled:opacity-50"
             onClick={onCheckout}
             disabled={busy !== "none" || !selectedPlan}
           >
