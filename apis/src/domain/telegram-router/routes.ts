@@ -414,10 +414,21 @@ function getAbnormalAssistantId(state: UserState): number | null {
 }
 
 async function forwardToOpenClaw(container: ContainerInfo, update: unknown, source: WebhookSource): Promise<boolean> {
-  const candidateUrls =
-    container.runtime_provider === "docker"
-      ? buildDockerWebhookCandidateUrls(container, source)
-      : buildFlyWebhookCandidateUrls(container, source);
+  const candidateUrls: string[] = [];
+  const hasFlyRuntimeRef = container.container_id?.startsWith("fly:");
+
+  if (hasFlyRuntimeRef) {
+    candidateUrls.push(...buildFlyWebhookCandidateUrls(container, source));
+  }
+
+  if (container.runtime_provider === "docker") {
+    candidateUrls.push(...buildDockerWebhookCandidateUrls(container, source));
+  }
+
+  if (!candidateUrls.length) {
+    candidateUrls.push(...buildFlyWebhookCandidateUrls(container, source));
+    candidateUrls.push(...buildDockerWebhookCandidateUrls(container, source));
+  }
 
   if (!candidateUrls.length) return false;
 
