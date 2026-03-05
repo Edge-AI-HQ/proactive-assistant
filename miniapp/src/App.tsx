@@ -235,7 +235,7 @@ const App = () => {
       window.location.href = result.url;
     } catch (e) {
       alert(
-        `Unable to create checkout session: ${e instanceof Error ? e.message : "unknown"}`,
+        `Unable to change plan: ${e instanceof Error ? e.message : "unknown"}`,
       );
       setBusy("none");
     }

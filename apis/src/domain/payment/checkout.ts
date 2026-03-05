@@ -328,11 +328,55 @@ export const createCheckoutSession = async (
       }
 
       if (stripeSubActive && stripeSubscription) {
-        // 已有活跃订阅，暂不支持升降配
-        throw new DomainError(
-          "INVALID_INPUT",
-          `You already have an active ${currentPlan.display_name} subscription.`,
-        );
+        const currentPriceAmount = currentPlan.price_cents_monthly ?? 0;
+        const newPriceAmount = selectedPlan.price_cents_monthly ?? 0;
+
+        if (currentPlan.plan_code === selectedPlan.plan_code) {
+          throw new DomainError(
+            "INVALID_INPUT",
+            `You are already on the ${currentPlan.display_name} plan.`,
+          );
+        }
+
+        const subscriptionItem = stripeSubscription.items.data[0];
+        if (!subscriptionItem) {
+          throw new DomainError("INTERNAL", "Subscription item not found");
+        }
+
+        if (newPriceAmount > currentPriceAmount) {
+          // Upgrade: apply immediately with proration
+          await stripe.subscriptions.update(existingSub.stripe_subscription_id, {
+            items: [{ id: subscriptionItem.id, price: stripePriceId }],
+            proration_behavior: "always_invoice",
+            metadata: {
+              telegram_user_id: telegramUserId,
+              plan: selectedPlan.plan_code,
+            },
+          });
+          await db.markPaymentSessionUsed(token);
+          return {
+            url: null,
+            action: "upgrade",
+            message: `Upgraded to ${selectedPlan.display_name}. Effective immediately.`,
+          };
+        } else {
+          // Downgrade: schedule for next billing cycle
+          await stripe.subscriptions.update(existingSub.stripe_subscription_id, {
+            items: [{ id: subscriptionItem.id, price: stripePriceId }],
+            proration_behavior: "none",
+            billing_cycle_anchor: "unchanged" as const,
+            metadata: {
+              telegram_user_id: telegramUserId,
+              plan: selectedPlan.plan_code,
+            },
+          });
+          await db.markPaymentSessionUsed(token);
+          return {
+            url: null,
+            action: "downgrade",
+            message: `Downgrade to ${selectedPlan.display_name} scheduled for next billing cycle.`,
+          };
+        }
       }
     }
   }
