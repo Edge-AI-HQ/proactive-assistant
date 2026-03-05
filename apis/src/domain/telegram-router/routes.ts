@@ -47,6 +47,9 @@ export const registerTelegramRouterRoutes = (app: Application): void => {
     void handleTelegramWebhook(req, res, "private");
   });
 
+  app.all("/api/telegram/file/*", express.raw({ type: "*/*", limit: "50mb" }), (req, res) => {
+    void handleTelegramFileProxy(req, res);
+  });
   app.all("/api/telegram/:method", express.raw({ type: "*/*", limit: "50mb" }), (req, res) => {
     void handleTelegramApiProxy(req, res);
   });
@@ -230,6 +233,49 @@ async function handleTelegramApiProxy(req: Request, res: Response): Promise<void
     res.send(Buffer.from(result));
   } catch (error) {
     console.error("❌ Telegram API proxy error:", error);
+    res.status(500).send("Internal Server Error");
+  }
+}
+
+async function handleTelegramFileProxy(req: Request, res: Response): Promise<void> {
+  try {
+    const rawPath = String(req.params[0] || "").replace(/^\/+/, "");
+    if (!rawPath) {
+      res.status(400).json({ ok: false, description: "missing file path" });
+      return;
+    }
+    const traceId = `tgfile_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const reqMethod = req.method.toUpperCase();
+    const hasBody = reqMethod !== "GET" && reqMethod !== "HEAD";
+    const body = hasBody ? toBodyBytes(req) : undefined;
+    const proxyUrl = new URL(req.originalUrl, "http://localhost");
+
+    console.log(
+      `📦 Proxying Telegram file [${traceId}] method=${reqMethod} path=${rawPath} ` +
+        `content_type=${String(req.headers["content-type"] || "none")} body_bytes=${body?.byteLength ?? 0}`,
+    );
+
+    const botToken = resolveProxyBotToken(req);
+    const telegramUrl = `https://api.telegram.org/file/bot${botToken}/${rawPath}${proxyUrl.search}`;
+    const outgoingHeaders = new Headers();
+    const contentType = req.headers["content-type"] as string | undefined;
+    if (contentType) outgoingHeaders.set("content-type", contentType);
+
+    const requestInit: RequestInit = {
+      method: reqMethod,
+      headers: outgoingHeaders,
+    };
+    if (body) {
+      requestInit.body = body;
+    }
+
+    const response = await fetch(telegramUrl, requestInit);
+    const result = new Uint8Array(await response.arrayBuffer());
+    res.status(response.status);
+    res.setHeader("Content-Type", response.headers.get("content-type") || "application/octet-stream");
+    res.send(Buffer.from(result));
+  } catch (error) {
+    console.error("❌ Telegram file proxy error:", error);
     res.status(500).send("Internal Server Error");
   }
 }

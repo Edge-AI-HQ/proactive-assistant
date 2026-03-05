@@ -72,30 +72,27 @@ function installTelegramFetchProxy(api: OpenClawPluginApi, routerUrl: string) {
 
       if (rawUrl) {
         const targetUrl = new URL(rawUrl);
-        const telegramApiPath = extractTelegramApiPath(targetUrl);
-        if (telegramApiPath) {
-          const { methodName, botToken } = telegramApiPath;
-          if (BLOCKED_TELEGRAM_METHODS.has(methodName)) {
-            api.logger.warn(`Blocked Telegram method from OpenClaw: ${methodName}`);
-            return new Response(JSON.stringify({ ok: true, result: true }), {
-              status: 200,
-              headers: { 'Content-Type': 'application/json' },
-            });
-          }
-          if (!PASSTHROUGH_TELEGRAM_METHODS.has(methodName)) {
+        const telegramTarget = extractTelegramTarget(targetUrl);
+        if (telegramTarget) {
+          if (telegramTarget.kind === 'method') {
+            const { methodName, botToken } = telegramTarget;
+            if (BLOCKED_TELEGRAM_METHODS.has(methodName)) {
+              api.logger.warn(`Blocked Telegram method from OpenClaw: ${methodName}`);
+              return new Response(JSON.stringify({ ok: true, result: true }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
+            if (PASSTHROUGH_TELEGRAM_METHODS.has(methodName)) {
+              return await originalFetch(input as RequestInfo, init);
+            }
             const proxyUrl = `${normalizedRouter}/api/telegram/${methodName}${targetUrl.search}`;
-            const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : {}));
-            headers.delete('host');
-            headers.delete('authorization');
-            headers.set('X-PinAI-Telegram-Bot-Token', botToken);
-
-            const effectiveInit: RequestInit = {
-              ...(input instanceof Request ? { method: input.method, body: input.body, redirect: input.redirect } : {}),
-              ...init,
-              headers
-            };
+            const effectiveInit = buildProxyInit(input, init, botToken);
             return await originalFetch(proxyUrl, effectiveInit);
           }
+          const proxyUrl = `${normalizedRouter}/api/telegram/file/${telegramTarget.filePath}${targetUrl.search}`;
+          const effectiveInit = buildProxyInit(input, init, telegramTarget.botToken);
+          return await originalFetch(proxyUrl, effectiveInit);
         }
       }
     } catch (error) {
@@ -108,20 +105,44 @@ function installTelegramFetchProxy(api: OpenClawPluginApi, routerUrl: string) {
   api.logger.info('Telegram fetch proxy patch installed');
 }
 
-function extractTelegramApiPath(url: URL): { methodName: string; botToken: string } | null {
+function buildProxyInit(input: RequestInfo | URL, init: RequestInit | undefined, botToken: string): RequestInit {
+  const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : {}));
+  headers.delete('host');
+  headers.delete('authorization');
+  headers.set('X-PinAI-Telegram-Bot-Token', botToken);
+  return {
+    ...(input instanceof Request ? { method: input.method, body: input.body, redirect: input.redirect } : {}),
+    ...init,
+    headers,
+  };
+}
+
+function extractTelegramTarget(url: URL):
+  | { kind: 'method'; methodName: string; botToken: string }
+  | { kind: 'file'; filePath: string; botToken: string }
+  | null {
   if (url.hostname !== 'api.telegram.org') {
     return null;
   }
-  const match = url.pathname.match(/^\/bot([^/]+)\/([^/?#]+)/);
-  if (!match) {
+  const methodMatch = url.pathname.match(/^\/bot([^/]+)\/([^/?#]+)/);
+  if (methodMatch) {
+    const botToken = methodMatch[1] || '';
+    const methodName = methodMatch[2] || '';
+    if (!botToken || !methodName) {
+      return null;
+    }
+    return { kind: 'method', methodName, botToken };
+  }
+  const fileMatch = url.pathname.match(/^\/file\/bot([^/]+)\/(.+)$/);
+  if (!fileMatch) {
     return null;
   }
-  const botToken = match[1] || '';
-  const methodName = match[2] || '';
-  if (!botToken || !methodName) {
+  const botToken = fileMatch[1] || '';
+  const filePath = fileMatch[2] || '';
+  if (!botToken || !filePath) {
     return null;
   }
-  return { methodName, botToken };
+  return { kind: 'file', filePath, botToken };
 }
 
 async function patchCronAddDeliveryAccountId(
