@@ -10,6 +10,7 @@ import {
   listAssistantsByOwnerTelegramId,
   getUserByTelegramId,
 } from "../common/db/index.js";
+import { pool } from "../common/db/core.js";
 import { config } from "../common/config.js";
 import {
   stopAssistantContainer,
@@ -19,6 +20,9 @@ import { ensureLiteLLMKeyForAssistant } from "../litellm/index.js";
 import { sendTelegramMessage } from "../telegram/notify.js";
 import { createAssistantWithoutContainer } from "../claw-assistant/service.js";
 import { shouldEnsureAssistantRuntime } from "../claw-assistant/runtimeHealth.js";
+
+const SUBSCRIPTION_PERIOD_APPLY_LOCK_KEY = 319_903;
+let isApplyingSubscriptionPeriodsInProcess = false;
 
 const parseUnixSecondsToDate = (value: unknown): Date | null => {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
@@ -1057,4 +1061,71 @@ export async function applySubscriptionPeriodBudgets(now?: Date): Promise<{
     endedZeroed,
     endedFailed,
   };
+}
+
+export async function applySubscriptionPeriodBudgetsWithLock(now?: Date): Promise<{
+  processed: number;
+  failed: number;
+  errors: Array<{ periodId: number; error: string }>;
+  endedZeroed: number;
+  endedFailed: number;
+  skipped?: boolean;
+  reason?: "local_lock" | "advisory_lock";
+}> {
+  const skippedResult = (
+    reason: "local_lock" | "advisory_lock",
+  ): {
+    processed: number;
+    failed: number;
+    errors: Array<{ periodId: number; error: string }>;
+    endedZeroed: number;
+    endedFailed: number;
+    skipped: true;
+    reason: "local_lock" | "advisory_lock";
+  } => ({
+    processed: 0,
+    failed: 0,
+    errors: [],
+    endedZeroed: 0,
+    endedFailed: 0,
+    skipped: true,
+    reason,
+  });
+
+  if (isApplyingSubscriptionPeriodsInProcess) {
+    return skippedResult("local_lock");
+  }
+
+  isApplyingSubscriptionPeriodsInProcess = true;
+  let client: any = null;
+  let gotAdvisoryLock = false;
+
+  try {
+    client = await pool.connect();
+    const lockResult = await client.query(
+      "SELECT pg_try_advisory_lock($1) as got_lock",
+      [SUBSCRIPTION_PERIOD_APPLY_LOCK_KEY],
+    );
+    gotAdvisoryLock = Boolean(lockResult.rows[0]?.got_lock);
+    if (!gotAdvisoryLock) {
+      return skippedResult("advisory_lock");
+    }
+
+    return await applySubscriptionPeriodBudgets(now);
+  } finally {
+    if (gotAdvisoryLock) {
+      try {
+        await client?.query("SELECT pg_advisory_unlock($1)", [
+          SUBSCRIPTION_PERIOD_APPLY_LOCK_KEY,
+        ]);
+      } catch (error) {
+        console.error(
+          "[payment] failed to release subscription period advisory lock",
+          error,
+        );
+      }
+    }
+    client?.release();
+    isApplyingSubscriptionPeriodsInProcess = false;
+  }
 }
