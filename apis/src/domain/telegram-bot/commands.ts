@@ -191,18 +191,12 @@ const buildAssistantGatewayUrl = (
   return url.toString();
 };
 
-const buildSubscriptionMiniAppUrl = (
-  publicOrigin: string,
-): string => {
-  return new URL("/mini", publicOrigin).toString();
-};
-
 const createSubscriptionEntryUrl = async (
-  _telegramUserId: number,
+  telegramUserId: number,
+  telegramUsername: string | null,
+  assistantId?: number,
 ): Promise<string | null> => {
-  const publicBase = resolveGatewayPublicOrigin();
-  if (!publicBase) return null;
-  return buildSubscriptionMiniAppUrl(publicBase.origin);
+  return safeCreatePaymentLink(telegramUserId, telegramUsername, assistantId);
 };
 
 const buildAssistantGatewayLinksText = (
@@ -238,22 +232,11 @@ const provisionAssistantWithGuideBot = async (
 
   if (!hasActiveSubscription) {
     const assistantId = existingAssistants[0]?.id;
-    let paymentLink: string | null = null;
-    try {
-      paymentLink = await createSubscriptionEntryUrl(telegramUserId);
-    } catch (error: unknown) {
-      console.error("Failed to create mini app entry URL", {
-        telegramUserId,
-        error: error instanceof Error ? error.message : String(error || ""),
-      });
-    }
-    if (!paymentLink) {
-      paymentLink = await safeCreatePaymentLink(
-        telegramUserId,
-        telegramUsername,
-        assistantId,
-      );
-    }
+    const paymentLink = await createSubscriptionEntryUrl(
+      telegramUserId,
+      telegramUsername,
+      assistantId,
+    );
 
     if (!paymentLink) {
       await replyHtml(
@@ -454,23 +437,12 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
 
     const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
 
-    let paymentLink: string | null = null;
-    try {
-      paymentLink = await createSubscriptionEntryUrl(telegramUserId);
-    } catch (error: unknown) {
-      console.error("Failed to create subscription mini app URL", {
-        telegramUserId,
-        error: error instanceof Error ? error.message : String(error || ""),
-      });
-    }
-    if (!paymentLink) {
-      const assistantId = assistants[0]?.id;
-      paymentLink = await safeCreatePaymentLink(
-        telegramUserId,
-        ctx.from?.username ?? null,
-        assistantId,
-      );
-    }
+    const assistantId = assistants[0]?.id;
+    const paymentLink = await createSubscriptionEntryUrl(
+      telegramUserId,
+      ctx.from?.username ?? null,
+      assistantId,
+    );
 
     if (!paymentLink) {
       await replyHtml(
@@ -620,24 +592,13 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
 
-    let paymentLink: string | null = null;
-    try {
-      paymentLink = await createSubscriptionEntryUrl(telegramUserId);
-    } catch (error: unknown) {
-      console.error("Failed to create subscription mini app URL (callback)", {
-        telegramUserId,
-        error: error instanceof Error ? error.message : String(error || ""),
-      });
-    }
-    if (!paymentLink) {
-      const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
-      const assistantId = assistants[0]?.id;
-      paymentLink = await safeCreatePaymentLink(
-        telegramUserId,
-        ctx.from?.username ?? null,
-        assistantId,
-      );
-    }
+    const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
+    const assistantId = assistants[0]?.id;
+    const paymentLink = await createSubscriptionEntryUrl(
+      telegramUserId,
+      ctx.from?.username ?? null,
+      assistantId,
+    );
 
     if (!paymentLink) {
       await ctx.answerCallbackQuery({
@@ -656,7 +617,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
       [
         "📊 <b>Subscription Management</b>",
         "",
-        "• <b>Open Mini App:</b> Subscribe, upgrade, downgrade in one place",
+        "• <b>Open Subscription Page:</b> Subscribe, upgrade, downgrade in one place",
         "• <b>Cancel:</b> Cancel your subscription (stays active until period end)",
         "",
         "Your subscription applies to all your assistants.",
