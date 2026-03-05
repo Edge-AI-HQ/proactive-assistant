@@ -59,8 +59,8 @@ const CreateAgentFlow = ({ open, onClose, onCreateSuccess }: CreateAgentFlowProp
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-pin-gradient animate-slide-up">
-      <div className="max-w-md mx-auto h-full flex flex-col">
+    <div className="fixed inset-0 z-[9999] bg-pin-gradient animate-slide-up overflow-hidden">
+      <div className="max-w-md mx-auto h-full flex flex-col overflow-y-auto">
         {/* Header */}
         {step === 1 && (
           <div className="flex items-center justify-between px-5 pt-5 pb-3">
