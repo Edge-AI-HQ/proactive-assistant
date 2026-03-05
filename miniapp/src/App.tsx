@@ -1,4 +1,8 @@
 import { useEffect, useState } from "react";
+import CreateAgentFlow from "./components/CreateAgentFlow";
+import CreateAgentCTA from "./components/CreateAgentCTA";
+import TopStatus from "./components/TopStatus";
+import AgentCard from "./components/AgentCard";
 
 type Plan = {
   id: string;
@@ -82,6 +86,7 @@ const App = () => {
   const [loading, setLoading] = useState(true);
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
   const [busy, setBusy] = useState<string>("none");
+  const [showCreateFlow, setShowCreateFlow] = useState(false);
 
   const hydrateState = (payload: StatePayload): void => {
     setState(payload);
@@ -223,6 +228,38 @@ const App = () => {
     );
   }
 
+  // Show home page when no assistant and no subscription
+  if (!state.assistant.exists && !state.subscription.active) {
+    return (
+      <div className="min-h-screen bg-pin-gradient max-w-md mx-auto pb-8">
+        <TopStatus hasAgent={false} />
+
+        <div className="px-4 mt-6 space-y-4">
+          <CreateAgentCTA onCreateClick={() => setShowCreateFlow(true)} />
+        </div>
+
+        <div className="px-4 mt-8 mb-4">
+          <a
+            href="mailto:support@pinai.io"
+            className="glass-card rounded-2xl flex items-center justify-center gap-2 text-sm text-foreground font-medium py-3.5 hover:bg-secondary/50 transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            </svg>
+            Contact Us
+          </a>
+        </div>
+
+        <CreateAgentFlow 
+          open={showCreateFlow} 
+          onClose={() => setShowCreateFlow(false)}
+          onCreateSuccess={() => void loadState()}
+        />
+      </div>
+    );
+  }
+
+  // Show subscription required page when assistant exists but no subscription
   if (!state.subscription.active) {
     return (
       <div className="relative mx-auto w-full max-w-2xl p-4 pb-8">
@@ -290,6 +327,40 @@ const App = () => {
     );
   }
 
+  // Show home page with agent when subscription is active
+  if (state.assistant.exists) {
+    return (
+      <div className="min-h-screen bg-pin-gradient max-w-md mx-auto pb-8">
+        <TopStatus hasAgent={true} />
+
+        <div className="px-4 mt-6 space-y-4">
+          <h2 className="text-base font-semibold text-foreground px-1">
+            <span className="title-highlight">My Agent</span>
+          </h2>
+          <AgentCard
+            username={state.assistant.username || null}
+            status={state.assistant.status || "未知"}
+            planId={state.subscription.plan_id}
+            active={state.subscription.active}
+          />
+        </div>
+
+        <div className="px-4 mt-8 mb-4">
+          <a
+            href="mailto:support@pinai.io"
+            className="glass-card rounded-2xl flex items-center justify-center gap-2 text-sm text-foreground font-medium py-3.5 hover:bg-secondary/50 transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            </svg>
+            Contact Us
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  // Show subscription center when subscription is active but no assistant
   return (
     <div className="relative mx-auto w-full max-w-2xl p-4 pb-8">
       <div
@@ -305,8 +376,7 @@ const App = () => {
           Subscription Center
         </h1>
         <p className="mt-2 max-w-md text-sm text-muted">
-          Your assistant is ready. Subscribe, upgrade, downgrade, and manage
-          skills here.
+          Your subscription is active. Create your assistant to get started.
         </p>
       </section>
 
@@ -332,7 +402,7 @@ const App = () => {
         ) : null}
         {state.subscription.cancel_at_period_end ? (
           <div className="mt-1 text-xs text-amber-700">
-            Renewal canceled (service ends at period end).
+            Renewal canceled (service ends at period end)
           </div>
         ) : null}
       </section>
