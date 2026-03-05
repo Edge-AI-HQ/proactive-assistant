@@ -7,9 +7,9 @@ interface CreateAgentFlowProps {
 }
 
 const features = [
-  { img: "/sketch-brain.png", label: "Task Intelligence", desc: "From planning to execution." },
-  { img: "/sketch-bull.png", label: "Autonomous Operations", desc: "Real-world actions, handled by your AI." },
-  { img: "/sketch-flower.png", label: "24/7 Active", desc: "Always available. Always improving." },
+  { img: "/tg-subscription-mini/sketch-brain.png", label: "Task Intelligence", desc: "From planning to execution." },
+  { img: "/tg-subscription-mini/sketch-bull.png", label: "Autonomous Operations", desc: "Real-world actions, handled by your AI." },
+  { img: "/tg-subscription-mini/sketch-flower.png", label: "24/7 Active", desc: "Always available. Always improving." },
 ];
 
 const CreateAgentFlow = ({ open, onClose, onCreateSuccess }: CreateAgentFlowProps) => {
