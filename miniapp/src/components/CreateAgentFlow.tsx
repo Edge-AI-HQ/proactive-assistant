@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 
 interface CreateAgentFlowProps {
   open: boolean;
@@ -6,15 +6,21 @@ interface CreateAgentFlowProps {
   onCreateSuccess: () => void;
 }
 
+const features = [
+  { img: "/sketch-brain.png", label: "Task Intelligence", desc: "From planning to execution." },
+  { img: "/sketch-bull.png", label: "Autonomous Operations", desc: "Real-world actions, handled by your AI." },
+  { img: "/sketch-flower.png", label: "24/7 Active", desc: "Always available. Always improving." },
+];
+
 const CreateAgentFlow = ({ open, onClose, onCreateSuccess }: CreateAgentFlowProps) => {
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState(1);
   const [deploying, setDeploying] = useState(false);
   const [deployed, setDeployed] = useState(false);
 
   useEffect(() => {
     if (!open) {
       setTimeout(() => {
-        setStep(0);
+        setStep(1);
         setDeploying(false);
         setDeployed(false);
       }, 300);
@@ -40,7 +46,6 @@ const CreateAgentFlow = ({ open, onClose, onCreateSuccess }: CreateAgentFlowProp
       setDeploying(false);
       setDeployed(true);
       
-      // Wait a bit before calling success callback
       setTimeout(() => {
         onCreateSuccess();
         onClose();
@@ -53,65 +58,66 @@ const CreateAgentFlow = ({ open, onClose, onCreateSuccess }: CreateAgentFlowProp
 
   if (!open) return null;
 
-  const stepTitles = ["准备创建", ""];
-
   return (
-    <div className="fixed inset-0 z-50 bg-background animate-slide-up">
+    <div className="fixed inset-0 z-50 bg-pin-gradient animate-slide-up">
       <div className="max-w-md mx-auto h-full flex flex-col">
         {/* Header */}
-        {step === 0 && (
+        {step === 1 && (
           <div className="flex items-center justify-between px-5 pt-5 pb-3">
             <button onClick={onClose} className="w-9 h-9 rounded-full bg-secondary flex items-center justify-center btn-press">
               <svg className="w-5 h-5 text-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
               </svg>
             </button>
-            <h2 className="text-sm font-semibold text-foreground">Ready to Create</h2>
+            <h2 className="text-sm font-semibold text-foreground">Create Your AI Agent</h2>
             <div className="w-9" />
           </div>
         )}
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto px-5 pb-32">
-          {/* Step 0: Ready to Create */}
-          {step === 0 && (
-            <div className="animate-fade-in space-y-6 mt-8">
-              <div className="text-center">
-                <div className="w-20 h-20 rounded-full bg-gradient-to-br from-primary to-pin-lavender flex items-center justify-center mx-auto mb-4">
-                  <svg className="w-10 h-10 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+        <div className="flex-1 overflow-y-auto px-6 pb-32">
+          {/* Step 1: Features overview */}
+          {step === 1 && (
+            <div className="flex flex-col items-center pt-4 animate-fade-in">
+              {/* Large icon circle */}
+              <div className="relative mb-6">
+                <div className="w-32 h-32 rounded-full bg-primary/10 flex items-center justify-center animate-pulse-soft">
+                  <svg className="w-20 h-20 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
                   </svg>
                 </div>
-                <h1 className="font-heading text-2xl font-bold text-foreground mb-2">
-                  Create Your AI Assistant
-                </h1>
-                <p className="text-sm text-muted-foreground max-w-sm mx-auto">
-                  Click below to create your personal AI assistant. Once created, you can chat with it on Telegram.
-                </p>
               </div>
 
-              {/* Features Preview */}
-              <div className="glass-card rounded-2xl p-5 space-y-3">
-                <h3 className="text-sm font-semibold text-foreground mb-3">You'll get:</h3>
-                <div className="space-y-2.5">
-                  {[
-                    { icon: "🤖", text: "Dedicated AI Assistant" },
-                    { icon: "💬", text: "24/7 Online Service" },
-                    { icon: "⚡", text: "Fast Response" },
-                    { icon: "🔒", text: "Secure & Private" },
-                  ].map((item, i) => (
-                    <div key={i} className="flex items-center gap-3">
-                      <span className="text-xl">{item.icon}</span>
-                      <p className="text-sm text-foreground/80">{item.text}</p>
+              {/* Title and subtitle */}
+              <h1 className="text-2xl font-bold text-foreground text-center mb-2">
+                Create Your AI Agent
+              </h1>
+              <p className="text-sm text-muted-foreground text-center max-w-[280px] mb-8">
+                Your personal all-in-one AI assistant. Deploy in 60 seconds, runs 24/7.
+              </p>
+
+              {/* Feature cards */}
+              <div className="w-full space-y-3">
+                {features.map(({ img, label, desc }) => (
+                  <div
+                    key={label}
+                    className="flex items-center gap-4 bg-white rounded-2xl p-4 border border-border/20 shadow-sm animate-fade-in"
+                  >
+                    <div className="w-14 h-14 rounded-xl flex items-center justify-center shrink-0">
+                      <img src={img} alt={label} className="w-12 h-12 object-contain" />
                     </div>
-                  ))}
-                </div>
+                    <div>
+                      <h3 className="text-sm font-semibold text-foreground">{label}</h3>
+                      <p className="text-xs text-muted-foreground">{desc}</p>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}
 
-          {/* Step 1: Deploy */}
-          {step === 1 && (
+          {/* Step 2: Deploy */}
+          {step === 2 && (
             <div className="flex flex-col items-center justify-center min-h-[60vh] animate-fade-in">
               {deploying && (
                 <div className="text-center">
@@ -120,7 +126,7 @@ const CreateAgentFlow = ({ open, onClose, onCreateSuccess }: CreateAgentFlowProp
                       <div className="w-8 h-8 rounded-full bg-primary" />
                     </div>
                   </div>
-                  <h3 className="text-lg font-semibold text-foreground mb-2">Deploying your AI...</h3>
+                  <h3 className="text-lg font-semibold text-foreground mb-2">Deploying your AI…</h3>
                   <p className="text-sm text-muted-foreground">Setting up neural pathways</p>
                 </div>
               )}
@@ -135,8 +141,6 @@ const CreateAgentFlow = ({ open, onClose, onCreateSuccess }: CreateAgentFlowProp
                       { shape: 'circle', size: 'w-2.5 h-2.5', color: 'bg-pin-lavender/50', left: '55%', delay: '0.1s' },
                       { shape: 'rect', size: 'w-1 h-2.5', color: 'bg-pin-lavender/35', left: '70%', delay: '0.25s' },
                       { shape: 'circle', size: 'w-1.5 h-1.5', color: 'bg-primary/20', left: '82%', delay: '0.4s' },
-                      { shape: 'rect', size: 'w-0.5 h-2', color: 'bg-primary/30', left: '18%', delay: '0.35s' },
-                      { shape: 'circle', size: 'w-1 h-1', color: 'bg-pin-lavender/40', left: '90%', delay: '0.2s' },
                     ].map((p, i) => (
                       <span
                         key={i}
@@ -162,18 +166,18 @@ const CreateAgentFlow = ({ open, onClose, onCreateSuccess }: CreateAgentFlowProp
           )}
         </div>
 
-        {/* Bottom Button */}
-        {step === 0 && (
+        {/* Bottom button */}
+        {step === 1 && (
           <div className="fixed bottom-0 left-0 right-0 bg-background/90 backdrop-blur-lg border-t border-border/30 p-5">
             <div className="max-w-md mx-auto">
               <button
                 onClick={() => {
-                  setStep(1);
+                  setStep(2);
                   handleDeploy();
                 }}
-                className="w-full bg-foreground text-background rounded-xl py-3.5 text-sm font-semibold btn-press shadow-md flex items-center justify-center gap-2"
+                className="w-full bg-foreground text-background rounded-2xl py-4 text-base font-semibold btn-press shadow-md flex items-center justify-center gap-2"
               >
-                Create Agent
+                Continue
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                 </svg>
