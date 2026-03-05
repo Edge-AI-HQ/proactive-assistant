@@ -226,15 +226,24 @@ const App = () => {
     if (!selectedPlan) return;
     setBusy("checkout");
     try {
-      const result = await safeFetch<{ url: string | null }>("/api/mini/checkout", {
+      const result = await safeFetch<{ url: string | null; action?: string; message?: string }>("/api/mini/checkout", {
         method: "POST",
         body: JSON.stringify({ plan: selectedPlan }),
       });
+      
+      if (result.action === "upgrade" || result.action === "downgrade") {
+        // Plan changed directly via Stripe subscription update (no redirect needed)
+        alert(result.message ?? "Plan updated successfully.");
+        setBusy("none");
+        await loadState();
+        return;
+      }
+      
       if (!result.url) throw new Error("missing checkout url");
       window.location.href = result.url;
     } catch (e) {
       alert(
-        `Unable to create checkout session: ${e instanceof Error ? e.message : "unknown"}`,
+        `Unable to change plan: ${e instanceof Error ? e.message : "unknown"}`,
       );
       setBusy("none");
     }
