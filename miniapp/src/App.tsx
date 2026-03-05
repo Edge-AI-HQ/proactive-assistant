@@ -193,14 +193,14 @@ const App = () => {
       });
   }, []);
 
-  // Auto-show CreateAgentFlow for first-time users (only if no assistant exists)
-  useEffect(() => {
-    if (state && !loading && !hasSeenIntro && !state.assistant.exists) {
-      console.log('[MiniApp] Auto-opening CreateAgentFlow for first-time user');
-      setShowCreateFlow(true);
-      setHasSeenIntro(true);
-    }
-  }, [state, loading, hasSeenIntro]);
+  // No longer needed - we'll show CreateAgentFlow directly in the render
+  // useEffect(() => {
+  //   if (state && !loading && !hasSeenIntro && !state.assistant.exists) {
+  //     console.log('[MiniApp] Auto-opening CreateAgentFlow for first-time user');
+  //     setShowCreateFlow(true);
+  //     setHasSeenIntro(true);
+  //   }
+  // }, [state, loading, hasSeenIntro]);
 
   const createAssistant = async () => {
     setBusy("create");
@@ -330,38 +330,14 @@ const App = () => {
     );
   }
 
-  // Show home page when no assistant and no subscription
-  if (!state.assistant.exists && !state.subscription.active) {
+  // Show CreateAgentFlow directly when no assistant exists
+  if (!state.assistant.exists) {
     return (
-      <>
-        {!showCreateFlow && (
-          <div className="min-h-screen bg-pin-gradient max-w-md mx-auto pb-8">
-            <TopStatus hasAgent={false} />
-
-            <div className="px-4 mt-6 space-y-4">
-              <CreateAgentCTA onCreateClick={() => setShowCreateFlow(true)} />
-            </div>
-
-            <div className="px-4 mt-8 mb-4">
-              <a
-                href="mailto:support@pinai.io"
-                className="glass-card rounded-2xl flex items-center justify-center gap-2 text-sm text-foreground font-medium py-3.5 hover:bg-secondary/50 transition-colors"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                </svg>
-                Contact Us
-              </a>
-            </div>
-          </div>
-        )}
-
-        <CreateAgentFlow 
-          open={showCreateFlow} 
-          onClose={() => setShowCreateFlow(false)}
-          onCreateSuccess={() => void loadState()}
-        />
-      </>
+      <CreateAgentFlow 
+        open={true} 
+        onClose={() => {}} // No close button for first-time users
+        onCreateSuccess={() => void loadState()}
+      />
     );
   }
 
