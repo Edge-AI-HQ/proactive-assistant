@@ -55,6 +55,17 @@ declare global {
         ready: () => void;
         expand: () => void;
         initData?: string;
+        initDataUnsafe?: {
+          user?: {
+            id: number;
+            first_name?: string;
+            last_name?: string;
+            username?: string;
+            language_code?: string;
+          };
+          auth_date?: number;
+          hash?: string;
+        };
       };
     };
   }
@@ -103,15 +114,22 @@ const App = () => {
 
   const bootstrap = async () => {
     const initData = window.Telegram?.WebApp?.initData?.trim() ?? "";
-    console.log('[MiniApp] Bootstrap', {
+    const initDataUnsafe = window.Telegram?.WebApp?.initDataUnsafe;
+    
+    console.log('[MiniApp] Bootstrap Debug Info:', {
       hasInitData: !!initData,
       initDataLength: initData.length,
       telegram: !!window.Telegram,
       webApp: !!window.Telegram?.WebApp,
+      hasInitDataUnsafe: !!initDataUnsafe,
+      userId: initDataUnsafe?.user?.id,
+      username: initDataUnsafe?.user?.username,
+      userAgent: navigator.userAgent,
+      url: window.location.href,
     });
     
     if (initData) {
-      console.log('[MiniApp] Using Telegram initData for bootstrap');
+      console.log('[MiniApp] ✓ Using Telegram initData for bootstrap');
       const payload = await safeFetch<StatePayload>("/api/mini/bootstrap", {
         method: "POST",
         body: JSON.stringify({ init_data: initData }),
@@ -120,7 +138,19 @@ const App = () => {
       return;
     }
 
-    console.log('[MiniApp] No initData, trying to load existing session');
+    console.warn('[MiniApp] ✗ No initData available');
+    console.warn('Possible reasons:');
+    console.warn('  1. Opened in regular browser instead of Telegram');
+    console.warn('  2. Web Telegram does not have initData yet (still loading)');
+    console.warn('  3. Mini App not opened via proper Telegram button/link');
+    console.warn('');
+    console.warn('Please ensure you:');
+    console.warn('  - Open from Telegram bot menu button or inline button');
+    console.warn('  - Use Telegram mobile/desktop app (recommended)');
+    console.warn('  - Wait for Telegram WebApp SDK to fully load');
+    
+    // Try to load existing session (will fail with 401 if no session)
+    console.log('[MiniApp] Attempting to use existing session cookie...');
     await loadState();
   };
 
