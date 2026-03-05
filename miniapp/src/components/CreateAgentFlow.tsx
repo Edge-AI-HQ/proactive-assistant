@@ -4,6 +4,7 @@ interface CreateAgentFlowProps {
   open: boolean;
   onClose: () => void;
   onCreateSuccess: () => void;
+  allowClose?: boolean; // Whether to show close button
 }
 
 const features = [
@@ -12,7 +13,7 @@ const features = [
   { img: "/tg-subscription-mini/sketch-flower.png", label: "24/7 Active", desc: "Always available. Always improving." },
 ];
 
-const CreateAgentFlow = ({ open, onClose, onCreateSuccess }: CreateAgentFlowProps) => {
+const CreateAgentFlow = ({ open, onClose, onCreateSuccess, allowClose = false }: CreateAgentFlowProps) => {
   const [step, setStep] = useState(1);
   const [deploying, setDeploying] = useState(false);
   const [deployed, setDeployed] = useState(false);
@@ -64,11 +65,15 @@ const CreateAgentFlow = ({ open, onClose, onCreateSuccess }: CreateAgentFlowProp
         {/* Header */}
         {step === 1 && (
           <div className="flex items-center justify-between px-5 pt-5 pb-3">
-            <button onClick={onClose} className="w-9 h-9 rounded-full bg-secondary flex items-center justify-center btn-press">
-              <svg className="w-5 h-5 text-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-              </svg>
-            </button>
+            {allowClose ? (
+              <button onClick={onClose} className="w-9 h-9 rounded-full bg-secondary flex items-center justify-center btn-press">
+                <svg className="w-5 h-5 text-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+            ) : (
+              <div className="w-9" />
+            )}
             <h2 className="text-sm font-semibold text-foreground">Create Your AI Agent</h2>
             <div className="w-9" />
           </div>
