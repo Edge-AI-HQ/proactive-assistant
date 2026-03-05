@@ -87,3 +87,55 @@ test('rewrites telegram file download calls to telegram router', async () => {
     delete globalThis.__pinaiTelegramRouterFetchPatched__;
   }
 });
+
+test('disables stream for litellm vision chat completions', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalRouter = process.env.TELEGRAM_ROUTER_URL;
+  delete globalThis.__pinaiTelegramRouterFetchPatched__;
+
+  const calls = [];
+  globalThis.fetch = async (input, init) => {
+    calls.push({ input: String(input), init });
+    return new Response(JSON.stringify({ id: 'ok', choices: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  process.env.TELEGRAM_ROUTER_URL = 'https://router.example.com';
+  const { api } = createApiStub();
+
+  try {
+    plugin.register(api);
+    await globalThis.fetch('https://litellm-dev.fly.dev/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'litellm/minimax-m2.5',
+        stream: true,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'describe image' },
+              { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,abc' } },
+            ],
+          },
+        ],
+      }),
+    });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.input, 'https://litellm-dev.fly.dev/v1/chat/completions');
+    const body = JSON.parse(String(calls[0]?.init?.body || '{}'));
+    assert.equal(body.stream, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalRouter === undefined) {
+      delete process.env.TELEGRAM_ROUTER_URL;
+    } else {
+      process.env.TELEGRAM_ROUTER_URL = originalRouter;
+    }
+    delete globalThis.__pinaiTelegramRouterFetchPatched__;
+  }
+});
