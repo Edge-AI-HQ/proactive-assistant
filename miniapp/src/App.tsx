@@ -239,8 +239,7 @@ const App = () => {
             Subscription Required
           </h1>
           <p className="mt-2 max-w-md text-sm text-muted">
-            Subscribe first to unlock the full V3 workspace, runtime controls,
-            and skills management.
+            Subscribe first to unlock runtime controls and skills management.
           </p>
         </section>
 
@@ -301,7 +300,7 @@ const App = () => {
         }}
       />
       <section className="panel relative overflow-hidden p-5">
-        <span className="pill bg-ink text-white">PIN AI V3</span>
+        <span className="pill bg-ink text-white">PIN AI</span>
         <h1 className="mt-3 font-heading text-[30px] leading-[1.1]">
           Subscription Center
         </h1>
