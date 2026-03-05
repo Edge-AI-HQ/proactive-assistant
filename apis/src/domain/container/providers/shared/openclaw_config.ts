@@ -1,6 +1,7 @@
 import type { ContainerManagerConfig } from "../../types.js";
 import {
   buildLiteLLMFallbackModelRefs,
+  buildLiteLLMModelsAllowlist,
   buildLiteLLMPrimaryModelRef,
   buildLiteLLMProviderConfig,
   type UnknownRecord,
@@ -159,6 +160,7 @@ export const buildLiteLLMModelsSection = (
     agents: {
       defaults: {
         model: nextModel,
+        models: buildLiteLLMModelsAllowlist(context.litellm),
       },
     },
   };

@@ -45,6 +45,29 @@ export const buildLiteLLMPrimaryModelRef = (litellm: ContainerManagerConfig['lit
 export const buildLiteLLMFallbackModelRefs = (litellm: ContainerManagerConfig['litellm']): string[] =>
   buildLiteLLMModelIds(litellm).slice(1).map((id) => `litellm/${id}`);
 
+const inferAliasByModelId = (id: string): string => {
+  const normalized = id.toLowerCase();
+  // Extract a short, memorable alias from the model id
+  if (normalized.includes('kimi')) return 'kimi';
+  if (normalized.includes('claude') && normalized.includes('sonnet')) return 'sonnet';
+  if (normalized.includes('claude') && normalized.includes('opus')) return 'opus';
+  if (normalized.includes('minimax')) return 'minimax';
+  if (normalized.includes('gpt-4o-mini')) return 'gpt-mini';
+  if (normalized.includes('gpt')) return 'gpt';
+  if (normalized.includes('seed')) return 'seed';
+  // Fallback: use the id itself
+  return id;
+};
+
+export const buildLiteLLMModelsAllowlist = (litellm: ContainerManagerConfig['litellm']): UnknownRecord => {
+  const modelIds = buildLiteLLMModelIds(litellm);
+  const allowlist: UnknownRecord = {};
+  for (const id of modelIds) {
+    allowlist[`litellm/${id}`] = { alias: inferAliasByModelId(id) };
+  }
+  return allowlist;
+};
+
 export const buildLiteLLMProviderConfig = (
   litellm: ContainerManagerConfig['litellm'],
   apiKey: string
