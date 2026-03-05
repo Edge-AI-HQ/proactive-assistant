@@ -494,6 +494,16 @@ export const getLiteLLMUserSpendCents = async (litellmUserId: string): Promise<n
   return Math.max(0, Math.trunc(info.spendUsd * 100));
 };
 
+export const deleteLiteLLMKey = async (keys: string[]): Promise<void> => {
+  if (!keys.length) return;
+  await requestJson('POST', '/key/delete', { keys });
+};
+
+export const deleteLiteLLMUser = async (userIds: string[]): Promise<void> => {
+  if (!userIds.length) return;
+  await requestJson('POST', '/user/delete', { user_ids: userIds });
+};
+
 export const getLiteLLMVirtualKeyInfo = async (virtualKey: string): Promise<LiteLLMVirtualKeyInfo> => {
   const token = virtualKey.trim();
   if (!token) {

@@ -1,4 +1,6 @@
-import { getContainerProvider } from "./provider_factory.js";
+import { getContainerRuntime } from "./provider_factory.js";
+import { getContainerManagerRuntime } from "./runtime.js";
+import { ContainerOrchestrator } from "./orchestrator.js";
 import type {
   AssistantContainerDestroyRef,
   AssistantContainerGatewayRef,
@@ -6,34 +8,59 @@ import type {
   GatewayTarget,
 } from "./contracts.js";
 
+// ---------------------------------------------------------------------------
+// Lazy singleton orchestrator — constructed on first use from runtime config
+// ---------------------------------------------------------------------------
+
+let orchestrator: ContainerOrchestrator | null = null;
+
+const getOrchestrator = (): ContainerOrchestrator => {
+  if (!orchestrator) {
+    const runtime = getContainerRuntime();
+    const mgr = getContainerManagerRuntime();
+    orchestrator = new ContainerOrchestrator(
+      runtime,
+      mgr.store,
+      mgr.notifier,
+      mgr.config,
+      mgr.readAssistantLiteLLMVirtualKey,
+    );
+  }
+  return orchestrator;
+};
+
+// ---------------------------------------------------------------------------
+// Public API — same signatures as before, now delegating to orchestrator
+// ---------------------------------------------------------------------------
+
 export const prepareContainerRuntime = async (): Promise<void> => {
-  await getContainerProvider().prepareRuntime();
+  await getOrchestrator().prepareRuntime();
 };
 
 export const ensureAssistantContainer = async (
   assistant: AssistantContainerRuntimeRef,
   gatewayToken: string,
 ): Promise<{ containerId: string; ready: boolean }> => {
-  return getContainerProvider().ensureAssistantContainer(
-    assistant,
-    gatewayToken,
-  );
+  return getOrchestrator().ensureAssistantContainer(assistant, gatewayToken);
 };
 
 export const destroyAssistantContainer = async (
   assistant: AssistantContainerDestroyRef,
 ): Promise<{ deleted: boolean }> => {
-  return getContainerProvider().destroyAssistantContainer(assistant);
+  return getOrchestrator().destroyAssistantContainer(assistant);
 };
 
 export const stopAssistantContainer = async (
   assistant: AssistantContainerDestroyRef,
 ): Promise<{ stopped: boolean }> => {
-  return getContainerProvider().stopAssistantContainer(assistant);
+  return getOrchestrator().stopAssistantContainer(assistant);
 };
 
 export const resolveGatewayTargetForAssistant = (
   assistant: AssistantContainerGatewayRef,
 ): GatewayTarget => {
-  return getContainerProvider().resolveGatewayTargetForAssistant(assistant);
+  return getOrchestrator().resolveGatewayTargetForAssistant(assistant);
 };
+
+// Re-export for state sync
+export { getOrchestrator };

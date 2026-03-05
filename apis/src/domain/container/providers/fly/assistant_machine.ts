@@ -1,8 +1,17 @@
 import crypto from "node:crypto";
 import { getContainerManagerRuntime } from "../../runtime.js";
 import type { ContainerManagerConfig } from "../../types.js";
+import { config as appConfig } from "../../../common/config.js";
 import { isAssistantContainerName } from "../../naming.js";
 import { buildAssistantOpenclawConfig } from "../shared/openclaw_config.js";
+import {
+  assertNoP0SecretsInConfig,
+  assertNoP0SecretsInEnv,
+} from "../shared/secret_guard.js";
+import {
+  deriveAssistantWebhookSecret,
+  QUICKSTART_SYNTHETIC_BOT_TOKEN,
+} from "../shared/telegram_runtime_secret.js";
 import { FLY_FORBIDDEN_SECRET_ENV_KEYS } from "../shared/secret_env.js";
 import {
   createMachine as createFlyMachine,
@@ -32,6 +41,7 @@ interface AssistantMachineCreateArgs {
   gatewayToken: string;
   assistantBotToken?: string | null;
   liteLlmApiKey: string | null;
+  skillsConfig?: UnknownRecord | null;
 }
 
 let latestAppDeployCache: {
@@ -66,9 +76,6 @@ const extractOrigin = (urlStr: string): string => {
 const hashConfigSha256 = (raw: string): string =>
   crypto.createHash("sha256").update(raw).digest("hex");
 
-const quoteForShell = (value: string): string =>
-  `'${value.replace(/'/g, `"'"'`)}'`;
-
 const resolveLiteLLMContainerBaseUrlForFly = (): string => {
   const containerBaseUrl = config.litellm.containerBaseUrl.trim();
   const liteLlmBaseUrl = config.litellm.baseUrl.trim();
@@ -85,10 +92,12 @@ const resolveLiteLLMContainerBaseUrlForFly = (): string => {
 };
 
 const buildAssistantOpenclawConfigPayload = (
+  assistantBotId: number,
   gatewayToken: string,
   assistantBotToken: string,
   liteLlmApiKey: string | null,
-): { config: UnknownRecord; json: string; hash: string } => {
+  skillsConfig?: UnknownRecord | null,
+): { config: UnknownRecord; json: string; base64: string; hash: string } => {
   const { webhookUrl, webhookPath, webhookHost, webhookPort, pluginPath } =
     config.telegramRouter;
   const normalizedWebhookUrl = webhookUrl.trim();
@@ -98,7 +107,11 @@ const buildAssistantOpenclawConfigPayload = (
     );
   }
   const privateWebhookPort = webhookPort + 1;
-  const webhookSecret = config.telegram.webhookSecret;
+  const webhookSecret = deriveAssistantWebhookSecret(
+    assistantBotId,
+    gatewayToken,
+    appConfig.apiAuthToken,
+  );
   const openclawConfigContext = {
     openclaw: config.openclaw,
     elevenLabs: config.elevenLabs,
@@ -112,22 +125,26 @@ const buildAssistantOpenclawConfigPayload = (
     gatewayToken,
     gatewayBind: "loopback",
     assistantBotToken,
-    publicBotToken: config.telegram.token,
+    quickStartSyntheticBotToken: QUICKSTART_SYNTHETIC_BOT_TOKEN,
     liteLlmApiKey,
     includeTelegramPlugin: true,
     telegramWebhookMode: true,
     telegramWebhookPort: webhookPort,
     telegramPrivateWebhookPort: privateWebhookPort,
     telegramWebhookUrl: normalizedWebhookUrl,
-    ...(webhookSecret ? { telegramWebhookSecret: webhookSecret } : {}),
+    telegramWebhookSecret: webhookSecret,
     ...(webhookPath ? { telegramWebhookPath: webhookPath } : {}),
     ...(webhookHost ? { telegramWebhookHost: webhookHost } : {}),
     ...(pluginPath ? { telegramRouterPluginPath: pluginPath } : {}),
+    controlOrigin: appConfig.publicBaseUrl,
+    ...(skillsConfig ? { skillsConfig } : {}),
   });
+  assertNoP0SecretsInConfig(built, config);
   const json = JSON.stringify(built);
   return {
     config: built,
     json,
+    base64: Buffer.from(json, "utf8").toString("base64"),
     hash: hashConfigSha256(json),
   };
 };
@@ -277,6 +294,7 @@ export const shouldRecreateAssistantMachine = (
   desiredGatewayToken: string,
   desiredAssistantBotToken?: string | null,
   desiredLiteLLMApiKey?: string | null,
+  desiredSkillsConfig?: UnknownRecord | null,
 ): boolean => {
   const configuredImage = machine.config?.image?.trim();
   if (configuredImage && configuredImage !== config.openclaw.image) {
@@ -301,9 +319,11 @@ export const shouldRecreateAssistantMachine = (
 
   const desiredToken = normalizeAssistantToken(desiredAssistantBotToken);
   const desiredConfigHash = buildAssistantOpenclawConfigPayload(
+    Number(machine.name?.replace(/^assistant-/, "") || 0),
     desiredGatewayToken,
     desiredToken,
     desiredLiteLLMApiKey || null,
+    desiredSkillsConfig,
   ).hash;
 
   const currentEnv = machine.config?.env;
@@ -361,15 +381,16 @@ export const createAssistantMachine = async (
   const normalizedWebhookPort = config.telegramRouter.webhookPort;
   const normalizedPrivateWebhookPort = normalizedWebhookPort + 1;
   const openclawPayload = buildAssistantOpenclawConfigPayload(
+    args.assistantBotId,
     args.gatewayToken,
     normalizedAssistantBotToken,
     args.liteLlmApiKey,
+    args.skillsConfig,
   );
 
-  const apisInternalPort = Number.parseInt(process.env.PORT || "3000", 10);
   const routerOrigin = config.telegramRouter.webhookUrl
     ? extractOrigin(config.telegramRouter.webhookUrl)
-    : `http://${config.fly.appName}.internal:${apisInternalPort}`;
+    : extractOrigin(appConfig.publicBaseUrl);
   const env: Record<string, string> = {
     OPENCLAW_USER_ID: `assistant-${args.assistantBotId}`,
     OPENCLAW_GATEWAY_PORT: String(config.openclaw.gatewayPort),
@@ -378,11 +399,13 @@ export const createAssistantMachine = async (
       normalizedPrivateWebhookPort,
     ),
     OPENCLAW_CONFIG_PATH: "/app/data/config/openclaw.json",
+    OPENCLAW_CONFIG_B64: openclawPayload.base64,
     OPENCLAW_STATE_DIR: "/app/data",
     NODE_COMPILE_CACHE: "/app/data/cache/node-compile-cache",
     PINAI_OPENCLAW_CONFIG_SHA256: openclawPayload.hash,
     TELEGRAM_ROUTER_URL: routerOrigin,
   };
+  assertNoP0SecretsInEnv(env, config);
 
   // Persist jiti + Node compile caches on the volume so restarts skip
   // the expensive cold-compile phase (~7 min → seconds).
@@ -400,7 +423,7 @@ export const createAssistantMachine = async (
   // 构建启动命令：前置准备 + 后台任务 + 主进程
   const setupCommands = [
     "mkdir -p /app/data/workspace /app/data/tmp /app/data/config /root/.openclaw",
-    `printf "%s" ${quoteForShell(openclawPayload.json)} > "$OPENCLAW_CONFIG_PATH"`,
+    'printf "%s" "$OPENCLAW_CONFIG_B64" | base64 -d > "$OPENCLAW_CONFIG_PATH"',
     "ln -sfn /app/data/workspace /root/.openclaw/workspace",
     reminderPolicyBootstrap,
     cacheBootstrap,

@@ -25,6 +25,7 @@ export interface ContainerStateStore {
   updateAssistant(id: number, fields: AssistantMutableFields): Promise<AssistantRecord | undefined>;
   updateUser(telegramUserId: number, fields: UserMutableFields): Promise<UserRecord | undefined>;
   updateUserById(id: number, fields: UserMutableFields): Promise<UserRecord | undefined>;
+  readAssistantRuntimeMetadata(assistantId: number): Promise<Record<string, unknown>>;
 }
 
 export type ReadAssistantLiteLLMVirtualKey = (
@@ -35,9 +36,14 @@ export type ReadUserLiteLLMVirtualKey = (
   user: Pick<UserRecord, 'telegram_user_id' | 'litellm_virtual_key'>
 ) => string | null;
 
+export interface ContainerNotifier {
+  notifyReady(telegramUserId: number): Promise<void>;
+}
+
 export interface ContainerManagerRuntime {
   config: ContainerManagerConfig;
   store: ContainerStateStore;
+  notifier: ContainerNotifier;
   readAssistantLiteLLMVirtualKey: ReadAssistantLiteLLMVirtualKey;
   readUserLiteLLMVirtualKey: ReadUserLiteLLMVirtualKey;
 }

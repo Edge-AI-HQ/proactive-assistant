@@ -10,6 +10,7 @@ import {
   ensureTelegramUserViaApi,
   listAssistantsByOwnerViaApi,
   readInternalSubscriptionViaApi,
+  resetUserAccountViaApi,
 } from "./client.js";
 import type { AssistantRecord } from "../../types.js";
 import { shouldEnsureAssistantRuntime } from "../claw-assistant/runtimeHealth.js";
@@ -18,6 +19,7 @@ import {
   CREATE_ASSISTANT_COMMAND,
   GATEWAY_COMMAND,
   LIST_ASSISTANT_COMMAND,
+  RESET_ACCOUNT_COMMAND,
   SUBSCRIBE_COMMAND,
   VNC_ACCESS_COMMAND,
   guideCommandList,
@@ -189,6 +191,14 @@ const buildAssistantGatewayUrl = (
   return url.toString();
 };
 
+const createSubscriptionEntryUrl = async (
+  telegramUserId: number,
+  telegramUsername: string | null,
+  assistantId?: number,
+): Promise<string | null> => {
+  return safeCreatePaymentLink(telegramUserId, telegramUsername, assistantId);
+};
+
 const buildAssistantGatewayLinksText = (
   assistants: AssistantRecord[],
   publicOrigin: string,
@@ -222,7 +232,7 @@ const provisionAssistantWithGuideBot = async (
 
   if (!hasActiveSubscription) {
     const assistantId = existingAssistants[0]?.id;
-    const paymentLink = await safeCreatePaymentLink(
+    const paymentLink = await createSubscriptionEntryUrl(
       telegramUserId,
       telegramUsername,
       assistantId,
@@ -426,8 +436,9 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     await clearTokenInputPending(telegramUserId);
 
     const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
+
     const assistantId = assistants[0]?.id;
-    const paymentLink = await safeCreatePaymentLink(
+    const paymentLink = await createSubscriptionEntryUrl(
       telegramUserId,
       ctx.from?.username ?? null,
       assistantId,
@@ -515,7 +526,8 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
 
     const keyboard = new InlineKeyboard();
     for (const assistant of assistants) {
-      const buttonLabel = `@${assistant.assistant_bot_username} (${assistant.container_status || "unknown"})`;
+      const botName = assistant.assistant_bot_username || assistant.container_name || `bot-${assistant.id}`;
+      const buttonLabel = `@${botName} (${assistant.container_status || "unknown"})`;
       const url = buildAssistantGatewayUrl(
         publicOrigin,
         telegramUserId,
@@ -580,11 +592,9 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
 
-    // 获取用户的助理（限制只有一个）
     const assistants = await listAssistantsByOwnerViaApi(telegramUserId);
     const assistantId = assistants[0]?.id;
-
-    const paymentLink = await safeCreatePaymentLink(
+    const paymentLink = await createSubscriptionEntryUrl(
       telegramUserId,
       ctx.from?.username ?? null,
       assistantId,
@@ -607,6 +617,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
       [
         "📊 <b>Subscription Management</b>",
         "",
+        "• <b>Open Subscription Page:</b> Subscribe, upgrade, downgrade in one place",
         "• <b>Cancel:</b> Cancel your subscription (stays active until period end)",
         "",
         "Your subscription applies to all your assistants.",
@@ -921,5 +932,74 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
   // VNC 远程桌面访问命令（暂时禁用）
   bot.command(VNC_ACCESS_COMMAND, async (ctx) => {
     await replyHtml(ctx, "⚠️ 远程桌面功能暂时不可用。");
+  });
+
+  bot.command(RESET_ACCOUNT_COMMAND, async (ctx) => {
+    const telegramUserId = ctx.from?.id;
+    if (!telegramUserId) return;
+
+    const keyboard = new InlineKeyboard()
+      .text("⚠️ Yes, Delete Everything", "confirm_reset_account")
+      .text("❌ Cancel", "cancel_reset_account");
+
+    await replyHtml(
+      ctx,
+      [
+        "⚠️ <b>Reset Account</b>",
+        "",
+        "This will <b>permanently</b> delete your account and all associated data:",
+        "",
+        "• Cancel your subscription immediately",
+        "• Destroy all assistant containers",
+        "• Delete all your data from our database",
+        "",
+        "<b>This action cannot be undone.</b>",
+        "",
+        "Are you sure you want to proceed?",
+      ].join("\n"),
+      { reply_markup: keyboard },
+    );
+  });
+
+  bot.callbackQuery("confirm_reset_account", async (ctx) => {
+    const telegramUserId = ctx.from?.id;
+    if (!telegramUserId) return;
+
+    await ctx.editMessageText(
+      "🔄 <b>Resetting your account...</b>\nThis may take a moment.",
+      { parse_mode: "HTML" },
+    );
+
+    try {
+      await resetUserAccountViaApi(telegramUserId);
+      await ctx.editMessageText(
+        [
+          "✅ <b>Account reset complete.</b>",
+          "",
+          "All your data, subscriptions, and assistants have been deleted.",
+          "Send /start to create a new account.",
+        ].join("\n"),
+        { parse_mode: "HTML" },
+      );
+    } catch (error: unknown) {
+      console.error("Failed to reset account", {
+        telegramUserId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await ctx.editMessageText(
+        "<b>Failed to reset account.</b>\nPlease try again later or contact support.",
+        { parse_mode: "HTML" },
+      );
+    }
+
+    await ctx.answerCallbackQuery();
+  });
+
+  bot.callbackQuery("cancel_reset_account", async (ctx) => {
+    await ctx.editMessageText(
+      "✅ <b>Account reset cancelled.</b>\nYour account remains unchanged.",
+      { parse_mode: "HTML" },
+    );
+    await ctx.answerCallbackQuery({ text: "Reset cancelled" });
   });
 };

@@ -3,6 +3,7 @@ import {
   type ContainerManagerConfig,
   type ContainerStateStore
 } from '../container/index.js';
+import type { ContainerNotifier } from '../container/types.js';
 import {
   configureLiteLLMRuntime,
   readAssistantLiteLLMVirtualKey,
@@ -10,12 +11,14 @@ import {
   type LiteLLMRuntimeConfig,
   type LiteLLMStore
 } from '../litellm/index.js';
+import { sendTelegramMessage } from '../telegram/notify.js';
 import { config } from './config.js';
 import {
   getUserByTelegramId,
   listAssistantsByOwnerTelegramId,
   listAssistantsWithLiteLLMKey,
   listUsedPorts,
+  readAssistantRuntimeMetadata,
   updateAssistant,
   updateUser,
   updateUserById
@@ -56,7 +59,19 @@ const containerStateStore: ContainerStateStore = {
   listUsedPorts,
   updateAssistant,
   updateUser,
-  updateUserById
+  updateUserById,
+  readAssistantRuntimeMetadata
+};
+
+const containerNotifier: ContainerNotifier = {
+  async notifyReady(telegramUserId: number): Promise<void> {
+    await sendTelegramMessage(
+      telegramUserId,
+      `✅ <b>Your assistant is ready!</b>\n\nYou can start chatting now.`,
+    ).catch((e) =>
+      console.warn(`[container] notify failed for user ${telegramUserId}`, e),
+    );
+  },
 };
 
 export const ensureInfraRuntimeConfigured = (): void => {
@@ -70,6 +85,7 @@ export const ensureInfraRuntimeConfigured = (): void => {
   configureContainerManagerRuntime({
     config: containerManagerConfig,
     store: containerStateStore,
+    notifier: containerNotifier,
     readAssistantLiteLLMVirtualKey,
     readUserLiteLLMVirtualKey
   });

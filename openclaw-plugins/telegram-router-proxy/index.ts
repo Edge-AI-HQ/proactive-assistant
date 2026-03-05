@@ -5,6 +5,7 @@ import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import { emptyPluginConfigSchema } from 'openclaw/plugin-sdk';
 
 const FETCH_PATCH_KEY = '__pinaiTelegramRouterFetchPatched__';
+const LITELLM_STREAM_ADAPTER_HEADER = 'x-pinai-litellm-stream-adapter';
 const OPENCLAW_GATEWAY_PORT = Number.parseInt(process.env.OPENCLAW_GATEWAY_PORT || '18789', 10);
 
 // Methods blocked entirely (return fake success) to prevent OpenClaw's
@@ -24,7 +25,6 @@ const BLOCKED_TELEGRAM_METHODS = new Set([
 // Methods that bypass the proxy and go directly to Telegram API.
 const PASSTHROUGH_TELEGRAM_METHODS = new Set([
   'getWebhookInfo',
-  'getMe',
   'logOut',
   'close'
 ]);
@@ -65,6 +65,10 @@ function installTelegramFetchProxy(api: OpenClawPluginApi, routerUrl: string) {
       if (patchedGatewayInit) {
         init = patchedGatewayInit;
       }
+      const patchedLiteLLMInit = await patchLiteLLMVisionStreamOff(input, init, api);
+      if (patchedLiteLLMInit) {
+        init = patchedLiteLLMInit;
+      }
       const rawUrl =
         typeof input === 'string' ? input
         : input instanceof URL ? input.toString()
@@ -73,56 +77,82 @@ function installTelegramFetchProxy(api: OpenClawPluginApi, routerUrl: string) {
 
       if (rawUrl) {
         const targetUrl = new URL(rawUrl);
-        const telegramApiPath = extractTelegramApiPath(targetUrl);
-        if (telegramApiPath) {
-          const { methodName, botToken } = telegramApiPath;
-          if (BLOCKED_TELEGRAM_METHODS.has(methodName)) {
-            api.logger.warn(`Blocked Telegram method from OpenClaw: ${methodName}`);
-            return new Response(JSON.stringify({ ok: true, result: true }), {
-              status: 200,
-              headers: { 'Content-Type': 'application/json' },
-            });
-          }
-          if (!PASSTHROUGH_TELEGRAM_METHODS.has(methodName)) {
+        const telegramTarget = extractTelegramTarget(targetUrl);
+        if (telegramTarget) {
+          if (telegramTarget.kind === 'method') {
+            const { methodName, botToken } = telegramTarget;
+            if (BLOCKED_TELEGRAM_METHODS.has(methodName)) {
+              api.logger.warn(`Blocked Telegram method from OpenClaw: ${methodName}`);
+              return new Response(JSON.stringify({ ok: true, result: true }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
+            if (PASSTHROUGH_TELEGRAM_METHODS.has(methodName)) {
+              return await originalFetch(input as RequestInfo, init);
+            }
             const proxyUrl = `${normalizedRouter}/api/telegram/${methodName}${targetUrl.search}`;
-            const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : {}));
-            headers.delete('host');
-            headers.delete('authorization');
-            headers.set('X-PinAI-Telegram-Bot-Token', botToken);
-
-            const effectiveInit: RequestInit = {
-              ...(input instanceof Request ? { method: input.method, body: input.body, redirect: input.redirect } : {}),
-              ...init,
-              headers
-            };
+            const effectiveInit = buildProxyInit(input, init, botToken);
             return await originalFetch(proxyUrl, effectiveInit);
           }
+          const proxyUrl = `${normalizedRouter}/api/telegram/file/${telegramTarget.filePath}${targetUrl.search}`;
+          const effectiveInit = buildProxyInit(input, init, telegramTarget.botToken);
+          return await originalFetch(proxyUrl, effectiveInit);
         }
       }
     } catch (error) {
       api.logger.error(`Telegram fetch proxy rewrite failed: ${String(error)}`);
     }
-    return await originalFetch(input as RequestInfo, init);
+    const { nextInit, shouldAdaptLiteLLMStream } = consumeLiteLLMStreamAdapterMarker(input, init);
+    const response = await originalFetch(input as RequestInfo, nextInit);
+    if (shouldAdaptLiteLLMStream) {
+      return await adaptLiteLLMNonStreamResponseToSse(response, api);
+    }
+    return response;
   }) as typeof fetch;
 
   g[FETCH_PATCH_KEY] = true;
   api.logger.info('Telegram fetch proxy patch installed');
 }
 
-function extractTelegramApiPath(url: URL): { methodName: string; botToken: string } | null {
+function buildProxyInit(input: RequestInfo | URL, init: RequestInit | undefined, botToken: string): RequestInit {
+  const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : {}));
+  headers.delete('host');
+  headers.delete('authorization');
+  headers.set('X-PinAI-Telegram-Bot-Token', botToken);
+  return {
+    ...(input instanceof Request ? { method: input.method, body: input.body, redirect: input.redirect } : {}),
+    ...init,
+    headers,
+  };
+}
+
+function extractTelegramTarget(url: URL):
+  | { kind: 'method'; methodName: string; botToken: string }
+  | { kind: 'file'; filePath: string; botToken: string }
+  | null {
   if (url.hostname !== 'api.telegram.org') {
     return null;
   }
-  const match = url.pathname.match(/^\/bot([^/]+)\/([^/?#]+)/);
-  if (!match) {
+  const methodMatch = url.pathname.match(/^\/bot([^/]+)\/([^/?#]+)/);
+  if (methodMatch) {
+    const botToken = methodMatch[1] || '';
+    const methodName = methodMatch[2] || '';
+    if (!botToken || !methodName) {
+      return null;
+    }
+    return { kind: 'method', methodName, botToken };
+  }
+  const fileMatch = url.pathname.match(/^\/file\/bot([^/]+)\/(.+)$/);
+  if (!fileMatch) {
     return null;
   }
-  const botToken = match[1] || '';
-  const methodName = match[2] || '';
-  if (!botToken || !methodName) {
+  const botToken = fileMatch[1] || '';
+  const filePath = fileMatch[2] || '';
+  if (!botToken || !filePath) {
     return null;
   }
-  return { methodName, botToken };
+  return { kind: 'file', filePath, botToken };
 }
 
 async function patchCronAddDeliveryAccountId(
@@ -237,6 +267,226 @@ async function patchCronAddDeliveryAccountId(
     headers,
     body: nextBody,
   };
+}
+
+async function patchLiteLLMVisionStreamOff(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  api?: OpenClawPluginApi,
+): Promise<RequestInit | null> {
+  const rawUrl =
+    typeof input === 'string' ? input
+    : input instanceof URL ? input.toString()
+    : input instanceof Request ? input.url
+    : '';
+  if (!rawUrl) {
+    return null;
+  }
+  let targetUrl: URL;
+  try {
+    targetUrl = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  if (!isLiteLLMChatCompletions(targetUrl)) {
+    return null;
+  }
+  const method =
+    (init?.method || (input instanceof Request ? input.method : 'GET')).trim().toUpperCase();
+  if (method !== 'POST') {
+    return null;
+  }
+  const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : {}));
+  const contentType = headers.get('content-type')?.toLowerCase() || '';
+  if (!contentType.includes('application/json')) {
+    return null;
+  }
+
+  let bodyText = '';
+  const rawBody = init?.body;
+  if (typeof rawBody === 'string') {
+    bodyText = rawBody;
+  } else if (rawBody instanceof Uint8Array) {
+    bodyText = new TextDecoder().decode(rawBody);
+  } else if (input instanceof Request) {
+    try {
+      bodyText = await input.clone().text();
+    } catch {
+      bodyText = '';
+    }
+  }
+  if (!bodyText) {
+    return null;
+  }
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(bodyText) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  if (parsed.stream !== true || !hasImageMessages(parsed.messages)) {
+    return null;
+  }
+  parsed.stream = false;
+  headers.set(LITELLM_STREAM_ADAPTER_HEADER, '1');
+  const nextBody = JSON.stringify(parsed);
+  api?.logger.info('[litellm patch] disable stream for vision request');
+  return {
+    ...(input instanceof Request
+      ? { method: input.method, redirect: input.redirect, credentials: input.credentials }
+      : {}),
+    ...init,
+    headers,
+    body: nextBody,
+  };
+}
+
+function isLiteLLMChatCompletions(url: URL): boolean {
+  return /\/(v1\/)?chat\/completions$/.test(url.pathname);
+}
+
+function hasImageMessages(messages: unknown): boolean {
+  if (!Array.isArray(messages)) {
+    return false;
+  }
+  for (const message of messages) {
+    if (!isRecord(message)) {
+      continue;
+    }
+    const content = message.content;
+    if (!Array.isArray(content)) {
+      continue;
+    }
+    for (const part of content) {
+      if (!isRecord(part)) {
+        continue;
+      }
+      const type = String(part.type || '').toLowerCase();
+      if (type === 'image_url' || type === 'input_image' || type === 'image') {
+        return true;
+      }
+      if (isRecord(part.image_url) || typeof part.image === 'string') {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function consumeLiteLLMStreamAdapterMarker(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): { nextInit: RequestInit | undefined; shouldAdaptLiteLLMStream: boolean } {
+  const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : {}));
+  const marker = headers.get(LITELLM_STREAM_ADAPTER_HEADER) === '1';
+  if (!marker) {
+    return { nextInit: init, shouldAdaptLiteLLMStream: false };
+  }
+  headers.delete(LITELLM_STREAM_ADAPTER_HEADER);
+  const nextInit: RequestInit = {
+    ...(input instanceof Request ? { method: input.method, body: input.body, redirect: input.redirect } : {}),
+    ...init,
+    headers,
+  };
+  return { nextInit, shouldAdaptLiteLLMStream: true };
+}
+
+async function adaptLiteLLMNonStreamResponseToSse(
+  response: Response,
+  api?: OpenClawPluginApi,
+): Promise<Response> {
+  if (!response.ok) {
+    return response;
+  }
+  const contentType = response.headers.get('content-type')?.toLowerCase() || '';
+  if (contentType.includes('text/event-stream')) {
+    return response;
+  }
+  const raw = await response.text();
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return new Response(raw, {
+      status: response.status,
+      headers: response.headers,
+    });
+  }
+  const content = extractLiteLLMMessageText(parsed);
+  if (!content) {
+    return new Response(raw, {
+      status: response.status,
+      headers: response.headers,
+    });
+  }
+  const created = Math.floor(Date.now() / 1000);
+  const id = typeof parsed.id === 'string' && parsed.id.trim() ? parsed.id.trim() : `chatcmpl_${Date.now()}`;
+  const model = typeof parsed.model === 'string' ? parsed.model : '';
+  const firstChunk = {
+    id,
+    object: 'chat.completion.chunk',
+    created,
+    model,
+    choices: [
+      {
+        index: 0,
+        delta: { content },
+        finish_reason: null,
+      },
+    ],
+  };
+  const lastChunk = {
+    id,
+    object: 'chat.completion.chunk',
+    created,
+    model,
+    choices: [
+      {
+        index: 0,
+        delta: {},
+        finish_reason: 'stop',
+      },
+    ],
+  };
+  const sse =
+    `data: ${JSON.stringify(firstChunk)}\n\n` +
+    `data: ${JSON.stringify(lastChunk)}\n\n` +
+    'data: [DONE]\n\n';
+  api?.logger.info('[litellm patch] adapted non-stream completion to SSE');
+  return new Response(sse, {
+    status: response.status,
+    headers: {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache',
+    },
+  });
+}
+
+function extractLiteLLMMessageText(payload: Record<string, unknown>): string {
+  const choices = Array.isArray(payload.choices) ? payload.choices : [];
+  if (!choices.length || !isRecord(choices[0])) {
+    return '';
+  }
+  const message = isRecord(choices[0].message) ? choices[0].message : null;
+  if (!message) {
+    return '';
+  }
+  const content = message.content;
+  if (typeof content === 'string') {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return '';
+  }
+  const parts: string[] = [];
+  for (const part of content) {
+    if (!isRecord(part)) continue;
+    if (typeof part.text === 'string' && part.text) {
+      parts.push(part.text);
+    }
+  }
+  return parts.join('');
 }
 
 function isOpenClawGatewayRpc(url: URL): boolean {

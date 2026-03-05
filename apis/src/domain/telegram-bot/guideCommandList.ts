@@ -3,6 +3,7 @@ export const LIST_ASSISTANT_COMMAND = "list_claw_assistant";
 export const SUBSCRIBE_COMMAND = "subscribe";
 export const GATEWAY_COMMAND = "gateway";
 export const VNC_ACCESS_COMMAND = "vnc_access";
+export const RESET_ACCOUNT_COMMAND = "reset_account";
 
 export const guideCommandList = [
   {
@@ -28,5 +29,9 @@ export const guideCommandList = [
   {
     command: VNC_ACCESS_COMMAND,
     description: "Access remote desktop for browser operations",
+  },
+  {
+    command: RESET_ACCOUNT_COMMAND,
+    description: "Delete your account and all associated data",
   },
 ] as const;

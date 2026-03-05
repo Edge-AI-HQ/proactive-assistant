@@ -330,9 +330,9 @@ INSERT INTO billing_plans (
   sort_order,
   is_active
 ) VALUES
-  ('basic', 'Basic', 'price_1SzoXARuhUY2tIYEZ6BUQOHE', 'usd', 10, 0, 1000, 10, TRUE),
-  ('pro', 'Pro', 'price_1SzoYERuhUY2tIYEHXkcIljS', 'usd', 20, 0, 2000, 20, TRUE),
-  ('max', 'Max', 'price_1SzoYoRuhUY2tIYEsEGvaGBm', 'usd', 30, 0, 5000, 30, TRUE)
+  ('basic', 'Basic', 'price_1T50rb2K5fzHJAlc2maOE5fP', 'usd', 499, 0, 1000, 10, TRUE),
+  ('pro', 'Pro', 'price_1T50rc2K5fzHJAlcTYU5PxtX', 'usd', 999, 0, 2000, 20, TRUE),
+  ('max', 'Max', 'price_1T50rd2K5fzHJAlc4WmBNvPy', 'usd', 1999, 0, 5000, 30, TRUE)
 ON CONFLICT (plan_code)
 DO UPDATE SET
   display_name = EXCLUDED.display_name,

@@ -20,19 +20,20 @@ const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 const isFlyConfigured = (): boolean =>
-  Boolean(config.fly.apiToken && config.fly.appName);
+  Boolean(config.fly.apiToken && config.fly.assistantAppName);
 
 const assertFlyConfigured = (): void => {
   if (!isFlyConfigured()) {
     throw new Error(
-      "FLY_API_TOKEN and FLY_APP_NAME are required when CONTAINER_RUNTIME=fly",
+      "FLY_API_TOKEN and FLY_ASSISTANT_APP_NAME (or FLY_APP_NAME fallback) are required when CONTAINER_RUNTIME=fly",
     );
   }
 };
 
 const flyApiBase = (): string => config.fly.apiBaseUrl.replace(/\/+$/, "");
 
-const appPath = (): string => `/apps/${encodeURIComponent(config.fly.appName)}`;
+const appPath = (): string =>
+  `/apps/${encodeURIComponent(config.fly.assistantAppName)}`;
 
 const flyRequest = async <T>(
   method: string,

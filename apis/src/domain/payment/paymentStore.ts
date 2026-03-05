@@ -91,6 +91,11 @@ export interface PaymentStore {
     cancel_at_period_end: boolean,
     status?: string,
   ): Promise<boolean>;
+  truncateSubscriptionPeriodsAt(
+    stripe_subscription_id: string,
+    ended_at: Date,
+    status?: string,
+  ): Promise<boolean>;
   createPaymentSession(data: {
     token: string;
     telegram_user_id: string;

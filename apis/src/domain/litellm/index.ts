@@ -7,6 +7,8 @@ export {
 } from './service.js';
 export {
   createLiteLLMUser,
+  deleteLiteLLMKey,
+  deleteLiteLLMUser,
   generateLiteLLMKey,
   getLiteLLMUserInfo,
   getLiteLLMUserSpendCents,
