@@ -49,6 +49,26 @@ LiteLLM 本地命令：
 - 生产环境禁止直接执行任何数据库变更（含手动 SQL、`migrate`、`db push`、`schema` 变更）。
 - 所有生产变更必须走代码评审 + CI/CD 发布流程，不允许在终端临时“热修”。
 
+## Prod 上线同类工作清单（安全版）
+1. 合并前（代码侧）
+- 确认 P0 防护仍在：`assertNoP0SecretsInEnv` / `assertNoP0SecretsInConfig` 未被绕过。
+- 若改了 `openclaw-plugins/` 或启动命令：同步重建 OpenClaw 镜像并准备新 `OPENCLAW_IMAGE@sha256`。
+- 至少通过：`npm run type-check`、`npm run test --workspace @pin-ai/apis`。
+
+2. 发布前（配置侧）
+- 确认 prod 也使用 assistant 独立 app（`FLY_ASSISTANT_APP_NAME` 指向 prod assistant app）。
+- 确认 `OPENCLAW_IMAGE` 为 digest（禁止 tag）。
+- 确认 Telegram 路由关键项完整：`TELEGRAM_ROUTER_WEBHOOK_URL`、`TELEGRAM_WEBHOOK_SECRET`。
+
+3. 发布后（验收侧）
+- 看 APIs 日志：无 `Forward failed on all candidate endpoints`。
+- 看 assistant 日志：出现 `webhook local listener` 后再出现用户业务消息转发。
+- 抽检一台 assistant 机：P0 三项不在 env / openclaw config 明文中。
+
+4. 回滚策略
+- 优先回滚应用版本与 `OPENCLAW_IMAGE` digest（均走 CI/CD）。
+- 回滚后重复“发布后验收侧”三步，确认链路和密钥防护同时恢复。
+
 ## Telegram 路由运行规则（当前真相）
 消息流：
 ```text
