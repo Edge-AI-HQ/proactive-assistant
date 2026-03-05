@@ -4,6 +4,7 @@ import TopStatus from "./components/TopStatus";
 import AgentCard from "./components/AgentCard";
 import ChangePlanDialog from "./components/ChangePlanDialog";
 import VideoLanding from "./components/VideoLanding";
+import SetupWaiting from "./components/SetupWaiting";
 import Toast from "./components/Toast";
 
 type Plan = {
@@ -286,34 +287,6 @@ const App = () => {
     }
   };
 
-  const installSkill = async (skillKey: string) => {
-    setBusy(`skill-install:${skillKey}`);
-    try {
-      await safeFetch("/api/mini/skills/install", {
-        method: "POST",
-        body: JSON.stringify({ skill_key: skillKey }),
-      });
-      await loadState();
-    } catch (e) {
-      showToast(`Install failed: ${e instanceof Error ? e.message : "unknown"}`);
-      setBusy("none");
-    }
-  };
-
-  const uninstallSkill = async (skillKey: string) => {
-    setBusy(`skill-uninstall:${skillKey}`);
-    try {
-      await safeFetch("/api/mini/skills/uninstall", {
-        method: "POST",
-        body: JSON.stringify({ skill_key: skillKey }),
-      });
-      await loadState();
-    } catch (e) {
-      showToast(`Uninstall failed: ${e instanceof Error ? e.message : "unknown"}`);
-      setBusy("none");
-    }
-  };
-
   if (loading) {
     return (
       <div
@@ -494,185 +467,16 @@ const App = () => {
     );
   }
 
-  // Show subscription center when subscription is active but no assistant
+  // Subscription active but assistant not yet created — show waiting screen
+  // Auto-poll until assistant exists, with manual fallback after timeout
   return (
-    <div
-      className="min-h-dvh bg-pin-gradient max-w-md mx-auto px-4 overflow-y-auto"
-      style={{
-        paddingTop: "calc(var(--safe-top) + 1rem)",
-        paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1rem)",
-      }}
-    >
-      <section className="glass-card rounded-2xl p-5 animate-fade-in">
-        <span className="pill bg-foreground text-background">PIN AI</span>
-        <h1 className="mt-3 font-heading text-xl font-bold leading-[1.1] text-foreground">
-          Subscription Center
-        </h1>
-        <p className="mt-1.5 text-sm text-foreground/70">
-          Your subscription is active. Create your assistant to get started.
-        </p>
-      </section>
-
-      <section className="glass-card rounded-2xl p-4 mt-3 animate-fade-in">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <h2 className="text-base font-semibold text-foreground">Runtime Status</h2>
-          <span
-            className={`pill text-xs ${state.subscription.active ? "bg-pin-mint/20 text-pin-mint-text" : "bg-amber-100 text-amber-700"}`}
-          >
-            {state.subscription.active ? "Active" : "Inactive"}
-          </span>
-        </div>
-        <div className="space-y-1.5 text-sm text-foreground/80">
-          <div>
-            <span className="font-medium">Status:</span> {state.assistant.exists ? (state.assistant.status || "unknown") : "assistant not created"}
-          </div>
-          <div>
-            <span className="font-medium">Plan:</span> {state.subscription.plan_id || "none"}
-          </div>
-          {state.subscription.current_period_end ? (
-            <div>
-              <span className="font-medium">Period end:</span> {state.subscription.current_period_end}
-            </div>
-          ) : null}
-          {state.subscription.cancel_at_period_end ? (
-            <div className="text-sm text-amber-600 font-medium mt-1">
-              Renewal canceled (ends at period end)
-            </div>
-          ) : null}
-        </div>
-      </section>
-
-      {!state.assistant.exists ? (
-        <section className="glass-card rounded-2xl p-4 mt-3 animate-fade-in">
-          <h2 className="text-base font-semibold text-foreground mb-2">Create Assistant</h2>
-          <p className="text-sm text-foreground/70 mb-3">
-            Subscription is active. Create your assistant to enable runtime and skills.
-          </p>
-          <button
-            className="w-full rounded-xl bg-foreground text-background px-4 py-3 text-sm font-bold shadow-lg btn-press disabled:opacity-50"
-            onClick={() => void createAssistant()}
-            disabled={busy !== "none"}
-          >
-            {busy === "create" ? "Creating..." : "Create Assistant"}
-          </button>
-        </section>
-      ) : null}
-
-      <section className="glass-card rounded-2xl p-4 mt-3 animate-fade-in">
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <h2 className="text-base font-semibold text-foreground">Change Plan</h2>
-          <span className="pill text-xs bg-secondary/60 text-foreground">Flexible</span>
-        </div>
-
-        <div className="space-y-2">
-          {state.plans.map((plan) => {
-            const selected = selectedPlan === plan.id;
-            const current = state.subscription.plan_id === plan.id;
-            return (
-              <button
-                key={plan.id}
-                className={`w-full rounded-xl p-3.5 text-left transition-all btn-press ${
-                  selected
-                    ? "bg-white/60 border-2 border-primary shadow-lg"
-                    : "bg-white/30 border border-white/40 hover:bg-white/40"
-                }`}
-                onClick={() => setSelectedPlan(plan.id)}
-              >
-                <div className="flex items-center justify-between gap-2 mb-0.5">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-bold text-foreground">{plan.name}</span>
-                    {current && <span className="text-[10px] px-2 py-0.5 rounded-full bg-pin-mint/20 text-pin-mint-text font-medium">Current</span>}
-                  </div>
-                  <span className="text-base font-extrabold text-primary">
-                    ${plan.price}<span className="text-xs font-normal text-muted-foreground">/mo</span>
-                  </span>
-                </div>
-                <div className="text-xs text-foreground/60">
-                  {plan.features.slice(0, 2).join(" · ")}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="mt-3 space-y-2">
-          <button
-            className="w-full rounded-xl bg-foreground text-background px-4 py-3 text-sm font-bold shadow-lg btn-press disabled:opacity-50"
-            onClick={() => void checkout()}
-            disabled={busy !== "none" || !selectedPlan}
-          >
-            {busy === "checkout" ? "Redirecting..." : "Continue to Checkout"}
-          </button>
-          <button
-            className="w-full rounded-xl bg-secondary/60 text-foreground px-4 py-2.5 text-sm font-medium btn-press disabled:opacity-50"
-            onClick={() => void cancelSubscription()}
-            disabled={busy !== "none"}
-          >
-            {busy === "cancel" ? "Processing..." : "Cancel Renewal"}
-          </button>
-        </div>
-      </section>
-
-      <section className="glass-card rounded-2xl p-4 mt-3 animate-fade-in">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <h2 className="text-base font-semibold text-foreground">Skills</h2>
-          <span className={`pill text-xs ${state.skills.supported ? "bg-pin-mint/20 text-pin-mint-text" : "bg-amber-100 text-amber-700"}`}>
-            {state.skills.supported ? "Enabled" : "Pending"}
-          </span>
-        </div>
-        <div className="text-sm text-foreground/70 mb-3">{state.skills.message}</div>
-        {state.skills.supported ? (
-          <div className="space-y-2">
-            {(state.skills.items || []).map((skill) => {
-              const installing = busy === `skill-install:${skill.key}`;
-              const uninstalling = busy === `skill-uninstall:${skill.key}`;
-              return (
-                <div
-                  key={skill.key}
-                  className="rounded-xl bg-white/30 border border-white/40 p-3.5"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1">
-                      <div className="text-sm font-bold text-foreground">{skill.name}</div>
-                      <div className="mt-0.5 text-xs text-foreground/70">
-                        {skill.description}
-                      </div>
-                      <div className="mt-1 text-[11px] text-foreground/50">
-                        {skill.key} · {skill.installed ? (
-                          <span className="text-pin-mint-text">installed</span>
-                        ) : (
-                          <span>not installed</span>
-                        )}
-                      </div>
-                    </div>
-                    {skill.enabled ? (
-                      <button
-                        className="rounded-lg bg-secondary/60 px-3 py-2 text-xs font-semibold text-foreground btn-press disabled:opacity-50 shrink-0"
-                        onClick={() => void uninstallSkill(skill.key)}
-                        disabled={busy !== "none"}
-                      >
-                        {uninstalling ? "Removing..." : "Remove"}
-                      </button>
-                    ) : (
-                      <button
-                        className="rounded-lg bg-foreground text-background px-3 py-2 text-xs font-semibold btn-press disabled:opacity-50 shrink-0"
-                        onClick={() => void installSkill(skill.key)}
-                        disabled={busy !== "none"}
-                      >
-                        {installing ? "Installing..." : "Install"}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : null}
-      </section>
-
-      <div className="mt-3 pb-1 text-center text-xs text-foreground/50">PIN AI</div>
-      <Toast message={toast?.message ?? null} type={toast?.type} onDismiss={() => setToast(null)} />
-    </div>
+    <SetupWaiting
+      onRetry={createAssistant}
+      onPoll={loadState}
+      busy={busy === "create"}
+      toast={toast}
+      onDismissToast={() => setToast(null)}
+    />
   );
 };
 
