@@ -71,6 +71,8 @@ test("buildOnboardingGreetingPrompt includes pinai tenure identity and style con
   assert.match(prompt, /How can I help you today\?/);
   assert.match(prompt, /preferred name \+ response style/i);
   assert.match(prompt, /playful|fun|light humor/i);
-  assert.match(prompt, /max 2 short paragraphs/i);
+  assert.match(prompt, /short title line/i);
+  assert.match(prompt, /exactly 3 compact blocks/i);
+  assert.match(prompt, /exactly 2 short bullet points/i);
   assert.match(prompt, /1-2 natural emoji/i);
 });
