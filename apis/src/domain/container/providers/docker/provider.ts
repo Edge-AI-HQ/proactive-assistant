@@ -186,9 +186,13 @@ const ensureWorkspaceUserProfile = (
   profileText?: string | null,
   profileSource?: "connector" | "privy" | null,
 ): boolean => {
-  const userMdPath = path.join(workspaceDir, "user.md");
+  const userMdPath = path.join(workspaceDir, "USER.md");
+  const legacyUserMdPath = path.join(workspaceDir, "user.md");
   const normalized = (profileText || "").trim();
   if (!normalized) {
+    if (fs.existsSync(legacyUserMdPath)) {
+      fs.rmSync(legacyUserMdPath, { force: true });
+    }
     if (fs.existsSync(userMdPath)) {
       fs.rmSync(userMdPath, { force: true });
       return true;
@@ -203,9 +207,18 @@ const ensureWorkspaceUserProfile = (
   const before = fs.existsSync(userMdPath)
     ? fs.readFileSync(userMdPath, "utf8")
     : "";
-  if (before === content) return false;
+  if (before === content) {
+    if (fs.existsSync(legacyUserMdPath)) {
+      fs.rmSync(legacyUserMdPath, { force: true });
+      return true;
+    }
+    return false;
+  }
 
   fs.writeFileSync(userMdPath, content, "utf8");
+  if (fs.existsSync(legacyUserMdPath)) {
+    fs.rmSync(legacyUserMdPath, { force: true });
+  }
   return true;
 };
 

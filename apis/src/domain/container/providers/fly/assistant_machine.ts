@@ -468,7 +468,7 @@ export const createAssistantMachine = async (
   const setupCommands = [
     "mkdir -p /app/data/workspace /app/data/tmp /app/data/config /root/.openclaw",
     'printf "%s" "$OPENCLAW_CONFIG_B64" | base64 -d > "$OPENCLAW_CONFIG_PATH"',
-    'if [ -n "${PINAI_ONBOARDING_PROFILE_B64:-}" ]; then printf "%s" "$PINAI_ONBOARDING_PROFILE_B64" | base64 -d > /app/data/workspace/user.md; else rm -f /app/data/workspace/user.md; fi',
+    'if [ -n "${PINAI_ONBOARDING_PROFILE_B64:-}" ]; then printf "%s" "$PINAI_ONBOARDING_PROFILE_B64" | base64 -d > /app/data/workspace/USER.md; rm -f /app/data/workspace/user.md; else rm -f /app/data/workspace/USER.md /app/data/workspace/user.md; fi',
     "ln -sfn /app/data/workspace /root/.openclaw/workspace",
     reminderPolicyBootstrap,
     cacheBootstrap,
