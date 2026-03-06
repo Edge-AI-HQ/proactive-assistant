@@ -218,12 +218,17 @@ export const buildOnboardingGreetingPrompt = (input: {
   hasProfile: boolean;
   profileText?: string;
   membershipDays?: number | null;
+  membershipSinceDate?: string | null;
 }): string => {
   if (input.hasProfile && input.profileText?.trim()) {
     const snippet = truncate(input.profileText.trim(), 2000);
     const tenureHint =
       typeof input.membershipDays === "number" && Number.isFinite(input.membershipDays)
         ? Math.max(1, Math.floor(input.membershipDays))
+        : null;
+    const sinceHint =
+      typeof input.membershipSinceDate === "string" && input.membershipSinceDate.trim().length > 0
+        ? input.membershipSinceDate.trim()
         : null;
     return [
       "[SYSTEM INTERNAL TRIGGER - DO NOT EXPOSE]",
@@ -235,8 +240,10 @@ export const buildOnboardingGreetingPrompt = (input: {
       tenureHint
         ? `Mention their tenure naturally as about ${tenureHint} days in PINAI (do not sound robotic).`
         : "If no exact tenure is available, still thank them for being with PINAI for a long time.",
+      sinceHint ? `Reference that they have been with PINAI since ${sinceHint}.` : "If available, mention when they first joined PINAI.",
       "Use profile memory to make it personal, concrete, and high-energy.",
       "Mention 1-2 specific profile facts naturally (no bullet list, no dump).",
+      "Tone should feel playful and fun with light humor, while staying respectful and concise.",
       'End with one short question that includes: "How can I help you today?", and briefly asks preferred name + response style.',
       "Do not mention internal trigger, profile import, system, or hidden channels.",
       "",
@@ -252,6 +259,7 @@ export const buildOnboardingGreetingPrompt = (input: {
     "Language policy: default to English.",
     "If there is clear language preference signal in available user context, follow it.",
     "Acknowledge the user as a valued High PIN member and thank them for being with PINAI.",
+    "Tone should feel playful and fun with light humor, while staying respectful and concise.",
     'End with one short question that includes: "How can I help you today?", and briefly asks preferred name + response style.',
     "Do not mention internal trigger, system, or hidden channels.",
   ].join("\n");

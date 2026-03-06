@@ -132,6 +132,7 @@ export const triggerReadyGreetingForAssistant = async (input: {
   let hasProfile = parseHasProfile(metadata);
   let profileText = "";
   let membershipDays: number | null = null;
+  let membershipSinceDate: string | null = null;
 
   if (hasProfile === null) {
     const ownerTelegramId =
@@ -141,10 +142,12 @@ export const triggerReadyGreetingForAssistant = async (input: {
     hasProfile = Boolean(profile?.profileText?.trim());
     profileText = profile?.profileText || "";
     if (profile?.accountCreatedAt) {
-      const createdAtMs = new Date(profile.accountCreatedAt).getTime();
+      const createdAt = new Date(profile.accountCreatedAt);
+      const createdAtMs = createdAt.getTime();
       if (Number.isFinite(createdAtMs)) {
         const diffDays = Math.floor((Date.now() - createdAtMs) / 86_400_000);
         membershipDays = Math.max(1, diffDays);
+        membershipSinceDate = createdAt.toISOString().slice(0, 10);
       }
     }
   }
@@ -153,6 +156,7 @@ export const triggerReadyGreetingForAssistant = async (input: {
     hasProfile: Boolean(hasProfile),
     profileText,
     membershipDays,
+    membershipSinceDate,
   });
 
   const update = buildPrivateWebhookUpdate(input.telegramUserId, prompt);
