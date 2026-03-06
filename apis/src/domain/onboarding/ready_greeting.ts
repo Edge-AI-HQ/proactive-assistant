@@ -56,7 +56,21 @@ const postPrivateWebhook = async (
           },
           body: JSON.stringify(update),
         });
-        if (res.ok) return true;
+        if (res.ok) {
+          let forwarded = false;
+          try {
+            const payload = (await res.json()) as { forwarded?: unknown };
+            forwarded = payload.forwarded === true;
+          } catch {
+            forwarded = false;
+          }
+          if (forwarded) return true;
+          console.warn("[onboarding] greeting trigger acknowledged but not forwarded", {
+            url,
+            attempt,
+          });
+          continue;
+        }
         console.warn("[onboarding] greeting trigger webhook returned non-2xx", {
           url,
           attempt,

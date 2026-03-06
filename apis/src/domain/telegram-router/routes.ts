@@ -178,7 +178,7 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
       if (userState.container) {
         const forwarded = await forwardToOpenClaw(userState.container, update, source);
         if (forwarded) {
-          res.status(200).json({ ok: true });
+          res.status(200).json({ ok: true, forwarded: true });
           return;
         }
       }
@@ -187,7 +187,7 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
         chatId,
         "Your assistant is starting up — first launch may take a few minutes. Please try again shortly.",
       );
-      res.status(200).json({ ok: true });
+      res.status(200).json({ ok: true, forwarded: false });
       return;
     }
 
@@ -200,7 +200,7 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
       );
     }
 
-    res.status(200).json({ ok: true });
+    res.status(200).json({ ok: true, forwarded });
   } catch (error) {
     console.error("❌ Webhook error:", error);
     res.status(500).send("Internal Server Error");
