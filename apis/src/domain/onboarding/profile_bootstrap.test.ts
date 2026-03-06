@@ -57,7 +57,7 @@ test("shouldTriggerReadyGreeting is false after first successful trigger", () =>
   assert.equal(shouldTriggerReadyGreeting({ onboarding_greeted_at: "2026-03-06T08:00:00Z" }), false);
 });
 
-test("buildOnboardingGreetingPrompt includes high pin tenure and identity asks", () => {
+test("buildOnboardingGreetingPrompt includes pinai tenure identity and style constraints", () => {
   const prompt = buildOnboardingGreetingPrompt({
     hasProfile: true,
     profileText: "Daily syncs and gaming as SmileToYe",
@@ -65,10 +65,12 @@ test("buildOnboardingGreetingPrompt includes high pin tenure and identity asks",
     membershipSinceDate: "2023-12-28",
   });
 
-  assert.match(prompt, /High PIN member/i);
+  assert.match(prompt, /valued PINAI member/i);
   assert.match(prompt, /about 800 days/i);
   assert.match(prompt, /since 2023-12-28/i);
   assert.match(prompt, /How can I help you today\?/);
   assert.match(prompt, /preferred name \+ response style/i);
   assert.match(prompt, /playful|fun|light humor/i);
+  assert.match(prompt, /max 2 short paragraphs/i);
+  assert.match(prompt, /1-2 natural emoji/i);
 });

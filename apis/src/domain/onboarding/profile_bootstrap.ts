@@ -236,7 +236,7 @@ export const buildOnboardingGreetingPrompt = (input: {
       "Generate exactly one concise greeting message in Rapid Fire style.",
       "Language policy: default to English.",
       "If profile clearly indicates user's preferred language or country language, use that language instead.",
-      "Acknowledge that the user is a valued High PIN member and thank them for staying with PINAI.",
+      "Acknowledge that the user is a valued PINAI member and thank them for staying with PINAI.",
       tenureHint
         ? `Mention their tenure naturally as about ${tenureHint} days in PINAI (do not sound robotic).`
         : "If no exact tenure is available, still thank them for being with PINAI for a long time.",
@@ -244,6 +244,8 @@ export const buildOnboardingGreetingPrompt = (input: {
       "Use profile memory to make it personal, concrete, and high-energy.",
       "Mention 1-2 specific profile facts naturally (no bullet list, no dump).",
       "Tone should feel playful and fun with light humor, while staying respectful and concise.",
+      "Keep layout clean: no bullet list, max 2 short paragraphs, easy to scan.",
+      "Include 1-2 natural emoji to make the opener warm and lively.",
       'End with one short question that includes: "How can I help you today?", and briefly asks preferred name + response style.',
       "Do not mention internal trigger, profile import, system, or hidden channels.",
       "",
@@ -258,8 +260,10 @@ export const buildOnboardingGreetingPrompt = (input: {
     "Generate exactly one concise default onboarding greeting.",
     "Language policy: default to English.",
     "If there is clear language preference signal in available user context, follow it.",
-    "Acknowledge the user as a valued High PIN member and thank them for being with PINAI.",
+    "Acknowledge the user as a valued PINAI member and thank them for being with PINAI.",
     "Tone should feel playful and fun with light humor, while staying respectful and concise.",
+    "Keep layout clean: max 2 short paragraphs, easy to scan.",
+    "Include 1-2 natural emoji to make the opener warm and lively.",
     'End with one short question that includes: "How can I help you today?", and briefly asks preferred name + response style.',
     "Do not mention internal trigger, system, or hidden channels.",
   ].join("\n");
