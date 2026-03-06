@@ -220,6 +220,10 @@ export interface FeatureFlagsConfig {
   allowMissingSecrets: boolean;
 }
 
+export interface LegacyProfileConfig {
+  mysqlUrl: string;
+}
+
 export interface SharedConfig {
   nodeEnv: string;
   port: number;
@@ -236,4 +240,5 @@ export interface SharedConfig {
   fly: FlyConfig;
   telegramRouter: TelegramRouterConfig;
   featureFlags: FeatureFlagsConfig;
+  legacyProfile: LegacyProfileConfig;
 }

@@ -28,6 +28,7 @@ import {
 } from "../shared/telegram_runtime_secret.js";
 import { config as appConfig } from "../../../common/config.js";
 import { toOpenclawSkillsPayload } from "../../../skills/openclaw_skills.js";
+import { renderUserProfileMarkdown } from "../../../onboarding/profile_bootstrap.js";
 
 // ---------------------------------------------------------------------------
 // Docker client & config proxy
@@ -178,6 +179,34 @@ const sanitizeCronStore = (runtimeDataDir: string): void => {
     cronPath,
     `${JSON.stringify({ ...parsed, jobs }, null, 2)}\n`,
   );
+};
+
+const ensureWorkspaceUserProfile = (
+  workspaceDir: string,
+  profileText?: string | null,
+  profileSource?: "connector" | "privy" | null,
+): boolean => {
+  const userMdPath = path.join(workspaceDir, "user.md");
+  const normalized = (profileText || "").trim();
+  if (!normalized) {
+    if (fs.existsSync(userMdPath)) {
+      fs.rmSync(userMdPath, { force: true });
+      return true;
+    }
+    return false;
+  }
+
+  const content = renderUserProfileMarkdown(
+    normalized,
+    profileSource || "connector",
+  );
+  const before = fs.existsSync(userMdPath)
+    ? fs.readFileSync(userMdPath, "utf8")
+    : "";
+  if (before === content) return false;
+
+  fs.writeFileSync(userMdPath, content, "utf8");
+  return true;
 };
 
 // ---------------------------------------------------------------------------
@@ -523,6 +552,11 @@ export const dockerContainerRuntime: ContainerRuntime = {
       liteLlmApiKey,
       params.skillsConfig,
     );
+    ensureWorkspaceUserProfile(
+      dirs.workspaceDir,
+      params.onboardingProfileText,
+      params.onboardingProfileSource,
+    );
     sanitizeCronStore(dirs.dataDir);
 
     const hostPort = params.containerPort
@@ -739,6 +773,11 @@ export const dockerContainerRuntime: ContainerRuntime = {
       liteLlmApiKey,
       params.skillsConfig,
     );
+    const profileChanged = ensureWorkspaceUserProfile(
+      dirs.workspaceDir,
+      params.onboardingProfileText,
+      params.onboardingProfileSource,
+    );
 
     // Config change doesn't need recreation — just a restart (handled by orchestrator)
     // But we sanitize cron store as a side effect
@@ -746,7 +785,7 @@ export const dockerContainerRuntime: ContainerRuntime = {
 
     // If config changed and container is running, orchestrator should restart
     // We return false because recreation (destroy+create) is not needed
-    if (changed) {
+    if (changed || profileChanged) {
       // Restart the running container to pick up config changes
       if (inspect.State?.Status === "running") {
         await container.restart();

@@ -13,6 +13,7 @@ import {
 } from '../litellm/index.js';
 import { sendTelegramMessage } from '../telegram/notify.js';
 import { config } from './config.js';
+import { triggerReadyGreetingForAssistant } from '../onboarding/ready_greeting.js';
 import {
   getUserByTelegramId,
   listAssistantsByOwnerTelegramId,
@@ -64,7 +65,24 @@ const containerStateStore: ContainerStateStore = {
 };
 
 const containerNotifier: ContainerNotifier = {
-  async notifyReady(telegramUserId: number): Promise<void> {
+  async notifyReady(
+    telegramUserId: number,
+    options?: { assistantId?: number },
+  ): Promise<void> {
+    if (options?.assistantId) {
+      const delivered = await triggerReadyGreetingForAssistant({
+        assistantId: options.assistantId,
+        telegramUserId,
+      }).catch((e) => {
+        console.warn(
+          `[container] onboarding greeting failed for assistant ${options.assistantId}`,
+          e,
+        );
+        return false;
+      });
+      if (delivered) return;
+    }
+
     await sendTelegramMessage(
       telegramUserId,
       `✅ <b>Your assistant is ready!</b>\n\nYou can start chatting now.`,

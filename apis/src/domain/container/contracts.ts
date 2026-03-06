@@ -80,6 +80,8 @@ export interface AssistantContainerParams {
   gatewayToken: string;
   assistantBotToken: string | null;
   liteLlmApiKey: string | null;
+  onboardingProfileText?: string | null;
+  onboardingProfileSource?: "connector" | "privy" | null;
   skillsConfig?: Record<string, unknown> | null;
   /** Docker needs a pre-allocated host port. */
   containerPort?: number;

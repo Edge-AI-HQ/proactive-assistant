@@ -19,7 +19,7 @@
     "litellm:cleanup-local-db": "cd .. && bash ops/litellm/litellm.sh cleanup-local-db",
     "litellm:verify-db-env": "cd .. && bash ops/litellm/litellm.sh verify-db-env",
     "test:fly-api": "node scripts/test-fly-api.mjs",
-"test:create-container": "node scripts/test-create-container.mjs",
+    "test:create-container": "node scripts/test-create-container.mjs",
     "db:migrate": "node scripts/run-migration.mjs"
   },
   "dependencies": {
@@ -30,6 +30,7 @@
     "express": "^4.19.2",
     "grammy": "^1.31.0",
     "http-proxy": "^1.18.1",
+    "mysql2": "^3.19.0",
     "pg": "^8.13.3",
     "stripe": "^14.10.0",
     "ws": "^8.18.0"

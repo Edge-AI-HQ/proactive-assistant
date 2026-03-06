@@ -184,6 +184,11 @@ export const config: Config = {
   },
   featureFlags: {
     allowMissingSecrets: toBool(process.env.ALLOW_MISSING_SECRETS, false)
+  },
+  legacyProfile: {
+    mysqlUrl: toTrimmed(
+      process.env.PIN_MINING_MYSQL_URL || process.env.LEGACY_PROFILE_MYSQL_URL
+    )
   }
 };
 

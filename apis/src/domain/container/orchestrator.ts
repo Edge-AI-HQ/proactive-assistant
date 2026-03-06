@@ -19,6 +19,7 @@ import {
   readSkillsConfigFromRuntimeMetadata,
   toOpenclawSkillsPayload,
 } from "../skills/openclaw_skills.js";
+import { resolveExternalProfileForTelegramUser } from "../onboarding/profile_bootstrap.js";
 
 const resolveTelegramWebhookPort = (): number =>
   Number(process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT || "8787");
@@ -280,7 +281,9 @@ export class ContainerOrchestrator {
               assistant.owner_telegram_user_id
             ) {
               this.notifier
-                .notifyReady(Number(assistant.owner_telegram_user_id))
+                .notifyReady(Number(assistant.owner_telegram_user_id), {
+                  assistantId: assistant.id,
+                })
                 .catch((e) =>
                   console.warn(
                     `[container] notify failed for assistant ${assistant.id}`,
@@ -408,7 +411,9 @@ export class ContainerOrchestrator {
           `[orchestrator] Fully ready for assistant ${assistant.id}, notifying user ${assistant.owner_telegram_user_id}`,
         );
         await this.notifier
-          .notifyReady(Number(assistant.owner_telegram_user_id))
+          .notifyReady(Number(assistant.owner_telegram_user_id), {
+            assistantId: assistant.id,
+          })
           .catch((e) =>
             console.warn(
               `[orchestrator] notify failed for assistant ${assistant.id}`,
@@ -452,6 +457,9 @@ export class ContainerOrchestrator {
     const skillsConfig = toOpenclawSkillsPayload(
       readSkillsConfigFromRuntimeMetadata(runtimeMetadata),
     );
+    const legacyProfile = await resolveExternalProfileForTelegramUser(
+      assistant.owner_telegram_user_id,
+    );
 
     return {
       assistantBotId: botIdForContainer,
@@ -460,6 +468,8 @@ export class ContainerOrchestrator {
       gatewayToken,
       assistantBotToken: assistant.assistant_bot_token ?? null,
       liteLlmApiKey,
+      onboardingProfileText: legacyProfile?.profileText || null,
+      onboardingProfileSource: legacyProfile?.source || null,
       ...(skillsConfig ? { skillsConfig } : {}),
       containerPort: assistant.container_port,
     };
