@@ -160,7 +160,17 @@ export const resolveExternalProfileForTelegramUser = async (
     return await withMysqlPool(async (pool) => {
       const connector = await readConnectorCandidate(pool, telegramUserId);
       const privy = await readPrivyCandidate(pool, telegramUserId);
-      return chooseProfileCandidate({ connector, privy });
+      const selected = chooseProfileCandidate({ connector, privy });
+      if (selected?.profileText) {
+        console.info("[onboarding] Legacy profile matched", {
+          telegramUserId,
+          source: selected.source,
+          externalUserId: selected.externalUserId,
+          profileLength: selected.profileText.length,
+          profileUpdatedAt: selected.profileUpdatedAt,
+        });
+      }
+      return selected;
     });
   } catch (error) {
     console.warn("[onboarding] Failed to resolve legacy profile", {
