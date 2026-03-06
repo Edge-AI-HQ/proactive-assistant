@@ -414,6 +414,8 @@ export async function syncSubscriptionFromStripe(
         const toStart = candidates.filter((assistant) =>
           shouldEnsureAssistantRuntime(assistant.container_status),
         );
+        // Avoid duplicate start notifications from subscription.* events.
+        // User-facing "creating/starting" messages are sent on invoice.paid only.
         const toNotify: typeof toStart = [];
 
         if (toStart.length > 0) {
@@ -894,7 +896,8 @@ export async function handleInvoicePaid(
     const toStart = candidates.filter((assistant) =>
       shouldEnsureAssistantRuntime(assistant.container_status),
     );
-    const toNotify: typeof toStart = [];
+    // invoice.paid is the canonical point to notify container provisioning.
+    const toNotify = toStart;
 
     console.log(`[payment] Containers to start: ${toStart.length}`, {
       toStartIds: toStart.map((a) => a.id),
