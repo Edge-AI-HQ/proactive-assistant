@@ -245,8 +245,13 @@ function isMailIntent(text: string | null): boolean {
 }
 
 function buildGoogleManageUrl(telegramUserId: number): string {
+  void telegramUserId;
+  const botUsername = (config.telegram.botUsername || "").trim().replace(/^@/, "");
+  if (botUsername) {
+    return `https://t.me/${botUsername}`;
+  }
   const base = (config.publicBaseUrl || "").trim().replace(/\/+$/, "");
-  return `${base}/google/manage?telegram_user_id=${telegramUserId}`;
+  return `${base}/mini`;
 }
 
 async function hasGoogleOAuthCredential(telegramUserId: number): Promise<boolean> {
@@ -282,8 +287,8 @@ async function tryHandleGoogleOAuthPrompt(
         source,
         chatId,
         [
-          "检测到你已授权 Google，但凭据还没成功下发到助理容器。",
-          "请打开下方页面后点击“下发 gws 凭据到容器”重试：",
+          "检测到你已授权 Google，但凭据还没成功同步到助理。",
+          "请打开 PIN AI mini app，在 Manage 里重新连接 Google：",
           manageUrl,
           "",
           `错误: ${(error as Error).message}`,
@@ -298,7 +303,8 @@ async function tryHandleGoogleOAuthPrompt(
     source,
     chatId,
     [
-      "你还没有连接 Google 邮箱，先完成一次授权：",
+      "你还没有连接 Google 邮箱。",
+      "请先打开 PIN AI mini app，在 Manage 里完成 Connect Google：",
       manageUrl,
       "",
       "授权完成后回到这里再发：给我看最近10封邮件",

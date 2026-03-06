@@ -4,6 +4,7 @@ import Docker from 'dockerode';
 import { decryptText, encryptText } from './crypto.js';
 import { config } from '../common/config.js';
 import { buildGoogleConnectedMessage } from '../telegram-bot/startPayload.js';
+import { buildMiniGoogleReturnUrl } from './miniapp.js';
 import {
   consumeOAuthState,
   createOAuthState,
@@ -191,7 +192,7 @@ export const buildGoogleAuthStartUrl = async (telegramUserId: number, nextPath?:
   const { clientId, redirectUri } = resolveOAuthClient();
   const state = await createOAuthState({
     telegramUserId,
-    nextPath: nextPath?.trim() || `/google/manage?telegram_user_id=${telegramUserId}`,
+    nextPath: nextPath?.trim() || buildMiniGoogleReturnUrl('/mini', { status: 'connected' }),
   });
 
   const url = new URL(GOOGLE_AUTH_BASE);
