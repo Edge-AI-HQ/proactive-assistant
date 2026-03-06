@@ -1,4 +1,6 @@
 import express, { type Application, type Request, type Response } from "express";
+import Docker from "dockerode";
+import { PassThrough } from "node:stream";
 import { pool } from "../common/db/core.js";
 import { config } from "../common/config.js";
 import { isGuideBotCommandText } from "./guideCommands.js";
@@ -6,6 +8,7 @@ import { getAssistantById } from "../common/db/index.js";
 import { hasActiveSubscriptionForService } from "../payment/subscriptionGuard.js";
 import { ensureGatewayAssistantReady } from "../gateway/assistant_warmup.js";
 import { deriveAssistantWebhookSecret } from "../container/providers/shared/telegram_runtime_secret.js";
+import { syncCredentialToContainer } from "../google-oauth/service.js";
 
 type WebhookSource = "public" | "private";
 
@@ -57,10 +60,12 @@ export const registerTelegramRouterRoutes = (app: Application): void => {
 
 async function handleTelegramWebhook(req: Request, res: Response, source: WebhookSource): Promise<void> {
   try {
-    const secretToken = req.headers["x-telegram-bot-api-secret-token"];
-    const expected = config.telegram.webhookSecret;
-    if (expected && secretToken !== expected) {
-      const received = typeof secretToken === "string" ? `${secretToken.slice(0, 8)}...(${secretToken.length})` : "missing";
+    const secretHeader = req.headers["x-telegram-bot-api-secret-token"];
+    const secretToken = Array.isArray(secretHeader) ? secretHeader[0] : secretHeader;
+    const expected = config.telegram.webhookSecret.trim();
+    const receivedToken = typeof secretToken === "string" ? secretToken.trim() : "";
+    if (expected && receivedToken !== expected) {
+      const received = receivedToken ? `${receivedToken.slice(0, 8)}...(${receivedToken.length})` : "missing";
       console.error(`❌ Invalid webhook secret (received=${received})`);
       res.status(401).send("Unauthorized");
       return;
@@ -153,6 +158,11 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
     }
 
     if (userState.phase === "container_starting") {
+      const oauthPrompted = await tryHandleGoogleOAuthPrompt(source, chatId, text);
+      if (oauthPrompted) {
+        res.status(200).json({ ok: true });
+        return;
+      }
       if (userState.container) {
         const forwarded = await forwardToOpenClaw(userState.container, update, source);
         if (forwarded) {
@@ -165,6 +175,23 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
         chatId,
         "Your assistant is starting up — first launch may take a few minutes. Please try again shortly.",
       );
+      res.status(200).json({ ok: true });
+      return;
+    }
+
+    const oauthPrompted = await tryHandleGoogleOAuthPrompt(source, chatId, text);
+    if (oauthPrompted) {
+      res.status(200).json({ ok: true });
+      return;
+    }
+
+    const mailHandled = await tryHandleGmailListIntentWithRouter(
+      source,
+      chatId,
+      text,
+      userState.container.container_id,
+    );
+    if (mailHandled) {
       res.status(200).json({ ok: true });
       return;
     }
@@ -182,6 +209,241 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
   } catch (error) {
     console.error("❌ Webhook error:", error);
     res.status(500).send("Internal Server Error");
+  }
+}
+
+const MAIL_INTENT_PATTERN =
+  /(邮件|邮箱|gmail|mailbox|inbox|收件箱|未读|最近\d*封|latest\s*\d+\s*(emails?|mails?))/i;
+const LATEST_MAIL_INTENT_PATTERN =
+  /(最近|最新|latest)\s*(\d{1,2})?\s*(封)?\s*(邮件|邮箱|emails?|mails?)/i;
+
+function isMailIntent(text: string | null): boolean {
+  if (!text) return false;
+  return MAIL_INTENT_PATTERN.test(text);
+}
+
+function buildGoogleManageUrl(telegramUserId: number): string {
+  const base = (config.publicBaseUrl || "").trim().replace(/\/+$/, "");
+  return `${base}/google/manage?telegram_user_id=${telegramUserId}`;
+}
+
+async function hasGoogleOAuthCredential(telegramUserId: number): Promise<boolean> {
+  const result = await pool.query<{ exists: boolean }>(
+    `SELECT EXISTS(
+       SELECT 1
+       FROM google_oauth_credentials
+       WHERE telegram_user_id = $1
+         AND (
+           COALESCE(length(refresh_token_enc), 0) > 0
+           OR COALESCE(length(access_token_enc), 0) > 0
+         )
+     ) AS exists`,
+    [telegramUserId],
+  );
+  return Boolean(result.rows[0]?.exists);
+}
+
+async function tryHandleGoogleOAuthPrompt(
+  source: WebhookSource,
+  chatId: number,
+  text: string | null,
+): Promise<boolean> {
+  if (!isMailIntent(text)) return false;
+  const connected = await hasGoogleOAuthCredential(chatId);
+  if (connected) {
+    try {
+      await syncCredentialToContainer(chatId);
+      return false;
+    } catch (error) {
+      const manageUrl = buildGoogleManageUrl(chatId);
+      await sendFallbackMessageBySource(
+        source,
+        chatId,
+        [
+          "检测到你已授权 Google，但凭据还没成功下发到助理容器。",
+          "请打开下方页面后点击“下发 gws 凭据到容器”重试：",
+          manageUrl,
+          "",
+          `错误: ${(error as Error).message}`,
+        ].join("\n"),
+      );
+      return true;
+    }
+  }
+
+  const manageUrl = buildGoogleManageUrl(chatId);
+  await sendFallbackMessageBySource(
+    source,
+    chatId,
+    [
+      "你还没有连接 Google 邮箱，先完成一次授权：",
+      manageUrl,
+      "",
+      "授权完成后回到这里再发：给我看最近10封邮件",
+    ].join("\n"),
+  );
+  return true;
+}
+
+function parseLatestMailCount(text: string | null): number | null {
+  if (!text) return null;
+  const m = text.match(LATEST_MAIL_INTENT_PATTERN);
+  if (!m) return null;
+  const raw = (m[2] || "").trim();
+  if (!raw) return 10;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return 10;
+  return Math.min(n, 20);
+}
+
+async function runCommandInContainer(
+  containerId: string,
+  cmd: string[],
+): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
+  const docker = new Docker();
+  const exec = await docker.getContainer(containerId).exec({
+    Cmd: cmd,
+    AttachStdout: true,
+    AttachStderr: true,
+  });
+
+  const stream = await exec.start({ hijack: false, stdin: false });
+  const stdoutStream = new PassThrough();
+  const stderrStream = new PassThrough();
+  const stdoutChunks: Buffer[] = [];
+  const stderrChunks: Buffer[] = [];
+  stdoutStream.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+  stderrStream.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+  docker.modem.demuxStream(stream, stdoutStream, stderrStream);
+  await new Promise<void>((resolve, reject) => {
+    stream.on("end", resolve);
+    stream.on("error", reject);
+  });
+
+  const inspect = await exec.inspect();
+  const stdout = Buffer.concat(stdoutChunks).toString("utf8");
+  const stderr = Buffer.concat(stderrChunks).toString("utf8");
+  return {
+    exitCode: inspect.ExitCode ?? null,
+    stdout,
+    stderr,
+  };
+}
+
+type GmailHeader = { name?: string; value?: string };
+type GmailMessageGet = {
+  id?: string;
+  snippet?: string;
+  payload?: {
+    headers?: GmailHeader[];
+  };
+};
+
+function readHeader(headers: GmailHeader[] | undefined, key: string): string {
+  if (!Array.isArray(headers)) return "";
+  const found = headers.find((h) => String(h?.name || "").toLowerCase() === key.toLowerCase());
+  return String(found?.value || "").trim();
+}
+
+async function fetchLatestMailSummariesFromContainer(
+  containerId: string,
+  maxResults: number,
+): Promise<Array<{ from: string; subject: string; date: string }>> {
+  const listCmd = [
+    "gws",
+    "gmail",
+    "users",
+    "messages",
+    "list",
+    "--params",
+    JSON.stringify({ userId: "me", maxResults }),
+  ];
+  const listed = await runCommandInContainer(containerId, listCmd);
+  if ((listed.exitCode ?? 1) !== 0) {
+    throw new Error(`gws list failed: ${listed.stdout || listed.stderr}`);
+  }
+
+  const listJson = JSON.parse(listed.stdout) as { messages?: Array<{ id?: string }> };
+  const ids = (listJson.messages || [])
+    .map((m) => String(m.id || "").trim())
+    .filter(Boolean)
+    .slice(0, maxResults);
+  const rows: Array<{ from: string; subject: string; date: string }> = [];
+
+  for (const id of ids) {
+    const getCmd = [
+      "gws",
+      "gmail",
+      "users",
+      "messages",
+      "get",
+      "--params",
+      JSON.stringify({
+        userId: "me",
+        id,
+        format: "full",
+      }),
+    ];
+    const got = await runCommandInContainer(containerId, getCmd);
+    if ((got.exitCode ?? 1) !== 0) continue;
+
+    const detail = JSON.parse(got.stdout) as GmailMessageGet;
+    const headers = detail.payload?.headers || [];
+    const snippet = String(detail.snippet || "").trim();
+    rows.push({
+      from: readHeader(headers, "From") || "(未知发件人)",
+      subject: readHeader(headers, "Subject") || snippet || "(无主题)",
+      date: readHeader(headers, "Date") || "",
+    });
+  }
+
+  return rows;
+}
+
+async function tryHandleGmailListIntentWithRouter(
+  source: WebhookSource,
+  chatId: number,
+  text: string | null,
+  containerId: string,
+): Promise<boolean> {
+  const count = parseLatestMailCount(text);
+  if (!count) return false;
+
+  try {
+    await syncCredentialToContainer(chatId);
+  } catch (error) {
+    const manageUrl = buildGoogleManageUrl(chatId);
+    await sendFallbackMessageBySource(
+      source,
+      chatId,
+      [
+        "Google 授权存在，但凭据未成功下发到容器。",
+        "请打开管理页重试“下发 gws 凭据到容器”：",
+        manageUrl,
+        "",
+        `错误: ${(error as Error).message}`,
+      ].join("\n"),
+    );
+    return true;
+  }
+
+  try {
+    const rows = await fetchLatestMailSummariesFromContainer(containerId, count);
+    if (!rows.length) {
+      await sendFallbackMessageBySource(source, chatId, "邮箱里没有读到可展示的邮件。");
+      return true;
+    }
+
+    const lines = rows.map((row, idx) => `${idx + 1}. ${row.subject}\n   发件人: ${row.from}${row.date ? `\n   时间: ${row.date}` : ""}`);
+    await sendFallbackMessageBySource(source, chatId, [`最新 ${rows.length} 封邮件：`, ...lines].join("\n\n"));
+    return true;
+  } catch (error) {
+    await sendFallbackMessageBySource(
+      source,
+      chatId,
+      `读取 Gmail 失败：${(error as Error).message}\n请稍后重试，或重新授权后再试。`,
+    );
+    return true;
   }
 }
 
@@ -299,11 +561,20 @@ async function forwardToGuideBot(update: unknown): Promise<boolean> {
 async function sendFallbackMessageBySource(source: WebhookSource, chatId: number, text: string): Promise<void> {
   if (source === "private") return;
   if (!config.telegram.token?.trim()) return;
-  await fetch(`https://api.telegram.org/bot${config.telegram.token}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text }),
-  });
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${config.telegram.token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      console.error(`❌ fallback sendMessage failed status=${response.status} body=${truncateForLog(body, 300)}`);
+    }
+  } catch (error) {
+    console.error("❌ fallback sendMessage network error:", error);
+  }
 }
 
 async function findUserState(chatId: number): Promise<UserState> {
@@ -438,6 +709,7 @@ async function forwardToOpenClaw(container: ContainerInfo, update: unknown, sour
     container.gateway_token,
     config.apiAuthToken,
   );
+  const webhookSecret = assistantWebhookSecret;
 
   for (const webhookUrl of candidateUrls) {
     try {
@@ -445,7 +717,7 @@ async function forwardToOpenClaw(container: ContainerInfo, update: unknown, sour
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Telegram-Bot-Api-Secret-Token": assistantWebhookSecret,
+          "X-Telegram-Bot-Api-Secret-Token": webhookSecret,
           "X-PinAI-Source": source,
         },
         body: JSON.stringify(update),

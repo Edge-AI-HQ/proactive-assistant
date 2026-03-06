@@ -1,0 +1,287 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import Docker from 'dockerode';
+import { decryptText, encryptText } from './crypto.js';
+import { config } from '../common/config.js';
+import {
+  consumeOAuthState,
+  createOAuthState,
+  deleteGoogleCredentialByTelegramId,
+  extractGoogleConnectedEmail,
+  findLatestAssistantRuntimeByTelegramId,
+  findUserIdentityByTelegramId,
+  getGoogleCredentialByTelegramId,
+  saveGoogleCredential,
+} from './repository.js';
+
+const GOOGLE_AUTH_BASE = 'https://accounts.google.com/o/oauth2/v2/auth';
+const GOOGLE_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
+const GOOGLE_USERINFO_ENDPOINT = 'https://openidconnect.googleapis.com/v1/userinfo';
+const DEFAULT_SCOPES = [
+  'openid',
+  'email',
+  'profile',
+  'https://www.googleapis.com/auth/gmail.readonly',
+  'https://www.googleapis.com/auth/drive.readonly',
+].join(' ');
+
+type GoogleClientSecretFile = {
+  web?: {
+    client_id?: string;
+    client_secret?: string;
+    redirect_uris?: string[];
+  };
+  installed?: {
+    client_id?: string;
+    client_secret?: string;
+    redirect_uris?: string[];
+  };
+};
+
+const resolveClientSecretPath = (): string => {
+  const fromEnv = process.env.GOOGLE_OAUTH_CLIENT_SECRET_PATH?.trim();
+  if (fromEnv) return fromEnv;
+  return '/Users/smile/Documents/01PINAI/01Code/12repo/personal-ai-skills-new/credentials/client_secret.json';
+};
+
+const resolveOAuthClient = (): { clientId: string; clientSecret: string; redirectUri: string } => {
+  const raw = fs.readFileSync(resolveClientSecretPath(), 'utf8');
+  const parsed = JSON.parse(raw) as GoogleClientSecretFile;
+  const node = parsed.web || parsed.installed;
+  const clientId = node?.client_id?.trim() || '';
+  const clientSecret = node?.client_secret?.trim() || '';
+
+  const explicitRedirect = process.env.GOOGLE_OAUTH_REDIRECT_URI?.trim();
+  const redirectUri = explicitRedirect || node?.redirect_uris?.[0]?.trim() || '';
+
+  if (!clientId || !clientSecret || !redirectUri) {
+    throw new Error('Invalid Google OAuth client_secret.json or missing GOOGLE_OAUTH_REDIRECT_URI');
+  }
+  return { clientId, clientSecret, redirectUri };
+};
+
+const normalizeTelegramUserId = (value: unknown): number => {
+  const raw = typeof value === 'number' ? String(value) : typeof value === 'string' ? value.trim() : '';
+  if (!/^\d+$/.test(raw)) throw new Error('telegram_user_id is required');
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isSafeInteger(n) || n <= 0) throw new Error('telegram_user_id is invalid');
+  return n;
+};
+
+const buildDockerContainerName = (runtimeRef: string | null): string | null => {
+  const ref = (runtimeRef || '').trim();
+  if (!ref) return null;
+  if (ref.startsWith('docker:')) return ref.slice('docker:'.length);
+  if (ref.startsWith('fly:')) return null;
+  return ref;
+};
+
+const resolveDockerContainerName = async (
+  docker: Docker,
+  telegramUserId: number,
+  runtimeRef: string | null,
+): Promise<string | null> => {
+  const candidates = [buildDockerContainerName(runtimeRef), `assistant-${telegramUserId}`].filter(
+    (v): v is string => Boolean(v && v.trim()),
+  );
+
+  for (const name of [...new Set(candidates)]) {
+    try {
+      await docker.getContainer(name).inspect();
+      return name;
+    } catch {
+      // try next candidate
+    }
+  }
+  return null;
+};
+
+const isoFromExpiresIn = (expiresIn: unknown): string | null => {
+  const seconds = Number(expiresIn);
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  return new Date(Date.now() + seconds * 1000).toISOString();
+};
+
+export const parseTelegramUserId = normalizeTelegramUserId;
+
+export const getGoogleConnectionStatus = async (telegramUserId: number): Promise<{
+  connected: boolean;
+  scopes: string;
+  updatedAt: string;
+  email: string | null;
+}> => {
+  const row = await getGoogleCredentialByTelegramId(telegramUserId);
+  if (!row) return { connected: false, scopes: '', updatedAt: '', email: null };
+  return {
+    connected: Boolean(row.refresh_token_enc || row.access_token_enc),
+    scopes: row.scope || '',
+    updatedAt: row.updated_at,
+    email: extractGoogleConnectedEmail(row),
+  };
+};
+
+export const buildGoogleAuthStartUrl = async (telegramUserId: number, nextPath?: string): Promise<string> => {
+  const { clientId, redirectUri } = resolveOAuthClient();
+  const state = await createOAuthState({
+    telegramUserId,
+    nextPath: nextPath?.trim() || `/google/manage?telegram_user_id=${telegramUserId}`,
+  });
+
+  const url = new URL(GOOGLE_AUTH_BASE);
+  url.searchParams.set('client_id', clientId);
+  url.searchParams.set('redirect_uri', redirectUri);
+  url.searchParams.set('response_type', 'code');
+  url.searchParams.set('scope', process.env.GOOGLE_OAUTH_SCOPES?.trim() || DEFAULT_SCOPES);
+  url.searchParams.set('access_type', 'offline');
+  url.searchParams.set('prompt', 'consent');
+  url.searchParams.set('include_granted_scopes', 'true');
+  url.searchParams.set('state', state);
+  return url.toString();
+};
+
+export const handleGoogleOAuthCallback = async (query: {
+  code: string | undefined;
+  state: string | undefined;
+  error: string | undefined;
+}): Promise<{ nextPath: string; message: string; telegramUserId: number; email: string | null; botUsername: string | null }> => {
+  if (query.error) throw new Error(`Google OAuth rejected: ${query.error}`);
+  const code = (query.code || '').trim();
+  const state = (query.state || '').trim();
+  if (!code || !state) throw new Error('Missing code/state from callback');
+
+  const stateRow = await consumeOAuthState(state);
+  if (!stateRow) throw new Error('OAuth state invalid or expired');
+
+  const user = await findUserIdentityByTelegramId(stateRow.telegramUserId);
+  if (!user) {
+    throw new Error(`Telegram user ${stateRow.telegramUserId} not found in users table`);
+  }
+
+  const { clientId, clientSecret, redirectUri } = resolveOAuthClient();
+  const tokenResp = await fetch(GOOGLE_TOKEN_ENDPOINT, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      code,
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: redirectUri,
+    }),
+  });
+
+  const payload = (await tokenResp.json()) as Record<string, unknown>;
+  if (!tokenResp.ok) {
+    throw new Error(`Token exchange failed: ${JSON.stringify(payload)}`);
+  }
+
+  const accessToken = typeof payload.access_token === 'string' ? payload.access_token : null;
+  const refreshToken = typeof payload.refresh_token === 'string' ? payload.refresh_token : null;
+  const idToken = typeof payload.id_token === 'string' ? payload.id_token : null;
+  const scope = typeof payload.scope === 'string' ? payload.scope : null;
+  const tokenType = typeof payload.token_type === 'string' ? payload.token_type : null;
+  const expiryAt = isoFromExpiresIn(payload.expires_in);
+  let email: string | null = null;
+
+  if (accessToken) {
+    const userInfoResp = await fetch(GOOGLE_USERINFO_ENDPOINT, {
+      headers: { authorization: `Bearer ${accessToken}` },
+    }).catch(() => null);
+    if (userInfoResp?.ok) {
+      const userInfo = (await userInfoResp.json()) as Record<string, unknown>;
+      email = typeof userInfo.email === 'string' ? userInfo.email.trim() || null : null;
+      payload.email = email;
+      if (typeof userInfo.name === 'string') payload.name = userInfo.name;
+      if (typeof userInfo.picture === 'string') payload.picture = userInfo.picture;
+    }
+  }
+
+  await saveGoogleCredential({
+    userId: user.id,
+    telegramUserId: stateRow.telegramUserId,
+    accessTokenEnc: accessToken ? encryptText(accessToken) : null,
+    refreshTokenEnc: refreshToken ? encryptText(refreshToken) : null,
+    idTokenEnc: idToken ? encryptText(idToken) : null,
+    tokenType,
+    scope,
+    expiryAt,
+    rawPayload: payload,
+  });
+
+  await syncCredentialToContainer(stateRow.telegramUserId).catch((error) => {
+    console.warn('[google-oauth] sync-to-container skipped:', error);
+  });
+
+  return {
+    nextPath: stateRow.nextPath,
+    telegramUserId: stateRow.telegramUserId,
+    message: 'Google OAuth connected and token stored.',
+    email,
+    botUsername: config.telegram.botUsername || null,
+  };
+};
+
+export const disconnectGoogleOAuth = async (telegramUserId: number): Promise<void> => {
+  await deleteGoogleCredentialByTelegramId(telegramUserId);
+};
+
+export const syncCredentialToContainer = async (telegramUserId: number): Promise<{ message: string }> => {
+  const cred = await getGoogleCredentialByTelegramId(telegramUserId);
+  if (!cred) {
+    throw new Error('No Google credential found for this user');
+  }
+
+  const runtime = await findLatestAssistantRuntimeByTelegramId(telegramUserId);
+  const docker = new Docker();
+  const containerName = await resolveDockerContainerName(docker, telegramUserId, runtime?.runtime_ref || null);
+  if (!containerName) {
+    throw new Error('No docker runtime_ref found for this user');
+  }
+  if (config.container.runtime !== 'docker' && (runtime?.runtime_provider || '').toLowerCase() === 'fly') {
+    throw new Error('Current runtime is fly; local docker file sync is disabled');
+  }
+
+  const { clientId, clientSecret } = resolveOAuthClient();
+  const refreshToken = cred.refresh_token_enc ? decryptText(cred.refresh_token_enc) : '';
+  if (!refreshToken) {
+    throw new Error('Missing refresh token for gws credentials');
+  }
+  const content = {
+    type: 'authorized_user',
+    key_type: 'authorized_user',
+    client_id: clientId,
+    client_secret: clientSecret,
+    refresh_token: refreshToken,
+  };
+
+  const targetFile = process.env.GOOGLE_OAUTH_CONTAINER_FILE?.trim() || '/app/data/google/gws-credentials.json';
+  const targetDir = path.posix.dirname(targetFile);
+  const gwsDefaultFile = '/root/.config/gws/credentials.json';
+  const gwsDefaultDir = path.posix.dirname(gwsDefaultFile);
+  const container = docker.getContainer(containerName);
+  const exec = await container.exec({
+    AttachStdin: true,
+    AttachStdout: true,
+    AttachStderr: true,
+    Tty: false,
+    Cmd: [
+      'sh',
+      '-lc',
+      `mkdir -p ${targetDir} ${gwsDefaultDir} && cat > ${targetFile} && cp ${targetFile} ${gwsDefaultFile}`,
+    ],
+  });
+  const stream = await exec.start({ hijack: true, stdin: true });
+
+  await new Promise<void>((resolve, reject) => {
+    stream.on('error', reject);
+    stream.on('end', resolve);
+    stream.end(`${JSON.stringify(content, null, 2)}\n`);
+  });
+
+  const inspect = await exec.inspect();
+  if (inspect.ExitCode !== 0) {
+    throw new Error(`docker exec failed with exit code ${inspect.ExitCode}`);
+  }
+
+  return { message: `Credential synced to ${containerName}:${targetFile}` };
+};

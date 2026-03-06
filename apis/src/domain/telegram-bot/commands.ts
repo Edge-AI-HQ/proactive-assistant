@@ -24,9 +24,18 @@ import {
   VNC_ACCESS_COMMAND,
   guideCommandList,
 } from "./guideCommandList.js";
+import { getGoogleConnectionStatus } from "../google-oauth/service.js";
+import { buildGoogleConnectedMessage, extractStartPayload } from "./startPayload.js";
 
 const GATEWAY_LINK_SESSION_TTL_HOURS = 12;
 const TELEGRAM_BOT_TOKEN_PATTERN = /^\d{6,}:[A-Za-z0-9_-]{20,}$/;
+const isLocalSubscriptionBypassEnabled = (): boolean => {
+  // Local DX only: never bypass subscription in production.
+  if (config.nodeEnv === "production") return false;
+  if (config.container.runtime !== "docker") return false;
+  const flag = (process.env.LOCAL_BYPASS_SUBSCRIPTION || "1").trim().toLowerCase();
+  return !["0", "false", "off", "no"].includes(flag);
+};
 
 const commandText = (): string =>
   guideCommandList
@@ -226,9 +235,11 @@ const provisionAssistantWithGuideBot = async (
     listAssistantsByOwnerViaApi(telegramUserId),
     readInternalSubscriptionViaApi(telegramUserId),
   ]);
-  const hasActiveSubscription = isSubscriptionActiveForService(
+  const hasActiveSubscriptionRaw = isSubscriptionActiveForService(
     subscriptionResult.subscription,
   );
+  const hasActiveSubscription =
+    hasActiveSubscriptionRaw || isLocalSubscriptionBypassEnabled();
 
   if (!hasActiveSubscription) {
     const assistantId = existingAssistants[0]?.id;
@@ -380,6 +391,12 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     if (!telegramUserId) return;
     await ensureTelegramUserViaApi(telegramUserId, ctx.from?.username ?? null);
     await clearTokenInputPending(telegramUserId);
+    const startPayload = extractStartPayload(ctx.message?.text);
+    if (startPayload === 'google_connected') {
+      const status = await getGoogleConnectionStatus(telegramUserId);
+      await replyHtml(ctx, buildGoogleConnectedMessage(status.email));
+      return;
+    }
     await replyHtml(ctx, welcomeMessage());
   });
 

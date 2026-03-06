@@ -10,12 +10,14 @@ RUN apt-get update && apt-get install -y \
     net-tools \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g openclaw@2026.3.2
+RUN npm install -g openclaw@2026.3.2 @googleworkspace/cli
+RUN rm -f /usr/local/bin/gog && rm -rf /usr/local/lib/node_modules/openclaw/skills/gog
 
 WORKDIR /app
 
 RUN mkdir -p /opt/pinai/plugins/telegram-router-proxy
 COPY openclaw-plugins/telegram-router-proxy/ /opt/pinai/plugins/telegram-router-proxy/
+COPY infra/container-manager/images/openclaw/skills/ /usr/local/lib/node_modules/openclaw/skills/
 
 VOLUME /app/config
 VOLUME /app/data

@@ -32,6 +32,127 @@ LiteLLM 本地命令：
 - `npm run litellm:up`
 - `npm run litellm:logs`
 
+## 本地测试手册（Checkpoint）
+目标：本地完整验证 Telegram -> APIs -> Assistant -> Google OAuth/GWS 链路，且不影响 dev/prod。
+
+0. 硬约束（先确认）
+- 只在本地 worktree 运行（例如 `~/.config/superpowers/worktrees/...`），不要在主工作目录直接做实验。
+- 严禁在本地测试过程中执行任何 prod `flyctl` 或 prod DB 变更命令。
+- 本地 `nodeEnv` 必须不是 `production`。
+- 当前仓库的私有本地模板固定路径：`~/.config/pinai/repos/pin-ai-assistant.env`
+- 当前 worktree 的运行时 env 文件固定使用仓库根 `.env.local`
+
+1. 启动前检查
+- 本地 PostgreSQL 可用（建议本地容器独立端口，例如 `127.0.0.1:55432`）。
+- 已执行 `npm install`（`local:doctor` 会检查依赖是否已安装）。
+- 仓库根 `.env.local` 至少包含：
+  - `SUPABASE_DB_URL`（本地库）
+  - `TELEGRAM_BOT_TOKEN`（测试 bot）
+  - `TELEGRAM_WEBHOOK_SECRET`
+  - `TELEGRAM_BOT_USERNAME`
+  - `ANTHROPIC_API_KEY`（避免 reset 后 assistant 首次回复报 key 缺失）
+  - `TELEGRAM_ROUTER_WEBHOOK_URL`（你的 ngrok `https://.../webhook/telegram`）
+- ngrok 已启动并指向本地 `apis` 端口（默认 `3001`）。
+- 可先执行：
+  - `npm run local:init-env`
+  - `npm run local:doctor`
+  - `npm run local:up`
+
+2. 启动服务与健康检查
+- 一键启动：`npm run local:up`
+- 手动启动：`npm run dev`
+- 健康检查：
+  - `curl -sf http://127.0.0.1:3001/health`
+  - `curl -skf https://<your-ngrok-domain>/health`
+- 若 webhook 失联，先查 `getWebhookInfo`，确认 `last_error_message` 不是 `502/connection refused`。
+
+3. 从零重测（建议每次改动后都跑）
+- 在 TG 先执行 `/reset_account`，确认收到 reset 完成消息。
+- 执行 `/start` -> `/create_claw_assistant`。
+- 只有收到 `Your assistant is ready` 后再发业务消息；若未 ready，不做功能判定。
+- 先发 `hi` 验证模型链路，再测邮件场景：
+  - `给我看最近 10 封邮件`
+
+4. Google OAuth / GWS 测试检查点
+- 未授权时，机器人应返回授权入口（`/google/manage?telegram_user_id=...`），不是泛化“我不会”回答。
+- 授权完成后，回调应写入 DB，并自动尝试下发凭据到容器。
+- 下发失败时，必须返回明确错误（例如找不到 runtime_ref），不能静默成功。
+- 成功后再次请求邮件，应返回真实 `From/Subject`，不是全 `(无主题)/(未知发件人)`。
+
+5. 容器与凭据检查点
+- 容器存在且 running：`docker ps | rg assistant-<telegram_user_id>`
+- 容器内必须存在：
+  - `/app/data/agents/main/agent/auth-profiles.json`（anthropic profile 正确）
+  - `/app/data/google/gws-credentials.json`（授权后）
+- 若 `reset_account` 后再次报 `No API key found for provider "anthropic"`：
+  - 优先检查当前 worktree 根目录的 `.env.local` 是否有 `ANTHROPIC_API_KEY`；
+  - 再检查容器创建时自动注入逻辑是否生效。
+
+6. 验收通过标准（最小集）
+- `hi` 稳定可回复，不出现 `temporarily unavailable` 或 provider key 缺失。
+- 邮件请求在未授权/已授权两种状态下行为都正确。
+- 冷启动期间不会提前发送“ready”误导消息（ready 后立即可聊）。
+- 全流程不依赖改动 dev/prod 资源。
+
+7. 30 秒快速自检（可直接复制）
+```bash
+# 0) 初次进入新 worktree
+npm install
+npm run local:init-env
+
+# 1) APIs / ngrok 健康
+curl -sf http://127.0.0.1:3001/health && echo " local health ok"
+curl -skf https://<your-ngrok-domain>/health && echo " ngrok health ok"
+
+# 2) 关键本地进程
+ps aux | rg "npm run dev|tsx.*apis|ngrok" -n
+
+# 3) assistant 容器是否存在（替换 TG 用户 ID）
+docker ps | rg "assistant-<telegram_user_id>"
+
+# 4) 容器内关键凭据文件（替换容器名）
+docker exec assistant-<telegram_user_id> sh -lc "ls -l /app/data/agents/main/agent/auth-profiles.json /app/data/google/gws-credentials.json"
+
+# 5) 最近错误关键字（本地 APIs 日志窗口内观察）
+# No API key found for provider \"anthropic\"
+# temporarily unavailable
+# Forward failed on all candidate endpoints
+```
+
+## Feature 开发标准流程
+目标：从最新 `dev` 新开 feature，到本地验证通过，再进入 PR，不依赖记忆。
+
+1. 同步最新 `dev`
+- `git fetch origin`
+- `git switch dev`
+- `git pull --ff-only origin dev`
+
+2. 新开 worktree
+- `git worktree add ~/.config/superpowers/worktrees/PIN-AI-ASSISTANT/<branch-name> origin/dev -b <branch-name>`
+- `cd ~/.config/superpowers/worktrees/PIN-AI-ASSISTANT/<branch-name>`
+
+3. 初始化本地环境
+- `npm install`
+- `npm run local:init-env`
+- `npm run local:doctor`
+- `npm run local:up`
+
+4. 做基线验证
+- `curl -sf http://127.0.0.1:3001/health`
+- 若这里就失败，先修环境，不要把环境问题误判成代码问题。
+
+5. 开发与本地回归
+- 小步改动，小步验证。
+- 至少跑一遍本地主链路：`/reset_account` -> `/start` -> `/create_claw_assistant` -> `hi` -> 业务消息。
+
+6. PR 前收口
+- `git fetch origin && git rebase origin/dev`
+- `npm run type-check`
+- `npm run test --workspace @pin-ai/apis`
+- 手工回归主链路
+- `git diff origin/dev...HEAD` 检查是否误带本地调试内容、ngrok 地址、私有 env
+- 再提交和开 PR
+
 ## 变更决策表（先看这个）
 1. 改 `apis/` 代码：
 - 直接提交并 `git push`，GitHub Actions 自动部署 `pinclaw-api-dev`。
@@ -145,3 +266,6 @@ flyctl secrets list -a pinclaw-api-dev | rg "TELEGRAM_ROUTER_WEBHOOK_URL|TELEGRA
 - `AGENTS.md` 是 SSOT。
 - `.cursor/rules/agents.mdc` 应软链接到本文件。
 - `CLAUDE.md`、`GEMINI.md` 继续指向本文件，避免规则漂移。
+
+# 规则
+1. 每次压缩上下文后，请重新读取任务计划和相关文件，确定好任务 scope 不偏离。

@@ -65,6 +65,18 @@ interface AssistantContainerDirs {
   workspaceDir: string;
 }
 
+type AuthProfilesStore = {
+  version: number;
+  profiles: Record<
+    string,
+    {
+      type: "api_key";
+      provider: string;
+      key: string;
+    }
+  >;
+};
+
 // ---------------------------------------------------------------------------
 // Utility helpers
 // ---------------------------------------------------------------------------
@@ -79,6 +91,49 @@ const ensureDir = (dirPath: string): void => {
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true });
   }
+};
+
+const ensureLocalDevModelAuthProfiles = (runtimeDataDir: string): void => {
+  // Local Docker DX only: avoid affecting online environments.
+  if (appConfig.nodeEnv === "production") return;
+  const anthropicKey = (
+    process.env.ANTHROPIC_API_KEY ||
+    appConfig.anthropicApiKey ||
+    ""
+  ).trim();
+  if (!anthropicKey) return;
+
+  const agentDir = path.join(runtimeDataDir, "agents", "main", "agent");
+  const authPath = path.join(agentDir, "auth-profiles.json");
+  ensureDir(agentDir);
+
+  let next: AuthProfilesStore = { version: 1, profiles: {} };
+  if (fs.existsSync(authPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(authPath, "utf8")) as unknown;
+      if (isRecord(parsed) && isRecord((parsed as Record<string, unknown>).profiles)) {
+        next = {
+          version:
+            typeof (parsed as Record<string, unknown>).version === "number"
+              ? ((parsed as Record<string, unknown>).version as number)
+              : 1,
+          profiles: {
+            ...((parsed as Record<string, unknown>).profiles as AuthProfilesStore["profiles"]),
+          },
+        };
+      }
+    } catch {
+      // overwrite malformed file
+    }
+  }
+
+  next.profiles["anthropic:default"] = {
+    type: "api_key",
+    provider: "anthropic",
+    key: anthropicKey,
+  };
+
+  fs.writeFileSync(authPath, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
 };
 
 const hasEnvKey = (envVars: string[] | undefined, key: string): boolean =>
@@ -384,6 +439,31 @@ const waitForLocalPort = (
     tryConnect();
   });
 
+const waitForHttpProbe = async (
+  hostPort: number,
+  pathName: string,
+  timeoutMs: number,
+): Promise<boolean> => {
+  const startedAt = Date.now();
+  const targetPath = pathName.startsWith("/") ? pathName : `/${pathName}`;
+  const url = `http://127.0.0.1:${hostPort}${targetPath}`;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        signal: AbortSignal.timeout(1200),
+      });
+      // Any HTTP response means listener is up.
+      if (response.status >= 100 && response.status < 600) return true;
+    } catch {
+      // retry until timeout
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return false;
+};
+
 // ---------------------------------------------------------------------------
 // Internal: container resolution & state normalization
 // ---------------------------------------------------------------------------
@@ -524,6 +604,7 @@ export const dockerContainerRuntime: ContainerRuntime = {
       params.skillsConfig,
     );
     sanitizeCronStore(dirs.dataDir);
+    ensureLocalDevModelAuthProfiles(dirs.dataDir);
 
     const hostPort = params.containerPort
       ? String(params.containerPort)
@@ -551,6 +632,7 @@ export const dockerContainerRuntime: ContainerRuntime = {
       OPENCLAW_STATE_DIR: "/app/data",
       NODE_COMPILE_CACHE: "/app/data/cache/node-compile-cache",
       TELEGRAM_ROUTER_URL: telegramRouterUrl,
+      GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE: "/app/data/google/gws-credentials.json",
     };
     assertNoP0SecretsInEnv(containerEnv, config);
 
@@ -668,6 +750,27 @@ export const dockerContainerRuntime: ContainerRuntime = {
     if (webhookHostPort > 0) {
       const webhookReady = await waitForLocalPort(webhookHostPort, 120_000);
       if (!webhookReady) return false;
+    }
+
+    if (Array.isArray(options.httpProbes) && options.httpProbes.length > 0) {
+      for (const probe of options.httpProbes) {
+        const containerPort = Number(probe.port);
+        const mappedHostPort =
+          containerPort === config.openclaw.gatewayPort
+            ? Number(ref.metadata.hostPort)
+            : containerPort === config.telegramRouter.webhookPort
+              ? Number(ref.metadata.webhookHostPort)
+              : containerPort === config.telegramRouter.webhookPort + 1
+                ? Number(ref.metadata.privateWebhookHostPort)
+                : 0;
+        if (!mappedHostPort || mappedHostPort <= 0) return false;
+        const ok = await waitForHttpProbe(
+          mappedHostPort,
+          probe.path,
+          options.timeoutMs,
+        );
+        if (!ok) return false;
+      }
     }
 
     return true;
