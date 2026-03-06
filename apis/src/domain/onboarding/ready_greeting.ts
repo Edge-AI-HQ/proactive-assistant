@@ -43,17 +43,36 @@ const postPrivateWebhook = async (
     `${baseUrl}/webhook/telegram/private`,
     `${baseUrl}/webhook/telegram`,
   ];
+  const maxAttempts = 4;
 
-  for (const url of urls) {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Telegram-Bot-Api-Secret-Token": secret,
-      },
-      body: JSON.stringify(update),
-    });
-    if (res.ok) return true;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    for (const url of urls) {
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Telegram-Bot-Api-Secret-Token": secret,
+          },
+          body: JSON.stringify(update),
+        });
+        if (res.ok) return true;
+        console.warn("[onboarding] greeting trigger webhook returned non-2xx", {
+          url,
+          attempt,
+          status: res.status,
+        });
+      } catch (error) {
+        console.warn("[onboarding] greeting trigger webhook request failed", {
+          url,
+          attempt,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    if (attempt < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, attempt * 600));
+    }
   }
 
   return false;

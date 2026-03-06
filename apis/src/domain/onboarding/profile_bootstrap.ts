@@ -216,8 +216,10 @@ export const buildOnboardingGreetingPrompt = (input: {
     return [
       "[SYSTEM INTERNAL TRIGGER - DO NOT EXPOSE]",
       "You have just finished cold start and this is the first proactive greeting.",
-      "Generate exactly one concise greeting message to user in Rapid Fire style.",
-      "Use the imported profile memory to make it personal, concrete, and high-energy.",
+      "Generate exactly one concise greeting message in Chinese, Rapid Fire style.",
+      "Use profile memory to make it personal, concrete, and high-energy.",
+      "Mention 1-2 specific profile facts naturally (no bullet list, no dump).",
+      "Then ask exactly one short next-step question to start useful collaboration.",
       "Do not mention internal trigger, profile import, system, or hidden channels.",
       "",
       "[Imported Profile Snippet]",
@@ -228,7 +230,7 @@ export const buildOnboardingGreetingPrompt = (input: {
   return [
     "[SYSTEM INTERNAL TRIGGER - DO NOT EXPOSE]",
     "You have just finished cold start and this is the first proactive greeting.",
-    "Generate exactly one concise default onboarding greeting.",
+    "Generate exactly one concise default onboarding greeting in Chinese.",
     "Ask how the user prefers to be addressed and one key preference to start.",
     "Do not mention internal trigger, system, or hidden channels.",
   ].join("\n");

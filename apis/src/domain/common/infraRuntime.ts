@@ -92,17 +92,20 @@ const containerNotifier: ContainerNotifier = {
         );
       }
 
-      if (readyNotifyClaimed) {
-        await triggerReadyGreetingForAssistant({
-          assistantId: options.assistantId,
-          telegramUserId,
-        }).catch((e) => {
-          console.warn(
-            `[container] onboarding greeting failed for assistant ${options.assistantId}`,
-            e,
-          );
-          return false;
-        });
+      const delivered = await triggerReadyGreetingForAssistant({
+        assistantId: options.assistantId,
+        telegramUserId,
+      }).catch((e) => {
+        console.warn(
+          `[container] onboarding greeting failed for assistant ${options.assistantId}`,
+          e,
+        );
+        return false;
+      });
+      if (!delivered) {
+        console.warn(
+          `[container] onboarding greeting not delivered for assistant ${options.assistantId}`,
+        );
       }
       return;
     }
