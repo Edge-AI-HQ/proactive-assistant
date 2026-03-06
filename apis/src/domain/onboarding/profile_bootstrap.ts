@@ -216,10 +216,12 @@ export const buildOnboardingGreetingPrompt = (input: {
     return [
       "[SYSTEM INTERNAL TRIGGER - DO NOT EXPOSE]",
       "You have just finished cold start and this is the first proactive greeting.",
-      "Generate exactly one concise greeting message in Chinese, Rapid Fire style.",
+      "Generate exactly one concise greeting message in Rapid Fire style.",
+      "Language policy: default to English.",
+      "If profile clearly indicates user's preferred language or country language, use that language instead.",
       "Use profile memory to make it personal, concrete, and high-energy.",
       "Mention 1-2 specific profile facts naturally (no bullet list, no dump).",
-      "Then ask exactly one short next-step question to start useful collaboration.",
+      'Then ask exactly one short next-step question, preferably "How can I help you today?" or close variant.',
       "Do not mention internal trigger, profile import, system, or hidden channels.",
       "",
       "[Imported Profile Snippet]",
@@ -230,8 +232,10 @@ export const buildOnboardingGreetingPrompt = (input: {
   return [
     "[SYSTEM INTERNAL TRIGGER - DO NOT EXPOSE]",
     "You have just finished cold start and this is the first proactive greeting.",
-    "Generate exactly one concise default onboarding greeting in Chinese.",
-    "Ask how the user prefers to be addressed and one key preference to start.",
+    "Generate exactly one concise default onboarding greeting.",
+    "Language policy: default to English.",
+    "If there is clear language preference signal in available user context, follow it.",
+    'Ask exactly one short next-step question, preferably "How can I help you today?" or close variant.',
     "Do not mention internal trigger, system, or hidden channels.",
   ].join("\n");
 };
