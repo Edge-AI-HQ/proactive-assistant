@@ -20,6 +20,7 @@ import { ensureLiteLLMKeyForAssistant } from "../litellm/index.js";
 import { sendTelegramMessage } from "../telegram/notify.js";
 import { createAssistantWithoutContainer } from "../claw-assistant/service.js";
 import { shouldEnsureAssistantRuntime } from "../claw-assistant/runtimeHealth.js";
+import { summarizeContainerProvisionResults } from "./containerProvisionMessage.js";
 
 const SUBSCRIPTION_PERIOD_APPLY_LOCK_KEY = 319_903;
 let isApplyingSubscriptionPeriodsInProcess = false;
@@ -430,7 +431,10 @@ export async function syncSubscriptionFromStripe(
           const chatId = Number(telegram_user_id);
           void (async () => {
             try {
-              const results: { label: string; ok: boolean }[] = [];
+              const results: Array<{
+                label: string;
+                state: "ready" | "starting" | "failed";
+              }> = [];
               for (const assistant of toStart) {
                 const label =
                   assistant.assistant_bot_username ?? `#${assistant.id}`;
@@ -442,16 +446,19 @@ export async function syncSubscriptionFromStripe(
                     Number(telegram_user_id),
                     assistant,
                   );
-                  await ensureAssistantContainer(
+                  const ensureResult = await ensureAssistantContainer(
                     assistantWithLiteLLM,
                     user.gateway_token,
                   );
-                  results.push({ label: displayLabel, ok: true });
+                  results.push({
+                    label: displayLabel,
+                    state: ensureResult.ready ? "ready" : "starting",
+                  });
                   console.log(
-                    `Started container for assistant ${assistant.id} after subscription sync`,
+                    `[payment] Container ${ensureResult.ready ? "ready" : "starting"} for assistant ${assistant.id} after subscription sync`,
                   );
                 } catch (error: unknown) {
-                  results.push({ label: displayLabel, ok: false });
+                  results.push({ label: displayLabel, state: "failed" });
                   console.error(
                     `Failed to start container for assistant ${assistant.id}`,
                     {
@@ -462,25 +469,30 @@ export async function syncSubscriptionFromStripe(
                   );
                 }
               }
-              const succeeded = results.filter((r) => r.ok).map((r) => r.label);
-              const failed = results.filter((r) => !r.ok).map((r) => r.label);
+              const summary = summarizeContainerProvisionResults(results);
               const parts: string[] = [];
-              if (succeeded.length > 0) {
+              if (summary.ready.length > 0) {
                 parts.push(
-                  `✅ <b>Container(s) ready</b>\n\n${succeeded.join(", ")}\n\nYour assistant is warming up and will be fully ready in about a minute. You can start chatting now!`,
+                  `✅ <b>Container(s) ready</b>\n\n${summary.ready.join(", ")}\n\nYour assistant is ready. You can start chatting now!`,
                 );
               }
-              if (failed.length > 0) {
+              if (summary.starting.length > 0) {
                 parts.push(
-                  `❌ <b>Creation failed</b>\n\n${failed.join(", ")}\n\nPlease contact support.`,
+                  `⏳ <b>Container(s) starting</b>\n\n${summary.starting.join(", ")}\n\nStill warming up — first launch may take a few minutes. We'll notify you when ready.`,
+                );
+              }
+              if (summary.failed.length > 0) {
+                parts.push(
+                  `❌ <b>Creation failed</b>\n\n${summary.failed.join(", ")}\n\nPlease contact support.`,
                 );
               }
               if (parts.length > 0) {
                 const msg = parts.join("\n\n");
                 console.log("Sending container ready/failed notification", {
                   chatId,
-                  succeededCount: succeeded.length,
-                  failedCount: failed.length,
+                  readyCount: summary.ready.length,
+                  startingCount: summary.starting.length,
+                  failedCount: summary.failed.length,
                 });
                 const sendResult = await sendTelegramMessage(chatId, msg);
                 if (!sendResult.ok) {
@@ -897,7 +909,10 @@ export async function handleInvoicePaid(
       // 异步启动容器
       void (async () => {
         try {
-          const results: { label: string; ok: boolean }[] = [];
+          const results: Array<{
+            label: string;
+            state: "ready" | "starting" | "failed";
+          }> = [];
           for (const assistant of toStart) {
             const label =
               assistant.assistant_bot_username ?? `#${assistant.id}`;
@@ -911,8 +926,10 @@ export async function handleInvoicePaid(
                 assistantWithLiteLLM,
                 user.gateway_token,
               );
-              // ready=false 表示容器启动了但未就绪（探测中），算部分成功
-              results.push({ label: displayLabel, ok: result.ready });
+              results.push({
+                label: displayLabel,
+                state: result.ready ? "ready" : "starting",
+              });
               if (result.ready) {
                 console.log(
                   `[payment] Container ready for assistant ${assistant.id} after invoice.paid`,
@@ -923,7 +940,7 @@ export async function handleInvoicePaid(
                 );
               }
             } catch (error: unknown) {
-              results.push({ label: displayLabel, ok: false });
+              results.push({ label: displayLabel, state: "failed" });
               console.error(
                 `[payment] Failed to start container for assistant ${assistant.id}`,
                 {
@@ -934,18 +951,22 @@ export async function handleInvoicePaid(
             }
           }
 
-          const succeeded = results.filter((r) => r.ok).map((r) => r.label);
-          const failed = results.filter((r) => !r.ok).map((r) => r.label);
+          const summary = summarizeContainerProvisionResults(results);
           const parts: string[] = [];
 
-          if (succeeded.length > 0) {
+          if (summary.ready.length > 0) {
             parts.push(
-              `✅ <b>Container(s) ready</b>\n\n${succeeded.join(", ")}\n\nYour assistant is warming up and will be fully ready in about a minute. You can start chatting now!`,
+              `✅ <b>Container(s) ready</b>\n\n${summary.ready.join(", ")}\n\nYour assistant is ready. You can start chatting now!`,
             );
           }
-          if (failed.length > 0) {
+          if (summary.starting.length > 0) {
             parts.push(
-              `⏳ <b>Container(s) starting</b>\n\n${failed.join(", ")}\n\nStill warming up — first launch may take a few minutes. We'll notify you when ready.`,
+              `⏳ <b>Container(s) starting</b>\n\n${summary.starting.join(", ")}\n\nStill warming up — first launch may take a few minutes. We'll notify you when ready.`,
+            );
+          }
+          if (summary.failed.length > 0) {
+            parts.push(
+              `❌ <b>Creation failed</b>\n\n${summary.failed.join(", ")}\n\nPlease contact support.`,
             );
           }
 
