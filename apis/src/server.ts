@@ -2,6 +2,7 @@ import express, { type Request, type Response } from "express";
 import cookieParser from "cookie-parser";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import httpProxy from "http-proxy";
 import { prepareContainerRuntime } from "./domain/container/index.js";
 import { syncContainerStates } from "./domain/container/syncContainerStates.js";
 import { config, validateConfig } from "./domain/common/config.js";
@@ -35,12 +36,32 @@ const app = express();
 app.disable("x-powered-by");
 app.set("trust proxy", true);
 
+const miniappDevProxy = httpProxy.createProxyServer({
+  target: "http://127.0.0.1:3002",
+  changeOrigin: true,
+  ws: false,
+});
+
+miniappDevProxy.on("error", (error, _req, res) => {
+  console.error("Miniapp dev proxy error", error);
+  if ("writeHead" in res) {
+    res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
+    res.end("Miniapp dev server is unavailable.");
+  }
+});
+
 registerRawBodyRoutes(app);
 registerTelegramRouterRoutes(app);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+
+if (config.nodeEnv !== "production") {
+  app.use("/tg-subscription-mini", (req, res) => {
+    miniappDevProxy.web(req, res);
+  });
+}
 
 // Serve static files from public directory
 const publicPath = path.join(process.cwd(), "public");
