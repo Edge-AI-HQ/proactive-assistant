@@ -414,18 +414,24 @@ export async function syncSubscriptionFromStripe(
         const toStart = candidates.filter((assistant) =>
           shouldEnsureAssistantRuntime(assistant.container_status),
         );
+        const toNotify = toStart.filter(
+          (assistant) =>
+            String(assistant.container_status || "").toLowerCase() !== "creating",
+        );
 
         if (toStart.length > 0) {
-          const listStr = toStart
-            .map((a) => {
-              const u = a.assistant_bot_username ?? `#${a.id}`;
-              return u.startsWith("#") ? u : `@${u}`;
-            })
-            .join(", ");
-          await sendTelegramMessage(
-            Number(telegram_user_id),
-            `⏳ <b>Creating container(s)</b>\n\n${listStr}\n\nStarting up, please wait. First launch may take a few minutes — we'll notify you when ready.`,
-          );
+          if (toNotify.length > 0) {
+            const listStr = toNotify
+              .map((a) => {
+                const u = a.assistant_bot_username ?? `#${a.id}`;
+                return u.startsWith("#") ? u : `@${u}`;
+              })
+              .join(", ");
+            await sendTelegramMessage(
+              Number(telegram_user_id),
+              `⏳ <b>Creating container(s)</b>\n\n${listStr}\n\nStarting up, please wait. First launch may take a few minutes — we'll notify you when ready.`,
+            );
+          }
 
           // Fire-and-forget: create containers in background
           const chatId = Number(telegram_user_id);
@@ -435,6 +441,7 @@ export async function syncSubscriptionFromStripe(
                 label: string;
                 state: "ready" | "starting" | "failed";
               }> = [];
+              const notifyAssistantIds = new Set(toNotify.map((a) => a.id));
               for (const assistant of toStart) {
                 const label =
                   assistant.assistant_bot_username ?? `#${assistant.id}`;
@@ -450,15 +457,19 @@ export async function syncSubscriptionFromStripe(
                     assistantWithLiteLLM,
                     user.gateway_token,
                   );
-                  results.push({
-                    label: displayLabel,
-                    state: ensureResult.ready ? "ready" : "starting",
-                  });
+                  if (notifyAssistantIds.has(assistant.id)) {
+                    results.push({
+                      label: displayLabel,
+                      state: ensureResult.ready ? "ready" : "starting",
+                    });
+                  }
                   console.log(
                     `[payment] Container ${ensureResult.ready ? "ready" : "starting"} for assistant ${assistant.id} after subscription sync`,
                   );
                 } catch (error: unknown) {
-                  results.push({ label: displayLabel, state: "failed" });
+                  if (notifyAssistantIds.has(assistant.id)) {
+                    results.push({ label: displayLabel, state: "failed" });
+                  }
                   console.error(
                     `Failed to start container for assistant ${assistant.id}`,
                     {
@@ -886,6 +897,10 @@ export async function handleInvoicePaid(
     const toStart = candidates.filter((assistant) =>
       shouldEnsureAssistantRuntime(assistant.container_status),
     );
+    const toNotify = toStart.filter(
+      (assistant) =>
+        String(assistant.container_status || "").toLowerCase() !== "creating",
+    );
 
     console.log(`[payment] Containers to start: ${toStart.length}`, {
       toStartIds: toStart.map((a) => a.id),
@@ -894,17 +909,19 @@ export async function handleInvoicePaid(
 
     if (toStart.length > 0) {
       const chatId = Number(subscription.telegram_user_id);
-      const listStr = toStart
-        .map((a) => {
-          const u = a.assistant_bot_username ?? `#${a.id}`;
-          return u.startsWith("#") ? u : `@${u}`;
-        })
-        .join(", ");
+      if (toNotify.length > 0) {
+        const listStr = toNotify
+          .map((a) => {
+            const u = a.assistant_bot_username ?? `#${a.id}`;
+            return u.startsWith("#") ? u : `@${u}`;
+          })
+          .join(", ");
 
-      await sendTelegramMessage(
-        chatId,
-        `⏳ <b>Creating container(s)</b>\n\n${listStr}\n\nStarting up, please wait. First launch may take a few minutes — we'll notify you when ready.`,
-      );
+        await sendTelegramMessage(
+          chatId,
+          `⏳ <b>Creating container(s)</b>\n\n${listStr}\n\nStarting up, please wait. First launch may take a few minutes — we'll notify you when ready.`,
+        );
+      }
 
       // 异步启动容器
       void (async () => {
@@ -913,6 +930,7 @@ export async function handleInvoicePaid(
             label: string;
             state: "ready" | "starting" | "failed";
           }> = [];
+          const notifyAssistantIds = new Set(toNotify.map((a) => a.id));
           for (const assistant of toStart) {
             const label =
               assistant.assistant_bot_username ?? `#${assistant.id}`;
@@ -926,10 +944,12 @@ export async function handleInvoicePaid(
                 assistantWithLiteLLM,
                 user.gateway_token,
               );
-              results.push({
-                label: displayLabel,
-                state: result.ready ? "ready" : "starting",
-              });
+              if (notifyAssistantIds.has(assistant.id)) {
+                results.push({
+                  label: displayLabel,
+                  state: result.ready ? "ready" : "starting",
+                });
+              }
               if (result.ready) {
                 console.log(
                   `[payment] Container ready for assistant ${assistant.id} after invoice.paid`,
@@ -940,7 +960,9 @@ export async function handleInvoicePaid(
                 );
               }
             } catch (error: unknown) {
-              results.push({ label: displayLabel, state: "failed" });
+              if (notifyAssistantIds.has(assistant.id)) {
+                results.push({ label: displayLabel, state: "failed" });
+              }
               console.error(
                 `[payment] Failed to start container for assistant ${assistant.id}`,
                 {

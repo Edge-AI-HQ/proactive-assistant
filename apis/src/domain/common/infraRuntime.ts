@@ -20,6 +20,7 @@ import {
   listAssistantsWithLiteLLMKey,
   listUsedPorts,
   readAssistantRuntimeMetadata,
+  setAssistantRuntimeMetadataKeyIfAbsent,
   updateAssistant,
   updateUser,
   updateUserById
@@ -70,17 +71,40 @@ const containerNotifier: ContainerNotifier = {
     options?: { assistantId?: number },
   ): Promise<void> {
     if (options?.assistantId) {
-      const delivered = await triggerReadyGreetingForAssistant({
-        assistantId: options.assistantId,
-        telegramUserId,
-      }).catch((e) => {
+      const readyNotifyClaimed = await setAssistantRuntimeMetadataKeyIfAbsent(
+        options.assistantId,
+        "onboarding_ready_notified_at",
+        new Date().toISOString(),
+      ).catch((error) => {
         console.warn(
-          `[container] onboarding greeting failed for assistant ${options.assistantId}`,
-          e,
+          `[container] failed to claim ready notification lock for assistant ${options.assistantId}`,
+          error,
         );
         return false;
       });
-      if (delivered) return;
+
+      if (readyNotifyClaimed) {
+        await sendTelegramMessage(
+          telegramUserId,
+          `✅ <b>Your assistant is ready!</b>\n\nYou can start chatting now.`,
+        ).catch((e) =>
+          console.warn(`[container] notify failed for user ${telegramUserId}`, e),
+        );
+      }
+
+      if (readyNotifyClaimed) {
+        await triggerReadyGreetingForAssistant({
+          assistantId: options.assistantId,
+          telegramUserId,
+        }).catch((e) => {
+          console.warn(
+            `[container] onboarding greeting failed for assistant ${options.assistantId}`,
+            e,
+          );
+          return false;
+        });
+      }
+      return;
     }
 
     await sendTelegramMessage(
