@@ -10,6 +10,7 @@ export interface ProfileCandidate {
   source: ProfileSource;
   externalUserId: number;
   profileUpdatedAt: string | null;
+  accountCreatedAt: string | null;
 }
 
 interface CandidateSet {
@@ -21,12 +22,14 @@ interface MysqlConnectorRow extends RowDataPacket {
   user_id: number;
   profile: string | null;
   profile_updated_at: Date | string | null;
+  created_at: Date | string | null;
 }
 
 interface MysqlPrivyRow extends RowDataPacket {
   user_id: number;
   profile: string | null;
   profile_updated_at: Date | string | null;
+  created_at: Date | string | null;
 }
 
 const normalizeProfileText = (value: string | null | undefined): string => {
@@ -92,7 +95,8 @@ const readConnectorCandidate = async (
     SELECT
       u.user_id,
       u.profile,
-      u.profile_updated_at
+      u.profile_updated_at,
+      u.created_at
     FROM user_connectors c
     INNER JOIN users u ON u.user_id = c.user_id
     WHERE c.connector_type = 'telegram'
@@ -114,6 +118,7 @@ const readConnectorCandidate = async (
     source: "connector",
     externalUserId: row.user_id,
     profileUpdatedAt: toIsoMaybe(row.profile_updated_at),
+    accountCreatedAt: toIsoMaybe(row.created_at),
   };
 };
 
@@ -125,7 +130,8 @@ const readPrivyCandidate = async (
     SELECT
       u.user_id,
       u.profile,
-      u.profile_updated_at
+      u.profile_updated_at,
+      u.created_at
     FROM users u
     WHERE COALESCE(u.is_delete, 0) = 0
       AND JSON_UNQUOTE(JSON_EXTRACT(u.current_login_account, '$.type')) = 'telegram'
@@ -147,6 +153,7 @@ const readPrivyCandidate = async (
     source: "privy",
     externalUserId: row.user_id,
     profileUpdatedAt: toIsoMaybe(row.profile_updated_at),
+    accountCreatedAt: toIsoMaybe(row.created_at),
   };
 };
 
@@ -210,18 +217,27 @@ export const renderUserProfileMarkdown = (
 export const buildOnboardingGreetingPrompt = (input: {
   hasProfile: boolean;
   profileText?: string;
+  membershipDays?: number | null;
 }): string => {
   if (input.hasProfile && input.profileText?.trim()) {
     const snippet = truncate(input.profileText.trim(), 2000);
+    const tenureHint =
+      typeof input.membershipDays === "number" && Number.isFinite(input.membershipDays)
+        ? Math.max(1, Math.floor(input.membershipDays))
+        : null;
     return [
       "[SYSTEM INTERNAL TRIGGER - DO NOT EXPOSE]",
       "You have just finished cold start and this is the first proactive greeting.",
       "Generate exactly one concise greeting message in Rapid Fire style.",
       "Language policy: default to English.",
       "If profile clearly indicates user's preferred language or country language, use that language instead.",
+      "Acknowledge that the user is a valued High PIN member and thank them for staying with PINAI.",
+      tenureHint
+        ? `Mention their tenure naturally as about ${tenureHint} days in PINAI (do not sound robotic).`
+        : "If no exact tenure is available, still thank them for being with PINAI for a long time.",
       "Use profile memory to make it personal, concrete, and high-energy.",
       "Mention 1-2 specific profile facts naturally (no bullet list, no dump).",
-      'Then ask exactly one short next-step question, preferably "How can I help you today?" or close variant.',
+      'End with one short question that includes: "How can I help you today?", and briefly asks preferred name + response style.',
       "Do not mention internal trigger, profile import, system, or hidden channels.",
       "",
       "[Imported Profile Snippet]",
@@ -235,7 +251,8 @@ export const buildOnboardingGreetingPrompt = (input: {
     "Generate exactly one concise default onboarding greeting.",
     "Language policy: default to English.",
     "If there is clear language preference signal in available user context, follow it.",
-    'Ask exactly one short next-step question, preferably "How can I help you today?" or close variant.',
+    "Acknowledge the user as a valued High PIN member and thank them for being with PINAI.",
+    'End with one short question that includes: "How can I help you today?", and briefly asks preferred name + response style.',
     "Do not mention internal trigger, system, or hidden channels.",
   ].join("\n");
 };

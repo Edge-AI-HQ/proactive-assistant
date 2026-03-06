@@ -20,12 +20,14 @@ test("chooseProfileCandidate prioritizes connector mapping", () => {
       source: "connector",
       externalUserId: 11,
       profileUpdatedAt: "2026-01-01T00:00:00Z",
+      accountCreatedAt: "2024-01-01T00:00:00Z",
     },
     privy: {
       profileText: "privy profile",
       source: "privy",
       externalUserId: 22,
       profileUpdatedAt: "2026-02-01T00:00:00Z",
+      accountCreatedAt: "2025-02-01T00:00:00Z",
     },
   });
 
@@ -41,6 +43,7 @@ test("chooseProfileCandidate falls back to privy mapping", () => {
       source: "privy",
       externalUserId: 22,
       profileUpdatedAt: null,
+      accountCreatedAt: null,
     },
   });
 
