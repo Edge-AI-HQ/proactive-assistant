@@ -3,6 +3,7 @@ import path from 'node:path';
 import Docker from 'dockerode';
 import { decryptText, encryptText } from './crypto.js';
 import { config } from '../common/config.js';
+import { buildGoogleConnectedMessage } from '../telegram-bot/startPayload.js';
 import {
   consumeOAuthState,
   createOAuthState,
@@ -102,6 +103,72 @@ const isoFromExpiresIn = (expiresIn: unknown): string | null => {
   return new Date(Date.now() + seconds * 1000).toISOString();
 };
 
+const resolveGoogleCredentialPaths = (): {
+  targetFile: string;
+  gwsDefaultFile: string;
+} => {
+  const targetFile =
+    process.env.GOOGLE_OAUTH_CONTAINER_FILE?.trim() ||
+    '/app/data/google/gws-credentials.json';
+  return {
+    targetFile,
+    gwsDefaultFile: '/root/.config/gws/credentials.json',
+  };
+};
+
+const executeContainerShell = async (
+  container: Docker.Container,
+  command: string,
+  stdin?: string,
+): Promise<void> => {
+  const exec = await container.exec({
+    AttachStdin: Boolean(stdin),
+    AttachStdout: true,
+    AttachStderr: true,
+    Tty: false,
+    Cmd: ['sh', '-lc', command],
+  });
+  const stream = await exec.start({ hijack: true, stdin: Boolean(stdin) });
+
+  await new Promise<void>((resolve, reject) => {
+    stream.on('error', reject);
+    stream.on('end', resolve);
+    if (stdin) {
+      stream.end(stdin);
+      return;
+    }
+    stream.end();
+  });
+
+  const inspect = await exec.inspect();
+  if (inspect.ExitCode !== 0) {
+    throw new Error(`docker exec failed with exit code ${inspect.ExitCode}`);
+  }
+};
+
+const sendGoogleConnectedBotMessage = async (
+  telegramUserId: number,
+  email: string | null,
+): Promise<void> => {
+  const botToken = config.telegram.token.trim();
+  if (!botToken) return;
+  const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: telegramUserId,
+      text: buildGoogleConnectedMessage(email),
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+    }),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`telegram sendMessage failed: ${response.status} ${body}`);
+  }
+};
+
 export const parseTelegramUserId = normalizeTelegramUserId;
 
 export const getGoogleConnectionStatus = async (telegramUserId: number): Promise<{
@@ -143,7 +210,13 @@ export const handleGoogleOAuthCallback = async (query: {
   code: string | undefined;
   state: string | undefined;
   error: string | undefined;
-}): Promise<{ nextPath: string; message: string; telegramUserId: number; email: string | null; botUsername: string | null }> => {
+}): Promise<{
+  nextPath: string;
+  message: string;
+  telegramUserId: number;
+  email: string | null;
+  botUsername: string | null;
+}> => {
   if (query.error) throw new Error(`Google OAuth rejected: ${query.error}`);
   const code = (query.code || '').trim();
   const state = (query.state || '').trim();
@@ -211,6 +284,9 @@ export const handleGoogleOAuthCallback = async (query: {
   await syncCredentialToContainer(stateRow.telegramUserId).catch((error) => {
     console.warn('[google-oauth] sync-to-container skipped:', error);
   });
+  await sendGoogleConnectedBotMessage(stateRow.telegramUserId, email).catch((error) => {
+    console.warn('[google-oauth] bot-confirmation skipped:', error);
+  });
 
   return {
     nextPath: stateRow.nextPath,
@@ -223,6 +299,38 @@ export const handleGoogleOAuthCallback = async (query: {
 
 export const disconnectGoogleOAuth = async (telegramUserId: number): Promise<void> => {
   await deleteGoogleCredentialByTelegramId(telegramUserId);
+  await removeGoogleCredentialFromContainer(telegramUserId).catch((error) => {
+    console.warn('[google-oauth] remove-from-container skipped:', error);
+  });
+};
+
+export const removeGoogleCredentialFromContainer = async (
+  telegramUserId: number,
+): Promise<{ message: string }> => {
+  const runtime = await findLatestAssistantRuntimeByTelegramId(telegramUserId);
+  const docker = new Docker();
+  const containerName = await resolveDockerContainerName(
+    docker,
+    telegramUserId,
+    runtime?.runtime_ref || null,
+  );
+  if (!containerName) {
+    return { message: 'No container found; only database credential was removed' };
+  }
+  if (
+    config.container.runtime !== 'docker' &&
+    (runtime?.runtime_provider || '').toLowerCase() === 'fly'
+  ) {
+    return { message: 'Database credential removed; fly runtime file cleanup skipped' };
+  }
+
+  const { targetFile, gwsDefaultFile } = resolveGoogleCredentialPaths();
+  const container = docker.getContainer(containerName);
+  await executeContainerShell(
+    container,
+    `rm -f ${targetFile} ${gwsDefaultFile}`,
+  );
+  return { message: `Credential removed from ${containerName}` };
 };
 
 export const syncCredentialToContainer = async (telegramUserId: number): Promise<{ message: string }> => {
@@ -254,34 +362,15 @@ export const syncCredentialToContainer = async (telegramUserId: number): Promise
     refresh_token: refreshToken,
   };
 
-  const targetFile = process.env.GOOGLE_OAUTH_CONTAINER_FILE?.trim() || '/app/data/google/gws-credentials.json';
+  const { targetFile, gwsDefaultFile } = resolveGoogleCredentialPaths();
   const targetDir = path.posix.dirname(targetFile);
-  const gwsDefaultFile = '/root/.config/gws/credentials.json';
   const gwsDefaultDir = path.posix.dirname(gwsDefaultFile);
   const container = docker.getContainer(containerName);
-  const exec = await container.exec({
-    AttachStdin: true,
-    AttachStdout: true,
-    AttachStderr: true,
-    Tty: false,
-    Cmd: [
-      'sh',
-      '-lc',
-      `mkdir -p ${targetDir} ${gwsDefaultDir} && cat > ${targetFile} && cp ${targetFile} ${gwsDefaultFile}`,
-    ],
-  });
-  const stream = await exec.start({ hijack: true, stdin: true });
-
-  await new Promise<void>((resolve, reject) => {
-    stream.on('error', reject);
-    stream.on('end', resolve);
-    stream.end(`${JSON.stringify(content, null, 2)}\n`);
-  });
-
-  const inspect = await exec.inspect();
-  if (inspect.ExitCode !== 0) {
-    throw new Error(`docker exec failed with exit code ${inspect.ExitCode}`);
-  }
+  await executeContainerShell(
+    container,
+    `mkdir -p ${targetDir} ${gwsDefaultDir} && cat > ${targetFile} && cp ${targetFile} ${gwsDefaultFile}`,
+    `${JSON.stringify(content, null, 2)}\n`,
+  );
 
   return { message: `Credential synced to ${containerName}:${targetFile}` };
 };

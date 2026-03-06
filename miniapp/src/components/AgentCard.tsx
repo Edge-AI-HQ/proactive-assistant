@@ -1,4 +1,3 @@
-import { useState } from "react";
 import ManageAgentDialog from "./ManageAgentDialog";
 
 interface AgentCardProps {
@@ -6,8 +5,18 @@ interface AgentCardProps {
   status: string;
   planId: string | null;
   active: boolean;
+  manageOpen: boolean;
+  google: {
+    connected: boolean;
+    email: string | null;
+  };
+  googleBusy: boolean;
+  onOpenManage: () => void;
+  onCloseManage: () => void;
   onChangePlan: () => void;
   onDeleteAccount: () => void;
+  onConnectGoogle: () => void;
+  onDisconnectGoogle: () => void;
 }
 
 const getStatusDisplay = (status: string): { text: string; color: string } => {
@@ -27,8 +36,21 @@ const getStatusDisplay = (status: string): { text: string; color: string } => {
   }
 };
 
-const AgentCard = ({ username, status, planId, active, onChangePlan, onDeleteAccount }: AgentCardProps) => {
-  const [showManage, setShowManage] = useState(false);
+const AgentCard = ({
+  username,
+  status,
+  planId,
+  active,
+  manageOpen,
+  google,
+  googleBusy,
+  onOpenManage,
+  onCloseManage,
+  onChangePlan,
+  onDeleteAccount,
+  onConnectGoogle,
+  onDisconnectGoogle,
+}: AgentCardProps) => {
   const statusDisplay = getStatusDisplay(status);
 
   const handleChat = () => {
@@ -97,7 +119,7 @@ const AgentCard = ({ username, status, planId, active, onChangePlan, onDeleteAcc
             Chat
           </button>
           <button
-            onClick={() => setShowManage(true)}
+            onClick={onOpenManage}
             className="flex-1 flex items-center justify-center gap-1.5 bg-secondary text-foreground rounded-xl py-2.5 text-sm font-semibold btn-press hover:bg-secondary/80 transition-colors"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -110,11 +132,15 @@ const AgentCard = ({ username, status, planId, active, onChangePlan, onDeleteAcc
       </div>
 
       <ManageAgentDialog
-        open={showManage}
-        onClose={() => setShowManage(false)}
+        open={manageOpen}
+        onClose={onCloseManage}
         planId={planId}
+        google={google}
+        googleBusy={googleBusy}
         onChangePlan={onChangePlan}
         onDeleteAccount={onDeleteAccount}
+        onConnectGoogle={onConnectGoogle}
+        onDisconnectGoogle={onDisconnectGoogle}
       />
     </>
   );

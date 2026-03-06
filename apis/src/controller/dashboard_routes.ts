@@ -60,6 +60,13 @@ import { config } from "../domain/common/config.js";
 import { ensureTelegramUser } from "../domain/user/service.js";
 import { resetTelegramUserAccount } from "../domain/user/usecases.js";
 import type { AssistantRecord } from "../types.js";
+import {
+  buildGoogleAuthStartUrl,
+  disconnectGoogleOAuth,
+  getGoogleConnectionStatus,
+  handleGoogleOAuthCallback,
+} from "../domain/google-oauth/service.js";
+import { buildMiniGoogleReturnUrl } from "../domain/google-oauth/miniapp.js";
 
 const miniAppEntryPath = path.join(
   process.cwd(),
@@ -242,10 +249,11 @@ const buildMiniStatePayload = async (
   telegramUserId: number,
   telegramUsername: string | null,
 ) => {
-  const [assistants, subscriptionResult, plansResult] = await Promise.all([
+  const [assistants, subscriptionResult, plansResult, googleStatus] = await Promise.all([
     listAssistantsByOwnerId(telegramUserId),
     readInternalSubscription(String(telegramUserId)),
     listActivePlansForApi(),
+    getGoogleConnectionStatus(telegramUserId),
   ]);
 
   const assistant = assistants[0] ?? null;
@@ -295,6 +303,7 @@ const buildMiniStatePayload = async (
       items: skillViews,
       config: skillsConfig,
     },
+    google: googleStatus,
   };
 };
 
@@ -347,6 +356,58 @@ export const createDashboardRouter = (): Router => {
   router.get("/mini", (_req: Request, res: Response) => {
     res.setHeader("Cache-Control", "no-store");
     res.sendFile(miniAppEntryPath);
+  });
+
+  router.get(
+    "/mini/google/start",
+    async (req: Request, res: Response, next: NextFunction) => {
+      void requireMiniSession(req, res, next).catch((error: unknown) => {
+        console.error("Mini session check failed", error);
+        res.status(500).send("Mini session check failed.");
+      });
+    },
+    async (req: Request, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).send("Gateway user missing.");
+        return;
+      }
+
+      try {
+        const url = await buildGoogleAuthStartUrl(
+          user.telegram_user_id,
+          buildMiniGoogleReturnUrl("/mini", { status: "connected" }),
+        );
+        res.redirect(url);
+      } catch (error: unknown) {
+        console.error("Mini google start failed", error);
+        res.redirect(
+          buildMiniGoogleReturnUrl("/mini", {
+            status: "error",
+            error: "oauth_start_failed",
+          }),
+        );
+      }
+    },
+  );
+
+  router.get("/mini/google/callback", async (req: Request, res: Response) => {
+    try {
+      const result = await handleGoogleOAuthCallback({
+        code: typeof req.query.code === "string" ? req.query.code : undefined,
+        state: typeof req.query.state === "string" ? req.query.state : undefined,
+        error: typeof req.query.error === "string" ? req.query.error : undefined,
+      });
+      res.redirect(result.nextPath || buildMiniGoogleReturnUrl("/mini", { status: "connected" }));
+    } catch (error: unknown) {
+      console.error("Mini google callback failed", error);
+      res.redirect(
+        buildMiniGoogleReturnUrl("/mini", {
+          status: "error",
+          error: "oauth_callback_failed",
+        }),
+      );
+    }
   });
 
   router.post(
@@ -402,6 +463,38 @@ export const createDashboardRouter = (): Router => {
           user.telegram_username,
         );
         res.status(200).json(payload);
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
+    "/api/mini/google/disconnect",
+    async (req: Request, res: Response, next: NextFunction) => {
+      void requireMiniSession(req, res, next).catch((error: unknown) => {
+        console.error("Mini session check failed", error);
+        res.status(500).json({ error: "Mini session check failed." });
+      });
+    },
+    async (req: Request, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+
+      try {
+        await disconnectGoogleOAuth(user.telegram_user_id);
+        res.status(200).json({
+          ok: true,
+          message: "Google disconnected",
+          redirect: buildMiniGoogleReturnUrl("/mini", { status: "disconnected" }),
+        });
       } catch (error: unknown) {
         if (isDomainError(error)) {
           res.status(error.status).json({ error: error.message });

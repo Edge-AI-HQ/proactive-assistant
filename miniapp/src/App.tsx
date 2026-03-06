@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import CreateAgentFlow from "./components/CreateAgentFlow";
 import TopStatus from "./components/TopStatus";
 import AgentCard from "./components/AgentCard";
@@ -6,6 +6,7 @@ import ChangePlanDialog from "./components/ChangePlanDialog";
 import VideoLanding from "./components/VideoLanding";
 import SetupWaiting from "./components/SetupWaiting";
 import Toast from "./components/Toast";
+import { readGoogleRedirectState } from "./googleRedirectState";
 
 type Plan = {
   id: string;
@@ -48,6 +49,12 @@ type StatePayload = {
     message: string;
     items: SkillItem[];
     config?: Record<string, unknown> | null;
+  };
+  google: {
+    connected: boolean;
+    email: string | null;
+    scopes: string;
+    updatedAt: string;
   };
 };
 
@@ -105,6 +112,7 @@ const App = () => {
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
   const [busy, setBusy] = useState<string>("none");
   const [showChangePlan, setShowChangePlan] = useState(false);
+  const [showManageAgent, setShowManageAgent] = useState(false);
   const [showLanding, setShowLanding] = useState(
     () => !sessionStorage.getItem("landing_seen"),
   );
@@ -112,6 +120,7 @@ const App = () => {
     () => !sessionStorage.getItem("onboarding_seen"),
   );
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+  const handledGoogleRedirectRef = useRef(false);
 
   const showToast = (message: string, type: "success" | "error" = "error") => {
     setToast({ message, type });
@@ -124,9 +133,36 @@ const App = () => {
     );
   };
 
+  const consumeGoogleRedirect = async (): Promise<void> => {
+    const redirectState = readGoogleRedirectState(window.location.search);
+    if (redirectState.kind === "idle") return;
+
+    const payload = await loadState();
+    if (redirectState.manage) {
+      setShowManageAgent(true);
+    }
+
+    if (redirectState.kind === "connected") {
+      const email = payload.google.email || "";
+      showToast(
+        email
+          ? `Google connected: ${email}. Return to Telegram to use email actions.`
+          : "Google connected. Return to Telegram to use email actions.",
+        "success",
+      );
+    } else if (redirectState.kind === "disconnected") {
+      showToast("Google disconnected.", "success");
+    } else {
+      showToast(`Google connection failed: ${redirectState.reason}`);
+    }
+
+    window.history.replaceState({}, "", window.location.pathname);
+  };
+
   const loadState = async () => {
     const payload = await safeFetch<StatePayload>("/api/mini/state");
     hydrateState(payload);
+    return payload;
   };
 
   const bootstrap = async () => {
@@ -216,6 +252,14 @@ const App = () => {
       });
   }, []);
 
+  useEffect(() => {
+    if (loading || !state) return;
+    if (handledGoogleRedirectRef.current) return;
+    if (!window.location.search.includes("google=")) return;
+    handledGoogleRedirectRef.current = true;
+    void consumeGoogleRedirect();
+  }, [loading, state]);
+
   const createAssistant = async () => {
     setBusy("create");
     try {
@@ -283,6 +327,27 @@ const App = () => {
       setTimeout(() => window.location.reload(), 1500);
     } catch (e) {
       showToast(`Delete failed: ${e instanceof Error ? e.message : "unknown"}`);
+      setBusy("none");
+    }
+  };
+
+  const handleConnectGoogle = () => {
+    window.location.href = "/mini/google/start";
+  };
+
+  const handleDisconnectGoogle = async () => {
+    setBusy("google-disconnect");
+    try {
+      await safeFetch<{ ok: true; message: string }>("/api/mini/google/disconnect", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      await loadState();
+      setShowManageAgent(true);
+      showToast("Google disconnected.", "success");
+    } catch (e) {
+      showToast(`Disconnect failed: ${e instanceof Error ? e.message : "unknown"}`);
+    } finally {
       setBusy("none");
     }
   };
@@ -433,8 +498,15 @@ const App = () => {
             status={state.assistant.status || "unknown"}
             planId={state.subscription.plan_id}
             active={state.subscription.active}
+            manageOpen={showManageAgent}
+            google={state.google}
+            googleBusy={busy === "google-disconnect"}
+            onOpenManage={() => setShowManageAgent(true)}
+            onCloseManage={() => setShowManageAgent(false)}
             onChangePlan={() => setShowChangePlan(true)}
             onDeleteAccount={handleDeleteAccount}
+            onConnectGoogle={handleConnectGoogle}
+            onDisconnectGoogle={handleDisconnectGoogle}
           />
         </div>
 
@@ -472,7 +544,7 @@ const App = () => {
   return (
     <SetupWaiting
       onRetry={createAssistant}
-      onPoll={loadState}
+      onPoll={() => loadState().then(() => undefined)}
       busy={busy === "create"}
       toast={toast}
       onDismissToast={() => setToast(null)}
