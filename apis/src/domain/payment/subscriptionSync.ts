@@ -10,6 +10,7 @@ import {
   listAssistantsByOwnerTelegramId,
   getUserByTelegramId,
 } from "../common/db/index.js";
+import { pool } from "../common/db/core.js";
 import { config } from "../common/config.js";
 import {
   stopAssistantContainer,
@@ -19,6 +20,10 @@ import { ensureLiteLLMKeyForAssistant } from "../litellm/index.js";
 import { sendTelegramMessage } from "../telegram/notify.js";
 import { createAssistantWithoutContainer } from "../claw-assistant/service.js";
 import { shouldEnsureAssistantRuntime } from "../claw-assistant/runtimeHealth.js";
+import { summarizeContainerProvisionResults } from "./containerProvisionMessage.js";
+
+const SUBSCRIPTION_PERIOD_APPLY_LOCK_KEY = 319_903;
+let isApplyingSubscriptionPeriodsInProcess = false;
 
 const parseUnixSecondsToDate = (value: unknown): Date | null => {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
@@ -155,6 +160,60 @@ export async function syncSubscriptionFromStripe(
   const status = subscription.status;
   const stripeStatus = subscription.status;
   const planCode = await resolvePlanCodeFromSubscription(subscription);
+  const currentPeriodBeforeUpsert =
+    await db.getCurrentPeriodByTelegramId(telegram_user_id);
+
+  let effectivePlanCode = planCode;
+  if (
+    periodStart &&
+    periodEnd &&
+    planCode &&
+    currentPeriodBeforeUpsert?.stripe_subscription_id === subscription.id &&
+    currentPeriodBeforeUpsert.plan_id &&
+    currentPeriodBeforeUpsert.plan_id !== planCode
+  ) {
+    const currentStartMs = new Date(
+      currentPeriodBeforeUpsert.current_period_start,
+    ).getTime();
+    const currentEndMs = new Date(
+      currentPeriodBeforeUpsert.current_period_end,
+    ).getTime();
+    const incomingStartMs = periodStart.getTime();
+    const incomingEndMs = periodEnd.getTime();
+    const isSameBillingWindow =
+      Number.isFinite(currentStartMs) &&
+      Number.isFinite(currentEndMs) &&
+      currentStartMs === incomingStartMs &&
+      currentEndMs === incomingEndMs;
+
+    if (isSameBillingWindow) {
+      const [currentPlan, incomingPlan] = await Promise.all([
+        db.getPlanByCode(currentPeriodBeforeUpsert.plan_id),
+        db.getPlanByCode(planCode),
+      ]);
+      const currentAmount = currentPlan?.price_cents_monthly ?? null;
+      const incomingAmount = incomingPlan?.price_cents_monthly ?? null;
+
+      // Downgrade during the same billing window should not reduce current-cycle entitlement.
+      // Keep current period's plan; next invoice.paid will create the next cycle with new plan.
+      if (
+        typeof currentAmount === "number" &&
+        typeof incomingAmount === "number" &&
+        incomingAmount < currentAmount
+      ) {
+        effectivePlanCode = currentPeriodBeforeUpsert.plan_id;
+        console.log(
+          "[payment] preserve current cycle plan on downgrade (same billing window)",
+          {
+            subscriptionId: subscription.id,
+            telegramUserId: telegram_user_id,
+            currentPlan: currentPeriodBeforeUpsert.plan_id,
+            incomingPlan: planCode,
+          },
+        );
+      }
+    }
+  }
 
   const payload: {
     telegram_user_id: string;
@@ -170,7 +229,7 @@ export async function syncSubscriptionFromStripe(
   const username = subscription.metadata?.telegram_username;
   if (typeof username === "string" && username.trim())
     payload.telegram_username = username.trim();
-  if (planCode) payload.plan_id = planCode;
+  if (effectivePlanCode) payload.plan_id = effectivePlanCode;
 
   // 事件只维护周期表；「当前生效」由时间决定。若当前生效的是更新订阅，则跳过旧订阅的周期写入。
   const inactiveStatuses: Stripe.Subscription.Status[] = [
@@ -179,8 +238,7 @@ export async function syncSubscriptionFromStripe(
     "unpaid",
   ];
   if (inactiveStatuses.includes(status)) {
-    const currentPeriod =
-      await db.getCurrentPeriodByTelegramId(telegram_user_id);
+    const currentPeriod = currentPeriodBeforeUpsert;
     if (
       currentPeriod?.stripe_subscription_id &&
       currentPeriod.stripe_subscription_id !== subscription.id
@@ -208,7 +266,7 @@ export async function syncSubscriptionFromStripe(
   }
 
   // 如果有完整的 period 信息，upsert 整个周期
-  if (periodStart && periodEnd && planCode) {
+  if (periodStart && periodEnd && effectivePlanCode) {
     try {
       await db.upsertSubscriptionPeriod({
         telegram_user_id,
@@ -217,7 +275,7 @@ export async function syncSubscriptionFromStripe(
         stripe_customer_id: customerId,
         period_start: periodStart,
         period_end: periodEnd,
-        plan_id: planCode,
+        plan_id: effectivePlanCode,
         status,
         cancel_at_period_end:
           typeof subscription.cancel_at_period_end === "boolean"
@@ -290,18 +348,28 @@ export async function syncSubscriptionFromStripe(
       : true;
 
   const shouldProvideService =
-    hasActiveStatus && isWithinPeriod && (currentPeriod?.plan_id ?? planCode);
+    hasActiveStatus &&
+    isWithinPeriod &&
+    (currentPeriod?.plan_id ?? effectivePlanCode);
 
-  if (shouldProvideService) {
+  // Do NOT trigger container creation/restart when the subscription event is
+  // a cancel_at_period_end update. The user still has service until period end,
+  // but we should not restart a crashed container as a side effect of cancellation.
+  // Container restarts should only happen on new subscriptions (invoice.paid).
+  const isCancellationEvent =
+    typeof subscription.cancel_at_period_end === "boolean" &&
+    subscription.cancel_at_period_end === true;
+
+  if (shouldProvideService && !isCancellationEvent) {
     // Sync budget before starting containers — Stripe events can arrive out of order,
     // so subscription.updated (active) may arrive before invoice.paid. Without this,
     // the user would get Budget=0 and hit ExceededBudget on first message.
-    if (planCode) {
+    if (effectivePlanCode) {
       try {
         await syncLiteLLMBudgetFromPlan({
           telegram_user_id,
           telegram_username: telegramUsername,
-          plan_code: planCode,
+          plan_code: effectivePlanCode,
           source: "subscription_sync_before_container",
         });
       } catch (err) {
@@ -309,7 +377,7 @@ export async function syncSubscriptionFromStripe(
           "Budget sync before container start failed (invoice.paid will retry)",
           {
             telegramUserId: telegram_user_id,
-            planCode,
+            planCode: effectivePlanCode,
             error: err instanceof Error ? err.message : String(err),
           },
         );
@@ -346,24 +414,33 @@ export async function syncSubscriptionFromStripe(
         const toStart = candidates.filter((assistant) =>
           shouldEnsureAssistantRuntime(assistant.container_status),
         );
+        // Avoid duplicate start notifications from subscription.* events.
+        // User-facing "creating/starting" messages are sent on invoice.paid only.
+        const toNotify: typeof toStart = [];
 
         if (toStart.length > 0) {
-          const listStr = toStart
-            .map((a) => {
-              const u = a.assistant_bot_username ?? `#${a.id}`;
-              return u.startsWith("#") ? u : `@${u}`;
-            })
-            .join(", ");
-          await sendTelegramMessage(
-            Number(telegram_user_id),
-            `⏳ <b>Creating container(s)</b>\n\n${listStr}\n\nStarting up, please wait. First launch may take a few minutes — we'll notify you when ready.`,
-          );
+          if (toNotify.length > 0) {
+            const listStr = toNotify
+              .map((a) => {
+                const u = a.assistant_bot_username ?? `#${a.id}`;
+                return u.startsWith("#") ? u : `@${u}`;
+              })
+              .join(", ");
+            await sendTelegramMessage(
+              Number(telegram_user_id),
+              `⏳ <b>Creating container(s)</b>\n\n${listStr}\n\nStarting up, please wait. First launch may take a few minutes — we'll notify you when ready.`,
+            );
+          }
 
           // Fire-and-forget: create containers in background
           const chatId = Number(telegram_user_id);
           void (async () => {
             try {
-              const results: { label: string; ok: boolean }[] = [];
+              const results: Array<{
+                label: string;
+                state: "ready" | "starting" | "failed";
+              }> = [];
+              const notifyAssistantIds = new Set(toNotify.map((a) => a.id));
               for (const assistant of toStart) {
                 const label =
                   assistant.assistant_bot_username ?? `#${assistant.id}`;
@@ -375,16 +452,23 @@ export async function syncSubscriptionFromStripe(
                     Number(telegram_user_id),
                     assistant,
                   );
-                  await ensureAssistantContainer(
+                  const ensureResult = await ensureAssistantContainer(
                     assistantWithLiteLLM,
                     user.gateway_token,
                   );
-                  results.push({ label: displayLabel, ok: true });
+                  if (notifyAssistantIds.has(assistant.id)) {
+                    results.push({
+                      label: displayLabel,
+                      state: ensureResult.ready ? "ready" : "starting",
+                    });
+                  }
                   console.log(
-                    `Started container for assistant ${assistant.id} after subscription sync`,
+                    `[payment] Container ${ensureResult.ready ? "ready" : "starting"} for assistant ${assistant.id} after subscription sync`,
                   );
                 } catch (error: unknown) {
-                  results.push({ label: displayLabel, ok: false });
+                  if (notifyAssistantIds.has(assistant.id)) {
+                    results.push({ label: displayLabel, state: "failed" });
+                  }
                   console.error(
                     `Failed to start container for assistant ${assistant.id}`,
                     {
@@ -395,25 +479,30 @@ export async function syncSubscriptionFromStripe(
                   );
                 }
               }
-              const succeeded = results.filter((r) => r.ok).map((r) => r.label);
-              const failed = results.filter((r) => !r.ok).map((r) => r.label);
+              const summary = summarizeContainerProvisionResults(results);
               const parts: string[] = [];
-              if (succeeded.length > 0) {
+              if (summary.ready.length > 0) {
                 parts.push(
-                  `✅ <b>Container(s) ready</b>\n\n${succeeded.join(", ")}\n\nYour assistant is warming up and will be fully ready in about a minute. You can start chatting now!`,
+                  `✅ <b>Container(s) ready</b>\n\n${summary.ready.join(", ")}\n\nYour assistant is ready. You can start chatting now!`,
                 );
               }
-              if (failed.length > 0) {
+              if (summary.starting.length > 0) {
                 parts.push(
-                  `❌ <b>Creation failed</b>\n\n${failed.join(", ")}\n\nPlease contact support.`,
+                  `⏳ <b>Container(s) starting</b>\n\n${summary.starting.join(", ")}\n\nStill warming up — first launch may take a few minutes. We'll notify you when ready.`,
+                );
+              }
+              if (summary.failed.length > 0) {
+                parts.push(
+                  `❌ <b>Creation failed</b>\n\n${summary.failed.join(", ")}\n\nPlease contact support.`,
                 );
               }
               if (parts.length > 0) {
                 const msg = parts.join("\n\n");
                 console.log("Sending container ready/failed notification", {
                   chatId,
-                  succeededCount: succeeded.length,
-                  failedCount: failed.length,
+                  readyCount: summary.ready.length,
+                  startingCount: summary.starting.length,
+                  failedCount: summary.failed.length,
                 });
                 const sendResult = await sendTelegramMessage(chatId, msg);
                 if (!sendResult.ok) {
@@ -463,7 +552,7 @@ export async function syncSubscriptionFromStripe(
       source: "stripe_subscription_sync",
       metadata: {
         subscription_status: status,
-        plan_code: planCode,
+        plan_code: effectivePlanCode,
         cancel_at_period_end: subscription.cancel_at_period_end,
       },
     });
@@ -697,6 +786,25 @@ export async function handleInvoicePaid(
     const parsed = Number.parseInt(String(invoice.metadata.assistant_id), 10);
     if (Number.isFinite(parsed)) assistantId = parsed;
   }
+  if (!assistantId && stripeSubscriptionId) {
+    try {
+      const stripeSub =
+        await requireStripe().subscriptions.retrieve(stripeSubscriptionId);
+      if (stripeSub.metadata?.assistant_id) {
+        const parsed = Number.parseInt(
+          String(stripeSub.metadata.assistant_id),
+          10,
+        );
+        if (Number.isFinite(parsed)) assistantId = parsed;
+      }
+    } catch (err) {
+      console.warn("[payment] invoice.paid load subscription metadata failed", {
+        invoiceId: invoice.id,
+        stripeSubscriptionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 
   console.log("[payment] invoice.paid: upserting subscription_periods", {
     invoiceId: invoice.id,
@@ -706,6 +814,20 @@ export async function handleInvoicePaid(
     periodStart: periodStart.toISOString(),
     periodEnd: periodEnd.toISOString(),
   });
+
+  // For immediate plan switches on the same Stripe subscription, Stripe may emit
+  // a new period that starts "now" while an older local period is still open.
+  // Close any overlapping old period first so only one period is active at a time.
+  try {
+    await db.truncateSubscriptionPeriodsAt(stripeSubscriptionId, periodStart);
+  } catch (err) {
+    console.warn("[payment] invoice.paid period truncate failed (non-fatal)", {
+      invoiceId: invoice.id,
+      stripeSubscriptionId,
+      periodStart: periodStart.toISOString(),
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   await db.upsertSubscriptionPeriod({
     telegram_user_id: subscription.telegram_user_id,
@@ -774,6 +896,8 @@ export async function handleInvoicePaid(
     const toStart = candidates.filter((assistant) =>
       shouldEnsureAssistantRuntime(assistant.container_status),
     );
+    // invoice.paid is the canonical point to notify container provisioning.
+    const toNotify = toStart;
 
     console.log(`[payment] Containers to start: ${toStart.length}`, {
       toStartIds: toStart.map((a) => a.id),
@@ -782,22 +906,28 @@ export async function handleInvoicePaid(
 
     if (toStart.length > 0) {
       const chatId = Number(subscription.telegram_user_id);
-      const listStr = toStart
-        .map((a) => {
-          const u = a.assistant_bot_username ?? `#${a.id}`;
-          return u.startsWith("#") ? u : `@${u}`;
-        })
-        .join(", ");
+      if (toNotify.length > 0) {
+        const listStr = toNotify
+          .map((a) => {
+            const u = a.assistant_bot_username ?? `#${a.id}`;
+            return u.startsWith("#") ? u : `@${u}`;
+          })
+          .join(", ");
 
-      await sendTelegramMessage(
-        chatId,
-        `⏳ <b>Creating container(s)</b>\n\n${listStr}\n\nStarting up, please wait. First launch may take a few minutes — we'll notify you when ready.`,
-      );
+        await sendTelegramMessage(
+          chatId,
+          `⏳ <b>Creating container(s)</b>\n\n${listStr}\n\nStarting up, please wait. First launch may take a few minutes — we'll notify you when ready.`,
+        );
+      }
 
       // 异步启动容器
       void (async () => {
         try {
-          const results: { label: string; ok: boolean }[] = [];
+          const results: Array<{
+            label: string;
+            state: "ready" | "starting" | "failed";
+          }> = [];
+          const notifyAssistantIds = new Set(toNotify.map((a) => a.id));
           for (const assistant of toStart) {
             const label =
               assistant.assistant_bot_username ?? `#${assistant.id}`;
@@ -811,8 +941,12 @@ export async function handleInvoicePaid(
                 assistantWithLiteLLM,
                 user.gateway_token,
               );
-              // ready=false 表示容器启动了但未就绪（探测中），算部分成功
-              results.push({ label: displayLabel, ok: result.ready });
+              if (notifyAssistantIds.has(assistant.id)) {
+                results.push({
+                  label: displayLabel,
+                  state: result.ready ? "ready" : "starting",
+                });
+              }
               if (result.ready) {
                 console.log(
                   `[payment] Container ready for assistant ${assistant.id} after invoice.paid`,
@@ -823,7 +957,9 @@ export async function handleInvoicePaid(
                 );
               }
             } catch (error: unknown) {
-              results.push({ label: displayLabel, ok: false });
+              if (notifyAssistantIds.has(assistant.id)) {
+                results.push({ label: displayLabel, state: "failed" });
+              }
               console.error(
                 `[payment] Failed to start container for assistant ${assistant.id}`,
                 {
@@ -834,18 +970,22 @@ export async function handleInvoicePaid(
             }
           }
 
-          const succeeded = results.filter((r) => r.ok).map((r) => r.label);
-          const failed = results.filter((r) => !r.ok).map((r) => r.label);
+          const summary = summarizeContainerProvisionResults(results);
           const parts: string[] = [];
 
-          if (succeeded.length > 0) {
+          if (summary.ready.length > 0) {
             parts.push(
-              `✅ <b>Container(s) ready</b>\n\n${succeeded.join(", ")}\n\nYour assistant is warming up and will be fully ready in about a minute. You can start chatting now!`,
+              `✅ <b>Container(s) ready</b>\n\n${summary.ready.join(", ")}\n\nYour assistant is ready. You can start chatting now!`,
             );
           }
-          if (failed.length > 0) {
+          if (summary.starting.length > 0) {
             parts.push(
-              `⏳ <b>Container(s) starting</b>\n\n${failed.join(", ")}\n\nStill warming up — first launch may take a few minutes. We'll notify you when ready.`,
+              `⏳ <b>Container(s) starting</b>\n\n${summary.starting.join(", ")}\n\nStill warming up — first launch may take a few minutes. We'll notify you when ready.`,
+            );
+          }
+          if (summary.failed.length > 0) {
+            parts.push(
+              `❌ <b>Creation failed</b>\n\n${summary.failed.join(", ")}\n\nPlease contact support.`,
             );
           }
 
@@ -864,7 +1004,7 @@ export async function handleInvoicePaid(
  * 定时任务：对「当前时间已进入且尚未应用 budget」的周期执行 LiteLLM reset spend + set budget，并标记已应用；
  * 对「曾有周期但当前无生效周期」（如已取消且周期已结束）的用户清零 budget 并停容器。
  */
-export async function applySubscriptionPeriodBudgets(now?: Date): Promise<{
+async function applySubscriptionPeriodBudgetsCore(now?: Date): Promise<{
   processed: number;
   failed: number;
   errors: Array<{ periodId: number; error: string }>;
@@ -961,4 +1101,71 @@ export async function applySubscriptionPeriodBudgets(now?: Date): Promise<{
     endedZeroed,
     endedFailed,
   };
+}
+
+export async function applySubscriptionPeriodBudgetsWithLock(now?: Date): Promise<{
+  processed: number;
+  failed: number;
+  errors: Array<{ periodId: number; error: string }>;
+  endedZeroed: number;
+  endedFailed: number;
+  skipped?: boolean;
+  reason?: "local_lock" | "advisory_lock";
+}> {
+  const skippedResult = (
+    reason: "local_lock" | "advisory_lock",
+  ): {
+    processed: number;
+    failed: number;
+    errors: Array<{ periodId: number; error: string }>;
+    endedZeroed: number;
+    endedFailed: number;
+    skipped: true;
+    reason: "local_lock" | "advisory_lock";
+  } => ({
+    processed: 0,
+    failed: 0,
+    errors: [],
+    endedZeroed: 0,
+    endedFailed: 0,
+    skipped: true,
+    reason,
+  });
+
+  if (isApplyingSubscriptionPeriodsInProcess) {
+    return skippedResult("local_lock");
+  }
+
+  isApplyingSubscriptionPeriodsInProcess = true;
+  let client: any = null;
+  let gotAdvisoryLock = false;
+
+  try {
+    client = await pool.connect();
+    const lockResult = await client.query(
+      "SELECT pg_try_advisory_lock($1) as got_lock",
+      [SUBSCRIPTION_PERIOD_APPLY_LOCK_KEY],
+    );
+    gotAdvisoryLock = Boolean(lockResult.rows[0]?.got_lock);
+    if (!gotAdvisoryLock) {
+      return skippedResult("advisory_lock");
+    }
+
+    return await applySubscriptionPeriodBudgetsCore(now);
+  } finally {
+    if (gotAdvisoryLock) {
+      try {
+        await client?.query("SELECT pg_advisory_unlock($1)", [
+          SUBSCRIPTION_PERIOD_APPLY_LOCK_KEY,
+        ]);
+      } catch (error) {
+        console.error(
+          "[payment] failed to release subscription period advisory lock",
+          error,
+        );
+      }
+    }
+    client?.release();
+    isApplyingSubscriptionPeriodsInProcess = false;
+  }
 }

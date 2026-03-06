@@ -28,11 +28,6 @@ export const claimStripeEventForProcessing = async (
   return { skipped: false };
 };
 
-const normalizeEventCreated = (value: unknown): number | undefined => {
-  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
-  return Math.max(0, Math.trunc(value));
-};
-
 export const processStripeEvent = async (
   event: Stripe.Event,
 ): Promise<{ skipped: boolean }> => {
@@ -53,20 +48,24 @@ export const processStripeEvent = async (
       case "customer.subscription.updated":
       case "customer.subscription.deleted": {
         const subscription = eventObject as Stripe.Subscription;
-        const eventCreated = normalizeEventCreated(event.created);
-        const eventOrder =
-          eventCreated === undefined
-            ? "process"
-            : await db.claimSubscriptionEventOrder({
-                stripe_subscription_id: subscription.id,
-                event_created: eventCreated,
-                event_id: event.id,
-              });
-        if (eventOrder === "skip") {
-          skipped = true;
-          break;
+        let latestSubscription: Stripe.Subscription = subscription;
+        try {
+          // Always reconcile against Stripe's latest subscription snapshot.
+          // This avoids stale/older webhook payloads overriding newer states.
+          latestSubscription = await requireStripe().subscriptions.retrieve(
+            subscription.id,
+          );
+        } catch (error) {
+          console.warn(
+            "Failed to retrieve latest subscription state, fallback to event payload",
+            {
+              subscriptionId: subscription.id,
+              eventId: event.id,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          );
         }
-        await syncSubscriptionFromStripe(subscription);
+        await syncSubscriptionFromStripe(latestSubscription);
         break;
       }
 

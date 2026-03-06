@@ -37,7 +37,10 @@ export type ReadUserLiteLLMVirtualKey = (
 ) => string | null;
 
 export interface ContainerNotifier {
-  notifyReady(telegramUserId: number): Promise<void>;
+  notifyReady(
+    telegramUserId: number,
+    options?: { assistantId?: number },
+  ): Promise<void>;
 }
 
 export interface ContainerManagerRuntime {

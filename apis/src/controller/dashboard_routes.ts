@@ -36,6 +36,7 @@ import {
   listActivePlansForApi,
   readInternalSubscription,
 } from "../domain/payment/checkout.js";
+import { readPaymentPublicBaseUrl } from "../domain/payment/publicBaseUrl.js";
 import {
   buildOpenclawAuthHeaders,
   resolveAssistantGatewayTarget,
@@ -57,6 +58,7 @@ import {
 import { hasActiveSubscriptionForService } from "../domain/payment/subscriptionGuard.js";
 import { config } from "../domain/common/config.js";
 import { ensureTelegramUser } from "../domain/user/service.js";
+import { resetTelegramUserAccount } from "../domain/user/usecases.js";
 import type { AssistantRecord } from "../types.js";
 
 const miniAppEntryPath = path.join(
@@ -193,8 +195,8 @@ const setMiniSessionCookie = (
 ): void => {
   res.cookie(miniSessionCookieName, sessionToken, {
     httpOnly: true,
-    sameSite: "lax",
-    secure: config.nodeEnv === "production",
+    sameSite: "none", // Required for Telegram WebApp (iframe/cross-site context)
+    secure: true, // Required when sameSite=none
     path: "/",
     expires: new Date(expiresAt),
   });
@@ -493,9 +495,11 @@ export const createDashboardRouter = (): Router => {
           assistant_id: assistants[0]?.id,
           plan_code: plan,
         });
+        const baseUrl = readPaymentPublicBaseUrl(req);
         const checkout = await createCheckoutSession(req, {
           token: paymentSession.token,
           plan,
+          successUrl: `${baseUrl}/mini`,
         });
 
         res.status(200).json(checkout);
@@ -673,6 +677,35 @@ export const createDashboardRouter = (): Router => {
       try {
         const result = await cancelStripeSubscription(String(user.telegram_user_id));
         res.status(200).json(result);
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
+    "/api/mini/reset-account",
+    async (req: Request, res: Response, next: NextFunction) => {
+      void requireMiniSession(req, res, next).catch((error: unknown) => {
+        console.error("Mini session check failed", error);
+        res.status(500).json({ error: "Mini session check failed." });
+      });
+    },
+    async (req: Request, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+
+      try {
+        await resetTelegramUserAccount(user.telegram_user_id);
+        res.clearCookie("mini_sid");
+        res.status(200).json({ ok: true });
       } catch (error: unknown) {
         if (isDomainError(error)) {
           res.status(error.status).json({ error: error.message });

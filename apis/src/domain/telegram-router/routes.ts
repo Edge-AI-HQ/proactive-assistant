@@ -110,6 +110,11 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
 
     const userStateRaw = await findUserState(chatId);
     const userState = await tryAutoRecoverRuntime(chatId, userStateRaw);
+    const stateAssistantId = readAssistantIdFromState(userState);
+    const hasActiveSubscription =
+      stateAssistantId !== undefined
+        ? await hasActiveSubscriptionForService(String(chatId))
+        : false;
 
     if (userState.phase === "no_user") {
       if (source === "public") {
@@ -126,10 +131,6 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
     }
 
     if (userState.phase === "no_subscription") {
-      const hasActiveSubscription =
-        userState.assistantId !== undefined
-          ? await hasActiveSubscriptionForService(String(chatId))
-          : false;
       if (hasActiveSubscription) {
         await sendFallbackMessageBySource(
           source,
@@ -157,6 +158,27 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
       return;
     }
 
+    // Guard all runtime paths with subscription status.
+    // If subscription has ended/refunded, do not forward to assistant runtime
+    // and do not show "starting up" fallback.
+    if (!hasActiveSubscription) {
+      if (source === "public") {
+        const handled = await forwardToGuideBot(update);
+        if (!handled) {
+          res.status(503).send("Guide bot not initialized");
+          return;
+        }
+      } else {
+        await sendFallbackMessageBySource(
+          source,
+          chatId,
+          "Your assistant is registered but not yet activated. Please subscribe to start using it.",
+        );
+      }
+      res.status(200).json({ ok: true });
+      return;
+    }
+
     if (userState.phase === "container_starting") {
       const oauthPrompted = await tryHandleGoogleOAuthPrompt(source, chatId, text);
       if (oauthPrompted) {
@@ -166,7 +188,7 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
       if (userState.container) {
         const forwarded = await forwardToOpenClaw(userState.container, update, source);
         if (forwarded) {
-          res.status(200).json({ ok: true });
+          res.status(200).json({ ok: true, forwarded: true });
           return;
         }
       }
@@ -175,7 +197,7 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
         chatId,
         "Your assistant is starting up — first launch may take a few minutes. Please try again shortly.",
       );
-      res.status(200).json({ ok: true });
+      res.status(200).json({ ok: true, forwarded: false });
       return;
     }
 
@@ -205,7 +227,7 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
       );
     }
 
-    res.status(200).json({ ok: true });
+    res.status(200).json({ ok: true, forwarded });
   } catch (error) {
     console.error("❌ Webhook error:", error);
     res.status(500).send("Internal Server Error");
@@ -682,6 +704,13 @@ function getAbnormalAssistantId(state: UserState): number | null {
   if (state.phase === "container_starting") return state.assistantId;
   if (state.phase === "no_subscription" && state.assistantId) return state.assistantId;
   return null;
+}
+
+function readAssistantIdFromState(state: UserState): number | undefined {
+  if (state.phase === "no_subscription") return state.assistantId;
+  if (state.phase === "container_starting") return state.assistantId;
+  if (state.phase === "running") return state.assistantId;
+  return undefined;
 }
 
 async function forwardToOpenClaw(container: ContainerInfo, update: unknown, source: WebhookSource): Promise<boolean> {

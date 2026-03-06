@@ -252,7 +252,7 @@ export interface CheckoutResult {
 
 export const createCheckoutSession = async (
   req: Request,
-  body: { token?: string; plan?: string },
+  body: { token?: string; plan?: string; successUrl?: string },
 ): Promise<CheckoutResult> => {
   const stripe = requireStripe();
   const token = String(body.token || "").trim();
@@ -328,11 +328,66 @@ export const createCheckoutSession = async (
       }
 
       if (stripeSubActive && stripeSubscription) {
-        // 已有活跃订阅，暂不支持升降配
-        throw new DomainError(
-          "INVALID_INPUT",
-          `You already have an active ${currentPlan.display_name} subscription.`,
-        );
+        const currentPriceAmount = currentPlan.price_cents_monthly ?? 0;
+        const newPriceAmount = selectedPlan.price_cents_monthly ?? 0;
+
+        if (currentPlan.plan_code === selectedPlan.plan_code) {
+          throw new DomainError(
+            "INVALID_INPUT",
+            `You are already on the ${currentPlan.display_name} plan.`,
+          );
+        }
+
+        const subscriptionItem = stripeSubscription.items.data[0];
+        if (!subscriptionItem) {
+          throw new DomainError("INTERNAL", "Subscription item not found");
+        }
+
+        // Build shared metadata with assistant_id so invoice.paid creates correct period
+        const sharedMetadata: Record<string, string> = {
+          telegram_user_id: telegramUserId,
+          telegram_username: telegramUsername || "",
+          plan: selectedPlan.plan_code,
+        };
+        if (session.assistant_id) {
+          sharedMetadata.assistant_id = String(session.assistant_id);
+        }
+
+        if (newPriceAmount > currentPriceAmount) {
+          // Upgrade: apply immediately with proration
+          // Also reset cancel_at_period_end — user is actively upgrading, so they want to continue
+          await stripe.subscriptions.update(existingSub.stripe_subscription_id, {
+            items: [{ id: subscriptionItem.id, price: stripePriceId }],
+            proration_behavior: "always_invoice",
+            cancel_at_period_end: false,
+            metadata: sharedMetadata,
+          });
+          // Also update DB period to reflect cancel_at_period_end=false
+          await db.updateSubscriptionCancelFlag(
+            existingSub.stripe_subscription_id,
+            false,
+          ).catch(() => {/* non-fatal */});
+          await db.markPaymentSessionUsed(token);
+          return {
+            url: null,
+            action: "upgrade",
+            message: `Upgraded to ${selectedPlan.display_name}. Effective immediately.`,
+          };
+        } else {
+          // Downgrade: schedule for next billing cycle (no proration, no refund)
+          await stripe.subscriptions.update(existingSub.stripe_subscription_id, {
+            items: [{ id: subscriptionItem.id, price: stripePriceId }],
+            proration_behavior: "none",
+            billing_cycle_anchor: "unchanged" as const,
+            metadata: sharedMetadata,
+          });
+          await db.markPaymentSessionUsed(token);
+          return {
+            url: null,
+            action: "downgrade",
+            message: `Downgrade to ${selectedPlan.display_name} scheduled for next billing cycle.`,
+          };
+        }
       }
     }
   }
@@ -345,7 +400,7 @@ export const createCheckoutSession = async (
         customer: customerId,
         mode: "subscription",
         line_items: [{ price: stripePriceId, quantity: 1 }],
-        success_url: `${landingBaseUrl}/api/payment/success?session_id={CHECKOUT_SESSION_ID}`,
+        success_url: body.successUrl || `${landingBaseUrl}/api/payment/success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${landingBaseUrl}/api/payment/subscribe?token=${token}`,
         metadata: {
           telegram_user_id: telegramUserId,

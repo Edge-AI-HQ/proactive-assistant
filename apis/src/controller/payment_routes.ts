@@ -15,7 +15,7 @@ import {
   validateInternalPaymentSession,
 } from "../domain/payment/checkout.js";
 import { runCreditsMaintenance } from "../domain/payment/maintenance.js";
-import { applySubscriptionPeriodBudgets } from "../domain/payment/subscriptionSync.js";
+import { applySubscriptionPeriodBudgetsWithLock } from "../domain/payment/subscriptionSync.js";
 import {
   renderCancelPage,
   renderSubscribePage,
@@ -201,7 +201,7 @@ export const createPaymentRouter = (): Router => {
       if (!ensureInternalOrCronAuth(req, res)) return;
 
       try {
-        const response = await applySubscriptionPeriodBudgets();
+        const response = await applySubscriptionPeriodBudgetsWithLock();
         res.status(200).json(response);
       } catch (error: unknown) {
         if (respondKnownError(res, error)) return;

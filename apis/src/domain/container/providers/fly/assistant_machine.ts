@@ -5,6 +5,10 @@ import { config as appConfig } from "../../../common/config.js";
 import { isAssistantContainerName } from "../../naming.js";
 import { buildAssistantOpenclawConfig } from "../shared/openclaw_config.js";
 import {
+  renderUserProfileMarkdown,
+  sha256Hex,
+} from "../../../onboarding/profile_bootstrap.js";
+import {
   assertNoP0SecretsInConfig,
   assertNoP0SecretsInEnv,
 } from "../shared/secret_guard.js";
@@ -41,6 +45,8 @@ interface AssistantMachineCreateArgs {
   gatewayToken: string;
   assistantBotToken?: string | null;
   liteLlmApiKey: string | null;
+  onboardingProfileText?: string | null;
+  onboardingProfileSource?: "connector" | "privy" | null;
   skillsConfig?: UnknownRecord | null;
 }
 
@@ -75,6 +81,23 @@ const extractOrigin = (urlStr: string): string => {
 
 const hashConfigSha256 = (raw: string): string =>
   crypto.createHash("sha256").update(raw).digest("hex");
+
+const buildOnboardingProfilePayload = (
+  profileText?: string | null,
+  profileSource?: "connector" | "privy" | null,
+): { markdown: string; base64: string; hash: string } | null => {
+  const normalized = (profileText || "").trim();
+  if (!normalized) return null;
+  const markdown = renderUserProfileMarkdown(
+    normalized,
+    profileSource || "connector",
+  );
+  return {
+    markdown,
+    base64: Buffer.from(markdown, "utf8").toString("base64"),
+    hash: sha256Hex(markdown),
+  };
+};
 
 const resolveLiteLLMContainerBaseUrlForFly = (): string => {
   const containerBaseUrl = config.litellm.containerBaseUrl.trim();
@@ -294,6 +317,8 @@ export const shouldRecreateAssistantMachine = (
   desiredGatewayToken: string,
   desiredAssistantBotToken?: string | null,
   desiredLiteLLMApiKey?: string | null,
+  desiredOnboardingProfileText?: string | null,
+  desiredOnboardingProfileSource?: "connector" | "privy" | null,
   desiredSkillsConfig?: UnknownRecord | null,
 ): boolean => {
   const configuredImage = machine.config?.image?.trim();
@@ -332,6 +357,18 @@ export const shouldRecreateAssistantMachine = (
     typeof currentConfigHash !== "string" ||
     currentConfigHash.trim() !== desiredConfigHash
   ) {
+    return true;
+  }
+
+  const desiredProfile = buildOnboardingProfilePayload(
+    desiredOnboardingProfileText,
+    desiredOnboardingProfileSource,
+  );
+  const desiredProfileHash = desiredProfile?.hash || "";
+  const currentProfileHash = (
+    currentEnv?.PINAI_ONBOARDING_PROFILE_SHA256 || ""
+  ).trim();
+  if (currentProfileHash !== desiredProfileHash) {
     return true;
   }
 
@@ -387,6 +424,10 @@ export const createAssistantMachine = async (
     args.liteLlmApiKey,
     args.skillsConfig,
   );
+  const onboardingProfile = buildOnboardingProfilePayload(
+    args.onboardingProfileText,
+    args.onboardingProfileSource,
+  );
 
   const routerOrigin = config.telegramRouter.webhookUrl
     ? extractOrigin(config.telegramRouter.webhookUrl)
@@ -403,6 +444,9 @@ export const createAssistantMachine = async (
     OPENCLAW_STATE_DIR: "/app/data",
     NODE_COMPILE_CACHE: "/app/data/cache/node-compile-cache",
     PINAI_OPENCLAW_CONFIG_SHA256: openclawPayload.hash,
+    PINAI_ONBOARDING_PROFILE_B64: onboardingProfile?.base64 || "",
+    PINAI_ONBOARDING_PROFILE_SHA256: onboardingProfile?.hash || "",
+    PINAI_ONBOARDING_HAS_PROFILE: onboardingProfile ? "1" : "0",
     TELEGRAM_ROUTER_URL: routerOrigin,
   };
   assertNoP0SecretsInEnv(env, config);
@@ -424,6 +468,7 @@ export const createAssistantMachine = async (
   const setupCommands = [
     "mkdir -p /app/data/workspace /app/data/tmp /app/data/config /root/.openclaw",
     'printf "%s" "$OPENCLAW_CONFIG_B64" | base64 -d > "$OPENCLAW_CONFIG_PATH"',
+    'if [ -n "${PINAI_ONBOARDING_PROFILE_B64:-}" ]; then printf "%s" "$PINAI_ONBOARDING_PROFILE_B64" | base64 -d > /app/data/workspace/USER.md; rm -f /app/data/workspace/user.md; else rm -f /app/data/workspace/USER.md /app/data/workspace/user.md; fi',
     "ln -sfn /app/data/workspace /root/.openclaw/workspace",
     reminderPolicyBootstrap,
     cacheBootstrap,

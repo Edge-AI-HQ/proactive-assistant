@@ -9,6 +9,7 @@ import { cleanupExpiredGatewaySessions } from "./domain/common/db/index.js";
 import { ensureInfraRuntimeConfigured } from "./domain/common/infraRuntime.js";
 import { db as paymentDb } from "./domain/payment/db.js";
 import { validatePaymentPriceConsistencyOnStartup } from "./domain/payment/startupValidation.js";
+import { applySubscriptionPeriodBudgetsWithLock } from "./domain/payment/subscriptionSync.js";
 import {
   registerHttpRoutes,
   registerRawBodyRoutes,
@@ -73,6 +74,9 @@ setInterval(
     });
     void syncContainerStates().catch((error: unknown) => {
       console.error("Failed to sync container states", error);
+    });
+    void applySubscriptionPeriodBudgetsWithLock().catch((error: unknown) => {
+      console.error("Failed to apply subscription period budgets", error);
     });
   },
   5 * 60 * 1000,

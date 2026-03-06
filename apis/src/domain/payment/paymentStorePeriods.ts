@@ -192,7 +192,7 @@ export const createSubscriptionPeriodStore = (
           WHERE users.telegram_user_id = $1::bigint
             AND sp.period_start <= $2::timestamptz
             AND sp.period_end > $2::timestamptz
-          ORDER BY sp.period_end DESC
+          ORDER BY sp.period_start DESC, sp.updated_at DESC, sp.period_end DESC
           LIMIT 1
         `,
         [telegram_user_id, nowIso],
@@ -334,6 +334,7 @@ export const createSubscriptionPeriodStore = (
           UPDATE subscription_periods
           SET ${updates.join(", ")}
           WHERE stripe_subscription_id = $1
+            AND period_start < $2::timestamptz
             AND period_end > $2::timestamptz
         `,
         params,

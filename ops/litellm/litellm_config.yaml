@@ -5,6 +5,7 @@ general_settings:
   database_url: os.environ/LITELLM_DB_URL
   # 健康检查端点不需要认证
   disable_auth_on_health: true
+  store_model_in_db: true
 
 litellm_settings:
   set_verbose: false
@@ -16,9 +17,9 @@ router_settings:
   timeout: 60
 
 model_list:
-  - model_name: claude-sonnet-4-5
+  - model_name: claude-sonnet-4-6
     litellm_params:
-      model: anthropic/claude-sonnet-4-5
+      model: anthropic/claude-sonnet-4-6
       api_key: os.environ/ANTHROPIC_API_KEY
 
   - model_name: claude-opus-4-6
@@ -45,3 +46,9 @@ model_list:
     litellm_params:
       model: volcengine/ep-20260304110144-6zwwz
       api_key: os.environ/VOLCENGINE_API_KEY
+  
+  - model_name: kimi-k2.5
+    litellm_params:
+      model: openai/kimi-k2.5
+      api_key: os.environ/MOONSHOT_API_KEY
+      api_base: https://api.moonshot.ai/v1
