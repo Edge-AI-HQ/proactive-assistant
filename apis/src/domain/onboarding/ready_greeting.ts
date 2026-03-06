@@ -38,17 +38,25 @@ const postPrivateWebhook = async (
   const secret = config.telegram.webhookSecret?.trim();
   if (!secret) return false;
 
-  const url = `${config.publicBaseUrl.replace(/\/+$/, "")}/webhook/telegram/private`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Telegram-Bot-Api-Secret-Token": secret,
-    },
-    body: JSON.stringify(update),
-  });
+  const baseUrl = config.publicBaseUrl.replace(/\/+$/, "");
+  const urls = [
+    `${baseUrl}/webhook/telegram/private`,
+    `${baseUrl}/webhook/telegram`,
+  ];
 
-  return res.ok;
+  for (const url of urls) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Telegram-Bot-Api-Secret-Token": secret,
+      },
+      body: JSON.stringify(update),
+    });
+    if (res.ok) return true;
+  }
+
+  return false;
 };
 
 const parseHasProfile = (metadata: Record<string, unknown>): boolean | null => {

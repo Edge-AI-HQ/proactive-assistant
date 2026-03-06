@@ -414,10 +414,7 @@ export async function syncSubscriptionFromStripe(
         const toStart = candidates.filter((assistant) =>
           shouldEnsureAssistantRuntime(assistant.container_status),
         );
-        const toNotify = toStart.filter(
-          (assistant) =>
-            String(assistant.container_status || "").toLowerCase() !== "creating",
-        );
+        const toNotify: typeof toStart = [];
 
         if (toStart.length > 0) {
           if (toNotify.length > 0) {
@@ -897,10 +894,7 @@ export async function handleInvoicePaid(
     const toStart = candidates.filter((assistant) =>
       shouldEnsureAssistantRuntime(assistant.container_status),
     );
-    const toNotify = toStart.filter(
-      (assistant) =>
-        String(assistant.container_status || "").toLowerCase() !== "creating",
-    );
+    const toNotify: typeof toStart = [];
 
     console.log(`[payment] Containers to start: ${toStart.length}`, {
       toStartIds: toStart.map((a) => a.id),
