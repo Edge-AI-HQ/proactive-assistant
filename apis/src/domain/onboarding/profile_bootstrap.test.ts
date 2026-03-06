@@ -80,4 +80,7 @@ test("buildOnboardingGreetingPrompt includes pinai tenure identity and style con
   assert.match(prompt, /Do not output broken fragments/i);
   assert.match(prompt, /Never output NO_REPLY/i);
   assert.match(prompt, /even if earlier onboarding triggers exist/i);
+  assert.match(prompt, /sound like a familiar friend/i);
+  assert.match(prompt, /light teasing or warm knowing humor/i);
+  assert.match(prompt, /Do not format Block 2 like labels, fields, database facts, or profile keys/i);
 });
