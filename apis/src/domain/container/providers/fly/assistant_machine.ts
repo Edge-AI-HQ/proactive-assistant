@@ -13,6 +13,11 @@ import {
   assertNoP0SecretsInEnv,
 } from "../shared/secret_guard.js";
 import {
+  buildGoogleWorkspaceCredentialBootstrapShell,
+  GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE,
+  PINAI_GOOGLE_CREDENTIALS_B64_ENV,
+} from "../shared/google_workspace_credentials.js";
+import {
   deriveAssistantWebhookSecret,
   QUICKSTART_SYNTHETIC_BOT_TOKEN,
 } from "../shared/telegram_runtime_secret.js";
@@ -447,6 +452,8 @@ export const createAssistantMachine = async (
     PINAI_ONBOARDING_PROFILE_B64: onboardingProfile?.base64 || "",
     PINAI_ONBOARDING_PROFILE_SHA256: onboardingProfile?.hash || "",
     PINAI_ONBOARDING_HAS_PROFILE: onboardingProfile ? "1" : "0",
+    [PINAI_GOOGLE_CREDENTIALS_B64_ENV]: "",
+    GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE,
     TELEGRAM_ROUTER_URL: routerOrigin,
   };
   assertNoP0SecretsInEnv(env, config);
@@ -469,6 +476,7 @@ export const createAssistantMachine = async (
     "mkdir -p /app/data/workspace /app/data/tmp /app/data/config /root/.openclaw",
     'printf "%s" "$OPENCLAW_CONFIG_B64" | base64 -d > "$OPENCLAW_CONFIG_PATH"',
     'if [ -n "${PINAI_ONBOARDING_PROFILE_B64:-}" ]; then printf "%s" "$PINAI_ONBOARDING_PROFILE_B64" | base64 -d > /app/data/workspace/USER.md; rm -f /app/data/workspace/user.md; else rm -f /app/data/workspace/USER.md /app/data/workspace/user.md; fi',
+    buildGoogleWorkspaceCredentialBootstrapShell(),
     "ln -sfn /app/data/workspace /root/.openclaw/workspace",
     reminderPolicyBootstrap,
     cacheBootstrap,

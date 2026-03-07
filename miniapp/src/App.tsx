@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import CreateAgentFlow from "./components/CreateAgentFlow";
 import TopStatus from "./components/TopStatus";
 import AgentCard from "./components/AgentCard";
@@ -6,6 +6,7 @@ import ChangePlanDialog from "./components/ChangePlanDialog";
 import VideoLanding from "./components/VideoLanding";
 import SetupWaiting from "./components/SetupWaiting";
 import Toast from "./components/Toast";
+import { readGoogleRedirectState } from "./googleRedirectState";
 
 type Plan = {
   id: string;
@@ -48,6 +49,12 @@ type StatePayload = {
     message: string;
     items: SkillItem[];
     config?: Record<string, unknown> | null;
+  };
+  google: {
+    connected: boolean;
+    email: string | null;
+    scopes: string;
+    updatedAt: string;
   };
 };
 
@@ -105,6 +112,7 @@ const App = () => {
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
   const [busy, setBusy] = useState<string>("none");
   const [showChangePlan, setShowChangePlan] = useState(false);
+  const [showManageAgent, setShowManageAgent] = useState(false);
   const [showLanding, setShowLanding] = useState(
     () => !sessionStorage.getItem("landing_seen"),
   );
@@ -112,6 +120,7 @@ const App = () => {
     () => !sessionStorage.getItem("onboarding_seen"),
   );
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+  const handledGoogleRedirectRef = useRef(false);
 
   const showToast = (message: string, type: "success" | "error" = "error") => {
     setToast({ message, type });
@@ -124,74 +133,54 @@ const App = () => {
     );
   };
 
+  const consumeGoogleRedirect = async (): Promise<void> => {
+    const redirectState = readGoogleRedirectState(window.location.search);
+    if (redirectState.kind === "idle") return;
+
+    const payload = await loadState();
+    if (redirectState.manage) {
+      setShowManageAgent(true);
+    }
+
+    if (redirectState.kind === "connected") {
+      const email = payload.google.email || "";
+      showToast(
+        email
+          ? `Google connected: ${email}. Return to Telegram to use email actions.`
+          : "Google connected. Return to Telegram to use email actions.",
+        "success",
+      );
+    } else if (redirectState.kind === "disconnected") {
+      showToast("Google disconnected.", "success");
+    } else {
+      showToast(`Google connection failed: ${redirectState.reason}`);
+    }
+
+    window.history.replaceState({}, "", window.location.pathname);
+  };
+
   const loadState = async () => {
     const payload = await safeFetch<StatePayload>("/api/mini/state");
     hydrateState(payload);
+    return payload;
   };
 
   const bootstrap = async () => {
     const initData = window.Telegram?.WebApp?.initData?.trim() ?? "";
-    const initDataUnsafe = window.Telegram?.WebApp?.initDataUnsafe;
-    
-    console.log('[MiniApp] Bootstrap Debug Info:', {
-      hasInitData: !!initData,
-      initDataLength: initData.length,
-      telegram: !!window.Telegram,
-      webApp: !!window.Telegram?.WebApp,
-      hasInitDataUnsafe: !!initDataUnsafe,
-      userId: initDataUnsafe?.user?.id,
-      username: initDataUnsafe?.user?.username,
-      userAgent: navigator.userAgent,
-      url: window.location.href,
-    });
-    
+
     if (initData) {
-      console.log('[MiniApp] ✓ Using Telegram initData for bootstrap');
-      
       const requestBody = { init_data: initData };
-      console.log('[MiniApp] Preparing bootstrap request:', {
-        url: '/api/mini/bootstrap',
-        method: 'POST',
-        bodyKeys: Object.keys(requestBody),
-        initDataLength: initData.length,
-        initDataPreview: initData.substring(0, 50) + '...',
-      });
-      
       try {
         const payload = await safeFetch<StatePayload>("/api/mini/bootstrap", {
           method: "POST",
           body: JSON.stringify(requestBody),
         });
-        
-        console.log('[MiniApp] ✓ Bootstrap SUCCESS:', {
-          hasAssistant: payload.assistant.exists,
-          assistantId: payload.assistant.id,
-          hasSubscription: payload.subscription.active,
-          planId: payload.subscription.plan_id,
-          subscriptionStatus: payload.subscription.status,
-        });
-        
         hydrateState(payload);
         return;
       } catch (error) {
-        console.error('[MiniApp] ✗ Bootstrap FAILED:', error);
         throw error;
       }
     }
-
-    console.warn('[MiniApp] ✗ No initData available');
-    console.warn('Possible reasons:');
-    console.warn('  1. Opened in regular browser instead of Telegram');
-    console.warn('  2. Web Telegram does not have initData yet (still loading)');
-    console.warn('  3. Mini App not opened via proper Telegram button/link');
-    console.warn('');
-    console.warn('Please ensure you:');
-    console.warn('  - Open from Telegram bot menu button or inline button');
-    console.warn('  - Use Telegram mobile/desktop app (recommended)');
-    console.warn('  - Wait for Telegram WebApp SDK to fully load');
-    
-    // Try to load existing session (will fail with 401 if no session)
-    console.log('[MiniApp] Attempting to use existing session cookie...');
     await loadState();
   };
 
@@ -215,6 +204,14 @@ const App = () => {
         setLoading(false);
       });
   }, []);
+
+  useEffect(() => {
+    if (loading || !state) return;
+    if (handledGoogleRedirectRef.current) return;
+    if (!window.location.search.includes("google=")) return;
+    handledGoogleRedirectRef.current = true;
+    void consumeGoogleRedirect();
+  }, [loading, state]);
 
   const createAssistant = async () => {
     setBusy("create");
@@ -287,6 +284,27 @@ const App = () => {
     }
   };
 
+  const handleConnectGoogle = () => {
+    window.location.href = "/mini/google/start";
+  };
+
+  const handleDisconnectGoogle = async () => {
+    setBusy("google-disconnect");
+    try {
+      await safeFetch<{ ok: true; message: string }>("/api/mini/google/disconnect", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      await loadState();
+      setShowManageAgent(true);
+      showToast("Google disconnected.", "success");
+    } catch (e) {
+      showToast(`Disconnect failed: ${e instanceof Error ? e.message : "unknown"}`);
+    } finally {
+      setBusy("none");
+    }
+  };
+
   if (loading) {
     return (
       <div
@@ -298,14 +316,6 @@ const App = () => {
         </div>
       </div>
     );
-  }
-
-  // Debug: log current state
-  if (state) {
-    console.log('[MiniApp] Current state:', {
-      hasAssistant: state.assistant.exists,
-      hasSubscription: state.subscription.active,
-    });
   }
 
   if (error || !state) {
@@ -433,8 +443,15 @@ const App = () => {
             status={state.assistant.status || "unknown"}
             planId={state.subscription.plan_id}
             active={state.subscription.active}
+            manageOpen={showManageAgent}
+            google={state.google}
+            googleBusy={busy === "google-disconnect"}
+            onOpenManage={() => setShowManageAgent(true)}
+            onCloseManage={() => setShowManageAgent(false)}
             onChangePlan={() => setShowChangePlan(true)}
             onDeleteAccount={handleDeleteAccount}
+            onConnectGoogle={handleConnectGoogle}
+            onDisconnectGoogle={handleDisconnectGoogle}
           />
         </div>
 
@@ -472,7 +489,7 @@ const App = () => {
   return (
     <SetupWaiting
       onRetry={createAssistant}
-      onPoll={loadState}
+      onPoll={() => loadState().then(() => undefined)}
       busy={busy === "create"}
       toast={toast}
       onDismissToast={() => setToast(null)}

@@ -16,7 +16,7 @@ RUN npm ci
 COPY apis ./apis
 COPY miniapp ./miniapp
 
-# Build miniapp first (outputs to apis/public/tg-subscription-mini/)
+# Build miniapp first (outputs to apis/public/mini/)
 RUN npm run build --workspace @pin-ai/miniapp
 
 # Build the API

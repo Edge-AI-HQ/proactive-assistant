@@ -6,6 +6,7 @@ import { getAssistantById } from "../common/db/index.js";
 import { hasActiveSubscriptionForService } from "../payment/subscriptionGuard.js";
 import { ensureGatewayAssistantReady } from "../gateway/assistant_warmup.js";
 import { deriveAssistantWebhookSecret } from "../container/providers/shared/telegram_runtime_secret.js";
+import { hasGoogleOAuthConnection } from "../google-oauth/service.js";
 
 type WebhookSource = "public" | "private";
 
@@ -57,10 +58,12 @@ export const registerTelegramRouterRoutes = (app: Application): void => {
 
 async function handleTelegramWebhook(req: Request, res: Response, source: WebhookSource): Promise<void> {
   try {
-    const secretToken = req.headers["x-telegram-bot-api-secret-token"];
-    const expected = config.telegram.webhookSecret;
-    if (expected && secretToken !== expected) {
-      const received = typeof secretToken === "string" ? `${secretToken.slice(0, 8)}...(${secretToken.length})` : "missing";
+    const secretHeader = req.headers["x-telegram-bot-api-secret-token"];
+    const secretToken = Array.isArray(secretHeader) ? secretHeader[0] : secretHeader;
+    const expected = config.telegram.webhookSecret.trim();
+    const receivedToken = typeof secretToken === "string" ? secretToken.trim() : "";
+    if (expected && receivedToken !== expected) {
+      const received = receivedToken ? `${receivedToken.slice(0, 8)}...(${receivedToken.length})` : "missing";
       console.error(`❌ Invalid webhook secret (received=${received})`);
       res.status(401).send("Unauthorized");
       return;
@@ -175,6 +178,11 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
     }
 
     if (userState.phase === "container_starting") {
+      const oauthPrompted = await tryHandleGoogleOAuthPrompt(source, chatId, text);
+      if (oauthPrompted) {
+        res.status(200).json({ ok: true });
+        return;
+      }
       if (userState.container) {
         const forwarded = await forwardToOpenClaw(userState.container, update, source);
         if (forwarded) {
@@ -188,6 +196,12 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
         "Your assistant is starting up — first launch may take a few minutes. Please try again shortly.",
       );
       res.status(200).json({ ok: true, forwarded: false });
+      return;
+    }
+
+    const oauthPrompted = await tryHandleGoogleOAuthPrompt(source, chatId, text);
+    if (oauthPrompted) {
+      res.status(200).json({ ok: true });
       return;
     }
 
@@ -205,6 +219,47 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
     console.error("❌ Webhook error:", error);
     res.status(500).send("Internal Server Error");
   }
+}
+
+const MAIL_INTENT_PATTERN =
+  /(邮件|邮箱|gmail|mailbox|inbox|收件箱|未读|最近\d*封|latest\s*\d+\s*(emails?|mails?))/i;
+
+function isMailIntent(text: string | null): boolean {
+  if (!text) return false;
+  return MAIL_INTENT_PATTERN.test(text);
+}
+
+function buildGoogleManageUrl(): string {
+  const base = (config.publicBaseUrl || "").trim().replace(/\/+$/, "");
+  if (base) {
+    return `${base}/mini?manage=1`;
+  }
+  const botUsername = (config.telegram.botUsername || "").trim().replace(/^@/, "");
+  return botUsername ? `https://t.me/${botUsername}` : "";
+}
+
+async function tryHandleGoogleOAuthPrompt(
+  source: WebhookSource,
+  chatId: number,
+  text: string | null,
+): Promise<boolean> {
+  if (!isMailIntent(text)) return false;
+  const connected = await hasGoogleOAuthConnection(chatId);
+  if (connected) return false;
+
+  const manageUrl = buildGoogleManageUrl();
+  await sendFallbackMessageBySource(
+    source,
+    chatId,
+    [
+      "你还没有连接 Google 邮箱。",
+      "请先打开 PIN AI mini app，在 Manage 里完成 Connect Google：",
+      manageUrl,
+      "",
+      "授权完成后回到这里再发：给我看最近10封邮件",
+    ].join("\n"),
+  );
+  return true;
 }
 
 async function handleTelegramApiProxy(req: Request, res: Response): Promise<void> {
@@ -321,11 +376,20 @@ async function forwardToGuideBot(update: unknown): Promise<boolean> {
 async function sendFallbackMessageBySource(source: WebhookSource, chatId: number, text: string): Promise<void> {
   if (source === "private") return;
   if (!config.telegram.token?.trim()) return;
-  await fetch(`https://api.telegram.org/bot${config.telegram.token}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text }),
-  });
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${config.telegram.token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      console.error(`❌ fallback sendMessage failed status=${response.status} body=${truncateForLog(body, 300)}`);
+    }
+  } catch (error) {
+    console.error("❌ fallback sendMessage network error:", error);
+  }
 }
 
 async function findUserState(chatId: number): Promise<UserState> {
@@ -467,6 +531,7 @@ async function forwardToOpenClaw(container: ContainerInfo, update: unknown, sour
     container.gateway_token,
     config.apiAuthToken,
   );
+  const webhookSecret = assistantWebhookSecret;
 
   for (const webhookUrl of candidateUrls) {
     try {
@@ -474,7 +539,7 @@ async function forwardToOpenClaw(container: ContainerInfo, update: unknown, sour
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Telegram-Bot-Api-Secret-Token": assistantWebhookSecret,
+          "X-Telegram-Bot-Api-Secret-Token": webhookSecret,
           "X-PinAI-Source": source,
         },
         body: JSON.stringify(update),

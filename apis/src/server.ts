@@ -7,6 +7,7 @@ import { syncContainerStates } from "./domain/container/syncContainerStates.js";
 import { config, validateConfig } from "./domain/common/config.js";
 import { cleanupExpiredGatewaySessions } from "./domain/common/db/index.js";
 import { ensureInfraRuntimeConfigured } from "./domain/common/infraRuntime.js";
+import { materializeGoogleOAuthClientSecretFromEnv } from "./domain/google-oauth/client_secret_file.js";
 import { db as paymentDb } from "./domain/payment/db.js";
 import { validatePaymentPriceConsistencyOnStartup } from "./domain/payment/startupValidation.js";
 import { applySubscriptionPeriodBudgetsWithLock } from "./domain/payment/subscriptionSync.js";
@@ -27,6 +28,7 @@ if (missing.length) {
 }
 
 ensureInfraRuntimeConfigured();
+materializeGoogleOAuthClientSecretFromEnv();
 
 await prepareContainerRuntime();
 await validatePaymentPriceConsistencyOnStartup();

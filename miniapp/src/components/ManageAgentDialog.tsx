@@ -6,14 +6,48 @@ interface ManageAgentDialogProps {
   planId: string | null;
   onChangePlan: () => void;
   onDeleteAccount: () => void;
+  google: {
+    connected: boolean;
+    email: string | null;
+  };
+  googleBusy: boolean;
+  onConnectGoogle: () => void;
+  onDisconnectGoogle: () => void;
 }
 
-const ManageAgentDialog = ({ open, onClose, planId, onChangePlan, onDeleteAccount }: ManageAgentDialogProps) => {
+const ManageAgentDialog = ({
+  open,
+  onClose,
+  planId,
+  onChangePlan,
+  onDeleteAccount,
+  google,
+  googleBusy,
+  onConnectGoogle,
+  onDisconnectGoogle,
+}: ManageAgentDialogProps) => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   if (!open) return null;
 
   const menuItems = [
+    {
+      icon: "📧",
+      label: google.connected ? "Disconnect Google" : "Connect Google",
+      desc: google.connected
+        ? `Connected mailbox: ${google.email || "Connected"}`
+        : "Connect Gmail for email actions",
+      onClick: () => {
+        if (googleBusy) return;
+        if (google.connected) {
+          onDisconnectGoogle();
+          return;
+        }
+        onConnectGoogle();
+      },
+      destructive: false,
+      loading: googleBusy,
+    },
     {
       icon: "💳",
       label: "Change Subscription",
@@ -23,6 +57,7 @@ const ManageAgentDialog = ({ open, onClose, planId, onChangePlan, onDeleteAccoun
         onChangePlan();
       },
       destructive: false,
+      loading: false,
     },
     {
       icon: "🗑️",
@@ -30,6 +65,7 @@ const ManageAgentDialog = ({ open, onClose, planId, onChangePlan, onDeleteAccoun
       desc: "Permanently remove all data",
       onClick: () => setShowDeleteConfirm(true),
       destructive: true,
+      loading: false,
     },
   ];
 
@@ -68,12 +104,14 @@ const ManageAgentDialog = ({ open, onClose, planId, onChangePlan, onDeleteAccoun
           <p className="text-xs text-muted-foreground mt-1">Configure your agent settings</p>
         </div>
         <div className="px-3 pb-4 space-y-1">
-          {menuItems.map(({ icon, label, desc, onClick, destructive }) => (
+          {menuItems.map(({ icon, label, desc, onClick, destructive, loading }) => (
             <button
               key={label}
               onClick={onClick}
+              disabled={loading}
               className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors text-left btn-press
                 ${destructive ? "hover:bg-red-50" : "hover:bg-gray-50"}
+                ${loading ? "opacity-60 cursor-not-allowed" : ""}
               `}
             >
               <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 text-lg
@@ -85,11 +123,22 @@ const ManageAgentDialog = ({ open, onClose, planId, onChangePlan, onDeleteAccoun
                 <p className={`text-sm font-medium ${destructive ? "text-red-500" : "text-foreground"}`}>{label}</p>
                 <p className="text-[11px] text-muted-foreground">{desc}</p>
               </div>
+              {loading ? (
+                <span className="text-[11px] text-muted-foreground shrink-0">Working...</span>
+              ) : null}
               <svg className="w-4 h-4 text-muted-foreground shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
               </svg>
             </button>
           ))}
+          {google.connected ? (
+            <div className="rounded-xl bg-gray-50 px-3 py-3 mt-2">
+              <p className="text-[11px] font-semibold text-foreground">Use it in Telegram</p>
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Try: "Show me my latest 10 emails" or "Summarize unread emails from today".
+              </p>
+            </div>
+          ) : null}
         </div>
         <div className="p-4 border-t border-gray-100">
           <button
