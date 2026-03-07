@@ -6,6 +6,14 @@ import { config } from '../common/config.js';
 import { buildGoogleConnectedMessage } from '../telegram-bot/startPayload.js';
 import { buildMiniGoogleReturnUrl } from './miniapp.js';
 import {
+  buildGoogleWorkspaceAuthorizedUserCredential,
+  encodeGoogleWorkspaceAuthorizedUserCredential,
+  GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE,
+  GOOGLE_WORKSPACE_CLI_DEFAULT_CREDENTIALS_FILE,
+  PINAI_GOOGLE_CREDENTIALS_B64_ENV,
+} from '../container/providers/shared/google_workspace_credentials.js';
+import { getMachine, updateMachine } from '../container/providers/fly/fly_client.js';
+import {
   consumeOAuthState,
   createOAuthState,
   deleteGoogleCredentialByTelegramId,
@@ -43,7 +51,7 @@ type GoogleClientSecretFile = {
 const resolveClientSecretPath = (): string => {
   const fromEnv = process.env.GOOGLE_OAUTH_CLIENT_SECRET_PATH?.trim();
   if (fromEnv) return fromEnv;
-  return '/Users/smile/Documents/01PINAI/01Code/12repo/personal-ai-skills-new/credentials/client_secret.json';
+  throw new Error('GOOGLE_OAUTH_CLIENT_SECRET_PATH is required');
 };
 
 const resolveOAuthClient = (): { clientId: string; clientSecret: string; redirectUri: string } => {
@@ -54,7 +62,8 @@ const resolveOAuthClient = (): { clientId: string; clientSecret: string; redirec
   const clientSecret = node?.client_secret?.trim() || '';
 
   const explicitRedirect = process.env.GOOGLE_OAUTH_REDIRECT_URI?.trim();
-  const redirectUri = explicitRedirect || node?.redirect_uris?.[0]?.trim() || '';
+  const defaultRedirect = `${config.publicBaseUrl.replace(/\/+$/, '')}/mini/google/callback`;
+  const redirectUri = explicitRedirect || defaultRedirect || node?.redirect_uris?.[0]?.trim() || '';
 
   if (!clientId || !clientSecret || !redirectUri) {
     throw new Error('Invalid Google OAuth client_secret.json or missing GOOGLE_OAUTH_REDIRECT_URI');
@@ -76,6 +85,14 @@ const buildDockerContainerName = (runtimeRef: string | null): string | null => {
   if (ref.startsWith('docker:')) return ref.slice('docker:'.length);
   if (ref.startsWith('fly:')) return null;
   return ref;
+};
+
+const parseFlyMachineId = (runtimeRef: string | null): string | null => {
+  const ref = (runtimeRef || '').trim();
+  if (!ref.startsWith('fly:')) return null;
+  const payload = ref.slice('fly:'.length);
+  const [machineId] = payload.split('|', 2);
+  return machineId?.trim() || null;
 };
 
 const resolveDockerContainerName = async (
@@ -110,10 +127,38 @@ const resolveGoogleCredentialPaths = (): {
 } => {
   const targetFile =
     process.env.GOOGLE_OAUTH_CONTAINER_FILE?.trim() ||
-    '/app/data/google/gws-credentials.json';
+    GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE;
   return {
     targetFile,
-    gwsDefaultFile: '/root/.config/gws/credentials.json',
+    gwsDefaultFile: GOOGLE_WORKSPACE_CLI_DEFAULT_CREDENTIALS_FILE,
+  };
+};
+
+const buildGoogleWorkspaceCredentialContent = async (
+  telegramUserId: number,
+): Promise<{
+  content: ReturnType<typeof buildGoogleWorkspaceAuthorizedUserCredential>;
+  encoded: string;
+}> => {
+  const cred = await getGoogleCredentialByTelegramId(telegramUserId);
+  if (!cred) {
+    throw new Error('No Google credential found for this user');
+  }
+
+  const { clientId, clientSecret } = resolveOAuthClient();
+  const refreshToken = cred.refresh_token_enc ? decryptText(cred.refresh_token_enc) : '';
+  if (!refreshToken) {
+    throw new Error('Missing refresh token for gws credentials');
+  }
+
+  const content = buildGoogleWorkspaceAuthorizedUserCredential({
+    clientId,
+    clientSecret,
+    refreshToken,
+  });
+  return {
+    content,
+    encoded: encodeGoogleWorkspaceAuthorizedUserCredential(content),
   };
 };
 
@@ -309,6 +354,33 @@ export const removeGoogleCredentialFromContainer = async (
   telegramUserId: number,
 ): Promise<{ message: string }> => {
   const runtime = await findLatestAssistantRuntimeByTelegramId(telegramUserId);
+  const runtimeProvider = (runtime?.runtime_provider || '').toLowerCase();
+
+  if (runtimeProvider === 'fly') {
+    const machineId = parseFlyMachineId(runtime?.runtime_ref || null);
+    if (!machineId) {
+      return { message: 'No fly machine found; only database credential was removed' };
+    }
+
+    const machine = await getMachine(machineId);
+    if (!machine.config) {
+      throw new Error(`Fly machine ${machineId} has no config`);
+    }
+
+    const nextEnv = {
+      ...(machine.config.env || {}),
+      [PINAI_GOOGLE_CREDENTIALS_B64_ENV]: '',
+    };
+    await updateMachine(machineId, {
+      ...(machine.name ? { name: machine.name } : {}),
+      config: {
+        ...machine.config,
+        env: nextEnv,
+      },
+    });
+    return { message: `Credential removed from fly machine ${machineId}` };
+  }
+
   const docker = new Docker();
   const containerName = await resolveDockerContainerName(
     docker,
@@ -318,13 +390,6 @@ export const removeGoogleCredentialFromContainer = async (
   if (!containerName) {
     return { message: 'No container found; only database credential was removed' };
   }
-  if (
-    config.container.runtime !== 'docker' &&
-    (runtime?.runtime_provider || '').toLowerCase() === 'fly'
-  ) {
-    return { message: 'Database credential removed; fly runtime file cleanup skipped' };
-  }
-
   const { targetFile, gwsDefaultFile } = resolveGoogleCredentialPaths();
   const container = docker.getContainer(containerName);
   await executeContainerShell(
@@ -335,34 +400,41 @@ export const removeGoogleCredentialFromContainer = async (
 };
 
 export const syncCredentialToContainer = async (telegramUserId: number): Promise<{ message: string }> => {
-  const cred = await getGoogleCredentialByTelegramId(telegramUserId);
-  if (!cred) {
-    throw new Error('No Google credential found for this user');
+  const runtime = await findLatestAssistantRuntimeByTelegramId(telegramUserId);
+  const runtimeProvider = (runtime?.runtime_provider || '').toLowerCase();
+  const { content, encoded } = await buildGoogleWorkspaceCredentialContent(telegramUserId);
+
+  if (runtimeProvider === 'fly') {
+    const machineId = parseFlyMachineId(runtime?.runtime_ref || null);
+    if (!machineId) {
+      throw new Error('No fly runtime_ref found for this user');
+    }
+
+    const machine = await getMachine(machineId);
+    if (!machine.config) {
+      throw new Error(`Fly machine ${machineId} has no config`);
+    }
+
+    const nextEnv = {
+      ...(machine.config.env || {}),
+      GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE,
+      [PINAI_GOOGLE_CREDENTIALS_B64_ENV]: encoded,
+    };
+    await updateMachine(machineId, {
+      ...(machine.name ? { name: machine.name } : {}),
+      config: {
+        ...machine.config,
+        env: nextEnv,
+      },
+    });
+    return { message: `Credential synced to fly machine ${machineId}:${GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE}` };
   }
 
-  const runtime = await findLatestAssistantRuntimeByTelegramId(telegramUserId);
   const docker = new Docker();
   const containerName = await resolveDockerContainerName(docker, telegramUserId, runtime?.runtime_ref || null);
   if (!containerName) {
     throw new Error('No docker runtime_ref found for this user');
   }
-  if (config.container.runtime !== 'docker' && (runtime?.runtime_provider || '').toLowerCase() === 'fly') {
-    throw new Error('Current runtime is fly; local docker file sync is disabled');
-  }
-
-  const { clientId, clientSecret } = resolveOAuthClient();
-  const refreshToken = cred.refresh_token_enc ? decryptText(cred.refresh_token_enc) : '';
-  if (!refreshToken) {
-    throw new Error('Missing refresh token for gws credentials');
-  }
-  const content = {
-    type: 'authorized_user',
-    key_type: 'authorized_user',
-    client_id: clientId,
-    client_secret: clientSecret,
-    refresh_token: refreshToken,
-  };
-
   const { targetFile, gwsDefaultFile } = resolveGoogleCredentialPaths();
   const targetDir = path.posix.dirname(targetFile);
   const gwsDefaultDir = path.posix.dirname(gwsDefaultFile);

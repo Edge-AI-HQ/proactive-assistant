@@ -194,3 +194,14 @@ export const destroyVolume = async (volumeId: string): Promise<void> => {
 export const createMachine = async (body: unknown): Promise<FlyMachine> => {
   return flyRequest<FlyMachine>("POST", `${appPath()}/machines`, body);
 };
+
+export const updateMachine = async (
+  machineId: string,
+  body: unknown,
+): Promise<FlyMachine> => {
+  return flyRequest<FlyMachine>(
+    "POST",
+    `${appPath()}/machines/${encodeURIComponent(machineId)}`,
+    body,
+  );
+};

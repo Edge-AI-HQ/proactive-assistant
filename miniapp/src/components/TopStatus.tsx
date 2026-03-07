@@ -10,7 +10,7 @@ const TopStatus = ({ hasAgent = false }: TopStatusProps) => {
         <div className="flex items-center gap-3">
           <div className="avatar-ring-glow" style={{ width: 48, height: 48 }}>
             <img
-              src="/tg-subscription-mini/avatar-pinai.png"
+              src="/mini/avatar-pinai.png"
               alt="PIN AI"
               className="w-[44px] h-[44px] rounded-full object-cover shadow-md"
             />

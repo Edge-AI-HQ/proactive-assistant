@@ -13,7 +13,6 @@ import {
   registerPaymentRoutes,
   registerPaymentWebhookRoutes,
 } from "./payment_routes.js";
-import { registerGoogleOAuthRoutes } from "./google_oauth_routes.js";
 import vncRoutes, { registerVncWebSocketProxy } from "./vnc_routes.js";
 
 export const registerRawBodyRoutes = (app: Application): void => {
@@ -27,7 +26,6 @@ export const registerHttpRoutes = (app: Application): void => {
   registerContainerRoutes(app);
   registerDashboardApiRoutes(app);
   registerPaymentRoutes(app);
-  registerGoogleOAuthRoutes(app);
   app.use(vncRoutes);
 
   registerAuthRoutes(app);

@@ -69,7 +69,7 @@ const AgentCard = ({
           <div className="relative shrink-0">
             <div className="avatar-ring-glow" style={{ width: 56, height: 56 }}>
               <img
-                src="/tg-subscription-mini/avatar-pinai.png"
+                src="/mini/avatar-pinai.png"
                 alt="PIN AI"
                 className="w-[52px] h-[52px] rounded-full object-cover shadow-md"
               />

@@ -4,7 +4,7 @@ import path from "node:path";
 
 export default defineConfig({
   plugins: [react()],
-  base: "/tg-subscription-mini/",
+  base: "/mini/",
   server: {
     port: 3002,
     proxy: {
@@ -14,7 +14,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: path.resolve(__dirname, "../apis/public/tg-subscription-mini"),
+    outDir: path.resolve(__dirname, "../apis/public/mini"),
     emptyOutDir: true,
   },
 });

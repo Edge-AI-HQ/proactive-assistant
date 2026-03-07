@@ -13,6 +13,7 @@ export interface FlyVolume {
 export interface FlyMachine {
   id: string;
   name?: string;
+  region?: string;
   state?: string;
   private_ip?: string;
   created_at?: string;
@@ -26,6 +27,14 @@ export interface FlyMachine {
     guest?: {
       cpus?: number;
       memory_mb?: number;
+    };
+    mounts?: Array<{
+      volume: string;
+      path: string;
+    }>;
+    restart?: {
+      policy?: string;
+      max_retries?: number;
     };
   };
 }

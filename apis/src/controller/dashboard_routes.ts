@@ -71,7 +71,7 @@ import { buildMiniGoogleReturnUrl } from "../domain/google-oauth/miniapp.js";
 const miniAppEntryPath = path.join(
   process.cwd(),
   "public",
-  "tg-subscription-mini",
+  "mini",
   "index.html",
 );
 const miniSessionCookieName = "mini_sid";
@@ -263,6 +263,9 @@ const buildMiniStatePayload = async (
     : {};
   const skillsConfig = readSkillsConfigFromRuntimeMetadata(runtimeMetadata);
   const skillViews = buildSkillViewList(skillsConfig);
+  const hasActiveSubscription = subscription
+    ? await hasActiveSubscriptionForService(String(telegramUserId))
+    : false;
 
   return {
     user: {
@@ -281,14 +284,14 @@ const buildMiniStatePayload = async (
         },
     subscription: subscription
       ? {
-          active: await hasActiveSubscriptionForService(String(telegramUserId)),
+          active: hasActiveSubscription,
           status: subscription.status,
           plan_id: subscription.plan_id,
           cancel_at_period_end: subscription.cancel_at_period_end,
           current_period_end: subscription.current_period_end,
         }
       : {
-          active: false,
+          active: hasActiveSubscription,
           status: null,
           plan_id: null,
           cancel_at_period_end: false,
@@ -398,7 +401,9 @@ export const createDashboardRouter = (): Router => {
         state: typeof req.query.state === "string" ? req.query.state : undefined,
         error: typeof req.query.error === "string" ? req.query.error : undefined,
       });
-      res.redirect(result.nextPath || buildMiniGoogleReturnUrl("/mini", { status: "connected" }));
+      res.redirect(
+        result.nextPath || buildMiniGoogleReturnUrl("/mini", { status: "connected" }),
+      );
     } catch (error: unknown) {
       console.error("Mini google callback failed", error);
       res.redirect(
@@ -493,7 +498,9 @@ export const createDashboardRouter = (): Router => {
         res.status(200).json({
           ok: true,
           message: "Google disconnected",
-          redirect: buildMiniGoogleReturnUrl("/mini", { status: "disconnected" }),
+          redirect: buildMiniGoogleReturnUrl("/mini", {
+            status: "disconnected",
+          }),
         });
       } catch (error: unknown) {
         if (isDomainError(error)) {

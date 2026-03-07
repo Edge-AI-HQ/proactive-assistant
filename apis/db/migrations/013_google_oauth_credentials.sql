@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS google_oauth_states (
   state_token TEXT PRIMARY KEY,
   telegram_user_id BIGINT NOT NULL,
-  next_path TEXT NOT NULL DEFAULT '/google/manage',
+  next_path TEXT NOT NULL DEFAULT '/mini',
   code_verifier TEXT,
   expires_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

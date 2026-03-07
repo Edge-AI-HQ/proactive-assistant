@@ -66,18 +66,6 @@ interface AssistantContainerDirs {
   workspaceDir: string;
 }
 
-type AuthProfilesStore = {
-  version: number;
-  profiles: Record<
-    string,
-    {
-      type: "api_key";
-      provider: string;
-      key: string;
-    }
-  >;
-};
-
 // ---------------------------------------------------------------------------
 // Utility helpers
 // ---------------------------------------------------------------------------
@@ -92,49 +80,6 @@ const ensureDir = (dirPath: string): void => {
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true });
   }
-};
-
-const ensureLocalDevModelAuthProfiles = (runtimeDataDir: string): void => {
-  // Local Docker DX only: avoid affecting online environments.
-  if (appConfig.nodeEnv === "production") return;
-  const anthropicKey = (
-    process.env.ANTHROPIC_API_KEY ||
-    appConfig.anthropicApiKey ||
-    ""
-  ).trim();
-  if (!anthropicKey) return;
-
-  const agentDir = path.join(runtimeDataDir, "agents", "main", "agent");
-  const authPath = path.join(agentDir, "auth-profiles.json");
-  ensureDir(agentDir);
-
-  let next: AuthProfilesStore = { version: 1, profiles: {} };
-  if (fs.existsSync(authPath)) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(authPath, "utf8")) as unknown;
-      if (isRecord(parsed) && isRecord((parsed as Record<string, unknown>).profiles)) {
-        next = {
-          version:
-            typeof (parsed as Record<string, unknown>).version === "number"
-              ? ((parsed as Record<string, unknown>).version as number)
-              : 1,
-          profiles: {
-            ...((parsed as Record<string, unknown>).profiles as AuthProfilesStore["profiles"]),
-          },
-        };
-      }
-    } catch {
-      // overwrite malformed file
-    }
-  }
-
-  next.profiles["anthropic:default"] = {
-    type: "api_key",
-    provider: "anthropic",
-    key: anthropicKey,
-  };
-
-  fs.writeFileSync(authPath, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
 };
 
 const hasEnvKey = (envVars: string[] | undefined, key: string): boolean =>
@@ -651,7 +596,6 @@ export const dockerContainerRuntime: ContainerRuntime = {
       params.onboardingProfileSource,
     );
     sanitizeCronStore(dirs.dataDir);
-    ensureLocalDevModelAuthProfiles(dirs.dataDir);
 
     const hostPort = params.containerPort
       ? String(params.containerPort)

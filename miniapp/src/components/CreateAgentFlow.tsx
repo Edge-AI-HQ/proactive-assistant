@@ -3,9 +3,9 @@ interface CreateAgentFlowProps {
 }
 
 const features = [
-  { img: "/tg-subscription-mini/sketch-brain.png", label: "Task Intelligence", desc: "From planning to execution." },
-  { img: "/tg-subscription-mini/sketch-bull.png", label: "Autonomous Operations", desc: "Real-world actions, handled by your AI." },
-  { img: "/tg-subscription-mini/sketch-flower.png", label: "24/7 Active", desc: "Always available. Always improving." },
+  { img: "/mini/sketch-brain.png", label: "Task Intelligence", desc: "From planning to execution." },
+  { img: "/mini/sketch-bull.png", label: "Autonomous Operations", desc: "Real-world actions, handled by your AI." },
+  { img: "/mini/sketch-flower.png", label: "24/7 Active", desc: "Always available. Always improving." },
 ];
 
 const CreateAgentFlow = ({ onContinue }: CreateAgentFlowProps) => {
@@ -28,7 +28,7 @@ const CreateAgentFlow = ({ onContinue }: CreateAgentFlowProps) => {
           <div className="relative mb-5">
             <div className="w-28 h-28 rounded-full bg-primary/10 flex items-center justify-center animate-pulse-soft">
               <img
-                src="/tg-subscription-mini/avatar-pinai.png"
+                src="/mini/avatar-pinai.png"
                 alt="PIN AI"
                 className="w-20 h-20 object-contain"
               />
