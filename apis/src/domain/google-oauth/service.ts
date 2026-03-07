@@ -22,6 +22,7 @@ import {
   findLatestAssistantRuntimeByTelegramId,
   findUserIdentityByTelegramId,
   getGoogleCredentialByTelegramId,
+  hasGoogleCredentialByTelegramId,
   saveGoogleCredential,
 } from './repository.js';
 
@@ -49,21 +50,72 @@ type GoogleClientSecretFile = {
   };
 };
 
+type OAuthClientConfig = {
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+};
+
+let oauthClientCache:
+  | {
+      secretPath: string;
+      explicitRedirect: string;
+      publicBaseUrl: string;
+      value: OAuthClientConfig;
+    }
+  | null = null;
+
+export function sanitizeGoogleTokenPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (key === 'access_token' || key === 'refresh_token' || key === 'id_token') continue;
+    sanitized[key] = value;
+  }
+  return sanitized;
+}
+
+export function resetGoogleOAuthClientCacheForTest(): void {
+  oauthClientCache = null;
+}
+
+export function resolveGoogleOAuthClientForTest(): OAuthClientConfig {
+  return resolveOAuthClient();
+}
+
 const resolveOAuthClient = (): { clientId: string; clientSecret: string; redirectUri: string } => {
-  const raw = fs.readFileSync(resolveGoogleOAuthClientSecretPath(), 'utf8');
+  const secretPath = resolveGoogleOAuthClientSecretPath();
+  const explicitRedirect = process.env.GOOGLE_OAUTH_REDIRECT_URI?.trim() || '';
+  const publicBaseUrl = config.publicBaseUrl.replace(/\/+$/, '');
+  if (
+    oauthClientCache &&
+    oauthClientCache.secretPath === secretPath &&
+    oauthClientCache.explicitRedirect === explicitRedirect &&
+    oauthClientCache.publicBaseUrl === publicBaseUrl
+  ) {
+    return oauthClientCache.value;
+  }
+
+  const raw = fs.readFileSync(secretPath, 'utf8');
   const parsed = JSON.parse(raw) as GoogleClientSecretFile;
   const node = parsed.web || parsed.installed;
   const clientId = node?.client_id?.trim() || '';
   const clientSecret = node?.client_secret?.trim() || '';
 
-  const explicitRedirect = process.env.GOOGLE_OAUTH_REDIRECT_URI?.trim();
-  const defaultRedirect = `${config.publicBaseUrl.replace(/\/+$/, '')}/mini/google/callback`;
+  const defaultRedirect = `${publicBaseUrl}/mini/google/callback`;
   const redirectUri = explicitRedirect || defaultRedirect || node?.redirect_uris?.[0]?.trim() || '';
 
   if (!clientId || !clientSecret || !redirectUri) {
     throw new Error('Invalid Google OAuth client_secret.json or missing GOOGLE_OAUTH_REDIRECT_URI');
   }
-  return { clientId, clientSecret, redirectUri };
+
+  const value = { clientId, clientSecret, redirectUri };
+  oauthClientCache = {
+    secretPath,
+    explicitRedirect,
+    publicBaseUrl,
+    value,
+  };
+  return value;
 };
 
 const normalizeTelegramUserId = (value: unknown): number => {
@@ -228,6 +280,8 @@ export const getGoogleConnectionStatus = async (telegramUserId: number): Promise
   };
 };
 
+export const hasGoogleOAuthConnection = hasGoogleCredentialByTelegramId;
+
 export const buildGoogleAuthStartUrl = async (telegramUserId: number, nextPath?: string): Promise<string> => {
   const { clientId, redirectUri } = resolveOAuthClient();
   const state = await createOAuthState({
@@ -310,6 +364,8 @@ export const handleGoogleOAuthCallback = async (query: {
     }
   }
 
+  const safePayload = sanitizeGoogleTokenPayload(payload);
+
   await saveGoogleCredential({
     userId: user.id,
     telegramUserId: stateRow.telegramUserId,
@@ -319,7 +375,7 @@ export const handleGoogleOAuthCallback = async (query: {
     tokenType,
     scope,
     expiryAt,
-    rawPayload: payload,
+    rawPayload: safePayload,
   });
 
   await syncCredentialToContainer(stateRow.telegramUserId).catch((error) => {

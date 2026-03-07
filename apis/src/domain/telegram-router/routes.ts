@@ -6,6 +6,7 @@ import { getAssistantById } from "../common/db/index.js";
 import { hasActiveSubscriptionForService } from "../payment/subscriptionGuard.js";
 import { ensureGatewayAssistantReady } from "../gateway/assistant_warmup.js";
 import { deriveAssistantWebhookSecret } from "../container/providers/shared/telegram_runtime_secret.js";
+import { hasGoogleOAuthConnection } from "../google-oauth/service.js";
 
 type WebhookSource = "public" | "private";
 
@@ -228,8 +229,7 @@ function isMailIntent(text: string | null): boolean {
   return MAIL_INTENT_PATTERN.test(text);
 }
 
-function buildGoogleManageUrl(telegramUserId: number): string {
-  void telegramUserId;
+function buildGoogleManageUrl(): string {
   const base = (config.publicBaseUrl || "").trim().replace(/\/+$/, "");
   if (base) {
     return `${base}/mini?manage=1`;
@@ -238,32 +238,16 @@ function buildGoogleManageUrl(telegramUserId: number): string {
   return botUsername ? `https://t.me/${botUsername}` : "";
 }
 
-async function hasGoogleOAuthCredential(telegramUserId: number): Promise<boolean> {
-  const result = await pool.query<{ exists: boolean }>(
-    `SELECT EXISTS(
-       SELECT 1
-       FROM google_oauth_credentials
-       WHERE telegram_user_id = $1
-         AND (
-           COALESCE(length(refresh_token_enc), 0) > 0
-           OR COALESCE(length(access_token_enc), 0) > 0
-         )
-     ) AS exists`,
-    [telegramUserId],
-  );
-  return Boolean(result.rows[0]?.exists);
-}
-
 async function tryHandleGoogleOAuthPrompt(
   source: WebhookSource,
   chatId: number,
   text: string | null,
 ): Promise<boolean> {
   if (!isMailIntent(text)) return false;
-  const connected = await hasGoogleOAuthCredential(chatId);
+  const connected = await hasGoogleOAuthConnection(chatId);
   if (connected) return false;
 
-  const manageUrl = buildGoogleManageUrl(chatId);
+  const manageUrl = buildGoogleManageUrl();
   await sendFallbackMessageBySource(
     source,
     chatId,

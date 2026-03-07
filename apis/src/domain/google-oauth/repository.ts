@@ -163,6 +163,22 @@ export const getGoogleCredentialByTelegramId = async (
   return result.rows[0] || null;
 };
 
+export const hasGoogleCredentialByTelegramId = async (telegramUserId: number): Promise<boolean> => {
+  const result = await pool.query<{ exists: boolean }>(
+    `SELECT EXISTS(
+       SELECT 1
+       FROM google_oauth_credentials
+       WHERE telegram_user_id = $1
+         AND (
+           COALESCE(length(refresh_token_enc), 0) > 0
+           OR COALESCE(length(access_token_enc), 0) > 0
+         )
+     ) AS exists`,
+    [telegramUserId],
+  );
+  return Boolean(result.rows[0]?.exists);
+};
+
 export const deleteGoogleCredentialByTelegramId = async (telegramUserId: number): Promise<void> => {
   await pool.query(`DELETE FROM google_oauth_credentials WHERE telegram_user_id = $1`, [telegramUserId]);
 };
