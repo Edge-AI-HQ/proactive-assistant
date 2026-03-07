@@ -56,6 +56,7 @@ import {
   resolveGatewayAssistantForUser,
 } from "../domain/gateway/session_guard.js";
 import { hasActiveSubscriptionForService } from "../domain/payment/subscriptionGuard.js";
+import { isSubscriptionActiveForService } from "../domain/payment/subscriptionPolicy.js";
 import { config } from "../domain/common/config.js";
 import { ensureTelegramUser } from "../domain/user/service.js";
 import { resetTelegramUserAccount } from "../domain/user/usecases.js";
@@ -245,27 +246,22 @@ const requireMiniSession = async (
   next();
 };
 
-const buildMiniStatePayload = async (
+/**
+ * Quick payload — only the data needed to render the main UI immediately.
+ * Skips skills, google, and plans (deferred to a separate request).
+ */
+const buildQuickStatePayload = async (
   telegramUserId: number,
   telegramUsername: string | null,
 ) => {
-  const [assistants, subscriptionResult, plansResult, googleStatus] = await Promise.all([
+  const [assistants, subscriptionResult] = await Promise.all([
     listAssistantsByOwnerId(telegramUserId),
     readInternalSubscription(String(telegramUserId)),
-    listActivePlansForApi(),
-    getGoogleConnectionStatus(telegramUserId),
   ]);
 
   const assistant = assistants[0] ?? null;
   const subscription = subscriptionResult.subscription;
-  const runtimeMetadata = assistant
-    ? await readAssistantRuntimeMetadata(assistant.id)
-    : {};
-  const skillsConfig = readSkillsConfigFromRuntimeMetadata(runtimeMetadata);
-  const skillViews = buildSkillViewList(skillsConfig);
-  const hasActiveSubscription = subscription
-    ? await hasActiveSubscriptionForService(String(telegramUserId))
-    : false;
+  const active = isSubscriptionActiveForService(subscription);
 
   return {
     user: {
@@ -284,19 +280,44 @@ const buildMiniStatePayload = async (
         },
     subscription: subscription
       ? {
-          active: hasActiveSubscription,
+          active,
           status: subscription.status,
           plan_id: subscription.plan_id,
           cancel_at_period_end: subscription.cancel_at_period_end,
           current_period_end: subscription.current_period_end,
         }
       : {
-          active: hasActiveSubscription,
+          active,
           status: null,
           plan_id: null,
           cancel_at_period_end: false,
           current_period_end: null,
         },
+    plans: null as null,
+    skills: null as null,
+    google: null as null,
+  };
+};
+
+/**
+ * Deferred payload — heavier data loaded after initial render.
+ */
+const buildDeferredStatePayload = async (
+  telegramUserId: number,
+) => {
+  const assistants = await listAssistantsByOwnerId(telegramUserId);
+  const assistant = assistants[0] ?? null;
+
+  const [plansResult, googleStatus, runtimeMetadata] = await Promise.all([
+    listActivePlansForApi(),
+    getGoogleConnectionStatus(telegramUserId),
+    assistant ? readAssistantRuntimeMetadata(assistant.id) : Promise.resolve({}),
+  ]);
+
+  const skillsConfig = readSkillsConfigFromRuntimeMetadata(runtimeMetadata);
+  const skillViews = buildSkillViewList(skillsConfig);
+
+  return {
     plans: plansResult.plans,
     skills: {
       supported: Boolean(assistant),
@@ -436,7 +457,7 @@ export const createDashboardRouter = (): Router => {
           miniSessionTtlHours,
         );
         setMiniSessionCookie(res, sessionToken, expiresAt);
-        const payload = await buildMiniStatePayload(
+        const payload = await buildQuickStatePayload(
           user.telegram_user_id,
           user.telegram_username,
         );
@@ -463,9 +484,39 @@ export const createDashboardRouter = (): Router => {
       }
 
       try {
-        const payload = await buildMiniStatePayload(
+        const payload = await buildQuickStatePayload(
           user.telegram_user_id,
           user.telegram_username,
+        );
+        res.status(200).json(payload);
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.get(
+    "/api/mini/state/deferred",
+    async (req: Request, res: Response, next: NextFunction) => {
+      void requireMiniSession(req, res, next).catch((error: unknown) => {
+        console.error("Mini session check failed", error);
+        res.status(500).json({ error: "Mini session check failed." });
+      });
+    },
+    async (req: Request, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+
+      try {
+        const payload = await buildDeferredStatePayload(
+          user.telegram_user_id,
         );
         res.status(200).json(payload);
       } catch (error: unknown) {

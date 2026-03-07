@@ -8,7 +8,7 @@ services:
 
   litellm:
     profiles: ["litellm"]
-    image: docker.litellm.ai/berriai/litellm:main-v1.82.rc.1
+    image: docker.litellm.ai/berriai/litellm:main-v1.82.0.dev1
     container_name: pin-ai-litellm
     restart: unless-stopped
     env_file:

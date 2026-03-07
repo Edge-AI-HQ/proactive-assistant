@@ -6,7 +6,7 @@ interface AgentCardProps {
   planId: string | null;
   active: boolean;
   manageOpen: boolean;
-  google: {
+  google?: {
     connected: boolean;
     email: string | null;
   };
