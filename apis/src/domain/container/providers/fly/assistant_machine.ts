@@ -460,8 +460,11 @@ export const createAssistantMachine = async (
 
   // Persist jiti + Node compile caches on the volume so restarts skip
   // the expensive cold-compile phase (~7 min → seconds).
+  // On cold volumes, seed from the image-baked warmup layer first.
   const cacheBootstrap = [
     "mkdir -p /app/data/cache/jiti /app/data/cache/node-compile-cache",
+    '[ "$(ls -A /app/data/cache/jiti 2>/dev/null)" ] || cp -r /opt/jiti-warmup/. /app/data/cache/jiti/ 2>/dev/null || true',
+    '[ "$(ls -A /app/data/cache/node-compile-cache 2>/dev/null)" ] || cp -r /opt/node-compile-warmup/. /app/data/cache/node-compile-cache/ 2>/dev/null || true',
     "ln -sfn /app/data/cache/jiti /tmp/jiti",
     "export NODE_COMPILE_CACHE=/app/data/cache/node-compile-cache",
   ].join(" && ");
