@@ -24,15 +24,13 @@ const getStatusDisplay = (status: string): { text: string; color: string } => {
     case "running":
       return { text: "Running", color: "text-pin-mint" };
     case "creating":
-      return { text: "Setting up...", color: "text-amber-600" };
     case "stopped":
-      return { text: "Stopped", color: "text-muted-foreground" };
+    case "missing":
+      return { text: "Starting up...", color: "text-amber-600" };
     case "error":
       return { text: "Error", color: "text-destructive" };
-    case "missing":
-      return { text: "Initializing...", color: "text-amber-600" };
     default:
-      return { text: "Unknown", color: "text-muted-foreground" };
+      return { text: "Starting up...", color: "text-amber-600" };
   }
 };
 
