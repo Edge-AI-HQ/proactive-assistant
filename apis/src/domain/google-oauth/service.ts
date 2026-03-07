@@ -5,6 +5,7 @@ import { decryptText, encryptText } from './crypto.js';
 import { config } from '../common/config.js';
 import { buildGoogleConnectedMessage } from '../telegram-bot/startPayload.js';
 import { buildMiniGoogleReturnUrl } from './miniapp.js';
+import { resolveGoogleOAuthClientSecretPath } from './client_secret_file.js';
 import {
   buildGoogleWorkspaceAuthorizedUserCredential,
   encodeGoogleWorkspaceAuthorizedUserCredential,
@@ -48,14 +49,8 @@ type GoogleClientSecretFile = {
   };
 };
 
-const resolveClientSecretPath = (): string => {
-  const fromEnv = process.env.GOOGLE_OAUTH_CLIENT_SECRET_PATH?.trim();
-  if (fromEnv) return fromEnv;
-  throw new Error('GOOGLE_OAUTH_CLIENT_SECRET_PATH is required');
-};
-
 const resolveOAuthClient = (): { clientId: string; clientSecret: string; redirectUri: string } => {
-  const raw = fs.readFileSync(resolveClientSecretPath(), 'utf8');
+  const raw = fs.readFileSync(resolveGoogleOAuthClientSecretPath(), 'utf8');
   const parsed = JSON.parse(raw) as GoogleClientSecretFile;
   const node = parsed.web || parsed.installed;
   const clientId = node?.client_id?.trim() || '';
