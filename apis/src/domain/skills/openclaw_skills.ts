@@ -30,6 +30,21 @@ export interface SkillCatalogItem {
 
 export const DEFAULT_SKILLS_CATALOG: SkillCatalogItem[] = [
   {
+    key: "gws",
+    name: "Google Workspace Core",
+    description: "Shared Google Workspace CLI access.",
+  },
+  {
+    key: "gws-gmail",
+    name: "Gmail",
+    description: "Read and search Gmail with Google Workspace CLI.",
+  },
+  {
+    key: "gws-shared",
+    name: "Google Workspace Shared",
+    description: "Shared Google Workspace auth and helper utilities.",
+  },
+  {
     key: "gemini",
     name: "Gemini",
     description: "Google Gemini model integration skill.",
@@ -50,6 +65,15 @@ export const DEFAULT_SKILLS_CATALOG: SkillCatalogItem[] = [
     description: "Advanced multimodal agent enhancement skill.",
   },
 ];
+
+export const DEFAULT_PREINSTALLED_BUNDLED_SKILLS = [
+  "openai-image-gen",
+  "openai-whisper-api",
+  "sag",
+  "gws",
+  "gws-gmail",
+  "gws-shared",
+] as const;
 
 const isRecord = (value: unknown): value is UnknownRecord =>
   typeof value === "object" && value !== null;
@@ -160,11 +184,25 @@ export const normalizeOpenclawSkillsConfig = (
   return Object.keys(next).length > 0 ? next : null;
 };
 
+export const ensureBundledSkillsInstalled = (
+  current: OpenclawSkillsConfig | null,
+  skillKeys: readonly string[],
+): OpenclawSkillsConfig => {
+  let next = normalizeOpenclawSkillsConfig(current || {}) || {};
+  skillKeys.forEach((skillKey) => {
+    next = installSkillToConfig(next, skillKey);
+  });
+  return next;
+};
+
 export const readSkillsConfigFromRuntimeMetadata = (
   metadata: unknown,
 ): OpenclawSkillsConfig | null => {
   if (!isRecord(metadata)) return null;
-  return normalizeOpenclawSkillsConfig(metadata[SKILLS_METADATA_KEY]);
+  return ensureBundledSkillsInstalled(
+    normalizeOpenclawSkillsConfig(metadata[SKILLS_METADATA_KEY]),
+    DEFAULT_PREINSTALLED_BUNDLED_SKILLS,
+  );
 };
 
 export const installSkillToConfig = (

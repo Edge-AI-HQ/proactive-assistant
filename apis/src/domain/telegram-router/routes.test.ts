@@ -5,6 +5,7 @@ import {
   buildGoogleOAuthPrompt,
   classifyTelegramOutboundMessage,
   detectPromptLanguage,
+  hasGoogleWorkspaceIntentForTest,
   resetTelegramWelcomeDedupeForTest,
   shouldSuppressTelegramOutboundMessage,
 } from "./routes.js";
@@ -29,6 +30,13 @@ test("buildGoogleOAuthPrompt returns English mini app guidance without raw URL",
   assert.match(prompt, /bottom-left button in Telegram/);
   assert.match(prompt, /Manage -> Connect Google/);
   assert.doesNotMatch(prompt, /https?:\/\//);
+});
+
+test("hasGoogleWorkspaceIntentForTest matches calendar and drive requests", () => {
+  assert.equal(hasGoogleWorkspaceIntentForTest("我下一个日历是什么"), true);
+  assert.equal(hasGoogleWorkspaceIntentForTest("Show my next calendar event"), true);
+  assert.equal(hasGoogleWorkspaceIntentForTest("帮我看一下 Google Drive 里的文件"), true);
+  assert.equal(hasGoogleWorkspaceIntentForTest("What is the weather today?"), false);
 });
 
 test("classifyTelegramOutboundMessage marks welcome messages only", () => {
