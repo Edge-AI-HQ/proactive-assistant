@@ -51,6 +51,7 @@ interface AssistantMachineCreateArgs {
   machineName: string;
   gatewayToken: string;
   assistantBotToken?: string | null;
+  googleCredentialsB64?: string | null;
   liteLlmApiKey: string | null;
   onboardingProfileText?: string | null;
   onboardingProfileSource?: "connector" | "privy" | null;
@@ -305,6 +306,7 @@ export const shouldRecreateAssistantMachine = (
   latestAppDeployAtMs: number | null,
   desiredGatewayToken: string,
   desiredAssistantBotToken?: string | null,
+  desiredGoogleCredentialsB64?: string | null,
   desiredLiteLLMApiKey?: string | null,
   desiredOnboardingProfileText?: string | null,
   desiredOnboardingProfileSource?: "connector" | "privy" | null,
@@ -341,6 +343,11 @@ export const shouldRecreateAssistantMachine = (
   ).hash;
 
   const currentEnv = machine.config?.env;
+  const desiredGoogleB64 = (desiredGoogleCredentialsB64 || "").trim();
+  const currentGoogleB64 = (currentEnv?.[PINAI_GOOGLE_CREDENTIALS_B64_ENV] || "").trim();
+  if (currentGoogleB64 !== desiredGoogleB64) {
+    return true;
+  }
   const currentConfigHash = currentEnv?.PINAI_OPENCLAW_CONFIG_SHA256;
   if (
     typeof currentConfigHash !== "string" ||
@@ -431,7 +438,7 @@ export const createAssistantMachine = async (
     PINAI_ONBOARDING_PROFILE_B64: onboardingProfile?.base64 || "",
     PINAI_ONBOARDING_PROFILE_SHA256: onboardingProfile?.hash || "",
     PINAI_ONBOARDING_HAS_PROFILE: onboardingProfile ? "1" : "0",
-    [PINAI_GOOGLE_CREDENTIALS_B64_ENV]: "",
+    [PINAI_GOOGLE_CREDENTIALS_B64_ENV]: (args.googleCredentialsB64 || "").trim(),
     PINAI_FLY_MODE: "1",
     PINAI_GATEWAY_BIND: "loopback",
     PINAI_WORKSPACE_STATUS_PORT: String(PINAI_WORKSPACE_STATUS_PORT),

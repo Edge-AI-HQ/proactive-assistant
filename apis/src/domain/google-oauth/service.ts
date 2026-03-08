@@ -3,6 +3,7 @@ import path from 'node:path';
 import Docker from 'dockerode';
 import { decryptText, encryptText } from './crypto.js';
 import { config } from '../common/config.js';
+import { setAssistantRuntimeMetadataKey } from '../common/db/index.js';
 import { buildGoogleConnectedMessage } from '../telegram-bot/startPayload.js';
 import { buildMiniGoogleReturnUrl } from './miniapp.js';
 import { resolveGoogleOAuthClientSecretPath } from './client_secret_file.js';
@@ -12,6 +13,7 @@ import {
   GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE,
   GOOGLE_WORKSPACE_CLI_DEFAULT_CREDENTIALS_FILE,
   PINAI_GOOGLE_CREDENTIALS_B64_ENV,
+  GOOGLE_CREDENTIALS_RUNTIME_METADATA_KEY,
 } from '../container/providers/shared/google_workspace_credentials.js';
 import { getMachine, updateMachine } from '../container/providers/fly/fly_client.js';
 import {
@@ -36,6 +38,7 @@ const DEFAULT_SCOPES = [
   'email',
   'profile',
   'https://www.googleapis.com/auth/gmail.readonly',
+  'https://www.googleapis.com/auth/calendar.readonly',
   'https://www.googleapis.com/auth/drive.readonly',
 ].join(' ');
 
@@ -410,6 +413,33 @@ const waitForAssistantReadyAfterGoogleSync = async (
   await ensureGatewayAssistantReady(assistant);
 };
 
+const persistGoogleCredentialRuntimeMetadata = async (
+  telegramUserId: number,
+  googleCredentialsB64: string,
+): Promise<void> => {
+  const assistants = await listAssistantsByOwnerId(telegramUserId);
+  const assistant = assistants[0];
+  if (!assistant) return;
+  await setAssistantRuntimeMetadataKey(
+    assistant.id,
+    GOOGLE_CREDENTIALS_RUNTIME_METADATA_KEY,
+    googleCredentialsB64,
+  );
+};
+
+const clearGoogleCredentialRuntimeMetadata = async (
+  telegramUserId: number,
+): Promise<void> => {
+  const assistants = await listAssistantsByOwnerId(telegramUserId);
+  const assistant = assistants[0];
+  if (!assistant) return;
+  await setAssistantRuntimeMetadataKey(
+    assistant.id,
+    GOOGLE_CREDENTIALS_RUNTIME_METADATA_KEY,
+    "",
+  );
+};
+
 type SyncGoogleCredentialDeps = {
   ensureReady: (telegramUserId: number) => Promise<void>;
   syncCredential: (telegramUserId: number) => Promise<{ message: string }>;
@@ -469,6 +499,9 @@ export const syncGoogleCredentialAfterOAuthForTest = (
 
 export const disconnectGoogleOAuth = async (telegramUserId: number): Promise<void> => {
   await deleteGoogleCredentialByTelegramId(telegramUserId);
+  await clearGoogleCredentialRuntimeMetadata(telegramUserId).catch((error) => {
+    console.warn('[google-oauth] clear-runtime-metadata skipped:', error);
+  });
   await removeGoogleCredentialFromContainer(telegramUserId).catch((error) => {
     console.warn('[google-oauth] remove-from-container skipped:', error);
   });
@@ -527,6 +560,9 @@ export const syncCredentialToContainer = async (telegramUserId: number): Promise
   const runtime = await findLatestAssistantRuntimeByTelegramId(telegramUserId);
   const runtimeProvider = (runtime?.runtime_provider || '').toLowerCase();
   const { content, encoded } = await buildGoogleWorkspaceCredentialContent(telegramUserId);
+  await persistGoogleCredentialRuntimeMetadata(telegramUserId, encoded).catch((error) => {
+    console.warn('[google-oauth] persist-runtime-metadata skipped:', error);
+  });
 
   if (runtimeProvider === 'fly') {
     const machineId = parseFlyMachineId(runtime?.runtime_ref || null);

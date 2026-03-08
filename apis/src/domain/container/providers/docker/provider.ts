@@ -26,6 +26,7 @@ import {
   buildBaseContainerEnv,
 } from "../shared/webhook_params.js";
 import { PINAI_WORKSPACE_STATUS_PORT } from "../shared/workspace_ready.js";
+import { PINAI_GOOGLE_CREDENTIALS_B64_ENV } from "../shared/google_workspace_credentials.js";
 import { config as appConfig } from "../../../common/config.js";
 import { toOpenclawSkillsPayload } from "../../../skills/openclaw_skills.js";
 import { renderUserProfileMarkdown } from "../../../onboarding/profile_bootstrap.js";
@@ -609,6 +610,7 @@ export const dockerContainerRuntime: ContainerRuntime = {
       telegramRouterUrl,
       "/app/google/gws-credentials.json",
     );
+    containerEnv[PINAI_GOOGLE_CREDENTIALS_B64_ENV] = (params.googleCredentialsB64 || "").trim();
     assertNoP0SecretsInEnv(containerEnv, config);
 
     const container = await docker.createContainer({
