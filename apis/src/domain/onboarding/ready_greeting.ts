@@ -46,58 +46,69 @@ const computeDaysWithPinai = (joinDate: string | null): number | null => {
   return Math.max(1, Math.floor((Date.now() - joinedMs) / MS_PER_DAY));
 };
 
+const formatEnglishDayLabel = (days: number): string =>
+  days === 1 ? "day" : "days";
+
 export const buildApiReadyGreetingMessage = (
   input: ReadyGreetingRenderInput,
 ): string => {
   const joined = formatJoinDate(input.joinDate, input.locale);
 
   if (input.locale === "zh") {
-    const lines: string[] = ["你好，我已经在线了。", ""];
+    const lines: string[] = ["👋 我上线啦。", ""];
 
     if (input.subscriptionActive) {
-      lines.push("HiPin，尊贵的 PINAI 用户。感谢你一路陪伴。");
+      lines.push("💎 你好，感谢你一直陪伴 PINAI。");
     } else {
-      lines.push("欢迎回来，感谢你使用 PINAI。");
+      lines.push("💎 欢迎回来，感谢你使用 PINAI。");
     }
 
     if (joined && input.daysWithPinai) {
-      lines.push(`你从 ${joined} 加入 PINAI，到现在已经 ${input.daysWithPinai} 天了。`);
+      lines.push(`📅 你从 ${joined} 加入 PINAI，到现在已经 ${input.daysWithPinai} 天了。`);
     } else if (input.daysWithPinai) {
-      lines.push(`你已经和 PINAI 一起走过 ${input.daysWithPinai} 天了。`);
+      lines.push(`📅 你已经和 PINAI 一起走过 ${input.daysWithPinai} 天了。`);
     }
 
     lines.push("");
+    lines.push("开始前先确认两件事：");
     if (input.askPreferredName) {
-      lines.push("我该怎么称呼你？");
+      lines.push("• 我该怎么称呼你？");
     } else {
-      lines.push("如果你希望我换个称呼，直接告诉我。");
+      lines.push("• 如果你希望我换个称呼，直接告诉我。");
     }
-    lines.push("你希望我回答时更简洁，还是更详细？");
-    lines.push("今天想先处理什么？");
+    lines.push("• 你希望我回答时更简洁，还是更详细？");
+    lines.push("");
+    lines.push("✨ 今天想先处理什么？");
     return lines.join("\n");
   }
 
-  const lines: string[] = ["Hey, I’m online now.", ""];
+  const lines: string[] = ["👋 Hey, I’m online now.", ""];
   if (input.subscriptionActive) {
-    lines.push("HiPin. Thank you for staying with PINAI.");
+    lines.push("💎 Hi, thank you for staying with PINAI.");
   } else {
-    lines.push("Welcome back, and thanks for being with PINAI.");
+    lines.push("💎 Welcome back, and thanks for being with PINAI.");
   }
 
   if (joined && input.daysWithPinai) {
-    lines.push(`You joined PINAI on ${joined}, and it's been ${input.daysWithPinai} days together.`);
+    lines.push(
+      `📅 You joined PINAI on ${joined}, and it's been ${input.daysWithPinai} ${formatEnglishDayLabel(input.daysWithPinai)} together.`,
+    );
   } else if (input.daysWithPinai) {
-    lines.push(`You’ve been with PINAI for ${input.daysWithPinai} days.`);
+    lines.push(
+      `📅 You’ve been with PINAI for ${input.daysWithPinai} ${formatEnglishDayLabel(input.daysWithPinai)}.`,
+    );
   }
 
   lines.push("");
+  lines.push("Quick check before we start:");
   if (input.askPreferredName) {
-    lines.push("What should I call you?");
+    lines.push("• What should I call you?");
   } else {
-    lines.push("If you want me to use a different name, just tell me.");
+    lines.push("• If you want me to use a different name, just tell me.");
   }
-  lines.push("Do you want me to be concise or detailed?");
-  lines.push("How can I help you today?");
+  lines.push("• Do you want me to be concise or detailed?");
+  lines.push("");
+  lines.push("✨ How can I help you today?");
   return lines.join("\n");
 };
 
