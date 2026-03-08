@@ -342,14 +342,6 @@ async function handleTelegramApiProxy(req: Request, res: Response): Promise<void
     const body = hasBody ? toBodyBytes(req) : undefined;
 
     const proxyUrl = new URL(req.originalUrl, "http://localhost");
-    const inferredTgId = extractTelegramProxyTgId(
-      proxyUrl,
-      req.headers["content-type"] as string | undefined,
-      body,
-    );
-    if (inferredTgId !== undefined) {
-      setLogContextTelegramUserId(inferredTgId);
-    }
     const bodyInfo = extractTelegramProxyBodyInfo(proxyUrl, req.headers["content-type"] as string | undefined, body);
     if (bodyInfo.chatId) {
       setLogContextTelegramUserId(bodyInfo.chatId);
@@ -389,17 +381,6 @@ async function handleTelegramApiProxy(req: Request, res: Response): Promise<void
     const response = await fetch(telegramUrl, requestInit);
 
     const result = new Uint8Array(await response.arrayBuffer());
-    if (method.toLowerCase() === "getme") {
-      try {
-        const parsed = JSON.parse(new TextDecoder().decode(result)) as Record<string, unknown>;
-        const maybeId = parseNumeric((parsed.result as Record<string, unknown> | undefined)?.id);
-        if (maybeId !== undefined) {
-          setLogContextTelegramUserId(maybeId);
-        }
-      } catch {
-        // ignore parse errors for logging context
-      }
-    }
     res.status(response.status);
     res.setHeader("Content-Type", response.headers.get("content-type") || "application/json");
     res.send(Buffer.from(result));
@@ -784,61 +765,6 @@ function buildBodyInfo(chatId: number | undefined, contentType: string, text?: s
 
 function parseMultipartChatId(raw: string): number | undefined {
   return parseNumeric(parseMultipartField(raw, "chat_id"));
-}
-
-function extractTelegramProxyTgId(
-  url: URL,
-  contentType: string | undefined,
-  body?: Uint8Array,
-): number | undefined {
-  const fromQuery =
-    parseNumeric(url.searchParams.get("chat_id")) ??
-    parseNumeric(url.searchParams.get("user_id")) ??
-    parseNumeric(url.searchParams.get("from_id"));
-  if (fromQuery !== undefined) return fromQuery;
-
-  if (!body || body.byteLength === 0) return undefined;
-  const normalizedType = (contentType || "").toLowerCase();
-  const bodyText = decodeUtf8(body);
-  if (!bodyText) return undefined;
-
-  if (normalizedType.includes("application/json")) {
-    try {
-      const parsed = JSON.parse(bodyText) as Record<string, unknown>;
-      return (
-        parseNumeric(parsed.chat_id) ??
-        parseNumeric(parsed.user_id) ??
-        parseNumeric((parsed.from as Record<string, unknown> | undefined)?.id) ??
-        parseNumeric((parsed.chat as Record<string, unknown> | undefined)?.id) ??
-        parseNumeric(
-          ((parsed.message as Record<string, unknown> | undefined)?.chat as
-            | Record<string, unknown>
-            | undefined)?.id,
-        )
-      );
-    } catch {
-      return undefined;
-    }
-  }
-
-  if (normalizedType.includes("application/x-www-form-urlencoded")) {
-    const params = new URLSearchParams(bodyText);
-    return (
-      parseNumeric(params.get("chat_id")) ??
-      parseNumeric(params.get("user_id")) ??
-      parseNumeric(params.get("from_id"))
-    );
-  }
-
-  if (normalizedType.includes("multipart/form-data")) {
-    return (
-      parseNumeric(parseMultipartField(bodyText, "chat_id")) ??
-      parseNumeric(parseMultipartField(bodyText, "user_id")) ??
-      parseNumeric(parseMultipartField(bodyText, "from_id"))
-    );
-  }
-
-  return undefined;
 }
 
 function parseMultipartField(raw: string, fieldName: string): string | undefined {
