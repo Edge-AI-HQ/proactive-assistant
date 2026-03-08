@@ -5,7 +5,6 @@ import Docker from "dockerode";
 import { getContainerManagerRuntime } from "../../runtime.js";
 import type {
   ContainerManagerConfig,
-  ReadAssistantLiteLLMVirtualKey,
 } from "../../types.js";
 import type {
   AssistantContainerParams,
@@ -16,7 +15,6 @@ import type {
   ProbeOptions,
 } from "../../contracts.js";
 import { buildAssistantOpenclawConfig } from "../shared/openclaw_config.js";
-import { resolveAssistantLiteLLMApiKey as resolveAssistantLiteLLMApiKeyShared } from "../shared/assistant_litellm_key.js";
 import { DOCKER_FORBIDDEN_SECRET_ENV_KEYS } from "../shared/secret_env.js";
 import {
   assertNoP0SecretsInConfig,
@@ -41,10 +39,6 @@ const config = new Proxy({} as ContainerManagerConfig, {
     getContainerManagerRuntime().config[prop as keyof ContainerManagerConfig],
 });
 
-const readAssistantLiteLLMVirtualKey: ReadAssistantLiteLLMVirtualKey = (
-  assistant,
-) => getContainerManagerRuntime().readAssistantLiteLLMVirtualKey(assistant);
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -60,9 +54,8 @@ interface DockerStatusCodeError {
 }
 
 interface AssistantContainerDirs {
-  configDir: string;
-  dataDir: string;
-  tmpDir: string;
+  baseDir: string;
+  openclawDir: string;
   workspaceDir: string;
 }
 
@@ -120,10 +113,9 @@ const findBindSource = (
 const buildContainerDirs = (scopeDirName: string): AssistantContainerDirs => {
   const baseDir = path.join(process.cwd(), "data", scopeDirName);
   return {
-    configDir: path.join(baseDir, "config"),
-    dataDir: path.join(baseDir, "data"),
-    tmpDir: path.join(baseDir, "tmp"),
-    workspaceDir: path.join(baseDir, "workspace"),
+    baseDir,
+    openclawDir: path.join(baseDir, ".openclaw"),
+    workspaceDir: path.join(baseDir, ".openclaw", "workspace"),
   };
 };
 
@@ -390,9 +382,10 @@ const prepareDockerRuntime = (): void => {
   entries.forEach((entry) => {
     if (!entry.isDirectory()) return;
     if (!entry.name.startsWith("assistant-")) return;
-    const runtimeDataDir = path.join(dataDir, entry.name, "data");
-    if (!fs.existsSync(runtimeDataDir)) return;
-    sanitizeCronStore(runtimeDataDir);
+    // Cron store lives under .openclaw/ state dir
+    const stateDir = path.join(dataDir, entry.name, ".openclaw");
+    if (!fs.existsSync(stateDir)) return;
+    sanitizeCronStore(stateDir);
   });
 };
 
@@ -454,29 +447,6 @@ const waitForHttpProbe = async (
 // ---------------------------------------------------------------------------
 // Internal: container resolution & state normalization
 // ---------------------------------------------------------------------------
-
-const resolveDockerContainer = async (
-  containerId: string | null | undefined,
-  fallbackName: string,
-): Promise<Docker.Container | null> => {
-  if (containerId) {
-    try {
-      const container = docker.getContainer(containerId);
-      await container.inspect();
-      return container;
-    } catch {
-      // fall through to fallback lookup
-    }
-  }
-
-  try {
-    const container = docker.getContainer(fallbackName);
-    await container.inspect();
-    return container;
-  } catch {
-    return null;
-  }
-};
 
 const normalizeDockerState = (status: string | undefined): ContainerState => {
   const s = (status || "").toLowerCase();
@@ -574,16 +544,13 @@ export const dockerContainerRuntime: ContainerRuntime = {
     params: AssistantContainerParams,
   ): Promise<ContainerRef> {
     const dirs = getAssistantContainerDirs(params.assistantBotId);
-    ensureDir(dirs.configDir);
-    ensureDir(dirs.dataDir);
-    ensureDir(dirs.tmpDir);
+    ensureDir(dirs.openclawDir);
     ensureDir(dirs.workspaceDir);
 
-    // Resolve LiteLLM key
     const liteLlmApiKey = params.liteLlmApiKey;
 
     ensureOpenclawConfig(
-      dirs.configDir,
+      dirs.openclawDir,
       params.assistantBotId,
       params.gatewayToken,
       params.assistantBotToken,
@@ -595,7 +562,7 @@ export const dockerContainerRuntime: ContainerRuntime = {
       params.onboardingProfileText,
       params.onboardingProfileSource,
     );
-    sanitizeCronStore(dirs.dataDir);
+    sanitizeCronStore(dirs.openclawDir);
 
     const hostPort = params.containerPort
       ? String(params.containerPort)
@@ -615,15 +582,14 @@ export const dockerContainerRuntime: ContainerRuntime = {
     const apisPort = Number.parseInt(process.env.PORT || "3000", 10);
     const telegramRouterUrl = `http://host.docker.internal:${apisPort}`;
     const containerEnv: Record<string, string> = {
+      OPENCLAW_HOME: "/app",
       OPENCLAW_USER_ID: `assistant-${params.assistantBotId}`,
       OPENCLAW_GATEWAY_PORT: String(config.openclaw.gatewayPort),
       OPENCLAW_TELEGRAM_WEBHOOK_PORT: String(webhookPort),
       OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT: String(privateWebhookPort),
-      OPENCLAW_CONFIG_PATH: "/app/config/openclaw.json",
-      OPENCLAW_STATE_DIR: "/app/data",
-      NODE_COMPILE_CACHE: "/app/data/cache/node-compile-cache",
+      NODE_COMPILE_CACHE: "/app/cache/node-compile-cache",
       TELEGRAM_ROUTER_URL: telegramRouterUrl,
-      GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE: "/app/data/google/gws-credentials.json",
+      GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE: "/app/google/gws-credentials.json",
     };
     assertNoP0SecretsInEnv(containerEnv, config);
 
@@ -645,10 +611,7 @@ export const dockerContainerRuntime: ContainerRuntime = {
           [`${privateWebhookPort}/tcp`]: [{ HostPort: privateWebhookHostPort }],
         },
         Binds: [
-          `${dirs.configDir}:/app/config`,
-          `${dirs.dataDir}:/app/data`,
-          `${dirs.tmpDir}:/tmp`,
-          `${dirs.workspaceDir}:/root/.openclaw/workspace`,
+          `${dirs.baseDir}:/app`,
         ],
         Memory: config.container.memoryMb * 1024 * 1024,
         CpuShares: config.container.cpuShares,
@@ -788,17 +751,8 @@ export const dockerContainerRuntime: ContainerRuntime = {
 
     const dirs = getAssistantContainerDirs(params.assistantBotId);
     const binds = inspect?.HostConfig?.Binds;
-    const expectedBinds: Array<{ target: string; source: string }> = [
-      { target: "/app/config", source: dirs.configDir },
-      { target: "/app/data", source: dirs.dataDir },
-      { target: "/tmp", source: dirs.tmpDir },
-      { target: "/root/.openclaw/workspace", source: dirs.workspaceDir },
-    ];
-    const needsBindMigration = expectedBinds.some(({ target, source }) => {
-      const mountedSource = findBindSource(binds, target);
-      return mountedSource !== source;
-    });
-    if (needsBindMigration) return true;
+    const mountedSource = findBindSource(binds, "/app");
+    if (mountedSource !== dirs.baseDir) return true;
 
     const legacyTelegramBotToken = findEnvValue(
       inspect?.Config?.Env,
@@ -826,7 +780,7 @@ export const dockerContainerRuntime: ContainerRuntime = {
     // Write updated config and check if restart is needed
     const liteLlmApiKey = params.liteLlmApiKey;
     const { changed } = ensureOpenclawConfig(
-      dirs.configDir,
+      dirs.openclawDir,
       params.assistantBotId,
       params.gatewayToken,
       params.assistantBotToken,
@@ -839,9 +793,7 @@ export const dockerContainerRuntime: ContainerRuntime = {
       params.onboardingProfileSource,
     );
 
-    // Config change doesn't need recreation — just a restart (handled by orchestrator)
-    // But we sanitize cron store as a side effect
-    sanitizeCronStore(dirs.dataDir);
+    sanitizeCronStore(dirs.openclawDir);
 
     // If config changed and container is running, orchestrator should restart
     // We return false because recreation (destroy+create) is not needed

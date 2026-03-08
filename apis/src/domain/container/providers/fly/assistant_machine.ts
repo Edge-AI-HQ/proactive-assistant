@@ -13,7 +13,6 @@ import {
   assertNoP0SecretsInEnv,
 } from "../shared/secret_guard.js";
 import {
-  buildGoogleWorkspaceCredentialBootstrapShell,
   GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE,
   PINAI_GOOGLE_CREDENTIALS_B64_ENV,
 } from "../shared/google_workspace_credentials.js";
@@ -373,7 +372,7 @@ export const shouldRecreateAssistantMachine = (
     }
   }
 
-  if (currentEnv?.OPENCLAW_CONFIG_PATH !== "/app/data/config/openclaw.json") {
+  if (currentEnv?.OPENCLAW_HOME !== "/app") {
     return true;
   }
 
@@ -381,11 +380,7 @@ export const shouldRecreateAssistantMachine = (
   if (!Array.isArray(initExec) || initExec.length === 0) return false;
 
   const joined = initExec.join(" ");
-  const legacyConfig =
-    !joined.includes("[fly-ipv6-proxy]") ||
-    !joined.includes("[fly-tg-webhook-ipv6-proxy]") ||
-    !joined.includes("openclaw gateway --bind loopback");
-  if (legacyConfig) return true;
+  if (!joined.includes("pinai-entrypoint.sh")) return true;
 
   if (latestAppDeployAtMs === null) return false;
 
@@ -420,16 +415,15 @@ export const createAssistantMachine = async (
     ? extractOrigin(config.telegramRouter.webhookUrl)
     : extractOrigin(appConfig.publicBaseUrl);
   const env: Record<string, string> = {
+    OPENCLAW_HOME: "/app",
     OPENCLAW_USER_ID: `assistant-${args.assistantBotId}`,
     OPENCLAW_GATEWAY_PORT: String(config.openclaw.gatewayPort),
     OPENCLAW_TELEGRAM_WEBHOOK_PORT: String(normalizedWebhookPort),
     OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT: String(
       normalizedPrivateWebhookPort,
     ),
-    OPENCLAW_CONFIG_PATH: "/app/data/config/openclaw.json",
     OPENCLAW_CONFIG_B64: openclawPayload.base64,
-    OPENCLAW_STATE_DIR: "/app/data",
-    NODE_COMPILE_CACHE: "/app/data/cache/node-compile-cache",
+    NODE_COMPILE_CACHE: "/app/cache/node-compile-cache",
     PINAI_OPENCLAW_CONFIG_SHA256: openclawPayload.hash,
     PINAI_ONBOARDING_PROFILE_B64: onboardingProfile?.base64 || "",
     PINAI_ONBOARDING_PROFILE_SHA256: onboardingProfile?.hash || "",
@@ -437,45 +431,15 @@ export const createAssistantMachine = async (
     [PINAI_GOOGLE_CREDENTIALS_B64_ENV]: "",
     GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE,
     TELEGRAM_ROUTER_URL: routerOrigin,
+    PINAI_FLY_MODE: "1",
+    PINAI_GATEWAY_BIND: "loopback",
   };
   assertNoP0SecretsInEnv(env, config);
 
-  // Persist jiti + Node compile caches on the volume so restarts skip
-  // the expensive cold-compile phase (~7 min → seconds).
-  // On cold volumes, seed from the image-baked warmup layer first.
-  const cacheBootstrap = [
-    "mkdir -p /app/data/cache/jiti /app/data/cache/node-compile-cache",
-    '[ "$(ls -A /app/data/cache/jiti 2>/dev/null)" ] || cp -r /opt/jiti-warmup/. /app/data/cache/jiti/ 2>/dev/null || true',
-    '[ "$(ls -A /app/data/cache/node-compile-cache 2>/dev/null)" ] || cp -r /opt/node-compile-warmup/. /app/data/cache/node-compile-cache/ 2>/dev/null || true',
-    "ln -sfn /app/data/cache/jiti /tmp/jiti",
-    "export NODE_COMPILE_CACHE=/app/data/cache/node-compile-cache",
-  ].join(" && ");
-
-  const reminderPolicyBootstrap = [
-    "touch /app/data/workspace/AGENTS.md",
-    'grep -q "PINAI_REMINDER_POLICY_V1" /app/data/workspace/AGENTS.md || printf "\\n# PINAI_REMINDER_POLICY_V1\\n- For time-based reminders and scheduled follow-ups, ALWAYS use the cron tool (cron.add / cron.update / cron.run).\\n- NEVER use exec/process with sleep, while, timeout, or background shell jobs to simulate timers.\\n- For Telegram reminders, always send back to the same channel/account context where the user asked.\\n" >> /app/data/workspace/AGENTS.md',
-  ].join(" && ");
-
-  // 构建启动命令：前置准备 + 后台任务 + 主进程
-  const setupCommands = [
-    "mkdir -p /app/data/workspace /app/data/tmp /app/data/config /root/.openclaw",
-    'printf "%s" "$OPENCLAW_CONFIG_B64" | base64 -d > "$OPENCLAW_CONFIG_PATH"',
-    'if [ -n "${PINAI_ONBOARDING_PROFILE_B64:-}" ]; then printf "%s" "$PINAI_ONBOARDING_PROFILE_B64" | base64 -d > /app/data/workspace/USER.md; rm -f /app/data/workspace/user.md; else rm -f /app/data/workspace/USER.md /app/data/workspace/user.md; fi',
-    buildGoogleWorkspaceCredentialBootstrapShell(),
-    "ln -sfn /app/data/workspace /root/.openclaw/workspace",
-    reminderPolicyBootstrap,
-    cacheBootstrap,
-  ].join(" && ");
-
-  const backgroundTasks = [
-    // IPv6 代理们（后台进程）
-    `node -e 'const net=require("net");const port=Number(process.env.OPENCLAW_GATEWAY_PORT||${config.openclaw.gatewayPort});const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});' >/tmp/fly-ipv6-proxy.log 2>&1 &`,
-    `node -e 'const net=require("net");const port=Number(process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT||${normalizedWebhookPort});const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-tg-webhook-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-tg-webhook-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});' >/tmp/fly-tg-webhook-ipv6-proxy.log 2>&1 &`,
-    `node -e 'const net=require("net");const port=Number(process.env.OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT||${normalizedPrivateWebhookPort});const server=net.createServer((inbound)=>{const outbound=net.connect({host:"127.0.0.1",port});inbound.pipe(outbound);outbound.pipe(inbound);const close=()=>{inbound.destroy();outbound.destroy();};inbound.on("error",close);outbound.on("error",close);});server.on("error",(err)=>{console.error("[fly-tg-private-webhook-ipv6-proxy] fatal",err);process.exit(1);});server.listen({host:"::",port,ipv6Only:true},()=>{console.log(\`[fly-tg-private-webhook-ipv6-proxy] listening on [::]:\${port} -> 127.0.0.1:\${port}\`);});' >/tmp/fly-tg-private-webhook-ipv6-proxy.log 2>&1 &`,
-    "sleep 0.2",
-  ].join(" ");
-
-  const bootstrapCommand = `${setupCommands} && ${backgroundTasks} && exec openclaw gateway --bind loopback`;
+  // All bootstrap logic (secret decode, cache seed, workspace init,
+  // IPv6 proxies) is handled by pinai-entrypoint.sh baked into the image.
+  // The entrypoint reads from the env vars set above.
+  const bootstrapCommand = "exec pinai-entrypoint.sh";
 
   const regions = config.fly.regionFallbacks?.length
     ? config.fly.regionFallbacks
@@ -502,7 +466,7 @@ export const createAssistantMachine = async (
               cpus: Math.max(1, config.fly.machineCpus),
               memory_mb: config.container.memoryMb,
             },
-            mounts: [{ volume: volume.id, path: "/app/data" }],
+            mounts: [{ volume: volume.id, path: "/app" }],
             restart: {
               policy: "on-failure",
               max_retries: 3,
