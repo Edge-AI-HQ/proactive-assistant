@@ -46,6 +46,35 @@ const mergeLogMeta = (args: unknown[], meta: Record<string, unknown>): unknown[]
   return [...args, meta];
 };
 
+const safeJsonStringify = (value: unknown): string => {
+  const seen = new WeakSet<object>();
+  return JSON.stringify(value, (_key, raw) => {
+    if (typeof raw === "bigint") return raw.toString();
+    if (raw instanceof Error) {
+      return {
+        name: raw.name,
+        message: raw.message,
+        stack: raw.stack?.replace(/\n/g, "\\n"),
+      };
+    }
+    if (raw && typeof raw === "object") {
+      const asObject = raw as object;
+      if (seen.has(asObject)) return "[Circular]";
+      seen.add(asObject);
+    }
+    if (typeof raw === "string") return raw.replace(/\n/g, "\\n");
+    return raw;
+  });
+};
+
+const toOneLineString = (arg: unknown): string => {
+  if (typeof arg === "string") return arg.replace(/\n/g, "\\n");
+  return safeJsonStringify(arg);
+};
+
+const formatLogLine = (args: unknown[]): string =>
+  args.map((arg) => toOneLineString(arg)).join(" ");
+
 const patchConsole = (): void => {
   if (consolePatched) return;
   consolePatched = true;
@@ -54,17 +83,13 @@ const patchConsole = (): void => {
     const original = console[level].bind(console);
     console[level] = (...args: unknown[]) => {
       const store = logContext.getStore();
-      if (!store) {
-        original(...args);
-        return;
-      }
-
-      original(
-        ...mergeLogMeta(args, {
-          trace_id: store.traceId,
-          tg_id: store.tgId ?? "n/a",
-        }),
-      );
+      const finalArgs = store
+        ? mergeLogMeta(args, {
+            trace_id: store.traceId,
+            tg_id: store.tgId ?? "n/a",
+          })
+        : args;
+      original(formatLogLine(finalArgs));
     };
   }
 };
