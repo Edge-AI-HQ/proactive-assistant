@@ -86,7 +86,7 @@ const patchConsole = (): void => {
         original(line);
         return;
       }
-      original(`${line} | trace_id=${store.traceId}|tg_id=${store.tgId ?? "n/a"}`);
+      original(`${line}|trace_id=${store.traceId}|tg_id=${store.tgId ?? "n/a"}`);
     };
   }
 };
