@@ -336,9 +336,28 @@ const App = () => {
       setShowManageAgent(true);
       showToast("Google disconnected.", "success");
     } catch (e) {
-      showToast(`Disconnect failed: ${e instanceof Error ? e.message : "unknown"}`);
+      const message = e instanceof Error ? e.message : "unknown";
+      if (/unauthorized/i.test(message)) {
+        window.location.reload();
+        return;
+      }
+      showToast(`Disconnect failed: ${message}`);
     } finally {
       setBusy("none");
+    }
+  };
+
+  const handleOpenManage = async () => {
+    try {
+      await loadState();
+      setShowManageAgent(true);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "unknown";
+      if (/unauthorized/i.test(message)) {
+        window.location.reload();
+        return;
+      }
+      showToast(`Unable to open manage: ${message}`);
     }
   };
 
@@ -488,7 +507,9 @@ const App = () => {
             manageOpen={showManageAgent}
             google={state.google ?? undefined}
             googleBusy={busy === "google-disconnect"}
-            onOpenManage={() => setShowManageAgent(true)}
+            onOpenManage={() => {
+              void handleOpenManage();
+            }}
             onCloseManage={() => setShowManageAgent(false)}
             onChangePlan={() => setShowChangePlan(true)}
             onDeleteAccount={handleDeleteAccount}

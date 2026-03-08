@@ -21,6 +21,10 @@ import { sendTelegramMessage } from "../telegram/notify.js";
 import { createAssistantWithoutContainer } from "../claw-assistant/service.js";
 import { shouldEnsureAssistantRuntime } from "../claw-assistant/runtimeHealth.js";
 import { summarizeContainerProvisionResults } from "./containerProvisionMessage.js";
+import {
+  reconcileProvisionResultsForNotification,
+  type ProvisionNotifyResult,
+} from "./subscriptionSync_notify_results.js";
 
 const SUBSCRIPTION_PERIOD_APPLY_LOCK_KEY = 319_903;
 let isApplyingSubscriptionPeriodsInProcess = false;
@@ -436,10 +440,7 @@ export async function syncSubscriptionFromStripe(
           const chatId = Number(telegram_user_id);
           void (async () => {
             try {
-              const results: Array<{
-                label: string;
-                state: "ready" | "starting" | "failed";
-              }> = [];
+              const results: ProvisionNotifyResult[] = [];
               const notifyAssistantIds = new Set(toNotify.map((a) => a.id));
               for (const assistant of toStart) {
                 const label =
@@ -458,6 +459,7 @@ export async function syncSubscriptionFromStripe(
                   );
                   if (notifyAssistantIds.has(assistant.id)) {
                     results.push({
+                      assistantId: assistant.id,
                       label: displayLabel,
                       state: ensureResult.ready ? "ready" : "starting",
                     });
@@ -467,7 +469,11 @@ export async function syncSubscriptionFromStripe(
                   );
                 } catch (error: unknown) {
                   if (notifyAssistantIds.has(assistant.id)) {
-                    results.push({ label: displayLabel, state: "failed" });
+                    results.push({
+                      assistantId: assistant.id,
+                      label: displayLabel,
+                      state: "failed",
+                    });
                   }
                   console.error(
                     `Failed to start container for assistant ${assistant.id}`,
@@ -479,7 +485,18 @@ export async function syncSubscriptionFromStripe(
                   );
                 }
               }
-              const summary = summarizeContainerProvisionResults(results);
+              const latestAssistants = await listAssistantsByOwnerTelegramId(
+                Number(telegram_user_id),
+              );
+              const latestStatuses = new Map(
+                latestAssistants.map((assistant) => [
+                  assistant.id,
+                  assistant.container_status ?? "",
+                ]),
+              );
+              const summary = summarizeContainerProvisionResults(
+                reconcileProvisionResultsForNotification(results, latestStatuses),
+              );
               const parts: string[] = [];
               if (summary.ready.length > 0) {
                 parts.push(
@@ -923,10 +940,7 @@ export async function handleInvoicePaid(
       // 异步启动容器
       void (async () => {
         try {
-          const results: Array<{
-            label: string;
-            state: "ready" | "starting" | "failed";
-          }> = [];
+          const results: ProvisionNotifyResult[] = [];
           const notifyAssistantIds = new Set(toNotify.map((a) => a.id));
           for (const assistant of toStart) {
             const label =
@@ -943,6 +957,7 @@ export async function handleInvoicePaid(
               );
               if (notifyAssistantIds.has(assistant.id)) {
                 results.push({
+                  assistantId: assistant.id,
                   label: displayLabel,
                   state: result.ready ? "ready" : "starting",
                 });
@@ -958,7 +973,11 @@ export async function handleInvoicePaid(
               }
             } catch (error: unknown) {
               if (notifyAssistantIds.has(assistant.id)) {
-                results.push({ label: displayLabel, state: "failed" });
+                results.push({
+                  assistantId: assistant.id,
+                  label: displayLabel,
+                  state: "failed",
+                });
               }
               console.error(
                 `[payment] Failed to start container for assistant ${assistant.id}`,
@@ -970,7 +989,18 @@ export async function handleInvoicePaid(
             }
           }
 
-          const summary = summarizeContainerProvisionResults(results);
+          const latestAssistants = await listAssistantsByOwnerTelegramId(
+            Number(subscription.telegram_user_id),
+          );
+          const latestStatuses = new Map(
+            latestAssistants.map((assistant) => [
+              assistant.id,
+              assistant.container_status ?? "",
+            ]),
+          );
+          const summary = summarizeContainerProvisionResults(
+            reconcileProvisionResultsForNotification(results, latestStatuses),
+          );
           const parts: string[] = [];
 
           if (summary.ready.length > 0) {
