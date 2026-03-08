@@ -82,7 +82,37 @@ export const requestLogContextMiddleware: RequestHandler = (req, res, next) => {
     undefined;
 
   const context: LogContext = seedTgId ? { traceId, tgId: seedTgId } : { traceId };
-  logContext.run(context, next);
+  const startedAt = Date.now();
+
+  logContext.run(context, () => {
+    console.log("[http:in]", {
+      method: req.method,
+      path: req.path,
+      ip: req.ip,
+      ua: req.get("user-agent") ?? "",
+    });
+
+    res.on("finish", () => {
+      console.log("[http:out]", {
+        method: req.method,
+        path: req.path,
+        status: res.statusCode,
+        duration_ms: Date.now() - startedAt,
+      });
+    });
+
+    res.on("close", () => {
+      if (res.writableEnded) return;
+      console.warn("[http:out]", {
+        method: req.method,
+        path: req.path,
+        status: "closed",
+        duration_ms: Date.now() - startedAt,
+      });
+    });
+
+    next();
+  });
 };
 
 export const setLogContextTelegramUserId = (telegramUserId: number | string): void => {
