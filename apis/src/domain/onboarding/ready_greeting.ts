@@ -48,6 +48,13 @@ export const buildReadyGreetingRetryDelaysForTest = (): number[] =>
     buildReadyGreetingRetryDelayMs(index + 1),
   );
 
+export const buildReadyGreetingFallbackMessage = (): string =>
+  [
+    "Hey, I’m online now.",
+    "",
+    "Tell me what you want to work on first.",
+  ].join("\n");
+
 const postPrivateWebhook = async (
   update: Record<string, unknown>,
 ): Promise<boolean> => {

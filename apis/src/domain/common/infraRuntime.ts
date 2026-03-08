@@ -13,7 +13,10 @@ import {
 } from '../litellm/index.js';
 import { sendTelegramMessage } from '../telegram/notify.js';
 import { config } from './config.js';
-import { triggerReadyGreetingForAssistant } from '../onboarding/ready_greeting.js';
+import {
+  buildReadyGreetingFallbackMessage,
+  triggerReadyGreetingForAssistant,
+} from '../onboarding/ready_greeting.js';
 import {
   getUserByTelegramId,
   listAssistantsByOwnerTelegramId,
@@ -105,6 +108,17 @@ const containerNotifier: ContainerNotifier = {
         console.warn(
           `[container] onboarding greeting not delivered for assistant ${options.assistantId}`,
         );
+        if (readyNotifyClaimed) {
+          await sendTelegramMessage(
+            telegramUserId,
+            buildReadyGreetingFallbackMessage(),
+          ).catch((e) =>
+            console.warn(
+              `[container] fallback onboarding greeting failed for assistant ${options.assistantId}`,
+              e,
+            ),
+          );
+        }
       }
       return;
     }
