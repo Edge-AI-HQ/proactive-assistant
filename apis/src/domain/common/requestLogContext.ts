@@ -47,10 +47,22 @@ const mergeLogMeta = (args: unknown[], meta: Record<string, unknown>): unknown[]
   return [...args, meta];
 };
 
+const previewBuffer = (buffer: Buffer): string => {
+  const text = buffer.toString("utf8");
+  const hasReplacement = text.includes("\uFFFD");
+  if (!hasReplacement) return text;
+  return JSON.stringify({
+    type: "buffer",
+    encoding: "base64",
+    data: buffer.toString("base64"),
+  });
+};
+
 const safeJsonStringify = (value: unknown): string => {
   const seen = new WeakSet<object>();
   return JSON.stringify(value, (_key, raw) => {
     if (typeof raw === "bigint") return raw.toString();
+    if (Buffer.isBuffer(raw)) return previewBuffer(raw);
     if (raw instanceof Error) {
       return {
         name: raw.name,
@@ -78,6 +90,7 @@ const formatLogLine = (args: unknown[]): string =>
 
 const previewValue = (value: unknown): unknown => {
   if (value === undefined) return undefined;
+  if (Buffer.isBuffer(value)) return previewBuffer(value);
   if (typeof value === "string") return value;
   return safeJsonStringify(value);
 };
