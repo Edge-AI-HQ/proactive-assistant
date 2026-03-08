@@ -24,7 +24,6 @@ const toPositiveIntString = (value: unknown): string | undefined => {
   return raw;
 };
 
-const MAX_PREVIEW_CHARS = 4000;
 
 const mergeLogMeta = (args: unknown[], meta: Record<string, unknown>): unknown[] => {
   if (args.length === 0) return [meta];
@@ -77,16 +76,10 @@ const toOneLineString = (arg: unknown): string => {
 const formatLogLine = (args: unknown[]): string =>
   args.map((arg) => toOneLineString(arg)).join(" ");
 
-const trimPreview = (value: string): string => {
-  if (value.length <= MAX_PREVIEW_CHARS) return value;
-  return `${value.slice(0, MAX_PREVIEW_CHARS)}...[truncated:${value.length - MAX_PREVIEW_CHARS}]`;
-};
-
 const previewValue = (value: unknown): unknown => {
   if (value === undefined) return undefined;
-  if (typeof value === "string") return trimPreview(value);
-  const serialized = safeJsonStringify(value);
-  return trimPreview(serialized);
+  if (typeof value === "string") return value;
+  return safeJsonStringify(value);
 };
 
 const patchConsole = (): void => {
