@@ -1,0 +1,98 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import {
+  buildGoogleOAuthPrompt,
+  classifyTelegramOutboundMessage,
+  detectPromptLanguage,
+  resetTelegramWelcomeDedupeForTest,
+  shouldSuppressTelegramOutboundMessage,
+} from "./routes.js";
+
+test("detectPromptLanguage uses Chinese when the user asks in Chinese", () => {
+  assert.equal(detectPromptLanguage("给我最新的10封邮件"), "zh");
+});
+
+test("detectPromptLanguage defaults to English for non-Chinese requests", () => {
+  assert.equal(detectPromptLanguage("Show me my latest 10 emails"), "en");
+});
+
+test("buildGoogleOAuthPrompt returns Chinese mini app guidance without raw URL", () => {
+  const prompt = buildGoogleOAuthPrompt("给我最新的10封邮件");
+  assert.match(prompt, /左下角/);
+  assert.match(prompt, /Manage -> Connect Google/);
+  assert.doesNotMatch(prompt, /https?:\/\//);
+});
+
+test("buildGoogleOAuthPrompt returns English mini app guidance without raw URL", () => {
+  const prompt = buildGoogleOAuthPrompt("Show me my latest 10 emails");
+  assert.match(prompt, /bottom-left button in Telegram/);
+  assert.match(prompt, /Manage -> Connect Google/);
+  assert.doesNotMatch(prompt, /https?:\/\//);
+});
+
+test("classifyTelegramOutboundMessage marks welcome messages only", () => {
+  assert.equal(
+    classifyTelegramOutboundMessage("Welcome back. What should I call you? How can I help you today?"),
+    "welcome",
+  );
+  assert.equal(classifyTelegramOutboundMessage("Here are your latest 10 emails"), null);
+});
+
+test("shouldSuppressTelegramOutboundMessage dedupes repeated welcome sendMessage calls", () => {
+  resetTelegramWelcomeDedupeForTest();
+
+  const first = shouldSuppressTelegramOutboundMessage(
+    "sendMessage",
+    {
+      chatId: 6142814327,
+      contentType: "application/json",
+      text: "Welcome back. What should I call you? How can I help you today?",
+    },
+    1_000,
+  );
+  const second = shouldSuppressTelegramOutboundMessage(
+    "sendMessage",
+    {
+      chatId: 6142814327,
+      contentType: "application/json",
+      text: "Good to see you again. How can I help you today?",
+    },
+    2_000,
+  );
+
+  assert.equal(first, false);
+  assert.equal(second, true);
+});
+
+test("shouldSuppressTelegramOutboundMessage does not suppress normal business replies", () => {
+  resetTelegramWelcomeDedupeForTest();
+
+  const suppressed = shouldSuppressTelegramOutboundMessage(
+    "sendMessage",
+    {
+      chatId: 6142814327,
+      contentType: "application/json",
+      text: "Here are your latest 10 emails.",
+    },
+    1_000,
+  );
+
+  assert.equal(suppressed, false);
+});
+
+test("shouldSuppressTelegramOutboundMessage ignores sendMessageDraft", () => {
+  resetTelegramWelcomeDedupeForTest();
+
+  const suppressed = shouldSuppressTelegramOutboundMessage(
+    "sendMessageDraft",
+    {
+      chatId: 6142814327,
+      contentType: "application/json",
+      text: "Welcome back. What should I call you?",
+    },
+    1_000,
+  );
+
+  assert.equal(suppressed, false);
+});
