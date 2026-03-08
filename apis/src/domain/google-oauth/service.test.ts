@@ -8,6 +8,7 @@ import {
   resolveGoogleOAuthClientForTest,
   resetGoogleOAuthClientCacheForTest,
   sanitizeGoogleTokenPayload,
+  syncGoogleCredentialAfterOAuthForTest,
 } from './service.js';
 
 test('sanitizeGoogleTokenPayload strips raw oauth tokens but keeps profile fields', () => {
@@ -79,4 +80,51 @@ test('resolveGoogleOAuthClientForTest caches parsed client secret file', () => {
     else process.env.GOOGLE_OAUTH_REDIRECT_URI = previousRedirect;
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('syncGoogleCredentialAfterOAuthForTest retries sync after first failure', async () => {
+  let ensureCalls = 0;
+  let syncCalls = 0;
+  let slept = 0;
+
+  const result = await syncGoogleCredentialAfterOAuthForTest(6142814327, {
+    maxAttempts: 3,
+    ensureReady: async () => {
+      ensureCalls += 1;
+    },
+    syncCredential: async () => {
+      syncCalls += 1;
+      if (syncCalls === 1) {
+        throw new Error('No fly runtime_ref found for this user');
+      }
+      return { message: 'ok' };
+    },
+    sleep: async () => {
+      slept += 1;
+    },
+  });
+
+  assert.equal(result.synced, true);
+  assert.equal(result.attempts, 2);
+  assert.equal(syncCalls, 2);
+  assert.equal(ensureCalls, 3);
+  assert.equal(slept, 1);
+});
+
+test('syncGoogleCredentialAfterOAuthForTest reports failure after max retries', async () => {
+  let syncCalls = 0;
+  const result = await syncGoogleCredentialAfterOAuthForTest(6142814327, {
+    maxAttempts: 2,
+    ensureReady: async () => {},
+    syncCredential: async () => {
+      syncCalls += 1;
+      throw new Error('sync failed');
+    },
+    sleep: async () => {},
+  });
+
+  assert.equal(result.synced, false);
+  assert.equal(result.attempts, 2);
+  assert.equal(syncCalls, 2);
+  assert.match(result.error || '', /sync failed/);
 });

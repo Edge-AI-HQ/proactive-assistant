@@ -4,13 +4,19 @@ export const extractStartPayload = (text: string | undefined): string => {
   return (match?.[1] || '').trim();
 };
 
-export const buildGoogleConnectedMessage = (email: string | null): string => {
+export const buildGoogleConnectedMessage = (
+  email: string | null,
+  syncedToContainer = true,
+): string => {
   const mailbox = email?.trim() || 'your Google mailbox';
+  const syncLine = syncedToContainer
+    ? 'Credentials have been synced to your assistant container.'
+    : 'Authorization is done, but credential sync is still warming up. Please retry in about 10-20 seconds.';
   return [
     `✅ <b>Google connected</b>`,
     '',
     `Connected mailbox: <code>${mailbox}</code>`,
-    'Credentials have been synced to your assistant container.',
+    syncLine,
     '',
     'You can now ask things like:',
     '• Show me my latest 10 emails',

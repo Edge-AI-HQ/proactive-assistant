@@ -48,6 +48,8 @@ const BLOCKED_TG_METHODS = new Set([
 
 const WELCOME_MESSAGE_DEDUPE_WINDOW_MS = 45_000;
 const welcomeMessageDedupeCache = new Map<number, number>();
+const OAUTH_PROMPT_DEDUPE_WINDOW_MS = 20_000;
+const oauthPromptDedupeCache = new Map<number, { text: string; sentAt: number }>();
 
 export const registerTelegramRouterRoutes = (app: Application): void => {
   app.post("/webhook/telegram", express.json({ limit: "10mb" }), (req, res) => {
@@ -323,9 +325,35 @@ async function tryHandleGoogleOAuthPrompt(
   const connected = await hasGoogleOAuthConnection(chatId);
   if (connected) return false;
 
+  const now = Date.now();
+  if (shouldSuppressGoogleOAuthPrompt(chatId, text, now)) {
+    return true;
+  }
+
   await sendFallbackMessageBySource(source, chatId, buildGoogleOAuthPrompt(text));
   return true;
 }
+
+function shouldSuppressGoogleOAuthPrompt(
+  chatId: number,
+  text: string | null,
+  nowMs = Date.now(),
+): boolean {
+  const normalizedText = (text || '').trim().toLowerCase();
+  const previous = oauthPromptDedupeCache.get(chatId);
+  oauthPromptDedupeCache.set(chatId, { text: normalizedText, sentAt: nowMs });
+  if (!previous) return false;
+  return (
+    previous.text === normalizedText &&
+    nowMs - previous.sentAt < OAUTH_PROMPT_DEDUPE_WINDOW_MS
+  );
+}
+
+export const shouldSuppressGoogleOAuthPromptForTest = (
+  chatId: number,
+  text: string | null,
+  nowMs = Date.now(),
+): boolean => shouldSuppressGoogleOAuthPrompt(chatId, text, nowMs);
 
 async function handleTelegramApiProxy(req: Request, res: Response): Promise<void> {
   try {
@@ -816,6 +844,7 @@ export function shouldSuppressTelegramOutboundMessage(
 
 export function resetTelegramWelcomeDedupeForTest(): void {
   welcomeMessageDedupeCache.clear();
+  oauthPromptDedupeCache.clear();
 }
 
 function parseNumeric(value: unknown): number | undefined {

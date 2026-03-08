@@ -22,7 +22,7 @@ metadata:
 
 In our container, prefer:
 
-- `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=/app/data/google/gws-credentials.json`
+- `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=/app/google/gws-credentials.json`
 - fallback `~/.config/gws/credentials.json`
 
 If either credential file exists, do not ask user to re-authorize first. Execute `gws`.

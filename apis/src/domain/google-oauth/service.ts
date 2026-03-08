@@ -244,6 +244,7 @@ const executeContainerShell = async (
 const sendGoogleConnectedBotMessage = async (
   telegramUserId: number,
   email: string | null,
+  syncedToContainer: boolean,
 ): Promise<void> => {
   const botToken = config.telegram.token.trim();
   if (!botToken) return;
@@ -252,7 +253,7 @@ const sendGoogleConnectedBotMessage = async (
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       chat_id: telegramUserId,
-      text: buildGoogleConnectedMessage(email),
+      text: buildGoogleConnectedMessage(email, syncedToContainer),
       parse_mode: 'HTML',
       disable_web_page_preview: true,
     }),
@@ -380,13 +381,14 @@ export const handleGoogleOAuthCallback = async (query: {
     rawPayload: safePayload,
   });
 
-  await syncCredentialToContainer(stateRow.telegramUserId).catch((error) => {
-    console.warn('[google-oauth] sync-to-container skipped:', error);
-  });
-  await waitForAssistantReadyAfterGoogleSync(stateRow.telegramUserId).catch((error) => {
-    console.warn('[google-oauth] ready-after-sync skipped:', error);
-  });
-  await sendGoogleConnectedBotMessage(stateRow.telegramUserId, email).catch((error) => {
+  const syncResult = await syncGoogleCredentialAfterOAuth(stateRow.telegramUserId);
+  if (!syncResult.synced) {
+    console.warn(
+      `[google-oauth] credential sync incomplete for tg=${stateRow.telegramUserId}: ${syncResult.error || 'unknown error'}`,
+    );
+  }
+
+  await sendGoogleConnectedBotMessage(stateRow.telegramUserId, email, syncResult.synced).catch((error) => {
     console.warn('[google-oauth] bot-confirmation skipped:', error);
   });
 
@@ -407,6 +409,63 @@ const waitForAssistantReadyAfterGoogleSync = async (
   if (!assistant) return;
   await ensureGatewayAssistantReady(assistant);
 };
+
+type SyncGoogleCredentialDeps = {
+  ensureReady: (telegramUserId: number) => Promise<void>;
+  syncCredential: (telegramUserId: number) => Promise<{ message: string }>;
+  sleep: (ms: number) => Promise<void>;
+  maxAttempts: number;
+};
+
+type SyncGoogleCredentialResult = {
+  synced: boolean;
+  attempts: number;
+  error?: string;
+};
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+const syncGoogleCredentialAfterOAuth = async (
+  telegramUserId: number,
+  overrides?: Partial<SyncGoogleCredentialDeps>,
+): Promise<SyncGoogleCredentialResult> => {
+  const deps: SyncGoogleCredentialDeps = {
+    ensureReady: waitForAssistantReadyAfterGoogleSync,
+    syncCredential: syncCredentialToContainer,
+    sleep,
+    maxAttempts: 3,
+    ...overrides,
+  };
+
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= deps.maxAttempts; attempt += 1) {
+    try {
+      await deps.ensureReady(telegramUserId);
+      await deps.syncCredential(telegramUserId);
+      await deps.ensureReady(telegramUserId);
+      return { synced: true, attempts: attempt };
+    } catch (error) {
+      lastError = error;
+      if (attempt < deps.maxAttempts) {
+        await deps.sleep(Math.min(2000, attempt * 500));
+      }
+    }
+  }
+
+  return {
+    synced: false,
+    attempts: deps.maxAttempts,
+    error: lastError instanceof Error ? lastError.message : String(lastError || 'unknown'),
+  };
+};
+
+export const syncGoogleCredentialAfterOAuthForTest = (
+  telegramUserId: number,
+  overrides?: Partial<SyncGoogleCredentialDeps>,
+): Promise<SyncGoogleCredentialResult> =>
+  syncGoogleCredentialAfterOAuth(telegramUserId, overrides);
 
 export const disconnectGoogleOAuth = async (telegramUserId: number): Promise<void> => {
   await deleteGoogleCredentialByTelegramId(telegramUserId);
