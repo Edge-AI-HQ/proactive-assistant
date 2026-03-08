@@ -6,6 +6,7 @@ import {
   classifyTelegramOutboundMessage,
   detectPromptLanguage,
   hasGoogleWorkspaceIntentForTest,
+  shouldPromptGoogleOAuthForTest,
   resetTelegramWelcomeDedupeForTest,
   shouldSuppressTelegramOutboundMessage,
 } from "./routes.js";
@@ -37,6 +38,11 @@ test("hasGoogleWorkspaceIntentForTest matches calendar and drive requests", () =
   assert.equal(hasGoogleWorkspaceIntentForTest("Show my next calendar event"), true);
   assert.equal(hasGoogleWorkspaceIntentForTest("帮我看一下 Google Drive 里的文件"), true);
   assert.equal(hasGoogleWorkspaceIntentForTest("What is the weather today?"), false);
+});
+
+test("shouldPromptGoogleOAuthForTest ignores private onboarding triggers", () => {
+  assert.equal(shouldPromptGoogleOAuthForTest("private", "Show me my latest 10 emails"), false);
+  assert.equal(shouldPromptGoogleOAuthForTest("public", "Show me my latest 10 emails"), true);
 });
 
 test("classifyTelegramOutboundMessage marks welcome messages only", () => {

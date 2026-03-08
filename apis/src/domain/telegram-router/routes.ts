@@ -285,6 +285,11 @@ function isGoogleWorkspaceIntent(text: string | null): boolean {
 export const hasGoogleWorkspaceIntentForTest = (text: string | null): boolean =>
   isGoogleWorkspaceIntent(text);
 
+export const shouldPromptGoogleOAuthForTest = (
+  source: WebhookSource,
+  text: string | null,
+): boolean => source === "public" && isGoogleWorkspaceIntent(text);
+
 export function detectPromptLanguage(text: string | null): PromptLanguage {
   return /[\u3400-\u9fff]/.test(text || "") ? "zh" : "en";
 }
@@ -313,7 +318,7 @@ async function tryHandleGoogleOAuthPrompt(
   chatId: number,
   text: string | null,
 ): Promise<boolean> {
-  if (!isGoogleWorkspaceIntent(text)) return false;
+  if (!shouldPromptGoogleOAuthForTest(source, text)) return false;
   const connected = await hasGoogleOAuthConnection(chatId);
   if (connected) return false;
 
