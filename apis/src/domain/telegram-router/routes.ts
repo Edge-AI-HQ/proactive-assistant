@@ -19,6 +19,14 @@ type ContainerInfo = {
   host_port: number | null;
 };
 
+type PromptLanguage = "zh" | "en";
+
+type TelegramProxyBodyInfo = {
+  chatId?: number;
+  contentType: string;
+  text?: string;
+};
+
 type UserState =
   | { phase: "no_user" }
   | { phase: "no_subscription"; assistantId?: number }
@@ -36,6 +44,9 @@ const BLOCKED_TG_METHODS = new Set([
   "setwebhook",
   "deletewebhook",
 ]);
+
+const WELCOME_MESSAGE_DEDUPE_WINDOW_MS = 45_000;
+const welcomeMessageDedupeCache = new Map<number, number>();
 
 export const registerTelegramRouterRoutes = (app: Application): void => {
   app.post("/webhook/telegram", express.json({ limit: "10mb" }), (req, res) => {
@@ -229,13 +240,27 @@ function isMailIntent(text: string | null): boolean {
   return MAIL_INTENT_PATTERN.test(text);
 }
 
-function buildGoogleManageUrl(): string {
-  const base = (config.publicBaseUrl || "").trim().replace(/\/+$/, "");
-  if (base) {
-    return `${base}/mini?manage=1`;
+export function detectPromptLanguage(text: string | null): PromptLanguage {
+  return /[\u3400-\u9fff]/.test(text || "") ? "zh" : "en";
+}
+
+export function buildGoogleOAuthPrompt(text: string | null): string {
+  const language = detectPromptLanguage(text);
+  if (language === "zh") {
+    return [
+      "你还没有连接 Google 邮箱。",
+      "请点击 Telegram 左下角的 PIN AI mini app。",
+      "进入 Manage -> Connect Google 完成授权。",
+      "授权完成后，回到这里再发送你刚才的请求。",
+    ].join("\n");
   }
-  const botUsername = (config.telegram.botUsername || "").trim().replace(/^@/, "");
-  return botUsername ? `https://t.me/${botUsername}` : "";
+
+  return [
+    "Your Google mailbox is not connected yet.",
+    "Open the PIN AI mini app from the bottom-left button in Telegram.",
+    "Go to Manage -> Connect Google to finish authorization.",
+    "Then come back here and send the same request again.",
+  ].join("\n");
 }
 
 async function tryHandleGoogleOAuthPrompt(
@@ -247,18 +272,7 @@ async function tryHandleGoogleOAuthPrompt(
   const connected = await hasGoogleOAuthConnection(chatId);
   if (connected) return false;
 
-  const manageUrl = buildGoogleManageUrl();
-  await sendFallbackMessageBySource(
-    source,
-    chatId,
-    [
-      "你还没有连接 Google 邮箱。",
-      "请先打开 PIN AI mini app，在 Manage 里完成 Connect Google：",
-      manageUrl,
-      "",
-      "授权完成后回到这里再发：给我看最近10封邮件",
-    ].join("\n"),
-  );
+  await sendFallbackMessageBySource(source, chatId, buildGoogleOAuthPrompt(text));
   return true;
 }
 
@@ -278,6 +292,14 @@ async function handleTelegramApiProxy(req: Request, res: Response): Promise<void
 
     const proxyUrl = new URL(req.originalUrl, "http://localhost");
     const bodyInfo = extractTelegramProxyBodyInfo(proxyUrl, req.headers["content-type"] as string | undefined, body);
+    if (shouldSuppressTelegramOutboundMessage(method, bodyInfo)) {
+      console.log(
+        `🧹 Suppressed duplicate welcome message method=${method} chat_id=${bodyInfo.chatId ?? "n/a"} ` +
+          `text="${truncateForLog(bodyInfo.text || "", 120)}"`,
+      );
+      res.status(200).json({ ok: true, result: true, description: "duplicate welcome suppressed by router" });
+      return;
+    }
     const userState = bodyInfo.chatId ? await findUserState(bodyInfo.chatId) : null;
     const container = userState?.phase === "running" ? userState.container : null;
     const runtime = container?.container_id ? parseFlyRuntimeRef(container.container_id) : null;
@@ -636,56 +658,110 @@ function extractTelegramProxyBodyInfo(
   url: URL,
   contentType: string | undefined,
   body?: Uint8Array,
-): { chatId?: number; contentType: string } {
+): TelegramProxyBodyInfo {
   const normalizedType = (contentType || "").toLowerCase();
   let chatId: number | undefined;
+  let text: string | undefined;
 
   if (url.searchParams.has("chat_id")) chatId = parseNumeric(url.searchParams.get("chat_id"));
-  if (!body || body.byteLength === 0) return buildBodyInfo(chatId, normalizedType || "none");
+  if (url.searchParams.has("text")) text = url.searchParams.get("text") || undefined;
+  if (url.searchParams.has("caption") && !text) text = url.searchParams.get("caption") || undefined;
+  if (!body || body.byteLength === 0) return buildBodyInfo(chatId, normalizedType || "none", text);
 
   const bodyText = decodeUtf8(body);
-  if (!bodyText) return buildBodyInfo(chatId, normalizedType || "binary");
+  if (!bodyText) return buildBodyInfo(chatId, normalizedType || "binary", text);
 
   if (normalizedType.includes("application/json")) {
     try {
       const parsed = JSON.parse(bodyText) as Record<string, unknown>;
       const maybeChatId = parseNumeric(parsed.chat_id);
       if (maybeChatId !== undefined) chatId = maybeChatId;
+      text = firstNonEmptyString(parsed.text, parsed.caption) || text;
     } catch {
       // ignore
     }
-    return buildBodyInfo(chatId, normalizedType);
+    return buildBodyInfo(chatId, normalizedType, text);
   }
 
   if (normalizedType.includes("application/x-www-form-urlencoded")) {
     const params = new URLSearchParams(bodyText);
     const maybeChatId = parseNumeric(params.get("chat_id"));
     if (maybeChatId !== undefined) chatId = maybeChatId;
-    return buildBodyInfo(chatId, normalizedType);
+    text = firstNonEmptyString(params.get("text"), params.get("caption")) || text;
+    return buildBodyInfo(chatId, normalizedType, text);
   }
 
   if (normalizedType.includes("multipart/form-data")) {
     const maybeChatId = parseMultipartChatId(bodyText);
     if (maybeChatId !== undefined) chatId = maybeChatId;
-    return buildBodyInfo(chatId, normalizedType);
+    text = firstNonEmptyString(parseMultipartField(bodyText, "text"), parseMultipartField(bodyText, "caption")) || text;
+    return buildBodyInfo(chatId, normalizedType, text);
   }
 
-  return buildBodyInfo(chatId, normalizedType || "text");
+  return buildBodyInfo(chatId, normalizedType || "text", text);
 }
 
-function buildBodyInfo(chatId: number | undefined, contentType: string): { chatId?: number; contentType: string } {
-  if (chatId === undefined) return { contentType };
-  return { chatId, contentType };
+function buildBodyInfo(chatId: number | undefined, contentType: string, text?: string): TelegramProxyBodyInfo {
+  return {
+    ...(chatId === undefined ? {} : { chatId }),
+    ...(text ? { text } : {}),
+    contentType,
+  };
 }
 
 function parseMultipartChatId(raw: string): number | undefined {
-  const marker = 'name="chat_id"';
+  return parseNumeric(parseMultipartField(raw, "chat_id"));
+}
+
+function parseMultipartField(raw: string, fieldName: string): string | undefined {
+  const marker = `name="${fieldName}"`;
   const idx = raw.indexOf(marker);
   if (idx < 0) return undefined;
   const tail = raw.slice(idx + marker.length);
-  const match = tail.match(/\r?\n\r?\n([\-0-9]+)/);
-  if (!match) return undefined;
-  return parseNumeric(match[1]);
+  const match = tail.match(/\r?\n\r?\n([\s\S]*?)(?:\r?\n--|\r?\n$)/);
+  if (!match?.[1]) return undefined;
+  return match[1].trim();
+}
+
+function firstNonEmptyString(...values: Array<unknown>): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+export function classifyTelegramOutboundMessage(text: string | undefined): "welcome" | null {
+  if (!text) return null;
+  const normalized = text.toLowerCase();
+  const welcomeSignals = [
+    /good to see you again/,
+    /welcome back/,
+    /what should i call you/,
+    /how can i help you today/,
+    /你想我怎么称呼/,
+    /我该怎么称呼/,
+    /今天.*帮你/,
+  ];
+  return welcomeSignals.some((pattern) => pattern.test(normalized)) ? "welcome" : null;
+}
+
+export function shouldSuppressTelegramOutboundMessage(
+  method: string,
+  bodyInfo: TelegramProxyBodyInfo,
+  nowMs = Date.now(),
+): boolean {
+  if (method.toLowerCase() !== "sendmessage") return false;
+  if (!bodyInfo.chatId) return false;
+  const messageClass = classifyTelegramOutboundMessage(bodyInfo.text);
+  if (!messageClass) return false;
+
+  const lastSentAt = welcomeMessageDedupeCache.get(bodyInfo.chatId);
+  welcomeMessageDedupeCache.set(bodyInfo.chatId, nowMs);
+  return typeof lastSentAt === "number" && nowMs - lastSentAt < WELCOME_MESSAGE_DEDUPE_WINDOW_MS;
+}
+
+export function resetTelegramWelcomeDedupeForTest(): void {
+  welcomeMessageDedupeCache.clear();
 }
 
 function parseNumeric(value: unknown): number | undefined {
