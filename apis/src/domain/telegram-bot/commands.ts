@@ -21,7 +21,6 @@ import {
   LIST_ASSISTANT_COMMAND,
   RESET_ACCOUNT_COMMAND,
   SUBSCRIBE_COMMAND,
-  VNC_ACCESS_COMMAND,
   guideCommandList,
 } from "./guideCommandList.js";
 import { getGoogleConnectionStatus } from "../google-oauth/service.js";
@@ -935,11 +934,6 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
         ].join("\n"),
       );
     }
-  });
-
-  // VNC 远程桌面访问命令（暂时禁用）
-  bot.command(VNC_ACCESS_COMMAND, async (ctx) => {
-    await replyHtml(ctx, "⚠️ 远程桌面功能暂时不可用。");
   });
 
   bot.command(RESET_ACCOUNT_COMMAND, async (ctx) => {
