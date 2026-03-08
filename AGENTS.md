@@ -108,6 +108,11 @@ OpenClaw -> telegram-router-proxy -> APIs(/api/telegram/:method) -> Telegram API
 3. OpenClaw 冷启动慢通常不是卡死，是 jiti/V8 缓存构建叠加 `shared-cpu-1x` throttle。
 4. TCP 端口通不代表 OpenClaw ready；应看 webhook/gateway 协议级探测日志。
 5. `container_status=running` 不等于 Telegram 可用；必须等待 webhook HTTP 真正可响应后再通知 ready。
+6. 本机若启用了全局代理（`all_proxy/http_proxy/https_proxy`），`flyctl` 构建与 Docker push 可能出现卡住、`EOF`、`h2c 500` 或 `NAME_UNKNOWN`。处理方式：执行 Fly/Docker 发布命令时先禁用代理，例如：
+```bash
+env -u all_proxy -u http_proxy -u https_proxy flyctl ...
+env -u all_proxy -u http_proxy -u https_proxy docker ...
+```
 
 ## 冷启动优化（按优先级）
 1. 创建期升配（`shared-cpu-2x` 或 `performance-1x`），ready 后降配。
