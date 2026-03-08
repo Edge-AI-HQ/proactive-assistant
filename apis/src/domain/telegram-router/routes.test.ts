@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildGoogleCalendarReauthPromptForTest,
   buildGoogleCredentialSyncingPromptForTest,
   buildGoogleOAuthPrompt,
   classifyTelegramOutboundMessage,
@@ -45,6 +46,18 @@ test("buildGoogleCredentialSyncingPromptForTest returns English syncing hint", (
   const prompt = buildGoogleCredentialSyncingPromptForTest("Show my next calendar event");
   assert.match(prompt, /Google is connected/);
   assert.match(prompt, /10-20 seconds/);
+});
+
+test("buildGoogleCalendarReauthPromptForTest returns Chinese reauth hint", () => {
+  const prompt = buildGoogleCalendarReauthPromptForTest("我下一个日历是什么");
+  assert.match(prompt, /缺少日历权限/);
+  assert.match(prompt, /重新 Connect Google/);
+});
+
+test("buildGoogleCalendarReauthPromptForTest returns English reauth hint", () => {
+  const prompt = buildGoogleCalendarReauthPromptForTest("Show my next calendar event");
+  assert.match(prompt, /missing Calendar permission/);
+  assert.match(prompt, /reconnect Google/);
 });
 
 test("hasGoogleWorkspaceIntentForTest matches calendar and drive requests", () => {
