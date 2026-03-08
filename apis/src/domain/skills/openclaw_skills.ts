@@ -49,6 +49,23 @@ export const DEFAULT_SKILLS_CATALOG: SkillCatalogItem[] = [
     name: "Nano Banana Pro",
     description: "Advanced multimodal agent enhancement skill.",
   },
+  {
+    key: "openai-whisper-api",
+    name: "OpenAI Whisper API",
+    description: "Speech-to-text transcription via OpenAI Whisper API.",
+  },
+  {
+    key: "openai-image-gen",
+    name: "OpenAI Image Gen",
+    description: "Image generation via OpenAI DALL-E / image API.",
+  },
+];
+
+/** Skills to install by default when no runtime metadata is present. */
+export const DEFAULT_ENABLED_SKILLS: string[] = [
+  "openai-whisper-api",
+  "openai-image-gen",
+  "sag",
 ];
 
 const isRecord = (value: unknown): value is UnknownRecord =>

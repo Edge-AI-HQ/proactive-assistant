@@ -160,7 +160,6 @@ export interface OpenclawConfig {
 export interface LiteLLMConfig {
   enabled: boolean;
   baseUrl: string;
-  containerBaseUrl: string;
   masterKey: string;
   requestTimeoutMs: number;
   syncIntervalMs: number;

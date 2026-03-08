@@ -74,7 +74,7 @@ export const buildLiteLLMProviderConfig = (
 ): UnknownRecord => {
   const modelIds = buildLiteLLMModelIds(litellm);
   return {
-    baseUrl: normalizeLiteLLMBaseUrlForOpenClaw(litellm.containerBaseUrl),
+    baseUrl: normalizeLiteLLMBaseUrlForOpenClaw(litellm.baseUrl),
     apiKey,
     api: 'openai-completions',
     models: modelIds.map((id) => ({

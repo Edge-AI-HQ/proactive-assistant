@@ -47,7 +47,7 @@ app.use(cookieParser());
 // Serve static files from public directory
 const publicPath = path.join(process.cwd(), "public");
 console.log("Serving static files from:", publicPath);
-app.use(express.static(publicPath));
+app.use(express.static(publicPath, { maxAge: "7d" }));
 
 registerHttpRoutes(app);
 

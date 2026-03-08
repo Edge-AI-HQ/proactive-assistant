@@ -13,7 +13,7 @@ export type AssistantMutableFields = SharedAssistantMutableFields;
 
 type ContainerLiteLLMConfig = Pick<
   Config['litellm'],
-  'enabled' | 'baseUrl' | 'containerBaseUrl' | 'masterKey' | 'allowedModels' | 'openclawDefaultModel'
+  'enabled' | 'baseUrl' | 'masterKey' | 'allowedModels' | 'openclawDefaultModel'
 >;
 
 export type ContainerManagerConfig = Pick<Config, 'openclaw' | 'elevenLabs' | 'container' | 'fly' | 'telegram' | 'telegramRouter'> & {

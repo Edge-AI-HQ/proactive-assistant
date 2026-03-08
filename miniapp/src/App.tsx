@@ -236,6 +236,20 @@ const App = () => {
     void consumeGoogleRedirect();
   }, [loading, state]);
 
+  // Poll for status changes when assistant exists but isn't running yet
+  useEffect(() => {
+    if (!state?.assistant.exists) return;
+    if (state.assistant.status === "running") return;
+
+    const id = setInterval(() => {
+      void safeFetch<StatePayload>("/api/mini/state").then((quick) => {
+        setState((prev) => prev ? { ...prev, ...quick } : prev);
+      }).catch(() => {});
+    }, 3_000);
+
+    return () => clearInterval(id);
+  }, [state?.assistant.exists, state?.assistant.status]);
+
   const createAssistant = async () => {
     setBusy("create");
     try {

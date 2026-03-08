@@ -104,21 +104,6 @@ const buildOnboardingProfilePayload = (
   };
 };
 
-const resolveLiteLLMContainerBaseUrlForFly = (): string => {
-  const containerBaseUrl = config.litellm.containerBaseUrl.trim();
-  const liteLlmBaseUrl = config.litellm.baseUrl.trim();
-  if (!containerBaseUrl) return liteLlmBaseUrl;
-
-  const normalized = containerBaseUrl.toLowerCase();
-  const pointsToLocalBridge =
-    normalized.includes("host.docker.internal") ||
-    normalized.includes("127.0.0.1") ||
-    normalized.includes("localhost");
-
-  if (!pointsToLocalBridge) return containerBaseUrl;
-  return liteLlmBaseUrl || containerBaseUrl;
-};
-
 const buildAssistantOpenclawConfigPayload = (
   assistantBotId: number,
   gatewayToken: string,
@@ -143,10 +128,7 @@ const buildAssistantOpenclawConfigPayload = (
   const openclawConfigContext = {
     openclaw: config.openclaw,
     elevenLabs: config.elevenLabs,
-    litellm: {
-      ...config.litellm,
-      containerBaseUrl: resolveLiteLLMContainerBaseUrlForFly(),
-    },
+    litellm: config.litellm,
   };
 
   const built = buildAssistantOpenclawConfig(openclawConfigContext, {
