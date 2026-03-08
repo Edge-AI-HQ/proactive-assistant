@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildGoogleCredentialSyncingPromptForTest,
   buildGoogleOAuthPrompt,
   classifyTelegramOutboundMessage,
   detectPromptLanguage,
@@ -32,6 +33,18 @@ test("buildGoogleOAuthPrompt returns English mini app guidance without raw URL",
   assert.match(prompt, /bottom-left button in Telegram/);
   assert.match(prompt, /Manage -> Connect Google/);
   assert.doesNotMatch(prompt, /https?:\/\//);
+});
+
+test("buildGoogleCredentialSyncingPromptForTest returns Chinese syncing hint", () => {
+  const prompt = buildGoogleCredentialSyncingPromptForTest("我下一个日历是什么");
+  assert.match(prompt, /正在同步凭证/);
+  assert.match(prompt, /10-20 秒/);
+});
+
+test("buildGoogleCredentialSyncingPromptForTest returns English syncing hint", () => {
+  const prompt = buildGoogleCredentialSyncingPromptForTest("Show my next calendar event");
+  assert.match(prompt, /Google is connected/);
+  assert.match(prompt, /10-20 seconds/);
 });
 
 test("hasGoogleWorkspaceIntentForTest matches calendar and drive requests", () => {

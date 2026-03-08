@@ -82,6 +82,7 @@ export interface AssistantContainerParams {
   liteLlmApiKey: string | null;
   onboardingProfileText?: string | null;
   onboardingProfileSource?: "connector" | "privy" | null;
+  googleCredentialsB64?: string | null;
   skillsConfig?: Record<string, unknown> | null;
   /** Docker needs a pre-allocated host port. */
   containerPort?: number;

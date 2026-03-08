@@ -6,7 +6,7 @@ import { getAssistantById } from "../common/db/index.js";
 import { hasActiveSubscriptionForService } from "../payment/subscriptionGuard.js";
 import { ensureGatewayAssistantReady } from "../gateway/assistant_warmup.js";
 import { deriveAssistantWebhookSecret } from "../container/providers/shared/telegram_runtime_secret.js";
-import { hasGoogleOAuthConnection } from "../google-oauth/service.js";
+import { hasGoogleOAuthConnection, syncCredentialToContainer } from "../google-oauth/service.js";
 import { setLogContextTelegramUserId } from "../common/requestLogContext.js";
 
 type WebhookSource = "public" | "private";
@@ -50,6 +50,8 @@ const WELCOME_MESSAGE_DEDUPE_WINDOW_MS = 45_000;
 const welcomeMessageDedupeCache = new Map<number, number>();
 const OAUTH_PROMPT_DEDUPE_WINDOW_MS = 20_000;
 const oauthPromptDedupeCache = new Map<number, { text: string; sentAt: number }>();
+const googleCredentialSyncedRuntimeRef = new Map<number, string>();
+const googleCredentialSyncInFlight = new Map<number, Promise<void>>();
 
 export const registerTelegramRouterRoutes = (app: Application): void => {
   app.post("/webhook/telegram", express.json({ limit: "10mb" }), (req, res) => {
@@ -192,7 +194,12 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
     }
 
     if (userState.phase === "container_starting") {
-      const oauthPrompted = await tryHandleGoogleOAuthPrompt(source, chatId, text);
+      const oauthPrompted = await tryHandleGoogleOAuthPrompt(
+        source,
+        chatId,
+        text,
+        userState.container?.container_id || null,
+      );
       if (oauthPrompted) {
         res.status(200).json({ ok: true });
         return;
@@ -213,7 +220,12 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
       return;
     }
 
-    const oauthPrompted = await tryHandleGoogleOAuthPrompt(source, chatId, text);
+    const oauthPrompted = await tryHandleGoogleOAuthPrompt(
+      source,
+      chatId,
+      text,
+      userState.container.container_id,
+    );
     if (oauthPrompted) {
       res.status(200).json({ ok: true });
       return;
@@ -316,14 +328,79 @@ export function buildGoogleOAuthPrompt(text: string | null): string {
   ].join("\n");
 }
 
+function buildGoogleCredentialSyncingPrompt(text: string | null): string {
+  const language = detectPromptLanguage(text);
+  if (language === "zh") {
+    return [
+      "Google 已连接，正在同步凭证到你的助手容器。",
+      "请等待 10-20 秒后，再发送你刚才的请求。",
+    ].join("\n");
+  }
+
+  return [
+    "Google is connected. We're syncing credentials to your assistant container.",
+    "Please wait about 10-20 seconds, then send the same request again.",
+  ].join("\n");
+}
+
+export const buildGoogleCredentialSyncingPromptForTest = (
+  text: string | null,
+): string => buildGoogleCredentialSyncingPrompt(text);
+
+async function ensureGoogleCredentialSync(
+  chatId: number,
+  runtimeRef: string | null,
+): Promise<"ready" | "syncing"> {
+  const runtime = (runtimeRef || "").trim();
+  if (!runtime) return "ready";
+
+  const alreadySyncedRuntime = googleCredentialSyncedRuntimeRef.get(chatId);
+  if (alreadySyncedRuntime === runtime) return "ready";
+
+  const inFlight = googleCredentialSyncInFlight.get(chatId);
+  if (inFlight) {
+    await inFlight.catch(() => undefined);
+    return "syncing";
+  }
+
+  const job = syncCredentialToContainer(chatId)
+    .then(() => {
+      googleCredentialSyncedRuntimeRef.set(chatId, runtime);
+    })
+    .catch((error) => {
+      console.warn(`[google-oauth] background sync failed chat_id=${chatId}`, error);
+    })
+    .finally(() => {
+      if (googleCredentialSyncInFlight.get(chatId) === job) {
+        googleCredentialSyncInFlight.delete(chatId);
+      }
+    });
+  googleCredentialSyncInFlight.set(chatId, job);
+
+  await job;
+  return "syncing";
+}
+
 async function tryHandleGoogleOAuthPrompt(
   source: WebhookSource,
   chatId: number,
   text: string | null,
+  runtimeRef: string | null,
 ): Promise<boolean> {
   if (!shouldPromptGoogleOAuthForTest(source, text)) return false;
   const connected = await hasGoogleOAuthConnection(chatId);
-  if (connected) return false;
+  if (connected) {
+    const syncState = await ensureGoogleCredentialSync(chatId, runtimeRef);
+    if (syncState === "syncing") {
+      await sendFallbackMessageBySource(
+        source,
+        chatId,
+        buildGoogleCredentialSyncingPrompt(text),
+      );
+      return true;
+    }
+    return false;
+  }
 
   const now = Date.now();
   if (shouldSuppressGoogleOAuthPrompt(chatId, text, now)) {
@@ -845,6 +922,8 @@ export function shouldSuppressTelegramOutboundMessage(
 export function resetTelegramWelcomeDedupeForTest(): void {
   welcomeMessageDedupeCache.clear();
   oauthPromptDedupeCache.clear();
+  googleCredentialSyncedRuntimeRef.clear();
+  googleCredentialSyncInFlight.clear();
 }
 
 function parseNumeric(value: unknown): number | undefined {

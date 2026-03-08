@@ -21,6 +21,7 @@ import {
 } from "../skills/openclaw_skills.js";
 import { resolveExternalProfileForTelegramUser } from "../onboarding/profile_bootstrap.js";
 import { PINAI_WORKSPACE_STATUS_PATH, PINAI_WORKSPACE_STATUS_PORT } from "./providers/shared/workspace_ready.js";
+import { GOOGLE_CREDENTIALS_RUNTIME_METADATA_KEY } from "./providers/shared/google_workspace_credentials.js";
 
 const resolveTelegramWebhookPort = (): number =>
   Number(process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT || "8787");
@@ -458,6 +459,9 @@ export class ContainerOrchestrator {
     const runtimeMetadata = await this.store.readAssistantRuntimeMetadata(
       assistant.id,
     );
+    const googleCredentialsB64 = readGoogleCredentialsB64FromRuntimeMetadata(
+      runtimeMetadata,
+    );
     const skillsConfig = toOpenclawSkillsPayload(
       readSkillsConfigFromRuntimeMetadata(runtimeMetadata),
     );
@@ -474,6 +478,7 @@ export class ContainerOrchestrator {
       liteLlmApiKey,
       onboardingProfileText: legacyProfile?.profileText || null,
       onboardingProfileSource: legacyProfile?.source || null,
+      ...(googleCredentialsB64 ? { googleCredentialsB64 } : {}),
       ...(skillsConfig ? { skillsConfig } : {}),
       containerPort: assistant.container_port,
     };
@@ -494,3 +499,12 @@ export class ContainerOrchestrator {
     );
   }
 }
+
+const readGoogleCredentialsB64FromRuntimeMetadata = (
+  metadata: Record<string, unknown> | null | undefined,
+): string | null => {
+  const raw = metadata?.[GOOGLE_CREDENTIALS_RUNTIME_METADATA_KEY];
+  if (typeof raw !== "string") return null;
+  const normalized = raw.trim();
+  return normalized || null;
+};

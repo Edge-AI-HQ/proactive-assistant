@@ -4,6 +4,8 @@ export const GOOGLE_WORKSPACE_CLI_DEFAULT_CREDENTIALS_FILE =
   "/root/.config/gws/credentials.json";
 export const PINAI_GOOGLE_CREDENTIALS_B64_ENV =
   "PINAI_GOOGLE_CREDENTIALS_B64";
+export const GOOGLE_CREDENTIALS_RUNTIME_METADATA_KEY =
+  "google_credentials_b64";
 
 export type GoogleWorkspaceAuthorizedUserCredential = {
   type: "authorized_user";
