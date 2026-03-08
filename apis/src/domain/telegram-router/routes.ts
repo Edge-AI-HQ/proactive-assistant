@@ -55,7 +55,7 @@ const welcomeMessageDedupeCache = new Map<number, number>();
 const OAUTH_PROMPT_DEDUPE_WINDOW_MS = 20_000;
 const oauthPromptDedupeCache = new Map<number, { text: string; sentAt: number }>();
 const googleCredentialSyncedRuntimeRef = new Map<number, string>();
-const googleCredentialSyncInFlight = new Map<number, Promise<void>>();
+const googleCredentialSyncInFlight = new Map<number, Promise<boolean>>();
 const GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
 
 export const registerTelegramRouterRoutes = (app: Application): void => {
@@ -391,15 +391,19 @@ async function ensureGoogleCredentialSync(
   const inFlight = googleCredentialSyncInFlight.get(chatId);
   if (inFlight) {
     await inFlight.catch(() => undefined);
-    return "syncing";
+    return googleCredentialSyncedRuntimeRef.get(chatId) === runtime
+      ? "ready"
+      : "syncing";
   }
 
   const job = syncCredentialToContainer(chatId)
     .then(() => {
       googleCredentialSyncedRuntimeRef.set(chatId, runtime);
+      return true;
     })
     .catch((error) => {
       console.warn(`[google-oauth] background sync failed chat_id=${chatId}`, error);
+      return false;
     })
     .finally(() => {
       if (googleCredentialSyncInFlight.get(chatId) === job) {
@@ -408,8 +412,8 @@ async function ensureGoogleCredentialSync(
     });
   googleCredentialSyncInFlight.set(chatId, job);
 
-  await job;
-  return "syncing";
+  const ok = await job;
+  return ok ? "ready" : "syncing";
 }
 
 async function tryHandleGoogleOAuthPrompt(
@@ -421,26 +425,31 @@ async function tryHandleGoogleOAuthPrompt(
   if (!shouldPromptGoogleOAuthForTest(source, text)) return false;
   const connected = await hasGoogleOAuthConnection(chatId);
   if (connected) {
+    const now = Date.now();
     if (isGoogleCalendarIntent(text)) {
       const status = await getGoogleConnectionStatus(chatId).catch(() => null);
       const scopes = (status?.scopes || "").trim();
       if (scopes && !scopes.includes(GOOGLE_CALENDAR_SCOPE)) {
-        await sendFallbackMessageBySource(
-          source,
-          chatId,
-          buildGoogleCalendarReauthPrompt(text),
-        );
+        if (!shouldSuppressGoogleOAuthPrompt(chatId, text, now)) {
+          await sendFallbackMessageBySource(
+            source,
+            chatId,
+            buildGoogleCalendarReauthPrompt(text),
+          );
+        }
         return true;
       }
     }
 
     const syncState = await ensureGoogleCredentialSync(chatId, runtimeRef);
     if (syncState === "syncing") {
-      await sendFallbackMessageBySource(
-        source,
-        chatId,
-        buildGoogleCredentialSyncingPrompt(text),
-      );
+      if (!shouldSuppressGoogleOAuthPrompt(chatId, text, now)) {
+        await sendFallbackMessageBySource(
+          source,
+          chatId,
+          buildGoogleCredentialSyncingPrompt(text),
+        );
+      }
       return true;
     }
     return false;

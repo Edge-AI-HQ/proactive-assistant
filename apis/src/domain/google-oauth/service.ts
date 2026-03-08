@@ -575,8 +575,18 @@ export const syncCredentialToContainer = async (telegramUserId: number): Promise
       throw new Error(`Fly machine ${machineId} has no config`);
     }
 
+    const currentEnv = machine.config.env || {};
+    const currentCredentialsB64 = (currentEnv[PINAI_GOOGLE_CREDENTIALS_B64_ENV] || '').trim();
+    const currentCredentialsFile = (currentEnv.GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE || '').trim();
+    if (
+      currentCredentialsB64 === encoded &&
+      currentCredentialsFile === GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE
+    ) {
+      return { message: `Credential already synced on fly machine ${machineId}` };
+    }
+
     const nextEnv = {
-      ...(machine.config.env || {}),
+      ...currentEnv,
       GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE,
       [PINAI_GOOGLE_CREDENTIALS_B64_ENV]: encoded,
     };
