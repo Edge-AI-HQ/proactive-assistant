@@ -28,6 +28,8 @@ import {
   createMachine as createFlyMachine,
   createVolume,
   destroyVolume,
+  extractMachineIdFromNameConflictError,
+  getMachine,
   isInsufficientResourcesError,
   isMachineNameConflict,
   isVolumeAlreadyExists,
@@ -272,6 +274,30 @@ const ensureAssistantVolume = async (
   throw new Error(`Fly volume ${name} is not ready`);
 };
 
+const resolveExistingMachineOnNameConflict = async (
+  machineName: string,
+  error: unknown,
+): Promise<FlyMachine | null> => {
+  const conflictMachineId = extractMachineIdFromNameConflictError(error);
+  if (conflictMachineId) {
+    try {
+      return await getMachine(conflictMachineId);
+    } catch {
+      // fall through to name-based lookup
+    }
+  }
+
+  const deadlineAt = Date.now() + 20_000;
+  while (Date.now() < deadlineAt) {
+    const machines = await listMachines();
+    const existing = machines.find((machine) => machine.name === machineName);
+    if (existing) return existing;
+    await sleep(1000);
+  }
+
+  return null;
+};
+
 export const getLatestAppDeployTimestampMs = async (): Promise<
   number | null
 > => {
@@ -490,11 +516,15 @@ export const createAssistantMachine = async (
         lastError = error;
 
         if (isMachineNameConflict(error)) {
-          const machines = await listMachines();
-          const existing = machines.find(
-            (machine) => machine.name === args.machineName,
+          const existing = await resolveExistingMachineOnNameConflict(
+            args.machineName,
+            error,
           );
           if (existing) return existing;
+          if (attempt < FLY_CREATE_RETRIES) {
+            await sleep(1000 * attempt);
+            continue;
+          }
         }
 
         if (isInsufficientResourcesError(error)) {

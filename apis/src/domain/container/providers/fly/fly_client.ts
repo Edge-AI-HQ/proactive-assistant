@@ -108,6 +108,14 @@ export const isMachineNameConflict = (error: unknown): boolean => {
   return flyErrorMessage(error).includes("name");
 };
 
+export const extractMachineIdFromNameConflictError = (
+  error: unknown,
+): string | null => {
+  const raw = error instanceof Error ? error.message : String(error || "");
+  const match = raw.match(/machine ID\s+([a-z0-9]+)/i);
+  return match?.[1]?.trim() || null;
+};
+
 export const isVolumeAlreadyExists = (error: unknown): boolean => {
   if (!(error instanceof FlyApiError)) return false;
   if (error.status !== 409 && error.status !== 422) return false;
