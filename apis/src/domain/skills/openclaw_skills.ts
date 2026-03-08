@@ -76,13 +76,9 @@ export const DEFAULT_SKILLS_CATALOG: SkillCatalogItem[] = [
   },
 ];
 
-/** Skills to install by default when no runtime metadata is present. */
-export const DEFAULT_ENABLED_SKILLS: string[] = [
-  "openai-whisper-api",
-  "openai-image-gen",
-  "sag",
-];
-
+/** Skills always injected into every assistant config — both when runtime
+ *  metadata exists (via readSkillsConfigFromRuntimeMetadata) and as the
+ *  fallback when no metadata is present (via buildAssistantOpenclawConfig). */
 export const DEFAULT_PREINSTALLED_BUNDLED_SKILLS = [
   "openai-image-gen",
   "openai-whisper-api",

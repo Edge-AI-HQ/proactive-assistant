@@ -13,20 +13,16 @@ WS="/app/.openclaw/workspace"
 
 # ── 1. Decode runtime secrets from env vars ──────────────────────────
 setup_secrets() {
-  mkdir -p "$WS" /app/google /root/.config/gws
+  # Only create .openclaw/ for config — do NOT create workspace/ here.
+  # OpenClaw skips workspace init if the directory already exists.
+  mkdir -p /app/.openclaw /app/google /root/.config/gws
 
   # OpenClaw config JSON → default config path for OPENCLAW_HOME=/app
   if [ -n "${OPENCLAW_CONFIG_B64:-}" ]; then
     printf "%s" "$OPENCLAW_CONFIG_B64" | base64 -d > /app/.openclaw/openclaw.json
   fi
 
-  # Onboarding profile → USER.md
-  if [ -n "${PINAI_ONBOARDING_PROFILE_B64:-}" ]; then
-    printf "%s" "$PINAI_ONBOARDING_PROFILE_B64" | base64 -d > "$WS/USER.md"
-    rm -f "$WS/user.md"
-  else
-    rm -f "$WS/USER.md" "$WS/user.md"
-  fi
+  # Onboarding profile → USER.md: deferred to workspace_inject() after workspace exists.
 
   # Google Workspace CLI credentials
   GWS_CREDS="/app/google/gws-credentials.json"
@@ -72,6 +68,14 @@ workspace_inject() {
       return 1
     fi
     echo "[workspace] workspace initialized" >&2
+  fi
+
+  # Inject USER.md (idempotent)
+  if [ -n "${PINAI_ONBOARDING_PROFILE_B64:-}" ]; then
+    printf "%s" "$PINAI_ONBOARDING_PROFILE_B64" | base64 -d > "$WS/USER.md"
+    rm -f "$WS/user.md"
+  else
+    rm -f "$WS/USER.md" "$WS/user.md"
   fi
 
   # Append custom TOOLS.md content (idempotent)

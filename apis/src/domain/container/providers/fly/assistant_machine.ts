@@ -12,14 +12,16 @@ import {
   assertNoP0SecretsInConfig,
   assertNoP0SecretsInEnv,
 } from "../shared/secret_guard.js";
+import { toOpenclawSkillsPayload } from "../../../skills/openclaw_skills.js";
 import {
   GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE,
   PINAI_GOOGLE_CREDENTIALS_B64_ENV,
 } from "../shared/google_workspace_credentials.js";
+import { QUICKSTART_SYNTHETIC_BOT_TOKEN } from "../shared/telegram_runtime_secret.js";
 import {
-  deriveAssistantWebhookSecret,
-  QUICKSTART_SYNTHETIC_BOT_TOKEN,
-} from "../shared/telegram_runtime_secret.js";
+  buildWebhookParams,
+  buildBaseContainerEnv,
+} from "../shared/webhook_params.js";
 import { FLY_FORBIDDEN_SECRET_ENV_KEYS } from "../shared/secret_env.js";
 import {
   createMachine as createFlyMachine,
@@ -110,20 +112,18 @@ const buildAssistantOpenclawConfigPayload = (
   liteLlmApiKey: string | null,
   skillsConfig?: UnknownRecord | null,
 ): { config: UnknownRecord; json: string; base64: string; hash: string } => {
-  const { webhookUrl, webhookPath, webhookHost, webhookPort, pluginPath } =
-    config.telegramRouter;
-  const normalizedWebhookUrl = webhookUrl.trim();
-  if (!normalizedWebhookUrl) {
+  const wp = buildWebhookParams(
+    config,
+    assistantBotId,
+    gatewayToken,
+    appConfig.apiAuthToken,
+    "loopback",
+  );
+  if (!wp.webhookUrl) {
     throw new Error(
       "telegramRouter.webhookUrl is required to keep OpenClaw in webhook mode",
     );
   }
-  const privateWebhookPort = webhookPort + 1;
-  const webhookSecret = deriveAssistantWebhookSecret(
-    assistantBotId,
-    gatewayToken,
-    appConfig.apiAuthToken,
-  );
   const openclawConfigContext = {
     openclaw: config.openclaw,
     elevenLabs: config.elevenLabs,
@@ -138,15 +138,17 @@ const buildAssistantOpenclawConfigPayload = (
     liteLlmApiKey,
     includeTelegramPlugin: true,
     telegramWebhookMode: true,
-    telegramWebhookPort: webhookPort,
-    telegramPrivateWebhookPort: privateWebhookPort,
-    telegramWebhookUrl: normalizedWebhookUrl,
-    telegramWebhookSecret: webhookSecret,
-    ...(webhookPath ? { telegramWebhookPath: webhookPath } : {}),
-    ...(webhookHost ? { telegramWebhookHost: webhookHost } : {}),
-    ...(pluginPath ? { telegramRouterPluginPath: pluginPath } : {}),
+    telegramWebhookPort: wp.webhookPort,
+    telegramPrivateWebhookPort: wp.privateWebhookPort,
+    telegramWebhookUrl: wp.webhookUrl,
+    telegramWebhookSecret: wp.webhookSecret,
+    ...(wp.webhookPath ? { telegramWebhookPath: wp.webhookPath } : {}),
+    ...(wp.webhookHost ? { telegramWebhookHost: wp.webhookHost } : {}),
+    ...(wp.pluginPath ? { telegramRouterPluginPath: wp.pluginPath } : {}),
     controlOrigin: appConfig.publicBaseUrl,
-    ...(skillsConfig ? { skillsConfig } : {}),
+    ...(skillsConfig
+      ? { skillsConfig: toOpenclawSkillsPayload(skillsConfig) }
+      : {}),
   });
   assertNoP0SecretsInConfig(built, config);
   const json = JSON.stringify(built);
@@ -415,22 +417,20 @@ export const createAssistantMachine = async (
     ? extractOrigin(config.telegramRouter.webhookUrl)
     : extractOrigin(appConfig.publicBaseUrl);
   const env: Record<string, string> = {
-    OPENCLAW_HOME: "/app",
-    OPENCLAW_USER_ID: `assistant-${args.assistantBotId}`,
-    OPENCLAW_GATEWAY_PORT: String(config.openclaw.gatewayPort),
-    OPENCLAW_TELEGRAM_WEBHOOK_PORT: String(normalizedWebhookPort),
-    OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT: String(
+    ...buildBaseContainerEnv(
+      config,
+      args.assistantBotId,
+      normalizedWebhookPort,
       normalizedPrivateWebhookPort,
+      routerOrigin,
+      GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE,
     ),
     OPENCLAW_CONFIG_B64: openclawPayload.base64,
-    NODE_COMPILE_CACHE: "/app/cache/node-compile-cache",
     PINAI_OPENCLAW_CONFIG_SHA256: openclawPayload.hash,
     PINAI_ONBOARDING_PROFILE_B64: onboardingProfile?.base64 || "",
     PINAI_ONBOARDING_PROFILE_SHA256: onboardingProfile?.hash || "",
     PINAI_ONBOARDING_HAS_PROFILE: onboardingProfile ? "1" : "0",
     [PINAI_GOOGLE_CREDENTIALS_B64_ENV]: "",
-    GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE,
-    TELEGRAM_ROUTER_URL: routerOrigin,
     PINAI_FLY_MODE: "1",
     PINAI_GATEWAY_BIND: "loopback",
   };

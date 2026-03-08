@@ -7,9 +7,8 @@ import {
   type UnknownRecord,
 } from "./litellm_models.js";
 import {
-  DEFAULT_ENABLED_SKILLS,
-  installSkillToConfig,
-  type OpenclawSkillsConfig,
+  DEFAULT_PREINSTALLED_BUNDLED_SKILLS,
+  ensureBundledSkillsInstalled,
 } from "../../../skills/openclaw_skills.js";
 
 export type GatewayBindMode = "lan" | "loopback";
@@ -264,14 +263,12 @@ export const buildAssistantOpenclawConfig = (
   if (options.skillsConfig && Object.keys(options.skillsConfig).length > 0) {
     next.skills = options.skillsConfig;
   } else {
-    // No runtime skills metadata — install default skills
-    let defaultSkills: OpenclawSkillsConfig | null = null;
-    for (const key of DEFAULT_ENABLED_SKILLS) {
-      defaultSkills = installSkillToConfig(defaultSkills, key);
-    }
-    if (defaultSkills) {
-      next.skills = defaultSkills as UnknownRecord;
-    }
+    // No runtime skills metadata — install default bundled skills
+    const defaultSkills = ensureBundledSkillsInstalled(
+      null,
+      DEFAULT_PREINSTALLED_BUNDLED_SKILLS,
+    );
+    next.skills = defaultSkills as UnknownRecord;
   }
 
   const baseWebhookConfig: TelegramWebhookConfig = { enabled: true };
@@ -402,7 +399,13 @@ export const buildAssistantOpenclawConfig = (
     allow: ["*"],
     deny: [],
     elevated: { enabled: true, allowFrom: { "*": ["*"] } },
-    exec: { backgroundMs: 10000, timeoutSec: 1800, notifyOnExit: true },
+    exec: {
+      security: "full",
+      host: "gateway",
+      backgroundMs: 10000,
+      timeoutSec: 1800,
+      notifyOnExit: true,
+    },
     web: {
       search: { enabled: true, maxResults: 10 },
       fetch: { enabled: true, maxChars: 50000 },
@@ -433,6 +436,11 @@ export const buildAssistantOpenclawConfig = (
   next.browser = {
     enabled: true,
     evaluateEnabled: true,
+  };
+
+  // Enable cron scheduler
+  next.cron = {
+    enabled: true,
   };
 
   return next;

@@ -20,10 +20,11 @@ import {
   assertNoP0SecretsInConfig,
   assertNoP0SecretsInEnv,
 } from "../shared/secret_guard.js";
+import { QUICKSTART_SYNTHETIC_BOT_TOKEN } from "../shared/telegram_runtime_secret.js";
 import {
-  deriveAssistantWebhookSecret,
-  QUICKSTART_SYNTHETIC_BOT_TOKEN,
-} from "../shared/telegram_runtime_secret.js";
+  buildWebhookParams,
+  buildBaseContainerEnv,
+} from "../shared/webhook_params.js";
 import { config as appConfig } from "../../../common/config.js";
 import { toOpenclawSkillsPayload } from "../../../skills/openclaw_skills.js";
 import { renderUserProfileMarkdown } from "../../../onboarding/profile_bootstrap.js";
@@ -231,12 +232,9 @@ const mergeAssistantOpenclawConfig = (
   const desiredMessages = isRecord(desired.messages) ? desired.messages : {};
   next.messages = { ...existingMessages, tts: desiredMessages.tts };
 
-  const desiredTalk = isRecord(desired.talk) ? desired.talk : null;
-  if (desiredTalk) {
+  if (isRecord(desired.talk)) {
     const existingTalk = isRecord(next.talk) ? next.talk : {};
-    const mergedTalk: UnknownRecord = { ...existingTalk, ...desiredTalk };
-    if (Object.hasOwn(mergedTalk, "baseUrl")) delete mergedTalk.baseUrl;
-    next.talk = mergedTalk;
+    next.talk = { ...existingTalk, ...desired.talk };
   }
 
   const normalizedAssistantBotToken = assistantBotToken.trim();
@@ -258,13 +256,10 @@ const mergeAssistantOpenclawConfig = (
     }
   }
 
-  // Always take plugins and session config from desired — these are generated
-  // fresh each time and include webhook-related plugins.
+  // Always take plugins from desired — generated fresh each time with
+  // webhook-related plugins.
   if (isRecord(desired.plugins)) {
     next.plugins = desired.plugins;
-  }
-  if (isRecord(desired.session)) {
-    next.session = desired.session;
   }
 
   if (config.litellm.enabled) {
@@ -291,7 +286,13 @@ const mergeAssistantOpenclawConfig = (
       : {};
     next.agents = {
       ...existingAgents,
-      defaults: { ...existingDefaults, model: desiredDefaults.model },
+      defaults: {
+        ...existingDefaults,
+        model: desiredDefaults.model,
+        ...(desiredDefaults.models !== undefined
+          ? { models: desiredDefaults.models }
+          : {}),
+      },
     };
   }
 
@@ -299,6 +300,17 @@ const mergeAssistantOpenclawConfig = (
     next.skills = desired.skills;
   } else if (Object.hasOwn(next, "skills")) {
     delete next.skills;
+  }
+
+  // Always take tools, commands, and browser from desired config
+  if (isRecord(desired.tools)) {
+    next.tools = desired.tools;
+  }
+  if (isRecord(desired.commands)) {
+    next.commands = desired.commands;
+  }
+  if (isRecord(desired.browser)) {
+    next.browser = desired.browser;
   }
 
   return next;
@@ -326,17 +338,13 @@ const ensureOpenclawConfig = (
     }
   })();
 
-  const webhookPort = config.telegramRouter.webhookPort;
-  const privateWebhookPort = webhookPort + 1;
-  const webhookPath = config.telegramRouter.webhookPath;
-  const webhookHost = config.telegramRouter.webhookHost || "0.0.0.0";
-  const webhookSecret = deriveAssistantWebhookSecret(
+  const wp = buildWebhookParams(
+    config,
     assistantBotId,
     gatewayToken,
     appConfig.apiAuthToken,
+    "lan",
   );
-  const pluginPath = config.telegramRouter.pluginPath;
-  const webhookUrl = config.telegramRouter.webhookUrl.trim();
 
   const desired = buildAssistantOpenclawConfig(config, {
     gatewayToken,
@@ -346,13 +354,13 @@ const ensureOpenclawConfig = (
     liteLlmApiKey: liteLlmApiKey ?? null,
     includeTelegramPlugin: true,
     telegramWebhookMode: true,
-    telegramWebhookPort: webhookPort,
-    telegramPrivateWebhookPort: privateWebhookPort,
-    telegramWebhookPath: webhookPath,
-    telegramWebhookHost: webhookHost,
-    telegramWebhookSecret: webhookSecret,
-    ...(webhookUrl ? { telegramWebhookUrl: webhookUrl } : {}),
-    ...(pluginPath ? { telegramRouterPluginPath: pluginPath } : {}),
+    telegramWebhookPort: wp.webhookPort,
+    telegramPrivateWebhookPort: wp.privateWebhookPort,
+    telegramWebhookPath: wp.webhookPath,
+    telegramWebhookHost: wp.webhookHost,
+    telegramWebhookSecret: wp.webhookSecret,
+    ...(wp.webhookUrl ? { telegramWebhookUrl: wp.webhookUrl } : {}),
+    ...(wp.pluginPath ? { telegramRouterPluginPath: wp.pluginPath } : {}),
     controlOrigin: appConfig.publicBaseUrl,
     ...(skillsConfig ? { skillsConfig: toOpenclawSkillsPayload(skillsConfig) } : {}),
   });
@@ -545,7 +553,11 @@ export const dockerContainerRuntime: ContainerRuntime = {
   ): Promise<ContainerRef> {
     const dirs = getAssistantContainerDirs(params.assistantBotId);
     ensureDir(dirs.openclawDir);
-    ensureDir(dirs.workspaceDir);
+    // Do NOT create workspace dir here — OpenClaw skips workspace init
+    // if the directory already exists. For hot volumes (workspace already
+    // has TOOLS.md), we write USER.md into the existing dir. For cold
+    // volumes, we let OpenClaw create the workspace, and the entrypoint's
+    // workspace_inject handles USER.md + TOOLS append afterward.
 
     const liteLlmApiKey = params.liteLlmApiKey;
 
@@ -557,11 +569,14 @@ export const dockerContainerRuntime: ContainerRuntime = {
       liteLlmApiKey,
       params.skillsConfig,
     );
-    ensureWorkspaceUserProfile(
-      dirs.workspaceDir,
-      params.onboardingProfileText,
-      params.onboardingProfileSource,
-    );
+    // Only write USER.md if workspace already exists (hot volume)
+    if (fs.existsSync(dirs.workspaceDir)) {
+      ensureWorkspaceUserProfile(
+        dirs.workspaceDir,
+        params.onboardingProfileText,
+        params.onboardingProfileSource,
+      );
+    }
     sanitizeCronStore(dirs.openclawDir);
 
     const hostPort = params.containerPort
@@ -581,16 +596,14 @@ export const dockerContainerRuntime: ContainerRuntime = {
     // outbound Telegram API calls. In Docker, the APIs server runs on the host.
     const apisPort = Number.parseInt(process.env.PORT || "3000", 10);
     const telegramRouterUrl = `http://host.docker.internal:${apisPort}`;
-    const containerEnv: Record<string, string> = {
-      OPENCLAW_HOME: "/app",
-      OPENCLAW_USER_ID: `assistant-${params.assistantBotId}`,
-      OPENCLAW_GATEWAY_PORT: String(config.openclaw.gatewayPort),
-      OPENCLAW_TELEGRAM_WEBHOOK_PORT: String(webhookPort),
-      OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT: String(privateWebhookPort),
-      NODE_COMPILE_CACHE: "/app/cache/node-compile-cache",
-      TELEGRAM_ROUTER_URL: telegramRouterUrl,
-      GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE: "/app/google/gws-credentials.json",
-    };
+    const containerEnv: Record<string, string> = buildBaseContainerEnv(
+      config,
+      params.assistantBotId,
+      webhookPort,
+      privateWebhookPort,
+      telegramRouterUrl,
+      "/app/google/gws-credentials.json",
+    );
     assertNoP0SecretsInEnv(containerEnv, config);
 
     const container = await docker.createContainer({
