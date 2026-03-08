@@ -25,6 +25,8 @@ import {
   hasGoogleCredentialByTelegramId,
   saveGoogleCredential,
 } from './repository.js';
+import { listAssistantsByOwnerId } from '../claw-assistant/usecases.js';
+import { ensureGatewayAssistantReady } from '../gateway/assistant_warmup.js';
 
 const GOOGLE_AUTH_BASE = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
@@ -381,6 +383,9 @@ export const handleGoogleOAuthCallback = async (query: {
   await syncCredentialToContainer(stateRow.telegramUserId).catch((error) => {
     console.warn('[google-oauth] sync-to-container skipped:', error);
   });
+  await waitForAssistantReadyAfterGoogleSync(stateRow.telegramUserId).catch((error) => {
+    console.warn('[google-oauth] ready-after-sync skipped:', error);
+  });
   await sendGoogleConnectedBotMessage(stateRow.telegramUserId, email).catch((error) => {
     console.warn('[google-oauth] bot-confirmation skipped:', error);
   });
@@ -392,6 +397,15 @@ export const handleGoogleOAuthCallback = async (query: {
     email,
     botUsername: config.telegram.botUsername || null,
   };
+};
+
+const waitForAssistantReadyAfterGoogleSync = async (
+  telegramUserId: number,
+): Promise<void> => {
+  const assistants = await listAssistantsByOwnerId(telegramUserId);
+  const assistant = assistants[0];
+  if (!assistant) return;
+  await ensureGatewayAssistantReady(assistant);
 };
 
 export const disconnectGoogleOAuth = async (telegramUserId: number): Promise<void> => {

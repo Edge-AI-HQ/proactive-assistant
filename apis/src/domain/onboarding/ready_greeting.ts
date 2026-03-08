@@ -31,6 +31,13 @@ const buildPrivateWebhookUpdate = (telegramUserId: number, text: string) => {
   };
 };
 
+const buildReadyGreetingWebhookUrls = (baseUrl: string): string[] => [
+  `${baseUrl.replace(/\/+$/, "")}/webhook/telegram/private`,
+];
+
+export const buildReadyGreetingWebhookUrlsForTest = (baseUrl: string): string[] =>
+  buildReadyGreetingWebhookUrls(baseUrl);
+
 const postPrivateWebhook = async (
   update: Record<string, unknown>,
 ): Promise<boolean> => {
@@ -38,10 +45,7 @@ const postPrivateWebhook = async (
   if (!secret) return false;
 
   const baseUrl = config.publicBaseUrl.replace(/\/+$/, "");
-  const urls = [
-    `${baseUrl}/webhook/telegram/private`,
-    `${baseUrl}/webhook/telegram`,
-  ];
+  const urls = buildReadyGreetingWebhookUrls(baseUrl);
   const maxAttempts = 4;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
