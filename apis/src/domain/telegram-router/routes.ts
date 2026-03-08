@@ -232,13 +232,58 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
   }
 }
 
-const MAIL_INTENT_PATTERN =
-  /(邮件|邮箱|gmail|mailbox|inbox|收件箱|未读|最近\d*封|latest\s*\d+\s*(emails?|mails?))/i;
+const GOOGLE_WORKSPACE_INTENT_PATTERN = new RegExp(
+  [
+    "邮件",
+    "邮箱",
+    "gmail",
+    "mailbox",
+    "inbox",
+    "收件箱",
+    "未读",
+    "最近\\d*封",
+    "latest\\s*\\d+\\s*(emails?|mails?)",
+    "日历",
+    "日程",
+    "会议",
+    "calendar",
+    "event",
+    "events",
+    "schedule",
+    "meeting",
+    "drive",
+    "google\\s*drive",
+    "云盘",
+    "网盘",
+    "文件夹",
+    "文件",
+    "docs?",
+    "document",
+    "文档",
+    "sheets?",
+    "spreadsheet",
+    "表格",
+    "slides?",
+    "presentation",
+    "演示",
+    "forms?",
+    "表单",
+    "meet",
+    "google\\s*meet",
+    "chat",
+    "google\\s*chat",
+    "classroom",
+  ].join("|"),
+  "i",
+);
 
-function isMailIntent(text: string | null): boolean {
+function isGoogleWorkspaceIntent(text: string | null): boolean {
   if (!text) return false;
-  return MAIL_INTENT_PATTERN.test(text);
+  return GOOGLE_WORKSPACE_INTENT_PATTERN.test(text);
 }
+
+export const hasGoogleWorkspaceIntentForTest = (text: string | null): boolean =>
+  isGoogleWorkspaceIntent(text);
 
 export function detectPromptLanguage(text: string | null): PromptLanguage {
   return /[\u3400-\u9fff]/.test(text || "") ? "zh" : "en";
@@ -248,7 +293,7 @@ export function buildGoogleOAuthPrompt(text: string | null): string {
   const language = detectPromptLanguage(text);
   if (language === "zh") {
     return [
-      "你还没有连接 Google 邮箱。",
+      "你还没有连接 Google Workspace。",
       "↙ 请点击 Telegram 左下角的 PIN AI mini app 按钮。",
       "打开后进入 Manage -> Connect Google 完成授权。",
       "授权完成后，回到这里再发送你刚才的请求。",
@@ -256,7 +301,7 @@ export function buildGoogleOAuthPrompt(text: string | null): string {
   }
 
   return [
-    "Your Google mailbox is not connected yet.",
+    "Your Google Workspace account is not connected yet.",
     "↙ Open the PIN AI mini app from the bottom-left button in Telegram.",
     "Then go to Manage -> Connect Google to finish authorization.",
     "Then come back here and send the same request again.",
@@ -268,7 +313,7 @@ async function tryHandleGoogleOAuthPrompt(
   chatId: number,
   text: string | null,
 ): Promise<boolean> {
-  if (!isMailIntent(text)) return false;
+  if (!isGoogleWorkspaceIntent(text)) return false;
   const connected = await hasGoogleOAuthConnection(chatId);
   if (connected) return false;
 
