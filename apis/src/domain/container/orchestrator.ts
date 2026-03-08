@@ -20,6 +20,7 @@ import {
   toOpenclawSkillsPayload,
 } from "../skills/openclaw_skills.js";
 import { resolveExternalProfileForTelegramUser } from "../onboarding/profile_bootstrap.js";
+import { PINAI_WORKSPACE_STATUS_PATH, PINAI_WORKSPACE_STATUS_PORT } from "./providers/shared/workspace_ready.js";
 
 const resolveTelegramWebhookPort = (): number =>
   Number(process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT || "8787");
@@ -398,8 +399,11 @@ export class ContainerOrchestrator {
         timeoutMs: probeTimeoutMs,
         gatewayToken,
         gatewayPort: this.config.openclaw.gatewayPort,
-        additionalPorts: [webhookPort],
-        httpProbes: [{ port: webhookPort, path: webhookPath }],
+        additionalPorts: [webhookPort, PINAI_WORKSPACE_STATUS_PORT],
+        httpProbes: [
+          { port: webhookPort, path: webhookPath },
+          { port: PINAI_WORKSPACE_STATUS_PORT, path: PINAI_WORKSPACE_STATUS_PATH },
+        ],
       });
 
       await this.store.updateAssistant(assistant.id, {

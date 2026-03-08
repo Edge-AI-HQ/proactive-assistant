@@ -133,7 +133,7 @@ const resolveGreetingContext = async (assistantId: number, telegramUserId: numbe
   } satisfies ReadyGreetingRenderInput;
 };
 
-export const triggerReadyGreetingForAssistant = async (input: {
+export const sendApiReadyGreetingForAssistant = async (input: {
   assistantId: number;
   telegramUserId: number;
 }): Promise<boolean> => {

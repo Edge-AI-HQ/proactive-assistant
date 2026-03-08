@@ -13,7 +13,7 @@ import {
 } from '../litellm/index.js';
 import { sendTelegramMessage } from '../telegram/notify.js';
 import { config } from './config.js';
-import { triggerReadyGreetingForAssistant } from '../onboarding/ready_greeting.js';
+import { sendApiReadyGreetingForAssistant } from '../onboarding/ready_greeting.js';
 import {
   getUserByTelegramId,
   listAssistantsByOwnerTelegramId,
@@ -92,7 +92,7 @@ const containerNotifier: ContainerNotifier = {
       }
 
       if (readyNotifyClaimed) {
-        const delivered = await triggerReadyGreetingForAssistant({
+        const delivered = await sendApiReadyGreetingForAssistant({
           assistantId: options.assistantId,
           telegramUserId,
         }).catch((e) => {
