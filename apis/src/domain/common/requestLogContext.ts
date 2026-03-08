@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import type { RequestHandler } from "express";
 
 type LogContext = {
@@ -15,8 +16,7 @@ const toSingleHeaderValue = (value: unknown): string | null => {
   return null;
 };
 
-const nextTraceId = (): string =>
-  `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+const nextTraceId = (): string => randomUUID();
 
 const toPositiveIntString = (value: unknown): string | undefined => {
   const raw = typeof value === "string" ? value.trim() : "";
