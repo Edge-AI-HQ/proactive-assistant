@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildReadyGreetingFallbackMessage,
   buildReadyGreetingRetryDelaysForTest,
   buildReadyGreetingWebhookUrlsForTest,
 } from "./ready_greeting.js";
@@ -24,4 +25,11 @@ test("buildReadyGreetingRetryDelaysForTest keeps retrying long enough to survive
     4000,
     4000,
   ]);
+});
+
+test("buildReadyGreetingFallbackMessage provides a deterministic fallback greeting", () => {
+  assert.equal(
+    buildReadyGreetingFallbackMessage(),
+    "Hey, I’m online now.\n\nTell me what you want to work on first.",
+  );
 });
