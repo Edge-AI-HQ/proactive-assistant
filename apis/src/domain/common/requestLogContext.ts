@@ -25,28 +25,6 @@ const toPositiveIntString = (value: unknown): string | undefined => {
 };
 
 
-const mergeLogMeta = (args: unknown[], meta: Record<string, unknown>): unknown[] => {
-  if (args.length === 0) return [meta];
-  const last = args[args.length - 1];
-  if (
-    last &&
-    typeof last === "object" &&
-    !Array.isArray(last) &&
-    !(last instanceof Error)
-  ) {
-    const record = last as Record<string, unknown>;
-    if (
-      "trace_id" in record ||
-      "traceId" in record ||
-      "tg_id" in record ||
-      "telegram_user_id" in record
-    ) {
-      return args;
-    }
-  }
-  return [...args, meta];
-};
-
 const previewBuffer = (buffer: Buffer): string => {
   const text = buffer.toString("utf8");
   const hasReplacement = text.includes("\uFFFD");
@@ -103,13 +81,12 @@ const patchConsole = (): void => {
     const original = console[level].bind(console);
     console[level] = (...args: unknown[]) => {
       const store = logContext.getStore();
-      const finalArgs = store
-        ? mergeLogMeta(args, {
-            trace_id: store.traceId,
-            tg_id: store.tgId ?? "n/a",
-          })
-        : args;
-      original(formatLogLine(finalArgs));
+      const line = formatLogLine(args);
+      if (!store) {
+        original(line);
+        return;
+      }
+      original(`${line} | trace_id=${store.traceId}|tg_id=${store.tgId ?? "n/a"}`);
     };
   }
 };
