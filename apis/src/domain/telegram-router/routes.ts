@@ -249,16 +249,16 @@ export function buildGoogleOAuthPrompt(text: string | null): string {
   if (language === "zh") {
     return [
       "你还没有连接 Google 邮箱。",
-      "请点击 Telegram 左下角的 PIN AI mini app。",
-      "进入 Manage -> Connect Google 完成授权。",
+      "↙ 请点击 Telegram 左下角的 PIN AI mini app 按钮。",
+      "打开后进入 Manage -> Connect Google 完成授权。",
       "授权完成后，回到这里再发送你刚才的请求。",
     ].join("\n");
   }
 
   return [
     "Your Google mailbox is not connected yet.",
-    "Open the PIN AI mini app from the bottom-left button in Telegram.",
-    "Go to Manage -> Connect Google to finish authorization.",
+    "↙ Open the PIN AI mini app from the bottom-left button in Telegram.",
+    "Then go to Manage -> Connect Google to finish authorization.",
     "Then come back here and send the same request again.",
   ].join("\n");
 }

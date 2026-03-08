@@ -1,13 +1,12 @@
 import { pool } from "../common/db/core.js";
 import {
-  readAssistantRuntimeMetadata,
+  setAssistantRuntimeMetadataKeyIfAbsent,
   setAssistantRuntimeMetadataKey,
 } from "../common/db/runtimeRepository.js";
 import { config } from "../common/config.js";
 import {
   buildOnboardingGreetingPrompt,
   resolveExternalProfileForTelegramUser,
-  shouldTriggerReadyGreeting,
 } from "./profile_bootstrap.js";
 
 const buildPrivateWebhookUpdate = (telegramUserId: number, text: string) => {
@@ -92,17 +91,6 @@ const postPrivateWebhook = async (
   return false;
 };
 
-const parseHasProfile = (metadata: Record<string, unknown>): boolean | null => {
-  const value = metadata.onboarding_has_profile;
-  if (typeof value === "boolean") return value;
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (["1", "true", "yes"].includes(normalized)) return true;
-    if (["0", "false", "no"].includes(normalized)) return false;
-  }
-  return null;
-};
-
 const readAssistantOwnerTelegramId = async (
   assistantId: number,
 ): Promise<number | null> => {
@@ -124,31 +112,33 @@ export const triggerReadyGreetingForAssistant = async (input: {
   assistantId: number;
   telegramUserId: number;
 }): Promise<boolean> => {
-  const metadata = await readAssistantRuntimeMetadata(input.assistantId);
-  if (!shouldTriggerReadyGreeting(metadata)) {
+  const claimed = await setAssistantRuntimeMetadataKeyIfAbsent(
+    input.assistantId,
+    "onboarding_greeted_at",
+    new Date().toISOString(),
+  );
+  if (!claimed) {
     return true;
   }
 
-  let hasProfile = parseHasProfile(metadata);
+  let hasProfile: boolean | null = null;
   let profileText = "";
   let membershipDays: number | null = null;
   let membershipSinceDate: string | null = null;
 
-  if (hasProfile === null) {
-    const ownerTelegramId =
-      (await readAssistantOwnerTelegramId(input.assistantId)) ??
-      input.telegramUserId;
-    const profile = await resolveExternalProfileForTelegramUser(ownerTelegramId);
-    hasProfile = Boolean(profile?.profileText?.trim());
-    profileText = profile?.profileText || "";
-    if (profile?.accountCreatedAt) {
-      const createdAt = new Date(profile.accountCreatedAt);
-      const createdAtMs = createdAt.getTime();
-      if (Number.isFinite(createdAtMs)) {
-        const diffDays = Math.floor((Date.now() - createdAtMs) / 86_400_000);
-        membershipDays = Math.max(1, diffDays);
-        membershipSinceDate = createdAt.toISOString().slice(0, 10);
-      }
+  const ownerTelegramId =
+    (await readAssistantOwnerTelegramId(input.assistantId)) ??
+    input.telegramUserId;
+  const profile = await resolveExternalProfileForTelegramUser(ownerTelegramId);
+  hasProfile = Boolean(profile?.profileText?.trim());
+  profileText = profile?.profileText || "";
+  if (profile?.accountCreatedAt) {
+    const createdAt = new Date(profile.accountCreatedAt);
+    const createdAtMs = createdAt.getTime();
+    if (Number.isFinite(createdAtMs)) {
+      const diffDays = Math.floor((Date.now() - createdAtMs) / 86_400_000);
+      membershipDays = Math.max(1, diffDays);
+      membershipSinceDate = createdAt.toISOString().slice(0, 10);
     }
   }
 
@@ -161,18 +151,19 @@ export const triggerReadyGreetingForAssistant = async (input: {
 
   const update = buildPrivateWebhookUpdate(input.telegramUserId, prompt);
   const ok = await postPrivateWebhook(update);
-  if (!ok) return false;
-
-  await setAssistantRuntimeMetadataKey(
-    input.assistantId,
-    "onboarding_greeted_at",
-    new Date().toISOString(),
-  ).catch((error) => {
-    console.warn("[onboarding] Failed to persist greeting metadata", {
-      assistantId: input.assistantId,
-      error: error instanceof Error ? error.message : String(error),
+  if (!ok) {
+    await setAssistantRuntimeMetadataKey(
+      input.assistantId,
+      "onboarding_greeted_at",
+      null,
+    ).catch((error) => {
+      console.warn("[onboarding] Failed to clear greeting metadata after delivery failure", {
+        assistantId: input.assistantId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
-  });
+    return false;
+  }
 
   return true;
 };
