@@ -5,6 +5,10 @@ import { fileURLToPath } from "node:url";
 import { prepareContainerRuntime } from "./domain/container/index.js";
 import { syncContainerStates } from "./domain/container/syncContainerStates.js";
 import { config, validateConfig } from "./domain/common/config.js";
+import {
+  initializeRequestLogging,
+  requestLogContextMiddleware,
+} from "./domain/common/requestLogContext.js";
 import { cleanupExpiredGatewaySessions } from "./domain/common/db/index.js";
 import { ensureInfraRuntimeConfigured } from "./domain/common/infraRuntime.js";
 import { materializeGoogleOAuthClientSecretFromEnv } from "./domain/google-oauth/client_secret_file.js";
@@ -27,6 +31,7 @@ if (missing.length) {
   console.warn(`Missing env vars: ${missing.join(", ")}`);
 }
 
+initializeRequestLogging();
 ensureInfraRuntimeConfigured();
 materializeGoogleOAuthClientSecretFromEnv();
 
@@ -36,6 +41,7 @@ await validatePaymentPriceConsistencyOnStartup();
 const app = express();
 app.disable("x-powered-by");
 app.set("trust proxy", true);
+app.use(requestLogContextMiddleware);
 
 registerRawBodyRoutes(app);
 registerTelegramRouterRoutes(app);
