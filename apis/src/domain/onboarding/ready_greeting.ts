@@ -35,8 +35,18 @@ const buildReadyGreetingWebhookUrls = (baseUrl: string): string[] => [
   `${baseUrl.replace(/\/+$/, "")}/webhook/telegram/private`,
 ];
 
+const READY_GREETING_MAX_ATTEMPTS = 10;
+
+const buildReadyGreetingRetryDelayMs = (attempt: number): number =>
+  Math.min(1500 * attempt, 4000);
+
 export const buildReadyGreetingWebhookUrlsForTest = (baseUrl: string): string[] =>
   buildReadyGreetingWebhookUrls(baseUrl);
+
+export const buildReadyGreetingRetryDelaysForTest = (): number[] =>
+  Array.from({ length: Math.max(READY_GREETING_MAX_ATTEMPTS - 1, 0) }, (_, index) =>
+    buildReadyGreetingRetryDelayMs(index + 1),
+  );
 
 const postPrivateWebhook = async (
   update: Record<string, unknown>,
@@ -46,7 +56,7 @@ const postPrivateWebhook = async (
 
   const baseUrl = config.publicBaseUrl.replace(/\/+$/, "");
   const urls = buildReadyGreetingWebhookUrls(baseUrl);
-  const maxAttempts = 4;
+  const maxAttempts = READY_GREETING_MAX_ATTEMPTS;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     for (const url of urls) {
@@ -88,7 +98,7 @@ const postPrivateWebhook = async (
       }
     }
     if (attempt < maxAttempts) {
-      await new Promise((resolve) => setTimeout(resolve, attempt * 600));
+      await new Promise((resolve) => setTimeout(resolve, buildReadyGreetingRetryDelayMs(attempt)));
     }
   }
 
