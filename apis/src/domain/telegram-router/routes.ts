@@ -6,7 +6,11 @@ import { getAssistantById } from "../common/db/index.js";
 import { hasActiveSubscriptionForService } from "../payment/subscriptionGuard.js";
 import { ensureGatewayAssistantReady } from "../gateway/assistant_warmup.js";
 import { deriveAssistantWebhookSecret } from "../container/providers/shared/telegram_runtime_secret.js";
-import { hasGoogleOAuthConnection, syncCredentialToContainer } from "../google-oauth/service.js";
+import {
+  getGoogleConnectionStatus,
+  hasGoogleOAuthConnection,
+  syncCredentialToContainer,
+} from "../google-oauth/service.js";
 import { setLogContextTelegramUserId } from "../common/requestLogContext.js";
 
 type WebhookSource = "public" | "private";
@@ -52,6 +56,7 @@ const OAUTH_PROMPT_DEDUPE_WINDOW_MS = 20_000;
 const oauthPromptDedupeCache = new Map<number, { text: string; sentAt: number }>();
 const googleCredentialSyncedRuntimeRef = new Map<number, string>();
 const googleCredentialSyncInFlight = new Map<number, Promise<void>>();
+const GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
 
 export const registerTelegramRouterRoutes = (app: Application): void => {
   app.post("/webhook/telegram", express.json({ limit: "10mb" }), (req, res) => {
@@ -297,6 +302,11 @@ function isGoogleWorkspaceIntent(text: string | null): boolean {
   return GOOGLE_WORKSPACE_INTENT_PATTERN.test(text);
 }
 
+function isGoogleCalendarIntent(text: string | null): boolean {
+  if (!text) return false;
+  return /(日历|日程|calendar|event|events|meeting|schedule)/i.test(text);
+}
+
 export const hasGoogleWorkspaceIntentForTest = (text: string | null): boolean =>
   isGoogleWorkspaceIntent(text);
 
@@ -342,6 +352,27 @@ function buildGoogleCredentialSyncingPrompt(text: string | null): string {
     "Please wait about 10-20 seconds, then send the same request again.",
   ].join("\n");
 }
+
+function buildGoogleCalendarReauthPrompt(text: string | null): string {
+  const language = detectPromptLanguage(text);
+  if (language === "zh") {
+    return [
+      "你已连接 Google，但当前授权缺少日历权限。",
+      "请在 Telegram 左下角 PIN AI mini app 中重新 Connect Google，一并勾选日历权限。",
+      "完成后回到这里重试刚才的请求。",
+    ].join("\n");
+  }
+
+  return [
+    "Google is connected, but the current authorization is missing Calendar permission.",
+    "Please reconnect Google in the PIN AI mini app (bottom-left in Telegram) and grant Calendar access.",
+    "Then come back here and retry the same request.",
+  ].join("\n");
+}
+
+export const buildGoogleCalendarReauthPromptForTest = (
+  text: string | null,
+): string => buildGoogleCalendarReauthPrompt(text);
 
 export const buildGoogleCredentialSyncingPromptForTest = (
   text: string | null,
@@ -390,6 +421,19 @@ async function tryHandleGoogleOAuthPrompt(
   if (!shouldPromptGoogleOAuthForTest(source, text)) return false;
   const connected = await hasGoogleOAuthConnection(chatId);
   if (connected) {
+    if (isGoogleCalendarIntent(text)) {
+      const status = await getGoogleConnectionStatus(chatId).catch(() => null);
+      const scopes = (status?.scopes || "").trim();
+      if (scopes && !scopes.includes(GOOGLE_CALENDAR_SCOPE)) {
+        await sendFallbackMessageBySource(
+          source,
+          chatId,
+          buildGoogleCalendarReauthPrompt(text),
+        );
+        return true;
+      }
+    }
+
     const syncState = await ensureGoogleCredentialSync(chatId, runtimeRef);
     if (syncState === "syncing") {
       await sendFallbackMessageBySource(
