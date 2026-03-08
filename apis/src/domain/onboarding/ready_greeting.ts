@@ -1,132 +1,136 @@
-import { pool } from "../common/db/core.js";
+import { getUserByTelegramId } from "../common/db/userRepository.js";
 import {
-  setAssistantRuntimeMetadataKeyIfAbsent,
+  readAssistantRuntimeMetadata,
   setAssistantRuntimeMetadataKey,
+  setAssistantRuntimeMetadataKeyIfAbsent,
 } from "../common/db/runtimeRepository.js";
-import { config } from "../common/config.js";
-import {
-  buildOnboardingGreetingPrompt,
-  resolveExternalProfileForTelegramUser,
-} from "./profile_bootstrap.js";
+import { hasActiveSubscriptionForService } from "../payment/subscriptionGuard.js";
+import { sendTelegramMessage } from "../telegram/notify.js";
 
-const buildPrivateWebhookUpdate = (telegramUserId: number, text: string) => {
-  const nowSec = Math.floor(Date.now() / 1000);
-  const baseId = Date.now();
-  return {
-    update_id: baseId,
-    message: {
-      message_id: baseId,
-      date: nowSec,
-      chat: {
-        id: telegramUserId,
-        type: "private",
-      },
-      from: {
-        id: telegramUserId,
-        is_bot: false,
-        first_name: "PINAI",
-      },
-      text,
-    },
-  };
+const MS_PER_DAY = 86_400_000;
+
+type ReadyGreetingLocale = "en" | "zh";
+
+interface ReadyGreetingRenderInput {
+  locale: ReadyGreetingLocale;
+  subscriptionActive: boolean;
+  joinDate: string | null;
+  daysWithPinai: number | null;
+  askPreferredName: boolean;
+}
+
+const formatJoinDate = (value: string | null, locale: ReadyGreetingLocale): string | null => {
+  if (!value) return null;
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  if (locale === "zh") return date.toISOString().slice(0, 10);
+  return new Intl.DateTimeFormat("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(date);
 };
 
-const buildReadyGreetingWebhookUrls = (baseUrl: string): string[] => [
-  `${baseUrl.replace(/\/+$/, "")}/webhook/telegram/private`,
-];
+const resolveLocale = (languageCode: string | null | undefined): ReadyGreetingLocale => {
+  const raw = String(languageCode || "").trim().toLowerCase();
+  if (raw.startsWith("zh")) return "zh";
+  return "en";
+};
 
-const READY_GREETING_MAX_ATTEMPTS = 10;
+const computeDaysWithPinai = (joinDate: string | null): number | null => {
+  if (!joinDate) return null;
+  const joinedAt = new Date(joinDate);
+  const joinedMs = joinedAt.getTime();
+  if (!Number.isFinite(joinedMs)) return null;
+  return Math.max(1, Math.floor((Date.now() - joinedMs) / MS_PER_DAY));
+};
 
-const buildReadyGreetingRetryDelayMs = (attempt: number): number =>
-  Math.min(1500 * attempt, 4000);
+export const buildApiReadyGreetingMessage = (
+  input: ReadyGreetingRenderInput,
+): string => {
+  const joined = formatJoinDate(input.joinDate, input.locale);
 
-export const buildReadyGreetingWebhookUrlsForTest = (baseUrl: string): string[] =>
-  buildReadyGreetingWebhookUrls(baseUrl);
+  if (input.locale === "zh") {
+    const lines: string[] = ["你好，我已经在线了。", ""];
 
-export const buildReadyGreetingRetryDelaysForTest = (): number[] =>
-  Array.from({ length: Math.max(READY_GREETING_MAX_ATTEMPTS - 1, 0) }, (_, index) =>
-    buildReadyGreetingRetryDelayMs(index + 1),
-  );
-
-export const buildReadyGreetingFallbackMessage = (): string =>
-  [
-    "Hey, I’m online now.",
-    "",
-    "Tell me what you want to work on first.",
-  ].join("\n");
-
-const postPrivateWebhook = async (
-  update: Record<string, unknown>,
-): Promise<boolean> => {
-  const secret = config.telegram.webhookSecret?.trim();
-  if (!secret) return false;
-
-  const baseUrl = config.publicBaseUrl.replace(/\/+$/, "");
-  const urls = buildReadyGreetingWebhookUrls(baseUrl);
-  const maxAttempts = READY_GREETING_MAX_ATTEMPTS;
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    for (const url of urls) {
-      try {
-        const res = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Telegram-Bot-Api-Secret-Token": secret,
-          },
-          body: JSON.stringify(update),
-        });
-        if (res.ok) {
-          let forwarded = false;
-          try {
-            const payload = (await res.json()) as { forwarded?: unknown };
-            forwarded = payload.forwarded === true;
-          } catch {
-            forwarded = false;
-          }
-          if (forwarded) return true;
-          console.warn("[onboarding] greeting trigger acknowledged but not forwarded", {
-            url,
-            attempt,
-          });
-          continue;
-        }
-        console.warn("[onboarding] greeting trigger webhook returned non-2xx", {
-          url,
-          attempt,
-          status: res.status,
-        });
-      } catch (error) {
-        console.warn("[onboarding] greeting trigger webhook request failed", {
-          url,
-          attempt,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+    if (input.subscriptionActive) {
+      lines.push("HiPin，尊贵的 PINAI 用户。感谢你一路陪伴。");
+    } else {
+      lines.push("欢迎回来，感谢你使用 PINAI。");
     }
-    if (attempt < maxAttempts) {
-      await new Promise((resolve) => setTimeout(resolve, buildReadyGreetingRetryDelayMs(attempt)));
+
+    if (joined && input.daysWithPinai) {
+      lines.push(`你从 ${joined} 加入 PINAI，到现在已经 ${input.daysWithPinai} 天了。`);
+    } else if (input.daysWithPinai) {
+      lines.push(`你已经和 PINAI 一起走过 ${input.daysWithPinai} 天了。`);
     }
+
+    lines.push("");
+    if (input.askPreferredName) {
+      lines.push("我该怎么称呼你？");
+    } else {
+      lines.push("如果你希望我换个称呼，直接告诉我。");
+    }
+    lines.push("你希望我回答时更简洁，还是更详细？");
+    lines.push("今天想先处理什么？");
+    return lines.join("\n");
   }
 
-  return false;
+  const lines: string[] = ["Hey, I’m online now.", ""];
+  if (input.subscriptionActive) {
+    lines.push("HiPin. Thank you for staying with PINAI.");
+  } else {
+    lines.push("Welcome back, and thanks for being with PINAI.");
+  }
+
+  if (joined && input.daysWithPinai) {
+    lines.push(`You joined PINAI on ${joined}, and it's been ${input.daysWithPinai} days together.`);
+  } else if (input.daysWithPinai) {
+    lines.push(`You’ve been with PINAI for ${input.daysWithPinai} days.`);
+  }
+
+  lines.push("");
+  if (input.askPreferredName) {
+    lines.push("What should I call you?");
+  } else {
+    lines.push("If you want me to use a different name, just tell me.");
+  }
+  lines.push("Do you want me to be concise or detailed?");
+  lines.push("How can I help you today?");
+  return lines.join("\n");
 };
 
-const readAssistantOwnerTelegramId = async (
-  assistantId: number,
-): Promise<number | null> => {
-  const result = await pool.query<{ telegram_user_id: number }>(
-    `
-      SELECT u.telegram_user_id
-      FROM assistants a
-      INNER JOIN users u ON u.id = a.owner_user_id
-      WHERE a.id = $1
-      LIMIT 1
-    `,
-    [assistantId],
-  );
+export const buildReadyGreetingFallbackMessage = (): string =>
+  buildApiReadyGreetingMessage({
+    locale: "en",
+    subscriptionActive: false,
+    joinDate: null,
+    daysWithPinai: null,
+    askPreferredName: true,
+  });
 
-  return result.rows[0]?.telegram_user_id ?? null;
+const resolveGreetingContext = async (assistantId: number, telegramUserId: number) => {
+  const [user, runtimeMetadata, subscriptionActive] = await Promise.all([
+    getUserByTelegramId(telegramUserId),
+    readAssistantRuntimeMetadata(assistantId).catch(() => ({})),
+    hasActiveSubscriptionForService(String(telegramUserId)).catch(() => false),
+  ]);
+
+  const joinDate = user?.created_at ?? null;
+  const metadataRecord = runtimeMetadata as Record<string, unknown>;
+  const languageCode =
+    typeof metadataRecord["telegram_language_code"] === "string"
+      ? String(metadataRecord["telegram_language_code"])
+      : null;
+
+  return {
+    locale: resolveLocale(languageCode),
+    subscriptionActive,
+    joinDate,
+    daysWithPinai: computeDaysWithPinai(joinDate),
+    askPreferredName: true,
+  } satisfies ReadyGreetingRenderInput;
 };
 
 export const triggerReadyGreetingForAssistant = async (input: {
@@ -142,49 +146,40 @@ export const triggerReadyGreetingForAssistant = async (input: {
     return true;
   }
 
-  let hasProfile: boolean | null = null;
-  let profileText = "";
-  let membershipDays: number | null = null;
-  let membershipSinceDate: string | null = null;
+  const message = buildApiReadyGreetingMessage(
+    await resolveGreetingContext(input.assistantId, input.telegramUserId),
+  );
 
-  const ownerTelegramId =
-    (await readAssistantOwnerTelegramId(input.assistantId)) ??
-    input.telegramUserId;
-  const profile = await resolveExternalProfileForTelegramUser(ownerTelegramId);
-  hasProfile = Boolean(profile?.profileText?.trim());
-  profileText = profile?.profileText || "";
-  if (profile?.accountCreatedAt) {
-    const createdAt = new Date(profile.accountCreatedAt);
-    const createdAtMs = createdAt.getTime();
-    if (Number.isFinite(createdAtMs)) {
-      const diffDays = Math.floor((Date.now() - createdAtMs) / 86_400_000);
-      membershipDays = Math.max(1, diffDays);
-      membershipSinceDate = createdAt.toISOString().slice(0, 10);
-    }
-  }
-
-  const prompt = buildOnboardingGreetingPrompt({
-    hasProfile: Boolean(hasProfile),
-    profileText,
-    membershipDays,
-    membershipSinceDate,
-  });
-
-  const update = buildPrivateWebhookUpdate(input.telegramUserId, prompt);
-  const ok = await postPrivateWebhook(update);
-  if (!ok) {
+  try {
+    await sendTelegramMessage(input.telegramUserId, message);
+    return true;
+  } catch (error) {
     await setAssistantRuntimeMetadataKey(
       input.assistantId,
       "onboarding_greeted_at",
       null,
-    ).catch((error) => {
-      console.warn("[onboarding] Failed to clear greeting metadata after delivery failure", {
-        assistantId: input.assistantId,
-        error: error instanceof Error ? error.message : String(error),
-      });
+    ).catch(() => undefined);
+    console.warn("[onboarding] Failed to send API-controlled ready greeting", {
+      assistantId: input.assistantId,
+      telegramUserId: input.telegramUserId,
+      error: error instanceof Error ? error.message : String(error),
     });
     return false;
   }
-
-  return true;
 };
+
+export const setAssistantReadyGreetingLanguageCode = async (
+  assistantId: number,
+  languageCode: string | null | undefined,
+): Promise<void> => {
+  const normalized = String(languageCode || "").trim().toLowerCase();
+  if (!normalized) return;
+  await setAssistantRuntimeMetadataKey(
+    assistantId,
+    "telegram_language_code",
+    normalized,
+  );
+};
+
+export const resolveReadyGreetingLocaleForTest = resolveLocale;
+export const computeDaysWithPinaiForTest = computeDaysWithPinai;
