@@ -25,6 +25,20 @@ type SkillItem = {
   enabled: boolean;
 };
 
+type GoogleStatus = {
+  connected: boolean;
+  email: string | null;
+  scopes: string;
+  updatedAt: string;
+};
+
+type SkillsPayload = {
+  supported: boolean;
+  message: string;
+  items: SkillItem[];
+  config?: Record<string, unknown> | null;
+};
+
 type StatePayload = {
   user: {
     telegram_user_id: number;
@@ -43,19 +57,15 @@ type StatePayload = {
     cancel_at_period_end: boolean;
     current_period_end: string | null;
   };
+  plans: Plan[] | null;
+  skills: SkillsPayload | null;
+  google: GoogleStatus | null;
+};
+
+type DeferredPayload = {
   plans: Plan[];
-  skills: {
-    supported: boolean;
-    message: string;
-    items: SkillItem[];
-    config?: Record<string, unknown> | null;
-  };
-  google: {
-    connected: boolean;
-    email: string | null;
-    scopes: string;
-    updatedAt: string;
-  };
+  skills: SkillsPayload;
+  google: GoogleStatus;
 };
 
 declare global {
@@ -108,7 +118,7 @@ const safeFetch = async <T,>(url: string, init?: RequestInit): Promise<T> => {
 const App = () => {
   const [state, setState] = useState<StatePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(true); // true until bootstrap completes; Telegram native loader covers this
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
   const [busy, setBusy] = useState<string>("none");
   const [showChangePlan, setShowChangePlan] = useState(false);
@@ -129,21 +139,29 @@ const App = () => {
   const hydrateState = (payload: StatePayload): void => {
     setState(payload);
     setSelectedPlan(
-      (prev) => prev ?? payload.subscription.plan_id ?? payload.plans[0]?.id ?? null,
+      (prev) => prev ?? payload.subscription.plan_id ?? payload.plans?.[0]?.id ?? null,
     );
+  };
+
+  const loadDeferred = async (): Promise<DeferredPayload> => {
+    const deferred = await safeFetch<DeferredPayload>("/api/mini/state/deferred");
+    setState((prev) => prev ? { ...prev, ...deferred } : prev);
+    setSelectedPlan((prev) => prev ?? deferred.plans[0]?.id ?? null);
+    return deferred;
   };
 
   const consumeGoogleRedirect = async (): Promise<void> => {
     const redirectState = readGoogleRedirectState(window.location.search);
     if (redirectState.kind === "idle") return;
 
-    const payload = await loadState();
+    // Google redirect needs full data including google status
+    const deferred = await loadDeferred();
     if (redirectState.manage) {
       setShowManageAgent(true);
     }
 
     if (redirectState.kind === "connected") {
-      const email = payload.google.email || "";
+      const email = deferred.google.email || "";
       showToast(
         email
           ? `Google connected: ${email}. Return to Telegram to use email actions.`
@@ -160,7 +178,11 @@ const App = () => {
   };
 
   const loadState = async () => {
-    const payload = await safeFetch<StatePayload>("/api/mini/state");
+    const [quick, deferred] = await Promise.all([
+      safeFetch<StatePayload>("/api/mini/state"),
+      safeFetch<DeferredPayload>("/api/mini/state/deferred"),
+    ]);
+    const payload: StatePayload = { ...quick, ...deferred };
     hydrateState(payload);
     return payload;
   };
@@ -169,39 +191,40 @@ const App = () => {
     const initData = window.Telegram?.WebApp?.initData?.trim() ?? "";
 
     if (initData) {
-      const requestBody = { init_data: initData };
-      try {
-        const payload = await safeFetch<StatePayload>("/api/mini/bootstrap", {
-          method: "POST",
-          body: JSON.stringify(requestBody),
-        });
-        hydrateState(payload);
-        return;
-      } catch (error) {
-        throw error;
-      }
+      const payload = await safeFetch<StatePayload>("/api/mini/bootstrap", {
+        method: "POST",
+        body: JSON.stringify({ init_data: initData }),
+      });
+      hydrateState(payload);
+      return;
     }
     await loadState();
   };
 
   useEffect(() => {
-    window.Telegram?.WebApp?.ready?.();
+    // expand/fullscreen can be called early — they don't dismiss the native loader
     window.Telegram?.WebApp?.expand?.();
     const platform = window.Telegram?.WebApp?.platform;
     if (platform === 'ios' || platform === 'android') {
       window.Telegram?.WebApp?.requestFullscreen?.();
-      // Telegram fullscreen adds close/settings buttons (~56px) below the safe area
       document.documentElement.style.setProperty("--tg-top-offset", "56px");
     }
     setLoading(true);
     setError(null);
 
     void bootstrap()
+      .then(() => {
+        setLoading(false);
+        // Signal Telegram that the page is ready — dismisses native loader
+        window.Telegram?.WebApp?.ready?.();
+        // Fire deferred load in background (plans, google, skills)
+        void loadDeferred().catch(() => {});
+      })
       .catch((e: unknown) => {
         setError(e instanceof Error ? e.message : "unknown error");
-      })
-      .finally(() => {
         setLoading(false);
+        // Still need to dismiss native loader on error so user sees error UI
+        window.Telegram?.WebApp?.ready?.();
       });
   }, []);
 
@@ -212,6 +235,20 @@ const App = () => {
     handledGoogleRedirectRef.current = true;
     void consumeGoogleRedirect();
   }, [loading, state]);
+
+  // Poll for status changes when assistant exists but isn't running yet
+  useEffect(() => {
+    if (!state?.assistant.exists) return;
+    if (state.assistant.status === "running") return;
+
+    const id = setInterval(() => {
+      void safeFetch<StatePayload>("/api/mini/state").then((quick) => {
+        setState((prev) => prev ? { ...prev, ...quick } : prev);
+      }).catch(() => {});
+    }, 3_000);
+
+    return () => clearInterval(id);
+  }, [state?.assistant.exists, state?.assistant.status]);
 
   const createAssistant = async () => {
     setBusy("create");
@@ -324,17 +361,9 @@ const App = () => {
     }
   };
 
+  // Telegram native loader covers the bootstrap wait — render empty background
   if (loading) {
-    return (
-      <div
-        className="min-h-dvh bg-pin-gradient flex items-center justify-center p-5"
-        style={{ paddingTop: "calc(var(--safe-top) + 1.25rem)" }}
-      >
-        <div className="glass-card rounded-2xl p-9 text-center text-sm text-muted-foreground max-w-md w-full">
-          Loading...
-        </div>
-      </div>
-    );
+    return <div className="min-h-dvh bg-pin-gradient" />;
   }
 
   if (error || !state) {
@@ -400,30 +429,43 @@ const App = () => {
 
         <section className="glass-card rounded-2xl p-4 mt-3 animate-fade-in flex-1 flex flex-col min-h-0">
           <div className="flex-1 space-y-2.5 overflow-y-auto min-h-0">
-            {state.plans.map((plan) => {
-              const selected = selectedPlan === plan.id;
-              return (
-                <button
-                  key={plan.id}
-                  className={`w-full rounded-xl p-3.5 text-left transition-all btn-press ${
-                    selected
-                      ? "bg-white/60 border-2 border-primary shadow-lg"
-                      : "bg-white/30 border border-white/40 hover:bg-white/40"
-                  }`}
-                  onClick={() => setSelectedPlan(plan.id)}
-                >
-                  <div className="flex items-center justify-between gap-2 mb-0.5">
-                    <span className="text-base font-bold text-foreground">{plan.name}</span>
-                    <span className="text-lg font-extrabold text-primary">
-                      ${plan.price}<span className="text-sm font-normal text-muted-foreground">/mo</span>
-                    </span>
+            {state.plans === null ? (
+              /* Skeleton placeholders while plans load */
+              Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="w-full rounded-xl p-3.5 bg-white/30 border border-white/40 animate-pulse">
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <div className="h-4 w-24 bg-white/50 rounded" />
+                    <div className="h-5 w-16 bg-white/50 rounded" />
                   </div>
-                  <div className="text-xs text-foreground/60">
-                    {plan.features.slice(0, 2).join(" · ")}
-                  </div>
-                </button>
-              );
-            })}
+                  <div className="h-3 w-40 bg-white/40 rounded" />
+                </div>
+              ))
+            ) : (
+              state.plans.map((plan) => {
+                const selected = selectedPlan === plan.id;
+                return (
+                  <button
+                    key={plan.id}
+                    className={`w-full rounded-xl p-3.5 text-left transition-all btn-press ${
+                      selected
+                        ? "bg-white/60 border-2 border-primary shadow-lg"
+                        : "bg-white/30 border border-white/40 hover:bg-white/40"
+                    }`}
+                    onClick={() => setSelectedPlan(plan.id)}
+                  >
+                    <div className="flex items-center justify-between gap-2 mb-0.5">
+                      <span className="text-base font-bold text-foreground">{plan.name}</span>
+                      <span className="text-lg font-extrabold text-primary">
+                        ${plan.price}<span className="text-sm font-normal text-muted-foreground">/mo</span>
+                      </span>
+                    </div>
+                    <div className="text-xs text-foreground/60">
+                      {plan.features.slice(0, 2).join(" · ")}
+                    </div>
+                  </button>
+                );
+              })
+            )}
           </div>
           <div className="mt-3 shrink-0">
             <button
@@ -463,7 +505,7 @@ const App = () => {
             planId={state.subscription.plan_id}
             active={state.subscription.active}
             manageOpen={showManageAgent}
-            google={state.google}
+            google={state.google ?? undefined}
             googleBusy={busy === "google-disconnect"}
             onOpenManage={() => {
               void handleOpenManage();
@@ -491,7 +533,7 @@ const App = () => {
         <ChangePlanDialog
           open={showChangePlan}
           onClose={() => setShowChangePlan(false)}
-          plans={state.plans}
+          plans={state.plans ?? []}
           currentPlanId={state.subscription.plan_id}
           selectedPlan={selectedPlan}
           onSelectPlan={setSelectedPlan}

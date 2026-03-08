@@ -6,7 +6,7 @@ interface ManageAgentDialogProps {
   planId: string | null;
   onChangePlan: () => void;
   onDeleteAccount: () => void;
-  google: {
+  google?: {
     connected: boolean;
     email: string | null;
   };
@@ -31,23 +31,28 @@ const ManageAgentDialog = ({
 
   if (!open) return null;
 
+  const googleLoading = !google;
+  const googleConnected = google?.connected ?? false;
+
   const menuItems = [
     {
       icon: "📧",
-      label: google.connected ? "Disconnect Google" : "Connect Google",
-      desc: google.connected
-        ? `Connected mailbox: ${google.email || "Connected"}`
-        : "Connect Gmail for email actions",
+      label: googleLoading ? "Google" : googleConnected ? "Disconnect Google" : "Connect Google",
+      desc: googleLoading
+        ? "Loading..."
+        : googleConnected
+          ? `Connected mailbox: ${google?.email || "Connected"}`
+          : "Connect Gmail for email actions",
       onClick: () => {
-        if (googleBusy) return;
-        if (google.connected) {
+        if (googleLoading || googleBusy) return;
+        if (googleConnected) {
           setShowGoogleDisconnectConfirm(true);
           return;
         }
         onConnectGoogle();
       },
       destructive: false,
-      loading: googleBusy,
+      loading: googleBusy || googleLoading,
     },
     {
       icon: "💳",
@@ -162,7 +167,7 @@ const ManageAgentDialog = ({
               </svg>
             </button>
           ))}
-          {google.connected ? (
+          {googleConnected ? (
             <div className="rounded-xl bg-gray-50 px-3 py-3 mt-2">
               <p className="text-[11px] font-semibold text-foreground">Use it in Telegram</p>
               <p className="text-[11px] text-muted-foreground mt-1">

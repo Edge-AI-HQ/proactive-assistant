@@ -6,7 +6,7 @@ interface AgentCardProps {
   planId: string | null;
   active: boolean;
   manageOpen: boolean;
-  google: {
+  google?: {
     connected: boolean;
     email: string | null;
   };
@@ -24,15 +24,15 @@ const getStatusDisplay = (status: string): { text: string; color: string } => {
     case "running":
       return { text: "Running", color: "text-pin-mint" };
     case "creating":
-      return { text: "Setting up...", color: "text-amber-600" };
+      return { text: "Creating...", color: "text-amber-600" };
     case "stopped":
-      return { text: "Stopped", color: "text-muted-foreground" };
+      return { text: "Starting...", color: "text-amber-600" };
+    case "missing":
+      return { text: "Provisioning...", color: "text-amber-600" };
     case "error":
       return { text: "Error", color: "text-destructive" };
-    case "missing":
-      return { text: "Initializing...", color: "text-amber-600" };
     default:
-      return { text: "Unknown", color: "text-muted-foreground" };
+      return { text: "Starting up...", color: "text-amber-600" };
   }
 };
 

@@ -1,5 +1,5 @@
 export const GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE =
-  "/app/data/google/gws-credentials.json";
+  "/app/google/gws-credentials.json";
 export const GOOGLE_WORKSPACE_CLI_DEFAULT_CREDENTIALS_FILE =
   "/root/.config/gws/credentials.json";
 export const PINAI_GOOGLE_CREDENTIALS_B64_ENV =

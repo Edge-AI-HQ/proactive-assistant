@@ -29,13 +29,28 @@ RUN mkdir -p /opt/pinai/plugins/telegram-router-proxy
 COPY openclaw-plugins/telegram-router-proxy/ /opt/pinai/plugins/telegram-router-proxy/
 COPY infra/container-manager/images/openclaw/skills/ /usr/local/lib/node_modules/openclaw/skills/
 
-VOLUME /app/config
-VOLUME /app/data
+# ── Warm up jiti + Node compile caches at build time ──
+# Launch gateway with OPENCLAW_HOME=/app so workspace lands at /app/.openclaw/workspace/.
+# After 60s the gateway is killed; caches are saved into /opt/pinai/*.
+RUN mkdir -p /tmp/jiti \
+    && OPENCLAW_HOME=/app \
+       NODE_COMPILE_CACHE=/tmp/node-compile-cache \
+       timeout 60 openclaw gateway --bind loopback --allow-unconfigured 2>&1 || true \
+    && mkdir -p /opt/pinai/jiti-warmup /opt/pinai/node-compile-warmup \
+    && cp -r /tmp/jiti/. /opt/pinai/jiti-warmup/ 2>/dev/null || true \
+    && cp -r /tmp/node-compile-cache/. /opt/pinai/node-compile-warmup/ 2>/dev/null || true \
+    && rm -rf /tmp/jiti /tmp/node-compile-cache /app/.openclaw
 
+COPY infra/container-manager/images/openclaw/pinai-entrypoint.sh /usr/local/bin/pinai-entrypoint.sh
+RUN chmod +x /usr/local/bin/pinai-entrypoint.sh
+COPY infra/container-manager/images/openclaw/TOOLS_to_append.md /opt/pinai/TOOLS_to_append.md
+
+ENV OPENCLAW_HOME="/app"
 ENV OPENCLAW_MODE="headless"
 ENV OPENCLAW_GATEWAY_PORT="18789"
 ENV OPENCLAW_TELEGRAM_ROUTER_PLUGIN_PATH="/opt/pinai/plugins/telegram-router-proxy"
+ENV PINAI_TOOLS_APPEND_PATH="/opt/pinai/TOOLS_to_append.md"
 
 EXPOSE 18789
 
-CMD ["openclaw", "gateway", "--bind", "lan"]
+CMD ["pinai-entrypoint.sh"]

@@ -220,8 +220,8 @@ export const resolveAssistantLiteLLMEnv = (assistant: AssistantLiteLLMRef): Reco
 
   const env: Record<string, string> = {
     LITELLM_API_KEY: key,
-    LITELLM_BASE_URL: config.litellm.containerBaseUrl,
-    PINAI_LITELLM_BASE_URL: config.litellm.containerBaseUrl
+    LITELLM_BASE_URL: config.litellm.baseUrl,
+    PINAI_LITELLM_BASE_URL: config.litellm.baseUrl
   };
 
   return env;

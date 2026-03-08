@@ -6,6 +6,10 @@ import {
   buildLiteLLMProviderConfig,
   type UnknownRecord,
 } from "./litellm_models.js";
+import {
+  DEFAULT_PREINSTALLED_BUNDLED_SKILLS,
+  ensureBundledSkillsInstalled,
+} from "../../../skills/openclaw_skills.js";
 
 export type GatewayBindMode = "lan" | "loopback";
 
@@ -258,6 +262,13 @@ export const buildAssistantOpenclawConfig = (
 
   if (options.skillsConfig && Object.keys(options.skillsConfig).length > 0) {
     next.skills = options.skillsConfig;
+  } else {
+    // No runtime skills metadata — install default bundled skills
+    const defaultSkills = ensureBundledSkillsInstalled(
+      null,
+      DEFAULT_PREINSTALLED_BUNDLED_SKILLS,
+    );
+    next.skills = defaultSkills as UnknownRecord;
   }
 
   const baseWebhookConfig: TelegramWebhookConfig = { enabled: true };
@@ -381,6 +392,56 @@ export const buildAssistantOpenclawConfig = (
   if (Object.keys(plugins.entries).length > 0) {
     next.plugins = plugins;
   }
+
+  // Enable all tools with full profile
+  next.tools = {
+    profile: "full",
+    allow: ["*"],
+    deny: [],
+    elevated: { enabled: true, allowFrom: { "*": ["*"] } },
+    exec: {
+      security: "full",
+      host: "gateway",
+      backgroundMs: 10000,
+      timeoutSec: 1800,
+      notifyOnExit: true,
+    },
+    web: {
+      search: { enabled: true, maxResults: 10 },
+      fetch: { enabled: true, maxChars: 50000 },
+    },
+    media: {
+      concurrency: 2,
+      audio: { enabled: true, maxBytes: 20971520 },
+      video: { enabled: true, maxBytes: 52428800 },
+    },
+    sessions: { visibility: "all" },
+    sessions_spawn: {
+      attachments: { enabled: true, maxTotalBytes: 5242880, maxFiles: 50 },
+    },
+    loopDetection: { enabled: false },
+  };
+
+  // Enable all commands except config
+  next.commands = {
+    native: true,
+    text: true,
+    bash: true,
+    config: false,
+    debug: true,
+    restart: true,
+  };
+
+  // Enable browser capability
+  next.browser = {
+    enabled: true,
+    evaluateEnabled: true,
+  };
+
+  // Enable cron scheduler
+  next.cron = {
+    enabled: true,
+  };
 
   return next;
 };

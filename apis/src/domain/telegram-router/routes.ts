@@ -7,6 +7,7 @@ import { hasActiveSubscriptionForService } from "../payment/subscriptionGuard.js
 import { ensureGatewayAssistantReady } from "../gateway/assistant_warmup.js";
 import { deriveAssistantWebhookSecret } from "../container/providers/shared/telegram_runtime_secret.js";
 import { hasGoogleOAuthConnection } from "../google-oauth/service.js";
+import { setLogContextTelegramUserId } from "../common/requestLogContext.js";
 
 type WebhookSource = "public" | "private";
 
@@ -342,6 +343,9 @@ async function handleTelegramApiProxy(req: Request, res: Response): Promise<void
 
     const proxyUrl = new URL(req.originalUrl, "http://localhost");
     const bodyInfo = extractTelegramProxyBodyInfo(proxyUrl, req.headers["content-type"] as string | undefined, body);
+    if (bodyInfo.chatId) {
+      setLogContextTelegramUserId(bodyInfo.chatId);
+    }
     if (shouldSuppressTelegramOutboundMessage(method, bodyInfo)) {
       console.log(
         `🧹 Suppressed duplicate welcome message method=${method} chat_id=${bodyInfo.chatId ?? "n/a"} ` +

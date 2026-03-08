@@ -64,8 +64,21 @@ export const DEFAULT_SKILLS_CATALOG: SkillCatalogItem[] = [
     name: "Nano Banana Pro",
     description: "Advanced multimodal agent enhancement skill.",
   },
+  {
+    key: "openai-whisper-api",
+    name: "OpenAI Whisper API",
+    description: "Speech-to-text transcription via OpenAI Whisper API.",
+  },
+  {
+    key: "openai-image-gen",
+    name: "OpenAI Image Gen",
+    description: "Image generation via OpenAI DALL-E / image API.",
+  },
 ];
 
+/** Skills always injected into every assistant config — both when runtime
+ *  metadata exists (via readSkillsConfigFromRuntimeMetadata) and as the
+ *  fallback when no metadata is present (via buildAssistantOpenclawConfig). */
 export const DEFAULT_PREINSTALLED_BUNDLED_SKILLS = [
   "openai-image-gen",
   "openai-whisper-api",

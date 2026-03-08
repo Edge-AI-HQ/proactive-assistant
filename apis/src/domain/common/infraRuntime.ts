@@ -37,7 +37,6 @@ const containerManagerConfig: ContainerManagerConfig = {
   litellm: {
     enabled: config.litellm.enabled,
     baseUrl: config.litellm.baseUrl,
-    containerBaseUrl: config.litellm.containerBaseUrl,
     masterKey: config.litellm.masterKey,
     allowedModels: config.litellm.allowedModels,
     openclawDefaultModel: config.litellm.openclawDefaultModel

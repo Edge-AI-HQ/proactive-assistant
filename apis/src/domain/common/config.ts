@@ -89,9 +89,6 @@ const port = toInt(process.env.PORT, 3000);
 const publicBaseUrl = process.env.PUBLIC_BASE_URL || `http://localhost:${port}`;
 const liteLlmEnabled = toBool(process.env.LITELLM_ENABLED, true);
 const liteLlmBaseUrl = stripTrailingSlash(toTrimmed(process.env.LITELLM_BASE_URL, 'http://127.0.0.1:4000'));
-const liteLlmContainerBaseUrl = stripTrailingSlash(
-  toTrimmed(process.env.LITELLM_CONTAINER_BASE_URL, 'http://host.docker.internal:4000')
-);
 
 export const config: Config = {
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -111,7 +108,6 @@ export const config: Config = {
   litellm: {
     enabled: liteLlmEnabled,
     baseUrl: liteLlmBaseUrl,
-    containerBaseUrl: liteLlmContainerBaseUrl,
     masterKey: toTrimmed(process.env.LITELLM_MASTER_KEY),
     requestTimeoutMs: toInt(process.env.LITELLM_REQUEST_TIMEOUT_MS, 15000),
     syncIntervalMs: toInt(process.env.LITELLM_SYNC_INTERVAL_MS, 300000),

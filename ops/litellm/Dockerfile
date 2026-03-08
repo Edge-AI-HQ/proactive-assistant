@@ -1,4 +1,4 @@
-FROM docker.litellm.ai/berriai/litellm:main-v1.82.rc.1
+FROM docker.litellm.ai/berriai/litellm:main-v1.82.0.dev1
 WORKDIR /app
 COPY litellm_config.yaml config.yaml
 EXPOSE 4000
