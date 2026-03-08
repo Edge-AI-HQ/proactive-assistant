@@ -13,4 +13,11 @@ test('buildGoogleConnectedMessage includes mailbox and suggested actions', () =>
   assert.match(message, /smile@pinai\.io/);
   assert.match(message, /latest 10 emails/);
   assert.match(message, /unread emails/);
+  assert.match(message, /Credentials have been synced/);
+});
+
+test('buildGoogleConnectedMessage does not claim sync success when container sync is pending', () => {
+  const message = buildGoogleConnectedMessage('smile@pinai.io', false);
+  assert.match(message, /still warming up/);
+  assert.doesNotMatch(message, /Credentials have been synced/);
 });

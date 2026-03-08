@@ -8,6 +8,7 @@ import {
   hasGoogleWorkspaceIntentForTest,
   shouldPromptGoogleOAuthForTest,
   resetTelegramWelcomeDedupeForTest,
+  shouldSuppressGoogleOAuthPromptForTest,
   shouldSuppressTelegramOutboundMessage,
 } from "./routes.js";
 
@@ -109,4 +110,35 @@ test("shouldSuppressTelegramOutboundMessage ignores sendMessageDraft", () => {
   );
 
   assert.equal(suppressed, false);
+});
+
+test("shouldSuppressGoogleOAuthPromptForTest dedupes same prompt in short window", () => {
+  resetTelegramWelcomeDedupeForTest();
+
+  const first = shouldSuppressGoogleOAuthPromptForTest(
+    6142814327,
+    "我下一个日历是什么",
+    1_000,
+  );
+  const second = shouldSuppressGoogleOAuthPromptForTest(
+    6142814327,
+    "我下一个日历是什么",
+    5_000,
+  );
+
+  assert.equal(first, false);
+  assert.equal(second, true);
+});
+
+test("shouldSuppressGoogleOAuthPromptForTest allows resend after dedupe window", () => {
+  resetTelegramWelcomeDedupeForTest();
+
+  shouldSuppressGoogleOAuthPromptForTest(6142814327, "Show my next calendar event", 1_000);
+  const later = shouldSuppressGoogleOAuthPromptForTest(
+    6142814327,
+    "Show my next calendar event",
+    30_000,
+  );
+
+  assert.equal(later, false);
 });
