@@ -285,6 +285,7 @@ const provisionAssistantWithGuideBot = async (
       await createAssistantWithoutContainerViaApi({
         ownerTelegramUserId: telegramUserId,
         ownerTelegramUsername: telegramUsername,
+        ownerTelegramLanguageCode: ctx.from?.language_code ?? null,
       });
     } catch (error: unknown) {
       const is409 = error instanceof BackendApiError && error.status === 409;
@@ -851,6 +852,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
       await createAssistantWithoutContainerViaApi({
         ownerTelegramUserId: telegramUserId,
         ownerTelegramUsername: ctx.from?.username ?? null,
+        ownerTelegramLanguageCode: ctx.from?.language_code ?? null,
         assistantBotId: tokenParsed.id,
         assistantBotToken: tokenParsed.token,
         assistantBotUsername: "", // 会自动从 Telegram 获取

@@ -69,10 +69,16 @@ export const parseProvisionAssistantInput = (
     record.owner_telegram_username.trim().length > 0
       ? record.owner_telegram_username.trim()
       : null;
+  const ownerTelegramLanguageCode =
+    typeof record.owner_telegram_language_code === "string" &&
+    record.owner_telegram_language_code.trim().length > 0
+      ? record.owner_telegram_language_code.trim()
+      : null;
 
   return {
     ownerTelegramUserId,
     ownerTelegramUsername,
+    ownerTelegramLanguageCode,
     assistantBotId: assistantBotId || null,
     assistantBotToken: assistantBotToken || null,
     assistantBotUsername: assistantBotUsername || null,

@@ -25,6 +25,7 @@ import {
   buildWebhookParams,
   buildBaseContainerEnv,
 } from "../shared/webhook_params.js";
+import { PINAI_WORKSPACE_STATUS_PORT } from "../shared/workspace_ready.js";
 import { config as appConfig } from "../../../common/config.js";
 import { toOpenclawSkillsPayload } from "../../../skills/openclaw_skills.js";
 import { renderUserProfileMarkdown } from "../../../onboarding/profile_bootstrap.js";
@@ -495,6 +496,7 @@ const inspectToContainerRef = async (
   metadata.privateWebhookHostPort = extractHostPort(
     `${webhookPort + 1}/tcp`,
   );
+  metadata.workspaceStatusHostPort = extractHostPort(`${PINAI_WORKSPACE_STATUS_PORT}/tcp`);
 
   return {
     id: inspect.Id,
@@ -591,6 +593,9 @@ export const dockerContainerRuntime: ContainerRuntime = {
     const privateWebhookHostPort = params.containerPort
       ? String(params.containerPort + 2)
       : "0";
+    const workspaceStatusHostPort = params.containerPort
+      ? String(params.containerPort + 3)
+      : "0";
 
     // TELEGRAM_ROUTER_URL: where the telegram-router-proxy plugin forwards
     // outbound Telegram API calls. In Docker, the APIs server runs on the host.
@@ -614,6 +619,7 @@ export const dockerContainerRuntime: ContainerRuntime = {
         [`${config.openclaw.gatewayPort}/tcp`]: {},
         [`${webhookPort}/tcp`]: {},
         [`${privateWebhookPort}/tcp`]: {},
+        [`${PINAI_WORKSPACE_STATUS_PORT}/tcp`]: {},
       },
       HostConfig: {
         RestartPolicy: { Name: "unless-stopped" },
@@ -622,6 +628,7 @@ export const dockerContainerRuntime: ContainerRuntime = {
           [`${config.openclaw.gatewayPort}/tcp`]: [{ HostPort: hostPort }],
           [`${webhookPort}/tcp`]: [{ HostPort: webhookHostPort }],
           [`${privateWebhookPort}/tcp`]: [{ HostPort: privateWebhookHostPort }],
+          [`${PINAI_WORKSPACE_STATUS_PORT}/tcp`]: [{ HostPort: workspaceStatusHostPort }],
         },
         Binds: [
           `${dirs.baseDir}:/app`,
@@ -730,7 +737,9 @@ export const dockerContainerRuntime: ContainerRuntime = {
               ? Number(ref.metadata.webhookHostPort)
               : containerPort === config.telegramRouter.webhookPort + 1
                 ? Number(ref.metadata.privateWebhookHostPort)
-                : 0;
+                : containerPort === PINAI_WORKSPACE_STATUS_PORT
+                  ? Number(ref.metadata.workspaceStatusHostPort)
+                  : 0;
         if (!mappedHostPort || mappedHostPort <= 0) return false;
         const ok = await waitForHttpProbe(
           mappedHostPort,
@@ -782,6 +791,9 @@ export const dockerContainerRuntime: ContainerRuntime = {
     const webhookPort = config.telegramRouter.webhookPort;
     const exposedPorts = inspect?.Config?.ExposedPorts || {};
     if (!exposedPorts[`${webhookPort}/tcp`]) {
+      return true;
+    }
+    if (!exposedPorts[`${PINAI_WORKSPACE_STATUS_PORT}/tcp`]) {
       return true;
     }
 

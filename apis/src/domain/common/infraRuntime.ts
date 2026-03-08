@@ -13,10 +13,7 @@ import {
 } from '../litellm/index.js';
 import { sendTelegramMessage } from '../telegram/notify.js';
 import { config } from './config.js';
-import {
-  buildReadyGreetingFallbackMessage,
-  triggerReadyGreetingForAssistant,
-} from '../onboarding/ready_greeting.js';
+import { sendApiReadyGreetingForAssistant } from '../onboarding/ready_greeting.js';
 import {
   getUserByTelegramId,
   listAssistantsByOwnerTelegramId,
@@ -94,29 +91,20 @@ const containerNotifier: ContainerNotifier = {
         );
       }
 
-      const delivered = await triggerReadyGreetingForAssistant({
-        assistantId: options.assistantId,
-        telegramUserId,
-      }).catch((e) => {
-        console.warn(
-          `[container] onboarding greeting failed for assistant ${options.assistantId}`,
-          e,
-        );
-        return false;
-      });
-      if (!delivered) {
-        console.warn(
-          `[container] onboarding greeting not delivered for assistant ${options.assistantId}`,
-        );
-        if (readyNotifyClaimed) {
-          await sendTelegramMessage(
-            telegramUserId,
-            buildReadyGreetingFallbackMessage(),
-          ).catch((e) =>
-            console.warn(
-              `[container] fallback onboarding greeting failed for assistant ${options.assistantId}`,
-              e,
-            ),
+      if (readyNotifyClaimed) {
+        const delivered = await sendApiReadyGreetingForAssistant({
+          assistantId: options.assistantId,
+          telegramUserId,
+        }).catch((e) => {
+          console.warn(
+            `[container] onboarding greeting failed for assistant ${options.assistantId}`,
+            e,
+          );
+          return false;
+        });
+        if (!delivered) {
+          console.warn(
+            `[container] onboarding greeting not delivered for assistant ${options.assistantId}`,
           );
         }
       }

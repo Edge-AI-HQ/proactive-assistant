@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  buildOnboardingGreetingPrompt,
   chooseProfileCandidate,
   normalizeLegacyMysqlUrl,
-  shouldTriggerReadyGreeting,
 } from "./profile_bootstrap.js";
 
 test("normalizeLegacyMysqlUrl converts mysql+pymysql scheme", () => {
@@ -52,35 +50,4 @@ test("chooseProfileCandidate falls back to privy mapping", () => {
   assert.equal(selected?.profileText, "privy profile");
 });
 
-test("shouldTriggerReadyGreeting is false after first successful trigger", () => {
-  assert.equal(shouldTriggerReadyGreeting({}), true);
-  assert.equal(shouldTriggerReadyGreeting({ onboarding_greeted_at: "2026-03-06T08:00:00Z" }), false);
-});
 
-test("buildOnboardingGreetingPrompt includes pinai tenure identity and style constraints", () => {
-  const prompt = buildOnboardingGreetingPrompt({
-    hasProfile: true,
-    profileText: "Daily syncs and gaming as SmileToYe",
-    membershipDays: 800,
-    membershipSinceDate: "2023-12-28",
-  });
-
-  assert.match(prompt, /valued PINAI member/i);
-  assert.match(prompt, /about 800 days/i);
-  assert.match(prompt, /since 2023-12-28/i);
-  assert.match(prompt, /How can I help you today\?/);
-  assert.match(prompt, /preferred name \+ response style/i);
-  assert.match(prompt, /playful|fun|light humor/i);
-  assert.match(prompt, /short title line/i);
-  assert.match(prompt, /exactly 3 compact blocks/i);
-  assert.match(prompt, /exactly 3 short lines total/i);
-  assert.match(prompt, /membership line/i);
-  assert.match(prompt, /Lines 2-3 of Block 2: exactly 2 short bullet points/i);
-  assert.match(prompt, /1-2 natural emoji/i);
-  assert.match(prompt, /Do not output broken fragments/i);
-  assert.match(prompt, /Never output NO_REPLY/i);
-  assert.match(prompt, /even if earlier onboarding triggers exist/i);
-  assert.match(prompt, /sound like a familiar friend/i);
-  assert.match(prompt, /light teasing or warm knowing humor/i);
-  assert.match(prompt, /Do not format Block 2 like labels, fields, database facts, or profile keys/i);
-});

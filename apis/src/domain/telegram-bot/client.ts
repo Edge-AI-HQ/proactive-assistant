@@ -113,6 +113,7 @@ const requestJson = async <T>(
 export interface ProvisionAssistantInput {
   ownerTelegramUserId: number;
   ownerTelegramUsername?: string | null;
+  ownerTelegramLanguageCode?: string | null;
   assistantBotId?: number | null;
   assistantBotToken?: string | null;
   assistantBotUsername?: string | null;
@@ -171,6 +172,7 @@ export const provisionAssistantViaApi = async (
     {
       owner_telegram_user_id: input.ownerTelegramUserId,
       owner_telegram_username: input.ownerTelegramUsername,
+      owner_telegram_language_code: input.ownerTelegramLanguageCode ?? null,
       assistant_bot_id: input.assistantBotId,
       assistant_bot_token: input.assistantBotToken,
       assistant_bot_username: input.assistantBotUsername,
@@ -187,6 +189,7 @@ export const createAssistantWithoutContainerViaApi = async (
     {
       owner_telegram_user_id: input.ownerTelegramUserId,
       owner_telegram_username: input.ownerTelegramUsername,
+      owner_telegram_language_code: input.ownerTelegramLanguageCode ?? null,
       assistant_bot_id: input.assistantBotId,
       assistant_bot_token: input.assistantBotToken,
       assistant_bot_username: input.assistantBotUsername,

@@ -1,6 +1,7 @@
 import type { ContainerManagerConfig } from "../../types.js";
 import type { GatewayBindMode } from "./openclaw_config.js";
 import { deriveAssistantWebhookSecret } from "./telegram_runtime_secret.js";
+import { PINAI_WORKSPACE_STATUS_PORT } from "./workspace_ready.js";
 
 /**
  * Common webhook-related parameters extracted from ContainerManagerConfig.
@@ -68,4 +69,5 @@ export const buildBaseContainerEnv = (
   NODE_COMPILE_CACHE: "/app/cache/node-compile-cache",
   TELEGRAM_ROUTER_URL: telegramRouterUrl,
   GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE: googleCredentialsFile,
+  PINAI_WORKSPACE_STATUS_PORT: String(PINAI_WORKSPACE_STATUS_PORT),
 });
