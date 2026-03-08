@@ -66,7 +66,9 @@ export const readTelegramUserById = async (telegramUserId: number): Promise<User
 export const resetTelegramUserAccount = async (telegramUserId: number): Promise<{ ok: true }> => {
   const user = await getUserByTelegramId(telegramUserId);
   if (!user) {
-    throw new DomainError('NOT_FOUND', 'User not found');
+    // Idempotency: Telegram may retry callback updates; if the account is already
+    // deleted, treat reset as completed.
+    return { ok: true };
   }
 
   // 1. Cancel Stripe subscription immediately
