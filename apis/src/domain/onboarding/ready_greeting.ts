@@ -50,12 +50,25 @@ const computeDaysWithPinai = (joinDate: string | null): number | null => {
 const formatEnglishDayLabel = (days: number): string =>
   days === 1 ? "day" : "days";
 
+const normalizeDateLike = (value: unknown): string => {
+  if (typeof value === "string") return value.trim();
+  if (value instanceof Date) {
+    const ms = value.getTime();
+    if (!Number.isFinite(ms)) return "";
+    return value.toISOString();
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return new Date(value).toISOString();
+  }
+  return "";
+};
+
 const pickEarlierIsoDate = (
-  a: string | null | undefined,
-  b: string | null | undefined,
+  a: unknown,
+  b: unknown,
 ): string | null => {
-  const first = (a || "").trim();
-  const second = (b || "").trim();
+  const first = normalizeDateLike(a);
+  const second = normalizeDateLike(b);
   if (!first) return second || null;
   if (!second) return first;
   const firstMs = new Date(first).getTime();
@@ -217,3 +230,4 @@ export const setAssistantReadyGreetingLanguageCode = async (
 
 export const resolveReadyGreetingLocaleForTest = resolveLocale;
 export const computeDaysWithPinaiForTest = computeDaysWithPinai;
+export const pickEarlierIsoDateForTest = pickEarlierIsoDate;
