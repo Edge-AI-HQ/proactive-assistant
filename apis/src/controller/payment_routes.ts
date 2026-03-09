@@ -16,6 +16,7 @@ import {
 } from "../domain/payment/checkout.js";
 import { runCreditsMaintenance } from "../domain/payment/maintenance.js";
 import { applySubscriptionPeriodBudgetsWithLock } from "../domain/payment/subscriptionSync.js";
+import { buildCaptainReport } from "../domain/payment/captain_report.js";
 import {
   renderCancelPage,
   renderSubscribePage,
@@ -203,6 +204,23 @@ export const createPaymentRouter = (): Router => {
       try {
         const response = await applySubscriptionPeriodBudgetsWithLock();
         res.status(200).json(response);
+      } catch (error: unknown) {
+        if (respondKnownError(res, error)) return;
+        const message =
+          error instanceof Error ? error.message : "Unknown error";
+        res.status(500).json({ error: message });
+      }
+    },
+  );
+
+  router.get(
+    "/internal/captain-report",
+    async (req: Request, res: Response) => {
+      if (!ensureInternalOrCronAuth(req, res)) return;
+
+      try {
+        const report = await buildCaptainReport();
+        res.status(200).json(report);
       } catch (error: unknown) {
         if (respondKnownError(res, error)) return;
         const message =
