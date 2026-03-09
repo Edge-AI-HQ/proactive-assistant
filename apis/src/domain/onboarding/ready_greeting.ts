@@ -182,7 +182,10 @@ export const sendApiReadyGreetingForAssistant = async (input: {
   );
 
   try {
-    await sendTelegramMessage(input.telegramUserId, message);
+    const sent = await sendTelegramMessage(input.telegramUserId, message);
+    if (!sent.ok) {
+      throw new Error(sent.error || "sendTelegramMessage returned ok=false");
+    }
     return true;
   } catch (error) {
     await setAssistantRuntimeMetadataKey(

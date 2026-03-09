@@ -27,6 +27,8 @@ import {
 } from './db/index.js';
 
 let configured = false;
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 const litellmRuntimeConfig: LiteLLMRuntimeConfig = {
   litellm: config.litellm
@@ -92,6 +94,7 @@ const containerNotifier: ContainerNotifier = {
       }
 
       if (readyNotifyClaimed) {
+        await sleep(800);
         const delivered = await sendApiReadyGreetingForAssistant({
           assistantId: options.assistantId,
           telegramUserId,
