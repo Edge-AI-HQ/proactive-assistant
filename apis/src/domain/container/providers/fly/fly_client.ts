@@ -213,3 +213,52 @@ export const updateMachine = async (
     body,
   );
 };
+
+export type FlyExecResult = {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+};
+
+const normalizeExecText = (value: unknown): string =>
+  typeof value === "string" ? value : "";
+
+const normalizeExecExitCode = (value: unknown): number => {
+  const n =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number.parseInt(value, 10)
+        : Number.NaN;
+  return Number.isFinite(n) ? n : 1;
+};
+
+const pick = (obj: Record<string, unknown>, keys: string[]): unknown => {
+  for (const key of keys) {
+    if (obj[key] !== undefined) return obj[key];
+  }
+  return undefined;
+};
+
+export const execMachine = async (
+  machineId: string,
+  command: string[],
+): Promise<FlyExecResult> => {
+  const result = await flyRequest<Record<string, unknown>>(
+    "POST",
+    `${appPath()}/machines/${encodeURIComponent(machineId)}/exec`,
+    { command },
+  );
+  const output =
+    result.output && typeof result.output === "object"
+      ? (result.output as Record<string, unknown>)
+      : result;
+
+  return {
+    exitCode: normalizeExecExitCode(
+      pick(output, ["exit_code", "exitCode", "status", "code"]),
+    ),
+    stdout: normalizeExecText(pick(output, ["stdout", "out"])),
+    stderr: normalizeExecText(pick(output, ["stderr", "err"])),
+  };
+};
