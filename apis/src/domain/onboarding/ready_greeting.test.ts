@@ -5,6 +5,7 @@ import {
   buildApiReadyGreetingMessage,
   buildReadyGreetingFallbackMessage,
   computeDaysWithPinaiForTest,
+  pickEarlierIsoDateForTest,
   resolveReadyGreetingLocaleForTest,
 } from "./ready_greeting.js";
 
@@ -93,6 +94,14 @@ test("computeDaysWithPinaiForTest returns null for invalid date and positive day
   const days = computeDaysWithPinaiForTest("2025-02-27T00:00:00.000Z");
   assert.equal(typeof days, "number");
   assert.ok((days ?? 0) >= 1);
+});
+
+test("pickEarlierIsoDateForTest supports Date-like values", () => {
+  const picked = pickEarlierIsoDateForTest(
+    new Date("2024-01-01T00:00:00.000Z"),
+    "2025-01-01T00:00:00.000Z",
+  );
+  assert.equal(picked, "2024-01-01T00:00:00.000Z");
 });
 
 test("buildReadyGreetingFallbackMessage stays deterministic", () => {
