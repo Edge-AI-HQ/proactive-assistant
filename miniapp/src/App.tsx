@@ -68,6 +68,18 @@ type DeferredPayload = {
   google: GoogleStatus;
 };
 
+const mergeQuickPayload = (
+  prev: StatePayload,
+  quick: StatePayload,
+): StatePayload => ({
+  ...prev,
+  ...quick,
+  // quick payload intentionally omits heavy fields; keep last known values
+  plans: quick.plans ?? prev.plans,
+  skills: quick.skills ?? prev.skills,
+  google: quick.google ?? prev.google,
+});
+
 declare global {
   interface Window {
     Telegram?: {
@@ -243,7 +255,7 @@ const App = () => {
 
     const id = setInterval(() => {
       void safeFetch<StatePayload>("/api/mini/state").then((quick) => {
-        setState((prev) => prev ? { ...prev, ...quick } : prev);
+        setState((prev) => (prev ? mergeQuickPayload(prev, quick) : prev));
       }).catch(() => {});
     }, 3_000);
 
