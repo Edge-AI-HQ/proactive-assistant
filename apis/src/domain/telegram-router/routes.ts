@@ -11,7 +11,10 @@ import {
   hasGoogleOAuthConnection,
   syncCredentialToContainer,
 } from "../google-oauth/service.js";
-import { setLogContextTelegramUserId } from "../common/requestLogContext.js";
+import {
+  setLogContextTelegramIdentity,
+  setLogContextTelegramUserId,
+} from "../common/requestLogContext.js";
 
 type WebhookSource = "public" | "private";
 
@@ -92,6 +95,8 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
 
     const update = req.body;
     const chatId = extractChatId(update);
+    const telegramUsername = extractUpdateUsername(update);
+    setLogContextTelegramIdentity(chatId ?? undefined, telegramUsername ?? undefined);
     const fromUser = extractUpdateFromUser(update);
     const text = extractUpdateText(update);
     const telegramDate = extractUpdateDate(update);
@@ -1009,6 +1014,13 @@ function extractUpdateFromUser(update: any): string | null {
   const from = update?.message?.from || update?.callback_query?.from || update?.channel_post?.from;
   if (!from) return null;
   return from.username || from.first_name || from.last_name || String(from.id || "");
+}
+
+function extractUpdateUsername(update: any): string | null {
+  const from = update?.message?.from || update?.callback_query?.from || update?.channel_post?.from;
+  if (!from || typeof from.username !== "string") return null;
+  const username = from.username.trim().replace(/^@+/, "");
+  return username || null;
 }
 
 function extractUpdateText(update: any): string {
