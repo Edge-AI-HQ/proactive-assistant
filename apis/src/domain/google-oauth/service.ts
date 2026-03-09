@@ -12,10 +12,9 @@ import {
   encodeGoogleWorkspaceAuthorizedUserCredential,
   GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE,
   GOOGLE_WORKSPACE_CLI_DEFAULT_CREDENTIALS_FILE,
-  PINAI_GOOGLE_CREDENTIALS_B64_ENV,
   GOOGLE_CREDENTIALS_RUNTIME_METADATA_KEY,
 } from '../container/providers/shared/google_workspace_credentials.js';
-import { getMachine, updateMachine } from '../container/providers/fly/fly_client.js';
+import { execMachine } from '../container/providers/fly/fly_client.js';
 import {
   consumeOAuthState,
   createOAuthState,
@@ -29,6 +28,7 @@ import {
 } from './repository.js';
 import { listAssistantsByOwnerId } from '../claw-assistant/usecases.js';
 import { ensureGatewayAssistantReady } from '../gateway/assistant_warmup.js';
+import { buildGoogleCredentialRemoveShell, buildGoogleCredentialWriteShell } from './hot_sync.js';
 
 const GOOGLE_AUTH_BASE = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
@@ -518,24 +518,15 @@ export const removeGoogleCredentialFromContainer = async (
     if (!machineId) {
       return { message: 'No fly machine found; only database credential was removed' };
     }
-
-    const machine = await getMachine(machineId);
-    if (!machine.config) {
-      throw new Error(`Fly machine ${machineId} has no config`);
+    const { targetFile, gwsDefaultFile } = resolveGoogleCredentialPaths();
+    const shell = buildGoogleCredentialRemoveShell(targetFile, gwsDefaultFile);
+    const execResult = await execMachine(machineId, ['sh', '-lc', shell]);
+    if (execResult.exitCode !== 0) {
+      throw new Error(
+        `Fly machine exec failed while removing Google credential (exit=${execResult.exitCode}): ${execResult.stderr || execResult.stdout || 'unknown error'}`,
+      );
     }
-
-    const nextEnv = {
-      ...(machine.config.env || {}),
-      [PINAI_GOOGLE_CREDENTIALS_B64_ENV]: '',
-    };
-    await updateMachine(machineId, {
-      ...(machine.name ? { name: machine.name } : {}),
-      config: {
-        ...machine.config,
-        env: nextEnv,
-      },
-    });
-    return { message: `Credential removed from fly machine ${machineId}` };
+    return { message: `Credential removed from fly machine ${machineId}:${targetFile}` };
   }
 
   const docker = new Docker();
@@ -569,35 +560,15 @@ export const syncCredentialToContainer = async (telegramUserId: number): Promise
     if (!machineId) {
       throw new Error('No fly runtime_ref found for this user');
     }
-
-    const machine = await getMachine(machineId);
-    if (!machine.config) {
-      throw new Error(`Fly machine ${machineId} has no config`);
+    const { targetFile, gwsDefaultFile } = resolveGoogleCredentialPaths();
+    const shell = buildGoogleCredentialWriteShell(encoded, targetFile, gwsDefaultFile);
+    const execResult = await execMachine(machineId, ['sh', '-lc', shell]);
+    if (execResult.exitCode !== 0) {
+      throw new Error(
+        `Fly machine exec failed while syncing Google credential (exit=${execResult.exitCode}): ${execResult.stderr || execResult.stdout || 'unknown error'}`,
+      );
     }
-
-    const currentEnv = machine.config.env || {};
-    const currentCredentialsB64 = (currentEnv[PINAI_GOOGLE_CREDENTIALS_B64_ENV] || '').trim();
-    const currentCredentialsFile = (currentEnv.GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE || '').trim();
-    if (
-      currentCredentialsB64 === encoded &&
-      currentCredentialsFile === GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE
-    ) {
-      return { message: `Credential already synced on fly machine ${machineId}` };
-    }
-
-    const nextEnv = {
-      ...currentEnv,
-      GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE,
-      [PINAI_GOOGLE_CREDENTIALS_B64_ENV]: encoded,
-    };
-    await updateMachine(machineId, {
-      ...(machine.name ? { name: machine.name } : {}),
-      config: {
-        ...machine.config,
-        env: nextEnv,
-      },
-    });
-    return { message: `Credential synced to fly machine ${machineId}:${GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE}` };
+    return { message: `Credential hot-synced to fly machine ${machineId}:${targetFile}` };
   }
 
   const docker = new Docker();
