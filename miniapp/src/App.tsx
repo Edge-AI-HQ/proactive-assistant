@@ -295,7 +295,12 @@ const App = () => {
       if (!result.url) throw new Error("Unable to get checkout URL. Please try again.");
       window.location.href = result.url;
     } catch (e) {
-      showToast(`Unable to change plan: ${e instanceof Error ? e.message : "unknown"}`);
+      const message = e instanceof Error ? e.message : "unknown";
+      if (/downgrade is locked until/i.test(message)) {
+        showToast("Downgrade is locked until the current billing cycle ends.");
+      } else {
+        showToast(`Unable to change plan: ${message}`);
+      }
       setBusy("none");
     }
   };
