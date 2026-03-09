@@ -4,6 +4,7 @@ import {
   setAssistantRuntimeMetadataKey,
   setAssistantRuntimeMetadataKeyIfAbsent,
 } from "../common/db/runtimeRepository.js";
+import { resolveExternalProfileForTelegramUser } from "./profile_bootstrap.js";
 import { hasActiveSubscriptionForService } from "../payment/subscriptionGuard.js";
 import { sendTelegramMessage } from "../telegram/notify.js";
 
@@ -48,6 +49,21 @@ const computeDaysWithPinai = (joinDate: string | null): number | null => {
 
 const formatEnglishDayLabel = (days: number): string =>
   days === 1 ? "day" : "days";
+
+const pickEarlierIsoDate = (
+  a: string | null | undefined,
+  b: string | null | undefined,
+): string | null => {
+  const first = (a || "").trim();
+  const second = (b || "").trim();
+  if (!first) return second || null;
+  if (!second) return first;
+  const firstMs = new Date(first).getTime();
+  const secondMs = new Date(second).getTime();
+  if (!Number.isFinite(firstMs)) return second;
+  if (!Number.isFinite(secondMs)) return first;
+  return firstMs <= secondMs ? first : second;
+};
 
 export const buildApiReadyGreetingMessage = (
   input: ReadyGreetingRenderInput,
@@ -122,13 +138,17 @@ export const buildReadyGreetingFallbackMessage = (): string =>
   });
 
 const resolveGreetingContext = async (assistantId: number, telegramUserId: number) => {
-  const [user, runtimeMetadata, subscriptionActive] = await Promise.all([
+  const [user, runtimeMetadata, subscriptionActive, externalProfile] = await Promise.all([
     getUserByTelegramId(telegramUserId),
     readAssistantRuntimeMetadata(assistantId).catch(() => ({})),
     hasActiveSubscriptionForService(String(telegramUserId)).catch(() => false),
+    resolveExternalProfileForTelegramUser(telegramUserId).catch(() => null),
   ]);
 
-  const joinDate = user?.created_at ?? null;
+  const joinDate = pickEarlierIsoDate(
+    user?.created_at ?? null,
+    externalProfile?.accountCreatedAt ?? null,
+  );
   const metadataRecord = runtimeMetadata as Record<string, unknown>;
   const languageCode =
     typeof metadataRecord["telegram_language_code"] === "string"
