@@ -610,6 +610,10 @@ export async function handleInvoicePaid(
   }
 
   const stripeSubscriptionId = subscription.stripe_subscription_id;
+  const stripeCustomerId =
+    typeof invoice.customer === "string"
+      ? invoice.customer
+      : invoice.customer?.id ?? null;
 
   // 优先从 invoice.lines[0].period 获取周期（首次付款时 subscription 可能还是 incomplete 状态）
   let periodStart: Date | null = null;
@@ -695,6 +699,7 @@ export async function handleInvoicePaid(
     telegram_user_id: subscription.telegram_user_id,
     telegram_username: subscription.telegram_username ?? null,
     stripe_subscription_id: stripeSubscriptionId,
+    stripe_customer_id: stripeCustomerId,
     stripe_invoice_id: invoice.id,
     period_start: periodStart,
     period_end: periodEnd,
