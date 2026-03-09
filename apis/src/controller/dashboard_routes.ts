@@ -58,7 +58,7 @@ import {
 import { hasActiveSubscriptionForService } from "../domain/payment/subscriptionGuard.js";
 import { isSubscriptionActiveForService } from "../domain/payment/subscriptionPolicy.js";
 import { config } from "../domain/common/config.js";
-import { setLogContextTelegramUserId } from "../domain/common/requestLogContext.js";
+import { setLogContextTelegramIdentity } from "../domain/common/requestLogContext.js";
 import { ensureTelegramUser } from "../domain/user/service.js";
 import { resetTelegramUserAccount } from "../domain/user/usecases.js";
 import type { AssistantRecord } from "../types.js";
@@ -243,7 +243,7 @@ const requireMiniSession = async (
     return;
   }
 
-  setLogContextTelegramUserId(user.telegram_user_id);
+  setLogContextTelegramIdentity(user.telegram_user_id, user.telegram_username);
   req.gatewayUser = user;
   next();
 };
@@ -454,7 +454,15 @@ export const createDashboardRouter = (): Router => {
           verification.telegramUserId,
           verification.telegramUsername,
         );
-        setLogContextTelegramUserId(user.telegram_user_id);
+        setLogContextTelegramIdentity(
+          user.telegram_user_id,
+          user.telegram_username,
+        );
+        console.info("[auth:resolved]", {
+          source: "mini_bootstrap",
+          telegram_user_id: user.telegram_user_id,
+          telegram_username: user.telegram_username,
+        });
         const { sessionToken, expiresAt } = await createGatewaySession(
           user.telegram_user_id,
           miniSessionTtlHours,

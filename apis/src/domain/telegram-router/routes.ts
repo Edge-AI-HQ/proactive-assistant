@@ -1030,8 +1030,8 @@ function formatUnixTimestamp(unixSec?: number): string {
 }
 
 function truncateForLog(value: string, maxLen: number): string {
+  void maxLen;
   if (!value) return "";
   const compact = value.replace(/\s+/g, " ").trim();
-  if (compact.length <= maxLen) return compact;
-  return `${compact.slice(0, maxLen)}...`;
+  return compact;
 }

@@ -2,7 +2,10 @@ import crypto from "node:crypto";
 import Stripe from "stripe";
 import type { Request } from "express";
 import { DomainError } from "../common/errors.js";
-import { setLogContextTelegramUserId } from "../common/requestLogContext.js";
+import {
+  setLogContextTelegramIdentity,
+  setLogContextTelegramUserId,
+} from "../common/requestLogContext.js";
 import { db } from "./db.js";
 import { syncLiteLLMBudgetFromPlan } from "./litellmBudget.js";
 import { readPaymentPublicBaseUrl } from "./publicBaseUrl.js";
@@ -79,9 +82,7 @@ const readCurrentSubscriptionItemId = (
 };
 
 const summarizeToken = (token: string): string => {
-  if (!token) return "";
-  if (token.length <= 12) return token;
-  return `${token.slice(0, 6)}...${token.slice(-6)}`;
+  return token || "";
 };
 
 export const listActivePlansForApi = async (): Promise<{
@@ -141,7 +142,7 @@ export const createInternalPaymentSession = async (
   const token = crypto.randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
   const subscribeUrl = `${readPaymentPublicBaseUrl(req)}/api/payment/subscribe?token=${encodeURIComponent(token)}`;
-  setLogContextTelegramUserId(telegramUserId);
+  setLogContextTelegramIdentity(telegramUserId, telegramUsername);
   console.log("[payment] create_internal_session:start", {
     telegram_user_id: telegramUserId,
     ttl_seconds: ttlSeconds,
@@ -327,7 +328,7 @@ export const createCheckoutSession = async (
 
   const telegramUserId = session.telegram_user_id;
   const telegramUsername = session.telegram_username;
-  setLogContextTelegramUserId(telegramUserId);
+  setLogContextTelegramIdentity(telegramUserId, telegramUsername);
   console.log("[payment] checkout:validated", {
     telegram_user_id: telegramUserId,
     assistant_id: session.assistant_id ?? null,

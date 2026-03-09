@@ -1,5 +1,5 @@
 import Stripe from "stripe";
-import { setLogContextTelegramUserId } from "../common/requestLogContext.js";
+import { setLogContextTelegramIdentity } from "../common/requestLogContext.js";
 import { db } from "./db.js";
 import {
   handleCheckoutCompleted,
@@ -14,6 +14,12 @@ const toTgIdFromString = (value: unknown): string | null => {
   return /^\d+$/.test(raw) ? raw : null;
 };
 
+const toTgName = (value: unknown): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().replace(/^@+/, "");
+  return normalized || undefined;
+};
+
 const bindWebhookTelegramId = (event: Stripe.Event): void => {
   const obj = event.data.object as Record<string, unknown> | undefined;
   if (!obj || typeof obj !== "object") return;
@@ -23,8 +29,9 @@ const bindWebhookTelegramId = (event: Stripe.Event): void => {
       ? (obj.metadata as Record<string, unknown>)
       : null;
   const idFromMetadata = toTgIdFromString(metadata?.telegram_user_id);
+  const nameFromMetadata = toTgName(metadata?.telegram_username);
   if (idFromMetadata) {
-    setLogContextTelegramUserId(idFromMetadata);
+    setLogContextTelegramIdentity(idFromMetadata, nameFromMetadata);
     return;
   }
 
@@ -36,8 +43,9 @@ const bindWebhookTelegramId = (event: Stripe.Event): void => {
         ? (customerObj.metadata as Record<string, unknown>)
         : null;
     const fromCustomerMeta = toTgIdFromString(customerMeta?.telegram_user_id);
+    const fromCustomerName = toTgName(customerMeta?.telegram_username);
     if (fromCustomerMeta) {
-      setLogContextTelegramUserId(fromCustomerMeta);
+      setLogContextTelegramIdentity(fromCustomerMeta, fromCustomerName);
     }
   }
 };

@@ -2,7 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 import type { IncomingMessage } from 'node:http';
 import { config } from '../common/config.js';
 import { getAssistantById, getGatewaySession, getUserByTelegramId } from '../common/db/index.js';
-import { setLogContextTelegramUserId } from '../common/requestLogContext.js';
+import { setLogContextTelegramIdentity } from '../common/requestLogContext.js';
 import type { AssistantRecord, UserRecord } from '../../types.js';
 
 const toSingleString = (value: unknown): string | undefined => {
@@ -73,7 +73,7 @@ export const resolveGatewayUser = async (userIdParam: string): Promise<UserRecor
   if (userId === null) return null;
   const user = await getUserByTelegramId(userId);
   if (user) {
-    setLogContextTelegramUserId(user.telegram_user_id);
+    setLogContextTelegramIdentity(user.telegram_user_id, user.telegram_username);
   }
   return user ?? null;
 };
@@ -104,7 +104,12 @@ export const requireGatewaySession = async (
   if (cookieSessionToken) {
     const session = await getGatewaySession(cookieSessionToken);
     if (session && session.telegram_user_id === user.telegram_user_id) {
-      setLogContextTelegramUserId(user.telegram_user_id);
+      setLogContextTelegramIdentity(user.telegram_user_id, user.telegram_username);
+      console.info('[auth:resolved]', {
+        source: 'gateway_session_cookie',
+        telegram_user_id: user.telegram_user_id,
+        telegram_username: user.telegram_username ?? null
+      });
       req.gatewayUser = user;
       next();
       return;
@@ -117,7 +122,12 @@ export const requireGatewaySession = async (
   if (querySessionToken) {
     const querySession = await getGatewaySession(querySessionToken);
     if (querySession && querySession.telegram_user_id === user.telegram_user_id) {
-      setLogContextTelegramUserId(user.telegram_user_id);
+      setLogContextTelegramIdentity(user.telegram_user_id, user.telegram_username);
+      console.info('[auth:resolved]', {
+        source: 'gateway_session_query',
+        telegram_user_id: user.telegram_user_id,
+        telegram_username: user.telegram_username ?? null
+      });
       setGatewaySessionCookie(res, user.telegram_user_id, querySessionToken, querySession.expires_at);
       const cleanUrl = stripGatewaySidFromUrl(req.originalUrl);
       if (cleanUrl !== req.originalUrl) {

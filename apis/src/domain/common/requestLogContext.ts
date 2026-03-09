@@ -1,10 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import type { RequestHandler } from "express";
+import type { Request, RequestHandler } from "express";
 
 type LogContext = {
   traceId: string;
   tgId?: string;
+  tgName?: string;
 };
 
 const logContext = new AsyncLocalStorage<LogContext>();
@@ -19,11 +20,143 @@ const toSingleHeaderValue = (value: unknown): string | null => {
 const nextTraceId = (): string => randomUUID();
 
 const toPositiveIntString = (value: unknown): string | undefined => {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
+    return String(value);
+  }
   const raw = typeof value === "string" ? value.trim() : "";
   if (!/^\d+$/.test(raw)) return undefined;
   return raw;
 };
 
+const toTelegramUsername = (value: unknown): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().replace(/^@+/, "");
+  if (!normalized) return undefined;
+  return normalized;
+};
+
+const buildIdentity = (
+  tgId?: string,
+  tgName?: string,
+): { tgId?: string; tgName?: string } => ({
+  ...(tgId ? { tgId } : {}),
+  ...(tgName ? { tgName } : {}),
+});
+
+const readTelegramIdentityFromInitData = (
+  value: unknown,
+): { tgId?: string; tgName?: string } => {
+  if (typeof value !== "string" || !value.trim()) return {};
+  try {
+    const params = new URLSearchParams(value.trim());
+    const userRaw = params.get("user");
+    if (!userRaw) return {};
+    const parsed = JSON.parse(userRaw) as { id?: unknown; username?: unknown };
+    return buildIdentity(
+      toPositiveIntString(parsed.id),
+      toTelegramUsername(parsed.username),
+    );
+  } catch {
+    return {};
+  }
+};
+
+const readTelegramIdentityFromRecord = (
+  value: unknown,
+): { tgId?: string; tgName?: string } => {
+  if (!value || typeof value !== "object") return {};
+  const record = value as Record<string, unknown>;
+
+  const directKeys = [
+    "telegram_user_id",
+    "telegramUserId",
+    "tg_id",
+    "tgId",
+    "user_id",
+    "userId",
+    "provider_user_id",
+    "providerUserId",
+    "chat_id",
+    "chatId",
+    "from_id",
+    "fromId",
+  ] as const;
+  let tgId: string | undefined;
+  for (const key of directKeys) {
+    const found = toPositiveIntString(record[key]);
+    if (found) {
+      tgId = found;
+      break;
+    }
+  }
+
+  const usernameKeys = [
+    "telegram_username",
+    "telegramUsername",
+    "username",
+    "user_name",
+    "tg_name",
+    "tgName",
+  ] as const;
+  let tgName: string | undefined;
+  for (const key of usernameKeys) {
+    const found = toTelegramUsername(record[key]);
+    if (found) {
+      tgName = found;
+      break;
+    }
+  }
+
+  const fromNested = [record.user, record.from, record.chat, record.sender];
+  for (const nested of fromNested) {
+    if (nested && typeof nested === "object") {
+      const nestedRecord = nested as Record<string, unknown>;
+      tgId = tgId ?? toPositiveIntString(nestedRecord.id);
+      tgName = tgName ?? toTelegramUsername(nestedRecord.username);
+      if (tgId && tgName) break;
+    }
+  }
+
+  const fromInitData = readTelegramIdentityFromInitData(
+    record.init_data ?? record.initData,
+  );
+  tgId = tgId ?? fromInitData.tgId;
+  tgName = tgName ?? fromInitData.tgName;
+
+  return buildIdentity(tgId, tgName);
+};
+
+const readTelegramIdentityFromRequest = (
+  req: Request,
+): { tgId?: string; tgName?: string } => {
+  const headerCandidates = [
+    req.headers["x-telegram-user-id"],
+    req.headers["x-telegram-userid"],
+    req.headers["x-tg-id"],
+  ];
+  let tgId: string | undefined;
+  for (const candidate of headerCandidates) {
+    const found = toPositiveIntString(toSingleHeaderValue(candidate));
+    if (found) {
+      tgId = found;
+      break;
+    }
+  }
+  const tgName = toTelegramUsername(
+    toSingleHeaderValue(req.headers["x-telegram-username"]) ??
+      toSingleHeaderValue(req.headers["x-tg-name"]),
+  );
+
+  const recordCandidates = [req.params, req.query, req.body];
+  for (const candidate of recordCandidates) {
+    const found = readTelegramIdentityFromRecord(candidate);
+    tgId = tgId ?? found?.tgId;
+    if (!found?.tgName) continue;
+    return buildIdentity(tgId, tgName ?? found.tgName);
+  }
+
+  return buildIdentity(tgId, tgName);
+};
 
 const previewBuffer = (buffer: Buffer): string => {
   const text = buffer.toString("utf8");
@@ -86,7 +219,9 @@ const patchConsole = (): void => {
         original(line);
         return;
       }
-      original(`${line}|trace_id=${store.traceId}|tg_id=${store.tgId ?? "n/a"}`);
+      original(
+        `${line}|trace_id=${store.traceId}|tg_id=${store.tgId ?? "n/a"}|tg_name=${store.tgName ?? "n/a"}`,
+      );
     };
   }
 };
@@ -98,12 +233,13 @@ export const requestLogContextMiddleware: RequestHandler = (req, res, next) => {
   const traceId = incomingTrace?.trim() || nextTraceId();
   res.setHeader("x-trace-id", traceId);
 
-  const seedTgId =
-    toPositiveIntString(req.params?.user_id) ??
-    toPositiveIntString(req.query?.user_id) ??
-    undefined;
+  const seedIdentity = readTelegramIdentityFromRequest(req);
 
-  const context: LogContext = seedTgId ? { traceId, tgId: seedTgId } : { traceId };
+  const context: LogContext = {
+    traceId,
+    ...(seedIdentity.tgId ? { tgId: seedIdentity.tgId } : {}),
+    ...(seedIdentity.tgName ? { tgName: seedIdentity.tgName } : {}),
+  };
   const startedAt = Date.now();
   let responseBodyPreview: unknown;
 
@@ -158,6 +294,26 @@ export const setLogContextTelegramUserId = (telegramUserId: number | string): vo
   const store = logContext.getStore();
   if (!store) return;
   store.tgId = String(telegramUserId);
+};
+
+export const setLogContextTelegramUsername = (telegramUsername: string | null | undefined): void => {
+  const store = logContext.getStore();
+  if (!store) return;
+  const normalized = toTelegramUsername(telegramUsername);
+  if (!normalized) return;
+  store.tgName = normalized;
+};
+
+export const setLogContextTelegramIdentity = (
+  telegramUserId: number | string | null | undefined,
+  telegramUsername?: string | null,
+): void => {
+  if (telegramUserId !== null && telegramUserId !== undefined && String(telegramUserId).trim()) {
+    setLogContextTelegramUserId(telegramUserId);
+  }
+  if (telegramUsername !== undefined) {
+    setLogContextTelegramUsername(telegramUsername);
+  }
 };
 
 export const initializeRequestLogging = (): void => {
