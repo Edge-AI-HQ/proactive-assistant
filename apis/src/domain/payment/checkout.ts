@@ -61,6 +61,17 @@ const parseUnixSecondsToDate = (value: unknown): Date | undefined => {
   return parsed;
 };
 
+const parseUnixSeconds = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.trunc(value);
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return null;
+};
+
 const isStripeSubscriptionOpen = (
   status: Stripe.Subscription.Status,
 ): boolean => {
@@ -412,13 +423,27 @@ export const createCheckoutSession = async (
         }
 
         if (newPriceAmount > currentPriceAmount) {
+          const lockUntil =
+            parseUnixSeconds(stripeSubscription.current_period_end) ??
+            parseUnixSeconds(
+              existingSub.current_period_end
+                ? Math.floor(
+                    new Date(existingSub.current_period_end).getTime() / 1000,
+                  )
+                : null,
+            );
           // Upgrade: apply immediately with proration
           // Also reset cancel_at_period_end — user is actively upgrading, so they want to continue
           await stripe.subscriptions.update(existingSub.stripe_subscription_id, {
             items: [{ id: subscriptionItem.id, price: stripePriceId }],
             proration_behavior: "always_invoice",
             cancel_at_period_end: false,
-            metadata: sharedMetadata,
+            metadata: {
+              ...sharedMetadata,
+              ...(lockUntil
+                ? { pinai_downgrade_lock_until: String(lockUntil) }
+                : {}),
+            },
           });
           // Also update DB period to reflect cancel_at_period_end=false
           await db.updateSubscriptionCancelFlag(
@@ -439,6 +464,24 @@ export const createCheckoutSession = async (
             message: `Upgraded to ${selectedPlan.display_name}. Effective immediately.`,
           };
         } else {
+          const lockUntil = parseUnixSeconds(
+            stripeSubscription.metadata?.pinai_downgrade_lock_until,
+          );
+          const nowSec = Math.floor(Date.now() / 1000);
+          if (lockUntil && nowSec < lockUntil) {
+            const lockDate = new Date(lockUntil * 1000).toISOString();
+            console.warn("[payment] checkout:downgrade_blocked_by_upgrade_lock", {
+              telegram_user_id: telegramUserId,
+              stripe_subscription_id: existingSub.stripe_subscription_id,
+              from_plan: currentPlan.plan_code,
+              to_plan: selectedPlan.plan_code,
+              lock_until: lockDate,
+            });
+            throw new DomainError(
+              "INVALID_INPUT",
+              `Downgrade is locked until ${lockDate}. You can downgrade after this billing cycle ends.`,
+            );
+          }
           // Downgrade: schedule for next billing cycle (no proration, no refund)
           await stripe.subscriptions.update(existingSub.stripe_subscription_id, {
             items: [{ id: subscriptionItem.id, price: stripePriceId }],
