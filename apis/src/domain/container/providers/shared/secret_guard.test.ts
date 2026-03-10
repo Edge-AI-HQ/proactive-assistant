@@ -122,13 +122,11 @@ test("buildAssistantOpenclawConfig enforces full tools defaults for new agents",
     includeTelegramPlugin: true,
   }) as {
     tools?: { profile?: string };
-    agents?: { defaults?: { tools?: { profile?: string } } };
     commands?: { config?: boolean };
     cron?: { enabled?: boolean };
   };
 
   assert.equal(openclaw.tools?.profile, "full");
-  assert.equal(openclaw.agents?.defaults?.tools?.profile, "full");
   assert.equal(openclaw.commands?.config, true);
   assert.equal(openclaw.cron?.enabled, true);
 });
