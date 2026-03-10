@@ -108,6 +108,31 @@ test("quick start builds telegram channel with synthetic token + assistant secre
   assert.equal(raw.includes(context.telegram.webhookSecret), false);
 });
 
+test("buildAssistantOpenclawConfig enforces full tools defaults for new agents", () => {
+  const context = buildConfig();
+  const openclaw = buildAssistantOpenclawConfig(context, {
+    gatewayToken: "user-gateway-token",
+    gatewayBind: "loopback",
+    assistantBotToken: "assistant-bot-token",
+    telegramWebhookMode: true,
+    telegramWebhookUrl: context.telegramRouter.webhookUrl,
+    telegramWebhookPath: context.telegramRouter.webhookPath,
+    telegramWebhookHost: context.telegramRouter.webhookHost,
+    telegramWebhookPort: context.telegramRouter.webhookPort,
+    includeTelegramPlugin: true,
+  }) as {
+    tools?: { profile?: string };
+    agents?: { defaults?: { tools?: { profile?: string } } };
+    commands?: { config?: boolean };
+    cron?: { enabled?: boolean };
+  };
+
+  assert.equal(openclaw.tools?.profile, "full");
+  assert.equal(openclaw.agents?.defaults?.tools?.profile, "full");
+  assert.equal(openclaw.commands?.config, true);
+  assert.equal(openclaw.cron?.enabled, true);
+});
+
 test("assertNoP0SecretsInConfig rejects forbidden keys and values", () => {
   const context = buildConfig();
   assert.throws(
