@@ -471,15 +471,15 @@ const App = () => {
   };
 
   const handleContactSupport = () => {
-    const mailto = "mailto:support@pinai.io";
+    const supportUrl = `${window.location.origin}/mini/support.html`;
     const webApp = window.Telegram?.WebApp;
 
     if (webApp?.openLink) {
-      webApp.openLink(mailto, { try_browser: "chrome" });
+      webApp.openLink(supportUrl, { try_browser: "chrome" });
       return;
     }
 
-    window.location.href = mailto;
+    window.open(supportUrl, "_blank", "noopener,noreferrer");
   };
 
   const loadModels = async () => {
