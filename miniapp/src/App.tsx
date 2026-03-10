@@ -57,6 +57,9 @@ type StatePayload = {
     cancel_at_period_end: boolean;
     current_period_end: string | null;
   };
+  features?: {
+    can_delete_account?: boolean;
+  };
   plans: Plan[] | null;
   skills: SkillsPayload | null;
   google: GoogleStatus | null;
@@ -667,6 +670,7 @@ const App = () => {
             onChangePlan={() => setShowChangePlan(true)}
             onRepairRuntime={handleRepairRuntime}
             runtimeBusy={busy === "repair-runtime"}
+            allowDeleteAccount={state.features?.can_delete_account ?? true}
             onDeleteAccount={handleDeleteAccount}
             onConnectGoogle={handleConnectGoogle}
             onDisconnectGoogle={handleDisconnectGoogle}

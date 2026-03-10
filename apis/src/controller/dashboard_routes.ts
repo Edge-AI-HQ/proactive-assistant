@@ -357,6 +357,9 @@ const buildQuickStatePayload = async (
           cancel_at_period_end: false,
           current_period_end: null,
         },
+    features: {
+      can_delete_account: config.nodeEnv.trim().toLowerCase() !== "production",
+    },
     plans: null as null,
     skills: null as null,
     google: null as null,

@@ -13,6 +13,7 @@ interface ManageAgentDialogProps {
   onChangePlan: () => void;
   onRepairRuntime: () => void;
   runtimeBusy: boolean;
+  allowDeleteAccount: boolean;
   onDeleteAccount: () => void;
   google?: {
     connected: boolean;
@@ -38,6 +39,7 @@ const ManageAgentDialog = ({
   onChangePlan,
   onRepairRuntime,
   runtimeBusy,
+  allowDeleteAccount,
   onDeleteAccount,
   google,
   googleBusy,
@@ -111,14 +113,18 @@ const ManageAgentDialog = ({
       destructive: false,
       loading: runtimeBusy,
     },
-    {
-      icon: "🗑️",
-      label: "Delete Account",
-      desc: "Permanently remove all data",
-      onClick: () => setShowDeleteConfirm(true),
-      destructive: true,
-      loading: false,
-    },
+    ...(allowDeleteAccount
+      ? [
+          {
+            icon: "🗑️",
+            label: "Delete Account",
+            desc: "Permanently remove all data",
+            onClick: () => setShowDeleteConfirm(true),
+            destructive: true,
+            loading: false,
+          },
+        ]
+      : []),
   ];
 
   if (showModelPicker) {

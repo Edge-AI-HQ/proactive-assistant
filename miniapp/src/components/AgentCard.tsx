@@ -21,6 +21,7 @@ interface AgentCardProps {
   onChangePlan: () => void;
   onRepairRuntime: () => void;
   runtimeBusy: boolean;
+  allowDeleteAccount: boolean;
   onDeleteAccount: () => void;
   onConnectGoogle: () => void;
   onDisconnectGoogle: () => void;
@@ -63,6 +64,7 @@ const AgentCard = ({
   onChangePlan,
   onRepairRuntime,
   runtimeBusy,
+  allowDeleteAccount,
   onDeleteAccount,
   onConnectGoogle,
   onDisconnectGoogle,
@@ -161,6 +163,7 @@ const AgentCard = ({
         onChangePlan={onChangePlan}
         onRepairRuntime={onRepairRuntime}
         runtimeBusy={runtimeBusy}
+        allowDeleteAccount={allowDeleteAccount}
         onDeleteAccount={onDeleteAccount}
         onConnectGoogle={onConnectGoogle}
         onDisconnectGoogle={onDisconnectGoogle}
