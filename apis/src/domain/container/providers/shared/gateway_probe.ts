@@ -264,11 +264,19 @@ export const probeGatewayReady = async (
     if (!gatewayOk) return false;
   }
 
-  // 3. TCP: additional ports (webhook, etc.)
+  // Gateway hello succeeded — fire the early-ready callback so the caller
+  // can update DB status immediately without waiting for supplementary probes.
+  options.onGatewayReady?.();
+
+  // 3. TCP: additional ports (webhook, etc.) — best-effort, don't block
   if (target.additionalPorts?.length) {
     for (const port of target.additionalPorts) {
-      const ok = await waitForPort(host, port, timeoutMs);
-      if (!ok) return false;
+      const ok = await waitForPort(host, port, Math.min(timeoutMs, 30_000));
+      if (!ok) {
+        console.warn(
+          `[gateway-probe] Additional port check failed (non-fatal): ${host}:${port}`,
+        );
+      }
     }
   }
 
@@ -279,8 +287,6 @@ export const probeGatewayReady = async (
         host,
         probe.port,
         probe.path,
-        // Use a shorter timeout for HTTP probes since gateway is already
-        // confirmed ready; these are supplementary health checks.
         Math.min(timeoutMs, 30_000),
       );
       if (!ok) {

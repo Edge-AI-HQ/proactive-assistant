@@ -94,6 +94,8 @@ export interface ProbeOptions {
   gatewayPort: number;
   additionalPorts?: number[];
   httpProbes?: Array<{ port: number; path: string }>;
+  /** Fires as soon as gateway WebSocket hello succeeds (before supplementary probes). */
+  onGatewayReady?: () => void;
 }
 
 export interface ContainerRuntime {
