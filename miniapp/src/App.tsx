@@ -471,18 +471,15 @@ const App = () => {
   };
 
   const handleContactSupport = () => {
-    const mailto = "mailto:support@pinai.io";
+    const supportUrl = `${window.location.origin}/mini/support.html`;
     const webApp = window.Telegram?.WebApp;
 
-    // Telegram mobile webviews often swallow mailto links. Try the system handler first,
-    // then fall back to an external browser if the client exposes one.
-    window.location.href = mailto;
-
     if (webApp?.openLink) {
-      window.setTimeout(() => {
-        webApp.openLink(mailto, { try_browser: "chrome" });
-      }, 150);
+      webApp.openLink(supportUrl, { try_browser: "chrome" });
+      return;
     }
+
+    window.open(supportUrl, "_blank", "noopener,noreferrer");
   };
 
   const loadModels = async () => {
@@ -684,7 +681,7 @@ const App = () => {
           <button
             type="button"
             onClick={handleContactSupport}
-            className="glass-card rounded-2xl flex items-center justify-center gap-2 text-sm text-foreground font-medium py-3 hover:bg-secondary/50 transition-colors"
+            className="glass-card w-full rounded-2xl flex items-center justify-center gap-2 text-sm text-foreground font-medium py-3 hover:bg-secondary/50 transition-colors border-0 bg-transparent appearance-none"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
