@@ -1,3 +1,5 @@
+import { CUSTOM_SKILL_KEYS } from "./generated_custom_skill_keys.js";
+
 type UnknownRecord = Record<string, unknown>;
 
 export const SKILLS_METADATA_KEY = "openclaw_skills";
@@ -78,15 +80,10 @@ export const DEFAULT_SKILLS_CATALOG: SkillCatalogItem[] = [
 
 /** Skills always injected into every assistant config — both when runtime
  *  metadata exists (via readSkillsConfigFromRuntimeMetadata) and as the
- *  fallback when no metadata is present (via buildAssistantOpenclawConfig). */
-export const DEFAULT_PREINSTALLED_BUNDLED_SKILLS = [
-  "openai-image-gen",
-  "openai-whisper-api",
-  "sag",
-  "gws",
-  "gws-gmail",
-  "gws-shared",
-] as const;
+ *  fallback when no metadata is present (via buildAssistantOpenclawConfig).
+ *  Auto-generated from infra/container-manager/images/openclaw/skills/ via
+ *  scripts/sync-skills-manifest.mjs — run it after adding/removing skills. */
+export const DEFAULT_PREINSTALLED_BUNDLED_SKILLS = CUSTOM_SKILL_KEYS;
 
 const isRecord = (value: unknown): value is UnknownRecord =>
   typeof value === "object" && value !== null;
