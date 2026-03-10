@@ -30,6 +30,10 @@ import { buildGoogleConnectedMessage, extractStartPayload } from "./startPayload
 const GATEWAY_LINK_SESSION_TTL_HOURS = 12;
 const TELEGRAM_BOT_TOKEN_PATTERN = /^\d{6,}:[A-Za-z0-9_-]{20,}$/;
 
+export const shouldHideGuideBotCommands = (
+  nodeEnv: string = config.nodeEnv,
+): boolean => nodeEnv.trim().toLowerCase() === "production";
+
 const commandText = (): string =>
   guideCommandList
     .map((item) => `/${item.command} - ${item.description}`)
@@ -403,9 +407,15 @@ const provisionAssistantWithGuideBot = async (
 };
 
 export const registerTelegramCommands = (bot: Bot<Context>): void => {
-  bot.api.setMyCommands(guideCommandList).catch((error: unknown) => {
-    console.error("Failed to set bot commands", error);
-  });
+  if (shouldHideGuideBotCommands()) {
+    bot.api.deleteMyCommands().catch((error: unknown) => {
+      console.error("Failed to hide bot commands in production", error);
+    });
+  } else {
+    bot.api.setMyCommands(guideCommandList).catch((error: unknown) => {
+      console.error("Failed to set bot commands", error);
+    });
+  }
 
   bot.command("start", async (ctx) => {
     const telegramUserId = ctx.from?.id;
@@ -796,9 +806,11 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     }
   });
 
-  bot.hears(/^\s*\/\s*$/, async (ctx) => {
-    await replyHtml(ctx, `<b>Available commands:</b>\n${commandText()}`);
-  });
+  if (!shouldHideGuideBotCommands()) {
+    bot.hears(/^\s*\/\s*$/, async (ctx) => {
+      await replyHtml(ctx, `<b>Available commands:</b>\n${commandText()}`);
+    });
+  }
 
   bot.on("message:text", async (ctx, next) => {
     const telegramUserId = ctx.from?.id;
