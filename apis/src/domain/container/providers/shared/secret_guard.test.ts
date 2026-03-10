@@ -129,6 +129,12 @@ test("buildAssistantOpenclawConfig enforces full tools defaults for new agents",
   assert.equal(openclaw.tools?.profile, "full");
   assert.equal(openclaw.commands?.config, true);
   assert.equal(openclaw.cron?.enabled, true);
+  const trustedProxies = (openclaw as { gateway?: { trustedProxies?: unknown } })
+    .gateway?.trustedProxies as string[] | undefined;
+  assert.ok(Array.isArray(trustedProxies));
+  assert.equal(trustedProxies?.includes("127.0.0.0/8"), true);
+  assert.equal(trustedProxies?.includes("172.16.0.0/12"), true);
+  assert.equal(trustedProxies?.includes("fc00::/7"), true);
 });
 
 test("assertNoP0SecretsInConfig rejects forbidden keys and values", () => {

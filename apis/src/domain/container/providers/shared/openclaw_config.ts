@@ -55,7 +55,16 @@ export const buildGatewayConfigSection = (
   // Trust the APIs reverse proxy so the gateway accepts forwarded headers
   // and treats proxied connections as local.
   const trustedProxies =
-    bind === "loopback" ? ["127.0.0.0/8"] : ["0.0.0.0/0"];
+    bind === "loopback"
+      ? [
+          "127.0.0.0/8",
+          "::1/128",
+          "10.0.0.0/8",
+          "172.16.0.0/12",
+          "192.168.0.0/16",
+          "fc00::/7",
+        ]
+      : ["0.0.0.0/0"];
 
   return {
     mode: "local",
