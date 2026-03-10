@@ -273,11 +273,6 @@ export const renderSubscribeUnavailablePage = (options?: {
     reason === "expired"
       ? "No action was taken and no charge was made."
       : "Your account is safe. You only need a fresh link to continue.";
-  const button = readTelegramReturnButton(
-    "Get a new payment link",
-    "Open Telegram and request a new payment link to continue.",
-  );
-
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -304,7 +299,7 @@ export const renderSubscribeUnavailablePage = (options?: {
           <span><strong>What to do next:</strong> return to Telegram and open a new subscription link.</span>
           <span>${helper}</span>
         </div>
-        ${button}
+        <p class="muted">Open Telegram and run <strong>/create</strong> to generate a fresh payment link.</p>
       </div>
     </div>
   </body>
