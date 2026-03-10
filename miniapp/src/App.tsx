@@ -288,6 +288,19 @@ const App = () => {
 
   const createAssistant = async () => {
     setBusy("create");
+    setState((prev) =>
+      prev
+        ? {
+            ...prev,
+            assistant: {
+              exists: true,
+              id: prev.assistant.id,
+              username: prev.assistant.username ?? null,
+              status: prev.assistant.status === "running" ? "running" : "creating",
+            },
+          }
+        : prev,
+    );
     try {
       await safeFetch("/api/mini/create-assistant", {
         method: "POST",
@@ -295,6 +308,7 @@ const App = () => {
       });
       await loadState();
     } catch (e) {
+      await loadState().catch(() => {});
       showToast(`Create failed: ${e instanceof Error ? e.message : "unknown"}`);
     } finally {
       setBusy("none");
@@ -453,6 +467,21 @@ const App = () => {
       showToast(`Repair failed: ${e instanceof Error ? e.message : "unknown"}`);
     } finally {
       setBusy("none");
+    }
+  };
+
+  const handleContactSupport = () => {
+    const mailto = "mailto:support@pinai.io";
+    const webApp = window.Telegram?.WebApp;
+
+    // Telegram mobile webviews often swallow mailto links. Try the system handler first,
+    // then fall back to an external browser if the client exposes one.
+    window.location.href = mailto;
+
+    if (webApp?.openLink) {
+      window.setTimeout(() => {
+        webApp.openLink(mailto, { try_browser: "chrome" });
+      }, 150);
     }
   };
 
@@ -652,15 +681,16 @@ const App = () => {
         </div>
 
         <div className="px-4 mt-auto pt-4">
-          <a
-            href="mailto:support@pinai.io"
+          <button
+            type="button"
+            onClick={handleContactSupport}
             className="glass-card rounded-2xl flex items-center justify-center gap-2 text-sm text-foreground font-medium py-3 hover:bg-secondary/50 transition-colors"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
             </svg>
             Contact Us
-          </a>
+          </button>
         </div>
 
         <ChangePlanDialog
