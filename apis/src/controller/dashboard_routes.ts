@@ -43,6 +43,7 @@ import {
   resolveAssistantGatewayTarget,
   rewriteGatewayProxyRequestUrl,
 } from "../domain/gateway/proxy_orchestrator.js";
+import { gatewayHostHeaders } from "../domain/container/contracts.js";
 import {
   getCurrentModel,
   setCurrentModel,
@@ -1728,7 +1729,10 @@ export const createDashboardRouter = (): Router => {
       proxy.web(req, res, {
         target: target.httpBaseUrl,
         changeOrigin: true,
-        headers: buildOpenclawAuthHeaders(user.gateway_token),
+        headers: {
+          ...buildOpenclawAuthHeaders(user.gateway_token),
+          ...gatewayHostHeaders(target),
+        },
       });
     },
   );
@@ -1817,7 +1821,10 @@ export const registerDashboardWsRoutes = (server: Server): void => {
       proxy.ws(req, socket, head, {
         target: target.wsBaseUrl,
         changeOrigin: false,
-        headers: buildOpenclawAuthHeaders(user.gateway_token),
+        headers: {
+          ...buildOpenclawAuthHeaders(user.gateway_token),
+          ...gatewayHostHeaders(target),
+        },
       });
     })().catch((error: unknown) => {
       console.error("Assistant dashboard WS upgrade error", error);

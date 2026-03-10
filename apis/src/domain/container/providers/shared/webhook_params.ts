@@ -60,14 +60,24 @@ export const buildBaseContainerEnv = (
   privateWebhookPort: number,
   telegramRouterUrl: string,
   googleCredentialsFile: string,
-): Record<string, string> => ({
-  OPENCLAW_HOME: "/app",
-  OPENCLAW_USER_ID: `assistant-${assistantBotId}`,
-  OPENCLAW_GATEWAY_PORT: String(config.openclaw.gatewayPort),
-  OPENCLAW_TELEGRAM_WEBHOOK_PORT: String(webhookPort),
-  OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT: String(privateWebhookPort),
-  NODE_COMPILE_CACHE: "/app/cache/node-compile-cache",
-  TELEGRAM_ROUTER_URL: telegramRouterUrl,
-  GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE: googleCredentialsFile,
-  PINAI_WORKSPACE_STATUS_PORT: String(PINAI_WORKSPACE_STATUS_PORT),
-});
+  liteLlmApiKey?: string | null,
+): Record<string, string> => {
+  const env: Record<string, string> = {
+    OPENCLAW_HOME: "/app",
+    OPENCLAW_USER_ID: `assistant-${assistantBotId}`,
+    OPENCLAW_GATEWAY_PORT: String(config.openclaw.gatewayPort),
+    OPENCLAW_TELEGRAM_WEBHOOK_PORT: String(webhookPort),
+    OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT: String(privateWebhookPort),
+    NODE_COMPILE_CACHE: "/app/cache/node-compile-cache",
+    TELEGRAM_ROUTER_URL: telegramRouterUrl,
+    GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE: googleCredentialsFile,
+    PINAI_WORKSPACE_STATUS_PORT: String(PINAI_WORKSPACE_STATUS_PORT),
+  };
+  if (config.litellm.enabled) {
+    const baseUrl = config.litellm.baseUrl?.trim();
+    const apiKey = liteLlmApiKey?.trim();
+    if (baseUrl) env.LITELLM_BASE_URL = baseUrl;
+    if (apiKey) env.LITELLM_API_KEY = apiKey;
+  }
+  return env;
+};

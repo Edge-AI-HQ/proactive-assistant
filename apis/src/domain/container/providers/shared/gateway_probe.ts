@@ -82,10 +82,14 @@ const probeGatewayHelloOnce = (
   host: string,
   port: number,
   gatewayToken: string,
+  hostOverride?: string,
 ): Promise<boolean> =>
   new Promise((resolve) => {
     const wsUrl = `ws://${formatHostForUrl(host)}:${port}`;
-    const ws = new WebSocket(wsUrl, { maxPayload: 2 * 1024 * 1024 });
+    const ws = new WebSocket(wsUrl, {
+      maxPayload: 2 * 1024 * 1024,
+      ...(hostOverride ? { headers: { Host: hostOverride } } : {}),
+    });
     let settled = false;
     let sent = false;
 
@@ -170,10 +174,11 @@ export const waitForGatewayHello = async (
   port: number,
   gatewayToken: string,
   timeoutMs: number,
+  hostOverride?: string,
 ): Promise<boolean> => {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    const ok = await probeGatewayHelloOnce(host, port, gatewayToken);
+    const ok = await probeGatewayHelloOnce(host, port, gatewayToken, hostOverride);
     if (ok) return true;
     await sleep(1000);
   }
@@ -188,6 +193,7 @@ export const waitForHttpReady = async (
   port: number,
   urlPath: string,
   timeoutMs: number,
+  hostOverride?: string,
 ): Promise<boolean> => {
   const startedAt = Date.now();
   const normalizedPath = urlPath.startsWith("/") ? urlPath : `/${urlPath}`;
@@ -201,6 +207,7 @@ export const waitForHttpReady = async (
       const response = await fetch(url, {
         method: "GET",
         signal: controller.signal,
+        ...(hostOverride ? { headers: { Host: hostOverride } } : {}),
       });
       clearTimeout(timer);
       if (response.status >= 100 && response.status < 600) {
@@ -224,6 +231,8 @@ export interface ResolvedProbeTarget {
   host: string;
   /** Host-mapped gateway port. */
   gatewayPort: number;
+  /** Override Host header for WS/HTTP probes (e.g. Fly loopback workaround). */
+  hostOverride?: string;
   /** Host-mapped additional ports to TCP-check (e.g. webhook). */
   additionalPorts?: number[];
   /** Host-mapped HTTP probes. */
@@ -246,7 +255,7 @@ export const probeGatewayReady = async (
   target: ResolvedProbeTarget,
   options: ProbeOptions,
 ): Promise<boolean> => {
-  const { host, gatewayPort } = target;
+  const { host, gatewayPort, hostOverride } = target;
   const { timeoutMs, gatewayToken } = options;
 
   // 1. TCP: gateway port
@@ -260,6 +269,7 @@ export const probeGatewayReady = async (
       gatewayPort,
       gatewayToken,
       timeoutMs,
+      hostOverride,
     );
     if (!gatewayOk) return false;
   }
@@ -288,6 +298,7 @@ export const probeGatewayReady = async (
         probe.port,
         probe.path,
         Math.min(timeoutMs, 30_000),
+        hostOverride,
       );
       if (!ok) {
         console.warn(

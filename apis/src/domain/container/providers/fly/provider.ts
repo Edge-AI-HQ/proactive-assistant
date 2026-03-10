@@ -179,6 +179,10 @@ const toGatewayTarget = (host: string, port: number): GatewayTarget => {
     port,
     httpBaseUrl: `http://${urlHost}:${port}`,
     wsBaseUrl: `ws://${urlHost}:${port}`,
+    // Fly routes cross-machine traffic through flycast, so the TCP connection
+    // arrives at 127.0.0.1 but the Host header carries the Fly IPv6 address.
+    // Override Host so OpenClaw's loopback gateway classifies it as local.
+    hostOverride: `127.0.0.1:${port}`,
   };
 };
 
@@ -306,10 +310,12 @@ export const flyContainerRuntime: ContainerRuntime = {
     options: ProbeOptions,
   ): Promise<boolean> {
     const host = resolveHostFromRef(ref);
+    const target = toGatewayTarget(host, options.gatewayPort);
     return probeGatewayReady(
       {
         host,
         gatewayPort: options.gatewayPort,
+        ...(target.hostOverride ? { hostOverride: target.hostOverride } : {}),
         ...(options.additionalPorts ? { additionalPorts: options.additionalPorts } : {}),
         ...(options.httpProbes ? { httpProbes: options.httpProbes } : {}),
       },

@@ -90,40 +90,25 @@ workspace_inject() {
   echo "[workspace] done" >&2
 }
 
+_ipv6_proxy() {
+  # Usage: _ipv6_proxy <label> <port>
+  # Bridges [::]:port -> 127.0.0.1:port so Fly Proxy (IPv6) can reach IPv4-only listeners.
+  local label="$1" port="$2"
+  node -e "
+const net=require('net'),port=${port},label='${label}';
+const srv=net.createServer(i=>{const o=net.connect({host:'127.0.0.1',port});i.pipe(o);o.pipe(i);const c=()=>{i.destroy();o.destroy()};i.on('error',c);o.on('error',c)});
+srv.on('error',e=>{console.error('['+label+'] fatal',e);process.exit(1)});
+srv.listen({host:'::',port,ipv6Only:true},()=>console.log('['+label+'] [::]:'+port+' -> 127.0.0.1:'+port));
+" >"/tmp/${label}.log" 2>&1 &
+}
+
 start_ipv6_proxies() {
   [ "${PINAI_FLY_MODE:-}" = "1" ] || return 0
 
-  GW_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
-  node -e "
-const net=require('net');const port=${GW_PORT};
-const srv=net.createServer(i=>{const o=net.connect({host:'127.0.0.1',port});i.pipe(o);o.pipe(i);const c=()=>{i.destroy();o.destroy()};i.on('error',c);o.on('error',c)});
-srv.on('error',e=>{console.error('[fly-ipv6-proxy] fatal',e);process.exit(1)});
-srv.listen({host:'::',port,ipv6Only:true},()=>console.log('[fly-ipv6-proxy] [::]:'+port+' -> 127.0.0.1:'+port));
-" >/tmp/fly-ipv6-proxy.log 2>&1 &
-
-  WH_PORT="${OPENCLAW_TELEGRAM_WEBHOOK_PORT:-8787}"
-  node -e "
-const net=require('net');const port=${WH_PORT};
-const srv=net.createServer(i=>{const o=net.connect({host:'127.0.0.1',port});i.pipe(o);o.pipe(i);const c=()=>{i.destroy();o.destroy()};i.on('error',c);o.on('error',c)});
-srv.on('error',e=>{console.error('[fly-tg-webhook-ipv6-proxy] fatal',e);process.exit(1)});
-srv.listen({host:'::',port,ipv6Only:true},()=>console.log('[fly-tg-webhook-ipv6-proxy] [::]:'+port+' -> 127.0.0.1:'+port));
-" >/tmp/fly-tg-webhook-ipv6-proxy.log 2>&1 &
-
-  PWH_PORT="${OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT:-8788}"
-  node -e "
-const net=require('net');const port=${PWH_PORT};
-const srv=net.createServer(i=>{const o=net.connect({host:'127.0.0.1',port});i.pipe(o);o.pipe(i);const c=()=>{i.destroy();o.destroy()};i.on('error',c);o.on('error',c)});
-srv.on('error',e=>{console.error('[fly-tg-private-webhook-ipv6-proxy] fatal',e);process.exit(1)});
-srv.listen({host:'::',port,ipv6Only:true},()=>console.log('[fly-tg-private-webhook-ipv6-proxy] [::]:'+port+' -> 127.0.0.1:'+port));
-" >/tmp/fly-tg-private-webhook-ipv6-proxy.log 2>&1 &
-
-  WS_PORT="${PINAI_WORKSPACE_STATUS_PORT:-8790}"
-  node -e "
-const net=require('net');const port=${WS_PORT};
-const srv=net.createServer(i=>{const o=net.connect({host:'127.0.0.1',port});i.pipe(o);o.pipe(i);const c=()=>{i.destroy();o.destroy()};i.on('error',c);o.on('error',c)});
-srv.on('error',e=>{console.error('[fly-workspace-status-ipv6-proxy] fatal',e);process.exit(1)});
-srv.listen({host:'::',port,ipv6Only:true},()=>console.log('[fly-workspace-status-ipv6-proxy] [::]:'+port+' -> 127.0.0.1:'+port));
-" >/tmp/fly-workspace-status-ipv6-proxy.log 2>&1 &
+  _ipv6_proxy fly-ipv6-proxy           "${OPENCLAW_GATEWAY_PORT:-18789}"
+  _ipv6_proxy fly-tg-webhook           "${OPENCLAW_TELEGRAM_WEBHOOK_PORT:-8787}"
+  _ipv6_proxy fly-tg-private-webhook   "${OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT:-8788}"
+  _ipv6_proxy fly-workspace-status     "${PINAI_WORKSPACE_STATUS_PORT:-8790}"
 
   sleep 0.2
 }

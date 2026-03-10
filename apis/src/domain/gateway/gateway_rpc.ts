@@ -48,7 +48,10 @@ const rpcCall = <T = unknown>(
   params: Record<string, unknown> = {},
 ): Promise<RpcResult<T>> =>
   new Promise((resolve) => {
-    const ws = new WebSocket(target.wsBaseUrl, { maxPayload: 4 * 1024 * 1024 });
+    const ws = new WebSocket(target.wsBaseUrl, {
+      maxPayload: 4 * 1024 * 1024,
+      ...(target.hostOverride ? { headers: { Host: target.hostOverride } } : {}),
+    });
     let settled = false;
 
     const connectId = generateRequestId();

@@ -447,6 +447,7 @@ export const createAssistantMachine = async (
       normalizedPrivateWebhookPort,
       routerOrigin,
       GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE,
+      args.liteLlmApiKey,
     ),
     OPENCLAW_CONFIG_B64: openclawPayload.base64,
     PINAI_OPENCLAW_CONFIG_SHA256: openclawPayload.hash,

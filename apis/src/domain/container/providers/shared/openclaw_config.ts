@@ -428,7 +428,20 @@ export const buildAssistantOpenclawConfig = (
       notifyOnExit: true,
     },
     web: {
-      search: { enabled: true, maxResults: 10 },
+      search: {
+        enabled: true,
+        maxResults: 10,
+        ...(context.litellm.enabled && normalizedLiteLLMApiKey
+          ? {
+              provider: "perplexity",
+              perplexity: {
+                apiKey: normalizedLiteLLMApiKey,
+                baseUrl: context.litellm.baseUrl.replace(/\/+$/, ""),
+                model: "sonar-pro",
+              },
+            }
+          : {}),
+      },
       fetch: { enabled: true, maxChars: 50000 },
     },
     media: {

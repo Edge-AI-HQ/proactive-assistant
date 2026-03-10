@@ -593,6 +593,7 @@ export const dockerContainerRuntime: ContainerRuntime = {
       privateWebhookPort,
       telegramRouterUrl,
       "/app/google/gws-credentials.json",
+      liteLlmApiKey,
     );
     containerEnv[PINAI_GOOGLE_CREDENTIALS_B64_ENV] = (params.googleCredentialsB64 || "").trim();
     assertNoP0SecretsInEnv(containerEnv, config);
