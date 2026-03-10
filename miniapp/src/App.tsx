@@ -91,6 +91,13 @@ declare global {
         close: () => void;
         initData?: string;
         openTelegramLink?: (url: string) => void;
+        openLink?: (
+          url: string,
+          options?: {
+            try_instant_view?: boolean;
+            try_browser?: string;
+          },
+        ) => void;
         initDataUnsafe?: {
           user?: {
             id: number;
@@ -339,7 +346,13 @@ const App = () => {
   };
 
   const handleConnectGoogle = () => {
-    window.location.href = "/mini/google/start";
+    const authStartUrl = `${window.location.origin}/mini/google/start`;
+    const webApp = window.Telegram?.WebApp;
+    if (webApp?.openLink) {
+      webApp.openLink(authStartUrl, { try_browser: "chrome" });
+      return;
+    }
+    window.open(authStartUrl, "_blank", "noopener,noreferrer");
   };
 
   const handleDisconnectGoogle = async () => {

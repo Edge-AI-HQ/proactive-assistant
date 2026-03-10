@@ -215,6 +215,63 @@ const clearMiniSessionCookie = (res: Response): void => {
   res.clearCookie(miniSessionCookieName, { path: "/" });
 };
 
+const normalizeBotUsername = (): string | null => {
+  const raw = String(config.telegram.botUsername || "").trim();
+  if (!raw) return null;
+  return raw.replace(/^@+/, "") || null;
+};
+
+const renderMiniGoogleDonePage = (
+  status: "connected" | "error" | "disconnected",
+  reason?: string,
+): string => {
+  const botUsername = normalizeBotUsername();
+  const openTelegramUrl = botUsername
+    ? `https://t.me/${botUsername}?startapp=manage`
+    : "tg://resolve";
+
+  const title =
+    status === "connected"
+      ? "Google connected"
+      : status === "disconnected"
+        ? "Google disconnected"
+        : "Google connection failed";
+  const description =
+    status === "connected"
+      ? "Authorization completed. Return to Telegram Mini App and continue in chat."
+      : status === "disconnected"
+        ? "Google has been disconnected. Return to Telegram Mini App."
+        : `Authorization failed${reason ? `: ${reason}` : ""}. Please retry from Telegram Mini App.`;
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${title}</title>
+  <style>
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0b1220; color: #e6edf7; }
+    .wrap { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    .card { width: 100%; max-width: 520px; background: #121a2b; border: 1px solid #26324a; border-radius: 16px; padding: 24px; }
+    h1 { margin: 0 0 12px; font-size: 24px; line-height: 1.2; }
+    p { margin: 0 0 16px; color: #b6c2d9; line-height: 1.5; }
+    a.btn { display: inline-block; text-decoration: none; background: #4f8cff; color: white; padding: 12px 16px; border-radius: 10px; font-weight: 600; }
+    .hint { margin-top: 14px; font-size: 13px; color: #8fa0c0; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>${title}</h1>
+      <p>${description}</p>
+      <a class="btn" href="${openTelegramUrl}">Back to Telegram</a>
+      <p class="hint">After returning, send your previous request again in chat.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+};
+
 const requireMiniSession = async (
   req: Request,
   res: Response,
@@ -402,13 +459,13 @@ export const createDashboardRouter = (): Router => {
       try {
         const url = await buildGoogleAuthStartUrl(
           user.telegram_user_id,
-          buildMiniGoogleReturnUrl("/mini", { status: "connected" }),
+          buildMiniGoogleReturnUrl("/mini/google/done", { status: "connected" }),
         );
         res.redirect(url);
       } catch (error: unknown) {
         console.error("Mini google start failed", error);
         res.redirect(
-          buildMiniGoogleReturnUrl("/mini", {
+          buildMiniGoogleReturnUrl("/mini/google/done", {
             status: "error",
             error: "oauth_start_failed",
           }),
@@ -424,18 +481,37 @@ export const createDashboardRouter = (): Router => {
         state: typeof req.query.state === "string" ? req.query.state : undefined,
         error: typeof req.query.error === "string" ? req.query.error : undefined,
       });
-      res.redirect(
-        result.nextPath || buildMiniGoogleReturnUrl("/mini", { status: "connected" }),
-      );
+      const nextPath =
+        result.nextPath ||
+        buildMiniGoogleReturnUrl("/mini/google/done", { status: "connected" });
+      res.redirect(nextPath);
     } catch (error: unknown) {
       console.error("Mini google callback failed", error);
       res.redirect(
-        buildMiniGoogleReturnUrl("/mini", {
+        buildMiniGoogleReturnUrl("/mini/google/done", {
           status: "error",
           error: "oauth_callback_failed",
         }),
       );
     }
+  });
+
+  router.get("/mini/google/done", (req: Request, res: Response) => {
+    const statusParam = String(req.query.google || "connected").trim().toLowerCase();
+    const status =
+      statusParam === "error"
+        ? "error"
+        : statusParam === "disconnected"
+          ? "disconnected"
+          : "connected";
+    const reason =
+      typeof req.query.reason === "string"
+        ? req.query.reason
+        : typeof req.query.error === "string"
+          ? req.query.error
+          : undefined;
+    res.setHeader("Cache-Control", "no-store");
+    res.type("html").send(renderMiniGoogleDonePage(status, reason));
   });
 
   router.post(
