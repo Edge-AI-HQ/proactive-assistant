@@ -1,5 +1,10 @@
 import ManageAgentDialog from "./ManageAgentDialog";
 
+type ModelItem = {
+  id: string;
+  ref: string;
+};
+
 interface AgentCardProps {
   username: string | null;
   status: string;
@@ -19,6 +24,13 @@ interface AgentCardProps {
   onDeleteAccount: () => void;
   onConnectGoogle: () => void;
   onDisconnectGoogle: () => void;
+  models?: {
+    current: string | null;
+    available: ModelItem[];
+  } | null;
+  modelBusy: boolean;
+  onChangeModel: (modelRef: string) => void;
+  onLoadModels: () => Promise<void>;
 }
 
 const getStatusDisplay = (status: string): { text: string; color: string } => {
@@ -54,6 +66,10 @@ const AgentCard = ({
   onDeleteAccount,
   onConnectGoogle,
   onDisconnectGoogle,
+  models,
+  modelBusy,
+  onChangeModel,
+  onLoadModels,
 }: AgentCardProps) => {
   const statusDisplay = getStatusDisplay(status);
 
@@ -148,6 +164,10 @@ const AgentCard = ({
         onDeleteAccount={onDeleteAccount}
         onConnectGoogle={onConnectGoogle}
         onDisconnectGoogle={onDisconnectGoogle}
+        models={models}
+        modelBusy={modelBusy}
+        onChangeModel={onChangeModel}
+        onLoadModels={onLoadModels}
       />
     </>
   );

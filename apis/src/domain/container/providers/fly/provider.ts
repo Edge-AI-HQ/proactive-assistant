@@ -19,10 +19,8 @@ import {
 } from "./fly_client.js";
 import {
   formatHostForUrl,
-  waitForGatewayHello,
-  waitForHttpReady,
-  waitForPort,
-} from "./gateway_probe.js";
+  probeGatewayReady,
+} from "../shared/gateway_probe.js";
 import { ensureFlyOpenclawImageDigestPullable } from "./image_digest_guard.js";
 import {
   createAssistantMachine as provisionAssistantMachine,
@@ -308,36 +306,15 @@ export const flyContainerRuntime: ContainerRuntime = {
     options: ProbeOptions,
   ): Promise<boolean> {
     const host = resolveHostFromRef(ref);
-    const { timeoutMs, gatewayToken, gatewayPort, additionalPorts, httpProbes } = options;
-
-    const portReady = await waitForPort(host, gatewayPort, timeoutMs);
-    if (!portReady) return false;
-
-    if (gatewayToken) {
-      const gatewayOk = await waitForGatewayHello(
+    return probeGatewayReady(
+      {
         host,
-        gatewayPort,
-        gatewayToken,
-        timeoutMs,
-      );
-      if (!gatewayOk) return false;
-    }
-
-    if (additionalPorts?.length) {
-      for (const port of additionalPorts) {
-        const ok = await waitForPort(host, port, timeoutMs);
-        if (!ok) return false;
-      }
-    }
-
-    if (httpProbes?.length) {
-      for (const probe of httpProbes) {
-        const ok = await waitForHttpReady(host, probe.port, probe.path, timeoutMs);
-        if (!ok) return false;
-      }
-    }
-
-    return true;
+        gatewayPort: options.gatewayPort,
+        ...(options.additionalPorts ? { additionalPorts: options.additionalPorts } : {}),
+        ...(options.httpProbes ? { httpProbes: options.httpProbes } : {}),
+      },
+      options,
+    );
   },
 
   async needsRecreation(

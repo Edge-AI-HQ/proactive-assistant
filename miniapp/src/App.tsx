@@ -68,6 +68,18 @@ type DeferredPayload = {
   google: GoogleStatus;
 };
 
+type ModelItem = {
+  id: string;
+  ref: string;
+};
+
+type ModelsPayload = {
+  ok: boolean;
+  current_model: string;
+  default_model: string;
+  available_models: ModelItem[];
+};
+
 type GoogleStartUrlPayload = {
   url: string;
 };
@@ -153,6 +165,7 @@ const App = () => {
     () => !sessionStorage.getItem("onboarding_seen"),
   );
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+  const [models, setModels] = useState<{ current: string | null; available: ModelItem[] } | null>(null);
   const handledGoogleRedirectRef = useRef(false);
 
   const showToast = (message: string, type: "success" | "error" = "error") => {
@@ -443,18 +456,36 @@ const App = () => {
     }
   };
 
-  const handleOpenManage = async () => {
+  const loadModels = async () => {
     try {
-      await loadState();
-      setShowManageAgent(true);
-    } catch (e) {
-      const message = e instanceof Error ? e.message : "unknown";
-      if (/unauthorized/i.test(message)) {
-        window.location.reload();
-        return;
-      }
-      showToast(`Unable to open manage: ${message}`);
+      const payload = await safeFetch<ModelsPayload>("/api/mini/models");
+      setModels({
+        current: payload.current_model,
+        available: payload.available_models,
+      });
+    } catch {
+      // non-critical — models section will just be empty
     }
+  };
+
+  const handleChangeModel = async (modelRef: string) => {
+    setBusy("change-model");
+    try {
+      await safeFetch<{ ok: true; model: string }>("/api/mini/change-model", {
+        method: "POST",
+        body: JSON.stringify({ model: modelRef }),
+      });
+      setModels((prev) => prev ? { ...prev, current: modelRef } : prev);
+      showToast("Model changed successfully.", "success");
+    } catch (e) {
+      showToast(`Model change failed: ${e instanceof Error ? e.message : "unknown"}`);
+    } finally {
+      setBusy("none");
+    }
+  };
+
+  const handleOpenManage = () => {
+    setShowManageAgent(true);
   };
 
   // Telegram native loader covers the bootstrap wait — render empty background
@@ -613,6 +644,10 @@ const App = () => {
             onDeleteAccount={handleDeleteAccount}
             onConnectGoogle={handleConnectGoogle}
             onDisconnectGoogle={handleDisconnectGoogle}
+            models={models}
+            modelBusy={busy === "change-model"}
+            onChangeModel={handleChangeModel}
+            onLoadModels={loadModels}
           />
         </div>
 

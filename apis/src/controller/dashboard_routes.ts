@@ -43,6 +43,10 @@ import {
   resolveAssistantGatewayTarget,
   rewriteGatewayProxyRequestUrl,
 } from "../domain/gateway/proxy_orchestrator.js";
+import {
+  getCurrentModel,
+  setCurrentModel,
+} from "../domain/gateway/gateway_rpc.js";
 import { createGatewaySessionByBody } from "../domain/gateway/session_api.js";
 import {
   buildSkillViewList,
@@ -958,6 +962,152 @@ export const createDashboardRouter = (): Router => {
           skill_key: skillKey,
           skills: buildSkillViewList(nextConfig),
           config: nextConfig,
+        });
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------------
+  // Model management
+  // -----------------------------------------------------------------------
+
+  router.get(
+    "/api/mini/models",
+    async (req: Request, res: Response, next: NextFunction) => {
+      void requireMiniSession(req, res, next).catch((error: unknown) => {
+        console.error("Mini session check failed", error);
+        res.status(500).json({ error: "Mini session check failed." });
+      });
+    },
+    async (_req: Request, res: Response) => {
+      const user = (_req as Request).gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+
+      try {
+        const assistants = await listAssistantsByOwnerId(user.telegram_user_id);
+        const assistant = assistants[0];
+
+        // Build available models from config
+        const allowedModels = config.litellm.allowedModels.length
+          ? config.litellm.allowedModels
+          : [config.litellm.openclawDefaultModel];
+        const defaultModel = config.litellm.openclawDefaultModel;
+
+        // Try to read current model from running gateway
+        let currentModel: string | null = null;
+        if (assistant?.container_status === "running" && user.gateway_token?.trim()) {
+          try {
+            const target = resolveAssistantGatewayTarget(assistant);
+            currentModel = await getCurrentModel(target, user.gateway_token.trim());
+          } catch {
+            // Gateway unreachable — fall back to default
+          }
+        }
+
+        res.status(200).json({
+          ok: true,
+          current_model: currentModel ?? `litellm/${defaultModel}`,
+          default_model: `litellm/${defaultModel}`,
+          available_models: allowedModels.map((id) => ({
+            id,
+            ref: `litellm/${id}`,
+          })),
+        });
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
+    "/api/mini/change-model",
+    async (req: Request, res: Response, next: NextFunction) => {
+      void requireMiniSession(req, res, next).catch((error: unknown) => {
+        console.error("Mini session check failed", error);
+        res.status(500).json({ error: "Mini session check failed." });
+      });
+    },
+    async (
+      req: Request<Record<string, never>, unknown, { model?: string }>,
+      res: Response,
+    ) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+
+      const modelRef =
+        typeof req.body?.model === "string" ? req.body.model.trim() : "";
+      if (!modelRef) {
+        res.status(400).json({ error: "model is required (e.g. litellm/claude-opus-4-6)" });
+        return;
+      }
+
+      // Validate against allowed models
+      const bareId = modelRef.replace(/^litellm\//i, "");
+      const allowedModels = config.litellm.allowedModels.length
+        ? config.litellm.allowedModels
+        : [config.litellm.openclawDefaultModel];
+      if (!allowedModels.includes(bareId)) {
+        res.status(400).json({
+          error: `Model "${bareId}" is not in the allowed list.`,
+          allowed: allowedModels,
+        });
+        return;
+      }
+
+      const normalizedRef = modelRef.startsWith("litellm/")
+        ? modelRef
+        : `litellm/${modelRef}`;
+
+      try {
+        const assistants = await listAssistantsByOwnerId(user.telegram_user_id);
+        const assistant = assistants[0];
+        if (!assistant) {
+          res.status(400).json({ error: "Assistant not found. Create assistant first." });
+          return;
+        }
+
+        const gatewayToken = user.gateway_token?.trim();
+        if (!gatewayToken) {
+          res.status(500).json({ error: "Gateway token missing." });
+          return;
+        }
+
+        if (assistant.container_status !== "running") {
+          res.status(503).json({
+            error: "Assistant is not running. Please wait for it to start or repair it.",
+          });
+          return;
+        }
+
+        const target = resolveAssistantGatewayTarget(assistant);
+        const result = await setCurrentModel(target, gatewayToken, normalizedRef);
+
+        if (!result.ok) {
+          res.status(502).json({
+            error: `Gateway rejected model change: ${result.error}`,
+          });
+          return;
+        }
+
+        res.status(200).json({
+          ok: true,
+          model: normalizedRef,
         });
       } catch (error: unknown) {
         if (isDomainError(error)) {
