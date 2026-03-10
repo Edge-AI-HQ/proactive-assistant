@@ -68,6 +68,10 @@ type DeferredPayload = {
   google: GoogleStatus;
 };
 
+type GoogleStartUrlPayload = {
+  url: string;
+};
+
 const mergeQuickPayload = (
   prev: StatePayload,
   quick: StatePayload,
@@ -345,14 +349,33 @@ const App = () => {
     }
   };
 
-  const handleConnectGoogle = () => {
-    const authStartUrl = `${window.location.origin}/mini/google/start`;
-    const webApp = window.Telegram?.WebApp;
-    if (webApp?.openLink) {
-      webApp.openLink(authStartUrl, { try_browser: "chrome" });
-      return;
+  const handleConnectGoogle = async () => {
+    setBusy("google-connect");
+    try {
+      const payload = await safeFetch<GoogleStartUrlPayload>("/api/mini/google/start-url", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      const authUrl = String(payload.url || "").trim();
+      if (!authUrl) {
+        throw new Error("Missing Google auth URL");
+      }
+      const webApp = window.Telegram?.WebApp;
+      if (webApp?.openLink) {
+        webApp.openLink(authUrl, { try_browser: "chrome" });
+      } else {
+        window.open(authUrl, "_blank", "noopener,noreferrer");
+      }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "unknown";
+      if (/unauthorized/i.test(message)) {
+        window.location.reload();
+        return;
+      }
+      showToast(`Google connect failed: ${message}`);
+    } finally {
+      setBusy("none");
     }
-    window.open(authStartUrl, "_blank", "noopener,noreferrer");
   };
 
   const handleDisconnectGoogle = async () => {
@@ -536,7 +559,7 @@ const App = () => {
             active={state.subscription.active}
             manageOpen={showManageAgent}
             google={state.google ?? undefined}
-            googleBusy={busy === "google-disconnect"}
+            googleBusy={busy === "google-disconnect" || busy === "google-connect"}
             onOpenManage={() => {
               void handleOpenManage();
             }}

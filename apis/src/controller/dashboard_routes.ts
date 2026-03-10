@@ -617,6 +617,37 @@ export const createDashboardRouter = (): Router => {
   );
 
   router.post(
+    "/api/mini/google/start-url",
+    async (req: Request, res: Response, next: NextFunction) => {
+      void requireMiniSession(req, res, next).catch((error: unknown) => {
+        console.error("Mini session check failed", error);
+        res.status(500).json({ error: "Mini session check failed." });
+      });
+    },
+    async (req: Request, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+
+      try {
+        const url = await buildGoogleAuthStartUrl(
+          user.telegram_user_id,
+          buildMiniGoogleReturnUrl("/mini/google/done", { status: "connected" }),
+        );
+        res.status(200).json({ url });
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
     "/api/mini/google/disconnect",
     async (req: Request, res: Response, next: NextFunction) => {
       void requireMiniSession(req, res, next).catch((error: unknown) => {
