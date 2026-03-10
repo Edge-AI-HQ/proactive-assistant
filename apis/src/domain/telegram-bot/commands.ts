@@ -1,4 +1,5 @@
-import { Bot, InlineKeyboard, type Context } from "grammy";
+import path from "node:path";
+import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
 import { config } from "../common/config.js";
 import {
   BackendApiError,
@@ -39,14 +40,43 @@ const replyHtml = (
   other?: Parameters<Context["reply"]>[1],
 ) => ctx.reply(text, { parse_mode: "HTML", ...(other || {}) });
 
-const welcomeMessage = (): string =>
-  [
-    "🐾 <b>Welcome to PIN Claw!</b>",
+export const buildGuideBotStartWelcome = (
+  miniAppUrl = `${config.publicBaseUrl.replace(/\/+$/, "")}/mini/`,
+): {
+  imagePath: string;
+  caption: string;
+  buttonText: string;
+  miniAppUrl: string;
+} => ({
+  imagePath: path.join(process.cwd(), "public", "telegram-start-landing.png"),
+  caption: [
+    "🐾 <b>Welcome to PIN Claw</b> your personal AI assistant.",
     "",
-    "Your personal AI assistant is just one step away.",
+    "🔗 Connect your tools and data to unlock everyday tasks in one place.",
     "",
-    "Send /create_claw_assistant to get started.",
-  ].join("\n");
+    "🧠 Plan, search, organize, and act with a workspace built for real execution.",
+    "",
+    "🚀 Open the Mini App below to start exploring PIN Claw.",
+    "",
+    "Tap <b>Try for PIN Claw</b> to begin.",
+  ].join("\n"),
+  buttonText: "Try for PIN Claw",
+  miniAppUrl,
+});
+
+const sendGuideBotStartWelcome = async (ctx: Context): Promise<void> => {
+  const payload = buildGuideBotStartWelcome();
+  const keyboard = new InlineKeyboard().webApp(
+    payload.buttonText,
+    payload.miniAppUrl,
+  );
+
+  await ctx.replyWithPhoto(new InputFile(payload.imagePath), {
+    caption: payload.caption,
+    parse_mode: "HTML",
+    reply_markup: keyboard,
+  });
+};
 
 const parseAssistantToken = (
   text: string | undefined,
@@ -388,7 +418,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
       await replyHtml(ctx, buildGoogleConnectedMessage(status.email));
       return;
     }
-    await replyHtml(ctx, welcomeMessage());
+    await sendGuideBotStartWelcome(ctx);
   });
 
   bot.command(CREATE_ASSISTANT_COMMAND, async (ctx) => {
