@@ -20,6 +20,7 @@ import {
 } from "../domain/common/db/index.js";
 import { domainErrorMessage, isDomainError } from "../domain/common/errors.js";
 import { requireApiAuth } from "../domain/common/httpAuth.js";
+import { repairAssistantContainerById } from "../domain/container/usecases.js";
 import {
   createAssistantWithoutContainerByInput,
   listAssistantsByOwnerId,
@@ -730,6 +731,46 @@ export const createDashboardRouter = (): Router => {
   );
 
   router.post(
+    "/api/mini/repair-runtime",
+    async (req: Request, res: Response, next: NextFunction) => {
+      void requireMiniSession(req, res, next).catch((error: unknown) => {
+        console.error("Mini session check failed", error);
+        res.status(500).json({ error: "Mini session check failed." });
+      });
+    },
+    async (req: Request, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+
+      try {
+        const assistants = await listAssistantsByOwnerId(user.telegram_user_id);
+        const assistant = assistants[0];
+        if (!assistant) {
+          res.status(400).json({ error: "Assistant not found. Create assistant first." });
+          return;
+        }
+
+        const result = await repairAssistantContainerById(assistant.id);
+        res.status(200).json({
+          ok: true,
+          deleted: result.deleted,
+          container_id: result.containerId,
+          ready: result.ready,
+        });
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
     "/api/mini/checkout",
     async (req: Request, res: Response, next: NextFunction) => {
       void requireMiniSession(req, res, next).catch((error: unknown) => {
@@ -1126,6 +1167,45 @@ export const createDashboardRouter = (): Router => {
               return;
             }
           }
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
+    "/gateway/:user_id/mini/repair-runtime",
+    requireDashboardSession,
+    async (req: Request<{ user_id: string }>, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+      if (String(user.telegram_user_id) !== req.params.user_id) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      try {
+        const assistants = await listAssistantsByOwnerId(user.telegram_user_id);
+        const assistant = assistants[0];
+        if (!assistant) {
+          res.status(400).json({ error: "Assistant not found. Create assistant first." });
+          return;
+        }
+
+        const result = await repairAssistantContainerById(assistant.id);
+        res.status(200).json({
+          ok: true,
+          deleted: result.deleted,
+          container_id: result.containerId,
+          ready: result.ready,
+        });
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
           res.status(error.status).json({ error: error.message });
           return;
         }

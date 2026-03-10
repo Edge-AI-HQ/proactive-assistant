@@ -45,3 +45,15 @@ export const deleteAssistantContainerById = async (assistantId: number): Promise
     container_name: assistant.container_name
   });
 };
+
+export const repairAssistantContainerById = async (
+  assistantId: number,
+): Promise<{ deleted: boolean; containerId: string; ready: boolean }> => {
+  const deleted = await deleteAssistantContainerById(assistantId);
+  const recreated = await createAssistantContainerById(assistantId);
+  return {
+    deleted: deleted.deleted,
+    containerId: recreated.containerId,
+    ready: recreated.ready,
+  };
+};

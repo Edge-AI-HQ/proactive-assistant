@@ -4,7 +4,10 @@ interface ManageAgentDialogProps {
   open: boolean;
   onClose: () => void;
   planId: string | null;
+  runtimeStatus?: string;
   onChangePlan: () => void;
+  onRepairRuntime: () => void;
+  runtimeBusy: boolean;
   onDeleteAccount: () => void;
   google?: {
     connected: boolean;
@@ -19,7 +22,10 @@ const ManageAgentDialog = ({
   open,
   onClose,
   planId,
+  runtimeStatus,
   onChangePlan,
+  onRepairRuntime,
+  runtimeBusy,
   onDeleteAccount,
   google,
   googleBusy,
@@ -28,6 +34,7 @@ const ManageAgentDialog = ({
 }: ManageAgentDialogProps) => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showGoogleDisconnectConfirm, setShowGoogleDisconnectConfirm] = useState(false);
+  const [showRepairConfirm, setShowRepairConfirm] = useState(false);
 
   if (!open) return null;
 
@@ -66,6 +73,16 @@ const ManageAgentDialog = ({
       loading: false,
     },
     {
+      icon: "🛠️",
+      label: "Repair",
+      desc: runtimeStatus
+        ? `Rebuild the current runtime. Status: ${runtimeStatus}`
+        : "Destroy and recreate the current runtime",
+      onClick: () => setShowRepairConfirm(true),
+      destructive: false,
+      loading: runtimeBusy,
+    },
+    {
       icon: "🗑️",
       label: "Delete Account",
       desc: "Permanently remove all data",
@@ -95,6 +112,37 @@ const ManageAgentDialog = ({
               className="flex-1 px-4 py-2.5 bg-red-500 text-white rounded-xl text-sm font-bold btn-press"
             >
               Delete
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (showRepairConfirm) {
+    return (
+      <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center p-4 animate-fade-in">
+        <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl animate-scale-in">
+          <h3 className="text-lg font-bold text-foreground mb-2">Repair?</h3>
+          <p className="text-sm text-foreground/70 mb-6">
+            This destroys the current runtime and recreates it with the platform-managed configuration. Workspace data is kept.
+          </p>
+          <div className="flex gap-2.5">
+            <button
+              onClick={() => setShowRepairConfirm(false)}
+              className="flex-1 px-4 py-2.5 bg-gray-100 text-gray-700 rounded-xl text-sm font-medium btn-press"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => {
+                setShowRepairConfirm(false);
+                onClose();
+                onRepairRuntime();
+              }}
+              className="flex-1 px-4 py-2.5 bg-foreground text-white rounded-xl text-sm font-bold btn-press"
+            >
+              Repair
             </button>
           </div>
         </div>

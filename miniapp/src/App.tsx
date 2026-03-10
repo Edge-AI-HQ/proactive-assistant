@@ -427,6 +427,22 @@ const App = () => {
     }
   };
 
+  const handleRepairRuntime = async () => {
+    setBusy("repair-runtime");
+    try {
+      await safeFetch<{ ok: true; ready: boolean }>("/api/mini/repair-runtime", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      showToast("Runtime repair started. The assistant may take a moment to become ready again.", "success");
+      await loadState();
+    } catch (e) {
+      showToast(`Repair failed: ${e instanceof Error ? e.message : "unknown"}`);
+    } finally {
+      setBusy("none");
+    }
+  };
+
   const handleOpenManage = async () => {
     try {
       await loadState();
@@ -592,6 +608,8 @@ const App = () => {
             }}
             onCloseManage={() => setShowManageAgent(false)}
             onChangePlan={() => setShowChangePlan(true)}
+            onRepairRuntime={handleRepairRuntime}
+            runtimeBusy={busy === "repair-runtime"}
             onDeleteAccount={handleDeleteAccount}
             onConnectGoogle={handleConnectGoogle}
             onDisconnectGoogle={handleDisconnectGoogle}
