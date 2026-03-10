@@ -329,10 +329,8 @@ export const getLatestAppDeployTimestampMs = async (): Promise<
 
 export const shouldRecreateAssistantMachine = (
   machine: FlyMachine,
-  latestAppDeployAtMs: number | null,
   desiredGatewayToken: string,
   desiredAssistantBotToken?: string | null,
-  desiredGoogleCredentialsB64?: string | null,
   desiredLiteLLMApiKey?: string | null,
   desiredOnboardingProfileText?: string | null,
   desiredOnboardingProfileSource?: "connector" | "privy" | null,
@@ -415,13 +413,7 @@ export const shouldRecreateAssistantMachine = (
   const joined = initExec.join(" ");
   if (!joined.includes("pinai-entrypoint.sh")) return true;
 
-  if (latestAppDeployAtMs === null) return false;
-
-  const machineUpdatedAtMs =
-    toTimestampMs(machine.updated_at) ?? toTimestampMs(machine.created_at);
-  if (machineUpdatedAtMs === null) return false;
-
-  return machineUpdatedAtMs < latestAppDeployAtMs;
+  return false;
 };
 
 export const createAssistantMachine = async (

@@ -26,7 +26,6 @@ import {
 import { ensureFlyOpenclawImageDigestPullable } from "./image_digest_guard.js";
 import {
   createAssistantMachine as provisionAssistantMachine,
-  getLatestAppDeployTimestampMs,
   shouldRecreateAssistantMachine,
 } from "./assistant_machine.js";
 import type { FlyMachine } from "./types.js";
@@ -371,22 +370,10 @@ export const flyContainerRuntime: ContainerRuntime = {
     if (ref.createdAt) machine.created_at = ref.createdAt;
     if (ref.updatedAt) machine.updated_at = ref.updatedAt;
 
-    let latestAppDeployAtMs: number | null = null;
-    try {
-      latestAppDeployAtMs = await getLatestAppDeployTimestampMs();
-    } catch (error: unknown) {
-      console.warn(
-        "Failed to resolve latest app deployment timestamp",
-        error,
-      );
-    }
-
     return shouldRecreateAssistantMachine(
       machine,
-      latestAppDeployAtMs,
       params.gatewayToken,
       params.assistantBotToken,
-      params.googleCredentialsB64,
       params.liteLlmApiKey,
       params.onboardingProfileText,
       params.onboardingProfileSource,
