@@ -369,11 +369,8 @@ export const shouldRecreateAssistantMachine = (
   ).hash;
 
   const currentEnv = machine.config?.env;
-  const desiredGoogleB64 = (desiredGoogleCredentialsB64 || "").trim();
-  const currentGoogleB64 = (currentEnv?.[PINAI_GOOGLE_CREDENTIALS_B64_ENV] || "").trim();
-  if (currentGoogleB64 !== desiredGoogleB64) {
-    return true;
-  }
+  // Google OAuth credentials are now hot-synced via machine exec.
+  // Do not recreate the machine only because runtime metadata credential changes.
   const currentConfigHash = currentEnv?.PINAI_OPENCLAW_CONFIG_SHA256;
   if (
     typeof currentConfigHash !== "string" ||
