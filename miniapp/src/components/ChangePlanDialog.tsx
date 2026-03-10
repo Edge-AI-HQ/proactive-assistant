@@ -29,7 +29,7 @@ const ChangePlanDialog = ({
         <div className="mb-4 flex items-center justify-between">
           <div>
             <h3 className="text-lg font-bold text-foreground">Change Plan</h3>
-            <p className="text-xs text-muted-foreground mt-0.5">Upgrade or downgrade anytime</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Plan updates with billing-cycle safeguards</p>
           </div>
           <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 text-gray-500">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -44,13 +44,19 @@ const ChangePlanDialog = ({
           <div className="flex items-start gap-2">
             <span className="text-base leading-none mt-0.5">⬆️</span>
             <p className="text-xs text-foreground/70">
-              <span className="font-medium text-foreground">Upgrade</span> takes effect immediately. You'll be charged the price difference for the remaining period. No refund for the current plan.
+              <span className="font-medium text-foreground">Upgrade</span> takes effect immediately. You'll be charged the price difference for the remaining period.
             </p>
           </div>
           <div className="flex items-start gap-2">
             <span className="text-base leading-none mt-0.5">⬇️</span>
             <p className="text-xs text-foreground/70">
               <span className="font-medium text-foreground">Downgrade</span> takes effect at the start of the next billing cycle.
+            </p>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="text-base leading-none mt-0.5">🔒</span>
+            <p className="text-xs text-foreground/70">
+              After an upgrade, downgrade is locked until this billing cycle ends.
             </p>
           </div>
         </div>

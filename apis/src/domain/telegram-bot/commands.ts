@@ -21,9 +21,10 @@ import {
   LIST_ASSISTANT_COMMAND,
   RESET_ACCOUNT_COMMAND,
   SUBSCRIBE_COMMAND,
-  VNC_ACCESS_COMMAND,
   guideCommandList,
 } from "./guideCommandList.js";
+import { getGoogleConnectionStatus } from "../google-oauth/service.js";
+import { buildGoogleConnectedMessage, extractStartPayload } from "./startPayload.js";
 
 const GATEWAY_LINK_SESSION_TTL_HOURS = 12;
 const TELEGRAM_BOT_TOKEN_PATTERN = /^\d{6,}:[A-Za-z0-9_-]{20,}$/;
@@ -284,6 +285,7 @@ const provisionAssistantWithGuideBot = async (
       await createAssistantWithoutContainerViaApi({
         ownerTelegramUserId: telegramUserId,
         ownerTelegramUsername: telegramUsername,
+        ownerTelegramLanguageCode: ctx.from?.language_code ?? null,
       });
     } catch (error: unknown) {
       const is409 = error instanceof BackendApiError && error.status === 409;
@@ -380,6 +382,12 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     if (!telegramUserId) return;
     await ensureTelegramUserViaApi(telegramUserId, ctx.from?.username ?? null);
     await clearTokenInputPending(telegramUserId);
+    const startPayload = extractStartPayload(ctx.message?.text);
+    if (startPayload === 'google_connected') {
+      const status = await getGoogleConnectionStatus(telegramUserId);
+      await replyHtml(ctx, buildGoogleConnectedMessage(status.email));
+      return;
+    }
     await replyHtml(ctx, welcomeMessage());
   });
 
@@ -844,6 +852,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
       await createAssistantWithoutContainerViaApi({
         ownerTelegramUserId: telegramUserId,
         ownerTelegramUsername: ctx.from?.username ?? null,
+        ownerTelegramLanguageCode: ctx.from?.language_code ?? null,
         assistantBotId: tokenParsed.id,
         assistantBotToken: tokenParsed.token,
         assistantBotUsername: "", // 会自动从 Telegram 获取
@@ -927,11 +936,6 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
         ].join("\n"),
       );
     }
-  });
-
-  // VNC 远程桌面访问命令（暂时禁用）
-  bot.command(VNC_ACCESS_COMMAND, async (ctx) => {
-    await replyHtml(ctx, "⚠️ 远程桌面功能暂时不可用。");
   });
 
   bot.command(RESET_ACCOUNT_COMMAND, async (ctx) => {

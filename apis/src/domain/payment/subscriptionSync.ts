@@ -20,6 +20,11 @@ import { ensureLiteLLMKeyForAssistant } from "../litellm/index.js";
 import { sendTelegramMessage } from "../telegram/notify.js";
 import { createAssistantWithoutContainer } from "../claw-assistant/service.js";
 import { shouldEnsureAssistantRuntime } from "../claw-assistant/runtimeHealth.js";
+import { summarizeContainerProvisionResults } from "./containerProvisionMessage.js";
+import {
+  reconcileProvisionResultsForNotification,
+  type ProvisionNotifyResult,
+} from "./subscriptionSync_notify_results.js";
 
 const SUBSCRIPTION_PERIOD_APPLY_LOCK_KEY = 319_903;
 let isApplyingSubscriptionPeriodsInProcess = false;
@@ -383,136 +388,15 @@ export async function syncSubscriptionFromStripe(
       }
     }
 
-    // Ensure runtime for assistants asynchronously (create assistant first if absent).
-    try {
-      const user = await getUserByTelegramId(Number(telegram_user_id));
-      if (user) {
-        let assistants = await listAssistantsByOwnerTelegramId(
-          Number(telegram_user_id),
-        );
-
-        if (assistants.length === 0) {
-          try {
-            await createAssistantWithoutContainer({
-              ownerTelegramUserId: Number(telegram_user_id),
-              ownerTelegramUsername: telegramUsername,
-            });
-          } catch (error: unknown) {
-            if (!isAssistantAlreadyExistsError(error)) {
-              throw error;
-            }
-          }
-          assistants = await listAssistantsByOwnerTelegramId(
-            Number(telegram_user_id),
-          );
-        }
-
-        const candidates = assistantId
-          ? assistants.filter((assistant) => assistant.id === assistantId)
-          : assistants;
-        const toStart = candidates.filter((assistant) =>
-          shouldEnsureAssistantRuntime(assistant.container_status),
-        );
-
-        if (toStart.length > 0) {
-          const listStr = toStart
-            .map((a) => {
-              const u = a.assistant_bot_username ?? `#${a.id}`;
-              return u.startsWith("#") ? u : `@${u}`;
-            })
-            .join(", ");
-          await sendTelegramMessage(
-            Number(telegram_user_id),
-            `⏳ <b>Creating container(s)</b>\n\n${listStr}\n\nStarting up, please wait. First launch may take a few minutes — we'll notify you when ready.`,
-          );
-
-          // Fire-and-forget: create containers in background
-          const chatId = Number(telegram_user_id);
-          void (async () => {
-            try {
-              const results: { label: string; ok: boolean }[] = [];
-              for (const assistant of toStart) {
-                const label =
-                  assistant.assistant_bot_username ?? `#${assistant.id}`;
-                const displayLabel = label.startsWith("#")
-                  ? label
-                  : `@${label}`;
-                try {
-                  const assistantWithLiteLLM = await ensureLiteLLMKeyForAssistant(
-                    Number(telegram_user_id),
-                    assistant,
-                  );
-                  await ensureAssistantContainer(
-                    assistantWithLiteLLM,
-                    user.gateway_token,
-                  );
-                  results.push({ label: displayLabel, ok: true });
-                  console.log(
-                    `Started container for assistant ${assistant.id} after subscription sync`,
-                  );
-                } catch (error: unknown) {
-                  results.push({ label: displayLabel, ok: false });
-                  console.error(
-                    `Failed to start container for assistant ${assistant.id}`,
-                    {
-                      assistantId: assistant.id,
-                      error:
-                        error instanceof Error ? error.message : String(error),
-                    },
-                  );
-                }
-              }
-              const succeeded = results.filter((r) => r.ok).map((r) => r.label);
-              const failed = results.filter((r) => !r.ok).map((r) => r.label);
-              const parts: string[] = [];
-              if (succeeded.length > 0) {
-                parts.push(
-                  `✅ <b>Container(s) ready</b>\n\n${succeeded.join(", ")}\n\nYour assistant is warming up and will be fully ready in about a minute. You can start chatting now!`,
-                );
-              }
-              if (failed.length > 0) {
-                parts.push(
-                  `❌ <b>Creation failed</b>\n\n${failed.join(", ")}\n\nPlease contact support.`,
-                );
-              }
-              if (parts.length > 0) {
-                const msg = parts.join("\n\n");
-                console.log("Sending container ready/failed notification", {
-                  chatId,
-                  succeededCount: succeeded.length,
-                  failedCount: failed.length,
-                });
-                const sendResult = await sendTelegramMessage(chatId, msg);
-                if (!sendResult.ok) {
-                  console.error("Failed to send container notification", {
-                    chatId,
-                    error: sendResult.error,
-                  });
-                }
-              }
-            } catch (err: unknown) {
-              console.error("Async container creation notification error", {
-                chatId,
-                error: err instanceof Error ? err.message : String(err),
-              });
-              try {
-                await sendTelegramMessage(
-                  chatId,
-                  "❌ Container creation completed but we couldn't send the status. Please check the guide bot for your Gateway link.",
-                );
-              } catch {
-                /* ignore */
-              }
-            }
-          })();
-        }
-      }
-    } catch (error: unknown) {
-      console.error("Failed to start containers after subscription sync", {
+    // Container provisioning must be handled only by invoice.paid to avoid
+    // duplicate create/start races with subscription.* webhooks.
+    console.log(
+      "[payment] subscription sync: skip container provisioning (handled by invoice.paid)",
+      {
         telegramUserId: telegram_user_id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+        subscriptionId: subscription.id,
+      },
+    );
     return;
   }
 
@@ -726,6 +610,10 @@ export async function handleInvoicePaid(
   }
 
   const stripeSubscriptionId = subscription.stripe_subscription_id;
+  const stripeCustomerId =
+    typeof invoice.customer === "string"
+      ? invoice.customer
+      : invoice.customer?.id ?? null;
 
   // 优先从 invoice.lines[0].period 获取周期（首次付款时 subscription 可能还是 incomplete 状态）
   let periodStart: Date | null = null;
@@ -811,6 +699,7 @@ export async function handleInvoicePaid(
     telegram_user_id: subscription.telegram_user_id,
     telegram_username: subscription.telegram_username ?? null,
     stripe_subscription_id: stripeSubscriptionId,
+    stripe_customer_id: stripeCustomerId,
     stripe_invoice_id: invoice.id,
     period_start: periodStart,
     period_end: periodEnd,
@@ -874,6 +763,8 @@ export async function handleInvoicePaid(
     const toStart = candidates.filter((assistant) =>
       shouldEnsureAssistantRuntime(assistant.container_status),
     );
+    // invoice.paid is the canonical point to notify container provisioning.
+    const toNotify = toStart;
 
     console.log(`[payment] Containers to start: ${toStart.length}`, {
       toStartIds: toStart.map((a) => a.id),
@@ -882,22 +773,25 @@ export async function handleInvoicePaid(
 
     if (toStart.length > 0) {
       const chatId = Number(subscription.telegram_user_id);
-      const listStr = toStart
-        .map((a) => {
-          const u = a.assistant_bot_username ?? `#${a.id}`;
-          return u.startsWith("#") ? u : `@${u}`;
-        })
-        .join(", ");
+      if (toNotify.length > 0) {
+        const listStr = toNotify
+          .map((a) => {
+            const u = a.assistant_bot_username ?? `#${a.id}`;
+            return u.startsWith("#") ? u : `@${u}`;
+          })
+          .join(", ");
 
-      await sendTelegramMessage(
-        chatId,
-        `⏳ <b>Creating container(s)</b>\n\n${listStr}\n\nStarting up, please wait. First launch may take a few minutes — we'll notify you when ready.`,
-      );
+        await sendTelegramMessage(
+          chatId,
+          `⏳ <b>Creating container(s)</b>\n\n${listStr}\n\nStarting up, please wait. First launch may take a few minutes — we'll notify you when ready.`,
+        );
+      }
 
       // 异步启动容器
       void (async () => {
         try {
-          const results: { label: string; ok: boolean }[] = [];
+          const results: ProvisionNotifyResult[] = [];
+          const notifyAssistantIds = new Set(toNotify.map((a) => a.id));
           for (const assistant of toStart) {
             const label =
               assistant.assistant_bot_username ?? `#${assistant.id}`;
@@ -911,8 +805,13 @@ export async function handleInvoicePaid(
                 assistantWithLiteLLM,
                 user.gateway_token,
               );
-              // ready=false 表示容器启动了但未就绪（探测中），算部分成功
-              results.push({ label: displayLabel, ok: result.ready });
+              if (notifyAssistantIds.has(assistant.id)) {
+                results.push({
+                  assistantId: assistant.id,
+                  label: displayLabel,
+                  state: result.ready ? "ready" : "starting",
+                });
+              }
               if (result.ready) {
                 console.log(
                   `[payment] Container ready for assistant ${assistant.id} after invoice.paid`,
@@ -923,7 +822,13 @@ export async function handleInvoicePaid(
                 );
               }
             } catch (error: unknown) {
-              results.push({ label: displayLabel, ok: false });
+              if (notifyAssistantIds.has(assistant.id)) {
+                results.push({
+                  assistantId: assistant.id,
+                  label: displayLabel,
+                  state: "failed",
+                });
+              }
               console.error(
                 `[payment] Failed to start container for assistant ${assistant.id}`,
                 {
@@ -934,18 +839,33 @@ export async function handleInvoicePaid(
             }
           }
 
-          const succeeded = results.filter((r) => r.ok).map((r) => r.label);
-          const failed = results.filter((r) => !r.ok).map((r) => r.label);
+          const latestAssistants = await listAssistantsByOwnerTelegramId(
+            Number(subscription.telegram_user_id),
+          );
+          const latestStatuses = new Map(
+            latestAssistants.map((assistant) => [
+              assistant.id,
+              assistant.container_status ?? "",
+            ]),
+          );
+          const summary = summarizeContainerProvisionResults(
+            reconcileProvisionResultsForNotification(results, latestStatuses),
+          );
           const parts: string[] = [];
 
-          if (succeeded.length > 0) {
+          if (summary.ready.length > 0) {
             parts.push(
-              `✅ <b>Container(s) ready</b>\n\n${succeeded.join(", ")}\n\nYour assistant is warming up and will be fully ready in about a minute. You can start chatting now!`,
+              `✅ <b>Container(s) ready</b>\n\n${summary.ready.join(", ")}\n\nYour assistant is ready. You can start chatting now!`,
             );
           }
-          if (failed.length > 0) {
+          if (summary.starting.length > 0) {
             parts.push(
-              `⏳ <b>Container(s) starting</b>\n\n${failed.join(", ")}\n\nStill warming up — first launch may take a few minutes. We'll notify you when ready.`,
+              `⏳ <b>Container(s) starting</b>\n\n${summary.starting.join(", ")}\n\nStill warming up — first launch may take a few minutes. We'll notify you when ready.`,
+            );
+          }
+          if (summary.failed.length > 0) {
+            parts.push(
+              `❌ <b>Creation failed</b>\n\n${summary.failed.join(", ")}\n\nPlease contact support.`,
             );
           }
 

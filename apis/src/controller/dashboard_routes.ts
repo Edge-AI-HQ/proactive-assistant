@@ -36,6 +36,7 @@ import {
   listActivePlansForApi,
   readInternalSubscription,
 } from "../domain/payment/checkout.js";
+import { readPaymentPublicBaseUrl } from "../domain/payment/publicBaseUrl.js";
 import {
   buildOpenclawAuthHeaders,
   resolveAssistantGatewayTarget,
@@ -55,14 +56,24 @@ import {
   resolveGatewayAssistantForUser,
 } from "../domain/gateway/session_guard.js";
 import { hasActiveSubscriptionForService } from "../domain/payment/subscriptionGuard.js";
+import { isSubscriptionActiveForService } from "../domain/payment/subscriptionPolicy.js";
 import { config } from "../domain/common/config.js";
+import { setLogContextTelegramIdentity } from "../domain/common/requestLogContext.js";
 import { ensureTelegramUser } from "../domain/user/service.js";
+import { resetTelegramUserAccount } from "../domain/user/usecases.js";
 import type { AssistantRecord } from "../types.js";
+import {
+  buildGoogleAuthStartUrl,
+  disconnectGoogleOAuth,
+  getGoogleConnectionStatus,
+  handleGoogleOAuthCallback,
+} from "../domain/google-oauth/service.js";
+import { buildMiniGoogleReturnUrl } from "../domain/google-oauth/miniapp.js";
 
 const miniAppEntryPath = path.join(
   process.cwd(),
   "public",
-  "tg-subscription-mini",
+  "mini",
   "index.html",
 );
 const miniSessionCookieName = "mini_sid";
@@ -232,27 +243,27 @@ const requireMiniSession = async (
     return;
   }
 
+  setLogContextTelegramIdentity(user.telegram_user_id, user.telegram_username);
   req.gatewayUser = user;
   next();
 };
 
-const buildMiniStatePayload = async (
+/**
+ * Quick payload — only the data needed to render the main UI immediately.
+ * Skips skills, google, and plans (deferred to a separate request).
+ */
+const buildQuickStatePayload = async (
   telegramUserId: number,
   telegramUsername: string | null,
 ) => {
-  const [assistants, subscriptionResult, plansResult] = await Promise.all([
+  const [assistants, subscriptionResult] = await Promise.all([
     listAssistantsByOwnerId(telegramUserId),
     readInternalSubscription(String(telegramUserId)),
-    listActivePlansForApi(),
   ]);
 
   const assistant = assistants[0] ?? null;
   const subscription = subscriptionResult.subscription;
-  const runtimeMetadata = assistant
-    ? await readAssistantRuntimeMetadata(assistant.id)
-    : {};
-  const skillsConfig = readSkillsConfigFromRuntimeMetadata(runtimeMetadata);
-  const skillViews = buildSkillViewList(skillsConfig);
+  const active = isSubscriptionActiveForService(subscription);
 
   return {
     user: {
@@ -271,19 +282,44 @@ const buildMiniStatePayload = async (
         },
     subscription: subscription
       ? {
-          active: await hasActiveSubscriptionForService(String(telegramUserId)),
+          active,
           status: subscription.status,
           plan_id: subscription.plan_id,
           cancel_at_period_end: subscription.cancel_at_period_end,
           current_period_end: subscription.current_period_end,
         }
       : {
-          active: false,
+          active,
           status: null,
           plan_id: null,
           cancel_at_period_end: false,
           current_period_end: null,
         },
+    plans: null as null,
+    skills: null as null,
+    google: null as null,
+  };
+};
+
+/**
+ * Deferred payload — heavier data loaded after initial render.
+ */
+const buildDeferredStatePayload = async (
+  telegramUserId: number,
+) => {
+  const assistants = await listAssistantsByOwnerId(telegramUserId);
+  const assistant = assistants[0] ?? null;
+
+  const [plansResult, googleStatus, runtimeMetadata] = await Promise.all([
+    listActivePlansForApi(),
+    getGoogleConnectionStatus(telegramUserId),
+    assistant ? readAssistantRuntimeMetadata(assistant.id) : Promise.resolve({}),
+  ]);
+
+  const skillsConfig = readSkillsConfigFromRuntimeMetadata(runtimeMetadata);
+  const skillViews = buildSkillViewList(skillsConfig);
+
+  return {
     plans: plansResult.plans,
     skills: {
       supported: Boolean(assistant),
@@ -293,6 +329,7 @@ const buildMiniStatePayload = async (
       items: skillViews,
       config: skillsConfig,
     },
+    google: googleStatus,
   };
 };
 
@@ -347,6 +384,60 @@ export const createDashboardRouter = (): Router => {
     res.sendFile(miniAppEntryPath);
   });
 
+  router.get(
+    "/mini/google/start",
+    async (req: Request, res: Response, next: NextFunction) => {
+      void requireMiniSession(req, res, next).catch((error: unknown) => {
+        console.error("Mini session check failed", error);
+        res.status(500).send("Mini session check failed.");
+      });
+    },
+    async (req: Request, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).send("Gateway user missing.");
+        return;
+      }
+
+      try {
+        const url = await buildGoogleAuthStartUrl(
+          user.telegram_user_id,
+          buildMiniGoogleReturnUrl("/mini", { status: "connected" }),
+        );
+        res.redirect(url);
+      } catch (error: unknown) {
+        console.error("Mini google start failed", error);
+        res.redirect(
+          buildMiniGoogleReturnUrl("/mini", {
+            status: "error",
+            error: "oauth_start_failed",
+          }),
+        );
+      }
+    },
+  );
+
+  router.get("/mini/google/callback", async (req: Request, res: Response) => {
+    try {
+      const result = await handleGoogleOAuthCallback({
+        code: typeof req.query.code === "string" ? req.query.code : undefined,
+        state: typeof req.query.state === "string" ? req.query.state : undefined,
+        error: typeof req.query.error === "string" ? req.query.error : undefined,
+      });
+      res.redirect(
+        result.nextPath || buildMiniGoogleReturnUrl("/mini", { status: "connected" }),
+      );
+    } catch (error: unknown) {
+      console.error("Mini google callback failed", error);
+      res.redirect(
+        buildMiniGoogleReturnUrl("/mini", {
+          status: "error",
+          error: "oauth_callback_failed",
+        }),
+      );
+    }
+  });
+
   router.post(
     "/api/mini/bootstrap",
     async (req: Request, res: Response) => {
@@ -363,12 +454,21 @@ export const createDashboardRouter = (): Router => {
           verification.telegramUserId,
           verification.telegramUsername,
         );
+        setLogContextTelegramIdentity(
+          user.telegram_user_id,
+          user.telegram_username,
+        );
+        console.info("[auth:resolved]", {
+          source: "mini_bootstrap",
+          telegram_user_id: user.telegram_user_id,
+          telegram_username: user.telegram_username,
+        });
         const { sessionToken, expiresAt } = await createGatewaySession(
           user.telegram_user_id,
           miniSessionTtlHours,
         );
         setMiniSessionCookie(res, sessionToken, expiresAt);
-        const payload = await buildMiniStatePayload(
+        const payload = await buildQuickStatePayload(
           user.telegram_user_id,
           user.telegram_username,
         );
@@ -395,11 +495,75 @@ export const createDashboardRouter = (): Router => {
       }
 
       try {
-        const payload = await buildMiniStatePayload(
+        const payload = await buildQuickStatePayload(
           user.telegram_user_id,
           user.telegram_username,
         );
         res.status(200).json(payload);
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.get(
+    "/api/mini/state/deferred",
+    async (req: Request, res: Response, next: NextFunction) => {
+      void requireMiniSession(req, res, next).catch((error: unknown) => {
+        console.error("Mini session check failed", error);
+        res.status(500).json({ error: "Mini session check failed." });
+      });
+    },
+    async (req: Request, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+
+      try {
+        const payload = await buildDeferredStatePayload(
+          user.telegram_user_id,
+        );
+        res.status(200).json(payload);
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
+    "/api/mini/google/disconnect",
+    async (req: Request, res: Response, next: NextFunction) => {
+      void requireMiniSession(req, res, next).catch((error: unknown) => {
+        console.error("Mini session check failed", error);
+        res.status(500).json({ error: "Mini session check failed." });
+      });
+    },
+    async (req: Request, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+
+      try {
+        await disconnectGoogleOAuth(user.telegram_user_id);
+        res.status(200).json({
+          ok: true,
+          message: "Google disconnected",
+          redirect: buildMiniGoogleReturnUrl("/mini", {
+            status: "disconnected",
+          }),
+        });
       } catch (error: unknown) {
         if (isDomainError(error)) {
           res.status(error.status).json({ error: error.message });
@@ -493,9 +657,11 @@ export const createDashboardRouter = (): Router => {
           assistant_id: assistants[0]?.id,
           plan_code: plan,
         });
+        const baseUrl = readPaymentPublicBaseUrl(req);
         const checkout = await createCheckoutSession(req, {
           token: paymentSession.token,
           plan,
+          successUrl: `${baseUrl}/mini`,
         });
 
         res.status(200).json(checkout);
@@ -673,6 +839,35 @@ export const createDashboardRouter = (): Router => {
       try {
         const result = await cancelStripeSubscription(String(user.telegram_user_id));
         res.status(200).json(result);
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
+    "/api/mini/reset-account",
+    async (req: Request, res: Response, next: NextFunction) => {
+      void requireMiniSession(req, res, next).catch((error: unknown) => {
+        console.error("Mini session check failed", error);
+        res.status(500).json({ error: "Mini session check failed." });
+      });
+    },
+    async (req: Request, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+
+      try {
+        await resetTelegramUserAccount(user.telegram_user_id);
+        res.clearCookie("mini_sid");
+        res.status(200).json({ ok: true });
       } catch (error: unknown) {
         if (isDomainError(error)) {
           res.status(error.status).json({ error: error.message });

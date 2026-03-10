@@ -1,4 +1,5 @@
 import Stripe from "stripe";
+import { setLogContextTelegramIdentity } from "../common/requestLogContext.js";
 import { db } from "./db.js";
 import {
   handleCheckoutCompleted,
@@ -7,6 +8,47 @@ import {
 } from "./subscriptionSync.js";
 import { requireStripe, requireStripeWebhookSecret } from "./stripeClient.js";
 import { buildStripeEventClaimPayload } from "./webhookClaim.js";
+
+const toTgIdFromString = (value: unknown): string | null => {
+  const raw = typeof value === "string" ? value.trim() : "";
+  return /^\d+$/.test(raw) ? raw : null;
+};
+
+const toTgName = (value: unknown): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().replace(/^@+/, "");
+  return normalized || undefined;
+};
+
+const bindWebhookTelegramId = (event: Stripe.Event): void => {
+  const obj = event.data.object as Record<string, unknown> | undefined;
+  if (!obj || typeof obj !== "object") return;
+
+  const metadata =
+    typeof obj.metadata === "object" && obj.metadata !== null
+      ? (obj.metadata as Record<string, unknown>)
+      : null;
+  const idFromMetadata = toTgIdFromString(metadata?.telegram_user_id);
+  const nameFromMetadata = toTgName(metadata?.telegram_username);
+  if (idFromMetadata) {
+    setLogContextTelegramIdentity(idFromMetadata, nameFromMetadata);
+    return;
+  }
+
+  const maybeCustomer = obj.customer;
+  if (typeof maybeCustomer === "object" && maybeCustomer !== null) {
+    const customerObj = maybeCustomer as Record<string, unknown>;
+    const customerMeta =
+      typeof customerObj.metadata === "object" && customerObj.metadata !== null
+        ? (customerObj.metadata as Record<string, unknown>)
+        : null;
+    const fromCustomerMeta = toTgIdFromString(customerMeta?.telegram_user_id);
+    const fromCustomerName = toTgName(customerMeta?.telegram_username);
+    if (fromCustomerMeta) {
+      setLogContextTelegramIdentity(fromCustomerMeta, fromCustomerName);
+    }
+  }
+};
 
 export const constructStripeEvent = (
   body: Buffer,
@@ -31,8 +73,18 @@ export const claimStripeEventForProcessing = async (
 export const processStripeEvent = async (
   event: Stripe.Event,
 ): Promise<{ skipped: boolean }> => {
+  bindWebhookTelegramId(event);
+  console.log("[payment] webhook:received", {
+    event_id: event.id,
+    event_type: event.type,
+  });
+
   const claimed = await claimStripeEventForProcessing(event);
   if (claimed.skipped) {
+    console.log("[payment] webhook:skip_already_claimed", {
+      event_id: event.id,
+      event_type: event.type,
+    });
     return { skipped: true };
   }
 
@@ -82,11 +134,21 @@ export const processStripeEvent = async (
     }
 
     await db.markStripeEventProcessed(event.id);
+    console.log("[payment] webhook:processed", {
+      event_id: event.id,
+      event_type: event.type,
+      skipped,
+    });
     return { skipped };
   } catch (error: unknown) {
     const message =
       error instanceof Error ? error.message : "Unknown webhook handler error";
     await db.markStripeEventFailed(event.id, message);
+    console.error("[payment] webhook:failed", {
+      event_id: event.id,
+      event_type: event.type,
+      error: message,
+    });
     throw error;
   }
 };

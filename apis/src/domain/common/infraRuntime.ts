@@ -13,18 +13,22 @@ import {
 } from '../litellm/index.js';
 import { sendTelegramMessage } from '../telegram/notify.js';
 import { config } from './config.js';
+import { sendApiReadyGreetingForAssistant } from '../onboarding/ready_greeting.js';
 import {
   getUserByTelegramId,
   listAssistantsByOwnerTelegramId,
   listAssistantsWithLiteLLMKey,
   listUsedPorts,
   readAssistantRuntimeMetadata,
+  setAssistantRuntimeMetadataKeyIfAbsent,
   updateAssistant,
   updateUser,
   updateUserById
 } from './db/index.js';
 
 let configured = false;
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 const litellmRuntimeConfig: LiteLLMRuntimeConfig = {
   litellm: config.litellm
@@ -35,7 +39,6 @@ const containerManagerConfig: ContainerManagerConfig = {
   litellm: {
     enabled: config.litellm.enabled,
     baseUrl: config.litellm.baseUrl,
-    containerBaseUrl: config.litellm.containerBaseUrl,
     masterKey: config.litellm.masterKey,
     allowedModels: config.litellm.allowedModels,
     openclawDefaultModel: config.litellm.openclawDefaultModel
@@ -64,7 +67,53 @@ const containerStateStore: ContainerStateStore = {
 };
 
 const containerNotifier: ContainerNotifier = {
-  async notifyReady(telegramUserId: number): Promise<void> {
+  async notifyReady(
+    telegramUserId: number,
+    options?: { assistantId?: number },
+  ): Promise<void> {
+    if (options?.assistantId) {
+      const readyNotifyClaimed = await setAssistantRuntimeMetadataKeyIfAbsent(
+        options.assistantId,
+        "onboarding_ready_notified_at",
+        new Date().toISOString(),
+      ).catch((error) => {
+        console.warn(
+          `[container] failed to claim ready notification lock for assistant ${options.assistantId}`,
+          error,
+        );
+        return false;
+      });
+
+      if (readyNotifyClaimed) {
+        await sendTelegramMessage(
+          telegramUserId,
+          `✅ <b>Your assistant is ready!</b>\n\nYou can start chatting now.`,
+        ).catch((e) =>
+          console.warn(`[container] notify failed for user ${telegramUserId}`, e),
+        );
+      }
+
+      if (readyNotifyClaimed) {
+        await sleep(800);
+        const delivered = await sendApiReadyGreetingForAssistant({
+          assistantId: options.assistantId,
+          telegramUserId,
+        }).catch((e) => {
+          console.warn(
+            `[container] onboarding greeting failed for assistant ${options.assistantId}`,
+            e,
+          );
+          return false;
+        });
+        if (!delivered) {
+          console.warn(
+            `[container] onboarding greeting not delivered for assistant ${options.assistantId}`,
+          );
+        }
+      }
+      return;
+    }
+
     await sendTelegramMessage(
       telegramUserId,
       `✅ <b>Your assistant is ready!</b>\n\nYou can start chatting now.`,

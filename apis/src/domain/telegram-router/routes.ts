@@ -6,6 +6,15 @@ import { getAssistantById } from "../common/db/index.js";
 import { hasActiveSubscriptionForService } from "../payment/subscriptionGuard.js";
 import { ensureGatewayAssistantReady } from "../gateway/assistant_warmup.js";
 import { deriveAssistantWebhookSecret } from "../container/providers/shared/telegram_runtime_secret.js";
+import {
+  getGoogleConnectionStatus,
+  hasGoogleOAuthConnection,
+  syncCredentialToContainer,
+} from "../google-oauth/service.js";
+import {
+  setLogContextTelegramIdentity,
+  setLogContextTelegramUserId,
+} from "../common/requestLogContext.js";
 
 type WebhookSource = "public" | "private";
 
@@ -16,6 +25,14 @@ type ContainerInfo = {
   assistant_bot_id: string | null;
   runtime_provider: string | null;
   host_port: number | null;
+};
+
+type PromptLanguage = "zh" | "en";
+
+type TelegramProxyBodyInfo = {
+  chatId?: number;
+  contentType: string;
+  text?: string;
 };
 
 type UserState =
@@ -35,6 +52,14 @@ const BLOCKED_TG_METHODS = new Set([
   "setwebhook",
   "deletewebhook",
 ]);
+
+const WELCOME_MESSAGE_DEDUPE_WINDOW_MS = 45_000;
+const welcomeMessageDedupeCache = new Map<number, number>();
+const OAUTH_PROMPT_DEDUPE_WINDOW_MS = 20_000;
+const oauthPromptDedupeCache = new Map<number, { text: string; sentAt: number }>();
+const googleCredentialSyncedRuntimeRef = new Map<number, string>();
+const googleCredentialSyncInFlight = new Map<number, Promise<boolean>>();
+const GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
 
 export const registerTelegramRouterRoutes = (app: Application): void => {
   app.post("/webhook/telegram", express.json({ limit: "10mb" }), (req, res) => {
@@ -57,10 +82,12 @@ export const registerTelegramRouterRoutes = (app: Application): void => {
 
 async function handleTelegramWebhook(req: Request, res: Response, source: WebhookSource): Promise<void> {
   try {
-    const secretToken = req.headers["x-telegram-bot-api-secret-token"];
-    const expected = config.telegram.webhookSecret;
-    if (expected && secretToken !== expected) {
-      const received = typeof secretToken === "string" ? `${secretToken.slice(0, 8)}...(${secretToken.length})` : "missing";
+    const secretHeader = req.headers["x-telegram-bot-api-secret-token"];
+    const secretToken = Array.isArray(secretHeader) ? secretHeader[0] : secretHeader;
+    const expected = config.telegram.webhookSecret.trim();
+    const receivedToken = typeof secretToken === "string" ? secretToken.trim() : "";
+    if (expected && receivedToken !== expected) {
+      const received = receivedToken ? `${receivedToken.slice(0, 8)}...(${receivedToken.length})` : "missing";
       console.error(`❌ Invalid webhook secret (received=${received})`);
       res.status(401).send("Unauthorized");
       return;
@@ -68,6 +95,8 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
 
     const update = req.body;
     const chatId = extractChatId(update);
+    const telegramUsername = extractUpdateUsername(update);
+    setLogContextTelegramIdentity(chatId ?? undefined, telegramUsername ?? undefined);
     const fromUser = extractUpdateFromUser(update);
     const text = extractUpdateText(update);
     const telegramDate = extractUpdateDate(update);
@@ -175,10 +204,20 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
     }
 
     if (userState.phase === "container_starting") {
+      const oauthPrompted = await tryHandleGoogleOAuthPrompt(
+        source,
+        chatId,
+        text,
+        userState.container?.container_id || null,
+      );
+      if (oauthPrompted) {
+        res.status(200).json({ ok: true });
+        return;
+      }
       if (userState.container) {
         const forwarded = await forwardToOpenClaw(userState.container, update, source);
         if (forwarded) {
-          res.status(200).json({ ok: true });
+          res.status(200).json({ ok: true, forwarded: true });
           return;
         }
       }
@@ -187,6 +226,17 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
         chatId,
         "Your assistant is starting up — first launch may take a few minutes. Please try again shortly.",
       );
+      res.status(200).json({ ok: true, forwarded: false });
+      return;
+    }
+
+    const oauthPrompted = await tryHandleGoogleOAuthPrompt(
+      source,
+      chatId,
+      text,
+      userState.container.container_id,
+    );
+    if (oauthPrompted) {
       res.status(200).json({ ok: true });
       return;
     }
@@ -200,12 +250,245 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
       );
     }
 
-    res.status(200).json({ ok: true });
+    res.status(200).json({ ok: true, forwarded });
   } catch (error) {
     console.error("❌ Webhook error:", error);
     res.status(500).send("Internal Server Error");
   }
 }
+
+const GOOGLE_WORKSPACE_INTENT_PATTERN = new RegExp(
+  [
+    "邮件",
+    "邮箱",
+    "gmail",
+    "mailbox",
+    "inbox",
+    "收件箱",
+    "未读",
+    "最近\\d*封",
+    "latest\\s*\\d+\\s*(emails?|mails?)",
+    "日历",
+    "日程",
+    "会议",
+    "calendar",
+    "event",
+    "events",
+    "schedule",
+    "meeting",
+    "drive",
+    "google\\s*drive",
+    "云盘",
+    "网盘",
+    "文件夹",
+    "文件",
+    "docs?",
+    "document",
+    "文档",
+    "sheets?",
+    "spreadsheet",
+    "表格",
+    "slides?",
+    "presentation",
+    "演示",
+    "forms?",
+    "表单",
+    "meet",
+    "google\\s*meet",
+    "chat",
+    "google\\s*chat",
+    "classroom",
+  ].join("|"),
+  "i",
+);
+
+function isGoogleWorkspaceIntent(text: string | null): boolean {
+  if (!text) return false;
+  return GOOGLE_WORKSPACE_INTENT_PATTERN.test(text);
+}
+
+function isGoogleCalendarIntent(text: string | null): boolean {
+  if (!text) return false;
+  return /(日历|日程|calendar|event|events|meeting|schedule)/i.test(text);
+}
+
+export const hasGoogleWorkspaceIntentForTest = (text: string | null): boolean =>
+  isGoogleWorkspaceIntent(text);
+
+export const shouldPromptGoogleOAuthForTest = (
+  source: WebhookSource,
+  text: string | null,
+): boolean => source === "public" && isGoogleWorkspaceIntent(text);
+
+export function detectPromptLanguage(text: string | null): PromptLanguage {
+  return /[\u3400-\u9fff]/.test(text || "") ? "zh" : "en";
+}
+
+export function buildGoogleOAuthPrompt(text: string | null): string {
+  const language = detectPromptLanguage(text);
+  if (language === "zh") {
+    return [
+      "你还没有连接 Google Workspace。",
+      "↙ 请点击 Telegram 左下角的 PIN AI mini app 按钮。",
+      "打开后进入 Manage -> Connect Google 完成授权。",
+      "授权完成后，回到这里再发送你刚才的请求。",
+    ].join("\n");
+  }
+
+  return [
+    "Your Google Workspace account is not connected yet.",
+    "↙ Open the PIN AI mini app from the bottom-left button in Telegram.",
+    "Then go to Manage -> Connect Google to finish authorization.",
+    "Then come back here and send the same request again.",
+  ].join("\n");
+}
+
+function buildGoogleCredentialSyncingPrompt(text: string | null): string {
+  const language = detectPromptLanguage(text);
+  if (language === "zh") {
+    return [
+      "Google 已连接，正在同步凭证到你的助手容器。",
+      "请等待 10-20 秒后，再发送你刚才的请求。",
+    ].join("\n");
+  }
+
+  return [
+    "Google is connected. We're syncing credentials to your assistant container.",
+    "Please wait about 10-20 seconds, then send the same request again.",
+  ].join("\n");
+}
+
+function buildGoogleCalendarReauthPrompt(text: string | null): string {
+  const language = detectPromptLanguage(text);
+  if (language === "zh") {
+    return [
+      "你已连接 Google，但当前授权缺少日历权限。",
+      "请在 Telegram 左下角 PIN AI mini app 中重新 Connect Google，一并勾选日历权限。",
+      "完成后回到这里重试刚才的请求。",
+    ].join("\n");
+  }
+
+  return [
+    "Google is connected, but the current authorization is missing Calendar permission.",
+    "Please reconnect Google in the PIN AI mini app (bottom-left in Telegram) and grant Calendar access.",
+    "Then come back here and retry the same request.",
+  ].join("\n");
+}
+
+export const buildGoogleCalendarReauthPromptForTest = (
+  text: string | null,
+): string => buildGoogleCalendarReauthPrompt(text);
+
+export const buildGoogleCredentialSyncingPromptForTest = (
+  text: string | null,
+): string => buildGoogleCredentialSyncingPrompt(text);
+
+async function ensureGoogleCredentialSync(
+  chatId: number,
+  runtimeRef: string | null,
+): Promise<"ready" | "syncing"> {
+  const runtime = (runtimeRef || "").trim();
+  if (!runtime) return "ready";
+
+  const alreadySyncedRuntime = googleCredentialSyncedRuntimeRef.get(chatId);
+  if (alreadySyncedRuntime === runtime) return "ready";
+
+  const inFlight = googleCredentialSyncInFlight.get(chatId);
+  if (inFlight) {
+    await inFlight.catch(() => undefined);
+    return googleCredentialSyncedRuntimeRef.get(chatId) === runtime
+      ? "ready"
+      : "syncing";
+  }
+
+  const job = syncCredentialToContainer(chatId)
+    .then(() => {
+      googleCredentialSyncedRuntimeRef.set(chatId, runtime);
+      return true;
+    })
+    .catch((error) => {
+      console.warn(`[google-oauth] background sync failed chat_id=${chatId}`, error);
+      return false;
+    })
+    .finally(() => {
+      if (googleCredentialSyncInFlight.get(chatId) === job) {
+        googleCredentialSyncInFlight.delete(chatId);
+      }
+    });
+  googleCredentialSyncInFlight.set(chatId, job);
+
+  const ok = await job;
+  return ok ? "ready" : "syncing";
+}
+
+async function tryHandleGoogleOAuthPrompt(
+  source: WebhookSource,
+  chatId: number,
+  text: string | null,
+  runtimeRef: string | null,
+): Promise<boolean> {
+  if (!shouldPromptGoogleOAuthForTest(source, text)) return false;
+  const connected = await hasGoogleOAuthConnection(chatId);
+  if (connected) {
+    const now = Date.now();
+    if (isGoogleCalendarIntent(text)) {
+      const status = await getGoogleConnectionStatus(chatId).catch(() => null);
+      const scopes = (status?.scopes || "").trim();
+      if (scopes && !scopes.includes(GOOGLE_CALENDAR_SCOPE)) {
+        if (!shouldSuppressGoogleOAuthPrompt(chatId, text, now)) {
+          await sendFallbackMessageBySource(
+            source,
+            chatId,
+            buildGoogleCalendarReauthPrompt(text),
+          );
+        }
+        return true;
+      }
+    }
+
+    const syncState = await ensureGoogleCredentialSync(chatId, runtimeRef);
+    if (syncState === "syncing") {
+      if (!shouldSuppressGoogleOAuthPrompt(chatId, text, now)) {
+        await sendFallbackMessageBySource(
+          source,
+          chatId,
+          buildGoogleCredentialSyncingPrompt(text),
+        );
+      }
+      return true;
+    }
+    return false;
+  }
+
+  const now = Date.now();
+  if (shouldSuppressGoogleOAuthPrompt(chatId, text, now)) {
+    return true;
+  }
+
+  await sendFallbackMessageBySource(source, chatId, buildGoogleOAuthPrompt(text));
+  return true;
+}
+
+function shouldSuppressGoogleOAuthPrompt(
+  chatId: number,
+  text: string | null,
+  nowMs = Date.now(),
+): boolean {
+  const normalizedText = (text || '').trim().toLowerCase();
+  const previous = oauthPromptDedupeCache.get(chatId);
+  oauthPromptDedupeCache.set(chatId, { text: normalizedText, sentAt: nowMs });
+  if (!previous) return false;
+  return (
+    previous.text === normalizedText &&
+    nowMs - previous.sentAt < OAUTH_PROMPT_DEDUPE_WINDOW_MS
+  );
+}
+
+export const shouldSuppressGoogleOAuthPromptForTest = (
+  chatId: number,
+  text: string | null,
+  nowMs = Date.now(),
+): boolean => shouldSuppressGoogleOAuthPrompt(chatId, text, nowMs);
 
 async function handleTelegramApiProxy(req: Request, res: Response): Promise<void> {
   try {
@@ -223,6 +506,17 @@ async function handleTelegramApiProxy(req: Request, res: Response): Promise<void
 
     const proxyUrl = new URL(req.originalUrl, "http://localhost");
     const bodyInfo = extractTelegramProxyBodyInfo(proxyUrl, req.headers["content-type"] as string | undefined, body);
+    if (bodyInfo.chatId) {
+      setLogContextTelegramUserId(bodyInfo.chatId);
+    }
+    if (shouldSuppressTelegramOutboundMessage(method, bodyInfo)) {
+      console.log(
+        `🧹 Suppressed duplicate welcome message method=${method} chat_id=${bodyInfo.chatId ?? "n/a"} ` +
+          `text="${truncateForLog(bodyInfo.text || "", 120)}"`,
+      );
+      res.status(200).json({ ok: true, result: true, description: "duplicate welcome suppressed by router" });
+      return;
+    }
     const userState = bodyInfo.chatId ? await findUserState(bodyInfo.chatId) : null;
     const container = userState?.phase === "running" ? userState.container : null;
     const runtime = container?.container_id ? parseFlyRuntimeRef(container.container_id) : null;
@@ -321,11 +615,20 @@ async function forwardToGuideBot(update: unknown): Promise<boolean> {
 async function sendFallbackMessageBySource(source: WebhookSource, chatId: number, text: string): Promise<void> {
   if (source === "private") return;
   if (!config.telegram.token?.trim()) return;
-  await fetch(`https://api.telegram.org/bot${config.telegram.token}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text }),
-  });
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${config.telegram.token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      console.error(`❌ fallback sendMessage failed status=${response.status} body=${truncateForLog(body, 300)}`);
+    }
+  } catch (error) {
+    console.error("❌ fallback sendMessage network error:", error);
+  }
 }
 
 async function findUserState(chatId: number): Promise<UserState> {
@@ -467,6 +770,7 @@ async function forwardToOpenClaw(container: ContainerInfo, update: unknown, sour
     container.gateway_token,
     config.apiAuthToken,
   );
+  const webhookSecret = assistantWebhookSecret;
 
   for (const webhookUrl of candidateUrls) {
     try {
@@ -474,7 +778,7 @@ async function forwardToOpenClaw(container: ContainerInfo, update: unknown, sour
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Telegram-Bot-Api-Secret-Token": assistantWebhookSecret,
+          "X-Telegram-Bot-Api-Secret-Token": webhookSecret,
           "X-PinAI-Source": source,
         },
         body: JSON.stringify(update),
@@ -571,56 +875,113 @@ function extractTelegramProxyBodyInfo(
   url: URL,
   contentType: string | undefined,
   body?: Uint8Array,
-): { chatId?: number; contentType: string } {
+): TelegramProxyBodyInfo {
   const normalizedType = (contentType || "").toLowerCase();
   let chatId: number | undefined;
+  let text: string | undefined;
 
   if (url.searchParams.has("chat_id")) chatId = parseNumeric(url.searchParams.get("chat_id"));
-  if (!body || body.byteLength === 0) return buildBodyInfo(chatId, normalizedType || "none");
+  if (url.searchParams.has("text")) text = url.searchParams.get("text") || undefined;
+  if (url.searchParams.has("caption") && !text) text = url.searchParams.get("caption") || undefined;
+  if (!body || body.byteLength === 0) return buildBodyInfo(chatId, normalizedType || "none", text);
 
   const bodyText = decodeUtf8(body);
-  if (!bodyText) return buildBodyInfo(chatId, normalizedType || "binary");
+  if (!bodyText) return buildBodyInfo(chatId, normalizedType || "binary", text);
 
   if (normalizedType.includes("application/json")) {
     try {
       const parsed = JSON.parse(bodyText) as Record<string, unknown>;
       const maybeChatId = parseNumeric(parsed.chat_id);
       if (maybeChatId !== undefined) chatId = maybeChatId;
+      text = firstNonEmptyString(parsed.text, parsed.caption) || text;
     } catch {
       // ignore
     }
-    return buildBodyInfo(chatId, normalizedType);
+    return buildBodyInfo(chatId, normalizedType, text);
   }
 
   if (normalizedType.includes("application/x-www-form-urlencoded")) {
     const params = new URLSearchParams(bodyText);
     const maybeChatId = parseNumeric(params.get("chat_id"));
     if (maybeChatId !== undefined) chatId = maybeChatId;
-    return buildBodyInfo(chatId, normalizedType);
+    text = firstNonEmptyString(params.get("text"), params.get("caption")) || text;
+    return buildBodyInfo(chatId, normalizedType, text);
   }
 
   if (normalizedType.includes("multipart/form-data")) {
     const maybeChatId = parseMultipartChatId(bodyText);
     if (maybeChatId !== undefined) chatId = maybeChatId;
-    return buildBodyInfo(chatId, normalizedType);
+    text = firstNonEmptyString(parseMultipartField(bodyText, "text"), parseMultipartField(bodyText, "caption")) || text;
+    return buildBodyInfo(chatId, normalizedType, text);
   }
 
-  return buildBodyInfo(chatId, normalizedType || "text");
+  return buildBodyInfo(chatId, normalizedType || "text", text);
 }
 
-function buildBodyInfo(chatId: number | undefined, contentType: string): { chatId?: number; contentType: string } {
-  if (chatId === undefined) return { contentType };
-  return { chatId, contentType };
+function buildBodyInfo(chatId: number | undefined, contentType: string, text?: string): TelegramProxyBodyInfo {
+  return {
+    ...(chatId === undefined ? {} : { chatId }),
+    ...(text ? { text } : {}),
+    contentType,
+  };
 }
 
 function parseMultipartChatId(raw: string): number | undefined {
-  const marker = 'name="chat_id"';
+  return parseNumeric(parseMultipartField(raw, "chat_id"));
+}
+
+function parseMultipartField(raw: string, fieldName: string): string | undefined {
+  const marker = `name="${fieldName}"`;
   const idx = raw.indexOf(marker);
   if (idx < 0) return undefined;
   const tail = raw.slice(idx + marker.length);
-  const match = tail.match(/\r?\n\r?\n([\-0-9]+)/);
-  if (!match) return undefined;
-  return parseNumeric(match[1]);
+  const match = tail.match(/\r?\n\r?\n([\s\S]*?)(?:\r?\n--|\r?\n$)/);
+  if (!match?.[1]) return undefined;
+  return match[1].trim();
+}
+
+function firstNonEmptyString(...values: Array<unknown>): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+export function classifyTelegramOutboundMessage(text: string | undefined): "welcome" | null {
+  if (!text) return null;
+  const normalized = text.toLowerCase();
+  const welcomeSignals = [
+    /good to see you again/,
+    /welcome back/,
+    /what should i call you/,
+    /how can i help you today/,
+    /你想我怎么称呼/,
+    /我该怎么称呼/,
+    /今天.*帮你/,
+  ];
+  return welcomeSignals.some((pattern) => pattern.test(normalized)) ? "welcome" : null;
+}
+
+export function shouldSuppressTelegramOutboundMessage(
+  method: string,
+  bodyInfo: TelegramProxyBodyInfo,
+  nowMs = Date.now(),
+): boolean {
+  if (method.toLowerCase() !== "sendmessage") return false;
+  if (!bodyInfo.chatId) return false;
+  const messageClass = classifyTelegramOutboundMessage(bodyInfo.text);
+  if (!messageClass) return false;
+
+  const lastSentAt = welcomeMessageDedupeCache.get(bodyInfo.chatId);
+  welcomeMessageDedupeCache.set(bodyInfo.chatId, nowMs);
+  return typeof lastSentAt === "number" && nowMs - lastSentAt < WELCOME_MESSAGE_DEDUPE_WINDOW_MS;
+}
+
+export function resetTelegramWelcomeDedupeForTest(): void {
+  welcomeMessageDedupeCache.clear();
+  oauthPromptDedupeCache.clear();
+  googleCredentialSyncedRuntimeRef.clear();
+  googleCredentialSyncInFlight.clear();
 }
 
 function parseNumeric(value: unknown): number | undefined {
@@ -655,6 +1016,13 @@ function extractUpdateFromUser(update: any): string | null {
   return from.username || from.first_name || from.last_name || String(from.id || "");
 }
 
+function extractUpdateUsername(update: any): string | null {
+  const from = update?.message?.from || update?.callback_query?.from || update?.channel_post?.from;
+  if (!from || typeof from.username !== "string") return null;
+  const username = from.username.trim().replace(/^@+/, "");
+  return username || null;
+}
+
 function extractUpdateText(update: any): string {
   return update?.message?.text || update?.channel_post?.text || update?.callback_query?.data || "";
 }
@@ -674,8 +1042,8 @@ function formatUnixTimestamp(unixSec?: number): string {
 }
 
 function truncateForLog(value: string, maxLen: number): string {
+  void maxLen;
   if (!value) return "";
   const compact = value.replace(/\s+/g, " ").trim();
-  if (compact.length <= maxLen) return compact;
-  return `${compact.slice(0, maxLen)}...`;
+  return compact;
 }

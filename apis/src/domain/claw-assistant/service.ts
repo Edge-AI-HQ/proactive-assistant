@@ -15,11 +15,13 @@ import {
 } from "../common/db/index.js";
 import { ensureTelegramUser } from "../user/service.js";
 import { setPrivateBotWebhook } from "../telegram/webhook.js";
+import { setAssistantReadyGreetingLanguageCode } from "../onboarding/ready_greeting.js";
 import type { AssistantRecord } from "../../types.js";
 
 export interface ProvisionAssistantInput {
   ownerTelegramUserId: number;
   ownerTelegramUsername?: string | null;
+  ownerTelegramLanguageCode?: string | null;
   assistantBotId?: number | null;
   assistantBotToken?: string | null;
   assistantBotUsername?: string | null;
@@ -100,6 +102,10 @@ export const provisionAssistant = async (
     input.ownerTelegramUserId,
     assistant,
   );
+  await setAssistantReadyGreetingLanguageCode(
+    assistantWithLiteLLM.id,
+    input.ownerTelegramLanguageCode ?? null,
+  );
   await ensurePrivateWebhookForAssistantToken(
     assistantWithLiteLLM.assistant_bot_token,
   );
@@ -138,6 +144,10 @@ export const createAssistantWithoutContainer = async (
   const assistantWithLiteLLM = await ensureLiteLLMKeyForAssistant(
     input.ownerTelegramUserId,
     assistant,
+  );
+  await setAssistantReadyGreetingLanguageCode(
+    assistantWithLiteLLM.id,
+    input.ownerTelegramLanguageCode ?? null,
   );
   await ensurePrivateWebhookForAssistantToken(
     assistantWithLiteLLM.assistant_bot_token,

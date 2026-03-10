@@ -1,4 +1,3 @@
-import { useState } from "react";
 import ManageAgentDialog from "./ManageAgentDialog";
 
 interface AgentCardProps {
@@ -6,8 +5,18 @@ interface AgentCardProps {
   status: string;
   planId: string | null;
   active: boolean;
+  manageOpen: boolean;
+  google?: {
+    connected: boolean;
+    email: string | null;
+  };
+  googleBusy: boolean;
+  onOpenManage: () => void;
+  onCloseManage: () => void;
   onChangePlan: () => void;
   onDeleteAccount: () => void;
+  onConnectGoogle: () => void;
+  onDisconnectGoogle: () => void;
 }
 
 const getStatusDisplay = (status: string): { text: string; color: string } => {
@@ -15,20 +24,33 @@ const getStatusDisplay = (status: string): { text: string; color: string } => {
     case "running":
       return { text: "Running", color: "text-pin-mint" };
     case "creating":
-      return { text: "Setting up...", color: "text-amber-600" };
+      return { text: "Creating...", color: "text-amber-600" };
     case "stopped":
-      return { text: "Stopped", color: "text-muted-foreground" };
+      return { text: "Starting...", color: "text-amber-600" };
+    case "missing":
+      return { text: "Provisioning...", color: "text-amber-600" };
     case "error":
       return { text: "Error", color: "text-destructive" };
-    case "missing":
-      return { text: "Initializing...", color: "text-amber-600" };
     default:
-      return { text: "Unknown", color: "text-muted-foreground" };
+      return { text: "Starting up...", color: "text-amber-600" };
   }
 };
 
-const AgentCard = ({ username, status, planId, active, onChangePlan, onDeleteAccount }: AgentCardProps) => {
-  const [showManage, setShowManage] = useState(false);
+const AgentCard = ({
+  username,
+  status,
+  planId,
+  active,
+  manageOpen,
+  google,
+  googleBusy,
+  onOpenManage,
+  onCloseManage,
+  onChangePlan,
+  onDeleteAccount,
+  onConnectGoogle,
+  onDisconnectGoogle,
+}: AgentCardProps) => {
   const statusDisplay = getStatusDisplay(status);
 
   const handleChat = () => {
@@ -47,7 +69,7 @@ const AgentCard = ({ username, status, planId, active, onChangePlan, onDeleteAcc
           <div className="relative shrink-0">
             <div className="avatar-ring-glow" style={{ width: 56, height: 56 }}>
               <img
-                src="/tg-subscription-mini/avatar-pinai.png"
+                src="/mini/avatar-pinai.png"
                 alt="PIN AI"
                 className="w-[52px] h-[52px] rounded-full object-cover shadow-md"
               />
@@ -97,7 +119,7 @@ const AgentCard = ({ username, status, planId, active, onChangePlan, onDeleteAcc
             Chat
           </button>
           <button
-            onClick={() => setShowManage(true)}
+            onClick={onOpenManage}
             className="flex-1 flex items-center justify-center gap-1.5 bg-secondary text-foreground rounded-xl py-2.5 text-sm font-semibold btn-press hover:bg-secondary/80 transition-colors"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -110,11 +132,15 @@ const AgentCard = ({ username, status, planId, active, onChangePlan, onDeleteAcc
       </div>
 
       <ManageAgentDialog
-        open={showManage}
-        onClose={() => setShowManage(false)}
+        open={manageOpen}
+        onClose={onCloseManage}
         planId={planId}
+        google={google}
+        googleBusy={googleBusy}
         onChangePlan={onChangePlan}
         onDeleteAccount={onDeleteAccount}
+        onConnectGoogle={onConnectGoogle}
+        onDisconnectGoogle={onDisconnectGoogle}
       />
     </>
   );

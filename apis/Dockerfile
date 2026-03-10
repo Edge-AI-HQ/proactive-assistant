@@ -7,12 +7,17 @@ COPY package*.json ./
 
 # Copy workspace package files
 COPY apis/package*.json ./apis/
+COPY miniapp/package*.json ./miniapp/
 
 # Install all dependencies
 RUN npm ci
 
-# Copy apis source (types are now inside apis/src/types)
+# Copy source for both workspaces
 COPY apis ./apis
+COPY miniapp ./miniapp
+
+# Build miniapp first (outputs to apis/public/mini/)
+RUN npm run build --workspace @pin-ai/miniapp
 
 # Build the API
 RUN npm run build --workspace @pin-ai/apis

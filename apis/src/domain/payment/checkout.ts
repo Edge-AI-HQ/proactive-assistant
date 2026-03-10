@@ -2,6 +2,10 @@ import crypto from "node:crypto";
 import Stripe from "stripe";
 import type { Request } from "express";
 import { DomainError } from "../common/errors.js";
+import {
+  setLogContextTelegramIdentity,
+  setLogContextTelegramUserId,
+} from "../common/requestLogContext.js";
 import { db } from "./db.js";
 import { syncLiteLLMBudgetFromPlan } from "./litellmBudget.js";
 import { readPaymentPublicBaseUrl } from "./publicBaseUrl.js";
@@ -57,6 +61,17 @@ const parseUnixSecondsToDate = (value: unknown): Date | undefined => {
   return parsed;
 };
 
+const parseUnixSeconds = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.trunc(value);
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return null;
+};
+
 const isStripeSubscriptionOpen = (
   status: Stripe.Subscription.Status,
 ): boolean => {
@@ -75,6 +90,10 @@ const readCurrentSubscriptionItemId = (
 ): string | null => {
   const firstItem = subscription.items.data[0];
   return firstItem?.id ?? null;
+};
+
+const summarizeToken = (token: string): string => {
+  return token || "";
 };
 
 export const listActivePlansForApi = async (): Promise<{
@@ -134,6 +153,12 @@ export const createInternalPaymentSession = async (
   const token = crypto.randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
   const subscribeUrl = `${readPaymentPublicBaseUrl(req)}/api/payment/subscribe?token=${encodeURIComponent(token)}`;
+  setLogContextTelegramIdentity(telegramUserId, telegramUsername);
+  console.log("[payment] create_internal_session:start", {
+    telegram_user_id: telegramUserId,
+    ttl_seconds: ttlSeconds,
+    token_ref: summarizeToken(token),
+  });
 
   // 解析 assistant_id（可选，用于助理级订阅）
   let assistantId: number | undefined = undefined;
@@ -167,6 +192,13 @@ export const createInternalPaymentSession = async (
     sessionPayload.plan_code = body.plan_code.trim();
   }
   await db.createPaymentSession(sessionPayload);
+  console.log("[payment] create_internal_session:ok", {
+    telegram_user_id: telegramUserId,
+    assistant_id: assistantId ?? null,
+    plan_code: sessionPayload.plan_code ?? null,
+    expires_at: expiresAt,
+    token_ref: summarizeToken(token),
+  });
 
   return {
     token,
@@ -252,7 +284,7 @@ export interface CheckoutResult {
 
 export const createCheckoutSession = async (
   req: Request,
-  body: { token?: string; plan?: string },
+  body: { token?: string; plan?: string; successUrl?: string },
 ): Promise<CheckoutResult> => {
   const stripe = requireStripe();
   const token = String(body.token || "").trim();
@@ -265,28 +297,56 @@ export const createCheckoutSession = async (
   if (!token) {
     throw new DomainError("INVALID_INPUT", "Token is required");
   }
+  console.log("[payment] checkout:start", {
+    token_ref: summarizeToken(token),
+    plan_code: planCode,
+  });
 
   const session = await db.getPaymentSessionByToken(token);
   if (!session) {
+    console.warn("[payment] checkout:invalid_token", {
+      token_ref: summarizeToken(token),
+    });
     throw new DomainError("NOT_FOUND", "Invalid token");
   }
 
   if (session.used) {
+    console.warn("[payment] checkout:token_used", {
+      token_ref: summarizeToken(token),
+      telegram_user_id: session.telegram_user_id,
+    });
     throw new DomainError("INVALID_INPUT", "Token already used");
   }
 
   if (new Date(session.expires_at) < new Date()) {
+    console.warn("[payment] checkout:token_expired", {
+      token_ref: summarizeToken(token),
+      telegram_user_id: session.telegram_user_id,
+      expires_at: session.expires_at,
+    });
     throw new DomainError("INVALID_INPUT", "Token expired");
   }
 
   const selectedPlan = await db.getPlanByCode(planCode);
   if (!selectedPlan || !selectedPlan.is_active) {
+    console.warn("[payment] checkout:invalid_plan", {
+      token_ref: summarizeToken(token),
+      plan_code: planCode,
+    });
     throw new DomainError("INVALID_INPUT", "Invalid plan");
   }
   const stripePriceId = requireStripePriceId(selectedPlan);
 
   const telegramUserId = session.telegram_user_id;
   const telegramUsername = session.telegram_username;
+  setLogContextTelegramIdentity(telegramUserId, telegramUsername);
+  console.log("[payment] checkout:validated", {
+    telegram_user_id: telegramUserId,
+    assistant_id: session.assistant_id ?? null,
+    plan_code: selectedPlan.plan_code,
+    stripe_price_id: stripePriceId,
+    token_ref: summarizeToken(token),
+  });
 
   const existingSub = await db.getCurrentPeriodByTelegramId(telegramUserId);
   let customerId = existingSub?.stripe_customer_id ?? null;
@@ -310,6 +370,10 @@ export const createCheckoutSession = async (
       },
     });
     customerId = customer.id;
+    console.log("[payment] checkout:stripe_customer_created", {
+      telegram_user_id: telegramUserId,
+      stripe_customer_id: customerId,
+    });
   }
 
   // --- Handle existing active subscription: upgrade / downgrade / same plan ---
@@ -332,6 +396,11 @@ export const createCheckoutSession = async (
         const newPriceAmount = selectedPlan.price_cents_monthly ?? 0;
 
         if (currentPlan.plan_code === selectedPlan.plan_code) {
+          console.warn("[payment] checkout:same_plan", {
+            telegram_user_id: telegramUserId,
+            plan_code: selectedPlan.plan_code,
+            stripe_subscription_id: existingSub.stripe_subscription_id,
+          });
           throw new DomainError(
             "INVALID_INPUT",
             `You are already on the ${currentPlan.display_name} plan.`,
@@ -354,13 +423,27 @@ export const createCheckoutSession = async (
         }
 
         if (newPriceAmount > currentPriceAmount) {
+          const lockUntil =
+            parseUnixSeconds(stripeSubscription.current_period_end) ??
+            parseUnixSeconds(
+              existingSub.current_period_end
+                ? Math.floor(
+                    new Date(existingSub.current_period_end).getTime() / 1000,
+                  )
+                : null,
+            );
           // Upgrade: apply immediately with proration
           // Also reset cancel_at_period_end — user is actively upgrading, so they want to continue
           await stripe.subscriptions.update(existingSub.stripe_subscription_id, {
             items: [{ id: subscriptionItem.id, price: stripePriceId }],
             proration_behavior: "always_invoice",
             cancel_at_period_end: false,
-            metadata: sharedMetadata,
+            metadata: {
+              ...sharedMetadata,
+              ...(lockUntil
+                ? { pinai_downgrade_lock_until: String(lockUntil) }
+                : {}),
+            },
           });
           // Also update DB period to reflect cancel_at_period_end=false
           await db.updateSubscriptionCancelFlag(
@@ -368,12 +451,37 @@ export const createCheckoutSession = async (
             false,
           ).catch(() => {/* non-fatal */});
           await db.markPaymentSessionUsed(token);
+          console.log("[payment] checkout:upgrade_applied", {
+            telegram_user_id: telegramUserId,
+            stripe_subscription_id: existingSub.stripe_subscription_id,
+            from_plan: currentPlan.plan_code,
+            to_plan: selectedPlan.plan_code,
+            token_ref: summarizeToken(token),
+          });
           return {
             url: null,
             action: "upgrade",
             message: `Upgraded to ${selectedPlan.display_name}. Effective immediately.`,
           };
         } else {
+          const lockUntil = parseUnixSeconds(
+            stripeSubscription.metadata?.pinai_downgrade_lock_until,
+          );
+          const nowSec = Math.floor(Date.now() / 1000);
+          if (lockUntil && nowSec < lockUntil) {
+            const lockDate = new Date(lockUntil * 1000).toISOString();
+            console.warn("[payment] checkout:downgrade_blocked_by_upgrade_lock", {
+              telegram_user_id: telegramUserId,
+              stripe_subscription_id: existingSub.stripe_subscription_id,
+              from_plan: currentPlan.plan_code,
+              to_plan: selectedPlan.plan_code,
+              lock_until: lockDate,
+            });
+            throw new DomainError(
+              "INVALID_INPUT",
+              `Downgrade is locked until ${lockDate}. You can downgrade after this billing cycle ends.`,
+            );
+          }
           // Downgrade: schedule for next billing cycle (no proration, no refund)
           await stripe.subscriptions.update(existingSub.stripe_subscription_id, {
             items: [{ id: subscriptionItem.id, price: stripePriceId }],
@@ -382,6 +490,13 @@ export const createCheckoutSession = async (
             metadata: sharedMetadata,
           });
           await db.markPaymentSessionUsed(token);
+          console.log("[payment] checkout:downgrade_scheduled", {
+            telegram_user_id: telegramUserId,
+            stripe_subscription_id: existingSub.stripe_subscription_id,
+            from_plan: currentPlan.plan_code,
+            to_plan: selectedPlan.plan_code,
+            token_ref: summarizeToken(token),
+          });
           return {
             url: null,
             action: "downgrade",
@@ -400,7 +515,7 @@ export const createCheckoutSession = async (
         customer: customerId,
         mode: "subscription",
         line_items: [{ price: stripePriceId, quantity: 1 }],
-        success_url: `${landingBaseUrl}/api/payment/success?session_id={CHECKOUT_SESSION_ID}`,
+        success_url: body.successUrl || `${landingBaseUrl}/api/payment/success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${landingBaseUrl}/api/payment/subscribe?token=${token}`,
         metadata: {
           telegram_user_id: telegramUserId,
@@ -427,15 +542,32 @@ export const createCheckoutSession = async (
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message.toLowerCase() : "";
     if (message.includes("idempotent")) {
+      console.warn("[payment] checkout:idempotency_conflict", {
+        telegram_user_id: telegramUserId,
+        token_ref: summarizeToken(token),
+      });
       throw new DomainError(
         "INVALID_INPUT",
         "A checkout session already exists for this payment link. Please refresh and retry.",
         409,
       );
     }
+    console.error("[payment] checkout:stripe_create_failed", {
+      telegram_user_id: telegramUserId,
+      token_ref: summarizeToken(token),
+      plan_code: selectedPlan.plan_code,
+      error: error instanceof Error ? error.message : String(error ?? ""),
+    });
     throw error;
   }
 
+  console.log("[payment] checkout:created", {
+    telegram_user_id: telegramUserId,
+    token_ref: summarizeToken(token),
+    stripe_checkout_session_id: checkoutSession.id,
+    stripe_customer_id: customerId,
+    plan_code: selectedPlan.plan_code,
+  });
   return { url: checkoutSession.url, action: "checkout" };
 };
 
@@ -470,9 +602,16 @@ export const cancelStripeSubscription = async (
   if (!telegramUserId) {
     throw new DomainError("INVALID_INPUT", "telegram_user_id is required");
   }
+  setLogContextTelegramUserId(telegramUserId);
+  console.log("[payment] cancel_subscription:start", {
+    telegram_user_id: telegramUserId,
+  });
 
   const subscription = await db.getCurrentPeriodByTelegramId(telegramUserId);
   if (!subscription || !subscription.stripe_subscription_id) {
+    console.warn("[payment] cancel_subscription:not_found", {
+      telegram_user_id: telegramUserId,
+    });
     throw new DomainError("NOT_FOUND", "Active subscription not found");
   }
 
@@ -482,6 +621,11 @@ export const cancelStripeSubscription = async (
       cancel_at_period_end: true,
     },
   );
+  console.log("[payment] cancel_subscription:ok", {
+    telegram_user_id: telegramUserId,
+    stripe_subscription_id: subscription.stripe_subscription_id,
+    current_period_end: new Date(updated.current_period_end * 1000).toISOString(),
+  });
 
   return {
     ok: true,

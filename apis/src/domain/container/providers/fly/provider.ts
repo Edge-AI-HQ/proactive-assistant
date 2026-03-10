@@ -239,7 +239,16 @@ export const flyContainerRuntime: ContainerRuntime = {
       machineName: params.containerName,
       gatewayToken: params.gatewayToken,
       assistantBotToken: params.assistantBotToken,
+      ...(params.googleCredentialsB64 !== undefined
+        ? { googleCredentialsB64: params.googleCredentialsB64 }
+        : {}),
       liteLlmApiKey: params.liteLlmApiKey,
+      ...(params.onboardingProfileText !== undefined
+        ? { onboardingProfileText: params.onboardingProfileText }
+        : {}),
+      ...(params.onboardingProfileSource !== undefined
+        ? { onboardingProfileSource: params.onboardingProfileSource }
+        : {}),
       ...(params.skillsConfig ? { skillsConfig: params.skillsConfig } : {}),
     });
     return machineToContainerRef(machine);
@@ -377,7 +386,10 @@ export const flyContainerRuntime: ContainerRuntime = {
       latestAppDeployAtMs,
       params.gatewayToken,
       params.assistantBotToken,
+      params.googleCredentialsB64,
       params.liteLlmApiKey,
+      params.onboardingProfileText,
+      params.onboardingProfileSource,
       params.skillsConfig,
     );
   },

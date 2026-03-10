@@ -1,9 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import CreateAgentFlow from "./components/CreateAgentFlow";
 import TopStatus from "./components/TopStatus";
 import AgentCard from "./components/AgentCard";
-import AgentInsights from "./components/AgentInsights";
 import ChangePlanDialog from "./components/ChangePlanDialog";
+import VideoLanding from "./components/VideoLanding";
+import SetupWaiting from "./components/SetupWaiting";
+import Toast from "./components/Toast";
+import { readGoogleRedirectState } from "./googleRedirectState";
 
 type Plan = {
   id: string;
@@ -20,6 +23,20 @@ type SkillItem = {
   description: string;
   installed: boolean;
   enabled: boolean;
+};
+
+type GoogleStatus = {
+  connected: boolean;
+  email: string | null;
+  scopes: string;
+  updatedAt: string;
+};
+
+type SkillsPayload = {
+  supported: boolean;
+  message: string;
+  items: SkillItem[];
+  config?: Record<string, unknown> | null;
 };
 
 type StatePayload = {
@@ -40,14 +57,28 @@ type StatePayload = {
     cancel_at_period_end: boolean;
     current_period_end: string | null;
   };
-  plans: Plan[];
-  skills: {
-    supported: boolean;
-    message: string;
-    items: SkillItem[];
-    config?: Record<string, unknown> | null;
-  };
+  plans: Plan[] | null;
+  skills: SkillsPayload | null;
+  google: GoogleStatus | null;
 };
+
+type DeferredPayload = {
+  plans: Plan[];
+  skills: SkillsPayload;
+  google: GoogleStatus;
+};
+
+const mergeQuickPayload = (
+  prev: StatePayload,
+  quick: StatePayload,
+): StatePayload => ({
+  ...prev,
+  ...quick,
+  // quick payload intentionally omits heavy fields; keep last known values
+  plans: quick.plans ?? prev.plans,
+  skills: quick.skills ?? prev.skills,
+  google: quick.google ?? prev.google,
+});
 
 declare global {
   interface Window {
@@ -55,6 +86,8 @@ declare global {
       WebApp?: {
         ready: () => void;
         expand: () => void;
+        requestFullscreen: () => void;
+        platform?: string;
         close: () => void;
         initData?: string;
         openTelegramLink?: (url: string) => void;
@@ -97,103 +130,137 @@ const safeFetch = async <T,>(url: string, init?: RequestInit): Promise<T> => {
 const App = () => {
   const [state, setState] = useState<StatePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(true); // true until bootstrap completes; Telegram native loader covers this
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
   const [busy, setBusy] = useState<string>("none");
   const [showChangePlan, setShowChangePlan] = useState(false);
+  const [showManageAgent, setShowManageAgent] = useState(false);
+  const [showLanding, setShowLanding] = useState(
+    () => !sessionStorage.getItem("landing_seen"),
+  );
+  const [showOnboarding, setShowOnboarding] = useState(
+    () => !sessionStorage.getItem("onboarding_seen"),
+  );
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+  const handledGoogleRedirectRef = useRef(false);
+
+  const showToast = (message: string, type: "success" | "error" = "error") => {
+    setToast({ message, type });
+  };
 
   const hydrateState = (payload: StatePayload): void => {
     setState(payload);
     setSelectedPlan(
-      (prev) => prev ?? payload.subscription.plan_id ?? payload.plans[0]?.id ?? null,
+      (prev) => prev ?? payload.subscription.plan_id ?? payload.plans?.[0]?.id ?? null,
     );
   };
 
+  const loadDeferred = async (): Promise<DeferredPayload> => {
+    const deferred = await safeFetch<DeferredPayload>("/api/mini/state/deferred");
+    setState((prev) => prev ? { ...prev, ...deferred } : prev);
+    setSelectedPlan((prev) => prev ?? deferred.plans[0]?.id ?? null);
+    return deferred;
+  };
+
+  const consumeGoogleRedirect = async (): Promise<void> => {
+    const redirectState = readGoogleRedirectState(window.location.search);
+    if (redirectState.kind === "idle") return;
+
+    // Google redirect needs full data including google status
+    const deferred = await loadDeferred();
+    if (redirectState.manage) {
+      setShowManageAgent(true);
+    }
+
+    if (redirectState.kind === "connected") {
+      const email = deferred.google.email || "";
+      showToast(
+        email
+          ? `Google connected: ${email}. Return to Telegram to use email actions.`
+          : "Google connected. Return to Telegram to use email actions.",
+        "success",
+      );
+    } else if (redirectState.kind === "disconnected") {
+      showToast("Google disconnected.", "success");
+    } else {
+      showToast(`Google connection failed: ${redirectState.reason}`);
+    }
+
+    window.history.replaceState({}, "", window.location.pathname);
+  };
+
   const loadState = async () => {
-    const payload = await safeFetch<StatePayload>("/api/mini/state");
+    const [quick, deferred] = await Promise.all([
+      safeFetch<StatePayload>("/api/mini/state"),
+      safeFetch<DeferredPayload>("/api/mini/state/deferred"),
+    ]);
+    const payload: StatePayload = { ...quick, ...deferred };
     hydrateState(payload);
+    return payload;
   };
 
   const bootstrap = async () => {
     const initData = window.Telegram?.WebApp?.initData?.trim() ?? "";
-    const initDataUnsafe = window.Telegram?.WebApp?.initDataUnsafe;
-    
-    console.log('[MiniApp] Bootstrap Debug Info:', {
-      hasInitData: !!initData,
-      initDataLength: initData.length,
-      telegram: !!window.Telegram,
-      webApp: !!window.Telegram?.WebApp,
-      hasInitDataUnsafe: !!initDataUnsafe,
-      userId: initDataUnsafe?.user?.id,
-      username: initDataUnsafe?.user?.username,
-      userAgent: navigator.userAgent,
-      url: window.location.href,
-    });
-    
-    if (initData) {
-      console.log('[MiniApp] ✓ Using Telegram initData for bootstrap');
-      
-      const requestBody = { init_data: initData };
-      console.log('[MiniApp] Preparing bootstrap request:', {
-        url: '/api/mini/bootstrap',
-        method: 'POST',
-        bodyKeys: Object.keys(requestBody),
-        initDataLength: initData.length,
-        initDataPreview: initData.substring(0, 50) + '...',
-      });
-      
-      try {
-        const payload = await safeFetch<StatePayload>("/api/mini/bootstrap", {
-          method: "POST",
-          body: JSON.stringify(requestBody),
-        });
-        
-        console.log('[MiniApp] ✓ Bootstrap SUCCESS:', {
-          hasAssistant: payload.assistant.exists,
-          assistantId: payload.assistant.id,
-          hasSubscription: payload.subscription.active,
-          planId: payload.subscription.plan_id,
-          subscriptionStatus: payload.subscription.status,
-        });
-        
-        hydrateState(payload);
-        return;
-      } catch (error) {
-        console.error('[MiniApp] ✗ Bootstrap FAILED:', error);
-        throw error;
-      }
-    }
 
-    console.warn('[MiniApp] ✗ No initData available');
-    console.warn('Possible reasons:');
-    console.warn('  1. Opened in regular browser instead of Telegram');
-    console.warn('  2. Web Telegram does not have initData yet (still loading)');
-    console.warn('  3. Mini App not opened via proper Telegram button/link');
-    console.warn('');
-    console.warn('Please ensure you:');
-    console.warn('  - Open from Telegram bot menu button or inline button');
-    console.warn('  - Use Telegram mobile/desktop app (recommended)');
-    console.warn('  - Wait for Telegram WebApp SDK to fully load');
-    
-    // Try to load existing session (will fail with 401 if no session)
-    console.log('[MiniApp] Attempting to use existing session cookie...');
+    if (initData) {
+      const payload = await safeFetch<StatePayload>("/api/mini/bootstrap", {
+        method: "POST",
+        body: JSON.stringify({ init_data: initData }),
+      });
+      hydrateState(payload);
+      return;
+    }
     await loadState();
   };
 
   useEffect(() => {
-    window.Telegram?.WebApp?.ready?.();
+    // expand/fullscreen can be called early — they don't dismiss the native loader
     window.Telegram?.WebApp?.expand?.();
+    const platform = window.Telegram?.WebApp?.platform;
+    if (platform === 'ios' || platform === 'android') {
+      window.Telegram?.WebApp?.requestFullscreen?.();
+      document.documentElement.style.setProperty("--tg-top-offset", "56px");
+    }
     setLoading(true);
     setError(null);
 
     void bootstrap()
+      .then(() => {
+        setLoading(false);
+        // Signal Telegram that the page is ready — dismisses native loader
+        window.Telegram?.WebApp?.ready?.();
+        // Fire deferred load in background (plans, google, skills)
+        void loadDeferred().catch(() => {});
+      })
       .catch((e: unknown) => {
         setError(e instanceof Error ? e.message : "unknown error");
-      })
-      .finally(() => {
         setLoading(false);
+        // Still need to dismiss native loader on error so user sees error UI
+        window.Telegram?.WebApp?.ready?.();
       });
   }, []);
+
+  useEffect(() => {
+    if (loading || !state) return;
+    if (handledGoogleRedirectRef.current) return;
+    if (!window.location.search.includes("google=")) return;
+    handledGoogleRedirectRef.current = true;
+    void consumeGoogleRedirect();
+  }, [loading, state]);
+
+  // Poll for status changes when assistant exists but isn't running yet
+  useEffect(() => {
+    if (!state?.assistant.exists) return;
+    if (state.assistant.status === "running") return;
+
+    const id = setInterval(() => {
+      void safeFetch<StatePayload>("/api/mini/state").then((quick) => {
+        setState((prev) => (prev ? mergeQuickPayload(prev, quick) : prev));
+      }).catch(() => {});
+    }, 3_000);
+
+    return () => clearInterval(id);
+  }, [state?.assistant.exists, state?.assistant.status]);
 
   const createAssistant = async () => {
     setBusy("create");
@@ -204,7 +271,7 @@ const App = () => {
       });
       await loadState();
     } catch (e) {
-      alert(`Create failed: ${e instanceof Error ? e.message : "unknown"}`);
+      showToast(`Create failed: ${e instanceof Error ? e.message : "unknown"}`);
     } finally {
       setBusy("none");
     }
@@ -220,7 +287,7 @@ const App = () => {
       });
       if (result.action === "upgrade" || result.action === "downgrade") {
         // Plan changed directly via Stripe subscription update — no redirect needed
-        alert(result.message ?? "Plan updated successfully.");
+        showToast(result.message ?? "Plan updated successfully.", "success");
         setBusy("none");
         await loadState();
         return;
@@ -228,9 +295,12 @@ const App = () => {
       if (!result.url) throw new Error("Unable to get checkout URL. Please try again.");
       window.location.href = result.url;
     } catch (e) {
-      alert(
-        `Unable to change plan: ${e instanceof Error ? e.message : "unknown"}`,
-      );
+      const message = e instanceof Error ? e.message : "unknown";
+      if (/downgrade is locked until/i.test(message)) {
+        showToast("Downgrade is locked until the current billing cycle ends.");
+      } else {
+        showToast(`Unable to change plan: ${message}`);
+      }
       setBusy("none");
     }
   };
@@ -245,10 +315,10 @@ const App = () => {
         method: "POST",
         body: JSON.stringify({}),
       });
-      alert("Renewal canceled. Service remains active until period end.");
+      showToast("Renewal canceled. Service remains active until period end.", "success");
       await loadState();
     } catch (e) {
-      alert(`Cancel failed: ${e instanceof Error ? e.message : "unknown"}`);
+      showToast(`Cancel failed: ${e instanceof Error ? e.message : "unknown"}`);
       setBusy("none");
     }
   };
@@ -256,75 +326,70 @@ const App = () => {
   const handleDeleteAccount = async () => {
     setBusy("delete");
     try {
-      const telegramUserId = state?.user.telegram_user_id;
-      if (!telegramUserId) {
-        throw new Error("User ID not found");
-      }
-      
-      // Call reset account API
-      await safeFetch(`/api/reset-account/${telegramUserId}`, {
+      await safeFetch("/api/mini/reset-account", {
         method: "POST",
         body: JSON.stringify({}),
       });
-      
-      alert("Account deleted successfully. Redirecting...");
-      window.location.reload();
+      showToast("Account deleted successfully.", "success");
+      setTimeout(() => window.location.reload(), 1500);
     } catch (e) {
-      alert(`Delete failed: ${e instanceof Error ? e.message : "unknown"}`);
+      showToast(`Delete failed: ${e instanceof Error ? e.message : "unknown"}`);
       setBusy("none");
     }
   };
 
-  const installSkill = async (skillKey: string) => {
-    setBusy(`skill-install:${skillKey}`);
+  const handleConnectGoogle = () => {
+    window.location.href = "/mini/google/start";
+  };
+
+  const handleDisconnectGoogle = async () => {
+    setBusy("google-disconnect");
     try {
-      await safeFetch("/api/mini/skills/install", {
+      await safeFetch<{ ok: true; message: string }>("/api/mini/google/disconnect", {
         method: "POST",
-        body: JSON.stringify({ skill_key: skillKey }),
+        body: JSON.stringify({}),
       });
       await loadState();
+      setShowManageAgent(true);
+      showToast("Google disconnected.", "success");
     } catch (e) {
-      alert(`Install failed: ${e instanceof Error ? e.message : "unknown"}`);
+      const message = e instanceof Error ? e.message : "unknown";
+      if (/unauthorized/i.test(message)) {
+        window.location.reload();
+        return;
+      }
+      showToast(`Disconnect failed: ${message}`);
+    } finally {
       setBusy("none");
     }
   };
 
-  const uninstallSkill = async (skillKey: string) => {
-    setBusy(`skill-uninstall:${skillKey}`);
+  const handleOpenManage = async () => {
     try {
-      await safeFetch("/api/mini/skills/uninstall", {
-        method: "POST",
-        body: JSON.stringify({ skill_key: skillKey }),
-      });
       await loadState();
+      setShowManageAgent(true);
     } catch (e) {
-      alert(`Uninstall failed: ${e instanceof Error ? e.message : "unknown"}`);
-      setBusy("none");
+      const message = e instanceof Error ? e.message : "unknown";
+      if (/unauthorized/i.test(message)) {
+        window.location.reload();
+        return;
+      }
+      showToast(`Unable to open manage: ${message}`);
     }
   };
 
+  // Telegram native loader covers the bootstrap wait — render empty background
   if (loading) {
-    return (
-      <div className="mx-auto w-full max-w-2xl p-5">
-        <div className="panel p-9 text-center text-sm text-muted">
-          Loading...
-        </div>
-      </div>
-    );
-  }
-
-  // Debug: log current state
-  if (state) {
-    console.log('[MiniApp] Current state:', {
-      hasAssistant: state.assistant.exists,
-      hasSubscription: state.subscription.active,
-    });
+    return <div className="min-h-dvh bg-pin-gradient" />;
   }
 
   if (error || !state) {
     const isAuthError = error?.includes("401") || error?.includes("Unauthorized");
     return (
-      <div className="min-h-screen bg-pin-gradient flex items-center justify-center p-5">
+      <div
+        className="min-h-dvh bg-pin-gradient flex items-center justify-center p-5"
+        style={{ paddingTop: "calc(var(--safe-top) + 1.25rem)" }}
+      >
         <div className="glass-card rounded-2xl p-6 max-w-md text-center">
           <div className="w-16 h-16 rounded-full bg-destructive/10 flex items-center justify-center mx-auto mb-4">
             <svg className="w-8 h-8 text-destructive" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -335,8 +400,8 @@ const App = () => {
             {isAuthError ? "Authentication Required" : "Load Failed"}
           </h2>
           <p className="text-sm text-foreground/70 mb-4">
-            {isAuthError 
-              ? "Please open this page in Telegram app" 
+            {isAuthError
+              ? "Please open this page in Telegram app"
               : error || "Unknown error"}
           </p>
           <button
@@ -350,62 +415,76 @@ const App = () => {
     );
   }
 
-  // Show CreateAgentFlow directly when no assistant exists
-  if (!state.assistant.exists) {
-    return (
-      <CreateAgentFlow 
-        open={true} 
-        onClose={() => {}} // No close button for first-time users
-        onCreateSuccess={() => void loadState()}
-      />
-    );
+  // Onboarding flow for unpaid users: Landing → Features → Choose Plan
+  if (!state.subscription.active && showLanding) {
+    return <VideoLanding onGetStarted={() => { sessionStorage.setItem("landing_seen", "1"); setShowLanding(false); }} />;
   }
 
-  // Show subscription required page when assistant exists but no subscription
+  if (!state.subscription.active && showOnboarding) {
+    return <CreateAgentFlow onContinue={() => { sessionStorage.setItem("onboarding_seen", "1"); setShowOnboarding(false); }} />;
+  }
+
+  // Show subscription / choose plan page when not subscribed
   if (!state.subscription.active) {
     return (
-      <div className="min-h-screen bg-pin-gradient max-w-md mx-auto p-4 pb-8">
-        <section className="glass-card rounded-2xl p-6 mt-4 animate-fade-in">
+      <div
+        className="min-h-dvh bg-pin-gradient max-w-md mx-auto flex flex-col px-4"
+        style={{
+          paddingTop: "calc(var(--safe-top) + 1rem)",
+          paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1rem)",
+        }}
+      >
+        <section className="glass-card rounded-2xl p-5 animate-fade-in shrink-0">
           <span className="pill bg-foreground text-background">PIN AI MINI</span>
-          <h1 className="mt-4 font-heading text-2xl font-bold leading-[1.1] text-foreground">
-            Subscription Required
+          <h1 className="mt-3 font-heading text-xl font-bold leading-[1.1] text-foreground">
+            Choose Your Plan
           </h1>
-          <p className="mt-2 max-w-md text-sm text-foreground/70">
-            Subscribe first to unlock runtime controls and skills management.
+          <p className="mt-1.5 text-sm text-foreground/70">
+            Subscribe to unlock your AI agent.
           </p>
         </section>
 
-        <section className="glass-card rounded-2xl p-5 mt-3 animate-fade-in">
-          <div className="mb-4">
-            <h2 className="text-lg font-semibold text-foreground">Choose Plan</h2>
-          </div>
-          <div className="space-y-2.5">
-            {state.plans.map((plan) => {
-              const selected = selectedPlan === plan.id;
-              return (
-                <button
-                  key={plan.id}
-                  className={`w-full rounded-xl p-4 text-left transition-all btn-press ${
-                    selected 
-                      ? "bg-white/60 border-2 border-primary shadow-lg" 
-                      : "bg-white/30 border border-white/40 hover:bg-white/40"
-                  }`}
-                  onClick={() => setSelectedPlan(plan.id)}
-                >
-                  <div className="flex items-center justify-between gap-2 mb-1">
-                    <span className="text-base font-bold text-foreground">{plan.name}</span>
-                    <span className="text-lg font-extrabold text-primary">
-                      ${plan.price}<span className="text-sm font-normal text-muted-foreground">/mo</span>
-                    </span>
+        <section className="glass-card rounded-2xl p-4 mt-3 animate-fade-in flex-1 flex flex-col min-h-0">
+          <div className="flex-1 space-y-2.5 overflow-y-auto min-h-0">
+            {state.plans === null ? (
+              /* Skeleton placeholders while plans load */
+              Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="w-full rounded-xl p-3.5 bg-white/30 border border-white/40 animate-pulse">
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <div className="h-4 w-24 bg-white/50 rounded" />
+                    <div className="h-5 w-16 bg-white/50 rounded" />
                   </div>
-                  <div className="text-xs text-foreground/60">
-                    {plan.features.slice(0, 2).join(" · ")}
-                  </div>
-                </button>
-              );
-            })}
+                  <div className="h-3 w-40 bg-white/40 rounded" />
+                </div>
+              ))
+            ) : (
+              state.plans.map((plan) => {
+                const selected = selectedPlan === plan.id;
+                return (
+                  <button
+                    key={plan.id}
+                    className={`w-full rounded-xl p-3.5 text-left transition-all btn-press ${
+                      selected
+                        ? "bg-white/60 border-2 border-primary shadow-lg"
+                        : "bg-white/30 border border-white/40 hover:bg-white/40"
+                    }`}
+                    onClick={() => setSelectedPlan(plan.id)}
+                  >
+                    <div className="flex items-center justify-between gap-2 mb-0.5">
+                      <span className="text-base font-bold text-foreground">{plan.name}</span>
+                      <span className="text-lg font-extrabold text-primary">
+                        ${plan.price}<span className="text-sm font-normal text-muted-foreground">/mo</span>
+                      </span>
+                    </div>
+                    <div className="text-xs text-foreground/60">
+                      {plan.features.slice(0, 2).join(" · ")}
+                    </div>
+                  </button>
+                );
+              })
+            )}
           </div>
-          <div className="mt-4 space-y-2.5">
+          <div className="mt-3 shrink-0">
             <button
               className="w-full rounded-xl bg-foreground text-background px-4 py-3.5 text-sm font-bold shadow-lg btn-press disabled:opacity-50"
               onClick={() => void checkout()}
@@ -413,15 +492,10 @@ const App = () => {
             >
               {busy === "checkout" ? "Redirecting..." : "Continue to Checkout"}
             </button>
-            <button
-              className="w-full rounded-xl bg-secondary/60 text-foreground px-4 py-3 text-sm font-medium btn-press"
-              onClick={() => void loadState()}
-            >
-              Refresh
-            </button>
           </div>
         </section>
-        <div className="mt-4 text-center text-xs text-foreground/50">PIN AI</div>
+
+        <div className="mt-3 text-center text-xs text-foreground/50 shrink-0">PIN AI</div>
       </div>
     );
   }
@@ -429,10 +503,16 @@ const App = () => {
   // Show home page with agent when subscription is active
   if (state.assistant.exists) {
     return (
-      <div className="min-h-screen bg-pin-gradient max-w-md mx-auto pb-8">
+      <div
+        className="min-h-dvh bg-pin-gradient max-w-md mx-auto flex flex-col"
+        style={{
+          paddingTop: "var(--safe-top)",
+          paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1rem)",
+        }}
+      >
         <TopStatus hasAgent={true} />
 
-        <div className="px-4 mt-6 space-y-4">
+        <div className="px-4 mt-5 space-y-3 flex-1">
           <h2 className="text-base font-semibold text-foreground px-1">
             <span className="title-highlight">My Agent</span>
           </h2>
@@ -441,21 +521,24 @@ const App = () => {
             status={state.assistant.status || "unknown"}
             planId={state.subscription.plan_id}
             active={state.subscription.active}
+            manageOpen={showManageAgent}
+            google={state.google ?? undefined}
+            googleBusy={busy === "google-disconnect"}
+            onOpenManage={() => {
+              void handleOpenManage();
+            }}
+            onCloseManage={() => setShowManageAgent(false)}
             onChangePlan={() => setShowChangePlan(true)}
             onDeleteAccount={handleDeleteAccount}
+            onConnectGoogle={handleConnectGoogle}
+            onDisconnectGoogle={handleDisconnectGoogle}
           />
         </div>
 
-        {/* Skills section temporarily hidden pending API key input support */}
-
-        <div className="px-4 mt-6">
-          <AgentInsights />
-        </div>
-
-        <div className="px-4 mt-8 mb-4">
+        <div className="px-4 mt-auto pt-4">
           <a
             href="mailto:support@pinai.io"
-            className="glass-card rounded-2xl flex items-center justify-center gap-2 text-sm text-foreground font-medium py-3.5 hover:bg-secondary/50 transition-colors"
+            className="glass-card rounded-2xl flex items-center justify-center gap-2 text-sm text-foreground font-medium py-3 hover:bg-secondary/50 transition-colors"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
@@ -467,7 +550,7 @@ const App = () => {
         <ChangePlanDialog
           open={showChangePlan}
           onClose={() => setShowChangePlan(false)}
-          plans={state.plans}
+          plans={state.plans ?? []}
           currentPlanId={state.subscription.plan_id}
           selectedPlan={selectedPlan}
           onSelectPlan={setSelectedPlan}
@@ -475,182 +558,22 @@ const App = () => {
           onCancel={cancelSubscription}
           busy={busy}
         />
+
+        <Toast message={toast?.message ?? null} type={toast?.type} onDismiss={() => setToast(null)} />
       </div>
     );
   }
 
-  // Show subscription center when subscription is active but no assistant
+  // Subscription active but assistant not yet created — show waiting screen
+  // Auto-poll until assistant exists, with manual fallback after timeout
   return (
-    <div className="min-h-screen bg-pin-gradient max-w-md mx-auto p-4 pb-8">
-      <section className="glass-card rounded-2xl p-6 mt-4 animate-fade-in">
-        <span className="pill bg-foreground text-background">PIN AI</span>
-        <h1 className="mt-4 font-heading text-2xl font-bold leading-[1.1] text-foreground">
-          Subscription Center
-        </h1>
-        <p className="mt-2 max-w-md text-sm text-foreground/70">
-          Your subscription is active. Create your assistant to get started.
-        </p>
-      </section>
-
-      <section className="glass-card rounded-2xl p-5 mt-3 animate-fade-in">
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <h2 className="text-lg font-semibold text-foreground">Runtime Status</h2>
-          <span
-            className={`pill text-xs ${state.subscription.active ? "bg-pin-mint/20 text-pin-mint-text" : "bg-amber-100 text-amber-700"}`}
-          >
-            {state.subscription.active ? "Active" : "Inactive"}
-          </span>
-        </div>
-        <div className="space-y-2">
-          <div className="text-sm text-foreground/80">
-            <span className="font-medium">Status:</span> {state.assistant.exists ? (state.assistant.status || "unknown") : "assistant not created"}
-          </div>
-          <div className="text-sm text-foreground/80">
-            <span className="font-medium">Current plan:</span> {state.subscription.plan_id || "none"}
-          </div>
-          {state.subscription.current_period_end ? (
-            <div className="text-sm text-foreground/80">
-              <span className="font-medium">Period end:</span> {state.subscription.current_period_end}
-            </div>
-          ) : null}
-          {state.subscription.cancel_at_period_end ? (
-            <div className="text-sm text-amber-600 font-medium mt-2">
-              ⚠️ Renewal canceled (service ends at period end)
-            </div>
-          ) : null}
-        </div>
-      </section>
-
-      {!state.assistant.exists ? (
-        <section className="glass-card rounded-2xl p-5 mt-3 animate-fade-in">
-          <h2 className="text-lg font-semibold text-foreground mb-3">Create Assistant</h2>
-          <p className="text-sm text-foreground/70 mb-4">
-            Subscription is active. Create your assistant to enable runtime and skills.
-          </p>
-          <button
-            className="w-full rounded-xl bg-foreground text-background px-4 py-3.5 text-sm font-bold shadow-lg btn-press disabled:opacity-50"
-            onClick={() => void createAssistant()}
-            disabled={busy !== "none"}
-          >
-            {busy === "create" ? "Creating..." : "Create Assistant"}
-          </button>
-        </section>
-      ) : null}
-
-      <section className="glass-card rounded-2xl p-5 mt-3 animate-fade-in">
-        <div className="mb-4 flex items-center justify-between gap-2">
-          <h2 className="text-lg font-semibold text-foreground">Change Plan</h2>
-          <span className="pill text-xs bg-secondary/60 text-foreground">Flexible</span>
-        </div>
-
-        <div className="space-y-2.5">
-          {state.plans.map((plan) => {
-            const selected = selectedPlan === plan.id;
-            const current = state.subscription.plan_id === plan.id;
-            return (
-              <button
-                key={plan.id}
-                className={`w-full rounded-xl p-4 text-left transition-all btn-press ${
-                  selected 
-                    ? "bg-white/60 border-2 border-primary shadow-lg" 
-                    : "bg-white/30 border border-white/40 hover:bg-white/40"
-                }`}
-                onClick={() => setSelectedPlan(plan.id)}
-              >
-                <div className="flex items-center justify-between gap-2 mb-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-base font-bold text-foreground">{plan.name}</span>
-                    {current && <span className="text-xs px-2 py-0.5 rounded-full bg-pin-mint/20 text-pin-mint-text font-medium">Current</span>}
-                  </div>
-                  <span className="text-lg font-extrabold text-primary">
-                    ${plan.price}<span className="text-sm font-normal text-muted-foreground">/mo</span>
-                  </span>
-                </div>
-                <div className="text-xs text-foreground/60">
-                  {plan.features.slice(0, 2).join(" · ")}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="mt-4 space-y-2.5">
-          <button
-            className="w-full rounded-xl bg-foreground text-background px-4 py-3.5 text-sm font-bold shadow-lg btn-press disabled:opacity-50"
-            onClick={() => void checkout()}
-            disabled={busy !== "none" || !selectedPlan}
-          >
-            {busy === "checkout" ? "Redirecting..." : "Continue to Checkout"}
-          </button>
-          <button
-            className="w-full rounded-xl bg-secondary/60 text-foreground px-4 py-3 text-sm font-medium btn-press disabled:opacity-50"
-            onClick={() => void cancelSubscription()}
-            disabled={busy !== "none"}
-          >
-            {busy === "cancel" ? "Processing..." : "Cancel Renewal"}
-          </button>
-        </div>
-      </section>
-
-      <section className="glass-card rounded-2xl p-5 mt-3 animate-fade-in">
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <h2 className="text-lg font-semibold text-foreground">Skills</h2>
-          <span className={`pill text-xs ${state.skills.supported ? "bg-pin-mint/20 text-pin-mint-text" : "bg-amber-100 text-amber-700"}`}>
-            {state.skills.supported ? "Enabled" : "Pending"}
-          </span>
-        </div>
-        <div className="text-sm text-foreground/70 mb-4">{state.skills.message}</div>
-        {state.skills.supported ? (
-          <div className="space-y-2.5">
-            {(state.skills.items || []).map((skill) => {
-              const installing = busy === `skill-install:${skill.key}`;
-              const uninstalling = busy === `skill-uninstall:${skill.key}`;
-              return (
-                <div
-                  key={skill.key}
-                  className="rounded-xl bg-white/30 border border-white/40 p-4"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1">
-                      <div className="text-sm font-bold text-foreground">{skill.name}</div>
-                      <div className="mt-1 text-xs text-foreground/70">
-                        {skill.description}
-                      </div>
-                      <div className="mt-1.5 text-[11px] text-foreground/50">
-                        {skill.key} · {skill.installed ? (
-                          <span className="text-pin-mint-text">✓ installed</span>
-                        ) : (
-                          <span>not installed</span>
-                        )}
-                      </div>
-                    </div>
-                    {skill.enabled ? (
-                      <button
-                        className="rounded-lg bg-secondary/60 px-3 py-2 text-xs font-semibold text-foreground btn-press disabled:opacity-50 shrink-0"
-                        onClick={() => void uninstallSkill(skill.key)}
-                        disabled={busy !== "none"}
-                      >
-                        {uninstalling ? "Removing..." : "Remove"}
-                      </button>
-                    ) : (
-                      <button
-                        className="rounded-lg bg-foreground text-background px-3 py-2 text-xs font-semibold btn-press disabled:opacity-50 shrink-0"
-                        onClick={() => void installSkill(skill.key)}
-                        disabled={busy !== "none"}
-                      >
-                        {installing ? "Installing..." : "Install"}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : null}
-      </section>
-
-      <div className="mt-4 text-center text-xs text-foreground/50">PIN AI</div>
-    </div>
+    <SetupWaiting
+      onRetry={createAssistant}
+      onPoll={() => loadState().then(() => undefined)}
+      busy={busy === "create"}
+      toast={toast}
+      onDismissToast={() => setToast(null)}
+    />
   );
 };
 

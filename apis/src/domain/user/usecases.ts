@@ -4,6 +4,7 @@ import { deleteTelegramUser, ensureTelegramUser } from './service.js';
 import { removeAssistantById } from '../claw-assistant/service.js';
 import { cancelStripeSubscriptionImmediately } from '../payment/checkout.js';
 import { deleteLiteLLMKey, deleteLiteLLMUser, isLiteLLMClientEnabled } from '../litellm/index.js';
+import { disconnectGoogleOAuth } from '../google-oauth/service.js';
 import type { UserRecord } from '../../types.js';
 
 export interface EnsureTelegramUserInput {
@@ -65,7 +66,9 @@ export const readTelegramUserById = async (telegramUserId: number): Promise<User
 export const resetTelegramUserAccount = async (telegramUserId: number): Promise<{ ok: true }> => {
   const user = await getUserByTelegramId(telegramUserId);
   if (!user) {
-    throw new DomainError('NOT_FOUND', 'User not found');
+    // Idempotency: Telegram may retry callback updates; if the account is already
+    // deleted, treat reset as completed.
+    return { ok: true };
   }
 
   // 1. Cancel Stripe subscription immediately
@@ -78,7 +81,17 @@ export const resetTelegramUserAccount = async (telegramUserId: number): Promise<
     });
   }
 
-  // 2. Destroy all assistants (containers + DB records)
+  // 2. Disconnect Google OAuth (best-effort)
+  try {
+    await disconnectGoogleOAuth(telegramUserId);
+  } catch (error: unknown) {
+    console.warn('[reset_account] Failed to disconnect Google OAuth', {
+      telegramUserId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  // 3. Destroy all assistants (containers + DB records)
   const assistants = await listAssistantsByOwnerTelegramId(telegramUserId);
   for (const assistant of assistants) {
     try {
@@ -92,7 +105,7 @@ export const resetTelegramUserAccount = async (telegramUserId: number): Promise<
     }
   }
 
-  // 3. Delete LiteLLM key and user (best-effort)
+  // 4. Delete LiteLLM key and user (best-effort)
   if (isLiteLLMClientEnabled()) {
     try {
       if (user.litellm_virtual_key) {
@@ -116,7 +129,7 @@ export const resetTelegramUserAccount = async (telegramUserId: number): Promise<
     }
   }
 
-  // 4. Delete user record (cascades to subscription_periods, sessions, etc.)
+  // 5. Delete user record (cascades to subscription_periods, sessions, etc.)
   await deleteUserByTelegramId(telegramUserId);
 
   return { ok: true };

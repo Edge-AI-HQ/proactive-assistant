@@ -56,7 +56,6 @@ const buildConfig = (): ContainerManagerConfig => ({
   litellm: {
     enabled: false,
     baseUrl: "http://127.0.0.1:4000",
-    containerBaseUrl: "http://host.docker.internal:4000",
     masterKey: "master",
     allowedModels: [],
     openclawDefaultModel: "claude-opus-4-6",

@@ -5,8 +5,13 @@ import { fileURLToPath } from "node:url";
 import { prepareContainerRuntime } from "./domain/container/index.js";
 import { syncContainerStates } from "./domain/container/syncContainerStates.js";
 import { config, validateConfig } from "./domain/common/config.js";
+import {
+  initializeRequestLogging,
+  requestLogContextMiddleware,
+} from "./domain/common/requestLogContext.js";
 import { cleanupExpiredGatewaySessions } from "./domain/common/db/index.js";
 import { ensureInfraRuntimeConfigured } from "./domain/common/infraRuntime.js";
+import { materializeGoogleOAuthClientSecretFromEnv } from "./domain/google-oauth/client_secret_file.js";
 import { db as paymentDb } from "./domain/payment/db.js";
 import { validatePaymentPriceConsistencyOnStartup } from "./domain/payment/startupValidation.js";
 import { applySubscriptionPeriodBudgetsWithLock } from "./domain/payment/subscriptionSync.js";
@@ -26,7 +31,9 @@ if (missing.length) {
   console.warn(`Missing env vars: ${missing.join(", ")}`);
 }
 
+initializeRequestLogging();
 ensureInfraRuntimeConfigured();
+materializeGoogleOAuthClientSecretFromEnv();
 
 await prepareContainerRuntime();
 await validatePaymentPriceConsistencyOnStartup();
@@ -34,6 +41,7 @@ await validatePaymentPriceConsistencyOnStartup();
 const app = express();
 app.disable("x-powered-by");
 app.set("trust proxy", true);
+app.use(requestLogContextMiddleware);
 
 registerRawBodyRoutes(app);
 registerTelegramRouterRoutes(app);
@@ -45,7 +53,7 @@ app.use(cookieParser());
 // Serve static files from public directory
 const publicPath = path.join(process.cwd(), "public");
 console.log("Serving static files from:", publicPath);
-app.use(express.static(publicPath));
+app.use(express.static(publicPath, { maxAge: "7d" }));
 
 registerHttpRoutes(app);
 

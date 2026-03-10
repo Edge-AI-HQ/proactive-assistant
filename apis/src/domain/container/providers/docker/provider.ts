@@ -5,7 +5,6 @@ import Docker from "dockerode";
 import { getContainerManagerRuntime } from "../../runtime.js";
 import type {
   ContainerManagerConfig,
-  ReadAssistantLiteLLMVirtualKey,
 } from "../../types.js";
 import type {
   AssistantContainerParams,
@@ -16,18 +15,21 @@ import type {
   ProbeOptions,
 } from "../../contracts.js";
 import { buildAssistantOpenclawConfig } from "../shared/openclaw_config.js";
-import { resolveAssistantLiteLLMApiKey as resolveAssistantLiteLLMApiKeyShared } from "../shared/assistant_litellm_key.js";
 import { DOCKER_FORBIDDEN_SECRET_ENV_KEYS } from "../shared/secret_env.js";
 import {
   assertNoP0SecretsInConfig,
   assertNoP0SecretsInEnv,
 } from "../shared/secret_guard.js";
+import { QUICKSTART_SYNTHETIC_BOT_TOKEN } from "../shared/telegram_runtime_secret.js";
 import {
-  deriveAssistantWebhookSecret,
-  QUICKSTART_SYNTHETIC_BOT_TOKEN,
-} from "../shared/telegram_runtime_secret.js";
+  buildWebhookParams,
+  buildBaseContainerEnv,
+} from "../shared/webhook_params.js";
+import { PINAI_WORKSPACE_STATUS_PORT } from "../shared/workspace_ready.js";
+import { PINAI_GOOGLE_CREDENTIALS_B64_ENV } from "../shared/google_workspace_credentials.js";
 import { config as appConfig } from "../../../common/config.js";
 import { toOpenclawSkillsPayload } from "../../../skills/openclaw_skills.js";
+import { renderUserProfileMarkdown } from "../../../onboarding/profile_bootstrap.js";
 
 // ---------------------------------------------------------------------------
 // Docker client & config proxy
@@ -39,10 +41,6 @@ const config = new Proxy({} as ContainerManagerConfig, {
   get: (_target, prop) =>
     getContainerManagerRuntime().config[prop as keyof ContainerManagerConfig],
 });
-
-const readAssistantLiteLLMVirtualKey: ReadAssistantLiteLLMVirtualKey = (
-  assistant,
-) => getContainerManagerRuntime().readAssistantLiteLLMVirtualKey(assistant);
 
 // ---------------------------------------------------------------------------
 // Types
@@ -59,9 +57,8 @@ interface DockerStatusCodeError {
 }
 
 interface AssistantContainerDirs {
-  configDir: string;
-  dataDir: string;
-  tmpDir: string;
+  baseDir: string;
+  openclawDir: string;
   workspaceDir: string;
 }
 
@@ -119,10 +116,9 @@ const findBindSource = (
 const buildContainerDirs = (scopeDirName: string): AssistantContainerDirs => {
   const baseDir = path.join(process.cwd(), "data", scopeDirName);
   return {
-    configDir: path.join(baseDir, "config"),
-    dataDir: path.join(baseDir, "data"),
-    tmpDir: path.join(baseDir, "tmp"),
-    workspaceDir: path.join(baseDir, "workspace"),
+    baseDir,
+    openclawDir: path.join(baseDir, ".openclaw"),
+    workspaceDir: path.join(baseDir, ".openclaw", "workspace"),
   };
 };
 
@@ -180,6 +176,47 @@ const sanitizeCronStore = (runtimeDataDir: string): void => {
   );
 };
 
+const ensureWorkspaceUserProfile = (
+  workspaceDir: string,
+  profileText?: string | null,
+  profileSource?: "connector" | "privy" | null,
+): boolean => {
+  const userMdPath = path.join(workspaceDir, "USER.md");
+  const legacyUserMdPath = path.join(workspaceDir, "user.md");
+  const normalized = (profileText || "").trim();
+  if (!normalized) {
+    if (fs.existsSync(legacyUserMdPath)) {
+      fs.rmSync(legacyUserMdPath, { force: true });
+    }
+    if (fs.existsSync(userMdPath)) {
+      fs.rmSync(userMdPath, { force: true });
+      return true;
+    }
+    return false;
+  }
+
+  const content = renderUserProfileMarkdown(
+    normalized,
+    profileSource || "connector",
+  );
+  const before = fs.existsSync(userMdPath)
+    ? fs.readFileSync(userMdPath, "utf8")
+    : "";
+  if (before === content) {
+    if (fs.existsSync(legacyUserMdPath)) {
+      fs.rmSync(legacyUserMdPath, { force: true });
+      return true;
+    }
+    return false;
+  }
+
+  fs.writeFileSync(userMdPath, content, "utf8");
+  if (fs.existsSync(legacyUserMdPath)) {
+    fs.rmSync(legacyUserMdPath, { force: true });
+  }
+  return true;
+};
+
 // ---------------------------------------------------------------------------
 // OpenClaw config management
 // ---------------------------------------------------------------------------
@@ -197,12 +234,9 @@ const mergeAssistantOpenclawConfig = (
   const desiredMessages = isRecord(desired.messages) ? desired.messages : {};
   next.messages = { ...existingMessages, tts: desiredMessages.tts };
 
-  const desiredTalk = isRecord(desired.talk) ? desired.talk : null;
-  if (desiredTalk) {
+  if (isRecord(desired.talk)) {
     const existingTalk = isRecord(next.talk) ? next.talk : {};
-    const mergedTalk: UnknownRecord = { ...existingTalk, ...desiredTalk };
-    if (Object.hasOwn(mergedTalk, "baseUrl")) delete mergedTalk.baseUrl;
-    next.talk = mergedTalk;
+    next.talk = { ...existingTalk, ...desired.talk };
   }
 
   const normalizedAssistantBotToken = assistantBotToken.trim();
@@ -224,13 +258,10 @@ const mergeAssistantOpenclawConfig = (
     }
   }
 
-  // Always take plugins and session config from desired — these are generated
-  // fresh each time and include webhook-related plugins.
+  // Always take plugins from desired — generated fresh each time with
+  // webhook-related plugins.
   if (isRecord(desired.plugins)) {
     next.plugins = desired.plugins;
-  }
-  if (isRecord(desired.session)) {
-    next.session = desired.session;
   }
 
   if (config.litellm.enabled) {
@@ -257,7 +288,13 @@ const mergeAssistantOpenclawConfig = (
       : {};
     next.agents = {
       ...existingAgents,
-      defaults: { ...existingDefaults, model: desiredDefaults.model },
+      defaults: {
+        ...existingDefaults,
+        model: desiredDefaults.model,
+        ...(desiredDefaults.models !== undefined
+          ? { models: desiredDefaults.models }
+          : {}),
+      },
     };
   }
 
@@ -265,6 +302,17 @@ const mergeAssistantOpenclawConfig = (
     next.skills = desired.skills;
   } else if (Object.hasOwn(next, "skills")) {
     delete next.skills;
+  }
+
+  // Always take tools, commands, and browser from desired config
+  if (isRecord(desired.tools)) {
+    next.tools = desired.tools;
+  }
+  if (isRecord(desired.commands)) {
+    next.commands = desired.commands;
+  }
+  if (isRecord(desired.browser)) {
+    next.browser = desired.browser;
   }
 
   return next;
@@ -292,17 +340,13 @@ const ensureOpenclawConfig = (
     }
   })();
 
-  const webhookPort = config.telegramRouter.webhookPort;
-  const privateWebhookPort = webhookPort + 1;
-  const webhookPath = config.telegramRouter.webhookPath;
-  const webhookHost = config.telegramRouter.webhookHost || "0.0.0.0";
-  const webhookSecret = deriveAssistantWebhookSecret(
+  const wp = buildWebhookParams(
+    config,
     assistantBotId,
     gatewayToken,
     appConfig.apiAuthToken,
+    "lan",
   );
-  const pluginPath = config.telegramRouter.pluginPath;
-  const webhookUrl = config.telegramRouter.webhookUrl.trim();
 
   const desired = buildAssistantOpenclawConfig(config, {
     gatewayToken,
@@ -312,13 +356,13 @@ const ensureOpenclawConfig = (
     liteLlmApiKey: liteLlmApiKey ?? null,
     includeTelegramPlugin: true,
     telegramWebhookMode: true,
-    telegramWebhookPort: webhookPort,
-    telegramPrivateWebhookPort: privateWebhookPort,
-    telegramWebhookPath: webhookPath,
-    telegramWebhookHost: webhookHost,
-    telegramWebhookSecret: webhookSecret,
-    ...(webhookUrl ? { telegramWebhookUrl: webhookUrl } : {}),
-    ...(pluginPath ? { telegramRouterPluginPath: pluginPath } : {}),
+    telegramWebhookPort: wp.webhookPort,
+    telegramPrivateWebhookPort: wp.privateWebhookPort,
+    telegramWebhookPath: wp.webhookPath,
+    telegramWebhookHost: wp.webhookHost,
+    telegramWebhookSecret: wp.webhookSecret,
+    ...(wp.webhookUrl ? { telegramWebhookUrl: wp.webhookUrl } : {}),
+    ...(wp.pluginPath ? { telegramRouterPluginPath: wp.pluginPath } : {}),
     controlOrigin: appConfig.publicBaseUrl,
     ...(skillsConfig ? { skillsConfig: toOpenclawSkillsPayload(skillsConfig) } : {}),
   });
@@ -348,9 +392,10 @@ const prepareDockerRuntime = (): void => {
   entries.forEach((entry) => {
     if (!entry.isDirectory()) return;
     if (!entry.name.startsWith("assistant-")) return;
-    const runtimeDataDir = path.join(dataDir, entry.name, "data");
-    if (!fs.existsSync(runtimeDataDir)) return;
-    sanitizeCronStore(runtimeDataDir);
+    // Cron store lives under .openclaw/ state dir
+    const stateDir = path.join(dataDir, entry.name, ".openclaw");
+    if (!fs.existsSync(stateDir)) return;
+    sanitizeCronStore(stateDir);
   });
 };
 
@@ -384,32 +429,34 @@ const waitForLocalPort = (
     tryConnect();
   });
 
+const waitForHttpProbe = async (
+  hostPort: number,
+  pathName: string,
+  timeoutMs: number,
+): Promise<boolean> => {
+  const startedAt = Date.now();
+  const targetPath = pathName.startsWith("/") ? pathName : `/${pathName}`;
+  const url = `http://127.0.0.1:${hostPort}${targetPath}`;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        signal: AbortSignal.timeout(1200),
+      });
+      // Any HTTP response means listener is up.
+      if (response.status >= 100 && response.status < 600) return true;
+    } catch {
+      // retry until timeout
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return false;
+};
+
 // ---------------------------------------------------------------------------
 // Internal: container resolution & state normalization
 // ---------------------------------------------------------------------------
-
-const resolveDockerContainer = async (
-  containerId: string | null | undefined,
-  fallbackName: string,
-): Promise<Docker.Container | null> => {
-  if (containerId) {
-    try {
-      const container = docker.getContainer(containerId);
-      await container.inspect();
-      return container;
-    } catch {
-      // fall through to fallback lookup
-    }
-  }
-
-  try {
-    const container = docker.getContainer(fallbackName);
-    await container.inspect();
-    return container;
-  } catch {
-    return null;
-  }
-};
 
 const normalizeDockerState = (status: string | undefined): ContainerState => {
   const s = (status || "").toLowerCase();
@@ -450,6 +497,7 @@ const inspectToContainerRef = async (
   metadata.privateWebhookHostPort = extractHostPort(
     `${webhookPort + 1}/tcp`,
   );
+  metadata.workspaceStatusHostPort = extractHostPort(`${PINAI_WORKSPACE_STATUS_PORT}/tcp`);
 
   return {
     id: inspect.Id,
@@ -507,23 +555,32 @@ export const dockerContainerRuntime: ContainerRuntime = {
     params: AssistantContainerParams,
   ): Promise<ContainerRef> {
     const dirs = getAssistantContainerDirs(params.assistantBotId);
-    ensureDir(dirs.configDir);
-    ensureDir(dirs.dataDir);
-    ensureDir(dirs.tmpDir);
-    ensureDir(dirs.workspaceDir);
+    ensureDir(dirs.openclawDir);
+    // Do NOT create workspace dir here — OpenClaw skips workspace init
+    // if the directory already exists. For hot volumes (workspace already
+    // has TOOLS.md), we write USER.md into the existing dir. For cold
+    // volumes, we let OpenClaw create the workspace, and the entrypoint's
+    // workspace_inject handles USER.md + TOOLS append afterward.
 
-    // Resolve LiteLLM key
     const liteLlmApiKey = params.liteLlmApiKey;
 
     ensureOpenclawConfig(
-      dirs.configDir,
+      dirs.openclawDir,
       params.assistantBotId,
       params.gatewayToken,
       params.assistantBotToken,
       liteLlmApiKey,
       params.skillsConfig,
     );
-    sanitizeCronStore(dirs.dataDir);
+    // Only write USER.md if workspace already exists (hot volume)
+    if (fs.existsSync(dirs.workspaceDir)) {
+      ensureWorkspaceUserProfile(
+        dirs.workspaceDir,
+        params.onboardingProfileText,
+        params.onboardingProfileSource,
+      );
+    }
+    sanitizeCronStore(dirs.openclawDir);
 
     const hostPort = params.containerPort
       ? String(params.containerPort)
@@ -537,21 +594,23 @@ export const dockerContainerRuntime: ContainerRuntime = {
     const privateWebhookHostPort = params.containerPort
       ? String(params.containerPort + 2)
       : "0";
+    const workspaceStatusHostPort = params.containerPort
+      ? String(params.containerPort + 3)
+      : "0";
 
     // TELEGRAM_ROUTER_URL: where the telegram-router-proxy plugin forwards
     // outbound Telegram API calls. In Docker, the APIs server runs on the host.
     const apisPort = Number.parseInt(process.env.PORT || "3000", 10);
     const telegramRouterUrl = `http://host.docker.internal:${apisPort}`;
-    const containerEnv: Record<string, string> = {
-      OPENCLAW_USER_ID: `assistant-${params.assistantBotId}`,
-      OPENCLAW_GATEWAY_PORT: String(config.openclaw.gatewayPort),
-      OPENCLAW_TELEGRAM_WEBHOOK_PORT: String(webhookPort),
-      OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT: String(privateWebhookPort),
-      OPENCLAW_CONFIG_PATH: "/app/config/openclaw.json",
-      OPENCLAW_STATE_DIR: "/app/data",
-      NODE_COMPILE_CACHE: "/app/data/cache/node-compile-cache",
-      TELEGRAM_ROUTER_URL: telegramRouterUrl,
-    };
+    const containerEnv: Record<string, string> = buildBaseContainerEnv(
+      config,
+      params.assistantBotId,
+      webhookPort,
+      privateWebhookPort,
+      telegramRouterUrl,
+      "/app/google/gws-credentials.json",
+    );
+    containerEnv[PINAI_GOOGLE_CREDENTIALS_B64_ENV] = (params.googleCredentialsB64 || "").trim();
     assertNoP0SecretsInEnv(containerEnv, config);
 
     const container = await docker.createContainer({
@@ -562,19 +621,19 @@ export const dockerContainerRuntime: ContainerRuntime = {
         [`${config.openclaw.gatewayPort}/tcp`]: {},
         [`${webhookPort}/tcp`]: {},
         [`${privateWebhookPort}/tcp`]: {},
+        [`${PINAI_WORKSPACE_STATUS_PORT}/tcp`]: {},
       },
       HostConfig: {
         RestartPolicy: { Name: "unless-stopped" },
+        ExtraHosts: ["host.docker.internal:host-gateway"],
         PortBindings: {
           [`${config.openclaw.gatewayPort}/tcp`]: [{ HostPort: hostPort }],
           [`${webhookPort}/tcp`]: [{ HostPort: webhookHostPort }],
           [`${privateWebhookPort}/tcp`]: [{ HostPort: privateWebhookHostPort }],
+          [`${PINAI_WORKSPACE_STATUS_PORT}/tcp`]: [{ HostPort: workspaceStatusHostPort }],
         },
         Binds: [
-          `${dirs.configDir}:/app/config`,
-          `${dirs.dataDir}:/app/data`,
-          `${dirs.tmpDir}:/tmp`,
-          `${dirs.workspaceDir}:/root/.openclaw/workspace`,
+          `${dirs.baseDir}:/app`,
         ],
         Memory: config.container.memoryMb * 1024 * 1024,
         CpuShares: config.container.cpuShares,
@@ -670,6 +729,29 @@ export const dockerContainerRuntime: ContainerRuntime = {
       if (!webhookReady) return false;
     }
 
+    if (Array.isArray(options.httpProbes) && options.httpProbes.length > 0) {
+      for (const probe of options.httpProbes) {
+        const containerPort = Number(probe.port);
+        const mappedHostPort =
+          containerPort === config.openclaw.gatewayPort
+            ? Number(ref.metadata.hostPort)
+            : containerPort === config.telegramRouter.webhookPort
+              ? Number(ref.metadata.webhookHostPort)
+              : containerPort === config.telegramRouter.webhookPort + 1
+                ? Number(ref.metadata.privateWebhookHostPort)
+                : containerPort === PINAI_WORKSPACE_STATUS_PORT
+                  ? Number(ref.metadata.workspaceStatusHostPort)
+                  : 0;
+        if (!mappedHostPort || mappedHostPort <= 0) return false;
+        const ok = await waitForHttpProbe(
+          mappedHostPort,
+          probe.path,
+          options.timeoutMs,
+        );
+        if (!ok) return false;
+      }
+    }
+
     return true;
   },
 
@@ -693,17 +775,8 @@ export const dockerContainerRuntime: ContainerRuntime = {
 
     const dirs = getAssistantContainerDirs(params.assistantBotId);
     const binds = inspect?.HostConfig?.Binds;
-    const expectedBinds: Array<{ target: string; source: string }> = [
-      { target: "/app/config", source: dirs.configDir },
-      { target: "/app/data", source: dirs.dataDir },
-      { target: "/tmp", source: dirs.tmpDir },
-      { target: "/root/.openclaw/workspace", source: dirs.workspaceDir },
-    ];
-    const needsBindMigration = expectedBinds.some(({ target, source }) => {
-      const mountedSource = findBindSource(binds, target);
-      return mountedSource !== source;
-    });
-    if (needsBindMigration) return true;
+    const mountedSource = findBindSource(binds, "/app");
+    if (mountedSource !== dirs.baseDir) return true;
 
     const legacyTelegramBotToken = findEnvValue(
       inspect?.Config?.Env,
@@ -722,6 +795,9 @@ export const dockerContainerRuntime: ContainerRuntime = {
     if (!exposedPorts[`${webhookPort}/tcp`]) {
       return true;
     }
+    if (!exposedPorts[`${PINAI_WORKSPACE_STATUS_PORT}/tcp`]) {
+      return true;
+    }
 
     const needsSecretEnvPrune = DOCKER_FORBIDDEN_SECRET_ENV_KEYS.some((key) =>
       hasEnvKey(inspect?.Config?.Env, key),
@@ -731,21 +807,24 @@ export const dockerContainerRuntime: ContainerRuntime = {
     // Write updated config and check if restart is needed
     const liteLlmApiKey = params.liteLlmApiKey;
     const { changed } = ensureOpenclawConfig(
-      dirs.configDir,
+      dirs.openclawDir,
       params.assistantBotId,
       params.gatewayToken,
       params.assistantBotToken,
       liteLlmApiKey,
       params.skillsConfig,
     );
+    const profileChanged = ensureWorkspaceUserProfile(
+      dirs.workspaceDir,
+      params.onboardingProfileText,
+      params.onboardingProfileSource,
+    );
 
-    // Config change doesn't need recreation — just a restart (handled by orchestrator)
-    // But we sanitize cron store as a side effect
-    sanitizeCronStore(dirs.dataDir);
+    sanitizeCronStore(dirs.openclawDir);
 
     // If config changed and container is running, orchestrator should restart
     // We return false because recreation (destroy+create) is not needed
-    if (changed) {
+    if (changed || profileChanged) {
       // Restart the running container to pick up config changes
       if (inspect.State?.Status === "running") {
         await container.restart();

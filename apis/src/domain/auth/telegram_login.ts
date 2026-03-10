@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import type { CookieOptions, Request } from 'express';
 import { config } from '../common/config.js';
 import { createGatewaySession, getUserByTelegramId } from '../common/db/index.js';
+import { setLogContextTelegramIdentity } from '../common/requestLogContext.js';
 
 const GATEWAY_SESSION_TTL_HOURS = 12;
 const TELEGRAM_AUTH_MAX_AGE_SECONDS = 10 * 60;
@@ -147,6 +148,12 @@ export const startGatewayTelegramAuth = async (req: Request): Promise<StartGatew
       message: '用户不存在。请先在 Telegram 使用 /start 初始化账号。'
     };
   }
+  setLogContextTelegramIdentity(user.telegram_user_id, user.telegram_username);
+  console.info('[auth:resolved]', {
+    source: 'gateway_login_start',
+    telegram_user_id: user.telegram_user_id,
+    telegram_username: user.telegram_username ?? null
+  });
 
   const botUsername = config.telegram.botUsername;
   if (!botUsername) {
@@ -189,6 +196,12 @@ export const completeGatewayTelegramAuth = async (req: Request): Promise<Complet
       message: '用户不存在。请先在 Telegram 使用 /start 初始化账号。'
     };
   }
+  setLogContextTelegramIdentity(user.telegram_user_id, user.telegram_username);
+  console.info('[auth:resolved]', {
+    source: 'gateway_login_callback',
+    telegram_user_id: user.telegram_user_id,
+    telegram_username: user.telegram_username ?? null
+  });
 
   const verification = verifyTelegramLogin(req);
   if (!verification.ok) {
