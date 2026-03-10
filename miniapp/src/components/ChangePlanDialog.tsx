@@ -10,6 +10,8 @@ interface ChangePlanDialogProps {
   onClose: () => void;
   plans: Plan[];
   currentPlanId: string | null;
+  cancelAtPeriodEnd: boolean;
+  currentPeriodEnd: string | null;
   selectedPlan: string | null;
   onSelectPlan: (planId: string) => void;
   onCheckout: () => void;
@@ -19,7 +21,7 @@ interface ChangePlanDialogProps {
 
 const ChangePlanDialog = ({
   open, onClose, plans, currentPlanId, selectedPlan,
-  onSelectPlan, onCheckout, onCancel, busy,
+  cancelAtPeriodEnd, currentPeriodEnd, onSelectPlan, onCheckout, onCancel, busy,
 }: ChangePlanDialogProps) => {
   if (!open) return null;
 
@@ -93,6 +95,12 @@ const ChangePlanDialog = ({
         </div>
 
         <div className="space-y-2.5">
+          {cancelAtPeriodEnd && (
+            <div className="rounded-xl bg-amber-50 px-4 py-3 text-xs text-amber-800">
+              Renewal already canceled.
+              {currentPeriodEnd ? ` Service stays active until ${new Date(currentPeriodEnd).toLocaleDateString()}.` : ""}
+            </div>
+          )}
           <button
             className="w-full rounded-xl btn-dark px-4 py-3.5 text-sm font-bold shadow-lg btn-press disabled:opacity-50"
             onClick={onCheckout}
@@ -104,9 +112,9 @@ const ChangePlanDialog = ({
             <button
               className="w-full rounded-xl bg-gray-100 text-gray-600 px-4 py-3 text-sm font-medium btn-press disabled:opacity-50"
               onClick={onCancel}
-              disabled={busy !== "none"}
+              disabled={busy !== "none" || cancelAtPeriodEnd}
             >
-              {busy === "cancel" ? "Processing..." : "Cancel Renewal"}
+              {busy === "cancel" ? "Processing..." : cancelAtPeriodEnd ? "Renewal Canceled" : "Cancel Renewal"}
             </button>
           )}
         </div>

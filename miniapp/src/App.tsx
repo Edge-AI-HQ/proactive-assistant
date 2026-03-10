@@ -322,15 +322,42 @@ const App = () => {
     }
     setBusy("cancel");
     try {
-      await safeFetch("/api/mini/cancel-subscription", {
+      const result = await safeFetch<{
+        ok: true;
+        status: string;
+        cancel_at_period_end: true;
+        current_period_end: string;
+        already_scheduled?: boolean;
+      }>("/api/mini/cancel-subscription", {
         method: "POST",
         body: JSON.stringify({}),
       });
-      showToast("Renewal canceled. Service remains active until period end.", "success");
+      setState((prev) => prev ? {
+        ...prev,
+        subscription: {
+          ...prev.subscription,
+          status: result.status,
+          cancel_at_period_end: true,
+          current_period_end: result.current_period_end,
+        },
+      } : prev);
+      showToast(
+        result.already_scheduled
+          ? "Renewal was already canceled. Service remains active until period end."
+          : "Renewal canceled. Service remains active until period end.",
+        "success",
+      );
       await loadState();
+    } finally {
+      setBusy("none");
+    }
+  };
+
+  const handleCancelSubscription = async () => {
+    try {
+      await cancelSubscription();
     } catch (e) {
       showToast(`Cancel failed: ${e instanceof Error ? e.message : "unknown"}`);
-      setBusy("none");
     }
   };
 
@@ -588,10 +615,12 @@ const App = () => {
           onClose={() => setShowChangePlan(false)}
           plans={state.plans ?? []}
           currentPlanId={state.subscription.plan_id}
+          cancelAtPeriodEnd={state.subscription.cancel_at_period_end}
+          currentPeriodEnd={state.subscription.current_period_end}
           selectedPlan={selectedPlan}
           onSelectPlan={setSelectedPlan}
           onCheckout={checkout}
-          onCancel={cancelSubscription}
+          onCancel={handleCancelSubscription}
           busy={busy}
         />
 

@@ -60,6 +60,23 @@ const readInvoicePriceId = (invoice: Stripe.Invoice): string | null => {
   return null;
 };
 
+export const isCancellationScheduledButServiceStillActive = (input: {
+  cancel_at_period_end?: boolean | null;
+  currentPeriodEnd?: string | Date | null;
+  now?: Date;
+}): boolean => {
+  if (input.cancel_at_period_end !== true) return false;
+  if (!input.currentPeriodEnd) return false;
+
+  const periodEnd =
+    input.currentPeriodEnd instanceof Date
+      ? input.currentPeriodEnd
+      : new Date(input.currentPeriodEnd);
+  if (!Number.isFinite(periodEnd.getTime())) return false;
+
+  return periodEnd.getTime() > (input.now ?? new Date()).getTime();
+};
+
 const resolvePlanCodeFromSubscription = async (
   subscription: Stripe.Subscription,
 ): Promise<string | null> => {
@@ -363,6 +380,12 @@ export async function syncSubscriptionFromStripe(
   const isCancellationEvent =
     typeof subscription.cancel_at_period_end === "boolean" &&
     subscription.cancel_at_period_end === true;
+  const isScheduledCancellationStillActive =
+    currentPeriod !== null &&
+    isCancellationScheduledButServiceStillActive({
+      cancel_at_period_end: subscription.cancel_at_period_end,
+      currentPeriodEnd: currentPeriod.current_period_end,
+    });
 
   if (shouldProvideService && !isCancellationEvent) {
     // Sync budget before starting containers — Stripe events can arrive out of order,
@@ -395,6 +418,18 @@ export async function syncSubscriptionFromStripe(
       {
         telegramUserId: telegram_user_id,
         subscriptionId: subscription.id,
+      },
+    );
+    return;
+  }
+
+  if (isScheduledCancellationStillActive) {
+    console.log(
+      "[payment] subscription sync: keep service active until current period ends",
+      {
+        telegramUserId: telegram_user_id,
+        subscriptionId: subscription.id,
+        currentPeriodEnd: currentPeriod.current_period_end,
       },
     );
     return;

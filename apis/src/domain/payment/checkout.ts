@@ -596,6 +596,7 @@ export const cancelStripeSubscription = async (
   status: "active" | "paused" | "canceled" | "pending";
   cancel_at_period_end: true;
   current_period_end: string;
+  already_scheduled?: boolean;
 }> => {
   const stripe = requireStripe();
   const telegramUserId = parseTelegramUserId(telegramUserIdRaw);
@@ -615,24 +616,53 @@ export const cancelStripeSubscription = async (
     throw new DomainError("NOT_FOUND", "Active subscription not found");
   }
 
+  if (
+    subscription.cancel_at_period_end &&
+    typeof subscription.current_period_end === "string" &&
+    subscription.current_period_end
+  ) {
+    console.log("[payment] cancel_subscription:already_scheduled", {
+      telegram_user_id: telegramUserId,
+      stripe_subscription_id: subscription.stripe_subscription_id,
+      current_period_end: subscription.current_period_end,
+    });
+    return {
+      ok: true,
+      status: mapStripeSubscriptionStatus(
+        subscription.status as Stripe.Subscription.Status,
+      ),
+      cancel_at_period_end: true,
+      current_period_end: subscription.current_period_end,
+      already_scheduled: true,
+    };
+  }
+
   const updated = await stripe.subscriptions.update(
     subscription.stripe_subscription_id,
     {
       cancel_at_period_end: true,
     },
   );
+
+  const currentPeriodEnd = new Date(
+    updated.current_period_end * 1000,
+  ).toISOString();
+  await db.updateSubscriptionCancelFlag(
+    subscription.stripe_subscription_id,
+    true,
+    updated.status,
+  );
+
   console.log("[payment] cancel_subscription:ok", {
     telegram_user_id: telegramUserId,
     stripe_subscription_id: subscription.stripe_subscription_id,
-    current_period_end: new Date(updated.current_period_end * 1000).toISOString(),
+    current_period_end: currentPeriodEnd,
   });
 
   return {
     ok: true,
     status: mapStripeSubscriptionStatus(updated.status),
     cancel_at_period_end: true,
-    current_period_end: new Date(
-      updated.current_period_end * 1000,
-    ).toISOString(),
+    current_period_end: currentPeriodEnd,
   };
 };
