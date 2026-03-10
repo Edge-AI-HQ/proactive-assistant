@@ -129,6 +129,10 @@ test("buildAssistantOpenclawConfig enforces full tools defaults for new agents",
   assert.equal(openclaw.tools?.profile, "full");
   assert.equal(openclaw.commands?.config, true);
   assert.equal(openclaw.cron?.enabled, true);
+  const gatewayAuthMode = (
+    openclaw as { gateway?: { auth?: { mode?: string } } }
+  ).gateway?.auth?.mode;
+  assert.equal(gatewayAuthMode, "none");
   const trustedProxies = (openclaw as { gateway?: { trustedProxies?: unknown } })
     .gateway?.trustedProxies as string[] | undefined;
   assert.ok(Array.isArray(trustedProxies));

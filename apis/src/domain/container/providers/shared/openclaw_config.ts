@@ -32,6 +32,13 @@ export const buildGatewayConfigSection = (
   bind: GatewayBindMode,
   controlOrigin?: string,
 ): UnknownRecord => {
+  const normalizedGatewayToken = gatewayToken.trim();
+  if (!normalizedGatewayToken) {
+    throw new Error(
+      "gateway_token is required to start OpenClaw gateway with token auth.",
+    );
+  }
+
   const controlUi: UnknownRecord = {
     allowInsecureAuth: true,
     // Disable device-identity / pairing checks — our APIs layer already
@@ -66,15 +73,20 @@ export const buildGatewayConfigSection = (
         ]
       : ["0.0.0.0/0"];
 
+  const auth =
+    bind === "loopback"
+      ? { mode: "none" as const }
+      : {
+          mode: "token" as const,
+          token: normalizedGatewayToken,
+        };
+
   return {
     mode: "local",
     port: context.openclaw.gatewayPort,
     bind,
     trustedProxies,
-    auth: {
-      mode: "token",
-      token: gatewayToken,
-    },
+    auth,
     controlUi,
     http: {
       endpoints: {
