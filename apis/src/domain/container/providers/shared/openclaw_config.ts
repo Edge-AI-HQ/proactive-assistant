@@ -90,7 +90,13 @@ export const buildGatewayConfigSection = (
   // For LAN bindings, use token auth with the gateway token.
   const auth =
     bind === "loopback"
-      ? { mode: "trusted-proxy" as const }
+      ? {
+          mode: "trusted-proxy" as const,
+          trustedProxy: {
+            headers: ["x-forwarded-for", "x-real-ip"],
+            allowLoopback: true,
+          },
+        }
       : {
           mode: "token" as const,
           token: normalizedGatewayToken,
