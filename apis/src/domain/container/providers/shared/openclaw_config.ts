@@ -85,17 +85,13 @@ export const buildGatewayConfigSection = (
         ]
       : ["0.0.0.0/0"];
 
-  // Assistant machines run the gateway on loopback only. Keep loopback
-  // auth disabled so owner-only tools (for example cron) can call the
-  // local gateway without triggering pairing/auth flows. LAN bindings
-  // still require token auth.
-  const auth =
-    bind === "loopback"
-      ? { mode: "none" as const }
-      : {
-          mode: "token" as const,
-          token: normalizedGatewayToken,
-        };
+  // Keep token auth for both loopback and LAN gateways.
+  // OpenClaw backend clients (RPC/cron/tool calls) can then use shared-auth
+  // local bypass paths instead of hitting pairing gates on role upgrades.
+  const auth = {
+    mode: "token" as const,
+    token: normalizedGatewayToken,
+  };
 
   return {
     mode: "local",

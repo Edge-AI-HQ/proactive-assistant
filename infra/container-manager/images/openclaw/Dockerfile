@@ -16,7 +16,7 @@ RUN npm config set fetch-retries 5 \
     && npm config set fetch-retry-maxtimeout 120000 \
     && npm config set registry https://registry.npmmirror.com \
     && for attempt in 1 2 3 4 5; do \
-        npm install -g openclaw@2026.2.26 @googleworkspace/cli && exit 0; \
+        npm install -g openclaw@2026.3.8 @googleworkspace/cli && exit 0; \
         echo "npm install failed on attempt ${attempt}, retrying..." >&2; \
         sleep $((attempt * 10)); \
       done; \
