@@ -51,6 +51,7 @@ const FLY_CREATE_RETRIES = 8;
 interface AssistantMachineCreateArgs {
   assistantBotId: number;
   machineName: string;
+  ownerTelegramUserId: string | null;
   gatewayToken: string;
   assistantBotToken?: string | null;
   googleCredentialsB64?: string | null;
@@ -112,6 +113,7 @@ const buildOnboardingProfilePayload = (
 const buildAssistantOpenclawConfigPayload = (
   assistantBotId: number,
   gatewayToken: string,
+  ownerTelegramUserId: string | null,
   assistantBotToken: string,
   liteLlmApiKey: string | null,
   skillsConfig?: UnknownRecord | null,
@@ -137,6 +139,7 @@ const buildAssistantOpenclawConfigPayload = (
   const built = buildAssistantOpenclawConfig(openclawConfigContext, {
     gatewayToken,
     gatewayBind: "loopback",
+    ownerTelegramUserId,
     assistantBotToken,
     quickStartSyntheticBotToken: QUICKSTART_SYNTHETIC_BOT_TOKEN,
     liteLlmApiKey,
@@ -330,6 +333,7 @@ export const getLatestAppDeployTimestampMs = async (): Promise<
 export const shouldRecreateAssistantMachine = (
   machine: FlyMachine,
   desiredGatewayToken: string,
+  desiredOwnerTelegramUserId: string | null,
   desiredAssistantBotToken?: string | null,
   desiredLiteLLMApiKey?: string | null,
   desiredOnboardingProfileText?: string | null,
@@ -361,6 +365,7 @@ export const shouldRecreateAssistantMachine = (
   const desiredConfigHash = buildAssistantOpenclawConfigPayload(
     Number(machine.name?.replace(/^assistant-/, "") || 0),
     desiredGatewayToken,
+    desiredOwnerTelegramUserId,
     desiredToken,
     desiredLiteLLMApiKey || null,
     desiredSkillsConfig,
@@ -427,6 +432,7 @@ export const createAssistantMachine = async (
   const openclawPayload = buildAssistantOpenclawConfigPayload(
     args.assistantBotId,
     args.gatewayToken,
+    args.ownerTelegramUserId,
     normalizedAssistantBotToken,
     args.liteLlmApiKey,
     args.skillsConfig,

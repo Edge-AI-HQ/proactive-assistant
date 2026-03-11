@@ -26,6 +26,14 @@ type TelegramWebhookConfig = {
   port?: number;
 };
 
+const buildOwnerAllowFrom = (
+  ownerTelegramUserId?: string | null,
+): string[] | undefined => {
+  const normalized = (ownerTelegramUserId || "").trim();
+  if (!normalized) return undefined;
+  return [normalized];
+};
+
 export const buildGatewayConfigSection = (
   context: OpenclawConfigContext,
   gatewayToken: string,
@@ -195,6 +203,7 @@ export const buildLiteLLMModelsSection = (
 interface BuildAssistantOpenclawConfigOptions {
   gatewayToken: string;
   gatewayBind: GatewayBindMode;
+  ownerTelegramUserId?: string | null;
   assistantBotToken?: string | null;
   quickStartSyntheticBotToken?: string | null;
   liteLlmApiKey?: string | null;
@@ -454,7 +463,7 @@ export const buildAssistantOpenclawConfig = (
   };
 
   // Enable all commands, including runtime config edits via /config
-  next.commands = {
+  const commands: UnknownRecord = {
     native: true,
     text: true,
     bash: true,
@@ -462,6 +471,11 @@ export const buildAssistantOpenclawConfig = (
     debug: true,
     restart: true,
   };
+  const ownerAllowFrom = buildOwnerAllowFrom(options.ownerTelegramUserId);
+  if (ownerAllowFrom?.length) {
+    commands.ownerAllowFrom = ownerAllowFrom;
+  }
+  next.commands = commands;
 
   // Enable browser capability
   next.browser = {

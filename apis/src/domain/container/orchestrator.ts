@@ -500,6 +500,10 @@ export class ContainerOrchestrator {
     return {
       assistantBotId: botIdForContainer,
       assistantId: assistant.id,
+      ownerTelegramUserId:
+        assistant.owner_telegram_user_id != null
+          ? String(assistant.owner_telegram_user_id)
+          : null,
       containerName,
       gatewayToken,
       assistantBotToken: assistant.assistant_bot_token ?? null,

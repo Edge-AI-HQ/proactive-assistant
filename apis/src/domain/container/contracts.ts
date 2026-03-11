@@ -99,6 +99,7 @@ export interface ContainerRef {
 export interface AssistantContainerParams {
   assistantBotId: number;
   assistantId: number;
+  ownerTelegramUserId: string | null;
   containerName: string;
   gatewayToken: string;
   assistantBotToken: string | null;

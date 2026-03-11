@@ -113,6 +113,7 @@ test("buildAssistantOpenclawConfig enforces full tools defaults", () => {
   const openclaw = buildAssistantOpenclawConfig(context, {
     gatewayToken: "user-gateway-token",
     gatewayBind: "loopback",
+    ownerTelegramUserId: "123456789",
     assistantBotToken: "assistant-bot-token",
     telegramWebhookMode: true,
     telegramWebhookUrl: context.telegramRouter.webhookUrl,
@@ -129,6 +130,11 @@ test("buildAssistantOpenclawConfig enforces full tools defaults", () => {
   assert.equal(openclaw.tools?.profile, "full");
   assert.equal(openclaw.commands?.config, true);
   assert.equal(openclaw.cron?.enabled, true);
+  assert.deepEqual(
+    (openclaw.commands as { ownerAllowFrom?: string[] } | undefined)
+      ?.ownerAllowFrom,
+    ["123456789"],
+  );
   const gatewayAuthMode = (
     openclaw as { gateway?: { auth?: { mode?: string } } }
   ).gateway?.auth?.mode;
