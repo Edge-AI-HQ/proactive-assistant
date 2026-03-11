@@ -85,12 +85,11 @@ export const buildGatewayConfigSection = (
         ]
       : ["0.0.0.0/0"];
 
-  // OpenClaw 2026.3.8 only bypasses backend self-pairing for local-direct
-  // gateway-client connections when shared-secret auth succeeds. Loopback
-  // assistants therefore must keep token auth enabled; auth.mode=none
-  // breaks cron/reminder calls by disabling the shared-auth path.
-  // Backend clients (RPC/cron/tool calls) use shared-auth local bypass paths
-  // to avoid hitting pairing gates on role upgrades.
+  // Always use token auth. Agent reads token from OPENCLAW_GATEWAY_TOKEN env var.
+  // Combined with disabled device identity (deleted in entrypoint.sh), this allows:
+  // - sharedAuthOk = true (token auth succeeds)
+  // - hasDeviceIdentity = false (no device files)
+  // - roleCanSkipDeviceIdentity(operator, true) → allow
   const auth = {
     mode: "token" as const,
     token: normalizedGatewayToken,
