@@ -456,6 +456,18 @@ export const buildAssistantOpenclawConfig = (
     loopDetection: { enabled: false },
   };
 
+  const existingAgents = (next.agents || {}) as UnknownRecord;
+  const existingAgentDefaults = (existingAgents.defaults || {}) as UnknownRecord;
+  next.agents = {
+    ...existingAgents,
+    defaults: {
+      ...existingAgentDefaults,
+      tools: {
+        profile: "full",
+      },
+    },
+  };
+
   // Enable all commands, including runtime config edits via /config
   next.commands = {
     native: true,
