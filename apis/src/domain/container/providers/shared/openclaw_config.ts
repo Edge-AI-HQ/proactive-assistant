@@ -85,18 +85,12 @@ export const buildGatewayConfigSection = (
         ]
       : ["0.0.0.0/0"];
 
-  // Use trusted-proxy mode for loopback bindings to bypass device pairing.
-  // All connections from localhost are trusted (agent, cron, tools).
-  // For LAN bindings, use token auth with the gateway token.
+  // Use no auth for loopback bindings - all localhost connections are trusted.
+  // Agent, cron, and tools run in the same container and don't need authentication.
+  // For LAN bindings, use token auth for security.
   const auth =
     bind === "loopback"
-      ? {
-          mode: "trusted-proxy" as const,
-          trustedProxy: {
-            headers: ["x-forwarded-for", "x-real-ip"],
-            allowLoopback: true,
-          },
-        }
+      ? { mode: "none" as const }
       : {
           mode: "token" as const,
           token: normalizedGatewayToken,
