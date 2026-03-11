@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type ModelItem = {
   id: string;
@@ -54,6 +54,15 @@ const ManageAgentDialog = ({
   const [showGoogleDisconnectConfirm, setShowGoogleDisconnectConfirm] = useState(false);
   const [showRepairConfirm, setShowRepairConfirm] = useState(false);
   const [showModelPicker, setShowModelPicker] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setShowDeleteConfirm(false);
+      setShowGoogleDisconnectConfirm(false);
+      setShowRepairConfirm(false);
+      setShowModelPicker(false);
+    }
+  }, [open]);
 
   if (!open) return null;
 

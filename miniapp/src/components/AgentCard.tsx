@@ -9,6 +9,7 @@ interface AgentCardProps {
   username: string | null;
   status: string;
   planId: string | null;
+  skillsCount: number;
   active: boolean;
   manageOpen: boolean;
   google?: {
@@ -51,10 +52,17 @@ const getStatusDisplay = (status: string): { text: string; color: string } => {
   }
 };
 
+const formatModelName = (modelRef: string | null | undefined): string => {
+  if (!modelRef) return "Default";
+  const tail = modelRef.split("/").pop() || modelRef;
+  return tail.length > 12 ? `${tail.slice(0, 12)}...` : tail;
+};
+
 const AgentCard = ({
   username,
   status,
   planId,
+  skillsCount,
   active,
   manageOpen,
   google,
@@ -73,7 +81,9 @@ const AgentCard = ({
   onChangeModel,
   onLoadModels,
 }: AgentCardProps) => {
+  const handle = username ? `@${username}` : "@PINClaw_AI_bot";
   const statusDisplay = getStatusDisplay(status);
+  const modelName = formatModelName(models?.current);
 
   const handleChat = () => {
     // Close the mini app — returns user to Telegram where they can chat with the bot
@@ -86,70 +96,84 @@ const AgentCard = ({
 
   return (
     <>
-      <div className={`rounded-2xl p-5 transition-all animate-fade-in ${active ? "bg-white/45 backdrop-blur-xl border border-white/60 shadow-[inset_0_1px_1px_hsl(0_0%_100%/0.5),0_4px_24px_-4px_hsl(270_30%_60%/0.1)]" : "bg-card shadow-sm"}`}>
-        <div className="flex items-start gap-4">
-          <div className="relative shrink-0">
-            <div className="avatar-ring-glow" style={{ width: 56, height: 56 }}>
-              <img
-                src="/mini/avatar-pinai.png"
-                alt="PIN AI"
-                className="w-[52px] h-[52px] rounded-full object-cover shadow-md"
-              />
-            </div>
+      <div className="relative pt-14 animate-fade-in">
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 z-10">
+          <div className="avatar-ring-glow" style={{ width: 100, height: 100 }}>
+            <img
+              src="/mini/avatar-pinai.png"
+              alt="PIN Claw"
+              className="w-[96px] h-[96px] rounded-full object-cover shadow-md bg-white"
+            />
           </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-0.5">
-              <h3 className="text-base font-semibold text-foreground">PIN AI</h3>
-              {active && (
-                <span className="flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full status-active-dot animate-pulse-soft" />
-                  <span className="text-[10px] status-active-text font-medium">Active 24/7</span>
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-muted-foreground mb-1">All-in-One AI Assistant</p>
-            {username && (
-              <p className="text-xs text-foreground/70 font-medium">@{username}</p>
+        </div>
+
+        <div
+          className={`rounded-3xl p-6 pt-16 transition-all ${
+            active ? "glass-card-home" : "bg-card border border-border/40 shadow-sm"
+          }`}
+        >
+          <div className="flex flex-col items-center text-center mb-5">
+            <h3 className="text-2xl font-bold text-foreground">PIN Claw</h3>
+            {active && (
+              <span className="flex items-center justify-center gap-1.5 mt-1">
+                <span className="w-2.5 h-2.5 rounded-full status-active-dot animate-active-breathe" />
+                <span className="text-sm font-semibold status-active-text">Active</span>
+              </span>
             )}
+            <p className="text-base font-medium text-foreground/70 mt-1">All-in-One AI Assistant</p>
+            <p className="text-sm font-semibold mt-0.5 text-primary">{handle}</p>
           </div>
-          {/* Plan Badge */}
-          <div className="shrink-0 rounded-xl bg-secondary px-3 py-1.5 text-center">
-            <p className="text-[10px] text-muted-foreground font-medium">Plan</p>
-            <p className="text-xs font-semibold text-foreground">{planId || "Free"}</p>
-          </div>
-        </div>
 
-        {/* Status */}
-        <div className="mt-4 mb-4 glass-stat-box rounded-xl px-4 py-3">
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-muted-foreground">Status</span>
-            <span className={`text-xs font-semibold ${statusDisplay.color}`}>
-              {statusDisplay.text}
-            </span>
-          </div>
-        </div>
+          <button
+            type="button"
+            onClick={onChangePlan}
+            className="w-full rounded-xl px-4 py-2.5 flex items-center justify-between glass-stat-box mb-4 text-left btn-press hover:bg-white/40 transition-colors"
+          >
+            <span className="text-xs text-muted-foreground font-medium">Current Plan</span>
+            <span className="text-sm font-semibold text-foreground">{planId || "Free"}</span>
+          </button>
 
-        {/* Action buttons */}
-        <div className="flex gap-2.5">
-          <button
-            onClick={handleChat}
-            className="flex-1 flex items-center justify-center gap-1.5 btn-dark rounded-xl py-2.5 text-sm font-semibold btn-press shadow-md"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-            </svg>
-            Chat
-          </button>
-          <button
-            onClick={onOpenManage}
-            className="flex-1 flex items-center justify-center gap-1.5 bg-secondary text-foreground rounded-xl py-2.5 text-sm font-semibold btn-press hover:bg-secondary/80 transition-colors"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-            Manage
-          </button>
+          <div className="flex items-center gap-2.5 mb-5">
+            <div className="flex-1 rounded-xl px-2 py-3.5 text-center glass-stat-box">
+              <p className="text-[10px] text-muted-foreground whitespace-nowrap">Status</p>
+              <p className={`text-sm font-bold whitespace-nowrap ${statusDisplay.color}`}>{statusDisplay.text}</p>
+            </div>
+            <div className="flex-1 rounded-xl px-2 py-3.5 text-center glass-stat-box">
+              <p className="text-[10px] text-muted-foreground whitespace-nowrap">Skills</p>
+              <p className="text-xl font-bold text-foreground">{skillsCount}</p>
+            </div>
+            <div className="flex-1 rounded-xl px-2 py-3.5 text-center glass-stat-box">
+              <p className="text-[10px] text-muted-foreground whitespace-nowrap">Model</p>
+              <p className="text-sm font-bold text-foreground whitespace-nowrap">{modelName}</p>
+            </div>
+          </div>
+
+          <div className="space-y-2.5">
+            <button
+              onClick={handleChat}
+              className="w-full flex items-center justify-center gap-2 rounded-2xl py-3.5 text-sm font-semibold text-white btn-press bg-foreground shadow-lg"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+              </svg>
+              Chat with PIN Claw
+            </button>
+            <button
+              onClick={onOpenManage}
+              className="w-full flex items-center justify-center gap-2 rounded-2xl py-3 text-sm font-medium text-foreground btn-press glass-stat-box hover:bg-white/40 transition-colors"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+                />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              Manage Agent
+            </button>
+          </div>
         </div>
       </div>
 
