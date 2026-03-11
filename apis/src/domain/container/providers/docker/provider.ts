@@ -586,9 +586,11 @@ export const dockerContainerRuntime: ContainerRuntime = {
       : "0";
 
     // TELEGRAM_ROUTER_URL: where the telegram-router-proxy plugin forwards
-    // outbound Telegram API calls. In Docker, the APIs server runs on the host.
-    const apisPort = Number.parseInt(process.env.PORT || "3000", 10);
-    const telegramRouterUrl = `http://host.docker.internal:${apisPort}`;
+    // outbound Telegram API calls.  Mirrors the Fly provider logic:
+    // prefer telegramRouter.webhookUrl, fall back to PUBLIC_BASE_URL.
+    const telegramRouterUrl = appConfig.telegramRouter.webhookUrl
+      ? new URL(appConfig.telegramRouter.webhookUrl).origin
+      : appConfig.publicBaseUrl;
     const containerEnv: Record<string, string> = buildBaseContainerEnv(
       config,
       params.assistantBotId,
@@ -597,6 +599,7 @@ export const dockerContainerRuntime: ContainerRuntime = {
       telegramRouterUrl,
       "/app/google/gws-credentials.json",
       liteLlmApiKey,
+      params.gatewayToken,
     );
     containerEnv[PINAI_GOOGLE_CREDENTIALS_B64_ENV] = (params.googleCredentialsB64 || "").trim();
     assertNoP0SecretsInEnv(containerEnv, config);

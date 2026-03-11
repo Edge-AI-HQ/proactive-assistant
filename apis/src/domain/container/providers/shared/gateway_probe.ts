@@ -1,6 +1,11 @@
 import net from "node:net";
 import WebSocket from "ws";
 import type { ProbeOptions } from "../../contracts.js";
+import {
+  GATEWAY_CLIENT_ID,
+  GATEWAY_CLIENT_ROLE,
+  GATEWAY_CLIENT_SCOPES,
+} from "../../../gateway/device_identity.js";
 
 // ---------------------------------------------------------------------------
 // Shared gateway probe utilities
@@ -86,9 +91,14 @@ const probeGatewayHelloOnce = (
 ): Promise<boolean> =>
   new Promise((resolve) => {
     const wsUrl = `ws://${formatHostForUrl(host)}:${port}`;
+    const httpOrigin = `http://${formatHostForUrl(host)}:${port}`;
     const ws = new WebSocket(wsUrl, {
       maxPayload: 2 * 1024 * 1024,
-      ...(hostOverride ? { headers: { Host: hostOverride } } : {}),
+      headers: {
+        ...(hostOverride ? { Host: hostOverride } : {}),
+        "X-Forwarded-For": "127.0.0.1",
+        Origin: httpOrigin,
+      },
     });
     let settled = false;
     let sent = false;
@@ -112,14 +122,14 @@ const probeGatewayHelloOnce = (
         minProtocol: 3,
         maxProtocol: 3,
         client: {
-          id: "gateway-client",
+          id: GATEWAY_CLIENT_ID,
           version: "dev",
           platform: process.platform,
           mode: "backend",
           instanceId: "pinai-gateway-probe",
         },
-        role: "operator",
-        scopes: ["operator.admin"],
+        role: GATEWAY_CLIENT_ROLE,
+        scopes: GATEWAY_CLIENT_SCOPES,
         caps: ["tool-events"],
         commands: [],
         permissions: {},
@@ -186,11 +196,6 @@ export const waitForGatewayHello = async (
   while (Date.now() - startedAt < timeoutMs) {
     const ok = await probeGatewayHelloOnce(host, port, token, hostOverride);
     if (ok) return true;
-    // Compatibility fallback for loopback gateways running auth.mode=none.
-    if (token) {
-      const okWithoutAuth = await probeGatewayHelloOnce(host, port, "", hostOverride);
-      if (okWithoutAuth) return true;
-    }
     await sleep(1000);
   }
   return false;

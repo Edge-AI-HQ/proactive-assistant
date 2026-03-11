@@ -40,6 +40,7 @@ import {
 import { readPaymentPublicBaseUrl } from "../domain/payment/publicBaseUrl.js";
 import {
   buildOpenclawAuthHeaders,
+  buildGatewayLocalHeaders,
   resolveAssistantGatewayTarget,
   rewriteGatewayProxyRequestUrl,
 } from "../domain/gateway/proxy_orchestrator.js";
@@ -48,6 +49,7 @@ import {
   getCurrentModel,
   setCurrentModel,
 } from "../domain/gateway/gateway_rpc.js";
+import { relayGatewayWs } from "../domain/gateway/gateway_ws_relay.js";
 import { createGatewaySessionByBody } from "../domain/gateway/session_api.js";
 import {
   buildSkillViewList,
@@ -1735,6 +1737,7 @@ export const createDashboardRouter = (): Router => {
         headers: {
           ...buildOpenclawAuthHeaders(user.gateway_token),
           ...gatewayHostHeaders(target),
+          ...buildGatewayLocalHeaders(target),
         },
       });
     },
@@ -1821,14 +1824,7 @@ export const registerDashboardWsRoutes = (server: Server): void => {
         return;
       }
 
-      proxy.ws(req, socket, head, {
-        target: target.wsBaseUrl,
-        changeOrigin: false,
-        headers: {
-          ...buildOpenclawAuthHeaders(user.gateway_token),
-          ...gatewayHostHeaders(target),
-        },
-      });
+      relayGatewayWs(req, socket, head, target, user.gateway_token);
     })().catch((error: unknown) => {
       console.error("Assistant dashboard WS upgrade error", error);
       rejectUpgrade(socket, "500 Internal Server Error");

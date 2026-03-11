@@ -64,12 +64,12 @@ export const buildGatewayConfigSection = (
     controlUi.allowedOrigins = [controlOrigin];
   }
 
-  // Non-loopback (LAN) binding requires explicit origin policy for Control UI.
-  // Docker containers bind to 0.0.0.0 so the host can reach the gateway via
-  // port mapping — use the Host-header fallback to avoid enumerating origins.
-  if (bind === "lan") {
-    controlUi.dangerouslyAllowHostHeaderOriginFallback = true;
-  }
+  // Allow the gateway to accept connections whose Origin matches the Host
+  // header.  This is needed in ALL bind modes because our APIs layer proxies
+  // browser connections to the gateway — the browser's Origin (e.g. an ngrok
+  // or Fly public URL) won't match 127.0.0.1, but it DOES match the Host
+  // header the browser sends.
+  controlUi.dangerouslyAllowHostHeaderOriginFallback = true;
 
   // Trust the APIs reverse proxy so the gateway accepts forwarded headers
   // and treats proxied connections as local.

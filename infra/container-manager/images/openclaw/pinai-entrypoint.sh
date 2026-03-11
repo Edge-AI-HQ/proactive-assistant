@@ -112,6 +112,12 @@ workspace_inject() {
 
   if [ -f "$WS/TOOLS.md" ]; then
     echo "[workspace] hot volume detected" >&2
+  elif [ -d /opt/pinai/workspace-snapshot ] && [ -f /opt/pinai/workspace-snapshot/TOOLS.md ]; then
+    # Seed from build-time snapshot — skips the slow gateway workspace-init
+    echo "[workspace] cold volume, seeding from build-time snapshot" >&2
+    mkdir -p "$WS"
+    cp -r /opt/pinai/workspace-snapshot/. "$WS"/
+    echo "[workspace] snapshot restored" >&2
   else
     echo "[workspace] cold volume, waiting for workspace init..." >&2
     for _i in $(seq 1 60); do

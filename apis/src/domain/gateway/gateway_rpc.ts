@@ -1,11 +1,19 @@
 import WebSocket from "ws";
 import type { GatewayTarget } from "../container/contracts.js";
+import { gatewayHostHeaders } from "../container/contracts.js";
+import {
+  buildDeviceBlock,
+  GATEWAY_CLIENT_ID,
+  GATEWAY_CLIENT_ROLE,
+  GATEWAY_CLIENT_SCOPES,
+} from "./device_identity.js";
 
 // ---------------------------------------------------------------------------
 // Gateway WebSocket RPC client
 //
 // Connects to the OpenClaw gateway via WebSocket, performs the `connect`
-// handshake, then issues a single RPC request and returns the result.
+// handshake (with Ed25519 device identity when a challenge is issued), then
+// issues a single RPC request and returns the result.
 // ---------------------------------------------------------------------------
 
 const RPC_TIMEOUT_MS = 10_000;
@@ -38,8 +46,62 @@ const generateRequestId = (): string =>
   `rpc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 /**
+ * Build the `connect` request params.
+ *
+ * When the gateway issues a challenge (`connect.challenge` event), we include
+ * an Ed25519 device block so the gateway can verify our identity and skip
+ * the interactive pairing flow.
+ */
+const buildConnectParams = (
+  gatewayToken: string,
+  challenge?: { nonce: string; ts: number },
+): Record<string, unknown> => {
+  const params: Record<string, unknown> = {
+    minProtocol: 3,
+    maxProtocol: 3,
+    client: {
+      id: GATEWAY_CLIENT_ID,
+      version: "dev",
+      platform: process.platform,
+      mode: "backend",
+      instanceId: "pinai-rpc-client",
+    },
+    role: GATEWAY_CLIENT_ROLE,
+    scopes: GATEWAY_CLIENT_SCOPES,
+    caps: ["tool-events"],
+    commands: [],
+    permissions: {},
+    auth: { token: gatewayToken },
+    userAgent: "pinai-model-manager",
+    locale: "en-US",
+  };
+
+  if (challenge) {
+    params.device = buildDeviceBlock(
+      {
+        clientId: GATEWAY_CLIENT_ID,
+        clientMode: "backend",
+        role: GATEWAY_CLIENT_ROLE,
+        scopes: GATEWAY_CLIENT_SCOPES,
+        token: gatewayToken,
+      },
+      challenge,
+    );
+  }
+
+  return params;
+};
+
+/**
  * Open a WebSocket to the gateway, authenticate via `connect`, send a single
  * RPC request, and return the response payload.
+ *
+ * Protocol flow:
+ *   1. Open WS with local-identity headers (X-Forwarded-For, Origin, Host)
+ *   2. If gateway sends `connect.challenge`, sign it and include device block
+ *   3. Send `connect` request (with or without device block)
+ *   4. On success, send the actual RPC method
+ *   5. Return the RPC response payload
  */
 const rpcCall = <T = unknown>(
   target: GatewayTarget,
@@ -50,7 +112,11 @@ const rpcCall = <T = unknown>(
   new Promise((resolve) => {
     const ws = new WebSocket(target.wsBaseUrl, {
       maxPayload: 4 * 1024 * 1024,
-      ...(target.hostOverride ? { headers: { Host: target.hostOverride } } : {}),
+      headers: {
+        ...gatewayHostHeaders(target),
+        "X-Forwarded-For": "127.0.0.1",
+        Origin: target.httpBaseUrl,
+      },
     });
     let settled = false;
 
@@ -74,35 +140,23 @@ const rpcCall = <T = unknown>(
     timeout.unref();
 
     let authenticated = false;
+    let challengeReceived = false;
 
-    ws.on("open", () => {
-      // Send connect handshake
+    const sendConnect = (challenge?: { nonce: string; ts: number }): void => {
       ws.send(
         JSON.stringify({
           type: "req",
           id: connectId,
           method: "connect",
-          params: {
-            minProtocol: 3,
-            maxProtocol: 3,
-            client: {
-              id: "gateway-client",
-              version: "dev",
-              platform: process.platform,
-              mode: "backend",
-              instanceId: "pinai-rpc-client",
-            },
-            role: "operator",
-            scopes: ["operator.admin"],
-            caps: ["tool-events"],
-            commands: [],
-            permissions: {},
-            auth: { token: gatewayToken },
-            userAgent: "pinai-model-manager",
-            locale: "en-US",
-          },
+          params: buildConnectParams(gatewayToken, challenge),
         }),
       );
+    };
+
+    ws.on("open", () => {
+      // Send connect immediately — if the gateway requires a challenge it
+      // will respond with `connect.challenge` and we retry with device block.
+      sendConnect();
     });
 
     ws.on("message", (raw) => {
@@ -114,13 +168,48 @@ const rpcCall = <T = unknown>(
       }
       if (!data || typeof data !== "object") return;
 
+      // Handle challenge from gateway — re-send connect with device identity
+      if (
+        data.type === "event" &&
+        data.event === "connect.challenge" &&
+        !challengeReceived
+      ) {
+        challengeReceived = true;
+        const payload = data.data as
+          | { nonce?: string; ts?: number }
+          | undefined;
+        if (payload?.nonce) {
+          sendConnect({
+            nonce: payload.nonce,
+            ts: typeof payload.ts === "number" ? payload.ts : Date.now(),
+          });
+        }
+        return;
+      }
+
       if (data.type === "res" && data.id === connectId) {
         if (!data.ok) {
+          // If connect failed and we haven't tried with a device block yet,
+          // check if the error includes a challenge we can respond to.
+          const errorData = data.error as
+            | { challenge?: { nonce?: string; ts?: number } }
+            | undefined;
+          if (!challengeReceived && errorData?.challenge?.nonce) {
+            challengeReceived = true;
+            sendConnect({
+              nonce: errorData.challenge.nonce,
+              ts:
+                typeof errorData.challenge.ts === "number"
+                  ? errorData.challenge.ts
+                  : Date.now(),
+            });
+            return;
+          }
+
           clearTimeout(timeout);
           finish({
             ok: false,
-            error:
-              extractErrorMessage(data.error),
+            error: extractErrorMessage(data.error),
           });
           return;
         }
@@ -144,8 +233,7 @@ const rpcCall = <T = unknown>(
         } else {
           finish({
             ok: false,
-            error:
-              extractErrorMessage(data.error),
+            error: extractErrorMessage(data.error),
           });
         }
       }

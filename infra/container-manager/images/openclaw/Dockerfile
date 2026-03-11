@@ -39,15 +39,22 @@ RUN for skill in /tmp/pinai-skills/*/; do \
     && rm -rf /tmp/pinai-skills
 
 # ── Warm up jiti + Node compile caches at build time ──
-# Launch gateway with OPENCLAW_HOME=/app so workspace lands at /app/.openclaw/workspace/.
-# After 60s the gateway is killed; caches are saved into /opt/pinai/*.
+# Launch gateway with plugin path so jiti compiles both openclaw core AND our
+# plugin TS. After 90s the gateway is killed; caches are saved into /opt/pinai/*.
+# The workspace created during warmup is preserved as a pre-built snapshot so
+# cold-start containers can skip the expensive workspace-init step.
 RUN mkdir -p /tmp/jiti \
     && OPENCLAW_HOME=/app \
        NODE_COMPILE_CACHE=/tmp/node-compile-cache \
-       timeout 60 openclaw gateway --bind loopback --allow-unconfigured 2>&1 || true \
+       OPENCLAW_TELEGRAM_ROUTER_PLUGIN_PATH=/opt/pinai/plugins/telegram-router-proxy \
+       timeout 90 openclaw gateway --bind loopback --allow-unconfigured 2>&1 || true \
     && mkdir -p /opt/pinai/jiti-warmup /opt/pinai/node-compile-warmup \
     && cp -r /tmp/jiti/. /opt/pinai/jiti-warmup/ 2>/dev/null || true \
     && cp -r /tmp/node-compile-cache/. /opt/pinai/node-compile-warmup/ 2>/dev/null || true \
+    && if [ -f /app/.openclaw/workspace/TOOLS.md ]; then \
+         mkdir -p /opt/pinai/workspace-snapshot \
+         && cp -r /app/.openclaw/workspace/. /opt/pinai/workspace-snapshot/; \
+       fi \
     && rm -rf /tmp/jiti /tmp/node-compile-cache /app/.openclaw
 
 COPY infra/container-manager/images/openclaw/pinai-entrypoint.sh /usr/local/bin/pinai-entrypoint.sh
