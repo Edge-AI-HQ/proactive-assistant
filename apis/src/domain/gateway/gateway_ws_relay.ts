@@ -130,6 +130,11 @@ export const relayGatewayWs = (
             params.role = GATEWAY_CLIENT_ROLE;
             params.scopes = GATEWAY_CLIENT_SCOPES;
 
+            // Strip browser device block — its signature is bound to the
+            // original client ID and would be invalid after our rewrite.
+            // Operator+token auth bypasses device identity entirely.
+            delete params.device;
+
             // Inject token auth
             if (!params.auth || typeof params.auth !== "object") {
               params.auth = { token: gatewayToken };
