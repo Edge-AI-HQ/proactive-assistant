@@ -450,22 +450,7 @@ export const buildAssistantOpenclawConfig = (
       video: { enabled: true, maxBytes: 52428800 },
     },
     sessions: { visibility: "all" },
-    sessions_spawn: {
-      attachments: { enabled: true, maxTotalBytes: 5242880, maxFiles: 50 },
-    },
     loopDetection: { enabled: false },
-  };
-
-  const existingAgents = (next.agents || {}) as UnknownRecord;
-  const existingAgentDefaults = (existingAgents.defaults || {}) as UnknownRecord;
-  next.agents = {
-    ...existingAgents,
-    defaults: {
-      ...existingAgentDefaults,
-      tools: {
-        profile: "full",
-      },
-    },
   };
 
   // Enable all commands, including runtime config edits via /config
