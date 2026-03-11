@@ -7,6 +7,7 @@ import VideoLanding from "./components/VideoLanding";
 import SetupWaiting from "./components/SetupWaiting";
 import Toast from "./components/Toast";
 import { readGoogleRedirectState } from "./googleRedirectState";
+import { shouldRefreshAfterExternalOAuthReturn } from "./googleReconnectRefresh";
 
 type Plan = {
   id: string;
@@ -170,6 +171,7 @@ const App = () => {
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
   const [models, setModels] = useState<{ current: string | null; available: ModelItem[] } | null>(null);
   const handledGoogleRedirectRef = useRef(false);
+  const refreshingOnResumeRef = useRef(false);
 
   const showToast = (message: string, type: "success" | "error" = "error") => {
     setToast({ message, type });
@@ -226,6 +228,23 @@ const App = () => {
     return payload;
   };
 
+  const refreshStateOnReturn = async (): Promise<void> => {
+    if (refreshingOnResumeRef.current) return;
+    refreshingOnResumeRef.current = true;
+    try {
+      const [quick, deferred] = await Promise.all([
+        safeFetch<StatePayload>("/api/mini/state"),
+        safeFetch<DeferredPayload>("/api/mini/state/deferred"),
+      ]);
+      setState((prev) => (prev ? { ...prev, ...quick, ...deferred } : { ...quick, ...deferred }));
+      setSelectedPlan((prev) => prev ?? quick.subscription.plan_id ?? deferred.plans[0]?.id ?? null);
+    } catch {
+      // Best-effort refresh only. Existing state remains usable.
+    } finally {
+      refreshingOnResumeRef.current = false;
+    }
+  };
+
   const bootstrap = async () => {
     const initData = window.Telegram?.WebApp?.initData?.trim() ?? "";
 
@@ -274,6 +293,63 @@ const App = () => {
     handledGoogleRedirectRef.current = true;
     void consumeGoogleRedirect();
   }, [loading, state]);
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (
+        !shouldRefreshAfterExternalOAuthReturn({
+          eventType: "visibilitychange",
+          visibilityState: document.visibilityState,
+          loading,
+          hasState: Boolean(state),
+          busy,
+        })
+      ) {
+        return;
+      }
+      void refreshStateOnReturn();
+    };
+
+    const onFocus = () => {
+      if (
+        !shouldRefreshAfterExternalOAuthReturn({
+          eventType: "focus",
+          visibilityState: document.visibilityState,
+          loading,
+          hasState: Boolean(state),
+          busy,
+        })
+      ) {
+        return;
+      }
+      void refreshStateOnReturn();
+    };
+
+    const onPageShow = () => {
+      if (
+        !shouldRefreshAfterExternalOAuthReturn({
+          eventType: "pageshow",
+          visibilityState: document.visibilityState,
+          loading,
+          hasState: Boolean(state),
+          busy,
+        })
+      ) {
+        return;
+      }
+      void refreshStateOnReturn();
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("pageshow", onPageShow);
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("pageshow", onPageShow);
+    };
+  }, [busy, loading, state]);
 
   // Poll for status changes when assistant exists but isn't running yet
   useEffect(() => {
