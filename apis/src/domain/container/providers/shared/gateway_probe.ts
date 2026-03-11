@@ -1,11 +1,6 @@
 import net from "node:net";
 import WebSocket from "ws";
 import type { ProbeOptions } from "../../contracts.js";
-import {
-  GATEWAY_CLIENT_ID,
-  GATEWAY_CLIENT_ROLE,
-  GATEWAY_CLIENT_SCOPES,
-} from "../../../gateway/device_identity.js";
 
 // ---------------------------------------------------------------------------
 // Shared gateway probe utilities
@@ -13,6 +8,11 @@ import {
 // Used by both Fly and Docker providers to verify that the OpenClaw gateway
 // is reachable, authenticated, and serving HTTP probes.
 // ---------------------------------------------------------------------------
+
+/** Client identity for probe connections — matches gateway_constants.ts values. */
+const PROBE_CLIENT_ID = "pin-ai-backend";
+const PROBE_CLIENT_ROLE = "operator";
+const PROBE_CLIENT_SCOPES = ["operator.admin"];
 
 const DEFAULT_PORT_TIMEOUT_MS = 120_000;
 const CONNECT_PROBE_REQUEST_ID = "gateway-probe-connect";
@@ -82,6 +82,9 @@ export const waitForPort = (
 
 /**
  * Single-shot WebSocket `connect` handshake probe.
+ *
+ * Uses operator + token auth so the gateway's `roleCanSkipDeviceIdentity`
+ * allows the connection without device identity.
  */
 const probeGatewayHelloOnce = (
   host: string,
@@ -91,13 +94,10 @@ const probeGatewayHelloOnce = (
 ): Promise<boolean> =>
   new Promise((resolve) => {
     const wsUrl = `ws://${formatHostForUrl(host)}:${port}`;
-    const httpOrigin = `http://${formatHostForUrl(host)}:${port}`;
     const ws = new WebSocket(wsUrl, {
       maxPayload: 2 * 1024 * 1024,
       headers: {
         ...(hostOverride ? { Host: hostOverride } : {}),
-        "X-Forwarded-For": "127.0.0.1",
-        Origin: httpOrigin,
       },
     });
     let settled = false;
@@ -122,14 +122,14 @@ const probeGatewayHelloOnce = (
         minProtocol: 3,
         maxProtocol: 3,
         client: {
-          id: GATEWAY_CLIENT_ID,
+          id: PROBE_CLIENT_ID,
           version: "dev",
           platform: process.platform,
           mode: "backend",
           instanceId: "pinai-gateway-probe",
         },
-        role: GATEWAY_CLIENT_ROLE,
-        scopes: GATEWAY_CLIENT_SCOPES,
+        role: PROBE_CLIENT_ROLE,
+        scopes: PROBE_CLIENT_SCOPES,
         caps: ["tool-events"],
         commands: [],
         permissions: {},

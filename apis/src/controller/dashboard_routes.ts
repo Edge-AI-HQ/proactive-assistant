@@ -40,7 +40,6 @@ import {
 import { readPaymentPublicBaseUrl } from "../domain/payment/publicBaseUrl.js";
 import {
   buildOpenclawAuthHeaders,
-  buildGatewayLocalHeaders,
   resolveAssistantGatewayTarget,
   rewriteGatewayProxyRequestUrl,
 } from "../domain/gateway/proxy_orchestrator.js";
@@ -1737,7 +1736,6 @@ export const createDashboardRouter = (): Router => {
         headers: {
           ...buildOpenclawAuthHeaders(user.gateway_token),
           ...gatewayHostHeaders(target),
-          ...buildGatewayLocalHeaders(target),
         },
       });
     },

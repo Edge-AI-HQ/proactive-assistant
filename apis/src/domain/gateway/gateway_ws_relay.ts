@@ -4,31 +4,27 @@ import type { Socket } from "node:net";
 import type { GatewayTarget } from "../container/contracts.js";
 import { gatewayHostHeaders } from "../container/contracts.js";
 import {
-  buildDeviceBlock,
   GATEWAY_CLIENT_ID,
   GATEWAY_CLIENT_ROLE,
   GATEWAY_CLIENT_SCOPES,
-} from "./device_identity.js";
+} from "./gateway_constants.js";
 
 // ---------------------------------------------------------------------------
 // Gateway WebSocket Relay
 //
-// Instead of raw-proxying the browser WS to the OpenClaw gateway (which fails
-// because the browser's Control UI JS sends `connect` without a device block),
-// we act as a relay:
+// The browser's Control UI JS sends `connect` without proper auth credentials.
+// We relay the connection and inject operator-level auth into the `connect`
+// message so the gateway accepts it via the operator+token fast path
+// (roleCanSkipDeviceIdentity) — no device identity or Ed25519 crypto needed.
 //
 //   Browser <--WS--> APIs relay <--WS--> OpenClaw gateway
-//
-// The relay intercepts the `connect` message from the browser, injects an
-// Ed25519 device identity block (signed against the gateway's challenge), and
-// forwards it.  All other messages pass through unmodified.
 // ---------------------------------------------------------------------------
 
 const wss = new WebSocketServer({ noServer: true });
 
 /**
  * Handle a browser WS upgrade by relaying to the OpenClaw gateway with
- * device identity injection.
+ * operator auth injection.
  */
 export const relayGatewayWs = (
   req: IncomingMessage,
@@ -42,25 +38,18 @@ export const relayGatewayWs = (
       maxPayload: 4 * 1024 * 1024,
       headers: {
         ...gatewayHostHeaders(target),
-        "X-Forwarded-For": "127.0.0.1",
-        Origin: target.httpBaseUrl,
         Authorization: `Bearer ${gatewayToken}`,
       },
     });
 
     let upstreamReady = false;
-    let challengeNonce: string | null = null;
-    let challengeTs: number | null = null;
-    // Buffer browser messages until upstream is open
     const pendingBrowserMessages: { data: Buffer | string; isBinary: boolean }[] = [];
-    // Track if we've already injected device identity into a connect message
-    let deviceInjected = false;
+    let connectInjected = false;
 
     // ── Upstream (gateway) events ──
 
     upstreamWs.on("open", () => {
       upstreamReady = true;
-      // Flush buffered browser messages
       for (const msg of pendingBrowserMessages) {
         forwardToUpstream(msg.data, msg.isBinary);
       }
@@ -68,29 +57,6 @@ export const relayGatewayWs = (
     });
 
     upstreamWs.on("message", (data, isBinary) => {
-      // Check for connect.challenge from gateway
-      if (!deviceInjected && !isBinary) {
-        try {
-          const parsed = JSON.parse(String(data)) as Record<string, unknown>;
-          if (
-            parsed.type === "event" &&
-            parsed.event === "connect.challenge"
-          ) {
-            const payload = parsed.data as
-              | { nonce?: string; ts?: number }
-              | undefined;
-            if (payload?.nonce) {
-              challengeNonce = payload.nonce;
-              challengeTs =
-                typeof payload.ts === "number" ? payload.ts : Date.now();
-            }
-          }
-        } catch {
-          // not JSON, pass through
-        }
-      }
-
-      // Forward everything to browser
       if (browserWs.readyState === WebSocket.OPEN) {
         browserWs.send(data, { binary: isBinary });
       }
@@ -143,8 +109,8 @@ export const relayGatewayWs = (
     ): void {
       if (upstreamWs.readyState !== WebSocket.OPEN) return;
 
-      // Try to intercept `connect` messages to inject device identity
-      if (!deviceInjected && !isBinary) {
+      // Intercept the first `connect` message to inject operator auth
+      if (!connectInjected && !isBinary) {
         const text = String(data);
         try {
           const parsed = JSON.parse(text) as Record<string, unknown>;
@@ -156,42 +122,21 @@ export const relayGatewayWs = (
           ) {
             const params = parsed.params as Record<string, unknown>;
 
-            // Ensure client.id is set to our Control UI identity
+            // Set our backend client identity (NOT "openclaw-control-ui")
             if (typeof params.client === "object" && params.client !== null) {
-              (params.client as Record<string, unknown>).id =
-                GATEWAY_CLIENT_ID;
+              (params.client as Record<string, unknown>).id = GATEWAY_CLIENT_ID;
             }
             params.role = GATEWAY_CLIENT_ROLE;
             params.scopes = GATEWAY_CLIENT_SCOPES;
 
-            // Ensure token auth is present
+            // Inject token auth
             if (!params.auth || typeof params.auth !== "object") {
               params.auth = { token: gatewayToken };
             } else {
               (params.auth as Record<string, unknown>).token = gatewayToken;
             }
 
-            // Inject device identity if we have a challenge
-            if (challengeNonce) {
-              params.device = buildDeviceBlock(
-                {
-                  clientId: GATEWAY_CLIENT_ID,
-                  clientMode: String(
-                    (params.client as Record<string, unknown>)?.mode ||
-                      "browser",
-                  ),
-                  role: GATEWAY_CLIENT_ROLE,
-                  scopes: GATEWAY_CLIENT_SCOPES,
-                  token: gatewayToken,
-                },
-                {
-                  nonce: challengeNonce,
-                  ts: challengeTs ?? Date.now(),
-                },
-              );
-            }
-
-            deviceInjected = true;
+            connectInjected = true;
             upstreamWs.send(JSON.stringify(parsed));
             return;
           }
