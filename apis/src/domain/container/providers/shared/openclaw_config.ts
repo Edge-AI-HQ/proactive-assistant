@@ -56,9 +56,6 @@ export const buildGatewayConfigSection = (
     // Disable device-identity / pairing checks — our APIs layer already
     // authenticates dashboard sessions before proxying to the gateway.
     dangerouslyDisableDeviceAuth: true,
-    // Skip pairing UI checks completely for cron and other backend features
-    dangerouslySkipPairingUI: true,
-    requirePairing: false,
   };
 
   // Allow the APIs proxy origin so the Control UI accepts requests forwarded
@@ -496,9 +493,6 @@ export const buildAssistantOpenclawConfig = (
   // Enable cron scheduler
   next.cron = {
     enabled: true,
-    // Bypass pairing/auth checks for cron background operations
-    bypassAuth: true,
-    requireGateway: false,
   };
 
   return next;
