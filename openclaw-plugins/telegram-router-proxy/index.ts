@@ -43,9 +43,9 @@ const plugin = {
       process.env.TELEGRAM_ROUTER_URL || "http://host.docker.internal:3000";
 
     api.logger.info(`Telegram Router Proxy enabled: ${routerUrl}`);
-    api.logger.info("TRP_VERSION_20260311_SKIP_DEVICE_PAIRING");
+    api.logger.info("TRP_VERSION_20260311_AUTO_PAIRING");
     installTelegramFetchProxy(api, routerUrl);
-    disableDeviceIdentityForLoopbackCalls(api);
+    installAutoPairingApproval(api);
   },
 };
 
@@ -716,31 +716,192 @@ function isRecord(value: unknown): value is Record<string, any> {
 }
 
 /**
- * Disable device identity for loopback gateway calls.
- * This allows cron and other internal services to bypass pairing requirements.
+ * Auto-approve device pairing — two-phase strategy:
  *
- * Strategy: Patch the GatewayClient constructor to skip deviceIdentity when
- * connecting to loopback gateway with token auth.
+ * Phase 1 (eager, at startup): Create the Ed25519 device identity file
+ * (identity/device.json) if it doesn't exist, then write the device
+ * directly into devices/paired.json.  OpenClaw's `loadOrCreateDeviceIdentity()`
+ * will find and reuse this file, so the very first cron/tool `callGateway()`
+ * connection sees the device already paired → zero "pairing required" failures.
+ *
+ * Phase 2 (background): Poll every 3 s and approve any NEW pending
+ * requests that appear at runtime (scope-upgrade, Control UI relay
+ * connections from the APIs side, etc.).
  */
-function disableDeviceIdentityForLoopbackCalls(api: OpenClawPluginApi) {
-  // Set environment flag to signal we want to skip device identity for local calls
-  process.env.OPENCLAW_SKIP_DEVICE_PAIRING = "1";
+function installAutoPairingApproval(api: OpenClawPluginApi) {
+  const CHECK_INTERVAL_MS = 3000;
+  let isRunning = false;
 
-  api.logger.info(
-    "[device-pairing] Set OPENCLAW_SKIP_DEVICE_PAIRING=1 to bypass pairing",
-  );
-  api.logger.info(
-    "[device-pairing] Cron and internal tools should work without pairing",
-  );
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore — module available at runtime inside OpenClaw container
+  type DevicePairSdk = typeof import("openclaw/plugin-sdk/device-pair");
+  let sdk: DevicePairSdk | null = null;
 
-  // The key insight: with gateway.controlUi.dangerouslyDisableDeviceAuth: true,
-  // the gateway server will accept connections without device identity when
-  // shared token auth succeeds. We just need to prevent the client from
-  // sending device identity in the first place.
+  const loadSdk = async (): Promise<DevicePairSdk | null> => {
+    if (sdk) return sdk;
+    try {
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore — module available at runtime inside OpenClaw container
+      sdk = (await import("openclaw/plugin-sdk/device-pair")) as DevicePairSdk;
+      return sdk;
+    } catch {
+      return null;
+    }
+  };
+
+  // ── Phase 1: Create device identity + pre-pair at startup ──
   //
-  // Unfortunately, OpenClaw's callGateway() always calls loadOrCreateDeviceIdentity().
-  // The only way to bypass this is through gateway server-side config, which we've
-  // already set: dangerouslyDisableDeviceAuth: true should allow token-only auth.
+  // The device identity file is NOT created by the gateway at startup — it is
+  // created lazily by the first `callGateway()` client via `loadOrCreateDeviceIdentity()`.
+  // Our plugin runs before any client connects, so we must create the identity
+  // file ourselves.  This guarantees the first cron/tool connection finds the
+  // device already paired → zero "pairing required" failures.
+  const prePairDeviceIdentity = async () => {
+    try {
+      const stateDir =
+        process.env.OPENCLAW_STATE_DIR ||
+        `${process.env.OPENCLAW_HOME || process.env.HOME || "/app"}/.openclaw`;
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const crypto = await import("node:crypto");
+
+      // ── Step 1: Ensure device identity exists ──
+      const identityDir = path.join(stateDir, "identity");
+      const identityPath = path.join(identityDir, "device.json");
+
+      let deviceId: string;
+      let publicKeyPem: string;
+
+      if (fs.existsSync(identityPath)) {
+        // Hot volume — identity already exists from a previous run
+        const existing = JSON.parse(fs.readFileSync(identityPath, "utf8")) as {
+          deviceId?: string;
+          publicKeyPem?: string;
+        };
+        if (existing.deviceId && existing.publicKeyPem) {
+          deviceId = existing.deviceId;
+          publicKeyPem = existing.publicKeyPem;
+          api.logger.info(`[auto-pairing] Existing device identity ${deviceId.slice(0, 12)}…`);
+        } else {
+          api.logger.warn("[auto-pairing] Device identity file malformed — regenerating");
+          fs.unlinkSync(identityPath);
+          return; // will be created by gateway on first connect
+        }
+      } else {
+        // Cold start — generate a new Ed25519 identity (same as OpenClaw's
+        // loadOrCreateDeviceIdentity in src/infra/device-identity.ts)
+        const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+        publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
+        const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+
+        // Derive deviceId = SHA-256 of raw public key bytes
+        const ED25519_SPKI_PREFIX_LEN = 12;
+        const spkiDer = publicKey.export({ type: "spki", format: "der" });
+        const rawPubKey = (spkiDer as Buffer).subarray(ED25519_SPKI_PREFIX_LEN);
+        deviceId = crypto.createHash("sha256").update(rawPubKey).digest("hex");
+
+        fs.mkdirSync(identityDir, { recursive: true });
+        const stored = {
+          version: 1,
+          deviceId,
+          publicKeyPem,
+          privateKeyPem,
+          createdAtMs: Date.now(),
+        };
+        fs.writeFileSync(identityPath, JSON.stringify(stored, null, 2) + "\n", { mode: 0o600 });
+        api.logger.info(`[auto-pairing] Created device identity ${deviceId.slice(0, 12)}…`);
+      }
+
+      // ── Step 2: Ensure device is paired ──
+      const devicesDir = path.join(stateDir, "devices");
+      fs.mkdirSync(devicesDir, { recursive: true });
+      const pairedPath = path.join(devicesDir, "paired.json");
+      const existingPaired: Record<string, unknown> = fs.existsSync(pairedPath)
+        ? (JSON.parse(fs.readFileSync(pairedPath, "utf8")) as Record<string, unknown>)
+        : {};
+
+      if (existingPaired[deviceId]) {
+        api.logger.info(`[auto-pairing] Device ${deviceId.slice(0, 12)}… already paired`);
+        return;
+      }
+
+      // Derive base64url public key for the paired entry
+      const pubKey = crypto.createPublicKey(publicKeyPem);
+      const spki = pubKey.export({ type: "spki", format: "der" });
+      const rawKey = (spki as Buffer).subarray(12);
+      const pubKeyB64 = rawKey
+        .toString("base64")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
+
+      const now = Date.now();
+      existingPaired[deviceId] = {
+        deviceId,
+        publicKey: pubKeyB64,
+        clientId: "gateway-client",
+        clientMode: "backend",
+        role: "admin",
+        roles: ["admin", "operator"],
+        scopes: [
+          "operator.read",
+          "operator.write",
+          "operator.admin",
+          "operator.approvals",
+          "operator.pairing",
+        ],
+        approvedScopes: [
+          "operator.read",
+          "operator.write",
+          "operator.admin",
+          "operator.approvals",
+          "operator.pairing",
+        ],
+        createdAtMs: now,
+        approvedAtMs: now,
+      };
+
+      fs.writeFileSync(pairedPath, JSON.stringify(existingPaired, null, 2) + "\n");
+      api.logger.info(`[auto-pairing] Pre-paired device ${deviceId.slice(0, 12)}… with full scopes`);
+    } catch (err) {
+      api.logger.warn(`[auto-pairing] Pre-pair failed: ${String(err)}`);
+    }
+  };
+
+  // ── Phase 2: Background polling for new requests ──
+  const checkAndApprovePending = async () => {
+    if (isRunning) return;
+    isRunning = true;
+    try {
+      const mod = await loadSdk();
+      if (!mod) return;
+
+      const { pending } = await mod.listDevicePairing();
+      for (const request of pending) {
+        if (!("requestId" in request)) continue;
+        const req = request as { requestId: string; clientId?: string };
+        const clientId = req.clientId || "unknown";
+        api.logger.info(`[auto-pairing] Approving: ${req.requestId} (client: ${clientId})`);
+        try {
+          await mod.approveDevicePairing(req.requestId);
+          api.logger.info(`[auto-pairing] Approved: ${req.requestId}`);
+        } catch (err) {
+          api.logger.warn(`[auto-pairing] Failed: ${req.requestId}: ${String(err)}`);
+        }
+      }
+    } catch {
+      // Gateway might not be ready yet
+    } finally {
+      isRunning = false;
+    }
+  };
+
+  // Kick off both phases
+  prePairDeviceIdentity().catch(() => {});
+  setInterval(checkAndApprovePending, CHECK_INTERVAL_MS);
+  setTimeout(checkAndApprovePending, 2000);
+
+  api.logger.info("[auto-pairing] Enabled (eager pre-pair + background polling)");
 }
 
 export default plugin;

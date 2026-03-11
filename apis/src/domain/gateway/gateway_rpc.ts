@@ -1,11 +1,18 @@
 import WebSocket from "ws";
 import type { GatewayTarget } from "../container/contracts.js";
+import { gatewayHostHeaders } from "../container/contracts.js";
+import {
+  GATEWAY_CLIENT_ID,
+  GATEWAY_CLIENT_ROLE,
+  GATEWAY_CLIENT_SCOPES,
+} from "./gateway_constants.js";
 
 // ---------------------------------------------------------------------------
 // Gateway WebSocket RPC client
 //
 // Connects to the OpenClaw gateway via WebSocket, performs the `connect`
-// handshake, then issues a single RPC request and returns the result.
+// handshake as operator with token auth (no device identity needed), then
+// issues a single RPC request and returns the result.
 // ---------------------------------------------------------------------------
 
 const RPC_TIMEOUT_MS = 10_000;
@@ -38,6 +45,34 @@ const generateRequestId = (): string =>
   `rpc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 /**
+ * Build the `connect` request params.
+ *
+ * Uses operator role + token auth so `roleCanSkipDeviceIdentity` returns true
+ * on the gateway side — no Ed25519 device identity needed.
+ */
+const buildConnectParams = (
+  gatewayToken: string,
+): Record<string, unknown> => ({
+  minProtocol: 3,
+  maxProtocol: 3,
+  client: {
+    id: GATEWAY_CLIENT_ID,
+    version: "dev",
+    platform: process.platform,
+    mode: "backend",
+    instanceId: "pinai-rpc-client",
+  },
+  role: GATEWAY_CLIENT_ROLE,
+  scopes: GATEWAY_CLIENT_SCOPES,
+  caps: ["tool-events"],
+  commands: [],
+  permissions: {},
+  auth: { token: gatewayToken },
+  userAgent: "pinai-model-manager",
+  locale: "en-US",
+});
+
+/**
  * Open a WebSocket to the gateway, authenticate via `connect`, send a single
  * RPC request, and return the response payload.
  */
@@ -50,7 +85,10 @@ const rpcCall = <T = unknown>(
   new Promise((resolve) => {
     const ws = new WebSocket(target.wsBaseUrl, {
       maxPayload: 4 * 1024 * 1024,
-      ...(target.hostOverride ? { headers: { Host: target.hostOverride } } : {}),
+      headers: {
+        ...gatewayHostHeaders(target),
+        Origin: target.httpBaseUrl,
+      },
     });
     let settled = false;
 
@@ -76,31 +114,12 @@ const rpcCall = <T = unknown>(
     let authenticated = false;
 
     ws.on("open", () => {
-      // Send connect handshake
       ws.send(
         JSON.stringify({
           type: "req",
           id: connectId,
           method: "connect",
-          params: {
-            minProtocol: 3,
-            maxProtocol: 3,
-            client: {
-              id: "gateway-client",
-              version: "dev",
-              platform: process.platform,
-              mode: "backend",
-              instanceId: "pinai-rpc-client",
-            },
-            role: "operator",
-            scopes: ["operator.admin"],
-            caps: ["tool-events"],
-            commands: [],
-            permissions: {},
-            auth: { token: gatewayToken },
-            userAgent: "pinai-model-manager",
-            locale: "en-US",
-          },
+          params: buildConnectParams(gatewayToken),
         }),
       );
     });
@@ -119,8 +138,7 @@ const rpcCall = <T = unknown>(
           clearTimeout(timeout);
           finish({
             ok: false,
-            error:
-              extractErrorMessage(data.error),
+            error: extractErrorMessage(data.error),
           });
           return;
         }
@@ -144,8 +162,7 @@ const rpcCall = <T = unknown>(
         } else {
           finish({
             ok: false,
-            error:
-              extractErrorMessage(data.error),
+            error: extractErrorMessage(data.error),
           });
         }
       }
