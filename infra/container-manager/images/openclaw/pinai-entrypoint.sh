@@ -180,7 +180,17 @@ start_ipv6_proxies
 export PINAI_WORKSPACE_READY_MARKER="$READY_MARKER"
 export PINAI_WORKSPACE_ERROR_MARKER="$ERROR_MARKER"
 
+disable_device_identity() {
+  # Remove device identity to bypass pairing requirement
+  # When GatewayClient can't load device identity, it falls back to token-only auth
+  # Combined with gateway.controlUi.dangerouslyDisableDeviceAuth: true,
+  # this allows cron and other internal calls to work without pairing
+  rm -f /app/.openclaw/device-identity.* /root/.openclaw/device-identity.* 2>/dev/null || true
+  echo "[device-identity] Removed device identity files to bypass pairing" >&2
+}
+
 BIND="${PINAI_GATEWAY_BIND:-lan}"
+disable_device_identity
 openclaw gateway --bind "$BIND" &
 OC_PID=$!
 
