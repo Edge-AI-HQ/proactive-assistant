@@ -1736,6 +1736,9 @@ export const createDashboardRouter = (): Router => {
         headers: {
           ...buildOpenclawAuthHeaders(user.gateway_token),
           ...gatewayHostHeaders(target),
+          // Override browser Origin so the gateway's controlUi.allowedOrigins
+          // check passes — the proxy is trusted, not the browser.
+          Origin: target.httpBaseUrl,
         },
       });
     },
