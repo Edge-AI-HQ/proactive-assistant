@@ -26,11 +26,42 @@ const outputFile = path.join(
 );
 
 const readSkillKeys = async () => {
-  const entries = await fs.readdir(skillsDir, { withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-    .map((entry) => entry.name)
-    .sort((a, b) => a.localeCompare(b));
+  try {
+    const entries = await fs.readdir(skillsDir, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+      .map((entry) => entry.name)
+      .sort((a, b) => a.localeCompare(b));
+  } catch (error) {
+    const code =
+      typeof error === "object" && error && "code" in error
+        ? String(error.code)
+        : "";
+    if (code !== "ENOENT") throw error;
+
+    // Docker API image build context may not include infra/skills.
+    // In that case keep using the already committed generated file.
+    try {
+      const existing = await fs.readFile(outputFile, "utf8");
+      const keys = Array.from(
+        existing.matchAll(/^\s*"([^"]+)",?\s*$/gm),
+        (m) => m[1],
+      ).filter(Boolean);
+      if (keys.length > 0) {
+        console.warn(
+          `skills dir missing at ${skillsDir}; reusing ${keys.length} keys from existing manifest.`,
+        );
+        return keys.sort((a, b) => a.localeCompare(b));
+      }
+    } catch {
+      // fall through and generate empty list
+    }
+
+    console.warn(
+      `skills dir missing at ${skillsDir}; generating empty manifest fallback.`,
+    );
+    return [];
+  }
 };
 
 const buildSource = (keys) => {
