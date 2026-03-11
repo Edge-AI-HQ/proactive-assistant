@@ -133,14 +133,14 @@ const AgentCard = ({
             <span className="text-sm font-semibold text-foreground">{planId || "Free"}</span>
           </button>
 
-          <div className="flex items-center gap-2.5 mb-5">
+          <div className="flex items-stretch gap-2.5 mb-5">
             <div className="flex-1 rounded-xl px-2 py-3.5 text-center glass-stat-box">
               <p className="text-[10px] text-muted-foreground whitespace-nowrap">Status</p>
               <p className={`text-sm font-bold whitespace-nowrap ${statusDisplay.color}`}>{statusDisplay.text}</p>
             </div>
             <div className="flex-1 rounded-xl px-2 py-3.5 text-center glass-stat-box">
               <p className="text-[10px] text-muted-foreground whitespace-nowrap">Skills</p>
-              <p className="text-xl font-bold text-foreground">{skillsCount}</p>
+              <p className="text-sm font-bold text-foreground">{skillsCount}</p>
             </div>
             <div className="flex-1 rounded-xl px-2 py-3.5 text-center glass-stat-box">
               <p className="text-[10px] text-muted-foreground whitespace-nowrap">Model</p>

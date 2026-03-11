@@ -805,7 +805,7 @@ const App = () => {
           }}
         />
 
-        <div className="relative z-10 px-4 pt-4 flex-1">
+        <div className={`relative px-4 pt-4 flex-1 ${showManageAgent ? "z-30" : "z-10"}`}>
           <AgentCard
             username={state.assistant.username || null}
             status={state.assistant.status || "unknown"}
