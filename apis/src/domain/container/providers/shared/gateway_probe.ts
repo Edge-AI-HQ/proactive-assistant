@@ -10,7 +10,7 @@ import type { ProbeOptions } from "../../contracts.js";
 // ---------------------------------------------------------------------------
 
 /** Client identity for probe connections — matches gateway_constants.ts values. */
-const PROBE_CLIENT_ID = "pin-ai-backend";
+const PROBE_CLIENT_ID = "gateway-client";
 const PROBE_CLIENT_ROLE = "operator";
 const PROBE_CLIENT_SCOPES = ["operator.admin"];
 

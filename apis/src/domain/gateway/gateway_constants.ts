@@ -3,18 +3,21 @@
 //
 // All backend connections (WS relay, RPC, probe) use these values.
 //
-// Key design decision: we use a NON-Control-UI client ID ("pin-ai-backend")
-// so the gateway's `evaluateMissingDeviceIdentity` skips the stricter
-// Control UI auth checks and goes straight to `roleCanSkipDeviceIdentity`.
+// Key design decision: we use "gateway-client" — a valid OpenClaw client ID
+// that is NOT "openclaw-control-ui", so the gateway's
+// `evaluateMissingDeviceIdentity` skips the stricter Control UI auth checks
+// and goes straight to `roleCanSkipDeviceIdentity`.
 // Since operator + valid token (sharedAuthOk) passes that check, NO device
 // identity or Ed25519 crypto is required on the APIs side.
 //
-// See: openclaw/src/gateway/role-policy.ts
-//   roleCanSkipDeviceIdentity(role, sharedAuthOk) = role === "operator" && sharedAuthOk
+// Valid client IDs (from GATEWAY_CLIENT_IDS in openclaw 2026.3.8):
+//   webchat-ui, openclaw-control-ui, webchat, cli, gateway-client,
+//   openclaw-macos, openclaw-ios, openclaw-android, node-host, test,
+//   fingerprint, openclaw-probe
 // ---------------------------------------------------------------------------
 
-/** Client ID — intentionally NOT "openclaw-control-ui" to avoid Control UI security gates. */
-export const GATEWAY_CLIENT_ID = "pin-ai-backend";
+/** Client ID — must be a valid GATEWAY_CLIENT_IDS value, NOT "openclaw-control-ui". */
+export const GATEWAY_CLIENT_ID = "gateway-client";
 
 export const GATEWAY_CLIENT_ROLE = "operator";
 
