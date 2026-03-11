@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import net from "node:net";
 import Docker from "dockerode";
 import { getContainerManagerRuntime } from "../../runtime.js";
 import type {
@@ -27,6 +26,7 @@ import {
 } from "../shared/webhook_params.js";
 import { PINAI_WORKSPACE_STATUS_PORT } from "../shared/workspace_ready.js";
 import { PINAI_GOOGLE_CREDENTIALS_B64_ENV } from "../shared/google_workspace_credentials.js";
+import { probeGatewayReady, type ResolvedProbeTarget } from "../shared/gateway_probe.js";
 import { config as appConfig } from "../../../common/config.js";
 import { toOpenclawSkillsPayload } from "../../../skills/openclaw_skills.js";
 import { renderUserProfileMarkdown } from "../../../onboarding/profile_bootstrap.js";
@@ -400,58 +400,42 @@ const prepareDockerRuntime = (): void => {
 };
 
 // ---------------------------------------------------------------------------
-// Port probe
+// Port mapping helper for probes
 // ---------------------------------------------------------------------------
 
-const waitForLocalPort = (
-  port: number,
-  timeoutMs = 30_000,
-): Promise<boolean> =>
-  new Promise((resolve) => {
-    const start = Date.now();
+const resolveDockerProbeTarget = (
+  ref: ContainerRef,
+  options: ProbeOptions,
+): ResolvedProbeTarget => {
+  const hostPort = Number(ref.metadata.hostPort) || options.gatewayPort;
 
-    const tryConnect = (): void => {
-      const socket = net.createConnection({ host: "127.0.0.1", port }, () => {
-        socket.end();
-        resolve(true);
-      });
+  // Map container-internal ports to host-mapped ports for additional TCP checks
+  const additionalPorts: number[] = [];
+  const webhookHostPort = Number(ref.metadata.webhookHostPort);
+  if (webhookHostPort > 0) additionalPorts.push(webhookHostPort);
 
-      socket.on("error", () => {
-        socket.destroy();
-        if (Date.now() - start >= timeoutMs) {
-          resolve(false);
-        } else {
-          setTimeout(tryConnect, 1000);
-        }
-      });
-    };
-
-    tryConnect();
-  });
-
-const waitForHttpProbe = async (
-  hostPort: number,
-  pathName: string,
-  timeoutMs: number,
-): Promise<boolean> => {
-  const startedAt = Date.now();
-  const targetPath = pathName.startsWith("/") ? pathName : `/${pathName}`;
-  const url = `http://127.0.0.1:${hostPort}${targetPath}`;
-
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const response = await fetch(url, {
-        method: "GET",
-        signal: AbortSignal.timeout(1200),
-      });
-      // Any HTTP response means listener is up.
-      if (response.status >= 100 && response.status < 600) return true;
-    } catch {
-      // retry until timeout
+  // Map container-internal HTTP probes to host-mapped ports
+  const httpProbes: Array<{ port: number; path: string }> = [];
+  if (Array.isArray(options.httpProbes)) {
+    for (const probe of options.httpProbes) {
+      const containerPort = Number(probe.port);
+      const mappedHostPort =
+        containerPort === config.openclaw.gatewayPort
+          ? Number(ref.metadata.hostPort)
+          : containerPort === config.telegramRouter.webhookPort
+            ? Number(ref.metadata.webhookHostPort)
+            : containerPort === config.telegramRouter.webhookPort + 1
+              ? Number(ref.metadata.privateWebhookHostPort)
+              : containerPort === PINAI_WORKSPACE_STATUS_PORT
+                ? Number(ref.metadata.workspaceStatusHostPort)
+                : 0;
+      if (mappedHostPort > 0) {
+        httpProbes.push({ port: mappedHostPort, path: probe.path });
+      }
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  return false;
+
+  return { host: "127.0.0.1", gatewayPort: hostPort, additionalPorts, httpProbes };
 };
 
 // ---------------------------------------------------------------------------
@@ -609,6 +593,7 @@ export const dockerContainerRuntime: ContainerRuntime = {
       privateWebhookPort,
       telegramRouterUrl,
       "/app/google/gws-credentials.json",
+      liteLlmApiKey,
     );
     containerEnv[PINAI_GOOGLE_CREDENTIALS_B64_ENV] = (params.googleCredentialsB64 || "").trim();
     assertNoP0SecretsInEnv(containerEnv, config);
@@ -718,41 +703,8 @@ export const dockerContainerRuntime: ContainerRuntime = {
     ref: ContainerRef,
     options: ProbeOptions,
   ): Promise<boolean> {
-    const hostPort = Number(ref.metadata.hostPort) || options.gatewayPort;
-    const gatewayReady = await waitForLocalPort(hostPort, options.timeoutMs);
-    if (!gatewayReady) return false;
-
-    // Also probe the webhook host port if exposed
-    const webhookHostPort = Number(ref.metadata.webhookHostPort);
-    if (webhookHostPort > 0) {
-      const webhookReady = await waitForLocalPort(webhookHostPort, 120_000);
-      if (!webhookReady) return false;
-    }
-
-    if (Array.isArray(options.httpProbes) && options.httpProbes.length > 0) {
-      for (const probe of options.httpProbes) {
-        const containerPort = Number(probe.port);
-        const mappedHostPort =
-          containerPort === config.openclaw.gatewayPort
-            ? Number(ref.metadata.hostPort)
-            : containerPort === config.telegramRouter.webhookPort
-              ? Number(ref.metadata.webhookHostPort)
-              : containerPort === config.telegramRouter.webhookPort + 1
-                ? Number(ref.metadata.privateWebhookHostPort)
-                : containerPort === PINAI_WORKSPACE_STATUS_PORT
-                  ? Number(ref.metadata.workspaceStatusHostPort)
-                  : 0;
-        if (!mappedHostPort || mappedHostPort <= 0) return false;
-        const ok = await waitForHttpProbe(
-          mappedHostPort,
-          probe.path,
-          options.timeoutMs,
-        );
-        if (!ok) return false;
-      }
-    }
-
-    return true;
+    const target = resolveDockerProbeTarget(ref, options);
+    return probeGatewayReady(target, options);
   },
 
   async needsRecreation(

@@ -19,6 +19,7 @@ import { applySubscriptionPeriodBudgetsWithLock } from "../domain/payment/subscr
 import {
   renderCancelPage,
   renderSubscribePage,
+  renderSubscribeUnavailablePage,
   renderSuccessPage,
 } from "../domain/payment/pages.js";
 import { verifyInternalApiKey } from "../domain/payment/internalAuth.js";
@@ -220,14 +221,27 @@ export const createPaymentRouter = (): Router => {
       await assertSubscribeTokenUsable(token);
     } catch (error: unknown) {
       if (isDomainError(error)) {
-        res.status(error.status).send(error.message);
+        const message = error.message.toLowerCase();
+        const reason =
+          message.includes("expired")
+            ? "expired"
+            : message.includes("invalid")
+              ? "invalid"
+              : "unavailable";
+        res
+          .status(error.status)
+          .setHeader("Content-Type", "text/html; charset=utf-8")
+          .send(
+            renderSubscribeUnavailablePage({
+              reason,
+            }),
+          );
         return;
       }
       res
         .status(500)
-        .send(
-          `Payment service unavailable: ${error instanceof Error ? error.message : "Unknown error"}`,
-        );
+        .setHeader("Content-Type", "text/html; charset=utf-8")
+        .send(renderSubscribeUnavailablePage({ reason: "unavailable" }));
       return;
     }
 

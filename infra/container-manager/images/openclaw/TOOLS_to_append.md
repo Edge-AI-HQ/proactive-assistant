@@ -12,7 +12,7 @@ When executing a skill or calling LLMs:
 
    ```bash
    curl -X GET "$LITELLM_BASE_URL/v1/models" \
-     -H "Authorization: Bearer $LITELLM_KEY"
+     -H "Authorization: Bearer $LITELLM_API_KEY"
    ```
 
 3. **Rewrite the request**

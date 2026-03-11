@@ -165,7 +165,7 @@ export const config: Config = {
     apiBaseUrl: process.env.FLY_API_BASE_URL || 'https://api.machines.dev/v1',
     apiToken: process.env.FLY_API_TOKEN || '',
     appName: process.env.FLY_APP_NAME || '',
-    assistantAppName: process.env.FLY_ASSISTANT_APP_NAME || process.env.FLY_APP_NAME || '',
+    assistantAppName: process.env.FLY_ASSISTANT_APP_NAME || '',
     /** 逗号分隔的 region 列表，资源不足时按顺序尝试；如 "yyz,cdg,lhr,gru" */
     regionFallbacks: (() => {
       const raw = (process.env.FLY_REGION || 'iad').split(',').map((r) => r.trim()).filter(Boolean);
@@ -207,6 +207,9 @@ export const requiredSecrets: RequiredSecret[] = (() => {
 
 export const validateConfig = (): string[] => {
   const missing = requiredSecrets.filter(([, value]) => !value).map(([name]) => name);
+  if (config.container.runtime === "fly" && !config.fly.assistantAppName) {
+    missing.push("FLY_ASSISTANT_APP_NAME");
+  }
   if (missing.length && config.nodeEnv === 'production' && !config.featureFlags.allowMissingSecrets) {
     throw new Error(`Missing required env vars: ${missing.join(', ')}`);
   }

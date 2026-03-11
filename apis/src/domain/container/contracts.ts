@@ -9,7 +9,30 @@ export interface GatewayTarget {
   port: number;
   httpBaseUrl: string;
   wsBaseUrl: string;
+  /**
+   * Override Host header to send when proxying/probing this target.
+   *
+   * On Fly, connections to loopback-bound assistant machines arrive at
+   * 127.0.0.1 via flycast, but the Host header carries the original Fly
+   * IPv6 address.  OpenClaw's gateway checks the Host header to classify
+   * connections — a non-local Host causes it to treat the connection as
+   * remote, triggering device-identity checks.
+   *
+   * Set by the Fly provider to `127.0.0.1:<port>` for loopback-bound
+   * gateways.  `undefined` means "use the default Host header".
+   */
+  hostOverride?: string;
 }
+
+/**
+ * Build extra headers needed for proxying to a gateway target.
+ * Returns an object with a Host override when the provider requires it,
+ * or an empty object otherwise — safe to spread into any headers bag.
+ */
+export const gatewayHostHeaders = (
+  target: GatewayTarget,
+): Record<string, string> =>
+  target.hostOverride ? { Host: target.hostOverride } : {};
 
 // ---------------------------------------------------------------------------
 // Assistant record projections (used by callers of the public API)
@@ -94,6 +117,8 @@ export interface ProbeOptions {
   gatewayPort: number;
   additionalPorts?: number[];
   httpProbes?: Array<{ port: number; path: string }>;
+  /** Fires as soon as gateway WebSocket hello succeeds (before supplementary probes). */
+  onGatewayReady?: () => void;
 }
 
 export interface ContainerRuntime {

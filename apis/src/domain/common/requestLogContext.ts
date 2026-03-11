@@ -267,12 +267,18 @@ export const requestLogContextMiddleware: RequestHandler = (req, res, next) => {
     });
 
     res.on("finish", () => {
+      // Truncate large response bodies (e.g. HTML pages) to keep logs readable
+      const MAX_RESPONSE_LOG = 512;
+      let preview = responseBodyPreview;
+      if (typeof preview === "string" && preview.length > MAX_RESPONSE_LOG) {
+        preview = `${preview.slice(0, MAX_RESPONSE_LOG)}…[truncated ${preview.length} chars]`;
+      }
       console.log("[http:out]", {
         method: req.method,
         path: req.path,
         status: res.statusCode,
         duration_ms: Date.now() - startedAt,
-        response: responseBodyPreview,
+        response: preview,
       });
     });
 

@@ -20,6 +20,7 @@ import {
 } from "../domain/common/db/index.js";
 import { domainErrorMessage, isDomainError } from "../domain/common/errors.js";
 import { requireApiAuth } from "../domain/common/httpAuth.js";
+import { repairAssistantContainerById } from "../domain/container/usecases.js";
 import {
   createAssistantWithoutContainerByInput,
   listAssistantsByOwnerId,
@@ -42,6 +43,11 @@ import {
   resolveAssistantGatewayTarget,
   rewriteGatewayProxyRequestUrl,
 } from "../domain/gateway/proxy_orchestrator.js";
+import { gatewayHostHeaders } from "../domain/container/contracts.js";
+import {
+  getCurrentModel,
+  setCurrentModel,
+} from "../domain/gateway/gateway_rpc.js";
 import { createGatewaySessionByBody } from "../domain/gateway/session_api.js";
 import {
   buildSkillViewList,
@@ -215,6 +221,63 @@ const clearMiniSessionCookie = (res: Response): void => {
   res.clearCookie(miniSessionCookieName, { path: "/" });
 };
 
+const normalizeBotUsername = (): string | null => {
+  const raw = String(config.telegram.botUsername || "").trim();
+  if (!raw) return null;
+  return raw.replace(/^@+/, "") || null;
+};
+
+const renderMiniGoogleDonePage = (
+  status: "connected" | "error" | "disconnected",
+  reason?: string,
+): string => {
+  const botUsername = normalizeBotUsername();
+  const openTelegramUrl = botUsername
+    ? `https://t.me/${botUsername}?startapp=manage`
+    : "tg://resolve";
+
+  const title =
+    status === "connected"
+      ? "Google connected"
+      : status === "disconnected"
+        ? "Google disconnected"
+        : "Google connection failed";
+  const description =
+    status === "connected"
+      ? "Authorization completed. Return to Telegram Mini App and continue in chat."
+      : status === "disconnected"
+        ? "Google has been disconnected. Return to Telegram Mini App."
+        : `Authorization failed${reason ? `: ${reason}` : ""}. Please retry from Telegram Mini App.`;
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${title}</title>
+  <style>
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0b1220; color: #e6edf7; }
+    .wrap { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    .card { width: 100%; max-width: 520px; background: #121a2b; border: 1px solid #26324a; border-radius: 16px; padding: 24px; }
+    h1 { margin: 0 0 12px; font-size: 24px; line-height: 1.2; }
+    p { margin: 0 0 16px; color: #b6c2d9; line-height: 1.5; }
+    a.btn { display: inline-block; text-decoration: none; background: #4f8cff; color: white; padding: 12px 16px; border-radius: 10px; font-weight: 600; }
+    .hint { margin-top: 14px; font-size: 13px; color: #8fa0c0; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>${title}</h1>
+      <p>${description}</p>
+      <a class="btn" href="${openTelegramUrl}">Back to Telegram</a>
+      <p class="hint">After returning, send your previous request again in chat.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+};
+
 const requireMiniSession = async (
   req: Request,
   res: Response,
@@ -295,6 +358,9 @@ const buildQuickStatePayload = async (
           cancel_at_period_end: false,
           current_period_end: null,
         },
+    features: {
+      can_delete_account: config.nodeEnv.trim().toLowerCase() !== "production",
+    },
     plans: null as null,
     skills: null as null,
     google: null as null,
@@ -402,13 +468,13 @@ export const createDashboardRouter = (): Router => {
       try {
         const url = await buildGoogleAuthStartUrl(
           user.telegram_user_id,
-          buildMiniGoogleReturnUrl("/mini", { status: "connected" }),
+          buildMiniGoogleReturnUrl("/mini/google/done", { status: "connected" }),
         );
         res.redirect(url);
       } catch (error: unknown) {
         console.error("Mini google start failed", error);
         res.redirect(
-          buildMiniGoogleReturnUrl("/mini", {
+          buildMiniGoogleReturnUrl("/mini/google/done", {
             status: "error",
             error: "oauth_start_failed",
           }),
@@ -424,18 +490,37 @@ export const createDashboardRouter = (): Router => {
         state: typeof req.query.state === "string" ? req.query.state : undefined,
         error: typeof req.query.error === "string" ? req.query.error : undefined,
       });
-      res.redirect(
-        result.nextPath || buildMiniGoogleReturnUrl("/mini", { status: "connected" }),
-      );
+      const nextPath =
+        result.nextPath ||
+        buildMiniGoogleReturnUrl("/mini/google/done", { status: "connected" });
+      res.redirect(nextPath);
     } catch (error: unknown) {
       console.error("Mini google callback failed", error);
       res.redirect(
-        buildMiniGoogleReturnUrl("/mini", {
+        buildMiniGoogleReturnUrl("/mini/google/done", {
           status: "error",
           error: "oauth_callback_failed",
         }),
       );
     }
+  });
+
+  router.get("/mini/google/done", (req: Request, res: Response) => {
+    const statusParam = String(req.query.google || "connected").trim().toLowerCase();
+    const status =
+      statusParam === "error"
+        ? "error"
+        : statusParam === "disconnected"
+          ? "disconnected"
+          : "connected";
+    const reason =
+      typeof req.query.reason === "string"
+        ? req.query.reason
+        : typeof req.query.error === "string"
+          ? req.query.error
+          : undefined;
+    res.setHeader("Cache-Control", "no-store");
+    res.type("html").send(renderMiniGoogleDonePage(status, reason));
   });
 
   router.post(
@@ -541,6 +626,37 @@ export const createDashboardRouter = (): Router => {
   );
 
   router.post(
+    "/api/mini/google/start-url",
+    async (req: Request, res: Response, next: NextFunction) => {
+      void requireMiniSession(req, res, next).catch((error: unknown) => {
+        console.error("Mini session check failed", error);
+        res.status(500).json({ error: "Mini session check failed." });
+      });
+    },
+    async (req: Request, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+
+      try {
+        const url = await buildGoogleAuthStartUrl(
+          user.telegram_user_id,
+          buildMiniGoogleReturnUrl("/mini/google/done", { status: "connected" }),
+        );
+        res.status(200).json({ url });
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
     "/api/mini/google/disconnect",
     async (req: Request, res: Response, next: NextFunction) => {
       void requireMiniSession(req, res, next).catch((error: unknown) => {
@@ -614,6 +730,46 @@ export const createDashboardRouter = (): Router => {
               return;
             }
           }
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
+    "/api/mini/repair-runtime",
+    async (req: Request, res: Response, next: NextFunction) => {
+      void requireMiniSession(req, res, next).catch((error: unknown) => {
+        console.error("Mini session check failed", error);
+        res.status(500).json({ error: "Mini session check failed." });
+      });
+    },
+    async (req: Request, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+
+      try {
+        const assistants = await listAssistantsByOwnerId(user.telegram_user_id);
+        const assistant = assistants[0];
+        if (!assistant) {
+          res.status(400).json({ error: "Assistant not found. Create assistant first." });
+          return;
+        }
+
+        const result = await repairAssistantContainerById(assistant.id);
+        res.status(200).json({
+          ok: true,
+          deleted: result.deleted,
+          container_id: result.containerId,
+          ready: result.ready,
+        });
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
           res.status(error.status).json({ error: error.message });
           return;
         }
@@ -810,6 +966,152 @@ export const createDashboardRouter = (): Router => {
           skill_key: skillKey,
           skills: buildSkillViewList(nextConfig),
           config: nextConfig,
+        });
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------------
+  // Model management
+  // -----------------------------------------------------------------------
+
+  router.get(
+    "/api/mini/models",
+    async (req: Request, res: Response, next: NextFunction) => {
+      void requireMiniSession(req, res, next).catch((error: unknown) => {
+        console.error("Mini session check failed", error);
+        res.status(500).json({ error: "Mini session check failed." });
+      });
+    },
+    async (_req: Request, res: Response) => {
+      const user = (_req as Request).gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+
+      try {
+        const assistants = await listAssistantsByOwnerId(user.telegram_user_id);
+        const assistant = assistants[0];
+
+        // Build available models from config
+        const allowedModels = config.litellm.allowedModels.length
+          ? config.litellm.allowedModels
+          : [config.litellm.openclawDefaultModel];
+        const defaultModel = config.litellm.openclawDefaultModel;
+
+        // Try to read current model from running gateway
+        let currentModel: string | null = null;
+        if (assistant?.container_status === "running" && user.gateway_token?.trim()) {
+          try {
+            const target = resolveAssistantGatewayTarget(assistant);
+            currentModel = await getCurrentModel(target, user.gateway_token.trim());
+          } catch {
+            // Gateway unreachable — fall back to default
+          }
+        }
+
+        res.status(200).json({
+          ok: true,
+          current_model: currentModel ?? `litellm/${defaultModel}`,
+          default_model: `litellm/${defaultModel}`,
+          available_models: allowedModels.map((id) => ({
+            id,
+            ref: `litellm/${id}`,
+          })),
+        });
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
+    "/api/mini/change-model",
+    async (req: Request, res: Response, next: NextFunction) => {
+      void requireMiniSession(req, res, next).catch((error: unknown) => {
+        console.error("Mini session check failed", error);
+        res.status(500).json({ error: "Mini session check failed." });
+      });
+    },
+    async (
+      req: Request<Record<string, never>, unknown, { model?: string }>,
+      res: Response,
+    ) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+
+      const modelRef =
+        typeof req.body?.model === "string" ? req.body.model.trim() : "";
+      if (!modelRef) {
+        res.status(400).json({ error: "model is required (e.g. litellm/claude-opus-4-6)" });
+        return;
+      }
+
+      // Validate against allowed models
+      const bareId = modelRef.replace(/^litellm\//i, "");
+      const allowedModels = config.litellm.allowedModels.length
+        ? config.litellm.allowedModels
+        : [config.litellm.openclawDefaultModel];
+      if (!allowedModels.includes(bareId)) {
+        res.status(400).json({
+          error: `Model "${bareId}" is not in the allowed list.`,
+          allowed: allowedModels,
+        });
+        return;
+      }
+
+      const normalizedRef = modelRef.startsWith("litellm/")
+        ? modelRef
+        : `litellm/${modelRef}`;
+
+      try {
+        const assistants = await listAssistantsByOwnerId(user.telegram_user_id);
+        const assistant = assistants[0];
+        if (!assistant) {
+          res.status(400).json({ error: "Assistant not found. Create assistant first." });
+          return;
+        }
+
+        const gatewayToken = user.gateway_token?.trim();
+        if (!gatewayToken) {
+          res.status(500).json({ error: "Gateway token missing." });
+          return;
+        }
+
+        if (assistant.container_status !== "running") {
+          res.status(503).json({
+            error: "Assistant is not running. Please wait for it to start or repair it.",
+          });
+          return;
+        }
+
+        const target = resolveAssistantGatewayTarget(assistant);
+        const result = await setCurrentModel(target, gatewayToken, normalizedRef);
+
+        if (!result.ok) {
+          res.status(502).json({
+            error: `Gateway rejected model change: ${result.error}`,
+          });
+          return;
+        }
+
+        res.status(200).json({
+          ok: true,
+          model: normalizedRef,
         });
       } catch (error: unknown) {
         if (isDomainError(error)) {
@@ -1019,6 +1321,45 @@ export const createDashboardRouter = (): Router => {
               return;
             }
           }
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
+    "/gateway/:user_id/mini/repair-runtime",
+    requireDashboardSession,
+    async (req: Request<{ user_id: string }>, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+      if (String(user.telegram_user_id) !== req.params.user_id) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      try {
+        const assistants = await listAssistantsByOwnerId(user.telegram_user_id);
+        const assistant = assistants[0];
+        if (!assistant) {
+          res.status(400).json({ error: "Assistant not found. Create assistant first." });
+          return;
+        }
+
+        const result = await repairAssistantContainerById(assistant.id);
+        res.status(200).json({
+          ok: true,
+          deleted: result.deleted,
+          container_id: result.containerId,
+          ready: result.ready,
+        });
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
           res.status(error.status).json({ error: error.message });
           return;
         }
@@ -1391,7 +1732,10 @@ export const createDashboardRouter = (): Router => {
       proxy.web(req, res, {
         target: target.httpBaseUrl,
         changeOrigin: true,
-        headers: buildOpenclawAuthHeaders(user.gateway_token),
+        headers: {
+          ...buildOpenclawAuthHeaders(user.gateway_token),
+          ...gatewayHostHeaders(target),
+        },
       });
     },
   );
@@ -1480,7 +1824,10 @@ export const registerDashboardWsRoutes = (server: Server): void => {
       proxy.ws(req, socket, head, {
         target: target.wsBaseUrl,
         changeOrigin: false,
-        headers: buildOpenclawAuthHeaders(user.gateway_token),
+        headers: {
+          ...buildOpenclawAuthHeaders(user.gateway_token),
+          ...gatewayHostHeaders(target),
+        },
       });
     })().catch((error: unknown) => {
       console.error("Assistant dashboard WS upgrade error", error);

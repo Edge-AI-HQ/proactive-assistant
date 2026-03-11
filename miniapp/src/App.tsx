@@ -57,6 +57,9 @@ type StatePayload = {
     cancel_at_period_end: boolean;
     current_period_end: string | null;
   };
+  features?: {
+    can_delete_account?: boolean;
+  };
   plans: Plan[] | null;
   skills: SkillsPayload | null;
   google: GoogleStatus | null;
@@ -66,6 +69,22 @@ type DeferredPayload = {
   plans: Plan[];
   skills: SkillsPayload;
   google: GoogleStatus;
+};
+
+type ModelItem = {
+  id: string;
+  ref: string;
+};
+
+type ModelsPayload = {
+  ok: boolean;
+  current_model: string;
+  default_model: string;
+  available_models: ModelItem[];
+};
+
+type GoogleStartUrlPayload = {
+  url: string;
 };
 
 const mergeQuickPayload = (
@@ -91,6 +110,13 @@ declare global {
         close: () => void;
         initData?: string;
         openTelegramLink?: (url: string) => void;
+        openLink?: (
+          url: string,
+          options?: {
+            try_instant_view?: boolean;
+            try_browser?: string;
+          },
+        ) => void;
         initDataUnsafe?: {
           user?: {
             id: number;
@@ -142,6 +168,7 @@ const App = () => {
     () => !sessionStorage.getItem("onboarding_seen"),
   );
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+  const [models, setModels] = useState<{ current: string | null; available: ModelItem[] } | null>(null);
   const handledGoogleRedirectRef = useRef(false);
 
   const showToast = (message: string, type: "success" | "error" = "error") => {
@@ -264,6 +291,19 @@ const App = () => {
 
   const createAssistant = async () => {
     setBusy("create");
+    setState((prev) =>
+      prev
+        ? {
+            ...prev,
+            assistant: {
+              exists: true,
+              id: prev.assistant.id,
+              username: prev.assistant.username ?? null,
+              status: prev.assistant.status === "running" ? "running" : "creating",
+            },
+          }
+        : prev,
+    );
     try {
       await safeFetch("/api/mini/create-assistant", {
         method: "POST",
@@ -271,6 +311,7 @@ const App = () => {
       });
       await loadState();
     } catch (e) {
+      await loadState().catch(() => {});
       showToast(`Create failed: ${e instanceof Error ? e.message : "unknown"}`);
     } finally {
       setBusy("none");
@@ -311,15 +352,42 @@ const App = () => {
     }
     setBusy("cancel");
     try {
-      await safeFetch("/api/mini/cancel-subscription", {
+      const result = await safeFetch<{
+        ok: true;
+        status: string;
+        cancel_at_period_end: true;
+        current_period_end: string;
+        already_scheduled?: boolean;
+      }>("/api/mini/cancel-subscription", {
         method: "POST",
         body: JSON.stringify({}),
       });
-      showToast("Renewal canceled. Service remains active until period end.", "success");
+      setState((prev) => prev ? {
+        ...prev,
+        subscription: {
+          ...prev.subscription,
+          status: result.status,
+          cancel_at_period_end: true,
+          current_period_end: result.current_period_end,
+        },
+      } : prev);
+      showToast(
+        result.already_scheduled
+          ? "Renewal was already canceled. Service remains active until period end."
+          : "Renewal canceled. Service remains active until period end.",
+        "success",
+      );
       await loadState();
+    } finally {
+      setBusy("none");
+    }
+  };
+
+  const handleCancelSubscription = async () => {
+    try {
+      await cancelSubscription();
     } catch (e) {
       showToast(`Cancel failed: ${e instanceof Error ? e.message : "unknown"}`);
-      setBusy("none");
     }
   };
 
@@ -338,8 +406,33 @@ const App = () => {
     }
   };
 
-  const handleConnectGoogle = () => {
-    window.location.href = "/mini/google/start";
+  const handleConnectGoogle = async () => {
+    setBusy("google-connect");
+    try {
+      const payload = await safeFetch<GoogleStartUrlPayload>("/api/mini/google/start-url", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      const authUrl = String(payload.url || "").trim();
+      if (!authUrl) {
+        throw new Error("Missing Google auth URL");
+      }
+      const webApp = window.Telegram?.WebApp;
+      if (webApp?.openLink) {
+        webApp.openLink(authUrl, { try_browser: "chrome" });
+      } else {
+        window.open(authUrl, "_blank", "noopener,noreferrer");
+      }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "unknown";
+      if (/unauthorized/i.test(message)) {
+        window.location.reload();
+        return;
+      }
+      showToast(`Google connect failed: ${message}`);
+    } finally {
+      setBusy("none");
+    }
   };
 
   const handleDisconnectGoogle = async () => {
@@ -364,18 +457,64 @@ const App = () => {
     }
   };
 
-  const handleOpenManage = async () => {
+  const handleRepairRuntime = async () => {
+    setBusy("repair-runtime");
     try {
+      await safeFetch<{ ok: true; ready: boolean }>("/api/mini/repair-runtime", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      showToast("Runtime repair started. The assistant may take a moment to become ready again.", "success");
       await loadState();
-      setShowManageAgent(true);
     } catch (e) {
-      const message = e instanceof Error ? e.message : "unknown";
-      if (/unauthorized/i.test(message)) {
-        window.location.reload();
-        return;
-      }
-      showToast(`Unable to open manage: ${message}`);
+      showToast(`Repair failed: ${e instanceof Error ? e.message : "unknown"}`);
+    } finally {
+      setBusy("none");
     }
+  };
+
+  const handleContactSupport = () => {
+    const supportUrl = `${window.location.origin}/mini/support.html`;
+    const webApp = window.Telegram?.WebApp;
+
+    if (webApp?.openLink) {
+      webApp.openLink(supportUrl, { try_browser: "chrome" });
+      return;
+    }
+
+    window.open(supportUrl, "_blank", "noopener,noreferrer");
+  };
+
+  const loadModels = async () => {
+    try {
+      const payload = await safeFetch<ModelsPayload>("/api/mini/models");
+      setModels({
+        current: payload.current_model,
+        available: payload.available_models,
+      });
+    } catch {
+      // non-critical — models section will just be empty
+    }
+  };
+
+  const handleChangeModel = async (modelRef: string) => {
+    setBusy("change-model");
+    try {
+      await safeFetch<{ ok: true; model: string }>("/api/mini/change-model", {
+        method: "POST",
+        body: JSON.stringify({ model: modelRef }),
+      });
+      setModels((prev) => prev ? { ...prev, current: modelRef } : prev);
+      showToast("Model changed successfully.", "success");
+    } catch (e) {
+      showToast(`Model change failed: ${e instanceof Error ? e.message : "unknown"}`);
+    } finally {
+      setBusy("none");
+    }
+  };
+
+  const handleOpenManage = () => {
+    setShowManageAgent(true);
   };
 
   // Telegram native loader covers the bootstrap wait — render empty background
@@ -523,28 +662,36 @@ const App = () => {
             active={state.subscription.active}
             manageOpen={showManageAgent}
             google={state.google ?? undefined}
-            googleBusy={busy === "google-disconnect"}
+            googleBusy={busy === "google-disconnect" || busy === "google-connect"}
             onOpenManage={() => {
               void handleOpenManage();
             }}
             onCloseManage={() => setShowManageAgent(false)}
             onChangePlan={() => setShowChangePlan(true)}
+            onRepairRuntime={handleRepairRuntime}
+            runtimeBusy={busy === "repair-runtime"}
+            allowDeleteAccount={state.features?.can_delete_account ?? true}
             onDeleteAccount={handleDeleteAccount}
             onConnectGoogle={handleConnectGoogle}
             onDisconnectGoogle={handleDisconnectGoogle}
+            models={models}
+            modelBusy={busy === "change-model"}
+            onChangeModel={handleChangeModel}
+            onLoadModels={loadModels}
           />
         </div>
 
         <div className="px-4 mt-auto pt-4">
-          <a
-            href="mailto:support@pinai.io"
-            className="glass-card rounded-2xl flex items-center justify-center gap-2 text-sm text-foreground font-medium py-3 hover:bg-secondary/50 transition-colors"
+          <button
+            type="button"
+            onClick={handleContactSupport}
+            className="glass-card w-full rounded-2xl flex items-center justify-center gap-2 text-sm text-foreground font-medium py-3 hover:bg-secondary/50 transition-colors border-0 bg-transparent appearance-none"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
             </svg>
             Contact Us
-          </a>
+          </button>
         </div>
 
         <ChangePlanDialog
@@ -552,10 +699,12 @@ const App = () => {
           onClose={() => setShowChangePlan(false)}
           plans={state.plans ?? []}
           currentPlanId={state.subscription.plan_id}
+          cancelAtPeriodEnd={state.subscription.cancel_at_period_end}
+          currentPeriodEnd={state.subscription.current_period_end}
           selectedPlan={selectedPlan}
           onSelectPlan={setSelectedPlan}
           onCheckout={checkout}
-          onCancel={cancelSubscription}
+          onCancel={handleCancelSubscription}
           busy={busy}
         />
 

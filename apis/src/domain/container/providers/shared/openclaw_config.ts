@@ -32,6 +32,13 @@ export const buildGatewayConfigSection = (
   bind: GatewayBindMode,
   controlOrigin?: string,
 ): UnknownRecord => {
+  const normalizedGatewayToken = gatewayToken.trim();
+  if (!normalizedGatewayToken) {
+    throw new Error(
+      "gateway_token is required to start OpenClaw gateway with token auth.",
+    );
+  }
+
   const controlUi: UnknownRecord = {
     allowInsecureAuth: true,
     // Disable device-identity / pairing checks — our APIs layer already
@@ -55,17 +62,31 @@ export const buildGatewayConfigSection = (
   // Trust the APIs reverse proxy so the gateway accepts forwarded headers
   // and treats proxied connections as local.
   const trustedProxies =
-    bind === "loopback" ? ["127.0.0.0/8"] : ["0.0.0.0/0"];
+    bind === "loopback"
+      ? [
+          "127.0.0.0/8",
+          "::1/128",
+          "10.0.0.0/8",
+          "172.16.0.0/12",
+          "192.168.0.0/16",
+          "fc00::/7",
+        ]
+      : ["0.0.0.0/0"];
+
+  const auth =
+    bind === "loopback"
+      ? { mode: "none" as const }
+      : {
+          mode: "token" as const,
+          token: normalizedGatewayToken,
+        };
 
   return {
     mode: "local",
     port: context.openclaw.gatewayPort,
     bind,
     trustedProxies,
-    auth: {
-      mode: "token",
-      token: gatewayToken,
-    },
+    auth,
     controlUi,
     http: {
       endpoints: {
@@ -407,7 +428,20 @@ export const buildAssistantOpenclawConfig = (
       notifyOnExit: true,
     },
     web: {
-      search: { enabled: true, maxResults: 10 },
+      search: {
+        enabled: true,
+        maxResults: 10,
+        ...(context.litellm.enabled && normalizedLiteLLMApiKey
+          ? {
+              provider: "perplexity",
+              perplexity: {
+                apiKey: normalizedLiteLLMApiKey,
+                baseUrl: context.litellm.baseUrl.replace(/\/+$/, ""),
+                model: "sonar-pro",
+              },
+            }
+          : {}),
+      },
       fetch: { enabled: true, maxChars: 50000 },
     },
     media: {
@@ -422,12 +456,12 @@ export const buildAssistantOpenclawConfig = (
     loopDetection: { enabled: false },
   };
 
-  // Enable all commands except config
+  // Enable all commands, including runtime config edits via /config
   next.commands = {
     native: true,
     text: true,
     bash: true,
-    config: false,
+    config: true,
     debug: true,
     restart: true,
   };

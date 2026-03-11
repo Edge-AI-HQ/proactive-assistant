@@ -15,6 +15,7 @@ RUN npm ci
 # Copy source for both workspaces
 COPY apis ./apis
 COPY miniapp ./miniapp
+COPY scripts ./scripts
 
 # Build miniapp first (outputs to apis/public/mini/)
 RUN npm run build --workspace @pin-ai/miniapp

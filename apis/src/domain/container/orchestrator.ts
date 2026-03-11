@@ -396,6 +396,8 @@ export class ContainerOrchestrator {
         600_000,
       );
 
+      let earlyMarked = false;
+
       const ready = await this.runtime.probeReady(container, {
         timeoutMs: probeTimeoutMs,
         gatewayToken,
@@ -405,26 +407,52 @@ export class ContainerOrchestrator {
           { port: webhookPort, path: webhookPath },
           { port: PINAI_WORKSPACE_STATUS_PORT, path: PINAI_WORKSPACE_STATUS_PATH },
         ],
-      });
-
-      await this.store.updateAssistant(assistant.id, {
-        container_status: ready ? "running" : "error",
-      });
-
-      if (ready && assistant.owner_telegram_user_id) {
-        console.log(
-          `[orchestrator] Fully ready for assistant ${assistant.id}, notifying user ${assistant.owner_telegram_user_id}`,
-        );
-        await this.notifier
-          .notifyReady(Number(assistant.owner_telegram_user_id), {
-            assistantId: assistant.id,
-          })
-          .catch((e) =>
-            console.warn(
-              `[orchestrator] notify failed for assistant ${assistant.id}`,
-              e,
-            ),
+        onGatewayReady: () => {
+          // Mark running as soon as gateway hello succeeds — don't wait for
+          // supplementary port/HTTP probes which can add 10-20s of delay.
+          earlyMarked = true;
+          console.log(
+            `[orchestrator] Gateway ready for assistant ${assistant.id}, marking running early`,
           );
+          void this.store.updateAssistant(assistant.id, {
+            container_status: "running",
+          });
+          if (assistant.owner_telegram_user_id) {
+            void this.notifier
+              .notifyReady(Number(assistant.owner_telegram_user_id), {
+                assistantId: assistant.id,
+              })
+              .catch((e) =>
+                console.warn(
+                  `[orchestrator] notify failed for assistant ${assistant.id}`,
+                  e,
+                ),
+              );
+          }
+        },
+      });
+
+      // If onGatewayReady never fired (e.g. no gatewayToken), fall back to
+      // the final probe result.
+      if (!earlyMarked) {
+        await this.store.updateAssistant(assistant.id, {
+          container_status: ready ? "running" : "error",
+        });
+        if (ready && assistant.owner_telegram_user_id) {
+          console.log(
+            `[orchestrator] Fully ready for assistant ${assistant.id}, notifying user ${assistant.owner_telegram_user_id}`,
+          );
+          await this.notifier
+            .notifyReady(Number(assistant.owner_telegram_user_id), {
+              assistantId: assistant.id,
+            })
+            .catch((e) =>
+              console.warn(
+                `[orchestrator] notify failed for assistant ${assistant.id}`,
+                e,
+              ),
+            );
+        }
       }
     } catch (err) {
       console.error(

@@ -27,7 +27,16 @@ WORKDIR /app
 
 RUN mkdir -p /opt/pinai/plugins/telegram-router-proxy
 COPY openclaw-plugins/telegram-router-proxy/ /opt/pinai/plugins/telegram-router-proxy/
-COPY infra/container-manager/images/openclaw/skills/ /usr/local/lib/node_modules/openclaw/skills/
+
+# Copy custom skills: first remove any same-named bundled skills so ours
+# completely replace them (no leftover files), then copy in.
+COPY infra/container-manager/images/openclaw/skills/ /tmp/pinai-skills/
+RUN for skill in /tmp/pinai-skills/*/; do \
+      name=$(basename "$skill"); \
+      rm -rf "/usr/local/lib/node_modules/openclaw/skills/$name"; \
+    done \
+    && cp -r /tmp/pinai-skills/. /usr/local/lib/node_modules/openclaw/skills/ \
+    && rm -rf /tmp/pinai-skills
 
 # ── Warm up jiti + Node compile caches at build time ──
 # Launch gateway with OPENCLAW_HOME=/app so workspace lands at /app/.openclaw/workspace/.

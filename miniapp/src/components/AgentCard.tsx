@@ -1,5 +1,10 @@
 import ManageAgentDialog from "./ManageAgentDialog";
 
+type ModelItem = {
+  id: string;
+  ref: string;
+};
+
 interface AgentCardProps {
   username: string | null;
   status: string;
@@ -14,9 +19,19 @@ interface AgentCardProps {
   onOpenManage: () => void;
   onCloseManage: () => void;
   onChangePlan: () => void;
+  onRepairRuntime: () => void;
+  runtimeBusy: boolean;
+  allowDeleteAccount: boolean;
   onDeleteAccount: () => void;
   onConnectGoogle: () => void;
   onDisconnectGoogle: () => void;
+  models?: {
+    current: string | null;
+    available: ModelItem[];
+  } | null;
+  modelBusy: boolean;
+  onChangeModel: (modelRef: string) => void;
+  onLoadModels: () => Promise<void>;
 }
 
 const getStatusDisplay = (status: string): { text: string; color: string } => {
@@ -47,9 +62,16 @@ const AgentCard = ({
   onOpenManage,
   onCloseManage,
   onChangePlan,
+  onRepairRuntime,
+  runtimeBusy,
+  allowDeleteAccount,
   onDeleteAccount,
   onConnectGoogle,
   onDisconnectGoogle,
+  models,
+  modelBusy,
+  onChangeModel,
+  onLoadModels,
 }: AgentCardProps) => {
   const statusDisplay = getStatusDisplay(status);
 
@@ -135,12 +157,20 @@ const AgentCard = ({
         open={manageOpen}
         onClose={onCloseManage}
         planId={planId}
+        runtimeStatus={status}
         google={google}
         googleBusy={googleBusy}
         onChangePlan={onChangePlan}
+        onRepairRuntime={onRepairRuntime}
+        runtimeBusy={runtimeBusy}
+        allowDeleteAccount={allowDeleteAccount}
         onDeleteAccount={onDeleteAccount}
         onConnectGoogle={onConnectGoogle}
         onDisconnectGoogle={onDisconnectGoogle}
+        models={models}
+        modelBusy={modelBusy}
+        onChangeModel={onChangeModel}
+        onLoadModels={onLoadModels}
       />
     </>
   );

@@ -1,11 +1,25 @@
 const paymentPageLayoutStyles = `
   * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --page-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.92) 0%, rgba(248, 238, 250, 0.92) 18%, rgba(244, 229, 246, 0.88) 34%, rgba(239, 225, 243, 0.84) 53%, rgba(223, 231, 248, 0.88) 77%, rgba(244, 245, 255, 0.96) 100%);
+    --ink: #1a1630;
+    --muted: #655f7f;
+    --soft-line: rgba(131, 102, 164, 0.16);
+    --accent: #df5bb9;
+    --accent-deep: #c3479f;
+    --card-shadow: 0 18px 45px rgba(78, 48, 109, 0.14);
+    --card-bg: rgba(255, 255, 255, 0.82);
+  }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif;
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.60) 0%, rgba(249, 237, 250, 0.26) 7.25%, rgba(247, 231, 249, 0.35) 11.8%, rgba(244, 222, 246, 0.49) 19.12%, rgba(242, 215, 244, 0.60) 32.22%, rgba(246, 206, 216, 0.60) 48.33%, rgba(180, 202, 244, 0.60) 80.24%, rgba(220, 211, 241, 0.60) 88.99%, rgba(223, 212, 240, 0.00) 100%), #FFF;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'SF Pro Display', 'Helvetica Neue', sans-serif;
+    background:
+      radial-gradient(circle at top, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0) 42%),
+      radial-gradient(circle at 18% 18%, rgba(230, 164, 226, 0.22), rgba(230, 164, 226, 0) 30%),
+      radial-gradient(circle at 78% 22%, rgba(125, 168, 250, 0.22), rgba(125, 168, 250, 0) 28%),
+      var(--page-bg);
     min-height: 100vh;
     padding: 40px 20px;
-    color: #1a1a1a;
+    color: var(--ink);
   }
   .container { max-width: 1200px; margin: 0 auto; }
   .header { text-align: center; margin-bottom: 40px; }
@@ -17,51 +31,163 @@ const paymentPageLayoutStyles = `
     margin-bottom: 30px;
   }
   .header-icons img { height: 60px; width: auto; object-fit: contain; }
-  .header-icons .separator { font-size: 32px; color: #999; font-weight: 300; }
-  .header h1 { font-size: 42px; font-weight: 700; margin-bottom: 16px; line-height: 1.2; color: #000; }
-  .header p { font-size: 16px; color: #666; max-width: 700px; margin: 0 auto 20px; line-height: 1.6; }
+  .header-icons .separator { font-size: 32px; color: rgba(91, 79, 117, 0.48); font-weight: 300; }
+  .header h1 { font-size: 42px; font-weight: 700; margin-bottom: 16px; line-height: 1.15; color: var(--ink); letter-spacing: -0.03em; }
+  .header p { font-size: 16px; color: var(--muted); max-width: 700px; margin: 0 auto 20px; line-height: 1.6; }
   .card {
-    background: white;
-    border-radius: 16px;
+    background: var(--card-bg);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    border-radius: 24px;
     padding: 40px 32px;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-    border: 2px solid rgba(225, 92, 230, 0.2);
+    box-shadow: var(--card-shadow);
+    border: 1px solid var(--soft-line);
     max-width: 560px;
     margin: 0 auto;
   }
-  .card p { font-size: 16px; color: #333; line-height: 1.6; margin-bottom: 24px; }
+  .card p { font-size: 16px; color: #2d2647; line-height: 1.65; margin-bottom: 24px; }
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 auto 18px;
+    padding: 8px 14px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.66);
+    border: 1px solid rgba(131, 102, 164, 0.14);
+    color: #7b5f98;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .eyebrow::before {
+    content: '';
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, #ffb7dd, #df5bb9);
+    box-shadow: 0 0 0 4px rgba(223, 91, 185, 0.12);
+  }
+  .status-card {
+    position: relative;
+    overflow: hidden;
+    max-width: 620px;
+    padding: 48px 36px 34px;
+  }
+  .status-card::before {
+    content: '';
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 180px;
+    height: 180px;
+    background: radial-gradient(circle, rgba(223, 91, 185, 0.18), rgba(223, 91, 185, 0));
+    pointer-events: none;
+  }
+  .status-icon {
+    width: 72px;
+    height: 72px;
+    border-radius: 22px;
+    display: grid;
+    place-items: center;
+    margin: 0 auto 22px;
+    font-size: 34px;
+    background: linear-gradient(145deg, rgba(255, 255, 255, 0.9), rgba(252, 236, 246, 0.82));
+    border: 1px solid rgba(223, 91, 185, 0.18);
+    box-shadow: 0 12px 30px rgba(193, 94, 162, 0.18);
+  }
+  .status-title {
+    font-size: 34px;
+    line-height: 1.12;
+    letter-spacing: -0.03em;
+    margin-bottom: 14px;
+    text-align: center;
+  }
+  .status-copy {
+    text-align: center;
+    color: var(--muted);
+    margin: 0 auto 28px;
+    max-width: 480px;
+  }
+  .status-copy strong { color: var(--ink); }
+  .tip-strip {
+    display: grid;
+    gap: 10px;
+    margin: 0 0 26px;
+    padding: 16px 18px;
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px solid rgba(131, 102, 164, 0.12);
+  }
+  .tip-strip span {
+    font-size: 14px;
+    color: #544b70;
+  }
   .btn {
     display: inline-block;
     width: 100%;
     padding: 16px 32px;
-    background: #E15CE6;
+    background: linear-gradient(135deg, var(--accent), #eb76c7);
     color: white;
     border: none;
-    border-radius: 12px;
+    border-radius: 16px;
     font-size: 16px;
     font-weight: 600;
     text-decoration: none;
     text-align: center;
     cursor: pointer;
     transition: all 0.3s ease;
-    box-shadow: 0 4px 12px rgba(225, 92, 230, 0.3);
+    box-shadow: 0 12px 28px rgba(223, 91, 185, 0.26);
   }
   .btn:hover {
     transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(225, 92, 230, 0.4);
-    background: #C94DD4;
+    box-shadow: 0 16px 32px rgba(223, 91, 185, 0.34);
+    background: linear-gradient(135deg, var(--accent-deep), var(--accent));
     color: white;
   }
-  .muted { color: #6b7280; font-size: 14px; }
+  .btn-secondary {
+    display: inline-block;
+    width: 100%;
+    padding: 14px 22px;
+    border-radius: 16px;
+    text-align: center;
+    text-decoration: none;
+    font-size: 15px;
+    font-weight: 600;
+    color: #58467f;
+    background: rgba(255, 255, 255, 0.74);
+    border: 1px solid rgba(131, 102, 164, 0.14);
+    margin-top: 12px;
+  }
+  .muted { color: var(--muted); font-size: 14px; text-align: center; }
+  .stack { display: grid; gap: 12px; }
+  @media (max-width: 640px) {
+    body { padding: 28px 16px; }
+    .header { margin-bottom: 28px; }
+    .header-icons { gap: 14px; margin-bottom: 22px; }
+    .header-icons img { height: 46px; }
+    .header h1, .status-title { font-size: 30px; }
+    .card, .status-card { padding: 30px 22px 24px; border-radius: 22px; }
+  }
 `;
 
-export const renderSuccessPage = (mode?: string): string => {
+const readTelegramReturnButton = (
+  label: string,
+  fallback: string,
+): string => {
   const username = (process.env.TELEGRAM_BOT_USERNAME || "")
     .trim()
     .replace(/^@/, "");
-  const button = username
-    ? `<a class="btn" href="https://t.me/${username}" target="_blank" rel="noopener">Return to Telegram</a>`
-    : `<p class="muted">Return to Telegram and continue with your bot.</p>`;
+  return username
+    ? `<div class="stack"><a class="btn" href="https://t.me/${username}" target="_blank" rel="noopener">${label}</a><a class="btn-secondary" href="https://t.me/${username}" target="_blank" rel="noopener">Open Telegram bot</a></div>`
+    : `<p class="muted">${fallback}</p>`;
+};
+
+export const renderSuccessPage = (mode?: string): string => {
+  const button = readTelegramReturnButton(
+    "Return to Telegram",
+    "Return to Telegram and continue with your bot.",
+  );
 
   const isDowngrade = mode === "downgrade_scheduled";
   const title = isDowngrade ? "Plan Change Scheduled" : "Subscription Activated";
@@ -95,12 +221,10 @@ export const renderSuccessPage = (mode?: string): string => {
 };
 
 export const renderCancelPage = (): string => {
-  const username = (process.env.TELEGRAM_BOT_USERNAME || "")
-    .trim()
-    .replace(/^@/, "");
-  const button = username
-    ? `<a class="btn" href="https://t.me/${username}" target="_blank" rel="noopener">Back to Telegram</a>`
-    : `<p class="muted">No charge was made. Retry from Telegram anytime.</p>`;
+  const button = readTelegramReturnButton(
+    "Back to Telegram",
+    "No charge was made. Retry from Telegram anytime.",
+  );
 
   return `<!doctype html>
 <html lang="en">
@@ -123,6 +247,59 @@ export const renderCancelPage = (): string => {
       <div class="card">
         <p>No charge was made to your account. You can subscribe anytime from the guide bot in Telegram.</p>
         ${button}
+      </div>
+    </div>
+  </body>
+</html>`;
+};
+
+export const renderSubscribeUnavailablePage = (options?: {
+  reason?: "expired" | "invalid" | "unavailable";
+}): string => {
+  const reason = options?.reason ?? "unavailable";
+  const title =
+    reason === "expired"
+      ? "This payment link has expired"
+      : reason === "invalid"
+        ? "This payment link is no longer available"
+        : "Payment link unavailable";
+  const copy =
+    reason === "expired"
+      ? "For security, subscription links only stay active for a limited time. Please return to Telegram and request a fresh link."
+      : reason === "invalid"
+        ? "The link looks incomplete or has already been replaced. You can safely open a new one from Telegram."
+        : "We could not open this payment page right now. Please go back to Telegram and try again in a moment.";
+  const helper =
+    reason === "expired"
+      ? "No action was taken and no charge was made."
+      : "Your account is safe. You only need a fresh link to continue.";
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Payment Link Unavailable - PIN AI</title>
+    <style>${paymentPageLayoutStyles}</style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <div class="header-icons">
+          <img src="/logo_pinai.png" alt="PIN AI Logo">
+          <div class="separator">×</div>
+          <img src="/logo_openclaw.png" alt="OpenClaw Logo">
+        </div>
+        <div class="eyebrow">Payment Link Status</div>
+      </div>
+      <div class="card status-card">
+        <div class="status-icon">↺</div>
+        <h1 class="status-title">${title}</h1>
+        <p class="status-copy">${copy}</p>
+        <div class="tip-strip">
+          <span><strong>What to do next:</strong> return to Telegram and open a new subscription link.</span>
+          <span>${helper}</span>
+        </div>
+        <p class="muted">Open Telegram and run <strong>/create</strong> to generate a fresh payment link.</p>
       </div>
     </div>
   </body>

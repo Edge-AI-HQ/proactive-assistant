@@ -329,10 +329,8 @@ export const getLatestAppDeployTimestampMs = async (): Promise<
 
 export const shouldRecreateAssistantMachine = (
   machine: FlyMachine,
-  latestAppDeployAtMs: number | null,
   desiredGatewayToken: string,
   desiredAssistantBotToken?: string | null,
-  desiredGoogleCredentialsB64?: string | null,
   desiredLiteLLMApiKey?: string | null,
   desiredOnboardingProfileText?: string | null,
   desiredOnboardingProfileSource?: "connector" | "privy" | null,
@@ -369,11 +367,8 @@ export const shouldRecreateAssistantMachine = (
   ).hash;
 
   const currentEnv = machine.config?.env;
-  const desiredGoogleB64 = (desiredGoogleCredentialsB64 || "").trim();
-  const currentGoogleB64 = (currentEnv?.[PINAI_GOOGLE_CREDENTIALS_B64_ENV] || "").trim();
-  if (currentGoogleB64 !== desiredGoogleB64) {
-    return true;
-  }
+  // Google OAuth credentials are now hot-synced via machine exec.
+  // Do not recreate the machine only because runtime metadata credential changes.
   const currentConfigHash = currentEnv?.PINAI_OPENCLAW_CONFIG_SHA256;
   if (
     typeof currentConfigHash !== "string" ||
@@ -418,13 +413,7 @@ export const shouldRecreateAssistantMachine = (
   const joined = initExec.join(" ");
   if (!joined.includes("pinai-entrypoint.sh")) return true;
 
-  if (latestAppDeployAtMs === null) return false;
-
-  const machineUpdatedAtMs =
-    toTimestampMs(machine.updated_at) ?? toTimestampMs(machine.created_at);
-  if (machineUpdatedAtMs === null) return false;
-
-  return machineUpdatedAtMs < latestAppDeployAtMs;
+  return false;
 };
 
 export const createAssistantMachine = async (
@@ -458,6 +447,7 @@ export const createAssistantMachine = async (
       normalizedPrivateWebhookPort,
       routerOrigin,
       GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE,
+      args.liteLlmApiKey,
     ),
     OPENCLAW_CONFIG_B64: openclawPayload.base64,
     PINAI_OPENCLAW_CONFIG_SHA256: openclawPayload.hash,

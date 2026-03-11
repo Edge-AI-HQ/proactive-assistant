@@ -210,19 +210,3 @@ export const readUserLiteLLMVirtualKey = (user: UserLiteLLMRef): string | null =
   return key;
 };
 
-export const resolveAssistantLiteLLMEnv = (assistant: AssistantLiteLLMRef): Record<string, string> | null => {
-  if (!isLiteLLMEnabled()) return null;
-
-  const key = readAssistantLiteLLMVirtualKey(assistant);
-  if (!key) {
-    throw new Error(`Assistant ${assistant.assistant_bot_id} missing LiteLLM virtual key`);
-  }
-
-  const env: Record<string, string> = {
-    LITELLM_API_KEY: key,
-    LITELLM_BASE_URL: config.litellm.baseUrl,
-    PINAI_LITELLM_BASE_URL: config.litellm.baseUrl
-  };
-
-  return env;
-};

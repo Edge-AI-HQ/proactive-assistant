@@ -43,6 +43,12 @@ model_list:
     litellm_params:
       model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-image-1
+    litellm_params:
+      model: openai/gpt-image-1
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: image_generation
 
   # Gemini
   # - model_name: "*"
@@ -50,10 +56,11 @@ model_list:
   #     model: "gemini/*"
   #     api_key: "os.environ/OPENAI_API_KEY"
 
-  # - model_name: minimax-m2.5
-  #   litellm_params:
-  #     model: minimax/MiniMax-M2.5
-  #     api_key: os.environ/MINIMAX_API_KEY
+  # Minimax
+  - model_name: minimax-m2.5
+    litellm_params:
+      model: minimax/MiniMax-M2.5
+      api_key: os.environ/MINIMAX_API_KEY
 
   # - model_name: seed-2-0
   #   litellm_params:
@@ -65,3 +72,9 @@ model_list:
     litellm_params:
       model: moonshot/kimi-k2.5
       api_key: os.environ/MOONSHOT_API_KEY
+
+  # Perplexity (search-grounded)
+  - model_name: sonar-pro
+    litellm_params:
+      model: perplexity/sonar-pro
+      api_key: os.environ/PERPLEXITYAI_API_KEY
