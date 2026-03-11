@@ -85,16 +85,16 @@ export const buildGatewayConfigSection = (
         ]
       : ["0.0.0.0/0"];
 
-  // OpenClaw 2026.3.8 only bypasses backend self-pairing for local-direct
-  // gateway-client connections when shared-secret auth succeeds. Loopback
-  // assistants therefore must keep token auth enabled; auth.mode=none
-  // breaks cron/reminder calls by disabling the shared-auth path.
-  // Backend clients (RPC/cron/tool calls) use shared-auth local bypass paths
-  // to avoid hitting pairing gates on role upgrades.
-  const auth = {
-    mode: "token" as const,
-    token: normalizedGatewayToken,
-  };
+  // Use trusted-proxy mode for loopback bindings to bypass device pairing.
+  // All connections from localhost are trusted (agent, cron, tools).
+  // For LAN bindings, use token auth with the gateway token.
+  const auth =
+    bind === "loopback"
+      ? { mode: "trusted-proxy" as const }
+      : {
+          mode: "token" as const,
+          token: normalizedGatewayToken,
+        };
 
   return {
     mode: "local",
