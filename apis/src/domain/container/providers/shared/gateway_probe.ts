@@ -1,6 +1,11 @@
 import net from "node:net";
 import WebSocket from "ws";
 import type { ProbeOptions } from "../../contracts.js";
+import {
+  GATEWAY_CLIENT_ID,
+  GATEWAY_CLIENT_ROLE,
+  GATEWAY_CLIENT_SCOPES,
+} from "../../../gateway/gateway_constants.js";
 
 // ---------------------------------------------------------------------------
 // Shared gateway probe utilities
@@ -8,11 +13,6 @@ import type { ProbeOptions } from "../../contracts.js";
 // Used by both Fly and Docker providers to verify that the OpenClaw gateway
 // is reachable, authenticated, and serving HTTP probes.
 // ---------------------------------------------------------------------------
-
-/** Client identity for probe connections — matches gateway_constants.ts values. */
-const PROBE_CLIENT_ID = "gateway-client";
-const PROBE_CLIENT_ROLE = "operator";
-const PROBE_CLIENT_SCOPES = ["operator.admin"];
 
 const DEFAULT_PORT_TIMEOUT_MS = 120_000;
 const CONNECT_PROBE_REQUEST_ID = "gateway-probe-connect";
@@ -124,14 +124,14 @@ const probeGatewayHelloOnce = (
         minProtocol: 3,
         maxProtocol: 3,
         client: {
-          id: PROBE_CLIENT_ID,
+          id: GATEWAY_CLIENT_ID,
           version: "dev",
           platform: process.platform,
           mode: "backend",
           instanceId: "pinai-gateway-probe",
         },
-        role: PROBE_CLIENT_ROLE,
-        scopes: PROBE_CLIENT_SCOPES,
+        role: GATEWAY_CLIENT_ROLE,
+        scopes: GATEWAY_CLIENT_SCOPES,
         caps: ["tool-events"],
         commands: [],
         permissions: {},
