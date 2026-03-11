@@ -31,7 +31,11 @@ const buildOwnerAllowFrom = (
 ): string[] | undefined => {
   const normalized = (ownerTelegramUserId || "").trim();
   if (!normalized) return undefined;
-  return [normalized];
+  const values = new Set<string>([normalized]);
+  if (/^\d+$/.test(normalized)) {
+    values.add(`tg:${normalized}`);
+  }
+  return Array.from(values);
 };
 
 export const buildGatewayConfigSection = (

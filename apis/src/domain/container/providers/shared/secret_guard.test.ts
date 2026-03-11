@@ -133,7 +133,7 @@ test("buildAssistantOpenclawConfig enforces full tools defaults", () => {
   assert.deepEqual(
     (openclaw.commands as { ownerAllowFrom?: string[] } | undefined)
       ?.ownerAllowFrom,
-    ["123456789"],
+    ["123456789", "tg:123456789"],
   );
   const gatewayAuthMode = (
     openclaw as { gateway?: { auth?: { mode?: string } } }
