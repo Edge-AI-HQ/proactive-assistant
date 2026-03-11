@@ -180,19 +180,77 @@ start_ipv6_proxies
 export PINAI_WORKSPACE_READY_MARKER="$READY_MARKER"
 export PINAI_WORKSPACE_ERROR_MARKER="$ERROR_MARKER"
 
-disable_device_identity() {
-  # Remove device identity to bypass pairing requirement
-  # When GatewayClient can't load device identity, it falls back to token-only auth
-  # Combined with gateway.controlUi.dangerouslyDisableDeviceAuth: true,
-  # this allows cron and other internal calls to work without pairing
-  rm -f /app/.openclaw/device-identity.* /root/.openclaw/device-identity.* 2>/dev/null || true
-  echo "[device-identity] Removed device identity files to bypass pairing" >&2
+auto_approve_pairing() {
+  # Auto-approve all pending pairing requests to bypass pairing requirement
+  # This runs after gateway starts and approves any pending requests
+  sleep 3  # Give gateway time to start
+  
+  PAIRING_DIR="/app/.openclaw/pairing"
+  PENDING_FILE="$PAIRING_DIR/devices.pending.json"
+  PAIRED_FILE="$PAIRING_DIR/devices.paired.json"
+  
+  if [ ! -f "$PENDING_FILE" ]; then
+    echo "[auto-pairing] No pending pairing requests" >&2
+    return 0
+  fi
+  
+  # Read pending requests and auto-approve them
+  node - <<'EOFNODE'
+const fs = require('fs');
+const pendingPath = '/app/.openclaw/pairing/devices.pending.json';
+const pairedPath = '/app/.openclaw/pairing/devices.paired.json';
+
+try {
+  const pending = JSON.parse(fs.readFileSync(pendingPath, 'utf8') || '{}');
+  const paired = JSON.parse(fs.readFileSync(pairedPath, 'utf8') || '{}');
+  
+  const pendingIds = Object.keys(pending);
+  if (pendingIds.length === 0) {
+    console.error('[auto-pairing] No pending requests to approve');
+    process.exit(0);
+  }
+  
+  const now = Date.now();
+  for (const requestId of pendingIds) {
+    const request = pending[requestId];
+    if (!request || !request.deviceId) continue;
+    
+    // Create paired device entry
+    paired[request.deviceId] = {
+      deviceId: request.deviceId,
+      publicKey: request.publicKey,
+      displayName: request.displayName || 'Auto-approved device',
+      platform: request.platform,
+      clientId: request.clientId,
+      clientMode: request.clientMode,
+      role: request.role || 'operator',
+      roles: request.roles || ['operator'],
+      scopes: request.scopes || ['operator.admin'],
+      approvedScopes: request.scopes || ['operator.admin'],
+      tokens: {},
+      createdAtMs: now,
+      approvedAtMs: now,
+    };
+    
+    console.error(`[auto-pairing] Approved device: ${request.deviceId}`);
+    delete pending[requestId];
+  }
+  
+  fs.writeFileSync(pendingPath, JSON.stringify(pending, null, 2));
+  fs.writeFileSync(pairedPath, JSON.stringify(paired, null, 2));
+  console.error('[auto-pairing] All pending requests approved');
+} catch (error) {
+  console.error('[auto-pairing] Error:', error.message);
+  process.exit(1);
+}
+EOFNODE
 }
 
 BIND="${PINAI_GATEWAY_BIND:-lan}"
-disable_device_identity
 openclaw gateway --bind "$BIND" &
 OC_PID=$!
+
+auto_approve_pairing &
 
 trap 'kill $OC_PID 2>/dev/null; wait $OC_PID 2>/dev/null' TERM INT
 
