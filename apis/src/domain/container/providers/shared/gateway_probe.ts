@@ -107,30 +107,35 @@ const probeGatewayHelloOnce = (
     const sendConnect = (): void => {
       if (sent) return;
       sent = true;
+      const token = gatewayToken.trim();
+      const params: Record<string, unknown> = {
+        minProtocol: 3,
+        maxProtocol: 3,
+        client: {
+          id: "gateway-client",
+          version: "dev",
+          platform: process.platform,
+          mode: "backend",
+          instanceId: "pinai-gateway-probe",
+        },
+        role: "operator",
+        scopes: ["operator.admin"],
+        caps: ["tool-events"],
+        commands: [],
+        permissions: {},
+        userAgent: "pinai-gateway-probe",
+        locale: "en-US",
+      };
+      if (token) {
+        params.auth = { token };
+      }
+
       ws.send(
         JSON.stringify({
           type: "req",
           id: CONNECT_PROBE_REQUEST_ID,
           method: "connect",
-          params: {
-            minProtocol: 3,
-            maxProtocol: 3,
-            client: {
-              id: "gateway-client",
-              version: "dev",
-              platform: process.platform,
-              mode: "backend",
-              instanceId: "pinai-gateway-probe",
-            },
-            role: "operator",
-            scopes: ["operator.admin"],
-            caps: ["tool-events"],
-            commands: [],
-            permissions: {},
-            auth: { token: gatewayToken },
-            userAgent: "pinai-gateway-probe",
-            locale: "en-US",
-          },
+          params,
         }),
       );
     };
@@ -177,9 +182,15 @@ export const waitForGatewayHello = async (
   hostOverride?: string,
 ): Promise<boolean> => {
   const startedAt = Date.now();
+  const token = gatewayToken.trim();
   while (Date.now() - startedAt < timeoutMs) {
-    const ok = await probeGatewayHelloOnce(host, port, gatewayToken, hostOverride);
+    const ok = await probeGatewayHelloOnce(host, port, token, hostOverride);
     if (ok) return true;
+    // Compatibility fallback for loopback gateways running auth.mode=none.
+    if (token) {
+      const okWithoutAuth = await probeGatewayHelloOnce(host, port, "", hostOverride);
+      if (okWithoutAuth) return true;
+    }
     await sleep(1000);
   }
   return false;
