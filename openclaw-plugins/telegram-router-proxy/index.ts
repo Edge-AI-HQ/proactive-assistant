@@ -309,10 +309,46 @@ async function patchCronAddDeliveryAccountId(
         : "";
   const inferredAccountId = inferAccountIdFromSessionKey(sessionKey);
   const inferredPeerId = inferPeerIdFromSessionKey(sessionKey);
-  if (!inferredAccountId && !inferredPeerId) {
-    return null;
-  }
+
   const existingTo = typeof delivery.to === "string" ? delivery.to.trim() : "";
+  const existingAccountId =
+    typeof delivery.accountId === "string" && delivery.accountId.trim()
+      ? delivery.accountId.trim().toLowerCase()
+      : "";
+
+  // Determine targets: prioritize inferred, fallback to existing, then use safe defaults
+  const hasInferredTarget = inferredAccountId || inferredPeerId;
+  const hasExistingTarget = existingTo || existingAccountId;
+
+  if (!hasInferredTarget && !hasExistingTarget) {
+    // No target info at all - set safe defaults to bypass pairing requirement
+    // Use 'last' channel which sends to the most recent chat context
+    api?.logger.info(
+      '[cron.add patch] No target info, using "last" channel to bypass pairing',
+    );
+    parsed.params = {
+      ...job,
+      delivery: {
+        ...delivery,
+        mode: "announce",
+        channel: "last",
+        accountId: "default",
+      },
+    };
+    return {
+      ...(input instanceof Request
+        ? {
+            method: input.method,
+            redirect: input.redirect,
+            credentials: input.credentials,
+          }
+        : {}),
+      ...init,
+      headers,
+      body: JSON.stringify(parsed),
+    };
+  }
+
   const inferredTo = inferredPeerId ? `telegram:${inferredPeerId}` : "";
   const nextTo = inferredTo || existingTo;
   const nextMode =
@@ -323,10 +359,6 @@ async function patchCronAddDeliveryAccountId(
     typeof delivery.channel === "string" && delivery.channel.trim()
       ? delivery.channel
       : "telegram";
-  const existingAccountId =
-    typeof delivery.accountId === "string" && delivery.accountId.trim()
-      ? delivery.accountId.trim().toLowerCase()
-      : "";
   const nextAccountId = inferredAccountId || existingAccountId || undefined;
 
   parsed.params = {
