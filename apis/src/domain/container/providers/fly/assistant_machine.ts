@@ -454,13 +454,16 @@ export const createAssistantMachine = async (
       routerOrigin,
       GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE,
       args.liteLlmApiKey,
+      args.gatewayToken,
     ),
     OPENCLAW_CONFIG_B64: openclawPayload.base64,
     PINAI_OPENCLAW_CONFIG_SHA256: openclawPayload.hash,
     PINAI_ONBOARDING_PROFILE_B64: onboardingProfile?.base64 || "",
     PINAI_ONBOARDING_PROFILE_SHA256: onboardingProfile?.hash || "",
     PINAI_ONBOARDING_HAS_PROFILE: onboardingProfile ? "1" : "0",
-    [PINAI_GOOGLE_CREDENTIALS_B64_ENV]: (args.googleCredentialsB64 || "").trim(),
+    [PINAI_GOOGLE_CREDENTIALS_B64_ENV]: (
+      args.googleCredentialsB64 || ""
+    ).trim(),
     PINAI_FLY_MODE: "1",
     PINAI_GATEWAY_BIND: "loopback",
     PINAI_WORKSPACE_STATUS_PORT: String(PINAI_WORKSPACE_STATUS_PORT),

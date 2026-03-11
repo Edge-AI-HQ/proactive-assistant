@@ -691,17 +691,31 @@ function installAutoPairingApproval(api: OpenClawPluginApi) {
   const checkIntervalMs = 5000; // Check every 5 seconds
   let isRunning = false;
 
+  // Get gateway token from environment (injected by container manager)
+  const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN || "";
+  if (!gatewayToken) {
+    api.logger.warn(
+      "[auto-pairing] No OPENCLAW_GATEWAY_TOKEN found, auto-pairing disabled",
+    );
+    return;
+  }
+
   const checkAndApprovePending = async () => {
     if (isRunning) return;
     isRunning = true;
 
     try {
+      const headers = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${gatewayToken}`,
+      };
+
       // Call gateway RPC to list pending pairing requests
       const response = await fetch(
         `http://127.0.0.1:${OPENCLAW_GATEWAY_PORT}/rpc`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers,
           body: JSON.stringify({
             jsonrpc: "2.0",
             id: `auto-pairing-${Date.now()}`,
@@ -745,7 +759,7 @@ function installAutoPairingApproval(api: OpenClawPluginApi) {
           `http://127.0.0.1:${OPENCLAW_GATEWAY_PORT}/rpc`,
           {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers,
             body: JSON.stringify({
               jsonrpc: "2.0",
               id: `auto-approve-${Date.now()}`,
