@@ -39,6 +39,7 @@ export const relayGatewayWs = (
       headers: {
         ...gatewayHostHeaders(target),
         Authorization: `Bearer ${gatewayToken}`,
+        Origin: target.httpBaseUrl,
       },
     });
 

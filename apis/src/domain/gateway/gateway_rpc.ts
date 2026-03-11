@@ -85,7 +85,10 @@ const rpcCall = <T = unknown>(
   new Promise((resolve) => {
     const ws = new WebSocket(target.wsBaseUrl, {
       maxPayload: 4 * 1024 * 1024,
-      headers: gatewayHostHeaders(target),
+      headers: {
+        ...gatewayHostHeaders(target),
+        Origin: target.httpBaseUrl,
+      },
     });
     let settled = false;
 

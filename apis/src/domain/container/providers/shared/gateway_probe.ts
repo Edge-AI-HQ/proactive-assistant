@@ -94,10 +94,12 @@ const probeGatewayHelloOnce = (
 ): Promise<boolean> =>
   new Promise((resolve) => {
     const wsUrl = `ws://${formatHostForUrl(host)}:${port}`;
+    const httpOrigin = `http://${formatHostForUrl(host)}:${port}`;
     const ws = new WebSocket(wsUrl, {
       maxPayload: 2 * 1024 * 1024,
       headers: {
         ...(hostOverride ? { Host: hostOverride } : {}),
+        Origin: hostOverride ? `http://${hostOverride}` : httpOrigin,
       },
     });
     let settled = false;
