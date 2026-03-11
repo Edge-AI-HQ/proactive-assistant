@@ -85,16 +85,15 @@ export const buildGatewayConfigSection = (
         ]
       : ["0.0.0.0/0"];
 
-  // Use no auth for loopback bindings - all localhost connections are trusted.
-  // Agent, cron, and tools run in the same container and don't need authentication.
-  // For LAN bindings, use token auth for security.
-  const auth =
-    bind === "loopback"
-      ? { mode: "none" as const }
-      : {
-          mode: "token" as const,
-          token: normalizedGatewayToken,
-        };
+  // Always use token auth. Agent reads token from OPENCLAW_GATEWAY_TOKEN env var.
+  // Combined with disabled device identity (deleted in entrypoint.sh), this allows:
+  // - sharedAuthOk = true (token auth succeeds)
+  // - hasDeviceIdentity = false (no device files)
+  // - roleCanSkipDeviceIdentity(operator, true) → allow
+  const auth = {
+    mode: "token" as const,
+    token: normalizedGatewayToken,
+  };
 
   return {
     mode: "local",
