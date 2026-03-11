@@ -105,10 +105,10 @@ const ManageAgentDialog = ({
     },
     {
       icon: "🛠️",
-      label: "Repair",
+      label: "Restart",
       desc: runtimeStatus
-        ? `Rebuild the current runtime. Status: ${runtimeStatus}`
-        : "Destroy and recreate the current runtime",
+        ? `Restart the current runtime. Status: ${runtimeStatus}`
+        : "Restart the current runtime",
       onClick: () => setShowRepairConfirm(true),
       destructive: false,
       loading: runtimeBusy,
@@ -235,9 +235,9 @@ const ManageAgentDialog = ({
     return (
       <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center p-4 animate-fade-in">
         <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl animate-scale-in">
-          <h3 className="text-lg font-bold text-foreground mb-2">Repair?</h3>
+          <h3 className="text-lg font-bold text-foreground mb-2">Restart?</h3>
           <p className="text-sm text-foreground/70 mb-6">
-            This destroys the current runtime and recreates it with the platform-managed configuration. Workspace data is kept.
+            This restarts the current runtime with the platform-managed configuration. Workspace data is kept.
           </p>
           <div className="flex gap-2.5">
             <button
@@ -254,7 +254,7 @@ const ManageAgentDialog = ({
               }}
               className="flex-1 px-4 py-2.5 bg-foreground text-white rounded-xl text-sm font-bold btn-press"
             >
-              Repair
+              Restart
             </button>
           </div>
         </div>

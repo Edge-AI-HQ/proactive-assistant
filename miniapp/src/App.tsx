@@ -540,10 +540,10 @@ const App = () => {
         method: "POST",
         body: JSON.stringify({}),
       });
-      showToast("Runtime repair started. The assistant may take a moment to become ready again.", "success");
+      showToast("Runtime restart started. The assistant may take a moment to become ready again.", "success");
       await loadState();
     } catch (e) {
-      showToast(`Repair failed: ${e instanceof Error ? e.message : "unknown"}`);
+      showToast(`Restart failed: ${e instanceof Error ? e.message : "unknown"}`);
     } finally {
       setBusy("none");
     }

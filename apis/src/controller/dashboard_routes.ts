@@ -1094,7 +1094,7 @@ export const createDashboardRouter = (): Router => {
 
         if (assistant.container_status !== "running") {
           res.status(503).json({
-            error: "Assistant is not running. Please wait for it to start or repair it.",
+            error: "Assistant is not running. Please wait for it to start or restart it.",
           });
           return;
         }
