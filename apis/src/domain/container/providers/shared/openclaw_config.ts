@@ -81,13 +81,17 @@ export const buildGatewayConfigSection = (
         ]
       : ["0.0.0.0/0"];
 
-  // OpenClaw 2026.2.26 requires shared auth for operator config RPCs
-  // (e.g. mini-app model switch) when no device identity is provided.
-  // Keep token auth in both loopback and LAN modes.
-  const auth = {
-    mode: "token" as const,
-    token: normalizedGatewayToken,
-  };
+  // Assistant machines run the gateway on loopback only. Keep loopback
+  // auth disabled so owner-only tools (for example cron) can call the
+  // local gateway without triggering pairing/auth flows. LAN bindings
+  // still require token auth.
+  const auth =
+    bind === "loopback"
+      ? { mode: "none" as const }
+      : {
+          mode: "token" as const,
+          token: normalizedGatewayToken,
+        };
 
   return {
     mode: "local",
