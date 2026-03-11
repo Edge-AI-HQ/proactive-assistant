@@ -68,6 +68,7 @@ export const buildBaseContainerEnv = (
     OPENCLAW_GATEWAY_PORT: String(config.openclaw.gatewayPort),
     OPENCLAW_TELEGRAM_WEBHOOK_PORT: String(webhookPort),
     OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT: String(privateWebhookPort),
+    PINAI_OPENCLAW_EXEC_APPROVALS_MODE: "full",
     NODE_COMPILE_CACHE: "/app/cache/node-compile-cache",
     TELEGRAM_ROUTER_URL: telegramRouterUrl,
     GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE: googleCredentialsFile,

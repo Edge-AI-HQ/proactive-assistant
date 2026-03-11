@@ -5,6 +5,7 @@ WS="/app/.openclaw/workspace"
 READY_MARKER="$WS/.pinai-workspace-ready"
 ERROR_MARKER="$WS/.pinai-workspace-error"
 STATUS_PORT="${PINAI_WORKSPACE_STATUS_PORT:-8790}"
+EXEC_APPROVALS_MODE="${PINAI_OPENCLAW_EXEC_APPROVALS_MODE:-full}"
 
 setup_secrets() {
   mkdir -p /app/.openclaw /app/google /root/.config/gws
@@ -21,6 +22,63 @@ setup_secrets() {
   else
     rm -f "$GWS_CREDS" "$GWS_DEFAULT"
   fi
+}
+
+setup_exec_approvals() {
+  [ "$EXEC_APPROVALS_MODE" = "off" ] && return 0
+
+  mkdir -p /app/.openclaw /root/.openclaw
+
+  node - <<'EOF'
+const fs = require("fs");
+const path = require("path");
+
+const appPath = "/app/.openclaw/exec-approvals.json";
+const rootPath = "/root/.openclaw/exec-approvals.json";
+const socketPath = "/root/.openclaw/exec-approvals.sock";
+
+const readJson = (file) => {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return {};
+  }
+};
+
+const base = readJson(appPath);
+const root = readJson(rootPath);
+const merged = {
+  ...(root && typeof root === "object" ? root : {}),
+  ...(base && typeof base === "object" ? base : {}),
+  version: 1,
+  socket:
+    (base && typeof base.socket === "object" && base.socket) ||
+    (root && typeof root.socket === "object" && root.socket) || {
+      path: socketPath,
+    },
+  defaults: {
+    ...((root && typeof root.defaults === "object" && root.defaults) || {}),
+    ...((base && typeof base.defaults === "object" && base.defaults) || {}),
+    security: "full",
+    ask: "off",
+    askFallback: "full",
+    autoAllowSkills: true,
+  },
+};
+
+fs.mkdirSync(path.dirname(appPath), { recursive: true });
+fs.writeFileSync(appPath, `${JSON.stringify(merged, null, 2)}\n`, { mode: 0o600 });
+
+try {
+  if (fs.existsSync(rootPath) || fs.lstatSync(path.dirname(rootPath)).isDirectory()) {
+    try { fs.rmSync(rootPath, { force: true }); } catch {}
+    fs.symlinkSync(appPath, rootPath);
+  }
+} catch {
+  fs.copyFileSync(appPath, rootPath);
+  fs.chmodSync(rootPath, 0o600);
+}
+EOF
 }
 
 setup_cache() {
@@ -114,6 +172,7 @@ start_ipv6_proxies() {
 }
 
 setup_secrets
+setup_exec_approvals
 setup_cache
 start_workspace_status_server
 start_ipv6_proxies
