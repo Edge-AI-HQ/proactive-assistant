@@ -56,6 +56,9 @@ export const buildGatewayConfigSection = (
     // Disable device-identity / pairing checks — our APIs layer already
     // authenticates dashboard sessions before proxying to the gateway.
     dangerouslyDisableDeviceAuth: true,
+    // Skip pairing UI checks completely for cron and other backend features
+    dangerouslySkipPairingUI: true,
+    requirePairing: false,
   };
 
   // Allow the APIs proxy origin so the Control UI accepts requests forwarded
@@ -85,9 +88,12 @@ export const buildGatewayConfigSection = (
         ]
       : ["0.0.0.0/0"];
 
-  // Keep token auth for both loopback and LAN gateways.
-  // OpenClaw backend clients (RPC/cron/tool calls) can then use shared-auth
-  // local bypass paths instead of hitting pairing gates on role upgrades.
+  // OpenClaw 2026.3.8 only bypasses backend self-pairing for local-direct
+  // gateway-client connections when shared-secret auth succeeds. Loopback
+  // assistants therefore must keep token auth enabled; auth.mode=none
+  // breaks cron/reminder calls by disabling the shared-auth path.
+  // Backend clients (RPC/cron/tool calls) use shared-auth local bypass paths
+  // to avoid hitting pairing gates on role upgrades.
   const auth = {
     mode: "token" as const,
     token: normalizedGatewayToken,
@@ -490,6 +496,9 @@ export const buildAssistantOpenclawConfig = (
   // Enable cron scheduler
   next.cron = {
     enabled: true,
+    // Bypass pairing/auth checks for cron background operations
+    bypassAuth: true,
+    requireGateway: false,
   };
 
   return next;
