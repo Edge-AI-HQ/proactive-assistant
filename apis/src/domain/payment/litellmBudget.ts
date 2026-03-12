@@ -3,6 +3,7 @@ import {
   getLiteLLMUserInfo,
   isLiteLLMClientEnabled,
   resetLiteLLMUserSpend,
+  resetLiteLLMKeySpend,
   updateLiteLLMKey,
   updateLiteLLMUser,
 } from "../litellm/client.js";
@@ -179,16 +180,46 @@ export const syncLiteLLMBudgetAbsolute = async (
     try {
       await resetLiteLLMUserSpend(litellmUserId);
       console.log(
-        `[payment] Reset LiteLLM spend for user ${litellmUserId} (source: ${input.source})`,
+        `[payment] Reset LiteLLM user spend for ${litellmUserId} (source: ${input.source})`,
       );
     } catch (error: unknown) {
       console.error(
-        "[payment] Failed to reset LiteLLM spend, continuing with budget update",
+        "[payment] Failed to reset LiteLLM user spend, continuing with budget update",
         {
           userId: litellmUserId,
           error: error instanceof Error ? error.message : String(error),
         },
       );
+    }
+
+    // CRITICAL: Also reset key-level spend!
+    // LiteLLM checks BOTH user.spend and key.spend against their respective budgets.
+    // If we only reset user spend, the key will still exceed its budget on next use.
+    const litellmKey = await db.getLiteLLMKeyByTelegramId(
+      input.telegram_user_id,
+    );
+    if (litellmKey) {
+      try {
+        await resetLiteLLMKeySpend(litellmKey);
+        console.log(
+          `[payment] Reset LiteLLM key spend for user ${litellmUserId} (source: ${input.source})`,
+        );
+      } catch (error: unknown) {
+        console.error(
+          "[payment] Failed to reset LiteLLM key spend - USER MAY HIT BUDGET LIMIT",
+          {
+            userId: litellmUserId,
+            telegramUserId: input.telegram_user_id,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
+      }
+    } else {
+      console.warn("[payment] No LiteLLM key found to reset spend", {
+        userId: litellmUserId,
+        telegramUserId: input.telegram_user_id,
+        source: input.source,
+      });
     }
   }
 

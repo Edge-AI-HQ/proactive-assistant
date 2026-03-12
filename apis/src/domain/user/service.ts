@@ -1,15 +1,20 @@
-import { createLiteLLMUser, generateLiteLLMKey, updateLiteLLMKey, updateLiteLLMUser } from '../litellm/index.js';
-import { config } from '../common/config.js';
+import {
+  createLiteLLMUser,
+  generateLiteLLMKey,
+  updateLiteLLMKey,
+  updateLiteLLMUser,
+} from "../litellm/index.js";
+import { config } from "../common/config.js";
 import {
   createGatewayToken,
   createUser,
   deleteUserByTelegramId,
   getUserByTelegramId,
   listAssistantsByOwnerTelegramId,
-  updateUser
-} from '../common/db/index.js';
-import { resolveBudgetForUser } from '../payment/litellmBudget.js';
-import type { UserRecord } from '../../types.js';
+  updateUser,
+} from "../common/db/index.js";
+import { resolveBudgetForUser } from "../payment/litellmBudget.js";
+import type { UserRecord } from "../../types.js";
 
 const normalizeUsername = (value: string | null | undefined): string | null => {
   if (!value) return null;
@@ -19,29 +24,38 @@ const normalizeUsername = (value: string | null | undefined): string | null => {
 
 const buildLiteLLMUserId = (userId: number): string => String(userId);
 
-const buildLiteLLMUserAlias = (telegramUserId: number, telegramUsername: string | null): string => {
-  if (telegramUsername?.trim()) return `telegram:${telegramUserId}:@${telegramUsername.trim()}`;
+const buildLiteLLMUserAlias = (
+  telegramUserId: number,
+  telegramUsername: string | null,
+): string => {
+  if (telegramUsername?.trim())
+    return `telegram:${telegramUserId}:@${telegramUsername.trim()}`;
   return `telegram:${telegramUserId}`;
 };
 
 const buildUserKeyAlias = (userId: number): string => `claw-user-${userId}`;
-const buildFallbackUserKeyAlias = (userId: number): string => `claw-user-${userId}-${Date.now().toString(36)}`;
+const buildFallbackUserKeyAlias = (userId: number): string =>
+  `claw-user-${userId}-${Date.now().toString(36)}`;
 
 const keyLast4 = (value: string): string => {
   const raw = value.trim();
-  if (!raw) return '';
+  if (!raw) return "";
   return raw.slice(-4);
 };
 
 const ensureUserLiteLLMKey = async (user: UserRecord): Promise<UserRecord> => {
   if (!config.litellm.enabled) return user;
 
-  const litellmUserId = user.litellm_user_id?.trim() || buildLiteLLMUserId(user.id);
-  const litellmUserAlias = user.litellm_user_alias?.trim() || buildLiteLLMUserAlias(user.telegram_user_id, user.telegram_username);
-  const userKeyAlias = user.litellm_key_alias?.trim() || buildUserKeyAlias(user.id);
+  const litellmUserId =
+    user.litellm_user_id?.trim() || buildLiteLLMUserId(user.id);
+  const litellmUserAlias =
+    user.litellm_user_alias?.trim() ||
+    buildLiteLLMUserAlias(user.telegram_user_id, user.telegram_username);
+  const userKeyAlias =
+    user.litellm_key_alias?.trim() || buildUserKeyAlias(user.id);
   const maxBudgetUsd = await resolveBudgetForUser({
     litellm_user_id: litellmUserId,
-    telegram_user_id: String(user.telegram_user_id)
+    telegram_user_id: String(user.telegram_user_id),
   });
 
   const created = await createLiteLLMUser({
@@ -50,19 +64,22 @@ const ensureUserLiteLLMKey = async (user: UserRecord): Promise<UserRecord> => {
     keyAlias: userKeyAlias,
     maxBudgetUsd: maxBudgetUsd ?? null,
     metadata: {
-      source: 'pin-ai-assistant-apis',
+      source: "pin-ai-assistant-apis",
       user_id: user.id,
       telegram_user_id: user.telegram_user_id,
-      telegram_username: user.telegram_username || null
-    }
+      telegram_username: user.telegram_username || null,
+    },
   });
 
   let workingUser = user;
-  if (user.litellm_user_id !== litellmUserId || user.litellm_user_alias !== litellmUserAlias) {
+  if (
+    user.litellm_user_id !== litellmUserId ||
+    user.litellm_user_alias !== litellmUserAlias
+  ) {
     workingUser =
       (await updateUser(user.telegram_user_id, {
         litellm_user_id: litellmUserId,
-        litellm_user_alias: litellmUserAlias
+        litellm_user_alias: litellmUserAlias,
       })) ?? workingUser;
   }
 
@@ -72,17 +89,17 @@ const ensureUserLiteLLMKey = async (user: UserRecord): Promise<UserRecord> => {
       await updateLiteLLMUser({
         userId: litellmUserId,
         userAlias: litellmUserAlias,
-        maxBudgetUsd: maxBudgetUsd ?? null
+        maxBudgetUsd: maxBudgetUsd ?? null,
       });
       await updateLiteLLMKey({
         key: workingUser.litellm_virtual_key!,
         maxBudgetUsd: maxBudgetUsd ?? null,
-        budgetDuration: config.litellm.defaultBudgetDuration
+        budgetDuration: config.litellm.defaultBudgetDuration,
       });
     } catch (err) {
-      console.warn('[user] Failed to sync LiteLLM budget for existing key', {
+      console.warn("[user] Failed to sync LiteLLM budget for existing key", {
         userId: litellmUserId,
-        error: err instanceof Error ? err.message : String(err)
+        error: err instanceof Error ? err.message : String(err),
       });
     }
     return workingUser;
@@ -101,17 +118,17 @@ const ensureUserLiteLLMKey = async (user: UserRecord): Promise<UserRecord> => {
       userId: litellmUserId,
       keyAlias: buildFallbackUserKeyAlias(user.id),
       maxBudgetUsd: maxBudgetUsd ?? null,
-      budgetDuration: config.litellm.defaultBudgetDuration,
+      budgetDuration: null, // Don't set auto-reset - we manage spend reset manually via subscription periods
       rpmLimit: config.litellm.defaultRpmLimit,
       tpmLimit: config.litellm.defaultTpmLimit,
       models: config.litellm.allowedModels,
       metadata: {
-        source: 'pin-ai-assistant-apis',
+        source: "pin-ai-assistant-apis",
         user_id: user.id,
         telegram_user_id: user.telegram_user_id,
         telegram_username: user.telegram_username || null,
-        reason: 'existing-user-generate-key'
-      }
+        reason: "existing-user-generate-key",
+      },
     });
     rawKey = generated.rawKey;
     resolvedKeyAlias = generated.keyAlias;
@@ -129,23 +146,30 @@ const ensureUserLiteLLMKey = async (user: UserRecord): Promise<UserRecord> => {
     litellm_virtual_key: rawKey,
     litellm_key_last4: keyLast4(rawKey),
     litellm_spend_usd: 0,
-    litellm_budget_duration: resolvedBudgetDuration ?? config.litellm.defaultBudgetDuration,
+    litellm_budget_duration:
+      resolvedBudgetDuration ?? config.litellm.defaultBudgetDuration,
     litellm_rpm_limit: resolvedRpmLimit,
     litellm_tpm_limit: resolvedTpmLimit,
-    litellm_last_synced_at: new Date().toISOString()
+    litellm_last_synced_at: new Date().toISOString(),
   });
 
   return updated ?? workingUser;
 };
 
-export const ensureTelegramUser = async (telegramUserId: number, telegramUsername?: string | null): Promise<UserRecord> => {
+export const ensureTelegramUser = async (
+  telegramUserId: number,
+  telegramUsername?: string | null,
+): Promise<UserRecord> => {
   const normalizedUsername = normalizeUsername(telegramUsername);
   const existing = await getUserByTelegramId(telegramUserId);
 
   if (existing) {
     let updated = existing;
     if (existing.telegram_username !== normalizedUsername) {
-      updated = (await updateUser(telegramUserId, { telegram_username: normalizedUsername })) ?? existing;
+      updated =
+        (await updateUser(telegramUserId, {
+          telegram_username: normalizedUsername,
+        })) ?? existing;
     }
     return ensureUserLiteLLMKey(updated);
   }
@@ -153,7 +177,7 @@ export const ensureTelegramUser = async (telegramUserId: number, telegramUsernam
   const created = await createUser({
     telegram_user_id: telegramUserId,
     telegram_username: normalizedUsername,
-    gateway_token: createGatewayToken()
+    gateway_token: createGatewayToken(),
   });
 
   if (!created) {
@@ -165,10 +189,12 @@ export const ensureTelegramUser = async (telegramUserId: number, telegramUsernam
   return ensureUserLiteLLMKey(created);
 };
 
-export const deleteTelegramUser = async (telegramUserId: number): Promise<UserRecord | undefined> => {
+export const deleteTelegramUser = async (
+  telegramUserId: number,
+): Promise<UserRecord | undefined> => {
   const assistants = await listAssistantsByOwnerTelegramId(telegramUserId);
   if (assistants.length) {
-    throw new Error('User still has assistants. Delete assistants first.');
+    throw new Error("User still has assistants. Delete assistants first.");
   }
   return deleteUserByTelegramId(telegramUserId);
 };
