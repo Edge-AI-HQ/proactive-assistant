@@ -20,6 +20,9 @@ set -e
 
 SCRIPTS_DIR="/opt/pinai/scripts"
 EXEC_APPROVALS_MODE="${PINAI_OPENCLAW_EXEC_APPROVALS_MODE:-full}"
+# Force in-process SIGUSR1 restart by default. Full respawn can exit the
+# parent gateway PID and unintentionally end PID1 wrappers that wait on it.
+OPENCLAW_NO_RESPAWN="${OPENCLAW_NO_RESPAWN:-1}"
 
 # ── 1. Secrets ─────────────────────────────────────────────────────────────
 
@@ -77,6 +80,8 @@ setup_exec_approvals
 setup_cache
 
 start_ipv6_proxies
+
+export OPENCLAW_NO_RESPAWN
 
 BIND="${PINAI_GATEWAY_BIND:-lan}"
 openclaw gateway --bind "$BIND" &
