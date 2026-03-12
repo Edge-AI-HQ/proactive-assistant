@@ -57,15 +57,12 @@ test("gateway config: lan bind trusts all sources", () => {
   assert.deepEqual(gw.trustedProxies, ["0.0.0.0/0"]);
 });
 
-test("gateway config: uses trusted-proxy auth for both bind modes", () => {
-  for (const bind of ["loopback", "lan"] as const) {
-    const gw = buildGatewayConfigSection(buildContext(), "my-token", bind) as {
-      auth: { mode: string; token: string; trustedProxy: { userHeader: string } };
-    };
-    assert.equal(gw.auth.mode, "trusted-proxy", `bind=${bind}`);
-    assert.equal(gw.auth.token, "my-token", `bind=${bind}`);
-    assert.equal(gw.auth.trustedProxy.userHeader, "x-pinai-identity", `bind=${bind}`);
-  }
+test("gateway config: uses token auth mode", () => {
+  const gw = buildGatewayConfigSection(buildContext(), "my-token", "loopback") as {
+    auth: { mode: string; token: string };
+  };
+  assert.equal(gw.auth.mode, "token");
+  assert.equal(gw.auth.token, "my-token");
 });
 
 test("gateway config: throws on empty token", () => {

@@ -38,9 +38,6 @@ const buildOwnerAllowFrom = (
   return Array.from(values);
 };
 
-/** Header used by trusted-proxy auth to carry the operator identity. */
-export const TRUSTED_PROXY_USER_HEADER = "x-pinai-identity";
-
 export const buildGatewayConfigSection = (
   context: OpenclawConfigContext,
   gatewayToken: string,
@@ -85,17 +82,13 @@ export const buildGatewayConfigSection = (
         ]
       : ["0.0.0.0/0"];
 
-  // Trusted-proxy auth: the gateway reads operator identity from the
-  // x-pinai-identity header on the HTTP upgrade request.  Both Fly (6PN)
-  // and Docker (localhost port mapping) connect directly to the container
-  // — no intermediate proxy strips headers.  Token is kept as fallback
-  // for the connect handshake.
+  // Token auth: all callers (OpenClaw internal tools like cron, APIs
+  // RPC/probe, browser webchat) authenticate via token in the connect
+  // handshake.  This is the only mode compatible with OpenClaw's own
+  // internal RPC which doesn't send custom identity headers.
   const auth = {
-    mode: "trusted-proxy" as const,
+    mode: "token" as const,
     token: normalizedGatewayToken,
-    trustedProxy: {
-      userHeader: TRUSTED_PROXY_USER_HEADER,
-    },
   };
 
   return {

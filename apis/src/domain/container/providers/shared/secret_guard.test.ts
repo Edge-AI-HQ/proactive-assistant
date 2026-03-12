@@ -142,7 +142,7 @@ test("buildAssistantOpenclawConfig enforces full tools defaults", () => {
   const gatewayAuth = (
     openclaw as { gateway?: { auth?: { mode?: string; token?: string } } }
   ).gateway?.auth;
-  assert.equal(gatewayAuth?.mode, "trusted-proxy");
+  assert.equal(gatewayAuth?.mode, "token");
   assert.equal(gatewayAuth?.token, "user-gateway-token");
   const trustedProxies = (openclaw as { gateway?: { trustedProxies?: unknown } })
     .gateway?.trustedProxies as string[] | undefined;
