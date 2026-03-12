@@ -48,6 +48,7 @@ import {
   getCurrentModel,
   setCurrentModel,
 } from "../domain/gateway/gateway_rpc.js";
+import { relayGatewayWs } from "../domain/gateway/gateway_ws_relay.js";
 import { createGatewaySessionByBody } from "../domain/gateway/session_api.js";
 import {
   buildSkillViewList,
@@ -1094,7 +1095,7 @@ export const createDashboardRouter = (): Router => {
 
         if (assistant.container_status !== "running") {
           res.status(503).json({
-            error: "Assistant is not running. Please wait for it to start or repair it.",
+            error: "Assistant is not running. Please wait for it to start or restart it.",
           });
           return;
         }
@@ -1821,14 +1822,7 @@ export const registerDashboardWsRoutes = (server: Server): void => {
         return;
       }
 
-      proxy.ws(req, socket, head, {
-        target: target.wsBaseUrl,
-        changeOrigin: false,
-        headers: {
-          ...buildOpenclawAuthHeaders(user.gateway_token),
-          ...gatewayHostHeaders(target),
-        },
-      });
+      relayGatewayWs(req, socket, head, target, user.gateway_token);
     })().catch((error: unknown) => {
       console.error("Assistant dashboard WS upgrade error", error);
       rejectUpgrade(socket, "500 Internal Server Error");

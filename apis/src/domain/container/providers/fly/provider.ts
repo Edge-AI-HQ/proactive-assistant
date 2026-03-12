@@ -238,6 +238,7 @@ export const flyContainerRuntime: ContainerRuntime = {
     const machine = await provisionAssistantMachine({
       assistantBotId: params.assistantBotId,
       machineName: params.containerName,
+      ownerTelegramUserId: params.ownerTelegramUserId,
       gatewayToken: params.gatewayToken,
       assistantBotToken: params.assistantBotToken,
       ...(params.googleCredentialsB64 !== undefined
@@ -356,6 +357,7 @@ export const flyContainerRuntime: ContainerRuntime = {
     return shouldRecreateAssistantMachine(
       machine,
       params.gatewayToken,
+      params.ownerTelegramUserId,
       params.assistantBotToken,
       params.liteLlmApiKey,
       params.onboardingProfileText,

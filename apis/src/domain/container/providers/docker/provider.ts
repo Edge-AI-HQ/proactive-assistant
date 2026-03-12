@@ -322,6 +322,7 @@ const ensureOpenclawConfig = (
   configDir: string,
   assistantBotId: number,
   gatewayToken: string,
+  ownerTelegramUserId: string | null,
   assistantBotToken?: string | null,
   liteLlmApiKey?: string | null,
   skillsConfig?: Record<string, unknown> | null,
@@ -351,6 +352,7 @@ const ensureOpenclawConfig = (
   const desired = buildAssistantOpenclawConfig(config, {
     gatewayToken,
     gatewayBind: "lan",
+    ownerTelegramUserId,
     assistantBotToken: assistantBotToken ?? null,
     quickStartSyntheticBotToken: QUICKSTART_SYNTHETIC_BOT_TOKEN,
     liteLlmApiKey: liteLlmApiKey ?? null,
@@ -552,6 +554,7 @@ export const dockerContainerRuntime: ContainerRuntime = {
       dirs.openclawDir,
       params.assistantBotId,
       params.gatewayToken,
+      params.ownerTelegramUserId,
       params.assistantBotToken,
       liteLlmApiKey,
       params.skillsConfig,
@@ -583,9 +586,11 @@ export const dockerContainerRuntime: ContainerRuntime = {
       : "0";
 
     // TELEGRAM_ROUTER_URL: where the telegram-router-proxy plugin forwards
-    // outbound Telegram API calls. In Docker, the APIs server runs on the host.
-    const apisPort = Number.parseInt(process.env.PORT || "3000", 10);
-    const telegramRouterUrl = `http://host.docker.internal:${apisPort}`;
+    // outbound Telegram API calls.  Mirrors the Fly provider logic:
+    // prefer telegramRouter.webhookUrl, fall back to PUBLIC_BASE_URL.
+    const telegramRouterUrl = appConfig.telegramRouter.webhookUrl
+      ? new URL(appConfig.telegramRouter.webhookUrl).origin
+      : appConfig.publicBaseUrl;
     const containerEnv: Record<string, string> = buildBaseContainerEnv(
       config,
       params.assistantBotId,
@@ -594,6 +599,7 @@ export const dockerContainerRuntime: ContainerRuntime = {
       telegramRouterUrl,
       "/app/google/gws-credentials.json",
       liteLlmApiKey,
+      params.gatewayToken,
     );
     containerEnv[PINAI_GOOGLE_CREDENTIALS_B64_ENV] = (params.googleCredentialsB64 || "").trim();
     assertNoP0SecretsInEnv(containerEnv, config);
@@ -762,6 +768,7 @@ export const dockerContainerRuntime: ContainerRuntime = {
       dirs.openclawDir,
       params.assistantBotId,
       params.gatewayToken,
+      params.ownerTelegramUserId,
       params.assistantBotToken,
       liteLlmApiKey,
       params.skillsConfig,

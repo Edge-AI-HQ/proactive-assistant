@@ -108,11 +108,12 @@ test("quick start builds telegram channel with synthetic token + assistant secre
   assert.equal(raw.includes(context.telegram.webhookSecret), false);
 });
 
-test("buildAssistantOpenclawConfig enforces full tools defaults for new agents", () => {
+test("buildAssistantOpenclawConfig enforces full tools defaults", () => {
   const context = buildConfig();
   const openclaw = buildAssistantOpenclawConfig(context, {
     gatewayToken: "user-gateway-token",
     gatewayBind: "loopback",
+    ownerTelegramUserId: "123456789",
     assistantBotToken: "assistant-bot-token",
     telegramWebhookMode: true,
     telegramWebhookUrl: context.telegramRouter.webhookUrl,
@@ -129,10 +130,16 @@ test("buildAssistantOpenclawConfig enforces full tools defaults for new agents",
   assert.equal(openclaw.tools?.profile, "full");
   assert.equal(openclaw.commands?.config, true);
   assert.equal(openclaw.cron?.enabled, true);
-  const gatewayAuthMode = (
-    openclaw as { gateway?: { auth?: { mode?: string } } }
-  ).gateway?.auth?.mode;
-  assert.equal(gatewayAuthMode, "none");
+  assert.deepEqual(
+    (openclaw.commands as { ownerAllowFrom?: string[] } | undefined)
+      ?.ownerAllowFrom,
+    ["123456789", "tg:123456789"],
+  );
+  const gatewayAuth = (
+    openclaw as { gateway?: { auth?: { mode?: string; token?: string } } }
+  ).gateway?.auth;
+  assert.equal(gatewayAuth?.mode, "token");
+  assert.equal(gatewayAuth?.token, "user-gateway-token");
   const trustedProxies = (openclaw as { gateway?: { trustedProxies?: unknown } })
     .gateway?.trustedProxies as string[] | undefined;
   assert.ok(Array.isArray(trustedProxies));

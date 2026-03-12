@@ -26,6 +26,18 @@ type TelegramWebhookConfig = {
   port?: number;
 };
 
+const buildOwnerAllowFrom = (
+  ownerTelegramUserId?: string | null,
+): string[] | undefined => {
+  const normalized = (ownerTelegramUserId || "").trim();
+  if (!normalized) return undefined;
+  const values = new Set<string>([normalized]);
+  if (/^\d+$/.test(normalized)) {
+    values.add(`tg:${normalized}`);
+  }
+  return Array.from(values);
+};
+
 export const buildGatewayConfigSection = (
   context: OpenclawConfigContext,
   gatewayToken: string,
@@ -52,12 +64,12 @@ export const buildGatewayConfigSection = (
     controlUi.allowedOrigins = [controlOrigin];
   }
 
-  // Non-loopback (LAN) binding requires explicit origin policy for Control UI.
-  // Docker containers bind to 0.0.0.0 so the host can reach the gateway via
-  // port mapping — use the Host-header fallback to avoid enumerating origins.
-  if (bind === "lan") {
-    controlUi.dangerouslyAllowHostHeaderOriginFallback = true;
-  }
+  // Allow the gateway to accept connections whose Origin matches the Host
+  // header.  This is needed in ALL bind modes because our APIs layer proxies
+  // browser connections to the gateway — the browser's Origin (e.g. an ngrok
+  // or Fly public URL) won't match 127.0.0.1, but it DOES match the Host
+  // header the browser sends.
+  controlUi.dangerouslyAllowHostHeaderOriginFallback = true;
 
   // Trust the APIs reverse proxy so the gateway accepts forwarded headers
   // and treats proxied connections as local.
@@ -73,13 +85,15 @@ export const buildGatewayConfigSection = (
         ]
       : ["0.0.0.0/0"];
 
-  const auth =
-    bind === "loopback"
-      ? { mode: "none" as const }
-      : {
-          mode: "token" as const,
-          token: normalizedGatewayToken,
-        };
+  // Always use token auth. Agent reads token from OPENCLAW_GATEWAY_TOKEN env var.
+  // Combined with disabled device identity (deleted in entrypoint.sh), this allows:
+  // - sharedAuthOk = true (token auth succeeds)
+  // - hasDeviceIdentity = false (no device files)
+  // - roleCanSkipDeviceIdentity(operator, true) → allow
+  const auth = {
+    mode: "token" as const,
+    token: normalizedGatewayToken,
+  };
 
   return {
     mode: "local",
@@ -195,6 +209,7 @@ export const buildLiteLLMModelsSection = (
 interface BuildAssistantOpenclawConfigOptions {
   gatewayToken: string;
   gatewayBind: GatewayBindMode;
+  ownerTelegramUserId?: string | null;
   assistantBotToken?: string | null;
   quickStartSyntheticBotToken?: string | null;
   liteLlmApiKey?: string | null;
@@ -450,14 +465,11 @@ export const buildAssistantOpenclawConfig = (
       video: { enabled: true, maxBytes: 52428800 },
     },
     sessions: { visibility: "all" },
-    sessions_spawn: {
-      attachments: { enabled: true, maxTotalBytes: 5242880, maxFiles: 50 },
-    },
     loopDetection: { enabled: false },
   };
 
   // Enable all commands, including runtime config edits via /config
-  next.commands = {
+  const commands: UnknownRecord = {
     native: true,
     text: true,
     bash: true,
@@ -465,6 +477,11 @@ export const buildAssistantOpenclawConfig = (
     debug: true,
     restart: true,
   };
+  const ownerAllowFrom = buildOwnerAllowFrom(options.ownerTelegramUserId);
+  if (ownerAllowFrom?.length) {
+    commands.ownerAllowFrom = ownerAllowFrom;
+  }
+  next.commands = commands;
 
   // Enable browser capability
   next.browser = {

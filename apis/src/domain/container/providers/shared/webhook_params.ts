@@ -61,6 +61,7 @@ export const buildBaseContainerEnv = (
   telegramRouterUrl: string,
   googleCredentialsFile: string,
   liteLlmApiKey?: string | null,
+  gatewayToken?: string | null,
 ): Record<string, string> => {
   const env: Record<string, string> = {
     OPENCLAW_HOME: "/app",
@@ -68,11 +69,17 @@ export const buildBaseContainerEnv = (
     OPENCLAW_GATEWAY_PORT: String(config.openclaw.gatewayPort),
     OPENCLAW_TELEGRAM_WEBHOOK_PORT: String(webhookPort),
     OPENCLAW_TELEGRAM_PRIVATE_WEBHOOK_PORT: String(privateWebhookPort),
+    PINAI_OPENCLAW_EXEC_APPROVALS_MODE: "full",
     NODE_COMPILE_CACHE: "/app/cache/node-compile-cache",
     TELEGRAM_ROUTER_URL: telegramRouterUrl,
     GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE: googleCredentialsFile,
     PINAI_WORKSPACE_STATUS_PORT: String(PINAI_WORKSPACE_STATUS_PORT),
   };
+
+  // Inject gateway token for plugin auto-pairing
+  if (gatewayToken?.trim()) {
+    env.OPENCLAW_GATEWAY_TOKEN = gatewayToken.trim();
+  }
   if (config.litellm.enabled) {
     const baseUrl = config.litellm.baseUrl?.trim();
     const apiKey = liteLlmApiKey?.trim();

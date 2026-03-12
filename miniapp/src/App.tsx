@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import CreateAgentFlow from "./components/CreateAgentFlow";
-import TopStatus from "./components/TopStatus";
 import AgentCard from "./components/AgentCard";
 import ChangePlanDialog from "./components/ChangePlanDialog";
 import VideoLanding from "./components/VideoLanding";
 import SetupWaiting from "./components/SetupWaiting";
 import Toast from "./components/Toast";
 import { readGoogleRedirectState } from "./googleRedirectState";
+import { shouldRefreshAfterExternalOAuthReturn } from "./googleReconnectRefresh";
 
 type Plan = {
   id: string;
@@ -99,6 +99,24 @@ const mergeQuickPayload = (
   google: quick.google ?? prev.google,
 });
 
+const hasQuickPayloadChanged = (prev: StatePayload, next: StatePayload): boolean => {
+  return (
+    prev.user.telegram_user_id !== next.user.telegram_user_id ||
+    prev.user.telegram_username !== next.user.telegram_username ||
+    prev.assistant.exists !== next.assistant.exists ||
+    prev.assistant.id !== next.assistant.id ||
+    prev.assistant.username !== next.assistant.username ||
+    prev.assistant.status !== next.assistant.status ||
+    prev.subscription.active !== next.subscription.active ||
+    prev.subscription.status !== next.subscription.status ||
+    prev.subscription.plan_id !== next.subscription.plan_id ||
+    prev.subscription.cancel_at_period_end !== next.subscription.cancel_at_period_end ||
+    prev.subscription.current_period_end !== next.subscription.current_period_end ||
+    (prev.features?.can_delete_account ?? true) !==
+      (next.features?.can_delete_account ?? true)
+  );
+};
+
 declare global {
   interface Window {
     Telegram?: {
@@ -153,6 +171,32 @@ const safeFetch = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   return payload as T;
 };
 
+const preloadImage = async (src: string, timeoutMs = 1200): Promise<void> => {
+  await new Promise<void>((resolve) => {
+    const img = new Image();
+    let settled = false;
+
+    const finalize = () => {
+      if (settled) return;
+      settled = true;
+      img.onload = null;
+      img.onerror = null;
+      resolve();
+    };
+
+    const timeoutId = window.setTimeout(finalize, timeoutMs);
+    img.onload = () => {
+      window.clearTimeout(timeoutId);
+      finalize();
+    };
+    img.onerror = () => {
+      window.clearTimeout(timeoutId);
+      finalize();
+    };
+    img.src = src;
+  });
+};
+
 const App = () => {
   const [state, setState] = useState<StatePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -170,6 +214,7 @@ const App = () => {
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
   const [models, setModels] = useState<{ current: string | null; available: ModelItem[] } | null>(null);
   const handledGoogleRedirectRef = useRef(false);
+  const refreshingOnResumeRef = useRef(false);
 
   const showToast = (message: string, type: "success" | "error" = "error") => {
     setToast({ message, type });
@@ -226,18 +271,69 @@ const App = () => {
     return payload;
   };
 
-  const bootstrap = async () => {
+  async function loadModels(): Promise<void> {
+    try {
+      const payload = await safeFetch<ModelsPayload>("/api/mini/models");
+      setModels({
+        current: payload.current_model,
+        available: payload.available_models,
+      });
+    } catch {
+      // non-critical — models section will just be empty
+    }
+  }
+
+  const refreshStateOnReturn = async (): Promise<void> => {
+    if (refreshingOnResumeRef.current) return;
+    refreshingOnResumeRef.current = true;
+    try {
+      const [quick, deferred] = await Promise.all([
+        safeFetch<StatePayload>("/api/mini/state"),
+        safeFetch<DeferredPayload>("/api/mini/state/deferred"),
+      ]);
+      setState((prev) => (prev ? { ...prev, ...quick, ...deferred } : { ...quick, ...deferred }));
+      setSelectedPlan((prev) => prev ?? quick.subscription.plan_id ?? deferred.plans[0]?.id ?? null);
+    } catch {
+      // Best-effort refresh only. Existing state remains usable.
+    } finally {
+      refreshingOnResumeRef.current = false;
+    }
+  };
+
+  const bootstrap = async (): Promise<{ loadedDeferred: boolean }> => {
     const initData = window.Telegram?.WebApp?.initData?.trim() ?? "";
 
     if (initData) {
-      const payload = await safeFetch<StatePayload>("/api/mini/bootstrap", {
+      const quick = await safeFetch<StatePayload>("/api/mini/bootstrap", {
         method: "POST",
         body: JSON.stringify({ init_data: initData }),
       });
+      let payload: StatePayload = quick;
+      let loadedDeferred = false;
+      try {
+        const deferred = await safeFetch<DeferredPayload>("/api/mini/state/deferred");
+        payload = { ...quick, ...deferred };
+        loadedDeferred = true;
+      } catch {
+        // fallback to quick payload; deferred will be retried in background
+      }
       hydrateState(payload);
-      return;
+      if (payload.assistant.exists) {
+        await Promise.all([
+          loadModels(),
+          preloadImage("/mini/bg-garden.png"),
+        ]);
+      }
+      return { loadedDeferred };
     }
-    await loadState();
+    const payload = await loadState();
+    if (payload.assistant.exists) {
+      await Promise.all([
+        loadModels(),
+        preloadImage("/mini/bg-garden.png"),
+      ]);
+    }
+    return { loadedDeferred: true };
   };
 
   useEffect(() => {
@@ -252,12 +348,14 @@ const App = () => {
     setError(null);
 
     void bootstrap()
-      .then(() => {
+      .then(({ loadedDeferred }) => {
         setLoading(false);
         // Signal Telegram that the page is ready — dismisses native loader
         window.Telegram?.WebApp?.ready?.();
-        // Fire deferred load in background (plans, google, skills)
-        void loadDeferred().catch(() => {});
+        if (!loadedDeferred) {
+          // Only backfill deferred fields if bootstrap could not fetch them
+          void loadDeferred().catch(() => {});
+        }
       })
       .catch((e: unknown) => {
         setError(e instanceof Error ? e.message : "unknown error");
@@ -275,6 +373,63 @@ const App = () => {
     void consumeGoogleRedirect();
   }, [loading, state]);
 
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (
+        !shouldRefreshAfterExternalOAuthReturn({
+          eventType: "visibilitychange",
+          visibilityState: document.visibilityState,
+          loading,
+          hasState: Boolean(state),
+          busy,
+        })
+      ) {
+        return;
+      }
+      void refreshStateOnReturn();
+    };
+
+    const onFocus = () => {
+      if (
+        !shouldRefreshAfterExternalOAuthReturn({
+          eventType: "focus",
+          visibilityState: document.visibilityState,
+          loading,
+          hasState: Boolean(state),
+          busy,
+        })
+      ) {
+        return;
+      }
+      void refreshStateOnReturn();
+    };
+
+    const onPageShow = () => {
+      if (
+        !shouldRefreshAfterExternalOAuthReturn({
+          eventType: "pageshow",
+          visibilityState: document.visibilityState,
+          loading,
+          hasState: Boolean(state),
+          busy,
+        })
+      ) {
+        return;
+      }
+      void refreshStateOnReturn();
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("pageshow", onPageShow);
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("pageshow", onPageShow);
+    };
+  }, [busy, loading, state]);
+
   // Poll for status changes when assistant exists but isn't running yet
   useEffect(() => {
     if (!state?.assistant.exists) return;
@@ -282,7 +437,11 @@ const App = () => {
 
     const id = setInterval(() => {
       void safeFetch<StatePayload>("/api/mini/state").then((quick) => {
-        setState((prev) => (prev ? mergeQuickPayload(prev, quick) : prev));
+        setState((prev) => {
+          if (!prev) return prev;
+          if (!hasQuickPayloadChanged(prev, quick)) return prev;
+          return mergeQuickPayload(prev, quick);
+        });
       }).catch(() => {});
     }, 3_000);
 
@@ -464,10 +623,10 @@ const App = () => {
         method: "POST",
         body: JSON.stringify({}),
       });
-      showToast("Runtime repair started. The assistant may take a moment to become ready again.", "success");
+      showToast("Runtime restart started. The assistant may take a moment to become ready again.", "success");
       await loadState();
     } catch (e) {
-      showToast(`Repair failed: ${e instanceof Error ? e.message : "unknown"}`);
+      showToast(`Restart failed: ${e instanceof Error ? e.message : "unknown"}`);
     } finally {
       setBusy("none");
     }
@@ -483,18 +642,6 @@ const App = () => {
     }
 
     window.open(supportUrl, "_blank", "noopener,noreferrer");
-  };
-
-  const loadModels = async () => {
-    try {
-      const payload = await safeFetch<ModelsPayload>("/api/mini/models");
-      setModels({
-        current: payload.current_model,
-        available: payload.available_models,
-      });
-    } catch {
-      // non-critical — models section will just be empty
-    }
   };
 
   const handleChangeModel = async (modelRef: string) => {
@@ -643,29 +790,32 @@ const App = () => {
   if (state.assistant.exists) {
     return (
       <div
-        className="min-h-dvh bg-pin-gradient max-w-md mx-auto flex flex-col"
+        className="relative min-h-dvh bg-pin-gradient max-w-md mx-auto flex flex-col overflow-hidden"
         style={{
           paddingTop: "var(--safe-top)",
           paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1rem)",
         }}
       >
-        <TopStatus hasAgent={true} />
+        <div
+          className="fixed inset-0 z-0 opacity-[0.9] pointer-events-none"
+          style={{
+            backgroundImage: "url('/mini/bg-garden.png')",
+            backgroundSize: "cover",
+            backgroundPosition: "center",
+          }}
+        />
 
-        <div className="px-4 mt-5 space-y-3 flex-1">
-          <h2 className="text-base font-semibold text-foreground px-1">
-            <span className="title-highlight">My Agent</span>
-          </h2>
+        <div className={`relative px-4 pt-4 flex-1 ${showManageAgent ? "z-30" : "z-10"}`}>
           <AgentCard
             username={state.assistant.username || null}
             status={state.assistant.status || "unknown"}
             planId={state.subscription.plan_id}
+            skillsCount={state.skills?.items?.filter((item) => item.enabled).length ?? 0}
             active={state.subscription.active}
             manageOpen={showManageAgent}
             google={state.google ?? undefined}
             googleBusy={busy === "google-disconnect" || busy === "google-connect"}
-            onOpenManage={() => {
-              void handleOpenManage();
-            }}
+            onOpenManage={handleOpenManage}
             onCloseManage={() => setShowManageAgent(false)}
             onChangePlan={() => setShowChangePlan(true)}
             onRepairRuntime={handleRepairRuntime}
@@ -681,11 +831,11 @@ const App = () => {
           />
         </div>
 
-        <div className="px-4 mt-auto pt-4">
+        <div className="relative z-10 px-4 mt-auto pt-4">
           <button
             type="button"
             onClick={handleContactSupport}
-            className="glass-card w-full rounded-2xl flex items-center justify-center gap-2 text-sm text-foreground font-medium py-3 hover:bg-secondary/50 transition-colors border-0 bg-transparent appearance-none"
+            className="glass-stat-box w-full rounded-2xl flex items-center justify-center gap-2 text-sm text-foreground font-medium py-3.5 hover:bg-white/40 transition-colors border-0 bg-transparent appearance-none"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
@@ -694,21 +844,23 @@ const App = () => {
           </button>
         </div>
 
-        <ChangePlanDialog
-          open={showChangePlan}
-          onClose={() => setShowChangePlan(false)}
-          plans={state.plans ?? []}
-          currentPlanId={state.subscription.plan_id}
-          cancelAtPeriodEnd={state.subscription.cancel_at_period_end}
-          currentPeriodEnd={state.subscription.current_period_end}
-          selectedPlan={selectedPlan}
-          onSelectPlan={setSelectedPlan}
-          onCheckout={checkout}
-          onCancel={handleCancelSubscription}
-          busy={busy}
-        />
+        <div className="relative z-20">
+          <ChangePlanDialog
+            open={showChangePlan}
+            onClose={() => setShowChangePlan(false)}
+            plans={state.plans ?? []}
+            currentPlanId={state.subscription.plan_id}
+            cancelAtPeriodEnd={state.subscription.cancel_at_period_end}
+            currentPeriodEnd={state.subscription.current_period_end}
+            selectedPlan={selectedPlan}
+            onSelectPlan={setSelectedPlan}
+            onCheckout={checkout}
+            onCancel={handleCancelSubscription}
+            busy={busy}
+          />
 
-        <Toast message={toast?.message ?? null} type={toast?.type} onDismiss={() => setToast(null)} />
+          <Toast message={toast?.message ?? null} type={toast?.type} onDismiss={() => setToast(null)} />
+        </div>
       </div>
     );
   }

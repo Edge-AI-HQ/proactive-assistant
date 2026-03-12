@@ -123,7 +123,7 @@ mkdir -p /app/data/cache/jiti /app/data/cache/node-compile-cache
 ln -sfn /app/data/cache/jiti /tmp/jiti
 export NODE_COMPILE_CACHE=/app/data/cache/node-compile-cache
 ```
-4. 保持插件入口指向预编译 `index.js`。
+4. 插件入口为 `index.ts`（jiti 运行时编译）。Docker 构建时 warmup 阶段已缓存编译结果，冷启动从 snapshot 恢复，无需预编译 `index.js`。
 
 ## 标准排障命令（以 APIs 为准）
 1. 看 Telegram 全链路日志：
