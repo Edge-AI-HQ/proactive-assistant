@@ -32,7 +32,7 @@ interface LiteLLMGenerateKeyInput {
   userId: string;
   keyAlias: string;
   maxBudgetUsd: number | null;
-  budgetDuration: string;
+  budgetDuration: string | null; // Allow null to disable auto-reset
   rpmLimit: number | null;
   tpmLimit: number | null;
   models: string[];
@@ -450,8 +450,13 @@ export const generateLiteLLMKey = async (
   const body: JsonRecord = {
     user_id: input.userId,
     key_alias: input.keyAlias,
-    budget_duration: input.budgetDuration,
   };
+
+  // Only set budget_duration if explicitly provided (and not null)
+  // We manage spend reset manually via subscription periods, not auto-reset
+  if (input.budgetDuration !== null && input.budgetDuration !== undefined) {
+    body.budget_duration = input.budgetDuration;
+  }
 
   if (input.maxBudgetUsd !== null) body.max_budget = input.maxBudgetUsd;
   if (input.rpmLimit !== null) body.rpm_limit = input.rpmLimit;
