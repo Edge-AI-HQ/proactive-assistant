@@ -1,8 +1,20 @@
+import { useState } from "react";
 import ManageAgentDialog from "./ManageAgentDialog";
+import DataConnectionsDialog from "./DataConnectionsDialog";
+import SkillsDialog from "./SkillsDialog";
+import ModelPickerDialog, { formatModelName } from "./ModelPickerDialog";
 
 type ModelItem = {
   id: string;
   ref: string;
+};
+
+type SkillItem = {
+  key: string;
+  name: string;
+  description: string;
+  installed: boolean;
+  enabled: boolean;
 };
 
 interface AgentCardProps {
@@ -10,8 +22,10 @@ interface AgentCardProps {
   status: string;
   planId: string | null;
   skillsCount: number;
+  skills: SkillItem[];
   active: boolean;
   manageOpen: boolean;
+  createdAt: string | null;
   google?: {
     connected: boolean;
     email: string | null;
@@ -35,27 +49,31 @@ interface AgentCardProps {
   onLoadModels: () => Promise<void>;
 }
 
-const getStatusDisplay = (status: string): { text: string; color: string } => {
+const getStatusDisplay = (status: string): { text: string; dotColor: string; textColor: string } => {
   switch (status) {
     case "running":
-      return { text: "Running", color: "text-pin-mint" };
+      return { text: "Running", dotColor: "bg-green-400", textColor: "text-green-700" };
     case "creating":
-      return { text: "Creating...", color: "text-amber-600" };
+      return { text: "Creating...", dotColor: "bg-yellow-400 animate-pulse", textColor: "text-yellow-700" };
     case "stopped":
-      return { text: "Starting...", color: "text-amber-600" };
+      return { text: "Starting...", dotColor: "bg-yellow-400 animate-pulse", textColor: "text-amber-600" };
     case "missing":
-      return { text: "Provisioning...", color: "text-amber-600" };
+      return { text: "Provisioning...", dotColor: "bg-yellow-400 animate-pulse", textColor: "text-amber-600" };
     case "error":
-      return { text: "Error", color: "text-destructive" };
+      return { text: "Error", dotColor: "bg-red-400", textColor: "text-destructive" };
     default:
-      return { text: "Starting up...", color: "text-amber-600" };
+      return { text: "Starting up...", dotColor: "bg-yellow-400 animate-pulse", textColor: "text-amber-600" };
   }
 };
 
-const formatModelName = (modelRef: string | null | undefined): string => {
-  if (!modelRef) return "Default";
-  const tail = modelRef.split("/").pop() || modelRef;
-  return tail.length > 12 ? `${tail.slice(0, 12)}...` : tail;
+const formatBirthday = (createdAt: string | null): string => {
+  if (!createdAt) return "—";
+  try {
+    const d = new Date(createdAt);
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  } catch {
+    return "—";
+  }
 };
 
 const AgentCard = ({
@@ -63,8 +81,10 @@ const AgentCard = ({
   status,
   planId,
   skillsCount,
+  skills,
   active,
   manageOpen,
+  createdAt,
   google,
   googleBusy,
   onOpenManage,
@@ -81,18 +101,24 @@ const AgentCard = ({
   onChangeModel,
   onLoadModels,
 }: AgentCardProps) => {
+  const [showData, setShowData] = useState(false);
+  const [showSkills, setShowSkills] = useState(false);
+  const [showModel, setShowModel] = useState(false);
+
   const handle = username ? `@${username}` : "@PINClaw_AI_bot";
   const statusDisplay = getStatusDisplay(status);
-  const modelName = formatModelName(models?.current);
+  const modelName = formatModelName(models?.current, models?.available);
+  const birthday = formatBirthday(createdAt);
 
   const handleChat = () => {
-    // Close the mini app — returns user to Telegram where they can chat with the bot
     if (window.Telegram?.WebApp?.close) {
       window.Telegram.WebApp.close();
     } else if (username) {
       window.open(`https://t.me/${username}`, "_blank");
     }
   };
+
+  const googleConnectedCount = google?.connected ? 1 : 0;
 
   return (
     <>
@@ -107,47 +133,67 @@ const AgentCard = ({
           </div>
         </div>
 
-        <div
-          className={`rounded-3xl p-6 pt-16 transition-all ${
-            active ? "glass-card-home" : "bg-card border border-border/40 shadow-sm"
-          }`}
-        >
+        <div className="rounded-3xl p-6 pt-16 glass-card-home">
           <div className="flex flex-col items-center text-center mb-5">
-            <h3 className="text-2xl font-bold text-foreground">PIN Claw</h3>
-            {active && (
-              <span className="flex items-center justify-center gap-1.5 mt-1">
-                <span className="w-2.5 h-2.5 rounded-full status-active-dot animate-active-breathe" />
-                <span className="text-sm font-semibold status-active-text">Active</span>
-              </span>
-            )}
-            <p className="text-base font-medium text-foreground/70 mt-1">All-in-One AI Assistant</p>
-            <p className="text-sm font-semibold mt-0.5 text-primary">{handle}</p>
+            <h3 className="text-2xl font-bold text-foreground drop-shadow-[0_1px_2px_rgba(255,255,255,0.8)]">PIN Claw</h3>
+            <p className="text-base font-medium text-foreground/70 mt-1 drop-shadow-[0_1px_2px_rgba(255,255,255,0.8)]">All-in-One AI Assistant</p>
+            <p className="text-sm font-semibold mt-0.5 drop-shadow-[0_1px_2px_rgba(255,255,255,0.8)]" style={{ color: "hsl(289 80% 55%)" }}>{handle}</p>
           </div>
 
-          <button
-            type="button"
-            onClick={onChangePlan}
-            className="w-full rounded-xl px-4 py-2.5 flex items-center justify-between glass-stat-box mb-4 text-left btn-press hover:bg-white/40 transition-colors"
-          >
-            <span className="text-xs text-muted-foreground font-medium">Current Plan</span>
-            <span className="text-sm font-semibold text-foreground">{planId || "Free"}</span>
-          </button>
-
-          <div className="flex items-stretch gap-2.5 mb-5">
-            <div className="flex-1 rounded-xl px-2 py-3.5 text-center glass-stat-box">
-              <p className="text-[10px] text-muted-foreground whitespace-nowrap">Status</p>
-              <p className={`text-sm font-bold whitespace-nowrap ${statusDisplay.color}`}>{statusDisplay.text}</p>
+          {/* Full-width info rows */}
+          <div className="space-y-2.5 mb-2.5">
+            {/* Status - NOT clickable */}
+            <div className="rounded-2xl px-4 py-3.5 glass-stat-box flex items-center justify-between">
+              <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Status</p>
+              <div className="flex items-center gap-1.5">
+                <span className={`w-2 h-2 rounded-full ${statusDisplay.dotColor}`} />
+                <p className={`text-sm font-bold ${statusDisplay.textColor}`}>{statusDisplay.text}</p>
+              </div>
             </div>
-            <div className="flex-1 rounded-xl px-2 py-3.5 text-center glass-stat-box">
-              <p className="text-[10px] text-muted-foreground whitespace-nowrap">Skills</p>
+
+            {/* Model - clickable, opens model picker */}
+            <div
+              onClick={() => setShowModel(true)}
+              className="rounded-2xl px-4 py-3.5 glass-stat-box flex items-center justify-between cursor-pointer hover:bg-white/50 transition-colors"
+            >
+              <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Model</p>
+              <div className="flex items-center gap-1">
+                <p className="text-sm font-bold text-foreground">{modelName}</p>
+                <svg className="w-3.5 h-3.5 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          {/* Info pills */}
+          <div className="flex items-stretch gap-2 mb-5">
+            {/* Plan - clickable */}
+            <div
+              onClick={onChangePlan}
+              className="flex-1 rounded-2xl px-2 py-3.5 glass-stat-box text-center min-w-0 flex flex-col justify-center cursor-pointer hover:bg-white/50 transition-colors"
+            >
+              <p className="text-[9px] uppercase tracking-widest text-muted-foreground mb-1">Plan</p>
+              <p className="text-sm font-bold text-foreground truncate">{planId ? planId.charAt(0).toUpperCase() + planId.slice(1) : "Free"}</p>
+            </div>
+
+            {/* Birthday - NOT clickable */}
+            <div className="rounded-2xl px-3 py-3.5 glass-stat-box text-center min-w-0 flex flex-col justify-center" style={{ flex: "1.4" }}>
+              <p className="text-[9px] uppercase tracking-widest text-muted-foreground mb-1">Birthday</p>
+              <p className="text-xs font-bold text-foreground whitespace-nowrap">{birthday}</p>
+            </div>
+
+            {/* Skills - clickable */}
+            <div
+              onClick={() => setShowSkills(true)}
+              className="flex-1 rounded-2xl px-2 py-3.5 glass-stat-box text-center min-w-0 flex flex-col justify-center cursor-pointer hover:bg-white/50 transition-colors"
+            >
+              <p className="text-[9px] uppercase tracking-widest text-muted-foreground mb-1">Skills</p>
               <p className="text-sm font-bold text-foreground">{skillsCount}</p>
             </div>
-            <div className="flex-1 rounded-xl px-2 py-3.5 text-center glass-stat-box">
-              <p className="text-[10px] text-muted-foreground whitespace-nowrap">Model</p>
-              <p className="text-sm font-bold text-foreground whitespace-nowrap">{modelName}</p>
-            </div>
           </div>
 
+          {/* Action buttons */}
           <div className="space-y-2.5">
             <button
               onClick={handleChat}
@@ -159,19 +205,24 @@ const AgentCard = ({
               Chat with PIN Claw
             </button>
             <button
-              onClick={onOpenManage}
-              className="w-full flex items-center justify-center gap-2 rounded-2xl py-3 text-sm font-medium text-foreground btn-press glass-stat-box hover:bg-white/40 transition-colors"
+              onClick={() => setShowData(true)}
+              className="w-full flex items-center justify-center gap-2 rounded-2xl py-3 text-sm font-medium text-foreground btn-press glass-stat-box border-foreground/30"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-                />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
+              </svg>
+              Data Connectors
+              <span className="text-xs text-muted-foreground ml-1">{googleConnectedCount}/5</span>
+            </button>
+            <button
+              onClick={onOpenManage}
+              className="w-full flex items-center justify-center gap-2 rounded-2xl py-3 text-sm font-medium text-foreground btn-press glass-stat-box border-foreground/30"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
-              Manage Agent
+              Manage
             </button>
           </div>
         </div>
@@ -182,15 +233,39 @@ const AgentCard = ({
         onClose={onCloseManage}
         planId={planId}
         runtimeStatus={status}
-        google={google}
-        googleBusy={googleBusy}
         onChangePlan={onChangePlan}
         onRepairRuntime={onRepairRuntime}
         runtimeBusy={runtimeBusy}
         allowDeleteAccount={allowDeleteAccount}
         onDeleteAccount={onDeleteAccount}
+        models={models}
+        modelBusy={modelBusy}
+        onChangeModel={onChangeModel}
+        onLoadModels={onLoadModels}
+        onOpenModelPicker={() => {
+          onCloseManage();
+          setShowModel(true);
+        }}
+      />
+
+      <DataConnectionsDialog
+        open={showData}
+        onClose={() => setShowData(false)}
+        google={google}
+        googleBusy={googleBusy}
         onConnectGoogle={onConnectGoogle}
         onDisconnectGoogle={onDisconnectGoogle}
+      />
+
+      <SkillsDialog
+        open={showSkills}
+        onClose={() => setShowSkills(false)}
+        skills={skills}
+      />
+
+      <ModelPickerDialog
+        open={showModel}
+        onClose={() => setShowModel(false)}
         models={models}
         modelBusy={modelBusy}
         onChangeModel={onChangeModel}

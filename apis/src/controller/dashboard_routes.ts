@@ -355,6 +355,7 @@ const buildQuickStatePayload = async (
           id: assistant.id,
           username: assistant.assistant_bot_username ?? null,
           status: assistant.container_status ?? "unknown",
+          created_at: assistant.created_at ?? null,
         }
       : {
           exists: false,

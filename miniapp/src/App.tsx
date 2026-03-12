@@ -55,6 +55,7 @@ type StatePayload = {
     id?: number;
     username?: string | null;
     status?: string;
+    created_at?: string | null;
   };
   subscription: {
     active: boolean;
@@ -329,39 +330,39 @@ const App = () => {
     const initData = window.Telegram?.WebApp?.initData?.trim() ?? "";
     const inWebPreview = isDemoMode();
 
-    // If we have initData (in Telegram) or in web preview mode, use bootstrap
+    let quick: StatePayload;
     if (initData || inWebPreview) {
       const endpoint = getBootstrapEndpoint();
       const payload = getBootstrapPayload();
 
-      const quick = await safeFetch<StatePayload>(endpoint, {
+      quick = await safeFetch<StatePayload>(endpoint, {
         method: "POST",
         body: JSON.stringify(payload),
       });
-      let fullPayload: StatePayload = quick;
-      let loadedDeferred = false;
-      try {
-        const deferred = await safeFetch<DeferredPayload>(
-          "/api/mini/state/deferred",
-        );
-        fullPayload = { ...quick, ...deferred };
-        loadedDeferred = true;
-      } catch {
-        // fallback to quick payload; deferred will be retried in background
-      }
-      hydrateState(fullPayload);
-      if (fullPayload.assistant.exists) {
-        await Promise.all([loadModels(), preloadImage("/mini/bg-garden.png")]);
-      }
-      return { loadedDeferred };
+    } else {
+      quick = await safeFetch<StatePayload>("/api/mini/state");
     }
 
-    // Fallback to regular state endpoint (shouldn't reach here normally)
-    const payload = await loadState();
-    if (payload.assistant.exists) {
-      await Promise.all([loadModels(), preloadImage("/mini/bg-garden.png")]);
+    hydrateState(quick);
+    setLoading(false);
+    window.Telegram?.WebApp?.ready?.();
+
+    if (quick.assistant.exists) {
+      void loadModels();
+      void preloadImage("/mini/bg-garden.png");
     }
-    return { loadedDeferred: true };
+
+    let loadedDeferred = false;
+    try {
+      const deferred = await safeFetch<DeferredPayload>("/api/mini/state/deferred");
+      setState((prev) => prev ? { ...prev, ...deferred } : prev);
+      setSelectedPlan((prev) => prev ?? deferred.plans[0]?.id ?? null);
+      loadedDeferred = true;
+    } catch {
+      // deferred will be retried via loadDeferred() below
+    }
+
+    return { loadedDeferred };
   };
 
   useEffect(() => {
@@ -380,18 +381,13 @@ const App = () => {
 
     void bootstrap()
       .then(({ loadedDeferred }) => {
-        setLoading(false);
-        // Signal Telegram that the page is ready — dismisses native loader
-        window.Telegram?.WebApp?.ready?.();
         if (!loadedDeferred) {
-          // Only backfill deferred fields if bootstrap could not fetch them
           void loadDeferred().catch(() => {});
         }
       })
       .catch((e: unknown) => {
         setError(e instanceof Error ? e.message : "unknown error");
         setLoading(false);
-        // Still need to dismiss native loader on error so user sees error UI
         window.Telegram?.WebApp?.ready?.();
       });
   }, []);
@@ -903,18 +899,16 @@ const App = () => {
           }}
         />
 
-        <div
-          className={`relative px-4 pt-4 flex-1 ${showManageAgent ? "z-30" : "z-10"}`}
-        >
+        <div className="relative px-4 pt-4 flex-1 z-10">
           <AgentCard
             username={state.assistant.username || null}
             status={state.assistant.status || "unknown"}
             planId={state.subscription.plan_id}
-            skillsCount={
-              state.skills?.items?.filter((item) => item.enabled).length ?? 0
-            }
+            skillsCount={state.skills?.items?.filter((item) => item.installed).length ?? 0}
+            skills={state.skills?.items ?? []}
             active={state.subscription.active}
             manageOpen={showManageAgent}
+            createdAt={state.assistant.created_at ?? null}
             google={state.google ?? undefined}
             googleBusy={
               busy === "google-disconnect" || busy === "google-connect"
@@ -935,7 +929,7 @@ const App = () => {
           />
         </div>
 
-        <div className="relative z-10 px-4 mt-auto pt-4">
+        <div className="relative z-[1] px-4 mt-auto pt-4">
           <button
             type="button"
             onClick={handleContactSupport}
