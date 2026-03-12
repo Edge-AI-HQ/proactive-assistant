@@ -274,7 +274,7 @@ const mergeAssistantOpenclawConfig = (
       : {};
     next.models = {
       ...existingModels,
-      providers: { ...existingProviders, litellm: desiredProviders.litellm },
+      providers: { ...existingProviders, ...desiredProviders },
     };
 
     const desiredAgents = isRecord(desired.agents) ? desired.agents : {};

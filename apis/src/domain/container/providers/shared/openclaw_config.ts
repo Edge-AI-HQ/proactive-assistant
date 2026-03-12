@@ -179,6 +179,24 @@ export const buildLiteLLMModelsSection = (
   const models: UnknownRecord = {
     providers: {
       litellm: buildLiteLLMProviderConfig(context.litellm, liteLlmApiKey),
+      // Register provider aliases pointing at LiteLLM so that
+      // tools.media (audio/image) can resolve API keys without
+      // requiring provider-specific env vars in the container.
+      openai: {
+        baseUrl: context.litellm.baseUrl.replace(/\/+$/, ""),
+        apiKey: liteLlmApiKey,
+        models: [],
+      },
+      anthropic: {
+        baseUrl: context.litellm.baseUrl.replace(/\/+$/, ""),
+        apiKey: liteLlmApiKey,
+        models: [],
+      },
+      moonshot: {
+        baseUrl: context.litellm.baseUrl.replace(/\/+$/, ""),
+        apiKey: liteLlmApiKey,
+        models: [],
+      },
     },
   };
 
@@ -459,8 +477,50 @@ export const buildAssistantOpenclawConfig = (
     },
     media: {
       concurrency: 2,
-      audio: { enabled: true, maxBytes: 20971520 },
-      video: { enabled: true, maxBytes: 52428800 },
+      audio: {
+        enabled: true,
+        maxBytes: 20971520,
+        ...(context.litellm.enabled && normalizedLiteLLMApiKey
+          ? {
+              models: [
+                {
+                  provider: "openai",
+                  model: "gpt-4o-mini-transcribe",
+                  baseUrl: context.litellm.baseUrl.replace(/\/+$/, ""),
+                },
+              ],
+            }
+          : {}),
+      },
+      image: {
+        enabled: true,
+        ...(context.litellm.enabled && normalizedLiteLLMApiKey
+          ? {
+              models: [
+                {
+                  provider: "moonshot",
+                  model: "kimi-k2.5",
+                  baseUrl: context.litellm.baseUrl.replace(/\/+$/, ""),
+                },
+              ],
+            }
+          : {}),
+      },
+      video: {
+        enabled: true,
+        maxBytes: 52428800,
+        ...(context.litellm.enabled && normalizedLiteLLMApiKey
+          ? {
+              models: [
+                {
+                  provider: "moonshot",
+                  model: "kimi-k2.5",
+                  baseUrl: context.litellm.baseUrl.replace(/\/+$/, ""),
+                },
+              ],
+            }
+          : {}),
+      },
     },
     sessions: { visibility: "all" },
     loopDetection: { enabled: false },

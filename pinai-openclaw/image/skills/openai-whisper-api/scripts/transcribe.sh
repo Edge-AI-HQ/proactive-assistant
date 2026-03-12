@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat >&2 <<'EOF'
 Usage:
-  transcribe.sh <audio-file> [--model whisper-1] [--out /path/to/out.txt] [--language en] [--prompt "hint"] [--json]
+  transcribe.sh <audio-file> [--model gpt-4o-mini-transcribe] [--out /path/to/out.txt] [--language en] [--prompt "hint"] [--json]
 EOF
   exit 2
 }
@@ -16,7 +16,7 @@ fi
 in="${1:-}"
 shift || true
 
-model="whisper-1"
+model="gpt-4o-mini-transcribe"
 out=""
 language=""
 prompt=""
