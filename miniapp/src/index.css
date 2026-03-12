@@ -48,6 +48,9 @@
     --pin-bg-gradient-to: 270 30% 96.5%;
     --pin-card-shadow: 0 4px 24px -4px hsl(299 40% 70% / 0.12);
     --pin-card-glow: 0 0 24px 0 hsl(299 76% 63% / 0.15);
+    
+    /* Demo mode offset */
+    --demo-top-offset: 0px;
     --pin-glass-bg: 0 0% 100% / 0.88;
 
     /* Telegram fullscreen header offset (close/settings buttons) — set via JS on mobile */
