@@ -3,7 +3,7 @@ services:
   openclaw-image:
     build:
       context: .
-      dockerfile: infra/container-manager/images/openclaw/Dockerfile
+      dockerfile: pinai-openclaw/image/Dockerfile
     image: pinai-openclaw:latest
 
   litellm:
