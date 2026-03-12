@@ -105,10 +105,7 @@ const probeGatewayHelloOnce = (
     };
     const ws = new WebSocket(wsUrl, {
       maxPayload: 2 * 1024 * 1024,
-      headers: {
-        ...gatewayHostHeaders(target),
-        Origin: target.httpBaseUrl,
-      },
+      headers: gatewayHostHeaders(target),
     });
     let settled = false;
     let sent = false;
