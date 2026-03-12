@@ -25,12 +25,17 @@ RUN rm -f /usr/local/bin/gog && rm -rf /usr/local/lib/node_modules/openclaw/skil
 
 WORKDIR /app
 
-RUN mkdir -p /opt/pinai/plugins/telegram-router-proxy
-COPY openclaw-plugins/telegram-router-proxy/ /opt/pinai/plugins/telegram-router-proxy/
+# Copy all three plugins into separate directories
+RUN mkdir -p /opt/pinai/plugins/telegram-api-proxy \
+             /opt/pinai/plugins/litellm-vision-adapter \
+             /opt/pinai/plugins/platform-hooks
+COPY pinai-openclaw/plugins/telegram-api-proxy/  /opt/pinai/plugins/telegram-api-proxy/
+COPY pinai-openclaw/plugins/litellm-vision-adapter/ /opt/pinai/plugins/litellm-vision-adapter/
+COPY pinai-openclaw/plugins/platform-hooks/      /opt/pinai/plugins/platform-hooks/
 
 # Copy custom skills: first remove any same-named bundled skills so ours
 # completely replace them (no leftover files), then copy in.
-COPY infra/container-manager/images/openclaw/skills/ /tmp/pinai-skills/
+COPY pinai-openclaw/image/skills/ /tmp/pinai-skills/
 RUN for skill in /tmp/pinai-skills/*/; do \
       name=$(basename "$skill"); \
       rm -rf "/usr/local/lib/node_modules/openclaw/skills/$name"; \
@@ -39,33 +44,28 @@ RUN for skill in /tmp/pinai-skills/*/; do \
     && rm -rf /tmp/pinai-skills
 
 # ── Warm up jiti + Node compile caches at build time ──
-# Launch gateway with plugin path so jiti compiles both openclaw core AND our
-# plugin TS. After 90s the gateway is killed; caches are saved into /opt/pinai/*.
-# The workspace created during warmup is preserved as a pre-built snapshot so
-# cold-start containers can skip the expensive workspace-init step.
+# Launch gateway with all plugin paths so jiti compiles both openclaw core
+# AND our plugin TS.  After 90s the gateway is killed; caches are saved.
 RUN mkdir -p /tmp/jiti \
     && OPENCLAW_HOME=/app \
        NODE_COMPILE_CACHE=/tmp/node-compile-cache \
-       OPENCLAW_TELEGRAM_ROUTER_PLUGIN_PATH=/opt/pinai/plugins/telegram-router-proxy \
+       OPENCLAW_PLUGIN_LOAD_PATHS=/opt/pinai/plugins/telegram-api-proxy:/opt/pinai/plugins/litellm-vision-adapter:/opt/pinai/plugins/platform-hooks \
        timeout 90 openclaw gateway --bind loopback --allow-unconfigured 2>&1 || true \
     && mkdir -p /opt/pinai/jiti-warmup /opt/pinai/node-compile-warmup \
     && cp -r /tmp/jiti/. /opt/pinai/jiti-warmup/ 2>/dev/null || true \
     && cp -r /tmp/node-compile-cache/. /opt/pinai/node-compile-warmup/ 2>/dev/null || true \
-    && if [ -f /app/.openclaw/workspace/TOOLS.md ]; then \
-         mkdir -p /opt/pinai/workspace-snapshot \
-         && cp -r /app/.openclaw/workspace/. /opt/pinai/workspace-snapshot/; \
-       fi \
     && rm -rf /tmp/jiti /tmp/node-compile-cache /app/.openclaw
 
-COPY infra/container-manager/images/openclaw/pinai-entrypoint.sh /usr/local/bin/pinai-entrypoint.sh
+COPY pinai-openclaw/image/scripts/ /opt/pinai/scripts/
+COPY pinai-openclaw/image/pinai-entrypoint.sh /usr/local/bin/pinai-entrypoint.sh
 RUN chmod +x /usr/local/bin/pinai-entrypoint.sh
-COPY infra/container-manager/images/openclaw/TOOLS_to_append.md /opt/pinai/TOOLS_to_append.md
+COPY pinai-openclaw/image/platform-system-guidance.md /opt/pinai/platform-system-guidance.md
 
 ENV OPENCLAW_HOME="/app"
 ENV OPENCLAW_MODE="headless"
 ENV OPENCLAW_GATEWAY_PORT="18789"
-ENV OPENCLAW_TELEGRAM_ROUTER_PLUGIN_PATH="/opt/pinai/plugins/telegram-router-proxy"
-ENV PINAI_TOOLS_APPEND_PATH="/opt/pinai/TOOLS_to_append.md"
+ENV OPENCLAW_PLUGIN_LOAD_PATHS="/opt/pinai/plugins/telegram-api-proxy:/opt/pinai/plugins/litellm-vision-adapter:/opt/pinai/plugins/platform-hooks"
+ENV PINAI_SYSTEM_GUIDANCE_PATH="/opt/pinai/platform-system-guidance.md"
 
 EXPOSE 18789
 

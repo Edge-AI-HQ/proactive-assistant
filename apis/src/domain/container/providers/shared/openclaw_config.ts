@@ -38,6 +38,9 @@ const buildOwnerAllowFrom = (
   return Array.from(values);
 };
 
+/** Header used by trusted-proxy auth to carry the operator identity. */
+export const TRUSTED_PROXY_USER_HEADER = "x-pinai-identity";
+
 export const buildGatewayConfigSection = (
   context: OpenclawConfigContext,
   gatewayToken: string,
@@ -47,15 +50,12 @@ export const buildGatewayConfigSection = (
   const normalizedGatewayToken = gatewayToken.trim();
   if (!normalizedGatewayToken) {
     throw new Error(
-      "gateway_token is required to start OpenClaw gateway with token auth.",
+      "gateway_token is required for OpenClaw gateway auth.",
     );
   }
 
   const controlUi: UnknownRecord = {
     allowInsecureAuth: true,
-    // Disable device-identity / pairing checks — our APIs layer already
-    // authenticates dashboard sessions before proxying to the gateway.
-    dangerouslyDisableDeviceAuth: true,
   };
 
   // Allow the APIs proxy origin so the Control UI accepts requests forwarded
@@ -85,14 +85,16 @@ export const buildGatewayConfigSection = (
         ]
       : ["0.0.0.0/0"];
 
-  // Always use token auth. Agent reads token from OPENCLAW_GATEWAY_TOKEN env var.
-  // Combined with disabled device identity (deleted in entrypoint.sh), this allows:
-  // - sharedAuthOk = true (token auth succeeds)
-  // - hasDeviceIdentity = false (no device files)
-  // - roleCanSkipDeviceIdentity(operator, true) → allow
+  // Token auth mode: the gateway validates the token on the `connect`
+  // handshake.  Trusted-proxy config is kept so it can be enabled later
+  // once all intermediate proxies (ngrok, APIs reverse proxy) are
+  // guaranteed to forward custom headers.
   const auth = {
     mode: "token" as const,
     token: normalizedGatewayToken,
+    trustedProxy: {
+      userHeader: TRUSTED_PROXY_USER_HEADER,
+    },
   };
 
   return {
@@ -221,7 +223,7 @@ interface BuildAssistantOpenclawConfigOptions {
   telegramWebhookHost?: string;
   telegramWebhookPort?: number;
   telegramPrivateWebhookPort?: number;
-  telegramRouterPluginPath?: string;
+  pluginLoadPaths?: string[];
   controlOrigin?: string;
   skillsConfig?: UnknownRecord | null;
 }
@@ -400,9 +402,11 @@ export const buildAssistantOpenclawConfig = (
     };
   }
 
-  // Plugin config is independent of assistantBotToken — OpenClaw's Doctor
-  // auto-enables Telegram when it detects TELEGRAM_BOT_TOKEN in env, so the
-  // proxy plugin must always be loaded to prevent webhook/command mutations.
+  // Plugin config — three independent plugins replace the old monolithic
+  // telegram-router-proxy.  Each handles a single concern:
+  //   telegram-api-proxy:     Telegram API URL rewrite + method blocking
+  //   litellm-vision-adapter: Vision streaming adaptation
+  //   platform-hooks:         Cron delivery + device auto-pairing
   const plugins: {
     entries: Record<string, UnknownRecord>;
     load?: { paths: string[] };
@@ -415,13 +419,13 @@ export const buildAssistantOpenclawConfig = (
   }
 
   if (options.telegramWebhookMode) {
-    plugins.entries["telegram-router-proxy"] = {
-      enabled: true,
-    };
+    plugins.entries["telegram-api-proxy"] = { enabled: true };
+    plugins.entries["litellm-vision-adapter"] = { enabled: true };
+    plugins.entries["platform-hooks"] = { enabled: true };
 
-    const pluginPath = options.telegramRouterPluginPath?.trim();
-    if (pluginPath) {
-      plugins.load = { paths: [pluginPath] };
+    const paths = options.pluginLoadPaths?.filter((p) => p.trim());
+    if (paths?.length) {
+      plugins.load = { paths };
     }
   }
 

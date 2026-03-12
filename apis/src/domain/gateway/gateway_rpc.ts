@@ -6,13 +6,14 @@ import {
   GATEWAY_CLIENT_ROLE,
   GATEWAY_CLIENT_SCOPES,
 } from "./gateway_constants.js";
+import { TRUSTED_PROXY_USER_HEADER } from "../container/providers/shared/openclaw_config.js";
 
 // ---------------------------------------------------------------------------
 // Gateway WebSocket RPC client
 //
-// Connects to the OpenClaw gateway via WebSocket, performs the `connect`
-// handshake as operator with token auth (no device identity needed), then
-// issues a single RPC request and returns the result.
+// Connects to the OpenClaw gateway via WebSocket using trusted-proxy auth.
+// The identity header is sent on the upgrade request; the `connect` handshake
+// carries the token as fallback for compatibility.
 // ---------------------------------------------------------------------------
 
 const RPC_TIMEOUT_MS = 10_000;
@@ -47,8 +48,9 @@ const generateRequestId = (): string =>
 /**
  * Build the `connect` request params.
  *
- * Uses operator role + token auth so `roleCanSkipDeviceIdentity` returns true
- * on the gateway side — no Ed25519 device identity needed.
+ * Uses operator role with trusted-proxy auth. The gateway reads the operator
+ * identity from the HTTP upgrade header (TRUSTED_PROXY_USER_HEADER).
+ * Token is kept as fallback for gateway compatibility.
  */
 const buildConnectParams = (
   gatewayToken: string,
@@ -85,7 +87,10 @@ const rpcCall = <T = unknown>(
   new Promise((resolve) => {
     const ws = new WebSocket(target.wsBaseUrl, {
       maxPayload: 4 * 1024 * 1024,
-      headers: gatewayHostHeaders(target),
+      headers: {
+        ...gatewayHostHeaders(target),
+        [TRUSTED_PROXY_USER_HEADER]: GATEWAY_CLIENT_ROLE,
+      },
     });
     let settled = false;
 
