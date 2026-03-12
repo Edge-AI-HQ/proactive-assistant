@@ -1,5 +1,8 @@
 # Repository Guidelines
 
+## 只读源码参考
+- `pinai-openclaw/external/openclaw/`：OpenClaw 上游源码（git submodule，锁定 `v2026.3.8`）。**仅供阅读参考，禁止修改此目录下的任何文件。**
+
 ## 当前架构（一句话）
 Telegram Router 已并入 `apis`，不存在独立 `telegram-router` 服务。所有 Telegram 入/出站统一走 `pinclaw-api-dev`。
 
