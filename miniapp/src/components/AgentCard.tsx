@@ -109,8 +109,10 @@ const AgentCard = ({
   const statusDisplay = getStatusDisplay(status);
   const modelName = formatModelName(models?.current, models?.available);
   const birthday = formatBirthday(createdAt);
+  const isRuntimeRunning = status === "running";
 
   const handleChat = () => {
+    if (!isRuntimeRunning) return;
     if (window.Telegram?.WebApp?.close) {
       window.Telegram.WebApp.close();
     } else if (username) {
@@ -151,10 +153,19 @@ const AgentCard = ({
               </div>
             </div>
 
-            {/* Model - clickable, opens model picker */}
-            <div
-              onClick={() => setShowModel(true)}
-              className="rounded-2xl px-4 py-3.5 glass-stat-box flex items-center justify-between cursor-pointer hover:bg-white/50 transition-colors"
+            {/* Model - only clickable when runtime is running */}
+            <button
+              type="button"
+              onClick={() => {
+                if (!isRuntimeRunning) return;
+                setShowModel(true);
+              }}
+              disabled={!isRuntimeRunning}
+              className={`w-full rounded-2xl px-4 py-3.5 glass-stat-box flex items-center justify-between transition-colors ${
+                isRuntimeRunning
+                  ? "cursor-pointer hover:bg-white/50"
+                  : "opacity-60 cursor-not-allowed"
+              }`}
             >
               <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Model</p>
               <div className="flex items-center gap-1">
@@ -163,7 +174,7 @@ const AgentCard = ({
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                 </svg>
               </div>
-            </div>
+            </button>
           </div>
 
           {/* Info pills */}
@@ -197,7 +208,12 @@ const AgentCard = ({
           <div className="space-y-2.5">
             <button
               onClick={handleChat}
-              className="w-full flex items-center justify-center gap-2 rounded-2xl py-3.5 text-sm font-semibold text-white btn-press bg-foreground shadow-lg"
+              disabled={!isRuntimeRunning}
+              className={`w-full flex items-center justify-center gap-2 rounded-2xl py-3.5 text-sm font-semibold btn-press shadow-lg ${
+                isRuntimeRunning
+                  ? "text-white bg-foreground"
+                  : "text-white/80 bg-foreground/60 cursor-not-allowed"
+              }`}
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
@@ -206,7 +222,12 @@ const AgentCard = ({
             </button>
             <button
               onClick={() => setShowData(true)}
-              className="w-full flex items-center justify-center gap-2 rounded-2xl py-3 text-sm font-medium text-foreground btn-press glass-stat-box border-foreground/30"
+              disabled={!isRuntimeRunning}
+              className={`w-full flex items-center justify-center gap-2 rounded-2xl py-3 text-sm font-medium btn-press glass-stat-box border-foreground/30 ${
+                isRuntimeRunning
+                  ? "text-foreground"
+                  : "text-foreground/60 cursor-not-allowed opacity-60"
+              }`}
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
@@ -238,14 +259,6 @@ const AgentCard = ({
         runtimeBusy={runtimeBusy}
         allowDeleteAccount={allowDeleteAccount}
         onDeleteAccount={onDeleteAccount}
-        models={models}
-        modelBusy={modelBusy}
-        onChangeModel={onChangeModel}
-        onLoadModels={onLoadModels}
-        onOpenModelPicker={() => {
-          onCloseManage();
-          setShowModel(true);
-        }}
       />
 
       <DataConnectionsDialog
