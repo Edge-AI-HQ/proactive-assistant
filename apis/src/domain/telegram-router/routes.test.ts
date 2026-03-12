@@ -25,14 +25,14 @@ test("detectPromptLanguage defaults to English for non-Chinese requests", () => 
 test("buildGoogleOAuthPrompt returns Chinese mini app guidance without raw URL", () => {
   const prompt = buildGoogleOAuthPrompt("给我最新的10封邮件");
   assert.match(prompt, /左下角/);
-  assert.match(prompt, /Manage -> Connect Google/);
+  assert.match(prompt, /Data Connectors -> Google/);
   assert.doesNotMatch(prompt, /https?:\/\//);
 });
 
 test("buildGoogleOAuthPrompt returns English mini app guidance without raw URL", () => {
   const prompt = buildGoogleOAuthPrompt("Show me my latest 10 emails");
   assert.match(prompt, /bottom-left button in Telegram/);
-  assert.match(prompt, /Manage -> Connect Google/);
+  assert.match(prompt, /Data Connectors -> Google/);
   assert.doesNotMatch(prompt, /https?:\/\//);
 });
 
@@ -51,25 +51,26 @@ test("buildGoogleCredentialSyncingPromptForTest returns English syncing hint", (
 test("buildGoogleCalendarReauthPromptForTest returns Chinese reauth hint", () => {
   const prompt = buildGoogleCalendarReauthPromptForTest("我下一个日历是什么");
   assert.match(prompt, /缺少日历权限/);
-  assert.match(prompt, /重新 Connect Google/);
+  assert.match(prompt, /Data Connectors -> Google/);
 });
 
 test("buildGoogleCalendarReauthPromptForTest returns English reauth hint", () => {
   const prompt = buildGoogleCalendarReauthPromptForTest("Show my next calendar event");
   assert.match(prompt, /missing Calendar permission/);
-  assert.match(prompt, /reconnect Google/);
+  assert.match(prompt, /Data Connectors -> Google/);
 });
 
 test("hasGoogleWorkspaceIntentForTest matches calendar and drive requests", () => {
-  assert.equal(hasGoogleWorkspaceIntentForTest("我下一个日历是什么"), true);
-  assert.equal(hasGoogleWorkspaceIntentForTest("Show my next calendar event"), true);
+  assert.equal(hasGoogleWorkspaceIntentForTest("Show my next Google Calendar event"), true);
   assert.equal(hasGoogleWorkspaceIntentForTest("帮我看一下 Google Drive 里的文件"), true);
+  assert.equal(hasGoogleWorkspaceIntentForTest("openclaw doctor --non-interactive"), false);
+  assert.equal(hasGoogleWorkspaceIntentForTest("Show me my latest 10 emails"), false);
   assert.equal(hasGoogleWorkspaceIntentForTest("What is the weather today?"), false);
 });
 
 test("shouldPromptGoogleOAuthForTest ignores private onboarding triggers", () => {
-  assert.equal(shouldPromptGoogleOAuthForTest("private", "Show me my latest 10 emails"), false);
-  assert.equal(shouldPromptGoogleOAuthForTest("public", "Show me my latest 10 emails"), true);
+  assert.equal(shouldPromptGoogleOAuthForTest("private", "Show my next Google Calendar event"), false);
+  assert.equal(shouldPromptGoogleOAuthForTest("public", "Show my next Google Calendar event"), true);
 });
 
 test("classifyTelegramOutboundMessage marks welcome messages only", () => {

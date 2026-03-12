@@ -14,6 +14,7 @@ interface Connection {
   name: string;
   connected: boolean;
   enabled: boolean;
+  description?: string;
   onClick?: () => void;
 }
 
@@ -35,6 +36,9 @@ const DataConnectionsDialog = ({
       name: "Google",
       connected: googleConnected,
       enabled: true,
+      description: googleConnected
+        ? (google?.email || "Google Workspace connected")
+        : "Connect Gmail, Calendar, and Drive",
       onClick: () => {
         if (googleBusy) return;
         if (googleConnected) {
@@ -70,14 +74,14 @@ const DataConnectionsDialog = ({
           <p className="text-xs text-muted-foreground">Connect accounts to power your AI</p>
         </div>
 
-        <div className="px-3 pb-4 pt-2 space-y-0.5">
+        <div className="px-3 pb-4 pt-2 space-y-1">
           {connections.map((conn) => (
             <button
               key={conn.name}
               disabled={!conn.enabled || googleBusy}
               onClick={conn.onClick}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors text-left ${
-                conn.enabled ? "hover:bg-accent" : "cursor-not-allowed"
+              className={`w-full flex items-center gap-3 px-3 py-3 rounded-2xl transition-colors text-left ${
+                conn.enabled ? "hover:bg-accent" : "cursor-not-allowed opacity-70"
               } ${googleBusy && conn.name === "Google" ? "opacity-60" : ""}`}
             >
               <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
@@ -99,27 +103,27 @@ const DataConnectionsDialog = ({
               </div>
               <div className="flex-1 min-w-0">
                 <p className={`text-sm font-medium ${conn.enabled ? "text-foreground" : "text-muted-foreground/50"}`}>{conn.name}</p>
-                {conn.connected && conn.name === "Google" && google?.email && (
-                  <p className="text-[10px] text-muted-foreground truncate">{google.email}</p>
+                {conn.description && conn.enabled && (
+                  <p className="text-[11px] text-muted-foreground truncate">{conn.description}</p>
                 )}
                 {!conn.enabled && (
                   <p className="text-[10px] text-muted-foreground/40">Coming Soon</p>
                 )}
               </div>
-              <span className={`text-xs font-semibold ${
+              <span className={`text-[11px] font-semibold px-2 py-1 rounded-full ${
                 conn.connected
-                  ? ""
+                  ? "bg-[hsl(152_69%_65%/0.15)]"
                   : conn.enabled
-                    ? "text-muted-foreground"
+                    ? "bg-secondary text-muted-foreground"
                     : "text-muted-foreground/30"
               }`} style={conn.connected ? { color: "hsl(152 69% 35%)" } : undefined}>
                 {!conn.enabled
                   ? ""
                   : googleBusy && conn.name === "Google"
-                    ? "Working..."
+                    ? "Syncing..."
                     : conn.connected
                       ? "Connected"
-                      : "Unconnected"}
+                      : "Tap to Connect"}
               </span>
             </button>
           ))}
