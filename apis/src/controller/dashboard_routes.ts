@@ -93,8 +93,13 @@ const DEMO_MODE_ENABLED =
   process.env.MINIAPP_DEMO_ENABLED === "true" ||
   process.env.MINIAPP_DEMO_ENABLED === "1";
 // Use real user account for web preview (shows actual subscription, assistant, etc.)
+// SECURITY: This user ID is hardcoded and cannot be changed via client
 const DEMO_TELEGRAM_USER_ID = 5572561504;
 const DEMO_TELEGRAM_USERNAME = "preview_user";
+
+// SECURITY: Whitelist of allowed user IDs for web preview mode
+// Only these users can be accessed via web preview to prevent unauthorized access
+const ALLOWED_PREVIEW_USER_IDS = new Set([5572561504]);
 
 const proxy = httpProxy.createProxyServer({ ws: true, xfwd: true });
 let proxyErrorHandlerBound = false;
@@ -469,6 +474,15 @@ export const createDashboardRouter = (): Router => {
     }
 
     try {
+      // SECURITY: Verify the hardcoded user ID is in the whitelist
+      if (!ALLOWED_PREVIEW_USER_IDS.has(DEMO_TELEGRAM_USER_ID)) {
+        console.error("[security] Preview user ID not in whitelist", {
+          userId: DEMO_TELEGRAM_USER_ID,
+        });
+        res.status(403).send("Unauthorized preview user");
+        return;
+      }
+
       // Use real user account for preview
       const user = await getUserByTelegramId(DEMO_TELEGRAM_USER_ID);
       if (!user) {
@@ -617,6 +631,15 @@ export const createDashboardRouter = (): Router => {
       }
 
       try {
+        // SECURITY: Verify the hardcoded user ID is in the whitelist
+        if (!ALLOWED_PREVIEW_USER_IDS.has(DEMO_TELEGRAM_USER_ID)) {
+          console.error("[security] Preview user ID not in whitelist", {
+            userId: DEMO_TELEGRAM_USER_ID,
+          });
+          res.status(403).json({ error: "Unauthorized preview user" });
+          return;
+        }
+
         // Use real user account for preview
         const user = await getUserByTelegramId(DEMO_TELEGRAM_USER_ID);
         if (!user) {
