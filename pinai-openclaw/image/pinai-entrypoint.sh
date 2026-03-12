@@ -84,4 +84,22 @@ start_ipv6_proxies
 export OPENCLAW_NO_RESPAWN
 
 BIND="${PINAI_GATEWAY_BIND:-lan}"
-exec openclaw gateway --bind "$BIND"
+
+# Gateway's "full process restart" on SIGUSR1 spawns a replacement child,
+# then the parent exits with code 0.  If the parent IS the container's main
+# process (exec), the container dies.  So we run gateway in the foreground
+# (shell stays alive) and keep the container alive after exit-0 so the
+# spawned replacement can continue serving.
+
+set +e  # allow gateway to exit without killing the script
+openclaw gateway --bind "$BIND"
+EXIT_CODE=$?
+
+if [ "$EXIT_CODE" -eq 0 ]; then
+  echo "[entrypoint] gateway exited (code 0, internal restart); keeping container alive"
+  # The replacement process is already running; just stay alive.
+  exec sleep infinity
+else
+  echo "[entrypoint] gateway exited with code $EXIT_CODE"
+  exit "$EXIT_CODE"
+fi
