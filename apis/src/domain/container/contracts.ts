@@ -26,13 +26,24 @@ export interface GatewayTarget {
 
 /**
  * Build extra headers needed for proxying to a gateway target.
- * Returns an object with a Host override when the provider requires it,
- * or an empty object otherwise — safe to spread into any headers bag.
+ *
+ * Handles both Host and Origin overrides so that every consumer
+ * (RPC, WS relay, probe) gets consistent headers from one place.
+ *
+ * On Fly, the real httpBaseUrl is an internal IPv6 address that won't
+ * match the gateway's allowedOrigins or Host header.  When hostOverride
+ * is set we derive Origin from it so the gateway's
+ * `dangerouslyAllowHostHeaderOriginFallback` check (Origin == Host) passes.
  */
 export const gatewayHostHeaders = (
   target: GatewayTarget,
-): Record<string, string> =>
-  target.hostOverride ? { Host: target.hostOverride } : {};
+): Record<string, string> => {
+  if (!target.hostOverride) return {};
+  return {
+    Host: target.hostOverride,
+    Origin: `http://${target.hostOverride}`,
+  };
+};
 
 // ---------------------------------------------------------------------------
 // Assistant record projections (used by callers of the public API)

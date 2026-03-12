@@ -1,6 +1,7 @@
 import net from "node:net";
 import WebSocket from "ws";
-import type { ProbeOptions } from "../../contracts.js";
+import type { ProbeOptions, GatewayTarget } from "../../contracts.js";
+import { gatewayHostHeaders } from "../../contracts.js";
 import {
   GATEWAY_CLIENT_ID,
   GATEWAY_CLIENT_ROLE,
@@ -93,13 +94,20 @@ const probeGatewayHelloOnce = (
   hostOverride?: string,
 ): Promise<boolean> =>
   new Promise((resolve) => {
-    const wsUrl = `ws://${formatHostForUrl(host)}:${port}`;
-    const httpOrigin = `http://${formatHostForUrl(host)}:${port}`;
+    const urlHost = formatHostForUrl(host);
+    const wsUrl = `ws://${urlHost}:${port}`;
+    const target: GatewayTarget = {
+      host,
+      port,
+      httpBaseUrl: `http://${urlHost}:${port}`,
+      wsBaseUrl: wsUrl,
+      ...(hostOverride ? { hostOverride } : {}),
+    };
     const ws = new WebSocket(wsUrl, {
       maxPayload: 2 * 1024 * 1024,
       headers: {
-        ...(hostOverride ? { Host: hostOverride } : {}),
-        Origin: hostOverride ? `http://${hostOverride}` : httpOrigin,
+        ...gatewayHostHeaders(target),
+        Origin: target.httpBaseUrl,
       },
     });
     let settled = false;
