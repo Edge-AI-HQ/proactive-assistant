@@ -38,7 +38,9 @@ export interface GatewayTarget {
 export const gatewayHostHeaders = (
   target: GatewayTarget,
 ): Record<string, string> => {
-  if (!target.hostOverride) return {};
+  if (!target.hostOverride) {
+    return { Origin: target.httpBaseUrl };
+  }
   return {
     Host: target.hostOverride,
     Origin: `http://${target.hostOverride}`,
