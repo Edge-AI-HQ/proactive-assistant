@@ -7,6 +7,7 @@ import {
   GATEWAY_CLIENT_ROLE,
   GATEWAY_CLIENT_SCOPES,
 } from "../../../gateway/gateway_constants.js";
+import { TRUSTED_PROXY_USER_HEADER } from "./openclaw_config.js";
 
 // ---------------------------------------------------------------------------
 // Shared gateway probe utilities
@@ -105,7 +106,10 @@ const probeGatewayHelloOnce = (
     };
     const ws = new WebSocket(wsUrl, {
       maxPayload: 2 * 1024 * 1024,
-      headers: gatewayHostHeaders(target),
+      headers: {
+        ...gatewayHostHeaders(target),
+        [TRUSTED_PROXY_USER_HEADER]: GATEWAY_CLIENT_ROLE,
+      },
     });
     let settled = false;
     let sent = false;

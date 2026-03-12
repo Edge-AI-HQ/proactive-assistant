@@ -85,28 +85,18 @@ export const buildGatewayConfigSection = (
         ]
       : ["0.0.0.0/0"];
 
-  // Auth mode depends on bind:
-  // - loopback (Fly): trusted-proxy — Fly 6PN preserves custom headers,
-  //   so the gateway reads operator identity from the header directly.
-  //   Token is kept as fallback for the connect handshake.
-  // - lan (Docker/local): token — local proxies (ngrok) strip custom
-  //   headers, so we rely on token auth in the connect handshake.
-  const auth =
-    bind === "loopback"
-      ? {
-          mode: "trusted-proxy" as const,
-          token: normalizedGatewayToken,
-          trustedProxy: {
-            userHeader: TRUSTED_PROXY_USER_HEADER,
-          },
-        }
-      : {
-          mode: "token" as const,
-          token: normalizedGatewayToken,
-          trustedProxy: {
-            userHeader: TRUSTED_PROXY_USER_HEADER,
-          },
-        };
+  // Trusted-proxy auth: the gateway reads operator identity from the
+  // x-pinai-identity header on the HTTP upgrade request.  Both Fly (6PN)
+  // and Docker (localhost port mapping) connect directly to the container
+  // — no intermediate proxy strips headers.  Token is kept as fallback
+  // for the connect handshake.
+  const auth = {
+    mode: "trusted-proxy" as const,
+    token: normalizedGatewayToken,
+    trustedProxy: {
+      userHeader: TRUSTED_PROXY_USER_HEADER,
+    },
+  };
 
   return {
     mode: "local",
