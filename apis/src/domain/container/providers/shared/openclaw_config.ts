@@ -85,17 +85,28 @@ export const buildGatewayConfigSection = (
         ]
       : ["0.0.0.0/0"];
 
-  // Token auth mode: the gateway validates the token on the `connect`
-  // handshake.  Trusted-proxy config is kept so it can be enabled later
-  // once all intermediate proxies (ngrok, APIs reverse proxy) are
-  // guaranteed to forward custom headers.
-  const auth = {
-    mode: "token" as const,
-    token: normalizedGatewayToken,
-    trustedProxy: {
-      userHeader: TRUSTED_PROXY_USER_HEADER,
-    },
-  };
+  // Auth mode depends on bind:
+  // - loopback (Fly): trusted-proxy — Fly 6PN preserves custom headers,
+  //   so the gateway reads operator identity from the header directly.
+  //   Token is kept as fallback for the connect handshake.
+  // - lan (Docker/local): token — local proxies (ngrok) strip custom
+  //   headers, so we rely on token auth in the connect handshake.
+  const auth =
+    bind === "loopback"
+      ? {
+          mode: "trusted-proxy" as const,
+          token: normalizedGatewayToken,
+          trustedProxy: {
+            userHeader: TRUSTED_PROXY_USER_HEADER,
+          },
+        }
+      : {
+          mode: "token" as const,
+          token: normalizedGatewayToken,
+          trustedProxy: {
+            userHeader: TRUSTED_PROXY_USER_HEADER,
+          },
+        };
 
   return {
     mode: "local",
