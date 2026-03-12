@@ -37,9 +37,9 @@ const DEFAULT_SCOPES = [
   'openid',
   'email',
   'profile',
-  'https://www.googleapis.com/auth/gmail.readonly',
-  'https://www.googleapis.com/auth/calendar.readonly',
-  'https://www.googleapis.com/auth/drive.readonly',
+  'https://mail.google.com/',
+  'https://www.googleapis.com/auth/calendar',
+  'https://www.googleapis.com/auth/drive',
 ].join(' ');
 
 type GoogleClientSecretFile = {

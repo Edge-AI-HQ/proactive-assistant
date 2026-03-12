@@ -8,6 +8,7 @@ import {
   classifyTelegramOutboundMessage,
   detectPromptLanguage,
   hasGoogleWorkspaceIntentForTest,
+  hasAnyScopeForTest,
   shouldPromptGoogleOAuthForTest,
   resetTelegramWelcomeDedupeForTest,
   shouldSuppressGoogleOAuthPromptForTest,
@@ -66,6 +67,23 @@ test("hasGoogleWorkspaceIntentForTest matches calendar and drive requests", () =
   assert.equal(hasGoogleWorkspaceIntentForTest("openclaw doctor --non-interactive"), false);
   assert.equal(hasGoogleWorkspaceIntentForTest("Show me my latest 10 emails"), false);
   assert.equal(hasGoogleWorkspaceIntentForTest("What is the weather today?"), false);
+});
+
+test("hasAnyScopeForTest matches exact scope tokens only", () => {
+  assert.equal(
+    hasAnyScopeForTest(
+      "openid email https://www.googleapis.com/auth/calendar",
+      ["https://www.googleapis.com/auth/calendar.readonly", "https://www.googleapis.com/auth/calendar"],
+    ),
+    true,
+  );
+  assert.equal(
+    hasAnyScopeForTest(
+      "openid email https://www.googleapis.com/auth/calendar.events.readonly",
+      ["https://www.googleapis.com/auth/calendar.readonly", "https://www.googleapis.com/auth/calendar"],
+    ),
+    false,
+  );
 });
 
 test("shouldPromptGoogleOAuthForTest ignores private onboarding triggers", () => {

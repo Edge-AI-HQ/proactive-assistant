@@ -59,7 +59,10 @@ const OAUTH_PROMPT_DEDUPE_WINDOW_MS = 20_000;
 const oauthPromptDedupeCache = new Map<number, { text: string; sentAt: number }>();
 const googleCredentialSyncedRuntimeRef = new Map<number, string>();
 const googleCredentialSyncInFlight = new Map<number, Promise<boolean>>();
-const GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+const GOOGLE_CALENDAR_SCOPES = [
+  "https://www.googleapis.com/auth/calendar.readonly",
+  "https://www.googleapis.com/auth/calendar",
+];
 
 export const registerTelegramRouterRoutes = (app: Application): void => {
   app.post("/webhook/telegram", express.json({ limit: "10mb" }), (req, res) => {
@@ -286,6 +289,20 @@ function isGoogleCalendarIntent(text: string | null): boolean {
   return /(日历|日程|calendar|event|events|meeting|schedule)/i.test(text);
 }
 
+function hasAnyScope(scopesRaw: string, candidates: string[]): boolean {
+  const scopes = new Set(
+    scopesRaw
+      .trim()
+      .split(/\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+  return candidates.some((scope) => scopes.has(scope));
+}
+
+export const hasAnyScopeForTest = (scopesRaw: string, candidates: string[]): boolean =>
+  hasAnyScope(scopesRaw, candidates);
+
 export const hasGoogleWorkspaceIntentForTest = (text: string | null): boolean =>
   isGoogleWorkspaceIntent(text);
 
@@ -408,7 +425,7 @@ async function tryHandleGoogleOAuthPrompt(
     if (isGoogleCalendarIntent(text)) {
       const status = await getGoogleConnectionStatus(chatId).catch(() => null);
       const scopes = (status?.scopes || "").trim();
-      if (scopes && !scopes.includes(GOOGLE_CALENDAR_SCOPE)) {
+      if (scopes && !hasAnyScope(scopes, GOOGLE_CALENDAR_SCOPES)) {
         if (!shouldSuppressGoogleOAuthPrompt(chatId, text, now)) {
           await sendFallbackMessageBySource(
             source,
