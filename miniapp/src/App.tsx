@@ -349,7 +349,7 @@ const App = () => {
 
     if (quick.assistant.exists) {
       void loadModels();
-      void preloadImage("/mini/bg-garden.png");
+      void preloadImage("https://static.pinai.tech/pinclaw/bg-garden.jpg");
     }
 
     let loadedDeferred = false;
@@ -897,7 +897,7 @@ const App = () => {
         <div
           className="fixed inset-0 z-0 opacity-[0.9] pointer-events-none"
           style={{
-            backgroundImage: "url('/mini/bg-garden.png')",
+            backgroundImage: "url('https://static.pinai.tech/pinclaw/bg-garden.jpg')",
             backgroundSize: "cover",
             backgroundPosition: "center",
           }}

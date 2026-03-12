@@ -8,7 +8,7 @@ const SparklesIcon = () => (
 const VideoLanding = ({ onGetStarted }: { onGetStarted: () => void }) => (
   <div className="fixed inset-0 z-50 flex flex-col animate-fade-in">
     <video
-      src={import.meta.env.BASE_URL + "intro-video.mp4"}
+      src="https://static.pinai.tech/pinclaw/intro-video.mp4"
       autoPlay
       loop
       muted

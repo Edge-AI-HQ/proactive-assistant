@@ -52,7 +52,7 @@ export const buildGuideBotStartWelcome = (
   buttonText: string;
   miniAppUrl: string;
 } => ({
-  imagePath: path.join(process.cwd(), "public", "telegram-start-landing.png"),
+  imagePath: "https://static.pinai.tech/pinclaw/telegram-start-landing.jpg",
   caption: [
     "🐾 <b>Welcome to PIN Claw</b> your personal AI assistant.",
     "",
