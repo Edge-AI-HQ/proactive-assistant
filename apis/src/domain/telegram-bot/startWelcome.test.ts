@@ -23,7 +23,7 @@ test("buildGuideBotStartWelcome returns landing image, intro copy, and mini app 
   );
 
   assert.ok(payload);
-  assert.match(payload.imagePath, /telegram-start-landing\.png$/);
+  assert.match(payload.imagePath, /telegram-start-landing\.jpg$/);
   assert.match(payload.caption, /PIN Claw/i);
   assert.match(payload.caption, /personal AI assistant/i);
   assert.match(payload.caption, /start exploring PIN Claw/i);
