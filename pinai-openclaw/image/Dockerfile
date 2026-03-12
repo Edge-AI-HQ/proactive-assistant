@@ -44,17 +44,21 @@ RUN for skill in /tmp/pinai-skills/*/; do \
     && rm -rf /tmp/pinai-skills
 
 # ── Warm up jiti + Node compile caches at build time ──
-# Launch gateway with all plugin paths so jiti compiles both openclaw core
-# AND our plugin TS.  After 90s the gateway is killed; caches are saved.
-RUN mkdir -p /tmp/jiti \
+# Launch gateway with a near-production config so V8 compiles bytecode for
+# the full module graph (channels, models, tools, skills, browser, cron).
+# Without config, --allow-unconfigured only loads gateway core (~52s cold
+# start on 1-CPU machines due to V8 parsing 759 JS files from scratch).
+COPY pinai-openclaw/image/warmup-config.json /tmp/warmup-config.json
+RUN mkdir -p /tmp/jiti /app/.openclaw \
+    && cp /tmp/warmup-config.json /app/.openclaw/openclaw.json \
     && OPENCLAW_HOME=/app \
        NODE_COMPILE_CACHE=/tmp/node-compile-cache \
        OPENCLAW_PLUGIN_LOAD_PATHS=/opt/pinai/plugins/telegram-api-proxy:/opt/pinai/plugins/litellm-vision-adapter:/opt/pinai/plugins/platform-hooks \
-       timeout 90 openclaw gateway --bind loopback --allow-unconfigured 2>&1 || true \
+       timeout 120 openclaw gateway --bind loopback 2>&1 || true \
     && mkdir -p /opt/pinai/jiti-warmup /opt/pinai/node-compile-warmup \
     && cp -r /tmp/jiti/. /opt/pinai/jiti-warmup/ 2>/dev/null || true \
     && cp -r /tmp/node-compile-cache/. /opt/pinai/node-compile-warmup/ 2>/dev/null || true \
-    && rm -rf /tmp/jiti /tmp/node-compile-cache /app/.openclaw
+    && rm -rf /tmp/jiti /tmp/node-compile-cache /app/.openclaw /tmp/warmup-config.json
 
 COPY pinai-openclaw/image/scripts/ /opt/pinai/scripts/
 COPY pinai-openclaw/image/pinai-entrypoint.sh /usr/local/bin/pinai-entrypoint.sh

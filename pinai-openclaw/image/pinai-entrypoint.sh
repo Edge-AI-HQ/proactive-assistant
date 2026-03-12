@@ -79,9 +79,4 @@ setup_cache
 start_ipv6_proxies
 
 BIND="${PINAI_GATEWAY_BIND:-lan}"
-openclaw gateway --bind "$BIND" &
-OC_PID=$!
-
-trap 'kill $OC_PID 2>/dev/null; wait $OC_PID 2>/dev/null' TERM INT
-
-wait $OC_PID
+exec openclaw gateway --bind "$BIND"
