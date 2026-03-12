@@ -47,6 +47,7 @@ interface AgentCardProps {
   modelBusy: boolean;
   onChangeModel: (modelRef: string) => void;
   onLoadModels: () => Promise<void>;
+  onBlockedAction: (action: "model" | "chat" | "data") => void;
 }
 
 const getStatusDisplay = (status: string): { text: string; dotColor: string; textColor: string } => {
@@ -100,6 +101,7 @@ const AgentCard = ({
   modelBusy,
   onChangeModel,
   onLoadModels,
+  onBlockedAction,
 }: AgentCardProps) => {
   const [showData, setShowData] = useState(false);
   const [showSkills, setShowSkills] = useState(false);
@@ -112,7 +114,10 @@ const AgentCard = ({
   const isRuntimeRunning = status === "running";
 
   const handleChat = () => {
-    if (!isRuntimeRunning) return;
+    if (!isRuntimeRunning) {
+      onBlockedAction("chat");
+      return;
+    }
     if (window.Telegram?.WebApp?.close) {
       window.Telegram.WebApp.close();
     } else if (username) {
@@ -157,10 +162,13 @@ const AgentCard = ({
             <button
               type="button"
               onClick={() => {
-                if (!isRuntimeRunning) return;
+                if (!isRuntimeRunning) {
+                  onBlockedAction("model");
+                  return;
+                }
                 setShowModel(true);
               }}
-              disabled={!isRuntimeRunning}
+              aria-disabled={!isRuntimeRunning}
               className={`w-full rounded-2xl px-4 py-3.5 glass-stat-box flex items-center justify-between transition-colors ${
                 isRuntimeRunning
                   ? "cursor-pointer hover:bg-white/50"
@@ -208,7 +216,7 @@ const AgentCard = ({
           <div className="space-y-2.5">
             <button
               onClick={handleChat}
-              disabled={!isRuntimeRunning}
+              aria-disabled={!isRuntimeRunning}
               className={`w-full flex items-center justify-center gap-2 rounded-2xl py-3.5 text-sm font-semibold btn-press shadow-lg ${
                 isRuntimeRunning
                   ? "text-white bg-foreground"
@@ -221,8 +229,14 @@ const AgentCard = ({
               Chat with PIN Claw
             </button>
             <button
-              onClick={() => setShowData(true)}
-              disabled={!isRuntimeRunning}
+              onClick={() => {
+                if (!isRuntimeRunning) {
+                  onBlockedAction("data");
+                  return;
+                }
+                setShowData(true);
+              }}
+              aria-disabled={!isRuntimeRunning}
               className={`w-full flex items-center justify-center gap-2 rounded-2xl py-3 text-sm font-medium btn-press glass-stat-box border-foreground/30 ${
                 isRuntimeRunning
                   ? "text-foreground"

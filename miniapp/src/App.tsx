@@ -723,6 +723,10 @@ const App = () => {
     setShowManageAgent(true);
   };
 
+  const handleBlockedAction = () => {
+    showToast("Agent is starting. Please wait a moment.", "success");
+  };
+
   // Telegram native loader covers the bootstrap wait — render empty background
   if (loading) {
     return <div className="min-h-dvh bg-pin-gradient" />;
@@ -926,6 +930,7 @@ const App = () => {
             modelBusy={busy === "change-model"}
             onChangeModel={handleChangeModel}
             onLoadModels={loadModels}
+            onBlockedAction={handleBlockedAction}
           />
         </div>
 
