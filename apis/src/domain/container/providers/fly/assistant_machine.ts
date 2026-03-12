@@ -17,7 +17,6 @@ import {
   GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE,
   PINAI_GOOGLE_CREDENTIALS_B64_ENV,
 } from "../shared/google_workspace_credentials.js";
-import { PINAI_WORKSPACE_STATUS_PORT } from "../shared/workspace_ready.js";
 import { QUICKSTART_SYNTHETIC_BOT_TOKEN } from "../shared/telegram_runtime_secret.js";
 import {
   buildWebhookParams,
@@ -151,7 +150,7 @@ const buildAssistantOpenclawConfigPayload = (
     telegramWebhookSecret: wp.webhookSecret,
     ...(wp.webhookPath ? { telegramWebhookPath: wp.webhookPath } : {}),
     ...(wp.webhookHost ? { telegramWebhookHost: wp.webhookHost } : {}),
-    ...(wp.pluginPath ? { telegramRouterPluginPath: wp.pluginPath } : {}),
+    ...(wp.pluginLoadPaths.length ? { pluginLoadPaths: wp.pluginLoadPaths } : {}),
     controlOrigin: appConfig.publicBaseUrl,
     ...(skillsConfig
       ? { skillsConfig: toOpenclawSkillsPayload(skillsConfig) }
@@ -466,7 +465,6 @@ export const createAssistantMachine = async (
     ).trim(),
     PINAI_FLY_MODE: "1",
     PINAI_GATEWAY_BIND: "loopback",
-    PINAI_WORKSPACE_STATUS_PORT: String(PINAI_WORKSPACE_STATUS_PORT),
   };
   assertNoP0SecretsInEnv(env, config);
 

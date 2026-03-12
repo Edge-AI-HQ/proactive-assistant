@@ -1,0 +1,8 @@
+{
+  "id": "litellm-vision-adapter",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

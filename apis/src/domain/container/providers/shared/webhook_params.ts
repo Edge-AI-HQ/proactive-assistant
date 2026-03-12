@@ -1,8 +1,6 @@
 import type { ContainerManagerConfig } from "../../types.js";
 import type { GatewayBindMode } from "./openclaw_config.js";
 import { deriveAssistantWebhookSecret } from "./telegram_runtime_secret.js";
-import { PINAI_WORKSPACE_STATUS_PORT } from "./workspace_ready.js";
-
 /**
  * Common webhook-related parameters extracted from ContainerManagerConfig.
  * Both Docker and Fly providers need the same derivation logic.
@@ -14,7 +12,7 @@ export interface WebhookParams {
   webhookPort: number;
   privateWebhookPort: number;
   webhookSecret: string;
-  pluginPath: string;
+  pluginLoadPaths: string[];
 }
 
 /**
@@ -29,7 +27,7 @@ export const buildWebhookParams = (
   apiAuthToken: string | null | undefined,
   gatewayBind: GatewayBindMode,
 ): WebhookParams => {
-  const { webhookUrl, webhookPath, webhookPort, pluginPath } =
+  const { webhookUrl, webhookPath, webhookPort, pluginLoadPaths } =
     config.telegramRouter;
   const webhookHost =
     config.telegramRouter.webhookHost ||
@@ -46,7 +44,7 @@ export const buildWebhookParams = (
       gatewayToken,
       apiAuthToken,
     ),
-    pluginPath,
+    pluginLoadPaths,
   };
 };
 
@@ -73,7 +71,6 @@ export const buildBaseContainerEnv = (
     NODE_COMPILE_CACHE: "/app/cache/node-compile-cache",
     TELEGRAM_ROUTER_URL: telegramRouterUrl,
     GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE: googleCredentialsFile,
-    PINAI_WORKSPACE_STATUS_PORT: String(PINAI_WORKSPACE_STATUS_PORT),
   };
 
   // Inject gateway token for plugin auto-pairing

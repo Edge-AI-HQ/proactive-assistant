@@ -6,13 +6,12 @@ import {
   GATEWAY_CLIENT_ROLE,
   GATEWAY_CLIENT_SCOPES,
 } from "./gateway_constants.js";
-
 // ---------------------------------------------------------------------------
 // Gateway WebSocket RPC client
 //
 // Connects to the OpenClaw gateway via WebSocket, performs the `connect`
-// handshake as operator with token auth (no device identity needed), then
-// issues a single RPC request and returns the result.
+// handshake as operator with token auth, then issues a single RPC request
+// and returns the result.
 // ---------------------------------------------------------------------------
 
 const RPC_TIMEOUT_MS = 10_000;

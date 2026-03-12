@@ -156,10 +156,12 @@ export const config: Config = {
     webhookPath: toTrimmed(process.env.OPENCLAW_TELEGRAM_WEBHOOK_PATH, '/telegram-webhook'),
     webhookHost: toTrimmed(process.env.OPENCLAW_TELEGRAM_WEBHOOK_HOST, '0.0.0.0'),
     webhookPort: toInt(process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT, 8787),
-    pluginPath: toTrimmed(
-      process.env.OPENCLAW_TELEGRAM_ROUTER_PLUGIN_PATH,
-      '/opt/pinai/plugins/telegram-router-proxy'
-    )
+    pluginLoadPaths: (
+      toTrimmed(
+        process.env.OPENCLAW_PLUGIN_LOAD_PATHS,
+        '/opt/pinai/plugins/telegram-api-proxy:/opt/pinai/plugins/litellm-vision-adapter:/opt/pinai/plugins/platform-hooks'
+      )
+    ).split(':').map(p => p.trim()).filter(Boolean)
   },
   fly: {
     apiBaseUrl: process.env.FLY_API_BASE_URL || 'https://api.machines.dev/v1',
