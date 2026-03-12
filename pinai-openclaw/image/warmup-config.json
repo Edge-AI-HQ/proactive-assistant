@@ -1,0 +1,107 @@
+{
+  "gateway": {
+    "mode": "local",
+    "port": 18789,
+    "bind": "loopback"
+  },
+  "messages": {
+    "tts": { "auto": "off" }
+  },
+  "models": {
+    "providers": {
+      "litellm": {
+        "baseUrl": "http://127.0.0.1:4000",
+        "apiKey": "warmup-dummy",
+        "api": "openai-completions",
+        "models": [
+          { "id": "claude-opus-4-6", "name": "Claude Opus 4.6" }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "litellm/claude-opus-4-6"
+      },
+      "models": {
+        "litellm/claude-opus-4-6": { "alias": "opus" }
+      }
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "dmPolicy": "open",
+      "botToken": "0:warmup-dummy-token",
+      "allowFrom": ["*"],
+      "groupAllowFrom": [],
+      "groupPolicy": "open",
+      "groups": { "*": { "requireMention": true } },
+      "streaming": "partial",
+      "actions": {
+        "sendMessage": true,
+        "deleteMessage": false,
+        "sticker": true
+      },
+      "webhookUrl": "http://127.0.0.1:3000/webhook/telegram",
+      "webhookSecret": "warmup-dummy-secret",
+      "webhookPath": "/telegram-webhook",
+      "webhookPort": 8787
+    }
+  },
+  "plugins": {
+    "entries": {
+      "telegram": { "enabled": true },
+      "telegram-api-proxy": { "enabled": true },
+      "litellm-vision-adapter": { "enabled": true },
+      "platform-hooks": { "enabled": true }
+    },
+    "load": {
+      "paths": [
+        "/opt/pinai/plugins/telegram-api-proxy",
+        "/opt/pinai/plugins/litellm-vision-adapter",
+        "/opt/pinai/plugins/platform-hooks"
+      ]
+    }
+  },
+  "tools": {
+    "profile": "full",
+    "allow": ["*"],
+    "deny": [],
+    "elevated": { "enabled": true, "allowFrom": { "*": ["*"] } },
+    "exec": {
+      "security": "full",
+      "host": "gateway",
+      "backgroundMs": 10000,
+      "timeoutSec": 1800,
+      "notifyOnExit": true
+    },
+    "web": {
+      "search": { "enabled": false },
+      "fetch": { "enabled": true, "maxChars": 50000 }
+    },
+    "media": {
+      "concurrency": 2,
+      "audio": { "enabled": true, "maxBytes": 20971520 },
+      "video": { "enabled": true, "maxBytes": 52428800 }
+    },
+    "sessions": { "visibility": "all" },
+    "loopDetection": { "enabled": false }
+  },
+  "commands": {
+    "native": true,
+    "text": true,
+    "bash": true,
+    "config": true,
+    "debug": true,
+    "restart": true
+  },
+  "browser": {
+    "enabled": true,
+    "evaluateEnabled": true
+  },
+  "cron": {
+    "enabled": true
+  }
+}
