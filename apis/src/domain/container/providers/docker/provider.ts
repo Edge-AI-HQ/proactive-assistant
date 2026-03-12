@@ -24,7 +24,6 @@ import {
   buildWebhookParams,
   buildBaseContainerEnv,
 } from "../shared/webhook_params.js";
-import { PINAI_WORKSPACE_STATUS_PORT } from "../shared/workspace_ready.js";
 import { PINAI_GOOGLE_CREDENTIALS_B64_ENV } from "../shared/google_workspace_credentials.js";
 import { probeGatewayReady, type ResolvedProbeTarget } from "../shared/gateway_probe.js";
 import { config as appConfig } from "../../../common/config.js";
@@ -364,7 +363,7 @@ const ensureOpenclawConfig = (
     telegramWebhookHost: wp.webhookHost,
     telegramWebhookSecret: wp.webhookSecret,
     ...(wp.webhookUrl ? { telegramWebhookUrl: wp.webhookUrl } : {}),
-    ...(wp.pluginPath ? { telegramRouterPluginPath: wp.pluginPath } : {}),
+    ...(wp.pluginLoadPaths.length ? { pluginLoadPaths: wp.pluginLoadPaths } : {}),
     controlOrigin: appConfig.publicBaseUrl,
     ...(skillsConfig ? { skillsConfig: toOpenclawSkillsPayload(skillsConfig) } : {}),
   });
@@ -428,9 +427,7 @@ const resolveDockerProbeTarget = (
             ? Number(ref.metadata.webhookHostPort)
             : containerPort === config.telegramRouter.webhookPort + 1
               ? Number(ref.metadata.privateWebhookHostPort)
-              : containerPort === PINAI_WORKSPACE_STATUS_PORT
-                ? Number(ref.metadata.workspaceStatusHostPort)
-                : 0;
+              : 0;
       if (mappedHostPort > 0) {
         httpProbes.push({ port: mappedHostPort, path: probe.path });
       }
@@ -483,8 +480,6 @@ const inspectToContainerRef = async (
   metadata.privateWebhookHostPort = extractHostPort(
     `${webhookPort + 1}/tcp`,
   );
-  metadata.workspaceStatusHostPort = extractHostPort(`${PINAI_WORKSPACE_STATUS_PORT}/tcp`);
-
   return {
     id: inspect.Id,
     name: (inspect.Name || "").replace(/^\//, ""),
@@ -581,10 +576,6 @@ export const dockerContainerRuntime: ContainerRuntime = {
     const privateWebhookHostPort = params.containerPort
       ? String(params.containerPort + 2)
       : "0";
-    const workspaceStatusHostPort = params.containerPort
-      ? String(params.containerPort + 3)
-      : "0";
-
     // TELEGRAM_ROUTER_URL: where the telegram-router-proxy plugin forwards
     // outbound Telegram API calls.  Mirrors the Fly provider logic:
     // prefer telegramRouter.webhookUrl, fall back to PUBLIC_BASE_URL.
@@ -612,7 +603,6 @@ export const dockerContainerRuntime: ContainerRuntime = {
         [`${config.openclaw.gatewayPort}/tcp`]: {},
         [`${webhookPort}/tcp`]: {},
         [`${privateWebhookPort}/tcp`]: {},
-        [`${PINAI_WORKSPACE_STATUS_PORT}/tcp`]: {},
       },
       HostConfig: {
         RestartPolicy: { Name: "unless-stopped" },
@@ -621,7 +611,6 @@ export const dockerContainerRuntime: ContainerRuntime = {
           [`${config.openclaw.gatewayPort}/tcp`]: [{ HostPort: hostPort }],
           [`${webhookPort}/tcp`]: [{ HostPort: webhookHostPort }],
           [`${privateWebhookPort}/tcp`]: [{ HostPort: privateWebhookHostPort }],
-          [`${PINAI_WORKSPACE_STATUS_PORT}/tcp`]: [{ HostPort: workspaceStatusHostPort }],
         },
         Binds: [
           `${dirs.baseDir}:/app`,
@@ -753,10 +742,6 @@ export const dockerContainerRuntime: ContainerRuntime = {
     if (!exposedPorts[`${webhookPort}/tcp`]) {
       return true;
     }
-    if (!exposedPorts[`${PINAI_WORKSPACE_STATUS_PORT}/tcp`]) {
-      return true;
-    }
-
     const needsSecretEnvPrune = DOCKER_FORBIDDEN_SECRET_ENV_KEYS.some((key) =>
       hasEnvKey(inspect?.Config?.Env, key),
     );

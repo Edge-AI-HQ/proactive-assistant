@@ -212,7 +212,7 @@ export interface TelegramRouterConfig {
   webhookPath: string;
   webhookHost: string;
   webhookPort: number;
-  pluginPath: string;
+  pluginLoadPaths: string[];
 }
 
 export interface FeatureFlagsConfig {

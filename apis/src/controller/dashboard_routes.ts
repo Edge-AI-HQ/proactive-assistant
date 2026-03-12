@@ -88,6 +88,19 @@ const miniSessionTtlHours = 12;
 const miniAuthMaxAgeSeconds = 24 * 60 * 60;
 const miniAuthFutureSkewSeconds = 5 * 60;
 
+// Web preview mode configuration
+const DEMO_MODE_ENABLED =
+  process.env.MINIAPP_DEMO_ENABLED === "true" ||
+  process.env.MINIAPP_DEMO_ENABLED === "1";
+// Use real user account for web preview (shows actual subscription, assistant, etc.)
+// SECURITY: This user ID is hardcoded and cannot be changed via client
+const DEMO_TELEGRAM_USER_ID = 5572561504;
+const DEMO_TELEGRAM_USERNAME = "preview_user";
+
+// SECURITY: Whitelist of allowed user IDs for web preview mode
+// Only these users can be accessed via web preview to prevent unauthorized access
+const ALLOWED_PREVIEW_USER_IDS = new Set([5572561504]);
+
 const proxy = httpProxy.createProxyServer({ ws: true, xfwd: true });
 let proxyErrorHandlerBound = false;
 
@@ -126,7 +139,9 @@ const ensureProxyErrorHandlerBound = (): void => {
 
 const parseTelegramInitData = (
   rawInitData: string,
-): { ok: true; telegramUserId: number; telegramUsername: string | null } | { ok: false; error: string } => {
+):
+  | { ok: true; telegramUserId: number; telegramUsername: string | null }
+  | { ok: false; error: string } => {
   const normalized = rawInitData.trim();
   if (!normalized) {
     return { ok: false, error: "init_data is required" };
@@ -340,6 +355,7 @@ const buildQuickStatePayload = async (
           id: assistant.id,
           username: assistant.assistant_bot_username ?? null,
           status: assistant.container_status ?? "unknown",
+          created_at: assistant.created_at ?? null,
         }
       : {
           exists: false,
@@ -371,16 +387,16 @@ const buildQuickStatePayload = async (
 /**
  * Deferred payload — heavier data loaded after initial render.
  */
-const buildDeferredStatePayload = async (
-  telegramUserId: number,
-) => {
+const buildDeferredStatePayload = async (telegramUserId: number) => {
   const assistants = await listAssistantsByOwnerId(telegramUserId);
   const assistant = assistants[0] ?? null;
 
   const [plansResult, googleStatus, runtimeMetadata] = await Promise.all([
     listActivePlansForApi(),
     getGoogleConnectionStatus(telegramUserId),
-    assistant ? readAssistantRuntimeMetadata(assistant.id) : Promise.resolve({}),
+    assistant
+      ? readAssistantRuntimeMetadata(assistant.id)
+      : Promise.resolve({}),
   ]);
 
   const skillsConfig = readSkillsConfigFromRuntimeMetadata(runtimeMetadata);
@@ -469,7 +485,9 @@ export const createDashboardRouter = (): Router => {
       try {
         const url = await buildGoogleAuthStartUrl(
           user.telegram_user_id,
-          buildMiniGoogleReturnUrl("/mini/google/done", { status: "connected" }),
+          buildMiniGoogleReturnUrl("/mini/google/done", {
+            status: "connected",
+          }),
         );
         res.redirect(url);
       } catch (error: unknown) {
@@ -488,8 +506,10 @@ export const createDashboardRouter = (): Router => {
     try {
       const result = await handleGoogleOAuthCallback({
         code: typeof req.query.code === "string" ? req.query.code : undefined,
-        state: typeof req.query.state === "string" ? req.query.state : undefined,
-        error: typeof req.query.error === "string" ? req.query.error : undefined,
+        state:
+          typeof req.query.state === "string" ? req.query.state : undefined,
+        error:
+          typeof req.query.error === "string" ? req.query.error : undefined,
       });
       const nextPath =
         result.nextPath ||
@@ -507,7 +527,9 @@ export const createDashboardRouter = (): Router => {
   });
 
   router.get("/mini/google/done", (req: Request, res: Response) => {
-    const statusParam = String(req.query.google || "connected").trim().toLowerCase();
+    const statusParam = String(req.query.google || "connected")
+      .trim()
+      .toLowerCase();
     const status =
       statusParam === "error"
         ? "error"
@@ -524,28 +546,35 @@ export const createDashboardRouter = (): Router => {
     res.type("html").send(renderMiniGoogleDonePage(status, reason));
   });
 
-  router.post(
-    "/api/mini/bootstrap",
-    async (req: Request, res: Response) => {
-      const initDataRaw =
-        typeof req.body?.init_data === "string" ? req.body.init_data : "";
-      const verification = parseTelegramInitData(initDataRaw);
-      if (!verification.ok) {
-        res.status(401).json({ error: verification.error });
-        return;
-      }
+  router.post("/api/mini/bootstrap", async (req: Request, res: Response) => {
+    const initDataRaw =
+      typeof req.body?.init_data === "string" ? req.body.init_data : "";
 
+    // Web preview mode: no initData means browser access (not Telegram)
+    if (!initDataRaw && DEMO_MODE_ENABLED) {
       try {
-        const user = await ensureTelegramUser(
-          verification.telegramUserId,
-          verification.telegramUsername,
-        );
+        // SECURITY: Verify the hardcoded user ID is in the whitelist
+        if (!ALLOWED_PREVIEW_USER_IDS.has(DEMO_TELEGRAM_USER_ID)) {
+          console.error("[security] Preview user ID not in whitelist", {
+            userId: DEMO_TELEGRAM_USER_ID,
+          });
+          res.status(403).json({ error: "Unauthorized preview user" });
+          return;
+        }
+
+        // Use real user account for web preview
+        const user = await getUserByTelegramId(DEMO_TELEGRAM_USER_ID);
+        if (!user) {
+          res.status(404).json({ error: "Preview user not found" });
+          return;
+        }
+
         setLogContextTelegramIdentity(
           user.telegram_user_id,
           user.telegram_username,
         );
         console.info("[auth:resolved]", {
-          source: "mini_bootstrap",
+          source: "mini_bootstrap_web_preview",
           telegram_user_id: user.telegram_user_id,
           telegram_username: user.telegram_username,
         });
@@ -559,11 +588,48 @@ export const createDashboardRouter = (): Router => {
           user.telegram_username,
         );
         res.status(200).json(payload);
+        return;
       } catch (error: unknown) {
         res.status(500).json({ error: domainErrorMessage(error) });
+        return;
       }
-    },
-  );
+    }
+
+    // Normal Telegram mode: verify initData
+    const verification = parseTelegramInitData(initDataRaw);
+    if (!verification.ok) {
+      res.status(401).json({ error: verification.error });
+      return;
+    }
+
+    try {
+      const user = await ensureTelegramUser(
+        verification.telegramUserId,
+        verification.telegramUsername,
+      );
+      setLogContextTelegramIdentity(
+        user.telegram_user_id,
+        user.telegram_username,
+      );
+      console.info("[auth:resolved]", {
+        source: "mini_bootstrap_telegram",
+        telegram_user_id: user.telegram_user_id,
+        telegram_username: user.telegram_username,
+      });
+      const { sessionToken, expiresAt } = await createGatewaySession(
+        user.telegram_user_id,
+        miniSessionTtlHours,
+      );
+      setMiniSessionCookie(res, sessionToken, expiresAt);
+      const payload = await buildQuickStatePayload(
+        user.telegram_user_id,
+        user.telegram_username,
+      );
+      res.status(200).json(payload);
+    } catch (error: unknown) {
+      res.status(500).json({ error: domainErrorMessage(error) });
+    }
+  });
 
   router.get(
     "/api/mini/state",
@@ -612,9 +678,7 @@ export const createDashboardRouter = (): Router => {
       }
 
       try {
-        const payload = await buildDeferredStatePayload(
-          user.telegram_user_id,
-        );
+        const payload = await buildDeferredStatePayload(user.telegram_user_id);
         res.status(200).json(payload);
       } catch (error: unknown) {
         if (isDomainError(error)) {
@@ -644,7 +708,9 @@ export const createDashboardRouter = (): Router => {
       try {
         const url = await buildGoogleAuthStartUrl(
           user.telegram_user_id,
-          buildMiniGoogleReturnUrl("/mini/google/done", { status: "connected" }),
+          buildMiniGoogleReturnUrl("/mini/google/done", {
+            status: "connected",
+          }),
         );
         res.status(200).json({ url });
       } catch (error: unknown) {
@@ -725,9 +791,13 @@ export const createDashboardRouter = (): Router => {
       } catch (error: unknown) {
         if (isDomainError(error)) {
           if (error.status === 409) {
-            const assistants = await listAssistantsByOwnerId(user.telegram_user_id);
+            const assistants = await listAssistantsByOwnerId(
+              user.telegram_user_id,
+            );
             if (assistants.length > 0) {
-              res.status(200).json({ created: false, assistant: assistants[0] });
+              res
+                .status(200)
+                .json({ created: false, assistant: assistants[0] });
               return;
             }
           }
@@ -758,7 +828,9 @@ export const createDashboardRouter = (): Router => {
         const assistants = await listAssistantsByOwnerId(user.telegram_user_id);
         const assistant = assistants[0];
         if (!assistant) {
-          res.status(400).json({ error: "Assistant not found. Create assistant first." });
+          res
+            .status(400)
+            .json({ error: "Assistant not found. Create assistant first." });
           return;
         }
 
@@ -851,7 +923,9 @@ export const createDashboardRouter = (): Router => {
       }
 
       const skillKey =
-        typeof req.body?.skill_key === "string" ? req.body.skill_key.trim() : "";
+        typeof req.body?.skill_key === "string"
+          ? req.body.skill_key.trim()
+          : "";
       if (!skillKey) {
         res.status(400).json({ error: "skill_key is required" });
         return;
@@ -861,12 +935,17 @@ export const createDashboardRouter = (): Router => {
         const assistants = await listAssistantsByOwnerId(user.telegram_user_id);
         const assistant = assistants[0];
         if (!assistant) {
-          res.status(400).json({ error: "Assistant not found. Create assistant first." });
+          res
+            .status(400)
+            .json({ error: "Assistant not found. Create assistant first." });
           return;
         }
 
-        const runtimeMetadata = await readAssistantRuntimeMetadata(assistant.id);
-        const currentConfig = readSkillsConfigFromRuntimeMetadata(runtimeMetadata);
+        const runtimeMetadata = await readAssistantRuntimeMetadata(
+          assistant.id,
+        );
+        const currentConfig =
+          readSkillsConfigFromRuntimeMetadata(runtimeMetadata);
         const nextConfig = installSkillToConfig(currentConfig, skillKey);
         await setAssistantRuntimeMetadataKey(
           assistant.id,
@@ -884,7 +963,8 @@ export const createDashboardRouter = (): Router => {
             console.warn("Skills install saved but runtime refresh failed", {
               assistantId: assistant.id,
               skillKey,
-              error: error instanceof Error ? error.message : String(error || ""),
+              error:
+                error instanceof Error ? error.message : String(error || ""),
             });
           }
         }
@@ -924,7 +1004,9 @@ export const createDashboardRouter = (): Router => {
       }
 
       const skillKey =
-        typeof req.body?.skill_key === "string" ? req.body.skill_key.trim() : "";
+        typeof req.body?.skill_key === "string"
+          ? req.body.skill_key.trim()
+          : "";
       if (!skillKey) {
         res.status(400).json({ error: "skill_key is required" });
         return;
@@ -934,12 +1016,17 @@ export const createDashboardRouter = (): Router => {
         const assistants = await listAssistantsByOwnerId(user.telegram_user_id);
         const assistant = assistants[0];
         if (!assistant) {
-          res.status(400).json({ error: "Assistant not found. Create assistant first." });
+          res
+            .status(400)
+            .json({ error: "Assistant not found. Create assistant first." });
           return;
         }
 
-        const runtimeMetadata = await readAssistantRuntimeMetadata(assistant.id);
-        const currentConfig = readSkillsConfigFromRuntimeMetadata(runtimeMetadata);
+        const runtimeMetadata = await readAssistantRuntimeMetadata(
+          assistant.id,
+        );
+        const currentConfig =
+          readSkillsConfigFromRuntimeMetadata(runtimeMetadata);
         const nextConfig = uninstallSkillFromConfig(currentConfig, skillKey);
         await setAssistantRuntimeMetadataKey(
           assistant.id,
@@ -957,7 +1044,8 @@ export const createDashboardRouter = (): Router => {
             console.warn("Skills uninstall saved but runtime refresh failed", {
               assistantId: assistant.id,
               skillKey,
-              error: error instanceof Error ? error.message : String(error || ""),
+              error:
+                error instanceof Error ? error.message : String(error || ""),
             });
           }
         }
@@ -1009,10 +1097,16 @@ export const createDashboardRouter = (): Router => {
 
         // Try to read current model from running gateway
         let currentModel: string | null = null;
-        if (assistant?.container_status === "running" && user.gateway_token?.trim()) {
+        if (
+          assistant?.container_status === "running" &&
+          user.gateway_token?.trim()
+        ) {
           try {
             const target = resolveAssistantGatewayTarget(assistant);
-            currentModel = await getCurrentModel(target, user.gateway_token.trim());
+            currentModel = await getCurrentModel(
+              target,
+              user.gateway_token.trim(),
+            );
           } catch {
             // Gateway unreachable — fall back to default
           }
@@ -1058,7 +1152,9 @@ export const createDashboardRouter = (): Router => {
       const modelRef =
         typeof req.body?.model === "string" ? req.body.model.trim() : "";
       if (!modelRef) {
-        res.status(400).json({ error: "model is required (e.g. litellm/claude-opus-4-6)" });
+        res
+          .status(400)
+          .json({ error: "model is required (e.g. litellm/claude-opus-4-6)" });
         return;
       }
 
@@ -1083,7 +1179,9 @@ export const createDashboardRouter = (): Router => {
         const assistants = await listAssistantsByOwnerId(user.telegram_user_id);
         const assistant = assistants[0];
         if (!assistant) {
-          res.status(400).json({ error: "Assistant not found. Create assistant first." });
+          res
+            .status(400)
+            .json({ error: "Assistant not found. Create assistant first." });
           return;
         }
 
@@ -1095,13 +1193,18 @@ export const createDashboardRouter = (): Router => {
 
         if (assistant.container_status !== "running") {
           res.status(503).json({
-            error: "Assistant is not running. Please wait for it to start or restart it.",
+            error:
+              "Assistant is not running. Please wait for it to start or restart it.",
           });
           return;
         }
 
         const target = resolveAssistantGatewayTarget(assistant);
-        const result = await setCurrentModel(target, gatewayToken, normalizedRef);
+        const result = await setCurrentModel(
+          target,
+          gatewayToken,
+          normalizedRef,
+        );
 
         if (!result.ok) {
           res.status(502).json({
@@ -1140,7 +1243,9 @@ export const createDashboardRouter = (): Router => {
       }
 
       try {
-        const result = await cancelStripeSubscription(String(user.telegram_user_id));
+        const result = await cancelStripeSubscription(
+          String(user.telegram_user_id),
+        );
         res.status(200).json(result);
       } catch (error: unknown) {
         if (isDomainError(error)) {
@@ -1217,18 +1322,21 @@ export const createDashboardRouter = (): Router => {
       }
 
       try {
-        const [assistants, subscriptionResult, plansResult] = await Promise.all([
-          listAssistantsByOwnerId(user.telegram_user_id),
-          readInternalSubscription(String(user.telegram_user_id)),
-          listActivePlansForApi(),
-        ]);
+        const [assistants, subscriptionResult, plansResult] = await Promise.all(
+          [
+            listAssistantsByOwnerId(user.telegram_user_id),
+            readInternalSubscription(String(user.telegram_user_id)),
+            listActivePlansForApi(),
+          ],
+        );
 
         const assistant = assistants[0] ?? null;
         const subscription = subscriptionResult.subscription;
         const runtimeMetadata = assistant
           ? await readAssistantRuntimeMetadata(assistant.id)
           : {};
-        const skillsConfig = readSkillsConfigFromRuntimeMetadata(runtimeMetadata);
+        const skillsConfig =
+          readSkillsConfigFromRuntimeMetadata(runtimeMetadata);
         const skillViews = buildSkillViewList(skillsConfig);
 
         res.status(200).json({
@@ -1316,9 +1424,13 @@ export const createDashboardRouter = (): Router => {
       } catch (error: unknown) {
         if (isDomainError(error)) {
           if (error.status === 409) {
-            const assistants = await listAssistantsByOwnerId(user.telegram_user_id);
+            const assistants = await listAssistantsByOwnerId(
+              user.telegram_user_id,
+            );
             if (assistants.length > 0) {
-              res.status(200).json({ created: false, assistant: assistants[0] });
+              res
+                .status(200)
+                .json({ created: false, assistant: assistants[0] });
               return;
             }
           }
@@ -1348,7 +1460,9 @@ export const createDashboardRouter = (): Router => {
         const assistants = await listAssistantsByOwnerId(user.telegram_user_id);
         const assistant = assistants[0];
         if (!assistant) {
-          res.status(400).json({ error: "Assistant not found. Create assistant first." });
+          res
+            .status(400)
+            .json({ error: "Assistant not found. Create assistant first." });
           return;
         }
 
@@ -1387,7 +1501,10 @@ export const createDashboardRouter = (): Router => {
       }
 
       try {
-        const plan = typeof req.body?.plan === "string" ? req.body.plan.trim().toLowerCase() : "";
+        const plan =
+          typeof req.body?.plan === "string"
+            ? req.body.plan.trim().toLowerCase()
+            : "";
         if (!plan) {
           res.status(400).json({ error: "plan is required" });
           return;
@@ -1434,7 +1551,9 @@ export const createDashboardRouter = (): Router => {
       }
 
       const skillKey =
-        typeof req.body?.skill_key === "string" ? req.body.skill_key.trim() : "";
+        typeof req.body?.skill_key === "string"
+          ? req.body.skill_key.trim()
+          : "";
       if (!skillKey) {
         res.status(400).json({ error: "skill_key is required" });
         return;
@@ -1444,12 +1563,17 @@ export const createDashboardRouter = (): Router => {
         const assistants = await listAssistantsByOwnerId(user.telegram_user_id);
         const assistant = assistants[0];
         if (!assistant) {
-          res.status(400).json({ error: "Assistant not found. Create assistant first." });
+          res
+            .status(400)
+            .json({ error: "Assistant not found. Create assistant first." });
           return;
         }
 
-        const runtimeMetadata = await readAssistantRuntimeMetadata(assistant.id);
-        const currentConfig = readSkillsConfigFromRuntimeMetadata(runtimeMetadata);
+        const runtimeMetadata = await readAssistantRuntimeMetadata(
+          assistant.id,
+        );
+        const currentConfig =
+          readSkillsConfigFromRuntimeMetadata(runtimeMetadata);
         const nextConfig = installSkillToConfig(currentConfig, skillKey);
         await setAssistantRuntimeMetadataKey(
           assistant.id,
@@ -1467,7 +1591,8 @@ export const createDashboardRouter = (): Router => {
             console.warn("Skills install saved but runtime refresh failed", {
               assistantId: assistant.id,
               skillKey,
-              error: error instanceof Error ? error.message : String(error || ""),
+              error:
+                error instanceof Error ? error.message : String(error || ""),
             });
           }
         }
@@ -1506,7 +1631,9 @@ export const createDashboardRouter = (): Router => {
       }
 
       const skillKey =
-        typeof req.body?.skill_key === "string" ? req.body.skill_key.trim() : "";
+        typeof req.body?.skill_key === "string"
+          ? req.body.skill_key.trim()
+          : "";
       if (!skillKey) {
         res.status(400).json({ error: "skill_key is required" });
         return;
@@ -1516,12 +1643,17 @@ export const createDashboardRouter = (): Router => {
         const assistants = await listAssistantsByOwnerId(user.telegram_user_id);
         const assistant = assistants[0];
         if (!assistant) {
-          res.status(400).json({ error: "Assistant not found. Create assistant first." });
+          res
+            .status(400)
+            .json({ error: "Assistant not found. Create assistant first." });
           return;
         }
 
-        const runtimeMetadata = await readAssistantRuntimeMetadata(assistant.id);
-        const currentConfig = readSkillsConfigFromRuntimeMetadata(runtimeMetadata);
+        const runtimeMetadata = await readAssistantRuntimeMetadata(
+          assistant.id,
+        );
+        const currentConfig =
+          readSkillsConfigFromRuntimeMetadata(runtimeMetadata);
         const nextConfig = uninstallSkillFromConfig(currentConfig, skillKey);
         await setAssistantRuntimeMetadataKey(
           assistant.id,
@@ -1539,7 +1671,8 @@ export const createDashboardRouter = (): Router => {
             console.warn("Skills uninstall saved but runtime refresh failed", {
               assistantId: assistant.id,
               skillKey,
-              error: error instanceof Error ? error.message : String(error || ""),
+              error:
+                error instanceof Error ? error.message : String(error || ""),
             });
           }
         }
@@ -1575,7 +1708,9 @@ export const createDashboardRouter = (): Router => {
       }
 
       try {
-        const result = await cancelStripeSubscription(String(user.telegram_user_id));
+        const result = await cancelStripeSubscription(
+          String(user.telegram_user_id),
+        );
         res.status(200).json(result);
       } catch (error: unknown) {
         if (isDomainError(error)) {

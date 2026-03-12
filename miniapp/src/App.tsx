@@ -7,6 +7,12 @@ import SetupWaiting from "./components/SetupWaiting";
 import Toast from "./components/Toast";
 import { readGoogleRedirectState } from "./googleRedirectState";
 import { shouldRefreshAfterExternalOAuthReturn } from "./googleReconnectRefresh";
+import {
+  setupDemoMode,
+  isDemoMode,
+  getBootstrapEndpoint,
+  getBootstrapPayload,
+} from "./demoMode";
 
 type Plan = {
   id: string;
@@ -49,6 +55,7 @@ type StatePayload = {
     id?: number;
     username?: string | null;
     status?: string;
+    created_at?: string | null;
   };
   subscription: {
     active: boolean;
@@ -99,7 +106,10 @@ const mergeQuickPayload = (
   google: quick.google ?? prev.google,
 });
 
-const hasQuickPayloadChanged = (prev: StatePayload, next: StatePayload): boolean => {
+const hasQuickPayloadChanged = (
+  prev: StatePayload,
+  next: StatePayload,
+): boolean => {
   return (
     prev.user.telegram_user_id !== next.user.telegram_user_id ||
     prev.user.telegram_username !== next.user.telegram_username ||
@@ -110,8 +120,10 @@ const hasQuickPayloadChanged = (prev: StatePayload, next: StatePayload): boolean
     prev.subscription.active !== next.subscription.active ||
     prev.subscription.status !== next.subscription.status ||
     prev.subscription.plan_id !== next.subscription.plan_id ||
-    prev.subscription.cancel_at_period_end !== next.subscription.cancel_at_period_end ||
-    prev.subscription.current_period_end !== next.subscription.current_period_end ||
+    prev.subscription.cancel_at_period_end !==
+      next.subscription.cancel_at_period_end ||
+    prev.subscription.current_period_end !==
+      next.subscription.current_period_end ||
     (prev.features?.can_delete_account ?? true) !==
       (next.features?.can_delete_account ?? true)
   );
@@ -211,8 +223,14 @@ const App = () => {
   const [showOnboarding, setShowOnboarding] = useState(
     () => !sessionStorage.getItem("onboarding_seen"),
   );
-  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
-  const [models, setModels] = useState<{ current: string | null; available: ModelItem[] } | null>(null);
+  const [toast, setToast] = useState<{
+    message: string;
+    type: "success" | "error";
+  } | null>(null);
+  const [models, setModels] = useState<{
+    current: string | null;
+    available: ModelItem[];
+  } | null>(null);
   const handledGoogleRedirectRef = useRef(false);
   const refreshingOnResumeRef = useRef(false);
 
@@ -223,13 +241,16 @@ const App = () => {
   const hydrateState = (payload: StatePayload): void => {
     setState(payload);
     setSelectedPlan(
-      (prev) => prev ?? payload.subscription.plan_id ?? payload.plans?.[0]?.id ?? null,
+      (prev) =>
+        prev ?? payload.subscription.plan_id ?? payload.plans?.[0]?.id ?? null,
     );
   };
 
   const loadDeferred = async (): Promise<DeferredPayload> => {
-    const deferred = await safeFetch<DeferredPayload>("/api/mini/state/deferred");
-    setState((prev) => prev ? { ...prev, ...deferred } : prev);
+    const deferred = await safeFetch<DeferredPayload>(
+      "/api/mini/state/deferred",
+    );
+    setState((prev) => (prev ? { ...prev, ...deferred } : prev));
     setSelectedPlan((prev) => prev ?? deferred.plans[0]?.id ?? null);
     return deferred;
   };
@@ -291,8 +312,13 @@ const App = () => {
         safeFetch<StatePayload>("/api/mini/state"),
         safeFetch<DeferredPayload>("/api/mini/state/deferred"),
       ]);
-      setState((prev) => (prev ? { ...prev, ...quick, ...deferred } : { ...quick, ...deferred }));
-      setSelectedPlan((prev) => prev ?? quick.subscription.plan_id ?? deferred.plans[0]?.id ?? null);
+      setState((prev) =>
+        prev ? { ...prev, ...quick, ...deferred } : { ...quick, ...deferred },
+      );
+      setSelectedPlan(
+        (prev) =>
+          prev ?? quick.subscription.plan_id ?? deferred.plans[0]?.id ?? null,
+      );
     } catch {
       // Best-effort refresh only. Existing state remains usable.
     } finally {
@@ -302,45 +328,51 @@ const App = () => {
 
   const bootstrap = async (): Promise<{ loadedDeferred: boolean }> => {
     const initData = window.Telegram?.WebApp?.initData?.trim() ?? "";
+    const inWebPreview = isDemoMode();
 
-    if (initData) {
-      const quick = await safeFetch<StatePayload>("/api/mini/bootstrap", {
+    let quick: StatePayload;
+    if (initData || inWebPreview) {
+      const endpoint = getBootstrapEndpoint();
+      const payload = getBootstrapPayload();
+
+      quick = await safeFetch<StatePayload>(endpoint, {
         method: "POST",
-        body: JSON.stringify({ init_data: initData }),
+        body: JSON.stringify(payload),
       });
-      let payload: StatePayload = quick;
-      let loadedDeferred = false;
-      try {
-        const deferred = await safeFetch<DeferredPayload>("/api/mini/state/deferred");
-        payload = { ...quick, ...deferred };
-        loadedDeferred = true;
-      } catch {
-        // fallback to quick payload; deferred will be retried in background
-      }
-      hydrateState(payload);
-      if (payload.assistant.exists) {
-        await Promise.all([
-          loadModels(),
-          preloadImage("/mini/bg-garden.png"),
-        ]);
-      }
-      return { loadedDeferred };
+    } else {
+      quick = await safeFetch<StatePayload>("/api/mini/state");
     }
-    const payload = await loadState();
-    if (payload.assistant.exists) {
-      await Promise.all([
-        loadModels(),
-        preloadImage("/mini/bg-garden.png"),
-      ]);
+
+    hydrateState(quick);
+    setLoading(false);
+    window.Telegram?.WebApp?.ready?.();
+
+    if (quick.assistant.exists) {
+      void loadModels();
+      void preloadImage("/mini/bg-garden.png");
     }
-    return { loadedDeferred: true };
+
+    let loadedDeferred = false;
+    try {
+      const deferred = await safeFetch<DeferredPayload>("/api/mini/state/deferred");
+      setState((prev) => prev ? { ...prev, ...deferred } : prev);
+      setSelectedPlan((prev) => prev ?? deferred.plans[0]?.id ?? null);
+      loadedDeferred = true;
+    } catch {
+      // deferred will be retried via loadDeferred() below
+    }
+
+    return { loadedDeferred };
   };
 
   useEffect(() => {
+    // Setup demo mode if needed (must be called before Telegram WebApp API access)
+    setupDemoMode();
+
     // expand/fullscreen can be called early — they don't dismiss the native loader
     window.Telegram?.WebApp?.expand?.();
     const platform = window.Telegram?.WebApp?.platform;
-    if (platform === 'ios' || platform === 'android') {
+    if (platform === "ios" || platform === "android") {
       window.Telegram?.WebApp?.requestFullscreen?.();
       document.documentElement.style.setProperty("--tg-top-offset", "56px");
     }
@@ -349,18 +381,13 @@ const App = () => {
 
     void bootstrap()
       .then(({ loadedDeferred }) => {
-        setLoading(false);
-        // Signal Telegram that the page is ready — dismisses native loader
-        window.Telegram?.WebApp?.ready?.();
         if (!loadedDeferred) {
-          // Only backfill deferred fields if bootstrap could not fetch them
           void loadDeferred().catch(() => {});
         }
       })
       .catch((e: unknown) => {
         setError(e instanceof Error ? e.message : "unknown error");
         setLoading(false);
-        // Still need to dismiss native loader on error so user sees error UI
         window.Telegram?.WebApp?.ready?.();
       });
   }, []);
@@ -436,13 +463,15 @@ const App = () => {
     if (state.assistant.status === "running") return;
 
     const id = setInterval(() => {
-      void safeFetch<StatePayload>("/api/mini/state").then((quick) => {
-        setState((prev) => {
-          if (!prev) return prev;
-          if (!hasQuickPayloadChanged(prev, quick)) return prev;
-          return mergeQuickPayload(prev, quick);
-        });
-      }).catch(() => {});
+      void safeFetch<StatePayload>("/api/mini/state")
+        .then((quick) => {
+          setState((prev) => {
+            if (!prev) return prev;
+            if (!hasQuickPayloadChanged(prev, quick)) return prev;
+            return mergeQuickPayload(prev, quick);
+          });
+        })
+        .catch(() => {});
     }, 3_000);
 
     return () => clearInterval(id);
@@ -458,7 +487,8 @@ const App = () => {
               exists: true,
               id: prev.assistant.id,
               username: prev.assistant.username ?? null,
-              status: prev.assistant.status === "running" ? "running" : "creating",
+              status:
+                prev.assistant.status === "running" ? "running" : "creating",
             },
           }
         : prev,
@@ -481,7 +511,11 @@ const App = () => {
     if (!selectedPlan) return;
     setBusy("checkout");
     try {
-      const result = await safeFetch<{ url: string | null; action?: string; message?: string }>("/api/mini/checkout", {
+      const result = await safeFetch<{
+        url: string | null;
+        action?: string;
+        message?: string;
+      }>("/api/mini/checkout", {
         method: "POST",
         body: JSON.stringify({ plan: selectedPlan }),
       });
@@ -492,7 +526,8 @@ const App = () => {
         await loadState();
         return;
       }
-      if (!result.url) throw new Error("Unable to get checkout URL. Please try again.");
+      if (!result.url)
+        throw new Error("Unable to get checkout URL. Please try again.");
       window.location.href = result.url;
     } catch (e) {
       const message = e instanceof Error ? e.message : "unknown";
@@ -506,7 +541,11 @@ const App = () => {
   };
 
   const cancelSubscription = async () => {
-    if (!window.confirm("Cancel renewal? Service remains active until period end.")) {
+    if (
+      !window.confirm(
+        "Cancel renewal? Service remains active until period end.",
+      )
+    ) {
       return;
     }
     setBusy("cancel");
@@ -521,15 +560,19 @@ const App = () => {
         method: "POST",
         body: JSON.stringify({}),
       });
-      setState((prev) => prev ? {
-        ...prev,
-        subscription: {
-          ...prev.subscription,
-          status: result.status,
-          cancel_at_period_end: true,
-          current_period_end: result.current_period_end,
-        },
-      } : prev);
+      setState((prev) =>
+        prev
+          ? {
+              ...prev,
+              subscription: {
+                ...prev.subscription,
+                status: result.status,
+                cancel_at_period_end: true,
+                current_period_end: result.current_period_end,
+              },
+            }
+          : prev,
+      );
       showToast(
         result.already_scheduled
           ? "Renewal was already canceled. Service remains active until period end."
@@ -568,10 +611,13 @@ const App = () => {
   const handleConnectGoogle = async () => {
     setBusy("google-connect");
     try {
-      const payload = await safeFetch<GoogleStartUrlPayload>("/api/mini/google/start-url", {
-        method: "POST",
-        body: JSON.stringify({}),
-      });
+      const payload = await safeFetch<GoogleStartUrlPayload>(
+        "/api/mini/google/start-url",
+        {
+          method: "POST",
+          body: JSON.stringify({}),
+        },
+      );
       const authUrl = String(payload.url || "").trim();
       if (!authUrl) {
         throw new Error("Missing Google auth URL");
@@ -597,10 +643,13 @@ const App = () => {
   const handleDisconnectGoogle = async () => {
     setBusy("google-disconnect");
     try {
-      await safeFetch<{ ok: true; message: string }>("/api/mini/google/disconnect", {
-        method: "POST",
-        body: JSON.stringify({}),
-      });
+      await safeFetch<{ ok: true; message: string }>(
+        "/api/mini/google/disconnect",
+        {
+          method: "POST",
+          body: JSON.stringify({}),
+        },
+      );
       await loadState();
       setShowManageAgent(true);
       showToast("Google disconnected.", "success");
@@ -619,14 +668,22 @@ const App = () => {
   const handleRepairRuntime = async () => {
     setBusy("repair-runtime");
     try {
-      await safeFetch<{ ok: true; ready: boolean }>("/api/mini/repair-runtime", {
-        method: "POST",
-        body: JSON.stringify({}),
-      });
-      showToast("Runtime restart started. The assistant may take a moment to become ready again.", "success");
+      await safeFetch<{ ok: true; ready: boolean }>(
+        "/api/mini/repair-runtime",
+        {
+          method: "POST",
+          body: JSON.stringify({}),
+        },
+      );
+      showToast(
+        "Runtime restart started. The assistant may take a moment to become ready again.",
+        "success",
+      );
       await loadState();
     } catch (e) {
-      showToast(`Restart failed: ${e instanceof Error ? e.message : "unknown"}`);
+      showToast(
+        `Restart failed: ${e instanceof Error ? e.message : "unknown"}`,
+      );
     } finally {
       setBusy("none");
     }
@@ -651,10 +708,12 @@ const App = () => {
         method: "POST",
         body: JSON.stringify({ model: modelRef }),
       });
-      setModels((prev) => prev ? { ...prev, current: modelRef } : prev);
+      setModels((prev) => (prev ? { ...prev, current: modelRef } : prev));
       showToast("Model changed successfully.", "success");
     } catch (e) {
-      showToast(`Model change failed: ${e instanceof Error ? e.message : "unknown"}`);
+      showToast(
+        `Model change failed: ${e instanceof Error ? e.message : "unknown"}`,
+      );
     } finally {
       setBusy("none");
     }
@@ -670,7 +729,8 @@ const App = () => {
   }
 
   if (error || !state) {
-    const isAuthError = error?.includes("401") || error?.includes("Unauthorized");
+    const isAuthError =
+      error?.includes("401") || error?.includes("Unauthorized");
     return (
       <div
         className="min-h-dvh bg-pin-gradient flex items-center justify-center p-5"
@@ -678,8 +738,18 @@ const App = () => {
       >
         <div className="glass-card rounded-2xl p-6 max-w-md text-center">
           <div className="w-16 h-16 rounded-full bg-destructive/10 flex items-center justify-center mx-auto mb-4">
-            <svg className="w-8 h-8 text-destructive" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            <svg
+              className="w-8 h-8 text-destructive"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+              />
             </svg>
           </div>
           <h2 className="text-lg font-bold text-foreground mb-2">
@@ -703,11 +773,25 @@ const App = () => {
 
   // Onboarding flow for unpaid users: Landing → Features → Choose Plan
   if (!state.subscription.active && showLanding) {
-    return <VideoLanding onGetStarted={() => { sessionStorage.setItem("landing_seen", "1"); setShowLanding(false); }} />;
+    return (
+      <VideoLanding
+        onGetStarted={() => {
+          sessionStorage.setItem("landing_seen", "1");
+          setShowLanding(false);
+        }}
+      />
+    );
   }
 
   if (!state.subscription.active && showOnboarding) {
-    return <CreateAgentFlow onContinue={() => { sessionStorage.setItem("onboarding_seen", "1"); setShowOnboarding(false); }} />;
+    return (
+      <CreateAgentFlow
+        onContinue={() => {
+          sessionStorage.setItem("onboarding_seen", "1");
+          setShowOnboarding(false);
+        }}
+      />
+    );
   }
 
   // Show subscription / choose plan page when not subscribed
@@ -721,7 +805,9 @@ const App = () => {
         }}
       >
         <section className="glass-card rounded-2xl p-5 animate-fade-in shrink-0">
-          <span className="pill bg-foreground text-background">PIN AI MINI</span>
+          <span className="pill bg-foreground text-background">
+            PIN AI MINI
+          </span>
           <h1 className="mt-3 font-heading text-xl font-bold leading-[1.1] text-foreground">
             Choose Your Plan
           </h1>
@@ -732,43 +818,49 @@ const App = () => {
 
         <section className="glass-card rounded-2xl p-4 mt-3 animate-fade-in flex-1 flex flex-col min-h-0">
           <div className="flex-1 space-y-2.5 overflow-y-auto min-h-0">
-            {state.plans === null ? (
-              /* Skeleton placeholders while plans load */
-              Array.from({ length: 3 }).map((_, i) => (
-                <div key={i} className="w-full rounded-xl p-3.5 bg-white/30 border border-white/40 animate-pulse">
-                  <div className="flex items-center justify-between gap-2 mb-1.5">
-                    <div className="h-4 w-24 bg-white/50 rounded" />
-                    <div className="h-5 w-16 bg-white/50 rounded" />
-                  </div>
-                  <div className="h-3 w-40 bg-white/40 rounded" />
-                </div>
-              ))
-            ) : (
-              state.plans.map((plan) => {
-                const selected = selectedPlan === plan.id;
-                return (
-                  <button
-                    key={plan.id}
-                    className={`w-full rounded-xl p-3.5 text-left transition-all btn-press ${
-                      selected
-                        ? "bg-white/60 border-2 border-primary shadow-lg"
-                        : "bg-white/30 border border-white/40 hover:bg-white/40"
-                    }`}
-                    onClick={() => setSelectedPlan(plan.id)}
+            {state.plans === null
+              ? /* Skeleton placeholders while plans load */
+                Array.from({ length: 3 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="w-full rounded-xl p-3.5 bg-white/30 border border-white/40 animate-pulse"
                   >
-                    <div className="flex items-center justify-between gap-2 mb-0.5">
-                      <span className="text-base font-bold text-foreground">{plan.name}</span>
-                      <span className="text-lg font-extrabold text-primary">
-                        ${plan.price}<span className="text-sm font-normal text-muted-foreground">/mo</span>
-                      </span>
+                    <div className="flex items-center justify-between gap-2 mb-1.5">
+                      <div className="h-4 w-24 bg-white/50 rounded" />
+                      <div className="h-5 w-16 bg-white/50 rounded" />
                     </div>
-                    <div className="text-xs text-foreground/60">
-                      {plan.features.slice(0, 2).join(" · ")}
-                    </div>
-                  </button>
-                );
-              })
-            )}
+                    <div className="h-3 w-40 bg-white/40 rounded" />
+                  </div>
+                ))
+              : state.plans.map((plan) => {
+                  const selected = selectedPlan === plan.id;
+                  return (
+                    <button
+                      key={plan.id}
+                      className={`w-full rounded-xl p-3.5 text-left transition-all btn-press ${
+                        selected
+                          ? "bg-white/60 border-2 border-primary shadow-lg"
+                          : "bg-white/30 border border-white/40 hover:bg-white/40"
+                      }`}
+                      onClick={() => setSelectedPlan(plan.id)}
+                    >
+                      <div className="flex items-center justify-between gap-2 mb-0.5">
+                        <span className="text-base font-bold text-foreground">
+                          {plan.name}
+                        </span>
+                        <span className="text-lg font-extrabold text-primary">
+                          ${plan.price}
+                          <span className="text-sm font-normal text-muted-foreground">
+                            /mo
+                          </span>
+                        </span>
+                      </div>
+                      <div className="text-xs text-foreground/60">
+                        {plan.features.slice(0, 2).join(" · ")}
+                      </div>
+                    </button>
+                  );
+                })}
           </div>
           <div className="mt-3 shrink-0">
             <button
@@ -781,7 +873,9 @@ const App = () => {
           </div>
         </section>
 
-        <div className="mt-3 text-center text-xs text-foreground/50 shrink-0">PIN AI</div>
+        <div className="mt-3 text-center text-xs text-foreground/50 shrink-0">
+          PIN AI
+        </div>
       </div>
     );
   }
@@ -805,16 +899,20 @@ const App = () => {
           }}
         />
 
-        <div className={`relative px-4 pt-4 flex-1 ${showManageAgent ? "z-30" : "z-10"}`}>
+        <div className="relative px-4 pt-4 flex-1 z-10">
           <AgentCard
             username={state.assistant.username || null}
             status={state.assistant.status || "unknown"}
             planId={state.subscription.plan_id}
-            skillsCount={state.skills?.items?.filter((item) => item.enabled).length ?? 0}
+            skillsCount={state.skills?.items?.filter((item) => item.installed).length ?? 0}
+            skills={state.skills?.items ?? []}
             active={state.subscription.active}
             manageOpen={showManageAgent}
+            createdAt={state.assistant.created_at ?? null}
             google={state.google ?? undefined}
-            googleBusy={busy === "google-disconnect" || busy === "google-connect"}
+            googleBusy={
+              busy === "google-disconnect" || busy === "google-connect"
+            }
             onOpenManage={handleOpenManage}
             onCloseManage={() => setShowManageAgent(false)}
             onChangePlan={() => setShowChangePlan(true)}
@@ -831,14 +929,24 @@ const App = () => {
           />
         </div>
 
-        <div className="relative z-10 px-4 mt-auto pt-4">
+        <div className="relative z-[1] px-4 mt-auto pt-4">
           <button
             type="button"
             onClick={handleContactSupport}
             className="glass-stat-box w-full rounded-2xl flex items-center justify-center gap-2 text-sm text-foreground font-medium py-3.5 hover:bg-white/40 transition-colors border-0 bg-transparent appearance-none"
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            <svg
+              className="w-4 h-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+              />
             </svg>
             Contact Us
           </button>
@@ -859,7 +967,11 @@ const App = () => {
             busy={busy}
           />
 
-          <Toast message={toast?.message ?? null} type={toast?.type} onDismiss={() => setToast(null)} />
+          <Toast
+            message={toast?.message ?? null}
+            type={toast?.type}
+            onDismiss={() => setToast(null)}
+          />
         </div>
       </div>
     );

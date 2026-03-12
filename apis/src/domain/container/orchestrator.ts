@@ -20,7 +20,6 @@ import {
   toOpenclawSkillsPayload,
 } from "../skills/openclaw_skills.js";
 import { resolveExternalProfileForTelegramUser } from "../onboarding/profile_bootstrap.js";
-import { PINAI_WORKSPACE_STATUS_PATH, PINAI_WORKSPACE_STATUS_PORT } from "./providers/shared/workspace_ready.js";
 import { GOOGLE_CREDENTIALS_RUNTIME_METADATA_KEY } from "./providers/shared/google_workspace_credentials.js";
 
 const resolveTelegramWebhookPort = (): number =>
@@ -402,10 +401,9 @@ export class ContainerOrchestrator {
         timeoutMs: probeTimeoutMs,
         gatewayToken,
         gatewayPort: this.config.openclaw.gatewayPort,
-        additionalPorts: [webhookPort, PINAI_WORKSPACE_STATUS_PORT],
+        additionalPorts: [webhookPort],
         httpProbes: [
           { port: webhookPort, path: webhookPath },
-          { port: PINAI_WORKSPACE_STATUS_PORT, path: PINAI_WORKSPACE_STATUS_PATH },
         ],
         onGatewayReady: () => {
           // Mark running as soon as gateway hello succeeds — don't wait for

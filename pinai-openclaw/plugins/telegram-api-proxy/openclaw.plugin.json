@@ -1,5 +1,5 @@
 {
-  "id": "telegram-router-proxy",
+  "id": "telegram-api-proxy",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

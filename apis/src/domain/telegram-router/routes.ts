@@ -59,7 +59,10 @@ const OAUTH_PROMPT_DEDUPE_WINDOW_MS = 20_000;
 const oauthPromptDedupeCache = new Map<number, { text: string; sentAt: number }>();
 const googleCredentialSyncedRuntimeRef = new Map<number, string>();
 const googleCredentialSyncInFlight = new Map<number, Promise<boolean>>();
-const GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+const GOOGLE_CALENDAR_SCOPES = [
+  "https://www.googleapis.com/auth/calendar.readonly",
+  "https://www.googleapis.com/auth/calendar",
+];
 
 export const registerTelegramRouterRoutes = (app: Application): void => {
   app.post("/webhook/telegram", express.json({ limit: "10mb" }), (req, res) => {
@@ -259,45 +262,19 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
 
 const GOOGLE_WORKSPACE_INTENT_PATTERN = new RegExp(
   [
-    "邮件",
-    "邮箱",
     "gmail",
-    "mailbox",
-    "inbox",
-    "收件箱",
-    "未读",
-    "最近\\d*封",
-    "latest\\s*\\d+\\s*(emails?|mails?)",
-    "日历",
-    "日程",
-    "会议",
-    "calendar",
-    "event",
-    "events",
-    "schedule",
-    "meeting",
-    "drive",
+    "google\\s*mail",
+    "google\\s*workspace",
+    "google\\s*calendar",
     "google\\s*drive",
-    "云盘",
-    "网盘",
-    "文件夹",
-    "文件",
-    "docs?",
-    "document",
-    "文档",
-    "sheets?",
-    "spreadsheet",
-    "表格",
-    "slides?",
-    "presentation",
-    "演示",
-    "forms?",
-    "表单",
-    "meet",
+    "google\\s*docs?",
+    "google\\s*sheets?",
+    "google\\s*slides?",
+    "google\\s*forms?",
     "google\\s*meet",
-    "chat",
     "google\\s*chat",
-    "classroom",
+    "google\\s*classroom",
+    "谷歌\\s*(邮箱|邮件|日历|云盘|网盘|文档|表格|会议)",
   ].join("|"),
   "i",
 );
@@ -311,6 +288,20 @@ function isGoogleCalendarIntent(text: string | null): boolean {
   if (!text) return false;
   return /(日历|日程|calendar|event|events|meeting|schedule)/i.test(text);
 }
+
+function hasAnyScope(scopesRaw: string, candidates: string[]): boolean {
+  const scopes = new Set(
+    scopesRaw
+      .trim()
+      .split(/\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+  return candidates.some((scope) => scopes.has(scope));
+}
+
+export const hasAnyScopeForTest = (scopesRaw: string, candidates: string[]): boolean =>
+  hasAnyScope(scopesRaw, candidates);
 
 export const hasGoogleWorkspaceIntentForTest = (text: string | null): boolean =>
   isGoogleWorkspaceIntent(text);
@@ -330,7 +321,7 @@ export function buildGoogleOAuthPrompt(text: string | null): string {
     return [
       "你还没有连接 Google Workspace。",
       "↙ 请点击 Telegram 左下角的 PIN AI mini app 按钮。",
-      "打开后进入 Manage -> Connect Google 完成授权。",
+      "打开后进入 Data Connectors -> Google 完成授权。",
       "授权完成后，回到这里再发送你刚才的请求。",
     ].join("\n");
   }
@@ -338,7 +329,7 @@ export function buildGoogleOAuthPrompt(text: string | null): string {
   return [
     "Your Google Workspace account is not connected yet.",
     "↙ Open the PIN AI mini app from the bottom-left button in Telegram.",
-    "Then go to Manage -> Connect Google to finish authorization.",
+    "Then go to Data Connectors -> Google to finish authorization.",
     "Then come back here and send the same request again.",
   ].join("\n");
 }
@@ -363,14 +354,14 @@ function buildGoogleCalendarReauthPrompt(text: string | null): string {
   if (language === "zh") {
     return [
       "你已连接 Google，但当前授权缺少日历权限。",
-      "请在 Telegram 左下角 PIN AI mini app 中重新 Connect Google，一并勾选日历权限。",
+      "请在 Telegram 左下角 PIN AI mini app 中进入 Data Connectors -> Google 重新授权，并勾选日历权限。",
       "完成后回到这里重试刚才的请求。",
     ].join("\n");
   }
 
   return [
     "Google is connected, but the current authorization is missing Calendar permission.",
-    "Please reconnect Google in the PIN AI mini app (bottom-left in Telegram) and grant Calendar access.",
+    "Please open Data Connectors -> Google in the PIN AI mini app (bottom-left in Telegram), reconnect, and grant Calendar access.",
     "Then come back here and retry the same request.",
   ].join("\n");
 }
@@ -434,7 +425,7 @@ async function tryHandleGoogleOAuthPrompt(
     if (isGoogleCalendarIntent(text)) {
       const status = await getGoogleConnectionStatus(chatId).catch(() => null);
       const scopes = (status?.scopes || "").trim();
-      if (scopes && !scopes.includes(GOOGLE_CALENDAR_SCOPE)) {
+      if (scopes && !hasAnyScope(scopes, GOOGLE_CALENDAR_SCOPES)) {
         if (!shouldSuppressGoogleOAuthPrompt(chatId, text, now)) {
           await sendFallbackMessageBySource(
             source,
