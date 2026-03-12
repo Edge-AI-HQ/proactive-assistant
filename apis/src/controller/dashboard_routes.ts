@@ -466,44 +466,6 @@ export const createDashboardRouter = (): Router => {
     res.sendFile(miniAppEntryPath);
   });
 
-  // Direct web preview entry - auto-login with preview user
-  router.get("/miniapp", async (req: Request, res: Response) => {
-    if (!DEMO_MODE_ENABLED) {
-      res.status(403).send("Web preview is not enabled");
-      return;
-    }
-
-    try {
-      // SECURITY: Verify the hardcoded user ID is in the whitelist
-      if (!ALLOWED_PREVIEW_USER_IDS.has(DEMO_TELEGRAM_USER_ID)) {
-        console.error("[security] Preview user ID not in whitelist", {
-          userId: DEMO_TELEGRAM_USER_ID,
-        });
-        res.status(403).send("Unauthorized preview user");
-        return;
-      }
-
-      // Use real user account for preview
-      const user = await getUserByTelegramId(DEMO_TELEGRAM_USER_ID);
-      if (!user) {
-        res.status(404).send("Preview user not found");
-        return;
-      }
-
-      const { sessionToken, expiresAt } = await createGatewaySession(
-        user.telegram_user_id,
-        miniSessionTtlHours,
-      );
-      setMiniSessionCookie(res, sessionToken, expiresAt);
-
-      // Redirect to miniapp (preview mode auto-detected)
-      res.redirect("/mini/");
-    } catch (error: unknown) {
-      console.error("Failed to create preview session", error);
-      res.status(500).send("Failed to initialize web preview");
-    }
-  });
-
   router.get(
     "/mini/google/start",
     async (req: Request, res: Response, next: NextFunction) => {
@@ -586,6 +548,53 @@ export const createDashboardRouter = (): Router => {
   router.post("/api/mini/bootstrap", async (req: Request, res: Response) => {
     const initDataRaw =
       typeof req.body?.init_data === "string" ? req.body.init_data : "";
+
+    // Web preview mode: no initData means browser access (not Telegram)
+    if (!initDataRaw && DEMO_MODE_ENABLED) {
+      try {
+        // SECURITY: Verify the hardcoded user ID is in the whitelist
+        if (!ALLOWED_PREVIEW_USER_IDS.has(DEMO_TELEGRAM_USER_ID)) {
+          console.error("[security] Preview user ID not in whitelist", {
+            userId: DEMO_TELEGRAM_USER_ID,
+          });
+          res.status(403).json({ error: "Unauthorized preview user" });
+          return;
+        }
+
+        // Use real user account for web preview
+        const user = await getUserByTelegramId(DEMO_TELEGRAM_USER_ID);
+        if (!user) {
+          res.status(404).json({ error: "Preview user not found" });
+          return;
+        }
+
+        setLogContextTelegramIdentity(
+          user.telegram_user_id,
+          user.telegram_username,
+        );
+        console.info("[auth:resolved]", {
+          source: "mini_bootstrap_web_preview",
+          telegram_user_id: user.telegram_user_id,
+          telegram_username: user.telegram_username,
+        });
+        const { sessionToken, expiresAt } = await createGatewaySession(
+          user.telegram_user_id,
+          miniSessionTtlHours,
+        );
+        setMiniSessionCookie(res, sessionToken, expiresAt);
+        const payload = await buildQuickStatePayload(
+          user.telegram_user_id,
+          user.telegram_username,
+        );
+        res.status(200).json(payload);
+        return;
+      } catch (error: unknown) {
+        res.status(500).json({ error: domainErrorMessage(error) });
+        return;
+      }
+    }
+
+    // Normal Telegram mode: verify initData
     const verification = parseTelegramInitData(initDataRaw);
     if (!verification.ok) {
       res.status(401).json({ error: verification.error });
@@ -602,7 +611,7 @@ export const createDashboardRouter = (): Router => {
         user.telegram_username,
       );
       console.info("[auth:resolved]", {
-        source: "mini_bootstrap",
+        source: "mini_bootstrap_telegram",
         telegram_user_id: user.telegram_user_id,
         telegram_username: user.telegram_username,
       });
@@ -620,57 +629,6 @@ export const createDashboardRouter = (): Router => {
       res.status(500).json({ error: domainErrorMessage(error) });
     }
   });
-
-  // Web preview bootstrap - for Google OAuth review
-  router.post(
-    "/api/mini/bootstrap-demo",
-    async (req: Request, res: Response) => {
-      if (!DEMO_MODE_ENABLED) {
-        res.status(403).json({ error: "Web preview is not enabled" });
-        return;
-      }
-
-      try {
-        // SECURITY: Verify the hardcoded user ID is in the whitelist
-        if (!ALLOWED_PREVIEW_USER_IDS.has(DEMO_TELEGRAM_USER_ID)) {
-          console.error("[security] Preview user ID not in whitelist", {
-            userId: DEMO_TELEGRAM_USER_ID,
-          });
-          res.status(403).json({ error: "Unauthorized preview user" });
-          return;
-        }
-
-        // Use real user account for preview
-        const user = await getUserByTelegramId(DEMO_TELEGRAM_USER_ID);
-        if (!user) {
-          res.status(404).json({ error: "Preview user not found" });
-          return;
-        }
-
-        setLogContextTelegramIdentity(
-          user.telegram_user_id,
-          user.telegram_username,
-        );
-        console.info("[auth:resolved]", {
-          source: "mini_bootstrap_preview",
-          telegram_user_id: user.telegram_user_id,
-          telegram_username: user.telegram_username,
-        });
-        const { sessionToken, expiresAt } = await createGatewaySession(
-          user.telegram_user_id,
-          miniSessionTtlHours,
-        );
-        setMiniSessionCookie(res, sessionToken, expiresAt);
-        const payload = await buildQuickStatePayload(
-          user.telegram_user_id,
-          user.telegram_username,
-        );
-        res.status(200).json(payload);
-      } catch (error: unknown) {
-        res.status(500).json({ error: domainErrorMessage(error) });
-      }
-    },
-  );
 
   router.get(
     "/api/mini/state",

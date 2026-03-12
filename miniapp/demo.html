@@ -200,16 +200,12 @@
         <strong>Note:</strong> The application is designed to run within Telegram as a Mini App. 
         This web version provides full access for review purposes.
       </p>
-      
-      <p class="note" style="margin-top: 16px; font-size: 12px; color: #999;">
-        Direct link: <a href="/miniapp" style="color: #667eea; text-decoration: underline;">/miniapp</a>
-      </p>
     </div>
     
     <script>
       function launchApp() {
-        // Redirect to miniapp - auto-login for web preview
-        window.location.href = '/miniapp';
+        // Redirect to miniapp - auto-detects web preview mode
+        window.location.href = '/mini/';
       }
     </script>
   </body>

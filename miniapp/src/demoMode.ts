@@ -61,12 +61,11 @@ export const setupDemoMode = (): void => {
 };
 
 /**
- * Get the bootstrap endpoint based on mode
+ * Get the bootstrap endpoint - always use the same endpoint
+ * Server will auto-detect web preview mode based on empty initData
  */
 export const getBootstrapEndpoint = (): string => {
-  const initData = window.Telegram?.WebApp?.initData?.trim() ?? "";
-  // Use preview endpoint if no initData (web preview mode)
-  return initData ? "/api/mini/bootstrap" : "/api/mini/bootstrap-demo";
+  return "/api/mini/bootstrap";
 };
 
 /**
