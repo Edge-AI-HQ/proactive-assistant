@@ -75,7 +75,7 @@ const sendGuideBotStartWelcome = async (ctx: Context): Promise<void> => {
     payload.miniAppUrl,
   );
 
-  await ctx.replyWithPhoto(new InputFile(payload.imagePath), {
+  await ctx.replyWithPhoto(payload.imagePath, {
     caption: payload.caption,
     parse_mode: "HTML",
     reply_markup: keyboard,
