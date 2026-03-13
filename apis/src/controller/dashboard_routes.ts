@@ -446,18 +446,22 @@ const buildDeferredStatePayload = async (telegramUserId: number) => {
 
   let credits: { remaining: number; total: number } | null = null;
   if (user && active) {
-    const budgetUsd = Number(user.litellm_budget_usd) || 0;
+    let budgetUsd = Number(user.litellm_budget_usd) || 0;
     let spendUsd = Number(user.litellm_spend_usd) || 0;
 
-    if (budgetUsd > 0 && isLiteLLMClientEnabled()) {
+    if (isLiteLLMClientEnabled()) {
       try {
         if (user.litellm_virtual_key) {
           const keyInfo = await getLiteLLMVirtualKeyInfo(user.litellm_virtual_key);
           spendUsd = keyInfo.spendUsd ?? spendUsd;
+          if (keyInfo.maxBudgetUsd != null && keyInfo.maxBudgetUsd > 0) {
+            budgetUsd = keyInfo.maxBudgetUsd;
+          }
         } else if (user.litellm_user_id) {
           const userInfo = await getLiteLLMUserInfo(user.litellm_user_id);
-          if (userInfo.spendUsd !== null) {
-            spendUsd = userInfo.spendUsd;
+          if (userInfo.spendUsd !== null) spendUsd = userInfo.spendUsd;
+          if (userInfo.maxBudgetUsd != null && userInfo.maxBudgetUsd > 0) {
+            budgetUsd = userInfo.maxBudgetUsd;
           }
         }
       } catch {
