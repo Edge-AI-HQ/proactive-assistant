@@ -11,6 +11,15 @@ allowed-tools: Bash(npx agent-browser:*), Bash(agent-browser:*)
 - Start directly with normal workflow (`open` -> `snapshot -i` -> interactions).
 - Only run install commands if commands fail with an explicit missing-browser executable error.
 
+## Headless UX Rules (Must Follow)
+
+- This environment is Ubuntu + headless browser. The user cannot watch the browser in real time.
+- For flows that require user interaction (login, QR scan, 2FA challenge), immediately capture and share a screenshot.
+- Preferred capture command:
+  - `agent-browser screenshot --full /tmp/agent-browser-login.png`
+- After sending the screenshot, ask the user to complete the step, then continue automation.
+- Do not stall in a hidden login page without giving the user visible artifacts.
+
 # Browser Automation with agent-browser
 
 ## Core Workflow
