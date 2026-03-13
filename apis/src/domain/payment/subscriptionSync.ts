@@ -893,11 +893,7 @@ export async function handleInvoicePaid(
               `✅ Your assistant is ready! You can start chatting now. Just use it as your personal assistant.`,
             );
           }
-          if (summary.starting.length > 0) {
-            parts.push(
-              `⏳ Almost there — your assistant is warming up. We'll notify you when it's ready.`,
-            );
-          }
+          // Starting containers will notify when ready via infraRuntime callback
           if (summary.failed.length > 0) {
             parts.push(
               `❌ <b>Creation failed</b>\n\n${summary.failed.join(", ")}\n\nPlease contact support.`,
