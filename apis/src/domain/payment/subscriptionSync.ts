@@ -818,7 +818,7 @@ export async function handleInvoicePaid(
 
         await sendTelegramMessage(
           chatId,
-          `⏳ <b>Creating container(s)</b>\n\n${listStr}\n\nStarting up, please wait. First launch may take a few minutes — we'll notify you when ready.`,
+          `⏳ Setting up your assistant. This may take 1–2 minutes — please hang tight.`,
         );
       }
 
@@ -890,12 +890,12 @@ export async function handleInvoicePaid(
 
           if (summary.ready.length > 0) {
             parts.push(
-              `✅ <b>Container(s) ready</b>\n\n${summary.ready.join(", ")}\n\nYour assistant is ready. You can start chatting now!`,
+              `✅ Your assistant is ready! You can start chatting now. Just use it as your personal assistant.`,
             );
           }
           if (summary.starting.length > 0) {
             parts.push(
-              `⏳ <b>Container(s) starting</b>\n\n${summary.starting.join(", ")}\n\nStill warming up — first launch may take a few minutes. We'll notify you when ready.`,
+              `⏳ Almost there — your assistant is warming up. We'll notify you when it's ready.`,
             );
           }
           if (summary.failed.length > 0) {
