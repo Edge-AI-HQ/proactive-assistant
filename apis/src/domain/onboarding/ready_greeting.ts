@@ -124,8 +124,34 @@ export const buildApiReadyGreetingMessage = (
     return lines.join("\n");
   }
 
-  void joined;
-  return "👋 Hey, I'm online and ready to help!\n\n✨ How can I help you today?";
+  const lines: string[] = ["👋 Hi, I'm HiPIN.", ""];
+  if (input.subscriptionActive) {
+    lines.push("💎 Thanks for staying with PINAI.");
+  } else {
+    lines.push("💎 Welcome back to PINAI.");
+  }
+
+  if (joined && input.daysWithPinai) {
+    lines.push(
+      `📅 You've been with PINAI since ${joined} — ${input.daysWithPinai} ${formatEnglishDayLabel(input.daysWithPinai)}.`,
+    );
+  } else if (input.daysWithPinai) {
+    lines.push(
+      `📅 You've been with PINAI for ${input.daysWithPinai} ${formatEnglishDayLabel(input.daysWithPinai)}.`,
+    );
+  }
+
+  lines.push("");
+  lines.push("Before we start, two quick things:");
+  if (input.askPreferredName) {
+    lines.push("• What should I call you?");
+  } else {
+    lines.push("• If you'd like a different nickname, tell me anytime.");
+  }
+  lines.push("• Do you prefer concise answers or detailed ones?");
+  lines.push("");
+  lines.push("✨ What would you like to work on first?");
+  return lines.join("\n");
 };
 
 export const buildReadyGreetingFallbackMessage = (): string =>

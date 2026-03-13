@@ -30,8 +30,7 @@ let configured = false;
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 const ASSISTANT_READY_FIXED_MESSAGE =
-  `✅ Your assistant is ready! You can start chatting now. Just use it as your personal assistant.\n\n` +
-  `👋 Hey, I'm online and ready to help!\n\n✨ How can I help you today?`;
+  `✅ Your assistant is ready! You can start chatting now. Just use it as your personal assistant.`;
 
 interface AssistantReadyNotificationArgs {
   assistantId: number | null;

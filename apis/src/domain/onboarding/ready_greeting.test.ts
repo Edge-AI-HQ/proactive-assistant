@@ -21,8 +21,10 @@ test("buildApiReadyGreetingMessage renders simplified English greeting", () => {
   });
 
   assert.match(message, /👋/);
-  assert.match(message, /online and ready to help/i);
-  assert.match(message, /✨ How can I help you today\?/i);
+  assert.match(message, /HiPIN/i);
+  assert.match(message, /Thanks for staying with PINAI/i);
+  assert.match(message, /You've been with PINAI since/i);
+  assert.match(message, /✨ What would you like to work on first\?/i);
 });
 
 test("buildApiReadyGreetingMessage renders subscribed Chinese greeting", () => {
@@ -62,8 +64,9 @@ test("pickEarlierIsoDateForTest supports Date-like values", () => {
 
 test("buildReadyGreetingFallbackMessage returns simplified greeting", () => {
   const message = buildReadyGreetingFallbackMessage();
-  assert.match(message, /online and ready to help/i);
-  assert.match(message, /How can I help you today/i);
+  assert.match(message, /HiPIN/i);
+  assert.match(message, /Welcome back to PINAI/i);
+  assert.match(message, /What would you like to work on first/i);
 });
 
 test("resolveMySqlJoinDateForTest uses MySQL accountCreatedAt only", () => {
