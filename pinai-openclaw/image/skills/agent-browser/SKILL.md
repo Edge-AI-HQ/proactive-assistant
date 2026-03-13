@@ -4,6 +4,13 @@ description: Browser automation CLI for AI agents. Use when the user needs to in
 allowed-tools: Bash(npx agent-browser:*), Bash(agent-browser:*)
 ---
 
+## PinAI Runtime Note (Must Follow)
+
+- In this PinAI OpenClaw runtime, `agent-browser` and required Playwright browser engines are preinstalled.
+- Do **not** start by running `agent-browser install` or `npx playwright install`.
+- Start directly with normal workflow (`open` -> `snapshot -i` -> interactions).
+- Only run install commands if commands fail with an explicit missing-browser executable error.
+
 # Browser Automation with agent-browser
 
 ## Core Workflow
