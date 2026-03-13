@@ -15,6 +15,8 @@ import {
   setLogContextTelegramIdentity,
   setLogContextTelegramUserId,
 } from "../common/requestLogContext.js";
+import { handleCommandMenuUpdate } from "./commandMenu.js";
+import { requireApiAuth } from "../common/httpAuth.js";
 
 type WebhookSource = "public" | "private";
 
@@ -47,8 +49,6 @@ type UserState =
   | { phase: "running"; assistantId: number; container: ContainerInfo };
 
 const BLOCKED_TG_METHODS = new Set([
-  "setmycommands",
-  "deletemycommands",
   "setwebhook",
   "deletewebhook",
 ]);
@@ -73,6 +73,10 @@ export const registerTelegramRouterRoutes = (app: Application): void => {
   });
   app.post("/webhook/telegram/private", express.json({ limit: "10mb" }), (req, res) => {
     void handleTelegramWebhook(req, res, "private");
+  });
+
+  app.post("/api/internal/commands", requireApiAuth, express.json({ limit: "1mb" }), (req, res) => {
+    void handleCommandMenuUpdate(req, res);
   });
 
   app.all("/api/telegram/file/*", express.raw({ type: "*/*", limit: "50mb" }), (req, res) => {

@@ -17,6 +17,7 @@ import {
   ensureAssistantContainer,
 } from "../container/index.js";
 import { ensureLiteLLMKeyForAssistant } from "../litellm/index.js";
+import { clearCommandMenuForAssistant } from "../telegram-router/commandMenu.js";
 import { sendTelegramMessage } from "../telegram/notify.js";
 import { createAssistantWithoutContainer } from "../claw-assistant/service.js";
 import { shouldEnsureAssistantRuntime } from "../claw-assistant/runtimeHealth.js";
@@ -466,6 +467,10 @@ export async function syncSubscriptionFromStripe(
             container_id: assistant.container_id,
             container_name: assistant.container_name,
           });
+          clearCommandMenuForAssistant(
+            String(telegram_user_id),
+            assistant.assistant_bot_token,
+          ).catch((e) => console.error("Failed to clear command menu:", e));
           console.log(
             `Stopped container for assistant ${assistant.id} due to inactive subscription`,
           );
@@ -989,6 +994,10 @@ async function applySubscriptionPeriodBudgetsCore(now?: Date): Promise<{
             container_id: assistant.container_id,
             container_name: assistant.container_name,
           });
+          clearCommandMenuForAssistant(
+            String(user.telegram_user_id),
+            assistant.assistant_bot_token,
+          ).catch((e) => console.error("Failed to clear command menu:", e));
           console.log(
             `[payment] Stopped container for assistant ${assistant.id} (ended subscription)`,
           );
