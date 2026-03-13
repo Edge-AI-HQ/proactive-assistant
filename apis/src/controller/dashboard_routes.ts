@@ -51,6 +51,7 @@ import {
 } from "../domain/gateway/gateway_rpc.js";
 import {
   getLiteLLMUserInfo,
+  getLiteLLMVirtualKeyInfo,
   isLiteLLMClientEnabled,
 } from "../domain/litellm/index.js";
 import { relayGatewayWs } from "../domain/gateway/gateway_ws_relay.js";
@@ -448,11 +449,16 @@ const buildDeferredStatePayload = async (telegramUserId: number) => {
     const budgetUsd = Number(user.litellm_budget_usd) || 0;
     let spendUsd = Number(user.litellm_spend_usd) || 0;
 
-    if (budgetUsd > 0 && isLiteLLMClientEnabled() && user.litellm_user_id) {
+    if (budgetUsd > 0 && isLiteLLMClientEnabled()) {
       try {
-        const info = await getLiteLLMUserInfo(user.litellm_user_id);
-        if (info.spendUsd !== null) {
-          spendUsd = info.spendUsd;
+        if (user.litellm_virtual_key) {
+          const keyInfo = await getLiteLLMVirtualKeyInfo(user.litellm_virtual_key);
+          spendUsd = keyInfo.spendUsd ?? spendUsd;
+        } else if (user.litellm_user_id) {
+          const userInfo = await getLiteLLMUserInfo(user.litellm_user_id);
+          if (userInfo.spendUsd !== null) {
+            spendUsd = userInfo.spendUsd;
+          }
         }
       } catch {
         // LiteLLM unavailable — fall back to DB value
