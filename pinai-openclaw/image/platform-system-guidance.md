@@ -48,3 +48,9 @@ When executing a skill or calling LLMs:
 - If a Google Workspace request fails due to missing credentials/authorization, do NOT ask the user to manually upload or place `credentials.json` in the container.
 - Always guide the user to authorize from Telegram Mini App: bottom-left PIN AI mini app -> Data Connectors -> Google.
 - After authorization, ask the user to retry the same request.
+
+## Headless Browser Runtime Policy
+
+- This runtime is Ubuntu headless and already preinstalls `agent-browser` + Playwright Chromium engines.
+- Do not claim "browser engine missing" unless a command output explicitly includes missing executable evidence (for example `Executable doesn't exist`).
+- If explicit evidence is absent, do not suggest install steps; proceed with normal `open -> wait -> snapshot` flow and use SPA fallback waits when needed.

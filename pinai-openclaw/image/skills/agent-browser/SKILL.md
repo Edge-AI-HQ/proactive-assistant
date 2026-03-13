@@ -11,6 +11,23 @@ allowed-tools: Bash(npx agent-browser:*), Bash(agent-browser:*)
 - Start directly with normal workflow (`open` -> `snapshot -i` -> interactions).
 - Only run install commands if commands fail with an explicit missing-browser executable error.
 
+### Missing-Engine Claim Gate (Must Follow)
+
+- Do not claim "browser engine missing" unless command output contains an explicit executable-missing error.
+- Accepted evidence examples:
+  - `Executable doesn't exist`
+  - `Failed to launch browser` with a missing executable path
+- If no explicit error is present, treat runtime as healthy and continue with SPA fallback workflow.
+- Before any install attempt, run this quick check:
+
+```bash
+agent-browser --version \
+  && node -p "require('/usr/local/lib/node_modules/agent-browser/node_modules/playwright-core/package.json').version" \
+  && ls -1 /app/cache/ms-playwright | head
+```
+
+- If the check passes, do not run any install command and do not tell the user to install browser dependencies.
+
 ## Headless UX Rules (Must Follow)
 
 - This environment is Ubuntu + headless browser. The user cannot watch the browser in real time.
