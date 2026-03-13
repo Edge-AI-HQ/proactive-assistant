@@ -508,6 +508,15 @@ async function handleTelegramApiProxy(req: Request, res: Response): Promise<void
       res.status(200).json({ ok: true, result: true, description: "duplicate welcome suppressed by router" });
       return;
     }
+    if (method.toLowerCase() === "sendmessage" && bodyInfo.chatId && isBudgetExceededMessage(bodyInfo.text)) {
+      console.log(
+        `💳 Intercepted budget-exceeded message chat_id=${bodyInfo.chatId} ` +
+          `text="${truncateForLog(bodyInfo.text || "", 120)}"`,
+      );
+      await sendBudgetExhaustedMessage(bodyInfo.chatId);
+      res.status(200).json({ ok: true, result: true, description: "budget exceeded intercepted by router" });
+      return;
+    }
     const userState = bodyInfo.chatId ? await findUserState(bodyInfo.chatId) : null;
     const container = userState?.phase === "running" ? userState.container : null;
     const runtime = container?.container_id ? parseFlyRuntimeRef(container.container_id) : null;
@@ -601,6 +610,42 @@ async function forwardToGuideBot(update: unknown): Promise<boolean> {
   }
   await bot.handleUpdate(update);
   return true;
+}
+
+const BUDGET_EXCEEDED_PATTERNS = [
+  /budget.*exceeded/i,
+  /exceeded.*budget/i,
+  /insufficient.*budget/i,
+];
+
+export function isBudgetExceededMessage(text: string | undefined): boolean {
+  if (!text) return false;
+  return BUDGET_EXCEEDED_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+async function sendBudgetExhaustedMessage(chatId: number): Promise<void> {
+  if (!config.telegram.token?.trim()) return;
+  const miniAppUrl = `${config.publicBaseUrl.replace(/\/+$/, "")}/mini/`;
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${config.telegram.token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: "Your credits have been used up for this billing period.\n\nUpgrade your plan to continue using your assistant.",
+        reply_markup: {
+          inline_keyboard: [[{ text: "Manage Subscription", web_app: { url: miniAppUrl } }]],
+        },
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      console.error(`❌ budget-exhausted sendMessage failed status=${response.status} body=${truncateForLog(body, 300)}`);
+    }
+  } catch (error) {
+    console.error("❌ budget-exhausted sendMessage network error:", error);
+  }
 }
 
 async function sendFallbackMessageBySource(source: WebhookSource, chatId: number, text: string): Promise<void> {
