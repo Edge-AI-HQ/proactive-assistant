@@ -1,6 +1,5 @@
 FROM node:22-slim
 ARG AGENT_BROWSER_VERSION=0.18.0
-ARG PLAYWRIGHT_VERSION=1.57.0
 
 # Install basic dependencies
 RUN apt-get update && apt-get install -y \
@@ -26,7 +25,9 @@ RUN npm config set fetch-retries 5 \
 RUN rm -f /usr/local/bin/gog && rm -rf /usr/local/lib/node_modules/openclaw/skills/gog
 RUN mkdir -p /app/cache/ms-playwright \
     && for attempt in 1 2 3; do \
-        PLAYWRIGHT_BROWSERS_PATH=/app/cache/ms-playwright npx -y playwright@${PLAYWRIGHT_VERSION} install --with-deps chromium && exit 0; \
+        PW_VERSION="$(node -p "require('/usr/local/lib/node_modules/agent-browser/node_modules/playwright-core/package.json').version")" \
+        && PLAYWRIGHT_BROWSERS_PATH=/app/cache/ms-playwright npx -y "playwright@${PW_VERSION}" install --with-deps chromium chromium-headless-shell \
+        && exit 0; \
         echo "playwright install failed on attempt ${attempt}, retrying..." >&2; \
         sleep $((attempt * 10)); \
       done; \
