@@ -18,6 +18,19 @@ interface Connection {
   onClick?: () => void;
 }
 
+export const shouldDisconnectAfterConfirm = ({
+  connected,
+  busy,
+  confirmDisconnect,
+}: {
+  connected: boolean;
+  busy: boolean;
+  confirmDisconnect: () => boolean;
+}): boolean => {
+  if (!connected || busy) return false;
+  return confirmDisconnect();
+};
+
 const DataConnectionsDialog = ({
   open,
   onClose,
@@ -42,6 +55,18 @@ const DataConnectionsDialog = ({
       onClick: () => {
         if (googleBusy) return;
         if (googleConnected) {
+          if (
+            !shouldDisconnectAfterConfirm({
+              connected: true,
+              busy: googleBusy,
+              confirmDisconnect: () =>
+                window.confirm(
+                  "Disconnect Google? Gmail, Calendar, and Drive access will be removed.",
+                ),
+            })
+          ) {
+            return;
+          }
           onDisconnectGoogle();
         } else {
           onConnectGoogle();
