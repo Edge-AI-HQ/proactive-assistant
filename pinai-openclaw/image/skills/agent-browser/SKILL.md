@@ -20,6 +20,30 @@ allowed-tools: Bash(npx agent-browser:*), Bash(agent-browser:*)
 - After sending the screenshot, ask the user to complete the step, then continue automation.
 - Do not stall in a hidden login page without giving the user visible artifacts.
 
+## SPA/Heavy-JS Stability Rules (Must Follow)
+
+- For sites like `lu.ma` (SPA + delayed hydration), do not rely on one-shot `networkidle`.
+- Use a staged load strategy: open -> short fixed wait -> `domcontentloaded` wait -> interactive snapshot.
+- If no actionable elements appear, perform one controlled retry with longer wait, then collect screenshot + snapshot for fallback.
+
+Recommended command template:
+
+```bash
+agent-browser open https://lu.ma \
+  && agent-browser wait 2500 \
+  && agent-browser wait --load domcontentloaded \
+  && agent-browser wait 2500 \
+  && agent-browser snapshot -i -C
+```
+
+One retry template:
+
+```bash
+agent-browser wait 4000 \
+  && agent-browser snapshot -i -C \
+  && agent-browser screenshot --full /tmp/agent-browser-spa-retry.png
+```
+
 # Browser Automation with agent-browser
 
 ## Core Workflow
