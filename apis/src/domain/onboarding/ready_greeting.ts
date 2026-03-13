@@ -1,10 +1,12 @@
-import { getUserByTelegramId } from "../common/db/userRepository.js";
 import {
   readAssistantRuntimeMetadata,
   setAssistantRuntimeMetadataKey,
   setAssistantRuntimeMetadataKeyIfAbsent,
 } from "../common/db/runtimeRepository.js";
-import { resolveExternalProfileForTelegramUser } from "./profile_bootstrap.js";
+import {
+  resolveExternalProfileForTelegramUser,
+  type ProfileCandidate,
+} from "./profile_bootstrap.js";
 import { hasActiveSubscriptionForService } from "../payment/subscriptionGuard.js";
 import { sendTelegramMessage } from "../telegram/notify.js";
 
@@ -78,6 +80,17 @@ const pickEarlierIsoDate = (
   return firstMs <= secondMs ? first : second;
 };
 
+const resolveMySqlJoinDate = (
+  externalProfile: ProfileCandidate | null,
+): string | null => {
+  const joinDate = normalizeDateLike(externalProfile?.accountCreatedAt ?? null);
+  return joinDate || null;
+};
+
+const shouldSendApiReadyGreeting = (
+  input: Pick<ReadyGreetingRenderInput, "joinDate" | "daysWithPinai">,
+): boolean => Boolean(input.joinDate) && typeof input.daysWithPinai === "number";
+
 export const buildApiReadyGreetingMessage = (
   input: ReadyGreetingRenderInput,
 ): string => {
@@ -125,17 +138,14 @@ export const buildReadyGreetingFallbackMessage = (): string =>
   });
 
 const resolveGreetingContext = async (assistantId: number, telegramUserId: number) => {
-  const [user, runtimeMetadata, subscriptionActive, externalProfile] = await Promise.all([
-    getUserByTelegramId(telegramUserId),
+  const [runtimeMetadata, subscriptionActive, externalProfile] = await Promise.all([
     readAssistantRuntimeMetadata(assistantId).catch(() => ({})),
     hasActiveSubscriptionForService(String(telegramUserId)).catch(() => false),
     resolveExternalProfileForTelegramUser(telegramUserId).catch(() => null),
   ]);
 
-  const joinDate = pickEarlierIsoDate(
-    user?.created_at ?? null,
-    externalProfile?.accountCreatedAt ?? null,
-  );
+  const joinDate = resolveMySqlJoinDate(externalProfile);
+  const daysWithPinai = computeDaysWithPinai(joinDate);
   const metadataRecord = runtimeMetadata as Record<string, unknown>;
   const languageCode =
     typeof metadataRecord["telegram_language_code"] === "string"
@@ -146,7 +156,7 @@ const resolveGreetingContext = async (assistantId: number, telegramUserId: numbe
     locale: resolveLocale(languageCode),
     subscriptionActive,
     joinDate,
-    daysWithPinai: computeDaysWithPinai(joinDate),
+    daysWithPinai,
     askPreferredName: true,
   } satisfies ReadyGreetingRenderInput;
 };
@@ -164,9 +174,14 @@ export const sendApiReadyGreetingForAssistant = async (input: {
     return true;
   }
 
-  const message = buildApiReadyGreetingMessage(
-    await resolveGreetingContext(input.assistantId, input.telegramUserId),
+  const greetingContext = await resolveGreetingContext(
+    input.assistantId,
+    input.telegramUserId,
   );
+  if (!shouldSendApiReadyGreeting(greetingContext)) {
+    return true;
+  }
+  const message = buildApiReadyGreetingMessage(greetingContext);
 
   try {
     const sent = await sendTelegramMessage(input.telegramUserId, message);
@@ -205,3 +220,11 @@ export const setAssistantReadyGreetingLanguageCode = async (
 export const resolveReadyGreetingLocaleForTest = resolveLocale;
 export const computeDaysWithPinaiForTest = computeDaysWithPinai;
 export const pickEarlierIsoDateForTest = pickEarlierIsoDate;
+export const resolveMySqlJoinDateForTest = resolveMySqlJoinDate;
+export const shouldSendApiReadyGreetingForTest = (
+  input: { joinDate: string | null },
+): boolean =>
+  shouldSendApiReadyGreeting({
+    joinDate: input.joinDate,
+    daysWithPinai: computeDaysWithPinai(input.joinDate),
+  });

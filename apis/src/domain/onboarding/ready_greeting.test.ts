@@ -7,6 +7,8 @@ import {
   computeDaysWithPinaiForTest,
   pickEarlierIsoDateForTest,
   resolveReadyGreetingLocaleForTest,
+  resolveMySqlJoinDateForTest,
+  shouldSendApiReadyGreetingForTest,
 } from "./ready_greeting.js";
 
 test("buildApiReadyGreetingMessage renders simplified English greeting", () => {
@@ -62,4 +64,38 @@ test("buildReadyGreetingFallbackMessage returns simplified greeting", () => {
   const message = buildReadyGreetingFallbackMessage();
   assert.match(message, /online and ready to help/i);
   assert.match(message, /How can I help you today/i);
+});
+
+test("resolveMySqlJoinDateForTest uses MySQL accountCreatedAt only", () => {
+  assert.equal(resolveMySqlJoinDateForTest(null), null);
+  assert.equal(
+    resolveMySqlJoinDateForTest({
+      source: "connector",
+      externalUserId: 11,
+      profileText: "x",
+      profileUpdatedAt: null,
+      accountCreatedAt: "2024-01-01T00:00:00.000Z",
+    }),
+    "2024-01-01T00:00:00.000Z",
+  );
+  assert.equal(
+    resolveMySqlJoinDateForTest({
+      source: "privy",
+      externalUserId: 22,
+      profileText: "x",
+      profileUpdatedAt: null,
+      accountCreatedAt: null,
+    }),
+    null,
+  );
+});
+
+test("shouldSendApiReadyGreetingForTest requires MySQL join date", () => {
+  assert.equal(shouldSendApiReadyGreetingForTest({ joinDate: null }), false);
+  assert.equal(
+    shouldSendApiReadyGreetingForTest({
+      joinDate: "2024-01-01T00:00:00.000Z",
+    }),
+    true,
+  );
 });

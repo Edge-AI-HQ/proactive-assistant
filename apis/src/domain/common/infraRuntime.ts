@@ -29,6 +29,24 @@ import {
 let configured = false;
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
+const ASSISTANT_READY_FIXED_MESSAGE =
+  `✅ Your assistant is ready! You can start chatting now. Just use it as your personal assistant.\n\n` +
+  `👋 Hey, I'm online and ready to help!\n\n✨ How can I help you today?`;
+
+interface AssistantReadyNotificationArgs {
+  assistantId: number | null;
+  telegramUserId: number;
+  claimReadyNotifyLock: (
+    assistantId: number,
+    key: string,
+    value: string,
+  ) => Promise<boolean>;
+  sendFixedReadyMessage: (telegramUserId: number, message: string) => Promise<void>;
+  sendHiPinReadyGreeting: (input: {
+    assistantId: number;
+    telegramUserId: number;
+  }) => Promise<boolean>;
+}
 
 const litellmRuntimeConfig: LiteLLMRuntimeConfig = {
   litellm: config.litellm
@@ -66,43 +84,69 @@ const containerStateStore: ContainerStateStore = {
   readAssistantRuntimeMetadata
 };
 
+const executeAssistantReadyNotifications = async (
+  args: AssistantReadyNotificationArgs,
+): Promise<void> => {
+  if (!args.assistantId) {
+    await args.sendFixedReadyMessage(
+      args.telegramUserId,
+      ASSISTANT_READY_FIXED_MESSAGE,
+    ).catch((e) =>
+      console.warn(`[container] notify failed for user ${args.telegramUserId}`, e),
+    );
+    return;
+  }
+
+  const readyNotifyClaimed = await args.claimReadyNotifyLock(
+    args.assistantId,
+    "onboarding_ready_notified_at",
+    new Date().toISOString(),
+  ).catch((error) => {
+    console.warn(
+      `[container] failed to claim ready notification lock for assistant ${args.assistantId}`,
+      error,
+    );
+    return false;
+  });
+  if (!readyNotifyClaimed) return;
+
+  await args.sendFixedReadyMessage(
+    args.telegramUserId,
+    ASSISTANT_READY_FIXED_MESSAGE,
+  ).catch((e) =>
+    console.warn(`[container] notify failed for user ${args.telegramUserId}`, e),
+  );
+
+  await args.sendHiPinReadyGreeting({
+    assistantId: args.assistantId,
+    telegramUserId: args.telegramUserId,
+  }).catch((e) =>
+    console.warn(
+      `[container] HiPIN ready greeting failed for user ${args.telegramUserId}`,
+      e,
+    ),
+  );
+};
+
 const containerNotifier: ContainerNotifier = {
   async notifyReady(
     telegramUserId: number,
     options?: { assistantId?: number },
   ): Promise<void> {
-    if (options?.assistantId) {
-      const readyNotifyClaimed = await setAssistantRuntimeMetadataKeyIfAbsent(
-        options.assistantId,
-        "onboarding_ready_notified_at",
-        new Date().toISOString(),
-      ).catch((error) => {
-        console.warn(
-          `[container] failed to claim ready notification lock for assistant ${options.assistantId}`,
-          error,
-        );
-        return false;
-      });
-
-      if (readyNotifyClaimed) {
-        await sendTelegramMessage(
-          telegramUserId,
-          `✅ Your assistant is ready! You can start chatting now. Just use it as your personal assistant.\n\n👋 Hey, I'm online and ready to help!\n\n✨ How can I help you today?`,
-        ).catch((e) =>
-          console.warn(`[container] notify failed for user ${telegramUserId}`, e),
-        );
-      }
-      return;
-    }
-
-    await sendTelegramMessage(
+    await executeAssistantReadyNotifications({
+      assistantId: options?.assistantId ?? null,
       telegramUserId,
-      `✅ Your assistant is ready! You can start chatting now. Just use it as your personal assistant.\n\n👋 Hey, I'm online and ready to help!\n\n✨ How can I help you today?`,
-    ).catch((e) =>
-      console.warn(`[container] notify failed for user ${telegramUserId}`, e),
-    );
+      claimReadyNotifyLock: setAssistantRuntimeMetadataKeyIfAbsent,
+      sendFixedReadyMessage: async (targetTelegramUserId, message) => {
+        await sendTelegramMessage(targetTelegramUserId, message);
+      },
+      sendHiPinReadyGreeting: sendApiReadyGreetingForAssistant,
+    });
   },
 };
+
+export const executeAssistantReadyNotificationsForTest =
+  executeAssistantReadyNotifications;
 
 export const ensureInfraRuntimeConfigured = (): void => {
   if (configured) return;
