@@ -43,15 +43,13 @@ COPY pinai-openclaw/plugins/telegram-api-proxy/  /opt/pinai/plugins/telegram-api
 COPY pinai-openclaw/plugins/litellm-vision-adapter/ /opt/pinai/plugins/litellm-vision-adapter/
 COPY pinai-openclaw/plugins/platform-hooks/      /opt/pinai/plugins/platform-hooks/
 
-# Copy custom skills: first remove any same-named bundled skills so ours
-# completely replace them (no leftover files), then copy in.
-COPY pinai-openclaw/image/skills/ /tmp/pinai-skills/
-RUN for skill in /tmp/pinai-skills/*/; do \
-      name=$(basename "$skill"); \
-      rm -rf "/usr/local/lib/node_modules/openclaw/skills/$name"; \
-    done \
-    && cp -r /tmp/pinai-skills/. /usr/local/lib/node_modules/openclaw/skills/ \
-    && rm -rf /tmp/pinai-skills
+# Copy custom skills to a separate directory; loaded via skills.load.extraDirs
+# in openclaw.json — no longer bulk-replaces the built-in skills directory.
+# Only remove bundled skills whose names overlap with ours (extraDirs has
+# lowest priority, so bundled versions would shadow our custom ones).
+COPY pinai-openclaw/image/skills/ /opt/pinai/skills/
+RUN rm -rf /usr/local/lib/node_modules/openclaw/skills/openai-image-gen \
+           /usr/local/lib/node_modules/openclaw/skills/openai-whisper-api
 
 # ── Warm up jiti + Node compile caches at build time ──
 # Launch gateway with a near-production config so V8 compiles bytecode for
