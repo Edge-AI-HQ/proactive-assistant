@@ -97,7 +97,7 @@ export const buildApiReadyGreetingMessage = (
   const joined = formatJoinDate(input.joinDate, input.locale);
 
   if (input.locale === "zh") {
-    const lines: string[] = ["👋 我上线啦。", ""];
+    const lines: string[] = ["👋 我是 PIN Claw。", ""];
 
     if (input.subscriptionActive) {
       lines.push("💎 你好，感谢你一直陪伴 PINAI。");
@@ -120,11 +120,17 @@ export const buildApiReadyGreetingMessage = (
     }
     lines.push("• 你希望我回答时更简洁，还是更详细？");
     lines.push("");
+    lines.push("我可以先帮你做这些：");
+    lines.push("• 📬 整理 Gmail：汇总未读、挑重点、起草回复。");
+    lines.push("• 📅 安排 Calendar：找空档、排优先级、生成今日计划。");
+    lines.push("• 🗂 处理 Drive 文件：按主题归档、提取要点、给出下一步。");
+    lines.push("• 🌐 代你跑网页任务：查资料、比方案、填表单。");
+    lines.push("");
     lines.push("✨ 今天想先处理什么？");
     return lines.join("\n");
   }
 
-  const lines: string[] = ["👋 Hi, I'm HiPIN.", ""];
+  const lines: string[] = ["👋 Hi, I'm PIN Claw.", ""];
   if (input.subscriptionActive) {
     lines.push("💎 Thanks for staying with PINAI.");
   } else {
@@ -149,6 +155,12 @@ export const buildApiReadyGreetingMessage = (
     lines.push("• If you'd like a different nickname, tell me anytime.");
   }
   lines.push("• Do you prefer concise answers or detailed ones?");
+  lines.push("");
+  lines.push("I can start with any of these use cases:");
+  lines.push("• 📬 Gmail triage: summarize unread threads, prioritize, and draft replies.");
+  lines.push("• 📅 Calendar planning: find open slots and build a practical day plan.");
+  lines.push("• 🗂 Drive assistant: extract key points from files and organize next actions.");
+  lines.push("• 🌐 Agent Browser tasks: research websites, compare options, and fill forms.");
   lines.push("");
   lines.push("✨ What would you like to work on first?");
   return lines.join("\n");

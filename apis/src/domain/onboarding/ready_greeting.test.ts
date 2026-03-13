@@ -21,9 +21,11 @@ test("buildApiReadyGreetingMessage renders simplified English greeting", () => {
   });
 
   assert.match(message, /👋/);
-  assert.match(message, /HiPIN/i);
+  assert.match(message, /PIN Claw/i);
   assert.match(message, /Thanks for staying with PINAI/i);
   assert.match(message, /You've been with PINAI since/i);
+  assert.match(message, /Gmail triage/i);
+  assert.match(message, /Agent Browser tasks/i);
   assert.match(message, /✨ What would you like to work on first\?/i);
 });
 
@@ -38,6 +40,8 @@ test("buildApiReadyGreetingMessage renders subscribed Chinese greeting", () => {
 
   assert.match(message, /👋/);
   assert.match(message, /感谢你一直陪伴 PINAI/);
+  assert.match(message, /整理 Gmail/);
+  assert.match(message, /代你跑网页任务/);
   assert.match(message, /✨ 今天想先处理什么/);
 });
 
@@ -64,8 +68,9 @@ test("pickEarlierIsoDateForTest supports Date-like values", () => {
 
 test("buildReadyGreetingFallbackMessage returns simplified greeting", () => {
   const message = buildReadyGreetingFallbackMessage();
-  assert.match(message, /HiPIN/i);
+  assert.match(message, /PIN Claw/i);
   assert.match(message, /Welcome back to PINAI/i);
+  assert.match(message, /Gmail triage/i);
   assert.match(message, /What would you like to work on first/i);
 });
 
