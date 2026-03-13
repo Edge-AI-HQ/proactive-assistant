@@ -177,9 +177,21 @@ const resolveGreetingContext = async (assistantId: number, telegramUserId: numbe
     typeof metadataRecord["telegram_language_code"] === "string"
       ? String(metadataRecord["telegram_language_code"])
       : null;
+  const locale = resolveLocale(languageCode);
+  console.info("[onboarding] HiPIN greeting context resolved", {
+    assistantId,
+    telegramUserId,
+    profileMatched: Boolean(externalProfile),
+    profileSource: externalProfile?.source ?? null,
+    externalUserId: externalProfile?.externalUserId ?? null,
+    mysqlAccountCreatedAt: externalProfile?.accountCreatedAt ?? null,
+    joinDate,
+    daysWithPinai,
+    locale,
+  });
 
   return {
-    locale: resolveLocale(languageCode),
+    locale,
     subscriptionActive,
     joinDate,
     daysWithPinai,
@@ -197,6 +209,10 @@ export const sendApiReadyGreetingForAssistant = async (input: {
     new Date().toISOString(),
   );
   if (!claimed) {
+    console.info("[onboarding] HiPIN greeting skipped: lock already claimed", {
+      assistantId: input.assistantId,
+      telegramUserId: input.telegramUserId,
+    });
     return true;
   }
 
@@ -205,6 +221,12 @@ export const sendApiReadyGreetingForAssistant = async (input: {
     input.telegramUserId,
   );
   if (!shouldSendApiReadyGreeting(greetingContext)) {
+    console.info("[onboarding] HiPIN greeting skipped: missing MySQL join date", {
+      assistantId: input.assistantId,
+      telegramUserId: input.telegramUserId,
+      joinDate: greetingContext.joinDate,
+      daysWithPinai: greetingContext.daysWithPinai,
+    });
     return true;
   }
   const message = buildApiReadyGreetingMessage(greetingContext);
@@ -214,6 +236,13 @@ export const sendApiReadyGreetingForAssistant = async (input: {
     if (!sent.ok) {
       throw new Error(sent.error || "sendTelegramMessage returned ok=false");
     }
+    console.info("[onboarding] HiPIN greeting sent", {
+      assistantId: input.assistantId,
+      telegramUserId: input.telegramUserId,
+      joinDate: greetingContext.joinDate,
+      daysWithPinai: greetingContext.daysWithPinai,
+      locale: greetingContext.locale,
+    });
     return true;
   } catch (error) {
     await setAssistantRuntimeMetadataKey(

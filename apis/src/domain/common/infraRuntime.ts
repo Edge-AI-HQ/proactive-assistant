@@ -116,7 +116,7 @@ const executeAssistantReadyNotifications = async (
     console.warn(`[container] notify failed for user ${args.telegramUserId}`, e),
   );
 
-  await args.sendHiPinReadyGreeting({
+  const hiPinSent = await args.sendHiPinReadyGreeting({
     assistantId: args.assistantId,
     telegramUserId: args.telegramUserId,
   }).catch((e) =>
@@ -125,6 +125,11 @@ const executeAssistantReadyNotifications = async (
       e,
     ),
   );
+  console.info("[container] HiPIN ready greeting dispatch finished", {
+    assistantId: args.assistantId,
+    telegramUserId: args.telegramUserId,
+    hiPinSent: Boolean(hiPinSent),
+  });
 };
 
 const containerNotifier: ContainerNotifier = {
