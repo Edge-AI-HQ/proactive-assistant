@@ -356,6 +356,7 @@ export const flyContainerRuntime: ContainerRuntime = {
 
     return shouldRecreateAssistantMachine(
       machine,
+      params.assistantBotId,
       params.gatewayToken,
       params.ownerTelegramUserId,
       params.assistantBotToken,
