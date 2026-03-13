@@ -4,6 +4,7 @@ import ManageAgentDialog from "./ManageAgentDialog";
 import DataConnectionsDialog from "./DataConnectionsDialog";
 import SkillsDialog from "./SkillsDialog";
 import ModelPickerDialog, { formatModelName } from "./ModelPickerDialog";
+import { decideDataConnectorsAction } from "./agentCardActions";
 
 type ModelItem = {
   id: string;
@@ -93,7 +94,6 @@ const getStatusDisplay = (
       };
   }
 };
-
 
 const AgentCard = ({
   username,
@@ -303,8 +303,20 @@ const AgentCard = ({
               Chat with PIN Claw
             </button>
             <button
-              onClick={() => setShowData(true)}
-              className="w-full flex items-center justify-center gap-2 rounded-2xl py-3 text-sm font-medium text-foreground btn-press glass-stat-box border-foreground/30"
+              onClick={() => {
+                const action = decideDataConnectorsAction(isRuntimeRunning);
+                if (action === "blocked") {
+                  onBlockedAction("data");
+                  return;
+                }
+                setShowData(true);
+              }}
+              aria-disabled={!isRuntimeRunning}
+              className={`w-full flex items-center justify-center gap-2 rounded-2xl py-3 text-sm font-medium btn-press glass-stat-box border-foreground/30 ${
+                isRuntimeRunning
+                  ? "text-foreground"
+                  : "text-foreground/70 cursor-not-allowed opacity-60"
+              }`}
             >
               <svg
                 className="w-4 h-4"
