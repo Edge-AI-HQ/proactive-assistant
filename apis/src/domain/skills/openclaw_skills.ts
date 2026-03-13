@@ -72,13 +72,13 @@ export const DEFAULT_SKILLS_CATALOG: SkillCatalogItem[] = [
     description: "Advanced multimodal agent enhancement skill.",
   },
   {
-    key: "openai-whisper-api",
-    name: "OpenAI Whisper API",
+    key: "openai-whisper-api-by-pinai",
+    name: "OpenAI Whisper API (PinAI)",
     description: "Speech-to-text transcription via OpenAI Whisper API.",
   },
   {
-    key: "openai-image-gen",
-    name: "OpenAI Image Gen",
+    key: "openai-image-gen-by-pinai",
+    name: "OpenAI Image Gen (PinAI)",
     description: "Image generation via OpenAI DALL-E / image API.",
   },
 ];
