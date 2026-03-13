@@ -9,6 +9,7 @@ import {
   detectPromptLanguage,
   hasGoogleWorkspaceIntentForTest,
   hasAnyScopeForTest,
+  isBudgetExceededMessage,
   shouldPromptGoogleOAuthForTest,
   resetTelegramWelcomeDedupeForTest,
   shouldSuppressGoogleOAuthPromptForTest,
@@ -186,4 +187,24 @@ test("shouldSuppressGoogleOAuthPromptForTest allows resend after dedupe window",
   );
 
   assert.equal(later, false);
+});
+
+test("isBudgetExceededMessage matches LiteLLM budget exceeded error", () => {
+  assert.equal(
+    isBudgetExceededMessage("400 Budget has been exceeded! Current cost: 32.186020299999996, Max budget: 32.0"),
+    true,
+  );
+});
+
+test("isBudgetExceededMessage matches variations", () => {
+  assert.equal(isBudgetExceededMessage("Budget has been exceeded"), true);
+  assert.equal(isBudgetExceededMessage("Error: exceeded budget limit"), true);
+  assert.equal(isBudgetExceededMessage("insufficient budget remaining"), true);
+});
+
+test("isBudgetExceededMessage does not match normal messages", () => {
+  assert.equal(isBudgetExceededMessage("Here are your latest 10 emails"), false);
+  assert.equal(isBudgetExceededMessage("What is your budget for this project?"), false);
+  assert.equal(isBudgetExceededMessage(undefined), false);
+  assert.equal(isBudgetExceededMessage(""), false);
 });
