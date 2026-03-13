@@ -410,7 +410,7 @@ const waitForAssistantReadyAfterGoogleSync = async (
   const assistants = await listAssistantsByOwnerId(telegramUserId);
   const assistant = assistants[0];
   if (!assistant) return;
-  await ensureGatewayAssistantReady(assistant);
+  await ensureGatewayAssistantReady(assistant, { allowRecreate: false });
 };
 
 const persistGoogleCredentialRuntimeMetadata = async (

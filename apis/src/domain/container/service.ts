@@ -40,8 +40,13 @@ export const prepareContainerRuntime = async (): Promise<void> => {
 export const ensureAssistantContainer = async (
   assistant: AssistantContainerRuntimeRef,
   gatewayToken: string,
+  options?: { allowRecreate?: boolean },
 ): Promise<{ containerId: string; ready: boolean }> => {
-  return getOrchestrator().ensureAssistantContainer(assistant, gatewayToken);
+  return getOrchestrator().ensureAssistantContainer(
+    assistant,
+    gatewayToken,
+    options,
+  );
 };
 
 export const destroyAssistantContainer = async (
