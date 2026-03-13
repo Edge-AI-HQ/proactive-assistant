@@ -130,7 +130,7 @@ const AgentCard = ({
   const statusDisplay = getStatusDisplay(status);
   const modelsLoaded = models != null;
   const modelName = formatModelName(models?.current, models?.available, modelsLoaded);
-  const creditsDisplay = credits ? Math.floor(credits.remaining).toLocaleString() : "—";
+  const creditsDisplay = credits ? Math.floor(credits.remaining).toLocaleString() : "Loading...";
   const isRuntimeRunning = status === "running";
 
   const handleChat = () => {
@@ -259,7 +259,7 @@ const AgentCard = ({
               <p className="text-[9px] uppercase tracking-widest text-muted-foreground mb-1">
                 Credits
               </p>
-              <p className="text-sm font-bold text-foreground whitespace-nowrap">
+              <p className={`font-bold text-foreground whitespace-nowrap ${credits ? "text-sm" : "text-[10px] text-muted-foreground animate-pulse"}`}>
                 {creditsDisplay}
               </p>
             </div>
