@@ -342,6 +342,51 @@ const requireMiniSession = async (
   next();
 };
 
+const resolveCredits = async (
+  user: { litellm_budget_usd: number | null; litellm_spend_usd: number; litellm_virtual_key: string | null; litellm_user_id: string | null } | undefined,
+  active: boolean,
+  planId: string | null,
+): Promise<{ remaining: number; total: number } | null> => {
+  if (!user || !active) return null;
+
+  let budgetUsd = Number(user.litellm_budget_usd) || 0;
+  let spendUsd = Number(user.litellm_spend_usd) || 0;
+
+  if (isLiteLLMClientEnabled()) {
+    try {
+      if (user.litellm_virtual_key) {
+        const keyInfo = await getLiteLLMVirtualKeyInfo(user.litellm_virtual_key);
+        spendUsd = keyInfo.spendUsd ?? spendUsd;
+        if (keyInfo.maxBudgetUsd != null && keyInfo.maxBudgetUsd > 0) {
+          budgetUsd = keyInfo.maxBudgetUsd;
+        }
+      } else if (user.litellm_user_id) {
+        const userInfo = await getLiteLLMUserInfo(user.litellm_user_id);
+        if (userInfo.spendUsd !== null) spendUsd = userInfo.spendUsd;
+        if (userInfo.maxBudgetUsd != null && userInfo.maxBudgetUsd > 0) {
+          budgetUsd = userInfo.maxBudgetUsd;
+        }
+      }
+    } catch {
+      // LiteLLM unavailable — use DB values
+    }
+  }
+
+  if (budgetUsd > 0) {
+    return {
+      remaining: Math.floor(Math.max(0, (budgetUsd - spendUsd) * 100)),
+      total: Math.floor(budgetUsd * 100),
+    };
+  }
+
+  if (planId) {
+    const planCredits = await getPlanMonthlyCredits(planId);
+    if (planCredits > 0) return { remaining: planCredits, total: planCredits };
+  }
+
+  return null;
+};
+
 /**
  * Quick payload — only the data needed to render the main UI immediately.
  * Skips skills, google, and plans (deferred to a separate request).
@@ -360,23 +405,7 @@ const buildQuickStatePayload = async (
   const subscription = subscriptionResult.subscription;
   const active = isSubscriptionActiveForService(subscription);
 
-  let credits: { remaining: number; total: number } | null = null;
-  if (user && active) {
-    const budgetUsd = Number(user.litellm_budget_usd) || 0;
-    const spendUsd = Number(user.litellm_spend_usd) || 0;
-    if (budgetUsd > 0) {
-      const remainingCredits = Math.max(0, (budgetUsd - spendUsd) * 100);
-      credits = {
-        remaining: Math.floor(remainingCredits),
-        total: Math.floor(budgetUsd * 100),
-      };
-    } else if (subscription?.plan_id) {
-      const planCredits = await getPlanMonthlyCredits(subscription.plan_id);
-      if (planCredits > 0) {
-        credits = { remaining: planCredits, total: planCredits };
-      }
-    }
-  }
+  const credits = await resolveCredits(user, active, subscription?.plan_id ?? null);
 
   return {
     user: {
@@ -443,44 +472,7 @@ const buildDeferredStatePayload = async (telegramUserId: number) => {
 
   const subscription = subscriptionResult.subscription;
   const active = isSubscriptionActiveForService(subscription);
-
-  let credits: { remaining: number; total: number } | null = null;
-  if (user && active) {
-    let budgetUsd = Number(user.litellm_budget_usd) || 0;
-    let spendUsd = Number(user.litellm_spend_usd) || 0;
-
-    if (isLiteLLMClientEnabled()) {
-      try {
-        if (user.litellm_virtual_key) {
-          const keyInfo = await getLiteLLMVirtualKeyInfo(user.litellm_virtual_key);
-          spendUsd = keyInfo.spendUsd ?? spendUsd;
-          if (keyInfo.maxBudgetUsd != null && keyInfo.maxBudgetUsd > 0) {
-            budgetUsd = keyInfo.maxBudgetUsd;
-          }
-        } else if (user.litellm_user_id) {
-          const userInfo = await getLiteLLMUserInfo(user.litellm_user_id);
-          if (userInfo.spendUsd !== null) spendUsd = userInfo.spendUsd;
-          if (userInfo.maxBudgetUsd != null && userInfo.maxBudgetUsd > 0) {
-            budgetUsd = userInfo.maxBudgetUsd;
-          }
-        }
-      } catch {
-        // LiteLLM unavailable — fall back to DB value
-      }
-    }
-
-    if (budgetUsd > 0) {
-      credits = {
-        remaining: Math.floor(Math.max(0, (budgetUsd - spendUsd) * 100)),
-        total: Math.floor(budgetUsd * 100),
-      };
-    } else if (subscription?.plan_id) {
-      const planCredits = await getPlanMonthlyCredits(subscription.plan_id);
-      if (planCredits > 0) {
-        credits = { remaining: planCredits, total: planCredits };
-      }
-    }
-  }
+  const credits = await resolveCredits(user, active, subscription?.plan_id ?? null);
 
   return {
     plans: plansResult.plans,
