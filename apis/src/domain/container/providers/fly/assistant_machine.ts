@@ -331,6 +331,7 @@ export const getLatestAppDeployTimestampMs = async (): Promise<
 
 export const shouldRecreateAssistantMachine = (
   machine: FlyMachine,
+  desiredAssistantBotId: number,
   desiredGatewayToken: string,
   desiredOwnerTelegramUserId: string | null,
   desiredAssistantBotToken?: string | null,
@@ -362,7 +363,7 @@ export const shouldRecreateAssistantMachine = (
 
   const desiredToken = normalizeAssistantToken(desiredAssistantBotToken);
   const desiredConfigHash = buildAssistantOpenclawConfigPayload(
-    Number(machine.name?.replace(/^assistant-/, "") || 0),
+    desiredAssistantBotId,
     desiredGatewayToken,
     desiredOwnerTelegramUserId,
     desiredToken,

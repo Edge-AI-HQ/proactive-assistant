@@ -1,10 +1,12 @@
-import { getUserByTelegramId } from "../common/db/userRepository.js";
 import {
   readAssistantRuntimeMetadata,
   setAssistantRuntimeMetadataKey,
   setAssistantRuntimeMetadataKeyIfAbsent,
 } from "../common/db/runtimeRepository.js";
-import { resolveExternalProfileForTelegramUser } from "./profile_bootstrap.js";
+import {
+  resolveExternalProfileForTelegramUser,
+  type ProfileCandidate,
+} from "./profile_bootstrap.js";
 import { hasActiveSubscriptionForService } from "../payment/subscriptionGuard.js";
 import { sendTelegramMessage } from "../telegram/notify.js";
 
@@ -78,13 +80,24 @@ const pickEarlierIsoDate = (
   return firstMs <= secondMs ? first : second;
 };
 
+const resolveMySqlJoinDate = (
+  externalProfile: ProfileCandidate | null,
+): string | null => {
+  const joinDate = normalizeDateLike(externalProfile?.accountCreatedAt ?? null);
+  return joinDate || null;
+};
+
+const shouldSendApiReadyGreeting = (
+  input: Pick<ReadyGreetingRenderInput, "joinDate" | "daysWithPinai">,
+): boolean => Boolean(input.joinDate) && typeof input.daysWithPinai === "number";
+
 export const buildApiReadyGreetingMessage = (
   input: ReadyGreetingRenderInput,
 ): string => {
   const joined = formatJoinDate(input.joinDate, input.locale);
 
   if (input.locale === "zh") {
-    const lines: string[] = ["👋 我上线啦。", ""];
+    const lines: string[] = ["👋 我是 PIN Claw。", ""];
 
     if (input.subscriptionActive) {
       lines.push("💎 你好，感谢你一直陪伴 PINAI。");
@@ -106,13 +119,37 @@ export const buildApiReadyGreetingMessage = (
       lines.push("• 如果你希望我换个称呼，直接告诉我。");
     }
     lines.push("• 你希望我回答时更简洁，还是更详细？");
-    lines.push("");
     lines.push("✨ 今天想先处理什么？");
     return lines.join("\n");
   }
 
-  void joined;
-  return "👋 Hey, I'm online and ready to help!\n\n✨ How can I help you today?";
+  const lines: string[] = ["👋 Hi, I'm PIN Claw.", ""];
+  if (input.subscriptionActive) {
+    lines.push("💎 Thanks for staying with PINAI.");
+  } else {
+    lines.push("💎 Welcome back to PINAI.");
+  }
+
+  if (joined && input.daysWithPinai) {
+    lines.push(
+      `📅 You've been with PINAI since ${joined} — ${input.daysWithPinai} ${formatEnglishDayLabel(input.daysWithPinai)}.`,
+    );
+  } else if (input.daysWithPinai) {
+    lines.push(
+      `📅 You've been with PINAI for ${input.daysWithPinai} ${formatEnglishDayLabel(input.daysWithPinai)}.`,
+    );
+  }
+
+  lines.push("");
+  lines.push("Before we start, two quick things:");
+  if (input.askPreferredName) {
+    lines.push("• What should I call you?");
+  } else {
+    lines.push("• If you'd like a different nickname, tell me anytime.");
+  }
+  lines.push("• Do you prefer concise answers or detailed ones?");
+  lines.push("✨ What would you like to work on first?");
+  return lines.join("\n");
 };
 
 export const buildReadyGreetingFallbackMessage = (): string =>
@@ -125,28 +162,37 @@ export const buildReadyGreetingFallbackMessage = (): string =>
   });
 
 const resolveGreetingContext = async (assistantId: number, telegramUserId: number) => {
-  const [user, runtimeMetadata, subscriptionActive, externalProfile] = await Promise.all([
-    getUserByTelegramId(telegramUserId),
+  const [runtimeMetadata, subscriptionActive, externalProfile] = await Promise.all([
     readAssistantRuntimeMetadata(assistantId).catch(() => ({})),
     hasActiveSubscriptionForService(String(telegramUserId)).catch(() => false),
     resolveExternalProfileForTelegramUser(telegramUserId).catch(() => null),
   ]);
 
-  const joinDate = pickEarlierIsoDate(
-    user?.created_at ?? null,
-    externalProfile?.accountCreatedAt ?? null,
-  );
+  const joinDate = resolveMySqlJoinDate(externalProfile);
+  const daysWithPinai = computeDaysWithPinai(joinDate);
   const metadataRecord = runtimeMetadata as Record<string, unknown>;
   const languageCode =
     typeof metadataRecord["telegram_language_code"] === "string"
       ? String(metadataRecord["telegram_language_code"])
       : null;
+  const locale = resolveLocale(languageCode);
+  console.info("[onboarding] PIN Claw greeting context resolved", {
+    assistantId,
+    telegramUserId,
+    profileMatched: Boolean(externalProfile),
+    profileSource: externalProfile?.source ?? null,
+    externalUserId: externalProfile?.externalUserId ?? null,
+    mysqlAccountCreatedAt: externalProfile?.accountCreatedAt ?? null,
+    joinDate,
+    daysWithPinai,
+    locale,
+  });
 
   return {
-    locale: resolveLocale(languageCode),
+    locale,
     subscriptionActive,
     joinDate,
-    daysWithPinai: computeDaysWithPinai(joinDate),
+    daysWithPinai,
     askPreferredName: true,
   } satisfies ReadyGreetingRenderInput;
 };
@@ -161,18 +207,40 @@ export const sendApiReadyGreetingForAssistant = async (input: {
     new Date().toISOString(),
   );
   if (!claimed) {
+    console.info("[onboarding] PIN Claw greeting skipped: lock already claimed", {
+      assistantId: input.assistantId,
+      telegramUserId: input.telegramUserId,
+    });
     return true;
   }
 
-  const message = buildApiReadyGreetingMessage(
-    await resolveGreetingContext(input.assistantId, input.telegramUserId),
+  const greetingContext = await resolveGreetingContext(
+    input.assistantId,
+    input.telegramUserId,
   );
+  if (!shouldSendApiReadyGreeting(greetingContext)) {
+    console.info("[onboarding] PIN Claw greeting skipped: missing MySQL join date", {
+      assistantId: input.assistantId,
+      telegramUserId: input.telegramUserId,
+      joinDate: greetingContext.joinDate,
+      daysWithPinai: greetingContext.daysWithPinai,
+    });
+    return true;
+  }
+  const message = buildApiReadyGreetingMessage(greetingContext);
 
   try {
     const sent = await sendTelegramMessage(input.telegramUserId, message);
     if (!sent.ok) {
       throw new Error(sent.error || "sendTelegramMessage returned ok=false");
     }
+    console.info("[onboarding] PIN Claw greeting sent", {
+      assistantId: input.assistantId,
+      telegramUserId: input.telegramUserId,
+      joinDate: greetingContext.joinDate,
+      daysWithPinai: greetingContext.daysWithPinai,
+      locale: greetingContext.locale,
+    });
     return true;
   } catch (error) {
     await setAssistantRuntimeMetadataKey(
@@ -205,3 +273,11 @@ export const setAssistantReadyGreetingLanguageCode = async (
 export const resolveReadyGreetingLocaleForTest = resolveLocale;
 export const computeDaysWithPinaiForTest = computeDaysWithPinai;
 export const pickEarlierIsoDateForTest = pickEarlierIsoDate;
+export const resolveMySqlJoinDateForTest = resolveMySqlJoinDate;
+export const shouldSendApiReadyGreetingForTest = (
+  input: { joinDate: string | null },
+): boolean =>
+  shouldSendApiReadyGreeting({
+    joinDate: input.joinDate,
+    daysWithPinai: computeDaysWithPinai(input.joinDate),
+  });

@@ -253,42 +253,51 @@ const renderMiniGoogleDonePage = (
     ? `https://t.me/${botUsername}?startapp=manage`
     : "tg://resolve";
 
-  const title =
-    status === "connected"
-      ? "Google connected"
-      : status === "disconnected"
-        ? "Google disconnected"
-        : "Google connection failed";
-  const description =
-    status === "connected"
-      ? "Authorization completed. Return to Telegram Mini App and continue in chat."
-      : status === "disconnected"
-        ? "Google has been disconnected. Return to Telegram Mini App."
-        : `Authorization failed${reason ? `: ${reason}` : ""}. Please retry from Telegram Mini App.`;
+  const isSuccess = status === "connected";
+  const isDisconnect = status === "disconnected";
+
+  const icon = isSuccess ? "✓" : isDisconnect ? "—" : "✕";
+  const iconColor = isSuccess ? "#22c55e" : isDisconnect ? "#a1a1aa" : "#ef4444";
+  const iconBg = isSuccess ? "rgba(34,197,94,0.1)" : isDisconnect ? "rgba(161,161,170,0.1)" : "rgba(239,68,68,0.1)";
+
+  const title = isSuccess
+    ? "Google Connected"
+    : isDisconnect
+      ? "Google Disconnected"
+      : "Connection Failed";
+  const description = isSuccess
+    ? "Your Google account has been linked successfully. You can now use email actions with your assistant."
+    : isDisconnect
+      ? "Your Google account has been unlinked. Email actions are no longer available."
+      : `Something went wrong${reason ? ` — ${reason}` : ""}. Please go back and try again.`;
 
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${title}</title>
+  <title>${title} — PIN Claw</title>
   <style>
-    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0b1220; color: #e6edf7; }
-    .wrap { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
-    .card { width: 100%; max-width: 520px; background: #121a2b; border: 1px solid #26324a; border-radius: 16px; padding: 24px; }
-    h1 { margin: 0 0 12px; font-size: 24px; line-height: 1.2; }
-    p { margin: 0 0 16px; color: #b6c2d9; line-height: 1.5; }
-    a.btn { display: inline-block; text-decoration: none; background: #4f8cff; color: white; padding: 12px 16px; border-radius: 10px; font-weight: 600; }
-    .hint { margin-top: 14px; font-size: 13px; color: #8fa0c0; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif; background: linear-gradient(160deg, hsl(310 25% 97%), hsl(270 30% 96.5%)); color: hsl(270 20% 15%); -webkit-font-smoothing: antialiased; }
+    .wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+    .card { width: 100%; max-width: 360px; background: rgba(255,255,255,0.85); backdrop-filter: blur(32px); -webkit-backdrop-filter: blur(32px); border: 1.5px solid rgba(255,255,255,0.5); border-radius: 24px; padding: 32px 24px; text-align: center; box-shadow: 0 8px 32px -8px rgba(120,80,140,0.12); }
+    .icon { width: 56px; height: 56px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-size: 24px; font-weight: 700; background: ${iconBg}; color: ${iconColor}; }
+    h1 { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
+    p { font-size: 14px; color: hsl(270 10% 50%); line-height: 1.5; margin-bottom: 24px; }
+    a.btn { display: inline-block; text-decoration: none; background: hsl(270 20% 15%); color: white; padding: 14px 32px; border-radius: 16px; font-size: 15px; font-weight: 600; transition: opacity 0.2s; }
+    a.btn:active { opacity: 0.85; transform: scale(0.98); }
+    .brand { margin-top: 20px; font-size: 12px; color: hsl(270 10% 70%); }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
+      <div class="icon">${icon}</div>
       <h1>${title}</h1>
       <p>${description}</p>
       <a class="btn" href="${openTelegramUrl}">Back to Telegram</a>
-      <p class="hint">After returning, send your previous request again in chat.</p>
+      <div class="brand">PIN Claw</div>
     </div>
   </div>
 </body>

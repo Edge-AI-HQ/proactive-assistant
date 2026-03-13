@@ -332,11 +332,15 @@ export class ContainerOrchestrator {
       assistant.container_id,
       fallbackNames,
     );
+    let recreated = false;
+    let created = false;
+    let started = false;
 
     // 2. Check drift → recreate if needed
     if (container && (await this.runtime.needsRecreation(container, params))) {
       await this.runtime.destroyContainer(container.id);
       container = null;
+      recreated = true;
       await this.store.updateAssistant(assistant.id, {
         container_status: "creating",
         container_id: "",
@@ -347,16 +351,24 @@ export class ContainerOrchestrator {
     // 3. Create if missing
     if (!container || container.state === "missing") {
       container = await this.runtime.createContainer(params);
+      created = true;
     }
 
     // 4. Start if not running
     if (container.state !== "running") {
       container = await this.runtime.startContainer(container.id);
+      started = true;
     }
 
     // 5. Decide whether to probe
+    // Probe is needed only when runtime changed in this call:
+    // - recreated due to drift
+    // - newly created
+    // - started from non-running
+    const runtimeChanged = recreated || created || started;
     const shouldProbe =
       container.state === "running" &&
+      runtimeChanged &&
       (this.config.fly?.gatewayProbe ?? true);
 
     // 6. Persist container ref + optimistic status
@@ -375,7 +387,10 @@ export class ContainerOrchestrator {
       void this.probeAndNotify(assistant, container, normalizedGatewayToken);
     }
 
-    return { containerId: container.id, ready: !shouldProbe && container.state === "running" };
+    return {
+      containerId: container.id,
+      ready: !shouldProbe && container.state === "running",
+    };
   }
 
   // -----------------------------------------------------------------------

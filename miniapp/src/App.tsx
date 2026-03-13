@@ -657,7 +657,6 @@ const App = () => {
         },
       );
       await loadState();
-      setShowManageAgent(true);
       showToast("Google disconnected.", "success");
     } catch (e) {
       const message = e instanceof Error ? e.message : "unknown";
