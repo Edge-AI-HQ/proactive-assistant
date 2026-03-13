@@ -395,8 +395,7 @@ const buildQuickStatePayload = async (
   telegramUserId: number,
   telegramUsername: string | null,
 ) => {
-  const [user, assistants, subscriptionResult] = await Promise.all([
-    getUserByTelegramId(telegramUserId),
+  const [assistants, subscriptionResult] = await Promise.all([
     listAssistantsByOwnerId(telegramUserId),
     readInternalSubscription(String(telegramUserId)),
   ]);
@@ -404,8 +403,6 @@ const buildQuickStatePayload = async (
   const assistant = assistants[0] ?? null;
   const subscription = subscriptionResult.subscription;
   const active = isSubscriptionActiveForService(subscription);
-
-  const credits = await resolveCredits(user, active, subscription?.plan_id ?? null);
 
   return {
     user: {
@@ -438,7 +435,7 @@ const buildQuickStatePayload = async (
           cancel_at_period_end: false,
           current_period_end: null,
         },
-    credits,
+    credits: null as null,
     features: {
       can_delete_account: config.nodeEnv.trim().toLowerCase() !== "production",
     },
@@ -452,27 +449,24 @@ const buildQuickStatePayload = async (
  * Deferred payload — heavier data loaded after initial render.
  */
 const buildDeferredStatePayload = async (telegramUserId: number) => {
-  const [user, assistants] = await Promise.all([
+  const [user, assistants, subscriptionResult, plansResult, googleStatus] = await Promise.all([
     getUserByTelegramId(telegramUserId),
     listAssistantsByOwnerId(telegramUserId),
-  ]);
-  const assistant = assistants[0] ?? null;
-
-  const [plansResult, googleStatus, runtimeMetadata, subscriptionResult] = await Promise.all([
+    readInternalSubscription(String(telegramUserId)),
     listActivePlansForApi(),
     getGoogleConnectionStatus(telegramUserId),
-    assistant
-      ? readAssistantRuntimeMetadata(assistant.id)
-      : Promise.resolve({}),
-    readInternalSubscription(String(telegramUserId)),
+  ]);
+  const assistant = assistants[0] ?? null;
+  const subscription = subscriptionResult.subscription;
+  const active = isSubscriptionActiveForService(subscription);
+
+  const [runtimeMetadata, credits] = await Promise.all([
+    assistant ? readAssistantRuntimeMetadata(assistant.id) : Promise.resolve({}),
+    resolveCredits(user, active, subscription?.plan_id ?? null),
   ]);
 
   const skillsConfig = readSkillsConfigFromRuntimeMetadata(runtimeMetadata);
   const skillViews = buildSkillViewList(skillsConfig);
-
-  const subscription = subscriptionResult.subscription;
-  const active = isSubscriptionActiveForService(subscription);
-  const credits = await resolveCredits(user, active, subscription?.plan_id ?? null);
 
   return {
     plans: plansResult.plans,
