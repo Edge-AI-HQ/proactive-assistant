@@ -649,9 +649,9 @@ Base Profile → Provider Profile → Allow/Deny
 | LiteLLM Vision 适配 | `globalThis.fetch` patch | Plugin SDK | ✓ 正确 | 同上 |
 | System guidance 注入 | `before_prompt_build` hook | Plugin Hook | ✓ 最佳实践 | — |
 | Onboarding profile | `before_prompt_build` hook | Plugin Hook | ✓ 最佳实践 | — |
-| Cron delivery 补全 | fetch patch 拦截 RPC | Plugin SDK | △ | 可改为 `before_tool_call` hook |
-| 设备自动配对 | 预写 `paired.json` + `setInterval` 3s | Plugin SDK | △ | 改为事件监听或 `registerService` |
-| 自定义 Skills | Dockerfile COPY 替换内置目录 | 侵入式 | △ | 改用 `skills.load.extraDirs` |
+| Cron delivery 补全 | `before_tool_call` hook 拦截 cron add | Plugin Hook | ✓ 已迁移 | ~~fetch patch~~ → hook，精准拦截 |
+| 设备自动配对 | 预写 `paired.json` + `registerService` 轮询 | Plugin SDK | ✓ 已迁移 | ~~setInterval~~ → registerService 生命周期管理 |
+| 自定义 Skills | `skills.load.extraDirs` + 仅删 2 个重叠 bundled | 配置层 | ✓ 已迁移 | ~~Dockerfile rm+cp~~ → extraDirs |
 | Exec approvals | 写入配置文件 | 配置层 | ✓ | — |
 | Slash commands | 未使用 | — | — | 可用 `registerCommand` 添加 |
 | 自定义 channel | 未需要 | — | — | 如需接入新 IM，用 `registerChannel` |
@@ -686,7 +686,7 @@ const patchedFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
 globalThis.fetch = patchedFetch;
 ```
 
-**PinAI 三个插件均使用此模式。** 合理场景包括 API 代理、流式适配、请求审计。
+**PinAI 两个插件使用此模式**（Telegram API 代理、LiteLLM Vision 适配）。Cron delivery 已迁移到 `before_tool_call` hook。合理场景包括 API 代理、流式适配、请求审计。
 
 **注意事项：**
 - 必须加去重 guard（`__patchedKey__`），避免热重载时多层包装
@@ -1024,17 +1024,17 @@ RUN npm install -g openclaw@2026.3.8
 
 将三个插件的 `process.env.XXX` 读取迁移到 `configSchema`，通过 `openclaw.json` 的 `plugins.entries` 传入。
 
-### P1: Skills 改用 `extraDirs`
+### ~~P1: Skills 改用 `extraDirs`~~ ✅ 已完成（2026-03-13）
 
-**工作量：** 小（改 Dockerfile + openclaw.json）
-**风险：** 低
-**收益：** 不再侵入内置目录，升级更安全
+自定义 skills 已迁移到 `/opt/pinai/skills/`，通过 `skills.load.extraDirs` 加载。仅对 2 个同名 bundled skill（`openai-image-gen`、`openai-whisper-api`）执行 `rm -rf`，因 extraDirs 优先级最低。运行时配置构建器自动注入 `extraDirs`。
 
-### P2: 设备配对改用 registerService
+### ~~P2: 设备配对改用 registerService~~ ✅ 已完成（2026-03-13）
 
-**工作量：** 中
-**风险：** 中（需验证事件可用性）
-**收益：** Gateway 关闭时自动清理，日志更干净
+轮询逻辑已包装在 `api.registerService({ id: "device-auto-pairing" })`，Gateway 关闭时自动调用 `stop()` 清理定时器。`prePairDeviceIdentity()` 仍在 register 阶段同步运行（需在 gateway ready 前完成）。
+
+### ~~P1.5: Cron delivery 改用 `before_tool_call` hook~~ ✅ 已完成（2026-03-13）
+
+已从 `globalThis.fetch` patch 迁移到 `api.on("before_tool_call")` hook。仅在 `toolName === "cron"` 且 `action === "add"` 时触发，通过 hook context 的 `sessionKey` 推断 delivery target。
 
 ### P2: workspace-status-server 改用 registerHttpRoute
 
@@ -1067,9 +1067,9 @@ RUN npm install -g openclaw@2026.3.8
 | 风险 | 可能性 | 影响 | 缓解 |
 |------|--------|------|------|
 | Plugin SDK breaking change | 中 | 高：插件不可用 | 版本锁定 + CI warmup 门禁 + changelog 审查 |
-| fetch patch 与上游冲突 | 低 | 中：请求路由异常 | 去重 guard + 集成测试覆盖所有路径 |
+| fetch patch 与上游冲突 | 低 | 中：请求路由异常 | 去重 guard + 集成测试覆盖所有路径（已减少到 2 个 fetch patch） |
 | 社区 MCP/Skill 安全风险 | 中 | 高：容器被控 | 白名单 + 审计 + sandbox |
-| Skill 替换在新版本失效 | 低 | 中：自定义 skill 丢失 | 改用 extraDirs 后风险消除 |
+| Skill 替换在新版本失效 | 低 | 低：仅 2 个重叠 skill | 已改用 extraDirs，仅 `openai-image-gen`/`openai-whisper-api` 需 rm |
 | ContextEngine API 变化 | 高 | 中：context 策略失效 | 暂不在 prod 用，等 API 稳定 |
 | jiti 缓存与新版本不兼容 | 低 | 低：冷启动变慢 | warmup 阶段自动重建缓存 |
 | Plugin 内存泄漏影响 Gateway | 低 | 高：容器 OOM | registerService 管理生命周期 + 监控内存 |
@@ -1088,12 +1088,10 @@ Workspace    Skill     MCP Server    Hook    Plugin    ContextEngine
 
 **核心策略：选择最左侧能满足需求的扩展点。** 越往左侵入性越低、升级越安全、开发越简单。
 
-当前 PinAI 的三个 Plugin + 五个 Skill + Dockerfile overlay 的架构方向是正确的。改进方向不是推翻重来，而是：
+当前 PinAI 的三个 Plugin + 六个 Skill + `extraDirs` 配置的架构方向是正确的。2026-03-13 已完成三项迁移（cron → hook、pairing → registerService、skills → extraDirs），剩余改进方向：
 
-1. **用好 Plugin SDK 的声明式能力**（configSchema、registerService、registerHttpRoute）替代手工操作
-2. **用 `skills.load.extraDirs` 替代侵入式覆盖**
-3. **新集成优先走 MCP**（进程隔离 + 社区生态）
-4. **用 Hook 事件驱动替代轮询**
-5. **持续跟踪 ContextEngine 成熟度**
+1. **用好 Plugin SDK 的声明式能力**（configSchema、registerHttpRoute）替代手工操作
+2. **新集成优先走 MCP**（进程隔离 + 社区生态）
+3. **持续跟踪 ContextEngine 成熟度**
 
 **一句话：不改 OpenClaw 一行核心代码，通过七层扩展点覆盖所有定制需求，`npm update` 即可拥抱上游更新。**
