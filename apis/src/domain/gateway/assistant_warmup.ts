@@ -3,17 +3,30 @@ import { ensureTelegramUser } from '../user/service.js';
 import { ensureLiteLLMKeyForAssistant } from '../litellm/index.js';
 import type { AssistantRecord } from '../../types.js';
 
-const warmupInFlight = new Map<number, Promise<AssistantRecord | null>>();
+type EnsureGatewayAssistantReadyOptions = {
+  allowRecreate?: boolean;
+};
 
-export const ensureGatewayAssistantReady = async (assistant: AssistantRecord): Promise<AssistantRecord | null> => {
+const warmupInFlight = new Map<string, Promise<AssistantRecord | null>>();
+
+export const ensureGatewayAssistantReady = async (
+  assistant: AssistantRecord,
+  options?: EnsureGatewayAssistantReadyOptions,
+): Promise<AssistantRecord | null> => {
   const assistantId = assistant.id;
-  const inFlight = warmupInFlight.get(assistantId);
+  const allowRecreate = options?.allowRecreate !== false;
+  const key = `${assistantId}:${allowRecreate ? 'recreate' : 'no-recreate'}`;
+  const inFlight = warmupInFlight.get(key);
   if (inFlight) return inFlight;
 
   const job = (async (): Promise<AssistantRecord | null> => {
     const owner = await ensureTelegramUser(assistant.owner_telegram_user_id);
     const assistantWithKey = await ensureLiteLLMKeyForAssistant(assistant.owner_telegram_user_id, assistant);
-    const { containerId, ready } = await ensureAssistantContainer(assistantWithKey, owner.gateway_token);
+    const { containerId, ready } = await ensureAssistantContainer(
+      assistantWithKey,
+      owner.gateway_token,
+      { allowRecreate },
+    );
     if (!ready) return null;
     return {
       ...assistantWithKey,
@@ -23,11 +36,11 @@ export const ensureGatewayAssistantReady = async (assistant: AssistantRecord): P
   })();
 
   void job.finally(() => {
-    if (warmupInFlight.get(assistantId) === job) {
-      warmupInFlight.delete(assistantId);
+    if (warmupInFlight.get(key) === job) {
+      warmupInFlight.delete(key);
     }
   });
 
-  warmupInFlight.set(assistantId, job);
+  warmupInFlight.set(key, job);
   return job;
 };
