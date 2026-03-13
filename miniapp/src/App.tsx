@@ -80,6 +80,7 @@ type DeferredPayload = {
   plans: Plan[];
   skills: SkillsPayload;
   google: GoogleStatus;
+  credits?: { remaining: number; total: number } | null;
 };
 
 type ModelItem = {
