@@ -49,6 +49,10 @@ import {
   getCurrentModel,
   setCurrentModel,
 } from "../domain/gateway/gateway_rpc.js";
+import {
+  getLiteLLMUserInfo,
+  isLiteLLMClientEnabled,
+} from "../domain/litellm/index.js";
 import { relayGatewayWs } from "../domain/gateway/gateway_ws_relay.js";
 import { createGatewaySessionByBody } from "../domain/gateway/session_api.js";
 import {
@@ -418,19 +422,55 @@ const buildQuickStatePayload = async (
  * Deferred payload — heavier data loaded after initial render.
  */
 const buildDeferredStatePayload = async (telegramUserId: number) => {
-  const assistants = await listAssistantsByOwnerId(telegramUserId);
+  const [user, assistants] = await Promise.all([
+    getUserByTelegramId(telegramUserId),
+    listAssistantsByOwnerId(telegramUserId),
+  ]);
   const assistant = assistants[0] ?? null;
 
-  const [plansResult, googleStatus, runtimeMetadata] = await Promise.all([
+  const [plansResult, googleStatus, runtimeMetadata, subscriptionResult] = await Promise.all([
     listActivePlansForApi(),
     getGoogleConnectionStatus(telegramUserId),
     assistant
       ? readAssistantRuntimeMetadata(assistant.id)
       : Promise.resolve({}),
+    readInternalSubscription(String(telegramUserId)),
   ]);
 
   const skillsConfig = readSkillsConfigFromRuntimeMetadata(runtimeMetadata);
   const skillViews = buildSkillViewList(skillsConfig);
+
+  const subscription = subscriptionResult.subscription;
+  const active = isSubscriptionActiveForService(subscription);
+
+  let credits: { remaining: number; total: number } | null = null;
+  if (user && active) {
+    const budgetUsd = Number(user.litellm_budget_usd) || 0;
+    let spendUsd = Number(user.litellm_spend_usd) || 0;
+
+    if (budgetUsd > 0 && isLiteLLMClientEnabled() && user.litellm_user_id) {
+      try {
+        const info = await getLiteLLMUserInfo(user.litellm_user_id);
+        if (info.spendUsd !== null) {
+          spendUsd = info.spendUsd;
+        }
+      } catch {
+        // LiteLLM unavailable — fall back to DB value
+      }
+    }
+
+    if (budgetUsd > 0) {
+      credits = {
+        remaining: Math.floor(Math.max(0, (budgetUsd - spendUsd) * 100)),
+        total: Math.floor(budgetUsd * 100),
+      };
+    } else if (subscription?.plan_id) {
+      const planCredits = await getPlanMonthlyCredits(subscription.plan_id);
+      if (planCredits > 0) {
+        credits = { remaining: planCredits, total: planCredits };
+      }
+    }
+  }
 
   return {
     plans: plansResult.plans,
@@ -443,6 +483,7 @@ const buildDeferredStatePayload = async (telegramUserId: number) => {
       config: skillsConfig,
     },
     google: googleStatus,
+    credits,
   };
 };
 
