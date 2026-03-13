@@ -469,9 +469,6 @@ export const createAssistantMachine = async (
     ...(args.ownerTelegramUserId
       ? { OWNER_TELEGRAM_USER_ID: args.ownerTelegramUserId }
       : {}),
-    ...(appConfig.apiAuthToken
-      ? { PINAI_API_INTERNAL_TOKEN: appConfig.apiAuthToken }
-      : {}),
   };
   assertNoP0SecretsInEnv(env, config);
 

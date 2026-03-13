@@ -16,7 +16,6 @@ import {
   setLogContextTelegramUserId,
 } from "../common/requestLogContext.js";
 import { handleCommandMenuUpdate } from "./commandMenu.js";
-import { requireApiAuth } from "../common/httpAuth.js";
 
 type WebhookSource = "public" | "private";
 
@@ -75,7 +74,7 @@ export const registerTelegramRouterRoutes = (app: Application): void => {
     void handleTelegramWebhook(req, res, "private");
   });
 
-  app.post("/api/internal/commands", requireApiAuth, express.json({ limit: "1mb" }), (req, res) => {
+  app.post("/api/internal/commands", express.json({ limit: "1mb" }), (req, res) => {
     void handleCommandMenuUpdate(req, res);
   });
 

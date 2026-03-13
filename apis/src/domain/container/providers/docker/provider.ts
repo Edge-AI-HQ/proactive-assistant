@@ -596,9 +596,6 @@ export const dockerContainerRuntime: ContainerRuntime = {
     if (params.ownerTelegramUserId) {
       containerEnv.OWNER_TELEGRAM_USER_ID = params.ownerTelegramUserId;
     }
-    if (appConfig.apiAuthToken) {
-      containerEnv.PINAI_API_INTERNAL_TOKEN = appConfig.apiAuthToken;
-    }
     assertNoP0SecretsInEnv(containerEnv, config);
 
     const container = await docker.createContainer({

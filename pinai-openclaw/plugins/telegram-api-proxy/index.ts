@@ -126,8 +126,8 @@ function forwardCommandMenuToRouter(
     headers: {
       "Content-Type": "application/json",
       "X-PinAI-Telegram-Bot-Token": botToken,
-      ...(process.env.PINAI_API_INTERNAL_TOKEN
-        ? { "x-api-key": process.env.PINAI_API_INTERNAL_TOKEN }
+      ...(process.env.OPENCLAW_GATEWAY_TOKEN
+        ? { "x-gateway-token": process.env.OPENCLAW_GATEWAY_TOKEN }
         : {}),
     },
     body: payload,
