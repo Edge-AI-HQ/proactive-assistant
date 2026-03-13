@@ -87,9 +87,7 @@ const resolveMySqlJoinDate = (
   return joinDate || null;
 };
 
-const shouldSendApiReadyGreeting = (
-  input: Pick<ReadyGreetingRenderInput, "joinDate" | "daysWithPinai">,
-): boolean => Boolean(input.joinDate) && typeof input.daysWithPinai === "number";
+const shouldSendApiReadyGreeting = (): boolean => true;
 
 export const buildApiReadyGreetingMessage = (
   input: ReadyGreetingRenderInput,
@@ -190,7 +188,7 @@ const resolveGreetingContext = async (assistantId: number, telegramUserId: numbe
       ? String(metadataRecord["telegram_language_code"])
       : null;
   const locale = resolveLocale(languageCode);
-  console.info("[onboarding] HiPIN greeting context resolved", {
+  console.info("[onboarding] PIN Claw greeting context resolved", {
     assistantId,
     telegramUserId,
     profileMatched: Boolean(externalProfile),
@@ -221,7 +219,7 @@ export const sendApiReadyGreetingForAssistant = async (input: {
     new Date().toISOString(),
   );
   if (!claimed) {
-    console.info("[onboarding] HiPIN greeting skipped: lock already claimed", {
+    console.info("[onboarding] PIN Claw greeting skipped: lock already claimed", {
       assistantId: input.assistantId,
       telegramUserId: input.telegramUserId,
     });
@@ -232,15 +230,15 @@ export const sendApiReadyGreetingForAssistant = async (input: {
     input.assistantId,
     input.telegramUserId,
   );
-  if (!shouldSendApiReadyGreeting(greetingContext)) {
-    console.info("[onboarding] HiPIN greeting skipped: missing MySQL join date", {
+  if (!greetingContext.joinDate || typeof greetingContext.daysWithPinai !== "number") {
+    console.info("[onboarding] PIN Claw greeting: sending without MySQL join date", {
       assistantId: input.assistantId,
       telegramUserId: input.telegramUserId,
       joinDate: greetingContext.joinDate,
       daysWithPinai: greetingContext.daysWithPinai,
     });
-    return true;
   }
+  if (!shouldSendApiReadyGreeting()) return true;
   const message = buildApiReadyGreetingMessage(greetingContext);
 
   try {
@@ -248,7 +246,7 @@ export const sendApiReadyGreetingForAssistant = async (input: {
     if (!sent.ok) {
       throw new Error(sent.error || "sendTelegramMessage returned ok=false");
     }
-    console.info("[onboarding] HiPIN greeting sent", {
+    console.info("[onboarding] PIN Claw greeting sent", {
       assistantId: input.assistantId,
       telegramUserId: input.telegramUserId,
       joinDate: greetingContext.joinDate,
@@ -291,7 +289,4 @@ export const resolveMySqlJoinDateForTest = resolveMySqlJoinDate;
 export const shouldSendApiReadyGreetingForTest = (
   input: { joinDate: string | null },
 ): boolean =>
-  shouldSendApiReadyGreeting({
-    joinDate: input.joinDate,
-    daysWithPinai: computeDaysWithPinai(input.joinDate),
-  });
+  shouldSendApiReadyGreeting();

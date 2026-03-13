@@ -98,8 +98,8 @@ test("resolveMySqlJoinDateForTest uses MySQL accountCreatedAt only", () => {
   );
 });
 
-test("shouldSendApiReadyGreetingForTest requires MySQL join date", () => {
-  assert.equal(shouldSendApiReadyGreetingForTest({ joinDate: null }), false);
+test("shouldSendApiReadyGreetingForTest always allows greeting", () => {
+  assert.equal(shouldSendApiReadyGreetingForTest({ joinDate: null }), true);
   assert.equal(
     shouldSendApiReadyGreetingForTest({
       joinDate: "2024-01-01T00:00:00.000Z",

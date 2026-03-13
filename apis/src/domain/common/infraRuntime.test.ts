@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { executeAssistantReadyNotificationsForTest } from "./infraRuntime.js";
 
-test("executeAssistantReadyNotificationsForTest sends fixed then HiPIN when lock is claimed", async () => {
+test("executeAssistantReadyNotificationsForTest sends fixed then PIN Claw greeting when lock is claimed", async () => {
   const calls: string[] = [];
   await executeAssistantReadyNotificationsForTest({
     assistantId: 9,
@@ -13,12 +13,12 @@ test("executeAssistantReadyNotificationsForTest sends fixed then HiPIN when lock
       calls.push("fixed");
     },
     sendHiPinReadyGreeting: async () => {
-      calls.push("hipin");
+      calls.push("pinclaw");
       return true;
     },
   });
 
-  assert.deepEqual(calls, ["fixed", "hipin"]);
+  assert.deepEqual(calls, ["fixed", "pinclaw"]);
 });
 
 test("executeAssistantReadyNotificationsForTest skips sends when lock is not claimed", async () => {
@@ -31,7 +31,7 @@ test("executeAssistantReadyNotificationsForTest skips sends when lock is not cla
       calls.push("fixed");
     },
     sendHiPinReadyGreeting: async () => {
-      calls.push("hipin");
+      calls.push("pinclaw");
       return true;
     },
   });
@@ -49,7 +49,7 @@ test("executeAssistantReadyNotificationsForTest sends only fixed when no assista
       calls.push("fixed");
     },
     sendHiPinReadyGreeting: async () => {
-      calls.push("hipin");
+      calls.push("pinclaw");
       return true;
     },
   });

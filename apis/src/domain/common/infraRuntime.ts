@@ -121,11 +121,11 @@ const executeAssistantReadyNotifications = async (
     telegramUserId: args.telegramUserId,
   }).catch((e) =>
     console.warn(
-      `[container] HiPIN ready greeting failed for user ${args.telegramUserId}`,
+      `[container] PIN Claw ready greeting failed for user ${args.telegramUserId}`,
       e,
     ),
   );
-  console.info("[container] HiPIN ready greeting dispatch finished", {
+  console.info("[container] PIN Claw ready greeting dispatch finished", {
     assistantId: args.assistantId,
     telegramUserId: args.telegramUserId,
     hiPinSent: Boolean(hiPinSent),
