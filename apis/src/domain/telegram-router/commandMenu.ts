@@ -160,6 +160,21 @@ async function deleteCommandsForOwnBot(botToken: string): Promise<boolean> {
  */
 export async function handleCommandMenuUpdate(req: Request, res: Response): Promise<void> {
   try {
+    // Authenticate via per-user gateway token (not the platform API key).
+    const gatewayToken = (req.headers["x-gateway-token"] as string | undefined)?.trim();
+    if (!gatewayToken) {
+      res.status(401).json({ ok: false, description: "missing gateway token" });
+      return;
+    }
+    const tokenOwner = await pool.query<{ telegram_user_id: string }>(
+      `SELECT telegram_user_id FROM users WHERE gateway_token = $1 LIMIT 1`,
+      [gatewayToken],
+    );
+    if (!tokenOwner.rows[0]) {
+      res.status(401).json({ ok: false, description: "invalid gateway token" });
+      return;
+    }
+
     const payload = req.body as CommandMenuPayload;
     if (!payload?.method || !payload?.botToken) {
       res.status(400).json({ ok: false, description: "missing method or botToken" });
