@@ -466,6 +466,12 @@ export const createAssistantMachine = async (
     ).trim(),
     PINAI_FLY_MODE: "1",
     PINAI_GATEWAY_BIND: "loopback",
+    ...(args.ownerTelegramUserId
+      ? { OWNER_TELEGRAM_USER_ID: args.ownerTelegramUserId }
+      : {}),
+    ...(appConfig.apiAuthToken
+      ? { PINAI_API_INTERNAL_TOKEN: appConfig.apiAuthToken }
+      : {}),
   };
   assertNoP0SecretsInEnv(env, config);
 

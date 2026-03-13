@@ -593,6 +593,12 @@ export const dockerContainerRuntime: ContainerRuntime = {
       params.gatewayToken,
     );
     containerEnv[PINAI_GOOGLE_CREDENTIALS_B64_ENV] = (params.googleCredentialsB64 || "").trim();
+    if (params.ownerTelegramUserId) {
+      containerEnv.OWNER_TELEGRAM_USER_ID = params.ownerTelegramUserId;
+    }
+    if (appConfig.apiAuthToken) {
+      containerEnv.PINAI_API_INTERNAL_TOKEN = appConfig.apiAuthToken;
+    }
     assertNoP0SecretsInEnv(containerEnv, config);
 
     const container = await docker.createContainer({
