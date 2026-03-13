@@ -89,14 +89,10 @@ const getShortDesc = (key: string, fallback: string) =>
 const AVAILABLE_SKILLS: { id: string; name: string; desc: string }[] = [
   { id: "content-writer", name: "Content Writer", desc: "Blog posts & summaries" },
   { id: "web-research", name: "Web Research", desc: "Deep search & fact-check" },
-  { id: "deal-finder", name: "Deal Finder", desc: "Compare prices & deals" },
-  { id: "data-analyst", name: "Data Analyst", desc: "Charts, trends & insights" },
-  { id: "social-media", name: "Social Media", desc: "Post scheduling" },
+  { id: "data-analyst", name: "Data Analyst", desc: "Charts & insights" },
   { id: "code-helper", name: "Code Helper", desc: "Debug & review code" },
   { id: "translator", name: "Translator", desc: "Multi-language translation" },
   { id: "finance-tracker", name: "Finance Tracker", desc: "Budget & expenses" },
-  { id: "travel-planner", name: "Travel Planner", desc: "Itineraries & flights" },
-  { id: "study-buddy", name: "Study Buddy", desc: "Flashcards & quizzes" },
 ];
 
 const AVAILABLE_ICON_MAP: Record<string, JSX.Element> = {
@@ -110,19 +106,9 @@ const AVAILABLE_ICON_MAP: Record<string, JSX.Element> = {
       <circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /><path d="M2 12h20" />
     </svg>
   ),
-  "deal-finder": (
-    <svg className="w-4 h-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="8" cy="21" r="1" /><circle cx="19" cy="21" r="1" /><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12" />
-    </svg>
-  ),
   "data-analyst": (
     <svg className="w-4 h-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
       <path d="M3 3v18h18" /><path d="M18 17V9" /><path d="M13 17V5" /><path d="M8 17v-3" />
-    </svg>
-  ),
-  "social-media": (
-    <svg className="w-4 h-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" />
     </svg>
   ),
   "code-helper": (
@@ -140,16 +126,6 @@ const AVAILABLE_ICON_MAP: Record<string, JSX.Element> = {
       <rect x="2" y="4" width="20" height="16" rx="2" /><path d="M12 10v4" /><path d="M2 10h20" />
     </svg>
   ),
-  "travel-planner": (
-    <svg className="w-4 h-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z" />
-    </svg>
-  ),
-  "study-buddy": (
-    <svg className="w-4 h-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" />
-    </svg>
-  ),
 };
 
 const SkillsDialog = ({ open, onClose, skills }: SkillsDialogProps) => {
@@ -161,15 +137,15 @@ const SkillsDialog = ({ open, onClose, skills }: SkillsDialogProps) => {
   return createPortal(
     <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
       <div
-        className="relative bg-background max-w-sm w-full rounded-3xl p-0 overflow-hidden shadow-lg"
+        className="relative bg-background max-w-[340px] w-full rounded-3xl p-0 overflow-hidden shadow-lg"
         onClick={(e) => e.stopPropagation()}
       >
         <button
           onClick={onClose}
-          className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100 transition-opacity z-10"
+          className="absolute right-3 top-3 w-7 h-7 flex items-center justify-center rounded-full bg-secondary/80 hover:bg-secondary text-foreground/60 hover:text-foreground transition-all z-10"
         >
-          <svg className="h-4 w-4 text-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 6 6 18" /><path d="m6 6 12 12" />
           </svg>
         </button>
 
@@ -180,7 +156,7 @@ const SkillsDialog = ({ open, onClose, skills }: SkillsDialogProps) => {
           </p>
         </div>
 
-        <div className="px-5 pb-5 pt-3 max-h-[75vh] overflow-y-scroll overscroll-contain">
+        <div className="px-5 pb-5 pt-3 max-h-[50vh] overflow-y-scroll overscroll-contain">
           <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-2">Installed</p>
           {installedSkills.length === 0 ? (
             <p className="text-xs text-muted-foreground py-3 mb-4">No skills installed yet.</p>

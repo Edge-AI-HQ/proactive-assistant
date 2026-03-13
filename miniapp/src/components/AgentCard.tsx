@@ -187,13 +187,17 @@ const AgentCard = ({
 
           {/* Info pills */}
           <div className="flex items-stretch gap-2 mb-5">
-            {/* Plan - clickable */}
+            {/* Repair - clickable */}
             <div
-              onClick={onChangePlan}
-              className="flex-1 rounded-2xl px-2 py-3.5 glass-stat-box text-center min-w-0 flex flex-col justify-center cursor-pointer hover:bg-white/50 transition-colors"
+              onClick={onRepairRuntime}
+              className={`flex-1 rounded-2xl px-2 py-3.5 glass-stat-box text-center min-w-0 flex flex-col justify-center transition-colors ${
+                runtimeBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-white/50"
+              }`}
             >
-              <p className="text-[9px] uppercase tracking-widest text-muted-foreground mb-1">Plan</p>
-              <p className="text-sm font-bold text-foreground truncate">{planId ? planId.charAt(0).toUpperCase() + planId.slice(1) : "Free"}</p>
+              <p className="text-[9px] uppercase tracking-widest text-muted-foreground mb-1">Repair</p>
+              <svg className="w-4 h-4 text-foreground mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+              </svg>
             </div>
 
             {/* Birthday - NOT clickable */}
@@ -229,19 +233,8 @@ const AgentCard = ({
               Chat with PIN Claw
             </button>
             <button
-              onClick={() => {
-                if (!isRuntimeRunning) {
-                  onBlockedAction("data");
-                  return;
-                }
-                setShowData(true);
-              }}
-              aria-disabled={!isRuntimeRunning}
-              className={`w-full flex items-center justify-center gap-2 rounded-2xl py-3 text-sm font-medium btn-press glass-stat-box border-foreground/30 ${
-                isRuntimeRunning
-                  ? "text-foreground"
-                  : "text-foreground/60 cursor-not-allowed opacity-60"
-              }`}
+              onClick={() => setShowData(true)}
+              className="w-full flex items-center justify-center gap-2 rounded-2xl py-3 text-sm font-medium text-foreground btn-press glass-stat-box border-foreground/30"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
