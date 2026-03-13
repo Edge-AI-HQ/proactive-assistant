@@ -32,6 +32,11 @@ export interface SkillCatalogItem {
 
 export const DEFAULT_SKILLS_CATALOG: SkillCatalogItem[] = [
   {
+    key: "agent-browser",
+    name: "Agent Browser",
+    description: "Browser automation CLI for AI agents.",
+  },
+  {
     key: "gws",
     name: "Google Workspace Core",
     description: "Shared Google Workspace CLI access.",

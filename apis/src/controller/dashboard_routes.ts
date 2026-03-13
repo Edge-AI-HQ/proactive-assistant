@@ -14,6 +14,7 @@ import {
   createGatewaySession,
   getAssistantById,
   getGatewaySession,
+  getPlanMonthlyCredits,
   getUserByTelegramId,
   readAssistantRuntimeMetadata,
   setAssistantRuntimeMetadataKey,
@@ -335,7 +336,8 @@ const buildQuickStatePayload = async (
   telegramUserId: number,
   telegramUsername: string | null,
 ) => {
-  const [assistants, subscriptionResult] = await Promise.all([
+  const [user, assistants, subscriptionResult] = await Promise.all([
+    getUserByTelegramId(telegramUserId),
     listAssistantsByOwnerId(telegramUserId),
     readInternalSubscription(String(telegramUserId)),
   ]);
@@ -343,6 +345,24 @@ const buildQuickStatePayload = async (
   const assistant = assistants[0] ?? null;
   const subscription = subscriptionResult.subscription;
   const active = isSubscriptionActiveForService(subscription);
+
+  let credits: { remaining: number; total: number } | null = null;
+  if (user && active) {
+    const budgetUsd = Number(user.litellm_budget_usd) || 0;
+    const spendUsd = Number(user.litellm_spend_usd) || 0;
+    if (budgetUsd > 0) {
+      const remainingCredits = Math.max(0, (budgetUsd - spendUsd) * 100);
+      credits = {
+        remaining: Math.floor(remainingCredits),
+        total: Math.floor(budgetUsd * 100),
+      };
+    } else if (subscription?.plan_id) {
+      const planCredits = await getPlanMonthlyCredits(subscription.plan_id);
+      if (planCredits > 0) {
+        credits = { remaining: planCredits, total: planCredits };
+      }
+    }
+  }
 
   return {
     user: {
@@ -375,6 +395,7 @@ const buildQuickStatePayload = async (
           cancel_at_period_end: false,
           current_period_end: null,
         },
+    credits,
     features: {
       can_delete_account: config.nodeEnv.trim().toLowerCase() !== "production",
     },

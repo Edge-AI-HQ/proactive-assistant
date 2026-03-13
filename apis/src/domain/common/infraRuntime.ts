@@ -87,36 +87,17 @@ const containerNotifier: ContainerNotifier = {
       if (readyNotifyClaimed) {
         await sendTelegramMessage(
           telegramUserId,
-          `✅ <b>Your assistant is ready!</b>\n\nYou can start chatting now.`,
+          `✅ Your assistant is ready! You can start chatting now. Just use it as your personal assistant.\n\n👋 Hey, I'm online and ready to help!\n\n✨ How can I help you today?`,
         ).catch((e) =>
           console.warn(`[container] notify failed for user ${telegramUserId}`, e),
         );
-      }
-
-      if (readyNotifyClaimed) {
-        await sleep(800);
-        const delivered = await sendApiReadyGreetingForAssistant({
-          assistantId: options.assistantId,
-          telegramUserId,
-        }).catch((e) => {
-          console.warn(
-            `[container] onboarding greeting failed for assistant ${options.assistantId}`,
-            e,
-          );
-          return false;
-        });
-        if (!delivered) {
-          console.warn(
-            `[container] onboarding greeting not delivered for assistant ${options.assistantId}`,
-          );
-        }
       }
       return;
     }
 
     await sendTelegramMessage(
       telegramUserId,
-      `✅ <b>Your assistant is ready!</b>\n\nYou can start chatting now.`,
+      `✅ Your assistant is ready! You can start chatting now. Just use it as your personal assistant.\n\n👋 Hey, I'm online and ready to help!\n\n✨ How can I help you today?`,
     ).catch((e) =>
       console.warn(`[container] notify failed for user ${telegramUserId}`, e),
     );

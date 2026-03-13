@@ -64,6 +64,10 @@ type StatePayload = {
     cancel_at_period_end: boolean;
     current_period_end: string | null;
   };
+  credits?: {
+    remaining: number;
+    total: number;
+  } | null;
   features?: {
     can_delete_account?: boolean;
   };
@@ -805,14 +809,11 @@ const App = () => {
 
   // Show subscription / choose plan page when not subscribed
   if (!state.subscription.active) {
-    const planBadge: Record<string, string> = {
-      pro: "Most Popular",
-      max: "Best Value",
-    };
-    const planPromo: Record<string, string> = {
-      basic: "2x",
-      pro: "3x",
-      max: "3.5x",
+    const planBadge: Record<string, string> = { pro: "Most Popular", max: "Best Value" };
+    const planPromo: Record<string, { original: string; actual: string; multiplier: string }> = {
+      basic: { original: "1,600", actual: "3,200", multiplier: "2x" },
+      pro: { original: "4,100", actual: "12,800", multiplier: "3x" },
+      max: { original: "8,200", actual: "28,800", multiplier: "3.5x" },
     };
 
     return (
@@ -911,9 +912,12 @@ const App = () => {
                         <p className="text-xs text-muted-foreground">
                           {plan.features[0]}
                         </p>
-                        <p className="text-[11px] font-medium text-primary mt-1">
-                          Early Access — {planPromo[plan.id] ?? "2x"} credits
-                          included
+                        <p className="text-[12px] font-medium text-primary mt-1">
+                          <span className="line-through text-muted-foreground text-[11px]">{planPromo[plan.id]?.original ?? "—"}</span>
+                          {" "}
+                          <span className="font-bold">{planPromo[plan.id]?.actual ?? "—"} credits</span>
+                          {" "}
+                          <span className="text-[10px] text-primary/70">{planPromo[plan.id]?.multiplier ?? ""}</span>
                         </p>
                       </button>
                     );
@@ -970,7 +974,7 @@ const App = () => {
             skills={state.skills?.items ?? []}
             active={state.subscription.active}
             manageOpen={showManageAgent}
-            createdAt={state.assistant.created_at ?? null}
+            credits={state.credits ?? null}
             google={state.google ?? undefined}
             googleBusy={
               busy === "google-disconnect" || busy === "google-connect"
