@@ -14,6 +14,7 @@ import {
   createGatewaySession,
   getAssistantById,
   getGatewaySession,
+  getPlanMonthlyCredits,
   getUserByTelegramId,
   readAssistantRuntimeMetadata,
   setAssistantRuntimeMetadataKey,
@@ -346,15 +347,21 @@ const buildQuickStatePayload = async (
   const active = isSubscriptionActiveForService(subscription);
 
   let credits: { remaining: number; total: number } | null = null;
-  if (user && active && user.litellm_budget_usd != null) {
+  if (user && active) {
     const budgetUsd = Number(user.litellm_budget_usd) || 0;
     const spendUsd = Number(user.litellm_spend_usd) || 0;
-    const remainingCredits = Math.max(0, (budgetUsd - spendUsd) * 100);
-    const totalCredits = budgetUsd * 100;
-    credits = {
-      remaining: Math.round(remainingCredits * 100) / 100,
-      total: Math.round(totalCredits * 100) / 100,
-    };
+    if (budgetUsd > 0) {
+      const remainingCredits = Math.max(0, (budgetUsd - spendUsd) * 100);
+      credits = {
+        remaining: Math.floor(remainingCredits),
+        total: Math.floor(budgetUsd * 100),
+      };
+    } else if (subscription?.plan_id) {
+      const planCredits = await getPlanMonthlyCredits(subscription.plan_id);
+      if (planCredits > 0) {
+        credits = { remaining: planCredits, total: planCredits };
+      }
+    }
   }
 
   return {
