@@ -353,8 +353,10 @@ const App = () => {
 
     let loadedDeferred = false;
     try {
-      const deferred = await safeFetch<DeferredPayload>("/api/mini/state/deferred");
-      setState((prev) => prev ? { ...prev, ...deferred } : prev);
+      const deferred = await safeFetch<DeferredPayload>(
+        "/api/mini/state/deferred",
+      );
+      setState((prev) => (prev ? { ...prev, ...deferred } : prev));
       setSelectedPlan((prev) => prev ?? deferred.plans[0]?.id ?? null);
       loadedDeferred = true;
     } catch {
@@ -919,7 +921,8 @@ const App = () => {
         <div
           className="fixed inset-0 z-0 opacity-[0.9] pointer-events-none"
           style={{
-            backgroundImage: "url('https://static.pinai.tech/pinclaw/bg-garden.jpg')",
+            backgroundImage:
+              "url('https://static.pinai.tech/pinclaw/bg-garden.jpg')",
             backgroundSize: "cover",
             backgroundPosition: "center",
           }}
@@ -930,7 +933,9 @@ const App = () => {
             username={state.assistant.username || null}
             status={state.assistant.status || "unknown"}
             planId={state.subscription.plan_id}
-            skillsCount={state.skills?.items?.filter((item) => item.installed).length ?? 0}
+            skillsCount={
+              state.skills?.items?.filter((item) => item.installed).length ?? 0
+            }
             skills={state.skills?.items ?? []}
             active={state.subscription.active}
             manageOpen={showManageAgent}
@@ -977,6 +982,26 @@ const App = () => {
             </svg>
             Contact Us
           </button>
+
+          <div className="mt-3 pb-4 flex items-center justify-center gap-3 text-xs text-foreground/60">
+            <a
+              href="/mini/privacy-policy.html"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-foreground/80 transition-colors underline"
+            >
+              Privacy Policy
+            </a>
+            <span className="text-foreground/40">•</span>
+            <a
+              href="/mini/terms-of-service.html"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-foreground/80 transition-colors underline"
+            >
+              Terms of Service
+            </a>
+          </div>
         </div>
 
         <div className="relative z-20">
