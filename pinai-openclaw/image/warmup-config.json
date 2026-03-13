@@ -50,6 +50,13 @@
       "webhookPort": 8787
     }
   },
+  "skills": {
+    "load": { "extraDirs": ["/opt/pinai/skills"] },
+    "entries": {
+      "openai-image-gen": { "enabled": false },
+      "openai-whisper-api": { "enabled": false }
+    }
+  },
   "plugins": {
     "entries": {
       "telegram": { "enabled": true },

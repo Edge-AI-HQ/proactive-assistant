@@ -2,19 +2,16 @@
 // Handles platform-level integrations:
 // 1. System prompt injection — injects platform guidance (API proxy rules,
 //    reminder policy) via before_prompt_build hook.
-// 2. Cron delivery auto-completion — patches cron.add RPC calls to fill in
-//    missing delivery targets (accountId, to) inferred from sessionKey.
+// 2. Cron delivery auto-completion — patches cron.add tool calls to fill in
+//    missing delivery targets (accountId, to) inferred from sessionKey,
+//    using the before_tool_call hook.
 // 3. Device auto-pairing — pre-creates Ed25519 device identity and writes
-//    paired.json at startup, then polls for new pairing requests.
+//    paired.json at startup, then polls for new pairing requests via
+//    registerService for proper lifecycle management.
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 
-const FETCH_PATCH_KEY = "__pinaiPlatformHooksPatched__";
-const OPENCLAW_GATEWAY_PORT = Number.parseInt(
-  process.env.OPENCLAW_GATEWAY_PORT || "18789",
-  10,
-);
 const SYSTEM_GUIDANCE_PATH =
   process.env.PINAI_SYSTEM_GUIDANCE_PATH || "/opt/pinai/platform-system-guidance.md";
 
@@ -24,15 +21,6 @@ const SYSTEM_GUIDANCE_PATH =
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isOpenClawGatewayRpc(url: URL): boolean {
-  const host = url.hostname.toLowerCase();
-  const isLoopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
-  if (!isLoopback) return false;
-  const port = Number.parseInt(url.port || "", 10);
-  if (!Number.isFinite(port) || port !== OPENCLAW_GATEWAY_PORT) return false;
-  return url.pathname === "/rpc" || url.pathname === "/gateway" || url.pathname === "/gateway/rpc";
 }
 
 function inferAccountIdFromSessionKey(sessionKey: string): string | null {
@@ -74,285 +62,215 @@ function inferPeerIdFromSessionKey(sessionKey: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Cron delivery patch
+// Cron delivery auto-completion via before_tool_call hook
 // ---------------------------------------------------------------------------
 
-async function patchCronAddDeliveryAccountId(
-  input: RequestInfo | URL,
-  init?: RequestInit,
-  api?: OpenClawPluginApi,
-): Promise<RequestInit | null> {
-  const rawUrl =
-    typeof input === "string"
-      ? input
-      : input instanceof URL
-        ? input.toString()
-        : input instanceof Request
-          ? input.url
-          : "";
-  if (!rawUrl) return null;
+function installCronDeliveryHook(api: OpenClawPluginApi) {
+  api.on("before_tool_call", async (event: any, ctx: any) => {
+    if (event.toolName !== "cron") return;
 
-  let targetUrl: URL;
-  try { targetUrl = new URL(rawUrl); } catch { return null; }
-  if (!isOpenClawGatewayRpc(targetUrl)) return null;
+    const params = event.params as Record<string, unknown> | undefined;
+    if (!params || params.action !== "add") return;
 
-  const method = (
-    init?.method || (input instanceof Request ? input.method : "GET")
-  ).trim().toUpperCase();
-  if (method !== "POST") return null;
+    // Handle both flat params and nested job form
+    const job = isRecord(params.job) ? (params.job as Record<string, unknown>) : params;
+    const delivery = isRecord(job.delivery) ? { ...(job.delivery as Record<string, unknown>) } : {};
+    const mode = typeof delivery.mode === "string" ? delivery.mode.trim().toLowerCase() : "";
+    if (mode === "none" || mode === "webhook") return;
 
-  const headers = new Headers(
-    init?.headers || (input instanceof Request ? input.headers : {}),
-  );
-  const contentType = headers.get("content-type")?.toLowerCase() || "";
-  if (!contentType.includes("application/json")) return null;
-
-  let bodyText = "";
-  const rawBody = init?.body;
-  if (typeof rawBody === "string") {
-    bodyText = rawBody;
-  } else if (rawBody instanceof Uint8Array) {
-    bodyText = new TextDecoder().decode(rawBody);
-  } else if (input instanceof Request) {
-    try { bodyText = await input.clone().text(); } catch { bodyText = ""; }
-  }
-  if (!bodyText) return null;
-
-  let parsed: Record<string, unknown>;
-  try { parsed = JSON.parse(bodyText) as Record<string, unknown>; } catch { return null; }
-  if (parsed.method !== "cron.add" || !isRecord(parsed.params)) return null;
-
-  const job = parsed.params;
-  const delivery = isRecord(job.delivery) ? job.delivery : {};
-  const mode = typeof delivery.mode === "string" ? delivery.mode.trim().toLowerCase() : "";
-  if (mode === "none" || mode === "webhook") return null;
-
-  const sessionKey =
-    typeof job.sessionKey === "string"
-      ? job.sessionKey
-      : isRecord(job.payload) && typeof job.payload.sessionKey === "string"
+    // Get sessionKey: prefer hook context, fall back to tool params
+    const sessionKey =
+      (typeof ctx?.sessionKey === "string" ? ctx.sessionKey : "") ||
+      (typeof job.sessionKey === "string" ? job.sessionKey : "") ||
+      (isRecord(job.payload) && typeof job.payload.sessionKey === "string"
         ? job.payload.sessionKey
+        : "");
+
+    const inferredAccountId = inferAccountIdFromSessionKey(sessionKey);
+    const inferredPeerId = inferPeerIdFromSessionKey(sessionKey);
+
+    const existingTo = typeof delivery.to === "string" ? delivery.to.trim() : "";
+    const existingAccountId =
+      typeof delivery.accountId === "string" && delivery.accountId.trim()
+        ? (delivery.accountId as string).trim().toLowerCase()
         : "";
-  const inferredAccountId = inferAccountIdFromSessionKey(sessionKey);
-  const inferredPeerId = inferPeerIdFromSessionKey(sessionKey);
 
-  const existingTo = typeof delivery.to === "string" ? delivery.to.trim() : "";
-  const existingAccountId =
-    typeof delivery.accountId === "string" && delivery.accountId.trim()
-      ? delivery.accountId.trim().toLowerCase()
-      : "";
+    const hasInferredTarget = inferredAccountId || inferredPeerId;
+    const hasExistingTarget = existingTo || existingAccountId;
 
-  const hasInferredTarget = inferredAccountId || inferredPeerId;
-  const hasExistingTarget = existingTo || existingAccountId;
+    if (!hasInferredTarget && !hasExistingTarget) {
+      api.logger.info('[cron.add hook] No target info, using "last" channel to bypass pairing');
+      const patchedDelivery = { ...delivery, mode: "announce", channel: "last", accountId: "default" };
+      // Return params for shallow merge with original params
+      return isRecord(params.job)
+        ? { params: { job: { ...job, delivery: patchedDelivery } } }
+        : { params: { delivery: patchedDelivery } };
+    }
 
-  if (!hasInferredTarget && !hasExistingTarget) {
-    api?.logger.info('[cron.add patch] No target info, using "last" channel to bypass pairing');
-    parsed.params = {
-      ...job,
-      delivery: { ...delivery, mode: "announce", channel: "last", accountId: "default" },
-    };
-    return {
-      ...(input instanceof Request
-        ? { method: input.method, redirect: input.redirect, credentials: input.credentials }
-        : {}),
-      ...init,
-      headers,
-      body: JSON.stringify(parsed),
-    };
-  }
+    const inferredTo = inferredPeerId ? `telegram:${inferredPeerId}` : "";
+    const nextTo = inferredTo || existingTo;
+    const nextMode = typeof delivery.mode === "string" && delivery.mode.trim() ? delivery.mode : "announce";
+    const nextChannel =
+      typeof delivery.channel === "string" && delivery.channel.trim() ? delivery.channel : "telegram";
+    const nextAccountId = inferredAccountId || existingAccountId || undefined;
 
-  const inferredTo = inferredPeerId ? `telegram:${inferredPeerId}` : "";
-  const nextTo = inferredTo || existingTo;
-  const nextMode = typeof delivery.mode === "string" && delivery.mode.trim() ? delivery.mode : "announce";
-  const nextChannel = typeof delivery.channel === "string" && delivery.channel.trim() ? delivery.channel : "telegram";
-  const nextAccountId = inferredAccountId || existingAccountId || undefined;
-
-  parsed.params = {
-    ...job,
-    delivery: {
+    const patchedDelivery = {
       ...delivery,
       mode: nextMode,
       channel: nextChannel,
       ...(nextTo ? { to: nextTo } : {}),
       ...(nextAccountId ? { accountId: nextAccountId } : {}),
-    },
-  };
-  api?.logger.info(
-    `[cron.add patch] sessionKey=${sessionKey || "n/a"} accountId=${nextAccountId || "n/a"} to=${nextTo || "n/a"}`,
-  );
+    };
 
-  return {
-    ...(input instanceof Request
-      ? { method: input.method, redirect: input.redirect, credentials: input.credentials }
-      : {}),
-    ...init,
-    headers,
-    body: JSON.stringify(parsed),
-  };
-}
+    api.logger.info(
+      `[cron.add hook] sessionKey=${sessionKey || "n/a"} accountId=${nextAccountId || "n/a"} to=${nextTo || "n/a"}`,
+    );
 
-// ---------------------------------------------------------------------------
-// Fetch proxy installation (cron delivery only)
-// ---------------------------------------------------------------------------
+    return isRecord(params.job)
+      ? { params: { job: { ...job, delivery: patchedDelivery } } }
+      : { params: { delivery: patchedDelivery } };
+  });
 
-function installFetchProxy(api: OpenClawPluginApi) {
-  const g = globalThis as typeof globalThis & { [FETCH_PATCH_KEY]?: boolean };
-  if (g[FETCH_PATCH_KEY]) return;
-  if (typeof globalThis.fetch !== "function") {
-    api.logger.warn("Global fetch unavailable, skip platform hooks fetch patch");
-    return;
-  }
-
-  const originalFetch = globalThis.fetch.bind(globalThis);
-
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const patchedInit = await patchCronAddDeliveryAccountId(input, init, api);
-    if (patchedInit) init = patchedInit;
-    return originalFetch(input as RequestInfo, init);
-  }) as typeof fetch;
-
-  g[FETCH_PATCH_KEY] = true;
-  api.logger.info("Platform hooks fetch patch installed");
+  api.logger.info("[cron.add] before_tool_call hook registered");
 }
 
 // ---------------------------------------------------------------------------
 // Device auto-pairing
 // ---------------------------------------------------------------------------
 
-function installAutoPairingApproval(api: OpenClawPluginApi) {
-  const CHECK_INTERVAL_MS = 3000;
-  let isRunning = false;
+async function prePairDeviceIdentity(api: OpenClawPluginApi) {
+  try {
+    const stateDir =
+      process.env.OPENCLAW_STATE_DIR ||
+      `${process.env.OPENCLAW_HOME || process.env.HOME || "/app"}/.openclaw`;
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const crypto = await import("node:crypto");
 
-  // @ts-ignore — module available at runtime inside OpenClaw container
-  type DevicePairSdk = typeof import("openclaw/plugin-sdk/device-pair");
-  let sdk: DevicePairSdk | null = null;
+    const identityDir = path.join(stateDir, "identity");
+    const identityPath = path.join(identityDir, "device.json");
 
-  const loadSdk = async (): Promise<DevicePairSdk | null> => {
-    if (sdk) return sdk;
-    try {
-      // @ts-ignore — module available at runtime inside OpenClaw container
-      sdk = (await import("openclaw/plugin-sdk/device-pair")) as DevicePairSdk;
-      return sdk;
-    } catch { return null; }
-  };
+    let deviceId: string;
+    let publicKeyPem: string;
 
-  // ── Phase 1: Create device identity + pre-pair at startup ──
-  const prePairDeviceIdentity = async () => {
-    try {
-      const stateDir =
-        process.env.OPENCLAW_STATE_DIR ||
-        `${process.env.OPENCLAW_HOME || process.env.HOME || "/app"}/.openclaw`;
-      const fs = await import("node:fs");
-      const path = await import("node:path");
-      const crypto = await import("node:crypto");
-
-      const identityDir = path.join(stateDir, "identity");
-      const identityPath = path.join(identityDir, "device.json");
-
-      let deviceId: string;
-      let publicKeyPem: string;
-
-      if (fs.existsSync(identityPath)) {
-        const existing = JSON.parse(fs.readFileSync(identityPath, "utf8")) as {
-          deviceId?: string;
-          publicKeyPem?: string;
-        };
-        if (existing.deviceId && existing.publicKeyPem) {
-          deviceId = existing.deviceId;
-          publicKeyPem = existing.publicKeyPem;
-          api.logger.info(`[auto-pairing] Existing identity ${deviceId.slice(0, 12)}…`);
-        } else {
-          api.logger.warn("[auto-pairing] Identity file malformed — regenerating");
-          fs.unlinkSync(identityPath);
-          return;
-        }
+    if (fs.existsSync(identityPath)) {
+      const existing = JSON.parse(fs.readFileSync(identityPath, "utf8")) as {
+        deviceId?: string;
+        publicKeyPem?: string;
+      };
+      if (existing.deviceId && existing.publicKeyPem) {
+        deviceId = existing.deviceId;
+        publicKeyPem = existing.publicKeyPem;
+        api.logger.info(`[auto-pairing] Existing identity ${deviceId.slice(0, 12)}…`);
       } else {
-        const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-        publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
-        const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
-
-        const ED25519_SPKI_PREFIX_LEN = 12;
-        const spkiDer = publicKey.export({ type: "spki", format: "der" });
-        const rawPubKey = (spkiDer as Buffer).subarray(ED25519_SPKI_PREFIX_LEN);
-        deviceId = crypto.createHash("sha256").update(rawPubKey).digest("hex");
-
-        fs.mkdirSync(identityDir, { recursive: true });
-        fs.writeFileSync(
-          identityPath,
-          JSON.stringify({
-            version: 1, deviceId, publicKeyPem, privateKeyPem, createdAtMs: Date.now(),
-          }, null, 2) + "\n",
-          { mode: 0o600 },
-        );
-        api.logger.info(`[auto-pairing] Created identity ${deviceId.slice(0, 12)}…`);
-      }
-
-      // Ensure device is paired
-      const devicesDir = path.join(stateDir, "devices");
-      fs.mkdirSync(devicesDir, { recursive: true });
-      const pairedPath = path.join(devicesDir, "paired.json");
-      const existingPaired: Record<string, unknown> = fs.existsSync(pairedPath)
-        ? (JSON.parse(fs.readFileSync(pairedPath, "utf8")) as Record<string, unknown>)
-        : {};
-
-      if (existingPaired[deviceId]) {
-        api.logger.info(`[auto-pairing] Device ${deviceId.slice(0, 12)}… already paired`);
+        api.logger.warn("[auto-pairing] Identity file malformed — regenerating");
+        fs.unlinkSync(identityPath);
         return;
       }
+    } else {
+      const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+      publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
+      const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
 
-      const pubKey = crypto.createPublicKey(publicKeyPem);
-      const spki = pubKey.export({ type: "spki", format: "der" });
-      const rawKey = (spki as Buffer).subarray(12);
-      const pubKeyB64 = rawKey
-        .toString("base64")
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/, "");
+      const ED25519_SPKI_PREFIX_LEN = 12;
+      const spkiDer = publicKey.export({ type: "spki", format: "der" });
+      const rawPubKey = (spkiDer as Buffer).subarray(ED25519_SPKI_PREFIX_LEN);
+      deviceId = crypto.createHash("sha256").update(rawPubKey).digest("hex");
 
-      const now = Date.now();
-      existingPaired[deviceId] = {
-        deviceId,
-        publicKey: pubKeyB64,
-        clientId: "gateway-client",
-        clientMode: "backend",
-        role: "admin",
-        roles: ["admin", "operator"],
-        scopes: [
-          "operator.read", "operator.write", "operator.admin",
-          "operator.approvals", "operator.pairing",
-        ],
-        approvedScopes: [
-          "operator.read", "operator.write", "operator.admin",
-          "operator.approvals", "operator.pairing",
-        ],
-        createdAtMs: now,
-        approvedAtMs: now,
-      };
-
-      fs.writeFileSync(pairedPath, JSON.stringify(existingPaired, null, 2) + "\n");
-      api.logger.info(`[auto-pairing] Pre-paired ${deviceId.slice(0, 12)}… with full scopes`);
-    } catch (err) {
-      api.logger.warn(`[auto-pairing] Pre-pair failed: ${String(err)}`);
+      fs.mkdirSync(identityDir, { recursive: true });
+      fs.writeFileSync(
+        identityPath,
+        JSON.stringify({
+          version: 1, deviceId, publicKeyPem, privateKeyPem, createdAtMs: Date.now(),
+        }, null, 2) + "\n",
+        { mode: 0o600 },
+      );
+      api.logger.info(`[auto-pairing] Created identity ${deviceId.slice(0, 12)}…`);
     }
-  };
 
-  // ── Phase 2: Background polling for new requests ──
-  const checkAndApprovePending = async () => {
+    // Ensure device is paired
+    const devicesDir = path.join(stateDir, "devices");
+    fs.mkdirSync(devicesDir, { recursive: true });
+    const pairedPath = path.join(devicesDir, "paired.json");
+    const existingPaired: Record<string, unknown> = fs.existsSync(pairedPath)
+      ? (JSON.parse(fs.readFileSync(pairedPath, "utf8")) as Record<string, unknown>)
+      : {};
+
+    if (existingPaired[deviceId]) {
+      api.logger.info(`[auto-pairing] Device ${deviceId.slice(0, 12)}… already paired`);
+      return;
+    }
+
+    const pubKey = crypto.createPublicKey(publicKeyPem);
+    const spki = pubKey.export({ type: "spki", format: "der" });
+    const rawKey = (spki as Buffer).subarray(12);
+    const pubKeyB64 = rawKey
+      .toString("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+
+    const now = Date.now();
+    existingPaired[deviceId] = {
+      deviceId,
+      publicKey: pubKeyB64,
+      clientId: "gateway-client",
+      clientMode: "backend",
+      role: "admin",
+      roles: ["admin", "operator"],
+      scopes: [
+        "operator.read", "operator.write", "operator.admin",
+        "operator.approvals", "operator.pairing",
+      ],
+      approvedScopes: [
+        "operator.read", "operator.write", "operator.admin",
+        "operator.approvals", "operator.pairing",
+      ],
+      createdAtMs: now,
+      approvedAtMs: now,
+    };
+
+    fs.writeFileSync(pairedPath, JSON.stringify(existingPaired, null, 2) + "\n");
+    api.logger.info(`[auto-pairing] Pre-paired ${deviceId.slice(0, 12)}… with full scopes`);
+  } catch (err) {
+    api.logger.warn(`[auto-pairing] Pre-pair failed: ${String(err)}`);
+  }
+}
+
+function installAutoPairingService(api: OpenClawPluginApi) {
+  const CHECK_INTERVAL_MS = 3000;
+
+  // Phase 1: Pre-pair identity at startup (must run before gateway is ready)
+  prePairDeviceIdentity(api).catch(() => {});
+
+  // Phase 2: Background polling via registerService for proper lifecycle
+  // @ts-ignore — module available at runtime inside OpenClaw container
+  type DevicePairSdk = typeof import("openclaw/plugin-sdk/device-pair");
+
+  let sdk: DevicePairSdk | null = null;
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let isRunning = false;
+
+  const checkAndApprovePending = async (logger: { info: Function; warn: Function }) => {
     if (isRunning) return;
     isRunning = true;
     try {
-      const mod = await loadSdk();
-      if (!mod) return;
-      const { pending } = await mod.listDevicePairing();
+      if (!sdk) {
+        try {
+          // @ts-ignore — module available at runtime inside OpenClaw container
+          sdk = (await import("openclaw/plugin-sdk/device-pair")) as DevicePairSdk;
+        } catch { return; }
+      }
+      const { pending } = await sdk.listDevicePairing();
       for (const request of pending) {
         if (!("requestId" in request)) continue;
         const req = request as { requestId: string; clientId?: string };
-        api.logger.info(`[auto-pairing] Approving: ${req.requestId}`);
+        logger.info(`[auto-pairing] Approving: ${req.requestId}`);
         try {
-          await mod.approveDevicePairing(req.requestId);
-          api.logger.info(`[auto-pairing] Approved: ${req.requestId}`);
+          await sdk.approveDevicePairing(req.requestId);
+          logger.info(`[auto-pairing] Approved: ${req.requestId}`);
         } catch (err) {
-          api.logger.warn(`[auto-pairing] Failed: ${req.requestId}: ${String(err)}`);
+          logger.warn(`[auto-pairing] Failed: ${req.requestId}: ${String(err)}`);
         }
       }
     } catch {
@@ -362,10 +280,24 @@ function installAutoPairingApproval(api: OpenClawPluginApi) {
     }
   };
 
-  prePairDeviceIdentity().catch(() => {});
-  setInterval(checkAndApprovePending, CHECK_INTERVAL_MS);
-  setTimeout(checkAndApprovePending, 2000);
-  api.logger.info("[auto-pairing] Enabled (eager pre-pair + background polling)");
+  api.registerService({
+    id: "device-auto-pairing",
+    async start(ctx: any) {
+      ctx.logger.info("[auto-pairing] Service started (eager pre-pair + background polling)");
+      // Initial check after 2s
+      setTimeout(() => checkAndApprovePending(ctx.logger), 2000);
+      // Regular polling
+      timer = setInterval(() => checkAndApprovePending(ctx.logger), CHECK_INTERVAL_MS);
+      timer.unref?.();
+    },
+    async stop() {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      api.logger.info("[auto-pairing] Service stopped");
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -432,8 +364,8 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     api.logger.info("PinAI Platform Hooks enabled");
     installSystemGuidanceHook(api);
-    installFetchProxy(api);
-    installAutoPairingApproval(api);
+    installCronDeliveryHook(api);
+    installAutoPairingService(api);
   },
 };
 
