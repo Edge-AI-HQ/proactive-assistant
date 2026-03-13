@@ -77,11 +77,11 @@ echo
 # 尝试多种可能的 digest 格式
 if command -v rg >/dev/null 2>&1; then
   # 尝试完整格式: registry.fly.io/app@sha256:...
-  DIGEST_REF="$(rg -o "registry\\.fly\\.io/${FLY_APP}@sha256:[0-9a-f]{64}" "${BUILD_OUTPUT_FILE}" | tail -n 1)"
+  DIGEST_REF="$(rg -o "registry\\.fly\\.io/${FLY_APP}@sha256:[0-9a-f]{64}" "${BUILD_OUTPUT_FILE}" | tail -n 1 || true)"
   
   # 如果没找到,尝试匹配 "digest: sha256:..." 格式
   if [ -z "${DIGEST_REF}" ]; then
-    SHA256_ONLY="$(rg -o "digest: sha256:[0-9a-f]{64}" "${BUILD_OUTPUT_FILE}" | rg -o "sha256:[0-9a-f]{64}" | tail -n 1)"
+    SHA256_ONLY="$(rg -o "digest: sha256:[0-9a-f]{64}" "${BUILD_OUTPUT_FILE}" | rg -o "sha256:[0-9a-f]{64}" | tail -n 1 || true)"
     if [ -n "${SHA256_ONLY}" ]; then
       DIGEST_REF="registry.fly.io/${FLY_APP}@${SHA256_ONLY}"
     fi
@@ -89,18 +89,18 @@ if command -v rg >/dev/null 2>&1; then
   
   # 最后尝试只匹配任意 sha256:...
   if [ -z "${DIGEST_REF}" ]; then
-    SHA256_ONLY="$(rg -o "sha256:[0-9a-f]{64}" "${BUILD_OUTPUT_FILE}" | tail -n 1)"
+    SHA256_ONLY="$(rg -o "sha256:[0-9a-f]{64}" "${BUILD_OUTPUT_FILE}" | tail -n 1 || true)"
     if [ -n "${SHA256_ONLY}" ]; then
       DIGEST_REF="registry.fly.io/${FLY_APP}@${SHA256_ONLY}"
     fi
   fi
 else
   # 尝试完整格式
-  DIGEST_REF="$(grep -Eo "registry\\.fly\\.io/${FLY_APP}@sha256:[0-9a-f]{64}" "${BUILD_OUTPUT_FILE}" | tail -n 1)"
+  DIGEST_REF="$(grep -Eo "registry\\.fly\\.io/${FLY_APP}@sha256:[0-9a-f]{64}" "${BUILD_OUTPUT_FILE}" | tail -n 1 || true)"
   
   # 如果没找到,尝试匹配 "digest: sha256:..." 格式
   if [ -z "${DIGEST_REF}" ]; then
-    SHA256_ONLY="$(grep -Eo "digest: sha256:[0-9a-f]{64}" "${BUILD_OUTPUT_FILE}" | grep -Eo "sha256:[0-9a-f]{64}" | tail -n 1)"
+    SHA256_ONLY="$(grep -Eo "digest: sha256:[0-9a-f]{64}" "${BUILD_OUTPUT_FILE}" | grep -Eo "sha256:[0-9a-f]{64}" | tail -n 1 || true)"
     if [ -n "${SHA256_ONLY}" ]; then
       DIGEST_REF="registry.fly.io/${FLY_APP}@${SHA256_ONLY}"
     fi
@@ -108,7 +108,7 @@ else
   
   # 最后尝试只匹配任意 sha256:...
   if [ -z "${DIGEST_REF}" ]; then
-    SHA256_ONLY="$(grep -Eo "sha256:[0-9a-f]{64}" "${BUILD_OUTPUT_FILE}" | tail -n 1)"
+    SHA256_ONLY="$(grep -Eo "sha256:[0-9a-f]{64}" "${BUILD_OUTPUT_FILE}" | tail -n 1 || true)"
     if [ -n "${SHA256_ONLY}" ]; then
       DIGEST_REF="registry.fly.io/${FLY_APP}@${SHA256_ONLY}"
     fi
