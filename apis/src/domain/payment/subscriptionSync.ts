@@ -918,6 +918,14 @@ export async function handleInvoicePaid(
 /**
  * 定时任务：对「当前时间已进入且尚未应用 budget」的周期执行 LiteLLM reset spend + set budget，并标记已应用；
  * 对「曾有周期但当前无生效周期」（如已取消且周期已结束）的用户清零 budget 并停容器。
+ *
+ * 幂等性保证（方案A）：
+ * 1. 新周期应用：先标记 budget_applied_at，再执行 LiteLLM API 调用
+ *    - 即使后续操作失败，下次定时任务不会重复执行（已标记）
+ *    - FOR UPDATE ... SKIP LOCKED 防止并发处理同一周期
+ * 2. 过期用户清零：LiteLLM API 调用本身是幂等的
+ *    - 多次设置 budget=0 不会造成数据不一致
+ *    - 容器停止操作添加细粒度错误处理，避免单个失败影响整体
  */
 async function applySubscriptionPeriodBudgetsCore(now?: Date): Promise<{
   processed: number;
@@ -934,6 +942,21 @@ async function applySubscriptionPeriodBudgetsCore(now?: Date): Promise<{
 
   for (const period of periods) {
     try {
+      // 先标记为已应用，避免后续操作失败导致重复执行（幂等性保证）
+      const marked = await db.markPeriodBudgetApplied(period.id);
+      if (!marked) {
+        // 已被其他实例处理，跳过
+        console.log(
+          "[payment] Period already marked as applied by another instance, skipping",
+          {
+            periodId: period.id,
+            telegramUserId: period.telegram_user_id,
+          },
+        );
+        continue;
+      }
+
+      // 执行 LiteLLM budget 操作（设计为幂等，即使多次执行结果相同）
       await syncLiteLLMBudgetFromPlan({
         telegram_user_id: period.telegram_user_id,
         telegram_username: period.telegram_username ?? null,
@@ -941,8 +964,7 @@ async function applySubscriptionPeriodBudgetsCore(now?: Date): Promise<{
         source: "cron_apply_subscription_period",
         reset_spend: true,
       });
-      const updated = await db.markPeriodBudgetApplied(period.id);
-      if (updated) processed += 1;
+      processed += 1;
     } catch (err) {
       failed += 1;
       const msg = err instanceof Error ? err.message : String(err);
@@ -961,6 +983,7 @@ async function applySubscriptionPeriodBudgetsCore(now?: Date): Promise<{
   let endedFailed = 0;
 
   for (const user of endedUsers) {
+    // 清零 budget 操作（幂等：多次执行结果相同，不会造成数据不一致）
     try {
       await syncLiteLLMBudgetAbsolute({
         telegram_user_id: user.telegram_user_id,
@@ -970,6 +993,12 @@ async function applySubscriptionPeriodBudgetsCore(now?: Date): Promise<{
         reset_spend: true,
       });
       endedZeroed += 1;
+      console.log(
+        "[payment] Budget zeroed for ended subscription (idempotent operation)",
+        {
+          telegramUserId: user.telegram_user_id,
+        },
+      );
     } catch (err) {
       endedFailed += 1;
       console.error(
@@ -979,14 +1008,32 @@ async function applySubscriptionPeriodBudgetsCore(now?: Date): Promise<{
           error: err instanceof Error ? err.message : String(err),
         },
       );
+      // 即使清零失败，仍然尝试停止容器（避免资源泄漏）
     }
 
+    // 停止运行中的容器（独立操作，不依赖 budget 清零结果）
     try {
       const assistants = await listAssistantsByOwnerTelegramId(
         Number(user.telegram_user_id),
       );
-      for (const assistant of assistants) {
-        if (assistant.container_status === "running") {
+      const runningAssistants = assistants.filter(
+        (a) => a.container_status === "running",
+      );
+
+      if (runningAssistants.length === 0) {
+        continue;
+      }
+
+      console.log(
+        `[payment] Stopping ${runningAssistants.length} container(s) for ended subscription`,
+        {
+          telegramUserId: user.telegram_user_id,
+          assistantIds: runningAssistants.map((a) => a.id),
+        },
+      );
+
+      for (const assistant of runningAssistants) {
+        try {
           await stopAssistantContainer({
             id: assistant.id,
             assistant_bot_id: assistant.assistant_bot_id,
@@ -995,6 +1042,16 @@ async function applySubscriptionPeriodBudgetsCore(now?: Date): Promise<{
           });
           console.log(
             `[payment] Stopped container for assistant ${assistant.id} (ended subscription)`,
+          );
+        } catch (stopErr) {
+          console.error(
+            `[payment] Failed to stop individual container for assistant ${assistant.id}`,
+            {
+              assistantId: assistant.id,
+              telegramUserId: user.telegram_user_id,
+              error:
+                stopErr instanceof Error ? stopErr.message : String(stopErr),
+            },
           );
         }
       }
