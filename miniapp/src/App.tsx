@@ -330,18 +330,19 @@ const App = () => {
     const initData = window.Telegram?.WebApp?.initData?.trim() ?? "";
     const inWebPreview = isDemoMode();
 
-    let quick: StatePayload;
-    if (initData || inWebPreview) {
-      const endpoint = getBootstrapEndpoint();
-      const payload = getBootstrapPayload();
-
-      quick = await safeFetch<StatePayload>(endpoint, {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
-    } else {
-      quick = await safeFetch<StatePayload>("/api/mini/state");
+    if (!initData && !inWebPreview) {
+      throw new Error(
+        "Please open this app through Telegram. Direct browser access is not supported.",
+      );
     }
+
+    const endpoint = getBootstrapEndpoint();
+    const payload = getBootstrapPayload();
+
+    const quick = await safeFetch<StatePayload>(endpoint, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
 
     hydrateState(quick);
     setLoading(false);
@@ -804,13 +805,18 @@ const App = () => {
 
   // Show subscription / choose plan page when not subscribed
   if (!state.subscription.active) {
-    const planBadge: Record<string, string> = { pro: "Most Popular", max: "Best Value" };
-    const planPromo: Record<string, string> = { basic: "2x", pro: "3x", max: "3.5x" };
+    const planBadge: Record<string, string> = {
+      pro: "Most Popular",
+      max: "Best Value",
+    };
+    const planPromo: Record<string, string> = {
+      basic: "2x",
+      pro: "3x",
+      max: "3.5x",
+    };
 
     return (
-      <div
-        className="fixed inset-0 z-[9999] bg-pin-gradient animate-fade-in"
-      >
+      <div className="fixed inset-0 z-[9999] bg-pin-gradient animate-fade-in">
         <div
           className="max-w-md mx-auto h-full flex flex-col"
           style={{
@@ -826,8 +832,18 @@ const App = () => {
               }}
               className="absolute left-4 w-8 h-8 flex items-center justify-center rounded-xl hover:bg-black/5 transition-colors"
             >
-              <svg className="w-5 h-5 text-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+              <svg
+                className="w-5 h-5 text-foreground"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M15 19l-7-7 7-7"
+                />
               </svg>
             </button>
             <h2 className="text-sm font-semibold text-foreground">PIN Claw</h2>
@@ -835,14 +851,21 @@ const App = () => {
 
           <div className="flex-1 flex flex-col px-5 min-h-0 overflow-y-auto">
             <div className="text-center mb-5">
-              <h1 className="text-2xl font-bold text-foreground mb-1.5">Choose Your Plan</h1>
-              <p className="text-sm text-muted-foreground">Subscribe to unlock your AI agent.</p>
+              <h1 className="text-2xl font-bold text-foreground mb-1.5">
+                Choose Your Plan
+              </h1>
+              <p className="text-sm text-muted-foreground">
+                Subscribe to unlock your AI agent.
+              </p>
             </div>
 
             <div className="space-y-3 flex-1">
               {state.plans === null
                 ? Array.from({ length: 3 }).map((_, i) => (
-                    <div key={i} className="w-full rounded-2xl p-4 bg-white border border-border/20 animate-pulse">
+                    <div
+                      key={i}
+                      className="w-full rounded-2xl p-4 bg-white border border-border/20 animate-pulse"
+                    >
                       <div className="flex items-center justify-between mb-2">
                         <div className="h-5 w-20 bg-secondary rounded" />
                         <div className="h-6 w-24 bg-secondary rounded" />
@@ -864,25 +887,33 @@ const App = () => {
                         onClick={() => setSelectedPlan(plan.id)}
                       >
                         {badge && (
-                          <span className={`absolute -top-2.5 right-4 text-[10px] font-semibold px-2.5 py-0.5 rounded-full ${
-                            plan.id === "pro"
-                              ? "bg-primary text-white"
-                              : "bg-foreground text-background"
-                          }`}>
+                          <span
+                            className={`absolute -top-2.5 right-4 text-[10px] font-semibold px-2.5 py-0.5 rounded-full ${
+                              plan.id === "pro"
+                                ? "bg-primary text-white"
+                                : "bg-foreground text-background"
+                            }`}
+                          >
                             {badge}
                           </span>
                         )}
                         <div className="flex items-center justify-between gap-2 mb-1">
-                          <span className="text-base font-bold text-foreground">{plan.name}</span>
+                          <span className="text-base font-bold text-foreground">
+                            {plan.name}
+                          </span>
                           <span className="text-lg font-extrabold text-foreground">
-                            ${plan.price}<span className="text-sm font-normal text-muted-foreground">/mo</span>
+                            ${plan.price}
+                            <span className="text-sm font-normal text-muted-foreground">
+                              /mo
+                            </span>
                           </span>
                         </div>
                         <p className="text-xs text-muted-foreground">
                           {plan.features[0]}
                         </p>
                         <p className="text-[11px] font-medium text-primary mt-1">
-                          Early Access — {planPromo[plan.id] ?? "2x"} credits included
+                          Early Access — {planPromo[plan.id] ?? "2x"} credits
+                          included
                         </p>
                       </button>
                     );
