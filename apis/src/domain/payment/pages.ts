@@ -171,139 +171,102 @@ const paymentPageLayoutStyles = `
   }
 `;
 
-const readTelegramReturnButton = (
-  label: string,
-  fallback: string,
-): string => {
-  const username = (process.env.TELEGRAM_BOT_USERNAME || "")
-    .trim()
-    .replace(/^@/, "");
-  return username
-    ? `<div class="stack"><a class="btn" href="https://t.me/${username}" target="_blank" rel="noopener">${label}</a><a class="btn-secondary" href="https://t.me/${username}" target="_blank" rel="noopener">Open Telegram bot</a></div>`
-    : `<p class="muted">${fallback}</p>`;
+const miniPageStyles = `
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif; background: linear-gradient(160deg, hsl(310 25% 97%), hsl(270 30% 96.5%)); color: hsl(270 20% 15%); -webkit-font-smoothing: antialiased; }
+  .wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .card { width: 100%; max-width: 360px; background: rgba(255,255,255,0.85); backdrop-filter: blur(32px); -webkit-backdrop-filter: blur(32px); border: 1.5px solid rgba(255,255,255,0.5); border-radius: 24px; padding: 32px 24px; text-align: center; box-shadow: 0 8px 32px -8px rgba(120,80,140,0.12); }
+  .icon { width: 56px; height: 56px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-size: 24px; font-weight: 700; }
+  h1 { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
+  p { font-size: 14px; color: hsl(270 10% 50%); line-height: 1.5; margin-bottom: 24px; }
+  a.btn { display: inline-block; text-decoration: none; background: hsl(270 20% 15%); color: white; padding: 14px 32px; border-radius: 16px; font-size: 15px; font-weight: 600; transition: opacity 0.2s; }
+  a.btn:active { opacity: 0.85; transform: scale(0.98); }
+  .brand { margin-top: 20px; font-size: 12px; color: hsl(270 10% 70%); }
+`;
+
+const readTelegramReturnUrl = (): string => {
+  const username = (process.env.TELEGRAM_BOT_USERNAME || "").trim().replace(/^@/, "");
+  return username ? `https://t.me/${username}` : "tg://resolve";
+};
+
+const renderMiniPage = (opts: {
+  title: string;
+  pageTitle: string;
+  icon: string;
+  iconColor: string;
+  iconBg: string;
+  description: string;
+  buttonLabel: string;
+}): string => {
+  const url = readTelegramReturnUrl();
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${opts.pageTitle} — PIN Claw</title>
+  <style>${miniPageStyles}</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="icon" style="background:${opts.iconBg};color:${opts.iconColor}">${opts.icon}</div>
+      <h1>${opts.title}</h1>
+      <p>${opts.description}</p>
+      <a class="btn" href="${url}">${opts.buttonLabel}</a>
+      <div class="brand">PIN Claw</div>
+    </div>
+  </div>
+</body>
+</html>`;
 };
 
 export const renderSuccessPage = (mode?: string): string => {
-  const button = readTelegramReturnButton(
-    "Return to Telegram",
-    "Return to Telegram and continue with your bot.",
-  );
-
   const isDowngrade = mode === "downgrade_scheduled";
-  const title = isDowngrade ? "Plan Change Scheduled" : "Subscription Activated";
-  const pageTitle = isDowngrade ? "Plan Changed - PIN AI" : "Subscription Active - PIN AI";
-
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>${pageTitle}</title>
-    <style>${paymentPageLayoutStyles}</style>
-  </head>
-  <body>
-    <div class="container">
-      <div class="header">
-        <div class="header-icons">
-          <img src="/logo_pinai.png" alt="PIN AI Logo">
-          <div class="separator">×</div>
-          <img src="/logo_openclaw.png" alt="OpenClaw Logo">
-        </div>
-        <h1>${title}</h1>
-      </div>
-      <div class="card">
-        <p>${isDowngrade ? "Your plan has been changed. The new plan will take effect at your next billing cycle. You will keep your current credits until then." : "Your payment was completed successfully and credits are now managed by your active plan. Your assistant container will be ready shortly."}</p>
-        ${button}
-      </div>
-    </div>
-  </body>
-</html>`;
+  return renderMiniPage({
+    title: isDowngrade ? "Plan Change Scheduled" : "Subscription Activated",
+    pageTitle: isDowngrade ? "Plan Changed" : "Subscription Active",
+    icon: isDowngrade ? "↻" : "✓",
+    iconColor: isDowngrade ? "#a855f7" : "#22c55e",
+    iconBg: isDowngrade ? "rgba(168,85,247,0.1)" : "rgba(34,197,94,0.1)",
+    description: isDowngrade
+      ? "Your new plan will take effect at the next billing cycle. Current credits remain available until then."
+      : "Payment complete! Your credits are active and your assistant will be ready shortly.",
+    buttonLabel: "Back to Telegram",
+  });
 };
 
 export const renderCancelPage = (): string => {
-  const button = readTelegramReturnButton(
-    "Back to Telegram",
-    "No charge was made. Retry from Telegram anytime.",
-  );
-
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Payment Cancelled - PIN AI</title>
-    <style>${paymentPageLayoutStyles}</style>
-  </head>
-  <body>
-    <div class="container">
-      <div class="header">
-        <div class="header-icons">
-          <img src="/logo_pinai.png" alt="PIN AI Logo">
-          <div class="separator">×</div>
-          <img src="/logo_openclaw.png" alt="OpenClaw Logo">
-        </div>
-        <h1>Checkout Cancelled</h1>
-      </div>
-      <div class="card">
-        <p>No charge was made to your account. You can subscribe anytime from the guide bot in Telegram.</p>
-        ${button}
-      </div>
-    </div>
-  </body>
-</html>`;
+  return renderMiniPage({
+    title: "Checkout Cancelled",
+    pageTitle: "Cancelled",
+    icon: "—",
+    iconColor: "#a1a1aa",
+    iconBg: "rgba(161,161,170,0.1)",
+    description: "No charge was made. You can subscribe anytime from the Mini App in Telegram.",
+    buttonLabel: "Back to Telegram",
+  });
 };
 
 export const renderSubscribeUnavailablePage = (options?: {
   reason?: "expired" | "invalid" | "unavailable";
 }): string => {
   const reason = options?.reason ?? "unavailable";
-  const title =
+  const description =
     reason === "expired"
-      ? "This payment link has expired"
+      ? "This link has expired for security reasons. Please return to Telegram and request a new one."
       : reason === "invalid"
-        ? "This payment link is no longer available"
-        : "Payment link unavailable";
-  const copy =
-    reason === "expired"
-      ? "For security, subscription links only stay active for a limited time. Please return to Telegram and request a fresh link."
-      : reason === "invalid"
-        ? "The link looks incomplete or has already been replaced. You can safely open a new one from Telegram."
-        : "We could not open this payment page right now. Please go back to Telegram and try again in a moment.";
-  const helper =
-    reason === "expired"
-      ? "No action was taken and no charge was made."
-      : "Your account is safe. You only need a fresh link to continue.";
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Payment Link Unavailable - PIN AI</title>
-    <style>${paymentPageLayoutStyles}</style>
-  </head>
-  <body>
-    <div class="container">
-      <div class="header">
-        <div class="header-icons">
-          <img src="/logo_pinai.png" alt="PIN AI Logo">
-          <div class="separator">×</div>
-          <img src="/logo_openclaw.png" alt="OpenClaw Logo">
-        </div>
-        <div class="eyebrow">Payment Link Status</div>
-      </div>
-      <div class="card status-card">
-        <div class="status-icon">↺</div>
-        <h1 class="status-title">${title}</h1>
-        <p class="status-copy">${copy}</p>
-        <div class="tip-strip">
-          <span><strong>What to do next:</strong> return to Telegram and open a new subscription link.</span>
-          <span>${helper}</span>
-        </div>
-        <p class="muted">Open Telegram and run <strong>/create</strong> to generate a fresh payment link.</p>
-      </div>
-    </div>
-  </body>
-</html>`;
+        ? "This link is no longer valid. Please open a new one from Telegram."
+        : "Something went wrong. Please go back to Telegram and try again.";
+  return renderMiniPage({
+    title: "Link Unavailable",
+    pageTitle: "Unavailable",
+    icon: "✕",
+    iconColor: "#ef4444",
+    iconBg: "rgba(239,68,68,0.1)",
+    description,
+    buttonLabel: "Back to Telegram",
+  });
 };
 
 export const renderSubscribePage = (token: string): string => {
