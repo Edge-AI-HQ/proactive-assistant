@@ -15,12 +15,12 @@ TARGET_ENV="${1:-prod}"
 
 case "${TARGET_ENV}" in
   dev)
-    FLY_APP="${FLY_APP:-pinclaw-openclaw-dev}"
+    FLY_APP="${FLY_APP:-pinclaw-assistant-dev}"
     SECRET_APP="${SECRET_APP:-pinclaw-api-dev}"
     FLY_CONFIG_PATH="${FLY_CONFIG_PATH:-pinai-openclaw/fly.dev.toml}"
     ;;
   prod)
-    FLY_APP="${FLY_APP:-pinclaw-openclaw-prod}"
+    FLY_APP="${FLY_APP:-pinclaw-assistant-prod}"
     SECRET_APP="${SECRET_APP:-pinclaw-api-prod}"
     FLY_CONFIG_PATH="${FLY_CONFIG_PATH:-pinai-openclaw/fly.prod.toml}"
     ;;
