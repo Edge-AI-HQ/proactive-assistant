@@ -1,5 +1,6 @@
 interface CreateAgentFlowProps {
   onContinue: () => void;
+  onBack?: () => void;
 }
 
 const features = [
@@ -8,7 +9,7 @@ const features = [
   { img: "/mini/sketch-flower.png", label: "24/7 Active", desc: "Always available. Always improving." },
 ];
 
-const CreateAgentFlow = ({ onContinue }: CreateAgentFlowProps) => {
+const CreateAgentFlow = ({ onContinue, onBack }: CreateAgentFlowProps) => {
   return (
     <div className="fixed inset-0 z-[9999] bg-pin-gradient animate-slide-up">
       <div
@@ -18,8 +19,14 @@ const CreateAgentFlow = ({ onContinue }: CreateAgentFlowProps) => {
           paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 0.75rem)",
         }}
       >
-        {/* Header */}
-        <div className="flex items-center justify-center px-5 py-3 shrink-0">
+        <div className="relative flex items-center justify-center px-5 py-3 shrink-0">
+          {onBack && (
+            <button onClick={onBack} className="absolute left-4 w-8 h-8 flex items-center justify-center rounded-xl hover:bg-black/5 transition-colors">
+              <svg className="w-5 h-5 text-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+              </svg>
+            </button>
+          )}
           <h2 className="text-sm font-semibold text-foreground">Create Your AI Agent</h2>
         </div>
 

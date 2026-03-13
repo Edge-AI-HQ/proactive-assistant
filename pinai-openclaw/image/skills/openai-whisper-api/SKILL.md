@@ -25,13 +25,13 @@ Transcribe an audio file via OpenAI’s `/v1/audio/transcriptions` endpoint.
 
 Defaults:
 
-- Model: `whisper-1`
+- Model: `gpt-4o-mini-transcribe`
 - Output: `<input>.txt`
 
 ## Useful flags
 
 ```bash
-{baseDir}/scripts/transcribe.sh /path/to/audio.ogg --model whisper-1 --out /tmp/transcript.txt
+{baseDir}/scripts/transcribe.sh /path/to/audio.ogg --model gpt-4o-mini-transcribe --out /tmp/transcript.txt
 {baseDir}/scripts/transcribe.sh /path/to/audio.m4a --language en
 {baseDir}/scripts/transcribe.sh /path/to/audio.m4a --prompt "Speaker names: Peter, Daniel"
 {baseDir}/scripts/transcribe.sh /path/to/audio.m4a --json --out /tmp/transcript.json

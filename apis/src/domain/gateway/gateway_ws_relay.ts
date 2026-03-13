@@ -20,6 +20,15 @@ import {
 //   Browser <--WS--> APIs relay <--WS--> OpenClaw gateway
 // ---------------------------------------------------------------------------
 
+/** Close codes valid to send in a close frame per RFC 6455 §7.4.1 */
+function isForwardableCloseCode(code: number): boolean {
+  return (
+    (code >= 1000 && code <= 1003) ||
+    (code >= 1007 && code <= 1014) ||
+    (code >= 3000 && code <= 4999)
+  );
+}
+
 const wss = new WebSocketServer({ noServer: true });
 
 /**
@@ -64,7 +73,11 @@ export const relayGatewayWs = (
 
     upstreamWs.on("close", (code, reason) => {
       if (browserWs.readyState === WebSocket.OPEN) {
-        browserWs.close(code, reason);
+        if (isForwardableCloseCode(code)) {
+          browserWs.close(code, reason);
+        } else {
+          browserWs.close();
+        }
       }
     });
 
@@ -90,7 +103,11 @@ export const relayGatewayWs = (
 
     browserWs.on("close", (code, reason) => {
       if (upstreamWs.readyState === WebSocket.OPEN) {
-        upstreamWs.close(code, reason);
+        if (isForwardableCloseCode(code)) {
+          upstreamWs.close(code, reason);
+        } else {
+          upstreamWs.close();
+        }
       }
     });
 

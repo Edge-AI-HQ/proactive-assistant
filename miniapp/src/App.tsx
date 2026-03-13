@@ -345,7 +345,6 @@ const App = () => {
 
     hydrateState(quick);
     setLoading(false);
-    window.Telegram?.WebApp?.ready?.();
 
     if (quick.assistant.exists) {
       void loadModels();
@@ -354,8 +353,10 @@ const App = () => {
 
     let loadedDeferred = false;
     try {
-      const deferred = await safeFetch<DeferredPayload>("/api/mini/state/deferred");
-      setState((prev) => prev ? { ...prev, ...deferred } : prev);
+      const deferred = await safeFetch<DeferredPayload>(
+        "/api/mini/state/deferred",
+      );
+      setState((prev) => (prev ? { ...prev, ...deferred } : prev));
       setSelectedPlan((prev) => prev ?? deferred.plans[0]?.id ?? null);
       loadedDeferred = true;
     } catch {
@@ -366,16 +367,17 @@ const App = () => {
   };
 
   useEffect(() => {
-    // Setup demo mode if needed (must be called before Telegram WebApp API access)
     setupDemoMode();
 
-    // expand/fullscreen can be called early — they don't dismiss the native loader
     window.Telegram?.WebApp?.expand?.();
     const platform = window.Telegram?.WebApp?.platform;
     if (platform === "ios" || platform === "android") {
       window.Telegram?.WebApp?.requestFullscreen?.();
       document.documentElement.style.setProperty("--tg-top-offset", "56px");
     }
+
+    window.Telegram?.WebApp?.ready?.();
+
     setLoading(true);
     setError(null);
 
@@ -388,7 +390,6 @@ const App = () => {
       .catch((e: unknown) => {
         setError(e instanceof Error ? e.message : "unknown error");
         setLoading(false);
-        window.Telegram?.WebApp?.ready?.();
       });
   }, []);
 
@@ -727,9 +728,8 @@ const App = () => {
     showToast("Agent is starting. Please wait a moment.", "success");
   };
 
-  // Telegram native loader covers the bootstrap wait — render empty background
   if (loading) {
-    return <div className="min-h-dvh bg-pin-gradient" />;
+    return null;
   }
 
   if (error || !state) {
@@ -790,6 +790,10 @@ const App = () => {
   if (!state.subscription.active && showOnboarding) {
     return (
       <CreateAgentFlow
+        onBack={() => {
+          sessionStorage.removeItem("landing_seen");
+          setShowLanding(true);
+        }}
         onContinue={() => {
           sessionStorage.setItem("onboarding_seen", "1");
           setShowOnboarding(false);
@@ -800,85 +804,105 @@ const App = () => {
 
   // Show subscription / choose plan page when not subscribed
   if (!state.subscription.active) {
+    const planBadge: Record<string, string> = { pro: "Most Popular", max: "Best Value" };
+    const planPromo: Record<string, string> = { basic: "2x", pro: "3x", max: "3.5x" };
+
     return (
       <div
-        className="min-h-dvh bg-pin-gradient max-w-md mx-auto flex flex-col px-4"
-        style={{
-          paddingTop: "calc(var(--safe-top) + 1rem)",
-          paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1rem)",
-        }}
+        className="fixed inset-0 z-[9999] bg-pin-gradient animate-fade-in"
       >
-        <section className="glass-card rounded-2xl p-5 animate-fade-in shrink-0">
-          <span className="pill bg-foreground text-background">
-            PIN AI MINI
-          </span>
-          <h1 className="mt-3 font-heading text-xl font-bold leading-[1.1] text-foreground">
-            Choose Your Plan
-          </h1>
-          <p className="mt-1.5 text-sm text-foreground/70">
-            Subscribe to unlock your AI agent.
-          </p>
-        </section>
-
-        <section className="glass-card rounded-2xl p-4 mt-3 animate-fade-in flex-1 flex flex-col min-h-0">
-          <div className="flex-1 space-y-2.5 overflow-y-auto min-h-0">
-            {state.plans === null
-              ? /* Skeleton placeholders while plans load */
-                Array.from({ length: 3 }).map((_, i) => (
-                  <div
-                    key={i}
-                    className="w-full rounded-xl p-3.5 bg-white/30 border border-white/40 animate-pulse"
-                  >
-                    <div className="flex items-center justify-between gap-2 mb-1.5">
-                      <div className="h-4 w-24 bg-white/50 rounded" />
-                      <div className="h-5 w-16 bg-white/50 rounded" />
-                    </div>
-                    <div className="h-3 w-40 bg-white/40 rounded" />
-                  </div>
-                ))
-              : state.plans.map((plan) => {
-                  const selected = selectedPlan === plan.id;
-                  return (
-                    <button
-                      key={plan.id}
-                      className={`w-full rounded-xl p-3.5 text-left transition-all btn-press ${
-                        selected
-                          ? "bg-white/60 border-2 border-primary shadow-lg"
-                          : "bg-white/30 border border-white/40 hover:bg-white/40"
-                      }`}
-                      onClick={() => setSelectedPlan(plan.id)}
-                    >
-                      <div className="flex items-center justify-between gap-2 mb-0.5">
-                        <span className="text-base font-bold text-foreground">
-                          {plan.name}
-                        </span>
-                        <span className="text-lg font-extrabold text-primary">
-                          ${plan.price}
-                          <span className="text-sm font-normal text-muted-foreground">
-                            /mo
-                          </span>
-                        </span>
-                      </div>
-                      <div className="text-xs text-foreground/60">
-                        {plan.features.slice(0, 2).join(" · ")}
-                      </div>
-                    </button>
-                  );
-                })}
-          </div>
-          <div className="mt-3 shrink-0">
+        <div
+          className="max-w-md mx-auto h-full flex flex-col"
+          style={{
+            paddingTop: "calc(var(--safe-top) + 0.75rem)",
+            paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 0.75rem)",
+          }}
+        >
+          <div className="relative flex items-center justify-center px-5 py-3 shrink-0">
             <button
-              className="w-full rounded-xl bg-foreground text-background px-4 py-3.5 text-sm font-bold shadow-lg btn-press disabled:opacity-50"
+              onClick={() => {
+                sessionStorage.removeItem("onboarding_seen");
+                setShowOnboarding(true);
+              }}
+              className="absolute left-4 w-8 h-8 flex items-center justify-center rounded-xl hover:bg-black/5 transition-colors"
+            >
+              <svg className="w-5 h-5 text-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+              </svg>
+            </button>
+            <h2 className="text-sm font-semibold text-foreground">PIN Claw</h2>
+          </div>
+
+          <div className="flex-1 flex flex-col px-5 min-h-0 overflow-y-auto">
+            <div className="text-center mb-5">
+              <h1 className="text-2xl font-bold text-foreground mb-1.5">Choose Your Plan</h1>
+              <p className="text-sm text-muted-foreground">Subscribe to unlock your AI agent.</p>
+            </div>
+
+            <div className="space-y-3 flex-1">
+              {state.plans === null
+                ? Array.from({ length: 3 }).map((_, i) => (
+                    <div key={i} className="w-full rounded-2xl p-4 bg-white border border-border/20 animate-pulse">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="h-5 w-20 bg-secondary rounded" />
+                        <div className="h-6 w-24 bg-secondary rounded" />
+                      </div>
+                      <div className="h-3 w-48 bg-secondary/60 rounded" />
+                    </div>
+                  ))
+                : state.plans.map((plan) => {
+                    const selected = selectedPlan === plan.id;
+                    const badge = planBadge[plan.id];
+                    return (
+                      <button
+                        key={plan.id}
+                        className={`w-full rounded-2xl p-4 text-left transition-all btn-press relative ${
+                          selected
+                            ? "bg-white border-2 border-foreground shadow-md"
+                            : "bg-white border border-border/20 shadow-sm hover:shadow-md"
+                        }`}
+                        onClick={() => setSelectedPlan(plan.id)}
+                      >
+                        {badge && (
+                          <span className={`absolute -top-2.5 right-4 text-[10px] font-semibold px-2.5 py-0.5 rounded-full ${
+                            plan.id === "pro"
+                              ? "bg-primary text-white"
+                              : "bg-foreground text-background"
+                          }`}>
+                            {badge}
+                          </span>
+                        )}
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <span className="text-base font-bold text-foreground">{plan.name}</span>
+                          <span className="text-lg font-extrabold text-foreground">
+                            ${plan.price}<span className="text-sm font-normal text-muted-foreground">/mo</span>
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {plan.features[0]}
+                        </p>
+                        <p className="text-[11px] font-medium text-primary mt-1">
+                          Early Access — {planPromo[plan.id] ?? "2x"} credits included
+                        </p>
+                      </button>
+                    );
+                  })}
+            </div>
+
+            <p className="text-center text-[10px] text-muted-foreground mt-4 mb-1">
+              Limited-time offer for early subscribers.
+            </p>
+          </div>
+
+          <div className="shrink-0 px-5 pt-3">
+            <button
+              className="w-full bg-foreground text-background rounded-2xl py-3.5 text-base font-semibold btn-press shadow-md disabled:opacity-50"
               onClick={() => void checkout()}
               disabled={busy !== "none" || !selectedPlan}
             >
               {busy === "checkout" ? "Redirecting..." : "Continue to Checkout"}
             </button>
           </div>
-        </section>
-
-        <div className="mt-3 text-center text-xs text-foreground/50 shrink-0">
-          PIN AI
         </div>
       </div>
     );
@@ -897,7 +921,8 @@ const App = () => {
         <div
           className="fixed inset-0 z-0 opacity-[0.9] pointer-events-none"
           style={{
-            backgroundImage: "url('https://static.pinai.tech/pinclaw/bg-garden.jpg')",
+            backgroundImage:
+              "url('https://static.pinai.tech/pinclaw/bg-garden.jpg')",
             backgroundSize: "cover",
             backgroundPosition: "center",
           }}
@@ -908,7 +933,9 @@ const App = () => {
             username={state.assistant.username || null}
             status={state.assistant.status || "unknown"}
             planId={state.subscription.plan_id}
-            skillsCount={state.skills?.items?.filter((item) => item.installed).length ?? 0}
+            skillsCount={
+              state.skills?.items?.filter((item) => item.installed).length ?? 0
+            }
             skills={state.skills?.items ?? []}
             active={state.subscription.active}
             manageOpen={showManageAgent}
@@ -955,6 +982,26 @@ const App = () => {
             </svg>
             Contact Us
           </button>
+
+          <div className="mt-3 pb-4 flex items-center justify-center gap-3 text-xs text-foreground/60">
+            <a
+              href="/mini/privacy-policy.html"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-foreground/80 transition-colors underline"
+            >
+              Privacy Policy
+            </a>
+            <span className="text-foreground/40">•</span>
+            <a
+              href="/mini/terms-of-service.html"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-foreground/80 transition-colors underline"
+            >
+              Terms of Service
+            </a>
+          </div>
         </div>
 
         <div className="relative z-20">

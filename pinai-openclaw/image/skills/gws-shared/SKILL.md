@@ -27,6 +27,11 @@ In our container, prefer:
 
 If either credential file exists, do not ask user to re-authorize first. Execute `gws`.
 
+If credentials are missing/invalid, do not ask user to manually place credential files in container paths.
+Instead, guide user to authorize via Telegram Mini App:
+`PIN AI mini app (bottom-left) -> Data Connectors -> Google`,
+then retry the same request.
+
 ## Core Commands
 
 ```bash
