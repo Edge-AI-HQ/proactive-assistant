@@ -51,11 +51,7 @@
     }
   },
   "skills": {
-    "load": { "extraDirs": ["/opt/pinai/skills"] },
-    "entries": {
-      "openai-image-gen": { "enabled": false },
-      "openai-whisper-api": { "enabled": false }
-    }
+    "load": { "extraDirs": ["/opt/pinai/skills"] }
   },
   "plugins": {
     "entries": {

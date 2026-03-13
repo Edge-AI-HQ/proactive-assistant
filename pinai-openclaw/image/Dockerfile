@@ -44,12 +44,8 @@ COPY pinai-openclaw/plugins/litellm-vision-adapter/ /opt/pinai/plugins/litellm-v
 COPY pinai-openclaw/plugins/platform-hooks/      /opt/pinai/plugins/platform-hooks/
 
 # Copy custom skills to a separate directory; loaded via skills.load.extraDirs
-# in openclaw.json — no longer bulk-replaces the built-in skills directory.
-# Only remove bundled skills whose names overlap with ours (extraDirs has
-# lowest priority, so bundled versions would shadow our custom ones).
+# in openclaw.json — no longer touches the built-in skills directory.
 COPY pinai-openclaw/image/skills/ /opt/pinai/skills/
-RUN rm -rf /usr/local/lib/node_modules/openclaw/skills/openai-image-gen \
-           /usr/local/lib/node_modules/openclaw/skills/openai-whisper-api
 
 # ── Warm up jiti + Node compile caches at build time ──
 # Launch gateway with a near-production config so V8 compiles bytecode for

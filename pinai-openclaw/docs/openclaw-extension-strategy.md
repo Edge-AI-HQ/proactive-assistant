@@ -651,7 +651,7 @@ Base Profile → Provider Profile → Allow/Deny
 | Onboarding profile | `before_prompt_build` hook | Plugin Hook | ✓ 最佳实践 | — |
 | Cron delivery 补全 | `before_tool_call` hook 拦截 cron add | Plugin Hook | ✓ 已迁移 | ~~fetch patch~~ → hook，精准拦截 |
 | 设备自动配对 | 预写 `paired.json` + `registerService` 轮询 | Plugin SDK | ✓ 已迁移 | ~~setInterval~~ → registerService 生命周期管理 |
-| 自定义 Skills | `skills.load.extraDirs` + 仅删 2 个重叠 bundled | 配置层 | ✓ 已迁移 | ~~Dockerfile rm+cp~~ → extraDirs |
+| 自定义 Skills | `skills.load.extraDirs`（零侵入） | 配置层 | ✓ 已迁移 | ~~Dockerfile rm+cp~~ → extraDirs，重叠 skill 已重命名 |
 | Exec approvals | 写入配置文件 | 配置层 | ✓ | — |
 | Slash commands | 未使用 | — | — | 可用 `registerCommand` 添加 |
 | 自定义 channel | 未需要 | — | — | 如需接入新 IM，用 `registerChannel` |
@@ -1026,7 +1026,7 @@ RUN npm install -g openclaw@2026.3.8
 
 ### ~~P1: Skills 改用 `extraDirs`~~ ✅ 已完成（2026-03-13）
 
-自定义 skills 已迁移到 `/opt/pinai/skills/`，通过 `skills.load.extraDirs` 加载。仅对 2 个同名 bundled skill（`openai-image-gen`、`openai-whisper-api`）执行 `rm -rf`，因 extraDirs 优先级最低。运行时配置构建器自动注入 `extraDirs`。
+自定义 skills 已迁移到 `/opt/pinai/skills/`，通过 `skills.load.extraDirs` 加载。原重叠 skill 已重命名为 `openai-image-gen-by-pinai` / `openai-whisper-api-by-pinai`，不再需要删除 bundled 版本。运行时配置构建器自动注入 `extraDirs`。
 
 ### ~~P2: 设备配对改用 registerService~~ ✅ 已完成（2026-03-13）
 
@@ -1069,7 +1069,7 @@ RUN npm install -g openclaw@2026.3.8
 | Plugin SDK breaking change | 中 | 高：插件不可用 | 版本锁定 + CI warmup 门禁 + changelog 审查 |
 | fetch patch 与上游冲突 | 低 | 中：请求路由异常 | 去重 guard + 集成测试覆盖所有路径（已减少到 2 个 fetch patch） |
 | 社区 MCP/Skill 安全风险 | 中 | 高：容器被控 | 白名单 + 审计 + sandbox |
-| Skill 替换在新版本失效 | 低 | 低：仅 2 个重叠 skill | 已改用 extraDirs，仅 `openai-image-gen`/`openai-whisper-api` 需 rm |
+| Skill 替换在新版本失效 | 极低 | 低 | 已改用 extraDirs + 重命名，零 bundled 删除 |
 | ContextEngine API 变化 | 高 | 中：context 策略失效 | 暂不在 prod 用，等 API 稳定 |
 | jiti 缓存与新版本不兼容 | 低 | 低：冷启动变慢 | warmup 阶段自动重建缓存 |
 | Plugin 内存泄漏影响 Gateway | 低 | 高：容器 OOM | registerService 管理生命周期 + 监控内存 |
