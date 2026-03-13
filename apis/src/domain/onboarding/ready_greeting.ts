@@ -87,7 +87,9 @@ const resolveMySqlJoinDate = (
   return joinDate || null;
 };
 
-const shouldSendApiReadyGreeting = (): boolean => true;
+const shouldSendApiReadyGreeting = (
+  input: Pick<ReadyGreetingRenderInput, "joinDate" | "daysWithPinai">,
+): boolean => Boolean(input.joinDate) && typeof input.daysWithPinai === "number";
 
 export const buildApiReadyGreetingMessage = (
   input: ReadyGreetingRenderInput,
@@ -117,13 +119,6 @@ export const buildApiReadyGreetingMessage = (
       lines.push("• 如果你希望我换个称呼，直接告诉我。");
     }
     lines.push("• 你希望我回答时更简洁，还是更详细？");
-    lines.push("");
-    lines.push("我可以先帮你做这些：");
-    lines.push("• 📬 整理 Gmail：汇总未读、挑重点、起草回复。");
-    lines.push("• 📅 安排 Calendar：找空档、排优先级、生成今日计划。");
-    lines.push("• 🗂 处理 Drive 文件：按主题归档、提取要点、给出下一步。");
-    lines.push("• 🌐 代你跑网页任务：查资料、比方案、填表单。");
-    lines.push("");
     lines.push("✨ 今天想先处理什么？");
     return lines.join("\n");
   }
@@ -153,13 +148,6 @@ export const buildApiReadyGreetingMessage = (
     lines.push("• If you'd like a different nickname, tell me anytime.");
   }
   lines.push("• Do you prefer concise answers or detailed ones?");
-  lines.push("");
-  lines.push("I can start with any of these use cases:");
-  lines.push("• 📬 Gmail triage: summarize unread threads, prioritize, and draft replies.");
-  lines.push("• 📅 Calendar planning: find open slots and build a practical day plan.");
-  lines.push("• 🗂 Drive assistant: extract key points from files and organize next actions.");
-  lines.push("• 🌐 Agent Browser tasks: research websites, compare options, and fill forms.");
-  lines.push("");
   lines.push("✨ What would you like to work on first?");
   return lines.join("\n");
 };
@@ -230,15 +218,15 @@ export const sendApiReadyGreetingForAssistant = async (input: {
     input.assistantId,
     input.telegramUserId,
   );
-  if (!greetingContext.joinDate || typeof greetingContext.daysWithPinai !== "number") {
-    console.info("[onboarding] PIN Claw greeting: sending without MySQL join date", {
+  if (!shouldSendApiReadyGreeting(greetingContext)) {
+    console.info("[onboarding] PIN Claw greeting skipped: missing MySQL join date", {
       assistantId: input.assistantId,
       telegramUserId: input.telegramUserId,
       joinDate: greetingContext.joinDate,
       daysWithPinai: greetingContext.daysWithPinai,
     });
+    return true;
   }
-  if (!shouldSendApiReadyGreeting()) return true;
   const message = buildApiReadyGreetingMessage(greetingContext);
 
   try {
@@ -289,4 +277,7 @@ export const resolveMySqlJoinDateForTest = resolveMySqlJoinDate;
 export const shouldSendApiReadyGreetingForTest = (
   input: { joinDate: string | null },
 ): boolean =>
-  shouldSendApiReadyGreeting();
+  shouldSendApiReadyGreeting({
+    joinDate: input.joinDate,
+    daysWithPinai: computeDaysWithPinai(input.joinDate),
+  });

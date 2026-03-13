@@ -30,7 +30,15 @@ let configured = false;
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 const ASSISTANT_READY_FIXED_MESSAGE =
-  `✅ Your assistant is ready! You can start chatting now. Just use it as your personal assistant.`;
+  [
+    "✅ Your assistant is ready! You can start chatting now. Just use it as your personal assistant.",
+    "",
+    "Try one of these use cases:",
+    "• 📬 Gmail triage: summarize unread threads, prioritize, and draft replies.",
+    "• 📅 Calendar planning: find open slots and build a practical day plan.",
+    "• 🗂 Drive assistant: extract key points from files and organize next actions.",
+    "• 🌐 Agent Browser tasks: research websites, compare options, and fill forms.",
+  ].join("\n");
 
 interface AssistantReadyNotificationArgs {
   assistantId: number | null;
