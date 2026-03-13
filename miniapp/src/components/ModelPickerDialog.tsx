@@ -235,14 +235,23 @@ const ModelPickerDialog = ({
 export const formatModelName = (
   modelRef: string | null | undefined,
   availableModels?: { id: string; ref: string }[],
+  modelsLoaded?: boolean,
 ): string => {
+  if (modelsLoaded === false) return "Loading...";
   if (!modelRef) return "Default";
-  const tail = modelRef.split("/").pop() || modelRef;
-  const display = getModelDisplay(tail);
-  if (display.name !== tail) return display.name;
+
   const fromList = availableModels?.find((m) => m.ref === modelRef);
   if (fromList) return getModelDisplay(fromList.id).name;
-  return formatIdToName(tail);
+
+  const tail = modelRef.split("/").pop() || modelRef;
+  const known = MODEL_DISPLAY[tail];
+  if (known) return known.name;
+
+  const vendor = inferVendor(tail);
+  if (vendor) return formatIdToName(tail);
+
+  const formatted = formatIdToName(tail);
+  return formatted.length > 20 ? `${formatted.slice(0, 18)}...` : formatted;
 };
 
 export default ModelPickerDialog;

@@ -111,34 +111,8 @@ export const buildApiReadyGreetingMessage = (
     return lines.join("\n");
   }
 
-  const lines: string[] = ["👋 Hey, I’m online now.", ""];
-  if (input.subscriptionActive) {
-    lines.push("💎 Hi, thank you for staying with PINAI.");
-  } else {
-    lines.push("💎 Welcome back, and thanks for being with PINAI.");
-  }
-
-  if (joined && input.daysWithPinai) {
-    lines.push(
-      `📅 You joined PINAI on ${joined}, and it's been ${input.daysWithPinai} ${formatEnglishDayLabel(input.daysWithPinai)} together.`,
-    );
-  } else if (input.daysWithPinai) {
-    lines.push(
-      `📅 You’ve been with PINAI for ${input.daysWithPinai} ${formatEnglishDayLabel(input.daysWithPinai)}.`,
-    );
-  }
-
-  lines.push("");
-  lines.push("Quick check before we start:");
-  if (input.askPreferredName) {
-    lines.push("• What should I call you?");
-  } else {
-    lines.push("• If you want me to use a different name, just tell me.");
-  }
-  lines.push("• Do you want me to be concise or detailed?");
-  lines.push("");
-  lines.push("✨ How can I help you today?");
-  return lines.join("\n");
+  void joined;
+  return "👋 Hey, I'm online and ready to help!\n\n✨ How can I help you today?";
 };
 
 export const buildReadyGreetingFallbackMessage = (): string =>

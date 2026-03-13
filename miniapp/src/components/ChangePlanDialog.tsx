@@ -24,7 +24,11 @@ interface ChangePlanDialogProps {
 }
 
 const PLAN_BADGE: Record<string, string> = { pro: "Most Popular", max: "Best Value" };
-const PLAN_PROMO: Record<string, string> = { basic: "2x", pro: "3x", max: "3.5x" };
+const PLAN_PROMO: Record<string, { original: string; actual: string; multiplier: string }> = {
+  basic: { original: "1,600", actual: "3,200", multiplier: "2x" },
+  pro: { original: "4,100", actual: "12,800", multiplier: "3x" },
+  max: { original: "8,200", actual: "28,800", multiplier: "3.5x" },
+};
 
 const BillingRulesDialog = ({ open, onClose }: { open: boolean; onClose: () => void }) => {
   if (!open) return null;
@@ -150,7 +154,13 @@ const ChangePlanDialog = ({
                     </span>
                   </div>
                   <p className="text-[11px] text-muted-foreground">{plan.features[0]}</p>
-                  <p className="text-[10px] font-medium text-primary mt-0.5">Early Access — {PLAN_PROMO[plan.id] ?? "2x"} credits included</p>
+                  <p className="text-[11px] font-medium text-primary mt-0.5">
+                    <span className="line-through text-muted-foreground text-[10px]">{PLAN_PROMO[plan.id]?.original ?? "—"}</span>
+                    {" "}
+                    <span className="font-bold">{PLAN_PROMO[plan.id]?.actual ?? "—"} credits</span>
+                    {" "}
+                    <span className="text-[9px] text-primary/70">{PLAN_PROMO[plan.id]?.multiplier ?? ""}</span>
+                  </p>
                 </button>
               );
             })}

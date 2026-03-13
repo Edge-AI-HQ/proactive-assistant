@@ -26,7 +26,7 @@ interface AgentCardProps {
   skills: SkillItem[];
   active: boolean;
   manageOpen: boolean;
-  createdAt: string | null;
+  credits: { remaining: number; total: number } | null;
   google?: {
     connected: boolean;
     email: string | null;
@@ -94,19 +94,6 @@ const getStatusDisplay = (
   }
 };
 
-const formatBirthday = (createdAt: string | null): string => {
-  if (!createdAt) return "—";
-  try {
-    const d = new Date(createdAt);
-    return d.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  } catch {
-    return "—";
-  }
-};
 
 const AgentCard = ({
   username,
@@ -116,7 +103,7 @@ const AgentCard = ({
   skills,
   active,
   manageOpen,
-  createdAt,
+  credits,
   google,
   googleBusy,
   onOpenManage,
@@ -141,8 +128,9 @@ const AgentCard = ({
 
   const handle = username ? `@${username}` : "@PINClaw_AI_bot";
   const statusDisplay = getStatusDisplay(status);
-  const modelName = formatModelName(models?.current, models?.available);
-  const birthday = formatBirthday(createdAt);
+  const modelsLoaded = models != null;
+  const modelName = formatModelName(models?.current, models?.available, modelsLoaded);
+  const creditsDisplay = credits ? Math.floor(credits.remaining).toLocaleString() : "—";
   const isRuntimeRunning = status === "running";
 
   const handleChat = () => {
@@ -263,16 +251,16 @@ const AgentCard = ({
               </svg>
             </button>
 
-            {/* Birthday - NOT clickable */}
+            {/* Credits */}
             <div
               className="rounded-2xl px-3 py-3.5 glass-stat-box text-center min-w-0 flex flex-col justify-center"
               style={{ flex: "1.4" }}
             >
               <p className="text-[9px] uppercase tracking-widest text-muted-foreground mb-1">
-                Birthday
+                Credits
               </p>
-              <p className="text-xs font-bold text-foreground whitespace-nowrap">
-                {birthday}
+              <p className="text-sm font-bold text-foreground whitespace-nowrap">
+                {creditsDisplay}
               </p>
             </div>
 

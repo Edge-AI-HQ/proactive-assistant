@@ -335,7 +335,8 @@ const buildQuickStatePayload = async (
   telegramUserId: number,
   telegramUsername: string | null,
 ) => {
-  const [assistants, subscriptionResult] = await Promise.all([
+  const [user, assistants, subscriptionResult] = await Promise.all([
+    getUserByTelegramId(telegramUserId),
     listAssistantsByOwnerId(telegramUserId),
     readInternalSubscription(String(telegramUserId)),
   ]);
@@ -343,6 +344,18 @@ const buildQuickStatePayload = async (
   const assistant = assistants[0] ?? null;
   const subscription = subscriptionResult.subscription;
   const active = isSubscriptionActiveForService(subscription);
+
+  let credits: { remaining: number; total: number } | null = null;
+  if (user && active && user.litellm_budget_usd != null) {
+    const budgetUsd = Number(user.litellm_budget_usd) || 0;
+    const spendUsd = Number(user.litellm_spend_usd) || 0;
+    const remainingCredits = Math.max(0, (budgetUsd - spendUsd) * 100);
+    const totalCredits = budgetUsd * 100;
+    credits = {
+      remaining: Math.round(remainingCredits * 100) / 100,
+      total: Math.round(totalCredits * 100) / 100,
+    };
+  }
 
   return {
     user: {
@@ -375,6 +388,7 @@ const buildQuickStatePayload = async (
           cancel_at_period_end: false,
           current_period_end: null,
         },
+    credits,
     features: {
       can_delete_account: config.nodeEnv.trim().toLowerCase() !== "production",
     },
