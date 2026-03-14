@@ -21,6 +21,14 @@ model_list:
     litellm_params:
       model: anthropic/claude-sonnet-4-6
       api_key: os.environ/ANTHROPIC_API_KEY
+    model_info:
+      input_cost_per_token: 0.000003
+      output_cost_per_token: 0.000015
+      input_cost_per_token_above_200k_tokens: 0.000003
+      output_cost_per_token_above_200k_tokens: 0.000015
+      cache_creation_input_token_cost_above_200k_tokens: 0.00000375
+      cache_read_input_token_cost_above_200k_tokens: 0.0000003
+
   - model_name: claude-opus-4-6
     litellm_params:
       model: anthropic/claude-opus-4-6
