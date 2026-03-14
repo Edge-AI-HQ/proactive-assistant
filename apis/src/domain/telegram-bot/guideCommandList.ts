@@ -1,3 +1,10 @@
+/**
+ * Prefix for all Guide Bot inline-button callback data.
+ * The telegram-router uses this to distinguish Guide Bot callbacks from
+ * OpenClaw callbacks without maintaining a hardcoded list.
+ */
+export const GUIDE_BOT_CB_PREFIX = "gb:";
+
 export const CREATE_ASSISTANT_COMMAND = "create_claw_assistant";
 export const LIST_ASSISTANT_COMMAND = "list_claw_assistant";
 export const SUBSCRIBE_COMMAND = "subscribe";

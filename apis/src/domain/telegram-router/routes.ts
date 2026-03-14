@@ -16,6 +16,7 @@ import {
   setLogContextTelegramUserId,
 } from "../common/requestLogContext.js";
 import { handleCommandMenuUpdate } from "./commandMenu.js";
+import { GUIDE_BOT_CB_PREFIX } from "../telegram-bot/guideCommandList.js";
 
 type WebhookSource = "public" | "private";
 
@@ -129,13 +130,17 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
     }
 
     if (source === "public" && update?.callback_query) {
-      const handled = await forwardToGuideBot(update);
-      if (!handled) {
-        res.status(503).send("Guide bot not initialized");
+      const cbData = (update.callback_query.data ?? "").trim();
+      if (isGuideBotCallback(cbData)) {
+        const handled = await forwardToGuideBot(update);
+        if (!handled) {
+          res.status(503).send("Guide bot not initialized");
+          return;
+        }
+        res.status(200).json({ ok: true });
         return;
       }
-      res.status(200).json({ ok: true });
-      return;
+      // Non-guide-bot callbacks fall through to normal OpenClaw routing
     }
 
     const userStateRaw = await findUserState(chatId);
@@ -1038,6 +1043,10 @@ function decodeUtf8(data: Uint8Array): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function isGuideBotCallback(data: string): boolean {
+  return data.startsWith(GUIDE_BOT_CB_PREFIX);
 }
 
 function isBotCommand(update: any): boolean {
