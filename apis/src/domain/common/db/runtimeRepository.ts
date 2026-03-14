@@ -65,6 +65,29 @@ export const setAssistantRuntimeMetadataKey = async (
   return result.rows[0].metadata || {};
 };
 
+export const deleteAssistantRuntimeMetadataKey = async (
+  assistantId: number,
+  key: string,
+): Promise<boolean> => {
+  await withSchema();
+
+  const result = await pool.query(
+    `
+      UPDATE runtime_instances
+      SET
+        metadata = COALESCE(metadata, '{}'::jsonb) - $2::text,
+        updated_at = NOW()
+      WHERE assistant_id = $1
+        AND scope = 'assistant'
+        AND (COALESCE(metadata, '{}'::jsonb) ? $2::text)
+      RETURNING 1
+    `,
+    [assistantId, key],
+  );
+
+  return (result.rowCount ?? 0) > 0;
+};
+
 export const setAssistantRuntimeMetadataKeyIfAbsent = async (
   assistantId: number,
   key: string,
