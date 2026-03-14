@@ -170,18 +170,38 @@ const sanitizeVolumePrefix = (value: string): string => {
   return value.replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
 };
 
-const buildAssistantVolumeName = (assistantBotId: number): string => {
-  const rawPrefix = (
-    config.fly.volumeNamePrefix || "pinclaw_assistant"
-  ).toLowerCase();
+const normalizeOwnerTelegramUserId = (value: string | null | undefined): string => {
+  const normalized = (value || "").trim();
+  if (!/^[1-9]\d*$/.test(normalized)) {
+    throw new Error(
+      `ownerTelegramUserId must be a positive integer string for Fly volume key, got: ${value ?? "null"}`,
+    );
+  }
+  return normalized;
+};
+
+const buildAssistantVolumeName = (
+  ownerTelegramUserId: string,
+  volumeNamePrefix: string,
+): string => {
+  const rawPrefix = (volumeNamePrefix || "openclaw_user").toLowerCase();
   const sanitizedPrefix =
-    sanitizeVolumePrefix(rawPrefix) || "pinclaw_assistant";
-  const suffix = String(assistantBotId).replace(/[^0-9]/g, "") || "0";
+    sanitizeVolumePrefix(rawPrefix) || "openclaw_user";
+  const suffix = ownerTelegramUserId;
   const maxPrefixLength = Math.max(1, 30 - suffix.length - 1);
   const prefix =
     sanitizedPrefix.slice(0, maxPrefixLength).replace(/^_+|_+$/g, "") || "a";
   return `${prefix}_${suffix}`.slice(0, 30);
 };
+
+export const buildAssistantVolumeNameForTest = (
+  ownerTelegramUserId: string,
+  volumeNamePrefix: string,
+): string => buildAssistantVolumeName(ownerTelegramUserId, volumeNamePrefix);
+
+export const normalizeOwnerTelegramUserIdForTest = (
+  value: string | null | undefined,
+): string => normalizeOwnerTelegramUserId(value);
 
 const isVolumeReady = (volume: FlyVolume): boolean => {
   const state = (volume.state || "").toLowerCase();
@@ -231,10 +251,13 @@ const waitForVolumeReady = async (
 };
 
 const ensureAssistantVolume = async (
-  assistantBotId: number,
+  ownerTelegramUserId: string,
   region?: string,
 ): Promise<{ volume: FlyVolume; created: boolean }> => {
-  const name = buildAssistantVolumeName(assistantBotId);
+  const name = buildAssistantVolumeName(
+    ownerTelegramUserId,
+    config.fly.volumeNamePrefix,
+  );
   const targetRegion = (region ?? config.fly.region).toLowerCase();
 
   const volumes = await listVolumes();
@@ -424,6 +447,9 @@ export const shouldRecreateAssistantMachine = (
 export const createAssistantMachine = async (
   args: AssistantMachineCreateArgs,
 ): Promise<FlyMachine> => {
+  const ownerTelegramUserId = normalizeOwnerTelegramUserId(
+    args.ownerTelegramUserId,
+  );
   const normalizedAssistantBotToken = normalizeAssistantToken(
     args.assistantBotToken,
   );
@@ -466,9 +492,7 @@ export const createAssistantMachine = async (
     ).trim(),
     PINAI_FLY_MODE: "1",
     PINAI_GATEWAY_BIND: "loopback",
-    ...(args.ownerTelegramUserId
-      ? { OWNER_TELEGRAM_USER_ID: args.ownerTelegramUserId }
-      : {}),
+    OWNER_TELEGRAM_USER_ID: ownerTelegramUserId,
   };
   assertNoP0SecretsInEnv(env, config);
 
@@ -486,7 +510,7 @@ export const createAssistantMachine = async (
     const region = regions[regionIndex];
     for (let attempt = 1; attempt <= FLY_CREATE_RETRIES; attempt += 1) {
       const { volume, created } = await ensureAssistantVolume(
-        args.assistantBotId,
+        ownerTelegramUserId,
         region,
       );
 
