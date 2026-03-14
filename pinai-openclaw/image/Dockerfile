@@ -36,6 +36,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     git \
     curl \
+    python3 \
+    sudo \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy pre-compiled global node_modules and binaries from builder
