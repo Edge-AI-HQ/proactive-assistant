@@ -199,12 +199,15 @@ export async function handleCommandMenuUpdate(req: Request, res: Response): Prom
         ? await deleteCommandsForOwnBot(botToken)
         : await setCommandsForOwnBot(botToken, commands);
 
-      // Mirror on Guide Bot with chat scope so commands show when user
+      // Mirror on Guide Bot with per-chat scope so commands show when user
       // interacts via the shared entry point.
-      if (assistant.owner_telegram_user_id) {
-        isDelete
-          ? await deleteCommandsForChat(assistant.owner_telegram_user_id)
-          : await setCommandsForChat(assistant.owner_telegram_user_id, commands);
+      // IMPORTANT: Only mirror setMyCommands. OpenClaw's deleteMyCommands
+      // targets default/group scopes, not our per-chat scope.  Forwarding
+      // the delete would race with setMyCommands (fire-and-forget from plugin)
+      // and undo the commands we just set.  Per-chat cleanup is handled by
+      // clearCommandMenuForAssistant() during container lifecycle instead.
+      if (assistant.owner_telegram_user_id && !isDelete) {
+        await setCommandsForChat(assistant.owner_telegram_user_id, commands);
       }
 
       console.log(
@@ -224,9 +227,22 @@ export async function handleCommandMenuUpdate(req: Request, res: Response): Prom
       return;
     }
 
-    const ok = isDelete
-      ? await deleteCommandsForChat(ownerChatId)
-      : await setCommandsForChat(ownerChatId, commands);
+    // Ignore deleteMyCommands for per-chat scope.  OpenClaw fires both
+    // setMyCommands and deleteMyCommands on startup (for different scopes).
+    // Because the plugin forwards them as fire-and-forget, the arrival
+    // order is non-deterministic — on Fly.io the delete can land *after*
+    // the set and wipe out the commands we just registered.  Per-chat
+    // cleanup is handled by clearCommandMenuForAssistant() instead.
+    if (isDelete) {
+      console.log(
+        `📋 Command menu ${method} ignored for quickstart user tg=${ownerChatId} ` +
+          `(per-chat scope preserved)`,
+      );
+      res.status(200).json({ ok: true });
+      return;
+    }
+
+    const ok = await setCommandsForChat(ownerChatId, commands);
 
     console.log(
       `📋 Command menu ${method} for quickstart user tg=${ownerChatId} ` +
