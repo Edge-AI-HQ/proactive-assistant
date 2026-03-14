@@ -7,12 +7,6 @@ import SetupWaiting from "./components/SetupWaiting";
 import Toast from "./components/Toast";
 import { readGoogleRedirectState } from "./googleRedirectState";
 import { shouldRefreshAfterExternalOAuthReturn } from "./googleReconnectRefresh";
-import {
-  setupDemoMode,
-  isDemoMode,
-  getBootstrapEndpoint,
-  getBootstrapPayload,
-} from "./demoMode";
 
 type Plan = {
   id: string;
@@ -63,6 +57,7 @@ type StatePayload = {
     plan_id: string | null;
     cancel_at_period_end: boolean;
     current_period_end: string | null;
+    downgrade_lock_until: string | null;
   };
   credits?: {
     remaining: number;
@@ -80,6 +75,7 @@ type DeferredPayload = {
   plans: Plan[];
   skills: SkillsPayload;
   google: GoogleStatus;
+  credits?: { remaining: number; total: number } | null;
 };
 
 type ModelItem = {
@@ -128,6 +124,8 @@ const hasQuickPayloadChanged = (
       next.subscription.cancel_at_period_end ||
     prev.subscription.current_period_end !==
       next.subscription.current_period_end ||
+    prev.subscription.downgrade_lock_until !==
+      next.subscription.downgrade_lock_until ||
     (prev.features?.can_delete_account ?? true) !==
       (next.features?.can_delete_account ?? true)
   );
@@ -332,20 +330,15 @@ const App = () => {
 
   const bootstrap = async (): Promise<{ loadedDeferred: boolean }> => {
     const initData = window.Telegram?.WebApp?.initData?.trim() ?? "";
-    const inWebPreview = isDemoMode();
-
-    if (!initData && !inWebPreview) {
+    if (!initData) {
       throw new Error(
         "Please open this app through Telegram. Direct browser access is not supported.",
       );
     }
 
-    const endpoint = getBootstrapEndpoint();
-    const payload = getBootstrapPayload();
-
-    const quick = await safeFetch<StatePayload>(endpoint, {
+    const quick = await safeFetch<StatePayload>("/api/mini/bootstrap", {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ init_data: initData }),
     });
 
     hydrateState(quick);
@@ -372,8 +365,6 @@ const App = () => {
   };
 
   useEffect(() => {
-    setupDemoMode();
-
     window.Telegram?.WebApp?.expand?.();
     const platform = window.Telegram?.WebApp?.platform;
     if (platform === "ios" || platform === "android") {
@@ -529,7 +520,10 @@ const App = () => {
         // Plan changed directly via Stripe subscription update — no redirect needed
         showToast(result.message ?? "Plan updated successfully.", "success");
         setBusy("none");
-        await loadState();
+        const latest = await loadState();
+        setSelectedPlan(
+          latest.subscription.plan_id ?? latest.plans?.[0]?.id ?? null,
+        );
         return;
       }
       if (!result.url)
@@ -539,6 +533,8 @@ const App = () => {
       const message = e instanceof Error ? e.message : "unknown";
       if (/downgrade is locked until/i.test(message)) {
         showToast("Downgrade is locked until the current billing cycle ends.");
+      } else if (/downgrade is unavailable while renewal is canceled/i.test(message)) {
+        showToast("Renewal is canceled. Resume renewal before downgrading.");
       } else {
         showToast(`Unable to change plan: ${message}`);
       }
@@ -599,6 +595,52 @@ const App = () => {
     }
   };
 
+  const resumeSubscription = async () => {
+    setBusy("resume");
+    try {
+      const result = await safeFetch<{
+        ok: true;
+        status: string;
+        cancel_at_period_end: false;
+        current_period_end: string;
+        already_active?: boolean;
+      }>("/api/mini/resume-subscription", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      setState((prev) =>
+        prev
+          ? {
+              ...prev,
+              subscription: {
+                ...prev.subscription,
+                status: result.status,
+                cancel_at_period_end: false,
+                current_period_end: result.current_period_end,
+              },
+            }
+          : prev,
+      );
+      showToast(
+        result.already_active
+          ? "Renewal is already active."
+          : "Renewal resumed successfully.",
+        "success",
+      );
+      await loadState();
+    } finally {
+      setBusy("none");
+    }
+  };
+
+  const handleResumeSubscription = async () => {
+    try {
+      await resumeSubscription();
+    } catch (e) {
+      showToast(`Resume failed: ${e instanceof Error ? e.message : "unknown"}`);
+    }
+  };
+
   const handleDeleteAccount = async () => {
     setBusy("delete");
     try {
@@ -617,11 +659,14 @@ const App = () => {
   const handleConnectGoogle = async () => {
     setBusy("google-connect");
     try {
+      const initData = window.Telegram?.WebApp?.initData?.trim() ?? "";
       const payload = await safeFetch<GoogleStartUrlPayload>(
         "/api/mini/google/start-url",
         {
           method: "POST",
-          body: JSON.stringify({}),
+          body: JSON.stringify(
+            initData ? { init_data: initData } : {},
+          ),
         },
       );
       const authUrl = String(payload.url || "").trim();
@@ -980,7 +1025,12 @@ const App = () => {
             }
             onOpenManage={handleOpenManage}
             onCloseManage={() => setShowManageAgent(false)}
-            onChangePlan={() => setShowChangePlan(true)}
+            onChangePlan={() => {
+              setSelectedPlan(
+                state.subscription.plan_id ?? state.plans?.[0]?.id ?? null,
+              );
+              setShowChangePlan(true);
+            }}
             onRepairRuntime={handleRepairRuntime}
             runtimeBusy={busy === "repair-runtime"}
             allowDeleteAccount={state.features?.can_delete_account ?? true}
@@ -1046,10 +1096,12 @@ const App = () => {
             currentPlanId={state.subscription.plan_id}
             cancelAtPeriodEnd={state.subscription.cancel_at_period_end}
             currentPeriodEnd={state.subscription.current_period_end}
+            downgradeLockUntil={state.subscription.downgrade_lock_until}
             selectedPlan={selectedPlan}
             onSelectPlan={setSelectedPlan}
             onCheckout={checkout}
             onCancel={handleCancelSubscription}
+            onResume={handleResumeSubscription}
             busy={busy}
           />
 

@@ -6,6 +6,6 @@ export const CUSTOM_SKILL_KEYS = [
   "gws",
   "gws-gmail",
   "gws-shared",
-  "openai-image-gen",
-  "openai-whisper-api",
+  "openai-image-gen-by-pinai",
+  "openai-whisper-api-by-pinai",
 ] as const;

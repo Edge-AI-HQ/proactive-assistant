@@ -34,9 +34,9 @@ const ASSISTANT_READY_FIXED_MESSAGE =
     "✅ Your assistant is ready! You can start chatting now. Just use it as your personal assistant.",
     "",
     "Try one of these use cases:",
-    "• 📬 Gmail triage: summarize unread threads, prioritize, and draft replies.",
-    "• 📅 Calendar planning: find open slots and build a practical day plan.",
-    "• 🗂 Drive assistant: extract key points from files and organize next actions.",
+    "• 🌅 Custom Morning Brief: daily push with key news, top tasks, and suggested next actions.",
+    "• 📬 Inbox De-clutter: summarize newsletters and unread threads, then draft replies.",
+    "• 👤 Work Calendar: merge meeting plans and track upcoming events.",
     "• 🌐 Agent Browser tasks: research websites, compare options, and fill forms.",
   ].join("\n");
 

@@ -37,7 +37,7 @@ const resolveTelegramWebhookPath = (): string => {
 
 export class ContainerOrchestrator {
   private readonly ensureInFlight = new Map<
-    number,
+    string,
     Promise<{ containerId: string; ready: boolean }>
   >();
 
@@ -64,14 +64,17 @@ export class ContainerOrchestrator {
   async ensureAssistantContainer(
     assistant: AssistantContainerRuntimeRef,
     gatewayToken: string,
+    options?: { allowRecreate?: boolean },
   ): Promise<{ containerId: string; ready: boolean }> {
-    const key = assistant.id;
+    const allowRecreate = options?.allowRecreate !== false;
+    const key = `${assistant.id}:${allowRecreate ? "recreate" : "no-recreate"}`;
     const existing = this.ensureInFlight.get(key);
     if (existing) return existing;
 
     const job = this.runEnsureAssistantContainer(
       assistant,
       gatewayToken,
+      { allowRecreate },
     ).finally(() => {
       if (this.ensureInFlight.get(key) === job) {
         this.ensureInFlight.delete(key);
@@ -316,6 +319,7 @@ export class ContainerOrchestrator {
   private async runEnsureAssistantContainer(
     assistant: AssistantContainerRuntimeRef,
     gatewayToken: string,
+    options?: { allowRecreate?: boolean },
   ): Promise<{ containerId: string; ready: boolean }> {
     const normalizedGatewayToken = gatewayToken.trim();
     if (!normalizedGatewayToken) {
@@ -338,14 +342,21 @@ export class ContainerOrchestrator {
 
     // 2. Check drift → recreate if needed
     if (container && (await this.runtime.needsRecreation(container, params))) {
-      await this.runtime.destroyContainer(container.id);
-      container = null;
-      recreated = true;
-      await this.store.updateAssistant(assistant.id, {
-        container_status: "creating",
-        container_id: "",
-        container_name: params.containerName,
-      });
+      const allowRecreate = options?.allowRecreate !== false;
+      if (allowRecreate) {
+        await this.runtime.destroyContainer(container.id);
+        container = null;
+        recreated = true;
+        await this.store.updateAssistant(assistant.id, {
+          container_status: "creating",
+          container_id: "",
+          container_name: params.containerName,
+        });
+      } else {
+        console.log(
+          `[orchestrator] Drift detected for assistant ${assistant.id}, skip recreation (allowRecreate=false)`,
+        );
+      }
     }
 
     // 3. Create if missing

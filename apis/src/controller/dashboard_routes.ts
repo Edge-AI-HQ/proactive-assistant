@@ -37,6 +37,7 @@ import {
   createInternalPaymentSession,
   listActivePlansForApi,
   readInternalSubscription,
+  resumeStripeSubscription,
 } from "../domain/payment/checkout.js";
 import { readPaymentPublicBaseUrl } from "../domain/payment/publicBaseUrl.js";
 import {
@@ -49,6 +50,11 @@ import {
   getCurrentModel,
   setCurrentModel,
 } from "../domain/gateway/gateway_rpc.js";
+import {
+  getLiteLLMUserInfo,
+  getLiteLLMVirtualKeyInfo,
+  isLiteLLMClientEnabled,
+} from "../domain/litellm/index.js";
 import { relayGatewayWs } from "../domain/gateway/gateway_ws_relay.js";
 import { createGatewaySessionByBody } from "../domain/gateway/session_api.js";
 import {
@@ -77,6 +83,7 @@ import {
   handleGoogleOAuthCallback,
 } from "../domain/google-oauth/service.js";
 import { buildMiniGoogleReturnUrl } from "../domain/google-oauth/miniapp.js";
+import { validateMiniGoogleStartIdentity } from "../domain/google-oauth/start_identity.js";
 
 const miniAppEntryPath = path.join(
   process.cwd(),
@@ -88,19 +95,6 @@ const miniSessionCookieName = "mini_sid";
 const miniSessionTtlHours = 12;
 const miniAuthMaxAgeSeconds = 24 * 60 * 60;
 const miniAuthFutureSkewSeconds = 5 * 60;
-
-// Web preview mode configuration
-const DEMO_MODE_ENABLED =
-  process.env.MINIAPP_DEMO_ENABLED === "true" ||
-  process.env.MINIAPP_DEMO_ENABLED === "1";
-// Use real user account for web preview (shows actual subscription, assistant, etc.)
-// SECURITY: This user ID is hardcoded and cannot be changed via client
-const DEMO_TELEGRAM_USER_ID = 5572561504;
-const DEMO_TELEGRAM_USERNAME = "preview_user";
-
-// SECURITY: Whitelist of allowed user IDs for web preview mode
-// Only these users can be accessed via web preview to prevent unauthorized access
-const ALLOWED_PREVIEW_USER_IDS = new Set([5572561504]);
 
 const proxy = httpProxy.createProxyServer({ ws: true, xfwd: true });
 let proxyErrorHandlerBound = false;
@@ -337,6 +331,51 @@ const requireMiniSession = async (
   next();
 };
 
+const resolveCredits = async (
+  user: { litellm_budget_usd: number | null; litellm_spend_usd: number; litellm_virtual_key: string | null; litellm_user_id: string | null } | undefined,
+  active: boolean,
+  planId: string | null,
+): Promise<{ remaining: number; total: number } | null> => {
+  if (!user || !active) return null;
+
+  let budgetUsd = Number(user.litellm_budget_usd) || 0;
+  let spendUsd = Number(user.litellm_spend_usd) || 0;
+
+  if (isLiteLLMClientEnabled()) {
+    try {
+      if (user.litellm_virtual_key) {
+        const keyInfo = await getLiteLLMVirtualKeyInfo(user.litellm_virtual_key);
+        spendUsd = keyInfo.spendUsd ?? spendUsd;
+        if (keyInfo.maxBudgetUsd != null && keyInfo.maxBudgetUsd > 0) {
+          budgetUsd = keyInfo.maxBudgetUsd;
+        }
+      } else if (user.litellm_user_id) {
+        const userInfo = await getLiteLLMUserInfo(user.litellm_user_id);
+        if (userInfo.spendUsd !== null) spendUsd = userInfo.spendUsd;
+        if (userInfo.maxBudgetUsd != null && userInfo.maxBudgetUsd > 0) {
+          budgetUsd = userInfo.maxBudgetUsd;
+        }
+      }
+    } catch {
+      // LiteLLM unavailable — use DB values
+    }
+  }
+
+  if (budgetUsd > 0) {
+    return {
+      remaining: Math.floor(Math.max(0, (budgetUsd - spendUsd) * 100)),
+      total: Math.floor(budgetUsd * 100),
+    };
+  }
+
+  if (planId) {
+    const planCredits = await getPlanMonthlyCredits(planId);
+    if (planCredits > 0) return { remaining: planCredits, total: planCredits };
+  }
+
+  return null;
+};
+
 /**
  * Quick payload — only the data needed to render the main UI immediately.
  * Skips skills, google, and plans (deferred to a separate request).
@@ -345,8 +384,7 @@ const buildQuickStatePayload = async (
   telegramUserId: number,
   telegramUsername: string | null,
 ) => {
-  const [user, assistants, subscriptionResult] = await Promise.all([
-    getUserByTelegramId(telegramUserId),
+  const [assistants, subscriptionResult] = await Promise.all([
     listAssistantsByOwnerId(telegramUserId),
     readInternalSubscription(String(telegramUserId)),
   ]);
@@ -354,24 +392,6 @@ const buildQuickStatePayload = async (
   const assistant = assistants[0] ?? null;
   const subscription = subscriptionResult.subscription;
   const active = isSubscriptionActiveForService(subscription);
-
-  let credits: { remaining: number; total: number } | null = null;
-  if (user && active) {
-    const budgetUsd = Number(user.litellm_budget_usd) || 0;
-    const spendUsd = Number(user.litellm_spend_usd) || 0;
-    if (budgetUsd > 0) {
-      const remainingCredits = Math.max(0, (budgetUsd - spendUsd) * 100);
-      credits = {
-        remaining: Math.floor(remainingCredits),
-        total: Math.floor(budgetUsd * 100),
-      };
-    } else if (subscription?.plan_id) {
-      const planCredits = await getPlanMonthlyCredits(subscription.plan_id);
-      if (planCredits > 0) {
-        credits = { remaining: planCredits, total: planCredits };
-      }
-    }
-  }
 
   return {
     user: {
@@ -396,6 +416,7 @@ const buildQuickStatePayload = async (
           plan_id: subscription.plan_id,
           cancel_at_period_end: subscription.cancel_at_period_end,
           current_period_end: subscription.current_period_end,
+          downgrade_lock_until: subscriptionResult.downgrade_lock_until,
         }
       : {
           active,
@@ -403,8 +424,9 @@ const buildQuickStatePayload = async (
           plan_id: null,
           cancel_at_period_end: false,
           current_period_end: null,
+          downgrade_lock_until: null,
         },
-    credits,
+    credits: null as null,
     features: {
       can_delete_account: config.nodeEnv.trim().toLowerCase() !== "production",
     },
@@ -418,15 +440,20 @@ const buildQuickStatePayload = async (
  * Deferred payload — heavier data loaded after initial render.
  */
 const buildDeferredStatePayload = async (telegramUserId: number) => {
-  const assistants = await listAssistantsByOwnerId(telegramUserId);
-  const assistant = assistants[0] ?? null;
-
-  const [plansResult, googleStatus, runtimeMetadata] = await Promise.all([
+  const [user, assistants, subscriptionResult, plansResult, googleStatus] = await Promise.all([
+    getUserByTelegramId(telegramUserId),
+    listAssistantsByOwnerId(telegramUserId),
+    readInternalSubscription(String(telegramUserId)),
     listActivePlansForApi(),
     getGoogleConnectionStatus(telegramUserId),
-    assistant
-      ? readAssistantRuntimeMetadata(assistant.id)
-      : Promise.resolve({}),
+  ]);
+  const assistant = assistants[0] ?? null;
+  const subscription = subscriptionResult.subscription;
+  const active = isSubscriptionActiveForService(subscription);
+
+  const [runtimeMetadata, credits] = await Promise.all([
+    assistant ? readAssistantRuntimeMetadata(assistant.id) : Promise.resolve({}),
+    resolveCredits(user, active, subscription?.plan_id ?? null),
   ]);
 
   const skillsConfig = readSkillsConfigFromRuntimeMetadata(runtimeMetadata);
@@ -443,6 +470,7 @@ const buildDeferredStatePayload = async (telegramUserId: number) => {
       config: skillsConfig,
     },
     google: googleStatus,
+    credits,
   };
 };
 
@@ -497,6 +525,9 @@ export const createDashboardRouter = (): Router => {
     res.sendFile(miniAppEntryPath);
   });
 
+  // Legacy compatibility shim:
+  // old miniapp builds may still open /mini/google/start directly.
+  // Keep this route non-authoritative and require init_data identity binding.
   router.get(
     "/mini/google/start",
     async (req: Request, res: Response, next: NextFunction) => {
@@ -509,6 +540,27 @@ export const createDashboardRouter = (): Router => {
       const user = req.gatewayUser;
       if (!user) {
         res.status(500).send("Gateway user missing.");
+        return;
+      }
+
+      const initDataRaw =
+        typeof req.query.init_data === "string" ? req.query.init_data : "";
+      const validation = validateMiniGoogleStartIdentity(
+        initDataRaw,
+        user.telegram_user_id,
+        parseTelegramInitData,
+      );
+
+      if (!validation.ok) {
+        if (validation.shouldClearSession) {
+          clearMiniSessionCookie(res);
+        }
+        res.redirect(
+          buildMiniGoogleReturnUrl("/mini/google/done", {
+            status: "error",
+            error: "refresh_required",
+          }),
+        );
         return;
       }
 
@@ -577,53 +629,12 @@ export const createDashboardRouter = (): Router => {
   });
 
   router.post("/api/mini/bootstrap", async (req: Request, res: Response) => {
+    // Always reset stale mini session first; a fresh bootstrap must bind the
+    // cookie to the currently verified Telegram identity.
+    clearMiniSessionCookie(res);
+
     const initDataRaw =
       typeof req.body?.init_data === "string" ? req.body.init_data : "";
-
-    // Web preview mode: no initData means browser access (not Telegram)
-    if (!initDataRaw && DEMO_MODE_ENABLED) {
-      try {
-        // SECURITY: Verify the hardcoded user ID is in the whitelist
-        if (!ALLOWED_PREVIEW_USER_IDS.has(DEMO_TELEGRAM_USER_ID)) {
-          console.error("[security] Preview user ID not in whitelist", {
-            userId: DEMO_TELEGRAM_USER_ID,
-          });
-          res.status(403).json({ error: "Unauthorized preview user" });
-          return;
-        }
-
-        // Use real user account for web preview
-        const user = await getUserByTelegramId(DEMO_TELEGRAM_USER_ID);
-        if (!user) {
-          res.status(404).json({ error: "Preview user not found" });
-          return;
-        }
-
-        setLogContextTelegramIdentity(
-          user.telegram_user_id,
-          user.telegram_username,
-        );
-        console.info("[auth:resolved]", {
-          source: "mini_bootstrap_web_preview",
-          telegram_user_id: user.telegram_user_id,
-          telegram_username: user.telegram_username,
-        });
-        const { sessionToken, expiresAt } = await createGatewaySession(
-          user.telegram_user_id,
-          miniSessionTtlHours,
-        );
-        setMiniSessionCookie(res, sessionToken, expiresAt);
-        const payload = await buildQuickStatePayload(
-          user.telegram_user_id,
-          user.telegram_username,
-        );
-        res.status(200).json(payload);
-        return;
-      } catch (error: unknown) {
-        res.status(500).json({ error: domainErrorMessage(error) });
-        return;
-      }
-    }
 
     // Normal Telegram mode: verify initData
     const verification = parseTelegramInitData(initDataRaw);
@@ -736,6 +747,21 @@ export const createDashboardRouter = (): Router => {
       }
 
       try {
+        const initDataRaw =
+          typeof req.body?.init_data === "string" ? req.body.init_data : "";
+        const validation = validateMiniGoogleStartIdentity(
+          initDataRaw,
+          user.telegram_user_id,
+          parseTelegramInitData,
+        );
+        if (!validation.ok) {
+          if (validation.shouldClearSession) {
+            clearMiniSessionCookie(res);
+          }
+          res.status(401).json({ error: validation.error });
+          return;
+        }
+
         const url = await buildGoogleAuthStartUrl(
           user.telegram_user_id,
           buildMiniGoogleReturnUrl("/mini/google/done", {
@@ -1288,6 +1314,36 @@ export const createDashboardRouter = (): Router => {
   );
 
   router.post(
+    "/api/mini/resume-subscription",
+    async (req: Request, res: Response, next: NextFunction) => {
+      void requireMiniSession(req, res, next).catch((error: unknown) => {
+        console.error("Mini session check failed", error);
+        res.status(500).json({ error: "Mini session check failed." });
+      });
+    },
+    async (req: Request, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+
+      try {
+        const result = await resumeStripeSubscription(
+          String(user.telegram_user_id),
+        );
+        res.status(200).json(result);
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
     "/api/mini/reset-account",
     async (req: Request, res: Response, next: NextFunction) => {
       void requireMiniSession(req, res, next).catch((error: unknown) => {
@@ -1739,6 +1795,35 @@ export const createDashboardRouter = (): Router => {
 
       try {
         const result = await cancelStripeSubscription(
+          String(user.telegram_user_id),
+        );
+        res.status(200).json(result);
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
+    "/gateway/:user_id/mini/resume-subscription",
+    requireDashboardSession,
+    async (req: Request<{ user_id: string }>, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+      if (String(user.telegram_user_id) !== req.params.user_id) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      try {
+        const result = await resumeStripeSubscription(
           String(user.telegram_user_id),
         );
         res.status(200).json(result);

@@ -2,6 +2,7 @@ import { config } from '../common/config.js';
 import { getAssistantById, getUserByTelegramId } from '../common/db/index.js';
 import { DomainError } from '../common/errors.js';
 import { destroyAssistantContainer, ensureAssistantContainer } from './index.js';
+import { clearCommandMenuForAssistant } from '../telegram-router/commandMenu.js';
 
 const parsePositiveInt = (value: unknown): number | null => {
   const raw = typeof value === 'string' ? value.trim() : typeof value === 'number' ? String(value) : '';
@@ -38,12 +39,17 @@ export const createAssistantContainerById = async (assistantId: number) => {
 
 export const deleteAssistantContainerById = async (assistantId: number): Promise<{ deleted: boolean }> => {
   const { assistant } = await readAssistantWithOwnerGatewayTokenOrThrow(assistantId);
-  return destroyAssistantContainer({
+  const result = await destroyAssistantContainer({
     id: assistant.id,
     assistant_bot_id: assistant.assistant_bot_id,
     container_id: assistant.container_id,
     container_name: assistant.container_name
   });
+  clearCommandMenuForAssistant(
+    String(assistant.owner_telegram_user_id),
+    assistant.assistant_bot_token,
+  ).catch((e) => console.error("Failed to clear command menu:", e));
+  return result;
 };
 
 export const repairAssistantContainerById = async (

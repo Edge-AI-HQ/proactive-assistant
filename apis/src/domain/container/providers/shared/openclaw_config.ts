@@ -321,6 +321,21 @@ export const buildAssistantOpenclawConfig = (
     next.skills = defaultSkills as UnknownRecord;
   }
 
+  // Custom skills live in /opt/pinai/skills/ — ensure extraDirs is always set
+  // so OpenClaw loads them alongside (or instead of) bundled skills.
+  const skillsObj = next.skills as UnknownRecord;
+  const skillsLoad = (skillsObj.load as UnknownRecord) || {};
+  const existingExtraDirs = Array.isArray(skillsLoad.extraDirs)
+    ? (skillsLoad.extraDirs as string[])
+    : [];
+  const PINAI_SKILLS_DIR = "/opt/pinai/skills";
+  if (!existingExtraDirs.includes(PINAI_SKILLS_DIR)) {
+    skillsObj.load = {
+      ...skillsLoad,
+      extraDirs: [...existingExtraDirs, PINAI_SKILLS_DIR],
+    };
+  }
+
   const baseWebhookConfig: TelegramWebhookConfig = { enabled: true };
   if (options.telegramWebhookMode) {
     const normalizedWebhookPath = normalizeWebhookPath(

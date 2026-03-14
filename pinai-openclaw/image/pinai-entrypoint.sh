@@ -47,7 +47,7 @@ setup_secrets() {
 
 setup_exec_approvals() {
   [ "$EXEC_APPROVALS_MODE" = "off" ] && return 0
-  mkdir -p /app/.openclaw /root/.openclaw
+  mkdir -p /app/.openclaw
   node "$SCRIPTS_DIR/setup-exec-approvals.js"
 }
 

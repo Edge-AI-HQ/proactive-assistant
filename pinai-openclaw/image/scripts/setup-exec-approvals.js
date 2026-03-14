@@ -5,15 +5,15 @@
  * In our headless (no human operator) container, we must pre-approve all
  * exec actions; otherwise the agent hangs forever waiting for user input.
  *
- * Merges existing approval files (if any) and writes the final config to
- * /app/.openclaw/exec-approvals.json, then symlinks /root/.openclaw/ to it.
+ * Writes to /app/.openclaw/exec-approvals.json (the single state directory).
+ * /root/.openclaw is a symlink to /app/.openclaw (set up in the Dockerfile),
+ * so OpenClaw finds this file regardless of which home-dir path it resolves.
  */
 const fs = require("fs");
 const path = require("path");
 
-const appPath = "/app/.openclaw/exec-approvals.json";
-const rootPath = "/root/.openclaw/exec-approvals.json";
-const socketPath = "/root/.openclaw/exec-approvals.sock";
+const approvalPath = "/app/.openclaw/exec-approvals.json";
+const socketPath = "/app/.openclaw/exec-approvals.sock";
 
 const readJson = (file) => {
   try {
@@ -23,20 +23,16 @@ const readJson = (file) => {
   }
 };
 
-const base = readJson(appPath);
-const root = readJson(rootPath);
+const existing = readJson(approvalPath);
 const merged = {
-  ...(root && typeof root === "object" ? root : {}),
-  ...(base && typeof base === "object" ? base : {}),
+  ...(existing && typeof existing === "object" ? existing : {}),
   version: 1,
   socket:
-    (base && typeof base.socket === "object" && base.socket) ||
-    (root && typeof root.socket === "object" && root.socket) || {
+    (existing && typeof existing.socket === "object" && existing.socket) || {
       path: socketPath,
     },
   defaults: {
-    ...((root && typeof root.defaults === "object" && root.defaults) || {}),
-    ...((base && typeof base.defaults === "object" && base.defaults) || {}),
+    ...((existing && typeof existing.defaults === "object" && existing.defaults) || {}),
     security: "full",
     ask: "off",
     askFallback: "full",
@@ -44,15 +40,5 @@ const merged = {
   },
 };
 
-fs.mkdirSync(path.dirname(appPath), { recursive: true });
-fs.writeFileSync(appPath, `${JSON.stringify(merged, null, 2)}\n`, { mode: 0o600 });
-
-try {
-  if (fs.existsSync(rootPath) || fs.lstatSync(path.dirname(rootPath)).isDirectory()) {
-    try { fs.rmSync(rootPath, { force: true }); } catch {}
-    fs.symlinkSync(appPath, rootPath);
-  }
-} catch {
-  fs.copyFileSync(appPath, rootPath);
-  fs.chmodSync(rootPath, 0o600);
-}
+fs.mkdirSync(path.dirname(approvalPath), { recursive: true });
+fs.writeFileSync(approvalPath, `${JSON.stringify(merged, null, 2)}\n`, { mode: 0o600 });

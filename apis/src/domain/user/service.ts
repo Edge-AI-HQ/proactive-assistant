@@ -63,6 +63,7 @@ const ensureUserLiteLLMKey = async (user: UserRecord): Promise<UserRecord> => {
     userAlias: litellmUserAlias,
     keyAlias: userKeyAlias,
     maxBudgetUsd: maxBudgetUsd ?? null,
+    budgetDuration: null, // Disable auto-reset; budget reset is managed by subscription periods
     metadata: {
       source: "pin-ai-assistant-apis",
       user_id: user.id,
@@ -90,11 +91,13 @@ const ensureUserLiteLLMKey = async (user: UserRecord): Promise<UserRecord> => {
         userId: litellmUserId,
         userAlias: litellmUserAlias,
         maxBudgetUsd: maxBudgetUsd ?? null,
+        budgetDuration: null, // Disable auto-reset
       });
       await updateLiteLLMKey({
         key: workingUser.litellm_virtual_key!,
         maxBudgetUsd: maxBudgetUsd ?? null,
-        budgetDuration: config.litellm.defaultBudgetDuration,
+        budgetDuration: null, // Disable auto-reset
+        budgetResetAt: null, // Clear stale reset timestamp from previous auto-reset configs
       });
     } catch (err) {
       console.warn("[user] Failed to sync LiteLLM budget for existing key", {
@@ -146,8 +149,7 @@ const ensureUserLiteLLMKey = async (user: UserRecord): Promise<UserRecord> => {
     litellm_virtual_key: rawKey,
     litellm_key_last4: keyLast4(rawKey),
     litellm_spend_usd: 0,
-    litellm_budget_duration:
-      resolvedBudgetDuration ?? config.litellm.defaultBudgetDuration,
+    litellm_budget_duration: resolvedBudgetDuration ?? null,
     litellm_rpm_limit: resolvedRpmLimit,
     litellm_tpm_limit: resolvedTpmLimit,
     litellm_last_synced_at: new Date().toISOString(),

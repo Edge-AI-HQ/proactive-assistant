@@ -17,6 +17,7 @@ interface LiteLLMCreateUserInput {
   userAlias: string;
   keyAlias?: string | null;
   maxBudgetUsd?: number | null;
+  budgetDuration?: string | null; // null = disable auto-reset, undefined = use LiteLLM default
   metadata?: JsonRecord;
   autoCreateKey?: boolean;
 }
@@ -25,6 +26,7 @@ interface LiteLLMUpdateUserInput {
   userId: string;
   userAlias?: string | null;
   maxBudgetUsd?: number | null;
+  budgetDuration?: string | null; // null = disable auto-reset, undefined = use LiteLLM default
   metadata?: JsonRecord;
 }
 
@@ -359,6 +361,11 @@ export const createLiteLLMUser = async (
   if (normalizedMaxBudget !== null) {
     body.max_budget = normalizedMaxBudget;
   }
+  // Set budget_duration to disable auto-reset (null) or use specific duration
+  // undefined = don't send (use LiteLLM default)
+  if (input.budgetDuration !== undefined) {
+    body.budget_duration = input.budgetDuration;
+  }
   if (input.metadata && Object.keys(input.metadata).length > 0) {
     body.metadata = input.metadata;
   }
@@ -437,6 +444,12 @@ export const updateLiteLLMUser = async (
     body.max_budget = normalizedMaxBudget;
   }
 
+  // Set budget_duration to disable auto-reset (null) or use specific duration
+  // undefined = don't send (keeps existing value)
+  if (input.budgetDuration !== undefined) {
+    body.budget_duration = input.budgetDuration;
+  }
+
   if (input.metadata && Object.keys(input.metadata).length > 0) {
     body.metadata = input.metadata;
   }
@@ -497,6 +510,7 @@ export const updateLiteLLMKey = async (input: {
   key: string;
   maxBudgetUsd?: number | null;
   budgetDuration?: string | null;
+  budgetResetAt?: string | null;
   spend?: number | null;
 }): Promise<void> => {
   const token = input.key.trim();
@@ -507,12 +521,15 @@ export const updateLiteLLMKey = async (input: {
   if (normalizedMaxBudget !== null) {
     body.max_budget = normalizedMaxBudget;
   }
-  if (
-    input.budgetDuration != null &&
-    typeof input.budgetDuration === "string" &&
-    input.budgetDuration.trim()
-  ) {
-    body.budget_duration = input.budgetDuration.trim();
+  // Set budget_duration: null to disable auto-reset, non-null string to set duration
+  // undefined = don't send (keeps existing value)
+  if (input.budgetDuration !== undefined) {
+    body.budget_duration = input.budgetDuration;
+  }
+  // Set budget_reset_at: null to clear reset timestamp
+  // undefined = don't send (keeps existing value)
+  if (input.budgetResetAt !== undefined) {
+    body.budget_reset_at = input.budgetResetAt;
   }
   if (
     input.spend !== undefined &&

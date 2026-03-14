@@ -106,6 +106,7 @@ export interface SubscriptionPeriod {
   status: string;
   cancel_at_period_end: boolean;
   budget_applied_at: string | null;
+  reset_spend_on_apply: boolean | null; // true = reset spend when applying budget (new cycle), false = preserve spend (upgrade)
   created_at: string;
   updated_at: string;
 }

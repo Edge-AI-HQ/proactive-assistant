@@ -17,10 +17,7 @@ export default defineConfig({
     outDir: path.resolve(__dirname, "../apis/public/mini"),
     emptyOutDir: true,
     rollupOptions: {
-      input: {
-        main: path.resolve(__dirname, "index.html"),
-        demo: path.resolve(__dirname, "demo.html"),
-      },
+      input: path.resolve(__dirname, "index.html"),
     },
   },
 });

@@ -68,6 +68,7 @@ export interface PaymentStore {
     status?: string;
     cancel_at_period_end?: boolean;
     assistant_id?: number | null;
+    reset_spend_on_apply?: boolean; // true = reset spend when applying budget (new cycle), false = preserve spend (upgrade)
   }): Promise<void>;
   getPeriodsToApplyBudget(now?: Date): Promise<SubscriptionPeriod[]>;
   markPeriodBudgetApplied(periodId: number): Promise<boolean>;

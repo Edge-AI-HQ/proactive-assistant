@@ -34,7 +34,9 @@ test("executeAssistantReadyNotificationsForTest fixed message includes use cases
   });
 
   assert.match(fixedMessage, /Try one of these use cases:/i);
-  assert.match(fixedMessage, /Gmail triage/i);
+  assert.match(fixedMessage, /Custom Morning Brief/i);
+  assert.match(fixedMessage, /Inbox De-clutter/i);
+  assert.match(fixedMessage, /Work Calendar/i);
   assert.match(fixedMessage, /Agent Browser tasks/i);
 });
 

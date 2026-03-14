@@ -17,6 +17,7 @@ import {
   ensureAssistantContainer,
 } from "../container/index.js";
 import { ensureLiteLLMKeyForAssistant } from "../litellm/index.js";
+import { clearCommandMenuForAssistant } from "../telegram-router/commandMenu.js";
 import { sendTelegramMessage } from "../telegram/notify.js";
 import { createAssistantWithoutContainer } from "../claw-assistant/service.js";
 import { shouldEnsureAssistantRuntime } from "../claw-assistant/runtimeHealth.js";
@@ -466,6 +467,10 @@ export async function syncSubscriptionFromStripe(
             container_id: assistant.container_id,
             container_name: assistant.container_name,
           });
+          clearCommandMenuForAssistant(
+            String(telegram_user_id),
+            assistant.assistant_bot_token,
+          ).catch((e) => console.error("Failed to clear command menu:", e));
           console.log(
             `Stopped container for assistant ${assistant.id} due to inactive subscription`,
           );
@@ -719,8 +724,17 @@ export async function handleInvoicePaid(
   // For immediate plan switches on the same Stripe subscription, Stripe may emit
   // a new period that starts "now" while an older local period is still open.
   // Close any overlapping old period first so only one period is active at a time.
+  // If truncate returns true, this is an upgrade - don't reset spend.
+  let isUpgrade = false;
   try {
-    await db.truncateSubscriptionPeriodsAt(stripeSubscriptionId, periodStart);
+    isUpgrade = await db.truncateSubscriptionPeriodsAt(stripeSubscriptionId, periodStart);
+    if (isUpgrade) {
+      console.log("[payment] Detected upgrade - will preserve user spend", {
+        invoiceId: invoice.id,
+        stripeSubscriptionId,
+        telegramUserId: subscription.telegram_user_id,
+      });
+    }
   } catch (err) {
     console.warn("[payment] invoice.paid period truncate failed (non-fatal)", {
       invoiceId: invoice.id,
@@ -741,6 +755,7 @@ export async function handleInvoicePaid(
     plan_id: planCode,
     status: "active",
     assistant_id: assistantId ?? null,
+    reset_spend_on_apply: !isUpgrade, // Don't reset on upgrade, do reset on new billing cycle
   });
 
   // invoice.paid 后也启动容器（不依赖 subscription.updated，因为 period 可能为空）
@@ -750,6 +765,7 @@ export async function handleInvoicePaid(
       telegram_username: subscription.telegram_username ?? null,
       plan_code: planCode,
       source: "invoice_paid_provision",
+      reset_spend: !isUpgrade, // Don't reset on upgrade
     });
   } catch (err) {
     console.warn("[payment] invoice.paid budget sync failed", {
@@ -953,12 +969,13 @@ async function applySubscriptionPeriodBudgetsCore(now?: Date): Promise<{
       }
 
       // 执行 LiteLLM budget 操作（设计为幂等，即使多次执行结果相同）
+      // reset_spend_on_apply: true for new billing cycles, false for upgrades
       await syncLiteLLMBudgetFromPlan({
         telegram_user_id: period.telegram_user_id,
         telegram_username: period.telegram_username ?? null,
         plan_code: period.plan_id,
         source: "cron_apply_subscription_period",
-        reset_spend: true,
+        reset_spend: period.reset_spend_on_apply ?? true, // Default true for backward compatibility
       });
       processed += 1;
     } catch (err) {
@@ -1036,6 +1053,10 @@ async function applySubscriptionPeriodBudgetsCore(now?: Date): Promise<{
             container_id: assistant.container_id,
             container_name: assistant.container_name,
           });
+          clearCommandMenuForAssistant(
+            String(user.telegram_user_id),
+            assistant.assistant_bot_token,
+          ).catch((e) => console.error("Failed to clear command menu:", e));
           console.log(
             `[payment] Stopped container for assistant ${assistant.id} (ended subscription)`,
           );

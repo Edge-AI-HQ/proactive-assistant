@@ -367,77 +367,11 @@ CREATE TABLE vnc_access_tokens (
 - **Gateway 校验**：访问 Gateway/Proxy/WS 前会校验订阅是否有效（`hasActiveSubscriptionForService`），过期或已取消且过 period_end 时返回 **402**，且不会启动新容器。
 - 测试：续费成功看 `invoice.paid` 与 LiteLLM budget；续费失败用测试卡 4000 0000 0000 0341 或 Stripe Dashboard 把 invoice 标失败；取消用 Dashboard 选 Cancel at period end；过期访问 Gateway 应得 402。详见 `apis/src/domain/payment/subscriptionSync.ts`、`subscriptionGuard.ts`、`webhook.ts`。
 
-## Miniapp 演示模式（Google OAuth 审核）
+## Miniapp 访问规则
 
-为了让 Google OAuth 审核人员在标准浏览器中访问 Telegram Mini App，我们实现了演示模式。
-
-### 快速启动
-
-1. **启用演示模式**
-   ```bash
-   # 在 apis/.env 中添加
-   MINIAPP_DEMO_ENABLED=true
-   ```
-
-2. **构建 miniapp**
-   ```bash
-   cd miniapp
-   npm run build
-   ```
-
-3. **启动服务器**
-   ```bash
-   cd apis
-   npm run dev
-   ```
-
-4. **访问演示页面**
-   - 演示欢迎页：`http://localhost:3000/mini/demo.html`
-   - 直接启动：`http://localhost:3000/mini/?demo=1`
-
-### 技术实现
-
-#### 后端
-- 新增 `/api/mini/bootstrap-demo` 端点，使用固定演示用户（ID: 999999999）
-- 无需 Telegram initData 验证
-- 其他 API 端点保持不变，通过会话 cookie 认证
-
-#### 前端
-- 自动检测 URL 参数 `?demo=1`
-- 模拟 Telegram WebApp API（ready, expand, openLink 等）
-- 显示明显的演示模式横幅："🎭 DEMO MODE - Google OAuth Review Preview"
-- 完整功能展示：Google OAuth 连接/断开、账户管理、订阅界面等
-
-#### 构建配置
-- Vite 多入口配置，同时构建 `index.html` 和 `demo.html`
-
-### 提供给审核人员的信息
-
-**演示 URL**: `https://your-domain.com/mini/demo.html`
-
-**使用说明**:
-1. 点击 "Launch Demo App" 按钮
-2. 在设置中点击 "Connect Google" 测试 OAuth 流程
-3. 完成授权后查看已连接的 Google 账户
-4. 可以测试 "Disconnect Google" 功能
-
-**OAuth 范围**:
-- Gmail: 读取和发送邮件
-- Calendar: 读取和创建日历事件
-- Drive: 访问和管理文件
-
-### 安全注意事项
-
-- 演示模式必须通过环境变量显式启用
-- 使用独立的演示用户，与真实用户完全隔离
-- 生产环境建议仅在审核期间临时启用
-
-### 相关文件
-
-- `apis/src/controller/dashboard_routes.ts` - 演示 bootstrap 端点
-- `miniapp/src/demoMode.ts` - 演示模式核心逻辑
-- `miniapp/src/App.tsx` - 演示模式集成
-- `miniapp/demo.html` - 演示欢迎页
+- Miniapp 仅支持 Telegram WebApp 入口。
+- 后端 `POST /api/mini/bootstrap` 必须携带并通过 `init_data` 验签。
+- 不再支持浏览器预览用户回落模式（避免 OAuth 身份串号风险）。
 
 ## 参考文档
 

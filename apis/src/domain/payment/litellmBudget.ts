@@ -166,6 +166,7 @@ export const syncLiteLLMBudgetAbsolute = async (
       userId: litellmUserId,
       userAlias: litellmUserAlias,
       maxBudgetUsd: targetBudgetUsd,
+      budgetDuration: null, // Disable auto-reset, we manage budget manually via subscription periods
       autoCreateKey: false,
       metadata: {
         source: input.source,
@@ -227,6 +228,7 @@ export const syncLiteLLMBudgetAbsolute = async (
     userId: litellmUserId,
     userAlias: litellmUserAlias,
     maxBudgetUsd: targetBudgetUsd,
+    budgetDuration: null, // Disable auto-reset, we manage budget manually via subscription periods
   });
 
   const litellmKey = await db.getLiteLLMKeyByTelegramId(input.telegram_user_id);
@@ -235,6 +237,8 @@ export const syncLiteLLMBudgetAbsolute = async (
       await updateLiteLLMKey({
         key: litellmKey,
         maxBudgetUsd: targetBudgetUsd,
+        budgetDuration: null, // Disable auto-reset, we manage budget manually via subscription periods
+        budgetResetAt: null, // Clear reset timestamp
       });
     } catch (e) {
       console.warn("[payment] key budget sync failed (non-fatal)", {

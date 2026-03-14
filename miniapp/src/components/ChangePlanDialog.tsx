@@ -16,10 +16,12 @@ interface ChangePlanDialogProps {
   currentPlanId: string | null;
   cancelAtPeriodEnd: boolean;
   currentPeriodEnd: string | null;
+  downgradeLockUntil: string | null;
   selectedPlan: string | null;
   onSelectPlan: (planId: string) => void;
   onCheckout: () => void;
   onCancel: () => void;
+  onResume: () => void;
   busy: string;
 }
 
@@ -90,12 +92,19 @@ const BillingRulesDialog = ({ open, onClose }: { open: boolean; onClose: () => v
 
 const ChangePlanDialog = ({
   open, onClose, plans, currentPlanId, selectedPlan,
-  cancelAtPeriodEnd, currentPeriodEnd, onSelectPlan, onCheckout, onCancel, busy,
+  cancelAtPeriodEnd, currentPeriodEnd, downgradeLockUntil, onSelectPlan, onCheckout, onCancel, onResume, busy,
 }: ChangePlanDialogProps) => {
   const [showBillingRules, setShowBillingRules] = useState(false);
 
   useBodyScrollLock(open);
   if (!open) return null;
+
+  // Check if downgrade is locked
+  const isDowngradeLocked = downgradeLockUntil && new Date(downgradeLockUntil) > new Date();
+  
+  // Get current plan price for comparison
+  const currentPlan = plans.find((p) => p.id === currentPlanId);
+  const currentPrice = currentPlan ? parseFloat(currentPlan.price) : 0;
 
   return createPortal(
     <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
@@ -123,17 +132,26 @@ const ChangePlanDialog = ({
               const selected = selectedPlan === plan.id;
               const current = currentPlanId === plan.id;
               const badge = PLAN_BADGE[plan.id];
+              const planPrice = parseFloat(plan.price);
+              const isDowngrade = planPrice < currentPrice;
+              const isLocked = isDowngradeLocked && isDowngrade;
+              const isDowngradeBlockedByCancel = cancelAtPeriodEnd && isDowngrade;
+              const isDisabled = isLocked || isDowngradeBlockedByCancel || current;
+              
               return (
                 <button
                   key={plan.id}
-                  className={`w-full rounded-2xl p-3.5 text-left transition-all btn-press relative ${
-                    selected
-                      ? "bg-white border-2 border-foreground shadow-md"
-                      : "bg-white border border-border/20 shadow-sm hover:shadow-md"
+                  className={`w-full rounded-2xl p-3.5 text-left transition-all relative ${
+                    isDisabled
+                      ? "bg-secondary/30 border border-border/10 cursor-not-allowed opacity-60"
+                      : selected
+                        ? "bg-white border-2 border-foreground shadow-md btn-press"
+                        : "bg-white border border-border/20 shadow-sm hover:shadow-md btn-press"
                   }`}
-                  onClick={() => onSelectPlan(plan.id)}
+                  onClick={() => !isDisabled && onSelectPlan(plan.id)}
+                  disabled={isDisabled}
                 >
-                  {badge && (
+                  {badge && !isLocked && (
                     <span className={`absolute -top-2.5 right-3 text-[9px] font-semibold px-2 py-0.5 rounded-full ${
                       plan.id === "pro"
                         ? "bg-primary text-white"
@@ -142,19 +160,27 @@ const ChangePlanDialog = ({
                       {badge}
                     </span>
                   )}
+                  {isLocked && (
+                    <span className="absolute -top-2.5 right-3 text-[9px] font-semibold px-2 py-0.5 rounded-full bg-muted-foreground/20 text-muted-foreground flex items-center gap-1">
+                      <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                        <rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                      </svg>
+                      Locked
+                    </span>
+                  )}
                   <div className="flex items-center justify-between gap-2 mb-0.5">
                     <div className="flex items-center gap-1.5">
-                      <span className="text-sm font-bold text-foreground">{plan.name}</span>
+                      <span className={`text-sm font-bold ${isLocked ? "text-muted-foreground" : "text-foreground"}`}>{plan.name}</span>
                       {current && (
                         <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[hsl(152_69%_65%/0.15)] font-medium" style={{ color: "hsl(152 69% 35%)" }}>Current</span>
                       )}
                     </div>
-                    <span className="text-base font-extrabold text-foreground">
+                    <span className={`text-base font-extrabold ${isLocked ? "text-muted-foreground" : "text-foreground"}`}>
                       ${plan.price}<span className="text-xs font-normal text-muted-foreground">/mo</span>
                     </span>
                   </div>
                   <p className="text-[11px] text-muted-foreground">{plan.features[0]}</p>
-                  <p className="text-[11px] font-medium text-primary mt-0.5">
+                  <p className={`text-[11px] font-medium mt-0.5 ${isLocked ? "text-muted-foreground" : "text-primary"}`}>
                     <span className="line-through text-muted-foreground text-[10px]">{PLAN_PROMO[plan.id]?.original ?? "—"}</span>
                     {" "}
                     <span className="font-bold">{PLAN_PROMO[plan.id]?.actual ?? "—"} credits</span>
@@ -169,6 +195,23 @@ const ChangePlanDialog = ({
           {cancelAtPeriodEnd && (
             <div className="rounded-xl bg-amber-50 px-3 py-2.5 text-[11px] text-amber-800 mb-3">
               Renewal canceled.{currentPeriodEnd ? ` Active until ${new Date(currentPeriodEnd).toLocaleDateString()}.` : ""}
+            </div>
+          )}
+
+          {isDowngradeLocked && !cancelAtPeriodEnd && (
+            <div className="rounded-xl bg-blue-50 px-3 py-2.5 text-[11px] text-blue-800 mb-3 flex items-start gap-2">
+              <svg className="w-3.5 h-3.5 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" />
+              </svg>
+              <span>
+                Downgrade locked until {downgradeLockUntil ? new Date(downgradeLockUntil).toLocaleDateString() : "current period ends"}. You can downgrade after this billing cycle.
+              </span>
+            </div>
+          )}
+
+          {cancelAtPeriodEnd && (
+            <div className="rounded-xl bg-slate-50 px-3 py-2.5 text-[11px] text-slate-700 mb-3">
+              Downgrade is unavailable while renewal is canceled. Resume renewal first.
             </div>
           )}
 
@@ -189,17 +232,17 @@ const ChangePlanDialog = ({
           <button
             className="w-full bg-foreground text-background rounded-2xl py-3 text-sm font-semibold btn-press shadow-md disabled:opacity-50"
             onClick={onCheckout}
-            disabled={busy !== "none" || !selectedPlan}
+            disabled={busy !== "none" || !selectedPlan || selectedPlan === currentPlanId}
           >
             {busy === "checkout" ? "Redirecting..." : "Continue to Checkout"}
           </button>
           {currentPlanId && (
             <button
               className="w-full bg-secondary text-foreground rounded-2xl py-2.5 text-sm font-medium btn-press disabled:opacity-50 mt-2"
-              onClick={onCancel}
-              disabled={busy !== "none" || cancelAtPeriodEnd}
+              onClick={cancelAtPeriodEnd ? onResume : onCancel}
+              disabled={busy !== "none"}
             >
-              {busy === "cancel" ? "Processing..." : cancelAtPeriodEnd ? "Renewal Canceled" : "Cancel Renewal"}
+              {busy === "cancel" || busy === "resume" ? "Processing..." : cancelAtPeriodEnd ? "Resume Renewal" : "Cancel Renewal"}
             </button>
           )}
         </div>

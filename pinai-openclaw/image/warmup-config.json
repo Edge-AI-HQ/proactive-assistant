@@ -50,6 +50,9 @@
       "webhookPort": 8787
     }
   },
+  "skills": {
+    "load": { "extraDirs": ["/opt/pinai/skills"] }
+  },
   "plugins": {
     "entries": {
       "telegram": { "enabled": true },
