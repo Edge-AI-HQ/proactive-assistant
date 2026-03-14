@@ -211,13 +211,37 @@ export const readInternalSubscription = async (
   telegramUserIdRaw: unknown,
 ): Promise<{
   subscription: Awaited<ReturnType<typeof db.getCurrentPeriodByTelegramId>>;
+  downgrade_lock_until: string | null;
 }> => {
   const telegramUserId = parseTelegramUserId(telegramUserIdRaw);
   if (!telegramUserId) {
     throw new DomainError("INVALID_INPUT", "telegram_user_id is required");
   }
   const subscription = await db.getCurrentPeriodByTelegramId(telegramUserId);
-  return { subscription };
+  
+  let downgradeLockUntil: string | null = null;
+  if (subscription?.stripe_subscription_id) {
+    try {
+      const stripeSub = await requireStripe().subscriptions.retrieve(
+        subscription.stripe_subscription_id,
+      );
+      const lockUntilRaw = stripeSub.metadata?.pinai_downgrade_lock_until;
+      if (lockUntilRaw) {
+        const lockTimestamp = Number.parseInt(lockUntilRaw, 10);
+        if (Number.isFinite(lockTimestamp) && lockTimestamp > Date.now() / 1000) {
+          downgradeLockUntil = new Date(lockTimestamp * 1000).toISOString();
+        }
+      }
+    } catch (err) {
+      // Non-fatal, just won't show lock info
+      console.warn("[payment] Failed to read downgrade lock from Stripe", {
+        subscriptionId: subscription.stripe_subscription_id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  
+  return { subscription, downgrade_lock_until: downgradeLockUntil };
 };
 
 export const validateInternalPaymentSession = async (

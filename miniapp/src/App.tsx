@@ -63,6 +63,7 @@ type StatePayload = {
     plan_id: string | null;
     cancel_at_period_end: boolean;
     current_period_end: string | null;
+    downgrade_lock_until: string | null;
   };
   credits?: {
     remaining: number;
@@ -129,6 +130,8 @@ const hasQuickPayloadChanged = (
       next.subscription.cancel_at_period_end ||
     prev.subscription.current_period_end !==
       next.subscription.current_period_end ||
+    prev.subscription.downgrade_lock_until !==
+      next.subscription.downgrade_lock_until ||
     (prev.features?.can_delete_account ?? true) !==
       (next.features?.can_delete_account ?? true)
   );
@@ -1047,6 +1050,7 @@ const App = () => {
             currentPlanId={state.subscription.plan_id}
             cancelAtPeriodEnd={state.subscription.cancel_at_period_end}
             currentPeriodEnd={state.subscription.current_period_end}
+            downgradeLockUntil={state.subscription.downgrade_lock_until}
             selectedPlan={selectedPlan}
             onSelectPlan={setSelectedPlan}
             onCheckout={checkout}

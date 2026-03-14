@@ -427,6 +427,7 @@ const buildQuickStatePayload = async (
           plan_id: subscription.plan_id,
           cancel_at_period_end: subscription.cancel_at_period_end,
           current_period_end: subscription.current_period_end,
+          downgrade_lock_until: subscriptionResult.downgrade_lock_until,
         }
       : {
           active,
@@ -434,6 +435,7 @@ const buildQuickStatePayload = async (
           plan_id: null,
           cancel_at_period_end: false,
           current_period_end: null,
+          downgrade_lock_until: null,
         },
     credits: null as null,
     features: {
