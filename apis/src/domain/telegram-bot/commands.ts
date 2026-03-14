@@ -19,6 +19,7 @@ import { isSubscriptionActiveForService } from "../payment/subscriptionPolicy.js
 import {
   CREATE_ASSISTANT_COMMAND,
   GATEWAY_COMMAND,
+  GUIDE_BOT_CB_PREFIX,
   LIST_ASSISTANT_COMMAND,
   RESET_ACCOUNT_COMMAND,
   SUBSCRIBE_COMMAND,
@@ -103,6 +104,19 @@ const parseAssistantToken = (
 
 // 使用数据库存储待处理动作（支持集群部署）
 import { pool } from "../common/db/core.js";
+
+/** Guide Bot callback data constants — single source of truth for both handlers and buttons */
+const CB = {
+  QUICK_START: `${GUIDE_BOT_CB_PREFIX}quick_start`,
+  USE_OWN_BOT: `${GUIDE_BOT_CB_PREFIX}use_own_bot`,
+  MANAGE_SUB: `${GUIDE_BOT_CB_PREFIX}manage_subscription`,
+  CONFIRM_CANCEL_SUB: `${GUIDE_BOT_CB_PREFIX}confirm_cancel_subscription`,
+  DO_CANCEL_SUB: `${GUIDE_BOT_CB_PREFIX}do_cancel_subscription`,
+  KEEP_SUB: `${GUIDE_BOT_CB_PREFIX}keep_subscription`,
+  REFRESH_STATUS: `${GUIDE_BOT_CB_PREFIX}refresh_assistant_status`,
+  CONFIRM_RESET: `${GUIDE_BOT_CB_PREFIX}confirm_reset_account`,
+  CANCEL_RESET: `${GUIDE_BOT_CB_PREFIX}cancel_reset_account`,
+} as const;
 
 const markTokenInputPending = async (telegramUserId: number): Promise<void> => {
   const PENDING_TOKEN_INPUT_TTL_MS = 10 * 60 * 1000; // 10分钟
@@ -458,9 +472,9 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
       if (!assistant) continue;
 
       const keyboard = new InlineKeyboard()
-        .text("📊 Manage Subscription", "manage_subscription")
+        .text("📊 Manage Subscription", CB.MANAGE_SUB)
         .row()
-        .text("🔄 Refresh Status", "refresh_assistant_status");
+        .text("🔄 Refresh Status", CB.REFRESH_STATUS);
 
       await replyHtml(
         ctx,
@@ -617,13 +631,13 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
   // Callback query handlers for inline buttons
 
   // 兼容旧 quick_start callback：复用统一创建流程
-  bot.callbackQuery("quick_start", async (ctx) => {
+  bot.callbackQuery(CB.QUICK_START, async (ctx) => {
     await ctx.answerCallbackQuery();
     await provisionAssistantWithGuideBot(ctx);
   });
 
   // 兼容旧消息里的 callback，入口已在 v1 隐藏
-  bot.callbackQuery("use_own_bot", async (ctx) => {
+  bot.callbackQuery(CB.USE_OWN_BOT, async (ctx) => {
     await ctx.editMessageText(
       [
         "🔧 <b>Use Your Own Bot</b>",
@@ -636,7 +650,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     await ctx.answerCallbackQuery();
   });
 
-  bot.callbackQuery("manage_subscription", async (ctx) => {
+  bot.callbackQuery(CB.MANAGE_SUB, async (ctx) => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
 
@@ -659,7 +673,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     const keyboard = new InlineKeyboard()
       .url("💳 Manage Subscription", paymentLink)
       .row()
-      .text("❌ Cancel Subscription", "confirm_cancel_subscription");
+      .text("❌ Cancel Subscription", CB.CONFIRM_CANCEL_SUB);
 
     await ctx.editMessageText(
       [
@@ -678,10 +692,10 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     await ctx.answerCallbackQuery();
   });
 
-  bot.callbackQuery("confirm_cancel_subscription", async (ctx) => {
+  bot.callbackQuery(CB.CONFIRM_CANCEL_SUB, async (ctx) => {
     const keyboard = new InlineKeyboard()
-      .text("⚠️ Yes, Cancel Subscription", "do_cancel_subscription")
-      .text("❌ Keep Subscription", "keep_subscription");
+      .text("⚠️ Yes, Cancel Subscription", CB.DO_CANCEL_SUB)
+      .text("❌ Keep Subscription", CB.KEEP_SUB);
 
     await ctx.editMessageText(
       [
@@ -703,7 +717,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     await ctx.answerCallbackQuery();
   });
 
-  bot.callbackQuery("do_cancel_subscription", async (ctx) => {
+  bot.callbackQuery(CB.DO_CANCEL_SUB, async (ctx) => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
 
@@ -747,14 +761,14 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     await ctx.answerCallbackQuery();
   });
 
-  bot.callbackQuery("keep_subscription", async (ctx) => {
+  bot.callbackQuery(CB.KEEP_SUB, async (ctx) => {
     await ctx.editMessageText("✅ <b>Subscription kept active.</b>", {
       parse_mode: "HTML",
     });
     await ctx.answerCallbackQuery({ text: "Subscription kept" });
   });
 
-  bot.callbackQuery("refresh_assistant_status", async (ctx) => {
+  bot.callbackQuery(CB.REFRESH_STATUS, async (ctx) => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
 
@@ -778,9 +792,9 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
       }
 
       const keyboard = new InlineKeyboard()
-        .text("📊 Manage Subscription", "manage_subscription")
+        .text("📊 Manage Subscription", CB.MANAGE_SUB)
         .row()
-        .text("🔄 Refresh Status", "refresh_assistant_status");
+        .text("🔄 Refresh Status", CB.REFRESH_STATUS);
 
       await ctx.editMessageText(
         [
@@ -985,8 +999,8 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     if (!telegramUserId) return;
 
     const keyboard = new InlineKeyboard()
-      .text("⚠️ Yes, Delete Everything", "confirm_reset_account")
-      .text("❌ Cancel", "cancel_reset_account");
+      .text("⚠️ Yes, Delete Everything", CB.CONFIRM_RESET)
+      .text("❌ Cancel", CB.CANCEL_RESET);
 
     await replyHtml(
       ctx,
@@ -1007,7 +1021,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     );
   });
 
-  bot.callbackQuery("confirm_reset_account", async (ctx) => {
+  bot.callbackQuery(CB.CONFIRM_RESET, async (ctx) => {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) return;
 
@@ -1041,7 +1055,7 @@ export const registerTelegramCommands = (bot: Bot<Context>): void => {
     await ctx.answerCallbackQuery();
   });
 
-  bot.callbackQuery("cancel_reset_account", async (ctx) => {
+  bot.callbackQuery(CB.CANCEL_RESET, async (ctx) => {
     await ctx.editMessageText(
       "✅ <b>Account reset cancelled.</b>\nYour account remains unchanged.",
       { parse_mode: "HTML" },
