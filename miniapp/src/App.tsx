@@ -533,7 +533,10 @@ const App = () => {
         // Plan changed directly via Stripe subscription update — no redirect needed
         showToast(result.message ?? "Plan updated successfully.", "success");
         setBusy("none");
-        await loadState();
+        const latest = await loadState();
+        setSelectedPlan(
+          latest.subscription.plan_id ?? latest.plans?.[0]?.id ?? null,
+        );
         return;
       }
       if (!result.url)
@@ -987,7 +990,12 @@ const App = () => {
             }
             onOpenManage={handleOpenManage}
             onCloseManage={() => setShowManageAgent(false)}
-            onChangePlan={() => setShowChangePlan(true)}
+            onChangePlan={() => {
+              setSelectedPlan(
+                state.subscription.plan_id ?? state.plans?.[0]?.id ?? null,
+              );
+              setShowChangePlan(true);
+            }}
             onRepairRuntime={handleRepairRuntime}
             runtimeBusy={busy === "repair-runtime"}
             allowDeleteAccount={state.features?.can_delete_account ?? true}
