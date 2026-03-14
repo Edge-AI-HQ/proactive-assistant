@@ -41,6 +41,10 @@ export interface ContainerNotifier {
     telegramUserId: number,
     options?: { assistantId?: number },
   ): Promise<void>;
+  notifyError?(
+    telegramUserId: number,
+    options?: { assistantId?: number },
+  ): Promise<void>;
 }
 
 export interface ContainerManagerRuntime {
