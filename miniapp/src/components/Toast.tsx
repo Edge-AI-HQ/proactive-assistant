@@ -17,14 +17,14 @@ const Toast = ({ message, type = "error", onDismiss }: ToastProps) => {
 
   return (
     <div
-      className="fixed left-4 right-4 z-[9999] flex justify-center animate-fade-in"
+      className="fixed left-4 right-4 z-[99999] flex justify-center animate-fade-in"
       style={{ top: "calc(var(--safe-top) + 1rem)" }}
     >
       <div
-        className={`max-w-md w-full rounded-xl px-4 py-3 text-sm font-medium shadow-lg backdrop-blur-md ${
+        className={`max-w-md w-full rounded-xl px-4 py-3 text-sm font-medium shadow-2xl border-2 ${
           type === "success"
-            ? "bg-pin-mint/90 text-white"
-            : "bg-red-500/90 text-white"
+            ? "bg-pin-mint text-white border-pin-mint/30"
+            : "bg-red-500 text-white border-red-400"
         }`}
       >
         {message}
