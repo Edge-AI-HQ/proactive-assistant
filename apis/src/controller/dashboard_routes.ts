@@ -95,9 +95,12 @@ const miniAuthMaxAgeSeconds = 24 * 60 * 60;
 const miniAuthFutureSkewSeconds = 5 * 60;
 
 // Web preview mode configuration
-const DEMO_MODE_ENABLED =
+const DEMO_MODE_REQUESTED =
   process.env.MINIAPP_DEMO_ENABLED === "true" ||
   process.env.MINIAPP_DEMO_ENABLED === "1";
+// Production must never fallback to preview identity when initData is missing.
+const DEMO_MODE_ENABLED =
+  DEMO_MODE_REQUESTED && config.nodeEnv !== "production";
 // Use real user account for web preview (shows actual subscription, assistant, etc.)
 // SECURITY: This user ID is hardcoded and cannot be changed via client
 const DEMO_TELEGRAM_USER_ID = 5572561504;
@@ -106,6 +109,12 @@ const DEMO_TELEGRAM_USERNAME = "preview_user";
 // SECURITY: Whitelist of allowed user IDs for web preview mode
 // Only these users can be accessed via web preview to prevent unauthorized access
 const ALLOWED_PREVIEW_USER_IDS = new Set([5572561504]);
+
+if (DEMO_MODE_REQUESTED && !DEMO_MODE_ENABLED) {
+  console.warn(
+    "[miniapp-demo] MINIAPP_DEMO_ENABLED is ignored in production for safety.",
+  );
+}
 
 const proxy = httpProxy.createProxyServer({ ws: true, xfwd: true });
 let proxyErrorHandlerBound = false;
@@ -616,6 +625,10 @@ export const createDashboardRouter = (): Router => {
   });
 
   router.post("/api/mini/bootstrap", async (req: Request, res: Response) => {
+    // Always reset stale mini session first; a fresh bootstrap must bind the
+    // cookie to the currently verified Telegram identity.
+    clearMiniSessionCookie(res);
+
     const initDataRaw =
       typeof req.body?.init_data === "string" ? req.body.init_data : "";
 
@@ -775,6 +788,30 @@ export const createDashboardRouter = (): Router => {
       }
 
       try {
+        const initDataRaw =
+          typeof req.body?.init_data === "string" ? req.body.init_data : "";
+
+        if (!initDataRaw) {
+          // Demo preview has no Telegram initData; keep it scoped to demo identity.
+          if (!(DEMO_MODE_ENABLED && user.telegram_user_id === DEMO_TELEGRAM_USER_ID)) {
+            clearMiniSessionCookie(res);
+            res.status(401).json({ error: "Unauthorized: missing Telegram init_data" });
+            return;
+          }
+        } else {
+          const verification = parseTelegramInitData(initDataRaw);
+          if (!verification.ok) {
+            clearMiniSessionCookie(res);
+            res.status(401).json({ error: verification.error });
+            return;
+          }
+          if (verification.telegramUserId !== user.telegram_user_id) {
+            clearMiniSessionCookie(res);
+            res.status(401).json({ error: "Unauthorized: session user mismatch" });
+            return;
+          }
+        }
+
         const url = await buildGoogleAuthStartUrl(
           user.telegram_user_id,
           buildMiniGoogleReturnUrl("/mini/google/done", {

@@ -621,11 +621,14 @@ const App = () => {
   const handleConnectGoogle = async () => {
     setBusy("google-connect");
     try {
+      const initData = window.Telegram?.WebApp?.initData?.trim() ?? "";
       const payload = await safeFetch<GoogleStartUrlPayload>(
         "/api/mini/google/start-url",
         {
           method: "POST",
-          body: JSON.stringify({}),
+          body: JSON.stringify(
+            initData ? { init_data: initData } : {},
+          ),
         },
       );
       const authUrl = String(payload.url || "").trim();
