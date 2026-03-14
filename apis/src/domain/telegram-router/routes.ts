@@ -7,11 +7,6 @@ import { hasActiveSubscriptionForService } from "../payment/subscriptionGuard.js
 import { ensureGatewayAssistantReady } from "../gateway/assistant_warmup.js";
 import { deriveAssistantWebhookSecret } from "../container/providers/shared/telegram_runtime_secret.js";
 import {
-  getGoogleConnectionStatus,
-  hasGoogleOAuthConnection,
-  syncCredentialToContainer,
-} from "../google-oauth/service.js";
-import {
   setLogContextTelegramIdentity,
   setLogContextTelegramUserId,
 } from "../common/requestLogContext.js";
@@ -28,8 +23,6 @@ type ContainerInfo = {
   runtime_provider: string | null;
   host_port: number | null;
 };
-
-type PromptLanguage = "zh" | "en";
 
 type TelegramProxyBodyInfo = {
   chatId?: number;
@@ -55,14 +48,6 @@ const BLOCKED_TG_METHODS = new Set([
 
 const WELCOME_MESSAGE_DEDUPE_WINDOW_MS = 45_000;
 const welcomeMessageDedupeCache = new Map<number, number>();
-const OAUTH_PROMPT_DEDUPE_WINDOW_MS = 20_000;
-const oauthPromptDedupeCache = new Map<number, { text: string; sentAt: number }>();
-const googleCredentialSyncedRuntimeRef = new Map<number, string>();
-const googleCredentialSyncInFlight = new Map<number, Promise<boolean>>();
-const GOOGLE_CALENDAR_SCOPES = [
-  "https://www.googleapis.com/auth/calendar.readonly",
-  "https://www.googleapis.com/auth/calendar",
-];
 
 export const registerTelegramRouterRoutes = (app: Application): void => {
   app.post("/webhook/telegram", express.json({ limit: "10mb" }), (req, res) => {
@@ -215,16 +200,6 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
     }
 
     if (userState.phase === "container_starting") {
-      const oauthPrompted = await tryHandleGoogleOAuthPrompt(
-        source,
-        chatId,
-        text,
-        userState.container?.container_id || null,
-      );
-      if (oauthPrompted) {
-        res.status(200).json({ ok: true });
-        return;
-      }
       if (userState.container) {
         const forwarded = await forwardToOpenClaw(userState.container, update, source);
         if (forwarded) {
@@ -238,17 +213,6 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
         "Your assistant is starting up — first launch may take a few minutes. Please try again shortly.",
       );
       res.status(200).json({ ok: true, forwarded: false });
-      return;
-    }
-
-    const oauthPrompted = await tryHandleGoogleOAuthPrompt(
-      source,
-      chatId,
-      text,
-      userState.container.container_id,
-    );
-    if (oauthPrompted) {
-      res.status(200).json({ ok: true });
       return;
     }
 
@@ -267,227 +231,6 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
     res.status(500).send("Internal Server Error");
   }
 }
-
-const GOOGLE_WORKSPACE_INTENT_PATTERN = new RegExp(
-  [
-    "gmail",
-    "google\\s*mail",
-    "google\\s*workspace",
-    "google\\s*calendar",
-    "google\\s*drive",
-    "google\\s*docs?",
-    "google\\s*sheets?",
-    "google\\s*slides?",
-    "google\\s*forms?",
-    "google\\s*meet",
-    "google\\s*chat",
-    "google\\s*classroom",
-    "谷歌\\s*(邮箱|邮件|日历|云盘|网盘|文档|表格|会议)",
-  ].join("|"),
-  "i",
-);
-
-function isGoogleWorkspaceIntent(text: string | null): boolean {
-  if (!text) return false;
-  return GOOGLE_WORKSPACE_INTENT_PATTERN.test(text);
-}
-
-function isGoogleCalendarIntent(text: string | null): boolean {
-  if (!text) return false;
-  return /(日历|日程|calendar|event|events|meeting|schedule)/i.test(text);
-}
-
-function hasAnyScope(scopesRaw: string, candidates: string[]): boolean {
-  const scopes = new Set(
-    scopesRaw
-      .trim()
-      .split(/\s+/)
-      .map((s) => s.trim())
-      .filter(Boolean),
-  );
-  return candidates.some((scope) => scopes.has(scope));
-}
-
-export const hasAnyScopeForTest = (scopesRaw: string, candidates: string[]): boolean =>
-  hasAnyScope(scopesRaw, candidates);
-
-export const hasGoogleWorkspaceIntentForTest = (text: string | null): boolean =>
-  isGoogleWorkspaceIntent(text);
-
-export const shouldPromptGoogleOAuthForTest = (
-  source: WebhookSource,
-  text: string | null,
-): boolean => source === "public" && isGoogleWorkspaceIntent(text);
-
-export function detectPromptLanguage(text: string | null): PromptLanguage {
-  return /[\u3400-\u9fff]/.test(text || "") ? "zh" : "en";
-}
-
-export function buildGoogleOAuthPrompt(text: string | null): string {
-  const language = detectPromptLanguage(text);
-  if (language === "zh") {
-    return [
-      "你还没有连接 Google Workspace。",
-      "↙ 请点击 Telegram 左下角的 PIN AI mini app 按钮。",
-      "打开后进入 Data Connectors -> Google 完成授权。",
-      "授权完成后，回到这里再发送你刚才的请求。",
-    ].join("\n");
-  }
-
-  return [
-    "Your Google Workspace account is not connected yet.",
-    "↙ Open the PIN AI mini app from the bottom-left button in Telegram.",
-    "Then go to Data Connectors -> Google to finish authorization.",
-    "Then come back here and send the same request again.",
-  ].join("\n");
-}
-
-function buildGoogleCredentialSyncingPrompt(text: string | null): string {
-  const language = detectPromptLanguage(text);
-  if (language === "zh") {
-    return [
-      "Google 已连接，正在同步凭证到你的助手容器。",
-      "请等待 10-20 秒后，再发送你刚才的请求。",
-    ].join("\n");
-  }
-
-  return [
-    "Google is connected. We're syncing credentials to your assistant container.",
-    "Please wait about 10-20 seconds, then send the same request again.",
-  ].join("\n");
-}
-
-function buildGoogleCalendarReauthPrompt(text: string | null): string {
-  const language = detectPromptLanguage(text);
-  if (language === "zh") {
-    return [
-      "你已连接 Google，但当前授权缺少日历权限。",
-      "请在 Telegram 左下角 PIN AI mini app 中进入 Data Connectors -> Google 重新授权，并勾选日历权限。",
-      "完成后回到这里重试刚才的请求。",
-    ].join("\n");
-  }
-
-  return [
-    "Google is connected, but the current authorization is missing Calendar permission.",
-    "Please open Data Connectors -> Google in the PIN AI mini app (bottom-left in Telegram), reconnect, and grant Calendar access.",
-    "Then come back here and retry the same request.",
-  ].join("\n");
-}
-
-export const buildGoogleCalendarReauthPromptForTest = (
-  text: string | null,
-): string => buildGoogleCalendarReauthPrompt(text);
-
-export const buildGoogleCredentialSyncingPromptForTest = (
-  text: string | null,
-): string => buildGoogleCredentialSyncingPrompt(text);
-
-async function ensureGoogleCredentialSync(
-  chatId: number,
-  runtimeRef: string | null,
-): Promise<"ready" | "syncing"> {
-  const runtime = (runtimeRef || "").trim();
-  if (!runtime) return "ready";
-
-  const alreadySyncedRuntime = googleCredentialSyncedRuntimeRef.get(chatId);
-  if (alreadySyncedRuntime === runtime) return "ready";
-
-  const inFlight = googleCredentialSyncInFlight.get(chatId);
-  if (inFlight) {
-    await inFlight.catch(() => undefined);
-    return googleCredentialSyncedRuntimeRef.get(chatId) === runtime
-      ? "ready"
-      : "syncing";
-  }
-
-  const job = syncCredentialToContainer(chatId)
-    .then(() => {
-      googleCredentialSyncedRuntimeRef.set(chatId, runtime);
-      return true;
-    })
-    .catch((error) => {
-      console.warn(`[google-oauth] background sync failed chat_id=${chatId}`, error);
-      return false;
-    })
-    .finally(() => {
-      if (googleCredentialSyncInFlight.get(chatId) === job) {
-        googleCredentialSyncInFlight.delete(chatId);
-      }
-    });
-  googleCredentialSyncInFlight.set(chatId, job);
-
-  const ok = await job;
-  return ok ? "ready" : "syncing";
-}
-
-async function tryHandleGoogleOAuthPrompt(
-  source: WebhookSource,
-  chatId: number,
-  text: string | null,
-  runtimeRef: string | null,
-): Promise<boolean> {
-  if (!shouldPromptGoogleOAuthForTest(source, text)) return false;
-  const connected = await hasGoogleOAuthConnection(chatId);
-  if (connected) {
-    const now = Date.now();
-    if (isGoogleCalendarIntent(text)) {
-      const status = await getGoogleConnectionStatus(chatId).catch(() => null);
-      const scopes = (status?.scopes || "").trim();
-      if (scopes && !hasAnyScope(scopes, GOOGLE_CALENDAR_SCOPES)) {
-        if (!shouldSuppressGoogleOAuthPrompt(chatId, text, now)) {
-          await sendFallbackMessageBySource(
-            source,
-            chatId,
-            buildGoogleCalendarReauthPrompt(text),
-          );
-        }
-        return true;
-      }
-    }
-
-    const syncState = await ensureGoogleCredentialSync(chatId, runtimeRef);
-    if (syncState === "syncing") {
-      if (!shouldSuppressGoogleOAuthPrompt(chatId, text, now)) {
-        await sendFallbackMessageBySource(
-          source,
-          chatId,
-          buildGoogleCredentialSyncingPrompt(text),
-        );
-      }
-      return true;
-    }
-    return false;
-  }
-
-  const now = Date.now();
-  if (shouldSuppressGoogleOAuthPrompt(chatId, text, now)) {
-    return true;
-  }
-
-  await sendFallbackMessageBySource(source, chatId, buildGoogleOAuthPrompt(text));
-  return true;
-}
-
-function shouldSuppressGoogleOAuthPrompt(
-  chatId: number,
-  text: string | null,
-  nowMs = Date.now(),
-): boolean {
-  const normalizedText = (text || '').trim().toLowerCase();
-  const previous = oauthPromptDedupeCache.get(chatId);
-  oauthPromptDedupeCache.set(chatId, { text: normalizedText, sentAt: nowMs });
-  if (!previous) return false;
-  return (
-    previous.text === normalizedText &&
-    nowMs - previous.sentAt < OAUTH_PROMPT_DEDUPE_WINDOW_MS
-  );
-}
-
-export const shouldSuppressGoogleOAuthPromptForTest = (
-  chatId: number,
-  text: string | null,
-  nowMs = Date.now(),
-): boolean => shouldSuppressGoogleOAuthPrompt(chatId, text, nowMs);
 
 async function handleTelegramApiProxy(req: Request, res: Response): Promise<void> {
   try {
@@ -1023,9 +766,6 @@ export function shouldSuppressTelegramOutboundMessage(
 
 export function resetTelegramWelcomeDedupeForTest(): void {
   welcomeMessageDedupeCache.clear();
-  oauthPromptDedupeCache.clear();
-  googleCredentialSyncedRuntimeRef.clear();
-  googleCredentialSyncInFlight.clear();
 }
 
 function parseNumeric(value: unknown): number | undefined {
