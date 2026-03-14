@@ -21,6 +21,7 @@ interface ChangePlanDialogProps {
   onSelectPlan: (planId: string) => void;
   onCheckout: () => void;
   onCancel: () => void;
+  onResume: () => void;
   busy: string;
 }
 
@@ -91,7 +92,7 @@ const BillingRulesDialog = ({ open, onClose }: { open: boolean; onClose: () => v
 
 const ChangePlanDialog = ({
   open, onClose, plans, currentPlanId, selectedPlan,
-  cancelAtPeriodEnd, currentPeriodEnd, downgradeLockUntil, onSelectPlan, onCheckout, onCancel, busy,
+  cancelAtPeriodEnd, currentPeriodEnd, downgradeLockUntil, onSelectPlan, onCheckout, onCancel, onResume, busy,
 }: ChangePlanDialogProps) => {
   const [showBillingRules, setShowBillingRules] = useState(false);
 
@@ -134,7 +135,8 @@ const ChangePlanDialog = ({
               const planPrice = parseFloat(plan.price);
               const isDowngrade = planPrice < currentPrice;
               const isLocked = isDowngradeLocked && isDowngrade;
-              const isDisabled = isLocked || current;
+              const isDowngradeBlockedByCancel = cancelAtPeriodEnd && isDowngrade;
+              const isDisabled = isLocked || isDowngradeBlockedByCancel || current;
               
               return (
                 <button
@@ -207,6 +209,12 @@ const ChangePlanDialog = ({
             </div>
           )}
 
+          {cancelAtPeriodEnd && (
+            <div className="rounded-xl bg-slate-50 px-3 py-2.5 text-[11px] text-slate-700 mb-3">
+              Downgrade is unavailable while renewal is canceled. Resume renewal first.
+            </div>
+          )}
+
           <div className="flex items-center justify-center gap-1 mb-3">
             <p className="text-[10px] text-muted-foreground">
               Limited-time offer for early subscribers.
@@ -231,10 +239,10 @@ const ChangePlanDialog = ({
           {currentPlanId && (
             <button
               className="w-full bg-secondary text-foreground rounded-2xl py-2.5 text-sm font-medium btn-press disabled:opacity-50 mt-2"
-              onClick={onCancel}
-              disabled={busy !== "none" || cancelAtPeriodEnd}
+              onClick={cancelAtPeriodEnd ? onResume : onCancel}
+              disabled={busy !== "none"}
             >
-              {busy === "cancel" ? "Processing..." : cancelAtPeriodEnd ? "Renewal Canceled" : "Cancel Renewal"}
+              {busy === "cancel" || busy === "resume" ? "Processing..." : cancelAtPeriodEnd ? "Resume Renewal" : "Cancel Renewal"}
             </button>
           )}
         </div>

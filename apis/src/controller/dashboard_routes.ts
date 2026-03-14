@@ -37,6 +37,7 @@ import {
   createInternalPaymentSession,
   listActivePlansForApi,
   readInternalSubscription,
+  resumeStripeSubscription,
 } from "../domain/payment/checkout.js";
 import { readPaymentPublicBaseUrl } from "../domain/payment/publicBaseUrl.js";
 import {
@@ -1364,6 +1365,36 @@ export const createDashboardRouter = (): Router => {
   );
 
   router.post(
+    "/api/mini/resume-subscription",
+    async (req: Request, res: Response, next: NextFunction) => {
+      void requireMiniSession(req, res, next).catch((error: unknown) => {
+        console.error("Mini session check failed", error);
+        res.status(500).json({ error: "Mini session check failed." });
+      });
+    },
+    async (req: Request, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+
+      try {
+        const result = await resumeStripeSubscription(
+          String(user.telegram_user_id),
+        );
+        res.status(200).json(result);
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
     "/api/mini/reset-account",
     async (req: Request, res: Response, next: NextFunction) => {
       void requireMiniSession(req, res, next).catch((error: unknown) => {
@@ -1815,6 +1846,35 @@ export const createDashboardRouter = (): Router => {
 
       try {
         const result = await cancelStripeSubscription(
+          String(user.telegram_user_id),
+        );
+        res.status(200).json(result);
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
+    "/gateway/:user_id/mini/resume-subscription",
+    requireDashboardSession,
+    async (req: Request<{ user_id: string }>, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+      if (String(user.telegram_user_id) !== req.params.user_id) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      try {
+        const result = await resumeStripeSubscription(
           String(user.telegram_user_id),
         );
         res.status(200).json(result);

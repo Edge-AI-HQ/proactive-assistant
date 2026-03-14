@@ -488,6 +488,12 @@ export const createCheckoutSession = async (
             message: `Upgraded to ${selectedPlan.display_name}. Effective immediately.`,
           };
         } else {
+          if (existingSub.cancel_at_period_end === true) {
+            throw new DomainError(
+              "INVALID_INPUT",
+              "Downgrade is unavailable while renewal is canceled. Resume renewal first.",
+            );
+          }
           const lockUntil = parseUnixSeconds(
             stripeSubscription.metadata?.pinai_downgrade_lock_until,
           );
@@ -687,6 +693,80 @@ export const cancelStripeSubscription = async (
     ok: true,
     status: mapStripeSubscriptionStatus(updated.status),
     cancel_at_period_end: true,
+    current_period_end: currentPeriodEnd,
+  };
+};
+
+export const resumeStripeSubscription = async (
+  telegramUserIdRaw: unknown,
+): Promise<{
+  ok: true;
+  status: "active" | "paused" | "canceled" | "pending";
+  cancel_at_period_end: false;
+  current_period_end: string;
+  already_active?: boolean;
+}> => {
+  const stripe = requireStripe();
+  const telegramUserId = parseTelegramUserId(telegramUserIdRaw);
+  if (!telegramUserId) {
+    throw new DomainError("INVALID_INPUT", "telegram_user_id is required");
+  }
+  setLogContextTelegramUserId(telegramUserId);
+  console.log("[payment] resume_subscription:start", {
+    telegram_user_id: telegramUserId,
+  });
+
+  const subscription = await db.getCurrentPeriodByTelegramId(telegramUserId);
+  if (!subscription || !subscription.stripe_subscription_id) {
+    console.warn("[payment] resume_subscription:not_found", {
+      telegram_user_id: telegramUserId,
+    });
+    throw new DomainError("NOT_FOUND", "Active subscription not found");
+  }
+
+  if (subscription.cancel_at_period_end !== true) {
+    console.log("[payment] resume_subscription:already_active", {
+      telegram_user_id: telegramUserId,
+      stripe_subscription_id: subscription.stripe_subscription_id,
+      current_period_end: subscription.current_period_end,
+    });
+    return {
+      ok: true,
+      status: mapStripeSubscriptionStatus(
+        subscription.status as Stripe.Subscription.Status,
+      ),
+      cancel_at_period_end: false,
+      current_period_end: subscription.current_period_end || "",
+      already_active: true,
+    };
+  }
+
+  const updated = await stripe.subscriptions.update(
+    subscription.stripe_subscription_id,
+    {
+      cancel_at_period_end: false,
+    },
+  );
+
+  const currentPeriodEnd = new Date(
+    updated.current_period_end * 1000,
+  ).toISOString();
+  await db.updateSubscriptionCancelFlag(
+    subscription.stripe_subscription_id,
+    false,
+    updated.status,
+  );
+
+  console.log("[payment] resume_subscription:ok", {
+    telegram_user_id: telegramUserId,
+    stripe_subscription_id: subscription.stripe_subscription_id,
+    current_period_end: currentPeriodEnd,
+  });
+
+  return {
+    ok: true,
+    status: mapStripeSubscriptionStatus(updated.status),
+    cancel_at_period_end: false,
     current_period_end: currentPeriodEnd,
   };
 };

@@ -546,6 +546,8 @@ const App = () => {
       const message = e instanceof Error ? e.message : "unknown";
       if (/downgrade is locked until/i.test(message)) {
         showToast("Downgrade is locked until the current billing cycle ends.");
+      } else if (/downgrade is unavailable while renewal is canceled/i.test(message)) {
+        showToast("Renewal is canceled. Resume renewal before downgrading.");
       } else {
         showToast(`Unable to change plan: ${message}`);
       }
@@ -603,6 +605,52 @@ const App = () => {
       await cancelSubscription();
     } catch (e) {
       showToast(`Cancel failed: ${e instanceof Error ? e.message : "unknown"}`);
+    }
+  };
+
+  const resumeSubscription = async () => {
+    setBusy("resume");
+    try {
+      const result = await safeFetch<{
+        ok: true;
+        status: string;
+        cancel_at_period_end: false;
+        current_period_end: string;
+        already_active?: boolean;
+      }>("/api/mini/resume-subscription", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      setState((prev) =>
+        prev
+          ? {
+              ...prev,
+              subscription: {
+                ...prev.subscription,
+                status: result.status,
+                cancel_at_period_end: false,
+                current_period_end: result.current_period_end,
+              },
+            }
+          : prev,
+      );
+      showToast(
+        result.already_active
+          ? "Renewal is already active."
+          : "Renewal resumed successfully.",
+        "success",
+      );
+      await loadState();
+    } finally {
+      setBusy("none");
+    }
+  };
+
+  const handleResumeSubscription = async () => {
+    try {
+      await resumeSubscription();
+    } catch (e) {
+      showToast(`Resume failed: ${e instanceof Error ? e.message : "unknown"}`);
     }
   };
 
@@ -1066,6 +1114,7 @@ const App = () => {
             onSelectPlan={setSelectedPlan}
             onCheckout={checkout}
             onCancel={handleCancelSubscription}
+            onResume={handleResumeSubscription}
             busy={busy}
           />
 
