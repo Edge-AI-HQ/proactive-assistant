@@ -215,9 +215,6 @@ export const buildLiteLLMModelsSection = (
       defaults: {
         model: nextModel,
         models: buildLiteLLMModelsAllowlist(context.litellm),
-        params: {
-          cacheRetention: "long",
-        },
       },
     },
   };
