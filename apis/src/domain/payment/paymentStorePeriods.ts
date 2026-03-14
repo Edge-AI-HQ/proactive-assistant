@@ -101,8 +101,9 @@ export const createSubscriptionPeriodStore = (
             plan_id,
             status,
             cancel_at_period_end,
-            assistant_id
-          ) VALUES ($1, $2, $3, $4, $5::timestamptz, $6::timestamptz, $7, $8, $9, $10)
+            assistant_id,
+            reset_spend_on_apply
+          ) VALUES ($1, $2, $3, $4, $5::timestamptz, $6::timestamptz, $7, $8, $9, $10, $11)
           ON CONFLICT (stripe_subscription_id, period_start)
           DO UPDATE SET
             stripe_customer_id = COALESCE(EXCLUDED.stripe_customer_id, subscription_periods.stripe_customer_id),
@@ -112,6 +113,7 @@ export const createSubscriptionPeriodStore = (
             status = EXCLUDED.status,
             cancel_at_period_end = EXCLUDED.cancel_at_period_end,
             assistant_id = COALESCE(EXCLUDED.assistant_id, subscription_periods.assistant_id),
+            reset_spend_on_apply = COALESCE(EXCLUDED.reset_spend_on_apply, subscription_periods.reset_spend_on_apply),
             updated_at = NOW()
         `,
         [
@@ -125,6 +127,7 @@ export const createSubscriptionPeriodStore = (
           data.status ?? "active",
           data.cancel_at_period_end === true,
           assistantId,
+          data.reset_spend_on_apply ?? true, // Default true for backward compatibility
         ],
       );
     },
@@ -150,6 +153,7 @@ export const createSubscriptionPeriodStore = (
             sp.status,
             sp.cancel_at_period_end,
             sp.budget_applied_at::text,
+            sp.reset_spend_on_apply,
             sp.created_at::text,
             sp.updated_at::text
           FROM subscription_periods sp

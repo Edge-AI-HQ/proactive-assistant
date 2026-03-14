@@ -17,6 +17,7 @@ interface LiteLLMCreateUserInput {
   userAlias: string;
   keyAlias?: string | null;
   maxBudgetUsd?: number | null;
+  budgetDuration?: string | null; // null = disable auto-reset, undefined = use LiteLLM default
   metadata?: JsonRecord;
   autoCreateKey?: boolean;
 }
@@ -25,6 +26,7 @@ interface LiteLLMUpdateUserInput {
   userId: string;
   userAlias?: string | null;
   maxBudgetUsd?: number | null;
+  budgetDuration?: string | null; // null = disable auto-reset, undefined = use LiteLLM default
   metadata?: JsonRecord;
 }
 
@@ -359,6 +361,11 @@ export const createLiteLLMUser = async (
   if (normalizedMaxBudget !== null) {
     body.max_budget = normalizedMaxBudget;
   }
+  // Set budget_duration to disable auto-reset (null) or use specific duration
+  // undefined = don't send (use LiteLLM default)
+  if (input.budgetDuration !== undefined) {
+    body.budget_duration = input.budgetDuration;
+  }
   if (input.metadata && Object.keys(input.metadata).length > 0) {
     body.metadata = input.metadata;
   }
@@ -435,6 +442,12 @@ export const updateLiteLLMUser = async (
   const normalizedMaxBudget = normalizeOptionalBudgetUsd(input.maxBudgetUsd);
   if (normalizedMaxBudget !== null) {
     body.max_budget = normalizedMaxBudget;
+  }
+
+  // Set budget_duration to disable auto-reset (null) or use specific duration
+  // undefined = don't send (keeps existing value)
+  if (input.budgetDuration !== undefined) {
+    body.budget_duration = input.budgetDuration;
   }
 
   if (input.metadata && Object.keys(input.metadata).length > 0) {
