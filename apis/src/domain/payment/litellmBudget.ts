@@ -238,6 +238,7 @@ export const syncLiteLLMBudgetAbsolute = async (
         key: litellmKey,
         maxBudgetUsd: targetBudgetUsd,
         budgetDuration: null, // Disable auto-reset, we manage budget manually via subscription periods
+        budgetResetAt: null, // Clear reset timestamp
       });
     } catch (e) {
       console.warn("[payment] key budget sync failed (non-fatal)", {
