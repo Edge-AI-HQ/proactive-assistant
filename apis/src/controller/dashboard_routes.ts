@@ -83,6 +83,7 @@ import {
   handleGoogleOAuthCallback,
 } from "../domain/google-oauth/service.js";
 import { buildMiniGoogleReturnUrl } from "../domain/google-oauth/miniapp.js";
+import { validateMiniGoogleStartIdentity } from "../domain/google-oauth/start_identity.js";
 
 const miniAppEntryPath = path.join(
   process.cwd(),
@@ -94,28 +95,6 @@ const miniSessionCookieName = "mini_sid";
 const miniSessionTtlHours = 12;
 const miniAuthMaxAgeSeconds = 24 * 60 * 60;
 const miniAuthFutureSkewSeconds = 5 * 60;
-
-// Web preview mode configuration
-const DEMO_MODE_REQUESTED =
-  process.env.MINIAPP_DEMO_ENABLED === "true" ||
-  process.env.MINIAPP_DEMO_ENABLED === "1";
-// Production must never fallback to preview identity when initData is missing.
-const DEMO_MODE_ENABLED =
-  DEMO_MODE_REQUESTED && config.nodeEnv !== "production";
-// Use real user account for web preview (shows actual subscription, assistant, etc.)
-// SECURITY: This user ID is hardcoded and cannot be changed via client
-const DEMO_TELEGRAM_USER_ID = 5572561504;
-const DEMO_TELEGRAM_USERNAME = "preview_user";
-
-// SECURITY: Whitelist of allowed user IDs for web preview mode
-// Only these users can be accessed via web preview to prevent unauthorized access
-const ALLOWED_PREVIEW_USER_IDS = new Set([5572561504]);
-
-if (DEMO_MODE_REQUESTED && !DEMO_MODE_ENABLED) {
-  console.warn(
-    "[miniapp-demo] MINIAPP_DEMO_ENABLED is ignored in production for safety.",
-  );
-}
 
 const proxy = httpProxy.createProxyServer({ ws: true, xfwd: true });
 let proxyErrorHandlerBound = false;
@@ -546,6 +525,9 @@ export const createDashboardRouter = (): Router => {
     res.sendFile(miniAppEntryPath);
   });
 
+  // Legacy compatibility shim:
+  // old miniapp builds may still open /mini/google/start directly.
+  // Keep this route non-authoritative and require init_data identity binding.
   router.get(
     "/mini/google/start",
     async (req: Request, res: Response, next: NextFunction) => {
@@ -558,6 +540,27 @@ export const createDashboardRouter = (): Router => {
       const user = req.gatewayUser;
       if (!user) {
         res.status(500).send("Gateway user missing.");
+        return;
+      }
+
+      const initDataRaw =
+        typeof req.query.init_data === "string" ? req.query.init_data : "";
+      const validation = validateMiniGoogleStartIdentity(
+        initDataRaw,
+        user.telegram_user_id,
+        parseTelegramInitData,
+      );
+
+      if (!validation.ok) {
+        if (validation.shouldClearSession) {
+          clearMiniSessionCookie(res);
+        }
+        res.redirect(
+          buildMiniGoogleReturnUrl("/mini/google/done", {
+            status: "error",
+            error: "refresh_required",
+          }),
+        );
         return;
       }
 
@@ -632,51 +635,6 @@ export const createDashboardRouter = (): Router => {
 
     const initDataRaw =
       typeof req.body?.init_data === "string" ? req.body.init_data : "";
-
-    // Web preview mode: no initData means browser access (not Telegram)
-    if (!initDataRaw && DEMO_MODE_ENABLED) {
-      try {
-        // SECURITY: Verify the hardcoded user ID is in the whitelist
-        if (!ALLOWED_PREVIEW_USER_IDS.has(DEMO_TELEGRAM_USER_ID)) {
-          console.error("[security] Preview user ID not in whitelist", {
-            userId: DEMO_TELEGRAM_USER_ID,
-          });
-          res.status(403).json({ error: "Unauthorized preview user" });
-          return;
-        }
-
-        // Use real user account for web preview
-        const user = await getUserByTelegramId(DEMO_TELEGRAM_USER_ID);
-        if (!user) {
-          res.status(404).json({ error: "Preview user not found" });
-          return;
-        }
-
-        setLogContextTelegramIdentity(
-          user.telegram_user_id,
-          user.telegram_username,
-        );
-        console.info("[auth:resolved]", {
-          source: "mini_bootstrap_web_preview",
-          telegram_user_id: user.telegram_user_id,
-          telegram_username: user.telegram_username,
-        });
-        const { sessionToken, expiresAt } = await createGatewaySession(
-          user.telegram_user_id,
-          miniSessionTtlHours,
-        );
-        setMiniSessionCookie(res, sessionToken, expiresAt);
-        const payload = await buildQuickStatePayload(
-          user.telegram_user_id,
-          user.telegram_username,
-        );
-        res.status(200).json(payload);
-        return;
-      } catch (error: unknown) {
-        res.status(500).json({ error: domainErrorMessage(error) });
-        return;
-      }
-    }
 
     // Normal Telegram mode: verify initData
     const verification = parseTelegramInitData(initDataRaw);
@@ -791,26 +749,17 @@ export const createDashboardRouter = (): Router => {
       try {
         const initDataRaw =
           typeof req.body?.init_data === "string" ? req.body.init_data : "";
-
-        if (!initDataRaw) {
-          // Demo preview has no Telegram initData; keep it scoped to demo identity.
-          if (!(DEMO_MODE_ENABLED && user.telegram_user_id === DEMO_TELEGRAM_USER_ID)) {
+        const validation = validateMiniGoogleStartIdentity(
+          initDataRaw,
+          user.telegram_user_id,
+          parseTelegramInitData,
+        );
+        if (!validation.ok) {
+          if (validation.shouldClearSession) {
             clearMiniSessionCookie(res);
-            res.status(401).json({ error: "Unauthorized: missing Telegram init_data" });
-            return;
           }
-        } else {
-          const verification = parseTelegramInitData(initDataRaw);
-          if (!verification.ok) {
-            clearMiniSessionCookie(res);
-            res.status(401).json({ error: verification.error });
-            return;
-          }
-          if (verification.telegramUserId !== user.telegram_user_id) {
-            clearMiniSessionCookie(res);
-            res.status(401).json({ error: "Unauthorized: session user mismatch" });
-            return;
-          }
+          res.status(401).json({ error: validation.error });
+          return;
         }
 
         const url = await buildGoogleAuthStartUrl(

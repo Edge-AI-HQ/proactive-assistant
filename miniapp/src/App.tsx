@@ -7,12 +7,6 @@ import SetupWaiting from "./components/SetupWaiting";
 import Toast from "./components/Toast";
 import { readGoogleRedirectState } from "./googleRedirectState";
 import { shouldRefreshAfterExternalOAuthReturn } from "./googleReconnectRefresh";
-import {
-  setupDemoMode,
-  isDemoMode,
-  getBootstrapEndpoint,
-  getBootstrapPayload,
-} from "./demoMode";
 
 type Plan = {
   id: string;
@@ -336,20 +330,15 @@ const App = () => {
 
   const bootstrap = async (): Promise<{ loadedDeferred: boolean }> => {
     const initData = window.Telegram?.WebApp?.initData?.trim() ?? "";
-    const inWebPreview = isDemoMode();
-
-    if (!initData && !inWebPreview) {
+    if (!initData) {
       throw new Error(
         "Please open this app through Telegram. Direct browser access is not supported.",
       );
     }
 
-    const endpoint = getBootstrapEndpoint();
-    const payload = getBootstrapPayload();
-
-    const quick = await safeFetch<StatePayload>(endpoint, {
+    const quick = await safeFetch<StatePayload>("/api/mini/bootstrap", {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ init_data: initData }),
     });
 
     hydrateState(quick);
@@ -376,8 +365,6 @@ const App = () => {
   };
 
   useEffect(() => {
-    setupDemoMode();
-
     window.Telegram?.WebApp?.expand?.();
     const platform = window.Telegram?.WebApp?.platform;
     if (platform === "ios" || platform === "android") {
