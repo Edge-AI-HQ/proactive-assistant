@@ -17,6 +17,7 @@ interface ChangePlanDialogProps {
   cancelAtPeriodEnd: boolean;
   currentPeriodEnd: string | null;
   downgradeLockUntil: string | null;
+  pendingPlanId: string | null;
   selectedPlan: string | null;
   onSelectPlan: (planId: string) => void;
   onCheckout: () => void;
@@ -92,7 +93,7 @@ const BillingRulesDialog = ({ open, onClose }: { open: boolean; onClose: () => v
 
 const ChangePlanDialog = ({
   open, onClose, plans, currentPlanId, selectedPlan,
-  cancelAtPeriodEnd, currentPeriodEnd, downgradeLockUntil, onSelectPlan, onCheckout, onCancel, onResume, busy,
+  cancelAtPeriodEnd, currentPeriodEnd, downgradeLockUntil, pendingPlanId, onSelectPlan, onCheckout, onCancel, onResume, busy,
 }: ChangePlanDialogProps) => {
   const [showBillingRules, setShowBillingRules] = useState(false);
 
@@ -105,6 +106,7 @@ const ChangePlanDialog = ({
   // Get current plan price for comparison
   const currentPlan = plans.find((p) => p.id === currentPlanId);
   const currentPrice = currentPlan ? parseFloat(currentPlan.price) : 0;
+  const pendingPlanName = plans.find((p) => p.id === pendingPlanId)?.name ?? pendingPlanId;
 
   return createPortal(
     <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
@@ -206,6 +208,12 @@ const ChangePlanDialog = ({
               <span>
                 Downgrade locked until {downgradeLockUntil ? new Date(downgradeLockUntil).toLocaleDateString() : "current period ends"}. You can downgrade after this billing cycle.
               </span>
+            </div>
+          )}
+
+          {pendingPlanId && currentPeriodEnd && (
+            <div className="rounded-xl bg-emerald-50 px-3 py-2.5 text-[11px] text-emerald-800 mb-3">
+              Downgrade to {pendingPlanName} is scheduled for next billing cycle ({new Date(currentPeriodEnd).toLocaleDateString()}).
             </div>
           )}
 

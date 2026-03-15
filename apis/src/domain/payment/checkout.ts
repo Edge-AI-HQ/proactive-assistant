@@ -212,6 +212,7 @@ export const readInternalSubscription = async (
 ): Promise<{
   subscription: Awaited<ReturnType<typeof db.getCurrentPeriodByTelegramId>>;
   downgrade_lock_until: string | null;
+  pending_plan_id: string | null;
 }> => {
   const telegramUserId = parseTelegramUserId(telegramUserIdRaw);
   if (!telegramUserId) {
@@ -220,6 +221,7 @@ export const readInternalSubscription = async (
   const subscription = await db.getCurrentPeriodByTelegramId(telegramUserId);
   
   let downgradeLockUntil: string | null = null;
+  let pendingPlanId: string | null = null;
   if (subscription?.stripe_subscription_id) {
     try {
       const stripeSub = await requireStripe().subscriptions.retrieve(
@@ -232,6 +234,12 @@ export const readInternalSubscription = async (
           downgradeLockUntil = new Date(lockTimestamp * 1000).toISOString();
         }
       }
+
+      const metadataPlan = stripeSub.metadata?.plan?.trim().toLowerCase() || null;
+      const currentPlan = subscription.plan_id?.trim().toLowerCase() || null;
+      if (metadataPlan && currentPlan && metadataPlan !== currentPlan) {
+        pendingPlanId = metadataPlan;
+      }
     } catch (err) {
       // Non-fatal, just won't show lock info
       console.warn("[payment] Failed to read downgrade lock from Stripe", {
@@ -241,7 +249,11 @@ export const readInternalSubscription = async (
     }
   }
   
-  return { subscription, downgrade_lock_until: downgradeLockUntil };
+  return {
+    subscription,
+    downgrade_lock_until: downgradeLockUntil,
+    pending_plan_id: pendingPlanId,
+  };
 };
 
 export const validateInternalPaymentSession = async (

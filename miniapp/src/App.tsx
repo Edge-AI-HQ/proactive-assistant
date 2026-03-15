@@ -58,6 +58,7 @@ type StatePayload = {
     cancel_at_period_end: boolean;
     current_period_end: string | null;
     downgrade_lock_until: string | null;
+    pending_plan_id: string | null;
   };
   credits?: {
     remaining: number;
@@ -1149,6 +1150,7 @@ const App = () => {
             cancelAtPeriodEnd={state.subscription.cancel_at_period_end}
             currentPeriodEnd={state.subscription.current_period_end}
             downgradeLockUntil={state.subscription.downgrade_lock_until}
+            pendingPlanId={state.subscription.pending_plan_id}
             selectedPlan={selectedPlan}
             onSelectPlan={setSelectedPlan}
             onCheckout={checkout}

@@ -417,6 +417,7 @@ const buildQuickStatePayload = async (
           cancel_at_period_end: subscription.cancel_at_period_end,
           current_period_end: subscription.current_period_end,
           downgrade_lock_until: subscriptionResult.downgrade_lock_until,
+          pending_plan_id: subscriptionResult.pending_plan_id,
         }
       : {
           active,
@@ -425,6 +426,7 @@ const buildQuickStatePayload = async (
           cancel_at_period_end: false,
           current_period_end: null,
           downgrade_lock_until: null,
+          pending_plan_id: null,
         },
     credits: null as null,
     features: {
@@ -1449,6 +1451,8 @@ export const createDashboardRouter = (): Router => {
                 plan_id: subscription.plan_id,
                 cancel_at_period_end: subscription.cancel_at_period_end,
                 current_period_end: subscription.current_period_end,
+                downgrade_lock_until: subscriptionResult.downgrade_lock_until,
+                pending_plan_id: subscriptionResult.pending_plan_id,
               }
             : {
                 active: false,
@@ -1456,6 +1460,8 @@ export const createDashboardRouter = (): Router => {
                 plan_id: null,
                 cancel_at_period_end: false,
                 current_period_end: null,
+                downgrade_lock_until: null,
+                pending_plan_id: null,
               },
           plans: plansResult.plans,
           skills: {
