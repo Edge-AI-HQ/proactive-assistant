@@ -238,7 +238,20 @@ export const readInternalSubscription = async (
       const metadataPlan = stripeSub.metadata?.plan?.trim().toLowerCase() || null;
       const currentPlan = subscription.plan_id?.trim().toLowerCase() || null;
       if (metadataPlan && currentPlan && metadataPlan !== currentPlan) {
-        pendingPlanId = metadataPlan;
+        const [metadataPlanRecord, currentPlanRecord] = await Promise.all([
+          db.getPlanByCode(metadataPlan),
+          db.getPlanByCode(currentPlan),
+        ]);
+
+        // Only expose a pending plan for next-cycle downgrades.
+        // Upgrades should be treated as immediate and not shown as "scheduled downgrade".
+        if (
+          metadataPlanRecord &&
+          currentPlanRecord &&
+          metadataPlanRecord.price_cents_monthly < currentPlanRecord.price_cents_monthly
+        ) {
+          pendingPlanId = metadataPlan;
+        }
       }
     } catch (err) {
       // Non-fatal, just won't show lock info

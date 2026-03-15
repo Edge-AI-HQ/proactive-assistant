@@ -529,6 +529,7 @@ const App = () => {
 
   const checkout = async () => {
     if (!selectedPlan) return;
+    const targetPlan = selectedPlan;
     setBusy("checkout");
     try {
       const result = await safeFetch<{
@@ -537,16 +538,47 @@ const App = () => {
         message?: string;
       }>("/api/mini/checkout", {
         method: "POST",
-        body: JSON.stringify({ plan: selectedPlan }),
+        body: JSON.stringify({ plan: targetPlan }),
       });
       if (result.action === "upgrade" || result.action === "downgrade") {
         // Plan changed directly via Stripe subscription update — no redirect needed
         showToast(result.message ?? "Plan updated successfully.", "success");
+        setState((prev) => {
+          if (!prev) return prev;
+          if (result.action === "upgrade") {
+            return {
+              ...prev,
+              subscription: {
+                ...prev.subscription,
+                plan_id: targetPlan,
+                cancel_at_period_end: false,
+                pending_plan_id: null,
+              },
+            };
+          }
+          return {
+            ...prev,
+            subscription: {
+              ...prev.subscription,
+              pending_plan_id: targetPlan,
+            },
+          };
+        });
+        setSelectedPlan(targetPlan);
         setBusy("none");
-        const latest = await loadState();
-        setSelectedPlan(
-          latest.subscription.plan_id ?? latest.plans?.[0]?.id ?? null,
-        );
+
+        // Stripe webhook sync may lag briefly; poll state until server catches up.
+        const maxAttempts = 6;
+        for (let i = 0; i < maxAttempts; i += 1) {
+          const latest = await loadState();
+          const matched =
+            result.action === "upgrade"
+              ? latest.subscription.plan_id === targetPlan
+              : latest.subscription.pending_plan_id === targetPlan ||
+                latest.subscription.plan_id === targetPlan;
+          if (matched) break;
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
         return;
       }
       if (!result.url)
