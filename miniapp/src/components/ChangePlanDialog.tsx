@@ -148,7 +148,7 @@ const ChangePlanDialog = ({
                     isMutedDisabled
                       ? "bg-secondary/30 border border-border/10 cursor-not-allowed opacity-60"
                       : current
-                        ? "bg-secondary/30 border border-border/10 cursor-not-allowed"
+                        ? "bg-secondary/30 border-2 border-foreground/30 cursor-not-allowed"
                       : selected
                         ? "bg-white border-2 border-foreground shadow-md btn-press"
                         : "bg-white border border-border/20 shadow-sm hover:shadow-md btn-press"
