@@ -177,7 +177,7 @@ const ChangePlanDialog = ({
                     <div className="flex items-center gap-1.5">
                       <span className={`text-sm font-bold ${isLocked || current ? "text-muted-foreground" : "text-foreground"}`}>{plan.name}</span>
                       {current && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[hsl(152_69%_65%/0.15)] font-medium" style={{ color: "hsl(152 69% 35%)" }}>Current</span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[hsl(152_69%_65%/0.15)] font-medium animate-pulse" style={{ color: "hsl(152 69% 35%)" }}>Current</span>
                       )}
                     </div>
                     <span className={`text-base font-extrabold ${isLocked || current ? "text-muted-foreground" : "text-foreground"}`}>
