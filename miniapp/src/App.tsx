@@ -95,6 +95,15 @@ type GoogleStartUrlPayload = {
   url: string;
 };
 
+type PromotionPreviewPayload = {
+  valid: boolean;
+  original_price: string;
+  discounted_price: string | null;
+  discount_label: string | null;
+  duration_label: string | null;
+  message: string | null;
+};
+
 const mergeQuickPayload = (
   prev: StatePayload,
   quick: StatePayload,
@@ -218,6 +227,11 @@ const App = () => {
   const [loading, setLoading] = useState(true); // true until bootstrap completes; Telegram native loader covers this
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
   const [promotionCode, setPromotionCode] = useState("");
+  const [promotionPreview, setPromotionPreview] =
+    useState<PromotionPreviewPayload | null>(null);
+  const [promotionPreviewError, setPromotionPreviewError] = useState<
+    string | null
+  >(null);
   const [busy, setBusy] = useState<string>("none");
   const [showChangePlan, setShowChangePlan] = useState(false);
   const [showManageAgent, setShowManageAgent] = useState(false);
@@ -241,6 +255,49 @@ const App = () => {
   const showToast = (message: string, type: "success" | "error" = "error") => {
     setToast({ message, type });
   };
+
+  useEffect(() => {
+    if (state?.subscription.active) {
+      setPromotionPreview(null);
+      setPromotionPreviewError(null);
+      return;
+    }
+
+    const code = promotionCode.trim();
+    if (!selectedPlan || !code) {
+      setPromotionPreview(null);
+      setPromotionPreviewError(null);
+      return;
+    }
+
+    let cancelled = false;
+    const timeoutId = window.setTimeout(() => {
+      void safeFetch<PromotionPreviewPayload>("/api/mini/promotion-preview", {
+        method: "POST",
+        body: JSON.stringify({
+          plan: selectedPlan,
+          promotionCode: code,
+        }),
+      })
+        .then((payload) => {
+          if (cancelled) return;
+          setPromotionPreview(payload);
+          setPromotionPreviewError(null);
+        })
+        .catch((error: unknown) => {
+          if (cancelled) return;
+          setPromotionPreview(null);
+          setPromotionPreviewError(
+            error instanceof Error ? error.message : "Invalid promotion code",
+          );
+        });
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [promotionCode, selectedPlan, state?.subscription.active]);
 
   const hydrateState = (payload: StatePayload): void => {
     setState(payload);
@@ -1012,6 +1069,11 @@ const App = () => {
                 : state.plans.map((plan) => {
                     const selected = selectedPlan === plan.id;
                     const badge = planBadge[plan.id];
+                    const hasValidPreview =
+                      selected &&
+                      promotionCode.trim() &&
+                      promotionPreview?.valid &&
+                      promotionPreview.discounted_price;
                     return (
                       <button
                         key={plan.id}
@@ -1037,11 +1099,27 @@ const App = () => {
                           <span className="text-base font-bold text-foreground">
                             {plan.name}
                           </span>
-                          <span className="text-lg font-extrabold text-foreground">
-                            ${plan.price}
-                            <span className="text-sm font-normal text-muted-foreground">
-                              /mo
-                            </span>
+                          <span className="text-right">
+                            {hasValidPreview ? (
+                              <>
+                                <span className="block text-[12px] text-muted-foreground line-through">
+                                  ${promotionPreview.original_price}/mo
+                                </span>
+                                <span className="text-lg font-extrabold text-primary">
+                                  ${promotionPreview.discounted_price}
+                                  <span className="text-sm font-normal text-muted-foreground">
+                                    /mo
+                                  </span>
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-lg font-extrabold text-foreground">
+                                ${plan.price}
+                                <span className="text-sm font-normal text-muted-foreground">
+                                  /mo
+                                </span>
+                              </span>
+                            )}
                           </span>
                         </div>
                         <p className="text-xs text-muted-foreground">
@@ -1054,6 +1132,14 @@ const App = () => {
                           {" "}
                           <span className="text-[10px] text-primary/70">{planPromo[plan.id]?.multiplier ?? ""}</span>
                         </p>
+                        {hasValidPreview ? (
+                          <p className="text-[11px] font-medium text-primary mt-2">
+                            {promotionPreview.discount_label}
+                            {promotionPreview.duration_label
+                              ? ` • ${promotionPreview.duration_label}`
+                              : ""}
+                          </p>
+                        ) : null}
                       </button>
                     );
                   })}
@@ -1079,6 +1165,19 @@ const App = () => {
                 disabled={busy !== "none"}
               />
             </label>
+            {promotionPreview?.valid && promotionCode.trim() ? (
+              <p className="mt-2 text-[11px] text-primary">
+                {promotionPreview.discount_label}
+                {promotionPreview.duration_label
+                  ? ` applied • ${promotionPreview.duration_label}`
+                  : " applied"}
+              </p>
+            ) : null}
+            {promotionPreviewError && promotionCode.trim() ? (
+              <p className="mt-2 text-[11px] text-destructive">
+                {promotionPreviewError}
+              </p>
+            ) : null}
           </div>
 
           <div className="shrink-0 px-5 pt-3">

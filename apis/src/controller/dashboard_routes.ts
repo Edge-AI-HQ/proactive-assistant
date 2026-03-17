@@ -36,6 +36,7 @@ import {
   createCheckoutSession,
   createInternalPaymentSession,
   listActivePlansForApi,
+  previewPromotionCode,
   readInternalSubscription,
   resumeStripeSubscription,
 } from "../domain/payment/checkout.js";
@@ -899,6 +900,46 @@ export const createDashboardRouter = (): Router => {
           container_id: result.containerId,
           ready: result.ready,
         });
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
+    "/api/mini/promotion-preview",
+    async (req: Request, res: Response, next: NextFunction) => {
+      void requireMiniSession(req, res, next).catch((error: unknown) => {
+        console.error("Mini session check failed", error);
+        res.status(500).json({ error: "Mini session check failed." });
+      });
+    },
+    async (
+      req: Request<
+        Record<string, never>,
+        unknown,
+        { plan?: string; promotionCode?: string }
+      >,
+      res: Response,
+    ) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+
+      try {
+        const payload = await previewPromotionCode({
+          ...(typeof req.body?.plan === "string" ? { plan: req.body.plan } : {}),
+          ...(typeof req.body?.promotionCode === "string"
+            ? { promotionCode: req.body.promotionCode }
+            : {}),
+        });
+        res.status(200).json(payload);
       } catch (error: unknown) {
         if (isDomainError(error)) {
           res.status(error.status).json({ error: error.message });
