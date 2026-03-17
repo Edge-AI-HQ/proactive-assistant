@@ -1,4 +1,4 @@
-import { Pool, types, type PoolConfig } from 'pg';
+import { Pool, types, type PoolConfig, type PoolClient } from 'pg';
 
 let parsersConfigured = false;
 
@@ -37,5 +37,17 @@ export const createSupabasePool = (
     idleTimeoutMillis: options.idleTimeoutMillis ?? 30_000
   };
 
-  return new Pool(config);
+  const pool = new Pool(config);
+
+  pool.on('error', (error: Error) => {
+    console.error('[db] pool idle client error', error);
+  });
+
+  pool.on('connect', (client: PoolClient) => {
+    client.on('error', (error: Error) => {
+      console.error('[db] pooled client error', error);
+    });
+  });
+
+  return pool;
 };
