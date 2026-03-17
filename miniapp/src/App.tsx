@@ -224,6 +224,10 @@ const preloadImage = async (src: string, timeoutMs = 1200): Promise<void> => {
 };
 
 const App = () => {
+  const localBrowserDevEnabled =
+    import.meta.env.DEV &&
+    String(import.meta.env.VITE_MINIAPP_LOCAL_DEV || "").toLowerCase() ===
+      "true";
   const [state, setState] = useState<StatePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true); // true until bootstrap completes; Telegram native loader covers this
@@ -404,16 +408,19 @@ const App = () => {
 
   const bootstrap = async (): Promise<{ loadedDeferred: boolean }> => {
     const initData = window.Telegram?.WebApp?.initData?.trim() ?? "";
-    if (!initData) {
-      throw new Error(
-        "Please open this app through Telegram. Direct browser access is not supported.",
-      );
-    }
-
-    const quick = await safeFetch<StatePayload>("/api/mini/bootstrap", {
-      method: "POST",
-      body: JSON.stringify({ init_data: initData }),
-    });
+    const quick = initData
+      ? await safeFetch<StatePayload>("/api/mini/bootstrap", {
+          method: "POST",
+          body: JSON.stringify({ init_data: initData }),
+        })
+      : await (async () => {
+          if (!localBrowserDevEnabled) {
+            throw new Error("Please open this app through Telegram.");
+          }
+          // Local browser-only fallback (explicitly gated by VITE_MINIAPP_LOCAL_DEV=true):
+          // session is pre-created by local/start-mini-local-dev.sh.
+          return safeFetch<StatePayload>("/api/mini/state");
+        })();
 
     hydrateState(quick);
     setLoading(false);

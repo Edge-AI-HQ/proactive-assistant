@@ -69,6 +69,13 @@ const toNullableFloat = (value: string | undefined): number | null => {
   return parsed;
 };
 
+const toNullablePositiveInt = (value: string | undefined): number | null => {
+  if (value === undefined || value.trim() === "") return null;
+  const parsed = Number.parseInt(value.trim(), 10);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) return null;
+  return parsed;
+};
+
 const toTrimmed = (value: string | undefined, fallback = ''): string => {
   if (typeof value !== 'string') return fallback;
   const trimmed = value.trim();
@@ -187,8 +194,16 @@ export const config: Config = {
     mysqlUrl: toTrimmed(
       process.env.PIN_MINING_MYSQL_URL || process.env.LEGACY_PROFILE_MYSQL_URL
     )
+  },
+  miniapp: {
+    localDevEnabled: toBool(process.env.MINIAPP_LOCAL_DEV, false),
+    devTelegramUserId: toNullablePositiveInt(process.env.MINIAPP_DEV_TELEGRAM_USER_ID),
   }
 };
+
+if (config.miniapp.localDevEnabled && config.container.runtime !== 'docker') {
+  throw new Error('MINIAPP_LOCAL_DEV is only supported when CONTAINER_RUNTIME=docker');
+}
 
 export const requiredSecrets: RequiredSecret[] = (() => {
   const secrets: RequiredSecret[] = [

@@ -64,3 +64,5 @@ apps/payment-gateway/.vercel
 apps/payment-gateway/node_modules
 apps/payment-gateway/test-*.html
 lovable-temp-repo/
+
+local/

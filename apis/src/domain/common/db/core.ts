@@ -20,6 +20,9 @@ const dbUrl = requireSupabaseDbUrl(
 );
 
 export const pool = createSupabasePool(dbUrl, { max: 12, idleTimeoutMillis: 30_000 });
+pool.on('error', (error: Error) => {
+  console.error('[db] idle client error', error);
+});
 
 export const withSchema = async (): Promise<void> => {
   // Schema ownership is migration-only under apis/db/migrations.

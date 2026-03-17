@@ -216,14 +216,31 @@ const parseTelegramInitData = (
 };
 
 const setMiniSessionCookie = (
+  req: Request,
   res: Response,
   sessionToken: string,
   expiresAt: string,
 ): void => {
+  const hostHeader =
+    typeof req.headers.host === "string"
+      ? req.headers.host.trim().toLowerCase()
+      : "";
+  const isLoopbackHost =
+    hostHeader.startsWith("localhost") ||
+    hostHeader.startsWith("127.0.0.1") ||
+    hostHeader.startsWith("[::1]") ||
+    hostHeader.startsWith("::1");
+  const allowInsecureLocalCookie =
+    config.nodeEnv === "development" &&
+    config.container.runtime === "docker" &&
+    isLoopbackHost &&
+    !req.headers["x-forwarded-for"];
   res.cookie(miniSessionCookieName, sessionToken, {
     httpOnly: true,
-    sameSite: "none", // Required for Telegram WebApp (iframe/cross-site context)
-    secure: true, // Required when sameSite=none
+    // Local browser dev needs non-secure cookie on localhost.
+    // Telegram WebApp keeps sameSite=none+secure for cross-site iframe context.
+    sameSite: allowInsecureLocalCookie ? "lax" : "none",
+    secure: !allowInsecureLocalCookie,
     path: "/",
     expires: new Date(expiresAt),
   });
@@ -528,6 +545,46 @@ export const createDashboardRouter = (): Router => {
     res.sendFile(miniAppEntryPath);
   });
 
+  router.post("/api/mini/dev-login", requireApiAuth, async (req: Request, res: Response) => {
+    if (
+      config.nodeEnv !== "development" ||
+      !config.miniapp.localDevEnabled ||
+      config.container.runtime !== "docker"
+    ) {
+      res.status(404).json({ error: "Not Found" });
+      return;
+    }
+
+    const telegramUserId = config.miniapp.devTelegramUserId;
+    if (!telegramUserId) {
+      res
+        .status(400)
+        .json({
+          error: "MINIAPP_DEV_TELEGRAM_USER_ID is required",
+        });
+      return;
+    }
+
+    clearMiniSessionCookie(res);
+
+    try {
+      const user = await ensureTelegramUser(telegramUserId);
+      const { sessionToken, expiresAt } = await createGatewaySession(
+        user.telegram_user_id,
+        miniSessionTtlHours,
+      );
+      setMiniSessionCookie(req, res, sessionToken, expiresAt);
+
+      res.status(200).json({
+        ok: true,
+        telegram_user_id: user.telegram_user_id,
+        expires_at: expiresAt,
+      });
+    } catch (error: unknown) {
+      res.status(500).json({ error: domainErrorMessage(error) });
+    }
+  });
+
   // Legacy compatibility shim:
   // old miniapp builds may still open /mini/google/start directly.
   // Keep this route non-authoritative and require init_data identity binding.
@@ -664,7 +721,7 @@ export const createDashboardRouter = (): Router => {
         user.telegram_user_id,
         miniSessionTtlHours,
       );
-      setMiniSessionCookie(res, sessionToken, expiresAt);
+      setMiniSessionCookie(req, res, sessionToken, expiresAt);
       const payload = await buildQuickStatePayload(
         user.telegram_user_id,
         user.telegram_username,

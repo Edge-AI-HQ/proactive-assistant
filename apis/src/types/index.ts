@@ -223,6 +223,11 @@ export interface LegacyProfileConfig {
   mysqlUrl: string;
 }
 
+export interface MiniAppConfig {
+  localDevEnabled: boolean;
+  devTelegramUserId: number | null;
+}
+
 export interface SharedConfig {
   nodeEnv: string;
   port: number;
@@ -240,4 +245,5 @@ export interface SharedConfig {
   telegramRouter: TelegramRouterConfig;
   featureFlags: FeatureFlagsConfig;
   legacyProfile: LegacyProfileConfig;
+  miniapp: MiniAppConfig;
 }
