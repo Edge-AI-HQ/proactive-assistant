@@ -251,7 +251,11 @@ export const createPaymentRouter = (): Router => {
 
   router.post("/create-checkout", async (req: Request, res: Response) => {
     try {
-      const body = (req.body || {}) as { token?: string; plan?: string };
+      const body = (req.body || {}) as {
+        token?: string;
+        plan?: string;
+        promotionCode?: string;
+      };
       const response = await createCheckoutSession(req, body);
       res.status(200).json(response);
     } catch (error: unknown) {

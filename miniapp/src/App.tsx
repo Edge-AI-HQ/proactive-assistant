@@ -217,6 +217,7 @@ const App = () => {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true); // true until bootstrap completes; Telegram native loader covers this
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
+  const [promotionCode, setPromotionCode] = useState("");
   const [busy, setBusy] = useState<string>("none");
   const [showChangePlan, setShowChangePlan] = useState(false);
   const [showManageAgent, setShowManageAgent] = useState(false);
@@ -530,6 +531,8 @@ const App = () => {
   const checkout = async () => {
     if (!selectedPlan) return;
     const targetPlan = selectedPlan;
+    const checkoutPromotionCode =
+      state?.subscription.plan_id ? undefined : promotionCode.trim() || undefined;
     setBusy("checkout");
     try {
       const result = await safeFetch<{
@@ -538,7 +541,10 @@ const App = () => {
         message?: string;
       }>("/api/mini/checkout", {
         method: "POST",
-        body: JSON.stringify({ plan: targetPlan }),
+        body: JSON.stringify({
+          plan: targetPlan,
+          promotionCode: checkoutPromotionCode,
+        }),
       });
       if (result.action === "upgrade" || result.action === "downgrade") {
         // Plan changed directly via Stripe subscription update — no redirect needed
@@ -1056,6 +1062,23 @@ const App = () => {
             <p className="text-center text-[10px] text-muted-foreground mt-4 mb-1">
               Limited-time offer for early subscribers.
             </p>
+
+            <label className="block mt-3">
+              <span className="block text-[12px] font-medium text-foreground mb-1.5">
+                Redeem code
+              </span>
+              <input
+                type="text"
+                value={promotionCode}
+                onChange={(e) => setPromotionCode(e.target.value)}
+                placeholder="Optional"
+                className="w-full rounded-2xl border border-border/30 bg-white px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-foreground/40"
+                autoCapitalize="characters"
+                autoCorrect="off"
+                spellCheck={false}
+                disabled={busy !== "none"}
+              />
+            </label>
           </div>
 
           <div className="shrink-0 px-5 pt-3">

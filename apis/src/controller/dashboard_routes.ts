@@ -918,7 +918,11 @@ export const createDashboardRouter = (): Router => {
       });
     },
     async (
-      req: Request<Record<string, never>, unknown, { plan?: string }>,
+      req: Request<
+        Record<string, never>,
+        unknown,
+        { plan?: string; promotionCode?: string }
+      >,
       res: Response,
     ) => {
       const user = req.gatewayUser;
@@ -931,6 +935,10 @@ export const createDashboardRouter = (): Router => {
         const plan =
           typeof req.body?.plan === "string"
             ? req.body.plan.trim().toLowerCase()
+            : "";
+        const promotionCode =
+          typeof req.body?.promotionCode === "string"
+            ? req.body.promotionCode.trim()
             : "";
         if (!plan) {
           res.status(400).json({ error: "plan is required" });
@@ -948,6 +956,7 @@ export const createDashboardRouter = (): Router => {
         const checkout = await createCheckoutSession(req, {
           token: paymentSession.token,
           plan,
+          promotionCode,
           successUrl: `${baseUrl}/mini`,
         });
 

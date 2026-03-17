@@ -331,9 +331,39 @@ export interface CheckoutResult {
   message?: string;
 }
 
+const normalizePromotionCode = (value: unknown): string | null => {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized ? normalized : null;
+};
+
+const resolvePromotionCodeId = async (
+  stripeClient: Stripe,
+  promotionCode: string,
+): Promise<string> => {
+  const result = await stripeClient.promotionCodes.list({
+    code: promotionCode,
+    active: true,
+    limit: 1,
+  });
+  const match = result.data[0];
+  if (!match) {
+    throw new DomainError(
+      "INVALID_INPUT",
+      "Invalid or inactive promotion code.",
+    );
+  }
+  return match.id;
+};
+
 export const createCheckoutSession = async (
   req: Request,
-  body: { token?: string; plan?: string; successUrl?: string },
+  body: {
+    token?: string;
+    plan?: string;
+    successUrl?: string;
+    promotionCode?: string;
+  },
 ): Promise<CheckoutResult> => {
   const stripe = requireStripe();
   const token = String(body.token || "").trim();
@@ -341,6 +371,7 @@ export const createCheckoutSession = async (
     String(body.plan || "")
       .trim()
       .toLowerCase() || "basic";
+  const promotionCode = normalizePromotionCode(body.promotionCode);
   const landingBaseUrl = readPaymentPublicBaseUrl(req);
 
   if (!token) {
@@ -349,6 +380,7 @@ export const createCheckoutSession = async (
   console.log("[payment] checkout:start", {
     token_ref: summarizeToken(token),
     plan_code: planCode,
+    promotion_code_supplied: Boolean(promotionCode),
   });
 
   const session = await db.getPaymentSessionByToken(token);
@@ -453,6 +485,13 @@ export const createCheckoutSession = async (
           throw new DomainError(
             "INVALID_INPUT",
             `You are already on the ${currentPlan.display_name} plan.`,
+          );
+        }
+
+        if (promotionCode) {
+          throw new DomainError(
+            "INVALID_INPUT",
+            "Promotion codes are only supported for new checkout sessions.",
           );
         }
 
@@ -565,11 +604,18 @@ export const createCheckoutSession = async (
   // --- Create new checkout session (new subscription or upgrade) ---
   let checkoutSession: Stripe.Checkout.Session;
   try {
+    const promotionCodeId = promotionCode
+      ? await resolvePromotionCodeId(stripe, promotionCode)
+      : null;
     checkoutSession = await stripe.checkout.sessions.create(
       {
         customer: customerId,
         mode: "subscription",
         line_items: [{ price: stripePriceId, quantity: 1 }],
+        ...(!promotionCodeId ? { allow_promotion_codes: true } : {}),
+        ...(promotionCodeId
+          ? { discounts: [{ promotion_code: promotionCodeId }] }
+          : {}),
         success_url: body.successUrl || `${landingBaseUrl}/api/payment/success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${landingBaseUrl}/api/payment/subscribe?token=${token}`,
         metadata: {
@@ -577,6 +623,7 @@ export const createCheckoutSession = async (
           telegram_username: telegramUsername || "",
           plan: selectedPlan.plan_code,
           payment_token: token,
+          ...(promotionCode ? { promotion_code: promotionCode } : {}),
           ...(session.assistant_id
             ? { assistant_id: String(session.assistant_id) }
             : {}),
@@ -586,6 +633,7 @@ export const createCheckoutSession = async (
             telegram_user_id: telegramUserId,
             telegram_username: telegramUsername || "",
             plan: selectedPlan.plan_code,
+            ...(promotionCode ? { promotion_code: promotionCode } : {}),
             ...(session.assistant_id
               ? { assistant_id: String(session.assistant_id) }
               : {}),

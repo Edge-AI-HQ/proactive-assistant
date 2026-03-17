@@ -365,8 +365,25 @@ export const renderSubscribePage = (token: string): string => {
         background: #C94DD4;
       }
       .btn:active { transform: translateY(0); }
-      .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-      .err { color: #b91c1c; text-align: center; margin-bottom: 20px; font-weight: 500; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .err { color: #b91c1c; text-align: center; margin-bottom: 20px; font-weight: 500; }
+  .promo-wrap { max-width: 360px; margin: 0 auto 28px; }
+  .promo-label { display: block; margin-bottom: 8px; font-size: 13px; font-weight: 600; color: var(--ink); text-align: left; }
+  .promo-input {
+    width: 100%;
+    border: 1px solid rgba(131, 102, 164, 0.18);
+    border-radius: 14px;
+    padding: 14px 16px;
+    font-size: 15px;
+    color: var(--ink);
+    background: rgba(255, 255, 255, 0.92);
+    outline: none;
+  }
+  .promo-input:focus {
+    border-color: rgba(223, 91, 185, 0.42);
+    box-shadow: 0 0 0 4px rgba(223, 91, 185, 0.1);
+  }
+  .promo-help { margin-top: 8px; font-size: 12px; color: var(--muted); text-align: left; }
     </style>
   </head>
   <body>
@@ -381,12 +398,18 @@ export const renderSubscribePage = (token: string): string => {
         <p>OpenClaw is powerful but difficult to set up.<br>PIN AI makes it simple — deploy OpenClaw's capabilities on the cloud instantly.</p>
         <p id="error" class="err"></p>
       </div>
+      <div class="promo-wrap">
+        <label class="promo-label" for="promotion-code">Redeem code</label>
+        <input id="promotion-code" class="promo-input" type="text" placeholder="Optional">
+        <p class="promo-help">If you received a code, enter it here. You can also apply one on the Stripe checkout page.</p>
+      </div>
       <div id="plans" class="plans"></div>
     </div>
     <script>
       const token = ${JSON.stringify(token)};
       const plansEl = document.getElementById('plans');
       const errorEl = document.getElementById('error');
+      const promotionCodeEl = document.getElementById('promotion-code');
 
       const setError = (text) => {
         errorEl.textContent = text || '';
@@ -397,7 +420,11 @@ export const renderSubscribePage = (token: string): string => {
         const response = await fetch('/api/payment/create-checkout', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token, plan: planId })
+          body: JSON.stringify({
+            token,
+            plan: planId,
+            promotionCode: promotionCodeEl && promotionCodeEl.value ? promotionCodeEl.value.trim() : undefined
+          })
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok || !payload.url) {
