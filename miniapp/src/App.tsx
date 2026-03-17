@@ -104,6 +104,8 @@ type PromotionPreviewPayload = {
   message: string | null;
 };
 
+type PromotionPreviewMap = Record<string, PromotionPreviewPayload | null>;
+
 const mergeQuickPayload = (
   prev: StatePayload,
   quick: StatePayload,
@@ -227,8 +229,8 @@ const App = () => {
   const [loading, setLoading] = useState(true); // true until bootstrap completes; Telegram native loader covers this
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
   const [promotionCode, setPromotionCode] = useState("");
-  const [promotionPreview, setPromotionPreview] =
-    useState<PromotionPreviewPayload | null>(null);
+  const [promotionPreviews, setPromotionPreviews] =
+    useState<PromotionPreviewMap>({});
   const [promotionPreviewError, setPromotionPreviewError] = useState<
     string | null
   >(null);
@@ -256,37 +258,50 @@ const App = () => {
     setToast({ message, type });
   };
 
+  const selectedPromotionPreview = selectedPlan
+    ? promotionPreviews[selectedPlan] ?? null
+    : null;
+
   useEffect(() => {
     if (state?.subscription.active) {
-      setPromotionPreview(null);
+      setPromotionPreviews({});
       setPromotionPreviewError(null);
       return;
     }
 
     const code = promotionCode.trim();
-    if (!selectedPlan || !code) {
-      setPromotionPreview(null);
+    const plans = state?.plans ?? [];
+    if (!plans.length || !code) {
+      setPromotionPreviews({});
       setPromotionPreviewError(null);
       return;
     }
 
     let cancelled = false;
     const timeoutId = window.setTimeout(() => {
-      void safeFetch<PromotionPreviewPayload>("/api/mini/promotion-preview", {
-        method: "POST",
-        body: JSON.stringify({
-          plan: selectedPlan,
-          promotionCode: code,
+      void Promise.all(
+        plans.map(async (plan) => {
+          const payload = await safeFetch<PromotionPreviewPayload>(
+            "/api/mini/promotion-preview",
+            {
+              method: "POST",
+              body: JSON.stringify({
+                plan: plan.id,
+                promotionCode: code,
+              }),
+            },
+          );
+          return [plan.id, payload] as const;
         }),
-      })
-        .then((payload) => {
+      )
+        .then((entries) => {
           if (cancelled) return;
-          setPromotionPreview(payload);
+          setPromotionPreviews(Object.fromEntries(entries));
           setPromotionPreviewError(null);
         })
         .catch((error: unknown) => {
           if (cancelled) return;
-          setPromotionPreview(null);
+          setPromotionPreviews({});
           setPromotionPreviewError(
             error instanceof Error ? error.message : "Invalid promotion code",
           );
@@ -297,7 +312,7 @@ const App = () => {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [promotionCode, selectedPlan, state?.subscription.active]);
+  }, [promotionCode, state?.plans, state?.subscription.active]);
 
   const hydrateState = (payload: StatePayload): void => {
     setState(payload);
@@ -588,8 +603,7 @@ const App = () => {
   const checkout = async () => {
     if (!selectedPlan) return;
     const targetPlan = selectedPlan;
-    const checkoutPromotionCode =
-      state?.subscription.plan_id ? undefined : promotionCode.trim() || undefined;
+    const checkoutPromotionCode = promotionCode.trim() || undefined;
     setBusy("checkout");
     try {
       const result = await safeFetch<{
@@ -1069,11 +1083,13 @@ const App = () => {
                 : state.plans.map((plan) => {
                     const selected = selectedPlan === plan.id;
                     const badge = planBadge[plan.id];
+                    const promotionPreview = promotionPreviews[plan.id] ?? null;
                     const hasValidPreview =
-                      selected &&
                       promotionCode.trim() &&
-                      promotionPreview?.valid &&
-                      promotionPreview.discounted_price;
+                      Boolean(
+                        promotionPreview?.valid &&
+                          promotionPreview.discounted_price,
+                      );
                     return (
                       <button
                         key={plan.id}
@@ -1165,11 +1181,11 @@ const App = () => {
                 disabled={busy !== "none"}
               />
             </label>
-            {promotionPreview?.valid && promotionCode.trim() ? (
+            {selectedPromotionPreview?.valid && promotionCode.trim() ? (
               <p className="mt-2 text-[11px] text-primary">
-                {promotionPreview.discount_label}
-                {promotionPreview.duration_label
-                  ? ` applied • ${promotionPreview.duration_label}`
+                {selectedPromotionPreview.discount_label}
+                {selectedPromotionPreview.duration_label
+                  ? ` applied • ${selectedPromotionPreview.duration_label}`
                   : " applied"}
               </p>
             ) : null}

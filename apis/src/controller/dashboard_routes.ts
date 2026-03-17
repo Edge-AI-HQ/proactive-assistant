@@ -999,6 +999,7 @@ export const createDashboardRouter = (): Router => {
           plan,
           promotionCode,
           successUrl: `${baseUrl}/mini`,
+          cancelUrl: `${baseUrl}/mini`,
         });
 
         res.status(200).json(checkout);

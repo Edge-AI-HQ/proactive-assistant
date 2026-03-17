@@ -11,6 +11,7 @@ import {
   createCheckoutSession,
   createInternalPaymentSession,
   listActivePlansForApi,
+  previewPromotionCode,
   readInternalSubscription,
   validateInternalPaymentSession,
 } from "../domain/payment/checkout.js";
@@ -257,6 +258,21 @@ export const createPaymentRouter = (): Router => {
         promotionCode?: string;
       };
       const response = await createCheckoutSession(req, body);
+      res.status(200).json(response);
+    } catch (error: unknown) {
+      if (respondKnownError(res, error)) return;
+      const message = error instanceof Error ? error.message : "Unknown error";
+      res.status(500).json({ error: message });
+    }
+  });
+
+  router.post("/promotion-preview", async (req: Request, res: Response) => {
+    try {
+      const body = (req.body || {}) as {
+        plan?: string;
+        promotionCode?: string;
+      };
+      const response = await previewPromotionCode(body);
       res.status(200).json(response);
     } catch (error: unknown) {
       if (respondKnownError(res, error)) return;

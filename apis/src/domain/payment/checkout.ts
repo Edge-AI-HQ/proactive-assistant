@@ -499,6 +499,7 @@ export const createCheckoutSession = async (
     token?: string;
     plan?: string;
     successUrl?: string;
+    cancelUrl?: string;
     promotionCode?: string;
   },
 ): Promise<CheckoutResult> => {
@@ -754,7 +755,9 @@ export const createCheckoutSession = async (
           ? { discounts: [{ promotion_code: promotionCodeId }] }
           : {}),
         success_url: body.successUrl || `${landingBaseUrl}/api/payment/success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${landingBaseUrl}/api/payment/subscribe?token=${token}`,
+        cancel_url:
+          body.cancelUrl ||
+          `${landingBaseUrl}/api/payment/subscribe?token=${token}`,
         metadata: {
           telegram_user_id: telegramUserId,
           telegram_username: telegramUsername || "",

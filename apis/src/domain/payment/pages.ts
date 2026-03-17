@@ -384,6 +384,21 @@ export const renderSubscribePage = (token: string): string => {
     box-shadow: 0 0 0 4px rgba(223, 91, 185, 0.1);
   }
   .promo-help { margin-top: 8px; font-size: 12px; color: var(--muted); text-align: left; }
+  .promo-status { margin-top: 8px; font-size: 12px; text-align: left; min-height: 18px; }
+  .promo-status.valid { color: #0f766e; }
+  .promo-status.error { color: #b91c1c; }
+  .price-stack { display: flex; flex-direction: column; align-items: flex-start; }
+  .price-original { font-size: 16px; color: #7b728d; text-decoration: line-through; line-height: 1.2; }
+  .price-current { display: flex; align-items: baseline; }
+  .discount-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 12px;
+    font-size: 12px;
+    color: #0f766e;
+    font-weight: 600;
+  }
     </style>
   </head>
   <body>
@@ -402,6 +417,7 @@ export const renderSubscribePage = (token: string): string => {
         <label class="promo-label" for="promotion-code">Redeem code</label>
         <input id="promotion-code" class="promo-input" type="text" placeholder="Optional">
         <p class="promo-help">If you received a code, enter it here. You can also apply one on the Stripe checkout page.</p>
+        <p id="promotion-status" class="promo-status"></p>
       </div>
       <div id="plans" class="plans"></div>
     </div>
@@ -410,10 +426,123 @@ export const renderSubscribePage = (token: string): string => {
       const plansEl = document.getElementById('plans');
       const errorEl = document.getElementById('error');
       const promotionCodeEl = document.getElementById('promotion-code');
+      let plansCache = [];
+      let selectedPlanId = null;
+      let promotionState = null;
 
       const setError = (text) => {
         errorEl.textContent = text || '';
       };
+
+      const escapeHtml = (value) => String(value || '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+
+      const formatDiscountMeta = (promotion) => {
+        if (!promotion || !promotion.valid) return '';
+        const parts = [promotion.discount_label, promotion.duration_label].filter(Boolean);
+        return parts.length
+          ? '<div class="discount-badge">' + escapeHtml(parts.join(' • ')) + '</div>'
+          : '';
+      };
+
+      const renderPrice = (plan) => {
+        const hasPreview = promotionState && promotionState.valid && selectedPlanId === plan.id && promotionState.discounted_price;
+        if (!hasPreview) {
+          return (
+            '<div class="plan-price">' +
+            '<span class="currency">$</span>' +
+            '<span class="amount">' + escapeHtml(plan.price) + '</span>' +
+            '<span class="period">/mo</span>' +
+            '</div>'
+          );
+        }
+
+        return (
+          '<div class="price-stack">' +
+          '<div class="price-original">$' + escapeHtml(promotionState.original_price) + '/mo</div>' +
+          '<div class="plan-price price-current">' +
+          '<span class="currency">$</span>' +
+          '<span class="amount">' + escapeHtml(promotionState.discounted_price) + '</span>' +
+          '<span class="period">/mo</span>' +
+          '</div>' +
+          formatDiscountMeta(promotionState) +
+          '</div>'
+        );
+      };
+
+      const renderPlans = () => {
+        plansEl.innerHTML = plansCache
+          .map((plan) => {
+            const features = Array.isArray(plan.features)
+              ? plan.features.map((f) => '<li>' + escapeHtml(f) + '</li>').join('')
+              : '';
+            const popularClass = plan.popular ? ' popular' : '';
+            return (
+              '<article class=\"plan' + popularClass + '\">' +
+              '<div class=\"plan-name\">' + escapeHtml(plan.name) + '</div>' +
+              renderPrice(plan) +
+              '<div class=\"plan-description\">' + escapeHtml(plan.description) + '</div>' +
+              '<ul class=\"features\">' + features + '</ul>' +
+              '<button class=\"btn subscribe-btn\" data-plan=\"' + escapeHtml(plan.id) + '\">Subscribe</button>' +
+              '</article>'
+            );
+          })
+          .join('');
+
+        document.querySelectorAll('button[data-plan]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const plan = button.getAttribute('data-plan');
+            if (plan) {
+              selectedPlanId = plan;
+              void refreshPromotionPreview().then(() => createCheckout(plan));
+            }
+          });
+        });
+      };
+
+      const setPromotionStatus = (text, type) => {
+        const statusEl = document.getElementById('promotion-status');
+        if (!statusEl) return;
+        statusEl.className = 'promo-status' + (type ? ' ' + type : '');
+        statusEl.textContent = text || '';
+      };
+
+      async function refreshPromotionPreview() {
+        const code = promotionCodeEl && promotionCodeEl.value ? promotionCodeEl.value.trim() : '';
+        if (!selectedPlanId || !code) {
+          promotionState = null;
+          setPromotionStatus('', '');
+          renderPlans();
+          return;
+        }
+
+        const response = await fetch('/api/payment/promotion-preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ plan: selectedPlanId, promotionCode: code })
+        });
+        const payload = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          promotionState = null;
+          setPromotionStatus(payload.error || 'Invalid promotion code', 'error');
+          renderPlans();
+          return;
+        }
+
+        promotionState = payload;
+        setPromotionStatus(
+          payload.valid && payload.discount_label
+            ? [payload.discount_label, payload.duration_label].filter(Boolean).join(' • ')
+            : '',
+          payload.valid ? 'valid' : ''
+        );
+        renderPlans();
+      }
 
       async function createCheckout(planId) {
         setError('');
@@ -443,35 +572,14 @@ export const renderSubscribePage = (token: string): string => {
           return;
         }
 
-        plansEl.innerHTML = payload.plans
-          .map((plan) => {
-            const features = Array.isArray(plan.features)
-              ? plan.features.map((f) => '<li>' + f + '</li>').join('')
-              : '';
-            const popularClass = plan.popular ? ' popular' : '';
-            return (
-              '<article class=\"plan' + popularClass + '\">' +
-              '<div class=\"plan-name\">' + plan.name + '</div>' +
-              '<div class=\"plan-price\">' +
-              '<span class=\"currency\">$</span>' +
-              '<span class=\"amount\">' + plan.price + '</span>' +
-              '<span class=\"period\">/mo</span>' +
-              '</div>' +
-              '<div class=\"plan-description\">' + plan.description + '</div>' +
-              '<ul class=\"features\">' + features + '</ul>' +
-              '<button class=\"btn subscribe-btn\" data-plan=\"' + plan.id + '\">Subscribe</button>' +
-              '</article>'
-            );
-          })
-          .join('');
-
-        document.querySelectorAll('button[data-plan]').forEach((button) => {
-          button.addEventListener('click', () => {
-            const plan = button.getAttribute('data-plan');
-            if (plan) createCheckout(plan);
-          });
-        });
+        plansCache = payload.plans;
+        selectedPlanId = payload.plans[0]?.id || null;
+        renderPlans();
       }
+
+      promotionCodeEl && promotionCodeEl.addEventListener('input', () => {
+        void refreshPromotionPreview();
+      });
 
       loadPlans();
     </script>
