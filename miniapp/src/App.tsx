@@ -95,6 +95,17 @@ type GoogleStartUrlPayload = {
   url: string;
 };
 
+type PromotionPreviewPayload = {
+  valid: boolean;
+  original_price: string;
+  discounted_price: string | null;
+  discount_label: string | null;
+  duration_label: string | null;
+  message: string | null;
+};
+
+type PromotionPreviewMap = Record<string, PromotionPreviewPayload | null>;
+
 const mergeQuickPayload = (
   prev: StatePayload,
   quick: StatePayload,
@@ -217,6 +228,12 @@ const App = () => {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true); // true until bootstrap completes; Telegram native loader covers this
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
+  const [promotionCode, setPromotionCode] = useState("");
+  const [promotionPreviews, setPromotionPreviews] =
+    useState<PromotionPreviewMap>({});
+  const [promotionPreviewError, setPromotionPreviewError] = useState<
+    string | null
+  >(null);
   const [busy, setBusy] = useState<string>("none");
   const [showChangePlan, setShowChangePlan] = useState(false);
   const [showManageAgent, setShowManageAgent] = useState(false);
@@ -240,6 +257,62 @@ const App = () => {
   const showToast = (message: string, type: "success" | "error" = "error") => {
     setToast({ message, type });
   };
+
+  const selectedPromotionPreview = selectedPlan
+    ? promotionPreviews[selectedPlan] ?? null
+    : null;
+
+  useEffect(() => {
+    if (state?.subscription.active) {
+      setPromotionPreviews({});
+      setPromotionPreviewError(null);
+      return;
+    }
+
+    const code = promotionCode.trim();
+    const plans = state?.plans ?? [];
+    if (!plans.length || !code) {
+      setPromotionPreviews({});
+      setPromotionPreviewError(null);
+      return;
+    }
+
+    let cancelled = false;
+    const timeoutId = window.setTimeout(() => {
+      void Promise.all(
+        plans.map(async (plan) => {
+          const payload = await safeFetch<PromotionPreviewPayload>(
+            "/api/mini/promotion-preview",
+            {
+              method: "POST",
+              body: JSON.stringify({
+                plan: plan.id,
+                promotionCode: code,
+              }),
+            },
+          );
+          return [plan.id, payload] as const;
+        }),
+      )
+        .then((entries) => {
+          if (cancelled) return;
+          setPromotionPreviews(Object.fromEntries(entries));
+          setPromotionPreviewError(null);
+        })
+        .catch((error: unknown) => {
+          if (cancelled) return;
+          setPromotionPreviews({});
+          setPromotionPreviewError(
+            error instanceof Error ? error.message : "Invalid promotion code",
+          );
+        });
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [promotionCode, state?.plans, state?.subscription.active]);
 
   const hydrateState = (payload: StatePayload): void => {
     setState(payload);
@@ -530,6 +603,7 @@ const App = () => {
   const checkout = async () => {
     if (!selectedPlan) return;
     const targetPlan = selectedPlan;
+    const checkoutPromotionCode = promotionCode.trim() || undefined;
     setBusy("checkout");
     try {
       const result = await safeFetch<{
@@ -538,7 +612,10 @@ const App = () => {
         message?: string;
       }>("/api/mini/checkout", {
         method: "POST",
-        body: JSON.stringify({ plan: targetPlan }),
+        body: JSON.stringify({
+          plan: targetPlan,
+          promotionCode: checkoutPromotionCode,
+        }),
       });
       if (result.action === "upgrade" || result.action === "downgrade") {
         // Plan changed directly via Stripe subscription update — no redirect needed
@@ -1006,6 +1083,13 @@ const App = () => {
                 : state.plans.map((plan) => {
                     const selected = selectedPlan === plan.id;
                     const badge = planBadge[plan.id];
+                    const promotionPreview = promotionPreviews[plan.id] ?? null;
+                    const hasValidPreview =
+                      promotionCode.trim() &&
+                      Boolean(
+                        promotionPreview?.valid &&
+                          promotionPreview.discounted_price,
+                      );
                     return (
                       <button
                         key={plan.id}
@@ -1031,11 +1115,27 @@ const App = () => {
                           <span className="text-base font-bold text-foreground">
                             {plan.name}
                           </span>
-                          <span className="text-lg font-extrabold text-foreground">
-                            ${plan.price}
-                            <span className="text-sm font-normal text-muted-foreground">
-                              /mo
-                            </span>
+                          <span className="text-right">
+                            {hasValidPreview ? (
+                              <>
+                                <span className="block text-[12px] text-muted-foreground line-through">
+                                  ${promotionPreview.original_price}/mo
+                                </span>
+                                <span className="text-lg font-extrabold text-primary">
+                                  ${promotionPreview.discounted_price}
+                                  <span className="text-sm font-normal text-muted-foreground">
+                                    /mo
+                                  </span>
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-lg font-extrabold text-foreground">
+                                ${plan.price}
+                                <span className="text-sm font-normal text-muted-foreground">
+                                  /mo
+                                </span>
+                              </span>
+                            )}
                           </span>
                         </div>
                         <p className="text-xs text-muted-foreground">
@@ -1048,6 +1148,14 @@ const App = () => {
                           {" "}
                           <span className="text-[10px] text-primary/70">{planPromo[plan.id]?.multiplier ?? ""}</span>
                         </p>
+                        {hasValidPreview ? (
+                          <p className="text-[11px] font-medium text-primary mt-2">
+                            {promotionPreview.discount_label}
+                            {promotionPreview.duration_label
+                              ? ` • ${promotionPreview.duration_label}`
+                              : ""}
+                          </p>
+                        ) : null}
                       </button>
                     );
                   })}
@@ -1056,6 +1164,36 @@ const App = () => {
             <p className="text-center text-[10px] text-muted-foreground mt-4 mb-1">
               Limited-time offer for early subscribers.
             </p>
+
+            <label className="block mt-3">
+              <span className="block text-[12px] font-medium text-foreground mb-1.5">
+                Redeem code
+              </span>
+              <input
+                type="text"
+                value={promotionCode}
+                onChange={(e) => setPromotionCode(e.target.value)}
+                placeholder="Optional"
+                className="w-full rounded-2xl border border-border/30 bg-white px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-foreground/40"
+                autoCapitalize="characters"
+                autoCorrect="off"
+                spellCheck={false}
+                disabled={busy !== "none"}
+              />
+            </label>
+            {selectedPromotionPreview?.valid && promotionCode.trim() ? (
+              <p className="mt-2 text-[11px] text-primary">
+                {selectedPromotionPreview.discount_label}
+                {selectedPromotionPreview.duration_label
+                  ? ` applied • ${selectedPromotionPreview.duration_label}`
+                  : " applied"}
+              </p>
+            ) : null}
+            {promotionPreviewError && promotionCode.trim() ? (
+              <p className="mt-2 text-[11px] text-destructive">
+                {promotionPreviewError}
+              </p>
+            ) : null}
           </div>
 
           <div className="shrink-0 px-5 pt-3">
