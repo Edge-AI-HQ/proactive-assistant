@@ -107,6 +107,28 @@ const ChangePlanDialog = ({
   // Get current plan price for comparison
   const currentPlan = plans.find((p) => p.id === currentPlanId);
   const currentPrice = currentPlan ? parseFloat(currentPlan.price) : 0;
+  const selectedPlanItem = plans.find((p) => p.id === selectedPlan);
+  const selectedPrice = selectedPlanItem ? parseFloat(selectedPlanItem.price) : 0;
+  const isUpgradeSelection =
+    Boolean(selectedPlanItem) &&
+    Boolean(currentPlanId) &&
+    selectedPlan !== currentPlanId &&
+    selectedPrice > currentPrice;
+  const isDowngradeSelection =
+    Boolean(selectedPlanItem) &&
+    Boolean(currentPlanId) &&
+    selectedPlan !== currentPlanId &&
+    selectedPrice < currentPrice;
+  const submitLabel = isUpgradeSelection
+    ? "Upgrade Now"
+    : isDowngradeSelection
+      ? "Schedule Downgrade"
+      : "Change Plan";
+  const busyLabel = isUpgradeSelection
+    ? "Applying Upgrade..."
+    : isDowngradeSelection
+      ? "Scheduling Downgrade..."
+      : "Updating Plan...";
   const pendingPlanName = plans.find((p) => p.id === pendingPlanId)?.name ?? pendingPlanId;
 
   return createPortal(
@@ -254,7 +276,7 @@ const ChangePlanDialog = ({
             onClick={onCheckout}
             disabled={busy !== "none" || !selectedPlan || selectedPlan === currentPlanId}
           >
-            {busy === "checkout" ? "Redirecting..." : "Continue to Checkout"}
+            {busy === "checkout" ? busyLabel : submitLabel}
           </button>
           {currentPlanId && (
             <button
