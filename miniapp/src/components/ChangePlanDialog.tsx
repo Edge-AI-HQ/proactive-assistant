@@ -17,6 +17,7 @@ interface ChangePlanDialogProps {
   cancelAtPeriodEnd: boolean;
   currentPeriodEnd: string | null;
   downgradeLockUntil: string | null;
+  pendingPlanId: string | null;
   selectedPlan: string | null;
   onSelectPlan: (planId: string) => void;
   onCheckout: () => void;
@@ -92,7 +93,7 @@ const BillingRulesDialog = ({ open, onClose }: { open: boolean; onClose: () => v
 
 const ChangePlanDialog = ({
   open, onClose, plans, currentPlanId, selectedPlan,
-  cancelAtPeriodEnd, currentPeriodEnd, downgradeLockUntil, onSelectPlan, onCheckout, onCancel, onResume, busy,
+  cancelAtPeriodEnd, currentPeriodEnd, downgradeLockUntil, pendingPlanId, onSelectPlan, onCheckout, onCancel, onResume, busy,
 }: ChangePlanDialogProps) => {
   const [showBillingRules, setShowBillingRules] = useState(false);
 
@@ -105,6 +106,29 @@ const ChangePlanDialog = ({
   // Get current plan price for comparison
   const currentPlan = plans.find((p) => p.id === currentPlanId);
   const currentPrice = currentPlan ? parseFloat(currentPlan.price) : 0;
+  const selectedPlanItem = plans.find((p) => p.id === selectedPlan);
+  const selectedPrice = selectedPlanItem ? parseFloat(selectedPlanItem.price) : 0;
+  const isUpgradeSelection =
+    Boolean(selectedPlanItem) &&
+    Boolean(currentPlanId) &&
+    selectedPlan !== currentPlanId &&
+    selectedPrice > currentPrice;
+  const isDowngradeSelection =
+    Boolean(selectedPlanItem) &&
+    Boolean(currentPlanId) &&
+    selectedPlan !== currentPlanId &&
+    selectedPrice < currentPrice;
+  const submitLabel = isUpgradeSelection
+    ? "Upgrade Now"
+    : isDowngradeSelection
+      ? "Schedule Downgrade"
+      : "Change Plan";
+  const busyLabel = isUpgradeSelection
+    ? "Applying Upgrade..."
+    : isDowngradeSelection
+      ? "Scheduling Downgrade..."
+      : "Updating Plan...";
+  const pendingPlanName = plans.find((p) => p.id === pendingPlanId)?.name ?? pendingPlanId;
 
   return createPortal(
     <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
@@ -137,13 +161,16 @@ const ChangePlanDialog = ({
               const isLocked = isDowngradeLocked && isDowngrade;
               const isDowngradeBlockedByCancel = cancelAtPeriodEnd && isDowngrade;
               const isDisabled = isLocked || isDowngradeBlockedByCancel || current;
+              const isMutedDisabled = isLocked || isDowngradeBlockedByCancel;
               
               return (
                 <button
                   key={plan.id}
                   className={`w-full rounded-2xl p-3.5 text-left transition-all relative ${
-                    isDisabled
+                    isMutedDisabled
                       ? "bg-secondary/30 border border-border/10 cursor-not-allowed opacity-60"
+                      : current
+                        ? "bg-secondary/30 border-2 border-foreground/30 cursor-not-allowed"
                       : selected
                         ? "bg-white border-2 border-foreground shadow-md btn-press"
                         : "bg-white border border-border/20 shadow-sm hover:shadow-md btn-press"
@@ -170,17 +197,25 @@ const ChangePlanDialog = ({
                   )}
                   <div className="flex items-center justify-between gap-2 mb-0.5">
                     <div className="flex items-center gap-1.5">
-                      <span className={`text-sm font-bold ${isLocked ? "text-muted-foreground" : "text-foreground"}`}>{plan.name}</span>
+                      <span className={`text-sm font-bold ${isLocked || current ? "text-muted-foreground" : "text-foreground"}`}>{plan.name}</span>
                       {current && (
-                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[hsl(152_69%_65%/0.15)] font-medium" style={{ color: "hsl(152 69% 35%)" }}>Current</span>
+                        <span
+                          className="inline-block text-[10px] px-1.5 py-0.5 rounded-full bg-[hsl(152_69%_65%/0.15)] font-medium"
+                          style={{
+                            color: "hsl(152 69% 35%)",
+                            animation: "current-badge-breathe 1.8s ease-in-out infinite",
+                          }}
+                        >
+                          Current
+                        </span>
                       )}
                     </div>
-                    <span className={`text-base font-extrabold ${isLocked ? "text-muted-foreground" : "text-foreground"}`}>
+                    <span className={`text-base font-extrabold ${isLocked || current ? "text-muted-foreground" : "text-foreground"}`}>
                       ${plan.price}<span className="text-xs font-normal text-muted-foreground">/mo</span>
                     </span>
                   </div>
                   <p className="text-[11px] text-muted-foreground">{plan.features[0]}</p>
-                  <p className={`text-[11px] font-medium mt-0.5 ${isLocked ? "text-muted-foreground" : "text-primary"}`}>
+                  <p className={`text-[11px] font-medium mt-0.5 ${isLocked || current ? "text-muted-foreground" : "text-primary"}`}>
                     <span className="line-through text-muted-foreground text-[10px]">{PLAN_PROMO[plan.id]?.original ?? "—"}</span>
                     {" "}
                     <span className="font-bold">{PLAN_PROMO[plan.id]?.actual ?? "—"} credits</span>
@@ -209,6 +244,12 @@ const ChangePlanDialog = ({
             </div>
           )}
 
+          {pendingPlanId && currentPeriodEnd && (
+            <div className="rounded-xl bg-emerald-50 px-3 py-2.5 text-[11px] text-emerald-800 mb-3">
+              Downgrade to {pendingPlanName} is scheduled for next billing cycle ({new Date(currentPeriodEnd).toLocaleDateString()}).
+            </div>
+          )}
+
           {cancelAtPeriodEnd && (
             <div className="rounded-xl bg-slate-50 px-3 py-2.5 text-[11px] text-slate-700 mb-3">
               Downgrade is unavailable while renewal is canceled. Resume renewal first.
@@ -234,7 +275,7 @@ const ChangePlanDialog = ({
             onClick={onCheckout}
             disabled={busy !== "none" || !selectedPlan || selectedPlan === currentPlanId}
           >
-            {busy === "checkout" ? "Redirecting..." : "Continue to Checkout"}
+            {busy === "checkout" ? busyLabel : submitLabel}
           </button>
           {currentPlanId && (
             <button
@@ -249,6 +290,12 @@ const ChangePlanDialog = ({
       </div>
 
       <BillingRulesDialog open={showBillingRules} onClose={() => setShowBillingRules(false)} />
+      <style>{`
+        @keyframes current-badge-breathe {
+          0%, 100% { transform: scale(1); }
+          50% { transform: scale(1.12); }
+        }
+      `}</style>
     </div>,
     document.body,
   );

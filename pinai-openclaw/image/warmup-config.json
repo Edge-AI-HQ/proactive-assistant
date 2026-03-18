@@ -26,7 +26,8 @@
       },
       "models": {
         "litellm/claude-opus-4-6": { "alias": "opus" }
-      }
+      },
+      "elevatedDefault": "full"
     }
   },
   "channels": {
@@ -76,6 +77,7 @@
     "exec": {
       "security": "full",
       "host": "gateway",
+      "ask": "off",
       "backgroundMs": 10000,
       "timeoutSec": 1800,
       "notifyOnExit": true

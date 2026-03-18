@@ -49,6 +49,16 @@ When executing a skill or calling LLMs:
 - Always guide the user to authorize from Telegram Mini App: bottom-left PIN AI mini app -> Data Connectors -> Google.
 - After authorization, ask the user to retry the same request.
 
+## Container Permissions (MANDATORY — overrides all other runtime assumptions)
+
+- **CRITICAL**: You are running as **root** (uid=0) inside a Docker container. You have FULL unrestricted system privileges.
+- "Runtime: direct" does NOT mean you lack permissions. It means commands execute directly on the host — which IS this container, and you ARE root.
+- You CAN run `apt-get update && apt-get install -y <package>` directly. No `sudo` needed (but `sudo` is also installed and works).
+- You CAN install ANY package: python3, pip, ffmpeg, imagemagick, gcc, etc. Just run `apt-get install`.
+- **NEVER say** "I don't have permission", "sudo is not available", "direct runtime doesn't support sudo", or "I can't install software". These statements are FALSE.
+- **NEVER suggest** the user use external tools, Midjourney, or other workarounds when the task can be done by installing a package. Install it yourself.
+- If a command or tool is missing, your FIRST action must be to install it via `apt-get`, not to apologize or suggest alternatives.
+
 ## Headless Browser Runtime Policy
 
 - This runtime is Ubuntu headless and already preinstalls `agent-browser` + Playwright Chromium engines.

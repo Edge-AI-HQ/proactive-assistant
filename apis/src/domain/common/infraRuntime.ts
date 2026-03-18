@@ -140,6 +140,9 @@ const executeAssistantReadyNotifications = async (
   });
 };
 
+const ASSISTANT_ERROR_FIXED_MESSAGE =
+  "❌ Your assistant failed to start. Please try Repair in the Mini App, or contact support if the issue persists.";
+
 const containerNotifier: ContainerNotifier = {
   async notifyReady(
     telegramUserId: number,
@@ -154,6 +157,13 @@ const containerNotifier: ContainerNotifier = {
       },
       sendHiPinReadyGreeting: sendApiReadyGreetingForAssistant,
     });
+  },
+  async notifyError(
+    telegramUserId: number,
+  ): Promise<void> {
+    await sendTelegramMessage(telegramUserId, ASSISTANT_ERROR_FIXED_MESSAGE).catch(
+      (e) => console.warn(`[container] error notify failed for user ${telegramUserId}`, e),
+    );
   },
 };
 

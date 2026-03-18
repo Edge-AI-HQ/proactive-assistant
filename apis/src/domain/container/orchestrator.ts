@@ -462,20 +462,33 @@ export class ContainerOrchestrator {
         await this.store.updateAssistant(assistant.id, {
           container_status: ready ? "running" : "error",
         });
-        if (ready && assistant.owner_telegram_user_id) {
-          console.log(
-            `[orchestrator] Fully ready for assistant ${assistant.id}, notifying user ${assistant.owner_telegram_user_id}`,
-          );
-          await this.notifier
-            .notifyReady(Number(assistant.owner_telegram_user_id), {
-              assistantId: assistant.id,
-            })
-            .catch((e) =>
-              console.warn(
-                `[orchestrator] notify failed for assistant ${assistant.id}`,
-                e,
-              ),
+        if (assistant.owner_telegram_user_id) {
+          const telegramUserId = Number(assistant.owner_telegram_user_id);
+          if (ready) {
+            console.log(
+              `[orchestrator] Fully ready for assistant ${assistant.id}, notifying user ${telegramUserId}`,
             );
+            await this.notifier
+              .notifyReady(telegramUserId, { assistantId: assistant.id })
+              .catch((e) =>
+                console.warn(
+                  `[orchestrator] notify failed for assistant ${assistant.id}`,
+                  e,
+                ),
+              );
+          } else {
+            console.warn(
+              `[orchestrator] Probe failed for assistant ${assistant.id}, notifying user ${telegramUserId}`,
+            );
+            await this.notifier
+              .notifyError?.(telegramUserId, { assistantId: assistant.id })
+              ?.catch((e: unknown) =>
+                console.warn(
+                  `[orchestrator] error notify failed for assistant ${assistant.id}`,
+                  e,
+                ),
+              );
+          }
         }
       }
     } catch (err) {
@@ -486,6 +499,18 @@ export class ContainerOrchestrator {
       await this.store.updateAssistant(assistant.id, {
         container_status: "error",
       });
+      if (assistant.owner_telegram_user_id) {
+        await this.notifier
+          .notifyError?.(Number(assistant.owner_telegram_user_id), {
+            assistantId: assistant.id,
+          })
+          ?.catch((e: unknown) =>
+            console.warn(
+              `[orchestrator] error notify failed for assistant ${assistant.id}`,
+              e,
+            ),
+          );
+      }
     }
   }
 

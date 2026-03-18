@@ -58,6 +58,7 @@ type StatePayload = {
     cancel_at_period_end: boolean;
     current_period_end: string | null;
     downgrade_lock_until: string | null;
+    pending_plan_id: string | null;
   };
   credits?: {
     remaining: number;
@@ -454,10 +455,14 @@ const App = () => {
     };
   }, [busy, loading, state]);
 
-  // Poll for status changes when assistant exists but isn't running yet
+  // Poll for status changes when assistant exists but isn't in a terminal state.
+  // Skip polling while an action is in flight (e.g. repair-runtime) to avoid
+  // server-side stale reads overwriting our optimistic UI state.
   useEffect(() => {
     if (!state?.assistant.exists) return;
-    if (state.assistant.status === "running") return;
+    if (busy !== "none") return;
+    const status = state.assistant.status;
+    if (status === "running" || status === "error") return;
 
     const id = setInterval(() => {
       void safeFetch<StatePayload>("/api/mini/state")
@@ -472,7 +477,25 @@ const App = () => {
     }, 3_000);
 
     return () => clearInterval(id);
-  }, [state?.assistant.exists, state?.assistant.status]);
+  }, [state?.assistant.exists, state?.assistant.status, busy]);
+
+  // Notify user when polled status reaches a terminal state after repair/create
+  const prevStatusRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const curr = state?.assistant.status;
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = curr;
+    if (!prev || !curr || prev === curr) return;
+
+    // Transition from non-running → running: repair/create succeeded
+    if (prev !== "running" && curr === "running") {
+      showToast("Agent is ready!", "success");
+    }
+    // Transition from non-error → error: probe failed
+    if (prev !== "error" && curr === "error") {
+      showToast("Agent failed to start. Try Repair again or contact support.");
+    }
+  }, [state?.assistant.status]);
 
   const createAssistant = async () => {
     setBusy("create");
@@ -506,6 +529,7 @@ const App = () => {
 
   const checkout = async () => {
     if (!selectedPlan) return;
+    const targetPlan = selectedPlan;
     setBusy("checkout");
     try {
       const result = await safeFetch<{
@@ -514,16 +538,47 @@ const App = () => {
         message?: string;
       }>("/api/mini/checkout", {
         method: "POST",
-        body: JSON.stringify({ plan: selectedPlan }),
+        body: JSON.stringify({ plan: targetPlan }),
       });
       if (result.action === "upgrade" || result.action === "downgrade") {
         // Plan changed directly via Stripe subscription update — no redirect needed
         showToast(result.message ?? "Plan updated successfully.", "success");
+        setState((prev) => {
+          if (!prev) return prev;
+          if (result.action === "upgrade") {
+            return {
+              ...prev,
+              subscription: {
+                ...prev.subscription,
+                plan_id: targetPlan,
+                cancel_at_period_end: false,
+                pending_plan_id: null,
+              },
+            };
+          }
+          return {
+            ...prev,
+            subscription: {
+              ...prev.subscription,
+              pending_plan_id: targetPlan,
+            },
+          };
+        });
+        setSelectedPlan(targetPlan);
         setBusy("none");
-        const latest = await loadState();
-        setSelectedPlan(
-          latest.subscription.plan_id ?? latest.plans?.[0]?.id ?? null,
-        );
+
+        // Stripe webhook sync may lag briefly; poll state until server catches up.
+        const maxAttempts = 6;
+        for (let i = 0; i < maxAttempts; i += 1) {
+          const latest = await loadState();
+          const matched =
+            result.action === "upgrade"
+              ? latest.subscription.plan_id === targetPlan
+              : latest.subscription.pending_plan_id === targetPlan ||
+                latest.subscription.plan_id === targetPlan;
+          if (matched) break;
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
         return;
       }
       if (!result.url)
@@ -716,23 +771,53 @@ const App = () => {
   };
 
   const handleRepairRuntime = async () => {
+    setShowManageAgent(false);
     setBusy("repair-runtime");
+    // Capture current status so we can roll back on failure.
+    const prevStatus = state?.assistant.status;
+    // Immediately show transitional status — the API call (delete + create
+    // on Fly) can take 5-30s and the user should see feedback right away.
+    setState((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        assistant: { ...prev.assistant, status: "creating" },
+      };
+    });
     try {
-      await safeFetch<{ ok: true; ready: boolean }>(
-        "/api/mini/repair-runtime",
-        {
-          method: "POST",
-          body: JSON.stringify({}),
-        },
-      );
-      showToast(
-        "Runtime restart started. The assistant may take a moment to become ready again.",
-        "success",
-      );
-      await loadState();
+      const result = await safeFetch<{
+        ok: true;
+        ready: boolean;
+        deleted: boolean;
+      }>("/api/mini/repair-runtime", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      // Sync with actual result — if already ready skip further polling.
+      // The status-transition useEffect will handle the success toast.
+      setState((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          assistant: {
+            ...prev.assistant,
+            status: result.ready ? "running" : "creating",
+          },
+        };
+      });
+      // If not ready yet, polling (useEffect) will keep refreshing until
+      // status reaches "running" or "error".
     } catch (e) {
+      // Roll back optimistic status so the UI doesn't stay stuck on "Creating..."
+      setState((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          assistant: { ...prev.assistant, status: prevStatus ?? "error" },
+        };
+      });
       showToast(
-        `Restart failed: ${e instanceof Error ? e.message : "unknown"}`,
+        `Repair failed: ${e instanceof Error ? e.message : "unknown"}`,
       );
     } finally {
       setBusy("none");
@@ -1097,6 +1182,7 @@ const App = () => {
             cancelAtPeriodEnd={state.subscription.cancel_at_period_end}
             currentPeriodEnd={state.subscription.current_period_end}
             downgradeLockUntil={state.subscription.downgrade_lock_until}
+            pendingPlanId={state.subscription.pending_plan_id}
             selectedPlan={selectedPlan}
             onSelectPlan={setSelectedPlan}
             onCheckout={checkout}

@@ -1,5 +1,5 @@
 import { config } from '../common/config.js';
-import { getAssistantById, getUserByTelegramId } from '../common/db/index.js';
+import { getAssistantById, getUserByTelegramId, deleteAssistantRuntimeMetadataKey } from '../common/db/index.js';
 import { DomainError } from '../common/errors.js';
 import { destroyAssistantContainer, ensureAssistantContainer } from './index.js';
 import { clearCommandMenuForAssistant } from '../telegram-router/commandMenu.js';
@@ -55,6 +55,18 @@ export const deleteAssistantContainerById = async (assistantId: number): Promise
 export const repairAssistantContainerById = async (
   assistantId: number,
 ): Promise<{ deleted: boolean; containerId: string; ready: boolean }> => {
+  // Clear the onboarding notification lock so that the post-repair
+  // probeAndNotify cycle can re-send the "ready" Telegram message.
+  await deleteAssistantRuntimeMetadataKey(
+    assistantId,
+    "onboarding_ready_notified_at",
+  ).catch((e) =>
+    console.warn(
+      `[repair] Failed to clear ready-notify lock for assistant ${assistantId}`,
+      e,
+    ),
+  );
+
   const deleted = await deleteAssistantContainerById(assistantId);
   const recreated = await createAssistantContainerById(assistantId);
   return {

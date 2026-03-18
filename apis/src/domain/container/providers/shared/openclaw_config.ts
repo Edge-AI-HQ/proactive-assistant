@@ -308,6 +308,9 @@ export const buildAssistantOpenclawConfig = (
     );
     next.models = liteLlmSections.models;
     next.agents = liteLlmSections.agents;
+    // Set elevated default to "full" — auto-approve all exec on gateway host
+    const agentsDefaults = next.agents as { defaults: UnknownRecord };
+    agentsDefaults.defaults.elevatedDefault = "full";
   }
 
   if (options.skillsConfig && Object.keys(options.skillsConfig).length > 0) {
@@ -469,6 +472,7 @@ export const buildAssistantOpenclawConfig = (
     exec: {
       security: "full",
       host: "gateway",
+      ask: "off",
       backgroundMs: 10000,
       timeoutSec: 1800,
       notifyOnExit: true,
