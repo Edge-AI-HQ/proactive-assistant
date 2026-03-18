@@ -50,6 +50,7 @@ interface AgentCardProps {
   onChangeModel: (modelRef: string) => void;
   onLoadModels: () => Promise<void>;
   onBlockedAction: (action: "model" | "chat" | "data") => void;
+  onOpenGateway: () => void;
 }
 
 const getStatusDisplay = (
@@ -120,6 +121,7 @@ const AgentCard = ({
   onChangeModel,
   onLoadModels,
   onBlockedAction,
+  onOpenGateway,
 }: AgentCardProps) => {
   const [showData, setShowData] = useState(false);
   const [showSkills, setShowSkills] = useState(false);
@@ -375,6 +377,7 @@ const AgentCard = ({
         runtimeBusy={runtimeBusy}
         allowDeleteAccount={allowDeleteAccount}
         onDeleteAccount={onDeleteAccount}
+        onOpenGateway={onOpenGateway}
       />
 
       <DataConnectionsDialog

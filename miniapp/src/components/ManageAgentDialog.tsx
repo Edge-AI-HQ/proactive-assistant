@@ -12,6 +12,7 @@ interface ManageAgentDialogProps {
   runtimeBusy: boolean;
   allowDeleteAccount: boolean;
   onDeleteAccount: () => void;
+  onOpenGateway: () => void;
 }
 
 const IconWrench = () => (
@@ -32,6 +33,12 @@ const IconTrash = () => (
   </svg>
 );
 
+const IconGateway = () => (
+  <svg className="w-4 h-4 text-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" />
+  </svg>
+);
+
 const IconChevron = () => (
   <svg className="w-4 h-4 text-muted-foreground shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
     <path d="M9 5l7 7-7 7" />
@@ -48,6 +55,7 @@ const ManageAgentDialog = ({
   runtimeBusy,
   allowDeleteAccount,
   onDeleteAccount,
+  onOpenGateway,
 }: ManageAgentDialogProps) => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showRepairConfirm, setShowRepairConfirm] = useState(false);
@@ -140,6 +148,17 @@ const ManageAgentDialog = ({
           label: "Change Subscription",
           desc: `Current: ${planId ? planId.charAt(0).toUpperCase() + planId.slice(1) : "None"}`,
           onClick: () => { onClose(); onChangePlan(); },
+        },
+      ],
+    },
+    {
+      title: "Advanced",
+      items: [
+        {
+          icon: IconGateway,
+          label: "Gateway (Advanced)",
+          desc: "Open the full gateway dashboard",
+          onClick: () => { onClose(); onOpenGateway(); },
         },
       ],
     },
