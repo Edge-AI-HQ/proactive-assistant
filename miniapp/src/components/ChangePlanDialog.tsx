@@ -93,7 +93,8 @@ const BillingRulesDialog = ({ open, onClose }: { open: boolean; onClose: () => v
 
 const ChangePlanDialog = ({
   open, onClose, plans, currentPlanId, selectedPlan,
-  cancelAtPeriodEnd, currentPeriodEnd, downgradeLockUntil, pendingPlanId, onSelectPlan, onCheckout, onCancel, onResume, busy,
+  cancelAtPeriodEnd, currentPeriodEnd, downgradeLockUntil, pendingPlanId,
+  onSelectPlan, onCheckout, onCancel, onResume, busy,
 }: ChangePlanDialogProps) => {
   const [showBillingRules, setShowBillingRules] = useState(false);
 

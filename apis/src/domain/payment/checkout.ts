@@ -331,9 +331,177 @@ export interface CheckoutResult {
   message?: string;
 }
 
+export interface PromotionPreviewResult {
+  valid: boolean;
+  original_price: string;
+  discounted_price: string | null;
+  discount_label: string | null;
+  duration_label: string | null;
+  message: string | null;
+}
+
+const normalizePromotionCode = (value: unknown): string | null => {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized ? normalized : null;
+};
+
+const resolvePromotionCodeId = async (
+  stripeClient: Stripe,
+  promotionCode: string,
+): Promise<string> => {
+  const result = await stripeClient.promotionCodes.list({
+    code: promotionCode,
+    active: true,
+    limit: 1,
+  });
+  const match = result.data[0];
+  if (!match) {
+    throw new DomainError(
+      "INVALID_INPUT",
+      "Invalid or inactive promotion code.",
+    );
+  }
+  return match.id;
+};
+
+const formatPriceCents = (cents: number): string => {
+  return (Math.max(0, cents) / 100).toFixed(2);
+};
+
+const readCouponObject = async (
+  stripeClient: Stripe,
+  promotionCode: string,
+): Promise<{
+  promotionCode: Stripe.PromotionCode;
+  coupon: Stripe.Coupon;
+}> => {
+  const result = await stripeClient.promotionCodes.list({
+    code: promotionCode,
+    active: true,
+    limit: 1,
+  });
+  const match = result.data[0];
+  if (!match) {
+    throw new DomainError(
+      "INVALID_INPUT",
+      "Invalid or inactive promotion code.",
+    );
+  }
+
+  const coupon =
+    typeof match.coupon === "string"
+      ? await stripeClient.coupons.retrieve(match.coupon)
+      : match.coupon;
+
+  return { promotionCode: match, coupon };
+};
+
+const readCouponDurationLabel = (coupon: Stripe.Coupon): string | null => {
+  switch (coupon.duration) {
+    case "once":
+      return "First payment only";
+    case "repeating":
+      return coupon.duration_in_months
+        ? `First ${coupon.duration_in_months} months`
+        : "Limited months";
+    case "forever":
+      return "Every renewal";
+    default:
+      return null;
+  }
+};
+
+export const previewPromotionCode = async (body: {
+  plan?: string;
+  promotionCode?: string;
+}): Promise<PromotionPreviewResult> => {
+  const stripeClient = requireStripe();
+  const planCode =
+    String(body.plan || "")
+      .trim()
+      .toLowerCase() || "basic";
+  const promotionCode = normalizePromotionCode(body.promotionCode);
+  const selectedPlan = await db.getPlanByCode(planCode);
+  if (!selectedPlan || !selectedPlan.is_active) {
+    throw new DomainError("INVALID_INPUT", "Invalid plan");
+  }
+
+  const originalPriceCents = selectedPlan.price_cents_monthly ?? 0;
+  const originalPrice = formatPriceCents(originalPriceCents);
+  if (!promotionCode) {
+    return {
+      valid: false,
+      original_price: originalPrice,
+      discounted_price: null,
+      discount_label: null,
+      duration_label: null,
+      message: null,
+    };
+  }
+
+  const stripePriceId = requireStripePriceId(selectedPlan);
+  const [{ coupon }, stripePrice] = await Promise.all([
+    readCouponObject(stripeClient, promotionCode),
+    stripeClient.prices.retrieve(stripePriceId, { expand: ["product"] }),
+  ]);
+
+  const priceCurrency = stripePrice.currency?.toLowerCase() ?? "";
+  const productId =
+    typeof stripePrice.product === "string"
+      ? stripePrice.product
+      : stripePrice.product?.id ?? "";
+  const appliesToProducts = coupon.applies_to?.products ?? [];
+  if (appliesToProducts.length > 0 && !appliesToProducts.includes(productId)) {
+    throw new DomainError(
+      "INVALID_INPUT",
+      "This promotion code does not apply to the selected plan.",
+    );
+  }
+
+  let discountedPriceCents = originalPriceCents;
+  let discountLabel: string | null = null;
+
+  if (typeof coupon.percent_off === "number") {
+    discountedPriceCents = Math.round(
+      originalPriceCents * (1 - coupon.percent_off / 100),
+    );
+    discountLabel = `${coupon.percent_off}% off`;
+  } else {
+    const amountOff =
+      typeof coupon.amount_off === "number" &&
+      (!coupon.currency || coupon.currency.toLowerCase() === priceCurrency)
+        ? coupon.amount_off
+        : null;
+    if (amountOff === null) {
+      throw new DomainError(
+        "INVALID_INPUT",
+        "This promotion code is not supported for the selected plan.",
+      );
+    }
+    discountedPriceCents = Math.max(0, originalPriceCents - amountOff);
+    discountLabel = `$${formatPriceCents(amountOff)} off`;
+  }
+
+  return {
+    valid: true,
+    original_price: originalPrice,
+    discounted_price: formatPriceCents(discountedPriceCents),
+    discount_label: discountLabel,
+    duration_label: readCouponDurationLabel(coupon),
+    message: null,
+  };
+};
+
 export const createCheckoutSession = async (
   req: Request,
-  body: { token?: string; plan?: string; successUrl?: string },
+  body: {
+    token?: string;
+    plan?: string;
+    successUrl?: string;
+    cancelUrl?: string;
+    promotionCode?: string;
+  },
 ): Promise<CheckoutResult> => {
   const stripe = requireStripe();
   const token = String(body.token || "").trim();
@@ -341,6 +509,7 @@ export const createCheckoutSession = async (
     String(body.plan || "")
       .trim()
       .toLowerCase() || "basic";
+  const promotionCode = normalizePromotionCode(body.promotionCode);
   const landingBaseUrl = readPaymentPublicBaseUrl(req);
 
   if (!token) {
@@ -349,6 +518,7 @@ export const createCheckoutSession = async (
   console.log("[payment] checkout:start", {
     token_ref: summarizeToken(token),
     plan_code: planCode,
+    promotion_code_supplied: Boolean(promotionCode),
   });
 
   const session = await db.getPaymentSessionByToken(token);
@@ -453,6 +623,13 @@ export const createCheckoutSession = async (
           throw new DomainError(
             "INVALID_INPUT",
             `You are already on the ${currentPlan.display_name} plan.`,
+          );
+        }
+
+        if (promotionCode) {
+          throw new DomainError(
+            "INVALID_INPUT",
+            "Promotion codes are only supported for new checkout sessions.",
           );
         }
 
@@ -565,18 +742,28 @@ export const createCheckoutSession = async (
   // --- Create new checkout session (new subscription or upgrade) ---
   let checkoutSession: Stripe.Checkout.Session;
   try {
+    const promotionCodeId = promotionCode
+      ? await resolvePromotionCodeId(stripe, promotionCode)
+      : null;
     checkoutSession = await stripe.checkout.sessions.create(
       {
         customer: customerId,
         mode: "subscription",
         line_items: [{ price: stripePriceId, quantity: 1 }],
+        ...(!promotionCodeId ? { allow_promotion_codes: true } : {}),
+        ...(promotionCodeId
+          ? { discounts: [{ promotion_code: promotionCodeId }] }
+          : {}),
         success_url: body.successUrl || `${landingBaseUrl}/api/payment/success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${landingBaseUrl}/api/payment/subscribe?token=${token}`,
+        cancel_url:
+          body.cancelUrl ||
+          `${landingBaseUrl}/api/payment/subscribe?token=${token}`,
         metadata: {
           telegram_user_id: telegramUserId,
           telegram_username: telegramUsername || "",
           plan: selectedPlan.plan_code,
           payment_token: token,
+          ...(promotionCode ? { promotion_code: promotionCode } : {}),
           ...(session.assistant_id
             ? { assistant_id: String(session.assistant_id) }
             : {}),
@@ -586,6 +773,7 @@ export const createCheckoutSession = async (
             telegram_user_id: telegramUserId,
             telegram_username: telegramUsername || "",
             plan: selectedPlan.plan_code,
+            ...(promotionCode ? { promotion_code: promotionCode } : {}),
             ...(session.assistant_id
               ? { assistant_id: String(session.assistant_id) }
               : {}),
