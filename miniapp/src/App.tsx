@@ -116,6 +116,7 @@ const mergeQuickPayload = (
   plans: quick.plans ?? prev.plans,
   skills: quick.skills ?? prev.skills,
   google: quick.google ?? prev.google,
+  credits: quick.credits ?? prev.credits,
 });
 
 const hasQuickPayloadChanged = (
