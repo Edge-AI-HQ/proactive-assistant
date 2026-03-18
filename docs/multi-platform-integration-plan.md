@@ -21,7 +21,8 @@
 9. [Security Considerations](#9-security-considerations)
 10. [Implementation Phases](#10-implementation-phases)
 11. [Risk Matrix](#11-risk-matrix)
-12. [Open Questions](#12-open-questions)
+12. [Decisions Log](#12-decisions-log-resolved)
+13. [Resolved Follow-Up Items](#13-resolved-follow-up-items)
 
 ---
 
@@ -691,8 +692,10 @@ iMessage requires macOS. Fly.io runs Linux. No cloud-native path exists. If revi
 The portal is a **standalone React SPA** (not embedded in Telegram), accessible from any browser.
 
 - **Tech stack**: React + Vite + Tailwind CSS (consistent with existing miniapp).
-- **Hosting**: Vercel or Cloudflare Pages (static SPA) — or Fly.io if server-side rendering is needed later.
+- **Hosting**: **Fly.io** (same platform as APIs; simplifies deployment and internal networking).
+- **Domain**: Main domain (e.g., `pinclaw.com`). Google OAuth redirect URI and CORS configured for this domain.
 - **API communication**: REST calls to APIs service + WebSocket for real-time updates.
+- **Coexistence**: The existing Telegram Mini App remains operational for Telegram users. The web portal is a parallel entry point, not a replacement.
 
 ### 5.2 Authentication — Google OAuth2 (Gmail)
 
@@ -705,7 +708,7 @@ The portal is a **standalone React SPA** (not embedded in Telegram), accessible 
 6. If user exists (by `google_id`), log in. Otherwise, create new user.
 7. Issue a session token (HTTP-only cookie).
 
-**Migration for existing Telegram-only users:** When an existing user logs in via Google for the first time, the portal offers a one-time "Link your Telegram account" step (using Telegram Login Widget) to merge the accounts.
+**Coexistence with Telegram Mini App:** No forced migration. Telegram Mini App users continue using their `telegram_user_id` auth path. Web portal users use Google OAuth (`google_id`). The two identity systems run in parallel. Accounts are separate — a user can have both a Telegram-based account and a Google-based account independently.
 
 ### 5.3 Portal Page Structure
 
@@ -1107,7 +1110,7 @@ Key principle: keep existing Telegram Quick Start working (backward compat) whil
 
 - [ ] Database migration: `users` adds `google_id` + `email`, `telegram_user_id` becomes nullable.
 - [ ] Google OAuth2 login (server-side token exchange + session cookies).
-- [ ] Web portal scaffolding (React + Vite + Tailwind, deployed to Vercel/Cloudflare).
+- [ ] Web portal scaffolding (React + Vite + Tailwind, deployed to Fly.io).
 - [ ] Portal: Google Sign-In, dashboard shell, routing.
 - [ ] `channel_connections` table + encrypted credential storage (`CREDENTIAL_ENCRYPTION_KEY`).
 - [ ] Channel Connection Manager service (CRUD, validators).
@@ -1185,21 +1188,26 @@ Key principle: keep existing Telegram Quick Start working (backward compat) whil
 
 ---
 
-## 12. Open Questions
+## 12. Decisions Log (Resolved)
 
-1. **Identity migration**: How to migrate existing Telegram-only users to Google OAuth? Options: (a) manual linking via Telegram Login Widget, (b) auto-link if email matches, (c) keep both auth paths.
+| # | Question | Decision | Rationale |
+|---|----------|----------|-----------|
+| 1 | **Web portal hosting** | **Fly.io** | Same platform as APIs; simplifies deployment and internal networking. |
+| 2 | **Portal domain** | **Main domain** (e.g. `pinclaw.com`) | Professional look; Google OAuth redirect URI and CORS set to this domain. |
+| 3 | **Existing Mini App** | **Keep both in parallel** | Telegram Mini App continues for existing Telegram users. Web portal is the new entry point for multi-platform users. Both coexist indefinitely. |
+| 4 | **Identity migration** | **No migration — parallel identity systems** | Telegram Mini App users keep their `telegram_user_id` path. Web portal users get `google_id` path. Two systems run in parallel. No forced migration. If a user wants to use both, they can (but accounts are separate unless manually linked in the future). |
+| 5 | **Pricing** | **All platforms included in existing plans** | Basic/Pro/Max prices unchanged. Users can connect any/all 4 platforms at no extra cost. Credits are consumed by AI usage regardless of which platform the message came from. |
+| 6 | **Container sizing** | **Keep `shared-cpu-1x` (256MB) for now** | Start with current specs. Monitor memory usage after adding channels. Upgrade to `shared-cpu-2x` only if OOM or performance issues are observed. |
 
-2. **Pricing model**: Is multi-platform included in existing plans or per-platform pricing?
+## 13. Resolved Follow-Up Items
 
-3. **WhatsApp Business API**: Offer the official WA Business Cloud API as an alternative to Baileys? More reliable but requires business verification + per-message cost.
+| # | Item | Decision |
+|---|------|----------|
+| 1 | WhatsApp Business API as Baileys alternative | **Not needed.** Baileys only. |
+| 2 | BYOB UX optimization (Discord invite URL auto-gen, Slack manifest import) | **Post-MVP.** Iterate after core flow works. |
+| 3 | Google Cloud OAuth credentials setup | **After code is written.** Step-by-step setup guide will be provided at that time. |
 
-4. **Container sizing**: With 4 channels, memory/CPU needs? Current `shared-cpu-1x` (256MB) may need upgrade to `shared-cpu-2x` (512MB).
-
-5. **Web portal hosting**: Vercel/Cloudflare Pages (fast, global CDN) or Fly.io (co-located with APIs)?
-
-6. **Existing Mini App**: Keep as Telegram-embedded lightweight entry? Or sunset in favor of the portal?
-
-7. **BYOB UX**: Should we pre-generate invite URLs / provide one-click Slack manifest import to reduce setup friction?
+**All architectural and product decisions are finalized. Ready to begin Phase 0 implementation.**
 
 ---
 
