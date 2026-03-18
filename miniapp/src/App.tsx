@@ -943,6 +943,22 @@ const App = () => {
     setShowManageAgent(true);
   };
 
+  const handleOpenGateway = async () => {
+    try {
+      const data = await safeFetch<{ url: string }>("/api/mini/gateway-url", {
+        method: "POST",
+      });
+      const webApp = window.Telegram?.WebApp;
+      if (webApp?.openLink) {
+        webApp.openLink(data.url, { try_browser: "chrome" });
+      } else {
+        window.open(data.url, "_blank", "noopener,noreferrer");
+      }
+    } catch (e) {
+      showToast("Failed to open gateway. Please try again.", "error");
+    }
+  };
+
   const handleBlockedAction = () => {
     showToast("Agent is starting. Please wait a moment.", "success");
   };
@@ -1273,6 +1289,7 @@ const App = () => {
             onChangeModel={handleChangeModel}
             onLoadModels={loadModels}
             onBlockedAction={handleBlockedAction}
+            onOpenGateway={handleOpenGateway}
           />
         </div>
 

@@ -1454,6 +1454,45 @@ export const createDashboardRouter = (): Router => {
   );
 
   router.post(
+    "/api/mini/gateway-url",
+    async (req: Request, res: Response, next: NextFunction) => {
+      void requireMiniSession(req, res, next).catch((error: unknown) => {
+        console.error("Mini session check failed", error);
+        res.status(500).json({ error: "Mini session check failed." });
+      });
+    },
+    async (req: Request, res: Response) => {
+      const user = req.gatewayUser;
+      if (!user) {
+        res.status(500).json({ error: "Gateway user missing." });
+        return;
+      }
+
+      try {
+        const assistants = await listAssistantsByOwnerId(user.telegram_user_id);
+        const assistant = assistants[0];
+        if (!assistant) {
+          res
+            .status(400)
+            .json({ error: "Assistant not found. Create assistant first." });
+          return;
+        }
+
+        const session = await createGatewaySession(user.telegram_user_id, 12);
+        const gatewayPath = `/gateway/${user.telegram_user_id}/bot/${assistant.id}?gateway_sid=${session.sessionToken}`;
+        const origin = `${req.protocol}://${req.get("host")}`;
+        res.status(200).json({ url: `${origin}${gatewayPath}` });
+      } catch (error: unknown) {
+        if (isDomainError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        res.status(500).json({ error: domainErrorMessage(error) });
+      }
+    },
+  );
+
+  router.post(
     "/api/mini/reset-account",
     async (req: Request, res: Response, next: NextFunction) => {
       void requireMiniSession(req, res, next).catch((error: unknown) => {
