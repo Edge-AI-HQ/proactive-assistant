@@ -101,12 +101,15 @@ export async function fetchEarliestCronNextRunMs(
         clearTimeout(timeout);
         if (!data.ok) { finish(null); return; }
 
-        const result = data.result as { items?: unknown[] } | unknown[] | undefined;
-        const items = Array.isArray(result)
-          ? result
-          : Array.isArray(result?.items)
-            ? result.items
-            : [];
+        // Gateway returns { payload: { jobs: [...] } } or { result: { items: [...] } }
+        const payload = (data.payload ?? data.result) as { jobs?: unknown[]; items?: unknown[] } | unknown[] | undefined;
+        const items = Array.isArray(payload)
+          ? payload
+          : Array.isArray(payload?.jobs)
+            ? payload.jobs
+            : Array.isArray(payload?.items)
+              ? payload.items
+              : [];
 
         let earliest: number | null = null;
         const nowMs = Date.now();
