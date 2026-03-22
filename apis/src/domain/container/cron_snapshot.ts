@@ -6,7 +6,10 @@ import {
   GATEWAY_CLIENT_ROLE,
   GATEWAY_CLIENT_SCOPES,
 } from "../gateway/gateway_constants.js";
-import { setAssistantRuntimeMetadataKey } from "../common/db/runtimeRepository.js";
+import {
+  setAssistantRuntimeMetadataKey,
+  deleteAssistantRuntimeMetadataKey,
+} from "../common/db/runtimeRepository.js";
 
 // ---------------------------------------------------------------------------
 // Gateway RPC: fetch cron schedules and persist earliest next-run time
@@ -123,6 +126,7 @@ export async function fetchEarliestCronNextRunMs(
 
 /**
  * Snapshot the earliest cron next-run time into `runtime_instances.metadata`.
+ * Clears the key when no upcoming cron jobs exist to prevent stale wakes.
  * Fire-and-forget safe — callers should catch errors.
  */
 export async function snapshotCronNextRun(
@@ -133,5 +137,7 @@ export async function snapshotCronNextRun(
   const nextMs = await fetchEarliestCronNextRunMs(target, gatewayToken);
   if (nextMs != null) {
     await setAssistantRuntimeMetadataKey(assistantId, "cronNextRunMs", nextMs);
+  } else {
+    await deleteAssistantRuntimeMetadataKey(assistantId, "cronNextRunMs");
   }
 }

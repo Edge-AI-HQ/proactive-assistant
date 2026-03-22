@@ -127,6 +127,7 @@ export interface IdleAssistantRow {
 export const findIdleRunningAssistants = async (
   idleThresholdMs: number,
 ): Promise<IdleAssistantRow[]> => {
+  await withSchema();
   const result = await pool.query<IdleAssistantRow>(
     `
       SELECT
@@ -169,21 +170,32 @@ export const findSuspendedWithUpcomingCron = async (
   nowMs: number,
   lookaheadMs: number,
 ): Promise<SuspendedCronRow[]> => {
+  await withSchema();
   const result = await pool.query<SuspendedCronRow>(
     `
+      WITH cron_candidates AS (
+        SELECT
+          r.assistant_id,
+          a.assistant_bot_id,
+          r.container_name,
+          COALESCE(r.runtime_ref, '') as container_id,
+          r.metadata->>'cronNextRunMs' as raw_cron_ms
+        FROM runtime_instances r
+        JOIN assistants a ON a.id = r.assistant_id
+        WHERE r.scope = 'assistant'
+          AND r.status = 'suspended'
+          AND r.metadata ? 'cronNextRunMs'
+          AND (r.metadata->>'cronNextRunMs') ~ '^[0-9]+$'
+      )
       SELECT
-        r.assistant_id,
-        a.assistant_bot_id,
-        r.container_name,
-        COALESCE(r.runtime_ref, '') as container_id,
-        (r.metadata->>'cronNextRunMs')::bigint as cron_next_run_ms
-      FROM runtime_instances r
-      JOIN assistants a ON a.id = r.assistant_id
-      WHERE r.scope = 'assistant'
-        AND r.status = 'suspended'
-        AND r.metadata ? 'cronNextRunMs'
-        AND (r.metadata->>'cronNextRunMs')::bigint > $1
-        AND (r.metadata->>'cronNextRunMs')::bigint <= $2
+        assistant_id,
+        assistant_bot_id,
+        container_name,
+        container_id,
+        raw_cron_ms::bigint as cron_next_run_ms
+      FROM cron_candidates
+      WHERE raw_cron_ms::bigint > $1
+        AND raw_cron_ms::bigint <= $2
     `,
     [nowMs, nowMs + lookaheadMs],
   );
