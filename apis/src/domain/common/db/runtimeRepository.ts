@@ -116,6 +116,8 @@ export interface IdleAssistantRow {
   assistant_bot_id: number;
   container_name: string;
   container_id: string;
+  host_port: number;
+  gateway_token: string;
 }
 
 /**
@@ -125,21 +127,83 @@ export interface IdleAssistantRow {
 export const findIdleRunningAssistants = async (
   idleThresholdMs: number,
 ): Promise<IdleAssistantRow[]> => {
+  await withSchema();
   const result = await pool.query<IdleAssistantRow>(
     `
       SELECT
         r.assistant_id,
         a.assistant_bot_id,
         r.container_name,
-        COALESCE(r.runtime_ref, '') as container_id
+        COALESCE(r.runtime_ref, '') as container_id,
+        COALESCE(r.host_port, 0) as host_port,
+        COALESCE(u.gateway_token, '') as gateway_token
       FROM runtime_instances r
       JOIN assistants a ON a.id = r.assistant_id
+      LEFT JOIN users u ON u.id = a.owner_user_id
       WHERE r.scope = 'assistant'
         AND r.status = 'running'
         AND r.last_active_at IS NOT NULL
         AND r.last_active_at < NOW() - make_interval(secs => $1::double precision / 1000)
     `,
     [idleThresholdMs],
+  );
+  return result.rows;
+};
+
+// ---------------------------------------------------------------------------
+// Wake-on-cron: find suspended assistants with upcoming cron jobs
+// ---------------------------------------------------------------------------
+
+export interface SuspendedCronRow {
+  assistant_id: number;
+  assistant_bot_id: number;
+  container_name: string;
+  container_id: string;
+  cron_next_run_ms: number;
+}
+
+/**
+ * Find suspended assistant containers whose cached `cronNextRunMs` is
+ * either past-due (up to maxStaleMs) or within the look-ahead window.
+ *
+ * Range: (nowMs - maxStaleMs, nowMs + lookaheadMs]
+ *
+ * The staleness cap prevents permanently suspended containers (e.g. user
+ * manually stopped) from being woken every scan cycle forever.
+ */
+export const findSuspendedWithUpcomingCron = async (
+  nowMs: number,
+  lookaheadMs: number,
+  maxStaleMs: number = 3_600_000, // default 1 hour
+): Promise<SuspendedCronRow[]> => {
+  await withSchema();
+  const result = await pool.query<SuspendedCronRow>(
+    `
+      WITH cron_candidates AS (
+        SELECT
+          r.assistant_id,
+          a.assistant_bot_id,
+          r.container_name,
+          COALESCE(r.runtime_ref, '') as container_id,
+          r.metadata->>'cronNextRunMs' as raw_cron_ms
+        FROM runtime_instances r
+        JOIN assistants a ON a.id = r.assistant_id
+        WHERE r.scope = 'assistant'
+          AND r.status = 'suspended'
+          AND r.metadata ? 'cronNextRunMs'
+          AND (r.metadata->>'cronNextRunMs') ~ '^[0-9]+$'
+      )
+      SELECT
+        assistant_id,
+        assistant_bot_id,
+        container_name,
+        container_id,
+        raw_cron_ms::bigint as cron_next_run_ms
+      FROM cron_candidates
+      WHERE raw_cron_ms::bigint > $1
+        AND raw_cron_ms::bigint <= $2
+    `,
+    [nowMs - maxStaleMs, nowMs + lookaheadMs],
   );
   return result.rows;
 };
