@@ -116,6 +116,8 @@ export interface IdleAssistantRow {
   assistant_bot_id: number;
   container_name: string;
   container_id: string;
+  host_port: number;
+  gateway_token: string;
 }
 
 /**
@@ -131,15 +133,59 @@ export const findIdleRunningAssistants = async (
         r.assistant_id,
         a.assistant_bot_id,
         r.container_name,
-        COALESCE(r.runtime_ref, '') as container_id
+        COALESCE(r.runtime_ref, '') as container_id,
+        COALESCE(r.host_port, 0) as host_port,
+        COALESCE(u.gateway_token, '') as gateway_token
       FROM runtime_instances r
       JOIN assistants a ON a.id = r.assistant_id
+      LEFT JOIN users u ON u.id = a.owner_user_id
       WHERE r.scope = 'assistant'
         AND r.status = 'running'
         AND r.last_active_at IS NOT NULL
         AND r.last_active_at < NOW() - make_interval(secs => $1::double precision / 1000)
     `,
     [idleThresholdMs],
+  );
+  return result.rows;
+};
+
+// ---------------------------------------------------------------------------
+// Wake-on-cron: find suspended assistants with upcoming cron jobs
+// ---------------------------------------------------------------------------
+
+export interface SuspendedCronRow {
+  assistant_id: number;
+  assistant_bot_id: number;
+  container_name: string;
+  container_id: string;
+  cron_next_run_ms: number;
+}
+
+/**
+ * Find suspended assistant containers whose cached `cronNextRunMs` falls
+ * within the look-ahead window (nowMs, nowMs + lookaheadMs].
+ */
+export const findSuspendedWithUpcomingCron = async (
+  nowMs: number,
+  lookaheadMs: number,
+): Promise<SuspendedCronRow[]> => {
+  const result = await pool.query<SuspendedCronRow>(
+    `
+      SELECT
+        r.assistant_id,
+        a.assistant_bot_id,
+        r.container_name,
+        COALESCE(r.runtime_ref, '') as container_id,
+        (r.metadata->>'cronNextRunMs')::bigint as cron_next_run_ms
+      FROM runtime_instances r
+      JOIN assistants a ON a.id = r.assistant_id
+      WHERE r.scope = 'assistant'
+        AND r.status = 'suspended'
+        AND r.metadata ? 'cronNextRunMs'
+        AND (r.metadata->>'cronNextRunMs')::bigint > $1
+        AND (r.metadata->>'cronNextRunMs')::bigint <= $2
+    `,
+    [nowMs, nowMs + lookaheadMs],
   );
   return result.rows;
 };

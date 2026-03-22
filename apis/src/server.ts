@@ -3,7 +3,7 @@ import cookieParser from "cookie-parser";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { prepareContainerRuntime } from "./domain/container/index.js";
-import { configureIdleSuspendMs, scanAndSuspendIdle, getIdleSuspendMs } from "./domain/container/idle_suspend.js";
+import { configureIdleSuspendMs, scanIdleAndCron, getIdleSuspendMs } from "./domain/container/idle_suspend.js";
 import { syncContainerStates } from "./domain/container/syncContainerStates.js";
 import { config, validateConfig } from "./domain/common/config.js";
 import {
@@ -95,19 +95,19 @@ setInterval(
   5 * 60 * 1000,
 );
 
-// Idle-suspend scan: runs at half the idle threshold (so worst-case overshoot ≈ 1 scan interval).
-// Min 10s to avoid hammering DB; capped at 60s for responsiveness.
+// Combined idle-suspend + wake-on-cron scan.
+// Fixed 30s interval ensures cron jobs are woken with ≥30s lead time (60s look-ahead window).
 if (getIdleSuspendMs() > 0) {
-  const scanIntervalMs = Math.max(10_000, Math.min(60_000, Math.floor(getIdleSuspendMs() / 2)));
+  const scanIntervalMs = 30_000;
   setInterval(
     () => {
-      void scanAndSuspendIdle().catch((error: unknown) => {
-        console.error("Failed to scan idle containers", error);
+      void scanIdleAndCron().catch((error: unknown) => {
+        console.error("Failed to run idle/cron scan", error);
       });
     },
     scanIntervalMs,
   );
-  console.log(`[idle-suspend] Scan interval: ${scanIntervalMs}ms`);
+  console.log(`[idle-suspend] Scan interval: ${scanIntervalMs}ms (idle + cron wake)`);
 }
 
 const server = app.listen(config.port, () => {

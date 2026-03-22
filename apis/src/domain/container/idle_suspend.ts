@@ -1,9 +1,11 @@
 import {
   touchAssistantLastActiveAt,
   findIdleRunningAssistants,
+  findSuspendedWithUpcomingCron,
 } from "../common/db/runtimeRepository.js";
 import { pool } from "../common/db/core.js";
 import { getOrchestrator } from "./service.js";
+import { snapshotCronNextRun } from "./cron_snapshot.js";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -16,6 +18,9 @@ export const configureIdleSuspendMs = (ms: number): void => {
 };
 
 export const getIdleSuspendMs = (): number => idleSuspendMs;
+
+/** Look-ahead window for wake-on-cron (ms). */
+const CRON_WAKE_LOOKAHEAD_MS = 60_000;
 
 // ---------------------------------------------------------------------------
 // Activity recording (DB-based, multi-instance safe)
@@ -36,17 +41,21 @@ export const recordAssistantActivity = (assistantId: number): void => {
 };
 
 // ---------------------------------------------------------------------------
-// Periodic idle scan (cluster-safe via PostgreSQL advisory lock)
+// Combined periodic scan: wake-on-cron + idle-suspend
+// (cluster-safe via PostgreSQL advisory lock)
 // ---------------------------------------------------------------------------
 
 const IDLE_SUSPEND_LOCK_KEY = 319_903;
 
 /**
- * Scan for running containers that have been idle beyond the threshold,
- * and suspend them. Uses pg_try_advisory_lock so only one API instance
- * runs the scan at a time — others skip silently.
+ * Combined scan that runs under a single advisory lock:
+ *   1. Wake suspended containers whose cron jobs are about to fire
+ *   2. Suspend idle running containers (with pre-suspend cron snapshot)
+ *
+ * Order matters: wake first so we don't immediately re-suspend a container
+ * that should be waking up.
  */
-export async function scanAndSuspendIdle(): Promise<void> {
+export async function scanIdleAndCron(): Promise<void> {
   if (idleSuspendMs <= 0) return;
 
   const client = await pool.connect();
@@ -61,44 +70,127 @@ export async function scanAndSuspendIdle(): Promise<void> {
     }
 
     try {
-      const idleAssistants = await findIdleRunningAssistants(idleSuspendMs);
-      if (!idleAssistants.length) return;
+      // Phase 1: wake suspended containers with imminent cron jobs
+      const wokenIds = await doWakeForCron();
 
-      console.log(
-        `[idle-suspend] Found ${idleAssistants.length} idle assistant(s), suspending...`,
-      );
-
-      const orchestrator = getOrchestrator();
-
-      for (const row of idleAssistants) {
-        try {
-          const { suspended } = await orchestrator.suspendAssistantContainer({
-            id: row.assistant_id,
-            assistant_bot_id: row.assistant_bot_id,
-            container_name: row.container_name,
-            container_id: row.container_id,
-          });
-
-          if (suspended) {
-            console.log(
-              `[idle-suspend] Suspended container for assistant ${row.assistant_id}`,
-            );
-          }
-        } catch (error) {
-          console.error(
-            `[idle-suspend] Failed to suspend assistant ${row.assistant_id}`,
-            error,
-          );
-        }
-      }
+      // Phase 2: suspend idle running containers (skip any just woken)
+      await doSuspendIdle(wokenIds);
     } finally {
       await client.query("SELECT pg_advisory_unlock($1)", [
         IDLE_SUSPEND_LOCK_KEY,
       ]);
     }
   } catch (error) {
-    console.error("[idle-suspend] Idle scan failed", error);
+    console.error("[scan] Combined idle/cron scan failed", error);
   } finally {
     client.release();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1: Wake-on-cron
+// ---------------------------------------------------------------------------
+
+async function doWakeForCron(): Promise<Set<number>> {
+  const wokenIds = new Set<number>();
+
+  try {
+    const rows = await findSuspendedWithUpcomingCron(
+      Date.now(),
+      CRON_WAKE_LOOKAHEAD_MS,
+    );
+    if (!rows.length) return wokenIds;
+
+    const orchestrator = getOrchestrator();
+
+    for (const row of rows) {
+      try {
+        const leadMs = row.cron_next_run_ms - Date.now();
+        console.log(
+          `[wake-on-cron] Waking assistant ${row.assistant_id} — cron due in ${leadMs}ms`,
+        );
+
+        const { resumed } = await orchestrator.resumeAssistantContainer({
+          id: row.assistant_id,
+          assistant_bot_id: row.assistant_bot_id,
+          container_name: row.container_name,
+          container_id: row.container_id,
+        });
+
+        if (resumed) {
+          // Reset idle timer so we don't immediately re-suspend
+          recordAssistantActivity(row.assistant_id);
+          wokenIds.add(row.assistant_id);
+          console.log(
+            `[wake-on-cron] Resumed assistant ${row.assistant_id} for upcoming cron job`,
+          );
+        }
+      } catch (error) {
+        console.error(
+          `[wake-on-cron] Failed to wake assistant ${row.assistant_id}`,
+          error,
+        );
+      }
+    }
+  } catch (error) {
+    console.error("[wake-on-cron] Cron wake scan failed", error);
+  }
+
+  return wokenIds;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: Idle suspend (with pre-suspend cron snapshot)
+// ---------------------------------------------------------------------------
+
+async function doSuspendIdle(skipIds: Set<number>): Promise<void> {
+  const idleAssistants = await findIdleRunningAssistants(idleSuspendMs);
+  if (!idleAssistants.length) return;
+
+  console.log(
+    `[idle-suspend] Found ${idleAssistants.length} idle assistant(s), suspending...`,
+  );
+
+  const orchestrator = getOrchestrator();
+
+  for (const row of idleAssistants) {
+    if (skipIds.has(row.assistant_id)) continue;
+
+    try {
+      // Pre-suspend: snapshot cron schedule so wake-on-cron knows when to resume
+      if (row.gateway_token) {
+        try {
+          const target = orchestrator.resolveGatewayTargetForAssistant({
+            assistant_bot_id: row.assistant_bot_id,
+            container_id: row.container_id,
+            container_port: row.host_port,
+          });
+          await snapshotCronNextRun(row.assistant_id, target, row.gateway_token);
+        } catch (err) {
+          console.warn(
+            `[idle-suspend] Failed to snapshot cron for assistant ${row.assistant_id} (non-fatal)`,
+            err,
+          );
+        }
+      }
+
+      const { suspended } = await orchestrator.suspendAssistantContainer({
+        id: row.assistant_id,
+        assistant_bot_id: row.assistant_bot_id,
+        container_name: row.container_name,
+        container_id: row.container_id,
+      });
+
+      if (suspended) {
+        console.log(
+          `[idle-suspend] Suspended container for assistant ${row.assistant_id}`,
+        );
+      }
+    } catch (error) {
+      console.error(
+        `[idle-suspend] Failed to suspend assistant ${row.assistant_id}`,
+        error,
+      );
+    }
   }
 }
