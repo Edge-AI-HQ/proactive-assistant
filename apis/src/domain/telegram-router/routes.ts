@@ -5,8 +5,9 @@ import { isGuideBotCommandText } from "./guideCommands.js";
 import { getAssistantById } from "../common/db/index.js";
 import { hasActiveSubscriptionForService } from "../payment/subscriptionGuard.js";
 import { ensureGatewayAssistantReady } from "../gateway/assistant_warmup.js";
-import { resumeAssistantContainer } from "../container/index.js";
+import { resumeAssistantContainer, resolveGatewayTargetForAssistant } from "../container/index.js";
 import { recordAssistantActivity } from "../container/idle_suspend.js";
+import { waitForGatewayHello } from "../container/providers/shared/gateway_probe.js";
 import { deriveAssistantWebhookSecret } from "../container/providers/shared/telegram_runtime_secret.js";
 import {
   setLogContextTelegramIdentity,
@@ -215,8 +216,37 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
         });
         if (resumed) {
           console.log(
-            `[suspend-resume] Container resumed for assistant ${userState.assistantId} in ${durationMs}ms`,
+            `[suspend-resume] Container resumed for assistant ${userState.assistantId} in ${durationMs}ms, probing readiness...`,
           );
+
+          // Probe gateway readiness before forwarding — Fly resume is fast but OpenClaw
+          // needs a moment to accept WebSocket/webhook connections.
+          const gatewayTarget = resolveGatewayTargetForAssistant({
+            assistant_bot_id: Number(userState.container.assistant_bot_id) || userState.assistantId,
+            container_id: userState.container.container_id,
+            container_port: userState.container.host_port ?? 0,
+          });
+          const ready = await waitForGatewayHello(
+            gatewayTarget.host,
+            gatewayTarget.port,
+            userState.container.gateway_token,
+            15_000, // 15s timeout — Fly resume typically <1s, leave margin
+            gatewayTarget.hostOverride,
+          );
+
+          if (!ready) {
+            console.warn(
+              `[suspend-resume] Gateway not ready after resume for assistant ${userState.assistantId}`,
+            );
+            await sendFallbackMessageBySource(
+              source,
+              chatId,
+              "Your assistant is waking up from sleep — please try again in a few seconds.",
+            );
+            res.status(200).json({ ok: true, forwarded: false, resumedFromSuspend: true });
+            return;
+          }
+
           recordAssistantActivity(userState.assistantId);
           const forwarded = await forwardToOpenClaw(userState.container, update, source);
           res.status(200).json({ ok: true, forwarded, resumedFromSuspend: true, resumeDurationMs: durationMs });

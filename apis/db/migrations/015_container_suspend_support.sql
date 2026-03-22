@@ -13,7 +13,10 @@ ALTER TABLE runtime_instances
 ALTER TABLE runtime_instances
   ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMPTZ;
 
--- 3. Index for periodic idle scan: find running containers with stale last_active_at
+-- 3. Backfill existing rows so they are eligible for idle-suspend from now
+UPDATE runtime_instances SET last_active_at = NOW() WHERE last_active_at IS NULL;
+
+-- 4. Index for periodic idle scan: find running containers with stale last_active_at
 CREATE INDEX IF NOT EXISTS idx_runtime_instances_idle_scan
   ON runtime_instances(status, last_active_at)
   WHERE status = 'running' AND last_active_at IS NOT NULL;
