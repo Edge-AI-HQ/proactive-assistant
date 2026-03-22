@@ -106,8 +106,9 @@ async function doWakeForCron(): Promise<Set<number>> {
     for (const row of rows) {
       try {
         const leadMs = row.cron_next_run_ms - Date.now();
+        const label = leadMs > 0 ? `due in ${leadMs}ms` : `past-due by ${-leadMs}ms`;
         console.log(
-          `[wake-on-cron] Waking assistant ${row.assistant_id} — cron due in ${leadMs}ms`,
+          `[wake-on-cron] Waking assistant ${row.assistant_id} — cron ${label}`,
         );
 
         const { resumed } = await orchestrator.resumeAssistantContainer({
