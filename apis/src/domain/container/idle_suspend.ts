@@ -2,6 +2,7 @@ import {
   touchAssistantLastActiveAt,
   findIdleRunningAssistants,
   findSuspendedWithUpcomingCron,
+  deleteAssistantRuntimeMetadataKey,
 } from "../common/db/runtimeRepository.js";
 import { pool } from "../common/db/core.js";
 import { getOrchestrator } from "./service.js";
@@ -119,8 +120,15 @@ async function doWakeForCron(): Promise<Set<number>> {
         });
 
         if (resumed) {
-          // Reset idle timer so we don't immediately re-suspend
-          recordAssistantActivity(row.assistant_id);
+          // Clear stale cronNextRunMs — container will get a fresh snapshot
+          // on next suspend. This prevents re-wake loops if resume succeeded
+          // but DB status update lagged.
+          await deleteAssistantRuntimeMetadataKey(row.assistant_id, "cronNextRunMs");
+
+          // Must await — fire-and-forget risks stale last_active_at causing
+          // immediate re-suspend on the next scan cycle (30s later).
+          await touchAssistantLastActiveAt(row.assistant_id);
+
           wokenIds.add(row.assistant_id);
           console.log(
             `[wake-on-cron] Resumed assistant ${row.assistant_id} for upcoming cron job`,

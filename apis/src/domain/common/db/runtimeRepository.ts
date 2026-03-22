@@ -164,15 +164,17 @@ export interface SuspendedCronRow {
 
 /**
  * Find suspended assistant containers whose cached `cronNextRunMs` is
- * either past-due or falls within the look-ahead window (<= nowMs + lookaheadMs).
+ * either past-due (up to maxStaleMs) or within the look-ahead window.
  *
- * Past-due crons must also trigger a wake because:
- *   - Recurring cron jobs (e.g. every 2 min) will keep missing if not woken
- *   - The snapshot is a point-in-time value that goes stale while suspended
+ * Range: (nowMs - maxStaleMs, nowMs + lookaheadMs]
+ *
+ * The staleness cap prevents permanently suspended containers (e.g. user
+ * manually stopped) from being woken every scan cycle forever.
  */
 export const findSuspendedWithUpcomingCron = async (
   nowMs: number,
   lookaheadMs: number,
+  maxStaleMs: number = 3_600_000, // default 1 hour
 ): Promise<SuspendedCronRow[]> => {
   await withSchema();
   const result = await pool.query<SuspendedCronRow>(
@@ -198,9 +200,10 @@ export const findSuspendedWithUpcomingCron = async (
         container_id,
         raw_cron_ms::bigint as cron_next_run_ms
       FROM cron_candidates
-      WHERE raw_cron_ms::bigint <= $1
+      WHERE raw_cron_ms::bigint > $1
+        AND raw_cron_ms::bigint <= $2
     `,
-    [nowMs + lookaheadMs],
+    [nowMs - maxStaleMs, nowMs + lookaheadMs],
   );
   return result.rows;
 };
