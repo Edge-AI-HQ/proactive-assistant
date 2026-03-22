@@ -169,6 +169,13 @@ export const stopMachine = async (machineId: string): Promise<void> => {
   );
 };
 
+export const suspendMachine = async (machineId: string): Promise<void> => {
+  await flyRequest<unknown>(
+    "POST",
+    `${appPath()}/machines/${encodeURIComponent(machineId)}/suspend`,
+  );
+};
+
 export const destroyMachine = async (machineId: string): Promise<void> => {
   await flyRequest<unknown>(
     "DELETE",

@@ -61,6 +61,18 @@ export const stopAssistantContainer = async (
   return getOrchestrator().stopAssistantContainer(assistant);
 };
 
+export const suspendAssistantContainer = async (
+  assistant: AssistantContainerDestroyRef,
+): Promise<{ suspended: boolean }> => {
+  return getOrchestrator().suspendAssistantContainer(assistant);
+};
+
+export const resumeAssistantContainer = async (
+  assistant: AssistantContainerDestroyRef,
+): Promise<{ resumed: boolean; durationMs: number }> => {
+  return getOrchestrator().resumeAssistantContainer(assistant);
+};
+
 export const resolveGatewayTargetForAssistant = (
   assistant: AssistantContainerGatewayRef,
 ): GatewayTarget => {

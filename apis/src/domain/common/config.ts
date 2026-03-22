@@ -153,7 +153,8 @@ export const config: Config = {
     portStart: toInt(process.env.CONTAINER_PORT_START, 20000),
     portEnd: toInt(process.env.CONTAINER_PORT_END, 22000),
     memoryMb: toInt(process.env.CONTAINER_MEMORY_MB, 2048),
-    cpuShares: toInt(process.env.CONTAINER_CPU_SHARES, 512)
+    cpuShares: toInt(process.env.CONTAINER_CPU_SHARES, 512),
+    idleSuspendMs: toInt(process.env.CONTAINER_IDLE_SUSPEND_MS, 30000),
   },
   telegramRouter: {
     webhookUrl: toTrimmed(

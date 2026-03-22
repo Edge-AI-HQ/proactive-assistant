@@ -88,6 +88,62 @@ export const deleteAssistantRuntimeMetadataKey = async (
   return (result.rowCount ?? 0) > 0;
 };
 
+// ---------------------------------------------------------------------------
+// Idle-suspend: last_active_at tracking + idle scan
+// ---------------------------------------------------------------------------
+
+/**
+ * Touch last_active_at for an assistant's runtime instance.
+ * Called on every outbound Telegram API proxy response.
+ * Fire-and-forget safe — failures are logged but not thrown.
+ */
+export const touchAssistantLastActiveAt = async (
+  assistantId: number,
+): Promise<void> => {
+  await pool.query(
+    `
+      UPDATE runtime_instances
+      SET last_active_at = NOW()
+      WHERE assistant_id = $1
+        AND scope = 'assistant'
+    `,
+    [assistantId],
+  );
+};
+
+export interface IdleAssistantRow {
+  assistant_id: number;
+  assistant_bot_id: number;
+  container_name: string;
+  container_id: string;
+}
+
+/**
+ * Find running assistant containers that have been idle longer than the given threshold.
+ * Returns rows suitable for passing to the orchestrator's suspendAssistantContainer.
+ */
+export const findIdleRunningAssistants = async (
+  idleThresholdMs: number,
+): Promise<IdleAssistantRow[]> => {
+  const result = await pool.query<IdleAssistantRow>(
+    `
+      SELECT
+        r.assistant_id,
+        a.assistant_bot_id,
+        r.container_name,
+        COALESCE(r.runtime_ref, '') as container_id
+      FROM runtime_instances r
+      JOIN assistants a ON a.id = r.assistant_id
+      WHERE r.scope = 'assistant'
+        AND r.status = 'running'
+        AND r.last_active_at IS NOT NULL
+        AND r.last_active_at < NOW() - make_interval(secs => $1::double precision / 1000)
+    `,
+    [idleThresholdMs],
+  );
+  return result.rows;
+};
+
 export const setAssistantRuntimeMetadataKeyIfAbsent = async (
   assistantId: number,
   key: string,

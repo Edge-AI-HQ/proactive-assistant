@@ -16,6 +16,7 @@ import {
   listMachines,
   startMachine,
   stopMachine,
+  suspendMachine,
 } from "./fly_client.js";
 import {
   formatHostForUrl,
@@ -87,6 +88,7 @@ const normalizeMachineState = (machine: FlyMachine): ContainerState => {
   const state = (machine.state || "").toLowerCase();
   if (state === "started" || state === "running") return "running";
   if (state === "stopped") return "stopped";
+  if (state === "suspended" || state === "suspending") return "suspended";
   if (state === "created" || state === "starting") return "creating";
   if (state === "destroyed") return "missing";
   return (state || "unknown") as ContainerState;
@@ -279,6 +281,18 @@ export const flyContainerRuntime: ContainerRuntime = {
     }
     try {
       await stopMachine(parsed.machineId);
+    } catch (error: unknown) {
+      if (!isNotFoundError(error)) throw error;
+    }
+  },
+
+  async suspendContainer(containerId: string): Promise<void> {
+    const parsed = parseFlyContainerRef(containerId);
+    if (!parsed?.machineId) {
+      throw new Error(`Invalid Fly container ref: ${containerId}`);
+    }
+    try {
+      await suspendMachine(parsed.machineId);
     } catch (error: unknown) {
       if (!isNotFoundError(error)) throw error;
     }

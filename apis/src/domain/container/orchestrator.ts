@@ -173,6 +173,97 @@ export class ContainerOrchestrator {
   }
 
   // -----------------------------------------------------------------------
+  // Public: suspendAssistantContainer
+  // -----------------------------------------------------------------------
+
+  async suspendAssistantContainer(
+    assistant: AssistantContainerDestroyRef,
+  ): Promise<{ suspended: boolean }> {
+    const botIdForContainer = assistant.assistant_bot_id ?? assistant.id;
+    const fallbackName =
+      assistant.container_name?.trim() ||
+      containerNameForAssistant(botIdForContainer);
+    const fallbackNames = [
+      fallbackName,
+      containerNameForAssistant(botIdForContainer),
+    ];
+
+    const container = await this.runtime.findContainer(
+      assistant.container_id,
+      fallbackNames,
+    );
+
+    if (!container) {
+      return { suspended: false };
+    }
+
+    if (container.state !== "running") {
+      return { suspended: false };
+    }
+
+    console.log(
+      `[container] Suspending container for assistant ${assistant.id} (state=${container.state})`,
+    );
+
+    await this.runtime.suspendContainer(container.id);
+
+    await this.store.updateAssistant(assistant.id, {
+      container_status: "suspended",
+    });
+
+    console.log(
+      `[container] Container suspended for assistant ${assistant.id}`,
+    );
+
+    return { suspended: true };
+  }
+
+  // -----------------------------------------------------------------------
+  // Public: resumeAssistantContainer (from suspended state)
+  // -----------------------------------------------------------------------
+
+  async resumeAssistantContainer(
+    assistant: AssistantContainerDestroyRef,
+  ): Promise<{ resumed: boolean; durationMs: number }> {
+    const startTime = Date.now();
+    const botIdForContainer = assistant.assistant_bot_id ?? assistant.id;
+    const fallbackName =
+      assistant.container_name?.trim() ||
+      containerNameForAssistant(botIdForContainer);
+    const fallbackNames = [
+      fallbackName,
+      containerNameForAssistant(botIdForContainer),
+    ];
+
+    const container = await this.runtime.findContainer(
+      assistant.container_id,
+      fallbackNames,
+    );
+
+    if (!container) {
+      return { resumed: false, durationMs: Date.now() - startTime };
+    }
+
+    console.log(
+      `[container] Resuming container for assistant ${assistant.id} (state=${container.state})`,
+    );
+
+    // startContainer handles both suspended (Fly: start from snapshot, Docker: unpause) and stopped
+    await this.runtime.startContainer(container.id);
+
+    await this.store.updateAssistant(assistant.id, {
+      container_status: "running",
+    });
+
+    const durationMs = Date.now() - startTime;
+    console.log(
+      `[container] Container resumed for assistant ${assistant.id} in ${durationMs}ms`,
+    );
+
+    return { resumed: true, durationMs };
+  }
+
+  // -----------------------------------------------------------------------
   // Public: resolveGatewayTargetForAssistant
   // -----------------------------------------------------------------------
 
