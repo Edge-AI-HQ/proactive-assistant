@@ -27,6 +27,7 @@ const buildConfig = (): ContainerManagerConfig => ({
     portEnd: 22000,
     memoryMb: 2048,
     cpuShares: 512,
+    idleSuspendMs: 30000,
   },
   fly: {
     apiBaseUrl: "https://api.machines.dev/v1",

@@ -444,6 +444,7 @@ const resolveDockerProbeTarget = (
 const normalizeDockerState = (status: string | undefined): ContainerState => {
   const s = (status || "").toLowerCase();
   if (s === "running") return "running";
+  if (s === "paused") return "suspended";
   if (s === "exited" || s === "dead") return "stopped";
   if (s === "created" || s === "restarting") return "creating";
   if (s === "removing") return "missing";
@@ -629,8 +630,11 @@ export const dockerContainerRuntime: ContainerRuntime = {
   async startContainer(containerId: string): Promise<ContainerRef> {
     const container = docker.getContainer(containerId);
     const inspect = await container.inspect();
+    const status = (inspect.State?.Status || "").toLowerCase();
 
-    if (inspect.State.Status !== "running") {
+    if (status === "paused") {
+      await container.unpause();
+    } else if (status !== "running") {
       try {
         await container.start();
       } catch (error: unknown) {
@@ -645,6 +649,20 @@ export const dockerContainerRuntime: ContainerRuntime = {
     const container = docker.getContainer(containerId);
     try {
       await container.stop();
+    } catch (error: unknown) {
+      if (
+        !isStatusCodeError(error) ||
+        (error.statusCode !== 304 && error.statusCode !== 404)
+      ) {
+        throw error;
+      }
+    }
+  },
+
+  async suspendContainer(containerId: string): Promise<void> {
+    const container = docker.getContainer(containerId);
+    try {
+      await container.pause();
     } catch (error: unknown) {
       if (
         !isStatusCodeError(error) ||

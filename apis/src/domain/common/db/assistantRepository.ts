@@ -223,10 +223,11 @@ export const createAssistant = async (
           container_name,
           runtime_ref,
           host_port,
-          status
+          status,
+          last_active_at
         ) VALUES (
           $1, $2, 'assistant', $3,
-          $4, $5, $6, $7
+          $4, $5, $6, $7, NOW()
         )
       `,
       [
@@ -316,10 +317,11 @@ export const updateAssistant = async (
             runtime_ref,
             host_port,
             status,
-            updated_at
+            updated_at,
+            last_active_at
           ) VALUES (
             $1, $2, 'assistant', $3,
-            $4, $5, $6, $7, $8::timestamptz
+            $4, $5, $6, $7, $8::timestamptz, NOW()
           )
           ON CONFLICT (assistant_id)
           WHERE assistant_id IS NOT NULL

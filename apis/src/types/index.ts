@@ -191,6 +191,8 @@ export interface ContainerConfig {
   portEnd: number;
   memoryMb: number;
   cpuShares: number;
+  /** Idle time in ms before auto-suspending a container. 0 = disabled. */
+  idleSuspendMs: number;
 }
 
 export interface FlyConfig {

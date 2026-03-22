@@ -89,6 +89,7 @@ export type AssistantContainerGatewayRef = Pick<
 export type ContainerState =
   | "running"
   | "stopped"
+  | "suspended"
   | "creating"
   | "missing"
   | "error"
@@ -155,6 +156,12 @@ export interface ContainerRuntime {
 
   /** Stop a running container. */
   stopContainer(containerId: string): Promise<void>;
+
+  /**
+   * Suspend a running container (Fly: Firecracker snapshot, Docker: SIGSTOP pause).
+   * Resume is fast — Fly ~hundreds of ms, Docker ~instant.
+   */
+  suspendContainer(containerId: string): Promise<void>;
 
   /** Destroy a container permanently. */
   destroyContainer(containerId: string): Promise<void>;

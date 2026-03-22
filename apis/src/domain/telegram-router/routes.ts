@@ -5,6 +5,9 @@ import { isGuideBotCommandText } from "./guideCommands.js";
 import { getAssistantById } from "../common/db/index.js";
 import { hasActiveSubscriptionForService } from "../payment/subscriptionGuard.js";
 import { ensureGatewayAssistantReady } from "../gateway/assistant_warmup.js";
+import { resumeAssistantContainer, resolveGatewayTargetForAssistant } from "../container/index.js";
+import { recordAssistantActivity } from "../container/idle_suspend.js";
+import { waitForGatewayHello } from "../container/providers/shared/gateway_probe.js";
 import { deriveAssistantWebhookSecret } from "../container/providers/shared/telegram_runtime_secret.js";
 import {
   setLogContextTelegramIdentity,
@@ -39,6 +42,7 @@ type UserState =
       runtimeStatus: string;
       container?: ContainerInfo;
     }
+  | { phase: "suspended"; assistantId: number; container: ContainerInfo }
   | { phase: "running"; assistantId: number; container: ContainerInfo };
 
 const BLOCKED_TG_METHODS = new Set([
@@ -199,6 +203,71 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
       return;
     }
 
+    if (userState.phase === "suspended") {
+      console.log(
+        `[suspend-resume] Container suspended for assistant ${userState.assistantId}, resuming...`,
+      );
+      try {
+        const { resumed, durationMs } = await resumeAssistantContainer({
+          id: userState.assistantId,
+          assistant_bot_id: Number(userState.container.assistant_bot_id) || userState.assistantId,
+          container_name: "",
+          container_id: userState.container.container_id,
+        });
+        if (resumed) {
+          console.log(
+            `[suspend-resume] Container resumed for assistant ${userState.assistantId} in ${durationMs}ms, probing readiness...`,
+          );
+
+          // Probe gateway readiness before forwarding — Fly resume is fast but OpenClaw
+          // needs a moment to accept WebSocket/webhook connections.
+          const gatewayTarget = resolveGatewayTargetForAssistant({
+            assistant_bot_id: Number(userState.container.assistant_bot_id) || userState.assistantId,
+            container_id: userState.container.container_id,
+            container_port: userState.container.host_port ?? 0,
+          });
+          const ready = await waitForGatewayHello(
+            gatewayTarget.host,
+            gatewayTarget.port,
+            userState.container.gateway_token,
+            15_000, // 15s timeout — Fly resume typically <1s, leave margin
+            gatewayTarget.hostOverride,
+          );
+
+          if (!ready) {
+            console.warn(
+              `[suspend-resume] Gateway not ready after resume for assistant ${userState.assistantId}`,
+            );
+            await sendFallbackMessageBySource(
+              source,
+              chatId,
+              "Your assistant is waking up from sleep — please try again in a few seconds.",
+            );
+            res.status(200).json({ ok: true, forwarded: false, resumedFromSuspend: true });
+            return;
+          }
+
+          recordAssistantActivity(userState.assistantId);
+          const forwarded = await forwardToOpenClaw(userState.container, update, source);
+          res.status(200).json({ ok: true, forwarded, resumedFromSuspend: true, resumeDurationMs: durationMs });
+          return;
+        }
+      } catch (error) {
+        console.error(
+          `[suspend-resume] Failed to resume container for assistant ${userState.assistantId}`,
+          error,
+        );
+      }
+      // Fall through to starting-up message if resume failed
+      await sendFallbackMessageBySource(
+        source,
+        chatId,
+        "Your assistant is waking up from sleep — please try again in a few seconds.",
+      );
+      res.status(200).json({ ok: true, forwarded: false });
+      return;
+    }
+
     if (userState.phase === "container_starting") {
       if (userState.container) {
         const forwarded = await forwardToOpenClaw(userState.container, update, source);
@@ -293,6 +362,13 @@ async function handleTelegramApiProxy(req: Request, res: Response): Promise<void
     }
 
     const response = await fetch(telegramUrl, requestInit);
+
+    // Record outbound activity for idle-suspend tracking.
+    // Timer starts after OpenClaw finishes replying, not when user sends a message.
+    const stateAssistantId = userState ? readAssistantIdFromState(userState) : undefined;
+    if (stateAssistantId !== undefined && response.ok) {
+      recordAssistantActivity(stateAssistantId);
+    }
 
     const result = new Uint8Array(await response.arrayBuffer());
     res.status(response.status);
@@ -460,6 +536,21 @@ async function findUserState(chatId: number): Promise<UserState> {
       return { phase: "no_subscription", assistantId: row.assistant_id };
     }
 
+    if (row.runtime_status === "suspended") {
+      return {
+        phase: "suspended",
+        assistantId: row.assistant_id,
+        container: {
+          assistant_id: row.assistant_id,
+          container_id: row.runtime_ref,
+          gateway_token: row.gateway_token,
+          assistant_bot_id: row.assistant_bot_id,
+          runtime_provider: row.runtime_provider,
+          host_port: row.host_port ?? null,
+        },
+      };
+    }
+
     if (row.runtime_status !== "running") {
       return {
         phase: "container_starting",
@@ -528,6 +619,7 @@ function getAbnormalAssistantId(state: UserState): number | null {
 function readAssistantIdFromState(state: UserState): number | undefined {
   if (state.phase === "no_subscription") return state.assistantId;
   if (state.phase === "container_starting") return state.assistantId;
+  if (state.phase === "suspended") return state.assistantId;
   if (state.phase === "running") return state.assistantId;
   return undefined;
 }

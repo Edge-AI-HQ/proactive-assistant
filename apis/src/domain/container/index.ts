@@ -4,7 +4,9 @@ export {
   ensureAssistantContainer,
   prepareContainerRuntime,
   resolveGatewayTargetForAssistant,
+  resumeAssistantContainer,
   stopAssistantContainer,
+  suspendAssistantContainer,
 } from "./service.js";
 export type {
   ContainerRuntime,

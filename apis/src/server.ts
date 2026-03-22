@@ -3,6 +3,7 @@ import cookieParser from "cookie-parser";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { prepareContainerRuntime } from "./domain/container/index.js";
+import { configureIdleSuspendMs, scanAndSuspendIdle, getIdleSuspendMs } from "./domain/container/idle_suspend.js";
 import { syncContainerStates } from "./domain/container/syncContainerStates.js";
 import { config, validateConfig } from "./domain/common/config.js";
 import {
@@ -36,6 +37,10 @@ ensureInfraRuntimeConfigured();
 materializeGoogleOAuthClientSecretFromEnv();
 
 await prepareContainerRuntime();
+if (config.container.idleSuspendMs > 0) {
+  configureIdleSuspendMs(config.container.idleSuspendMs);
+  console.log(`[idle-suspend] Auto-suspend enabled: ${config.container.idleSuspendMs}ms idle timeout`);
+}
 await validatePaymentPriceConsistencyOnStartup();
 
 const app = express();
@@ -89,6 +94,21 @@ setInterval(
   },
   5 * 60 * 1000,
 );
+
+// Idle-suspend scan: runs at half the idle threshold (so worst-case overshoot ≈ 1 scan interval).
+// Min 10s to avoid hammering DB; capped at 60s for responsiveness.
+if (getIdleSuspendMs() > 0) {
+  const scanIntervalMs = Math.max(10_000, Math.min(60_000, Math.floor(getIdleSuspendMs() / 2)));
+  setInterval(
+    () => {
+      void scanAndSuspendIdle().catch((error: unknown) => {
+        console.error("Failed to scan idle containers", error);
+      });
+    },
+    scanIntervalMs,
+  );
+  console.log(`[idle-suspend] Scan interval: ${scanIntervalMs}ms`);
+}
 
 const server = app.listen(config.port, () => {
   console.log(`PINClaw backend listening on :${config.port}`);
