@@ -215,6 +215,10 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
           container_id: userState.container.container_id,
         });
         if (resumed) {
+          // Touch last_active_at immediately so the idle scan doesn't
+          // re-suspend the container while we're probing readiness.
+          recordAssistantActivity(userState.assistantId);
+
           console.log(
             `[suspend-resume] Container resumed for assistant ${userState.assistantId} in ${durationMs}ms, probing readiness...`,
           );
@@ -247,7 +251,6 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
             return;
           }
 
-          recordAssistantActivity(userState.assistantId);
           const forwarded = await forwardToOpenClaw(userState.container, update, source);
           res.status(200).json({ ok: true, forwarded, resumedFromSuspend: true, resumeDurationMs: durationMs });
           return;
