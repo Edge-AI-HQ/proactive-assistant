@@ -371,6 +371,19 @@ async function handleTelegramApiProxy(req: Request, res: Response): Promise<void
     }
 
     const result = new Uint8Array(await response.arrayBuffer());
+
+    // Silently swallow "message is not modified" 400s from editMessageText.
+    // This happens at the end of streaming edits when the final content is identical
+    // to the previous edit — harmless but noisy.
+    if (
+      method.toLowerCase() === "editmessagetext" &&
+      response.status === 400 &&
+      Buffer.from(result).toString().includes("message is not modified")
+    ) {
+      res.status(200).json({ ok: true, result: true, description: "identical edit suppressed by router" });
+      return;
+    }
+
     res.status(response.status);
     res.setHeader("Content-Type", response.headers.get("content-type") || "application/json");
     res.send(Buffer.from(result));
