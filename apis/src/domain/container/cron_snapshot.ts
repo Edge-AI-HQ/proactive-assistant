@@ -139,7 +139,7 @@ export async function snapshotCronNextRun(
 ): Promise<void> {
   const nextMs = await fetchEarliestCronNextRunMs(target, gatewayToken);
   if (nextMs != null) {
-    await setAssistantRuntimeMetadataKey(assistantId, "cronNextRunMs", nextMs);
+    await setAssistantRuntimeMetadataKey(assistantId, "cronNextRunMs", Math.floor(nextMs));
   } else {
     await deleteAssistantRuntimeMetadataKey(assistantId, "cronNextRunMs");
   }

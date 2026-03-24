@@ -7,6 +7,7 @@ import { hasActiveSubscriptionForService } from "../payment/subscriptionGuard.js
 import { ensureGatewayAssistantReady } from "../gateway/assistant_warmup.js";
 import { resumeAssistantContainer, resolveGatewayTargetForAssistant } from "../container/index.js";
 import { recordAssistantActivity } from "../container/idle_suspend.js";
+import { touchAssistantLastActiveAt } from "../common/db/runtimeRepository.js";
 import { waitForGatewayHello } from "../container/providers/shared/gateway_probe.js";
 import { deriveAssistantWebhookSecret } from "../container/providers/shared/telegram_runtime_secret.js";
 import {
@@ -215,9 +216,9 @@ async function handleTelegramWebhook(req: Request, res: Response, source: Webhoo
           container_id: userState.container.container_id,
         });
         if (resumed) {
-          // Touch last_active_at immediately so the idle scan doesn't
-          // re-suspend the container while we're probing readiness.
-          recordAssistantActivity(userState.assistantId);
+          // Await last_active_at write so the idle scan doesn't re-suspend
+          // the container while we're probing readiness. Must not be fire-and-forget.
+          await touchAssistantLastActiveAt(userState.assistantId);
 
           console.log(
             `[suspend-resume] Container resumed for assistant ${userState.assistantId} in ${durationMs}ms, probing readiness...`,

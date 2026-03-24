@@ -60,6 +60,7 @@ export async function scanIdleAndCron(): Promise<void> {
   if (idleSuspendMs <= 0) return;
 
   const client = await pool.connect();
+  let destroyClient = false;
   try {
     const lockResult = await client.query<{ got_lock: boolean }>(
       "SELECT pg_try_advisory_lock($1) as got_lock",
@@ -77,14 +78,25 @@ export async function scanIdleAndCron(): Promise<void> {
       // Phase 2: suspend idle running containers (skip any just woken)
       await doSuspendIdle(wokenIds);
     } finally {
-      await client.query("SELECT pg_advisory_unlock($1)", [
-        IDLE_SUSPEND_LOCK_KEY,
-      ]);
+      try {
+        await client.query("SELECT pg_advisory_unlock($1)", [
+          IDLE_SUSPEND_LOCK_KEY,
+        ]);
+      } catch (unlockErr) {
+        // If unlock fails, the session-level lock is stuck on this connection.
+        // Destroy the connection instead of returning it to the pool, otherwise
+        // the leaked lock permanently blocks all future scans.
+        console.error(
+          "[scan] Failed to release advisory lock, destroying connection to prevent leak",
+          unlockErr,
+        );
+        destroyClient = true;
+      }
     }
   } catch (error) {
     console.error("[scan] Combined idle/cron scan failed", error);
   } finally {
-    client.release();
+    client.release(destroyClient);
   }
 }
 
