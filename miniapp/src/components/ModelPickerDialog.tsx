@@ -79,6 +79,7 @@ const MODEL_DISPLAY: Record<string, ModelDisplayInfo> = {
   "gemini-2.0-flash": { name: "Gemini 2.0 Flash", desc: "Google's fast model", icon: IconZap },
   "kimi-k2.5": { name: "Kimi K2.5", desc: "Moonshot's reasoning model", icon: IconGlobe },
   "kimi-k2": { name: "Kimi K2", desc: "Moonshot's versatile model", icon: IconGlobe },
+  "minimax-m2.7": { name: "MiniMax M2.7", desc: "MiniMax latest flagship model", icon: IconWand },
   "minimax-m2.5": { name: "MiniMax M2.5", desc: "MiniMax multimodal model", icon: IconWand },
   "minimax-m1": { name: "MiniMax M1", desc: "MiniMax general model", icon: IconWand },
   "deepseek-r1": { name: "DeepSeek R1", desc: "DeepSeek reasoning model", icon: IconBrain },
