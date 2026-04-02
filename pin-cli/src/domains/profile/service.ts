@@ -3,6 +3,7 @@ import type { ProfileRecord } from "./schema.js";
 
 import { PinDatabaseManager } from "../../db/database.js";
 import { errorEnvelope, okEnvelope } from "../../output/envelope.js";
+import { ErrorType } from "../../output/errors.js";
 import type { CliRuntimeInput, RunCliResult } from "../../runtime.js";
 
 const parseMetadata = (raw?: string): Record<string, unknown> | undefined => {
@@ -53,12 +54,14 @@ export const createProfile = async (
 
     if (message.includes("UNIQUE constraint failed")) {
       return {
-        exitCode: 5,
+        exitCode: 1,
         stdout: errorEnvelope(
           "profile",
           "create",
+          ErrorType.CONFLICT,
           "CONFLICT",
           `Profile ${input.id} already exists`,
+          "run `pin profile list` to see existing profiles",
         ),
       } satisfies RunCliResult;
     }
@@ -76,8 +79,8 @@ export const getProfile = async (
 
   if (!profile) {
     return {
-      exitCode: 4,
-      stdout: errorEnvelope("profile", "get", "NOT_FOUND", `Profile ${id} not found`),
+      exitCode: 1,
+      stdout: errorEnvelope("profile", "get", ErrorType.NOT_FOUND, "NOT_FOUND", `Profile ${id} not found`, "run `pin profile list` to see available profiles"),
     } satisfies RunCliResult;
   }
 
@@ -123,12 +126,14 @@ export const updateProfile = async (
 
   if (!profile) {
     return {
-      exitCode: 4,
+      exitCode: 1,
       stdout: errorEnvelope(
         "profile",
         "update",
+        ErrorType.NOT_FOUND,
         "NOT_FOUND",
         `Profile ${input.id} not found`,
+        "run `pin profile list` to see available profiles",
       ),
     } satisfies RunCliResult;
   }
@@ -148,12 +153,14 @@ export const deleteProfile = async (
 
   if (!deleted) {
     return {
-      exitCode: 4,
+      exitCode: 1,
       stdout: errorEnvelope(
         "profile",
         "delete",
+        ErrorType.NOT_FOUND,
         "NOT_FOUND",
         `Profile ${id} not found`,
+        "run `pin profile list` to see available profiles",
       ),
     } satisfies RunCliResult;
   }

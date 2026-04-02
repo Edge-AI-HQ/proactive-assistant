@@ -149,6 +149,10 @@ flyctl secrets list -a pinclaw-api-dev | rg "TELEGRAM_ROUTER_WEBHOOK_URL|TELEGRA
 - 每次提交聚焦一个变更点。
 - 提交前最少跑：`npm run type-check`。
 
+## PIN CLI (`pin-cli/`)
+
+**修改 `pin-cli/` 下任何文件前，必须先阅读 [`pin-cli/CODING.md`](pin-cli/CODING.md)。** 该文件包含输出层规范、数据库约定、命令注册模式、安全规范和测试要求。
+
 ## 规则单一真源
 - `AGENTS.md` 是 SSOT。
 - `.cursor/rules/agents.mdc` 应软链接到本文件。

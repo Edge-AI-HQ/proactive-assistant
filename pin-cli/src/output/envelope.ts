@@ -6,8 +6,15 @@ export interface PinEnvelopeMeta {
 }
 
 export interface PinErrorShape {
+  type: string;
   code: string;
   message: string;
+  hint?: string;
+}
+
+export interface PinNotice {
+  message: string;
+  hint?: string;
 }
 
 export interface PinEnvelope<T> {
@@ -15,6 +22,7 @@ export interface PinEnvelope<T> {
   data: T | null;
   meta: PinEnvelopeMeta;
   error: PinErrorShape | null;
+  _notice: Record<string, PinNotice> | null;
 }
 
 const nextRequestId = (): string =>
@@ -24,6 +32,7 @@ export const okEnvelope = <T>(
   domain: string,
   command: string,
   data: T,
+  notice?: Record<string, PinNotice>,
 ): PinEnvelope<T> => ({
   ok: true,
   data,
@@ -34,13 +43,16 @@ export const okEnvelope = <T>(
     timestamp: new Date().toISOString(),
   },
   error: null,
+  _notice: notice ?? null,
 });
 
 export const errorEnvelope = (
   domain: string,
   command: string,
+  type: string,
   code: string,
   message: string,
+  hint?: string,
 ): PinEnvelope<null> => ({
   ok: false,
   data: null,
@@ -51,7 +63,10 @@ export const errorEnvelope = (
     timestamp: new Date().toISOString(),
   },
   error: {
+    type,
     code,
     message,
+    ...(hint ? { hint } : {}),
   },
+  _notice: null,
 });

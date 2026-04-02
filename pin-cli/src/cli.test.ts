@@ -9,7 +9,8 @@ import type { PinEnvelope } from "./output/envelope.js";
 import type { RunCliResult } from "./runtime.js";
 
 interface SysDoctorData {
-  status: string;
+  checks: Array<{ name: string; status: string; message: string; hint?: string }>;
+  ok: boolean;
   dataRoot: string;
   paths: {
     pin: string;
@@ -40,9 +41,11 @@ test("runCli returns invalid argument for unknown domain", async () => {
   assert.equal(result.exitCode, 2);
   assert.equal(result.stdout.ok, false);
   assert.equal(result.stdout.error?.code, "INVALID_ARGUMENT");
+  assert.equal(result.stdout.error?.type, "validation");
+  assert.ok(result.stdout.error?.hint);
 });
 
-test("sys doctor reports database root and files", async () => {
+test("sys doctor reports checklist with database root", async () => {
   const result = await runCli(["sys", "doctor", "--json"], {
     env: { PIN_DATA_ROOT: "/tmp/pin-test-root" },
     homeDir: "/Users/test",
@@ -53,6 +56,37 @@ test("sys doctor reports database root and files", async () => {
   assert.equal(stdout.ok, true);
   assert.equal(stdout.data?.dataRoot, "/tmp/pin-test-root");
   assert.equal(stdout.data?.paths.pin.includes("pin.db"), true);
+  assert.ok(Array.isArray(stdout.data?.checks));
+  assert.ok(stdout.data?.checks.some((c) => c.name === "cli_version"));
+  assert.ok(stdout.data?.checks.some((c) => c.name === "data_root"));
+});
+
+test("sys schema lists all registered commands", async () => {
+  const result = await runCli(["sys", "schema", "--json"]);
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout.ok, true);
+  assert.equal(result.stdout.meta.domain, "sys");
+  assert.equal(result.stdout.meta.command, "schema");
+  const data = result.stdout.data as { commands: Array<{ path: string }> };
+  assert.ok(data.commands.length > 0);
+});
+
+test("sys schema returns command detail for known path", async () => {
+  const result = await runCli(["sys", "schema", "profile.get", "--json"]);
+
+  assert.equal(result.exitCode, 0);
+  const data = result.stdout.data as { domain: string; command: string; flags: unknown[] };
+  assert.equal(data.domain, "profile");
+  assert.equal(data.command, "get");
+  assert.ok(Array.isArray(data.flags));
+});
+
+test("sys schema returns not found for unknown path", async () => {
+  const result = await runCli(["sys", "schema", "unknown.cmd", "--json"]);
+
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout.error?.code, "NOT_FOUND");
 });
 
 test("profile commands support CRUD demo", async () => {
@@ -125,7 +159,8 @@ test("profile commands support CRUD demo", async () => {
       ["profile", "get", "--id", "default", "--json"],
       runtime,
     )) as RunCliResult & { stdout: PinEnvelope<ProfileRecord> };
-    assert.equal(afterDelete.exitCode, 4);
+    assert.equal(afterDelete.exitCode, 1);
+    assert.equal(afterDelete.stdout.error?.type, "not_found");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -158,10 +193,37 @@ test("profile create returns conflict when id already exists", async () => {
       runtime,
     );
 
-    assert.equal(duplicate.exitCode, 5);
+    assert.equal(duplicate.exitCode, 1);
     assert.equal(duplicate.stdout.ok, false);
     assert.equal(duplicate.stdout.error?.code, "CONFLICT");
+    assert.equal(duplicate.stdout.error?.type, "conflict");
+    assert.ok(duplicate.stdout.error?.hint);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("feedback commands return NOT_IMPLEMENTED with hints", async () => {
+  const result = await runCli(["feedback", "list", "--since", "7d", "--json"]);
+
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout.ok, false);
+  assert.equal(result.stdout.error?.type, "not_implemented");
+  assert.equal(result.stdout.error?.code, "NOT_IMPLEMENTED");
+  assert.equal(result.stdout.meta.domain, "feedback");
+});
+
+test("push commands return NOT_IMPLEMENTED with hints", async () => {
+  const result = await runCli(["push", "history", "--limit", "10", "--json"]);
+
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout.ok, false);
+  assert.equal(result.stdout.error?.type, "not_implemented");
+  assert.equal(result.stdout.error?.code, "NOT_IMPLEMENTED");
+  assert.equal(result.stdout.meta.domain, "push");
+});
+
+test("envelope includes _notice field (null when empty)", async () => {
+  const result = await runCli(["sys", "doctor", "--json"]);
+  assert.equal(result.stdout._notice, null);
 });

@@ -1,10 +1,18 @@
 #!/usr/bin/env node
 import { runCli } from "./cli.js";
+import { formatEnvelope, parseFormat } from "./output/format.js";
 
-const result = await runCli(process.argv.slice(2));
+const argv = process.argv.slice(2);
+
+const formatIdx = argv.indexOf("--format");
+const format = parseFormat(
+  formatIdx >= 0 ? argv[formatIdx + 1] : (argv.includes("--json") ? "json" : undefined),
+);
+
+const result = await runCli(argv);
 
 if (result.stdout) {
-  console.log(JSON.stringify(result.stdout, null, 2));
+  console.log(formatEnvelope(result.stdout, format));
 }
 
 process.exit(result.exitCode);
