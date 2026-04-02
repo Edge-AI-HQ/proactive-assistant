@@ -1,0 +1,320 @@
+/**
+ * Pipeline Orchestrator — runs the Planner -> Generator -> Evaluator loop.
+ *
+ * This is the core engine of the Proactive AI system. It:
+ * 1. Spawns a Planner agent to decide what cards to create
+ * 2. Spawns a Generator agent to create the cards
+ * 3. Spawns an Evaluator agent to score and filter cards
+ * 4. Loops N times, feeding structured context from previous iteration
+ * 5. Selects the best cards across all iterations
+ *
+ * Card selection strategy:
+ *   - All cards across all iterations go into a candidate pool with their evaluation scores
+ *   - Only cards that passed (overall >= 7.0) are eligible
+ *   - Sorted by Evaluator's `overall` score (5-dimension average) — the authoritative quality signal
+ *   - Diversity constraint: max 2 cards per goalBasket
+ *   - Final output: top 5
+ */
+
+import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
+import { buildPlannerPrompt } from '../agents/planner.js';
+import { buildGeneratorPrompt } from '../agents/generator.js';
+import { buildEvaluatorPrompt } from '../agents/evaluator.js';
+import type {
+  IntentCard,
+  PlannerOutput,
+  GeneratorOutput,
+  EvaluatorOutput,
+  EvaluationScore,
+  PipelineIteration,
+  PipelineResult,
+  ServerEvent,
+} from '../types/index.js';
+
+export interface PipelineOptions {
+  maxIterations: number;
+  agentTimeoutMs: number;
+}
+
+export const DEFAULT_PIPELINE_OPTIONS: PipelineOptions = {
+  maxIterations: 1,
+  agentTimeoutMs: 300_000, // 5 minutes per agent
+};
+
+type EventSink = (event: ServerEvent) => void;
+
+/** A card paired with its evaluation score, tracked across iterations */
+interface ScoredCandidate {
+  card: IntentCard;
+  score: EvaluationScore;
+  iteration: number;
+}
+
+/** Structured context carried from iteration N to iteration N+1 */
+interface IterationContext {
+  feedback: string;
+  plan: PlannerOutput;
+  cards: IntentCard[];
+  scores: EvaluationScore[];
+}
+
+/**
+ * Run the full intent card generation pipeline.
+ */
+export async function runPipeline(
+  api: OpenClawPluginApi,
+  opts: PipelineOptions = DEFAULT_PIPELINE_OPTIONS,
+  onEvent?: EventSink,
+): Promise<PipelineResult> {
+  const emit = onEvent ?? (() => {});
+  const currentDate = new Date().toISOString().slice(0, 10);
+  const iterations: PipelineIteration[] = [];
+  const candidatePool: ScoredCandidate[] = [];
+  let prev: IterationContext | undefined;
+
+  emit({ type: 'pipeline:start', data: { maxIterations: opts.maxIterations } });
+
+  for (let i = 1; i <= opts.maxIterations; i++) {
+    api.logger.info(`Pipeline iteration ${i}/${opts.maxIterations}`);
+
+    // ── Phase 1: Planner ──
+    emit({ type: 'pipeline:iteration', data: { iteration: i, phase: 'planning' } });
+
+    const plannerPrompt = buildPlannerPrompt({
+      currentDate,
+      iterationNumber: i,
+      previousFeedback: prev?.feedback,
+      previousPlan: prev ? JSON.stringify(prev.plan, null, 2) : undefined,
+      previousCards: prev ? JSON.stringify(prev.cards, null, 2) : undefined,
+      previousScores: prev ? JSON.stringify(prev.scores, null, 2) : undefined,
+    });
+
+    const planText = await runAgent(api, `plan:${i}`, plannerPrompt, 'Generate an intent card plan based on the user\'s current context.', opts.agentTimeoutMs);
+    const plan = parseJsonFromAgent<PlannerOutput>(planText);
+
+    if (!plan || !plan.intentsToGenerate?.length) {
+      api.logger.warn(`Planner iteration ${i} produced no intents, stopping`);
+      break;
+    }
+
+    // ── Phase 2: Generator ──
+    emit({ type: 'pipeline:iteration', data: { iteration: i, phase: 'generating' } });
+
+    const generatorPrompt = buildGeneratorPrompt({
+      currentDate,
+      plan: JSON.stringify(plan, null, 2),
+      iterationNumber: i,
+      previousFeedback: prev?.feedback,
+      previousCards: prev ? JSON.stringify(prev.cards, null, 2) : undefined,
+      previousScores: prev ? JSON.stringify(prev.scores, null, 2) : undefined,
+    });
+
+    const cardsText = await runAgent(api, `generate:${i}`, generatorPrompt, 'Generate intent cards based on the plan.', opts.agentTimeoutMs);
+    const generated = parseJsonFromAgent<GeneratorOutput>(cardsText);
+
+    if (!generated?.cards?.length) {
+      api.logger.warn(`Generator iteration ${i} produced no cards, stopping`);
+      break;
+    }
+
+    emit({ type: 'pipeline:cards', data: { iteration: i, cards: generated.cards } });
+
+    // ── Phase 3: Evaluator ──
+    emit({ type: 'pipeline:iteration', data: { iteration: i, phase: 'evaluating' } });
+
+    const evaluatorPrompt = buildEvaluatorPrompt({
+      currentDate,
+      plan: JSON.stringify(plan, null, 2),
+      cards: JSON.stringify(generated, null, 2),
+      iterationNumber: i,
+      maxIterations: opts.maxIterations,
+    });
+
+    const evalText = await runAgent(api, `evaluate:${i}`, evaluatorPrompt, 'Evaluate the generated intent cards for quality.', opts.agentTimeoutMs);
+    const evaluation = parseJsonFromAgent<EvaluatorOutput>(evalText);
+
+    if (!evaluation) {
+      api.logger.warn(`Evaluator iteration ${i} produced no output, using cards as-is`);
+      // No scores — add cards with synthetic passing scores so they're still candidates
+      for (const card of generated.cards) {
+        candidatePool.push({
+          card,
+          score: syntheticScore(card.id),
+          iteration: i,
+        });
+      }
+    } else {
+      emit({ type: 'pipeline:evaluation', data: { iteration: i, evaluation } });
+
+      // Pair each card with its evaluation score and add to pool
+      for (const card of generated.cards) {
+        const score = evaluation.evaluations.find(e => e.cardId === card.id);
+        if (score) {
+          candidatePool.push({ card, score, iteration: i });
+        }
+      }
+
+      // Build structured context for next iteration
+      prev = {
+        feedback: evaluation.iterationFeedback,
+        plan,
+        cards: generated.cards,
+        scores: evaluation.evaluations,
+      };
+    }
+
+    iterations.push({
+      iteration: i,
+      plan,
+      cards: generated.cards,
+      evaluation: evaluation ?? {
+        evaluations: [],
+        bestCards: generated.cards,
+        iterationFeedback: 'No evaluation produced',
+      },
+    });
+
+    // If all cards passed with high scores, no need to iterate more
+    if (evaluation?.evaluations?.every(e => e.overall >= 8.5)) {
+      api.logger.info(`All cards scored >= 8.5 at iteration ${i}, stopping early`);
+      break;
+    }
+  }
+
+  const finalCards = selectBestCards(candidatePool);
+
+  const result: PipelineResult = {
+    iterations,
+    finalCards,
+    totalIterations: iterations.length,
+  };
+
+  emit({ type: 'pipeline:complete', data: result });
+  return result;
+}
+
+// ── Card selection ──
+
+const MAX_FINAL_CARDS = 5;
+const MAX_PER_BASKET = 2;
+const PASS_THRESHOLD = 7.0;
+
+/**
+ * Select the best cards from the candidate pool across all iterations.
+ *
+ * Strategy:
+ * 1. Filter: only cards that passed (overall >= 7.0)
+ * 2. Sort: by Evaluator's `overall` score descending
+ * 3. Diversify: max 2 cards per goalBasket
+ * 4. Take top 5
+ *
+ * If no cards pass, fall back to the highest-scoring cards regardless of threshold.
+ */
+function selectBestCards(pool: ScoredCandidate[]): IntentCard[] {
+  if (pool.length === 0) return [];
+
+  // Sort all candidates by overall score, highest first
+  const sorted = [...pool].sort((a, b) => b.score.overall - a.score.overall);
+
+  // Try with pass threshold first
+  let selected = pickWithDiversity(sorted.filter(c => c.score.pass && c.score.overall >= PASS_THRESHOLD));
+
+  // Fallback: if nothing passed, take the best available
+  if (selected.length === 0) {
+    selected = pickWithDiversity(sorted);
+  }
+
+  return selected;
+}
+
+/** Pick top cards with basket diversity constraint */
+function pickWithDiversity(candidates: ScoredCandidate[]): IntentCard[] {
+  const result: IntentCard[] = [];
+  const basketCount = new Map<string, number>();
+
+  for (const { card } of candidates) {
+    if (result.length >= MAX_FINAL_CARDS) break;
+
+    const count = basketCount.get(card.goalBasket) ?? 0;
+    if (count >= MAX_PER_BASKET) continue;
+
+    result.push(card);
+    basketCount.set(card.goalBasket, count + 1);
+  }
+
+  return result;
+}
+
+/** Create a synthetic passing score when Evaluator produces no output */
+function syntheticScore(cardId: string): EvaluationScore {
+  return {
+    cardId,
+    overall: 7.0,
+    dimensions: { relevance: 7, actionability: 7, whyNowClarity: 7, novelty: 7, decisionCompression: 7 },
+    feedback: 'No evaluation available — using default score',
+    pass: true,
+  };
+}
+
+// ── Agent runner ──
+
+async function runAgent(
+  api: OpenClawPluginApi,
+  tag: string,
+  systemPrompt: string,
+  userMessage: string,
+  timeoutMs: number,
+): Promise<string> {
+  const sessionKey = `agent:main:proactive-ai:${tag}:${Date.now().toString(36)}`;
+
+  const { runId } = await api.runtime.subagent.run({
+    sessionKey,
+    extraSystemPrompt: systemPrompt,
+    idempotencyKey: `proactive-ai:${tag}:${Date.now().toString(36)}`,
+    message: userMessage,
+    deliver: false,
+  });
+
+  const result = await api.runtime.subagent.waitForRun({ runId, timeoutMs });
+
+  if (result.status !== 'completed' && result.status !== 'ok') {
+    throw new Error(`Agent ${tag} failed with status: ${result.status}${result.error ? ` — ${result.error}` : ''}`);
+  }
+
+  // Extract the agent's final text output
+  const messages = await api.runtime.subagent.getSessionMessages({ sessionKey, limit: 10 });
+  return extractAgentText(messages);
+}
+
+// ── Helpers ──
+
+function extractAgentText(messages: { messages: unknown[] }): string {
+  const assistantMsgs = (messages.messages as Array<{ role?: string; content?: unknown }>)
+    .filter(m => m.role === 'assistant');
+  const last = assistantMsgs[assistantMsgs.length - 1];
+
+  if (!last?.content) return '';
+  if (typeof last.content === 'string') return last.content.trim();
+  if (Array.isArray(last.content)) {
+    return (last.content as Array<{ type?: string; text?: string }>)
+      .filter(b => b.type === 'text' && b.text)
+      .map(b => b.text!)
+      .join('\n')
+      .trim();
+  }
+  return '';
+}
+
+function parseJsonFromAgent<T>(text: string): T | null {
+  if (!text) return null;
+
+  // Extract JSON from markdown code fence
+  const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
+  const jsonStr = fenceMatch ? fenceMatch[1]! : text;
+
+  try {
+    return JSON.parse(jsonStr.trim()) as T;
+  } catch {
+    return null;
+  }
+}

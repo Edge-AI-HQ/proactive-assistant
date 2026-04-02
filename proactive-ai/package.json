@@ -1,0 +1,42 @@
+{
+  "name": "@boliangzhang85/proactive-ai",
+  "version": "2.0.0",
+  "type": "module",
+  "description": "OpenClaw plugin — Intent card generation pipeline with Planner/Generator/Evaluator agents",
+  "main": "index.ts",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "publishConfig": {
+    "main": "dist/index.js",
+    "openclaw": {
+      "extensions": [
+        "./dist/index.js"
+      ]
+    }
+  },
+  "files": [
+    "dist/",
+    "openclaw.plugin.json"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "type-check": "tsc --noEmit",
+    "prepublishOnly": "npm run build",
+    "clean": "rm -rf dist"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.0.0"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.8.0"
+  }
+}

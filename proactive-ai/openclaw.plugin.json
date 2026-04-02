@@ -1,0 +1,28 @@
+{
+  "id": "proactive-ai",
+  "name": "Proactive AI",
+  "description": "Intent card generation pipeline. Uses Planner/Generator/Evaluator agents with PIN CLI to produce actionable recommendations.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {
+      "max_iterations": {
+        "type": "number",
+        "description": "Max pipeline iterations per generation run",
+        "default": 1
+      },
+      "agent_timeout_ms": {
+        "type": "number",
+        "description": "Timeout per agent in milliseconds",
+        "default": 100000
+      }
+    }
+  },
+  "skills": [
+    "../pin-cli/SKILL.md"
+  ],
+  "uiHints": {
+    "max_iterations": { "label": "Max iterations", "help": "How many planner/generator/evaluator loops to run" },
+    "agent_timeout_ms": { "label": "Agent timeout", "help": "Max time per agent execution (ms)" }
+  }
+}

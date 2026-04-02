@@ -1,0 +1,16 @@
+# Source (dist/ has compiled output)
+*.ts
+!dist/**/*.d.ts
+tsconfig.json
+
+# Dev files
+.git
+.gitignore
+docs/
+scripts/
+test-dispatch.ts
+docker-compose.yml
+
+# IDE
+.vscode/
+.idea/
