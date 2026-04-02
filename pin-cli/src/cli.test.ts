@@ -22,7 +22,11 @@ interface ProfileRecord {
   locale: string | null;
   timezone: string | null;
   summary: string | null;
+  facts?: Record<string, unknown>;
   metadata: Record<string, unknown>;
+  preferences?: Record<string, unknown>;
+  goals?: Array<Record<string, unknown>>;
+  constraints?: Record<string, unknown>;
 }
 
 test("runCli returns ok envelope for sys doctor json command", async () => {
@@ -161,6 +165,183 @@ test("profile create returns conflict when id already exists", async () => {
     assert.equal(duplicate.exitCode, 5);
     assert.equal(duplicate.stdout.ok, false);
     assert.equal(duplicate.stdout.error?.code, "CONFLICT");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("profile supports preferences goals and constraints sections", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-profile-sections-"));
+
+  try {
+    const runtime = {
+      env: { PIN_DATA_ROOT: root },
+      homeDir: "/Users/test",
+    };
+
+    await runCli(
+      [
+        "profile",
+        "create",
+        "--id",
+        "default",
+        "--display-name",
+        "Alice",
+        "--json",
+      ],
+      runtime,
+    );
+
+    const preferenceSet = await runCli(
+      [
+        "profile",
+        "preferences",
+        "set",
+        "--key",
+        "content_topics",
+        "--value-json",
+        '["ai","startups"]',
+        "--json",
+      ],
+      runtime,
+    );
+    assert.equal(preferenceSet.exitCode, 0);
+
+    const preferenceGet = (await runCli(
+      ["profile", "preferences", "get", "--json"],
+      runtime,
+    )) as RunCliResult & { stdout: PinEnvelope<Record<string, unknown>> };
+    assert.deepEqual(preferenceGet.stdout.data?.content_topics, [
+      "ai",
+      "startups",
+    ]);
+
+    const goalUpsert = await runCli(
+      [
+        "profile",
+        "goals",
+        "upsert",
+        "--key",
+        "career",
+        "--title",
+        "Find startup opportunities",
+        "--priority",
+        "high",
+        "--json",
+      ],
+      runtime,
+    );
+    assert.equal(goalUpsert.exitCode, 0);
+
+    const goalList = (await runCli(
+      ["profile", "goals", "list", "--json"],
+      runtime,
+    )) as RunCliResult & {
+      stdout: PinEnvelope<Array<Record<string, unknown>>>;
+    };
+    assert.equal(goalList.stdout.data?.length, 1);
+    assert.equal(goalList.stdout.data?.[0]?.key, "career");
+
+    const goalClose = await runCli(
+      ["profile", "goals", "close", "--key", "career", "--json"],
+      runtime,
+    );
+    assert.equal(goalClose.exitCode, 0);
+
+    const constraintSet = await runCli(
+      [
+        "profile",
+        "constraints",
+        "set",
+        "--key",
+        "quiet_hours",
+        "--value-json",
+        '"23:00-08:00"',
+        "--json",
+      ],
+      runtime,
+    );
+    assert.equal(constraintSet.exitCode, 0);
+
+    const constraintGet = (await runCli(
+      ["profile", "constraints", "get", "--json"],
+      runtime,
+    )) as RunCliResult & { stdout: PinEnvelope<Record<string, unknown>> };
+    assert.equal(constraintGet.stdout.data?.quiet_hours, "23:00-08:00");
+
+    const constraintUnset = await runCli(
+      ["profile", "constraints", "unset", "--key", "quiet_hours", "--json"],
+      runtime,
+    );
+    assert.equal(constraintUnset.exitCode, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("profile supports facts section for stable background information", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-profile-facts-"));
+
+  try {
+    const runtime = {
+      env: { PIN_DATA_ROOT: root },
+      homeDir: "/Users/test",
+    };
+
+    await runCli(
+      [
+        "profile",
+        "create",
+        "--id",
+        "default",
+        "--display-name",
+        "Alice",
+        "--json",
+      ],
+      runtime,
+    );
+
+    const factsSet = await runCli(
+      [
+        "profile",
+        "facts",
+        "set",
+        "--key",
+        "home_address",
+        "--value-json",
+        '"Shanghai Pudong"',
+        "--json",
+      ],
+      runtime,
+    );
+    assert.equal(factsSet.exitCode, 0);
+
+    await runCli(
+      [
+        "profile",
+        "facts",
+        "set",
+        "--key",
+        "work_location",
+        "--value-json",
+        '"Zhangjiang"',
+        "--json",
+      ],
+      runtime,
+    );
+
+    const factsGet = (await runCli(
+      ["profile", "facts", "get", "--json"],
+      runtime,
+    )) as RunCliResult & { stdout: PinEnvelope<Record<string, unknown>> };
+    assert.equal(factsGet.stdout.data?.home_address, "Shanghai Pudong");
+    assert.equal(factsGet.stdout.data?.work_location, "Zhangjiang");
+
+    const factsUnset = await runCli(
+      ["profile", "facts", "unset", "--key", "home_address", "--json"],
+      runtime,
+    );
+    assert.equal(factsUnset.exitCode, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
