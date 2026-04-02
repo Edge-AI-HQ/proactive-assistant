@@ -14,6 +14,10 @@ export const profiles = sqliteTable("profiles", {
     .$type<Record<string, unknown>>()
     .notNull()
     .$defaultFn(() => ({})),
+  memory: text("memory", { mode: "json" })
+    .$type<Array<Record<string, unknown>>>()
+    .notNull()
+    .$defaultFn(() => []),
   goals: text("goals", { mode: "json" })
     .$type<Array<Record<string, unknown>>>()
     .notNull()

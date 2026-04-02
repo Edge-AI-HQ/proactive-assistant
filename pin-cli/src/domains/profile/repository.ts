@@ -23,6 +23,7 @@ export interface UpdateProfileInput {
   summary?: string | null;
   facts?: Record<string, unknown>;
   preferences?: Record<string, unknown>;
+  memory?: Array<Record<string, unknown>>;
   goals?: Array<Record<string, unknown>>;
   constraints?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
@@ -35,6 +36,14 @@ export interface ProfileGoalRecord extends Record<string, unknown> {
   priority?: string;
   closedAt?: string | null;
   summary?: string | null;
+}
+
+export interface ProfileMemoryRecord extends Record<string, unknown> {
+  id: string;
+  kind: string;
+  text: string;
+  tags?: string[];
+  createdAt: string;
 }
 
 export class ProfileRepository {
@@ -54,6 +63,7 @@ export class ProfileRepository {
       summary: input.summary ?? null,
       facts: {},
       preferences: {},
+      memory: [],
       goals: [],
       constraints: {},
       metadata: input.metadata ?? {},
@@ -99,6 +109,7 @@ export class ProfileRepository {
       ...(patch.preferences !== undefined
         ? { preferences: patch.preferences }
         : {}),
+      ...(patch.memory !== undefined ? { memory: patch.memory } : {}),
       ...(patch.goals !== undefined ? { goals: patch.goals } : {}),
       ...(patch.constraints !== undefined
         ? { constraints: patch.constraints }
@@ -146,6 +157,7 @@ export class ProfileRepository {
         summary text,
         facts text not null default '{}',
         preferences text not null default '{}',
+        memory text not null default '[]',
         goals text not null default '[]',
         constraints text not null default '{}',
         metadata text not null default '{}',
@@ -168,6 +180,12 @@ export class ProfileRepository {
     if (!columnNames.has("preferences")) {
       this.database.exec(
         "alter table profiles add column preferences text not null default '{}'",
+      );
+    }
+
+    if (!columnNames.has("memory")) {
+      this.database.exec(
+        "alter table profiles add column memory text not null default '[]'",
       );
     }
 
@@ -255,6 +273,76 @@ export class ProfileRepository {
   async listGoals(id: string): Promise<ProfileGoalRecord[] | null> {
     const profile = await this.getById(id);
     return profile ? ((profile.goals ?? []) as ProfileGoalRecord[]) : null;
+  }
+
+  async listMemory(id: string): Promise<ProfileMemoryRecord[] | null> {
+    const profile = await this.getById(id);
+    return profile ? ((profile.memory ?? []) as ProfileMemoryRecord[]) : null;
+  }
+
+  async addMemory(
+    id: string,
+    input: {
+      kind: string;
+      text: string;
+      tags?: string[];
+    },
+  ): Promise<ProfileMemoryRecord | null> {
+    const profile = await this.getById(id);
+    if (!profile) return null;
+
+    const entry: ProfileMemoryRecord = {
+      id: Math.random().toString(36).slice(2, 10),
+      kind: input.kind,
+      text: input.text,
+      tags: input.tags ?? [],
+      createdAt: new Date().toISOString(),
+    };
+
+    await this.update(id, {
+      memory: [...(profile.memory ?? []), entry],
+    });
+
+    return entry;
+  }
+
+  async searchMemory(
+    id: string,
+    query: string,
+  ): Promise<ProfileMemoryRecord[] | null> {
+    const entries = await this.listMemory(id);
+    if (!entries) return null;
+
+    const normalizedQuery = query.trim().toLowerCase();
+    return entries.filter((entry) => {
+      const haystack = [
+        entry.kind,
+        entry.text,
+        ...(Array.isArray(entry.tags) ? entry.tags : []),
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(normalizedQuery);
+    });
+  }
+
+  async removeMemory(id: string, entryId: string): Promise<boolean | null> {
+    const profile = await this.getById(id);
+    if (!profile) return null;
+
+    const currentMemory = (profile.memory ?? []) as ProfileMemoryRecord[];
+    const nextMemory = currentMemory.filter((entry) => entry.id !== entryId);
+
+    if (nextMemory.length === currentMemory.length) {
+      return false;
+    }
+
+    await this.update(id, {
+      memory: nextMemory,
+    });
+
+    return true;
   }
 
   async upsertGoal(

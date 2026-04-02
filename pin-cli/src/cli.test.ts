@@ -28,6 +28,16 @@ interface ProfileRecord {
   preferences?: Record<string, unknown>;
   goals?: Array<Record<string, unknown>>;
   constraints?: Record<string, unknown>;
+  memory?: Array<Record<string, unknown>>;
+}
+
+interface WorldItemRecord {
+  id: string;
+  provider: string;
+  title: string;
+  url: string;
+  normalizedUrl: string;
+  searchQueries: string[];
 }
 
 test("runCli returns ok envelope for sys doctor json command", async () => {
@@ -232,6 +242,166 @@ test("envelope includes _notice field (null when empty)", async () => {
   assert.equal(result.stdout._notice, null);
 });
 
+test("world search ingests deduplicated news items and exposes list/get", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-world-cli-"));
+  const feed = `<?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0">
+      <channel>
+        <title>News</title>
+        <item>
+          <title>AI startup raises funding</title>
+          <link>https://example.com/story?utm_source=rss</link>
+          <guid>story-1</guid>
+          <description>Funding round details</description>
+          <pubDate>2026-04-02T08:00:00.000Z</pubDate>
+        </item>
+        <item>
+          <title>AI startup raises funding duplicate</title>
+          <link>https://example.com/story</link>
+          <guid>story-2</guid>
+          <description>Duplicate via another source</description>
+          <pubDate>2026-04-02T09:00:00.000Z</pubDate>
+        </item>
+        <item>
+          <title>Robotics startup ships new product</title>
+          <link>https://example.com/robotics</link>
+          <guid>story-3</guid>
+          <description>Robotics launch</description>
+          <pubDate>2026-04-02T07:30:00.000Z</pubDate>
+        </item>
+      </channel>
+    </rss>`;
+
+  try {
+    const runtime = {
+      env: {
+        PIN_DATA_ROOT: root,
+        PIN_WORLD_NEWS_SEARCH_URL_TEMPLATE: `data:text/xml,${encodeURIComponent(feed)}`,
+      },
+      homeDir: "/Users/test",
+    };
+
+    const searched = (await runCli(
+      [
+        "world",
+        "search",
+        "--query",
+        "startup",
+        "--limit",
+        "10",
+        "--json",
+      ],
+      runtime,
+    )) as RunCliResult & {
+      stdout: PinEnvelope<{
+        query: string;
+        items: WorldItemRecord[];
+      }>;
+    };
+
+    assert.equal(searched.exitCode, 0);
+    assert.equal(searched.stdout.data?.query, "startup");
+    assert.equal(searched.stdout.data?.items.length, 2);
+    assert.deepEqual(
+      searched.stdout.data?.items[0]?.searchQueries,
+      ["startup"],
+    );
+
+    const listed = (await runCli(
+      ["world", "list", "--limit", "10", "--json"],
+      runtime,
+    )) as RunCliResult & { stdout: PinEnvelope<WorldItemRecord[]> };
+    assert.equal(listed.stdout.data?.length, 2);
+
+    const itemId = listed.stdout.data?.[0]?.id;
+    assert.ok(itemId);
+
+    const fetched = (await runCli(
+      ["world", "get", "--id", itemId!, "--json"],
+      runtime,
+    )) as RunCliResult & { stdout: PinEnvelope<WorldItemRecord> };
+    assert.equal(fetched.exitCode, 0);
+    assert.equal(fetched.stdout.data?.id, itemId);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("world list supports incremental queries by time and id", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-world-incremental-cli-"));
+  const feed = `<?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0">
+      <channel>
+        <title>News</title>
+        <item>
+          <title>AI startup raises funding</title>
+          <link>https://example.com/story</link>
+          <guid>story-1</guid>
+          <description>Funding round details</description>
+          <pubDate>2026-04-02T08:00:00.000Z</pubDate>
+        </item>
+        <item>
+          <title>Robotics startup ships new product</title>
+          <link>https://example.com/robotics</link>
+          <guid>story-2</guid>
+          <description>Robotics launch</description>
+          <pubDate>2026-04-02T09:00:00.000Z</pubDate>
+        </item>
+      </channel>
+    </rss>`;
+
+  try {
+    const runtime = {
+      env: {
+        PIN_DATA_ROOT: root,
+        PIN_WORLD_NEWS_SEARCH_URL_TEMPLATE: `data:text/xml,${encodeURIComponent(feed)}`,
+      },
+      homeDir: "/Users/test",
+    };
+
+    await runCli(
+      ["world", "search", "--query", "startup", "--limit", "10", "--json"],
+      runtime,
+    );
+
+    const sinceList = (await runCli(
+      [
+        "world",
+        "list",
+        "--since",
+        "2026-04-02T08:30:00.000Z",
+        "--json",
+      ],
+      runtime,
+    )) as RunCliResult & { stdout: PinEnvelope<WorldItemRecord[]> };
+    assert.equal(sinceList.stdout.data?.length, 1);
+    assert.equal(sinceList.stdout.data?.[0]?.title, "Robotics startup ships new product");
+
+    const baseList = (await runCli(
+      ["world", "list", "--json"],
+      runtime,
+    )) as RunCliResult & { stdout: PinEnvelope<WorldItemRecord[]> };
+    const firstId = baseList.stdout.data?.[0]?.id;
+    assert.ok(firstId);
+
+    const afterIdList = (await runCli(
+      ["world", "list", "--after-id", firstId!, "--json"],
+      runtime,
+    )) as RunCliResult & { stdout: PinEnvelope<WorldItemRecord[]> };
+    assert.equal(afterIdList.stdout.data?.length, 1);
+    assert.equal(afterIdList.stdout.data?.[0]?.title, "AI startup raises funding");
+
+    const queryList = (await runCli(
+      ["world", "list", "--query", "robotics", "--json"],
+      runtime,
+    )) as RunCliResult & { stdout: PinEnvelope<WorldItemRecord[]> };
+    assert.equal(queryList.stdout.data?.length, 1);
+    assert.equal(queryList.stdout.data?.[0]?.title, "Robotics startup ships new product");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("profile supports preferences goals and constraints sections", async () => {
   const root = await mkdtemp(join(tmpdir(), "pin-profile-sections-"));
 
@@ -404,6 +574,81 @@ test("profile supports facts section for stable background information", async (
       runtime,
     );
     assert.equal(factsUnset.exitCode, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("profile supports memory add list search and remove", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-profile-memory-"));
+
+  try {
+    const runtime = {
+      env: { PIN_DATA_ROOT: root },
+      homeDir: "/Users/test",
+    };
+
+    await runCli(
+      [
+        "profile",
+        "create",
+        "--id",
+        "default",
+        "--display-name",
+        "Alice",
+        "--json",
+      ],
+      runtime,
+    );
+
+    const added = (await runCli(
+      [
+        "profile",
+        "memory",
+        "add",
+        "--kind",
+        "observation",
+        "--text",
+        "User often opens AI startup news",
+        "--tags-json",
+        '["ai","news"]',
+        "--json",
+      ],
+      runtime,
+    )) as RunCliResult & {
+      stdout: PinEnvelope<Record<string, unknown>>;
+    };
+    assert.equal(added.exitCode, 0);
+    assert.equal(added.stdout.data?.kind, "observation");
+
+    const listed = (await runCli(
+      ["profile", "memory", "list", "--json"],
+      runtime,
+    )) as RunCliResult & {
+      stdout: PinEnvelope<Array<Record<string, unknown>>>;
+    };
+    assert.equal(listed.stdout.data?.length, 1);
+
+    const searched = (await runCli(
+      ["profile", "memory", "search", "--query", "startup", "--json"],
+      runtime,
+    )) as RunCliResult & {
+      stdout: PinEnvelope<Array<Record<string, unknown>>>;
+    };
+    assert.equal(searched.stdout.data?.length, 1);
+
+    const removed = await runCli(
+      [
+        "profile",
+        "memory",
+        "remove",
+        "--id",
+        String(added.stdout.data?.id),
+        "--json",
+      ],
+      runtime,
+    );
+    assert.equal(removed.exitCode, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

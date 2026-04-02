@@ -3,6 +3,7 @@ import { Command } from "commander";
 import type { CliRuntimeInput, ResultRef } from "../../runtime.js";
 import { registerCommand } from "../../registry.js";
 import {
+  addMemory,
   getFacts,
   createProfile,
   closeGoal,
@@ -12,6 +13,9 @@ import {
   getProfile,
   listProfiles,
   listGoals,
+  listMemory,
+  removeMemory,
+  searchMemory,
   setFact,
   setConstraint,
   setPreference,
@@ -183,6 +187,40 @@ export const registerProfileCommands = (
     .option("--json")
     .action(async (options) => {
       resultRef.current = await unsetConstraint(runtime, options.key);
+    });
+
+  const memory = profile.command("memory");
+  memory
+    .command("list")
+    .option("--json")
+    .action(async () => {
+      resultRef.current = await listMemory(runtime);
+    });
+
+  memory
+    .command("add")
+    .requiredOption("--kind <kind>")
+    .requiredOption("--text <text>")
+    .option("--tags-json <tagsJson>")
+    .option("--json")
+    .action(async (options) => {
+      resultRef.current = await addMemory(runtime, options);
+    });
+
+  memory
+    .command("search")
+    .requiredOption("--query <query>")
+    .option("--json")
+    .action(async (options) => {
+      resultRef.current = await searchMemory(runtime, options.query);
+    });
+
+  memory
+    .command("remove")
+    .requiredOption("--id <id>")
+    .option("--json")
+    .action(async (options) => {
+      resultRef.current = await removeMemory(runtime, options.id);
     });
 
   program.addCommand(profile);

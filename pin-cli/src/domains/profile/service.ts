@@ -25,6 +25,14 @@ const createRepository = async (runtime: CliRuntimeInput) => {
 const DEFAULT_PROFILE_ID = "default";
 
 const parseJsonValue = (raw: string): unknown => JSON.parse(raw);
+const parseJsonStringArray = (raw?: string): string[] | undefined => {
+  if (!raw) return undefined;
+  const parsed = JSON.parse(raw);
+  if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) {
+    throw new Error("tags-json must be a JSON string array");
+  }
+  return parsed;
+};
 
 export const createProfile = async (
   runtime: CliRuntimeInput,
@@ -230,6 +238,97 @@ export const listGoals = async (runtime: CliRuntimeInput) => {
   return {
     exitCode: 0,
     stdout: okEnvelope("profile.goals", "list", goals),
+  } satisfies RunCliResult;
+};
+
+export const listMemory = async (runtime: CliRuntimeInput) => {
+  const repository = await createRepository(runtime);
+  const entries = await repository.listMemory(DEFAULT_PROFILE_ID);
+
+  if (!entries) {
+    return {
+      exitCode: 4,
+      stdout: errorEnvelope("profile.memory", "list", "NOT_FOUND", "Default profile not found"),
+    } satisfies RunCliResult;
+  }
+
+  return {
+    exitCode: 0,
+    stdout: okEnvelope("profile.memory", "list", entries),
+  } satisfies RunCliResult;
+};
+
+export const addMemory = async (
+  runtime: CliRuntimeInput,
+  input: { kind: string; text: string; tagsJson?: string },
+) => {
+  const repository = await createRepository(runtime);
+  const entry = await repository.addMemory(DEFAULT_PROFILE_ID, {
+    kind: input.kind,
+    text: input.text,
+    tags: parseJsonStringArray(input.tagsJson),
+  });
+
+  if (!entry) {
+    return {
+      exitCode: 4,
+      stdout: errorEnvelope("profile.memory", "add", "NOT_FOUND", "Default profile not found"),
+    } satisfies RunCliResult;
+  }
+
+  return {
+    exitCode: 0,
+    stdout: okEnvelope("profile.memory", "add", entry),
+  } satisfies RunCliResult;
+};
+
+export const searchMemory = async (
+  runtime: CliRuntimeInput,
+  query: string,
+) => {
+  const repository = await createRepository(runtime);
+  const entries = await repository.searchMemory(DEFAULT_PROFILE_ID, query);
+
+  if (!entries) {
+    return {
+      exitCode: 4,
+      stdout: errorEnvelope("profile.memory", "search", "NOT_FOUND", "Default profile not found"),
+    } satisfies RunCliResult;
+  }
+
+  return {
+    exitCode: 0,
+    stdout: okEnvelope("profile.memory", "search", entries),
+  } satisfies RunCliResult;
+};
+
+export const removeMemory = async (
+  runtime: CliRuntimeInput,
+  entryId: string,
+) => {
+  const repository = await createRepository(runtime);
+  const removed = await repository.removeMemory(DEFAULT_PROFILE_ID, entryId);
+
+  if (removed === null) {
+    return {
+      exitCode: 4,
+      stdout: errorEnvelope("profile.memory", "remove", "NOT_FOUND", "Default profile not found"),
+    } satisfies RunCliResult;
+  }
+
+  if (removed === false) {
+    return {
+      exitCode: 4,
+      stdout: errorEnvelope("profile.memory", "remove", "NOT_FOUND", `Memory ${entryId} not found`),
+    } satisfies RunCliResult;
+  }
+
+  return {
+    exitCode: 0,
+    stdout: okEnvelope("profile.memory", "remove", {
+      id: entryId,
+      deleted: true,
+    }),
   } satisfies RunCliResult;
 };
 

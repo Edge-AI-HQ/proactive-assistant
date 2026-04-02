@@ -10,9 +10,12 @@ Local-first CLI for proactive AI tooling. This package is currently a standalone
 - `pin profile list`
 - `pin profile update`
 - `pin profile delete`
+- `pin profile facts get|set|unset`
 - `pin profile preferences get|set|unset`
 - `pin profile goals list|upsert|close`
 - `pin profile constraints get|set|unset`
+- `pin profile memory add|list|search|remove`
+- `pin world search|list|get`
 
 Storage:
 
@@ -121,13 +124,69 @@ PIN_DATA_ROOT=/tmp/pin-demo pin profile constraints get --json
 PIN_DATA_ROOT=/tmp/pin-demo pin profile constraints unset --key quiet_hours --json
 ```
 
+Manage stable background facts:
+
+```bash
+PIN_DATA_ROOT=/tmp/pin-demo pin profile facts set \
+  --key home_address \
+  --value-json '"Shanghai Pudong"' \
+  --json
+
+PIN_DATA_ROOT=/tmp/pin-demo pin profile facts get --json
+```
+
+Manage memory:
+
+```bash
+PIN_DATA_ROOT=/tmp/pin-demo pin profile memory add \
+  --kind observation \
+  --text "User often opens AI startup news" \
+  --tags-json '["ai","news"]' \
+  --json
+
+PIN_DATA_ROOT=/tmp/pin-demo pin profile memory list --json
+PIN_DATA_ROOT=/tmp/pin-demo pin profile memory search --query startup --json
+```
+
+Search and store world news:
+
+```bash
+PIN_DATA_ROOT=/tmp/pin-demo pin world search \
+  --query "OpenAI agents" \
+  --limit 10 \
+  --json
+
+PIN_DATA_ROOT=/tmp/pin-demo pin world list --json
+PIN_DATA_ROOT=/tmp/pin-demo pin world get --id <id> --json
+```
+
+Incremental world queries:
+
+```bash
+PIN_DATA_ROOT=/tmp/pin-demo pin world list \
+  --since 2026-04-02T08:30:00.000Z \
+  --json
+
+PIN_DATA_ROOT=/tmp/pin-demo pin world list \
+  --after-updated-at 2026-04-02T09:00:00.000Z \
+  --json
+
+PIN_DATA_ROOT=/tmp/pin-demo pin world list \
+  --after-id <id> \
+  --json
+```
+
 ## Notes
 
 - `profile create` uses `id` as the primary key.
 - Repeating `create` with the same `id` returns a conflict.
 - `metadata` must be a JSON object string.
-- `preferences` and `constraints` are stored as keyed JSON objects on the default profile row.
-- `goals` are stored as a JSON array on the default profile row.
+- `facts` and `preferences` are stored as keyed JSON objects on the default profile row.
+- `constraints` are stored as keyed JSON objects on the default profile row.
+- `memory` and `goals` are stored as JSON arrays on the default profile row.
+- `world search` ingests feed results into the local `world_items` table and deduplicates by normalized URL.
+- `world list --after-id` acts as a paging cursor over the current sorted result set.
+- `world list --after-updated-at` is the better option for incremental sync.
 - `npm run dev` uses `node --import tsx` to avoid the `tsx` IPC issue seen in restricted environments.
 
 ## Development Layout
@@ -137,5 +196,9 @@ PIN_DATA_ROOT=/tmp/pin-demo pin profile constraints unset --key quiet_hours --js
 - [src/domains/profile/repository.ts](/Users/heyuehui/Desktop/PINAI/PIN-AI-ASSISTANT/pin-cli/src/domains/profile/repository.ts): CRUD repository
 - [src/domains/profile/register.ts](/Users/heyuehui/Desktop/PINAI/PIN-AI-ASSISTANT/pin-cli/src/domains/profile/register.ts): CLI command registration
 - [src/domains/profile/service.ts](/Users/heyuehui/Desktop/PINAI/PIN-AI-ASSISTANT/pin-cli/src/domains/profile/service.ts): profile command execution logic
+- [src/domains/world/schema.ts](/Users/heyuehui/Desktop/PINAI/PIN-AI-ASSISTANT/pin-cli/src/domains/world/schema.ts): world news schema
+- [src/domains/world/repository.ts](/Users/heyuehui/Desktop/PINAI/PIN-AI-ASSISTANT/pin-cli/src/domains/world/repository.ts): ingestion, dedupe, local queries
+- [src/domains/world/register.ts](/Users/heyuehui/Desktop/PINAI/PIN-AI-ASSISTANT/pin-cli/src/domains/world/register.ts): world CLI command registration
+- [src/domains/world/service.ts](/Users/heyuehui/Desktop/PINAI/PIN-AI-ASSISTANT/pin-cli/src/domains/world/service.ts): world command execution logic
 - [src/db/sqlite_adapter.ts](/Users/heyuehui/Desktop/PINAI/PIN-AI-ASSISTANT/pin-cli/src/db/sqlite_adapter.ts): Drizzle and SQLite client wrapper
 - [drizzle.config.ts](/Users/heyuehui/Desktop/PINAI/PIN-AI-ASSISTANT/pin-cli/drizzle.config.ts): Drizzle config
