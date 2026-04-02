@@ -247,8 +247,15 @@ export const listMemory = async (runtime: CliRuntimeInput) => {
 
   if (!entries) {
     return {
-      exitCode: 4,
-      stdout: errorEnvelope("profile.memory", "list", "NOT_FOUND", "Default profile not found"),
+      exitCode: 1,
+      stdout: errorEnvelope(
+        "profile.memory",
+        "list",
+        ErrorType.NOT_FOUND,
+        "NOT_FOUND",
+        "Default profile not found",
+        "run `pin profile create` first",
+      ),
     } satisfies RunCliResult;
   }
 
@@ -271,8 +278,15 @@ export const addMemory = async (
 
   if (!entry) {
     return {
-      exitCode: 4,
-      stdout: errorEnvelope("profile.memory", "add", "NOT_FOUND", "Default profile not found"),
+      exitCode: 1,
+      stdout: errorEnvelope(
+        "profile.memory",
+        "add",
+        ErrorType.NOT_FOUND,
+        "NOT_FOUND",
+        "Default profile not found",
+        "run `pin profile create` first",
+      ),
     } satisfies RunCliResult;
   }
 
@@ -291,8 +305,15 @@ export const searchMemory = async (
 
   if (!entries) {
     return {
-      exitCode: 4,
-      stdout: errorEnvelope("profile.memory", "search", "NOT_FOUND", "Default profile not found"),
+      exitCode: 1,
+      stdout: errorEnvelope(
+        "profile.memory",
+        "search",
+        ErrorType.NOT_FOUND,
+        "NOT_FOUND",
+        "Default profile not found",
+        "run `pin profile create` first",
+      ),
     } satisfies RunCliResult;
   }
 
@@ -311,15 +332,28 @@ export const removeMemory = async (
 
   if (removed === null) {
     return {
-      exitCode: 4,
-      stdout: errorEnvelope("profile.memory", "remove", "NOT_FOUND", "Default profile not found"),
+      exitCode: 1,
+      stdout: errorEnvelope(
+        "profile.memory",
+        "remove",
+        ErrorType.NOT_FOUND,
+        "NOT_FOUND",
+        "Default profile not found",
+        "run `pin profile create` first",
+      ),
     } satisfies RunCliResult;
   }
 
   if (removed === false) {
     return {
-      exitCode: 4,
-      stdout: errorEnvelope("profile.memory", "remove", "NOT_FOUND", `Memory ${entryId} not found`),
+      exitCode: 1,
+      stdout: errorEnvelope(
+        "profile.memory",
+        "remove",
+        ErrorType.NOT_FOUND,
+        "NOT_FOUND",
+        `Memory ${entryId} not found`,
+      ),
     } satisfies RunCliResult;
   }
 

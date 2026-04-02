@@ -1,5 +1,6 @@
 import { PinDatabaseManager } from "../../db/database.js";
 import { errorEnvelope, okEnvelope } from "../../output/envelope.js";
+import { ErrorType } from "../../output/errors.js";
 import type { CliRuntimeInput, RunCliResult } from "../../runtime.js";
 import { WorldRepository } from "./repository.js";
 import type { WorldItemRecord } from "./schema.js";
@@ -95,12 +96,14 @@ export const searchNews = async (
 
   if (!response.ok) {
     return {
-      exitCode: 6,
+      exitCode: 1,
       stdout: errorEnvelope(
         "world",
         "search",
+        ErrorType.PROVIDER_UNAVAILABLE,
         "UPSTREAM_ERROR",
         `News search failed with status ${response.status}`,
+        "check provider availability or try a different source",
       ),
     } satisfies RunCliResult;
   }
@@ -183,8 +186,14 @@ export const getWorldItem = async (
 
   if (!item) {
     return {
-      exitCode: 4,
-      stdout: errorEnvelope("world", "get", "NOT_FOUND", `World item ${id} not found`),
+      exitCode: 1,
+      stdout: errorEnvelope(
+        "world",
+        "get",
+        ErrorType.NOT_FOUND,
+        "NOT_FOUND",
+        `World item ${id} not found`,
+      ),
     } satisfies RunCliResult;
   }
 
