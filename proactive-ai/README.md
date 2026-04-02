@@ -14,10 +14,10 @@ cd ../pin-cli && npm install
 ## Install
 
 ```bash
-# Register the plugin (from repo root)
-openclaw plugins install -l ./proactive-ai
+# Register the plugin and install gateway (from repo root)
+openclaw plugins install -l ./proactive-ai && openclaw gateway install
 
-# Restart gateway to load
+# Or if already installed, restart to pick up changes
 openclaw gateway restart
 ```
 
@@ -57,12 +57,12 @@ curl http://127.0.0.1:<port>/proactive-ai/api/health
 curl http://127.0.0.1:<port>/proactive-ai/api/generate
 
 # Custom iteration count
-curl http://127.0.0.1:<port>/proactive-ai/api/generate?iterations=5
+curl http://127.0.0.1:<port>/proactive-ai/api/generate?iterations=3
 ```
 
 ## How It Works
 
-The pipeline runs a **Planner -> Generator -> Evaluator** loop (default 3 iterations):
+The pipeline runs a **Planner -> Generator -> Evaluator** loop (default 1 iteration, configurable):
 
 ```
 Planner   reads user profile/goals/context via pin-cli
@@ -76,10 +76,30 @@ Evaluator scores each card on 5 dimensions (0-10):
           pass threshold: overall >= 7.0
           outputs: scores + improvement feedback
               |
-          feedback loops back to Planner for next iteration
+          If more iterations: structured context feeds back to Planner
 ```
 
-Best cards across all iterations are returned to the frontend.
+### Cross-Iteration Context
+
+When running multiple iterations, each round gets the full context from the previous:
+
+| Agent | Receives from previous iteration |
+|-------|----------------------------------|
+| Planner | feedback + previous plan + previous cards + per-card scores |
+| Generator | feedback + previous cards + per-card scores |
+| Evaluator | (always evaluates fresh — no carryover needed) |
+
+This lets agents make targeted improvements: low actionability scores → more concrete actions, low novelty → find new data sources, etc.
+
+### Card Selection
+
+After all iterations complete, cards are selected from a cross-iteration candidate pool:
+
+1. **Filter** — only cards that passed evaluation (overall >= 7.0)
+2. **Sort** — by Evaluator's `overall` score (5-dimension average), not Generator's self-reported confidence
+3. **Diversify** — max 2 cards per goal basket (work/health/family/wealth/growth/life)
+4. **Top 5** — final output
+5. **Fallback** — if nothing passes 7.0, take the highest-scoring cards anyway
 
 ## Configuration
 
@@ -95,20 +115,20 @@ In `~/.openclaw/openclaw.json`, under plugin config:
 ```
 proactive-ai/
   index.ts                    # Plugin entry (tool + command + HTTP routes)
-  openclaw.plugin.json        # Plugin manifest
+  openclaw.plugin.json        # Plugin manifest (skills: pin-cli/SKILL.md)
   src/
     agents/
       planner.ts              # Planner agent system prompt
       generator.ts            # Generator agent system prompt
       evaluator.ts            # Evaluator agent system prompt
     pipeline/
-      orchestrator.ts         # Planner->Generator->Evaluator loop
+      orchestrator.ts         # Planner->Generator->Evaluator loop + card selection
       pin-cli.ts              # Shell exec wrapper for `pin` commands
     types/
-      intent-card.ts          # IntentCard, PipelineResult, etc.
+      intent-card.ts          # IntentCard, PipelineResult, EvaluationScore, etc.
       openclaw.d.ts           # OpenClaw SDK type stubs
     ui/
-      index.html              # Placeholder frontend
+      index.html              # Placeholder frontend (will be replaced)
 ```
 
 ## Pin CLI Integration
