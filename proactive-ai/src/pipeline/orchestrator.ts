@@ -37,7 +37,7 @@ export interface PipelineOptions {
 }
 
 export const DEFAULT_PIPELINE_OPTIONS: PipelineOptions = {
-  maxIterations: 1,
+  maxIterations: 3,
   agentTimeoutMs: 300_000, // 5 minutes per agent
 };
 

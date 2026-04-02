@@ -62,7 +62,7 @@ curl http://127.0.0.1:<port>/proactive-ai/api/generate?iterations=3
 
 ## How It Works
 
-The pipeline runs a **Planner -> Generator -> Evaluator** loop (default 1 iteration, configurable):
+The pipeline runs a **Planner -> Generator -> Evaluator** loop (default 3 iterations):
 
 ```
 Planner   reads user profile/goals/context via pin-cli
@@ -107,7 +107,7 @@ In `~/.openclaw/openclaw.json`, under plugin config:
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `max_iterations` | `1` | Planner/Generator/Evaluator loop count |
+| `max_iterations` | `3` | Planner/Generator/Evaluator loop count |
 | `agent_timeout_ms` | `300000` | Timeout per agent (5 min) |
 
 ## Project Structure

@@ -23,7 +23,7 @@ interface ProactiveAIConfig {
 }
 
 const DEFAULT_CONFIG: ProactiveAIConfig = {
-  max_iterations: 1,
+  max_iterations: 3,
   agent_timeout_ms: 300_000,
 };
 
@@ -41,7 +41,7 @@ export default {
   configSchema: {
     type: 'object' as const,
     properties: {
-      max_iterations: { type: 'number' as const, default: 1 },
+      max_iterations: { type: 'number' as const, default: 3 },
       agent_timeout_ms: { type: 'number' as const, default: 300_000 },
     },
   },
