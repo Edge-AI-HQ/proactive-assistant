@@ -55,3 +55,54 @@ test("ProfileRepository supports create read update delete lifecycle", async () 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("ProfileRepository supports preferences goals and constraints sections", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-profile-sections-repo-"));
+
+  try {
+    const manager = new PinDatabaseManager({ dataRoot: root });
+    await manager.init();
+    const repository = new ProfileRepository(manager.open("pin"));
+
+    await repository.create({
+      id: "default",
+      displayName: "Alice",
+    });
+
+    const afterPreference = await repository.setPreference(
+      "default",
+      "content_topics",
+      ["ai", "startups"],
+    );
+    assert.deepEqual(afterPreference?.preferences.content_topics, [
+      "ai",
+      "startups",
+    ]);
+
+    const afterGoal = await repository.upsertGoal("default", {
+      key: "career",
+      title: "Find startup opportunities",
+      priority: "high",
+    });
+    assert.equal((afterGoal?.goals ?? [])[0]?.key, "career");
+    assert.equal((afterGoal?.goals ?? [])[0]?.status, "active");
+
+    const afterGoalClose = await repository.closeGoal("default", "career");
+    assert.equal((afterGoalClose?.goals ?? [])[0]?.status, "closed");
+
+    const afterConstraint = await repository.setConstraint(
+      "default",
+      "quiet_hours",
+      "23:00-08:00",
+    );
+    assert.equal(afterConstraint?.constraints.quiet_hours, "23:00-08:00");
+
+    const afterUnsetConstraint = await repository.unsetConstraint(
+      "default",
+      "quiet_hours",
+    );
+    assert.equal(afterUnsetConstraint?.constraints.quiet_hours, undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

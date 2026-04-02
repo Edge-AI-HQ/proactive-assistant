@@ -22,6 +22,10 @@ const createRepository = async (runtime: CliRuntimeInput) => {
   return new ProfileRepository(manager.open("pin"));
 };
 
+const DEFAULT_PROFILE_ID = "default";
+
+const parseJsonValue = (raw: string): unknown => JSON.parse(raw);
+
 export const createProfile = async (
   runtime: CliRuntimeInput,
   input: {
@@ -87,6 +91,246 @@ export const getProfile = async (
   return {
     exitCode: 0,
     stdout: okEnvelope<ProfileRecord>("profile", "get", profile),
+  } satisfies RunCliResult;
+};
+
+export const getPreferences = async (runtime: CliRuntimeInput) => {
+  const repository = await createRepository(runtime);
+  const preferences = await repository.getPreferences(DEFAULT_PROFILE_ID);
+
+  if (!preferences) {
+    return {
+      exitCode: 1,
+      stdout: errorEnvelope("profile.preferences", "get", ErrorType.NOT_FOUND, "NOT_FOUND", "Default profile not found", "run `pin profile create` first"),
+    } satisfies RunCliResult;
+  }
+
+  return {
+    exitCode: 0,
+    stdout: okEnvelope("profile.preferences", "get", preferences),
+  } satisfies RunCliResult;
+};
+
+export const getFacts = async (runtime: CliRuntimeInput) => {
+  const repository = await createRepository(runtime);
+  const facts = await repository.getFacts(DEFAULT_PROFILE_ID);
+
+  if (!facts) {
+    return {
+      exitCode: 1,
+      stdout: errorEnvelope("profile.facts", "get", ErrorType.NOT_FOUND, "NOT_FOUND", "Default profile not found", "run `pin profile create` first"),
+    } satisfies RunCliResult;
+  }
+
+  return {
+    exitCode: 0,
+    stdout: okEnvelope("profile.facts", "get", facts),
+  } satisfies RunCliResult;
+};
+
+export const setFact = async (
+  runtime: CliRuntimeInput,
+  input: { key: string; valueJson: string },
+) => {
+  const repository = await createRepository(runtime);
+  const profile = await repository.setFact(
+    DEFAULT_PROFILE_ID,
+    input.key,
+    parseJsonValue(input.valueJson),
+  );
+
+  if (!profile) {
+    return {
+      exitCode: 1,
+      stdout: errorEnvelope("profile.facts", "set", ErrorType.NOT_FOUND, "NOT_FOUND", "Default profile not found", "run `pin profile create` first"),
+    } satisfies RunCliResult;
+  }
+
+  return {
+    exitCode: 0,
+    stdout: okEnvelope("profile.facts", "set", profile.facts ?? {}),
+  } satisfies RunCliResult;
+};
+
+export const unsetFact = async (
+  runtime: CliRuntimeInput,
+  key: string,
+) => {
+  const repository = await createRepository(runtime);
+  const profile = await repository.unsetFact(DEFAULT_PROFILE_ID, key);
+
+  if (!profile) {
+    return {
+      exitCode: 1,
+      stdout: errorEnvelope("profile.facts", "unset", ErrorType.NOT_FOUND, "NOT_FOUND", "Default profile not found", "run `pin profile create` first"),
+    } satisfies RunCliResult;
+  }
+
+  return {
+    exitCode: 0,
+    stdout: okEnvelope("profile.facts", "unset", profile.facts ?? {}),
+  } satisfies RunCliResult;
+};
+
+export const setPreference = async (
+  runtime: CliRuntimeInput,
+  input: { key: string; valueJson: string },
+) => {
+  const repository = await createRepository(runtime);
+  const profile = await repository.setPreference(
+    DEFAULT_PROFILE_ID,
+    input.key,
+    parseJsonValue(input.valueJson),
+  );
+
+  if (!profile) {
+    return {
+      exitCode: 1,
+      stdout: errorEnvelope("profile.preferences", "set", ErrorType.NOT_FOUND, "NOT_FOUND", "Default profile not found", "run `pin profile create` first"),
+    } satisfies RunCliResult;
+  }
+
+  return {
+    exitCode: 0,
+    stdout: okEnvelope("profile.preferences", "set", profile.preferences ?? {}),
+  } satisfies RunCliResult;
+};
+
+export const unsetPreference = async (
+  runtime: CliRuntimeInput,
+  key: string,
+) => {
+  const repository = await createRepository(runtime);
+  const profile = await repository.unsetPreference(DEFAULT_PROFILE_ID, key);
+
+  if (!profile) {
+    return {
+      exitCode: 1,
+      stdout: errorEnvelope("profile.preferences", "unset", ErrorType.NOT_FOUND, "NOT_FOUND", "Default profile not found", "run `pin profile create` first"),
+    } satisfies RunCliResult;
+  }
+
+  return {
+    exitCode: 0,
+    stdout: okEnvelope("profile.preferences", "unset", profile.preferences ?? {}),
+  } satisfies RunCliResult;
+};
+
+export const listGoals = async (runtime: CliRuntimeInput) => {
+  const repository = await createRepository(runtime);
+  const goals = await repository.listGoals(DEFAULT_PROFILE_ID);
+
+  if (!goals) {
+    return {
+      exitCode: 1,
+      stdout: errorEnvelope("profile.goals", "list", ErrorType.NOT_FOUND, "NOT_FOUND", "Default profile not found", "run `pin profile create` first"),
+    } satisfies RunCliResult;
+  }
+
+  return {
+    exitCode: 0,
+    stdout: okEnvelope("profile.goals", "list", goals),
+  } satisfies RunCliResult;
+};
+
+export const upsertGoal = async (
+  runtime: CliRuntimeInput,
+  input: { key: string; title: string; priority?: string; summary?: string },
+) => {
+  const repository = await createRepository(runtime);
+  const profile = await repository.upsertGoal(DEFAULT_PROFILE_ID, input);
+
+  if (!profile) {
+    return {
+      exitCode: 1,
+      stdout: errorEnvelope("profile.goals", "upsert", ErrorType.NOT_FOUND, "NOT_FOUND", "Default profile not found", "run `pin profile create` first"),
+    } satisfies RunCliResult;
+  }
+
+  return {
+    exitCode: 0,
+    stdout: okEnvelope("profile.goals", "upsert", profile.goals ?? []),
+  } satisfies RunCliResult;
+};
+
+export const closeGoal = async (
+  runtime: CliRuntimeInput,
+  key: string,
+) => {
+  const repository = await createRepository(runtime);
+  const profile = await repository.closeGoal(DEFAULT_PROFILE_ID, key);
+
+  if (!profile) {
+    return {
+      exitCode: 1,
+      stdout: errorEnvelope("profile.goals", "close", ErrorType.NOT_FOUND, "NOT_FOUND", "Default profile not found", "run `pin profile create` first"),
+    } satisfies RunCliResult;
+  }
+
+  return {
+    exitCode: 0,
+    stdout: okEnvelope("profile.goals", "close", profile.goals ?? []),
+  } satisfies RunCliResult;
+};
+
+export const getConstraints = async (runtime: CliRuntimeInput) => {
+  const repository = await createRepository(runtime);
+  const constraints = await repository.getConstraints(DEFAULT_PROFILE_ID);
+
+  if (!constraints) {
+    return {
+      exitCode: 1,
+      stdout: errorEnvelope("profile.constraints", "get", ErrorType.NOT_FOUND, "NOT_FOUND", "Default profile not found", "run `pin profile create` first"),
+    } satisfies RunCliResult;
+  }
+
+  return {
+    exitCode: 0,
+    stdout: okEnvelope("profile.constraints", "get", constraints),
+  } satisfies RunCliResult;
+};
+
+export const setConstraint = async (
+  runtime: CliRuntimeInput,
+  input: { key: string; valueJson: string },
+) => {
+  const repository = await createRepository(runtime);
+  const profile = await repository.setConstraint(
+    DEFAULT_PROFILE_ID,
+    input.key,
+    parseJsonValue(input.valueJson),
+  );
+
+  if (!profile) {
+    return {
+      exitCode: 1,
+      stdout: errorEnvelope("profile.constraints", "set", ErrorType.NOT_FOUND, "NOT_FOUND", "Default profile not found", "run `pin profile create` first"),
+    } satisfies RunCliResult;
+  }
+
+  return {
+    exitCode: 0,
+    stdout: okEnvelope("profile.constraints", "set", profile.constraints ?? {}),
+  } satisfies RunCliResult;
+};
+
+export const unsetConstraint = async (
+  runtime: CliRuntimeInput,
+  key: string,
+) => {
+  const repository = await createRepository(runtime);
+  const profile = await repository.unsetConstraint(DEFAULT_PROFILE_ID, key);
+
+  if (!profile) {
+    return {
+      exitCode: 1,
+      stdout: errorEnvelope("profile.constraints", "unset", ErrorType.NOT_FOUND, "NOT_FOUND", "Default profile not found", "run `pin profile create` first"),
+    } satisfies RunCliResult;
+  }
+
+  return {
+    exitCode: 0,
+    stdout: okEnvelope("profile.constraints", "unset", profile.constraints ?? {}),
   } satisfies RunCliResult;
 };
 

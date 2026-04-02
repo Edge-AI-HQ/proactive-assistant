@@ -10,6 +10,9 @@ Local-first CLI for proactive AI tooling. This package is currently a standalone
 - `pin profile list`
 - `pin profile update`
 - `pin profile delete`
+- `pin profile preferences get|set|unset`
+- `pin profile goals list|upsert|close`
+- `pin profile constraints get|set|unset`
 
 Storage:
 
@@ -82,11 +85,49 @@ Delete it:
 PIN_DATA_ROOT=/tmp/pin-demo pin profile delete --id demo --json
 ```
 
+Set and read preferences:
+
+```bash
+PIN_DATA_ROOT=/tmp/pin-demo pin profile preferences set \
+  --key content_topics \
+  --value-json '["ai","startups"]' \
+  --json
+
+PIN_DATA_ROOT=/tmp/pin-demo pin profile preferences get --json
+```
+
+Manage goals:
+
+```bash
+PIN_DATA_ROOT=/tmp/pin-demo pin profile goals upsert \
+  --key career \
+  --title "Find startup opportunities" \
+  --priority high \
+  --json
+
+PIN_DATA_ROOT=/tmp/pin-demo pin profile goals list --json
+PIN_DATA_ROOT=/tmp/pin-demo pin profile goals close --key career --json
+```
+
+Manage constraints:
+
+```bash
+PIN_DATA_ROOT=/tmp/pin-demo pin profile constraints set \
+  --key quiet_hours \
+  --value-json '"23:00-08:00"' \
+  --json
+
+PIN_DATA_ROOT=/tmp/pin-demo pin profile constraints get --json
+PIN_DATA_ROOT=/tmp/pin-demo pin profile constraints unset --key quiet_hours --json
+```
+
 ## Notes
 
 - `profile create` uses `id` as the primary key.
 - Repeating `create` with the same `id` returns a conflict.
 - `metadata` must be a JSON object string.
+- `preferences` and `constraints` are stored as keyed JSON objects on the default profile row.
+- `goals` are stored as a JSON array on the default profile row.
 - `npm run dev` uses `node --import tsx` to avoid the `tsx` IPC issue seen in restricted environments.
 
 ## Development Layout
