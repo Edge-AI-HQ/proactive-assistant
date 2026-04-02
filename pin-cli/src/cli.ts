@@ -5,6 +5,7 @@ import { registerProfileCommands } from "./domains/profile/register.js";
 import { registerSysCommands } from "./domains/sys/register.js";
 import { registerFeedbackCommands } from "./domains/feedback/register.js";
 import { registerPushCommands } from "./domains/push/register.js";
+import { registerPersonalCommands } from "./domains/personal/register.js";
 import { errorEnvelope } from "./output/envelope.js";
 import { ErrorType } from "./output/errors.js";
 import type { CliRuntimeInput, ResultRef, RunCliResult } from "./runtime.js";
@@ -23,6 +24,7 @@ const createProgram = (runtime: CliRuntimeInput, resultRef: ResultRef): Command 
   registerProfileCommands(program, runtime, resultRef);
   registerFeedbackCommands(program, runtime, resultRef);
   registerPushCommands(program, runtime, resultRef);
+  registerPersonalCommands(program, runtime, resultRef);
 
   return program;
 };

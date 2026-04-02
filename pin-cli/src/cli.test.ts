@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { runCli } from "./cli.js";
 import type { PinEnvelope } from "./output/envelope.js";
 import type { RunCliResult } from "./runtime.js";
+import { runPersonalSync } from "./domains/personal/service.js";
 
 interface SysDoctorData {
   checks: Array<{ name: string; status: string; message: string; hint?: string }>;
@@ -28,6 +29,45 @@ interface ProfileRecord {
   preferences?: Record<string, unknown>;
   goals?: Array<Record<string, unknown>>;
   constraints?: Record<string, unknown>;
+}
+
+interface PersonalSourceRecord {
+  id: string;
+  userId: string;
+  provider: string;
+  toolkit: string;
+  connectedAccountId: string;
+  status: string;
+  syncEnabled: boolean;
+}
+
+interface PersonalSyncStatusRecord {
+  sourceId: string;
+  userId: string;
+  syncStrategy: string;
+  lastSuccessAt: string | null;
+  lastBackfillAt: string | null;
+}
+
+interface PersonalSyncStatusEnvelope {
+  states: PersonalSyncStatusRecord[];
+  recentRuns: Array<{
+    sourceId: string | null;
+    userId: string | null;
+    status: string;
+    fetchedCount: number;
+    upsertedCount: number;
+  }>;
+}
+
+interface PersonalSearchEnvelope {
+  strategy: string;
+  degraded: boolean;
+  results: Array<{
+    id: string;
+    toolkit: string;
+    title: string | null;
+  }>;
 }
 
 test("runCli returns ok envelope for sys doctor json command", async () => {
@@ -225,6 +265,214 @@ test("push commands return NOT_IMPLEMENTED with hints", async () => {
   assert.equal(result.stdout.error?.type, "not_implemented");
   assert.equal(result.stdout.error?.code, "NOT_IMPLEMENTED");
   assert.equal(result.stdout.meta.domain, "push");
+});
+
+test("personal source list returns an empty list for a fresh data root", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-personal-sources-"));
+
+  try {
+    const result = (await runCli(
+      ["personal", "source", "list", "--json"],
+      {
+        env: { PIN_DATA_ROOT: root },
+        homeDir: "/Users/test",
+      },
+    )) as RunCliResult & { stdout: PinEnvelope<PersonalSourceRecord[]> };
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout.ok, true);
+    assert.equal(result.stdout.meta.domain, "personal");
+    assert.equal(result.stdout.meta.command, "source list");
+    assert.deepEqual(result.stdout.data, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("personal sync status returns an empty status list for a fresh data root", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-personal-status-"));
+
+  try {
+    const result = (await runCli(
+      ["personal", "sync", "status", "--json"],
+      {
+        env: { PIN_DATA_ROOT: root },
+        homeDir: "/Users/test",
+      },
+    )) as RunCliResult & { stdout: PinEnvelope<PersonalSyncStatusEnvelope> };
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout.ok, true);
+    assert.equal(result.stdout.meta.domain, "personal");
+    assert.equal(result.stdout.meta.command, "sync status");
+    assert.deepEqual(result.stdout.data?.states, []);
+    assert.deepEqual(result.stdout.data?.recentRuns, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("personal sync run --all succeeds with no supported sources", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-personal-sync-"));
+
+  try {
+    const result = (await runCli(
+      ["personal", "sync", "run", "--all", "--json"],
+      {
+        env: { PIN_DATA_ROOT: root },
+        homeDir: "/Users/test",
+      },
+    )) as RunCliResult & {
+      stdout: PinEnvelope<{
+        mode: string;
+        requested: string;
+        sourcesDiscovered: number;
+        sourcesSynced: number;
+      }>;
+    };
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout.ok, true);
+    assert.equal(result.stdout.meta.domain, "personal");
+    assert.equal(result.stdout.meta.command, "sync run");
+    assert.equal(result.stdout.data?.requested, "all");
+    assert.equal(result.stdout.data?.sourcesDiscovered, 0);
+    assert.equal(result.stdout.data?.sourcesSynced, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("personal item get and search read synced items through CLI", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-personal-cli-items-"));
+
+  try {
+    const runtime = {
+      env: { PIN_DATA_ROOT: root },
+      homeDir: "/Users/test",
+    };
+
+    await runPersonalSync(
+      runtime,
+      { all: true, mode: "incremental" },
+      {
+        provider: {
+          async listConnectedSources() {
+            return [
+              {
+                id: "src_gmail_main",
+                userId: "user_123",
+                provider: "composio",
+                toolkit: "gmail",
+                connectedAccountId: "ca_gmail_1",
+                accountLabel: "Primary Gmail",
+                status: "ACTIVE",
+                syncEnabled: true,
+                authMetadataJson: '{"userId":"user_123"}',
+              },
+            ];
+          },
+        },
+        executor: {
+          async execute(toolSlug) {
+            if (toolSlug === "GMAIL_FETCH_EMAILS") {
+              return {
+                data: {
+                  messages: [{ messageId: "msg_1", threadId: "thread_1" }],
+                },
+              };
+            }
+
+            if (toolSlug === "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID") {
+              return {
+                data: {
+                  messageId: "msg_1",
+                  threadId: "thread_1",
+                  subject: "Weekly review",
+                  preview: {
+                    body: "Your weekly review is ready.",
+                  },
+                  sender: "PIN Team <team@pin.ai>",
+                  to: "Smile <smile@pin.ai>",
+                  messageTimestamp: "2026-04-02T11:00:00.000Z",
+                },
+              };
+            }
+
+            throw new Error(`Unexpected tool slug ${toolSlug}`);
+          },
+        },
+      },
+    );
+
+    const item = await runCli(
+      [
+        "personal",
+        "item",
+        "get",
+        "--id",
+        "src_gmail_main:email:msg_1",
+        "--json",
+      ],
+      runtime,
+    );
+    const itemData = item.stdout.data as {
+      title: string | null;
+      toolkit: string;
+      userId: string;
+    };
+
+    assert.equal(item.exitCode, 0);
+    assert.equal(itemData.title, "Weekly review");
+    assert.equal(itemData.toolkit, "gmail");
+    assert.equal(itemData.userId, "user_123");
+
+    const sources = (await runCli(
+      ["personal", "source", "list", "--json"],
+      runtime,
+    )) as RunCliResult & { stdout: PinEnvelope<PersonalSourceRecord[]> };
+    assert.equal(sources.stdout.data?.[0]?.userId, "user_123");
+
+    const search = (await runCli(
+      [
+        "personal",
+        "search",
+        "--query",
+        "weekly",
+        "--strategy",
+        "hybrid",
+        "--json",
+      ],
+      runtime,
+    )) as RunCliResult & { stdout: PinEnvelope<PersonalSearchEnvelope> };
+
+    assert.equal(search.exitCode, 0);
+    assert.equal(search.stdout.data?.strategy, "keyword");
+    assert.equal(search.stdout.data?.degraded, true);
+    assert.equal(search.stdout.data?.results.length, 1);
+    assert.equal(search.stdout.data?.results[0]?.id, "src_gmail_main:email:msg_1");
+
+    const timeline = (await runCli(
+      [
+        "personal",
+        "timeline",
+        "--from",
+        "2026-04-02T00:00:00.000Z",
+        "--to",
+        "2026-04-03T00:00:00.000Z",
+        "--json",
+      ],
+      runtime,
+    )) as RunCliResult & {
+      stdout: PinEnvelope<Array<{ id: string; title: string | null }>>;
+    };
+
+    assert.equal(timeline.exitCode, 0);
+    assert.equal(timeline.stdout.data?.length, 1);
+    assert.equal(timeline.stdout.data?.[0]?.id, "src_gmail_main:email:msg_1");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("envelope includes _notice field (null when empty)", async () => {
