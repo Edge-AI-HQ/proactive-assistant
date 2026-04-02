@@ -400,6 +400,126 @@ test("runPersonalSync stores normalized google calendar events", async () => {
   }
 });
 
+test("runPersonalSync stores normalized notion pages and databases", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-personal-notion-sync-"));
+
+  try {
+    const runtime = {
+      env: { PIN_DATA_ROOT: root },
+      homeDir: "/Users/test",
+    };
+
+    const syncResult = await runPersonalSync(
+      runtime,
+      { all: true, mode: "incremental" },
+      {
+        provider: {
+          async listConnectedSources() {
+            return [
+              {
+                id: "src_notion_main",
+                userId: "user_999",
+                provider: "composio",
+                toolkit: "notion",
+                connectedAccountId: "ca_notion_1",
+                accountLabel: "Personal Notion",
+                status: "ACTIVE",
+                syncEnabled: true,
+                authMetadataJson: '{"userId":"user_999"}',
+              },
+            ];
+          },
+        },
+        executor: {
+          async execute(toolSlug, input) {
+            assert.equal(input.connectedAccountId, "ca_notion_1");
+            assert.equal(input.userId, "user_999");
+
+            if (toolSlug === "NOTION_FETCH_DATA") {
+              return {
+                data: {
+                  results: [
+                    {
+                      object: "page",
+                      id: "page_1",
+                      url: "https://www.notion.so/page-1",
+                      last_edited_time: "2026-04-02T10:30:00.000Z",
+                      properties: {
+                        Name: {
+                          type: "title",
+                          title: [{ plain_text: "Research Notes" }],
+                        },
+                      },
+                      parent: {
+                        type: "database_id",
+                        database_id: "db_parent",
+                      },
+                    },
+                    {
+                      object: "database",
+                      id: "db_1",
+                      url: "https://www.notion.so/db-1",
+                      last_edited_time: "2026-04-02T11:00:00.000Z",
+                      title: [{ plain_text: "Personal Tasks" }],
+                    },
+                  ],
+                },
+              };
+            }
+
+            throw new Error(`Unexpected tool slug ${toolSlug}`);
+          },
+        },
+      },
+    );
+
+    assert.equal(syncResult.exitCode, 0);
+    assert.equal(syncResult.stdout.ok, true);
+
+    const pageItem = await getPersonalItem(
+      runtime,
+      "src_notion_main:notion_page:page_1",
+    );
+    const pageData = pageItem.stdout.data as {
+      id: string;
+      userId: string;
+      toolkit: string;
+      itemType: string;
+      externalParentId: string | null;
+      title: string | null;
+      occurredAt: string | null;
+      url: string | null;
+      attributes: Record<string, unknown>;
+    };
+
+    assert.equal(pageItem.exitCode, 0);
+    assert.equal(pageData.id, "src_notion_main:notion_page:page_1");
+    assert.equal(pageData.userId, "user_999");
+    assert.equal(pageData.toolkit, "notion");
+    assert.equal(pageData.itemType, "notion_page");
+    assert.equal(pageData.externalParentId, "db_parent");
+    assert.equal(pageData.title, "Research Notes");
+    assert.equal(pageData.occurredAt, "2026-04-02T10:30:00.000Z");
+    assert.equal(pageData.url, "https://www.notion.so/page-1");
+    assert.equal(pageData.attributes.object, "page");
+
+    const search = await searchPersonalItems(runtime, {
+      query: "Research",
+      strategy: "keyword",
+      toolkit: "notion",
+      limit: 5,
+    });
+    const searchData = search.stdout.data as {
+      results: Array<{ id: string; title: string | null }>;
+    };
+    assert.equal(search.exitCode, 0);
+    assert.equal(searchData.results.length, 1);
+    assert.equal(searchData.results[0]?.id, "src_notion_main:notion_page:page_1");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("runPersonalSync keeps userId on skipped sources", async () => {
   const root = await mkdtemp(join(tmpdir(), "pin-personal-skip-user-"));
 

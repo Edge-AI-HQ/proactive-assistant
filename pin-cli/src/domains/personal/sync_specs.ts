@@ -79,6 +79,40 @@ const buildSearchText = (
     .filter(Boolean)
     .join("\n");
 
+const extractPlainTextFromRichText = (value: unknown): string | null => {
+  const parts = Array.isArray(value) ? value : [];
+  const text = parts
+    .map((part) => {
+      const row = asRecord(part);
+      return stringOrNull(row.plain_text) ?? stringOrNull(row.text);
+    })
+    .filter((part): part is string => part !== null)
+    .join(" ")
+    .trim();
+
+  return text.length > 0 ? text : null;
+};
+
+const extractNotionTitle = (row: Record<string, unknown>): string | null => {
+  const directTitle = extractPlainTextFromRichText(row.title);
+  if (directTitle) {
+    return directTitle;
+  }
+
+  const properties = asRecord(row.properties);
+  for (const value of Object.values(properties)) {
+    const property = asRecord(value);
+    if (stringOrNull(property.type) === "title") {
+      const title = extractPlainTextFromRichText(property.title);
+      if (title) {
+        return title;
+      }
+    }
+  }
+
+  return stringOrNull(row.name);
+};
+
 const extractSourceAuthMetadata = (
   source: PersonalConnectedSourceRecord,
 ): PersonalSourceAuthMetadata => {
@@ -204,6 +238,54 @@ const normalizeGoogleCalendarEvent = (
       organizerEmail,
       attendeeEmails.join(" "),
     ]),
+  };
+};
+
+const normalizeNotionEntry = (
+  source: PersonalConnectedSourceRecord,
+  payload: unknown,
+): PersonalNormalizedItem | null => {
+  const row = asRecord(payload);
+  const objectType = stringOrNull(row.object);
+  const entryId = stringOrNull(row.id);
+  if (!objectType || !entryId) {
+    return null;
+  }
+
+  const parent = asRecord(row.parent);
+  const parentType = stringOrNull(parent.type);
+  const parentId =
+    stringOrNull(parent.database_id) ??
+    stringOrNull(parent.page_id) ??
+    stringOrNull(parent.workspace);
+  const lastEditedAt =
+    stringOrNull(row.last_edited_time) ??
+    stringOrNull(row.created_time);
+  const title = extractNotionTitle(row);
+  const itemType = objectType === "database" ? "notion_database" : "notion_page";
+
+  return {
+    id: `${source.id}:${itemType}:${entryId}`,
+    sourceId: source.id,
+    userId: source.userId,
+    toolkit: source.toolkit,
+    itemType,
+    externalId: entryId,
+    externalParentId: parentId,
+    title,
+    contentText: stringOrNull(row.description),
+    url: stringOrNull(row.url),
+    occurredAt: lastEditedAt,
+    attributes: {
+      object: objectType,
+      parentType,
+      parentId,
+      lastEditedAt,
+      archived: row.archived === true,
+      inTrash: row.in_trash === true,
+    },
+    raw: row,
+    searchText: buildSearchText([title, stringOrNull(row.url), parentType]),
   };
 };
 
@@ -367,11 +449,72 @@ const googleCalendarSyncSpec: PersonalSyncSpec = {
   },
 };
 
+const notionSyncSpec: PersonalSyncSpec = {
+  toolkit: "notion",
+  async sync({ source, executor, syncedAt }) {
+    const metadata = extractSourceAuthMetadata(source);
+    if (!metadata.userId) {
+      return [];
+    }
+
+    const result = await executor.execute("NOTION_FETCH_DATA", {
+      connectedAccountId: source.connectedAccountId,
+      userId: metadata.userId,
+      arguments: {
+        fetch_type: "all",
+        page_size: 100,
+      },
+    });
+
+    const data = asRecord(result.data);
+    const entries = asRecordArray(data.results).length > 0
+      ? asRecordArray(data.results)
+      : asRecordArray(data.items);
+    const rows: UpsertPersonalContextItemInput[] = [];
+
+    for (const entry of entries) {
+      const normalized = normalizeNotionEntry(source, entry);
+      if (!normalized) {
+        continue;
+      }
+
+      rows.push({
+        id: normalized.id,
+        sourceId: normalized.sourceId,
+        userId: normalized.userId,
+        toolkit: normalized.toolkit,
+        itemType: normalized.itemType,
+        externalId: normalized.externalId,
+        externalParentId: normalized.externalParentId,
+        title: normalized.title,
+        contentText: normalized.contentText,
+        url: normalized.url,
+        occurredAt: normalized.occurredAt,
+        syncedAt,
+        contentHash: buildContentHash(
+          JSON.stringify({
+            title: normalized.title,
+            contentText: normalized.contentText,
+            attributes: normalized.attributes,
+          }),
+        ),
+        attributesJson: JSON.stringify(normalized.attributes),
+        rawJson: JSON.stringify(normalized.raw),
+        searchText: normalized.searchText,
+        isDeleted: false,
+      });
+    }
+
+    return rows;
+  },
+};
+
 const syncSpecs = new Map<string, PersonalSyncSpec>([
   [gmailSyncSpec.toolkit, gmailSyncSpec],
   [googleCalendarSyncSpec.toolkit, googleCalendarSyncSpec],
   ["google_calendar", googleCalendarSyncSpec],
   ["google-calendar", googleCalendarSyncSpec],
+  [notionSyncSpec.toolkit, notionSyncSpec],
 ]);
 
 export const getPersonalSyncSpec = (
