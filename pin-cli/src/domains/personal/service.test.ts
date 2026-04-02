@@ -1131,3 +1131,84 @@ test("hybrid search degrades to keyword when embeddings fail", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("keyword search escapes fts special characters in raw queries", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-personal-fts-escape-"));
+
+  try {
+    const runtime = {
+      env: { PIN_DATA_ROOT: root },
+      homeDir: "/Users/test",
+    };
+
+    await runPersonalSync(
+      runtime,
+      { all: true, mode: "incremental" },
+      {
+        provider: {
+          async listConnectedSources() {
+            return [
+              {
+                id: "src_gmail_main",
+                userId: "user_123",
+                provider: "composio",
+                toolkit: "gmail",
+                connectedAccountId: "ca_gmail_1",
+                accountLabel: "Primary Gmail",
+                status: "ACTIVE",
+                syncEnabled: true,
+                authMetadataJson: '{"userId":"user_123"}',
+              },
+            ];
+          },
+        },
+        executor: {
+          async execute(toolSlug) {
+            if (toolSlug === "GMAIL_FETCH_EMAILS") {
+              return {
+                data: {
+                  messages: [{ messageId: "msg_1", threadId: "thread_1" }],
+                },
+              };
+            }
+
+            if (toolSlug === "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID") {
+              return {
+                data: {
+                  messageId: "msg_1",
+                  threadId: "thread_1",
+                  subject: "Re: Project update",
+                  preview: {
+                    body: "The latest project update is here.",
+                  },
+                  sender: "PIN Team <team@pin.ai>",
+                  to: "Smile <smile@pin.ai>",
+                  messageTimestamp: "2026-04-02T11:00:00.000Z",
+                },
+              };
+            }
+
+            throw new Error(`Unexpected tool slug ${toolSlug}`);
+          },
+        },
+      },
+    );
+
+    const search = await searchPersonalItems(runtime, {
+      query: "Re: Project update",
+      strategy: "keyword",
+      limit: 5,
+    });
+    const searchData = search.stdout.data as {
+      strategy: string;
+      results: Array<{ id: string }>;
+    };
+
+    assert.equal(search.exitCode, 0);
+    assert.equal(searchData.strategy, "keyword");
+    assert.equal(searchData.results.length, 1);
+    assert.equal(searchData.results[0]?.id, "src_gmail_main:email:msg_1");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

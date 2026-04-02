@@ -152,7 +152,7 @@ class LanceDbPersonalSemanticIndex implements PersonalSemanticIndex {
     const rows = await table
       .search(vector)
       .limit(options?.limit ?? 10)
-      .select(["id"])
+      .select(["id", "_distance"])
       .toArray();
 
     return rows

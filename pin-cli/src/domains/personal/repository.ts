@@ -265,6 +265,24 @@ interface PersonalSearchRow {
   attributes_json: string;
 }
 
+const toSafeFtsQuery = (query: string): string => {
+  const normalized = query
+    .replace(/["'*:^{}()[\]+-]/g, " ")
+    .trim();
+  const tokens = normalized
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+  if (tokens.length === 0) {
+    return `"${query.replace(/"/g, '""').trim()}"`;
+  }
+
+  return tokens
+    .map((token) => `"${token.replace(/"/g, '""')}"`)
+    .join(" ");
+};
+
 export class PersonalRepository {
   private schemaReady = false;
 
@@ -945,7 +963,7 @@ export class PersonalRepository {
     await this.ensureSchema();
 
     const conditions: string[] = ["pf_context_items_fts match ?"];
-    const params: unknown[] = [query];
+    const params: unknown[] = [toSafeFtsQuery(query)];
     this.applyCommonItemFilters(conditions, params, input);
     params.push(input.limit ?? 10);
 
