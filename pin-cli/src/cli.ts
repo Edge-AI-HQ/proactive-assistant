@@ -3,6 +3,7 @@ import { CommanderError } from "commander";
 
 import { registerFeedbackCommands } from "./domains/feedback/register.js";
 import { registerProfileCommands } from "./domains/profile/register.js";
+import { registerPersonalCommands } from "./domains/personal/register.js";
 import { registerPushCommands } from "./domains/push/register.js";
 import { registerSysCommands } from "./domains/sys/register.js";
 import { registerWorldCommands } from "./domains/world/register.js";
@@ -25,6 +26,7 @@ const createProgram = (runtime: CliRuntimeInput, resultRef: ResultRef): Command 
   registerWorldCommands(program, runtime, resultRef);
   registerFeedbackCommands(program, runtime, resultRef);
   registerPushCommands(program, runtime, resultRef);
+  registerPersonalCommands(program, runtime, resultRef);
 
   return program;
 };
