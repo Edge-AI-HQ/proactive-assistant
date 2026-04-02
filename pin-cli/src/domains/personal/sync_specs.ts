@@ -62,6 +62,9 @@ const asRecord = (value: unknown): Record<string, unknown> =>
     ? (value as Record<string, unknown>)
     : {};
 
+const asRecordArray = (value: unknown): Record<string, unknown>[] =>
+  Array.isArray(value) ? value.map(asRecord) : [];
+
 const stringOrNull = (value: unknown): string | null =>
   typeof value === "string" && value.length > 0 ? value : null;
 
@@ -133,6 +136,74 @@ const normalizeGmailMessage = (
     },
     raw: row,
     searchText: buildSearchText([subject, contentText, sender, to]),
+  };
+};
+
+const normalizeGoogleCalendarEvent = (
+  source: PersonalConnectedSourceRecord,
+  calendar: Record<string, unknown>,
+  payload: unknown,
+): PersonalNormalizedItem | null => {
+  const row = asRecord(payload);
+  const start = asRecord(row.start);
+  const end = asRecord(row.end);
+  const organizer = asRecord(row.organizer);
+  const attendees = asRecordArray(row.attendees);
+  const eventId = stringOrNull(row.id);
+  const calendarId = stringOrNull(calendar.id) ?? "primary";
+
+  if (!eventId) {
+    return null;
+  }
+
+  const summary = stringOrNull(row.summary);
+  const description = stringOrNull(row.description);
+  const organizerEmail = stringOrNull(organizer.email);
+  const attendeeEmails = attendees
+    .map((attendee) => stringOrNull(attendee.email))
+    .filter((email): email is string => email !== null);
+  const occurredAt =
+    stringOrNull(start.dateTime) ??
+    stringOrNull(start.date) ??
+    stringOrNull(row.created) ??
+    stringOrNull(row.updated);
+  const endAt =
+    stringOrNull(end.dateTime) ??
+    stringOrNull(end.date);
+
+  return {
+    id: `${source.id}:calendar_event:${calendarId}:${eventId}`,
+    sourceId: source.id,
+    userId: source.userId,
+    toolkit: source.toolkit,
+    itemType: "calendar_event",
+    externalId: `${calendarId}:${eventId}`,
+    externalParentId: stringOrNull(row.recurringEventId),
+    title: summary,
+    contentText: description,
+    url: stringOrNull(row.htmlLink),
+    occurredAt,
+    attributes: {
+      calendarId,
+      calendarSummary: stringOrNull(calendar.summary),
+      organizerEmail,
+      attendeesCount: attendeeEmails.length,
+      attendeeEmails,
+      status: stringOrNull(row.status),
+      start: occurredAt,
+      end: endAt,
+    },
+    raw: {
+      calendar,
+      event: row,
+    },
+    searchText: buildSearchText([
+      summary,
+      description,
+      stringOrNull(calendar.summary),
+      organizerEmail,
+      attendeeEmails.join(" "),
+    ]),
   };
 };
 
@@ -216,8 +287,91 @@ const gmailSyncSpec: PersonalSyncSpec = {
   },
 };
 
+const googleCalendarSyncSpec: PersonalSyncSpec = {
+  toolkit: "googlecalendar",
+  async sync({ source, executor, syncedAt }) {
+    const metadata = extractSourceAuthMetadata(source);
+    if (!metadata.userId) {
+      return [];
+    }
+
+    const calendarsResult = await executor.execute("GOOGLECALENDAR_LIST_CALENDARS", {
+      connectedAccountId: source.connectedAccountId,
+      userId: metadata.userId,
+      arguments: {
+        max_results: 25,
+        show_hidden: false,
+        show_deleted: false,
+      },
+    });
+
+    const calendarsData = asRecord(calendarsResult.data);
+    const calendars = asRecordArray(calendarsData.items);
+    const rows: UpsertPersonalContextItemInput[] = [];
+    const timeMin = new Date(Date.parse(syncedAt) - 1000 * 60 * 60 * 24 * 90).toISOString();
+    const timeMax = new Date(Date.parse(syncedAt) + 1000 * 60 * 60 * 24 * 30).toISOString();
+
+    for (const calendar of calendars) {
+      const calendarId = stringOrNull(calendar.id) ?? "primary";
+      const eventsResult = await executor.execute("GOOGLECALENDAR_EVENTS_LIST", {
+        connectedAccountId: source.connectedAccountId,
+        userId: metadata.userId,
+        arguments: {
+          calendarId,
+          maxResults: 100,
+          singleEvents: true,
+          orderBy: "startTime",
+          timeMin,
+          timeMax,
+          showDeleted: false,
+        },
+      });
+      const eventsData = asRecord(eventsResult.data);
+      const events = asRecordArray(eventsData.items);
+
+      for (const event of events) {
+        const normalized = normalizeGoogleCalendarEvent(source, calendar, event);
+        if (!normalized) {
+          continue;
+        }
+
+        rows.push({
+          id: normalized.id,
+          sourceId: normalized.sourceId,
+          userId: normalized.userId,
+          toolkit: normalized.toolkit,
+          itemType: normalized.itemType,
+          externalId: normalized.externalId,
+          externalParentId: normalized.externalParentId,
+          title: normalized.title,
+          contentText: normalized.contentText,
+          url: normalized.url,
+          occurredAt: normalized.occurredAt,
+          syncedAt,
+          contentHash: buildContentHash(
+            JSON.stringify({
+              title: normalized.title,
+              contentText: normalized.contentText,
+              attributes: normalized.attributes,
+            }),
+          ),
+          attributesJson: JSON.stringify(normalized.attributes),
+          rawJson: JSON.stringify(normalized.raw),
+          searchText: normalized.searchText,
+          isDeleted: false,
+        });
+      }
+    }
+
+    return rows;
+  },
+};
+
 const syncSpecs = new Map<string, PersonalSyncSpec>([
   [gmailSyncSpec.toolkit, gmailSyncSpec],
+  [googleCalendarSyncSpec.toolkit, googleCalendarSyncSpec],
+  ["google_calendar", googleCalendarSyncSpec],
+  ["google-calendar", googleCalendarSyncSpec],
 ]);
 
 export const getPersonalSyncSpec = (

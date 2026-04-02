@@ -5,6 +5,10 @@ import { errorEnvelope, okEnvelope } from "../../output/envelope.js";
 import { ErrorType } from "../../output/errors.js";
 import type { CliRuntimeInput, RunCliResult } from "../../runtime.js";
 import {
+  createPersonalEmbeddingProvider,
+  type PersonalEmbeddingProvider,
+} from "./embedding.js";
+import {
   createPersonalToolExecutor,
   type PersonalToolExecutor,
 } from "./executor.js";
@@ -17,10 +21,17 @@ import {
   type PersonalConnectedSourceRecord,
   type PersonalContextItemRecord,
   type PersonalItemQueryInput,
+  type PersonalSemanticIndexCandidateRecord,
   type PersonalSearchResultRecord,
   type PersonalSyncRunRecord,
   type PersonalSyncStateRecord,
 } from "./repository.js";
+import {
+  createPersonalSemanticIndex,
+  type PersonalSemanticIndex,
+  type PersonalSemanticIndexRecord,
+  type PersonalSemanticSearchHit,
+} from "./semantic_index.js";
 import {
   getPersonalSyncSpec,
   isPersonalSyncSupported,
@@ -175,6 +186,151 @@ const toSearchResult = (
   attributes: parseJsonObject(row.attributesJson),
 });
 
+const toSemanticIndexRecord = (
+  row: PersonalSemanticIndexCandidateRecord,
+  vector: number[],
+): PersonalSemanticIndexRecord => ({
+  id: row.id,
+  userId: row.userId,
+  sourceId: row.sourceId,
+  toolkit: row.toolkit,
+  itemType: row.itemType,
+  occurredAt: row.occurredAt,
+  title: row.title,
+  url: row.url,
+  attributesJson: row.attributesJson,
+  searchText: row.searchText,
+  vector,
+});
+
+const normalizeSnippet = (text: string | null): string | null =>
+  text ? text.slice(0, 280) : null;
+
+const toProviderUnavailableResult = (
+  command: "index refresh" | "search",
+  message: string,
+  hint: string,
+): RunCliResult => ({
+  exitCode: 1,
+  stdout: errorEnvelope(
+    "personal",
+    command,
+    ErrorType.PROVIDER_UNAVAILABLE,
+    "UNAVAILABLE",
+    message,
+    hint,
+  ),
+});
+
+const toKeywordFallbackResult = (
+  keywordResults: PersonalSearchResultRecord[],
+  message: string,
+  hint: string,
+): RunCliResult => ({
+  exitCode: 0,
+  stdout: okEnvelope(
+    "personal",
+    "search",
+    {
+      strategy: "keyword",
+      degraded: true,
+      results: keywordResults.map(toSearchResult),
+    },
+    {
+      search: {
+        message,
+        hint,
+      },
+    },
+  ),
+});
+
+const toSemanticSearchResult = (
+  row: PersonalContextItemRecord,
+  score: number,
+  matchReason: "semantic" | "hybrid",
+): Record<string, unknown> => ({
+  id: row.id,
+  sourceId: row.sourceId,
+  userId: row.userId,
+  toolkit: row.toolkit,
+  itemType: row.itemType,
+  occurredAt: row.occurredAt,
+  title: row.title,
+  url: row.url,
+  snippet: normalizeSnippet(row.contentText),
+  score,
+  matchReason,
+  attributes: parseJsonObject(row.attributesJson),
+});
+
+const matchesQueryInput = (
+  row: PersonalContextItemRecord,
+  input: PersonalItemQueryInput,
+): boolean => {
+  if (row.isDeleted) {
+    return false;
+  }
+
+  if (input.from && row.occurredAt && row.occurredAt < input.from) {
+    return false;
+  }
+  if (input.to && row.occurredAt && row.occurredAt > input.to) {
+    return false;
+  }
+  if (input.sourceIds && input.sourceIds.length > 0 && !input.sourceIds.includes(row.sourceId)) {
+    return false;
+  }
+  if (input.toolkits && input.toolkits.length > 0 && !input.toolkits.includes(row.toolkit)) {
+    return false;
+  }
+  if (input.itemTypes && input.itemTypes.length > 0 && !input.itemTypes.includes(row.itemType)) {
+    return false;
+  }
+  if (input.facet) {
+    const attributes = parseJsonObject(row.attributesJson);
+    const facetValue = attributes[input.facet.key];
+    if (String(facetValue ?? "") !== input.facet.value) {
+      return false;
+    }
+  }
+
+  return true;
+};
+
+const reciprocalRankFusion = (
+  keywordRows: PersonalSearchResultRecord[],
+  semanticRows: Array<{ row: PersonalContextItemRecord; score: number }>,
+): Array<{ id: string; score: number; reason: "keyword" | "semantic" | "hybrid" }> => {
+  const scores = new Map<string, { score: number; sources: Set<string> }>();
+  const k = 60;
+
+  keywordRows.forEach((row, index) => {
+    const current = scores.get(row.id) ?? { score: 0, sources: new Set<string>() };
+    current.score += 1 / (k + index + 1);
+    current.sources.add("keyword");
+    scores.set(row.id, current);
+  });
+
+  semanticRows.forEach(({ row }, index) => {
+    const current = scores.get(row.id) ?? { score: 0, sources: new Set<string>() };
+    current.score += 1 / (k + index + 1);
+    current.sources.add("semantic");
+    scores.set(row.id, current);
+  });
+
+  return [...scores.entries()]
+    .map(([id, value]) => ({
+      id,
+      score: value.score,
+      reason:
+        value.sources.size === 2
+          ? "hybrid"
+          : (value.sources.has("semantic") ? "semantic" : "keyword"),
+    }) as { id: string; score: number; reason: "keyword" | "semantic" | "hybrid" })
+    .sort((a, b) => b.score - a.score);
+};
+
 export const listPersonalSources = async (
   runtime: CliRuntimeInput,
 ): Promise<RunCliResult> => {
@@ -255,6 +411,91 @@ export const getPersonalItem = async (
   };
 };
 
+export const runPersonalIndexRefresh = async (
+  runtime: CliRuntimeInput,
+  input: { all?: boolean; pending?: boolean; limit?: string | number },
+  deps?: {
+    embeddingProvider?: PersonalEmbeddingProvider;
+    semanticIndex?: PersonalSemanticIndex;
+  },
+): Promise<RunCliResult> => {
+  const repository = await createRepository(runtime);
+  const embeddingProvider = createPersonalEmbeddingProvider(
+    runtime,
+    deps?.embeddingProvider,
+  );
+  const semanticIndex = createPersonalSemanticIndex(runtime, deps?.semanticIndex);
+  const limit =
+    typeof input.limit === "number"
+      ? input.limit
+      : Number.parseInt(input.limit ?? "", 10) || 100;
+  const mode = input.all ? "all" : "pending";
+  const candidates = await repository.listSemanticIndexCandidates({
+    all: input.all === true,
+    limit,
+  });
+
+  if (candidates.length === 0) {
+    return {
+      exitCode: 0,
+      stdout: okEnvelope(
+        "personal",
+        "index refresh",
+        {
+          mode,
+          itemsSelected: 0,
+          itemsIndexed: 0,
+          deletedCount: 0,
+        },
+      ),
+    };
+  }
+
+  try {
+    const vectors = await embeddingProvider.embedTexts(
+      candidates.map((candidate) => candidate.searchText),
+    );
+    const refreshResult = await semanticIndex.refresh(
+      candidates.map((candidate, index) =>
+        toSemanticIndexRecord(candidate, vectors[index] ?? []),
+      ),
+      { replaceAll: input.all === true },
+    );
+    const indexedAt = new Date().toISOString();
+    await repository.markSemanticIndexed(
+      candidates.map((candidate) => ({
+        id: candidate.id,
+        semanticIndexedAt: indexedAt,
+        semanticModel: embeddingProvider.model,
+        semanticContentHash: candidate.contentHash,
+      })),
+    );
+
+    return {
+      exitCode: 0,
+      stdout: okEnvelope(
+        "personal",
+        "index refresh",
+        {
+          mode,
+          itemsSelected: candidates.length,
+          itemsIndexed: refreshResult.upsertedCount,
+          deletedCount: refreshResult.deletedCount,
+          model: embeddingProvider.model,
+        },
+      ),
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "语义索引提供方当前不可用";
+    return toProviderUnavailableResult(
+      "index refresh",
+      "语义索引构建失败",
+      `请检查 OPENAI_API_KEY 和 embedding 服务状态。底层错误: ${message}`,
+    );
+  }
+};
+
 export const searchPersonalItems = async (
   runtime: CliRuntimeInput,
   input: {
@@ -268,20 +509,106 @@ export const searchPersonalItems = async (
     facet?: string;
     limit?: string | number;
   },
+  deps?: {
+    embeddingProvider?: PersonalEmbeddingProvider;
+    semanticIndex?: PersonalSemanticIndex;
+  },
 ): Promise<RunCliResult> => {
   const repository = await createRepository(runtime);
   const queryInput = toItemQueryInput(input);
   const strategy = input.strategy ?? "keyword";
-  const results = await repository.searchItems(input.query, queryInput);
-  const degraded =
-    strategy === "semantic" || strategy === "hybrid"
-      ? {
-          search: {
-            message: "语义索引尚未接入，当前已降级为关键词检索",
-            hint: "下一步会把 LanceDB embedding 索引接上",
-          },
-        }
-      : undefined;
+  const limit = queryInput.limit ?? 10;
+  const keywordResults = await repository.searchItems(input.query, queryInput);
+
+  if (strategy === "keyword") {
+    return {
+      exitCode: 0,
+      stdout: okEnvelope(
+        "personal",
+        "search",
+        {
+          strategy,
+          degraded: false,
+          results: keywordResults.map(toSearchResult),
+        },
+      ),
+    };
+  }
+
+  const embeddingProvider = createPersonalEmbeddingProvider(
+    runtime,
+    deps?.embeddingProvider,
+  );
+  const semanticIndex = createPersonalSemanticIndex(runtime, deps?.semanticIndex);
+  const semanticReady = await semanticIndex.isReady();
+
+  if (!semanticReady) {
+    if (strategy === "semantic") {
+      return toProviderUnavailableResult(
+        "search",
+        "语义索引尚未准备好",
+        "先执行 `pin personal index refresh --all --json` 建立语义索引",
+      );
+    }
+
+    return toKeywordFallbackResult(
+      keywordResults,
+      "语义索引尚未接入，当前已降级为关键词检索",
+      "先执行 `pin personal index refresh --all --json` 建立语义索引",
+    );
+  }
+
+  let semanticItems: Array<{ row: PersonalContextItemRecord; score: number }> = [];
+  try {
+    const queryVector = (await embeddingProvider.embedTexts([input.query]))[0] ?? [];
+    const semanticHits = await semanticIndex.search(queryVector, {
+      limit: Math.max(limit * 3, 20),
+    });
+    semanticItems = (await repository.listItemsByIds(semanticHits.map((hit) => hit.id)))
+      .filter((row) => matchesQueryInput(row, queryInput))
+      .map((row) => ({
+        row,
+        score: semanticHits.find((hit) => hit.id === row.id)?.score ?? 0,
+      }));
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "语义检索提供方当前不可用";
+
+    if (strategy === "semantic") {
+      return toProviderUnavailableResult(
+        "search",
+        "语义检索当前不可用",
+        `请检查 OPENAI_API_KEY 和 embedding 服务状态。底层错误: ${message}`,
+      );
+    }
+
+    return toKeywordFallbackResult(
+      keywordResults,
+      "语义检索当前不可用，已降级为关键词检索",
+      `请检查 OPENAI_API_KEY 和 embedding 服务状态。底层错误: ${message}`,
+    );
+  }
+
+  if (strategy === "semantic") {
+    return {
+      exitCode: 0,
+      stdout: okEnvelope(
+        "personal",
+        "search",
+        {
+          strategy: "semantic",
+          degraded: false,
+          results: semanticItems
+            .slice(0, limit)
+            .map(({ row, score }) => toSemanticSearchResult(row, score, "semantic")),
+        },
+      ),
+    };
+  }
+
+  const fused = reciprocalRankFusion(keywordResults, semanticItems).slice(0, limit);
+  const semanticMap = new Map(semanticItems.map((item) => [item.row.id, item]));
+  const keywordMap = new Map(keywordResults.map((row) => [row.id, row]));
 
   return {
     exitCode: 0,
@@ -289,14 +616,22 @@ export const searchPersonalItems = async (
       "personal",
       "search",
       {
-        strategy:
-          strategy === "semantic" || strategy === "hybrid"
-            ? "keyword"
-            : strategy,
-        degraded: degraded ? true : false,
-        results: results.map(toSearchResult),
+        strategy: "hybrid",
+        degraded: false,
+        results: fused.map((item) => {
+          const semantic = semanticMap.get(item.id);
+          if (semantic) {
+            return toSemanticSearchResult(
+              semantic.row,
+              item.score,
+              item.reason === "keyword" ? "semantic" : item.reason,
+            );
+          }
+
+          const keyword = keywordMap.get(item.id);
+          return keyword ? { ...toSearchResult(keyword), matchReason: item.reason } : null;
+        }).filter((item): item is Record<string, unknown> => item !== null),
       },
-      degraded,
     ),
   };
 };

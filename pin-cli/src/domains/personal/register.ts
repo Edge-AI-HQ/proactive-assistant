@@ -6,6 +6,7 @@ import type { CliRuntimeInput, ResultRef } from "../../runtime.js";
 import {
   getPersonalItem,
   listPersonalSources,
+  runPersonalIndexRefresh,
   listPersonalSyncStatus,
   runPersonalSync,
   searchPersonalItems,
@@ -50,6 +51,18 @@ export const registerPersonalCommands = (
     .option("--json")
     .action(async (options) => {
       resultRef.current = await listPersonalSyncStatus(runtime, options);
+    });
+
+  const index = personal.command("index").description("Manage semantic search indices");
+  index
+    .command("refresh")
+    .description("Refresh the semantic index for personal items")
+    .option("--all", "rebuild the entire semantic index")
+    .option("--pending", "refresh only items changed since the last semantic index update")
+    .option("--limit <limit>", "max items to process", "100")
+    .option("--json")
+    .action(async (options) => {
+      resultRef.current = await runPersonalIndexRefresh(runtime, options);
     });
 
   const item = personal.command("item").description("Read personal feed items");
@@ -129,6 +142,19 @@ export const registerPersonalCommands = (
     flags: [
       { name: "source", type: "string", required: false, description: "Source ID filter" },
       { name: "recent", type: "number", required: false, description: "Number of recent runs to show" },
+    ],
+  });
+
+  registerCommand({
+    domain: "personal",
+    command: "index refresh",
+    description: "Refresh the semantic index for personal-feed items",
+    risk: "write",
+    supportsDryRun: true,
+    flags: [
+      { name: "all", type: "boolean", required: false, description: "Rebuild the full semantic index" },
+      { name: "pending", type: "boolean", required: false, description: "Index only pending items" },
+      { name: "limit", type: "number", required: false, description: "Maximum items to process" },
     ],
   });
 

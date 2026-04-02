@@ -8,6 +8,7 @@ import {
   getPersonalItem,
   listPersonalSources,
   listPersonalSyncStatus,
+  runPersonalIndexRefresh,
   runPersonalSync,
   searchPersonalItems,
   timelinePersonalItems,
@@ -250,6 +251,155 @@ test("runPersonalSync stores normalized gmail messages and getPersonalItem retur
   }
 });
 
+test("runPersonalSync stores normalized google calendar events", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-personal-calendar-sync-"));
+
+  try {
+    const runtime = {
+      env: { PIN_DATA_ROOT: root },
+      homeDir: "/Users/test",
+    };
+
+    const syncResult = await runPersonalSync(
+      runtime,
+      { all: true, mode: "incremental" },
+      {
+        provider: {
+          async listConnectedSources() {
+            return [
+              {
+                id: "src_googlecalendar_main",
+                userId: "user_789",
+                provider: "composio",
+                toolkit: "googlecalendar",
+                connectedAccountId: "ca_calendar_1",
+                accountLabel: "Primary Calendar",
+                status: "ACTIVE",
+                syncEnabled: true,
+                authMetadataJson: '{"userId":"user_789"}',
+              },
+            ];
+          },
+        },
+        executor: {
+          async execute(toolSlug, input) {
+            assert.equal(input.connectedAccountId, "ca_calendar_1");
+            assert.equal(input.userId, "user_789");
+
+            if (toolSlug === "GOOGLECALENDAR_LIST_CALENDARS") {
+              return {
+                data: {
+                  items: [
+                    {
+                      id: "primary",
+                      summary: "Personal",
+                      timeZone: "Asia/Shanghai",
+                    },
+                  ],
+                },
+              };
+            }
+
+            if (toolSlug === "GOOGLECALENDAR_EVENTS_LIST") {
+              return {
+                data: {
+                  items: [
+                    {
+                      id: "event_1",
+                      recurringEventId: "series_1",
+                      summary: "Dinner with team",
+                      description: "Discuss personal feed next steps.",
+                      htmlLink: "https://calendar.google.com/event?eid=event_1",
+                      status: "confirmed",
+                      organizer: {
+                        email: "smile@pin.ai",
+                      },
+                      attendees: [
+                        { email: "smile@pin.ai" },
+                        { email: "team@pin.ai" },
+                      ],
+                      start: {
+                        dateTime: "2026-04-02T19:00:00+08:00",
+                      },
+                      end: {
+                        dateTime: "2026-04-02T20:00:00+08:00",
+                      },
+                    },
+                  ],
+                },
+              };
+            }
+
+            throw new Error(`Unexpected tool slug ${toolSlug}`);
+          },
+        },
+      },
+    );
+
+    assert.equal(syncResult.exitCode, 0);
+    assert.equal(syncResult.stdout.ok, true);
+
+    const item = await getPersonalItem(
+      runtime,
+      "src_googlecalendar_main:calendar_event:primary:event_1",
+    );
+    const data = item.stdout.data as {
+      id: string;
+      sourceId: string;
+      userId: string;
+      toolkit: string;
+      itemType: string;
+      externalId: string;
+      externalParentId: string | null;
+      occurredAt: string | null;
+      title: string | null;
+      contentText: string | null;
+      url: string | null;
+      attributes: Record<string, unknown>;
+    };
+
+    assert.equal(item.exitCode, 0);
+    assert.equal(data.id, "src_googlecalendar_main:calendar_event:primary:event_1");
+    assert.equal(data.sourceId, "src_googlecalendar_main");
+    assert.equal(data.userId, "user_789");
+    assert.equal(data.toolkit, "googlecalendar");
+    assert.equal(data.itemType, "calendar_event");
+    assert.equal(data.externalId, "primary:event_1");
+    assert.equal(data.externalParentId, "series_1");
+    assert.equal(data.occurredAt, "2026-04-02T19:00:00+08:00");
+    assert.equal(data.title, "Dinner with team");
+    assert.equal(data.contentText, "Discuss personal feed next steps.");
+    assert.equal(
+      data.url,
+      "https://calendar.google.com/event?eid=event_1",
+    );
+    assert.equal(data.attributes.calendarId, "primary");
+    assert.equal(data.attributes.calendarSummary, "Personal");
+    assert.equal(data.attributes.organizerEmail, "smile@pin.ai");
+    assert.equal(data.attributes.attendeesCount, 2);
+
+    const timeline = await timelinePersonalItems(runtime, {
+      from: "2026-04-02T00:00:00.000Z",
+      to: "2026-04-03T00:00:00.000Z",
+      toolkit: "googlecalendar",
+      limit: 5,
+    });
+    const timelineData = timeline.stdout.data as Array<{
+      id: string;
+      toolkit: string;
+    }>;
+    assert.equal(timeline.exitCode, 0);
+    assert.equal(timelineData.length, 1);
+    assert.equal(
+      timelineData[0]?.id,
+      "src_googlecalendar_main:calendar_event:primary:event_1",
+    );
+    assert.equal(timelineData[0]?.toolkit, "googlecalendar");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("runPersonalSync keeps userId on skipped sources", async () => {
   const root = await mkdtemp(join(tmpdir(), "pin-personal-skip-user-"));
 
@@ -298,6 +448,565 @@ test("runPersonalSync keeps userId on skipped sources", async () => {
     assert.equal(data.recentRuns[0]?.sourceId, "src_outlook_main");
     assert.equal(data.recentRuns[0]?.userId, "user_456");
     assert.equal(data.recentRuns[0]?.status, "skipped");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("runPersonalIndexRefresh indexes pending items and semantic search uses the semantic index", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-personal-semantic-"));
+  const indexedIds: string[] = [];
+
+  try {
+    const runtime = {
+      env: { PIN_DATA_ROOT: root },
+      homeDir: "/Users/test",
+    };
+
+    await runPersonalSync(
+      runtime,
+      { all: true, mode: "incremental" },
+      {
+        provider: {
+          async listConnectedSources() {
+            return [
+              {
+                id: "src_gmail_main",
+                userId: "user_123",
+                provider: "composio",
+                toolkit: "gmail",
+                connectedAccountId: "ca_gmail_1",
+                accountLabel: "Primary Gmail",
+                status: "ACTIVE",
+                syncEnabled: true,
+                authMetadataJson: '{"userId":"user_123"}',
+              },
+            ];
+          },
+        },
+        executor: {
+          async execute(toolSlug) {
+            if (toolSlug === "GMAIL_FETCH_EMAILS") {
+              return {
+                data: {
+                  messages: [{ messageId: "msg_1", threadId: "thread_1" }],
+                },
+              };
+            }
+
+            if (toolSlug === "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID") {
+              return {
+                data: {
+                  messageId: "msg_1",
+                  threadId: "thread_1",
+                  subject: "Career update",
+                  preview: {
+                    body: "You are actively exploring research directions.",
+                  },
+                  sender: "PIN Team <team@pin.ai>",
+                  to: "Smile <smile@pin.ai>",
+                  messageTimestamp: "2026-04-02T11:00:00.000Z",
+                },
+              };
+            }
+
+            throw new Error(`Unexpected tool slug ${toolSlug}`);
+          },
+        },
+      },
+    );
+
+    const refresh = await runPersonalIndexRefresh(
+      runtime,
+      { pending: true },
+      {
+        embeddingProvider: {
+          model: "fake-embedding-model",
+          async embedTexts(texts) {
+            return texts.map(() => [0.1, 0.2, 0.3]);
+          },
+        },
+        semanticIndex: {
+          async refresh(records) {
+            indexedIds.push(...records.map((record) => record.id));
+            return {
+              upsertedCount: records.length,
+              deletedCount: 0,
+            };
+          },
+          async search() {
+            return [
+              {
+                id: "src_gmail_main:email:msg_1",
+                score: 0.92,
+              },
+            ];
+          },
+          async isReady() {
+            return true;
+          },
+        },
+      },
+    );
+
+    const refreshData = refresh.stdout.data as {
+      mode: string;
+      itemsSelected: number;
+      itemsIndexed: number;
+      deletedCount: number;
+    };
+    assert.equal(refresh.exitCode, 0);
+    assert.equal(refreshData.mode, "pending");
+    assert.equal(refreshData.itemsSelected, 1);
+    assert.equal(refreshData.itemsIndexed, 1);
+    assert.equal(indexedIds[0], "src_gmail_main:email:msg_1");
+
+    const semantic = await searchPersonalItems(
+      runtime,
+      {
+        query: "research direction",
+        strategy: "semantic",
+        limit: 5,
+      },
+      {
+        embeddingProvider: {
+          model: "fake-embedding-model",
+          async embedTexts(texts) {
+            return texts.map(() => [0.1, 0.2, 0.3]);
+          },
+        },
+        semanticIndex: {
+          async refresh() {
+            return { upsertedCount: 0, deletedCount: 0 };
+          },
+          async search() {
+            return [
+              {
+                id: "src_gmail_main:email:msg_1",
+                score: 0.92,
+              },
+            ];
+          },
+          async isReady() {
+            return true;
+          },
+        },
+      },
+    );
+
+    const semanticData = semantic.stdout.data as {
+      strategy: string;
+      degraded: boolean;
+      results: Array<{ id: string; matchReason: string; userId: string }>;
+    };
+    assert.equal(semantic.exitCode, 0);
+    assert.equal(semanticData.strategy, "semantic");
+    assert.equal(semanticData.degraded, false);
+    assert.equal(semanticData.results[0]?.id, "src_gmail_main:email:msg_1");
+    assert.equal(semanticData.results[0]?.matchReason, "semantic");
+    assert.equal(semanticData.results[0]?.userId, "user_123");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("hybrid search falls back to keyword when semantic index is unavailable", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-personal-hybrid-fallback-"));
+
+  try {
+    const runtime = {
+      env: { PIN_DATA_ROOT: root },
+      homeDir: "/Users/test",
+    };
+
+    await runPersonalSync(
+      runtime,
+      { all: true, mode: "incremental" },
+      {
+        provider: {
+          async listConnectedSources() {
+            return [
+              {
+                id: "src_gmail_main",
+                userId: "user_123",
+                provider: "composio",
+                toolkit: "gmail",
+                connectedAccountId: "ca_gmail_1",
+                accountLabel: "Primary Gmail",
+                status: "ACTIVE",
+                syncEnabled: true,
+                authMetadataJson: '{"userId":"user_123"}',
+              },
+            ];
+          },
+        },
+        executor: {
+          async execute(toolSlug) {
+            if (toolSlug === "GMAIL_FETCH_EMAILS") {
+              return {
+                data: {
+                  messages: [{ messageId: "msg_1", threadId: "thread_1" }],
+                },
+              };
+            }
+
+            if (toolSlug === "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID") {
+              return {
+                data: {
+                  messageId: "msg_1",
+                  threadId: "thread_1",
+                  subject: "Weekly review",
+                  preview: {
+                    body: "Your weekly review is ready.",
+                  },
+                  sender: "PIN Team <team@pin.ai>",
+                  to: "Smile <smile@pin.ai>",
+                  messageTimestamp: "2026-04-02T11:00:00.000Z",
+                },
+              };
+            }
+
+            throw new Error(`Unexpected tool slug ${toolSlug}`);
+          },
+        },
+      },
+    );
+
+    const hybrid = await searchPersonalItems(
+      runtime,
+      {
+        query: "weekly",
+        strategy: "hybrid",
+        limit: 5,
+      },
+      {
+        embeddingProvider: {
+          model: "fake-embedding-model",
+          async embedTexts() {
+            throw new Error("should not be called");
+          },
+        },
+        semanticIndex: {
+          async refresh() {
+            return { upsertedCount: 0, deletedCount: 0 };
+          },
+          async search() {
+            return [];
+          },
+          async isReady() {
+            return false;
+          },
+        },
+      },
+    );
+
+    const hybridData = hybrid.stdout.data as {
+      strategy: string;
+      degraded: boolean;
+      results: Array<{ id: string; matchReason: string }>;
+    };
+    assert.equal(hybrid.exitCode, 0);
+    assert.equal(hybridData.strategy, "keyword");
+    assert.equal(hybridData.degraded, true);
+    assert.equal(hybridData.results[0]?.id, "src_gmail_main:email:msg_1");
+    assert.equal(hybrid.stdout._notice?.search?.message.includes("降级"), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("runPersonalIndexRefresh returns provider_unavailable when embeddings fail", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-personal-index-fail-"));
+
+  try {
+    const runtime = {
+      env: { PIN_DATA_ROOT: root },
+      homeDir: "/Users/test",
+    };
+
+    await runPersonalSync(
+      runtime,
+      { all: true, mode: "incremental" },
+      {
+        provider: {
+          async listConnectedSources() {
+            return [
+              {
+                id: "src_gmail_main",
+                userId: "user_123",
+                provider: "composio",
+                toolkit: "gmail",
+                connectedAccountId: "ca_gmail_1",
+                accountLabel: "Primary Gmail",
+                status: "ACTIVE",
+                syncEnabled: true,
+                authMetadataJson: '{"userId":"user_123"}',
+              },
+            ];
+          },
+        },
+        executor: {
+          async execute(toolSlug) {
+            if (toolSlug === "GMAIL_FETCH_EMAILS") {
+              return {
+                data: {
+                  messages: [{ messageId: "msg_1", threadId: "thread_1" }],
+                },
+              };
+            }
+
+            if (toolSlug === "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID") {
+              return {
+                data: {
+                  messageId: "msg_1",
+                  threadId: "thread_1",
+                  subject: "Weekly review",
+                  preview: {
+                    body: "Your weekly review is ready.",
+                  },
+                  sender: "PIN Team <team@pin.ai>",
+                  to: "Smile <smile@pin.ai>",
+                  messageTimestamp: "2026-04-02T11:00:00.000Z",
+                },
+              };
+            }
+
+            throw new Error(`Unexpected tool slug ${toolSlug}`);
+          },
+        },
+      },
+    );
+
+    const refresh = await runPersonalIndexRefresh(
+      runtime,
+      { pending: true },
+      {
+        embeddingProvider: {
+          model: "broken-model",
+          async embedTexts() {
+            throw new Error("invalid embedding key");
+          },
+        },
+        semanticIndex: {
+          async refresh() {
+            return { upsertedCount: 0, deletedCount: 0 };
+          },
+          async search() {
+            return [];
+          },
+          async isReady() {
+            return false;
+          },
+        },
+      },
+    );
+
+    assert.equal(refresh.exitCode, 1);
+    assert.equal(refresh.stdout.error?.type, "provider_unavailable");
+    assert.equal(refresh.stdout.error?.code, "UNAVAILABLE");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("semantic search returns provider_unavailable when embeddings fail", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-personal-semantic-fail-"));
+
+  try {
+    const runtime = {
+      env: { PIN_DATA_ROOT: root },
+      homeDir: "/Users/test",
+    };
+
+    await runPersonalSync(
+      runtime,
+      { all: true, mode: "incremental" },
+      {
+        provider: {
+          async listConnectedSources() {
+            return [
+              {
+                id: "src_gmail_main",
+                userId: "user_123",
+                provider: "composio",
+                toolkit: "gmail",
+                connectedAccountId: "ca_gmail_1",
+                accountLabel: "Primary Gmail",
+                status: "ACTIVE",
+                syncEnabled: true,
+                authMetadataJson: '{"userId":"user_123"}',
+              },
+            ];
+          },
+        },
+        executor: {
+          async execute(toolSlug) {
+            if (toolSlug === "GMAIL_FETCH_EMAILS") {
+              return {
+                data: {
+                  messages: [{ messageId: "msg_1", threadId: "thread_1" }],
+                },
+              };
+            }
+
+            if (toolSlug === "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID") {
+              return {
+                data: {
+                  messageId: "msg_1",
+                  threadId: "thread_1",
+                  subject: "Semantic fail",
+                  preview: {
+                    body: "Embedding provider should fail here.",
+                  },
+                  sender: "PIN Team <team@pin.ai>",
+                  to: "Smile <smile@pin.ai>",
+                  messageTimestamp: "2026-04-02T11:00:00.000Z",
+                },
+              };
+            }
+
+            throw new Error(`Unexpected tool slug ${toolSlug}`);
+          },
+        },
+      },
+    );
+
+    const semantic = await searchPersonalItems(
+      runtime,
+      {
+        query: "embedding fail",
+        strategy: "semantic",
+        limit: 5,
+      },
+      {
+        embeddingProvider: {
+          model: "broken-model",
+          async embedTexts() {
+            throw new Error("invalid embedding key");
+          },
+        },
+        semanticIndex: {
+          async refresh() {
+            return { upsertedCount: 0, deletedCount: 0 };
+          },
+          async search() {
+            return [];
+          },
+          async isReady() {
+            return true;
+          },
+        },
+      },
+    );
+
+    assert.equal(semantic.exitCode, 1);
+    assert.equal(semantic.stdout.error?.type, "provider_unavailable");
+    assert.equal(semantic.stdout.error?.code, "UNAVAILABLE");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("hybrid search degrades to keyword when embeddings fail", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-personal-hybrid-embed-fail-"));
+
+  try {
+    const runtime = {
+      env: { PIN_DATA_ROOT: root },
+      homeDir: "/Users/test",
+    };
+
+    await runPersonalSync(
+      runtime,
+      { all: true, mode: "incremental" },
+      {
+        provider: {
+          async listConnectedSources() {
+            return [
+              {
+                id: "src_gmail_main",
+                userId: "user_123",
+                provider: "composio",
+                toolkit: "gmail",
+                connectedAccountId: "ca_gmail_1",
+                accountLabel: "Primary Gmail",
+                status: "ACTIVE",
+                syncEnabled: true,
+                authMetadataJson: '{"userId":"user_123"}',
+              },
+            ];
+          },
+        },
+        executor: {
+          async execute(toolSlug) {
+            if (toolSlug === "GMAIL_FETCH_EMAILS") {
+              return {
+                data: {
+                  messages: [{ messageId: "msg_1", threadId: "thread_1" }],
+                },
+              };
+            }
+
+            if (toolSlug === "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID") {
+              return {
+                data: {
+                  messageId: "msg_1",
+                  threadId: "thread_1",
+                  subject: "Hybrid fail",
+                  preview: {
+                    body: "Fallback should still return this item.",
+                  },
+                  sender: "PIN Team <team@pin.ai>",
+                  to: "Smile <smile@pin.ai>",
+                  messageTimestamp: "2026-04-02T11:00:00.000Z",
+                },
+              };
+            }
+
+            throw new Error(`Unexpected tool slug ${toolSlug}`);
+          },
+        },
+      },
+    );
+
+    const hybrid = await searchPersonalItems(
+      runtime,
+      {
+        query: "fallback",
+        strategy: "hybrid",
+        limit: 5,
+      },
+      {
+        embeddingProvider: {
+          model: "broken-model",
+          async embedTexts() {
+            throw new Error("invalid embedding key");
+          },
+        },
+        semanticIndex: {
+          async refresh() {
+            return { upsertedCount: 0, deletedCount: 0 };
+          },
+          async search() {
+            return [];
+          },
+          async isReady() {
+            return true;
+          },
+        },
+      },
+    );
+
+    const hybridData = hybrid.stdout.data as {
+      strategy: string;
+      degraded: boolean;
+      results: Array<{ id: string }>;
+    };
+    assert.equal(hybrid.exitCode, 0);
+    assert.equal(hybridData.strategy, "keyword");
+    assert.equal(hybridData.degraded, true);
+    assert.equal(hybridData.results[0]?.id, "src_gmail_main:email:msg_1");
+    assert.equal(hybrid.stdout._notice?.search?.message.includes("降级"), true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

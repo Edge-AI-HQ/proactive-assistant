@@ -62,6 +62,9 @@ export interface PersonalContextItemRecord {
   attributesJson: string;
   rawJson: string;
   searchText: string;
+  semanticIndexedAt: string | null;
+  semanticModel: string | null;
+  semanticContentHash: string | null;
   isDeleted: boolean;
   createdAt: string;
   updatedAt: string;
@@ -123,6 +126,31 @@ export interface UpsertPersonalContextItemInput {
   rawJson: string;
   searchText?: string | null;
   isDeleted?: boolean;
+}
+
+export interface PersonalSemanticIndexCandidateRecord {
+  id: string;
+  userId: string;
+  sourceId: string;
+  toolkit: string;
+  itemType: string;
+  title: string | null;
+  url: string | null;
+  occurredAt: string | null;
+  attributesJson: string;
+  searchText: string;
+  contentHash: string | null;
+  updatedAt: string;
+  semanticIndexedAt: string | null;
+  semanticModel: string | null;
+  semanticContentHash: string | null;
+}
+
+export interface MarkPersonalSemanticIndexedInput {
+  id: string;
+  semanticIndexedAt: string;
+  semanticModel: string;
+  semanticContentHash: string | null;
 }
 
 export interface PersonalSyncRunInput {
@@ -197,6 +225,9 @@ interface PersonalContextItemRow {
   attributes_json: string;
   raw_json: string;
   search_text: string;
+  semantic_indexed_at: string | null;
+  semantic_model: string | null;
+  semantic_content_hash: string | null;
   is_deleted: number;
   created_at: string;
   updated_at: string;
@@ -290,6 +321,9 @@ export class PersonalRepository {
         attributes_json text not null default '{}',
         raw_json text not null,
         search_text text not null default '',
+        semantic_indexed_at text,
+        semantic_model text,
+        semantic_content_hash text,
         is_deleted integer not null default 0,
         created_at text not null,
         updated_at text not null,
@@ -361,6 +395,21 @@ export class PersonalRepository {
       "pf_context_items",
       "user_id",
       "user_id text not null default ''",
+    );
+    this.ensureColumn(
+      "pf_context_items",
+      "semantic_indexed_at",
+      "semantic_indexed_at text",
+    );
+    this.ensureColumn(
+      "pf_context_items",
+      "semantic_model",
+      "semantic_model text",
+    );
+    this.ensureColumn(
+      "pf_context_items",
+      "semantic_content_hash",
+      "semantic_content_hash text",
     );
     this.ensureColumn(
       "pf_sync_runs",
@@ -670,6 +719,9 @@ export class PersonalRepository {
         attributes_json,
         raw_json,
         search_text,
+        semantic_indexed_at,
+        semantic_model,
+        semantic_content_hash,
         is_deleted,
         created_at,
         updated_at
@@ -690,6 +742,9 @@ export class PersonalRepository {
         @attributes_json,
         @raw_json,
         @search_text,
+        @semantic_indexed_at,
+        @semantic_model,
+        @semantic_content_hash,
         @is_deleted,
         @created_at,
         @updated_at
@@ -710,6 +765,9 @@ export class PersonalRepository {
         attributes_json = excluded.attributes_json,
         raw_json = excluded.raw_json,
         search_text = excluded.search_text,
+        semantic_indexed_at = pf_context_items.semantic_indexed_at,
+        semantic_model = pf_context_items.semantic_model,
+        semantic_content_hash = pf_context_items.semantic_content_hash,
         is_deleted = excluded.is_deleted,
         updated_at = excluded.updated_at
     `);
@@ -746,6 +804,9 @@ export class PersonalRepository {
             attributes_json: row.attributesJson ?? "{}",
             raw_json: row.rawJson,
             search_text: row.searchText ?? "",
+            semantic_indexed_at: null,
+            semantic_model: null,
+            semantic_content_hash: null,
             is_deleted: row.isDeleted ? 1 : 0,
             created_at: now,
             updated_at: now,
@@ -790,6 +851,9 @@ export class PersonalRepository {
           attributes_json,
           raw_json,
           search_text,
+          semantic_indexed_at,
+          semantic_model,
+          semantic_content_hash,
           is_deleted,
           created_at,
           updated_at
@@ -820,6 +884,9 @@ export class PersonalRepository {
       attributesJson: row.attributes_json,
       rawJson: row.raw_json,
       searchText: row.search_text,
+      semanticIndexedAt: row.semantic_indexed_at,
+      semanticModel: row.semantic_model,
+      semanticContentHash: row.semantic_content_hash,
       isDeleted: row.is_deleted === 1,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -964,6 +1031,170 @@ export class PersonalRepository {
       snippet: row.snippet,
       score: row.score,
       attributesJson: row.attributes_json,
+    }));
+  }
+
+  async listSemanticIndexCandidates(options?: {
+    all?: boolean;
+    limit?: number;
+  }): Promise<PersonalSemanticIndexCandidateRecord[]> {
+    await this.ensureSchema();
+
+    const params: unknown[] = [];
+    const conditions = ["is_deleted = 0", "search_text <> ''"];
+    if (!options?.all) {
+      conditions.push(
+        "(semantic_content_hash is null or semantic_content_hash <> content_hash)",
+      );
+    }
+    params.push(options?.limit ?? 100);
+
+    const rows = this.database.all<PersonalContextItemRow>(
+      `
+        select
+          id,
+          source_id,
+          user_id,
+          toolkit,
+          item_type,
+          external_id,
+          external_parent_id,
+          title,
+          content_text,
+          url,
+          occurred_at,
+          synced_at,
+          content_hash,
+          attributes_json,
+          raw_json,
+          search_text,
+          semantic_indexed_at,
+          semantic_model,
+          semantic_content_hash,
+          is_deleted,
+          created_at,
+          updated_at
+        from pf_context_items
+        where ${conditions.join(" and ")}
+        order by updated_at asc, id asc
+        limit ?
+      `,
+      params,
+    );
+
+    return rows.map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      sourceId: row.source_id,
+      toolkit: row.toolkit,
+      itemType: row.item_type,
+      title: row.title,
+      url: row.url,
+      occurredAt: row.occurred_at,
+      attributesJson: row.attributes_json,
+      searchText: row.search_text,
+      contentHash: row.content_hash,
+      updatedAt: row.updated_at,
+      semanticIndexedAt: row.semantic_indexed_at,
+      semanticModel: row.semantic_model,
+      semanticContentHash: row.semantic_content_hash,
+    }));
+  }
+
+  async markSemanticIndexed(
+    inputs: MarkPersonalSemanticIndexedInput[],
+  ): Promise<number> {
+    await this.ensureSchema();
+    if (inputs.length === 0) {
+      return 0;
+    }
+
+    const statement = this.database.client.prepare(`
+      update pf_context_items
+      set
+        semantic_indexed_at = @semantic_indexed_at,
+        semantic_model = @semantic_model,
+        semantic_content_hash = @semantic_content_hash
+      where id = @id
+    `);
+
+    const transaction = this.database.client.transaction(
+      (rows: MarkPersonalSemanticIndexedInput[]) => {
+        for (const row of rows) {
+          statement.run({
+            id: row.id,
+            semantic_indexed_at: row.semanticIndexedAt,
+            semantic_model: row.semanticModel,
+            semantic_content_hash: row.semanticContentHash,
+          });
+        }
+      },
+    );
+
+    transaction(inputs);
+    return inputs.length;
+  }
+
+  async listItemsByIds(ids: string[]): Promise<PersonalContextItemRecord[]> {
+    await this.ensureSchema();
+    if (ids.length === 0) {
+      return [];
+    }
+
+    const rows = this.database.all<PersonalContextItemRow>(
+      `
+        select
+          id,
+          source_id,
+          user_id,
+          toolkit,
+          item_type,
+          external_id,
+          external_parent_id,
+          title,
+          content_text,
+          url,
+          occurred_at,
+          synced_at,
+          content_hash,
+          attributes_json,
+          raw_json,
+          search_text,
+          semantic_indexed_at,
+          semantic_model,
+          semantic_content_hash,
+          is_deleted,
+          created_at,
+          updated_at
+        from pf_context_items
+        where id in (${ids.map(() => "?").join(", ")})
+      `,
+      ids,
+    );
+
+    return rows.map((row) => ({
+      id: row.id,
+      sourceId: row.source_id,
+      userId: row.user_id,
+      toolkit: row.toolkit,
+      itemType: row.item_type,
+      externalId: row.external_id,
+      externalParentId: row.external_parent_id,
+      title: row.title,
+      contentText: row.content_text,
+      url: row.url,
+      occurredAt: row.occurred_at,
+      syncedAt: row.synced_at,
+      contentHash: row.content_hash,
+      attributesJson: row.attributes_json,
+      rawJson: row.raw_json,
+      searchText: row.search_text,
+      semanticIndexedAt: row.semantic_indexed_at,
+      semanticModel: row.semantic_model,
+      semanticContentHash: row.semantic_content_hash,
+      isDeleted: row.is_deleted === 1,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
     }));
   }
 
