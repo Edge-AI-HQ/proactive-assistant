@@ -26,6 +26,18 @@ export const profiles = sqliteTable("profiles", {
     .$type<Record<string, unknown>>()
     .notNull()
     .$defaultFn(() => ({})),
+  signals: text("signals", { mode: "json" })
+    .$type<Array<Record<string, unknown>>>()
+    .notNull()
+    .$defaultFn(() => []),
+  interests: text("interests", { mode: "json" })
+    .$type<Array<Record<string, unknown>>>()
+    .notNull()
+    .$defaultFn(() => []),
+  snapshots: text("snapshots", { mode: "json" })
+    .$type<Array<Record<string, unknown>>>()
+    .notNull()
+    .$defaultFn(() => []),
   metadata: text("metadata", { mode: "json" })
     .$type<Record<string, unknown>>()
     .notNull()

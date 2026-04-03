@@ -40,12 +40,43 @@ test("WorldRepository ingests and deduplicates items by normalized url", async (
 
     const listed = await repository.list({ limit: 10 });
     assert.equal(listed.length, 1);
+    assert.equal(listed[0]?.streamType, "search");
     assert.equal(listed[0]?.summary, "Updated summary");
     assert.deepEqual(listed[0]?.searchQueries, ["ai startups", "venture"]);
 
     const searched = await repository.searchStored("venture", 10);
     assert.equal(searched.length, 1);
     assert.equal(searched[0]?.id, first.id);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("WorldRepository preserves headline metadata on ingest", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-world-headlines-repo-"));
+
+  try {
+    const manager = new PinDatabaseManager({ dataRoot: root });
+    await manager.init();
+    const repository = new WorldRepository(manager.open("pin"));
+
+    const item = await repository.ingest({
+      provider: "google-news",
+      streamType: "headline",
+      title: "US strikes Iran proxy sites",
+      url: "https://example.com/geopolitics",
+      publishedAt: "2026-04-02T10:00:00.000Z",
+      query: "headline:geopolitics:global",
+      topics: ["geopolitics"],
+      regions: ["global"],
+      importance: "high",
+      metadata: { stream: "headline" },
+    });
+
+    assert.equal(item.streamType, "headline");
+    assert.deepEqual(item.topics, ["geopolitics"]);
+    assert.deepEqual(item.regions, ["global"]);
+    assert.equal(item.importance, "high");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

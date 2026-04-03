@@ -10,12 +10,16 @@ import {
 
 export interface IngestWorldItemInput {
   provider: string;
+  streamType?: string;
   title: string;
   url: string;
   externalId?: string | null;
   summary?: string | null;
   publishedAt?: string | null;
   query: string;
+  topics?: string[];
+  regions?: string[];
+  importance?: string | null;
   metadata?: Record<string, unknown>;
 }
 
@@ -26,6 +30,10 @@ export interface ListWorldItemsInput {
   until?: string;
   afterId?: string;
   afterUpdatedAt?: string;
+}
+
+export interface WorldSemanticIndexCandidateRecord extends WorldItemRecord {
+  searchText: string;
 }
 
 const normalizeUrl = (raw: string): string => {
@@ -92,12 +100,16 @@ export class WorldRepository {
         .update(worldItems)
         .set({
           provider: input.provider,
+          streamType: input.streamType ?? existing.streamType,
           title: input.title,
           url: input.url,
           externalId: input.externalId ?? existing.externalId ?? null,
           summary: input.summary ?? existing.summary ?? null,
           publishedAt: input.publishedAt ?? existing.publishedAt ?? null,
           searchQueries: nextQueries,
+          topics: Array.from(new Set([...(existing.topics ?? []), ...(input.topics ?? [])])),
+          regions: Array.from(new Set([...(existing.regions ?? []), ...(input.regions ?? [])])),
+          importance: input.importance ?? existing.importance ?? null,
           metadata: {
             ...(existing.metadata ?? {}),
             ...(input.metadata ?? {}),
@@ -114,6 +126,7 @@ export class WorldRepository {
     const values: NewWorldItemRecord = {
       id: buildWorldItemId(normalizedUrl, input),
       provider: input.provider,
+      streamType: input.streamType ?? "search",
       title: input.title,
       url: input.url,
       normalizedUrl,
@@ -121,6 +134,9 @@ export class WorldRepository {
       summary: input.summary ?? null,
       publishedAt: input.publishedAt ?? null,
       searchQueries: nextQueries,
+      topics: input.topics ?? [],
+      regions: input.regions ?? [],
+      importance: input.importance ?? null,
       metadata: input.metadata ?? {},
       createdAt: now,
       updatedAt: now,
@@ -207,6 +223,43 @@ export class WorldRepository {
     });
   }
 
+  async listByIds(ids: string[]): Promise<WorldItemRecord[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
+    const all = await this.list({ limit: Math.max(ids.length * 5, 100) });
+    const order = new Map(ids.map((id, index) => [id, index]));
+    return all
+      .filter((item) => order.has(item.id))
+      .sort((left, right) => (order.get(left.id) ?? 0) - (order.get(right.id) ?? 0));
+  }
+
+  async listSemanticIndexCandidates(
+    options?: { all?: boolean; limit?: number },
+  ): Promise<WorldSemanticIndexCandidateRecord[]> {
+    const items = await this.list({
+      limit: options?.limit ?? 100,
+    });
+
+    return items.map((item) => ({
+      ...item,
+      searchText: [
+        item.title,
+        item.summary ?? "",
+        ...(item.topics ?? []),
+        ...(item.regions ?? []),
+        ...(item.searchQueries ?? []),
+        item.provider,
+        item.streamType,
+        item.importance ?? "",
+      ]
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim(),
+    }));
+  }
+
   private async ensureSchema(): Promise<void> {
     if (this.schemaReady) {
       return;
@@ -216,6 +269,7 @@ export class WorldRepository {
       create table if not exists world_items (
         id text primary key not null,
         provider text not null,
+        stream_type text not null default 'search',
         title text not null,
         url text not null,
         normalized_url text not null unique,
@@ -223,6 +277,9 @@ export class WorldRepository {
         summary text,
         published_at text,
         search_queries text not null default '[]',
+        topics text not null default '[]',
+        regions text not null default '[]',
+        importance text,
         metadata text not null default '{}',
         created_at text not null,
         updated_at text not null
@@ -238,6 +295,28 @@ export class WorldRepository {
       this.database.exec(
         "alter table world_items add column search_queries text not null default '[]'",
       );
+    }
+
+    if (!columnNames.has("stream_type")) {
+      this.database.exec(
+        "alter table world_items add column stream_type text not null default 'search'",
+      );
+    }
+
+    if (!columnNames.has("topics")) {
+      this.database.exec(
+        "alter table world_items add column topics text not null default '[]'",
+      );
+    }
+
+    if (!columnNames.has("regions")) {
+      this.database.exec(
+        "alter table world_items add column regions text not null default '[]'",
+      );
+    }
+
+    if (!columnNames.has("importance")) {
+      this.database.exec("alter table world_items add column importance text");
     }
 
     if (!columnNames.has("metadata")) {

@@ -26,6 +26,9 @@ export interface UpdateProfileInput {
   memory?: Array<Record<string, unknown>>;
   goals?: Array<Record<string, unknown>>;
   constraints?: Record<string, unknown>;
+  signals?: Array<Record<string, unknown>>;
+  interests?: Array<Record<string, unknown>>;
+  snapshots?: Array<Record<string, unknown>>;
   metadata?: Record<string, unknown>;
 }
 
@@ -45,6 +48,109 @@ export interface ProfileMemoryRecord extends Record<string, unknown> {
   tags?: string[];
   createdAt: string;
 }
+
+export interface ProfileSignalRecord extends Record<string, unknown> {
+  id: string;
+  kind: string;
+  targetType: string;
+  targetKey: string;
+  value: number;
+  source: string;
+  occurredAt: string;
+  context?: Record<string, unknown>;
+}
+
+export interface ProfileInterestRecord extends Record<string, unknown> {
+  id: string;
+  kind: string;
+  key: string;
+  score: number;
+  confidence: number;
+  evidenceCount: number;
+  lastSignalAt: string;
+  status: string;
+}
+
+export interface ProfileSnapshotContent extends Record<string, unknown> {
+  profileId: string;
+  view: string;
+  topPositiveTopics: Array<{
+    key: string;
+    score: number;
+    evidenceCount: number;
+    facts: Array<{ code: string; value: string | number }>;
+  }>;
+  topNegativeTopics: Array<{
+    key: string;
+    score: number;
+    evidenceCount: number;
+    facts: Array<{ code: string; value: string | number }>;
+  }>;
+  topEntities: Array<{
+    key: string;
+    score: number;
+    evidenceCount: number;
+    facts: Array<{ code: string; value: string | number }>;
+  }>;
+  activeConstraints: Array<{
+    key: string;
+    facts: Array<{ code: string; value: string }>;
+  }>;
+}
+
+export interface RollupSignalsResult {
+  signalsProcessed: number;
+  interestsUpdated: number;
+}
+
+interface AddSignalInput {
+  kind: string;
+  targetType: string;
+  targetKey: string;
+  value?: number;
+  source: string;
+  occurredAt?: string;
+  context?: Record<string, unknown>;
+}
+
+const nextRecordId = (prefix: string): string =>
+  `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
+
+const BASE_SIGNAL_WEIGHTS: Record<string, number> = {
+  liked: 1,
+  disliked: -1.2,
+  shared: 0.9,
+  followed_up: 0.8,
+  saved: 0.7,
+  clicked: 0.5,
+  opened: 0.3,
+  searched: 0.25,
+  skipped: -0.2,
+  dismissed: -0.5,
+};
+
+const SOURCE_WEIGHTS: Record<string, number> = {
+  explicit: 1,
+  implicit: 0.7,
+  agent: 0.4,
+};
+
+const getBaseSignalWeight = (kind: string): number =>
+  BASE_SIGNAL_WEIGHTS[kind] ?? 0;
+
+const getSourceWeight = (source: string): number =>
+  SOURCE_WEIGHTS[source] ?? 1;
+
+const getDecayMultiplier = (occurredAt: string): number => {
+  const ageMs = Math.max(0, Date.now() - new Date(occurredAt).getTime());
+  const days = ageMs / (1000 * 60 * 60 * 24);
+  return Math.exp(-days / 14);
+};
+
+const toInterestScore = (raw: number): number => Math.tanh(raw);
+
+const toInterestConfidence = (evidenceCount: number): number =>
+  Math.min(1, Math.sqrt(evidenceCount) / 3);
 
 export class ProfileRepository {
   private schemaReady = false;
@@ -66,6 +172,9 @@ export class ProfileRepository {
       memory: [],
       goals: [],
       constraints: {},
+      signals: [],
+      interests: [],
+      snapshots: [],
       metadata: input.metadata ?? {},
       createdAt: now,
       updatedAt: now,
@@ -114,6 +223,9 @@ export class ProfileRepository {
       ...(patch.constraints !== undefined
         ? { constraints: patch.constraints }
         : {}),
+      ...(patch.signals !== undefined ? { signals: patch.signals } : {}),
+      ...(patch.interests !== undefined ? { interests: patch.interests } : {}),
+      ...(patch.snapshots !== undefined ? { snapshots: patch.snapshots } : {}),
       ...(patch.metadata !== undefined ? { metadata: patch.metadata } : {}),
       updatedAt: new Date().toISOString(),
     };
@@ -160,6 +272,9 @@ export class ProfileRepository {
         memory text not null default '[]',
         goals text not null default '[]',
         constraints text not null default '{}',
+        signals text not null default '[]',
+        interests text not null default '[]',
+        snapshots text not null default '[]',
         metadata text not null default '{}',
         created_at text not null,
         updated_at text not null
@@ -198,6 +313,24 @@ export class ProfileRepository {
     if (!columnNames.has("constraints")) {
       this.database.exec(
         "alter table profiles add column constraints text not null default '{}'",
+      );
+    }
+
+    if (!columnNames.has("signals")) {
+      this.database.exec(
+        "alter table profiles add column signals text not null default '[]'",
+      );
+    }
+
+    if (!columnNames.has("interests")) {
+      this.database.exec(
+        "alter table profiles add column interests text not null default '[]'",
+      );
+    }
+
+    if (!columnNames.has("snapshots")) {
+      this.database.exec(
+        "alter table profiles add column snapshots text not null default '[]'",
       );
     }
 
@@ -431,5 +564,201 @@ export class ProfileRepository {
     return this.update(id, {
       constraints: nextConstraints,
     });
+  }
+
+  async addSignal(
+    id: string,
+    input: AddSignalInput,
+  ): Promise<ProfileSignalRecord | null> {
+    const profile = await this.getById(id);
+    if (!profile) return null;
+
+    const signal: ProfileSignalRecord = {
+      id: nextRecordId("sig"),
+      kind: input.kind,
+      targetType: input.targetType,
+      targetKey: input.targetKey,
+      value: input.value ?? 1,
+      source: input.source,
+      occurredAt: input.occurredAt ?? new Date().toISOString(),
+      context: input.context ?? {},
+    };
+
+    await this.update(id, {
+      signals: [...((profile.signals ?? []) as ProfileSignalRecord[]), signal],
+    });
+
+    return signal;
+  }
+
+  async listSignals(id: string): Promise<ProfileSignalRecord[] | null> {
+    const profile = await this.getById(id);
+    return profile ? ((profile.signals ?? []) as ProfileSignalRecord[]) : null;
+  }
+
+  async rollupSignals(
+    id: string,
+    options?: { since?: string },
+  ): Promise<RollupSignalsResult | null> {
+    const profile = await this.getById(id);
+    if (!profile) return null;
+
+    const signals = ((profile.signals ?? []) as ProfileSignalRecord[])
+      .filter((signal) =>
+        options?.since ? signal.occurredAt >= options.since : true,
+      );
+
+    const aggregates = new Map<
+      string,
+      {
+        kind: string;
+        key: string;
+        rawScore: number;
+        evidenceCount: number;
+        lastSignalAt: string;
+      }
+    >();
+
+    for (const signal of signals) {
+      const aggregateKey = `${signal.targetType}:${signal.targetKey}`;
+      const current = aggregates.get(aggregateKey) ?? {
+        kind: signal.targetType,
+        key: signal.targetKey,
+        rawScore: 0,
+        evidenceCount: 0,
+        lastSignalAt: signal.occurredAt,
+      };
+      current.rawScore +=
+        getBaseSignalWeight(signal.kind) *
+        getSourceWeight(signal.source) *
+        signal.value *
+        getDecayMultiplier(signal.occurredAt);
+      current.evidenceCount += 1;
+      if (signal.occurredAt > current.lastSignalAt) {
+        current.lastSignalAt = signal.occurredAt;
+      }
+      aggregates.set(aggregateKey, current);
+    }
+
+    const nextInterests: ProfileInterestRecord[] = [...aggregates.values()]
+      .map((entry) => ({
+        id: nextRecordId("interest"),
+        kind: entry.kind,
+        key: entry.key,
+        score: Number(toInterestScore(entry.rawScore).toFixed(4)),
+        confidence: Number(
+          toInterestConfidence(entry.evidenceCount).toFixed(4),
+        ),
+        evidenceCount: entry.evidenceCount,
+        lastSignalAt: entry.lastSignalAt,
+        status: entry.rawScore <= -0.75 ? "suppressed" : "active",
+      }))
+      .sort((left, right) => {
+        const scoreDiff = right.score - left.score;
+        if (scoreDiff !== 0) return scoreDiff;
+        return left.key.localeCompare(right.key);
+      });
+
+    await this.update(id, {
+      interests: nextInterests,
+    });
+
+    return {
+      signalsProcessed: signals.length,
+      interestsUpdated: nextInterests.length,
+    };
+  }
+
+  async listInterests(
+    id: string,
+    options?: { kind?: string; limit?: number },
+  ): Promise<ProfileInterestRecord[]> {
+    const profile = await this.getById(id);
+    if (!profile) return [];
+
+    return ((profile.interests ?? []) as ProfileInterestRecord[])
+      .filter((interest) => (options?.kind ? interest.kind === options.kind : true))
+      .slice(0, options?.limit ?? 20);
+  }
+
+  async buildSnapshot(
+    id: string,
+    view: string,
+  ): Promise<ProfileSnapshotContent | null> {
+    const profile = await this.getById(id);
+    if (!profile) return null;
+
+    const interests = ((profile.interests ?? []) as ProfileInterestRecord[]).sort(
+      (left, right) => right.score - left.score,
+    );
+    const positiveTopics = interests
+      .filter((interest) => interest.kind === "topic" && interest.score > 0)
+      .slice(0, 3)
+      .map((interest) => ({
+        key: interest.key,
+        score: interest.score,
+        evidenceCount: interest.evidenceCount,
+        facts: [
+          { code: "INTEREST_SCORE", value: interest.score },
+          { code: "EVIDENCE_COUNT", value: interest.evidenceCount },
+        ],
+      }));
+    const negativeTopics = interests
+      .filter((interest) => interest.kind === "topic" && interest.score < 0)
+      .sort((left, right) => left.score - right.score)
+      .slice(0, 3)
+      .map((interest) => ({
+        key: interest.key,
+        score: interest.score,
+        evidenceCount: interest.evidenceCount,
+        facts: [
+          { code: "INTEREST_SCORE", value: interest.score },
+          { code: "EVIDENCE_COUNT", value: interest.evidenceCount },
+        ],
+      }));
+    const topEntities = interests
+      .filter((interest) => interest.kind === "entity" && interest.score > 0)
+      .slice(0, 3)
+      .map((interest) => ({
+        key: interest.key,
+        score: interest.score,
+        evidenceCount: interest.evidenceCount,
+        facts: [
+          { code: "INTEREST_SCORE", value: interest.score },
+          { code: "EVIDENCE_COUNT", value: interest.evidenceCount },
+        ],
+      }));
+    const activeConstraints = Object.keys(
+      (profile.constraints ?? {}) as Record<string, unknown>,
+    )
+      .sort()
+      .map((key) => ({
+        key,
+        facts: [{ code: "CONSTRAINT_ACTIVE", value: key }],
+      }));
+
+    const snapshot: ProfileSnapshotContent = {
+      profileId: id,
+      view,
+      topPositiveTopics: positiveTopics,
+      topNegativeTopics: negativeTopics,
+      topEntities,
+      activeConstraints,
+    };
+
+    const currentSnapshots = (profile.snapshots ?? []) as Array<Record<string, unknown>>;
+    const nextSnapshots = [
+      ...currentSnapshots.filter((entry) => entry.view !== view),
+      {
+        ...snapshot,
+        generatedAt: new Date().toISOString(),
+      },
+    ];
+
+    await this.update(id, {
+      snapshots: nextSnapshots,
+    });
+
+    return snapshot;
   }
 }
