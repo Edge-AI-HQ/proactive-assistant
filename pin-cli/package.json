@@ -1,13 +1,22 @@
 {
   "name": "@pin-ai/pin-cli",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "engines": {
     "node": ">=20"
   },
   "bin": {
     "pin": "./dist/src/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/src/cli.d.ts",
+      "import": "./dist/src/cli.js"
+    },
+    "./envelope": {
+      "types": "./dist/src/output/envelope.d.ts",
+      "import": "./dist/src/output/envelope.js"
+    }
   },
   "dependencies": {
     "@composio/core": "^0.6.8",

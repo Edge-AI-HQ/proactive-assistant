@@ -28,7 +28,8 @@
     "clean": "rm -rf dist"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.0.0"
+    "openclaw": ">=2026.0.0",
+    "@pin-ai/pin-cli": ">=0.1.0"
   },
   "peerDependenciesMeta": {
     "openclaw": {
