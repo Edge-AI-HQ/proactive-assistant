@@ -203,20 +203,25 @@ const PASS_THRESHOLD = 7.0;
  * Select the best cards from the candidate pool across all iterations.
  *
  * Strategy:
- * 1. Filter: only cards that passed (overall >= 7.0)
- * 2. Sort: by Evaluator's `overall` score descending
- * 3. Diversify: max 2 cards per goalBasket
- * 4. Take top 5
+ * 1. Deduplicate: same-intent cards across iterations → keep highest score
+ * 2. Filter: only cards that passed (overall >= 7.0)
+ * 3. Sort: by Evaluator's `overall` score descending
+ * 4. Diversify: max 2 cards per goalBasket
+ * 5. Take top 5
  *
  * If no cards pass, fall back to the highest-scoring cards regardless of threshold.
  */
 function selectBestCards(pool: ScoredCandidate[]): IntentCard[] {
   if (pool.length === 0) return [];
 
-  // Sort all candidates by overall score, highest first
-  const sorted = [...pool].sort((a, b) => b.score.overall - a.score.overall);
+  // Step 1: Deduplicate — across iterations, same-intent cards get refined
+  // but are conceptually the same. Keep the highest-scoring version.
+  const deduped = deduplicateByIntent(pool);
 
-  // Try with pass threshold first
+  // Step 2+3: Sort by overall score
+  const sorted = [...deduped].sort((a, b) => b.score.overall - a.score.overall);
+
+  // Step 4: Try with pass threshold first
   let selected = pickWithDiversity(sorted.filter(c => c.score.pass && c.score.overall >= PASS_THRESHOLD));
 
   // Fallback: if nothing passed, take the best available
@@ -225,6 +230,48 @@ function selectBestCards(pool: ScoredCandidate[]): IntentCard[] {
   }
 
   return selected;
+}
+
+/**
+ * Deduplicate cards that represent the same intent across iterations.
+ *
+ * Two cards are considered the same intent if they share the same goalBasket
+ * AND have high title similarity (normalized Jaccard similarity >= 0.4).
+ * Among duplicates, the one with the highest overall score wins.
+ */
+function deduplicateByIntent(pool: ScoredCandidate[]): ScoredCandidate[] {
+  const kept: ScoredCandidate[] = [];
+
+  for (const candidate of pool) {
+    const existingIdx = kept.findIndex(
+      k => k.card.goalBasket === candidate.card.goalBasket
+        && titleSimilarity(k.card.title, candidate.card.title) >= 0.4,
+    );
+
+    if (existingIdx === -1) {
+      // No similar card found — add as new
+      kept.push(candidate);
+    } else if (candidate.score.overall > kept[existingIdx]!.score.overall) {
+      // Found similar card but this one scores higher — replace
+      kept[existingIdx] = candidate;
+    }
+    // Otherwise: existing card scores higher, skip this one
+  }
+
+  return kept;
+}
+
+/** Jaccard similarity on lowercased word sets */
+function titleSimilarity(a: string, b: string): number {
+  const wordsA = new Set(a.toLowerCase().split(/\W+/).filter(w => w.length > 2));
+  const wordsB = new Set(b.toLowerCase().split(/\W+/).filter(w => w.length > 2));
+  if (wordsA.size === 0 || wordsB.size === 0) return 0;
+
+  let intersection = 0;
+  for (const w of wordsA) {
+    if (wordsB.has(w)) intersection++;
+  }
+  return intersection / (wordsA.size + wordsB.size - intersection);
 }
 
 /** Pick top cards with basket diversity constraint */
