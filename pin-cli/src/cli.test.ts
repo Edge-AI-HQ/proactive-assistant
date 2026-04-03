@@ -416,14 +416,135 @@ test("profile create defaults to simple output and supports --full", async () =>
   }
 });
 
-test("feedback commands return NOT_IMPLEMENTED with hints", async () => {
-  const result = await runCli(["feedback", "list", "--since", "7d", "--json"]);
+test("feedback log, list, get, stats full lifecycle", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-feedback-"));
+  try {
+    const runtime = { env: { PIN_DATA_ROOT: root } };
 
-  assert.equal(result.exitCode, 1);
+    // log a card_action confirm
+    const logged = await runCli(
+      ["feedback", "log", "--kind", "card_action", "--action", "confirm",
+       "--basket", "work", "--channel", "telegram", "--source", "user_direct",
+       "--intent-card-id", "ic_001", "--push-id", "push_123", "--json"],
+      runtime,
+    );
+    assert.equal(logged.exitCode, 0);
+    assert.equal(logged.stdout.ok, true);
+    assert.equal(logged.stdout.meta.domain, "feedback");
+    assert.equal(logged.stdout.meta.command, "log");
+    const loggedData = logged.stdout.data as Record<string, unknown>;
+    assert.equal(loggedData.kind, "card_action");
+    assert.equal(loggedData.action, "confirm");
+    assert.equal(loggedData.basket, "work");
+    assert.equal(loggedData.intentCardId, "ic_001");
+    const feedbackId = loggedData.id as string;
+    assert.ok(feedbackId.startsWith("fe_"));
+
+    // log a text_feedback
+    const textLogged = await runCli(
+      ["feedback", "log", "--kind", "text_feedback",
+       "--text", "User prefers morning notifications",
+       "--source", "user_derived", "--basket", "health",
+       "--conversation-id", "conv_abc", "--message-id", "msg_456", "--json"],
+      runtime,
+    );
+    assert.equal(textLogged.exitCode, 0);
+    assert.equal(textLogged.stdout.ok, true);
+
+    // log a card_open
+    await runCli(
+      ["feedback", "log", "--kind", "card_open", "--basket", "work", "--json"],
+      runtime,
+    );
+
+    // get single event
+    const got = await runCli(
+      ["feedback", "get", "--id", feedbackId, "--json"],
+      runtime,
+    );
+    assert.equal(got.exitCode, 0);
+    assert.equal(got.stdout.ok, true);
+    assert.equal((got.stdout.data as Record<string, unknown>).id, feedbackId);
+
+    // get not found
+    const notFound = await runCli(
+      ["feedback", "get", "--id", "nonexistent", "--json"],
+      runtime,
+    );
+    assert.equal(notFound.exitCode, 1);
+    assert.equal(notFound.stdout.error?.code, "NOT_FOUND");
+
+    // list all
+    const listed = await runCli(
+      ["feedback", "list", "--json"],
+      runtime,
+    );
+    assert.equal(listed.exitCode, 0);
+    assert.equal((listed.stdout.data as unknown[]).length, 3);
+
+    // list filtered by basket
+    const workOnly = await runCli(
+      ["feedback", "list", "--basket", "work", "--json"],
+      runtime,
+    );
+    assert.equal(workOnly.exitCode, 0);
+    assert.equal((workOnly.stdout.data as unknown[]).length, 2);
+
+    // list filtered by intent-card-id
+    const icFiltered = await runCli(
+      ["feedback", "list", "--intent-card-id", "ic_001", "--json"],
+      runtime,
+    );
+    assert.equal(icFiltered.exitCode, 0);
+    assert.equal((icFiltered.stdout.data as unknown[]).length, 1);
+
+    // stats
+    const stats = await runCli(
+      ["feedback", "stats", "--json"],
+      runtime,
+    );
+    assert.equal(stats.exitCode, 0);
+    assert.equal(stats.stdout.ok, true);
+    const statsData = stats.stdout.data as Record<string, unknown>;
+    assert.equal(statsData.totalCount, 3);
+    assert.equal(statsData.grossHitCount, 2); // card_action(confirm) + card_open
+    assert.equal(statsData.qualifiedHitCount, 1); // card_action(confirm)
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("feedback log with --dry-run does not persist", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-feedback-dry-"));
+  try {
+    const runtime = { env: { PIN_DATA_ROOT: root } };
+
+    const dryResult = await runCli(
+      ["feedback", "log", "--kind", "card_action", "--action", "confirm",
+       "--basket", "work", "--dry-run", "--json"],
+      runtime,
+    );
+    assert.equal(dryResult.exitCode, 0);
+    assert.equal(dryResult.stdout.ok, true);
+    assert.equal((dryResult.stdout.data as Record<string, unknown>).dryRun, true);
+
+    const listed = await runCli(
+      ["feedback", "list", "--json"],
+      runtime,
+    );
+    assert.equal((listed.stdout.data as unknown[]).length, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("feedback log validates kind enum", async () => {
+  const result = await runCli(
+    ["feedback", "log", "--kind", "invalid_kind", "--json"],
+  );
+  assert.equal(result.exitCode, 2);
   assert.equal(result.stdout.ok, false);
-  assert.equal(result.stdout.error?.type, "not_implemented");
-  assert.equal(result.stdout.error?.code, "NOT_IMPLEMENTED");
-  assert.equal(result.stdout.meta.domain, "feedback");
+  assert.ok(result.stdout.error?.message.includes("Invalid"));
 });
 
 test("push commands return NOT_IMPLEMENTED with hints", async () => {
