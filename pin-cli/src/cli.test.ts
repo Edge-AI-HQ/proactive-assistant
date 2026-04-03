@@ -32,13 +32,68 @@ interface ProfileRecord {
   memory?: Array<Record<string, unknown>>;
 }
 
+interface ProfileSimpleRecord {
+  id: string;
+  displayName: string;
+  locale: string | null;
+  timezone: string | null;
+  summary: string | null;
+}
+
+interface ProfileInterestRecord {
+  kind: string;
+  key: string;
+  score: number;
+  confidence: number;
+  evidenceCount: number;
+  status: string;
+}
+
+interface ProfileSnapshotRecord {
+  profileId: string;
+  view: string;
+  topPositiveTopics: Array<{ key: string; score: number; evidenceCount: number; facts: Array<{ code: string; value: string | number }> }>;
+  topNegativeTopics: Array<{ key: string; score: number; evidenceCount: number; facts: Array<{ code: string; value: string | number }> }>;
+  topEntities: Array<{ key: string; score: number; evidenceCount: number; facts: Array<{ code: string; value: string | number }> }>;
+  activeConstraints: Array<{ key: string; facts: Array<{ code: string; value: string }> }>;
+}
+
 interface WorldItemRecord {
   id: string;
   provider: string;
+  streamType: string;
   title: string;
   url: string;
   normalizedUrl: string;
   searchQueries: string[];
+  topics?: string[];
+  regions?: string[];
+  importance?: string | null;
+}
+
+interface WorldShortlistRecord {
+  id: string;
+  title: string;
+  profileScore: number;
+  reasons: Array<{ code: string; value: string | number }>;
+}
+
+interface WorldContextRecord {
+  id: string;
+  title: string;
+  summary: string | null;
+  topics: string[];
+  importance: string | null;
+}
+
+interface WorldSimpleRecord {
+  id: string;
+  title: string;
+  summary: string | null;
+  topics: string[];
+  importance: string | null;
+  publishedAt?: string | null;
+  provider?: string;
 }
 
 interface PersonalSourceRecord {
@@ -136,6 +191,45 @@ test("sys schema returns command detail for known path", async () => {
   assert.ok(Array.isArray(data.flags));
 });
 
+test("sys schema includes world semantic commands", async () => {
+  const findResult = await runCli(["sys", "schema", "world.find", "--json"]);
+  assert.equal(findResult.exitCode, 0);
+  const findData = findResult.stdout.data as { domain: string; command: string };
+  assert.equal(findData.domain, "world");
+  assert.equal(findData.command, "find");
+
+  const indexResult = await runCli(["sys", "schema", "world.index.refresh", "--json"]);
+  assert.equal(indexResult.exitCode, 0);
+  const indexData = indexResult.stdout.data as { domain: string; command: string };
+  assert.equal(indexData.domain, "world");
+  assert.equal(indexData.command, "index refresh");
+});
+
+test("sys schema includes implemented section commands and system placeholders", async () => {
+  const commandsResult = (await runCli(["sys", "schema", "--json"])) as RunCliResult & {
+    stdout: PinEnvelope<{ commands: Array<{ path: string }> }>;
+  };
+  const paths = new Set(commandsResult.stdout.data?.commands.map((command) => command.path) ?? []);
+  assert.equal(paths.has("sys.migrate"), true);
+  assert.equal(paths.has("sys.import"), true);
+  assert.equal(paths.has("profile.facts.get"), true);
+  assert.equal(paths.has("profile.memory.add"), true);
+  assert.equal(paths.has("profile.goals.upsert"), true);
+
+  const memoryAdd = await runCli(["sys", "schema", "profile.memory.add", "--json"]);
+  assert.equal(memoryAdd.exitCode, 0);
+  const memoryAddData = memoryAdd.stdout.data as { domain: string; command: string; flags: Array<{ name: string }> };
+  assert.equal(memoryAddData.domain, "profile");
+  assert.equal(memoryAddData.command, "memory add");
+  assert.equal(memoryAddData.flags.some((flag) => flag.name === "kind"), true);
+
+  const migrate = await runCli(["sys", "schema", "sys.migrate", "--json"]);
+  assert.equal(migrate.exitCode, 0);
+  const migrateData = migrate.stdout.data as { domain: string; command: string };
+  assert.equal(migrateData.domain, "sys");
+  assert.equal(migrateData.command, "migrate");
+});
+
 test("sys schema returns not found for unknown path", async () => {
   const result = await runCli(["sys", "schema", "unknown.cmd", "--json"]);
 
@@ -178,8 +272,15 @@ test("profile commands support CRUD demo", async () => {
     const fetched = (await runCli(
       ["profile", "get", "--id", "default", "--json"],
       runtime,
+    )) as RunCliResult & { stdout: PinEnvelope<ProfileSimpleRecord> };
+    assert.equal(fetched.stdout.data?.displayName, "Alice");
+    assert.equal("metadata" in (fetched.stdout.data ?? {}), false);
+
+    const fullFetched = (await runCli(
+      ["profile", "get", "--id", "default", "--full", "--json"],
+      runtime,
     )) as RunCliResult & { stdout: PinEnvelope<ProfileRecord> };
-    assert.equal(fetched.stdout.data?.metadata.source, "cli");
+    assert.equal(fullFetched.stdout.data?.metadata.source, "cli");
 
     const updated = (await runCli(
       [
@@ -200,8 +301,15 @@ test("profile commands support CRUD demo", async () => {
     const listed = (await runCli(
       ["profile", "list", "--json"],
       runtime,
-    )) as RunCliResult & { stdout: PinEnvelope<ProfileRecord[]> };
+    )) as RunCliResult & { stdout: PinEnvelope<ProfileSimpleRecord[]> };
     assert.equal(listed.stdout.data?.length, 1);
+    assert.equal("metadata" in (listed.stdout.data?.[0] ?? {}), false);
+
+    const fullListed = (await runCli(
+      ["profile", "list", "--full", "--json"],
+      runtime,
+    )) as RunCliResult & { stdout: PinEnvelope<ProfileRecord[]> };
+    assert.equal(fullListed.stdout.data?.[0]?.metadata.source, "cli");
 
     const deleted = await runCli(
       ["profile", "delete", "--id", "default", "--json"],
@@ -252,6 +360,57 @@ test("profile create returns conflict when id already exists", async () => {
     assert.equal(duplicate.stdout.error?.code, "CONFLICT");
     assert.equal(duplicate.stdout.error?.type, "conflict");
     assert.ok(duplicate.stdout.error?.hint);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("profile create defaults to simple output and supports --full", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-profile-create-"));
+
+  try {
+    const runtime = {
+      env: { PIN_DATA_ROOT: root },
+      homeDir: "/Users/test",
+    };
+
+    const created = (await runCli(
+      [
+        "profile",
+        "create",
+        "--id",
+        "default",
+        "--display-name",
+        "Alice",
+        "--metadata",
+        '{"source":"cli"}',
+        "--json",
+      ],
+      runtime,
+    )) as RunCliResult & { stdout: PinEnvelope<ProfileSimpleRecord> };
+
+    assert.equal(created.exitCode, 0);
+    assert.equal(created.stdout.data?.id, "default");
+    assert.equal("metadata" in (created.stdout.data ?? {}), false);
+
+    const createdFull = (await runCli(
+      [
+        "profile",
+        "create",
+        "--id",
+        "full",
+        "--display-name",
+        "Bob",
+        "--metadata",
+        '{"source":"cli"}',
+        "--full",
+        "--json",
+      ],
+      runtime,
+    )) as RunCliResult & { stdout: PinEnvelope<ProfileRecord> };
+
+    assert.equal(createdFull.exitCode, 0);
+    assert.equal(createdFull.stdout.data?.metadata.source, "cli");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -543,17 +702,34 @@ test("world search ingests deduplicated news items and exposes list/get", async 
     )) as RunCliResult & {
       stdout: PinEnvelope<{
         query: string;
-        items: WorldItemRecord[];
+        items: WorldSimpleRecord[];
       }>;
     };
 
     assert.equal(searched.exitCode, 0);
     assert.equal(searched.stdout.data?.query, "startup");
     assert.equal(searched.stdout.data?.items.length, 2);
-    assert.deepEqual(
-      searched.stdout.data?.items[0]?.searchQueries,
-      ["startup"],
-    );
+    assert.equal("searchQueries" in (searched.stdout.data?.items[0] ?? {}), false);
+
+    const searchedFull = (await runCli(
+      [
+        "world",
+        "search",
+        "--query",
+        "startup",
+        "--limit",
+        "10",
+        "--full",
+        "--json",
+      ],
+      runtime,
+    )) as RunCliResult & {
+      stdout: PinEnvelope<{
+        query: string;
+        items: WorldItemRecord[];
+      }>;
+    };
+    assert.deepEqual(searchedFull.stdout.data?.items[0]?.searchQueries, ["startup"]);
 
     const listed = (await runCli(
       ["world", "list", "--limit", "10", "--json"],
@@ -645,6 +821,289 @@ test("world list supports incremental queries by time and id", async () => {
     )) as RunCliResult & { stdout: PinEnvelope<WorldItemRecord[]> };
     assert.equal(queryList.stdout.data?.length, 1);
     assert.equal(queryList.stdout.data?.[0]?.title, "Robotics startup ships new product");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("world headlines ingests non-keyword global news into the same store", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-world-headlines-cli-"));
+  const feed = `<?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0">
+      <channel>
+        <title>Headlines</title>
+        <item>
+          <title>Conflict in Middle East rattles global markets</title>
+          <link>https://example.com/global-markets</link>
+          <guid>headline-1</guid>
+          <description>Oil jumps as conflict escalates</description>
+          <pubDate>2026-04-02T10:30:00.000Z</pubDate>
+        </item>
+      </channel>
+    </rss>`;
+
+  try {
+    const runtime = {
+      env: {
+        PIN_DATA_ROOT: root,
+        PIN_WORLD_HEADLINES_URL_TEMPLATE: `data:text/xml,${encodeURIComponent(feed)}`,
+      },
+      homeDir: "/Users/test",
+    };
+
+    const result = (await runCli(
+      [
+        "world",
+        "headlines",
+        "--topic",
+        "geopolitics",
+        "--region",
+        "global",
+        "--limit",
+        "10",
+        "--json",
+      ],
+      runtime,
+    )) as RunCliResult & {
+      stdout: PinEnvelope<{
+        topic: string;
+        region: string;
+        items: WorldSimpleRecord[];
+      }>;
+    };
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout.data?.topic, "geopolitics");
+    assert.equal(result.stdout.data?.region, "global");
+    assert.equal(result.stdout.data?.items.length, 1);
+    assert.deepEqual(result.stdout.data?.items[0]?.topics, ["geopolitics"]);
+    assert.equal(result.stdout.data?.items[0]?.importance, "high");
+    assert.equal("streamType" in (result.stdout.data?.items[0] ?? {}), false);
+
+    const resultFull = (await runCli(
+      [
+        "world",
+        "headlines",
+        "--topic",
+        "geopolitics",
+        "--region",
+        "global",
+        "--limit",
+        "10",
+        "--full",
+        "--json",
+      ],
+      runtime,
+    )) as RunCliResult & {
+      stdout: PinEnvelope<{
+        topic: string;
+        region: string;
+        items: WorldItemRecord[];
+      }>;
+    };
+    assert.equal(resultFull.stdout.data?.items[0]?.streamType, "headline");
+    assert.deepEqual(resultFull.stdout.data?.items[0]?.regions, ["global"]);
+
+    const stored = (await runCli(
+      ["world", "list", "--query", "markets", "--full", "--json"],
+      runtime,
+    )) as RunCliResult & { stdout: PinEnvelope<WorldItemRecord[]> };
+    assert.equal(stored.stdout.data?.length, 1);
+    assert.equal(stored.stdout.data?.[0]?.streamType, "headline");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("world search returns provider error envelope when fetch throws", async () => {
+  const runtime = {
+    env: {
+      PIN_DATA_ROOT: "/tmp/pin-provider-error",
+      PIN_WORLD_NEWS_SEARCH_URL_TEMPLATE: "http://127.0.0.1:1/rss?q={query}",
+    },
+    homeDir: "/Users/test",
+  };
+
+  const result = await runCli(
+    ["world", "search", "--query", "OpenAI", "--json"],
+    runtime,
+  );
+
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout.ok, false);
+  assert.equal(result.stdout.error?.type, "provider_unavailable");
+  assert.equal(result.stdout.error?.code, "PROVIDER_UNAVAILABLE");
+  assert.equal(result.stdout.meta.domain, "world");
+  assert.equal(result.stdout.meta.command, "search");
+});
+
+test("world shortlist uses profile interests and context returns compact items", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-world-shortlist-cli-"));
+  const feed = `<?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0">
+      <channel>
+        <title>Headlines</title>
+        <item>
+          <title>OpenAI launches new agent toolkit</title>
+          <link>https://example.com/openai-agents</link>
+          <guid>headline-1</guid>
+          <description>New developer toolkit for agents.</description>
+          <pubDate>2026-04-03T10:00:00.000Z</pubDate>
+        </item>
+        <item>
+          <title>Celebrity couple announces new project</title>
+          <link>https://example.com/celebrity-project</link>
+          <guid>headline-2</guid>
+          <description>Entertainment news update.</description>
+          <pubDate>2026-04-03T09:30:00.000Z</pubDate>
+        </item>
+      </channel>
+    </rss>`;
+
+  try {
+    const runtime = {
+      env: {
+        PIN_DATA_ROOT: root,
+        PIN_WORLD_HEADLINES_URL_TEMPLATE: `data:text/xml,${encodeURIComponent(feed)}`,
+      },
+      homeDir: "/Users/test",
+    };
+
+    await runCli(
+      ["profile", "create", "--id", "default", "--display-name", "Alice", "--json"],
+      runtime,
+    );
+    await runCli(
+      [
+        "profile",
+        "signal",
+        "add",
+        "--id",
+        "default",
+        "--kind",
+        "liked",
+        "--target-type",
+        "topic",
+        "--target-key",
+        "ai",
+        "--source",
+        "explicit",
+        "--json",
+      ],
+      runtime,
+    );
+    await runCli(
+      [
+        "profile",
+        "signal",
+        "add",
+        "--id",
+        "default",
+        "--kind",
+        "disliked",
+        "--target-type",
+        "topic",
+        "--target-key",
+        "celebrity-gossip",
+        "--source",
+        "explicit",
+        "--json",
+      ],
+      runtime,
+    );
+    await runCli(
+      ["profile", "signal", "rollup", "--id", "default", "--since", "30d", "--json"],
+      runtime,
+    );
+
+    await runCli(
+      [
+        "world",
+        "headlines",
+        "--topic",
+        "ai",
+        "--region",
+        "global",
+        "--limit",
+        "10",
+        "--json",
+      ],
+      runtime,
+    );
+
+    await runCli(
+      [
+        "world",
+        "headlines",
+        "--topic",
+        "celebrity-gossip",
+        "--region",
+        "global",
+        "--limit",
+        "10",
+        "--json",
+      ],
+      runtime,
+    );
+
+    const shortlist = (await runCli(
+      [
+        "world",
+        "shortlist",
+        "--profile-id",
+        "default",
+        "--limit",
+        "10",
+        "--json",
+      ],
+      runtime,
+    )) as RunCliResult & { stdout: PinEnvelope<WorldShortlistRecord[]> };
+    assert.equal(shortlist.exitCode, 0);
+    assert.equal(shortlist.stdout.data?.[0]?.title, "OpenAI launches new agent toolkit");
+    assert.equal((shortlist.stdout.data?.[0]?.profileScore ?? 0) > 0, true);
+    assert.equal(shortlist.stdout.data?.[0]?.reasons.some((reason) => reason.code === "TOPIC_MATCH"), true);
+    assert.equal(
+      shortlist.stdout.data?.[0]?.reasons.some((reason) => reason.code === "SUPPRESSED_TOPIC_MATCH"),
+      true,
+    );
+    assert.equal(
+      shortlist.stdout.data?.some((item) => item.title === "Celebrity couple announces new project"),
+      true,
+    );
+
+    const topId = shortlist.stdout.data?.[0]?.id;
+    assert.ok(topId);
+
+    const simpleGet = (await runCli(
+      ["world", "get", "--id", topId!, "--json"],
+      runtime,
+    )) as RunCliResult & { stdout: PinEnvelope<WorldSimpleRecord> };
+    assert.equal(simpleGet.exitCode, 0);
+    assert.equal("normalizedUrl" in (simpleGet.stdout.data ?? {}), false);
+    assert.equal(simpleGet.stdout.data?.title, "OpenAI launches new agent toolkit");
+
+    const fullGet = (await runCli(
+      ["world", "get", "--id", topId!, "--full", "--json"],
+      runtime,
+    )) as RunCliResult & { stdout: PinEnvelope<Record<string, unknown>> };
+    assert.equal(fullGet.exitCode, 0);
+    assert.equal("normalizedUrl" in (fullGet.stdout.data ?? {}), true);
+
+    const context = (await runCli(
+      [
+        "world",
+        "context",
+        "--ids",
+        topId!,
+        "--json",
+      ],
+      runtime,
+    )) as RunCliResult & { stdout: PinEnvelope<WorldContextRecord[]> };
+    assert.equal(context.exitCode, 0);
+    assert.equal(context.stdout.data?.length, 1);
+    assert.equal(context.stdout.data?.[0]?.title, "OpenAI launches new agent toolkit");
+    assert.equal(context.stdout.data?.[0]?.topics.includes("ai"), true);
+    assert.equal(context.stdout.data?.[0]?.summary, "New developer toolkit for agents.");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -897,6 +1356,167 @@ test("profile supports memory add list search and remove", async () => {
       runtime,
     );
     assert.equal(removed.exitCode, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("profile supports signal rollup into interests and ranking snapshots", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-profile-rollup-"));
+
+  try {
+    const runtime = {
+      env: { PIN_DATA_ROOT: root },
+      homeDir: "/Users/test",
+    };
+
+    await runCli(
+      [
+        "profile",
+        "create",
+        "--id",
+        "default",
+        "--display-name",
+        "Alice",
+        "--json",
+      ],
+      runtime,
+    );
+
+    await runCli(
+      [
+        "profile",
+        "constraints",
+        "set",
+        "--key",
+        "quiet_hours",
+        "--value-json",
+        '"23:00-08:00"',
+        "--json",
+      ],
+      runtime,
+    );
+
+    const liked = await runCli(
+      [
+        "profile",
+        "signal",
+        "add",
+        "--id",
+        "default",
+        "--kind",
+        "liked",
+        "--target-type",
+        "topic",
+        "--target-key",
+        "ai",
+        "--source",
+        "explicit",
+        "--json",
+      ],
+      runtime,
+    );
+    assert.equal(liked.exitCode, 0);
+
+    const disliked = await runCli(
+      [
+        "profile",
+        "signal",
+        "add",
+        "--id",
+        "default",
+        "--kind",
+        "disliked",
+        "--target-type",
+        "topic",
+        "--target-key",
+        "celebrity-gossip",
+        "--source",
+        "explicit",
+        "--json",
+      ],
+      runtime,
+    );
+    assert.equal(disliked.exitCode, 0);
+
+    const entitySignal = await runCli(
+      [
+        "profile",
+        "signal",
+        "add",
+        "--id",
+        "default",
+        "--kind",
+        "followed_up",
+        "--target-type",
+        "entity",
+        "--target-key",
+        "OpenAI",
+        "--source",
+        "implicit",
+        "--json",
+      ],
+      runtime,
+    );
+    assert.equal(entitySignal.exitCode, 0);
+
+    const rolledUp = await runCli(
+      [
+        "profile",
+        "signal",
+        "rollup",
+        "--id",
+        "default",
+        "--since",
+        "30d",
+        "--json",
+      ],
+      runtime,
+    );
+    assert.equal(rolledUp.exitCode, 0);
+
+    const topicInterests = (await runCli(
+      [
+        "profile",
+        "interests",
+        "list",
+        "--id",
+        "default",
+        "--kind",
+        "topic",
+        "--json",
+      ],
+      runtime,
+    )) as RunCliResult & {
+      stdout: PinEnvelope<ProfileInterestRecord[]>;
+    };
+    assert.equal(topicInterests.exitCode, 0);
+    assert.equal(topicInterests.stdout.data?.[0]?.key, "ai");
+    assert.equal(topicInterests.stdout.data?.[0]?.status, "active");
+    assert.equal(topicInterests.stdout.data?.some((item) => item.key === "celebrity-gossip"), true);
+
+    const snapshot = (await runCli(
+      [
+        "profile",
+        "snapshot",
+        "build",
+        "--id",
+        "default",
+        "--view",
+        "ranking",
+        "--json",
+      ],
+      runtime,
+    )) as RunCliResult & {
+      stdout: PinEnvelope<ProfileSnapshotRecord>;
+    };
+    assert.equal(snapshot.exitCode, 0);
+    assert.equal(snapshot.stdout.data?.topPositiveTopics[0]?.key, "ai");
+    assert.equal(snapshot.stdout.data?.topPositiveTopics[0]?.facts.some((fact) => fact.code === "INTEREST_SCORE"), true);
+    assert.equal(snapshot.stdout.data?.topNegativeTopics[0]?.key, "celebrity-gossip");
+    assert.equal(snapshot.stdout.data?.topEntities[0]?.key, "OpenAI");
+    assert.equal(snapshot.stdout.data?.activeConstraints[0]?.key, "quiet_hours");
+    assert.equal(snapshot.stdout.data?.activeConstraints[0]?.facts[0]?.code, "CONSTRAINT_ACTIVE");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

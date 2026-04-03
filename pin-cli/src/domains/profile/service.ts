@@ -1,4 +1,10 @@
-import { ProfileRepository } from "./repository.js";
+import {
+  ProfileRepository,
+  type ProfileInterestRecord,
+  type ProfileSnapshotContent,
+  type ProfileSignalRecord,
+  type RollupSignalsResult,
+} from "./repository.js";
 import type { ProfileRecord } from "./schema.js";
 
 import { PinDatabaseManager } from "../../db/database.js";
@@ -24,7 +30,42 @@ const createRepository = async (runtime: CliRuntimeInput) => {
 
 const DEFAULT_PROFILE_ID = "default";
 
+const toSimpleProfile = (profile: ProfileRecord): Record<string, unknown> => ({
+  id: profile.id,
+  displayName: profile.displayName,
+  locale: profile.locale,
+  timezone: profile.timezone,
+  summary: profile.summary,
+});
+
 const parseJsonValue = (raw: string): unknown => JSON.parse(raw);
+const parseOptionalFloat = (raw?: string): number | undefined => {
+  if (raw === undefined) return undefined;
+  const value = Number.parseFloat(raw);
+  if (Number.isNaN(value)) {
+    throw new Error("value must be a number");
+  }
+  return value;
+};
+
+const parseSinceCutoff = (raw?: string): string | undefined => {
+  if (!raw) return undefined;
+  const durationMatch = raw.match(/^(\d+)([dhm])$/i);
+  if (durationMatch) {
+    const amount = Number.parseInt(durationMatch[1] ?? "0", 10);
+    const unit = (durationMatch[2] ?? "d").toLowerCase();
+    const msPerUnit =
+      unit === "d" ? 24 * 60 * 60 * 1000 : unit === "h" ? 60 * 60 * 1000 : 60 * 1000;
+    return new Date(Date.now() - amount * msPerUnit).toISOString();
+  }
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error("since must be an ISO timestamp or duration like 30d");
+  }
+  return parsed.toISOString();
+};
+
 const parseJsonStringArray = (raw?: string): string[] | undefined => {
   if (!raw) return undefined;
   const parsed = JSON.parse(raw);
@@ -43,6 +84,7 @@ export const createProfile = async (
     timezone?: string;
     summary?: string;
     metadata?: string;
+    full?: boolean;
   },
 ) => {
   const repository = await createRepository(runtime);
@@ -58,7 +100,7 @@ export const createProfile = async (
 
     return {
       exitCode: 0,
-      stdout: okEnvelope<ProfileRecord>("profile", "create", profile),
+      stdout: okEnvelope("profile", "create", input.full === true ? profile : toSimpleProfile(profile)),
     } satisfies RunCliResult;
   } catch (error) {
     const message =
@@ -85,6 +127,7 @@ export const createProfile = async (
 export const getProfile = async (
   runtime: CliRuntimeInput,
   id: string,
+  full = false,
 ) => {
   const repository = await createRepository(runtime);
   const profile = await repository.getById(id);
@@ -98,7 +141,7 @@ export const getProfile = async (
 
   return {
     exitCode: 0,
-    stdout: okEnvelope<ProfileRecord>("profile", "get", profile),
+    stdout: okEnvelope("profile", "get", full ? profile : toSimpleProfile(profile)),
   } satisfies RunCliResult;
 };
 
@@ -467,13 +510,20 @@ export const unsetConstraint = async (
   } satisfies RunCliResult;
 };
 
-export const listProfiles = async (runtime: CliRuntimeInput) => {
+export const listProfiles = async (
+  runtime: CliRuntimeInput,
+  full = false,
+) => {
   const repository = await createRepository(runtime);
   const profiles = await repository.list();
 
   return {
     exitCode: 0,
-    stdout: okEnvelope<ProfileRecord[]>("profile", "list", profiles),
+    stdout: okEnvelope(
+      "profile",
+      "list",
+      full ? profiles : profiles.map((profile) => toSimpleProfile(profile)),
+    ),
   } satisfies RunCliResult;
 };
 
@@ -518,6 +568,153 @@ export const updateProfile = async (
   return {
     exitCode: 0,
     stdout: okEnvelope<ProfileRecord>("profile", "update", profile),
+  } satisfies RunCliResult;
+};
+
+export const addProfileSignal = async (
+  runtime: CliRuntimeInput,
+  input: {
+    id: string;
+    kind: string;
+    targetType: string;
+    targetKey: string;
+    value?: string;
+    source: string;
+    occurredAt?: string;
+  },
+) => {
+  const repository = await createRepository(runtime);
+  const signal = await repository.addSignal(input.id, {
+    kind: input.kind,
+    targetType: input.targetType,
+    targetKey: input.targetKey,
+    value: parseOptionalFloat(input.value),
+    source: input.source,
+    occurredAt: input.occurredAt,
+  });
+
+  if (!signal) {
+    return {
+      exitCode: 1,
+      stdout: errorEnvelope(
+        "profile.signal",
+        "add",
+        ErrorType.NOT_FOUND,
+        "NOT_FOUND",
+        `Profile ${input.id} not found`,
+        "run `pin profile list` to see available profiles",
+      ),
+    } satisfies RunCliResult;
+  }
+
+  return {
+    exitCode: 0,
+    stdout: okEnvelope<ProfileSignalRecord>("profile.signal", "add", signal),
+  } satisfies RunCliResult;
+};
+
+export const rollupProfileSignals = async (
+  runtime: CliRuntimeInput,
+  input: {
+    id: string;
+    since?: string;
+  },
+) => {
+  const repository = await createRepository(runtime);
+  const result = await repository.rollupSignals(input.id, {
+    since: parseSinceCutoff(input.since),
+  });
+
+  if (!result) {
+    return {
+      exitCode: 1,
+      stdout: errorEnvelope(
+        "profile.signal",
+        "rollup",
+        ErrorType.NOT_FOUND,
+        "NOT_FOUND",
+        `Profile ${input.id} not found`,
+        "run `pin profile list` to see available profiles",
+      ),
+    } satisfies RunCliResult;
+  }
+
+  return {
+    exitCode: 0,
+    stdout: okEnvelope<RollupSignalsResult>("profile.signal", "rollup", result),
+  } satisfies RunCliResult;
+};
+
+export const listProfileInterests = async (
+  runtime: CliRuntimeInput,
+  input: {
+    id: string;
+    kind?: string;
+    limit?: string;
+  },
+) => {
+  const repository = await createRepository(runtime);
+  const profile = await repository.getById(input.id);
+  if (!profile) {
+    return {
+      exitCode: 1,
+      stdout: errorEnvelope(
+        "profile.interests",
+        "list",
+        ErrorType.NOT_FOUND,
+        "NOT_FOUND",
+        `Profile ${input.id} not found`,
+        "run `pin profile list` to see available profiles",
+      ),
+    } satisfies RunCliResult;
+  }
+
+  const limit = Number.parseInt(input.limit ?? "20", 10);
+  const interests = await repository.listInterests(input.id, {
+    kind: input.kind,
+    limit: Number.isNaN(limit) ? 20 : limit,
+  });
+
+  return {
+    exitCode: 0,
+    stdout: okEnvelope<ProfileInterestRecord[]>(
+      "profile.interests",
+      "list",
+      interests,
+    ),
+  } satisfies RunCliResult;
+};
+
+export const buildProfileSnapshot = async (
+  runtime: CliRuntimeInput,
+  input: {
+    id: string;
+    view: string;
+  },
+) => {
+  const repository = await createRepository(runtime);
+  const snapshot = await repository.buildSnapshot(input.id, input.view);
+  if (!snapshot) {
+    return {
+      exitCode: 1,
+      stdout: errorEnvelope(
+        "profile.snapshot",
+        "build",
+        ErrorType.NOT_FOUND,
+        "NOT_FOUND",
+        `Profile ${input.id} not found`,
+        "run `pin profile list` to see available profiles",
+      ),
+    } satisfies RunCliResult;
+  }
+
+  return {
+    exitCode: 0,
+    stdout: okEnvelope<ProfileSnapshotContent>(
+      "profile.snapshot",
+      "build",
+      snapshot,
+    ),
   } satisfies RunCliResult;
 };
 

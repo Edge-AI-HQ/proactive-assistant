@@ -125,4 +125,43 @@ export const registerSysCommands = (
     supportsDryRun: false,
     flags: [{ name: "path", type: "string", required: false, description: "Command path (e.g. profile.get)" }],
   });
+
+  registerCommand({
+    domain: "sys",
+    command: "migrate",
+    description: "Run database migrations",
+    risk: "high-risk-write",
+    supportsDryRun: false,
+    flags: [],
+  });
+
+  registerCommand({
+    domain: "sys",
+    command: "reindex",
+    description: "Rebuild search indexes",
+    risk: "write",
+    supportsDryRun: false,
+    flags: [{ name: "domain", type: "string", required: false, description: "Target domain to reindex" }],
+  });
+
+  registerCommand({
+    domain: "sys",
+    command: "export",
+    description: "Export local data",
+    risk: "read",
+    supportsDryRun: false,
+    flags: [{ name: "path", type: "string", required: false, description: "Export directory" }],
+  });
+
+  registerCommand({
+    domain: "sys",
+    command: "import",
+    description: "Import local data",
+    risk: "high-risk-write",
+    supportsDryRun: false,
+    flags: [
+      { name: "path", type: "string", required: false, description: "Import directory" },
+      { name: "yes", type: "boolean", required: false, description: "Skip confirmation" },
+    ],
+  });
 };
