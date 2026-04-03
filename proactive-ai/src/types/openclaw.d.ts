@@ -1,5 +1,5 @@
 /**
- * Minimal type declarations for the OpenClaw Plugin SDK.
+ * Minimal type declarations for the OpenClaw Plugin SDK (v2026.4.2).
  *
  * These are local stubs so the project compiles without the openclaw
  * peer dependency installed. The real types come from the openclaw package
@@ -35,8 +35,11 @@ declare module 'openclaw/plugin-sdk' {
 
     registerCommand(command: {
       name: string;
+      nativeNames?: Partial<Record<string, string>> & { default?: string };
       description: string;
-      handler(...args: unknown[]): Promise<string>;
+      acceptsArgs?: boolean;
+      requireAuth?: boolean;
+      handler(...args: unknown[]): Promise<string | { text: string; isError?: boolean }>;
     }): void;
 
     registerService(service: {
@@ -47,10 +50,10 @@ declare module 'openclaw/plugin-sdk' {
 
     registerHttpRoute(params: {
       path: string;
-      auth?: 'plugin' | 'gateway';
+      auth: 'plugin' | 'gateway';
       match?: 'exact' | 'prefix';
       replaceExisting?: boolean;
-      handler(req: unknown, res: unknown): Promise<void>;
+      handler(req: unknown, res: unknown): Promise<boolean | void> | boolean | void;
     }): void;
 
     on(event: string, handler: (...args: unknown[]) => void | Promise<void>): void;
@@ -59,23 +62,29 @@ declare module 'openclaw/plugin-sdk' {
       subagent: {
         run(params: {
           sessionKey: string;
-          extraSystemPrompt: string;
-          idempotencyKey: string;
           message: string;
-          deliver: boolean;
+          provider?: string;
+          model?: string;
+          extraSystemPrompt?: string;
+          lane?: string;
+          deliver?: boolean;
+          idempotencyKey?: string;
         }): Promise<{ runId: string }>;
 
         waitForRun(params: {
           runId: string;
-          timeoutMs: number;
-        }): Promise<{ status: 'ok' | 'completed' | 'failed' | 'timeout'; error?: string }>;
+          timeoutMs?: number;
+        }): Promise<{ status: 'ok' | 'error' | 'timeout'; error?: string }>;
 
         getSessionMessages(params: {
           sessionKey: string;
-          limit: number;
+          limit?: number;
         }): Promise<{ messages: unknown[] }>;
 
-        deleteSession(params: { sessionKey: string }): Promise<void>;
+        deleteSession(params: {
+          sessionKey: string;
+          deleteTranscript?: boolean;
+        }): Promise<void>;
       };
     };
   }

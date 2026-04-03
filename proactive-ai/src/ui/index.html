@@ -236,6 +236,7 @@
   </style>
 </head>
 <body>
+  <!-- __GW_TOKEN__ -->
   <header>
     <div class="logo">SIPA</div>
     <div class="status"><span class="dot"></span>Proactive AI Engine</div>
@@ -257,50 +258,73 @@
     const statusLine = document.getElementById('status-line');
     const container = document.getElementById('cards-container');
 
-    btn.addEventListener('click', () => {
+    // Gateway token injected by server at render time
+    const gwToken = window.__GW_TOKEN__ || '';
+
+    btn.addEventListener('click', async () => {
       btn.disabled = true;
       container.innerHTML = '';
       statusLine.textContent = 'Starting pipeline...';
 
-      const es = new EventSource('/proactive-ai/api/generate');
+      try {
+        const resp = await fetch('/proactive-ai/api/generate', {
+          headers: gwToken ? { 'Authorization': 'Bearer ' + gwToken } : {},
+        });
 
-      es.onmessage = (e) => {
-        const event = JSON.parse(e.data);
-        switch (event.type) {
-          case 'pipeline:start':
-            statusLine.textContent = 'Pipeline started (' + event.data.maxIterations + ' iterations max)';
-            break;
-          case 'pipeline:iteration':
-            statusLine.textContent = 'Iteration ' + event.data.iteration + ': ' + event.data.phase + '...';
-            break;
-          case 'pipeline:cards':
-            statusLine.textContent = 'Iteration ' + event.data.iteration + ': generated ' + event.data.cards.length + ' cards';
-            break;
-          case 'pipeline:evaluation': {
-            const passed = event.data.evaluation.evaluations.filter(ev => ev.pass).length;
-            const total = event.data.evaluation.evaluations.length;
-            statusLine.textContent = 'Iteration ' + event.data.iteration + ': ' + passed + '/' + total + ' cards passed';
-            break;
-          }
-          case 'pipeline:complete':
-            statusLine.textContent = 'Done! ' + event.data.finalCards.length + ' cards generated in ' + event.data.totalIterations + ' iterations';
-            renderCards(event.data.finalCards);
-            btn.disabled = false;
-            es.close();
-            break;
-          case 'pipeline:error':
-            statusLine.textContent = 'Error: ' + event.data.message;
-            btn.disabled = false;
-            es.close();
-            break;
+        if (!resp.ok) {
+          const err = await resp.text();
+          statusLine.textContent = 'Error: ' + (err || resp.statusText);
+          btn.disabled = false;
+          return;
         }
-      };
 
-      es.onerror = () => {
-        statusLine.textContent = 'Connection lost';
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const event = JSON.parse(line.slice(6));
+
+            switch (event.type) {
+              case 'pipeline:start':
+                statusLine.textContent = 'Pipeline started (' + event.data.maxIterations + ' iterations max)';
+                break;
+              case 'pipeline:iteration':
+                statusLine.textContent = 'Iteration ' + event.data.iteration + ': ' + event.data.phase + '...';
+                break;
+              case 'pipeline:cards':
+                statusLine.textContent = 'Iteration ' + event.data.iteration + ': generated ' + event.data.cards.length + ' cards';
+                break;
+              case 'pipeline:evaluation': {
+                const passed = event.data.evaluation.evaluations.filter(ev => ev.pass).length;
+                const total = event.data.evaluation.evaluations.length;
+                statusLine.textContent = 'Iteration ' + event.data.iteration + ': ' + passed + '/' + total + ' cards passed';
+                break;
+              }
+              case 'pipeline:complete':
+                statusLine.textContent = 'Done! ' + event.data.finalCards.length + ' cards generated in ' + event.data.totalIterations + ' iterations';
+                renderCards(event.data.finalCards);
+                break;
+              case 'pipeline:error':
+                statusLine.textContent = 'Error: ' + event.data.message;
+                break;
+            }
+          }
+        }
+      } catch (err) {
+        statusLine.textContent = 'Connection error: ' + (err.message || err);
+      } finally {
         btn.disabled = false;
-        es.close();
-      };
+      }
     });
 
     function renderCards(cards) {

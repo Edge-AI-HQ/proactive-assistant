@@ -277,7 +277,9 @@ async function runAgent(
 
   const result = await api.runtime.subagent.waitForRun({ runId, timeoutMs });
 
-  if (result.status !== 'completed' && result.status !== 'ok') {
+  // 'ok' = success. Anything else (error/timeout/failed) is a failure.
+  // Check for 'ok' to stay forward-compatible with future status values.
+  if (result.status !== 'ok') {
     throw new Error(`Agent ${tag} failed with status: ${result.status}${result.error ? ` — ${result.error}` : ''}`);
   }
 

@@ -113,34 +113,49 @@ export default {
     });
 
     // ── 3. Register HTTP routes on OpenClaw gateway ──
-    // Single prefix-matched route handles all /proactive-ai/* requests
+
+    // Frontend — no auth needed (public page)
+    // Injects gateway token into HTML so frontend JS can call authenticated API
+    const gwAuth = (api.config as Record<string, unknown>)?.['gateway'] as Record<string, unknown> | undefined;
+    const gwAuthInner = gwAuth?.['auth'] as Record<string, unknown> | undefined;
+    const gwToken = (gwAuthInner?.['token'] as string) ?? '';
 
     api.registerHttpRoute({
       path: '/proactive-ai',
       auth: 'plugin',
+      match: 'exact',
+      async handler(_req, res) {
+        const r = res as import('node:http').ServerResponse;
+        // Inject token into HTML via a script tag before the main script
+        const html = UI_HTML.replace(
+          '<!-- __GW_TOKEN__ -->',
+          `<script>window.__GW_TOKEN__=${JSON.stringify(gwToken)};</script>`,
+        );
+        r.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        r.end(html);
+      },
+    });
+
+    // API — gateway auth (subagent needs operator.write scope)
+    api.registerHttpRoute({
+      path: '/proactive-ai/api',
+      auth: 'gateway',
       match: 'prefix',
       async handler(req, res) {
         const r = res as import('node:http').ServerResponse;
         const rq = req as import('node:http').IncomingMessage;
         const url = new URL(rq.url ?? '/', `http://${rq.headers.host ?? 'localhost'}`);
-        const subpath = url.pathname.replace(/^\/proactive-ai\/?/, '/');
+        const subpath = url.pathname.replace(/^\/proactive-ai\/api\/?/, '/');
 
-        // GET / → placeholder frontend
-        if ((subpath === '/' || subpath === '') && rq.method === 'GET') {
-          r.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          r.end(UI_HTML);
-          return;
-        }
-
-        // GET /api/health → health check
-        if (subpath === '/api/health' && rq.method === 'GET') {
+        // GET /api/health
+        if (subpath === '/health' && rq.method === 'GET') {
           r.writeHead(200, { 'Content-Type': 'application/json' });
           r.end(JSON.stringify({ ok: true, pipelineRunning }));
           return;
         }
 
         // GET /api/generate → SSE pipeline stream
-        if (subpath === '/api/generate' && rq.method === 'GET') {
+        if (subpath === '/generate' && rq.method === 'GET') {
           if (pipelineRunning) {
             r.writeHead(409, { 'Content-Type': 'application/json' });
             r.end(JSON.stringify({ error: 'Pipeline is already running' }));
