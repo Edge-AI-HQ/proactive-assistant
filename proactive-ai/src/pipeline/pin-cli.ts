@@ -5,6 +5,7 @@
  * This is the bridge between OpenClaw agents and the deterministic pin-cli tool layer.
  */
 
+import { homedir } from 'node:os';
 import { runCli } from '@pin-ai/pin-cli';
 import type { PinEnvelope } from '@pin-ai/pin-cli/envelope';
 
@@ -29,7 +30,7 @@ export async function pinCli(command: string): Promise<PinCliResult> {
     args.push('--json');
   }
 
-  const result = await runCli(args);
+  const result = await runCli(args, { homeDir: homedir() });
   const envelope = result.stdout as PinEnvelope<unknown>;
 
   return {
