@@ -28,6 +28,19 @@ const createProgram = (runtime: CliRuntimeInput, resultRef: ResultRef): Command 
   registerPushCommands(program, runtime, resultRef);
   registerPersonalCommands(program, runtime, resultRef);
 
+  // Commander does not propagate exitOverride/configureOutput to subcommands.
+  // Without this, bad args on nested commands (e.g. `personal exec` without --tool)
+  // call process.exit(1), killing the host process when run in-process.
+  const silentOutput = { writeOut: () => {}, writeErr: () => {} };
+  const propagate = (cmd: Command) => {
+    for (const sub of cmd.commands) {
+      sub.exitOverride();
+      sub.configureOutput(silentOutput);
+      propagate(sub);
+    }
+  };
+  propagate(program);
+
   return program;
 };
 

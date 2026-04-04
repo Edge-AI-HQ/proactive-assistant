@@ -5,7 +5,7 @@ description: "世界上下文：抓取新闻/头条、建立本地 world store�
 metadata:
   requires:
     bins: ["pin"]
-  cliHelp: "pin world --help"
+  cliHelp: "world --help"
 ---
 
 # world

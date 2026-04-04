@@ -11,9 +11,15 @@ declare module 'openclaw/plugin-sdk' {
     id: string;
     name: string;
     version: string;
+    /** Full OpenClaw config (from ~/.openclaw/openclaw.json). */
     config: Record<string, unknown>;
+    /** Plugin-specific config (from ~/.openclaw/plugins/<id>/config.json). */
     pluginConfig: Record<string, unknown>;
     registrationMode: 'full' | 'setup-only' | 'setup-runtime';
+    /** Plugin root directory (e.g. ~/.openclaw/plugins/<id>/ or source dir for local-linked). */
+    rootDir: string;
+    /** Resolve a path relative to the OpenClaw config directory. */
+    resolvePath(relativePath: string): string;
 
     logger: {
       debug(msg: string, ...args: unknown[]): void;

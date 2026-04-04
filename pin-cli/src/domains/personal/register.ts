@@ -1,16 +1,16 @@
 import { Command } from "commander";
 
-import { notImplemented } from "../not_implemented.js";
 import { registerCommand } from "../../registry.js";
 import type { CliRuntimeInput, ResultRef } from "../../runtime.js";
 import {
-  getPersonalItem,
-  listPersonalSources,
-  runPersonalIndexRefresh,
-  listPersonalSyncStatus,
-  runPersonalSync,
-  searchPersonalItems,
-  timelinePersonalItems,
+  setup,
+  status,
+  connectApp,
+  waitForConnection,
+  listConnections,
+  searchTools,
+  getToolSchema,
+  execTool,
 } from "./service.js";
 
 export const registerPersonalCommands = (
@@ -19,102 +19,116 @@ export const registerPersonalCommands = (
   resultRef: ResultRef,
 ): void => {
   const personal = new Command("personal").description(
-    "Personal feed: sync and search personal context from connected sources",
+    "Personal data: connect apps and access user data via Composio MCP",
   );
 
-  const source = personal.command("source").description("Manage connected personal sources");
-  source
-    .command("list")
-    .description("List connected personal sources")
+  // ── Key management ──
+
+  personal
+    .command("setup")
+    .description("Save and validate your Composio consumer key")
+    .requiredOption("--key <key>", "Composio consumer key (ck_...)")
+    .option("--json")
+    .action(async (options) => {
+      resultRef.current = await setup(runtime, options);
+    });
+
+  personal
+    .command("status")
+    .description("Check if a Composio consumer key is configured")
     .option("--json")
     .action(async () => {
-      resultRef.current = await listPersonalSources(runtime);
+      resultRef.current = await status(runtime);
     });
 
-  const sync = personal.command("sync").description("Run and inspect personal feed syncs");
-  sync
-    .command("run")
-    .description("Run a sync across all sources or a single source")
-    .option("--all", "sync all sources")
-    .option("--source <source>", "sync a single source")
-    .option("--mode <mode>", "sync mode: incremental | backfill", "incremental")
-    .option("--json")
-    .action(async (options) => {
-      resultRef.current = await runPersonalSync(runtime, options);
-    });
+  // ── Connection management ──
 
-  sync
-    .command("status")
-    .description("Show latest sync state")
-    .option("--source <source>", "filter by source ID")
-    .option("--recent <recent>", "show the most recent runs")
-    .option("--json")
-    .action(async (options) => {
-      resultRef.current = await listPersonalSyncStatus(runtime, options);
-    });
+  const connections = personal
+    .command("connections")
+    .description("Manage connected personal data sources");
 
-  const index = personal.command("index").description("Manage semantic search indices");
-  index
-    .command("refresh")
-    .description("Refresh the semantic index for personal items")
-    .option("--all", "rebuild the entire semantic index")
-    .option("--pending", "refresh only items changed since the last semantic index update")
-    .option("--limit <limit>", "max items to process", "100")
+  connections
+    .command("list")
+    .description("List connected apps and their status")
+    .option("--toolkits <toolkits>", "comma-separated toolkit names to check (e.g. gmail,slack,notion)")
     .option("--json")
     .action(async (options) => {
-      resultRef.current = await runPersonalIndexRefresh(runtime, options);
-    });
-
-  const item = personal.command("item").description("Read personal feed items");
-  item
-    .command("get")
-    .description("Get a personal feed item by ID")
-    .requiredOption("--id <id>", "personal item ID")
-    .option("--include-raw", "include raw payload")
-    .option("--json")
-    .action(async (options) => {
-      resultRef.current = await getPersonalItem(runtime, options.id, {
-        includeRaw: options.includeRaw === true,
-      });
+      resultRef.current = await listConnections(runtime, options);
     });
 
   personal
+    .command("connect")
+    .description("Initiate OAuth connection for an app (returns redirect URL)")
+    .requiredOption("--toolkit <toolkit>", "app to connect (e.g. gmail, slack, notion)")
+    .option("--json")
+    .action(async (options) => {
+      resultRef.current = await connectApp(runtime, options);
+    });
+
+  personal
+    .command("wait")
+    .description("Wait for an OAuth connection to become active")
+    .requiredOption("--toolkit <toolkit>", "app to wait for (e.g. gmail, slack, notion)")
+    .option("--json")
+    .action(async (options) => {
+      resultRef.current = await waitForConnection(runtime, options);
+    });
+
+  // ── Tool discovery & execution ──
+
+  const tools = personal
+    .command("tools")
+    .description("Discover and inspect available Composio tools");
+
+  tools
     .command("search")
-    .description("Search personal feed items")
-    .requiredOption("--query <query>", "search query")
-    .option("--strategy <strategy>", "keyword | semantic | hybrid")
-    .option("--from <from>", "start timestamp in ISO-8601")
-    .option("--to <to>", "end timestamp in ISO-8601")
-    .option("--source <source>", "comma-separated source IDs")
-    .option("--toolkit <toolkit>", "comma-separated toolkit names")
-    .option("--type <type>", "comma-separated item types")
-    .option("--facet <facet>", "exact metadata filter, key=value")
-    .option("--limit <limit>", "max results")
+    .description("Search available tools by keyword or toolkit")
+    .requiredOption("--query <query>", "search keyword (e.g. 'fetch emails', 'list slack channels')")
+    .option("--toolkit <toolkit>", "filter by toolkit name (e.g. gmail, slack, notion)")
+    .option("--limit <limit>", "max results", "20")
     .option("--json")
     .action(async (options) => {
-      resultRef.current = await searchPersonalItems(runtime, options);
+      resultRef.current = await searchTools(runtime, options);
+    });
+
+  tools
+    .command("schema")
+    .description("Get the input schema for a specific tool")
+    .requiredOption("--name <name>", "tool slug (e.g. GMAIL_FETCH_EMAILS)")
+    .option("--json")
+    .action(async (options) => {
+      resultRef.current = await getToolSchema(runtime, options);
     });
 
   personal
-    .command("timeline")
-    .description("List personal feed items in a time window")
-    .requiredOption("--from <from>", "start timestamp in ISO-8601")
-    .requiredOption("--to <to>", "end timestamp in ISO-8601")
-    .option("--source <source>", "comma-separated source IDs")
-    .option("--toolkit <toolkit>", "comma-separated toolkit names")
-    .option("--type <type>", "comma-separated item types")
-    .option("--limit <limit>", "max results")
+    .command("exec")
+    .description("Execute a Composio tool and return results")
+    .requiredOption("--tool <tool>", "tool slug (e.g. GMAIL_FETCH_EMAILS)")
+    .option("--input <input>", "JSON object of tool arguments")
     .option("--json")
     .action(async (options) => {
-      resultRef.current = await timelinePersonalItems(runtime, options);
+      resultRef.current = await execTool(runtime, options);
     });
 
   program.addCommand(personal);
 
+  // ── Registry ──
+
   registerCommand({
     domain: "personal",
-    command: "source list",
-    description: "List connected personal-feed sources discovered from provider integrations",
+    command: "setup",
+    description: "Save and validate Composio consumer key (ck_...)",
+    risk: "write",
+    supportsDryRun: false,
+    flags: [
+      { name: "key", type: "string", required: true, description: "Composio consumer key (ck_...)" },
+    ],
+  });
+
+  registerCommand({
+    domain: "personal",
+    command: "status",
+    description: "Check if Composio consumer key is configured",
     risk: "read",
     supportsDryRun: false,
     flags: [],
@@ -122,70 +136,70 @@ export const registerPersonalCommands = (
 
   registerCommand({
     domain: "personal",
-    command: "sync run",
-    description: "Run a personal-feed sync for all or one source",
+    command: "connections list",
+    description: "List connected apps and their status via COMPOSIO_MANAGE_CONNECTIONS",
+    risk: "read",
+    supportsDryRun: false,
+    flags: [
+      { name: "toolkits", type: "string", required: false, description: "Comma-separated toolkit names (e.g. gmail,slack,notion)" },
+    ],
+  });
+
+  registerCommand({
+    domain: "personal",
+    command: "connect",
+    description: "Initiate OAuth connection for an app (returns redirect URL if not connected)",
     risk: "write",
-    supportsDryRun: true,
+    supportsDryRun: false,
     flags: [
-      { name: "all", type: "boolean", required: false, description: "Sync all sources" },
-      { name: "source", type: "string", required: false, description: "Source ID to sync" },
-      { name: "mode", type: "string", required: false, enum: ["incremental", "backfill"], default: "incremental", description: "Sync mode" },
+      { name: "toolkit", type: "string", required: true, description: "App to connect (e.g. gmail, slack, notion)" },
     ],
   });
 
   registerCommand({
     domain: "personal",
-    command: "sync status",
-    description: "Show the latest personal-feed sync state per source",
+    command: "wait",
+    description: "Wait for an OAuth connection to become active via COMPOSIO_WAIT_FOR_CONNECTIONS",
     risk: "read",
     supportsDryRun: false,
     flags: [
-      { name: "source", type: "string", required: false, description: "Source ID filter" },
-      { name: "recent", type: "number", required: false, description: "Number of recent runs to show" },
+      { name: "toolkit", type: "string", required: true, description: "App to wait for" },
     ],
   });
 
   registerCommand({
     domain: "personal",
-    command: "index refresh",
-    description: "Refresh the semantic index for personal-feed items",
+    command: "tools search",
+    description: "Search available Composio tools by use case via COMPOSIO_SEARCH_TOOLS",
+    risk: "read",
+    supportsDryRun: false,
+    flags: [
+      { name: "query", type: "string", required: true, description: "Search keyword (e.g. 'fetch emails')" },
+      { name: "toolkit", type: "string", required: false, description: "Filter by toolkit (e.g. gmail, slack)" },
+      { name: "limit", type: "number", required: false, default: "20", description: "Max results" },
+    ],
+  });
+
+  registerCommand({
+    domain: "personal",
+    command: "tools schema",
+    description: "Get tool input schema via COMPOSIO_GET_TOOL_SCHEMAS",
+    risk: "read",
+    supportsDryRun: false,
+    flags: [
+      { name: "name", type: "string", required: true, description: "Tool slug (e.g. GMAIL_FETCH_EMAILS)" },
+    ],
+  });
+
+  registerCommand({
+    domain: "personal",
+    command: "exec",
+    description: "Execute a Composio tool via COMPOSIO_MULTI_EXECUTE_TOOL",
     risk: "write",
-    supportsDryRun: true,
-    flags: [
-      { name: "all", type: "boolean", required: false, description: "Rebuild the full semantic index" },
-      { name: "pending", type: "boolean", required: false, description: "Index only pending items" },
-      { name: "limit", type: "number", required: false, description: "Maximum items to process" },
-    ],
-  });
-
-  registerCommand({
-    domain: "personal",
-    command: "search",
-    description: "Search personal-feed items with time and source filters",
-    risk: "read",
     supportsDryRun: false,
     flags: [
-      { name: "query", type: "string", required: true, description: "Search query" },
-      { name: "strategy", type: "string", required: false, enum: ["keyword", "semantic", "hybrid"], description: "Search strategy" },
-      { name: "from", type: "string", required: false, description: "Start timestamp (ISO-8601)" },
-      { name: "to", type: "string", required: false, description: "End timestamp (ISO-8601)" },
-      { name: "source", type: "string", required: false, description: "Comma-separated source IDs" },
-      { name: "toolkit", type: "string", required: false, description: "Comma-separated toolkit names" },
-      { name: "type", type: "string", required: false, description: "Comma-separated item types" },
-      { name: "facet", type: "string", required: false, description: "Exact metadata filter key=value" },
-      { name: "limit", type: "number", required: false, description: "Maximum result count" },
-    ],
-  });
-
-  registerCommand({
-    domain: "personal",
-    command: "item get",
-    description: "Get a single personal-feed item by ID",
-    risk: "read",
-    supportsDryRun: false,
-    flags: [
-      { name: "id", type: "string", required: true, description: "Personal item ID" },
-      { name: "include-raw", type: "boolean", required: false, description: "Include raw provider payload" },
+      { name: "tool", type: "string", required: true, description: "Tool slug (e.g. GMAIL_FETCH_EMAILS)" },
+      { name: "input", type: "string", required: false, description: "JSON object of tool arguments" },
     ],
   });
 };

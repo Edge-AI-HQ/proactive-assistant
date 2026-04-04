@@ -5,7 +5,7 @@ description: "反馈系统：记录和查询用户/Agent 反馈事件，支持 I
 metadata:
   requires:
     bins: ["pin"]
-  cliHelp: "pin feedback --help"
+  cliHelp: "feedback --help"
 ---
 
 # feedback

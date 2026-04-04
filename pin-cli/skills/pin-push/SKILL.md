@@ -5,7 +5,7 @@ description: "推送记录：追踪推送了什么、何时推送、投递结果
 metadata:
   requires:
     bins: ["pin"]
-  cliHelp: "pin push --help"
+  cliHelp: "push --help"
 ---
 
 # push

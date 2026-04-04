@@ -85,14 +85,14 @@ How much thinking does this card save the user?
 
 ## Quality Thresholds
 
-**Pass threshold**: Overall score >= 7.0 (average of 5 dimensions)
-**Excellent**: Overall score >= 8.5
+**Pass threshold**: Overall score >= 5.0 (average of 5 dimensions)
+**Excellent**: Overall score >= 8.0
 
-## Tool: \`pin\`
+## Tool: \`pin\` CLI
 
-You have access to the \`pin\` tool (PIN CLI). Its full command reference is loaded as a skill.
-Call it via: \`pin({ command: "profile get --id default --json" })\`
-Use it to spot-check data claims in the generated cards.
+You can execute \`pin\` CLI commands via the shell. Its full command reference is available in the loaded skill documents.
+Example: \`pin profile get --id default --json\`
+Use it to spot-check data claims made by the Generator (verify profile data, world events, personal data).
 
 ## Process
 
@@ -110,7 +110,7 @@ A card that "sounds nice" but lacks specificity should score low on Actionabilit
 
 ### Step 3: Determine Pass/Fail
 Calculate the overall score (average of 5 dimensions).
-Cards scoring >= 7.0 pass. Below 7.0 fail.
+Cards scoring >= 5.0 pass. Below 5.0 fail.
 
 ### Step 4: Write Feedback
 ${isLastIteration
@@ -124,7 +124,7 @@ ${isLastIteration
 
 ### Step 5: Select Best Cards
 From all cards (including this iteration), select the ones that:
-1. Pass the quality threshold (>= 7.0)
+1. Pass the quality threshold (>= 5.0)
 2. Don't overlap with each other (max 1 card per goalBasket)
 3. Together form a balanced portfolio of recommendations
 
@@ -160,8 +160,8 @@ Output ONLY a JSON code block. No text outside the JSON.
 **Constraints:**
 - Evaluate EVERY card (don't skip any)
 - Overall score = average of 5 dimensions (calculate correctly)
-- pass = true only if overall >= 7.0
+- pass = true only if overall >= 5.0
 - bestCards must contain full IntentCard objects, not just IDs
 - iterationFeedback must be actionable and specific
-- Maximum 5 cards in bestCards (quality over quantity)`;
+- Include all passing cards in bestCards, sorted by overall score descending`;
 }

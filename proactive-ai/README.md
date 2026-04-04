@@ -4,11 +4,17 @@ OpenClaw plugin that generates Intent Cards — AI-powered "next best action" re
 
 ## Prerequisites
 
-- [OpenClaw](https://docs.openclaw.ai) installed and running
-- [pin-cli](../pin-cli/) dependencies installed:
+- [OpenClaw](https://docs.openclaw.ai) installed and running (with `tools.profile: "coding"`)
+- [pin-cli](../pin-cli/) built and globally linked:
 
 ```bash
-cd ../pin-cli && npm install
+# From repo root
+npm install --workspace pin-cli
+npm run build --workspace pin-cli
+npm link --workspace pin-cli
+
+# Verify
+pin sys doctor --json
 ```
 
 ## Install
@@ -114,8 +120,15 @@ In `~/.openclaw/openclaw.json`, under plugin config:
 
 ```
 proactive-ai/
-  index.ts                    # Plugin entry (tool + command + HTTP routes)
-  openclaw.plugin.json        # Plugin manifest (skills: pin-cli/SKILL.md)
+  index.ts                    # Plugin entry (command + HTTP routes)
+  openclaw.plugin.json        # Plugin manifest (skills: ./skills/)
+  skills/                     # pin-cli skill docs (loaded by OpenClaw agents)
+    pin-shared/SKILL.md       # Output contract, safety rules, introspection
+    pin-profile/SKILL.md      # User profile, goals, preferences, memory
+    pin-personal/SKILL.md     # Third-party data via Composio MCP
+    pin-world/SKILL.md        # News, headlines, world events
+    pin-feedback/SKILL.md     # Intent Card response tracking
+    pin-push/SKILL.md         # Push dedup and delivery tracking
   src/
     agents/
       planner.ts              # Planner agent system prompt
@@ -133,13 +146,9 @@ proactive-ai/
 
 ## Pin CLI Integration
 
-Agents access user data through the `pin` tool (registered on OpenClaw). The tool shells out to [pin-cli](../pin-cli/), which is auto-discovered:
+Agents access user data by executing `pin` CLI commands via OpenClaw's built-in `exec` tool. The plugin registers skill files (under `./skills/`) that teach agents the full command reference.
 
-1. `PIN_CLI_BIN` env var (explicit override)
-2. `../pin-cli/src/bin.ts` via tsx (dev mode, no build needed)
-3. `pin` on `$PATH` (global install)
-
-The pin-cli skill reference ([`../pin-cli/SKILL.md`](../pin-cli/SKILL.md)) is auto-injected into all subagents via the `skills` field in `openclaw.plugin.json`.
+`pin` must be available on `$PATH` (see Prerequisites).
 
 ## Development
 

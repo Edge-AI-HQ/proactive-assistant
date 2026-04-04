@@ -251,6 +251,31 @@
     <button id="generate-btn">Generate Intent Cards</button>
     <div id="status-line"></div>
     <div id="cards-container"></div>
+
+    <!-- Data Connections -->
+    <div style="width:100%;border-top:1px solid var(--border);margin-top:24px;padding-top:32px;">
+      <h2 style="font-size:18px;font-weight:400;color:var(--text-secondary);margin-bottom:16px;">Data Connections</h2>
+
+      <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px;">
+        <div style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+          Composio Consumer Key — get yours at
+          <a href="https://dashboard.composio.dev" target="_blank" rel="noopener" style="color:var(--accent-cyan);">dashboard.composio.dev</a>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <input type="password" id="ck-input" placeholder="ck_..." style="flex:1;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;color:var(--text-primary);font-size:13px;font-family:'SF Mono','Fira Code',monospace;outline:none;">
+          <button id="ck-save" style="padding:8px 16px;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;border:none;background:var(--accent-cyan);color:white;">Save</button>
+        </div>
+        <div id="ck-status" style="font-size:12px;margin-top:8px;min-height:18px;"></div>
+      </div>
+
+      <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+          <span style="font-size:13px;color:var(--text-muted);">Connected Apps</span>
+          <button id="conn-refresh" style="padding:4px 12px;border-radius:6px;font-size:12px;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text-muted);">Refresh</button>
+        </div>
+        <div id="conn-list" style="font-size:13px;color:var(--text-muted);font-style:italic;">Not configured</div>
+      </div>
+    </div>
   </main>
 
   <script>
@@ -357,6 +382,87 @@
       d.textContent = s || '';
       return d.innerHTML;
     }
+
+    // ── Data Connections ──
+
+    const ckInput = document.getElementById('ck-input');
+    const ckSave = document.getElementById('ck-save');
+    const ckStatus = document.getElementById('ck-status');
+    const connList = document.getElementById('conn-list');
+    const connRefresh = document.getElementById('conn-refresh');
+
+    function apiHeaders() {
+      return gwToken ? { 'Authorization': 'Bearer ' + gwToken, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
+    }
+
+    async function loadKeyStatus() {
+      try {
+        const res = await fetch('/proactive-ai/api/composio/status', { headers: apiHeaders() });
+        const data = await res.json();
+        if (data.configured) {
+          ckInput.placeholder = 'Key saved (' + (data.keyPrefix || 'hidden') + ')';
+          ckStatus.textContent = 'Consumer key is configured (source: ' + (data.source || 'file') + ').';
+          ckStatus.style.color = '#22c55e';
+          loadConnections();
+        }
+      } catch {}
+    }
+
+    ckSave.addEventListener('click', async () => {
+      const key = ckInput.value.trim();
+      if (!key) return;
+      ckSave.disabled = true;
+      ckStatus.textContent = 'Validating and saving...';
+      ckStatus.style.color = 'var(--text-muted)';
+      try {
+        const res = await fetch('/proactive-ai/api/composio/setup', {
+          method: 'POST', headers: apiHeaders(),
+          body: JSON.stringify({ key }),
+        });
+        const data = await res.json();
+        if (data.saved) {
+          ckInput.value = '';
+          ckInput.placeholder = 'Key saved (' + (data.keyPrefix || 'hidden') + ')';
+          ckStatus.textContent = 'Saved and validated successfully.';
+          ckStatus.style.color = '#22c55e';
+          loadConnections();
+        } else {
+          ckStatus.textContent = 'Error: ' + (data.error || 'Setup failed');
+          ckStatus.style.color = '#ef4444';
+        }
+      } catch (err) {
+        ckStatus.textContent = 'Error: ' + (err.message || err);
+        ckStatus.style.color = '#ef4444';
+      } finally {
+        ckSave.disabled = false;
+      }
+    });
+
+    connRefresh.addEventListener('click', loadConnections);
+
+    async function loadConnections() {
+      connList.innerHTML = '<span style="font-style:italic;">Loading...</span>';
+      try {
+        const res = await fetch('/proactive-ai/api/composio/connections', { headers: apiHeaders() });
+        const data = await res.json();
+        const conns = data.connections || [];
+        if (conns.length === 0) {
+          connList.innerHTML = '<span style="font-style:italic;">No apps connected. Connect apps at <a href="https://dashboard.composio.dev" target="_blank" style="color:var(--accent-cyan);">dashboard.composio.dev</a></span>';
+          return;
+        }
+        connList.innerHTML = conns.map(function(c) {
+          const color = c.status === 'ACTIVE' ? '#22c55e' : '#f59e0b';
+          return '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);">' +
+            '<span style="font-weight:500;font-style:normal;">' + esc(c.toolkit) + '</span>' +
+            '<span style="font-size:11px;font-weight:600;text-transform:uppercase;padding:2px 8px;border-radius:4px;background:' + color + '20;color:' + color + ';">' + esc(c.status) + '</span>' +
+          '</div>';
+        }).join('');
+      } catch (err) {
+        connList.innerHTML = '<span style="color:#ef4444;">' + esc(err.message || 'Failed to load') + '</span>';
+      }
+    }
+
+    loadKeyStatus();
   </script>
 </body>
 </html>

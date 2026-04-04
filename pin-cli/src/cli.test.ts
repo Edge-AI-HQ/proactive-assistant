@@ -7,7 +7,13 @@ import { tmpdir } from "node:os";
 import { runCli } from "./cli.js";
 import type { PinEnvelope } from "./output/envelope.js";
 import type { RunCliResult } from "./runtime.js";
-import { runPersonalSync } from "./domains/personal/service.js";
+import {
+  listConnections,
+  searchTools,
+  getToolSchema,
+  execTool,
+} from "./domains/personal/service.js";
+import type { PersonalProvider } from "./domains/personal/provider.js";
 
 interface SysDoctorData {
   checks: Array<{ name: string; status: string; message: string; hint?: string }>;
@@ -96,43 +102,22 @@ interface WorldSimpleRecord {
   provider?: string;
 }
 
-interface PersonalSourceRecord {
+interface PersonalConnectionRecord {
   id: string;
-  userId: string;
-  provider: string;
   toolkit: string;
-  connectedAccountId: string;
   status: string;
-  syncEnabled: boolean;
+  accountLabel: string | null;
 }
 
-interface PersonalSyncStatusRecord {
-  sourceId: string;
-  userId: string;
-  syncStrategy: string;
-  lastSuccessAt: string | null;
-  lastBackfillAt: string | null;
+interface PersonalToolRecord {
+  slug: string;
+  description: string | null;
+  toolkit: string | null;
 }
 
-interface PersonalSyncStatusEnvelope {
-  states: PersonalSyncStatusRecord[];
-  recentRuns: Array<{
-    sourceId: string | null;
-    userId: string | null;
-    status: string;
-    fetchedCount: number;
-    upsertedCount: number;
-  }>;
-}
-
-interface PersonalSearchEnvelope {
-  strategy: string;
-  degraded: boolean;
-  results: Array<{
-    id: string;
-    toolkit: string;
-    title: string | null;
-  }>;
+interface PersonalExecData {
+  tool: string;
+  data: unknown;
 }
 
 test("runCli returns ok envelope for sys doctor json command", async () => {
@@ -557,212 +542,182 @@ test("push commands return NOT_IMPLEMENTED with hints", async () => {
   assert.equal(result.stdout.meta.domain, "push");
 });
 
-test("personal source list returns an empty list for a fresh data root", async () => {
-  const root = await mkdtemp(join(tmpdir(), "pin-personal-sources-"));
+test("personal connections list returns empty with no API key", async () => {
+  const runtime = {
+    env: {},
+    homeDir: "/Users/test",
+  };
 
-  try {
-    const result = (await runCli(
-      ["personal", "source", "list", "--json"],
-      {
-        env: { PIN_DATA_ROOT: root },
-        homeDir: "/Users/test",
-      },
-    )) as RunCliResult & { stdout: PinEnvelope<PersonalSourceRecord[]> };
+  const result = (await runCli(
+    ["personal", "connections", "list", "--json"],
+    runtime,
+  )) as RunCliResult & { stdout: PinEnvelope<PersonalConnectionRecord[]> };
 
-    assert.equal(result.exitCode, 0);
-    assert.equal(result.stdout.ok, true);
-    assert.equal(result.stdout.meta.domain, "personal");
-    assert.equal(result.stdout.meta.command, "source list");
-    assert.deepEqual(result.stdout.data, []);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout.ok, true);
+  assert.equal(result.stdout.meta.domain, "personal");
+  assert.equal(result.stdout.meta.command, "connections list");
+  assert.deepEqual(result.stdout.data, []);
 });
 
-test("personal sync status returns an empty status list for a fresh data root", async () => {
-  const root = await mkdtemp(join(tmpdir(), "pin-personal-status-"));
+test("personal connections list returns mock connections via provider override", async () => {
+  const runtime = { env: {}, homeDir: "/tmp" };
+  const noopConn = { toolkit: "", status: "ACTIVE", connectedAccountId: null, userInfo: null, redirectUrl: null };
+  const mockProvider: PersonalProvider = {
+    async discoverConnections() {
+      return [
+        { ...noopConn, toolkit: "gmail", connectedAccountId: "ca_1" },
+        { ...noopConn, toolkit: "slack", connectedAccountId: "ca_2" },
+      ];
+    },
+    async checkConnections() { return []; },
+    async connectApp() { return noopConn; },
+    async waitForConnection() { return noopConn; },
+    async searchTools() { return []; },
+    async getToolSchema() { return null; },
+    async executeTool() { return { tool: "", success: false, data: null, error: "not called" }; },
+  };
 
-  try {
-    const result = (await runCli(
-      ["personal", "sync", "status", "--json"],
-      {
-        env: { PIN_DATA_ROOT: root },
-        homeDir: "/Users/test",
-      },
-    )) as RunCliResult & { stdout: PinEnvelope<PersonalSyncStatusEnvelope> };
+  const result = await listConnections(runtime, undefined, { provider: mockProvider });
 
-    assert.equal(result.exitCode, 0);
-    assert.equal(result.stdout.ok, true);
-    assert.equal(result.stdout.meta.domain, "personal");
-    assert.equal(result.stdout.meta.command, "sync status");
-    assert.deepEqual(result.stdout.data?.states, []);
-    assert.deepEqual(result.stdout.data?.recentRuns, []);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout.ok, true);
+  const data = result.stdout.data as PersonalConnectionRecord[];
+  assert.equal(data.length, 2);
+  assert.equal(data[0]?.toolkit, "gmail");
+  assert.equal(data[1]?.toolkit, "slack");
 });
 
-test("personal sync run --all succeeds with no supported sources", async () => {
-  const root = await mkdtemp(join(tmpdir(), "pin-personal-sync-"));
+test("personal tools search returns provider unavailable without API key", async () => {
+  const runtime = { env: {}, homeDir: "/tmp" };
 
-  try {
-    const result = (await runCli(
-      ["personal", "sync", "run", "--all", "--json"],
-      {
-        env: { PIN_DATA_ROOT: root },
-        homeDir: "/Users/test",
-      },
-    )) as RunCliResult & {
-      stdout: PinEnvelope<{
-        mode: string;
-        requested: string;
-        sourcesDiscovered: number;
-        sourcesSynced: number;
-      }>;
-    };
+  const result = await runCli(
+    ["personal", "tools", "search", "--query", "gmail", "--json"],
+    runtime,
+  );
 
-    assert.equal(result.exitCode, 0);
-    assert.equal(result.stdout.ok, true);
-    assert.equal(result.stdout.meta.domain, "personal");
-    assert.equal(result.stdout.meta.command, "sync run");
-    assert.equal(result.stdout.data?.requested, "all");
-    assert.equal(result.stdout.data?.sourcesDiscovered, 0);
-    assert.equal(result.stdout.data?.sourcesSynced, 0);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout.ok, false);
+  assert.equal(result.stdout.error?.type, "provider_unavailable");
+  assert.equal(result.stdout.error?.code, "PROVIDER_NOT_CONFIGURED");
+  assert.equal(result.stdout.meta.domain, "personal");
 });
 
-test("personal item get and search read synced items through CLI", async () => {
-  const root = await mkdtemp(join(tmpdir(), "pin-personal-cli-items-"));
+test("personal tools search returns results via provider override", async () => {
+  const runtime = { env: {}, homeDir: "/tmp" };
+  const mockProvider: PersonalProvider = {
+    async discoverConnections() { return []; },
+    async checkConnections() { return []; },
+    async connectApp() { return { toolkit: "", status: "ACTIVE", connectedAccountId: null, userInfo: null, redirectUrl: null }; },
+    async waitForConnection() { return { toolkit: "", status: "ACTIVE", connectedAccountId: null, userInfo: null, redirectUrl: null }; },
+    async searchTools(query) {
+      return [
+        { slug: "GMAIL_FETCH_EMAILS", description: "Fetch emails", toolkit: "gmail" },
+        { slug: "GMAIL_SEND_EMAIL", description: "Send email", toolkit: "gmail" },
+      ];
+    },
+    async getToolSchema() { return null; },
+    async executeTool() { return { tool: "", success: false, data: null, error: "not called" }; },
+  };
 
-  try {
-    const runtime = {
-      env: { PIN_DATA_ROOT: root },
-      homeDir: "/Users/test",
-    };
+  const result = await searchTools(runtime, { query: "gmail" }, { provider: mockProvider });
 
-    await runPersonalSync(
-      runtime,
-      { all: true, mode: "incremental" },
-      {
-        provider: {
-          async listConnectedSources() {
-            return [
-              {
-                id: "src_gmail_main",
-                userId: "user_123",
-                provider: "composio",
-                toolkit: "gmail",
-                connectedAccountId: "ca_gmail_1",
-                accountLabel: "Primary Gmail",
-                status: "ACTIVE",
-                syncEnabled: true,
-                authMetadataJson: '{"userId":"user_123"}',
-              },
-            ];
-          },
-        },
-        executor: {
-          async execute(toolSlug) {
-            if (toolSlug === "GMAIL_FETCH_EMAILS") {
-              return {
-                data: {
-                  messages: [{ messageId: "msg_1", threadId: "thread_1" }],
-                },
-              };
-            }
+  assert.equal(result.exitCode, 0);
+  const data = result.stdout.data as { query: string; count: number; tools: PersonalToolRecord[] };
+  assert.equal(data.query, "gmail");
+  assert.equal(data.count, 2);
+  assert.equal(data.tools[0]?.slug, "GMAIL_FETCH_EMAILS");
+});
 
-            if (toolSlug === "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID") {
-              return {
-                data: {
-                  messageId: "msg_1",
-                  threadId: "thread_1",
-                  subject: "Weekly review",
-                  preview: {
-                    body: "Your weekly review is ready.",
-                  },
-                  sender: "PIN Team <team@pin.ai>",
-                  to: "Smile <smile@pin.ai>",
-                  messageTimestamp: "2026-04-02T11:00:00.000Z",
-                },
-              };
-            }
+test("personal tools schema returns not found for unknown tool", async () => {
+  const runtime = { env: {}, homeDir: "/tmp" };
+  const mockProvider: PersonalProvider = {
+    async discoverConnections() { return []; },
+    async checkConnections() { return []; },
+    async connectApp() { return { toolkit: "", status: "ACTIVE", connectedAccountId: null, userInfo: null, redirectUrl: null }; },
+    async waitForConnection() { return { toolkit: "", status: "ACTIVE", connectedAccountId: null, userInfo: null, redirectUrl: null }; },
+    async searchTools() { return []; },
+    async getToolSchema() { return null; },
+    async executeTool() { return { tool: "", success: false, data: null, error: "not called" }; },
+  };
 
-            throw new Error(`Unexpected tool slug ${toolSlug}`);
-          },
-        },
-      },
-    );
+  const result = await getToolSchema(runtime, { name: "NONEXISTENT_TOOL" }, { provider: mockProvider });
 
-    const item = await runCli(
-      [
-        "personal",
-        "item",
-        "get",
-        "--id",
-        "src_gmail_main:email:msg_1",
-        "--json",
-      ],
-      runtime,
-    );
-    const itemData = item.stdout.data as {
-      title: string | null;
-      toolkit: string;
-      userId: string;
-    };
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout.error?.code, "TOOL_NOT_FOUND");
+});
 
-    assert.equal(item.exitCode, 0);
-    assert.equal(itemData.title, "Weekly review");
-    assert.equal(itemData.toolkit, "gmail");
-    assert.equal(itemData.userId, "user_123");
+test("personal exec returns validation error for invalid JSON input", async () => {
+  const result = await runCli(
+    ["personal", "exec", "--tool", "GMAIL_FETCH_EMAILS", "--input", "not-json", "--json"],
+    { env: { COMPOSIO_CONSUMER_KEY: "fake" }, homeDir: "/tmp" },
+  );
 
-    const sources = (await runCli(
-      ["personal", "source", "list", "--json"],
-      runtime,
-    )) as RunCliResult & { stdout: PinEnvelope<PersonalSourceRecord[]> };
-    assert.equal(sources.stdout.data?.[0]?.userId, "user_123");
+  assert.equal(result.exitCode, 2);
+  assert.equal(result.stdout.error?.type, "validation");
+  assert.equal(result.stdout.error?.code, "INVALID_ARGUMENT");
+});
 
-    const search = (await runCli(
-      [
-        "personal",
-        "search",
-        "--query",
-        "weekly",
-        "--strategy",
-        "hybrid",
-        "--json",
-      ],
-      runtime,
-    )) as RunCliResult & { stdout: PinEnvelope<PersonalSearchEnvelope> };
+test("personal exec succeeds via provider override", async () => {
+  const runtime = { env: {}, homeDir: "/tmp" };
+  const mockProvider: PersonalProvider = {
+    async discoverConnections() { return []; },
+    async checkConnections() { return []; },
+    async connectApp() { return { toolkit: "", status: "ACTIVE", connectedAccountId: null, userInfo: null, redirectUrl: null }; },
+    async waitForConnection() { return { toolkit: "", status: "ACTIVE", connectedAccountId: null, userInfo: null, redirectUrl: null }; },
+    async searchTools() { return []; },
+    async getToolSchema() { return null; },
+    async executeTool(slug, args) {
+      return {
+        tool: slug,
+        success: true,
+        data: { emails: [{ subject: "Hello", from: "test@example.com" }] },
+        error: null,
+      };
+    },
+  };
 
-    assert.equal(search.exitCode, 0);
-    assert.equal(search.stdout.data?.strategy, "keyword");
-    assert.equal(search.stdout.data?.degraded, true);
-    assert.equal(search.stdout.data?.results.length, 1);
-    assert.equal(search.stdout.data?.results[0]?.id, "src_gmail_main:email:msg_1");
+  const result = await execTool(
+    runtime,
+    { tool: "GMAIL_FETCH_EMAILS", input: '{"max_results":5}' },
+    { provider: mockProvider },
+  );
 
-    const timeline = (await runCli(
-      [
-        "personal",
-        "timeline",
-        "--from",
-        "2026-04-02T00:00:00.000Z",
-        "--to",
-        "2026-04-03T00:00:00.000Z",
-        "--json",
-      ],
-      runtime,
-    )) as RunCliResult & {
-      stdout: PinEnvelope<Array<{ id: string; title: string | null }>>;
-    };
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout.ok, true);
+  const data = result.stdout.data as PersonalExecData;
+  assert.equal(data.tool, "GMAIL_FETCH_EMAILS");
+  assert.ok(data.data);
+});
 
-    assert.equal(timeline.exitCode, 0);
-    assert.equal(timeline.stdout.data?.length, 1);
-    assert.equal(timeline.stdout.data?.[0]?.id, "src_gmail_main:email:msg_1");
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+test("personal exec returns error envelope when tool execution fails", async () => {
+  const runtime = { env: {}, homeDir: "/tmp" };
+  const mockProvider: PersonalProvider = {
+    async discoverConnections() { return []; },
+    async checkConnections() { return []; },
+    async connectApp() { return { toolkit: "", status: "ACTIVE", connectedAccountId: null, userInfo: null, redirectUrl: null }; },
+    async waitForConnection() { return { toolkit: "", status: "ACTIVE", connectedAccountId: null, userInfo: null, redirectUrl: null }; },
+    async searchTools() { return []; },
+    async getToolSchema() { return null; },
+    async executeTool(slug) {
+      return {
+        tool: slug,
+        success: false,
+        data: null,
+        error: "Rate limit exceeded",
+      };
+    },
+  };
+
+  const result = await execTool(
+    runtime,
+    { tool: "GMAIL_FETCH_EMAILS" },
+    { provider: mockProvider },
+  );
+
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout.error?.code, "TOOL_EXECUTION_FAILED");
+  assert.ok(result.stdout.error?.message.includes("Rate limit"));
 });
 
 test("envelope includes _notice field (null when empty)", async () => {

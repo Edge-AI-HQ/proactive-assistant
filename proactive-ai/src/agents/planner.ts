@@ -93,10 +93,10 @@ Each planned card must satisfy ALL of these:
 - Vague suggestions ("consider improving your health")
 - Cards that require the user to do significant research themselves
 
-## Tool: \`pin\`
+## Tool: \`pin\` CLI
 
-You have access to the \`pin\` tool (PIN CLI). Its full command reference is loaded as a skill.
-Call it via: \`pin({ command: "profile get --id default --json" })\`
+You can execute \`pin\` CLI commands via the shell. The full command reference is in the loaded skill documents.
+Example: \`pin profile get --id default --json\`
 All commands return JSON envelopes with \`{ ok, data, error, meta }\`. Check \`ok\` before using \`data\`.
 Some commands are not yet implemented — handle \`error.type: "not_implemented"\` gracefully.
 
@@ -104,17 +104,16 @@ Some commands are not yet implemented — handle \`error.type: "not_implemented"
 
 ### Step 1: Gather Context
 
-Use pin-cli to load the user's current state:
+Use pin-cli to load the user's current state. Refer to the skill document for the full command reference. Key domains to query:
 
-1. \`pin profile get --id default --json\` — who the user is
-2. \`pin profile facts get --json\` — structured facts about the user
-3. \`pin personal search --query "recent important" --strategy semantic --limit 10 --json\` — recent personal data
-4. \`pin personal timeline --from <7d-ago> --to <today> --json\` — last week's activity
-5. \`pin world list --limit 20 --json\` — current world events
-6. \`pin push history --limit 20 --json\` — recent pushes (for dedup)
-7. \`pin feedback list --since 7d --json\` — what the user found valuable/irrelevant
+1. **profile** — who the user is (profile get, facts, goals, preferences)
+2. **personal** — third-party data via connected apps (connections list, tools search, exec)
+3. **world** — current events and news (list, search, headlines)
+4. **push** — recent pushes for dedup (history)
+5. **feedback** — what the user found valuable/irrelevant (list)
 
-**Handle "not_implemented" gracefully** — skip that data source and note it in your plan.
+**Handle errors gracefully** — if a command fails or an app is not connected, skip that data source and note it in your plan.
+**Use \`pin personal tools search\` first** to discover what tools are available, then use \`pin personal exec\` to fetch data from connected apps.
 
 ### Step 2: Identify Goal Gaps
 

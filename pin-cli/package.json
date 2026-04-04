@@ -19,7 +19,6 @@
     }
   },
   "dependencies": {
-    "@composio/core": "^0.6.8",
     "@lancedb/lancedb": "^0.27.2",
     "better-sqlite3": "^12.8.0",
     "commander": "^12.1.0",
@@ -28,10 +27,10 @@
   },
   "scripts": {
     "build": "tsc",
+    "postbuild": "rm -rf ../proactive-ai/skills && cp -r skills ../proactive-ai/skills",
     "type-check": "tsc --noEmit",
     "test": "find src -name '*.test.ts' -print0 | xargs -0 node --import tsx --test",
-    "test:e2e:personal": "node --import tsx scripts/personal-feed-e2e.ts",
-    "dev": "node --import tsx src/bin.ts",
+"dev": "node --import tsx src/bin.ts",
     "db:generate": "drizzle-kit generate",
     "db:check": "drizzle-kit check"
   },

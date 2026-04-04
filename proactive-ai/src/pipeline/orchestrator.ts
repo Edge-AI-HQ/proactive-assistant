@@ -195,19 +195,19 @@ export async function runPipeline(
 
 // ── Card selection ──
 
-const MAX_FINAL_CARDS = 5;
-const MAX_PER_BASKET = 2;
-const PASS_THRESHOLD = 7.0;
+const MAX_FINAL_CARDS = 10;
+const MAX_PER_BASKET = 3;
+const PASS_THRESHOLD = 5.0;
 
 /**
  * Select the best cards from the candidate pool across all iterations.
  *
  * Strategy:
  * 1. Deduplicate: same-intent cards across iterations → keep highest score
- * 2. Filter: only cards that passed (overall >= 7.0)
+ * 2. Filter: only cards that passed (overall >= 5.0)
  * 3. Sort: by Evaluator's `overall` score descending
- * 4. Diversify: max 2 cards per goalBasket
- * 5. Take top 5
+ * 4. Diversify: max 3 cards per goalBasket
+ * 5. Take top 10
  *
  * If no cards pass, fall back to the highest-scoring cards regardless of threshold.
  */

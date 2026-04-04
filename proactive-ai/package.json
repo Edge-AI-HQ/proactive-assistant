@@ -19,7 +19,8 @@
   },
   "files": [
     "dist/",
-    "openclaw.plugin.json"
+    "openclaw.plugin.json",
+    "skills/"
   ],
   "scripts": {
     "build": "tsc",

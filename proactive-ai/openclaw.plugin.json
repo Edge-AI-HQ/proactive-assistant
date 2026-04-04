@@ -19,7 +19,7 @@
     }
   },
   "skills": [
-    "./skills/pin-cli.md"
+    "./skills"
   ],
   "uiHints": {
     "max_iterations": { "label": "Max iterations", "help": "How many planner/generator/evaluator loops to run" },

@@ -91,22 +91,22 @@ ${plan}
 - Primary action is advisory ("consider", "think about", "look into")
 - Card reads like a notification rather than a prepared decision
 
-## Tool: \`pin\`
+## Tool: \`pin\` CLI
 
-You have access to the \`pin\` tool (PIN CLI). Its full command reference is loaded as a skill.
-Call it via: \`pin({ command: "profile get --id default --json" })\`
+You can execute \`pin\` CLI commands via the shell. The full command reference is in the loaded skill documents.
+Example: \`pin profile get --id default --json\`
 All commands return JSON envelopes with \`{ ok, data, error, meta }\`. Check \`ok\` before using \`data\`.
-Some commands are not yet implemented — handle \`error.type: "not_implemented"\` gracefully.
+**Handle errors gracefully** — if a command fails or app is not connected, skip it and use available data.
 
 ## Process
 
 For EACH intent in the plan:
 
 ### Step 1: Deep Data Gathering
-Use the \`dataSources\` from the plan, plus your judgment, to gather:
-- Specific numbers, dates, names, events
-- Context that makes the "Why Now" concrete
-- Information needed to craft a specific default action
+Use the plan's \`dataSources\` hints, plus your judgment, to gather specifics:
+- Use \`pin personal tools search\` to find the right tool for the data you need
+- Use \`pin personal exec\` to fetch actual data (emails, calendar events, etc.)
+- Gather specific numbers, dates, names, events to make the card concrete
 
 ### Step 2: Craft the Card
 Write each field with care:
@@ -151,7 +151,7 @@ Output ONLY a JSON code block. No text outside the JSON.
       "confidence": 0.85,
       "urgency": 0.7,
       "importance": 0.8,
-      "sources": ["personal search", "world events"],
+      "sources": ["personal exec (gmail)", "world list"],
       "agentChain": ["planner", "generator"],
       "createdAt": "${currentDate}"
     }

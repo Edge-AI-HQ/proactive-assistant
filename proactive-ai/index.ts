@@ -2,7 +2,7 @@
  * OpenClaw Plugin: Proactive AI (v2)
  *
  * Registers:
- * 1. `pin` tool — shell bridge to pin-cli for subagents
+ * 1. Skills (via openclaw.plugin.json) — pin-cli command reference for agents
  * 2. `/generate` command — manually trigger intent card generation
  * 3. HTTP routes on OpenClaw gateway — UI + API (no separate server)
  */
@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
-import { pinCli, formatForAgent } from './src/pipeline/pin-cli.js';
+import { pinCli } from './src/pipeline/pin-cli.js';
 import { runPipeline, DEFAULT_PIPELINE_OPTIONS } from './src/pipeline/orchestrator.js';
 import type { ServerEvent } from './src/types/index.js';
 
@@ -54,45 +54,13 @@ export default {
 
     api.logger.info('Proactive AI v2 loading');
 
-    // ── 1. Register `pin` tool for subagents ──
+    // ── 0. Ensure default profile exists ──
 
-    api.registerTool({
-      name: 'pin',
-      description: [
-        'PIN CLI — deterministic data tool for user profile, personal feed, world context, feedback, and push management.',
-        'Call with a command string, e.g.: pin({ command: "profile get --id default" })',
-        'All commands return JSON envelopes with { ok, data, error, meta }.',
-        'Use `sys schema` to discover all available commands.',
-        'Add --json for structured output (auto-appended if missing).',
-      ].join('\n'),
-      parameters: {
-        type: 'object' as const,
-        properties: {
-          command: {
-            type: 'string' as const,
-            description: 'PIN CLI command, e.g. "profile get --id default", "personal search --query meetings --json"',
-          },
-        },
-        required: ['command'] as string[],
-      },
-      async execute(_toolCallId: string, toolArgs: Record<string, unknown>) {
-        const command = String(toolArgs['command'] ?? '').trim();
-        if (!command) {
-          return 'Error: empty command. Usage: pin({ command: "profile get --id default" })';
-        }
-
-        try {
-          const result = await pinCli(command);
-          return formatForAgent(result);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          api.logger.warn(`pin tool error: ${msg}`);
-          return `Error executing pin-cli: ${msg}`;
-        }
-      },
+    ensureDefaultProfile(api).catch(err => {
+      api.logger.warn(`Failed to seed default profile: ${err instanceof Error ? err.message : err}`);
     });
 
-    // ── 2. Register /generate command (chat interface) ──
+    // ── 1. Register /generate command (chat interface) ──
 
     api.registerCommand({
       name: 'generate',
@@ -114,8 +82,6 @@ export default {
 
     // ── 3. Register HTTP routes on OpenClaw gateway ──
 
-    // Frontend — no auth needed (public page)
-    // Injects gateway token into HTML so frontend JS can call authenticated API
     const gwAuth = (api.config as Record<string, unknown>)?.['gateway'] as Record<string, unknown> | undefined;
     const gwAuthInner = gwAuth?.['auth'] as Record<string, unknown> | undefined;
     const gwToken = (gwAuthInner?.['token'] as string) ?? '';
@@ -126,7 +92,6 @@ export default {
       match: 'exact',
       async handler(_req, res) {
         const r = res as import('node:http').ServerResponse;
-        // Inject token into HTML via a script tag before the main script
         const html = UI_HTML.replace(
           '<!-- __GW_TOKEN__ -->',
           `<script>window.__GW_TOKEN__=${JSON.stringify(gwToken)};</script>`,
@@ -136,7 +101,6 @@ export default {
       },
     });
 
-    // API — gateway auth (subagent needs operator.write scope)
     api.registerHttpRoute({
       path: '/proactive-ai/api',
       auth: 'gateway',
@@ -147,18 +111,32 @@ export default {
         const url = new URL(rq.url ?? '/', `http://${rq.headers.host ?? 'localhost'}`);
         const subpath = url.pathname.replace(/^\/proactive-ai\/api\/?/, '/');
 
+        const json = (status: number, data: unknown) => {
+          r.writeHead(status, { 'Content-Type': 'application/json' });
+          r.end(JSON.stringify(data));
+        };
+
+        const readBody = (): Promise<Record<string, unknown>> =>
+          new Promise((resolve, reject) => {
+            const chunks: Buffer[] = [];
+            rq.on('data', (c: Buffer) => chunks.push(c));
+            rq.on('end', () => {
+              try { resolve(JSON.parse(Buffer.concat(chunks).toString())); }
+              catch { resolve({}); }
+            });
+            rq.on('error', reject);
+          });
+
         // GET /api/health
         if (subpath === '/health' && rq.method === 'GET') {
-          r.writeHead(200, { 'Content-Type': 'application/json' });
-          r.end(JSON.stringify({ ok: true, pipelineRunning }));
+          json(200, { ok: true, pipelineRunning });
           return;
         }
 
         // GET /api/generate → SSE pipeline stream
         if (subpath === '/generate' && rq.method === 'GET') {
           if (pipelineRunning) {
-            r.writeHead(409, { 'Content-Type': 'application/json' });
-            r.end(JSON.stringify({ error: 'Pipeline is already running' }));
+            json(409, { error: 'Pipeline is already running' });
             return;
           }
 
@@ -194,12 +172,95 @@ export default {
           return;
         }
 
+        // ── Composio routes (all delegated to pin-cli) ──
+
+        // GET /api/composio/status — check if key is configured
+        if (subpath === '/composio/status' && rq.method === 'GET') {
+          try {
+            const result = await pinCli('personal status');
+            json(200, result.ok ? result.data : { configured: false });
+          } catch {
+            json(200, { configured: false });
+          }
+          return;
+        }
+
+        // POST /api/composio/setup — save consumer key
+        if (subpath === '/composio/setup' && rq.method === 'POST') {
+          try {
+            const body = await readBody();
+            const key = String(body['key'] ?? '').trim();
+            if (!key) {
+              json(400, { error: 'Missing key' });
+              return;
+            }
+            const result = await pinCli(`personal setup --key ${key}`);
+            if (result.ok) {
+              json(200, result.data);
+            } else {
+              json(400, { error: result.error ?? 'Setup failed' });
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            json(500, { error: msg });
+          }
+          return;
+        }
+
+        // GET /api/composio/connections — list connected apps
+        if (subpath === '/composio/connections' && rq.method === 'GET') {
+          try {
+            const result = await pinCli('personal connections list');
+            if (result.ok && Array.isArray(result.data)) {
+              json(200, { connections: result.data });
+            } else {
+              json(200, { connections: [] });
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            json(500, { error: msg });
+          }
+          return;
+        }
+
         // 404
-        r.writeHead(404, { 'Content-Type': 'application/json' });
-        r.end(JSON.stringify({ error: 'Not found' }));
+        json(404, { error: 'Not found' });
       },
     });
 
     api.logger.info('Proactive AI v2 ready (routes: /proactive-ai/*)');
   },
 };
+
+// ── Default profile seed ──
+
+async function ensureDefaultProfile(api: OpenClawPluginApi) {
+  const check = await pinCli('profile get --id default');
+  if (check.ok) return;
+
+  api.logger.info('Seeding default profile');
+
+  await pinCli([
+    'profile create',
+    '--id default',
+    '--display-name "User"',
+    '--locale en-US',
+    `--timezone "${Intl.DateTimeFormat().resolvedOptions().timeZone}"`,
+    '--summary "A busy professional balancing career, health, finances, and personal growth. Uses Proactive AI to stay on top of decisions and opportunities."',
+  ].join(' '));
+
+  const starterGoals = [
+    { key: 'career-growth', title: 'Advance career and professional skills', priority: 'high' },
+    { key: 'stay-healthy', title: 'Maintain consistent exercise and healthy habits', priority: 'medium' },
+    { key: 'financial-plan', title: 'Grow savings and make smart financial decisions', priority: 'medium' },
+    { key: 'learn-and-grow', title: 'Dedicate time to learning new skills and ideas', priority: 'medium' },
+    { key: 'relationships', title: 'Stay connected with family and close friends', priority: 'medium' },
+    { key: 'life-balance', title: 'Protect personal time and avoid burnout', priority: 'high' },
+  ];
+
+  for (const g of starterGoals) {
+    await pinCli(`profile goals upsert --key ${g.key} --title "${g.title}" --priority ${g.priority}`);
+  }
+
+  api.logger.info('Default profile seeded with 6 starter goals');
+}

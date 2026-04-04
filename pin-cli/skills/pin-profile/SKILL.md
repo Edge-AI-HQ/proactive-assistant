@@ -5,7 +5,7 @@ description: "用户画像管理：管理 profile、facts、preferences、goals�
 metadata:
   requires:
     bins: ["pin"]
-  cliHelp: "pin profile --help"
+  cliHelp: "profile --help"
 ---
 
 # profile
