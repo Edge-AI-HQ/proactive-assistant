@@ -23,7 +23,7 @@ interface ProactiveAIConfig {
 }
 
 const DEFAULT_CONFIG: ProactiveAIConfig = {
-  max_iterations: 3,
+  max_iterations: 2,
   agent_timeout_ms: 300_000,
 };
 
