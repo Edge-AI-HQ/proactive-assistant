@@ -53,8 +53,13 @@ npm run clean
 npm run build
 
 # ── Verify dist output ──
+if [[ ! -f dist/ui/index.html ]]; then
+  echo "Error: dist/ui/index.html not found after build (frontend build failed)"
+  exit 1
+fi
+
 if [[ ! -f dist/index.js ]]; then
-  echo "Error: dist/index.js not found after build"
+  echo "Error: dist/index.js not found after build (backend build failed)"
   exit 1
 fi
 
