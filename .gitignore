@@ -66,3 +66,6 @@ apps/payment-gateway/test-*.html
 lovable-temp-repo/
 
 local/
+
+# Composio consumer key (user-specific secret, never commit)
+composio-consumer-key

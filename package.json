@@ -8,7 +8,8 @@
   "workspaces": [
     "apis",
     "miniapp",
-    "pin-cli"
+    "pin-cli",
+    "composio-service"
   ],
   "scripts": {
     "dev": "npm run build --workspace @pin-ai/miniapp && npm run dev --workspace @pin-ai/apis",
