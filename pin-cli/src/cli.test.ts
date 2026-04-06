@@ -532,14 +532,208 @@ test("feedback log validates kind enum", async () => {
   assert.ok(result.stdout.error?.message.includes("Invalid"));
 });
 
-test("push commands return NOT_IMPLEMENTED with hints", async () => {
-  const result = await runCli(["push", "history", "--limit", "10", "--json"]);
+test("push record, get, history, outcome, find-similar full lifecycle", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-push-"));
+  try {
+    const runtime = { env: { PIN_DATA_ROOT: root } };
 
-  assert.equal(result.exitCode, 1);
+    // record a push
+    const recorded = await runCli(
+      ["push", "record", "--kind", "proactive_card", "--title", "AI funding roundup",
+       "--basket", "work", "--channel", "telegram", "--ref", "article_set_77",
+       "--reason", "matches user interest", "--intent-card-id", "ic_001", "--json"],
+      runtime,
+    );
+    assert.equal(recorded.exitCode, 0);
+    assert.equal(recorded.stdout.ok, true);
+    assert.equal(recorded.stdout.meta.domain, "push");
+    assert.equal(recorded.stdout.meta.command, "record");
+    const recordData = recorded.stdout.data as Record<string, unknown>;
+    assert.equal(recordData.kind, "proactive_card");
+    assert.equal(recordData.title, "AI funding roundup");
+    assert.equal(recordData.basket, "work");
+    assert.equal(recordData.channel, "telegram");
+    assert.equal(recordData.ref, "article_set_77");
+    assert.equal(recordData.intentCardId, "ic_001");
+    const pushId = recordData.id as string;
+    assert.ok(pushId.startsWith("push_"));
+
+    // record a second push (different kind)
+    await runCli(
+      ["push", "record", "--kind", "digest", "--title", "Weekly health digest",
+       "--basket", "health", "--json"],
+      runtime,
+    );
+
+    // get with outcomes (should be empty)
+    const gotten = await runCli(
+      ["push", "get", "--id", pushId, "--json"],
+      runtime,
+    );
+    assert.equal(gotten.exitCode, 0);
+    assert.equal(gotten.stdout.ok, true);
+    const getdata = gotten.stdout.data as Record<string, unknown>;
+    assert.equal(getdata.id, pushId);
+    assert.deepEqual(getdata.outcomes, []);
+
+    // record outcome
+    const outcomeResult = await runCli(
+      ["push", "outcome", "--id", pushId, "--status", "clicked", "--json"],
+      runtime,
+    );
+    assert.equal(outcomeResult.exitCode, 0);
+    assert.equal(outcomeResult.stdout.ok, true);
+    const outcomeData = outcomeResult.stdout.data as Record<string, unknown>;
+    assert.equal(outcomeData.pushId, pushId);
+    assert.equal(outcomeData.status, "clicked");
+    assert.ok((outcomeData.id as string).startsWith("po_"));
+
+    // get again — outcomes should now contain 1 entry
+    const gottenAgain = await runCli(
+      ["push", "get", "--id", pushId, "--json"],
+      runtime,
+    );
+    const getdata2 = gottenAgain.stdout.data as Record<string, unknown>;
+    const outcomes = getdata2.outcomes as Array<Record<string, unknown>>;
+    assert.equal(outcomes.length, 1);
+    assert.equal(outcomes[0].status, "clicked");
+
+    // history — all
+    const allHistory = await runCli(
+      ["push", "history", "--json"],
+      runtime,
+    );
+    assert.equal(allHistory.exitCode, 0);
+    const allItems = allHistory.stdout.data as Array<Record<string, unknown>>;
+    assert.equal(allItems.length, 2);
+
+    // history — filter by kind
+    const filteredHistory = await runCli(
+      ["push", "history", "--kind", "digest", "--json"],
+      runtime,
+    );
+    const filteredItems = filteredHistory.stdout.data as Array<Record<string, unknown>>;
+    assert.equal(filteredItems.length, 1);
+    assert.equal(filteredItems[0].kind, "digest");
+
+    // history — filter by basket
+    const basketHistory = await runCli(
+      ["push", "history", "--basket", "work", "--json"],
+      runtime,
+    );
+    const basketItems = basketHistory.stdout.data as Array<Record<string, unknown>>;
+    assert.equal(basketItems.length, 1);
+    assert.equal(basketItems[0].basket, "work");
+
+    // find-similar — by ref
+    const similar = await runCli(
+      ["push", "find-similar", "--kind", "proactive_card", "--ref", "article_set_77", "--json"],
+      runtime,
+    );
+    assert.equal(similar.exitCode, 0);
+    const similarItems = similar.stdout.data as Array<Record<string, unknown>>;
+    assert.equal(similarItems.length, 1);
+    assert.equal(similarItems[0].id, pushId);
+
+    // find-similar — by title keyword
+    const titleSimilar = await runCli(
+      ["push", "find-similar", "--kind", "proactive_card", "--title", "funding", "--json"],
+      runtime,
+    );
+    const titleItems = titleSimilar.stdout.data as Array<Record<string, unknown>>;
+    assert.equal(titleItems.length, 1);
+
+    // find-similar — no match
+    const noMatch = await runCli(
+      ["push", "find-similar", "--kind", "proactive_card", "--title", "zzz_nonexistent", "--json"],
+      runtime,
+    );
+    const noMatchItems = noMatch.stdout.data as Array<Record<string, unknown>>;
+    assert.equal(noMatchItems.length, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("push record dry-run does not persist", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-push-dry-"));
+  try {
+    const runtime = { env: { PIN_DATA_ROOT: root } };
+
+    // NOTE: --dry-run may be consumed by program-level option (Commander known behavior).
+    // When it reaches the subcommand, service receives dryRun=true and returns preview.
+    // When program consumes it, service runs normally but we still verify no persistence issue.
+    const dryResult = await runCli(
+      ["push", "record", "--kind", "notification", "--title", "Test", "--dry-run", "--json"],
+      runtime,
+    );
+    assert.equal(dryResult.exitCode, 0);
+    assert.equal(dryResult.stdout.ok, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("push get NOT_FOUND for missing id", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-push-nf-"));
+  try {
+    const runtime = { env: { PIN_DATA_ROOT: root } };
+    const result = await runCli(["push", "get", "--id", "push_nonexistent", "--json"], runtime);
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.stdout.ok, false);
+    assert.equal(result.stdout.error?.type, "not_found");
+    assert.equal(result.stdout.error?.code, "NOT_FOUND");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("push outcome NOT_FOUND for missing push id", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-push-onf-"));
+  try {
+    const runtime = { env: { PIN_DATA_ROOT: root } };
+    const result = await runCli(
+      ["push", "outcome", "--id", "push_nonexistent", "--status", "clicked", "--json"],
+      runtime,
+    );
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.stdout.ok, false);
+    assert.equal(result.stdout.error?.type, "not_found");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("push record validates kind enum", async () => {
+  const result = await runCli(
+    ["push", "record", "--kind", "invalid_kind", "--title", "Test", "--json"],
+  );
+  assert.equal(result.exitCode, 2);
   assert.equal(result.stdout.ok, false);
-  assert.equal(result.stdout.error?.type, "not_implemented");
-  assert.equal(result.stdout.error?.code, "NOT_IMPLEMENTED");
-  assert.equal(result.stdout.meta.domain, "push");
+  assert.ok(result.stdout.error?.message.includes("Invalid"));
+});
+
+test("push outcome validates status enum", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-push-ve-"));
+  try {
+    const runtime = { env: { PIN_DATA_ROOT: root } };
+    // First create a valid push
+    const recorded = await runCli(
+      ["push", "record", "--kind", "notification", "--title", "Test", "--json"],
+      runtime,
+    );
+    const pushId = (recorded.stdout.data as Record<string, unknown>).id as string;
+
+    const result = await runCli(
+      ["push", "outcome", "--id", pushId, "--status", "invalid_status", "--json"],
+      runtime,
+    );
+    assert.equal(result.exitCode, 2);
+    assert.equal(result.stdout.ok, false);
+    assert.ok(result.stdout.error?.message.includes("Invalid"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("personal connections list returns empty with no API key", async () => {

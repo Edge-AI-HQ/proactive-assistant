@@ -2,11 +2,17 @@ import { Command } from "commander";
 
 import type { CliRuntimeInput, ResultRef } from "../../runtime.js";
 import { registerCommand } from "../../registry.js";
-import { notImplemented } from "../not_implemented.js";
+import {
+  recordPush,
+  listPushHistory,
+  getPush,
+  recordOutcome,
+  findSimilarPushes,
+} from "./service.js";
 
 export const registerPushCommands = (
   program: Command,
-  _runtime: CliRuntimeInput,
+  runtime: CliRuntimeInput,
   resultRef: ResultRef,
 ): void => {
   const push = new Command("push").description("Push records: track what was pushed, when, and outcomes");
@@ -16,12 +22,15 @@ export const registerPushCommands = (
     .description("Record a new push")
     .requiredOption("--kind <kind>", "push kind: proactive_card | notification | digest")
     .requiredOption("--title <title>", "push title")
+    .option("--intent-card-id <intentCardId>", "related intent card ID")
+    .option("--basket <basket>", "goal basket: work | health | family | wealth | growth | life")
+    .option("--channel <channel>", "channel: telegram | web | mobile | im")
     .option("--ref <ref>", "reference to related content")
     .option("--reason <reason>", "why this push was generated")
     .option("--dry-run", "preview without saving")
     .option("--json")
-    .action(() => {
-      resultRef.current = notImplemented("push", "record");
+    .action(async (options) => {
+      resultRef.current = await recordPush(runtime, options);
     });
 
   push
@@ -29,9 +38,12 @@ export const registerPushCommands = (
     .description("List push history")
     .option("--limit <n>", "max results", "50")
     .option("--kind <kind>", "filter by push kind")
+    .option("--basket <basket>", "filter by goal basket")
+    .option("--channel <channel>", "filter by channel")
+    .option("--since <duration>", "time window (e.g. 7d, 24h, 2w)")
     .option("--json")
-    .action(() => {
-      resultRef.current = notImplemented("push", "history");
+    .action(async (options) => {
+      resultRef.current = await listPushHistory(runtime, options);
     });
 
   push
@@ -39,8 +51,8 @@ export const registerPushCommands = (
     .description("Get a single push record")
     .requiredOption("--id <id>", "push record ID")
     .option("--json")
-    .action(() => {
-      resultRef.current = notImplemented("push", "get");
+    .action(async (options) => {
+      resultRef.current = await getPush(runtime, options);
     });
 
   push
@@ -50,8 +62,8 @@ export const registerPushCommands = (
     .requiredOption("--status <status>", "outcome: clicked | dismissed | ignored | converted")
     .option("--dry-run", "preview without saving")
     .option("--json")
-    .action(() => {
-      resultRef.current = notImplemented("push", "outcome");
+    .action(async (options) => {
+      resultRef.current = await recordOutcome(runtime, options);
     });
 
   push
@@ -59,10 +71,11 @@ export const registerPushCommands = (
     .description("Find similar past pushes (for dedup)")
     .requiredOption("--kind <kind>", "push kind")
     .option("--ref <ref>", "content reference")
+    .option("--title <title>", "title keyword for similarity matching")
     .option("--since <duration>", "lookback window (e.g. 14d)")
     .option("--json")
-    .action(() => {
-      resultRef.current = notImplemented("push", "find-similar");
+    .action(async (options) => {
+      resultRef.current = await findSimilarPushes(runtime, options);
     });
 
   program.addCommand(push);
@@ -76,6 +89,9 @@ export const registerPushCommands = (
     flags: [
       { name: "kind", type: "string", required: true, enum: ["proactive_card", "notification", "digest"], description: "Push kind" },
       { name: "title", type: "string", required: true, description: "Push title" },
+      { name: "intent-card-id", type: "string", required: false, description: "Related intent card ID" },
+      { name: "basket", type: "string", required: false, enum: ["work", "health", "family", "wealth", "growth", "life"], description: "Goal basket" },
+      { name: "channel", type: "string", required: false, enum: ["telegram", "web", "mobile", "im"], description: "Channel" },
       { name: "ref", type: "string", required: false, description: "Reference to related content" },
       { name: "reason", type: "string", required: false, description: "Why this push was generated" },
     ],
@@ -89,14 +105,17 @@ export const registerPushCommands = (
     supportsDryRun: false,
     flags: [
       { name: "limit", type: "number", required: false, default: "50", description: "Max results" },
-      { name: "kind", type: "string", required: false, description: "Filter by push kind" },
+      { name: "kind", type: "string", required: false, enum: ["proactive_card", "notification", "digest"], description: "Filter by push kind" },
+      { name: "basket", type: "string", required: false, enum: ["work", "health", "family", "wealth", "growth", "life"], description: "Filter by goal basket" },
+      { name: "channel", type: "string", required: false, enum: ["telegram", "web", "mobile", "im"], description: "Filter by channel" },
+      { name: "since", type: "string", required: false, description: "Time window (e.g. 7d, 24h, 2w)" },
     ],
   });
 
   registerCommand({
     domain: "push",
     command: "get",
-    description: "Get a single push record by ID",
+    description: "Get a single push record by ID (includes outcomes)",
     risk: "read",
     supportsDryRun: false,
     flags: [
@@ -123,8 +142,9 @@ export const registerPushCommands = (
     risk: "read",
     supportsDryRun: false,
     flags: [
-      { name: "kind", type: "string", required: true, description: "Push kind" },
+      { name: "kind", type: "string", required: true, enum: ["proactive_card", "notification", "digest"], description: "Push kind" },
       { name: "ref", type: "string", required: false, description: "Content reference" },
+      { name: "title", type: "string", required: false, description: "Title keyword for similarity matching" },
       { name: "since", type: "string", required: false, description: "Lookback window (e.g. 14d)" },
     ],
   });
