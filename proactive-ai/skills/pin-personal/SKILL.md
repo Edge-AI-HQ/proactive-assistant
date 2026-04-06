@@ -22,7 +22,7 @@ metadata:
 ### 1. 配置 Composio
 
 ```bash
-pin personal setup --key ck_A4U6ZbQT5FZtZBlUvKLZ --json
+pin personal setup --key ck_YOUR_KEY_HERE --json
 pin personal status --json
 ```
 

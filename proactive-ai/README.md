@@ -1,74 +1,48 @@
 # Proactive AI (v2)
 
-OpenClaw plugin that generates Intent Cards — AI-powered "next best action" recommendations based on user profile, goals, personal context, and world events.
+AI-powered "next best action" recommendations based on user profile, goals, personal context, and world events. Runs as a macOS desktop app powered by OpenClaw.
 
-## Prerequisites
-
-- [OpenClaw](https://docs.openclaw.ai) installed and running (with `tools.profile: "coding"`)
-- [pin-cli](../pin-cli/) built and globally linked:
+## Quick Start
 
 ```bash
+# Prerequisites: Node.js 22.12+ and OpenClaw installed globally
+nvm use 22
+npm install -g openclaw
+
 # From repo root
-npm install --workspace pin-cli
-npm run build --workspace pin-cli
-npm link --workspace pin-cli
-
-# Verify
-pin sys doctor --json
+cd proactive-ai/electron
+npm run setup && npm run dev
 ```
 
-## Install
+On first launch, the app will:
+1. Create an isolated OpenClaw profile at `~/.openclaw-proactive-ai/`
+2. Prompt for your Anthropic API key (if not configured)
+3. Start the OpenClaw gateway and open the Proactive AI UI
+
+## Development
 
 ```bash
-# Register the plugin and install gateway (from repo root)
-openclaw plugins install -l ./proactive-ai && openclaw gateway install
+# Rebuild UI after frontend changes
+cd proactive-ai
+npm run build:ui
 
-# Or if already installed, restart to pick up changes
-openclaw gateway restart
+# Rebuild + launch Electron
+cd electron
+npm run dev
+
+# UI dev server with hot reload (optional — for faster frontend iteration)
+cd proactive-ai
+PROACTIVE_AI_PROXY_TARGET=http://127.0.0.1:<gateway-port> \
+PROACTIVE_AI_GW_TOKEN=<token> \
+npm run dev:ui
+# Then open http://localhost:8080
 ```
 
-## Usage
-
-### Web UI
-
-Open in browser:
-
-```
-http://127.0.0.1:<gateway-port>/proactive-ai
-```
-
-Find your gateway port:
-
-```bash
-grep '"port"' ~/.openclaw/openclaw.json
-```
-
-Click **"Generate Intent Cards"** to trigger the pipeline. Results stream in via SSE.
-
-### Chat Command
-
-In any OpenClaw chat session:
-
-```
-/generate
-```
-
-### API
-
-```bash
-# Health check
-curl http://127.0.0.1:<port>/proactive-ai/api/health
-
-# Trigger pipeline (SSE stream)
-curl http://127.0.0.1:<port>/proactive-ai/api/generate
-
-# Custom iteration count
-curl http://127.0.0.1:<port>/proactive-ai/api/generate?iterations=3
-```
+The gateway token is printed to the terminal when the Electron app starts.
 
 ## How It Works
 
-The pipeline runs a **Planner -> Generator -> Evaluator** loop (default 3 iterations):
+The pipeline runs a **Planner -> Generator -> Evaluator** loop (default 2 iterations):
 
 ```
 Planner   reads user profile/goals/context via pin-cli
@@ -95,69 +69,54 @@ When running multiple iterations, each round gets the full context from the prev
 | Generator | feedback + previous cards + per-card scores |
 | Evaluator | (always evaluates fresh — no carryover needed) |
 
-This lets agents make targeted improvements: low actionability scores → more concrete actions, low novelty → find new data sources, etc.
-
 ### Card Selection
 
 After all iterations complete, cards are selected from a cross-iteration candidate pool:
 
 1. **Filter** — only cards that passed evaluation (overall >= 7.0)
-2. **Sort** — by Evaluator's `overall` score (5-dimension average), not Generator's self-reported confidence
-3. **Diversify** — max 2 cards per goal basket (work/health/family/wealth/growth/life)
-4. **Top 5** — final output
+2. **Sort** — by Evaluator's `overall` score (5-dimension average)
+3. **Diversify** — max 3 cards per goal basket (work/health/family/wealth/growth/life)
+4. **Top 10** — final output
 5. **Fallback** — if nothing passes 7.0, take the highest-scoring cards anyway
-
-## Configuration
-
-In `~/.openclaw/openclaw.json`, under plugin config:
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `max_iterations` | `3` | Planner/Generator/Evaluator loop count |
-| `agent_timeout_ms` | `300000` | Timeout per agent (5 min) |
 
 ## Project Structure
 
 ```
 proactive-ai/
-  index.ts                    # Plugin entry (command + HTTP routes)
-  openclaw.plugin.json        # Plugin manifest (skills: ./skills/)
+  index.ts                    # OpenClaw plugin entry (commands + HTTP routes)
+  openclaw.plugin.json        # Plugin manifest
+  vite.config.ts              # Vite build config (React UI → single-file HTML)
   skills/                     # pin-cli skill docs (loaded by OpenClaw agents)
-    pin-shared/SKILL.md       # Output contract, safety rules, introspection
-    pin-profile/SKILL.md      # User profile, goals, preferences, memory
-    pin-personal/SKILL.md     # Third-party data via Composio MCP
-    pin-world/SKILL.md        # News, headlines, world events
-    pin-feedback/SKILL.md     # Intent Card response tracking
-    pin-push/SKILL.md         # Push dedup and delivery tracking
+    pin-shared/SKILL.md
+    pin-profile/SKILL.md
+    pin-personal/SKILL.md
+    pin-world/SKILL.md
+    pin-feedback/SKILL.md
+    pin-push/SKILL.md
   src/
-    agents/
-      planner.ts              # Planner agent system prompt
-      generator.ts            # Generator agent system prompt
-      evaluator.ts            # Evaluator agent system prompt
-    pipeline/
-      orchestrator.ts         # Planner->Generator->Evaluator loop + card selection
-      pin-cli.ts              # Shell exec wrapper for `pin` commands
-    types/
-      intent-card.ts          # IntentCard, PipelineResult, EvaluationScore, etc.
-      openclaw.d.ts           # OpenClaw SDK type stubs
-    ui/
-      index.html              # Placeholder frontend (will be replaced)
+    agents/                   # Agent system prompts (planner, generator, evaluator, chat)
+    pipeline/                 # Orchestrator loop + pin-cli wrapper
+    types/                    # TypeScript types + OpenClaw SDK stubs
+    ui/                       # React frontend (Vite + Tailwind + shadcn)
+      App.tsx                 # Root component
+      components/             # AppLayout, NowFeed, CardChat, GoalsView, etc.
+      hooks/                  # use-pipeline, use-composio
+      lib/                    # API helpers
+      assets/                 # Images
+  electron/                   # Desktop app shell
+    main.ts                   # Electron main process (gateway lifecycle, IPC)
+    gateway.ts                # OpenClaw gateway spawn + health polling
+    setup.ts                  # First-run profile setup + config management
+    config.ts                 # API key read/write (auth-profiles.json)
+    preload.ts                # IPC bridge for renderer
+    forge.config.ts           # electron-forge build config (DMG/ZIP)
 ```
 
-## Pin CLI Integration
+## Configuration
 
-Agents access user data by executing `pin` CLI commands via OpenClaw's built-in `exec` tool. The plugin registers skill files (under `./skills/`) that teach agents the full command reference.
+Data is stored at `~/.openclaw-proactive-ai/` (isolated from any existing OpenClaw install).
 
-`pin` must be available on `$PATH` (see Prerequisites).
-
-## Development
-
-```bash
-# Type-check
-cd proactive-ai && npx tsc --noEmit
-
-# After code changes, restart gateway to reload
-openclaw gateway restart
-```
-
-No build step needed — OpenClaw uses jiti for runtime TypeScript compilation.
+| Key | Default | Description |
+|-----|---------|-------------|
+| `max_iterations` | `2` | Planner/Generator/Evaluator loop count |
+| `agent_timeout_ms` | `300000` | Timeout per agent (5 min) |
