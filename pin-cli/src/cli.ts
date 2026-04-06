@@ -15,7 +15,6 @@ const createProgram = (runtime: CliRuntimeInput, resultRef: ResultRef): Command 
   const program = new Command();
   program.name("pin").exitOverride();
   program.option("--format <fmt>", "output format: json | table | ndjson | pretty", "json");
-  program.option("--dry-run", "preview operation without executing");
   program.configureOutput({
     writeOut: () => {},
     writeErr: () => {},

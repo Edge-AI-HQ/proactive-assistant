@@ -660,15 +660,20 @@ test("push record dry-run does not persist", async () => {
   try {
     const runtime = { env: { PIN_DATA_ROOT: root } };
 
-    // NOTE: --dry-run may be consumed by program-level option (Commander known behavior).
-    // When it reaches the subcommand, service receives dryRun=true and returns preview.
-    // When program consumes it, service runs normally but we still verify no persistence issue.
     const dryResult = await runCli(
       ["push", "record", "--kind", "notification", "--title", "Test", "--dry-run", "--json"],
       runtime,
     );
     assert.equal(dryResult.exitCode, 0);
     assert.equal(dryResult.stdout.ok, true);
+    const dryData = dryResult.stdout.data as Record<string, unknown>;
+    assert.equal(dryData.dryRun, true);
+    assert.equal(dryData.operation, "INSERT");
+
+    // history should be empty
+    const history = await runCli(["push", "history", "--json"], runtime);
+    const items = history.stdout.data as Array<Record<string, unknown>>;
+    assert.equal(items.length, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
