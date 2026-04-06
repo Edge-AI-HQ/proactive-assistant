@@ -23,7 +23,7 @@ export const registerWorldCommands = (
   world
     .command("search")
     .requiredOption("--query <query>")
-    .option("--provider <provider>")
+    .option("--provider <provider>", "google-news | sec | fed")
     .option("--limit <limit>")
     .option("--full")
     .option("--json")
@@ -35,7 +35,7 @@ export const registerWorldCommands = (
     .command("headlines")
     .option("--topic <topic>")
     .option("--region <region>")
-    .option("--provider <provider>")
+    .option("--provider <provider>", "google-news | sec | fed")
     .option("--limit <limit>")
     .option("--full")
     .option("--json")
@@ -116,7 +116,7 @@ export const registerWorldCommands = (
     supportsDryRun: false,
     flags: [
       { name: "query", type: "string", required: true, description: "Search query" },
-      { name: "provider", type: "string", required: false, description: "News provider" },
+      { name: "provider", type: "string", required: false, description: "News provider: google-news | sec | fed" },
       { name: "limit", type: "number", required: false, description: "Maximum result count" },
       { name: "full", type: "boolean", required: false, description: "Return the full stored record" },
     ],
@@ -131,7 +131,7 @@ export const registerWorldCommands = (
     flags: [
       { name: "topic", type: "string", required: false, description: "Headline topic, e.g. finance or geopolitics" },
       { name: "region", type: "string", required: false, description: "Headline region, e.g. global" },
-      { name: "provider", type: "string", required: false, description: "Headline provider" },
+      { name: "provider", type: "string", required: false, description: "Headline provider: google-news | sec | fed" },
       { name: "limit", type: "number", required: false, description: "Maximum result count" },
       { name: "full", type: "boolean", required: false, description: "Return the full stored record" },
     ],

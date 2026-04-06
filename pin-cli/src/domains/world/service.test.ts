@@ -14,6 +14,110 @@ import {
 import { PinDatabaseManager } from "../../db/database.js";
 import { ProfileRepository } from "../profile/repository.js";
 
+test("fetchHeadlines supports SEC official RSS feed with required user agent", { concurrency: false }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-world-sec-headlines-"));
+  const originalFetch = globalThis.fetch;
+
+  try {
+    const runtime = {
+      env: { PIN_DATA_ROOT: root } as Record<string, string>,
+      homeDir: "/Users/test",
+    };
+
+    let requestedUrl = "";
+    let requestedUserAgent = "";
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      requestedUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      requestedUserAgent = String(new Headers(init?.headers).get("user-agent") ?? "");
+
+      return new Response(`<?xml version="1.0" encoding="utf-8"?>
+        <rss version="2.0">
+          <channel>
+            <title>Press Releases</title>
+            <item>
+              <title>SEC Announces Roundtable on Options Market Structure</title>
+              <link>https://www.sec.gov/newsroom/press-releases/2026-33</link>
+              <guid>sec-1</guid>
+              <description>Official SEC press release.</description>
+              <pubDate>Thu, 02 Apr 2026 16:44:29 -0400</pubDate>
+            </item>
+          </channel>
+        </rss>`, {
+        status: 200,
+        headers: { "Content-Type": "application/rss+xml" },
+      });
+    }) as typeof fetch;
+
+    const result = await fetchHeadlines(runtime, {
+      provider: "sec",
+      limit: "10",
+    });
+
+    const data = result.stdout.data as { provider: string; count: number; items: Array<{ title: string }> };
+    assert.equal(result.exitCode, 0);
+    assert.equal(requestedUrl, "https://www.sec.gov/news/pressreleases.rss");
+    assert.equal(requestedUserAgent.includes("PINAI"), true);
+    assert.equal(data.provider, "sec");
+    assert.equal(data.count, 1);
+    assert.equal(data.items[0]?.title, "SEC Announces Roundtable on Options Market Structure");
+  } finally {
+    globalThis.fetch = originalFetch;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("fetchHeadlines supports Federal Reserve official RSS feed", { concurrency: false }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-world-fed-headlines-"));
+  const originalFetch = globalThis.fetch;
+
+  try {
+    const runtime = {
+      env: { PIN_DATA_ROOT: root } as Record<string, string>,
+      homeDir: "/Users/test",
+    };
+
+    let requestedUrl = "";
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      requestedUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+      return new Response(`<?xml version="1.0" encoding="utf-8"?>
+        <rss version="2.0">
+          <channel>
+            <title>FRB: Press Release - All Releases</title>
+            <item>
+              <title>Federal Reserve Board releases annual audited financial statements</title>
+              <link>https://www.federalreserve.gov/newsevents/pressreleases/other20260325a.htm</link>
+              <guid>fed-1</guid>
+              <description>All recent press releases from the Federal Reserve Board.</description>
+              <pubDate>Wed, 25 Mar 2026 18:00:00 GMT</pubDate>
+            </item>
+          </channel>
+        </rss>`, {
+        status: 200,
+        headers: { "Content-Type": "application/rss+xml" },
+      });
+    }) as typeof fetch;
+
+    const result = await fetchHeadlines(runtime, {
+      provider: "fed",
+      limit: "10",
+    });
+
+    const data = result.stdout.data as { provider: string; count: number; items: Array<{ title: string }> };
+    assert.equal(result.exitCode, 0);
+    assert.equal(requestedUrl, "https://www.federalreserve.gov/feeds/press_all.xml");
+    assert.equal(data.provider, "fed");
+    assert.equal(data.count, 1);
+    assert.equal(
+      data.items[0]?.title,
+      "Federal Reserve Board releases annual audited financial statements",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("runWorldIndexRefresh builds semantic index for stored world items", async () => {
   const root = await mkdtemp(join(tmpdir(), "pin-world-index-refresh-"));
 

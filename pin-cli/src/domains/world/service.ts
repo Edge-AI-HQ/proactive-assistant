@@ -19,6 +19,16 @@ const DEFAULT_NEWS_SEARCH_URL_TEMPLATE =
   "https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en";
 const DEFAULT_HEADLINES_URL_TEMPLATE =
   "https://news.google.com/rss/headlines/section/topic/{topic}?hl=en-US&gl=US&ceid=US:en";
+const SEC_PRESS_RELEASES_URL = "https://www.sec.gov/news/pressreleases.rss";
+const FED_PRESS_RELEASES_URL = "https://www.federalreserve.gov/feeds/press_all.xml";
+const DEFAULT_SEC_USER_AGENT = "PINAI World Fetch/1.0 (gray@pinai.io)";
+
+interface WorldFeedRequest {
+  url: string;
+  provider: string;
+  streamType: "search" | "headline";
+  headers?: Record<string, string>;
+}
 
 interface ParsedFeedItem {
   provider: string;
@@ -78,6 +88,21 @@ const parseNewsFeed = (provider: string, xml: string): ParsedFeedItem[] => {
     .filter((item): item is ParsedFeedItem => item !== null);
 };
 
+const filterParsedFeedItems = (
+  items: ParsedFeedItem[],
+  input: { provider: string; query?: string },
+): ParsedFeedItem[] => {
+  if (input.provider === "google-news" || !input.query?.trim()) {
+    return items;
+  }
+
+  const needle = input.query.trim().toLowerCase();
+  return items.filter((item) => {
+    const haystack = `${item.title} ${item.summary ?? ""}`.toLowerCase();
+    return haystack.includes(needle);
+  });
+};
+
 const createRepository = async (runtime: CliRuntimeInput) => {
   const dataRoot = runtime.env.PIN_DATA_ROOT || `${runtime.homeDir}/.pin`;
   const manager = new PinDatabaseManager({ dataRoot });
@@ -111,6 +136,38 @@ const buildSearchUrl = (runtime: CliRuntimeInput, query: string): string => {
   return template.replaceAll("{query}", encodeURIComponent(query.trim()));
 };
 
+const buildSearchRequest = (
+  runtime: CliRuntimeInput,
+  input: { query: string; provider?: string },
+): WorldFeedRequest => {
+  const provider = (input.provider ?? "google-news").trim().toLowerCase();
+
+  if (provider === "sec") {
+    return {
+      provider,
+      streamType: "search",
+      url: runtime.env.PIN_WORLD_SEC_SEARCH_URL_TEMPLATE || SEC_PRESS_RELEASES_URL,
+      headers: {
+        "user-agent": runtime.env.PIN_WORLD_SEC_USER_AGENT || DEFAULT_SEC_USER_AGENT,
+      },
+    };
+  }
+
+  if (provider === "fed") {
+    return {
+      provider,
+      streamType: "search",
+      url: runtime.env.PIN_WORLD_FED_SEARCH_URL_TEMPLATE || FED_PRESS_RELEASES_URL,
+    };
+  }
+
+  return {
+    provider,
+    streamType: "search",
+    url: buildSearchUrl(runtime, input.query),
+  };
+};
+
 const buildHeadlinesUrl = (
   runtime: CliRuntimeInput,
   input: { topic?: string; region?: string },
@@ -123,6 +180,41 @@ const buildHeadlinesUrl = (
     .replaceAll("{topic}", encodeURIComponent(normalizeHeadlineTopic(input.topic)))
     .replaceAll("{region}", encodeURIComponent((input.region ?? "global").trim()));
 };
+
+const buildHeadlinesRequest = (
+  runtime: CliRuntimeInput,
+  input: { topic?: string; region?: string; provider?: string },
+): WorldFeedRequest => {
+  const provider = (input.provider ?? "google-news").trim().toLowerCase();
+
+  if (provider === "sec") {
+    return {
+      provider,
+      streamType: "headline",
+      url: runtime.env.PIN_WORLD_SEC_HEADLINES_URL_TEMPLATE || SEC_PRESS_RELEASES_URL,
+      headers: {
+        "user-agent": runtime.env.PIN_WORLD_SEC_USER_AGENT || DEFAULT_SEC_USER_AGENT,
+      },
+    };
+  }
+
+  if (provider === "fed") {
+    return {
+      provider,
+      streamType: "headline",
+      url: runtime.env.PIN_WORLD_FED_HEADLINES_URL_TEMPLATE || FED_PRESS_RELEASES_URL,
+    };
+  }
+
+  return {
+    provider,
+    streamType: "headline",
+    url: buildHeadlinesUrl(runtime, input),
+  };
+};
+
+const fetchFeedResponse = async (request: WorldFeedRequest): Promise<Response> =>
+  fetch(request.url, request.headers ? { headers: request.headers } : undefined);
 
 const sortWorldItems = (items: WorldItemRecord[], limit: number): WorldItemRecord[] =>
   Array.from(new Map(items.map((item) => [item.id, item])).values())
@@ -326,12 +418,12 @@ export const searchNews = async (
   input: { query: string; limit?: string; provider?: string; full?: boolean },
 ) => {
   const limit = Number.parseInt(input.limit ?? "10", 10);
-  const provider = input.provider ?? "google-news";
-  const url = buildSearchUrl(runtime, input.query);
+  const request = buildSearchRequest(runtime, input);
+  const provider = request.provider;
   let response: Response;
 
   try {
-    response = await fetch(url);
+    response = await fetchFeedResponse(request);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown provider fetch error";
@@ -350,7 +442,10 @@ export const searchNews = async (
 
   const repository = await createRepository(runtime);
   const xml = await response.text();
-  const parsedItems = parseNewsFeed(provider, xml);
+  const parsedItems = filterParsedFeedItems(parseNewsFeed(provider, xml), {
+    provider,
+    query: input.query,
+  });
 
   const ingested: WorldItemRecord[] = [];
   for (const item of parsedItems) {
@@ -364,7 +459,7 @@ export const searchNews = async (
         publishedAt: item.publishedAt,
         query: input.query,
         metadata: {
-          sourceUrl: url,
+          sourceUrl: request.url,
         },
       }),
     );
@@ -388,14 +483,14 @@ export const fetchHeadlines = async (
   input: { topic?: string; region?: string; limit?: string; provider?: string; full?: boolean },
 ) => {
   const limit = Number.parseInt(input.limit ?? "10", 10);
-  const provider = input.provider ?? "google-news";
+  const request = buildHeadlinesRequest(runtime, input);
+  const provider = request.provider;
   const topic = (input.topic ?? "general").trim().toLowerCase();
   const region = (input.region ?? "global").trim().toLowerCase();
-  const url = buildHeadlinesUrl(runtime, input);
   let response: Response;
 
   try {
-    response = await fetch(url);
+    response = await fetchFeedResponse(request);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown provider fetch error";
@@ -433,7 +528,7 @@ export const fetchHeadlines = async (
         regions: [region],
         importance: topic === "geopolitics" || topic === "finance" ? "high" : "medium",
         metadata: {
-          sourceUrl: url,
+          sourceUrl: request.url,
           stream: "headline",
         },
       }),
