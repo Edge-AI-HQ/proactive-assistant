@@ -7,3 +7,4 @@ composio-consumer-key
 electron/node_modules
 electron/dist
 electron/out
+electron/.bundle

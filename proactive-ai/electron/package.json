@@ -18,5 +18,8 @@
     "@types/node": "^22.0.0",
     "electron": "^40.8.5",
     "typescript": "^5.8.0"
+  },
+  "dependencies": {
+    "openclaw": "^2026.4.5"
   }
 }

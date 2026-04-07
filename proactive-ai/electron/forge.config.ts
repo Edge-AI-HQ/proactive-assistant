@@ -6,15 +6,11 @@ const config: ForgeConfig = {
     executableName: 'proactive-ai',
     appBundleId: 'ai.pin.proactive-ai',
     darwinDarkModeSupport: true,
-    osxSign: {},
+    // osxSign: {},  // Uncomment when you have an Apple Developer certificate
     extraResource: [
-      // Bundle the plugin source so the packaged app can find it
-      '../index.ts',
-      '../src',
-      '../skills',
-      '../openclaw.plugin.json',
-      '../package.json',
-      '../node_modules',
+      // Built by scripts/build-dmg.sh — self-contained plugin + runtime
+      './.bundle/plugin',
+      './.bundle/runtime',
     ],
   },
   makers: [

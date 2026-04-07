@@ -56,11 +56,16 @@ export function findAvailablePort(): Promise<number> {
  * OpenClaw requires Node >= 22.12. We can't rely on the shell default `node`
  * being the right version (NVM, Volta, etc. may alias a different one).
  * Strategy:
- *   1. Find `openclaw` via login shell (picks up NVM/Volta profile)
- *   2. Derive the matching `node` from the same bin directory
+ *   0. Bundled runtime inside packaged app (Contents/Resources/runtime/)
+ *   1. Scan NVM versions for openclaw with Node >= 22.12
+ *   2. Login shell `which openclaw` (Volta, Homebrew, etc.)
  */
 export function resolveOpenclawBin(): OpenclawBin {
   const { homedir } = require('node:os');
+
+  // Strategy 0: Bundled runtime (packaged Electron app)
+  const bundled = resolveBundledRuntime();
+  if (bundled) return bundled;
 
   // Strategy 1: Scan NVM versions for openclaw with Node >= 22.12
   const nvmDir = join(homedir(), '.nvm', 'versions', 'node');
@@ -132,6 +137,24 @@ function nodeVersionOk(ver: string): boolean {
   const major = parseInt(m[1]!, 10);
   const minor = parseInt(m[2]!, 10);
   return major > 22 || (major === 22 && minor >= 12);
+}
+
+/**
+ * Look for Node + openclaw bundled inside the packaged Electron app.
+ * Layout: Contents/Resources/runtime/{node, node_modules/.bin/openclaw}
+ */
+function resolveBundledRuntime(): OpenclawBin | null {
+  // process.resourcesPath is only set in a packaged Electron app
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  if (!resourcesPath) return null;
+
+  const node = join(resourcesPath, 'runtime', 'node');
+  const script = join(resourcesPath, 'runtime', 'node_modules', '.bin', 'openclaw');
+  if (existsSync(node) && existsSync(script)) {
+    console.log('[gateway] Using bundled runtime:', node);
+    return { script, node };
+  }
+  return null;
 }
 
 /**
