@@ -48,6 +48,47 @@ const VALID_CHANNELS = [
   "im",
 ] as const;
 
+const sanitizeMetadataValue = (path: string, value: unknown): void => {
+  if (typeof value === "string") {
+    rejectDangerousChars(path, value);
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) =>
+      sanitizeMetadataValue(`${path}[${index}]`, entry),
+    );
+    return;
+  }
+
+  if (value && typeof value === "object") {
+    for (const [key, entry] of Object.entries(value)) {
+      rejectDangerousChars(`${path} key`, key);
+      sanitizeMetadataValue(`${path}.${key}`, entry);
+    }
+  }
+};
+
+const parseMetadata = (
+  raw?: string | Record<string, unknown>,
+): Record<string, unknown> | undefined => {
+  if (raw === undefined) return undefined;
+
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("metadata must be a JSON object");
+    }
+
+    sanitizeMetadataValue("metadata", parsed);
+    return parsed as Record<string, unknown>;
+  } catch (error) {
+    const reason =
+      error instanceof Error ? error.message : "metadata must be valid JSON";
+    throw new Error(`Invalid --metadata: ${reason}`);
+  }
+};
+
 const createRepository = async (runtime: CliRuntimeInput) => {
   const dataRoot = runtime.env.PIN_DATA_ROOT || `${runtime.homeDir}/.pin`;
   const manager = new PinDatabaseManager({ dataRoot });
@@ -99,6 +140,7 @@ export const logFeedback = async (
     channel?: string;
     value?: string;
     text?: string;
+    metadata?: string | Record<string, unknown>;
     at?: string;
     dryRun?: boolean;
   },
@@ -125,6 +167,7 @@ export const logFeedback = async (
       channel: input.channel,
       value: input.value,
       text: input.text,
+      metadata: parseMetadata(input.metadata),
       createdAt: input.at,
     };
 

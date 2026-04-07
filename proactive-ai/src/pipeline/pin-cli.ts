@@ -17,14 +17,9 @@ export interface PinCliResult {
 }
 
 /**
- * Execute a pin-cli command and return the parsed result.
- *
- * @param command - Full command string, e.g. "profile get --id default"
- * @returns Parsed PinCliResult envelope
+ * Execute a pin-cli command from already-tokenized args and return the parsed result.
  */
-export async function pinCli(command: string): Promise<PinCliResult> {
-  const args = parseArgs(command);
-
+export async function runPinCli(args: string[]): Promise<PinCliResult> {
   // Ensure --json is present for machine-readable output
   if (!args.includes('--json') && !args.includes('--format')) {
     args.push('--json');
@@ -42,11 +37,23 @@ export async function pinCli(command: string): Promise<PinCliResult> {
 }
 
 /**
+ * Execute a pin-cli command and return the parsed result.
+ *
+ * @param command - Full command string, e.g. "profile get --id default"
+ * @returns Parsed PinCliResult envelope
+ */
+export async function pinCli(command: string): Promise<PinCliResult> {
+  return runPinCli(parseArgs(command));
+}
+
+/**
  * Execute a pin-cli command and return just the data payload.
  * Throws on error.
  */
-export async function pinCliData<T = unknown>(command: string): Promise<T> {
-  const result = await pinCli(command);
+export async function pinCliData<T = unknown>(command: string | string[]): Promise<T> {
+  const result = Array.isArray(command)
+    ? await runPinCli(command)
+    : await pinCli(command);
   if (!result.ok) {
     const hint = result.error?.hint ? ` (hint: ${result.error.hint})` : '';
     throw new Error(`pin-cli error: ${result.error?.message ?? 'unknown'}${hint}`);

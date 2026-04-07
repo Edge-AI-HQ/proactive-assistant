@@ -100,6 +100,7 @@ export default function AppLayout() {
                   onScrollDirectionChange={handleScrollDirection}
                   cards={run.finalCards}
                   scoreMap={run.scoreMap}
+                  runId={run.runId}
                   isRunning={isRunning}
                   activePhase={run.activePhase}
                   onOpenChat={handleOpenChat}

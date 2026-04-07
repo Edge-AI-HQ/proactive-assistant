@@ -26,20 +26,48 @@ function basketMeta(goalBasket: IntentCard["goalBasket"]) {
 
 import { apiPost } from "@/lib/api";
 
+interface FeedbackMetadata {
+  runId?: string;
+  intentKey: string;
+  surface: "now_feed";
+}
+
 async function recordFeedback(params: {
   kind: string;
   action?: string;
   intentCardId: string;
   basket?: string;
+  channel?: string;
+  metadata?: FeedbackMetadata;
 }) {
   try {
     await apiPost("/api/feedback", params);
   } catch { /* best-effort, don't block UI */ }
 }
 
+function slugifyIntentKey(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function buildFeedbackMetadata(
+  card: IntentCard,
+  runId?: string | null,
+): FeedbackMetadata {
+  return {
+    ...(runId ? { runId } : {}),
+    intentKey: `${card.goalBasket.toLowerCase()}:${slugifyIntentKey(card.title)}`,
+    surface: "now_feed",
+  };
+}
+
 interface NowFeedProps {
   cards: IntentCard[];
   scoreMap: Record<string, EvaluationScore>;
+  runId?: string | null;
   isRunning: boolean;
   activePhase: string | null;
   onExecute: (title: string) => void;
@@ -52,6 +80,7 @@ interface NowFeedProps {
 export default function NowFeed({
   cards: incomingCards,
   scoreMap,
+  runId,
   isRunning,
   activePhase,
   onExecute,
@@ -62,6 +91,7 @@ export default function NowFeed({
 }: NowFeedProps) {
   const INITIAL_VISIBLE = 5;
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  const [openedIds, setOpenedIds] = useState<Set<string>>(new Set());
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [feedbackCardId, setFeedbackCardId] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
@@ -87,14 +117,34 @@ export default function NowFeed({
     }
   }, [onScrollDirectionChange]);
 
-  const dismiss = (id: string, basket: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setDismissedIds((prev) => new Set(prev).add(id));
-    recordFeedback({ kind: "dismiss", intentCardId: id, basket });
+  const logCardFeedback = (
+    card: IntentCard,
+    kind: string,
+    action?: string,
+  ) => {
+    recordFeedback({
+      kind,
+      action,
+      intentCardId: card.id,
+      basket: card.goalBasket,
+      channel: "web",
+      metadata: buildFeedbackMetadata(card, runId),
+    });
   };
 
-  const toggle = (id: string) => {
-    setExpandedId((prev) => (prev === id ? null : id));
+  const dismiss = (card: IntentCard, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDismissedIds((prev) => new Set(prev).add(card.id));
+    logCardFeedback(card, "dismiss");
+  };
+
+  const toggle = (card: IntentCard) => {
+    const opening = expandedId !== card.id;
+    if (opening && !openedIds.has(card.id)) {
+      setOpenedIds((prev) => new Set(prev).add(card.id));
+      logCardFeedback(card, "card_open");
+    }
+    setExpandedId((prev) => (prev === card.id ? null : card.id));
   };
 
   const landingOpacity = Math.max(0.2, 1 - scrollY / 600);
@@ -196,11 +246,12 @@ export default function NowFeed({
                   >
                     <div
                       className="glass-card-strong p-4 relative cursor-pointer"
-                      onClick={() => toggle(card.id)}
+                      onClick={() => toggle(card)}
                     >
                       {/* X dismiss */}
                       <button
-                        onClick={(e) => dismiss(card.id, card.goalBasket, e)}
+                        onClick={(e) => dismiss(card, e)}
+                        aria-label="Dismiss card"
                         className="absolute top-3 right-3 p-1 rounded-full hover:bg-foreground/10 transition-colors text-foreground/25 hover:text-foreground/60 z-10"
                       >
                         <X size={12} strokeWidth={2} />
@@ -329,6 +380,7 @@ export default function NowFeed({
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
+                            logCardFeedback(card, "card_action", "open_detail");
                             onOpenChat?.(card.id);
                           }}
                           className="flex items-center justify-center p-2.5 rounded-xl hover:bg-foreground/10 transition-colors text-foreground/40 hover:text-foreground/70"
@@ -339,7 +391,7 @@ export default function NowFeed({
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            recordFeedback({ kind: "card_action", action: "modify", intentCardId: card.id, basket: card.goalBasket });
+                            logCardFeedback(card, "card_action", "modify");
                             setFeedbackCardId(card.id);
                             setTimeout(() => setFeedbackCardId(null), 2000);
                           }}
@@ -354,7 +406,7 @@ export default function NowFeed({
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            recordFeedback({ kind: "card_action", action: "confirm", intentCardId: card.id, basket: card.goalBasket });
+                            logCardFeedback(card, "card_action", "confirm");
                             onExecute(card.title);
                           }}
                           className="flex items-center justify-center gap-2 px-7 py-2.5 rounded-xl bg-foreground text-background text-sm font-semibold hover:bg-foreground/85 transition-colors min-w-[100px]"

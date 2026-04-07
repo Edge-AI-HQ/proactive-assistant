@@ -20,6 +20,10 @@ import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import { buildPlannerPrompt } from '../agents/planner.js';
 import { buildGeneratorPrompt } from '../agents/generator.js';
 import { buildEvaluatorPrompt } from '../agents/evaluator.js';
+import {
+  formatRecentFeedbackSummary,
+  loadRecentFeedbackSummary,
+} from './feedback-summary.js';
 import type {
   IntentCard,
   PlannerOutput,
@@ -34,6 +38,7 @@ import type {
 export interface PipelineOptions {
   maxIterations: number;
   agentTimeoutMs: number;
+  runId?: string;
 }
 
 export const DEFAULT_PIPELINE_OPTIONS: PipelineOptions = {
@@ -70,7 +75,19 @@ export async function runPipeline(
   const currentDate = new Date().toISOString().slice(0, 10);
   const iterations: PipelineIteration[] = [];
   const candidatePool: ScoredCandidate[] = [];
+  const runId = opts.runId ?? `run_${Date.now().toString(36)}`;
+  let recentFeedbackSummary = '';
   let prev: IterationContext | undefined;
+
+  try {
+    recentFeedbackSummary = formatRecentFeedbackSummary(
+      await loadRecentFeedbackSummary({ since: '14d' }),
+    );
+  } catch (error) {
+    api.logger.warn(
+      `Failed to load recent feedback summary: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 
   emit({ type: 'pipeline:start', data: { maxIterations: opts.maxIterations } });
 
@@ -83,6 +100,7 @@ export async function runPipeline(
     const plannerPrompt = buildPlannerPrompt({
       currentDate,
       iterationNumber: i,
+      recentFeedbackSummary,
       previousFeedback: prev?.feedback,
       previousPlan: prev ? JSON.stringify(prev.plan, null, 2) : undefined,
       previousCards: prev ? JSON.stringify(prev.cards, null, 2) : undefined,
@@ -104,6 +122,7 @@ export async function runPipeline(
       currentDate,
       plan: JSON.stringify(plan, null, 2),
       iterationNumber: i,
+      recentFeedbackSummary,
       previousFeedback: prev?.feedback,
       previousCards: prev ? JSON.stringify(prev.cards, null, 2) : undefined,
       previousScores: prev ? JSON.stringify(prev.scores, null, 2) : undefined,
@@ -184,6 +203,7 @@ export async function runPipeline(
   const finalCards = selectBestCards(candidatePool);
 
   const result: PipelineResult = {
+    runId,
     iterations,
     finalCards,
     totalIterations: iterations.length,

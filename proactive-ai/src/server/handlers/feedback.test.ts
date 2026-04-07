@@ -1,0 +1,215 @@
+// @vitest-environment node
+
+import { Readable } from "node:stream";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { runPinCli } = vi.hoisted(() => ({
+  runPinCli: vi.fn(),
+}));
+
+vi.mock("../../pipeline/pin-cli.js", () => ({
+  runPinCli,
+}));
+
+import { handleFeedback } from "./feedback.js";
+import type { RouteContext } from "../../types/server.js";
+
+function createRequest(method: string, body: Record<string, unknown>) {
+  const req = Readable.from([Buffer.from(JSON.stringify(body))]) as Readable & {
+    method?: string;
+    headers?: Record<string, string>;
+    url?: string;
+  };
+  req.method = method;
+  req.headers = { host: "localhost" };
+  req.url = "/proactive-ai/api/feedback";
+  return req;
+}
+
+function createResponse() {
+  let statusCode = 0;
+  let payload = "";
+
+  return {
+    res: {
+      writeHead(code: number) {
+        statusCode = code;
+      },
+      end(body: string) {
+        payload = body;
+      },
+    },
+    get statusCode() {
+      return statusCode;
+    },
+    get json() {
+      return payload ? JSON.parse(payload) : null;
+    },
+  };
+}
+
+function createContext(method: string, body: Record<string, unknown>) {
+  const response = createResponse();
+  const ctx = {
+    api: {} as RouteContext["api"],
+    url: new URL("http://localhost/proactive-ai/api/feedback"),
+    req: createRequest(method, body) as RouteContext["req"],
+    res: response.res as RouteContext["res"],
+    subpath: "/feedback",
+  } satisfies RouteContext;
+
+  return { ctx, response };
+}
+
+describe("handleFeedback", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns 400 when kind is missing", async () => {
+    const { ctx, response } = createContext("POST", {});
+
+    const handled = await handleFeedback(ctx);
+
+    expect(handled).toBe(true);
+    expect(response.statusCode).toBe(400);
+    expect(response.json).toEqual({ error: "Missing kind" });
+    expect(runPinCli).not.toHaveBeenCalled();
+  });
+
+  it("passes through the full feedback payload to pin-cli", async () => {
+    runPinCli.mockResolvedValue({
+      ok: true,
+      data: { id: "fe_123" },
+      error: null,
+      meta: {
+        domain: "feedback",
+        command: "log",
+        requestId: "req_1",
+        timestamp: "2026-04-07T10:00:00.000Z",
+      },
+    });
+
+    const { ctx, response } = createContext("POST", {
+      kind: "card_action",
+      action: "confirm",
+      pushId: "push_123",
+      intentCardId: "card_1_1",
+      conversationId: "conv_1",
+      messageId: "msg_1",
+      basket: "work",
+      channel: "web",
+      value: "accepted",
+      text: "Ship it",
+      at: "2026-04-07T10:00:00.000Z",
+      metadata: {
+        runId: "run_123",
+        intentKey: "work:review-queue-with-alex",
+        surface: "now_feed",
+      },
+    });
+
+    await handleFeedback(ctx);
+
+    expect(runPinCli).toHaveBeenCalledWith([
+      "feedback",
+      "log",
+      "--kind",
+      "card_action",
+      "--action",
+      "confirm",
+      "--push-id",
+      "push_123",
+      "--intent-card-id",
+      "card_1_1",
+      "--conversation-id",
+      "conv_1",
+      "--message-id",
+      "msg_1",
+      "--source",
+      "user_direct",
+      "--basket",
+      "work",
+      "--channel",
+      "web",
+      "--value",
+      "accepted",
+      "--text",
+      "Ship it",
+      "--at",
+      "2026-04-07T10:00:00.000Z",
+      "--metadata",
+      "{\"runId\":\"run_123\",\"intentKey\":\"work:review-queue-with-alex\",\"surface\":\"now_feed\"}",
+    ]);
+    expect(response.statusCode).toBe(200);
+    expect(response.json).toEqual({ ok: true, data: { id: "fe_123" } });
+  });
+
+  it("uses user_direct as the default source", async () => {
+    runPinCli.mockResolvedValue({
+      ok: true,
+      data: { id: "fe_456" },
+      error: null,
+      meta: {
+        domain: "feedback",
+        command: "log",
+        requestId: "req_2",
+        timestamp: "2026-04-07T11:00:00.000Z",
+      },
+    });
+
+    const { ctx } = createContext("POST", {
+      kind: "dismiss",
+      intentCardId: "card_2_1",
+    });
+
+    await handleFeedback(ctx);
+
+    expect(runPinCli).toHaveBeenCalledWith([
+      "feedback",
+      "log",
+      "--kind",
+      "dismiss",
+      "--intent-card-id",
+      "card_2_1",
+      "--source",
+      "user_direct",
+    ]);
+  });
+
+  it("normalizes downstream cli errors", async () => {
+    runPinCli.mockResolvedValue({
+      ok: false,
+      data: null,
+      error: {
+        type: "validation",
+        code: "INVALID_ARGUMENT",
+        message: "Invalid --kind",
+        hint: "check `pin feedback log --help`",
+      },
+      meta: {
+        domain: "feedback",
+        command: "log",
+        requestId: "req_3",
+        timestamp: "2026-04-07T12:00:00.000Z",
+      },
+    });
+
+    const { ctx, response } = createContext("POST", {
+      kind: "invalid_kind",
+    });
+
+    await handleFeedback(ctx);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json).toEqual({
+      ok: false,
+      error: {
+        type: "validation",
+        code: "INVALID_ARGUMENT",
+        message: "Invalid --kind",
+        hint: "check `pin feedback log --help`",
+      },
+    });
+  });
+});

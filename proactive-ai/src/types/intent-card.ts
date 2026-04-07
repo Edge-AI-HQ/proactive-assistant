@@ -92,6 +92,7 @@ export interface PipelineIteration {
 }
 
 export interface PipelineResult {
+  runId: string;
   iterations: PipelineIteration[];
   finalCards: IntentCard[];    // best cards across all iterations
   totalIterations: number;

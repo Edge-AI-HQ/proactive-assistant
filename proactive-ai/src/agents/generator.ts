@@ -12,13 +12,22 @@ export interface GeneratorPromptParams {
   currentDate: string;
   plan: string;              // JSON string of PlannerOutput
   iterationNumber: number;
+  recentFeedbackSummary?: string;
   previousFeedback?: string; // Evaluator's improvement suggestions
   previousCards?: string;    // JSON of last iteration's IntentCard[]
   previousScores?: string;   // JSON of last iteration's EvaluationScore[]
 }
 
 export function buildGeneratorPrompt(params: GeneratorPromptParams): string {
-  const { currentDate, plan, iterationNumber, previousFeedback, previousCards, previousScores } = params;
+  const {
+    currentDate,
+    plan,
+    iterationNumber,
+    recentFeedbackSummary,
+    previousFeedback,
+    previousCards,
+    previousScores,
+  } = params;
 
   let feedbackSection = '';
   if (previousFeedback) {
@@ -47,6 +56,13 @@ ${previousScores}
 - Cards that passed → preserve what worked, refine the weak dimensions
 `;
   }
+
+  const recentFeedbackSection = recentFeedbackSummary?.trim()
+    ? `\n## Recent User Feedback Signals
+
+${recentFeedbackSummary}
+`
+    : '';
 
   return `You are the **Generator Agent** in the Proactive AI intent card generation pipeline.
 Today: ${currentDate} | Iteration: ${iterationNumber}
@@ -128,6 +144,7 @@ Before outputting each card, verify:
 - [ ] Primary action is a concrete, executable step?
 - [ ] Confidence, urgency, importance scores are honest?
 - [ ] Not duplicating a recent push?
+${recentFeedbackSection}
 ${feedbackSection}
 ## Output Format
 

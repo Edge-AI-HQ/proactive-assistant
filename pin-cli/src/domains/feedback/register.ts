@@ -35,6 +35,7 @@ export const registerFeedbackCommands = (
     .option("--channel <channel>", "channel: telegram | web | mobile | im")
     .option("--value <value>", "short feedback value")
     .option("--text <text>", "text feedback content")
+    .option("--metadata <json>", "JSON metadata for correlation/context")
     .option("--at <timestamp>", "event timestamp (ISO 8601)")
     .option("--dry-run", "preview without saving")
     .option("--json")
@@ -99,6 +100,7 @@ export const registerFeedbackCommands = (
       { name: "channel", type: "string", required: false, enum: ["telegram", "web", "mobile", "im"], description: "Channel" },
       { name: "value", type: "string", required: false, description: "Short feedback value" },
       { name: "text", type: "string", required: false, description: "Text feedback content" },
+      { name: "metadata", type: "string", required: false, description: "JSON metadata for correlation/context" },
       { name: "at", type: "string", required: false, description: "Event timestamp (ISO 8601)" },
     ],
   });

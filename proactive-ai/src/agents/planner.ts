@@ -14,6 +14,7 @@
 export interface PlannerPromptParams {
   currentDate: string;
   iterationNumber: number;
+  recentFeedbackSummary?: string;
   previousFeedback?: string;   // Evaluator's improvement suggestions
   previousPlan?: string;       // JSON of last iteration's PlannerOutput
   previousCards?: string;      // JSON of last iteration's IntentCard[]
@@ -21,7 +22,15 @@ export interface PlannerPromptParams {
 }
 
 export function buildPlannerPrompt(params: PlannerPromptParams): string {
-  const { currentDate, iterationNumber, previousFeedback, previousPlan, previousCards, previousScores } = params;
+  const {
+    currentDate,
+    iterationNumber,
+    recentFeedbackSummary,
+    previousFeedback,
+    previousPlan,
+    previousCards,
+    previousScores,
+  } = params;
 
   let feedbackSection = '';
   if (previousFeedback) {
@@ -54,6 +63,13 @@ ${previousScores}
 - Do NOT repeat the same plan verbatim — iterate meaningfully
 `;
   }
+
+  const recentFeedbackSection = recentFeedbackSummary?.trim()
+    ? `\n## Recent User Feedback Signals
+
+${recentFeedbackSummary}
+`
+    : '';
 
   return `You are the **Planner Agent** in the Proactive AI intent card generation pipeline.
 Today: ${currentDate} | Iteration: ${iterationNumber}
@@ -142,6 +158,7 @@ Score each potential card on:
 Select the top 3-5 most valuable cards to generate.
 
 **Portfolio rule**: Ensure diversity across baskets. Don't put all cards in one basket.
+${recentFeedbackSection}
 ${feedbackSection}
 ## Output Format
 

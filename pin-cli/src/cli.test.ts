@@ -532,6 +532,41 @@ test("feedback log validates kind enum", async () => {
   assert.ok(result.stdout.error?.message.includes("Invalid"));
 });
 
+test("feedback log persists metadata json", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-feedback-meta-"));
+  try {
+    const runtime = { env: { PIN_DATA_ROOT: root } };
+
+    const logged = await runCli(
+      [
+        "feedback",
+        "log",
+        "--kind",
+        "card_action",
+        "--action",
+        "confirm",
+        "--intent-card-id",
+        "ic_101",
+        "--metadata",
+        "{\"runId\":\"run_123\",\"intentKey\":\"work:review-queue-with-alex\",\"surface\":\"now_feed\"}",
+        "--json",
+      ],
+      runtime,
+    );
+
+    assert.equal(logged.exitCode, 0);
+    assert.equal(logged.stdout.ok, true);
+    const loggedData = logged.stdout.data as Record<string, unknown>;
+    assert.deepEqual(loggedData.metadata, {
+      runId: "run_123",
+      intentKey: "work:review-queue-with-alex",
+      surface: "now_feed",
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("push record, get, history, outcome, find-similar full lifecycle", async () => {
   const root = await mkdtemp(join(tmpdir(), "pin-push-"));
   try {

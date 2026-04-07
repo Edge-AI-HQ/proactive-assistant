@@ -19,6 +19,7 @@ export type PipelinePhase = "planning" | "generating" | "evaluating" | "complete
 export type RunStatus = "idle" | "connecting" | "running" | "complete" | "error";
 
 export interface RunState {
+  runId: string | null;
   status: RunStatus;
   maxIterations: number | null;
   activeIteration: number | null;
@@ -51,6 +52,7 @@ function makeLogEntry(kind: string, title: string, detail: string, extra?: Parti
 
 function createInitialRunState(): RunState {
   return {
+    runId: null,
     status: "idle", maxIterations: null, activeIteration: null, activePhase: null,
     startedAt: null, completedAt: null, finalCards: [], iterationDetails: {},
     scoreMap: {}, logEntries: [], error: null, totalIterations: 0,
@@ -122,6 +124,7 @@ export function usePipeline() {
           // Pipeline finished while we were disconnected — load the result
           setRun((prev) => ({
             ...prev,
+            runId: data.lastResult.id ?? prev.runId,
             status: "complete",
             activePhase: "complete",
             finalCards: data.lastResult.finalCards ?? [],
@@ -203,7 +206,7 @@ export function usePipeline() {
           const data = await res.json();
           if (data.lastResult?.finalCards?.length > 0) {
             setRun((prev) => ({
-              ...prev, status: "complete", activePhase: "complete",
+              ...prev, runId: data.lastResult.id ?? prev.runId, status: "complete", activePhase: "complete",
               finalCards: data.lastResult.finalCards,
               totalIterations: data.lastResult.totalIterations,
               completedAt: data.lastResult.completedAt,
@@ -256,6 +259,7 @@ export function usePipeline() {
         case "pipeline:complete":
           setRun((prev) => ({
             ...prev,
+            runId: event.data.runId ?? prev.runId,
             status: "complete", activePhase: "complete",
             completedAt: new Date().toISOString(),
             finalCards: event.data.finalCards,
