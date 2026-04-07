@@ -867,7 +867,7 @@ test("personal tools schema returns not found for unknown tool", async () => {
 test("personal exec returns validation error for invalid JSON input", async () => {
   const result = await runCli(
     ["personal", "exec", "--tool", "GMAIL_FETCH_EMAILS", "--input", "not-json", "--json"],
-    { env: { COMPOSIO_CONSUMER_KEY: "fake" }, homeDir: "/tmp" },
+    { env: { COMPOSIO_API_KEY: "ak_fake" }, homeDir: "/tmp" },
   );
 
   assert.equal(result.exitCode, 2);

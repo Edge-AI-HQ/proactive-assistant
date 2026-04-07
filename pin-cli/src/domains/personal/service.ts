@@ -1,6 +1,3 @@
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 import { errorEnvelope, okEnvelope } from "../../output/envelope.js";
 import { ErrorType } from "../../output/errors.js";
 import type { CliRuntimeInput, RunCliResult } from "../../runtime.js";
@@ -10,40 +7,6 @@ import {
 } from "./provider.js";
 import { loadPlatformSettings } from "./platform_settings.js";
 
-// ── Key persistence ──
-
-const KEY_FILENAME = "composio-consumer-key";
-
-function keyFileCandidates(homeDir: string): string[] {
-  const cliDir = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
-  return [
-    resolve(cliDir, "..", "proactive-ai", KEY_FILENAME),
-    resolve(homeDir, ".openclaw", "plugins", "proactive-ai", KEY_FILENAME),
-  ];
-}
-
-export function loadConsumerKey(homeDir: string): string {
-  for (const path of keyFileCandidates(homeDir)) {
-    try {
-      const key = readFileSync(path, "utf-8").trim();
-      if (key) return key;
-    } catch { /* next */ }
-  }
-  return "";
-}
-
-function saveConsumerKey(homeDir: string, key: string): string {
-  const candidates = keyFileCandidates(homeDir);
-  for (const path of candidates) {
-    try {
-      mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, key, { mode: 0o600 });
-      return path;
-    } catch { /* next */ }
-  }
-  throw new Error(`Cannot write consumer key to any of: ${candidates.join(", ")}`);
-}
-
 // ── Error helpers ──
 
 const providerUnavailable = (command: string, message: string): RunCliResult => ({
@@ -52,13 +15,13 @@ const providerUnavailable = (command: string, message: string): RunCliResult => 
     "personal", command,
     ErrorType.PROVIDER_UNAVAILABLE, "PROVIDER_NOT_CONFIGURED",
     message,
-    "set COMPOSIO_API_KEY for platform mode, or run `pin personal setup --key ck_...` for legacy consumer-key mode",
+    "set COMPOSIO_API_KEY or configure it in ~/.openclaw-proactive-ai/local-settings.json",
   ),
 });
 
 const wrapProviderError = (command: string, error: unknown): RunCliResult => {
   const message = error instanceof Error ? error.message : "Unknown provider error";
-  if (message.includes("COMPOSIO_CONSUMER_KEY") || message.includes("COMPOSIO_API_KEY")) {
+  if (message.includes("COMPOSIO_API_KEY")) {
     return providerUnavailable(command, message);
   }
   return {
@@ -66,7 +29,7 @@ const wrapProviderError = (command: string, error: unknown): RunCliResult => {
     stdout: errorEnvelope(
       "personal", command,
       ErrorType.PROVIDER_UNAVAILABLE, "PROVIDER_ERROR",
-      message, "check consumer key and network connectivity",
+      message, "check COMPOSIO_API_KEY and network connectivity",
     ),
   };
 };
@@ -79,29 +42,14 @@ export const setup = async (
 ): Promise<RunCliResult> => {
   const key = input.key.trim();
 
-  if (!key || !key.startsWith("ck_")) {
+  if (!key || !key.startsWith("ak_")) {
     return {
       exitCode: 2,
       stdout: errorEnvelope(
         "personal", "setup",
         ErrorType.VALIDATION, "INVALID_ARGUMENT",
-        key ? "Consumer key must start with 'ck_'" : "Consumer key is empty",
+        key ? "API key must start with 'ak_'" : "API key is empty",
         "get your key from https://dashboard.composio.dev",
-      ),
-    };
-  }
-
-  let savedPath: string;
-  try {
-    savedPath = saveConsumerKey(runtime.homeDir, key);
-  } catch (err) {
-    return {
-      exitCode: 1,
-      stdout: errorEnvelope(
-        "personal", "setup",
-        ErrorType.INTERNAL, "SAVE_FAILED",
-        err instanceof Error ? err.message : String(err),
-        "check file permissions",
       ),
     };
   }
@@ -109,17 +57,16 @@ export const setup = async (
   // Validate by discovering connections
   try {
     const provider = createPersonalProvider(
-      { ...runtime, env: { ...runtime.env, COMPOSIO_CONSUMER_KEY: key } },
+      { ...runtime, env: { ...runtime.env, COMPOSIO_API_KEY: key } },
     );
     await provider.discoverConnections();
   } catch {
-    try { writeFileSync(savedPath, "", { mode: 0o600 }); } catch { /* best effort */ }
     return {
       exitCode: 1,
       stdout: errorEnvelope(
         "personal", "setup",
         ErrorType.PROVIDER_UNAVAILABLE, "INVALID_KEY",
-        "Consumer key validation failed — could not connect to Composio MCP",
+        "API key validation failed — could not connect to Composio Platform API",
         "verify your key at https://dashboard.composio.dev",
       ),
     };
@@ -128,9 +75,9 @@ export const setup = async (
   return {
     exitCode: 0,
     stdout: okEnvelope("personal", "setup", {
-      saved: true,
-      path: savedPath,
+      validated: true,
       keyPrefix: key.slice(0, 6) + "...",
+      hint: "Set COMPOSIO_API_KEY or add to ~/.openclaw-proactive-ai/local-settings.json",
     }),
   };
 };
@@ -140,18 +87,15 @@ export const status = async (
 ): Promise<RunCliResult> => {
   const platformSettings = loadPlatformSettings(runtime.homeDir);
   const apiKey = runtime.env.COMPOSIO_API_KEY?.trim() || platformSettings.apiKey || "";
-  const consumerKey = runtime.env.COMPOSIO_CONSUMER_KEY || loadConsumerKey(runtime.homeDir);
   return {
     exitCode: 0,
     stdout: okEnvelope("personal", "status", {
-      configured: !!apiKey || !!consumerKey,
-      mode: apiKey ? "platform" : (consumerKey ? "consumer" : "none"),
+      configured: !!apiKey,
+      mode: apiKey ? "platform" : "none",
       source: apiKey
         ? (runtime.env.COMPOSIO_API_KEY ? "platform-env" : "platform-file")
-        : (runtime.env.COMPOSIO_CONSUMER_KEY ? "env" : (consumerKey ? "file" : "none")),
-      keyPrefix: apiKey
-        ? apiKey.slice(0, 6) + "..."
-        : (consumerKey ? consumerKey.slice(0, 6) + "..." : null),
+        : "none",
+      keyPrefix: apiKey ? apiKey.slice(0, 6) + "..." : null,
     }),
   };
 };

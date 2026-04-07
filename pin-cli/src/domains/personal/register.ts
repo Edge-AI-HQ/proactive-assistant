@@ -19,15 +19,15 @@ export const registerPersonalCommands = (
   resultRef: ResultRef,
 ): void => {
   const personal = new Command("personal").description(
-    "Personal data: connect apps and access user data via Composio MCP",
+    "Personal data: connect apps and access user data via Composio Platform API",
   );
 
   // ── Key management ──
 
   personal
     .command("setup")
-    .description("Save and validate your Composio consumer key")
-    .requiredOption("--key <key>", "Composio consumer key (ck_...)")
+    .description("Validate a Composio API key")
+    .requiredOption("--key <key>", "Composio API key (ak_...)")
     .option("--json")
     .action(async (options) => {
       resultRef.current = await setup(runtime, options);
@@ -35,7 +35,7 @@ export const registerPersonalCommands = (
 
   personal
     .command("status")
-    .description("Check if a Composio consumer key is configured")
+    .description("Check if a Composio API key is configured")
     .option("--json")
     .action(async () => {
       resultRef.current = await status(runtime);
@@ -117,18 +117,18 @@ export const registerPersonalCommands = (
   registerCommand({
     domain: "personal",
     command: "setup",
-    description: "Save and validate Composio consumer key (ck_...)",
+    description: "Validate Composio API key (ak_...)",
     risk: "write",
     supportsDryRun: false,
     flags: [
-      { name: "key", type: "string", required: true, description: "Composio consumer key (ck_...)" },
+      { name: "key", type: "string", required: true, description: "Composio API key (ak_...)" },
     ],
   });
 
   registerCommand({
     domain: "personal",
     command: "status",
-    description: "Check if Composio consumer key is configured",
+    description: "Check if Composio API key is configured",
     risk: "read",
     supportsDryRun: false,
     flags: [],
@@ -137,7 +137,7 @@ export const registerPersonalCommands = (
   registerCommand({
     domain: "personal",
     command: "connections list",
-    description: "List connected apps and their status via COMPOSIO_MANAGE_CONNECTIONS",
+    description: "List connected apps and their status via Composio Platform API",
     risk: "read",
     supportsDryRun: false,
     flags: [
@@ -159,7 +159,7 @@ export const registerPersonalCommands = (
   registerCommand({
     domain: "personal",
     command: "wait",
-    description: "Wait for an OAuth connection to become active via COMPOSIO_WAIT_FOR_CONNECTIONS",
+    description: "Wait for an OAuth connection to become active",
     risk: "read",
     supportsDryRun: false,
     flags: [
@@ -170,7 +170,7 @@ export const registerPersonalCommands = (
   registerCommand({
     domain: "personal",
     command: "tools search",
-    description: "Search available Composio tools by use case via COMPOSIO_SEARCH_TOOLS",
+    description: "Search available Composio tools by use case",
     risk: "read",
     supportsDryRun: false,
     flags: [
@@ -183,7 +183,7 @@ export const registerPersonalCommands = (
   registerCommand({
     domain: "personal",
     command: "tools schema",
-    description: "Get tool input schema via COMPOSIO_GET_TOOL_SCHEMAS",
+    description: "Get tool input schema via Composio Platform API",
     risk: "read",
     supportsDryRun: false,
     flags: [
@@ -194,7 +194,7 @@ export const registerPersonalCommands = (
   registerCommand({
     domain: "personal",
     command: "exec",
-    description: "Execute a Composio tool via COMPOSIO_MULTI_EXECUTE_TOOL",
+    description: "Execute a Composio tool via Platform API",
     risk: "write",
     supportsDryRun: false,
     flags: [
