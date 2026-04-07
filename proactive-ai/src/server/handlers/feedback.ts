@@ -1,30 +1,37 @@
+import { homedir } from 'node:os';
+import { feedback as coreFeedback, CoreError } from '@pin-ai/core';
 import type { RouteContext } from '../../types/server.js';
 import { json, readBody } from '../http-utils.js';
-import { pinCli } from '../../pipeline/pin-cli.js';
 
-export async function handleFeedback(ctx: RouteContext): Promise<boolean> {
-  if (ctx.subpath !== '/feedback' || ctx.req.method !== 'POST') return false;
+const ctx = { env: process.env, homeDir: homedir() };
+
+export async function handleFeedback(routeCtx: RouteContext): Promise<boolean> {
+  if (routeCtx.subpath !== '/feedback' || routeCtx.req.method !== 'POST') return false;
 
   try {
-    const body = await readBody(ctx.req);
+    const body = await readBody(routeCtx.req);
     const kind = String(body['kind'] ?? '').trim();
     if (!kind) {
-      json(ctx.res, 400, { error: 'Missing kind' });
+      json(routeCtx.res, 400, { error: 'Missing kind' });
       return true;
     }
 
-    const parts = ['feedback log', `--kind ${kind}`];
-    if (body['action'])       parts.push(`--action ${body['action']}`);
-    if (body['intentCardId']) parts.push(`--intent-card-id ${body['intentCardId']}`);
-    if (body['basket'])       parts.push(`--basket ${body['basket']}`);
-    if (body['source'])       parts.push(`--source ${body['source']}`);
-    else                      parts.push('--source user_direct');
+    const record = await coreFeedback.logFeedback(ctx, {
+      kind,
+      action: body['action'] ? String(body['action']) : undefined,
+      intentCardId: body['intentCardId'] ? String(body['intentCardId']) : undefined,
+      basket: body['basket'] ? String(body['basket']) : undefined,
+      source: body['source'] ? String(body['source']) : 'user_direct',
+    });
 
-    const result = await pinCli(parts.join(' '));
-    json(ctx.res, result.ok ? 200 : 400, result.ok ? { ok: true, data: result.data } : { ok: false, error: result.error });
+    json(routeCtx.res, 200, { ok: true, data: record });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    json(ctx.res, 500, { error: msg });
+    if (err instanceof CoreError) {
+      json(routeCtx.res, 400, { ok: false, error: { type: err.type, message: err.message } });
+    } else {
+      const msg = err instanceof Error ? err.message : String(err);
+      json(routeCtx.res, 500, { error: msg });
+    }
   }
   return true;
 }

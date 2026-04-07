@@ -9,8 +9,9 @@
     "outDir": "dist",
     "rootDir": ".",
     "paths": {
-      "@pin-ai/pin-cli": ["../pin-cli/dist/src/cli.d.ts"],
-      "@pin-ai/pin-cli/envelope": ["../pin-cli/dist/src/output/envelope.d.ts"]
+      "@pin-ai/core": ["./packages/core/dist/src/index.d.ts"],
+      "@pin-ai/pin-cli": ["./packages/cli/dist/src/cli.d.ts"],
+      "@pin-ai/pin-cli/envelope": ["./packages/cli/dist/src/output/envelope.d.ts"]
     }
   },
   "include": [
