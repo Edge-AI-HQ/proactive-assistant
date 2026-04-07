@@ -1,10 +1,9 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Key, RefreshCw, ExternalLink, CheckCircle2, XCircle,
-  Loader2, Plus, ChevronDown, type LucideIcon,
+  XCircle, Loader2, Plus, ChevronDown, type LucideIcon,
   Mail, Calendar, MessageSquare, BookOpen, FileText,
-  Briefcase, Globe, Link2, Github, Trello,
+  Briefcase, Github, Trello,
   BarChart3, CreditCard, Video, Pen, ListTodo,
   Users, Database, Linkedin, Twitter,
 } from "lucide-react";
@@ -99,11 +98,8 @@ interface DataConnectionsProps {
 }
 
 export default function DataConnections({ composio }: DataConnectionsProps) {
-  const { keyStatus, connections, statusLoading, loadingConns, loadConnections, saveKey, connectToolkit, waitForToolkit } = composio;
+  const { keyStatus, connections, statusLoading, connectToolkit, waitForToolkit, loadConnections } = composio;
 
-  const [keyInput, setKeyInput] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [connectingToolkit, setConnectingToolkit] = useState<string | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
@@ -111,127 +107,43 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
   const connectedSet = new Set(
     connections.filter(c => c.status === "ACTIVE").map(c => c.toolkit.toLowerCase())
   );
-  const connectedCount = connectedSet.size;
-
-  const handleSaveKey = async () => {
-    const key = keyInput.trim();
-    if (!key) return;
-    setSaving(true);
-    setError(null);
-    const result = await saveKey(key);
-    if (result.ok) {
-      setKeyInput("");
-    } else {
-      setError(result.error ?? "Setup failed");
-    }
-    setSaving(false);
-  };
 
   const handleConnect = async (toolkit: string) => {
     setConnectingToolkit(toolkit);
     setConnectError(null);
-    const result = await connectToolkit(toolkit);
-    if (result.ok && result.redirectUrl) {
-      window.open(result.redirectUrl, "_blank", "noopener,noreferrer");
-      await waitForToolkit(toolkit);
-    } else if (!result.ok) {
-      setConnectError(result.error ?? "Connect failed");
+    try {
+      const result = await connectToolkit(toolkit);
+      if (result.ok && result.redirectUrl) {
+        const popup = window.open(result.redirectUrl, "_blank", "noopener,noreferrer");
+        const waitForPopupClose = new Promise<"closed">((resolve) => {
+          if (!popup) {
+            resolve("closed");
+            return;
+          }
+
+          const intervalId = window.setInterval(() => {
+            if (popup.closed) {
+              window.clearInterval(intervalId);
+              resolve("closed");
+            }
+          }, 250);
+        });
+
+        await Promise.race([
+          waitForToolkit(toolkit).then(() => "connected" as const),
+          waitForPopupClose,
+        ]);
+        await loadConnections();
+      } else if (!result.ok) {
+        setConnectError(result.error ?? "Connect failed");
+      }
+    } finally {
+      setConnectingToolkit(null);
     }
-    setConnectingToolkit(null);
   };
 
   return (
     <div className="space-y-3">
-      {/* API Key Setup */}
-      <div className="glass-card-strong overflow-hidden">
-        <div className="p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Key size={14} strokeWidth={1.5} className="text-foreground/50" />
-            <span className="text-xs font-semibold text-foreground/70">Composio API Key</span>
-            {statusLoading ? (
-              <Loader2 size={12} className="animate-spin text-foreground/30 ml-auto" />
-            ) : keyStatus?.configured ? (
-              <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-medium text-emerald-600 bg-emerald-500/10 px-2 py-0.5 rounded-full">
-                <CheckCircle2 size={10} />
-                Connected
-              </span>
-            ) : (
-              <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-medium text-foreground/40 bg-foreground/5 px-2 py-0.5 rounded-full">
-                Not configured
-              </span>
-            )}
-          </div>
-
-          <p className="text-[11px] text-foreground/40 mb-3 leading-relaxed">
-            Get your consumer key at{" "}
-            <a
-              href="https://dashboard.composio.dev"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-primary hover:underline inline-flex items-center gap-0.5"
-            >
-              dashboard.composio.dev
-              <ExternalLink size={9} />
-            </a>
-          </p>
-
-          <div className="flex gap-2">
-            <input
-              type="password"
-              value={keyInput}
-              onChange={(e) => setKeyInput(e.target.value)}
-              placeholder={keyStatus?.configured ? `Key saved (${keyStatus.keyPrefix ?? "***"})` : "ck_..."}
-              disabled={saving}
-              onKeyDown={(e) => e.key === "Enter" && handleSaveKey()}
-              className="flex-1 rounded-xl bg-foreground/5 border border-foreground/10 px-3 py-2 text-xs text-foreground font-mono placeholder:text-foreground/25 focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-40"
-            />
-            <button
-              onClick={handleSaveKey}
-              disabled={saving || !keyInput.trim()}
-              className="rounded-xl bg-foreground text-background text-xs font-semibold px-4 py-2 hover:bg-foreground/85 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {saving ? <Loader2 size={14} className="animate-spin" /> : "Save"}
-            </button>
-          </div>
-
-          <AnimatePresence>
-            {error && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: "auto" }}
-                exit={{ opacity: 0, height: 0 }}
-                className="mt-2 flex items-start gap-1.5 text-[11px] text-red-500"
-              >
-                <XCircle size={12} className="mt-0.5 flex-shrink-0" />
-                <span>{error}</span>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-      </div>
-
-      {/* Connected summary */}
-      {keyStatus?.configured && (
-        <div className="glass-card p-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Link2 size={14} strokeWidth={1.5} className="text-foreground/50" />
-              <span className="text-sm font-semibold text-foreground">{connectedCount}</span>
-              <span className="text-xs text-foreground/40">app{connectedCount !== 1 ? "s" : ""} connected</span>
-              {loadingConns && <Loader2 size={10} className="animate-spin text-foreground/20" />}
-            </div>
-            <button
-              onClick={loadConnections}
-              disabled={loadingConns}
-              className="inline-flex items-center gap-1 text-[10px] font-medium text-foreground/50 hover:text-foreground/70 transition-colors disabled:opacity-30"
-            >
-              <RefreshCw size={10} className={loadingConns ? "animate-spin" : ""} />
-              Refresh
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Platforms by category */}
       {keyStatus?.configured && (
         <div className="space-y-2">
@@ -328,7 +240,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
       {!keyStatus?.configured && !statusLoading && (
         <div className="glass-card-strong p-6 text-center">
           <Plus size={24} className="mx-auto mb-2 text-foreground/30" />
-          <p className="text-sm text-foreground/50">Configure your API key above to connect apps</p>
+          <p className="text-sm text-foreground/50">App connections are not available yet.</p>
         </div>
       )}
 

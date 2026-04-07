@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import http from 'node:http';
+import { getGatewayEnvFromLocalSettings } from './config';
 
 const PROFILE = 'proactive-ai';
 const HEALTH_POLL_INTERVAL_MS = 500;
@@ -184,6 +185,7 @@ export async function startGateway(
     {
       env: {
         ...process.env,
+        ...getGatewayEnvFromLocalSettings(),
         // Ensure child processes don't inherit ELECTRON_RUN_AS_NODE
         ELECTRON_RUN_AS_NODE: undefined,
       },

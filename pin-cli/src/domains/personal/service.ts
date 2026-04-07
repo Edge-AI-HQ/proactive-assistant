@@ -8,6 +8,7 @@ import {
   createPersonalProvider,
   type PersonalProvider,
 } from "./provider.js";
+import { loadPlatformSettings } from "./platform_settings.js";
 
 // ── Key persistence ──
 
@@ -51,13 +52,15 @@ const providerUnavailable = (command: string, message: string): RunCliResult => 
     "personal", command,
     ErrorType.PROVIDER_UNAVAILABLE, "PROVIDER_NOT_CONFIGURED",
     message,
-    "run `pin personal setup --key ck_...` or set COMPOSIO_CONSUMER_KEY env var",
+    "set COMPOSIO_API_KEY for platform mode, or run `pin personal setup --key ck_...` for legacy consumer-key mode",
   ),
 });
 
 const wrapProviderError = (command: string, error: unknown): RunCliResult => {
   const message = error instanceof Error ? error.message : "Unknown provider error";
-  if (message.includes("COMPOSIO_CONSUMER_KEY")) return providerUnavailable(command, message);
+  if (message.includes("COMPOSIO_CONSUMER_KEY") || message.includes("COMPOSIO_API_KEY")) {
+    return providerUnavailable(command, message);
+  }
   return {
     exitCode: 1,
     stdout: errorEnvelope(
@@ -135,13 +138,20 @@ export const setup = async (
 export const status = async (
   runtime: CliRuntimeInput,
 ): Promise<RunCliResult> => {
-  const key = runtime.env.COMPOSIO_CONSUMER_KEY || loadConsumerKey(runtime.homeDir);
+  const platformSettings = loadPlatformSettings(runtime.homeDir);
+  const apiKey = runtime.env.COMPOSIO_API_KEY?.trim() || platformSettings.apiKey || "";
+  const consumerKey = runtime.env.COMPOSIO_CONSUMER_KEY || loadConsumerKey(runtime.homeDir);
   return {
     exitCode: 0,
     stdout: okEnvelope("personal", "status", {
-      configured: !!key,
-      source: runtime.env.COMPOSIO_CONSUMER_KEY ? "env" : (key ? "file" : "none"),
-      keyPrefix: key ? key.slice(0, 6) + "..." : null,
+      configured: !!apiKey || !!consumerKey,
+      mode: apiKey ? "platform" : (consumerKey ? "consumer" : "none"),
+      source: apiKey
+        ? (runtime.env.COMPOSIO_API_KEY ? "platform-env" : "platform-file")
+        : (runtime.env.COMPOSIO_CONSUMER_KEY ? "env" : (consumerKey ? "file" : "none")),
+      keyPrefix: apiKey
+        ? apiKey.slice(0, 6) + "..."
+        : (consumerKey ? consumerKey.slice(0, 6) + "..." : null),
     }),
   };
 };

@@ -759,6 +759,24 @@ test("personal connections list returns empty with no API key", async () => {
   assert.deepEqual(result.stdout.data, []);
 });
 
+test("personal status reports platform mode when COMPOSIO_API_KEY is configured", async () => {
+  const result = await runCli(
+    ["personal", "status", "--json"],
+    {
+      env: { COMPOSIO_API_KEY: "ak_platform_test" },
+      homeDir: "/Users/test",
+    },
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout.ok, true);
+  const data = result.stdout.data as { configured: boolean; mode: string; source: string; keyPrefix: string | null };
+  assert.equal(data.configured, true);
+  assert.equal(data.mode, "platform");
+  assert.equal(data.source, "platform-env");
+  assert.equal(data.keyPrefix, "ak_pla...");
+});
+
 test("personal connections list returns mock connections via provider override", async () => {
   const runtime = { env: {}, homeDir: "/tmp" };
   const noopConn = { toolkit: "", status: "ACTIVE", connectedAccountId: null, userInfo: null, redirectUrl: null };

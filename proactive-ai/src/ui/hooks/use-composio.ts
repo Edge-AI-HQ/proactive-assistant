@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
-import { apiFetch, apiPost } from "@/lib/api";
+import { apiRpcFetch, apiRpcPost } from "@/lib/api";
 
 export interface Connection {
   toolkit: string;
@@ -10,6 +10,7 @@ export interface ComposioStatus {
   configured: boolean;
   keyPrefix?: string;
   source?: string;
+  mode?: string;
 }
 
 export interface ComposioState {
@@ -19,7 +20,6 @@ export interface ComposioState {
   loadingConns: boolean;
   loadStatus: () => Promise<void>;
   loadConnections: () => Promise<void>;
-  saveKey: (key: string) => Promise<{ ok: boolean; error?: string }>;
   connectToolkit: (toolkit: string) => Promise<{ ok: boolean; redirectUrl?: string; error?: string }>;
   waitForToolkit: (toolkit: string) => Promise<void>;
 }
@@ -33,7 +33,7 @@ export function useComposio(): ComposioState {
   const loadConnections = useCallback(async () => {
     setLoadingConns(true);
     try {
-      const res = await apiFetch("/api/composio/connections");
+      const res = await apiRpcFetch("/composio/connections");
       if (!res.ok) throw new Error(`${res.status}`);
       const data = await res.json();
       setConnections(data.connections ?? []);
@@ -47,7 +47,7 @@ export function useComposio(): ComposioState {
   const loadStatus = useCallback(async () => {
     try {
       setStatusLoading(true);
-      const res = await apiFetch("/api/composio/status");
+      const res = await apiRpcFetch("/composio/status");
       if (!res.ok) throw new Error(`${res.status}`);
       const data = await res.json();
       setKeyStatus(data);
@@ -61,23 +61,9 @@ export function useComposio(): ComposioState {
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
 
-  const saveKey = useCallback(async (key: string): Promise<{ ok: boolean; error?: string }> => {
-    try {
-      const res = await apiPost("/api/composio/setup", { key });
-      const data = await res.json();
-      if (res.ok && data.saved) {
-        await loadStatus();
-        return { ok: true };
-      }
-      return { ok: false, error: data.error ?? "Setup failed" };
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
-    }
-  }, [loadStatus]);
-
   const connectToolkit = useCallback(async (toolkit: string): Promise<{ ok: boolean; redirectUrl?: string; error?: string }> => {
     try {
-      const res = await apiPost("/api/composio/connect", { toolkit });
+      const res = await apiRpcPost("/composio/connect", { toolkit });
       const data = await res.json();
       if (data.status === "ACTIVE") {
         await loadConnections();
@@ -94,10 +80,10 @@ export function useComposio(): ComposioState {
 
   const waitForToolkit = useCallback(async (toolkit: string) => {
     try {
-      await apiPost("/api/composio/wait", { toolkit });
+      await apiRpcPost("/composio/wait", { toolkit });
     } catch { /* best effort */ }
     await loadConnections();
   }, [loadConnections]);
 
-  return { keyStatus, connections, statusLoading, loadingConns, loadStatus, loadConnections, saveKey, connectToolkit, waitForToolkit };
+  return { keyStatus, connections, statusLoading, loadingConns, loadStatus, loadConnections, connectToolkit, waitForToolkit };
 }
