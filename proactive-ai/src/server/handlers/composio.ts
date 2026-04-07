@@ -1,6 +1,11 @@
 import type { RouteContext } from '../../types/server.js';
 import { json, readBody } from '../http-utils.js';
-import { pinCli } from '../../pipeline/pin-cli.js';
+import {
+  connectToolkit,
+  getComposioStatus,
+  listActiveConnections,
+  waitForToolkit,
+} from '../composio-platform.js';
 
 export async function handleComposio(ctx: RouteContext): Promise<boolean> {
   const { subpath, req, res } = ctx;
@@ -11,15 +16,14 @@ export async function handleComposio(ctx: RouteContext): Promise<boolean> {
   try {
     // GET /composio/status
     if (route === '/status' && req.method === 'GET') {
-      const result = await pinCli('personal status');
-      json(res, 200, result.ok ? result.data : { configured: false });
+      json(res, 200, getComposioStatus());
       return true;
     }
 
     // GET /composio/connections
     if (route === '/connections' && req.method === 'GET') {
-      const result = await pinCli('personal connections list');
-      json(res, 200, { connections: result.ok && Array.isArray(result.data) ? result.data : [] });
+      const connections = await listActiveConnections();
+      json(res, 200, { connections });
       return true;
     }
 
@@ -27,12 +31,12 @@ export async function handleComposio(ctx: RouteContext): Promise<boolean> {
     if (req.method !== 'POST') return false;
     const body = await readBody(req);
 
-    // POST /composio/setup
+    // POST /composio/setup (deprecated in platform mode)
     if (route === '/setup') {
-      const key = String(body['key'] ?? '').trim();
-      if (!key) { json(res, 400, { error: 'Missing key' }); return true; }
-      const result = await pinCli(`personal setup --key ${key}`);
-      json(res, result.ok ? 200 : 400, result.ok ? result.data : { error: result.error ?? 'Setup failed' });
+      json(res, 400, {
+        error: 'Setup is not supported in platform mode',
+        hint: 'Configure COMPOSIO_API_KEY on host process or local-settings.json',
+      });
       return true;
     }
 
@@ -40,8 +44,8 @@ export async function handleComposio(ctx: RouteContext): Promise<boolean> {
     if (route === '/connect') {
       const toolkit = String(body['toolkit'] ?? '').trim().toLowerCase();
       if (!toolkit) { json(res, 400, { error: 'Missing toolkit' }); return true; }
-      const result = await pinCli(`personal connect --toolkit ${toolkit}`);
-      json(res, result.ok ? 200 : 400, result.ok ? result.data : { error: result.error ?? 'Connect failed' });
+      const result = await connectToolkit(toolkit);
+      json(res, 200, result);
       return true;
     }
 
@@ -49,8 +53,8 @@ export async function handleComposio(ctx: RouteContext): Promise<boolean> {
     if (route === '/wait') {
       const toolkit = String(body['toolkit'] ?? '').trim().toLowerCase();
       if (!toolkit) { json(res, 400, { error: 'Missing toolkit' }); return true; }
-      const result = await pinCli(`personal wait --toolkit ${toolkit}`);
-      json(res, result.ok ? 200 : 400, result.ok ? result.data : { error: result.error ?? 'Wait failed' });
+      const result = await waitForToolkit(toolkit);
+      json(res, 200, result);
       return true;
     }
   } catch (err) {

@@ -25,7 +25,7 @@ export function createApiHandler(api: OpenClawPluginApi) {
     const rq = req as IncomingMessage;
     const r = res as ServerResponse;
     const url = new URL(rq.url ?? '/', `http://${rq.headers.host ?? 'localhost'}`);
-    const subpath = url.pathname.replace(/^\/proactive-ai\/api\/?/, '/');
+    const subpath = url.pathname.replace(/^\/proactive-ai\/(?:api|rpc)\/?/, '/');
 
     const ctx: RouteContext = { api, url, req: rq, res: r, subpath };
 
