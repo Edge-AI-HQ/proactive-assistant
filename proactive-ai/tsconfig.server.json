@@ -17,7 +17,13 @@
     "index.ts",
     "src/agents/**/*.ts",
     "src/pipeline/**/*.ts",
-    "src/types/**/*.ts"
+    "src/types/**/*.ts",
+    "src/server/**/*.ts",
+    "src/config.ts",
+    "src/state.ts",
+    "src/run-store.ts",
+    "src/helpers.ts",
+    "src/profile-seed.ts"
   ],
   "exclude": ["node_modules", "dist"]
 }

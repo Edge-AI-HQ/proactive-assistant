@@ -54,6 +54,16 @@ export function ensureConfig(): void {
     changed = true;
   }
 
+  // Default model — pin to Anthropic so OpenClaw never falls back to openai/gpt-*
+  if (!config.agents) config.agents = {};
+  const agents = config.agents as Record<string, unknown>;
+  if (!agents.defaults) agents.defaults = {};
+  const defaults = agents.defaults as Record<string, unknown>;
+  if (!defaults.model) {
+    defaults.model = 'anthropic/claude-opus-4-6';
+    changed = true;
+  }
+
   // browser config — OpenClaw launches its own Chrome instance (not attach to user's).
   const br = config.browser as Record<string, unknown> | undefined;
   if (!br || br.attachOnly || br.cdpUrl) {

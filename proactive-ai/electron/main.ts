@@ -23,8 +23,13 @@ import { resolveOpenclawBin, startGateway, type GatewayHandle, type OpenclawBin 
 import { needsSetup, runSetup, ensureConfig } from './setup';
 import { getApiKeyStatus, saveApiKey, hasApiKey } from './config';
 
-// The proactive-ai plugin directory (two levels up: electron/dist/ → electron/ → proactive-ai/)
-const PLUGIN_DIR = resolve(__dirname, '..', '..');
+// The proactive-ai plugin directory:
+// - Packaged app: Contents/Resources/plugin/
+// - Dev mode: two levels up from electron/dist/ → proactive-ai/
+const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+const PLUGIN_DIR = resourcesPath
+  ? resolve(resourcesPath, 'plugin')
+  : resolve(__dirname, '..', '..');
 
 let mainWindow: BrowserWindow | null = null;
 let splashWindow: BrowserWindow | null = null;
@@ -144,7 +149,7 @@ async function launchGatewayAndMainWindow(openclawBin: OpenclawBin): Promise<voi
   gateway = await startGateway(openclawBin, PLUGIN_DIR);
 
   console.log(`[main] Gateway ready at ${gateway.url}`);
-  console.log(`[main] Token: ${gateway.token}`);
+  console.log(`[main] Token: ${gateway.token.slice(0, 8)}...`);
   console.log(`[main] UI: ${gateway.url}/proactive-ai`);
 
   mainWindow = createMainWindow();
