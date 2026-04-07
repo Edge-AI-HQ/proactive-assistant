@@ -22,14 +22,9 @@ import { resolve } from 'node:path';
 import { resolveOpenclawBin, startGateway, type GatewayHandle, type OpenclawBin } from './gateway';
 import { needsSetup, runSetup, ensureConfig } from './setup';
 import { getApiKeyStatus, saveApiKey, hasApiKey } from './config';
+import { getPluginDir } from './paths';
 
-// The proactive-ai plugin directory:
-// - Packaged app: Contents/Resources/plugin/
-// - Dev mode: two levels up from electron/dist/ → proactive-ai/
-const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-const PLUGIN_DIR = resourcesPath
-  ? resolve(resourcesPath, 'plugin')
-  : resolve(__dirname, '..', '..');
+const PLUGIN_DIR = getPluginDir();
 
 let mainWindow: BrowserWindow | null = null;
 let splashWindow: BrowserWindow | null = null;
@@ -65,7 +60,7 @@ app.whenReady().then(async () => {
     const openclawBin = resolveOpenclawBin();
 
     // 2. First-run setup + ensure config is current
-    if (needsSetup()) {
+    if (needsSetup(PLUGIN_DIR)) {
       updateSplash('Setting up for first run...');
       runSetup(PLUGIN_DIR);
     } else {

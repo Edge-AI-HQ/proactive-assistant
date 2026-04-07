@@ -15,15 +15,26 @@ const PROFILE_DIR = join(homedir(), `.openclaw-${PROFILE}`);
 const CONFIG_PATH = join(PROFILE_DIR, 'openclaw.json');
 
 /**
- * Check if first-run setup is needed (plugin not registered yet).
+ * Check if first-run setup is needed.
+ *
+ * Returns true if:
+ *   - Config file doesn't exist
+ *   - Plugin not registered
+ *   - Registered plugin path no longer matches the current PLUGIN_DIR
+ *     (e.g. user moved .app from Downloads to /Applications)
  */
-export function needsSetup(): boolean {
+export function needsSetup(currentPluginDir: string): boolean {
   if (!existsSync(CONFIG_PATH)) return true;
 
   try {
     const config = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
     const installs = config?.plugins?.installs;
     if (!installs || !installs['proactive-ai']) return true;
+
+    // Re-register if the app was moved and the plugin path changed
+    const registered = installs['proactive-ai'];
+    if (registered.installPath !== currentPluginDir) return true;
+
     return false;
   } catch {
     return true;
@@ -121,14 +132,15 @@ export function runSetup(pluginDir: string): void {
     installedAt: new Date().toISOString(),
   };
 
-  // Ensure the plugin is in the load paths
+  // Ensure the plugin is in the load paths (replace stale paths)
   if (!plugins.load) plugins.load = {};
   const load = plugins.load as Record<string, unknown>;
   if (!Array.isArray(load.paths)) load.paths = [];
   const paths = load.paths as string[];
-  if (!paths.includes(pluginDir)) {
-    paths.push(pluginDir);
-  }
+  // Remove any stale plugin paths that no longer exist
+  const cleaned = paths.filter((p: string) => existsSync(p) && p !== pluginDir);
+  cleaned.push(pluginDir);
+  load.paths = cleaned;
 
   // Allow the plugin to load (security allowlist)
   if (!Array.isArray(plugins.allow)) plugins.allow = [];

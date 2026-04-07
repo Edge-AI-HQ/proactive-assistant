@@ -12,6 +12,7 @@ import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import http from 'node:http';
 import { getGatewayEnvFromLocalSettings } from './config';
+import { getBundledNodeBin, getBundledOpenclawScript } from './paths';
 
 const PROFILE = 'proactive-ai';
 const HEALTH_POLL_INTERVAL_MS = 500;
@@ -145,13 +146,9 @@ function nodeVersionOk(ver: string): boolean {
  * Layout: Contents/Resources/runtime/{node, node_modules/.bin/openclaw}
  */
 function resolveBundledRuntime(): OpenclawBin | null {
-  // process.resourcesPath is only set in a packaged Electron app
-  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-  if (!resourcesPath) return null;
-
-  const node = join(resourcesPath, 'runtime', 'node');
-  const script = join(resourcesPath, 'runtime', 'node_modules', '.bin', 'openclaw');
-  if (existsSync(node) && existsSync(script)) {
+  const node = getBundledNodeBin();
+  const script = getBundledOpenclawScript();
+  if (node && script) {
     console.log('[gateway] Using bundled runtime:', node);
     return { script, node };
   }
