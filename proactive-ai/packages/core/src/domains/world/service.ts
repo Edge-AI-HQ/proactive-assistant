@@ -1,7 +1,7 @@
-import { PinDatabaseManager } from "../../db/database.js";
-import { errorEnvelope, okEnvelope } from "../../output/envelope.js";
-import { ErrorType } from "../../output/errors.js";
-import type { CliRuntimeInput, RunCliResult } from "../../runtime.js";
+import { PinDatabaseManager, resolvePinDataRoot } from "../../db/database.js";
+import type { CoreContext } from "../../context.js";
+import { NotFoundError, ProviderUnavailableError } from "../../errors.js";
+import { parseOptionalInt } from "../../validation.js";
 import {
   createWorldEmbeddingProvider,
   type WorldEmbeddingProvider,
@@ -103,15 +103,15 @@ const filterParsedFeedItems = (
   });
 };
 
-const createRepository = async (runtime: CliRuntimeInput) => {
-  const dataRoot = runtime.env.PIN_DATA_ROOT || `${runtime.homeDir}/.pin`;
+const createRepository = async (ctx: CoreContext) => {
+  const dataRoot = resolvePinDataRoot(ctx);
   const manager = new PinDatabaseManager({ dataRoot });
   await manager.init();
   return new WorldRepository(manager.open("pin"));
 };
 
-const createProfileRepository = async (runtime: CliRuntimeInput) => {
-  const dataRoot = runtime.env.PIN_DATA_ROOT || `${runtime.homeDir}/.pin`;
+const createProfileRepository = async (ctx: CoreContext) => {
+  const dataRoot = resolvePinDataRoot(ctx);
   const manager = new PinDatabaseManager({ dataRoot });
   await manager.init();
   return new ProfileRepository(manager.open("pin"));
@@ -124,9 +124,9 @@ const normalizeHeadlineTopic = (topic?: string): string => {
   return "WORLD";
 };
 
-const buildSearchUrl = (runtime: CliRuntimeInput, query: string): string => {
+const buildSearchUrl = (ctx: CoreContext, query: string): string => {
   const template =
-    runtime.env.PIN_WORLD_NEWS_SEARCH_URL_TEMPLATE ||
+    ctx.env.PIN_WORLD_NEWS_SEARCH_URL_TEMPLATE ||
     DEFAULT_NEWS_SEARCH_URL_TEMPLATE;
 
   if (!template.includes("{query}")) {
@@ -137,7 +137,7 @@ const buildSearchUrl = (runtime: CliRuntimeInput, query: string): string => {
 };
 
 const buildSearchRequest = (
-  runtime: CliRuntimeInput,
+  ctx: CoreContext,
   input: { query: string; provider?: string },
 ): WorldFeedRequest => {
   const provider = (input.provider ?? "google-news").trim().toLowerCase();
@@ -146,9 +146,9 @@ const buildSearchRequest = (
     return {
       provider,
       streamType: "search",
-      url: runtime.env.PIN_WORLD_SEC_SEARCH_URL_TEMPLATE || SEC_PRESS_RELEASES_URL,
+      url: ctx.env.PIN_WORLD_SEC_SEARCH_URL_TEMPLATE || SEC_PRESS_RELEASES_URL,
       headers: {
-        "user-agent": runtime.env.PIN_WORLD_SEC_USER_AGENT || DEFAULT_SEC_USER_AGENT,
+        "user-agent": ctx.env.PIN_WORLD_SEC_USER_AGENT || DEFAULT_SEC_USER_AGENT,
       },
     };
   }
@@ -157,23 +157,23 @@ const buildSearchRequest = (
     return {
       provider,
       streamType: "search",
-      url: runtime.env.PIN_WORLD_FED_SEARCH_URL_TEMPLATE || FED_PRESS_RELEASES_URL,
+      url: ctx.env.PIN_WORLD_FED_SEARCH_URL_TEMPLATE || FED_PRESS_RELEASES_URL,
     };
   }
 
   return {
     provider,
     streamType: "search",
-    url: buildSearchUrl(runtime, input.query),
+    url: buildSearchUrl(ctx, input.query),
   };
 };
 
 const buildHeadlinesUrl = (
-  runtime: CliRuntimeInput,
+  ctx: CoreContext,
   input: { topic?: string; region?: string },
 ): string => {
   const template =
-    runtime.env.PIN_WORLD_HEADLINES_URL_TEMPLATE ||
+    ctx.env.PIN_WORLD_HEADLINES_URL_TEMPLATE ||
     DEFAULT_HEADLINES_URL_TEMPLATE;
 
   return template
@@ -182,7 +182,7 @@ const buildHeadlinesUrl = (
 };
 
 const buildHeadlinesRequest = (
-  runtime: CliRuntimeInput,
+  ctx: CoreContext,
   input: { topic?: string; region?: string; provider?: string },
 ): WorldFeedRequest => {
   const provider = (input.provider ?? "google-news").trim().toLowerCase();
@@ -191,9 +191,9 @@ const buildHeadlinesRequest = (
     return {
       provider,
       streamType: "headline",
-      url: runtime.env.PIN_WORLD_SEC_HEADLINES_URL_TEMPLATE || SEC_PRESS_RELEASES_URL,
+      url: ctx.env.PIN_WORLD_SEC_HEADLINES_URL_TEMPLATE || SEC_PRESS_RELEASES_URL,
       headers: {
-        "user-agent": runtime.env.PIN_WORLD_SEC_USER_AGENT || DEFAULT_SEC_USER_AGENT,
+        "user-agent": ctx.env.PIN_WORLD_SEC_USER_AGENT || DEFAULT_SEC_USER_AGENT,
       },
     };
   }
@@ -202,14 +202,14 @@ const buildHeadlinesRequest = (
     return {
       provider,
       streamType: "headline",
-      url: runtime.env.PIN_WORLD_FED_HEADLINES_URL_TEMPLATE || FED_PRESS_RELEASES_URL,
+      url: ctx.env.PIN_WORLD_FED_HEADLINES_URL_TEMPLATE || FED_PRESS_RELEASES_URL,
     };
   }
 
   return {
     provider,
     streamType: "headline",
-    url: buildHeadlinesUrl(runtime, input),
+    url: buildHeadlinesUrl(ctx, input),
   };
 };
 
@@ -224,61 +224,6 @@ const sortWorldItems = (items: WorldItemRecord[], limit: number): WorldItemRecor
       return rightTs.localeCompare(leftTs);
     })
     .slice(0, limit);
-
-const providerErrorResult = (
-  command: "search" | "headlines",
-  message: string,
-  hint = "check provider connectivity or try a different source",
-): RunCliResult => ({
-  exitCode: 1,
-  stdout: errorEnvelope(
-    "world",
-    command,
-    ErrorType.PROVIDER_UNAVAILABLE,
-    "PROVIDER_UNAVAILABLE",
-    message,
-    hint,
-  ),
-});
-
-const worldSearchUnavailable = (
-  command: "index refresh" | "find",
-  message: string,
-  hint: string,
-): RunCliResult => ({
-  exitCode: 1,
-  stdout: errorEnvelope(
-    "world",
-    command,
-    ErrorType.PROVIDER_UNAVAILABLE,
-    "UNAVAILABLE",
-    message,
-    hint,
-  ),
-});
-
-const worldKeywordFallback = (
-  results: Array<Record<string, unknown>>,
-  message: string,
-  hint: string,
-): RunCliResult => ({
-  exitCode: 0,
-  stdout: okEnvelope(
-    "world",
-    "find",
-    {
-      strategy: "keyword",
-      degraded: true,
-      results,
-    },
-    {
-      search: {
-        message,
-        hint,
-      },
-    },
-  ),
-});
 
 const toSemanticIndexRecord = (
   row: {
@@ -413,12 +358,24 @@ const reciprocalRankFusion = (
     .sort((a, b) => b.score - a.score);
 };
 
+// ── Public service functions ──
+
+export interface WorldSearchNotice {
+  message: string;
+  hint: string;
+}
+
 export const searchNews = async (
-  runtime: CliRuntimeInput,
+  ctx: CoreContext,
   input: { query: string; limit?: string; provider?: string; full?: boolean },
-) => {
-  const limit = Number.parseInt(input.limit ?? "10", 10);
-  const request = buildSearchRequest(runtime, input);
+): Promise<{
+  query: string;
+  provider: string;
+  count: number;
+  items: Array<Record<string, unknown> | WorldItemRecord>;
+}> => {
+  const limit = parseOptionalInt(input.limit, 10);
+  const request = buildSearchRequest(ctx, input);
   const provider = request.provider;
   let response: Response;
 
@@ -427,20 +384,22 @@ export const searchNews = async (
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown provider fetch error";
-    return providerErrorResult(
-      "search",
+    throw new ProviderUnavailableError(
+      "PROVIDER_UNAVAILABLE",
       `News search request failed: ${message}`,
+      "check provider connectivity or try a different source",
     );
   }
 
   if (!response.ok) {
-    return providerErrorResult(
-      "search",
+    throw new ProviderUnavailableError(
+      "PROVIDER_UNAVAILABLE",
       `News search failed with status ${response.status}`,
+      "check provider connectivity or try a different source",
     );
   }
 
-  const repository = await createRepository(runtime);
+  const repository = await createRepository(ctx);
   const xml = await response.text();
   const parsedItems = filterParsedFeedItems(parseNewsFeed(provider, xml), {
     provider,
@@ -468,22 +427,25 @@ export const searchNews = async (
   const deduped = sortWorldItems(ingested, limit);
 
   return {
-    exitCode: 0,
-    stdout: okEnvelope("world", "search", {
-      query: input.query,
-      provider,
-      count: deduped.length,
-      items: input.full === true ? deduped : deduped.map((item) => toSimpleWorldItem(item)),
-    }),
-  } satisfies RunCliResult;
+    query: input.query,
+    provider,
+    count: deduped.length,
+    items: input.full === true ? deduped : deduped.map((item) => toSimpleWorldItem(item)),
+  };
 };
 
 export const fetchHeadlines = async (
-  runtime: CliRuntimeInput,
+  ctx: CoreContext,
   input: { topic?: string; region?: string; limit?: string; provider?: string; full?: boolean },
-) => {
-  const limit = Number.parseInt(input.limit ?? "10", 10);
-  const request = buildHeadlinesRequest(runtime, input);
+): Promise<{
+  topic: string;
+  region: string;
+  provider: string;
+  count: number;
+  items: Array<Record<string, unknown> | WorldItemRecord>;
+}> => {
+  const limit = parseOptionalInt(input.limit, 10);
+  const request = buildHeadlinesRequest(ctx, input);
   const provider = request.provider;
   const topic = (input.topic ?? "general").trim().toLowerCase();
   const region = (input.region ?? "global").trim().toLowerCase();
@@ -494,20 +456,22 @@ export const fetchHeadlines = async (
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown provider fetch error";
-    return providerErrorResult(
-      "headlines",
+    throw new ProviderUnavailableError(
+      "PROVIDER_UNAVAILABLE",
       `Headline request failed: ${message}`,
+      "check provider connectivity or try a different source",
     );
   }
 
   if (!response.ok) {
-    return providerErrorResult(
-      "headlines",
+    throw new ProviderUnavailableError(
+      "PROVIDER_UNAVAILABLE",
       `Headline fetch failed with status ${response.status}`,
+      "check provider connectivity or try a different source",
     );
   }
 
-  const repository = await createRepository(runtime);
+  const repository = await createRepository(ctx);
   const xml = await response.text();
   const parsedItems = parseNewsFeed(provider, xml);
   const streamQuery = `headline:${topic}:${region}`;
@@ -538,31 +502,34 @@ export const fetchHeadlines = async (
   const deduped = sortWorldItems(ingested, limit);
 
   return {
-    exitCode: 0,
-    stdout: okEnvelope("world", "headlines", {
-      topic,
-      region,
-      provider,
-      count: deduped.length,
-      items: input.full === true ? deduped : deduped.map((item) => toSimpleWorldItem(item)),
-    }),
-  } satisfies RunCliResult;
+    topic,
+    region,
+    provider,
+    count: deduped.length,
+    items: input.full === true ? deduped : deduped.map((item) => toSimpleWorldItem(item)),
+  };
 };
 
 export const runWorldIndexRefresh = async (
-  runtime: CliRuntimeInput,
+  ctx: CoreContext,
   input: { all?: boolean; limit?: string | number },
   deps?: {
     embeddingProvider?: WorldEmbeddingProvider;
     semanticIndex?: WorldSemanticIndex;
   },
-): Promise<RunCliResult> => {
-  const repository = await createRepository(runtime);
+): Promise<{
+  mode: string;
+  itemsSelected: number;
+  itemsIndexed: number;
+  deletedCount: number;
+  model?: string;
+}> => {
+  const repository = await createRepository(ctx);
   const embeddingProvider = createWorldEmbeddingProvider(
-    runtime,
+    ctx,
     deps?.embeddingProvider,
   );
-  const semanticIndex = createWorldSemanticIndex(runtime, deps?.semanticIndex);
+  const semanticIndex = createWorldSemanticIndex(ctx, deps?.semanticIndex);
   const limit =
     typeof input.limit === "number"
       ? input.limit
@@ -574,13 +541,10 @@ export const runWorldIndexRefresh = async (
 
   if (candidates.length === 0) {
     return {
-      exitCode: 0,
-      stdout: okEnvelope("world", "index refresh", {
-        mode: input.all ? "all" : "recent",
-        itemsSelected: 0,
-        itemsIndexed: 0,
-        deletedCount: 0,
-      }),
+      mode: input.all ? "all" : "recent",
+      itemsSelected: 0,
+      itemsIndexed: 0,
+      deletedCount: 0,
     };
   }
 
@@ -596,20 +560,17 @@ export const runWorldIndexRefresh = async (
     );
 
     return {
-      exitCode: 0,
-      stdout: okEnvelope("world", "index refresh", {
-        mode: input.all ? "all" : "recent",
-        itemsSelected: candidates.length,
-        itemsIndexed: refreshResult.upsertedCount,
-        deletedCount: refreshResult.deletedCount,
-        model: embeddingProvider.model,
-      }),
+      mode: input.all ? "all" : "recent",
+      itemsSelected: candidates.length,
+      itemsIndexed: refreshResult.upsertedCount,
+      deletedCount: refreshResult.deletedCount,
+      model: embeddingProvider.model,
     };
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "semantic index provider unavailable";
-    return worldSearchUnavailable(
-      "index refresh",
+    throw new ProviderUnavailableError(
+      "UNAVAILABLE",
       "世界信息语义索引构建失败",
       `请检查 OPENAI_API_KEY 和 embedding 服务状态。底层错误: ${message}`,
     );
@@ -617,7 +578,7 @@ export const runWorldIndexRefresh = async (
 };
 
 export const searchWorldItems = async (
-  runtime: CliRuntimeInput,
+  ctx: CoreContext,
   input: {
     query: string;
     strategy?: string;
@@ -629,8 +590,13 @@ export const searchWorldItems = async (
     embeddingProvider?: WorldEmbeddingProvider;
     semanticIndex?: WorldSemanticIndex;
   },
-): Promise<RunCliResult> => {
-  const repository = await createRepository(runtime);
+): Promise<{
+  strategy: string;
+  degraded: boolean;
+  results: Array<Record<string, unknown>>;
+  notice?: WorldSearchNotice;
+}> => {
+  const repository = await createRepository(ctx);
   const strategy = input.strategy ?? "keyword";
   const limit =
     typeof input.limit === "number"
@@ -645,20 +611,17 @@ export const searchWorldItems = async (
 
   if (strategy === "keyword") {
     return {
-      exitCode: 0,
-      stdout: okEnvelope("world", "find", {
-        strategy: "keyword",
-        degraded: false,
-        results: keywordResults.map((row) => toWorldSearchResult(row)),
-      }),
+      strategy: "keyword",
+      degraded: false,
+      results: keywordResults.map((row) => toWorldSearchResult(row)),
     };
   }
 
   const embeddingProvider = createWorldEmbeddingProvider(
-    runtime,
+    ctx,
     deps?.embeddingProvider,
   );
-  const semanticIndex = createWorldSemanticIndex(runtime, deps?.semanticIndex);
+  const semanticIndex = createWorldSemanticIndex(ctx, deps?.semanticIndex);
   let semanticReady = false;
 
   try {
@@ -668,34 +631,42 @@ export const searchWorldItems = async (
       error instanceof Error ? error.message : "semantic provider unavailable";
 
     if (strategy === "semantic") {
-      return worldSearchUnavailable(
-        "find",
+      throw new ProviderUnavailableError(
+        "UNAVAILABLE",
         "世界信息语义检索当前不可用",
         `请检查 OPENAI_API_KEY、LanceDB 依赖和 embedding 服务状态。底层错误: ${message}`,
       );
     }
 
-    return worldKeywordFallback(
-      keywordResults.map((row) => toWorldSearchResult(row)),
-      "世界信息语义检索当前不可用，已降级为关键词检索",
-      `请检查 OPENAI_API_KEY、LanceDB 依赖和 embedding 服务状态。底层错误: ${message}`,
-    );
+    return {
+      strategy: "keyword",
+      degraded: true,
+      results: keywordResults.map((row) => toWorldSearchResult(row)),
+      notice: {
+        message: "世界信息语义检索当前不可用，已降级为关键词检索",
+        hint: `请检查 OPENAI_API_KEY、LanceDB 依赖和 embedding 服务状态。底层错误: ${message}`,
+      },
+    };
   }
 
   if (!semanticReady) {
     if (strategy === "semantic") {
-      return worldSearchUnavailable(
-        "find",
+      throw new ProviderUnavailableError(
+        "UNAVAILABLE",
         "世界信息语义索引尚未准备好",
         "先执行 `pin world index refresh --all --json` 建立语义索引",
       );
     }
 
-    return worldKeywordFallback(
-      keywordResults.map((row) => toWorldSearchResult(row)),
-      "语义索引尚未接入，当前已降级为关键词检索",
-      "先执行 `pin world index refresh --all --json` 建立语义索引",
-    );
+    return {
+      strategy: "keyword",
+      degraded: true,
+      results: keywordResults.map((row) => toWorldSearchResult(row)),
+      notice: {
+        message: "语义索引尚未接入，当前已降级为关键词检索",
+        hint: "先执行 `pin world index refresh --all --json` 建立语义索引",
+      },
+    };
   }
 
   let semanticItems: Array<{ row: WorldItemRecord; score: number }> = [];
@@ -719,32 +690,33 @@ export const searchWorldItems = async (
       error instanceof Error ? error.message : "semantic provider unavailable";
 
     if (strategy === "semantic") {
-      return worldSearchUnavailable(
-        "find",
+      throw new ProviderUnavailableError(
+        "UNAVAILABLE",
         "世界信息语义检索当前不可用",
         `请检查 OPENAI_API_KEY 和 embedding 服务状态。底层错误: ${message}`,
       );
     }
 
-    return worldKeywordFallback(
-      keywordResults.map((row) => toWorldSearchResult(row)),
-      "世界信息语义检索当前不可用，已降级为关键词检索",
-      `请检查 OPENAI_API_KEY 和 embedding 服务状态。底层错误: ${message}`,
-    );
+    return {
+      strategy: "keyword",
+      degraded: true,
+      results: keywordResults.map((row) => toWorldSearchResult(row)),
+      notice: {
+        message: "世界信息语义检索当前不可用，已降级为关键词检索",
+        hint: `请检查 OPENAI_API_KEY 和 embedding 服务状态。底层错误: ${message}`,
+      },
+    };
   }
 
   if (strategy === "semantic") {
     return {
-      exitCode: 0,
-      stdout: okEnvelope("world", "find", {
-        strategy: "semantic",
-        degraded: false,
-        results: semanticItems
-          .slice(0, limit)
-          .map(({ row, score }) =>
-            toWorldSearchResult(row, score, "semantic"),
-          ),
-      }),
+      strategy: "semantic",
+      degraded: false,
+      results: semanticItems
+        .slice(0, limit)
+        .map(({ row, score }) =>
+          toWorldSearchResult(row, score, "semantic"),
+        ),
     };
   }
 
@@ -753,33 +725,30 @@ export const searchWorldItems = async (
   const keywordMap = new Map(keywordResults.map((row) => [row.id, row]));
 
   return {
-    exitCode: 0,
-    stdout: okEnvelope("world", "find", {
-      strategy: "hybrid",
-      degraded: false,
-      results: fused
-        .map((item) => {
-          const semantic = semanticMap.get(item.id);
-          if (semantic) {
-            return toWorldSearchResult(
-              semantic.row,
-              item.score,
-              item.reason === "keyword" ? "semantic" : item.reason,
-            );
-          }
+    strategy: "hybrid",
+    degraded: false,
+    results: fused
+      .map((item) => {
+        const semantic = semanticMap.get(item.id);
+        if (semantic) {
+          return toWorldSearchResult(
+            semantic.row,
+            item.score,
+            item.reason === "keyword" ? "semantic" : item.reason,
+          );
+        }
 
-          const keyword = keywordMap.get(item.id);
-          return keyword
-            ? toWorldSearchResult(keyword, item.score, item.reason)
-            : null;
-        })
-        .filter((item): item is Record<string, unknown> => item !== null),
-    }),
+        const keyword = keywordMap.get(item.id);
+        return keyword
+          ? toWorldSearchResult(keyword, item.score, item.reason)
+          : null;
+      })
+      .filter((item): item is Record<string, unknown> => item !== null),
   };
 };
 
 export const listWorldItems = async (
-  runtime: CliRuntimeInput,
+  ctx: CoreContext,
   input: {
     limit?: string;
     query?: string;
@@ -789,9 +758,9 @@ export const listWorldItems = async (
     afterUpdatedAt?: string;
     full?: boolean;
   },
-) => {
-  const repository = await createRepository(runtime);
-  const limit = Number.parseInt(input.limit ?? "20", 10);
+): Promise<Array<Record<string, unknown> | WorldItemRecord>> => {
+  const repository = await createRepository(ctx);
+  const limit = parseOptionalInt(input.limit, 20);
   const items = await repository.list({
     limit,
     query: input.query,
@@ -801,71 +770,49 @@ export const listWorldItems = async (
     afterUpdatedAt: input.afterUpdatedAt,
   });
 
-  return {
-    exitCode: 0,
-    stdout: okEnvelope(
-      "world",
-      "list",
-      input.full ? items : items.map((item) => toSimpleWorldItem(item)),
-    ),
-  } satisfies RunCliResult;
+  return input.full ? items : items.map((item) => toSimpleWorldItem(item));
 };
 
 export const getWorldItem = async (
-  runtime: CliRuntimeInput,
+  ctx: CoreContext,
   id: string,
   full = false,
-) => {
-  const repository = await createRepository(runtime);
+): Promise<Record<string, unknown> | WorldItemRecord> => {
+  const repository = await createRepository(ctx);
   const item = await repository.getById(id);
 
   if (!item) {
-    return {
-      exitCode: 1,
-      stdout: errorEnvelope(
-        "world",
-        "get",
-        ErrorType.NOT_FOUND,
-        "NOT_FOUND",
-        `World item ${id} not found`,
-      ),
-    } satisfies RunCliResult;
+    throw new NotFoundError(
+      "NOT_FOUND",
+      `World item ${id} not found`,
+    );
   }
 
-  return {
-    exitCode: 0,
-    stdout: okEnvelope("world", "get", full ? item : toSimpleWorldItem(item)),
-  } satisfies RunCliResult;
+  return full ? item : toSimpleWorldItem(item);
 };
 
 export const shortlistWorldItems = async (
-  runtime: CliRuntimeInput,
+  ctx: CoreContext,
   input: {
     profileId: string;
     limit?: string;
   },
-) => {
-  const profileRepository = await createProfileRepository(runtime);
+): Promise<Array<Record<string, unknown>>> => {
+  const profileRepository = await createProfileRepository(ctx);
   const profile = await profileRepository.getById(input.profileId);
   if (!profile) {
-    return {
-      exitCode: 1,
-      stdout: errorEnvelope(
-        "world",
-        "shortlist",
-        ErrorType.NOT_FOUND,
-        "NOT_FOUND",
-        `Profile ${input.profileId} not found`,
-        "run `pin profile list` to see available profiles",
-      ),
-    } satisfies RunCliResult;
+    throw new NotFoundError(
+      "NOT_FOUND",
+      `Profile ${input.profileId} not found`,
+      "run `pin profile list` to see available profiles",
+    );
   }
 
-  const repository = await createRepository(runtime);
+  const repository = await createRepository(ctx);
   const interests = await profileRepository.listInterests(input.profileId, {
     limit: 100,
   });
-  const limit = Number.parseInt(input.limit ?? "20", 10);
+  const limit = parseOptionalInt(input.limit, 20);
   const items = await repository.list({
     limit: Math.max(Number.isNaN(limit) ? 20 : limit * 5, 20),
   });
@@ -891,29 +838,22 @@ export const shortlistWorldItems = async (
     })
     .slice(0, Number.isNaN(limit) ? 20 : limit);
 
-  return {
-    exitCode: 0,
-    stdout: okEnvelope("world", "shortlist", shortlisted),
-  } satisfies RunCliResult;
+  return shortlisted;
 };
 
 export const buildWorldContext = async (
-  runtime: CliRuntimeInput,
+  ctx: CoreContext,
   input: {
     ids: string;
     full?: boolean;
   },
-) => {
-  const repository = await createRepository(runtime);
+): Promise<Array<Record<string, unknown> | WorldItemRecord>> => {
+  const repository = await createRepository(ctx);
   const ids = input.ids
     .split(",")
     .map((id) => id.trim())
     .filter((id) => id.length > 0);
   const items = await repository.listByIds(ids);
-  const context = input.full ? items : items.map((item) => toSimpleWorldItem(item));
 
-  return {
-    exitCode: 0,
-    stdout: okEnvelope("world", "context", context),
-  } satisfies RunCliResult;
+  return input.full ? items : items.map((item) => toSimpleWorldItem(item));
 };

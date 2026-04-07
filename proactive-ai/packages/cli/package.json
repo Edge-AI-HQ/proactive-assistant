@@ -19,6 +19,7 @@
     }
   },
   "dependencies": {
+    "@pin-ai/core": "*",
     "@lancedb/lancedb": "^0.27.2",
     "better-sqlite3": "^12.8.0",
     "commander": "^12.1.0",
@@ -27,7 +28,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "postbuild": "rm -rf ../proactive-ai/skills && cp -r skills ../proactive-ai/skills",
+    "postbuild": "rm -rf ../../skills && cp -r skills ../../skills",
     "type-check": "tsc --noEmit",
     "test": "find src -name '*.test.ts' -print0 | xargs -0 node --import tsx --test",
 "dev": "node --import tsx src/bin.ts",

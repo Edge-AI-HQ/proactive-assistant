@@ -32,8 +32,11 @@
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run build"
   },
+  "dependencies": {
+    "@pin-ai/core": "file:./packages/core",
+    "@pin-ai/pin-cli": "file:./packages/cli"
+  },
   "peerDependencies": {
-    "@pin-ai/pin-cli": ">=0.1.0",
     "openclaw": ">=2026.0.0"
   },
   "peerDependenciesMeta": {
