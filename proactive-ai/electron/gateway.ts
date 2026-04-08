@@ -195,11 +195,10 @@ export async function startGateway(
 ): Promise<GatewayHandle> {
   const port = await findAvailablePort();
   const token = randomUUID();
-
-  // Make plugin bins (e.g. `pin`) available on PATH so OpenClaw's
-  // hasBinary() finds them and agents can run `pin ...` directly.
+  const preferredPinBinDir = join(pluginDir, 'node_modules', '.bin');
   const pluginBinDir = join(pluginDir, 'bin');
-  const pathWithPluginBins = [pluginBinDir, process.env.PATH ?? '']
+  const pathWithPluginBins = [preferredPinBinDir, pluginBinDir, process.env.PATH ?? '']
+    .filter((dir, index, dirs) => dir && (dir === process.env.PATH || existsSync(dir)) && dirs.indexOf(dir) === index)
     .filter(Boolean)
     .join(':');
 

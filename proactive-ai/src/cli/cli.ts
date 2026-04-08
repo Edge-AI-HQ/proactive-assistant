@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { CommanderError } from "commander";
+import { homedir } from "node:os";
 
 import { registerFeedbackCommands } from "./domains/feedback/register.js";
 import { registerIngestCommands } from "./domains/ingest/register.js";
@@ -56,7 +57,7 @@ export async function runCli(
   const resultRef: ResultRef = { current: null };
   const runtime: CliRuntimeInput = {
     env: { ...process.env, ...runtimeOverride?.env },
-    homeDir: runtimeOverride?.homeDir || (await import("node:os")).homedir(),
+    homeDir: runtimeOverride?.homeDir || homedir(),
   };
   const program = createProgram(runtime, resultRef);
 
