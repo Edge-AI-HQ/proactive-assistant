@@ -3,16 +3,24 @@
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { runPinCli } = vi.hoisted(() => ({
-  runPinCli: vi.fn(),
+const { logFeedback } = vi.hoisted(() => ({
+  logFeedback: vi.fn(),
 }));
 
-vi.mock("../../pipeline/pin-cli.js", () => ({
-  runPinCli,
-}));
+vi.mock("@pin-ai/core", async () => {
+  const actual = await vi.importActual<typeof import("@pin-ai/core")>("@pin-ai/core");
+  return {
+    ...actual,
+    feedback: {
+      ...actual.feedback,
+      logFeedback,
+    },
+  };
+});
 
 import { handleFeedback } from "./feedback.js";
 import type { RouteContext } from "../../types/server.js";
+import { ValidationError } from "@pin-ai/core";
 
 function createRequest(method: string, body: Record<string, unknown>) {
   const req = Readable.from([Buffer.from(JSON.stringify(body))]) as Readable & {
@@ -74,20 +82,29 @@ describe("handleFeedback", () => {
     expect(handled).toBe(true);
     expect(response.statusCode).toBe(400);
     expect(response.json).toEqual({ error: "Missing kind" });
-    expect(runPinCli).not.toHaveBeenCalled();
+    expect(logFeedback).not.toHaveBeenCalled();
   });
 
-  it("passes through the full feedback payload to pin-cli", async () => {
-    runPinCli.mockResolvedValue({
-      ok: true,
-      data: { id: "fe_123" },
-      error: null,
-      meta: {
-        domain: "feedback",
-        command: "log",
-        requestId: "req_1",
-        timestamp: "2026-04-07T10:00:00.000Z",
+  it("passes through the full feedback payload to core feedback service", async () => {
+    logFeedback.mockResolvedValue({
+      id: "fe_123",
+      kind: "card_action",
+      action: "confirm",
+      pushId: "push_123",
+      intentCardId: "card_1_1",
+      conversationId: "conv_1",
+      messageId: "msg_1",
+      source: "user_direct",
+      basket: "work",
+      channel: "web",
+      value: "accepted",
+      text: "Ship it",
+      metadata: {
+        runId: "run_123",
+        intentKey: "work:review-queue-with-alex",
+        surface: "now_feed",
       },
+      createdAt: "2026-04-07T10:00:00.000Z",
     });
 
     const { ctx, response } = createContext("POST", {
@@ -111,51 +128,64 @@ describe("handleFeedback", () => {
 
     await handleFeedback(ctx);
 
-    expect(runPinCli).toHaveBeenCalledWith([
-      "feedback",
-      "log",
-      "--kind",
-      "card_action",
-      "--action",
-      "confirm",
-      "--push-id",
-      "push_123",
-      "--intent-card-id",
-      "card_1_1",
-      "--conversation-id",
-      "conv_1",
-      "--message-id",
-      "msg_1",
-      "--source",
-      "user_direct",
-      "--basket",
-      "work",
-      "--channel",
-      "web",
-      "--value",
-      "accepted",
-      "--text",
-      "Ship it",
-      "--at",
-      "2026-04-07T10:00:00.000Z",
-      "--metadata",
-      "{\"runId\":\"run_123\",\"intentKey\":\"work:review-queue-with-alex\",\"surface\":\"now_feed\"}",
-    ]);
+    expect(logFeedback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: process.env,
+      }),
+      {
+        kind: "card_action",
+        action: "confirm",
+        pushId: "push_123",
+        intentCardId: "card_1_1",
+        conversationId: "conv_1",
+        messageId: "msg_1",
+        source: "user_direct",
+        basket: "work",
+        channel: "web",
+        value: "accepted",
+        text: "Ship it",
+        at: "2026-04-07T10:00:00.000Z",
+        metadata: {
+          runId: "run_123",
+          intentKey: "work:review-queue-with-alex",
+          surface: "now_feed",
+        },
+      },
+    );
     expect(response.statusCode).toBe(200);
-    expect(response.json).toEqual({ ok: true, data: { id: "fe_123" } });
+    expect(response.json).toEqual({
+      ok: true,
+      data: {
+        id: "fe_123",
+        kind: "card_action",
+        action: "confirm",
+        pushId: "push_123",
+        intentCardId: "card_1_1",
+        conversationId: "conv_1",
+        messageId: "msg_1",
+        source: "user_direct",
+        basket: "work",
+        channel: "web",
+        value: "accepted",
+        text: "Ship it",
+        metadata: {
+          runId: "run_123",
+          intentKey: "work:review-queue-with-alex",
+          surface: "now_feed",
+        },
+        createdAt: "2026-04-07T10:00:00.000Z",
+      },
+    });
   });
 
   it("uses user_direct as the default source", async () => {
-    runPinCli.mockResolvedValue({
-      ok: true,
-      data: { id: "fe_456" },
-      error: null,
-      meta: {
-        domain: "feedback",
-        command: "log",
-        requestId: "req_2",
-        timestamp: "2026-04-07T11:00:00.000Z",
-      },
+    logFeedback.mockResolvedValue({
+      id: "fe_456",
+      kind: "dismiss",
+      intentCardId: "card_2_1",
+      source: "user_direct",
+      metadata: {},
+      createdAt: "2026-04-07T11:00:00.000Z",
     });
 
     const { ctx } = createContext("POST", {
@@ -165,35 +195,24 @@ describe("handleFeedback", () => {
 
     await handleFeedback(ctx);
 
-    expect(runPinCli).toHaveBeenCalledWith([
-      "feedback",
-      "log",
-      "--kind",
-      "dismiss",
-      "--intent-card-id",
-      "card_2_1",
-      "--source",
-      "user_direct",
-    ]);
+    expect(logFeedback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        kind: "dismiss",
+        intentCardId: "card_2_1",
+        source: "user_direct",
+      }),
+    );
   });
 
-  it("normalizes downstream cli errors", async () => {
-    runPinCli.mockResolvedValue({
-      ok: false,
-      data: null,
-      error: {
-        type: "validation",
-        code: "INVALID_ARGUMENT",
-        message: "Invalid --kind",
-        hint: "check `pin feedback log --help`",
-      },
-      meta: {
-        domain: "feedback",
-        command: "log",
-        requestId: "req_3",
-        timestamp: "2026-04-07T12:00:00.000Z",
-      },
-    });
+  it("maps core validation errors to 400 responses", async () => {
+    logFeedback.mockRejectedValue(
+      new ValidationError(
+        "INVALID_ARGUMENT",
+        "Invalid --kind",
+        "check `pin feedback log --help`",
+      ),
+    );
 
     const { ctx, response } = createContext("POST", {
       kind: "invalid_kind",

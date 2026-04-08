@@ -24,6 +24,11 @@ import {
   formatRecentFeedbackSummary,
   loadRecentFeedbackSummary,
 } from './feedback-summary.js';
+import {
+  detectAgentErrorInMessages,
+  parseAgentJson,
+  parseAgentJsonOrThrow,
+} from './agent-output.js';
 import type {
   IntentCard,
   PlannerOutput,
@@ -108,9 +113,9 @@ export async function runPipeline(
     });
 
     const planText = await runAgent(api, `plan:${i}`, plannerPrompt, 'Generate an intent card plan based on the user\'s current context.', opts.agentTimeoutMs);
-    const plan = parseJsonFromAgent<PlannerOutput>(planText);
+    const plan = parseAgentJsonOrThrow<PlannerOutput>(planText, `plan:${i}`);
 
-    if (!plan || !plan.intentsToGenerate?.length) {
+    if (!plan.intentsToGenerate?.length) {
       api.logger.warn(`Planner iteration ${i} produced no intents, stopping`);
       break;
     }
@@ -129,9 +134,9 @@ export async function runPipeline(
     });
 
     const cardsText = await runAgent(api, `generate:${i}`, generatorPrompt, 'Generate intent cards based on the plan.', opts.agentTimeoutMs);
-    const generated = parseJsonFromAgent<GeneratorOutput>(cardsText);
+    const generated = parseAgentJsonOrThrow<GeneratorOutput>(cardsText, `generate:${i}`);
 
-    if (!generated?.cards?.length) {
+    if (!generated.cards?.length) {
       api.logger.warn(`Generator iteration ${i} produced no cards, stopping`);
       break;
     }
@@ -150,7 +155,7 @@ export async function runPipeline(
     });
 
     const evalText = await runAgent(api, `evaluate:${i}`, evaluatorPrompt, 'Evaluate the generated intent cards for quality.', opts.agentTimeoutMs);
-    const evaluation = parseJsonFromAgent<EvaluatorOutput>(evalText);
+    const evaluation = parseAgentJson<EvaluatorOutput>(evalText);
 
     if (!evaluation) {
       api.logger.warn(`Evaluator iteration ${i} produced no output, using cards as-is`);
@@ -352,6 +357,10 @@ async function runAgent(
 
   // Extract the agent's final text output
   const messages = await api.runtime.subagent.getSessionMessages({ sessionKey, limit: 10 });
+  const messageError = detectAgentErrorInMessages(messages.messages);
+  if (messageError) {
+    throw new Error(`Agent ${tag} failed: ${messageError}`);
+  }
   return extractAgentText(messages);
 }
 
@@ -374,16 +383,3 @@ function extractAgentText(messages: { messages: unknown[] }): string {
   return '';
 }
 
-function parseJsonFromAgent<T>(text: string): T | null {
-  if (!text) return null;
-
-  // Extract JSON from markdown code fence
-  const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
-  const jsonStr = fenceMatch ? fenceMatch[1]! : text;
-
-  try {
-    return JSON.parse(jsonStr.trim()) as T;
-  } catch {
-    return null;
-  }
-}

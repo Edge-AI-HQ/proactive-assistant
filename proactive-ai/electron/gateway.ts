@@ -250,7 +250,7 @@ function pollHealth(port: number, token: string): Promise<void> {
       }
 
       const req = http.get(
-        `http://127.0.0.1:${port}/proactive-ai/api/health`,
+        `http://127.0.0.1:${port}/proactive-ai/rpc/health`,
         {
           headers: { Authorization: `Bearer ${token}` },
           timeout: 2_000,

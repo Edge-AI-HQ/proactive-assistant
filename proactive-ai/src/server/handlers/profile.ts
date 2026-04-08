@@ -1,18 +1,34 @@
+import { homedir } from 'node:os';
+import { profile as coreProfile, CoreError } from '@pin-ai/core';
 import type { RouteContext } from '../../types/server.js';
 import { json, readBody } from '../http-utils.js';
-import { pinCli } from '../../pipeline/pin-cli.js';
 
-export async function handleProfile(ctx: RouteContext): Promise<boolean> {
-  const { subpath, req, res } = ctx;
+const ctx = { env: process.env, homeDir: homedir() };
+
+function coreErrorToHttp(res: import('node:http').ServerResponse, err: unknown): void {
+  if (err instanceof CoreError) {
+    const status = err.type === 'not_found' ? 404
+                 : err.type === 'validation' ? 400
+                 : err.type === 'conflict' ? 409
+                 : 500;
+    json(res, status, { ok: false, error: { type: err.type, code: err.code, message: err.message, hint: err.hint } });
+  } else {
+    const msg = err instanceof Error ? err.message : String(err);
+    json(res, 500, { error: msg });
+  }
+}
+
+export async function handleProfile(routeCtx: RouteContext): Promise<boolean> {
+  const { subpath, req, res } = routeCtx;
   if (!subpath.startsWith('/profile/')) return false;
 
-  const route = subpath.slice('/profile'.length); // e.g. '/goals', '/goals/close'
+  const route = subpath.slice('/profile'.length);
 
   try {
     // GET /profile/goals
     if (route === '/goals' && req.method === 'GET') {
-      const result = await pinCli('profile goals list');
-      json(res, 200, { ok: true, goals: result.ok ? result.data : [] });
+      const goals = await coreProfile.listGoals(ctx);
+      json(res, 200, { ok: true, goals });
       return true;
     }
 
@@ -23,8 +39,8 @@ export async function handleProfile(ctx: RouteContext): Promise<boolean> {
       const title = String(body['title'] ?? '').trim();
       const priority = String(body['priority'] ?? 'medium').trim();
       if (!key || !title) { json(res, 400, { error: 'Missing key or title' }); return true; }
-      const result = await pinCli(`profile goals upsert --key ${key} --title "${title}" --priority ${priority}`);
-      json(res, result.ok ? 200 : 400, result.ok ? { ok: true, data: result.data } : { ok: false, error: result.error });
+      const goals = await coreProfile.upsertGoal(ctx, { key, title, priority });
+      json(res, 200, { ok: true, data: goals });
       return true;
     }
 
@@ -33,13 +49,12 @@ export async function handleProfile(ctx: RouteContext): Promise<boolean> {
       const body = await readBody(req);
       const key = String(body['key'] ?? '').trim();
       if (!key) { json(res, 400, { error: 'Missing key' }); return true; }
-      const result = await pinCli(`profile goals close --key ${key}`);
-      json(res, result.ok ? 200 : 400, result.ok ? { ok: true, data: result.data } : { ok: false, error: result.error });
+      const goals = await coreProfile.closeGoal(ctx, key);
+      json(res, 200, { ok: true, data: goals });
       return true;
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    json(res, 500, { error: msg });
+    coreErrorToHttp(res, err);
     return true;
   }
 

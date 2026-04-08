@@ -1,6 +1,7 @@
+import { homedir } from 'node:os';
+import { feedback as coreFeedback, CoreError } from '@pin-ai/core';
 import type { RouteContext } from '../../types/server.js';
 import { json, readBody } from '../http-utils.js';
-import { runPinCli } from '../../pipeline/pin-cli.js';
 
 const asTrimmedString = (value: unknown): string | null => {
   if (typeof value === 'string') {
@@ -15,67 +16,90 @@ const asTrimmedString = (value: unknown): string | null => {
   return null;
 };
 
-const pushFlag = (args: string[], flag: string, value: unknown): void => {
-  const normalized = asTrimmedString(value);
-  if (normalized) {
-    args.push(flag, normalized);
+const ctx = { env: process.env, homeDir: homedir() };
+
+const coreErrorToHttp = (
+  res: import('node:http').ServerResponse,
+  err: unknown,
+): void => {
+  if (err instanceof CoreError) {
+    const status = err.type === 'not_found'
+      ? 404
+      : err.type === 'validation'
+        ? 400
+        : err.type === 'conflict'
+          ? 409
+          : 500;
+
+    json(res, status, {
+      ok: false,
+      error: {
+        type: err.type,
+        code: err.code,
+        message: err.message,
+        hint: err.hint,
+      },
+    });
+    return;
   }
+
+  const msg = err instanceof Error ? err.message : String(err);
+  json(res, 500, { error: msg });
 };
 
-const stringifyMetadata = (value: unknown): string | null => {
+const normalizeMetadata = (
+  value: unknown,
+): string | Record<string, unknown> | undefined => {
   if (typeof value === 'string') {
     const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : null;
+    return trimmed.length > 0 ? trimmed : undefined;
   }
 
   if (value && typeof value === 'object' && !Array.isArray(value)) {
-    return JSON.stringify(value);
+    return value as Record<string, unknown>;
   }
 
-  return null;
+  return undefined;
 };
 
-export function buildFeedbackLogArgs(body: Record<string, unknown>): string[] {
+const buildFeedbackInput = (body: Record<string, unknown>) => {
   const kind = asTrimmedString(body['kind']);
   if (!kind) {
     throw new Error('Missing kind');
   }
 
-  const args = ['feedback', 'log', '--kind', kind];
-  pushFlag(args, '--action', body['action']);
-  pushFlag(args, '--push-id', body['pushId']);
-  pushFlag(args, '--intent-card-id', body['intentCardId']);
-  pushFlag(args, '--conversation-id', body['conversationId']);
-  pushFlag(args, '--message-id', body['messageId']);
-  pushFlag(args, '--source', body['source']);
-  if (!args.includes('--source')) {
-    args.push('--source', 'user_direct');
-  }
-  pushFlag(args, '--basket', body['basket']);
-  pushFlag(args, '--channel', body['channel']);
-  pushFlag(args, '--value', body['value']);
-  pushFlag(args, '--text', body['text']);
-  pushFlag(args, '--at', body['at']);
+  return {
+    kind,
+    action: asTrimmedString(body['action']) ?? undefined,
+    pushId: asTrimmedString(body['pushId']) ?? undefined,
+    intentCardId: asTrimmedString(body['intentCardId']) ?? undefined,
+    conversationId: asTrimmedString(body['conversationId']) ?? undefined,
+    messageId: asTrimmedString(body['messageId']) ?? undefined,
+    source: asTrimmedString(body['source']) ?? 'user_direct',
+    basket: asTrimmedString(body['basket']) ?? undefined,
+    channel: asTrimmedString(body['channel']) ?? undefined,
+    value: asTrimmedString(body['value']) ?? undefined,
+    text: asTrimmedString(body['text']) ?? undefined,
+    metadata: normalizeMetadata(body['metadata']),
+    at: asTrimmedString(body['at']) ?? undefined,
+  };
+};
 
-  const metadata = stringifyMetadata(body['metadata']);
-  if (metadata) {
-    args.push('--metadata', metadata);
-  }
-
-  return args;
-}
-
-export async function handleFeedback(ctx: RouteContext): Promise<boolean> {
-  if (ctx.subpath !== '/feedback' || ctx.req.method !== 'POST') return false;
+export async function handleFeedback(routeCtx: RouteContext): Promise<boolean> {
+  if (routeCtx.subpath !== '/feedback' || routeCtx.req.method !== 'POST') return false;
 
   try {
-    const body = await readBody(ctx.req);
-    const args = buildFeedbackLogArgs(body);
-    const result = await runPinCli(args);
-    json(ctx.res, result.ok ? 200 : 400, result.ok ? { ok: true, data: result.data } : { ok: false, error: result.error });
+    const body = await readBody(routeCtx.req);
+    const input = buildFeedbackInput(body);
+    const record = await coreFeedback.logFeedback(ctx, input);
+
+    json(routeCtx.res, 200, { ok: true, data: record });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    json(ctx.res, msg === 'Missing kind' ? 400 : 500, { error: msg });
+    if (err instanceof Error && err.message === 'Missing kind') {
+      json(routeCtx.res, 400, { error: err.message });
+    } else {
+      coreErrorToHttp(routeCtx.res, err);
+    }
   }
   return true;
 }

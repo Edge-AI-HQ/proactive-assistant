@@ -4,7 +4,7 @@
   "description": "Proactive AI — macOS desktop app",
   "main": "dist/main.js",
   "scripts": {
-    "setup": "cd ../.. && npm install --workspace pin-cli && npm run build --workspace pin-cli && npm link --workspace pin-cli && cd proactive-ai && npm install --legacy-peer-deps && cd electron && npm install",
+    "setup": "cd ../.. && npm install --workspace @pin-ai/core && npm run build --workspace @pin-ai/core && npm install --workspace @pin-ai/pin-cli && npm run build --workspace @pin-ai/pin-cli && cd proactive-ai && npm install --legacy-peer-deps && cd electron && npm install",
     "build": "tsc",
     "dev": "npm run build:ui --prefix .. && tsc && env -u ELECTRON_RUN_AS_NODE electron .",
     "start": "env -u ELECTRON_RUN_AS_NODE electron .",

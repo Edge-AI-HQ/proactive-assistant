@@ -18,7 +18,9 @@ export function apiFetch(path: string, init?: RequestInit): Promise<Response> {
     ...getAuthHeaders(),
     ...(init?.headers as Record<string, string> ?? {}),
   };
-  return fetch(`${API_ROOT}${path}`, { ...init, headers });
+  // Map legacy /api/ paths to /rpc/ (server routes live under /proactive-ai/rpc/*)
+  const rpcPath = path.replace(/^\/api\//, '/rpc/');
+  return fetch(`${API_ROOT}${rpcPath}`, { ...init, headers });
 }
 
 export function apiRpcFetch(path: string, init?: RequestInit): Promise<Response> {

@@ -20,6 +20,7 @@ export interface ComposioState {
   loadingConns: boolean;
   loadStatus: () => Promise<void>;
   loadConnections: () => Promise<void>;
+  saveApiKey: (key: string) => Promise<{ ok: boolean; error?: string }>;
   connectToolkit: (toolkit: string) => Promise<{ ok: boolean; redirectUrl?: string; error?: string }>;
   waitForToolkit: (toolkit: string) => Promise<void>;
 }
@@ -61,6 +62,21 @@ export function useComposio(): ComposioState {
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
 
+  const saveApiKey = useCallback(async (key: string): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await apiRpcPost("/composio/setup", { key });
+      const data = await res.json();
+      if (!res.ok) {
+        return { ok: false, error: data.error?.message ?? data.error ?? "Invalid key" };
+      }
+      // Reload status + connections after key saved
+      await loadStatus();
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }, [loadStatus]);
+
   const connectToolkit = useCallback(async (toolkit: string): Promise<{ ok: boolean; redirectUrl?: string; error?: string }> => {
     try {
       const res = await apiRpcPost("/composio/connect", { toolkit });
@@ -85,5 +101,5 @@ export function useComposio(): ComposioState {
     await loadConnections();
   }, [loadConnections]);
 
-  return { keyStatus, connections, statusLoading, loadingConns, loadStatus, loadConnections, connectToolkit, waitForToolkit };
+  return { keyStatus, connections, statusLoading, loadingConns, loadStatus, loadConnections, saveApiKey, connectToolkit, waitForToolkit };
 }
