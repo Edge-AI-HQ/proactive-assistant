@@ -191,10 +191,17 @@ function resolveBundledRuntime(): OpenclawBin | null {
  */
 export async function startGateway(
   bin: OpenclawBin,
-  _pluginDir: string,
+  pluginDir: string,
 ): Promise<GatewayHandle> {
   const port = await findAvailablePort();
   const token = randomUUID();
+
+  // Make plugin bins (e.g. `pin`) available on PATH so OpenClaw's
+  // hasBinary() finds them and agents can run `pin ...` directly.
+  const pluginBinDir = join(pluginDir, 'bin');
+  const pathWithPluginBins = [pluginBinDir, process.env.PATH ?? '']
+    .filter(Boolean)
+    .join(':');
 
   // Spawn: node <openclaw-script> --profile proactive-ai gateway run ...
   const child = spawn(
@@ -214,6 +221,7 @@ export async function startGateway(
       env: {
         ...process.env,
         ...getGatewayEnvFromLocalSettings(),
+        PATH: pathWithPluginBins,
         // Ensure child processes don't inherit ELECTRON_RUN_AS_NODE
         ELECTRON_RUN_AS_NODE: undefined,
       },

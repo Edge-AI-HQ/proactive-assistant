@@ -145,8 +145,8 @@ async function launchGatewayAndMainWindow(openclawBin: OpenclawBin): Promise<voi
   updateSplash('Starting AI engine...');
   gateway = await startGateway(openclawBin, PLUGIN_DIR);
 
-  console.log(`[main] Gateway ready at ${gateway.url}`);
-  console.log(`[main] Token: ${gateway.token.slice(0, 8)}...`);
+  console.log(`[main] Gateway ready at ${gateway.url}?token=${gateway.token}`);
+  console.log(`[main] Token: ${gateway.token}`);
   console.log(`[main] UI: ${gateway.url}/proactive-ai`);
 
   mainWindow = createMainWindow(gateway.url, gateway.token);

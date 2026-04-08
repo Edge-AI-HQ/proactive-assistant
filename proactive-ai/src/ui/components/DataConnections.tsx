@@ -98,9 +98,10 @@ interface DataConnectionsProps {
 }
 
 export default function DataConnections({ composio }: DataConnectionsProps) {
-  const { keyStatus, connections, statusLoading, saveApiKey, connectToolkit, waitForToolkit, loadConnections } = composio;
+  const { keyStatus, connections, statusLoading, saveApiKey, connectToolkit, disconnectToolkit, waitForToolkit } = composio;
 
   const [connectingToolkit, setConnectingToolkit] = useState<string | null>(null);
+  const [disconnectingToolkit, setDisconnectingToolkit] = useState<string | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState("");
@@ -133,32 +134,39 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
     setConnectError(null);
     try {
       const result = await connectToolkit(toolkit);
-      if (result.ok && result.redirectUrl) {
-        const popup = window.open(result.redirectUrl, "_blank", "noopener,noreferrer");
-        const waitForPopupClose = new Promise<"closed">((resolve) => {
-          if (!popup) {
-            resolve("closed");
-            return;
-          }
-
-          const intervalId = window.setInterval(() => {
-            if (popup.closed) {
-              window.clearInterval(intervalId);
-              resolve("closed");
-            }
-          }, 250);
-        });
-
-        await Promise.race([
-          waitForToolkit(toolkit).then(() => "connected" as const),
-          waitForPopupClose,
-        ]);
-        await loadConnections();
-      } else if (!result.ok) {
+      if (!result.ok) {
         setConnectError(result.error ?? "Connect failed");
+        return;
       }
+
+      // Already active (e.g. re-connecting an existing integration)
+      if (!result.redirectUrl) return;
+
+      // Open OAuth in the system browser (uses the user's existing sessions)
+      window.open(result.redirectUrl, "_blank");
+
+      // Wait for backend to confirm the connection is ACTIVE (polls up to 120s)
+      const { connected } = await waitForToolkit(toolkit);
+      if (!connected) {
+        setConnectError("Connection not confirmed — please try again");
+      }
+    } catch (err) {
+      setConnectError(err instanceof Error ? err.message : "Unexpected error");
     } finally {
       setConnectingToolkit(null);
+    }
+  };
+
+  const handleDisconnect = async (toolkit: string) => {
+    setDisconnectingToolkit(toolkit);
+    setConnectError(null);
+    try {
+      const result = await disconnectToolkit(toolkit);
+      if (!result.ok) {
+        setConnectError(result.error ?? "Disconnect failed");
+      }
+    } finally {
+      setDisconnectingToolkit(null);
     }
   };
 
@@ -207,11 +215,13 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                           const Icon = tk.icon;
                           const isConnected = connectedSet.has(tk.id);
                           const isConnecting = connectingToolkit === tk.id;
+                          const isDisconnecting = disconnectingToolkit === tk.id;
+                          const isBusy = !!connectingToolkit || !!disconnectingToolkit;
 
                           return (
                             <div
                               key={tk.id}
-                              className={`flex items-center gap-2.5 rounded-xl px-3 py-2.5 transition-colors ${
+                              className={`group flex items-center gap-2.5 rounded-xl px-3 py-2.5 transition-colors ${
                                 isConnected ? "bg-emerald-500/[0.06]" : "bg-foreground/[0.02]"
                               }`}
                             >
@@ -229,11 +239,24 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                 isConnected ? "bg-emerald-500" : "bg-foreground/10"
                               }`} />
                               {isConnected ? (
-                                <span className="text-[10px] font-medium text-emerald-600">Connected</span>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); handleDisconnect(tk.id); }}
+                                  disabled={isBusy}
+                                  className="text-[10px] font-medium rounded-lg px-2.5 py-0.5 transition-colors disabled:opacity-40 text-emerald-600 hover:text-red-500 hover:bg-red-500/[0.08]"
+                                >
+                                  {isDisconnecting ? (
+                                    <Loader2 size={10} className="animate-spin text-red-500" />
+                                  ) : (
+                                    <span>
+                                      <span className="group-hover:hidden">Connected</span>
+                                      <span className="hidden group-hover:inline">Disconnect</span>
+                                    </span>
+                                  )}
+                                </button>
                               ) : (
                                 <button
                                   onClick={(e) => { e.stopPropagation(); handleConnect(tk.id); }}
-                                  disabled={!!connectingToolkit}
+                                  disabled={isBusy}
                                   className="text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1] transition-colors disabled:opacity-40"
                                 >
                                   {isConnecting ? (
@@ -318,7 +341,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
       {connectingToolkit && (
         <div className="glass-card px-4 py-3 text-center">
           <p className="text-[11px] text-foreground/40 italic">
-            OAuth window opened — complete authorization, then wait...
+            Authorize in your browser — this will update automatically
           </p>
         </div>
       )}

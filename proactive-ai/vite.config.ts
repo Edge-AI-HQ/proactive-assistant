@@ -30,7 +30,7 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "./src/ui"),
-        "@shared": path.resolve(__dirname, "./src/types"),
+        "@shared": path.resolve(__dirname, "./src/shared"),
       },
       dedupe: [
         "react",

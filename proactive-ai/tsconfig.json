@@ -12,7 +12,7 @@
     "isolatedModules": true,
     "paths": {
       "@/*": ["./src/ui/*"],
-      "@shared/*": ["./src/types/*"]
+      "@shared/*": ["./src/shared/*"]
     }
   }
 }

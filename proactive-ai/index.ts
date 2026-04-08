@@ -1,24 +1,21 @@
 /**
  * OpenClaw Plugin: Proactive AI (v2)
  *
- * Registers:
- * 1. Skills (via openclaw.plugin.json) — pin-cli command reference for agents
- * 2. `/generate` command — manually trigger intent card generation
- * 3. HTTP routes on OpenClaw gateway — UI + API (no separate server)
+ * Thin entry point that wires engine logic to OpenClaw.
  */
 
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
-import { DEFAULT_CONFIG, type ProactiveAIConfig } from './src/config.js';
-import { shared } from './src/state.js';
-import { ensureDefaultProfile } from './src/profile-seed.js';
-import { runPipeline } from './src/pipeline/orchestrator.js';
-import { startAutoLoop } from './src/scheduler/auto-loop.js';
-import { createUiHandler } from './src/server/ui-route.js';
-import { createAssetsHandler } from './src/server/assets-route.js';
-import { createApiHandler } from './src/server/api-router.js';
-import { DEFAULT_GENERATION_LANGUAGE } from './src/types/generation-language.js';
+import { DEFAULT_CONFIG, type ProactiveAIConfig } from './src/engine/config.js';
+import { shared } from './src/engine/state.js';
+import { ensureDefaultProfile } from './src/engine/pipeline/profile-seed.js';
+import { runPipeline } from './src/engine/pipeline/orchestrator.js';
+import { startAutoLoop } from './src/engine/scheduler/auto-loop.js';
+import { createUiHandler } from './src/engine/server/ui-route.js';
+import { createAssetsHandler } from './src/engine/server/assets-route.js';
+import { createApiHandler } from './src/engine/server/api-router.js';
+import { DEFAULT_GENERATION_LANGUAGE } from './src/engine/generation-language.js';
 
 const pluginDir = dirname(fileURLToPath(import.meta.url));
 

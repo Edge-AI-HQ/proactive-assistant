@@ -19,10 +19,12 @@ export interface ComposioState {
   statusLoading: boolean;
   loadingConns: boolean;
   loadStatus: () => Promise<void>;
-  loadConnections: () => Promise<void>;
+  loadConnections: () => Promise<Connection[]>;
   saveApiKey: (key: string) => Promise<{ ok: boolean; error?: string }>;
   connectToolkit: (toolkit: string) => Promise<{ ok: boolean; redirectUrl?: string; error?: string }>;
-  waitForToolkit: (toolkit: string) => Promise<void>;
+  disconnectToolkit: (toolkit: string) => Promise<{ ok: boolean; error?: string }>;
+  waitForToolkit: (toolkit: string) => Promise<{ connected: boolean }>;
+  isToolkitConnected: (toolkit: string) => boolean;
 }
 
 export function useComposio(): ComposioState {
@@ -31,15 +33,18 @@ export function useComposio(): ComposioState {
   const [statusLoading, setStatusLoading] = useState(true);
   const [loadingConns, setLoadingConns] = useState(false);
 
-  const loadConnections = useCallback(async () => {
+  const loadConnections = useCallback(async (): Promise<Connection[]> => {
     setLoadingConns(true);
     try {
       const res = await apiRpcFetch("/composio/connections");
       if (!res.ok) throw new Error(`${res.status}`);
       const data = await res.json();
-      setConnections(data.connections ?? []);
+      const conns: Connection[] = data.connections ?? [];
+      setConnections(conns);
+      return conns;
     } catch {
       setConnections([]);
+      return [];
     } finally {
       setLoadingConns(false);
     }
@@ -94,12 +99,38 @@ export function useComposio(): ComposioState {
     }
   }, [loadConnections]);
 
-  const waitForToolkit = useCallback(async (toolkit: string) => {
+  const disconnectToolkit = useCallback(async (toolkit: string): Promise<{ ok: boolean; error?: string }> => {
     try {
-      await apiRpcPost("/composio/wait", { toolkit });
-    } catch { /* best effort */ }
-    await loadConnections();
+      const res = await apiRpcPost("/composio/disconnect", { toolkit });
+      if (!res.ok) {
+        const data = await res.json();
+        return { ok: false, error: data.error?.message ?? data.error ?? "Disconnect failed" };
+      }
+      await loadConnections();
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
   }, [loadConnections]);
 
-  return { keyStatus, connections, statusLoading, loadingConns, loadStatus, loadConnections, saveApiKey, connectToolkit, waitForToolkit };
+  const waitForToolkit = useCallback(async (toolkit: string): Promise<{ connected: boolean }> => {
+    try {
+      const res = await apiRpcPost("/composio/wait", { toolkit });
+      const data = await res.json();
+      await loadConnections();
+      const status = (data.status ?? "").toUpperCase();
+      return { connected: status === "ACTIVE" };
+    } catch {
+      await loadConnections();
+      return { connected: false };
+    }
+  }, [loadConnections]);
+
+  const isToolkitConnected = useCallback((toolkit: string): boolean => {
+    return connections.some(
+      c => c.toolkit.toLowerCase() === toolkit.toLowerCase() && c.status === "ACTIVE",
+    );
+  }, [connections]);
+
+  return { keyStatus, connections, statusLoading, loadingConns, loadStatus, loadConnections, saveApiKey, connectToolkit, disconnectToolkit, waitForToolkit, isToolkitConnected };
 }

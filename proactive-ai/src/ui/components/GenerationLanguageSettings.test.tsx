@@ -67,7 +67,7 @@ describe("GenerationLanguageSettings", () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "/proactive-ai/rpc/settings/generation-language",
+      "/proactive-ai/api/settings/generation-language",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ language: "ja" }),
