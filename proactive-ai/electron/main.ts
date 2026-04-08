@@ -23,6 +23,7 @@ import { resolveOpenclawBin, startGateway, type GatewayHandle, type OpenclawBin 
 import { needsSetup, runSetup, ensureConfig } from './setup';
 import { getApiKeyStatus, saveApiKey, hasApiKey } from './config';
 import { getPluginDir } from './paths';
+import { buildTopDragRegionCss } from './drag-region';
 
 const PLUGIN_DIR = getPluginDir();
 
@@ -152,22 +153,7 @@ async function launchGatewayAndMainWindow(openclawBin: OpenclawBin): Promise<voi
 
   // Inject a transparent drag region at the top of the page
   mainWindow.webContents.on('did-finish-load', () => {
-    mainWindow?.webContents.insertCSS(`
-      body::before {
-        content: '';
-        position: fixed;
-        top: 0; left: 0; right: 0;
-        height: 38px;
-        -webkit-app-region: drag;
-        z-index: 9999;
-        pointer-events: none;
-      }
-      body::before { pointer-events: auto; }
-      /* Buttons/links inside the drag zone must remain clickable */
-      button, a, input, [role="button"] {
-        -webkit-app-region: no-drag;
-      }
-    `);
+    mainWindow?.webContents.insertCSS(buildTopDragRegionCss());
   });
 
   mainWindow.once('ready-to-show', () => {
