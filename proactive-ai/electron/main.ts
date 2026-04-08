@@ -26,6 +26,7 @@ import { getPluginDir } from './paths';
 import { buildTopDragRegionCss } from './drag-region';
 
 const PLUGIN_DIR = getPluginDir();
+const UI_DEV_SERVER_URL = process.env.PROACTIVE_AI_UI_DEV_SERVER?.trim().replace(/\/+$/, '') || null;
 
 let mainWindow: BrowserWindow | null = null;
 let splashWindow: BrowserWindow | null = null;
@@ -93,8 +94,8 @@ app.on('window-all-closed', () => {
 
 app.on('activate', () => {
   if (mainWindow === null && gateway) {
-    mainWindow = createMainWindow();
-    mainWindow.loadURL(`${gateway.url}/proactive-ai`);
+    mainWindow = createMainWindow(gateway.url, gateway.token);
+    mainWindow.loadURL(getRendererUrl(gateway.url));
   }
 });
 
@@ -148,8 +149,8 @@ async function launchGatewayAndMainWindow(openclawBin: OpenclawBin): Promise<voi
   console.log(`[main] Token: ${gateway.token.slice(0, 8)}...`);
   console.log(`[main] UI: ${gateway.url}/proactive-ai`);
 
-  mainWindow = createMainWindow();
-  mainWindow.loadURL(`${gateway.url}/proactive-ai`);
+  mainWindow = createMainWindow(gateway.url, gateway.token);
+  mainWindow.loadURL(getRendererUrl(gateway.url));
 
   // Inject a transparent drag region at the top of the page
   mainWindow.webContents.on('did-finish-load', () => {
@@ -187,7 +188,7 @@ async function launchGatewayAndMainWindow(openclawBin: OpenclawBin): Promise<voi
   });
 }
 
-function createMainWindow(): BrowserWindow {
+function createMainWindow(gatewayUrl?: string, gatewayToken?: string): BrowserWindow {
   const win = new BrowserWindow({
     width: 448,
     height: 900,
@@ -202,6 +203,11 @@ function createMainWindow(): BrowserWindow {
       preload: resolve(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      webSecurity: !UI_DEV_SERVER_URL,
+      additionalArguments: [
+        ...(gatewayUrl ? [`--proactive-gw-url=${gatewayUrl}`] : []),
+        ...(gatewayToken ? [`--proactive-gw-token=${gatewayToken}`] : []),
+      ],
     },
   });
   win.on('closed', () => { mainWindow = null; });
@@ -245,13 +251,24 @@ async function restartGateway(openclawBin: OpenclawBin): Promise<void> {
   try {
     gateway = await startGateway(openclawBin, PLUGIN_DIR);
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.loadURL(`${gateway.url}/proactive-ai`);
+      mainWindow.loadURL(getRendererUrl(gateway.url));
+      if (UI_DEV_SERVER_URL) {
+        const escapedUrl = JSON.stringify(gateway.url);
+        const escapedToken = JSON.stringify(gateway.token);
+        mainWindow.webContents.executeJavaScript(
+          `window.__GW_BASE_URL__ = ${escapedUrl}; window.__GW_TOKEN__ = ${escapedToken};`,
+        ).catch(() => {});
+      }
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     dialog.showErrorBox('Restart Failed', message);
     app.quit();
   }
+}
+
+function getRendererUrl(gatewayUrl: string): string {
+  return UI_DEV_SERVER_URL ?? `${gatewayUrl}/proactive-ai`;
 }
 
 // ── Setup HTML (API key entry, shown on first run) ──

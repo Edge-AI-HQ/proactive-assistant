@@ -21,24 +21,35 @@ On first launch, the app will:
 
 ## Development
 
-```bash
-# Rebuild UI after frontend changes
-cd proactive-ai
-npm run build:ui
+### Electron Runtime (no hot reload)
 
-# Rebuild + launch Electron
+```bash
+# Build the current UI bundle once, compile Electron, then launch the desktop app
 cd electron
 npm run dev
-
-# UI dev server with hot reload (optional — for faster frontend iteration)
-cd proactive-ai
-PROACTIVE_AI_PROXY_TARGET=http://127.0.0.1:<gateway-port> \
-PROACTIVE_AI_GW_TOKEN=<token> \
-npm run dev:ui
-# Then open http://localhost:8080
 ```
 
-The gateway token is printed to the terminal when the Electron app starts.
+`npm run dev` in `proactive-ai/electron` does **not** provide frontend hot reload.
+It builds the current UI bundle once, compiles the Electron main process, then launches Electron against the OpenClaw gateway UI.
+
+If you change frontend code and want to see it in the Electron window, rebuild the UI and relaunch Electron.
+
+### Frontend HMR + Gateway Proxy
+
+Use this mode for fast frontend iteration. Electron launches the OpenClaw gateway, starts the Vite dev server for the renderer, and injects the gateway URL/token automatically.
+
+```bash
+# One command: Electron + gateway + renderer HMR
+cd proactive-ai/electron
+npm run dev:hmr
+```
+
+Notes:
+- Renderer/frontend changes hot reload in the Electron window.
+- Electron main-process / preload changes still require restarting `npm run dev:hmr`.
+- By default the renderer dev server uses a random free localhost port. Set `PROACTIVE_AI_UI_DEV_SERVER` to pin it to a specific URL if needed.
+
+The gateway URL and token are printed to the terminal when the Electron app starts.
 
 ## How It Works
 

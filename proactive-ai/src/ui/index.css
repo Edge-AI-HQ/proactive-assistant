@@ -120,6 +120,17 @@
   .pulse-dot {
     animation: pulse-glow 2s ease-in-out infinite;
   }
+
+  .scrollbar-hidden {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hidden::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+  }
 }
 
 @keyframes breathe {

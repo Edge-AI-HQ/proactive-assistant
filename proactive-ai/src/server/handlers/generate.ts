@@ -4,6 +4,7 @@ import { json } from '../http-utils.js';
 import { pipelineState } from '../../state.js';
 import { saveRun } from '../../run-store.js';
 import { runPipeline, DEFAULT_PIPELINE_OPTIONS } from '../../pipeline/orchestrator.js';
+import { getGenerationLanguage } from '../local-settings.js';
 
 function buildScoreMap(result: Awaited<ReturnType<typeof runPipeline>>): Record<string, unknown> {
   const scoreMap: Record<string, unknown> = {};
@@ -46,10 +47,11 @@ export async function handleGenerate(ctx: RouteContext): Promise<boolean> {
     const runId = `run_${Date.now().toString(36)}`;
     const maxIter = parseInt(url.searchParams.get('iterations') ?? '', 10)
       || DEFAULT_PIPELINE_OPTIONS.maxIterations;
+    const outputLanguage = getGenerationLanguage();
 
     const result = await runPipeline(
       api,
-      { ...DEFAULT_PIPELINE_OPTIONS, maxIterations: maxIter, runId },
+      { ...DEFAULT_PIPELINE_OPTIONS, maxIterations: maxIter, runId, outputLanguage },
       sendEvent,
     );
 

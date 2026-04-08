@@ -8,6 +8,12 @@
  * polished, ready-to-approve Intent Cards.
  */
 
+import { buildOutputLanguageInstruction } from "./output-language.js";
+import {
+  DEFAULT_GENERATION_LANGUAGE,
+  type SupportedGenerationLanguage,
+} from "../types/generation-language.js";
+
 export interface GeneratorPromptParams {
   currentDate: string;
   plan: string;              // JSON string of PlannerOutput
@@ -16,6 +22,7 @@ export interface GeneratorPromptParams {
   previousFeedback?: string; // Evaluator's improvement suggestions
   previousCards?: string;    // JSON of last iteration's IntentCard[]
   previousScores?: string;   // JSON of last iteration's EvaluationScore[]
+  outputLanguage?: SupportedGenerationLanguage;
 }
 
 export function buildGeneratorPrompt(params: GeneratorPromptParams): string {
@@ -27,6 +34,7 @@ export function buildGeneratorPrompt(params: GeneratorPromptParams): string {
     previousFeedback,
     previousCards,
     previousScores,
+    outputLanguage = DEFAULT_GENERATION_LANGUAGE,
   } = params;
 
   let feedbackSection = '';
@@ -66,6 +74,10 @@ ${recentFeedbackSummary}
 
   return `You are the **Generator Agent** in the Proactive AI intent card generation pipeline.
 Today: ${currentDate} | Iteration: ${iterationNumber}
+
+**${buildOutputLanguageInstruction(outputLanguage, {
+    fieldsDescription: "All user-visible text fields: title, whyNow, summary, primaryAction.label, secondaryActions[].label, and sources",
+  })}**
 
 ## Mission
 

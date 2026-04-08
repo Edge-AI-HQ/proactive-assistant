@@ -11,6 +11,12 @@
  * will execute.
  */
 
+import { buildOutputLanguageInstruction } from "./output-language.js";
+import {
+  DEFAULT_GENERATION_LANGUAGE,
+  type SupportedGenerationLanguage,
+} from "../types/generation-language.js";
+
 export interface PlannerPromptParams {
   currentDate: string;
   iterationNumber: number;
@@ -19,6 +25,7 @@ export interface PlannerPromptParams {
   previousPlan?: string;       // JSON of last iteration's PlannerOutput
   previousCards?: string;      // JSON of last iteration's IntentCard[]
   previousScores?: string;     // JSON of last iteration's EvaluationScore[]
+  outputLanguage?: SupportedGenerationLanguage;
 }
 
 export function buildPlannerPrompt(params: PlannerPromptParams): string {
@@ -30,6 +37,7 @@ export function buildPlannerPrompt(params: PlannerPromptParams): string {
     previousPlan,
     previousCards,
     previousScores,
+    outputLanguage = DEFAULT_GENERATION_LANGUAGE,
   } = params;
 
   let feedbackSection = '';
@@ -73,6 +81,10 @@ ${recentFeedbackSummary}
 
   return `You are the **Planner Agent** in the Proactive AI intent card generation pipeline.
 Today: ${currentDate} | Iteration: ${iterationNumber}
+
+**${buildOutputLanguageInstruction(outputLanguage, {
+    fieldsDescription: "All prose fields (reasoning, objective, whyNow, expectedAction, etc.)",
+  })}**
 
 ## Mission
 

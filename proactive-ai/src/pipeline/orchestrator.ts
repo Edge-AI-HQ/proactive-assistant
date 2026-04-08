@@ -29,6 +29,7 @@ import {
   parseAgentJson,
   parseAgentJsonOrThrow,
 } from './agent-output.js';
+import { DEFAULT_GENERATION_LANGUAGE, type SupportedGenerationLanguage } from '../types/generation-language.js';
 import type {
   IntentCard,
   PlannerOutput,
@@ -44,11 +45,13 @@ export interface PipelineOptions {
   maxIterations: number;
   agentTimeoutMs: number;
   runId?: string;
+  outputLanguage?: SupportedGenerationLanguage;
 }
 
 export const DEFAULT_PIPELINE_OPTIONS: PipelineOptions = {
   maxIterations: 2,
   agentTimeoutMs: 300_000, // 5 minutes per agent
+  outputLanguage: DEFAULT_GENERATION_LANGUAGE,
 };
 
 type EventSink = (event: ServerEvent) => void;
@@ -78,6 +81,7 @@ export async function runPipeline(
 ): Promise<PipelineResult> {
   const emit = onEvent ?? (() => {});
   const currentDate = new Date().toISOString().slice(0, 10);
+  const outputLanguage = opts.outputLanguage ?? DEFAULT_GENERATION_LANGUAGE;
   const iterations: PipelineIteration[] = [];
   const candidatePool: ScoredCandidate[] = [];
   const runId = opts.runId ?? `run_${Date.now().toString(36)}`;
@@ -110,6 +114,7 @@ export async function runPipeline(
       previousPlan: prev ? JSON.stringify(prev.plan, null, 2) : undefined,
       previousCards: prev ? JSON.stringify(prev.cards, null, 2) : undefined,
       previousScores: prev ? JSON.stringify(prev.scores, null, 2) : undefined,
+      outputLanguage,
     });
 
     const planText = await runAgent(api, `plan:${i}`, plannerPrompt, 'Generate an intent card plan based on the user\'s current context.', opts.agentTimeoutMs);
@@ -131,6 +136,7 @@ export async function runPipeline(
       previousFeedback: prev?.feedback,
       previousCards: prev ? JSON.stringify(prev.cards, null, 2) : undefined,
       previousScores: prev ? JSON.stringify(prev.scores, null, 2) : undefined,
+      outputLanguage,
     });
 
     const cardsText = await runAgent(api, `generate:${i}`, generatorPrompt, 'Generate intent cards based on the plan.', opts.agentTimeoutMs);
@@ -152,6 +158,7 @@ export async function runPipeline(
       cards: JSON.stringify(generated, null, 2),
       iterationNumber: i,
       maxIterations: opts.maxIterations,
+      outputLanguage,
     });
 
     const evalText = await runAgent(api, `evaluate:${i}`, evaluatorPrompt, 'Evaluate the generated intent cards for quality.', opts.agentTimeoutMs);
@@ -382,4 +389,3 @@ function extractAgentText(messages: { messages: unknown[] }): string {
   }
   return '';
 }
-

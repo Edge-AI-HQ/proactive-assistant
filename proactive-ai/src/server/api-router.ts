@@ -9,6 +9,7 @@ import { handleChat } from './handlers/chat.js';
 import { handleFeedback } from './handlers/feedback.js';
 import { handleComposio } from './handlers/composio.js';
 import { handleProfile } from './handlers/profile.js';
+import { handleSettings } from './handlers/settings.js';
 
 const handlers = [
   handleHealth,
@@ -18,6 +19,7 @@ const handlers = [
   handleFeedback,
   handleComposio,
   handleProfile,
+  handleSettings,
 ];
 
 export function createApiHandler(api: OpenClawPluginApi) {

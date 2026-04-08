@@ -9,6 +9,12 @@
  * genuinely help the user make it through.
  */
 
+import { buildOutputLanguageInstruction } from "./output-language.js";
+import {
+  DEFAULT_GENERATION_LANGUAGE,
+  type SupportedGenerationLanguage,
+} from "../types/generation-language.js";
+
 
 export interface EvaluatorPromptParams {
   currentDate: string;
@@ -16,14 +22,26 @@ export interface EvaluatorPromptParams {
   cards: string;             // JSON string of GeneratorOutput
   iterationNumber: number;
   maxIterations: number;
+  outputLanguage?: SupportedGenerationLanguage;
 }
 
 export function buildEvaluatorPrompt(params: EvaluatorPromptParams): string {
-  const { currentDate, plan, cards, iterationNumber, maxIterations } = params;
+  const {
+    currentDate,
+    plan,
+    cards,
+    iterationNumber,
+    maxIterations,
+    outputLanguage = DEFAULT_GENERATION_LANGUAGE,
+  } = params;
   const isLastIteration = iterationNumber >= maxIterations;
 
   return `You are the **Evaluator Agent** in the Proactive AI intent card generation pipeline.
 Today: ${currentDate} | Iteration: ${iterationNumber} of ${maxIterations}
+
+**${buildOutputLanguageInstruction(outputLanguage, {
+    fieldsDescription: "All text fields (feedback, iterationFeedback, improvements, etc.)",
+  })}**
 
 ## Mission
 

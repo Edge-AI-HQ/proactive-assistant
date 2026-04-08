@@ -17,6 +17,7 @@ import { runPipeline } from './src/pipeline/orchestrator.js';
 import { createUiHandler } from './src/server/ui-route.js';
 import { createAssetsHandler } from './src/server/assets-route.js';
 import { createApiHandler } from './src/server/api-router.js';
+import { DEFAULT_GENERATION_LANGUAGE } from './src/types/generation-language.js';
 
 const pluginDir = dirname(fileURLToPath(import.meta.url));
 
@@ -61,6 +62,7 @@ export default {
           const result = await runPipeline(api, {
             maxIterations: config.max_iterations,
             agentTimeoutMs: config.agent_timeout_ms,
+            outputLanguage: DEFAULT_GENERATION_LANGUAGE,
           });
           return `Generated ${result.finalCards.length} intent cards in ${result.totalIterations} iterations.\n\n${JSON.stringify(result.finalCards, null, 2)}`;
         } catch (err) {
