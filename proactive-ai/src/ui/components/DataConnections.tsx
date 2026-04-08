@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  XCircle, Loader2, Plus, ChevronDown, type LucideIcon,
+  XCircle, Loader2, Plus, ChevronDown, Key, type LucideIcon,
   Mail, Calendar, MessageSquare, BookOpen, FileText,
   Briefcase, Github, Trello,
   BarChart3, CreditCard, Video, Pen, ListTodo,
@@ -98,11 +98,31 @@ interface DataConnectionsProps {
 }
 
 export default function DataConnections({ composio }: DataConnectionsProps) {
-  const { keyStatus, connections, statusLoading, connectToolkit, waitForToolkit, loadConnections } = composio;
+  const { keyStatus, connections, statusLoading, saveApiKey, connectToolkit, waitForToolkit, loadConnections } = composio;
 
   const [connectingToolkit, setConnectingToolkit] = useState<string | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
+  const [apiKeyInput, setApiKeyInput] = useState("");
+  const [savingKey, setSavingKey] = useState(false);
+  const [keyError, setKeyError] = useState<string | null>(null);
+
+  const handleSaveKey = async () => {
+    const key = apiKeyInput.trim();
+    if (!key) return;
+    setSavingKey(true);
+    setKeyError(null);
+    try {
+      const result = await saveApiKey(key);
+      if (!result.ok) {
+        setKeyError(result.error ?? "Failed to save key");
+      } else {
+        setApiKeyInput("");
+      }
+    } finally {
+      setSavingKey(false);
+    }
+  };
 
   const connectedSet = new Set(
     connections.filter(c => c.status === "ACTIVE").map(c => c.toolkit.toLowerCase())
@@ -236,11 +256,47 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
         </div>
       )}
 
-      {/* Not configured hint */}
+      {/* Not configured — API key input */}
       {!keyStatus?.configured && !statusLoading && (
-        <div className="glass-card-strong p-6 text-center">
-          <Plus size={24} className="mx-auto mb-2 text-foreground/30" />
-          <p className="text-sm text-foreground/50">App connections are not available yet.</p>
+        <div className="glass-card-strong p-5 space-y-3">
+          <div className="flex items-center gap-2 mb-1">
+            <Key size={16} className="text-foreground/40" />
+            <span className="text-sm font-semibold text-foreground">Connect your apps</span>
+          </div>
+          <p className="text-xs text-foreground/45">
+            Enter your Composio API key to connect apps. Get one at{" "}
+            <a
+              href="https://dashboard.composio.dev"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline text-foreground/60 hover:text-foreground/80"
+            >
+              dashboard.composio.dev
+            </a>
+          </p>
+          <div className="flex gap-2">
+            <input
+              type="password"
+              placeholder="ak_..."
+              value={apiKeyInput}
+              onChange={(e) => { setApiKeyInput(e.target.value); setKeyError(null); }}
+              onKeyDown={(e) => { if (e.key === "Enter") handleSaveKey(); }}
+              className="flex-1 text-xs bg-foreground/[0.04] border border-foreground/10 rounded-lg px-3 py-2 text-foreground placeholder:text-foreground/25 focus:outline-none focus:border-foreground/25 transition-colors"
+            />
+            <button
+              onClick={handleSaveKey}
+              disabled={savingKey || !apiKeyInput.trim()}
+              className="text-xs font-medium bg-foreground text-background rounded-lg px-4 py-2 hover:opacity-90 transition-opacity disabled:opacity-40"
+            >
+              {savingKey ? <Loader2 size={12} className="animate-spin" /> : "Save"}
+            </button>
+          </div>
+          {keyError && (
+            <div className="flex items-start gap-1.5 text-[11px] text-red-500">
+              <XCircle size={12} className="mt-0.5 flex-shrink-0" />
+              <span>{keyError}</span>
+            </div>
+          )}
         </div>
       )}
 

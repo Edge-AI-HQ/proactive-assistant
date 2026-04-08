@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { resolve, dirname } from "node:path";
 
 export interface PersonalPlatformSettings {
   apiKey?: string;
@@ -20,8 +20,29 @@ const asString = (value: unknown): string | undefined => {
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
+const settingsPath = (homeDir: string) =>
+  resolve(homeDir, ".openclaw-proactive-ai", "local-settings.json");
+
+/**
+ * Save a Composio API key to local-settings.json.
+ * Merges with existing settings — only touches `composio.apiKey`.
+ */
+export const savePlatformApiKey = (homeDir: string, apiKey: string): void => {
+  const path = settingsPath(homeDir);
+  let existing: Record<string, unknown> = {};
+  if (existsSync(path)) {
+    try {
+      existing = asObject(JSON.parse(readFileSync(path, "utf-8")));
+    } catch { /* start fresh */ }
+  }
+  const composio = asObject(existing.composio);
+  existing.composio = { ...composio, apiKey };
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path, JSON.stringify(existing, null, 2), { encoding: "utf-8", mode: 0o600 });
+};
+
 export const loadPlatformSettings = (homeDir: string): PersonalPlatformSettings => {
-  const path = resolve(homeDir, ".openclaw-proactive-ai", "local-settings.json");
+  const path = settingsPath(homeDir);
   if (!existsSync(path)) {
     return {};
   }

@@ -8,7 +8,7 @@ import {
   createPersonalProvider,
   type PersonalProvider,
 } from "./provider.js";
-import { loadPlatformSettings } from "./platform_settings.js";
+import { loadPlatformSettings, savePlatformApiKey } from "./platform_settings.js";
 
 // ── Error helpers ──
 
@@ -57,6 +57,9 @@ export const setup = async (
       "verify your key at https://dashboard.composio.dev",
     );
   }
+
+  // Persist to local-settings.json
+  savePlatformApiKey(ctx.homeDir, key);
 
   return {
     validated: true,

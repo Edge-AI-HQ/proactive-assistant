@@ -30,12 +30,12 @@ export async function handleComposio(routeCtx: RouteContext): Promise<boolean> {
     if (req.method !== 'POST') return false;
     const body = await readBody(req);
 
-    // POST /composio/setup (deprecated in platform mode)
+    // POST /composio/setup — validate + save API key to local-settings.json
     if (route === '/setup') {
-      json(res, 400, {
-        error: 'Setup is not supported in platform mode',
-        hint: 'Configure COMPOSIO_API_KEY on host process or local-settings.json',
-      });
+      const key = String(body['key'] ?? '').trim();
+      if (!key) { json(res, 400, { error: 'Missing key' }); return true; }
+      const result = await corePersonal.setup(ctx, { key });
+      json(res, 200, result);
       return true;
     }
 

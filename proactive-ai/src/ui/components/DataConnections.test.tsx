@@ -12,6 +12,7 @@ function createComposioState(overrides: Partial<ComposioState> = {}): ComposioSt
     loadingConns: false,
     loadStatus: vi.fn(async () => {}),
     loadConnections: vi.fn(async () => {}),
+    saveApiKey: vi.fn(async () => ({ ok: true })),
     connectToolkit: vi.fn(async () => ({ ok: true, redirectUrl: "https://example.com/oauth" })),
     waitForToolkit: vi.fn(async () => {}),
     ...overrides,
