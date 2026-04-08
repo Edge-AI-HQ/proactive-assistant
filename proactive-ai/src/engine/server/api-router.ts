@@ -10,7 +10,7 @@ import { handleChat } from './handlers/chat.js';
 import { handleFeedback } from './handlers/feedback.js';
 import { handleComposio } from './handlers/composio.js';
 import { handleProfile } from './handlers/profile.js';
-import { handleSettings } from './handlers/settings.js';
+import { handleSettings, handleAutoGenerateSettings } from './handlers/settings.js';
 import { handleAutoRun } from './handlers/auto-run.js';
 
 const handlers = [
@@ -22,6 +22,7 @@ const handlers = [
   handleComposio,
   handleProfile,
   handleSettings,
+  handleAutoGenerateSettings,
   handleAutoRun,
 ];
 

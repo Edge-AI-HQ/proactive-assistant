@@ -6,6 +6,7 @@ import { pinCliData } from '../pipeline/pin-cli.js';
 import {
   loadAutoLoopState,
 } from '../pending-store.js';
+import { getAutoGenerate } from '../server/local-settings.js';
 
 async function runIngest(api: OpenClawPluginApi, config: ProactiveAIConfig): Promise<void> {
   if (autoPollState.ingestInFlight) return;
@@ -78,6 +79,7 @@ async function triggerAutoRunViaGateway(api: OpenClawPluginApi): Promise<{ ok: b
 async function runDetectAndLoop(api: OpenClawPluginApi, config: ProactiveAIConfig): Promise<void> {
   if (autoPollState.loopInFlight) return;
   if (pipelineState.running) return;
+  if (!getAutoGenerate()) return;
 
   autoPollState.loopInFlight = true;
   try {

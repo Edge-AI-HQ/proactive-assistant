@@ -1,4 +1,5 @@
 import DataConnections from "./DataConnections";
+import AutoGenerateSettings from "./AutoGenerateSettings";
 import GenerationLanguageSettings from "./GenerationLanguageSettings";
 import type { ComposioState } from "@/hooks/use-composio";
 
@@ -33,6 +34,7 @@ export default function ControlPanel({ composio }: ControlPanelProps) {
                 Tune how cards are generated and shown to you.
               </p>
             </div>
+            <AutoGenerateSettings />
             <GenerationLanguageSettings />
           </section>
         </div>

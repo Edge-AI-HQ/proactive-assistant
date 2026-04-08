@@ -72,3 +72,19 @@ export function saveGenerationLanguage(
   writeSettingsFile(settingsPath, settings);
   return language;
 }
+
+export function getAutoGenerate(settingsPath: string = LOCAL_SETTINGS_PATH): boolean {
+  const settings = readSettingsFile(settingsPath);
+  const autoGenerate = (settings as Record<string, unknown>)['autoGenerate'];
+  return autoGenerate === true;
+}
+
+export function saveAutoGenerate(
+  enabled: boolean,
+  settingsPath: string = LOCAL_SETTINGS_PATH,
+): boolean {
+  const settings = readSettingsFile(settingsPath);
+  (settings as Record<string, unknown>)['autoGenerate'] = enabled;
+  writeSettingsFile(settingsPath, settings);
+  return enabled;
+}
