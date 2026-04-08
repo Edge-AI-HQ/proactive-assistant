@@ -7,24 +7,13 @@
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "dist",
-    "rootDir": ".",
-    "paths": {
-      "@pin-ai/core": ["./packages/core/dist/src/index.d.ts"],
-      "@pin-ai/pin-cli": ["./packages/cli/dist/src/cli.d.ts"],
-      "@pin-ai/pin-cli/envelope": ["./packages/cli/dist/src/output/envelope.d.ts"]
-    }
+    "rootDir": "."
   },
   "include": [
     "index.ts",
-    "src/agents/**/*.ts",
-    "src/pipeline/**/*.ts",
-    "src/types/**/*.ts",
-    "src/server/**/*.ts",
-    "src/config.ts",
-    "src/state.ts",
-    "src/run-store.ts",
-    "src/helpers.ts",
-    "src/profile-seed.ts"
+    "src/core/**/*.ts",
+    "src/cli/**/*.ts",
+    "src/engine/**/*.ts"
   ],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules", "dist", "**/*.test.ts"]
 }
