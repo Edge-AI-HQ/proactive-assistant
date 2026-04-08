@@ -78,11 +78,7 @@ export default {
     api.registerHttpRoute({ path: '/proactive-ai',        auth: 'plugin',  match: 'exact',  replaceExisting: true, handler: createUiHandler(pluginDir, gwToken) });
     api.registerHttpRoute({ path: '/proactive-ai/assets', auth: 'plugin',  match: 'prefix', replaceExisting: true, handler: createAssetsHandler(pluginDir) });
     api.registerHttpRoute({ path: '/proactive-ai/api',    auth: 'gateway', match: 'prefix', replaceExisting: true, handler: createApiHandler(api) });
-    api.registerHttpRoute({ path: '/proactive-ai/rpc',    auth: 'plugin',  match: 'prefix', replaceExisting: true, handler: createApiHandler(api) });
-    api.registerHttpRoute({ path: '/proactive-ai/rpc/composio/status',      auth: 'plugin', match: 'exact', replaceExisting: true, handler: createApiHandler(api) });
-    api.registerHttpRoute({ path: '/proactive-ai/rpc/composio/connections', auth: 'plugin', match: 'exact', replaceExisting: true, handler: createApiHandler(api) });
-    api.registerHttpRoute({ path: '/proactive-ai/rpc/composio/connect',     auth: 'plugin', match: 'exact', replaceExisting: true, handler: createApiHandler(api) });
-    api.registerHttpRoute({ path: '/proactive-ai/rpc/composio/wait',        auth: 'plugin', match: 'exact', replaceExisting: true, handler: createApiHandler(api) });
+    api.registerHttpRoute({ path: '/proactive-ai/rpc',    auth: 'gateway', match: 'prefix', replaceExisting: true, handler: createApiHandler(api) });
 
     api.logger.info('Proactive AI v2 ready (routes: /proactive-ai/*)');
   },
