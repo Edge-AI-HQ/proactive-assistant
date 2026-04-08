@@ -149,6 +149,7 @@ async function launchGatewayAndMainWindow(openclawBin: OpenclawBin): Promise<voi
   console.log(`[main] Token: ${gateway.token}`);
   console.log(`[main] UI: ${gateway.url}/proactive-ai`);
 
+  updateSplash('Loading UI...');
   mainWindow = createMainWindow(gateway.url, gateway.token);
   mainWindow.loadURL(getRendererUrl(gateway.url));
 
@@ -157,7 +158,18 @@ async function launchGatewayAndMainWindow(openclawBin: OpenclawBin): Promise<voi
     mainWindow?.webContents.insertCSS(buildTopDragRegionCss());
   });
 
-  mainWindow.once('ready-to-show', () => {
+  // Keep splash until the renderer signals that the initial data load is done.
+  // Fallback: if the signal doesn't arrive within 10s, show anyway.
+  const splashTimeout = setTimeout(() => {
+    if (splashWindow && !splashWindow.isDestroyed()) {
+      splashWindow.destroy();
+      splashWindow = null;
+    }
+    mainWindow?.show();
+  }, 10_000);
+
+  ipcMain.once('ui:ready', () => {
+    clearTimeout(splashTimeout);
     splashWindow?.destroy();
     splashWindow = null;
     mainWindow?.show();

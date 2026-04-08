@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import bgGradient from "@/assets/bg-gradient.jpg";
 import NowFeed from "./NowFeed";
@@ -32,6 +32,16 @@ export default function AppLayout() {
 
   const { health, run, generate, isRunning } = usePipeline();
   const composio = useComposio();
+
+  // Signal Electron main process that the UI is ready (gateway reachable).
+  // Fires once; the main process uses this to dismiss the splash screen.
+  const readySignaled = useRef(false);
+  useEffect(() => {
+    if (health.ok && !readySignaled.current) {
+      readySignaled.current = true;
+      window.electronAPI?.notifyReady();
+    }
+  }, [health.ok]);
 
   const handleScrollDirection = (direction: "up" | "down") => {
     setTabBarVisible(direction === "down");

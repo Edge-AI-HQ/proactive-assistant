@@ -30,4 +30,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getApiKeyStatus: () => ipcRenderer.invoke('config:apikey:status'),
   saveApiKey: (provider: string, key: string) => ipcRenderer.invoke('config:apikey:save', provider, key),
   notifyApiKeySaved: () => ipcRenderer.send('config:apikey:saved'),
+  notifyReady: () => ipcRenderer.send('ui:ready'),
 });
