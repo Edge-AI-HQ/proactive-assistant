@@ -9,7 +9,7 @@ import { spawn, execSync, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import http from 'node:http';
 import { getGatewayEnvFromLocalSettings } from './config';
 import { getBundledNodeBin, getBundledOpenclawScript } from './paths';
@@ -58,9 +58,10 @@ export function findAvailablePort(): Promise<number> {
  * OpenClaw requires Node >= 22.12. We can't rely on the shell default `node`
  * being the right version (NVM, Volta, etc. may alias a different one).
  * Strategy:
- *   0. Bundled runtime inside packaged app (Contents/Resources/runtime/)
- *   1. Scan NVM versions for openclaw with Node >= 22.12
- *   2. Login shell `which openclaw` (Volta, Homebrew, etc.)
+  *   0. Bundled runtime inside packaged app (Contents/Resources/runtime/)
+  *   0.5. Local electron/node_modules openclaw in dev mode
+  *   1. Scan NVM versions for openclaw with Node >= 22.12
+  *   2. Login shell `which openclaw` (Volta, Homebrew, etc.)
  */
 export function resolveOpenclawBin(): OpenclawBin {
   const { homedir } = require('node:os');
@@ -68,6 +69,10 @@ export function resolveOpenclawBin(): OpenclawBin {
   // Strategy 0: Bundled runtime (packaged Electron app)
   const bundled = resolveBundledRuntime();
   if (bundled) return bundled;
+
+  // Strategy 0.5: Local dev dependency under proactive-ai/electron/node_modules
+  const localDev = resolveLocalDevRuntime();
+  if (localDev) return localDev;
 
   // Strategy 1: Scan NVM versions for openclaw with Node >= 22.12
   const nvmDir = join(homedir(), '.nvm', 'versions', 'node');
@@ -120,6 +125,32 @@ function scanNvmVersions(nvmDir: string): OpenclawBin | null {
     const script = join(nvmDir, ver, 'bin', 'openclaw');
     const node = join(nvmDir, ver, 'bin', 'node');
     if (existsSync(script) && existsSync(node)) return { script, node };
+  }
+
+  return null;
+}
+
+function resolveLocalDevRuntime(): OpenclawBin | null {
+  const script = resolve(__dirname, '..', 'node_modules', '.bin', 'openclaw');
+  if (!existsSync(script)) return null;
+
+  const candidates = [
+    process.env['npm_node_execpath'],
+    process.env['NODE'],
+    process.env['PATH'] ? execSync('bash -lc "which node"', { encoding: 'utf-8' }).trim() : '',
+  ].filter((value): value is string => Boolean(value));
+
+  for (const node of candidates) {
+    if (!existsSync(node)) continue;
+    try {
+      const ver = execSync(`"${node}" -v`, { encoding: 'utf-8' }).trim();
+      if (nodeVersionOk(ver)) {
+        console.log('[gateway] Using local dev openclaw runtime:', script, 'with node', node);
+        return { script, node };
+      }
+    } catch {
+      // try next candidate
+    }
   }
 
   return null;

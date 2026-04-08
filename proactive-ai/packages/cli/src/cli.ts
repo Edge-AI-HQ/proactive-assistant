@@ -2,11 +2,14 @@ import { Command } from "commander";
 import { CommanderError } from "commander";
 
 import { registerFeedbackCommands } from "./domains/feedback/register.js";
+import { registerIngestCommands } from "./domains/ingest/register.js";
 import { registerProfileCommands } from "./domains/profile/register.js";
 import { registerPersonalCommands } from "./domains/personal/register.js";
 import { registerPushCommands } from "./domains/push/register.js";
 import { registerSysCommands } from "./domains/sys/register.js";
 import { registerWorldCommands } from "./domains/world/register.js";
+import { registerContextCommands } from "./domains/context/register.js";
+import { registerLoopCommands } from "./domains/loop/register.js";
 import { errorEnvelope } from "./output/envelope.js";
 import { ErrorType } from "./output/errors.js";
 import type { CliRuntimeInput, ResultRef, RunCliResult } from "./runtime.js";
@@ -23,6 +26,9 @@ const createProgram = (runtime: CliRuntimeInput, resultRef: ResultRef): Command 
   registerSysCommands(program, runtime, resultRef);
   registerProfileCommands(program, runtime, resultRef);
   registerWorldCommands(program, runtime, resultRef);
+  registerIngestCommands(program, runtime, resultRef);
+  registerContextCommands(program, runtime, resultRef);
+  registerLoopCommands(program, runtime, resultRef);
   registerFeedbackCommands(program, runtime, resultRef);
   registerPushCommands(program, runtime, resultRef);
   registerPersonalCommands(program, runtime, resultRef);

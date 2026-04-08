@@ -23,6 +23,7 @@ export interface EvaluatorPromptParams {
   iterationNumber: number;
   maxIterations: number;
   outputLanguage?: SupportedGenerationLanguage;
+  incrementalContext?: string;
 }
 
 export function buildEvaluatorPrompt(params: EvaluatorPromptParams): string {

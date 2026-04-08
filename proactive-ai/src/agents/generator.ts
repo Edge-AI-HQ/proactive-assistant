@@ -18,6 +18,7 @@ export interface GeneratorPromptParams {
   currentDate: string;
   plan: string;              // JSON string of PlannerOutput
   iterationNumber: number;
+  incrementalContext?: string;
   recentFeedbackSummary?: string;
   previousFeedback?: string; // Evaluator's improvement suggestions
   previousCards?: string;    // JSON of last iteration's IntentCard[]

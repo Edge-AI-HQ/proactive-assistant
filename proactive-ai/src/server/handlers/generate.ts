@@ -2,21 +2,9 @@ import type { RouteContext } from '../../types/server.js';
 import type { ServerEvent } from '../../types/index.js';
 import { json } from '../http-utils.js';
 import { pipelineState } from '../../state.js';
-import { saveRun } from '../../run-store.js';
-import { runPipeline, DEFAULT_PIPELINE_OPTIONS } from '../../pipeline/orchestrator.js';
+import { DEFAULT_PIPELINE_OPTIONS } from '../../pipeline/orchestrator.js';
 import { getGenerationLanguage } from '../local-settings.js';
-
-function buildScoreMap(result: Awaited<ReturnType<typeof runPipeline>>): Record<string, unknown> {
-  const scoreMap: Record<string, unknown> = {};
-
-  for (const iteration of result.iterations) {
-    for (const score of iteration.evaluation.evaluations) {
-      scoreMap[score.cardId] = score;
-    }
-  }
-
-  return scoreMap;
-}
+import { executeIncrementalPipeline } from '../pipeline-runner.js';
 
 export async function handleGenerate(ctx: RouteContext): Promise<boolean> {
   const { subpath, req, res, url, api } = ctx;
@@ -44,32 +32,28 @@ export async function handleGenerate(ctx: RouteContext): Promise<boolean> {
   pipelineState.running = true;
 
   try {
-    const runId = `run_${Date.now().toString(36)}`;
     const maxIter = parseInt(url.searchParams.get('iterations') ?? '', 10)
       || DEFAULT_PIPELINE_OPTIONS.maxIterations;
     const outputLanguage = getGenerationLanguage();
 
-    const result = await runPipeline(
-      api,
-      { ...DEFAULT_PIPELINE_OPTIONS, maxIterations: maxIter, runId, outputLanguage },
-      sendEvent,
-    );
-
-    saveRun({
-      id: result.runId,
-      completedAt: new Date().toISOString(),
-      totalIterations: result.totalIterations,
-      finalCards: result.finalCards,
-      scoreMap: buildScoreMap(result),
+    const result = await executeIncrementalPipeline(api, {
+      trigger: 'manual',
+      maxIterations: maxIter,
+      agentTimeoutMs: DEFAULT_PIPELINE_OPTIONS.agentTimeoutMs,
+      onEvent: sendEvent,
+      enforceCooldown: false,
+      outputLanguage,
     });
+    if ('skipped' in result) {
+      if (result.skipped === 'no-pending') {
+        sendEvent({ type: 'pipeline:error', data: { message: 'No incremental data available' } });
+      }
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     api.logger.error(`Pipeline error: ${message}`);
     sendEvent({ type: 'pipeline:error', data: { message } });
   } finally {
-    pipelineState.running = false;
-    pipelineState.phase = null;
-    pipelineState.iteration = null;
     res.end();
   }
 

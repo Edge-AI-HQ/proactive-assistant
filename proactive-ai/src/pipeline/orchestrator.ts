@@ -46,6 +46,7 @@ export interface PipelineOptions {
   agentTimeoutMs: number;
   runId?: string;
   outputLanguage?: SupportedGenerationLanguage;
+  incrementalContext?: string;
 }
 
 export const DEFAULT_PIPELINE_OPTIONS: PipelineOptions = {
@@ -109,6 +110,7 @@ export async function runPipeline(
     const plannerPrompt = buildPlannerPrompt({
       currentDate,
       iterationNumber: i,
+      incrementalContext: opts.incrementalContext,
       recentFeedbackSummary,
       previousFeedback: prev?.feedback,
       previousPlan: prev ? JSON.stringify(prev.plan, null, 2) : undefined,
@@ -132,6 +134,7 @@ export async function runPipeline(
       currentDate,
       plan: JSON.stringify(plan, null, 2),
       iterationNumber: i,
+      incrementalContext: opts.incrementalContext,
       recentFeedbackSummary,
       previousFeedback: prev?.feedback,
       previousCards: prev ? JSON.stringify(prev.cards, null, 2) : undefined,
@@ -159,6 +162,7 @@ export async function runPipeline(
       iterationNumber: i,
       maxIterations: opts.maxIterations,
       outputLanguage,
+      incrementalContext: opts.incrementalContext,
     });
 
     const evalText = await runAgent(api, `evaluate:${i}`, evaluatorPrompt, 'Evaluate the generated intent cards for quality.', opts.agentTimeoutMs);

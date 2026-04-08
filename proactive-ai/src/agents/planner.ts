@@ -20,6 +20,7 @@ import {
 export interface PlannerPromptParams {
   currentDate: string;
   iterationNumber: number;
+  incrementalContext?: string;
   recentFeedbackSummary?: string;
   previousFeedback?: string;   // Evaluator's improvement suggestions
   previousPlan?: string;       // JSON of last iteration's PlannerOutput

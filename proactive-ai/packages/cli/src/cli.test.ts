@@ -14,6 +14,8 @@ import {
   execTool,
 } from "./domains/personal/service.js";
 import type { PersonalProvider } from "./domains/personal/provider.js";
+import { PinDatabaseManager } from "./db/database.js";
+import { LoopRepository } from "./domains/loop/repository.js";
 
 interface SysDoctorData {
   checks: Array<{ name: string; status: string; message: string; hint?: string }>;
@@ -199,6 +201,10 @@ test("sys schema includes implemented section commands and system placeholders",
   assert.equal(paths.has("sys.import"), true);
   assert.equal(paths.has("profile.facts.get"), true);
   assert.equal(paths.has("profile.memory.add"), true);
+  assert.equal(paths.has("ingest.run"), true);
+  assert.equal(paths.has("context.incremental"), true);
+  assert.equal(paths.has("loop.commit"), true);
+  assert.equal(paths.has("loop.status"), true);
   assert.equal(paths.has("profile.goals.upsert"), true);
 
   const memoryAdd = await runCli(["sys", "schema", "profile.memory.add", "--json"]);
@@ -213,6 +219,71 @@ test("sys schema includes implemented section commands and system placeholders",
   const migrateData = migrate.stdout.data as { domain: string; command: string };
   assert.equal(migrateData.domain, "sys");
   assert.equal(migrateData.command, "migrate");
+});
+
+test("context incremental and loop commit support agent-style consumption", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-context-cli-"));
+
+  try {
+    const runtime = {
+      env: { PIN_DATA_ROOT: root },
+      homeDir: "/Users/test",
+    };
+    const manager = new PinDatabaseManager({ dataRoot: root });
+    await manager.init();
+    const repository = new LoopRepository(manager.open("pin"));
+
+    await repository.enqueuePending({
+      items: [
+        {
+          id: "world:1",
+          source: "world",
+          kind: "headline",
+          createdAt: "2026-04-08T10:00:00.000Z",
+          availableAt: "2026-04-08T10:00:00.000Z",
+          status: "pending",
+          processedAt: null,
+          payload: {
+            id: "1",
+            title: "Fed holds rates",
+            provider: "fed",
+          },
+        },
+      ],
+    });
+
+    const incremental = (await runCli(
+      ["context", "incremental", "--json"],
+      runtime,
+    )) as RunCliResult & {
+      stdout: PinEnvelope<{
+        runToken: string;
+        items: { world: Array<{ id: string; title: string }>; personal: unknown[] };
+      }>;
+    };
+
+    assert.equal(incremental.exitCode, 0);
+    assert.equal(incremental.stdout.data?.items.world.length, 1);
+    const runToken = incremental.stdout.data?.runToken;
+    assert.ok(runToken);
+
+    const committed = await runCli(
+      ["loop", "commit", "--run-token", runToken!, "--json"],
+      runtime,
+    );
+    assert.equal(committed.exitCode, 0);
+    assert.equal((committed.stdout.data as { processedCount: number }).processedCount, 1);
+
+    const status = await runCli(
+      ["loop", "status", "--json"],
+      runtime,
+    );
+    assert.equal(status.exitCode, 0);
+    assert.equal((status.stdout.data as { pendingCount: number }).pendingCount, 0);
+    assert.equal((status.stdout.data as { processedCount: number }).processedCount, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("sys schema returns not found for unknown path", async () => {

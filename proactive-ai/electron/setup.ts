@@ -7,12 +7,124 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { execSync } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 const PROFILE = 'proactive-ai';
 const PROFILE_DIR = join(homedir(), `.openclaw-${PROFILE}`);
 const CONFIG_PATH = join(PROFILE_DIR, 'openclaw.json');
+const EXEC_APPROVALS_PATH = join(homedir(), '.openclaw', 'exec-approvals.json');
+const DURABLE_PIN_COMMANDS = [
+  'which pin',
+  'pin sys doctor --json 2>&1',
+  'pin profile get --id default --full --json 2>/dev/null',
+  'pin profile get --id default --full --json 2>&1',
+  'which pin && pin profile get --id default --full --json',
+  'pin profile goals list --json 2>/dev/null',
+  'pin profile goals list --json 2>&1',
+  'pin profile facts get --json 2>/dev/null',
+  'pin profile facts get --json 2>&1',
+  'pin profile preferences get --json 2>/dev/null',
+  'pin profile preferences get --json 2>&1',
+  'pin profile constraints get --json 2>/dev/null',
+  'pin profile constraints get --json 2>&1',
+  'pin personal connections list --json 2>/dev/null',
+  'pin personal connections list --json 2>&1',
+  'pin push history --since 7d --json 2>/dev/null',
+  'pin push history --since 7d --json 2>&1',
+  'pin push history --since 3d --json 2>/dev/null',
+  'pin push history --since 3d --json 2>&1',
+  'pin feedback list --since 7d --json 2>/dev/null',
+  'pin feedback list --since 7d --json 2>&1',
+  'pin feedback stats --since 7d --json 2>/dev/null',
+  'pin feedback stats --since 7d --json 2>&1',
+];
+
+function resolvePinBin(): string | null {
+  try {
+    const bin = execSync('bash -lc "which pin"', { encoding: 'utf-8' }).trim();
+    return bin && existsSync(bin) ? bin : null;
+  } catch {
+    return null;
+  }
+}
+
+function ensurePinExecApproval(): void {
+  const pinBin = resolvePinBin();
+
+  mkdirSync(join(homedir(), '.openclaw'), { recursive: true });
+
+  let file: Record<string, unknown> = { version: 1 };
+  if (existsSync(EXEC_APPROVALS_PATH)) {
+    try {
+      file = JSON.parse(readFileSync(EXEC_APPROVALS_PATH, 'utf-8'));
+    } catch {
+      file = { version: 1 };
+    }
+  }
+
+  file['defaults'] = {
+    ...(typeof file['defaults'] === 'object' && file['defaults'] !== null ? file['defaults'] as Record<string, unknown> : {}),
+    security: 'full',
+    ask: 'off',
+  };
+
+  if (!file['agents'] || typeof file['agents'] !== 'object') file['agents'] = {};
+
+  const agents = file['agents'] as Record<string, unknown>;
+  const agentKeys = ['*', 'main'];
+
+  for (const agentKey of agentKeys) {
+    const agent = (
+      agents[agentKey] && typeof agents[agentKey] === 'object'
+        ? agents[agentKey]
+        : {}
+    ) as Record<string, unknown>;
+
+    agent['security'] = 'full';
+    agent['ask'] = 'off';
+
+    const allowlistRaw = Array.isArray(agent['allowlist']) ? agent['allowlist'] : [];
+    const allowlist = allowlistRaw.filter(
+      (entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object' && !Array.isArray(entry),
+    );
+
+    const pushAllowlistEntry = (pattern: string, commandText?: string): void => {
+      const exists = allowlist.some((entry) => {
+        const samePattern = String(entry['pattern'] ?? '').trim() === pattern;
+        const sameCommand = commandText == null || String(entry['commandText'] ?? '').trim() === commandText;
+        return samePattern && sameCommand;
+      });
+      if (exists) return;
+      allowlist.push({
+        id: randomUUID(),
+        pattern,
+        source: 'allow-always',
+        ...(commandText ? { commandText } : {}),
+        lastUsedAt: Date.now(),
+      });
+    };
+
+    if (pinBin) {
+      pushAllowlistEntry(pinBin, 'pin');
+      pushAllowlistEntry('pin');
+      for (const commandText of DURABLE_PIN_COMMANDS) {
+        const durablePattern = `=command:${createHash('sha256').update(commandText).digest('hex').slice(0, 16)}`;
+        pushAllowlistEntry(durablePattern, commandText);
+      }
+    }
+
+    agent['allowlist'] = allowlist;
+    agents[agentKey] = agent;
+  }
+
+  file['agents'] = agents;
+
+  writeFileSync(EXEC_APPROVALS_PATH, JSON.stringify(file, null, 2) + '\n');
+  console.log('[setup] Exec approvals updated at', EXEC_APPROVALS_PATH);
+}
 
 /**
  * Check if first-run setup is needed.
@@ -97,6 +209,8 @@ export function ensureConfig(): void {
     writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n');
     console.log('[setup] Config updated at', CONFIG_PATH);
   }
+
+  ensurePinExecApproval();
 }
 
 /**

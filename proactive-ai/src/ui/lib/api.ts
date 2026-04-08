@@ -18,25 +18,17 @@ function getApiRpcRoot(): string {
   return gatewayBaseUrl ? `${gatewayBaseUrl}${API_RPC_ROOT}` : API_RPC_ROOT;
 }
 
-function getAuthHeaders(): Record<string, string> {
+export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const token = window.__GW_TOKEN__;
-  if (token) return { Authorization: `Bearer ${token}` };
-  return {};
-}
-
-export function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const headers = {
-    ...getAuthHeaders(),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(init?.headers as Record<string, string> ?? {}),
   };
-  // Map legacy /api/ paths to /rpc/ (server routes live under /proactive-ai/rpc/*)
-  const rpcPath = path.replace(/^\/api\//, '/rpc/');
-  return fetch(`${getApiRoot()}${rpcPath}`, { ...init, headers });
+  return fetch(`${getApiRoot()}${path}`, { ...init, headers });
 }
 
 export function apiRpcFetch(path: string, init?: RequestInit): Promise<Response> {
   const headers = {
-    ...getAuthHeaders(),
     ...(init?.headers as Record<string, string> ?? {}),
   };
   return fetch(`${getApiRpcRoot()}${path}`, { ...init, headers });
