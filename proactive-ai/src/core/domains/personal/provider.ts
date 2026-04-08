@@ -327,17 +327,7 @@ class McpPersonalProvider implements PersonalProvider {
   }
 
   async waitForConnection(toolkit: string): Promise<PersonalConnection> {
-    const parsed = await this.meta("COMPOSIO_WAIT_FOR_CONNECTIONS", { toolkits: [toolkit] });
-    const data = obj(parsed.data);
-    const results = obj(data.results);
-    const row = obj(results[toolkit]);
-    return {
-      toolkit,
-      status: (str(row.status) ?? "unknown").toUpperCase(),
-      connectedAccountId: str(row.connected_account_id),
-      userInfo: null,
-      redirectUrl: null,
-    };
+    return this.platformDelegate().waitForConnection(toolkit);
   }
 
   async disconnectApp(toolkit: string): Promise<PersonalConnection> {
