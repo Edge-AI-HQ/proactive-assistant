@@ -4,6 +4,7 @@ import { resolve, dirname } from "node:path";
 export interface PersonalPlatformSettings {
   apiKey?: string;
   apiBase?: string;
+  mcpUrl?: string;
   userId?: string;
   callbackUrl?: string;
   authConfigMap?: Record<string, string>;
@@ -65,6 +66,7 @@ export const loadPlatformSettings = (homeDir: string): PersonalPlatformSettings 
     return {
       apiKey: asString(composio.apiKey),
       apiBase: asString(composio.apiBase),
+      mcpUrl: asString(composio.mcpUrl),
       userId: asString(composio.userId),
       callbackUrl: asString(composio.callbackUrl),
       authConfigMap: Object.keys(authConfigMap).length > 0 ? authConfigMap : undefined,

@@ -1,14 +1,13 @@
 /**
- * Composio Platform API provider for personal data access.
+ * Composio provider for personal data access.
  *
- * Uses the Composio v3 REST API to:
- *   1. List/manage connected accounts (OAuth connections)
- *   2. Search and discover available tools
- *   3. Get tool input schemas
- *   4. Execute tools on behalf of the user
+ * Current default transport in this repo:
+ *   - Platform API key (`ak_...`) + MCP meta tools.
  */
 
-import { createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import type { CoreContext } from "../../context.js";
 import { loadPlatformSettings } from "./platform_settings.js";
@@ -69,6 +68,32 @@ const obj = (v: unknown): Record<string, unknown> =>
     ? (v as Record<string, unknown>)
     : {};
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const resolveUserIdPath = (homeDir: string): string =>
+  resolve(homeDir, ".openclaw-proactive-ai", "composio-user-id");
+
+const loadOrCreateUuidUserId = (homeDir: string): string => {
+  const path = resolveUserIdPath(homeDir);
+  try {
+    const raw = readFileSync(path, "utf-8").trim();
+    if (UUID_RE.test(raw)) {
+      return raw;
+    }
+  } catch {
+    // continue and create
+  }
+
+  const generated = randomUUID();
+  try {
+    mkdirSync(resolve(homeDir, ".openclaw-proactive-ai"), { recursive: true });
+    writeFileSync(path, generated, { mode: 0o600 });
+  } catch {
+    // best effort persistence; return generated even if write fails
+  }
+  return generated;
+};
+
 // ── Noop (no key configured) ──
 
 class NoopPersonalProvider implements PersonalProvider {
@@ -83,6 +108,7 @@ class NoopPersonalProvider implements PersonalProvider {
 }
 
 const DEFAULT_API_BASE = "https://backend.composio.dev/api/v3";
+const DEFAULT_MCP_URL = "https://connect.composio.dev/mcp";
 
 const sleep = async (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -122,6 +148,291 @@ async function composioApiCall(
   }
 
   return json;
+}
+
+async function mcpCall(
+  mcpUrl: string,
+  authHeader: "x-api-key" | "x-consumer-api-key",
+  key: string,
+  method: string,
+  params?: Record<string, unknown>,
+): Promise<unknown> {
+  const body = {
+    jsonrpc: "2.0",
+    id: Date.now().toString(),
+    method,
+    ...(params ? { params } : {}),
+  };
+
+  const res = await fetch(mcpUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "application/json, text/event-stream",
+      [authHeader]: key,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Composio MCP ${res.status}: ${await res.text()}`);
+  }
+
+  const contentType = res.headers.get("content-type") ?? "";
+  if (contentType.includes("text/event-stream")) {
+    const text = await res.text();
+    for (const line of text.split("\n")) {
+      if (!line.startsWith("data: ")) continue;
+      const parsed = JSON.parse(line.slice(6)) as Record<string, unknown>;
+      if (parsed.result !== undefined) return parsed.result;
+      if (parsed.error) {
+        const err = obj(parsed.error);
+        throw new Error(str(err.message) ?? JSON.stringify(parsed.error));
+      }
+      return parsed;
+    }
+    throw new Error("No data in MCP SSE response");
+  }
+
+  const json = await res.json() as Record<string, unknown>;
+  if (json.error) {
+    const err = obj(json.error);
+    throw new Error(str(err.message) ?? JSON.stringify(json.error));
+  }
+  return json.result;
+}
+
+async function callMetaTool(
+  mcpUrl: string,
+  authHeader: "x-api-key" | "x-consumer-api-key",
+  key: string,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const result = obj(await mcpCall(mcpUrl, authHeader, key, "tools/call", {
+    name: toolName,
+    arguments: args,
+  }));
+  const content = Array.isArray(result.content) ? result.content : [];
+  const textBlock = content.find((entry) => obj(entry).type === "text");
+  if (!textBlock) return {};
+  return obj(JSON.parse(str(obj(textBlock).text) ?? "{}"));
+}
+
+const DISCOVERY_QUERIES = [
+  { query: "email" },
+  { query: "messaging chat" },
+  { query: "calendar schedule" },
+  { query: "files documents" },
+  { query: "tasks projects" },
+  { query: "code repository" },
+];
+
+class McpPersonalProvider implements PersonalProvider {
+  private sessionMcpUrl: string | null = null;
+
+  constructor(
+    private readonly apiKey: string,
+    private readonly apiBase: string,
+    private readonly userId: string,
+    private readonly preferredMcpUrl: string | null,
+    private readonly authHeader: "x-api-key" | "x-consumer-api-key",
+    private readonly callbackUrl: string | null,
+    private readonly authConfigMap: Record<string, string>,
+  ) {}
+
+  private withUserId(rawUrl: string): string {
+    const url = new URL(rawUrl);
+    if (!url.searchParams.get("user_id")) {
+      url.searchParams.set("user_id", this.userId);
+    }
+    return url.toString();
+  }
+
+  private async ensureMcpUrl(): Promise<string> {
+    if (this.sessionMcpUrl) return this.sessionMcpUrl;
+
+    if (this.preferredMcpUrl) {
+      this.sessionMcpUrl = this.withUserId(this.preferredMcpUrl);
+      return this.sessionMcpUrl;
+    }
+
+    const body: Record<string, unknown> = {
+      user_id: this.userId,
+    };
+    if (Object.keys(this.authConfigMap).length > 0) {
+      body["auth_configs"] = this.authConfigMap;
+    }
+    if (this.callbackUrl) {
+      body["manage_connections"] = {
+        enabled: true,
+        callback_url: this.callbackUrl,
+        enable_wait_for_connections: true,
+      };
+    }
+
+    const session = await composioApiCall(this.apiBase, this.apiKey, "/tool_router/session", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    const mcp = obj(session.mcp);
+    const url = str(mcp.url);
+    if (!url) {
+      throw new Error("Composio session missing mcp.url");
+    }
+
+    this.sessionMcpUrl = this.withUserId(url);
+    return this.sessionMcpUrl;
+  }
+
+  private async meta(tool: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const mcpUrl = await this.ensureMcpUrl();
+    return callMetaTool(mcpUrl, this.authHeader, this.apiKey, tool, args);
+  }
+
+  async discoverConnections(): Promise<PersonalConnection[]> {
+    const parsed = await this.meta("COMPOSIO_SEARCH_TOOLS", { queries: DISCOVERY_QUERIES });
+    const data = obj(parsed.data);
+    const statuses = Array.isArray(data.toolkit_connection_statuses)
+      ? data.toolkit_connection_statuses
+      : [];
+
+    return statuses
+      .filter((entry) => obj(entry).has_active_connection === true)
+      .map((entry) => {
+        const row = obj(entry);
+        const details = obj(row.connection_details);
+        const userInfo = row.current_user_info ? obj(row.current_user_info) : null;
+        return {
+          toolkit: str(row.toolkit) ?? "unknown",
+          status: "ACTIVE",
+          connectedAccountId: str(details.connected_account_id),
+          userInfo,
+          redirectUrl: null,
+        };
+      });
+  }
+
+  async checkConnections(toolkits: string[]): Promise<PersonalConnection[]> {
+    const parsed = await this.meta("COMPOSIO_MANAGE_CONNECTIONS", { toolkits });
+    const data = obj(parsed.data);
+    const results = obj(data.results);
+    return Object.entries(results).map(([toolkit, info]) => {
+      const row = obj(info);
+      return {
+        toolkit,
+        status: (str(row.status) ?? "unknown").toUpperCase(),
+        connectedAccountId: str(row.connected_account_id),
+        userInfo: row.current_user_info ? obj(row.current_user_info) : null,
+        redirectUrl: str(row.redirect_url),
+      };
+    });
+  }
+
+  async connectApp(toolkit: string): Promise<PersonalConnection> {
+    const connections = await this.checkConnections([toolkit]);
+    return connections[0] ?? {
+      toolkit,
+      status: "UNKNOWN",
+      connectedAccountId: null,
+      userInfo: null,
+      redirectUrl: null,
+    };
+  }
+
+  async waitForConnection(toolkit: string): Promise<PersonalConnection> {
+    const parsed = await this.meta("COMPOSIO_WAIT_FOR_CONNECTIONS", { toolkits: [toolkit] });
+    const data = obj(parsed.data);
+    const results = obj(data.results);
+    const row = obj(results[toolkit]);
+    return {
+      toolkit,
+      status: (str(row.status) ?? "unknown").toUpperCase(),
+      connectedAccountId: str(row.connected_account_id),
+      userInfo: null,
+      redirectUrl: null,
+    };
+  }
+
+  async searchTools(
+    query: string,
+    options?: { toolkit?: string; limit?: number },
+  ): Promise<PersonalToolInfo[]> {
+    const queries = options?.toolkit
+      ? [{ query, toolkits: [options.toolkit] }]
+      : [{ query }];
+    const parsed = await this.meta("COMPOSIO_SEARCH_TOOLS", { queries });
+    const data = obj(parsed.data);
+    const results = Array.isArray(data.results) ? data.results : [];
+    const schemas = obj(data.tool_schemas);
+    const tools: PersonalToolInfo[] = [];
+
+    for (const result of results) {
+      const row = obj(result);
+      const primary = Array.isArray(row.primary_tool_slugs) ? row.primary_tool_slugs : [];
+      const related = Array.isArray(row.related_tool_slugs) ? row.related_tool_slugs : [];
+      const toolkitNames = Array.isArray(row.toolkits) ? row.toolkits : [];
+      const toolkit = str(toolkitNames[0]);
+      for (const slugValue of [...primary, ...related]) {
+        const slug = str(slugValue);
+        if (!slug) continue;
+        const schema = obj(schemas[slug]);
+        tools.push({
+          slug,
+          description: str(schema.description),
+          toolkit: str(schema.toolkit)?.toLowerCase() ?? toolkit,
+        });
+      }
+    }
+
+    return tools.slice(0, options?.limit ?? 20);
+  }
+
+  async getToolSchema(slug: string): Promise<PersonalToolSchema | null> {
+    const parsed = await this.meta("COMPOSIO_GET_TOOL_SCHEMAS", { tool_slugs: [slug] });
+    const data = obj(parsed.data);
+    const schemas = obj(data.schemas ?? data);
+    const schema = obj(schemas[slug] ?? Object.values(schemas)[0]);
+    if (!schema.input_schema && !schema.inputSchema) return null;
+    return {
+      slug: str(schema.tool_slug) ?? slug,
+      description: str(schema.description),
+      parameters: obj(schema.input_schema ?? schema.inputSchema),
+    };
+  }
+
+  async executeTool(slug: string, args: Record<string, unknown>): Promise<PersonalExecResult> {
+    try {
+      const parsed = await this.meta("COMPOSIO_MULTI_EXECUTE_TOOL", {
+        tools: [{ tool_slug: slug, arguments: args }],
+      });
+      const data = obj(parsed.data);
+      const results = Array.isArray(data.results) ? data.results : [];
+      const first = obj(results[0]);
+      const response = obj(first.response);
+      if (response.successful === false || parsed.successful === false) {
+        return {
+          tool: slug,
+          success: false,
+          data: null,
+          error: str(response.error) ?? str(parsed.error) ?? "Execution failed",
+        };
+      }
+      return {
+        tool: slug,
+        success: true,
+        data: response.data ?? response,
+        error: null,
+      };
+    } catch (error) {
+      return {
+        tool: slug,
+        success: false,
+        data: null,
+        error: error instanceof Error ? error.message : "Unknown error",
+      };
+    }
+  }
 }
 
 // ── Platform API Provider ──
@@ -412,6 +723,13 @@ export const createPersonalProvider = (
   const apiKey = ctx.env.COMPOSIO_API_KEY?.trim() || platformSettings.apiKey;
   if (!apiKey) return new NoopPersonalProvider();
 
+  const userId = (() => {
+    const fromEnv = ctx.env.COMPOSIO_USER_ID?.trim();
+    if (fromEnv) return fromEnv;
+    const fromSettings = platformSettings.userId?.trim();
+    if (fromSettings) return fromSettings;
+    return loadOrCreateUuidUserId(ctx.homeDir);
+  })();
   const authConfigMap = (() => {
     try {
       const fromEnv = JSON.parse(ctx.env.COMPOSIO_AUTH_CONFIG_MAP_JSON ?? "{}") as Record<string, string>;
@@ -423,27 +741,19 @@ export const createPersonalProvider = (
       return { ...(platformSettings.authConfigMap ?? {}) };
     }
   })();
-
   for (const [key, value] of Object.entries(ctx.env)) {
-    if (!key.startsWith("COMPOSIO_AUTH_CONFIG_") || !value?.trim()) {
-      continue;
-    }
-    const toolkit = key
-      .replace("COMPOSIO_AUTH_CONFIG_", "")
-      .toLowerCase();
+    if (!key.startsWith("COMPOSIO_AUTH_CONFIG_") || !value?.trim()) continue;
+    const toolkit = key.replace("COMPOSIO_AUTH_CONFIG_", "").toLowerCase();
     authConfigMap[toolkit] = value.trim();
   }
 
-  const userId =
-    ctx.env.COMPOSIO_USER_ID?.trim() ||
-    platformSettings.userId ||
-    `pin_${createHash("sha256").update(ctx.homeDir).digest("hex").slice(0, 16)}`;
-
-  return new PlatformPersonalProvider({
+  return new McpPersonalProvider(
     apiKey,
-    apiBase: ctx.env.COMPOSIO_API_BASE || platformSettings.apiBase || DEFAULT_API_BASE,
+    ctx.env.COMPOSIO_API_BASE || platformSettings.apiBase || DEFAULT_API_BASE,
     userId,
-    callbackUrl: ctx.env.COMPOSIO_CALLBACK_URL ?? platformSettings.callbackUrl ?? null,
+    ctx.env.COMPOSIO_MCP_URL || platformSettings.mcpUrl || null,
+    "x-api-key",
+    ctx.env.COMPOSIO_CALLBACK_URL ?? platformSettings.callbackUrl ?? null,
     authConfigMap,
-  });
+  );
 };

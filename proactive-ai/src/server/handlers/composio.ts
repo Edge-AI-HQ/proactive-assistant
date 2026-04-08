@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
-import { personal as corePersonal, CoreError } from '@pin-ai/core';
 import type { RouteContext } from '../../types/server.js';
 import { json, readBody } from '../http-utils.js';
+import { loadCoreModule, readCoreError } from '../core-loader.js';
 
 const ctx = { env: process.env, homeDir: homedir() };
 
@@ -12,16 +12,19 @@ export async function handleComposio(routeCtx: RouteContext): Promise<boolean> {
   const route = subpath.slice('/composio'.length);
 
   try {
+    const core = await loadCoreModule();
+    const corePersonal = core.personal as Record<string, (...args: unknown[]) => Promise<unknown>>;
+
     // GET /composio/status
     if (route === '/status' && req.method === 'GET') {
-      const status = await corePersonal.status(ctx);
+      const status = await corePersonal['status'](ctx);
       json(res, 200, status);
       return true;
     }
 
     // GET /composio/connections
     if (route === '/connections' && req.method === 'GET') {
-      const connections = await corePersonal.listConnections(ctx);
+      const connections = await corePersonal['listConnections'](ctx);
       json(res, 200, { connections });
       return true;
     }
@@ -43,7 +46,7 @@ export async function handleComposio(routeCtx: RouteContext): Promise<boolean> {
     if (route === '/connect') {
       const toolkit = String(body['toolkit'] ?? '').trim().toLowerCase();
       if (!toolkit) { json(res, 400, { error: 'Missing toolkit' }); return true; }
-      const result = await corePersonal.connectApp(ctx, { toolkit });
+      const result = await corePersonal['connectApp'](ctx, { toolkit });
       json(res, 200, result);
       return true;
     }
@@ -52,16 +55,17 @@ export async function handleComposio(routeCtx: RouteContext): Promise<boolean> {
     if (route === '/wait') {
       const toolkit = String(body['toolkit'] ?? '').trim().toLowerCase();
       if (!toolkit) { json(res, 400, { error: 'Missing toolkit' }); return true; }
-      const result = await corePersonal.waitForConnection(ctx, { toolkit });
+      const result = await corePersonal['waitForConnection'](ctx, { toolkit });
       json(res, 200, result);
       return true;
     }
   } catch (err) {
-    if (err instanceof CoreError) {
-      json(res, 500, { ok: false, error: { type: err.type, message: err.message } });
+    const core = await loadCoreModule();
+    const parsed = readCoreError(err, core);
+    if (parsed.isCoreError) {
+      json(res, 500, { ok: false, error: { type: parsed.type, message: parsed.message } });
     } else {
-      const msg = err instanceof Error ? err.message : String(err);
-      json(res, 500, { error: msg });
+      json(res, 500, { error: parsed.message });
     }
     return true;
   }
