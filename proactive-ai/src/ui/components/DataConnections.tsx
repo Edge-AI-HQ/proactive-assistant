@@ -287,14 +287,14 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
             <span className="text-sm font-semibold text-foreground">Connect your apps</span>
           </div>
           <p className="text-xs text-foreground/45">
-            Enter your Composio API key to connect apps. Get one at{" "}
+            Enter your Composio API key to connect apps. Find it in your{" "}
             <a
-              href="https://dashboard.composio.dev"
+              href="https://app.composio.dev/settings"
               target="_blank"
               rel="noopener noreferrer"
               className="underline text-foreground/60 hover:text-foreground/80"
             >
-              dashboard.composio.dev
+              Composio workspace settings
             </a>
           </p>
           <div className="flex gap-2">
