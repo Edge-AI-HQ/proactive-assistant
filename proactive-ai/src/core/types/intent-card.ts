@@ -40,15 +40,18 @@ export interface IntentCard {
 
 export interface PlannerOutput {
   reasoning: string;
+  contextGaps?: string[];
   intentsToGenerate: IntentPlan[];
 }
 
 export interface IntentPlan {
   goalBasket: GoalBasket;
   objective: string;
-  dataSources: string[];   // which pin CLI commands to call
   whyNow: string;
   expectedAction: string;
+  dataSources?: string[];   // legacy compatibility; prefer evidenceRefs
+  evidenceRefs?: string[];
+  contextGaps?: string[];
 }
 
 export interface GeneratorOutput {
@@ -89,6 +92,17 @@ export interface PipelineResult {
   iterations: PipelineIteration[];
   finalCards: IntentCard[];
   totalIterations: number;
+  tracePath?: string;
+}
+
+export interface PipelineTraceEvent {
+  iteration?: number;
+  phase: string;
+  kind: string;
+  name: string;
+  durationMs?: number;
+  message?: string;
+  attrs?: Record<string, unknown>;
 }
 
 // ── Server events (SSE) ──
@@ -98,5 +112,7 @@ export type ServerEvent =
   | { type: 'pipeline:iteration'; data: { iteration: number; phase: 'planning' | 'generating' | 'evaluating' } }
   | { type: 'pipeline:cards'; data: { iteration: number; cards: IntentCard[] } }
   | { type: 'pipeline:evaluation'; data: { iteration: number; evaluation: EvaluatorOutput } }
+  | { type: 'pipeline:timing'; data: { label: string; durationMs: number; detail: string } }
+  | { type: 'pipeline:trace'; data: PipelineTraceEvent }
   | { type: 'pipeline:complete'; data: PipelineResult }
   | { type: 'pipeline:error'; data: { message: string } };

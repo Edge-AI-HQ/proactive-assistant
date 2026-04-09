@@ -10,6 +10,9 @@ import { homedir } from 'node:os';
 import {
   profile,
   feedback,
+  personal,
+  push,
+  world,
   type CoreContext,
   NotFoundError,
 } from '../../core/index.js';
@@ -53,6 +56,54 @@ export async function upsertGoal(input: {
   return await profile.upsertGoal(buildDefaultCtx(), input);
 }
 
+export async function getDefaultProfileFacts(): Promise<Record<string, unknown>> {
+  try {
+    return await profile.getFacts(buildDefaultCtx()) as Record<string, unknown>;
+  } catch (err) {
+    if (err instanceof NotFoundError) return {};
+    throw err;
+  }
+}
+
+export async function getDefaultProfilePreferences(): Promise<Record<string, unknown>> {
+  try {
+    return await profile.getPreferences(buildDefaultCtx()) as Record<string, unknown>;
+  } catch (err) {
+    if (err instanceof NotFoundError) return {};
+    throw err;
+  }
+}
+
+export async function getDefaultProfileGoals(): Promise<unknown[]> {
+  try {
+    return await profile.listGoals(buildDefaultCtx());
+  } catch (err) {
+    if (err instanceof NotFoundError) return [];
+    throw err;
+  }
+}
+
+export async function getDefaultProfileConstraints(): Promise<Record<string, unknown>> {
+  try {
+    return await profile.getConstraints(buildDefaultCtx()) as Record<string, unknown>;
+  } catch (err) {
+    if (err instanceof NotFoundError) return {};
+    throw err;
+  }
+}
+
+export async function getDefaultProfileSnapshot(): Promise<Record<string, unknown> | null> {
+  try {
+    return await profile.buildProfileSnapshot(buildDefaultCtx(), {
+      id: 'default',
+      view: 'ranking',
+    }) as Record<string, unknown>;
+  } catch (err) {
+    if (err instanceof NotFoundError) return null;
+    throw err;
+  }
+}
+
 // ── Feedback ──
 
 export async function listFeedback(opts?: {
@@ -71,4 +122,44 @@ export async function feedbackStats(opts?: {
   return await feedback.statsFeedback(buildDefaultCtx(), {
     since: opts?.since,
   }) as unknown as Record<string, unknown>;
+}
+
+export async function listFeedbackSummary(opts?: {
+  since?: string;
+  limit?: string;
+}): Promise<unknown[]> {
+  return await feedback.listFeedback(buildDefaultCtx(), {
+    since: opts?.since,
+    limit: opts?.limit ?? '20',
+  });
+}
+
+export async function listPushHistorySummary(opts?: {
+  since?: string;
+  limit?: string;
+}): Promise<unknown[]> {
+  return await push.listPushHistory(buildDefaultCtx(), {
+    since: opts?.since,
+    limit: opts?.limit ?? '20',
+  });
+}
+
+export async function getPersonalStatus(): Promise<Record<string, unknown>> {
+  return await personal.status(buildDefaultCtx()) as Record<string, unknown>;
+}
+
+export async function listPersonalConnections(): Promise<unknown[]> {
+  return await personal.listConnections(buildDefaultCtx());
+}
+
+export async function shortlistWorldItemsForDefaultProfile(limit = 10): Promise<unknown[]> {
+  try {
+    return await world.shortlistWorldItems(buildDefaultCtx(), {
+      profileId: 'default',
+      limit: String(limit),
+    });
+  } catch (err) {
+    if (err instanceof NotFoundError) return [];
+    throw err;
+  }
 }
