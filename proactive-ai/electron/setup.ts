@@ -208,9 +208,9 @@ export function ensureConfig(): void {
     config.browser = {
       enabled: true,
       headless: false,
-      defaultProfile: 'proactive',
+      defaultProfile: 'user',
       profiles: {
-        proactive: {
+        user: {
           driver: 'openclaw',
           cdpPort: 9333,
           color: '06b6d4',
