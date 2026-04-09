@@ -36,45 +36,48 @@ export function buildEvaluatorWorkerPrompt(params: EvaluatorWorkerPromptParams):
     outputLanguage = DEFAULT_GENERATION_LANGUAGE,
   } = params;
 
-  return `You are an **Evaluator Worker** in the Proactive AI intent card generation pipeline.
+  return `You are an Evaluator Worker in a Proactive AI pipeline. You score one intent card at a time.
 Today: ${currentDate} | Iteration: ${iterationNumber} of ${maxIterations}
 
-**${buildOutputLanguageInstruction(outputLanguage, {
+<language_requirement>
+${buildOutputLanguageInstruction(outputLanguage, {
     fieldsDescription: "All feedback text fields",
-  })}**
+  })}
+</language_requirement>
 
-## Mission
-
-Evaluate exactly one card. Be strict and evidence-bound.
-Do not re-select the final portfolio. Do not return the full card object.
-
-## Planner Intent
-
-\`\`\`json
+<planner_intent>
 ${plan}
-\`\`\`
+</planner_intent>
 
-## Card
-
-\`\`\`json
+<card>
 ${card}
-\`\`\`
+</card>
 
-## Evidence Pack
-
-\`\`\`json
+<evidence_pack>
 ${evidencePack}
-\`\`\`
+</evidence_pack>
 
-## Deterministic Validator Summary
-
-\`\`\`json
+<validator_summary>
 ${validatorSummary}
-\`\`\`
+</validator_summary>
 
-## Output Format
+<instructions>
+Score this single card on 5 dimensions (0.0–10.0 each). The overall score is the average of the 5 dimensions.
 
-Output ONLY a JSON code block.
+Scoring dimensions:
+- relevance: Does this card address something the user actually cares about, based on their goals and context?
+- actionability: Can the user act on this card immediately, or does it require more research/context?
+- whyNowClarity: Is the time-sensitive trigger concrete and verifiable, or vague/manufactured?
+- novelty: Does this card surface something the user wouldn't have thought of on their own?
+- decisionCompression: Does the card save thinking time by synthesizing evidence into a clear recommendation?
+
+A card passes if overall >= 6.0.
+
+Be consistent with the validator summary above — it contains deterministic checks you should not contradict. Write feedback as specific improvement suggestions the Generator can act on in the next iteration.
+</instructions>
+
+<output_format>
+Respond with ONLY a JSON code block:
 
 \`\`\`json
 {
@@ -90,12 +93,7 @@ Output ONLY a JSON code block.
   "pass": true
 }
 \`\`\`
-
-**Constraints:**
-- Evaluate only this card
-- Be consistent with the validator summary
-- Overall score must be the average of the 5 dimensions
-- Use the evidence pack, not external exploration`;
+</output_format>`;
 }
 
 export function buildFeedbackSynthPrompt(params: FeedbackSynthPromptParams): string {
@@ -109,41 +107,36 @@ export function buildFeedbackSynthPrompt(params: FeedbackSynthPromptParams): str
   } = params;
   const isLastIteration = iterationNumber >= maxIterations;
 
-  return `You are the **Feedback Synthesizer** in the Proactive AI intent card generation pipeline.
+  return `You are the Feedback Synthesizer in a Proactive AI pipeline. You distill evaluator scores into one actionable feedback string for the next iteration.
 Today: ${currentDate} | Iteration: ${iterationNumber} of ${maxIterations}
 
-**${buildOutputLanguageInstruction(outputLanguage, {
+<language_requirement>
+${buildOutputLanguageInstruction(outputLanguage, {
     fieldsDescription: "iterationFeedback",
-  })}**
+  })}
+</language_requirement>
 
-## Mission
-
-Read the worker evaluations and validator output, then synthesize one concise iteration feedback string for the next round.
-Do not return per-card scores and do not return full card objects.
-
-## Worker Evaluations
-
-\`\`\`json
+<worker_evaluations>
 ${evaluations}
-\`\`\`
+</worker_evaluations>
 
-## Validator Summary
-
-\`\`\`json
+<validator_summary>
 ${validatorSummary}
-\`\`\`
+</validator_summary>
 
-## Output Format
+<instructions>
+Synthesize one concise feedback string covering: what to preserve, what to tighten, and what to drop.
 
-Output ONLY a JSON code block.
+Focus on cross-card patterns (e.g., "all cards had vague whyNow triggers") rather than repeating per-card feedback. ${isLastIteration ? "This is the final iteration — keep feedback archival and brief." : "This feedback feeds directly into the next Planner iteration, so make it actionable and specific."}
+</instructions>
+
+<output_format>
+Respond with ONLY a JSON code block:
 
 \`\`\`json
 {
-  "iterationFeedback": "Explain what to preserve, what to tighten, and what to drop next round."
+  "iterationFeedback": "What to preserve, what to tighten, and what to drop."
 }
 \`\`\`
-
-**Constraints:**
-- Focus on cross-card patterns, not line-by-line repetition
-- ${isLastIteration ? "This is the final iteration, so keep feedback archival and brief." : "This feedback must be actionable for the next iteration."}`;
+</output_format>`;
 }

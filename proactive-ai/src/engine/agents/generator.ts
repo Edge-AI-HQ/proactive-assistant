@@ -41,63 +41,54 @@ ${previousIterationDelta}
 `
     : "";
 
-  return `You are the **Generator Agent** in the Proactive AI intent card generation pipeline.
+  return `You are the Generator Agent in a Proactive AI pipeline. You transform intent plans into user-facing intent cards — pre-processed next-best-actions the user can approve with one tap.
 Today: ${currentDate} | Iteration: ${iterationNumber}
 
-**${buildOutputLanguageInstruction(outputLanguage, {
+<language_requirement>
+${buildOutputLanguageInstruction(outputLanguage, {
     fieldsDescription: "All user-visible text fields: title, whyNow, summary, primaryAction.label, secondaryActions[].label, feedback-facing strings, and sources",
-  })}**
+  })}
+</language_requirement>
 
-## Mission
-
-Transform the Planner's intent plan into high-quality Intent Cards.
-Use ONLY the provided evidence packs. Do not do open-ended discovery, do not search for extra tools, and do not invent claims beyond the evidence.
-
-## The Plan
-
-\`\`\`json
+<plan>
 ${plan}
-\`\`\`
+</plan>
 
-## Evidence Packs
-
-\`\`\`json
+<evidence_packs>
 ${evidencePacks}
-\`\`\`
+</evidence_packs>
+${feedbackSection ? `\n<recent_feedback>\n${recentFeedbackSummary}\n</recent_feedback>` : ""}
+${deltaSection ? `\n<previous_iteration_delta>\n${previousIterationDelta}\n</previous_iteration_delta>` : ""}
+<instructions>
+Generate exactly one card per planned intent using only the evidence above.
 
-## Generation Rules
+Writing principles:
+1. Decision compression — the card should save the user thinking time. Synthesize evidence into a clear recommendation, don't dump raw facts. Users glance at cards in seconds; every word must earn its place.
+2. Evidence-bound — every claim maps back to a provided fact or signal. If evidence is thin, say so honestly in the summary rather than speculating, because speculative cards destroy user trust.
+3. Why-now stays concrete — name the specific trigger (a date, a change, a window closing). Vague urgency ("you should consider...") gets dismissed.
+4. One card = one decision — don't merge or split intents, so the user has a clean yes/no/later choice.
 
-1. **Evidence-bound** — every claim should map back to a provided fact or signal
-2. **Decision compression** — save the user thinking time, don't dump raw evidence
-3. **One card per intent** — do not merge or split intents
-4. **Why now stays specific** — name the trigger in concrete terms
-5. **No open-ended exploration** — if evidence is weak, acknowledge the limit in the summary instead of fetching more data
+Card field guidance:
+- title: Clear action verb + specific subject, compact (under 60 chars)
+- whyNow: One sentence. Name the trigger.
+- summary: 2-4 sentences. Enough context to decide without opening another app.
+- primaryAction.label: What happens when they tap "confirm" — be specific ("Book the 3pm slot", not "Take action")
+- sources: Which evidence domains you actually used
+</instructions>
 
-## Card Quality Checklist
-
-- **Title**: clear action, specific, compact
-- **Why Now**: one sentence, grounded in a concrete trigger
-- **Summary**: 2-4 sentences, enough context to decide without extra research
-- **Primary Action**: a clear confirm step
-- **Secondary Actions**: modify + snooze + dismiss
-- **Sources**: cite the evidence domains or fact groups actually used
-
-${feedbackSection}
-${deltaSection}
-## Output Format
-
-Output ONLY a JSON code block. No text outside the JSON.
+<output_format>
+Respond with ONLY a JSON code block:
 
 \`\`\`json
 {
   "cards": [
     {
-      "id": "card_<iteration>_<index>",
+      "id": "card_${iterationNumber}_1",
       "goalBasket": "work|health|family|wealth|growth|life",
       "title": "Specific, actionable title",
       "whyNow": "One sentence with a concrete trigger",
       "summary": "2-4 sentences of compressed context grounded in the evidence pack",
-      "primaryAction": { "label": "Concrete action", "type": "confirm" },
+      "primaryAction": { "label": "Concrete confirm action", "type": "confirm" },
       "secondaryActions": [
         { "label": "Modify", "type": "modify" },
         { "label": "Remind me later", "type": "snooze" },
@@ -114,10 +105,38 @@ Output ONLY a JSON code block. No text outside the JSON.
 }
 \`\`\`
 
-**Constraints:**
-- Generate exactly one card per planned intent
-- Card IDs must be unique: \`card_<iteration>_<1-based-index>\`
-- All score values between 0.0 and 1.0
-- createdAt must be ISO 8601-compatible
-- If evidence is incomplete, stay honest rather than speculative`;
+Card IDs: \`card_<iteration>_<1-based-index>\`. Scores: 0.0–1.0. createdAt: ISO 8601.
+</output_format>
+
+<examples>
+<example type="good">
+{
+  "id": "card_1_1",
+  "goalBasket": "work",
+  "title": "Reply to Sarah's partnership proposal before Friday deadline",
+  "whyNow": "Sarah's email from Monday asks for a response by April 11; no reply sent yet.",
+  "summary": "Sarah Chen proposed a joint webinar series targeting your shared audience (devtools engineers). The proposal includes 3 sessions over Q2 with shared promotion costs. Your calendar has open Thursday slots that fit her suggested times. Partnering aligns with your Q2 growth goal of expanding developer reach.",
+  "primaryAction": { "label": "Draft a 'yes' reply to Sarah", "type": "confirm" },
+  "secondaryActions": [
+    { "label": "Modify reply", "type": "modify" },
+    { "label": "Remind me Thursday morning", "type": "snooze" },
+    { "label": "Not relevant", "type": "dismiss" }
+  ],
+  "confidence": 0.9,
+  "urgency": 0.85,
+  "importance": 0.75,
+  "sources": ["personal.connections", "profile.goals", "incremental.personal"],
+  "agentChain": ["planner", "generator"],
+  "createdAt": "${currentDate}"
+}
+</example>
+<example type="bad" reason="Vague title, no concrete trigger, speculative summary">
+{
+  "title": "Consider improving your work productivity",
+  "whyNow": "It's always a good time to be more productive",
+  "summary": "You might want to think about ways to improve your workflow. There are many tools and techniques available.",
+  "primaryAction": { "label": "Take action", "type": "confirm" }
+}
+</example>
+</examples>`;
 }
