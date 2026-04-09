@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Settings, Activity, Circle, Clock, Hash, ChevronDown } from "lucide-react";
+import { Settings, Activity, Circle, Clock, Hash, ChevronDown, ExternalLink } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -159,6 +159,18 @@ export default function DebugPanel({
             {health.error && (
               <p className="text-[11px] text-red-500/80 mt-2 leading-snug">{health.error}</p>
             )}
+            <button
+              onClick={() => {
+                const base = (window.__GW_BASE_URL__ ?? window.location.origin).replace(/\/+$/, "");
+                const token = window.__GW_TOKEN__ ?? "";
+                const url = token ? `${base}?token=${token}` : base;
+                window.open(url, "_blank");
+              }}
+              className="mt-2.5 w-full flex items-center justify-center gap-1.5 rounded-xl bg-foreground/5 hover:bg-foreground/10 text-foreground/60 hover:text-foreground/80 text-[11px] font-medium py-1.5 transition-colors"
+            >
+              <ExternalLink size={12} strokeWidth={1.5} />
+              Open Gateway
+            </button>
           </div>
 
           {/* Iterations + Generate */}

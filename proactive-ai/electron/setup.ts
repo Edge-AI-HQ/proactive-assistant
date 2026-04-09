@@ -146,6 +146,10 @@ export function needsSetup(currentPluginDir: string): boolean {
     const registered = installs['proactive-ai'];
     if (registered.installPath !== currentPluginDir) return true;
 
+    // Re-register if load.paths is missing or doesn't include the plugin dir
+    const loadPaths: string[] = config?.plugins?.load?.paths ?? [];
+    if (!loadPaths.includes(currentPluginDir)) return true;
+
     return false;
   } catch {
     return true;
@@ -165,6 +169,18 @@ export function ensureConfig(): void {
   } catch { return; }
 
   let changed = false;
+
+  // Clean up plugins.entries['proactive-ai'] if OpenClaw auto-populated it.
+  // The plugin is loaded via plugins.load.paths; an extra entries key causes
+  // OpenClaw to discover it twice ("duplicate plugin id" warning).
+  const plugins = config.plugins as Record<string, unknown> | undefined;
+  if (plugins) {
+    const entries = plugins.entries as Record<string, unknown> | undefined;
+    if (entries && 'proactive-ai' in entries) {
+      delete entries['proactive-ai'];
+      changed = true;
+    }
+  }
 
   // gateway.controlUi.allowInsecureAuth — needed for device-identity-free connections
   if (!config.gateway) config.gateway = {};
@@ -235,7 +251,7 @@ export function runSetup(pluginDir: string): void {
   if (!config.plugins) config.plugins = {};
   const plugins = config.plugins as Record<string, unknown>;
 
-  // Set up installs entry (same as what `openclaw plugins install -l` would write)
+  // plugins.installs — metadata record (equivalent to `openclaw plugins install -l`)
   if (!plugins.installs) plugins.installs = {};
   const installs = plugins.installs as Record<string, unknown>;
   installs['proactive-ai'] = {
@@ -245,15 +261,20 @@ export function runSetup(pluginDir: string): void {
     installedAt: new Date().toISOString(),
   };
 
-  // Ensure the plugin is in the load paths (replace stale paths)
+  // plugins.load.paths — the actual loading mechanism (directory scan)
   if (!plugins.load) plugins.load = {};
   const load = plugins.load as Record<string, unknown>;
   if (!Array.isArray(load.paths)) load.paths = [];
   const paths = load.paths as string[];
-  // Remove any stale plugin paths that no longer exist
   const cleaned = paths.filter((p: string) => existsSync(p) && p !== pluginDir);
   cleaned.push(pluginDir);
   load.paths = cleaned;
+
+  // Remove stale plugins.entries to prevent duplicate loading
+  const entries = plugins.entries as Record<string, unknown> | undefined;
+  if (entries && 'proactive-ai' in entries) {
+    delete entries['proactive-ai'];
+  }
 
   // Allow the plugin to load (security allowlist)
   if (!Array.isArray(plugins.allow)) plugins.allow = [];
