@@ -957,16 +957,22 @@ async function collectPersonal(ctx: CoreContext, windowStart: string, windowEnd:
   const connectors: Record<string, unknown> = {};
   const normalized: Array<Record<string, unknown>> = [];
 
-  const tryExecute = async (tool: string, args: Record<string, unknown>) => {
-    const result = await provider.executeTool(tool, args);
+  const tryExecute = async (tool: string, args: Record<string, unknown>, connectedAccountId?: string | null) => {
+    const result = await provider.executeTool(tool, args, connectedAccountId ?? undefined);
     return result.success ? result.data : null;
   };
 
+  const appendConnector = (toolkit: string, data: unknown) => {
+    const existing = connectors[toolkit];
+    connectors[toolkit] = Array.isArray(existing) ? [...existing, data] : [data];
+  };
+
   for (const connection of active) {
+    const accountId = connection.connectedAccountId;
     try {
       if (connection.toolkit === "gmail") {
-        const data = await tryExecute("GMAIL_FETCH_EMAILS", {});
-        connectors.gmail = data ?? [];
+        const data = await tryExecute("GMAIL_FETCH_EMAILS", {}, accountId);
+        appendConnector("gmail", data ?? []);
         normalized.push(...normalizeGmailEntries(data, windowEnd));
         continue;
       }
@@ -975,15 +981,15 @@ async function collectPersonal(ctx: CoreContext, windowStart: string, windowEnd:
         const data = await tryExecute("GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS", {
           time_min: windowStart,
           time_max: windowEnd,
-        });
-        connectors.googlecalendar = data ?? [];
+        }, accountId);
+        appendConnector("googlecalendar", data ?? []);
         normalized.push(...normalizeGoogleCalendarEntries(data, windowEnd));
         continue;
       }
 
       if (connection.toolkit === "notion") {
-        const data = await tryExecute("NOTION_FETCH_DATA", {});
-        connectors.notion = data ?? [];
+        const data = await tryExecute("NOTION_FETCH_DATA", {}, accountId);
+        appendConnector("notion", data ?? []);
         normalized.push(...normalizeNotionEntries(data, windowEnd));
         continue;
       }

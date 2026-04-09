@@ -4,9 +4,11 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { createPersonalProvider } from "./provider.js";
+import { _resetSettingsCache } from "../../../core/domains/personal/platform_settings.js";
 
 test("createPersonalProvider uses Composio platform mode to create link sessions", { concurrency: false }, async () => {
   const originalFetch = globalThis.fetch;
+  _resetSettingsCache();
 
   try {
     const requests: Array<{ url: string; method: string; body: Record<string, unknown> | null }> = [];
@@ -80,6 +82,7 @@ test("createPersonalProvider uses Composio platform mode to create link sessions
 
 test("createPersonalProvider falls back to proactive-ai local settings for platform mode", { concurrency: false }, async () => {
   const originalFetch = globalThis.fetch;
+  _resetSettingsCache();
   const homeDir = "/tmp/pin-cli-personal-platform-fallback";
   const profileDir = join(homeDir, ".openclaw-proactive-ai");
   const settingsPath = join(profileDir, "local-settings.json");
@@ -89,7 +92,7 @@ test("createPersonalProvider falls back to proactive-ai local settings for platf
   writeFileSync(settingsPath, JSON.stringify({
     composio: {
       apiKey: "ak_test_platform_local",
-      userId: "user_local",
+      userId: "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
     },
   }) + "\n");
 
@@ -143,7 +146,7 @@ test("createPersonalProvider falls back to proactive-ai local settings for platf
     );
     assert.deepEqual(linkRequest?.body, {
       auth_config_id: "authcfg_notion",
-      user_id: "user_local",
+      user_id: "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
     });
   } finally {
     globalThis.fetch = originalFetch;

@@ -13,7 +13,7 @@ import {
   getToolSchema,
   execTool,
 } from "./domains/personal/service.js";
-import type { PersonalProvider } from "./domains/personal/provider.js";
+import type { PersonalProvider } from "../core/domains/personal/provider.js";
 import { PinDatabaseManager } from "./db/database.js";
 import { LoopRepository } from "./domains/loop/repository.js";
 
@@ -899,6 +899,8 @@ test("personal connections list returns mock connections via provider override",
     async searchTools() { return []; },
     async getToolSchema() { return null; },
     async executeTool() { return { tool: "", success: false, data: null, error: "not called" }; },
+    async disconnectAccount() {},
+    async resolveAccountIdentity() { return null; },
   };
 
   const result = await listConnections(runtime, undefined, { provider: mockProvider });
@@ -941,6 +943,8 @@ test("personal tools search returns results via provider override", async () => 
     },
     async getToolSchema() { return null; },
     async executeTool() { return { tool: "", success: false, data: null, error: "not called" }; },
+    async disconnectAccount() {},
+    async resolveAccountIdentity() { return null; },
   };
 
   const result = await searchTools(runtime, { query: "gmail" }, { provider: mockProvider });
@@ -962,6 +966,8 @@ test("personal tools schema returns not found for unknown tool", async () => {
     async searchTools() { return []; },
     async getToolSchema() { return null; },
     async executeTool() { return { tool: "", success: false, data: null, error: "not called" }; },
+    async disconnectAccount() {},
+    async resolveAccountIdentity() { return null; },
   };
 
   const result = await getToolSchema(runtime, { name: "NONEXISTENT_TOOL" }, { provider: mockProvider });
@@ -998,6 +1004,8 @@ test("personal exec succeeds via provider override", async () => {
         error: null,
       };
     },
+    async disconnectAccount() {},
+    async resolveAccountIdentity() { return null; },
   };
 
   const result = await execTool(
@@ -1030,6 +1038,8 @@ test("personal exec returns error envelope when tool execution fails", async () 
         error: "Rate limit exceeded",
       };
     },
+    async disconnectAccount() {},
+    async resolveAccountIdentity() { return null; },
   };
 
   const result = await execTool(
