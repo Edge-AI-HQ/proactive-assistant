@@ -56,7 +56,6 @@ type TimingEmitter = (label: string, durationMs: number, detail?: string) => voi
 interface ScoredCandidate {
   card: IntentCard;
   score: EvaluationScore;
-  iteration: number;
 }
 
 interface IterationContext {
@@ -91,7 +90,7 @@ export async function runPipeline(
   const startedAt = new Date().toISOString();
 
   const iterations: PipelineIteration[] = [];
-  const candidatePool: ScoredCandidate[] = [];
+  let lastIterationCards: ScoredCandidate[] = [];
   const pendingTraceWrites: Array<Promise<void>> = [];
   let recentFeedbackSummary = "";
   let contextBrief: ContextBrief | null = null;
@@ -426,10 +425,10 @@ export async function runPipeline(
 
     emit({ type: "pipeline:evaluation", data: { iteration: i, evaluation } });
 
-    for (const card of generated.cards) {
-      const score = evaluations.find((entry) => entry.cardId === card.id) ?? syntheticScore(card.id);
-      candidatePool.push({ card, score, iteration: i });
-    }
+    lastIterationCards = generated.cards.map((card) => ({
+      card,
+      score: evaluations.find((entry) => entry.cardId === card.id) ?? syntheticScore(card.id),
+    }));
 
     prev = {
       feedback: iterationFeedback,
@@ -454,7 +453,7 @@ export async function runPipeline(
   }
 
   const selectionT0 = Date.now();
-  const finalCards = selectBestCards(candidatePool);
+  const finalCards = selectBestCards(lastIterationCards);
   emitTiming("Candidate selection", Date.now() - selectionT0);
   emitTiming("Pipeline total", Date.now() - pipelineT0);
 
@@ -691,8 +690,7 @@ const PASS_THRESHOLD = 5.0;
 function selectBestCards(pool: ScoredCandidate[]): IntentCard[] {
   if (pool.length === 0) return [];
 
-  const deduped = deduplicateByIntent(pool);
-  const sorted = [...deduped].sort((a, b) => b.score.overall - a.score.overall);
+  const sorted = [...pool].sort((a, b) => b.score.overall - a.score.overall);
 
   let selected = pickWithDiversity(sorted.filter((candidate) => candidate.score.pass && candidate.score.overall >= PASS_THRESHOLD));
   if (selected.length === 0) {
@@ -700,38 +698,6 @@ function selectBestCards(pool: ScoredCandidate[]): IntentCard[] {
   }
 
   return selected;
-}
-
-function deduplicateByIntent(pool: ScoredCandidate[]): ScoredCandidate[] {
-  const kept: ScoredCandidate[] = [];
-
-  for (const candidate of pool) {
-    const existingIndex = kept.findIndex(
-      (entry) => entry.card.goalBasket === candidate.card.goalBasket
-        && titleSimilarity(entry.card.title, candidate.card.title) >= 0.4,
-    );
-
-    if (existingIndex === -1) {
-      kept.push(candidate);
-    } else if (candidate.score.overall > kept[existingIndex]!.score.overall) {
-      kept[existingIndex] = candidate;
-    }
-  }
-
-  return kept;
-}
-
-function titleSimilarity(left: string, right: string): number {
-  const wordsLeft = new Set(left.toLowerCase().split(/\W+/).filter((word) => word.length > 2));
-  const wordsRight = new Set(right.toLowerCase().split(/\W+/).filter((word) => word.length > 2));
-  if (wordsLeft.size === 0 || wordsRight.size === 0) return 0;
-
-  let intersection = 0;
-  for (const word of wordsLeft) {
-    if (wordsRight.has(word)) intersection += 1;
-  }
-
-  return intersection / (wordsLeft.size + wordsRight.size - intersection);
 }
 
 function pickWithDiversity(candidates: ScoredCandidate[]): IntentCard[] {
