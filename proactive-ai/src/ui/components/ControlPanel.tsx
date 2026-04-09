@@ -1,4 +1,5 @@
 import DataConnections from "./DataConnections";
+import AutoDreamingSettings from "./AutoDreamingSettings";
 import AutoGenerateSettings from "./AutoGenerateSettings";
 import GenerationLanguageSettings from "./GenerationLanguageSettings";
 import type { ComposioState } from "@/hooks/use-composio";
@@ -25,6 +26,16 @@ export default function ControlPanel({ composio }: ControlPanelProps) {
               </p>
             </div>
             <DataConnections composio={composio} />
+          </section>
+
+          <section className="glass-card-strong p-4">
+            <div className="mb-3">
+              <h2 className="text-sm font-semibold text-foreground">Dreaming</h2>
+              <p className="text-[11px] text-foreground/42 mt-1">
+                Review background dreaming runs, profile diffs, and candidate cards.
+              </p>
+            </div>
+            <AutoDreamingSettings />
           </section>
 
           <section className="glass-card-strong p-4">

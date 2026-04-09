@@ -10,6 +10,7 @@ interface AutoPollState {
   detectTimer: ReturnType<typeof setInterval> | null;
   ingestInFlight: boolean;
   loopInFlight: boolean;
+  dreamInFlight: boolean;
 }
 
 interface ProactiveAiGlobal {
@@ -32,6 +33,7 @@ if (!g[GLOBAL_KEY]) {
       detectTimer: null,
       ingestInFlight: false,
       loopInFlight: false,
+      dreamInFlight: false,
     },
     gatewayOrigin: null,
     initialized: false,

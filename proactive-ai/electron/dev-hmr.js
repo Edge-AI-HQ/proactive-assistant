@@ -3,6 +3,7 @@ const http = require('node:http');
 const net = require('node:net');
 const path = require('node:path');
 
+const { PIN_DATA_ROOT: _pinDataRoot, ...baseEnv } = process.env;
 const repoRoot = path.resolve(__dirname, '..');
 const electronDir = __dirname;
 function findAvailablePort(host = '127.0.0.1') {
@@ -115,9 +116,10 @@ async function main() {
   const vite = spawnManaged('npm', ['run', 'dev:ui', '--', '--host', uiDevHost, '--port', uiDevPort, '--strictPort'], {
     cwd: repoRoot,
     env: {
-      ...process.env,
+      ...baseEnv,
       PROACTIVE_AI_PROXY_TARGET: '',
       PROACTIVE_AI_GW_TOKEN: '',
+      PIN_DATA_ROOT: undefined,
     },
   });
   let electron = null;
@@ -158,8 +160,9 @@ async function main() {
   electron = spawnManaged('npm', ['run', 'start'], {
     cwd: electronDir,
     env: {
-      ...process.env,
+      ...baseEnv,
       PROACTIVE_AI_UI_DEV_SERVER: uiDevServerUrl,
+      PIN_DATA_ROOT: undefined,
     },
   });
 

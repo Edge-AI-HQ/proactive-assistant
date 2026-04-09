@@ -6,7 +6,10 @@ import { pinCliData } from '../pipeline/pin-cli.js';
 import {
   loadAutoLoopState,
 } from '../pending-store.js';
-import { getAutoGenerate } from '../server/local-settings.js';
+import { buildDefaultCtx, getDefaultProfile } from '../pipeline/data-access.js';
+import { startDreaming, listDreamRuns } from '../dreaming/service.js';
+import { resolveDreamingTimezone, isDreamingDue } from '../dreaming/schedule.js';
+import { getAutoDreaming, getAutoGenerate } from '../server/local-settings.js';
 
 async function runIngest(api: OpenClawPluginApi, config: ProactiveAIConfig): Promise<void> {
   if (autoPollState.ingestInFlight) return;
@@ -104,6 +107,45 @@ async function runDetectAndLoop(api: OpenClawPluginApi, config: ProactiveAIConfi
   }
 }
 
+async function runAutoDreaming(api: OpenClawPluginApi): Promise<void> {
+  if (autoPollState.dreamInFlight) return;
+  if (!getAutoDreaming()) return;
+
+  autoPollState.dreamInFlight = true;
+  try {
+    const ctx = buildDefaultCtx();
+    const profile = await getDefaultProfile();
+    const profileTimezone = typeof profile?.timezone === 'string' ? profile.timezone : null;
+    const timezone = resolveDreamingTimezone(
+      profileTimezone,
+      Intl.DateTimeFormat().resolvedOptions().timeZone,
+    );
+    const lastAutoCompletedAt =
+      listDreamRuns(ctx)
+        .find((run) => run.trigger === 'auto' && run.status === 'completed')?.completedAt ?? null;
+
+    if (!isDreamingDue({
+      now: new Date(),
+      timezone,
+      lastAutoCompletedAt,
+    })) {
+      return;
+    }
+
+    const run = await startDreaming({
+      ctx,
+      api,
+      trigger: 'auto',
+    });
+    api.logger.info(`[auto-dreaming] started runId=${run.id} timezone=${timezone}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    api.logger.error(`[auto-dreaming] failed: ${msg}`);
+  } finally {
+    autoPollState.dreamInFlight = false;
+  }
+}
+
 export function startAutoLoop(api: OpenClawPluginApi, config: ProactiveAIConfig): void {
   if (!config.auto_poll_enabled) {
     api.logger.info('[auto-loop] disabled by config');
@@ -119,6 +161,7 @@ export function startAutoLoop(api: OpenClawPluginApi, config: ProactiveAIConfig)
 
   autoPollState.detectTimer = setInterval(() => {
     void runDetectAndLoop(api, config);
+    void runAutoDreaming(api);
   }, config.auto_detect_interval_ms);
 
   api.logger.info(
