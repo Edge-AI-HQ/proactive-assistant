@@ -21,6 +21,7 @@ export async function handleDreaming(routeCtx: RouteContext): Promise<boolean> {
   if (subpath === "/dreaming/run" && req.method === "POST") {
     const run = await startDreaming({
       ctx,
+      api: routeCtx.api,
       trigger: "manual",
     });
     json(res, 202, { ok: true, runId: run.id, status: run.status });

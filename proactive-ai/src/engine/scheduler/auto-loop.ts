@@ -134,6 +134,7 @@ async function runAutoDreaming(api: OpenClawPluginApi): Promise<void> {
 
     const run = await startDreaming({
       ctx,
+      api,
       trigger: 'auto',
     });
     api.logger.info(`[auto-dreaming] started runId=${run.id} timezone=${timezone}`);

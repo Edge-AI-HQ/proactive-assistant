@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 
 import {
   type CoreContext,
@@ -11,6 +12,7 @@ import {
   appPaths,
   resolveAppRootFromCtx,
 } from "../../core/index.js";
+import { detectAgentErrorInMessages, parseAgentJson } from "../pipeline/agent-output.js";
 import { loadRunStore } from "../pipeline/run-store.js";
 import { DreamRunStore, type DreamProfileDelta, type DreamRunRecord, type DreamSummary } from "./store.js";
 
@@ -62,6 +64,7 @@ interface DreamExecutionContext {
   store: DreamRunStore;
   run: DreamRunRecord;
   ctx: CoreContext;
+  api?: OpenClawPluginApi;
   now: Date;
   windowStart: string;
   windowEnd: string;
@@ -74,6 +77,7 @@ interface DreamExecutionContext {
 interface RunDreamingInput {
   ctx: CoreContext;
   trigger: "auto" | "manual";
+  api?: OpenClawPluginApi;
   now?: Date;
   sources?: DreamSourceDefinition[];
 }
@@ -90,21 +94,22 @@ const DREAM_RUN_MARKDOWN_FILE_NAME = "dream.md";
 const DREAM_ROOT_MARKDOWN_FILE_NAME = "dreaming.md";
 const MAX_STORED_DREAM_RUNS = 30;
 const DEFAULT_PROFILE_ID = "default";
-const STOP_WORDS = new Set([
-  "the", "and", "for", "with", "from", "that", "this", "have", "your", "about",
-  "into", "after", "before", "were", "been", "also", "will", "just", "last",
-  "recent", "review", "update", "todo", "page",
-  "gmail", "googlecalendar", "calendar", "notion", "slack", "email", "event",
-  "events", "message", "messages", "thread", "sync", "daily", "item", "items",
-  "today", "tomorrow", "yesterday", "latest", "dreaming",
-]);
-const INTEREST_TEXT_KEYS = new Set([
-  "title", "subject", "summary", "snippet", "preview", "text", "name", "reason",
-  "key", "targetkey",
-]);
 const HOURS_PER_DAY = 24;
 const MS_PER_HOUR = 60 * 60 * 1000;
 const MS_PER_DAY = HOURS_PER_DAY * MS_PER_HOUR;
+const DREAM_SUMMARIZER_TIMEOUT_MS = 180_000;
+
+interface DreamSynthesis {
+  summary?: {
+    kind?: DreamSummary["kind"];
+    text?: string;
+    highlights?: string[];
+  };
+  highlights?: string[];
+  candidateCards?: Array<Record<string, unknown>>;
+  journalMarkdown?: string;
+  interestTopics?: string[];
+}
 
 function getDreamsDir(root: string): string {
   return join(root, DREAMS_DIR_NAME);
@@ -178,8 +183,23 @@ function readTextIfExists(path: string): string {
   return readFileSync(path, "utf-8");
 }
 
-function clampWindowStart(now: Date, latestCompletedAt: string | null): string {
-  if (latestCompletedAt) return latestCompletedAt;
+function extractAgentText(messages: { messages: unknown[] }): string {
+  const assistantMessages = (messages.messages as Array<{ role?: string; content?: unknown }>)
+    .filter((message) => message.role === "assistant");
+  const last = assistantMessages[assistantMessages.length - 1];
+  if (!last?.content) return "";
+  if (typeof last.content === "string") return last.content.trim();
+  if (Array.isArray(last.content)) {
+    return (last.content as Array<{ type?: string; text?: string }>)
+      .filter((block) => block.type === "text" && typeof block.text === "string")
+      .map((block) => block.text ?? "")
+      .join("\n")
+      .trim();
+  }
+  return "";
+}
+
+function clampWindowStart(now: Date): string {
   return new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
 }
 
@@ -343,59 +363,55 @@ function buildSourceBreakdownFromStored(
   });
 }
 
-function normalizeKeyHint(value: string | null | undefined): string {
-  return (value ?? "").replace(/[^a-z]/gi, "").toLowerCase();
+function compactText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const compacted = value.replace(/\s+/g, " ").trim();
+  return compacted.length > 0 ? compacted : null;
 }
 
-function flattenTexts(value: unknown, acc: string[], keyHint?: string): void {
-  if (typeof value === "string") {
-    if (!keyHint || INTEREST_TEXT_KEYS.has(normalizeKeyHint(keyHint))) {
-      acc.push(value);
-    }
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) flattenTexts(item, acc, keyHint);
-    return;
-  }
-  if (value && typeof value === "object") {
-    for (const [childKey, item] of Object.entries(value)) flattenTexts(item, acc, childKey);
-  }
+function truncateText(value: string | null, maxLength = 600): string | null {
+  if (!value) return null;
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
-function tokenize(text: string): string[] {
-  return (text.toLowerCase().match(/[a-z]{3,}/g) ?? [])
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 3 && !STOP_WORDS.has(token));
+function arrayOfObjects(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is Record<string, unknown> => !!item && typeof item === "object" && !Array.isArray(item));
 }
 
-function deriveInterests(normalizedInputs: Record<string, unknown>, fallbackTimestamp: string): Array<Record<string, unknown>> {
-  const texts: string[] = [];
-  flattenTexts(normalizedInputs, texts);
-  const counts = new Map<string, number>();
-  for (const text of texts) {
-    for (const token of tokenize(text)) {
-      counts.set(token, (counts.get(token) ?? 0) + 1);
-    }
-  }
-  return [...counts.entries()]
-    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
+function joinContextParts(parts: Array<unknown>): string | null {
+  const values = parts
+    .map((value) => compactText(value))
+    .filter((value): value is string => !!value);
+  if (values.length === 0) return null;
+  return values.join(" | ");
+}
+
+function createInterestRecords(topics: string[], fallbackTimestamp: string): Array<Record<string, unknown>> {
+  return topics
+    .map((topic) => compactText(topic)?.toLowerCase())
+    .filter((topic): topic is string => !!topic)
+    .filter((topic, index, list) => list.indexOf(topic) === index)
     .slice(0, 5)
-    .map(([key, evidenceCount], index) => ({
+    .map((key, index) => ({
       id: `dream_interest_${index}_${key}`,
       kind: "topic",
       key,
-      score: Number(Math.min(0.95, 0.35 + evidenceCount * 0.15).toFixed(2)),
-      confidence: Number(Math.min(0.95, 0.4 + evidenceCount * 0.1).toFixed(2)),
-      evidenceCount,
+      score: 0.8,
+      confidence: 0.8,
+      evidenceCount: 1,
       lastSignalAt: fallbackTimestamp,
       status: "active",
     }));
-}
-
-function titleCaseConnector(connector: string): string {
-  if (connector === "googlecalendar") return "Google Calendar";
-  return connector.charAt(0).toUpperCase() + connector.slice(1);
 }
 
 function parseIso(value: string): Date | null {
@@ -415,140 +431,8 @@ function toRelativeSince(windowStart: string, windowEnd: string): string {
   return `${Math.max(1, Math.ceil(days / 7))}w`;
 }
 
-function inferBasketFromTitle(title: string, fallback: string): string {
-  const normalized = title.toLowerCase();
-  if (/(invoice|billing|receipt|budget|payment|expense|tax|renewal|subscription)/.test(normalized)) return "wealth";
-  if (/(meeting|sync|review|launch|project|customer|demo|roadmap|github|product|standup)/.test(normalized)) return "work";
-  if (/(workshop|webinar|course|learn|conference|funding|founder|community|growth)/.test(normalized)) return "growth";
-  if (/(doctor|health|sleep|exercise|fitness|medication|therapy)/.test(normalized)) return "health";
-  if (/(family|home|parent|kid|travel|trip|friend)/.test(normalized)) return "family";
-  return fallback;
-}
-
-function extractHighlights(normalizedInputs: Record<string, unknown>): string[] {
-  const highlights: string[] = [];
-  const push = (value: unknown) => {
-    if (typeof value !== "string") return;
-    const trimmed = value.trim();
-    if (!trimmed) return;
-    if (!highlights.includes(trimmed)) highlights.push(trimmed);
-  };
-
-  const personalEntries = Array.isArray(normalizedInputs.personal)
-    ? normalizedInputs.personal as Array<Record<string, unknown>>
-    : [];
-  for (const entry of personalEntries) {
-    push(entry.title);
-  }
-
-  const feedbackEntries = Array.isArray(normalizedInputs.feedback)
-    ? normalizedInputs.feedback as Array<Record<string, unknown>>
-    : [];
-  for (const entry of feedbackEntries) {
-    if (typeof entry.action === "string" && typeof entry.basket === "string") {
-      push(`${entry.action} in ${entry.basket}`);
-    }
-  }
-
-  const signalEntries = Array.isArray(normalizedInputs.signals)
-    ? normalizedInputs.signals as Array<Record<string, unknown>>
-    : [];
-  for (const entry of signalEntries) {
-    push(entry.targetKey ?? entry.key);
-  }
-
-  return highlights.slice(0, 5);
-}
-
-function deriveTopBasket(rawInputs: Record<string, unknown>): string {
-  const counts = new Map<string, number>();
-  const pushBasket = (value: unknown) => {
-    if (typeof value === "string" && value.trim()) {
-      counts.set(value, (counts.get(value) ?? 0) + 1);
-    }
-  };
-
-  const scan = (value: unknown) => {
-    if (Array.isArray(value)) {
-      for (const item of value) scan(item);
-      return;
-    }
-    if (value && typeof value === "object") {
-      for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-        if (key === "basket" || key === "goalBasket") pushBasket(item);
-        scan(item);
-      }
-    }
-  };
-  scan(rawInputs);
-
-  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? "life";
-}
-
-function buildCandidates(
-  rawInputs: Record<string, unknown>,
-  normalizedInputs: Record<string, unknown>,
-  nowIso: string,
-): Array<Record<string, unknown>> {
-  const topBasket = deriveTopBasket(rawInputs);
-  const personalEntries = Array.isArray(normalizedInputs.personal)
-    ? normalizedInputs.personal as Array<Record<string, unknown>>
-    : [];
-
-  const candidates = personalEntries.slice(0, 3).map((entry, index) => {
-    const connector = String(entry.connector ?? "personal");
-    const title = String(entry.title ?? `${titleCaseConnector(connector)} update`);
-    const basket = inferBasketFromTitle(title, topBasket);
-    let candidateTitle = `Revisit ${title}`;
-    let reason = `Recent ${titleCaseConnector(connector)} activity surfaced during the latest dreaming window.`;
-
-    if (connector === "gmail") {
-      candidateTitle = `Check email: ${title}`;
-      reason = "A recent email looks specific enough to review or act on.";
-    } else if (connector === "googlecalendar") {
-      candidateTitle = `Prepare for ${title}`;
-      reason = "An upcoming calendar item was detected in the latest dreaming window.";
-    } else if (connector === "notion") {
-      candidateTitle = `Follow up in Notion: ${title}`;
-      reason = "A recently updated Notion item may need a next step.";
-    } else if (connector === "slack") {
-      candidateTitle = `Review Slack context: ${title}`;
-      reason = "A recent Slack thread looks relevant for follow-up.";
-    }
-
-    return {
-      id: `dream_candidate_${index + 1}`,
-      title: candidateTitle,
-      basket,
-      reason,
-      connector,
-      source: "dreaming",
-      createdAt: nowIso,
-    };
-  });
-
-  if (candidates.length === 0) {
-    const highlights = extractHighlights(normalizedInputs);
-    if (highlights[0]) {
-      candidates.push({
-        id: "dream_candidate_summary",
-        title: `Revisit ${highlights[0]}`,
-        basket: inferBasketFromTitle(highlights[0], topBasket),
-        reason: "Dreaming found a recent highlight worth revisiting.",
-        connector: "dreaming",
-        source: "dreaming",
-        createdAt: nowIso,
-      });
-    }
-  }
-
-  return candidates.slice(0, 3);
-}
-
-function buildSummary(
+function buildMinimalSummary(
   sourceStats: Record<string, Record<string, unknown>>,
-  candidates: Array<Record<string, unknown>>,
-  highlights: string[],
   locale?: unknown,
 ): DreamSummary {
   const totalCount = Object.values(sourceStats).reduce((sum, stat) => sum + Number(stat.count ?? 0), 0);
@@ -570,15 +454,14 @@ function buildSummary(
   }
 
   const sourceList = activeSourceEntries.map(([sourceId]) => sourceId).join(", ");
-  const highlightText = highlights.slice(0, 2).join("; ");
   return {
     kind: "updated",
     text: isZh
-      ? `这次 dreaming 回看了 ${totalCount} 条近期内容，来自 ${activeSources} 个活跃来源${sourceList ? `（${sourceList}）` : ""}，并整理出 ${candidates.length} 张候选卡片。${highlightText ? `重点线索包括：${highlightText}。` : ""}`
-      : `Dreaming reviewed ${totalCount} recent items across ${activeSources} active sources${sourceList ? ` (${sourceList})` : ""} and produced ${candidates.length} candidate cards.${highlightText ? ` Key highlights: ${highlightText}.` : ""}`,
+      ? `本次 Dreaming 采集了 ${totalCount} 条近期内容，来自 ${activeSources} 个活跃来源${sourceList ? `（${sourceList}）` : ""}。等待子代理进一步总结这些上下文。`
+      : `Dreaming collected ${totalCount} recent items across ${activeSources} active sources${sourceList ? ` (${sourceList})` : ""}. Waiting for subagent synthesis.`,
     sourceCount: activeSources,
-    candidateCount: candidates.length,
-    highlights,
+    candidateCount: 0,
+    highlights: [],
   };
 }
 
@@ -591,13 +474,16 @@ function buildProfileDelta(
   nowIso: string,
   windowStart: string,
   windowEnd: string,
+  options?: {
+    highlights?: string[];
+    interestTopics?: string[];
+  },
 ): DreamProfileDelta {
   const currentFacts = (currentProfile.facts ?? {}) as Record<string, unknown>;
   const currentPreferences = (currentProfile.preferences ?? {}) as Record<string, unknown>;
   const currentInterests = ((currentProfile.interests ?? []) as Array<Record<string, unknown>>);
   const currentSnapshots = ((currentProfile.snapshots ?? []) as Array<Record<string, unknown>>);
-  const topBasket = deriveTopBasket(normalizedInputs);
-  const highlights = extractHighlights(normalizedInputs);
+  const highlights = options?.highlights?.length ? options.highlights : [];
 
   const factsAfter = {
     ...currentFacts,
@@ -619,12 +505,13 @@ function buildProfileDelta(
   const preferencesAfter = {
     ...currentPreferences,
     dreaming: {
-      topBasket,
       lastUpdatedAt: nowIso,
     },
   };
 
-  const derivedInterests = deriveInterests(normalizedInputs, nowIso);
+  const derivedInterests = options?.interestTopics?.length
+    ? createInterestRecords(options.interestTopics, nowIso)
+    : [];
   const interestsAfter = derivedInterests.length > 0 ? derivedInterests : currentInterests;
 
   const snapshotsAfter = [
@@ -653,60 +540,216 @@ function isChineseLocale(value: unknown): boolean {
   return typeof value === "string" && value.toLowerCase().startsWith("zh");
 }
 
-function buildDreamJournal(input: {
+function buildMinimalDreamJournal(input: {
   locale: unknown;
   summary: DreamSummary;
-  highlights: string[];
-  candidates: Array<Record<string, unknown>>;
   trigger: "auto" | "manual";
   startedAt: string;
 }): string {
-  const highlights = input.highlights.slice(0, 2);
-  const candidates = input.candidates.slice(0, 2);
   const isZh = isChineseLocale(input.locale);
   const runLabel = `${input.startedAt.slice(0, 10)} · ${input.trigger}`;
 
   if (isZh) {
-    const firstParagraph = highlights.length > 0
-      ? `昨天我注意到你最近反复浮现的线索里，最明显的是 ${highlights.map((item) => `「${item}」`).join(" 和 ")}。我把这些个人信息流、近期卡片和其他上下文放在一起重新想了一遍，觉得它们值得先替你记下来。`
-      : "昨天我重新看了一遍你最近的个人信息流、卡片和反馈，但还没有看到特别明确的新线索。";
-    const secondParagraph = candidates.length > 0
-      ? `现在我更倾向于把重点放在 ${candidates.map((candidate) => `「${String(candidate.title ?? "")}」`).join(" 和 ")}。这些事情看起来更像是短期内值得你留意、也适合我后续继续帮你跟进的方向。`
-      : "这次我还没有整理出足够明确的后续候选卡片，所以先把现有信号记下来，等下一次 dreaming 再继续观察。";
-
     return [
       "# Dreaming Journal",
       "",
       `## ${runLabel}`,
       "",
-      firstParagraph,
+      "本次 Dreaming 记录已经生成，但当前仅保留原始上下文采集结果，语义总结等待子代理完成或重试。",
       "",
-      secondParagraph,
-      "",
-      `我想先替你记下这些变化。${typeof input.summary.text === "string" ? `这次 dreaming 的整体判断是：${input.summary.text}` : ""}`,
+      `当前状态：${typeof input.summary.text === "string" ? input.summary.text : "暂无额外说明。"}`,
       "",
     ].join("\n");
   }
-
-  const firstParagraph = highlights.length > 0
-    ? `Yesterday I noticed that the clearest threads in your recent activity were ${highlights.map((item) => `"${item}"`).join(" and ")}. I looked back across your personal feed, recent cards, and the rest of the context, and these are the signals that felt worth keeping.`
-    : "Yesterday I looked back across your recent personal feed, cards, and feedback, but I did not find a strong new pattern yet.";
-  const secondParagraph = candidates.length > 0
-    ? `Right now the follow-ups that feel most worth keeping in view are ${candidates.map((candidate) => `"${String(candidate.title ?? "")}"`).join(" and ")}. These look like the best short-term directions for me to keep tracking on your behalf.`
-    : "I did not extract a strong next-step candidate this time, so I am only keeping the current signals in memory for the next dreaming pass.";
 
   return [
     "# Dreaming Journal",
     "",
     `## ${runLabel}`,
     "",
-    firstParagraph,
+    "This Dreaming entry currently records collected context only. Semantic follow-up is deferred to the subagent result or a later retry.",
     "",
-    secondParagraph,
-    "",
-    `I want to keep these changes in mind for you. ${typeof input.summary.text === "string" ? `My overall read this time is: ${input.summary.text}` : ""}`,
+    `Current status: ${typeof input.summary.text === "string" ? input.summary.text : "No additional note."}`,
     "",
   ].join("\n");
+}
+
+function buildDreamingPrompt(input: {
+  locale: unknown;
+  trigger: "auto" | "manual";
+  startedAt: string;
+  windowStart: string;
+  windowEnd: string;
+  currentProfile: Record<string, unknown>;
+  sourceStats: Record<string, Record<string, unknown>>;
+  rawInputs: Record<string, unknown>;
+  normalizedInputs: Record<string, unknown>;
+  mode?: "primary" | "deep_retry";
+}): string {
+  const language = isChineseLocale(input.locale) ? "Simplified Chinese" : "English";
+  const deepRetryInstruction = input.mode === "deep_retry"
+    ? `
+This is a second-pass deep review because the first pass was too conservative.
+There ARE concrete personal items in the window. You must dig deeper like a sharp chief of staff:
+- Look again for actionable implications in email bodies, calendar events, titles, timestamps, and cross-source overlap.
+- Do not dismiss the window as no_new_data unless every concrete item is clearly trivial.
+- If you still conclude no_new_data, explain specifically why each concrete personal thread is not actionable.
+`
+    : "";
+  return `You are a Dreaming Agent for a proactive personal assistant.
+
+Your job is to think like a strong executive assistant or chief of staff, not a logger.
+You are reviewing the user's recent context across all connected data sources.
+Do not merely restate each record. Synthesize what actually matters.
+
+Write all prose in ${language}. Raw source titles, IDs, URLs, and proper nouns may remain in their original language when needed.
+
+Priorities:
+1. Identify the most meaningful cross-source threads, obligations, deadlines, and opportunities.
+2. Prefer concrete real-world items from email, calendar, notes, Slack, and recent cards over generic observations.
+3. Avoid noise, newsletters, obvious spam, and low-signal trivia unless they clearly matter.
+4. Produce assistant-style output that helps the system remember and follow up later.
+${deepRetryInstruction}
+
+You will receive:
+- current profile
+- source stats
+- raw inputs
+- normalized inputs
+
+Output ONLY a JSON code block with this exact shape:
+\`\`\`json
+{
+  "summary": {
+    "kind": "updated" | "no_new_data",
+    "text": "One concise high-level summary",
+    "highlights": ["highlight 1", "highlight 2"]
+  },
+  "highlights": ["highlight 1", "highlight 2"],
+  "candidateCards": [
+    {
+      "title": "Concrete follow-up title",
+      "basket": "work|health|family|wealth|growth|life",
+      "reason": "Why this matters now",
+      "connector": "gmail|googlecalendar|notion|slack|dreaming|other"
+    }
+  ],
+  "interestTopics": ["topic1", "topic2"],
+  "journalMarkdown": "# Dreaming Journal\\n\\n## YYYY-MM-DD · manual|auto\\n\\nNatural assistant-style diary entry"
+}
+\`\`\`
+
+Constraints:
+- Prefer 0-3 candidate cards, only when genuinely useful.
+- journalMarkdown must sound like a personal assistant reflecting on the user's day.
+- highlights should be concrete, not generic categories.
+- If the window has no meaningful new signal, return kind=no_new_data and empty arrays.
+
+Current run context:
+\`\`\`json
+${JSON.stringify({
+    trigger: input.trigger,
+    startedAt: input.startedAt,
+    windowStart: input.windowStart,
+    windowEnd: input.windowEnd,
+    currentProfile: input.currentProfile,
+    sourceStats: input.sourceStats,
+    rawInputs: input.rawInputs,
+    normalizedInputs: input.normalizedInputs,
+  }, null, 2)}
+\`\`\`
+`;
+}
+
+function sanitizeDreamCandidates(
+  candidates: unknown,
+  fallbackTimestamp: string,
+): Array<Record<string, unknown>> {
+  if (!Array.isArray(candidates)) return [];
+  return candidates
+    .filter((item): item is Record<string, unknown> => !!item && typeof item === "object" && !Array.isArray(item))
+    .slice(0, 3)
+    .map((item, index) => ({
+      id: `dream_candidate_${index + 1}`,
+      title: compactText(item.title) ?? `Dream follow-up ${index + 1}`,
+      basket: compactText(item.basket) ?? "life",
+      reason: compactText(item.reason) ?? "Dreaming identified this as worth following up.",
+      connector: compactText(item.connector) ?? "dreaming",
+      source: "dreaming",
+      createdAt: fallbackTimestamp,
+    }));
+}
+
+function normalizeDreamSummaryFromModel(
+  synthesis: DreamSynthesis,
+  fallback: DreamSummary,
+): DreamSummary {
+  const kind = synthesis.summary?.kind === "no_new_data" ? "no_new_data" : synthesis.summary?.kind === "updated" ? "updated" : fallback.kind;
+  const text = compactText(synthesis.summary?.text) ?? fallback.text;
+  const highlights = Array.isArray(synthesis.highlights)
+    ? synthesis.highlights.filter((item): item is string => typeof item === "string" && item.trim().length > 0).slice(0, 5)
+    : Array.isArray(synthesis.summary?.highlights)
+      ? synthesis.summary!.highlights!.filter((item): item is string => typeof item === "string" && item.trim().length > 0).slice(0, 5)
+      : fallback.highlights ?? [];
+  return {
+    kind,
+    text,
+    sourceCount: fallback.sourceCount,
+    candidateCount: fallback.candidateCount,
+    highlights,
+  };
+}
+
+async function runDreamingSummarizer(
+  api: OpenClawPluginApi,
+  input: {
+    locale: unknown;
+    trigger: "auto" | "manual";
+    startedAt: string;
+    windowStart: string;
+    windowEnd: string;
+    currentProfile: Record<string, unknown>;
+    sourceStats: Record<string, Record<string, unknown>>;
+    rawInputs: Record<string, unknown>;
+    normalizedInputs: Record<string, unknown>;
+    mode?: "primary" | "deep_retry";
+  },
+): Promise<DreamSynthesis> {
+  const sessionKey = `agent:dreaming:proactive-ai:${Date.now().toString(36)}`;
+  const prompt = buildDreamingPrompt(input);
+  const { runId } = await api.runtime.subagent.run({
+    sessionKey,
+    extraSystemPrompt: prompt,
+    idempotencyKey: `proactive-ai:dreaming:${Date.now().toString(36)}`,
+    message: "Review the full dream context and return the required JSON.",
+    deliver: false,
+  });
+
+  try {
+    const result = await api.runtime.subagent.waitForRun({
+      runId,
+      timeoutMs: DREAM_SUMMARIZER_TIMEOUT_MS,
+    });
+    if (result.status !== "ok") {
+      throw new Error(`Dreaming summarizer failed with status=${result.status}${result.error ? ` error=${result.error}` : ""}`);
+    }
+    const messages = await api.runtime.subagent.getSessionMessages({ sessionKey, limit: 10 });
+    const messageError = detectAgentErrorInMessages(messages.messages);
+    if (messageError) {
+      throw new Error(`Dreaming summarizer failed: ${messageError}`);
+    }
+    const text = extractAgentText(messages);
+    const parsed = parseAgentJson<DreamSynthesis>(text);
+    if (!parsed) {
+      throw new Error(`Dreaming summarizer returned invalid JSON: ${text.slice(0, 200)}`);
+    }
+    return parsed;
+  } finally {
+    await api.runtime.subagent.deleteSession({
+      sessionKey,
+      deleteTranscript: false,
+    }).catch(() => {});
+  }
 }
 
 function writeArtifacts(
@@ -768,6 +811,133 @@ function normalizeGoogleCalendarSummaryView(summaryView: string, windowEnd: stri
     }));
 }
 
+function normalizeGmailEntries(data: unknown, windowEnd: string): Array<Record<string, unknown>> {
+  const root = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : null;
+  const items = arrayOfObjects(root?.messages ?? data);
+  return items.slice(0, 20).map((item) => {
+    const preview = item.preview && typeof item.preview === "object" && !Array.isArray(item.preview)
+      ? item.preview as Record<string, unknown>
+      : {};
+    const title = compactText(item.subject) ?? compactText(preview.subject) ?? "Recent email";
+    const body = truncateText(compactText(item.messageText), 1600);
+    const previewBody = truncateText(compactText(preview.body) ?? compactText(item.snippet), 600);
+    const sender = compactText(item.sender) ?? compactText(item.from);
+    const labels = normalizeStringArray(item.labelIds ?? item.labels);
+    return {
+      connector: "gmail",
+      title,
+      timestamp: compactText(item.internalDate) ?? compactText(item.messageTimestamp) ?? compactText(item.date) ?? windowEnd,
+      sender,
+      to: compactText(item.to),
+      preview: previewBody,
+      body,
+      labels,
+      messageId: compactText(item.messageId),
+      threadId: compactText(item.threadId),
+      displayUrl: compactText(item.display_url),
+      context: joinContextParts([
+        title,
+        sender,
+        previewBody,
+        body,
+        labels.join(" "),
+      ]),
+    };
+  });
+}
+
+function normalizeGoogleCalendarEntries(data: unknown, windowEnd: string): Array<Record<string, unknown>> {
+  const root = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : null;
+  const summaryView = root?.summary_view;
+  if (typeof summaryView === "string") {
+    return normalizeGoogleCalendarSummaryView(summaryView, windowEnd);
+  }
+
+  const summaryEntries = arrayOfObjects(summaryView);
+  if (summaryEntries.length > 0) {
+    return summaryEntries.slice(0, 20).map((item, index) => {
+      const title = compactText(item.title) ?? compactText(item.summary) ?? "Calendar event";
+      const calendar = compactText(item.calendar);
+      const start = compactText(item.start) ?? windowEnd;
+      const end = compactText(item.end);
+      const details = joinContextParts([title, calendar, start, end, compactText(item.location), compactText(item.description)]);
+      return {
+        connector: "googlecalendar",
+        title,
+        timestamp: start,
+        start,
+        end,
+        calendar,
+        isAllDay: Boolean(item.is_all_day),
+        location: compactText(item.location),
+        description: truncateText(compactText(item.description), 600),
+        eventId: compactText(item.event_id),
+        displayUrl: compactText(item.display_url),
+        rank: index + 1,
+        context: details,
+      };
+    });
+  }
+
+  const items = arrayOfObjects(root?.items ?? root?.events ?? data);
+  return items.slice(0, 20).map((item) => {
+    const start = compactText(item.start) ?? compactText((item.start as Record<string, unknown> | undefined)?.dateTime)
+      ?? compactText((item.start as Record<string, unknown> | undefined)?.date) ?? windowEnd;
+    const end = compactText(item.end) ?? compactText((item.end as Record<string, unknown> | undefined)?.dateTime)
+      ?? compactText((item.end as Record<string, unknown> | undefined)?.date) ?? null;
+    const title = compactText(item.title) ?? compactText(item.summary) ?? "Calendar event";
+    const calendar = compactText(item.calendar) ?? compactText((item.organizer as Record<string, unknown> | undefined)?.email);
+    return {
+      connector: "googlecalendar",
+      title,
+      timestamp: start,
+      start,
+      end,
+      calendar,
+      isAllDay: Boolean((item.start as Record<string, unknown> | undefined)?.date),
+      location: compactText(item.location),
+      description: truncateText(compactText(item.description), 600),
+      displayUrl: compactText(item.display_url) ?? compactText(item.htmlLink),
+      attendees: arrayOfObjects(item.attendees).map((attendee) => compactText(attendee.email) ?? compactText(attendee.displayName)).filter((value): value is string => !!value),
+      context: joinContextParts([
+        title,
+        calendar,
+        start,
+        end,
+        compactText(item.location),
+        compactText(item.description),
+      ]),
+    };
+  });
+}
+
+function normalizeNotionEntries(data: unknown, windowEnd: string): Array<Record<string, unknown>> {
+  const root = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : null;
+  const items = arrayOfObjects(root?.items ?? root?.results ?? data);
+  return items.slice(0, 20).map((item) => {
+    const title = compactText(item.title) ?? compactText(item.name) ?? compactText(item.page_title) ?? "Notion item";
+    const preview = truncateText(
+      compactText(item.summary) ?? compactText(item.preview) ?? compactText(item.snippet) ?? compactText(item.text),
+      600,
+    );
+    return {
+      connector: "notion",
+      title,
+      timestamp: compactText(item.last_edited_time) ?? compactText(item.updated_at) ?? compactText(item.created_time) ?? windowEnd,
+      pageId: compactText(item.id),
+      objectType: compactText(item.object) ?? compactText(item.type),
+      url: compactText(item.url),
+      preview,
+      context: joinContextParts([
+        title,
+        preview,
+        compactText(item.object),
+        compactText(item.type),
+      ]),
+    };
+  });
+}
+
 async function collectCards(windowStart: string): Promise<DreamSourceResult> {
   const runs = loadRunStore().runs.filter((run) => run.completedAt >= windowStart);
   const cards = runs.flatMap((run) =>
@@ -797,14 +967,7 @@ async function collectPersonal(ctx: CoreContext, windowStart: string, windowEnd:
       if (connection.toolkit === "gmail") {
         const data = await tryExecute("GMAIL_FETCH_EMAILS", {});
         connectors.gmail = data ?? [];
-        const items = Array.isArray((data as { messages?: unknown[] } | null)?.messages)
-          ? ((data as { messages?: Array<Record<string, unknown>> }).messages ?? [])
-          : Array.isArray(data) ? data as Array<Record<string, unknown>> : [];
-        normalized.push(...items.slice(0, 10).map((item) => ({
-          connector: "gmail",
-          title: item.subject ?? item.snippet ?? "Recent email",
-          timestamp: item.internalDate ?? item.messageTimestamp ?? item.date ?? windowEnd,
-        })));
+        normalized.push(...normalizeGmailEntries(data, windowEnd));
         continue;
       }
 
@@ -814,35 +977,14 @@ async function collectPersonal(ctx: CoreContext, windowStart: string, windowEnd:
           time_max: windowEnd,
         });
         connectors.googlecalendar = data ?? [];
-        const summaryView = typeof (data as { summary_view?: unknown } | null)?.summary_view === "string"
-          ? String((data as { summary_view: string }).summary_view)
-          : null;
-        const items = Array.isArray((data as { items?: unknown[] } | null)?.items)
-          ? ((data as { items?: Array<Record<string, unknown>> }).items ?? [])
-          : Array.isArray(data) ? data as Array<Record<string, unknown>> : [];
-        if (summaryView && items.length === 0) {
-          normalized.push(...normalizeGoogleCalendarSummaryView(summaryView, windowEnd));
-        } else {
-          normalized.push(...items.slice(0, 10).map((item) => ({
-            connector: "googlecalendar",
-            title: item.title ?? item.summary ?? "Calendar event",
-            timestamp: item.start ?? item.updated ?? windowEnd,
-          })));
-        }
+        normalized.push(...normalizeGoogleCalendarEntries(data, windowEnd));
         continue;
       }
 
       if (connection.toolkit === "notion") {
         const data = await tryExecute("NOTION_FETCH_DATA", {});
         connectors.notion = data ?? [];
-        const items = Array.isArray((data as { items?: unknown[] } | null)?.items)
-          ? ((data as { items?: Array<Record<string, unknown>> }).items ?? [])
-          : Array.isArray(data) ? data as Array<Record<string, unknown>> : [];
-        normalized.push(...items.slice(0, 10).map((item) => ({
-          connector: "notion",
-          title: item.title ?? item.name ?? "Notion item",
-          timestamp: item.last_edited_time ?? item.updated_at ?? windowEnd,
-        })));
+        normalized.push(...normalizeNotionEntries(data, windowEnd));
         continue;
       }
 
@@ -899,6 +1041,18 @@ function createDefaultSources(): DreamSourceDefinition[] {
   ];
 }
 
+function hasConcretePersonalContext(normalizedInputs: Record<string, unknown>): boolean {
+  const personalEntries = Array.isArray(normalizedInputs.personal)
+    ? normalizedInputs.personal as Array<Record<string, unknown>>
+    : [];
+  return personalEntries.some((entry) =>
+    typeof entry.title === "string"
+    || typeof entry.context === "string"
+    || typeof entry.preview === "string"
+    || typeof entry.body === "string",
+  );
+}
+
 function createDreamExecutionContext(input: RunDreamingInput): DreamExecutionContext {
   const root = resolveAppRootFromCtx(input.ctx);
   ensureDir(getDreamsDir(root));
@@ -906,8 +1060,7 @@ function createDreamExecutionContext(input: RunDreamingInput): DreamExecutionCon
   const store = new DreamRunStore(root);
   const now = input.now ?? new Date();
   const windowEnd = now.toISOString();
-  const latestSuccess = store.getLatestSuccessfulRun();
-  const windowStart = clampWindowStart(now, latestSuccess?.completedAt ?? null);
+  const windowStart = clampWindowStart(now);
   const run = store.createRun({
     trigger: input.trigger,
     windowStart,
@@ -921,6 +1074,7 @@ function createDreamExecutionContext(input: RunDreamingInput): DreamExecutionCon
     store,
     run,
     ctx: input.ctx,
+    api: input.api,
     now,
     windowStart,
     windowEnd,
@@ -985,9 +1139,96 @@ async function executeDreaming(input: DreamExecutionContext): Promise<{ run: Dre
     }
 
     const nowIso = getNowIso(input.now);
-    const highlights = extractHighlights(normalizedInputs);
-    const candidates = buildCandidates(rawInputs, normalizedInputs, nowIso);
-    const summary = buildSummary(sourceStats, candidates, highlights, dreamingLanguage);
+    const fallbackHighlights: string[] = [];
+    const fallbackCandidates: Array<Record<string, unknown>> = [];
+    const fallbackSummary = buildMinimalSummary(sourceStats, dreamingLanguage);
+    let highlights = fallbackHighlights;
+    let candidates = fallbackCandidates;
+    let summary = fallbackSummary;
+    let markdown: string | null = null;
+    let interestTopics: string[] | undefined;
+
+    if (input.api) {
+      try {
+        logDreamEvent(input, "summarizer_started", { strategy: "subagent" });
+        const synthesis = await runDreamingSummarizer(input.api, {
+          locale: dreamingLanguage,
+          trigger: input.run.trigger,
+          startedAt: input.run.startedAt,
+          windowStart: input.windowStart,
+          windowEnd: input.windowEnd,
+          currentProfile,
+          sourceStats,
+          rawInputs,
+          normalizedInputs,
+          mode: "primary",
+        });
+        candidates = sanitizeDreamCandidates(synthesis.candidateCards, nowIso);
+        summary = normalizeDreamSummaryFromModel(synthesis, {
+          ...buildMinimalSummary(sourceStats, dreamingLanguage),
+          candidateCount: candidates.length,
+        });
+        highlights = Array.isArray(summary.highlights)
+          ? summary.highlights.filter((item): item is string => typeof item === "string")
+          : fallbackHighlights;
+        markdown = typeof synthesis.journalMarkdown === "string" && synthesis.journalMarkdown.trim().length > 0
+          ? synthesis.journalMarkdown.trim()
+          : null;
+        interestTopics = Array.isArray(synthesis.interestTopics)
+          ? synthesis.interestTopics.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+          : undefined;
+
+        if (
+          summary.kind === "no_new_data"
+          && candidates.length === 0
+          && hasConcretePersonalContext(normalizedInputs)
+        ) {
+          logDreamEvent(input, "summarizer_retry_started", {
+            strategy: "subagent",
+            reason: "no_new_data_with_personal_context",
+          });
+          const retrySynthesis = await runDreamingSummarizer(input.api, {
+            locale: dreamingLanguage,
+            trigger: input.run.trigger,
+            startedAt: input.run.startedAt,
+            windowStart: input.windowStart,
+            windowEnd: input.windowEnd,
+            currentProfile,
+            sourceStats,
+            rawInputs,
+            normalizedInputs,
+            mode: "deep_retry",
+          });
+          candidates = sanitizeDreamCandidates(retrySynthesis.candidateCards, nowIso);
+          summary = normalizeDreamSummaryFromModel(retrySynthesis, {
+            ...buildMinimalSummary(sourceStats, dreamingLanguage),
+            candidateCount: candidates.length,
+          });
+          highlights = Array.isArray(summary.highlights)
+            ? summary.highlights.filter((item): item is string => typeof item === "string")
+            : fallbackHighlights;
+          markdown = typeof retrySynthesis.journalMarkdown === "string" && retrySynthesis.journalMarkdown.trim().length > 0
+            ? retrySynthesis.journalMarkdown.trim()
+            : markdown;
+          interestTopics = Array.isArray(retrySynthesis.interestTopics)
+            ? retrySynthesis.interestTopics.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+            : interestTopics;
+          logDreamEvent(input, "summarizer_retry_completed", {
+            candidateCount: candidates.length,
+            summaryKind: summary.kind,
+          });
+        }
+        logDreamEvent(input, "summarizer_completed", {
+          candidateCount: candidates.length,
+          summaryKind: summary.kind,
+        });
+      } catch (error) {
+        logDreamEvent(input, "summarizer_failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     const profileDelta = buildProfileDelta(
       currentProfile,
       sourceStats,
@@ -997,6 +1238,10 @@ async function executeDreaming(input: DreamExecutionContext): Promise<{ run: Dre
       nowIso,
       input.windowStart,
       input.windowEnd,
+      {
+        highlights,
+        interestTopics,
+      },
     );
 
     const artifactDir = writeArtifacts(input.runDir, {
@@ -1016,13 +1261,11 @@ async function executeDreaming(input: DreamExecutionContext): Promise<{ run: Dre
       profileDelta,
       candidates,
     });
-    const markdown = buildDreamJournal({
+    markdown ??= buildMinimalDreamJournal({
       locale: dreamingLanguage,
       trigger: input.run.trigger,
       startedAt: input.run.startedAt,
       summary,
-      candidates,
-      highlights,
     });
     const dreamMarkdownPath = writeDreamMarkdown(root, artifactDir, markdown);
     logDreamEvent(input, "artifacts_written", { artifactDir });
