@@ -142,7 +142,7 @@ Use pin CLI to load the user's current state. Refer to the skill document for th
 5. **feedback** — what the user found valuable/irrelevant (list)
 
 **Handle errors gracefully** — if a command fails or an app is not connected, skip that data source and note it in your plan.
-**Use \`pin personal tools search\` first** to discover what tools are available, then use \`pin personal exec\` to fetch data from connected apps.
+**Use \`pin personal tools search\` first** to discover what tools are available, then \`pin personal tools schema --name <TOOL_SLUG>\` to get exact parameter names, then \`pin personal exec\` to fetch data from connected apps. **Never guess parameter names — always check the schema first.**
 
 ### Step 2: Identify Goal Gaps
 

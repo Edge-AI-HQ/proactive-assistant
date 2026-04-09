@@ -342,7 +342,7 @@ class McpPersonalProvider implements PersonalProvider {
   async getToolSchema(slug: string): Promise<PersonalToolSchema | null> {
     const parsed = await this.meta("COMPOSIO_GET_TOOL_SCHEMAS", { tool_slugs: [slug] });
     const data = obj(parsed.data);
-    const schemas = obj(data.schemas ?? data);
+    const schemas = obj(data.schemas ?? data.tool_schemas ?? data);
     const schema = obj(schemas[slug] ?? Object.values(schemas)[0]);
     if (!schema.input_schema && !schema.inputSchema) return null;
     return {

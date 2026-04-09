@@ -110,7 +110,7 @@ pin personal wait --toolkit notion --json
 4. personal exec                 → 获取实际数据
 ```
 
-先 search 再 exec —— 不要猜测 tool slug，用 search 确认。
+先 search 再 schema 再 exec —— 不要猜测 tool slug 或参数名。用 search 确认 slug，用 schema 确认参数名。
 
 ## 安全规则
 

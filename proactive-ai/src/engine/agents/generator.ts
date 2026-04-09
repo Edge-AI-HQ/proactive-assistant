@@ -134,7 +134,8 @@ For EACH intent in the plan:
 ### Step 1: Deep Data Gathering
 Use the plan's \`dataSources\` hints, plus your judgment, to gather specifics:
 - Use \`pin personal tools search\` to find the right tool for the data you need
-- Use \`pin personal exec\` to fetch actual data (emails, calendar events, etc.)
+- Use \`pin personal tools schema --name <TOOL_SLUG>\` to get exact parameter names — **never guess parameter names**
+- Use \`pin personal exec\` with the correct parameter names from the schema
 - Gather specific numbers, dates, names, events to make the card concrete
 
 ### Step 2: Craft the Card

@@ -58,8 +58,9 @@ pin world headlines --limit 5 --json
 ### Workflow
 1. Use \`pin personal connections list\` to see what apps are available
 2. Use \`pin personal tools search\` to find the right tool for the task
-3. Use \`pin personal exec\` to fetch actual data or take action
-4. Always check \`ok\` field in the response before using \`data\`
+3. Use \`pin personal tools schema --name <TOOL_SLUG>\` to get exact parameter names and types — **never guess parameter names from the description**
+4. Use \`pin personal exec\` with the parameter names from step 3
+5. Always check \`ok\` field in the response before using \`data\`
 
 ## Response Rules
 - FIRST MESSAGE: Greet briefly (one line), then list 2-3 specific actions you can take RIGHT NOW based on the card. Use bullet points. End with a short question asking which one they want.
