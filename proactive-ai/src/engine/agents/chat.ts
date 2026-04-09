@@ -24,7 +24,8 @@ Personal data (via Composio — connected third-party apps):
   pin personal connections list --json              # see connected apps
   pin personal tools search --query "..." --json    # find the right tool
   pin personal tools schema --name TOOL_SLUG --json # get exact parameter schema
-  pin personal exec --tool TOOL_SLUG --input '{...}' --json  # execute
+  pin personal exec --tool TOOL_SLUG --input '{...}' --json                    # execute (uses default account)
+  pin personal exec --tool TOOL_SLUG --input '{...}' --account-id ca_xxx --json # execute on a specific account
 
 User profile & goals:
   pin profile get --id default --json

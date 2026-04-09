@@ -83,7 +83,7 @@ export {
   type PersonalExecResult,
   createPersonalProvider,
 } from "./domains/personal/provider.js";
-export { loadPlatformSettings, type PersonalPlatformSettings } from "./domains/personal/platform_settings.js";
+export { loadPlatformSettings, _resetSettingsCache, type PersonalPlatformSettings } from "./domains/personal/platform_settings.js";
 
 // ── Types ──
 export {

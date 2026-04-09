@@ -51,10 +51,10 @@ export async function handleComposio(routeCtx: RouteContext): Promise<boolean> {
 
     // POST /composio/disconnect
     if (route === '/disconnect') {
-      const toolkit = String(body['toolkit'] ?? '').trim().toLowerCase();
-      if (!toolkit) { json(res, 400, { error: 'Missing toolkit' }); return true; }
-      const result = await personalAny['disconnectApp'](ctx, { toolkit });
-      json(res, 200, result);
+      const connectedAccountId = String(body['connectedAccountId'] ?? '').trim();
+      if (!connectedAccountId) { json(res, 400, { error: 'Missing connectedAccountId' }); return true; }
+      await personalAny['disconnectAccount'](ctx, { connectedAccountId });
+      json(res, 200, { ok: true });
       return true;
     }
 

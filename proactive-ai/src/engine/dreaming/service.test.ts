@@ -136,7 +136,8 @@ describe("runDreaming", () => {
       async waitForConnection() { throw new Error("not used"); },
       async searchTools() { return []; },
       async getToolSchema() { return null; },
-      async disconnectApp() { throw new Error("not used"); },
+      async disconnectAccount() { throw new Error("not used"); },
+      async resolveAccountIdentity() { return null; },
       async executeTool(slug) {
         if (slug === "GMAIL_FETCH_EMAILS") {
           return {

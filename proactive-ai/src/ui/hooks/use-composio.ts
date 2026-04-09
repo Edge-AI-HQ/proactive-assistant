@@ -1,9 +1,11 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { apiRpcFetch, apiRpcPost } from "@/lib/api";
 
 export interface Connection {
   toolkit: string;
   status: string;
+  connectedAccountId: string | null;
+  userInfo: Record<string, unknown> | null;
 }
 
 export interface ComposioStatus {
@@ -22,8 +24,9 @@ export interface ComposioState {
   loadConnections: () => Promise<Connection[]>;
   saveApiKey: (key: string) => Promise<{ ok: boolean; error?: string }>;
   connectToolkit: (toolkit: string) => Promise<{ ok: boolean; redirectUrl?: string; error?: string }>;
-  disconnectToolkit: (toolkit: string) => Promise<{ ok: boolean; error?: string }>;
+  disconnectAccount: (connectedAccountId: string) => Promise<{ ok: boolean; error?: string }>;
   waitForToolkit: (toolkit: string) => Promise<{ connected: boolean }>;
+  cancelWait: () => void;
   isToolkitConnected: (toolkit: string) => boolean;
 }
 
@@ -99,9 +102,9 @@ export function useComposio(): ComposioState {
     }
   }, [loadConnections]);
 
-  const disconnectToolkit = useCallback(async (toolkit: string): Promise<{ ok: boolean; error?: string }> => {
+  const disconnectAccount = useCallback(async (connectedAccountId: string): Promise<{ ok: boolean; error?: string }> => {
     try {
-      const res = await apiRpcPost("/composio/disconnect", { toolkit });
+      const res = await apiRpcPost("/composio/disconnect", { connectedAccountId });
       if (!res.ok) {
         const data = await res.json();
         return { ok: false, error: data.error?.message ?? data.error ?? "Disconnect failed" };
@@ -113,18 +116,33 @@ export function useComposio(): ComposioState {
     }
   }, [loadConnections]);
 
+  const waitAbortRef = useRef<AbortController | null>(null);
+
   const waitForToolkit = useCallback(async (toolkit: string): Promise<{ connected: boolean }> => {
+    waitAbortRef.current?.abort();
+    const controller = new AbortController();
+    waitAbortRef.current = controller;
     try {
-      const res = await apiRpcPost("/composio/wait", { toolkit });
+      const res = await apiRpcPost("/composio/wait", { toolkit }, controller.signal);
       const data = await res.json();
       await loadConnections();
       const status = (data.status ?? "").toUpperCase();
       return { connected: status === "ACTIVE" };
-    } catch {
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        return { connected: false };
+      }
       await loadConnections();
       return { connected: false };
+    } finally {
+      if (waitAbortRef.current === controller) waitAbortRef.current = null;
     }
   }, [loadConnections]);
+
+  const cancelWait = useCallback(() => {
+    waitAbortRef.current?.abort();
+    waitAbortRef.current = null;
+  }, []);
 
   const isToolkitConnected = useCallback((toolkit: string): boolean => {
     return connections.some(
@@ -132,5 +150,5 @@ export function useComposio(): ComposioState {
     );
   }, [connections]);
 
-  return { keyStatus, connections, statusLoading, loadingConns, loadStatus, loadConnections, saveApiKey, connectToolkit, disconnectToolkit, waitForToolkit, isToolkitConnected };
+  return { keyStatus, connections, statusLoading, loadingConns, loadStatus, loadConnections, saveApiKey, connectToolkit, disconnectAccount, waitForToolkit, cancelWait, isToolkitConnected };
 }
