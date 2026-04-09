@@ -265,9 +265,6 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                   }`}>
                                     {tk.label}
                                   </span>
-                                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                                    singleAccount ? "bg-emerald-500" : "bg-foreground/10"
-                                  }`} />
                                   {singleAccount ? (<>
                                     {/* + Add button: hidden by default, shown on hover */}
                                     <button
@@ -281,6 +278,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                         <span className="flex items-center gap-1"><Plus size={10} /> Add</span>
                                       )}
                                     </button>
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
                                     {/* Connected / Disconnect toggle */}
                                     <button
                                       onClick={(e) => { e.stopPropagation(); singleAccount.connectedAccountId && handleDisconnect(singleAccount.connectedAccountId); }}
@@ -296,7 +294,8 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                         </span>
                                       )}
                                     </button>
-                                  </>) : (
+                                  </>) : (<>
+                                    <span className="w-1.5 h-1.5 rounded-full bg-foreground/10 flex-shrink-0" />
                                     <button
                                       onClick={(e) => { e.stopPropagation(); handleConnect(tk.id); }}
                                       disabled={isBusy}
@@ -308,7 +307,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                         "Connect"
                                       )}
                                     </button>
-                                  )}
+                                  </>)}
                                 </div>
                               )}
 
