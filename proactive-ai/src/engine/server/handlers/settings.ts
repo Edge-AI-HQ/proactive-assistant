@@ -5,7 +5,16 @@ import {
   isSupportedGenerationLanguage,
 } from '../../generation-language.js';
 import { json, readBody } from "../http-utils.js";
-import { getGenerationLanguage, saveGenerationLanguage, getAutoGenerate, saveAutoGenerate } from "../local-settings.js";
+import { getDreamingSchedule, resolveDreamingTimezone } from "../../dreaming/schedule.js";
+import { getDefaultProfile } from "../../pipeline/data-access.js";
+import {
+  getGenerationLanguage,
+  saveGenerationLanguage,
+  getAutoGenerate,
+  saveAutoGenerate,
+  getAutoDreaming,
+  saveAutoDreaming,
+} from "../local-settings.js";
 
 export async function handleAutoGenerateSettings(ctx: RouteContext): Promise<boolean> {
   const { subpath, req, res } = ctx;
@@ -26,6 +35,37 @@ export async function handleAutoGenerateSettings(ctx: RouteContext): Promise<boo
     }
 
     json(res, 200, { ok: true, enabled: saveAutoGenerate(enabled) });
+    return true;
+  }
+
+  return false;
+}
+
+export async function handleAutoDreamingSettings(ctx: RouteContext): Promise<boolean> {
+  const { subpath, req, res } = ctx;
+  if (subpath !== "/settings/auto-dreaming") return false;
+
+  const profile = await getDefaultProfile();
+  const profileTimezone = typeof profile?.timezone === "string" ? profile.timezone : null;
+  const schedule = getDreamingSchedule(
+    resolveDreamingTimezone(profileTimezone, Intl.DateTimeFormat().resolvedOptions().timeZone),
+  );
+
+  if (req.method === "GET") {
+    json(res, 200, { ok: true, enabled: getAutoDreaming(), schedule });
+    return true;
+  }
+
+  if (req.method === "POST") {
+    const body = await readBody(req);
+    const enabled = body["enabled"];
+
+    if (typeof enabled !== "boolean") {
+      json(res, 400, { ok: false, error: "enabled must be a boolean" });
+      return true;
+    }
+
+    json(res, 200, { ok: true, enabled: saveAutoDreaming(enabled), schedule });
     return true;
   }
 

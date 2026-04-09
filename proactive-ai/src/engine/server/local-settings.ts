@@ -87,3 +87,19 @@ export function saveAutoGenerate(
   writeSettingsFile(settingsPath, settings);
   return enabled;
 }
+
+export function getAutoDreaming(settingsPath: string = LOCAL_SETTINGS_PATH): boolean {
+  const settings = readSettingsFile(settingsPath);
+  const autoDreaming = (settings as Record<string, unknown>)["autoDreaming"];
+  return autoDreaming === true;
+}
+
+export function saveAutoDreaming(
+  enabled: boolean,
+  settingsPath: string = LOCAL_SETTINGS_PATH,
+): boolean {
+  const settings = readSettingsFile(settingsPath);
+  (settings as Record<string, unknown>)["autoDreaming"] = enabled;
+  writeSettingsFile(settingsPath, settings);
+  return enabled;
+}

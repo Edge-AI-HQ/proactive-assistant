@@ -193,6 +193,7 @@ export async function startGateway(
   bin: OpenclawBin,
   pluginDir: string,
 ): Promise<GatewayHandle> {
+  const { PIN_DATA_ROOT: _pinDataRoot, ...baseEnv } = process.env;
   const port = await findAvailablePort();
   const token = randomUUID();
   const preferredPinBinDir = join(pluginDir, 'node_modules', '.bin');
@@ -218,11 +219,12 @@ export async function startGateway(
     ],
     {
       env: {
-        ...process.env,
+        ...baseEnv,
         ...getGatewayEnvFromLocalSettings(),
         PATH: pathWithPluginBins,
         // Ensure child processes don't inherit ELECTRON_RUN_AS_NODE
         ELECTRON_RUN_AS_NODE: undefined,
+        PIN_DATA_ROOT: undefined,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     },
