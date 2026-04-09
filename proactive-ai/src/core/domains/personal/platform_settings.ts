@@ -195,7 +195,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
  */
 export const loadOrCreateUserId = (homeDir: string): string => {
   const root = resolveAppRoot(undefined, homeDir);
-  const settingsFile = appPaths.localSettings(root);
+  const path = appPaths.localSettings(root);
 
   // 1. Already in local-settings.json?
   const settings = loadPlatformSettings(homeDir);
@@ -214,17 +214,11 @@ export const loadOrCreateUserId = (homeDir: string): string => {
   // 3. Generate new UUID
   if (!userId) userId = randomUUID();
 
-  // Persist to local-settings.json (the canonical location)
-  let existing: Record<string, unknown> = {};
-  if (existsSync(settingsFile)) {
-    try {
-      existing = asObject(JSON.parse(readFileSync(settingsFile, "utf-8")));
-    } catch { /* start fresh */ }
-  }
-  const composio = asObject(existing.composio);
-  existing.composio = { ...composio, userId };
-  mkdirSync(dirname(settingsFile), { recursive: true, mode: 0o700 });
-  writeFileSync(settingsFile, JSON.stringify(existing, null, 2), { encoding: "utf-8", mode: 0o600 });
+  // Persist to local-settings.json via the shared cache helpers
+  // so that subsequent reads (e.g. savePlatformApiKey) see the userId.
+  const existing = { ...readRawSettings(path) };
+  existing.composio = { ...asObject(existing.composio), userId };
+  writeRawSettings(path, existing);
 
   return userId;
 };
