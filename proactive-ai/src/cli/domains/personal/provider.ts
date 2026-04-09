@@ -8,10 +8,9 @@
  *   4. Execute tools on behalf of the user
  */
 
-import { createHash } from "node:crypto";
-
 import type { CliRuntimeInput } from "../../runtime.js";
 import { loadPlatformSettings } from "./platform_settings.js";
+import { loadOrCreateUserId } from "../../../core/domains/personal/platform_settings.js";
 
 // ── Types ──
 
@@ -436,8 +435,7 @@ export const createPersonalProvider = (
 
   const userId =
     runtime.env.COMPOSIO_USER_ID?.trim() ||
-    platformSettings.userId ||
-    `pin_${createHash("sha256").update(runtime.homeDir).digest("hex").slice(0, 16)}`;
+    loadOrCreateUserId(runtime.homeDir);
 
   return new PlatformPersonalProvider({
     apiKey,

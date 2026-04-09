@@ -5,13 +5,8 @@
  *   - Platform API key (`ak_...`) + MCP meta tools.
  */
 
-import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-
 import type { CoreContext } from "../../context.js";
-import { resolveAppRoot, appPaths } from "../../paths.js";
-import { loadPlatformSettings } from "./platform_settings.js";
+import { loadPlatformSettings, loadOrCreateUserId } from "./platform_settings.js";
 
 
 // ── Types ──
@@ -71,32 +66,6 @@ const obj = (v: unknown): Record<string, unknown> =>
   v && typeof v === "object" && !Array.isArray(v)
     ? (v as Record<string, unknown>)
     : {};
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-const resolveUserIdPath = (homeDir: string): string =>
-  appPaths.composioUserId(resolveAppRoot(undefined, homeDir));
-
-const loadOrCreateUuidUserId = (homeDir: string): string => {
-  const path = resolveUserIdPath(homeDir);
-  try {
-    const raw = readFileSync(path, "utf-8").trim();
-    if (UUID_RE.test(raw)) {
-      return raw;
-    }
-  } catch {
-    // continue and create
-  }
-
-  const generated = randomUUID();
-  try {
-    mkdirSync(dirname(resolveUserIdPath(homeDir)), { recursive: true });
-    writeFileSync(path, generated, { mode: 0o600 });
-  } catch {
-    // best effort persistence; return generated even if write fails
-  }
-  return generated;
-};
 
 // ── Noop (no key configured) ──
 
@@ -717,13 +686,9 @@ export const createPersonalProvider = (
   const apiKey = ctx.env.COMPOSIO_API_KEY?.trim() || platformSettings.apiKey;
   if (!apiKey) return new NoopPersonalProvider();
 
-  const userId = (() => {
-    const fromEnv = ctx.env.COMPOSIO_USER_ID?.trim();
-    if (fromEnv) return fromEnv;
-    const fromSettings = platformSettings.userId?.trim();
-    if (fromSettings) return fromSettings;
-    return loadOrCreateUuidUserId(ctx.homeDir);
-  })();
+  const userId =
+    ctx.env.COMPOSIO_USER_ID?.trim() ||
+    loadOrCreateUserId(ctx.homeDir);
   const authConfigMap = (() => {
     try {
       const fromEnv = JSON.parse(ctx.env.COMPOSIO_AUTH_CONFIG_MAP_JSON ?? "{}") as Record<string, string>;
