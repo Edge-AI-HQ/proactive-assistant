@@ -9,6 +9,7 @@ export type {
   EvaluatorOutput,
   PipelineResult,
   PipelineIteration,
+  PipelineTraceEvent,
   ServerEvent,
 } from '../core/types/intent-card.js';
 

@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { apiFetch } from "@/lib/api";
-import type { IntentCard, IntentCardAction, EvaluationScore, EvaluatorOutput } from "@shared/intent-card";
+import type { IntentCard, IntentCardAction, EvaluationScore, EvaluatorOutput, PipelineTraceEvent } from "@shared/intent-card";
 
 export type { IntentCard, IntentCardAction, EvaluationScore, EvaluatorOutput };
 
@@ -269,6 +269,19 @@ export function usePipeline() {
           setHealth((h) => ({ ...h, pipelineRunning: false }));
           closeSource();
           break;
+        case "pipeline:timing":
+          appendLog(makeLogEntry("timing", event.data.label ?? "Timing", event.data.detail ?? `${event.data.durationMs}ms`));
+          break;
+        case "pipeline:trace": {
+          const trace = event.data as PipelineTraceEvent;
+          appendLog(makeLogEntry(
+            "trace",
+            trace.name ?? trace.kind ?? "Trace",
+            trace.message ?? formatTraceDetail(trace),
+            trace.iteration ? { iteration: trace.iteration } : undefined,
+          ));
+          break;
+        }
         case "pipeline:error":
           setRun((prev) => ({ ...prev, status: "error", error: event.data.message || "Pipeline failed", completedAt: new Date().toISOString() }));
           appendLog(makeLogEntry("error", "Pipeline error", event.data.message || "Pipeline failed"));
@@ -282,4 +295,13 @@ export function usePipeline() {
   const isRunning = run.status === "running" || run.status === "connecting";
 
   return { health, run, generate, isRunning, closeSource };
+}
+
+function formatTraceDetail(trace: PipelineTraceEvent): string {
+  if (trace.message) return trace.message;
+  const bits: string[] = [];
+  if (trace.phase) bits.push(trace.phase);
+  if (trace.kind) bits.push(trace.kind);
+  if (typeof trace.durationMs === "number") bits.push(`${trace.durationMs}ms`);
+  return bits.join(" · ");
 }
