@@ -10,7 +10,7 @@ test("profile database supports exec and query helpers", async () => {
   const root = await mkdtemp(join(tmpdir(), "pin-sqlite-"));
 
   try {
-    const manager = new PinDatabaseManager({ dataRoot: root });
+    const manager = new PinDatabaseManager(root);
     await manager.init();
     const db = manager.open("pin");
 

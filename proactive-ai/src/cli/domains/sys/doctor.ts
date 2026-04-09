@@ -1,10 +1,8 @@
 import { existsSync } from "node:fs";
 
-import {
-  PinDatabaseManager,
-  resolvePinDataRoot,
-  type ResolvePinDataRootInput,
-} from "../../db/database.js";
+import { PinDatabaseManager } from "../../db/database.js";
+import { resolveAppRootFromCtx } from "../../../core/paths.js";
+import type { CoreContext } from "../../../core/context.js";
 import { okEnvelope } from "../../output/envelope.js";
 
 export interface DoctorCheck {
@@ -14,13 +12,13 @@ export interface DoctorCheck {
   hint?: string;
 }
 
-export interface SysDoctorRuntimeInput extends ResolvePinDataRootInput {}
+export interface SysDoctorRuntimeInput extends CoreContext {}
 
 const CLI_VERSION = "0.2.0";
 
 export const runSysDoctor = async (runtime: SysDoctorRuntimeInput) => {
-  const dataRoot = resolvePinDataRoot(runtime);
-  const manager = new PinDatabaseManager({ dataRoot });
+  const dataRoot = resolveAppRootFromCtx(runtime);
+  const manager = new PinDatabaseManager(dataRoot);
   const state = await manager.init();
 
   const checks: DoctorCheck[] = [];

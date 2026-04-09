@@ -40,7 +40,7 @@ export const setup = async (
     throw new ValidationError(
       "INVALID_ARGUMENT",
       key ? "API key must start with 'ak_'" : "API key is empty",
-      "get your key from https://dashboard.composio.dev",
+      "get your key from Composio workspace settings: https://app.composio.dev/settings",
     );
   }
 
@@ -54,7 +54,7 @@ export const setup = async (
     throw new ProviderUnavailableError(
       "INVALID_KEY",
       "API key validation failed — could not connect to Composio Platform API",
-      "verify your key at https://dashboard.composio.dev",
+      "verify your key at Composio workspace settings: https://app.composio.dev/settings",
     );
   }
 

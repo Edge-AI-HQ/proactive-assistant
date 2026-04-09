@@ -14,7 +14,7 @@ metadata:
 
 ## 前置条件
 
-1. 用户在 [dashboard.composio.dev](https://dashboard.composio.dev) 注册并获取 API key（`ak_...`）
+1. 用户在 [Composio workspace settings](https://app.composio.dev/settings) 中获取 API key（`ak_...`）
 2. 设置 `COMPOSIO_API_KEY` 环境变量，或写入 `~/.openclaw-proactive-ai/local-settings.json`
 
 ## 核心场景

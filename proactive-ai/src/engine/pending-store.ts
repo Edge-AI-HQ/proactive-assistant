@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import Database from 'better-sqlite3';
+import { resolveAppRoot, appPaths } from '../core/paths.js';
 
 export type PendingSource = 'world' | 'personal';
 export type PendingStatus = 'pending' | 'processed';
@@ -33,16 +34,16 @@ let schemaReady = false;
 let migrated = false;
 
 function getPinDbPath(): string {
-  const home = process.env['HOME'] ?? '/tmp';
-  const dataRoot = process.env['PIN_DATA_ROOT'] ?? resolve(home, '.pin');
-  const dataDir = resolve(dataRoot, 'data');
+  const root = resolveAppRoot();
+  const dbPath = appPaths.pinDb(root);
+  const dataDir = dirname(dbPath);
   if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
-  return resolve(dataDir, 'pin.db');
+  return dbPath;
 }
 
 function getLegacyPendingPath(): string {
-  const home = process.env['HOME'] ?? '/tmp';
-  return resolve(home, '.openclaw-proactive-ai', 'proactive-ai', 'pending.json');
+  const root = resolveAppRoot();
+  return join(root, 'proactive-ai', 'pending.json');
 }
 
 function openDb(): Database.Database {

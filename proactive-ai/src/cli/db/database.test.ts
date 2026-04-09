@@ -6,11 +6,11 @@ import { join } from "node:path";
 
 import {
   PinDatabaseManager,
-  resolvePinDataRoot,
+  resolveAppRootFromCtx,
 } from "./database.js";
 
-test("resolvePinDataRoot prefers explicit PIN_DATA_ROOT", () => {
-  const root = resolvePinDataRoot({
+test("resolveAppRootFromCtx prefers explicit PIN_DATA_ROOT", () => {
+  const root = resolveAppRootFromCtx({
     env: { PIN_DATA_ROOT: "/tmp/pin-data" },
     homeDir: "/Users/test",
   });
@@ -22,7 +22,7 @@ test("PinDatabaseManager init creates data directory metadata", async () => {
   const root = await mkdtemp(join(tmpdir(), "pin-db-"));
 
   try {
-    const manager = new PinDatabaseManager({ dataRoot: root });
+    const manager = new PinDatabaseManager(root);
     const state = await manager.init();
 
     assert.equal(state.dataRoot, root);

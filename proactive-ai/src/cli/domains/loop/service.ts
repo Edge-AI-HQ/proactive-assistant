@@ -1,12 +1,13 @@
-import { PinDatabaseManager, resolvePinDataRoot } from "../../db/database.js";
+import { PinDatabaseManager } from "../../db/database.js";
+import { resolveAppRootFromCtx } from "../../../core/paths.js";
 import { errorEnvelope, okEnvelope } from "../../output/envelope.js";
 import { ErrorType } from "../../output/errors.js";
 import type { CliRuntimeInput, RunCliResult } from "../../runtime.js";
 import { LoopRepository } from "./repository.js";
 
 const createRepository = async (runtime: CliRuntimeInput): Promise<LoopRepository> => {
-  const dataRoot = resolvePinDataRoot(runtime);
-  const manager = new PinDatabaseManager({ dataRoot });
+  const dataRoot = resolveAppRootFromCtx(runtime);
+  const manager = new PinDatabaseManager(dataRoot);
   await manager.init();
   return new LoopRepository(manager.open("pin"));
 };

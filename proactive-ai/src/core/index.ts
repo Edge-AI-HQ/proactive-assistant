@@ -11,6 +11,9 @@
 // ── Context ──
 export { type CoreContext } from "./context.js";
 
+// ── Paths ──
+export { resolveAppRoot, resolveAppRootFromCtx, appPaths } from "./paths.js";
+
 // ── Errors ──
 export {
   CoreError,
@@ -39,13 +42,11 @@ export {
 // ── Database ──
 export {
   PinDatabaseManager,
-  resolvePinDataRoot,
-  type PinDatabaseManagerOptions,
   type PinDatabaseRuntimeState,
   type PinDatabaseName,
+  type PinDatabasePaths,
 } from "./db/database.js";
 export { SqliteDatabase } from "./db/sqlite_adapter.js";
-export { buildDatabasePaths, type PinDatabasePaths } from "./db/paths.js";
 
 // ── Domain: Profile ──
 export * as profile from "./domains/profile/service.js";

@@ -1,7 +1,7 @@
-import { homedir } from 'node:os';
 import { feedback as coreFeedback, CoreError } from '../../../core/index.js';
 import type { RouteContext } from '../types.js';
 import { json, readBody } from '../http-utils.js';
+import { buildDefaultCtx } from '../../pipeline/data-access.js';
 
 const asTrimmedString = (value: unknown): string | null => {
   if (typeof value === 'string') {
@@ -16,7 +16,7 @@ const asTrimmedString = (value: unknown): string | null => {
   return null;
 };
 
-const ctx = { env: process.env, homeDir: homedir() };
+const ctx = buildDefaultCtx();
 
 const coreErrorToHttp = (
   res: import('node:http').ServerResponse,

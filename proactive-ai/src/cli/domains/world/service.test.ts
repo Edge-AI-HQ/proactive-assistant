@@ -366,7 +366,7 @@ test("shortlistWorldItems ranks by profile interests and buildWorldContext retur
       homeDir: "/Users/test",
     };
 
-    const manager = new PinDatabaseManager({ dataRoot: root });
+    const manager = new PinDatabaseManager(root);
     await manager.init();
     const profileRepository = new ProfileRepository(manager.open("pin"));
     await profileRepository.create({

@@ -11,7 +11,7 @@ test("ProfileRepository supports create read update delete lifecycle", async () 
   const root = await mkdtemp(join(tmpdir(), "pin-profile-repo-"));
 
   try {
-    const manager = new PinDatabaseManager({ dataRoot: root });
+    const manager = new PinDatabaseManager(root);
     await manager.init();
     const repository = new ProfileRepository(manager.open("pin"));
 
@@ -60,7 +60,7 @@ test("ProfileRepository supports preferences goals and constraints sections", as
   const root = await mkdtemp(join(tmpdir(), "pin-profile-sections-repo-"));
 
   try {
-    const manager = new PinDatabaseManager({ dataRoot: root });
+    const manager = new PinDatabaseManager(root);
     await manager.init();
     const repository = new ProfileRepository(manager.open("pin"));
 
@@ -111,7 +111,7 @@ test("ProfileRepository rolls up signals into interests and builds ranking snaps
   const root = await mkdtemp(join(tmpdir(), "pin-profile-rollup-repo-"));
 
   try {
-    const manager = new PinDatabaseManager({ dataRoot: root });
+    const manager = new PinDatabaseManager(root);
     await manager.init();
     const repository = new ProfileRepository(manager.open("pin"));
 

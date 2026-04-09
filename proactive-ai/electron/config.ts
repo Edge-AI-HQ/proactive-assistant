@@ -10,8 +10,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 
-const PROFILE = 'proactive-ai';
-const PROFILE_DIR = join(homedir(), `.openclaw-${PROFILE}`);
+const PROFILE_DIR = join(homedir(), '.openclaw-proactive-ai');
 const AUTH_PROFILES_PATH = join(PROFILE_DIR, 'agents', 'main', 'agent', 'auth-profiles.json');
 const LOCAL_SETTINGS_PATH = join(PROFILE_DIR, 'local-settings.json');
 

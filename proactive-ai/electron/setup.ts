@@ -12,8 +12,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-const PROFILE = 'proactive-ai';
-const PROFILE_DIR = join(homedir(), `.openclaw-${PROFILE}`);
+const PROFILE_DIR = join(homedir(), '.openclaw-proactive-ai');
 const CONFIG_PATH = join(PROFILE_DIR, 'openclaw.json');
 const EXEC_APPROVALS_PATH = join(homedir(), '.openclaw', 'exec-approvals.json');
 const DURABLE_PIN_COMMANDS = [
