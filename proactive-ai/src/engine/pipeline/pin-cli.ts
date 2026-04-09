@@ -5,9 +5,9 @@
  * Bridge between OpenClaw engine and the deterministic CLI tool layer.
  */
 
-import { homedir } from 'node:os';
 import { runCli } from '../../cli/cli.js';
 import type { PinEnvelope } from '../../cli/output/envelope.js';
+import { buildDefaultCtx } from './data-access.js';
 
 export interface PinCliResult {
   ok: boolean;
@@ -21,7 +21,7 @@ export async function runPinCli(args: string[]): Promise<PinCliResult> {
     args.push('--json');
   }
 
-  const result = await runCli(args, { homeDir: homedir() });
+  const result = await runCli(args, { homeDir: buildDefaultCtx().homeDir });
   const envelope = result.stdout as PinEnvelope<unknown>;
 
   return {

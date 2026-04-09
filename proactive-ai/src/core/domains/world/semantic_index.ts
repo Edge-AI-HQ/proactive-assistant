@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 
 import type { CoreContext } from "../../context.js";
-import { resolvePinDataRoot } from "../../db/database.js";
+import { resolveAppRootFromCtx } from "../../paths.js";
 
 export interface WorldSemanticIndexRecord {
   id: string;
@@ -202,6 +202,6 @@ export const createWorldSemanticIndex = (
     return new NoopWorldSemanticIndex();
   }
 
-  const dataRoot = resolvePinDataRoot(ctx);
+  const dataRoot = resolveAppRootFromCtx(ctx);
   return new LanceDbWorldSemanticIndex(dataRoot);
 };

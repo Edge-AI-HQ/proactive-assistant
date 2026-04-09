@@ -1,4 +1,5 @@
-import { PinDatabaseManager, resolvePinDataRoot } from "../../db/database.js";
+import { PinDatabaseManager } from "../../db/database.js";
+import { resolveAppRootFromCtx } from "../../../core/paths.js";
 import { okEnvelope } from "../../output/envelope.js";
 import type { CliRuntimeInput, RunCliResult } from "../../runtime.js";
 import { LoopRepository } from "../loop/repository.js";
@@ -26,8 +27,8 @@ export const getIncrementalContext = async (
   runtime: CliRuntimeInput,
   input: { limit?: string },
 ): Promise<RunCliResult> => {
-  const dataRoot = resolvePinDataRoot(runtime);
-  const manager = new PinDatabaseManager({ dataRoot });
+  const dataRoot = resolveAppRootFromCtx(runtime);
+  const manager = new PinDatabaseManager(dataRoot);
   await manager.init();
   const repository = new LoopRepository(manager.open("pin"));
   const limit = Math.max(1, Number.parseInt(input.limit ?? "50", 10) || 50);

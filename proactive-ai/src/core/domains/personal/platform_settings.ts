@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { dirname } from "node:path";
+import { resolveAppRoot, appPaths } from "../../paths.js";
 
 export interface PersonalPlatformSettings {
   apiKey?: string;
@@ -22,7 +23,7 @@ const asString = (value: unknown): string | undefined => {
 };
 
 const settingsPath = (homeDir: string) =>
-  resolve(homeDir, ".openclaw-proactive-ai", "local-settings.json");
+  appPaths.localSettings(resolveAppRoot(undefined, homeDir));
 
 /**
  * Save a Composio API key to local-settings.json.

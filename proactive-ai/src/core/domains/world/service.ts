@@ -1,4 +1,5 @@
-import { PinDatabaseManager, resolvePinDataRoot } from "../../db/database.js";
+import { PinDatabaseManager } from "../../db/database.js";
+import { resolveAppRootFromCtx } from "../../paths.js";
 import type { CoreContext } from "../../context.js";
 import { NotFoundError, ProviderUnavailableError } from "../../errors.js";
 import { parseOptionalInt } from "../../validation.js";
@@ -104,15 +105,15 @@ const filterParsedFeedItems = (
 };
 
 const createRepository = async (ctx: CoreContext) => {
-  const dataRoot = resolvePinDataRoot(ctx);
-  const manager = new PinDatabaseManager({ dataRoot });
+  const dataRoot = resolveAppRootFromCtx(ctx);
+  const manager = new PinDatabaseManager(dataRoot);
   await manager.init();
   return new WorldRepository(manager.open("pin"));
 };
 
 const createProfileRepository = async (ctx: CoreContext) => {
-  const dataRoot = resolvePinDataRoot(ctx);
-  const manager = new PinDatabaseManager({ dataRoot });
+  const dataRoot = resolveAppRootFromCtx(ctx);
+  const manager = new PinDatabaseManager(dataRoot);
   await manager.init();
   return new ProfileRepository(manager.open("pin"));
 };

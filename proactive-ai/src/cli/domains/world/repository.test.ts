@@ -12,7 +12,7 @@ test("WorldRepository ingests and deduplicates items by normalized url", async (
   const root = await mkdtemp(join(tmpdir(), "pin-world-repo-"));
 
   try {
-    const manager = new PinDatabaseManager({ dataRoot: root });
+    const manager = new PinDatabaseManager(root);
     await manager.init();
     const repository = new WorldRepository(manager.open("pin"));
 
@@ -56,7 +56,7 @@ test("WorldRepository preserves headline metadata on ingest", async () => {
   const root = await mkdtemp(join(tmpdir(), "pin-world-headlines-repo-"));
 
   try {
-    const manager = new PinDatabaseManager({ dataRoot: root });
+    const manager = new PinDatabaseManager(root);
     await manager.init();
     const repository = new WorldRepository(manager.open("pin"));
 
@@ -86,7 +86,7 @@ test("WorldRepository supports incremental filters by time and id", async () => 
   const root = await mkdtemp(join(tmpdir(), "pin-world-filters-repo-"));
 
   try {
-    const manager = new PinDatabaseManager({ dataRoot: root });
+    const manager = new PinDatabaseManager(root);
     await manager.init();
     const repository = new WorldRepository(manager.open("pin"));
 

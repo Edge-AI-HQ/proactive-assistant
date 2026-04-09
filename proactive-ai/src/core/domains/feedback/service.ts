@@ -2,7 +2,8 @@ import { FeedbackRepository } from "./repository.js";
 import type { FeedbackEventRecord } from "./schema.js";
 import type { FeedbackStats } from "./repository.js";
 
-import { PinDatabaseManager, resolvePinDataRoot } from "../../db/database.js";
+import { PinDatabaseManager } from "../../db/database.js";
+import { resolveAppRootFromCtx } from "../../paths.js";
 import type { CoreContext } from "../../context.js";
 import { NotFoundError, ValidationError } from "../../errors.js";
 import {
@@ -107,8 +108,8 @@ const parseMetadata = (
 // ── Repository factory ──
 
 const createRepository = async (ctx: CoreContext): Promise<FeedbackRepository> => {
-  const dataRoot = resolvePinDataRoot(ctx);
-  const manager = new PinDatabaseManager({ dataRoot });
+  const dataRoot = resolveAppRootFromCtx(ctx);
+  const manager = new PinDatabaseManager(dataRoot);
   await manager.init();
   return new FeedbackRepository(manager.open("pin"));
 };

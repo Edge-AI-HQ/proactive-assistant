@@ -70,10 +70,12 @@ app.whenReady().then(async () => {
     }
 
     // 3. Check API key — if missing, show setup window instead of gateway
+    //    Create the setup window BEFORE destroying splash to avoid
+    //    a zero-window state that triggers window-all-closed → app.quit().
     if (!hasApiKey()) {
+      showSetupWindow(openclawBin);
       splashWindow?.destroy();
       splashWindow = null;
-      showSetupWindow(openclawBin);
       return;
     }
 
@@ -126,8 +128,8 @@ function showSetupWindow(openclawBin: OpenclawBin): void {
   win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(SETUP_HTML)}`);
 
   ipcMain.once('config:apikey:saved', async () => {
-    win.destroy();
     showSplash();
+    win.destroy();
     try {
       await launchGatewayAndMainWindow(openclawBin);
     } catch (err) {

@@ -9,7 +9,8 @@ import {
   type PushOutcomeRow,
 } from "./schema.js";
 
-import { PinDatabaseManager, resolvePinDataRoot } from "../../db/database.js";
+import { PinDatabaseManager } from "../../db/database.js";
+import { resolveAppRootFromCtx } from "../../paths.js";
 import type { CoreContext } from "../../context.js";
 import { NotFoundError } from "../../errors.js";
 import {
@@ -25,8 +26,8 @@ export { VALID_PUSH_KINDS, VALID_PUSH_CHANNELS, VALID_BASKETS, VALID_OUTCOME_STA
 // ── Repository factory ──
 
 const createRepository = async (ctx: CoreContext): Promise<PushRepository> => {
-  const dataRoot = resolvePinDataRoot(ctx);
-  const manager = new PinDatabaseManager({ dataRoot });
+  const dataRoot = resolveAppRootFromCtx(ctx);
+  const manager = new PinDatabaseManager(dataRoot);
   await manager.init();
   return new PushRepository(manager.open("pin"));
 };

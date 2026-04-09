@@ -1,11 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import {
   DEFAULT_GENERATION_LANGUAGE,
   isSupportedGenerationLanguage,
   type SupportedGenerationLanguage,
 } from '../generation-language.js';
+import { resolveAppRoot, appPaths } from '../../core/paths.js';
 
 interface LocalSettings {
   composio?: Record<string, unknown>;
@@ -15,8 +15,7 @@ interface LocalSettings {
   [key: string]: unknown;
 }
 
-const PROFILE_DIR = join(homedir(), ".openclaw-proactive-ai");
-const LOCAL_SETTINGS_PATH = join(PROFILE_DIR, "local-settings.json");
+const LOCAL_SETTINGS_PATH = appPaths.localSettings(resolveAppRoot());
 
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)

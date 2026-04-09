@@ -229,7 +229,7 @@ test("context incremental and loop commit support agent-style consumption", asyn
       env: { PIN_DATA_ROOT: root },
       homeDir: "/Users/test",
     };
-    const manager = new PinDatabaseManager({ dataRoot: root });
+    const manager = new PinDatabaseManager(root);
     await manager.init();
     const repository = new LoopRepository(manager.open("pin"));
 

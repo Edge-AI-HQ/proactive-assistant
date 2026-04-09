@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { join } from 'node:path';
+import { resolveAppRoot } from '../../core/paths.js';
 
 const MAX_STORED_RUNS = 5;
 
@@ -16,10 +17,10 @@ interface RunStore {
 }
 
 function getRunStorePath(): string {
-  const home = process.env['HOME'] ?? '/tmp';
-  const dir = resolve(home, '.openclaw-proactive-ai', 'proactive-ai');
+  const root = resolveAppRoot();
+  const dir = join(root, 'proactive-ai');
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  return resolve(dir, 'runs.json');
+  return join(dir, 'runs.json');
 }
 
 export function loadRunStore(): RunStore {

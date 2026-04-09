@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 
 import type { CliRuntimeInput } from "../../runtime.js";
+import { resolveAppRoot } from "../../../core/paths.js";
 
 export interface WorldSemanticIndexRecord {
   id: string;
@@ -201,6 +202,6 @@ export const createWorldSemanticIndex = (
     return new NoopWorldSemanticIndex();
   }
 
-  const dataRoot = runtime.env.PIN_DATA_ROOT || `${runtime.homeDir}/.pin`;
+  const dataRoot = resolveAppRoot(runtime.env, runtime.homeDir);
   return new LanceDbWorldSemanticIndex(dataRoot);
 };

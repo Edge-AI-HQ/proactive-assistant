@@ -1,9 +1,9 @@
-import { homedir } from 'node:os';
 import { profile as coreProfile, CoreError } from '../../../core/index.js';
 import type { RouteContext } from '../types.js';
 import { json, readBody } from '../http-utils.js';
+import { buildDefaultCtx } from '../../pipeline/data-access.js';
 
-const ctx = { env: process.env, homeDir: homedir() };
+const ctx = buildDefaultCtx();
 
 function coreErrorToHttp(res: import('node:http').ServerResponse, err: unknown): void {
   if (err instanceof CoreError) {

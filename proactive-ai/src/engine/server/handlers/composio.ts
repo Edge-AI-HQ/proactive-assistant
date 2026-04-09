@@ -1,9 +1,9 @@
-import { homedir } from 'node:os';
 import type { RouteContext } from '../types.js';
 import { json, readBody } from '../http-utils.js';
 import { personal as corePersonal, CoreError } from '../../../core/index.js';
+import { buildDefaultCtx } from '../../pipeline/data-access.js';
 
-const ctx = { env: process.env, homeDir: homedir() };
+const ctx = buildDefaultCtx();
 
 export async function handleComposio(routeCtx: RouteContext): Promise<boolean> {
   const { subpath, req, res } = routeCtx;

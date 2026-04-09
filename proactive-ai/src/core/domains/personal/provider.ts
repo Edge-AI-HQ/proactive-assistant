@@ -7,10 +7,12 @@
 
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname } from "node:path";
 
 import type { CoreContext } from "../../context.js";
+import { resolveAppRoot, appPaths } from "../../paths.js";
 import { loadPlatformSettings } from "./platform_settings.js";
+
 
 // ── Types ──
 
@@ -73,7 +75,7 @@ const obj = (v: unknown): Record<string, unknown> =>
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const resolveUserIdPath = (homeDir: string): string =>
-  resolve(homeDir, ".openclaw-proactive-ai", "composio-user-id");
+  appPaths.composioUserId(resolveAppRoot(undefined, homeDir));
 
 const loadOrCreateUuidUserId = (homeDir: string): string => {
   const path = resolveUserIdPath(homeDir);
@@ -88,7 +90,7 @@ const loadOrCreateUuidUserId = (homeDir: string): string => {
 
   const generated = randomUUID();
   try {
-    mkdirSync(resolve(homeDir, ".openclaw-proactive-ai"), { recursive: true });
+    mkdirSync(dirname(resolveUserIdPath(homeDir)), { recursive: true });
     writeFileSync(path, generated, { mode: 0o600 });
   } catch {
     // best effort persistence; return generated even if write fails

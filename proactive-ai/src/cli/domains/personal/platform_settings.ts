@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolveAppRoot, appPaths } from "../../../core/paths.js";
 
 export interface PersonalPlatformSettings {
   apiKey?: string;
@@ -21,7 +21,7 @@ const asString = (value: unknown): string | undefined => {
 };
 
 export const loadPlatformSettings = (homeDir: string): PersonalPlatformSettings => {
-  const path = resolve(homeDir, ".openclaw-proactive-ai", "local-settings.json");
+  const path = appPaths.localSettings(resolveAppRoot(undefined, homeDir));
   if (!existsSync(path)) {
     return {};
   }

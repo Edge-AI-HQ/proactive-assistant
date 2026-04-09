@@ -1,8 +1,11 @@
 import { mkdir } from "node:fs/promises";
 
-import type { CoreContext } from "../context.js";
-import { buildDatabasePaths, type PinDatabasePaths } from "./paths.js";
+import { appPaths } from "../paths.js";
 import { SqliteDatabase } from "./sqlite_adapter.js";
+
+export interface PinDatabasePaths {
+  pin: string;
+}
 
 export interface PinDatabaseRuntimeState {
   dataRoot: string;
@@ -11,27 +14,21 @@ export interface PinDatabaseRuntimeState {
 
 export type PinDatabaseName = keyof PinDatabasePaths;
 
-export interface PinDatabaseManagerOptions {
-  dataRoot: string;
+function buildDatabasePaths(dataRoot: string): PinDatabasePaths {
+  return { pin: appPaths.pinDb(dataRoot) };
 }
-
-export const resolvePinDataRoot = (ctx: CoreContext): string =>
-  ctx.env.PIN_DATA_ROOT || `${ctx.homeDir}/.pin`;
 
 export class PinDatabaseManager {
   private state: PinDatabaseRuntimeState | null = null;
 
-  constructor(private readonly options: PinDatabaseManagerOptions) {}
+  constructor(private readonly dataRoot: string) {}
 
   async init(): Promise<PinDatabaseRuntimeState> {
-    const dataRoot = this.options.dataRoot;
-    const dataDir = `${dataRoot}/data`;
-
-    await mkdir(dataDir, { recursive: true });
+    await mkdir(appPaths.dataDir(this.dataRoot), { recursive: true });
 
     this.state = {
-      dataRoot,
-      databases: buildDatabasePaths(dataRoot),
+      dataRoot: this.dataRoot,
+      databases: buildDatabasePaths(this.dataRoot),
     };
 
     return this.state;
@@ -45,8 +42,8 @@ export class PinDatabaseManager {
   getState(): PinDatabaseRuntimeState {
     if (!this.state) {
       this.state = {
-        dataRoot: this.options.dataRoot,
-        databases: buildDatabasePaths(this.options.dataRoot),
+        dataRoot: this.dataRoot,
+        databases: buildDatabasePaths(this.dataRoot),
       };
     }
 

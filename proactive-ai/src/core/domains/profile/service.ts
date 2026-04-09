@@ -7,7 +7,8 @@ import {
 } from "./repository.js";
 import type { ProfileRecord } from "./schema.js";
 
-import { PinDatabaseManager, resolvePinDataRoot } from "../../db/database.js";
+import { PinDatabaseManager } from "../../db/database.js";
+import { resolveAppRootFromCtx } from "../../paths.js";
 import type { CoreContext } from "../../context.js";
 import { NotFoundError, ConflictError, ValidationError } from "../../errors.js";
 import { parseJsonValue, parseSinceCutoff } from "../../validation.js";
@@ -15,8 +16,8 @@ import { parseJsonValue, parseSinceCutoff } from "../../validation.js";
 export const DEFAULT_PROFILE_ID = "default";
 
 const createRepository = async (ctx: CoreContext) => {
-  const dataRoot = resolvePinDataRoot(ctx);
-  const manager = new PinDatabaseManager({ dataRoot });
+  const dataRoot = resolveAppRootFromCtx(ctx);
+  const manager = new PinDatabaseManager(dataRoot);
   await manager.init();
   return new ProfileRepository(manager.open("pin"));
 };

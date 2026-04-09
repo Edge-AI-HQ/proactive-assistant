@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 
 import { world as coreWorld, personal as corePersonal } from "../../../core/index.js";
 
-import { PinDatabaseManager, resolvePinDataRoot } from "../../db/database.js";
+import { PinDatabaseManager } from "../../db/database.js";
+import { resolveAppRootFromCtx } from "../../../core/paths.js";
 import { okEnvelope } from "../../output/envelope.js";
 import type { CliRuntimeInput, RunCliResult } from "../../runtime.js";
 import { LoopRepository, type PendingItemInput } from "../loop/repository.js";
@@ -128,8 +129,8 @@ function toPersonalPendingItem(
 }
 
 const createDeps = async (runtime: CliRuntimeInput): Promise<IngestDeps> => {
-  const dataRoot = resolvePinDataRoot(runtime);
-  const manager = new PinDatabaseManager({ dataRoot });
+  const dataRoot = resolveAppRootFromCtx(runtime);
+  const manager = new PinDatabaseManager(dataRoot);
   await manager.init();
   const repository = new LoopRepository(manager.open("pin"));
   return {
