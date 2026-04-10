@@ -25,6 +25,7 @@ export default {
     type: 'object' as const,
     properties: {
       max_iterations: { type: 'number' as const, default: 3 },
+      cards_per_iteration: { type: 'number' as const, default: 8 },
       agent_timeout_ms: { type: 'number' as const, default: 300_000 },
       auto_poll_enabled: { type: 'boolean' as const, default: true },
       auto_ingest_interval_ms: { type: 'number' as const, default: 300_000 },
@@ -67,6 +68,7 @@ export default {
         try {
           const result = await runPipeline(api, {
             maxIterations: config.max_iterations,
+            cardsPerIteration: config.cards_per_iteration,
             agentTimeoutMs: config.agent_timeout_ms,
             outputLanguage: DEFAULT_GENERATION_LANGUAGE,
           });
