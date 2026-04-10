@@ -54,6 +54,7 @@ apis/public/tg-subscription-mini/
 
 # Project-specific local files
 .claude/
+.worktrees/
 product_specs/
 docs/
 

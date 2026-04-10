@@ -1,0 +1,9 @@
+{
+  "name": "@pin-ai/core",
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./dist/src/index.js"
+  },
+  "main": "dist/src/index.js"
+}

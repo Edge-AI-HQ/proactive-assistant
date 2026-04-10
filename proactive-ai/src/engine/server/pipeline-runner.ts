@@ -64,13 +64,17 @@ export async function executeIncrementalPipeline(
   const agentTimeoutMs = input.agentTimeoutMs ?? DEFAULT_PIPELINE_OPTIONS.agentTimeoutMs;
   const cooldownMs = Math.max(0, input.cooldownMs ?? DEFAULT_CONFIG.auto_loop_min_interval_ms);
   const contextLimit = 200;
+  const plannedRunId = `run_${input.trigger}_${Date.now().toString(36)}`;
 
   const context = await pinCliData<IncrementalContextPayload>([
     'context',
     'incremental',
     '--limit',
     String(contextLimit),
-  ]);
+  ], {
+    runId: plannedRunId,
+    traceContext: 'pipeline-runner:context',
+  });
 
   if (!context.runToken) {
     return { ok: true, skipped: 'no-pending', pending: 0 };
@@ -100,7 +104,7 @@ export async function executeIncrementalPipeline(
       {
         maxIterations,
         agentTimeoutMs,
-        runId: `run_${input.trigger}_${Date.now().toString(36)}`,
+        runId: plannedRunId,
         incrementalContext: JSON.stringify({
           runToken: context.runToken,
           generatedAt: context.generatedAt,
@@ -112,7 +116,10 @@ export async function executeIncrementalPipeline(
       input.onEvent,
     );
     const nowIso = toIsoNow();
-    const commitResult = await runPinCli(['loop', 'commit', '--run-token', context.runToken]);
+    const commitResult = await runPinCli(['loop', 'commit', '--run-token', context.runToken], {
+      runId: result.runId,
+      traceContext: 'pipeline-runner:commit',
+    });
     if (!commitResult.ok) {
       throw new Error(commitResult.error?.message ?? 'Failed to commit loop run token');
     }
@@ -125,6 +132,7 @@ export async function executeIncrementalPipeline(
       completedAt: nowIso,
       totalIterations: result.totalIterations,
       finalCards: result.finalCards,
+      tracePath: result.tracePath,
       scoreMap: {
         trigger: input.trigger,
         consumedPending,
