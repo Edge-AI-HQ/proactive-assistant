@@ -144,6 +144,11 @@ export async function runPipeline(
       break;
     }
 
+    // Assign globally unique IDs: runId + iteration + index
+    for (let j = 0; j < generated.cards.length; j++) {
+      generated.cards[j]!.id = `${runId}_i${i}_${j + 1}`;
+    }
+
     emit({ type: 'pipeline:cards', data: { iteration: i, cards: generated.cards } });
 
     // ── Phase 3: Evaluator ──

@@ -95,7 +95,7 @@ Output ONLY a JSON code block:
 {
   "cards": [
     {
-      "id": "card_${iterationNumber}_<index>",
+      "id": "auto-assigned",
       "goalBasket": "work|health|family|wealth|growth|life",
       "title": "Specific, actionable title",
       "whyNow": "One sentence with specific trigger",
@@ -118,6 +118,7 @@ Output ONLY a JSON code block:
 \`\`\`
 
 - One card per planned intent. Do not skip any, do not add extras.
+- Card IDs will be auto-assigned by the system — use any placeholder.
 - All score values between 0.0 and 1.0.
 </output_format>`;
 }
