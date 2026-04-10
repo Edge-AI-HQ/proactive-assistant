@@ -40,15 +40,16 @@ export interface IntentCard {
 
 export interface PlannerOutput {
   reasoning: string;
+  collectedContext: Record<string, unknown>;  // raw data gathered by Planner via pin CLI
   intentsToGenerate: IntentPlan[];
 }
 
 export interface IntentPlan {
   goalBasket: GoalBasket;
   objective: string;
-  dataSources: string[];   // which pin CLI commands to call
   whyNow: string;
   expectedAction: string;
+  supportingData: string[];  // key data points from collectedContext backing this intent
 }
 
 export interface GeneratorOutput {

@@ -2,18 +2,11 @@
  * Pipeline Orchestrator — runs the Planner -> Generator -> Evaluator loop.
  *
  * This is the core engine of the Proactive AI system. It:
- * 1. Spawns a Planner agent to decide what cards to create
- * 2. Spawns a Generator agent to create the cards
+ * 1. Spawns a Planner agent to gather context and decide what cards to create
+ * 2. Spawns a Generator agent to create the cards (using Planner's collected data)
  * 3. Spawns an Evaluator agent to score and filter cards
- * 4. Loops N times, feeding structured context from previous iteration
- * 5. Selects the best cards across all iterations
- *
- * Card selection strategy:
- *   - All cards across all iterations go into a candidate pool with their evaluation scores
- *   - Only cards that passed (overall >= 7.0) are eligible
- *   - Sorted by Evaluator's `overall` score (5-dimension average) — the authoritative quality signal
- *   - Diversity constraint: max 2 cards per goalBasket
- *   - Final output: top 5
+ * 4. Loops N times, feeding structured feedback from previous iteration
+ * 5. Selects the best cards from the latest iteration
  */
 
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
@@ -44,14 +37,15 @@ import type {
 export interface PipelineOptions {
   maxIterations: number;
   agentTimeoutMs: number;
+  cardsPerIteration?: number;
   runId?: string;
   outputLanguage?: SupportedGenerationLanguage;
-  incrementalContext?: string;
 }
 
 export const DEFAULT_PIPELINE_OPTIONS: PipelineOptions = {
   maxIterations: 2,
   agentTimeoutMs: 300_000, // 5 minutes per agent
+  cardsPerIteration: 8,
   outputLanguage: DEFAULT_GENERATION_LANGUAGE,
 };
 
@@ -82,6 +76,7 @@ export async function runPipeline(
   const emit = onEvent ?? (() => {});
   const currentDate = new Date().toISOString().slice(0, 10);
   const outputLanguage = opts.outputLanguage ?? DEFAULT_GENERATION_LANGUAGE;
+  const cardsPerIteration = opts.cardsPerIteration ?? 8;
   const iterations: PipelineIteration[] = [];
   let lastIterationCards: ScoredCandidate[] = [];
   const runId = opts.runId ?? `run_${Date.now().toString(36)}`;
@@ -109,7 +104,7 @@ export async function runPipeline(
     const plannerPrompt = buildPlannerPrompt({
       currentDate,
       iterationNumber: i,
-      incrementalContext: opts.incrementalContext,
+      cardsPerIteration,
       recentFeedbackSummary,
       previousFeedback: prev?.feedback,
       previousPlan: prev ? JSON.stringify(prev.plan, null, 2) : undefined,
@@ -118,7 +113,7 @@ export async function runPipeline(
       outputLanguage,
     });
 
-    const planText = await runAgent(api, `plan:${i}`, plannerPrompt, 'Generate an intent card plan based on the user\'s current context.', opts.agentTimeoutMs);
+    const planText = await runAgent(api, `plan:${i}`, plannerPrompt, 'Gather the user\'s current context and generate an intent card plan.', opts.agentTimeoutMs);
     const plan = parseAgentJsonOrThrow<PlannerOutput>(planText, `plan:${i}`);
 
     if (!plan.intentsToGenerate?.length) {
@@ -127,13 +122,13 @@ export async function runPipeline(
     }
 
     // ── Phase 2: Generator ──
+    // Pass the FULL plan (including collectedContext) so Generator doesn't re-fetch data
     emit({ type: 'pipeline:iteration', data: { iteration: i, phase: 'generating' } });
 
     const generatorPrompt = buildGeneratorPrompt({
       currentDate,
       plan: JSON.stringify(plan, null, 2),
       iterationNumber: i,
-      incrementalContext: opts.incrementalContext,
       recentFeedbackSummary,
       previousFeedback: prev?.feedback,
       previousCards: prev ? JSON.stringify(prev.cards, null, 2) : undefined,
@@ -141,7 +136,7 @@ export async function runPipeline(
       outputLanguage,
     });
 
-    const cardsText = await runAgent(api, `generate:${i}`, generatorPrompt, 'Generate intent cards based on the plan.', opts.agentTimeoutMs);
+    const cardsText = await runAgent(api, `generate:${i}`, generatorPrompt, 'Generate intent cards based on the plan and collected context.', opts.agentTimeoutMs);
     const generated = parseAgentJsonOrThrow<GeneratorOutput>(cardsText, `generate:${i}`);
 
     if (!generated.cards?.length) {
@@ -161,7 +156,6 @@ export async function runPipeline(
       iterationNumber: i,
       maxIterations: opts.maxIterations,
       outputLanguage,
-      incrementalContext: opts.incrementalContext,
     });
 
     const evalText = await runAgent(api, `evaluate:${i}`, evaluatorPrompt, 'Evaluate the generated intent cards for quality.', opts.agentTimeoutMs);
