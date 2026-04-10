@@ -14,7 +14,6 @@
     "types": ["vitest/globals"]
   },
   "include": [
-    "src/ui/**/*.d.ts",
     "src/ui/**/*.ts",
     "src/ui/**/*.tsx",
     "src/shared/**/*.ts",

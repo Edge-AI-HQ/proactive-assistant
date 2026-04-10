@@ -98,7 +98,6 @@ export {
   type EvaluatorOutput,
   type PipelineIteration,
   type PipelineResult,
-  type PipelineTraceEvent,
   type ServerEvent,
 } from "./types/intent-card.js";
 export { type WritePreview } from "./types/preview.js";
