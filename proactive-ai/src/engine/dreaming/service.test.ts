@@ -124,6 +124,106 @@ describe("runDreaming", () => {
     const ctx = createCtx(root);
     await seedProfile(ctx);
 
+    const executeTool = vi.fn(async (slug: string, args?: Record<string, unknown>) => {
+      if (slug === "GMAIL_FETCH_EMAILS") {
+        if (args?.page_token === "page-2") {
+          return {
+            tool: slug,
+            success: true,
+            error: null,
+            data: {
+              messages: [
+                {
+                  messageId: "gmail-3",
+                  subject: "Weekly metrics",
+                  sender: "Ops <ops@pinai.io>",
+                  to: "smile@pinai.io",
+                  labelIds: ["INBOX"],
+                  messageTimestamp: "2026-04-09T05:10:00Z",
+                  preview: {
+                    subject: "Weekly metrics",
+                    body: "Metrics snapshot for yesterday.",
+                  },
+                  messageText: "Metrics snapshot for yesterday.",
+                },
+              ],
+            },
+          };
+        }
+        expect(args).toMatchObject({
+          max_results: 100,
+          query: expect.stringContaining("after:"),
+        });
+        return {
+          tool: slug,
+          success: true,
+          error: null,
+          data: {
+            nextPageToken: "page-2",
+            messages: [
+              {
+                messageId: "gmail-1",
+                subject: "Review Anthropic invoice",
+                sender: "Anthropic Billing <billing@anthropic.com>",
+                to: "smile@pinai.io",
+                labelIds: ["INBOX", "UNREAD"],
+                messageTimestamp: "2026-04-09T14:15:22Z",
+                display_url: "https://mail.google.com/mail/u/0/#inbox/example",
+                preview: {
+                  subject: "Review Anthropic invoice",
+                  body: "Invoice attached for March usage.",
+                },
+                messageText: "Invoice attached for March usage. Please review before Friday.",
+              },
+              {
+                messageId: "gmail-2",
+                subject: "Prepare board update",
+                sender: "Alex <alex@pinai.io>",
+                to: "smile@pinai.io",
+                labelIds: ["INBOX"],
+                messageTimestamp: "2026-04-09T06:45:00Z",
+                preview: {
+                  subject: "Prepare board update",
+                  body: "Need the topline metrics before the afternoon review.",
+                },
+                messageText: "Need the topline metrics before the afternoon review.",
+              },
+            ],
+          },
+        };
+      }
+      if (slug === "GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS") {
+        return {
+          tool: slug,
+          success: true,
+          error: null,
+          data: {
+            summary_view: [
+              {
+                title: "Product & Engineering Daily Sync",
+                start: "2026-04-09T07:30:00+08:00",
+                end: "2026-04-09T08:30:00+08:00",
+                is_all_day: false,
+                calendar: "smile@pinai.io",
+                display_url: "https://calendar.google.com/event?daily-sync",
+              },
+              {
+                title: "[Reminder] Pin AI Team - Midweek Update",
+                start: "2026-04-09T08:00:00+08:00",
+                end: "2026-04-09T08:30:00+08:00",
+                is_all_day: false,
+                calendar: "smile@pinai.io",
+                display_url: "https://calendar.google.com/event/midweek",
+              },
+            ],
+            calendars_queried: [{ id: "smile@pinai.io", summary: "smile@pinai.io" }],
+            events: [],
+          },
+        };
+      }
+      return { tool: slug, success: true, error: null, data: [] };
+    });
+
     const providerSpy = vi.spyOn(core, "createPersonalProvider").mockReturnValue({
       async discoverConnections() {
         return [
@@ -137,62 +237,7 @@ describe("runDreaming", () => {
       async searchTools() { return []; },
       async getToolSchema() { return null; },
       async disconnectApp() { throw new Error("not used"); },
-      async executeTool(slug) {
-        if (slug === "GMAIL_FETCH_EMAILS") {
-          return {
-            tool: slug,
-            success: true,
-            error: null,
-            data: {
-              messages: [
-                {
-                  subject: "Review Anthropic invoice",
-                  sender: "Anthropic Billing <billing@anthropic.com>",
-                  to: "smile@pinai.io",
-                  labelIds: ["INBOX", "UNREAD"],
-                  messageTimestamp: "2026-04-09T14:15:22Z",
-                  display_url: "https://mail.google.com/mail/u/0/#inbox/example",
-                  preview: {
-                    subject: "Review Anthropic invoice",
-                    body: "Invoice attached for March usage.",
-                  },
-                  messageText: "Invoice attached for March usage. Please review before Friday.",
-                },
-              ],
-            },
-          };
-        }
-        if (slug === "GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS") {
-          return {
-            tool: slug,
-            success: true,
-            error: null,
-            data: {
-              summary_view: [
-                {
-                  title: "Product & Engineering Daily Sync",
-                  start: "2026-04-09T07:30:00+08:00",
-                  end: "2026-04-09T08:30:00+08:00",
-                  is_all_day: false,
-                  calendar: "smile@pinai.io",
-                  display_url: "https://calendar.google.com/event?daily-sync",
-                },
-                {
-                  title: "[Reminder] Pin AI Team - Midweek Update",
-                  start: "2026-04-09T08:00:00+08:00",
-                  end: "2026-04-09T08:30:00+08:00",
-                  is_all_day: false,
-                  calendar: "smile@pinai.io",
-                  display_url: "https://calendar.google.com/event/midweek",
-                },
-              ],
-              calendars_queried: [{ id: "smile@pinai.io", summary: "smile@pinai.io" }],
-              events: [],
-            },
-          };
-        }
-        return { tool: slug, success: true, error: null, data: [] };
-      },
+      executeTool,
     });
 
     try {
@@ -206,7 +251,7 @@ describe("runDreaming", () => {
         ? result.detail.normalizedInputs.personal as Array<Record<string, unknown>>
         : [];
 
-      expect(personalEntries.length).toBeGreaterThanOrEqual(3);
+      expect(personalEntries.length).toBeGreaterThanOrEqual(4);
 
       const gmailEntry = personalEntries.find((entry) => entry.connector === "gmail");
       expect(gmailEntry).toMatchObject({
@@ -219,6 +264,13 @@ describe("runDreaming", () => {
       expect(gmailEntry?.labels).toEqual(["INBOX", "UNREAD"]);
       expect(gmailEntry?.context).toContain("Anthropic Billing");
       expect(gmailEntry?.context).toContain("Please review before Friday");
+      expect(personalEntries.filter((entry) => entry.connector === "gmail")).toHaveLength(3);
+      expect(executeTool).toHaveBeenCalledWith("GMAIL_FETCH_EMAILS", expect.objectContaining({
+        max_results: 100,
+      }));
+      expect(executeTool).toHaveBeenCalledWith("GMAIL_FETCH_EMAILS", expect.objectContaining({
+        page_token: "page-2",
+      }));
 
       const calendarEntry = personalEntries.find((entry) => entry.title === "Product & Engineering Daily Sync");
       expect(calendarEntry).toMatchObject({

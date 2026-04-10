@@ -98,6 +98,8 @@ const HOURS_PER_DAY = 24;
 const MS_PER_HOUR = 60 * 60 * 1000;
 const MS_PER_DAY = HOURS_PER_DAY * MS_PER_HOUR;
 const DREAM_SUMMARIZER_TIMEOUT_MS = 180_000;
+const DREAM_GMAIL_MAX_RESULTS = 100;
+const DREAM_GMAIL_MAX_PAGES = 10;
 
 interface DreamSynthesis {
   summary?: {
@@ -417,6 +419,65 @@ function createInterestRecords(topics: string[], fallbackTimestamp: string): Arr
 function parseIso(value: string): Date | null {
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatGmailSearchDate(value: string): string | null {
+  const parsed = parseIso(value);
+  if (!parsed) return null;
+  return `${parsed.getUTCFullYear()}/${formatReadableDatePart(parsed.getUTCMonth() + 1)}/${formatReadableDatePart(parsed.getUTCDate())}`;
+}
+
+function buildGmailFetchArgs(windowStart: string, windowEnd: string): Record<string, unknown> {
+  const after = formatGmailSearchDate(windowStart);
+  const before = formatGmailSearchDate(new Date(new Date(windowEnd).getTime() + MS_PER_DAY).toISOString());
+  const queryParts = [after ? `after:${after}` : null, before ? `before:${before}` : null].filter((value): value is string => !!value);
+  return {
+    max_results: DREAM_GMAIL_MAX_RESULTS,
+    ...(queryParts.length > 0 ? { query: queryParts.join(" ") } : {}),
+  };
+}
+
+function getNextPageToken(data: unknown): string | null {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const token = (data as Record<string, unknown>).nextPageToken;
+  return typeof token === "string" && token.trim().length > 0 ? token : null;
+}
+
+async function collectAllGmailData(
+  tryExecute: (tool: string, args: Record<string, unknown>) => Promise<unknown>,
+  windowStart: string,
+  windowEnd: string,
+): Promise<{ pages: unknown[]; merged: { messages: Array<Record<string, unknown>>; nextPageToken?: string | null; resultSizeEstimate?: unknown } }> {
+  const pages: unknown[] = [];
+  const mergedMessages: Array<Record<string, unknown>> = [];
+  let token: string | null = null;
+  let page = 0;
+
+  while (page < DREAM_GMAIL_MAX_PAGES) {
+    const args = {
+      ...buildGmailFetchArgs(windowStart, windowEnd),
+      ...(token ? { page_token: token } : {}),
+    };
+    const data = await tryExecute("GMAIL_FETCH_EMAILS", args);
+    pages.push(data ?? []);
+    const root = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : null;
+    mergedMessages.push(...arrayOfObjects(root?.messages ?? data));
+    token = getNextPageToken(data);
+    page += 1;
+    if (!token) break;
+  }
+
+  return {
+    pages,
+    merged: {
+      messages: mergedMessages,
+      nextPageToken: token,
+      resultSizeEstimate:
+        pages.length > 0 && pages[0] && typeof pages[0] === "object" && !Array.isArray(pages[0])
+          ? (pages[0] as Record<string, unknown>).resultSizeEstimate
+          : undefined,
+    },
+  };
 }
 
 function toRelativeSince(windowStart: string, windowEnd: string): string {
@@ -811,39 +872,53 @@ function normalizeGoogleCalendarSummaryView(summaryView: string, windowEnd: stri
     }));
 }
 
-function normalizeGmailEntries(data: unknown, windowEnd: string): Array<Record<string, unknown>> {
+function normalizeGmailEntries(data: unknown, windowStart: string, windowEnd: string): Array<Record<string, unknown>> {
   const root = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : null;
   const items = arrayOfObjects(root?.messages ?? data);
-  return items.slice(0, 20).map((item) => {
-    const preview = item.preview && typeof item.preview === "object" && !Array.isArray(item.preview)
-      ? item.preview as Record<string, unknown>
-      : {};
-    const title = compactText(item.subject) ?? compactText(preview.subject) ?? "Recent email";
-    const body = truncateText(compactText(item.messageText), 1600);
-    const previewBody = truncateText(compactText(preview.body) ?? compactText(item.snippet), 600);
-    const sender = compactText(item.sender) ?? compactText(item.from);
-    const labels = normalizeStringArray(item.labelIds ?? item.labels);
-    return {
-      connector: "gmail",
-      title,
-      timestamp: compactText(item.internalDate) ?? compactText(item.messageTimestamp) ?? compactText(item.date) ?? windowEnd,
-      sender,
-      to: compactText(item.to),
-      preview: previewBody,
-      body,
-      labels,
-      messageId: compactText(item.messageId),
-      threadId: compactText(item.threadId),
-      displayUrl: compactText(item.display_url),
-      context: joinContextParts([
+  const windowStartDate = parseIso(windowStart);
+  return items
+    .map((item) => {
+      const preview = item.preview && typeof item.preview === "object" && !Array.isArray(item.preview)
+        ? item.preview as Record<string, unknown>
+        : {};
+      const title = compactText(item.subject) ?? compactText(preview.subject) ?? "Recent email";
+      const body = truncateText(compactText(item.messageText), 1600);
+      const previewBody = truncateText(compactText(preview.body) ?? compactText(item.snippet), 600);
+      const sender = compactText(item.sender) ?? compactText(item.from);
+      const labels = normalizeStringArray(item.labelIds ?? item.labels);
+      const timestamp = compactText(item.internalDate) ?? compactText(item.messageTimestamp) ?? compactText(item.date) ?? windowEnd;
+      return {
+        connector: "gmail",
         title,
+        timestamp,
         sender,
-        previewBody,
+        to: compactText(item.to),
+        preview: previewBody,
         body,
-        labels.join(" "),
-      ]),
-    };
-  });
+        labels,
+        messageId: compactText(item.messageId),
+        threadId: compactText(item.threadId),
+        displayUrl: compactText(item.display_url),
+        context: joinContextParts([
+          title,
+          sender,
+          previewBody,
+          body,
+          labels.join(" "),
+        ]),
+      };
+    })
+    .filter((item) => {
+      if (!windowStartDate) return true;
+      const timestamp = typeof item.timestamp === "string" ? parseIso(item.timestamp) : null;
+      return !timestamp || timestamp >= windowStartDate;
+    })
+    .sort((left, right) => {
+      const leftTime = typeof left.timestamp === "string" ? parseIso(left.timestamp)?.getTime() ?? 0 : 0;
+      const rightTime = typeof right.timestamp === "string" ? parseIso(right.timestamp)?.getTime() ?? 0 : 0;
+      return rightTime - leftTime;
+    })
+    ;
 }
 
 function normalizeGoogleCalendarEntries(data: unknown, windowEnd: string): Array<Record<string, unknown>> {
@@ -965,9 +1040,14 @@ async function collectPersonal(ctx: CoreContext, windowStart: string, windowEnd:
   for (const connection of active) {
     try {
       if (connection.toolkit === "gmail") {
-        const data = await tryExecute("GMAIL_FETCH_EMAILS", {});
-        connectors.gmail = data ?? [];
-        normalized.push(...normalizeGmailEntries(data, windowEnd));
+        const data = await collectAllGmailData(tryExecute, windowStart, windowEnd);
+        connectors.gmail = {
+          pages: data.pages,
+          messages: data.merged.messages,
+          nextPageToken: data.merged.nextPageToken ?? null,
+          resultSizeEstimate: data.merged.resultSizeEstimate ?? data.merged.messages.length,
+        };
+        normalized.push(...normalizeGmailEntries(data.merged, windowStart, windowEnd));
         continue;
       }
 
