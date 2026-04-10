@@ -8,7 +8,6 @@
 import { runCli } from '../../cli/cli.js';
 import type { PinEnvelope } from '../../cli/output/envelope.js';
 import { buildDefaultCtx } from './data-access.js';
-import type { CliRuntimeInput } from '../../cli/runtime.js';
 
 export interface PinCliResult {
   ok: boolean;
@@ -17,27 +16,12 @@ export interface PinCliResult {
   meta: { domain: string; command: string; requestId: string; timestamp: string };
 }
 
-export interface PinCliRunOptions {
-  runId?: string;
-  traceContext?: string;
-  runtimeOverride?: Partial<CliRuntimeInput>;
-}
-
-export async function runPinCli(args: string[], options?: PinCliRunOptions): Promise<PinCliResult> {
+export async function runPinCli(args: string[]): Promise<PinCliResult> {
   if (!args.includes('--json') && !args.includes('--format')) {
     args.push('--json');
   }
 
-  const baseCtx = buildDefaultCtx();
-  const result = await runCli(args, {
-    homeDir: options?.runtimeOverride?.homeDir ?? baseCtx.homeDir,
-    env: {
-      ...baseCtx.env,
-      ...options?.runtimeOverride?.env,
-      ...(options?.traceContext ? { PIN_TRACE_CONTEXT: options.traceContext } : {}),
-      ...(options?.runId ? { PIN_TRACE_RUN_ID: options.runId } : {}),
-    },
-  });
+  const result = await runCli(args, { homeDir: buildDefaultCtx().homeDir });
   const envelope = result.stdout as PinEnvelope<unknown>;
 
   return {
@@ -48,8 +32,8 @@ export async function runPinCli(args: string[], options?: PinCliRunOptions): Pro
   };
 }
 
-export async function pinCliData<T = unknown>(args: string[], options?: PinCliRunOptions): Promise<T> {
-  const result = await runPinCli(args, options);
+export async function pinCliData<T = unknown>(args: string[]): Promise<T> {
+  const result = await runPinCli(args);
   if (!result.ok) {
     const hint = result.error?.hint ? ` (hint: ${result.error.hint})` : '';
     throw new Error(`pin-cli error: ${result.error?.message ?? 'unknown'}${hint}`);

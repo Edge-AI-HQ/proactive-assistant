@@ -61,9 +61,9 @@ export const getToolSchema = async (
 
 export const execTool = async (
   runtime: CliRuntimeInput,
-  input: { tool: string; input?: string },
+  input: { tool: string; input?: string; accountId?: string },
   deps?: { provider?: PersonalProvider },
 ): Promise<RunCliResult> =>
   callCore("personal", "exec", () =>
-    corePersonal.execTool(runtime, input, deps),
+    corePersonal.execTool(runtime, { tool: input.tool, input: input.input, connectedAccountId: input.accountId }, deps),
   );

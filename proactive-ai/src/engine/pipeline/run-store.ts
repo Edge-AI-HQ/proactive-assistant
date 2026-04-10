@@ -10,7 +10,6 @@ export interface StoredRun {
   totalIterations: number;
   finalCards: unknown[];
   scoreMap: Record<string, unknown>;
-  tracePath?: string;
 }
 
 interface RunStore {

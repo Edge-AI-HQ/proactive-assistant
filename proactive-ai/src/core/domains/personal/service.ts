@@ -7,6 +7,7 @@ import {
 import {
   createPersonalProvider,
   type PersonalProvider,
+  type PersonalConnection,
 } from "./provider.js";
 import { loadPlatformSettings, savePlatformApiKey } from "./platform_settings.js";
 
@@ -59,7 +60,7 @@ export const setup = async (
   }
 
   // Persist to local-settings.json
-  savePlatformApiKey(ctx.homeDir, key);
+  savePlatformApiKey(ctx.homeDir, key, ctx.env);
 
   return {
     validated: true,
@@ -91,7 +92,7 @@ export const listConnections = async (
   ctx: CoreContext,
   input?: { toolkits?: string },
   deps?: { provider?: PersonalProvider },
-): Promise<unknown[]> => {
+): Promise<PersonalConnection[]> => {
   try {
     const provider = createPersonalProvider(ctx, deps?.provider);
 
@@ -99,9 +100,11 @@ export const listConnections = async (
       ? input.toolkits.split(",").map(t => t.trim()).filter(Boolean)
       : null;
 
-    return toolkitList
+    const connections = toolkitList
       ? await provider.checkConnections(toolkitList)
       : await provider.discoverConnections();
+
+    return connections;
   } catch (error) {
     throw toProviderUnavailableError(error);
   }
@@ -120,14 +123,14 @@ export const connectApp = async (
   }
 };
 
-export const disconnectApp = async (
+export const disconnectAccount = async (
   ctx: CoreContext,
-  input: { toolkit: string },
+  input: { connectedAccountId: string },
   deps?: { provider?: PersonalProvider },
-): Promise<unknown> => {
+): Promise<void> => {
   try {
     const provider = createPersonalProvider(ctx, deps?.provider);
-    return await provider.disconnectApp(input.toolkit);
+    await provider.disconnectAccount(input.connectedAccountId);
   } catch (error) {
     throw toProviderUnavailableError(error);
   }
@@ -137,7 +140,7 @@ export const waitForConnection = async (
   ctx: CoreContext,
   input: { toolkit: string },
   deps?: { provider?: PersonalProvider },
-): Promise<unknown> => {
+): Promise<PersonalConnection> => {
   try {
     const provider = createPersonalProvider(ctx, deps?.provider);
     return await provider.waitForConnection(input.toolkit);
@@ -201,7 +204,7 @@ const parseJsonInput = (raw: string): Record<string, unknown> => {
 
 export const execTool = async (
   ctx: CoreContext,
-  input: { tool: string; input?: string },
+  input: { tool: string; input?: string; connectedAccountId?: string },
   deps?: { provider?: PersonalProvider },
 ): Promise<{ tool: string; data: unknown }> => {
   let args: Record<string, unknown> = {};
@@ -219,7 +222,7 @@ export const execTool = async (
 
   try {
     const provider = createPersonalProvider(ctx, deps?.provider);
-    const result = await provider.executeTool(input.tool, args);
+    const result = await provider.executeTool(input.tool, args, input.connectedAccountId);
     if (!result.success) {
       throw new ProviderUnavailableError(
         "TOOL_EXECUTION_FAILED",

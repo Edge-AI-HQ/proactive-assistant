@@ -7,7 +7,25 @@ import {
   BarChart3, CreditCard, Video, Pen, ListTodo,
   Users, Database, Linkedin, Twitter,
 } from "lucide-react";
-import type { ComposioState } from "@/hooks/use-composio";
+import type { ComposioState, Connection } from "@/hooks/use-composio";
+
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const SKIP_KEYS = /token|secret|key|password|code|cursor|etag|sync|url|endpoint|slug|status|type|version|id$/i;
+
+/** Extract a human-readable identity from Composio's current_user_info.
+ *  Canonical copy: core/domains/personal/provider.ts — keep in sync. */
+function extractIdentity(info: Record<string, unknown> | null | undefined): string | null {
+  if (!info) return null;
+  for (const v of Object.values(info)) {
+    if (typeof v === "string" && EMAIL_RE.test(v)) return v;
+  }
+  for (const [k, v] of Object.entries(info)) {
+    if (typeof v !== "string" || v.length === 0 || v.length > 60) continue;
+    if (v.startsWith("http") || SKIP_KEYS.test(k)) continue;
+    return v;
+  }
+  return null;
+}
 
 interface ToolkitDef {
   id: string;
@@ -98,10 +116,10 @@ interface DataConnectionsProps {
 }
 
 export default function DataConnections({ composio }: DataConnectionsProps) {
-  const { keyStatus, connections, statusLoading, saveApiKey, connectToolkit, disconnectToolkit, waitForToolkit } = composio;
+  const { keyStatus, connections, statusLoading, saveApiKey, connectToolkit, disconnectAccount, waitForToolkit, cancelWait } = composio;
 
   const [connectingToolkit, setConnectingToolkit] = useState<string | null>(null);
-  const [disconnectingToolkit, setDisconnectingToolkit] = useState<string | null>(null);
+  const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState("");
@@ -125,9 +143,15 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
     }
   };
 
-  const connectedSet = new Set(
-    connections.filter(c => c.status === "ACTIVE").map(c => c.toolkit.toLowerCase())
-  );
+  // Group connections by toolkit (multiple accounts per toolkit)
+  const connectionsByToolkit = new Map<string, Connection[]>();
+  for (const conn of connections) {
+    if (conn.status !== "ACTIVE") continue;
+    const key = conn.toolkit.toLowerCase();
+    const list = connectionsByToolkit.get(key) ?? [];
+    list.push(conn);
+    connectionsByToolkit.set(key, list);
+  }
 
   const handleConnect = async (toolkit: string) => {
     setConnectingToolkit(toolkit);
@@ -139,7 +163,6 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
         return;
       }
 
-      // Already active (e.g. re-connecting an existing integration)
       if (!result.redirectUrl) return;
 
       // Open OAuth in the system browser (uses the user's existing sessions)
@@ -157,16 +180,16 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
     }
   };
 
-  const handleDisconnect = async (toolkit: string) => {
-    setDisconnectingToolkit(toolkit);
+  const handleDisconnect = async (connectedAccountId: string) => {
+    setDisconnectingId(connectedAccountId);
     setConnectError(null);
     try {
-      const result = await disconnectToolkit(toolkit);
+      const result = await disconnectAccount(connectedAccountId);
       if (!result.ok) {
         setConnectError(result.error ?? "Disconnect failed");
       }
     } finally {
-      setDisconnectingToolkit(null);
+      setDisconnectingId(null);
     }
   };
 
@@ -177,7 +200,9 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
         <div className="space-y-2">
           {PLATFORM_CATEGORIES.map((category) => {
             const isExpanded = expandedCategory === category.name;
-            const catConnected = category.toolkits.filter(t => connectedSet.has(t.id)).length;
+            const catAccountCount = category.toolkits.reduce(
+              (sum, t) => sum + (connectionsByToolkit.get(t.id)?.length ?? 0), 0,
+            );
 
             return (
               <div key={category.name} className="glass-card-strong overflow-hidden">
@@ -188,9 +213,11 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                   <div className="flex-1 text-left">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold text-foreground">{category.name}</span>
-                      <span className="text-[10px] font-medium text-foreground/40 bg-foreground/[0.06] px-1.5 py-0.5 rounded-md">
-                        {catConnected} / {category.toolkits.length}
-                      </span>
+                      {catAccountCount > 0 && (
+                        <span className="text-[10px] font-medium text-emerald-600 bg-emerald-500/[0.08] px-1.5 py-0.5 rounded-md">
+                          {catAccountCount} {catAccountCount === 1 ? "account" : "accounts"}
+                        </span>
+                      )}
                     </div>
                   </div>
                   <ChevronDown
@@ -213,59 +240,123 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                         <div className="h-px bg-foreground/[0.06] mb-2" />
                         {category.toolkits.map((tk) => {
                           const Icon = tk.icon;
-                          const isConnected = connectedSet.has(tk.id);
+                          const accounts = connectionsByToolkit.get(tk.id) ?? [];
                           const isConnecting = connectingToolkit === tk.id;
-                          const isDisconnecting = disconnectingToolkit === tk.id;
-                          const isBusy = !!connectingToolkit || !!disconnectingToolkit;
+                          const isBusy = !!connectingToolkit || !!disconnectingId;
+                          const singleAccount = accounts.length === 1 ? accounts[0] : null;
+                          const multiAccounts = accounts.length >= 2;
 
                           return (
-                            <div
-                              key={tk.id}
-                              className={`group flex items-center gap-2.5 rounded-xl px-3 py-2.5 transition-colors ${
-                                isConnected ? "bg-emerald-500/[0.06]" : "bg-foreground/[0.02]"
-                              }`}
-                            >
-                              <Icon
-                                size={14}
-                                strokeWidth={1.5}
-                                className={isConnected ? "text-emerald-600 flex-shrink-0" : "text-foreground/30 flex-shrink-0"}
-                              />
-                              <span className={`text-xs flex-1 ${
-                                isConnected ? "text-foreground font-medium" : "text-foreground/45"
-                              }`}>
-                                {tk.label}
-                              </span>
-                              <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                                isConnected ? "bg-emerald-500" : "bg-foreground/10"
-                              }`} />
-                              {isConnected ? (
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); handleDisconnect(tk.id); }}
-                                  disabled={isBusy}
-                                  className="text-[10px] font-medium rounded-lg px-2.5 py-0.5 transition-colors disabled:opacity-40 text-emerald-600 hover:text-red-500 hover:bg-red-500/[0.08]"
+                            <div key={tk.id} className="space-y-0.5">
+                              {/* Single row: not connected, or exactly 1 account */}
+                              {!multiAccounts && (
+                                <div
+                                  className={`group flex items-center gap-2.5 rounded-xl px-3 py-2.5 transition-colors ${
+                                    singleAccount ? "bg-emerald-500/[0.06]" : "bg-foreground/[0.02]"
+                                  }`}
                                 >
-                                  {isDisconnecting ? (
-                                    <Loader2 size={10} className="animate-spin text-red-500" />
-                                  ) : (
-                                    <span>
-                                      <span className="group-hover:hidden">Connected</span>
-                                      <span className="hidden group-hover:inline">Disconnect</span>
-                                    </span>
-                                  )}
-                                </button>
-                              ) : (
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); handleConnect(tk.id); }}
-                                  disabled={isBusy}
-                                  className="text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1] transition-colors disabled:opacity-40"
-                                >
-                                  {isConnecting ? (
-                                    <Loader2 size={10} className="animate-spin" />
-                                  ) : (
-                                    "Connect"
-                                  )}
-                                </button>
+                                  <Icon
+                                    size={14}
+                                    strokeWidth={1.5}
+                                    className={singleAccount ? "text-emerald-600 flex-shrink-0" : "text-foreground/30 flex-shrink-0"}
+                                  />
+                                  <span className={`text-xs flex-1 ${
+                                    singleAccount ? "text-foreground font-medium" : "text-foreground/45"
+                                  }`}>
+                                    {tk.label}
+                                  </span>
+                                  {singleAccount ? (<>
+                                    {/* + Add button: hidden by default, shown on hover */}
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); handleConnect(tk.id); }}
+                                      disabled={isBusy}
+                                      className="text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1] transition-all disabled:opacity-40 opacity-0 group-hover:opacity-100"
+                                    >
+                                      {isConnecting ? (
+                                        <Loader2 size={10} className="animate-spin" />
+                                      ) : (
+                                        <span className="flex items-center gap-1"><Plus size={10} /> Add</span>
+                                      )}
+                                    </button>
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
+                                    {/* Connected / Disconnect toggle */}
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); singleAccount.connectedAccountId && handleDisconnect(singleAccount.connectedAccountId); }}
+                                      disabled={isBusy}
+                                      className="text-[10px] font-medium rounded-lg px-2.5 py-0.5 transition-colors disabled:opacity-40 text-emerald-600 hover:text-red-500 hover:bg-red-500/[0.08]"
+                                    >
+                                      {disconnectingId === singleAccount.connectedAccountId ? (
+                                        <Loader2 size={10} className="animate-spin text-red-500" />
+                                      ) : (
+                                        <span>
+                                          <span className="group-hover:hidden">Connected</span>
+                                          <span className="hidden group-hover:inline">Disconnect</span>
+                                        </span>
+                                      )}
+                                    </button>
+                                  </>) : (<>
+                                    <span className="w-1.5 h-1.5 rounded-full bg-foreground/10 flex-shrink-0" />
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); handleConnect(tk.id); }}
+                                      disabled={isBusy}
+                                      className="text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1] transition-colors disabled:opacity-40"
+                                    >
+                                      {isConnecting ? (
+                                        <Loader2 size={10} className="animate-spin" />
+                                      ) : (
+                                        "Connect"
+                                      )}
+                                    </button>
+                                  </>)}
+                                </div>
                               )}
+
+                              {/* Multi-account: header + account list */}
+                              {multiAccounts && (<>
+                                <div className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 bg-emerald-500/[0.06]">
+                                  <Icon size={14} strokeWidth={1.5} className="text-emerald-600 flex-shrink-0" />
+                                  <span className="text-xs text-foreground font-medium flex-1">{tk.label}</span>
+                                  <span className="text-[10px] text-foreground/30">{accounts.length}</span>
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); handleConnect(tk.id); }}
+                                    disabled={isBusy}
+                                    className="text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1] transition-colors disabled:opacity-40"
+                                  >
+                                    {isConnecting ? (
+                                      <Loader2 size={10} className="animate-spin" />
+                                    ) : (
+                                      <span className="flex items-center gap-1"><Plus size={10} /> Add</span>
+                                    )}
+                                  </button>
+                                </div>
+                                {accounts.map((conn) => {
+                                  const identity = extractIdentity(conn.userInfo);
+                                  const isDisconnecting = disconnectingId === conn.connectedAccountId;
+
+                                  return (
+                                    <div
+                                      key={conn.connectedAccountId}
+                                      className="group flex items-center gap-2.5 rounded-lg px-3 py-1.5 ml-6 bg-emerald-500/[0.03]"
+                                    >
+                                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
+                                      <span className="text-[11px] text-foreground/70 flex-1 truncate">
+                                        {identity ?? conn.connectedAccountId?.slice(0, 12) ?? ""}
+                                      </span>
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); conn.connectedAccountId && handleDisconnect(conn.connectedAccountId); }}
+                                        disabled={isBusy}
+                                        className="text-[10px] font-medium rounded-lg px-2 py-0.5 transition-colors disabled:opacity-40 text-foreground/30 hover:text-red-500 hover:bg-red-500/[0.08] opacity-0 group-hover:opacity-100"
+                                      >
+                                        {isDisconnecting ? (
+                                          <Loader2 size={10} className="animate-spin text-red-500" />
+                                        ) : (
+                                          "Disconnect"
+                                        )}
+                                      </button>
+                                    </div>
+                                  );
+                                })}
+                              </>)}
                             </div>
                           );
                         })}
@@ -339,10 +430,17 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
       </AnimatePresence>
 
       {connectingToolkit && (
-        <div className="glass-card px-4 py-3 text-center">
-          <p className="text-[11px] text-foreground/40 italic">
+        <div className="glass-card px-4 py-3 flex items-center justify-between">
+          <p className="text-[11px] text-foreground/40 italic flex items-center gap-1.5">
+            <Loader2 size={10} className="animate-spin" />
             Authorize in your browser — this will update automatically
           </p>
+          <button
+            onClick={() => { cancelWait(); setConnectingToolkit(null); }}
+            className="text-[10px] font-medium text-foreground/40 hover:text-foreground/70 px-2 py-0.5 rounded-lg hover:bg-foreground/[0.06] transition-colors"
+          >
+            Cancel
+          </button>
         </div>
       )}
     </div>

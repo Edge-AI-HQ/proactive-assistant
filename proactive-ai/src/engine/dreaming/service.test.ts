@@ -347,7 +347,9 @@ describe("runDreaming", () => {
       async waitForConnection() { throw new Error("not used"); },
       async searchTools() { return []; },
       async getToolSchema() { return null; },
-      async disconnectApp() { throw new Error("not used"); },
+      async disconnectAccount() { throw new Error("not used"); },
+      async resolveAccountIdentity() { return null; },
+      executeTool,
       executeTool,
     });
 
@@ -379,19 +381,19 @@ describe("runDreaming", () => {
       expect(executeTool).toHaveBeenCalledWith("GMAIL_FETCH_EMAILS", expect.objectContaining({
         ids_only: true,
         max_results: 500,
-      }));
+      }), "gmail-1");
       expect(executeTool).toHaveBeenCalledWith("GMAIL_FETCH_EMAILS", expect.objectContaining({
         page_token: "page-2",
-      }));
+      }), "gmail-1");
       expect(executeTool).toHaveBeenCalledWith("GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID", {
         message_id: "gmail-1",
-      });
+      }, "gmail-1");
       expect(executeTool).toHaveBeenCalledWith("GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID", {
         message_id: "gmail-2",
-      });
+      }, "gmail-1");
       expect(executeTool).toHaveBeenCalledWith("GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID", {
         message_id: "gmail-3",
-      });
+      }, "gmail-1");
       expect(result.detail.sourceBreakdown[0]?.connectors?.find((item) => item.connectorId === "gmail")?.itemCount).toBe(3);
 
       const calendarEntry = personalEntries.find((entry) => entry.title === "Product & Engineering Daily Sync");

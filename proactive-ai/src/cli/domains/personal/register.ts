@@ -105,6 +105,7 @@ export const registerPersonalCommands = (
     .description("Execute a Composio tool and return results")
     .requiredOption("--tool <tool>", "tool slug (e.g. GMAIL_FETCH_EMAILS)")
     .option("--input <input>", "JSON object of tool arguments")
+    .option("--account-id <accountId>", "connected account ID (for multi-account toolkits)")
     .option("--json")
     .action(async (options) => {
       resultRef.current = await execTool(runtime, options);

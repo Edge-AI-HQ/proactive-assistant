@@ -14,8 +14,9 @@ function createComposioState(overrides: Partial<ComposioState> = {}): ComposioSt
     loadConnections: vi.fn(async () => []),
     saveApiKey: vi.fn(async () => ({ ok: true })),
     connectToolkit: vi.fn(async () => ({ ok: true, redirectUrl: "https://example.com/oauth" })),
-    disconnectToolkit: vi.fn(async () => ({ ok: true })),
+    disconnectAccount: vi.fn(async () => ({ ok: true })),
     waitForToolkit: vi.fn(async () => ({ connected: false })),
+    cancelWait: vi.fn(),
     isToolkitConnected: vi.fn(() => false),
     ...overrides,
   };

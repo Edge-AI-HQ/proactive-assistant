@@ -1,8 +1,7 @@
 /**
  * Composio provider for personal data access.
  *
- * Current default transport in this repo:
- *   - Platform API key (`ak_...`) + MCP meta tools.
+ * Uses Platform REST API (v3) exclusively.
  */
 
 import type { CoreContext } from "../../context.js";
@@ -39,11 +38,11 @@ export interface PersonalExecResult {
 }
 
 export interface PersonalProvider {
-  /** Discover connected apps via broad tool search (no hardcoded list). */
+  /** Discover all connected accounts (multiple per toolkit allowed). */
   discoverConnections(): Promise<PersonalConnection[]>;
-  /** Check specific toolkits' connection status. */
+  /** Check specific toolkits' connection status (returns all accounts per toolkit). */
   checkConnections(toolkits: string[]): Promise<PersonalConnection[]>;
-  /** Initiate or check a single toolkit connection. Returns redirect URL if not connected. */
+  /** Initiate a new OAuth connection for a toolkit (always creates a new link). */
   connectApp(toolkit: string): Promise<PersonalConnection>;
   /** Wait for an OAuth connection to become active. */
   waitForConnection(toolkit: string): Promise<PersonalConnection>;
@@ -51,10 +50,12 @@ export interface PersonalProvider {
   searchTools(query: string, options?: { toolkit?: string; limit?: number }): Promise<PersonalToolInfo[]>;
   /** Get tool input schema. */
   getToolSchema(slug: string): Promise<PersonalToolSchema | null>;
-  /** Execute a tool via COMPOSIO_MULTI_EXECUTE_TOOL. */
-  executeTool(slug: string, args: Record<string, unknown>): Promise<PersonalExecResult>;
-  /** Disconnect (delete) an active connection for a toolkit. */
-  disconnectApp(toolkit: string): Promise<PersonalConnection>;
+  /** Execute a tool. If connectedAccountId is omitted, uses the most recent active account. */
+  executeTool(slug: string, args: Record<string, unknown>, connectedAccountId?: string): Promise<PersonalExecResult>;
+  /** Disconnect (delete) a specific connected account by ID. */
+  disconnectAccount(connectedAccountId: string): Promise<void>;
+  /** Resolve human-readable identity for a connected account (best-effort). */
+  resolveAccountIdentity(toolkit: string, connectedAccountId: string): Promise<Record<string, unknown> | null>;
 }
 
 // ── Helpers ──
@@ -67,6 +68,32 @@ const obj = (v: unknown): Record<string, unknown> =>
     ? (v as Record<string, unknown>)
     : {};
 
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const SKIP_KEYS = /token|secret|key|password|code|cursor|etag|sync|url|endpoint|slug|status|type|version|id$/i;
+
+/**
+ * Extract a human-readable identity string from Composio's `current_user_info`.
+ * Strategy: find the first email-shaped string, else the first short plain string.
+ * Works across 1000+ Composio apps without per-app logic.
+ */
+export function extractIdentity(info: Record<string, unknown> | null | undefined): string | null {
+  if (!info) return null;
+
+  // Pass 1: find an email in top-level values
+  for (const v of Object.values(info)) {
+    if (typeof v === "string" && EMAIL_RE.test(v)) return v;
+  }
+
+  // Pass 2: find a short, human-readable string (skip tokens/urls/ids)
+  for (const [k, v] of Object.entries(info)) {
+    if (typeof v !== "string" || v.length === 0 || v.length > 60) continue;
+    if (v.startsWith("http") || SKIP_KEYS.test(k)) continue;
+    return v;
+  }
+
+  return null;
+}
+
 // ── Noop (no key configured) ──
 
 class NoopPersonalProvider implements PersonalProvider {
@@ -78,11 +105,11 @@ class NoopPersonalProvider implements PersonalProvider {
   async searchTools(): Promise<PersonalToolInfo[]> { this.fail(); }
   async getToolSchema(): Promise<PersonalToolSchema | null> { this.fail(); }
   async executeTool(): Promise<PersonalExecResult> { this.fail(); }
-  async disconnectApp(): Promise<PersonalConnection> { this.fail(); }
+  async disconnectAccount(): Promise<void> { this.fail(); }
+  async resolveAccountIdentity(): Promise<Record<string, unknown> | null> { this.fail(); }
 }
 
 const DEFAULT_API_BASE = "https://backend.composio.dev/api/v3";
-const DEFAULT_MCP_URL = "https://connect.composio.dev/mcp";
 
 const sleep = async (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -122,268 +149,6 @@ async function composioApiCall(
   }
 
   return json;
-}
-
-async function mcpCall(
-  mcpUrl: string,
-  authHeader: "x-api-key" | "x-consumer-api-key",
-  key: string,
-  method: string,
-  params?: Record<string, unknown>,
-): Promise<unknown> {
-  const body = {
-    jsonrpc: "2.0",
-    id: Date.now().toString(),
-    method,
-    ...(params ? { params } : {}),
-  };
-
-  const res = await fetch(mcpUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Accept": "application/json, text/event-stream",
-      [authHeader]: key,
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Composio MCP ${res.status}: ${await res.text()}`);
-  }
-
-  const contentType = res.headers.get("content-type") ?? "";
-  if (contentType.includes("text/event-stream")) {
-    const text = await res.text();
-    for (const line of text.split("\n")) {
-      if (!line.startsWith("data: ")) continue;
-      const parsed = JSON.parse(line.slice(6)) as Record<string, unknown>;
-      if (parsed.result !== undefined) return parsed.result;
-      if (parsed.error) {
-        const err = obj(parsed.error);
-        throw new Error(str(err.message) ?? JSON.stringify(parsed.error));
-      }
-      return parsed;
-    }
-    throw new Error("No data in MCP SSE response");
-  }
-
-  const json = await res.json() as Record<string, unknown>;
-  if (json.error) {
-    const err = obj(json.error);
-    throw new Error(str(err.message) ?? JSON.stringify(json.error));
-  }
-  return json.result;
-}
-
-async function callMetaTool(
-  mcpUrl: string,
-  authHeader: "x-api-key" | "x-consumer-api-key",
-  key: string,
-  toolName: string,
-  args: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
-  const result = obj(await mcpCall(mcpUrl, authHeader, key, "tools/call", {
-    name: toolName,
-    arguments: args,
-  }));
-  const content = Array.isArray(result.content) ? result.content : [];
-  const textBlock = content.find((entry) => obj(entry).type === "text");
-  if (!textBlock) return {};
-  return obj(JSON.parse(str(obj(textBlock).text) ?? "{}"));
-}
-
-class McpPersonalProvider implements PersonalProvider {
-  private sessionMcpUrl: string | null = null;
-
-  constructor(
-    private readonly apiKey: string,
-    private readonly apiBase: string,
-    private readonly userId: string,
-    private readonly preferredMcpUrl: string | null,
-    private readonly authHeader: "x-api-key" | "x-consumer-api-key",
-    private readonly callbackUrl: string | null,
-    private readonly authConfigMap: Record<string, string>,
-  ) {}
-
-  private withUserId(rawUrl: string): string {
-    const url = new URL(rawUrl);
-    if (!url.searchParams.get("user_id")) {
-      url.searchParams.set("user_id", this.userId);
-    }
-    return url.toString();
-  }
-
-  private async ensureMcpUrl(): Promise<string> {
-    if (this.sessionMcpUrl) return this.sessionMcpUrl;
-
-    if (this.preferredMcpUrl) {
-      this.sessionMcpUrl = this.withUserId(this.preferredMcpUrl);
-      return this.sessionMcpUrl;
-    }
-
-    const body: Record<string, unknown> = {
-      user_id: this.userId,
-    };
-    if (Object.keys(this.authConfigMap).length > 0) {
-      body["auth_configs"] = this.authConfigMap;
-    }
-    if (this.callbackUrl) {
-      body["manage_connections"] = {
-        enabled: true,
-        callback_url: this.callbackUrl,
-        enable_wait_for_connections: true,
-      };
-    }
-
-    const session = await composioApiCall(this.apiBase, this.apiKey, "/tool_router/session", {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-    const mcp = obj(session.mcp);
-    const url = str(mcp.url);
-    if (!url) {
-      throw new Error("Composio session missing mcp.url");
-    }
-
-    this.sessionMcpUrl = this.withUserId(url);
-    return this.sessionMcpUrl;
-  }
-
-  private async meta(tool: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const mcpUrl = await this.ensureMcpUrl();
-    return callMetaTool(mcpUrl, this.authHeader, this.apiKey, tool, args);
-  }
-
-  /** Use Platform REST API for connection listing — much faster than MCP search. */
-  private platformDelegate(): PlatformPersonalProvider {
-    return new PlatformPersonalProvider({
-      apiKey: this.apiKey,
-      apiBase: this.apiBase,
-      userId: this.userId,
-      callbackUrl: this.callbackUrl,
-      authConfigMap: this.authConfigMap,
-    });
-  }
-
-  async discoverConnections(): Promise<PersonalConnection[]> {
-    return this.platformDelegate().discoverConnections();
-  }
-
-  async checkConnections(toolkits: string[]): Promise<PersonalConnection[]> {
-    const parsed = await this.meta("COMPOSIO_MANAGE_CONNECTIONS", { toolkits });
-    const data = obj(parsed.data);
-    const results = obj(data.results);
-    return Object.entries(results).map(([toolkit, info]) => {
-      const row = obj(info);
-      return {
-        toolkit,
-        status: (str(row.status) ?? "unknown").toUpperCase(),
-        connectedAccountId: str(row.connected_account_id),
-        userInfo: row.current_user_info ? obj(row.current_user_info) : null,
-        redirectUrl: str(row.redirect_url),
-      };
-    });
-  }
-
-  async connectApp(toolkit: string): Promise<PersonalConnection> {
-    const connections = await this.checkConnections([toolkit]);
-    return connections[0] ?? {
-      toolkit,
-      status: "UNKNOWN",
-      connectedAccountId: null,
-      userInfo: null,
-      redirectUrl: null,
-    };
-  }
-
-  async waitForConnection(toolkit: string): Promise<PersonalConnection> {
-    return this.platformDelegate().waitForConnection(toolkit);
-  }
-
-  async disconnectApp(toolkit: string): Promise<PersonalConnection> {
-    return this.platformDelegate().disconnectApp(toolkit);
-  }
-
-  async searchTools(
-    query: string,
-    options?: { toolkit?: string; limit?: number },
-  ): Promise<PersonalToolInfo[]> {
-    const queries = options?.toolkit
-      ? [{ query, toolkits: [options.toolkit] }]
-      : [{ query }];
-    const parsed = await this.meta("COMPOSIO_SEARCH_TOOLS", { queries });
-    const data = obj(parsed.data);
-    const results = Array.isArray(data.results) ? data.results : [];
-    const schemas = obj(data.tool_schemas);
-    const tools: PersonalToolInfo[] = [];
-
-    for (const result of results) {
-      const row = obj(result);
-      const primary = Array.isArray(row.primary_tool_slugs) ? row.primary_tool_slugs : [];
-      const related = Array.isArray(row.related_tool_slugs) ? row.related_tool_slugs : [];
-      const toolkitNames = Array.isArray(row.toolkits) ? row.toolkits : [];
-      const toolkit = str(toolkitNames[0]);
-      for (const slugValue of [...primary, ...related]) {
-        const slug = str(slugValue);
-        if (!slug) continue;
-        const schema = obj(schemas[slug]);
-        tools.push({
-          slug,
-          description: str(schema.description),
-          toolkit: str(schema.toolkit)?.toLowerCase() ?? toolkit,
-        });
-      }
-    }
-
-    return tools.slice(0, options?.limit ?? 20);
-  }
-
-  async getToolSchema(slug: string): Promise<PersonalToolSchema | null> {
-    const parsed = await this.meta("COMPOSIO_GET_TOOL_SCHEMAS", { tool_slugs: [slug] });
-    const data = obj(parsed.data);
-    const schemas = obj(data.schemas ?? data.tool_schemas ?? data);
-    const schema = obj(schemas[slug] ?? Object.values(schemas)[0]);
-    if (!schema.input_schema && !schema.inputSchema) return null;
-    return {
-      slug: str(schema.tool_slug) ?? slug,
-      description: str(schema.description),
-      parameters: obj(schema.input_schema ?? schema.inputSchema),
-    };
-  }
-
-  async executeTool(slug: string, args: Record<string, unknown>): Promise<PersonalExecResult> {
-    try {
-      const parsed = await this.meta("COMPOSIO_MULTI_EXECUTE_TOOL", {
-        tools: [{ tool_slug: slug, arguments: args }],
-      });
-      const data = obj(parsed.data);
-      const results = Array.isArray(data.results) ? data.results : [];
-      const first = obj(results[0]);
-      const response = obj(first.response);
-      if (response.successful === false || parsed.successful === false) {
-        return {
-          tool: slug,
-          success: false,
-          data: null,
-          error: str(response.error) ?? str(parsed.error) ?? "Execution failed",
-        };
-      }
-      return {
-        tool: slug,
-        success: true,
-        data: response.data ?? response,
-        error: null,
-      };
-    } catch (error) {
-      return {
-        tool: slug,
-        success: false,
-        data: null,
-        error: error instanceof Error ? error.message : "Unknown error",
-      };
-    }
-  }
 }
 
 // ── Platform API Provider ──
@@ -510,6 +275,15 @@ class PlatformPersonalProvider implements PersonalProvider {
     return this.api(`/tools/${encodeURIComponent(slug)}?toolkit_versions=latest`);
   }
 
+  async resolveAccountIdentity(
+    _toolkit: string,
+    _connectedAccountId: string,
+  ): Promise<Record<string, unknown> | null> {
+    // Composio v3 API does not provide a reliable, scalable way to fetch
+    // per-account user identity. Returning null; UI falls back to account ID.
+    return null;
+  }
+
   async discoverConnections(): Promise<PersonalConnection[]> {
     const active = await this.listConnectedAccounts({ statuses: ["ACTIVE"] });
     return active.map((row) => this.toConnection(str(obj(row.toolkit).slug) ?? "unknown", row));
@@ -517,30 +291,15 @@ class PlatformPersonalProvider implements PersonalProvider {
 
   async checkConnections(toolkits: string[]): Promise<PersonalConnection[]> {
     const items = await this.listConnectedAccounts({ toolkits });
-    const latestByToolkit = new Map<string, Record<string, unknown>>();
-
-    for (const item of items) {
-      const toolkit = str(obj(item.toolkit).slug) ?? "";
-      if (!toolkit) continue;
-      const current = latestByToolkit.get(toolkit);
-      const itemTs = str(item.updated_at) ?? str(item.created_at) ?? "";
-      const currentTs = current ? (str(current.updated_at) ?? str(current.created_at) ?? "") : "";
-      if (!current || itemTs > currentTs) {
-        latestByToolkit.set(toolkit, item);
-      }
+    if (items.length === 0) {
+      return toolkits.map((toolkit) => this.toConnection(toolkit, null));
     }
-
-    return toolkits.map((toolkit) =>
-      this.toConnection(toolkit, latestByToolkit.get(toolkit) ?? null),
+    return items.map((item) =>
+      this.toConnection(str(obj(item.toolkit).slug) ?? "unknown", item),
     );
   }
 
   async connectApp(toolkit: string): Promise<PersonalConnection> {
-    const existing = await this.findLatestConnection(toolkit);
-    if (existing && (str(existing.status) ?? "").toUpperCase() === "ACTIVE") {
-      return this.toConnection(toolkit, existing);
-    }
-
     const authConfigId = await this.ensureAuthConfigId(toolkit);
     const linked = await this.api("/connected_accounts/link", {
       method: "POST",
@@ -581,16 +340,10 @@ class PlatformPersonalProvider implements PersonalProvider {
     return this.toConnection(toolkit, latest);
   }
 
-  async disconnectApp(toolkit: string): Promise<PersonalConnection> {
-    const latest = await this.findLatestConnection(toolkit);
-    const accountId = str(latest?.id) ?? str(latest?.connected_account_id);
-    if (!latest || !accountId) {
-      return this.toConnection(toolkit, null);
-    }
-    await this.api(`/connected_accounts/${encodeURIComponent(accountId)}`, {
+  async disconnectAccount(connectedAccountId: string): Promise<void> {
+    await this.api(`/connected_accounts/${encodeURIComponent(connectedAccountId)}`, {
       method: "DELETE",
     });
-    return { ...this.toConnection(toolkit, latest), status: "NOT_CONNECTED", connectedAccountId: null };
   }
 
   async searchTools(
@@ -639,20 +392,25 @@ class PlatformPersonalProvider implements PersonalProvider {
   async executeTool(
     slug: string,
     args: Record<string, unknown>,
+    connectedAccountId?: string,
   ): Promise<PersonalExecResult> {
     try {
-      const tool = await this.getToolDetails(slug);
-      const toolkit = str(obj(tool.toolkit).slug);
-      const latest = toolkit ? await this.findLatestConnection(toolkit) : null;
-      const connectedAccountId =
-        str(latest?.id) ??
-        str(latest?.connected_account_id);
+      let accountId = connectedAccountId;
+      if (!accountId) {
+        const tool = await this.getToolDetails(slug);
+        const toolkit = str(obj(tool.toolkit).slug);
+        const latest = toolkit ? await this.findLatestConnection(toolkit) : null;
+        accountId =
+          str(latest?.id) ??
+          str(latest?.connected_account_id) ??
+          undefined;
+      }
 
       const response = await this.api(`/tools/execute/${encodeURIComponent(slug)}`, {
         method: "POST",
         body: JSON.stringify({
           user_id: this.options.userId,
-          ...(connectedAccountId ? { connected_account_id: connectedAccountId } : {}),
+          ...(accountId ? { connected_account_id: accountId } : {}),
           arguments: args,
         }),
       });
@@ -706,13 +464,11 @@ export const createPersonalProvider = (
     authConfigMap[toolkit] = value.trim();
   }
 
-  return new McpPersonalProvider(
+  return new PlatformPersonalProvider({
     apiKey,
-    ctx.env.COMPOSIO_API_BASE || platformSettings.apiBase || DEFAULT_API_BASE,
+    apiBase: ctx.env.COMPOSIO_API_BASE || platformSettings.apiBase || DEFAULT_API_BASE,
     userId,
-    ctx.env.COMPOSIO_MCP_URL || platformSettings.mcpUrl || null,
-    "x-api-key",
-    ctx.env.COMPOSIO_CALLBACK_URL ?? platformSettings.callbackUrl ?? null,
+    callbackUrl: ctx.env.COMPOSIO_CALLBACK_URL ?? platformSettings.callbackUrl ?? null,
     authConfigMap,
-  );
+  });
 };

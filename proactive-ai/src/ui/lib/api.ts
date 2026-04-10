@@ -42,10 +42,11 @@ export function apiPost(path: string, body: unknown): Promise<Response> {
   });
 }
 
-export function apiRpcPost(path: string, body: unknown): Promise<Response> {
+export function apiRpcPost(path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
   return apiRpcFetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal,
   });
 }
