@@ -153,6 +153,23 @@ const buildMemoryEventInput = (
 };
 
 export async function handleFeedback(routeCtx: RouteContext): Promise<boolean> {
+  // GET /feedback/dismissed — list dismissed card IDs
+  if (routeCtx.subpath === '/feedback/dismissed' && routeCtx.req.method === 'GET') {
+    try {
+      const records = await coreFeedback.listFeedback(ctx, { kind: 'dismiss', limit: '200' });
+      const ids = [...new Set(
+        records
+          .map((r: Record<string, unknown>) => r.intentCardId as string | undefined)
+          .filter((id): id is string => !!id),
+      )];
+      json(routeCtx.res, 200, { ok: true, dismissedCardIds: ids });
+    } catch (err) {
+      coreErrorToHttp(routeCtx.res, err);
+    }
+    return true;
+  }
+
+  // POST /feedback
   if (routeCtx.subpath !== '/feedback' || routeCtx.req.method !== 'POST') return false;
 
   try {

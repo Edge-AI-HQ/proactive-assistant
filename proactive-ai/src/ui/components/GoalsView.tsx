@@ -1,73 +1,137 @@
 import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Briefcase, Heart, TrendingUp, Sprout, Sparkles, Users,
-  X, Plus, Loader2, Check, ChevronDown,
+  Briefcase, Heart, Home, TrendingUp, Sprout, Sparkles,
+  Check, Mic, ArrowRightCircle, X, Plus, Loader2,
   type LucideIcon,
 } from "lucide-react";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
+  DrawerDescription,
+} from "@/components/ui/drawer";
 import { apiFetch, apiPost } from "@/lib/api";
+import goalWork from "@/assets/goal-work.png";
+import goalHealth from "@/assets/goal-health.png";
+import goalFamily from "@/assets/goal-family.png";
+import goalFinance from "@/assets/goal-finance.png";
+import goalGrowth from "@/assets/goal-growth.png";
+import goalLife from "@/assets/goal-life.png";
 
-interface Goal {
+interface ApiGoal {
   key: string;
   title: string;
   priority: "high" | "medium" | "low";
   status: "active" | "closed";
-  summary?: string;
+  summary?: string | null;
 }
 
-const GOAL_ICONS: Record<string, { icon: LucideIcon; label: string }> = {
-  "career-growth":   { icon: Briefcase,   label: "Career" },
-  "stay-healthy":    { icon: Heart,        label: "Health" },
-  "financial-plan":  { icon: TrendingUp,   label: "Finance" },
-  "learn-and-grow":  { icon: Sprout,       label: "Growth" },
-  "relationships":   { icon: Users,        label: "Relationships" },
-  "life-balance":    { icon: Sparkles,     label: "Life Balance" },
-  work:              { icon: Briefcase,     label: "Work" },
-  health:            { icon: Heart,         label: "Health" },
-  finance:           { icon: TrendingUp,    label: "Finance" },
-  growth:            { icon: Sprout,        label: "Growth" },
-  family:            { icon: Users,         label: "Family" },
-  life:              { icon: Sparkles,      label: "Life" },
+type VisualStatus = "Normal" | "Alert" | "Watch";
+
+interface GoalVisualMeta {
+  icon: LucideIcon;
+  image: string;
+  label: string;
+  pct: number;
+  weeklyActions: string[];
+  monitoring: string[];
+  aiQuestions: string[];
+}
+
+const GOAL_VISUAL_META: Record<string, GoalVisualMeta> = {
+  "career-growth": {
+    icon: Briefcase, image: goalWork, label: "Work", pct: 62,
+    weeklyActions: [
+      "Review project milestones for this sprint",
+      "Follow up on pending decisions",
+      "Check team blockers and unblock",
+    ],
+    monitoring: ["Career development trajectory", "Skill gap analysis", "Industry trends"],
+    aiQuestions: ["What skill are you focusing on developing?", "Any career goals shifting this quarter?"],
+  },
+  "stay-healthy": {
+    icon: Heart, image: goalHealth, label: "Health", pct: 35,
+    weeklyActions: ["No new health signals this cycle"],
+    monitoring: ["Exercise consistency", "Sleep quality trends", "Annual checkup schedule"],
+    aiQuestions: ["What health tracking are you currently doing?", "Any specific health topics you're watching?"],
+  },
+  "financial-plan": {
+    icon: TrendingUp, image: goalFinance, label: "Finance", pct: 52,
+    weeklyActions: ["Review monthly spending summary", "Check upcoming bills and subscriptions"],
+    monitoring: ["Budget vs. actual spending", "Savings rate", "Investment performance"],
+    aiQuestions: ["Any budget concerns for this quarter?", "Should I prepare a savings analysis?"],
+  },
+  "learn-and-grow": {
+    icon: Sprout, image: goalGrowth, label: "Growth", pct: 72,
+    weeklyActions: ["Continue current learning path", "Review bookmarked articles"],
+    monitoring: ["Learning time allocation", "New topics of interest", "Skill acquisition progress"],
+    aiQuestions: ["What topic are you most curious about right now?", "Should I find new learning resources?"],
+  },
+  "relationships": {
+    icon: Home, image: goalFamily, label: "Family", pct: 50,
+    weeklyActions: ["Plan weekend family activity", "Check in with close friends"],
+    monitoring: ["Family event calendar", "Relationship check-in frequency"],
+    aiQuestions: ["Any family events coming up?", "How's the work-life balance feeling?"],
+  },
+  "life-balance": {
+    icon: Sparkles, image: goalLife, label: "Life", pct: 40,
+    weeklyActions: ["Block personal time on calendar", "Review stress levels"],
+    monitoring: ["Personal time allocation", "Burnout risk indicators", "Hobby engagement"],
+    aiQuestions: ["Any personal projects you want to prioritize?", "What recharges you most right now?"],
+  },
 };
 
-const FALLBACK_ICON = { icon: Sparkles, label: "Goal" };
+const FALLBACK_META: GoalVisualMeta = {
+  icon: Sparkles, image: goalLife, label: "Goal", pct: 50,
+  weeklyActions: [], monitoring: [], aiQuestions: [],
+};
 
-function goalMeta(key: string) {
-  return GOAL_ICONS[key] ?? GOAL_ICONS[key.split("-")[0]] ?? FALLBACK_ICON;
+function getVisualMeta(key: string): GoalVisualMeta {
+  return GOAL_VISUAL_META[key] ?? FALLBACK_META;
 }
 
-const PRIORITY_STYLE: Record<string, string> = {
-  high:   "bg-rose-50 text-rose-500",
-  medium: "bg-amber-50 text-amber-500",
-  low:    "bg-foreground/5 text-foreground/40",
+function priorityToStatus(priority: string): VisualStatus {
+  if (priority === "high") return "Alert";
+  if (priority === "low") return "Watch";
+  return "Normal";
+}
+
+const statusColor: Record<VisualStatus, string> = {
+  Normal: "bg-emerald-400/30",
+  Alert: "bg-rose-400/30",
+  Watch: "bg-amber-400/30",
+};
+
+const statusBarColor: Record<VisualStatus, string> = {
+  Normal: "bg-emerald-400/50",
+  Alert: "bg-rose-400/50",
+  Watch: "bg-amber-400/50",
 };
 
 export default function GoalsView() {
-  const [goals, setGoals] = useState<Goal[]>([]);
+  const [goals, setGoals] = useState<ApiGoal[]>([]);
   const [loading, setLoading] = useState(true);
-  const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const [expandedGoal, setExpandedGoal] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [newKey, setNewKey] = useState("");
   const [newTitle, setNewTitle] = useState("");
   const [newPriority, setNewPriority] = useState<"high" | "medium" | "low">("medium");
   const [saving, setSaving] = useState(false);
-  const [closingKey, setClosingKey] = useState<string | null>(null);
 
   const loadGoals = useCallback(async () => {
     try {
       const res = await apiFetch("/api/profile/goals");
       const data = await res.json();
-      if (data.ok && Array.isArray(data.goals)) {
-        setGoals(data.goals);
-      }
+      if (data.ok && Array.isArray(data.goals)) setGoals(data.goals);
     } catch { /* ignore */ }
     finally { setLoading(false); }
   }, []);
 
   useEffect(() => { loadGoals(); }, [loadGoals]);
 
-  const activeGoals = goals.filter(g => g.status === "active");
-  const closedGoals = goals.filter(g => g.status === "closed");
+  const activeGoals = goals.filter((g) => g.status === "active");
 
   const handleAddGoal = async () => {
     const key = newKey.trim().toLowerCase().replace(/\s+/g, "-");
@@ -78,9 +142,7 @@ export default function GoalsView() {
       const res = await apiPost("/api/profile/goals", { key, title, priority: newPriority });
       const data = await res.json();
       if (data.ok) {
-        setNewKey("");
-        setNewTitle("");
-        setNewPriority("medium");
+        setNewKey(""); setNewTitle(""); setNewPriority("medium");
         setShowAddForm(false);
         await loadGoals();
       }
@@ -88,18 +150,13 @@ export default function GoalsView() {
     finally { setSaving(false); }
   };
 
-  const handleCloseGoal = async (key: string) => {
-    setClosingKey(key);
-    try {
-      await apiPost("/api/profile/goals/close", { key });
-      await loadGoals();
-    } catch { /* ignore */ }
-    finally { setClosingKey(null); }
-  };
+  const selectedApiGoal = expandedGoal ? activeGoals.find((g) => g.key === expandedGoal) : null;
+  const selectedMeta = selectedApiGoal ? getVisualMeta(selectedApiGoal.key) : null;
+  const selectedStatus = selectedApiGoal ? priorityToStatus(selectedApiGoal.priority) : "Normal";
 
   return (
-    <div className="flex flex-col h-full px-4 pt-14 pb-2 overflow-y-auto">
-      <div className="flex items-center justify-between mb-1">
+    <div className="flex flex-col h-full px-4 pt-14 pb-2 overflow-y-auto relative">
+      <div className="flex items-center justify-between mb-1 pr-20">
         <h1 className="text-display text-2xl text-foreground">Goals</h1>
         <button
           onClick={() => setShowAddForm(!showAddForm)}
@@ -109,7 +166,9 @@ export default function GoalsView() {
           Add Goal
         </button>
       </div>
-      <p className="text-sm text-muted-foreground mb-6">Your active goals and priorities</p>
+      <p className="text-sm text-muted-foreground mb-6">
+        {activeGoals.length} Baskets · Tap to expand
+      </p>
 
       {/* Add Goal Form */}
       <AnimatePresence>
@@ -168,7 +227,6 @@ export default function GoalsView() {
         )}
       </AnimatePresence>
 
-      {/* Loading */}
       {loading && (
         <div className="flex items-center justify-center py-8 gap-2">
           <Loader2 size={16} className="animate-spin text-foreground/40" />
@@ -176,7 +234,6 @@ export default function GoalsView() {
         </div>
       )}
 
-      {/* Active Goals */}
       {!loading && activeGoals.length === 0 && (
         <div className="glass-card-strong p-8 text-center mb-4">
           <Sparkles size={28} className="mx-auto mb-3 text-foreground/50" />
@@ -187,105 +244,167 @@ export default function GoalsView() {
         </div>
       )}
 
-      <div className="space-y-2.5">
+      {/* 2-Column Grid */}
+      <div className="grid grid-cols-2 gap-3">
         {activeGoals.map((goal, i) => {
-          const meta = goalMeta(goal.key);
+          const meta = getVisualMeta(goal.key);
+          const status = priorityToStatus(goal.priority);
           const Icon = meta.icon;
-          const isExpanded = expandedKey === goal.key;
-          const isClosing = closingKey === goal.key;
 
           return (
-            <motion.div
+            <div
               key={goal.key}
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.05 }}
+              className="glass-card-strong cursor-pointer active:scale-[0.97] transition-transform overflow-hidden"
+              onClick={() => setExpandedGoal(goal.key)}
             >
-              <div className="glass-card-strong overflow-hidden">
-                <button
-                  onClick={() => setExpandedKey(isExpanded ? null : goal.key)}
-                  className="w-full p-4 flex items-center gap-3 transition-colors hover:bg-white/20"
-                >
-                  <div className="w-10 h-10 rounded-xl bg-foreground/[0.06] flex items-center justify-center flex-shrink-0">
-                    <Icon size={18} strokeWidth={1.5} className="text-foreground/70" />
-                  </div>
-                  <div className="flex-1 text-left min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <span className="text-sm font-semibold text-foreground truncate">{goal.title}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] font-mono text-foreground/30">{goal.key}</span>
-                      <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${PRIORITY_STYLE[goal.priority] ?? PRIORITY_STYLE.medium}`}>
-                        {goal.priority}
-                      </span>
-                    </div>
-                  </div>
-                  <ChevronDown
-                    size={14}
-                    strokeWidth={1.5}
-                    className={`text-foreground/25 transition-transform duration-200 flex-shrink-0 ${isExpanded ? "rotate-180" : ""}`}
-                  />
-                </button>
-
-                <AnimatePresence>
-                  {isExpanded && (
-                    <motion.div
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: "auto", opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.25 }}
-                      className="overflow-hidden"
-                    >
-                      <div className="px-4 pb-4">
-                        <div className="h-px bg-foreground/[0.06] mb-3" />
-                        {goal.summary && (
-                          <p className="text-[13px] text-foreground/60 leading-relaxed mb-3">{goal.summary}</p>
-                        )}
-                        <button
-                          onClick={() => handleCloseGoal(goal.key)}
-                          disabled={isClosing}
-                          className="w-full py-2.5 rounded-xl text-xs font-medium text-foreground/50 bg-foreground/[0.04] hover:bg-foreground/[0.08] transition-colors disabled:opacity-40 flex items-center justify-center gap-1.5"
-                        >
-                          {isClosing ? (
-                            <Loader2 size={12} className="animate-spin" />
-                          ) : (
-                            <>
-                              <Check size={12} />
-                              Close Goal
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+              <div className="w-full h-24 overflow-hidden bg-foreground/[0.03] flex items-center justify-center">
+                <img
+                  src={meta.image}
+                  alt={meta.label}
+                  className={`w-auto object-contain ${meta.label === "Growth" ? "h-[70%]" : "h-full"}`}
+                />
               </div>
-            </motion.div>
+              <div className="p-3.5">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-foreground"><Icon size={20} /></span>
+                  <span className="text-display text-sm text-foreground">{meta.label}</span>
+                </div>
+
+                <div className="w-full h-1.5 rounded-full bg-foreground/10 mb-2 overflow-hidden">
+                  <div
+                    className={`h-full rounded-full ${statusColor[status]} transition-all duration-700 ease-out`}
+                    style={{ width: `${meta.pct}%` }}
+                  />
+                </div>
+
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-display text-lg text-foreground">{meta.pct}%</span>
+                  <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
+                    status === "Alert" ? "bg-rose-50 text-rose-400"
+                    : status === "Watch" ? "bg-amber-50 text-amber-500"
+                    : "bg-emerald-50 text-emerald-500"
+                  }`}>{status}</span>
+                </div>
+
+                <div className="flex justify-between items-end">
+                  <p className="text-[11px] text-foreground/50 leading-snug flex-1 line-clamp-2">
+                    {goal.summary || goal.title}
+                  </p>
+                  <ArrowRightCircle size={16} className="text-foreground/25 shrink-0 ml-1" />
+                </div>
+              </div>
+            </div>
           );
         })}
       </div>
 
-      {/* Closed Goals */}
-      {closedGoals.length > 0 && (
-        <div className="mt-6">
-          <span className="text-xs font-semibold text-foreground/30 uppercase tracking-wider mb-3 block">
-            Closed ({closedGoals.length})
-          </span>
-          <div className="space-y-1.5">
-            {closedGoals.map((goal) => {
-              const meta = goalMeta(goal.key);
-              const Icon = meta.icon;
-              return (
-                <div key={goal.key} className="glass-card px-4 py-3 flex items-center gap-3 opacity-50">
-                  <Icon size={14} strokeWidth={1.5} className="text-foreground/30 flex-shrink-0" />
-                  <span className="text-xs text-foreground/40 line-through flex-1">{goal.title}</span>
-                  <X size={10} className="text-foreground/20" />
+      {/* Detail Drawer */}
+      <Drawer open={!!expandedGoal} onOpenChange={(open) => { if (!open) setExpandedGoal(null); }}>
+        <DrawerContent
+          className="max-h-[85vh] border-t-0 !bg-transparent"
+          style={{
+            background: "linear-gradient(180deg, hsla(0, 0%, 100%, 0.5) 0%, hsla(0, 0%, 100%, 0.7) 100%)",
+            backdropFilter: "blur(40px) saturate(1.5)",
+            WebkitBackdropFilter: "blur(40px) saturate(1.5)",
+            border: "1px solid hsla(0, 0%, 100%, 0.4)",
+            borderBottom: "none",
+            borderRadius: "1.5rem 1.5rem 0 0",
+          }}
+          overlayClassName="!bg-foreground/5 backdrop-blur-[2px]"
+        >
+          <DrawerHeader className="sr-only">
+            <DrawerTitle>{selectedMeta?.label || "Goal"}</DrawerTitle>
+            <DrawerDescription>Goal detail view</DrawerDescription>
+          </DrawerHeader>
+
+          {selectedApiGoal && selectedMeta && (
+            <div className="px-5 pb-6 pt-2 overflow-y-auto max-h-[75vh]">
+              {/* Header */}
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-3">
+                  <img src={selectedMeta.image} alt={selectedMeta.label} width={32} height={32} className="w-8 h-8 object-contain" />
+                  <span className="text-display text-lg text-foreground font-semibold">{selectedMeta.label}</span>
+                  <span className={`text-[11px] font-medium px-2.5 py-0.5 rounded-full ${
+                    selectedStatus === "Alert" ? "bg-rose-50 text-rose-400"
+                    : selectedStatus === "Watch" ? "bg-amber-50 text-amber-500"
+                    : "bg-emerald-50 text-emerald-500"
+                  }`}>{selectedStatus}</span>
                 </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+                <span className={`text-display text-lg font-semibold ${
+                  selectedStatus === "Alert" ? "text-rose-400"
+                  : selectedStatus === "Watch" ? "text-amber-500"
+                  : "text-emerald-500"
+                }`}>{selectedMeta.pct}%</span>
+              </div>
+
+              {/* Progress bar */}
+              <div className="w-full h-2 rounded-full bg-foreground/5 mb-4 overflow-hidden">
+                <motion.div
+                  className={`h-full rounded-full ${statusBarColor[selectedStatus]}`}
+                  initial={{ width: 0 }}
+                  animate={{ width: `${selectedMeta.pct}%` }}
+                  transition={{ duration: 0.6, ease: "easeOut" }}
+                />
+              </div>
+
+              <p className="text-sm text-foreground/80 mb-4">
+                {selectedApiGoal.summary || selectedApiGoal.title}
+              </p>
+
+              <div className="w-full h-px bg-foreground/10 mb-4" />
+
+              {/* AI Weekly Actions */}
+              <h3 className="text-xs font-semibold text-emerald-500 uppercase tracking-wider mb-3">
+                AI Weekly Actions
+              </h3>
+              <div className="space-y-2.5 mb-5">
+                {selectedMeta.weeklyActions.map((action, i) => (
+                  <div key={i} className="flex items-start gap-2.5">
+                    <Check size={14} className="text-emerald-500 mt-0.5 shrink-0" />
+                    <span className="text-sm text-foreground/80 leading-snug">{action}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Monitoring */}
+              <h3 className="text-xs font-semibold text-amber-500 uppercase tracking-wider mb-3">
+                Monitoring
+              </h3>
+              <div className="space-y-2.5 mb-5">
+                {selectedMeta.monitoring.map((item, i) => (
+                  <div key={i} className="flex items-start gap-2.5">
+                    <div className="w-2.5 h-2.5 rounded-full bg-amber-400 mt-1 shrink-0 animate-pulse" />
+                    <span className="text-sm text-foreground/75 leading-snug">{item}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* AI wants to know */}
+              <h3 className="text-xs font-semibold text-foreground/50 uppercase tracking-wider mb-3">
+                AI wants to know
+              </h3>
+              <div className="space-y-2.5 mb-5">
+                {selectedMeta.aiQuestions.map((q, i) => (
+                  <button
+                    key={i}
+                    className="w-full flex items-center gap-3 p-3.5 rounded-2xl border border-foreground/10 bg-foreground/[0.03] hover:bg-foreground/[0.07] active:bg-foreground/[0.1] transition-all text-left group"
+                  >
+                    <div className="w-8 h-8 rounded-full bg-foreground flex items-center justify-center shrink-0">
+                      <Mic size={14} className="text-background" />
+                    </div>
+                    <span className="text-sm text-foreground/80 leading-snug flex-1">{q}</span>
+                    <ArrowRightCircle size={14} className="text-foreground shrink-0" />
+                  </button>
+                ))}
+              </div>
+
+              <button className="w-full py-3.5 rounded-2xl bg-foreground/[0.04] text-sm text-foreground/50 font-medium hover:bg-foreground/[0.07] transition-colors">
+                Lock Goals — AI watches only, no modify
+              </button>
+            </div>
+          )}
+        </DrawerContent>
+      </Drawer>
     </div>
   );
 }
