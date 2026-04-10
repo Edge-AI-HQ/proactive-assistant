@@ -199,17 +199,41 @@ function rawConnectorGroups(rawInputs: Record<string, unknown>): Array<{
       sourceId,
       connectors: Object.entries(connectors).map(([connectorId, connectorRaw]) => ({
         connectorId,
-        itemCount: Array.isArray((connectorRaw as { messages?: unknown[] })?.messages)
-          ? (((connectorRaw as { messages?: unknown[] }).messages?.length) ?? 0)
-          : Array.isArray((connectorRaw as { summary_view?: unknown[] })?.summary_view)
-            ? (((connectorRaw as { summary_view?: unknown[] }).summary_view?.length) ?? 0)
-            : Array.isArray((connectorRaw as { items?: unknown[] })?.items)
-              ? (((connectorRaw as { items?: unknown[] }).items?.length) ?? 0)
-              : 0,
+        itemCount: inferRawConnectorItemCount(connectorRaw),
         raw: connectorRaw,
       })),
     }];
   });
+}
+
+function inferRawConnectorItemCount(connectorRaw: unknown): number {
+  if (!connectorRaw || typeof connectorRaw !== "object" || Array.isArray(connectorRaw)) return 0;
+  const record = connectorRaw as Record<string, unknown>;
+  if (typeof record.itemCount === "number" && Number.isFinite(record.itemCount)) return record.itemCount;
+
+  const toolRuns = Array.isArray(record.toolRuns)
+    ? record.toolRuns.filter((item): item is Record<string, unknown> => !!item && typeof item === "object" && !Array.isArray(item))
+    : [];
+  const toolRunCount = toolRuns.reduce((sum, toolRun) => {
+    const itemCount = toolRun.itemCount;
+    return sum + (typeof itemCount === "number" && Number.isFinite(itemCount) ? itemCount : 0);
+  }, 0);
+  if (toolRunCount > 0) return toolRunCount;
+
+  const payload = record.payload && typeof record.payload === "object" && !Array.isArray(record.payload)
+    ? record.payload as Record<string, unknown>
+    : null;
+  if (Array.isArray(record.messages)) return record.messages.length;
+  if (Array.isArray(record.summary_view)) return record.summary_view.length;
+  if (Array.isArray(record.items)) return record.items.length;
+  if (payload) {
+    if (Array.isArray(payload.messages)) return payload.messages.length;
+    if (Array.isArray(payload.summary_view)) return payload.summary_view.length;
+    if (Array.isArray(payload.items)) return payload.items.length;
+    if (Array.isArray(payload.event_data)) return payload.event_data.length;
+    if (Array.isArray(payload.files)) return payload.files.length;
+  }
+  return 0;
 }
 
 export default function AutoDreamingSettings() {
@@ -671,6 +695,13 @@ export default function AutoDreamingSettings() {
           <summary className="cursor-pointer text-xs font-semibold text-foreground">Profile Diff</summary>
           <pre className="mt-2 max-h-48 overflow-auto rounded-2xl bg-black/[0.04] p-3 text-[10px] text-foreground/70">
             {JSON.stringify(detail.detail.profileDelta, null, 2)}
+          </pre>
+        </details>
+
+        <details className="rounded-2xl bg-foreground/[0.04] px-3 py-3">
+          <summary className="cursor-pointer text-xs font-semibold text-foreground">Goal Diff</summary>
+          <pre className="mt-2 max-h-48 overflow-auto rounded-2xl bg-black/[0.04] p-3 text-[10px] text-foreground/70">
+            {JSON.stringify(detail.detail.goalDelta, null, 2)}
           </pre>
         </details>
 
