@@ -1,10 +1,12 @@
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
+import { homedir } from 'node:os';
 import { DEFAULT_CONFIG } from '../config.js';
 import { runPipeline, DEFAULT_PIPELINE_OPTIONS } from '../pipeline/orchestrator.js';
 import { pinCliData, runPinCli } from '../pipeline/pin-cli.js';
 import { saveRun } from '../pipeline/run-store.js';
 import { pipelineState } from '../state.js';
 import type { ServerEvent } from '../../core/index.js';
+import { cards } from '../../core/index.js';
 import { loadAutoLoopState, saveAutoLoopState } from '../pending-store.js';
 import type { SupportedGenerationLanguage } from '../generation-language.js';
 
@@ -119,6 +121,18 @@ export async function executeIncrementalPipeline(
 
     const consumedPending =
       (commitResult.data as { processedCount?: number } | null)?.processedCount ?? 0;
+
+    await cards.recordGeneratedBatch(
+      {
+        env: process.env as Record<string, string | undefined>,
+        homeDir: homedir(),
+      },
+      {
+        runId: result.runId,
+        generatedAt: nowIso,
+        cards: result.finalCards,
+      },
+    );
 
     saveRun({
       id: result.runId,

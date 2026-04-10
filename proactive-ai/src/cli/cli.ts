@@ -7,6 +7,7 @@ import { registerIngestCommands } from "./domains/ingest/register.js";
 import { registerProfileCommands } from "./domains/profile/register.js";
 import { registerPersonalCommands } from "./domains/personal/register.js";
 import { registerPushCommands } from "./domains/push/register.js";
+import { registerCardsCommands } from "./domains/cards/register.js";
 import { registerSysCommands } from "./domains/sys/register.js";
 import { registerWorldCommands } from "./domains/world/register.js";
 import { registerContextCommands } from "./domains/context/register.js";
@@ -31,6 +32,7 @@ const createProgram = (runtime: CliRuntimeInput, resultRef: ResultRef): Command 
   registerContextCommands(program, runtime, resultRef);
   registerLoopCommands(program, runtime, resultRef);
   registerFeedbackCommands(program, runtime, resultRef);
+  registerCardsCommands(program, runtime, resultRef);
   registerPushCommands(program, runtime, resultRef);
   registerPersonalCommands(program, runtime, resultRef);
 

@@ -8,19 +8,24 @@ describe("buildPlannerPrompt", () => {
       currentDate: "2026-04-07",
       iterationNumber: 1,
       recentFeedbackSummary: "- Frequently confirmed: work cards (2)\n- Recent preferences: Prefer morning work briefings",
+      recentGeneratedCardsSummary: "- work: review-queue-with-alex | 2026-04-07 | Review queue with Alex",
     });
 
     expect(prompt).toContain("## Recent User Feedback Signals");
     expect(prompt).toContain("Frequently confirmed: work cards (2)");
     expect(prompt).toContain("Prefer morning work briefings");
+    expect(prompt).toContain("## Recent Generated Card History");
+    expect(prompt).toContain("pin cards recent --limit 10 --json");
+    expect(prompt).toContain("review-queue-with-alex");
   });
 
-  it("does not add an empty recent feedback section", () => {
+  it("does not add empty feedback or generated-card sections", () => {
     const prompt = buildPlannerPrompt({
       currentDate: "2026-04-07",
       iterationNumber: 1,
     });
 
     expect(prompt).not.toContain("## Recent User Feedback Signals");
+    expect(prompt).not.toContain("## Recent Generated Card History");
   });
 });

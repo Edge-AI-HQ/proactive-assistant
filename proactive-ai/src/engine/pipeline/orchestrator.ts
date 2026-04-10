@@ -24,6 +24,7 @@ import {
   formatRecentFeedbackSummary,
   loadRecentFeedbackSummary,
 } from './feedback-summary.js';
+import { loadRecentGeneratedCardsSummary } from './generated-cards-summary.js';
 import {
   detectAgentErrorInMessages,
   parseAgentJson,
@@ -86,6 +87,7 @@ export async function runPipeline(
   let lastIterationCards: ScoredCandidate[] = [];
   const runId = opts.runId ?? `run_${Date.now().toString(36)}`;
   let recentFeedbackSummary = '';
+  let recentGeneratedCardsSummary = '';
   let prev: IterationContext | undefined;
 
   try {
@@ -95,6 +97,17 @@ export async function runPipeline(
   } catch (error) {
     api.logger.warn(
       `Failed to load recent feedback summary: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  try {
+    recentGeneratedCardsSummary = await loadRecentGeneratedCardsSummary({
+      limit: 10,
+      since: '14d',
+    });
+  } catch (error) {
+    api.logger.warn(
+      `Failed to load recent generated cards summary: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 
@@ -111,6 +124,7 @@ export async function runPipeline(
       iterationNumber: i,
       incrementalContext: opts.incrementalContext,
       recentFeedbackSummary,
+      recentGeneratedCardsSummary,
       previousFeedback: prev?.feedback,
       previousPlan: prev ? JSON.stringify(prev.plan, null, 2) : undefined,
       previousCards: prev ? JSON.stringify(prev.cards, null, 2) : undefined,
@@ -135,6 +149,7 @@ export async function runPipeline(
       iterationNumber: i,
       incrementalContext: opts.incrementalContext,
       recentFeedbackSummary,
+      recentGeneratedCardsSummary,
       previousFeedback: prev?.feedback,
       previousCards: prev ? JSON.stringify(prev.cards, null, 2) : undefined,
       previousScores: prev ? JSON.stringify(prev.scores, null, 2) : undefined,

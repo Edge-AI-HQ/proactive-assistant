@@ -22,6 +22,7 @@ export interface PlannerPromptParams {
   iterationNumber: number;
   incrementalContext?: string;
   recentFeedbackSummary?: string;
+  recentGeneratedCardsSummary?: string;
   previousFeedback?: string;   // Evaluator's improvement suggestions
   previousPlan?: string;       // JSON of last iteration's PlannerOutput
   previousCards?: string;      // JSON of last iteration's IntentCard[]
@@ -34,6 +35,7 @@ export function buildPlannerPrompt(params: PlannerPromptParams): string {
     currentDate,
     iterationNumber,
     recentFeedbackSummary,
+    recentGeneratedCardsSummary,
     previousFeedback,
     previousPlan,
     previousCards,
@@ -77,6 +79,13 @@ ${previousScores}
     ? `\n## Recent User Feedback Signals
 
 ${recentFeedbackSummary}
+`
+    : '';
+
+  const recentGeneratedCardsSection = recentGeneratedCardsSummary?.trim()
+    ? `\n## Recent Generated Card History
+
+${recentGeneratedCardsSummary}
 `
     : '';
 
@@ -140,9 +149,11 @@ Use pin CLI to load the user's current state. Refer to the skill document for th
 3. **world** — current events and news (list, search, headlines)
 4. **push** — recent pushes for dedup (history)
 5. **feedback** — what the user found valuable/irrelevant (list)
+6. **cards** — recent generated card history (recent)
 
 **Handle errors gracefully** — if a command fails or an app is not connected, skip that data source and note it in your plan.
 **Use \`pin personal tools search\` first** to discover what tools are available, then \`pin personal tools schema --name <TOOL_SLUG>\` to get exact parameter names, then \`pin personal exec\` to fetch data from connected apps. **Never guess parameter names — always check the schema first.**
+**Before locking a plan, inspect recent generated cards with \`pin cards recent --limit 10 --json\`** so you know what kinds of cards were produced recently and avoid blindly repeating the same theme.
 
 ### Step 2: Identify Goal Gaps
 
@@ -172,6 +183,7 @@ Select the top 3-5 most valuable cards to generate.
 
 **Portfolio rule**: Ensure diversity across baskets. Don't put all cards in one basket.
 ${recentFeedbackSection}
+${recentGeneratedCardsSection}
 ${feedbackSection}
 ## Output Format
 

@@ -20,6 +20,7 @@ export interface GeneratorPromptParams {
   iterationNumber: number;
   incrementalContext?: string;
   recentFeedbackSummary?: string;
+  recentGeneratedCardsSummary?: string;
   previousFeedback?: string; // Evaluator's improvement suggestions
   previousCards?: string;    // JSON of last iteration's IntentCard[]
   previousScores?: string;   // JSON of last iteration's EvaluationScore[]
@@ -32,6 +33,7 @@ export function buildGeneratorPrompt(params: GeneratorPromptParams): string {
     plan,
     iterationNumber,
     recentFeedbackSummary,
+    recentGeneratedCardsSummary,
     previousFeedback,
     previousCards,
     previousScores,
@@ -70,6 +72,13 @@ ${previousScores}
     ? `\n## Recent User Feedback Signals
 
 ${recentFeedbackSummary}
+`
+    : '';
+
+  const recentGeneratedCardsSection = recentGeneratedCardsSummary?.trim()
+    ? `\n## Recent Generated Card History
+
+${recentGeneratedCardsSummary}
 `
     : '';
 
@@ -126,6 +135,7 @@ You can execute \`pin\` CLI commands via the shell. The full command reference i
 Example: \`pin profile get --id default --json\`
 All commands return JSON envelopes with \`{ ok, data, error, meta }\`. Check \`ok\` before using \`data\`.
 **Handle errors gracefully** — if a command fails or app is not connected, skip it and use available data.
+Before generating cards, inspect recent history with \`pin cards recent --limit 10 --json\` so you can see what themes were generated recently and avoid producing near-duplicates blindly.
 
 ## Process
 
@@ -157,8 +167,9 @@ Before outputting each card, verify:
 - [ ] Summary adds info beyond the title?
 - [ ] Primary action is a concrete, executable step?
 - [ ] Confidence, urgency, importance scores are honest?
-- [ ] Not duplicating a recent push?
+- [ ] Not duplicating a recent push or recent generated card theme?
 ${recentFeedbackSection}
+${recentGeneratedCardsSection}
 ${feedbackSection}
 ## Output Format
 
