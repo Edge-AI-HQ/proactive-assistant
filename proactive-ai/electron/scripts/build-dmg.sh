@@ -13,9 +13,11 @@
 # Environment variables (all optional):
 #   BUNDLE_NODE_VERSION     — Node.js version to bundle (default: 22.16.0)
 #   BUNDLE_OPENCLAW_VERSION — openclaw version to bundle (default: 2026.4.5)
+#   SKIP_SIGN=1             — skip code signing & notarization (faster builds)
 #
 # Usage:
 #   bash proactive-ai/electron/scripts/build-dmg.sh
+#   SKIP_SIGN=1 bash proactive-ai/electron/scripts/build-dmg.sh
 # ------------------------------------------------------------------
 set -euo pipefail
 
@@ -149,6 +151,11 @@ fi
 
 echo "==> [4/5] Installing openclaw ($OPENCLAW_VER)..."
 cd "$BUNDLE/runtime"
+
+# Create a minimal package.json so npm installs HERE, not in a parent directory
+cat > package.json <<'RTJSON'
+{ "name": "proactive-ai-runtime", "version": "1.0.0", "private": true }
+RTJSON
 
 # Install openclaw as a local package (provides node_modules/.bin/openclaw)
 npm install "openclaw@${OPENCLAW_VER}" --omit=dev 2>&1 | tail -5
