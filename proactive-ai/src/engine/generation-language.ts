@@ -12,7 +12,7 @@ export const GENERATION_LANGUAGE_OPTIONS = [
 export type SupportedGenerationLanguage =
   (typeof GENERATION_LANGUAGE_OPTIONS)[number]["value"];
 
-export const DEFAULT_GENERATION_LANGUAGE: SupportedGenerationLanguage = "en";
+export const DEFAULT_GENERATION_LANGUAGE: SupportedGenerationLanguage = "zh-Hans";
 
 export function isSupportedGenerationLanguage(value: unknown): value is SupportedGenerationLanguage {
   return GENERATION_LANGUAGE_OPTIONS.some((option) => option.value === value);
