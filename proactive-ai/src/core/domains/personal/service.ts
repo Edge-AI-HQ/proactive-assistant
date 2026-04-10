@@ -60,7 +60,7 @@ export const setup = async (
   }
 
   // Persist to local-settings.json
-  savePlatformApiKey(ctx.homeDir, key);
+  savePlatformApiKey(ctx.homeDir, key, ctx.env);
 
   return {
     validated: true,
@@ -76,7 +76,7 @@ export const status = async (
   source: string;
   keyPrefix: string | null;
 }> => {
-  const platformSettings = loadPlatformSettings(ctx.homeDir);
+  const platformSettings = loadPlatformSettings(ctx.homeDir, ctx.env);
   const apiKey = ctx.env.COMPOSIO_API_KEY?.trim() || platformSettings.apiKey || "";
   return {
     configured: !!apiKey,

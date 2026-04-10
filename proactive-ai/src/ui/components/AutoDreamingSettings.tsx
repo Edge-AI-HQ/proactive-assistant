@@ -15,6 +15,7 @@ interface AutoDreamingRun {
   startedAt?: string;
   completedAt?: string | null;
   appliedAt?: string | null;
+  goalsAppliedAt?: string | null;
   superseded?: boolean;
   summaryJson?: { text?: string } | null;
   sourceStatsJson?: Record<string, { status?: string; count?: number; message?: string }> | null;
@@ -43,6 +44,7 @@ interface DreamRunDetailResponse {
     dreamMarkdownPath: string | null;
     dreamMarkdown: string;
     profileDelta: Record<string, unknown>;
+    goalDelta: { changes?: Array<Record<string, unknown>> };
     candidates: Array<Record<string, unknown>>;
     sourceBreakdown: DreamSourceBreakdown[];
     logPath: string | null;
@@ -51,6 +53,9 @@ interface DreamRunDetailResponse {
 }
 
 type ViewMode = "home" | "history" | "detail";
+const DEFAULT_VISIBLE_ITEMS = 5;
+const DEFAULT_VISIBLE_HISTORY_DAYS = 7;
+const DEFAULT_VISIBLE_RUNS_PER_DAY = 3;
 
 function scheduleLabel(schedule: AutoDreamingSchedule | null): string {
   if (!schedule) return "Runs every day at 6:00 AM";
@@ -90,6 +95,123 @@ function formatDreamRunTitle(run: AutoDreamingRun): string {
   return `${day} · ${run.trigger ?? "manual"}`;
 }
 
+function runDayKey(run: AutoDreamingRun): string {
+  if (!run.startedAt) return "Unknown";
+  const date = new Date(run.startedAt);
+  if (Number.isNaN(date.getTime())) return "Unknown";
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+function historyGroups(runs: AutoDreamingRun[]): Array<{ day: string; runs: AutoDreamingRun[] }> {
+  const grouped = new Map<string, AutoDreamingRun[]>();
+  for (const run of runs) {
+    const day = runDayKey(run);
+    const current = grouped.get(day) ?? [];
+    current.push(run);
+    grouped.set(day, current);
+  }
+  return Array.from(grouped.entries())
+    .sort(([left], [right]) => right.localeCompare(left))
+    .map(([day, dayRuns]) => ({ day, runs: dayRuns }));
+}
+
+function todayDayKey(): string {
+  const date = new Date();
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+function previousDayKey(day: string): string {
+  const date = new Date(`${day}T00:00:00`);
+  date.setDate(date.getDate() - 1);
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+function formatItemMeta(item: Record<string, unknown>): string[] {
+  const values = [item.timestamp, item.sender, item.calendar, item.start, item.location];
+  return values
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .slice(0, 4);
+}
+
+function itemSummaryText(item: Record<string, unknown>): string {
+  for (const candidate of [item.preview, item.reason, item.context, item.body, item.description]) {
+    if (typeof candidate === "string" && candidate.trim().length > 0) return candidate;
+  }
+  return "No summary available.";
+}
+
+function goalChangeTitle(change: Record<string, unknown>, index: number): string {
+  const after = change.after && typeof change.after === "object" && !Array.isArray(change.after)
+    ? change.after as Record<string, unknown>
+    : null;
+  const before = change.before && typeof change.before === "object" && !Array.isArray(change.before)
+    ? change.before as Record<string, unknown>
+    : null;
+  return String(after?.title ?? before?.title ?? change.key ?? `Goal ${index + 1}`);
+}
+
+function normalizedSourceGroups(normalizedInputs: Record<string, unknown>): Array<{
+  sourceId: string;
+  items: Array<{ key: string; title: string; summary: string; meta: string[]; connector?: string }>;
+}> {
+  return Object.entries(normalizedInputs).flatMap(([sourceId, value]) => {
+    if (!Array.isArray(value)) return [];
+    const items = value
+      .filter((item): item is Record<string, unknown> => !!item && typeof item === "object" && !Array.isArray(item))
+      .map((item, index) => {
+        const title =
+          (typeof item.title === "string" && item.title.trim().length > 0 ? item.title : null)
+          ?? (typeof item.subject === "string" && item.subject.trim().length > 0 ? item.subject : null)
+          ?? `${sourceId} item ${index + 1}`;
+        return {
+          key: `${sourceId}-${typeof item.connector === "string" ? item.connector : "item"}-${index}`,
+          title,
+          summary: itemSummaryText(item),
+          meta: formatItemMeta(item),
+          connector: typeof item.connector === "string" ? item.connector : undefined,
+        };
+      });
+    return [{ sourceId, items }];
+  });
+}
+
+function rawConnectorGroups(rawInputs: Record<string, unknown>): Array<{
+  sourceId: string;
+  connectors: Array<{ connectorId: string; itemCount: number; raw: unknown }>;
+}> {
+  return Object.entries(rawInputs).flatMap(([sourceId, raw]) => {
+    if (sourceId !== "personal" || !raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+    const connectors = (raw as { connectors?: Record<string, unknown> }).connectors;
+    if (!connectors || typeof connectors !== "object") return [];
+    return [{
+      sourceId,
+      connectors: Object.entries(connectors).map(([connectorId, connectorRaw]) => ({
+        connectorId,
+        itemCount: Array.isArray((connectorRaw as { messages?: unknown[] })?.messages)
+          ? (((connectorRaw as { messages?: unknown[] }).messages?.length) ?? 0)
+          : Array.isArray((connectorRaw as { summary_view?: unknown[] })?.summary_view)
+            ? (((connectorRaw as { summary_view?: unknown[] }).summary_view?.length) ?? 0)
+            : Array.isArray((connectorRaw as { items?: unknown[] })?.items)
+              ? (((connectorRaw as { items?: unknown[] }).items?.length) ?? 0)
+              : 0,
+        raw: connectorRaw,
+      })),
+    }];
+  });
+}
+
 export default function AutoDreamingSettings() {
   const [enabled, setEnabled] = useState(false);
   const [schedule, setSchedule] = useState<AutoDreamingSchedule | null>(null);
@@ -102,6 +224,8 @@ export default function AutoDreamingSettings() {
   const [detail, setDetail] = useState<DreamRunDetailResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [visibleHistoryDays, setVisibleHistoryDays] = useState(DEFAULT_VISIBLE_HISTORY_DAYS);
 
   useEffect(() => {
     let mounted = true;
@@ -144,6 +268,28 @@ export default function AutoDreamingSettings() {
   }, [detail?.run.id, detail?.run.status, view]);
 
   const latestRun = useMemo(() => runs[0] ?? null, [runs]);
+  const groupedRuns = useMemo(() => historyGroups(runs), [runs]);
+  const normalizedGroups = useMemo(
+    () => detail ? normalizedSourceGroups(detail.detail.normalizedInputs) : [],
+    [detail],
+  );
+  const connectorGroups = useMemo(
+    () => detail ? rawConnectorGroups(detail.detail.rawInputs) : [],
+    [detail],
+  );
+
+  const toggleGroup = (key: string) => {
+    setExpandedGroups((current) => ({ ...current, [key]: !current[key] }));
+  };
+
+  const isHistoryDayExpanded = (day: string): boolean => {
+    const key = `history:${day}`;
+    if (key in expandedGroups) return Boolean(expandedGroups[key]);
+    const today = todayDayKey();
+    return day === today || day === previousDayKey(today);
+  };
+
+  const isHistoryDayShowingAll = (day: string): boolean => Boolean(expandedGroups[`history-all:${day}`]);
 
   const handleToggle = async () => {
     const previous = enabled;
@@ -184,6 +330,7 @@ export default function AutoDreamingSettings() {
     const res = await apiFetch("/api/dreaming/runs");
     const data = await res.json() as { ok: boolean; runs: AutoDreamingRun[] };
     setRuns(data.runs ?? []);
+    if (!background) setVisibleHistoryDays(DEFAULT_VISIBLE_HISTORY_DAYS);
     if (!background) setView("history");
   };
 
@@ -197,6 +344,7 @@ export default function AutoDreamingSettings() {
       const res = await apiFetch(`/api/dreaming/runs/${runId}`);
       const data = await res.json() as DreamRunDetailResponse;
       setDetail(data);
+      if (!options?.background) setExpandedGroups({});
       if (!options?.background) setView("detail");
     } catch {
       if (!options?.background) setError("Failed to load dream run detail");
@@ -245,6 +393,25 @@ export default function AutoDreamingSettings() {
     }
   };
 
+  const handleApplyGoals = async () => {
+    if (!detail) return;
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await apiPost(`/api/dreaming/runs/${detail.run.id}/apply-goals`, {});
+      const data = await res.json() as { ok: boolean; run: AutoDreamingRun; error?: string };
+      if (!res.ok || !data.ok) {
+        setError(data.error ?? "Failed to apply goal changes");
+        return;
+      }
+      setDetail((current) => current ? { ...current, run: data.run } : current);
+      setNotice("Goal changes applied.");
+      await loadHistory(true);
+    } catch {
+      setError("Failed to apply goal changes");
+    }
+  };
+
   if (view === "history") {
     return (
       <div className="rounded-3xl bg-white/42 px-4 py-4 backdrop-blur-2xl border border-white/45 space-y-3">
@@ -255,34 +422,85 @@ export default function AutoDreamingSettings() {
           </button>
         </div>
         <div className="space-y-2">
-          {runs.map((run) => {
-            const activeSourceCount = Object.values(run.sourceStatsJson ?? {}).filter((item) => Number(item?.count ?? 0) > 0).length;
+          {groupedRuns.slice(0, visibleHistoryDays).map((group) => {
+            const expanded = isHistoryDayExpanded(group.day);
             return (
-              <button
-                key={run.id}
-                type="button"
-                onClick={() => void loadDetail(run.id)}
-                className="w-full rounded-2xl bg-foreground/[0.04] px-3 py-3 text-left space-y-1"
-              >
+              <div key={group.day} className="rounded-2xl bg-foreground/[0.04] px-3 py-3 space-y-2">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="text-xs font-medium text-foreground">{formatDreamRunTitle(run)}</div>
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusTone(run.status)}`}>
-                    {formatStatusLabel(run.status)}
-                  </span>
+                  <div>
+                    <div className="text-xs font-medium text-foreground">{group.day}</div>
+                    <div className="text-[10px] text-foreground/45">{group.runs.length} run(s)</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => toggleGroup(`history:${group.day}`)}
+                    className="text-[10px] text-foreground/55"
+                  >
+                    {expanded ? "Collapse" : "Expand"}
+                  </button>
                 </div>
-                <div className="text-[10px] text-foreground/35">{run.id}</div>
-                <div className="text-[11px] text-foreground/55">
-                  {run.summaryJson?.text ?? "No summary yet"}
-                </div>
-                <div className="flex flex-wrap gap-2 text-[10px] text-foreground/45">
-                  <span>{run.trigger ?? "manual"}</span>
-                  <span>{formatTimestamp(run.startedAt)}</span>
-                  <span>{activeSourceCount} active source(s)</span>
-                  <span>{run.appliedAt ? "Applied" : run.superseded ? "Superseded" : "Not applied"}</span>
-                </div>
-              </button>
+                {expanded && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2 text-[10px] text-foreground/45">
+                      <span>
+                        {group.runs.length > DEFAULT_VISIBLE_RUNS_PER_DAY && !isHistoryDayShowingAll(group.day)
+                          ? `Showing latest ${DEFAULT_VISIBLE_RUNS_PER_DAY} of ${group.runs.length}`
+                          : `${group.runs.length} run(s)`}
+                      </span>
+                      {group.runs.length > DEFAULT_VISIBLE_RUNS_PER_DAY && (
+                        <button
+                          type="button"
+                          onClick={() => toggleGroup(`history-all:${group.day}`)}
+                          className="text-[10px] text-foreground/55"
+                        >
+                          {isHistoryDayShowingAll(group.day) ? "Show latest only" : "Show all runs"}
+                        </button>
+                      )}
+                    </div>
+                    <div className={`space-y-2 ${group.runs.length > DEFAULT_VISIBLE_RUNS_PER_DAY ? "max-h-72 overflow-y-auto pr-1" : ""}`}>
+                    {(isHistoryDayShowingAll(group.day) ? group.runs : group.runs.slice(0, DEFAULT_VISIBLE_RUNS_PER_DAY)).map((run) => {
+                      const activeSourceCount = Object.values(run.sourceStatsJson ?? {}).filter((item) => Number(item?.count ?? 0) > 0).length;
+                      return (
+                        <button
+                          key={run.id}
+                          type="button"
+                          onClick={() => void loadDetail(run.id)}
+                          className="w-full rounded-2xl bg-black/[0.04] px-3 py-3 text-left space-y-1"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-xs font-medium text-foreground">{formatDreamRunTitle(run)}</div>
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusTone(run.status)}`}>
+                              {formatStatusLabel(run.status)}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-foreground/35">{run.id}</div>
+                          <div className="text-[11px] text-foreground/55">
+                            {run.summaryJson?.text ?? "No summary yet"}
+                          </div>
+                          <div className="flex flex-wrap gap-2 text-[10px] text-foreground/45">
+                            <span>{run.trigger ?? "manual"}</span>
+                            <span>{formatTimestamp(run.startedAt)}</span>
+                            <span>{activeSourceCount} active source(s)</span>
+                            <span>{run.appliedAt ? "Applied" : run.superseded ? "Superseded" : "Not applied"}</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                    </div>
+                  </div>
+                )}
+              </div>
             );
           })}
+          {groupedRuns.length > visibleHistoryDays && (
+            <button
+              type="button"
+              onClick={() => setVisibleHistoryDays((current) => current + DEFAULT_VISIBLE_HISTORY_DAYS)}
+              className="w-full rounded-2xl bg-foreground/[0.06] px-3 py-2 text-xs font-medium text-foreground"
+            >
+              Load older days
+            </button>
+          )}
           {runs.length === 0 && (
             <p className="text-[11px] text-foreground/45">No dreaming runs yet.</p>
           )}
@@ -330,6 +548,58 @@ export default function AutoDreamingSettings() {
               {detail.detail.dreamMarkdown || "No dream journal yet."}
             </pre>
           </div>
+        </div>
+
+        <div className="space-y-2">
+          <h3 className="text-xs font-semibold text-foreground">Collected Context</h3>
+          {normalizedGroups.length > 0 ? (
+            normalizedGroups.map((group) => {
+              const expanded = Boolean(expandedGroups[`normalized:${group.sourceId}`]);
+              const visibleItems = expanded ? group.items : group.items.slice(0, DEFAULT_VISIBLE_ITEMS);
+              return (
+                <div key={`normalized-${group.sourceId}`} className="rounded-2xl bg-foreground/[0.04] px-3 py-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-medium text-foreground">
+                      {group.sourceId} · {group.items.length} item(s)
+                    </div>
+                    {group.items.length > DEFAULT_VISIBLE_ITEMS && (
+                      <button
+                        type="button"
+                        onClick={() => toggleGroup(`normalized:${group.sourceId}`)}
+                        className="text-[10px] text-foreground/55"
+                      >
+                        {expanded ? "Show less" : `Show all ${group.items.length}`}
+                      </button>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    {visibleItems.map((item) => (
+                      <div key={item.key} className="rounded-2xl bg-black/[0.04] px-3 py-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-[11px] font-medium text-foreground">{item.title}</span>
+                          {item.connector && (
+                            <span className="rounded-full bg-white/60 px-2 py-0.5 text-[10px] text-foreground/55">
+                              {item.connector}
+                            </span>
+                          )}
+                        </div>
+                        {item.meta.length > 0 && (
+                          <div className="mt-1 flex flex-wrap gap-2 text-[10px] text-foreground/40">
+                            {item.meta.map((metaValue, index) => (
+                              <span key={`${item.key}-meta-${index}`}>{metaValue}</span>
+                            ))}
+                          </div>
+                        )}
+                        <div className="mt-1 text-[11px] leading-5 text-foreground/60">{item.summary}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })
+          ) : (
+            <p className="text-[11px] text-foreground/45">No normalized input items for this run.</p>
+          )}
         </div>
 
         <div className="space-y-2">
@@ -404,12 +674,54 @@ export default function AutoDreamingSettings() {
           </pre>
         </details>
 
-        <details className="rounded-2xl bg-foreground/[0.04] px-3 py-3">
-          <summary className="cursor-pointer text-xs font-semibold text-foreground">Raw Inputs</summary>
-          <pre className="mt-2 max-h-48 overflow-auto rounded-2xl bg-black/[0.04] p-3 text-[10px] text-foreground/70">
-            {JSON.stringify(detail.detail.rawInputs, null, 2)}
-          </pre>
-        </details>
+        <div className="space-y-2">
+          <h3 className="text-xs font-semibold text-foreground">Goal Changes</h3>
+          {(detail.detail.goalDelta?.changes ?? []).length > 0 ? (
+            (detail.detail.goalDelta?.changes ?? []).map((change, index) => (
+              <div key={`goal-change-${index}`} className="rounded-2xl bg-foreground/[0.04] px-3 py-3 space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full bg-white/60 px-2 py-0.5 text-[10px] text-foreground/55">
+                    {String(change.action ?? "update")}
+                  </span>
+                  <span className="text-xs font-medium text-foreground">
+                    {goalChangeTitle(change, index)}
+                  </span>
+                </div>
+                <p className="text-[11px] text-foreground/55">{String(change.reason ?? "")}</p>
+                <pre className="max-h-40 overflow-auto rounded-2xl bg-black/[0.04] p-3 text-[10px] text-foreground/70">
+                  {JSON.stringify({ before: change.before ?? null, after: change.after ?? null }, null, 2)}
+                </pre>
+              </div>
+            ))
+          ) : (
+            <p className="text-[11px] text-foreground/45">No goal changes for this run.</p>
+          )}
+        </div>
+
+        <div className="space-y-2">
+          <h3 className="text-xs font-semibold text-foreground">Raw Connector Payloads</h3>
+          {connectorGroups.length > 0 ? connectorGroups.map((group) => (
+            <div key={`raw-${group.sourceId}`} className="space-y-2">
+              {group.connectors.map((connector) => (
+                <details key={`raw-${group.sourceId}-${connector.connectorId}`} className="rounded-2xl bg-foreground/[0.04] px-3 py-3">
+                  <summary className="cursor-pointer text-xs font-semibold text-foreground">
+                    {connector.connectorId} · {connector.itemCount} item(s)
+                  </summary>
+                  <pre className="mt-2 max-h-64 overflow-auto rounded-2xl bg-black/[0.04] p-3 text-[10px] text-foreground/70">
+                    {JSON.stringify(connector.raw, null, 2)}
+                  </pre>
+                </details>
+              ))}
+            </div>
+          )) : (
+            <details className="rounded-2xl bg-foreground/[0.04] px-3 py-3">
+              <summary className="cursor-pointer text-xs font-semibold text-foreground">Raw Inputs</summary>
+              <pre className="mt-2 max-h-64 overflow-auto rounded-2xl bg-black/[0.04] p-3 text-[10px] text-foreground/70">
+                {JSON.stringify(detail.detail.rawInputs, null, 2)}
+              </pre>
+            </details>
+          )}
+        </div>
 
         <button
           type="button"
@@ -418,6 +730,21 @@ export default function AutoDreamingSettings() {
           className="w-full rounded-2xl bg-primary px-3 py-2 text-xs font-medium text-primary-foreground disabled:opacity-50"
         >
           {detail.run.appliedAt ? "Applied" : detail.run.superseded ? "Superseded" : detail.run.status === "running" ? "Waiting For Completion" : "Apply Profile Changes"}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => void handleApplyGoals()}
+          disabled={Boolean((detail.run as AutoDreamingRun & { goalsAppliedAt?: string | null }).goalsAppliedAt) || detail.run.status !== "completed" || detail.run.superseded}
+          className="w-full rounded-2xl bg-foreground/[0.06] px-3 py-2 text-xs font-medium text-foreground disabled:opacity-50"
+        >
+          {(detail.run as AutoDreamingRun & { goalsAppliedAt?: string | null }).goalsAppliedAt
+            ? "Goal Changes Applied"
+            : detail.run.superseded
+              ? "Superseded"
+              : detail.run.status === "running"
+                ? "Waiting For Completion"
+                : "Apply Goal Changes"}
         </button>
       </div>
     );

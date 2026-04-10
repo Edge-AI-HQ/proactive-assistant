@@ -1,8 +1,8 @@
 /**
  * Re-export core Composio provider for CLI usage.
  *
- * CliRuntimeInput === CoreContext, so core's provider works directly.
- * All provider logic lives in src/core/domains/personal/provider.ts.
+ * CliRuntimeInput extends the core context shape, so the core provider works
+ * directly and stays in sync with server-side behavior.
  */
 export {
   type PersonalProvider,

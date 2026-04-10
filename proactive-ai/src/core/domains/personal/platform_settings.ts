@@ -29,8 +29,10 @@ const asString = (value: unknown): string | undefined => {
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
-const settingsPath = (homeDir: string) =>
-  appPaths.localSettings(resolveAppRoot(undefined, homeDir));
+const settingsPath = (
+  homeDir: string,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+) => appPaths.localSettings(resolveAppRoot(env, homeDir));
 
 // ── In-memory settings cache ──
 // Eliminates redundant disk reads across multiple calls per page load.
@@ -83,8 +85,12 @@ function writeRawSettings(path: string, raw: Record<string, unknown>): void {
  * Save a Composio API key to local-settings.json.
  * Merges with existing settings — only touches `composio.apiKey`.
  */
-export const savePlatformApiKey = (homeDir: string, apiKey: string): void => {
-  const path = settingsPath(homeDir);
+export const savePlatformApiKey = (
+  homeDir: string,
+  apiKey: string,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): void => {
+  const path = settingsPath(homeDir, env);
   const existing = { ...readRawSettings(path) };
   existing.composio = { ...asObject(existing.composio), apiKey };
   writeRawSettings(path, existing);
@@ -95,8 +101,9 @@ export const saveAccountIdentity = (
   homeDir: string,
   connectedAccountId: string,
   identity: AccountIdentity,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): void => {
-  const path = settingsPath(homeDir);
+  const path = settingsPath(homeDir, env);
   const existing = { ...readRawSettings(path) };
   const composio = asObject(existing.composio);
   const identities = { ...asObject(composio.accountIdentities), [connectedAccountId]: identity };
@@ -108,8 +115,9 @@ export const saveAccountIdentity = (
 export const deleteAccountIdentity = (
   homeDir: string,
   connectedAccountId: string,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): void => {
-  const path = settingsPath(homeDir);
+  const path = settingsPath(homeDir, env);
   const existing = { ...readRawSettings(path) };
   const composio = asObject(existing.composio);
   const identities = { ...asObject(composio.accountIdentities) };
@@ -122,8 +130,9 @@ export const deleteAccountIdentity = (
 export const pruneOrphanIdentities = (
   homeDir: string,
   activeAccountIds: Set<string>,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): void => {
-  const path = settingsPath(homeDir);
+  const path = settingsPath(homeDir, env);
   const existing = { ...readRawSettings(path) };
   const composio = asObject(existing.composio);
   const identities = asObject(composio.accountIdentities);
@@ -168,10 +177,12 @@ function parseComposioSettings(composio: Record<string, unknown>): PersonalPlatf
   };
 }
 
-export const loadPlatformSettings = (homeDir: string): PersonalPlatformSettings => {
-  const path = settingsPath(homeDir);
+export const loadPlatformSettings = (
+  homeDir: string,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): PersonalPlatformSettings => {
+  const path = settingsPath(homeDir, env);
   const raw = readRawSettings(path);
-  // Return cached parsed result if raw hasn't changed
   if (_cachedParsed && _cachedPath === path) return _cachedParsed;
   const composio = asObject(raw.composio);
   const parsed = parseComposioSettings(composio);
@@ -193,12 +204,15 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
  * resolve to the same identity — connections created in the UI are
  * visible from the CLI and vice-versa.
  */
-export const loadOrCreateUserId = (homeDir: string): string => {
-  const root = resolveAppRoot(undefined, homeDir);
+export const loadOrCreateUserId = (
+  homeDir: string,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): string => {
+  const root = resolveAppRoot(env, homeDir);
   const path = appPaths.localSettings(root);
 
   // 1. Already in local-settings.json?
-  const settings = loadPlatformSettings(homeDir);
+  const settings = loadPlatformSettings(homeDir, env);
   if (settings.userId && UUID_RE.test(settings.userId)) {
     return settings.userId;
   }

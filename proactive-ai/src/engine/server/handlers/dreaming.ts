@@ -2,6 +2,7 @@ import type { RouteContext } from "../types.js";
 import { json } from "../http-utils.js";
 import { buildDefaultCtx } from "../../pipeline/data-access.js";
 import {
+  applyDreamGoals,
   applyDreamProfile,
   getDreamRunDetail,
   listDreamRuns,
@@ -43,6 +44,17 @@ export async function handleDreaming(routeCtx: RouteContext): Promise<boolean> {
   if (applyMatch && req.method === "POST") {
     try {
       const run = await applyDreamProfile({ ctx, runId: applyMatch[1] });
+      json(res, 200, { ok: true, run });
+    } catch (error) {
+      json(res, 409, { ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+    return true;
+  }
+
+  const applyGoalsMatch = subpath.match(/^\/dreaming\/runs\/([^/]+)\/apply-goals$/);
+  if (applyGoalsMatch && req.method === "POST") {
+    try {
+      const run = await applyDreamGoals({ ctx, runId: applyGoalsMatch[1] });
       json(res, 200, { ok: true, run });
     } catch (error) {
       json(res, 409, { ok: false, error: error instanceof Error ? error.message : String(error) });
