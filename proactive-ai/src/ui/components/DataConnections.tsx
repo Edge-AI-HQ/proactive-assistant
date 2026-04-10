@@ -148,8 +148,12 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
   };
 
   const handleDisconnect = async (composioId: string) => {
+    const conn = composio.connections.find(
+      (c) => c.toolkit.toLowerCase() === composioId.toLowerCase() && c.connectedAccountId,
+    );
+    if (!conn?.connectedAccountId) return;
     setConnectingToolkit(composioId);
-    await composio.disconnectToolkit(composioId);
+    await composio.disconnectAccount(conn.connectedAccountId);
     setConnectingToolkit(null);
   };
 
