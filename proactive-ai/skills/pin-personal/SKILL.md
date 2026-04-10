@@ -64,6 +64,9 @@ pin personal exec --tool SLACK_FETCH_CONVERSATION_HISTORY \
 
 # 获取 Gmail 用户信息
 pin personal exec --tool GMAIL_GET_PROFILE --json
+
+# 多账户：指定具体 connected account（从 connections list 获取 connectedAccountId）
+pin personal exec --tool GMAIL_GET_PROFILE --account-id ca_xxx --json
 ```
 
 ### 5. 连接新应用（OAuth）

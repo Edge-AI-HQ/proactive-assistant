@@ -14,11 +14,6 @@ import { registerLoopCommands } from "./domains/loop/register.js";
 import { errorEnvelope } from "./output/envelope.js";
 import { ErrorType } from "./output/errors.js";
 import type { CliRuntimeInput, ResultRef, RunCliResult } from "./runtime.js";
-import {
-  appendCliTraceEvent,
-  appendRunTraceEvent,
-  redactCliArgv,
-} from "../engine/pipeline/trace.js";
 
 const createProgram = (runtime: CliRuntimeInput, resultRef: ResultRef): Command => {
   const program = new Command();
@@ -65,22 +60,6 @@ export async function runCli(
     homeDir: runtimeOverride?.homeDir || homedir(),
   };
   const program = createProgram(runtime, resultRef);
-  const startedAt = Date.now();
-  const startedAtIso = new Date(startedAt).toISOString();
-  const invocationId = `cli_${Math.random().toString(36).slice(2, 10)}`;
-  const traceContext = runtime.env.PIN_TRACE_CONTEXT || null;
-  const traceRunId = runtime.env.PIN_TRACE_RUN_ID || null;
-  const tracedArgs = redactCliArgv(argv);
-
-  await recordCliTrace("pin_cli.invoke", {
-    invocationId,
-    traceContext,
-    runId: traceRunId,
-    startedAt: startedAtIso,
-    domain: tracedArgs.domain,
-    command: tracedArgs.command,
-    argvRedacted: tracedArgs.argvRedacted,
-  });
 
   try {
     await program.parseAsync(["node", "pin", ...argv]);
@@ -89,7 +68,7 @@ export async function runCli(
       throw error;
     }
 
-    const failure = {
+    return {
       exitCode: 2,
       stdout: errorEnvelope(
         "cli",
@@ -100,16 +79,13 @@ export async function runCli(
         "run `pin --help` to see available commands",
       ),
     };
-    await recordCliResult(failure);
-    return failure;
   }
 
   if (resultRef.current) {
-    await recordCliResult(resultRef.current);
     return resultRef.current;
   }
 
-  const failure = {
+  return {
     exitCode: 2,
     stdout: errorEnvelope(
       "cli",
@@ -120,44 +96,4 @@ export async function runCli(
       "run `pin --help` to see available commands",
     ),
   };
-  await recordCliResult(failure);
-  return failure;
-
-  async function recordCliTrace(kind: string, attrs: Record<string, unknown>): Promise<void> {
-    const timestamp = new Date().toISOString();
-    const payload = {
-      timestamp,
-      kind,
-      ...attrs,
-    };
-
-    await appendCliTraceEvent(runtime, payload).catch(() => {});
-    if (traceRunId) {
-      await appendRunTraceEvent(runtime, traceRunId, {
-        timestamp,
-        phase: traceContext?.split(":")[0] ?? "pin-cli",
-        kind,
-        name: traceContext ?? tracedArgs.command,
-        attrs,
-      }).catch(() => {});
-    }
-  }
-
-  async function recordCliResult(result: RunCliResult): Promise<void> {
-    await recordCliTrace("pin_cli.result", {
-      invocationId,
-      traceContext,
-      runId: traceRunId,
-      startedAt: startedAtIso,
-      durationMs: Date.now() - startedAt,
-      domain: result.stdout.meta.domain,
-      command: result.stdout.meta.command,
-      argvRedacted: tracedArgs.argvRedacted,
-      exitCode: result.exitCode,
-      ok: result.stdout.ok,
-      requestId: result.stdout.meta.requestId,
-      timestamp: result.stdout.meta.timestamp,
-      errorCode: result.stdout.error?.code ?? null,
-    });
-  }
 }
