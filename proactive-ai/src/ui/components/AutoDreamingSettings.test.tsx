@@ -132,6 +132,21 @@ describe("AutoDreamingSettings", () => {
             interests: { before: [], after: [] },
             snapshots: { before: [], after: [] },
           },
+          goalDelta: {
+            changes: [
+              {
+                action: "create",
+                key: "review-inbox-threads",
+                reason: "Dreaming found a repeated inbox follow-up pattern.",
+                before: null,
+                after: {
+                  title: "Review inbox threads",
+                  priority: "medium",
+                  summary: "Keep inbox follow-ups visible.",
+                },
+              },
+            ],
+          },
           candidates: [{ id: "cand_1", title: "Review inbox" }],
           logPath: "/tmp/dream_1/events.log",
           logText: "{\"message\":\"run_completed\"}",
@@ -140,6 +155,22 @@ describe("AutoDreamingSettings", () => {
       .mockResolvedValueOnce(jsonResponse({
         ok: true,
         run: { id: "dream_1", status: "completed", appliedAt: "2026-04-09T01:00:00.000Z" },
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        ok: true,
+        runs: [
+          { id: "dream_1", status: "completed", trigger: "manual", startedAt: "2026-04-09T01:00:00.000Z", appliedAt: "2026-04-09T01:00:00.000Z", goalsAppliedAt: null },
+        ],
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        ok: true,
+        run: { id: "dream_1", status: "completed", appliedAt: "2026-04-09T01:00:00.000Z", goalsAppliedAt: "2026-04-09T01:05:00.000Z" },
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        ok: true,
+        runs: [
+          { id: "dream_1", status: "completed", trigger: "manual", startedAt: "2026-04-09T01:00:00.000Z", appliedAt: "2026-04-09T01:00:00.000Z", goalsAppliedAt: "2026-04-09T01:05:00.000Z" },
+        ],
       }));
 
     await act(async () => {
@@ -179,6 +210,8 @@ describe("AutoDreamingSettings", () => {
     expect(container.textContent).toContain("Show all 6");
     expect(container.textContent).toContain("Raw Connector Payloads");
     expect(container.textContent).toContain("personal");
+    expect(container.textContent).toContain("Goal Changes");
+    expect(container.textContent).toContain("Review inbox threads");
 
     const applyButton = Array.from(container.querySelectorAll("button")).find(
       (button) => button.textContent?.includes("Apply Profile Changes"),
@@ -196,6 +229,23 @@ describe("AutoDreamingSettings", () => {
       }),
     );
     expect(container.textContent).toContain("Applied");
+
+    const applyGoalsButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("Apply Goal Changes"),
+    ) as HTMLButtonElement | undefined;
+
+    await act(async () => {
+      applyGoalsButton?.click();
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/proactive-ai/api/dreaming/runs/dream_1/apply-goals",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    expect(container.textContent).toContain("Goal Changes Applied");
   });
 
   it("opens the new run detail immediately and shows running feedback", async () => {
@@ -229,6 +279,7 @@ describe("AutoDreamingSettings", () => {
           summary: { kind: "running", text: "Dreaming is collecting inputs and writing logs." },
           dreamMarkdownPath: null,
           dreamMarkdown: "",
+          goalDelta: { changes: [] },
           sourceBreakdown: [],
           profileDelta: {
             facts: { before: {}, after: {} },

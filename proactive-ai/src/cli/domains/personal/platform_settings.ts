@@ -20,8 +20,11 @@ const asString = (value: unknown): string | undefined => {
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
-export const loadPlatformSettings = (homeDir: string): PersonalPlatformSettings => {
-  const path = appPaths.localSettings(resolveAppRoot(undefined, homeDir));
+export const loadPlatformSettings = (
+  homeDir: string,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): PersonalPlatformSettings => {
+  const path = appPaths.localSettings(resolveAppRoot(env, homeDir));
   if (!existsSync(path)) {
     return {};
   }

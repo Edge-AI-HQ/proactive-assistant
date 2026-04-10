@@ -15,6 +15,7 @@ interface AutoDreamingRun {
   startedAt?: string;
   completedAt?: string | null;
   appliedAt?: string | null;
+  goalsAppliedAt?: string | null;
   superseded?: boolean;
   summaryJson?: { text?: string } | null;
   sourceStatsJson?: Record<string, { status?: string; count?: number; message?: string }> | null;
@@ -43,6 +44,7 @@ interface DreamRunDetailResponse {
     dreamMarkdownPath: string | null;
     dreamMarkdown: string;
     profileDelta: Record<string, unknown>;
+    goalDelta: { changes?: Array<Record<string, unknown>> };
     candidates: Array<Record<string, unknown>>;
     sourceBreakdown: DreamSourceBreakdown[];
     logPath: string | null;
@@ -148,6 +150,16 @@ function itemSummaryText(item: Record<string, unknown>): string {
     if (typeof candidate === "string" && candidate.trim().length > 0) return candidate;
   }
   return "No summary available.";
+}
+
+function goalChangeTitle(change: Record<string, unknown>, index: number): string {
+  const after = change.after && typeof change.after === "object" && !Array.isArray(change.after)
+    ? change.after as Record<string, unknown>
+    : null;
+  const before = change.before && typeof change.before === "object" && !Array.isArray(change.before)
+    ? change.before as Record<string, unknown>
+    : null;
+  return String(after?.title ?? before?.title ?? change.key ?? `Goal ${index + 1}`);
 }
 
 function normalizedSourceGroups(normalizedInputs: Record<string, unknown>): Array<{
@@ -378,6 +390,25 @@ export default function AutoDreamingSettings() {
       await loadHistory(true);
     } catch {
       setError("Failed to apply profile changes");
+    }
+  };
+
+  const handleApplyGoals = async () => {
+    if (!detail) return;
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await apiPost(`/api/dreaming/runs/${detail.run.id}/apply-goals`, {});
+      const data = await res.json() as { ok: boolean; run: AutoDreamingRun; error?: string };
+      if (!res.ok || !data.ok) {
+        setError(data.error ?? "Failed to apply goal changes");
+        return;
+      }
+      setDetail((current) => current ? { ...current, run: data.run } : current);
+      setNotice("Goal changes applied.");
+      await loadHistory(true);
+    } catch {
+      setError("Failed to apply goal changes");
     }
   };
 
@@ -644,6 +675,30 @@ export default function AutoDreamingSettings() {
         </details>
 
         <div className="space-y-2">
+          <h3 className="text-xs font-semibold text-foreground">Goal Changes</h3>
+          {(detail.detail.goalDelta?.changes ?? []).length > 0 ? (
+            (detail.detail.goalDelta?.changes ?? []).map((change, index) => (
+              <div key={`goal-change-${index}`} className="rounded-2xl bg-foreground/[0.04] px-3 py-3 space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full bg-white/60 px-2 py-0.5 text-[10px] text-foreground/55">
+                    {String(change.action ?? "update")}
+                  </span>
+                  <span className="text-xs font-medium text-foreground">
+                    {goalChangeTitle(change, index)}
+                  </span>
+                </div>
+                <p className="text-[11px] text-foreground/55">{String(change.reason ?? "")}</p>
+                <pre className="max-h-40 overflow-auto rounded-2xl bg-black/[0.04] p-3 text-[10px] text-foreground/70">
+                  {JSON.stringify({ before: change.before ?? null, after: change.after ?? null }, null, 2)}
+                </pre>
+              </div>
+            ))
+          ) : (
+            <p className="text-[11px] text-foreground/45">No goal changes for this run.</p>
+          )}
+        </div>
+
+        <div className="space-y-2">
           <h3 className="text-xs font-semibold text-foreground">Raw Connector Payloads</h3>
           {connectorGroups.length > 0 ? connectorGroups.map((group) => (
             <div key={`raw-${group.sourceId}`} className="space-y-2">
@@ -675,6 +730,21 @@ export default function AutoDreamingSettings() {
           className="w-full rounded-2xl bg-primary px-3 py-2 text-xs font-medium text-primary-foreground disabled:opacity-50"
         >
           {detail.run.appliedAt ? "Applied" : detail.run.superseded ? "Superseded" : detail.run.status === "running" ? "Waiting For Completion" : "Apply Profile Changes"}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => void handleApplyGoals()}
+          disabled={Boolean((detail.run as AutoDreamingRun & { goalsAppliedAt?: string | null }).goalsAppliedAt) || detail.run.status !== "completed" || detail.run.superseded}
+          className="w-full rounded-2xl bg-foreground/[0.06] px-3 py-2 text-xs font-medium text-foreground disabled:opacity-50"
+        >
+          {(detail.run as AutoDreamingRun & { goalsAppliedAt?: string | null }).goalsAppliedAt
+            ? "Goal Changes Applied"
+            : detail.run.superseded
+              ? "Superseded"
+              : detail.run.status === "running"
+                ? "Waiting For Completion"
+                : "Apply Goal Changes"}
         </button>
       </div>
     );

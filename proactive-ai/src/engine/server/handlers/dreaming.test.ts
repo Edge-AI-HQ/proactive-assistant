@@ -8,6 +8,7 @@ const dreamingMocks = vi.hoisted(() => ({
   getDreamRunDetail: vi.fn(),
   startDreaming: vi.fn(),
   applyDreamProfile: vi.fn(),
+  applyDreamGoals: vi.fn(),
 }));
 
 vi.mock("../../dreaming/service.js", () => dreamingMocks);
@@ -132,6 +133,25 @@ describe("handleDreaming", () => {
       run: {
         id: "dream_3",
         appliedAt: "2026-04-09T01:00:00.000Z",
+      },
+    });
+  });
+
+  it("applies dream goal changes", async () => {
+    dreamingMocks.applyDreamGoals.mockResolvedValue({
+      id: "dream_4",
+      goalsAppliedAt: "2026-04-09T02:00:00.000Z",
+    });
+
+    const { ctx, response } = createContext("/dreaming/runs/dream_4/apply-goals", "POST");
+    await handleDreaming(ctx);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json).toEqual({
+      ok: true,
+      run: {
+        id: "dream_4",
+        goalsAppliedAt: "2026-04-09T02:00:00.000Z",
       },
     });
   });

@@ -407,7 +407,7 @@ export const createPersonalProvider = (
 ): PersonalProvider => {
   if (override) return override;
 
-  const platformSettings = loadPlatformSettings(runtime.homeDir);
+  const platformSettings = loadPlatformSettings(runtime.homeDir, runtime.env);
   const apiKey = runtime.env.COMPOSIO_API_KEY?.trim() || platformSettings.apiKey;
   if (!apiKey) return new NoopPersonalProvider();
 
@@ -435,7 +435,7 @@ export const createPersonalProvider = (
 
   const userId =
     runtime.env.COMPOSIO_USER_ID?.trim() ||
-    loadOrCreateUserId(runtime.homeDir);
+    loadOrCreateUserId(runtime.homeDir, runtime.env);
 
   return new PlatformPersonalProvider({
     apiKey,

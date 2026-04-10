@@ -23,15 +23,22 @@ const asString = (value: unknown): string | undefined => {
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
-const settingsPath = (homeDir: string) =>
-  appPaths.localSettings(resolveAppRoot(undefined, homeDir));
+const settingsPath = (
+  homeDir: string,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+) =>
+  appPaths.localSettings(resolveAppRoot(env, homeDir));
 
 /**
  * Save a Composio API key to local-settings.json.
  * Merges with existing settings — only touches `composio.apiKey`.
  */
-export const savePlatformApiKey = (homeDir: string, apiKey: string): void => {
-  const path = settingsPath(homeDir);
+export const savePlatformApiKey = (
+  homeDir: string,
+  apiKey: string,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): void => {
+  const path = settingsPath(homeDir, env);
   let existing: Record<string, unknown> = {};
   if (existsSync(path)) {
     try {
@@ -44,8 +51,11 @@ export const savePlatformApiKey = (homeDir: string, apiKey: string): void => {
   writeFileSync(path, JSON.stringify(existing, null, 2), { encoding: "utf-8", mode: 0o600 });
 };
 
-export const loadPlatformSettings = (homeDir: string): PersonalPlatformSettings => {
-  const path = settingsPath(homeDir);
+export const loadPlatformSettings = (
+  homeDir: string,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): PersonalPlatformSettings => {
+  const path = settingsPath(homeDir, env);
   if (!existsSync(path)) {
     return {};
   }
@@ -92,12 +102,15 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
  * resolve to the same identity — connections created in the UI are
  * visible from the CLI and vice-versa.
  */
-export const loadOrCreateUserId = (homeDir: string): string => {
-  const root = resolveAppRoot(undefined, homeDir);
+export const loadOrCreateUserId = (
+  homeDir: string,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): string => {
+  const root = resolveAppRoot(env, homeDir);
   const settingsFile = appPaths.localSettings(root);
 
   // 1. Already in local-settings.json?
-  const settings = loadPlatformSettings(homeDir);
+  const settings = loadPlatformSettings(homeDir, env);
   if (settings.userId && UUID_RE.test(settings.userId)) {
     return settings.userId;
   }

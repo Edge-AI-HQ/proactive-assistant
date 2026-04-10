@@ -682,13 +682,13 @@ export const createPersonalProvider = (
 ): PersonalProvider => {
   if (override) return override;
 
-  const platformSettings = loadPlatformSettings(ctx.homeDir);
+  const platformSettings = loadPlatformSettings(ctx.homeDir, ctx.env);
   const apiKey = ctx.env.COMPOSIO_API_KEY?.trim() || platformSettings.apiKey;
   if (!apiKey) return new NoopPersonalProvider();
 
   const userId =
     ctx.env.COMPOSIO_USER_ID?.trim() ||
-    loadOrCreateUserId(ctx.homeDir);
+    loadOrCreateUserId(ctx.homeDir, ctx.env);
   const authConfigMap = (() => {
     try {
       const fromEnv = JSON.parse(ctx.env.COMPOSIO_AUTH_CONFIG_MAP_JSON ?? "{}") as Record<string, string>;

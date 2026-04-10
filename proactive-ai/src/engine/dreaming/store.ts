@@ -27,6 +27,18 @@ export interface DreamProfileDelta {
   snapshots: DreamProfileFieldDelta<Array<Record<string, unknown>>>;
 }
 
+export interface DreamGoalDeltaChange {
+  action: "create" | "update" | "close";
+  key: string;
+  reason: string;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+}
+
+export interface DreamGoalDelta {
+  changes: DreamGoalDeltaChange[];
+}
+
 export interface DreamRunRecord {
   id: string;
   trigger: DreamTrigger;
@@ -38,8 +50,10 @@ export interface DreamRunRecord {
   sourceStatsJson: Record<string, unknown> | null;
   summaryJson: DreamSummary | null;
   profileDeltaJson: DreamProfileDelta | null;
+  goalDeltaJson: DreamGoalDelta | null;
   artifactDir: string | null;
   appliedAt: string | null;
+  goalsAppliedAt: string | null;
   errorMessage: string | null;
   superseded: boolean;
 }
@@ -55,6 +69,7 @@ interface CompleteDreamRunInput {
   sourceStats: Record<string, unknown>;
   summary: DreamSummary;
   profileDelta: DreamProfileDelta;
+  goalDelta: DreamGoalDelta;
   completedAt?: string;
 }
 
@@ -95,14 +110,25 @@ export class DreamRunStore {
         source_stats_json TEXT,
         summary_json TEXT,
         profile_delta_json TEXT,
+        goal_delta_json TEXT,
         artifact_dir TEXT,
         applied_at TEXT,
+        goals_applied_at TEXT,
         error_message TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_proactive_dream_runs_completed_at
         ON proactive_dream_runs(completed_at DESC);
     `);
+
+    const columns = this.db.prepare(`PRAGMA table_info(proactive_dream_runs)`).all() as Array<{ name: string }>;
+    const columnNames = new Set(columns.map((column) => column.name));
+    if (!columnNames.has("goal_delta_json")) {
+      this.db.exec(`ALTER TABLE proactive_dream_runs ADD COLUMN goal_delta_json TEXT`);
+    }
+    if (!columnNames.has("goals_applied_at")) {
+      this.db.exec(`ALTER TABLE proactive_dream_runs ADD COLUMN goals_applied_at TEXT`);
+    }
   }
 
   private rowToRecord(row: Record<string, unknown> | undefined): DreamRunRecord | null {
@@ -118,8 +144,10 @@ export class DreamRunStore {
       sourceStatsJson: asObject((row.source_stats_json as string | null) ?? null),
       summaryJson: (asObject((row.summary_json as string | null) ?? null) as DreamSummary | null),
       profileDeltaJson: (asObject((row.profile_delta_json as string | null) ?? null) as DreamProfileDelta | null),
+      goalDeltaJson: (asObject((row.goal_delta_json as string | null) ?? null) as DreamGoalDelta | null),
       artifactDir: row.artifact_dir ? String(row.artifact_dir) : null,
       appliedAt: row.applied_at ? String(row.applied_at) : null,
+      goalsAppliedAt: row.goals_applied_at ? String(row.goals_applied_at) : null,
       errorMessage: row.error_message ? String(row.error_message) : null,
       superseded: false,
     };
@@ -164,6 +192,7 @@ export class DreamRunStore {
           source_stats_json = ?,
           summary_json = ?,
           profile_delta_json = ?,
+          goal_delta_json = ?,
           artifact_dir = ?,
           error_message = NULL
       WHERE id = ?
@@ -172,6 +201,7 @@ export class DreamRunStore {
       JSON.stringify(input.sourceStats),
       JSON.stringify(input.summary),
       JSON.stringify(input.profileDelta),
+      JSON.stringify(input.goalDelta),
       input.artifactDir,
       id,
     );
@@ -248,6 +278,36 @@ export class DreamRunStore {
     this.db.prepare(`
       UPDATE proactive_dream_runs
       SET applied_at = ?
+      WHERE id = ?
+    `).run(appliedAt, id);
+    return this.getRun(id) as DreamRunRecord;
+  }
+
+  assertCanApplyGoals(id: string): DreamRunRecord {
+    const run = this.getRun(id);
+    if (!run) {
+      throw new Error(`Dream run ${id} not found`);
+    }
+    if (run.goalsAppliedAt) {
+      return run;
+    }
+    if (run.superseded) {
+      throw new Error(`Dream run ${id} is superseded and cannot apply goal changes`);
+    }
+    if (run.status !== "completed") {
+      throw new Error(`Dream run ${id} is not completed`);
+    }
+    return run;
+  }
+
+  markGoalsApplied(id: string, appliedAt = new Date().toISOString()): DreamRunRecord {
+    const run = this.assertCanApplyGoals(id);
+    if (run.goalsAppliedAt) {
+      return run;
+    }
+    this.db.prepare(`
+      UPDATE proactive_dream_runs
+      SET goals_applied_at = ?
       WHERE id = ?
     `).run(appliedAt, id);
     return this.getRun(id) as DreamRunRecord;
