@@ -173,4 +173,60 @@ describe("NowFeed feedback logging", () => {
     expect(onOpenChat).toHaveBeenCalledWith("card_1_1");
     expect(onExecute).toHaveBeenCalledWith("Review queue with Alex");
   });
+
+  it("logs Chinese titles with a non-empty unicode-safe intent key", async () => {
+    await act(async () => {
+      root.render(
+        <NowFeed
+          cards={[
+            {
+              id: "card_cn_1",
+              goalBasket: "work",
+              title: "买房首付规划",
+              whyNow: "最近在看房，贷款窗口也合适。",
+              summary: "先把首付节奏和现金流计划列出来。",
+              primaryAction: { label: "开始规划", type: "confirm" },
+              secondaryActions: [
+                { label: "Modify", type: "modify" },
+                { label: "Later", type: "snooze" },
+                { label: "Dismiss", type: "dismiss" },
+              ],
+              confidence: 0.84,
+              urgency: 0.81,
+              importance: 0.9,
+              sources: ["notes"],
+              agentChain: ["planner", "generator"],
+              createdAt: "2026-04-11",
+            },
+          ]}
+          scoreMap={{}}
+          isRunning={false}
+          activePhase={null}
+          onExecute={vi.fn()}
+          onOpenChat={vi.fn()}
+        />,
+      );
+    });
+
+    const title = Array.from(container.querySelectorAll("h3")).find(
+      (node) => node.textContent === "买房首付规划",
+    );
+    expect(title).toBeTruthy();
+
+    await act(async () => {
+      title?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(apiPost).toHaveBeenCalledWith("/api/feedback", {
+      kind: "card_open",
+      intentCardId: "card_cn_1",
+      basket: "work",
+      channel: "web",
+      metadata: {
+        intentKey: "work:买房首付规划",
+        surface: "now_feed",
+      },
+    });
+  });
 });
