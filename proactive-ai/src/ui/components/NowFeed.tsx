@@ -6,6 +6,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { IntentCard, EvaluationScore } from "../hooks/use-pipeline";
+import { makeIntentKey } from "@shared/intent-key";
 import AiLanding from "./AiLanding";
 
 const BASKET_META: Record<string, { icon: LucideIcon; label: string }> = {
@@ -45,21 +46,13 @@ async function recordFeedback(params: {
   } catch { /* best-effort, don't block UI */ }
 }
 
-function slugifyIntentKey(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
 function buildFeedbackMetadata(
   card: IntentCard,
   runId?: string | null,
 ): FeedbackMetadata {
   return {
     ...(runId ? { runId } : {}),
-    intentKey: `${card.goalBasket.toLowerCase()}:${slugifyIntentKey(card.title)}`,
+    intentKey: makeIntentKey(card.goalBasket, card.title),
     surface: "now_feed",
   };
 }

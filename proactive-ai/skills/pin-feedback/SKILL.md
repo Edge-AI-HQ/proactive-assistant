@@ -10,7 +10,12 @@ metadata:
 
 # feedback
 
-**先读取 [`../pin-shared/SKILL.md`](../pin-shared/SKILL.md)**
+## Shared contract
+
+- 默认使用 `--json`（或 `--format json`）读取结构化结果
+- 出错先看 `error.hint`
+- 写操作优先先跑 `--dry-run`
+- 不确定参数时先用 `pin sys schema --json` 或 `pin sys schema <domain.command> --json`
 
 ## 核心场景
 

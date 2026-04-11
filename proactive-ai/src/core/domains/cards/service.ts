@@ -5,6 +5,7 @@ import { PinDatabaseManager } from "../../db/database.js";
 import { resolveAppRootFromCtx } from "../../paths.js";
 import type { CoreContext } from "../../context.js";
 import type { IntentCard } from "../../types/intent-card.js";
+import { makeTitleKey } from "../../../shared/intent-key.js";
 import {
   validateEnum,
   parseSinceToISO,
@@ -30,12 +31,7 @@ const createRepository = async (
   return new GeneratedIntentCardRepository(manager.open("pin"));
 };
 
-export const normalizeTitleKey = (title: string): string =>
-  title
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+export const normalizeTitleKey = (title: string): string => makeTitleKey(title);
 
 const sanitizeCard = (card: IntentCard): void => {
   validateEnum("goalBasket", card.goalBasket, VALID_BASKETS);
