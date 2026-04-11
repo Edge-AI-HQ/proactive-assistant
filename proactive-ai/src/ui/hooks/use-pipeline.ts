@@ -1,8 +1,15 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { apiFetch } from "@/lib/api";
-import type { IntentCard, IntentCardAction, EvaluationScore, EvaluatorOutput } from "@shared/intent-card";
+import type {
+  IntentCard,
+  IntentCardAction,
+  EvaluationScore,
+  EvaluatorOutput,
+  PipelineCompletionStatus,
+  PipelineWarning,
+} from "@shared/intent-card";
 
-export type { IntentCard, IntentCardAction, EvaluationScore, EvaluatorOutput };
+export type { IntentCard, IntentCardAction, EvaluationScore, EvaluatorOutput, PipelineWarning };
 
 const STORAGE_KEY = "proactive-ai-run-state";
 
@@ -30,6 +37,8 @@ export interface RunState {
   iterationDetails: Record<number, { cards?: IntentCard[]; evaluation?: EvaluatorOutput }>;
   scoreMap: Record<string, EvaluationScore>;
   logEntries: LogEntry[];
+  completionStatus: PipelineCompletionStatus | null;
+  warnings: PipelineWarning[];
   error: string | null;
   totalIterations: number;
 }
@@ -55,7 +64,7 @@ function createInitialRunState(): RunState {
     runId: null,
     status: "idle", maxIterations: null, activeIteration: null, activePhase: null,
     startedAt: null, completedAt: null, finalCards: [], iterationDetails: {},
-    scoreMap: {}, logEntries: [], error: null, totalIterations: 0,
+    scoreMap: {}, logEntries: [], completionStatus: null, warnings: [], error: null, totalIterations: 0,
   };
 }
 
@@ -129,9 +138,14 @@ export function usePipeline() {
             activePhase: "complete",
             finalCards: data.lastResult.finalCards ?? [],
             totalIterations: data.lastResult.totalIterations ?? 0,
+            completionStatus: data.lastResult.completionStatus ?? "complete",
+            warnings: data.lastResult.warnings ?? [],
             completedAt: data.lastResult.completedAt ?? new Date().toISOString(),
           }));
           appendLog(makeLogEntry("system", "Recovered results", `${data.lastResult.finalCards?.length ?? 0} cards from previous run`));
+          if ((data.lastResult.warnings?.length ?? 0) > 0) {
+            appendLog(makeLogEntry("warning", "Recovered with warnings", (data.lastResult.warnings as PipelineWarning[]).map((warning) => warning.message).join(" | ")));
+          }
         }
       } catch { /* /api/status not available */ }
     }
@@ -209,9 +223,14 @@ export function usePipeline() {
               ...prev, runId: data.lastResult.id ?? prev.runId, status: "complete", activePhase: "complete",
               finalCards: data.lastResult.finalCards,
               totalIterations: data.lastResult.totalIterations,
+              completionStatus: data.lastResult.completionStatus ?? "complete",
+              warnings: data.lastResult.warnings ?? [],
               completedAt: data.lastResult.completedAt,
             }));
             appendLog(makeLogEntry("complete", "Pipeline complete", `${data.lastResult.finalCards.length} cards (recovered)`));
+            if ((data.lastResult.warnings?.length ?? 0) > 0) {
+              appendLog(makeLogEntry("warning", "Recovered with warnings", (data.lastResult.warnings as PipelineWarning[]).map((warning) => warning.message).join(" | ")));
+            }
             setHealth((h) => ({ ...h, pipelineRunning: false }));
             return;
           }
@@ -264,8 +283,17 @@ export function usePipeline() {
             completedAt: new Date().toISOString(),
             finalCards: event.data.finalCards,
             totalIterations: event.data.totalIterations,
+            completionStatus: event.data.completionStatus ?? "complete",
+            warnings: event.data.warnings ?? [],
           }));
-          appendLog(makeLogEntry("complete", "Pipeline complete", `${event.data.finalCards.length} cards selected after ${event.data.totalIterations} iterations`));
+          appendLog(makeLogEntry(
+            "complete",
+            event.data.completionStatus === "partial" ? "Pipeline complete (partial)" : "Pipeline complete",
+            `${event.data.finalCards.length} cards selected after ${event.data.totalIterations} iterations`,
+          ));
+          if ((event.data.warnings?.length ?? 0) > 0) {
+            appendLog(makeLogEntry("warning", "Pipeline warnings", (event.data.warnings as PipelineWarning[]).map((warning) => warning.message).join(" | ")));
+          }
           setHealth((h) => ({ ...h, pipelineRunning: false }));
           closeSource();
           break;

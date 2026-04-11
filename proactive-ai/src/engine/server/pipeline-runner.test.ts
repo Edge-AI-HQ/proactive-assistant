@@ -69,6 +69,8 @@ describe("executeIncrementalPipeline", () => {
     runPipeline.mockResolvedValue({
       runId: "run_manual_abc",
       iterations: [],
+      completionStatus: "complete",
+      warnings: [],
       finalCards: [
         {
           id: "card_1_1",
@@ -138,5 +140,56 @@ describe("executeIncrementalPipeline", () => {
       pending: 0,
     });
     expect(recordGeneratedBatch).not.toHaveBeenCalled();
+  });
+
+  it("passes through cardsPerIteration, agentTimeoutMs, and minAgeMs", async () => {
+    pinCliData.mockResolvedValue({
+      runToken: "rt_456",
+      generatedAt: "2026-04-10T10:00:00.000Z",
+      items: { world: [], personal: [] },
+      meta: { pendingCount: 1, oldestPendingAt: "2026-04-10T09:30:00.000Z" },
+    });
+    runPipeline.mockResolvedValue({
+      runId: "run_auto_cfg",
+      iterations: [],
+      completionStatus: "complete",
+      warnings: [],
+      finalCards: [],
+      totalIterations: 0,
+    });
+    runPinCli.mockResolvedValue({
+      ok: true,
+      data: { processedCount: 1 },
+    });
+    recordGeneratedBatch.mockResolvedValue([]);
+
+    await executeIncrementalPipeline(
+      {
+        logger: { info() {}, warn() {}, error() {} },
+      } as never,
+      {
+        trigger: "auto",
+        cardsPerIteration: 5,
+        agentTimeoutMs: 123_000,
+        minAgeMs: 60_000,
+      },
+    );
+
+    expect(pinCliData).toHaveBeenCalledWith([
+      "context",
+      "incremental",
+      "--limit",
+      "200",
+      "--min-age-ms",
+      "60000",
+    ]);
+    expect(runPipeline).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        cardsPerIteration: 5,
+        agentTimeoutMs: 123_000,
+      }),
+      undefined,
+    );
   });
 });

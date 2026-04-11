@@ -6,6 +6,7 @@
  */
 
 import { buildOutputLanguageInstruction } from "./output-language.js";
+import { PIN_CLI_COMMAND_GUIDE } from "./pin-cli-command-guide.js";
 import {
   DEFAULT_GENERATION_LANGUAGE,
   type SupportedGenerationLanguage,
@@ -92,6 +93,8 @@ The Proactive AI system recommends pre-processed next-best-actions to the user. 
 
 You have access to the \`pin\` CLI. The full command reference is in the loaded skill documents. Use it to query: profile, personal connections, world events, push history, feedback, and recent generated cards — whatever you judge necessary to make a good plan.
 </context>
+
+${PIN_CLI_COMMAND_GUIDE}
 
 <quality_criteria>
 Each planned intent must satisfy ALL of these:

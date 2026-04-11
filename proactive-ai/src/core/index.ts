@@ -106,6 +106,10 @@ export {
   type EvaluationScore,
   type EvaluatorOutput,
   type PipelineIteration,
+  type PipelineIterationPhase,
+  type PipelineCompletionStatus,
+  type PipelineWarning,
+  type PipelineWarningFallback,
   type PipelineResult,
   type ServerEvent,
 } from "./types/intent-card.js";

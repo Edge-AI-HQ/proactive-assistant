@@ -287,6 +287,56 @@ test("context incremental and loop commit support agent-style consumption", asyn
   }
 });
 
+test("context incremental honors min-age-ms threshold", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-context-min-age-cli-"));
+
+  try {
+    const runtime = {
+      env: { PIN_DATA_ROOT: root },
+      homeDir: "/Users/test",
+    };
+    const manager = new PinDatabaseManager(root);
+    await manager.init();
+    const repository = new LoopRepository(manager.open("pin"));
+    const nowIso = new Date().toISOString();
+
+    await repository.enqueuePending({
+      items: [
+        {
+          id: "world:recent",
+          source: "world",
+          kind: "headline",
+          createdAt: nowIso,
+          availableAt: nowIso,
+          status: "pending",
+          processedAt: null,
+          payload: {
+            id: "recent",
+            title: "Fresh headline",
+            provider: "fed",
+          },
+        },
+      ],
+    });
+
+    const incremental = (await runCli(
+      ["context", "incremental", "--min-age-ms", "60000", "--json"],
+      runtime,
+    )) as RunCliResult & {
+      stdout: PinEnvelope<{
+        runToken: string | null;
+        items: { world: Array<{ id: string; title: string }>; personal: unknown[] };
+      }>;
+    };
+
+    assert.equal(incremental.exitCode, 0);
+    assert.equal(incremental.stdout.data?.runToken, null);
+    assert.equal(incremental.stdout.data?.items.world.length, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("sys schema returns not found for unknown path", async () => {
   const result = await runCli(["sys", "schema", "unknown.cmd", "--json"]);
 

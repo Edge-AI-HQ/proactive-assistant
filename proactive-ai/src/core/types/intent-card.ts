@@ -38,6 +38,10 @@ export interface IntentCard {
 
 // ── Pipeline types ──
 
+export type PipelineIterationPhase = 'planning' | 'generating' | 'evaluating';
+export type PipelineCompletionStatus = 'complete' | 'partial';
+export type PipelineWarningFallback = 'previous_iteration' | 'synthetic_evaluation';
+
 export interface PlannerOutput {
   reasoning?: string;
   collectedContext: Record<string, unknown>;  // raw data gathered by Planner via pin CLI
@@ -85,18 +89,27 @@ export interface PipelineIteration {
   evaluation: EvaluatorOutput;
 }
 
+export interface PipelineWarning {
+  iteration: number;
+  phase: PipelineIterationPhase;
+  fallback: PipelineWarningFallback;
+  message: string;
+}
+
 export interface PipelineResult {
   runId: string;
   iterations: PipelineIteration[];
   finalCards: IntentCard[];
   totalIterations: number;
+  completionStatus: PipelineCompletionStatus;
+  warnings: PipelineWarning[];
 }
 
 // ── Server events (SSE) ──
 
 export type ServerEvent =
   | { type: 'pipeline:start'; data: { maxIterations: number } }
-  | { type: 'pipeline:iteration'; data: { iteration: number; phase: 'planning' | 'generating' | 'evaluating' } }
+  | { type: 'pipeline:iteration'; data: { iteration: number; phase: PipelineIterationPhase } }
   | { type: 'pipeline:cards'; data: { iteration: number; cards: IntentCard[] } }
   | { type: 'pipeline:evaluation'; data: { iteration: number; evaluation: EvaluatorOutput } }
   | { type: 'pipeline:complete'; data: PipelineResult }

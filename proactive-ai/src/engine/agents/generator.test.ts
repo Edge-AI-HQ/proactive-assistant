@@ -30,4 +30,19 @@ describe("buildGeneratorPrompt", () => {
     expect(prompt).not.toContain("## Recent User Feedback Signals");
     expect(prompt).not.toContain("## Recent Generated Card History");
   });
+
+  it("includes concrete pin CLI commands and schema fallback when extra data is needed", () => {
+    const prompt = buildGeneratorPrompt({
+      currentDate: "2026-04-07",
+      iterationNumber: 1,
+      plan: JSON.stringify({ intentsToGenerate: [] }),
+    });
+
+    expect(prompt).toContain("pin push history --since 14d --json");
+    expect(prompt).toContain("pin world shortlist --profile-id default --limit 10 --json");
+    expect(prompt).toContain("pin profile interests list --id default --kind topic --limit 20 --json");
+    expect(prompt).toContain("pin profile snapshot build --id default --view ranking --json");
+    expect(prompt).toContain("pin profile facts get --json");
+    expect(prompt).toContain("pin sys schema world.shortlist --json");
+  });
 });

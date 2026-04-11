@@ -209,6 +209,25 @@ export function ensureConfig(currentPluginDir?: string): void {
     }
   }
 
+  // skills.load.extraDirs — keep in sync with current plugin dir
+  if (currentPluginDir) {
+    const skillsDir = join(currentPluginDir, 'skills');
+    if (!config.skills) config.skills = {};
+    const skills = config.skills as Record<string, unknown>;
+    if (!skills.load) skills.load = {};
+    const skillsLoad = skills.load as Record<string, unknown>;
+    if (!Array.isArray(skillsLoad.extraDirs)) skillsLoad.extraDirs = [];
+    const extraDirs = skillsLoad.extraDirs as string[];
+    const cleanedDirs = extraDirs.filter((d: string) => existsSync(d));
+    if (!cleanedDirs.includes(skillsDir) && existsSync(skillsDir)) {
+      cleanedDirs.push(skillsDir);
+    }
+    if (JSON.stringify(cleanedDirs) !== JSON.stringify(extraDirs)) {
+      skillsLoad.extraDirs = cleanedDirs;
+      changed = true;
+    }
+  }
+
   // gateway.controlUi.allowInsecureAuth — needed for device-identity-free connections
   if (!config.gateway) config.gateway = {};
   const gw = config.gateway as Record<string, unknown>;
@@ -308,6 +327,19 @@ export function runSetup(pluginDir: string): void {
   const allow = plugins.allow as string[];
   if (!allow.includes('proactive-ai')) {
     allow.push('proactive-ai');
+  }
+
+  // skills.load.extraDirs — load plugin skills via extraDirs to avoid the
+  // plugin path-containment check that rejects symlinked/monorepo paths.
+  const skillsDir = join(pluginDir, 'skills');
+  if (!config.skills) config.skills = {};
+  const skills = config.skills as Record<string, unknown>;
+  if (!skills.load) skills.load = {};
+  const skillsLoad = skills.load as Record<string, unknown>;
+  if (!Array.isArray(skillsLoad.extraDirs)) skillsLoad.extraDirs = [];
+  const extraDirs = skillsLoad.extraDirs as string[];
+  if (!extraDirs.includes(skillsDir)) {
+    extraDirs.push(skillsDir);
   }
 
   writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n');

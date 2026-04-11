@@ -7,6 +7,7 @@
  */
 
 import { buildOutputLanguageInstruction } from "./output-language.js";
+import { PIN_CLI_COMMAND_GUIDE } from "./pin-cli-command-guide.js";
 import {
   DEFAULT_GENERATION_LANGUAGE,
   type SupportedGenerationLanguage,
@@ -83,6 +84,8 @@ Transform the Planner's intent plan into polished, ready-to-approve Intent Cards
 
 The Planner has already gathered user context data — it is included in the plan below under \`collectedContext\`. Use this data to craft specific, evidence-backed cards. If you need additional details beyond what the Planner collected, you have access to the \`pin\` CLI (command reference in loaded skill documents).
 </goal>
+
+${PIN_CLI_COMMAND_GUIDE}
 
 <plan>
 ${plan}

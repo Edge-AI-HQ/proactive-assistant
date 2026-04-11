@@ -14,17 +14,20 @@ export async function handleAutoRun(ctx: RouteContext): Promise<boolean> {
     return true;
   }
 
-  const pluginConfig = api.pluginConfig as Record<string, unknown>;
+  const pluginConfig = (api.pluginConfig ?? {}) as Record<string, unknown>;
   const minAgeMs = Number(pluginConfig['auto_process_min_age_ms'] ?? DEFAULT_CONFIG.auto_process_min_age_ms);
   const cooldownMs = Number(pluginConfig['auto_loop_min_interval_ms'] ?? DEFAULT_CONFIG.auto_loop_min_interval_ms);
   const maxIterations = Number(pluginConfig['max_iterations'] ?? DEFAULT_PIPELINE_OPTIONS.maxIterations);
   const agentTimeoutMs = Number(pluginConfig['agent_timeout_ms'] ?? DEFAULT_PIPELINE_OPTIONS.agentTimeoutMs);
+  const cardsPerIteration = Number(pluginConfig['cards_per_iteration'] ?? DEFAULT_PIPELINE_OPTIONS.cardsPerIteration ?? 8);
 
   try {
     const result = await executeIncrementalPipeline(api, {
       trigger: 'auto',
       maxIterations,
       agentTimeoutMs,
+      cardsPerIteration,
+      minAgeMs,
       cooldownMs,
       enforceCooldown: true,
     });

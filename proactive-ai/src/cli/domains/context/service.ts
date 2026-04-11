@@ -25,16 +25,17 @@ function toSimplePersonalItem(payload: Record<string, unknown>): Record<string, 
 
 export const getIncrementalContext = async (
   runtime: CliRuntimeInput,
-  input: { limit?: string },
+  input: { limit?: string; minAgeMs?: string },
 ): Promise<RunCliResult> => {
   const dataRoot = resolveAppRootFromCtx(runtime);
   const manager = new PinDatabaseManager(dataRoot);
   await manager.init();
   const repository = new LoopRepository(manager.open("pin"));
   const limit = Math.max(1, Number.parseInt(input.limit ?? "50", 10) || 50);
+  const minAgeMs = Math.max(0, Number.parseInt(input.minAgeMs ?? "0", 10) || 0);
   const context = await repository.createIncrementalContextRun({
     limit,
-    minAgeMs: 0,
+    minAgeMs,
   });
 
   if (!context) {
