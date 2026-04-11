@@ -235,7 +235,6 @@ export class ProactiveContainerOrchestrator {
     ready: boolean;
   }> {
     const containerName = `proactive-${userId.slice(0, 8)}`;
-    const gatewayToken = crypto.randomUUID();
 
     // Auto-provision LiteLLM virtual key for this user
     let litellmApiKey: string | null = null;
@@ -246,13 +245,6 @@ export class ProactiveContainerOrchestrator {
         console.error(`[proactive] Failed to provision LiteLLM key for user ${userId.slice(0, 8)}`, err);
       }
     }
-
-    const params: ProactiveContainerParams = {
-      userId,
-      containerName,
-      gatewayToken,
-      litellmApiKey,
-    };
 
     // Check if container already exists in DB
     let dbContainer = await getContainerForUser(userId);
@@ -276,15 +268,25 @@ export class ProactiveContainerOrchestrator {
       }
     }
 
-    // Create new container
-    await upsertContainer({
+    // Create new container — use upsertContainer's RETURNED token as the
+    // source of truth.  If a concurrent API machine already upserted a
+    // different token, we adopt it instead of overwriting.
+    const candidateToken = crypto.randomUUID();
+    const dbRecord = await upsertContainer({
       userId,
       containerName,
       runtimeProvider: config.container.runtime,
-      gatewayToken,
+      gatewayToken: candidateToken,
       status: 'creating',
     });
+    const gatewayToken = dbRecord.gateway_token;
 
+    const params: ProactiveContainerParams = {
+      userId,
+      containerName,
+      gatewayToken,
+      litellmApiKey,
+    };
     const env = buildContainerEnv(params);
 
     // Use createGenericContainer (no Telegram assumptions) if available,
