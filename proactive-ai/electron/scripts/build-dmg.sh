@@ -167,13 +167,16 @@ echo "==> [5/5] Building DMG..."
 cd "$ELECTRON_DIR"
 
 # Ensure electron deps are installed
+echo "  [5a] Installing Electron dependencies..."
 npm install 2>&1 | tail -5
 
 # Compile Electron TypeScript
+echo "  [5b] Compiling Electron TypeScript..."
 npm run build
 
 # Package into DMG
-npx electron-forge make 2>&1 | tail -20
+echo "  [5c] Packaging with electron-forge (this may take a while)..."
+npx electron-forge make
 
 echo ""
 echo "========================================="

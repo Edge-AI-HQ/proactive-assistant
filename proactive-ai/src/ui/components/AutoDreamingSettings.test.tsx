@@ -211,6 +211,7 @@ describe("AutoDreamingSettings", () => {
     expect(container.textContent).toContain("Raw Connector Payloads");
     expect(container.textContent).toContain("personal");
     expect(container.textContent).toContain("Goal Changes");
+    expect(container.textContent).toContain("Goal Diff");
     expect(container.textContent).toContain("Review inbox threads");
 
     const applyButton = Array.from(container.querySelectorAll("button")).find(
@@ -431,5 +432,101 @@ describe("AutoDreamingSettings", () => {
 
     expect(container.textContent).toContain("dream_same_day_5");
     expect(container.textContent).toContain("Show latest only");
+  });
+
+  it("uses connector itemCount metadata for raw payload counts", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({
+        ok: true,
+        enabled: false,
+        schedule: { type: "daily", hour: 6, minute: 0, timezone: "Asia/Shanghai" },
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        ok: true,
+        runs: [],
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        ok: true,
+        runs: [
+          { id: "dream_raw", status: "completed", trigger: "manual", startedAt: "2026-04-10T01:00:00.000Z", appliedAt: null },
+        ],
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        ok: true,
+        run: { id: "dream_raw", status: "completed", trigger: "manual", startedAt: "2026-04-10T01:00:00.000Z", appliedAt: null },
+        detail: {
+          rawInputs: {
+            personal: {
+              connectors: {
+                slack: {
+                  status: "ok",
+                  itemCount: 19,
+                  toolRuns: [
+                    {
+                      slug: "SLACK_SEARCH_ALL",
+                      itemCount: 19,
+                      payload: { messages: [{ text: "design update" }] },
+                    },
+                  ],
+                },
+                googlecalendar: {
+                  status: "ok",
+                  itemCount: 7,
+                  toolRuns: [
+                    {
+                      slug: "GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS",
+                      itemCount: 7,
+                      payload: { event_data: [{ summary: "Daily Sync" }] },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+          normalizedInputs: {},
+          summary: { kind: "updated", text: "Dream complete" },
+          dreamMarkdownPath: null,
+          dreamMarkdown: "journal",
+          sourceBreakdown: [],
+          profileDelta: {
+            facts: { before: {}, after: {} },
+            preferences: { before: {}, after: {} },
+            interests: { before: [], after: [] },
+            snapshots: { before: [], after: [] },
+          },
+          goalDelta: { changes: [] },
+          candidates: [],
+          logPath: null,
+          logText: "",
+        },
+      }));
+
+    await act(async () => {
+      root.render(<AutoDreamingSettings />);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const historyButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("View History"),
+    ) as HTMLButtonElement | undefined;
+
+    await act(async () => {
+      historyButton?.click();
+      await Promise.resolve();
+    });
+
+    const runButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("dream_raw"),
+    ) as HTMLButtonElement | undefined;
+
+    await act(async () => {
+      runButton?.click();
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain("slack · 19 item(s)");
+    expect(container.textContent).toContain("googlecalendar · 7 item(s)");
   });
 });

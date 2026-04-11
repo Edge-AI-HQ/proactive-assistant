@@ -103,12 +103,6 @@ export async function executeIncrementalPipeline(
         maxIterations,
         agentTimeoutMs,
         runId: `run_${input.trigger}_${Date.now().toString(36)}`,
-        incrementalContext: JSON.stringify({
-          runToken: context.runToken,
-          generatedAt: context.generatedAt,
-          items: context.items,
-          meta: context.meta,
-        }, null, 2),
         outputLanguage: input.outputLanguage,
       },
       input.onEvent,

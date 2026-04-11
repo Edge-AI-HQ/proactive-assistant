@@ -1,11 +1,11 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import * as core from "../../core/index.js";
-import { appPaths, profile } from "../../core/index.js";
+import { profile } from "../../core/index.js";
 import type { CoreContext } from "../../core/index.js";
 import {
   applyDreamGoals,
@@ -21,6 +21,41 @@ function createCtx(root: string): CoreContext {
   };
 }
 
+function createDreamApi(json?: string): Parameters<typeof runDreaming>[0]["api"] {
+  const content = json ?? `\`\`\`json
+{
+  "summary": {
+    "kind": "updated",
+    "text": "Dreaming found one concrete thread worth remembering.",
+    "highlights": ["Concrete work follow-up"]
+  },
+  "highlights": ["Concrete work follow-up"],
+  "candidateCards": [],
+  "journalMarkdown": "# Dreaming Journal\\n\\n## 2026-04-09 · manual\\n\\n今天我替你记下了一条还值得明天继续记住的工作线索。\\n",
+  "interestTopics": []
+}
+\`\`\``;
+
+  return {
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    runtime: {
+      subagent: {
+        run: vi.fn().mockResolvedValue({ runId: `dream-subagent-${Date.now().toString(36)}` }),
+        waitForRun: vi.fn().mockResolvedValue({ status: "ok" }),
+        getSessionMessages: vi.fn().mockResolvedValue({
+          messages: [
+            {
+              role: "assistant",
+              content,
+            },
+          ],
+        }),
+        deleteSession: vi.fn().mockResolvedValue(undefined),
+      },
+    },
+  } as unknown as Parameters<typeof runDreaming>[0]["api"];
+}
+
 async function seedProfile(ctx: CoreContext, locale = "en-US") {
   await profile.createProfile(ctx, {
     id: "default",
@@ -33,7 +68,7 @@ async function seedProfile(ctx: CoreContext, locale = "en-US") {
 }
 
 describe("runDreaming", () => {
-  it("creates artifacts and a completed run with minimal fallback synthesis when no runtime api is available", async () => {
+  it("fails fast when runtime subagent is unavailable", async () => {
     const root = mkdtempSync(join(tmpdir(), "dream-service-"));
     const ctx = createCtx(root);
     await seedProfile(ctx);
@@ -90,37 +125,15 @@ describe("runDreaming", () => {
       },
     ];
 
-    const result = await runDreaming({
+    await expect(runDreaming({
       ctx,
       trigger: "manual",
       now: new Date("2026-04-09T01:00:00.000Z"),
       sources,
-    });
-
-    expect(result.run.status).toBe("completed");
-    expect(result.run.summaryJson?.kind).toBe("updated");
-    expect(result.run.profileDeltaJson?.facts.after).toHaveProperty("dreaming");
-    expect(result.detail.candidates).toEqual([]);
-    expect(result.detail.summary.text).toContain("Dreaming collected");
-    expect(result.run.artifactDir).toContain(join(root, "dreams", "2026-04-09", `2026-04-09-01-manual-${result.run.id}`));
-    expect(existsSync(join(result.run.artifactDir as string, "inputs.raw.json"))).toBe(true);
-    expect(existsSync(join(result.run.artifactDir as string, "profile-delta.json"))).toBe(true);
-    expect(existsSync(join(result.run.artifactDir as string, "events.log"))).toBe(true);
-    expect(existsSync(join(root, "dreams", "logs", "2026-04-09.log"))).toBe(true);
-
-    const rawInputs = JSON.parse(
-      readFileSync(join(result.run.artifactDir as string, "inputs.raw.json"), "utf-8"),
-    ) as Record<string, unknown>;
-    expect(rawInputs).toHaveProperty("personal");
-    expect(rawInputs).toHaveProperty("feedback");
-
-    const runLog = readFileSync(join(result.run.artifactDir as string, "events.log"), "utf-8");
-    expect(runLog).toContain("run_started");
-    expect(runLog).toContain("source_collect_completed");
-    expect(result.detail.logText).toContain("run_completed");
+    })).rejects.toThrow(/runtime subagent/i);
   });
 
-  it("ignores OPENAI_API_KEY and stays on minimal fallback when runtime api is unavailable", async () => {
+  it("does not call fetch-based fallbacks when runtime subagent is unavailable", async () => {
     const root = mkdtempSync(join(tmpdir(), "dream-service-"));
     const ctx = createCtx(root);
     ctx.env.OPENAI_API_KEY = "sk-test";
@@ -136,7 +149,7 @@ describe("runDreaming", () => {
     globalThis.fetch = fetchSpy as typeof fetch;
 
     try {
-      const result = await runDreaming({
+      await expect(runDreaming({
         ctx,
         trigger: "manual",
         now: new Date("2026-04-10T06:23:57.648Z"),
@@ -185,125 +198,59 @@ describe("runDreaming", () => {
             },
           },
         ],
-      });
-      expect(result.detail.summary.text).toContain("等待子代理进一步总结这些上下文");
-      expect(result.detail.candidates).toEqual([]);
-      expect(result.detail.profileDelta.interests.after).toEqual([]);
+      })).rejects.toThrow(/runtime subagent/i);
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       globalThis.fetch = originalFetch;
     }
   });
 
-  it("keeps rich personal connector context when using the default personal collector", async () => {
+  it("collects dynamic connector context instead of hardcoded connector branches", async () => {
     const root = mkdtempSync(join(tmpdir(), "dream-service-"));
     const ctx = createCtx(root);
     await seedProfile(ctx);
 
-    const executeTool = vi.fn(async (slug: string, args?: Record<string, unknown>) => {
+    const executeTool = vi.fn(async (slug: string, args?: Record<string, unknown>, connectedAccountId?: string) => {
       if (slug === "GMAIL_FETCH_EMAILS") {
-        if (args?.page_token === "page-2") {
-          return {
-            tool: slug,
-            success: true,
-            error: null,
-            data: {
-              successful: true,
-              data_preview: {
-                messages: [
-                  {
-                    messageId: "gmail-3",
-                    threadId: "thread-3",
-                  },
-                ],
-                resultSizeEstimate: 3,
+        expect(connectedAccountId).toBe("gmail-1");
+        return {
+          tool: slug,
+          success: true,
+          error: null,
+          data: {
+            messages: [
+              {
+                subject: "Review Anthropic invoice",
+                sender: "Anthropic Billing <billing@anthropic.com>",
+                to: "smile@pinai.io",
+                labelIds: ["INBOX", "UNREAD"],
+                messageTimestamp: "2026-04-09T14:15:22Z",
+                display_url: "https://mail.google.com/mail/u/0/#inbox/example",
+                preview: {
+                  subject: "Review Anthropic invoice",
+                  body: "Invoice attached for March usage.",
+                },
+                messageText: "Invoice attached for March usage. Please review before Friday.",
               },
-            },
-          };
-        }
-        expect(args).toMatchObject({
-          ids_only: true,
-          max_results: 500,
-          query: expect.stringContaining("after:"),
-        });
-        return {
-          tool: slug,
-          success: true,
-          error: null,
-          data: {
-            successful: true,
-            data_preview: {
-              nextPageToken: "page-2",
-              messages: [
-                {
-                  messageId: "gmail-1",
-                  threadId: "thread-1",
+              {
+                subject: "Prepare board update",
+                sender: "Alex <alex@pinai.io>",
+                to: "smile@pinai.io",
+                labelIds: ["INBOX"],
+                messageTimestamp: "2026-04-09T06:45:00Z",
+                preview: {
+                  subject: "Prepare board update",
+                  body: "Need the topline metrics before the afternoon review.",
                 },
-                {
-                  messageId: "gmail-2",
-                  threadId: "thread-2",
-                },
-                "...more items",
-              ],
-              resultSizeEstimate: 3,
-            },
+                messageText: "Need the topline metrics before the afternoon review.",
+              },
+            ],
           },
         };
       }
-      if (slug === "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID") {
-        const messages: Record<string, Record<string, unknown>> = {
-          "gmail-1": {
-            messageId: "gmail-1",
-            subject: "Review Anthropic invoice",
-            sender: "Anthropic Billing <billing@anthropic.com>",
-            to: "smile@pinai.io",
-            labelIds: ["INBOX", "UNREAD"],
-            messageTimestamp: "2026-04-09T14:15:22Z",
-            display_url: "https://mail.google.com/mail/u/0/#inbox/example",
-            preview: {
-              subject: "Review Anthropic invoice",
-              body: "Invoice attached for March usage.",
-            },
-            messageText: "Invoice attached for March usage. Please review before Friday.",
-          },
-          "gmail-2": {
-            messageId: "gmail-2",
-            subject: "Prepare board update",
-            sender: "Alex <alex@pinai.io>",
-            to: "smile@pinai.io",
-            labelIds: ["INBOX"],
-            messageTimestamp: "2026-04-09T06:45:00Z",
-            preview: {
-              subject: "Prepare board update",
-              body: "Need the topline metrics before the afternoon review.",
-            },
-            messageText: "Need the topline metrics before the afternoon review.",
-          },
-          "gmail-3": {
-            messageId: "gmail-3",
-            subject: "Weekly metrics",
-            sender: "Ops <ops@pinai.io>",
-            to: "smile@pinai.io",
-            labelIds: ["INBOX"],
-            messageTimestamp: "2026-04-09T05:10:00Z",
-            preview: {
-              subject: "Weekly metrics",
-              body: "Metrics snapshot for yesterday.",
-            },
-            messageText: "Metrics snapshot for yesterday.",
-          },
-        };
-        return {
-          tool: slug,
-          success: true,
-          error: null,
-          data: {
-            successful: true,
-            data_preview: messages[String(args?.message_id)],
-          },
-        };
-      }
+
       if (slug === "GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS") {
+        expect(connectedAccountId).toBe("gcal-1");
         return {
           tool: slug,
           success: true,
@@ -318,38 +265,129 @@ describe("runDreaming", () => {
                 calendar: "smile@pinai.io",
                 display_url: "https://calendar.google.com/event?daily-sync",
               },
-              {
-                title: "[Reminder] Pin AI Team - Midweek Update",
-                start: "2026-04-09T08:00:00+08:00",
-                end: "2026-04-09T08:30:00+08:00",
-                is_all_day: false,
-                calendar: "smile@pinai.io",
-                display_url: "https://calendar.google.com/event/midweek",
-              },
             ],
-            calendars_queried: [{ id: "smile@pinai.io", summary: "smile@pinai.io" }],
-            events: [],
           },
         };
       }
+
+      if (slug === "SLACK_SEARCH_MESSAGES") {
+        expect(args).toMatchObject({
+          query: expect.stringContaining("after:2026-04-08"),
+        });
+        expect(connectedAccountId).toBe("slack-1");
+        return {
+          tool: slug,
+          success: true,
+          error: null,
+          data: {
+            messages: [
+              {
+                ts: "1775772000.000000",
+                text: "Xi shared the new big-ball design and asked for product feedback.",
+                channel: "pinai-team-2026",
+                permalink: "https://slack.com/archives/C123/p1775778000000000",
+              },
+            ],
+          },
+        };
+      }
+
+      if (slug === "GITHUB_LIST_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER") {
+        expect(args).toMatchObject({
+          since: "2026-04-08T23:00:00.000Z",
+          state: "all",
+        });
+        expect(connectedAccountId).toBe("github-1");
+        return {
+          tool: slug,
+          success: true,
+          error: null,
+          data: [
+            {
+              title: "Review PAT approval backlog",
+              body: "Members are waiting on PAT approval for the PIN-AI org.",
+              updated_at: "2026-04-09T21:19:31Z",
+              html_url: "https://github.com/PIN-AI/PIN-AI-ASSISTANT/issues/123",
+            },
+          ],
+        };
+      }
+
       return { tool: slug, success: true, error: null, data: [] };
     });
+
+    const searchTools = vi.fn(async (_query: string, options?: { toolkit?: string }) => {
+      switch (options?.toolkit) {
+        case "gmail":
+          return [{ slug: "GMAIL_FETCH_EMAILS", description: "Fetch Gmail messages" }];
+        case "googlecalendar":
+          return [{ slug: "GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS", description: "List calendar events" }];
+        case "slack":
+          return [{ slug: "SLACK_SEARCH_MESSAGES", description: "Search Slack messages" }];
+        case "github":
+          return [{ slug: "GITHUB_LIST_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER", description: "List assigned issues" }];
+        default:
+          return [];
+      }
+    });
+
+    const getToolSchema = vi.fn(async (slug: string) => ({
+      slug,
+      description: slug,
+      parameters: {
+        GMAIL_FETCH_EMAILS: {
+          type: "object",
+          properties: {
+            max_results: { type: "integer" },
+            query: { type: "string" },
+          },
+        },
+        GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS: {
+          type: "object",
+          required: ["time_min", "time_max"],
+          properties: {
+            time_min: { type: "string" },
+            time_max: { type: "string" },
+            summary_only: { type: "boolean" },
+          },
+        },
+        SLACK_SEARCH_MESSAGES: {
+          type: "object",
+          required: ["query"],
+          properties: {
+            query: { type: "string" },
+            count: { type: "integer" },
+            sort: { type: "string" },
+          },
+        },
+        GITHUB_LIST_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER: {
+          type: "object",
+          properties: {
+            since: { type: "string" },
+            state: { type: "string" },
+            filter: { type: "string" },
+            per_page: { type: "integer" },
+          },
+        },
+      }[slug] ?? {},
+    }));
 
     const providerSpy = vi.spyOn(core, "createPersonalProvider").mockReturnValue({
       async discoverConnections() {
         return [
           { toolkit: "gmail", status: "ACTIVE", connectedAccountId: "gmail-1", userInfo: null, redirectUrl: null },
           { toolkit: "googlecalendar", status: "ACTIVE", connectedAccountId: "gcal-1", userInfo: null, redirectUrl: null },
+          { toolkit: "slack", status: "ACTIVE", connectedAccountId: "slack-1", userInfo: null, redirectUrl: null },
+          { toolkit: "github", status: "ACTIVE", connectedAccountId: "github-1", userInfo: null, redirectUrl: null },
         ];
       },
       async checkConnections() { return []; },
       async connectApp() { throw new Error("not used"); },
       async waitForConnection() { throw new Error("not used"); },
-      async searchTools() { return []; },
-      async getToolSchema() { return null; },
+      searchTools,
+      getToolSchema,
       async disconnectAccount() { throw new Error("not used"); },
       async resolveAccountIdentity() { return null; },
-      executeTool,
       executeTool,
     });
 
@@ -358,55 +396,288 @@ describe("runDreaming", () => {
         ctx,
         trigger: "manual",
         now: new Date("2026-04-09T23:00:00.000Z"),
+        api: {
+          logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+          runtime: {
+            subagent: {
+              run: vi.fn().mockResolvedValue({ runId: "dream-subagent-dynamic" }),
+              waitForRun: vi.fn().mockResolvedValue({ status: "ok" }),
+              getSessionMessages: vi.fn().mockResolvedValue({
+                messages: [
+                  {
+                    role: "assistant",
+                    content: `\`\`\`json
+{
+  "summary": {
+    "kind": "updated",
+    "text": "我从 Slack、GitHub、Gmail 和日历里看到了值得跟进的工作线索。",
+    "highlights": ["Slack design thread", "GitHub PAT approvals"]
+  },
+  "highlights": ["Slack design thread", "GitHub PAT approvals"],
+  "candidateCards": [],
+  "journalMarkdown": "# Dreaming Journal\\n\\n## 2026-04-09 · manual\\n\\n今天我从 Slack、GitHub、Gmail 和日历里重新拼出了几条值得跟进的线索。\\n",
+  "interestTopics": ["slack", "github", "product"]
+}
+\`\`\``,
+                  },
+                ],
+              }),
+              deleteSession: vi.fn().mockResolvedValue(undefined),
+            },
+          },
+        } as unknown as Parameters<typeof runDreaming>[0]["api"],
       });
 
       const personalEntries = Array.isArray(result.detail.normalizedInputs.personal)
         ? result.detail.normalizedInputs.personal as Array<Record<string, unknown>>
         : [];
 
-      expect(personalEntries.length).toBeGreaterThanOrEqual(4);
+      expect(personalEntries.length).toBeGreaterThanOrEqual(5);
+      expect(personalEntries.some((entry) => entry.connector === "gmail")).toBe(true);
+      expect(personalEntries.some((entry) => entry.connector === "googlecalendar")).toBe(true);
+      expect(personalEntries.some((entry) => entry.connector === "slack")).toBe(true);
+      expect(personalEntries.some((entry) => entry.connector === "github")).toBe(true);
 
-      const gmailEntry = personalEntries.find((entry) => entry.connector === "gmail");
-      expect(gmailEntry).toMatchObject({
-        connector: "gmail",
-        title: "Review Anthropic invoice",
-        sender: "Anthropic Billing <billing@anthropic.com>",
-        preview: "Invoice attached for March usage.",
-        body: "Invoice attached for March usage. Please review before Friday.",
-      });
-      expect(gmailEntry?.labels).toEqual(["INBOX", "UNREAD"]);
-      expect(gmailEntry?.context).toContain("Anthropic Billing");
-      expect(gmailEntry?.context).toContain("Please review before Friday");
-      expect(personalEntries.filter((entry) => entry.connector === "gmail")).toHaveLength(3);
-      expect(executeTool).toHaveBeenCalledWith("GMAIL_FETCH_EMAILS", expect.objectContaining({
-        ids_only: true,
-        max_results: 500,
-      }), "gmail-1");
-      expect(executeTool).toHaveBeenCalledWith("GMAIL_FETCH_EMAILS", expect.objectContaining({
-        page_token: "page-2",
-      }), "gmail-1");
-      expect(executeTool).toHaveBeenCalledWith("GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID", {
-        message_id: "gmail-1",
-      }, "gmail-1");
-      expect(executeTool).toHaveBeenCalledWith("GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID", {
-        message_id: "gmail-2",
-      }, "gmail-1");
-      expect(executeTool).toHaveBeenCalledWith("GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID", {
-        message_id: "gmail-3",
-      }, "gmail-1");
-      expect(result.detail.sourceBreakdown[0]?.connectors?.find((item) => item.connectorId === "gmail")?.itemCount).toBe(3);
+      const slackEntry = personalEntries.find((entry) => entry.connector === "slack");
+      expect(JSON.stringify(slackEntry)).toContain("big-ball design");
 
-      const calendarEntry = personalEntries.find((entry) => entry.title === "Product & Engineering Daily Sync");
-      expect(calendarEntry).toMatchObject({
-        connector: "googlecalendar",
-        title: "Product & Engineering Daily Sync",
-        calendar: "smile@pinai.io",
-        start: "2026-04-09T07:30:00+08:00",
-        end: "2026-04-09T08:30:00+08:00",
+      const githubEntry = personalEntries.find((entry) => entry.connector === "github");
+      expect(JSON.stringify(githubEntry)).toContain("PAT approval");
+
+      expect(searchTools).toHaveBeenCalled();
+      expect(result.detail.dreamMarkdown).toContain("Slack、GitHub、Gmail 和日历");
+    } finally {
+      providerSpy.mockRestore();
+    }
+  });
+
+  it("prefers connector-specific read tools over misleading generic matches", async () => {
+    const root = mkdtempSync(join(tmpdir(), "dream-service-"));
+    const ctx = createCtx(root);
+    await seedProfile(ctx);
+
+    const executeTool = vi.fn(async (slug: string, args?: Record<string, unknown>, connectedAccountId?: string) => {
+      switch (slug) {
+        case "GMAIL_FETCH_EMAILS":
+          expect(connectedAccountId).toBe("gmail-1");
+          expect(args).toMatchObject({ max_results: 100, include_payload: true });
+          return {
+            tool: slug,
+            success: true,
+            error: null,
+            data: {
+              messages: [
+                {
+                  subject: "Review Anthropic invoice",
+                  preview: { body: "Invoice attached for March usage." },
+                  messageTimestamp: "2026-04-09T14:15:22Z",
+                },
+              ],
+            },
+          };
+        case "GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS":
+          expect(connectedAccountId).toBe("gcal-1");
+          expect(args).toMatchObject({
+            time_min: "2026-04-08T23:00:00.000Z",
+            time_max: "2026-04-09T23:00:00.000Z",
+            single_events: true,
+          });
+          expect(args).not.toHaveProperty("query");
+          return {
+            tool: slug,
+            success: true,
+            error: null,
+            data: {
+              event_data: [
+                {
+                  summary: "Product & Engineering Daily Sync",
+                  start: { dateTime: "2026-04-09T07:30:00+08:00" },
+                  htmlLink: "https://calendar.google.com/event?daily-sync",
+                },
+              ],
+            },
+          };
+        case "SLACK_SEARCH_ALL":
+          expect(connectedAccountId).toBe("slack-1");
+          expect(args).toMatchObject({
+            query: expect.stringContaining("after:2026-04-08"),
+            count: 100,
+            sort: "timestamp",
+          });
+          return {
+            tool: slug,
+            success: true,
+            error: null,
+            data: {
+              messages: [
+                {
+                  ts: "1775772000.000000",
+                  text: "Xi shared the new big-ball design and asked for product feedback.",
+                  channel: { name: "pinai-team-2026" },
+                  permalink: "https://slack.com/archives/C123/p1775772000000000",
+                },
+              ],
+            },
+          };
+        case "GITHUB_LIST_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER":
+          expect(connectedAccountId).toBe("github-1");
+          expect(args).toMatchObject({
+            since: "2026-04-08T23:00:00.000Z",
+            state: "all",
+            filter: "assigned",
+          });
+          return {
+            tool: slug,
+            success: true,
+            error: null,
+            data: [
+              {
+                title: "Review PAT approval backlog",
+                body: "Members are waiting on PAT approval for the PIN-AI org.",
+                updated_at: "2026-04-09T21:19:31Z",
+                html_url: "https://github.com/PIN-AI/PIN-AI-ASSISTANT/issues/123",
+              },
+            ],
+          };
+        default:
+          throw new Error(`unexpected tool ${slug}`);
+      }
+    });
+
+    const searchTools = vi.fn(async (_query: string, options?: { toolkit?: string }) => {
+      switch (options?.toolkit) {
+        case "gmail":
+          return [
+            { slug: "GMAIL_GET_PROFILE", description: "Get Gmail profile" },
+            { slug: "GMAIL_FETCH_EMAILS", description: "Fetch Gmail messages" },
+          ];
+        case "googlecalendar":
+          return [
+            { slug: "GOOGLECALENDAR_FIND_EVENT", description: "Find calendar events by search query" },
+            { slug: "GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS", description: "List calendar events across calendars" },
+          ];
+        case "slack":
+          return [
+            { slug: "SLACK_FIND_CHANNELS", description: "Find channels in Slack" },
+            { slug: "SLACK_SEARCH_ALL", description: "Search all Slack messages and files" },
+          ];
+        case "github":
+          return [
+            { slug: "GITHUB_AUTH_USER_DOCKER_CONFLICT_PACKAGES_LIST", description: "List Docker migration conflicts" },
+            { slug: "GITHUB_LIST_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER", description: "List issues assigned to the authenticated user" },
+          ];
+        default:
+          return [];
+      }
+    });
+
+    const getToolSchema = vi.fn(async (slug: string) => ({
+      slug,
+      description: slug,
+      parameters: {
+        GMAIL_GET_PROFILE: { type: "object", properties: {} },
+        GMAIL_FETCH_EMAILS: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+            max_results: { type: "integer" },
+            include_payload: { type: "boolean" },
+          },
+        },
+        GOOGLECALENDAR_FIND_EVENT: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+            max_results: { type: "integer" },
+          },
+        },
+        GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS: {
+          type: "object",
+          required: ["time_min", "time_max"],
+          properties: {
+            time_min: { type: "string" },
+            time_max: { type: "string" },
+            single_events: { type: "boolean" },
+            summary_only: { type: "boolean" },
+          },
+        },
+        SLACK_FIND_CHANNELS: {
+          type: "object",
+          required: ["query"],
+          properties: {
+            query: { type: "string" },
+            limit: { type: "integer" },
+          },
+        },
+        SLACK_SEARCH_ALL: {
+          type: "object",
+          required: ["query"],
+          properties: {
+            query: { type: "string" },
+            count: { type: "integer" },
+            sort: { type: "string" },
+            sort_dir: { type: "string" },
+          },
+        },
+        GITHUB_AUTH_USER_DOCKER_CONFLICT_PACKAGES_LIST: {
+          type: "object",
+          properties: {},
+        },
+        GITHUB_LIST_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER: {
+          type: "object",
+          properties: {
+            since: { type: "string" },
+            state: { type: "string" },
+            filter: { type: "string" },
+            per_page: { type: "integer" },
+            direction: { type: "string" },
+          },
+        },
+      }[slug] ?? {},
+    }));
+
+    const providerSpy = vi.spyOn(core, "createPersonalProvider").mockReturnValue({
+      async discoverConnections() {
+        return [
+          { toolkit: "gmail", status: "ACTIVE", connectedAccountId: "gmail-1", userInfo: null, redirectUrl: null },
+          { toolkit: "googlecalendar", status: "ACTIVE", connectedAccountId: "gcal-1", userInfo: null, redirectUrl: null },
+          { toolkit: "slack", status: "ACTIVE", connectedAccountId: "slack-1", userInfo: null, redirectUrl: null },
+          { toolkit: "github", status: "ACTIVE", connectedAccountId: "github-1", userInfo: null, redirectUrl: null },
+        ];
+      },
+      async checkConnections() { return []; },
+      async connectApp() { throw new Error("not used"); },
+      async waitForConnection() { throw new Error("not used"); },
+      searchTools,
+      getToolSchema,
+      async disconnectAccount() { throw new Error("not used"); },
+      async resolveAccountIdentity() { return null; },
+      executeTool,
+    });
+
+    try {
+      const result = await runDreaming({
+        ctx,
+        trigger: "manual",
+        now: new Date("2026-04-09T23:00:00.000Z"),
+        api: createDreamApi(),
       });
-      expect(calendarEntry?.context).toContain("Product & Engineering Daily Sync");
-      expect(calendarEntry?.context).toContain("smile@pinai.io");
-      expect(result.detail.dreamMarkdown).toContain("records collected context only");
+
+      const calledSlugs = executeTool.mock.calls.map(([slug]) => slug);
+      expect(calledSlugs).toContain("GMAIL_FETCH_EMAILS");
+      expect(calledSlugs).toContain("GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS");
+      expect(calledSlugs).toContain("SLACK_SEARCH_ALL");
+      expect(calledSlugs).toContain("GITHUB_LIST_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER");
+      expect(calledSlugs).not.toContain("GITHUB_AUTH_USER_DOCKER_CONFLICT_PACKAGES_LIST");
+      expect(calledSlugs).not.toContain("GOOGLECALENDAR_FIND_EVENT");
+      expect(calledSlugs).not.toContain("SLACK_FIND_CHANNELS");
+
+      const personalEntries = Array.isArray(result.detail.normalizedInputs.personal)
+        ? result.detail.normalizedInputs.personal as Array<Record<string, unknown>>
+        : [];
+      expect(personalEntries.some((entry) => entry.connector === "googlecalendar")).toBe(true);
+      expect(personalEntries.some((entry) => entry.connector === "slack")).toBe(true);
+      expect(personalEntries.some((entry) => entry.connector === "github")).toBe(true);
     } finally {
       providerSpy.mockRestore();
     }
@@ -421,6 +692,7 @@ describe("runDreaming", () => {
       ctx,
       trigger: "manual",
       now: new Date("2026-04-09T01:00:00.000Z"),
+      api: createDreamApi(),
       sources: [
         {
           id: "personal",
@@ -589,6 +861,161 @@ describe("runDreaming", () => {
     expect(deleteSession).toHaveBeenCalledTimes(1);
   });
 
+  it("retries once with a compact json pass when the first synthesis is invalid json", async () => {
+    const root = mkdtempSync(join(tmpdir(), "dream-service-"));
+    const ctx = createCtx(root);
+    await seedProfile(ctx, "zh-CN");
+
+    const run = vi.fn()
+      .mockResolvedValueOnce({ runId: "dream-subagent-invalid-json" })
+      .mockResolvedValueOnce({ runId: "dream-subagent-json-retry" });
+    const waitForRun = vi.fn()
+      .mockResolvedValueOnce({ status: "ok" })
+      .mockResolvedValueOnce({ status: "ok" });
+    const getSessionMessages = vi.fn()
+      .mockResolvedValueOnce({
+        messages: [
+          {
+            role: "assistant",
+            content: "```json\n{\"summary\":{\"kind\":\"updated\",\"text\":\"半截输出\"",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          {
+            role: "assistant",
+            content: `\`\`\`json
+{
+  "summary": {
+    "kind": "updated",
+    "text": "我重新压缩成有效 JSON，只保留真正重要的事项。",
+    "highlights": ["GitHub PAT approvals"]
+  },
+  "highlights": ["GitHub PAT approvals"],
+  "candidateCards": [],
+  "journalMarkdown": "# Dreaming Journal\\n\\n## 2026-04-09 · manual\\n\\n今天我重新整理了重点，只留下有效的后续动作。\\n",
+  "interestTopics": ["github"]
+}
+\`\`\``,
+          },
+        ],
+      });
+    const deleteSession = vi.fn().mockResolvedValue(undefined);
+
+    const result = await runDreaming({
+      ctx,
+      trigger: "manual",
+      now: new Date("2026-04-09T01:00:00.000Z"),
+      api: {
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+        runtime: {
+          subagent: {
+            run,
+            waitForRun,
+            getSessionMessages,
+            deleteSession,
+          },
+        },
+      } as unknown as Parameters<typeof runDreaming>[0]["api"],
+      sources: [
+        {
+          id: "personal",
+          async collect() {
+            return {
+              status: "ok",
+              count: 1,
+              raw: [{ subject: "PAT approvals pending" }],
+              normalized: [{ connector: "gmail", title: "PAT approvals pending" }],
+            };
+          },
+        },
+      ],
+    });
+
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.run.status).toBe("completed");
+    expect(result.detail.summary.text).toContain("有效 JSON");
+    expect(result.detail.dreamMarkdown).toContain("重新整理了重点");
+    expect(deleteSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("trims oversized raw and normalized prompt context before calling the subagent", async () => {
+    const root = mkdtempSync(join(tmpdir(), "dream-service-"));
+    const ctx = createCtx(root);
+    await seedProfile(ctx, "zh-CN");
+
+    const run = vi.fn().mockResolvedValue({ runId: "dream-subagent-trim-context" });
+    const waitForRun = vi.fn().mockResolvedValue({ status: "ok" });
+    const getSessionMessages = vi.fn().mockResolvedValue({
+      messages: [
+        {
+          role: "assistant",
+          content: `\`\`\`json
+{
+  "summary": {
+    "kind": "updated",
+    "text": "只保留了压缩后的上下文。",
+    "highlights": []
+  },
+  "highlights": [],
+  "candidateCards": [],
+  "journalMarkdown": "# Dreaming Journal\\n\\n## 2026-04-09 · manual\\n\\n今天我看的是压缩过的上下文。\\n",
+  "interestTopics": []
+}
+\`\`\``,
+        },
+      ],
+    });
+    const deleteSession = vi.fn().mockResolvedValue(undefined);
+
+    const manyRaw = Array.from({ length: 120 }, (_, index) => ({
+      title: `raw-${index}`,
+      body: "x".repeat(150),
+    }));
+    const manyNormalized = Array.from({ length: 120 }, (_, index) => ({
+      connector: "gmail",
+      title: `normalized-${index}`,
+      preview: "y".repeat(120),
+    }));
+
+    await runDreaming({
+      ctx,
+      trigger: "manual",
+      now: new Date("2026-04-09T01:00:00.000Z"),
+      api: {
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+        runtime: {
+          subagent: {
+            run,
+            waitForRun,
+            getSessionMessages,
+            deleteSession,
+          },
+        },
+      } as unknown as Parameters<typeof runDreaming>[0]["api"],
+      sources: [
+        {
+          id: "personal",
+          async collect() {
+            return {
+              status: "ok",
+              count: manyNormalized.length,
+              raw: manyRaw,
+              normalized: manyNormalized,
+            };
+          },
+        },
+      ],
+    });
+
+    const prompt = String(run.mock.calls[0]?.[0]?.extraSystemPrompt ?? "");
+    expect(prompt).toContain("raw-0");
+    expect(prompt).toContain("normalized-0");
+    expect(prompt).not.toContain("raw-119");
+    expect(prompt).not.toContain("normalized-119");
+  });
+
   it("retries with a deeper model pass when the first synthesis says no_new_data despite personal context", async () => {
     const root = mkdtempSync(join(tmpdir(), "dream-service-"));
     const ctx = createCtx(root);
@@ -715,6 +1142,7 @@ describe("runDreaming", () => {
       ctx,
       trigger: "manual",
       now: new Date("2026-04-09T01:00:00.000Z"),
+      api: createDreamApi(),
       sources: [
         {
           id: "feedback",
@@ -832,6 +1260,7 @@ describe("runDreaming", () => {
       ctx,
       trigger: "manual",
       now: new Date("2026-04-09T01:00:00.000Z"),
+      api: createDreamApi(),
       sources: [
         {
           id: "feedback",
@@ -851,6 +1280,7 @@ describe("runDreaming", () => {
       ctx,
       trigger: "manual",
       now: new Date("2026-04-09T02:00:00.000Z"),
+      api: createDreamApi(),
       sources: [
         {
           id: "feedback",
@@ -948,46 +1378,6 @@ describe("runDreaming", () => {
     expect(existsSync(join(result.run.artifactDir as string, "dream.md"))).toBe(true);
   });
 
-  it("uses a localized minimal fallback journal when no model output is available", async () => {
-    const root = mkdtempSync(join(tmpdir(), "dream-service-"));
-    const ctx = createCtx(root);
-    await seedProfile(ctx, "en-US");
-    const settingsPath = appPaths.localSettings(root);
-    writeFileSync(settingsPath, JSON.stringify({
-      generation: {
-        language: "zh-Hans",
-      },
-    }, null, 2));
-
-    const result = await runDreaming({
-      ctx,
-      trigger: "manual",
-      now: new Date("2026-04-09T01:00:00.000Z"),
-      sources: [
-        {
-          id: "personal",
-          async collect() {
-            return {
-              status: "ok",
-              count: 1,
-              raw: {
-                connectors: {
-                  gmail: [{ subject: "Review Anthropic invoice" }],
-                },
-              },
-              normalized: [
-                { connector: "gmail", title: "Review Anthropic invoice", timestamp: "2026-04-09T00:00:00.000Z" },
-              ],
-            };
-          },
-        },
-      ],
-    });
-
-    expect(result.detail.dreamMarkdown).toContain("本次 Dreaming 记录");
-    expect(result.detail.dreamMarkdown).not.toContain("Yesterday I noticed");
-  });
-
   it("keeps derived interests empty without model-provided interest topics", async () => {
     const root = mkdtempSync(join(tmpdir(), "dream-service-"));
     const ctx = createCtx(root);
@@ -997,6 +1387,19 @@ describe("runDreaming", () => {
       ctx,
       trigger: "manual",
       now: new Date("2026-04-09T01:00:00.000Z"),
+      api: createDreamApi(`\`\`\`json
+{
+  "summary": {
+    "kind": "updated",
+    "text": "Dreaming reviewed one invoice email and found no new durable interests.",
+    "highlights": ["Anthropic invoice review"]
+  },
+  "highlights": ["Anthropic invoice review"],
+  "candidateCards": [],
+  "journalMarkdown": "# Dreaming Journal\\n\\n## 2026-04-09 · manual\\n\\n今天我重新看过一封发票相关邮件，但还没有足够证据形成新的长期兴趣。\\n",
+  "interestTopics": []
+}
+\`\`\``),
       sources: [
         {
           id: "personal",
@@ -1047,12 +1450,14 @@ describe("runDreaming", () => {
       ctx,
       trigger: "manual",
       now: new Date("2026-04-09T01:00:00.000Z"),
+      api: createDreamApi(),
       sources: [source],
     });
     const second = await runDreaming({
       ctx,
       trigger: "auto",
       now: new Date("2026-04-09T06:00:00.000Z"),
+      api: createDreamApi(),
       sources: [source],
     });
 
@@ -1069,6 +1474,7 @@ describe("runDreaming", () => {
       ctx,
       trigger: "manual",
       now: new Date("2026-04-09T15:00:00.000Z"),
+      api: createDreamApi(),
       sources: [
         {
           id: "personal",
@@ -1088,6 +1494,7 @@ describe("runDreaming", () => {
       ctx,
       trigger: "manual",
       now: new Date("2026-04-09T15:27:37.582Z"),
+      api: createDreamApi(),
       sources: [
         {
           id: "personal",

@@ -160,7 +160,7 @@ export function needsSetup(currentPluginDir: string): boolean {
  * Ensure gateway + browser config keys are present.
  * Called every launch (not just first-run) so new config keys are picked up.
  */
-export function ensureConfig(): void {
+export function ensureConfig(currentPluginDir?: string): void {
   if (!existsSync(CONFIG_PATH)) return;
 
   let config: Record<string, unknown>;
@@ -179,6 +179,33 @@ export function ensureConfig(): void {
     if (entries && 'proactive-ai' in entries) {
       delete entries['proactive-ai'];
       changed = true;
+    }
+
+    // Clean stale plugin load paths on every launch.
+    // Only keep the current pluginDir; remove any other paths (e.g. stale
+    // /Applications/Proactive AI.app paths left from a previous DMG install).
+    if (currentPluginDir) {
+      const load = plugins.load as Record<string, unknown> | undefined;
+      if (load && Array.isArray(load.paths)) {
+        const oldPaths = load.paths as string[];
+        const newPaths = oldPaths.filter((p: string) => p === currentPluginDir);
+        if (newPaths.length !== oldPaths.length) {
+          load.paths = newPaths;
+          changed = true;
+          console.log(`[setup] Cleaned stale plugin paths (${oldPaths.length} → ${newPaths.length})`);
+        }
+      }
+
+      // Also update plugins.installs to point to current pluginDir
+      const installs = plugins.installs as Record<string, unknown> | undefined;
+      if (installs && installs['proactive-ai']) {
+        const entry = installs['proactive-ai'] as Record<string, unknown>;
+        if (entry.installPath !== currentPluginDir || entry.sourcePath !== currentPluginDir) {
+          entry.installPath = currentPluginDir;
+          entry.sourcePath = currentPluginDir;
+          changed = true;
+        }
+      }
     }
   }
 
@@ -287,5 +314,5 @@ export function runSetup(pluginDir: string): void {
   console.log('[setup] Plugin registered at', CONFIG_PATH);
 
   // Apply gateway + browser config on top
-  ensureConfig();
+  ensureConfig(pluginDir);
 }

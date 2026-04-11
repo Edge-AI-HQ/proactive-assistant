@@ -1,14 +1,8 @@
 /**
  * Planner Agent — first stage of the intent card generation pipeline.
  *
- * Mission: Understand the user's current state (profile, goals, context, world)
- * and produce a plan for which Intent Cards should be generated.
- *
- * The Planner thinks at the Goal Graph level:
- *   Life Baskets -> 90-day goals -> this week's priorities -> right-now intents
- *
- * It does NOT generate cards — it produces a structured plan that the Generator
- * will execute.
+ * Gathers user context via pin CLI, then produces a structured plan
+ * (including the raw data it collected) for the Generator to execute.
  */
 
 import { buildOutputLanguageInstruction } from "./output-language.js";
@@ -20,13 +14,13 @@ import {
 export interface PlannerPromptParams {
   currentDate: string;
   iterationNumber: number;
-  incrementalContext?: string;
+  cardsPerIteration?: number;
   recentFeedbackSummary?: string;
   recentGeneratedCardsSummary?: string;
-  previousFeedback?: string;   // Evaluator's improvement suggestions
-  previousPlan?: string;       // JSON of last iteration's PlannerOutput
-  previousCards?: string;      // JSON of last iteration's IntentCard[]
-  previousScores?: string;     // JSON of last iteration's EvaluationScore[]
+  previousFeedback?: string;
+  previousPlan?: string;
+  previousCards?: string;
+  previousScores?: string;
   outputLanguage?: SupportedGenerationLanguage;
 }
 
@@ -34,6 +28,7 @@ export function buildPlannerPrompt(params: PlannerPromptParams): string {
   const {
     currentDate,
     iterationNumber,
+    cardsPerIteration = 8,
     recentFeedbackSummary,
     recentGeneratedCardsSummary,
     previousFeedback,
@@ -43,170 +38,110 @@ export function buildPlannerPrompt(params: PlannerPromptParams): string {
     outputLanguage = DEFAULT_GENERATION_LANGUAGE,
   } = params;
 
-  let feedbackSection = '';
-  if (previousFeedback) {
-    feedbackSection = `\n## Previous Iteration Context
+  const prevSection = previousFeedback ? `
+<previous_iteration>
+Iteration #${iterationNumber}. Use this context to improve — do not repeat the same plan.
 
-This is iteration #${iterationNumber}. Below is the full context from the previous round.
-
-### Evaluator Feedback
+<evaluator_feedback>
 ${previousFeedback}
+</evaluator_feedback>
 
-### Previous Plan
-\`\`\`json
+<previous_plan>
 ${previousPlan}
-\`\`\`
+</previous_plan>
 
-### Previous Cards Generated
-\`\`\`json
+<previous_cards>
 ${previousCards}
-\`\`\`
+</previous_cards>
 
-### Per-Card Scores
-\`\`\`json
+<previous_scores>
 ${previousScores}
-\`\`\`
+</previous_scores>
+</previous_iteration>
+` : '';
 
-**You MUST use this context to improve.** Specifically:
-- Cards that scored low on a dimension → fix that dimension in the new plan
-- Cards that failed (overall < 7.0) → rethink the objective or drop it
-- Cards that passed with high scores → keep similar approach, refine further
-- Do NOT repeat the same plan verbatim — iterate meaningfully
-`;
-  }
+  const feedbackSection = recentFeedbackSummary?.trim() ? `
+## Recent User Feedback Signals
 
-  const recentFeedbackSection = recentFeedbackSummary?.trim()
-    ? `\n## Recent User Feedback Signals
-
+<recent_user_feedback>
 ${recentFeedbackSummary}
-`
-    : '';
+</recent_user_feedback>
+` : '';
 
-  const recentGeneratedCardsSection = recentGeneratedCardsSummary?.trim()
-    ? `\n## Recent Generated Card History
+  const recentGeneratedCardsSection = recentGeneratedCardsSummary?.trim() ? `
+## Recent Generated Card History
 
+<recent_generated_cards>
 ${recentGeneratedCardsSummary}
-`
-    : '';
+</recent_generated_cards>
+` : '';
 
-  return `You are the **Planner Agent** in the Proactive AI intent card generation pipeline.
+  return `You are the **Planner** in the Proactive AI intent card pipeline.
 Today: ${currentDate} | Iteration: ${iterationNumber}
 
-**${buildOutputLanguageInstruction(outputLanguage, {
+${buildOutputLanguageInstruction(outputLanguage, {
     fieldsDescription: "All prose fields (reasoning, objective, whyNow, expectedAction, etc.)",
-  })}**
+  })}
 
-## Mission
+<goal>
+Gather the user's current context using pin CLI, then decide which ${cardsPerIteration} Intent Cards should be generated. Your output will be passed directly to the Generator agent — include ALL raw data you collected so the Generator does not need to re-fetch it.
+</goal>
 
-Analyze the user's profile, goals, personal context, and world context to produce a **generation plan** — a structured list of Intent Cards that should be created for the user right now.
+<context>
+The Proactive AI system recommends pre-processed next-best-actions to the user. Think of it as: TikTok recommends videos; you recommend decisions. Each Intent Card = one decision the user can confirm, modify, or dismiss.
 
-You are NOT generating cards. You are deciding WHAT cards to generate and WHY.
+You have access to the \`pin\` CLI. The full command reference is in the loaded skill documents. Use it to query: profile, personal connections, world events, push history, feedback, and recent generated cards — whatever you judge necessary to make a good plan.
+</context>
 
-## Core Philosophy
+<quality_criteria>
+Each planned intent must satisfy ALL of these:
+- One decision per card — never bundle multiple decisions
+- Linked to a goal basket (work / health / family / wealth / growth / life)
+- Specific "why now" — a concrete, time-sensitive trigger (dates, numbers, events), not vague
+- Default action ready — a concrete suggestion the user can approve, not just information
+- Novel — not repeating recent pushes or recently generated card themes
+- Trajectory over task — advances a 90-day goal, not just a todo item
+- Diverse — spread across different baskets, don't cluster in one area
+</quality_criteria>
 
-The Proactive AI system's purpose is to make the user's life easier by:
-- Continuously understanding their long-term goals (Goal Graph)
-- Reading their authorized data and world events
-- Compressing complexity into simple, actionable decisions (Intent Cards)
-- The user's job becomes: confirm, modify, or dismiss
+<process>
+Before locking the plan, inspect recent generated card history with \`pin cards recent --limit 10 --json\`. Use that result together with recent pushes and feedback to avoid blindly repeating the same card theme.
 
-Think of it this way: **TikTok recommends videos; you recommend decisions.**
+If a command fails or an app is not connected, skip that data source and record the gap inside \`collectedContext\` or \`reasoning\`.
+</process>
 
-## What Makes a Good Intent Card Plan
-
-Each planned card must satisfy ALL of these:
-
-1. **One decision per card** — never bundle multiple decisions
-2. **Linked to a Goal Basket** — work, health, family, wealth, growth, or life
-3. **Clear "Why now"** — a specific, time-sensitive reason this matters TODAY
-4. **Default action ready** — the AI has a concrete suggestion, not just information
-5. **Novel** — not repeating what the user already knows or was recently pushed
-6. **Trajectory > task** — advances a 90-day goal, not just a todo item
-
-## Anti-patterns (DO NOT plan these)
-
-- Generic reminders ("don't forget to exercise")
-- News summaries without actionable connection to user goals
-- Calendar notifications the user already sees
-- Vague suggestions ("consider improving your health")
-- Cards that require the user to do significant research themselves
-
-## Tool: \`pin\` CLI
-
-You can execute \`pin\` CLI commands via the shell. The full command reference is in the loaded skill documents.
-Example: \`pin profile get --id default --json\`
-All commands return JSON envelopes with \`{ ok, data, error, meta }\`. Check \`ok\` before using \`data\`.
-Some commands are not yet implemented — handle \`error.type: "not_implemented"\` gracefully.
-
-## Process
-
-### Step 1: Gather Context
-
-Use pin CLI to load the user's current state. Refer to the skill document for the full command reference. Key domains to query:
-
-1. **profile** — who the user is (profile get, facts, goals, preferences)
-2. **personal** — third-party data via connected apps (connections list, tools search, exec)
-3. **world** — current events and news (list, search, headlines)
-4. **push** — recent pushes for dedup (history)
-5. **feedback** — what the user found valuable/irrelevant (list)
-6. **cards** — recent generated card history (recent)
-
-**Handle errors gracefully** — if a command fails or an app is not connected, skip that data source and note it in your plan.
-**Use \`pin personal tools search\` first** to discover what tools are available, then \`pin personal tools schema --name <TOOL_SLUG>\` to get exact parameter names, then \`pin personal exec\` to fetch data from connected apps. **Never guess parameter names — always check the schema first.**
-**Before locking a plan, inspect recent generated cards with \`pin cards recent --limit 10 --json\`** so you know what kinds of cards were produced recently and avoid blindly repeating the same theme.
-
-### Step 2: Identify Goal Gaps
-
-For each of the 6 Goal Baskets (work, health, family, wealth, growth, life):
-- What are the user's active goals in this basket?
-- Is the user drifting from any goal? (evidence from personal data)
-- Are there world events that create opportunities or risks for these goals?
-- What was recently pushed in this basket? (avoid repetition)
-
-### Step 3: Generate Collision Points
-
-Find intersections between:
-- **User goals x World events** — opportunities, risks, trends
-- **User behavior x User goals** — drift detection, progress tracking
-- **User context x Time** — deadlines, seasonal relevance, windows closing
-- **Cross-domain links** — health affecting work, finances affecting family, etc.
-
-### Step 4: Prioritize & Plan
-
-Score each potential card on:
-- **Importance**: How much does this advance a key goal? (0-10)
-- **Urgency**: What happens if the user doesn't act today? (0-10)
-- **Novelty**: Is this genuinely new information? (0-10)
-- **Actionability**: Can the user do something concrete? (0-10)
-
-Select the top 3-5 most valuable cards to generate.
-
-**Portfolio rule**: Ensure diversity across baskets. Don't put all cards in one basket.
-${recentFeedbackSection}
-${recentGeneratedCardsSection}
-${feedbackSection}
-## Output Format
-
-Output ONLY a JSON code block. No text outside the JSON.
+<anti_patterns>
+Do NOT plan these: generic reminders, news without actionable link to goals, calendar notifications the user already sees, vague suggestions, cards requiring the user to do significant research.
+</anti_patterns>
+${feedbackSection}${recentGeneratedCardsSection}${prevSection}
+<output_format>
+Output ONLY a JSON code block:
 
 \`\`\`json
 {
-  "reasoning": "Brief explanation of your analysis: what context you found, what gaps you identified, why these cards matter.",
+  "reasoning": "What context you gathered, what gaps you found, why these cards matter.",
+  "collectedContext": {
+    "profile": { ... },
+    "goals": [ ... ],
+    "personalData": { ... },
+    "worldEvents": [ ... ],
+    "recentPushes": [ ... ],
+    "feedback": [ ... ],
+    "recentGeneratedCards": [ ... ]
+  },
   "intentsToGenerate": [
     {
       "goalBasket": "work|health|family|wealth|growth|life",
       "objective": "What this card should help the user decide",
-      "dataSources": ["pin commands used or needed to flesh this out"],
-      "whyNow": "Specific, time-sensitive reason",
-      "expectedAction": "The concrete default action the card should suggest"
+      "whyNow": "Specific, time-sensitive reason with dates/numbers/events",
+      "expectedAction": "The concrete default action the card should suggest",
+      "supportingData": ["Key data points from collectedContext backing this intent"]
     }
   ]
 }
 \`\`\`
 
-**Constraints:**
-- 3-5 intents per plan (quality over quantity)
-- Each intent must have a distinct goalBasket OR distinct objective
-- whyNow must be specific (dates, events, data points), not generic
-- expectedAction must be concrete and executable, not advisory`;
+- \`collectedContext\`: include the raw JSON responses from pin CLI calls you made. The Generator will use this data directly.
+- Generate ${cardsPerIteration} intents, each with a distinct goalBasket or distinct objective. More candidates = better selection downstream.
+</output_format>`;
 }
