@@ -4,9 +4,10 @@ import { runPipeline, DEFAULT_PIPELINE_OPTIONS } from '../pipeline/orchestrator.
 import { pinCliData, runPinCli } from '../pipeline/pin-cli.js';
 import { saveRun } from '../pipeline/run-store.js';
 import { pipelineState } from '../state.js';
-import type { ServerEvent } from '../../core/index.js';
+import { memory, type ServerEvent } from '../../core/index.js';
 import { loadAutoLoopState, saveAutoLoopState } from '../pending-store.js';
 import type { SupportedGenerationLanguage } from '../generation-language.js';
+import { buildDefaultCtx } from '../pipeline/data-access.js';
 
 type EventSink = (event: ServerEvent) => void;
 type TriggerKind = 'auto' | 'manual';
@@ -42,6 +43,38 @@ function buildScoreMap(result: Awaited<ReturnType<typeof runPipeline>>): Record<
     }
   }
   return scoreMap;
+}
+
+function buildRecallQuery(context: IncrementalContextPayload): string {
+  return JSON.stringify(context.items);
+}
+
+async function buildIncrementalContextPayload(
+  api: OpenClawPluginApi,
+  context: IncrementalContextPayload,
+): Promise<string> {
+  const payload: Record<string, unknown> = {
+    runToken: context.runToken,
+    generatedAt: context.generatedAt,
+    items: context.items,
+    meta: context.meta,
+  };
+
+  try {
+    payload.memory = await memory.buildMemoryContext(buildDefaultCtx(), {
+      profileId: 'default',
+      queryText: buildRecallQuery(context),
+      residentLimit: 6,
+      relevantLimit: 6,
+      recentEventLimit: 6,
+    });
+  } catch (error) {
+    api.logger.warn(
+      `Failed to build memory context pack: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  return JSON.stringify(payload, null, 2);
 }
 
 export async function executeIncrementalPipeline(
@@ -95,18 +128,14 @@ export async function executeIncrementalPipeline(
   saveAutoLoopState({ lastStartedAt: toIsoNow() });
 
   try {
+    const incrementalContext = await buildIncrementalContextPayload(api, context);
     const result = await runPipeline(
       api,
       {
         maxIterations,
         agentTimeoutMs,
         runId: `run_${input.trigger}_${Date.now().toString(36)}`,
-        incrementalContext: JSON.stringify({
-          runToken: context.runToken,
-          generatedAt: context.generatedAt,
-          items: context.items,
-          meta: context.meta,
-        }, null, 2),
+        incrementalContext,
         outputLanguage: input.outputLanguage,
       },
       input.onEvent,

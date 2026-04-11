@@ -3,8 +3,9 @@
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { logFeedback } = vi.hoisted(() => ({
+const { logFeedback, recordMemoryEvent } = vi.hoisted(() => ({
   logFeedback: vi.fn(),
+  recordMemoryEvent: vi.fn(),
 }));
 
 vi.mock("../../../core/index.js", async () => {
@@ -14,6 +15,10 @@ vi.mock("../../../core/index.js", async () => {
     feedback: {
       ...actual.feedback,
       logFeedback,
+    },
+    memory: {
+      ...actual.memory,
+      recordMemoryEvent,
     },
   };
 });
@@ -72,6 +77,19 @@ function createContext(method: string, body: Record<string, unknown>) {
 describe("handleFeedback", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    recordMemoryEvent.mockResolvedValue({
+      id: "mev_123",
+      profileId: "default",
+      source: "feedback",
+      kind: "user_confirmed",
+      subjectType: "intent",
+      subjectKey: "work:review-queue-with-alex",
+      text: "Ship it",
+      payload: {},
+      confidence: 1,
+      occurredAt: "2026-04-07T10:00:00.000Z",
+      createdAt: "2026-04-07T10:00:00.000Z",
+    });
   });
 
   it("returns 400 when kind is missing", async () => {
@@ -176,6 +194,17 @@ describe("handleFeedback", () => {
         createdAt: "2026-04-07T10:00:00.000Z",
       },
     });
+    expect(recordMemoryEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        profileId: "default",
+        source: "feedback",
+        kind: "user_confirmed",
+        subjectType: "intent",
+        subjectKey: "work:review-queue-with-alex",
+        text: "Ship it",
+      }),
+    );
   });
 
   it("uses user_direct as the default source", async () => {

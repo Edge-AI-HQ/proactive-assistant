@@ -41,6 +41,17 @@ export function buildPlannerPrompt(params: PlannerPromptParams): string {
     outputLanguage = DEFAULT_GENERATION_LANGUAGE,
   } = params;
 
+  const incrementalContextSection = params.incrementalContext?.trim()
+    ? `\n## Incremental And Memory Context
+
+Use this as staged context, not as raw output. Prioritize it when deciding what matters right now, especially the memory section's resident and relevant recall.
+
+\`\`\`json
+${params.incrementalContext}
+\`\`\`
+`
+    : '';
+
   let feedbackSection = '';
   if (previousFeedback) {
     feedbackSection = `\n## Previous Iteration Context
@@ -172,6 +183,7 @@ Select the top 3-5 most valuable cards to generate.
 
 **Portfolio rule**: Ensure diversity across baskets. Don't put all cards in one basket.
 ${recentFeedbackSection}
+${incrementalContextSection}
 ${feedbackSection}
 ## Output Format
 
