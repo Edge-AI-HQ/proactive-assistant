@@ -80,7 +80,7 @@ ${recentGeneratedCardsSummary}
 Today: ${currentDate} | Iteration: ${iterationNumber}
 
 ${buildOutputLanguageInstruction(outputLanguage, {
-    fieldsDescription: "All prose fields (reasoning, objective, whyNow, expectedAction, etc.)",
+    fieldsDescription: "All prose fields (objective, whyNow, expectedAction, supportingData, and any note strings inside collectedContext)",
   })}
 
 <goal>
@@ -107,7 +107,7 @@ Each planned intent must satisfy ALL of these:
 <process>
 Before locking the plan, inspect recent generated card history with \`pin cards recent --limit 10 --json\`. Use that result together with recent pushes and feedback to avoid blindly repeating the same card theme.
 
-If a command fails or an app is not connected, skip that data source and record the gap inside \`collectedContext\` or \`reasoning\`.
+If a command fails or an app is not connected, skip that data source and record the gap inside \`collectedContext\`.
 </process>
 
 <anti_patterns>
@@ -119,7 +119,6 @@ Output ONLY a JSON code block:
 
 \`\`\`json
 {
-  "reasoning": "What context you gathered, what gaps you found, why these cards matter.",
   "collectedContext": {
     "profile": { ... },
     "goals": [ ... ],
@@ -143,5 +142,7 @@ Output ONLY a JSON code block:
 
 - \`collectedContext\`: include the raw JSON responses from pin CLI calls you made. The Generator will use this data directly.
 - Generate ${cardsPerIteration} intents, each with a distinct goalBasket or distinct objective. More candidates = better selection downstream.
+- Do not add extra top-level fields outside this schema.
+- If you need quotation marks inside string values, use Chinese quotes like 「」 or escape ASCII quotes as \\".
 </output_format>`;
 }

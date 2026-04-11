@@ -16,6 +16,70 @@ function tryParseJson<T>(text: string): T | null {
   }
 }
 
+function nextNonWhitespaceChar(text: string, start: number): string | null {
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (!ch || /\s/.test(ch)) continue;
+    return ch;
+  }
+
+  return null;
+}
+
+function repairUnescapedInnerQuotes(text: string): string {
+  let repaired = '';
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+
+    if (escaped) {
+      repaired += ch;
+      escaped = false;
+      continue;
+    }
+
+    if (ch === '\\') {
+      repaired += ch;
+      escaped = true;
+      continue;
+    }
+
+    if (ch !== '"') {
+      repaired += ch;
+      continue;
+    }
+
+    if (!inString) {
+      inString = true;
+      repaired += ch;
+      continue;
+    }
+
+    const next = nextNonWhitespaceChar(text, i + 1);
+    if (next === null || next === ',' || next === '}' || next === ']' || next === ':') {
+      inString = false;
+      repaired += ch;
+      continue;
+    }
+
+    repaired += '\\"';
+  }
+
+  return repaired;
+}
+
+function tryParseJsonWithRepair<T>(text: string): T | null {
+  const parsed = tryParseJson<T>(text);
+  if (parsed) return parsed;
+
+  const repaired = repairUnescapedInnerQuotes(text);
+  if (repaired === text) return null;
+
+  return tryParseJson<T>(repaired);
+}
+
 function extractBalancedJson(text: string): string | null {
   const start = text.search(/[{[]/);
   if (start < 0) return null;
@@ -66,31 +130,23 @@ export function parseAgentJson<T>(text: string): T | null {
   if (!text) return null;
 
   const trimmed = text.trim();
-  const direct = tryParseJson<T>(trimmed);
-  if (direct) return direct;
-
   const completeFence = text.match(CODE_FENCE_RE)?.[1];
-  if (completeFence) {
-    const parsedFence = tryParseJson<T>(completeFence);
-    if (parsedFence) return parsedFence;
-  }
-
   const openFence = text.match(OPEN_CODE_FENCE_RE)?.[1];
-  if (openFence) {
-    const parsedOpenFence = tryParseJson<T>(openFence);
-    if (parsedOpenFence) return parsedOpenFence;
+  const balancedFromFence = openFence ? extractBalancedJson(openFence) : null;
+  const balanced = extractBalancedJson(text);
+  const candidates = [trimmed, completeFence, openFence, balancedFromFence, balanced]
+    .filter((candidate): candidate is string => Boolean(candidate));
 
-    const balancedFromFence = extractBalancedJson(openFence);
-    if (balancedFromFence) {
-      const parsedBalancedFence = tryParseJson<T>(balancedFromFence);
-      if (parsedBalancedFence) return parsedBalancedFence;
-    }
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    if (seen.has(candidate)) continue;
+    seen.add(candidate);
+
+    const parsed = tryParseJsonWithRepair<T>(candidate);
+    if (parsed) return parsed;
   }
 
-  const balanced = extractBalancedJson(text);
-  if (!balanced) return null;
-
-  return tryParseJson<T>(balanced);
+  return null;
 }
 
 export function detectAgentErrorMessage(text: string): string | null {

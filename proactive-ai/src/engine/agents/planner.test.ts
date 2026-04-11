@@ -28,4 +28,14 @@ describe("buildPlannerPrompt", () => {
     expect(prompt).not.toContain("## Recent User Feedback Signals");
     expect(prompt).not.toContain("## Recent Generated Card History");
   });
+
+  it("does not require a free-form reasoning field in planner json output", () => {
+    const prompt = buildPlannerPrompt({
+      currentDate: "2026-04-07",
+      iterationNumber: 1,
+    });
+
+    expect(prompt).not.toContain('"reasoning":');
+    expect(prompt).toContain('If you need quotation marks inside string values, use Chinese quotes like 「」 or escape ASCII quotes as \\".');
+  });
 });
