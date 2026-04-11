@@ -459,6 +459,21 @@ export const buildAssistantOpenclawConfig = (
     }
   }
 
+  // Web search provider plugin (v4.5+: provider config moved from
+  // tools.web.search.<provider> to plugins.entries.<provider>.config.webSearch)
+  if (context.litellm.enabled && normalizedLiteLLMApiKey) {
+    plugins.entries.perplexity = {
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: normalizedLiteLLMApiKey,
+          baseUrl: context.litellm.baseUrl.replace(/\/+$/, ""),
+          model: "sonar-pro",
+        },
+      },
+    };
+  }
+
   if (Object.keys(plugins.entries).length > 0) {
     next.plugins = plugins;
   }
@@ -482,14 +497,7 @@ export const buildAssistantOpenclawConfig = (
         enabled: true,
         maxResults: 10,
         ...(context.litellm.enabled && normalizedLiteLLMApiKey
-          ? {
-              provider: "perplexity",
-              perplexity: {
-                apiKey: normalizedLiteLLMApiKey,
-                baseUrl: context.litellm.baseUrl.replace(/\/+$/, ""),
-                model: "sonar-pro",
-              },
-            }
+          ? { provider: "perplexity" }
           : {}),
       },
       fetch: { enabled: true, maxChars: 50000 },
