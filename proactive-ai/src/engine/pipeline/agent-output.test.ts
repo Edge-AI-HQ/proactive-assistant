@@ -11,6 +11,24 @@ describe("parseAgentJsonOrThrow", () => {
     expect(result).toEqual({ ok: true });
   });
 
+  it("parses fenced JSON even when the model adds a leading explanation", () => {
+    const result = parseAgentJsonOrThrow<{ ok: boolean }>(
+      'Now I have enough context. Let me synthesize the plan:\n```json\n{"ok":true}\n```',
+      "plan:1",
+    );
+
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("parses a complete JSON object from an unclosed json fence", () => {
+    const result = parseAgentJsonOrThrow<{ ok: boolean }>(
+      'Now I have enough context. Let me synthesize the plan:\n```json\n{"ok":true}',
+      "plan:1",
+    );
+
+    expect(result).toEqual({ ok: true });
+  });
+
   it("surfaces raw provider errors instead of silently returning null", () => {
     expect(() =>
       parseAgentJsonOrThrow(

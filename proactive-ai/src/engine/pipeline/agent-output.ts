@@ -1,23 +1,96 @@
 import { extractTextContent } from '../helpers.js';
 
 const CODE_FENCE_RE = /```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/;
+const OPEN_CODE_FENCE_RE = /```(?:json)?\s*\n?([\s\S]*)$/;
 
 interface SessionMessageLike {
   content?: unknown;
   error?: unknown;
 }
 
-export function parseAgentJson<T>(text: string): T | null {
-  if (!text) return null;
-
-  const fenceMatch = text.match(CODE_FENCE_RE);
-  const jsonStr = fenceMatch ? fenceMatch[1]! : text;
-
+function tryParseJson<T>(text: string): T | null {
   try {
-    return JSON.parse(jsonStr.trim()) as T;
+    return JSON.parse(text.trim()) as T;
   } catch {
     return null;
   }
+}
+
+function extractBalancedJson(text: string): string | null {
+  const start = text.search(/[{[]/);
+  if (start < 0) return null;
+
+  const opening = text[start];
+  const closing = opening === '{' ? '}' : ']';
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (ch === '\\') {
+      escaped = true;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) continue;
+
+    if (ch === opening) {
+      depth += 1;
+      continue;
+    }
+
+    if (ch === closing) {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(start, i + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+export function parseAgentJson<T>(text: string): T | null {
+  if (!text) return null;
+
+  const trimmed = text.trim();
+  const direct = tryParseJson<T>(trimmed);
+  if (direct) return direct;
+
+  const completeFence = text.match(CODE_FENCE_RE)?.[1];
+  if (completeFence) {
+    const parsedFence = tryParseJson<T>(completeFence);
+    if (parsedFence) return parsedFence;
+  }
+
+  const openFence = text.match(OPEN_CODE_FENCE_RE)?.[1];
+  if (openFence) {
+    const parsedOpenFence = tryParseJson<T>(openFence);
+    if (parsedOpenFence) return parsedOpenFence;
+
+    const balancedFromFence = extractBalancedJson(openFence);
+    if (balancedFromFence) {
+      const parsedBalancedFence = tryParseJson<T>(balancedFromFence);
+      if (parsedBalancedFence) return parsedBalancedFence;
+    }
+  }
+
+  const balanced = extractBalancedJson(text);
+  if (!balanced) return null;
+
+  return tryParseJson<T>(balanced);
 }
 
 export function detectAgentErrorMessage(text: string): string | null {
