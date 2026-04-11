@@ -10,6 +10,7 @@ import { homedir } from 'node:os';
 import {
   profile,
   feedback,
+  cards,
   type CoreContext,
   NotFoundError,
 } from '../../core/index.js';
@@ -71,4 +72,16 @@ export async function feedbackStats(opts?: {
   return await feedback.statsFeedback(buildDefaultCtx(), {
     since: opts?.since,
   }) as unknown as Record<string, unknown>;
+}
+
+export async function listRecentGeneratedCards(opts?: {
+  since?: string;
+  limit?: string;
+  basket?: string;
+}): Promise<unknown[]> {
+  return await cards.listRecentGeneratedCards(buildDefaultCtx(), {
+    since: opts?.since,
+    limit: opts?.limit,
+    basket: opts?.basket,
+  });
 }

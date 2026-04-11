@@ -14,9 +14,10 @@ import {
 
 export interface GeneratorPromptParams {
   currentDate: string;
-  plan: string;              // JSON string of PlannerOutput (includes collectedContext)
+  plan: string;
   iterationNumber: number;
   recentFeedbackSummary?: string;
+  recentGeneratedCardsSummary?: string;
   previousFeedback?: string;
   previousCards?: string;
   previousScores?: string;
@@ -29,6 +30,7 @@ export function buildGeneratorPrompt(params: GeneratorPromptParams): string {
     plan,
     iterationNumber,
     recentFeedbackSummary,
+    recentGeneratedCardsSummary,
     previousFeedback,
     previousCards,
     previousScores,
@@ -54,9 +56,19 @@ ${previousScores}
 ` : '';
 
   const feedbackSection = recentFeedbackSummary?.trim() ? `
+## Recent User Feedback Signals
+
 <recent_user_feedback>
 ${recentFeedbackSummary}
 </recent_user_feedback>
+` : '';
+
+  const recentGeneratedCardsSection = recentGeneratedCardsSummary?.trim() ? `
+## Recent Generated Card History
+
+<recent_generated_cards>
+${recentGeneratedCardsSummary}
+</recent_generated_cards>
 ` : '';
 
   return `You are the **Generator** in the Proactive AI intent card pipeline.
@@ -76,6 +88,12 @@ The Planner has already gathered user context data — it is included in the pla
 ${plan}
 </plan>
 
+<process>
+Before generating cards, inspect recent generated history with \`pin cards recent --limit 10 --json\`. Use that result together with recent pushes and feedback to avoid producing near-duplicate card themes.
+
+If you need extra data, prefer specific pin CLI fetches that extend the Planner's collected context rather than redoing broad discovery.
+</process>
+
 <card_quality_standards>
 Each card must meet ALL of these:
 
@@ -87,7 +105,7 @@ Each card must meet ALL of these:
 - **Decision compression**: The card saves the user thinking time. Present the distilled decision, not raw data.
 - **Respectful tone**: Information over instruction. "Your sleep declined 15% this week" not "You should sleep more".
 </card_quality_standards>
-${feedbackSection}${prevSection}
+${feedbackSection}${recentGeneratedCardsSection}${prevSection}
 <output_format>
 Output ONLY a JSON code block:
 

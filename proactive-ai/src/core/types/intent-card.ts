@@ -39,7 +39,7 @@ export interface IntentCard {
 // ── Pipeline types ──
 
 export interface PlannerOutput {
-  reasoning: string;
+  reasoning?: string;
   collectedContext: Record<string, unknown>;  // raw data gathered by Planner via pin CLI
   intentsToGenerate: IntentPlan[];
 }
