@@ -15,6 +15,7 @@ import {
   updateContainerStatus,
   getContainerForUser,
   deleteContainer,
+  withUserLock,
 } from './user_service.js';
 import { config } from '../common/config.js';
 import { buildAssistantOpenclawConfig } from '../container/providers/shared/openclaw_config.js';
@@ -153,7 +154,9 @@ export class ProactiveContainerOrchestrator {
       return { ...result, gatewayToken: container?.gateway_token ?? '' };
     }
 
-    const job = this.runEnsure(userId).finally(() => {
+    // withUserLock serializes across API machines via Postgres advisory lock;
+    // ensureInFlight deduplicates within this process.
+    const job = withUserLock(userId, () => this.runEnsure(userId)).finally(() => {
       if (this.ensureInFlight.get(userId) === job) {
         this.ensureInFlight.delete(userId);
       }

@@ -124,6 +124,36 @@ export async function deleteContainer(userId: string): Promise<void> {
   await pool.query(`DELETE FROM proactive_containers WHERE user_id = $1`, [userId]);
 }
 
+/**
+ * Acquire a per-user advisory lock, run the callback, then release.
+ * Uses pg_advisory_xact_lock scoped to a transaction so the lock is
+ * automatically released on commit/rollback — no risk of leaked locks.
+ *
+ * This serializes container creation per user across all API machines.
+ */
+export async function withUserLock<T>(
+  userId: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Hash userId to a bigint for advisory lock key.
+    // Use two int4 args: a fixed namespace + hash of userId.
+    const hash = Buffer.from(userId.replace(/-/g, ''), 'hex');
+    const lockKey = hash.readInt32BE(0);
+    await client.query('SELECT pg_advisory_xact_lock(42, $1)', [lockKey]);
+    const result = await fn();
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 /** List idle containers for suspend cron. */
 export async function listIdleContainers(idleMinutes: number): Promise<Array<{
   user_id: string;
