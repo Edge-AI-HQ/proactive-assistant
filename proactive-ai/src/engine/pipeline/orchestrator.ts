@@ -73,7 +73,10 @@ export async function runPipeline(
   opts: PipelineOptions = DEFAULT_PIPELINE_OPTIONS,
   onEvent?: EventSink,
 ): Promise<PipelineResult> {
-  const emit = onEvent ?? (() => {});
+  const rawEmit = onEvent ?? (() => {});
+  const emit: EventSink = (event) => {
+    try { rawEmit(event); } catch { /* SSE write failure — continue pipeline */ }
+  };
   const currentDate = new Date().toISOString().slice(0, 10);
   const outputLanguage = opts.outputLanguage ?? DEFAULT_GENERATION_LANGUAGE;
   const cardsPerIteration = opts.cardsPerIteration ?? 8;
