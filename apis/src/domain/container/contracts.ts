@@ -126,6 +126,18 @@ export interface AssistantContainerParams {
   containerPort?: number;
 }
 
+/**
+ * Generic container creation params — runtime-agnostic, no Telegram coupling.
+ * Used by the proactive-ai container orchestrator.
+ */
+export interface GenericContainerParams {
+  containerName: string;
+  gatewayToken: string;
+  env: Record<string, string>;
+  /** Volume name prefix (provider builds the full name). */
+  volumeKey?: string;
+}
+
 export interface ProbeOptions {
   timeoutMs: number;
   gatewayToken?: string;
@@ -150,6 +162,12 @@ export interface ContainerRuntime {
 
   /** Create a new container. Returns the created container ref. */
   createContainer(params: AssistantContainerParams): Promise<ContainerRef>;
+
+  /**
+   * Create a container with explicit env vars (no Telegram assumptions).
+   * Falls back to createContainer with a cast if not implemented.
+   */
+  createGenericContainer?(params: GenericContainerParams): Promise<ContainerRef>;
 
   /** Start a stopped/created container. Waits until running or error. */
   startContainer(containerId: string): Promise<ContainerRef>;

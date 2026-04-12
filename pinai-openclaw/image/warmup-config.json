@@ -58,13 +58,11 @@
     "entries": {
       "telegram": { "enabled": true },
       "telegram-api-proxy": { "enabled": true },
-      "litellm-vision-adapter": { "enabled": true },
       "platform-hooks": { "enabled": true }
     },
     "load": {
       "paths": [
         "/opt/pinai/plugins/telegram-api-proxy",
-        "/opt/pinai/plugins/litellm-vision-adapter",
         "/opt/pinai/plugins/platform-hooks"
       ]
     }
@@ -103,8 +101,7 @@
     "restart": true
   },
   "browser": {
-    "enabled": true,
-    "evaluateEnabled": true
+    "enabled": false
   },
   "cron": {
     "enabled": true

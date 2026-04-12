@@ -7,6 +7,7 @@ import type {
 } from "../../types.js";
 import type {
   AssistantContainerParams,
+  GenericContainerParams,
   ContainerRef,
   ContainerRuntime,
   ContainerState,
@@ -462,15 +463,24 @@ const inspectToContainerRef = async (
     if (idx > 0) env[entry.slice(0, idx)] = entry.slice(idx + 1);
   }
 
-  // Extract host ports from bindings
+  // Extract host ports — prefer NetworkSettings.Ports (actual assigned port)
+  // over HostConfig.PortBindings (which may be "0" for auto-assign).
+  const networkPorts = (inspect.NetworkSettings as any)?.Ports || {};
   const portBindings = inspect.HostConfig?.PortBindings || {};
   const metadata: Record<string, string> = {};
 
   const extractHostPort = (containerPort: string): string => {
+    // Try NetworkSettings.Ports first (has the actual assigned port)
+    const netBindings = networkPorts[containerPort];
+    if (Array.isArray(netBindings) && netBindings.length > 0) {
+      const binding = netBindings[0] as { HostPort?: string };
+      if (binding.HostPort && binding.HostPort !== "0") return binding.HostPort;
+    }
+    // Fallback to HostConfig.PortBindings
     const bindings = portBindings[containerPort];
     if (Array.isArray(bindings) && bindings.length > 0) {
       const binding = bindings[0] as { HostPort?: string };
-      if (binding.HostPort) return binding.HostPort;
+      if (binding.HostPort && binding.HostPort !== "0") return binding.HostPort;
     }
     return "";
   };
@@ -619,6 +629,35 @@ export const dockerContainerRuntime: ContainerRuntime = {
         Binds: [
           `${dirs.baseDir}:/app`,
         ],
+        Memory: config.container.memoryMb * 1024 * 1024,
+        CpuShares: config.container.cpuShares,
+      },
+    });
+
+    return inspectToContainerRef(container);
+  },
+
+  async createGenericContainer(params: GenericContainerParams): Promise<ContainerRef> {
+    const baseDir = path.join(process.cwd(), "data", params.containerName);
+    const openclawDir = path.join(baseDir, 'data', 'config');
+    ensureDir(openclawDir);
+
+    const hostPort = "0"; // auto-assign
+
+    const container = await docker.createContainer({
+      name: params.containerName,
+      Image: config.openclaw.image,
+      Env: Object.entries(params.env).map(([k, v]) => `${k}=${v}`),
+      ExposedPorts: {
+        [`${config.openclaw.gatewayPort}/tcp`]: {},
+      },
+      HostConfig: {
+        RestartPolicy: { Name: "unless-stopped" },
+        ExtraHosts: ["host.docker.internal:host-gateway"],
+        PortBindings: {
+          [`${config.openclaw.gatewayPort}/tcp`]: [{ HostPort: hostPort }],
+        },
+        Binds: [`${baseDir}:/app`],
         Memory: config.container.memoryMb * 1024 * 1024,
         CpuShares: config.container.cpuShares,
       },

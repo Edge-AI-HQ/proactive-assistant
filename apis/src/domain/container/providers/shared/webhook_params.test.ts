@@ -46,7 +46,6 @@ const buildConfig = (): ContainerManagerConfig => ({
     webhookPort: 8787,
     pluginLoadPaths: [
       "/opt/pinai/plugins/telegram-api-proxy",
-      "/opt/pinai/plugins/litellm-vision-adapter",
       "/opt/pinai/plugins/platform-hooks",
     ],
   },
@@ -72,7 +71,6 @@ test("buildWebhookParams returns correct default values", () => {
   assert.equal(wp.privateWebhookPort, 8788);
   assert.deepEqual(wp.pluginLoadPaths, [
     "/opt/pinai/plugins/telegram-api-proxy",
-    "/opt/pinai/plugins/litellm-vision-adapter",
     "/opt/pinai/plugins/platform-hooks",
   ]);
 });

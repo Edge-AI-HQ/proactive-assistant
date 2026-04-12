@@ -126,7 +126,6 @@ test("config: webhook mode enables 3 split plugins with load paths", () => {
     telegramWebhookPort: 8787,
     pluginLoadPaths: [
       "/opt/pinai/plugins/telegram-api-proxy",
-      "/opt/pinai/plugins/litellm-vision-adapter",
       "/opt/pinai/plugins/platform-hooks",
     ],
     includeTelegramPlugin: true,
@@ -137,12 +136,10 @@ test("config: webhook mode enables 3 split plugins with load paths", () => {
     };
   };
   assert.equal(result.plugins.entries["telegram-api-proxy"]?.enabled, true);
-  assert.equal(result.plugins.entries["litellm-vision-adapter"]?.enabled, true);
   assert.equal(result.plugins.entries["platform-hooks"]?.enabled, true);
   assert.equal(result.plugins.entries.telegram?.enabled, true);
   assert.deepEqual(result.plugins.load?.paths, [
     "/opt/pinai/plugins/telegram-api-proxy",
-    "/opt/pinai/plugins/litellm-vision-adapter",
     "/opt/pinai/plugins/platform-hooks",
   ]);
 });
@@ -235,7 +232,7 @@ test("config: enables full tools, all commands, cron, and browser", () => {
   assert.equal(result.commands.config, true);
   assert.equal(result.commands.bash, true);
   assert.equal(result.cron.enabled, true);
-  assert.equal(result.browser.enabled, true);
+  assert.equal(result.browser.enabled, false);
 });
 
 // ---------------------------------------------------------------------------

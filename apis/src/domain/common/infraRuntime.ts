@@ -37,7 +37,7 @@ const ASSISTANT_READY_FIXED_MESSAGE =
     "• 🌅 Custom Morning Brief: daily push with key news, top tasks, and suggested next actions.",
     "• 📬 Inbox De-clutter: summarize newsletters and unread threads, then draft replies.",
     "• 👤 Work Calendar: merge meeting plans and track upcoming events.",
-    "• 🌐 Agent Browser tasks: research websites, compare options, and fill forms.",
+    "• 🌐 Browser tasks: research websites, compare options, and fill forms.",
   ].join("\n");
 
 interface AssistantReadyNotificationArgs {

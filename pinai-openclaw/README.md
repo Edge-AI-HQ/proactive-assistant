@@ -22,7 +22,6 @@ pinai-openclaw/
 │   └── skills/
 ├── plugins/
 │   ├── telegram-api-proxy/
-│   ├── litellm-vision-adapter/
 │   └── platform-hooks/
 └── external/
     └── openclaw/         # OpenClaw 上游源码（只读，git submodule）

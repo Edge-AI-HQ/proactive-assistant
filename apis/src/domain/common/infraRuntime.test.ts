@@ -37,7 +37,7 @@ test("executeAssistantReadyNotificationsForTest fixed message includes use cases
   assert.match(fixedMessage, /Custom Morning Brief/i);
   assert.match(fixedMessage, /Inbox De-clutter/i);
   assert.match(fixedMessage, /Work Calendar/i);
-  assert.match(fixedMessage, /Agent Browser tasks/i);
+  assert.match(fixedMessage, /Browser tasks/i);
 });
 
 test("executeAssistantReadyNotificationsForTest skips sends when lock is not claimed", async () => {

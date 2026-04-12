@@ -3,21 +3,18 @@
 //
 // All backend connections (WS relay, RPC, probe) use these values.
 //
-// Key design decision: we use "gateway-client" — a valid OpenClaw client ID
-// that is NOT "openclaw-control-ui", so the gateway's
-// `evaluateMissingDeviceIdentity` skips the stricter Control UI auth checks
-// and goes straight to `roleCanSkipDeviceIdentity`.
-// Since operator + valid token (sharedAuthOk) passes that check, NO device
-// identity or Ed25519 crypto is required on the APIs side.
+// We use "openclaw-control-ui" so the gateway's scope-preservation logic
+// recognises us as a trusted Control UI operator. With gateway config
+// `controlUi.allowInsecureAuth: true` and localhost connections, this avoids
+// the stricter device-identity/Ed25519 checks while preserving operator
+// scopes (operator.admin → full access).
 //
-// Valid client IDs (from GATEWAY_CLIENT_IDS in openclaw 2026.3.8):
-//   webchat-ui, openclaw-control-ui, webchat, cli, gateway-client,
-//   openclaw-macos, openclaw-ios, openclaw-android, node-host, test,
-//   fingerprint, openclaw-probe
+// Without this, OpenClaw ≥2026.4 clears self-declared scopes for any
+// device-less non-Control-UI client (security hardening for CVE-2026-32919).
 // ---------------------------------------------------------------------------
 
-/** Client ID — must be a valid GATEWAY_CLIENT_IDS value, NOT "openclaw-control-ui". */
-export const GATEWAY_CLIENT_ID = "gateway-client";
+/** Client ID — must match a recognized Control UI client for scope preservation. */
+export const GATEWAY_CLIENT_ID = "openclaw-control-ui";
 
 export const GATEWAY_CLIENT_ROLE = "operator";
 

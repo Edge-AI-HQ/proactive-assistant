@@ -172,7 +172,7 @@ export const config: Config = {
     pluginLoadPaths: (
       toTrimmed(
         process.env.OPENCLAW_PLUGIN_LOAD_PATHS,
-        '/opt/pinai/plugins/telegram-api-proxy:/opt/pinai/plugins/litellm-vision-adapter:/opt/pinai/plugins/platform-hooks'
+        '/opt/pinai/plugins/telegram-api-proxy:/opt/pinai/plugins/platform-hooks'
       )
     ).split(':').map(p => p.trim()).filter(Boolean)
   },

@@ -54,7 +54,6 @@ const buildConfig = (): ContainerManagerConfig => ({
     webhookPort: 8787,
     pluginLoadPaths: [
       "/opt/pinai/plugins/telegram-api-proxy",
-      "/opt/pinai/plugins/litellm-vision-adapter",
       "/opt/pinai/plugins/platform-hooks",
     ],
   },

@@ -7,18 +7,18 @@ COPY package*.json ./
 
 # Copy workspace package files
 COPY apis/package*.json ./apis/
-COPY miniapp/package*.json ./miniapp/
+COPY proactive-ai-frontend/package*.json ./proactive-ai-frontend/
 
 # Install all dependencies
 RUN npm ci
 
-# Copy source for both workspaces
+# Copy source for all workspaces
 COPY apis ./apis
-COPY miniapp ./miniapp
+COPY proactive-ai-frontend ./proactive-ai-frontend
 COPY scripts ./scripts
 
-# Build miniapp first (outputs to apis/public/mini/)
-RUN npm run build --workspace @pin-ai/miniapp
+# Build proactive frontend (outputs to apis/public/proactive/)
+RUN npm run build --workspace @pin-ai/proactive-ai-frontend
 
 # Build the API
 RUN npm run build --workspace @pin-ai/apis

@@ -139,9 +139,10 @@ export const relayGatewayWs = (
           ) {
             const params = parsed.params as Record<string, unknown>;
 
-            // Set our backend client identity (NOT "openclaw-control-ui")
+            // Set our backend client identity as Control UI for scope preservation
             if (typeof params.client === "object" && params.client !== null) {
               (params.client as Record<string, unknown>).id = GATEWAY_CLIENT_ID;
+              (params.client as Record<string, unknown>).mode = "ui";
             }
             params.role = GATEWAY_CLIENT_ROLE;
             params.scopes = GATEWAY_CLIENT_SCOPES;
