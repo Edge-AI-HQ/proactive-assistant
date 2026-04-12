@@ -6,7 +6,7 @@
   "scripts": {
     "setup": "cd .. && npm install && cd electron && npm install",
     "build": "tsc",
-    "dev": "npm run build --prefix .. && tsc && env -u ELECTRON_RUN_AS_NODE electron .",
+    "dev": "rm -rf .bundle && npm run build --prefix .. && tsc && env -u ELECTRON_RUN_AS_NODE electron .",
     "dev:hmr": "node dev-hmr.js",
     "start": "env -u ELECTRON_RUN_AS_NODE electron .",
     "package": "tsc && electron-forge package",
@@ -20,5 +20,8 @@
     "electron": "^40.8.5",
     "typescript": "^5.8.0"
   },
-  "dependencies": {}
+  "dependencies": {
+    "@buape/carbon": "^0.15.0",
+    "openclaw": "2026.4.5"
+  }
 }

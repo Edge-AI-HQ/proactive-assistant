@@ -75,6 +75,15 @@ export * as feedback from "./domains/feedback/service.js";
 export { FeedbackRepository } from "./domains/feedback/repository.js";
 export { feedbackEvents, type FeedbackEventRecord, type NewFeedbackEventRecord } from "./domains/feedback/schema.js";
 
+// ── Domain: Generated Cards ──
+export * as cards from "./domains/cards/service.js";
+export { GeneratedIntentCardRepository } from "./domains/cards/repository.js";
+export {
+  generatedIntentCards,
+  type GeneratedIntentCardRow,
+  type NewGeneratedIntentCardRow,
+} from "./domains/cards/schema.js";
+
 // ── Domain: Push ──
 export * as push from "./domains/push/service.js";
 export { PushRepository } from "./domains/push/repository.js";

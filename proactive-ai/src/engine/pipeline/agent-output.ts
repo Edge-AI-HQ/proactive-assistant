@@ -1,23 +1,152 @@
 import { extractTextContent } from '../helpers.js';
 
 const CODE_FENCE_RE = /```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/;
+const OPEN_CODE_FENCE_RE = /```(?:json)?\s*\n?([\s\S]*)$/;
 
 interface SessionMessageLike {
   content?: unknown;
   error?: unknown;
 }
 
-export function parseAgentJson<T>(text: string): T | null {
-  if (!text) return null;
-
-  const fenceMatch = text.match(CODE_FENCE_RE);
-  const jsonStr = fenceMatch ? fenceMatch[1]! : text;
-
+function tryParseJson<T>(text: string): T | null {
   try {
-    return JSON.parse(jsonStr.trim()) as T;
+    return JSON.parse(text.trim()) as T;
   } catch {
     return null;
   }
+}
+
+function nextNonWhitespaceChar(text: string, start: number): string | null {
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (!ch || /\s/.test(ch)) continue;
+    return ch;
+  }
+
+  return null;
+}
+
+function repairUnescapedInnerQuotes(text: string): string {
+  let repaired = '';
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+
+    if (escaped) {
+      repaired += ch;
+      escaped = false;
+      continue;
+    }
+
+    if (ch === '\\') {
+      repaired += ch;
+      escaped = true;
+      continue;
+    }
+
+    if (ch !== '"') {
+      repaired += ch;
+      continue;
+    }
+
+    if (!inString) {
+      inString = true;
+      repaired += ch;
+      continue;
+    }
+
+    const next = nextNonWhitespaceChar(text, i + 1);
+    if (next === null || next === ',' || next === '}' || next === ']' || next === ':') {
+      inString = false;
+      repaired += ch;
+      continue;
+    }
+
+    repaired += '\\"';
+  }
+
+  return repaired;
+}
+
+function tryParseJsonWithRepair<T>(text: string): T | null {
+  const parsed = tryParseJson<T>(text);
+  if (parsed) return parsed;
+
+  const repaired = repairUnescapedInnerQuotes(text);
+  if (repaired === text) return null;
+
+  return tryParseJson<T>(repaired);
+}
+
+function extractBalancedJson(text: string): string | null {
+  const start = text.search(/[{[]/);
+  if (start < 0) return null;
+
+  const opening = text[start];
+  const closing = opening === '{' ? '}' : ']';
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (ch === '\\') {
+      escaped = true;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) continue;
+
+    if (ch === opening) {
+      depth += 1;
+      continue;
+    }
+
+    if (ch === closing) {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(start, i + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+export function parseAgentJson<T>(text: string): T | null {
+  if (!text) return null;
+
+  const trimmed = text.trim();
+  const completeFence = text.match(CODE_FENCE_RE)?.[1];
+  const openFence = text.match(OPEN_CODE_FENCE_RE)?.[1];
+  const balancedFromFence = openFence ? extractBalancedJson(openFence) : null;
+  const balanced = extractBalancedJson(text);
+  const candidates = [trimmed, completeFence, openFence, balancedFromFence, balanced]
+    .filter((candidate): candidate is string => Boolean(candidate));
+
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    if (seen.has(candidate)) continue;
+    seen.add(candidate);
+
+    const parsed = tryParseJsonWithRepair<T>(candidate);
+    if (parsed) return parsed;
+  }
+
+  return null;
 }
 
 export function detectAgentErrorMessage(text: string): string | null {

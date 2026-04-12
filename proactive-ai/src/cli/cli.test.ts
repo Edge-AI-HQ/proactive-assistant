@@ -16,6 +16,7 @@ import {
 } from "./domains/personal/service.js";
 import type { PersonalProvider } from "../core/domains/personal/provider.js";
 import { LoopRepository } from "./domains/loop/repository.js";
+import * as cards from "../core/domains/cards/service.js";
 
 interface SysDoctorData {
   checks: Array<{ name: string; status: string; message: string; hint?: string }>;
@@ -932,6 +933,75 @@ test("push outcome validates status enum", async () => {
     assert.equal(result.exitCode, 2);
     assert.equal(result.stdout.ok, false);
     assert.ok(result.stdout.error?.message.includes("Invalid"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("cards recent returns latest generated cards and supports limit/basket filters", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-cards-cli-"));
+  try {
+    const runtime = { env: { PIN_DATA_ROOT: root } };
+
+    await cards.recordGeneratedBatch(
+      {
+        env: runtime.env,
+        homeDir: "/Users/test",
+      },
+      {
+        runId: "run_manual_1",
+        generatedAt: "2026-04-10T10:00:00.000Z",
+        cards: [
+          {
+            id: "card_1_1",
+            goalBasket: "work",
+            title: "Review queue with Alex",
+            whyNow: "Two PRs are blocked today.",
+            summary: "Alex is waiting on your review before noon.",
+            primaryAction: { label: "Review now", type: "confirm" },
+            secondaryActions: [],
+            confidence: 0.9,
+            urgency: 0.8,
+            importance: 0.85,
+            sources: ["calendar"],
+            agentChain: ["planner", "generator"],
+            createdAt: "2026-04-10",
+          },
+          {
+            id: "card_1_2",
+            goalBasket: "health",
+            title: "Adjust evening walk plan",
+            whyNow: "Rain is forecast for the next two evenings.",
+            summary: "A shorter indoor alternative avoids missing the streak.",
+            primaryAction: { label: "Move indoors", type: "confirm" },
+            secondaryActions: [],
+            confidence: 0.8,
+            urgency: 0.7,
+            importance: 0.75,
+            sources: ["weather"],
+            agentChain: ["planner", "generator"],
+            createdAt: "2026-04-10",
+          },
+        ],
+      },
+    );
+
+    const listed = await runCli(["cards", "recent", "--json"], runtime);
+    assert.equal(listed.exitCode, 0);
+    assert.equal(listed.stdout.ok, true);
+    const listData = listed.stdout.data as Array<Record<string, unknown>>;
+    assert.equal(listData.length, 2);
+    assert.equal(listData[0].goalBasket, "health");
+    assert.equal(listData[0].titleKey, "adjust-evening-walk-plan");
+
+    const limited = await runCli(
+      ["cards", "recent", "--limit", "1", "--basket", "work", "--json"],
+      runtime,
+    );
+    assert.equal(limited.exitCode, 0);
+    const limitedData = limited.stdout.data as Array<Record<string, unknown>>;
+    assert.equal(limitedData.length, 1);
+    assert.equal(limitedData[0].goalBasket, "work");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

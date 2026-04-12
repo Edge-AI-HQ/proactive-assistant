@@ -1,5 +1,6 @@
 export interface ProactiveAIConfig {
   max_iterations: number;
+  cards_per_iteration: number;
   agent_timeout_ms: number;
   auto_poll_enabled: boolean;
   auto_ingest_interval_ms: number;
@@ -13,6 +14,7 @@ export interface ProactiveAIConfig {
 
 export const DEFAULT_CONFIG: ProactiveAIConfig = {
   max_iterations: 2,
+  cards_per_iteration: 8,
   agent_timeout_ms: 300_000,
   auto_poll_enabled: true,
   auto_ingest_interval_ms: 300_000,

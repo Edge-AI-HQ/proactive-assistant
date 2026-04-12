@@ -66,7 +66,7 @@ app.whenReady().then(async () => {
       updateSplash('Setting up for first run...');
       runSetup(PLUGIN_DIR);
     } else {
-      ensureConfig();
+      ensureConfig(PLUGIN_DIR);
     }
 
     // 3. Check API key — if missing, show setup window instead of gateway
