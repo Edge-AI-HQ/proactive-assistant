@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveAppRoot } from '../../core/paths.js';
+import type { PipelineCompletionStatus, PipelineWarning } from '../../core/types/intent-card.js';
 
 const MAX_STORED_RUNS = 5;
 
@@ -10,6 +11,8 @@ export interface StoredRun {
   totalIterations: number;
   finalCards: unknown[];
   scoreMap: Record<string, unknown>;
+  completionStatus?: PipelineCompletionStatus;
+  warnings?: PipelineWarning[];
 }
 
 interface RunStore {

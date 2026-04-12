@@ -8,6 +8,7 @@ import { pipelineState } from '../state.js';
 import { cards, memory, type ServerEvent } from '../../core/index.js';
 import { loadAutoLoopState, saveAutoLoopState } from '../pending-store.js';
 import type { SupportedGenerationLanguage } from '../generation-language.js';
+import { syncCardChatFeedback } from '../chat-feedback/service.js';
 import { buildDefaultCtx } from '../pipeline/data-access.js';
 
 type EventSink = (event: ServerEvent) => void;
@@ -84,6 +85,7 @@ export async function executeIncrementalPipeline(
     trigger: TriggerKind;
     maxIterations?: number;
     agentTimeoutMs?: number;
+    cardsPerIteration?: number;
     minAgeMs?: number;
     cooldownMs?: number;
     onEvent?: EventSink;
@@ -96,6 +98,8 @@ export async function executeIncrementalPipeline(
 > {
   const maxIterations = input.maxIterations ?? DEFAULT_PIPELINE_OPTIONS.maxIterations;
   const agentTimeoutMs = input.agentTimeoutMs ?? DEFAULT_PIPELINE_OPTIONS.agentTimeoutMs;
+  const cardsPerIteration = input.cardsPerIteration ?? DEFAULT_PIPELINE_OPTIONS.cardsPerIteration;
+  const minAgeMs = Math.max(0, input.minAgeMs ?? 0);
   const cooldownMs = Math.max(0, input.cooldownMs ?? DEFAULT_CONFIG.auto_loop_min_interval_ms);
   const contextLimit = 200;
 
@@ -104,6 +108,8 @@ export async function executeIncrementalPipeline(
     'incremental',
     '--limit',
     String(contextLimit),
+    '--min-age-ms',
+    String(minAgeMs),
   ]);
 
   if (!context.runToken) {
@@ -129,12 +135,28 @@ export async function executeIncrementalPipeline(
   saveAutoLoopState({ lastStartedAt: toIsoNow() });
 
   try {
+    try {
+      await syncCardChatFeedback({
+        ctx: {
+          env: process.env as Record<string, string | undefined>,
+          homeDir: homedir(),
+        },
+        api,
+        trigger: 'pre_generate',
+      });
+    } catch (error) {
+      api.logger.warn(
+        `Card chat feedback sync skipped: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
     const incrementalContext = await buildIncrementalContextPayload(api, context);
     const result = await runPipeline(
       api,
       {
         maxIterations,
         agentTimeoutMs,
+        cardsPerIteration,
         runId: `run_${input.trigger}_${Date.now().toString(36)}`,
         incrementalContext,
         outputLanguage: input.outputLanguage,
@@ -172,6 +194,8 @@ export async function executeIncrementalPipeline(
         consumedPending,
         ...buildScoreMap(result),
       },
+      completionStatus: result.completionStatus,
+      warnings: result.warnings,
     });
     saveAutoLoopState({ lastFinishedAt: nowIso, lastStatus: 'success' });
 

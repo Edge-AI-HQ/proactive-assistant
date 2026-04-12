@@ -7,6 +7,8 @@ export type {
   GoalBasket,
   EvaluationScore,
   EvaluatorOutput,
+  PipelineCompletionStatus,
+  PipelineWarning,
   PipelineResult,
   PipelineIteration,
   ServerEvent,

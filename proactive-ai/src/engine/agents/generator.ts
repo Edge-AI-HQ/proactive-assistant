@@ -7,6 +7,7 @@
  */
 
 import { buildOutputLanguageInstruction } from "./output-language.js";
+import { PIN_CLI_COMMAND_GUIDE } from "./pin-cli-command-guide.js";
 import {
   DEFAULT_GENERATION_LANGUAGE,
   type SupportedGenerationLanguage,
@@ -96,12 +97,16 @@ Transform the Planner's intent plan into polished, ready-to-approve Intent Cards
 The Planner has already gathered user context data — it is included in the plan below under \`collectedContext\`. Use this data to craft specific, evidence-backed cards. If you need additional details beyond what the Planner collected, you have access to the \`pin\` CLI (command reference in loaded skill documents).
 </goal>
 
+${PIN_CLI_COMMAND_GUIDE}
+
 <plan>
 ${plan}
 </plan>
 
 <process>
 Before generating cards, inspect recent generated history with \`pin cards recent --limit 10 --json\`. Use that result together with recent pushes and feedback to avoid producing near-duplicate card themes.
+
+Treat sustained card-chat engagement as a strong signal for adjacent follow-up cards, but do not simply restate the same card. Turn that signal into the next upgraded, more actionable step around the same thread.
 
 If you need extra data, prefer specific pin CLI fetches that extend the Planner's collected context rather than redoing broad discovery.
 </process>

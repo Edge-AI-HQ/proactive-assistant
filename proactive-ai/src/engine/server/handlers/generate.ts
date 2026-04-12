@@ -30,14 +30,18 @@ export async function handleGenerate(ctx: RouteContext): Promise<boolean> {
   };
 
   try {
+    const pluginConfig = (api.pluginConfig ?? {}) as Record<string, unknown>;
     const maxIter = parseInt(url.searchParams.get('iterations') ?? '', 10)
-      || DEFAULT_PIPELINE_OPTIONS.maxIterations;
+      || Number(pluginConfig['max_iterations'] ?? DEFAULT_PIPELINE_OPTIONS.maxIterations);
+    const agentTimeoutMs = Number(pluginConfig['agent_timeout_ms'] ?? DEFAULT_PIPELINE_OPTIONS.agentTimeoutMs);
+    const cardsPerIteration = Number(pluginConfig['cards_per_iteration'] ?? DEFAULT_PIPELINE_OPTIONS.cardsPerIteration ?? 8);
     const outputLanguage = getGenerationLanguage();
 
     const result = await executeIncrementalPipeline(api, {
       trigger: 'manual',
       maxIterations: maxIter,
-      agentTimeoutMs: DEFAULT_PIPELINE_OPTIONS.agentTimeoutMs,
+      agentTimeoutMs,
+      cardsPerIteration,
       onEvent: sendEvent,
       enforceCooldown: false,
       outputLanguage,

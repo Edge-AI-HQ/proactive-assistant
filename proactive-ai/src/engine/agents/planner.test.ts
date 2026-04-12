@@ -39,6 +39,30 @@ describe("buildPlannerPrompt", () => {
     expect(prompt).toContain('If you need quotation marks inside string values, use Chinese quotes like 「」 or escape ASCII quotes as \\".');
   });
 
+  it("includes concrete pin CLI commands and schema fallback for nested lookups", () => {
+    const prompt = buildPlannerPrompt({
+      currentDate: "2026-04-07",
+      iterationNumber: 1,
+    });
+
+    expect(prompt).toContain("pin push history --since 14d --json");
+    expect(prompt).toContain("pin world shortlist --profile-id default --limit 10 --json");
+    expect(prompt).toContain("pin profile interests list --id default --kind topic --limit 20 --json");
+    expect(prompt).toContain("pin profile snapshot build --id default --view ranking --json");
+    expect(prompt).toContain("pin profile facts get --json");
+    expect(prompt).toContain("pin sys schema push.history --json");
+  });
+
+  it("treats sustained card-chat engagement as a strong follow-up signal", () => {
+    const prompt = buildPlannerPrompt({
+      currentDate: "2026-04-07",
+      iterationNumber: 1,
+    });
+
+    expect(prompt).toContain("sustained card-chat engagement");
+    expect(prompt).toContain("do not simply repeat the same card");
+  });
+
   it("injects memory context when incremental context is provided", () => {
     const prompt = buildPlannerPrompt({
       currentDate: "2026-04-07",

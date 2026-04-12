@@ -30,8 +30,12 @@ import type {
   GeneratorOutput,
   EvaluatorOutput,
   EvaluationScore,
+  PipelineCompletionStatus,
   PipelineIteration,
+  PipelineIterationPhase,
   PipelineResult,
+  PipelineWarning,
+  PipelineWarningFallback,
   ServerEvent,
 } from '../../core/index.js';
 
@@ -67,6 +71,35 @@ interface IterationContext {
   scores: EvaluationScore[];
 }
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function makePipelineWarning(
+  iteration: number,
+  phase: PipelineIterationPhase,
+  fallback: PipelineWarningFallback,
+  error: unknown,
+): PipelineWarning {
+  return {
+    iteration,
+    phase,
+    fallback,
+    message: getErrorMessage(error),
+  };
+}
+
+function makeSyntheticEvaluation(cards: IntentCard[], message: string): EvaluatorOutput {
+  return {
+    evaluations: cards.map((card) => ({
+      ...syntheticScore(card.id),
+      feedback: `Evaluator unavailable — ${message}`,
+    })),
+    bestCards: cards,
+    iterationFeedback: `Evaluator unavailable — ${message}`,
+  };
+}
+
 /**
  * Run the full intent card generation pipeline.
  */
@@ -85,6 +118,8 @@ export async function runPipeline(
   const iterations: PipelineIteration[] = [];
   let lastIterationCards: ScoredCandidate[] = [];
   const runId = opts.runId ?? `run_${Date.now().toString(36)}`;
+  const warnings: PipelineWarning[] = [];
+  let completionStatus: PipelineCompletionStatus = 'complete';
   let recentFeedbackSummary = '';
   let recentGeneratedCardsSummary = '';
   let prev: IterationContext | undefined;
@@ -132,8 +167,28 @@ export async function runPipeline(
       outputLanguage,
     });
 
-    const planText = await runAgent(api, `plan:${i}`, plannerPrompt, 'Gather the user\'s current context and generate an intent card plan.', opts.agentTimeoutMs);
-    const plan = parseAgentJsonOrThrow<PlannerOutput>(planText, `plan:${i}`);
+    let plan: PlannerOutput;
+    try {
+      const planText = await runAgent(
+        api,
+        `plan:${i}`,
+        plannerPrompt,
+        'Gather the user\'s current context and generate an intent card plan.',
+        opts.agentTimeoutMs,
+      );
+      plan = parseAgentJsonOrThrow<PlannerOutput>(planText, `plan:${i}`);
+    } catch (error) {
+      if (lastIterationCards.length > 0) {
+        const warning = makePipelineWarning(i, 'planning', 'previous_iteration', error);
+        completionStatus = 'partial';
+        warnings.push(warning);
+        api.logger.warn(
+          `Planner iteration ${i} failed after at least one successful iteration; returning partial result: ${warning.message}`,
+        );
+        break;
+      }
+      throw error;
+    }
 
     if (!plan.intentsToGenerate?.length) {
       api.logger.warn(`Planner iteration ${i} produced no intents, stopping`);
@@ -157,8 +212,28 @@ export async function runPipeline(
       outputLanguage,
     });
 
-    const cardsText = await runAgent(api, `generate:${i}`, generatorPrompt, 'Generate intent cards based on the plan and collected context.', opts.agentTimeoutMs);
-    const generated = parseAgentJsonOrThrow<GeneratorOutput>(cardsText, `generate:${i}`);
+    let generated: GeneratorOutput;
+    try {
+      const cardsText = await runAgent(
+        api,
+        `generate:${i}`,
+        generatorPrompt,
+        'Generate intent cards based on the plan and collected context.',
+        opts.agentTimeoutMs,
+      );
+      generated = parseAgentJsonOrThrow<GeneratorOutput>(cardsText, `generate:${i}`);
+    } catch (error) {
+      if (lastIterationCards.length > 0) {
+        const warning = makePipelineWarning(i, 'generating', 'previous_iteration', error);
+        completionStatus = 'partial';
+        warnings.push(warning);
+        api.logger.warn(
+          `Generator iteration ${i} failed after at least one successful iteration; returning partial result: ${warning.message}`,
+        );
+        break;
+      }
+      throw error;
+    }
 
     if (!generated.cards?.length) {
       api.logger.warn(`Generator iteration ${i} produced no cards, stopping`);
@@ -184,43 +259,60 @@ export async function runPipeline(
       outputLanguage,
     });
 
-    const evalText = await runAgent(api, `evaluate:${i}`, evaluatorPrompt, 'Evaluate the generated intent cards for quality.', opts.agentTimeoutMs);
-    const evaluation = parseAgentJson<EvaluatorOutput>(evalText);
+    let evaluation: EvaluatorOutput;
+    try {
+      const evalText = await runAgent(
+        api,
+        `evaluate:${i}`,
+        evaluatorPrompt,
+        'Evaluate the generated intent cards for quality.',
+        opts.agentTimeoutMs,
+      );
+      const parsedEvaluation = parseAgentJson<EvaluatorOutput>(evalText);
 
-    if (!evaluation) {
-      api.logger.warn(`Evaluator iteration ${i} produced no output, using cards as-is`);
-      // No scores — add cards with synthetic passing scores so they're still candidates
-      lastIterationCards = generated.cards.map((card) => ({
-        card,
-        score: syntheticScore(card.id),
-      }));
-    } else {
-      emit({ type: 'pipeline:evaluation', data: { iteration: i, evaluation } });
-
-      // Pair each card with its evaluation score and add to pool
-      lastIterationCards = generated.cards.map((card) => ({
-        card,
-        score: evaluation.evaluations.find((entry) => entry.cardId === card.id) ?? syntheticScore(card.id),
-      }));
-
-      // Build structured context for next iteration
-      prev = {
-        feedback: evaluation.iterationFeedback,
-        plan,
-        cards: generated.cards,
-        scores: evaluation.evaluations,
-      };
+      if (!parsedEvaluation) {
+        const warning = makePipelineWarning(
+          i,
+          'evaluating',
+          'synthetic_evaluation',
+          `Evaluator iteration ${i} produced no valid JSON output`,
+        );
+        completionStatus = 'partial';
+        warnings.push(warning);
+        api.logger.warn(`${warning.message}, using synthetic evaluation`);
+        evaluation = makeSyntheticEvaluation(generated.cards, warning.message);
+      } else {
+        evaluation = parsedEvaluation;
+      }
+    } catch (error) {
+      const warning = makePipelineWarning(i, 'evaluating', 'synthetic_evaluation', error);
+      completionStatus = 'partial';
+      warnings.push(warning);
+      api.logger.warn(`Evaluator iteration ${i} failed; using synthetic evaluation: ${warning.message}`);
+      evaluation = makeSyntheticEvaluation(generated.cards, warning.message);
     }
+
+    emit({ type: 'pipeline:evaluation', data: { iteration: i, evaluation } });
+
+    // Pair each card with its evaluation score and add to pool
+    lastIterationCards = generated.cards.map((card) => ({
+      card,
+      score: evaluation.evaluations.find((entry) => entry.cardId === card.id) ?? syntheticScore(card.id),
+    }));
+
+    // Build structured context for next iteration
+    prev = {
+      feedback: evaluation.iterationFeedback,
+      plan,
+      cards: generated.cards,
+      scores: evaluation.evaluations,
+    };
 
     iterations.push({
       iteration: i,
       plan,
       cards: generated.cards,
-      evaluation: evaluation ?? {
-        evaluations: [],
-        bestCards: generated.cards,
-        iterationFeedback: 'No evaluation produced',
-      },
+      evaluation,
     });
 
     // If all cards passed with high scores, no need to iterate more
@@ -237,6 +329,8 @@ export async function runPipeline(
     iterations,
     finalCards,
     totalIterations: iterations.length,
+    completionStatus,
+    warnings,
   };
 
   emit({ type: 'pipeline:complete', data: result });
@@ -321,21 +415,28 @@ async function runAgent(
     deliver: false,
   });
 
-  const result = await api.runtime.subagent.waitForRun({ runId, timeoutMs });
+  try {
+    const result = await api.runtime.subagent.waitForRun({ runId, timeoutMs });
 
-  // 'ok' = success. Anything else (error/timeout/failed) is a failure.
-  // Check for 'ok' to stay forward-compatible with future status values.
-  if (result.status !== 'ok') {
-    throw new Error(`Agent ${tag} failed with status: ${result.status}${result.error ? ` — ${result.error}` : ''}`);
-  }
+    // 'ok' = success. Anything else (error/timeout/failed) is a failure.
+    // Check for 'ok' to stay forward-compatible with future status values.
+    if (result.status !== 'ok') {
+      throw new Error(`Agent ${tag} failed with status: ${result.status}${result.error ? ` — ${result.error}` : ''}`);
+    }
 
-  // Extract the agent's final text output
-  const messages = await api.runtime.subagent.getSessionMessages({ sessionKey, limit: 10 });
-  const messageError = detectAgentErrorInMessages(messages.messages);
-  if (messageError) {
-    throw new Error(`Agent ${tag} failed: ${messageError}`);
+    // Extract the agent's final text output
+    const messages = await api.runtime.subagent.getSessionMessages({ sessionKey, limit: 10 });
+    const messageError = detectAgentErrorInMessages(messages.messages);
+    if (messageError) {
+      throw new Error(`Agent ${tag} failed: ${messageError}`);
+    }
+    return extractAgentText(messages);
+  } finally {
+    await api.runtime.subagent.deleteSession({
+      sessionKey,
+      deleteTranscript: false,
+    }).catch(() => {});
   }
-  return extractAgentText(messages);
 }
 
 // ── Helpers ──

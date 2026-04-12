@@ -17,6 +17,7 @@ export const registerContextCommands = (
     .command("incremental")
     .description("Return unprocessed incremental facts and a run token")
     .option("--limit <limit>", "max facts to include", "50")
+    .option("--min-age-ms <minAgeMs>", "minimum age in milliseconds before a fact becomes eligible", "0")
     .option("--json")
     .action(async (options) => {
       resultRef.current = await getIncrementalContext(runtime, options);
@@ -32,6 +33,7 @@ export const registerContextCommands = (
     supportsDryRun: false,
     flags: [
       { name: "limit", type: "number", required: false, default: "50", description: "Maximum facts to include" },
+      { name: "min-age-ms", type: "number", required: false, default: "0", description: "Minimum age in milliseconds before pending facts are eligible" },
     ],
   });
 };
