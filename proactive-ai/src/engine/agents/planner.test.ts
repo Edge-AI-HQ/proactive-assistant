@@ -62,4 +62,21 @@ describe("buildPlannerPrompt", () => {
     expect(prompt).toContain("sustained card-chat engagement");
     expect(prompt).toContain("do not simply repeat the same card");
   });
+
+  it("injects memory context when incremental context is provided", () => {
+    const prompt = buildPlannerPrompt({
+      currentDate: "2026-04-07",
+      iterationNumber: 1,
+      incrementalContext: JSON.stringify({
+        memory: {
+          residentMemories: [{ text: "User is actively working on Supabase issue triage." }],
+          relevantMemories: [{ text: "User confirmed repo maintenance cards twice this week." }],
+        },
+      }, null, 2),
+    });
+
+    expect(prompt).toContain("## Incremental And Memory Context");
+    expect(prompt).toContain("Supabase issue triage");
+    expect(prompt).toContain("repo maintenance cards twice this week");
+  });
 });

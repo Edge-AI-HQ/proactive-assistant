@@ -22,6 +22,7 @@ export interface PlannerPromptParams {
   previousPlan?: string;
   previousCards?: string;
   previousScores?: string;
+  incrementalContext?: string;
   outputLanguage?: SupportedGenerationLanguage;
 }
 
@@ -38,6 +39,17 @@ export function buildPlannerPrompt(params: PlannerPromptParams): string {
     previousScores,
     outputLanguage = DEFAULT_GENERATION_LANGUAGE,
   } = params;
+
+  const incrementalContextSection = params.incrementalContext?.trim()
+    ? `\n## Incremental And Memory Context
+
+Use this as staged context, not as raw output. Prioritize it when deciding what matters right now, especially the memory section's resident and relevant recall.
+
+\`\`\`json
+${params.incrementalContext}
+\`\`\`
+`
+    : '';
 
   const prevSection = previousFeedback ? `
 <previous_iteration>
@@ -61,7 +73,7 @@ ${previousScores}
 </previous_iteration>
 ` : '';
 
-  const feedbackSection = recentFeedbackSummary?.trim() ? `
+  const recentFeedbackSection = recentFeedbackSummary?.trim() ? `
 ## Recent User Feedback Signals
 
 <recent_user_feedback>
@@ -118,7 +130,7 @@ If a command fails or an app is not connected, skip that data source and record 
 <anti_patterns>
 Do NOT plan these: generic reminders, news without actionable link to goals, calendar notifications the user already sees, vague suggestions, cards requiring the user to do significant research.
 </anti_patterns>
-${feedbackSection}${recentGeneratedCardsSection}${prevSection}
+${recentFeedbackSection}${recentGeneratedCardsSection}${incrementalContextSection}${prevSection}
 <output_format>
 Output ONLY a JSON code block:
 

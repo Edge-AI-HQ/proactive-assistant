@@ -6,11 +6,13 @@ import {
   type CoreContext,
   PinDatabaseManager,
   ProfileRepository,
+  MemoryRepository,
   createPersonalProvider,
   type PersonalProvider,
   type PersonalToolInfo,
   type PersonalToolSchema,
   feedback,
+  memory,
   profile,
   appPaths,
   resolveAppRootFromCtx,
@@ -329,6 +331,13 @@ async function createProfileRepository(ctx: CoreContext): Promise<ProfileReposit
   return new ProfileRepository(manager.open("pin"));
 }
 
+async function createMemoryRepository(ctx: CoreContext): Promise<MemoryRepository> {
+  const root = resolveAppRootFromCtx(ctx);
+  const manager = new PinDatabaseManager(root);
+  await manager.init();
+  return new MemoryRepository(manager.open("pin"));
+}
+
 async function getDefaultProfileRecord(ctx: CoreContext): Promise<Record<string, unknown>> {
   return await profile.getProfile(ctx, DEFAULT_PROFILE_ID, true) as Record<string, unknown>;
 }
@@ -577,6 +586,124 @@ function normalizeStringArray(value: unknown): string[] {
     .filter((item): item is string => typeof item === "string")
     .map((item) => item.trim())
     .filter((item) => item.length > 0);
+}
+
+function slugifySubjectKey(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || "dreaming";
+}
+
+function buildDreamMemoryEvents(run: DreamRunRecord): Array<{
+  profileId: string;
+  source: string;
+  kind: string;
+  subjectType: string;
+  subjectKey: string;
+  text: string;
+  payload: Record<string, unknown>;
+  confidence: number;
+  occurredAt?: string;
+}> {
+  const occurredAt = run.completedAt ?? new Date().toISOString();
+  const events: Array<{
+    profileId: string;
+    source: string;
+    kind: string;
+    subjectType: string;
+    subjectKey: string;
+    text: string;
+    payload: Record<string, unknown>;
+    confidence: number;
+    occurredAt?: string;
+  }> = [];
+  const seen = new Set<string>();
+  const highlights = normalizeStringArray(run.summaryJson?.highlights);
+
+  const pushEvent = (event: {
+    profileId: string;
+    source: string;
+    kind: string;
+    subjectType: string;
+    subjectKey: string;
+    text: string;
+    payload: Record<string, unknown>;
+    confidence: number;
+    occurredAt?: string;
+  }) => {
+    const key = `${event.subjectType}|${event.subjectKey}|${event.text}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    events.push(event);
+  };
+
+  const summaryText = compactText(run.summaryJson?.text);
+  if (summaryText) {
+    pushEvent({
+      profileId: DEFAULT_PROFILE_ID,
+      source: "dreaming",
+      kind: "profile_refined",
+      subjectType: "dreaming",
+      subjectKey: "summary",
+      text: summaryText,
+      payload: {
+        runId: run.id,
+        trigger: run.trigger,
+        highlights,
+      },
+      confidence: 0.72,
+      occurredAt,
+    });
+  }
+
+  for (const highlight of highlights) {
+    pushEvent({
+      profileId: DEFAULT_PROFILE_ID,
+      source: "dreaming",
+      kind: "highlight_captured",
+      subjectType: "dreaming",
+      subjectKey: `highlight:${slugifySubjectKey(highlight)}`,
+      text: highlight,
+      payload: {
+        runId: run.id,
+        trigger: run.trigger,
+      },
+      confidence: 0.78,
+      occurredAt,
+    });
+  }
+
+  const beforeInterestKeys = new Set(
+    arrayOfObjects(run.profileDeltaJson?.interests.before)
+      .map((interest) => compactText(interest.key))
+      .filter((value): value is string => !!value),
+  );
+  const nextInterests = arrayOfObjects(run.profileDeltaJson?.interests.after);
+  for (const interest of nextInterests) {
+    const interestKey = compactText(interest.key);
+    if (!interestKey || beforeInterestKeys.has(interestKey)) {
+      continue;
+    }
+    pushEvent({
+      profileId: DEFAULT_PROFILE_ID,
+      source: "dreaming",
+      kind: "interest_detected",
+      subjectType: "interest",
+      subjectKey: interestKey,
+      text: `Dreaming surfaced a recurring interest in ${interestKey}.`,
+      payload: {
+        runId: run.id,
+        interest,
+      },
+      confidence: typeof interest.score === "number" ? Number(interest.score) : 0.7,
+      occurredAt,
+    });
+  }
+
+  return events;
 }
 
 function joinContextParts(parts: Array<unknown>): string | null {
@@ -2126,6 +2253,22 @@ export async function applyDreamProfile(input: ApplyDreamProfileInput): Promise<
   });
   if (!updated) {
     throw new Error("Default profile not found");
+  }
+
+  try {
+    const memoryRepository = await createMemoryRepository(input.ctx);
+    const memoryEvents = buildDreamMemoryEvents(run);
+    for (const event of memoryEvents) {
+      await memoryRepository.recordEvent(event);
+    }
+    if (memoryEvents.length > 0) {
+      await memory.consolidateMemoryEvents({
+        profileId: DEFAULT_PROFILE_ID,
+        memoryRepository,
+      });
+    }
+  } catch {
+    // Dream profile application remains the primary write; memory capture is best-effort.
   }
 
   return store.markApplied(input.runId);

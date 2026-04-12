@@ -53,6 +53,18 @@ export * as profile from "./domains/profile/service.js";
 export { ProfileRepository } from "./domains/profile/repository.js";
 export { profiles, type ProfileRecord, type NewProfileRecord } from "./domains/profile/schema.js";
 
+// ── Domain: Memory ──
+export * as memory from "./domains/memory/service.js";
+export { MemoryRepository } from "./domains/memory/repository.js";
+export {
+  memoryEvents,
+  memoryEntries,
+  type MemoryEventRecord,
+  type NewMemoryEventRecord,
+  type MemoryEntryRecord,
+  type NewMemoryEntryRecord,
+} from "./domains/memory/schema.js";
+
 // ── Domain: World ──
 export * as world from "./domains/world/service.js";
 export { WorldRepository } from "./domains/world/repository.js";

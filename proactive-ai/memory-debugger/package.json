@@ -1,0 +1,10 @@
+{
+  "name": "proactive-ai-memory-debugger",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "../node_modules/.bin/vite --host 127.0.0.1 --port 18101",
+    "build": "../node_modules/.bin/vite build",
+    "preview": "../node_modules/.bin/vite preview --host 127.0.0.1 --port 18101"
+  }
+}

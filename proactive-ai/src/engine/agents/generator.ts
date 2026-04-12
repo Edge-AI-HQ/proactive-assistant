@@ -22,6 +22,7 @@ export interface GeneratorPromptParams {
   previousFeedback?: string;
   previousCards?: string;
   previousScores?: string;
+  incrementalContext?: string;
   outputLanguage?: SupportedGenerationLanguage;
 }
 
@@ -37,6 +38,17 @@ export function buildGeneratorPrompt(params: GeneratorPromptParams): string {
     previousScores,
     outputLanguage = DEFAULT_GENERATION_LANGUAGE,
   } = params;
+
+  const incrementalContextSection = params.incrementalContext?.trim()
+    ? `\n## Incremental And Memory Context
+
+Use this staged context to personalize each card. The memory section tells you what the user consistently cares about and what is specifically relevant to this case.
+
+\`\`\`json
+${params.incrementalContext}
+\`\`\`
+`
+    : '';
 
   const prevSection = previousFeedback ? `
 <previous_iteration>
@@ -56,7 +68,7 @@ ${previousScores}
 </previous_iteration>
 ` : '';
 
-  const feedbackSection = recentFeedbackSummary?.trim() ? `
+  const recentFeedbackSection = recentFeedbackSummary?.trim() ? `
 ## Recent User Feedback Signals
 
 <recent_user_feedback>
@@ -110,7 +122,7 @@ Each card must meet ALL of these:
 - **Decision compression**: The card saves the user thinking time. Present the distilled decision, not raw data.
 - **Respectful tone**: Information over instruction. "Your sleep declined 15% this week" not "You should sleep more".
 </card_quality_standards>
-${feedbackSection}${recentGeneratedCardsSection}${prevSection}
+${recentFeedbackSection}${recentGeneratedCardsSection}${incrementalContextSection}${prevSection}
 <output_format>
 Output ONLY a JSON code block:
 

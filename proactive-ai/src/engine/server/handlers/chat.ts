@@ -3,6 +3,41 @@ import { json, readBody } from '../http-utils.js';
 import { extractTextContent } from '../../helpers.js';
 import { buildChatSystemPrompt, buildChatFirstMessage } from '../../agents/chat.js';
 import { normalizeCardChatMessages } from '../../chat-feedback/service.js';
+import { memory as coreMemory } from '../../../core/index.js';
+import { buildDefaultCtx } from '../../pipeline/data-access.js';
+
+const coreCtx = buildDefaultCtx();
+
+function buildChatMemoryEvent(input: {
+  text: string;
+  sessionKey: string;
+  isFirstTurn: boolean;
+  cardContext?: string;
+}): {
+  profileId: string;
+  source: string;
+  kind: string;
+  subjectType: string;
+  subjectKey: string;
+  text: string;
+  payload: Record<string, unknown>;
+  confidence: number;
+} {
+  return {
+    profileId: 'default',
+    source: 'chat',
+    kind: 'user_said',
+    subjectType: 'conversation',
+    subjectKey: 'chat',
+    text: input.text,
+    payload: {
+      sessionKey: input.sessionKey,
+      isFirstTurn: input.isFirstTurn,
+      hasCardContext: Boolean(input.cardContext),
+    },
+    confidence: 0.95,
+  };
+}
 
 export async function handleChat(ctx: RouteContext): Promise<boolean> {
   const { subpath, req, res, url, api } = ctx;
@@ -54,6 +89,22 @@ export async function handleChat(ctx: RouteContext): Promise<boolean> {
     }
 
     try {
+      if (userMessage) {
+        try {
+          await coreMemory.recordMemoryEvent(
+            coreCtx,
+            buildChatMemoryEvent({
+              text: userMessage,
+              sessionKey,
+              isFirstTurn,
+              cardContext: body.cardContext,
+            }),
+          );
+        } catch {
+          // Memory capture is best-effort and must not block chat.
+        }
+      }
+
       const { runId } = await api.runtime.subagent.run({
         sessionKey,
         message: agentMessage,

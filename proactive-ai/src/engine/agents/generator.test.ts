@@ -56,4 +56,22 @@ describe("buildGeneratorPrompt", () => {
     expect(prompt).toContain("sustained card-chat engagement");
     expect(prompt).toContain("do not simply restate the same card");
   });
+
+  it("injects memory context when incremental context is provided", () => {
+    const prompt = buildGeneratorPrompt({
+      currentDate: "2026-04-07",
+      iterationNumber: 1,
+      plan: JSON.stringify({ intentsToGenerate: [] }),
+      incrementalContext: JSON.stringify({
+        memory: {
+          residentMemories: [{ text: "User prefers short, execution-ready work recommendations." }],
+          relevantMemories: [{ text: "User recently dismissed travel cards as not relevant." }],
+        },
+      }, null, 2),
+    });
+
+    expect(prompt).toContain("## Incremental And Memory Context");
+    expect(prompt).toContain("execution-ready work recommendations");
+    expect(prompt).toContain("dismissed travel cards");
+  });
 });

@@ -157,3 +157,5 @@ flyctl secrets list -a pinclaw-api-dev | rg "TELEGRAM_ROUTER_WEBHOOK_URL|TELEGRA
 - `AGENTS.md` 是 SSOT。
 - `.cursor/rules/agents.mdc` 应软链接到本文件。
 - `CLAUDE.md`、`GEMINI.md` 继续指向本文件，避免规则漂移。
+- 未经允许不要乱加fullback
+- 请使用平实、直接、克制的技术向白话中文，以把事情说明白为首要目标。严禁大厂黑话与抽象职场词汇（如赋能、闭环、底座、抓手、下钻、落地等），禁用“先说判断”等故作高深的汇报句式或网络梗。多用精确的工程术语；从具体事实说起，再作判断。整体气质朴素诚恳，不空谈概念。

@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 
 import { registerFeedbackCommands } from "./domains/feedback/register.js";
 import { registerIngestCommands } from "./domains/ingest/register.js";
+import { registerMemoryCommands } from "./domains/memory/register.js";
 import { registerProfileCommands } from "./domains/profile/register.js";
 import { registerPersonalCommands } from "./domains/personal/register.js";
 import { registerPushCommands } from "./domains/push/register.js";
@@ -27,6 +28,7 @@ const createProgram = (runtime: CliRuntimeInput, resultRef: ResultRef): Command 
 
   registerSysCommands(program, runtime, resultRef);
   registerProfileCommands(program, runtime, resultRef);
+  registerMemoryCommands(program, runtime, resultRef);
   registerWorldCommands(program, runtime, resultRef);
   registerIngestCommands(program, runtime, resultRef);
   registerContextCommands(program, runtime, resultRef);
