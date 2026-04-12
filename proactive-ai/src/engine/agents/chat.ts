@@ -30,7 +30,8 @@ Personal data (via Composio — connected third-party apps):
 User profile & goals:
   pin profile get --id default --json
   pin profile goals list --json
-  pin profile memory search --query "..." --json
+  pin memory context --query "..." --json
+  pin memory events search --query "..." --json
 
 World context:
   pin world search --query "..." --limit 5 --json

@@ -38,6 +38,17 @@ export function buildGeneratorPrompt(params: GeneratorPromptParams): string {
     outputLanguage = DEFAULT_GENERATION_LANGUAGE,
   } = params;
 
+  const incrementalContextSection = params.incrementalContext?.trim()
+    ? `\n## Incremental And Memory Context
+
+Use this staged context to personalize each card. The memory section tells you what the user consistently cares about and what is specifically relevant to this case.
+
+\`\`\`json
+${params.incrementalContext}
+\`\`\`
+`
+    : '';
+
   let feedbackSection = '';
   if (previousFeedback) {
     feedbackSection = `\n## Previous Iteration Context
@@ -159,6 +170,7 @@ Before outputting each card, verify:
 - [ ] Confidence, urgency, importance scores are honest?
 - [ ] Not duplicating a recent push?
 ${recentFeedbackSection}
+${incrementalContextSection}
 ${feedbackSection}
 ## Output Format
 

@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
+import * as core from "../core/index.js";
 import { runCli } from "./cli.js";
 import type { PinEnvelope } from "./output/envelope.js";
 import type { RunCliResult } from "./runtime.js";
@@ -14,7 +15,6 @@ import {
   execTool,
 } from "./domains/personal/service.js";
 import type { PersonalProvider } from "../core/domains/personal/provider.js";
-import { PinDatabaseManager } from "./db/database.js";
 import { LoopRepository } from "./domains/loop/repository.js";
 
 interface SysDoctorData {
@@ -201,6 +201,8 @@ test("sys schema includes implemented section commands and system placeholders",
   assert.equal(paths.has("sys.import"), true);
   assert.equal(paths.has("profile.facts.get"), true);
   assert.equal(paths.has("profile.memory.add"), true);
+  assert.equal(paths.has("memory.entries.list"), true);
+  assert.equal(paths.has("memory.context"), true);
   assert.equal(paths.has("ingest.run"), true);
   assert.equal(paths.has("context.incremental"), true);
   assert.equal(paths.has("loop.commit"), true);
@@ -219,6 +221,94 @@ test("sys schema includes implemented section commands and system placeholders",
   const migrateData = migrate.stdout.data as { domain: string; command: string };
   assert.equal(migrateData.domain, "sys");
   assert.equal(migrateData.command, "migrate");
+});
+
+test("memory context returns resident and relevant recall from the independent memory domain", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-memory-cli-"));
+
+  try {
+    const runtime = {
+      env: { PIN_DATA_ROOT: root },
+      homeDir: root,
+    };
+
+    await runCli(["profile", "create", "--id", "default", "--display-name", "User", "--full", "--json"], runtime);
+    await core.memory.recordMemoryEvent(runtime, {
+      profileId: "default",
+      source: "chat",
+      kind: "user_said",
+      subjectType: "conversation",
+      subjectKey: "chat",
+      text: "User is handling Supabase issue triage this week.",
+    });
+
+    const manager = new core.PinDatabaseManager(root);
+    await manager.init();
+    const repository = new core.MemoryRepository(manager.open("pin"));
+    await core.memory.consolidateMemoryEvents({
+      profileId: "default",
+      memoryRepository: repository,
+    });
+
+    const result = await runCli(["memory", "context", "--query", "Supabase issue", "--json"], runtime);
+    assert.equal(result.exitCode, 0);
+    const data = result.stdout.data as {
+      residentMemories: Array<{ text: string }>;
+      relevantMemories: Array<{ text: string }>;
+    };
+
+    assert.equal(data.residentMemories.length > 0, true);
+    assert.equal(data.relevantMemories.some((entry) => entry.text.includes("Supabase issue triage")), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("memory consolidation keeps a single entry per subject when newer evidence changes the text", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-memory-dedupe-"));
+
+  try {
+    const runtime = {
+      env: { PIN_DATA_ROOT: root },
+      homeDir: root,
+    };
+
+    await runCli(["profile", "create", "--id", "default", "--display-name", "User", "--full", "--json"], runtime);
+
+    await core.memory.recordMemoryEvent(runtime, {
+      profileId: "default",
+      source: "dreaming",
+      kind: "profile_refined",
+      subjectType: "dreaming",
+      subjectKey: "summary",
+      text: "First summary",
+      occurredAt: "2026-04-10T10:00:00.000Z",
+    });
+    await core.memory.recordMemoryEvent(runtime, {
+      profileId: "default",
+      source: "dreaming",
+      kind: "profile_refined",
+      subjectType: "dreaming",
+      subjectKey: "summary",
+      text: "Updated summary",
+      occurredAt: "2026-04-10T11:00:00.000Z",
+    });
+
+    const manager = new core.PinDatabaseManager(root);
+    await manager.init();
+    const repository = new core.MemoryRepository(manager.open("pin"));
+    await core.memory.consolidateMemoryEvents({
+      profileId: "default",
+      memoryRepository: repository,
+    });
+
+    const entries = await repository.listEntries("default", { category: "dreaming", limit: 10 });
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0]?.text, "Updated summary");
+    assert.deepEqual(entries[0]?.sourceEventIds.length, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("context incremental and loop commit support agent-style consumption", async () => {

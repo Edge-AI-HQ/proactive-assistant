@@ -67,6 +67,12 @@ async function seedProfile(ctx: CoreContext, locale = "en-US") {
   });
 }
 
+async function createMemoryRepository(ctx: CoreContext): Promise<core.MemoryRepository> {
+  const manager = new core.PinDatabaseManager(core.resolveAppRootFromCtx(ctx));
+  await manager.init();
+  return new core.MemoryRepository(manager.open("pin"));
+}
+
 describe("runDreaming", () => {
   it("fails fast when runtime subagent is unavailable", async () => {
     const root = mkdtempSync(join(tmpdir(), "dream-service-"));
@@ -1173,6 +1179,13 @@ describe("runDreaming", () => {
 
     expect(updatedProfile.facts).toHaveProperty("dreaming");
     expect(updatedProfile.snapshots.length).toBeGreaterThan(0);
+
+    const memoryRepository = await createMemoryRepository(ctx);
+    const events = await memoryRepository.listEvents("default", { limit: 10 });
+    const entries = await memoryRepository.listEntries("default", { limit: 10 });
+
+    expect(events.some((event) => event.source === "dreaming")).toBe(true);
+    expect(entries.some((entry) => entry.text.includes("Concrete work follow-up"))).toBe(true);
   });
 
   it("applies dream goal changes separately from profile changes", async () => {
