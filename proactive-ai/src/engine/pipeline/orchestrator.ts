@@ -40,6 +40,7 @@ export interface PipelineOptions {
   agentTimeoutMs: number;
   cardsPerIteration?: number;
   runId?: string;
+  incrementalContext?: string;
   outputLanguage?: SupportedGenerationLanguage;
 }
 
@@ -127,6 +128,7 @@ export async function runPipeline(
       previousPlan: prev ? JSON.stringify(prev.plan, null, 2) : undefined,
       previousCards: prev ? JSON.stringify(prev.cards, null, 2) : undefined,
       previousScores: prev ? JSON.stringify(prev.scores, null, 2) : undefined,
+      incrementalContext: opts.incrementalContext,
       outputLanguage,
     });
 
@@ -151,6 +153,7 @@ export async function runPipeline(
       previousFeedback: prev?.feedback,
       previousCards: prev ? JSON.stringify(prev.cards, null, 2) : undefined,
       previousScores: prev ? JSON.stringify(prev.scores, null, 2) : undefined,
+      incrementalContext: opts.incrementalContext,
       outputLanguage,
     });
 
