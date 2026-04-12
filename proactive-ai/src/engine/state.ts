@@ -11,6 +11,7 @@ interface AutoPollState {
   ingestInFlight: boolean;
   loopInFlight: boolean;
   dreamInFlight: boolean;
+  chatFeedbackInFlight: boolean;
 }
 
 interface ProactiveAiGlobal {
@@ -34,6 +35,7 @@ if (!g[GLOBAL_KEY]) {
       ingestInFlight: false,
       loopInFlight: false,
       dreamInFlight: false,
+      chatFeedbackInFlight: false,
     },
     gatewayOrigin: null,
     initialized: false,

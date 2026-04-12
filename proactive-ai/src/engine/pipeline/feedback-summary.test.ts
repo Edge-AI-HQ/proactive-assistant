@@ -110,4 +110,32 @@ describe("feedback-summary", () => {
     expect(promptText).toContain("Frequently dismissed");
     expect(promptText).toContain("Prefer morning work briefings");
   });
+
+  it("surfaces sustained card-chat interest derived from agent analysis", async () => {
+    listFeedback.mockResolvedValueOnce([
+      {
+        id: "fe_chat_1",
+        kind: "text_feedback",
+        source: "agent_analysis",
+        basket: "work",
+        text: "User kept drilling into the executable hiring follow-up.",
+        createdAt: "2026-04-07T09:00:00.000Z",
+        metadata: {
+          analysisType: "card_chat_interest",
+          intentKey: "work:draft-hiring-outreach",
+          topics: ["hiring", "follow-up"],
+          nextAngles: ["draft outreach", "schedule follow-up"],
+        },
+      },
+    ]);
+    feedbackStats.mockResolvedValueOnce({ totalCount: 1 });
+
+    const summary = await loadRecentFeedbackSummary({ since: "14d" });
+    const promptText = formatRecentFeedbackSummary(summary);
+
+    expect(promptText).toContain("Sustained card chats: work cards (1)");
+    expect(promptText).toContain("work:draft-hiring-outreach");
+    expect(promptText).toContain("Chat-derived topics: hiring | follow-up");
+    expect(promptText).toContain("Chat-derived follow-up angles: draft outreach | schedule follow-up");
+  });
 });

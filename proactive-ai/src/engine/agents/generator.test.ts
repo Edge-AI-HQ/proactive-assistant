@@ -45,4 +45,15 @@ describe("buildGeneratorPrompt", () => {
     expect(prompt).toContain("pin profile facts get --json");
     expect(prompt).toContain("pin sys schema world.shortlist --json");
   });
+
+  it("treats sustained card-chat engagement as a strong signal for adjacent follow-up cards", () => {
+    const prompt = buildGeneratorPrompt({
+      currentDate: "2026-04-07",
+      iterationNumber: 1,
+      plan: JSON.stringify({ intentsToGenerate: [] }),
+    });
+
+    expect(prompt).toContain("sustained card-chat engagement");
+    expect(prompt).toContain("do not simply restate the same card");
+  });
 });

@@ -10,6 +10,7 @@ import { buildDefaultCtx, getDefaultProfile } from '../pipeline/data-access.js';
 import { startDreaming, listDreamRuns } from '../dreaming/service.js';
 import { resolveDreamingTimezone, isDreamingDue } from '../dreaming/schedule.js';
 import { getAutoDreaming, getAutoGenerate } from '../server/local-settings.js';
+import { syncCardChatFeedback } from '../chat-feedback/service.js';
 
 async function runIngest(api: OpenClawPluginApi, config: ProactiveAIConfig): Promise<void> {
   if (autoPollState.ingestInFlight) return;
@@ -146,6 +147,25 @@ async function runAutoDreaming(api: OpenClawPluginApi): Promise<void> {
   }
 }
 
+async function runAutoCardChatFeedback(api: OpenClawPluginApi): Promise<void> {
+  if (autoPollState.chatFeedbackInFlight) return;
+  if (pipelineState.running) return;
+
+  autoPollState.chatFeedbackInFlight = true;
+  try {
+    await syncCardChatFeedback({
+      ctx: buildDefaultCtx(),
+      api,
+      trigger: 'auto',
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    api.logger.error(`[auto-chat-feedback] failed: ${msg}`);
+  } finally {
+    autoPollState.chatFeedbackInFlight = false;
+  }
+}
+
 export function startAutoLoop(api: OpenClawPluginApi, config: ProactiveAIConfig): void {
   if (!config.auto_poll_enabled) {
     api.logger.info('[auto-loop] disabled by config');
@@ -161,6 +181,7 @@ export function startAutoLoop(api: OpenClawPluginApi, config: ProactiveAIConfig)
 
   autoPollState.detectTimer = setInterval(() => {
     void runDetectAndLoop(api, config);
+    void runAutoCardChatFeedback(api);
     void runAutoDreaming(api);
   }, config.auto_detect_interval_ms);
 

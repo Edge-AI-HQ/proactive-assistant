@@ -52,4 +52,14 @@ describe("buildPlannerPrompt", () => {
     expect(prompt).toContain("pin profile facts get --json");
     expect(prompt).toContain("pin sys schema push.history --json");
   });
+
+  it("treats sustained card-chat engagement as a strong follow-up signal", () => {
+    const prompt = buildPlannerPrompt({
+      currentDate: "2026-04-07",
+      iterationNumber: 1,
+    });
+
+    expect(prompt).toContain("sustained card-chat engagement");
+    expect(prompt).toContain("do not simply repeat the same card");
+  });
 });

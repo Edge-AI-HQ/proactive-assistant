@@ -2,6 +2,7 @@ import type { RouteContext } from '../types.js';
 import { json, readBody } from '../http-utils.js';
 import { extractTextContent } from '../../helpers.js';
 import { buildChatSystemPrompt, buildChatFirstMessage } from '../../agents/chat.js';
+import { normalizeCardChatMessages } from '../../chat-feedback/service.js';
 
 export async function handleChat(ctx: RouteContext): Promise<boolean> {
   const { subpath, req, res, url, api } = ctx;
@@ -16,24 +17,12 @@ export async function handleChat(ctx: RouteContext): Promise<boolean> {
 
     try {
       const result = await api.runtime.subagent.getSessionMessages({ sessionKey, limit: 50 });
-      const firstTurnPrompt = buildChatFirstMessage();
-      const seenAssistant = new Set<string>();
-      const messages = (result.messages as Array<{ role?: string; content?: unknown }>)
-        .filter(m => m.role === 'user' || m.role === 'assistant')
-        .map((m, i) => ({
-          id: `${m.role}-${i}`,
-          role: m.role as string,
-          content: extractTextContent(m.content),
-        }))
-        .filter(m => {
-          if (!m.content) return false;
-          if (m.role === 'user' && m.content.includes(firstTurnPrompt)) return false;
-          if (m.role === 'assistant') {
-            if (seenAssistant.has(m.content)) return false;
-            seenAssistant.add(m.content);
-          }
-          return true;
-        });
+      const messages = normalizeCardChatMessages(result.messages)
+        .map((message, index) => ({
+          id: `${message.role}-${index}`,
+          role: message.role,
+          content: message.content,
+        }));
       json(res, 200, { ok: true, sessionKey, messages });
     } catch {
       json(res, 200, { ok: true, sessionKey, messages: [] });

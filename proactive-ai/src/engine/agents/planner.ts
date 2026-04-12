@@ -110,6 +110,8 @@ Each planned intent must satisfy ALL of these:
 <process>
 Before locking the plan, inspect recent generated card history with \`pin cards recent --limit 10 --json\`. Use that result together with recent pushes and feedback to avoid blindly repeating the same card theme.
 
+Treat sustained card-chat engagement as a strong signal that the user wants adjacent follow-up content, but do not simply repeat the same card. Use that signal to plan the next higher-value step around the same thread.
+
 If a command fails or an app is not connected, skip that data source and record the gap inside \`collectedContext\`.
 </process>
 

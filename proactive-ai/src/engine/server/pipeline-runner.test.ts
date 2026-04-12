@@ -6,6 +6,7 @@ const {
   runPipeline,
   saveRun,
   recordGeneratedBatch,
+  syncCardChatFeedback,
   loadAutoLoopState,
   saveAutoLoopState,
 } = vi.hoisted(() => ({
@@ -14,6 +15,7 @@ const {
   runPipeline: vi.fn(),
   saveRun: vi.fn(),
   recordGeneratedBatch: vi.fn(),
+  syncCardChatFeedback: vi.fn(),
   loadAutoLoopState: vi.fn(() => ({ lastFinishedAt: null })),
   saveAutoLoopState: vi.fn(),
 }));
@@ -50,6 +52,10 @@ vi.mock("../../core/index.js", async () => {
     },
   };
 });
+
+vi.mock("../chat-feedback/service.js", () => ({
+  syncCardChatFeedback,
+}));
 
 import { executeIncrementalPipeline } from "./pipeline-runner.js";
 
@@ -191,5 +197,89 @@ describe("executeIncrementalPipeline", () => {
       }),
       undefined,
     );
+  });
+
+  it("best-effort syncs card-chat feedback before running the generation pipeline", async () => {
+    pinCliData.mockResolvedValue({
+      runToken: "rt_789",
+      generatedAt: "2026-04-10T10:00:00.000Z",
+      items: { world: [], personal: [] },
+      meta: { pendingCount: 1, oldestPendingAt: "2026-04-10T09:30:00.000Z" },
+    });
+    syncCardChatFeedback.mockResolvedValue({
+      scannedCards: 1,
+      qualifiedCards: 1,
+      summarizedCards: 1,
+      writtenFeedback: 1,
+      skippedBelowThreshold: 0,
+      skippedUnchanged: 0,
+    });
+    runPipeline.mockResolvedValue({
+      runId: "run_with_chat_feedback",
+      iterations: [],
+      completionStatus: "complete",
+      warnings: [],
+      finalCards: [],
+      totalIterations: 0,
+    });
+    runPinCli.mockResolvedValue({
+      ok: true,
+      data: { processedCount: 1 },
+    });
+    recordGeneratedBatch.mockResolvedValue([]);
+
+    await executeIncrementalPipeline(
+      {
+        logger: { info() {}, warn() {}, error() {} },
+      } as never,
+      { trigger: "manual" },
+    );
+
+    expect(syncCardChatFeedback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        api: expect.anything(),
+        trigger: "pre_generate",
+      }),
+    );
+    expect(syncCardChatFeedback.mock.invocationCallOrder[0]).toBeLessThan(
+      runPipeline.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("fails open when pre-generate card-chat feedback sync errors", async () => {
+    pinCliData.mockResolvedValue({
+      runToken: "rt_999",
+      generatedAt: "2026-04-10T10:00:00.000Z",
+      items: { world: [], personal: [] },
+      meta: { pendingCount: 1, oldestPendingAt: "2026-04-10T09:30:00.000Z" },
+    });
+    syncCardChatFeedback.mockRejectedValue(new Error("chat-feedback unavailable"));
+    runPipeline.mockResolvedValue({
+      runId: "run_despite_chat_feedback_error",
+      iterations: [],
+      completionStatus: "complete",
+      warnings: [],
+      finalCards: [],
+      totalIterations: 0,
+    });
+    runPinCli.mockResolvedValue({
+      ok: true,
+      data: { processedCount: 1 },
+    });
+    recordGeneratedBatch.mockResolvedValue([]);
+
+    await expect(executeIncrementalPipeline(
+      {
+        logger: { info() {}, warn() {}, error() {} },
+      } as never,
+      { trigger: "manual" },
+    )).resolves.toEqual(
+      expect.objectContaining({
+        ok: true,
+        runId: "run_despite_chat_feedback_error",
+      }),
+    );
+
+    expect(runPipeline).toHaveBeenCalledTimes(1);
   });
 });

@@ -9,6 +9,7 @@ import type { ServerEvent } from '../../core/index.js';
 import { cards } from '../../core/index.js';
 import { loadAutoLoopState, saveAutoLoopState } from '../pending-store.js';
 import type { SupportedGenerationLanguage } from '../generation-language.js';
+import { syncCardChatFeedback } from '../chat-feedback/service.js';
 
 type EventSink = (event: ServerEvent) => void;
 type TriggerKind = 'auto' | 'manual';
@@ -102,6 +103,21 @@ export async function executeIncrementalPipeline(
   saveAutoLoopState({ lastStartedAt: toIsoNow() });
 
   try {
+    try {
+      await syncCardChatFeedback({
+        ctx: {
+          env: process.env as Record<string, string | undefined>,
+          homeDir: homedir(),
+        },
+        api,
+        trigger: 'pre_generate',
+      });
+    } catch (error) {
+      api.logger.warn(
+        `Card chat feedback sync skipped: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
     const result = await runPipeline(
       api,
       {

@@ -94,6 +94,8 @@ ${plan}
 <process>
 Before generating cards, inspect recent generated history with \`pin cards recent --limit 10 --json\`. Use that result together with recent pushes and feedback to avoid producing near-duplicate card themes.
 
+Treat sustained card-chat engagement as a strong signal for adjacent follow-up cards, but do not simply restate the same card. Turn that signal into the next upgraded, more actionable step around the same thread.
+
 If you need extra data, prefer specific pin CLI fetches that extend the Planner's collected context rather than redoing broad discovery.
 </process>
 

@@ -1,4 +1,5 @@
 import { listFeedback, feedbackStats } from './data-access.js';
+import { CARD_CHAT_INTEREST_ANALYSIS_TYPE } from "../chat-feedback/service.js";
 
 export interface FeedbackActionPattern {
   basket: string;
@@ -13,6 +14,9 @@ export interface RecentFeedbackSummary {
   modifyPatterns: FeedbackActionPattern[];
   dismissPatterns: FeedbackActionPattern[];
   textPreferences: string[];
+  chatInterestPatterns: FeedbackActionPattern[];
+  chatTopics: string[];
+  chatNextAngles: string[];
 }
 
 interface FeedbackRecord {
@@ -78,6 +82,34 @@ function buildTextPreferences(records: FeedbackRecord[]): string[] {
     .slice(0, 3);
 }
 
+function isChatInterestRecord(record: FeedbackRecord): boolean {
+  return record.kind === "text_feedback"
+    && record.source === "agent_analysis"
+    && asObject(record.metadata)?.["analysisType"] === CARD_CHAT_INTEREST_ANALYSIS_TYPE;
+}
+
+function buildAgentInterestPatterns(records: FeedbackRecord[]): FeedbackActionPattern[] {
+  return buildPatterns(records, isChatInterestRecord);
+}
+
+function buildAgentDerivedList(
+  records: FeedbackRecord[],
+  key: "topics" | "nextAngles",
+): string[] {
+  const values = records
+    .filter(isChatInterestRecord)
+    .sort((left, right) => (right.createdAt ?? "").localeCompare(left.createdAt ?? ""))
+    .flatMap((record) => {
+      const metadata = asObject(record.metadata);
+      const raw = metadata?.[key];
+      return Array.isArray(raw)
+        ? raw.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim())
+        : [];
+    });
+
+  return unique(values).slice(0, 4);
+}
+
 export async function loadRecentFeedbackSummary(
   options?: { since?: string; limit?: number },
 ): Promise<RecentFeedbackSummary | null> {
@@ -112,13 +144,19 @@ export async function loadRecentFeedbackSummary(
       (record) => record.kind === "dismiss",
     ),
     textPreferences: buildTextPreferences(records),
+    chatInterestPatterns: buildAgentInterestPatterns(records),
+    chatTopics: buildAgentDerivedList(records, "topics"),
+    chatNextAngles: buildAgentDerivedList(records, "nextAngles"),
   };
 
   const hasSignals =
     summary.confirmPatterns.length > 0 ||
     summary.modifyPatterns.length > 0 ||
     summary.dismissPatterns.length > 0 ||
-    summary.textPreferences.length > 0;
+    summary.textPreferences.length > 0 ||
+    summary.chatInterestPatterns.length > 0 ||
+    summary.chatTopics.length > 0 ||
+    summary.chatNextAngles.length > 0;
 
   return hasSignals ? summary : null;
 }
@@ -146,11 +184,24 @@ export function formatRecentFeedbackSummary(
     ...formatPatternLines("Frequently confirmed", summary.confirmPatterns),
     ...formatPatternLines("Frequently modified", summary.modifyPatterns),
     ...formatPatternLines("Frequently dismissed", summary.dismissPatterns),
+    ...formatPatternLines("Sustained card chats", summary.chatInterestPatterns),
   ];
 
   if (summary.textPreferences.length > 0) {
     lines.push(
       `- Recent text preferences: ${summary.textPreferences.join(" | ")}`,
+    );
+  }
+
+  if (summary.chatTopics.length > 0) {
+    lines.push(
+      `- Chat-derived topics: ${summary.chatTopics.join(" | ")}`,
+    );
+  }
+
+  if (summary.chatNextAngles.length > 0) {
+    lines.push(
+      `- Chat-derived follow-up angles: ${summary.chatNextAngles.join(" | ")}`,
     );
   }
 
