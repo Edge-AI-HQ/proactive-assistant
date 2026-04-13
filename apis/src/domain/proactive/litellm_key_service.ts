@@ -2,8 +2,9 @@
  * LiteLLM virtual key management for proactive-ai users.
  *
  * Reuses the existing LiteLLM client (generateLiteLLMKey, createLiteLLMUser)
- * to provision per-user virtual keys with budget limits. Keys are stored in
- * the proactive_litellm_keys table (one key per user).
+ * to provision per-user virtual keys with budget limits. Keys are stored on
+ * the `users` table (litellm_virtual_key, litellm_user_id, etc.) — the same
+ * columns used by Telegram-based users, avoiding a separate table.
  */
 
 import { pool } from '../common/db/core.js';
@@ -14,50 +15,44 @@ import {
   isLiteLLMClientEnabled,
 } from '../litellm/client.js';
 
-export interface ProactiveLiteLLMKey {
-  user_id: string;
-  litellm_user_id: string;
-  virtual_key: string;
-  key_alias: string | null;
-  key_last4: string | null;
-  spend_usd: number;
-  budget_usd: number | null;
-  last_synced_at: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
 // ── DB helpers ──
 
-async function getKeyForUser(userId: string): Promise<ProactiveLiteLLMKey | null> {
-  const { rows } = await pool.query<ProactiveLiteLLMKey>(
-    `SELECT * FROM proactive_litellm_keys WHERE user_id = $1`,
-    [userId],
+interface UserLiteLLMRow {
+  id: number;
+  litellm_user_id: string | null;
+  litellm_virtual_key: string | null;
+  litellm_key_alias: string | null;
+  litellm_key_last4: string | null;
+  litellm_budget_usd: number | null;
+}
+
+async function getLiteLLMFieldsForUser(supabaseUserId: string): Promise<UserLiteLLMRow | null> {
+  const { rows } = await pool.query<UserLiteLLMRow>(
+    `SELECT id, litellm_user_id, litellm_virtual_key, litellm_key_alias, litellm_key_last4, litellm_budget_usd
+     FROM users WHERE supabase_user_id = $1`,
+    [supabaseUserId],
   );
   return rows[0] ?? null;
 }
 
-async function upsertKey(params: {
-  userId: string;
+async function updateLiteLLMFields(internalUserId: number, params: {
   litellmUserId: string;
   virtualKey: string;
   keyAlias: string | null;
   keyLast4: string | null;
   budgetUsd: number | null;
-}): Promise<ProactiveLiteLLMKey> {
-  const { rows } = await pool.query<ProactiveLiteLLMKey>(
-    `INSERT INTO proactive_litellm_keys (user_id, litellm_user_id, virtual_key, key_alias, key_last4, budget_usd)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (user_id) DO UPDATE SET
-       litellm_user_id = EXCLUDED.litellm_user_id,
-       virtual_key = EXCLUDED.virtual_key,
-       key_alias = EXCLUDED.key_alias,
-       key_last4 = EXCLUDED.key_last4,
-       budget_usd = EXCLUDED.budget_usd,
+}): Promise<void> {
+  await pool.query(
+    `UPDATE users SET
+       litellm_user_id = $2,
+       litellm_virtual_key = $3,
+       litellm_key_alias = $4,
+       litellm_key_last4 = $5,
+       litellm_budget_usd = $6,
        updated_at = NOW()
-     RETURNING *`,
+     WHERE id = $1`,
     [
-      params.userId,
+      internalUserId,
       params.litellmUserId,
       params.virtualKey,
       params.keyAlias,
@@ -65,7 +60,6 @@ async function upsertKey(params: {
       params.budgetUsd,
     ],
   );
-  return rows[0]!;
 }
 
 // ── Public API ──
@@ -85,10 +79,14 @@ export async function ensureProactiveLiteLLMKey(userId: string): Promise<string>
     throw new Error('LiteLLM client not configured (missing baseUrl or masterKey)');
   }
 
-  // Check DB first
-  const existing = await getKeyForUser(userId);
-  if (existing?.virtual_key) {
-    return existing.virtual_key;
+  // Check existing key on users table
+  const user = await getLiteLLMFieldsForUser(userId);
+  if (!user) {
+    throw new Error(`User not found for supabase_user_id=${userId}`);
+  }
+
+  if (user.litellm_virtual_key?.trim()) {
+    return user.litellm_virtual_key;
   }
 
   // Build identifiers
@@ -127,9 +125,8 @@ export async function ensureProactiveLiteLLMKey(userId: string): Promise<string>
 
   const last4 = generated.rawKey.slice(-4);
 
-  // Persist to DB
-  await upsertKey({
-    userId,
+  // Persist to users table
+  await updateLiteLLMFields(user.id, {
     litellmUserId,
     virtualKey: generated.rawKey,
     keyAlias: generated.keyAlias,

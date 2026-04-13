@@ -2,30 +2,21 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Copy root package files
+# ── Layer 1: Dependencies (rarely changes) ──
 COPY package*.json ./
-
-# Copy workspace package files
 COPY apis/package*.json ./apis/
 COPY proactive-ai-frontend/package*.json ./proactive-ai-frontend/
-
-# Install all dependencies
 RUN npm ci
 
-# Copy source for all workspaces
-COPY apis ./apis
+# ── Layer 2: Frontend build (changes less often than APIs) ──
 COPY proactive-ai-frontend ./proactive-ai-frontend
-COPY scripts ./scripts
-
-# Build proactive frontend (outputs to apis/public/proactive/)
+COPY scripts/sync-skills-manifest.mjs ./scripts/
 RUN npm run build --workspace @pin-ai/proactive-ai-frontend
 
-# Build the API
+# ── Layer 3: APIs source + build (changes most often — last) ──
+COPY apis ./apis
 RUN npm run build --workspace @pin-ai/apis
 
-# Expose port
 EXPOSE 3000
-
-# Start the application
 WORKDIR /app/apis
 CMD ["node", "dist/src/server.js"]

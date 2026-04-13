@@ -22,10 +22,10 @@ const COOKIE_NAME = 'gw_session';
 // ── HMAC helpers ──
 
 function getSecret(): string {
-  const secret = process.env.SESSION_SECRET ?? process.env.SUPABASE_JWT_SECRET;
+  const secret = process.env.SUPABASE_JWT_SECRET;
   if (!secret) {
     throw new Error(
-      'gateway_session: SESSION_SECRET or SUPABASE_JWT_SECRET must be set. ' +
+      'gateway_session: SUPABASE_JWT_SECRET must be set. ' +
       'Cannot sign gateway tickets/sessions without a secret.',
     );
   }

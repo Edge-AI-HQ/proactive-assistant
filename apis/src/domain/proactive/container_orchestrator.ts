@@ -197,16 +197,18 @@ export class ProactiveContainerOrchestrator {
       }
     }
 
-    // Delete LiteLLM key + user
+    // Delete LiteLLM key + user (keys stored on users table)
     try {
       const { deleteLiteLLMKey, deleteLiteLLMUser, isLiteLLMClientEnabled } = await import('../litellm/client.js');
       if (isLiteLLMClientEnabled()) {
-        const { rows } = await pool.query<{ virtual_key: string; litellm_user_id: string }>(
-          `SELECT virtual_key, litellm_user_id FROM proactive_litellm_keys WHERE user_id = $1`,
+        const { rows } = await pool.query<{ litellm_virtual_key: string | null; litellm_user_id: string | null }>(
+          `SELECT litellm_virtual_key, litellm_user_id FROM users WHERE supabase_user_id = $1`,
           [supabaseUserId],
         );
-        if (rows[0]) {
-          await deleteLiteLLMKey([rows[0].virtual_key]).catch(() => {});
+        if (rows[0]?.litellm_virtual_key) {
+          await deleteLiteLLMKey([rows[0].litellm_virtual_key]).catch(() => {});
+        }
+        if (rows[0]?.litellm_user_id) {
           await deleteLiteLLMUser([rows[0].litellm_user_id]).catch(() => {});
         }
       }
