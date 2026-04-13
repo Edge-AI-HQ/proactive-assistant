@@ -1,13 +1,15 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Heart, Briefcase, User, TrendingUp, BookOpen, MapPin,
   ChevronDown, ChevronUp, Mail, Calendar, FolderOpen, MessageSquare,
-  CreditCard, PiggyBank, FileText, Shield, Activity, Pill,
-  Stethoscope, Watch, Users, ShoppingBag, Plane, Home,
-  Globe, Smartphone, Brain, Eye, Clock, Wifi,
-  Code, BarChart3, Building2, Handshake, Key, Loader2,
-  XCircle, Plus, Database, Video, Pen, ListTodo,
+  CreditCard, FileText, Activity,
+  Watch, Users,
+  Globe, Smartphone, Eye, Clock, Wifi,
+  Code, BarChart3, Handshake, Key, Loader2,
+  XCircle, Plus,
+  Video, ListTodo, Music, Pen,
+  CircleDot, Bike, Zap,
   type LucideIcon,
 } from "lucide-react";
 import type { ComposioState, Connection } from "@/hooks/use-composio";
@@ -47,63 +49,64 @@ const INPUT_CATEGORIES: InputCategory[] = [
   {
     name: "Health",
     icon: Heart,
-    description: "Medical records, wearables, vitals, checkups, prescriptions",
+    description: "Wearables, fitness, sleep, vitals",
     sources: [
-      { name: "Apple Health", description: "Steps, heart rate, sleep", icon: Watch, tier: 0 },
-      { name: "Medical Records", description: "Lab results, diagnoses", icon: Stethoscope, tier: 0 },
-      { name: "Prescriptions", description: "Active medications", icon: Pill, tier: 1 },
-      { name: "Fitness Tracker", description: "Workouts, recovery", icon: Activity, tier: 1 },
-    ],
-  },
-  {
-    name: "Finance",
-    icon: TrendingUp,
-    description: "Bank accounts, cards, bills, investments, insurance, tax documents",
-    sources: [
-      { name: "Stripe", composioId: "stripe", description: "Payment processing", icon: CreditCard, tier: 0 },
-      { name: "Bank Accounts", description: "Checking, savings", icon: PiggyBank, tier: 0 },
-      { name: "Investments", description: "Portfolio, holdings", icon: BarChart3, tier: 1 },
-      { name: "Tax Documents", description: "W-2, 1099, returns", icon: FileText, tier: 1 },
-      { name: "Insurance", description: "Health, auto, life", icon: Shield, tier: 2 },
-    ],
-  },
-  {
-    name: "Personal",
-    icon: User,
-    description: "Identity, communication, travel, shopping, social, relationships",
-    sources: [
-      { name: "Twitter / X", composioId: "twitter", description: "Social posts, DMs", icon: Globe, tier: 0 },
-      { name: "LinkedIn", composioId: "linkedin", description: "Professional network", icon: Users, tier: 0 },
-      { name: "Shopping", description: "Orders, wishlists", icon: ShoppingBag, tier: 1 },
-      { name: "Travel", description: "Flights, hotels, itineraries", icon: Plane, tier: 1 },
-      { name: "Home", description: "Smart home, utilities", icon: Home, tier: 2 },
+      { name: "Strava", composioId: "strava", description: "Workouts, running, cycling", icon: Bike, tier: 0 },
+      { name: "Oura Ring", description: "Sleep, readiness, activity", icon: CircleDot, tier: 1 },
+      { name: "Apple Health", description: "Steps, heart rate, sleep", icon: Watch, tier: 1 },
     ],
   },
   {
     name: "Work",
     icon: Briefcase,
-    description: "Email, calendar, docs, collaboration, projects, code, CRM",
+    description: "Email, calendar, docs, projects, code, CRM",
     sources: [
       { name: "Gmail", composioId: "gmail", description: "Gmail workspace", icon: Mail, tier: 0 },
-      { name: "Google Calendar", composioId: "googlecalendar", description: "Google Calendar", icon: Calendar, tier: 0 },
-      { name: "Google Drive", composioId: "googledrive", description: "Google Drive indexed", icon: FolderOpen, tier: 0 },
-      { name: "Slack", composioId: "slack", description: "Messages from channels", icon: MessageSquare, tier: 0 },
-      { name: "Notion", composioId: "notion", description: "Workspace pages", icon: BookOpen, tier: 1 },
-      { name: "GitHub", composioId: "github", description: "Repositories", icon: Code, tier: 1 },
-      { name: "HubSpot", composioId: "hubspot", description: "CRM contacts, deals", icon: Handshake, tier: 1 },
-      { name: "Company", description: "Org chart, wiki", icon: Building2, tier: 2 },
+      { name: "Google Calendar", composioId: "googlecalendar", description: "Events, scheduling", icon: Calendar, tier: 0 },
+      { name: "Slack", composioId: "slack", description: "Channels, messages", icon: MessageSquare, tier: 0 },
+      { name: "Notion", composioId: "notion", description: "Workspace pages", icon: BookOpen, tier: 0 },
+      { name: "Outlook", composioId: "outlook", description: "Email, calendar", icon: Mail, tier: 0 },
+      { name: "GitHub", composioId: "github", description: "Repositories, PRs", icon: Code, tier: 1 },
+      { name: "Jira", composioId: "jira", description: "Issues, sprints", icon: ListTodo, tier: 1 },
+      { name: "Asana", composioId: "asana", description: "Tasks, projects", icon: Zap, tier: 1 },
+      { name: "HubSpot", composioId: "hubspot", description: "CRM contacts, deals", icon: Handshake, tier: 2 },
+    ],
+  },
+  {
+    name: "Personal",
+    icon: User,
+    description: "Social, communication, music, scheduling",
+    sources: [
+      { name: "Twitter / X", composioId: "twitter", description: "Posts, DMs, timeline", icon: Globe, tier: 0 },
+      { name: "LinkedIn", composioId: "linkedin", description: "Professional network", icon: Users, tier: 0 },
+      { name: "Discord", composioId: "discord", description: "Servers, messages", icon: MessageSquare, tier: 0 },
+      { name: "Spotify", composioId: "spotify", description: "Music, playlists", icon: Music, tier: 1 },
+      { name: "YouTube", composioId: "youtube", description: "Watch history, channels", icon: Video, tier: 1 },
+      { name: "Calendly", composioId: "calendly", description: "Scheduling links", icon: Calendar, tier: 1 },
+      { name: "Zoom", composioId: "zoom", description: "Meetings, recordings", icon: Video, tier: 2 },
+    ],
+  },
+  {
+    name: "Finance",
+    icon: TrendingUp,
+    description: "Payments, billing, transactions",
+    sources: [
+      { name: "Stripe", composioId: "stripe", description: "Payments, invoices", icon: CreditCard, tier: 0 },
     ],
   },
   {
     name: "Knowledge",
     icon: BookOpen,
-    description: "Reading, learning, research, bookmarks, notes",
+    description: "Docs, files, notes, design, tasks",
     sources: [
+      { name: "Google Drive", composioId: "googledrive", description: "Files, folders", icon: FolderOpen, tier: 0 },
       { name: "Google Docs", composioId: "googledocs", description: "Documents", icon: FileText, tier: 0 },
       { name: "Google Sheets", composioId: "googlesheets", description: "Spreadsheets", icon: BarChart3, tier: 0 },
-      { name: "Bookmarks", description: "Saved articles, links", icon: Globe, tier: 1 },
-      { name: "Reading List", description: "Books, papers", icon: FileText, tier: 1 },
-      { name: "Research", description: "Academic, market research", icon: Brain, tier: 2 },
+      { name: "Dropbox", composioId: "dropbox", description: "Cloud storage", icon: FolderOpen, tier: 1 },
+      { name: "Todoist", composioId: "todoist", description: "Tasks, projects", icon: ListTodo, tier: 1 },
+      { name: "Trello", composioId: "trello", description: "Boards, cards", icon: Pen, tier: 1 },
+      { name: "Figma", composioId: "figma", description: "Design files", icon: Pen, tier: 2 },
+      { name: "ClickUp", composioId: "clickup", description: "Tasks, docs, goals", icon: Zap, tier: 2 },
     ],
   },
   {
@@ -164,22 +167,32 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
     }
   };
 
+  const cancelledRef = useRef(false);
+
   const handleConnect = async (composioId: string) => {
     setConnectingToolkit(composioId);
     setConnectError(null);
+    cancelledRef.current = false;
     try {
       const result = await connectToolkit(composioId);
       if (!result.ok) { setConnectError(result.error ?? "Connect failed"); return; }
       if (result.redirectUrl) {
         window.open(result.redirectUrl, "_blank");
         const { connected } = await waitForToolkit(composioId);
-        if (!connected) setConnectError("Connection not confirmed — please try again");
+        if (!connected && !cancelledRef.current) setConnectError("Connection not confirmed — please try again");
       }
     } catch (err) {
-      setConnectError(err instanceof Error ? err.message : "Unexpected error");
+      if (!cancelledRef.current) setConnectError(err instanceof Error ? err.message : "Unexpected error");
     } finally {
       setConnectingToolkit(null);
     }
+  };
+
+  const handleCancel = () => {
+    cancelledRef.current = true;
+    cancelWait();
+    setConnectingToolkit(null);
+    setConnectError(null);
   };
 
   const handleDisconnect = async (connectedAccountId: string) => {
@@ -194,7 +207,6 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
   };
 
   const configured = keyStatus?.configured;
-  const isBusy = !!connectingToolkit || !!disconnectingId;
 
   return (
     <div>
@@ -347,17 +359,25 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                         </div>
 
                                         {singleAccount ? (<>
-                                          <button
-                                            onClick={(e) => { e.stopPropagation(); handleConnect(source.composioId!); }}
-                                            disabled={isBusy}
-                                            className="text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1] transition-all disabled:opacity-40 opacity-0 group-hover:opacity-100"
-                                          >
-                                            {isConnecting ? <Loader2 size={10} className="animate-spin" /> : <span className="flex items-center gap-1"><Plus size={10} /> Add</span>}
-                                          </button>
+                                          {isConnecting ? (
+                                            <button
+                                              onClick={(e) => { e.stopPropagation(); handleCancel(); }}
+                                              className="text-[10px] font-medium text-foreground/50 hover:text-foreground/80 bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1] transition-colors flex items-center gap-1"
+                                            >
+                                              <Loader2 size={10} className="animate-spin" /> Cancel
+                                            </button>
+                                          ) : (
+                                            <button
+                                              onClick={(e) => { e.stopPropagation(); handleConnect(source.composioId!); }}
+                                              className="text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1] transition-all opacity-0 group-hover:opacity-100"
+                                            >
+                                              <span className="flex items-center gap-1"><Plus size={10} /> Add</span>
+                                            </button>
+                                          )}
                                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
                                           <button
                                             onClick={(e) => { e.stopPropagation(); singleAccount.connectedAccountId && handleDisconnect(singleAccount.connectedAccountId); }}
-                                            disabled={isBusy}
+                                            disabled={disconnectingId === singleAccount.connectedAccountId}
                                             className="text-[10px] font-medium rounded-lg px-2.5 py-0.5 transition-colors disabled:opacity-40 text-emerald-600 hover:text-red-500 hover:bg-red-500/[0.08]"
                                           >
                                             {disconnectingId === singleAccount.connectedAccountId ? (
@@ -371,13 +391,21 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                           </button>
                                         </>) : hasComposio ? (<>
                                           <span className="w-1.5 h-1.5 rounded-full bg-foreground/10 flex-shrink-0" />
-                                          <button
-                                            onClick={(e) => { e.stopPropagation(); handleConnect(source.composioId!); }}
-                                            disabled={isBusy}
-                                            className="text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1] transition-colors disabled:opacity-40"
-                                          >
-                                            {isConnecting ? <Loader2 size={10} className="animate-spin" /> : "Connect"}
-                                          </button>
+                                          {isConnecting ? (
+                                            <button
+                                              onClick={(e) => { e.stopPropagation(); handleCancel(); }}
+                                              className="text-[10px] font-medium text-foreground/50 hover:text-foreground/80 bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1] transition-colors flex items-center gap-1"
+                                            >
+                                              <Loader2 size={10} className="animate-spin" /> Cancel
+                                            </button>
+                                          ) : (
+                                            <button
+                                              onClick={(e) => { e.stopPropagation(); handleConnect(source.composioId!); }}
+                                              className="text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1] transition-colors"
+                                            >
+                                              Connect
+                                            </button>
+                                          )}
                                         </>) : (<>
                                           <span className="w-1.5 h-1.5 rounded-full bg-foreground/10 flex-shrink-0" />
                                           <span className="text-[10px] font-medium text-foreground/20 bg-foreground/[0.03] border border-foreground/[0.06] rounded-lg px-2.5 py-0.5 cursor-not-allowed">
@@ -393,15 +421,23 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                         <SrcIcon size={14} strokeWidth={1.5} className="text-emerald-600 flex-shrink-0" />
                                         <span className="text-xs text-foreground font-medium flex-1">{source.name}</span>
                                         <span className="text-[10px] text-foreground/30">{accounts.length}</span>
-                                        <button
-                                          onClick={(e) => { e.stopPropagation(); handleConnect(source.composioId!); }}
-                                          disabled={isBusy}
-                                          className="text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1] transition-colors disabled:opacity-40"
-                                        >
-                                          {isConnecting ? <Loader2 size={10} className="animate-spin" /> : <span className="flex items-center gap-1"><Plus size={10} /> Add</span>}
-                                        </button>
+                                        {isConnecting ? (
+                                          <button
+                                            onClick={(e) => { e.stopPropagation(); handleCancel(); }}
+                                            className="text-[10px] font-medium text-foreground/50 hover:text-foreground/80 bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1] transition-colors flex items-center gap-1"
+                                          >
+                                            <Loader2 size={10} className="animate-spin" /> Cancel
+                                          </button>
+                                        ) : (
+                                          <button
+                                            onClick={(e) => { e.stopPropagation(); handleConnect(source.composioId!); }}
+                                            className="text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1] transition-colors"
+                                          >
+                                            <span className="flex items-center gap-1"><Plus size={10} /> Add</span>
+                                          </button>
+                                        )}
                                       </div>
-                                      {accounts.map((conn) => {
+                                      {accounts.map((conn, idx) => {
                                         const identity = extractIdentity(conn.userInfo);
                                         const isDisconnecting = disconnectingId === conn.connectedAccountId;
                                         return (
@@ -411,11 +447,11 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                           >
                                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
                                             <span className="text-[11px] text-foreground/70 flex-1 truncate">
-                                              {identity ?? `Account ${conn.connectedAccountId?.replace(/^ca_/, "").slice(0, 8) ?? ""}…`}
+                                              {identity ?? `${source.name} #${idx + 1}`}
                                             </span>
                                             <button
                                               onClick={(e) => { e.stopPropagation(); conn.connectedAccountId && handleDisconnect(conn.connectedAccountId); }}
-                                              disabled={isBusy}
+                                              disabled={isDisconnecting}
                                               className="text-[10px] font-medium rounded-lg px-2 py-0.5 transition-colors disabled:opacity-40 text-foreground/30 hover:text-red-500 hover:bg-red-500/[0.08] opacity-0 group-hover:opacity-100"
                                             >
                                               {isDisconnecting ? <Loader2 size={10} className="animate-spin text-red-500" /> : "Disconnect"}
@@ -462,7 +498,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
             Authorize in your browser — this will update automatically
           </p>
           <button
-            onClick={() => { cancelWait(); setConnectingToolkit(null); }}
+            onClick={handleCancel}
             className="text-[10px] font-medium text-foreground/40 hover:text-foreground/70 px-2 py-0.5 rounded-lg hover:bg-foreground/[0.06] transition-colors"
           >
             Cancel

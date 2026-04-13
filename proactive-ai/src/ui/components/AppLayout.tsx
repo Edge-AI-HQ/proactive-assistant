@@ -19,10 +19,9 @@ import { useComposio } from "@/hooks/use-composio";
 import { apiFetch, apiPost } from "@/lib/api";
 import {
   Menu, X, Zap, MessageCircle, Target, Settings,
-  Sprout, Briefcase, TrendingUp, Heart, Sparkles, Users,
-  ArrowRight, Pencil,
-  type LucideIcon,
+  ArrowRight, Pencil, Sparkles,
 } from "lucide-react";
+import { basketMeta } from "@/lib/basket-meta";
 
 const MENU_ITEMS = [
   { id: "now", label: "NOW", icon: Zap },
@@ -32,19 +31,6 @@ const MENU_ITEMS = [
 ] as const;
 type MenuId = (typeof MENU_ITEMS)[number]["id"];
 
-const BASKET_ICONS: Record<string, { icon: LucideIcon; label: string }> = {
-  work: { icon: Briefcase, label: "Work" },
-  health: { icon: Heart, label: "Health" },
-  family: { icon: Users, label: "Family" },
-  wealth: { icon: TrendingUp, label: "Finance" },
-  finance: { icon: TrendingUp, label: "Finance" },
-  growth: { icon: Sprout, label: "Growth" },
-  life: { icon: Sparkles, label: "Life" },
-};
-const FALLBACK_BASKET = { icon: Sparkles, label: "General" };
-function basketMeta(key: string) {
-  return BASKET_ICONS[key?.toLowerCase()] ?? FALLBACK_BASKET;
-}
 
 const SLOT_LAYOUTS = [
   [
@@ -221,7 +207,10 @@ function CardDrawerBody({
 
 export default function AppLayout() {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [activeView, setActiveView] = useState<MenuId>("now");
+  const [activeView, setActiveView] = useState<MenuId>(() => {
+    const saved = sessionStorage.getItem("proactive-ai:activeView");
+    return saved && ["now", "chat", "goals", "control"].includes(saved) ? saved as MenuId : "now";
+  });
   const [iterations, setIterations] = useState(2);
   const [chatTarget, setChatTarget] = useState<{ card: IntentCard; score?: EvaluationScore | null } | null>(null);
   const [selectedCard, setSelectedCard] = useState<IntentCard | null>(null);
@@ -282,20 +271,31 @@ export default function AppLayout() {
     setSelectedCard(null);
   }, [selectedCard]);
 
+  const persistChatted = useCallback((cardId: string) => {
+    try {
+      const raw = sessionStorage.getItem("proactive-ai:chattedCardIds");
+      const set: string[] = raw ? JSON.parse(raw) : [];
+      if (!set.includes(cardId)) { set.push(cardId); sessionStorage.setItem("proactive-ai:chattedCardIds", JSON.stringify(set)); }
+    } catch { /* ignore */ }
+  }, []);
+
   const handleOpenChatFromDrawer = useCallback(() => {
     if (selectedCard) {
+      persistChatted(selectedCard.id);
       setChatTarget({ card: selectedCard, score: run.scoreMap[selectedCard.id] ?? null });
     }
     setDrawerOpen(false);
     setSelectedCard(null);
-  }, [selectedCard, run.scoreMap]);
+  }, [selectedCard, run.scoreMap, persistChatted]);
 
   const handleOpenChatDirect = useCallback((card: IntentCard) => {
+    persistChatted(card.id);
     setChatTarget({ card, score: null });
-  }, []);
+  }, [persistChatted]);
 
   const handleMenuNav = (id: MenuId) => {
     setActiveView(id);
+    sessionStorage.setItem("proactive-ai:activeView", id);
     setChatTarget(null);
     setMenuOpen(false);
   };

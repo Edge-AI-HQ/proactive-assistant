@@ -1,8 +1,6 @@
 import { useState, useEffect } from "react";
 import {
-  Sprout, Briefcase, TrendingUp, Heart, Sparkles, Users,
-  Loader2, CheckCircle2, Zap, Pencil, MessageCircle,
-  type LucideIcon,
+  Loader2, CheckCircle2, Circle, Zap, Pencil, MessageCircle, Sparkles,
 } from "lucide-react";
 import {
   Drawer,
@@ -13,21 +11,7 @@ import {
 } from "@/components/ui/drawer";
 import type { IntentCard, EvaluationScore } from "@/hooks/use-pipeline";
 import { apiFetch } from "@/lib/api";
-
-const BASKET_ICONS: Record<string, { icon: LucideIcon; label: string }> = {
-  work:    { icon: Briefcase,   label: "Work" },
-  health:  { icon: Heart,       label: "Health" },
-  family:  { icon: Users,       label: "Family" },
-  wealth:  { icon: TrendingUp,  label: "Finance" },
-  finance: { icon: TrendingUp,  label: "Finance" },
-  growth:  { icon: Sprout,      label: "Growth" },
-  life:    { icon: Sparkles,    label: "Life" },
-};
-
-const FALLBACK = { icon: Sparkles, label: "General" };
-function basketMeta(key: string) {
-  return BASKET_ICONS[key?.toLowerCase()] ?? FALLBACK;
-}
+import { basketMeta } from "@/lib/basket-meta";
 
 interface StoredRun {
   id: string;
@@ -64,9 +48,11 @@ function formatDate(iso: string): string {
 function CardDetailDrawerBody({
   card,
   onOpenChat,
+  onMarkChatted,
 }: {
   card: TimelineCard;
   onOpenChat?: (card: IntentCard) => void;
+  onMarkChatted?: (cardId: string) => void;
 }) {
   const meta = basketMeta(card.goalBasket);
   const Icon = meta.icon;
@@ -174,7 +160,7 @@ function CardDetailDrawerBody({
 
       {/* Chat button */}
       <button
-        onClick={() => onOpenChat?.(card)}
+        onClick={() => { onMarkChatted?.(card.id); onOpenChat?.(card); }}
         className="w-full py-3 rounded-2xl bg-foreground text-background text-sm font-semibold hover:bg-foreground/85 transition-colors flex items-center justify-center gap-2"
       >
         <MessageCircle size={16} strokeWidth={1.8} />
@@ -188,6 +174,27 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
   const [historicalRuns, setHistoricalRuns] = useState<StoredRun[]>([]);
   const [loadingRuns, setLoadingRuns] = useState(true);
   const [selectedCard, setSelectedCard] = useState<TimelineCard | null>(null);
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  const [chattedIds, setChattedIds] = useState<Set<string>>(() => {
+    try {
+      const raw = sessionStorage.getItem("proactive-ai:chattedCardIds");
+      return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
+    } catch { return new Set(); }
+  });
+
+  const markChatted = (cardId: string) => {
+    setChattedIds((prev) => {
+      const next = new Set(prev).add(cardId);
+      sessionStorage.setItem("proactive-ai:chattedCardIds", JSON.stringify([...next]));
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    apiFetch("/api/feedback/dismissed").then(r => r.json())
+      .then(d => { if (d.ok && Array.isArray(d.dismissedCardIds)) setDismissedIds(new Set(d.dismissedCardIds)); })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     async function fetchRuns() {
@@ -241,31 +248,42 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
               const meta = basketMeta(card.goalBasket);
               const CatIcon = meta.icon;
               const actionCount = card.secondaryActions?.length ?? 0;
-              const previewText = card.primaryAction
+              const isDismissed = dismissedIds.has(card.id);
+              const isChatted = chattedIds.has(card.id);
+
+              const previewText = isDismissed
+                ? "Dismissed"
+                : card.primaryAction
                 ? `${actionCount + 1} operations · ${card.primaryAction.label}`
                 : card.sources.join(" · ");
 
               return (
                 <div
                   key={`${card.runId}-${card.id}`}
-                  className="glass-card px-3.5 py-3 w-full text-left cursor-pointer active:scale-[0.98] transition-transform"
-                  onClick={() => setSelectedCard(card)}
+                  className="glass-card px-3.5 py-4 w-full text-left cursor-pointer active:scale-[0.98] transition-transform"
+                  onClick={() => { if (!isDismissed) setSelectedCard(card); }}
                 >
                   <div className="flex items-center gap-2.5">
                     <span className="text-foreground/50 shrink-0">
-                      <CatIcon size={14} />
+                      <CatIcon size={16} />
                     </span>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5">
-                        <p className="text-[13px] font-medium text-foreground leading-tight truncate flex-1">
+                        <p className={`text-[13px] font-medium leading-snug truncate flex-1 ${isDismissed ? "text-foreground/35 line-through" : "text-foreground"}`}>
                           {card.title}
                         </p>
-                        <span className="shrink-0 w-[16px] h-[16px] inline-flex items-center justify-center">
-                          <CheckCircle2 size={14} className="text-green-500/60" />
+                        <span className="shrink-0 w-[18px] h-[18px] inline-flex items-center justify-center">
+                          {isDismissed ? (
+                            <CheckCircle2 size={15} className="text-green-500/60" />
+                          ) : isChatted ? (
+                            <Loader2 size={15} className="text-amber-500 animate-spin" />
+                          ) : (
+                            <Circle size={15} className="text-rose-400" fill="currentColor" />
+                          )}
                         </span>
                       </div>
-                      <div className="flex items-center gap-1 mt-1">
-                        <p className="text-[11px] text-foreground/35 truncate flex-1">
+                      <div className="flex items-center gap-1 mt-1.5">
+                        <p className="text-[11px] text-foreground/40 truncate flex-1">
                           {previewText}
                         </p>
                         <span className="text-[10px] text-muted-foreground shrink-0">
@@ -315,7 +333,9 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
           {selectedCard && (
             <CardDetailDrawerBody
               card={selectedCard}
+              onMarkChatted={markChatted}
               onOpenChat={(card) => {
+                markChatted(card.id);
                 setSelectedCard(null);
                 onOpenChat?.(card);
               }}

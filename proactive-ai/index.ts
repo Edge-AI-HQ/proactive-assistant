@@ -16,6 +16,7 @@ import { createUiHandler } from './src/engine/server/ui-route.js';
 import { createAssetsHandler } from './src/engine/server/assets-route.js';
 import { createApiHandler } from './src/engine/server/api-router.js';
 import { DEFAULT_GENERATION_LANGUAGE } from './src/engine/generation-language.js';
+import { warmIdentityCache } from './src/engine/server/identity-warmup.js';
 
 const pluginDir = dirname(fileURLToPath(import.meta.url));
 
@@ -94,6 +95,8 @@ export default {
     api.registerHttpRoute({ path: '/proactive-ai/rpc/composio/wait',        auth: 'plugin', match: 'exact', replaceExisting: true, handler: createApiHandler(api) });
 
     startAutoLoop(api, config);
+
+    warmIdentityCache(api.logger).catch(() => {});
 
     api.logger.info('Proactive AI v2 ready (routes: /proactive-ai/*)');
   },

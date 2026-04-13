@@ -5,7 +5,14 @@
  */
 
 import type { CoreContext } from "../../context.js";
-import { loadPlatformSettings, loadOrCreateUserId } from "./platform_settings.js";
+import {
+  loadPlatformSettings,
+  loadOrCreateUserId,
+  saveAccountIdentity,
+  deleteAccountIdentity,
+  pruneOrphanIdentities,
+  type AccountIdentity,
+} from "./platform_settings.js";
 
 
 // ── Types ──
@@ -111,6 +118,47 @@ class NoopPersonalProvider implements PersonalProvider {
 
 const DEFAULT_API_BASE = "https://backend.composio.dev/api/v3";
 
+/**
+ * Maps toolkit slug → Composio tool that returns the authenticated user's identity.
+ * All tools listed here require zero arguments.
+ * Google workspace toolkits (googledocs, googlesheets) share the same Google OAuth
+ * and fall back to GMAIL_GET_PROFILE via the GOOGLE_FAMILY_ALIAS below.
+ */
+const IDENTITY_TOOLS: Record<string, string> = {
+  gmail:           "GMAIL_GET_PROFILE",
+  googlecalendar:  "GOOGLECALENDAR_GET_CALENDAR_PROFILE",
+  googledrive:     "GOOGLEDRIVE_GET_ABOUT",
+  slack:           "SLACK_RETRIEVE_USER_PROFILE_INFORMATION",
+  github:          "GITHUB_LIST_EMAIL_ADDRESSES_FOR_THE_AUTHENTICATED_USER",
+  linkedin:        "LINKEDIN_GET_MY_INFO",
+  notion:          "NOTION_GET_ABOUT_ME",
+  twitter:         "TWITTER_USER_LOOKUP_ME",
+  stripe:          "STRIPE_GET_ACCOUNT",
+  hubspot:         "HUBSPOT_GET_ACCOUNT_INFO",
+  asana:           "ASANA_GET_CURRENT_USER",
+  jira:            "JIRA_GET_CURRENT_USER",
+  trello:          "TRELLO_GET_MEMBERS_ME",
+  discord:         "DISCORD_GET_MY_USER",
+  spotify:         "SPOTIFY_GET_CURRENT_USER_S_PROFILE",
+  dropbox:         "DROPBOX_GET_ABOUT_ME",
+  todoist:         "TODOIST_GET_USER",
+  figma:           "FIGMA_GET_CURRENT_USER",
+  outlook:         "OUTLOOK_GET_ME_CALENDAR",
+  calendly:        "CALENDLY_GET_CURRENT_USER",
+  clickup:         "CLICKUP_GET_AUTHORIZED_USER",
+  strava:          "STRAVA_GET_AUTHENTICATED_ATHLETE",
+  zoom:            "ZOOM_GET_USER",
+};
+
+const IDENTITY_TOOL_ARGS: Record<string, Record<string, unknown>> = {
+  zoom: { userId: "me" },
+};
+
+const GOOGLE_FAMILY_ALIAS: Record<string, string> = {
+  googledocs:   "gmail",
+  googlesheets: "gmail",
+};
+
 const sleep = async (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -157,6 +205,8 @@ interface PlatformProviderOptions {
   apiKey: string;
   apiBase: string;
   userId: string;
+  homeDir: string;
+  env: Record<string, string | undefined>;
   callbackUrl?: string | null;
   authConfigMap: Record<string, string>;
 }
@@ -276,30 +326,109 @@ class PlatformPersonalProvider implements PersonalProvider {
   }
 
   async resolveAccountIdentity(
-    _toolkit: string,
-    _connectedAccountId: string,
+    toolkit: string,
+    connectedAccountId: string,
   ): Promise<Record<string, unknown> | null> {
-    // Composio v3 API does not provide a reliable, scalable way to fetch
-    // per-account user identity. Returning null; UI falls back to account ID.
-    return null;
+    return this.fetchAccountIdentityViaTool(toolkit, connectedAccountId);
+  }
+
+  /**
+   * Execute the toolkit-specific identity tool to retrieve the authenticated
+   * user's profile (email, name, etc.). Returns a flat key-value object that
+   * can be fed to `extractIdentity()`, or null if no suitable tool exists.
+   */
+  private async fetchAccountIdentityViaTool(
+    toolkit: string,
+    connectedAccountId: string,
+  ): Promise<Record<string, unknown> | null> {
+    const effectiveToolkit = GOOGLE_FAMILY_ALIAS[toolkit] ?? toolkit;
+    const toolSlug = IDENTITY_TOOLS[effectiveToolkit];
+    if (!toolSlug) return null;
+
+    try {
+      const toolArgs = IDENTITY_TOOL_ARGS[effectiveToolkit] ?? {};
+      const result = await this.api(`/tools/execute/${encodeURIComponent(toolSlug)}`, {
+        method: "POST",
+        body: JSON.stringify({
+          connected_account_id: connectedAccountId,
+          user_id: this.options.userId,
+          arguments: toolArgs,
+        }),
+      });
+
+      if (!result.successful) return null;
+
+      const data = obj(result.data);
+      const responseData = obj(data.response_data);
+      const source = Object.keys(responseData).length > 0 ? responseData : data;
+
+      const flat: Record<string, unknown> = {};
+
+      const extractFlat = (items: Record<string, unknown>[]) => {
+        for (const item of items) {
+          for (const [k, v] of Object.entries(item)) {
+            if (typeof v === "string" && v.length > 0 && v.length < 120) flat[k] = v;
+          }
+        }
+      };
+
+      if (Array.isArray(result.data)) {
+        extractFlat((result.data as Record<string, unknown>[]).map(obj));
+      } else {
+        for (const [k, v] of Object.entries(source)) {
+          if (Array.isArray(v)) {
+            extractFlat(v.filter(i => i && typeof i === "object").map(obj));
+          } else if (v && typeof v === "object" && !Array.isArray(v)) {
+            for (const [nk, nv] of Object.entries(v as Record<string, unknown>)) {
+              if (typeof nv === "string" && nv.length > 0 && nv.length < 120) flat[nk] = nv;
+            }
+          } else if (typeof v === "string" && v.length > 0 && v.length < 120) {
+            flat[k] = v;
+          } else if (typeof v === "number" || typeof v === "boolean") {
+            flat[k] = v;
+          }
+        }
+      }
+
+      return Object.keys(flat).length > 0 ? flat : null;
+    } catch {
+      return null;
+    }
   }
 
   async discoverConnections(): Promise<PersonalConnection[]> {
     const active = await this.listConnectedAccounts({ statuses: ["ACTIVE"] });
     const connections = active.map((row) => this.toConnection(str(obj(row.toolkit).slug) ?? "unknown", row));
 
+    const { homeDir, env } = this.options;
+    const cached = loadPlatformSettings(homeDir, env).accountIdentities ?? {};
+
     const enriched = await Promise.all(
       connections.map(async (conn) => {
-        if (conn.userInfo || !conn.connectedAccountId) return conn;
+        if (conn.userInfo && Object.keys(conn.userInfo).length > 0) return conn;
+        if (!conn.connectedAccountId) return conn;
+
+        const hit = cached[conn.connectedAccountId];
+        if (hit?.userInfo && Object.keys(hit.userInfo).length > 0) {
+          return { ...conn, userInfo: hit.userInfo };
+        }
+
         try {
-          const detail = await this.api(`/connected_accounts/${encodeURIComponent(conn.connectedAccountId)}`);
-          const info = detail?.user_info ? obj(detail.user_info) : detail?.current_user_info ? obj(detail.current_user_info) : null;
-          return info ? { ...conn, userInfo: info } : conn;
+          const info = await this.fetchAccountIdentityViaTool(conn.toolkit, conn.connectedAccountId);
+          if (info) {
+            saveAccountIdentity(homeDir, conn.connectedAccountId, { toolkit: conn.toolkit, userInfo: info }, env);
+            return { ...conn, userInfo: info };
+          }
+          return conn;
         } catch {
           return conn;
         }
       }),
     );
+
+    const activeIds = new Set(connections.map((c) => c.connectedAccountId).filter(Boolean) as string[]);
+    pruneOrphanIdentities(homeDir, activeIds, env);
+
     return enriched;
   }
 
@@ -345,7 +474,16 @@ class PlatformPersonalProvider implements PersonalProvider {
       const latest = await this.findLatestConnection(toolkit);
       const status = (str(latest?.status) ?? "").toUpperCase();
       if (latest && status === "ACTIVE") {
-        return this.toConnection(toolkit, latest);
+        const conn = this.toConnection(toolkit, latest);
+        if (conn.connectedAccountId) {
+          const info = await this.fetchAccountIdentityViaTool(toolkit, conn.connectedAccountId).catch(() => null);
+          if (info) {
+            const { homeDir, env } = this.options;
+            saveAccountIdentity(homeDir, conn.connectedAccountId, { toolkit, userInfo: info }, env);
+            return { ...conn, userInfo: info };
+          }
+        }
+        return conn;
       }
       await sleep(2_000);
     }
@@ -358,6 +496,7 @@ class PlatformPersonalProvider implements PersonalProvider {
     await this.api(`/connected_accounts/${encodeURIComponent(connectedAccountId)}`, {
       method: "DELETE",
     });
+    deleteAccountIdentity(this.options.homeDir, connectedAccountId, this.options.env);
   }
 
   async searchTools(
@@ -482,6 +621,8 @@ export const createPersonalProvider = (
     apiKey,
     apiBase: ctx.env.COMPOSIO_API_BASE || platformSettings.apiBase || DEFAULT_API_BASE,
     userId,
+    homeDir: ctx.homeDir,
+    env: ctx.env,
     callbackUrl: ctx.env.COMPOSIO_CALLBACK_URL ?? platformSettings.callbackUrl ?? null,
     authConfigMap,
   });
