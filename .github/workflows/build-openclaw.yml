@@ -3,7 +3,7 @@ name: Build OpenClaw Image
 on:
   workflow_dispatch:
   push:
-    branches: [main, proactive-ai-v2]
+    branches: [proactive-ai-v2]
     paths:
       - 'pinai-openclaw/**'
 

@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-    branches: [main, proactive-ai-v2]
+    branches: [proactive-ai-v2]
 
 jobs:
   check:

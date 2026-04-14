@@ -11,7 +11,7 @@ on:
           - dev
           - prod
   push:
-    branches: [main, proactive-ai-v2]
+    branches: [proactive-ai-v2]
     paths:
       - 'ops/litellm/**'
 
