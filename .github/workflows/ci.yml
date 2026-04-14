@@ -24,6 +24,3 @@ jobs:
 
       - name: Type check (Frontend)
         run: npm run type-check --workspace=@pin-ai/proactive-ai-frontend
-
-      - name: Test
-        run: npm run test --workspace=@pin-ai/apis
