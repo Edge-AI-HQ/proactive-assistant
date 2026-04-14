@@ -7,6 +7,7 @@ import type {
 } from "../../types.js";
 import type {
   AssistantContainerParams,
+  GenericContainerParams,
   ContainerRef,
   ContainerRuntime,
   ContainerState,
@@ -106,6 +107,28 @@ const findBindSource = (
     if (containerTarget === target && source) return source;
   }
   return null;
+};
+
+// ---------------------------------------------------------------------------
+// Docker-out-of-Docker support
+// ---------------------------------------------------------------------------
+
+// When APIs runs inside a container, bind-mount paths passed to the Docker
+// daemon must use the *host* filesystem path, not the container-internal path.
+// HOST_DATA_DIR tells us where the host's data directory is mounted from.
+const HOST_DATA_DIR = (process.env.HOST_DATA_DIR || '').replace(/\/+$/, '');
+
+// When APIs runs inside a container, 127.0.0.1 refers to the container itself.
+// DOCKER_HOST_ADDRESS provides the address to reach the host's port-mapped
+// containers (typically "host.docker.internal").
+const DOCKER_HOST_ADDRESS = process.env.DOCKER_HOST_ADDRESS || '127.0.0.1';
+
+/** Translate a local data path to the host-side path for Docker bind mounts. */
+const toHostBindPath = (localPath: string): string => {
+  if (!HOST_DATA_DIR) return localPath;
+  const localDataDir = path.join(process.cwd(), 'data');
+  if (!localPath.startsWith(localDataDir)) return localPath;
+  return HOST_DATA_DIR + localPath.slice(localDataDir.length);
 };
 
 // ---------------------------------------------------------------------------
@@ -434,7 +457,7 @@ const resolveDockerProbeTarget = (
     }
   }
 
-  return { host: "127.0.0.1", gatewayPort: hostPort, additionalPorts, httpProbes };
+  return { host: DOCKER_HOST_ADDRESS, gatewayPort: hostPort, additionalPorts, httpProbes };
 };
 
 // ---------------------------------------------------------------------------
@@ -462,15 +485,24 @@ const inspectToContainerRef = async (
     if (idx > 0) env[entry.slice(0, idx)] = entry.slice(idx + 1);
   }
 
-  // Extract host ports from bindings
+  // Extract host ports — prefer NetworkSettings.Ports (actual assigned port)
+  // over HostConfig.PortBindings (which may be "0" for auto-assign).
+  const networkPorts = (inspect.NetworkSettings as any)?.Ports || {};
   const portBindings = inspect.HostConfig?.PortBindings || {};
   const metadata: Record<string, string> = {};
 
   const extractHostPort = (containerPort: string): string => {
+    // Try NetworkSettings.Ports first (has the actual assigned port)
+    const netBindings = networkPorts[containerPort];
+    if (Array.isArray(netBindings) && netBindings.length > 0) {
+      const binding = netBindings[0] as { HostPort?: string };
+      if (binding.HostPort && binding.HostPort !== "0") return binding.HostPort;
+    }
+    // Fallback to HostConfig.PortBindings
     const bindings = portBindings[containerPort];
     if (Array.isArray(bindings) && bindings.length > 0) {
       const binding = bindings[0] as { HostPort?: string };
-      if (binding.HostPort) return binding.HostPort;
+      if (binding.HostPort && binding.HostPort !== "0") return binding.HostPort;
     }
     return "";
   };
@@ -617,8 +649,37 @@ export const dockerContainerRuntime: ContainerRuntime = {
           [`${privateWebhookPort}/tcp`]: [{ HostPort: privateWebhookHostPort }],
         },
         Binds: [
-          `${dirs.baseDir}:/app`,
+          `${toHostBindPath(dirs.baseDir)}:/app`,
         ],
+        Memory: config.container.memoryMb * 1024 * 1024,
+        CpuShares: config.container.cpuShares,
+      },
+    });
+
+    return inspectToContainerRef(container);
+  },
+
+  async createGenericContainer(params: GenericContainerParams): Promise<ContainerRef> {
+    const baseDir = path.join(process.cwd(), "data", params.containerName);
+    const openclawDir = path.join(baseDir, 'data', 'config');
+    ensureDir(openclawDir);
+
+    const hostPort = "0"; // auto-assign
+
+    const container = await docker.createContainer({
+      name: params.containerName,
+      Image: config.openclaw.image,
+      Env: Object.entries(params.env).map(([k, v]) => `${k}=${v}`),
+      ExposedPorts: {
+        [`${config.openclaw.gatewayPort}/tcp`]: {},
+      },
+      HostConfig: {
+        RestartPolicy: { Name: "unless-stopped" },
+        ExtraHosts: ["host.docker.internal:host-gateway"],
+        PortBindings: {
+          [`${config.openclaw.gatewayPort}/tcp`]: [{ HostPort: hostPort }],
+        },
+        Binds: [`${toHostBindPath(baseDir)}:/app`],
         Memory: config.container.memoryMb * 1024 * 1024,
         CpuShares: config.container.cpuShares,
       },
@@ -708,10 +769,10 @@ export const dockerContainerRuntime: ContainerRuntime = {
   resolveGatewayTarget(ref: ContainerRef): GatewayTarget {
     const hostPort = Number(ref.metadata.hostPort) || config.openclaw.gatewayPort;
     return {
-      host: "127.0.0.1",
+      host: DOCKER_HOST_ADDRESS,
       port: hostPort,
-      httpBaseUrl: `http://127.0.0.1:${hostPort}`,
-      wsBaseUrl: `ws://127.0.0.1:${hostPort}`,
+      httpBaseUrl: `http://${DOCKER_HOST_ADDRESS}:${hostPort}`,
+      wsBaseUrl: `ws://${DOCKER_HOST_ADDRESS}:${hostPort}`,
     };
   },
 

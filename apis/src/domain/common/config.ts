@@ -30,11 +30,14 @@ const loadEnvFiles = (): void => {
   const moduleDir = path.dirname(fileURLToPath(import.meta.url));
   const workspaceDir = findWorkspaceDir(moduleDir);
   const repoRoot = path.resolve(workspaceDir, '..');
+  // override: false = 先加载的文件优先。
+  // 顺序：.env.local 在 .env 之前，workspace 在 repo-root 之前。
+  // 这样 .env.local 能覆盖 .env，符合 Next.js / Vite 等框架惯例。
   const candidates = [
-    path.join(repoRoot, '.env'),
+    path.join(workspaceDir, '.env.local'),
     path.join(repoRoot, '.env.local'),
     path.join(workspaceDir, '.env'),
-    path.join(workspaceDir, '.env.local')
+    path.join(repoRoot, '.env'),
   ];
 
   for (const envPath of candidates) {
@@ -172,7 +175,7 @@ export const config: Config = {
     pluginLoadPaths: (
       toTrimmed(
         process.env.OPENCLAW_PLUGIN_LOAD_PATHS,
-        '/opt/pinai/plugins/telegram-api-proxy:/opt/pinai/plugins/litellm-vision-adapter:/opt/pinai/plugins/platform-hooks'
+        '/opt/pinai/plugins/telegram-api-proxy:/opt/pinai/plugins/platform-hooks'
       )
     ).split(':').map(p => p.trim()).filter(Boolean)
   },

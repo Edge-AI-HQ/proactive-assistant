@@ -1,0 +1,1216 @@
+/**
+ * Local SQLite data access layer for the proactive-ai plugin.
+ *
+ * Replaces Supabase with better-sqlite3.  One container = one user,
+ * so there is no user_id scoping — all data belongs to the single user.
+ * Interfaces keep a `user_id` field populated with 'local' so callers
+ * that read it don't break.
+ *
+ * DB file: ${OPENCLAW_HOME}/data/proactive.db  (on Fly volume)
+ */
+
+import crypto from 'node:crypto';
+import path from 'node:path';
+import fs from 'node:fs';
+import Database from 'better-sqlite3';
+
+// ── Singleton DB ──
+
+let _db: Database.Database | null = null;
+
+function getDb(): Database.Database {
+  if (_db) return _db;
+  const home = process.env.OPENCLAW_HOME || '/app';
+  const dir = path.join(home, 'data');
+  fs.mkdirSync(dir, { recursive: true });
+  const dbPath = path.join(dir, 'proactive.db');
+  _db = new Database(dbPath);
+  _db.pragma('journal_mode = WAL');
+  _db.pragma('busy_timeout = 5000');
+  _db.pragma('foreign_keys = ON');
+  ensureSchema(_db);
+  return _db;
+}
+
+function genId(): string {
+  return crypto.randomUUID();
+}
+
+function now(): string {
+  return new Date().toISOString();
+}
+
+const USER_ID = 'local';
+
+// ── Schema ──
+
+function ensureSchema(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS profile (
+      id TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      locale TEXT NOT NULL DEFAULT 'en-US',
+      timezone TEXT NOT NULL DEFAULT 'UTC',
+      summary TEXT,
+      facts TEXT NOT NULL DEFAULT '{}',
+      preferences TEXT NOT NULL DEFAULT '{}',
+      constraints TEXT NOT NULL DEFAULT '{}',
+      metadata TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS goals (
+      id TEXT PRIMARY KEY,
+      key TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      priority TEXT NOT NULL DEFAULT 'medium',
+      status TEXT NOT NULL DEFAULT 'active',
+      summary TEXT,
+      closed_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS profile_memories (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      text TEXT NOT NULL,
+      tags TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS profile_signals (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      target_type TEXT NOT NULL,
+      target_key TEXT NOT NULL,
+      value REAL,
+      source TEXT,
+      context TEXT,
+      occurred_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_signals_occurred ON profile_signals(occurred_at DESC);
+
+    CREATE TABLE IF NOT EXISTS profile_interests (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      key TEXT NOT NULL,
+      score REAL NOT NULL DEFAULT 0,
+      confidence REAL NOT NULL DEFAULT 0,
+      evidence_count INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
+      last_signal_at TEXT,
+      UNIQUE(kind, key)
+    );
+
+    CREATE TABLE IF NOT EXISTS feedback_events (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      action TEXT,
+      push_id TEXT,
+      intent_card_id TEXT,
+      source TEXT NOT NULL DEFAULT 'user_direct',
+      basket TEXT,
+      value TEXT,
+      text TEXT,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback_events(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS push_records (
+      id TEXT PRIMARY KEY,
+      intent_card_id TEXT,
+      kind TEXT NOT NULL,
+      basket TEXT,
+      title TEXT NOT NULL,
+      ref TEXT,
+      reason TEXT,
+      pushed_at TEXT NOT NULL,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_push_pushed ON push_records(pushed_at DESC);
+
+    CREATE TABLE IF NOT EXISTS push_outcomes (
+      id TEXT PRIMARY KEY,
+      push_id TEXT NOT NULL REFERENCES push_records(id),
+      status TEXT NOT NULL,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      recorded_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS world_items (
+      id TEXT PRIMARY KEY,
+      provider TEXT NOT NULL,
+      stream_type TEXT NOT NULL DEFAULT 'search',
+      title TEXT NOT NULL,
+      url TEXT NOT NULL,
+      normalized_url TEXT NOT NULL UNIQUE,
+      external_id TEXT,
+      summary TEXT,
+      published_at TEXT,
+      search_queries TEXT NOT NULL DEFAULT '[]',
+      topics TEXT NOT NULL DEFAULT '[]',
+      regions TEXT NOT NULL DEFAULT '[]',
+      importance TEXT,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_world_published ON world_items(published_at DESC);
+
+    CREATE TABLE IF NOT EXISTS pipeline_runs (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      total_iterations INTEGER,
+      final_cards TEXT,
+      iterations TEXT,
+      error TEXT,
+      started_at TEXT NOT NULL,
+      completed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_pipeline_started ON pipeline_runs(started_at DESC);
+
+    CREATE TABLE IF NOT EXISTS user_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      generation_language TEXT NOT NULL DEFAULT 'en',
+      auto_generate INTEGER NOT NULL DEFAULT 0,
+      auto_dreaming INTEGER NOT NULL DEFAULT 0,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS auto_loop_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      last_started_at TEXT,
+      last_finished_at TEXT,
+      last_status TEXT,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS dream_runs (
+      id TEXT PRIMARY KEY,
+      trigger_kind TEXT NOT NULL CHECK (trigger_kind IN ('auto', 'manual')),
+      status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+      window_start TEXT NOT NULL,
+      window_end TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      completed_at TEXT,
+      source_stats TEXT,
+      summary TEXT,
+      profile_delta TEXT,
+      goal_delta TEXT,
+      journal_markdown TEXT,
+      candidates TEXT,
+      applied_at TEXT,
+      goals_applied_at TEXT,
+      error_message TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_dream_started ON dream_runs(started_at DESC);
+
+    CREATE TABLE IF NOT EXISTS ingest_cursor (
+      source TEXT PRIMARY KEY,
+      cursor TEXT,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS pending_items (
+      id TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      available_at TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'processed')),
+      processed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_pending_status_available ON pending_items(status, available_at);
+
+    CREATE TABLE IF NOT EXISTS context_runs (
+      run_token TEXT PRIMARY KEY,
+      item_ids_json TEXT NOT NULL,
+      item_count INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('open', 'committed', 'expired')),
+      committed_at TEXT
+    );
+  `);
+}
+
+// ── Helpers ──
+
+function parseJson<T = Record<string, unknown>>(raw: string | null | undefined): T {
+  if (!raw) return {} as T;
+  try { return JSON.parse(raw) as T; } catch { return {} as T; }
+}
+
+function parseJsonArray<T = unknown>(raw: string | null | undefined): T[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+// ── Profile ──
+
+export interface ProfileRow {
+  id: string;
+  user_id: string;
+  display_name: string;
+  locale: string;
+  timezone: string;
+  summary: string | null;
+  facts: Record<string, unknown>;
+  preferences: Record<string, unknown>;
+  constraints: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+}
+
+function rowToProfile(row: any): ProfileRow {
+  return {
+    id: row.id,
+    user_id: USER_ID,
+    display_name: row.display_name,
+    locale: row.locale,
+    timezone: row.timezone,
+    summary: row.summary ?? null,
+    facts: parseJson(row.facts),
+    preferences: parseJson(row.preferences),
+    constraints: parseJson(row.constraints),
+    metadata: parseJson(row.metadata),
+  };
+}
+
+export async function getProfile(): Promise<ProfileRow | null> {
+  const row = getDb().prepare('SELECT * FROM profile LIMIT 1').get() as any;
+  return row ? rowToProfile(row) : null;
+}
+
+export async function deleteProfile(): Promise<void> {
+  getDb().prepare('DELETE FROM profile').run();
+}
+
+export async function upsertProfile(input: {
+  displayName: string;
+  locale?: string;
+  timezone?: string;
+  summary?: string;
+}): Promise<ProfileRow> {
+  const db = getDb();
+  const existing = db.prepare('SELECT id FROM profile LIMIT 1').get() as any;
+  const id = existing?.id ?? genId();
+  const ts = now();
+  db.prepare(`
+    INSERT INTO profile (id, display_name, locale, timezone, summary, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      display_name = excluded.display_name,
+      locale = excluded.locale,
+      timezone = excluded.timezone,
+      summary = excluded.summary,
+      updated_at = excluded.updated_at
+  `).run(id, input.displayName, input.locale ?? 'en-US', input.timezone ?? 'UTC', input.summary ?? null, ts, ts);
+  return (await getProfile())!;
+}
+
+export async function updateProfile(
+  fields: Partial<Pick<ProfileRow, 'display_name' | 'locale' | 'timezone' | 'summary' | 'metadata'>>,
+): Promise<ProfileRow> {
+  const db = getDb();
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  if (fields.display_name !== undefined) { sets.push('display_name = ?'); vals.push(fields.display_name); }
+  if (fields.locale !== undefined) { sets.push('locale = ?'); vals.push(fields.locale); }
+  if (fields.timezone !== undefined) { sets.push('timezone = ?'); vals.push(fields.timezone); }
+  if (fields.summary !== undefined) { sets.push('summary = ?'); vals.push(fields.summary); }
+  if (fields.metadata !== undefined) { sets.push('metadata = ?'); vals.push(JSON.stringify(fields.metadata)); }
+  if (sets.length > 0) {
+    sets.push('updated_at = ?'); vals.push(now());
+    db.prepare(`UPDATE profile SET ${sets.join(', ')}`).run(...vals);
+  }
+  const result = await getProfile();
+  if (!result) throw new Error('No profile to update');
+  return result;
+}
+
+// ── Profile JSONB fields ──
+
+async function getProfileJsonField(field: 'facts' | 'preferences' | 'constraints'): Promise<Record<string, unknown>> {
+  const profile = await getProfile();
+  return (profile?.[field] as Record<string, unknown>) ?? {};
+}
+
+async function setProfileJsonField(
+  field: 'facts' | 'preferences' | 'constraints',
+  key: string,
+  value: unknown,
+): Promise<Record<string, unknown>> {
+  const current = await getProfileJsonField(field);
+  const updated = { ...current, [key]: value };
+  getDb().prepare(`UPDATE profile SET ${field} = ?, updated_at = ?`).run(JSON.stringify(updated), now());
+  return updated;
+}
+
+async function unsetProfileJsonField(
+  field: 'facts' | 'preferences' | 'constraints',
+  key: string,
+): Promise<Record<string, unknown>> {
+  const current = await getProfileJsonField(field);
+  const { [key]: _, ...rest } = current;
+  getDb().prepare(`UPDATE profile SET ${field} = ?, updated_at = ?`).run(JSON.stringify(rest), now());
+  return rest;
+}
+
+export const getFacts = () => getProfileJsonField('facts');
+export const setFact = (key: string, value: unknown) => setProfileJsonField('facts', key, value);
+export const unsetFact = (key: string) => unsetProfileJsonField('facts', key);
+
+export const getPreferences = () => getProfileJsonField('preferences');
+export const setPreference = (key: string, value: unknown) => setProfileJsonField('preferences', key, value);
+export const unsetPreference = (key: string) => unsetProfileJsonField('preferences', key);
+
+export const getConstraints = () => getProfileJsonField('constraints');
+export const setConstraint = (key: string, value: unknown) => setProfileJsonField('constraints', key, value);
+export const unsetConstraint = (key: string) => unsetProfileJsonField('constraints', key);
+
+// ── Goals ──
+
+export interface GoalRow {
+  id: string;
+  user_id: string;
+  key: string;
+  title: string;
+  priority: string;
+  status: string;
+  summary: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function rowToGoal(row: any): GoalRow {
+  return { ...row, user_id: USER_ID };
+}
+
+export async function listGoals(): Promise<GoalRow[]> {
+  const rows = getDb().prepare(
+    "SELECT * FROM goals WHERE status = 'active' ORDER BY CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END"
+  ).all() as any[];
+  return rows.map(rowToGoal);
+}
+
+export async function upsertGoal(input: {
+  key: string;
+  title: string;
+  priority?: string;
+}): Promise<GoalRow> {
+  const db = getDb();
+  const id = genId();
+  const ts = now();
+  db.prepare(`
+    INSERT INTO goals (id, key, title, priority, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, 'active', ?, ?)
+    ON CONFLICT(key) DO UPDATE SET
+      title = excluded.title,
+      priority = excluded.priority,
+      status = 'active',
+      updated_at = excluded.updated_at
+  `).run(id, input.key, input.title, input.priority ?? 'medium', ts, ts);
+  const row = db.prepare('SELECT * FROM goals WHERE key = ?').get(input.key) as any;
+  return rowToGoal(row);
+}
+
+export async function closeGoal(key: string): Promise<GoalRow> {
+  const ts = now();
+  const db = getDb();
+  db.prepare("UPDATE goals SET status = 'closed', closed_at = ?, updated_at = ? WHERE key = ?").run(ts, ts, key);
+  const row = db.prepare('SELECT * FROM goals WHERE key = ?').get(key) as any;
+  if (!row) throw new Error(`Goal not found: ${key}`);
+  return rowToGoal(row);
+}
+
+// ── Profile Memories ──
+
+export interface MemoryRow {
+  id: string;
+  user_id: string;
+  kind: string;
+  text: string;
+  tags: string[];
+  created_at: string;
+}
+
+function rowToMemory(row: any): MemoryRow {
+  return {
+    id: row.id,
+    user_id: USER_ID,
+    kind: row.kind,
+    text: row.text,
+    tags: parseJsonArray<string>(row.tags),
+    created_at: row.created_at,
+  };
+}
+
+export async function listMemories(opts?: { limit?: number }): Promise<MemoryRow[]> {
+  const limit = opts?.limit ?? 1000;
+  const rows = getDb().prepare('SELECT * FROM profile_memories ORDER BY created_at DESC LIMIT ?').all(limit) as any[];
+  return rows.map(rowToMemory);
+}
+
+export async function addMemory(input: {
+  kind: string;
+  text: string;
+  tags?: string[];
+}): Promise<MemoryRow> {
+  const id = genId();
+  const ts = now();
+  getDb().prepare('INSERT INTO profile_memories (id, kind, text, tags, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run(id, input.kind, input.text, JSON.stringify(input.tags ?? []), ts);
+  return { id, user_id: USER_ID, kind: input.kind, text: input.text, tags: input.tags ?? [], created_at: ts };
+}
+
+export async function searchMemory(query: string, opts?: { limit?: number }): Promise<MemoryRow[]> {
+  const limit = opts?.limit ?? 20;
+  const rows = getDb().prepare('SELECT * FROM profile_memories WHERE text LIKE ? ORDER BY created_at DESC LIMIT ?')
+    .all(`%${query}%`, limit) as any[];
+  return rows.map(rowToMemory);
+}
+
+export async function removeMemory(id: string): Promise<void> {
+  getDb().prepare('DELETE FROM profile_memories WHERE id = ?').run(id);
+}
+
+// ── Profile Signals ──
+
+export interface SignalRow {
+  id: string;
+  user_id: string;
+  kind: string;
+  target_type: string;
+  target_key: string;
+  value: number | null;
+  source: string | null;
+  context: Record<string, unknown> | null;
+  occurred_at: string;
+  created_at: string;
+}
+
+function rowToSignal(row: any): SignalRow {
+  return {
+    ...row,
+    user_id: USER_ID,
+    context: row.context ? parseJson(row.context) : null,
+  };
+}
+
+export async function listSignals(opts?: { since?: string; limit?: number }): Promise<SignalRow[]> {
+  const parts = ['SELECT * FROM profile_signals'];
+  const params: unknown[] = [];
+  if (opts?.since) { parts.push('WHERE occurred_at >= ?'); params.push(opts.since); }
+  parts.push('ORDER BY occurred_at DESC');
+  parts.push('LIMIT ?'); params.push(opts?.limit ?? 1000);
+  const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
+  return rows.map(rowToSignal);
+}
+
+export async function addSignal(input: {
+  kind: string;
+  targetType: string;
+  targetKey: string;
+  value?: number;
+  source?: string;
+  context?: Record<string, unknown>;
+}): Promise<SignalRow> {
+  const id = genId();
+  const ts = now();
+  getDb().prepare(
+    'INSERT INTO profile_signals (id, kind, target_type, target_key, value, source, context, occurred_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, input.kind, input.targetType, input.targetKey, input.value ?? null, input.source ?? null,
+    input.context ? JSON.stringify(input.context) : null, ts, ts);
+  return {
+    id, user_id: USER_ID, kind: input.kind, target_type: input.targetType, target_key: input.targetKey,
+    value: input.value ?? null, source: input.source ?? null, context: input.context ?? null,
+    occurred_at: ts, created_at: ts,
+  };
+}
+
+// ── Profile Interests ──
+
+export interface InterestRow {
+  id: string;
+  user_id: string;
+  kind: string;
+  key: string;
+  score: number;
+  confidence: number;
+  evidence_count: number;
+  status: string;
+  last_signal_at: string | null;
+}
+
+function rowToInterest(row: any): InterestRow {
+  return { ...row, user_id: USER_ID };
+}
+
+export async function listInterests(opts?: { kind?: string; limit?: number }): Promise<InterestRow[]> {
+  const parts = ["SELECT * FROM profile_interests WHERE status = 'active'"];
+  const params: unknown[] = [];
+  if (opts?.kind) { parts.push('AND kind = ?'); params.push(opts.kind); }
+  parts.push('ORDER BY score DESC');
+  if (opts?.limit) { parts.push('LIMIT ?'); params.push(opts.limit); }
+  const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
+  return rows.map(rowToInterest);
+}
+
+export async function upsertInterest(input: {
+  kind: string;
+  key: string;
+  score: number;
+  confidence: number;
+  evidenceCount: number;
+  lastSignalAt?: string;
+}): Promise<InterestRow> {
+  const db = getDb();
+  const id = genId();
+  const lastSignal = input.lastSignalAt ?? now();
+  db.prepare(`
+    INSERT INTO profile_interests (id, kind, key, score, confidence, evidence_count, status, last_signal_at)
+    VALUES (?, ?, ?, ?, ?, ?, 'active', ?)
+    ON CONFLICT(kind, key) DO UPDATE SET
+      score = excluded.score,
+      confidence = excluded.confidence,
+      evidence_count = excluded.evidence_count,
+      last_signal_at = excluded.last_signal_at
+  `).run(id, input.kind, input.key, input.score, input.confidence, input.evidenceCount, lastSignal);
+  const row = db.prepare('SELECT * FROM profile_interests WHERE kind = ? AND key = ?').get(input.kind, input.key) as any;
+  return rowToInterest(row);
+}
+
+export async function rollupSignals(sinceDays = 30): Promise<InterestRow[]> {
+  const since = new Date(Date.now() - sinceDays * 86400_000).toISOString();
+  const signals = await listSignals({ since, limit: 1000 });
+
+  const DECAY_HALF_LIFE_DAYS = 7;
+  const nowMs = Date.now();
+  const groups = new Map<string, { kind: string; key: string; total: number; count: number; lastAt: string }>();
+
+  for (const sig of signals) {
+    const gKey = `${sig.target_type}:${sig.target_key}`;
+    const ageDays = (nowMs - new Date(sig.occurred_at).getTime()) / 86400_000;
+    const weight = Math.pow(0.5, ageDays / DECAY_HALF_LIFE_DAYS) * (sig.value ?? 1);
+    const existing = groups.get(gKey);
+    if (existing) {
+      existing.total += weight;
+      existing.count += 1;
+      if (sig.occurred_at > existing.lastAt) existing.lastAt = sig.occurred_at;
+    } else {
+      groups.set(gKey, { kind: sig.target_type, key: sig.target_key, total: weight, count: 1, lastAt: sig.occurred_at });
+    }
+  }
+
+  const maxScore = Math.max(...[...groups.values()].map(v => v.total), 1);
+  const results: InterestRow[] = [];
+  for (const g of groups.values()) {
+    results.push(await upsertInterest({
+      kind: g.kind,
+      key: g.key,
+      score: Math.round((g.total / maxScore) * 1000) / 1000,
+      confidence: Math.round(Math.min(1, g.count / 10) * 1000) / 1000,
+      evidenceCount: g.count,
+      lastSignalAt: g.lastAt,
+    }));
+  }
+  return results;
+}
+
+// ── Feedback ──
+
+export interface FeedbackRow {
+  id: string;
+  user_id: string;
+  kind: string;
+  action: string | null;
+  push_id: string | null;
+  intent_card_id: string | null;
+  source: string;
+  basket: string | null;
+  value: string | null;
+  text: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+function rowToFeedback(row: any): FeedbackRow {
+  return { ...row, user_id: USER_ID, metadata: parseJson(row.metadata) };
+}
+
+export async function logFeedback(input: {
+  kind: string;
+  action?: string;
+  pushId?: string;
+  intentCardId?: string;
+  source?: string;
+  basket?: string;
+  value?: string;
+  text?: string;
+  metadata?: Record<string, unknown>;
+}): Promise<FeedbackRow> {
+  const id = genId();
+  const ts = now();
+  const meta = JSON.stringify(input.metadata ?? {});
+  getDb().prepare(
+    'INSERT INTO feedback_events (id, kind, action, push_id, intent_card_id, source, basket, value, text, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, input.kind, input.action ?? null, input.pushId ?? null, input.intentCardId ?? null,
+    input.source ?? 'user_direct', input.basket ?? null, input.value ?? null, input.text ?? null, meta, ts);
+  return {
+    id, user_id: USER_ID, kind: input.kind, action: input.action ?? null,
+    push_id: input.pushId ?? null, intent_card_id: input.intentCardId ?? null,
+    source: input.source ?? 'user_direct', basket: input.basket ?? null,
+    value: input.value ?? null, text: input.text ?? null,
+    metadata: input.metadata ?? {}, created_at: ts,
+  };
+}
+
+export async function listFeedback(opts?: {
+  since?: string;
+  kind?: string;
+  action?: string;
+  intentCardId?: string;
+  limit?: number;
+}): Promise<FeedbackRow[]> {
+  const parts = ['SELECT * FROM feedback_events WHERE 1=1'];
+  const params: unknown[] = [];
+  if (opts?.since) { parts.push('AND created_at >= ?'); params.push(opts.since); }
+  if (opts?.kind) { parts.push('AND kind = ?'); params.push(opts.kind); }
+  if (opts?.action) { parts.push('AND action = ?'); params.push(opts.action); }
+  if (opts?.intentCardId) { parts.push('AND intent_card_id = ?'); params.push(opts.intentCardId); }
+  parts.push('ORDER BY created_at DESC');
+  if (opts?.limit) { parts.push('LIMIT ?'); params.push(opts.limit); }
+  const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
+  return rows.map(rowToFeedback);
+}
+
+export async function getFeedback(id: string): Promise<FeedbackRow | null> {
+  const row = getDb().prepare('SELECT * FROM feedback_events WHERE id = ?').get(id) as any;
+  return row ? rowToFeedback(row) : null;
+}
+
+export async function feedbackStats(opts?: {
+  since?: string;
+  basket?: string;
+}): Promise<{ total: number; byKind: Record<string, number>; byAction: Record<string, number>; byBasket: Record<string, number> }> {
+  const rows = await listFeedback({ since: opts?.since, limit: 1000 });
+  const filtered = opts?.basket ? rows.filter(r => r.basket === opts.basket) : rows;
+  const byKind: Record<string, number> = {};
+  const byAction: Record<string, number> = {};
+  const byBasket: Record<string, number> = {};
+  for (const row of filtered) {
+    byKind[row.kind] = (byKind[row.kind] ?? 0) + 1;
+    if (row.action) byAction[row.action] = (byAction[row.action] ?? 0) + 1;
+    if (row.basket) byBasket[row.basket] = (byBasket[row.basket] ?? 0) + 1;
+  }
+  return { total: filtered.length, byKind, byAction, byBasket };
+}
+
+// ── Push Records ──
+
+export interface PushRecordRow {
+  id: string;
+  user_id: string;
+  intent_card_id: string | null;
+  kind: string;
+  basket: string | null;
+  title: string;
+  ref: string | null;
+  reason: string | null;
+  pushed_at: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface PushOutcomeRow {
+  id: string;
+  push_id: string;
+  status: string;
+  metadata: Record<string, unknown>;
+  recorded_at: string;
+}
+
+function rowToPush(row: any): PushRecordRow {
+  return { ...row, user_id: USER_ID, metadata: parseJson(row.metadata) };
+}
+
+function rowToOutcome(row: any): PushOutcomeRow {
+  return { ...row, metadata: parseJson(row.metadata) };
+}
+
+export async function recordPush(input: {
+  kind: string;
+  title: string;
+  intentCardId?: string;
+  basket?: string;
+  channel?: string;
+  ref?: string;
+  reason?: string;
+  metadata?: Record<string, unknown>;
+}): Promise<PushRecordRow> {
+  const id = genId();
+  const ts = now();
+  const meta = { ...(input.metadata ?? {}), ...(input.channel ? { channel: input.channel } : {}) };
+  getDb().prepare(
+    'INSERT INTO push_records (id, intent_card_id, kind, basket, title, ref, reason, pushed_at, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, input.intentCardId ?? null, input.kind, input.basket ?? null, input.title,
+    input.ref ?? null, input.reason ?? null, ts, JSON.stringify(meta), ts);
+  return {
+    id, user_id: USER_ID, intent_card_id: input.intentCardId ?? null,
+    kind: input.kind, basket: input.basket ?? null, title: input.title,
+    ref: input.ref ?? null, reason: input.reason ?? null,
+    pushed_at: ts, metadata: meta, created_at: ts,
+  };
+}
+
+export async function pushHistory(opts?: {
+  kind?: string;
+  basket?: string;
+  since?: string;
+  limit?: number;
+}): Promise<PushRecordRow[]> {
+  const parts = ['SELECT * FROM push_records WHERE 1=1'];
+  const params: unknown[] = [];
+  if (opts?.kind) { parts.push('AND kind = ?'); params.push(opts.kind); }
+  if (opts?.basket) { parts.push('AND basket = ?'); params.push(opts.basket); }
+  if (opts?.since) { parts.push('AND pushed_at >= ?'); params.push(opts.since); }
+  parts.push('ORDER BY pushed_at DESC');
+  if (opts?.limit) { parts.push('LIMIT ?'); params.push(opts.limit); }
+  const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
+  return rows.map(rowToPush);
+}
+
+export async function getPush(id: string): Promise<{ record: PushRecordRow; outcomes: PushOutcomeRow[] } | null> {
+  const row = getDb().prepare('SELECT * FROM push_records WHERE id = ?').get(id) as any;
+  if (!row) return null;
+  const outcomes = getDb().prepare('SELECT * FROM push_outcomes WHERE push_id = ? ORDER BY recorded_at DESC').all(id) as any[];
+  return { record: rowToPush(row), outcomes: outcomes.map(rowToOutcome) };
+}
+
+export async function recordOutcome(pushId: string, status: string, metadata?: Record<string, unknown>): Promise<PushOutcomeRow> {
+  const id = genId();
+  const ts = now();
+  const meta = JSON.stringify(metadata ?? {});
+  getDb().prepare('INSERT INTO push_outcomes (id, push_id, status, metadata, recorded_at) VALUES (?, ?, ?, ?, ?)')
+    .run(id, pushId, status, meta, ts);
+  return { id, push_id: pushId, status, metadata: metadata ?? {}, recorded_at: ts };
+}
+
+export async function findSimilarPushes(opts: {
+  kind: string;
+  ref?: string;
+  title?: string;
+  since?: string;
+}): Promise<PushRecordRow[]> {
+  const parts = ['SELECT * FROM push_records WHERE kind = ?'];
+  const params: unknown[] = [opts.kind];
+  if (opts.since) { parts.push('AND pushed_at >= ?'); params.push(opts.since); }
+  if (opts.ref) { parts.push('AND ref = ?'); params.push(opts.ref); }
+  if (opts.title) { parts.push('AND title LIKE ?'); params.push(`%${opts.title}%`); }
+  parts.push('ORDER BY pushed_at DESC LIMIT 20');
+  const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
+  return rows.map(rowToPush);
+}
+
+// ── World Items ──
+
+export interface WorldItemRow {
+  id: string;
+  provider: string;
+  stream_type: string;
+  title: string;
+  url: string;
+  normalized_url: string;
+  external_id: string | null;
+  summary: string | null;
+  published_at: string | null;
+  search_queries: string[];
+  topics: string[];
+  regions: string[];
+  importance: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+function rowToWorldItem(row: any): WorldItemRow {
+  return {
+    ...row,
+    search_queries: parseJsonArray<string>(row.search_queries),
+    topics: parseJsonArray<string>(row.topics),
+    regions: parseJsonArray<string>(row.regions),
+    metadata: parseJson(row.metadata),
+  };
+}
+
+export async function ingestWorldItem(input: {
+  provider: string;
+  streamType?: string;
+  title: string;
+  url: string;
+  normalizedUrl: string;
+  externalId?: string;
+  summary?: string;
+  publishedAt?: string;
+  searchQueries?: string[];
+  topics?: string[];
+  regions?: string[];
+  importance?: string;
+  metadata?: Record<string, unknown>;
+}): Promise<WorldItemRow> {
+  const db = getDb();
+  const id = genId();
+  const ts = now();
+  db.prepare(`
+    INSERT INTO world_items (id, provider, stream_type, title, url, normalized_url, external_id, summary, published_at,
+      search_queries, topics, regions, importance, metadata, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(normalized_url) DO UPDATE SET
+      title = excluded.title,
+      summary = excluded.summary,
+      published_at = excluded.published_at,
+      search_queries = excluded.search_queries,
+      topics = excluded.topics,
+      regions = excluded.regions,
+      importance = excluded.importance,
+      metadata = excluded.metadata,
+      updated_at = excluded.updated_at
+  `).run(id, input.provider, input.streamType ?? 'search', input.title, input.url, input.normalizedUrl,
+    input.externalId ?? null, input.summary ?? null, input.publishedAt ?? null,
+    JSON.stringify(input.searchQueries ?? []), JSON.stringify(input.topics ?? []),
+    JSON.stringify(input.regions ?? []), input.importance ?? null,
+    JSON.stringify(input.metadata ?? {}), ts, ts);
+  const row = db.prepare('SELECT * FROM world_items WHERE normalized_url = ?').get(input.normalizedUrl) as any;
+  return rowToWorldItem(row);
+}
+
+export async function listWorldItems(opts?: {
+  query?: string;
+  provider?: string;
+  since?: string;
+  limit?: number;
+}): Promise<WorldItemRow[]> {
+  const parts = ['SELECT * FROM world_items WHERE 1=1'];
+  const params: unknown[] = [];
+  if (opts?.query) { parts.push('AND title LIKE ?'); params.push(`%${opts.query}%`); }
+  if (opts?.provider) { parts.push('AND provider = ?'); params.push(opts.provider); }
+  if (opts?.since) { parts.push('AND published_at >= ?'); params.push(opts.since); }
+  parts.push('ORDER BY COALESCE(published_at, created_at) DESC');
+  if (opts?.limit) { parts.push('LIMIT ?'); params.push(opts.limit); }
+  const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
+  return rows.map(rowToWorldItem);
+}
+
+export async function getWorldItem(id: string): Promise<WorldItemRow | null> {
+  const row = getDb().prepare('SELECT * FROM world_items WHERE id = ?').get(id) as any;
+  return row ? rowToWorldItem(row) : null;
+}
+
+export async function listWorldItemsByIds(ids: string[]): Promise<WorldItemRow[]> {
+  if (ids.length === 0) return [];
+  const db = getDb();
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = db.prepare(`SELECT * FROM world_items WHERE id IN (${placeholders})`).all(...ids) as any[];
+  const mapped = rows.map(rowToWorldItem);
+  // Preserve input order
+  const order = new Map(ids.map((id, i) => [id, i]));
+  return mapped.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+}
+
+export interface WorldSemanticCandidate extends WorldItemRow {
+  searchText: string;
+}
+
+export async function listSemanticIndexCandidates(opts?: { limit?: number }): Promise<WorldSemanticCandidate[]> {
+  const items = await listWorldItems({ limit: opts?.limit ?? 100 });
+  return items.map(item => ({
+    ...item,
+    searchText: [
+      item.title,
+      item.summary ?? '',
+      ...(item.topics ?? []),
+      ...(item.regions ?? []),
+      ...(item.search_queries ?? []),
+      item.provider,
+      item.stream_type,
+      item.importance ?? '',
+    ].join(' ').replace(/\s+/g, ' ').trim(),
+  }));
+}
+
+// ── Pipeline Runs ──
+
+export interface PipelineRunRow {
+  id: string;
+  user_id: string;
+  run_id: string;
+  status: string;
+  total_iterations: number | null;
+  final_cards: unknown;
+  iterations: unknown;
+  error: string | null;
+  started_at: string;
+  completed_at: string | null;
+}
+
+function rowToPipelineRun(row: any): PipelineRunRow {
+  return {
+    ...row,
+    user_id: USER_ID,
+    final_cards: row.final_cards ? parseJson(row.final_cards) : null,
+    iterations: row.iterations ? parseJson(row.iterations) : null,
+  };
+}
+
+export async function savePipelineRun(input: {
+  runId: string;
+  status: string;
+  totalIterations: number;
+  finalCards: unknown;
+  iterations: unknown;
+}): Promise<void> {
+  const id = genId();
+  const ts = now();
+  getDb().prepare(
+    'INSERT INTO pipeline_runs (id, run_id, status, total_iterations, final_cards, iterations, started_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, input.runId, input.status, input.totalIterations,
+    JSON.stringify(input.finalCards), JSON.stringify(input.iterations), ts, ts);
+}
+
+export async function getLatestPipelineRun(): Promise<PipelineRunRow | null> {
+  const row = getDb().prepare('SELECT * FROM pipeline_runs ORDER BY started_at DESC LIMIT 1').get() as any;
+  return row ? rowToPipelineRun(row) : null;
+}
+
+export async function listPipelineRuns(opts?: { since?: string; limit?: number }): Promise<PipelineRunRow[]> {
+  const parts = ['SELECT * FROM pipeline_runs WHERE 1=1'];
+  const params: unknown[] = [];
+  if (opts?.since) { parts.push('AND started_at >= ?'); params.push(opts.since); }
+  parts.push('ORDER BY started_at DESC LIMIT ?');
+  params.push(opts?.limit ?? 30);
+  const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
+  return rows.map(rowToPipelineRun);
+}
+
+// ── User Settings ──
+
+export interface UserSettingsRow {
+  user_id: string;
+  generation_language: string;
+  auto_generate: boolean;
+  auto_dreaming: boolean;
+  metadata: Record<string, unknown>;
+  updated_at: string;
+}
+
+export async function getUserSettings(): Promise<UserSettingsRow> {
+  const db = getDb();
+  db.prepare("INSERT OR IGNORE INTO user_settings (id, updated_at) VALUES (1, ?)").run(now());
+  const row = db.prepare('SELECT * FROM user_settings WHERE id = 1').get() as any;
+  return {
+    user_id: USER_ID,
+    generation_language: row.generation_language,
+    auto_generate: Boolean(row.auto_generate),
+    auto_dreaming: Boolean(row.auto_dreaming),
+    metadata: parseJson(row.metadata),
+    updated_at: row.updated_at,
+  };
+}
+
+export async function updateUserSettings(
+  fields: Partial<Pick<UserSettingsRow, 'generation_language' | 'auto_generate' | 'auto_dreaming' | 'metadata'>>,
+): Promise<void> {
+  const db = getDb();
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  if (fields.generation_language !== undefined) { sets.push('generation_language = ?'); vals.push(fields.generation_language); }
+  if (fields.auto_generate !== undefined) { sets.push('auto_generate = ?'); vals.push(fields.auto_generate ? 1 : 0); }
+  if (fields.auto_dreaming !== undefined) { sets.push('auto_dreaming = ?'); vals.push(fields.auto_dreaming ? 1 : 0); }
+  if (fields.metadata !== undefined) { sets.push('metadata = ?'); vals.push(JSON.stringify(fields.metadata)); }
+  if (sets.length === 0) return;
+  sets.push('updated_at = ?'); vals.push(now());
+  // Ensure row exists
+  db.prepare("INSERT OR IGNORE INTO user_settings (id, updated_at) VALUES (1, ?)").run(now());
+  db.prepare(`UPDATE user_settings SET ${sets.join(', ')} WHERE id = 1`).run(...vals);
+}
+
+// ── Auto-Loop State ──
+
+export interface AutoLoopStateRow {
+  user_id: string;
+  last_started_at: string | null;
+  last_finished_at: string | null;
+  last_status: string | null;
+  updated_at: string;
+}
+
+export async function getAutoLoopState(): Promise<AutoLoopStateRow> {
+  const db = getDb();
+  db.prepare("INSERT OR IGNORE INTO auto_loop_state (id, updated_at) VALUES (1, ?)").run(now());
+  const row = db.prepare('SELECT * FROM auto_loop_state WHERE id = 1').get() as any;
+  return {
+    user_id: USER_ID,
+    last_started_at: row.last_started_at,
+    last_finished_at: row.last_finished_at,
+    last_status: row.last_status,
+    updated_at: row.updated_at,
+  };
+}
+
+export async function saveAutoLoopState(fields: Partial<Pick<AutoLoopStateRow, 'last_started_at' | 'last_finished_at' | 'last_status'>>): Promise<void> {
+  const db = getDb();
+  const ts = now();
+  db.prepare("INSERT OR IGNORE INTO auto_loop_state (id, updated_at) VALUES (1, ?)").run(ts);
+  const sets: string[] = ['updated_at = ?'];
+  const vals: unknown[] = [ts];
+  if (fields.last_started_at !== undefined) { sets.push('last_started_at = ?'); vals.push(fields.last_started_at); }
+  if (fields.last_finished_at !== undefined) { sets.push('last_finished_at = ?'); vals.push(fields.last_finished_at); }
+  if (fields.last_status !== undefined) { sets.push('last_status = ?'); vals.push(fields.last_status); }
+  db.prepare(`UPDATE auto_loop_state SET ${sets.join(', ')} WHERE id = 1`).run(...vals);
+}
+
+// ── Pending Store (ingest cursors, pending items, context runs) ──
+
+export type PendingSource = 'world' | 'personal';
+export type PendingStatus = 'pending' | 'processed';
+
+export interface PendingItem {
+  id: string;
+  source: PendingSource;
+  kind: string;
+  createdAt: string;
+  availableAt: string;
+  status: PendingStatus;
+  processedAt: string | null;
+  payload: Record<string, unknown>;
+}
+
+export interface PendingStoreState {
+  worldCursorUpdatedAt: string | null;
+  personalSnapshotHash: string | null;
+  items: PendingItem[];
+}
+
+export async function getIngestCursor(source: PendingSource): Promise<string | null> {
+  const row = getDb().prepare('SELECT cursor FROM ingest_cursor WHERE source = ?').get(source) as any;
+  return row?.cursor ?? null;
+}
+
+export async function setIngestCursor(source: PendingSource, cursor: string): Promise<void> {
+  getDb().prepare(`
+    INSERT INTO ingest_cursor (source, cursor, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(source) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at
+  `).run(source, cursor, now());
+}
+
+export async function loadPendingStore(limit = 500): Promise<PendingStoreState> {
+  const db = getDb();
+  const rows = db.prepare(
+    'SELECT * FROM pending_items ORDER BY created_at DESC LIMIT ?'
+  ).all(limit) as any[];
+  const items: PendingItem[] = rows.map(row => ({
+    id: row.id,
+    source: row.source as PendingSource,
+    kind: row.kind,
+    createdAt: row.created_at,
+    availableAt: row.available_at,
+    status: row.status as PendingStatus,
+    processedAt: row.processed_at,
+    payload: parseJson(row.payload_json),
+  }));
+  return {
+    worldCursorUpdatedAt: (await getIngestCursor('world')),
+    personalSnapshotHash: (await getIngestCursor('personal')),
+    items,
+  };
+}
+
+export async function addPendingItem(input: {
+  id: string;
+  source: PendingSource;
+  kind: string;
+  payload: Record<string, unknown>;
+  availableAt?: string;
+}): Promise<void> {
+  const ts = now();
+  getDb().prepare(
+    'INSERT OR IGNORE INTO pending_items (id, source, kind, payload_json, created_at, available_at, status) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(input.id, input.source, input.kind, JSON.stringify(input.payload), ts, input.availableAt ?? ts, 'pending');
+}
+
+export async function markPendingProcessed(id: string): Promise<void> {
+  getDb().prepare("UPDATE pending_items SET status = 'processed', processed_at = ? WHERE id = ?").run(now(), id);
+}
+
+export async function listPendingItems(opts?: { source?: PendingSource; status?: PendingStatus; limit?: number }): Promise<PendingItem[]> {
+  const parts = ['SELECT * FROM pending_items WHERE 1=1'];
+  const params: unknown[] = [];
+  if (opts?.source) { parts.push('AND source = ?'); params.push(opts.source); }
+  if (opts?.status) { parts.push('AND status = ?'); params.push(opts.status); }
+  parts.push('ORDER BY available_at ASC');
+  if (opts?.limit) { parts.push('LIMIT ?'); params.push(opts.limit); }
+  const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
+  return rows.map(row => ({
+    id: row.id,
+    source: row.source as PendingSource,
+    kind: row.kind,
+    createdAt: row.created_at,
+    availableAt: row.available_at,
+    status: row.status as PendingStatus,
+    processedAt: row.processed_at,
+    payload: parseJson(row.payload_json),
+  }));
+}
+
+// ── Context Runs ──
+
+export interface ContextRun {
+  runToken: string;
+  itemIds: string[];
+  itemCount: number;
+  createdAt: string;
+  status: 'open' | 'committed' | 'expired';
+  committedAt: string | null;
+}
+
+export async function createContextRun(runToken: string, itemIds: string[]): Promise<ContextRun> {
+  const ts = now();
+  getDb().prepare(
+    "INSERT INTO context_runs (run_token, item_ids_json, item_count, created_at, status) VALUES (?, ?, ?, ?, 'open')"
+  ).run(runToken, JSON.stringify(itemIds), itemIds.length, ts);
+  return { runToken, itemIds, itemCount: itemIds.length, createdAt: ts, status: 'open', committedAt: null };
+}
+
+export async function commitContextRun(runToken: string): Promise<void> {
+  getDb().prepare("UPDATE context_runs SET status = 'committed', committed_at = ? WHERE run_token = ?").run(now(), runToken);
+}
+
+export async function getContextRun(runToken: string): Promise<ContextRun | null> {
+  const row = getDb().prepare('SELECT * FROM context_runs WHERE run_token = ?').get(runToken) as any;
+  if (!row) return null;
+  return {
+    runToken: row.run_token,
+    itemIds: parseJsonArray<string>(row.item_ids_json),
+    itemCount: row.item_count,
+    createdAt: row.created_at,
+    status: row.status,
+    committedAt: row.committed_at,
+  };
+}
+
+export async function expireOldContextRuns(maxAgeMs = 3600_000): Promise<number> {
+  const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+  const result = getDb().prepare("UPDATE context_runs SET status = 'expired' WHERE status = 'open' AND created_at < ?").run(cutoff);
+  return result.changes;
+}

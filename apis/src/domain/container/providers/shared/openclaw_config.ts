@@ -53,6 +53,7 @@ export const buildGatewayConfigSection = (
 
   const controlUi: UnknownRecord = {
     allowInsecureAuth: true,
+    dangerouslyDisableDeviceAuth: true,
   };
 
   // Allow the APIs proxy origin so the Control UI accepts requests forwarded
@@ -432,10 +433,9 @@ export const buildAssistantOpenclawConfig = (
     };
   }
 
-  // Plugin config — three independent plugins replace the old monolithic
+  // Plugin config — two independent plugins replace the old monolithic
   // telegram-router-proxy.  Each handles a single concern:
   //   telegram-api-proxy:     Telegram API URL rewrite + method blocking
-  //   litellm-vision-adapter: Vision streaming adaptation
   //   platform-hooks:         Cron delivery + device auto-pairing
   const plugins: {
     entries: Record<string, UnknownRecord>;
@@ -450,7 +450,6 @@ export const buildAssistantOpenclawConfig = (
 
   if (options.telegramWebhookMode) {
     plugins.entries["telegram-api-proxy"] = { enabled: true };
-    plugins.entries["litellm-vision-adapter"] = { enabled: true };
     plugins.entries["platform-hooks"] = { enabled: true };
 
     const paths = options.pluginLoadPaths?.filter((p) => p.trim());
@@ -458,6 +457,24 @@ export const buildAssistantOpenclawConfig = (
       plugins.load = { paths };
     }
   }
+
+  // Web search provider plugin (v4.5+: provider config moved from
+  // tools.web.search.<provider> to plugins.entries.<provider>.config.webSearch)
+  if (context.litellm.enabled && normalizedLiteLLMApiKey) {
+    plugins.entries.perplexity = {
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: normalizedLiteLLMApiKey,
+          baseUrl: context.litellm.baseUrl.replace(/\/+$/, ""),
+          model: "sonar-pro",
+        },
+      },
+    };
+  }
+
+  // Disable native browser plugin — replaced by Browserbase plugin in proactive-ai
+  plugins.entries.browser = { enabled: false };
 
   if (Object.keys(plugins.entries).length > 0) {
     next.plugins = plugins;
@@ -482,14 +499,7 @@ export const buildAssistantOpenclawConfig = (
         enabled: true,
         maxResults: 10,
         ...(context.litellm.enabled && normalizedLiteLLMApiKey
-          ? {
-              provider: "perplexity",
-              perplexity: {
-                apiKey: normalizedLiteLLMApiKey,
-                baseUrl: context.litellm.baseUrl.replace(/\/+$/, ""),
-                model: "sonar-pro",
-              },
-            }
+          ? { provider: "perplexity" }
           : {}),
       },
       fetch: { enabled: true, maxChars: 50000 },
@@ -560,10 +570,9 @@ export const buildAssistantOpenclawConfig = (
   }
   next.commands = commands;
 
-  // Enable browser capability
+  // Disable built-in agent-browser (replaced by Browserbase plugin)
   next.browser = {
-    enabled: true,
-    evaluateEnabled: true,
+    enabled: false,
   };
 
   // Enable cron scheduler

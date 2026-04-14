@@ -607,6 +607,54 @@ export const deleteLiteLLMKey = async (keys: string[]): Promise<void> => {
   await requestJson("POST", "/key/delete", { keys });
 };
 
+/** Minimal info about a LiteLLM virtual key, as returned by /user/info. */
+export interface LiteLLMKeyEntry {
+  token: string;
+  keyAlias: string | null;
+}
+
+/**
+ * List all virtual keys belonging to a LiteLLM user.
+ * Uses GET /user/info and extracts the `keys` array from the response.
+ */
+export const listLiteLLMKeysForUser = async (
+  litellmUserId: string,
+): Promise<LiteLLMKeyEntry[]> => {
+  const userId = litellmUserId.trim();
+  if (!userId) return [];
+
+  let parsed: unknown;
+  try {
+    parsed = await requestJson("GET", "/user/info", { user_id: userId });
+  } catch (error: unknown) {
+    if (!shouldFallbackToPost(error)) throw error;
+    parsed = await requestJson("POST", "/user/info", { user_id: userId });
+  }
+
+  // LiteLLM /user/info returns { keys: [...] } at the top level or nested
+  // under data/info. Walk common locations.
+  const root = isRecord(parsed) ? parsed : null;
+  const candidates = [root, root?.data, root?.info].filter(isRecord);
+
+  let rawKeys: unknown[] | null = null;
+  for (const obj of candidates) {
+    if (Array.isArray(obj.keys)) {
+      rawKeys = obj.keys as unknown[];
+      break;
+    }
+  }
+
+  if (!rawKeys) return [];
+
+  return rawKeys
+    .filter(isRecord)
+    .map((k) => ({
+      token: readString(k, ["token", "key"]) ?? "",
+      keyAlias: readString(k, ["key_alias", "key_name"]),
+    }))
+    .filter((entry) => entry.token.length > 0);
+};
+
 export const deleteLiteLLMUser = async (userIds: string[]): Promise<void> => {
   if (!userIds.length) return;
   await requestJson("POST", "/user/delete", { user_ids: userIds });

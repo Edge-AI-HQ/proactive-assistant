@@ -2,6 +2,7 @@ import { getContainerManagerRuntime } from "../../runtime.js";
 import type { ContainerManagerConfig } from "../../types.js";
 import type {
   AssistantContainerParams,
+  GenericContainerParams,
   ContainerRef,
   ContainerRuntime,
   ContainerState,
@@ -10,6 +11,7 @@ import type {
 } from "../../contracts.js";
 import { isAssistantContainerName } from "../../naming.js";
 import {
+  createMachine as createFlyMachine,
   destroyMachine,
   getMachine,
   isNotFoundError,
@@ -255,6 +257,57 @@ export const flyContainerRuntime: ContainerRuntime = {
         : {}),
       ...(params.skillsConfig ? { skillsConfig: params.skillsConfig } : {}),
     });
+    return machineToContainerRef(machine);
+  },
+
+  async createGenericContainer(
+    params: GenericContainerParams,
+  ): Promise<ContainerRef> {
+    const volumeKey = params.volumeKey ?? params.containerName;
+    const volumeName = volumeKey.replace(/[^a-z0-9_]/g, "_").slice(0, 30);
+
+    // Try to find or create a volume
+    const { listVolumes, createVolume } = await import("./fly_client.js");
+    const volumes = await listVolumes();
+    let volume = volumes.find(
+      (v: { name: string; state?: string }) =>
+        v.name === volumeName &&
+        (!v.state || v.state === "created" || v.state === "ready"),
+    );
+    if (!volume) {
+      volume = await createVolume(volumeName, config.fly.region);
+    }
+
+    const env: Record<string, string> = {
+      ...params.env,
+      OPENCLAW_HOME: "/app",
+      OPENCLAW_GATEWAY_PORT: String(config.openclaw.gatewayPort),
+      OPENCLAW_GATEWAY_TOKEN: params.gatewayToken,
+    };
+
+    const machineBody = {
+      name: params.containerName,
+      region: volume.region ?? config.fly.region,
+      config: {
+        image: config.openclaw.image,
+        env,
+        guest: {
+          cpu_kind: "shared",
+          cpus: Math.max(1, config.fly.machineCpus),
+          memory_mb: config.container.memoryMb,
+        },
+        mounts: [{ volume: volume.id, path: "/app" }],
+        restart: {
+          policy: "on-failure",
+          max_retries: 3,
+        },
+        init: {
+          exec: ["sh", "-lc", "exec pinai-entrypoint.sh"],
+        },
+      },
+    };
+
+    const machine = await createFlyMachine(machineBody);
     return machineToContainerRef(machine);
   },
 

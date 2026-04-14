@@ -7,19 +7,15 @@
   },
   "workspaces": [
     "apis",
-    "miniapp",
-    "composio-service",
-    "proactive-ai/packages/core",
-    "proactive-ai/packages/cli"
+    "proactive-ai-frontend"
   ],
   "scripts": {
-    "dev": "npm run build --workspace @pin-ai/miniapp && npm run dev --workspace @pin-ai/apis",
+    "dev": "npm run build:proactive && npm run dev --workspace @pin-ai/apis",
     "build": "npm run build --workspace @pin-ai/apis",
-    "build:miniapp": "npm run build --workspace @pin-ai/miniapp",
-    "build:all": "npm run build --workspace @pin-ai/miniapp && npm run build --workspace @pin-ai/apis",
+    "build:proactive": "npm run build --workspace @pin-ai/proactive-ai-frontend",
+    "build:all": "npm run build --workspace @pin-ai/proactive-ai-frontend && npm run build --workspace @pin-ai/apis",
     "start": "npm run start --workspace @pin-ai/apis",
     "type-check": "npm run type-check --workspace @pin-ai/apis",
-    "type-check:miniapp": "npm run type-check --workspace @pin-ai/miniapp",
     "litellm:up": "bash ops/litellm/litellm.sh up",
     "litellm:restart": "bash ops/litellm/litellm.sh restart",
     "litellm:logs": "bash ops/litellm/litellm.sh logs",

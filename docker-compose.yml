@@ -1,25 +1,113 @@
 services:
-  # Build the OpenClaw image for user containers
-  openclaw-image:
-    build:
-      context: .
-      dockerfile: pinai-openclaw/image/Dockerfile
-    image: pinai-openclaw:latest
+  # ── Database ──
+  postgres:
+    image: postgres:15-alpine
+    container_name: pin-ai-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "54322:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
+  # ── Database migration (runs once, then exits) ──
+  db-migrate:
+    image: postgres:15-alpine
+    container_name: pin-ai-db-migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: postgres
+    volumes:
+      - ./apis/db/migrations:/migrations:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Creating litellm database..."
+        psql -h postgres -U postgres -d postgres -c "SELECT 1 FROM pg_database WHERE datname='litellm'" | grep -q 1 \
+          || psql -h postgres -U postgres -d postgres -c "CREATE DATABASE litellm;" 2>&1
+        echo "Running app migrations..."
+        for f in $$(ls /migrations/*.sql | sort); do
+          echo "  Applying $$(basename $$f)..."
+          psql -h postgres -U postgres -d postgres -f "$$f" 2>&1 || true
+        done
+        echo "Migrations complete."
+
+  # ── LiteLLM proxy ──
   litellm:
-    profiles: ["litellm"]
     image: docker.litellm.ai/berriai/litellm:main-v1.82.0.dev1
     container_name: pin-ai-litellm
     restart: unless-stopped
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
     env_file:
-      # LiteLLM service reads its own runtime env.
       - ./ops/litellm/.env
+    environment:
+      # Override DB URL to use local postgres (takes precedence over env_file)
+      - LITELLM_DB_URL=postgresql://postgres:postgres@postgres:5432/litellm
     ports:
       - "4000:4000"
     volumes:
       - ./ops/litellm/litellm_config.yaml:/app/config.yaml:ro
     command:
       ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "2"]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')\""]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+      start_period: 120s
+
+  # ── APIs ──
+  apis:
+    build:
+      context: .
+      dockerfile: apis/Dockerfile
+    container_name: pin-ai-apis
+    restart: unless-stopped
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      litellm:
+        condition: service_healthy
+    env_file:
+      - ./apis/.env
+    environment:
+      # Local overrides (take precedence over env_file)
+      - SUPABASE_DB_URL=postgresql://postgres:postgres@postgres:5432/postgres
+      - CONTAINER_RUNTIME=docker
+      - OPENCLAW_IMAGE=pinai-openclaw:latest
+      - LITELLM_BASE_URL=http://host.docker.internal:4000
+      # Docker-out-of-Docker: tell APIs the host-side data path
+      - HOST_DATA_DIR=${PWD}/data
+      - DOCKER_HOST_ADDRESS=host.docker.internal
+    ports:
+      - "3000:3000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data:/app/apis/data
+
+  # ── OpenClaw image (build only, no running container) ──
+  openclaw-image:
+    build:
+      context: .
+      dockerfile: pinai-openclaw/image/Dockerfile
+    image: pinai-openclaw:latest
+    entrypoint: ["true"]
+    restart: "no"
+
+volumes:
+  pgdata:
 
 networks:
   default:

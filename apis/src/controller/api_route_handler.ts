@@ -14,6 +14,7 @@ import {
   registerPaymentWebhookRoutes,
 } from "./payment_routes.js";
 import vncRoutes, { registerVncWebSocketProxy } from "./vnc_routes.js";
+import { registerProactiveRoutes, registerProactiveWsRoutes } from "./proactive_routes.js";
 
 export const registerRawBodyRoutes = (app: Application): void => {
   // Stripe webhook needs raw body for signature verification.
@@ -28,11 +29,13 @@ export const registerHttpRoutes = (app: Application): void => {
   registerPaymentRoutes(app);
   app.use(vncRoutes);
 
+  registerProactiveRoutes(app);
   registerAuthRoutes(app);
   registerDashboardRoutes(app);
 };
 
 export const registerWsRoutes = (server: Server): void => {
   registerDashboardWsRoutes(server);
+  registerProactiveWsRoutes(server);
   registerVncWebSocketProxy(server);
 };

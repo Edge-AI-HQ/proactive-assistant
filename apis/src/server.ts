@@ -21,8 +21,9 @@ import {
   registerRawBodyRoutes,
   registerWsRoutes,
 } from "./controller/api_route_handler.js";
-import { buildBot } from "./domain/telegram-bot/bot.js";
-import { registerTelegramRouterRoutes } from "./domain/telegram-router/routes.js";
+// Telegram bot and router imports removed — proactive-ai uses Supabase Auth.
+// Legacy telegram-bot and telegram-router code remains in the codebase
+// but is no longer wired into the server startup.
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -41,7 +42,11 @@ if (config.container.idleSuspendMs > 0) {
   configureIdleSuspendMs(config.container.idleSuspendMs);
   console.log(`[idle-suspend] Auto-suspend enabled: ${config.container.idleSuspendMs}ms idle timeout`);
 }
-await validatePaymentPriceConsistencyOnStartup();
+try {
+  await validatePaymentPriceConsistencyOnStartup();
+} catch (err) {
+  console.warn('[startup] Payment validation skipped (tables may not exist):', (err as Error).message);
+}
 
 const app = express();
 app.disable("x-powered-by");
@@ -49,7 +54,6 @@ app.set("trust proxy", true);
 app.use(requestLogContextMiddleware);
 
 registerRawBodyRoutes(app);
-registerTelegramRouterRoutes(app);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -58,7 +62,15 @@ app.use(cookieParser());
 // Serve static files from public directory
 const publicPath = path.join(process.cwd(), "public");
 console.log("Serving static files from:", publicPath);
-app.use(express.static(publicPath, { maxAge: "7d" }));
+app.use(express.static(publicPath, {
+  maxAge: "7d",
+  setHeaders(res, filePath) {
+    // HTML must never be cached — it references hashed JS/CSS bundles
+    if (filePath.endsWith(".html")) {
+      res.setHeader("Cache-Control", "no-store");
+    }
+  },
+}));
 
 registerHttpRoutes(app);
 
@@ -116,56 +128,4 @@ const server = app.listen(config.port, () => {
 
 registerWsRoutes(server);
 
-// Start Telegram bot with webhook mode
-if (config.telegram.token) {
-  const bot = buildBot();
-  const webhookPath = "/webhook/telegram";
-  const expectedWebhookUrl =
-    config.telegramRouter.webhookUrl || `${config.publicBaseUrl}${webhookPath}`;
-
-  // Initialize bot before storing globally
-  bot
-    .init()
-    .then(() => {
-      console.log(`Telegram bot initialized: @${bot.botInfo.username}`);
-      (global as any).__telegramBot = bot;
-
-      const routerWebhookUrl = config.telegramRouter.webhookUrl;
-      console.log(`Setting webhook to: ${expectedWebhookUrl}${routerWebhookUrl ? ' (via router)' : ' (direct)'}`);
-
-      // Set webhook
-      const webhookOptions: any = {
-        drop_pending_updates: true,
-      };
-      if (config.telegram.webhookSecret) {
-        webhookOptions.secret_token = config.telegram.webhookSecret;
-        console.log("Webhook secret token will be configured");
-      }
-
-      return bot.api.setWebhook(expectedWebhookUrl, webhookOptions);
-    })
-    .then((result) => {
-      console.log("Telegram webhook set successfully:", result);
-
-      // Verify webhook was set correctly
-      return bot.api.getWebhookInfo();
-    })
-    .then((info) => {
-      console.log("Webhook verification:", {
-        url: info.url,
-        pending_update_count: info.pending_update_count,
-        has_custom_certificate: info.has_custom_certificate,
-      });
-
-      if (info.url !== expectedWebhookUrl) {
-        console.warn(
-          `WARNING: Webhook URL mismatch! Expected ${expectedWebhookUrl}, got ${info.url}`,
-        );
-      }
-    })
-    .catch((error: unknown) => {
-      console.error("Failed to initialize or set webhook:", error);
-    });
-} else {
-  console.warn("TELEGRAM_BOT_TOKEN not configured, bot will not start");
-}
+// Telegram bot startup removed — proactive-ai cloud uses Supabase Auth + container proxy.

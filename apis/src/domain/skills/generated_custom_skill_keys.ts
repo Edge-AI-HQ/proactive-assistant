@@ -2,7 +2,6 @@
 // Do not edit manually.
 
 export const CUSTOM_SKILL_KEYS = [
-  "agent-browser",
   "gws",
   "gws-gmail",
   "gws-shared",

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">PIN AI</string>
+    <string name="title_activity_main">PIN AI</string>
+    <string name="package_name">ai.pin.proactive</string>
+    <string name="custom_url_scheme">ai.pin.proactive</string>
+</resources>

@@ -6,3 +6,10 @@ dist
 .DS_Store
 .claude
 /product_specs
+/proactive-ai
+/edge-harness
+/docs
+/ops
+/pin-cli
+/data
+apis/data
