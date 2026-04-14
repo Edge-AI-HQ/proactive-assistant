@@ -12,9 +12,13 @@ import { config } from '../common/config.js';
 import {
   createLiteLLMUser,
   generateLiteLLMKey,
+  deleteLiteLLMKey,
   listLiteLLMKeysForUser,
   isLiteLLMClientEnabled,
 } from '../litellm/client.js';
+
+/** LiteLLM virtual keys always start with this prefix. */
+const LITELLM_VIRTUAL_KEY_PREFIX = 'sk-';
 
 // ── DB helpers ──
 
@@ -86,11 +90,15 @@ export async function ensureProactiveLiteLLMKey(userId: string): Promise<string>
     throw new Error(`User not found for supabase_user_id=${userId}`);
   }
 
-  if (user.litellm_virtual_key?.trim()) {
-    return user.litellm_virtual_key;
+  // DB is the single source of truth for usable keys. Only trust sk-* values;
+  // anything else (NULL, empty, or a hashed token from a previous bug) is stale.
+  const cachedKey = user.litellm_virtual_key?.trim();
+  if (cachedKey && cachedKey.startsWith(LITELLM_VIRTUAL_KEY_PREFIX)) {
+    return cachedKey;
   }
 
-  // Build identifiers
+  // ── Need a fresh key: clean up any orphan in LiteLLM, then generate. ──
+
   const litellmUserId = `proactive-${userId}`;
   const keyAlias = `${KEY_ALIAS_PREFIX}${userId.slice(0, 8)}`;
 
@@ -99,60 +107,39 @@ export async function ensureProactiveLiteLLMKey(userId: string): Promise<string>
     userId: litellmUserId,
     userAlias: `proactive:${userId.slice(0, 8)}`,
     autoCreateKey: false,
-    metadata: {
-      source: 'proactive-ai',
-      proactive_user_id: userId,
-    },
+    metadata: { source: 'proactive-ai', proactive_user_id: userId },
   });
 
-  // ── Check-then-create: query existing keys before attempting generate ──
-  // This handles the case where a previous attempt created the key in LiteLLM
-  // but crashed before persisting the token to our DB.
+  // Delete any pre-existing key for this alias so we don't accumulate orphans.
+  // NOTE: LiteLLM /user/info returns hashed tokens, not the original sk-* key,
+  // so we can never recover a lost key — only replace it.
   const existingKeys = await listLiteLLMKeysForUser(litellmUserId);
-  const existingKey = existingKeys.find((k) => k.keyAlias === keyAlias);
-
-  let rawKey: string;
-  let resolvedAlias: string;
-
-  if (existingKey) {
-    // Key already exists in LiteLLM — reuse it
-    console.log(`[proactive] Found existing LiteLLM key for user ${userId.slice(0, 8)} (alias: ${keyAlias})`);
-    rawKey = existingKey.token;
-    resolvedAlias = keyAlias;
-  } else {
-    // No existing key — create a new one
-    const allowedModels = config.litellm.allowedModels.length > 0
-      ? config.litellm.allowedModels
-      : [];
-
-    const generated = await generateLiteLLMKey({
-      userId: litellmUserId,
-      keyAlias,
-      maxBudgetUsd: DEFAULT_BUDGET_USD,
-      budgetDuration: config.litellm.defaultBudgetDuration || '30d',
-      rpmLimit: config.litellm.defaultRpmLimit ?? null,
-      tpmLimit: config.litellm.defaultTpmLimit ?? null,
-      models: allowedModels,
-      metadata: {
-        source: 'proactive-ai',
-        proactive_user_id: userId,
-      },
-    });
-    rawKey = generated.rawKey;
-    resolvedAlias = generated.keyAlias ?? keyAlias;
+  const staleKey = existingKeys.find((k) => k.keyAlias === keyAlias);
+  if (staleKey) {
+    await deleteLiteLLMKey([staleKey.token]).catch(() => {});
   }
 
-  const last4 = rawKey.slice(-4);
+  // Generate a fresh virtual key
+  const generated = await generateLiteLLMKey({
+    userId: litellmUserId,
+    keyAlias,
+    maxBudgetUsd: DEFAULT_BUDGET_USD,
+    budgetDuration: config.litellm.defaultBudgetDuration || '30d',
+    rpmLimit: config.litellm.defaultRpmLimit ?? null,
+    tpmLimit: config.litellm.defaultTpmLimit ?? null,
+    models: config.litellm.allowedModels.length > 0 ? config.litellm.allowedModels : [],
+    metadata: { source: 'proactive-ai', proactive_user_id: userId },
+  });
 
   // Persist to users table
   await updateLiteLLMFields(user.id, {
     litellmUserId,
-    virtualKey: rawKey,
-    keyAlias: resolvedAlias,
-    keyLast4: last4,
+    virtualKey: generated.rawKey,
+    keyAlias: generated.keyAlias ?? keyAlias,
+    keyLast4: generated.rawKey.slice(-4),
     budgetUsd: DEFAULT_BUDGET_USD,
   });
 
   console.log(`[proactive] Provisioned LiteLLM key for user ${userId.slice(0, 8)} (alias: ${keyAlias})`);
-  return rawKey;
+  return generated.rawKey;
 }
