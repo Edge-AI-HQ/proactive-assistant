@@ -19,7 +19,7 @@ export const registerPersonalCommands = (
   resultRef: ResultRef,
 ): void => {
   const personal = new Command("personal").description(
-    "Personal data: connect apps and access user data via Composio Platform API",
+    "Personal data: connect apps and access user data via Composio MCP",
   );
 
   // ── Key management ──
@@ -138,7 +138,7 @@ export const registerPersonalCommands = (
   registerCommand({
     domain: "personal",
     command: "connections list",
-    description: "List connected apps and their status via Composio Platform API",
+    description: "List connected apps and their status via Composio MCP",
     risk: "read",
     supportsDryRun: false,
     flags: [
@@ -184,7 +184,7 @@ export const registerPersonalCommands = (
   registerCommand({
     domain: "personal",
     command: "tools schema",
-    description: "Get tool input schema via Composio Platform API",
+    description: "Get tool input schema via Composio MCP",
     risk: "read",
     supportsDryRun: false,
     flags: [
@@ -195,7 +195,7 @@ export const registerPersonalCommands = (
   registerCommand({
     domain: "personal",
     command: "exec",
-    description: "Execute a Composio tool via Platform API",
+    description: "Execute a Composio tool via MCP",
     risk: "write",
     supportsDryRun: false,
     flags: [

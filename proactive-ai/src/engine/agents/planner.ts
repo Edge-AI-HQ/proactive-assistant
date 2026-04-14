@@ -120,11 +120,19 @@ Each planned intent must satisfy ALL of these:
 </quality_criteria>
 
 <process>
+Start with personal data before planning:
+- Always run \`pin personal connections list --json\` first.
+- If personal connections exist, do not leave \`personalData\` empty.
+- After confirming connected apps, use \`pin personal tools search --query ... --json\` to find the right read tool for the connected sources.
+- Before execution, inspect the exact parameter contract with \`pin personal tools schema --name <TOOL_SLUG> --json\`.
+- Then execute at least one relevant personal read via \`pin personal exec --tool <TOOL_SLUG> --input '{...}' --json\` and include the raw result inside \`collectedContext.personalData\`.
+- If personal fetches fail, record the failure inside \`collectedContext.personalData.gaps\` with the attempted command/tool and the failure reason.
+
 Before locking the plan, inspect recent generated card history with \`pin cards recent --limit 10 --json\`. Use that result together with recent pushes and feedback to avoid blindly repeating the same card theme.
 
 Treat sustained card-chat engagement as a strong signal that the user wants adjacent follow-up content, but do not simply repeat the same card. Use that signal to plan the next higher-value step around the same thread.
 
-If a command fails or an app is not connected, skip that data source and record the gap inside \`collectedContext\`.
+If a command fails or an app is not connected, skip that data source and record the gap inside \`collectedContext\`. For personal data specifically, use \`collectedContext.personalData.gaps\`.
 </process>
 
 <anti_patterns>

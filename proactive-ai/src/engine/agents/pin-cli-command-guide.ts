@@ -8,6 +8,9 @@ When using pin CLI, prefer these exact commands instead of guessing nested subco
 - Rolled-up profile interests: \`pin profile interests list --id default --kind topic --limit 20 --json\`
 - Ranking snapshot: \`pin profile snapshot build --id default --view ranking --json\`
 - Personal connections: \`pin personal connections list --json\`
+- Personal tool discovery: \`pin personal tools search --query "recent emails" --json\`
+- Personal tool schema: \`pin personal tools schema --name GMAIL_FETCH_EMAILS --json\`
+- Personal tool execution: \`pin personal exec --tool GMAIL_FETCH_EMAILS --input '{"query":"newer_than:7d","max_results":10,"user_id":"me"}' --json\`
 - Recent push history: \`pin push history --since 14d --json\`
 - Recent feedback: \`pin feedback list --since 14d --json\`
 - Recent generated cards: \`pin cards recent --limit 10 --json\`

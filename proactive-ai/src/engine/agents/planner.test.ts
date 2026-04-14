@@ -53,6 +53,21 @@ describe("buildPlannerPrompt", () => {
     expect(prompt).toContain("pin sys schema push.history --json");
   });
 
+  it("forces a personal-data-first collection flow before planning", () => {
+    const prompt = buildPlannerPrompt({
+      currentDate: "2026-04-07",
+      iterationNumber: 1,
+    });
+
+    expect(prompt).toContain("Start with personal data before planning");
+    expect(prompt).toContain("pin personal connections list --json");
+    expect(prompt).toContain("pin personal tools search --query");
+    expect(prompt).toContain("pin personal tools schema --name");
+    expect(prompt).toContain("pin personal exec --tool");
+    expect(prompt).toContain("If personal connections exist, do not leave `personalData` empty");
+    expect(prompt).toContain("record the failure inside `collectedContext.personalData.gaps`");
+  });
+
   it("treats sustained card-chat engagement as a strong follow-up signal", () => {
     const prompt = buildPlannerPrompt({
       currentDate: "2026-04-07",

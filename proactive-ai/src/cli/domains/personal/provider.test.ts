@@ -6,40 +6,57 @@ import { join } from "node:path";
 import { createPersonalProvider } from "./provider.js";
 import { _resetSettingsCache } from "../../../core/domains/personal/platform_settings.js";
 
-test("createPersonalProvider uses Composio platform mode to create link sessions", { concurrency: false }, async () => {
+const sse = (payload: unknown): Response =>
+  new Response(`data: ${JSON.stringify(payload)}\n\n`, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+
+test("createPersonalProvider uses Composio MCP session and meta tools", { concurrency: false }, async () => {
   const originalFetch = globalThis.fetch;
   _resetSettingsCache();
 
   try {
-    const requests: Array<{ url: string; method: string; body: Record<string, unknown> | null }> = [];
+    const requests: Array<{ url: string; method: string; headers: Headers; body: Record<string, unknown> | null }> = [];
 
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       const method = init?.method ?? "GET";
+      const headers = new Headers(init?.headers);
       const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : null;
-      requests.push({ url, method, body });
+      requests.push({ url, method, headers, body });
 
-      if (url.includes("/api/v3/connected_accounts?")) {
-        return new Response(JSON.stringify({ items: [] }), { status: 200 });
-      }
-
-      if (url.includes("/api/v3/auth_configs?")) {
-        return new Response(JSON.stringify({ items: [] }), { status: 200 });
-      }
-
-      if (url.endsWith("/api/v3/auth_configs")) {
+      if (url.endsWith("/api/v3/tool_router/session")) {
         return new Response(JSON.stringify({
-          auth_config: {
-            id: "authcfg_gmail",
+          mcp: { url: "https://connect.composio.dev/mcp/session_test" },
+        }), { status: 200 });
+      }
+
+      if (url.startsWith("https://connect.composio.dev/mcp/session_test")) {
+        assert.equal(headers.get("x-api-key"), "ak_test_platform");
+        assert.equal(body?.method, "tools/call");
+        assert.deepEqual(body?.params, {
+          name: "COMPOSIO_MANAGE_CONNECTIONS",
+          arguments: { toolkits: ["gmail"] },
+        });
+        return sse({
+          result: {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                data: {
+                  results: {
+                    gmail: {
+                      status: "ACTIVE",
+                      connected_account_id: "ca_123",
+                      current_user_info: { email: "test@example.com" },
+                    },
+                  },
+                },
+              }),
+            }],
           },
-        }), { status: 200 });
-      }
-
-      if (url.endsWith("/api/v3/connected_accounts/link")) {
-        return new Response(JSON.stringify({
-          connected_account_id: "ca_123",
-          redirect_url: "https://platform.example/connect",
-        }), { status: 200 });
+        });
       }
 
       throw new Error(`Unexpected request: ${method} ${url}`);
@@ -54,36 +71,27 @@ test("createPersonalProvider uses Composio platform mode to create link sessions
       homeDir: "/Users/test",
     });
 
-    const connection = await provider.connectApp("gmail");
+    const [connection] = await provider.checkConnections(["gmail"]);
 
-    assert.equal(connection.toolkit, "gmail");
-    assert.equal(connection.status, "PENDING");
-    assert.equal(connection.connectedAccountId, "ca_123");
-    assert.equal(connection.redirectUrl, "https://platform.example/connect");
+    assert.equal(connection?.toolkit, "gmail");
+    assert.equal(connection?.status, "ACTIVE");
+    assert.equal(connection?.connectedAccountId, "ca_123");
+    assert.deepEqual(connection?.userInfo, { email: "test@example.com" });
 
-    const createdAuthConfig = requests.find((request) =>
-      request.url.endsWith("/api/v3/auth_configs") && request.method === "POST",
+    const sessionRequest = requests.find((request) =>
+      request.url.endsWith("/api/v3/tool_router/session") && request.method === "POST",
     );
-    assert.deepEqual(createdAuthConfig?.body, {
-      toolkit: { slug: "gmail" },
-    });
-
-    const linkRequest = requests.find((request) =>
-      request.url.endsWith("/api/v3/connected_accounts/link") && request.method === "POST",
-    );
-    assert.deepEqual(linkRequest?.body, {
-      auth_config_id: "authcfg_gmail",
-      user_id: "user_123",
-    });
+    assert.deepEqual(sessionRequest?.body, { user_id: "user_123" });
+    assert.equal(sessionRequest?.headers.get("x-api-key"), "ak_test_platform");
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test("createPersonalProvider falls back to proactive-ai local settings for platform mode", { concurrency: false }, async () => {
+test("createPersonalProvider falls back to proactive-ai local settings for MCP mode", { concurrency: false }, async () => {
   const originalFetch = globalThis.fetch;
   _resetSettingsCache();
-  const homeDir = "/tmp/pin-cli-personal-platform-fallback";
+  const homeDir = "/tmp/pin-cli-personal-mcp-fallback";
   const profileDir = join(homeDir, ".openclaw-proactive-ai");
   const settingsPath = join(profileDir, "local-settings.json");
 
@@ -105,25 +113,31 @@ test("createPersonalProvider falls back to proactive-ai local settings for platf
       const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : null;
       requests.push({ url, method, body });
 
-      if (url.includes("/api/v3/connected_accounts?")) {
-        return new Response(JSON.stringify({ items: [] }), { status: 200 });
-      }
-
-      if (url.includes("/api/v3/auth_configs?")) {
-        return new Response(JSON.stringify({ items: [] }), { status: 200 });
-      }
-
-      if (url.endsWith("/api/v3/auth_configs")) {
+      if (url.endsWith("/api/v3/tool_router/session")) {
         return new Response(JSON.stringify({
-          auth_config: { id: "authcfg_notion" },
+          mcp: { url: "https://connect.composio.dev/mcp/session_local" },
         }), { status: 200 });
       }
 
-      if (url.endsWith("/api/v3/connected_accounts/link")) {
-        return new Response(JSON.stringify({
-          connected_account_id: "ca_local",
-          redirect_url: "https://platform.example/connect-local",
-        }), { status: 200 });
+      if (url.startsWith("https://connect.composio.dev/mcp/session_local")) {
+        return sse({
+          result: {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                data: {
+                  results: {
+                    notion: {
+                      status: "PENDING",
+                      connected_account_id: "ca_local",
+                      redirect_url: "https://platform.example/connect-local",
+                    },
+                  },
+                },
+              }),
+            }],
+          },
+        });
       }
 
       throw new Error(`Unexpected request: ${method} ${url}`);
@@ -141,13 +155,10 @@ test("createPersonalProvider falls back to proactive-ai local settings for platf
     assert.equal(connection.connectedAccountId, "ca_local");
     assert.equal(connection.redirectUrl, "https://platform.example/connect-local");
 
-    const linkRequest = requests.find((request) =>
-      request.url.endsWith("/api/v3/connected_accounts/link") && request.method === "POST",
+    const sessionRequest = requests.find((request) =>
+      request.url.endsWith("/api/v3/tool_router/session") && request.method === "POST",
     );
-    assert.deepEqual(linkRequest?.body, {
-      auth_config_id: "authcfg_notion",
-      user_id: "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
-    });
+    assert.deepEqual(sessionRequest?.body, { user_id: "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d" });
   } finally {
     globalThis.fetch = originalFetch;
     rmSync(homeDir, { recursive: true, force: true });

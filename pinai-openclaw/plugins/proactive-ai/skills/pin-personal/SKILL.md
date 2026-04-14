@@ -1,7 +1,7 @@
 ---
 name: pin-personal
 version: 0.2.0
-description: "个人数据访问：通过 Composio Platform API 连接并读取用户的第三方应用数据（Gmail、Slack、Calendar 等）。"
+description: "个人数据访问：通过 Composio MCP 连接并读取用户的第三方应用数据（Gmail、Slack、Calendar 等）。"
 metadata:
   requires:
     bins: ["pin"]
@@ -93,16 +93,16 @@ pin personal wait --toolkit notion --json
 | `pin personal tools schema --name <TOOL_SLUG>` | 获取工具参数 | read |
 | `pin personal exec --tool <TOOL_SLUG> [--input '<json>']` | 执行工具 | write |
 
-## Composio Platform API 映射
+## Composio MCP 映射
 
-| pin-cli 命令 | Composio REST API |
+| pin-cli 命令 | Composio MCP meta tool |
 |---|---|
-| `connections list` | `GET /connected_accounts?statuses=ACTIVE` |
-| `connect` | `POST /connected_accounts/link` |
-| `wait` | polling `GET /connected_accounts` until ACTIVE |
-| `tools search` | `GET /tools?query=...` |
-| `tools schema` | `GET /tools/{slug}` |
-| `exec` | `POST /tools/execute/{slug}` |
+| `connections list` | `COMPOSIO_SEARCH_TOOLS` / `COMPOSIO_MANAGE_CONNECTIONS` |
+| `connect` | `COMPOSIO_MANAGE_CONNECTIONS` |
+| `wait` | `COMPOSIO_WAIT_FOR_CONNECTIONS` |
+| `tools search` | `COMPOSIO_SEARCH_TOOLS` |
+| `tools schema` | `COMPOSIO_GET_TOOL_SCHEMAS` |
+| `exec` | `COMPOSIO_MULTI_EXECUTE_TOOL` |
 
 ## Agent 使用模式
 
@@ -118,5 +118,5 @@ pin personal wait --toolkit notion --json
 ## 安全规则
 
 - API key 通过环境变量或本地配置文件传递，不硬编码
-- REST API 调用直接从用户机器到 Composio，产品方无法访问用户数据
+- MCP 调用直接从用户机器到 Composio，产品方无法访问用户数据
 - 所有工具执行结果不含原始 OAuth token

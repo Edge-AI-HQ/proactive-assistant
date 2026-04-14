@@ -11,6 +11,7 @@ export interface AccountIdentity {
 export interface PersonalPlatformSettings {
   apiKey?: string;
   apiBase?: string;
+  mcpUrl?: string;
   userId?: string;
   callbackUrl?: string;
   authConfigMap?: Record<string, string>;
@@ -170,6 +171,7 @@ function parseComposioSettings(composio: Record<string, unknown>): PersonalPlatf
   return {
     apiKey: asString(composio.apiKey),
     apiBase: asString(composio.apiBase),
+    mcpUrl: asString(composio.mcpUrl),
     userId: asString(composio.userId),
     callbackUrl: asString(composio.callbackUrl),
     authConfigMap: Object.keys(authConfigMap).length > 0 ? authConfigMap : undefined,
