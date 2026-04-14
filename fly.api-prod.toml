@@ -1,12 +1,17 @@
-app = 'proactive-ai-api-test'
+app = 'proactive-ai-api-prod'
 primary_region = 'iad'
 
 [build]
   dockerfile = 'apis/Dockerfile'
+  [build.args]
+    DEPLOY_ENV = 'production'
+    VITE_SUPABASE_URL = 'https://ferzdksixkkepromdhly.supabase.co'
+    VITE_SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_PZIDOtSPPLmNVV-R0U0hUQ_GlUisFft'
+    VITE_API_BASE_URL = 'https://proactive-ai-api-prod.fly.dev'
 
 [env]
   PORT = '3000'
-  NODE_ENV = 'development'
+  NODE_ENV = 'production'
   CONTAINER_RUNTIME = 'fly'
 
 [http_service]
@@ -22,10 +27,10 @@ primary_region = 'iad'
     hard_limit = 150
     soft_limit = 100
 
-[[vm]]
-  memory = '1gb'
-  cpu_kind = 'shared'
-  cpus = 1
-
 [deploy]
   strategy = 'rolling'
+
+[[vm]]
+  memory = '2gb'
+  cpu_kind = 'shared'
+  cpus = 2

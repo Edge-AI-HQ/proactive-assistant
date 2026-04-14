@@ -1,0 +1,26 @@
+name: Deploy Dev
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apis/**'
+      - 'proactive-ai-frontend/**'
+      - 'fly.api-dev.toml'
+      - 'package*.json'
+      - 'scripts/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy APIs to dev
+        run: flyctl deploy --config fly.api-dev.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

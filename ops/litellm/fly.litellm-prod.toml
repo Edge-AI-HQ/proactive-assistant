@@ -1,10 +1,10 @@
-# LiteLLM Fly.io deployment config (prod)
-# 与 apis 共用同一 Supabase 数据库,确保 budget 同步生效
-app = 'pinclaw-litellm-prod'
+app = 'proactive-ai-litellm-prod'
 primary_region = 'iad'
 
 [build]
   dockerfile = 'Dockerfile'
+  [build.args]
+    DEPLOY_ENV = 'production'
 
 [env]
   PORT = '4000'
@@ -14,13 +14,13 @@ primary_region = 'iad'
   force_https = true
   auto_stop_machines = false
   auto_start_machines = true
-  min_machines_running = 2
+  min_machines_running = 1
   processes = ['app']
 
   [http_service.concurrency]
     type = 'requests'
-    hard_limit = 240
-    soft_limit = 120
+    hard_limit = 80
+    soft_limit = 40
 
   [[http_service.checks]]
     grace_period = "60s"

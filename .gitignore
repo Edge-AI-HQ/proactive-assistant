@@ -27,6 +27,18 @@ api_key_env
 !.env.example
 docker-compose.override.yml
 
+# dotenvx private keys (NEVER commit — store in 1Password)
+.env.keys
+
+# Allow encrypted .env.dev / .env.production (dotenvx managed)
+!apis/.env.dev
+!apis/.env.production
+!ops/litellm/.env.dev
+!ops/litellm/.env.production
+
+# Allow frontend .env (public values only, no secrets)
+!proactive-ai-frontend/.env
+
 # Vercel
 .vercel
 

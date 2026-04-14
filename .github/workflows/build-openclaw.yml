@@ -1,0 +1,76 @@
+name: Build OpenClaw Image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'pinai-openclaw/**'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Build and push OpenClaw image
+        run: |
+          flyctl deploy . \
+            --config fly.openclaw.toml \
+            --build-only \
+            --push \
+            --image-label "openclaw-$(date +%Y%m%d-%H%M%S)" \
+            --remote-only \
+            --depot=false \
+            --yes 2>&1 | tee build-output.txt
+
+          DIGEST=$(grep -Eo "sha256:[0-9a-f]{64}" build-output.txt | tail -1)
+          if [ -z "$DIGEST" ]; then
+            echo "::error::Failed to extract digest from build output"
+            exit 1
+          fi
+          echo "DIGEST_REF=registry.fly.io/proactive-ai-openclaw@${DIGEST}" >> $GITHUB_ENV
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Update OPENCLAW_IMAGE in dev and prod
+        run: |
+          npx @dotenvx/dotenvx set OPENCLAW_IMAGE "${{ env.DIGEST_REF }}" -f apis/.env.dev
+          npx @dotenvx/dotenvx set OPENCLAW_IMAGE "${{ env.DIGEST_REF }}" -f apis/.env.production
+        env:
+          DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
+          DOTENV_PRIVATE_KEY_PRODUCTION: ${{ secrets.DOTENV_PRIVATE_KEY_PRODUCTION }}
+
+      - name: Commit updated digest
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add apis/.env.dev apis/.env.production
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
+          git commit -m "chore: update OPENCLAW_IMAGE digest [skip ci]"
+          git push
+
+      - name: Deploy APIs to dev
+        run: flyctl deploy --config fly.api-dev.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "## OpenClaw Image Built" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Digest: \`${{ env.DIGEST_REF }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Dev**: deployed ✅" >> $GITHUB_STEP_SUMMARY
+          echo "- **Prod**: digest updated in .env.production, will deploy on next \`git tag vX.Y.Z\`" >> $GITHUB_STEP_SUMMARY

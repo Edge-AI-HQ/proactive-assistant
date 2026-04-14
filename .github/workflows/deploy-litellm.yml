@@ -1,0 +1,42 @@
+name: Deploy LiteLLM
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+  push:
+    branches: [main]
+    paths:
+      - 'ops/litellm/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ (github.event_name == 'workflow_dispatch' && inputs.environment == 'prod') && 'production' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Determine environment
+        id: env
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "target=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+          else
+            echo "target=dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Deploy LiteLLM to ${{ steps.env.outputs.target }}
+        working-directory: ops/litellm
+        run: flyctl deploy --config fly.litellm-${{ steps.env.outputs.target }}.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

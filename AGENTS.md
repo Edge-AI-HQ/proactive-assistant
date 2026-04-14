@@ -1,161 +1,141 @@
 # Repository Guidelines
 
 ## 只读源码参考
-- `pinai-openclaw/external/openclaw/`：OpenClaw 上游源码（git submodule，锁定 `v2026.3.8`）。**仅供阅读参考，禁止修改此目录下的任何文件。**
+- `pinai-openclaw/external/openclaw/`：OpenClaw 上游源码（git submodule）。**仅供阅读参考，禁止修改此目录下的任何文件。**
 
-## 当前架构（一句话）
-Telegram Router 已并入 `apis`，不存在独立 `telegram-router` 服务。所有 Telegram 入/出站统一走 `pinclaw-api-dev`。
+## 当前架构
+Proactive AI 是产品主线。用户通过 proactive-ai-frontend（React SPA，Supabase Auth 登录）使用产品，APIs 负责容器编排与 gateway 代理，每个用户对应一台 OpenClaw assistant 机器（运行 pinai-openclaw 镜像），机器内跑 proactive-ai 插件（pipeline / scheduler / agents / world）。
 
-## 环境拓扑（2026-03-05）
-- Dev（当前生效）：
-  - APIs：`pinclaw-api-dev`
-  - Assistant 机器：`pinclaw-assistant-dev`（由 APIs 通过 `FLY_ASSISTANT_APP_NAME` 创建）
-  - LiteLLM：`pinclaw-litellm-dev`
-- Prod（规则口径）：
-  - 禁止在终端直接 `flyctl`/DB 变更，必须走评审 + CI/CD。
-  - Assistant 机器应与 APIs 隔离到独立 app（不要与 APIs 共用 app）。
+LiteLLM 作为 LLM 路由代理，统一管理模型调用（Claude、GPT、ElevenLabs TTS 等）。
 
-## 快速定位（高频目录）
-- `apis/src/domain/telegram-router/`：Telegram 路由核心逻辑（入站 webhook + 出站 API 代理）。
-- `apis/src/domain/container/`：OpenClaw 机器创建/重建与 env 注入。
-- `openclaw-plugins/telegram-router-proxy/`：OpenClaw 内 Telegram 出站重写插件（`index.ts` + `index.js`）。
-- `infra/container-manager/images/openclaw/`：自定义 OpenClaw 镜像。
-- `ops/litellm/`：LiteLLM 本地运维脚本。
-- `docs/`：运行记录与排障文档（默认被 `.gitignore` 忽略）。
+## 环境拓扑
 
-## 开发命令（只留常用）
-在仓库根目录执行：
-- `npm install`
-- `npm run dev`
-- `npm run build`
-- `npm run type-check`
-- `npm run test --workspace @pin-ai/apis`
+| 环境 | APIs | Assistant Machines | LiteLLM | OpenClaw Registry |
+|------|------|--------------------|---------|-------------------|
+| dev | `proactive-ai-api-dev` | `proactive-ai-assistant-dev` | `proactive-ai-litellm-dev` | `proactive-ai-openclaw`（共用） |
+| prod | `proactive-ai-api-prod` | `proactive-ai-assistant-prod` | `proactive-ai-litellm-prod` | `proactive-ai-openclaw`（共用） |
 
-LiteLLM 本地命令：
-- `npm run litellm:up`
-- `npm run litellm:logs`
+OpenClaw 镜像 registry 只有一个，dev 和 prod 通过 digest 区分版本。
 
-## 变更决策表（先看这个）
-1. 改 `apis/` 代码：
-- 直接提交并 `git push`，GitHub Actions 自动部署 `pinclaw-api-dev`。
+## Secrets 管理（dotenvx）
+Secrets 用 [dotenvx](https://dotenvx.com/) 加密后 checkin 到 git。每个环境一把私钥。
 
-2. 改 `openclaw-plugins/` 或 OpenClaw 启动行为：
-- 必须重建并推送 OpenClaw 镜像；
-- 然后更新 `OPENCLAW_IMAGE`（必须 `@sha256:` 格式）。
-- 备注：插件改动不会随 APIs 部署自动进入用户容器，必须走镜像 digest 更新。
-
-3. 只改文档：
-- `docs/` 默认被忽略，提交时需要 `git add -f docs/<file>`。
-
-## 生产环境硬性规则（必须遵守）
-- 生产环境（`pinclaw-api-prod`、`pinclaw-litellm-prod`）禁止直接执行任何 `flyctl` 命令。
-- 生产环境禁止直接执行任何数据库变更（含手动 SQL、`migrate`、`db push`、`schema` 变更）。
-- 所有生产变更必须走代码评审 + CI/CD 发布流程，不允许在终端临时“热修”。
-
-## Prod 上线同类工作清单（安全版）
-1. 合并前（代码侧）
-- 确认 P0 防护仍在：`assertNoP0SecretsInEnv` / `assertNoP0SecretsInConfig` 未被绕过。
-- 若改了 `openclaw-plugins/` 或启动命令：同步重建 OpenClaw 镜像并准备新 `OPENCLAW_IMAGE@sha256`。
-- 至少通过：`npm run type-check`、`npm run test --workspace @pin-ai/apis`。
-
-2. 发布前（配置侧）
-- 确认 prod 也使用 assistant 独立 app（`FLY_ASSISTANT_APP_NAME` 指向 prod assistant app）。
-- 确认 `OPENCLAW_IMAGE` 为 digest（禁止 tag）。
-- 确认 Telegram 路由关键项完整：`TELEGRAM_ROUTER_WEBHOOK_URL`、`TELEGRAM_WEBHOOK_SECRET`。
-
-3. 发布后（验收侧）
-- 看 APIs 日志：无 `Forward failed on all candidate endpoints`。
-- 看 assistant 日志：出现 `webhook local listener` 后再出现用户业务消息转发。
-- 抽检一台 assistant 机：P0 三项不在 env / openclaw config 明文中。
-
-4. 回滚策略
-- 优先回滚应用版本与 `OPENCLAW_IMAGE` digest（均走 CI/CD）。
-- 回滚后重复“发布后验收侧”三步，确认链路和密钥防护同时恢复。
-
-## Telegram 路由运行规则（当前真相）
-消息流：
-```text
-Telegram API -> APIs(/webhook/telegram*) -> OpenClaw webhook(:8787)
-OpenClaw -> telegram-router-proxy -> APIs(/api/telegram/:method) -> Telegram API
+```
+apis/.env.dev          # dev secrets（加密，已 checkin）
+apis/.env.production   # prod secrets（加密，已 checkin）
+apis/.env.keys         # 私钥（不 checkin，存 1Password "PIN-AI .env.keys"）
+ops/litellm/.env.dev / .env.production / .env.keys  # 同上
 ```
 
-关键配置：
-- APIs secrets：
-  - `TELEGRAM_ROUTER_WEBHOOK_URL`（建议为 APIs 的 `/webhook/telegram`）
-  - `TELEGRAM_WEBHOOK_SECRET`
-  - `OPENCLAW_IMAGE`（必须 digest）
-  - `FLY_ASSISTANT_APP_NAME`（dev 当前应为 `pinclaw-assistant-dev`）
-- OpenClaw machine env：
-  - `TELEGRAM_ROUTER_URL`（应指向 APIs）
-  - `OPENCLAW_TELEGRAM_WEBHOOK_PATH`
-  - `OPENCLAW_TELEGRAM_ROUTER_PLUGIN_PATH`
-  - `NODE_COMPILE_CACHE`
-
-## 泄露机制与防护（P0）
-- P0（平台级）：
-  - `telegram.token`（`TELEGRAM_BOT_TOKEN`）
-  - `telegram.webhookSecret`（`TELEGRAM_WEBHOOK_SECRET`）
-  - `elevenlabs.apiKey`（`ELEVENLABS_API_KEY` / `XI_API_KEY`）
-- 已落地防护：
-  - 用户容器禁止注入上述 P0 key/value（env + OpenClaw config 双层防护）。
-  - QuickStart 使用 synthetic bot token（`0:...`）+ assistant 级派生 webhook secret，不下发平台真实 token/secret。
-  - OpenClaw 启动不再把完整配置 JSON 内联在 `init.exec` 命令；改为 `OPENCLAW_CONFIG_B64` 容器内解码，避免 Fly `Preparing to run` 日志明文泄露。
-  - Assistant 机器与 APIs 分 app 运行，避免平台 secrets 被动注入到用户容器。
-- 验证口径（每次改动后至少抽查一次）：
-  - assistant 机内 `printenv` 不得出现上述 P0 非空值。
-  - `/app/data/config/openclaw.json` 不得出现上述 P0 key。
-
-## 实战踩坑（已验证）
-1. `OPENCLAW_IMAGE` 用 tag 会 crash loop；必须 `registry.fly.io/<app>@sha256:<64hex>`。
-2. `TELEGRAM_ROUTER_WEBHOOK_URL` 缺失或空值，可能退化为 polling 或转发异常。
-3. OpenClaw 冷启动慢通常不是卡死，是 jiti/V8 缓存构建叠加 `shared-cpu-1x` throttle。
-4. TCP 端口通不代表 OpenClaw ready；应看 webhook/gateway 协议级探测日志。
-5. `container_status=running` 不等于 Telegram 可用；必须等待 webhook HTTP 真正可响应后再通知 ready。
-6. 本机若启用了全局代理（`all_proxy/http_proxy/https_proxy`），`flyctl` 构建与 Docker push 可能出现卡住、`EOF`、`h2c 500` 或 `NAME_UNKNOWN`。处理方式：执行 Fly/Docker 发布命令时先禁用代理，例如：
+常用操作：
 ```bash
-env -u all_proxy -u http_proxy -u https_proxy flyctl ...
-env -u all_proxy -u http_proxy -u https_proxy docker ...
+npx dotenvx get -f apis/.env.dev                          # 查看所有 key 明文
+npx dotenvx set NEW_KEY "value" -f apis/.env.dev           # 加/改 key
+npx dotenvx run -f apis/.env.dev -- node dist/src/server.js  # 解密运行
 ```
 
-## 冷启动优化（按优先级）
-1. 创建期升配（`shared-cpu-2x` 或 `performance-1x`），ready 后降配。
-2. 保留 volume，避免 destroy+create 导致 `/tmp` 缓存丢失后重编译。
-3. 持久化缓存：
+Fly.io 上每个 app 只需设一个 secret（私钥），容器启动时自动解密：
 ```bash
-mkdir -p /app/data/cache/jiti /app/data/cache/node-compile-cache
-ln -sfn /app/data/cache/jiti /tmp/jiti
-export NODE_COMPILE_CACHE=/app/data/cache/node-compile-cache
-```
-4. 插件入口为 `index.ts`（jiti 运行时编译）。Docker 构建时 warmup 阶段已缓存编译结果，冷启动从 snapshot 恢复，无需预编译 `index.js`。
-
-## 标准排障命令（以 APIs 为准）
-1. 看 Telegram 全链路日志：
-```bash
-flyctl logs -a pinclaw-api-dev -n | rg "inbound ts=|Forward failed|Forwarded successfully|Proxying Telegram API|Telegram API response"
+flyctl secrets set DOTENV_PRIVATE_KEY_DEV="..." -a proactive-ai-api-dev
 ```
 
-2. 看某台 machine 冷启动与就绪：
+## 高频目录
+- `apis/src/server.ts`：服务入口
+- `apis/src/controller/`：HTTP 路由（dashboard、proactive、payment、VNC、container 等）
+- `apis/src/domain/proactive/`：Proactive AI 后端（Supabase auth、容器编排、gateway 代理、LiteLLM key）
+- `apis/src/domain/gateway/`：WebSocket relay、session 管理、RPC
+- `apis/src/domain/container/`：容器创建/销毁、idle suspend、状态同步（Docker + Fly 双 provider）
+- `apis/src/domain/payment/`：Stripe 集成、订阅、计费
+- `apis/src/domain/common/`：共享配置、DB repositories、infra runtime
+- `pinai-openclaw/plugins/proactive-ai/`：Proactive AI 核心插件（pipeline、scheduler、agents、world、CLI）
+- `pinai-openclaw/image/`：OpenClaw 自定义镜像（Dockerfile、entrypoint、warmup、skills）
+- `proactive-ai-frontend/src/`：React SPA 前端（Vite + Tailwind + Capacitor，支持 Web/iOS/Android）
+- `ops/litellm/`：LiteLLM 配置与部署脚本
+
+## 本地开发
+首次设置：
 ```bash
-flyctl logs -a pinclaw-assistant-dev -i <machine_id> -n | rg "pull|Machine started|TRP_VERSION|fetch proxy patch installed|Fully ready|telegram-webhook|ECONNRESET|502|webhook local listener"
+npm install
+make init    # 生成 .env 文件，按提示填入 secrets 和 dotenvx 私钥
 ```
 
-3. 检查关键 secrets：
+全栈启动（Docker Compose）：
 ```bash
-flyctl secrets list -a pinclaw-api-dev | rg "TELEGRAM_ROUTER_WEBHOOK_URL|TELEGRAM_WEBHOOK_SECRET|OPENCLAW_IMAGE"
+make up          # 构建并启动所有服务（postgres + litellm + apis + openclaw）
+make logs        # 查看日志
+make restart     # 改了 apis/ 代码后重建重启
+make reset       # 清空数据从头来（数据会丢失）
+make status      # 查看容器状态
 ```
+
+轻量开发（不走 Docker）：
+```bash
+npm run dev                                   # APIs dev server
+cd proactive-ai-frontend && npm run dev       # 前端 dev server（端口 3003）
+```
+
+验证：
+```bash
+npm run type-check
+npm run test --workspace @pin-ai/apis
+```
+
+完整命令：`make help`
+
+## 变更与部署
+
+### Dev 环境（自动）
+merge 到 main 后根据改动范围自动部署，不需要手动操作：
+- 改 `apis/` 或 `proactive-ai-frontend/` → 自动部署 APIs
+- 改 `pinai-openclaw/` → 自动构建镜像、更新 OPENCLAW_IMAGE digest、部署 APIs
+- 改 `ops/litellm/` → 自动部署 LiteLLM
+
+### Prod 环境（手动）
+在 GitHub Actions 页面手动触发对应 workflow：
+- **Deploy Prod** → 部署 APIs + 前端
+- **Deploy LiteLLM**（选 prod）→ 部署 LiteLLM
+- OpenClaw 镜像 prod 更新：先本地 `npx dotenvx set OPENCLAW_IMAGE "digest" -f apis/.env.production`，commit push 后触发 Deploy Prod
+
+### 本地部署（备用）
+CI/CD 不可用时可以本地直接部署：
+```bash
+make deploy-dev           # APIs dev
+make deploy-prod          # APIs prod（有 3 秒确认）
+make deploy-litellm-dev   # LiteLLM dev
+make deploy-litellm-prod  # LiteLLM prod
+make build-openclaw-image # 构建 OpenClaw 镜像到共用 registry
+```
+
+## 生产环境硬性规则
+- 生产部署优先走 GitHub Actions（有审计日志和 approval）。
+- 生产环境禁止直接执行任何数据库变更。
+- 所有生产变更必须走代码评审 + CI/CD。
+
+## 安全约束（P0）
+- P0 密钥（`TELEGRAM_BOT_TOKEN`、`TELEGRAM_WEBHOOK_SECRET`、`ELEVENLABS_API_KEY`）禁止注入用户容器。
+- 防护机制：`assertNoP0SecretsInEnv` / `assertNoP0SecretsInConfig`（见 `apis/src/domain/container/providers/shared/secret_guard.ts`），改动容器相关代码后必须确认未被绕过。
+- OpenClaw 配置走 `OPENCLAW_CONFIG_B64` 容器内解码，避免 Fly 日志明文泄露。
+- dotenvx 私钥（`.env.keys`）禁止 checkin，存 1Password 共享 vault。
+
+## 踩坑速查
+1. `OPENCLAW_IMAGE` 用 tag 会 crash loop；必须 `registry.fly.io/proactive-ai-openclaw@sha256:<64hex>`。
+2. OpenClaw 冷启动慢不是卡死，是 jiti/V8 缓存构建叠加 `shared-cpu-1x` throttle。
+3. `container_status=running` 不等于服务可用；必须等 HTTP 探测通过。
+4. 本机全局代理会导致 `flyctl` 和 Docker push 失败，deploy 命令已内置 `env -u` 处理。
+
+## 数据库变更规则
+- 每次 schema 变更写新的 migration 文件到 `apis/db/migrations/`。
+- migration 文件一旦 merge 到 main，禁止修改。
+- migration 只做 additive（加表、加列）；删列/改列走 expand-contract，分两个 release。
+- prod migration 随部署自动执行（`fly.toml` 的 `release_command`），禁止手动连 prod DB 跑 SQL。
 
 ## 提交规范
-- 使用 Conventional Commits：`feat(...)` / `fix(...)` / `chore(...)` / `docs(...)`。
+- Conventional Commits：`feat(...)` / `fix(...)` / `chore(...)` / `docs(...)`。
 - 每次提交聚焦一个变更点。
 - 提交前最少跑：`npm run type-check`。
 
-## PIN CLI (`pin-cli/`)
-
-**修改 `pin-cli/` 下任何文件前，必须先阅读 [`pin-cli/CODING.md`](pin-cli/CODING.md)。** 该文件包含输出层规范、数据库约定、命令注册模式、安全规范和测试要求。
-
 ## 规则单一真源
 - `AGENTS.md` 是 SSOT。
-- `.cursor/rules/agents.mdc` 应软链接到本文件。
-- `CLAUDE.md`、`GEMINI.md` 继续指向本文件，避免规则漂移。
-- 未经允许不要乱加fullback
-- 请使用平实、直接、克制的技术向白话中文，以把事情说明白为首要目标。严禁大厂黑话与抽象职场词汇（如赋能、闭环、底座、抓手、下钻、落地等），禁用“先说判断”等故作高深的汇报句式或网络梗。多用精确的工程术语；从具体事实说起，再作判断。整体气质朴素诚恳，不空谈概念。
+- `CLAUDE.md`、`GEMINI.md`、`.cursor/rules/agents.mdc` 均指向本文件。
+- 未经允许不要乱加 fallback。
+- 请使用平实、直接、克制的技术白话中文。禁止大厂黑话（赋能、闭环、底座、抓手等）。多用精确工程术语，从具体事实说起。

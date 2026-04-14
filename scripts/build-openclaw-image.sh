@@ -1,35 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build and push the OpenClaw image to Fly registry without deploying an app.
+# Build and push the OpenClaw image to the shared Fly registry.
+# One registry (proactive-ai-openclaw), all environments use the same digest.
 #
 # Usage:
-#   ./scripts/build-openclaw-image.sh dev
-#   ./scripts/build-openclaw-image.sh prod
-#   IMAGE_LABEL=my-openclaw-build ./scripts/build-openclaw-image.sh prod
+#   ./scripts/build-openclaw-image.sh
+#   IMAGE_LABEL=my-build ./scripts/build-openclaw-image.sh
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-TARGET_ENV="${1:-prod}"
-
-case "${TARGET_ENV}" in
-  dev)
-    FLY_APP="${FLY_APP:-pinclaw-assistant-dev}"
-    SECRET_APP="${SECRET_APP:-pinclaw-api-dev}"
-    FLY_CONFIG_PATH="${FLY_CONFIG_PATH:-pinai-openclaw/fly.dev.toml}"
-    ;;
-  prod)
-    FLY_APP="${FLY_APP:-pinclaw-assistant-prod}"
-    SECRET_APP="${SECRET_APP:-pinclaw-api-prod}"
-    FLY_CONFIG_PATH="${FLY_CONFIG_PATH:-pinai-openclaw/fly.prod.toml}"
-    ;;
-  *)
-    echo "Usage: $0 <dev|prod>"
-    exit 1
-    ;;
-esac
-
+FLY_APP="${FLY_APP:-proactive-ai-openclaw}"
+FLY_CONFIG_PATH="${FLY_CONFIG_PATH:-fly.openclaw.toml}"
 IMAGE_LABEL="${IMAGE_LABEL:-openclaw-$(date +%Y%m%d-%H%M%S)}"
 BUILD_OUTPUT_FILE="$(mktemp)"
 
@@ -50,9 +33,7 @@ if [ ! -f "${REPO_ROOT}/${FLY_CONFIG_PATH}" ]; then
 fi
 
 echo "Building OpenClaw image"
-echo "  env:        ${TARGET_ENV}"
-echo "  app:        ${FLY_APP}"
-echo "  secret app: ${SECRET_APP}"
+echo "  registry:   ${FLY_APP}"
 echo "  config:     ${FLY_CONFIG_PATH}"
 echo "  label:      ${IMAGE_LABEL}"
 echo
@@ -74,20 +55,15 @@ echo
 echo "Extracting digest from build output..."
 echo
 
-# 尝试多种可能的 digest 格式
+# Try multiple digest formats
 if command -v rg >/dev/null 2>&1; then
-  # 尝试完整格式: registry.fly.io/app@sha256:...
   DIGEST_REF="$(rg -o "registry\\.fly\\.io/${FLY_APP}@sha256:[0-9a-f]{64}" "${BUILD_OUTPUT_FILE}" | tail -n 1 || true)"
-  
-  # 如果没找到,尝试匹配 "digest: sha256:..." 格式
   if [ -z "${DIGEST_REF}" ]; then
     SHA256_ONLY="$(rg -o "digest: sha256:[0-9a-f]{64}" "${BUILD_OUTPUT_FILE}" | rg -o "sha256:[0-9a-f]{64}" | tail -n 1 || true)"
     if [ -n "${SHA256_ONLY}" ]; then
       DIGEST_REF="registry.fly.io/${FLY_APP}@${SHA256_ONLY}"
     fi
   fi
-  
-  # 最后尝试只匹配任意 sha256:...
   if [ -z "${DIGEST_REF}" ]; then
     SHA256_ONLY="$(rg -o "sha256:[0-9a-f]{64}" "${BUILD_OUTPUT_FILE}" | tail -n 1 || true)"
     if [ -n "${SHA256_ONLY}" ]; then
@@ -95,18 +71,13 @@ if command -v rg >/dev/null 2>&1; then
     fi
   fi
 else
-  # 尝试完整格式
   DIGEST_REF="$(grep -Eo "registry\\.fly\\.io/${FLY_APP}@sha256:[0-9a-f]{64}" "${BUILD_OUTPUT_FILE}" | tail -n 1 || true)"
-  
-  # 如果没找到,尝试匹配 "digest: sha256:..." 格式
   if [ -z "${DIGEST_REF}" ]; then
     SHA256_ONLY="$(grep -Eo "digest: sha256:[0-9a-f]{64}" "${BUILD_OUTPUT_FILE}" | grep -Eo "sha256:[0-9a-f]{64}" | tail -n 1 || true)"
     if [ -n "${SHA256_ONLY}" ]; then
       DIGEST_REF="registry.fly.io/${FLY_APP}@${SHA256_ONLY}"
     fi
   fi
-  
-  # 最后尝试只匹配任意 sha256:...
   if [ -z "${DIGEST_REF}" ]; then
     SHA256_ONLY="$(grep -Eo "sha256:[0-9a-f]{64}" "${BUILD_OUTPUT_FILE}" | tail -n 1 || true)"
     if [ -n "${SHA256_ONLY}" ]; then
@@ -117,7 +88,7 @@ fi
 
 if [ -z "${DIGEST_REF}" ]; then
   echo
-  echo "❌ Build completed, but digest was not found in output."
+  echo "Build completed, but digest was not found in output."
   echo
   echo "Debug: Searching build output for 'sha256'..."
   if command -v rg >/dev/null 2>&1; then
@@ -127,19 +98,20 @@ if [ -z "${DIGEST_REF}" ]; then
   fi
   echo
   echo "Full build output saved to: ${BUILD_OUTPUT_FILE}"
-  echo "Please inspect the file manually."
-  
-  # 不自动删除,方便调试
   trap - EXIT
   exit 1
 fi
 
 echo
-echo "✅ OpenClaw image digest:"
+echo "OpenClaw image digest:"
 echo
 echo "  ${DIGEST_REF}"
 echo
-echo "Set OPENCLAW_IMAGE with:"
+echo "Update OPENCLAW_IMAGE for each environment:"
 echo
-echo "  flyctl secrets set OPENCLAW_IMAGE=\"${DIGEST_REF}\" -a ${SECRET_APP}"
+echo "  # dev"
+echo "  npx dotenvx set OPENCLAW_IMAGE \"${DIGEST_REF}\" -f apis/.env.dev"
+echo
+echo "  # production (after dev verification)"
+echo "  npx dotenvx set OPENCLAW_IMAGE \"${DIGEST_REF}\" -f apis/.env.production"
 echo

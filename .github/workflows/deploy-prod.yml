@@ -1,0 +1,41 @@
+name: Deploy Prod
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 0
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          gh release create ${{ github.ref_name }} \
+            --title "${{ github.ref_name }}" \
+            --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Deploy APIs to prod
+        run: flyctl deploy --config fly.api-prod.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Deploy LiteLLM to prod
+        working-directory: ops/litellm
+        run: flyctl deploy --config fly.litellm-prod.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
