@@ -7,6 +7,7 @@ import ChatTimeline from "./ChatTimeline";
 import ControlPanel from "./ControlPanel";
 import DebugPanel from "./DebugPanel";
 import CardChat from "./CardChat";
+import CardDetailBody from "./CardDetailBody";
 import {
   Drawer,
   DrawerContent,
@@ -18,10 +19,10 @@ import { usePipeline, type IntentCard, type EvaluationScore } from "@/hooks/use-
 import { useComposio } from "@/hooks/use-composio";
 import { apiFetch, apiPost } from "@/lib/api";
 import {
-  Menu, X, Zap, MessageCircle, Target, Settings,
-  ArrowRight, Pencil, Sparkles,
+  Menu, X, Sparkles, Zap, MessageCircle, Target, Settings, ArrowRight,
 } from "lucide-react";
 import { basketMeta } from "@/lib/basket-meta";
+import { useWeather } from "@/hooks/use-weather";
 
 const MENU_ITEMS = [
   { id: "now", label: "NOW", icon: Zap },
@@ -64,146 +65,6 @@ const AI_GREETINGS = [
 
 type FloatingCard = IntentCard & { slotIndex: number };
 
-function CardDrawerBody({
-  card,
-  score,
-  onChat,
-  onDismiss,
-}: {
-  card: IntentCard;
-  score?: EvaluationScore | null;
-  onChat: () => void;
-  onDismiss: () => void;
-}) {
-  const meta = basketMeta(card.goalBasket);
-  const Icon = meta.icon;
-
-  const scores: { label: string; value: number; highlight?: boolean }[] = [
-    { label: "Confidence", value: Math.round(card.confidence * 100) },
-    { label: "Importance", value: Math.round(card.importance * 100) },
-    { label: "Urgency", value: Math.round(card.urgency * 100) },
-  ];
-  if (score) {
-    scores.push({ label: "Overall", value: Math.round(score.overall * 10), highlight: true });
-  }
-
-  return (
-    <motion.div
-      drag="x"
-      dragConstraints={{ left: 0, right: 0 }}
-      dragElastic={0.3}
-      onDragEnd={(_e, info) => {
-        if (info.offset.x < -100) onDismiss();
-        if (info.offset.x > 100) onChat();
-      }}
-      className="px-5 pb-6 pt-2 overflow-y-auto max-h-[75vh]"
-    >
-      {/* Swipe hints */}
-      <div className="flex justify-between mb-3 px-2">
-        <span className="text-[10px] text-foreground/25">← swipe to dismiss</span>
-        <span className="text-[10px] text-foreground/25">swipe to chat →</span>
-      </div>
-
-      {/* Category */}
-      <div className="flex items-center gap-1.5 mb-2">
-        <Icon size={14} strokeWidth={1.5} className="text-foreground/50" />
-        <span className="text-xs font-semibold tracking-wide text-foreground/50 uppercase">{meta.label}</span>
-        {card.urgency >= 0.85 && (
-          <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-full bg-foreground/10 text-foreground/50">Urgent</span>
-        )}
-      </div>
-
-      {/* Title */}
-      <h3 className="text-display text-[18px] leading-snug text-foreground mb-2.5 font-semibold">{card.title}</h3>
-
-      {/* Description */}
-      <p className="text-[15px] text-foreground/70 leading-relaxed mb-1.5">{card.whyNow}</p>
-      <p className="text-[13px] text-foreground/55 leading-relaxed mb-4">Sources: {card.sources.join(" · ")}</p>
-
-      {/* Scores */}
-      <div className={`grid gap-2 mb-4 ${scores.length === 4 ? "grid-cols-4" : "grid-cols-3"}`}>
-        {scores.map((s) => (
-          <div key={s.label} className="rounded-xl bg-foreground/5 py-2.5 text-center">
-            <div className={`text-lg font-bold ${s.highlight ? "text-purple-600" : "text-foreground/80"}`}>{s.value}</div>
-            <div className="text-[12px] text-foreground/50 mt-0.5 font-medium">{s.label}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Will execute */}
-      {card.primaryAction && (
-        <div className="rounded-xl p-4 mb-4 border border-pink-200/40" style={{ background: "linear-gradient(135deg, rgba(225,92,230,0.08) 0%, rgba(225,92,230,0.04) 100%)" }}>
-          <div className="text-[13px] font-bold mb-1.5 flex items-center gap-1.5">
-            <Zap size={13} strokeWidth={2} color="hsl(292,78%,63%)" />
-            <span className="bg-gradient-to-r from-[hsl(292,78%,63%)] to-[hsl(330,80%,65%)] bg-clip-text text-transparent">Will execute on confirm</span>
-          </div>
-          <p className="text-[15px] text-foreground font-medium leading-relaxed">{card.primaryAction.label}</p>
-        </div>
-      )}
-
-      {/* Secondary actions as execution plan */}
-      {card.secondaryActions.length > 0 && (
-        <div className="mb-4">
-          <div className="text-[13px] font-bold text-foreground uppercase tracking-wide mb-2">Actions</div>
-          <div className="flex flex-col gap-1.5">
-            {card.secondaryActions.map((action, i) => (
-              <div key={i} className="flex items-center gap-2 rounded-xl bg-foreground/4 px-3 py-2.5">
-                <ArrowRight size={13} strokeWidth={1.5} className="text-foreground/40 shrink-0" />
-                <span className="text-[14px] text-foreground/65 flex-1">{action.label}</span>
-                <span className="text-[11px] text-foreground/35 bg-foreground/5 px-2 py-0.5 rounded-full whitespace-nowrap">{action.type}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Data Sources */}
-      {card.sources.length > 0 && (
-        <div className="mb-4 rounded-xl bg-foreground/[0.04] border border-foreground/[0.06] p-3.5">
-          <div className="text-[13px] font-bold text-foreground/60 uppercase tracking-wide mb-2">Data Sources</div>
-          {card.sources.map((ds, i) => (
-            <div key={i} className="flex items-start gap-2 mb-1.5 last:mb-0">
-              <span className="w-2 h-2 rounded-full bg-foreground/25 mt-1.5 shrink-0" />
-              <span className="text-[14px] text-foreground/65 leading-relaxed">{ds}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Summary */}
-      {card.summary && (
-        <p className="text-[14px] text-foreground/55 mb-1.5">
-          <span className="font-bold text-foreground/70">Summary:</span> {card.summary}
-        </p>
-      )}
-
-      {/* Evaluator feedback */}
-      {score?.feedback && (
-        <p className="text-[14px] text-foreground/55 mb-4">
-          <span className="font-bold text-foreground/70">Evaluator:</span> {score.feedback}
-        </p>
-      )}
-
-      {/* Actions */}
-      <div className="flex items-center gap-2.5">
-        <button
-          onClick={onDismiss}
-          className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-sm font-medium text-foreground/50"
-        >
-          <Pencil size={13} strokeWidth={1.5} />
-          Dismiss
-        </button>
-        <button
-          onClick={onChat}
-          className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-foreground text-background text-sm font-semibold hover:bg-foreground/85 transition-colors"
-        >
-          <MessageCircle size={13} strokeWidth={2} />
-          Chat
-        </button>
-      </div>
-    </motion.div>
-  );
-}
 
 export default function AppLayout() {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -220,6 +81,7 @@ export default function AppLayout() {
 
   const { health, run, generate, isRunning } = usePipeline();
   const composio = useComposio();
+  const weather = useWeather();
 
   const readySignaled = useRef(false);
   useEffect(() => {
@@ -248,7 +110,7 @@ export default function AppLayout() {
 
   const visibleCards: FloatingCard[] = run.finalCards
     .filter((c) => !dismissedIds.has(c.id))
-    .slice(0, 10)
+    .slice(0, 8)
     .map((c, i) => ({ ...c, slotIndex: i }));
 
   const handleCardTap = useCallback((card: IntentCard) => {
@@ -262,6 +124,22 @@ export default function AppLayout() {
       setDismissedIds((prev) => new Set(prev).add(cardId));
       apiPost("/api/feedback", {
         kind: "dismiss",
+        intentCardId: cardId,
+        basket: selectedCard.goalBasket,
+        channel: "web",
+      }).catch(() => {});
+    }
+    setDrawerOpen(false);
+    setSelectedCard(null);
+  }, [selectedCard]);
+
+  const handleConfirmCard = useCallback(() => {
+    if (selectedCard) {
+      const cardId = selectedCard.id;
+      setDismissedIds((prev) => new Set(prev).add(cardId));
+      apiPost("/api/feedback", {
+        kind: "card_action",
+        action: "confirm",
         intentCardId: cardId,
         basket: selectedCard.goalBasket,
         channel: "web",
@@ -305,8 +183,23 @@ export default function AppLayout() {
 
     return (
       <div className="relative flex flex-col h-full">
-        {/* Greeting */}
-        <div className="relative z-20 px-5 pt-24 pb-2">
+        {/* Weather + Greeting */}
+        <div className="relative z-20 px-5 pt-14 pb-2">
+          {weather && (
+            <div className="flex items-center mb-3">
+              <div className="glass-card-strong px-3 py-1.5 flex items-center gap-1.5">
+                <weather.icon size={14} strokeWidth={1.5} className="text-foreground/60" />
+                <span className="text-sm font-medium text-foreground">{weather.temp}°</span>
+                <span className="text-xs text-foreground/60">{weather.label}</span>
+                {weather.city && (
+                  <>
+                    <span className="text-foreground/20">·</span>
+                    <span className="text-xs text-foreground/50">{weather.city}</span>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
           <h1 className="text-2xl font-light text-foreground leading-tight">
             Hi,{" "}
             <span className="font-semibold bg-gradient-to-r from-[hsl(292,78%,63%)] to-[hsl(330,80%,65%)] bg-clip-text text-transparent">
@@ -472,7 +365,7 @@ export default function AppLayout() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
               transition={{ duration: 0.25 }}
-              className="flex-1 overflow-hidden"
+              className="flex-1 min-h-0"
             >
               {activeView === "chat" && <ChatTimeline onOpenChat={handleOpenChatDirect} />}
               {activeView === "goals" && <GoalsView />}
@@ -555,11 +448,13 @@ export default function AppLayout() {
             <DrawerDescription>Intent card detail view</DrawerDescription>
           </DrawerHeader>
           {selectedCard && (
-            <CardDrawerBody
+            <CardDetailBody
               card={selectedCard}
               score={run.scoreMap[selectedCard.id] ?? null}
               onChat={handleOpenChatFromDrawer}
               onDismiss={handleDismissCard}
+              onConfirm={handleConfirmCard}
+              enableSwipe
             />
           )}
         </DrawerContent>

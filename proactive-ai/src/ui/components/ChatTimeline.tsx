@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import {
-  Loader2, CheckCircle2, Circle, Zap, Pencil, MessageCircle, Sparkles,
+  Loader2, CheckCircle2, Circle, Sparkles,
 } from "lucide-react";
 import {
   Drawer,
@@ -9,8 +9,9 @@ import {
   DrawerTitle,
   DrawerDescription,
 } from "@/components/ui/drawer";
+import CardDetailBody from "./CardDetailBody";
 import type { IntentCard, EvaluationScore } from "@/hooks/use-pipeline";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, apiPost } from "@/lib/api";
 import { basketMeta } from "@/lib/basket-meta";
 
 interface StoredRun {
@@ -45,131 +46,6 @@ function formatDate(iso: string): string {
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-function CardDetailDrawerBody({
-  card,
-  onOpenChat,
-  onMarkChatted,
-}: {
-  card: TimelineCard;
-  onOpenChat?: (card: IntentCard) => void;
-  onMarkChatted?: (cardId: string) => void;
-}) {
-  const meta = basketMeta(card.goalBasket);
-  const Icon = meta.icon;
-  const evalScore = card.score;
-
-  const scores: { label: string; value: number; highlight?: boolean }[] = [
-    { label: "Confidence", value: Math.round(card.confidence * 100) },
-    { label: "Importance", value: Math.round(card.importance * 100) },
-    { label: "Urgency", value: Math.round(card.urgency * 100) },
-  ];
-  if (evalScore) {
-    scores.push({ label: "Overall", value: Math.round(evalScore.overall * 10), highlight: true });
-  }
-
-  return (
-    <div className="px-5 pb-6 pt-2 overflow-y-auto max-h-[75vh]">
-      {/* Category + Title */}
-      <div className="flex items-center gap-2 mb-3">
-        <Icon size={16} strokeWidth={1.5} className="text-foreground/50" />
-        <span className="text-xs font-semibold tracking-wide text-foreground/50 uppercase">
-          {meta.label}
-        </span>
-        {card.urgency >= 0.85 && (
-          <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-full bg-foreground/10 text-foreground/50">
-            Urgent
-          </span>
-        )}
-      </div>
-      <h3 className="text-display text-lg text-foreground mb-2">{card.title}</h3>
-
-      {/* Scores grid */}
-      <div className={`grid gap-2 mb-4 ${scores.length === 4 ? "grid-cols-4" : "grid-cols-3"}`}>
-        {scores.map((s) => (
-          <div key={s.label} className="rounded-xl bg-foreground/5 py-2.5 text-center">
-            <div className={`text-base font-bold ${s.highlight ? "text-purple-600" : "text-foreground/80"}`}>
-              {s.value}
-            </div>
-            <div className="text-[11px] text-foreground/45 mt-0.5">{s.label}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* WhyNow / Summary */}
-      {card.whyNow && (
-        <div className="rounded-xl bg-green-50/60 border border-green-200/40 p-3 mb-4">
-          <div className="text-xs font-semibold text-green-700/80 mb-1">Why Now</div>
-          <p className="text-[13px] text-foreground/80 leading-relaxed">{card.whyNow}</p>
-        </div>
-      )}
-
-      {card.summary && (
-        <div className="rounded-xl bg-foreground/[0.03] border border-foreground/10 p-3 mb-4">
-          <div className="text-xs font-semibold text-foreground/50 mb-1">Summary</div>
-          <p className="text-[13px] text-foreground/70 leading-relaxed">{card.summary}</p>
-        </div>
-      )}
-
-      {/* Sources */}
-      {card.sources.length > 0 && (
-        <div className="mb-4">
-          <div className="text-xs font-semibold text-foreground/50 uppercase tracking-wide mb-2">Sources</div>
-          {card.sources.map((src, i) => (
-            <div key={i} className="flex items-start gap-1.5 mb-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-foreground/30 mt-1.5 shrink-0" />
-              <span className="text-[13px] text-foreground/60">{src}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Actions */}
-      {(card.primaryAction || card.secondaryActions.length > 0) && (
-        <div className="mb-4">
-          <div className="text-xs font-semibold text-foreground/50 uppercase tracking-wide mb-2">Available Actions</div>
-          <div className="flex flex-col gap-1.5">
-            {card.primaryAction && (
-              <div className="flex items-center gap-2 rounded-xl bg-foreground/4 px-3 py-2">
-                <Zap size={12} strokeWidth={1.5} className="text-foreground/40 shrink-0" />
-                <span className="text-[13px] text-foreground/70 flex-1">{card.primaryAction.label}</span>
-                <span className="text-[11px] text-foreground/35 bg-foreground/5 px-2 py-0.5 rounded-full whitespace-nowrap">
-                  {card.primaryAction.type}
-                </span>
-              </div>
-            )}
-            {card.secondaryActions.map((action, i) => (
-              <div key={i} className="flex items-center gap-2 rounded-xl bg-foreground/4 px-3 py-2">
-                <Pencil size={12} strokeWidth={1.5} className="text-foreground/40 shrink-0" />
-                <span className="text-[13px] text-foreground/70 flex-1">{action.label}</span>
-                <span className="text-[11px] text-foreground/35 bg-foreground/5 px-2 py-0.5 rounded-full whitespace-nowrap">
-                  {action.type}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Evaluator feedback */}
-      {evalScore?.feedback && (
-        <div className="mb-4">
-          <div className="text-xs font-semibold text-foreground/50 uppercase tracking-wide mb-2">Evaluator Feedback</div>
-          <p className="text-[13px] text-foreground/60 leading-relaxed">{evalScore.feedback}</p>
-        </div>
-      )}
-
-      {/* Chat button */}
-      <button
-        onClick={() => { onMarkChatted?.(card.id); onOpenChat?.(card); }}
-        className="w-full py-3 rounded-2xl bg-foreground text-background text-sm font-semibold hover:bg-foreground/85 transition-colors flex items-center justify-center gap-2"
-      >
-        <MessageCircle size={16} strokeWidth={1.8} />
-        Chat about this card
-      </button>
-    </div>
-  );
-}
-
 export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
   const [historicalRuns, setHistoricalRuns] = useState<StoredRun[]>([]);
   const [loadingRuns, setLoadingRuns] = useState(true);
@@ -182,12 +58,48 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
     } catch { return new Set(); }
   });
 
+  const [confirmedIds, setConfirmedIds] = useState<Set<string>>(new Set());
+
   const markChatted = (cardId: string) => {
     setChattedIds((prev) => {
       const next = new Set(prev).add(cardId);
       sessionStorage.setItem("proactive-ai:chattedCardIds", JSON.stringify([...next]));
       return next;
     });
+  };
+
+  const handleDismiss = () => {
+    if (!selectedCard) return;
+    const cardId = selectedCard.id;
+    setDismissedIds((prev) => new Set(prev).add(cardId));
+    apiPost("/api/feedback", {
+      kind: "dismiss",
+      intentCardId: cardId,
+      basket: selectedCard.goalBasket,
+      channel: "web",
+    }).catch(() => {});
+    setSelectedCard(null);
+  };
+
+  const handleConfirm = () => {
+    if (!selectedCard) return;
+    const cardId = selectedCard.id;
+    setConfirmedIds((prev) => new Set(prev).add(cardId));
+    apiPost("/api/feedback", {
+      kind: "card_action",
+      action: "confirm",
+      intentCardId: cardId,
+      basket: selectedCard.goalBasket,
+      channel: "web",
+    }).catch(() => {});
+    setSelectedCard(null);
+  };
+
+  const handleChat = () => {
+    if (!selectedCard) return;
+    markChatted(selectedCard.id);
+    setSelectedCard(null);
+    onOpenChat?.(selectedCard);
   };
 
   useEffect(() => {
@@ -249,10 +161,14 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
               const CatIcon = meta.icon;
               const actionCount = card.secondaryActions?.length ?? 0;
               const isDismissed = dismissedIds.has(card.id);
+              const isConfirmed = confirmedIds.has(card.id);
+              const isResolved = isDismissed || isConfirmed;
               const isChatted = chattedIds.has(card.id);
 
               const previewText = isDismissed
                 ? "Dismissed"
+                : isConfirmed
+                ? "Confirmed"
                 : card.primaryAction
                 ? `${actionCount + 1} operations · ${card.primaryAction.label}`
                 : card.sources.join(" · ");
@@ -261,7 +177,7 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
                 <div
                   key={`${card.runId}-${card.id}`}
                   className="glass-card px-3.5 py-4 w-full text-left cursor-pointer active:scale-[0.98] transition-transform"
-                  onClick={() => { if (!isDismissed) setSelectedCard(card); }}
+                  onClick={() => setSelectedCard(card)}
                 >
                   <div className="flex items-center gap-2.5">
                     <span className="text-foreground/50 shrink-0">
@@ -269,11 +185,11 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
                     </span>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5">
-                        <p className={`text-[13px] font-medium leading-snug truncate flex-1 ${isDismissed ? "text-foreground/35 line-through" : "text-foreground"}`}>
+                        <p className={`text-[13px] font-medium leading-snug truncate flex-1 ${isResolved ? "text-foreground/35 line-through" : "text-foreground"}`}>
                           {card.title}
                         </p>
                         <span className="shrink-0 w-[18px] h-[18px] inline-flex items-center justify-center">
-                          {isDismissed ? (
+                          {isResolved ? (
                             <CheckCircle2 size={15} className="text-green-500/60" />
                           ) : isChatted ? (
                             <Loader2 size={15} className="text-amber-500 animate-spin" />
@@ -331,14 +247,12 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
           </DrawerHeader>
 
           {selectedCard && (
-            <CardDetailDrawerBody
+            <CardDetailBody
               card={selectedCard}
-              onMarkChatted={markChatted}
-              onOpenChat={(card) => {
-                markChatted(card.id);
-                setSelectedCard(null);
-                onOpenChat?.(card);
-              }}
+              score={selectedCard.score}
+              onChat={handleChat}
+              onDismiss={handleDismiss}
+              onConfirm={handleConfirm}
             />
           )}
         </DrawerContent>
