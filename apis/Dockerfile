@@ -35,4 +35,4 @@ WORKDIR /app/apis
 # The matching DOTENV_PRIVATE_KEY_* must be set as a Fly secret.
 ARG DEPLOY_ENV=dev
 ENV DEPLOY_ENV=${DEPLOY_ENV}
-CMD ["sh", "-c", "exec dotenvx run -f .env.${DEPLOY_ENV} --overload -- node dist/src/server.js"]
+CMD ["sh", "-c", "exec dotenvx run -f .env.${DEPLOY_ENV} -- node dist/src/server.js"]
