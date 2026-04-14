@@ -1,4 +1,4 @@
-app = 'proactive-ai-openclaw-test'
+app = 'proactive-ai-openclaw'
 primary_region = 'iad'
 
 [build]

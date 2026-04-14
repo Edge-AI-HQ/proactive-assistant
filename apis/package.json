@@ -13,7 +13,7 @@
     "dev": "NODE_ENV=development tsx src/server.ts",
     "dev:watch": "NODE_ENV=development tsx watch src/server.ts",
     "type-check": "tsc --noEmit",
-    "test": "tsx --test src/**/*.test.ts",
+    "test": "tsx --test 'src/**/*.test.ts'",
     "litellm:up": "cd .. && bash ops/litellm/litellm.sh up",
     "litellm:restart": "cd .. && bash ops/litellm/litellm.sh restart",
     "litellm:logs": "cd .. && bash ops/litellm/litellm.sh logs",

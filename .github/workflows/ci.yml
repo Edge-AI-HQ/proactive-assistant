@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [proactive-ai-v2]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Type check (APIs)
+        run: npm run type-check --workspace=@pin-ai/apis
+
+      - name: Type check (Frontend)
+        run: npm run type-check --workspace=@pin-ai/proactive-ai-frontend
+
+      # TODO: re-enable test step once test suite is stable
+      # - name: Test (APIs)
+      #   run: npm run test --workspace=@pin-ai/apis
