@@ -32,27 +32,26 @@ const MENU_ITEMS = [
 ] as const;
 type MenuId = (typeof MENU_ITEMS)[number]["id"];
 
-
 const SLOT_LAYOUTS = [
   [
     { left: 3, y: -42 }, { left: 48, y: -34 }, { left: 20, y: -18 },
     { left: 55, y: -8 }, { left: 2, y: 6 }, { left: 40, y: 14 },
-    { left: 15, y: 30 }, { left: 52, y: 36 }, { left: 5, y: 52 }, { left: 36, y: 56 },
+    { left: 15, y: 30 }, { left: 52, y: 36 },
   ],
   [
     { left: 8, y: -40 }, { left: 52, y: -30 }, { left: 5, y: -14 },
     { left: 48, y: -4 }, { left: 12, y: 10 }, { left: 55, y: 20 },
-    { left: 2, y: 32 }, { left: 44, y: 40 }, { left: 18, y: 50 }, { left: 50, y: 58 },
+    { left: 2, y: 32 }, { left: 44, y: 40 },
   ],
   [
     { left: 2, y: -38 }, { left: 3, y: -20 }, { left: 50, y: -36 },
     { left: 52, y: -12 }, { left: 8, y: 4 }, { left: 48, y: 8 },
-    { left: 4, y: 28 }, { left: 50, y: 30 }, { left: 20, y: 46 }, { left: 38, y: 54 },
+    { left: 4, y: 28 }, { left: 50, y: 30 },
   ],
   [
     { left: 45, y: -44 }, { left: 6, y: -30 }, { left: 50, y: -16 },
     { left: 3, y: -2 }, { left: 46, y: 12 }, { left: 8, y: 22 },
-    { left: 48, y: 34 }, { left: 5, y: 42 }, { left: 42, y: 52 }, { left: 15, y: 58 },
+    { left: 48, y: 34 }, { left: 5, y: 42 },
   ],
 ];
 
@@ -63,8 +62,7 @@ const AI_GREETINGS = [
   "A $34,778 payroll charge just went through",
 ];
 
-type FloatingCard = IntentCard & { slotIndex: number };
-
+type FloatingCard = IntentCard & { slotIndex: number; exitDirection?: "left" | "scatter" };
 
 export default function AppLayout() {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -76,8 +74,29 @@ export default function AppLayout() {
   const [chatTarget, setChatTarget] = useState<{ card: IntentCard; score?: EvaluationScore | null } | null>(null);
   const [selectedCard, setSelectedCard] = useState<IntentCard | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // Shared card status — synced between NOW and CHAT tabs
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
-  const [currentLayoutIdx] = useState(() => Math.floor(Math.random() * SLOT_LAYOUTS.length));
+  const [confirmedIds, setConfirmedIds] = useState<Set<string>>(new Set());
+  const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
+  const [doneIds, setDoneIds] = useState<Set<string>>(new Set());
+  const [chattedIds, setChattedIds] = useState<Set<string>>(() => {
+    try {
+      const raw = sessionStorage.getItem("proactive-ai:chattedCardIds");
+      return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
+    } catch { return new Set(); }
+  });
+
+  // NOW tab layout + animation state
+  const [currentLayoutIdx, setCurrentLayoutIdx] = useState(() => Math.floor(Math.random() * SLOT_LAYOUTS.length));
+  const [scatterKey, setScatterKey] = useState(0);
+  const [globalExitDirection, setGlobalExitDirection] = useState<"left" | "scatter">("scatter");
+  const touchStartY = useRef<number | null>(null);
+  const touchStartX = useRef<number | null>(null);
+  const isScattering = useRef(false);
+
+  // Track which cards are "new" (appeared in the latest pipeline run)
+  const [seenCardIds, setSeenCardIds] = useState<Set<string>>(new Set());
 
   const { health, run, generate, isRunning } = usePipeline();
   const composio = useComposio();
@@ -108,23 +127,51 @@ export default function AppLayout() {
     return () => clearInterval(t);
   }, []);
 
+  const hiddenIds = new Set([...dismissedIds, ...doneIds]);
   const visibleCards: FloatingCard[] = run.finalCards
-    .filter((c) => !dismissedIds.has(c.id))
+    .filter((c) => !hiddenIds.has(c.id))
     .slice(0, 8)
     .map((c, i) => ({ ...c, slotIndex: i }));
 
+  // Mark new cards when pipeline produces results
+  useEffect(() => {
+    if (run.finalCards.length === 0) return;
+    const currentIds = new Set(run.finalCards.map((c) => c.id));
+    const newIds = new Set<string>();
+    for (const id of currentIds) {
+      if (!seenCardIds.has(id)) newIds.add(id);
+    }
+    if (newIds.size > 0) {
+      setSeenCardIds(currentIds);
+      const timer = setTimeout(() => {
+        setSeenCardIds((prev) => {
+          const next = new Set(prev);
+          for (const id of newIds) next.add(id);
+          return next;
+        });
+      }, 10000);
+      return () => clearTimeout(timer);
+    }
+  }, [run.finalCards]);
+
+  // ── Card action handlers ──
+
   const handleCardTap = useCallback((card: IntentCard) => {
+    if (processingIds.has(card.id)) {
+      persistChatted(card.id);
+      setChatTarget({ card, score: run.scoreMap[card.id] ?? null });
+      return;
+    }
     setSelectedCard(card);
     setDrawerOpen(true);
-  }, []);
+  }, [processingIds, run.scoreMap]);
 
   const handleDismissCard = useCallback(() => {
     if (selectedCard) {
-      const cardId = selectedCard.id;
-      setDismissedIds((prev) => new Set(prev).add(cardId));
+      setDismissedIds((prev) => new Set(prev).add(selectedCard.id));
       apiPost("/api/feedback", {
         kind: "dismiss",
-        intentCardId: cardId,
+        intentCardId: selectedCard.id,
         basket: selectedCard.goalBasket,
         channel: "web",
       }).catch(() => {});
@@ -133,13 +180,45 @@ export default function AppLayout() {
     setSelectedCard(null);
   }, [selectedCard]);
 
+  const handleDismissCardById = useCallback((cardId: string, card?: IntentCard) => {
+    setDismissedIds((prev) => new Set(prev).add(cardId));
+    if (card) {
+      apiPost("/api/feedback", {
+        kind: "dismiss",
+        intentCardId: cardId,
+        basket: card.goalBasket,
+        channel: "web",
+      }).catch(() => {});
+    }
+  }, []);
+
   const handleConfirmCard = useCallback(() => {
     if (selectedCard) {
       const cardId = selectedCard.id;
-      setDismissedIds((prev) => new Set(prev).add(cardId));
+      setConfirmedIds((prev) => new Set(prev).add(cardId));
+      setProcessingIds((prev) => new Set(prev).add(cardId));
       apiPost("/api/feedback", {
         kind: "card_action",
         action: "confirm",
+        intentCardId: cardId,
+        basket: selectedCard.goalBasket,
+        channel: "web",
+      }).catch(() => {});
+      persistChatted(cardId);
+      setChatTarget({ card: selectedCard, score: run.scoreMap[cardId] ?? null });
+    }
+    setDrawerOpen(false);
+    setSelectedCard(null);
+  }, [selectedCard, run.scoreMap]);
+
+  const handleDoneCard = useCallback(() => {
+    if (selectedCard) {
+      const cardId = selectedCard.id;
+      setDoneIds((prev) => new Set(prev).add(cardId));
+      setProcessingIds((prev) => { const n = new Set(prev); n.delete(cardId); return n; });
+      apiPost("/api/feedback", {
+        kind: "card_action",
+        action: "complete",
         intentCardId: cardId,
         basket: selectedCard.goalBasket,
         channel: "web",
@@ -172,8 +251,7 @@ export default function AppLayout() {
         basket: selectedCard.goalBasket,
         channel: "web",
       }).catch(() => {});
-    }
-    if (selectedCard) {
+      setProcessingIds((prev) => new Set(prev).add(selectedCard.id));
       persistChatted(selectedCard.id);
       setChatTarget({ card: selectedCard, score: run.scoreMap[selectedCard.id] ?? null });
     }
@@ -194,23 +272,26 @@ export default function AppLayout() {
   }, [selectedCard]);
 
   const persistChatted = useCallback((cardId: string) => {
-    try {
-      const raw = sessionStorage.getItem("proactive-ai:chattedCardIds");
-      const set: string[] = raw ? JSON.parse(raw) : [];
-      if (!set.includes(cardId)) { set.push(cardId); sessionStorage.setItem("proactive-ai:chattedCardIds", JSON.stringify(set)); }
-    } catch { /* ignore */ }
+    setChattedIds((prev) => {
+      const next = new Set(prev).add(cardId);
+      sessionStorage.setItem("proactive-ai:chattedCardIds", JSON.stringify([...next]));
+      return next;
+    });
   }, []);
 
   const handleOpenChatFromDrawer = useCallback(() => {
     if (selectedCard) {
-      persistChatted(selectedCard.id);
-      setChatTarget({ card: selectedCard, score: run.scoreMap[selectedCard.id] ?? null });
+      const cardId = selectedCard.id;
+      setProcessingIds((prev) => new Set(prev).add(cardId));
+      persistChatted(cardId);
+      setChatTarget({ card: selectedCard, score: run.scoreMap[cardId] ?? null });
     }
     setDrawerOpen(false);
     setSelectedCard(null);
   }, [selectedCard, run.scoreMap, persistChatted]);
 
   const handleOpenChatDirect = useCallback((card: IntentCard) => {
+    setProcessingIds((prev) => new Set(prev).add(card.id));
     persistChatted(card.id);
     setChatTarget({ card, score: null });
   }, [persistChatted]);
@@ -221,6 +302,44 @@ export default function AppLayout() {
     setChatTarget(null);
     setMenuOpen(false);
   };
+
+  // ── Swipe refresh handlers ──
+
+  const handleSwipeRefresh = useCallback((direction: "left" | "scatter") => {
+    if (isScattering.current) return;
+    isScattering.current = true;
+    setGlobalExitDirection(direction);
+    setScatterKey((k) => k + 1);
+
+    setTimeout(() => {
+      setGlobalExitDirection("scatter");
+      setCurrentLayoutIdx((prev) => {
+        const candidates = Array.from({ length: SLOT_LAYOUTS.length }, (_, i) => i).filter(i => i !== prev);
+        return candidates[Math.floor(Math.random() * candidates.length)];
+      });
+      isScattering.current = false;
+    }, 600);
+  }, []);
+
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    touchStartY.current = e.touches[0].clientY;
+    touchStartX.current = e.touches[0].clientX;
+  }, []);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (touchStartY.current === null || touchStartX.current === null) return;
+    const deltaY = touchStartY.current - e.changedTouches[0].clientY;
+    const deltaX = touchStartX.current - e.changedTouches[0].clientX;
+    touchStartY.current = null;
+    touchStartX.current = null;
+    if (deltaX > 80 && Math.abs(deltaX) > Math.abs(deltaY)) {
+      handleSwipeRefresh("left");
+    } else if (Math.abs(deltaY) > 80) {
+      handleSwipeRefresh("scatter");
+    }
+  }, [handleSwipeRefresh]);
+
+  // ── Render NOW view ──
 
   const renderNowView = () => {
     const positions = SLOT_LAYOUTS[currentLayoutIdx % SLOT_LAYOUTS.length];
@@ -268,7 +387,11 @@ export default function AppLayout() {
         </div>
 
         {/* Sphere + floating cards */}
-        <div className="flex-1 relative flex items-center justify-center overflow-hidden">
+        <div
+          className="flex-1 relative flex items-center justify-center overflow-hidden"
+          onTouchStart={handleTouchStart}
+          onTouchEnd={handleTouchEnd}
+        >
           <Suspense fallback={<div className="w-[300px] h-[300px] rounded-full bg-foreground/5 animate-pulse" />}>
             <AiSphere size={Math.min(570, window.innerWidth * 1.42)} mode={isRunning ? "thinking" : "idle"} className="-mt-[10%]" />
           </Suspense>
@@ -301,19 +424,52 @@ export default function AppLayout() {
               const CatIcon = meta.icon;
               const delay = i * 1.1;
               const dur = 7 + (i % 3) * 1.5;
+              const isNew = !seenCardIds.has(card.id);
+              const isProcessing = processingIds.has(card.id);
+
+              const cardCenterX = pos.left + 20;
+              const cardCenterY = 50 + pos.y;
+              const dx = cardCenterX - 50;
+              const dy = cardCenterY - 50;
+              const mag = Math.sqrt(dx * dx + dy * dy) || 1;
+              const exitX = (dx / mag) * 400;
+              const exitY = (dy / mag) * 400;
+
+              const flyLeft = card.exitDirection === "left" || globalExitDirection === "left";
 
               return (
                 <motion.button
-                  key={card.id}
+                  key={`float-${card.id}-${scatterKey}`}
                   layout
+                  drag="x"
+                  dragConstraints={{ left: 0, right: 0 }}
+                  dragElastic={0.4}
+                  onDragEnd={(_e, info) => {
+                    if (info.offset.x < -80) {
+                      handleDismissCardById(card.id, card);
+                    }
+                  }}
                   initial={{ opacity: 0, scale: 0.85 }}
                   animate={{
                     opacity: 1,
-                    scale: [1, 1.04, 1, 0.97, 1],
+                    scale: [1, 1.045, 1, 0.97, 1],
                     y: [0, -3.5, 0, 2, 0],
                     x: [0, 1.5, 0, -1.5, 0],
                   }}
-                  exit={{ opacity: 0, scale: 0.6, x: -300, rotate: -15, transition: { duration: 0.4 } }}
+                  exit={flyLeft ? {
+                    opacity: 0,
+                    scale: 0.6,
+                    x: -400,
+                    rotate: -15,
+                    transition: { duration: 0.4, ease: [0.4, 0, 1, 1] },
+                  } : {
+                    opacity: 0,
+                    scale: 0.6,
+                    x: exitX,
+                    y: exitY,
+                    rotate: (i % 2 === 0 ? 1 : -1) * (10 + i % 15),
+                    transition: { duration: 0.45, ease: [0.4, 0, 1, 1] },
+                  }}
                   transition={{
                     opacity: { duration: 0.8 },
                     scale: { duration: dur + 1, repeat: Infinity, ease: "easeInOut", delay: delay + 0.3 },
@@ -321,7 +477,9 @@ export default function AppLayout() {
                     x: { duration: dur + 2, repeat: Infinity, ease: "easeInOut", delay: delay + 0.5 },
                   }}
                   onClick={() => handleCardTap(card)}
-                  className="absolute glass-card-strong px-2.5 py-2 cursor-pointer hover:scale-105 transition-transform z-10"
+                  className={`absolute glass-card-strong px-2.5 py-2 cursor-pointer hover:scale-105 transition-transform z-10 ${
+                    isNew ? "ring-1 ring-pink-400/40" : isProcessing ? "ring-1 ring-amber-400/40" : ""
+                  }`}
                   style={{
                     left: `${pos.left}%`,
                     top: `calc(50% + ${pos.y}%)`,
@@ -337,6 +495,12 @@ export default function AppLayout() {
                     <span className="text-[10px] font-semibold tracking-wide text-foreground/50 uppercase truncate">
                       {meta.label}
                     </span>
+                    {isNew && (
+                      <span className="text-[9px] font-bold text-pink-500 uppercase tracking-wider">new</span>
+                    )}
+                    {isProcessing && (
+                      <span className="shrink-0 w-2.5 h-2.5 rounded-full border-[1.5px] border-amber-400 border-t-transparent animate-spin" />
+                    )}
                   </div>
                   <p className="text-[13px] font-medium text-foreground leading-snug line-clamp-3 text-left">
                     {card.title}
@@ -411,7 +575,27 @@ export default function AppLayout() {
               transition={{ duration: 0.25 }}
               className="flex-1 min-h-0"
             >
-              {activeView === "chat" && <ChatTimeline onOpenChat={handleOpenChatDirect} />}
+              {activeView === "chat" && (
+                <ChatTimeline
+                  onOpenChat={handleOpenChatDirect}
+                  dismissedIds={dismissedIds}
+                  confirmedIds={confirmedIds}
+                  processingIds={processingIds}
+                  doneIds={doneIds}
+                  chattedIds={chattedIds}
+                  onDismissId={(id) => setDismissedIds((prev) => new Set(prev).add(id))}
+                  onConfirmId={(id) => {
+                    setConfirmedIds((prev) => new Set(prev).add(id));
+                    setProcessingIds((prev) => new Set(prev).add(id));
+                  }}
+                  onDoneId={(id) => {
+                    setDoneIds((prev) => new Set(prev).add(id));
+                    setProcessingIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+                  }}
+                  onProcessingId={(id) => setProcessingIds((prev) => new Set(prev).add(id))}
+                  onChattedId={persistChatted}
+                />
+              )}
               {activeView === "goals" && <GoalsView />}
               {activeView === "control" && <ControlPanel composio={composio} />}
             </motion.div>
@@ -500,6 +684,7 @@ export default function AppLayout() {
               onConfirm={handleConfirmCard}
               onSnooze={handleSnoozeCard}
               onModify={handleModifyCard}
+              onDone={handleDoneCard}
               onTextFeedback={handleTextFeedback}
               enableSwipe
             />

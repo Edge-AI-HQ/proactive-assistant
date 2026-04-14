@@ -30,6 +30,16 @@ type TimelineCard = IntentCard & {
 
 interface ChatTimelineProps {
   onOpenChat?: (card: IntentCard) => void;
+  dismissedIds: Set<string>;
+  confirmedIds: Set<string>;
+  processingIds: Set<string>;
+  doneIds: Set<string>;
+  chattedIds: Set<string>;
+  onDismissId: (id: string) => void;
+  onConfirmId: (id: string) => void;
+  onDoneId: (id: string) => void;
+  onProcessingId: (id: string) => void;
+  onChattedId: (id: string) => void;
 }
 
 function formatTime(iso: string): string {
@@ -46,32 +56,15 @@ function formatDate(iso: string): string {
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
+export default function ChatTimeline({ onOpenChat, dismissedIds, confirmedIds, processingIds, doneIds, chattedIds, onDismissId, onConfirmId, onDoneId, onProcessingId, onChattedId }: ChatTimelineProps) {
   const [historicalRuns, setHistoricalRuns] = useState<StoredRun[]>([]);
   const [loadingRuns, setLoadingRuns] = useState(true);
   const [selectedCard, setSelectedCard] = useState<TimelineCard | null>(null);
-  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
-  const [chattedIds, setChattedIds] = useState<Set<string>>(() => {
-    try {
-      const raw = sessionStorage.getItem("proactive-ai:chattedCardIds");
-      return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
-    } catch { return new Set(); }
-  });
-
-  const [confirmedIds, setConfirmedIds] = useState<Set<string>>(new Set());
-
-  const markChatted = (cardId: string) => {
-    setChattedIds((prev) => {
-      const next = new Set(prev).add(cardId);
-      sessionStorage.setItem("proactive-ai:chattedCardIds", JSON.stringify([...next]));
-      return next;
-    });
-  };
 
   const handleDismiss = () => {
     if (!selectedCard) return;
     const cardId = selectedCard.id;
-    setDismissedIds((prev) => new Set(prev).add(cardId));
+    onDismissId(cardId);
     apiPost("/api/feedback", {
       kind: "dismiss",
       intentCardId: cardId,
@@ -84,7 +77,9 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
   const handleConfirm = () => {
     if (!selectedCard) return;
     const cardId = selectedCard.id;
-    setConfirmedIds((prev) => new Set(prev).add(cardId));
+    onConfirmId(cardId);
+    onProcessingId(cardId);
+    onChattedId(cardId);
     apiPost("/api/feedback", {
       kind: "card_action",
       action: "confirm",
@@ -93,11 +88,13 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
       channel: "web",
     }).catch(() => {});
     setSelectedCard(null);
+    onOpenChat?.(selectedCard);
   };
 
   const handleChat = () => {
     if (!selectedCard) return;
-    markChatted(selectedCard.id);
+    onProcessingId(selectedCard.id);
+    onChattedId(selectedCard.id);
     setSelectedCard(null);
     onOpenChat?.(selectedCard);
   };
@@ -110,7 +107,7 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
       basket: selectedCard.goalBasket,
       channel: "web",
     }).catch(() => {});
-    setDismissedIds((prev) => new Set(prev).add(selectedCard.id));
+    onDismissId(selectedCard.id);
     setSelectedCard(null);
   };
 
@@ -123,9 +120,23 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
       basket: selectedCard.goalBasket,
       channel: "web",
     }).catch(() => {});
-    markChatted(selectedCard.id);
+    onProcessingId(selectedCard.id);
+    onChattedId(selectedCard.id);
     setSelectedCard(null);
     onOpenChat?.(selectedCard);
+  };
+
+  const handleDone = () => {
+    if (!selectedCard) return;
+    onDoneId(selectedCard.id);
+    apiPost("/api/feedback", {
+      kind: "card_action",
+      action: "complete",
+      intentCardId: selectedCard.id,
+      basket: selectedCard.goalBasket,
+      channel: "web",
+    }).catch(() => {});
+    setSelectedCard(null);
   };
 
   const handleTextFeedback = (text: string) => {
@@ -138,12 +149,6 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
       text,
     }).catch(() => {});
   };
-
-  useEffect(() => {
-    apiFetch("/api/feedback/dismissed").then(r => r.json())
-      .then(d => { if (d.ok && Array.isArray(d.dismissedCardIds)) setDismissedIds(new Set(d.dismissedCardIds)); })
-      .catch(() => {});
-  }, []);
 
   useEffect(() => {
     async function fetchRuns() {
@@ -199,10 +204,18 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
               const actionCount = card.secondaryActions?.length ?? 0;
               const isDismissed = dismissedIds.has(card.id);
               const isConfirmed = confirmedIds.has(card.id);
-              const isResolved = isDismissed || isConfirmed;
+              const isProcessing = processingIds.has(card.id);
+              const isDone = doneIds.has(card.id);
               const isChatted = chattedIds.has(card.id);
+              const isResolved = (isDismissed || isDone) && !isChatted && !isProcessing;
 
-              const previewText = isDismissed
+              const previewText = isProcessing
+                ? "Processing..."
+                : isDone
+                ? "Completed"
+                : isChatted
+                ? "In conversation"
+                : isDismissed
                 ? "Dismissed"
                 : isConfirmed
                 ? "Confirmed"
@@ -226,10 +239,10 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
                           {card.title}
                         </p>
                         <span className="shrink-0 w-[18px] h-[18px] inline-flex items-center justify-center">
-                          {isResolved ? (
-                            <CheckCircle2 size={15} className="text-green-500/60" />
-                          ) : isChatted ? (
+                          {isProcessing || isChatted ? (
                             <Loader2 size={15} className="text-amber-500 animate-spin" />
+                          ) : isDone || isResolved ? (
+                            <CheckCircle2 size={15} className="text-green-500/60" />
                           ) : (
                             <Circle size={15} className="text-rose-400" fill="currentColor" />
                           )}
@@ -292,6 +305,7 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
               onConfirm={handleConfirm}
               onSnooze={handleSnooze}
               onModify={handleModify}
+              onDone={handleDone}
               onTextFeedback={handleTextFeedback}
             />
           )}

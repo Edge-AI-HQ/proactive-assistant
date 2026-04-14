@@ -2,7 +2,7 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import {
   Zap, ArrowRight, Pencil, MessageCircle, CheckCircle2, X,
-  Clock, Send,
+  Clock, Send, CircleCheck,
 } from "lucide-react";
 import type { IntentCard, EvaluationScore } from "@/hooks/use-pipeline";
 import { basketMeta } from "@/lib/basket-meta";
@@ -15,6 +15,7 @@ interface CardDetailBodyProps {
   onConfirm: () => void;
   onSnooze: () => void;
   onModify: () => void;
+  onDone: () => void;
   onTextFeedback: (text: string) => void;
   enableSwipe?: boolean;
 }
@@ -27,6 +28,7 @@ export default function CardDetailBody({
   onConfirm,
   onSnooze,
   onModify,
+  onDone,
   onTextFeedback,
   enableSwipe = false,
 }: CardDetailBodyProps) {
@@ -124,6 +126,13 @@ export default function CardDetailBody({
             <span className="text-[13px] text-foreground/65 flex-1">Not relevant, don't show again</span>
             <button onClick={onDismiss} className="text-[12px] font-medium text-foreground/45 bg-foreground/[0.06] hover:bg-foreground/[0.1] px-2.5 py-1 rounded-full whitespace-nowrap transition-colors">
               dismiss
+            </button>
+          </div>
+          <div className="flex items-center gap-2 rounded-xl bg-emerald-500/[0.04] px-3 py-2.5">
+            <CircleCheck size={13} strokeWidth={1.5} className="text-emerald-500/50 shrink-0" />
+            <span className="text-[13px] text-foreground/65 flex-1">Task completed, mark as done</span>
+            <button onClick={onDone} className="text-[12px] font-medium text-emerald-600/60 bg-emerald-500/[0.08] hover:bg-emerald-500/[0.15] px-2.5 py-1 rounded-full whitespace-nowrap transition-colors">
+              done
             </button>
           </div>
         </div>
