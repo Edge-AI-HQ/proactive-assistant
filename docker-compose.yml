@@ -87,7 +87,7 @@ services:
       - SUPABASE_DB_URL=postgresql://postgres:postgres@postgres:5432/postgres
       - CONTAINER_RUNTIME=docker
       - OPENCLAW_IMAGE=pinai-openclaw:latest
-      - LITELLM_BASE_URL=http://litellm:4000
+      - LITELLM_BASE_URL=http://host.docker.internal:4000
       # Docker-out-of-Docker: tell APIs the host-side data path
       - HOST_DATA_DIR=${PWD}/data
       - DOCKER_HOST_ADDRESS=host.docker.internal

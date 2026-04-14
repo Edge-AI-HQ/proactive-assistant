@@ -84,8 +84,7 @@ export class BrowserbaseManager {
       createdAt: now,
       lastActivityAt: now,
       browser: null,
-      pages: new Map(),
-      activeTab: 0,
+      page: null,
     };
     this.sessions.set(id, session);
 
@@ -116,12 +115,11 @@ export class BrowserbaseManager {
 
       const contexts = browser.contexts();
       const existingPages = contexts[0]?.pages() ?? [];
-      const firstPage = existingPages[0] ?? await contexts[0]?.newPage() ?? await browser.newPage();
-      session.pages.set(0, firstPage);
-      session.activeTab = 0;
+      const page = existingPages[0] ?? await contexts[0]?.newPage() ?? await browser.newPage();
+      session.page = page;
 
       if (opts.url) {
-        await firstPage.goto(opts.url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+        await page.goto(opts.url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
       }
 
       this.attachDisconnectHandler(session, browser);
@@ -162,7 +160,7 @@ export class BrowserbaseManager {
     if (session.browser) {
       try { await session.browser.close(); } catch {}
       session.browser = null;
-      session.pages.clear();
+      session.page = null;
     }
 
     await this.releaseBBSession(session);
@@ -215,59 +213,6 @@ export class BrowserbaseManager {
     return page.screenshot({ type: 'jpeg', quality: 75 });
   }
 
-  async newTab(sessionId: string, url?: string): Promise<{ tabIndex: number; title: string }> {
-    const session = this.sessions.get(sessionId);
-    if (!session || !session.browser || session.status !== 'live') {
-      throw new Error(`No active browser for session ${sessionId}`);
-    }
-    const context = session.browser.contexts()[0];
-    if (!context) throw new Error('No browser context');
-    const page = await context.newPage();
-    const tabIndex = session.pages.size;
-    session.pages.set(tabIndex, page);
-    session.activeTab = tabIndex;
-    if (url) {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-    }
-    this.touch(sessionId);
-    return { tabIndex, title: await page.title() };
-  }
-
-  switchTab(sessionId: string, tabIndex: number): { tabIndex: number } {
-    const session = this.sessions.get(sessionId);
-    if (!session || session.status !== 'live') {
-      throw new Error(`No active browser for session ${sessionId}`);
-    }
-    if (!session.pages.has(tabIndex)) {
-      throw new Error(`Tab ${tabIndex} does not exist. Open tabs: ${[...session.pages.keys()].join(', ')}`);
-    }
-    session.activeTab = tabIndex;
-    this.touch(sessionId);
-    return { tabIndex };
-  }
-
-  async closeTab(sessionId: string, tabIndex: number): Promise<void> {
-    const session = this.sessions.get(sessionId);
-    if (!session || session.status !== 'live') {
-      throw new Error(`No active browser for session ${sessionId}`);
-    }
-    const page = session.pages.get(tabIndex);
-    if (!page) throw new Error(`Tab ${tabIndex} does not exist`);
-    if (session.pages.size <= 1) throw new Error('Cannot close the last tab. Use "close" to end the browser session.');
-    await page.close();
-    session.pages.delete(tabIndex);
-    if (session.activeTab === tabIndex) {
-      session.activeTab = session.pages.keys().next().value!;
-    }
-    this.touch(sessionId);
-  }
-
-  listTabs(sessionId: string): Array<{ tabIndex: number; active: boolean }> {
-    const session = this.sessions.get(sessionId);
-    if (!session || session.status !== 'live') return [];
-    return [...session.pages.keys()].map(i => ({ tabIndex: i, active: i === session.activeTab }));
-  }
-
   getSession(sessionId: string): BrowserSession | undefined {
     const s = this.sessions.get(sessionId);
     return s ? this.toPublicSession(s) : undefined;
@@ -308,11 +253,10 @@ export class BrowserbaseManager {
     if (!session || session.status !== 'live') {
       throw new Error(`No active browser session for ${sessionId}`);
     }
-    const page = session.pages.get(session.activeTab);
-    if (!page) {
-      throw new Error(`No active tab (${session.activeTab}) for session ${sessionId}`);
+    if (!session.page) {
+      throw new Error(`No page for session ${sessionId}`);
     }
-    return page;
+    return session.page;
   }
 
   private touch(sessionId: string): void {
@@ -391,9 +335,7 @@ export class BrowserbaseManager {
 
           const contexts = browser.contexts();
           const existingPages = contexts[0]?.pages() ?? [];
-          session.pages.clear();
-          existingPages.forEach((p, i) => session.pages.set(i, p));
-          session.activeTab = Math.min(session.activeTab, Math.max(0, existingPages.length - 1));
+          session.page = existingPages[0] ?? null;
 
           this.attachDisconnectHandler(session, browser);
 

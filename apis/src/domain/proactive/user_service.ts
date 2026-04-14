@@ -134,7 +134,7 @@ export async function upsertContainer(params: {
       params.runtimeProvider,
       params.containerName,
       params.runtimeRef ?? null,
-      params.hostPort ?? 0,
+      params.hostPort ?? null,
       params.status ?? 'creating',
       JSON.stringify(params.metadata ?? {}),
     ]

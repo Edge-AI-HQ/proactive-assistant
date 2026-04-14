@@ -31,10 +31,8 @@ export interface BrowserSession {
 /** Internal session with Playwright refs (not exposed to clients). */
 export interface InternalSession extends BrowserSession {
   browser: Browser | null;
-  /** All open pages keyed by tab index (0-based). */
-  pages: Map<number, Page>;
-  /** Index of the currently active tab. */
-  activeTab: number;
+  /** The single controlled page. */
+  page: Page | null;
 }
 
 export interface CreateSessionOpts {
