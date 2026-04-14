@@ -2,7 +2,7 @@ name: Deploy Dev
 
 on:
   push:
-    branches: [main]
+    branches: [proactive-ai-v2]
     paths:
       - 'apis/**'
       - 'proactive-ai-frontend/**'

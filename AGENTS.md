@@ -45,9 +45,11 @@ Fly.io 上每个 app 只需设一个 secret（私钥），容器启动时自动�
 flyctl secrets set DOTENV_PRIVATE_KEY_DEV="..." -a proactive-ai-api-dev
 ```
 
-CI 需要在 GitHub Secrets 设置私钥来提取 VITE_* build args：
-- `DOTENV_PRIVATE_KEY_DEV_APIS` — deploy-dev workflow
-- `DOTENV_PRIVATE_KEY_PRODUCTION_APIS` — deploy-prod workflow
+CI 需要在 GitHub Secrets 设置以下 secrets：
+- `FLY_API_TOKEN` — 所有 deploy workflow
+- `DOTENV_PRIVATE_KEY_DEV` — build-openclaw workflow（更新 OPENCLAW_IMAGE digest + deploy）
+- `DOTENV_PRIVATE_KEY_DEV_APIS` — deploy-dev workflow（提取 VITE_* build args）
+- `DOTENV_PRIVATE_KEY_PRODUCTION_APIS` — deploy-prod workflow（提取 VITE_* build args）
 
 ## 高频目录
 - `apis/src/server.ts`：服务入口
@@ -97,7 +99,7 @@ npm run test --workspace @pin-ai/apis
 ## 变更与部署
 
 ### Dev 环境（自动）
-merge 到 main 后根据改动范围自动部署，不需要手动操作：
+push 到 `proactive-ai-v2` 后根据改动范围自动部署，不需要手动操作：
 - 改 `apis/` 或 `proactive-ai-frontend/` → 自动部署 APIs
 - 改 `pinai-openclaw/` → 自动构建镜像、更新 OPENCLAW_IMAGE digest、部署 APIs
 - 改 `ops/litellm/` → 自动部署 LiteLLM
