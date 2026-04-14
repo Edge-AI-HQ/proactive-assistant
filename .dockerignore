@@ -6,7 +6,6 @@ node_modules
 !apis/.env.dev
 !apis/.env.production
 /data
-dist
 .git
 .DS_Store
 .claude
@@ -16,5 +15,8 @@ dist
 /docs
 /ops
 /pin-cli
-/data
 apis/data
+# Stale local build artifacts — Docker builds from scratch in each stage
+apis/dist
+apis/public/proactive
+proactive-ai-frontend/dist

@@ -22,10 +22,10 @@ const COOKIE_NAME = 'gw_session';
 // ── HMAC helpers ──
 
 function getSecret(): string {
-  const secret = process.env.SUPABASE_JWT_SECRET;
+  const secret = process.env.API_INTERNAL_TOKEN;
   if (!secret) {
     throw new Error(
-      'gateway_session: SUPABASE_JWT_SECRET must be set. ' +
+      'gateway_session: API_INTERNAL_TOKEN must be set. ' +
       'Cannot sign gateway tickets/sessions without a secret.',
     );
   }

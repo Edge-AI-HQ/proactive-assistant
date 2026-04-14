@@ -1,28 +1,49 @@
+# ── Stage 1: Frontend build (isolated, VITE_* scoped here only) ──
+FROM node:20-alpine AS frontend
+
+WORKDIR /app
+
+# Install deps (monorepo root + frontend)
+COPY package*.json ./
+COPY proactive-ai-frontend/package*.json ./proactive-ai-frontend/
+COPY apis/package*.json ./apis/
+RUN npm ci
+
+# VITE_* are baked into the JS bundle at build time.
+# Pass via fly.toml [build.args], --build-arg, or docker-compose args.
+ARG VITE_SUPABASE_URL
+ARG VITE_SUPABASE_PUBLISHABLE_KEY
+ARG VITE_API_BASE_URL
+
+COPY proactive-ai-frontend ./proactive-ai-frontend
+COPY scripts/sync-skills-manifest.mjs ./scripts/
+
+# Vite outputs to apis/public/proactive/ (configured in vite.config.ts)
+RUN VITE_SUPABASE_URL=${VITE_SUPABASE_URL} \
+    VITE_SUPABASE_PUBLISHABLE_KEY=${VITE_SUPABASE_PUBLISHABLE_KEY} \
+    VITE_API_BASE_URL=${VITE_API_BASE_URL} \
+    npm run build --workspace @pin-ai/proactive-ai-frontend
+
+# ── Stage 2: APIs build + runtime ──
 FROM node:20-alpine
 
 WORKDIR /app
 
-# ── Layer 1: Dependencies (rarely changes) ──
+# Install deps (monorepo root + APIs)
 COPY package*.json ./
 COPY apis/package*.json ./apis/
-COPY proactive-ai-frontend/package*.json ./proactive-ai-frontend/
 RUN npm ci
 
-# ── Layer 2: Frontend build (changes less often than APIs) ──
-# VITE_* vars are baked into the JS bundle at build time.
-# Pass via fly.toml [build.args] or --build-arg.
-ARG VITE_SUPABASE_URL
-ARG VITE_SUPABASE_PUBLISHABLE_KEY
-ARG VITE_API_BASE_URL
-COPY proactive-ai-frontend ./proactive-ai-frontend
-COPY scripts/sync-skills-manifest.mjs ./scripts/
-RUN npm run build --workspace @pin-ai/proactive-ai-frontend
-
-# ── Layer 3: APIs source + build (changes most often — last) ──
+# Build APIs
 COPY apis ./apis
+COPY scripts/sync-skills-manifest.mjs ./scripts/
 RUN npm run build --workspace @pin-ai/apis
 
-# ── Layer 4: dotenvx for runtime secret decryption ──
+# Copy frontend build artifacts from stage 1 AFTER apis copy.
+# This overwrites any stale local apis/public/proactive/ that leaked in.
+COPY --from=frontend /app/apis/public/proactive ./apis/public/proactive
+
+# Install dotenvx for runtime secret decryption
 RUN apk add --no-cache curl && curl -sfS https://dotenvx.sh/install.sh | sh
 
 # Copy encrypted .env files (decrypted at runtime via DOTENV_PRIVATE_KEY_*)

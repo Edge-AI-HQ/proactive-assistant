@@ -24,6 +24,7 @@
     "db:migrate": "node scripts/run-migration.mjs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.103.0",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.6",
     "dockerode": "^4.0.2",

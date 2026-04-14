@@ -48,8 +48,8 @@ flyctl secrets set DOTENV_PRIVATE_KEY_DEV="..." -a proactive-ai-api-dev
 CI 需要在 GitHub Secrets 设置以下 secrets：
 - `FLY_API_TOKEN` — 所有 deploy workflow
 - `DOTENV_PRIVATE_KEY_DEV` — build-openclaw workflow（更新 OPENCLAW_IMAGE digest + deploy）
-- `DOTENV_PRIVATE_KEY_DEV_APIS` — deploy-dev workflow（提取 VITE_* build args）
-- `DOTENV_PRIVATE_KEY_PRODUCTION_APIS` — deploy-prod workflow（提取 VITE_* build args）
+- `DOTENV_PRIVATE_KEY_DEV` — deploy-dev + build-openclaw workflow（解密 .env.dev，提取 VITE_* build args）
+- `DOTENV_PRIVATE_KEY_PRODUCTION` — deploy-prod workflow（解密 .env.production，提取 VITE_* build args）
 
 ## 高频目录
 - `apis/src/server.ts`：服务入口
