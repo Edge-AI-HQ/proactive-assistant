@@ -89,3 +89,7 @@ _deprecated/
 
 # Composio consumer key (user-specific secret, never commit)
 composio-consumer-key
+
+# Local AI skills (user-specific, not project code)
+.codex/skills/
+.cursor/skills/ui-ux-pro-max/
