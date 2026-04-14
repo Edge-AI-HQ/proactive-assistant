@@ -7,6 +7,10 @@ on:
     paths:
       - 'pinai-openclaw/**'
 
+concurrency:
+  group: build-openclaw
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -44,13 +48,11 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
-      - name: Update OPENCLAW_IMAGE in dev and prod
+      - name: Update OPENCLAW_IMAGE in dev
         run: |
           npx @dotenvx/dotenvx set OPENCLAW_IMAGE "${{ env.DIGEST_REF }}" -f apis/.env.dev
-          npx @dotenvx/dotenvx set OPENCLAW_IMAGE "${{ env.DIGEST_REF }}" -f apis/.env.production
         env:
           DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
-          DOTENV_PRIVATE_KEY_PRODUCTION: ${{ secrets.DOTENV_PRIVATE_KEY_PRODUCTION }}
 
       - name: Commit updated digest
         run: |
@@ -73,4 +75,4 @@ jobs:
           echo "Digest: \`${{ env.DIGEST_REF }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Dev**: deployed ✅" >> $GITHUB_STEP_SUMMARY
-          echo "- **Prod**: digest updated in .env.production, will deploy on next \`git tag vX.Y.Z\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Prod**: promote manually via \`npx dotenvx set OPENCLAW_IMAGE \"${{ env.DIGEST_REF }}\" -f apis/.env.production\`" >> $GITHUB_STEP_SUMMARY

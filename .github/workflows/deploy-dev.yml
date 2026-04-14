@@ -2,7 +2,7 @@ name: Deploy Dev
 
 on:
   push:
-    branches: [proactive-ai-v2]
+    branches: [main]
     paths:
       - 'apis/**'
       - 'proactive-ai-frontend/**'
@@ -18,9 +18,28 @@ jobs:
         with:
           submodules: false
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
+      - name: Extract VITE_* build args from encrypted env
+        run: |
+          VITE_SUPABASE_URL=$(npx @dotenvx/dotenvx get VITE_SUPABASE_URL -f apis/.env.dev)
+          VITE_SUPABASE_PUBLISHABLE_KEY=$(npx @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f apis/.env.dev)
+          VITE_API_BASE_URL=$(npx @dotenvx/dotenvx get VITE_API_BASE_URL -f apis/.env.dev)
+          echo "VITE_SUPABASE_URL=$VITE_SUPABASE_URL" >> "$GITHUB_ENV"
+          echo "VITE_SUPABASE_PUBLISHABLE_KEY=$VITE_SUPABASE_PUBLISHABLE_KEY" >> "$GITHUB_ENV"
+          echo "VITE_API_BASE_URL=$VITE_API_BASE_URL" >> "$GITHUB_ENV"
+        env:
+          DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV_APIS }}
+
       - name: Deploy APIs to dev
-        run: flyctl deploy --config fly.api-dev.toml --remote-only
+        run: |
+          flyctl deploy --config fly.api-dev.toml --remote-only \
+            --build-arg VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
+            --build-arg VITE_SUPABASE_PUBLISHABLE_KEY="$VITE_SUPABASE_PUBLISHABLE_KEY" \
+            --build-arg VITE_API_BASE_URL="$VITE_API_BASE_URL"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

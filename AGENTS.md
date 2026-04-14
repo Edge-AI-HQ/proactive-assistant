@@ -18,26 +18,36 @@ LiteLLM 作为 LLM 路由代理，统一管理模型调用（Claude、GPT、Elev
 OpenClaw 镜像 registry 只有一个，dev 和 prod 通过 digest 区分版本。
 
 ## Secrets 管理（dotenvx）
-Secrets 用 [dotenvx](https://dotenvx.com/) 加密后 checkin 到 git。每个环境一把私钥。
+所有环境变量（后端 secrets + 前端 VITE_*）统一用 [dotenvx](https://dotenvx.com/) 加密后 checkin 到 git。每个环境一把私钥。
 
 ```
-apis/.env.dev          # dev secrets（加密，已 checkin）
-apis/.env.production   # prod secrets（加密，已 checkin）
+apis/.env.dev          # dev 所有变量（加密，已 checkin，含 VITE_*）
+apis/.env.production   # prod 所有变量（加密，已 checkin，含 VITE_*）
 apis/.env.keys         # 私钥（不 checkin，存 1Password "PIN-AI .env.keys"）
 ops/litellm/.env.dev / .env.production / .env.keys  # 同上
 ```
+
+本地明文 `.env` 由 `make ensure-env` 自动从加密文件解密生成，不 checkin：
+- `apis/.env` — docker-compose runtime 读取
+- `ops/litellm/.env` — docker-compose runtime 读取
+- 前端 VITE_* 在 `make up` 时自动从加密文件提取，通过 docker-compose build args 注入
 
 常用操作：
 ```bash
 npx dotenvx get -f apis/.env.dev                          # 查看所有 key 明文
 npx dotenvx set NEW_KEY "value" -f apis/.env.dev           # 加/改 key
 npx dotenvx run -f apis/.env.dev -- node dist/src/server.js  # 解密运行
+make env-local                                             # 强制重新解密所有 .env
 ```
 
 Fly.io 上每个 app 只需设一个 secret（私钥），容器启动时自动解密：
 ```bash
 flyctl secrets set DOTENV_PRIVATE_KEY_DEV="..." -a proactive-ai-api-dev
 ```
+
+CI 需要在 GitHub Secrets 设置私钥来提取 VITE_* build args：
+- `DOTENV_PRIVATE_KEY_DEV_APIS` — deploy-dev workflow
+- `DOTENV_PRIVATE_KEY_PRODUCTION_APIS` — deploy-prod workflow
 
 ## 高频目录
 - `apis/src/server.ts`：服务入口
@@ -56,7 +66,9 @@ flyctl secrets set DOTENV_PRIVATE_KEY_DEV="..." -a proactive-ai-api-dev
 首次设置：
 ```bash
 npm install
-make init    # 生成 .env 文件，按提示填入 secrets 和 dotenvx 私钥
+# 从 1Password 获取 .env.keys（搜索 "PIN-AI .env.keys"）
+# 放到 apis/.env.keys 和 ops/litellm/.env.keys
+make up      # 自动解密 .env.dev → .env，构建并启动所有服务
 ```
 
 全栈启动（Docker Compose）：

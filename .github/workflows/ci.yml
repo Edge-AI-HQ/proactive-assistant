@@ -24,3 +24,7 @@ jobs:
 
       - name: Type check (Frontend)
         run: npm run type-check --workspace=@pin-ai/proactive-ai-frontend
+
+      # TODO: re-enable test step once test suite is stable
+      # - name: Test (APIs)
+      #   run: npm run test --workspace=@pin-ai/apis

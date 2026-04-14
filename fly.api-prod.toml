@@ -5,9 +5,7 @@ primary_region = 'iad'
   dockerfile = 'apis/Dockerfile'
   [build.args]
     DEPLOY_ENV = 'production'
-    VITE_SUPABASE_URL = 'https://ferzdksixkkepromdhly.supabase.co'
-    VITE_SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_PZIDOtSPPLmNVV-R0U0hUQ_GlUisFft'
-    VITE_API_BASE_URL = 'https://proactive-ai-api-prod.fly.dev'
+    # VITE_* injected via --build-arg (from dotenvx encrypted apis/.env.production)
 
 [env]
   PORT = '3000'

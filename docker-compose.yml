@@ -73,6 +73,10 @@ services:
     build:
       context: .
       dockerfile: apis/Dockerfile
+      args:
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
+        VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY:-}
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
     container_name: pin-ai-apis
     restart: unless-stopped
     depends_on:
