@@ -22,8 +22,44 @@ function stableSessionKey(cardId: string): string {
   return `agent:main:proactive-ai:chat:card:${cardId}`;
 }
 
-const CHAR_INTERVAL_MS = 18;
-const CHUNK_SIZE = 2;
+interface SseEvent {
+  type: "start" | "delta" | "done" | "error";
+  content?: string;
+  sessionKey?: string;
+  message?: string;
+}
+
+async function readSseStream(
+  response: Response,
+  onEvent: (event: SseEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      if (signal?.aborted) break;
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        try {
+          const parsed = JSON.parse(line.slice(6)) as SseEvent;
+          onEvent(parsed);
+        } catch { /* malformed JSON line, skip */ }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
 
 export default function CardChat({ card, score, onBack }: CardChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -33,7 +69,7 @@ export default function CardChat({ card, score, onBack }: CardChatProps) {
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const initialized = useRef(false);
-  const typingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const sessionKey = stableSessionKey(card.id);
 
@@ -48,45 +84,78 @@ export default function CardChat({ card, score, onBack }: CardChatProps) {
   useEffect(() => { scrollToBottom(); }, [messages, scrollToBottom]);
 
   useEffect(() => {
-    return () => {
-      if (typingTimerRef.current) clearInterval(typingTimerRef.current);
-    };
+    return () => { abortRef.current?.abort(); };
   }, []);
 
-  const typeOutReply = useCallback((fullContent: string, msgId: string) => {
-    if (typingTimerRef.current) {
-      clearInterval(typingTimerRef.current);
-      typingTimerRef.current = null;
-    }
-
-    let charIndex = 0;
+  const streamChat = useCallback(async (
+    body: Record<string, unknown>,
+    assistantMsgId: string,
+  ) => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     setMessages((prev) => [
-      ...prev,
-      { id: msgId, role: "assistant", content: "", typing: true },
+      ...prev.filter((m) => m.id !== assistantMsgId),
+      { id: assistantMsgId, role: "assistant", content: "", typing: true },
     ]);
 
-    typingTimerRef.current = setInterval(() => {
-      charIndex = Math.min(charIndex + CHUNK_SIZE, fullContent.length);
-      const partial = fullContent.slice(0, charIndex);
-      const done = charIndex >= fullContent.length;
+    try {
+      const res = await apiFetch("/api/chat/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
 
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === msgId
-            ? { ...m, content: partial, typing: !done }
-            : m
-        )
-      );
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
 
-      if (done) {
-        if (typingTimerRef.current) {
-          clearInterval(typingTimerRef.current);
-          typingTimerRef.current = null;
+      await readSseStream(res, (event) => {
+        if (controller.signal.aborted) return;
+
+        if (event.type === "delta" && event.content) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsgId
+                ? { ...m, content: event.content!, typing: true }
+                : m
+            )
+          );
+        } else if (event.type === "done") {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsgId
+                ? { ...m, content: event.content ?? m.content, typing: false }
+                : m
+            )
+          );
+          setLoading(false);
+        } else if (event.type === "error") {
+          setMessages((prev) => prev.filter((m) => m.id !== assistantMsgId));
+          setError(event.message ?? "Agent error");
+          setLoading(false);
         }
+      }, controller.signal);
+
+      if (!controller.signal.aborted) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMsgId && m.typing
+              ? { ...m, typing: false }
+              : m
+          )
+        );
         setLoading(false);
       }
-    }, CHAR_INTERVAL_MS);
+    } catch (err) {
+      if (controller.signal.aborted) return;
+      setMessages((prev) => prev.filter((m) => m.id !== assistantMsgId));
+      setError(err instanceof Error ? err.message : "Network error");
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -126,26 +195,9 @@ export default function CardChat({ card, score, onBack }: CardChatProps) {
 
       setLoading(true);
       setError(null);
-      setMessages([{ id: "ai-waiting", role: "assistant", content: "", typing: false }]);
-
-      try {
-        const res = await apiPost("/api/chat", { sessionKey, cardContext });
-        const data = await res.json();
-        if (data.ok) {
-          setMessages([]);
-          typeOutReply(data.reply, "ai-0");
-        } else {
-          setMessages([]);
-          setError(data.error ?? "Failed to start conversation");
-          setLoading(false);
-        }
-      } catch (err) {
-        setMessages([]);
-        setError(err instanceof Error ? err.message : "Network error");
-        setLoading(false);
-      }
+      streamChat({ sessionKey, cardContext }, "ai-0");
     })();
-  }, [card, score, sessionKey, typeOutReply]);
+  }, [card, score, sessionKey, streamChat]);
 
   const sendMessage = useCallback(async () => {
     const text = input.trim();
@@ -157,26 +209,8 @@ export default function CardChat({ card, score, onBack }: CardChatProps) {
     setLoading(true);
     setError(null);
 
-    const waitingId = `ai-waiting-${Date.now()}`;
-    setMessages((prev) => [...prev, { id: waitingId, role: "assistant", content: "", typing: false }]);
-
-    try {
-      const res = await apiPost("/api/chat", { sessionKey, message: text });
-      const data = await res.json();
-      if (data.ok) {
-        setMessages((prev) => prev.filter((m) => m.id !== waitingId));
-        typeOutReply(data.reply, `ai-${Date.now()}`);
-      } else {
-        setMessages((prev) => prev.filter((m) => m.id !== waitingId));
-        setError(data.error ?? "Failed to get response");
-        setLoading(false);
-      }
-    } catch (err) {
-      setMessages((prev) => prev.filter((m) => m.id !== waitingId));
-      setError(err instanceof Error ? err.message : "Network error");
-      setLoading(false);
-    }
-  }, [input, loading, sessionKey, typeOutReply]);
+    streamChat({ sessionKey, message: text }, `ai-${Date.now()}`);
+  }, [input, loading, sessionKey, streamChat]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -241,8 +275,8 @@ export default function CardChat({ card, score, onBack }: CardChatProps) {
           )}
 
           {messages.map((msg) => {
-            const isWaiting = msg.role === "assistant" && !msg.content && !msg.typing;
-            const isTyping = msg.typing && msg.content;
+            const isStreaming = msg.role === "assistant" && msg.typing;
+            const isWaiting = msg.role === "assistant" && !msg.content && msg.typing;
 
             return (
               <div
@@ -262,7 +296,10 @@ export default function CardChat({ card, score, onBack }: CardChatProps) {
                       <span className="text-[13px] text-foreground/40">Thinking...</span>
                     </span>
                   ) : (
-                    msg.content
+                    <>
+                      {msg.content}
+                      {isStreaming && <span className="inline-block w-[2px] h-[14px] bg-foreground/50 ml-0.5 animate-pulse align-middle" />}
+                    </>
                   )}
                 </div>
               </div>
