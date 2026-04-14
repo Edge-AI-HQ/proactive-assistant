@@ -149,6 +149,50 @@ export default function AppLayout() {
     setSelectedCard(null);
   }, [selectedCard]);
 
+  const handleSnoozeCard = useCallback(() => {
+    if (selectedCard) {
+      apiPost("/api/feedback", {
+        kind: "snooze",
+        intentCardId: selectedCard.id,
+        basket: selectedCard.goalBasket,
+        channel: "web",
+      }).catch(() => {});
+      setDismissedIds((prev) => new Set(prev).add(selectedCard.id));
+    }
+    setDrawerOpen(false);
+    setSelectedCard(null);
+  }, [selectedCard]);
+
+  const handleModifyCard = useCallback(() => {
+    if (selectedCard) {
+      apiPost("/api/feedback", {
+        kind: "card_action",
+        action: "modify",
+        intentCardId: selectedCard.id,
+        basket: selectedCard.goalBasket,
+        channel: "web",
+      }).catch(() => {});
+    }
+    if (selectedCard) {
+      persistChatted(selectedCard.id);
+      setChatTarget({ card: selectedCard, score: run.scoreMap[selectedCard.id] ?? null });
+    }
+    setDrawerOpen(false);
+    setSelectedCard(null);
+  }, [selectedCard, run.scoreMap]);
+
+  const handleTextFeedback = useCallback((text: string) => {
+    if (selectedCard) {
+      apiPost("/api/feedback", {
+        kind: "text_feedback",
+        intentCardId: selectedCard.id,
+        basket: selectedCard.goalBasket,
+        channel: "web",
+        text,
+      }).catch(() => {});
+    }
+  }, [selectedCard]);
+
   const persistChatted = useCallback((cardId: string) => {
     try {
       const raw = sessionStorage.getItem("proactive-ai:chattedCardIds");
@@ -454,6 +498,9 @@ export default function AppLayout() {
               onChat={handleOpenChatFromDrawer}
               onDismiss={handleDismissCard}
               onConfirm={handleConfirmCard}
+              onSnooze={handleSnoozeCard}
+              onModify={handleModifyCard}
+              onTextFeedback={handleTextFeedback}
               enableSwipe
             />
           )}

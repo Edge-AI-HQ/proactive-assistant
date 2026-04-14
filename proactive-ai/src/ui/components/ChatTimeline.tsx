@@ -102,6 +102,43 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
     onOpenChat?.(selectedCard);
   };
 
+  const handleSnooze = () => {
+    if (!selectedCard) return;
+    apiPost("/api/feedback", {
+      kind: "snooze",
+      intentCardId: selectedCard.id,
+      basket: selectedCard.goalBasket,
+      channel: "web",
+    }).catch(() => {});
+    setDismissedIds((prev) => new Set(prev).add(selectedCard.id));
+    setSelectedCard(null);
+  };
+
+  const handleModify = () => {
+    if (!selectedCard) return;
+    apiPost("/api/feedback", {
+      kind: "card_action",
+      action: "modify",
+      intentCardId: selectedCard.id,
+      basket: selectedCard.goalBasket,
+      channel: "web",
+    }).catch(() => {});
+    markChatted(selectedCard.id);
+    setSelectedCard(null);
+    onOpenChat?.(selectedCard);
+  };
+
+  const handleTextFeedback = (text: string) => {
+    if (!selectedCard) return;
+    apiPost("/api/feedback", {
+      kind: "text_feedback",
+      intentCardId: selectedCard.id,
+      basket: selectedCard.goalBasket,
+      channel: "web",
+      text,
+    }).catch(() => {});
+  };
+
   useEffect(() => {
     apiFetch("/api/feedback/dismissed").then(r => r.json())
       .then(d => { if (d.ok && Array.isArray(d.dismissedCardIds)) setDismissedIds(new Set(d.dismissedCardIds)); })
@@ -253,6 +290,9 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
               onChat={handleChat}
               onDismiss={handleDismiss}
               onConfirm={handleConfirm}
+              onSnooze={handleSnooze}
+              onModify={handleModify}
+              onTextFeedback={handleTextFeedback}
             />
           )}
         </DrawerContent>

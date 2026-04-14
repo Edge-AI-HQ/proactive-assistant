@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { motion } from "framer-motion";
 import {
   Zap, ArrowRight, Pencil, MessageCircle, CheckCircle2, X,
+  Clock, Send,
 } from "lucide-react";
 import type { IntentCard, EvaluationScore } from "@/hooks/use-pipeline";
 import { basketMeta } from "@/lib/basket-meta";
@@ -11,6 +13,9 @@ interface CardDetailBodyProps {
   onChat: () => void;
   onDismiss: () => void;
   onConfirm: () => void;
+  onSnooze: () => void;
+  onModify: () => void;
+  onTextFeedback: (text: string) => void;
   enableSwipe?: boolean;
 }
 
@@ -20,8 +25,12 @@ export default function CardDetailBody({
   onChat,
   onDismiss,
   onConfirm,
+  onSnooze,
+  onModify,
+  onTextFeedback,
   enableSwipe = false,
 }: CardDetailBodyProps) {
+  const [feedbackText, setFeedbackText] = useState("");
   const meta = basketMeta(card.goalBasket);
   const Icon = meta.icon;
 
@@ -92,21 +101,33 @@ export default function CardDetailBody({
         </div>
       )}
 
-      {/* Secondary actions */}
-      {card.secondaryActions.length > 0 && (
-        <div className="mb-4">
-          <div className="text-xs font-semibold text-foreground/50 uppercase tracking-wide mb-2">Actions</div>
-          <div className="flex flex-col gap-1.5">
-            {card.secondaryActions.map((action, i) => (
-              <div key={i} className="flex items-center gap-2 rounded-xl bg-foreground/4 px-3 py-2.5">
-                <ArrowRight size={13} strokeWidth={1.5} className="text-foreground/40 shrink-0" />
-                <span className="text-[14px] text-foreground/65 flex-1">{action.label}</span>
-                <span className="text-[11px] text-foreground/35 bg-foreground/5 px-2 py-0.5 rounded-full whitespace-nowrap">{action.type}</span>
-              </div>
-            ))}
+      {/* Quick actions */}
+      <div className="mb-4">
+        <div className="text-xs font-semibold text-foreground/50 uppercase tracking-wide mb-2">Quick Actions</div>
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-2 rounded-xl bg-foreground/4 px-3 py-2.5">
+            <Pencil size={13} strokeWidth={1.5} className="text-foreground/40 shrink-0" />
+            <span className="text-[13px] text-foreground/65 flex-1">Adjust this card, then chat about it</span>
+            <button onClick={onModify} className="text-[12px] font-medium text-foreground/45 bg-foreground/[0.06] hover:bg-foreground/[0.1] px-2.5 py-1 rounded-full whitespace-nowrap transition-colors">
+              modify
+            </button>
+          </div>
+          <div className="flex items-center gap-2 rounded-xl bg-foreground/4 px-3 py-2.5">
+            <Clock size={13} strokeWidth={1.5} className="text-foreground/40 shrink-0" />
+            <span className="text-[13px] text-foreground/65 flex-1">Not now, remind me later</span>
+            <button onClick={onSnooze} className="text-[12px] font-medium text-foreground/45 bg-foreground/[0.06] hover:bg-foreground/[0.1] px-2.5 py-1 rounded-full whitespace-nowrap transition-colors">
+              snooze
+            </button>
+          </div>
+          <div className="flex items-center gap-2 rounded-xl bg-foreground/4 px-3 py-2.5">
+            <X size={13} strokeWidth={1.5} className="text-foreground/40 shrink-0" />
+            <span className="text-[13px] text-foreground/65 flex-1">Not relevant, don't show again</span>
+            <button onClick={onDismiss} className="text-[12px] font-medium text-foreground/45 bg-foreground/[0.06] hover:bg-foreground/[0.1] px-2.5 py-1 rounded-full whitespace-nowrap transition-colors">
+              dismiss
+            </button>
           </div>
         </div>
-      )}
+      </div>
 
       {/* Data Sources */}
       {card.sources.length > 0 && (
@@ -129,15 +150,8 @@ export default function CardDetailBody({
         </div>
       )}
 
-      {/* Action buttons */}
-      <div className="flex items-center gap-2">
-        <button
-          onClick={onDismiss}
-          className="flex items-center justify-center gap-1.5 py-3 px-4 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-sm font-medium text-foreground/50"
-        >
-          <X size={13} strokeWidth={1.5} />
-          Dismiss
-        </button>
+      {/* Primary actions */}
+      <div className="flex items-center gap-2 mb-3">
         <button
           onClick={onChat}
           className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-foreground/10 hover:bg-foreground/15 transition-colors text-sm font-medium text-foreground/70"
@@ -151,6 +165,35 @@ export default function CardDetailBody({
         >
           <CheckCircle2 size={13} strokeWidth={2} />
           Confirm
+        </button>
+      </div>
+
+      {/* Text feedback */}
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          value={feedbackText}
+          onChange={(e) => setFeedbackText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && feedbackText.trim()) {
+              onTextFeedback(feedbackText.trim());
+              setFeedbackText("");
+            }
+          }}
+          placeholder="Tell AI what you prefer..."
+          className="flex-1 text-xs bg-foreground/[0.03] border border-foreground/[0.06] rounded-lg px-3 py-2 text-foreground/70 placeholder:text-foreground/25 focus:outline-none focus:border-foreground/15"
+        />
+        <button
+          onClick={() => {
+            if (feedbackText.trim()) {
+              onTextFeedback(feedbackText.trim());
+              setFeedbackText("");
+            }
+          }}
+          disabled={!feedbackText.trim()}
+          className="p-2 rounded-lg bg-foreground/[0.03] hover:bg-foreground/[0.06] transition-colors text-foreground/40 disabled:opacity-30"
+        >
+          <Send size={12} strokeWidth={1.5} />
         </button>
       </div>
     </>

@@ -30,6 +30,26 @@ function extractIdentity(info: Record<string, unknown> | null | undefined): stri
   return null;
 }
 
+const GOOGLE_FAMILY = new Set(["googlecalendar", "googledrive", "googledocs", "googlesheets"]);
+
+function resolveIdentity(conn: Connection, allConnections: Connection[]): string | null {
+  const direct = extractIdentity(conn.userInfo);
+  if (direct) return direct;
+  if (!GOOGLE_FAMILY.has(conn.toolkit)) return null;
+
+  const gmailIdentities = allConnections
+    .filter((c) => c.toolkit === "gmail" && c.status === "ACTIVE" && c.userInfo)
+    .map((c) => extractIdentity(c.userInfo))
+    .filter((id): id is string => !!id);
+
+  if (gmailIdentities.length === 0) return null;
+
+  const sameToolkit = allConnections.filter((c) => c.toolkit === conn.toolkit && c.status === "ACTIVE");
+  const idx = sameToolkit.findIndex((c) => c.connectedAccountId === conn.connectedAccountId);
+
+  return gmailIdentities[idx % gmailIdentities.length] ?? gmailIdentities[0];
+}
+
 interface DataSource {
   name: string;
   composioId?: string;
@@ -351,7 +371,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                             : "text-foreground/25"
                                           }`}>{source.name}</span>
                                           {singleAccount && (() => {
-                                            const identity = extractIdentity(singleAccount.userInfo);
+                                            const identity = resolveIdentity(singleAccount, connections);
                                             return identity ? (
                                               <p className="text-[10px] text-foreground/35 truncate">{identity}</p>
                                             ) : null;
@@ -438,7 +458,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                         )}
                                       </div>
                                       {accounts.map((conn, idx) => {
-                                        const identity = extractIdentity(conn.userInfo);
+                                        const identity = resolveIdentity(conn, connections);
                                         const isDisconnecting = disconnectingId === conn.connectedAccountId;
                                         return (
                                           <div
