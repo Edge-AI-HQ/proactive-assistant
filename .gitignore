@@ -27,7 +27,7 @@ api_key_env
 !.env.example
 docker-compose.override.yml
 
-# dotenvx private keys (NEVER commit — store in 1Password)
+# dotenvx private keys (NEVER commit — get from team members)
 .env.keys
 
 # Allow encrypted .env.dev / .env.production (dotenvx managed)

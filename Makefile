@@ -21,7 +21,7 @@ help: ## Show this help
 
 # ── Environment: auto-decrypt .env.dev → .env ──
 # Triggers when .env is missing or .env.dev is newer.
-# Requires .env.keys (one-time setup from 1Password).
+# Requires .env.keys (get from team members).
 
 ensure-env: ensure-env-apis ensure-env-litellm ## Auto-decrypt all .env files if needed
 
@@ -29,7 +29,7 @@ ensure-env-apis:
 	@if [ ! -f apis/.env ] || [ apis/.env.dev -nt apis/.env ]; then \
 		if [ ! -f apis/.env.keys ]; then \
 			echo "Missing apis/.env.keys"; \
-			echo "  Get from 1Password -> search 'PIN-AI .env.keys'"; \
+			echo "  Get .env.keys from team members"; \
 			exit 1; \
 		fi; \
 		echo "Decrypting apis/.env.dev -> apis/.env"; \
@@ -42,7 +42,7 @@ ensure-env-litellm:
 	@if [ ! -f ops/litellm/.env ] || [ ops/litellm/.env.dev -nt ops/litellm/.env ]; then \
 		if [ ! -f ops/litellm/.env.keys ]; then \
 			echo "Missing ops/litellm/.env.keys"; \
-			echo "  Get from 1Password -> search 'PIN-AI .env.keys'"; \
+			echo "  Get .env.keys from team members"; \
 			exit 1; \
 		fi; \
 		echo "Decrypting ops/litellm/.env.dev -> ops/litellm/.env"; \
@@ -57,13 +57,14 @@ env-local: ## Force re-decrypt all .env files
 
 # ── Setup ──
 
-init: ## First-time setup: show what to do
-	@echo "Setup:"
-	@echo "  1. npm install"
-	@echo "  2. Get .env.keys from 1Password (search 'PIN-AI .env.keys')"
+init: ## First-time setup: install deps and show next steps
+	npm install
+	@echo ""
+	@echo "Next steps:"
+	@echo "  1. Get .env.keys from team members"
 	@echo "     Place:  apis/.env.keys"
 	@echo "             ops/litellm/.env.keys"
-	@echo "  3. make up  (auto-decrypts and starts everything)"
+	@echo "  2. make up  (auto-decrypts and starts everything)"
 
 # ── Build ──
 

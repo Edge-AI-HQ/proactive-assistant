@@ -23,7 +23,7 @@ OpenClaw 镜像 registry 只有一个，dev 和 prod 通过 digest 区分版本�
 ```
 apis/.env.dev          # dev 所有变量（加密，已 checkin，含 VITE_*）
 apis/.env.production   # prod 所有变量（加密，已 checkin，含 VITE_*）
-apis/.env.keys         # 私钥（不 checkin，存 1Password "PIN-AI .env.keys"）
+apis/.env.keys         # 私钥（不 checkin，找团队成员获取）
 ops/litellm/.env.dev / .env.production / .env.keys  # 同上
 ```
 
@@ -66,7 +66,7 @@ CI 需要在 GitHub Secrets 设置私钥来提取 VITE_* build args：
 首次设置：
 ```bash
 npm install
-# 从 1Password 获取 .env.keys（搜索 "PIN-AI .env.keys"）
+# 找团队成员获取 .env.keys
 # 放到 apis/.env.keys 和 ops/litellm/.env.keys
 make up      # 自动解密 .env.dev → .env，构建并启动所有服务
 ```
@@ -127,7 +127,7 @@ make build-openclaw-image # 构建 OpenClaw 镜像到共用 registry
 - P0 密钥（`TELEGRAM_BOT_TOKEN`、`TELEGRAM_WEBHOOK_SECRET`、`ELEVENLABS_API_KEY`）禁止注入用户容器。
 - 防护机制：`assertNoP0SecretsInEnv` / `assertNoP0SecretsInConfig`（见 `apis/src/domain/container/providers/shared/secret_guard.ts`），改动容器相关代码后必须确认未被绕过。
 - OpenClaw 配置走 `OPENCLAW_CONFIG_B64` 容器内解码，避免 Fly 日志明文泄露。
-- dotenvx 私钥（`.env.keys`）禁止 checkin，存 1Password 共享 vault。
+- dotenvx 私钥（`.env.keys`）禁止 checkin，找团队成员获取。
 
 ## 踩坑速查
 1. `OPENCLAW_IMAGE` 用 tag 会 crash loop；必须 `registry.fly.io/proactive-ai-openclaw@sha256:<64hex>`。
