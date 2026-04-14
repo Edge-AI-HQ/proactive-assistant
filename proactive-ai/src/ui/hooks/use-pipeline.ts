@@ -112,44 +112,54 @@ export function usePipeline() {
     return () => { mounted = false; window.clearInterval(interval); };
   }, []);
 
-  // On mount: check /api/status to recover from refresh
+  // On mount: recover cards from backend (parallel fetch)
   useEffect(() => {
-    async function checkStatus() {
-      try {
-        const res = await apiFetch("/api/status");
-        if (!res.ok) return;
-        const data = await res.json();
+    async function recover() {
+      const [statusRes, runsRes] = await Promise.all([
+        apiFetch("/api/status").catch(() => null),
+        apiFetch("/api/runs").catch(() => null),
+      ]);
 
-        if (data.pipelineRunning && run.status !== "running") {
-          // Pipeline is still running on the backend — update UI to show it
-          setRun((prev) => ({
-            ...prev,
-            status: "running",
-            activePhase: data.phase ?? prev.activePhase,
-            activeIteration: data.iteration ?? prev.activeIteration,
-          }));
-          appendLog(makeLogEntry("system", "Reconnected", "Pipeline is still running on the backend"));
-        } else if (!data.pipelineRunning && data.lastResult && run.status !== "complete" && run.finalCards.length === 0) {
-          // Pipeline finished while we were disconnected — load the result
-          setRun((prev) => ({
-            ...prev,
-            runId: data.lastResult.id ?? prev.runId,
-            status: "complete",
-            activePhase: "complete",
-            finalCards: data.lastResult.finalCards ?? [],
-            totalIterations: data.lastResult.totalIterations ?? 0,
-            completionStatus: data.lastResult.completionStatus ?? "complete",
-            warnings: data.lastResult.warnings ?? [],
-            completedAt: data.lastResult.completedAt ?? new Date().toISOString(),
-          }));
-          appendLog(makeLogEntry("system", "Recovered results", `${data.lastResult.finalCards?.length ?? 0} cards from previous run`));
-          if ((data.lastResult.warnings?.length ?? 0) > 0) {
-            appendLog(makeLogEntry("warning", "Recovered with warnings", (data.lastResult.warnings as PipelineWarning[]).map((warning) => warning.message).join(" | ")));
+      if (statusRes?.ok) {
+        try {
+          const status = await statusRes.json();
+          if (status.pipelineRunning && run.status !== "running") {
+            setRun((prev) => ({
+              ...prev,
+              status: "running",
+              activePhase: status.phase ?? prev.activePhase,
+              activeIteration: status.iteration ?? prev.activeIteration,
+            }));
+            appendLog(makeLogEntry("system", "Reconnected", "Pipeline is still running on the backend"));
+            return;
           }
-        }
-      } catch { /* /api/status not available */ }
+        } catch { /* ignore */ }
+      }
+
+      if (runsRes?.ok) {
+        try {
+          const runsData = await runsRes.json();
+          const runs: { finalCards?: IntentCard[] }[] = Array.isArray(runsData) ? runsData : runsData.runs ?? [];
+          const allCards = runs.flatMap((r) => r.finalCards ?? []);
+          if (allCards.length === 0) return;
+
+          setRun((prev) => {
+            if (prev.status === "running") return prev;
+            const prevIds = new Set(prev.finalCards.map((c) => c.id));
+            const newIds = new Set(allCards.map((c) => c.id));
+            if (prevIds.size === newIds.size && [...prevIds].every((id) => newIds.has(id))) return prev;
+            return {
+              ...prev,
+              status: "complete",
+              activePhase: "complete",
+              finalCards: allCards,
+              completedAt: prev.completedAt ?? new Date().toISOString(),
+            };
+          });
+        } catch { /* ignore */ }
+      }
     }
-    checkStatus();
+    recover();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

@@ -1,12 +1,19 @@
 /**
  * Composio provider for personal data access.
  *
- * Uses Platform API keys (`ak_...`) to create Composio MCP sessions, then
- * routes data access through Composio MCP meta tools.
+ * Uses Platform REST API (v3) exclusively.
  */
 
 import type { CoreContext } from "../../context.js";
-import { loadPlatformSettings, loadOrCreateUserId } from "./platform_settings.js";
+import {
+  loadPlatformSettings,
+  loadOrCreateUserId,
+  saveAccountIdentity,
+  deleteAccountIdentity,
+  pruneOrphanIdentities,
+  type AccountIdentity,
+} from "./platform_settings.js";
+
 
 // ── Types ──
 
@@ -42,7 +49,7 @@ export interface PersonalProvider {
   discoverConnections(): Promise<PersonalConnection[]>;
   /** Check specific toolkits' connection status (returns all accounts per toolkit). */
   checkConnections(toolkits: string[]): Promise<PersonalConnection[]>;
-  /** Initiate a new OAuth connection for a toolkit. */
+  /** Initiate a new OAuth connection for a toolkit (always creates a new link). */
   connectApp(toolkit: string): Promise<PersonalConnection>;
   /** Wait for an OAuth connection to become active. */
   waitForConnection(toolkit: string): Promise<PersonalConnection>;
@@ -50,7 +57,7 @@ export interface PersonalProvider {
   searchTools(query: string, options?: { toolkit?: string; limit?: number }): Promise<PersonalToolInfo[]>;
   /** Get tool input schema. */
   getToolSchema(slug: string): Promise<PersonalToolSchema | null>;
-  /** Execute a tool. If connectedAccountId is provided, pass it through to Composio. */
+  /** Execute a tool. If connectedAccountId is omitted, uses the most recent active account. */
   executeTool(slug: string, args: Record<string, unknown>, connectedAccountId?: string): Promise<PersonalExecResult>;
   /** Disconnect (delete) a specific connected account by ID. */
   disconnectAccount(connectedAccountId: string): Promise<void>;
@@ -79,10 +86,12 @@ const SKIP_KEYS = /token|secret|key|password|code|cursor|etag|sync|url|endpoint|
 export function extractIdentity(info: Record<string, unknown> | null | undefined): string | null {
   if (!info) return null;
 
+  // Pass 1: find an email in top-level values
   for (const v of Object.values(info)) {
     if (typeof v === "string" && EMAIL_RE.test(v)) return v;
   }
 
+  // Pass 2: find a short, human-readable string (skip tokens/urls/ids)
   for (const [k, v] of Object.entries(info)) {
     if (typeof v !== "string" || v.length === 0 || v.length > 60) continue;
     if (v.startsWith("http") || SKIP_KEYS.test(k)) continue;
@@ -109,9 +118,55 @@ class NoopPersonalProvider implements PersonalProvider {
 
 const DEFAULT_API_BASE = "https://backend.composio.dev/api/v3";
 
+/**
+ * Maps toolkit slug → Composio tool that returns the authenticated user's identity.
+ * All tools listed here require zero arguments.
+ * Google workspace toolkits (googledocs, googlesheets) share the same Google OAuth
+ * and fall back to GMAIL_GET_PROFILE via the GOOGLE_FAMILY_ALIAS below.
+ */
+const IDENTITY_TOOLS: Record<string, string> = {
+  gmail:           "GMAIL_GET_PROFILE",
+  googlecalendar:  "GOOGLECALENDAR_GET_CALENDAR_PROFILE",
+  googledrive:     "GOOGLEDRIVE_GET_ABOUT",
+  slack:           "SLACK_RETRIEVE_USER_PROFILE_INFORMATION",
+  github:          "GITHUB_LIST_EMAIL_ADDRESSES_FOR_THE_AUTHENTICATED_USER",
+  linkedin:        "LINKEDIN_GET_MY_INFO",
+  notion:          "NOTION_GET_ABOUT_ME",
+  twitter:         "TWITTER_USER_LOOKUP_ME",
+  stripe:          "STRIPE_GET_ACCOUNT",
+  hubspot:         "HUBSPOT_GET_ACCOUNT_INFO",
+  asana:           "ASANA_GET_CURRENT_USER",
+  jira:            "JIRA_GET_CURRENT_USER",
+  trello:          "TRELLO_GET_MEMBERS_ME",
+  discord:         "DISCORD_GET_MY_USER",
+  spotify:         "SPOTIFY_GET_CURRENT_USER_S_PROFILE",
+  dropbox:         "DROPBOX_GET_ABOUT_ME",
+  todoist:         "TODOIST_GET_USER",
+  figma:           "FIGMA_GET_CURRENT_USER",
+  outlook:         "OUTLOOK_GET_ME_CALENDAR",
+  calendly:        "CALENDLY_GET_CURRENT_USER",
+  clickup:         "CLICKUP_GET_AUTHORIZED_USER",
+  strava:          "STRAVA_GET_AUTHENTICATED_ATHLETE",
+  zoom:            "ZOOM_GET_USER",
+};
+
+const IDENTITY_TOOL_ARGS: Record<string, Record<string, unknown>> = {
+  zoom: { userId: "me" },
+};
+
+const GOOGLE_FAMILY_ALIAS: Record<string, string> = {
+  googledocs:   "gmail",
+  googlesheets: "gmail",
+};
+
+const sleep = async (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
 const parseJson = async (response: Response): Promise<Record<string, unknown>> => {
   const text = await response.text();
-  if (!text.trim()) return {};
+  if (!text.trim()) {
+    return {};
+  }
 
   try {
     return obj(JSON.parse(text));
@@ -144,264 +199,345 @@ async function composioApiCall(
   return json;
 }
 
-async function mcpCall(
-  mcpUrl: string,
-  apiKey: string,
-  method: string,
-  params?: Record<string, unknown>,
-): Promise<unknown> {
-  const body = {
-    jsonrpc: "2.0",
-    id: Date.now().toString(),
-    method,
-    ...(params ? { params } : {}),
-  };
+// ── Platform API Provider ──
 
-  const res = await fetch(mcpUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Accept": "application/json, text/event-stream",
-      "x-api-key": apiKey,
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Composio MCP ${res.status}: ${await res.text()}`);
-  }
-
-  const contentType = res.headers.get("content-type") ?? "";
-  if (contentType.includes("text/event-stream")) {
-    const text = await res.text();
-    for (const line of text.split("\n")) {
-      if (!line.startsWith("data: ")) continue;
-      const parsed = JSON.parse(line.slice(6)) as Record<string, unknown>;
-      if (parsed.result !== undefined) return parsed.result;
-      if (parsed.error) {
-        const err = obj(parsed.error);
-        throw new Error(str(err.message) ?? JSON.stringify(parsed.error));
-      }
-      return parsed;
-    }
-    throw new Error("No data in MCP SSE response");
-  }
-
-  const json = await res.json() as Record<string, unknown>;
-  if (json.error) {
-    const err = obj(json.error);
-    throw new Error(str(err.message) ?? JSON.stringify(json.error));
-  }
-  return json.result;
+interface PlatformProviderOptions {
+  apiKey: string;
+  apiBase: string;
+  userId: string;
+  homeDir: string;
+  env: Record<string, string | undefined>;
+  callbackUrl?: string | null;
+  authConfigMap: Record<string, string>;
 }
 
-async function callMetaTool(
-  mcpUrl: string,
-  apiKey: string,
-  toolName: string,
-  args: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
-  const result = obj(await mcpCall(mcpUrl, apiKey, "tools/call", {
-    name: toolName,
-    arguments: args,
-  }));
-  const content = Array.isArray(result.content) ? result.content : [];
-  const textBlock = content.find((entry) => obj(entry).type === "text");
-  if (!textBlock) return {};
-  return obj(JSON.parse(str(obj(textBlock).text) ?? "{}"));
-}
+class PlatformPersonalProvider implements PersonalProvider {
+  private readonly authConfigCache = new Map<string, string>();
 
-const DISCOVERY_QUERIES = [
-  { query: "email" },
-  { query: "messaging chat" },
-  { query: "calendar schedule" },
-  { query: "files documents" },
-  { query: "tasks projects" },
-  { query: "code repository" },
-];
-
-class McpPersonalProvider implements PersonalProvider {
-  private sessionMcpUrl: string | null = null;
-
-  constructor(
-    private readonly apiKey: string,
-    private readonly apiBase: string,
-    private readonly userId: string,
-    private readonly preferredMcpUrl: string | null,
-    private readonly callbackUrl: string | null,
-    private readonly authConfigMap: Record<string, string>,
-  ) {}
-
-  private withUserId(rawUrl: string): string {
-    const url = new URL(rawUrl);
-    if (!url.searchParams.get("user_id")) {
-      url.searchParams.set("user_id", this.userId);
+  constructor(private readonly options: PlatformProviderOptions) {
+    for (const [toolkit, authConfigId] of Object.entries(options.authConfigMap)) {
+      this.authConfigCache.set(toolkit, authConfigId);
     }
-    return url.toString();
   }
 
-  private async ensureMcpUrl(): Promise<string> {
-    if (this.sessionMcpUrl) return this.sessionMcpUrl;
-
-    if (this.preferredMcpUrl) {
-      this.sessionMcpUrl = this.withUserId(this.preferredMcpUrl);
-      return this.sessionMcpUrl;
-    }
-
-    const body: Record<string, unknown> = { user_id: this.userId };
-    if (Object.keys(this.authConfigMap).length > 0) {
-      body["auth_configs"] = this.authConfigMap;
-    }
-    if (this.callbackUrl) {
-      body["manage_connections"] = {
-        enabled: true,
-        callback_url: this.callbackUrl,
-        enable_wait_for_connections: true,
-      };
-    }
-
-    const session = await composioApiCall(this.apiBase, this.apiKey, "/tool_router/session", {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-    const mcp = obj(session.mcp);
-    const url = str(mcp.url);
-    if (!url) throw new Error("Composio session missing mcp.url");
-
-    this.sessionMcpUrl = this.withUserId(url);
-    return this.sessionMcpUrl;
+  private async api(path: string, init?: RequestInit): Promise<Record<string, unknown>> {
+    return composioApiCall(this.options.apiBase, this.options.apiKey, path, init);
   }
 
-  private async meta(tool: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const mcpUrl = await this.ensureMcpUrl();
-    return callMetaTool(mcpUrl, this.apiKey, tool, args);
-  }
+  private toConnection(toolkit: string, row: Record<string, unknown> | null): PersonalConnection {
+    const normalizedToolkit =
+      str(obj(row?.toolkit).slug) ??
+      str(row?.toolkit) ??
+      toolkit;
 
-  private connectionFromStatus(toolkit: string, info: Record<string, unknown>): PersonalConnection {
     return {
-      toolkit,
-      status: (str(info.status) ?? "unknown").toUpperCase(),
-      connectedAccountId: str(info.connected_account_id) ?? str(info.connectedAccountId),
-      userInfo: info.current_user_info ? obj(info.current_user_info) : null,
-      redirectUrl: str(info.redirect_url) ?? str(info.redirectUrl),
+      toolkit: normalizedToolkit,
+      status: (str(row?.status) ?? "NOT_CONNECTED").toUpperCase(),
+      connectedAccountId:
+        str(row?.id) ??
+        str(row?.connected_account_id) ??
+        str(row?.connectedAccountId),
+      userInfo:
+        row?.user_info ? obj(row.user_info) :
+        row?.current_user_info ? obj(row.current_user_info) :
+        null,
+      redirectUrl:
+        str(row?.redirect_url) ??
+        str(row?.redirectUrl),
     };
   }
 
-  async discoverConnections(): Promise<PersonalConnection[]> {
-    const parsed = await this.meta("COMPOSIO_SEARCH_TOOLS", { queries: DISCOVERY_QUERIES });
-    const data = obj(parsed.data);
-    const statuses = Array.isArray(data.toolkit_connection_statuses)
-      ? data.toolkit_connection_statuses
+  private async listConnectedAccounts(filters?: {
+    toolkits?: string[];
+    statuses?: string[];
+    connectedAccountIds?: string[];
+  }): Promise<Record<string, unknown>[]> {
+    const params = new URLSearchParams();
+    params.set("user_ids", this.options.userId);
+    params.set("limit", "100");
+
+    if (filters?.toolkits?.length) {
+      params.set("toolkit_slugs", filters.toolkits.join(","));
+    }
+    if (filters?.statuses?.length) {
+      params.set("statuses", filters.statuses.join(","));
+    }
+    if (filters?.connectedAccountIds?.length) {
+      params.set("connected_account_ids", filters.connectedAccountIds.join(","));
+    }
+
+    const response = await this.api(`/connected_accounts?${params.toString()}`);
+    return Array.isArray(response.items)
+      ? response.items.map((item) => obj(item))
       : [];
-
-    return statuses
-      .filter((entry) => obj(entry).has_active_connection === true)
-      .map((entry) => {
-        const row = obj(entry);
-        const details = obj(row.connection_details);
-        return {
-          toolkit: str(row.toolkit) ?? "unknown",
-          status: "ACTIVE",
-          connectedAccountId: str(details.connected_account_id),
-          userInfo: row.current_user_info ? obj(row.current_user_info) : null,
-          redirectUrl: null,
-        };
-      });
   }
 
-  async checkConnections(toolkits: string[]): Promise<PersonalConnection[]> {
-    const parsed = await this.meta("COMPOSIO_MANAGE_CONNECTIONS", { toolkits });
-    const data = obj(parsed.data);
-    const results = obj(data.results);
-    return toolkits.map((toolkit) => {
-      const row = obj(results[toolkit]);
-      return Object.keys(row).length > 0
-        ? this.connectionFromStatus(toolkit, row)
-        : {
-            toolkit,
-            status: "NOT_CONNECTED",
-            connectedAccountId: null,
-            userInfo: null,
-            redirectUrl: null,
-          };
+  private async findLatestConnection(toolkit: string): Promise<Record<string, unknown> | null> {
+    const items = await this.listConnectedAccounts({ toolkits: [toolkit] });
+    if (items.length === 0) {
+      return null;
+    }
+
+    return items.sort((left, right) => {
+      const leftTs = str(left.updated_at) ?? str(left.created_at) ?? "";
+      const rightTs = str(right.updated_at) ?? str(right.created_at) ?? "";
+      return rightTs.localeCompare(leftTs);
+    })[0] ?? null;
+  }
+
+  private async ensureAuthConfigId(toolkit: string): Promise<string> {
+    const cached = this.authConfigCache.get(toolkit);
+    if (cached) {
+      return cached;
+    }
+
+    const list = await this.api(
+      `/auth_configs?toolkit_slug=${encodeURIComponent(toolkit)}&is_composio_managed=true&limit=20`,
+    );
+    const existing = Array.isArray(list.items)
+      ? list.items.map((item) => obj(item)).find((item) => str(item.id))
+      : null;
+    const existingId = str(existing?.id);
+    if (existingId) {
+      this.authConfigCache.set(toolkit, existingId);
+      return existingId;
+    }
+
+    const created = await this.api("/auth_configs", {
+      method: "POST",
+      body: JSON.stringify({
+        toolkit: { slug: toolkit },
+      }),
     });
+    const authConfigId =
+      str(obj(created.auth_config).id) ??
+      str(created.id);
+
+    if (!authConfigId) {
+      throw new Error(`Composio auth config creation returned no id for toolkit ${toolkit}`);
+    }
+
+    this.authConfigCache.set(toolkit, authConfigId);
+    return authConfigId;
   }
 
-  async connectApp(toolkit: string): Promise<PersonalConnection> {
-    const [connection] = await this.checkConnections([toolkit]);
-    return connection ?? {
-      toolkit,
-      status: "UNKNOWN",
-      connectedAccountId: null,
-      userInfo: null,
-      redirectUrl: null,
-    };
-  }
-
-  async waitForConnection(toolkit: string): Promise<PersonalConnection> {
-    const parsed = await this.meta("COMPOSIO_WAIT_FOR_CONNECTIONS", { toolkits: [toolkit] });
-    const data = obj(parsed.data);
-    const results = obj(data.results);
-    return this.connectionFromStatus(toolkit, obj(results[toolkit]));
-  }
-
-  async disconnectAccount(_connectedAccountId: string): Promise<void> {
-    throw new Error("Disconnect is not supported by the MCP personal provider");
+  private async getToolDetails(slug: string): Promise<Record<string, unknown>> {
+    return this.api(`/tools/${encodeURIComponent(slug)}?toolkit_versions=latest`);
   }
 
   async resolveAccountIdentity(
     toolkit: string,
     connectedAccountId: string,
   ): Promise<Record<string, unknown> | null> {
-    const connections = await this.checkConnections([toolkit]);
-    const found = connections.find((connection) => connection.connectedAccountId === connectedAccountId);
-    return found?.userInfo ?? null;
+    return this.fetchAccountIdentityViaTool(toolkit, connectedAccountId);
+  }
+
+  /**
+   * Execute the toolkit-specific identity tool to retrieve the authenticated
+   * user's profile (email, name, etc.). Returns a flat key-value object that
+   * can be fed to `extractIdentity()`, or null if no suitable tool exists.
+   */
+  private async fetchAccountIdentityViaTool(
+    toolkit: string,
+    connectedAccountId: string,
+  ): Promise<Record<string, unknown> | null> {
+    const effectiveToolkit = GOOGLE_FAMILY_ALIAS[toolkit] ?? toolkit;
+    const toolSlug = IDENTITY_TOOLS[effectiveToolkit];
+    if (!toolSlug) return null;
+
+    try {
+      const toolArgs = IDENTITY_TOOL_ARGS[effectiveToolkit] ?? {};
+      const result = await this.api(`/tools/execute/${encodeURIComponent(toolSlug)}`, {
+        method: "POST",
+        body: JSON.stringify({
+          connected_account_id: connectedAccountId,
+          user_id: this.options.userId,
+          arguments: toolArgs,
+        }),
+      });
+
+      if (!result.successful) return null;
+
+      const data = obj(result.data);
+      const responseData = obj(data.response_data);
+      const source = Object.keys(responseData).length > 0 ? responseData : data;
+
+      const flat: Record<string, unknown> = {};
+
+      const extractFlat = (items: Record<string, unknown>[]) => {
+        for (const item of items) {
+          for (const [k, v] of Object.entries(item)) {
+            if (typeof v === "string" && v.length > 0 && v.length < 120) flat[k] = v;
+          }
+        }
+      };
+
+      if (Array.isArray(result.data)) {
+        extractFlat((result.data as Record<string, unknown>[]).map(obj));
+      } else {
+        for (const [k, v] of Object.entries(source)) {
+          if (Array.isArray(v)) {
+            extractFlat(v.filter(i => i && typeof i === "object").map(obj));
+          } else if (v && typeof v === "object" && !Array.isArray(v)) {
+            for (const [nk, nv] of Object.entries(v as Record<string, unknown>)) {
+              if (typeof nv === "string" && nv.length > 0 && nv.length < 120) flat[nk] = nv;
+            }
+          } else if (typeof v === "string" && v.length > 0 && v.length < 120) {
+            flat[k] = v;
+          } else if (typeof v === "number" || typeof v === "boolean") {
+            flat[k] = v;
+          }
+        }
+      }
+
+      return Object.keys(flat).length > 0 ? flat : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async discoverConnections(): Promise<PersonalConnection[]> {
+    const active = await this.listConnectedAccounts({ statuses: ["ACTIVE"] });
+    const connections = active.map((row) => this.toConnection(str(obj(row.toolkit).slug) ?? "unknown", row));
+
+    const { homeDir, env } = this.options;
+    const cached = loadPlatformSettings(homeDir, env).accountIdentities ?? {};
+
+    const enriched = await Promise.all(
+      connections.map(async (conn) => {
+        if (conn.userInfo && Object.keys(conn.userInfo).length > 0) return conn;
+        if (!conn.connectedAccountId) return conn;
+
+        const hit = cached[conn.connectedAccountId];
+        if (hit?.userInfo && Object.keys(hit.userInfo).length > 0) {
+          return { ...conn, userInfo: hit.userInfo };
+        }
+
+        try {
+          const info = await this.fetchAccountIdentityViaTool(conn.toolkit, conn.connectedAccountId);
+          if (info) {
+            saveAccountIdentity(homeDir, conn.connectedAccountId, { toolkit: conn.toolkit, userInfo: info }, env);
+            return { ...conn, userInfo: info };
+          }
+          return conn;
+        } catch {
+          return conn;
+        }
+      }),
+    );
+
+    const activeIds = new Set(connections.map((c) => c.connectedAccountId).filter(Boolean) as string[]);
+    pruneOrphanIdentities(homeDir, activeIds, env);
+
+    return enriched;
+  }
+
+  async checkConnections(toolkits: string[]): Promise<PersonalConnection[]> {
+    const items = await this.listConnectedAccounts({ toolkits });
+    if (items.length === 0) {
+      return toolkits.map((toolkit) => this.toConnection(toolkit, null));
+    }
+    return items.map((item) =>
+      this.toConnection(str(obj(item.toolkit).slug) ?? "unknown", item),
+    );
+  }
+
+  async connectApp(toolkit: string): Promise<PersonalConnection> {
+    const authConfigId = await this.ensureAuthConfigId(toolkit);
+    const linked = await this.api("/connected_accounts/link", {
+      method: "POST",
+      body: JSON.stringify({
+        auth_config_id: authConfigId,
+        user_id: this.options.userId,
+        ...(this.options.callbackUrl ? { callback_url: this.options.callbackUrl } : {}),
+      }),
+    });
+
+    return {
+      toolkit,
+      status: "PENDING",
+      connectedAccountId:
+        str(linked.connected_account_id) ??
+        str(linked.connectedAccountId),
+      userInfo: null,
+      redirectUrl:
+        str(linked.redirect_url) ??
+        str(linked.redirectUrl),
+    };
+  }
+
+  async waitForConnection(toolkit: string): Promise<PersonalConnection> {
+    const timeoutMs = 120_000;
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      const latest = await this.findLatestConnection(toolkit);
+      const status = (str(latest?.status) ?? "").toUpperCase();
+      if (latest && status === "ACTIVE") {
+        const conn = this.toConnection(toolkit, latest);
+        if (conn.connectedAccountId) {
+          const info = await this.fetchAccountIdentityViaTool(toolkit, conn.connectedAccountId).catch(() => null);
+          if (info) {
+            const { homeDir, env } = this.options;
+            saveAccountIdentity(homeDir, conn.connectedAccountId, { toolkit, userInfo: info }, env);
+            return { ...conn, userInfo: info };
+          }
+        }
+        return conn;
+      }
+      await sleep(2_000);
+    }
+
+    const latest = await this.findLatestConnection(toolkit);
+    return this.toConnection(toolkit, latest);
+  }
+
+  async disconnectAccount(connectedAccountId: string): Promise<void> {
+    await this.api(`/connected_accounts/${encodeURIComponent(connectedAccountId)}`, {
+      method: "DELETE",
+    });
+    deleteAccountIdentity(this.options.homeDir, connectedAccountId, this.options.env);
   }
 
   async searchTools(
     query: string,
     options?: { toolkit?: string; limit?: number },
   ): Promise<PersonalToolInfo[]> {
-    const queries = options?.toolkit
-      ? [{ query, toolkits: [options.toolkit] }]
-      : [{ query }];
-    const parsed = await this.meta("COMPOSIO_SEARCH_TOOLS", { queries });
-    const data = obj(parsed.data);
-    const results = Array.isArray(data.results) ? data.results : [];
-    const schemas = obj(data.tool_schemas);
-    const tools: PersonalToolInfo[] = [];
-
-    for (const result of results) {
-      const row = obj(result);
-      const primary = Array.isArray(row.primary_tool_slugs) ? row.primary_tool_slugs : [];
-      const related = Array.isArray(row.related_tool_slugs) ? row.related_tool_slugs : [];
-      const toolkitNames = Array.isArray(row.toolkits) ? row.toolkits : [];
-      const toolkit = str(toolkitNames[0]);
-      for (const slugValue of [...primary, ...related]) {
-        const slug = str(slugValue);
-        if (!slug) continue;
-        const schema = obj(schemas[slug]);
-        tools.push({
-          slug,
-          description: str(schema.description),
-          toolkit: str(schema.toolkit)?.toLowerCase() ?? toolkit,
-        });
-      }
+    const params = new URLSearchParams();
+    params.set("query", query);
+    params.set("limit", String(options?.limit ?? 20));
+    params.set("toolkit_versions", "latest");
+    if (options?.toolkit) {
+      params.set("toolkit_slug", options.toolkit);
     }
 
-    return tools.slice(0, options?.limit ?? 20);
+    const response = await this.api(`/tools?${params.toString()}`);
+    const items = Array.isArray(response.items) ? response.items : [];
+
+    return items.map((item) => {
+      const row = obj(item);
+      return {
+        slug: str(row.slug) ?? "unknown",
+        description: str(row.description),
+        toolkit: str(obj(row.toolkit).slug),
+      };
+    });
   }
 
   async getToolSchema(slug: string): Promise<PersonalToolSchema | null> {
-    const parsed = await this.meta("COMPOSIO_GET_TOOL_SCHEMAS", { tool_slugs: [slug] });
-    const data = obj(parsed.data);
-    const schemas = obj(data.schemas ?? data);
-    const schema = obj(schemas[slug] ?? Object.values(schemas)[0]);
-    const parameters = obj(schema.input_schema ?? schema.inputSchema);
-    if (Object.keys(parameters).length === 0) return null;
+    const tool = await this.getToolDetails(slug);
+    const parameters =
+      obj(tool.input_parameters).constructor === Object && Object.keys(obj(tool.input_parameters)).length > 0
+        ? obj(tool.input_parameters)
+        : obj(tool.inputSchema);
+
+    if (Object.keys(parameters).length === 0) {
+      return null;
+    }
+
     return {
-      slug: str(schema.tool_slug) ?? slug,
-      description: str(schema.description),
+      slug: str(tool.slug) ?? slug,
+      description: str(tool.description),
       parameters,
     };
   }
@@ -412,33 +548,30 @@ class McpPersonalProvider implements PersonalProvider {
     connectedAccountId?: string,
   ): Promise<PersonalExecResult> {
     try {
-      const toolCall: Record<string, unknown> = {
-        tool_slug: slug,
-        arguments: args,
-      };
-      if (connectedAccountId) {
-        toolCall.connected_account_id = connectedAccountId;
+      let accountId = connectedAccountId;
+      if (!accountId) {
+        const tool = await this.getToolDetails(slug);
+        const toolkit = str(obj(tool.toolkit).slug);
+        const latest = toolkit ? await this.findLatestConnection(toolkit) : null;
+        accountId =
+          str(latest?.id) ??
+          str(latest?.connected_account_id) ??
+          undefined;
       }
 
-      const parsed = await this.meta("COMPOSIO_MULTI_EXECUTE_TOOL", {
-        tools: [toolCall],
+      const response = await this.api(`/tools/execute/${encodeURIComponent(slug)}`, {
+        method: "POST",
+        body: JSON.stringify({
+          user_id: this.options.userId,
+          ...(accountId ? { connected_account_id: accountId } : {}),
+          arguments: args,
+        }),
       });
-      const data = obj(parsed.data);
-      const results = Array.isArray(data.results) ? data.results : [];
-      const first = obj(results[0]);
-      const response = obj(first.response);
-      if (response.successful === false || parsed.successful === false) {
-        return {
-          tool: slug,
-          success: false,
-          data: null,
-          error: str(response.error) ?? str(parsed.error) ?? "Execution failed",
-        };
-      }
+
       return {
         tool: slug,
         success: true,
-        data: response.data ?? response,
+        data: response,
         error: null,
       };
     } catch (error) {
@@ -484,12 +617,13 @@ export const createPersonalProvider = (
     authConfigMap[toolkit] = value.trim();
   }
 
-  return new McpPersonalProvider(
+  return new PlatformPersonalProvider({
     apiKey,
-    ctx.env.COMPOSIO_API_BASE || platformSettings.apiBase || DEFAULT_API_BASE,
+    apiBase: ctx.env.COMPOSIO_API_BASE || platformSettings.apiBase || DEFAULT_API_BASE,
     userId,
-    ctx.env.COMPOSIO_MCP_URL || platformSettings.mcpUrl || null,
-    ctx.env.COMPOSIO_CALLBACK_URL ?? platformSettings.callbackUrl ?? null,
+    homeDir: ctx.homeDir,
+    env: ctx.env,
+    callbackUrl: ctx.env.COMPOSIO_CALLBACK_URL ?? platformSettings.callbackUrl ?? null,
     authConfigMap,
-  );
+  });
 };
