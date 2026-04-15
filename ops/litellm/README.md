@@ -1,9 +1,10 @@
 # LiteLLM 部署
 
-**最后更新**: 2026-03-02 - 已拆分 fly.dev.toml / fly.prod.toml
+**最后更新**: 2026-04-14
 
 **重要配置：**
-- ✅ `DISABLE_SCHEMA_UPDATE=true` - 禁用自动迁移
+- ✅ `DISABLE_SCHEMA_UPDATE=true` - fly.toml env 禁用 app 启动时自动迁移
+- ✅ `release_command` - deploy 时通过 `--skip_server_startup` 执行一次 Prisma migration
 - ✅ `prod` 使用 `auto_stop_machines = false` 保持服务持续运行
 - ✅ `dev` 也使用 `auto_stop_machines = false` + `min_machines_running = 1`，避免冷启动抖动
 - ⚠️ **不使用 `--num_workers`** - LiteLLM 官方推荐单进程模式
@@ -13,69 +14,70 @@
 - 官方文档明确建议 Kubernetes/容器环境只用 1 worker
 - 正确的扩展方式：单进程 + 水平扩展（多机器）
 
-## 快速更新配置(跳过构建)
+## 数据库 Migration 架构
 
-当 `fly deploy` 因 Depot builder 超时失败时，使用此方法快速更新 `fly.dev.toml` 配置：
+**核心设计：Migration 与 App 启动分离**（参考 [LiteLLM Production Best Practices](https://docs.litellm.ai/docs/proxy/prod)）
 
-```bash
-# 方法1: 使用脚本(推荐)
-cd ops/litellm
-./fly-update-config.sh
-
-# 方法2: 手动执行（在仓库根目录）
-# 1. 获取当前镜像
-CURRENT_IMAGE=$(fly machines list -a litellm-dev --json | jq -r '.[0].image_ref.registry + "/" + .[0].image_ref.repository + ":" + .[0].image_ref.tag')
-
-# 2. 使用现有镜像重新部署，应用新配置
-fly deploy -a litellm-dev --config ops/litellm/fly.dev.toml --image "$CURRENT_IMAGE" --strategy immediate
-
-# 3. 验证配置
-fly config show -a litellm-dev
-
-# prod 更新（脚本会自动选 fly.prod.toml）
-APP_NAME=pinclaw-litellm-prod ./ops/litellm/fly-update-config.sh
+```
+deploy 时:  release_command → litellm --skip_server_startup → prisma migrate deploy → 退出
+app 启动:   DISABLE_SCHEMA_UPDATE=true → 跳过 migration → 秒起
 ```
 
-**原理**: 跳过漫长的镜像构建过程，直接用现有镜像重新部署并应用 `fly.dev.toml` 中的新配置。
+| 场景 | 行为 |
+|---|---|
+| 首次部署 | release_command 自动建所有表 |
+| 版本升级 | release_command 自动 apply 新 migration |
+| 正常重启 | 跳过 migration，秒起 |
+| 水平扩展 | 新机器不跑 migration，避免竞争 |
 
-## 核心问题和解决方案
-
-### 问题：Prisma 自动迁移导致启动缓慢和崩溃
-
-**症状：**
-- 启动耗时 40+ 秒
-- 日志显示 `Running prisma migrate deploy` 和 `prisma migrate diff` 耗时很长
-- 服务不稳定，频繁崩溃（`asyncio.exceptions.CancelledError`）
-
-**根本原因：**
-Prisma 会自动识别 `DATABASE_URL` 环境变量，并在启动时执行：
-1. `prisma migrate deploy` - 应用待处理的迁移
-2. `prisma migrate diff` - 生成并应用 schema 差异（post-migration sanity check）
-
-这些操作即使在设置 `DISABLE_SCHEMA_UPDATE=true` 后仍会执行，因为这些环境变量不是 LiteLLM 官方支持的。
-
-**解决方案：使用自定义环境变量名**
-
-将 `DATABASE_URL` 改为 `LITELLM_DB_URL`，并在 `litellm_config.yaml` 中显式读取：
-
-```yaml
-general_settings:
-  database_url: os.environ/LITELLM_DB_URL
-```
-
-这样 Prisma 不会自动识别数据库连接，避免自动触发迁移检查。
+**为什么不在每次启动时跑 migration？**
+- Prisma 每次启动跑 `migrate deploy` + `migrate diff`，在 `shared-cpu` 机器上耗时 40+ 秒
+- 频繁触发 `asyncio.exceptions.CancelledError` 导致服务崩溃
+- 官方推荐：migration 只在 deploy 时跑一次（Helm PreSync Hook / Fly release_command）
 
 ### 配置文件
 
-**ops/litellm/.env**（本地开发）：
-```env
-LITELLM_DB_URL=postgresql://postgres:PASSWORD@HOST:5432/postgres?schema=litellm
+**`fly.toml`**（dev/prod）：
+```toml
+[env]
+  DISABLE_SCHEMA_UPDATE = 'true'
+
+[deploy]
+  release_command = "sh -c 'dotenvx run -f .env.${DEPLOY_ENV} -- litellm --config /app/config.yaml --skip_server_startup'"
 ```
 
-**Fly.io secrets**（生产环境）：
-```bash
-fly secrets set LITELLM_DB_URL='postgresql://postgres:PASSWORD@HOST:5432/postgres?schema=litellm' -a litellm-dev
+**`litellm_config.yaml`**：
+```yaml
+general_settings:
+  database_url: os.environ/DATABASE_URL
 ```
+
+**加密 `.env` 文件**：
+```env
+DATABASE_URL=postgresql://postgres:PASSWORD@HOST:5432/postgres?schema=litellm
+```
+
+`?schema=litellm` 是 Prisma 参数，告诉 Prisma 在 `litellm` schema 下建表和迁移，不碰 `public`。
+
+## 快速更新配置(跳过构建)
+
+当 `fly deploy` 因 Depot builder 超时失败时，使用此方法快速更新 fly.toml 配置：
+
+```bash
+# 1. 获取当前镜像
+CURRENT_IMAGE=$(fly machines list -a proactive-ai-litellm-dev --json | jq -r '.[0].image_ref.registry + "/" + .[0].image_ref.repository + ":" + .[0].image_ref.tag')
+
+# 2. 使用现有镜像重新部署，应用新配置
+fly deploy -a proactive-ai-litellm-dev --config ops/litellm/fly.litellm-dev.toml --image "$CURRENT_IMAGE" --strategy immediate
+
+# 3. 验证配置
+fly config show -a proactive-ai-litellm-dev
+
+# prod 同理，替换 app name 和 config 文件
+fly deploy -a proactive-ai-litellm-prod --config ops/litellm/fly.litellm-prod.toml --image "$CURRENT_IMAGE" --strategy immediate
+```
+
+**原理**: 跳过镜像构建，直接用现有镜像重新部署并应用 fly.toml 中的新配置。
 
 ## 性能和扩展
 
@@ -200,58 +202,26 @@ locust -f ops/litellm/locustfile.py --headless --users 100 --spawn-rate 10 --run
 
 ### 更新 LiteLLM 版本
 
-由于使用了 `LITELLM_DB_URL` 而非 `DATABASE_URL`，Prisma 不会自动运行迁移。更新版本时需要手动处理 schema 变更。
-
-**⚠️ 重要：按顺序执行以下步骤**
-
-1. **临时恢复 DATABASE_URL 以允许迁移**：
-   ```bash
-   fly secrets set DATABASE_URL='postgresql://postgres:PASSWORD@HOST:5432/postgres?schema=litellm' -a litellm-dev
-   ```
-
-2. **修改 Dockerfile 版本号**：
+1. **修改 Dockerfile 版本号**：
    ```dockerfile
    FROM docker.litellm.ai/berriai/litellm:v1.XX.XX-stable
    ```
 
-3. **部署新版本**：
+2. **部署**：
    ```bash
    git add ops/litellm/Dockerfile
-   git commit -m "更新 LiteLLM 到 vX.XX.XX"
+   git commit -m "chore(litellm): update to vX.XX.XX"
    git push  # 触发自动部署
    ```
 
-4. **等待迁移完成** - 查看日志确认：
+3. **等待 release_command 完成迁移** - 查看日志确认：
    ```bash
    fly logs -a litellm-dev
-   # 等待看到 "✅ Post-migration sanity check completed"
-   # 和 "INFO: Uvicorn running on http://0.0.0.0:4000"
+   # release_command 会自动跑 prisma migrate deploy
+   # 完成后 app 正常启动
    ```
 
-5. **移除 DATABASE_URL，恢复 LITELLM_DB_URL**：
-   ```bash
-   fly secrets unset DATABASE_URL -a litellm-dev
-   fly secrets set LITELLM_DB_URL='postgresql://postgres:PASSWORD@HOST:5432/postgres?schema=litellm' -a litellm-dev
-   ```
-
-### 为什么需要这些步骤
-
-- **LITELLM_DB_URL**: 自定义环境变量名，避免 Prisma 自动识别触发迁移检查
-- **更新时临时使用 DATABASE_URL**: 允许新版本自动处理 schema 变更
-- **迁移完成后恢复 LITELLM_DB_URL**: 避免每次重启都运行迁移（提高启动速度，减少崩溃风险）
-
-## 构建与发布
-
-**必须把 `ops/litellm` 作为构建上下文**,否则 Docker 找不到 `litellm_config.yaml`。
-
-- 在仓库根目录执行：
-  ```bash
-  fly deploy ./ops/litellm -c ops/litellm/fly.dev.toml -a litellm-dev
-  ```
-- 或在 `ops/litellm` 目录下执行：
-  ```bash
-  cd ops/litellm && fly deploy -c fly.dev.toml -a litellm-dev
-  ```
+无需手动设置/移除 `DATABASE_URL`，release_command 自动处理。
 
 ## 与 apis 共用同一库（推荐）
 
@@ -284,7 +254,7 @@ LiteLLM 使用 **PostgreSQL schema 隔离**，与 apis 共用一个数据库但�
 - 日志显示 `prisma migrate diff` 耗时很长
 - 服务崩溃报 `asyncio.exceptions.CancelledError`
 
-**解决方案：** 使用 `LITELLM_DB_URL` 而非 `DATABASE_URL`（见上方"核心问题和解决方案"）
+**解决方案：** 已通过 `DISABLE_SCHEMA_UPDATE=true` + `release_command` 解决。Migration 只在 deploy 时执行一次。
 
 ### 401 Invalid proxy server token
 
@@ -321,11 +291,25 @@ LiteLLM 使用 **PostgreSQL schema 隔离**，与 apis 共用一个数据库但�
 - `POST /chat/completions` 指定该模型返回 200
 - OpenClaw 不再出现 `Invalid model name` / `API key doesn't exist`
 
-### Schema 不一致（历史问题，新部署已解决）
+### Schema 不一致
 
 **症状：** 
-- 部署时日志显示 "Running prisma migrate deploy" 后卡住
-- 或者服务报 "prisma schema out of sync with db"
+- 部署时 release_command 日志显示 migration error
+- 或者服务报 "relation X does not exist"
 
 **处理：**
-现在使用 `LITELLM_DB_URL`，Prisma 不会自动运行迁移。如果需要手动同步 schema，参考"版本管理"章节。
+参考 [LiteLLM Prisma Migration Troubleshooting](https://docs.litellm.ai/docs/troubleshoot/prisma_migrations)。
+通常删除 `_prisma_migrations` 中失败的记录后重新 deploy 即可。
+
+## 构建与发布
+
+**必须把 `ops/litellm` 作为构建上下文**,否则 Docker 找不到 `litellm_config.yaml`。
+
+- 在仓库根目录执行：
+  ```bash
+  fly deploy ./ops/litellm -c ops/litellm/fly.litellm-dev.toml -a proactive-ai-litellm-dev
+  ```
+- 或在 `ops/litellm` 目录下执行：
+  ```bash
+  cd ops/litellm && fly deploy -c fly.litellm-dev.toml -a proactive-ai-litellm-dev
+  ```
