@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build, archive, and export the iOS app for TestFlight.
+# Build, archive, export, and upload the iOS app to TestFlight.
+# Designed to run in CI (GitHub Actions). Requires ASC_* env vars.
 #
 # Usage:
 #   ./scripts/build-ios.sh          # defaults to dev
 #   ./scripts/build-ios.sh dev      # explicit dev
 #   ./scripts/build-ios.sh prod     # production
-#
-# After running, open Xcode Organizer (Window -> Organizer)
-# and click Distribute App -> TestFlight Internal Testing -> Distribute.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -18,7 +16,7 @@ IOS_DIR="$PROJECT_ROOT/ios/App"
 ARCHIVE_PATH="$IOS_DIR/build/App.xcarchive"
 EXPORT_PATH="$IOS_DIR/build/export"
 EXPORT_OPTIONS="$IOS_DIR/build/ExportOptions.plist"
-ORGANIZER_DIR="$HOME/Library/Developer/Xcode/Archives/$(date +%Y-%m-%d)"
+BUILD_LOG="$IOS_DIR/build/xcodebuild.log"
 
 # ── Environment selection ──
 
@@ -46,7 +44,6 @@ VITE_API_BASE_URL="$(get_env VITE_API_BASE_URL)"
 VITE_SUPABASE_URL="$(get_env VITE_SUPABASE_URL)"
 VITE_SUPABASE_PUBLISHABLE_KEY="$(get_env VITE_SUPABASE_PUBLISHABLE_KEY)"
 
-# Validate required vars
 for var in VITE_API_BASE_URL VITE_SUPABASE_URL VITE_SUPABASE_PUBLISHABLE_KEY; do
   if [ -z "${!var}" ]; then
     echo "Error: $var is empty after reading from $ENV_FILE" >&2
@@ -55,6 +52,15 @@ for var in VITE_API_BASE_URL VITE_SUPABASE_URL VITE_SUPABASE_PUBLISHABLE_KEY; do
 done
 
 echo "    VITE_API_BASE_URL=$VITE_API_BASE_URL"
+
+# ── Validate ASC credentials ──
+
+for var in ASC_API_KEY_PATH ASC_KEY_ID ASC_ISSUER_ID; do
+  if [ -z "${!var:-}" ]; then
+    echo "Error: $var is not set. Required for signing and upload." >&2
+    exit 1
+  fi
+done
 
 # ── Bump build number ──
 
@@ -87,6 +93,7 @@ echo "    API URL verified in build output"
 
 echo "==> Cleaning previous build..."
 rm -rf "$ARCHIVE_PATH" "$EXPORT_PATH"
+mkdir -p "$(dirname "$BUILD_LOG")"
 
 echo "==> Creating ExportOptions.plist..."
 mkdir -p "$(dirname "$EXPORT_OPTIONS")"
@@ -109,27 +116,16 @@ PLIST
 
 echo "==> Archiving..."
 cd "$IOS_DIR"
-BUILD_LOG="$IOS_DIR/build/xcodebuild.log"
-mkdir -p "$(dirname "$BUILD_LOG")"
-
-# In CI, pass API key for automatic signing
-ASC_AUTH_FLAGS=()
-if [ "${CI:-}" = "true" ] && [ -n "${ASC_API_KEY_PATH:-}" ]; then
-  ASC_AUTH_FLAGS=(
-    -allowProvisioningUpdates
-    -authenticationKeyPath "$ASC_API_KEY_PATH"
-    -authenticationKeyID "$ASC_KEY_ID"
-    -authenticationKeyIssuerID "$ASC_ISSUER_ID"
-  )
-fi
-
 xcodebuild \
   -project App.xcodeproj \
   -scheme App \
   -configuration Release \
   -destination "generic/platform=iOS" \
   -archivePath "$ARCHIVE_PATH" \
-  "${ASC_AUTH_FLAGS[@]}" \
+  -allowProvisioningUpdates \
+  -authenticationKeyPath "$ASC_API_KEY_PATH" \
+  -authenticationKeyID "$ASC_KEY_ID" \
+  -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
   archive 2>&1 | tee "$BUILD_LOG" | grep -E '^\*\*|error:|warning:' || true
 
 if [ ! -d "$ARCHIVE_PATH" ]; then
@@ -147,8 +143,11 @@ xcodebuild \
   -archivePath "$ARCHIVE_PATH" \
   -exportPath "$EXPORT_PATH" \
   -exportOptionsPlist "$EXPORT_OPTIONS" \
-  "${ASC_AUTH_FLAGS[@]}" \
-  -allowProvisioningUpdates 2>&1 | tee -a "$BUILD_LOG" | grep -E '^\*\*|error:|Exported' || true
+  -allowProvisioningUpdates \
+  -authenticationKeyPath "$ASC_API_KEY_PATH" \
+  -authenticationKeyID "$ASC_KEY_ID" \
+  -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+  2>&1 | tee -a "$BUILD_LOG" | grep -E '^\*\*|error:|Exported' || true
 
 if [ ! -d "$EXPORT_PATH" ]; then
   echo "Error: Export failed. Full log: $BUILD_LOG" >&2
@@ -156,24 +155,14 @@ if [ ! -d "$EXPORT_PATH" ]; then
   exit 1
 fi
 
-# ── Upload or copy to Organizer ──
+# ── Upload to TestFlight ──
 
-if [ "${CI:-}" = "true" ]; then
-  echo "==> Uploading to TestFlight..."
-  xcrun altool --upload-app \
-    --type ios \
-    --file "$EXPORT_PATH/App.ipa" \
-    --apiKey "$ASC_KEY_ID" \
-    --apiIssuer "$ASC_ISSUER_ID" 2>&1 | tail -5
-  echo ""
-  echo "Done! Build $NEW_BUILD ($ENV) uploaded to TestFlight."
-else
-  echo "==> Copying archive to Xcode Organizer..."
-  mkdir -p "$ORGANIZER_DIR"
-  cp -R "$ARCHIVE_PATH" "$ORGANIZER_DIR/App $(date '+%Y-%m-%d %H.%M.%S').xcarchive"
-  echo ""
-  echo "Done! Build $NEW_BUILD ($ENV) exported to: $EXPORT_PATH"
-  echo ""
-  echo "Next: Open Xcode Organizer to upload to TestFlight:"
-  echo "  Xcode -> Window -> Organizer -> select latest archive -> Distribute App"
-fi
+echo "==> Uploading to TestFlight..."
+xcrun altool --upload-app \
+  --type ios \
+  --file "$EXPORT_PATH/App.ipa" \
+  --apiKey "$ASC_KEY_ID" \
+  --apiIssuer "$ASC_ISSUER_ID" 2>&1 | tail -5
+
+echo ""
+echo "Done! Build $NEW_BUILD ($ENV) uploaded to TestFlight."
