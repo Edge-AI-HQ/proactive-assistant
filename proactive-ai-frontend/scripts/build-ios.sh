@@ -145,6 +145,7 @@ echo "** ARCHIVE SUCCEEDED **"
 # ── Export ──
 
 echo "==> Exporting and uploading to TestFlight..."
+set +e
 xcodebuild \
   -exportArchive \
   -archivePath "$ARCHIVE_PATH" \
@@ -155,9 +156,11 @@ xcodebuild \
   -authenticationKeyID "$ASC_KEY_ID" \
   -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
   2>&1 | tee -a "$BUILD_LOG" | grep -E '^\*\*|error:|Exported|Upload' || true
+EXPORT_EXIT=${PIPESTATUS[0]}
+set -e
 
-if [ ! -d "$EXPORT_PATH" ]; then
-  echo "Error: Export/upload failed. Full log: $BUILD_LOG" >&2
+if [ "$EXPORT_EXIT" -ne 0 ]; then
+  echo "Error: Export/upload failed (exit $EXPORT_EXIT). Full log: $BUILD_LOG" >&2
   tail -20 "$BUILD_LOG"
   exit 1
 fi
