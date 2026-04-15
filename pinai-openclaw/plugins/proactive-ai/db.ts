@@ -178,7 +178,7 @@ function ensureSchema(db: Database.Database): void {
 
     CREATE TABLE IF NOT EXISTS user_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
-      generation_language TEXT NOT NULL DEFAULT 'en',
+      generation_language TEXT NOT NULL DEFAULT 'zh-Hans',
       auto_generate INTEGER NOT NULL DEFAULT 0,
       auto_dreaming INTEGER NOT NULL DEFAULT 0,
       metadata TEXT NOT NULL DEFAULT '{}',

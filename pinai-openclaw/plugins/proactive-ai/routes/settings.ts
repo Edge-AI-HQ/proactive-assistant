@@ -32,8 +32,8 @@ export function handleSettings(): RouteHandler {
     if (ctx.subpath === '/settings/generation-language') {
       if (ctx.req.method === 'GET') {
         const settings = await db.getUserSettings();
-        json(ctx.res, 200, { ok: true, language: settings.generation_language, defaultLanguage: 'en',
-          options: [{ value: 'en', label: 'English' }, { value: 'zh', label: '中文' }, { value: 'ja', label: '日本語' }, { value: 'ko', label: '한국어' }, { value: 'es', label: 'Español' }],
+        json(ctx.res, 200, { ok: true, language: settings.generation_language, defaultLanguage: 'zh-Hans',
+          options: [{ value: 'en', label: 'English' }, { value: 'zh-Hans', label: '简体中文' }, { value: 'ja', label: '日本語' }, { value: 'ko', label: '한국어' }, { value: 'es', label: 'Español' }],
         });
         return true;
       }

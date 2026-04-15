@@ -13,7 +13,7 @@ import { startAutoLoop, type AutoLoopConfig } from './scheduler/auto-loop.js';
 import * as db from './db.js';
 
 const DEFAULT_CONFIG: PluginConfig = {
-  max_iterations: 2,
+  max_iterations: 1,
   cards_per_iteration: 8,
   agent_timeout_ms: 300_000,
   auto_loop_min_interval_ms: 900_000,
@@ -61,7 +61,7 @@ const plugin = {
   configSchema: {
     type: 'object' as const,
     properties: {
-      max_iterations: { type: 'number' as const, default: 2 },
+      max_iterations: { type: 'number' as const, default: 1 },
       cards_per_iteration: { type: 'number' as const, default: 8 },
       agent_timeout_ms: { type: 'number' as const, default: 300_000 },
       auto_loop_min_interval_ms: { type: 'number' as const, default: 900_000 },

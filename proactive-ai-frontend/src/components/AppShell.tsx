@@ -48,7 +48,7 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
   const [executingIntent, setExecutingIntent] = useState<string | null>(null);
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [mainChatOpen, setMainChatOpen] = useState(false);
-  const [iterations, setIterations] = useState(2);
+  const [iterations, setIterations] = useState(1);
 
   // Heartbeat every 60s to keep the container alive
   const sendHeartbeat = useCallback(() => {

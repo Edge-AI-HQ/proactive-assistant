@@ -3,12 +3,13 @@
 继承项目根 AGENTS.md 所有规则。
 
 ## 架构
-- Pipeline 三阶段（Planner → Generator → Evaluator），改动需理解完整流程。
+- Pipeline 单 agent（unified-generator）：一次调用完成 context gathering → plan → generate → self-review。
 - Agent 无状态 LLM 调用，通过 `runAgent()` 执行，必须设 timeout。
 - 路由用 RouteHandler 链式匹配，新端点加到 router.ts handler 链。
+- 旧的 planner.ts / evaluator.ts 保留但不再被 orchestrator 使用。
 
 ## LLM
-- prompt 包含完整上下文（feedback、card history、前序结果）。
+- prompt 包含完整上下文（feedback、card history）。
 - agent 返回 JSON 用 `parseAgentJson()` 安全解析，不直接 `JSON.parse`。
 
 ## 数据
