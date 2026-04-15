@@ -115,6 +115,8 @@ cat > "$EXPORT_OPTIONS" <<'PLIST'
         <key>ai.pin.proactive</key>
         <string>PIN AI AppStore Distribution</string>
     </dict>
+    <key>destination</key>
+    <string>upload</string>
 </dict>
 </plist>
 PLIST
@@ -142,7 +144,7 @@ echo "** ARCHIVE SUCCEEDED **"
 
 # ── Export ──
 
-echo "==> Exporting for TestFlight..."
+echo "==> Exporting and uploading to TestFlight..."
 xcodebuild \
   -exportArchive \
   -archivePath "$ARCHIVE_PATH" \
@@ -152,22 +154,13 @@ xcodebuild \
   -authenticationKeyPath "$ASC_API_KEY_PATH" \
   -authenticationKeyID "$ASC_KEY_ID" \
   -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
-  2>&1 | tee -a "$BUILD_LOG" | grep -E '^\*\*|error:|Exported' || true
+  2>&1 | tee -a "$BUILD_LOG" | grep -E '^\*\*|error:|Exported|Upload' || true
 
 if [ ! -d "$EXPORT_PATH" ]; then
-  echo "Error: Export failed. Full log: $BUILD_LOG" >&2
+  echo "Error: Export/upload failed. Full log: $BUILD_LOG" >&2
   tail -20 "$BUILD_LOG"
   exit 1
 fi
 
-# ── Upload to TestFlight ──
-
-echo "==> Uploading to TestFlight..."
-xcrun altool --upload-app \
-  --type ios \
-  --file "$EXPORT_PATH/App.ipa" \
-  --apiKey "$ASC_KEY_ID" \
-  --apiIssuer "$ASC_ISSUER_ID" 2>&1 | tail -5
-
 echo ""
-echo "Done! Build $NEW_BUILD ($ENV) uploaded to TestFlight."
+echo "Done! Build $NEW_BUILD ($ENV) exported and uploaded to TestFlight."
