@@ -103,7 +103,7 @@ cat > "$EXPORT_OPTIONS" <<'PLIST'
 <plist version="1.0">
 <dict>
     <key>method</key>
-    <string>app-store-connect</string>
+    <string>app-store</string>
     <key>teamID</key>
     <string>7T7C9L7H8F</string>
     <key>uploadSymbols</key>
@@ -129,10 +129,6 @@ xcodebuild \
   -configuration Release \
   -destination "generic/platform=iOS" \
   -archivePath "$ARCHIVE_PATH" \
-  -allowProvisioningUpdates \
-  -authenticationKeyPath "$ASC_API_KEY_PATH" \
-  -authenticationKeyID "$ASC_KEY_ID" \
-  -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
   archive 2>&1 | tee "$BUILD_LOG" | grep -E '^\*\*|error:|warning:' || true
 
 if [ ! -d "$ARCHIVE_PATH" ]; then
