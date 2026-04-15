@@ -141,7 +141,7 @@ make build-openclaw-image # 构建 OpenClaw 镜像到共用 registry
 - 每次 schema 变更写新的 migration 文件到 `apis/db/migrations/`。
 - migration 文件一旦 merge 到 main，禁止修改。
 - migration 只做 additive（加表、加列）；删列/改列走 expand-contract，分两个 release。
-- prod migration 随部署自动执行（`fly.toml` 的 `release_command`），禁止手动连 prod DB 跑 SQL。
+- dev/prod migration 均随部署自动执行（`fly.toml` 的 `release_command` → `run-all-migrations.mjs`），禁止手动连 prod DB 跑 SQL。
 
 ## 提交规范
 - Conventional Commits：`feat(...)` / `fix(...)` / `chore(...)` / `docs(...)`。
