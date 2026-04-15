@@ -3,7 +3,7 @@
 .PHONY: logs logs-apis logs-litellm logs-postgres
 .PHONY: migrate reset clean
 .PHONY: deploy-dev deploy-prod deploy-litellm-dev deploy-litellm-prod build-openclaw-image
-.PHONY: ios-sim
+.PHONY: ios
 
 COMPOSE := docker compose
 DOTENVX := npx @dotenvx/dotenvx
@@ -161,12 +161,13 @@ build-openclaw-image: ## Build and push OpenClaw image to shared registry
 
 # ── iOS ──
 
-ios-sim: ensure-env ## Build frontend and run in iOS Simulator (local backend)
+ios: ensure-env ## Build frontend, sync iOS, and open Xcode (select device + Cmd+R)
 	cd proactive-ai-frontend && \
-		VITE_API_BASE_URL=http://localhost:3000 \
+		VITE_API_BASE_URL=$$($(DOTENVX) get VITE_API_BASE_URL -f ../apis/.env.dev 2>/dev/null) \
 		VITE_SUPABASE_URL=$$($(DOTENVX) get VITE_SUPABASE_URL -f ../apis/.env.dev 2>/dev/null) \
 		VITE_SUPABASE_PUBLISHABLE_KEY=$$($(DOTENVX) get VITE_SUPABASE_PUBLISHABLE_KEY -f ../apis/.env.dev 2>/dev/null) \
 		VITE_CAPACITOR=1 npx vite build && \
-		SIM_UDID=$$(xcrun simctl list devices available | grep 'iPhone 16 (' | head -1 | grep -oE '[0-9A-F-]{36}') && \
-		echo "==> Using simulator: iPhone 16 ($$SIM_UDID)" && \
-		npx cap run ios --target "$$SIM_UDID"
+		npx cap sync ios && \
+		npx cap open ios
+	@echo ""
+	@echo "Xcode is open. Select your device at the top, then press Cmd+R to build and run."
