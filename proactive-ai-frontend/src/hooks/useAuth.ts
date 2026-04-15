@@ -25,22 +25,20 @@ export function useAuth() {
   });
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setState((s) => ({ ...s, loading: false, session, user: session?.user ?? null }));
-    });
-
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
-      setState((s) => ({
-        ...s,
-        loading: false,
-        session,
-        user: session?.user ?? null,
-      }));
+      setState({ loading: false, session, user: session?.user ?? null });
     });
 
-    return () => subscription.unsubscribe();
+    const timer = setTimeout(() => {
+      setState((s) => (s.loading ? { loading: false, session: null, user: null } : s));
+    }, 3000);
+
+    return () => {
+      subscription.unsubscribe();
+      clearTimeout(timer);
+    };
   }, []);
 
   // Native: listen for deep-link callback from OAuth redirect

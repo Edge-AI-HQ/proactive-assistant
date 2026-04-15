@@ -171,10 +171,10 @@ export default function DebugPanel({ health, run, isRunning, iterations, onItera
       {/* Gear icon trigger */}
       <button
         onClick={() => setOpen(true)}
-        className="p-2 rounded-lg hover:bg-foreground/10 transition-colors text-foreground/40 hover:text-foreground/70"
+        className="p-2 rounded-full glass-card-strong"
         title="Debug Panel"
       >
-        <Settings size={18} strokeWidth={1.5} />
+        <Settings size={18} strokeWidth={1.5} className="text-foreground/70" />
       </button>
 
       {/* Backdrop + slide-over */}

@@ -10,13 +10,13 @@ interface ControlPanelProps {
 
 export default function ControlPanel({ composio }: ControlPanelProps) {
   return (
-    <div className="flex flex-col h-full min-h-0 px-4 pt-3">
+    <div className="flex flex-col h-full min-h-0 px-4 pt-14">
       <div className="flex-shrink-0 mb-5">
-        <h1 className="text-display text-2xl text-foreground tracking-tight mb-0.5">Control Center</h1>
+        <h1 className="text-2xl font-semibold text-foreground tracking-tight mb-0.5 pr-20">Control Center</h1>
         <p className="text-xs text-foreground/40">Preferences, data connections and integrations</p>
       </div>
 
-      <div className="scrollbar-hidden flex-1 min-h-0 overflow-y-auto pb-24">
+      <div className="scrollbar-hidden flex-1 min-h-0 overflow-y-auto pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))]">
         <div className="space-y-4">
           <section className="glass-card-strong p-4">
             <div className="mb-3">
@@ -30,9 +30,9 @@ export default function ControlPanel({ composio }: ControlPanelProps) {
 
           <section className="glass-card-strong p-4">
             <div className="mb-3">
-              <h2 className="text-sm font-semibold text-foreground">Auto Dreaming</h2>
+              <h2 className="text-sm font-semibold text-foreground">Dreaming</h2>
               <p className="text-[11px] text-foreground/42 mt-1">
-                Automatic background context collection and card generation.
+                Review background dreaming runs, profile diffs, and candidate cards.
               </p>
             </div>
             <AutoDreamingSettings />

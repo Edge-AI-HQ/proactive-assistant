@@ -13,8 +13,10 @@ export type ContainerState =
 interface ContainerInfo {
   status: ContainerState;
   loading: boolean;
+  initialChecking: boolean;
   error: string | null;
 }
+
 
 /**
  * Manages the lifecycle of the user's container.
@@ -26,6 +28,7 @@ export function useContainer(authenticated: boolean) {
   const [info, setInfo] = useState<ContainerInfo>({
     status: "none",
     loading: false,
+    initialChecking: true,
     error: null,
   });
   const pollRef = useRef<ReturnType<typeof setInterval>>();
@@ -45,7 +48,7 @@ export function useContainer(authenticated: boolean) {
 
   /** Poll gateway health until it responds OK. */
   const waitForGateway = useCallback(() => {
-    setInfo({ status: "creating", loading: true, error: null });
+    setInfo((prev) => ({ ...prev, status: "creating", loading: true, error: null }));
     stopPolling();
 
     async function probe() {
@@ -53,7 +56,7 @@ export function useContainer(authenticated: boolean) {
       if (!mountedRef.current) return;
       if (ok) {
         stopPolling();
-        setInfo({ status: "running", loading: false, error: null });
+        setInfo({ status: "running", loading: false, initialChecking: false, error: null });
       }
     }
 
@@ -74,7 +77,7 @@ export function useContainer(authenticated: boolean) {
           waitForGateway();
         } else if (status === "error" || status === "none") {
           stopPolling();
-          setInfo({ status, loading: false, error: null });
+          setInfo({ status, loading: false, initialChecking: false, error: null });
         }
       } catch {
         // Silently ignore poll errors
@@ -84,7 +87,7 @@ export function useContainer(authenticated: boolean) {
 
   /** Manually trigger container creation/ensure. */
   const ensure = useCallback(async () => {
-    setInfo({ status: "creating", loading: true, error: null });
+    setInfo({ status: "creating", loading: true, initialChecking: false, error: null });
     try {
       const result = await ensureContainer();
       if (!mountedRef.current) return null;
@@ -93,7 +96,7 @@ export function useContainer(authenticated: boolean) {
       if (status === "running") {
         waitForGateway();
       } else {
-        setInfo({ status, loading: true, error: null });
+        setInfo({ status, loading: true, initialChecking: false, error: null });
         pollStatus();
       }
 
@@ -103,6 +106,7 @@ export function useContainer(authenticated: boolean) {
       setInfo({
         status: "error",
         loading: false,
+        initialChecking: false,
         error: err instanceof Error ? err.message : "Unknown error",
       });
       return null;
@@ -112,14 +116,14 @@ export function useContainer(authenticated: boolean) {
   /** Cancel container creation — stop polling and destroy the container. */
   const cancel = useCallback(async () => {
     stopPolling();
-    setInfo({ status: "none", loading: true, error: null });
+    setInfo({ status: "none", loading: true, initialChecking: false, error: null });
     try {
       await destroyContainer();
     } catch {
       // Ignore destroy errors
     }
     if (mountedRef.current) {
-      setInfo({ status: "none", loading: false, error: null });
+      setInfo({ status: "none", loading: false, initialChecking: false, error: null });
     }
   }, [stopPolling]);
 
@@ -137,12 +141,11 @@ export function useContainer(authenticated: boolean) {
         if (status === "running") {
           waitForGateway();
         } else {
-          // Show whatever state we find — don't auto-launch
-          setInfo({ status, loading: false, error: null });
+          setInfo({ status, loading: false, initialChecking: false, error: null });
         }
       } catch {
         if (!cancelled) {
-          setInfo({ status: "none", loading: false, error: null });
+          setInfo({ status: "none", loading: false, initialChecking: false, error: null });
         }
       }
     }

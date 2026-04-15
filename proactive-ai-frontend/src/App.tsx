@@ -6,10 +6,9 @@ import AppShell from "@/components/AppShell";
 
 export default function App() {
   const { loading: authLoading, user, signInWithGoogle, signOut } = useAuth();
-  const { status, loading: containerLoading, error, ensure, cancel } = useContainer(!!user);
+  const { status, loading: containerLoading, initialChecking, error, ensure, cancel } = useContainer(!!user);
 
-  // Auth loading
-  if (authLoading) {
+  if (authLoading || (user && initialChecking)) {
     return (
       <div className="relative flex h-full items-center justify-center overflow-hidden">
         <div className="absolute inset-0 animate-bg-flow opacity-60" />

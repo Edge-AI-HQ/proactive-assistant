@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  ArrowRightCircle,
   Briefcase,
   Check,
   ChevronDown,
   Heart,
   Loader2,
+  Mic,
   Plus,
   Sparkles,
   Sprout,
@@ -15,6 +17,13 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
+  Drawer,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
+  DrawerDescription,
+} from "@/components/ui/drawer";
+import {
   fetchProfileSnapshot,
   proxyPost,
   type Goal,
@@ -23,10 +32,166 @@ import {
   type ProfileSignal,
   type ProfileSnapshot,
 } from "@/lib/api";
+import { basketMeta } from "@/lib/basket-meta";
 
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+type VisualStatus = "Normal" | "Alert" | "Watch";
 type MemoryTab = "entry" | "event";
 type ProfileGroupKey = "facts" | "preferences" | "constraints" | "metadata";
 type SectionId = "memory" | "signals" | "interests" | "goals";
+
+interface GoalVisualMeta {
+  image: string;
+  pct: number;
+  weeklyActions: string[];
+  monitoring: string[];
+  aiQuestions: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Constants — gateway visual grid
+// ---------------------------------------------------------------------------
+
+const BASE = import.meta.env.BASE_URL;
+
+const GOAL_VISUAL_META: Record<string, GoalVisualMeta> = {
+  "career-growth": {
+    image: `${BASE}goal-work.png`,
+    pct: 62,
+    weeklyActions: [
+      "Review project milestones for this sprint",
+      "Follow up on pending decisions",
+      "Check team blockers and unblock",
+    ],
+    monitoring: ["Career development trajectory", "Skill gap analysis", "Industry trends"],
+    aiQuestions: ["What skill are you focusing on developing?", "Any career goals shifting this quarter?"],
+  },
+  work: {
+    image: `${BASE}goal-work.png`,
+    pct: 62,
+    weeklyActions: [
+      "Review project milestones for this sprint",
+      "Follow up on pending decisions",
+      "Check team blockers and unblock",
+    ],
+    monitoring: ["Career development trajectory", "Skill gap analysis", "Industry trends"],
+    aiQuestions: ["What skill are you focusing on developing?", "Any career goals shifting this quarter?"],
+  },
+  "stay-healthy": {
+    image: `${BASE}goal-health.png`,
+    pct: 35,
+    weeklyActions: ["No new health signals this cycle"],
+    monitoring: ["Exercise consistency", "Sleep quality trends", "Annual checkup schedule"],
+    aiQuestions: ["What health tracking are you currently doing?", "Any specific health topics you're watching?"],
+  },
+  health: {
+    image: `${BASE}goal-health.png`,
+    pct: 35,
+    weeklyActions: ["No new health signals this cycle"],
+    monitoring: ["Exercise consistency", "Sleep quality trends", "Annual checkup schedule"],
+    aiQuestions: ["What health tracking are you currently doing?", "Any specific health topics you're watching?"],
+  },
+  "financial-plan": {
+    image: `${BASE}goal-finance.png`,
+    pct: 52,
+    weeklyActions: ["Review monthly spending summary", "Check upcoming bills and subscriptions"],
+    monitoring: ["Budget vs. actual spending", "Savings rate", "Investment performance"],
+    aiQuestions: ["Any budget concerns for this quarter?", "Should I prepare a savings analysis?"],
+  },
+  finance: {
+    image: `${BASE}goal-finance.png`,
+    pct: 52,
+    weeklyActions: ["Review monthly spending summary", "Check upcoming bills and subscriptions"],
+    monitoring: ["Budget vs. actual spending", "Savings rate", "Investment performance"],
+    aiQuestions: ["Any budget concerns for this quarter?", "Should I prepare a savings analysis?"],
+  },
+  wealth: {
+    image: `${BASE}goal-finance.png`,
+    pct: 52,
+    weeklyActions: ["Review monthly spending summary", "Check upcoming bills and subscriptions"],
+    monitoring: ["Budget vs. actual spending", "Savings rate", "Investment performance"],
+    aiQuestions: ["Any budget concerns for this quarter?", "Should I prepare a savings analysis?"],
+  },
+  "learn-and-grow": {
+    image: `${BASE}goal-growth.png`,
+    pct: 72,
+    weeklyActions: ["Continue current learning path", "Review bookmarked articles"],
+    monitoring: ["Learning time allocation", "New topics of interest", "Skill acquisition progress"],
+    aiQuestions: ["What topic are you most curious about right now?", "Should I find new learning resources?"],
+  },
+  growth: {
+    image: `${BASE}goal-growth.png`,
+    pct: 72,
+    weeklyActions: ["Continue current learning path", "Review bookmarked articles"],
+    monitoring: ["Learning time allocation", "New topics of interest", "Skill acquisition progress"],
+    aiQuestions: ["What topic are you most curious about right now?", "Should I find new learning resources?"],
+  },
+  relationships: {
+    image: `${BASE}goal-family.png`,
+    pct: 50,
+    weeklyActions: ["Plan weekend family activity", "Check in with close friends"],
+    monitoring: ["Family event calendar", "Relationship check-in frequency"],
+    aiQuestions: ["Any family events coming up?", "How's the work-life balance feeling?"],
+  },
+  family: {
+    image: `${BASE}goal-family.png`,
+    pct: 50,
+    weeklyActions: ["Plan weekend family activity", "Check in with close friends"],
+    monitoring: ["Family event calendar", "Relationship check-in frequency"],
+    aiQuestions: ["Any family events coming up?", "How's the work-life balance feeling?"],
+  },
+  "life-balance": {
+    image: `${BASE}goal-life.png`,
+    pct: 40,
+    weeklyActions: ["Block personal time on calendar", "Review stress levels"],
+    monitoring: ["Personal time allocation", "Burnout risk indicators", "Hobby engagement"],
+    aiQuestions: ["Any personal projects you want to prioritize?", "What recharges you most right now?"],
+  },
+  life: {
+    image: `${BASE}goal-life.png`,
+    pct: 40,
+    weeklyActions: ["Block personal time on calendar", "Review stress levels"],
+    monitoring: ["Personal time allocation", "Burnout risk indicators", "Hobby engagement"],
+    aiQuestions: ["Any personal projects you want to prioritize?", "What recharges you most right now?"],
+  },
+};
+
+const FALLBACK_VISUAL: GoalVisualMeta = {
+  image: `${BASE}goal-life.png`,
+  pct: 50,
+  weeklyActions: [],
+  monitoring: [],
+  aiQuestions: [],
+};
+
+function getVisualMeta(key: string): GoalVisualMeta {
+  return GOAL_VISUAL_META[key] ?? GOAL_VISUAL_META[key.split("-")[0]] ?? FALLBACK_VISUAL;
+}
+
+function priorityToStatus(priority: string): VisualStatus {
+  if (priority === "high") return "Alert";
+  if (priority === "low") return "Watch";
+  return "Normal";
+}
+
+const statusColor: Record<VisualStatus, string> = {
+  Normal: "bg-emerald-400/30",
+  Alert: "bg-rose-400/30",
+  Watch: "bg-amber-400/30",
+};
+
+const statusBarColor: Record<VisualStatus, string> = {
+  Normal: "bg-emerald-400/50",
+  Alert: "bg-rose-400/50",
+  Watch: "bg-amber-400/50",
+};
+
+// ---------------------------------------------------------------------------
+// Constants — upstream profile sections
+// ---------------------------------------------------------------------------
 
 const EMPTY_SNAPSHOT: ProfileSnapshot = {
   profile: null,
@@ -75,6 +240,10 @@ function goalMeta(key: string) {
   return GOAL_ICONS[key] ?? GOAL_ICONS[key.split("-")[0]] ?? FALLBACK_ICON;
 }
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 function formatDateTime(value?: string | null): string {
   if (!value) return "n/a";
   const date = new Date(value);
@@ -103,13 +272,11 @@ function isEventMemory(memory: ProfileMemory): boolean {
   return memory.kind.trim().toLowerCase() === "event";
 }
 
-function EmptyState({
-  title,
-  description,
-}: {
-  title: string;
-  description: string;
-}) {
+// ---------------------------------------------------------------------------
+// Sub-components (upstream profile sections)
+// ---------------------------------------------------------------------------
+
+function EmptyState({ title, description }: { title: string; description: string }) {
   return (
     <div className="rounded-2xl border border-dashed border-foreground/10 bg-foreground/[0.03] px-4 py-5 text-center">
       <p className="text-sm font-medium text-foreground/70">{title}</p>
@@ -118,23 +285,13 @@ function EmptyState({
   );
 }
 
-function SummaryStat({
-  label,
-  value,
-  onClick,
-}: {
-  label: string;
-  value: number;
-  onClick: () => void;
-}) {
+function SummaryStat({ label, value, onClick }: { label: string; value: number; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
       className="rounded-2xl bg-white/45 px-3 py-3 text-left ring-1 ring-white/50 transition-colors hover:bg-white/75"
     >
-      <div className="text-[10px] uppercase tracking-[0.18em] text-foreground/35">
-        {label}
-      </div>
+      <div className="text-[10px] uppercase tracking-[0.18em] text-foreground/35">{label}</div>
       <div className="mt-1 text-lg font-semibold text-foreground">{value}</div>
     </button>
   );
@@ -195,10 +352,7 @@ function ProfileGroupCard({
               ) : (
                 <div className="space-y-3">
                   {entries.map(([key, value]) => (
-                    <div
-                      key={key}
-                      className="rounded-2xl bg-foreground/[0.03] px-3 py-3"
-                    >
+                    <div key={key} className="rounded-2xl bg-foreground/[0.03] px-3 py-3">
                       <div className="text-[10px] font-mono uppercase tracking-[0.14em] text-foreground/38">
                         {key}
                       </div>
@@ -291,17 +445,30 @@ function InterestItem({ interest }: { interest: ProfileInterest }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
+
 export default function GoalsView() {
   const [snapshot, setSnapshot] = useState<ProfileSnapshot>(EMPTY_SNAPSHOT);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Gateway grid drawer state
+  const [expandedGoal, setExpandedGoal] = useState<string | null>(null);
+
+  // Upstream goals list expand state
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
+
+  // Add / close goal forms
   const [showAddForm, setShowAddForm] = useState(false);
   const [newKey, setNewKey] = useState("");
   const [newTitle, setNewTitle] = useState("");
   const [newPriority, setNewPriority] = useState<"high" | "medium" | "low">("medium");
   const [saving, setSaving] = useState(false);
   const [closingKey, setClosingKey] = useState<string | null>(null);
+
+  // Upstream profile section state
   const [memoryTab, setMemoryTab] = useState<MemoryTab>("entry");
   const [openGroups, setOpenGroups] = useState<Record<ProfileGroupKey, boolean>>({
     facts: false,
@@ -311,6 +478,8 @@ export default function GoalsView() {
   });
 
   const controllerRef = useRef<AbortController | null>(null);
+
+  // ── Data fetching ──
 
   const loadSnapshot = useCallback(async (options?: { silent?: boolean }) => {
     controllerRef.current?.abort();
@@ -343,6 +512,8 @@ export default function GoalsView() {
     return () => controllerRef.current?.abort();
   }, [loadSnapshot]);
 
+  // ── Derived data ──
+
   const profile = snapshot.profile;
   const activeGoals = useMemo(
     () => snapshot.goals.filter((goal) => goal.status !== "closed"),
@@ -366,6 +537,8 @@ export default function GoalsView() {
     const element = document.getElementById(`profile-section-${sectionId}`);
     element?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
+
+  // ── Goal actions ──
 
   const handleAddGoal = async () => {
     const key = newKey.trim().toLowerCase().replace(/\s+/g, "-");
@@ -413,15 +586,25 @@ export default function GoalsView() {
     setOpenGroups((prev) => ({ ...prev, [group]: !prev[group] }));
   };
 
+  // ── Drawer selection for gateway grid ──
+
+  const selectedApiGoal = expandedGoal ? activeGoals.find((g) => g.key === expandedGoal) : null;
+  const selectedVisual = selectedApiGoal ? getVisualMeta(selectedApiGoal.key) : null;
+  const selectedBasket = selectedApiGoal ? basketMeta(selectedApiGoal.key) : null;
+  const selectedStatus = selectedApiGoal ? priorityToStatus(selectedApiGoal.priority) : "Normal";
+
   const sectionMotion = {
     initial: { opacity: 0, y: 12 },
     animate: { opacity: 1, y: 0 },
     transition: { duration: 0.24 },
   };
 
+  // ── Render ──
+
   return (
-    <div className="scrollbar-hidden flex h-full flex-col overflow-y-auto px-4 pb-24 pt-3">
-      <div className="mb-6">
+    <div className="flex flex-col h-full px-4 pt-14 pb-2 overflow-y-auto relative">
+      {/* Page header */}
+      <div className="mb-6 pr-20">
         <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-foreground/35">
           Profile Snapshot
         </div>
@@ -444,6 +627,78 @@ export default function GoalsView() {
               <p className="mt-1 text-xs leading-5 text-foreground/55">{error}</p>
             </motion.section>
           )}
+
+          {/* ────────────────────────────────────────────────────────── */}
+          {/* Section 1: Gateway-style 2-column image grid              */}
+          {/* ────────────────────────────────────────────────────────── */}
+
+          {activeGoals.length === 0 ? (
+            <div className="glass-card-strong p-8 text-center">
+              <Sparkles size={28} className="mx-auto mb-3 text-foreground/50" />
+              <p className="text-display text-foreground mb-1">No active goals</p>
+              <p className="text-sm text-muted-foreground">
+                Add goals to help your AI generate more relevant intent cards
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              {activeGoals.map((goal) => {
+                const visual = getVisualMeta(goal.key);
+                const basket = basketMeta(goal.key);
+                const status = priorityToStatus(goal.priority);
+                const Icon = basket.icon;
+
+                return (
+                  <div
+                    key={goal.key}
+                    className="glass-card-strong cursor-pointer active:scale-[0.97] transition-transform overflow-hidden"
+                    onClick={() => setExpandedGoal(goal.key)}
+                  >
+                    <div className="w-full h-24 overflow-hidden bg-foreground/[0.03] flex items-center justify-center">
+                      <img
+                        src={visual.image}
+                        alt={basket.label}
+                        className={`w-auto object-contain ${basket.label === "Growth" ? "h-[70%]" : "h-full"}`}
+                      />
+                    </div>
+                    <div className="p-3.5">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-foreground"><Icon size={20} /></span>
+                        <span className="text-display text-sm text-foreground">{basket.label}</span>
+                      </div>
+
+                      <div className="w-full h-1.5 rounded-full bg-foreground/10 mb-2 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full ${statusColor[status]} transition-all duration-700 ease-out`}
+                          style={{ width: `${visual.pct}%` }}
+                        />
+                      </div>
+
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="text-display text-lg text-foreground">{visual.pct}%</span>
+                        <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
+                          status === "Alert" ? "bg-rose-50 text-rose-400"
+                          : status === "Watch" ? "bg-amber-50 text-amber-500"
+                          : "bg-emerald-50 text-emerald-500"
+                        }`}>{status}</span>
+                      </div>
+
+                      <div className="flex justify-between items-end">
+                        <p className="text-[11px] text-foreground/50 leading-snug flex-1 line-clamp-2">
+                          {goal.summary || goal.title}
+                        </p>
+                        <ArrowRightCircle size={16} className="text-foreground/25 shrink-0 ml-1" />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ────────────────────────────────────────────────────────── */}
+          {/* Section 2: Profile Summary                                */}
+          {/* ────────────────────────────────────────────────────────── */}
 
           <motion.section {...sectionMotion} className="glass-card-strong p-5">
             <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
@@ -482,6 +737,10 @@ export default function GoalsView() {
             </div>
           </motion.section>
 
+          {/* ────────────────────────────────────────────────────────── */}
+          {/* Section 3: Profile Fields                                 */}
+          {/* ────────────────────────────────────────────────────────── */}
+
           <motion.section {...sectionMotion} className="glass-card-strong p-4">
             <div className="mb-3">
               <h2 className="text-sm font-semibold text-foreground">Profile Fields</h2>
@@ -502,6 +761,10 @@ export default function GoalsView() {
               ))}
             </div>
           </motion.section>
+
+          {/* ────────────────────────────────────────────────────────── */}
+          {/* Section 4: Memory                                         */}
+          {/* ────────────────────────────────────────────────────────── */}
 
           <motion.section id="profile-section-memory" {...sectionMotion} className="glass-card-strong p-4">
             <div className="flex items-start justify-between gap-4">
@@ -550,6 +813,10 @@ export default function GoalsView() {
             </div>
           </motion.section>
 
+          {/* ────────────────────────────────────────────────────────── */}
+          {/* Section 5: Signals                                        */}
+          {/* ────────────────────────────────────────────────────────── */}
+
           <motion.section id="profile-section-signals" {...sectionMotion} className="glass-card-strong p-4">
             <div className="mb-3">
               <h2 className="text-sm font-semibold text-foreground">Signals</h2>
@@ -571,6 +838,10 @@ export default function GoalsView() {
             </div>
           </motion.section>
 
+          {/* ────────────────────────────────────────────────────────── */}
+          {/* Section 6: Interests                                      */}
+          {/* ────────────────────────────────────────────────────────── */}
+
           <motion.section id="profile-section-interests" {...sectionMotion} className="glass-card-strong p-4">
             <div className="mb-3">
               <h2 className="text-sm font-semibold text-foreground">Interests</h2>
@@ -591,6 +862,10 @@ export default function GoalsView() {
               )}
             </div>
           </motion.section>
+
+          {/* ────────────────────────────────────────────────────────── */}
+          {/* Section 7: Goals list (upstream expandable list + add)    */}
+          {/* ────────────────────────────────────────────────────────── */}
 
           <motion.section id="profile-section-goals" {...sectionMotion} className="glass-card-strong p-4">
             <div className="mb-1 flex items-center justify-between gap-3">
@@ -792,6 +1067,109 @@ export default function GoalsView() {
           </motion.section>
         </div>
       )}
+
+      {/* Gateway grid detail Drawer */}
+      <Drawer open={!!expandedGoal} onOpenChange={(open) => { if (!open) setExpandedGoal(null); }}>
+        <DrawerContent
+          className="max-h-[85vh] border-t-0 !bg-transparent"
+          style={{
+            background: "linear-gradient(180deg, hsla(0, 0%, 100%, 0.5) 0%, hsla(0, 0%, 100%, 0.7) 100%)",
+            backdropFilter: "blur(40px) saturate(1.5)",
+            WebkitBackdropFilter: "blur(40px) saturate(1.5)",
+            border: "1px solid hsla(0, 0%, 100%, 0.4)",
+            borderBottom: "none",
+            borderRadius: "1.5rem 1.5rem 0 0",
+          }}
+          overlayClassName="!bg-foreground/5 backdrop-blur-[2px]"
+        >
+          <DrawerHeader className="sr-only">
+            <DrawerTitle>{selectedBasket?.label || "Goal"}</DrawerTitle>
+            <DrawerDescription>Goal detail view</DrawerDescription>
+          </DrawerHeader>
+
+          {selectedApiGoal && selectedVisual && selectedBasket && (
+            <div className="px-5 pb-6 pt-2 overflow-y-auto max-h-[75vh]">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-3">
+                  <img src={selectedVisual.image} alt={selectedBasket.label} width={32} height={32} className="w-8 h-8 object-contain" />
+                  <span className="text-display text-lg text-foreground font-semibold">{selectedBasket.label}</span>
+                  <span className={`text-[11px] font-medium px-2.5 py-0.5 rounded-full ${
+                    selectedStatus === "Alert" ? "bg-rose-50 text-rose-400"
+                    : selectedStatus === "Watch" ? "bg-amber-50 text-amber-500"
+                    : "bg-emerald-50 text-emerald-500"
+                  }`}>{selectedStatus}</span>
+                </div>
+                <span className={`text-display text-lg font-semibold ${
+                  selectedStatus === "Alert" ? "text-rose-400"
+                  : selectedStatus === "Watch" ? "text-amber-500"
+                  : "text-emerald-500"
+                }`}>{selectedVisual.pct}%</span>
+              </div>
+
+              <div className="w-full h-2 rounded-full bg-foreground/5 mb-4 overflow-hidden">
+                <motion.div
+                  className={`h-full rounded-full ${statusBarColor[selectedStatus]}`}
+                  initial={{ width: 0 }}
+                  animate={{ width: `${selectedVisual.pct}%` }}
+                  transition={{ duration: 0.6, ease: "easeOut" }}
+                />
+              </div>
+
+              <p className="text-sm text-foreground/80 mb-4">
+                {selectedApiGoal.summary || selectedApiGoal.title}
+              </p>
+
+              <div className="w-full h-px bg-foreground/10 mb-4" />
+
+              <h3 className="text-xs font-semibold text-emerald-500 uppercase tracking-wider mb-3">
+                AI Weekly Actions
+              </h3>
+              <div className="space-y-2.5 mb-5">
+                {selectedVisual.weeklyActions.map((action, i) => (
+                  <div key={i} className="flex items-start gap-2.5">
+                    <Check size={14} className="text-emerald-500 mt-0.5 shrink-0" />
+                    <span className="text-sm text-foreground/80 leading-snug">{action}</span>
+                  </div>
+                ))}
+              </div>
+
+              <h3 className="text-xs font-semibold text-amber-500 uppercase tracking-wider mb-3">
+                Monitoring
+              </h3>
+              <div className="space-y-2.5 mb-5">
+                {selectedVisual.monitoring.map((item, i) => (
+                  <div key={i} className="flex items-start gap-2.5">
+                    <div className="w-2.5 h-2.5 rounded-full bg-amber-400 mt-1 shrink-0 animate-pulse" />
+                    <span className="text-sm text-foreground/75 leading-snug">{item}</span>
+                  </div>
+                ))}
+              </div>
+
+              <h3 className="text-xs font-semibold text-foreground/50 uppercase tracking-wider mb-3">
+                AI wants to know
+              </h3>
+              <div className="space-y-2.5 mb-5">
+                {selectedVisual.aiQuestions.map((q, i) => (
+                  <button
+                    key={i}
+                    className="w-full flex items-center gap-3 p-3.5 rounded-2xl border border-foreground/10 bg-foreground/[0.03] hover:bg-foreground/[0.07] active:bg-foreground/[0.1] transition-all text-left group"
+                  >
+                    <div className="w-8 h-8 rounded-full bg-foreground flex items-center justify-center shrink-0">
+                      <Mic size={14} className="text-background" />
+                    </div>
+                    <span className="text-sm text-foreground/80 leading-snug flex-1">{q}</span>
+                    <ArrowRightCircle size={14} className="text-foreground shrink-0" />
+                  </button>
+                ))}
+              </div>
+
+              <button className="w-full py-3.5 rounded-2xl bg-foreground/[0.04] text-sm text-foreground/50 font-medium hover:bg-foreground/[0.07] transition-colors">
+                Lock Goals — AI watches only, no modify
+              </button>
+            </div>
+          )}
+        </DrawerContent>
+      </Drawer>
     </div>
   );
 }
