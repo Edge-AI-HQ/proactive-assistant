@@ -175,6 +175,14 @@ export async function ensureContainer(): Promise<{
   return res.json();
 }
 
+export async function resetContainer(): Promise<{ ok: boolean; containerId: string; ready: boolean }> {
+  const res = await proactiveFetch("/api/proactive/container/reset", {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`/container/reset failed: ${await readErrorMessage(res)}`);
+  return res.json();
+}
+
 export async function destroyContainer(): Promise<{ ok: boolean }> {
   const res = await proactiveFetch("/api/proactive/container/destroy", {
     method: "POST",

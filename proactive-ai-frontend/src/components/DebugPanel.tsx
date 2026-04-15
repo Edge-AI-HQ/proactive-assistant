@@ -10,7 +10,7 @@ import {
   ExternalLink, X, Zap,
 } from "lucide-react";
 import { Browser } from "@capacitor/browser";
-import { getGatewayTicket, deleteAccount } from "@/lib/api";
+import { getGatewayTicket, resetContainer, deleteAccount } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import { isNative, API_BASE } from "@/lib/platform";
 import type { HealthState, RunState, PipelinePhase } from "@/hooks/usePipeline";
@@ -99,6 +99,7 @@ export default function DebugPanel({ health, run, isRunning, iterations, onItera
   const [open, setOpen] = useState(false);
   const [expandedIter, setExpandedIter] = useState<number | null>(null);
   const [gatewayLoading, setGatewayLoading] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const logContainerRef = useRef<HTMLDivElement>(null);
 
@@ -133,6 +134,20 @@ export default function DebugPanel({ health, run, isRunning, iterations, onItera
       }
     } finally {
       setGatewayLoading(false);
+    }
+  }, []);
+
+  const handleResetContainer = useCallback(async () => {
+    if (!confirm("Reset container? This will destroy the current container and create a new one.")) return;
+    setResetLoading(true);
+    try {
+      await resetContainer();
+      window.location.reload();
+    } catch (err) {
+      console.error("Failed to reset container:", err);
+      alert(`Reset failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setResetLoading(false);
     }
   }, []);
 
@@ -445,9 +460,13 @@ export default function DebugPanel({ health, run, isRunning, iterations, onItera
                   <span className="text-[11px] font-medium text-red-400 uppercase tracking-wider block mb-2">
                     Danger Zone
                   </span>
-                  <p className="text-[11px] text-foreground/40 mb-2.5">
-                    Delete your account, container, volume, and all associated data.
-                  </p>
+                  <button
+                    onClick={handleResetContainer}
+                    disabled={resetLoading}
+                    className="w-full flex items-center justify-center gap-1.5 rounded-lg border border-red-300 text-red-600 text-[11px] font-medium py-2 mb-2 transition-colors hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {resetLoading ? "Resetting..." : "Reset Container"}
+                  </button>
                   <button
                     onClick={handleDeleteAccount}
                     disabled={deleteLoading}

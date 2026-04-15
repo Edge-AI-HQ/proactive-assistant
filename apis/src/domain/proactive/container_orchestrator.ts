@@ -154,11 +154,28 @@ export class ProactiveContainerOrchestrator {
     return true;
   }
 
+  async resetContainer(supabaseUserId: string): Promise<{
+    containerId: string;
+    ready: boolean;
+  }> {
+    return withUserLock(supabaseUserId, async () => {
+      await this.destroyContainerInner(supabaseUserId);
+      return this.runEnsure(supabaseUserId);
+    }).finally(() => {
+      this.invalidateReconcileCache(supabaseUserId);
+    });
+  }
+
   async destroyContainer(supabaseUserId: string): Promise<boolean> {
+    const destroyed = await this.destroyContainerInner(supabaseUserId);
+    this.invalidateReconcileCache(supabaseUserId);
+    return destroyed;
+  }
+
+  private async destroyContainerInner(supabaseUserId: string): Promise<boolean> {
     const container = await getContainerForUser(supabaseUserId);
     if (!container?.runtime_ref) {
       if (container) await deleteContainer(container.owner_user_id);
-      this.invalidateReconcileCache(supabaseUserId);
       return false;
     }
 
@@ -167,7 +184,6 @@ export class ProactiveContainerOrchestrator {
       await this.runtime.destroyContainer(ref.id);
     }
     await deleteContainer(container.owner_user_id);
-    this.invalidateReconcileCache(supabaseUserId);
     return true;
   }
 
