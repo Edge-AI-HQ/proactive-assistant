@@ -54,7 +54,7 @@ services:
       - ./ops/litellm/.env
     environment:
       # Override DB URL to use local postgres (takes precedence over env_file)
-      - LITELLM_DB_URL=postgresql://postgres:postgres@postgres:5432/litellm
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/litellm
     ports:
       - "4000:4000"
     volumes:

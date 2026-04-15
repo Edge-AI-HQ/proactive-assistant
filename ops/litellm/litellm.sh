@@ -34,7 +34,7 @@ case "${1:-}" in
     docker rm -f pin-ai-litellm-db >/dev/null 2>&1 || true
     ;;
   verify-db-env)
-    docker inspect pin-ai-litellm --format '{{range .Config.Env}}{{println .}}{{end}}' | rg '^LITELLM_DB_URL='
+    docker inspect pin-ai-litellm --format '{{range .Config.Env}}{{println .}}{{end}}' | rg '^DATABASE_URL='
     ;;
   *)
     usage
