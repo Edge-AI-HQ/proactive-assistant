@@ -44,7 +44,6 @@ jobs:
       - name: Build and upload iOS
         working-directory: proactive-ai-frontend
         env:
-          CI: 'true'
           DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
           DOTENV_PRIVATE_KEY_PRODUCTION: ${{ secrets.DOTENV_PRIVATE_KEY_PRODUCTION }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
