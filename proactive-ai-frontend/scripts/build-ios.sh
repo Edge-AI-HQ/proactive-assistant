@@ -109,7 +109,12 @@ cat > "$EXPORT_OPTIONS" <<'PLIST'
     <key>uploadSymbols</key>
     <true/>
     <key>signingStyle</key>
-    <string>automatic</string>
+    <string>manual</string>
+    <key>provisioningProfiles</key>
+    <dict>
+        <key>ai.pin.proactive</key>
+        <string>PIN AI AppStore Distribution</string>
+    </dict>
 </dict>
 </plist>
 PLIST
