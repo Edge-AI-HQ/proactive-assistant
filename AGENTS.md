@@ -62,8 +62,7 @@ flyctl secrets set DOTENV_PRIVATE_KEY_DEV="..." -a proactive-ai-api-dev
 
 CI 需要在 GitHub Secrets 设置以下 secrets：
 - `FLY_API_TOKEN` — 所有 deploy workflow
-- `DOTENV_PRIVATE_KEY_DEV` — build-openclaw workflow（更新 OPENCLAW_IMAGE digest + deploy）
-- `DOTENV_PRIVATE_KEY_DEV` — deploy-dev + build-openclaw workflow（解密 .env.dev，提取 VITE_* build args）
+- `DOTENV_PRIVATE_KEY_DEV` — deploy-dev workflow（构建 OpenClaw 镜像时更新 digest + 解密 .env.dev 提取 VITE_* build args）
 - `DOTENV_PRIVATE_KEY_PRODUCTION` — deploy-prod workflow（解密 .env.production，提取 VITE_* build args）
 
 ## 高频目录
@@ -116,7 +115,7 @@ npm run test --workspace @pin-ai/apis
 ### Dev 环境（自动）
 push 到 `proactive-ai-v2` 后根据改动范围自动部署，不需要手动操作：
 - 改 `apis/` 或 `proactive-ai-frontend/` → 自动部署 APIs
-- 改 `pinai-openclaw/` → 自动构建镜像、更新 OPENCLAW_IMAGE digest、部署 APIs
+- 改 `pinai-openclaw/` → 先构建镜像、更新 digest，再部署 APIs（同一 workflow 内 job 依赖，无竞态）
 - 改 `ops/litellm/` → 自动部署 LiteLLM
 
 ### Prod 环境（手动触发）
