@@ -9,9 +9,32 @@ on:
       - 'fly.api-dev.toml'
       - 'package*.json'
       - 'scripts/**'
+      - 'ops/litellm/**'
 
 jobs:
-  deploy:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      apis: ${{ steps.filter.outputs.apis }}
+      litellm: ${{ steps.filter.outputs.litellm }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            apis:
+              - 'apis/**'
+              - 'proactive-ai-frontend/**'
+              - 'fly.api-dev.toml'
+              - 'package*.json'
+              - 'scripts/**'
+            litellm:
+              - 'ops/litellm/**'
+
+  deploy-apis:
+    needs: changes
+    if: needs.changes.outputs.apis == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,5 +64,22 @@ jobs:
             --build-arg VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
             --build-arg VITE_SUPABASE_PUBLISHABLE_KEY="$VITE_SUPABASE_PUBLISHABLE_KEY" \
             --build-arg VITE_API_BASE_URL="$VITE_API_BASE_URL"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  deploy-litellm:
+    needs: changes
+    if: needs.changes.outputs.litellm == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy LiteLLM to dev
+        working-directory: ops/litellm
+        run: flyctl deploy --config fly.litellm-dev.toml --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
