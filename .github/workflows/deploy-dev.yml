@@ -1,6 +1,7 @@
 name: Deploy Dev
 
 on:
+  workflow_dispatch:
   push:
     branches: [proactive-ai-v2]
     paths:
@@ -34,7 +35,7 @@ jobs:
 
   deploy-apis:
     needs: changes
-    if: needs.changes.outputs.apis == 'true'
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.apis == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -69,7 +70,7 @@ jobs:
 
   deploy-litellm:
     needs: changes
-    if: needs.changes.outputs.litellm == 'true'
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.litellm == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
