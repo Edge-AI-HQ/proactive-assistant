@@ -162,12 +162,11 @@ build-openclaw-image: ## Build and push OpenClaw image to shared registry
 # ── iOS ──
 
 ios-sim: ensure-env ## Build frontend and run in iOS Simulator (local backend)
-	$(eval SIM_UDID := $(shell xcrun simctl list devices available | grep 'iPhone 16 (' | head -1 | grep -oE '[0-9A-F-]{36}'))
-	@if [ -z "$(SIM_UDID)" ]; then echo "Error: No iPhone 16 simulator found" >&2; exit 1; fi
-	@echo "==> Using simulator: iPhone 16 ($(SIM_UDID))"
 	cd proactive-ai-frontend && \
 		VITE_API_BASE_URL=http://localhost:3000 \
 		VITE_SUPABASE_URL=$$($(DOTENVX) get VITE_SUPABASE_URL -f ../apis/.env.dev 2>/dev/null) \
 		VITE_SUPABASE_PUBLISHABLE_KEY=$$($(DOTENVX) get VITE_SUPABASE_PUBLISHABLE_KEY -f ../apis/.env.dev 2>/dev/null) \
 		VITE_CAPACITOR=1 npx vite build && \
-		npx cap run ios --target $(SIM_UDID)
+		SIM_UDID=$$(xcrun simctl list devices available | grep 'iPhone 16 (' | head -1 | grep -oE '[0-9A-F-]{36}') && \
+		echo "==> Using simulator: iPhone 16 ($$SIM_UDID)" && \
+		npx cap run ios --target "$$SIM_UDID"
