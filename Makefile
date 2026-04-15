@@ -161,9 +161,9 @@ build-openclaw-image: ## Build and push OpenClaw image to shared registry
 
 # ── iOS ──
 
-ios-sim: ensure-env ## Build frontend and open in iOS Simulator
+ios-sim: ensure-env ## Build frontend for local backend and open in iOS Simulator
 	cd proactive-ai-frontend && \
-		VITE_API_BASE_URL=$$($(DOTENVX) get VITE_API_BASE_URL -f ../apis/.env.dev 2>/dev/null) \
+		VITE_API_BASE_URL=http://localhost:3000 \
 		VITE_SUPABASE_URL=$$($(DOTENVX) get VITE_SUPABASE_URL -f ../apis/.env.dev 2>/dev/null) \
 		VITE_SUPABASE_PUBLISHABLE_KEY=$$($(DOTENVX) get VITE_SUPABASE_PUBLISHABLE_KEY -f ../apis/.env.dev 2>/dev/null) \
 		VITE_CAPACITOR=1 npx vite build && \
