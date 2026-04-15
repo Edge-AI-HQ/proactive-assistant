@@ -3,12 +3,14 @@
  */
 import { buildOutputLanguageInstruction } from './output-language.js';
 import { DEFAULT_GENERATION_LANGUAGE, type SupportedGenerationLanguage } from './generation-language.js';
+import { PIN_CLI_COMMAND_GUIDE } from './pin-cli-command-guide.js';
 
 export interface PlannerPromptParams {
   currentDate: string;
   iterationNumber: number;
   cardsPerIteration?: number;
   recentFeedbackSummary?: string;
+  recentGeneratedCardsSummary?: string;
   previousFeedback?: string;
   previousPlan?: string;
   previousCards?: string;
@@ -19,7 +21,7 @@ export interface PlannerPromptParams {
 export function buildPlannerPrompt(params: PlannerPromptParams): string {
   const {
     currentDate, iterationNumber, cardsPerIteration = 8,
-    recentFeedbackSummary, previousFeedback, previousPlan, previousCards, previousScores,
+    recentFeedbackSummary, recentGeneratedCardsSummary, previousFeedback, previousPlan, previousCards, previousScores,
     outputLanguage = DEFAULT_GENERATION_LANGUAGE,
   } = params;
 
@@ -46,9 +48,19 @@ ${previousScores}
 ` : '';
 
   const feedbackSection = recentFeedbackSummary?.trim() ? `
+## Recent User Feedback Signals
+
 <recent_user_feedback>
 ${recentFeedbackSummary}
 </recent_user_feedback>
+` : '';
+
+  const recentGeneratedCardsSection = recentGeneratedCardsSummary?.trim() ? `
+## Recent Generated Card History
+
+<recent_generated_cards>
+${recentGeneratedCardsSummary}
+</recent_generated_cards>
 ` : '';
 
   return `You are the **Planner** in the Proactive AI intent card pipeline.
@@ -68,21 +80,29 @@ The Proactive AI system recommends pre-processed next-best-actions to the user. 
 You have access to the \`pin\` CLI. The full command reference is in the loaded skill documents. Use it to query: profile, personal connections, world events, push history, feedback — whatever you judge necessary to make a good plan.
 </context>
 
+${PIN_CLI_COMMAND_GUIDE}
+
 <quality_criteria>
 Each planned intent must satisfy ALL of these:
 - One decision per card — never bundle multiple decisions
 - Linked to a goal basket (work / health / family / wealth / growth / life)
 - Specific "why now" — a concrete, time-sensitive trigger (dates, numbers, events), not vague
 - Default action ready — a concrete suggestion the user can approve, not just information
-- Novel — not repeating recent pushes or things the user already knows
+- Novel — not repeating recent pushes, recently generated card themes, or things the user already knows
 - Trajectory over task — advances a 90-day goal, not just a todo item
 - Diverse — spread across different baskets, don't cluster in one area
 </quality_criteria>
 
+<process>
+Before locking the plan, inspect recent generated card history with \`pin cards recent --limit 10 --json\`. Use that result together with recent pushes and feedback to avoid blindly repeating the same card theme.
+
+Treat sustained card-chat engagement as a strong signal that the user wants adjacent follow-up content, but do not simply repeat the same card. Use that signal to plan the next higher-value step around the same thread.
+</process>
+
 <anti_patterns>
 Do NOT plan these: generic reminders, news without actionable link to goals, calendar notifications the user already sees, vague suggestions, cards requiring the user to do significant research.
 </anti_patterns>
-${feedbackSection}${prevSection}
+${feedbackSection}${recentGeneratedCardsSection}${prevSection}
 <output_format>
 Output ONLY a JSON code block:
 
@@ -95,7 +115,8 @@ Output ONLY a JSON code block:
     "personalData": { ... },
     "worldEvents": [ ... ],
     "recentPushes": [ ... ],
-    "feedback": [ ... ]
+    "feedback": [ ... ],
+    "recentGeneratedCards": [ ... ]
   },
   "intentsToGenerate": [
     {

@@ -12,6 +12,7 @@ import { runPipeline } from '../pipeline/orchestrator.js';
 import { DEFAULT_GENERATION_LANGUAGE } from '../agents/generation-language.js';
 import { resolveDreamingTimezone, isDreamingDue } from '../dreaming/schedule.js';
 import { startDreaming, listDreamRuns } from '../dreaming/service.js';
+import { syncCardChatFeedback } from '../chat-feedback/service.js';
 
 export interface AutoLoopConfig {
   auto_poll_enabled: boolean;
@@ -46,6 +47,7 @@ interface AutoLoopState {
   ingestInFlight: boolean;
   loopInFlight: boolean;
   dreamInFlight: boolean;
+  chatFeedbackInFlight: boolean;
   lastLoopFinishedAt: string | null;
   lastLoopStatus: string | null;
 }
@@ -57,6 +59,7 @@ const state: AutoLoopState = {
   ingestInFlight: false,
   loopInFlight: false,
   dreamInFlight: false,
+  chatFeedbackInFlight: false,
   lastLoopFinishedAt: null,
   lastLoopStatus: null,
 };
@@ -198,6 +201,33 @@ async function runAutoDreaming(api: OpenClawPluginApi): Promise<void> {
   }
 }
 
+interface AutoLoopChatFeedbackDeps {
+  syncCardChatFeedback?: typeof syncCardChatFeedback;
+}
+
+export async function runAutoCardChatFeedback(
+  api: OpenClawPluginApi,
+  pipelineState: PipelineState,
+  deps?: AutoLoopChatFeedbackDeps,
+): Promise<void> {
+  if (state.chatFeedbackInFlight) return;
+  if (pipelineState.running) return;
+
+  state.chatFeedbackInFlight = true;
+  try {
+    const syncCardChatFeedbackImpl = deps?.syncCardChatFeedback ?? syncCardChatFeedback;
+    await syncCardChatFeedbackImpl({
+      api,
+      trigger: 'auto',
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    api.logger.error(`[auto-chat-feedback] failed: ${msg}`);
+  } finally {
+    state.chatFeedbackInFlight = false;
+  }
+}
+
 // ── Start / Stop ──
 
 export function startAutoLoop(
@@ -223,6 +253,7 @@ export function startAutoLoop(
   // Start detect timer (runs both detect-and-loop and auto-dreaming)
   state.detectTimer = setInterval(() => {
     void runDetectAndLoop(api, config, pipelineState);
+    void runAutoCardChatFeedback(api, pipelineState);
     void runAutoDreaming(api);
   }, config.auto_detect_interval_ms);
 
@@ -244,6 +275,7 @@ export function stopAutoLoop(): void {
   state.ingestInFlight = false;
   state.loopInFlight = false;
   state.dreamInFlight = false;
+  state.chatFeedbackInFlight = false;
   state.lastLoopFinishedAt = null;
   state.lastLoopStatus = null;
 }

@@ -36,6 +36,7 @@ export async function handleSys(args: string[]): Promise<string> {
       world: ['search', 'headlines', 'find', 'list', 'get', 'shortlist', 'context', 'index'],
       feedback: ['log', 'list', 'get', 'stats'],
       push: ['record', 'history', 'get', 'outcome', 'find-similar'],
+      cards: ['recent'],
       sys: ['doctor', 'schema'],
     };
     return success('sys', 'schema', { domains });

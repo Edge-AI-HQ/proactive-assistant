@@ -4,15 +4,23 @@ import { json } from './types.js';
 import { runPipeline } from '../pipeline/orchestrator.js';
 import { DEFAULT_GENERATION_LANGUAGE } from '../agents/generation-language.js';
 import * as db from '../db.js';
+import { syncCardChatFeedback } from '../chat-feedback/service.js';
 
 const LANGUAGE_MAP: Record<string, string> = {
   en: 'English', zh: '中文 (Chinese)', ja: '日本語 (Japanese)',
   ko: '한국어 (Korean)', es: 'Español (Spanish)',
 };
 
+interface GenerateRouteDeps {
+  getUserSettings?: typeof db.getUserSettings;
+  runPipeline?: typeof runPipeline;
+  syncCardChatFeedback?: typeof syncCardChatFeedback;
+}
+
 export function handleGenerate(
   state: { running: boolean; phase: string | null; iteration: number | null },
   config: { max_iterations: number; cards_per_iteration: number; agent_timeout_ms: number },
+  deps?: GenerateRouteDeps,
 ): RouteHandler {
   return async (ctx) => {
     if (ctx.subpath !== '/generate' || ctx.req.method !== 'GET') return false;
@@ -27,11 +35,23 @@ export function handleGenerate(
     state.phase = 'manual';
 
     try {
+      const getUserSettings = deps?.getUserSettings ?? db.getUserSettings;
+      const runPipelineImpl = deps?.runPipeline ?? runPipeline;
+      const syncCardChatFeedbackImpl = deps?.syncCardChatFeedback ?? syncCardChatFeedback;
       const maxIter = parseInt(ctx.url.searchParams.get('iterations') ?? '', 10) || config.max_iterations;
-      const userSettings = await db.getUserSettings();
+      const userSettings = await getUserSettings();
       const outputLanguage = (LANGUAGE_MAP[userSettings.generation_language] ? userSettings.generation_language : 'en') as any;
 
-      const result = await runPipeline(ctx.api, {
+      try {
+        await syncCardChatFeedbackImpl({
+          api: ctx.api,
+          trigger: 'pre_generate',
+        });
+      } catch (error) {
+        ctx.api.logger.warn(`Card chat feedback sync skipped: ${error instanceof Error ? error.message : String(error)}`);
+      }
+
+      const result = await runPipelineImpl(ctx.api, {
         maxIterations: maxIter,
         cardsPerIteration: config.cards_per_iteration,
         agentTimeoutMs: config.agent_timeout_ms,

@@ -13,6 +13,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import Database from 'better-sqlite3';
+import { makeTitleKey } from './shared/intent-key.js';
 
 // ── Singleton DB ──
 
@@ -239,6 +240,23 @@ function ensureSchema(db: Database.Database): void {
       committed_at TEXT
     );
   `);
+
+  ensureColumn(db, 'feedback_events', 'conversation_id', 'TEXT');
+  ensureColumn(db, 'feedback_events', 'message_id', 'TEXT');
+  ensureColumn(db, 'feedback_events', 'channel', 'TEXT');
+}
+
+function ensureColumn(
+  db: Database.Database,
+  table: string,
+  column: string,
+  definition: string,
+): void {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: string }>;
+  const exists = rows.some((row) => row.name === column);
+  if (!exists) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
 }
 
 // ── Helpers ──
@@ -636,8 +654,11 @@ export interface FeedbackRow {
   action: string | null;
   push_id: string | null;
   intent_card_id: string | null;
+  conversation_id: string | null;
+  message_id: string | null;
   source: string;
   basket: string | null;
+  channel: string | null;
   value: string | null;
   text: string | null;
   metadata: Record<string, unknown>;
@@ -653,23 +674,43 @@ export async function logFeedback(input: {
   action?: string;
   pushId?: string;
   intentCardId?: string;
+  conversationId?: string;
+  messageId?: string;
   source?: string;
   basket?: string;
+  channel?: string;
   value?: string;
   text?: string;
   metadata?: Record<string, unknown>;
+  at?: string;
 }): Promise<FeedbackRow> {
   const id = genId();
-  const ts = now();
+  const ts = input.at ?? now();
   const meta = JSON.stringify(input.metadata ?? {});
   getDb().prepare(
-    'INSERT INTO feedback_events (id, kind, action, push_id, intent_card_id, source, basket, value, text, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, input.kind, input.action ?? null, input.pushId ?? null, input.intentCardId ?? null,
-    input.source ?? 'user_direct', input.basket ?? null, input.value ?? null, input.text ?? null, meta, ts);
+    'INSERT INTO feedback_events (id, kind, action, push_id, intent_card_id, conversation_id, message_id, source, basket, channel, value, text, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(
+    id,
+    input.kind,
+    input.action ?? null,
+    input.pushId ?? null,
+    input.intentCardId ?? null,
+    input.conversationId ?? null,
+    input.messageId ?? null,
+    input.source ?? 'user_direct',
+    input.basket ?? null,
+    input.channel ?? null,
+    input.value ?? null,
+    input.text ?? null,
+    meta,
+    ts,
+  );
   return {
     id, user_id: USER_ID, kind: input.kind, action: input.action ?? null,
     push_id: input.pushId ?? null, intent_card_id: input.intentCardId ?? null,
+    conversation_id: input.conversationId ?? null, message_id: input.messageId ?? null,
     source: input.source ?? 'user_direct', basket: input.basket ?? null,
+    channel: input.channel ?? null,
     value: input.value ?? null, text: input.text ?? null,
     metadata: input.metadata ?? {}, created_at: ts,
   };
@@ -679,6 +720,10 @@ export async function listFeedback(opts?: {
   since?: string;
   kind?: string;
   action?: string;
+  source?: string;
+  basket?: string;
+  channel?: string;
+  pushId?: string;
   intentCardId?: string;
   limit?: number;
 }): Promise<FeedbackRow[]> {
@@ -687,6 +732,10 @@ export async function listFeedback(opts?: {
   if (opts?.since) { parts.push('AND created_at >= ?'); params.push(opts.since); }
   if (opts?.kind) { parts.push('AND kind = ?'); params.push(opts.kind); }
   if (opts?.action) { parts.push('AND action = ?'); params.push(opts.action); }
+  if (opts?.source) { parts.push('AND source = ?'); params.push(opts.source); }
+  if (opts?.basket) { parts.push('AND basket = ?'); params.push(opts.basket); }
+  if (opts?.channel) { parts.push('AND channel = ?'); params.push(opts.channel); }
+  if (opts?.pushId) { parts.push('AND push_id = ?'); params.push(opts.pushId); }
   if (opts?.intentCardId) { parts.push('AND intent_card_id = ?'); params.push(opts.intentCardId); }
   parts.push('ORDER BY created_at DESC');
   if (opts?.limit) { parts.push('LIMIT ?'); params.push(opts.limit); }
@@ -963,6 +1012,20 @@ export interface PipelineRunRow {
   completed_at: string | null;
 }
 
+export interface RecentGeneratedCardRow {
+  runId: string;
+  cardId: string;
+  goalBasket: string | null;
+  title: string | null;
+  titleKey: string | null;
+  whyNow: string | null;
+  summary: string | null;
+  primaryActionLabel: string | null;
+  sources: string[];
+  generatedAt: string | null;
+  metadata: Record<string, unknown>;
+}
+
 function rowToPipelineRun(row: any): PipelineRunRow {
   return {
     ...row,
@@ -1000,6 +1063,71 @@ export async function listPipelineRuns(opts?: { since?: string; limit?: number }
   params.push(opts?.limit ?? 30);
   const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
   return rows.map(rowToPipelineRun);
+}
+
+export async function listRecentGeneratedCards(opts?: {
+  since?: string;
+  limit?: number;
+  basket?: string;
+}): Promise<RecentGeneratedCardRow[]> {
+  const runs = await listPipelineRuns({
+    since: opts?.since,
+    limit: 50,
+  });
+  const seen = new Set<string>();
+  const records: RecentGeneratedCardRow[] = [];
+
+  for (const run of runs) {
+    const cards = Array.isArray(run.final_cards) ? run.final_cards as Array<Record<string, unknown>> : [];
+    for (const card of cards) {
+      const cardId = typeof card.id === 'string' && card.id.trim().length > 0
+        ? card.id.trim()
+        : null;
+      if (!cardId) continue;
+      const key = `${run.run_id}:${cardId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const goalBasket = typeof card.goalBasket === 'string' ? card.goalBasket : null;
+      if (opts?.basket && goalBasket !== opts.basket) continue;
+      const title = typeof card.title === 'string' ? card.title : null;
+      const summary = typeof card.summary === 'string' ? card.summary : null;
+      const whyNow = typeof card.whyNow === 'string' ? card.whyNow : null;
+      const primaryAction = card.primaryAction && typeof card.primaryAction === 'object'
+        ? card.primaryAction as { label?: unknown }
+        : null;
+      const sources = Array.isArray(card.sources)
+        ? card.sources.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+        : [];
+      const metadata: Record<string, unknown> = {
+        agentChain: Array.isArray(card.agentChain) ? card.agentChain : [],
+        confidence: typeof card.confidence === 'number' ? card.confidence : null,
+        urgency: typeof card.urgency === 'number' ? card.urgency : null,
+        importance: typeof card.importance === 'number' ? card.importance : null,
+        cardCreatedAt: typeof card.createdAt === 'string' ? card.createdAt : null,
+      };
+
+      records.push({
+        runId: run.run_id,
+        cardId,
+        goalBasket,
+        title,
+        titleKey: title ? makeTitleKey(title) : null,
+        whyNow,
+        summary,
+        primaryActionLabel: typeof primaryAction?.label === 'string' ? primaryAction.label : null,
+        sources,
+        generatedAt: run.completed_at ?? run.started_at,
+        metadata,
+      });
+
+      if (records.length >= (opts?.limit ?? 10)) {
+        return records;
+      }
+    }
+  }
+
+  return records;
 }
 
 // ── User Settings ──

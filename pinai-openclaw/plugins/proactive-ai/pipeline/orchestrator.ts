@@ -9,6 +9,7 @@ import { DEFAULT_GENERATION_LANGUAGE, type SupportedGenerationLanguage } from '.
 import { runAgent, parseAgentJson, parseAgentJsonOrThrow } from './agent-runner.js';
 import { selectBestCards, syntheticScore, type ScoredCard } from './card-selection.js';
 import { loadRecentFeedbackSummary, formatRecentFeedbackSummary } from './feedback-summary.js';
+import { loadRecentGeneratedCardsSummary } from './generated-cards-summary.js';
 import * as db from '../db.js';
 
 export interface PipelineOptions {
@@ -38,10 +39,19 @@ export async function runPipeline(
 
   // Load feedback summary
   let feedbackSummary = '';
+  let recentGeneratedCardsSummary = '';
   try {
     feedbackSummary = formatRecentFeedbackSummary(await loadRecentFeedbackSummary());
   } catch (err) {
     api.logger.warn(`Failed to load feedback summary: ${err instanceof Error ? err.message : err}`);
+  }
+  try {
+    recentGeneratedCardsSummary = await loadRecentGeneratedCardsSummary({
+      limit: 10,
+      since: '14d',
+    });
+  } catch (err) {
+    api.logger.warn(`Failed to load recent generated cards summary: ${err instanceof Error ? err.message : err}`);
   }
 
   emit({ type: 'pipeline:start', data: { maxIterations: opts.maxIterations } });
@@ -58,6 +68,7 @@ export async function runPipeline(
     const plannerPrompt = buildPlannerPrompt({
       currentDate, iterationNumber: i, cardsPerIteration: opts.cardsPerIteration,
       recentFeedbackSummary: feedbackSummary,
+      recentGeneratedCardsSummary,
       previousFeedback: prev?.feedback, previousPlan: prev?.plan,
       previousCards: prev?.cards, previousScores: prev?.scores,
       outputLanguage,
@@ -74,6 +85,7 @@ export async function runPipeline(
     const generatorPrompt = buildGeneratorPrompt({
       currentDate, plan: JSON.stringify(plan, null, 2), iterationNumber: i,
       recentFeedbackSummary: feedbackSummary,
+      recentGeneratedCardsSummary,
       previousFeedback: prev?.feedback, previousCards: prev?.cards, previousScores: prev?.scores,
       outputLanguage,
     });

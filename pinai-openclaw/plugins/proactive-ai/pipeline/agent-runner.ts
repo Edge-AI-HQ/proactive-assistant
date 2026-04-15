@@ -79,7 +79,7 @@ function detectAgentErrorMessage(text: string): string | null {
   return null;
 }
 
-function detectAgentErrorInMessages(messages: unknown[]): string | null {
+export function detectAgentErrorInMessages(messages: unknown[]): string | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i] as { error?: string; content?: unknown } | undefined;
     if (!msg) continue;

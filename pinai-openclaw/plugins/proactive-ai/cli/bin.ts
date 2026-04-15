@@ -13,6 +13,7 @@ import { handleWorld } from './world.js';
 import { handleFeedback } from './feedback.js';
 import { handlePush } from './push.js';
 import { handleSys } from './sys.js';
+import { handleCards } from './cards.js';
 
 const DOMAINS: Record<string, (args: string[]) => Promise<string>> = {
   profile: handleProfile,
@@ -20,6 +21,7 @@ const DOMAINS: Record<string, (args: string[]) => Promise<string>> = {
   world: handleWorld,
   feedback: handleFeedback,
   push: handlePush,
+  cards: handleCards,
   sys: handleSys,
 };
 

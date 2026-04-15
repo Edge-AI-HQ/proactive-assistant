@@ -16,6 +16,7 @@
 import type { RouteHandler, RouteContext } from './types.js';
 import { json, readBody, extractTextContent } from './types.js';
 import { buildChatPrompt, type ChatCardContext } from '../agents/chat.js';
+import { normalizeCardChatMessages } from '../chat-feedback/service.js';
 
 /**
  * Try to parse a cardContext string as structured JSON.
@@ -31,9 +32,6 @@ function tryParseCardContext(raw: string | undefined): ChatCardContext | undefin
   } catch { /* not JSON — will fall back to rawCardContext */ }
   return undefined;
 }
-
-/** Marker prefix injected into system-generated first messages for history filtering. */
-const INJECTED_MSG_PREFIX = 'The user opened ';
 
 export function resolveIncomingChatMessage(params: {
   message?: string;
@@ -201,17 +199,12 @@ async function handleHistory(ctx: RouteContext): Promise<boolean> {
   if (!sessionKey) { json(ctx.res, 400, { error: 'Missing sessionKey' }); return true; }
   try {
     const result = await ctx.api.runtime.subagent.getSessionMessages({ sessionKey, limit: 50 });
-    const seenAssistant = new Set<string>();
-    const messages = (result.messages as Array<{ role?: string; content?: unknown }>)
-      .filter(m => m.role === 'user' || m.role === 'assistant')
-      .map((m, i) => ({ id: `${m.role}-${i}`, role: m.role as string, content: extractTextContent(m.content) }))
-      .filter(m => {
-        if (!m.content) return false;
-        // Hide injected first-turn messages (system-generated, not user-typed)
-        if (m.role === 'user' && m.content.startsWith(INJECTED_MSG_PREFIX)) return false;
-        if (m.role === 'assistant') { if (seenAssistant.has(m.content)) return false; seenAssistant.add(m.content); }
-        return true;
-      });
+    const messages = normalizeCardChatMessages(result.messages as unknown[])
+      .map((message, i) => ({
+        id: `${message.role}-${i}`,
+        role: message.role,
+        content: message.content,
+      }));
     json(ctx.res, 200, { ok: true, sessionKey, messages });
   } catch { json(ctx.res, 200, { ok: true, sessionKey, messages: [] }); }
   return true;
