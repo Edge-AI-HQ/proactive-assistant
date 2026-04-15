@@ -104,11 +104,10 @@ push 到 `proactive-ai-v2` 后根据改动范围自动部署，不需要手动�
 - 改 `pinai-openclaw/` → 自动构建镜像、更新 OPENCLAW_IMAGE digest、部署 APIs
 - 改 `ops/litellm/` → 自动部署 LiteLLM
 
-### Prod 环境（手动）
-在 GitHub Actions 页面手动触发对应 workflow：
-- **Deploy Prod** → 部署 APIs + 前端
-- **Deploy LiteLLM**（选 prod）→ 部署 LiteLLM
-- OpenClaw 镜像 prod 更新：先本地 `npx dotenvx set OPENCLAW_IMAGE "digest" -f apis/.env.production`，commit push 后触发 Deploy Prod
+### Prod 环境（手动触发）
+在 GitHub Actions 页面手动触发 **Deploy Prod**，或 push `v*` tag：
+- 自动 promote OPENCLAW_IMAGE digest（从 .env.dev → .env.production，同一镜像不重新构建）
+- 部署 APIs + 前端 + LiteLLM
 
 ### 本地部署（备用）
 CI/CD 不可用时可以本地直接部署：
