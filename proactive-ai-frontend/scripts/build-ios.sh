@@ -129,6 +129,10 @@ xcodebuild \
   -configuration Release \
   -destination "generic/platform=iOS" \
   -archivePath "$ARCHIVE_PATH" \
+  -allowProvisioningUpdates \
+  -authenticationKeyPath "$ASC_API_KEY_PATH" \
+  -authenticationKeyID "$ASC_KEY_ID" \
+  -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
   archive 2>&1 | tee "$BUILD_LOG" | grep -E '^\*\*|error:|warning:' || true
 
 if [ ! -d "$ARCHIVE_PATH" ]; then
