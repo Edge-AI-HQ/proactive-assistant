@@ -134,6 +134,17 @@ router.delete('/api/proactive/user/account', requireProactiveAuth, async (req, r
   }
 });
 
+router.post('/api/proactive/container/reset', requireProactiveAuth, async (req, res) => {
+  try {
+    const orchestrator = getOrchestrator();
+    const result = await orchestrator.resetContainer(req.proactiveAuth!.userId);
+    res.json({ ok: true, containerId: result.containerId, ready: result.ready });
+  } catch (err) {
+    console.error('[proactive] container/reset error:', err);
+    res.status(500).json({ error: 'Failed to reset container' });
+  }
+});
+
 router.post('/api/proactive/container/destroy', requireProactiveAuth, async (req, res) => {
   try {
     const orchestrator = getOrchestrator();
