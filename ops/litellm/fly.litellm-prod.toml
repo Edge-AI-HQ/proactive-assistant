@@ -11,7 +11,7 @@ primary_region = 'iad'
   DISABLE_SCHEMA_UPDATE = 'true'
 
 [deploy]
-  release_command = "sh -c 'dotenvx run -f .env.${DEPLOY_ENV} -- litellm --config /app/config.yaml --skip_server_startup'"
+  release_command = "--config /app/config.yaml --skip_server_startup"
 
 [http_service]
   internal_port = 4000
