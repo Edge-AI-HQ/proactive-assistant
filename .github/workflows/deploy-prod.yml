@@ -27,13 +27,56 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  deploy-apis:
+  promote-openclaw:
     needs: release
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: write
+    outputs:
+      deploy-ref: ${{ steps.promote.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: proactive-ai-v2
+          submodules: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Promote OPENCLAW_IMAGE from dev to prod
+        id: promote
+        run: |
+          DEV_DIGEST=$(npx @dotenvx/dotenvx get OPENCLAW_IMAGE -f apis/.env.dev)
+          PROD_DIGEST=$(npx @dotenvx/dotenvx get OPENCLAW_IMAGE -f apis/.env.production)
+
+          if [ "$DEV_DIGEST" = "$PROD_DIGEST" ]; then
+            echo "OPENCLAW_IMAGE already in sync, skipping"
+            echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          else
+            echo "Promoting OPENCLAW_IMAGE: ${DEV_DIGEST}"
+            npx @dotenvx/dotenvx set OPENCLAW_IMAGE "$DEV_DIGEST" -f apis/.env.production
+
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add apis/.env.production
+            git commit -m "chore: promote OPENCLAW_IMAGE to prod [skip ci]"
+            git push
+            echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
+          DOTENV_PRIVATE_KEY_PRODUCTION: ${{ secrets.DOTENV_PRIVATE_KEY_PRODUCTION }}
+
+  deploy-apis:
+    needs: [release, promote-openclaw]
     runs-on: ubuntu-latest
     environment: production
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.promote-openclaw.outputs.deploy-ref }}
           submodules: false
 
       - uses: actions/setup-node@v4
