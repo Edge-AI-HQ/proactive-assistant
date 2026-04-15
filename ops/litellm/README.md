@@ -43,7 +43,7 @@ app 启动:   DISABLE_SCHEMA_UPDATE=true → 跳过 migration → 秒起
   DISABLE_SCHEMA_UPDATE = 'true'
 
 [deploy]
-  release_command = "sh -c 'dotenvx run -f .env.${DEPLOY_ENV} -- litellm --config /app/config.yaml --skip_server_startup'"
+  release_command = "--config /app/config.yaml --skip_server_startup"
 ```
 
 **`litellm_config.yaml`**：
