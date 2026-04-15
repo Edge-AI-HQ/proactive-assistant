@@ -16,8 +16,7 @@ EXPOSE 4000
 ARG DEPLOY_ENV=dev
 ENV DEPLOY_ENV=${DEPLOY_ENV}
 
-# 必须覆盖 ENTRYPOINT，否则 prod_entrypoint.sh 会忽略 --host 参数
-# exec ensures litellm is PID 1 and receives SIGTERM for graceful shutdown
-ENTRYPOINT ["sh", "-c", "exec dotenvx run -f .env.${DEPLOY_ENV} -- litellm \"$@\"", "--"]
-# 单进程模式：通过 Fly.io 水平扩展提高吞吐量
-CMD ["--host", "0.0.0.0", "--port", "4000", "--config", "/app/config.yaml"]
+# Clear base image ENTRYPOINT (prod_entrypoint.sh ignores --host).
+ENTRYPOINT []
+# LiteLLM auto-runs Prisma migration on startup — no need for release_command.
+CMD ["sh", "-c", "exec dotenvx run -f .env.${DEPLOY_ENV} -- litellm --host 0.0.0.0 --port 4000 --config /app/config.yaml"]

@@ -1,8 +1,7 @@
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   # 与 apis 共用同一库，通过 ?schema=litellm 隔离，表建在 litellm schema 不碰 public
-  # Migration 由 fly.toml release_command 在 deploy 时执行，app 启动时通过
-  # DISABLE_SCHEMA_UPDATE=true 跳过，避免每次重启 40s+ Prisma 迁移检查
+  # LiteLLM 启动时自动跑 Prisma migration 建表/更新表
   database_url: os.environ/DATABASE_URL
   # 健康检查端点不需要认证
   disable_auth_on_health: true

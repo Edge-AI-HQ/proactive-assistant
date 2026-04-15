@@ -8,10 +8,6 @@ primary_region = 'iad'
 
 [env]
   PORT = '4000'
-  DISABLE_SCHEMA_UPDATE = 'true'
-
-[deploy]
-  release_command = "--config /app/config.yaml --skip_server_startup"
 
 [http_service]
   internal_port = 4000
