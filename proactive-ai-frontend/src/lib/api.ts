@@ -11,6 +11,75 @@
 import { supabase } from "./supabase";
 import { API_BASE } from "./platform";
 
+export interface Goal {
+  id: string;
+  user_id: string;
+  key: string;
+  title: string;
+  priority: string;
+  status: string;
+  summary: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProfileRecord {
+  id: string;
+  user_id: string;
+  display_name: string;
+  locale: string;
+  timezone: string;
+  summary: string | null;
+  facts: Record<string, unknown>;
+  preferences: Record<string, unknown>;
+  constraints: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ProfileMemory {
+  id: string;
+  user_id: string;
+  kind: string;
+  text: string;
+  tags: string[];
+  created_at: string;
+}
+
+export interface ProfileSignal {
+  id: string;
+  user_id: string;
+  kind: string;
+  target_type: string;
+  target_key: string;
+  value: number | null;
+  source: string | null;
+  context: Record<string, unknown> | null;
+  occurred_at: string;
+  created_at: string;
+}
+
+export interface ProfileInterest {
+  id: string;
+  user_id: string;
+  kind: string;
+  key: string;
+  score: number;
+  confidence: number;
+  evidence_count: number;
+  status: string;
+  last_signal_at: string | null;
+}
+
+export interface ProfileSnapshot {
+  profile: ProfileRecord | null;
+  goals: Goal[];
+  memories: ProfileMemory[];
+  signals: ProfileSignal[];
+  interests: ProfileInterest[];
+}
+
 async function getAccessToken(): Promise<string | null> {
   const {
     data: { session },
@@ -23,6 +92,26 @@ async function authHeaders(): Promise<Record<string, string>> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+async function readErrorMessage(res: Response): Promise<string> {
+  try {
+    const text = await res.text();
+    if (!text) return `${res.status}`;
+
+    try {
+      const data = JSON.parse(text) as { error?: unknown };
+      if (typeof data?.error === "string" && data.error.trim()) {
+        return `${res.status} ${data.error}`;
+      }
+    } catch {
+      // Fall back to the raw response text when the body is not JSON.
+    }
+
+    return `${res.status} ${text}`;
+  } catch {
+    return `${res.status}`;
+  }
+}
+
 /**
  * Refresh the Supabase session and return a fresh access token.
  * Returns null if refresh fails (user should be signed out).
@@ -33,23 +122,44 @@ async function refreshAndGetToken(): Promise<string | null> {
   return data.session.access_token;
 }
 
+async function proactiveFetch(
+  path: string,
+  init?: RequestInit
+): Promise<Response> {
+  const headers: Record<string, string> = {
+    ...(await authHeaders()),
+    ...((init?.headers as Record<string, string>) ?? {}),
+  };
+
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  if (res.status !== 401) return res;
+
+  const freshToken = await refreshAndGetToken();
+  if (!freshToken) return res;
+
+  return fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      ...headers,
+      Authorization: `Bearer ${freshToken}`,
+    },
+  });
+}
+
 // ── APIs endpoints (/api/proactive/*) ──
 
 export async function fetchMe(): Promise<{
   user: { id: string; email: string; name: string | null; avatar_url: string | null };
   container: { status: string; created_at: string } | null;
 }> {
-  const res = await fetch(`${API_BASE}/api/proactive/auth/me`, {
-    headers: await authHeaders(),
-  });
-  if (!res.ok) throw new Error(`/auth/me failed: ${res.status}`);
+  const res = await proactiveFetch("/api/proactive/auth/me");
+  if (!res.ok) throw new Error(`/auth/me failed: ${await readErrorMessage(res)}`);
   return res.json();
 }
 
 export async function heartbeat(): Promise<void> {
-  await fetch(`${API_BASE}/api/proactive/user/heartbeat`, {
+  await proactiveFetch("/api/proactive/user/heartbeat", {
     method: "POST",
-    headers: await authHeaders(),
   });
 }
 
@@ -58,20 +168,18 @@ export async function ensureContainer(): Promise<{
   ready: boolean;
   status: string;
 }> {
-  const res = await fetch(`${API_BASE}/api/proactive/container/ensure`, {
+  const res = await proactiveFetch("/api/proactive/container/ensure", {
     method: "POST",
-    headers: await authHeaders(),
   });
-  if (!res.ok) throw new Error(`/container/ensure failed: ${res.status}`);
+  if (!res.ok) throw new Error(`/container/ensure failed: ${await readErrorMessage(res)}`);
   return res.json();
 }
 
 export async function destroyContainer(): Promise<{ ok: boolean }> {
-  const res = await fetch(`${API_BASE}/api/proactive/container/destroy`, {
+  const res = await proactiveFetch("/api/proactive/container/destroy", {
     method: "POST",
-    headers: await authHeaders(),
   });
-  if (!res.ok) throw new Error(`/container/destroy failed: ${res.status}`);
+  if (!res.ok) throw new Error(`/container/destroy failed: ${await readErrorMessage(res)}`);
   return res.json();
 }
 
@@ -79,21 +187,18 @@ export async function fetchContainerStatus(): Promise<{
   status: string;
   created_at?: string;
 }> {
-  const res = await fetch(`${API_BASE}/api/proactive/container/status`, {
-    headers: await authHeaders(),
-  });
-  if (!res.ok) throw new Error(`/container/status failed: ${res.status}`);
+  const res = await proactiveFetch("/api/proactive/container/status");
+  if (!res.ok) throw new Error(`/container/status failed: ${await readErrorMessage(res)}`);
   return res.json();
 }
 
 // ── Account deletion ──
 
 export async function deleteAccount(): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/proactive/user/account`, {
+  const res = await proactiveFetch("/api/proactive/user/account", {
     method: "DELETE",
-    headers: await authHeaders(),
   });
-  if (!res.ok) throw new Error(`/user/account delete failed: ${res.status}`);
+  if (!res.ok) throw new Error(`/user/account delete failed: ${await readErrorMessage(res)}`);
 }
 
 // ── Gateway ticket ──
@@ -103,11 +208,10 @@ export async function getGatewayTicket(): Promise<{
   expiresIn: number;
   url: string;
 }> {
-  const res = await fetch(`${API_BASE}/api/proactive/gateway/ticket`, {
+  const res = await proactiveFetch("/api/proactive/gateway/ticket", {
     method: "POST",
-    headers: await authHeaders(),
   });
-  if (!res.ok) throw new Error(`/gateway/ticket failed: ${res.status}`);
+  if (!res.ok) throw new Error(`/gateway/ticket failed: ${await readErrorMessage(res)}`);
   return res.json();
 }
 
@@ -169,6 +273,22 @@ export async function proxyPost(
     body: JSON.stringify(body),
     signal,
   });
+}
+
+export async function fetchProfileSnapshot(
+  signal?: AbortSignal
+): Promise<ProfileSnapshot> {
+  const res = await proxyFetch("/profile", { signal });
+  if (!res.ok) throw new Error(`/profile failed: ${res.status}`);
+
+  const data = await res.json();
+  return {
+    profile: data?.profile ?? null,
+    goals: Array.isArray(data?.goals) ? data.goals : [],
+    memories: Array.isArray(data?.memories) ? data.memories : [],
+    signals: Array.isArray(data?.signals) ? data.signals : [],
+    interests: Array.isArray(data?.interests) ? data.interests : [],
+  };
 }
 
 /**

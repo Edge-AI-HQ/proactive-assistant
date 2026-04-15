@@ -29,7 +29,7 @@ interface AppShellProps {
 const tabs = [
   { id: "now", label: "NOW", icon: Zap },
   { id: "chat", label: "CHAT", icon: MessageCircle },
-  { id: "goals", label: "GOALS", icon: Target },
+  { id: "goals", label: "PROFILE", icon: Target },
   { id: "settings", label: "SETTINGS", icon: Settings },
 ] as const;
 
