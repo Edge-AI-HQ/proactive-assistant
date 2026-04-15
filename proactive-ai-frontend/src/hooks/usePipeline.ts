@@ -6,7 +6,12 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { proxyFetch } from "@/lib/api";
-import type { IntentCard, EvaluationScore, EvaluatorOutput } from "@/types/intent-card";
+import {
+  normalizeIntentCards,
+  type IntentCard,
+  type EvaluationScore,
+  type EvaluatorOutput,
+} from "@/types/intent-card";
 
 export type { IntentCard, EvaluationScore, EvaluatorOutput };
 
@@ -94,7 +99,19 @@ function loadRunState(): RunState | null {
       sessionStorage.removeItem(STORAGE_KEY);
       return null;
     }
-    return parsed;
+    return {
+      ...parsed,
+      finalCards: normalizeIntentCards(parsed.finalCards),
+      iterationDetails: Object.fromEntries(
+        Object.entries(parsed.iterationDetails ?? {}).map(([key, value]) => [
+          key,
+          {
+            ...value,
+            cards: normalizeIntentCards(value?.cards),
+          },
+        ]),
+      ),
+    };
   } catch {
     return null;
   }
@@ -151,7 +168,7 @@ export function usePipeline() {
             runId: data.lastResult.id ?? prev.runId,
             status: "complete",
             activePhase: "complete",
-            finalCards: data.lastResult.finalCards ?? [],
+            finalCards: normalizeIntentCards(data.lastResult.finalCards),
             totalIterations: data.lastResult.totalIterations ?? 0,
             completedAt: data.lastResult.completedAt ?? new Date().toISOString(),
           }));
@@ -231,7 +248,7 @@ export function usePipeline() {
           if (data.lastResult?.finalCards?.length > 0) {
             setRun((prev) => ({
               ...prev, runId: data.lastResult.id ?? prev.runId, status: "complete", activePhase: "complete",
-              finalCards: data.lastResult.finalCards,
+              finalCards: normalizeIntentCards(data.lastResult.finalCards),
               totalIterations: data.lastResult.totalIterations,
               completedAt: data.lastResult.completedAt,
             }));
@@ -262,9 +279,15 @@ export function usePipeline() {
         case "pipeline:cards":
           setRun((prev) => ({
             ...prev,
-            iterationDetails: { ...prev.iterationDetails, [event.data.iteration as number]: { ...(prev.iterationDetails[event.data.iteration as number] || {}), cards: event.data.cards as IntentCard[] } },
+            iterationDetails: {
+              ...prev.iterationDetails,
+              [event.data.iteration as number]: {
+                ...(prev.iterationDetails[event.data.iteration as number] || {}),
+                cards: normalizeIntentCards(event.data.cards),
+              },
+            },
           }));
-          appendLog(makeLogEntry("cards", `Iteration ${event.data.iteration} cards`, `${(event.data.cards as IntentCard[]).length} cards generated`, { iteration: event.data.iteration as number }));
+          appendLog(makeLogEntry("cards", `Iteration ${event.data.iteration} cards`, `${normalizeIntentCards(event.data.cards).length} cards generated`, { iteration: event.data.iteration as number }));
           break;
         case "pipeline:evaluation": {
           setRun((prev) => {
@@ -288,10 +311,10 @@ export function usePipeline() {
             runId: (event.data.runId as string) ?? prev.runId,
             status: "complete", activePhase: "complete",
             completedAt: new Date().toISOString(),
-            finalCards: event.data.finalCards as IntentCard[],
+            finalCards: normalizeIntentCards(event.data.finalCards),
             totalIterations: event.data.totalIterations as number,
           }));
-          appendLog(makeLogEntry("complete", "Pipeline complete", `${(event.data.finalCards as IntentCard[]).length} cards selected after ${event.data.totalIterations} iterations`));
+          appendLog(makeLogEntry("complete", "Pipeline complete", `${normalizeIntentCards(event.data.finalCards).length} cards selected after ${event.data.totalIterations} iterations`));
           setHealth((h) => ({ ...h, pipelineRunning: false }));
           closeSource();
           break;

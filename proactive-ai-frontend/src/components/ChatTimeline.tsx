@@ -5,7 +5,11 @@ import {
   Loader2, Check, MessageCircle,
   type LucideIcon,
 } from "lucide-react";
-import type { IntentCard, EvaluationScore } from "@/types/intent-card";
+import {
+  normalizeIntentCards,
+  type IntentCard,
+  type EvaluationScore,
+} from "@/types/intent-card";
 import { proxyFetch } from "@/lib/api";
 
 const BASKET_ICONS: Record<string, LucideIcon> = {
@@ -55,7 +59,12 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
         const res = await proxyFetch("/runs", { signal: controller.signal });
         const data = await res.json();
         if (!controller.signal.aborted && data.ok) {
-          setHistoricalRuns(data.runs ?? []);
+          setHistoricalRuns(
+            (data.runs ?? []).map((run: StoredRun) => ({
+              ...run,
+              finalCards: normalizeIntentCards(run.finalCards),
+            })),
+          );
         }
       } catch (err) {
         if (!controller.signal.aborted) {

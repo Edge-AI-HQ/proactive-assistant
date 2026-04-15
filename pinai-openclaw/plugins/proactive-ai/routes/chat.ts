@@ -35,6 +35,14 @@ function tryParseCardContext(raw: string | undefined): ChatCardContext | undefin
 /** Marker prefix injected into system-generated first messages for history filtering. */
 const INJECTED_MSG_PREFIX = 'The user opened ';
 
+export function resolveIncomingChatMessage(params: {
+  message?: string;
+  firstMessage?: string;
+}): string {
+  const userMessage = typeof params.message === 'string' ? params.message.trim() : '';
+  return userMessage || params.firstMessage || '';
+}
+
 export function handleChat(): RouteHandler {
   return async (ctx) => {
     // ── GET /chat/history or /chat-stream/history ──
@@ -68,7 +76,10 @@ export function handleChat(): RouteHandler {
         card,
         rawCardContext: card ? undefined : rawCardCtx,
       });
-      const message = firstMessage || (typeof body.message === 'string' ? body.message.trim() : '');
+      const message = resolveIncomingChatMessage({
+        message: body.message,
+        firstMessage,
+      });
 
       if (!sessionKey || !message) {
         json(ctx.res, 400, { error: 'Missing sessionKey; provide message or cardContext' });
@@ -157,7 +168,10 @@ export function handleChat(): RouteHandler {
         card,
         rawCardContext: card ? undefined : rawCtx,
       });
-      const agentMessage = firstMessage || body.message?.trim();
+      const agentMessage = resolveIncomingChatMessage({
+        message: body.message,
+        firstMessage,
+      });
       if (!agentMessage) { json(ctx.res, 400, { error: 'Missing message' }); return true; }
 
       try {

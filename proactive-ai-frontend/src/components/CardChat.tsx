@@ -1,4 +1,5 @@
 import type { IntentCard, EvaluationScore } from "@/types/intent-card";
+import { useMemo } from "react";
 import Chat from "./Chat";
 
 interface CardChatProps {
@@ -12,23 +13,26 @@ function stableSessionKey(cardId: string): string {
 }
 
 export default function CardChat({ card, score, onBack }: CardChatProps) {
-  const cardContext = {
-    title: card.title,
-    goalBasket: card.goalBasket,
-    whyNow: card.whyNow,
-    summary: card.summary,
-    primaryAction: card.primaryAction,
-    secondaryActions: card.secondaryActions,
-    confidence: card.confidence,
-    urgency: card.urgency,
-    importance: card.importance,
-    sources: card.sources,
-    ...(score && {
-      evaluatorScore: score.overall,
-      evaluatorFeedback: score.feedback,
-      evaluatorDimensions: score.dimensions,
+  const cardContext = useMemo(
+    () => ({
+      title: card.title,
+      goalBasket: card.goalBasket,
+      whyNow: card.whyNow,
+      summary: card.summary,
+      primaryAction: card.primaryAction,
+      secondaryActions: card.secondaryActions,
+      confidence: card.confidence,
+      urgency: card.urgency,
+      importance: card.importance,
+      sources: card.sources,
+      ...(score && {
+        evaluatorScore: score.overall,
+        evaluatorFeedback: score.feedback,
+        evaluatorDimensions: score.dimensions,
+      }),
     }),
-  };
+    [card, score],
+  );
 
   return (
     <Chat
