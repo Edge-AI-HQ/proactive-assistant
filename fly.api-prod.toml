@@ -26,6 +26,7 @@ primary_region = 'iad'
     soft_limit = 100
 
 [deploy]
+  release_command = 'dotenvx run -f .env.production -- node scripts/run-all-migrations.mjs'
   strategy = 'rolling'
 
 [[vm]]
