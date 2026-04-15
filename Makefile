@@ -3,7 +3,7 @@
 .PHONY: logs logs-apis logs-litellm logs-postgres
 .PHONY: migrate reset clean
 .PHONY: deploy-dev deploy-prod deploy-litellm-dev deploy-litellm-prod build-openclaw-image
-.PHONY: ios-sim ios-device
+.PHONY: ios-sim
 
 COMPOSE := docker compose
 DOTENVX := npx @dotenvx/dotenvx
