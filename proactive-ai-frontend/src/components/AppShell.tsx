@@ -110,15 +110,13 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
     } catch { return new Set(); }
   });
 
-  // NOW view layout + animation state
+  // NOW view layout. Cards stay mounted across swipes; reshuffling just
+  // changes `currentLayoutIdx`, causing each card's `style.left/top` to
+  // update. A CSS transition on left/top makes them drift smoothly to the
+  // new slot — no fly-out, no unmount/remount.
   const [currentLayoutIdx, setCurrentLayoutIdx] = useState(() => Math.floor(Math.random() * SLOT_LAYOUTS.length));
-  const [scatterKey, setScatterKey] = useState(0);
-  const [globalExitDirection, setGlobalExitDirection] = useState<"left" | "scatter">("scatter");
-  const [gathered, setGathered] = useState(false);
   const touchStartY = useRef<number | null>(null);
   const touchStartX = useRef<number | null>(null);
-  const pinchStartDist = useRef<number | null>(null);
-  const isScattering = useRef(false);
 
   // Track which cards are "new" (appeared in latest pipeline run)
   const [seenCardIds, setSeenCardIds] = useState<Set<string>>(new Set());
@@ -344,71 +342,31 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
     setMenuOpen(false);
   };
 
-  // ── Swipe refresh handlers (NOW view) ──
+  // ── Swipe-to-reshuffle (NOW view) ──
 
-  const handleSwipeRefresh = useCallback((direction: "left" | "scatter") => {
-    if (isScattering.current) return;
-    isScattering.current = true;
-    setGlobalExitDirection(direction);
-    setScatterKey((k) => k + 1);
-
-    setTimeout(() => {
-      setGlobalExitDirection("scatter");
-      setCurrentLayoutIdx((prev) => {
-        const candidates = Array.from({ length: SLOT_LAYOUTS.length }, (_, i) => i).filter(i => i !== prev);
-        return candidates[Math.floor(Math.random() * candidates.length)];
-      });
-      isScattering.current = false;
-    }, 400);
+  const triggerReshuffle = useCallback(() => {
+    setCurrentLayoutIdx((prev) => {
+      const candidates = Array.from({ length: SLOT_LAYOUTS.length }, (_, i) => i).filter(i => i !== prev);
+      return candidates[Math.floor(Math.random() * candidates.length)];
+    });
   }, []);
 
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    if (e.touches.length === 2) {
-      const dx = e.touches[0].clientX - e.touches[1].clientX;
-      const dy = e.touches[0].clientY - e.touches[1].clientY;
-      pinchStartDist.current = Math.sqrt(dx * dx + dy * dy);
-      touchStartX.current = null;
-      touchStartY.current = null;
-    } else if (e.touches.length === 1) {
-      touchStartY.current = e.touches[0].clientY;
-      touchStartX.current = e.touches[0].clientX;
-      pinchStartDist.current = null;
-    }
+    if (e.touches.length !== 1) return;
+    touchStartY.current = e.touches[0].clientY;
+    touchStartX.current = e.touches[0].clientX;
   }, []);
 
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
-    if (pinchStartDist.current !== null && e.changedTouches.length >= 1) {
-      const remaining = e.touches;
-      if (remaining.length === 1) {
-        const dx = e.changedTouches[0].clientX - remaining[0].clientX;
-        const dy = e.changedTouches[0].clientY - remaining[0].clientY;
-        const endDist = Math.sqrt(dx * dx + dy * dy);
-        const delta = endDist - pinchStartDist.current;
-        if (delta < -50) setGathered(true);
-        else if (delta > 50) setGathered(false);
-      } else if (remaining.length === 0 && e.changedTouches.length === 2) {
-        const dx = e.changedTouches[0].clientX - e.changedTouches[1].clientX;
-        const dy = e.changedTouches[0].clientY - e.changedTouches[1].clientY;
-        const endDist = Math.sqrt(dx * dx + dy * dy);
-        const delta = endDist - pinchStartDist.current;
-        if (delta < -50) setGathered(true);
-        else if (delta > 50) setGathered(false);
-      }
-      pinchStartDist.current = null;
-      return;
-    }
-
     if (touchStartY.current === null || touchStartX.current === null) return;
     const deltaY = touchStartY.current - e.changedTouches[0].clientY;
     const deltaX = touchStartX.current - e.changedTouches[0].clientX;
     touchStartY.current = null;
     touchStartX.current = null;
-    if (deltaX > 80 && Math.abs(deltaX) > Math.abs(deltaY)) {
-      handleSwipeRefresh("left");
-    } else if (Math.abs(deltaY) > 80) {
-      handleSwipeRefresh("scatter");
+    if (Math.max(Math.abs(deltaX), Math.abs(deltaY)) > 80) {
+      triggerReshuffle();
     }
-  }, [handleSwipeRefresh]);
+  }, [triggerReshuffle]);
 
   // ── Render NOW view (floating cards around sphere) ──
 
@@ -487,7 +445,10 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
             </div>
           )}
 
-          {/* Floating cards */}
+          {/* Floating cards. Cards stay mounted across swipes; left/top change
+              on reshuffle and the CSS transition below slides them smoothly to
+              their new slot. AnimatePresence only handles per-card dismissal
+              (when a card is filtered out of visibleCards). */}
           <AnimatePresence mode="popLayout">
             {visibleCards.map((card, i) => {
               const pos = positions[card.slotIndex % positions.length];
@@ -495,27 +456,13 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
               const CatIcon = meta.icon;
               const isNew = !seenCardIds.has(card.id);
               const isProcessing = processingIds.has(card.id);
-
-              const cardCenterX = pos.left + 20;
-              const cardCenterY = 50 + pos.y;
-              const dx = cardCenterX - 50;
-              const dy = cardCenterY - 50;
-              const mag = Math.sqrt(dx * dx + dy * dy) || 1;
-              const exitX = (dx / mag) * 400;
-              const exitY = (dy / mag) * 400;
-
-              const flyLeft = card.exitDirection === "left" || globalExitDirection === "left";
               const floatDur = 6 + (i % 3) * 1.5;
               const floatDelay = i * 0.8;
 
-              const gatheredLeft = 36 + (i % 2 === 0 ? -2 : 2) + (i % 3) * 1.5;
-              const gatheredY = -6 + i * 1.2;
-              const gatheredRotate = (i % 2 === 0 ? -1 : 1) * (2 + (i % 4));
-
               return (
                 <motion.button
-                  key={`float-${card.id}-${scatterKey}`}
-                  drag={gathered ? false : "x"}
+                  key={card.id}
+                  drag="x"
                   dragConstraints={{ left: 0, right: 0 }}
                   dragElastic={0.4}
                   onDragEnd={(_e, info) => {
@@ -524,43 +471,30 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
                     }
                   }}
                   initial={{ opacity: 0, scale: 0.85 }}
-                  animate={{ opacity: 1, scale: gathered ? 0.85 : 1 }}
-                  exit={flyLeft ? {
-                    opacity: 0,
-                    scale: 0.7,
-                    x: -350,
-                    rotate: -12,
-                    transition: { duration: 0.3, ease: [0.4, 0, 1, 1], delay: i * 0.03 },
-                  } : {
-                    opacity: 0,
-                    scale: 0.7,
-                    x: exitX,
-                    y: exitY,
-                    rotate: (i % 2 === 0 ? 1 : -1) * (8 + i % 10),
-                    transition: { duration: 0.3, ease: [0.4, 0, 1, 1], delay: i * 0.03 },
-                  }}
-                  transition={{ duration: 0.4, ease: "easeOut", delay: i * 0.04 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.7, x: -300, transition: { duration: 0.25 } }}
+                  transition={{ duration: 0.5, ease: "easeOut" }}
                   onClick={() => handleCardTap(card)}
                   className={`absolute glass-card-strong px-2.5 py-2 cursor-pointer card-float ${
                     isNew ? "ring-1 ring-pink-400/40" : isProcessing ? "ring-1 ring-amber-400/40" : ""
                   }`}
                   style={{
-                    left: gathered ? `${gatheredLeft}%` : `${pos.left}%`,
-                    top: gathered ? `calc(50% + ${gatheredY}%)` : `calc(50% + ${pos.y}%)`,
+                    left: `${pos.left}%`,
+                    top: `calc(50% + ${pos.y}%)`,
                     width: `${33 + (parseInt(card.id.replace(/\D/g, ""), 10) % 4) * 5}%`,
                     maxWidth: 180,
                     minWidth: 110,
                     borderRadius: 16,
-                    boxShadow: gathered
-                      ? "0 4px 20px rgba(0,0,0,0.1)"
-                      : "0 2px 12px rgba(0,0,0,0.06)",
-                    zIndex: gathered ? 10 + i : 10,
-                    transform: gathered ? `rotate(${gatheredRotate}deg)` : undefined,
-                    transition: "left 0.45s cubic-bezier(0.22,1,0.36,1), top 0.45s cubic-bezier(0.22,1,0.36,1), box-shadow 0.3s ease",
-                    willChange: "transform, opacity, left, top",
+                    boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
+                    zIndex: 10,
+                    // Smooth drift to new slot on reshuffle. Using CSS
+                    // transition on left/top means each card independently
+                    // interpolates its position — GPU-friendly, no React
+                    // work per frame.
+                    transition: "left 0.75s cubic-bezier(0.22,1,0.36,1), top 0.75s cubic-bezier(0.22,1,0.36,1)",
+                    willChange: "left, top, transform, opacity",
                     animationDuration: `${floatDur}s`,
                     animationDelay: `${floatDelay}s`,
-                    animationPlayState: gathered ? "paused" : "running",
                   }}
                 >
                   <div className="flex items-center gap-1.5 mb-0.5">
