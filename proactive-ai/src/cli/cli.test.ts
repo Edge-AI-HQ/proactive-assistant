@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import Database from "better-sqlite3";
 
 import * as core from "../core/index.js";
 import { runCli } from "./cli.js";
@@ -123,6 +124,86 @@ interface PersonalExecData {
   data: unknown;
 }
 
+interface MobileItemRecord {
+  id: string;
+  itemType: string;
+  status: string;
+  title: string;
+  summary: string;
+  deviceId: string;
+  dedupeKey: string | null;
+}
+
+function seedMobileDb(
+  filename: string,
+  items: Array<{
+    id: string;
+    deviceId?: string;
+    itemType: string;
+    status?: string;
+    title: string;
+    summary: string;
+    dedupeKey?: string;
+    occurredAt?: string;
+    availableAt?: string;
+    expiresAt?: string | null;
+  }>,
+): void {
+  const db = new Database(filename);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS mobile_items (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      device_id TEXT NOT NULL,
+      item_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      salience REAL NOT NULL DEFAULT 0,
+      confidence REAL NOT NULL DEFAULT 0,
+      dedupe_key TEXT,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'claimed', 'processed', 'expired')),
+      occurred_at TEXT NOT NULL,
+      available_at TEXT NOT NULL,
+      expires_at TEXT,
+      processed_at TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS mobile_item_runs (
+      run_token TEXT PRIMARY KEY,
+      item_ids_json TEXT NOT NULL,
+      item_count INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('open', 'committed', 'expired')),
+      committed_at TEXT
+    );
+  `);
+  const insert = db.prepare(`
+    INSERT INTO mobile_items (
+      id, user_id, device_id, item_type, title, summary, payload_json, salience, confidence, dedupe_key,
+      status, occurred_at, available_at, expires_at, processed_at, created_at
+    ) VALUES (?, 'local', ?, ?, ?, ?, '{}', 0.6, 0.7, ?, ?, ?, ?, ?, NULL, ?)
+  `);
+  const createdAt = new Date("2026-04-16T11:00:00.000Z").toISOString();
+  for (const item of items) {
+    const occurredAt = item.occurredAt ?? new Date("2026-04-16T10:00:00.000Z").toISOString();
+    insert.run(
+      item.id,
+      item.deviceId ?? "device-test",
+      item.itemType,
+      item.title,
+      item.summary,
+      item.dedupeKey ?? null,
+      item.status ?? "pending",
+      occurredAt,
+      item.availableAt ?? occurredAt,
+      item.expiresAt ?? new Date("2026-04-17T10:00:00.000Z").toISOString(),
+      createdAt,
+    );
+  }
+  db.close();
+}
+
 test("runCli returns ok envelope for sys doctor json command", async () => {
   const result = await runCli(["sys", "doctor", "--json"]);
 
@@ -140,6 +221,120 @@ test("runCli returns invalid argument for unknown domain", async () => {
   assert.equal(result.stdout.error?.code, "INVALID_ARGUMENT");
   assert.equal(result.stdout.error?.type, "validation");
   assert.ok(result.stdout.error?.hint);
+});
+
+test("personal mobile items list reads from explicit PIN_MOBILE_DB_PATH", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-mobile-cli-"));
+  const dbPath = join(root, "mobile_items.db");
+  try {
+    seedMobileDb(dbPath, [
+      {
+        id: "item_1",
+        itemType: "attention_item",
+        title: "Test attention",
+        summary: "Needs action",
+        dedupeKey: "attention:1",
+      },
+      {
+        id: "item_2",
+        itemType: "moment",
+        status: "processed",
+        title: "Processed moment",
+        summary: "Already handled",
+        dedupeKey: "moment:1",
+      },
+    ]);
+
+    const result = await runCli(
+      ["personal", "mobile", "items", "list", "--status", "pending", "--limit", "10", "--json"],
+      { env: { PIN_MOBILE_DB_PATH: dbPath }, homeDir: "/Users/test" },
+    );
+    const stdout = result.stdout as PinEnvelope<{ items: MobileItemRecord[] }>;
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(stdout.ok, true);
+    assert.equal(stdout.data?.items.length, 1);
+    assert.equal(stdout.data?.items[0]?.id, "item_1");
+    assert.equal(stdout.data?.items[0]?.itemType, "attention_item");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("personal mobile items claim and commit update statuses", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-mobile-claim-"));
+  const dbPath = join(root, "mobile_items.db");
+  try {
+    seedMobileDb(dbPath, [
+      {
+        id: "item_claim",
+        itemType: "session_summary",
+        title: "Recent summary",
+        summary: "Summarized speech",
+        dedupeKey: "summary:1",
+      },
+    ]);
+
+    const claimResult = await runCli(
+      ["personal", "mobile", "items", "claim", "--limit", "5", "--json"],
+      { env: { PIN_MOBILE_DB_PATH: dbPath }, homeDir: "/Users/test" },
+    );
+    const claimStdout = claimResult.stdout as PinEnvelope<{ runToken: string | null; items: MobileItemRecord[] }>;
+    assert.equal(claimResult.exitCode, 0);
+    assert.equal(claimStdout.ok, true);
+    assert.equal(claimStdout.data?.items.length, 1);
+    assert.ok(claimStdout.data?.runToken);
+
+    const commitResult = await runCli(
+      ["personal", "mobile", "items", "commit", "--run-token", claimStdout.data?.runToken ?? "", "--json"],
+      { env: { PIN_MOBILE_DB_PATH: dbPath }, homeDir: "/Users/test" },
+    );
+    const commitStdout = commitResult.stdout as PinEnvelope<{ processed: number }>;
+    assert.equal(commitResult.exitCode, 0);
+    assert.equal(commitStdout.ok, true);
+    assert.equal(commitStdout.data?.processed, 1);
+
+    const verifyDb = new Database(dbPath, { readonly: true });
+    const row = verifyDb.prepare("SELECT status FROM mobile_items WHERE id = ?").get("item_claim") as { status: string };
+    verifyDb.close();
+    assert.equal(row.status, "processed");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("personal mobile items list auto-detects local proactive data directory", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-mobile-autodetect-"));
+  const repoLikeRoot = join(root, "repo");
+  const dataDir = join(repoLikeRoot, "data", "proactive-test-runtime");
+  const dbPath = join(dataDir, "mobile_items.db");
+  const previousCwd = process.cwd();
+  try {
+    await mkdir(dataDir, { recursive: true });
+    seedMobileDb(dbPath, [
+      {
+        id: "item_auto",
+        itemType: "moment",
+        title: "Auto-detected",
+        summary: "From local data dir",
+        dedupeKey: "moment:auto",
+      },
+    ]);
+    process.chdir(repoLikeRoot);
+
+    const result = await runCli(
+      ["personal", "mobile", "items", "list", "--status", "pending", "--limit", "10", "--json"],
+      { env: {}, homeDir: "/Users/test" },
+    );
+    const stdout = result.stdout as PinEnvelope<{ items: MobileItemRecord[] }>;
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(stdout.ok, true);
+    assert.equal(stdout.data?.items[0]?.id, "item_auto");
+  } finally {
+    process.chdir(previousCwd);
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("sys doctor reports checklist with database root", async () => {

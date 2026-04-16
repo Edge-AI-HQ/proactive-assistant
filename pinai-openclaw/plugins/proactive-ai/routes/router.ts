@@ -16,6 +16,7 @@ import { handleSettings } from './settings.js';
 import { handleAutoRun } from './auto-run.js';
 import { handleDreaming } from './dreaming.js';
 import { handleBrowser } from './browser.js';
+import { handleMobile } from './mobile.js';
 
 export interface PipelineState {
   running: boolean;
@@ -46,6 +47,7 @@ export function createApiHandler(api: OpenClawPluginApi, state: PipelineState, c
     handleAutoRun(state, config),
     handleDreaming(),
     handleBrowser(),
+    handleMobile(),
   ];
 
   return async (req: unknown, res: unknown) => {
