@@ -602,7 +602,7 @@ export default function GoalsView() {
   // ── Render ──
 
   return (
-    <div className="flex flex-col h-full px-4 pt-14 pb-2 overflow-y-auto relative">
+    <div className="flex flex-col h-full px-4 pt-3 pb-2 overflow-y-auto relative">
       {/* Page header */}
       <div className="mb-6 pr-20">
         <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-foreground/35">

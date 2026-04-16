@@ -197,7 +197,7 @@ export default function DebugPanel({ health, run, isRunning, iterations, onItera
               className="fixed right-0 top-0 bottom-0 w-[380px] bg-white/80 backdrop-blur-2xl border-l border-foreground/10 shadow-2xl z-50 flex flex-col"
             >
               {/* Header */}
-              <div className="flex items-center justify-between px-5 pt-5 pb-3">
+              <div className="flex items-center justify-between px-5 pt-safe-top pb-3">
                 <h2 className="text-lg font-semibold text-foreground">Debug</h2>
                 <button
                   onClick={() => setOpen(false)}
