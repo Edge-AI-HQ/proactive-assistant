@@ -5,6 +5,12 @@ interface GeneratedCardRecord {
   title?: string | null;
   titleKey?: string | null;
   generatedAt?: string | null;
+  threadContext?: {
+    threadDecision?: string | null;
+    latestCardOutcome?: string | null;
+    latestChatSummary?: string | null;
+    nextAngles?: string[] | null;
+  } | null;
 }
 
 interface GeneratedCardsSummaryDeps {
@@ -37,7 +43,19 @@ export async function loadRecentGeneratedCardsSummary(
       const basket = asString(record.goalBasket) ?? 'unknown';
       const titleKey = asString(record.titleKey) ?? 'unknown';
       const title = asString(record.title) ?? 'Untitled card';
-      return `- ${basket}: ${titleKey} | ${formatDate(asString(record.generatedAt))} | ${title}`;
+      const threadDecision = asString(record.threadContext?.threadDecision) ?? 'hold';
+      const latestCardOutcome = asString(record.threadContext?.latestCardOutcome) ?? 'none';
+      const latestChatSummary = asString(record.threadContext?.latestChatSummary);
+      const nextAngles = Array.isArray(record.threadContext?.nextAngles)
+        ? record.threadContext.nextAngles.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+        : [];
+      const extras = [
+        `decision=${threadDecision}`,
+        `outcome=${latestCardOutcome}`,
+        latestChatSummary ? `chat=${latestChatSummary}` : null,
+        nextAngles.length > 0 ? `next=${nextAngles.join('; ')}` : null,
+      ].filter((value): value is string => Boolean(value));
+      return `- ${basket}: ${titleKey} | ${formatDate(asString(record.generatedAt))} | ${title} | ${extras.join(' | ')}`;
     })
     .join('\n');
 }

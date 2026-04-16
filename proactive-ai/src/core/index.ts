@@ -82,7 +82,19 @@ export {
   generatedIntentCards,
   type GeneratedIntentCardRow,
   type NewGeneratedIntentCardRow,
+  type GeneratedIntentCardWithThreadContextRow,
+  type ThreadContext,
 } from "./domains/cards/schema.js";
+
+// ── Domain: Intent State ──
+export * as intentState from "./domains/intent-state/service.js";
+export { IntentStateRepository } from "./domains/intent-state/repository.js";
+export {
+  intentCardState,
+  intentThreadState,
+  type IntentCardStateRow,
+  type IntentThreadStateRow,
+} from "./domains/intent-state/schema.js";
 
 // ── Domain: Push ──
 export * as push from "./domains/push/service.js";

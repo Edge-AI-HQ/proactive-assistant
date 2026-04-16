@@ -13,6 +13,12 @@ test("loadRecentGeneratedCardsSummary formats recent generated cards for prompts
           titleKey: "review-queue-with-alex",
           title: "Review queue with Alex",
           generatedAt: "2026-04-07T10:00:00.000Z",
+          threadContext: {
+            threadDecision: "refine",
+            latestCardOutcome: "dismiss",
+            latestChatSummary: "The topic still matters, but the action should be narrower.",
+            nextAngles: ["batch review", "delegate low-risk PRs"],
+          },
         },
         {
           goalBasket: "health",
@@ -26,6 +32,6 @@ test("loadRecentGeneratedCardsSummary formats recent generated cards for prompts
 
   assert.equal(
     summary,
-    "- work: review-queue-with-alex | 2026-04-07 | Review queue with Alex\n- health: adjust-evening-walk-plan | 2026-04-06 | Adjust evening walk plan",
+    "- work: review-queue-with-alex | 2026-04-07 | Review queue with Alex | decision=refine | outcome=dismiss | chat=The topic still matters, but the action should be narrower. | next=batch review; delegate low-risk PRs\n- health: adjust-evening-walk-plan | 2026-04-06 | Adjust evening walk plan | decision=hold | outcome=none",
   );
 });

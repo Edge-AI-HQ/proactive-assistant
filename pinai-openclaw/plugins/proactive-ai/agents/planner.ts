@@ -97,6 +97,12 @@ Each planned intent must satisfy ALL of these:
 Before locking the plan, inspect recent generated card history with \`pin cards recent --limit 10 --json\`. Use that result together with recent pushes and feedback to avoid blindly repeating the same card theme.
 
 Treat sustained card-chat engagement as a strong signal that the user wants adjacent follow-up content, but do not simply repeat the same card. Use that signal to plan the next higher-value step around the same thread.
+
+When recent generated-card history includes thread decisions:
+- \`advance\`: move the thread into the next stage instead of repeating the same card
+- \`refine\`: keep the thread, but change the action design, angle, or why-now trigger
+- \`hold\`: do not prioritize the thread unless new evidence appears
+- \`suppress\`: avoid similar cards unless there is a concrete new trigger that changes the case
 </process>
 
 <anti_patterns>

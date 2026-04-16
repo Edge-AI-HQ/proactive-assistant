@@ -47,6 +47,7 @@ test("syncCardChatFeedback summarizes qualified changed card chats into agent_an
   ];
 
   const writes: unknown[] = [];
+  const decisions: unknown[] = [];
   const normalized = normalizeCardChatMessages(transcript);
 
   const result = await syncCardChatFeedback(
@@ -63,12 +64,15 @@ test("syncCardChatFeedback summarizes qualified changed card chats into agent_an
           {
             cardId: "card_1",
             summary: "User kept drilling into the executable hiring follow-up.",
-            interestScore: 0.86,
+            decision: "refine",
             topics: ["hiring", "follow-up"],
             nextAngles: ["draft outreach", "schedule follow-up"],
           },
         ],
       }),
+      applyChatDecision: async (input) => {
+        decisions.push(input);
+      },
       logFeedback: async (input) => {
         writes.push(input);
       },
@@ -87,6 +91,7 @@ test("syncCardChatFeedback summarizes qualified changed card chats into agent_an
       metadata: {
         analysisType: CARD_CHAT_INTEREST_ANALYSIS_TYPE,
         intentKey: "work:draft-hiring-outreach",
+        decision: "refine",
         titleKey: "draft-hiring-outreach",
         title: "Draft hiring outreach",
         generatedAt: "2026-04-12T01:00:00.000Z",
@@ -94,7 +99,6 @@ test("syncCardChatFeedback summarizes qualified changed card chats into agent_an
         messageCount: normalized.length,
         userTurns: 3,
         userTextChars: 145,
-        interestScore: 0.86,
         topics: ["hiring", "follow-up"],
         nextAngles: ["draft outreach", "schedule follow-up"],
         trigger: "manual",
@@ -105,9 +109,19 @@ test("syncCardChatFeedback summarizes qualified changed card chats into agent_an
     qualifiedCards: 1,
     summarizedCards: 1,
     writtenFeedback: 1,
-    skippedBelowThreshold: 0,
-    skippedUnchanged: 0,
+      skippedBelowThreshold: 0,
+      skippedUnchanged: 0,
   });
+  assert.deepEqual(decisions, [
+    {
+      cardId: "card_1",
+      intentKey: "work:draft-hiring-outreach",
+      goalBasket: "work",
+      decision: "refine",
+      summary: "User kept drilling into the executable hiring follow-up.",
+      nextAngles: ["draft outreach", "schedule follow-up"],
+    },
+  ]);
 });
 
 test("syncCardChatFeedback skips unchanged transcripts", async () => {

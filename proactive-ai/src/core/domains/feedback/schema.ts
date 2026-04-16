@@ -4,6 +4,7 @@ export const feedbackEvents = sqliteTable("feedback_events", {
   id: text("id").primaryKey(),
   pushId: text("push_id"),
   intentCardId: text("intent_card_id"),
+  intentKey: text("intent_key"),
   conversationId: text("conversation_id"),
   messageId: text("message_id"),
   kind: text("kind").notNull(),

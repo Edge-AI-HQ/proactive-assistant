@@ -46,7 +46,7 @@ function createApi(summaryJson?: string) {
     {
       "cardId": "card_1",
       "summary": "User kept drilling into the executable hiring follow-up.",
-      "interestScore": 0.86,
+      "decision": "refine",
       "topics": ["hiring", "follow-up"],
       "nextAngles": ["draft outreach", "schedule follow-up"]
     }
@@ -150,11 +150,11 @@ describe("syncCardChatFeedback", () => {
         text: "User kept drilling into the executable hiring follow-up.",
         metadata: expect.objectContaining({
           analysisType: CARD_CHAT_INTEREST_ANALYSIS_TYPE,
+          decision: "refine",
           titleKey: "draft-hiring-outreach",
           transcriptHash: hashNormalizedCardChatMessages(normalizedMessages),
           messageCount: normalizedMessages.length,
           userTurns: 3,
-          interestScore: 0.86,
           topics: ["hiring", "follow-up"],
           nextAngles: ["draft outreach", "schedule follow-up"],
         }),

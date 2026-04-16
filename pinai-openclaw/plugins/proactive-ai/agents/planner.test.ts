@@ -16,6 +16,9 @@ test("buildPlannerPrompt injects feedback and recent generated card history", ()
   assert.match(prompt, /review-queue-with-alex/);
   assert.match(prompt, /sustained card-chat engagement/i);
   assert.match(prompt, /do not simply repeat the same card/i);
+  assert.match(prompt, /advance/);
+  assert.match(prompt, /refine/);
+  assert.match(prompt, /suppress/);
 });
 
 test("buildPlannerPrompt omits recent generated card section when empty", () => {

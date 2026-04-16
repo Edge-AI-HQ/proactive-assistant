@@ -81,6 +81,12 @@ ${plan}
 Before generating cards, inspect recent generated history with \`pin cards recent --limit 10 --json\`. Use that result together with recent pushes and feedback to avoid producing near-duplicate card themes.
 
 Treat sustained card-chat engagement as a strong signal for adjacent follow-up cards, but do not simply restate the same card. Turn that signal into the next upgraded, more actionable step around the same thread.
+
+When recent generated-card history includes thread decisions:
+- \`advance\`: generate the next-stage card for the same thread, not a restatement
+- \`refine\`: keep the thread but change the action design, angle, or why-now trigger
+- \`hold\`: deprioritize that thread unless fresh evidence makes it timely
+- \`suppress\`: avoid near-duplicate cards for that thread unless a concrete new trigger overrides the prior negative signal
 </process>
 
 <card_quality_standards>

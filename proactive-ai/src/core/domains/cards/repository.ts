@@ -9,6 +9,7 @@ import {
 
 export interface GeneratedIntentCardInput {
   cardId: string;
+  intentKey: string;
   goalBasket: string;
   title: string;
   titleKey: string;
@@ -50,6 +51,7 @@ export class GeneratedIntentCardRepository {
         id: nextId(),
         runId: input.runId,
         cardId: card.cardId,
+        intentKey: card.intentKey,
         goalBasket: card.goalBasket,
         title: card.title,
         titleKey: card.titleKey,
@@ -98,6 +100,32 @@ export class GeneratedIntentCardRepository {
     return query.all();
   }
 
+  async getByCardId(cardId: string): Promise<GeneratedIntentCardRow | null> {
+    await this.ensureSchema();
+    const result = this.database.orm
+      .select()
+      .from(generatedIntentCards)
+      .where(eq(generatedIntentCards.cardId, cardId))
+      .orderBy(
+        desc(generatedIntentCards.generatedAt),
+        desc(generatedIntentCards.createdAt),
+      )
+      .limit(1)
+      .all();
+
+    return result[0] ?? null;
+  }
+
+  private ensureColumn(table: string, column: string, definition: string): void {
+    const columns = this.database.all<{ name: string }>(
+      `PRAGMA table_info(${table})`,
+    );
+    if (columns.some((entry) => entry.name === column)) return;
+    this.database.exec(
+      `ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`,
+    );
+  }
+
   private async ensureSchema(): Promise<void> {
     if (this.schemaReady) return;
 
@@ -106,6 +134,7 @@ export class GeneratedIntentCardRepository {
         id                    TEXT PRIMARY KEY NOT NULL,
         run_id                TEXT NOT NULL,
         card_id               TEXT NOT NULL,
+        intent_key            TEXT NOT NULL DEFAULT '',
         goal_basket           TEXT NOT NULL,
         title                 TEXT NOT NULL,
         title_key             TEXT NOT NULL,
@@ -119,6 +148,8 @@ export class GeneratedIntentCardRepository {
       )
     `);
 
+    this.ensureColumn("generated_intent_cards", "intent_key", "TEXT NOT NULL DEFAULT ''");
+
     this.database.exec(`
       CREATE INDEX IF NOT EXISTS idx_generated_intent_cards_generated_at
         ON generated_intent_cards(generated_at DESC)
@@ -127,6 +158,10 @@ export class GeneratedIntentCardRepository {
     this.database.exec(`
       CREATE INDEX IF NOT EXISTS idx_generated_intent_cards_goal_basket
         ON generated_intent_cards(goal_basket)
+    `);
+    this.database.exec(`
+      CREATE INDEX IF NOT EXISTS idx_generated_intent_cards_intent_key
+        ON generated_intent_cards(intent_key)
     `);
 
     this.schemaReady = true;

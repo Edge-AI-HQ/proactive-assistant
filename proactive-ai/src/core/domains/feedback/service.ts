@@ -123,6 +123,7 @@ export const logFeedback = async (
     action?: string;
     pushId?: string;
     intentCardId?: string;
+    intentKey?: string;
     conversationId?: string;
     messageId?: string;
     source?: string;
@@ -144,11 +145,17 @@ export const logFeedback = async (
   if (input.value) rejectDangerousChars("value", input.value);
 
   const repository = await createRepository(ctx);
+  const metadata = parseMetadata(input.metadata);
+  const intentKey =
+    input.intentKey
+    ?? (typeof metadata?.["intentKey"] === "string" ? metadata["intentKey"] : undefined);
+
   return repository.create({
     kind: input.kind,
     action: input.action,
     pushId: input.pushId,
     intentCardId: input.intentCardId,
+    intentKey,
     conversationId: input.conversationId,
     messageId: input.messageId,
     source: input.source,
@@ -156,7 +163,7 @@ export const logFeedback = async (
     channel: input.channel,
     value: input.value,
     text: input.text,
-    metadata: parseMetadata(input.metadata),
+    metadata,
     createdAt: input.at,
   });
 };

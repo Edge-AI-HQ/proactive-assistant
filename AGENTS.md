@@ -61,6 +61,7 @@ CI 需要在 GitHub Secrets 设置以下 secrets：
 - `apis/src/domain/common/`：共享配置、DB repositories、infra runtime
 - `pinai-openclaw/plugins/proactive-ai/`：Proactive AI 核心插件（pipeline、scheduler、agents、world、CLI）
 - `pinai-openclaw/image/`：OpenClaw 自定义镜像（Dockerfile、entrypoint、warmup、skills）
+- `proactive-ai/`：废弃目录，已合并到 `pinai-openclaw/plugins/proactive-ai/`
 - `proactive-ai-frontend/src/`：React SPA 前端（Vite + Tailwind + Capacitor，支持 Web/iOS/Android）
 - `ops/litellm/`：LiteLLM 配置与部署脚本
 

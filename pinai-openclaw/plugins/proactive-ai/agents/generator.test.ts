@@ -17,6 +17,8 @@ test("buildGeneratorPrompt injects recent generated cards and follow-up guidance
   assert.match(prompt, /adjust-evening-walk-plan/);
   assert.match(prompt, /sustained card-chat engagement/i);
   assert.match(prompt, /do not simply restate the same card/i);
+  assert.match(prompt, /next-stage card/i);
+  assert.match(prompt, /avoid near-duplicate cards/i);
 });
 
 test("buildGeneratorPrompt omits recent generated card section when empty", () => {
