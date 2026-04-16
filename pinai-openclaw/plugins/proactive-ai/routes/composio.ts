@@ -5,6 +5,51 @@ import { json, readBody } from './types.js';
 
 const COMPOSIO_API_BASE = 'https://backend.composio.dev/api/v3';
 const KEY_FILE = '/app/data/composio-api-key';
+const IDENTITY_CACHE_FILE = '/app/data/composio-identity-cache.json';
+
+interface IdentityCache {
+  [connectedAccountId: string]: { userInfo: Record<string, unknown>; ts: number };
+}
+
+const IDENTITY_TTL = 24 * 60 * 60 * 1000; // 24h
+
+function loadIdentityCache(): IdentityCache {
+  try { return JSON.parse(readFileSync(IDENTITY_CACHE_FILE, 'utf-8')); } catch { return {}; }
+}
+
+function saveIdentityCache(cache: IdentityCache): void {
+  try { mkdirSync(dirname(IDENTITY_CACHE_FILE), { recursive: true }); writeFileSync(IDENTITY_CACHE_FILE, JSON.stringify(cache)); } catch { /* ignore */ }
+}
+
+const COMPOSIO_V2_BASE = 'https://backend.composio.dev/api/v2';
+
+const IDENTITY_ACTIONS: Record<string, string> = {
+  gmail: 'GMAIL_GET_PROFILE',
+  slack: 'SLACK_LIST_AUTH_IDENTITY',
+  github: 'GITHUB_GET_THE_AUTHENTICATED_USER',
+  linkedin: 'LINKEDIN_LINKEDIN_GET_CURRENT_USER_PROFILE',
+};
+
+async function fetchIdentityViaAction(
+  apiKey: string,
+  toolkit: string,
+  entityId: string,
+): Promise<Record<string, unknown> | null> {
+  const actionId = IDENTITY_ACTIONS[toolkit];
+  if (!actionId) return null;
+  try {
+    const res = await fetch(`${COMPOSIO_V2_BASE}/actions/${actionId}/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+      body: JSON.stringify({ appName: toolkit, entityId, input: {} }),
+    });
+    if (!res.ok) return null;
+    const result = await res.json();
+    const data = result?.data?.response_data ?? result?.data ?? null;
+    if (data && typeof data === 'object' && Object.keys(data).length > 0) return data as Record<string, unknown>;
+    return null;
+  } catch { return null; }
+}
 
 async function composioApi(apiKey: string, path: string, init?: RequestInit): Promise<Record<string, any>> {
   const response = await fetch(`${COMPOSIO_API_BASE}${path}`, {
@@ -64,12 +109,42 @@ export function handleComposio(): RouteHandler {
       if (route === '/connections' && ctx.req.method === 'GET') {
         const data = await composioApi(apiKey, `/connected_accounts?user_ids=${userId}&statuses=ACTIVE&limit=100`);
         const items = Array.isArray(data.items) ? data.items : [];
-        json(ctx.res, 200, { connections: items.map((item: any) => ({
-          toolkit: item.toolkit?.slug ?? item.toolkit ?? 'unknown',
-          status: (item.status ?? 'NOT_CONNECTED').toUpperCase(),
-          connectedAccountId: item.id ?? item.connected_account_id,
-          userInfo: item.user_info ?? item.current_user_info ?? null,
-        })) });
+        const cache = loadIdentityCache();
+        let cacheUpdated = false;
+
+        const connections = await Promise.all(items.map(async (item: any) => {
+          const id = item.id ?? item.connected_account_id;
+          const toolkit = (item.toolkit?.slug ?? item.toolkit ?? 'unknown') as string;
+          let userInfo = item.user_info ?? item.current_user_info ?? null;
+
+          if (!userInfo && id) {
+            const cached = cache[id];
+            if (cached && Date.now() - cached.ts < IDENTITY_TTL) {
+              userInfo = cached.userInfo;
+            } else {
+              const identity = await fetchIdentityViaAction(apiKey, toolkit.toLowerCase(), userId);
+              if (identity) {
+                userInfo = identity;
+                cache[id] = { userInfo: identity, ts: Date.now() };
+                cacheUpdated = true;
+              }
+            }
+          }
+
+          return {
+            toolkit,
+            status: (item.status ?? 'NOT_CONNECTED').toUpperCase(),
+            connectedAccountId: id,
+            userInfo,
+          };
+        }));
+
+        const activeIds = new Set(connections.map((c) => c.connectedAccountId));
+        for (const key of Object.keys(cache)) {
+          if (!activeIds.has(key)) { delete cache[key]; cacheUpdated = true; }
+        }
+        if (cacheUpdated) saveIdentityCache(cache);
+        json(ctx.res, 200, { connections });
         return true;
       }
 

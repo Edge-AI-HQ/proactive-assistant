@@ -1,616 +1,294 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import {
-  Sprout, Briefcase, TrendingUp, Heart, Sparkles, Users,
-  Zap, Pencil, X, ChevronDown, MessageCircle, Check,
-  type LucideIcon,
-} from "lucide-react";
+import { Sparkles } from "lucide-react";
+import { basketMeta } from "@/lib/basket-meta";
 import type { IntentCard, EvaluationScore } from "@/types/intent-card";
-import { proxyPost } from "@/lib/api";
-import AiLanding from "./AiLanding";
+import AiSphere from "./AiSphere";
 
 // ---------------------------------------------------------------------------
-// Constants & helpers
+// Slot layouts — 4 variants with left% / y% offsets for floating cards
 // ---------------------------------------------------------------------------
 
-const BASKET_META: Record<string, { icon: LucideIcon; label: string }> = {
-  work:    { icon: Briefcase,   label: "Work" },
-  health:  { icon: Heart,       label: "Health" },
-  family:  { icon: Users,       label: "Family" },
-  wealth:  { icon: TrendingUp,  label: "Finance" },
-  finance: { icon: TrendingUp,  label: "Finance" },
-  growth:  { icon: Sprout,      label: "Growth" },
-  life:    { icon: Sparkles,    label: "Life" },
-};
-
-const FALLBACK_META = { icon: Sparkles, label: "General" };
-const INITIAL_VISIBLE = 5;
-const SCROLL_DIRECTION_THRESHOLD = 3;
-
-function basketMeta(goalBasket: IntentCard["goalBasket"]) {
-  return BASKET_META[goalBasket.toLowerCase()] ?? FALLBACK_META;
-}
-
-// ---------------------------------------------------------------------------
-// Feedback helpers
-// ---------------------------------------------------------------------------
-
-interface FeedbackMetadata {
-  runId?: string;
-  intentKey: string;
-  surface: "now_feed";
-}
-
-function slugifyIntentKey(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-function buildFeedbackMetadata(
-  card: IntentCard,
-  runId?: string | null,
-): FeedbackMetadata {
-  return {
-    ...(runId ? { runId } : {}),
-    intentKey: `${card.goalBasket.toLowerCase()}:${slugifyIntentKey(card.title)}`,
-    surface: "now_feed",
-  };
-}
-
-async function recordFeedback(params: {
-  kind: string;
-  action?: string;
-  intentCardId: string;
-  basket?: string;
-  channel?: string;
-  metadata?: FeedbackMetadata;
-}) {
-  try {
-    await proxyPost("/feedback", params);
-  } catch (err) {
-    console.warn("[NowFeed] feedback recording failed:", err);
-  }
-}
+const SLOT_LAYOUTS = [
+  [
+    { left: 3, y: -42 }, { left: 48, y: -34 }, { left: 20, y: -18 },
+    { left: 55, y: -8 }, { left: 2, y: 6 }, { left: 40, y: 14 },
+    { left: 15, y: 30 }, { left: 52, y: 36 },
+  ],
+  [
+    { left: 8, y: -40 }, { left: 52, y: -30 }, { left: 5, y: -14 },
+    { left: 48, y: -4 }, { left: 12, y: 10 }, { left: 55, y: 20 },
+    { left: 2, y: 32 }, { left: 44, y: 40 },
+  ],
+  [
+    { left: 2, y: -38 }, { left: 3, y: -20 }, { left: 50, y: -36 },
+    { left: 52, y: -12 }, { left: 8, y: 4 }, { left: 48, y: 8 },
+    { left: 4, y: 28 }, { left: 50, y: 30 },
+  ],
+  [
+    { left: 45, y: -44 }, { left: 6, y: -30 }, { left: 50, y: -16 },
+    { left: 3, y: -2 }, { left: 46, y: 12 }, { left: 8, y: 22 },
+    { left: 48, y: 34 }, { left: 5, y: 42 },
+  ],
+];
 
 // ---------------------------------------------------------------------------
-// Component
+// Props
 // ---------------------------------------------------------------------------
 
 interface NowFeedProps {
   cards: IntentCard[];
   scoreMap: Record<string, EvaluationScore>;
-  runId?: string | null;
   isRunning: boolean;
   activePhase: string | null;
-  onExecute: (title: string) => void;
-  onScrollDirectionChange?: (direction: "up" | "down") => void;
-  onOpenChat?: (card: IntentCard) => void;
-  onGenerate?: () => void;
-  onTapToSpeak?: () => void;
+  onCardTap: (card: IntentCard) => void;
+  onDismissCard: (cardId: string, card?: IntentCard) => void;
+  dismissedIds: Set<string>;
+  doneIds: Set<string>;
+  processingIds: Set<string>;
+  seenCardIds: Set<string>;
 }
+
+type FloatingCard = IntentCard & { slotIndex: number };
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 
 export default function NowFeed({
   cards: incomingCards,
-  scoreMap,
-  runId,
+  scoreMap: _scoreMap,
   isRunning,
   activePhase,
-  onExecute,
-  onScrollDirectionChange,
-  onOpenChat,
-  onGenerate,
-  onTapToSpeak,
+  onCardTap,
+  onDismissCard,
+  dismissedIds,
+  doneIds,
+  processingIds,
+  seenCardIds,
 }: NowFeedProps) {
-  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
-  const [openedIds, setOpenedIds] = useState<Set<string>>(new Set());
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [feedbackCardId, setFeedbackCardId] = useState<string | null>(null);
-  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
-  const [scrollY, setScrollY] = useState(0);
+  const [currentLayoutIdx, setCurrentLayoutIdx] = useState(
+    () => Math.floor(Math.random() * SLOT_LAYOUTS.length),
+  );
+  const [scatterKey, setScatterKey] = useState(0);
+  const [globalExitDirection, setGlobalExitDirection] = useState<"left" | "scatter">("scatter");
 
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const lastScrollTop = useRef(0);
-  const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const touchStartY = useRef<number | null>(null);
+  const touchStartX = useRef<number | null>(null);
+  const isScattering = useRef(false);
 
-  // Reset visible count when cards change
-  useEffect(() => { setVisibleCount(INITIAL_VISIBLE); }, [incomingCards]);
+  // Build visible floating cards (max 8, excluding dismissed/done)
+  const hiddenIds = new Set([...dismissedIds, ...doneIds]);
+  const visibleCards: FloatingCard[] = incomingCards
+    .filter((c) => !hiddenIds.has(c.id))
+    .slice(0, 8)
+    .map((c, i) => ({ ...c, slotIndex: i }));
 
-  // Cleanup feedback timer on unmount
-  useEffect(() => {
-    return () => {
-      if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
-    };
+  const positions = SLOT_LAYOUTS[currentLayoutIdx % SLOT_LAYOUTS.length];
+
+  // ── Swipe refresh ──
+
+  const handleSwipeRefresh = useCallback((direction: "left" | "scatter") => {
+    if (isScattering.current) return;
+    isScattering.current = true;
+    setGlobalExitDirection(direction);
+    setScatterKey((k) => k + 1);
+
+    setTimeout(() => {
+      setGlobalExitDirection("scatter");
+      setCurrentLayoutIdx((prev) => {
+        const candidates = Array.from(
+          { length: SLOT_LAYOUTS.length },
+          (_, i) => i,
+        ).filter((i) => i !== prev);
+        return candidates[Math.floor(Math.random() * candidates.length)];
+      });
+      isScattering.current = false;
+    }, 600);
   }, []);
 
-  const allCards = incomingCards.filter((c) => !dismissedIds.has(c.id));
-  const cards = allCards.slice(0, visibleCount);
-  const hasMore = allCards.length > visibleCount;
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    touchStartY.current = e.touches[0].clientY;
+    touchStartX.current = e.touches[0].clientX;
+  }, []);
 
-  // Parallax: fade landing as user scrolls down
-  const landingOpacity = Math.max(0.2, 1 - scrollY / 600);
-
-  const handleScroll = useCallback(() => {
-    if (!scrollRef.current) return;
-    const top = scrollRef.current.scrollTop;
-    setScrollY(top);
-    const delta = top - lastScrollTop.current;
-    if (Math.abs(delta) > SCROLL_DIRECTION_THRESHOLD) {
-      onScrollDirectionChange?.(delta > 0 ? "up" : "down");
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (touchStartY.current === null || touchStartX.current === null) return;
+    const deltaY = touchStartY.current - e.changedTouches[0].clientY;
+    const deltaX = touchStartX.current - e.changedTouches[0].clientX;
+    touchStartY.current = null;
+    touchStartX.current = null;
+    if (deltaX > 80 && Math.abs(deltaX) > Math.abs(deltaY)) {
+      handleSwipeRefresh("left");
+    } else if (Math.abs(deltaY) > 80) {
+      handleSwipeRefresh("scatter");
     }
-    lastScrollTop.current = top;
-  }, [onScrollDirectionChange]);
+  }, [handleSwipeRefresh]);
 
-  const logCardFeedback = useCallback(
-    (card: IntentCard, kind: string, action?: string) => {
-      recordFeedback({
-        kind,
-        action,
-        intentCardId: card.id,
-        basket: card.goalBasket,
-        channel: "web",
-        metadata: buildFeedbackMetadata(card, runId),
-      });
-    },
-    [runId],
-  );
-
-  const dismiss = (card: IntentCard, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setDismissedIds((prev) => new Set(prev).add(card.id));
-    logCardFeedback(card, "dismiss");
-  };
-
-  const toggle = (card: IntentCard) => {
-    const opening = expandedId !== card.id;
-    if (opening && !openedIds.has(card.id)) {
-      setOpenedIds((prev) => new Set(prev).add(card.id));
-      logCardFeedback(card, "card_open");
-    }
-    setExpandedId((prev) => (prev === card.id ? null : card.id));
-  };
-
-  const handleModify = (card: IntentCard, e: React.MouseEvent) => {
-    e.stopPropagation();
-    logCardFeedback(card, "card_action", "modify");
-    setFeedbackCardId(card.id);
-    if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
-    feedbackTimerRef.current = setTimeout(() => setFeedbackCardId(null), 2000);
-  };
-
-  const showLoadingOverlay = isRunning && allCards.length === 0;
-  const showEmptyPrompt = !isRunning && allCards.length === 0;
+  const showLoadingOverlay = isRunning && visibleCards.length === 0;
 
   return (
-    <div className="relative h-full overflow-hidden">
-      {/* Fixed Landing behind — fades with scroll */}
-      <div
-        className="absolute inset-x-0 top-0 z-0"
-        style={{ opacity: landingOpacity, willChange: "opacity" }}
-        aria-hidden="true"
-      >
-        <AiLanding onTapToSpeak={onTapToSpeak} />
-
-        {showLoadingOverlay && (
-          <div className="absolute inset-0 z-20 flex items-center justify-center">
-            <motion.div
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="glass-card-strong px-6 py-4 text-center"
-            >
-              <div className="flex items-center gap-2 justify-center mb-1">
-                <motion.div
-                  animate={{ rotate: 360 }}
-                  transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
-                >
-                  <Sparkles size={16} className="text-foreground/60" />
-                </motion.div>
-                <span className="text-sm font-medium text-foreground/80">
-                  {activePhase === "generating"
-                    ? "Generating your intent cards\u2026"
-                    : activePhase === "evaluating"
-                      ? "Evaluating cards\u2026"
-                      : activePhase === "planning"
-                        ? "Planning your intents\u2026"
-                        : "Generating your intent cards\u2026"}
-                </span>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </div>
-
-      {/* Scrollable sheet that slides over landing */}
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="relative z-10 h-full overflow-y-auto scrollbar-hidden"
-        style={{ scrollBehavior: "smooth" }}
-      >
-        {/* Spacer to show landing initially */}
-        <div className="pointer-events-none" style={{ height: "55vh" }} />
-
-        {/* Cards sheet with glass-blur top edge */}
-        <div
-          className="relative px-4 pb-24"
-          style={{
-            borderRadius: "1.5rem 1.5rem 0 0",
-            background:
-              "linear-gradient(180deg, hsl(0 0% 100% / 0.15) 0%, hsl(0 0% 100% / 0.35) 120px, hsl(0 0% 100% / 0.5) 100%)",
-            backdropFilter: "blur(40px)",
-            WebkitBackdropFilter: "blur(40px)",
-            minHeight: "80vh",
-          }}
-        >
-          {/* Pull indicator */}
-          <div className="flex justify-center pt-3 pb-4">
-            <div className="w-9 h-1 rounded-full bg-foreground/15" />
-          </div>
-
-          <div className="flex flex-col gap-3">
-            <AnimatePresence>
-              {cards.map((card, index) => (
-                <IntentCardItem
-                  key={card.id}
-                  card={card}
-                  index={index}
-                  isExpanded={expandedId === card.id}
-                  evalScore={scoreMap[card.id]}
-                  isFeedbackShown={feedbackCardId === card.id}
-                  onToggle={toggle}
-                  onDismiss={dismiss}
-                  onModify={handleModify}
-                  onConfirm={(c, e) => {
-                    e.stopPropagation();
-                    logCardFeedback(c, "card_action", "confirm");
-                    onExecute(c.title);
-                  }}
-                  onChat={(c, e) => {
-                    e.stopPropagation();
-                    logCardFeedback(c, "card_action", "open_detail");
-                    onOpenChat?.(c);
-                  }}
-                />
-              ))}
-            </AnimatePresence>
-
-            {hasMore && (
-              <motion.button
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                onClick={() => setVisibleCount((v) => v + 5)}
-                className="w-full mt-2 py-3 rounded-2xl text-sm font-medium text-foreground/50 hover:text-foreground/70 bg-foreground/[0.03] hover:bg-foreground/[0.06] transition-colors"
-              >
-                Show {Math.min(allCards.length - visibleCount, 5)} more card
-                {allCards.length - visibleCount === 1 ? "" : "s"}
-                <span className="text-foreground/30 ml-1.5">
-                  ({allCards.length - visibleCount} remaining)
-                </span>
-              </motion.button>
-            )}
-          </div>
-
-          {showEmptyPrompt && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="glass-card-strong p-8 text-center"
-            >
-              <Sparkles size={28} className="mx-auto mb-3 text-foreground/50" />
-              <p className="text-display text-foreground mb-1">
-                No intent cards yet
-              </p>
-              <p className="text-sm text-muted-foreground mb-5">
-                Generate AI-powered action recommendations from your data
-              </p>
-              <button
-                onClick={onGenerate}
-                disabled={isRunning}
-                className="inline-flex items-center justify-center gap-2 px-8 py-3 rounded-2xl bg-foreground text-background text-sm font-semibold hover:bg-foreground/85 transition-colors disabled:opacity-50"
-              >
-                <Zap size={16} strokeWidth={2} />
-                {isRunning ? "Generating\u2026" : "Generate Intent Cards"}
-              </button>
-            </motion.div>
-          )}
-
-          {!showEmptyPrompt && !showLoadingOverlay && allCards.length === 0 && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="glass-card p-8 text-center breathing"
-            >
-              <Sparkles size={28} className="mx-auto mb-2 text-foreground/60" />
-              <p className="text-display text-foreground">All caught up</p>
-              <p className="text-sm text-muted-foreground mt-1">
-                Your AI is watching for new intents
-              </p>
-            </motion.div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// IntentCardItem — extracted for readability
-// ---------------------------------------------------------------------------
-
-interface IntentCardItemProps {
-  card: IntentCard;
-  index: number;
-  isExpanded: boolean;
-  evalScore?: EvaluationScore;
-  isFeedbackShown: boolean;
-  onToggle: (card: IntentCard) => void;
-  onDismiss: (card: IntentCard, e: React.MouseEvent) => void;
-  onModify: (card: IntentCard, e: React.MouseEvent) => void;
-  onConfirm: (card: IntentCard, e: React.MouseEvent) => void;
-  onChat: (card: IntentCard, e: React.MouseEvent) => void;
-}
-
-function IntentCardItem({
-  card,
-  index,
-  isExpanded,
-  evalScore,
-  isFeedbackShown,
-  onToggle,
-  onDismiss,
-  onModify,
-  onConfirm,
-  onChat,
-}: IntentCardItemProps) {
-  const meta = basketMeta(card.goalBasket);
-  const Icon = meta.icon;
-
-  const scores: { label: string; value: number; highlight?: boolean }[] = [
-    { label: "Confidence", value: Math.round(card.confidence * 100) },
-    { label: "Importance", value: Math.round(card.importance * 100) },
-    { label: "Urgency", value: Math.round(card.urgency * 100) },
-  ];
-  if (evalScore) {
-    scores.push({
-      label: "Overall",
-      value: Math.round(evalScore.overall * 100),
-      highlight: true,
-    });
-  }
-
-  const urgencyTag = card.urgency >= 0.85 ? "Urgent" : undefined;
-
-  return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.95 }}
-      transition={{ delay: index * 0.04, duration: 0.3 }}
+    <div
+      className="flex-1 relative flex items-center justify-center overflow-hidden"
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
     >
-      <div
-        className="glass-card-strong p-4 relative cursor-pointer"
-        onClick={() => onToggle(card)}
-      >
-        {/* Dismiss */}
-        <button
-          onClick={(e) => onDismiss(card, e)}
-          aria-label="Dismiss card"
-          className="absolute top-3 right-3 p-1 rounded-full hover:bg-foreground/10 transition-colors text-foreground/25 hover:text-foreground/60 z-10"
-        >
-          <X size={12} strokeWidth={2} />
-        </button>
+      {/* Centered AI Sphere */}
+      <AiSphere
+        size={Math.min(570, window.innerWidth * 1.42)}
+        mode={isRunning ? "thinking" : "idle"}
+        className="-mt-[10%]"
+      />
 
-        {/* Category */}
-        <div className="flex items-center gap-1.5 mb-2 pr-6">
-          <Icon size={14} strokeWidth={1.5} className="text-foreground/50" />
-          <span className="text-xs font-semibold tracking-wide text-foreground/50 uppercase">
-            {meta.label}
-          </span>
-          {urgencyTag && (
-            <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-full bg-foreground/10 text-foreground/50">
-              {urgencyTag}
-            </span>
-          )}
-        </div>
-
-        {/* Title */}
-        <h3 className="text-display text-[15px] leading-snug text-foreground mb-1.5">
-          {card.title}
-        </h3>
-
-        {/* Description */}
-        <p className="text-[13px] text-foreground/70 leading-relaxed mb-0.5">
-          {card.whyNow || card.summary}
-        </p>
-        <div className="flex items-center justify-between mb-3">
-          <p className="text-xs text-foreground/55 leading-relaxed">
-            {card.sources.length > 0
-              ? `Sources: ${card.sources.join(" \u00b7 ")}`
-              : ""}
-          </p>
-          <ChevronDown
-            size={14}
-            strokeWidth={1.5}
-            className={`text-foreground/25 transition-transform duration-300 shrink-0 ml-2 ${
-              isExpanded ? "rotate-180" : ""
-            }`}
-          />
-        </div>
-
-        {/* Expanded Detail */}
-        <AnimatePresence>
-          {isExpanded && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: "auto" }}
-              exit={{ opacity: 0, height: 0 }}
-              transition={{ duration: 0.3 }}
-              className="overflow-hidden"
-            >
-              {/* Scores */}
-              <div
-                className={`grid gap-2 mb-3 ${
-                  scores.length === 4 ? "grid-cols-4" : "grid-cols-3"
-                }`}
+      {/* Loading overlay when pipeline running with no cards */}
+      {showLoadingOverlay && (
+        <div className="absolute inset-0 flex items-center justify-center z-20">
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="glass-card-strong px-6 py-4 text-center"
+          >
+            <div className="flex items-center gap-2 justify-center">
+              <motion.div
+                animate={{ rotate: 360 }}
+                transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
               >
-                {scores.map((s) => (
-                  <div
-                    key={s.label}
-                    className="rounded-xl bg-foreground/5 py-2 text-center"
-                  >
-                    <div
-                      className={`text-base font-bold ${
-                        s.highlight ? "text-purple-600" : "text-foreground/80"
-                      }`}
-                    >
-                      {s.value}
-                    </div>
-                    <div className="text-[11px] text-foreground/45 mt-0.5">
-                      {s.label}
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Summary */}
-              {card.summary && (
-                <div className="rounded-xl bg-green-50/60 border border-green-200/40 p-3 mb-3">
-                  <div className="text-xs font-semibold text-green-700/80 mb-1">
-                    Summary
-                  </div>
-                  <p className="text-[13px] text-foreground/80 leading-relaxed">
-                    {card.summary}
-                  </p>
-                </div>
-              )}
-
-              {/* Sources */}
-              {card.sources.length > 0 && (
-                <div className="mb-3">
-                  <div className="text-xs font-semibold text-foreground/50 uppercase tracking-wide mb-1.5">
-                    Sources
-                  </div>
-                  {card.sources.map((src, i) => (
-                    <div key={i} className="flex items-start gap-1.5 mb-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-foreground/30 mt-1 shrink-0" />
-                      <span className="text-[13px] text-foreground/60">
-                        {src}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Actions */}
-              {(card.primaryAction || card.secondaryActions.length > 0) && (
-                <div className="mb-3">
-                  <div className="text-xs font-semibold text-foreground/50 uppercase tracking-wide mb-2">
-                    Available Actions
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                    {card.primaryAction && (
-                      <div className="flex items-center gap-2 rounded-xl bg-foreground/4 px-3 py-2">
-                        <Zap
-                          size={12}
-                          strokeWidth={1.5}
-                          className="text-foreground/40 shrink-0"
-                        />
-                        <span className="text-[13px] text-foreground/70 flex-1">
-                          {card.primaryAction.label}
-                        </span>
-                        <span className="text-[11px] text-foreground/35 bg-foreground/5 px-2 py-0.5 rounded-full whitespace-nowrap">
-                          {card.primaryAction.type}
-                        </span>
-                      </div>
-                    )}
-                    {card.secondaryActions.map((action, i) => (
-                      <div
-                        key={i}
-                        className="flex items-center gap-2 rounded-xl bg-foreground/4 px-3 py-2"
-                      >
-                        <Pencil
-                          size={12}
-                          strokeWidth={1.5}
-                          className="text-foreground/40 shrink-0"
-                        />
-                        <span className="text-[13px] text-foreground/70 flex-1">
-                          {action.label}
-                        </span>
-                        <span className="text-[11px] text-foreground/35 bg-foreground/5 px-2 py-0.5 rounded-full whitespace-nowrap">
-                          {action.type}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Evaluator feedback */}
-              {evalScore?.feedback && (
-                <p className="text-[13px] text-foreground/50 mb-3">
-                  <span className="font-semibold text-foreground/65">
-                    Evaluator:
-                  </span>{" "}
-                  {evalScore.feedback}
-                </p>
-              )}
-
-              {/* Agent chain */}
-              {card.agentChain.length > 0 && (
-                <p className="text-[13px] text-foreground/50 mb-3">
-                  <span className="font-semibold text-foreground/65">
-                    Agents:
-                  </span>{" "}
-                  {card.agentChain.join(" \u2192 ")}
-                </p>
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Action buttons */}
-        <div className="flex items-center gap-2.5 justify-end">
-          <button
-            onClick={(e) => onChat(card, e)}
-            className="flex items-center justify-center p-2.5 rounded-xl hover:bg-foreground/10 transition-colors text-foreground/40 hover:text-foreground/70"
-            title="Chat about this card"
-            aria-label={`Chat about ${card.title}`}
-          >
-            <MessageCircle size={16} strokeWidth={1.5} />
-          </button>
-          <button
-            onClick={(e) => onModify(card, e)}
-            className={
-              "flex items-center justify-center gap-2 px-7 py-2.5 rounded-xl transition-colors text-sm font-medium min-w-[100px] " +
-              (isFeedbackShown
-                ? "bg-emerald-500/15 text-emerald-600"
-                : "bg-foreground/5 hover:bg-foreground/10 text-foreground/50")
-            }
-            aria-label={`Modify ${card.title}`}
-          >
-            {isFeedbackShown ? (
-              <>
-                <Check size={13} strokeWidth={2} /> Noted
-              </>
-            ) : (
-              <>
-                <Pencil size={13} strokeWidth={1.5} /> Modify
-              </>
-            )}
-          </button>
-          <button
-            onClick={(e) => onConfirm(card, e)}
-            className="flex items-center justify-center gap-2 px-7 py-2.5 rounded-xl bg-foreground text-background text-sm font-semibold hover:bg-foreground/85 transition-colors min-w-[100px]"
-            aria-label={`Confirm ${card.title}`}
-          >
-            <Zap size={13} strokeWidth={2} />
-            Confirm
-          </button>
+                <Sparkles size={16} className="text-foreground/60" />
+              </motion.div>
+              <span className="text-sm font-medium text-foreground/80">
+                {activePhase === "evaluating"
+                  ? "Evaluating cards\u2026"
+                  : activePhase === "planning"
+                    ? "Planning intents\u2026"
+                    : "Generating cards\u2026"}
+              </span>
+            </div>
+          </motion.div>
         </div>
-      </div>
-    </motion.div>
+      )}
+
+      {/* Floating cards */}
+      <AnimatePresence>
+        {visibleCards.map((card, i) => {
+          const pos = positions[card.slotIndex % positions.length];
+          const meta = basketMeta(card.goalBasket);
+          const CatIcon = meta.icon;
+          const delay = i * 1.1;
+          const dur = 7 + (i % 3) * 1.5;
+          const isNew = !seenCardIds.has(card.id);
+          const isProcessing = processingIds.has(card.id);
+
+          const cardCenterX = pos.left + 20;
+          const cardCenterY = 50 + pos.y;
+          const dx = cardCenterX - 50;
+          const dy = cardCenterY - 50;
+          const mag = Math.sqrt(dx * dx + dy * dy) || 1;
+          const exitX = (dx / mag) * 400;
+          const exitY = (dy / mag) * 400;
+
+          const flyLeft = globalExitDirection === "left";
+
+          return (
+            <motion.button
+              key={`float-${card.id}-${scatterKey}`}
+              layout
+              drag="x"
+              dragConstraints={{ left: 0, right: 0 }}
+              dragElastic={0.4}
+              onDragEnd={(_e, info) => {
+                if (info.offset.x < -80) {
+                  onDismissCard(card.id, card);
+                }
+              }}
+              initial={{ opacity: 0, scale: 0.85 }}
+              animate={{
+                opacity: 1,
+                scale: [1, 1.045, 1, 0.97, 1],
+                y: [0, -3.5, 0, 2, 0],
+                x: [0, 1.5, 0, -1.5, 0],
+              }}
+              exit={
+                flyLeft
+                  ? {
+                      opacity: 0,
+                      scale: 0.6,
+                      x: -400,
+                      rotate: -15,
+                      transition: { duration: 0.4, ease: [0.4, 0, 1, 1] },
+                    }
+                  : {
+                      opacity: 0,
+                      scale: 0.6,
+                      x: exitX,
+                      y: exitY,
+                      rotate: (i % 2 === 0 ? 1 : -1) * (10 + (i % 15)),
+                      transition: { duration: 0.45, ease: [0.4, 0, 1, 1] },
+                    }
+              }
+              transition={{
+                opacity: { duration: 0.8 },
+                scale: {
+                  duration: dur + 1,
+                  repeat: Infinity,
+                  ease: "easeInOut",
+                  delay: delay + 0.3,
+                },
+                y: {
+                  duration: dur,
+                  repeat: Infinity,
+                  ease: "easeInOut",
+                  delay,
+                },
+                x: {
+                  duration: dur + 2,
+                  repeat: Infinity,
+                  ease: "easeInOut",
+                  delay: delay + 0.5,
+                },
+              }}
+              onClick={() => onCardTap(card)}
+              className={`absolute glass-card-strong px-2.5 py-2 cursor-pointer hover:scale-105 transition-transform z-10 ${
+                isNew
+                  ? "ring-1 ring-pink-400/40"
+                  : isProcessing
+                    ? "ring-1 ring-amber-400/40"
+                    : ""
+              }`}
+              style={{
+                left: `${pos.left}%`,
+                top: `calc(50% + ${pos.y}%)`,
+                width: `${33 + (parseInt(card.id.replace(/\D/g, ""), 10) % 4) * 5}%`,
+                maxWidth: 180,
+                minWidth: 110,
+                borderRadius: 16,
+                boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
+              }}
+            >
+              <div className="flex items-center gap-1.5 mb-0.5">
+                <CatIcon
+                  size={12}
+                  strokeWidth={1.5}
+                  className="text-foreground/50"
+                />
+                <span className="text-[10px] font-semibold tracking-wide text-foreground/50 uppercase truncate">
+                  {meta.label}
+                </span>
+                {isNew && (
+                  <span className="text-[9px] font-bold text-pink-500 uppercase tracking-wider">
+                    new
+                  </span>
+                )}
+                {isProcessing && (
+                  <span className="shrink-0 w-2.5 h-2.5 rounded-full border-[1.5px] border-amber-400 border-t-transparent animate-spin" />
+                )}
+              </div>
+              <p className="text-[13px] font-medium text-foreground leading-snug line-clamp-3 text-left">
+                {card.title}
+              </p>
+            </motion.button>
+          );
+        })}
+      </AnimatePresence>
+    </div>
   );
 }
