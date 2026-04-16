@@ -1,11 +1,16 @@
 .PHONY: help init env-local ensure-env ensure-env-apis ensure-env-litellm
 .PHONY: up down build build-apis build-openclaw restart status
+.PHONY: ensure-local-compose build-apis-local build-openclaw-local up-local down-local status-local logs-local restart-apis-local
 .PHONY: logs logs-apis logs-litellm logs-postgres
 .PHONY: migrate reset clean
 .PHONY: deploy-dev deploy-prod deploy-litellm-dev deploy-litellm-prod build-openclaw-image
 
 COMPOSE := docker compose
 DOTENVX := npx @dotenvx/dotenvx
+LOCAL_COMPOSE_FILE := $(CURDIR)/.git/pinai-docker-compose.local.yml
+LOCAL_IPV4_SUBNET ?= 172.21.0.0/16
+LOCAL_IPV6_SUBNET ?= fd00:21::/64
+COMPOSE_LOCAL := $(COMPOSE) --project-directory $(CURDIR) -f $(LOCAL_COMPOSE_FILE)
 
 # Extract VITE_* as shell exports for docker-compose build args.
 # docker-compose.yml references ${VITE_*} in apis.build.args;
@@ -77,6 +82,24 @@ build-apis: ## Build only the APIs image
 build-openclaw: ## Build only the local OpenClaw image
 	$(COMPOSE) build openclaw-image
 
+ensure-local-compose: ## Generate a local compose file with a non-conflicting Docker subnet
+	@python3 -c "from pathlib import Path; src = Path('docker-compose.yml').read_text(); src = src.replace('172.18.0.0/16', '$(LOCAL_IPV4_SUBNET)').replace('fd00:18::/64', '$(LOCAL_IPV6_SUBNET)'); Path('$(LOCAL_COMPOSE_FILE)').write_text(src)"
+
+build-apis-local: ensure-env-apis ## Build the APIs image locally without BuildKit remote metadata fetch
+	$(export_vite) && DOCKER_BUILDKIT=0 docker build --pull=false \
+		-t pin-ai-assistant-apis:latest \
+		-f apis/Dockerfile \
+		--build-arg VITE_SUPABASE_URL="$$VITE_SUPABASE_URL" \
+		--build-arg VITE_SUPABASE_PUBLISHABLE_KEY="$$VITE_SUPABASE_PUBLISHABLE_KEY" \
+		--build-arg VITE_API_BASE_URL="$$VITE_API_BASE_URL" \
+		.
+
+build-openclaw-local: ## Build the OpenClaw image locally without BuildKit remote metadata fetch
+	DOCKER_BUILDKIT=0 docker build --pull=false \
+		-t pinai-openclaw:latest \
+		-f pinai-openclaw/image/Dockerfile \
+		.
+
 # ── Run ──
 
 up: ensure-env ## Build and start all services
@@ -92,6 +115,21 @@ restart: ensure-env ## Restart all services (rebuild APIs to pick up changes)
 
 status: ## Show running containers
 	$(COMPOSE) ps
+
+up-local: ensure-env ensure-local-compose build-apis-local build-openclaw-local ## Build and start the local stack using stable local Docker settings
+	$(COMPOSE_LOCAL) up -d postgres db-migrate litellm apis
+
+down-local: ensure-local-compose ## Stop the local stack created by up-local
+	$(COMPOSE_LOCAL) down
+
+status-local: ensure-local-compose ## Show local stack container status
+	$(COMPOSE_LOCAL) ps
+
+logs-local: ensure-local-compose ## Tail all local stack logs
+	$(COMPOSE_LOCAL) logs -f
+
+restart-apis-local: ensure-local-compose build-apis-local ## Rebuild and recreate only the APIs container in the local stack
+	$(COMPOSE_LOCAL) up -d --force-recreate --no-deps apis
 
 # ── Logs ──
 
