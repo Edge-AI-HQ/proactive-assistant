@@ -7,7 +7,7 @@ WORKDIR /app
 COPY package*.json ./
 COPY proactive-ai-frontend/package*.json ./proactive-ai-frontend/
 COPY apis/package*.json ./apis/
-RUN npm ci
+RUN npm ci --workspaces --include-workspace-root
 
 # VITE_* are baked into the JS bundle at build time.
 # Pass via fly.toml [build.args], --build-arg, or docker-compose args.
