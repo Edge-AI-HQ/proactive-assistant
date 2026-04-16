@@ -64,7 +64,7 @@ export default function ExecutionView({ intentTitle, onBack }: ExecutionViewProp
         WebkitBackdropFilter: "blur(60px) saturate(1.4)",
       }}
     >
-      <div className="flex flex-col h-full px-4 pt-14 pb-2">
+      <div className="flex flex-col h-full px-4 pt-3 pb-2">
         <button
           onClick={onBack}
           className="text-sm text-primary font-medium mb-4 self-start flex items-center gap-1"

@@ -160,6 +160,21 @@ build-openclaw-image: ## Build and push OpenClaw image to shared registry
 		bash scripts/build-openclaw-image.sh
 
 # ── iOS ──
+# NOTE: The Xcode project (project.pbxproj) uses Team "DH9AJ6A38D" for signing.
+# If your Apple ID is not a member of that team, Cmd+R in Xcode will fail with
+# "No Account for Team". Workaround: build via CLI with your own team override:
+#
+#   cd proactive-ai-frontend/ios/App && \
+#     xcodebuild -project App.xcodeproj -scheme App -configuration Debug \
+#       -destination 'generic/platform=iOS' -allowProvisioningUpdates \
+#       DEVELOPMENT_TEAM=<YOUR_TEAM_ID> \
+#       PRODUCT_BUNDLE_IDENTIFIER=ai.pin.proactive.dev \
+#       build
+#
+# Then install: xcrun devicectl device install app --device <DEVICE_ID> \
+#   ~/Library/Developer/Xcode/DerivedData/App-*/Build/Products/Debug-iphoneos/App.app
+#
+# Long-term fix: ask the team admin to invite your Apple ID to Team DH9AJ6A38D.
 
 ios: ensure-env ## Build frontend, sync iOS, and open Xcode (select device + Cmd+R)
 	cd proactive-ai-frontend && \

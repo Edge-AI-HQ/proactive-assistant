@@ -10,7 +10,7 @@ interface ControlPanelProps {
 
 export default function ControlPanel({ composio }: ControlPanelProps) {
   return (
-    <div className="flex flex-col h-full min-h-0 px-4 pt-14">
+    <div className="flex flex-col h-full min-h-0 px-4 pt-3">
       <div className="flex-shrink-0 mb-5">
         <h1 className="text-2xl font-semibold text-foreground tracking-tight mb-0.5 pr-20">Control Center</h1>
         <p className="text-xs text-foreground/40">Preferences, data connections and integrations</p>

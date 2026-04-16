@@ -205,7 +205,7 @@ export default function ChatTimeline({
   }
 
   return (
-    <div className="flex flex-col h-full px-4 pt-14 pb-2 overflow-y-auto">
+    <div className="flex flex-col h-full px-4 pt-3 pb-2 overflow-y-auto">
       <h1 className="text-display text-2xl text-foreground mb-1 pr-20">Timeline</h1>
       <p className="text-sm text-muted-foreground mb-6">AI memory &amp; action log</p>
 
