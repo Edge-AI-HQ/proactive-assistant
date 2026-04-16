@@ -2,10 +2,23 @@ import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Loader2 } from "lucide-react";
 import { proxyFetch, proxyPost } from "@/lib/api";
 import type { SupportedGenerationLanguage } from "@/types/intent-card";
-import { GENERATION_LANGUAGE_OPTIONS } from "@/types/intent-card";
+
+interface LanguageOption {
+  value: SupportedGenerationLanguage;
+  label: string;
+}
+
+interface GenerationLanguageResponse {
+  ok: boolean;
+  language: SupportedGenerationLanguage;
+  defaultLanguage: SupportedGenerationLanguage;
+  options: LanguageOption[];
+  error?: string;
+}
 
 export default function GenerationLanguageSettings() {
-  const [language, setLanguage] = useState<SupportedGenerationLanguage>("en");
+  const [language, setLanguage] = useState<SupportedGenerationLanguage>("zh-Hans");
+  const [options, setOptions] = useState<LanguageOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -17,10 +30,11 @@ export default function GenerationLanguageSettings() {
     async function loadSettings() {
       try {
         const res = await proxyFetch("/settings/generation-language");
-        const data = await res.json();
+        const data = await res.json() as GenerationLanguageResponse;
         if (!mounted) return;
         if (res.ok && data.ok) {
           setLanguage(data.language);
+          setOptions(data.options);
           setError(null);
         } else {
           setError(data.error ?? "Failed to load language setting");
@@ -46,13 +60,14 @@ export default function GenerationLanguageSettings() {
     setError(null);
     try {
       const res = await proxyPost("/settings/generation-language", { language: nextLanguage });
-      const data = await res.json();
+      const data = await res.json() as GenerationLanguageResponse;
       if (!res.ok || !data.ok) {
         setLanguage(previous);
         setError(data.error ?? "Failed to save");
         return;
       }
       setLanguage(data.language);
+      setOptions(data.options);
       setSavedAt(Date.now());
       if (savedTimerRef.current) window.clearTimeout(savedTimerRef.current);
       savedTimerRef.current = window.setTimeout(() => setSavedAt(null), 1500);
@@ -76,10 +91,10 @@ export default function GenerationLanguageSettings() {
           <select
             value={language}
             onChange={(e) => handleChange(e.target.value as SupportedGenerationLanguage)}
-            disabled={loading || saving}
+            disabled={loading || saving || options.length === 0}
             className="appearance-none rounded-lg border border-foreground/10 bg-white/60 px-3 py-1.5 pr-8 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-40"
           >
-            {GENERATION_LANGUAGE_OPTIONS.map((opt) => (
+            {options.map((opt) => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>

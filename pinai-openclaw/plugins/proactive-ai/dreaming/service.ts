@@ -20,6 +20,7 @@ import {
 import * as store from './store.js';
 import { collectSignals, collectFeedback, collectCards, collectPersonal } from './sources.js';
 import { runAgent, parseAgentJson } from '../pipeline/agent-runner.js';
+import { normalizeGenerationLanguage } from '../agents/generation-language.js';
 import * as db from '../db.js';
 
 // ── Types ──
@@ -550,7 +551,7 @@ async function getCurrentProfile(): Promise<Record<string, unknown>> {
 async function resolveDreamingLanguage(): Promise<unknown> {
   const settings = await db.getUserSettings();
   if (settings.generation_language && settings.generation_language.trim()) {
-    return settings.generation_language;
+    return normalizeGenerationLanguage(settings.generation_language);
   }
   const profile = await db.getProfile();
   return profile?.locale ?? 'en';

@@ -2,14 +2,9 @@ import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import type { RouteHandler } from './types.js';
 import { json } from './types.js';
 import { runPipeline } from '../pipeline/orchestrator.js';
-import { DEFAULT_GENERATION_LANGUAGE } from '../agents/generation-language.js';
+import { normalizeGenerationLanguage } from '../agents/generation-language.js';
 import * as db from '../db.js';
 import { syncCardChatFeedback } from '../chat-feedback/service.js';
-
-const LANGUAGE_MAP: Record<string, string> = {
-  en: 'English', 'zh-Hans': '简体中文 (Chinese)', ja: '日本語 (Japanese)',
-  ko: '한국어 (Korean)', es: 'Español (Spanish)',
-};
 
 interface GenerateRouteDeps {
   getUserSettings?: typeof db.getUserSettings;
@@ -40,7 +35,7 @@ export function handleGenerate(
       const syncCardChatFeedbackImpl = deps?.syncCardChatFeedback ?? syncCardChatFeedback;
       const maxIter = parseInt(ctx.url.searchParams.get('iterations') ?? '', 10) || config.max_iterations;
       const userSettings = await getUserSettings();
-      const outputLanguage = (LANGUAGE_MAP[userSettings.generation_language] ? userSettings.generation_language : DEFAULT_GENERATION_LANGUAGE) as any;
+      const outputLanguage = normalizeGenerationLanguage(userSettings.generation_language);
 
       try {
         await syncCardChatFeedbackImpl({
