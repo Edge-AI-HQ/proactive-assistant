@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { Command } from "commander";
 
 import type { CliRuntimeInput, ResultRef } from "../../runtime.js";
@@ -28,6 +30,7 @@ import {
   unsetPreference,
   updateProfile,
   upsertGoal,
+  appendConnectorRaw,
 } from "./service.js";
 
 export const registerProfileCommands = (
@@ -35,7 +38,9 @@ export const registerProfileCommands = (
   runtime: CliRuntimeInput,
   resultRef: ResultRef,
 ): void => {
-  const profile = new Command("profile").description("User profile: identity, preferences, goals, memory");
+  const profile = new Command("profile").description(
+    "User profile: identity, preferences, goals, memory",
+  );
 
   profile
     .command("create")
@@ -59,7 +64,11 @@ export const registerProfileCommands = (
     .option("--full")
     .option("--json")
     .action(async (options) => {
-      resultRef.current = await getProfile(runtime, options.id, options.full === true);
+      resultRef.current = await getProfile(
+        runtime,
+        options.id,
+        options.full === true,
+      );
     });
 
   profile
@@ -230,6 +239,67 @@ export const registerProfileCommands = (
       resultRef.current = await removeMemory(runtime, options.id);
     });
 
+  const connectorRaw = profile.command("connector-raw");
+  connectorRaw
+    .command("append")
+    .description(
+      "Append bounded connector JSON to connector_raw_data (stdin, --payload-file, or --payload-json)",
+    )
+    .requiredOption("--toolkit <toolkit>")
+    .option("--profile-id <profileId>", "profile id", "default")
+    .option("--connector-kind <kind>", "connector family", "composio")
+    .option("--connected-account-id <id>")
+    .option("--tool-slug <slug>")
+    .option("--ingest-source <source>", "writer label", "profile_ingest")
+    .option("--window-label <label>")
+    .option("--captured-at <iso>", "logical capture time (ISO-8601)")
+    .option(
+      "--payload-json <json>",
+      "inline payload (small); prefer --stdin or --payload-file for large blobs",
+    )
+    .option("--payload-file <path>", "read payload text from file (UTF-8)")
+    .option(
+      "--stdin",
+      "read payload from stdin until EOF (use with a pipe or heredoc)",
+      false,
+    )
+    .option("--json")
+    .action(async (options) => {
+      const maxBytes = 512 * 1024;
+      let payload = "";
+      if (options.stdin) {
+        payload = readFileSync(0, "utf8");
+      } else if (options.payloadFile) {
+        payload = readFileSync(String(options.payloadFile), "utf8");
+      } else if (options.payloadJson !== undefined) {
+        payload = String(options.payloadJson);
+      } else {
+        throw new Error(
+          "Provide exactly one of: --stdin (pipe), --payload-file <path>, or --payload-json <text>",
+        );
+      }
+      if (Buffer.byteLength(payload, "utf8") > maxBytes) {
+        throw new Error(
+          `Payload exceeds max ${maxBytes} bytes; store a bounded subtree or split calls`,
+        );
+      }
+      const trimmed = payload.trim();
+      if (!trimmed) {
+        throw new Error("Payload is empty");
+      }
+      resultRef.current = await appendConnectorRaw(runtime, {
+        toolkit: String(options.toolkit),
+        profileId: options.profileId,
+        connectorKind: options.connectorKind,
+        connectedAccountId: options.connectedAccountId,
+        toolSlug: options.toolSlug,
+        ingestSource: options.ingestSource,
+        windowLabel: options.windowLabel,
+        capturedAt: options.capturedAt,
+        payloadJson: trimmed,
+      });
+    });
+
   const signal = profile.command("signal");
   signal
     .command("add")
@@ -285,12 +355,42 @@ export const registerProfileCommands = (
     supportsDryRun: true,
     flags: [
       { name: "id", type: "string", required: true, description: "Profile ID" },
-      { name: "display-name", type: "string", required: true, description: "Display name" },
-      { name: "locale", type: "string", required: false, description: "Locale (e.g. en-US)" },
-      { name: "timezone", type: "string", required: false, description: "Timezone (e.g. Asia/Shanghai)" },
-      { name: "summary", type: "string", required: false, description: "Profile summary" },
-      { name: "metadata", type: "string", required: false, description: "JSON metadata object" },
-      { name: "full", type: "boolean", required: false, description: "Return the full stored record" },
+      {
+        name: "display-name",
+        type: "string",
+        required: true,
+        description: "Display name",
+      },
+      {
+        name: "locale",
+        type: "string",
+        required: false,
+        description: "Locale (e.g. en-US)",
+      },
+      {
+        name: "timezone",
+        type: "string",
+        required: false,
+        description: "Timezone (e.g. Asia/Shanghai)",
+      },
+      {
+        name: "summary",
+        type: "string",
+        required: false,
+        description: "Profile summary",
+      },
+      {
+        name: "metadata",
+        type: "string",
+        required: false,
+        description: "JSON metadata object",
+      },
+      {
+        name: "full",
+        type: "boolean",
+        required: false,
+        description: "Return the full stored record",
+      },
     ],
   });
 
@@ -302,7 +402,12 @@ export const registerProfileCommands = (
     supportsDryRun: false,
     flags: [
       { name: "id", type: "string", required: true, description: "Profile ID" },
-      { name: "full", type: "boolean", required: false, description: "Return the full stored record" },
+      {
+        name: "full",
+        type: "boolean",
+        required: false,
+        description: "Return the full stored record",
+      },
     ],
   });
 
@@ -313,7 +418,12 @@ export const registerProfileCommands = (
     risk: "read",
     supportsDryRun: false,
     flags: [
-      { name: "full", type: "boolean", required: false, description: "Return the full stored record" },
+      {
+        name: "full",
+        type: "boolean",
+        required: false,
+        description: "Return the full stored record",
+      },
     ],
   });
 
@@ -325,11 +435,36 @@ export const registerProfileCommands = (
     supportsDryRun: true,
     flags: [
       { name: "id", type: "string", required: true, description: "Profile ID" },
-      { name: "display-name", type: "string", required: false, description: "Display name" },
-      { name: "locale", type: "string", required: false, description: "Locale" },
-      { name: "timezone", type: "string", required: false, description: "Timezone" },
-      { name: "summary", type: "string", required: false, description: "Profile summary" },
-      { name: "metadata", type: "string", required: false, description: "JSON metadata object" },
+      {
+        name: "display-name",
+        type: "string",
+        required: false,
+        description: "Display name",
+      },
+      {
+        name: "locale",
+        type: "string",
+        required: false,
+        description: "Locale",
+      },
+      {
+        name: "timezone",
+        type: "string",
+        required: false,
+        description: "Timezone",
+      },
+      {
+        name: "summary",
+        type: "string",
+        required: false,
+        description: "Profile summary",
+      },
+      {
+        name: "metadata",
+        type: "string",
+        required: false,
+        description: "JSON metadata object",
+      },
     ],
   });
 
@@ -361,7 +496,12 @@ export const registerProfileCommands = (
     supportsDryRun: false,
     flags: [
       { name: "key", type: "string", required: true, description: "Fact key" },
-      { name: "value-json", type: "string", required: true, description: "JSON-encoded fact value" },
+      {
+        name: "value-json",
+        type: "string",
+        required: true,
+        description: "JSON-encoded fact value",
+      },
     ],
   });
 
@@ -371,7 +511,9 @@ export const registerProfileCommands = (
     description: "Remove a stable fact from the default profile",
     risk: "write",
     supportsDryRun: false,
-    flags: [{ name: "key", type: "string", required: true, description: "Fact key" }],
+    flags: [
+      { name: "key", type: "string", required: true, description: "Fact key" },
+    ],
   });
 
   registerCommand({
@@ -390,8 +532,18 @@ export const registerProfileCommands = (
     risk: "write",
     supportsDryRun: false,
     flags: [
-      { name: "key", type: "string", required: true, description: "Preference key" },
-      { name: "value-json", type: "string", required: true, description: "JSON-encoded preference value" },
+      {
+        name: "key",
+        type: "string",
+        required: true,
+        description: "Preference key",
+      },
+      {
+        name: "value-json",
+        type: "string",
+        required: true,
+        description: "JSON-encoded preference value",
+      },
     ],
   });
 
@@ -401,7 +553,14 @@ export const registerProfileCommands = (
     description: "Remove a preference from the default profile",
     risk: "write",
     supportsDryRun: false,
-    flags: [{ name: "key", type: "string", required: true, description: "Preference key" }],
+    flags: [
+      {
+        name: "key",
+        type: "string",
+        required: true,
+        description: "Preference key",
+      },
+    ],
   });
 
   registerCommand({
@@ -421,9 +580,24 @@ export const registerProfileCommands = (
     supportsDryRun: false,
     flags: [
       { name: "key", type: "string", required: true, description: "Goal key" },
-      { name: "title", type: "string", required: true, description: "Goal title" },
-      { name: "priority", type: "string", required: false, description: "Goal priority" },
-      { name: "summary", type: "string", required: false, description: "Goal summary" },
+      {
+        name: "title",
+        type: "string",
+        required: true,
+        description: "Goal title",
+      },
+      {
+        name: "priority",
+        type: "string",
+        required: false,
+        description: "Goal priority",
+      },
+      {
+        name: "summary",
+        type: "string",
+        required: false,
+        description: "Goal summary",
+      },
     ],
   });
 
@@ -433,7 +607,9 @@ export const registerProfileCommands = (
     description: "Close an existing goal on the default profile",
     risk: "write",
     supportsDryRun: false,
-    flags: [{ name: "key", type: "string", required: true, description: "Goal key" }],
+    flags: [
+      { name: "key", type: "string", required: true, description: "Goal key" },
+    ],
   });
 
   registerCommand({
@@ -452,8 +628,18 @@ export const registerProfileCommands = (
     risk: "write",
     supportsDryRun: false,
     flags: [
-      { name: "key", type: "string", required: true, description: "Constraint key" },
-      { name: "value-json", type: "string", required: true, description: "JSON-encoded constraint value" },
+      {
+        name: "key",
+        type: "string",
+        required: true,
+        description: "Constraint key",
+      },
+      {
+        name: "value-json",
+        type: "string",
+        required: true,
+        description: "JSON-encoded constraint value",
+      },
     ],
   });
 
@@ -463,7 +649,14 @@ export const registerProfileCommands = (
     description: "Remove a constraint from the default profile",
     risk: "write",
     supportsDryRun: false,
-    flags: [{ name: "key", type: "string", required: true, description: "Constraint key" }],
+    flags: [
+      {
+        name: "key",
+        type: "string",
+        required: true,
+        description: "Constraint key",
+      },
+    ],
   });
 
   registerCommand({
@@ -482,9 +675,24 @@ export const registerProfileCommands = (
     risk: "write",
     supportsDryRun: false,
     flags: [
-      { name: "kind", type: "string", required: true, description: "Memory kind" },
-      { name: "text", type: "string", required: true, description: "Memory text" },
-      { name: "tags-json", type: "string", required: false, description: "JSON string array of tags" },
+      {
+        name: "kind",
+        type: "string",
+        required: true,
+        description: "Memory kind",
+      },
+      {
+        name: "text",
+        type: "string",
+        required: true,
+        description: "Memory text",
+      },
+      {
+        name: "tags-json",
+        type: "string",
+        required: false,
+        description: "JSON string array of tags",
+      },
     ],
   });
 
@@ -494,7 +702,14 @@ export const registerProfileCommands = (
     description: "Search profile memory entries for the default profile",
     risk: "read",
     supportsDryRun: false,
-    flags: [{ name: "query", type: "string", required: true, description: "Search query" }],
+    flags: [
+      {
+        name: "query",
+        type: "string",
+        required: true,
+        description: "Search query",
+      },
+    ],
   });
 
   registerCommand({
@@ -503,7 +718,94 @@ export const registerProfileCommands = (
     description: "Remove a memory entry from the default profile",
     risk: "write",
     supportsDryRun: false,
-    flags: [{ name: "id", type: "string", required: true, description: "Memory entry ID" }],
+    flags: [
+      {
+        name: "id",
+        type: "string",
+        required: true,
+        description: "Memory entry ID",
+      },
+    ],
+  });
+
+  registerCommand({
+    domain: "profile",
+    command: "connector-raw append",
+    description:
+      "Append one bounded connector payload to connector_raw_data (stdin, file, or inline JSON)",
+    risk: "write",
+    supportsDryRun: false,
+    flags: [
+      {
+        name: "toolkit",
+        type: "string",
+        required: true,
+        description: "Connector toolkit slug",
+      },
+      {
+        name: "profile-id",
+        type: "string",
+        required: false,
+        default: "default",
+        description: "Profile id",
+      },
+      {
+        name: "connector-kind",
+        type: "string",
+        required: false,
+        default: "composio",
+        description: "Connector family",
+      },
+      {
+        name: "connected-account-id",
+        type: "string",
+        required: false,
+        description: "Composio connected account id",
+      },
+      {
+        name: "tool-slug",
+        type: "string",
+        required: false,
+        description: "Tool slug for this fetch",
+      },
+      {
+        name: "ingest-source",
+        type: "string",
+        required: false,
+        default: "profile_ingest",
+        description: "Ingest pipeline label",
+      },
+      {
+        name: "window-label",
+        type: "string",
+        required: false,
+        description: "Optional window / batch label",
+      },
+      {
+        name: "captured-at",
+        type: "string",
+        required: false,
+        description: "Capture timestamp ISO-8601",
+      },
+      {
+        name: "payload-json",
+        type: "string",
+        required: false,
+        description: "Inline JSON payload (small)",
+      },
+      {
+        name: "payload-file",
+        type: "string",
+        required: false,
+        description: "Path to UTF-8 payload file",
+      },
+      {
+        name: "stdin",
+        type: "boolean",
+        required: false,
+        description: "Read payload from stdin until EOF",
+      },
+    ],
   });
 
   registerCommand({
@@ -514,12 +816,42 @@ export const registerProfileCommands = (
     supportsDryRun: false,
     flags: [
       { name: "id", type: "string", required: true, description: "Profile ID" },
-      { name: "kind", type: "string", required: true, description: "Signal kind" },
-      { name: "target-type", type: "string", required: true, description: "Signal target type" },
-      { name: "target-key", type: "string", required: true, description: "Signal target key" },
-      { name: "source", type: "string", required: true, description: "Signal source" },
-      { name: "value", type: "number", required: false, description: "Optional signal strength" },
-      { name: "occurred-at", type: "string", required: false, description: "Signal timestamp (ISO-8601)" },
+      {
+        name: "kind",
+        type: "string",
+        required: true,
+        description: "Signal kind",
+      },
+      {
+        name: "target-type",
+        type: "string",
+        required: true,
+        description: "Signal target type",
+      },
+      {
+        name: "target-key",
+        type: "string",
+        required: true,
+        description: "Signal target key",
+      },
+      {
+        name: "source",
+        type: "string",
+        required: true,
+        description: "Signal source",
+      },
+      {
+        name: "value",
+        type: "number",
+        required: false,
+        description: "Optional signal strength",
+      },
+      {
+        name: "occurred-at",
+        type: "string",
+        required: false,
+        description: "Signal timestamp (ISO-8601)",
+      },
     ],
   });
 
@@ -531,7 +863,12 @@ export const registerProfileCommands = (
     supportsDryRun: false,
     flags: [
       { name: "id", type: "string", required: true, description: "Profile ID" },
-      { name: "since", type: "string", required: false, description: "Lookback window or ISO-8601 timestamp" },
+      {
+        name: "since",
+        type: "string",
+        required: false,
+        description: "Lookback window or ISO-8601 timestamp",
+      },
     ],
   });
 
@@ -543,8 +880,18 @@ export const registerProfileCommands = (
     supportsDryRun: false,
     flags: [
       { name: "id", type: "string", required: true, description: "Profile ID" },
-      { name: "kind", type: "string", required: false, description: "Interest kind filter" },
-      { name: "limit", type: "number", required: false, description: "Maximum result count" },
+      {
+        name: "kind",
+        type: "string",
+        required: false,
+        description: "Interest kind filter",
+      },
+      {
+        name: "limit",
+        type: "number",
+        required: false,
+        description: "Maximum result count",
+      },
     ],
   });
 
@@ -556,7 +903,12 @@ export const registerProfileCommands = (
     supportsDryRun: false,
     flags: [
       { name: "id", type: "string", required: true, description: "Profile ID" },
-      { name: "view", type: "string", required: false, description: "Snapshot view name" },
+      {
+        name: "view",
+        type: "string",
+        required: false,
+        description: "Snapshot view name",
+      },
     ],
   });
 };

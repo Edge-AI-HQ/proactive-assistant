@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 
 import type { SqliteDatabase } from "../../db/sqlite_adapter.js";
@@ -138,8 +139,7 @@ const SOURCE_WEIGHTS: Record<string, number> = {
 const getBaseSignalWeight = (kind: string): number =>
   BASE_SIGNAL_WEIGHTS[kind] ?? 0;
 
-const getSourceWeight = (source: string): number =>
-  SOURCE_WEIGHTS[source] ?? 1;
+const getSourceWeight = (source: string): number => SOURCE_WEIGHTS[source] ?? 1;
 
 const getDecayMultiplier = (occurredAt: string): number => {
   const ageMs = Math.max(0, Date.now() - new Date(occurredAt).getTime());
@@ -334,6 +334,30 @@ export class ProfileRepository {
       );
     }
 
+    this.database.exec(`
+      create table if not exists connector_raw_data (
+        id text primary key not null,
+        profile_id text not null,
+        connector_kind text not null default 'composio',
+        toolkit text not null,
+        connected_account_id text,
+        tool_slug text,
+        ingest_source text not null default 'profile_ingest',
+        window_label text,
+        captured_at text not null,
+        payload_json text not null,
+        created_at text not null
+      )
+    `);
+    this.database.exec(`
+      create index if not exists connector_raw_data_profile_created_idx
+      on connector_raw_data (profile_id, created_at desc)
+    `);
+    this.database.exec(`
+      create index if not exists connector_raw_data_profile_toolkit_captured_idx
+      on connector_raw_data (profile_id, toolkit, captured_at desc)
+    `);
+
     this.schemaReady = true;
   }
 
@@ -391,7 +415,10 @@ export class ProfileRepository {
     });
   }
 
-  async unsetPreference(id: string, key: string): Promise<ProfileRecord | null> {
+  async unsetPreference(
+    id: string,
+    key: string,
+  ): Promise<ProfileRecord | null> {
     const profile = await this.getById(id);
     if (!profile) return null;
 
@@ -554,7 +581,10 @@ export class ProfileRepository {
     });
   }
 
-  async unsetConstraint(id: string, key: string): Promise<ProfileRecord | null> {
+  async unsetConstraint(
+    id: string,
+    key: string,
+  ): Promise<ProfileRecord | null> {
     const profile = await this.getById(id);
     if (!profile) return null;
 
@@ -603,10 +633,9 @@ export class ProfileRepository {
     const profile = await this.getById(id);
     if (!profile) return null;
 
-    const signals = ((profile.signals ?? []) as ProfileSignalRecord[])
-      .filter((signal) =>
-        options?.since ? signal.occurredAt >= options.since : true,
-      );
+    const signals = ((profile.signals ?? []) as ProfileSignalRecord[]).filter(
+      (signal) => (options?.since ? signal.occurredAt >= options.since : true),
+    );
 
     const aggregates = new Map<
       string,
@@ -677,7 +706,9 @@ export class ProfileRepository {
     if (!profile) return [];
 
     return ((profile.interests ?? []) as ProfileInterestRecord[])
-      .filter((interest) => (options?.kind ? interest.kind === options.kind : true))
+      .filter((interest) =>
+        options?.kind ? interest.kind === options.kind : true,
+      )
       .slice(0, options?.limit ?? 20);
   }
 
@@ -688,9 +719,9 @@ export class ProfileRepository {
     const profile = await this.getById(id);
     if (!profile) return null;
 
-    const interests = ((profile.interests ?? []) as ProfileInterestRecord[]).sort(
-      (left, right) => right.score - left.score,
-    );
+    const interests = (
+      (profile.interests ?? []) as ProfileInterestRecord[]
+    ).sort((left, right) => right.score - left.score);
     const positiveTopics = interests
       .filter((interest) => interest.kind === "topic" && interest.score > 0)
       .slice(0, 3)
@@ -746,7 +777,9 @@ export class ProfileRepository {
       activeConstraints,
     };
 
-    const currentSnapshots = (profile.snapshots ?? []) as Array<Record<string, unknown>>;
+    const currentSnapshots = (profile.snapshots ?? []) as Array<
+      Record<string, unknown>
+    >;
     const nextSnapshots = [
       ...currentSnapshots.filter((entry) => entry.view !== view),
       {
@@ -760,5 +793,56 @@ export class ProfileRepository {
     });
 
     return snapshot;
+  }
+
+  /**
+   * Append bounded connector payload (Composio or future kinds) for audit — not `profiles.memory`.
+   */
+  async insertConnectorRawData(
+    profileId: string,
+    input: {
+      connectorKind?: string;
+      toolkit: string;
+      connectedAccountId?: string;
+      toolSlug?: string;
+      ingestSource?: string;
+      windowLabel?: string;
+      capturedAt?: string;
+      payloadJson: string;
+    },
+  ): Promise<string | null> {
+    await this.ensureSchema();
+    const profile = await this.getById(profileId);
+    if (!profile) return null;
+
+    const id = randomUUID();
+    const createdAt = new Date().toISOString();
+    const capturedAt = input.capturedAt ?? createdAt;
+    const connectorKind =
+      (input.connectorKind ?? "composio").trim() || "composio";
+    const ingestSource =
+      (input.ingestSource ?? "profile_ingest").trim() || "profile_ingest";
+    this.database.client
+      .prepare(
+        `insert into connector_raw_data (
+          id, profile_id, connector_kind, toolkit, connected_account_id, tool_slug,
+          ingest_source, window_label, captured_at, payload_json, created_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        profileId,
+        connectorKind,
+        input.toolkit,
+        input.connectedAccountId?.trim() ?? null,
+        input.toolSlug?.trim() ?? null,
+        ingestSource,
+        input.windowLabel?.trim() ?? null,
+        capturedAt,
+        input.payloadJson,
+        createdAt,
+      );
+
+    return id;
   }
 }

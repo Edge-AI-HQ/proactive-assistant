@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractIdentity } from "./provider.js";
+import { extractIdentity } from "./extract_identity.js";
 
 describe("extractIdentity", () => {
   it("prefers email over Supabase issuer noise", () => {

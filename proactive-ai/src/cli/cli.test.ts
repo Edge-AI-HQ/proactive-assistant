@@ -20,7 +20,12 @@ import { LoopRepository } from "./domains/loop/repository.js";
 import * as cards from "../core/domains/cards/service.js";
 
 interface SysDoctorData {
-  checks: Array<{ name: string; status: string; message: string; hint?: string }>;
+  checks: Array<{
+    name: string;
+    status: string;
+    message: string;
+    hint?: string;
+  }>;
   ok: boolean;
   dataRoot: string;
   paths: {
@@ -62,10 +67,28 @@ interface ProfileInterestRecord {
 interface ProfileSnapshotRecord {
   profileId: string;
   view: string;
-  topPositiveTopics: Array<{ key: string; score: number; evidenceCount: number; facts: Array<{ code: string; value: string | number }> }>;
-  topNegativeTopics: Array<{ key: string; score: number; evidenceCount: number; facts: Array<{ code: string; value: string | number }> }>;
-  topEntities: Array<{ key: string; score: number; evidenceCount: number; facts: Array<{ code: string; value: string | number }> }>;
-  activeConstraints: Array<{ key: string; facts: Array<{ code: string; value: string }> }>;
+  topPositiveTopics: Array<{
+    key: string;
+    score: number;
+    evidenceCount: number;
+    facts: Array<{ code: string; value: string | number }>;
+  }>;
+  topNegativeTopics: Array<{
+    key: string;
+    score: number;
+    evidenceCount: number;
+    facts: Array<{ code: string; value: string | number }>;
+  }>;
+  topEntities: Array<{
+    key: string;
+    score: number;
+    evidenceCount: number;
+    facts: Array<{ code: string; value: string | number }>;
+  }>;
+  activeConstraints: Array<{
+    key: string;
+    facts: Array<{ code: string; value: string }>;
+  }>;
 }
 
 interface WorldItemRecord {
@@ -368,7 +391,11 @@ test("sys schema returns command detail for known path", async () => {
   const result = await runCli(["sys", "schema", "profile.get", "--json"]);
 
   assert.equal(result.exitCode, 0);
-  const data = result.stdout.data as { domain: string; command: string; flags: unknown[] };
+  const data = result.stdout.data as {
+    domain: string;
+    command: string;
+    flags: unknown[];
+  };
   assert.equal(data.domain, "profile");
   assert.equal(data.command, "get");
   assert.ok(Array.isArray(data.flags));
@@ -377,26 +404,44 @@ test("sys schema returns command detail for known path", async () => {
 test("sys schema includes world semantic commands", async () => {
   const findResult = await runCli(["sys", "schema", "world.find", "--json"]);
   assert.equal(findResult.exitCode, 0);
-  const findData = findResult.stdout.data as { domain: string; command: string };
+  const findData = findResult.stdout.data as {
+    domain: string;
+    command: string;
+  };
   assert.equal(findData.domain, "world");
   assert.equal(findData.command, "find");
 
-  const indexResult = await runCli(["sys", "schema", "world.index.refresh", "--json"]);
+  const indexResult = await runCli([
+    "sys",
+    "schema",
+    "world.index.refresh",
+    "--json",
+  ]);
   assert.equal(indexResult.exitCode, 0);
-  const indexData = indexResult.stdout.data as { domain: string; command: string };
+  const indexData = indexResult.stdout.data as {
+    domain: string;
+    command: string;
+  };
   assert.equal(indexData.domain, "world");
   assert.equal(indexData.command, "index refresh");
 });
 
 test("sys schema includes implemented section commands and system placeholders", async () => {
-  const commandsResult = (await runCli(["sys", "schema", "--json"])) as RunCliResult & {
+  const commandsResult = (await runCli([
+    "sys",
+    "schema",
+    "--json",
+  ])) as RunCliResult & {
     stdout: PinEnvelope<{ commands: Array<{ path: string }> }>;
   };
-  const paths = new Set(commandsResult.stdout.data?.commands.map((command) => command.path) ?? []);
+  const paths = new Set(
+    commandsResult.stdout.data?.commands.map((command) => command.path) ?? [],
+  );
   assert.equal(paths.has("sys.migrate"), true);
   assert.equal(paths.has("sys.import"), true);
   assert.equal(paths.has("profile.facts.get"), true);
   assert.equal(paths.has("profile.memory.add"), true);
+  assert.equal(paths.has("profile.connector-raw.append"), true);
   assert.equal(paths.has("memory.entries.list"), true);
   assert.equal(paths.has("memory.context"), true);
   assert.equal(paths.has("ingest.run"), true);
@@ -405,16 +450,31 @@ test("sys schema includes implemented section commands and system placeholders",
   assert.equal(paths.has("loop.status"), true);
   assert.equal(paths.has("profile.goals.upsert"), true);
 
-  const memoryAdd = await runCli(["sys", "schema", "profile.memory.add", "--json"]);
+  const memoryAdd = await runCli([
+    "sys",
+    "schema",
+    "profile.memory.add",
+    "--json",
+  ]);
   assert.equal(memoryAdd.exitCode, 0);
-  const memoryAddData = memoryAdd.stdout.data as { domain: string; command: string; flags: Array<{ name: string }> };
+  const memoryAddData = memoryAdd.stdout.data as {
+    domain: string;
+    command: string;
+    flags: Array<{ name: string }>;
+  };
   assert.equal(memoryAddData.domain, "profile");
   assert.equal(memoryAddData.command, "memory add");
-  assert.equal(memoryAddData.flags.some((flag) => flag.name === "kind"), true);
+  assert.equal(
+    memoryAddData.flags.some((flag) => flag.name === "kind"),
+    true,
+  );
 
   const migrate = await runCli(["sys", "schema", "sys.migrate", "--json"]);
   assert.equal(migrate.exitCode, 0);
-  const migrateData = migrate.stdout.data as { domain: string; command: string };
+  const migrateData = migrate.stdout.data as {
+    domain: string;
+    command: string;
+  };
   assert.equal(migrateData.domain, "sys");
   assert.equal(migrateData.command, "migrate");
 });
@@ -428,7 +488,19 @@ test("memory context returns resident and relevant recall from the independent m
       homeDir: root,
     };
 
-    await runCli(["profile", "create", "--id", "default", "--display-name", "User", "--full", "--json"], runtime);
+    await runCli(
+      [
+        "profile",
+        "create",
+        "--id",
+        "default",
+        "--display-name",
+        "User",
+        "--full",
+        "--json",
+      ],
+      runtime,
+    );
     await core.memory.recordMemoryEvent(runtime, {
       profileId: "default",
       source: "chat",
@@ -446,7 +518,10 @@ test("memory context returns resident and relevant recall from the independent m
       memoryRepository: repository,
     });
 
-    const result = await runCli(["memory", "context", "--query", "Supabase issue", "--json"], runtime);
+    const result = await runCli(
+      ["memory", "context", "--query", "Supabase issue", "--json"],
+      runtime,
+    );
     assert.equal(result.exitCode, 0);
     const data = result.stdout.data as {
       residentMemories: Array<{ text: string }>;
@@ -454,7 +529,12 @@ test("memory context returns resident and relevant recall from the independent m
     };
 
     assert.equal(data.residentMemories.length > 0, true);
-    assert.equal(data.relevantMemories.some((entry) => entry.text.includes("Supabase issue triage")), true);
+    assert.equal(
+      data.relevantMemories.some((entry) =>
+        entry.text.includes("Supabase issue triage"),
+      ),
+      true,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -469,7 +549,19 @@ test("memory consolidation keeps a single entry per subject when newer evidence 
       homeDir: root,
     };
 
-    await runCli(["profile", "create", "--id", "default", "--display-name", "User", "--full", "--json"], runtime);
+    await runCli(
+      [
+        "profile",
+        "create",
+        "--id",
+        "default",
+        "--display-name",
+        "User",
+        "--full",
+        "--json",
+      ],
+      runtime,
+    );
 
     await core.memory.recordMemoryEvent(runtime, {
       profileId: "default",
@@ -498,7 +590,10 @@ test("memory consolidation keeps a single entry per subject when newer evidence 
       memoryRepository: repository,
     });
 
-    const entries = await repository.listEntries("default", { category: "dreaming", limit: 10 });
+    const entries = await repository.listEntries("default", {
+      category: "dreaming",
+      limit: 10,
+    });
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.text, "Updated summary");
     assert.deepEqual(entries[0]?.sourceEventIds.length, 2);
@@ -544,7 +639,10 @@ test("context incremental and loop commit support agent-style consumption", asyn
     )) as RunCliResult & {
       stdout: PinEnvelope<{
         runToken: string;
-        items: { world: Array<{ id: string; title: string }>; personal: unknown[] };
+        items: {
+          world: Array<{ id: string; title: string }>;
+          personal: unknown[];
+        };
       }>;
     };
 
@@ -558,15 +656,21 @@ test("context incremental and loop commit support agent-style consumption", asyn
       runtime,
     );
     assert.equal(committed.exitCode, 0);
-    assert.equal((committed.stdout.data as { processedCount: number }).processedCount, 1);
-
-    const status = await runCli(
-      ["loop", "status", "--json"],
-      runtime,
+    assert.equal(
+      (committed.stdout.data as { processedCount: number }).processedCount,
+      1,
     );
+
+    const status = await runCli(["loop", "status", "--json"], runtime);
     assert.equal(status.exitCode, 0);
-    assert.equal((status.stdout.data as { pendingCount: number }).pendingCount, 0);
-    assert.equal((status.stdout.data as { processedCount: number }).processedCount, 1);
+    assert.equal(
+      (status.stdout.data as { pendingCount: number }).pendingCount,
+      0,
+    );
+    assert.equal(
+      (status.stdout.data as { processedCount: number }).processedCount,
+      1,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -610,7 +714,10 @@ test("context incremental honors min-age-ms threshold", async () => {
     )) as RunCliResult & {
       stdout: PinEnvelope<{
         runToken: string | null;
-        items: { world: Array<{ id: string; title: string }>; personal: unknown[] };
+        items: {
+          world: Array<{ id: string; title: string }>;
+          personal: unknown[];
+        };
       }>;
     };
 
@@ -815,9 +922,25 @@ test("feedback log, list, get, stats full lifecycle", async () => {
 
     // log a card_action confirm
     const logged = await runCli(
-      ["feedback", "log", "--kind", "card_action", "--action", "confirm",
-       "--basket", "work", "--channel", "telegram", "--source", "user_direct",
-       "--intent-card-id", "ic_001", "--push-id", "push_123", "--json"],
+      [
+        "feedback",
+        "log",
+        "--kind",
+        "card_action",
+        "--action",
+        "confirm",
+        "--basket",
+        "work",
+        "--channel",
+        "telegram",
+        "--source",
+        "user_direct",
+        "--intent-card-id",
+        "ic_001",
+        "--push-id",
+        "push_123",
+        "--json",
+      ],
       runtime,
     );
     assert.equal(logged.exitCode, 0);
@@ -834,10 +957,23 @@ test("feedback log, list, get, stats full lifecycle", async () => {
 
     // log a text_feedback
     const textLogged = await runCli(
-      ["feedback", "log", "--kind", "text_feedback",
-       "--text", "User prefers morning notifications",
-       "--source", "user_derived", "--basket", "health",
-       "--conversation-id", "conv_abc", "--message-id", "msg_456", "--json"],
+      [
+        "feedback",
+        "log",
+        "--kind",
+        "text_feedback",
+        "--text",
+        "User prefers morning notifications",
+        "--source",
+        "user_derived",
+        "--basket",
+        "health",
+        "--conversation-id",
+        "conv_abc",
+        "--message-id",
+        "msg_456",
+        "--json",
+      ],
       runtime,
     );
     assert.equal(textLogged.exitCode, 0);
@@ -867,10 +1003,7 @@ test("feedback log, list, get, stats full lifecycle", async () => {
     assert.equal(notFound.stdout.error?.code, "NOT_FOUND");
 
     // list all
-    const listed = await runCli(
-      ["feedback", "list", "--json"],
-      runtime,
-    );
+    const listed = await runCli(["feedback", "list", "--json"], runtime);
     assert.equal(listed.exitCode, 0);
     assert.equal((listed.stdout.data as unknown[]).length, 3);
 
@@ -891,10 +1024,7 @@ test("feedback log, list, get, stats full lifecycle", async () => {
     assert.equal((icFiltered.stdout.data as unknown[]).length, 1);
 
     // stats
-    const stats = await runCli(
-      ["feedback", "stats", "--json"],
-      runtime,
-    );
+    const stats = await runCli(["feedback", "stats", "--json"], runtime);
     assert.equal(stats.exitCode, 0);
     assert.equal(stats.stdout.ok, true);
     const statsData = stats.stdout.data as Record<string, unknown>;
@@ -912,18 +1042,28 @@ test("feedback log with --dry-run does not persist", async () => {
     const runtime = { env: { PIN_DATA_ROOT: root } };
 
     const dryResult = await runCli(
-      ["feedback", "log", "--kind", "card_action", "--action", "confirm",
-       "--basket", "work", "--dry-run", "--json"],
+      [
+        "feedback",
+        "log",
+        "--kind",
+        "card_action",
+        "--action",
+        "confirm",
+        "--basket",
+        "work",
+        "--dry-run",
+        "--json",
+      ],
       runtime,
     );
     assert.equal(dryResult.exitCode, 0);
     assert.equal(dryResult.stdout.ok, true);
-    assert.equal((dryResult.stdout.data as Record<string, unknown>).dryRun, true);
-
-    const listed = await runCli(
-      ["feedback", "list", "--json"],
-      runtime,
+    assert.equal(
+      (dryResult.stdout.data as Record<string, unknown>).dryRun,
+      true,
     );
+
+    const listed = await runCli(["feedback", "list", "--json"], runtime);
     assert.equal((listed.stdout.data as unknown[]).length, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -931,9 +1071,13 @@ test("feedback log with --dry-run does not persist", async () => {
 });
 
 test("feedback log validates kind enum", async () => {
-  const result = await runCli(
-    ["feedback", "log", "--kind", "invalid_kind", "--json"],
-  );
+  const result = await runCli([
+    "feedback",
+    "log",
+    "--kind",
+    "invalid_kind",
+    "--json",
+  ]);
   assert.equal(result.exitCode, 2);
   assert.equal(result.stdout.ok, false);
   assert.ok(result.stdout.error?.message.includes("Invalid"));
@@ -955,7 +1099,7 @@ test("feedback log persists metadata json", async () => {
         "--intent-card-id",
         "ic_101",
         "--metadata",
-        "{\"runId\":\"run_123\",\"intentKey\":\"work:review-queue-with-alex\",\"surface\":\"now_feed\"}",
+        '{"runId":"run_123","intentKey":"work:review-queue-with-alex","surface":"now_feed"}',
         "--json",
       ],
       runtime,
@@ -981,9 +1125,25 @@ test("push record, get, history, outcome, find-similar full lifecycle", async ()
 
     // record a push
     const recorded = await runCli(
-      ["push", "record", "--kind", "proactive_card", "--title", "AI funding roundup",
-       "--basket", "work", "--channel", "telegram", "--ref", "article_set_77",
-       "--reason", "matches user interest", "--intent-card-id", "ic_001", "--json"],
+      [
+        "push",
+        "record",
+        "--kind",
+        "proactive_card",
+        "--title",
+        "AI funding roundup",
+        "--basket",
+        "work",
+        "--channel",
+        "telegram",
+        "--ref",
+        "article_set_77",
+        "--reason",
+        "matches user interest",
+        "--intent-card-id",
+        "ic_001",
+        "--json",
+      ],
       runtime,
     );
     assert.equal(recorded.exitCode, 0);
@@ -1002,8 +1162,17 @@ test("push record, get, history, outcome, find-similar full lifecycle", async ()
 
     // record a second push (different kind)
     await runCli(
-      ["push", "record", "--kind", "digest", "--title", "Weekly health digest",
-       "--basket", "health", "--json"],
+      [
+        "push",
+        "record",
+        "--kind",
+        "digest",
+        "--title",
+        "Weekly health digest",
+        "--basket",
+        "health",
+        "--json",
+      ],
       runtime,
     );
 
@@ -1041,10 +1210,7 @@ test("push record, get, history, outcome, find-similar full lifecycle", async ()
     assert.equal(outcomes[0].status, "clicked");
 
     // history — all
-    const allHistory = await runCli(
-      ["push", "history", "--json"],
-      runtime,
-    );
+    const allHistory = await runCli(["push", "history", "--json"], runtime);
     assert.equal(allHistory.exitCode, 0);
     const allItems = allHistory.stdout.data as Array<Record<string, unknown>>;
     assert.equal(allItems.length, 2);
@@ -1054,7 +1220,9 @@ test("push record, get, history, outcome, find-similar full lifecycle", async ()
       ["push", "history", "--kind", "digest", "--json"],
       runtime,
     );
-    const filteredItems = filteredHistory.stdout.data as Array<Record<string, unknown>>;
+    const filteredItems = filteredHistory.stdout.data as Array<
+      Record<string, unknown>
+    >;
     assert.equal(filteredItems.length, 1);
     assert.equal(filteredItems[0].kind, "digest");
 
@@ -1063,13 +1231,23 @@ test("push record, get, history, outcome, find-similar full lifecycle", async ()
       ["push", "history", "--basket", "work", "--json"],
       runtime,
     );
-    const basketItems = basketHistory.stdout.data as Array<Record<string, unknown>>;
+    const basketItems = basketHistory.stdout.data as Array<
+      Record<string, unknown>
+    >;
     assert.equal(basketItems.length, 1);
     assert.equal(basketItems[0].basket, "work");
 
     // find-similar — by ref
     const similar = await runCli(
-      ["push", "find-similar", "--kind", "proactive_card", "--ref", "article_set_77", "--json"],
+      [
+        "push",
+        "find-similar",
+        "--kind",
+        "proactive_card",
+        "--ref",
+        "article_set_77",
+        "--json",
+      ],
       runtime,
     );
     assert.equal(similar.exitCode, 0);
@@ -1079,15 +1257,33 @@ test("push record, get, history, outcome, find-similar full lifecycle", async ()
 
     // find-similar — by title keyword
     const titleSimilar = await runCli(
-      ["push", "find-similar", "--kind", "proactive_card", "--title", "funding", "--json"],
+      [
+        "push",
+        "find-similar",
+        "--kind",
+        "proactive_card",
+        "--title",
+        "funding",
+        "--json",
+      ],
       runtime,
     );
-    const titleItems = titleSimilar.stdout.data as Array<Record<string, unknown>>;
+    const titleItems = titleSimilar.stdout.data as Array<
+      Record<string, unknown>
+    >;
     assert.equal(titleItems.length, 1);
 
     // find-similar — no match
     const noMatch = await runCli(
-      ["push", "find-similar", "--kind", "proactive_card", "--title", "zzz_nonexistent", "--json"],
+      [
+        "push",
+        "find-similar",
+        "--kind",
+        "proactive_card",
+        "--title",
+        "zzz_nonexistent",
+        "--json",
+      ],
       runtime,
     );
     const noMatchItems = noMatch.stdout.data as Array<Record<string, unknown>>;
@@ -1103,7 +1299,16 @@ test("push record dry-run does not persist", async () => {
     const runtime = { env: { PIN_DATA_ROOT: root } };
 
     const dryResult = await runCli(
-      ["push", "record", "--kind", "notification", "--title", "Test", "--dry-run", "--json"],
+      [
+        "push",
+        "record",
+        "--kind",
+        "notification",
+        "--title",
+        "Test",
+        "--dry-run",
+        "--json",
+      ],
       runtime,
     );
     assert.equal(dryResult.exitCode, 0);
@@ -1125,7 +1330,10 @@ test("push get NOT_FOUND for missing id", async () => {
   const root = await mkdtemp(join(tmpdir(), "pin-push-nf-"));
   try {
     const runtime = { env: { PIN_DATA_ROOT: root } };
-    const result = await runCli(["push", "get", "--id", "push_nonexistent", "--json"], runtime);
+    const result = await runCli(
+      ["push", "get", "--id", "push_nonexistent", "--json"],
+      runtime,
+    );
     assert.equal(result.exitCode, 1);
     assert.equal(result.stdout.ok, false);
     assert.equal(result.stdout.error?.type, "not_found");
@@ -1140,7 +1348,15 @@ test("push outcome NOT_FOUND for missing push id", async () => {
   try {
     const runtime = { env: { PIN_DATA_ROOT: root } };
     const result = await runCli(
-      ["push", "outcome", "--id", "push_nonexistent", "--status", "clicked", "--json"],
+      [
+        "push",
+        "outcome",
+        "--id",
+        "push_nonexistent",
+        "--status",
+        "clicked",
+        "--json",
+      ],
       runtime,
     );
     assert.equal(result.exitCode, 1);
@@ -1152,9 +1368,15 @@ test("push outcome NOT_FOUND for missing push id", async () => {
 });
 
 test("push record validates kind enum", async () => {
-  const result = await runCli(
-    ["push", "record", "--kind", "invalid_kind", "--title", "Test", "--json"],
-  );
+  const result = await runCli([
+    "push",
+    "record",
+    "--kind",
+    "invalid_kind",
+    "--title",
+    "Test",
+    "--json",
+  ]);
   assert.equal(result.exitCode, 2);
   assert.equal(result.stdout.ok, false);
   assert.ok(result.stdout.error?.message.includes("Invalid"));
@@ -1169,10 +1391,19 @@ test("push outcome validates status enum", async () => {
       ["push", "record", "--kind", "notification", "--title", "Test", "--json"],
       runtime,
     );
-    const pushId = (recorded.stdout.data as Record<string, unknown>).id as string;
+    const pushId = (recorded.stdout.data as Record<string, unknown>)
+      .id as string;
 
     const result = await runCli(
-      ["push", "outcome", "--id", pushId, "--status", "invalid_status", "--json"],
+      [
+        "push",
+        "outcome",
+        "--id",
+        pushId,
+        "--status",
+        "invalid_status",
+        "--json",
+      ],
       runtime,
     );
     assert.equal(result.exitCode, 2);
@@ -1271,17 +1502,19 @@ test("personal connections list returns empty with no API key", async () => {
 });
 
 test("personal status reports platform mode when COMPOSIO_API_KEY is configured", async () => {
-  const result = await runCli(
-    ["personal", "status", "--json"],
-    {
-      env: { COMPOSIO_API_KEY: "ak_platform_test" },
-      homeDir: "/Users/test",
-    },
-  );
+  const result = await runCli(["personal", "status", "--json"], {
+    env: { COMPOSIO_API_KEY: "ak_platform_test" },
+    homeDir: "/Users/test",
+  });
 
   assert.equal(result.exitCode, 0);
   assert.equal(result.stdout.ok, true);
-  const data = result.stdout.data as { configured: boolean; mode: string; source: string; keyPrefix: string | null };
+  const data = result.stdout.data as {
+    configured: boolean;
+    mode: string;
+    source: string;
+    keyPrefix: string | null;
+  };
   assert.equal(data.configured, true);
   assert.equal(data.mode, "platform");
   assert.equal(data.source, "platform-env");
@@ -1290,7 +1523,13 @@ test("personal status reports platform mode when COMPOSIO_API_KEY is configured"
 
 test("personal connections list returns mock connections via provider override", async () => {
   const runtime = { env: {}, homeDir: "/tmp" };
-  const noopConn = { toolkit: "", status: "ACTIVE", connectedAccountId: null, userInfo: null, redirectUrl: null };
+  const noopConn = {
+    toolkit: "",
+    status: "ACTIVE",
+    connectedAccountId: null,
+    userInfo: null,
+    redirectUrl: null,
+  };
   const mockProvider: PersonalProvider = {
     async discoverConnections() {
       return [
@@ -1298,17 +1537,33 @@ test("personal connections list returns mock connections via provider override",
         { ...noopConn, toolkit: "slack", connectedAccountId: "ca_2" },
       ];
     },
-    async checkConnections() { return []; },
-    async connectApp() { return noopConn; },
-    async waitForConnection() { return noopConn; },
-    async searchTools() { return []; },
-    async getToolSchema() { return null; },
-    async executeTool() { return { tool: "", success: false, data: null, error: "not called" }; },
+    async checkConnections() {
+      return [];
+    },
+    async connectApp() {
+      return noopConn;
+    },
+    async waitForConnection() {
+      return noopConn;
+    },
+    async searchTools() {
+      return [];
+    },
+    async getToolSchema() {
+      return null;
+    },
+    async executeTool() {
+      return { tool: "", success: false, data: null, error: "not called" };
+    },
     async disconnectAccount() {},
-    async resolveAccountIdentity() { return null; },
+    async resolveAccountIdentity() {
+      return null;
+    },
   };
 
-  const result = await listConnections(runtime, undefined, { provider: mockProvider });
+  const result = await listConnections(runtime, undefined, {
+    provider: mockProvider,
+  });
 
   assert.equal(result.exitCode, 0);
   assert.equal(result.stdout.ok, true);
@@ -1336,26 +1591,68 @@ test("personal tools search returns provider unavailable without API key", async
 test("personal tools search returns results via provider override", async () => {
   const runtime = { env: {}, homeDir: "/tmp" };
   const mockProvider: PersonalProvider = {
-    async discoverConnections() { return []; },
-    async checkConnections() { return []; },
-    async connectApp() { return { toolkit: "", status: "ACTIVE", connectedAccountId: null, userInfo: null, redirectUrl: null }; },
-    async waitForConnection() { return { toolkit: "", status: "ACTIVE", connectedAccountId: null, userInfo: null, redirectUrl: null }; },
+    async discoverConnections() {
+      return [];
+    },
+    async checkConnections() {
+      return [];
+    },
+    async connectApp() {
+      return {
+        toolkit: "",
+        status: "ACTIVE",
+        connectedAccountId: null,
+        userInfo: null,
+        redirectUrl: null,
+      };
+    },
+    async waitForConnection() {
+      return {
+        toolkit: "",
+        status: "ACTIVE",
+        connectedAccountId: null,
+        userInfo: null,
+        redirectUrl: null,
+      };
+    },
     async searchTools(query) {
       return [
-        { slug: "GMAIL_FETCH_EMAILS", description: "Fetch emails", toolkit: "gmail" },
-        { slug: "GMAIL_SEND_EMAIL", description: "Send email", toolkit: "gmail" },
+        {
+          slug: "GMAIL_FETCH_EMAILS",
+          description: "Fetch emails",
+          toolkit: "gmail",
+        },
+        {
+          slug: "GMAIL_SEND_EMAIL",
+          description: "Send email",
+          toolkit: "gmail",
+        },
       ];
     },
-    async getToolSchema() { return null; },
-    async executeTool() { return { tool: "", success: false, data: null, error: "not called" }; },
+    async getToolSchema() {
+      return null;
+    },
+    async executeTool() {
+      return { tool: "", success: false, data: null, error: "not called" };
+    },
     async disconnectAccount() {},
-    async resolveAccountIdentity() { return null; },
+    async resolveAccountIdentity() {
+      return null;
+    },
   };
 
-  const result = await searchTools(runtime, { query: "gmail" }, { provider: mockProvider });
+  const result = await searchTools(
+    runtime,
+    { query: "gmail" },
+    { provider: mockProvider },
+  );
 
   assert.equal(result.exitCode, 0);
-  const data = result.stdout.data as { query: string; count: number; tools: PersonalToolRecord[] };
+  const data = result.stdout.data as {
+    query: string;
+    count: number;
+    tools: PersonalToolRecord[];
+  };
   assert.equal(data.query, "gmail");
   assert.equal(data.count, 2);
   assert.equal(data.tools[0]?.slug, "GMAIL_FETCH_EMAILS");
@@ -1364,18 +1661,50 @@ test("personal tools search returns results via provider override", async () => 
 test("personal tools schema returns not found for unknown tool", async () => {
   const runtime = { env: {}, homeDir: "/tmp" };
   const mockProvider: PersonalProvider = {
-    async discoverConnections() { return []; },
-    async checkConnections() { return []; },
-    async connectApp() { return { toolkit: "", status: "ACTIVE", connectedAccountId: null, userInfo: null, redirectUrl: null }; },
-    async waitForConnection() { return { toolkit: "", status: "ACTIVE", connectedAccountId: null, userInfo: null, redirectUrl: null }; },
-    async searchTools() { return []; },
-    async getToolSchema() { return null; },
-    async executeTool() { return { tool: "", success: false, data: null, error: "not called" }; },
+    async discoverConnections() {
+      return [];
+    },
+    async checkConnections() {
+      return [];
+    },
+    async connectApp() {
+      return {
+        toolkit: "",
+        status: "ACTIVE",
+        connectedAccountId: null,
+        userInfo: null,
+        redirectUrl: null,
+      };
+    },
+    async waitForConnection() {
+      return {
+        toolkit: "",
+        status: "ACTIVE",
+        connectedAccountId: null,
+        userInfo: null,
+        redirectUrl: null,
+      };
+    },
+    async searchTools() {
+      return [];
+    },
+    async getToolSchema() {
+      return null;
+    },
+    async executeTool() {
+      return { tool: "", success: false, data: null, error: "not called" };
+    },
     async disconnectAccount() {},
-    async resolveAccountIdentity() { return null; },
+    async resolveAccountIdentity() {
+      return null;
+    },
   };
 
-  const result = await getToolSchema(runtime, { name: "NONEXISTENT_TOOL" }, { provider: mockProvider });
+  const result = await getToolSchema(
+    runtime,
+    { name: "NONEXISTENT_TOOL" },
+    { provider: mockProvider },
+  );
 
   assert.equal(result.exitCode, 1);
   assert.equal(result.stdout.error?.code, "TOOL_NOT_FOUND");
@@ -1383,7 +1712,15 @@ test("personal tools schema returns not found for unknown tool", async () => {
 
 test("personal exec returns validation error for invalid JSON input", async () => {
   const result = await runCli(
-    ["personal", "exec", "--tool", "GMAIL_FETCH_EMAILS", "--input", "not-json", "--json"],
+    [
+      "personal",
+      "exec",
+      "--tool",
+      "GMAIL_FETCH_EMAILS",
+      "--input",
+      "not-json",
+      "--json",
+    ],
     { env: { COMPOSIO_API_KEY: "ak_fake" }, homeDir: "/tmp" },
   );
 
@@ -1395,12 +1732,36 @@ test("personal exec returns validation error for invalid JSON input", async () =
 test("personal exec succeeds via provider override", async () => {
   const runtime = { env: {}, homeDir: "/tmp" };
   const mockProvider: PersonalProvider = {
-    async discoverConnections() { return []; },
-    async checkConnections() { return []; },
-    async connectApp() { return { toolkit: "", status: "ACTIVE", connectedAccountId: null, userInfo: null, redirectUrl: null }; },
-    async waitForConnection() { return { toolkit: "", status: "ACTIVE", connectedAccountId: null, userInfo: null, redirectUrl: null }; },
-    async searchTools() { return []; },
-    async getToolSchema() { return null; },
+    async discoverConnections() {
+      return [];
+    },
+    async checkConnections() {
+      return [];
+    },
+    async connectApp() {
+      return {
+        toolkit: "",
+        status: "ACTIVE",
+        connectedAccountId: null,
+        userInfo: null,
+        redirectUrl: null,
+      };
+    },
+    async waitForConnection() {
+      return {
+        toolkit: "",
+        status: "ACTIVE",
+        connectedAccountId: null,
+        userInfo: null,
+        redirectUrl: null,
+      };
+    },
+    async searchTools() {
+      return [];
+    },
+    async getToolSchema() {
+      return null;
+    },
     async executeTool(slug, args) {
       return {
         tool: slug,
@@ -1410,7 +1771,9 @@ test("personal exec succeeds via provider override", async () => {
       };
     },
     async disconnectAccount() {},
-    async resolveAccountIdentity() { return null; },
+    async resolveAccountIdentity() {
+      return null;
+    },
   };
 
   const result = await execTool(
@@ -1429,12 +1792,36 @@ test("personal exec succeeds via provider override", async () => {
 test("personal exec returns error envelope when tool execution fails", async () => {
   const runtime = { env: {}, homeDir: "/tmp" };
   const mockProvider: PersonalProvider = {
-    async discoverConnections() { return []; },
-    async checkConnections() { return []; },
-    async connectApp() { return { toolkit: "", status: "ACTIVE", connectedAccountId: null, userInfo: null, redirectUrl: null }; },
-    async waitForConnection() { return { toolkit: "", status: "ACTIVE", connectedAccountId: null, userInfo: null, redirectUrl: null }; },
-    async searchTools() { return []; },
-    async getToolSchema() { return null; },
+    async discoverConnections() {
+      return [];
+    },
+    async checkConnections() {
+      return [];
+    },
+    async connectApp() {
+      return {
+        toolkit: "",
+        status: "ACTIVE",
+        connectedAccountId: null,
+        userInfo: null,
+        redirectUrl: null,
+      };
+    },
+    async waitForConnection() {
+      return {
+        toolkit: "",
+        status: "ACTIVE",
+        connectedAccountId: null,
+        userInfo: null,
+        redirectUrl: null,
+      };
+    },
+    async searchTools() {
+      return [];
+    },
+    async getToolSchema() {
+      return null;
+    },
     async executeTool(slug) {
       return {
         tool: slug,
@@ -1444,7 +1831,9 @@ test("personal exec returns error envelope when tool execution fails", async () 
       };
     },
     async disconnectAccount() {},
-    async resolveAccountIdentity() { return null; },
+    async resolveAccountIdentity() {
+      return null;
+    },
   };
 
   const result = await execTool(
@@ -1503,15 +1892,7 @@ test("world search ingests deduplicated news items and exposes list/get", async 
     };
 
     const searched = (await runCli(
-      [
-        "world",
-        "search",
-        "--query",
-        "startup",
-        "--limit",
-        "10",
-        "--json",
-      ],
+      ["world", "search", "--query", "startup", "--limit", "10", "--json"],
       runtime,
     )) as RunCliResult & {
       stdout: PinEnvelope<{
@@ -1523,7 +1904,10 @@ test("world search ingests deduplicated news items and exposes list/get", async 
     assert.equal(searched.exitCode, 0);
     assert.equal(searched.stdout.data?.query, "startup");
     assert.equal(searched.stdout.data?.items.length, 2);
-    assert.equal("searchQueries" in (searched.stdout.data?.items[0] ?? {}), false);
+    assert.equal(
+      "searchQueries" in (searched.stdout.data?.items[0] ?? {}),
+      false,
+    );
 
     const searchedFull = (await runCli(
       [
@@ -1543,7 +1927,9 @@ test("world search ingests deduplicated news items and exposes list/get", async 
         items: WorldItemRecord[];
       }>;
     };
-    assert.deepEqual(searchedFull.stdout.data?.items[0]?.searchQueries, ["startup"]);
+    assert.deepEqual(searchedFull.stdout.data?.items[0]?.searchQueries, [
+      "startup",
+    ]);
 
     const listed = (await runCli(
       ["world", "list", "--limit", "10", "--json"],
@@ -1603,17 +1989,14 @@ test("world list supports incremental queries by time and id", async () => {
     );
 
     const sinceList = (await runCli(
-      [
-        "world",
-        "list",
-        "--since",
-        "2026-04-02T08:30:00.000Z",
-        "--json",
-      ],
+      ["world", "list", "--since", "2026-04-02T08:30:00.000Z", "--json"],
       runtime,
     )) as RunCliResult & { stdout: PinEnvelope<WorldItemRecord[]> };
     assert.equal(sinceList.stdout.data?.length, 1);
-    assert.equal(sinceList.stdout.data?.[0]?.title, "Robotics startup ships new product");
+    assert.equal(
+      sinceList.stdout.data?.[0]?.title,
+      "Robotics startup ships new product",
+    );
 
     const baseList = (await runCli(
       ["world", "list", "--json"],
@@ -1627,14 +2010,20 @@ test("world list supports incremental queries by time and id", async () => {
       runtime,
     )) as RunCliResult & { stdout: PinEnvelope<WorldItemRecord[]> };
     assert.equal(afterIdList.stdout.data?.length, 1);
-    assert.equal(afterIdList.stdout.data?.[0]?.title, "AI startup raises funding");
+    assert.equal(
+      afterIdList.stdout.data?.[0]?.title,
+      "AI startup raises funding",
+    );
 
     const queryList = (await runCli(
       ["world", "list", "--query", "robotics", "--json"],
       runtime,
     )) as RunCliResult & { stdout: PinEnvelope<WorldItemRecord[]> };
     assert.equal(queryList.stdout.data?.length, 1);
-    assert.equal(queryList.stdout.data?.[0]?.title, "Robotics startup ships new product");
+    assert.equal(
+      queryList.stdout.data?.[0]?.title,
+      "Robotics startup ships new product",
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -1784,7 +2173,15 @@ test("world shortlist uses profile interests and context returns compact items",
     };
 
     await runCli(
-      ["profile", "create", "--id", "default", "--display-name", "Alice", "--json"],
+      [
+        "profile",
+        "create",
+        "--id",
+        "default",
+        "--display-name",
+        "Alice",
+        "--json",
+      ],
       runtime,
     );
     await runCli(
@@ -1826,7 +2223,16 @@ test("world shortlist uses profile interests and context returns compact items",
       runtime,
     );
     await runCli(
-      ["profile", "signal", "rollup", "--id", "default", "--since", "30d", "--json"],
+      [
+        "profile",
+        "signal",
+        "rollup",
+        "--id",
+        "default",
+        "--since",
+        "30d",
+        "--json",
+      ],
       runtime,
     );
 
@@ -1873,15 +2279,27 @@ test("world shortlist uses profile interests and context returns compact items",
       runtime,
     )) as RunCliResult & { stdout: PinEnvelope<WorldShortlistRecord[]> };
     assert.equal(shortlist.exitCode, 0);
-    assert.equal(shortlist.stdout.data?.[0]?.title, "OpenAI launches new agent toolkit");
-    assert.equal((shortlist.stdout.data?.[0]?.profileScore ?? 0) > 0, true);
-    assert.equal(shortlist.stdout.data?.[0]?.reasons.some((reason) => reason.code === "TOPIC_MATCH"), true);
     assert.equal(
-      shortlist.stdout.data?.[0]?.reasons.some((reason) => reason.code === "SUPPRESSED_TOPIC_MATCH"),
+      shortlist.stdout.data?.[0]?.title,
+      "OpenAI launches new agent toolkit",
+    );
+    assert.equal((shortlist.stdout.data?.[0]?.profileScore ?? 0) > 0, true);
+    assert.equal(
+      shortlist.stdout.data?.[0]?.reasons.some(
+        (reason) => reason.code === "TOPIC_MATCH",
+      ),
       true,
     );
     assert.equal(
-      shortlist.stdout.data?.some((item) => item.title === "Celebrity couple announces new project"),
+      shortlist.stdout.data?.[0]?.reasons.some(
+        (reason) => reason.code === "SUPPRESSED_TOPIC_MATCH",
+      ),
+      true,
+    );
+    assert.equal(
+      shortlist.stdout.data?.some(
+        (item) => item.title === "Celebrity couple announces new project",
+      ),
       true,
     );
 
@@ -1894,7 +2312,10 @@ test("world shortlist uses profile interests and context returns compact items",
     )) as RunCliResult & { stdout: PinEnvelope<WorldSimpleRecord> };
     assert.equal(simpleGet.exitCode, 0);
     assert.equal("normalizedUrl" in (simpleGet.stdout.data ?? {}), false);
-    assert.equal(simpleGet.stdout.data?.title, "OpenAI launches new agent toolkit");
+    assert.equal(
+      simpleGet.stdout.data?.title,
+      "OpenAI launches new agent toolkit",
+    );
 
     const fullGet = (await runCli(
       ["world", "get", "--id", topId!, "--full", "--json"],
@@ -1904,20 +2325,20 @@ test("world shortlist uses profile interests and context returns compact items",
     assert.equal("normalizedUrl" in (fullGet.stdout.data ?? {}), true);
 
     const context = (await runCli(
-      [
-        "world",
-        "context",
-        "--ids",
-        topId!,
-        "--json",
-      ],
+      ["world", "context", "--ids", topId!, "--json"],
       runtime,
     )) as RunCliResult & { stdout: PinEnvelope<WorldContextRecord[]> };
     assert.equal(context.exitCode, 0);
     assert.equal(context.stdout.data?.length, 1);
-    assert.equal(context.stdout.data?.[0]?.title, "OpenAI launches new agent toolkit");
+    assert.equal(
+      context.stdout.data?.[0]?.title,
+      "OpenAI launches new agent toolkit",
+    );
     assert.equal(context.stdout.data?.[0]?.topics.includes("ai"), true);
-    assert.equal(context.stdout.data?.[0]?.summary, "New developer toolkit for agents.");
+    assert.equal(
+      context.stdout.data?.[0]?.summary,
+      "New developer toolkit for agents.",
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -2307,7 +2728,12 @@ test("profile supports signal rollup into interests and ranking snapshots", asyn
     assert.equal(topicInterests.exitCode, 0);
     assert.equal(topicInterests.stdout.data?.[0]?.key, "ai");
     assert.equal(topicInterests.stdout.data?.[0]?.status, "active");
-    assert.equal(topicInterests.stdout.data?.some((item) => item.key === "celebrity-gossip"), true);
+    assert.equal(
+      topicInterests.stdout.data?.some(
+        (item) => item.key === "celebrity-gossip",
+      ),
+      true,
+    );
 
     const snapshot = (await runCli(
       [
@@ -2326,11 +2752,25 @@ test("profile supports signal rollup into interests and ranking snapshots", asyn
     };
     assert.equal(snapshot.exitCode, 0);
     assert.equal(snapshot.stdout.data?.topPositiveTopics[0]?.key, "ai");
-    assert.equal(snapshot.stdout.data?.topPositiveTopics[0]?.facts.some((fact) => fact.code === "INTEREST_SCORE"), true);
-    assert.equal(snapshot.stdout.data?.topNegativeTopics[0]?.key, "celebrity-gossip");
+    assert.equal(
+      snapshot.stdout.data?.topPositiveTopics[0]?.facts.some(
+        (fact) => fact.code === "INTEREST_SCORE",
+      ),
+      true,
+    );
+    assert.equal(
+      snapshot.stdout.data?.topNegativeTopics[0]?.key,
+      "celebrity-gossip",
+    );
     assert.equal(snapshot.stdout.data?.topEntities[0]?.key, "OpenAI");
-    assert.equal(snapshot.stdout.data?.activeConstraints[0]?.key, "quiet_hours");
-    assert.equal(snapshot.stdout.data?.activeConstraints[0]?.facts[0]?.code, "CONSTRAINT_ACTIVE");
+    assert.equal(
+      snapshot.stdout.data?.activeConstraints[0]?.key,
+      "quiet_hours",
+    );
+    assert.equal(
+      snapshot.stdout.data?.activeConstraints[0]?.facts[0]?.code,
+      "CONSTRAINT_ACTIVE",
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

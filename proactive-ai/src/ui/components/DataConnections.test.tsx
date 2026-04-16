@@ -4,7 +4,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import DataConnections from "./DataConnections";
 import type { ComposioState } from "@/hooks/use-composio";
 
-function createComposioState(overrides: Partial<ComposioState> = {}): ComposioState {
+function createComposioState(
+  overrides: Partial<ComposioState> = {},
+): ComposioState {
   return {
     keyStatus: { configured: true },
     connections: [],
@@ -13,7 +15,10 @@ function createComposioState(overrides: Partial<ComposioState> = {}): ComposioSt
     loadStatus: vi.fn(async () => {}),
     loadConnections: vi.fn(async () => []),
     saveApiKey: vi.fn(async () => ({ ok: true })),
-    connectToolkit: vi.fn(async () => ({ ok: true, redirectUrl: "https://example.com/oauth" })),
+    connectToolkit: vi.fn(async () => ({
+      ok: true,
+      redirectUrl: "https://example.com/oauth",
+    })),
     disconnectAccount: vi.fn(async () => ({ ok: true })),
     waitForToolkit: vi.fn(async () => ({ connected: false })),
     cancelWait: vi.fn(),
@@ -42,7 +47,9 @@ describe("DataConnections", () => {
 
   it("shows loading while waiting for OAuth, then restores button on failure", async () => {
     let resolveWait!: (value: { connected: boolean }) => void;
-    const waitPromise = new Promise<{ connected: boolean }>((r) => { resolveWait = r; });
+    const waitPromise = new Promise<{ connected: boolean }>((r) => {
+      resolveWait = r;
+    });
 
     vi.spyOn(window, "open").mockImplementation(() => null);
 
@@ -55,9 +62,9 @@ describe("DataConnections", () => {
     });
 
     // Expand category
-    const categoryButton = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent?.includes("Email & Calendar"),
-    );
+    const categoryButton = Array.from(
+      container.querySelectorAll("button"),
+    ).find((button) => button.textContent?.includes("Work"));
     await act(async () => {
       categoryButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
@@ -81,9 +88,11 @@ describe("DataConnections", () => {
     });
 
     // Button should be restored
-    const restoredButton = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Connect",
-    ) as HTMLButtonElement | undefined;
+    const restoredButton = Array.from(
+      container.querySelectorAll("button"),
+    ).find((button) => button.textContent?.trim() === "Connect") as
+      | HTMLButtonElement
+      | undefined;
     expect(restoredButton).toBeTruthy();
     expect(restoredButton?.disabled).toBe(false);
 

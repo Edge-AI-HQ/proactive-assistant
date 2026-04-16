@@ -18,19 +18,27 @@ function getApiRpcRoot(): string {
   return gatewayBaseUrl ? `${gatewayBaseUrl}${API_RPC_ROOT}` : API_RPC_ROOT;
 }
 
-export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+function withGatewayAuth(init?: RequestInit): Record<string, string> {
   const token = window.__GW_TOKEN__;
-  const headers = {
+  return {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(init?.headers as Record<string, string> ?? {}),
+    ...((init?.headers as Record<string, string>) ?? {}),
   };
+}
+
+export async function apiFetch(
+  path: string,
+  init?: RequestInit,
+): Promise<Response> {
+  const headers = withGatewayAuth(init);
   return fetch(`${getApiRoot()}${path}`, { ...init, headers });
 }
 
-export function apiRpcFetch(path: string, init?: RequestInit): Promise<Response> {
-  const headers = {
-    ...(init?.headers as Record<string, string> ?? {}),
-  };
+export function apiRpcFetch(
+  path: string,
+  init?: RequestInit,
+): Promise<Response> {
+  const headers = withGatewayAuth(init);
   return fetch(`${getApiRpcRoot()}${path}`, { ...init, headers });
 }
 
@@ -42,7 +50,11 @@ export function apiPost(path: string, body: unknown): Promise<Response> {
   });
 }
 
-export function apiRpcPost(path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
+export function apiRpcPost(
+  path: string,
+  body: unknown,
+  signal?: AbortSignal,
+): Promise<Response> {
   return apiRpcFetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
