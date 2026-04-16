@@ -93,3 +93,4 @@ composio-consumer-key
 # Local AI skills (user-specific, not project code)
 .codex/skills/
 .cursor/skills/ui-ux-pro-max/
+agent-openai-sdk
