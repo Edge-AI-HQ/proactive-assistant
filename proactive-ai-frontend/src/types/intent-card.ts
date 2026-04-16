@@ -46,16 +46,17 @@ export interface EvaluatorOutput {
   iterationFeedback: string;
 }
 
-export type SupportedGenerationLanguage = 'en' | 'zh' | 'ja' | 'ko' | 'es' | 'fr' | 'de';
+export type SupportedGenerationLanguage = 'en' | 'zh-Hans' | 'ja' | 'ko' | 'es' | 'fr' | 'de' | 'pt';
 
 export const GENERATION_LANGUAGE_OPTIONS: { value: SupportedGenerationLanguage; label: string }[] = [
   { value: 'en', label: 'English' },
-  { value: 'zh', label: '中文' },
+  { value: 'zh-Hans', label: 'Simplified Chinese' },
   { value: 'ja', label: '日本語' },
   { value: 'ko', label: '한국어' },
   { value: 'es', label: 'Español' },
   { value: 'fr', label: 'Français' },
   { value: 'de', label: 'Deutsch' },
+  { value: 'pt', label: 'Português' },
 ];
 
 const VALID_GOAL_BASKETS = new Set<GoalBasket>([
