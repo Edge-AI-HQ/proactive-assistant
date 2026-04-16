@@ -11,6 +11,9 @@ import {
   searchTools,
   getToolSchema,
   execTool,
+  listMobileItems,
+  claimMobileItems,
+  commitMobileItems,
 } from "./service.js";
 
 export const registerPersonalCommands = (
@@ -111,6 +114,50 @@ export const registerPersonalCommands = (
       resultRef.current = await execTool(runtime, options);
     });
 
+  const mobile = personal
+    .command("mobile")
+    .description("Read high-value mobile items derived from local device context");
+
+  const mobileItems = mobile
+    .command("items")
+    .description("List or consume locally synced mobile items");
+
+  mobileItems
+    .command("list")
+    .description("List mobile items from local mobile_items.db")
+    .option("--status <status>", "status filter (pending, claimed, processed, expired)")
+    .option("--type <type>", "item type filter (attention_item, moment, session_summary)")
+    .option("--since <since>", "occurred-at lower bound (ISO timestamp)")
+    .option("--until <until>", "occurred-at upper bound (ISO timestamp)")
+    .option("--device-id <deviceId>", "device ID filter")
+    .option("--limit <limit>", "max results", "50")
+    .option("--json")
+    .action(async (options) => {
+      resultRef.current = await listMobileItems(runtime, options);
+    });
+
+  mobileItems
+    .command("claim")
+    .description("Claim a batch of pending mobile items from local mobile_items.db")
+    .option("--type <type>", "item type filter (attention_item, moment, session_summary)")
+    .option("--since <since>", "occurred-at lower bound (ISO timestamp)")
+    .option("--until <until>", "occurred-at upper bound (ISO timestamp)")
+    .option("--device-id <deviceId>", "device ID filter")
+    .option("--limit <limit>", "max results", "20")
+    .option("--json")
+    .action(async (options) => {
+      resultRef.current = await claimMobileItems(runtime, options);
+    });
+
+  mobileItems
+    .command("commit")
+    .description("Commit a previously claimed mobile item run")
+    .requiredOption("--run-token <runToken>", "run token returned by mobile items claim")
+    .option("--json")
+    .action(async (options) => {
+      resultRef.current = await commitMobileItems(runtime, options);
+    });
+
   program.addCommand(personal);
 
   // ── Registry ──
@@ -201,6 +248,48 @@ export const registerPersonalCommands = (
     flags: [
       { name: "tool", type: "string", required: true, description: "Tool slug (e.g. GMAIL_FETCH_EMAILS)" },
       { name: "input", type: "string", required: false, description: "JSON object of tool arguments" },
+    ],
+  });
+
+  registerCommand({
+    domain: "personal",
+    command: "mobile items list",
+    description: "List locally synced mobile high-value items",
+    risk: "read",
+    supportsDryRun: false,
+    flags: [
+      { name: "status", type: "string", required: false, description: "Status filter" },
+      { name: "type", type: "string", required: false, description: "Item type filter" },
+      { name: "since", type: "string", required: false, description: "Occurred-at lower bound" },
+      { name: "until", type: "string", required: false, description: "Occurred-at upper bound" },
+      { name: "device-id", type: "string", required: false, description: "Device ID filter" },
+      { name: "limit", type: "number", required: false, default: "50", description: "Max results" },
+    ],
+  });
+
+  registerCommand({
+    domain: "personal",
+    command: "mobile items claim",
+    description: "Claim locally synced pending mobile items",
+    risk: "write",
+    supportsDryRun: false,
+    flags: [
+      { name: "type", type: "string", required: false, description: "Item type filter" },
+      { name: "since", type: "string", required: false, description: "Occurred-at lower bound" },
+      { name: "until", type: "string", required: false, description: "Occurred-at upper bound" },
+      { name: "device-id", type: "string", required: false, description: "Device ID filter" },
+      { name: "limit", type: "number", required: false, default: "20", description: "Max results" },
+    ],
+  });
+
+  registerCommand({
+    domain: "personal",
+    command: "mobile items commit",
+    description: "Commit a claimed mobile item run",
+    risk: "write",
+    supportsDryRun: false,
+    flags: [
+      { name: "run-token", type: "string", required: true, description: "Run token from claim" },
     ],
   });
 };

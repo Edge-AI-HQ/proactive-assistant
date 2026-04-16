@@ -16,6 +16,8 @@ import {
   requireProactiveAuth,
   ProactiveContainerOrchestrator,
   createProactiveProxy,
+  createMobileProxy,
+  isMobileProxyEnabled,
   createGatewayProxy,
   createGatewayTicket,
   getSessionUserIdRaw,
@@ -41,7 +43,7 @@ function getOrchestrator(): ProactiveContainerOrchestrator {
 }
 
 // -- CORS for API routes --
-const CORS_PATHS = ['/api/proactive/*', '/api/proxy/*', '/api/gateway/*'];
+const CORS_PATHS = ['/api/proactive/*', '/api/proxy/*', '/api/gateway/*', '/api/mobile/*'];
 
 router.use(CORS_PATHS, (req, res, next) => {
   const origin = req.headers.origin;
@@ -213,6 +215,14 @@ router.all('/api/proxy/*', requireProactiveAuth, async (req, res) => {
   const proxy = createProactiveProxy(orchestrator);
   await proxy(req, res);
 });
+
+if (isMobileProxyEnabled()) {
+  router.all('/api/mobile/*', async (req, res) => {
+    const orchestrator = getOrchestrator();
+    const proxy = createMobileProxy(orchestrator);
+    await proxy(req, res);
+  });
+}
 
 // -- SPA entry point --
 

@@ -22,6 +22,7 @@ test("buildUnifiedGeneratorPrompt includes CLI guide with --full hint", () => {
   assert.match(prompt, /pin_cli_command_guide/);
   assert.match(prompt, /--full/);
   assert.match(prompt, /truncated/);
+  assert.match(prompt, /pin personal mobile items list --status pending --limit 20 --json/);
 });
 
 test("buildUnifiedGeneratorPrompt includes scoring rubric", () => {
@@ -68,4 +69,15 @@ test("buildUnifiedGeneratorPrompt output format includes evaluations and iterati
   assert.match(prompt, /"iterationFeedback"/);
   assert.match(prompt, /"cards"/);
   assert.match(prompt, /unified-generator/);
+});
+
+test("buildUnifiedGeneratorPrompt includes mobile items in context gathering", () => {
+  const prompt = buildUnifiedGeneratorPrompt({
+    currentDate: "2026-04-15",
+  });
+
+  assert.match(prompt, /Mobile high-value context/);
+  assert.match(prompt, /pin personal mobile items list --status pending --limit 20 --json/);
+  assert.match(prompt, /attention_item/);
+  assert.match(prompt, /session_summary/);
 });

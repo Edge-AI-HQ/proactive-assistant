@@ -14,6 +14,7 @@
     "build": "npm run build --workspace @pin-ai/apis",
     "build:proactive": "npm run build --workspace @pin-ai/proactive-ai-frontend",
     "build:all": "npm run build --workspace @pin-ai/proactive-ai-frontend && npm run build --workspace @pin-ai/apis",
+    "mobile-sync:ngrok": "node scripts/mobile-sync-ngrok.mjs",
     "start": "npm run start --workspace @pin-ai/apis",
     "type-check": "npm run type-check --workspace @pin-ai/apis",
     "litellm:up": "bash ops/litellm/litellm.sh up",
