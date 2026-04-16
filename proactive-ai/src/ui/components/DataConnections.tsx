@@ -13,22 +13,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { ComposioState, Connection } from "@/hooks/use-composio";
-
-const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-const SKIP_KEYS = /token|secret|key|password|code|cursor|etag|sync|url|endpoint|slug|status|type|version|id$/i;
-
-function extractIdentity(info: Record<string, unknown> | null | undefined): string | null {
-  if (!info) return null;
-  for (const v of Object.values(info)) {
-    if (typeof v === "string" && EMAIL_RE.test(v)) return v;
-  }
-  for (const [k, v] of Object.entries(info)) {
-    if (typeof v !== "string" || v.length === 0 || v.length > 60) continue;
-    if (v.startsWith("http") || SKIP_KEYS.test(k)) continue;
-    return v;
-  }
-  return null;
-}
+import { extractIdentity } from "../../core/domains/personal/provider.js";
 
 const GOOGLE_FAMILY = new Set(["googlecalendar", "googledrive", "googledocs", "googlesheets"]);
 

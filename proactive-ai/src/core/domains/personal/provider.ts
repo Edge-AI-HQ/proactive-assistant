@@ -14,7 +14,6 @@ import {
   type AccountIdentity,
 } from "./platform_settings.js";
 
-
 // ── Types ──
 
 export interface PersonalConnection {
@@ -54,15 +53,25 @@ export interface PersonalProvider {
   /** Wait for an OAuth connection to become active. */
   waitForConnection(toolkit: string): Promise<PersonalConnection>;
   /** Search tools by use case (returns tools + connection statuses). */
-  searchTools(query: string, options?: { toolkit?: string; limit?: number }): Promise<PersonalToolInfo[]>;
+  searchTools(
+    query: string,
+    options?: { toolkit?: string; limit?: number },
+  ): Promise<PersonalToolInfo[]>;
   /** Get tool input schema. */
   getToolSchema(slug: string): Promise<PersonalToolSchema | null>;
   /** Execute a tool. If connectedAccountId is omitted, uses the most recent active account. */
-  executeTool(slug: string, args: Record<string, unknown>, connectedAccountId?: string): Promise<PersonalExecResult>;
+  executeTool(
+    slug: string,
+    args: Record<string, unknown>,
+    connectedAccountId?: string,
+  ): Promise<PersonalExecResult>;
   /** Disconnect (delete) a specific connected account by ID. */
   disconnectAccount(connectedAccountId: string): Promise<void>;
   /** Resolve human-readable identity for a connected account (best-effort). */
-  resolveAccountIdentity(toolkit: string, connectedAccountId: string): Promise<Record<string, unknown> | null>;
+  resolveAccountIdentity(
+    toolkit: string,
+    connectedAccountId: string,
+  ): Promise<Record<string, unknown> | null>;
 }
 
 // ── Helpers ──
@@ -76,26 +85,97 @@ const obj = (v: unknown): Record<string, unknown> =>
     : {};
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-const SKIP_KEYS = /token|secret|key|password|code|cursor|etag|sync|url|endpoint|slug|status|type|version|id$/i;
+
+/** OAuth/OIDC claim keys and other machine fields — never use as human-facing label. */
+const OAUTH_OR_MACHINE_KEY =
+  /^(iss|issuer|aud|azp|jti|nonce|iat|exp|nbf|at_hash|c_hash|acr|amr|sid|kid|typ|alg|scope|session|flow_state|provider_id|ref)$/i;
+
+const LEGACY_SKIP_KEYS =
+  /token|secret|key|password|code|cursor|etag|sync|url|endpoint|slug|status|type|version|id$/i;
+
+function isIdentityNoiseValue(value: string): boolean {
+  const t = value.trim();
+  if (!t) return true;
+  const lower = t.toLowerCase();
+  if (lower.startsWith("http://") || lower.startsWith("https://")) return true;
+  if (/\bsupabase\.co\b/.test(lower)) return true;
+  if (/\/auth\/v1\b/.test(t)) return true;
+  if (/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/.test(t)) return true;
+  return false;
+}
+
+function identityKeySkippable(k: string): boolean {
+  return OAUTH_OR_MACHINE_KEY.test(k) || LEGACY_SKIP_KEYS.test(k);
+}
+
+/** Case-insensitive field lookup with underscore/spacing normalization. */
+function getStringFieldCI(
+  info: Record<string, unknown>,
+  ...candidates: string[]
+): string | null {
+  const norm = (s: string) => s.toLowerCase().replace(/[_\s-]/g, "");
+  const map = new Map<string, string>();
+  for (const key of Object.keys(info)) map.set(norm(key), key);
+  for (const want of candidates) {
+    const orig = map.get(norm(want));
+    if (!orig) continue;
+    const v = info[orig];
+    if (typeof v !== "string") continue;
+    const t = v.trim();
+    if (!t || isIdentityNoiseValue(t)) continue;
+    if (t.length > 120) continue;
+    return t;
+  }
+  return null;
+}
 
 /**
  * Extract a human-readable identity string from Composio's `current_user_info`.
- * Strategy: find the first email-shaped string, else the first short plain string.
- * Works across 1000+ Composio apps without per-app logic.
+ * Prefers stable profile fields (email, display name) and ignores OIDC issuer/audience
+ * and Supabase host strings that some payloads surface on native clients.
  */
-export function extractIdentity(info: Record<string, unknown> | null | undefined): string | null {
+export function extractIdentity(
+  info: Record<string, unknown> | null | undefined,
+): string | null {
   if (!info) return null;
 
-  // Pass 1: find an email in top-level values
-  for (const v of Object.values(info)) {
-    if (typeof v === "string" && EMAIL_RE.test(v)) return v;
+  const preferred = getStringFieldCI(
+    info,
+    "email",
+    "mail",
+    "primaryEmailAddress",
+    "primary_email",
+    "userPrincipalName",
+    "user_principal_name",
+    "displayName",
+    "display_name",
+    "name",
+    "full_name",
+    "given_name",
+    "username",
+    "login",
+    "preferred_username",
+    "nickname",
+  );
+  if (preferred) {
+    if (EMAIL_RE.test(preferred)) return preferred;
+    if (!isIdentityNoiseValue(preferred)) return preferred;
   }
 
-  // Pass 2: find a short, human-readable string (skip tokens/urls/ids)
+  for (const v of Object.values(info)) {
+    if (typeof v !== "string") continue;
+    const t = v.trim();
+    if (!EMAIL_RE.test(t) || isIdentityNoiseValue(t)) continue;
+    return t;
+  }
+
   for (const [k, v] of Object.entries(info)) {
-    if (typeof v !== "string" || v.length === 0 || v.length > 60) continue;
-    if (v.startsWith("http") || SKIP_KEYS.test(k)) continue;
-    return v;
+    if (typeof v !== "string") continue;
+    const t = v.trim();
+    if (!t || t.length > 60) continue;
+    if (isIdentityNoiseValue(t)) continue;
+    if (identityKeySkippable(k)) continue;
+    return t;
   }
 
   return null;
@@ -104,16 +184,36 @@ export function extractIdentity(info: Record<string, unknown> | null | undefined
 // ── Noop (no key configured) ──
 
 class NoopPersonalProvider implements PersonalProvider {
-  private fail(): never { throw new Error("COMPOSIO_API_KEY is not configured"); }
-  async discoverConnections(): Promise<PersonalConnection[]> { return []; }
-  async checkConnections(): Promise<PersonalConnection[]> { this.fail(); }
-  async connectApp(): Promise<PersonalConnection> { this.fail(); }
-  async waitForConnection(): Promise<PersonalConnection> { this.fail(); }
-  async searchTools(): Promise<PersonalToolInfo[]> { this.fail(); }
-  async getToolSchema(): Promise<PersonalToolSchema | null> { this.fail(); }
-  async executeTool(): Promise<PersonalExecResult> { this.fail(); }
-  async disconnectAccount(): Promise<void> { this.fail(); }
-  async resolveAccountIdentity(): Promise<Record<string, unknown> | null> { this.fail(); }
+  private fail(): never {
+    throw new Error("COMPOSIO_API_KEY is not configured");
+  }
+  async discoverConnections(): Promise<PersonalConnection[]> {
+    return [];
+  }
+  async checkConnections(): Promise<PersonalConnection[]> {
+    this.fail();
+  }
+  async connectApp(): Promise<PersonalConnection> {
+    this.fail();
+  }
+  async waitForConnection(): Promise<PersonalConnection> {
+    this.fail();
+  }
+  async searchTools(): Promise<PersonalToolInfo[]> {
+    this.fail();
+  }
+  async getToolSchema(): Promise<PersonalToolSchema | null> {
+    this.fail();
+  }
+  async executeTool(): Promise<PersonalExecResult> {
+    this.fail();
+  }
+  async disconnectAccount(): Promise<void> {
+    this.fail();
+  }
+  async resolveAccountIdentity(): Promise<Record<string, unknown> | null> {
+    this.fail();
+  }
 }
 
 const DEFAULT_API_BASE = "https://backend.composio.dev/api/v3";
@@ -125,29 +225,29 @@ const DEFAULT_API_BASE = "https://backend.composio.dev/api/v3";
  * and fall back to GMAIL_GET_PROFILE via the GOOGLE_FAMILY_ALIAS below.
  */
 const IDENTITY_TOOLS: Record<string, string> = {
-  gmail:           "GMAIL_GET_PROFILE",
-  googlecalendar:  "GOOGLECALENDAR_GET_CALENDAR_PROFILE",
-  googledrive:     "GOOGLEDRIVE_GET_ABOUT",
-  slack:           "SLACK_RETRIEVE_USER_PROFILE_INFORMATION",
-  github:          "GITHUB_LIST_EMAIL_ADDRESSES_FOR_THE_AUTHENTICATED_USER",
-  linkedin:        "LINKEDIN_GET_MY_INFO",
-  notion:          "NOTION_GET_ABOUT_ME",
-  twitter:         "TWITTER_USER_LOOKUP_ME",
-  stripe:          "STRIPE_GET_ACCOUNT",
-  hubspot:         "HUBSPOT_GET_ACCOUNT_INFO",
-  asana:           "ASANA_GET_CURRENT_USER",
-  jira:            "JIRA_GET_CURRENT_USER",
-  trello:          "TRELLO_GET_MEMBERS_ME",
-  discord:         "DISCORD_GET_MY_USER",
-  spotify:         "SPOTIFY_GET_CURRENT_USER_S_PROFILE",
-  dropbox:         "DROPBOX_GET_ABOUT_ME",
-  todoist:         "TODOIST_GET_USER",
-  figma:           "FIGMA_GET_CURRENT_USER",
-  outlook:         "OUTLOOK_GET_ME_CALENDAR",
-  calendly:        "CALENDLY_GET_CURRENT_USER",
-  clickup:         "CLICKUP_GET_AUTHORIZED_USER",
-  strava:          "STRAVA_GET_AUTHENTICATED_ATHLETE",
-  zoom:            "ZOOM_GET_USER",
+  gmail: "GMAIL_GET_PROFILE",
+  googlecalendar: "GOOGLECALENDAR_GET_CALENDAR_PROFILE",
+  googledrive: "GOOGLEDRIVE_GET_ABOUT",
+  slack: "SLACK_RETRIEVE_USER_PROFILE_INFORMATION",
+  github: "GITHUB_LIST_EMAIL_ADDRESSES_FOR_THE_AUTHENTICATED_USER",
+  linkedin: "LINKEDIN_GET_MY_INFO",
+  notion: "NOTION_GET_ABOUT_ME",
+  twitter: "TWITTER_USER_LOOKUP_ME",
+  stripe: "STRIPE_GET_ACCOUNT",
+  hubspot: "HUBSPOT_GET_ACCOUNT_INFO",
+  asana: "ASANA_GET_CURRENT_USER",
+  jira: "JIRA_GET_CURRENT_USER",
+  trello: "TRELLO_GET_MEMBERS_ME",
+  discord: "DISCORD_GET_MY_USER",
+  spotify: "SPOTIFY_GET_CURRENT_USER_S_PROFILE",
+  dropbox: "DROPBOX_GET_ABOUT_ME",
+  todoist: "TODOIST_GET_USER",
+  figma: "FIGMA_GET_CURRENT_USER",
+  outlook: "OUTLOOK_GET_ME_CALENDAR",
+  calendly: "CALENDLY_GET_CURRENT_USER",
+  clickup: "CLICKUP_GET_AUTHORIZED_USER",
+  strava: "STRAVA_GET_AUTHENTICATED_ATHLETE",
+  zoom: "ZOOM_GET_USER",
 };
 
 const IDENTITY_TOOL_ARGS: Record<string, Record<string, unknown>> = {
@@ -155,14 +255,16 @@ const IDENTITY_TOOL_ARGS: Record<string, Record<string, unknown>> = {
 };
 
 const GOOGLE_FAMILY_ALIAS: Record<string, string> = {
-  googledocs:   "gmail",
+  googledocs: "gmail",
   googlesheets: "gmail",
 };
 
 const sleep = async (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
-const parseJson = async (response: Response): Promise<Record<string, unknown>> => {
+const parseJson = async (
+  response: Response,
+): Promise<Record<string, unknown>> => {
   const text = await response.text();
   if (!text.trim()) {
     return {};
@@ -192,7 +294,10 @@ async function composioApiCall(
 
   const json = await parseJson(response);
   if (!response.ok) {
-    const message = str(json.message) ?? str(json.error) ?? JSON.stringify(json).slice(0, 300);
+    const message =
+      str(json.message) ??
+      str(json.error) ??
+      JSON.stringify(json).slice(0, 300);
     throw new Error(`Composio API ${response.status}: ${message}`);
   }
 
@@ -215,20 +320,31 @@ class PlatformPersonalProvider implements PersonalProvider {
   private readonly authConfigCache = new Map<string, string>();
 
   constructor(private readonly options: PlatformProviderOptions) {
-    for (const [toolkit, authConfigId] of Object.entries(options.authConfigMap)) {
+    for (const [toolkit, authConfigId] of Object.entries(
+      options.authConfigMap,
+    )) {
       this.authConfigCache.set(toolkit, authConfigId);
     }
   }
 
-  private async api(path: string, init?: RequestInit): Promise<Record<string, unknown>> {
-    return composioApiCall(this.options.apiBase, this.options.apiKey, path, init);
+  private async api(
+    path: string,
+    init?: RequestInit,
+  ): Promise<Record<string, unknown>> {
+    return composioApiCall(
+      this.options.apiBase,
+      this.options.apiKey,
+      path,
+      init,
+    );
   }
 
-  private toConnection(toolkit: string, row: Record<string, unknown> | null): PersonalConnection {
+  private toConnection(
+    toolkit: string,
+    row: Record<string, unknown> | null,
+  ): PersonalConnection {
     const normalizedToolkit =
-      str(obj(row?.toolkit).slug) ??
-      str(row?.toolkit) ??
-      toolkit;
+      str(obj(row?.toolkit).slug) ?? str(row?.toolkit) ?? toolkit;
 
     return {
       toolkit: normalizedToolkit,
@@ -237,13 +353,12 @@ class PlatformPersonalProvider implements PersonalProvider {
         str(row?.id) ??
         str(row?.connected_account_id) ??
         str(row?.connectedAccountId),
-      userInfo:
-        row?.user_info ? obj(row.user_info) :
-        row?.current_user_info ? obj(row.current_user_info) :
-        null,
-      redirectUrl:
-        str(row?.redirect_url) ??
-        str(row?.redirectUrl),
+      userInfo: row?.user_info
+        ? obj(row.user_info)
+        : row?.current_user_info
+          ? obj(row.current_user_info)
+          : null,
+      redirectUrl: str(row?.redirect_url) ?? str(row?.redirectUrl),
     };
   }
 
@@ -263,7 +378,10 @@ class PlatformPersonalProvider implements PersonalProvider {
       params.set("statuses", filters.statuses.join(","));
     }
     if (filters?.connectedAccountIds?.length) {
-      params.set("connected_account_ids", filters.connectedAccountIds.join(","));
+      params.set(
+        "connected_account_ids",
+        filters.connectedAccountIds.join(","),
+      );
     }
 
     const response = await this.api(`/connected_accounts?${params.toString()}`);
@@ -272,17 +390,21 @@ class PlatformPersonalProvider implements PersonalProvider {
       : [];
   }
 
-  private async findLatestConnection(toolkit: string): Promise<Record<string, unknown> | null> {
+  private async findLatestConnection(
+    toolkit: string,
+  ): Promise<Record<string, unknown> | null> {
     const items = await this.listConnectedAccounts({ toolkits: [toolkit] });
     if (items.length === 0) {
       return null;
     }
 
-    return items.sort((left, right) => {
-      const leftTs = str(left.updated_at) ?? str(left.created_at) ?? "";
-      const rightTs = str(right.updated_at) ?? str(right.created_at) ?? "";
-      return rightTs.localeCompare(leftTs);
-    })[0] ?? null;
+    return (
+      items.sort((left, right) => {
+        const leftTs = str(left.updated_at) ?? str(left.created_at) ?? "";
+        const rightTs = str(right.updated_at) ?? str(right.created_at) ?? "";
+        return rightTs.localeCompare(leftTs);
+      })[0] ?? null
+    );
   }
 
   private async ensureAuthConfigId(toolkit: string): Promise<string> {
@@ -309,12 +431,12 @@ class PlatformPersonalProvider implements PersonalProvider {
         toolkit: { slug: toolkit },
       }),
     });
-    const authConfigId =
-      str(obj(created.auth_config).id) ??
-      str(created.id);
+    const authConfigId = str(obj(created.auth_config).id) ?? str(created.id);
 
     if (!authConfigId) {
-      throw new Error(`Composio auth config creation returned no id for toolkit ${toolkit}`);
+      throw new Error(
+        `Composio auth config creation returned no id for toolkit ${toolkit}`,
+      );
     }
 
     this.authConfigCache.set(toolkit, authConfigId);
@@ -322,7 +444,9 @@ class PlatformPersonalProvider implements PersonalProvider {
   }
 
   private async getToolDetails(slug: string): Promise<Record<string, unknown>> {
-    return this.api(`/tools/${encodeURIComponent(slug)}?toolkit_versions=latest`);
+    return this.api(
+      `/tools/${encodeURIComponent(slug)}?toolkit_versions=latest`,
+    );
   }
 
   async resolveAccountIdentity(
@@ -347,14 +471,17 @@ class PlatformPersonalProvider implements PersonalProvider {
 
     try {
       const toolArgs = IDENTITY_TOOL_ARGS[effectiveToolkit] ?? {};
-      const result = await this.api(`/tools/execute/${encodeURIComponent(toolSlug)}`, {
-        method: "POST",
-        body: JSON.stringify({
-          connected_account_id: connectedAccountId,
-          user_id: this.options.userId,
-          arguments: toolArgs,
-        }),
-      });
+      const result = await this.api(
+        `/tools/execute/${encodeURIComponent(toolSlug)}`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            connected_account_id: connectedAccountId,
+            user_id: this.options.userId,
+            arguments: toolArgs,
+          }),
+        },
+      );
 
       if (!result.successful) return null;
 
@@ -364,10 +491,18 @@ class PlatformPersonalProvider implements PersonalProvider {
 
       const flat: Record<string, unknown> = {};
 
+      const putStringFlat = (key: string, val: string) => {
+        if (!val || val.length >= 120) return;
+        if (isIdentityNoiseValue(val)) return;
+        if (identityKeySkippable(key)) return;
+        flat[key] = val;
+      };
+
       const extractFlat = (items: Record<string, unknown>[]) => {
         for (const item of items) {
           for (const [k, v] of Object.entries(item)) {
-            if (typeof v === "string" && v.length > 0 && v.length < 120) flat[k] = v;
+            if (typeof v === "string" && v.length > 0 && v.length < 120)
+              putStringFlat(k, v);
           }
         }
       };
@@ -377,13 +512,16 @@ class PlatformPersonalProvider implements PersonalProvider {
       } else {
         for (const [k, v] of Object.entries(source)) {
           if (Array.isArray(v)) {
-            extractFlat(v.filter(i => i && typeof i === "object").map(obj));
+            extractFlat(v.filter((i) => i && typeof i === "object").map(obj));
           } else if (v && typeof v === "object" && !Array.isArray(v)) {
-            for (const [nk, nv] of Object.entries(v as Record<string, unknown>)) {
-              if (typeof nv === "string" && nv.length > 0 && nv.length < 120) flat[nk] = nv;
+            for (const [nk, nv] of Object.entries(
+              v as Record<string, unknown>,
+            )) {
+              if (typeof nv === "string" && nv.length > 0 && nv.length < 120)
+                putStringFlat(nk, nv);
             }
           } else if (typeof v === "string" && v.length > 0 && v.length < 120) {
-            flat[k] = v;
+            putStringFlat(k, v);
           } else if (typeof v === "number" || typeof v === "boolean") {
             flat[k] = v;
           }
@@ -398,7 +536,9 @@ class PlatformPersonalProvider implements PersonalProvider {
 
   async discoverConnections(): Promise<PersonalConnection[]> {
     const active = await this.listConnectedAccounts({ statuses: ["ACTIVE"] });
-    const connections = active.map((row) => this.toConnection(str(obj(row.toolkit).slug) ?? "unknown", row));
+    const connections = active.map((row) =>
+      this.toConnection(str(obj(row.toolkit).slug) ?? "unknown", row),
+    );
 
     const { homeDir, env } = this.options;
     const cached = loadPlatformSettings(homeDir, env).accountIdentities ?? {};
@@ -414,9 +554,17 @@ class PlatformPersonalProvider implements PersonalProvider {
         }
 
         try {
-          const info = await this.fetchAccountIdentityViaTool(conn.toolkit, conn.connectedAccountId);
+          const info = await this.fetchAccountIdentityViaTool(
+            conn.toolkit,
+            conn.connectedAccountId,
+          );
           if (info) {
-            saveAccountIdentity(homeDir, conn.connectedAccountId, { toolkit: conn.toolkit, userInfo: info }, env);
+            saveAccountIdentity(
+              homeDir,
+              conn.connectedAccountId,
+              { toolkit: conn.toolkit, userInfo: info },
+              env,
+            );
             return { ...conn, userInfo: info };
           }
           return conn;
@@ -426,7 +574,9 @@ class PlatformPersonalProvider implements PersonalProvider {
       }),
     );
 
-    const activeIds = new Set(connections.map((c) => c.connectedAccountId).filter(Boolean) as string[]);
+    const activeIds = new Set(
+      connections.map((c) => c.connectedAccountId).filter(Boolean) as string[],
+    );
     pruneOrphanIdentities(homeDir, activeIds, env);
 
     return enriched;
@@ -449,7 +599,9 @@ class PlatformPersonalProvider implements PersonalProvider {
       body: JSON.stringify({
         auth_config_id: authConfigId,
         user_id: this.options.userId,
-        ...(this.options.callbackUrl ? { callback_url: this.options.callbackUrl } : {}),
+        ...(this.options.callbackUrl
+          ? { callback_url: this.options.callbackUrl }
+          : {}),
       }),
     });
 
@@ -457,12 +609,9 @@ class PlatformPersonalProvider implements PersonalProvider {
       toolkit,
       status: "PENDING",
       connectedAccountId:
-        str(linked.connected_account_id) ??
-        str(linked.connectedAccountId),
+        str(linked.connected_account_id) ?? str(linked.connectedAccountId),
       userInfo: null,
-      redirectUrl:
-        str(linked.redirect_url) ??
-        str(linked.redirectUrl),
+      redirectUrl: str(linked.redirect_url) ?? str(linked.redirectUrl),
     };
   }
 
@@ -476,10 +625,18 @@ class PlatformPersonalProvider implements PersonalProvider {
       if (latest && status === "ACTIVE") {
         const conn = this.toConnection(toolkit, latest);
         if (conn.connectedAccountId) {
-          const info = await this.fetchAccountIdentityViaTool(toolkit, conn.connectedAccountId).catch(() => null);
+          const info = await this.fetchAccountIdentityViaTool(
+            toolkit,
+            conn.connectedAccountId,
+          ).catch(() => null);
           if (info) {
             const { homeDir, env } = this.options;
-            saveAccountIdentity(homeDir, conn.connectedAccountId, { toolkit, userInfo: info }, env);
+            saveAccountIdentity(
+              homeDir,
+              conn.connectedAccountId,
+              { toolkit, userInfo: info },
+              env,
+            );
             return { ...conn, userInfo: info };
           }
         }
@@ -493,10 +650,17 @@ class PlatformPersonalProvider implements PersonalProvider {
   }
 
   async disconnectAccount(connectedAccountId: string): Promise<void> {
-    await this.api(`/connected_accounts/${encodeURIComponent(connectedAccountId)}`, {
-      method: "DELETE",
-    });
-    deleteAccountIdentity(this.options.homeDir, connectedAccountId, this.options.env);
+    await this.api(
+      `/connected_accounts/${encodeURIComponent(connectedAccountId)}`,
+      {
+        method: "DELETE",
+      },
+    );
+    deleteAccountIdentity(
+      this.options.homeDir,
+      connectedAccountId,
+      this.options.env,
+    );
   }
 
   async searchTools(
@@ -527,7 +691,8 @@ class PlatformPersonalProvider implements PersonalProvider {
   async getToolSchema(slug: string): Promise<PersonalToolSchema | null> {
     const tool = await this.getToolDetails(slug);
     const parameters =
-      obj(tool.input_parameters).constructor === Object && Object.keys(obj(tool.input_parameters)).length > 0
+      obj(tool.input_parameters).constructor === Object &&
+      Object.keys(obj(tool.input_parameters)).length > 0
         ? obj(tool.input_parameters)
         : obj(tool.inputSchema);
 
@@ -552,21 +717,24 @@ class PlatformPersonalProvider implements PersonalProvider {
       if (!accountId) {
         const tool = await this.getToolDetails(slug);
         const toolkit = str(obj(tool.toolkit).slug);
-        const latest = toolkit ? await this.findLatestConnection(toolkit) : null;
+        const latest = toolkit
+          ? await this.findLatestConnection(toolkit)
+          : null;
         accountId =
-          str(latest?.id) ??
-          str(latest?.connected_account_id) ??
-          undefined;
+          str(latest?.id) ?? str(latest?.connected_account_id) ?? undefined;
       }
 
-      const response = await this.api(`/tools/execute/${encodeURIComponent(slug)}`, {
-        method: "POST",
-        body: JSON.stringify({
-          user_id: this.options.userId,
-          ...(accountId ? { connected_account_id: accountId } : {}),
-          arguments: args,
-        }),
-      });
+      const response = await this.api(
+        `/tools/execute/${encodeURIComponent(slug)}`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            user_id: this.options.userId,
+            ...(accountId ? { connected_account_id: accountId } : {}),
+            arguments: args,
+          }),
+        },
+      );
 
       return {
         tool: slug,
@@ -602,7 +770,9 @@ export const createPersonalProvider = (
     loadOrCreateUserId(ctx.homeDir, ctx.env);
   const authConfigMap = (() => {
     try {
-      const fromEnv = JSON.parse(ctx.env.COMPOSIO_AUTH_CONFIG_MAP_JSON ?? "{}") as Record<string, string>;
+      const fromEnv = JSON.parse(
+        ctx.env.COMPOSIO_AUTH_CONFIG_MAP_JSON ?? "{}",
+      ) as Record<string, string>;
       return {
         ...(platformSettings.authConfigMap ?? {}),
         ...fromEnv,
@@ -619,11 +789,13 @@ export const createPersonalProvider = (
 
   return new PlatformPersonalProvider({
     apiKey,
-    apiBase: ctx.env.COMPOSIO_API_BASE || platformSettings.apiBase || DEFAULT_API_BASE,
+    apiBase:
+      ctx.env.COMPOSIO_API_BASE || platformSettings.apiBase || DEFAULT_API_BASE,
     userId,
     homeDir: ctx.homeDir,
     env: ctx.env,
-    callbackUrl: ctx.env.COMPOSIO_CALLBACK_URL ?? platformSettings.callbackUrl ?? null,
+    callbackUrl:
+      ctx.env.COMPOSIO_CALLBACK_URL ?? platformSettings.callbackUrl ?? null,
     authConfigMap,
   });
 };
