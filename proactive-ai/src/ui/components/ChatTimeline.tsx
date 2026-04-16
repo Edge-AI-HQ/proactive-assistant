@@ -207,16 +207,17 @@ export default function ChatTimeline({ onOpenChat, dismissedIds, confirmedIds, p
               const isProcessing = processingIds.has(card.id);
               const isDone = doneIds.has(card.id);
               const isChatted = chattedIds.has(card.id);
-              const isResolved = (isDismissed || isDone) && !isChatted && !isProcessing;
+              const isActiveProcessing = isProcessing && !isDone && !isDismissed;
+              const isResolved = isDismissed || isDone;
 
-              const previewText = isProcessing
-                ? "Processing..."
-                : isDone
+              const previewText = isDone
                 ? "Completed"
-                : isChatted
-                ? "In conversation"
                 : isDismissed
                 ? "Dismissed"
+                : isActiveProcessing
+                ? "Processing..."
+                : isChatted
+                ? "In conversation"
                 : isConfirmed
                 ? "Confirmed"
                 : card.primaryAction
@@ -239,10 +240,10 @@ export default function ChatTimeline({ onOpenChat, dismissedIds, confirmedIds, p
                           {card.title}
                         </p>
                         <span className="shrink-0 w-[18px] h-[18px] inline-flex items-center justify-center">
-                          {isProcessing || isChatted ? (
-                            <Loader2 size={15} className="text-amber-500 animate-spin" />
-                          ) : isDone || isResolved ? (
+                          {isResolved ? (
                             <CheckCircle2 size={15} className="text-green-500/60" />
+                          ) : isActiveProcessing || isChatted ? (
+                            <Loader2 size={15} className="text-amber-500 animate-spin" />
                           ) : (
                             <Circle size={15} className="text-rose-400" fill="currentColor" />
                           )}

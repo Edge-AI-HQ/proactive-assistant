@@ -25,22 +25,20 @@ export function useAuth() {
   });
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setState((s) => ({ ...s, loading: false, session, user: session?.user ?? null }));
-    });
-
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
-      setState((s) => ({
-        ...s,
-        loading: false,
-        session,
-        user: session?.user ?? null,
-      }));
+      setState({ loading: false, session, user: session?.user ?? null });
     });
 
-    return () => subscription.unsubscribe();
+    const timer = setTimeout(() => {
+      setState((s) => (s.loading ? { loading: false, session: null, user: null } : s));
+    }, 3000);
+
+    return () => {
+      subscription.unsubscribe();
+      clearTimeout(timer);
+    };
   }, []);
 
   // Native: listen for deep-link callback from OAuth redirect
@@ -50,12 +48,28 @@ export function useAuth() {
     const listener = CapApp.addListener("appUrlOpen", async ({ url }) => {
       if (!url.includes("auth/callback")) return;
 
-      const params = new URL(url).searchParams;
-      const code = params.get("code");
-      if (code) {
-        await supabase.auth.exchangeCodeForSession(code);
+      try {
+        const params = new URL(url).searchParams;
+        const oauthError = params.get("error");
+        if (oauthError) {
+          const desc = params.get("error_description") || oauthError;
+          console.error("[auth] OAuth provider error:", desc);
+          return;
+        }
+
+        const code = params.get("code");
+        if (!code) {
+          console.error("[auth] OAuth callback missing authorization code");
+          return;
+        }
+
+        const { error } = await supabase.auth.exchangeCodeForSession(code);
+        if (error) console.error("[auth] exchangeCodeForSession failed:", error.message);
+      } catch (err) {
+        console.error("[auth] Deep-link handler error:", err);
+      } finally {
+        await Browser.close();
       }
-      await Browser.close();
     });
 
     return () => {
@@ -75,13 +89,17 @@ export function useAuth() {
       });
       if (error) throw error;
       if (data?.url) {
-        await Browser.open({ url: data.url });
+        try {
+          await Browser.open({ url: data.url });
+        } catch (err) {
+          throw new Error(`Failed to open browser: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
     } else {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: `${window.location.origin}/proactive/`,
+          redirectTo: `${window.location.origin}${import.meta.env.BASE_URL}`,
           queryParams: { prompt: "select_account" },
         },
       });

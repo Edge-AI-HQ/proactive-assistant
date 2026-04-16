@@ -1,26 +1,19 @@
 import { useState, useEffect } from "react";
-import { motion } from "framer-motion";
 import {
-  Sprout, Briefcase, TrendingUp, Heart, Sparkles, Users,
-  Loader2, Check, MessageCircle,
-  type LucideIcon,
+  Loader2, CheckCircle2, Circle, Sparkles,
 } from "lucide-react";
 import {
-  normalizeIntentCards,
-  type IntentCard,
-  type EvaluationScore,
-} from "@/types/intent-card";
-import { proxyFetch } from "@/lib/api";
-
-const BASKET_ICONS: Record<string, LucideIcon> = {
-  work: Briefcase,
-  health: Heart,
-  family: Users,
-  wealth: TrendingUp,
-  finance: TrendingUp,
-  growth: Sprout,
-  life: Sparkles,
-};
+  Drawer,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
+  DrawerDescription,
+} from "@/components/ui/drawer";
+import CardDetailBody from "./CardDetailBody";
+import type { IntentCard, EvaluationScore } from "@/types/intent-card";
+import { normalizeIntentCards } from "@/types/intent-card";
+import { proxyFetch, proxyPost } from "@/lib/api";
+import { basketMeta } from "@/lib/basket-meta";
 
 interface StoredRun {
   id: string;
@@ -30,8 +23,24 @@ interface StoredRun {
   scoreMap?: Record<string, EvaluationScore>;
 }
 
+type TimelineCard = IntentCard & {
+  runId: string;
+  runDate: string;
+  score: EvaluationScore | null;
+};
+
 interface ChatTimelineProps {
-  onOpenChat?: (card: IntentCard) => void;
+  onOpenChat: (card: IntentCard) => void;
+  dismissedIds: Set<string>;
+  confirmedIds: Set<string>;
+  processingIds: Set<string>;
+  doneIds: Set<string>;
+  chattedIds: Set<string>;
+  onDismissId: (id: string) => void;
+  onConfirmId: (id: string) => void;
+  onDoneId: (id: string) => void;
+  onProcessingId: (id: string) => void;
+  onChattedId: (id: string) => void;
 }
 
 function formatTime(iso: string): string {
@@ -48,9 +57,111 @@ function formatDate(iso: string): string {
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
+export default function ChatTimeline({
+  onOpenChat,
+  dismissedIds,
+  confirmedIds,
+  processingIds,
+  doneIds,
+  chattedIds,
+  onDismissId,
+  onConfirmId,
+  onDoneId,
+  onProcessingId,
+  onChattedId,
+}: ChatTimelineProps) {
   const [historicalRuns, setHistoricalRuns] = useState<StoredRun[]>([]);
   const [loadingRuns, setLoadingRuns] = useState(true);
+  const [selectedCard, setSelectedCard] = useState<TimelineCard | null>(null);
+
+  const handleDismiss = () => {
+    if (!selectedCard) return;
+    const cardId = selectedCard.id;
+    onDismissId(cardId);
+    proxyPost("/feedback", {
+      kind: "dismiss",
+      intentCardId: cardId,
+      basket: selectedCard.goalBasket,
+      channel: "web",
+    }).catch(() => {});
+    setSelectedCard(null);
+  };
+
+  const handleConfirm = () => {
+    if (!selectedCard) return;
+    const cardId = selectedCard.id;
+    onConfirmId(cardId);
+    onProcessingId(cardId);
+    onChattedId(cardId);
+    proxyPost("/feedback", {
+      kind: "card_action",
+      action: "confirm",
+      intentCardId: cardId,
+      basket: selectedCard.goalBasket,
+      channel: "web",
+    }).catch(() => {});
+    setSelectedCard(null);
+    onOpenChat(selectedCard);
+  };
+
+  const handleChat = () => {
+    if (!selectedCard) return;
+    onProcessingId(selectedCard.id);
+    onChattedId(selectedCard.id);
+    setSelectedCard(null);
+    onOpenChat(selectedCard);
+  };
+
+  const handleSnooze = () => {
+    if (!selectedCard) return;
+    proxyPost("/feedback", {
+      kind: "snooze",
+      intentCardId: selectedCard.id,
+      basket: selectedCard.goalBasket,
+      channel: "web",
+    }).catch(() => {});
+    onDismissId(selectedCard.id);
+    setSelectedCard(null);
+  };
+
+  const handleModify = () => {
+    if (!selectedCard) return;
+    proxyPost("/feedback", {
+      kind: "card_action",
+      action: "modify",
+      intentCardId: selectedCard.id,
+      basket: selectedCard.goalBasket,
+      channel: "web",
+    }).catch(() => {});
+    onProcessingId(selectedCard.id);
+    onChattedId(selectedCard.id);
+    setSelectedCard(null);
+    onOpenChat(selectedCard);
+  };
+
+  const handleDone = () => {
+    if (!selectedCard) return;
+    onDoneId(selectedCard.id);
+    proxyPost("/feedback", {
+      kind: "card_action",
+      action: "complete",
+      intentCardId: selectedCard.id,
+      basket: selectedCard.goalBasket,
+      channel: "web",
+    }).catch(() => {});
+    setSelectedCard(null);
+  };
+
+  const handleTextFeedback = (text: string) => {
+    if (!selectedCard) return;
+    proxyPost("/feedback", {
+      kind: "text_feedback",
+      intentCardId: selectedCard.id,
+      basket: selectedCard.goalBasket,
+      channel: "web",
+      text,
+    }).catch(() => {});
+  };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -66,10 +177,8 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
             })),
           );
         }
-      } catch (err) {
-        if (!controller.signal.aborted) {
-          console.warn("[ChatTimeline] fetchRuns failed:", err);
-        }
+      } catch {
+        /* ignore */
       } finally {
         if (!controller.signal.aborted) setLoadingRuns(false);
       }
@@ -79,17 +188,16 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
     return () => { controller.abort(); window.clearInterval(interval); };
   }, []);
 
-  const allCards = historicalRuns.flatMap((run) =>
+  const allCards: TimelineCard[] = historicalRuns.flatMap((run) =>
     (run.finalCards ?? []).map((card) => ({
       ...card,
       runId: run.id,
       runDate: run.completedAt,
-      runIterations: run.totalIterations,
       score: run.scoreMap?.[card.id] ?? null,
     }))
   );
 
-  const grouped = new Map<string, typeof allCards>();
+  const grouped = new Map<string, TimelineCard[]>();
   for (const card of allCards) {
     const label = formatDate(card.runDate);
     if (!grouped.has(label)) grouped.set(label, []);
@@ -97,11 +205,10 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
   }
 
   return (
-    <div className="flex flex-col h-full px-4 pt-3 pb-24 overflow-y-auto scrollbar-hidden">
-      <h1 className="text-display text-2xl text-foreground mb-1">Timeline</h1>
-      <p className="text-sm text-muted-foreground mb-6">All generated intent cards</p>
+    <div className="flex flex-col h-full px-4 pt-14 pb-2 overflow-y-auto">
+      <h1 className="text-display text-2xl text-foreground mb-1 pr-20">Timeline</h1>
+      <p className="text-sm text-muted-foreground mb-6">AI memory &amp; action log</p>
 
-      {/* Loading state */}
       {loadingRuns && (
         <div className="flex items-center justify-center py-8 gap-2">
           <Loader2 size={16} className="animate-spin text-foreground/40" />
@@ -109,111 +216,80 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
         </div>
       )}
 
-      {/* Historical cards grouped by date */}
       {[...grouped.entries()].map(([dateLabel, cards]) => (
         <div key={dateLabel} className="mb-5">
           <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 block">
             {dateLabel}
           </span>
-          <div className="space-y-3">
-            {cards.map((card, i) => {
-              const Icon = BASKET_ICONS[card.goalBasket?.toLowerCase()] ?? Sparkles;
+          <div className="space-y-2">
+            {cards.map((card) => {
+              const meta = basketMeta(card.goalBasket);
+              const CatIcon = meta.icon;
+              const actionCount = card.secondaryActions?.length ?? 0;
+              const isDismissed = dismissedIds.has(card.id);
+              const isConfirmed = confirmedIds.has(card.id);
+              const isProcessing = processingIds.has(card.id);
+              const isDone = doneIds.has(card.id);
+              const isChatted = chattedIds.has(card.id);
+              const isActiveProcessing = isProcessing && !isDone && !isDismissed;
+              const isResolved = isDismissed || isDone;
+
+              const previewText = isDone
+                ? "Completed"
+                : isDismissed
+                ? "Dismissed"
+                : isActiveProcessing
+                ? "Processing..."
+                : isChatted
+                ? "In conversation"
+                : isConfirmed
+                ? "Confirmed"
+                : card.primaryAction
+                ? `${actionCount + 1} operations · ${card.primaryAction.label}`
+                : card.sources.join(" · ");
+
               return (
-                <motion.div
+                <div
                   key={`${card.runId}-${card.id}`}
-                  initial={{ opacity: 0, y: 16 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.04 }}
-                  className="glass-card p-4"
+                  className="glass-card px-3.5 py-4 w-full text-left cursor-pointer active:scale-[0.98] transition-transform"
+                  onClick={() => setSelectedCard(card)}
                 >
-                  <div className="flex items-start gap-3">
-                    <span className="text-foreground/60 mt-0.5">
-                      <Icon size={16} />
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-foreground/50 shrink-0">
+                      <CatIcon size={16} />
                     </span>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-xs font-semibold uppercase text-foreground/50 tracking-wide">
-                          {card.goalBasket}
+                      <div className="flex items-center gap-1.5">
+                        <p className={`text-[13px] font-medium leading-snug truncate flex-1 ${isResolved ? "text-foreground/35 line-through" : "text-foreground"}`}>
+                          {card.title}
+                        </p>
+                        <span className="shrink-0 w-[18px] h-[18px] inline-flex items-center justify-center">
+                          {isResolved ? (
+                            <CheckCircle2 size={15} className="text-green-500/60" />
+                          ) : isActiveProcessing || isChatted ? (
+                            <Loader2 size={15} className="text-amber-500 animate-spin" />
+                          ) : (
+                            <Circle size={15} className="text-rose-400" fill="currentColor" />
+                          )}
                         </span>
-                        {card.score ? (
-                          <span className={`ml-auto inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full ${
-                            card.score.overall >= 8
-                              ? "text-emerald-600 bg-emerald-500/10"
-                              : card.score.overall >= 5
-                                ? "text-amber-600 bg-amber-500/10"
-                                : "text-red-500 bg-red-500/10"
-                          }`}>
-                            Score {card.score.overall.toFixed(1)}
-                          </span>
-                        ) : (
-                          <span className="ml-auto inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 bg-emerald-500/10 px-2 py-0.5 rounded-full">
-                            <Check size={10} />
-                            Ready
-                          </span>
-                        )}
                       </div>
-                      <p className="text-sm font-medium text-foreground leading-snug">
-                        {card.title}
-                      </p>
-                      <p className="text-[12px] text-foreground/50 mt-1 line-clamp-2">
-                        {card.whyNow}
-                      </p>
-                      <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-                        {(card.sources ?? []).map((s: string) => (
-                          <span
-                            key={s}
-                            className="text-[10px] px-2 py-0.5 rounded-full bg-foreground/5 text-foreground/40 font-medium"
-                          >
-                            {s}
-                          </span>
-                        ))}
-                        <span className="text-[10px] text-muted-foreground ml-auto">
+                      <div className="flex items-center gap-1 mt-1.5">
+                        <p className="text-[11px] text-foreground/40 truncate flex-1">
+                          {previewText}
+                        </p>
+                        <span className="text-[10px] text-muted-foreground shrink-0">
                           {formatTime(card.runDate)}
                         </span>
                       </div>
-
-                      {/* Score badges */}
-                      {card.score && (
-                        <div className="flex items-center gap-2 mt-2">
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                            card.score.overall >= 8
-                              ? "bg-emerald-500/15 text-emerald-600"
-                              : card.score.overall >= 5
-                                ? "bg-amber-500/15 text-amber-600"
-                                : "bg-red-500/15 text-red-500"
-                          }`}>
-                            {card.score.overall.toFixed(1)}
-                          </span>
-                          {card.score.dimensions && (
-                            <span className="text-[9px] text-foreground/30">
-                              R{card.score.dimensions.relevance.toFixed(0)} ·
-                              A{card.score.dimensions.actionability.toFixed(0)} ·
-                              W{card.score.dimensions.whyNowClarity.toFixed(0)} ·
-                              N{card.score.dimensions.novelty.toFixed(0)} ·
-                              D{card.score.dimensions.decisionCompression.toFixed(0)}
-                            </span>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Chat button */}
-                      <button
-                        onClick={() => onOpenChat?.(card)}
-                        className="mt-2.5 flex items-center gap-1.5 text-[12px] font-medium text-foreground/45 hover:text-foreground/70 transition-colors"
-                      >
-                        <MessageCircle size={13} strokeWidth={1.5} />
-                        Chat about this
-                      </button>
                     </div>
                   </div>
-                </motion.div>
+                </div>
               );
             })}
           </div>
         </div>
       ))}
 
-      {/* Empty state */}
       {!loadingRuns && allCards.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
           <div className="glass-card p-4 rounded-full">
@@ -225,6 +301,40 @@ export default function ChatTimeline({ onOpenChat }: ChatTimelineProps) {
           </p>
         </div>
       )}
+
+      <Drawer open={!!selectedCard} onOpenChange={(open) => { if (!open) setSelectedCard(null); }}>
+        <DrawerContent
+          className="max-h-[85vh] border-t-0 !bg-transparent"
+          style={{
+            background: "linear-gradient(180deg, hsla(0, 0%, 100%, 0.5) 0%, hsla(0, 0%, 100%, 0.7) 100%)",
+            backdropFilter: "blur(40px) saturate(1.5)",
+            WebkitBackdropFilter: "blur(40px) saturate(1.5)",
+            border: "1px solid hsla(0, 0%, 100%, 0.4)",
+            borderBottom: "none",
+            borderRadius: "1.5rem 1.5rem 0 0",
+          }}
+          overlayClassName="!bg-foreground/5 backdrop-blur-[2px]"
+        >
+          <DrawerHeader className="sr-only">
+            <DrawerTitle>{selectedCard?.title || "Card Detail"}</DrawerTitle>
+            <DrawerDescription>Intent card detail view</DrawerDescription>
+          </DrawerHeader>
+
+          {selectedCard && (
+            <CardDetailBody
+              card={selectedCard}
+              score={selectedCard.score}
+              onChat={handleChat}
+              onDismiss={handleDismiss}
+              onConfirm={handleConfirm}
+              onSnooze={handleSnooze}
+              onModify={handleModify}
+              onDone={handleDone}
+              onTextFeedback={handleTextFeedback}
+            />
+          )}
+        </DrawerContent>
+      </Drawer>
     </div>
   );
 }

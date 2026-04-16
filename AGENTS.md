@@ -1,5 +1,20 @@
 # Repository Guidelines
 
+## 编码原则
+
+写代码和 review 时逐条对照。所有 AI coding 工具和团队成员共同遵守。
+
+1. **先读后写** — 改代码前读懂现有实现的意图。不基于猜测写代码。
+2. **用正解不绕过** — 找根因，不 workaround。禁止 `as any`、`@ts-ignore`、`eslint-disable`，除非注释说明为什么是唯一选项。
+3. **改动最小化** — 只改该改的。不顺手重构，不加无关改善。
+4. **用业界标准做法** — 业界有成熟 pattern 的功能直接用通用方案，不自己设计。同模块已有 pattern 就复用，不发明新写法。
+5. **系统视角** — 改动前考虑在整个系统中的位置，接口变更考虑上下游，数据变更考虑迁移。
+6. **边界防御，内部信任** — 系统边界做防御性处理，内部代码信任类型系统。
+7. **高效** — 注意复杂度和不必要的 IO，但不为微优化牺牲可读性。
+8. **低冗余不过度抽象** — 消除真正的重复。三行重复优于只用一次的抽象。
+9. **关键路径可观测** — 状态变更和系统边界留日志，能定位问题即可。
+10. **写完自审** — 实现完成后 review 完整 diff，对照以上原则检查，发现问题立即修。
+
 ## 只读源码参考
 - `pinai-openclaw/external/openclaw/`：OpenClaw 上游源码（git submodule）。**仅供阅读参考，禁止修改此目录下的任何文件。**
 
@@ -47,8 +62,7 @@ flyctl secrets set DOTENV_PRIVATE_KEY_DEV="..." -a proactive-ai-api-dev
 
 CI 需要在 GitHub Secrets 设置以下 secrets：
 - `FLY_API_TOKEN` — 所有 deploy workflow
-- `DOTENV_PRIVATE_KEY_DEV` — build-openclaw workflow（更新 OPENCLAW_IMAGE digest + deploy）
-- `DOTENV_PRIVATE_KEY_DEV` — deploy-dev + build-openclaw workflow（解密 .env.dev，提取 VITE_* build args）
+- `DOTENV_PRIVATE_KEY_DEV` — deploy-dev workflow（构建 OpenClaw 镜像时更新 digest + 解密 .env.dev 提取 VITE_* build args）
 - `DOTENV_PRIVATE_KEY_PRODUCTION` — deploy-prod workflow（解密 .env.production，提取 VITE_* build args）
 
 ## 高频目录
@@ -102,7 +116,7 @@ npm run test --workspace @pin-ai/apis
 ### Dev 环境（自动）
 push 到 `proactive-ai-v2` 后根据改动范围自动部署，不需要手动操作：
 - 改 `apis/` 或 `proactive-ai-frontend/` → 自动部署 APIs
-- 改 `pinai-openclaw/` → 自动构建镜像、更新 OPENCLAW_IMAGE digest、部署 APIs
+- 改 `pinai-openclaw/` → 先构建镜像、更新 digest，再部署 APIs（同一 workflow 内 job 依赖，无竞态）
 - 改 `ops/litellm/` → 自动部署 LiteLLM
 
 ### Prod 环境（手动触发）

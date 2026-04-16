@@ -86,6 +86,22 @@ async function enrichFeedbackInput(input: FeedbackInput): Promise<FeedbackInput>
 
 export function handleFeedback(): RouteHandler {
   return async (ctx) => {
+    // GET /feedback/dismissed — list dismissed card IDs
+    if (ctx.subpath === '/feedback/dismissed' && ctx.req.method === 'GET') {
+      try {
+        const records = await db.listFeedback({ kind: 'dismiss', limit: 200 });
+        const ids = [...new Set(
+          records
+            .map((r) => (r as Record<string, unknown>).intent_card_id as string | undefined)
+            .filter((id): id is string => !!id),
+        )];
+        json(ctx.res, 200, { ok: true, dismissedCardIds: ids });
+      } catch (err) {
+        json(ctx.res, 500, { error: err instanceof Error ? err.message : String(err) });
+      }
+      return true;
+    }
+
     if (ctx.subpath !== '/feedback' || ctx.req.method !== 'POST') return false;
     try {
       const body = await readBody(ctx.req);

@@ -29,7 +29,7 @@ export const DEFAULT_AUTO_LOOP_CONFIG: AutoLoopConfig = {
   auto_ingest_interval_ms: 300_000,
   auto_detect_interval_ms: 60_000,
   auto_loop_min_interval_ms: 900_000,
-  max_iterations: 2,
+  max_iterations: 1,
   cards_per_iteration: 8,
   agent_timeout_ms: 300_000,
 };

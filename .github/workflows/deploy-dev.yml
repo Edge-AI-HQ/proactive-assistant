@@ -11,6 +11,14 @@ on:
       - 'package*.json'
       - 'scripts/**'
       - 'ops/litellm/**'
+      - 'pinai-openclaw/**'
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: true
+
+permissions:
+  contents: write
 
 jobs:
   changes:
@@ -18,6 +26,7 @@ jobs:
     outputs:
       apis: ${{ steps.filter.outputs.apis }}
       litellm: ${{ steps.filter.outputs.litellm }}
+      openclaw: ${{ steps.filter.outputs.openclaw }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -32,14 +41,83 @@ jobs:
               - 'scripts/**'
             litellm:
               - 'ops/litellm/**'
+            openclaw:
+              - 'pinai-openclaw/**'
+
+  build-openclaw:
+    needs: changes
+    if: needs.changes.outputs.openclaw == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      deploy-ref: ${{ steps.commit.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Build and push OpenClaw image
+        run: |
+          flyctl deploy . \
+            --config fly.openclaw.toml \
+            --build-only \
+            --push \
+            --image-label "openclaw-$(date +%Y%m%d-%H%M%S)" \
+            --remote-only \
+            --depot=false \
+            --yes 2>&1 | tee build-output.txt
+
+          DIGEST=$(grep -Eo "sha256:[0-9a-f]{64}" build-output.txt | tail -1)
+          if [ -z "$DIGEST" ]; then
+            echo "::error::Failed to extract digest from build output"
+            exit 1
+          fi
+          echo "DIGEST_REF=registry.fly.io/proactive-ai-openclaw@${DIGEST}" >> $GITHUB_ENV
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Update OPENCLAW_IMAGE in dev
+        run: |
+          npx @dotenvx/dotenvx set OPENCLAW_IMAGE "${{ env.DIGEST_REF }}" -f apis/.env.dev
+        env:
+          DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
+
+      - name: Commit updated digest
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add apis/.env.dev
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
+          git commit -m "chore: update OPENCLAW_IMAGE digest [skip ci]"
+          git push
+          echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        run: |
+          echo "## OpenClaw Image Built" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Digest: \`${{ env.DIGEST_REF }}\`" >> $GITHUB_STEP_SUMMARY
 
   deploy-apis:
-    needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.apis == 'true'
+    needs: [changes, build-openclaw]
+    # Run when apis or openclaw changed (or manual trigger), but not if build-openclaw failed
+    if: |
+      always()
+      && needs.changes.result == 'success'
+      && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.apis == 'true' || needs.changes.outputs.openclaw == 'true')
+      && needs.build-openclaw.result != 'failure'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          # Use the commit with updated digest if build-openclaw pushed one
+          ref: ${{ needs.build-openclaw.outputs.deploy-ref || github.sha }}
           submodules: false
 
       - uses: actions/setup-node@v4
