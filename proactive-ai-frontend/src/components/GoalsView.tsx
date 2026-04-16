@@ -774,8 +774,8 @@ export default function GoalsView() {
                   Full memory list split into personal entries and event-style records.
                 </p>
               </div>
-              <div className="rounded-2xl bg-foreground/5 p-1">
-                <div className="flex items-center gap-1">
+              <div className="shrink-0 rounded-2xl bg-foreground/5 p-0.5">
+                <div className="flex items-center gap-0.5">
                   {([
                     { id: "entry", label: "Entry", count: entryMemories.length },
                     { id: "event", label: "Event", count: eventMemories.length },
@@ -785,7 +785,7 @@ export default function GoalsView() {
                       <button
                         key={tab.id}
                         onClick={() => setMemoryTab(tab.id)}
-                        className={`rounded-xl px-3 py-1.5 text-[11px] font-medium transition-colors ${
+                        className={`whitespace-nowrap rounded-lg px-2 py-0.5 text-[10px] font-medium transition-colors ${
                           active
                             ? "bg-foreground text-background"
                             : "text-foreground/48 hover:bg-white/45"
@@ -863,208 +863,6 @@ export default function GoalsView() {
             </div>
           </motion.section>
 
-          {/* ────────────────────────────────────────────────────────── */}
-          {/* Section 7: Goals list (upstream expandable list + add)    */}
-          {/* ────────────────────────────────────────────────────────── */}
-
-          <motion.section id="profile-section-goals" {...sectionMotion} className="glass-card-strong p-4">
-            <div className="mb-1 flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-sm font-semibold text-foreground">Goals</h2>
-                <p className="mt-1 text-[11px] leading-5 text-foreground/42">
-                  Existing active goals stay editable here, now alongside the full profile context above.
-                </p>
-              </div>
-              <button
-                onClick={() => setShowAddForm((prev) => !prev)}
-                className="inline-flex items-center gap-1 rounded-full bg-foreground/5 px-3 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-foreground/10"
-              >
-                <Plus size={14} />
-                Add Goal
-              </button>
-            </div>
-
-            <AnimatePresence initial={false}>
-              {showAddForm && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="overflow-hidden"
-                >
-                  <div className="mt-4 rounded-3xl bg-foreground/[0.03] p-4">
-                    <div className="space-y-3">
-                      <input
-                        value={newKey}
-                        onChange={(event) => setNewKey(event.target.value)}
-                        placeholder="Key (e.g. learn-spanish)"
-                        className="w-full rounded-xl border border-foreground/10 bg-white/65 px-3 py-2 text-xs font-mono text-foreground placeholder:text-foreground/30 focus:outline-none focus:ring-2 focus:ring-primary/30"
-                      />
-                      <input
-                        value={newTitle}
-                        onChange={(event) => setNewTitle(event.target.value)}
-                        placeholder="Title (e.g. Learn conversational Spanish)"
-                        className="w-full rounded-xl border border-foreground/10 bg-white/65 px-3 py-2 text-xs text-foreground placeholder:text-foreground/30 focus:outline-none focus:ring-2 focus:ring-primary/30"
-                      />
-                      <div className="flex items-center gap-2">
-                        {(["high", "medium", "low"] as const).map((priority) => (
-                          <button
-                            key={priority}
-                            onClick={() => setNewPriority(priority)}
-                            className={`flex-1 rounded-xl py-1.5 text-[11px] font-medium transition-colors ${
-                              newPriority === priority
-                                ? "bg-foreground text-background"
-                                : "bg-white/70 text-foreground/50 hover:bg-white"
-                            }`}
-                          >
-                            {priority.charAt(0).toUpperCase() + priority.slice(1)}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => setShowAddForm(false)}
-                          className="flex-1 rounded-xl bg-white/70 py-2 text-xs font-medium text-foreground/50 transition-colors hover:bg-white"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          onClick={handleAddGoal}
-                          disabled={saving || !newKey.trim() || !newTitle.trim()}
-                          className="flex-1 rounded-xl bg-foreground py-2 text-xs font-semibold text-background transition-colors hover:bg-foreground/85 disabled:opacity-40"
-                        >
-                          {saving ? <Loader2 size={14} className="mx-auto animate-spin" /> : "Add"}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            <div className="mt-4 space-y-2.5">
-              {activeGoals.length === 0 ? (
-                <EmptyState
-                  title="No active goals"
-                  description="Add a goal to help the assistant generate more relevant intent cards."
-                />
-              ) : (
-                activeGoals.map((goal, index) => {
-                  const meta = goalMeta(goal.key);
-                  const Icon = meta.icon;
-                  const isExpanded = expandedKey === goal.key;
-                  const isClosing = closingKey === goal.key;
-
-                  return (
-                    <motion.div
-                      key={goal.key}
-                      initial={{ opacity: 0, y: 12 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: index * 0.04 }}
-                    >
-                      <div className="glass-card overflow-hidden">
-                        <button
-                          onClick={() => setExpandedKey(isExpanded ? null : goal.key)}
-                          className="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-foreground/[0.03]"
-                        >
-                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-foreground/5">
-                            <Icon size={18} strokeWidth={1.5} className="text-foreground/60" />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
-                              <span className="truncate text-sm font-semibold text-foreground">
-                                {goal.title}
-                              </span>
-                              <span className="rounded-full bg-foreground/5 px-2 py-0.5 text-[10px] font-medium text-foreground/42">
-                                {goalMeta(goal.key).label}
-                              </span>
-                            </div>
-                            <div className="mt-1 flex items-center gap-2">
-                              <span className="text-[10px] font-mono text-foreground/30">{goal.key}</span>
-                              <span
-                                className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                                  PRIORITY_STYLE[goal.priority] ?? PRIORITY_STYLE.medium
-                                }`}
-                              >
-                                {goal.priority}
-                              </span>
-                            </div>
-                          </div>
-                          <ChevronDown
-                            size={14}
-                            strokeWidth={1.5}
-                            className={`shrink-0 text-foreground/25 transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`}
-                          />
-                        </button>
-
-                        <AnimatePresence initial={false}>
-                          {isExpanded && (
-                            <motion.div
-                              initial={{ height: 0, opacity: 0 }}
-                              animate={{ height: "auto", opacity: 1 }}
-                              exit={{ height: 0, opacity: 0 }}
-                              transition={{ duration: 0.2 }}
-                              className="overflow-hidden"
-                            >
-                              <div className="border-t border-foreground/8 px-4 pb-4 pt-3">
-                                {goal.summary && (
-                                  <p className="mb-3 text-[13px] leading-relaxed text-foreground/60">
-                                    {goal.summary}
-                                  </p>
-                                )}
-                                <div className="mb-3 text-[11px] text-foreground/38">
-                                  Updated {formatDateTime(goal.updated_at)}
-                                </div>
-                                <button
-                                  onClick={() => handleCloseGoal(goal.key)}
-                                  disabled={isClosing}
-                                  className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-foreground/5 py-2.5 text-xs font-medium text-foreground/50 transition-colors hover:bg-foreground/10 disabled:opacity-40"
-                                >
-                                  {isClosing ? (
-                                    <Loader2 size={12} className="animate-spin" />
-                                  ) : (
-                                    <>
-                                      <Check size={12} />
-                                      Close Goal
-                                    </>
-                                  )}
-                                </button>
-                              </div>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
-                      </div>
-                    </motion.div>
-                  );
-                })
-              )}
-            </div>
-
-            {closedGoals.length > 0 && (
-              <div className="mt-6">
-                <span className="mb-3 block text-xs font-semibold uppercase tracking-wider text-foreground/25">
-                  Closed ({closedGoals.length})
-                </span>
-                <div className="space-y-1.5">
-                  {closedGoals.map((goal) => {
-                    const Icon = goalMeta(goal.key).icon;
-                    return (
-                      <div
-                        key={goal.key}
-                        className="glass-card flex items-center gap-3 px-4 py-3 opacity-50"
-                      >
-                        <Icon size={14} strokeWidth={1.5} className="shrink-0 text-foreground/30" />
-                        <span className="flex-1 text-xs text-foreground/40 line-through">
-                          {goal.title}
-                        </span>
-                        <X size={10} className="text-foreground/20" />
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </motion.section>
         </div>
       )}
 

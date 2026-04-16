@@ -556,7 +556,7 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
   // ── Main render ──
 
   return (
-    <div className="relative h-screen w-full max-w-md mx-auto overflow-hidden">
+    <div className="relative h-screen w-full max-w-lg mx-auto overflow-hidden">
       {/* Background: gradient image + animated overlay + white overlay */}
       <img
         src={`${import.meta.env.BASE_URL}bg-gradient.jpg`}
