@@ -51,6 +51,75 @@ function writeCache(data: CachedWeather) {
   } catch { /* ignore */ }
 }
 
+interface GeoLookup {
+  lat: number;
+  lon: number;
+  city?: string;
+}
+
+// Multi-source IP geolocation. All must be HTTPS — iOS App Transport
+// Security blocks plain HTTP. We try each source in order and return the
+// first response that parses cleanly. This protects against single-vendor
+// rate limits / CORS hiccups seen in WKWebView.
+const GEO_SOURCES: Array<{
+  name: string;
+  url: string;
+  parse: (d: Record<string, unknown>) => GeoLookup | null;
+}> = [
+  {
+    name: "ipapi.co",
+    url: "https://ipapi.co/json/",
+    parse: (d) => {
+      const lat = Number((d as { latitude?: unknown }).latitude);
+      const lon = Number((d as { longitude?: unknown }).longitude);
+      const city = (d as { city?: string }).city;
+      if (Number.isFinite(lat) && Number.isFinite(lon)) return { lat, lon, city };
+      return null;
+    },
+  },
+  {
+    name: "geojs.io",
+    url: "https://get.geojs.io/v1/ip/geo.json",
+    parse: (d) => {
+      const lat = parseFloat(String((d as { latitude?: unknown }).latitude));
+      const lon = parseFloat(String((d as { longitude?: unknown }).longitude));
+      const city = (d as { city?: string }).city;
+      if (Number.isFinite(lat) && Number.isFinite(lon)) return { lat, lon, city };
+      return null;
+    },
+  },
+  {
+    name: "ipwho.is",
+    url: "https://ipwho.is/",
+    parse: (d) => {
+      const lat = Number((d as { latitude?: unknown }).latitude);
+      const lon = Number((d as { longitude?: unknown }).longitude);
+      const city = (d as { city?: string }).city;
+      if (Number.isFinite(lat) && Number.isFinite(lon)) return { lat, lon, city };
+      return null;
+    },
+  },
+];
+
+async function lookupGeo(): Promise<GeoLookup | null> {
+  for (const source of GEO_SOURCES) {
+    try {
+      const res = await fetch(source.url);
+      if (!res.ok) {
+        console.warn(`[weather] ${source.name} HTTP ${res.status}`);
+        continue;
+      }
+      const data = await res.json();
+      const parsed = source.parse(data);
+      if (parsed) return parsed;
+      console.warn(`[weather] ${source.name} returned unparseable payload`, data);
+    } catch (err) {
+      console.warn(`[weather] ${source.name} fetch failed:`, err);
+    }
+  }
+  return null;
+}
+
 export function useWeather(): WeatherData | null {
   const [weather, setWeather] = useState<WeatherData | null>(() => {
     const cached = readCache();
@@ -65,14 +134,14 @@ export function useWeather(): WeatherData | null {
     let cancelled = false;
 
     async function fetchWeather() {
+      const geo = await lookupGeo();
+      if (!geo) {
+        console.warn("[weather] all geo sources failed — widget will stay hidden");
+        return;
+      }
       try {
-        const geo = await fetch("http://ip-api.com/json/?fields=lat,lon,city").then((r) => r.json());
-        const lat = geo.lat;
-        const lon = geo.lon;
-        const city: string | undefined = geo.city;
-
         const res = await fetch(
-          `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code&timezone=auto`,
+          `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}&current=temperature_2m,weather_code&timezone=auto`,
         );
         const data = await res.json();
         const temp = Math.round(data.current.temperature_2m);
@@ -80,11 +149,11 @@ export function useWeather(): WeatherData | null {
 
         if (cancelled) return;
 
-        writeCache({ temp, code, city, ts: Date.now() });
+        writeCache({ temp, code, city: geo.city, ts: Date.now() });
         const meta = weatherMeta(code);
-        setWeather({ temp, label: meta.label, icon: meta.icon, city });
-      } catch {
-        /* silently fail — weather is non-critical */
+        setWeather({ temp, label: meta.label, icon: meta.icon, city: geo.city });
+      } catch (err) {
+        console.warn("[weather] open-meteo fetch failed:", err);
       }
     }
 

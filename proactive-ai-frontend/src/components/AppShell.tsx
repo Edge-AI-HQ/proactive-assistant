@@ -163,6 +163,18 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
     return () => clearInterval(t);
   }, []);
 
+  // ── Refresh Composio connections on Control tab entry ──
+  // Keeps web and iOS in sync without a full app restart: when the user
+  // switches to CONTROL, re-pull the live connection list. loadStatus is
+  // intentionally omitted from the dep array — it's a useCallback whose
+  // identity is stable per mount and listing it would refire on every render.
+
+  useEffect(() => {
+    if (activeView !== "control") return;
+    void composio.loadStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeView]);
+
   // ── Visible cards for NOW view ──
 
   const hiddenIds = new Set([...dismissedIds, ...doneIds]);
@@ -379,14 +391,14 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
         <div className="relative z-20 px-5 pt-3 pb-2">
           {weather && (
             <div className="flex items-center mb-3">
-              <div className="glass-card-strong px-3 py-1.5 flex items-center gap-1.5">
-                <weather.icon size={14} strokeWidth={1.5} className="text-foreground/60" />
-                <span className="text-sm font-medium text-foreground">{weather.temp}&deg;</span>
-                <span className="text-xs text-foreground/60">{weather.label}</span>
+              <div className="glass-card-strong px-3 py-1.5 flex items-center gap-1.5 flex-nowrap whitespace-nowrap max-w-full">
+                <weather.icon size={14} strokeWidth={1.5} className="text-foreground/60 shrink-0" />
+                <span className="text-sm font-medium text-foreground shrink-0">{weather.temp}&deg;</span>
+                <span className="text-xs text-foreground/60 shrink-0">{weather.label}</span>
                 {weather.city && (
                   <>
-                    <span className="text-foreground/20">&middot;</span>
-                    <span className="text-xs text-foreground/50">{weather.city}</span>
+                    <span className="text-xs text-foreground/20 shrink-0">&middot;</span>
+                    <span className="text-xs text-foreground/50 shrink-0 truncate">{weather.city}</span>
                   </>
                 )}
               </div>
@@ -422,7 +434,19 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
           onTouchEnd={handleTouchEnd}
         >
           <Suspense fallback={<div className="w-[300px] h-[300px] rounded-full bg-foreground/5 animate-pulse" />}>
-            <AiSphere size={Math.min(570, window.innerWidth * 1.42)} mode={isRunning ? "thinking" : "idle"} className="-mt-[10%]" />
+            <AiSphere
+              /* Sphere fills ~95% of viewport width (a small safe margin so
+                 the edge never touches the screen). Capped at 460 so on
+                 tablet/desktop the sphere sits neatly inside max-w-lg. */
+              size={Math.min(window.innerWidth * 0.95, 460)}
+              mode={isRunning ? "thinking" : "idle"}
+              /* flex-1 sits below the weather+greeting header (~190px tall on
+                 iPhone), so its vertical center is below the screen's true
+                 center. The negative top margin pulls the sphere up by ~28%
+                 of its own size, canceling the header offset so the sphere
+                 reads as screen-centered. */
+              className="-mt-[28%]"
+            />
           </Suspense>
 
           {/* Loading overlay */}
@@ -536,8 +560,11 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
       <div className="absolute inset-0 bg-white/50" />
 
       <div className="relative z-10 flex flex-col h-full pt-safe-top">
-        {/* Top-right buttons: DebugPanel gear + hamburger */}
-        <div className="absolute top-[max(env(safe-area-inset-top,0px),12px)] right-4 z-30 flex items-center gap-2">
+        {/* Top-right buttons: DebugPanel gear + hamburger.
+            Align vertically with the weather pill: weather pill sits at
+            parent's padding-top (safe-area) + pt-3 (12px), so these
+            absolute buttons need safe-area + 12px too. */}
+        <div className="absolute top-[calc(env(safe-area-inset-top,0px)+12px)] right-4 z-30 flex items-center gap-2">
           <DebugPanel
             health={health}
             run={run}

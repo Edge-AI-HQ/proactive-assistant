@@ -52,38 +52,16 @@ export default function AiSphere({
           : undefined
       }
     >
-      {/* Ambient glow */}
-      <div
-        className="absolute rounded-full animate-pulse"
-        style={{
-          inset: -24,
-          background:
-            "radial-gradient(circle, hsl(320 55% 82% / 0.3) 0%, hsl(300 40% 85% / 0.12) 50%, transparent 72%)",
-          filter: "blur(22px)",
-        }}
-        aria-hidden="true"
-      />
-
-      {/* White halo ring — separates sphere from background */}
-      <div
-        className="absolute rounded-full"
-        style={{
-          inset: -2,
-          background:
-            "radial-gradient(circle, transparent 68%, hsl(0 0% 100% / 0.25) 74%, hsl(0 0% 100% / 0.4) 79%, hsl(0 0% 100% / 0.15) 85%, transparent 91%)",
-          filter: "blur(2px)",
-        }}
-        aria-hidden="true"
-      />
-
-      {/* Video sphere — circular mask + blend to remove white bg */}
+      {/* Video sphere — tight mask, soft feathered edge blends naturally
+          into the background. No ambient blur/halo: those made the sphere
+          look hazy on iOS. */}
       <div
         className="absolute overflow-hidden rounded-full"
         style={{
-          inset: "2%",
+          inset: "6%",
           WebkitMaskImage:
-            "radial-gradient(circle, black 64%, transparent 72%)",
-          maskImage: "radial-gradient(circle, black 64%, transparent 72%)",
+            "radial-gradient(circle, black 50%, transparent 55%)",
+          maskImage: "radial-gradient(circle, black 50%, transparent 55%)",
         }}
       >
         <video
@@ -96,6 +74,7 @@ export default function AiSphere({
           style={{
             mixBlendMode: "multiply",
             transform: "scale(1.05)",
+            imageRendering: "auto",
           }}
         >
           <source src={`${base}sphere.webm`} type="video/webm" />
