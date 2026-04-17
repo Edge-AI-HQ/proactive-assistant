@@ -209,6 +209,40 @@ export async function deleteAccount(): Promise<void> {
   if (!res.ok) throw new Error(`/user/account delete failed: ${await readErrorMessage(res)}`);
 }
 
+// ── Model management ──
+
+export interface ModelOption {
+  id: string;
+  ref: string;
+}
+
+export interface ModelsResponse {
+  ok: boolean;
+  current_model: string;
+  default_model: string;
+  available_models: ModelOption[];
+}
+
+export async function fetchModels(signal?: AbortSignal): Promise<ModelsResponse> {
+  const res = await proactiveFetch("/api/proactive/models", { signal });
+  if (!res.ok) throw new Error(`/models failed: ${await readErrorMessage(res)}`);
+  return res.json();
+}
+
+export async function changeModel(
+  modelRef: string,
+  signal?: AbortSignal
+): Promise<{ ok: boolean; model: string }> {
+  const res = await proactiveFetch("/api/proactive/models/change", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: modelRef }),
+    signal,
+  });
+  if (!res.ok) throw new Error(`/models/change failed: ${await readErrorMessage(res)}`);
+  return res.json();
+}
+
 // ── Gateway ticket ──
 
 export async function getGatewayTicket(): Promise<{

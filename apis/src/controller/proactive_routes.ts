@@ -28,6 +28,8 @@ import {
 } from '../domain/proactive/index.js';
 import { getContainerRuntime } from '../domain/container/provider_factory.js';
 import { relayGatewayWs } from '../domain/gateway/gateway_ws_relay.js';
+import { getCurrentModel, setCurrentModel } from '../domain/gateway/gateway_rpc.js';
+import { config } from '../domain/common/config.js';
 
 const router = Router();
 
@@ -173,6 +175,94 @@ router.get('/api/proactive/container/status', requireProactiveAuth, async (req, 
   } catch (err) {
     console.error('[proactive] container/status error:', err);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// -- Model management --
+
+router.get('/api/proactive/models', requireProactiveAuth, async (req, res) => {
+  try {
+    const auth = req.proactiveAuth!;
+    const allowedModels = config.litellm.allowedModels.length
+      ? config.litellm.allowedModels
+      : [config.litellm.openclawDefaultModel];
+    const defaultModel = config.litellm.openclawDefaultModel;
+
+    let currentModel: string | null = null;
+    const user = await getUserBySupabaseId(auth.userId);
+    const container = await getContainerForUser(auth.userId);
+    if (user?.gateway_token && container?.status === 'running') {
+      const target = getOrchestrator().resolveTarget(container);
+      if (target) {
+        try {
+          currentModel = await getCurrentModel(target, user.gateway_token);
+        } catch {
+          // Gateway unreachable — fall back to default below
+        }
+      }
+    }
+
+    res.json({
+      ok: true,
+      current_model: currentModel ?? `litellm/${defaultModel}`,
+      default_model: `litellm/${defaultModel}`,
+      available_models: allowedModels.map((id) => ({ id, ref: `litellm/${id}` })),
+    });
+  } catch (err) {
+    console.error('[proactive] /models error:', err);
+    res.status(500).json({ error: 'Failed to read models' });
+  }
+});
+
+router.post('/api/proactive/models/change', requireProactiveAuth, async (req, res) => {
+  try {
+    const auth = req.proactiveAuth!;
+    const body = req.body as { model?: unknown } | undefined;
+    const modelRef = typeof body?.model === 'string' ? body.model.trim() : '';
+    if (!modelRef) {
+      res.status(400).json({ error: 'model is required (e.g. litellm/claude-opus-4-6)' });
+      return;
+    }
+
+    const bareId = modelRef.replace(/^litellm\//i, '');
+    const allowedModels = config.litellm.allowedModels.length
+      ? config.litellm.allowedModels
+      : [config.litellm.openclawDefaultModel];
+    if (!allowedModels.includes(bareId)) {
+      res.status(400).json({ error: `Model "${bareId}" is not in the allowed list.`, allowed: allowedModels });
+      return;
+    }
+
+    const normalizedRef = modelRef.startsWith('litellm/') ? modelRef : `litellm/${modelRef}`;
+
+    const user = await getUserBySupabaseId(auth.userId);
+    if (!user?.gateway_token) {
+      res.status(500).json({ error: 'Gateway token missing.' });
+      return;
+    }
+
+    const container = await getContainerForUser(auth.userId);
+    if (!container || container.status !== 'running') {
+      res.status(503).json({ error: 'Container not running. Please wait for it to start.' });
+      return;
+    }
+
+    const target = getOrchestrator().resolveTarget(container);
+    if (!target) {
+      res.status(502).json({ error: 'Failed to resolve gateway target.' });
+      return;
+    }
+
+    const result = await setCurrentModel(target, user.gateway_token, normalizedRef);
+    if (!result.ok) {
+      res.status(502).json({ error: `Gateway rejected model change: ${result.error}` });
+      return;
+    }
+
+    res.json({ ok: true, model: normalizedRef });
+  } catch (err) {
+    console.error('[proactive] /models/change error:', err);
+    res.status(500).json({ error: 'Failed to change model' });
   }
 });
 
