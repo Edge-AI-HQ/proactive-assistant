@@ -50,5 +50,10 @@ export default defineConfig(({ mode }) => {
         input: path.resolve(__dirname, "index.html"),
       },
     },
+    test: {
+      environment: "jsdom",
+      globals: true,
+      include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    },
   };
 });

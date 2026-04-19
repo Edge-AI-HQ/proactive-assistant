@@ -223,6 +223,31 @@ export interface ModelsResponse {
   available_models: ModelOption[];
 }
 
+export type GatewayProbeCode =
+  | "NO_CONTAINER"
+  | "PROXY_ERROR"
+  | "RESUMING"
+  | "CONTAINER_NOT_RUNNING";
+
+export interface GatewayProbeResult {
+  ok: boolean;
+  httpStatus: number | null;
+  code?: GatewayProbeCode;
+  message?: string;
+}
+
+function toGatewayProbeCode(value: unknown): GatewayProbeCode | undefined {
+  switch (value) {
+    case "NO_CONTAINER":
+    case "PROXY_ERROR":
+    case "RESUMING":
+    case "CONTAINER_NOT_RUNNING":
+      return value;
+    default:
+      return undefined;
+  }
+}
+
 export async function fetchModels(signal?: AbortSignal): Promise<ModelsResponse> {
   const res = await proactiveFetch("/api/proactive/models", { signal });
   if (!res.ok) throw new Error(`/models failed: ${await readErrorMessage(res)}`);
@@ -259,17 +284,52 @@ export async function getGatewayTicket(): Promise<{
 
 // ── Gateway readiness probe ──
 
-export async function probeGatewayHealth(): Promise<boolean> {
+export async function probeGatewayHealth(): Promise<GatewayProbeResult> {
   try {
     const res = await fetch(`${API_BASE}/api/proxy/health`, {
       headers: await authHeaders(),
       signal: AbortSignal.timeout(5000),
     });
-    if (!res.ok) return false;
-    const data = await res.json();
-    return Boolean(data.ok);
-  } catch {
-    return false;
+    let data: Record<string, unknown> | null = null;
+    try {
+      const parsed = await res.json();
+      data =
+        parsed && typeof parsed === "object"
+          ? (parsed as Record<string, unknown>)
+          : null;
+    } catch {
+      data = null;
+    }
+
+    const message =
+      typeof data?.error === "string"
+        ? data.error
+        : typeof data?.message === "string"
+          ? data.message
+          : undefined;
+    const code = toGatewayProbeCode(data?.code);
+
+    if (!res.ok) {
+      return {
+        ok: false,
+        httpStatus: res.status,
+        code,
+        message: message || res.statusText || "Gateway health check failed",
+      };
+    }
+
+    return {
+      ok: typeof data?.ok === "boolean" ? data.ok : true,
+      httpStatus: res.status,
+      code,
+      message,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      httpStatus: null,
+      message: error instanceof Error ? error.message : "Gateway health check failed",
+    };
   }
 }
 
