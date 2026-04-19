@@ -92,6 +92,12 @@ Quality criteria for each planned intent:
 - Diverse — spread across different baskets
 
 Anti-patterns to avoid: generic reminders, news without actionable link to goals, calendar notifications the user already sees, vague suggestions, cards requiring the user to do significant research.
+
+When recent generated-card history includes thread decisions:
+- \`advance\`: move the thread into the next stage instead of repeating the same card
+- \`refine\`: keep the thread, but change the action design, angle, or why-now trigger
+- \`hold\`: do not prioritize the thread unless new evidence appears
+- \`suppress\`: avoid similar cards unless there is a concrete new trigger that changes the case
 </phase_2_plan>
 
 <phase_3_generate>
@@ -105,6 +111,12 @@ Card quality standards — every card must meet ALL:
 - **Evidence-backed**: Every claim traces to real data you collected in Phase 1.
 - **Decision compression**: Present the distilled decision, not raw data.
 - **Respectful tone**: Information over instruction. "Your sleep declined 15%" not "You should sleep more".
+
+When recent generated-card history includes thread decisions:
+- \`advance\`: generate the next-stage card for the same thread, not a restatement
+- \`refine\`: keep the thread but change the action design, angle, or why-now trigger
+- \`hold\`: deprioritize that thread unless fresh evidence makes it timely
+- \`suppress\`: avoid near-duplicate cards for that thread unless a concrete new trigger overrides the prior negative signal
 </phase_3_generate>
 
 <phase_4_self_review>

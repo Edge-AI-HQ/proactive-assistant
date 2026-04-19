@@ -10,6 +10,7 @@ import {
 export interface CreateFeedbackInput {
   pushId?: string;
   intentCardId?: string;
+  intentKey?: string;
   conversationId?: string;
   messageId?: string;
   kind: string;
@@ -69,6 +70,7 @@ export class FeedbackRepository {
       id,
       pushId: input.pushId ?? null,
       intentCardId: input.intentCardId ?? null,
+      intentKey: input.intentKey ?? null,
       conversationId: input.conversationId ?? null,
       messageId: input.messageId ?? null,
       kind: input.kind,
@@ -242,6 +244,7 @@ export class FeedbackRepository {
         id              TEXT PRIMARY KEY NOT NULL,
         push_id         TEXT,
         intent_card_id  TEXT,
+        intent_key      TEXT,
         conversation_id TEXT,
         message_id      TEXT,
         kind            TEXT NOT NULL,
@@ -254,6 +257,18 @@ export class FeedbackRepository {
         metadata        TEXT NOT NULL DEFAULT '{}',
         created_at      TEXT NOT NULL
       )
+    `);
+
+    const columns = this.database.all<{ name: string }>(
+      `PRAGMA table_info(feedback_events)`,
+    );
+    if (!columns.some((entry) => entry.name === "intent_key")) {
+      this.database.exec(`ALTER TABLE feedback_events ADD COLUMN intent_key TEXT`);
+    }
+
+    this.database.exec(`
+      CREATE INDEX IF NOT EXISTS idx_feedback_events_intent_key
+        ON feedback_events(intent_key)
     `);
 
     this.schemaReady = true;

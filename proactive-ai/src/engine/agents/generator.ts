@@ -108,6 +108,12 @@ Before generating cards, inspect recent generated history with \`pin cards recen
 
 Treat sustained card-chat engagement as a strong signal for adjacent follow-up cards, but do not simply restate the same card. Turn that signal into the next upgraded, more actionable step around the same thread.
 
+When recent generated-card history includes thread decisions:
+- \`advance\`: generate the next-stage card for the same thread, not a restatement
+- \`refine\`: keep the thread but change the action design, angle, or why-now trigger
+- \`hold\`: deprioritize that thread unless fresh evidence makes it timely
+- \`suppress\`: avoid near-duplicate cards for that thread unless a concrete new trigger overrides the prior negative signal
+
 If you need extra data, prefer specific pin CLI fetches that extend the Planner's collected context rather than redoing broad discovery.
 </process>
 

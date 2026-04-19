@@ -49,6 +49,9 @@ test("buildUnifiedGeneratorPrompt injects feedback and recent card history", () 
   assert.match(prompt, /Frequently confirmed: work cards/);
   assert.match(prompt, /Recent Generated Card History/);
   assert.match(prompt, /sync-talking-points/);
+  assert.match(prompt, /advance/);
+  assert.match(prompt, /refine/);
+  assert.match(prompt, /suppress/);
 });
 
 test("buildUnifiedGeneratorPrompt omits empty feedback and card history sections", () => {

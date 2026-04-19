@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 
-import { cards, feedback, type CoreContext } from "../../core/index.js";
+import { cards, feedback, intentState, type CoreContext } from "../../core/index.js";
 import { buildChatFirstMessage } from "../agents/chat.js";
 import { extractTextContent } from "../helpers.js";
 import {
@@ -55,7 +55,7 @@ interface EligibleCardChat {
 interface ChatFeedbackSignal {
   cardId?: string;
   summary?: string;
-  interestScore?: number;
+  decision?: string;
   topics?: string[];
   nextAngles?: string[];
 }
@@ -111,7 +111,7 @@ Return ONLY a JSON code block with this shape:
     {
       "cardId": "card id",
       "summary": "One concise sentence about what the user cared about in this card chat",
-      "interestScore": 0.0,
+      "decision": "advance|refine|hold|suppress",
       "topics": ["topic1", "topic2"],
       "nextAngles": ["follow-up angle 1", "follow-up angle 2"]
     }
@@ -122,6 +122,7 @@ Return ONLY a JSON code block with this shape:
 Rules:
 - Only summarize the cards included in the input.
 - Focus on durable interest, preferred follow-up angles, and what should bias future card generation.
+- Set decision to one of: advance, refine, hold, suppress.
 - Do not repeat raw transcript text unless absolutely necessary.
 - Do not include secrets, codes, or long quotes.
 - Keep topics and nextAngles short.
@@ -330,6 +331,9 @@ export async function syncCardChatFeedback(input: {
     const match = eligible.find((item) => item.cardId === cardId);
     if (!match) continue;
 
+    const decision = asTrimmedString(signal.decision);
+    const nextAngles = asStringArray(signal.nextAngles);
+
     await feedback.logFeedback(input.ctx, {
       kind: "text_feedback",
       source: "agent_analysis",
@@ -348,12 +352,22 @@ export async function syncCardChatFeedback(input: {
         messageCount: match.messageCount,
         userTurns: match.userTurns,
         userTextChars: match.userTextChars,
-        interestScore: typeof signal.interestScore === "number" ? signal.interestScore : undefined,
+        decision: decision ?? undefined,
         topics: asStringArray(signal.topics),
-        nextAngles: asStringArray(signal.nextAngles),
+        nextAngles,
         trigger: input.trigger,
       },
     });
+    if (decision === "advance" || decision === "refine" || decision === "hold" || decision === "suppress") {
+      await intentState.applyChatDecision(input.ctx, {
+        cardId: match.cardId,
+        intentKey: makeIntentKey(match.goalBasket, match.title),
+        goalBasket: match.goalBasket,
+        decision,
+        summary,
+        nextAngles,
+      });
+    }
 
     result.writtenFeedback += 1;
   }

@@ -13,7 +13,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import Database from 'better-sqlite3';
-import { makeTitleKey } from './shared/intent-key.js';
+import { makeIntentKey, makeTitleKey } from './shared/intent-key.js';
 
 // ── Singleton DB ──
 
@@ -31,6 +31,13 @@ function getDb(): Database.Database {
   _db.pragma('foreign_keys = ON');
   ensureSchema(_db);
   return _db;
+}
+
+export function resetDbForTests(): void {
+  if (_db) {
+    _db.close();
+    _db = null;
+  }
 }
 
 function genId(): string {
@@ -112,6 +119,7 @@ function ensureSchema(db: Database.Database): void {
       action TEXT,
       push_id TEXT,
       intent_card_id TEXT,
+      intent_key TEXT,
       source TEXT NOT NULL DEFAULT 'user_direct',
       basket TEXT,
       value TEXT,
@@ -239,11 +247,42 @@ function ensureSchema(db: Database.Database): void {
       status TEXT NOT NULL CHECK (status IN ('open', 'committed', 'expired')),
       committed_at TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS intent_card_state (
+      card_id TEXT PRIMARY KEY,
+      intent_key TEXT NOT NULL,
+      goal_basket TEXT NOT NULL,
+      latest_outcome TEXT NOT NULL DEFAULT 'none',
+      outcome_at TEXT,
+      has_deep_chat INTEGER NOT NULL DEFAULT 0,
+      latest_chat_decision TEXT NOT NULL DEFAULT 'none',
+      latest_chat_summary TEXT,
+      next_angles_json TEXT NOT NULL DEFAULT '[]',
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS intent_thread_state (
+      intent_key TEXT PRIMARY KEY,
+      goal_basket TEXT NOT NULL,
+      latest_card_id TEXT,
+      latest_generated_at TEXT,
+      latest_card_outcome TEXT NOT NULL DEFAULT 'none',
+      has_any_confirmed_card INTEGER NOT NULL DEFAULT 0,
+      has_any_dismissed_card INTEGER NOT NULL DEFAULT 0,
+      latest_chat_decision TEXT NOT NULL DEFAULT 'none',
+      latest_chat_summary TEXT,
+      next_angles_json TEXT NOT NULL DEFAULT '[]',
+      thread_decision TEXT NOT NULL DEFAULT 'hold',
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_intent_thread_state_updated ON intent_thread_state(updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_intent_thread_state_goal_basket ON intent_thread_state(goal_basket);
   `);
 
   ensureColumn(db, 'feedback_events', 'conversation_id', 'TEXT');
   ensureColumn(db, 'feedback_events', 'message_id', 'TEXT');
   ensureColumn(db, 'feedback_events', 'channel', 'TEXT');
+  ensureColumn(db, 'feedback_events', 'intent_key', 'TEXT');
 }
 
 function ensureColumn(
@@ -272,6 +311,78 @@ function parseJsonArray<T = unknown>(raw: string | null | undefined): T[] {
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
   } catch { return []; }
+}
+
+export type CardOutcome = 'confirm' | 'modify' | 'dismiss' | 'snooze' | 'none';
+export type ChatDecision = 'advance' | 'refine' | 'hold' | 'suppress' | 'none';
+export type ThreadDecision = 'advance' | 'refine' | 'hold' | 'suppress';
+
+export interface ThreadContext {
+  intentKey: string;
+  latestCardOutcome: CardOutcome;
+  hasAnyConfirmedCard: boolean;
+  hasAnyDismissedCard: boolean;
+  latestChatDecision: ChatDecision;
+  latestChatSummary: string | null;
+  nextAngles: string[];
+  threadDecision: ThreadDecision;
+}
+
+interface IntentCardStateRow {
+  card_id: string;
+  intent_key: string;
+  goal_basket: string;
+  latest_outcome: CardOutcome;
+  outcome_at: string | null;
+  has_deep_chat: number;
+  latest_chat_decision: ChatDecision;
+  latest_chat_summary: string | null;
+  next_angles_json: string;
+  updated_at: string;
+}
+
+interface IntentThreadStateRow {
+  intent_key: string;
+  goal_basket: string;
+  latest_card_id: string | null;
+  latest_generated_at: string | null;
+  latest_card_outcome: CardOutcome;
+  has_any_confirmed_card: number;
+  has_any_dismissed_card: number;
+  latest_chat_decision: ChatDecision;
+  latest_chat_summary: string | null;
+  next_angles_json: string;
+  thread_decision: ThreadDecision;
+  updated_at: string;
+}
+
+function deriveThreadDecision(outcome: CardOutcome, chatDecision: ChatDecision): ThreadDecision {
+  if (chatDecision !== 'none') return chatDecision;
+  switch (outcome) {
+    case 'confirm':
+      return 'advance';
+    case 'modify':
+      return 'refine';
+    case 'dismiss':
+      return 'suppress';
+    case 'snooze':
+    case 'none':
+    default:
+      return 'hold';
+  }
+}
+
+function defaultThreadContext(intentKey: string): ThreadContext {
+  return {
+    intentKey,
+    latestCardOutcome: 'none',
+    hasAnyConfirmedCard: false,
+    hasAnyDismissedCard: false,
+    latestChatDecision: 'none',
+    latestChatSummary: null,
+    nextAngles: [],
+    threadDecision: 'hold',
+  };
 }
 
 // ── Profile ──
@@ -654,6 +765,7 @@ export interface FeedbackRow {
   action: string | null;
   push_id: string | null;
   intent_card_id: string | null;
+  intent_key: string | null;
   conversation_id: string | null;
   message_id: string | null;
   source: string;
@@ -674,6 +786,7 @@ export async function logFeedback(input: {
   action?: string;
   pushId?: string;
   intentCardId?: string;
+  intentKey?: string;
   conversationId?: string;
   messageId?: string;
   source?: string;
@@ -686,15 +799,19 @@ export async function logFeedback(input: {
 }): Promise<FeedbackRow> {
   const id = genId();
   const ts = input.at ?? now();
+  const intentKey = input.intentKey
+    ?? (typeof input.metadata?.intentKey === 'string' ? input.metadata.intentKey : undefined)
+    ?? null;
   const meta = JSON.stringify(input.metadata ?? {});
   getDb().prepare(
-    'INSERT INTO feedback_events (id, kind, action, push_id, intent_card_id, conversation_id, message_id, source, basket, channel, value, text, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO feedback_events (id, kind, action, push_id, intent_card_id, intent_key, conversation_id, message_id, source, basket, channel, value, text, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(
     id,
     input.kind,
     input.action ?? null,
     input.pushId ?? null,
     input.intentCardId ?? null,
+    intentKey,
     input.conversationId ?? null,
     input.messageId ?? null,
     input.source ?? 'user_direct',
@@ -708,6 +825,7 @@ export async function logFeedback(input: {
   return {
     id, user_id: USER_ID, kind: input.kind, action: input.action ?? null,
     push_id: input.pushId ?? null, intent_card_id: input.intentCardId ?? null,
+    intent_key: intentKey,
     conversation_id: input.conversationId ?? null, message_id: input.messageId ?? null,
     source: input.source ?? 'user_direct', basket: input.basket ?? null,
     channel: input.channel ?? null,
@@ -725,6 +843,7 @@ export async function listFeedback(opts?: {
   channel?: string;
   pushId?: string;
   intentCardId?: string;
+  intentKey?: string;
   limit?: number;
 }): Promise<FeedbackRow[]> {
   const parts = ['SELECT * FROM feedback_events WHERE 1=1'];
@@ -737,6 +856,7 @@ export async function listFeedback(opts?: {
   if (opts?.channel) { parts.push('AND channel = ?'); params.push(opts.channel); }
   if (opts?.pushId) { parts.push('AND push_id = ?'); params.push(opts.pushId); }
   if (opts?.intentCardId) { parts.push('AND intent_card_id = ?'); params.push(opts.intentCardId); }
+  if (opts?.intentKey) { parts.push('AND intent_key = ?'); params.push(opts.intentKey); }
   parts.push('ORDER BY created_at DESC');
   if (opts?.limit) { parts.push('LIMIT ?'); params.push(opts.limit); }
   const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
@@ -763,6 +883,244 @@ export async function feedbackStats(opts?: {
     if (row.basket) byBasket[row.basket] = (byBasket[row.basket] ?? 0) + 1;
   }
   return { total: filtered.length, byKind, byAction, byBasket };
+}
+
+function getIntentCardState(cardId: string): IntentCardStateRow | null {
+  return getDb().prepare('SELECT * FROM intent_card_state WHERE card_id = ?').get(cardId) as IntentCardStateRow | null;
+}
+
+function getIntentThreadState(intentKey: string): IntentThreadStateRow | null {
+  return getDb().prepare('SELECT * FROM intent_thread_state WHERE intent_key = ?').get(intentKey) as IntentThreadStateRow | null;
+}
+
+function upsertIntentCardState(input: {
+  cardId: string;
+  intentKey: string;
+  goalBasket: string;
+  latestOutcome: CardOutcome;
+  outcomeAt?: string | null;
+  hasDeepChat: boolean;
+  latestChatDecision: ChatDecision;
+  latestChatSummary?: string | null;
+  nextAngles: string[];
+  updatedAt: string;
+}): void {
+  getDb().prepare(`
+    INSERT INTO intent_card_state (
+      card_id, intent_key, goal_basket, latest_outcome, outcome_at, has_deep_chat,
+      latest_chat_decision, latest_chat_summary, next_angles_json, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(card_id) DO UPDATE SET
+      intent_key = excluded.intent_key,
+      goal_basket = excluded.goal_basket,
+      latest_outcome = excluded.latest_outcome,
+      outcome_at = excluded.outcome_at,
+      has_deep_chat = excluded.has_deep_chat,
+      latest_chat_decision = excluded.latest_chat_decision,
+      latest_chat_summary = excluded.latest_chat_summary,
+      next_angles_json = excluded.next_angles_json,
+      updated_at = excluded.updated_at
+  `).run(
+    input.cardId,
+    input.intentKey,
+    input.goalBasket,
+    input.latestOutcome,
+    input.outcomeAt ?? null,
+    input.hasDeepChat ? 1 : 0,
+    input.latestChatDecision,
+    input.latestChatSummary ?? null,
+    JSON.stringify(input.nextAngles),
+    input.updatedAt,
+  );
+}
+
+function upsertIntentThreadState(input: {
+  intentKey: string;
+  goalBasket: string;
+  latestCardId?: string | null;
+  latestGeneratedAt?: string | null;
+  latestCardOutcome: CardOutcome;
+  hasAnyConfirmedCard: boolean;
+  hasAnyDismissedCard: boolean;
+  latestChatDecision: ChatDecision;
+  latestChatSummary?: string | null;
+  nextAngles: string[];
+  threadDecision: ThreadDecision;
+  updatedAt: string;
+}): void {
+  getDb().prepare(`
+    INSERT INTO intent_thread_state (
+      intent_key, goal_basket, latest_card_id, latest_generated_at, latest_card_outcome,
+      has_any_confirmed_card, has_any_dismissed_card, latest_chat_decision,
+      latest_chat_summary, next_angles_json, thread_decision, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(intent_key) DO UPDATE SET
+      goal_basket = excluded.goal_basket,
+      latest_card_id = excluded.latest_card_id,
+      latest_generated_at = excluded.latest_generated_at,
+      latest_card_outcome = excluded.latest_card_outcome,
+      has_any_confirmed_card = excluded.has_any_confirmed_card,
+      has_any_dismissed_card = excluded.has_any_dismissed_card,
+      latest_chat_decision = excluded.latest_chat_decision,
+      latest_chat_summary = excluded.latest_chat_summary,
+      next_angles_json = excluded.next_angles_json,
+      thread_decision = excluded.thread_decision,
+      updated_at = excluded.updated_at
+  `).run(
+    input.intentKey,
+    input.goalBasket,
+    input.latestCardId ?? null,
+    input.latestGeneratedAt ?? null,
+    input.latestCardOutcome,
+    input.hasAnyConfirmedCard ? 1 : 0,
+    input.hasAnyDismissedCard ? 1 : 0,
+    input.latestChatDecision,
+    input.latestChatSummary ?? null,
+    JSON.stringify(input.nextAngles),
+    input.threadDecision,
+    input.updatedAt,
+  );
+}
+
+export async function seedGeneratedCards(cards: Array<{
+  cardId: string;
+  intentKey: string;
+  goalBasket: string;
+  generatedAt: string;
+}>): Promise<void> {
+  for (const card of cards) {
+    const cardState = getIntentCardState(card.cardId);
+    upsertIntentCardState({
+      cardId: card.cardId,
+      intentKey: card.intentKey,
+      goalBasket: card.goalBasket,
+      latestOutcome: cardState?.latest_outcome ?? 'none',
+      outcomeAt: cardState?.outcome_at ?? null,
+      hasDeepChat: Boolean(cardState?.has_deep_chat),
+      latestChatDecision: cardState?.latest_chat_decision ?? 'none',
+      latestChatSummary: cardState?.latest_chat_summary ?? null,
+      nextAngles: parseJsonArray<string>(cardState?.next_angles_json),
+      updatedAt: card.generatedAt,
+    });
+
+    const threadState = getIntentThreadState(card.intentKey);
+    const latestGeneratedAt = !threadState?.latest_generated_at || threadState.latest_generated_at <= card.generatedAt
+      ? card.generatedAt
+      : threadState.latest_generated_at;
+    const latestCardId = !threadState?.latest_generated_at || threadState.latest_generated_at <= card.generatedAt
+      ? card.cardId
+      : threadState.latest_card_id;
+    upsertIntentThreadState({
+      intentKey: card.intentKey,
+      goalBasket: card.goalBasket,
+      latestCardId,
+      latestGeneratedAt,
+      latestCardOutcome: threadState?.latest_card_outcome ?? 'none',
+      hasAnyConfirmedCard: Boolean(threadState?.has_any_confirmed_card),
+      hasAnyDismissedCard: Boolean(threadState?.has_any_dismissed_card),
+      latestChatDecision: threadState?.latest_chat_decision ?? 'none',
+      latestChatSummary: threadState?.latest_chat_summary ?? null,
+      nextAngles: parseJsonArray<string>(threadState?.next_angles_json),
+      threadDecision: threadState?.thread_decision ?? 'hold',
+      updatedAt: card.generatedAt,
+    });
+  }
+}
+
+export async function applyCardOutcome(input: {
+  cardId: string;
+  intentKey: string;
+  goalBasket: string;
+  outcome: Exclude<CardOutcome, 'none'>;
+  at?: string;
+}): Promise<void> {
+  const ts = input.at ?? now();
+  const cardState = getIntentCardState(input.cardId);
+  upsertIntentCardState({
+    cardId: input.cardId,
+    intentKey: input.intentKey,
+    goalBasket: input.goalBasket,
+    latestOutcome: input.outcome,
+    outcomeAt: ts,
+    hasDeepChat: Boolean(cardState?.has_deep_chat),
+    latestChatDecision: cardState?.latest_chat_decision ?? 'none',
+    latestChatSummary: cardState?.latest_chat_summary ?? null,
+    nextAngles: parseJsonArray<string>(cardState?.next_angles_json),
+    updatedAt: ts,
+  });
+
+  const threadState = getIntentThreadState(input.intentKey);
+  const latestChatDecision = threadState?.latest_chat_decision ?? 'none';
+  upsertIntentThreadState({
+    intentKey: input.intentKey,
+    goalBasket: input.goalBasket,
+    latestCardId: input.cardId,
+    latestGeneratedAt: threadState?.latest_generated_at ?? null,
+    latestCardOutcome: input.outcome,
+    hasAnyConfirmedCard: Boolean(threadState?.has_any_confirmed_card) || input.outcome === 'confirm',
+    hasAnyDismissedCard: Boolean(threadState?.has_any_dismissed_card) || input.outcome === 'dismiss',
+    latestChatDecision,
+    latestChatSummary: threadState?.latest_chat_summary ?? null,
+    nextAngles: parseJsonArray<string>(threadState?.next_angles_json),
+    threadDecision: deriveThreadDecision(input.outcome, latestChatDecision),
+    updatedAt: ts,
+  });
+}
+
+export async function applyChatDecision(input: {
+  cardId: string;
+  intentKey: string;
+  goalBasket: string;
+  decision: Exclude<ChatDecision, 'none'>;
+  summary: string;
+  nextAngles: string[];
+  at?: string;
+}): Promise<void> {
+  const ts = input.at ?? now();
+  const cardState = getIntentCardState(input.cardId);
+  upsertIntentCardState({
+    cardId: input.cardId,
+    intentKey: input.intentKey,
+    goalBasket: input.goalBasket,
+    latestOutcome: cardState?.latest_outcome ?? 'none',
+    outcomeAt: cardState?.outcome_at ?? null,
+    hasDeepChat: true,
+    latestChatDecision: input.decision,
+    latestChatSummary: input.summary,
+    nextAngles: input.nextAngles,
+    updatedAt: ts,
+  });
+
+  const threadState = getIntentThreadState(input.intentKey);
+  upsertIntentThreadState({
+    intentKey: input.intentKey,
+    goalBasket: input.goalBasket,
+    latestCardId: threadState?.latest_card_id ?? input.cardId,
+    latestGeneratedAt: threadState?.latest_generated_at ?? null,
+    latestCardOutcome: threadState?.latest_card_outcome ?? 'none',
+    hasAnyConfirmedCard: Boolean(threadState?.has_any_confirmed_card),
+    hasAnyDismissedCard: Boolean(threadState?.has_any_dismissed_card),
+    latestChatDecision: input.decision,
+    latestChatSummary: input.summary,
+    nextAngles: input.nextAngles,
+    threadDecision: input.decision,
+    updatedAt: ts,
+  });
+}
+
+export async function getThreadContext(intentKey: string): Promise<ThreadContext> {
+  const row = getIntentThreadState(intentKey);
+  if (!row) return defaultThreadContext(intentKey);
+  return {
+    intentKey: row.intent_key,
+    latestCardOutcome: row.latest_card_outcome,
+    hasAnyConfirmedCard: Boolean(row.has_any_confirmed_card),
+    hasAnyDismissedCard: Boolean(row.has_any_dismissed_card),
+    latestChatDecision: row.latest_chat_decision,
+    latestChatSummary: row.latest_chat_summary ?? null,
+    nextAngles: parseJsonArray<string>(row.next_angles_json),
+    threadDecision: row.thread_decision,
+  };
 }
 
 // ── Push Records ──
@@ -1015,6 +1373,7 @@ export interface PipelineRunRow {
 export interface RecentGeneratedCardRow {
   runId: string;
   cardId: string;
+  intentKey: string;
   goalBasket: string | null;
   title: string | null;
   titleKey: string | null;
@@ -1024,6 +1383,7 @@ export interface RecentGeneratedCardRow {
   sources: string[];
   generatedAt: string | null;
   metadata: Record<string, unknown>;
+  threadContext: ThreadContext;
 }
 
 function rowToPipelineRun(row: any): PipelineRunRow {
@@ -1048,6 +1408,19 @@ export async function savePipelineRun(input: {
     'INSERT INTO pipeline_runs (id, run_id, status, total_iterations, final_cards, iterations, started_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(id, input.runId, input.status, input.totalIterations,
     JSON.stringify(input.finalCards), JSON.stringify(input.iterations), ts, ts);
+  const cards = Array.isArray(input.finalCards) ? input.finalCards as Array<Record<string, unknown>> : [];
+  await seedGeneratedCards(cards.flatMap((card) => {
+    const cardId = typeof card.id === 'string' && card.id.trim().length > 0 ? card.id.trim() : null;
+    const goalBasket = typeof card.goalBasket === 'string' ? card.goalBasket : null;
+    const title = typeof card.title === 'string' ? card.title : null;
+    if (!cardId || !goalBasket || !title) return [];
+    return [{
+      cardId,
+      intentKey: makeIntentKey(goalBasket, title),
+      goalBasket,
+      generatedAt: ts,
+    }];
+  }));
 }
 
 export async function getLatestPipelineRun(): Promise<PipelineRunRow | null> {
@@ -1091,6 +1464,7 @@ export async function listRecentGeneratedCards(opts?: {
       const goalBasket = typeof card.goalBasket === 'string' ? card.goalBasket : null;
       if (opts?.basket && goalBasket !== opts.basket) continue;
       const title = typeof card.title === 'string' ? card.title : null;
+      const intentKey = title && goalBasket ? makeIntentKey(goalBasket, title) : `unknown:${cardId}`;
       const summary = typeof card.summary === 'string' ? card.summary : null;
       const whyNow = typeof card.whyNow === 'string' ? card.whyNow : null;
       const primaryAction = card.primaryAction && typeof card.primaryAction === 'object'
@@ -1110,6 +1484,7 @@ export async function listRecentGeneratedCards(opts?: {
       records.push({
         runId: run.run_id,
         cardId,
+        intentKey,
         goalBasket,
         title,
         titleKey: title ? makeTitleKey(title) : null,
@@ -1119,6 +1494,7 @@ export async function listRecentGeneratedCards(opts?: {
         sources,
         generatedAt: run.completed_at ?? run.started_at,
         metadata,
+        threadContext: await getThreadContext(intentKey),
       });
 
       if (records.length >= (opts?.limit ?? 10)) {
@@ -1128,6 +1504,11 @@ export async function listRecentGeneratedCards(opts?: {
   }
 
   return records;
+}
+
+export async function getRecentGeneratedCardByCardId(cardId: string): Promise<RecentGeneratedCardRow | null> {
+  const rows = await listRecentGeneratedCards({ limit: 200 });
+  return rows.find((row) => row.cardId === cardId) ?? null;
 }
 
 // ── User Settings ──

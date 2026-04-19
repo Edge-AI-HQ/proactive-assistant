@@ -3,9 +3,11 @@
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { logFeedback, recordMemoryEvent } = vi.hoisted(() => ({
+const { logFeedback, recordMemoryEvent, getGeneratedCardByCardId, applyCardOutcome } = vi.hoisted(() => ({
   logFeedback: vi.fn(),
   recordMemoryEvent: vi.fn(),
+  getGeneratedCardByCardId: vi.fn(),
+  applyCardOutcome: vi.fn(),
 }));
 
 vi.mock("../../../core/index.js", async () => {
@@ -19,6 +21,14 @@ vi.mock("../../../core/index.js", async () => {
     memory: {
       ...actual.memory,
       recordMemoryEvent,
+    },
+    cards: {
+      ...actual.cards,
+      getGeneratedCardByCardId,
+    },
+    intentState: {
+      ...actual.intentState,
+      applyCardOutcome,
     },
   };
 });
@@ -77,6 +87,8 @@ function createContext(method: string, body: Record<string, unknown>) {
 describe("handleFeedback", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getGeneratedCardByCardId.mockResolvedValue(null);
+    applyCardOutcome.mockResolvedValue(undefined);
     recordMemoryEvent.mockResolvedValue({
       id: "mev_123",
       profileId: "default",
@@ -146,30 +158,31 @@ describe("handleFeedback", () => {
 
     await handleFeedback(ctx);
 
-    expect(logFeedback).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: process.env,
-      }),
-      {
-        kind: "card_action",
-        action: "confirm",
-        pushId: "push_123",
-        intentCardId: "card_1_1",
-        conversationId: "conv_1",
-        messageId: "msg_1",
-        source: "user_direct",
-        basket: "work",
-        channel: "web",
-        value: "accepted",
-        text: "Ship it",
-        at: "2026-04-07T10:00:00.000Z",
-        metadata: {
-          runId: "run_123",
-          intentKey: "work:review-queue-with-alex",
-          surface: "now_feed",
-        },
+    const [runtime, payload] = logFeedback.mock.calls[0] ?? [];
+    expect(runtime).toEqual(expect.objectContaining({
+      env: process.env,
+      homeDir: expect.any(String),
+    }));
+    expect(payload).toEqual({
+      kind: "card_action",
+      action: "confirm",
+      pushId: "push_123",
+      intentCardId: "card_1_1",
+      intentKey: "work:review-queue-with-alex",
+      conversationId: "conv_1",
+      messageId: "msg_1",
+      source: "user_direct",
+      basket: "work",
+      channel: "web",
+      value: "accepted",
+      text: "Ship it",
+      at: "2026-04-07T10:00:00.000Z",
+      metadata: {
+        runId: "run_123",
+        intentKey: "work:review-queue-with-alex",
+        surface: "now_feed",
       },
-    );
+    });
     expect(response.statusCode).toBe(200);
     expect(response.json).toEqual({
       ok: true,
@@ -231,6 +244,52 @@ describe("handleFeedback", () => {
         intentCardId: "card_2_1",
         source: "user_direct",
       }),
+    );
+  });
+
+  it("fills intentKey from the generated card record and syncs the card outcome state", async () => {
+    getGeneratedCardByCardId.mockResolvedValue({
+      cardId: "card_2_1",
+      goalBasket: "work",
+      intentKey: "work:review-queue-with-alex",
+    });
+    logFeedback.mockResolvedValue({
+      id: "fe_789",
+      kind: "dismiss",
+      intentCardId: "card_2_1",
+      source: "user_direct",
+      basket: "work",
+      metadata: {
+        intentKey: "work:review-queue-with-alex",
+      },
+      createdAt: "2026-04-07T11:00:00.000Z",
+    });
+
+    const { ctx } = createContext("POST", {
+      kind: "dismiss",
+      intentCardId: "card_2_1",
+    });
+
+    await handleFeedback(ctx);
+
+    expect(logFeedback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        basket: "work",
+        metadata: {
+          intentKey: "work:review-queue-with-alex",
+        },
+      }),
+    );
+    expect(applyCardOutcome).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        cardId: "card_2_1",
+        intentKey: "work:review-queue-with-alex",
+        goalBasket: "work",
+        outcome: "dismiss",
+        at: undefined,
+      },
     );
   });
 

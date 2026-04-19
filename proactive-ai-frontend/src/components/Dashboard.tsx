@@ -118,6 +118,9 @@ export default function Dashboard({
               <p className="text-sm text-amber-500 font-medium mb-2">
                 Container {containerStatus}
               </p>
+              {containerError && (
+                <p className="text-xs text-amber-500/80 mb-4">{containerError}</p>
+              )}
               <button
                 onClick={handleLaunch}
                 disabled={actionInProgress}
@@ -132,6 +135,9 @@ export default function Dashboard({
               <p className="text-sm text-foreground/60 mb-4">
                 Launch your personal AI environment to get started.
               </p>
+              {containerError && (
+                <p className="text-xs text-amber-500/80 mb-4">{containerError}</p>
+              )}
               <button
                 onClick={handleLaunch}
                 disabled={actionInProgress}

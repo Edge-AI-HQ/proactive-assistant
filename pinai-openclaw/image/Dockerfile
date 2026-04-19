@@ -90,6 +90,21 @@ RUN mkdir -p /tmp/jiti /app/.openclaw \
 # ── Plugin source layer (changes frequently — at the end) ──
 COPY pinai-openclaw/plugins/proactive-ai/        /opt/pinai/plugins/proactive-ai/
 
+# Guard against host-native node_modules overwriting the Linux build output.
+RUN python3 - <<'PY'
+from pathlib import Path
+
+native = Path("/opt/pinai/plugins/proactive-ai/node_modules/better-sqlite3/build/Release/better_sqlite3.node")
+if not native.exists():
+    raise SystemExit(f"Missing required native module: {native}")
+
+magic = native.read_bytes()[:4].hex()
+if magic != "7f454c46":
+    raise SystemExit(
+        f"Expected Linux ELF better-sqlite3 binary, found magic={magic} at {native}"
+    )
+PY
+
 # Build the `pin` CLI — esbuild bundles TS into a single executable JS file.
 # Output lives next to the plugin's node_modules so external native deps
 # (better-sqlite3, @lancedb/lancedb) resolve naturally via Node's algorithm.

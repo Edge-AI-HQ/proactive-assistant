@@ -6,7 +6,7 @@
  */
 
 import type { ContainerRuntime, ContainerRef } from '../container/contracts.js';
-import type { ProactiveContainerParams } from './types.js';
+import type { ProactiveContainer, ProactiveContainerParams } from './types.js';
 import {
   upsertContainer,
   updateContainerStatus,
@@ -90,6 +90,18 @@ function buildContainerEnv(params: ProactiveContainerParams): Record<string, str
 }
 
 const RECONCILE_CACHE_TTL_MS = 30_000;
+
+export function mapRuntimeStateToContainerStatus(
+  state: ContainerRef['state'],
+): ProactiveContainer['status'] | null {
+  if (state === 'running') return 'running';
+  if (state === 'suspended') return 'suspended';
+  if (state === 'stopped') return 'stopped';
+  if (state === 'creating') return 'creating';
+  if (state === 'error' || state === 'unknown') return 'error';
+  if (state === 'missing') return null;
+  return 'error';
+}
 
 export class ProactiveContainerOrchestrator {
   private readonly ensureInFlight = new Map<string, Promise<{ containerId: string; ready: boolean }>>();
@@ -280,7 +292,36 @@ export class ProactiveContainerOrchestrator {
     }
 
     const ref = await this.runtime.findContainer(container.runtime_ref, [container.container_name]);
-    if (ref) return container;
+    if (ref) {
+      const nextStatus = mapRuntimeStateToContainerStatus(ref.state);
+      if (nextStatus === null) {
+        console.warn(
+          `[proactive] Missing runtime during reconcile: user=${supabaseUserId.slice(0, 8)}, ` +
+          `ref=${container.runtime_ref}, status=${container.status} — cleaning up`
+        );
+        await deleteContainer(container.owner_user_id);
+        return null;
+      }
+
+      if (
+        container.status !== nextStatus
+        || String((container.metadata as Record<string, unknown> | undefined)?.['hostPort'] ?? '') !== String(ref.metadata.hostPort ?? '')
+      ) {
+        await updateContainerStatus(container.owner_user_id, {
+          status: nextStatus,
+          runtime_ref: ref.id,
+          metadata: ref.metadata as Record<string, unknown>,
+        });
+        return {
+          ...container,
+          status: nextStatus,
+          runtime_ref: ref.id,
+          metadata: ref.metadata as Record<string, unknown>,
+        };
+      }
+
+      return container;
+    }
 
     // Container gone from runtime — stale record
     console.warn(

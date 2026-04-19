@@ -1,4 +1,10 @@
-import { feedback as coreFeedback, memory as coreMemory, CoreError } from '../../../core/index.js';
+import {
+  feedback as coreFeedback,
+  memory as coreMemory,
+  cards as coreCards,
+  intentState as coreIntentState,
+  CoreError,
+} from '../../../core/index.js';
 import type { RouteContext } from '../types.js';
 import { json, readBody } from '../http-utils.js';
 import { buildDefaultCtx } from '../../pipeline/data-access.js';
@@ -85,8 +91,61 @@ const buildFeedbackInput = (body: Record<string, unknown>) => {
   };
 };
 
-const buildMemoryEventInput = (
+type FeedbackInput = ReturnType<typeof buildFeedbackInput> & {
+  intentKey?: string;
+};
+
+const OUTCOME_BY_FEEDBACK: Record<string, "confirm" | "modify" | "dismiss" | "snooze" | undefined> = {
+  "card_action:confirm": "confirm",
+  "card_action:modify": "modify",
+  dismiss: "dismiss",
+  snooze: "snooze",
+};
+
+async function enrichFeedbackInput(
   input: ReturnType<typeof buildFeedbackInput>,
+): Promise<FeedbackInput> {
+  const metadata =
+    input.metadata && typeof input.metadata === "object" && !Array.isArray(input.metadata)
+      ? { ...input.metadata }
+      : undefined;
+
+  let basket = input.basket;
+  let intentKey = metadata ? asTrimmedString(metadata["intentKey"]) : null;
+
+  if ((!intentKey || !basket) && input.intentCardId) {
+    const card = await coreCards.getGeneratedCardByCardId(ctx, {
+      cardId: input.intentCardId,
+    });
+    if (card) {
+      basket = basket ?? card.goalBasket;
+      intentKey = intentKey ?? card.intentKey;
+    }
+  }
+
+  if (intentKey) {
+    if (metadata) {
+      metadata.intentKey = intentKey;
+    } else {
+      return {
+        ...input,
+        basket,
+        intentKey,
+        metadata: { intentKey },
+      };
+    }
+  }
+
+  return {
+    ...input,
+    basket,
+    intentKey: intentKey ?? undefined,
+    metadata,
+  };
+}
+
+const buildMemoryEventInput = (
+  input: FeedbackInput,
 ): {
   profileId: string;
   source: string;
@@ -98,10 +157,12 @@ const buildMemoryEventInput = (
   confidence: number;
   occurredAt?: string;
 } => {
-  const intentKey =
-    input.metadata && typeof input.metadata === "object" && !Array.isArray(input.metadata)
-      ? asTrimmedString(input.metadata["intentKey"])
-      : null;
+  const intentKey = input.intentKey
+    ?? (
+      input.metadata && typeof input.metadata === "object" && !Array.isArray(input.metadata)
+        ? asTrimmedString(input.metadata["intentKey"])
+        : null
+    );
 
   const subjectKey =
     intentKey
@@ -174,8 +235,21 @@ export async function handleFeedback(routeCtx: RouteContext): Promise<boolean> {
 
   try {
     const body = await readBody(routeCtx.req);
-    const input = buildFeedbackInput(body);
+    const input = await enrichFeedbackInput(buildFeedbackInput(body));
     const record = await coreFeedback.logFeedback(ctx, input);
+    const outcomeKey = input.kind === "card_action" && input.action
+      ? `${input.kind}:${input.action}`
+      : input.kind;
+    const outcome = OUTCOME_BY_FEEDBACK[outcomeKey];
+    if (outcome && input.intentCardId && input.intentKey && input.basket) {
+      await coreIntentState.applyCardOutcome(ctx, {
+        cardId: input.intentCardId,
+        intentKey: input.intentKey,
+        goalBasket: input.basket,
+        outcome,
+        at: input.at,
+      });
+    }
     try {
       await coreMemory.recordMemoryEvent(ctx, buildMemoryEventInput(input));
     } catch {

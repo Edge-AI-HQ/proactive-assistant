@@ -1,17 +1,22 @@
 import { GeneratedIntentCardRepository } from "./repository.js";
-import type { GeneratedIntentCardRow } from "./schema.js";
+import type {
+  GeneratedIntentCardRow,
+  GeneratedIntentCardWithThreadContextRow,
+  ThreadContext,
+} from "./schema.js";
 
 import { PinDatabaseManager } from "../../db/database.js";
 import { resolveAppRootFromCtx } from "../../paths.js";
 import type { CoreContext } from "../../context.js";
 import type { IntentCard } from "../../types/intent-card.js";
-import { makeTitleKey } from "../../../shared/intent-key.js";
+import { makeIntentKey, makeTitleKey } from "../../../shared/intent-key.js";
 import {
   validateEnum,
   parseSinceToISO,
   parseOptionalInt,
   rejectDangerousChars,
 } from "../../validation.js";
+import { buildDefaultThreadState, listThreadStates, seedGeneratedCards } from "../intent-state/service.js";
 
 export const VALID_BASKETS = [
   "work",
@@ -63,11 +68,12 @@ export const recordGeneratedBatch = async (
 
   input.cards.forEach(sanitizeCard);
 
-  return repository.recordBatch({
+  const rows = await repository.recordBatch({
     runId: input.runId,
     generatedAt,
     cards: input.cards.map((card) => ({
       cardId: card.id,
+      intentKey: makeIntentKey(card.goalBasket, card.title),
       goalBasket: card.goalBasket,
       title: card.title,
       titleKey: normalizeTitleKey(card.title),
@@ -84,6 +90,17 @@ export const recordGeneratedBatch = async (
       },
     })),
   });
+
+  await seedGeneratedCards(ctx, {
+    generatedAt,
+    cards: rows.map((row) => ({
+      cardId: row.cardId,
+      intentKey: row.intentKey,
+      goalBasket: row.goalBasket,
+    })),
+  });
+
+  return rows;
 };
 
 export const listRecentGeneratedCards = async (
@@ -93,15 +110,50 @@ export const listRecentGeneratedCards = async (
     basket?: string;
     since?: string;
   },
-): Promise<GeneratedIntentCardRow[]> => {
+): Promise<GeneratedIntentCardWithThreadContextRow[]> => {
   if (input.basket) {
     validateEnum("basket", input.basket, VALID_BASKETS);
   }
 
   const repository = await createRepository(ctx);
-  return repository.listRecent({
+  const rows = await repository.listRecent({
     limit: parseOptionalInt(input.limit, 10),
     basket: input.basket,
     since: input.since ? parseSinceToISO(input.since) : undefined,
   });
+  const threadStateMap = new Map(
+    (await listThreadStates(ctx, {
+      intentKeys: rows.map((row) => row.intentKey),
+    })).map((state) => [state.intentKey, state]),
+  );
+
+  return rows.map((row) => {
+    const threadState = threadStateMap.get(row.intentKey) ?? buildDefaultThreadState({
+      intentKey: row.intentKey,
+      goalBasket: row.goalBasket,
+    });
+    const threadContext: ThreadContext = {
+      intentKey: threadState.intentKey,
+      latestCardOutcome: threadState.latestCardOutcome,
+      hasAnyConfirmedCard: threadState.hasAnyConfirmedCard,
+      hasAnyDismissedCard: threadState.hasAnyDismissedCard,
+      latestChatDecision: threadState.latestChatDecision,
+      latestChatSummary: threadState.latestChatSummary,
+      nextAngles: threadState.nextAngles,
+      threadDecision: threadState.threadDecision,
+    };
+    return {
+      ...row,
+      threadContext,
+    };
+  });
+};
+
+export const getGeneratedCardByCardId = async (
+  ctx: CoreContext,
+  input: { cardId: string },
+): Promise<GeneratedIntentCardRow | null> => {
+  rejectDangerousChars("cardId", input.cardId);
+  const repository = await createRepository(ctx);
+  return repository.getByCardId(input.cardId);
 };

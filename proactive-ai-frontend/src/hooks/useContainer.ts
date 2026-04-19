@@ -1,5 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { ensureContainer, fetchContainerStatus, probeGatewayHealth, destroyContainer } from "@/lib/api";
+import {
+  ensureContainer,
+  fetchContainerStatus,
+  probeGatewayHealth,
+  destroyContainer,
+} from "@/lib/api";
 
 export type ContainerState =
   | "none"
@@ -16,6 +21,9 @@ interface ContainerInfo {
   initialChecking: boolean;
   error: string | null;
 }
+
+const GATEWAY_FAILURE_THRESHOLD = 3;
+const CONTAINER_REMOVED_ERROR = "Container was removed. Launch again.";
 
 
 /**
@@ -46,23 +54,98 @@ export function useContainer(authenticated: boolean) {
     }
   }, []);
 
+  const setTerminalState = useCallback(
+    (status: Exclude<ContainerState, "creating" | "running">, error: string | null = null) => {
+      stopPolling();
+      setInfo({
+        status,
+        loading: false,
+        initialChecking: false,
+        error,
+      });
+    },
+    [stopPolling],
+  );
+
+  const syncStatusAfterGatewayFailure = useCallback(
+    async (fallbackError: string | null = null): Promise<ContainerState | null> => {
+      try {
+        const result = await fetchContainerStatus();
+        if (!mountedRef.current) return null;
+
+        const status = result.status as ContainerState;
+        if (status === "running") {
+          return status;
+        }
+
+        if (status === "creating") {
+          setInfo({ status, loading: true, initialChecking: false, error: null });
+          return status;
+        }
+
+        setTerminalState(status, fallbackError);
+        return status;
+      } catch (err) {
+        if (!mountedRef.current) return null;
+        setTerminalState(
+          "error",
+          err instanceof Error ? err.message : "Unknown error",
+        );
+        return "error";
+      }
+    },
+    [setTerminalState],
+  );
+
   /** Poll gateway health until it responds OK. */
   const waitForGateway = useCallback(() => {
     setInfo((prev) => ({ ...prev, status: "creating", loading: true, error: null }));
     stopPolling();
+    let consecutiveFailures = 0;
 
     async function probe() {
-      const ok = await probeGatewayHealth();
+      const result = await probeGatewayHealth();
       if (!mountedRef.current) return;
-      if (ok) {
+      if (result.ok) {
         stopPolling();
         setInfo({ status: "running", loading: false, initialChecking: false, error: null });
+        return;
+      }
+
+      if (result.code === "NO_CONTAINER") {
+        await syncStatusAfterGatewayFailure(
+          result.message ? `${result.message}. Launch again.` : CONTAINER_REMOVED_ERROR,
+        );
+        return;
+      }
+
+      if (
+        result.code === "CONTAINER_NOT_RUNNING" ||
+        result.code === "RESUMING"
+      ) {
+        const status = await syncStatusAfterGatewayFailure();
+        if (status === "running" || status === "creating") {
+          consecutiveFailures = 0;
+        }
+        return;
+      }
+
+      consecutiveFailures += 1;
+      if (consecutiveFailures < GATEWAY_FAILURE_THRESHOLD) {
+        return;
+      }
+
+      const status = await syncStatusAfterGatewayFailure();
+      if (status === "running" || status === "creating") {
+        consecutiveFailures = 0;
       }
     }
 
-    probe();
-    pollRef.current = setInterval(probe, 3000);
-  }, [stopPolling]);
+    void probe();
+    pollRef.current = setInterval(() => {
+      void probe();
+    }, 3000);
+  }, [stopPolling, syncStatusAfterGatewayFailure]);
 
   /** Poll container status until it reaches a terminal state. */
   const pollStatus = useCallback(() => {
@@ -75,15 +158,22 @@ export function useContainer(authenticated: boolean) {
 
         if (status === "running") {
           waitForGateway();
-        } else if (status === "error" || status === "none") {
-          stopPolling();
-          setInfo({ status, loading: false, initialChecking: false, error: null });
+        } else if (
+          status === "error" ||
+          status === "none" ||
+          status === "stopped" ||
+          status === "suspended" ||
+          status === "missing"
+        ) {
+          setTerminalState(status);
+        } else if (status === "creating") {
+          setInfo({ status, loading: true, initialChecking: false, error: null });
         }
       } catch {
         // Silently ignore poll errors
       }
     }, 3000);
-  }, [stopPolling, waitForGateway]);
+  }, [setTerminalState, stopPolling, waitForGateway]);
 
   /** Manually trigger container creation/ensure. */
   const ensure = useCallback(async () => {
@@ -141,7 +231,12 @@ export function useContainer(authenticated: boolean) {
         if (status === "running") {
           waitForGateway();
         } else {
-          setInfo({ status, loading: false, initialChecking: false, error: null });
+          setInfo({
+            status,
+            loading: status === "creating",
+            initialChecking: false,
+            error: null,
+          });
         }
       } catch {
         if (!cancelled) {

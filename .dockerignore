@@ -1,4 +1,5 @@
-node_modules
+# Never copy host-installed dependencies into Linux images.
+**/node_modules
 # Exclude local .env and private keys, keep encrypted env files
 .env
 .env.local
