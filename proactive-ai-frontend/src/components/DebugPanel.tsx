@@ -7,12 +7,14 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Settings, Activity, Circle, Clock, Hash, ChevronDown,
-  ExternalLink, X, Zap,
+  ExternalLink, X, Zap, Cpu, MessageSquare,
 } from "lucide-react";
 import { Browser } from "@capacitor/browser";
 import { getGatewayTicket, resetContainer, deleteAccount } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import { isNative, API_BASE } from "@/lib/platform";
+import { useModelSelection } from "@/hooks/useModelSelection";
+import MainChat from "./MainChat";
 import type { HealthState, RunState, PipelinePhase } from "@/hooks/usePipeline";
 
 interface DebugPanelProps {
@@ -97,20 +99,27 @@ function phaseStatus(phase: string, activePhase: string | null, status: string) 
 
 export default function DebugPanel({ health, run, isRunning, iterations, onIterationsChange, onGenerate }: DebugPanelProps) {
   const [open, setOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const [expandedIter, setExpandedIter] = useState<number | null>(null);
   const [gatewayLoading, setGatewayLoading] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const logContainerRef = useRef<HTMLDivElement>(null);
 
+  // Only fetch model list when panel is open and gateway is healthy.
+  const modelSelection = useModelSelection(open && health.ok);
+
   useEffect(() => {
-    if (!open) return;
+    if (!open && !chatOpen) return;
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key !== "Escape") return;
+      // Chat overlay sits above the drawer — close it first.
+      if (chatOpen) setChatOpen(false);
+      else setOpen(false);
     }
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [open]);
+  }, [open, chatOpen]);
 
   useEffect(() => {
     if (logContainerRef.current) logContainerRef.current.scrollTop = 0;
@@ -197,7 +206,7 @@ export default function DebugPanel({ health, run, isRunning, iterations, onItera
               className="fixed right-0 top-0 bottom-0 w-[380px] bg-white/80 backdrop-blur-2xl border-l border-foreground/10 shadow-2xl z-50 flex flex-col"
             >
               {/* Header */}
-              <div className="flex items-center justify-between px-5 pt-5 pb-3">
+              <div className="flex items-center justify-between px-5 pt-safe-top pb-3">
                 <h2 className="text-lg font-semibold text-foreground">Debug</h2>
                 <button
                   onClick={() => setOpen(false)}
@@ -229,6 +238,67 @@ export default function DebugPanel({ health, run, isRunning, iterations, onItera
                     <ExternalLink size={12} strokeWidth={1.5} />
                     {gatewayLoading ? "Opening..." : "Open Gateway"}
                   </button>
+                  <button
+                    onClick={() => setChatOpen(true)}
+                    disabled={!health.ok}
+                    className="mt-2 w-full flex items-center justify-center gap-1.5 rounded-lg bg-foreground/10 hover:bg-foreground/15 text-foreground/50 hover:text-foreground/70 text-[11px] font-medium py-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <MessageSquare size={12} strokeWidth={1.5} />
+                    Open Main Chat
+                  </button>
+                </div>
+
+                {/* Model Selection */}
+                <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-3.5">
+                  <div className="flex items-center justify-between mb-2.5">
+                    <div className="flex items-center gap-2">
+                      <Cpu size={14} strokeWidth={1.5} className="text-foreground/40" />
+                      <span className="text-xs font-medium text-foreground/50">Model</span>
+                    </div>
+                    {modelSelection.changing && (
+                      <span className="text-[10px] text-foreground/40">Applying…</span>
+                    )}
+                  </div>
+                  {modelSelection.loading && modelSelection.models.length === 0 ? (
+                    <p className="text-[11px] text-foreground/30 py-1">Loading models…</p>
+                  ) : modelSelection.models.length === 0 ? (
+                    <p className="text-[11px] text-foreground/40 py-1">
+                      {health.ok ? "No models configured" : "Gateway unavailable"}
+                    </p>
+                  ) : (
+                    <select
+                      value={modelSelection.currentModel ?? ""}
+                      disabled={
+                        isRunning ||
+                        modelSelection.changing ||
+                        modelSelection.loading ||
+                        !health.ok
+                      }
+                      onChange={(e) => { void modelSelection.change(e.target.value); }}
+                      title={isRunning ? "Pipeline is running — cannot switch model" : undefined}
+                      className="w-full rounded-lg bg-white/60 border border-foreground/10 px-2.5 py-1.5 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {modelSelection.models.map((m) => (
+                        <option key={m.ref} value={m.ref}>
+                          {m.id}
+                          {m.ref === modelSelection.defaultModel ? " (default)" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  {modelSelection.error && (
+                    <div className="mt-2 flex items-center justify-between gap-2">
+                      <p className="text-[11px] text-red-500 leading-snug flex-1">
+                        {modelSelection.error}
+                      </p>
+                      <button
+                        onClick={() => { void modelSelection.refetch(); }}
+                        className="text-[11px] font-medium text-foreground/50 hover:text-foreground/70 underline shrink-0"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Generate Controls */}
@@ -480,6 +550,12 @@ export default function DebugPanel({ health, run, isRunning, iterations, onItera
           </>
         )}
       </AnimatePresence>
+
+      {chatOpen && (
+        <div className="fixed inset-0 z-[60] bg-background">
+          <MainChat onBack={() => setChatOpen(false)} />
+        </div>
+      )}
     </>
   );
 }

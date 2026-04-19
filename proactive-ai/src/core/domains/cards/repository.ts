@@ -32,8 +32,7 @@ export interface ListRecentGeneratedCardsInput {
   since?: string;
 }
 
-const nextId = (): string =>
-  `gic_${Math.random().toString(36).slice(2, 10)}`;
+const nextId = (): string => `gic_${Math.random().toString(36).slice(2, 10)}`;
 
 export class GeneratedIntentCardRepository {
   private schemaReady = false;
@@ -90,6 +89,7 @@ export class GeneratedIntentCardRepository {
       .orderBy(
         desc(generatedIntentCards.generatedAt),
         desc(generatedIntentCards.createdAt),
+        desc(generatedIntentCards.cardId),
       )
       .limit(input.limit);
 

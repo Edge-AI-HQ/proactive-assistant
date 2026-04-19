@@ -72,12 +72,13 @@ export default function NowFeed({
   );
   const [scatterKey, setScatterKey] = useState(0);
   const [globalExitDirection, setGlobalExitDirection] = useState<"left" | "scatter">("scatter");
+  const [gathered, setGathered] = useState(false);
 
   const touchStartY = useRef<number | null>(null);
   const touchStartX = useRef<number | null>(null);
+  const pinchStartDist = useRef<number | null>(null);
   const isScattering = useRef(false);
 
-  // Build visible floating cards (max 8, excluding dismissed/done)
   const hiddenIds = new Set([...dismissedIds, ...doneIds]);
   const visibleCards: FloatingCard[] = incomingCards
     .filter((c) => !hiddenIds.has(c.id))
@@ -85,8 +86,6 @@ export default function NowFeed({
     .map((c, i) => ({ ...c, slotIndex: i }));
 
   const positions = SLOT_LAYOUTS[currentLayoutIdx % SLOT_LAYOUTS.length];
-
-  // ── Swipe refresh ──
 
   const handleSwipeRefresh = useCallback((direction: "left" | "scatter") => {
     if (isScattering.current) return;
@@ -104,15 +103,45 @@ export default function NowFeed({
         return candidates[Math.floor(Math.random() * candidates.length)];
       });
       isScattering.current = false;
-    }, 600);
+    }, 400);
   }, []);
 
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    touchStartY.current = e.touches[0].clientY;
-    touchStartX.current = e.touches[0].clientX;
+    if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      pinchStartDist.current = Math.sqrt(dx * dx + dy * dy);
+      touchStartX.current = null;
+      touchStartY.current = null;
+    } else if (e.touches.length === 1) {
+      touchStartY.current = e.touches[0].clientY;
+      touchStartX.current = e.touches[0].clientX;
+      pinchStartDist.current = null;
+    }
   }, []);
 
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (pinchStartDist.current !== null && e.changedTouches.length >= 1) {
+      const remaining = e.touches;
+      if (remaining.length === 1) {
+        const dx = e.changedTouches[0].clientX - remaining[0].clientX;
+        const dy = e.changedTouches[0].clientY - remaining[0].clientY;
+        const endDist = Math.sqrt(dx * dx + dy * dy);
+        const delta = endDist - pinchStartDist.current;
+        if (delta < -50) setGathered(true);
+        else if (delta > 50) setGathered(false);
+      } else if (remaining.length === 0 && e.changedTouches.length === 2) {
+        const dx = e.changedTouches[0].clientX - e.changedTouches[1].clientX;
+        const dy = e.changedTouches[0].clientY - e.changedTouches[1].clientY;
+        const endDist = Math.sqrt(dx * dx + dy * dy);
+        const delta = endDist - pinchStartDist.current;
+        if (delta < -50) setGathered(true);
+        else if (delta > 50) setGathered(false);
+      }
+      pinchStartDist.current = null;
+      return;
+    }
+
     if (touchStartY.current === null || touchStartX.current === null) return;
     const deltaY = touchStartY.current - e.changedTouches[0].clientY;
     const deltaX = touchStartX.current - e.changedTouches[0].clientX;
@@ -133,14 +162,12 @@ export default function NowFeed({
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
     >
-      {/* Centered AI Sphere */}
       <AiSphere
         size={Math.min(570, window.innerWidth * 1.42)}
         mode={isRunning ? "thinking" : "idle"}
         className="-mt-[10%]"
       />
 
-      {/* Loading overlay when pipeline running with no cards */}
       {showLoadingOverlay && (
         <div className="absolute inset-0 flex items-center justify-center z-20">
           <motion.div
@@ -167,14 +194,11 @@ export default function NowFeed({
         </div>
       )}
 
-      {/* Floating cards */}
-      <AnimatePresence>
+      <AnimatePresence mode="popLayout">
         {visibleCards.map((card, i) => {
           const pos = positions[card.slotIndex % positions.length];
           const meta = basketMeta(card.goalBasket);
           const CatIcon = meta.icon;
-          const delay = i * 1.1;
-          const dur = 7 + (i % 3) * 1.5;
           const isNew = !seenCardIds.has(card.id);
           const isProcessing = processingIds.has(card.id);
 
@@ -187,12 +211,17 @@ export default function NowFeed({
           const exitY = (dy / mag) * 400;
 
           const flyLeft = globalExitDirection === "left";
+          const floatDur = 6 + (i % 3) * 1.5;
+          const floatDelay = i * 0.8;
+
+          const gatheredLeft = 36 + (i % 2 === 0 ? -2 : 2) + (i % 3) * 1.5;
+          const gatheredY = -6 + i * 1.2;
+          const gatheredRotate = (i % 2 === 0 ? -1 : 1) * (2 + (i % 4));
 
           return (
             <motion.button
               key={`float-${card.id}-${scatterKey}`}
-              layout
-              drag="x"
+              drag={gathered ? false : "x"}
               dragConstraints={{ left: 0, right: 0 }}
               dragElastic={0.4}
               onDragEnd={(_e, info) => {
@@ -201,53 +230,28 @@ export default function NowFeed({
                 }
               }}
               initial={{ opacity: 0, scale: 0.85 }}
-              animate={{
-                opacity: 1,
-                scale: [1, 1.045, 1, 0.97, 1],
-                y: [0, -3.5, 0, 2, 0],
-                x: [0, 1.5, 0, -1.5, 0],
-              }}
+              animate={{ opacity: 1, scale: gathered ? 0.85 : 1 }}
               exit={
                 flyLeft
                   ? {
                       opacity: 0,
-                      scale: 0.6,
-                      x: -400,
-                      rotate: -15,
-                      transition: { duration: 0.4, ease: [0.4, 0, 1, 1] },
+                      scale: 0.7,
+                      x: -350,
+                      rotate: -12,
+                      transition: { duration: 0.3, ease: [0.4, 0, 1, 1], delay: i * 0.03 },
                     }
                   : {
                       opacity: 0,
-                      scale: 0.6,
+                      scale: 0.7,
                       x: exitX,
                       y: exitY,
-                      rotate: (i % 2 === 0 ? 1 : -1) * (10 + (i % 15)),
-                      transition: { duration: 0.45, ease: [0.4, 0, 1, 1] },
+                      rotate: (i % 2 === 0 ? 1 : -1) * (8 + (i % 10)),
+                      transition: { duration: 0.3, ease: [0.4, 0, 1, 1], delay: i * 0.03 },
                     }
               }
-              transition={{
-                opacity: { duration: 0.8 },
-                scale: {
-                  duration: dur + 1,
-                  repeat: Infinity,
-                  ease: "easeInOut",
-                  delay: delay + 0.3,
-                },
-                y: {
-                  duration: dur,
-                  repeat: Infinity,
-                  ease: "easeInOut",
-                  delay,
-                },
-                x: {
-                  duration: dur + 2,
-                  repeat: Infinity,
-                  ease: "easeInOut",
-                  delay: delay + 0.5,
-                },
-              }}
+              transition={{ duration: 0.4, ease: "easeOut", delay: i * 0.04 }}
               onClick={() => onCardTap(card)}
-              className={`absolute glass-card-strong px-2.5 py-2 cursor-pointer hover:scale-105 transition-transform z-10 ${
+              className={`absolute glass-card-strong px-2.5 py-2 cursor-pointer card-float ${
                 isNew
                   ? "ring-1 ring-pink-400/40"
                   : isProcessing
@@ -255,13 +259,22 @@ export default function NowFeed({
                     : ""
               }`}
               style={{
-                left: `${pos.left}%`,
-                top: `calc(50% + ${pos.y}%)`,
+                left: gathered ? `${gatheredLeft}%` : `${pos.left}%`,
+                top: gathered ? `calc(50% + ${gatheredY}%)` : `calc(50% + ${pos.y}%)`,
                 width: `${33 + (parseInt(card.id.replace(/\D/g, ""), 10) % 4) * 5}%`,
                 maxWidth: 180,
                 minWidth: 110,
                 borderRadius: 16,
-                boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
+                boxShadow: gathered
+                  ? "0 4px 20px rgba(0,0,0,0.1)"
+                  : "0 2px 12px rgba(0,0,0,0.06)",
+                zIndex: gathered ? 10 + i : 10,
+                transform: gathered ? `rotate(${gatheredRotate}deg)` : undefined,
+                transition: "left 0.45s cubic-bezier(0.22,1,0.36,1), top 0.45s cubic-bezier(0.22,1,0.36,1), box-shadow 0.3s ease",
+                willChange: "transform, opacity, left, top",
+                animationDuration: `${floatDur}s`,
+                animationDelay: `${floatDelay}s`,
+                animationPlayState: gathered ? "paused" : "running",
               }}
             >
               <div className="flex items-center gap-1.5 mb-0.5">

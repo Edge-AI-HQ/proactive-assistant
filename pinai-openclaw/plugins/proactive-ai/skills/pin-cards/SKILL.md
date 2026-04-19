@@ -36,12 +36,14 @@ pin cards recent --basket health --since 14d --json
 
 ```bash
 pin cards recent --limit 10 --json
+pin personal mobile items list --status pending --limit 20 --json
 ```
 
 读取结果时重点关注：
 - `goalBasket`：近期主要覆盖了哪些 life baskets
 - `title` / `titleKey`：近期是否已经生成过非常接近的主题
 - `generatedAt`：这些卡片是不是刚刚生成，是否仍然算“近期上下文”
+- 结合 mobile items 看用户“现在正在发生什么”，避免只根据历史卡片做静态重复判断
 
 ## 命令列表
 

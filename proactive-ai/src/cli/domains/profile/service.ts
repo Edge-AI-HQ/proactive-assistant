@@ -16,7 +16,9 @@ export const createProfile = async (
     full?: boolean;
   },
 ): Promise<RunCliResult> =>
-  callCore("profile", "create", () => coreProfile.createProfile(runtime, input));
+  callCore("profile", "create", () =>
+    coreProfile.createProfile(runtime, input),
+  );
 
 export const getProfile = async (
   runtime: CliRuntimeInput,
@@ -28,7 +30,9 @@ export const getProfile = async (
 export const getPreferences = async (
   runtime: CliRuntimeInput,
 ): Promise<RunCliResult> =>
-  callCore("profile.preferences", "get", () => coreProfile.getPreferences(runtime));
+  callCore("profile.preferences", "get", () =>
+    coreProfile.getPreferences(runtime),
+  );
 
 export const getFacts = async (
   runtime: CliRuntimeInput,
@@ -51,13 +55,17 @@ export const setPreference = async (
   runtime: CliRuntimeInput,
   input: { key: string; valueJson: string },
 ): Promise<RunCliResult> =>
-  callCore("profile.preferences", "set", () => coreProfile.setPreference(runtime, input));
+  callCore("profile.preferences", "set", () =>
+    coreProfile.setPreference(runtime, input),
+  );
 
 export const unsetPreference = async (
   runtime: CliRuntimeInput,
   key: string,
 ): Promise<RunCliResult> =>
-  callCore("profile.preferences", "unset", () => coreProfile.unsetPreference(runtime, key));
+  callCore("profile.preferences", "unset", () =>
+    coreProfile.unsetPreference(runtime, key),
+  );
 
 export const listGoals = async (
   runtime: CliRuntimeInput,
@@ -73,25 +81,33 @@ export const addMemory = async (
   runtime: CliRuntimeInput,
   input: { kind: string; text: string; tagsJson?: string },
 ): Promise<RunCliResult> =>
-  callCore("profile.memory", "add", () => coreProfile.addMemory(runtime, input));
+  callCore("profile.memory", "add", () =>
+    coreProfile.addMemory(runtime, input),
+  );
 
 export const searchMemory = async (
   runtime: CliRuntimeInput,
   query: string,
 ): Promise<RunCliResult> =>
-  callCore("profile.memory", "search", () => coreProfile.searchMemory(runtime, query));
+  callCore("profile.memory", "search", () =>
+    coreProfile.searchMemory(runtime, query),
+  );
 
 export const removeMemory = async (
   runtime: CliRuntimeInput,
   entryId: string,
 ): Promise<RunCliResult> =>
-  callCore("profile.memory", "remove", () => coreProfile.removeMemory(runtime, entryId));
+  callCore("profile.memory", "remove", () =>
+    coreProfile.removeMemory(runtime, entryId),
+  );
 
 export const upsertGoal = async (
   runtime: CliRuntimeInput,
   input: { key: string; title: string; priority?: string; summary?: string },
 ): Promise<RunCliResult> =>
-  callCore("profile.goals", "upsert", () => coreProfile.upsertGoal(runtime, input));
+  callCore("profile.goals", "upsert", () =>
+    coreProfile.upsertGoal(runtime, input),
+  );
 
 export const closeGoal = async (
   runtime: CliRuntimeInput,
@@ -102,19 +118,25 @@ export const closeGoal = async (
 export const getConstraints = async (
   runtime: CliRuntimeInput,
 ): Promise<RunCliResult> =>
-  callCore("profile.constraints", "get", () => coreProfile.getConstraints(runtime));
+  callCore("profile.constraints", "get", () =>
+    coreProfile.getConstraints(runtime),
+  );
 
 export const setConstraint = async (
   runtime: CliRuntimeInput,
   input: { key: string; valueJson: string },
 ): Promise<RunCliResult> =>
-  callCore("profile.constraints", "set", () => coreProfile.setConstraint(runtime, input));
+  callCore("profile.constraints", "set", () =>
+    coreProfile.setConstraint(runtime, input),
+  );
 
 export const unsetConstraint = async (
   runtime: CliRuntimeInput,
   key: string,
 ): Promise<RunCliResult> =>
-  callCore("profile.constraints", "unset", () => coreProfile.unsetConstraint(runtime, key));
+  callCore("profile.constraints", "unset", () =>
+    coreProfile.unsetConstraint(runtime, key),
+  );
 
 export const listProfiles = async (
   runtime: CliRuntimeInput,
@@ -133,7 +155,9 @@ export const updateProfile = async (
     metadata?: string;
   },
 ): Promise<RunCliResult> =>
-  callCore("profile", "update", () => coreProfile.updateProfile(runtime, input));
+  callCore("profile", "update", () =>
+    coreProfile.updateProfile(runtime, input),
+  );
 
 export const addProfileSignal = async (
   runtime: CliRuntimeInput,
@@ -147,7 +171,9 @@ export const addProfileSignal = async (
     occurredAt?: string;
   },
 ): Promise<RunCliResult> =>
-  callCore("profile.signal", "add", () => coreProfile.addProfileSignal(runtime, input));
+  callCore("profile.signal", "add", () =>
+    coreProfile.addProfileSignal(runtime, input),
+  );
 
 export const rollupProfileSignals = async (
   runtime: CliRuntimeInput,
@@ -156,7 +182,9 @@ export const rollupProfileSignals = async (
     since?: string;
   },
 ): Promise<RunCliResult> =>
-  callCore("profile.signal", "rollup", () => coreProfile.rollupProfileSignals(runtime, input));
+  callCore("profile.signal", "rollup", () =>
+    coreProfile.rollupProfileSignals(runtime, input),
+  );
 
 export const listProfileInterests = async (
   runtime: CliRuntimeInput,
@@ -166,7 +194,9 @@ export const listProfileInterests = async (
     limit?: string;
   },
 ): Promise<RunCliResult> =>
-  callCore("profile.interests", "list", () => coreProfile.listProfileInterests(runtime, input));
+  callCore("profile.interests", "list", () =>
+    coreProfile.listProfileInterests(runtime, input),
+  );
 
 export const buildProfileSnapshot = async (
   runtime: CliRuntimeInput,
@@ -175,10 +205,31 @@ export const buildProfileSnapshot = async (
     view: string;
   },
 ): Promise<RunCliResult> =>
-  callCore("profile.snapshot", "build", () => coreProfile.buildProfileSnapshot(runtime, input));
+  callCore("profile.snapshot", "build", () =>
+    coreProfile.buildProfileSnapshot(runtime, input),
+  );
 
 export const deleteProfile = async (
   runtime: CliRuntimeInput,
   id: string,
 ): Promise<RunCliResult> =>
   callCore("profile", "delete", () => coreProfile.deleteProfile(runtime, id));
+
+/** Append one bounded connector payload row (`connector_raw_data`). */
+export const appendConnectorRaw = async (
+  runtime: CliRuntimeInput,
+  input: {
+    toolkit: string;
+    payloadJson: string;
+    profileId?: string;
+    connectorKind?: string;
+    connectedAccountId?: string;
+    toolSlug?: string;
+    ingestSource?: string;
+    windowLabel?: string;
+    capturedAt?: string;
+  },
+): Promise<RunCliResult> =>
+  callCore("profile.connector-raw", "append", () =>
+    coreProfile.appendConnectorRawData(runtime, input),
+  );

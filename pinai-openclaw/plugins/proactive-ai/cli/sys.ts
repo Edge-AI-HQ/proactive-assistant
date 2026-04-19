@@ -32,7 +32,7 @@ export async function handleSys(args: string[]): Promise<string> {
     // Command introspection
     const domains = {
       profile: ['get', 'list', 'create', 'update', 'facts', 'preferences', 'constraints', 'goals', 'memory', 'signal', 'interests', 'snapshot'],
-      personal: ['status', 'setup', 'connections', 'connect', 'wait', 'tools search', 'tools schema', 'exec'],
+      personal: ['status', 'setup', 'connections', 'connect', 'wait', 'tools search', 'tools schema', 'exec', 'mobile items list', 'mobile items claim', 'mobile items commit'],
       world: ['search', 'headlines', 'find', 'list', 'get', 'shortlist', 'context', 'index'],
       feedback: ['log', 'list', 'get', 'stats'],
       push: ['record', 'history', 'get', 'outcome', 'find-similar'],

@@ -33,10 +33,15 @@
     "build": "npm run build:server && npm run build:ui",
     "type-check": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.app.json --noEmit",
     "test": "vitest run",
+    "test:cli": "npx --yes tsx --test src/cli/cli.test.ts src/cli/db/database.test.ts src/cli/db/sqlite_adapter.test.ts src/cli/domains/feedback/repository.test.ts src/cli/domains/ingest/service.test.ts src/cli/domains/loop/repository.test.ts src/cli/domains/personal/provider.test.ts src/cli/domains/profile/repository.test.ts src/cli/domains/world/repository.test.ts src/cli/domains/world/service.test.ts",
+    "profile-ingest:live:gmail": "node scripts/live-profile-ingest-connector.mjs --toolkit gmail",
+    "profile-ingest:live:gmail:apply": "node scripts/live-profile-ingest-connector.mjs --toolkit gmail --apply",
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run build",
     "db:generate": "drizzle-kit generate",
-    "db:check": "drizzle-kit check"
+    "db:check": "drizzle-kit check",
+    "rebuild:sqlite:host": "npm rebuild better-sqlite3 --foreground-scripts",
+    "rebuild:sqlite:electron": "npx --yes @electron/rebuild -f -w better-sqlite3 -v $(node -p \"require('./electron/node_modules/electron/package.json').version\")"
   },
   "dependencies": {
     "@lancedb/lancedb": "^0.27.2",

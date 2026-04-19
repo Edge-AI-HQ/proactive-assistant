@@ -9,7 +9,7 @@
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import * as db from '../db.js';
 import { runPipeline } from '../pipeline/orchestrator.js';
-import { DEFAULT_GENERATION_LANGUAGE } from '../agents/generation-language.js';
+import { normalizeGenerationLanguage } from '../agents/generation-language.js';
 import { resolveDreamingTimezone, isDreamingDue } from '../dreaming/schedule.js';
 import { startDreaming, listDreamRuns } from '../dreaming/service.js';
 import { syncCardChatFeedback } from '../chat-feedback/service.js';
@@ -123,12 +123,12 @@ async function runDetectAndLoop(
     }
 
     // Run pipeline directly (no need for gateway HTTP since we're in the same process)
-    const outputLanguage = userSettings.generation_language || DEFAULT_GENERATION_LANGUAGE;
+    const outputLanguage = normalizeGenerationLanguage(userSettings.generation_language);
     const result = await runPipeline(api, {
       maxIterations: config.max_iterations,
       cardsPerIteration: config.cards_per_iteration,
       agentTimeoutMs: config.agent_timeout_ms,
-      outputLanguage: outputLanguage as any,
+      outputLanguage,
     });
 
     state.lastLoopFinishedAt = new Date().toISOString();

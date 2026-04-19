@@ -1,17 +1,38 @@
 import type { RouteHandler } from './types.js';
 import { json, readBody } from './types.js';
 import * as db from '../db.js';
+import {
+  DEFAULT_GENERATION_LANGUAGE,
+  GENERATION_LANGUAGE_OPTIONS,
+  normalizeGenerationLanguage,
+  parseGenerationLanguage,
+} from '../agents/generation-language.js';
 
-export function handleSettings(): RouteHandler {
+interface SettingsRouteDeps {
+  getUserSettings?: typeof db.getUserSettings;
+  updateUserSettings?: typeof db.updateUserSettings;
+}
+
+export function handleSettings(deps?: SettingsRouteDeps): RouteHandler {
+  const getUserSettings = deps?.getUserSettings ?? db.getUserSettings;
+  const updateUserSettings = deps?.updateUserSettings ?? db.updateUserSettings;
+
   return async (ctx) => {
     if (ctx.subpath === '/settings' && ctx.req.method === 'GET') {
-      json(ctx.res, 200, { ok: true, ...(await db.getUserSettings()) });
+      json(ctx.res, 200, { ok: true, ...(await getUserSettings()) });
       return true;
     }
     if (ctx.subpath === '/settings' && ctx.req.method === 'POST') {
       const body = await readBody(ctx.req);
-      await db.updateUserSettings({
-        generation_language: body['generation_language'] as string | undefined,
+      const generationLanguage = body['generation_language'] !== undefined
+        ? parseGenerationLanguage(body['generation_language'])
+        : undefined;
+      if (body['generation_language'] !== undefined && generationLanguage === null) {
+        json(ctx.res, 400, { ok: false, error: 'Unsupported generation_language' });
+        return true;
+      }
+      await updateUserSettings({
+        generation_language: generationLanguage,
         auto_generate: body['auto_generate'] as boolean | undefined,
         auto_dreaming: body['auto_dreaming'] as boolean | undefined,
         metadata: body['metadata'] as Record<string, unknown> | undefined,
@@ -20,37 +41,50 @@ export function handleSettings(): RouteHandler {
       return true;
     }
     if (ctx.subpath === '/settings/auto-generate') {
-      if (ctx.req.method === 'GET') { json(ctx.res, 200, { ok: true, enabled: (await db.getUserSettings()).auto_generate }); return true; }
+      if (ctx.req.method === 'GET') { json(ctx.res, 200, { ok: true, enabled: (await getUserSettings()).auto_generate }); return true; }
       if (ctx.req.method === 'POST') {
         const body = await readBody(ctx.req);
         if (typeof body['enabled'] !== 'boolean') { json(ctx.res, 400, { ok: false, error: 'enabled must be a boolean' }); return true; }
-        await db.updateUserSettings({ auto_generate: body['enabled'] as boolean });
+        await updateUserSettings({ auto_generate: body['enabled'] as boolean });
         json(ctx.res, 200, { ok: true, enabled: body['enabled'] });
         return true;
       }
     }
     if (ctx.subpath === '/settings/generation-language') {
       if (ctx.req.method === 'GET') {
-        const settings = await db.getUserSettings();
-        json(ctx.res, 200, { ok: true, language: settings.generation_language, defaultLanguage: 'zh-Hans',
-          options: [{ value: 'en', label: 'English' }, { value: 'zh-Hans', label: '简体中文' }, { value: 'ja', label: '日本語' }, { value: 'ko', label: '한국어' }, { value: 'es', label: 'Español' }],
+        const settings = await getUserSettings();
+        json(ctx.res, 200, {
+          ok: true,
+          language: normalizeGenerationLanguage(settings.generation_language),
+          defaultLanguage: DEFAULT_GENERATION_LANGUAGE,
+          options: GENERATION_LANGUAGE_OPTIONS,
         });
         return true;
       }
       if (ctx.req.method === 'POST') {
         const body = await readBody(ctx.req);
         if (!body['language']) { json(ctx.res, 400, { ok: false, error: 'Missing language' }); return true; }
-        await db.updateUserSettings({ generation_language: body['language'] as string });
-        json(ctx.res, 200, { ok: true, language: body['language'] });
+        const language = parseGenerationLanguage(body['language']);
+        if (language === null) {
+          json(ctx.res, 400, { ok: false, error: 'Unsupported language' });
+          return true;
+        }
+        await updateUserSettings({ generation_language: language });
+        json(ctx.res, 200, {
+          ok: true,
+          language,
+          defaultLanguage: DEFAULT_GENERATION_LANGUAGE,
+          options: GENERATION_LANGUAGE_OPTIONS,
+        });
         return true;
       }
     }
     if (ctx.subpath === '/settings/auto-dreaming') {
-      if (ctx.req.method === 'GET') { json(ctx.res, 200, { ok: true, enabled: (await db.getUserSettings()).auto_dreaming, schedule: null }); return true; }
+      if (ctx.req.method === 'GET') { json(ctx.res, 200, { ok: true, enabled: (await getUserSettings()).auto_dreaming, schedule: null }); return true; }
       if (ctx.req.method === 'POST') {
         const body = await readBody(ctx.req);
         if (typeof body['enabled'] !== 'boolean') { json(ctx.res, 400, { ok: false, error: 'enabled must be a boolean' }); return true; }
-        await db.updateUserSettings({ auto_dreaming: body['enabled'] as boolean });
+        await updateUserSettings({ auto_dreaming: body['enabled'] as boolean });
         json(ctx.res, 200, { ok: true, enabled: body['enabled'], schedule: null });
         return true;
       }

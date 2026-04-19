@@ -1,7 +1,7 @@
 ---
 name: pin-personal
-version: 0.2.0
-description: "个人数据访问：通过 Composio MCP 连接并读取用户的第三方应用数据（Gmail、Slack、Calendar 等）。"
+version: 0.3.0
+description: "个人数据访问：读取用户的第三方应用数据，以及端侧上报的 mobile 高价值 items（attention_item / moment / session_summary）。"
 metadata:
   requires:
     bins: ["pin"]
@@ -80,6 +80,42 @@ pin personal connect --toolkit notion --json
 pin personal wait --toolkit notion --json
 ```
 
+### 6. 读取端侧 mobile 高价值 items
+
+这些数据不是 Composio 第三方连接，而是手机端已经预处理后上报到个人后端的第一方上下文。适合卡片生成、卡片 follow-up、以及“用户现在在干嘛”的快速判断。
+
+```bash
+# 看最近待处理的 mobile items
+pin personal mobile items list --status pending --limit 20 --json
+
+# 按类型过滤
+pin personal mobile items list --status pending --type attention_item --limit 10 --json
+pin personal mobile items list --status pending --type session_summary --since 24h --limit 10 --json
+pin personal mobile items list --status pending --type moment --since 6h --limit 10 --json
+
+# 按设备过滤
+pin personal mobile items list --status pending --device-id device-xxx --limit 20 --json
+```
+
+结果里重点关注：
+- `attention_item`：需要处理的提醒、通知、通信、日历变化
+- `session_summary`：语音转录或端侧模型整理过的阶段摘要
+- `moment`：高层状态变化，不是原始传感器流
+
+### 7. 消费 mobile items（高级）
+
+只有当你的工作流确实要“消费并标记已处理”时，才使用 `claim/commit`。  
+普通上下文读取、卡片生成前的调研，优先用 `list`，不要随手改状态。
+
+```bash
+# 领取一批 item
+pin personal mobile items claim --limit 10 --json
+pin personal mobile items claim --type attention_item --limit 5 --json
+
+# 处理完成后提交
+pin personal mobile items commit --run-token run_xxx --json
+```
+
 ## 命令列表
 
 | 命令 | 说明 | 风险 |
@@ -92,6 +128,9 @@ pin personal wait --toolkit notion --json
 | `pin personal tools search --query <q> [--toolkit <name>]` | 搜索可用工具 | read |
 | `pin personal tools schema --name <TOOL_SLUG>` | 获取工具参数 | read |
 | `pin personal exec --tool <TOOL_SLUG> [--input '<json>']` | 执行工具 | write |
+| `pin personal mobile items list [--status <s>] [--type <t>] [--since <d>] [--device-id <id>]` | 查看端侧高价值 items | read |
+| `pin personal mobile items claim [--type <t>] [--limit <n>]` | 领取一批端侧 items | write |
+| `pin personal mobile items commit --run-token <token>` | 提交已处理 items | write |
 
 ## Composio MCP 映射
 
@@ -115,8 +154,19 @@ pin personal wait --toolkit notion --json
 
 先 search 再 schema 再 exec —— 不要猜测 tool slug 或参数名。用 search 确认 slug，用 schema 确认参数名。
 
+### mobile items 使用模式
+
+```
+1. personal mobile items list    → 看最近端侧高价值上下文
+2. 仅在需要消费队列时使用 claim
+3. 完成处理后再 commit
+```
+
+卡片生成、用户当前状态判断、卡片 follow-up，通常从 `list` 开始就够了。
+
 ## 安全规则
 
 - API key 通过环境变量或本地配置文件传递，不硬编码
 - MCP 调用直接从用户机器到 Composio，产品方无法访问用户数据
 - 所有工具执行结果不含原始 OAuth token
+- mobile items 是端侧预处理后的高价值结果，不是原始手机全量日志

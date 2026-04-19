@@ -110,13 +110,13 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
     } catch { return new Set(); }
   });
 
-  // NOW view layout + animation state
+  // NOW view layout. Cards stay mounted across swipes; reshuffling just
+  // changes `currentLayoutIdx`, causing each card's `style.left/top` to
+  // update. A CSS transition on left/top makes them drift smoothly to the
+  // new slot — no fly-out, no unmount/remount.
   const [currentLayoutIdx, setCurrentLayoutIdx] = useState(() => Math.floor(Math.random() * SLOT_LAYOUTS.length));
-  const [scatterKey, setScatterKey] = useState(0);
-  const [globalExitDirection, setGlobalExitDirection] = useState<"left" | "scatter">("scatter");
   const touchStartY = useRef<number | null>(null);
   const touchStartX = useRef<number | null>(null);
-  const isScattering = useRef(false);
 
   // Track which cards are "new" (appeared in latest pipeline run)
   const [seenCardIds, setSeenCardIds] = useState<Set<string>>(new Set());
@@ -162,6 +162,18 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
     const t = setInterval(() => setGreetIdx((p) => (p + 1) % AI_GREETINGS.length), 5000);
     return () => clearInterval(t);
   }, []);
+
+  // ── Refresh Composio connections on Control tab entry ──
+  // Keeps web and iOS in sync without a full app restart: when the user
+  // switches to CONTROL, re-pull the live connection list. loadStatus is
+  // intentionally omitted from the dep array — it's a useCallback whose
+  // identity is stable per mount and listing it would refire on every render.
+
+  useEffect(() => {
+    if (activeView !== "control") return;
+    void composio.loadStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeView]);
 
   // ── Visible cards for NOW view ──
 
@@ -342,25 +354,17 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
     setMenuOpen(false);
   };
 
-  // ── Swipe refresh handlers (NOW view) ──
+  // ── Swipe-to-reshuffle (NOW view) ──
 
-  const handleSwipeRefresh = useCallback((direction: "left" | "scatter") => {
-    if (isScattering.current) return;
-    isScattering.current = true;
-    setGlobalExitDirection(direction);
-    setScatterKey((k) => k + 1);
-
-    setTimeout(() => {
-      setGlobalExitDirection("scatter");
-      setCurrentLayoutIdx((prev) => {
-        const candidates = Array.from({ length: SLOT_LAYOUTS.length }, (_, i) => i).filter(i => i !== prev);
-        return candidates[Math.floor(Math.random() * candidates.length)];
-      });
-      isScattering.current = false;
-    }, 600);
+  const triggerReshuffle = useCallback(() => {
+    setCurrentLayoutIdx((prev) => {
+      const candidates = Array.from({ length: SLOT_LAYOUTS.length }, (_, i) => i).filter(i => i !== prev);
+      return candidates[Math.floor(Math.random() * candidates.length)];
+    });
   }, []);
 
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length !== 1) return;
     touchStartY.current = e.touches[0].clientY;
     touchStartX.current = e.touches[0].clientX;
   }, []);
@@ -371,12 +375,10 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
     const deltaX = touchStartX.current - e.changedTouches[0].clientX;
     touchStartY.current = null;
     touchStartX.current = null;
-    if (deltaX > 80 && Math.abs(deltaX) > Math.abs(deltaY)) {
-      handleSwipeRefresh("left");
-    } else if (Math.abs(deltaY) > 80) {
-      handleSwipeRefresh("scatter");
+    if (Math.max(Math.abs(deltaX), Math.abs(deltaY)) > 80) {
+      triggerReshuffle();
     }
-  }, [handleSwipeRefresh]);
+  }, [triggerReshuffle]);
 
   // ── Render NOW view (floating cards around sphere) ──
 
@@ -386,17 +388,17 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
     return (
       <div className="relative flex flex-col h-full">
         {/* Weather + Greeting */}
-        <div className="relative z-20 px-5 pt-14 pb-2">
+        <div className="relative z-20 px-5 pt-3 pb-2">
           {weather && (
             <div className="flex items-center mb-3">
-              <div className="glass-card-strong px-3 py-1.5 flex items-center gap-1.5">
-                <weather.icon size={14} strokeWidth={1.5} className="text-foreground/60" />
-                <span className="text-sm font-medium text-foreground">{weather.temp}&deg;</span>
-                <span className="text-xs text-foreground/60">{weather.label}</span>
+              <div className="glass-card-strong px-3 py-1.5 flex items-center gap-1.5 flex-nowrap whitespace-nowrap max-w-full">
+                <weather.icon size={14} strokeWidth={1.5} className="text-foreground/60 shrink-0" />
+                <span className="text-sm font-medium text-foreground shrink-0">{weather.temp}&deg;</span>
+                <span className="text-xs text-foreground/60 shrink-0">{weather.label}</span>
                 {weather.city && (
                   <>
-                    <span className="text-foreground/20">&middot;</span>
-                    <span className="text-xs text-foreground/50">{weather.city}</span>
+                    <span className="text-xs text-foreground/20 shrink-0">&middot;</span>
+                    <span className="text-xs text-foreground/50 shrink-0 truncate">{weather.city}</span>
                   </>
                 )}
               </div>
@@ -432,7 +434,19 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
           onTouchEnd={handleTouchEnd}
         >
           <Suspense fallback={<div className="w-[300px] h-[300px] rounded-full bg-foreground/5 animate-pulse" />}>
-            <AiSphere size={Math.min(570, window.innerWidth * 1.42)} mode={isRunning ? "thinking" : "idle"} className="-mt-[10%]" />
+            <AiSphere
+              /* Sphere fills ~95% of viewport width (a small safe margin so
+                 the edge never touches the screen). Capped at 460 so on
+                 tablet/desktop the sphere sits neatly inside max-w-lg. */
+              size={Math.min(window.innerWidth * 0.95, 460)}
+              mode={isRunning ? "thinking" : "idle"}
+              /* flex-1 sits below the weather+greeting header (~190px tall on
+                 iPhone), so its vertical center is below the screen's true
+                 center. The negative top margin pulls the sphere up by ~28%
+                 of its own size, canceling the header offset so the sphere
+                 reads as screen-centered. */
+              className="-mt-[28%]"
+            />
           </Suspense>
 
           {/* Loading overlay */}
@@ -455,31 +469,23 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
             </div>
           )}
 
-          {/* Floating cards */}
-          <AnimatePresence>
+          {/* Floating cards. Cards stay mounted across swipes; left/top change
+              on reshuffle and the CSS transition below slides them smoothly to
+              their new slot. AnimatePresence only handles per-card dismissal
+              (when a card is filtered out of visibleCards). */}
+          <AnimatePresence mode="popLayout">
             {visibleCards.map((card, i) => {
               const pos = positions[card.slotIndex % positions.length];
               const meta = basketMeta(card.goalBasket);
               const CatIcon = meta.icon;
-              const delay = i * 1.1;
-              const dur = 7 + (i % 3) * 1.5;
               const isNew = !seenCardIds.has(card.id);
               const isProcessing = processingIds.has(card.id);
-
-              const cardCenterX = pos.left + 20;
-              const cardCenterY = 50 + pos.y;
-              const dx = cardCenterX - 50;
-              const dy = cardCenterY - 50;
-              const mag = Math.sqrt(dx * dx + dy * dy) || 1;
-              const exitX = (dx / mag) * 400;
-              const exitY = (dy / mag) * 400;
-
-              const flyLeft = card.exitDirection === "left" || globalExitDirection === "left";
+              const floatDur = 6 + (i % 3) * 1.5;
+              const floatDelay = i * 0.8;
 
               return (
                 <motion.button
-                  key={`float-${card.id}-${scatterKey}`}
-                  layout
+                  key={card.id}
                   drag="x"
                   dragConstraints={{ left: 0, right: 0 }}
                   dragElastic={0.4}
@@ -489,34 +495,11 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
                     }
                   }}
                   initial={{ opacity: 0, scale: 0.85 }}
-                  animate={{
-                    opacity: 1,
-                    scale: [1, 1.045, 1, 0.97, 1],
-                    y: [0, -3.5, 0, 2, 0],
-                    x: [0, 1.5, 0, -1.5, 0],
-                  }}
-                  exit={flyLeft ? {
-                    opacity: 0,
-                    scale: 0.6,
-                    x: -400,
-                    rotate: -15,
-                    transition: { duration: 0.4, ease: [0.4, 0, 1, 1] },
-                  } : {
-                    opacity: 0,
-                    scale: 0.6,
-                    x: exitX,
-                    y: exitY,
-                    rotate: (i % 2 === 0 ? 1 : -1) * (10 + i % 15),
-                    transition: { duration: 0.45, ease: [0.4, 0, 1, 1] },
-                  }}
-                  transition={{
-                    opacity: { duration: 0.8 },
-                    scale: { duration: dur + 1, repeat: Infinity, ease: "easeInOut", delay: delay + 0.3 },
-                    y: { duration: dur, repeat: Infinity, ease: "easeInOut", delay },
-                    x: { duration: dur + 2, repeat: Infinity, ease: "easeInOut", delay: delay + 0.5 },
-                  }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.7, x: -300, transition: { duration: 0.25 } }}
+                  transition={{ duration: 0.5, ease: "easeOut" }}
                   onClick={() => handleCardTap(card)}
-                  className={`absolute glass-card-strong px-2.5 py-2 cursor-pointer hover:scale-105 transition-transform z-10 ${
+                  className={`absolute glass-card-strong px-2.5 py-2 cursor-pointer card-float ${
                     isNew ? "ring-1 ring-pink-400/40" : isProcessing ? "ring-1 ring-amber-400/40" : ""
                   }`}
                   style={{
@@ -527,6 +510,15 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
                     minWidth: 110,
                     borderRadius: 16,
                     boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
+                    zIndex: 10,
+                    // Smooth drift to new slot on reshuffle. Using CSS
+                    // transition on left/top means each card independently
+                    // interpolates its position — GPU-friendly, no React
+                    // work per frame.
+                    transition: "left 0.75s cubic-bezier(0.22,1,0.36,1), top 0.75s cubic-bezier(0.22,1,0.36,1)",
+                    willChange: "left, top, transform, opacity",
+                    animationDuration: `${floatDur}s`,
+                    animationDelay: `${floatDelay}s`,
                   }}
                 >
                   <div className="flex items-center gap-1.5 mb-0.5">
@@ -567,9 +559,12 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
       <div className="absolute inset-0 animate-bg-flow opacity-25" />
       <div className="absolute inset-0 bg-white/50" />
 
-      <div className="relative z-10 flex flex-col h-full">
-        {/* Top-right buttons: DebugPanel gear + hamburger */}
-        <div className="absolute top-14 right-4 z-30 flex items-center gap-2">
+      <div className="relative z-10 flex flex-col h-full pt-safe-top">
+        {/* Top-right buttons: DebugPanel gear + hamburger.
+            Align vertically with the weather pill: weather pill sits at
+            parent's padding-top (safe-area) + pt-3 (12px), so these
+            absolute buttons need safe-area + 12px too. */}
+        <div className="absolute top-[calc(env(safe-area-inset-top,0px)+12px)] right-4 z-30 flex items-center gap-2">
           <DebugPanel
             health={health}
             run={run}
@@ -673,7 +668,7 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
                 borderLeft: "1px solid hsl(0 0% 100% / 0.5)",
               }}
             >
-              <div className="pt-14 px-5">
+              <div className="pt-safe-top px-5">
                 <div className="flex items-center justify-between mb-4">
                   <button onClick={() => setMenuOpen(false)} className="p-1.5 rounded-full hover:bg-foreground/[0.08]">
                     <X size={20} strokeWidth={1.5} className="text-foreground/60" />

@@ -73,6 +73,7 @@ export async function getUserBySupabaseId(supabaseUserId: string): Promise<Proac
  * (which lives on the `users` table, not `runtime_instances`).
  */
 export type ContainerWithToken = ProactiveContainer & { gateway_token: string };
+export type MobileSyncTarget = ContainerWithToken & { user_key: string | null };
 
 /** Get user-scope container for a user, including gateway_token from users. */
 export async function getContainerForUser(supabaseUserId: string): Promise<ContainerWithToken | null> {
@@ -84,6 +85,57 @@ export async function getContainerForUser(supabaseUserId: string): Promise<Conta
        AND ri.scope = 'user'
      LIMIT 1`,
     [supabaseUserId]
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * Resolve a default container for direct mobile ingestion.
+ *
+ * Priority:
+ * 1. MOBILE_SYNC_TARGET_USER_ID env override
+ * 2. Most recently active user-scope container
+ */
+export async function getDefaultMobileSyncContainer(): Promise<MobileSyncTarget | null> {
+  const configuredUserId = process.env.MOBILE_SYNC_TARGET_USER_ID?.trim();
+  if (configuredUserId) {
+    const { rows } = await pool.query<MobileSyncTarget>(
+      `SELECT
+         ri.*,
+         u.gateway_token,
+         COALESCE(
+           to_jsonb(u) ->> 'supabase_user_id',
+           to_jsonb(u) ->> 'id',
+           to_jsonb(u) ->> 'telegram_user_id'
+         ) AS user_key
+       FROM runtime_instances ri
+       JOIN users u ON u.id = ri.owner_user_id
+       WHERE COALESCE(
+         to_jsonb(u) ->> 'supabase_user_id',
+         to_jsonb(u) ->> 'id',
+         to_jsonb(u) ->> 'telegram_user_id'
+       ) = $1
+         AND ri.scope = 'user'
+       LIMIT 1`,
+      [configuredUserId],
+    );
+    return rows[0] ?? null;
+  }
+
+  const { rows } = await pool.query<MobileSyncTarget>(
+    `SELECT
+       ri.*,
+       u.gateway_token,
+       COALESCE(
+         to_jsonb(u) ->> 'supabase_user_id',
+         to_jsonb(u) ->> 'id',
+         to_jsonb(u) ->> 'telegram_user_id'
+       ) AS user_key
+     FROM runtime_instances ri
+     JOIN users u ON u.id = ri.owner_user_id
+     WHERE ri.scope = 'user'
+     ORDER BY COALESCE(ri.last_active_at, u.last_active_at, ri.updated_at, u.updated_at) DESC
+     LIMIT 1`,
   );
   return rows[0] ?? null;
 }

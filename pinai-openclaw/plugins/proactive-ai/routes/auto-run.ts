@@ -1,7 +1,7 @@
 import type { RouteHandler } from './types.js';
 import { json } from './types.js';
 import { runPipeline } from '../pipeline/orchestrator.js';
-import { DEFAULT_GENERATION_LANGUAGE } from '../agents/generation-language.js';
+import { normalizeGenerationLanguage } from '../agents/generation-language.js';
 import * as db from '../db.js';
 import { syncCardChatFeedback } from '../chat-feedback/service.js';
 
@@ -27,7 +27,7 @@ export function handleAutoRun(
       const runPipelineImpl = deps?.runPipeline ?? runPipeline;
       const syncCardChatFeedbackImpl = deps?.syncCardChatFeedback ?? syncCardChatFeedback;
       const userSettings = await getUserSettings();
-      const outputLanguage = userSettings.generation_language || DEFAULT_GENERATION_LANGUAGE;
+      const outputLanguage = normalizeGenerationLanguage(userSettings.generation_language);
       try {
         await syncCardChatFeedbackImpl({
           api: ctx.api,
@@ -40,7 +40,7 @@ export function handleAutoRun(
         maxIterations: config.max_iterations,
         cardsPerIteration: config.cards_per_iteration,
         agentTimeoutMs: config.agent_timeout_ms,
-        outputLanguage: outputLanguage as any,
+        outputLanguage,
       });
       json(ctx.res, 200, { ok: true, runId: result.runId, cards: result.finalCards.length });
     } catch (err) {

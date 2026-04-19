@@ -34,7 +34,10 @@ const parseMetadata = (raw?: string): Record<string, unknown> | undefined => {
   if (!raw) return undefined;
   const parsed = JSON.parse(raw);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new ValidationError("INVALID_ARGUMENT", "metadata must be a JSON object");
+    throw new ValidationError(
+      "INVALID_ARGUMENT",
+      "metadata must be a JSON object",
+    );
   }
   return parsed as Record<string, unknown>;
 };
@@ -51,8 +54,14 @@ const parseOptionalFloat = (raw?: string): number | undefined => {
 const parseJsonStringArray = (raw?: string): string[] | undefined => {
   if (!raw) return undefined;
   const parsed = JSON.parse(raw);
-  if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) {
-    throw new ValidationError("INVALID_ARGUMENT", "tags-json must be a JSON string array");
+  if (
+    !Array.isArray(parsed) ||
+    !parsed.every((item) => typeof item === "string")
+  ) {
+    throw new ValidationError(
+      "INVALID_ARGUMENT",
+      "tags-json must be a JSON string array",
+    );
   }
   return parsed;
 };
@@ -286,6 +295,45 @@ export const addMemory = async (
   return entry;
 };
 
+/** Bounded connector JSON — `connector_raw_data` table, separate from `profiles.memory`. */
+export const appendConnectorRawData = async (
+  ctx: CoreContext,
+  input: {
+    connectorKind?: string;
+    toolkit: string;
+    connectedAccountId?: string;
+    toolSlug?: string;
+    ingestSource?: string;
+    windowLabel?: string;
+    capturedAt?: string;
+    payloadJson: string;
+    profileId?: string;
+  },
+): Promise<{ id: string }> => {
+  const repository = await createRepository(ctx);
+  const profileId = input.profileId ?? DEFAULT_PROFILE_ID;
+  const id = await repository.insertConnectorRawData(profileId, {
+    connectorKind: input.connectorKind,
+    toolkit: input.toolkit.trim(),
+    connectedAccountId: input.connectedAccountId?.trim(),
+    toolSlug: input.toolSlug?.trim(),
+    ingestSource: input.ingestSource,
+    windowLabel: input.windowLabel?.trim(),
+    capturedAt: input.capturedAt,
+    payloadJson: input.payloadJson,
+  });
+
+  if (!id) {
+    throw new NotFoundError(
+      "NOT_FOUND",
+      `Profile ${profileId} not found`,
+      "run `pin profile create` first",
+    );
+  }
+
+  return { id };
+};
+
 export const searchMemory = async (
   ctx: CoreContext,
   query: string,
@@ -320,10 +368,7 @@ export const removeMemory = async (
   }
 
   if (removed === false) {
-    throw new NotFoundError(
-      "NOT_FOUND",
-      `Memory ${entryId} not found`,
-    );
+    throw new NotFoundError("NOT_FOUND", `Memory ${entryId} not found`);
   }
 
   return { id: entryId, deleted: true };
