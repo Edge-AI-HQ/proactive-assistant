@@ -17,6 +17,8 @@ import type { RouteHandler, RouteContext } from './types.js';
 import { json, readBody, extractTextContent } from './types.js';
 import { buildChatPrompt, type ChatCardContext } from '../agents/chat.js';
 import { normalizeCardChatMessages } from '../chat-feedback/service.js';
+import { isMainChatSessionKey } from '../conversation-crystallize/service.js';
+import * as db from '../db.js';
 
 /**
  * Try to parse a cardContext string as structured JSON.
@@ -106,6 +108,28 @@ function truncate(value: string, max: number): string {
   return `${value.slice(0, max - 1)}…`;
 }
 
+/**
+ * Non-blocking hook: increment the cross-session main-chat turn counter when
+ * the user sends a real message. Card-chat sessions and card-opener injections
+ * are excluded — those flows are handled by chat-feedback.
+ */
+function bumpCrystallizeTurnSafe(
+  ctx: RouteContext,
+  sessionKey: string | undefined,
+  message: string,
+  opts?: { cardOpener?: boolean },
+): void {
+  if (!sessionKey) return;
+  if (opts?.cardOpener) return;
+  if (!message || !message.trim()) return;
+  if (!isMainChatSessionKey(sessionKey)) return;
+  db.bumpCrystallizeTurn(sessionKey).catch((err) => {
+    ctx.api.logger.warn(
+      `[crystallize] bumpTurn failed: ${err instanceof Error ? err.message : err}`,
+    );
+  });
+}
+
 export function handleChat(): RouteHandler {
   return async (ctx) => {
     // ── GET /chat/history or /chat-stream/history ──
@@ -148,6 +172,10 @@ export function handleChat(): RouteHandler {
         json(ctx.res, 400, { error: 'Missing sessionKey; provide message or cardContext' });
         return true;
       }
+
+      bumpCrystallizeTurnSafe(ctx, sessionKey, body.message ?? '', {
+        cardOpener: Boolean(card || rawCardCtx),
+      });
 
       // Return SSE stream directly — standard AI chat pattern
       ctx.res.writeHead(200, {
@@ -298,6 +326,10 @@ export function handleChat(): RouteHandler {
         firstMessage,
       });
       if (!agentMessage) { json(ctx.res, 400, { error: 'Missing message' }); return true; }
+
+      bumpCrystallizeTurnSafe(ctx, sessionKey, body.message ?? '', {
+        cardOpener: Boolean(card || rawCtx),
+      });
 
       try {
         const { runId } = await ctx.api.runtime.subagent.run({
