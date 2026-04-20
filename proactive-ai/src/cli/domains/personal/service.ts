@@ -76,7 +76,7 @@ export const execTool = async (
 
 export const listMobileItems = async (
   runtime: CliRuntimeInput,
-  input: { status?: string; type?: string; since?: string; until?: string; deviceId?: string; limit?: string },
+  input: { status?: string; type?: string; since?: string; until?: string; deviceId?: string; order?: string; limit?: string },
 ): Promise<RunCliResult> => {
   try {
     const items = listLocalMobileItems(runtime, {
@@ -85,6 +85,7 @@ export const listMobileItems = async (
       since: input.since,
       until: input.until,
       deviceId: input.deviceId,
+      order: input.order,
       limit: input.limit ? Number.parseInt(input.limit, 10) : undefined,
     });
     return { exitCode: 0, stdout: okEnvelope("personal", "mobile.items.list", { items }) };

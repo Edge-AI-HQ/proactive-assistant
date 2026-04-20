@@ -51,6 +51,8 @@ describe("buildPlannerPrompt", () => {
     expect(prompt).toContain("pin profile snapshot build --id default --view ranking --json");
     expect(prompt).toContain("pin profile facts get --json");
     expect(prompt).toContain("pin sys schema push.history --json");
+    expect(prompt).toContain("pin personal mobile items list --type contact_directory_snapshot --order desc --limit 1 --json");
+    expect(prompt).toContain("pin personal mobile items list --type app_inventory_snapshot --order desc --limit 1 --json");
   });
 
   it("forces a personal-data-first collection flow before planning", () => {
@@ -66,6 +68,9 @@ describe("buildPlannerPrompt", () => {
     expect(prompt).toContain("pin personal exec --tool");
     expect(prompt).toContain("If personal connections exist, do not leave `personalData` empty");
     expect(prompt).toContain("record the failure inside `collectedContext.personalData.gaps`");
+    expect(prompt).toContain('"mobileSnapshots": {');
+    expect(prompt).toContain('"contacts": { ... }');
+    expect(prompt).toContain('"apps": { ... }');
   });
 
   it("treats sustained card-chat engagement as a strong follow-up signal", () => {

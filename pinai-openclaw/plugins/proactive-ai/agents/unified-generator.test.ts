@@ -23,6 +23,8 @@ test("buildUnifiedGeneratorPrompt includes CLI guide with --full hint", () => {
   assert.match(prompt, /--full/);
   assert.match(prompt, /truncated/);
   assert.match(prompt, /pin personal mobile items list --status pending --limit 20 --json/);
+  assert.match(prompt, /pin personal mobile items list --type contact_directory_snapshot --order desc --limit 1 --json/);
+  assert.match(prompt, /pin personal mobile items list --type app_inventory_snapshot --order desc --limit 1 --json/);
 });
 
 test("buildUnifiedGeneratorPrompt includes scoring rubric", () => {
@@ -79,8 +81,11 @@ test("buildUnifiedGeneratorPrompt includes mobile items in context gathering", (
     currentDate: "2026-04-15",
   });
 
-  assert.match(prompt, /Mobile high-value context/);
+  assert.match(prompt, /Mobile high-value queue/);
   assert.match(prompt, /pin personal mobile items list --status pending --limit 20 --json/);
+  assert.match(prompt, /contact_directory_snapshot/);
+  assert.match(prompt, /app_inventory_snapshot/);
   assert.match(prompt, /attention_item/);
   assert.match(prompt, /session_summary/);
+  assert.match(prompt, /Only fetch 11 and 12 when cards may depend on those domains/);
 });

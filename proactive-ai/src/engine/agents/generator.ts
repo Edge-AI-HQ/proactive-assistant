@@ -115,6 +115,8 @@ When recent generated-card history includes thread decisions:
 - \`suppress\`: avoid near-duplicate cards for that thread unless a concrete new trigger overrides the prior negative signal
 
 If you need extra data, prefer specific pin CLI fetches that extend the Planner's collected context rather than redoing broad discovery.
+When the card depends on people, orgs, family, teammates, or relationship context, inspect the latest contacts snapshot with \`pin personal mobile items list --type contact_directory_snapshot --order desc --limit 1 --json\`.
+When the card depends on installed apps, productivity stack, finance apps, or device software context, inspect the latest app snapshot with \`pin personal mobile items list --type app_inventory_snapshot --order desc --limit 1 --json\`.
 </process>
 
 <card_quality_standards>

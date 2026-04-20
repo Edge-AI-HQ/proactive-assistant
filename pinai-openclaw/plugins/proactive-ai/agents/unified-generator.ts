@@ -67,9 +67,11 @@ Use the \`pin\` CLI to collect the user's current context. Gather ALL of these:
 7. **Recent pushes**: \`pin push history --since 14d --json\`
 8. **Recent feedback**: \`pin feedback list --since 14d --json\`
 9. **Recent generated cards**: \`pin cards recent --limit 10 --json\`
-10. **Mobile high-value context**: \`pin personal mobile items list --status pending --limit 20 --json\`
+10. **Mobile high-value queue**: \`pin personal mobile items list --status pending --limit 20 --json\`
+11. **Latest contacts snapshot**: \`pin personal mobile items list --type contact_directory_snapshot --order desc --limit 1 --json\`
+12. **Latest installed apps snapshot**: \`pin personal mobile items list --type app_inventory_snapshot --order desc --limit 1 --json\`
 
-Adapt based on what connections are available. For mobile items, pay attention to \`attention_item\`, \`session_summary\`, and high-signal \`moment\` entries that reveal what the user is doing right now. If a tool returns truncated output, use \`--full\` to fetch the complete data only when the truncated preview looks relevant to card generation.
+Adapt based on what connections are available. For mobile items, pay attention to \`attention_item\`, \`session_summary\`, and high-signal \`moment\` entries that reveal what the user is doing right now. Only fetch 11 and 12 when cards may depend on those domains: use \`contact_directory_snapshot\` for people, orgs, family, teammates, or relationship context, and use \`app_inventory_snapshot\` for installed apps, work stack, finance apps, or device software context. If a tool returns truncated output, use \`--full\` to fetch the complete data only when the truncated preview looks relevant to card generation.
 
 After collecting, briefly note what you gathered and any gaps.
 </phase_1_context_gathering>

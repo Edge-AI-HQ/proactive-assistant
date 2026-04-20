@@ -77,7 +77,7 @@ test("handleMobile ingests, lists, claims, and commits mobile items", withTempHo
           dedupeKey: "session:session-1",
           occurredAt: "2026-04-16T08:00:00.000Z",
           availableAt: "2026-04-16T08:00:00.000Z",
-          expiresAt: "2026-04-17T08:00:00.000Z",
+          expiresAt: "2099-04-17T08:00:00.000Z",
         },
         {
           id: "item-2",
@@ -90,7 +90,7 @@ test("handleMobile ingests, lists, claims, and commits mobile items", withTempHo
           dedupeKey: "notification:com.shop:1",
           occurredAt: "2026-04-16T08:05:00.000Z",
           availableAt: "2026-04-16T08:05:00.000Z",
-          expiresAt: "2026-04-17T08:05:00.000Z",
+          expiresAt: "2099-04-17T08:05:00.000Z",
         },
       ],
     }),
@@ -254,6 +254,62 @@ test("handleMobile accepts millisecond timestamps from mobile clients", withTemp
   assert.equal(listed.items[0].occurredAt, "2027-04-16T10:00:00.000Z");
   assert.equal(listed.items[0].availableAt, "2027-04-16T10:00:00.000Z");
   assert.equal(listed.items[0].expiresAt, "2027-04-16T10:01:00.000Z");
+}));
+
+test("handleMobile lists latest-first items when order desc is requested", withTempHome(async () => {
+  const handler = handleMobile();
+
+  await handler({
+    subpath: "/mobile/items/ingest",
+    req: createRequest("POST", {
+      deviceId: "pixel-5",
+      items: [
+        {
+          id: "contact-old",
+          itemType: "contact_directory_snapshot",
+          title: "Contacts snapshot",
+          summary: "Older snapshot",
+          payload: { contacts: [{ contactId: "old-1", displayName: "Old Contact" }] },
+          salience: 0.5,
+          confidence: 0.8,
+          dedupeKey: "contact:old",
+          occurredAt: "2026-04-16T10:00:00.000Z",
+          availableAt: "2026-04-16T10:00:00.000Z",
+          expiresAt: "2026-04-20T10:00:00.000Z",
+        },
+        {
+          id: "contact-new",
+          itemType: "contact_directory_snapshot",
+          title: "Contacts snapshot",
+          summary: "Newer snapshot",
+          payload: { contacts: [{ contactId: "new-1", displayName: "New Contact" }] },
+          salience: 0.5,
+          confidence: 0.8,
+          dedupeKey: "contact:new",
+          occurredAt: "2026-04-17T10:00:00.000Z",
+          availableAt: "2026-04-17T10:00:00.000Z",
+          expiresAt: "2026-04-21T10:00:00.000Z",
+        },
+      ],
+    }),
+    res: createResponse(),
+    url: new URL("http://localhost/mobile/items/ingest"),
+    api: {} as never,
+  } as never);
+
+  const listRes = createResponse();
+  await handler({
+    subpath: "/mobile/items",
+    req: createRequest("GET"),
+    res: listRes,
+    url: new URL("http://localhost/mobile/items?type=contact_directory_snapshot&order=desc&limit=1"),
+    api: {} as never,
+  } as never);
+
+  const listed = JSON.parse(listRes.body);
+  assert.equal(listed.items.length, 1);
+  assert.equal(listed.items[0].id, "contact-new");
+  assert.deepEqual(listed.items[0].payload.contacts, [{ contactId: "new-1", displayName: "New Contact" }]);
 }));
 
 test("expired claim runs release items back to pending", withTempHome(async () => {
