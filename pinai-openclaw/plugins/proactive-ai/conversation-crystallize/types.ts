@@ -10,8 +10,35 @@
 
 export type CrystallizeDecision = 'memorize' | 'create_skill' | 'discard';
 
+/**
+ * The three memory kinds produced by the evaluator. Inspired by Hermes's
+ * memory_tool targets (`user` vs `memory`), but split a bit finer so the
+ * downstream consumer (user-facing UI + dreaming pipeline) can weight the
+ * entries differently.
+ *
+ * - `user_profile`  — who the user is: identity, durable preferences, habits
+ * - `convention`    — user- or domain-specific workflows, naming, response style
+ * - `environment`   — the user's context: OS, timezone, tools, project layout
+ *
+ * `conversation_crystal` is retained as a legacy fallback: older memories
+ * written before this split and any evaluator output that fails to
+ * classify will land under this kind.
+ */
+export type CrystallizeMemoryKind =
+  | 'user_profile'
+  | 'convention'
+  | 'environment'
+  | 'conversation_crystal';
+
+export const CRYSTALLIZE_MEMORY_KINDS: readonly CrystallizeMemoryKind[] = [
+  'user_profile',
+  'convention',
+  'environment',
+  'conversation_crystal',
+] as const;
+
 export interface CrystallizeMemoryPayload {
-  kind: string;
+  kind: CrystallizeMemoryKind;
   text: string;
   tags: string[];
 }
@@ -29,7 +56,8 @@ export interface CrystallizeSynthesis {
   topics?: string[];
   decision?: CrystallizeDecision;
   reason?: string;
-  memory?: Partial<CrystallizeMemoryPayload>;
+  // Evaluator may emit an unknown string; normalizeSynthesis coerces it.
+  memory?: { kind?: string; text?: string; tags?: unknown };
   skill?: Partial<CrystallizeSkillPayload>;
 }
 

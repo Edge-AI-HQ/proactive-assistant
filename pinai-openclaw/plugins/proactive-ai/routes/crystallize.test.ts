@@ -107,6 +107,47 @@ test('GET /crystallize/state returns state, defaults, override, effective and sk
   assert.equal(parsed.config.effective.cooldownMs, parsed.config.defaults.cooldownMs);
   assert.deepEqual(parsed.skillCounts, { active: 2, disabled: 1, total: 3 });
   assert.deepEqual(parsed.recentDecisions, []);
+  assert.equal(parsed.diagnostics.lastSessionKey, 'agent:main:proactive-ai:chat:abc');
+  assert.equal(parsed.diagnostics.lastSessionKind, 'main');
+  assert.equal(typeof parsed.diagnostics.secondsSinceLastBump, 'number');
+});
+
+test('GET /crystallize/state reports lastSessionKind="card" for card-chat sessions', async () => {
+  const deps = baseDeps();
+  deps.getCrystallizeState = async () => ({
+    turn_count: 3,
+    last_crystallized_at: null,
+    last_session_key: 'agent:main:proactive-ai:chat:card:run_manual_mo6u',
+    last_message_at: '2026-04-20T01:00:00.000Z',
+    updated_at: '2026-04-20T01:00:00.000Z',
+  });
+  const handler = handleCrystallize(deps as never);
+  const { ctx, res } = makeCtx('GET', '/crystallize/state');
+  await handler(ctx);
+  const parsed = JSON.parse(res.body);
+  assert.equal(parsed.diagnostics.lastSessionKind, 'card');
+  assert.equal(
+    parsed.diagnostics.lastSessionKey,
+    'agent:main:proactive-ai:chat:card:run_manual_mo6u',
+  );
+});
+
+test('GET /crystallize/state reports null diagnostics when no session has been seen', async () => {
+  const deps = baseDeps();
+  deps.getCrystallizeState = async () => ({
+    turn_count: 0,
+    last_crystallized_at: null,
+    last_session_key: null,
+    last_message_at: null,
+    updated_at: '2026-04-20T01:00:00.000Z',
+  });
+  const handler = handleCrystallize(deps as never);
+  const { ctx, res } = makeCtx('GET', '/crystallize/state');
+  await handler(ctx);
+  const parsed = JSON.parse(res.body);
+  assert.equal(parsed.diagnostics.lastSessionKey, null);
+  assert.equal(parsed.diagnostics.lastSessionKind, null);
+  assert.equal(parsed.diagnostics.secondsSinceLastBump, null);
 });
 
 test('GET /crystallize/state filters recent decisions to conversation_crystal entries with summary truncation', async () => {

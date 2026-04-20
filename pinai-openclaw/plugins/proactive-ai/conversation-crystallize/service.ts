@@ -1,9 +1,15 @@
 /**
- * Conversation Crystallize — cross-session main-chat turn aggregation +
+ * Conversation Crystallize — cross-session chat turn aggregation +
  * background evaluator subagent that decides whether to crystallize the
  * recent window into a profile memory or an active user skill.
  *
- * Trigger source: auto-loop 1-minute detect timer (see scheduler/auto-loop.ts).
+ * Scope: both MainChat and card-chat turns feed the counter. Card chats
+ * also drive chat-feedback (per-card decisions for the next generation
+ * loop) — that pipeline is orthogonal to this one and they do not share
+ * data stores.
+ *
+ * Trigger source: auto-loop 1-minute detect timer (see scheduler/auto-loop.ts)
+ * or the debug panel Run-now button.
  * Pipeline: threshold check -> mark turn counter reset -> subagent synthesis ->
  *           persist decision (memory / skill / discard) + observability record.
  */
@@ -16,33 +22,63 @@ import { buildCrystallizePrompt } from './prompt.js';
 import {
   CONVERSATION_CRYSTAL_ANALYSIS_TYPE,
   CONVERSATION_CRYSTAL_MEMORY_KIND,
+  CRYSTALLIZE_MEMORY_KINDS,
   DEFAULT_CRYSTALLIZE_CONFIG,
   TUNABLE_CRYSTALLIZE_KEYS,
   type CrystallizeConfig,
   type CrystallizeDecision,
+  type CrystallizeMemoryKind,
   type CrystallizeRunResult,
   type CrystallizeSynthesis,
   type CrystallizeTurn,
   type TunableCrystallizeConfig,
 } from './types.js';
 
-// ── Session key conventions (mirror chat-feedback/service.ts) ──
-// Main chat sessionKey prefix families we want to aggregate:
-//   agent:main:proactive-ai:chat:<rand>           (legacy POST /chat)
-//   agent:main:proactive-ai:chat-test:<rand>      (stream)
-//   agent:main:proactive-ai:chat-stream:<rand>    (future)
-// Excluded: card-chat sessions are handled by chat-feedback already.
+// ── Session key conventions ──
+// Tracked chat sessions whose turns feed the cross-session learning counter:
+//   agent:main:proactive-ai:chat:<rand>              (legacy POST /chat — MainChat)
+//   agent:main:proactive-ai:chat-test:<rand>         (test chat)
+//   agent:main:proactive-ai:chat-stream:<rand>       (streaming MainChat)
+//   agent:main:proactive-ai:chat:card:<cardId>       (card chat — high-signal)
+// Not tracked: chat-feedback / crystallize / dreaming internal subagent sessions.
 const CARD_CHAT_PREFIX = 'agent:main:proactive-ai:chat:card:';
-const MAIN_CHAT_PREFIXES = [
-  'agent:main:proactive-ai:chat:',
+
+/**
+ * Session keys whose turns should feed the cross-session learning counter.
+ * Both MainChat and Card chat belong here — they are complementary signal
+ * sources (main = general profile, card = goal-driven preferences). The
+ * chat-feedback / crystallize / dreaming subagent sessions (`chat-feedback:`,
+ * `crystallize:`, etc.) are excluded because those are internal analyses.
+ */
+const TRACKABLE_CHAT_PREFIXES = [
+  'agent:main:proactive-ai:chat:',         // matches MainChat + chat:card:*
   'agent:main:proactive-ai:chat-test:',
   'agent:main:proactive-ai:chat-stream:',
 ];
 
-export function isMainChatSessionKey(sessionKey: string | null | undefined): boolean {
+export function isTrackableChatSessionKey(sessionKey: string | null | undefined): boolean {
   if (!sessionKey) return false;
-  if (sessionKey.startsWith(CARD_CHAT_PREFIX)) return false;
-  return MAIN_CHAT_PREFIXES.some((prefix) => sessionKey.startsWith(prefix));
+  return TRACKABLE_CHAT_PREFIXES.some((prefix) => sessionKey.startsWith(prefix));
+}
+
+export type ChatSessionKind = 'main' | 'card' | 'other';
+
+export function classifyChatSessionKind(sessionKey: string | null | undefined): ChatSessionKind {
+  if (!sessionKey) return 'other';
+  if (sessionKey.startsWith(CARD_CHAT_PREFIX)) return 'card';
+  if (isTrackableChatSessionKey(sessionKey)) return 'main';
+  return 'other';
+}
+
+/**
+ * Extract the card id from a card-chat session key (e.g.
+ * `agent:main:proactive-ai:chat:card:run_manual_xyz` -> `run_manual_xyz`).
+ * Returns null for non-card keys.
+ */
+export function extractCardIdFromSessionKey(sessionKey: string | null | undefined): string | null {
+  if (!sessionKey || !sessionKey.startsWith(CARD_CHAT_PREFIX)) return null;
+  const tail = sessionKey.slice(CARD_CHAT_PREFIX.length);
+  return tail || null;
 }
 
 // ── Dependencies (for test injection) ──
@@ -89,7 +125,7 @@ export async function runCrystallize(
       addMemory: deps?.addMemory ?? db.addMemory,
       addUserSkill: deps?.addUserSkill ?? db.addUserSkill,
       logFeedback: deps?.logFeedback ?? db.logFeedback,
-      collectTurns: deps?.collectTurns ?? collectRecentMainChatTurns,
+      collectTurns: deps?.collectTurns ?? collectRecentChatTurns,
       runEvaluator: deps?.runEvaluator ?? runCrystallizeSubagent,
     };
 
@@ -159,7 +195,7 @@ async function runCrystallizeInner(
   }
 
   if (turns.length === 0) {
-    return { skipped: true, reason: 'no main-chat turns collected' };
+    return { skipped: true, reason: 'no chat turns collected' };
   }
 
   const totalUserChars = turns.reduce((sum, t) => sum + t.userText.length, 0);
@@ -276,8 +312,21 @@ interface NormalizedSynthesis {
   topics: string[];
   decision: CrystallizeDecision;
   reason: string;
-  memory?: { kind: string; text: string; tags: string[] };
+  memory?: { kind: CrystallizeMemoryKind; text: string; tags: string[] };
   skill?: { title: string; triggers: string[]; bodyMarkdown: string };
+}
+
+/**
+ * Coerce the evaluator's `memory.kind` into one of the known enum values.
+ * Unknown / missing values fall back to `conversation_crystal` (legacy).
+ */
+function coerceMemoryKind(raw: unknown): CrystallizeMemoryKind {
+  const trimmed = asTrimmedString(raw);
+  if (!trimmed) return CONVERSATION_CRYSTAL_MEMORY_KIND as CrystallizeMemoryKind;
+  if ((CRYSTALLIZE_MEMORY_KINDS as readonly string[]).includes(trimmed)) {
+    return trimmed as CrystallizeMemoryKind;
+  }
+  return CONVERSATION_CRYSTAL_MEMORY_KIND as CrystallizeMemoryKind;
 }
 
 export function normalizeSynthesis(
@@ -307,7 +356,7 @@ export function normalizeSynthesis(
       decision = 'discard';
     } else {
       memory = {
-        kind: asTrimmedString(raw?.memory?.kind) ?? CONVERSATION_CRYSTAL_MEMORY_KIND,
+        kind: coerceMemoryKind(raw?.memory?.kind),
         text,
         tags: asStringArray(raw?.memory?.tags).slice(0, 12),
       };
@@ -338,15 +387,15 @@ export function normalizeSynthesis(
 
 // ── Collection: pull recent main-chat turns from subagent session store ──
 
-export async function collectRecentMainChatTurns(
+export async function collectRecentChatTurns(
   api: OpenClawPluginApi,
   cfg: CrystallizeConfig,
 ): Promise<CrystallizeTurn[]> {
   const state = await db.getCrystallizeState();
   const sessionKey = state.last_session_key;
-  if (!sessionKey || !isMainChatSessionKey(sessionKey)) return [];
+  if (!sessionKey || !isTrackableChatSessionKey(sessionKey)) return [];
 
-  // For M1 we only sample from the most recent main-chat session.
+  // For M1 we only sample from the most recent tracked session (main or card).
   // listing sessions across the whole runtime requires API we don't have here,
   // so cross-session aggregation relies on the turn_count counter and falls
   // back to the latest session's tail for transcript content.

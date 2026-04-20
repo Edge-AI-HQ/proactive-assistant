@@ -17,7 +17,7 @@ import type { RouteHandler, RouteContext } from './types.js';
 import { json, readBody, extractTextContent } from './types.js';
 import { buildChatPrompt, type ChatCardContext } from '../agents/chat.js';
 import { normalizeCardChatMessages } from '../chat-feedback/service.js';
-import { isMainChatSessionKey } from '../conversation-crystallize/service.js';
+import { isTrackableChatSessionKey } from '../conversation-crystallize/service.js';
 import { loadActiveSkillsSection } from '../conversation-crystallize/skill-injection.js';
 import * as db from '../db.js';
 
@@ -110,15 +110,18 @@ function truncate(value: string, max: number): string {
 }
 
 /**
- * Load the learned-skills prompt section. Only injected into main-chat
- * sessions — card chat already has its own tightly-scoped card context.
+ * Load the learned-skills prompt section. Injected into any trackable chat
+ * session (MainChat + card chat) so learned preferences bias both channels.
  * Failures never block the chat flow.
  */
 async function loadLearnedSkillsSectionSafe(
   ctx: RouteContext,
   sessionKey: string | undefined,
 ): Promise<string | undefined> {
-  if (!isMainChatSessionKey(sessionKey)) return undefined;
+  // Inject learned skills for any trackable chat session — both MainChat and
+  // card chat benefit from previously-learned preferences ("user prefers
+  // morning time slots", etc.). Non-chat / internal sessions are skipped.
+  if (!isTrackableChatSessionKey(sessionKey)) return undefined;
   try {
     const section = await loadActiveSkillsSection();
     return section || undefined;
@@ -131,9 +134,11 @@ async function loadLearnedSkillsSectionSafe(
 }
 
 /**
- * Non-blocking hook: increment the cross-session main-chat turn counter when
- * the user sends a real message. Card-chat sessions and card-opener injections
- * are excluded — those flows are handled by chat-feedback.
+ * Non-blocking hook: increment the cross-session chat turn counter when the
+ * user sends a real message in any trackable chat session (MainChat or card
+ * chat). Card-opener auto-injections are excluded (they aren't user turns).
+ * Card chats also feed chat-feedback via the pre_generate hook — the two
+ * pipelines serve orthogonal purposes (long-term learning vs per-card bias).
  */
 function bumpCrystallizeTurnSafe(
   ctx: RouteContext,
@@ -144,7 +149,7 @@ function bumpCrystallizeTurnSafe(
   if (!sessionKey) return;
   if (opts?.cardOpener) return;
   if (!message || !message.trim()) return;
-  if (!isMainChatSessionKey(sessionKey)) return;
+  if (!isTrackableChatSessionKey(sessionKey)) return;
   db.bumpCrystallizeTurn(sessionKey).catch((err) => {
     ctx.api.logger.warn(
       `[crystallize] bumpTurn failed: ${err instanceof Error ? err.message : err}`,

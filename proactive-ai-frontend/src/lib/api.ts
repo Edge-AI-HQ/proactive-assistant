@@ -448,6 +448,8 @@ export type TunableCrystallizeKey =
 
 export type TunableCrystallizeConfig = Partial<Record<TunableCrystallizeKey, number>>;
 
+export type ChatSessionKind = "main" | "card" | "other";
+
 export interface CrystallizeStateResponse {
   ok: boolean;
   state: {
@@ -474,6 +476,11 @@ export interface CrystallizeStateResponse {
     skillId: string | null;
     turnCount: number | null;
   }>;
+  diagnostics: {
+    lastSessionKey: string | null;
+    lastSessionKind: ChatSessionKind | null;
+    secondsSinceLastBump: number | null;
+  };
 }
 
 export interface CrystallizeRunResponse {

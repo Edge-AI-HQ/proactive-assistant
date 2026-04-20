@@ -10,7 +10,11 @@
 import type { RouteHandler } from './types.js';
 import { json, readBody } from './types.js';
 import * as db from '../db.js';
-import { runCrystallize } from '../conversation-crystallize/service.js';
+import {
+  classifyChatSessionKind,
+  runCrystallize,
+  type ChatSessionKind,
+} from '../conversation-crystallize/service.js';
 import {
   CONVERSATION_CRYSTAL_ANALYSIS_TYPE,
   DEFAULT_CRYSTALLIZE_CONFIG,
@@ -142,6 +146,12 @@ async function buildStatePayload(args: BuildPayloadArgs) {
       };
     });
 
+  const lastSessionKey = state.last_session_key ?? null;
+  const lastSessionKind: ChatSessionKind | null = lastSessionKey
+    ? classifyChatSessionKind(lastSessionKey)
+    : null;
+  const secondsSinceLastBump = computeSecondsSince(state.last_message_at);
+
   return {
     ok: true,
     state: {
@@ -165,7 +175,21 @@ async function buildStatePayload(args: BuildPayloadArgs) {
       total: allSkills.length,
     },
     recentDecisions: decisions,
+    diagnostics: {
+      lastSessionKey,
+      lastSessionKind,
+      secondsSinceLastBump,
+    },
   };
+}
+
+function computeSecondsSince(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const parsed = Date.parse(iso);
+  if (!Number.isFinite(parsed)) return null;
+  const diff = Date.now() - parsed;
+  if (diff < 0) return 0;
+  return Math.floor(diff / 1000);
 }
 
 function pickTunable(raw: Record<string, number | undefined>): TunableCrystallizeConfig {

@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  isMainChatSessionKey,
+  classifyChatSessionKind,
+  extractCardIdFromSessionKey,
+  isTrackableChatSessionKey,
   normalizeSynthesis,
   pairUserAssistantMessages,
   runCrystallize,
@@ -42,21 +44,46 @@ function makeApi(logger = makeLogger()) {
   } as never;
 }
 
-// ── isMainChatSessionKey ──
+// ── isTrackableChatSessionKey ──
 
-test('isMainChatSessionKey accepts main chat session keys', () => {
-  assert.equal(isMainChatSessionKey('agent:main:proactive-ai:chat:abc'), true);
-  assert.equal(isMainChatSessionKey('agent:main:proactive-ai:chat-test:abc'), true);
-  assert.equal(isMainChatSessionKey('agent:main:proactive-ai:chat-stream:xyz'), true);
+test('isTrackableChatSessionKey accepts main chat + card chat session keys', () => {
+  assert.equal(isTrackableChatSessionKey('agent:main:proactive-ai:chat:abc'), true);
+  assert.equal(isTrackableChatSessionKey('agent:main:proactive-ai:chat-test:abc'), true);
+  assert.equal(isTrackableChatSessionKey('agent:main:proactive-ai:chat-stream:xyz'), true);
+  // Card chat must now be tracked (previously excluded).
+  assert.equal(isTrackableChatSessionKey('agent:main:proactive-ai:chat:card:card_1'), true);
 });
 
-test('isMainChatSessionKey rejects card-chat, other prefixes and empty values', () => {
-  assert.equal(isMainChatSessionKey('agent:main:proactive-ai:chat:card:card_1'), false);
-  assert.equal(isMainChatSessionKey('agent:main:proactive-ai:chat-feedback:abc'), false);
-  assert.equal(isMainChatSessionKey('agent:main:proactive-ai:crystallize:abc'), false);
-  assert.equal(isMainChatSessionKey(''), false);
-  assert.equal(isMainChatSessionKey(null), false);
-  assert.equal(isMainChatSessionKey(undefined), false);
+test('isTrackableChatSessionKey rejects internal analysis sessions and empty values', () => {
+  assert.equal(isTrackableChatSessionKey('agent:main:proactive-ai:chat-feedback:abc'), false);
+  assert.equal(isTrackableChatSessionKey('agent:main:proactive-ai:crystallize:abc'), false);
+  assert.equal(isTrackableChatSessionKey(''), false);
+  assert.equal(isTrackableChatSessionKey(null), false);
+  assert.equal(isTrackableChatSessionKey(undefined), false);
+});
+
+// ── classifyChatSessionKind ──
+
+test('classifyChatSessionKind distinguishes main / card / other', () => {
+  assert.equal(classifyChatSessionKind('agent:main:proactive-ai:chat:abc'), 'main');
+  assert.equal(classifyChatSessionKind('agent:main:proactive-ai:chat-stream:xyz'), 'main');
+  assert.equal(classifyChatSessionKind('agent:main:proactive-ai:chat-test:xyz'), 'main');
+  assert.equal(classifyChatSessionKind('agent:main:proactive-ai:chat:card:run_manual_mo6u'), 'card');
+  assert.equal(classifyChatSessionKind('agent:main:proactive-ai:chat-feedback:abc'), 'other');
+  assert.equal(classifyChatSessionKind(''), 'other');
+  assert.equal(classifyChatSessionKind(null), 'other');
+});
+
+// ── extractCardIdFromSessionKey ──
+
+test('extractCardIdFromSessionKey returns the card id or null', () => {
+  assert.equal(
+    extractCardIdFromSessionKey('agent:main:proactive-ai:chat:card:run_manual_mo6u'),
+    'run_manual_mo6u',
+  );
+  assert.equal(extractCardIdFromSessionKey('agent:main:proactive-ai:chat:abc'), null);
+  assert.equal(extractCardIdFromSessionKey('agent:main:proactive-ai:chat:card:'), null);
+  assert.equal(extractCardIdFromSessionKey(null), null);
 });
 
 // ── pairUserAssistantMessages ──

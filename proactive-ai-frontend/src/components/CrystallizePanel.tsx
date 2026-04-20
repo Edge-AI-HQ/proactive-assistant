@@ -21,6 +21,15 @@ const DECISION_STYLES: Record<string, string> = {
   discard: "bg-foreground/5 text-foreground/50 border-foreground/10",
 };
 
+function formatSeconds(sec: number): string {
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  if (hr < 48) return `${hr}h`;
+  return `${Math.floor(hr / 24)}d`;
+}
+
 function relativeTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   const parsed = Date.parse(iso);
@@ -119,6 +128,35 @@ export default function CrystallizePanel({ enabled }: CrystallizePanelProps) {
           </label>
         </div>
       </div>
+
+      {/* Diagnostics — last session kind */}
+      {state?.diagnostics?.lastSessionKind && (
+        <div className="mb-2 flex items-center gap-1.5 text-[10px] text-foreground/40">
+          <span>Last session</span>
+          <span
+            className={cn(
+              "rounded-md border px-1.5 py-0.5 font-medium uppercase tracking-wide text-[9px]",
+              state.diagnostics.lastSessionKind === "card" &&
+                "bg-blue-50 text-blue-700 border-blue-200",
+              state.diagnostics.lastSessionKind === "main" &&
+                "bg-emerald-50 text-emerald-700 border-emerald-200",
+              state.diagnostics.lastSessionKind === "other" &&
+                "bg-foreground/5 text-foreground/50 border-foreground/10",
+            )}
+          >
+            {state.diagnostics.lastSessionKind === "card"
+              ? "card chat"
+              : state.diagnostics.lastSessionKind === "main"
+                ? "main chat"
+                : "other"}
+          </span>
+          {state.diagnostics.secondsSinceLastBump !== null && (
+            <span className="tabular-nums text-foreground/30">
+              · {formatSeconds(state.diagnostics.secondsSinceLastBump)} ago
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Progress */}
       <div>
