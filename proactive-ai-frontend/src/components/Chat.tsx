@@ -18,6 +18,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useProactiveChatRuntime } from "./chat/useProactiveChatRuntime";
+import ToolStepCard from "./chat/ToolStepCard";
 import { proxyFetch, proxyPost } from "@/lib/api";
 import BrowserPanel from "./browser-view/BrowserPanel";
 
@@ -74,6 +75,7 @@ function AssistantMessage() {
         <MessagePrimitive.Content
           components={{
             Text: MarkdownText,
+            tools: { Fallback: ToolStepCard },
           }}
         />
         <ActionBarPrimitive.Root
