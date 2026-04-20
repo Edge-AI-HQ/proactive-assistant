@@ -31,6 +31,12 @@ export interface ChatPromptParams {
   /** Fallback when frontend sends an unstructured string. */
   rawCardContext?: string;
   outputLanguage?: SupportedGenerationLanguage;
+  /**
+   * Pre-formatted markdown section describing active learned skills.
+   * Produced by `conversation-crystallize/skill-injection.ts`. Omitted when
+   * empty.
+   */
+  learnedSkillsSection?: string;
 }
 
 export interface ChatPromptResult {
@@ -44,7 +50,12 @@ export interface ChatPromptResult {
 /* ------------------------------------------------------------------ */
 
 export function buildChatPrompt(params: ChatPromptParams): ChatPromptResult {
-  const { card, rawCardContext, outputLanguage = DEFAULT_GENERATION_LANGUAGE } = params;
+  const {
+    card,
+    rawCardContext,
+    outputLanguage = DEFAULT_GENERATION_LANGUAGE,
+    learnedSkillsSection,
+  } = params;
 
   // ── system prompt ──
   const sections: string[] = [
@@ -60,6 +71,10 @@ export function buildChatPrompt(params: ChatPromptParams): ChatPromptResult {
     : rawCardContext;
   if (cardBlock) {
     sections.push(`<card_context>\n${cardBlock}\n</card_context>`);
+  }
+
+  if (learnedSkillsSection && learnedSkillsSection.trim().length > 0) {
+    sections.push(learnedSkillsSection.trim());
   }
 
   // interaction style — static; pin CLI reference lives in loaded skill docs

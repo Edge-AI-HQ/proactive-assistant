@@ -13,6 +13,7 @@ import { normalizeGenerationLanguage } from '../agents/generation-language.js';
 import { resolveDreamingTimezone, isDreamingDue } from '../dreaming/schedule.js';
 import { startDreaming, listDreamRuns } from '../dreaming/service.js';
 import { syncCardChatFeedback } from '../chat-feedback/service.js';
+import { runCrystallize } from '../conversation-crystallize/service.js';
 
 export interface AutoLoopConfig {
   auto_poll_enabled: boolean;
@@ -48,6 +49,7 @@ interface AutoLoopState {
   loopInFlight: boolean;
   dreamInFlight: boolean;
   chatFeedbackInFlight: boolean;
+  crystallizeInFlight: boolean;
   lastLoopFinishedAt: string | null;
   lastLoopStatus: string | null;
 }
@@ -60,6 +62,7 @@ const state: AutoLoopState = {
   loopInFlight: false,
   dreamInFlight: false,
   chatFeedbackInFlight: false,
+  crystallizeInFlight: false,
   lastLoopFinishedAt: null,
   lastLoopStatus: null,
 };
@@ -205,6 +208,34 @@ interface AutoLoopChatFeedbackDeps {
   syncCardChatFeedback?: typeof syncCardChatFeedback;
 }
 
+// ── Auto-crystallize (main-chat conversation distillation) ──
+
+async function runAutoCrystallize(api: OpenClawPluginApi): Promise<void> {
+  if (state.crystallizeInFlight) return;
+
+  state.crystallizeInFlight = true;
+  try {
+    const userSettings = await db.getUserSettings();
+    if (!userSettings.auto_crystallize) {
+      return;
+    }
+
+    const result = await runCrystallize(api);
+    if (!result.skipped) {
+      api.logger.info(
+        `[auto-crystallize] decision=${result.decision} salience=${(result.salience ?? 0).toFixed(2)}` +
+        (result.memoryId ? ` memory=${result.memoryId}` : '') +
+        (result.skillId ? ` skill=${result.skillId}` : ''),
+      );
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    api.logger.error(`[auto-crystallize] failed: ${msg}`);
+  } finally {
+    state.crystallizeInFlight = false;
+  }
+}
+
 export async function runAutoCardChatFeedback(
   api: OpenClawPluginApi,
   pipelineState: PipelineState,
@@ -255,6 +286,7 @@ export function startAutoLoop(
     void runDetectAndLoop(api, config, pipelineState);
     void runAutoCardChatFeedback(api, pipelineState);
     void runAutoDreaming(api);
+    void runAutoCrystallize(api);
   }, config.auto_detect_interval_ms);
 
   api.logger.info(
@@ -276,6 +308,7 @@ export function stopAutoLoop(): void {
   state.loopInFlight = false;
   state.dreamInFlight = false;
   state.chatFeedbackInFlight = false;
+  state.crystallizeInFlight = false;
   state.lastLoopFinishedAt = null;
   state.lastLoopStatus = null;
 }

@@ -277,12 +277,36 @@ function ensureSchema(db: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_intent_thread_state_updated ON intent_thread_state(updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_intent_thread_state_goal_basket ON intent_thread_state(goal_basket);
+
+    CREATE TABLE IF NOT EXISTS chat_crystallize_state (
+      id TEXT PRIMARY KEY DEFAULT 'default',
+      turn_count INTEGER NOT NULL DEFAULT 0,
+      last_crystallized_at TEXT,
+      last_session_key TEXT,
+      last_message_at TEXT,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS user_skills (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      body_md TEXT NOT NULL,
+      triggers_json TEXT NOT NULL DEFAULT '[]',
+      source TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      source_summary TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_skills_status ON user_skills(status);
+    CREATE INDEX IF NOT EXISTS idx_user_skills_updated ON user_skills(updated_at DESC);
   `);
 
   ensureColumn(db, 'feedback_events', 'conversation_id', 'TEXT');
   ensureColumn(db, 'feedback_events', 'message_id', 'TEXT');
   ensureColumn(db, 'feedback_events', 'channel', 'TEXT');
   ensureColumn(db, 'feedback_events', 'intent_key', 'TEXT');
+  ensureColumn(db, 'user_settings', 'auto_crystallize', 'INTEGER NOT NULL DEFAULT 1');
 }
 
 function ensureColumn(
@@ -1518,6 +1542,7 @@ export interface UserSettingsRow {
   generation_language: string;
   auto_generate: boolean;
   auto_dreaming: boolean;
+  auto_crystallize: boolean;
   metadata: Record<string, unknown>;
   updated_at: string;
 }
@@ -1526,18 +1551,23 @@ export async function getUserSettings(): Promise<UserSettingsRow> {
   const db = getDb();
   db.prepare("INSERT OR IGNORE INTO user_settings (id, updated_at) VALUES (1, ?)").run(now());
   const row = db.prepare('SELECT * FROM user_settings WHERE id = 1').get() as any;
+  const autoCrystallizeRaw = row.auto_crystallize;
   return {
     user_id: USER_ID,
     generation_language: row.generation_language,
     auto_generate: Boolean(row.auto_generate),
     auto_dreaming: Boolean(row.auto_dreaming),
+    auto_crystallize: autoCrystallizeRaw === undefined || autoCrystallizeRaw === null
+      ? true
+      : Boolean(autoCrystallizeRaw),
     metadata: parseJson(row.metadata),
     updated_at: row.updated_at,
   };
 }
 
 export async function updateUserSettings(
-  fields: Partial<Pick<UserSettingsRow, 'generation_language' | 'auto_generate' | 'auto_dreaming' | 'metadata'>>,
+  fields: Partial<Pick<UserSettingsRow,
+    'generation_language' | 'auto_generate' | 'auto_dreaming' | 'auto_crystallize' | 'metadata'>>,
 ): Promise<void> {
   const db = getDb();
   const sets: string[] = [];
@@ -1545,12 +1575,222 @@ export async function updateUserSettings(
   if (fields.generation_language !== undefined) { sets.push('generation_language = ?'); vals.push(fields.generation_language); }
   if (fields.auto_generate !== undefined) { sets.push('auto_generate = ?'); vals.push(fields.auto_generate ? 1 : 0); }
   if (fields.auto_dreaming !== undefined) { sets.push('auto_dreaming = ?'); vals.push(fields.auto_dreaming ? 1 : 0); }
+  if (fields.auto_crystallize !== undefined) { sets.push('auto_crystallize = ?'); vals.push(fields.auto_crystallize ? 1 : 0); }
   if (fields.metadata !== undefined) { sets.push('metadata = ?'); vals.push(JSON.stringify(fields.metadata)); }
   if (sets.length === 0) return;
   sets.push('updated_at = ?'); vals.push(now());
   // Ensure row exists
   db.prepare("INSERT OR IGNORE INTO user_settings (id, updated_at) VALUES (1, ?)").run(now());
   db.prepare(`UPDATE user_settings SET ${sets.join(', ')} WHERE id = 1`).run(...vals);
+}
+
+// ── Chat Crystallize State ──
+
+export interface ChatCrystallizeStateRow {
+  turn_count: number;
+  last_crystallized_at: string | null;
+  last_session_key: string | null;
+  last_message_at: string | null;
+  updated_at: string;
+}
+
+function ensureCrystallizeStateRow(db: Database.Database): void {
+  db.prepare(
+    "INSERT OR IGNORE INTO chat_crystallize_state (id, turn_count, updated_at) VALUES ('default', 0, ?)",
+  ).run(now());
+}
+
+export async function getCrystallizeState(): Promise<ChatCrystallizeStateRow> {
+  const db = getDb();
+  ensureCrystallizeStateRow(db);
+  const row = db.prepare("SELECT * FROM chat_crystallize_state WHERE id = 'default'").get() as any;
+  return {
+    turn_count: Number(row.turn_count ?? 0),
+    last_crystallized_at: row.last_crystallized_at ?? null,
+    last_session_key: row.last_session_key ?? null,
+    last_message_at: row.last_message_at ?? null,
+    updated_at: row.updated_at,
+  };
+}
+
+export async function bumpCrystallizeTurn(sessionKey: string): Promise<ChatCrystallizeStateRow> {
+  const db = getDb();
+  const ts = now();
+  ensureCrystallizeStateRow(db);
+  db.prepare(`
+    UPDATE chat_crystallize_state
+    SET turn_count = turn_count + 1,
+        last_session_key = ?,
+        last_message_at = ?,
+        updated_at = ?
+    WHERE id = 'default'
+  `).run(sessionKey, ts, ts);
+  return getCrystallizeState();
+}
+
+export async function markCrystallized(): Promise<void> {
+  const db = getDb();
+  const ts = now();
+  ensureCrystallizeStateRow(db);
+  db.prepare(`
+    UPDATE chat_crystallize_state
+    SET turn_count = 0,
+        last_crystallized_at = ?,
+        updated_at = ?
+    WHERE id = 'default'
+  `).run(ts, ts);
+}
+
+/**
+ * Tunable crystallize config overrides — persisted in user_settings.metadata
+ * under the `crystallize` key so we don't add a new column. Only contains
+ * keys the user is allowed to tune (see TUNABLE_CRYSTALLIZE_KEYS in the
+ * conversation-crystallize/types module).
+ */
+export async function getCrystallizeOverride(): Promise<Record<string, number>> {
+  const settings = await getUserSettings();
+  const raw = settings.metadata?.crystallize;
+  if (!raw || typeof raw !== 'object') return {};
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof v === 'number' && Number.isFinite(v)) out[k] = v;
+  }
+  return out;
+}
+
+export async function setCrystallizeOverride(
+  patch: Record<string, number | null>,
+): Promise<Record<string, number>> {
+  const settings = await getUserSettings();
+  const metadata = { ...(settings.metadata ?? {}) };
+  const existing = (metadata.crystallize && typeof metadata.crystallize === 'object'
+    ? (metadata.crystallize as Record<string, unknown>)
+    : {}) as Record<string, number>;
+  const next: Record<string, number> = { ...existing };
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === null) {
+      delete next[k];
+    } else if (typeof v === 'number' && Number.isFinite(v)) {
+      next[k] = v;
+    }
+  }
+  metadata.crystallize = next;
+  await updateUserSettings({ metadata });
+  return next;
+}
+
+// ── User Skills ──
+
+export interface UserSkillRow {
+  id: string;
+  title: string;
+  body_md: string;
+  triggers: string[];
+  source: string;
+  status: 'active' | 'disabled';
+  source_summary: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function rowToUserSkill(row: any): UserSkillRow {
+  const status = row.status === 'disabled' ? 'disabled' : 'active';
+  return {
+    id: row.id,
+    title: row.title,
+    body_md: row.body_md,
+    triggers: parseJsonArray<string>(row.triggers_json),
+    source: row.source,
+    status,
+    source_summary: row.source_summary ?? null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+export async function listUserSkills(opts?: {
+  status?: 'active' | 'disabled';
+  limit?: number;
+}): Promise<UserSkillRow[]> {
+  const db = getDb();
+  const limit = opts?.limit ?? 200;
+  const rows = opts?.status
+    ? db.prepare('SELECT * FROM user_skills WHERE status = ? ORDER BY updated_at DESC LIMIT ?')
+        .all(opts.status, limit) as any[]
+    : db.prepare('SELECT * FROM user_skills ORDER BY updated_at DESC LIMIT ?')
+        .all(limit) as any[];
+  return rows.map(rowToUserSkill);
+}
+
+export async function getUserSkill(id: string): Promise<UserSkillRow | null> {
+  const row = getDb().prepare('SELECT * FROM user_skills WHERE id = ?').get(id) as any;
+  return row ? rowToUserSkill(row) : null;
+}
+
+export async function addUserSkill(input: {
+  title: string;
+  body_md: string;
+  triggers?: string[];
+  source: string;
+  status?: 'active' | 'disabled';
+  source_summary?: string | null;
+}): Promise<UserSkillRow> {
+  const db = getDb();
+  const id = genId();
+  const ts = now();
+  const status = input.status ?? 'active';
+  db.prepare(`
+    INSERT INTO user_skills
+      (id, title, body_md, triggers_json, source, status, source_summary, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    input.title,
+    input.body_md,
+    JSON.stringify(input.triggers ?? []),
+    input.source,
+    status,
+    input.source_summary ?? null,
+    ts,
+    ts,
+  );
+  return {
+    id,
+    title: input.title,
+    body_md: input.body_md,
+    triggers: input.triggers ?? [],
+    source: input.source,
+    status,
+    source_summary: input.source_summary ?? null,
+    created_at: ts,
+    updated_at: ts,
+  };
+}
+
+export async function updateUserSkill(
+  id: string,
+  patch: Partial<Pick<UserSkillRow, 'title' | 'body_md' | 'triggers' | 'status' | 'source_summary'>>,
+): Promise<UserSkillRow | null> {
+  const db = getDb();
+  const existing = await getUserSkill(id);
+  if (!existing) return null;
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  if (patch.title !== undefined) { sets.push('title = ?'); vals.push(patch.title); }
+  if (patch.body_md !== undefined) { sets.push('body_md = ?'); vals.push(patch.body_md); }
+  if (patch.triggers !== undefined) { sets.push('triggers_json = ?'); vals.push(JSON.stringify(patch.triggers)); }
+  if (patch.status !== undefined) { sets.push('status = ?'); vals.push(patch.status); }
+  if (patch.source_summary !== undefined) { sets.push('source_summary = ?'); vals.push(patch.source_summary); }
+  if (sets.length === 0) return existing;
+  sets.push('updated_at = ?'); vals.push(now());
+  vals.push(id);
+  db.prepare(`UPDATE user_skills SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+  return getUserSkill(id);
+}
+
+export async function deleteUserSkill(id: string): Promise<boolean> {
+  const info = getDb().prepare('DELETE FROM user_skills WHERE id = ?').run(id);
+  return info.changes > 0;
 }
 
 // ── Auto-Loop State ──

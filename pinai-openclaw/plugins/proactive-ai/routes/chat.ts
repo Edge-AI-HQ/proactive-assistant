@@ -17,6 +17,9 @@ import type { RouteHandler, RouteContext } from './types.js';
 import { json, readBody, extractTextContent } from './types.js';
 import { buildChatPrompt, type ChatCardContext } from '../agents/chat.js';
 import { normalizeCardChatMessages } from '../chat-feedback/service.js';
+import { isTrackableChatSessionKey } from '../conversation-crystallize/service.js';
+import { loadActiveSkillsSection } from '../conversation-crystallize/skill-injection.js';
+import * as db from '../db.js';
 
 /**
  * Try to parse a cardContext string as structured JSON.
@@ -106,6 +109,54 @@ function truncate(value: string, max: number): string {
   return `${value.slice(0, max - 1)}…`;
 }
 
+/**
+ * Load the learned-skills prompt section. Injected into any trackable chat
+ * session (MainChat + card chat) so learned preferences bias both channels.
+ * Failures never block the chat flow.
+ */
+async function loadLearnedSkillsSectionSafe(
+  ctx: RouteContext,
+  sessionKey: string | undefined,
+): Promise<string | undefined> {
+  // Inject learned skills for any trackable chat session — both MainChat and
+  // card chat benefit from previously-learned preferences ("user prefers
+  // morning time slots", etc.). Non-chat / internal sessions are skipped.
+  if (!isTrackableChatSessionKey(sessionKey)) return undefined;
+  try {
+    const section = await loadActiveSkillsSection();
+    return section || undefined;
+  } catch (err) {
+    ctx.api.logger.warn(
+      `[chat] loadActiveSkillsSection failed: ${err instanceof Error ? err.message : err}`,
+    );
+    return undefined;
+  }
+}
+
+/**
+ * Non-blocking hook: increment the cross-session chat turn counter when the
+ * user sends a real message in any trackable chat session (MainChat or card
+ * chat). Card-opener auto-injections are excluded (they aren't user turns).
+ * Card chats also feed chat-feedback via the pre_generate hook — the two
+ * pipelines serve orthogonal purposes (long-term learning vs per-card bias).
+ */
+function bumpCrystallizeTurnSafe(
+  ctx: RouteContext,
+  sessionKey: string | undefined,
+  message: string,
+  opts?: { cardOpener?: boolean },
+): void {
+  if (!sessionKey) return;
+  if (opts?.cardOpener) return;
+  if (!message || !message.trim()) return;
+  if (!isTrackableChatSessionKey(sessionKey)) return;
+  db.bumpCrystallizeTurn(sessionKey).catch((err) => {
+    ctx.api.logger.warn(
+      `[crystallize] bumpTurn failed: ${err instanceof Error ? err.message : err}`,
+    );
+  });
+}
+
 export function handleChat(): RouteHandler {
   return async (ctx) => {
     // ── GET /chat/history or /chat-stream/history ──
@@ -135,9 +186,11 @@ export function handleChat(): RouteHandler {
       const sessionKey = body.sessionKey;
       const rawCardCtx = typeof body.cardContext === 'string' && body.cardContext.trim() ? body.cardContext.trim() : undefined;
       const card = tryParseCardContext(rawCardCtx);
+      const learnedSkillsSection = await loadLearnedSkillsSectionSafe(ctx, sessionKey);
       const { systemPrompt, firstMessage } = buildChatPrompt({
         card,
         rawCardContext: card ? undefined : rawCardCtx,
+        learnedSkillsSection,
       });
       const message = resolveIncomingChatMessage({
         message: body.message,
@@ -148,6 +201,10 @@ export function handleChat(): RouteHandler {
         json(ctx.res, 400, { error: 'Missing sessionKey; provide message or cardContext' });
         return true;
       }
+
+      bumpCrystallizeTurnSafe(ctx, sessionKey, body.message ?? '', {
+        cardOpener: Boolean(card || rawCardCtx),
+      });
 
       // Return SSE stream directly — standard AI chat pattern
       ctx.res.writeHead(200, {
@@ -289,15 +346,21 @@ export function handleChat(): RouteHandler {
       const sessionKey = body.sessionKey ?? `agent:main:proactive-ai:chat:${Date.now().toString(36)}`;
       const rawCtx = typeof body.cardContext === 'string' && body.cardContext.trim() ? body.cardContext.trim() : undefined;
       const card = tryParseCardContext(rawCtx);
+      const learnedSkillsSection = await loadLearnedSkillsSectionSafe(ctx, sessionKey);
       const { systemPrompt, firstMessage } = buildChatPrompt({
         card,
         rawCardContext: card ? undefined : rawCtx,
+        learnedSkillsSection,
       });
       const agentMessage = resolveIncomingChatMessage({
         message: body.message,
         firstMessage,
       });
       if (!agentMessage) { json(ctx.res, 400, { error: 'Missing message' }); return true; }
+
+      bumpCrystallizeTurnSafe(ctx, sessionKey, body.message ?? '', {
+        cardOpener: Boolean(card || rawCtx),
+      });
 
       try {
         const { runId } = await ctx.api.runtime.subagent.run({

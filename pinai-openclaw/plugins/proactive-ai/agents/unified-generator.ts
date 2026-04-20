@@ -12,6 +12,12 @@ export interface UnifiedGeneratorPromptParams {
   recentFeedbackSummary?: string;
   recentGeneratedCardsSummary?: string;
   outputLanguage?: SupportedGenerationLanguage;
+  /**
+   * Pre-formatted markdown section describing active learned skills.
+   * Produced by `conversation-crystallize/skill-injection.ts`. Omitted when
+   * empty.
+   */
+  learnedSkillsSection?: string;
 }
 
 export function buildUnifiedGeneratorPrompt(params: UnifiedGeneratorPromptParams): string {
@@ -21,6 +27,7 @@ export function buildUnifiedGeneratorPrompt(params: UnifiedGeneratorPromptParams
     recentFeedbackSummary,
     recentGeneratedCardsSummary,
     outputLanguage = DEFAULT_GENERATION_LANGUAGE,
+    learnedSkillsSection,
   } = params;
 
   const feedbackSection = recentFeedbackSummary?.trim() ? `
@@ -37,6 +44,10 @@ ${recentFeedbackSummary}
 <recent_generated_cards>
 ${recentGeneratedCardsSummary}
 </recent_generated_cards>
+` : '';
+
+  const learnedSkillsBlock = learnedSkillsSection?.trim() ? `
+${learnedSkillsSection.trim()}
 ` : '';
 
   return `You are the Proactive AI card generator. Your job: gather the user's current context, generate high-quality Intent Cards, and critically self-review them — all in one pass.
@@ -144,7 +155,7 @@ Critically evaluate EVERY card you generated. Score each on 5 dimensions (0.0-10
 Be strict — do not inflate scores. If a card scores below 5.0, drop it from the final output.
 If you see a fixable issue during review, fix the card inline before scoring rather than leaving it broken.
 </phase_4_self_review>
-${feedbackSection}${recentGeneratedCardsSection}
+${feedbackSection}${recentGeneratedCardsSection}${learnedSkillsBlock}
 <output_format>
 After completing all 4 phases, output ONLY a JSON code block with this structure:
 

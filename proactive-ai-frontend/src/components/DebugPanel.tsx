@@ -15,6 +15,7 @@ import { supabase } from "@/lib/supabase";
 import { isNative, API_BASE } from "@/lib/platform";
 import { useModelSelection } from "@/hooks/useModelSelection";
 import MainChat from "./MainChat";
+import CrystallizePanel from "./CrystallizePanel";
 import type { HealthState, RunState, PipelinePhase } from "@/hooks/usePipeline";
 
 interface DebugPanelProps {
@@ -411,6 +412,9 @@ export default function DebugPanel({ health, run, isRunning, iterations, onItera
                     </AnimatePresence>
                   </div>
                 </div>
+
+                {/* Conversation Crystallize */}
+                <CrystallizePanel enabled={open && health.ok} />
 
                 {/* Iteration Summaries */}
                 {run.totalIterations > 0 && (
