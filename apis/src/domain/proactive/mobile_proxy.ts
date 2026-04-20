@@ -3,6 +3,7 @@ import http from 'node:http';
 import type { IncomingHttpHeaders } from 'node:http';
 import type { ProactiveContainerOrchestrator } from './container_orchestrator.js';
 import { getDefaultMobileSyncContainer } from './user_service.js';
+import type { MobileSyncTarget } from './user_service.js';
 import { config } from '../common/config.js';
 
 export function isMobileProxyEnabled(): boolean {
@@ -39,9 +40,23 @@ export function buildMobileProxyHeaders(
   return proxyHeaders;
 }
 
+export async function refreshMobileProxyContainer(
+  orchestrator: ProactiveContainerOrchestrator,
+  container: MobileSyncTarget | null,
+): Promise<MobileSyncTarget | null> {
+  if (!container?.user_key) return container;
+  const reconciled = await orchestrator.reconcileContainer(container.user_key);
+  if (!reconciled) return container;
+  return {
+    ...reconciled,
+    user_key: container.user_key,
+  };
+}
+
 export function createMobileProxy(orchestrator: ProactiveContainerOrchestrator) {
   return async function mobileProxyHandler(req: Request, res: Response): Promise<void> {
     let container = await getDefaultMobileSyncContainer();
+    container = await refreshMobileProxyContainer(orchestrator, container);
     if (!container) {
       res.status(503).json({
         error: 'No mobile sync target container is available',
@@ -60,7 +75,14 @@ export function createMobileProxy(orchestrator: ProactiveContainerOrchestrator) 
       }
       const resumed = await getDefaultMobileSyncContainer();
       if (resumed) {
-        container = resumed;
+        container = await refreshMobileProxyContainer(orchestrator, resumed);
+      }
+      if (!container) {
+        res.status(503).json({
+          error: 'No mobile sync target container is available',
+          code: 'NO_MOBILE_TARGET',
+        });
+        return;
       }
       if (container.status !== 'running') {
         res.status(503).json({

@@ -303,23 +303,34 @@ export class ProactiveContainerOrchestrator {
         return null;
       }
 
-      if (
-        container.status !== nextStatus
-        || String((container.metadata as Record<string, unknown> | undefined)?.['hostPort'] ?? '') !== String(ref.metadata.hostPort ?? '')
-      ) {
+      const nextHostPortRaw = ref.metadata?.hostPort;
+      const nextHostPort = typeof nextHostPortRaw === 'string'
+        ? Number(nextHostPortRaw)
+        : typeof nextHostPortRaw === 'number'
+          ? nextHostPortRaw
+          : undefined;
+      const currentMetadata = JSON.stringify(container.metadata ?? {});
+      const nextMetadata = JSON.stringify(ref.metadata ?? {});
+      const statusChanged = container.status !== nextStatus;
+      const runtimeRefChanged = container.runtime_ref !== ref.id;
+      const metadataChanged = currentMetadata !== nextMetadata;
+      const hostPortChanged = nextHostPort !== undefined && Number.isFinite(nextHostPort) && nextHostPort > 0 && container.host_port !== nextHostPort;
+      if (statusChanged || runtimeRefChanged || metadataChanged || hostPortChanged) {
         await updateContainerStatus(container.owner_user_id, {
           status: nextStatus,
           runtime_ref: ref.id,
           metadata: ref.metadata as Record<string, unknown>,
+          ...(hostPortChanged ? { host_port: nextHostPort } : {}),
         });
-        return {
+        const refreshed = await getContainerForUser(supabaseUserId);
+        return refreshed ?? {
           ...container,
           status: nextStatus,
           runtime_ref: ref.id,
           metadata: ref.metadata as Record<string, unknown>,
+          ...(hostPortChanged ? { host_port: nextHostPort } : {}),
         };
       }
-
       return container;
     }
 

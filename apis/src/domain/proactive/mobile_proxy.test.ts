@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildMobileProxyHeaders, isMobileProxyEnabled, rewriteMobileProxyPath } from "./mobile_proxy.js";
+import { buildMobileProxyHeaders, isMobileProxyEnabled, refreshMobileProxyContainer, rewriteMobileProxyPath } from "./mobile_proxy.js";
 
 test("rewriteMobileProxyPath rewrites /api/mobile prefix to plugin mobile route", () => {
   assert.equal(
@@ -67,4 +67,39 @@ test("isMobileProxyEnabled is disabled in production unless explicitly overridde
       process.env.MOBILE_SYNC_PROXY_ENABLED = previousOverride;
     }
   }
+});
+
+test("refreshMobileProxyContainer prefers reconciled container data when available", async () => {
+  const container = {
+    id: 1,
+    owner_user_id: 1,
+    scope: "user" as const,
+    runtime_provider: "docker" as const,
+    container_name: "proactive-285d35b0",
+    runtime_ref: "old-ref",
+    host_port: 55004,
+    status: "running" as const,
+    metadata: { hostPort: "55004" },
+    created_at: "2026-04-18T00:00:00.000Z",
+    updated_at: "2026-04-18T00:00:00.000Z",
+    last_active_at: null,
+    gateway_token: "gateway-token",
+    user_key: "285d35b0-e031-4cfd-97b3-0e21064d0d0e",
+  };
+  const refreshed = await refreshMobileProxyContainer(
+    {
+      reconcileContainer: async () => ({
+        ...container,
+        runtime_ref: "new-ref",
+        host_port: 55005,
+        metadata: { hostPort: "55005" },
+      }),
+    } as any,
+    container,
+  );
+
+  assert.equal(refreshed?.runtime_ref, "new-ref");
+  assert.equal(refreshed?.host_port, 55005);
+  assert.deepEqual(refreshed?.metadata, { hostPort: "55005" });
+  assert.equal(refreshed?.user_key, container.user_key);
 });
