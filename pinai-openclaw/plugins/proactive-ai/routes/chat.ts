@@ -41,6 +41,71 @@ export function resolveIncomingChatMessage(params: {
   return userMessage || params.firstMessage || '';
 }
 
+/**
+ * Compact single-line preview of tool args for display in the client.
+ * Picks well-known detail keys first; falls back to JSON-ish summary.
+ * Hard-capped to keep SSE frames small.
+ */
+const TOOL_ARG_PREVIEW_MAX = 200;
+const TOOL_ARG_PREVIEW_KEYS = [
+  'command', 'cmd',
+  'query', 'q',
+  'path', 'file_path',
+  'url', 'targetUrl',
+  'name', 'tool',
+  'sessionKey', 'agentId',
+  'input',
+] as const;
+
+export function previewToolArgs(args: unknown): string | undefined {
+  if (!args || typeof args !== 'object') return undefined;
+  const record = args as Record<string, unknown>;
+  const parts: string[] = [];
+  for (const key of TOOL_ARG_PREVIEW_KEYS) {
+    const raw = record[key];
+    if (raw === undefined || raw === null) continue;
+    const value = typeof raw === 'string' ? raw : safeStringify(raw);
+    if (!value) continue;
+    parts.push(`${key}=${value}`);
+    if (parts.join(' · ').length >= TOOL_ARG_PREVIEW_MAX) break;
+  }
+  const preview = parts.join(' · ').trim();
+  if (!preview) return undefined;
+  return truncate(preview, TOOL_ARG_PREVIEW_MAX);
+}
+
+/**
+ * Detect invocations of the `pin` CLI (shelled out via the `exec` tool)
+ * and return the subcommand portion so the UI can badge it as "PIN CLI".
+ */
+export function detectPinCommand(
+  toolName: string,
+  args: unknown,
+): string | undefined {
+  if (toolName !== 'exec') return undefined;
+  if (!args || typeof args !== 'object') return undefined;
+  const command = (args as Record<string, unknown>).command;
+  if (typeof command !== 'string') return undefined;
+  const trimmed = command.trim();
+  const match = trimmed.match(/(?:^|[\s;&|])pin\s+([^\n]+)/);
+  if (!match) return undefined;
+  return truncate(match[1].trim(), TOOL_ARG_PREVIEW_MAX);
+}
+
+function safeStringify(value: unknown): string {
+  try {
+    const s = JSON.stringify(value);
+    return typeof s === 'string' ? s : '';
+  } catch {
+    return '';
+  }
+}
+
+function truncate(value: string, max: number): string {
+  if (value.length <= max) return value;
+  return `${value.slice(0, max - 1)}…`;
+}
+
 export function handleChat(): RouteHandler {
   return async (ctx) => {
     // ── GET /chat/history or /chat-stream/history ──
@@ -107,17 +172,74 @@ export function handleChat(): RouteHandler {
           deliver: false,
         });
 
-        // Stream assistant deltas as they arrive via the agent event bus.
-        // The listener fires on every LLM token; we forward only assistant
-        // deltas for this specific run, then clean up once the run ends.
+        // Stream assistant deltas and tool lifecycle events via the agent
+        // event bus. Assistant deltas become chat:delta frames; tool events
+        // become chat:tool:{start|update|result} frames so the client can
+        // render "Agent is running Exec (pin personal ...)" style status
+        // strips inline with the reply.
         let streamed = false;
+        let toolEventsSeen = 0;
         const unsubscribe = ctx.api.runtime.events.onAgentEvent((evt) => {
           if (evt.runId !== runId) return;
-          if (evt.stream !== 'assistant') return;
-          const delta = evt.data.delta as string | undefined;
-          if (!delta) return;
-          streamed = true;
-          write({ type: 'chat:delta', delta, timestamp: Date.now() });
+
+          if (evt.stream === 'assistant') {
+            const delta = evt.data.delta as string | undefined;
+            if (!delta) return;
+            streamed = true;
+            write({ type: 'chat:delta', delta, timestamp: Date.now() });
+            return;
+          }
+
+          if (evt.stream === 'tool') {
+            toolEventsSeen += 1;
+            const phase = evt.data.phase as 'start' | 'update' | 'result' | undefined;
+            const toolCallId = evt.data.toolCallId as string | undefined;
+            const name = evt.data.name as string | undefined;
+            if (!phase || !toolCallId || !name) return;
+
+            if (phase === 'start') {
+              const args = evt.data.args;
+              const argsPreview = previewToolArgs(args);
+              const pinCommand = detectPinCommand(name, args);
+              ctx.api.logger.info(
+                `[chat-stream] tool-start name=${name} toolCallId=${toolCallId}` +
+                (pinCommand ? ` pin=${pinCommand}` : '') +
+                (argsPreview ? ` args=${argsPreview}` : ''),
+              );
+              write({
+                type: 'chat:tool:start',
+                toolCallId,
+                name,
+                meta: typeof evt.data.meta === 'string' ? evt.data.meta : undefined,
+                argsPreview,
+                pinCommand,
+                timestamp: Date.now(),
+              });
+              return;
+            }
+
+            if (phase === 'update') {
+              write({ type: 'chat:tool:update', toolCallId, name, timestamp: Date.now() });
+              return;
+            }
+
+            if (phase === 'result') {
+              const isError = Boolean(evt.data.isError);
+              ctx.api.logger.info(
+                `[chat-stream] tool-result name=${name} toolCallId=${toolCallId} ` +
+                `status=${isError ? 'error' : 'ok'}`,
+              );
+              write({
+                type: 'chat:tool:result',
+                toolCallId,
+                name,
+                isError,
+                meta: typeof evt.data.meta === 'string' ? evt.data.meta : undefined,
+                timestamp: Date.now(),
+              });
+              return;
+            }
+          }
         });
 
         // Clean up the listener when the client disconnects early.
@@ -131,6 +253,11 @@ export function handleChat(): RouteHandler {
             return true;
           }
         } finally {
+          if (toolEventsSeen > 0) {
+            ctx.api.logger.info(
+              `[chat-stream] run-complete runId=${runId} toolEvents=${toolEventsSeen} streamedText=${streamed}`,
+            );
+          }
           unsubscribe();
         }
 

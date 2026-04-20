@@ -3,10 +3,18 @@
  *
  * POST /chat-stream/send returns an SSE stream:
  *   data: { type: "chat:thinking", ... }
+ *   data: { type: "chat:delta", delta: "...", ... }
  *   data: { type: "chat:reply", content: "...", ... }
+ *   data: { type: "chat:tool:start",  toolCallId, name, meta?, argsPreview?, pinCommand?, ... }
+ *   data: { type: "chat:tool:update", toolCallId, name, ... }
+ *   data: { type: "chat:tool:result", toolCallId, name, isError, meta?, ... }
  *   data: { type: "chat:error", error: "...", ... }
+ *   data: { type: "chat:done", ... }
  *
  * The adapter yields accumulated content snapshots as required by assistant-ui.
+ * Tool events are surfaced as `tool-call` content parts so the UI can render
+ * the agent's current tool usage (e.g. exec / browser / pin CLI invocations)
+ * inline with the streaming reply.
  */
 import {
   useEffect,
@@ -25,6 +33,12 @@ import {
   buildChatRequestBody,
   shouldBootstrapCardChat,
 } from "./card-chat-session";
+import {
+  buildContentSnapshot,
+  type ProactiveToolStep,
+} from "./tool-steps";
+
+export type { ProactiveToolCallArgs } from "./tool-steps";
 
 interface UseProactiveChatRuntimeOptions {
   sessionKey: string;
@@ -149,6 +163,10 @@ function createAdapter({
       const decoder = new TextDecoder();
       let buffer = "";
       let accumulatedText = "";
+      const toolSteps: ProactiveToolStep[] = [];
+      const toolStepIndex = new Map<string, number>();
+
+      const snapshot = () => buildContentSnapshot(toolSteps, accumulatedText);
 
       while (true) {
         const { done, value } = await reader.read();
@@ -165,22 +183,44 @@ function createAdapter({
             const type = data.type as string;
 
             if (type === "chat:delta") {
-              // Streaming token delta — append and yield snapshot
-              accumulatedText += data.delta as string;
-              yield {
-                content: [{ type: "text" as const, text: accumulatedText }],
-              };
+              accumulatedText += (data.delta as string) ?? "";
+              yield { content: snapshot() };
             } else if (type === "chat:reply") {
-              // Non-streaming fallback — full reply in one shot
-              accumulatedText = data.content as string;
-              yield {
-                content: [{ type: "text" as const, text: accumulatedText }],
-              };
+              accumulatedText = (data.content as string) ?? "";
+              yield { content: snapshot() };
+            } else if (type === "chat:tool:start") {
+              const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : "";
+              const name = typeof data.name === "string" ? data.name : "";
+              if (!toolCallId || !name) continue;
+              if (!toolStepIndex.has(toolCallId)) {
+                toolStepIndex.set(toolCallId, toolSteps.length);
+                toolSteps.push({
+                  toolCallId,
+                  toolName: name,
+                  meta: typeof data.meta === "string" ? data.meta : undefined,
+                  argsPreview: typeof data.argsPreview === "string" ? data.argsPreview : undefined,
+                  pinCommand: typeof data.pinCommand === "string" ? data.pinCommand : undefined,
+                  status: "running",
+                });
+                yield { content: snapshot() };
+              }
+            } else if (type === "chat:tool:result") {
+              const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : "";
+              const idx = toolCallId ? toolStepIndex.get(toolCallId) : undefined;
+              if (idx === undefined) continue;
+              const step = toolSteps[idx];
+              step.status = data.isError ? "error" : "ok";
+              if (typeof data.meta === "string" && !step.meta) {
+                step.meta = data.meta;
+              }
+              yield { content: snapshot() };
+            } else if (type === "chat:tool:update") {
+              // Keep "running" state; no-op snapshot avoids unnecessary churn.
+              continue;
             } else if (type === "chat:error") {
               throw new Error(data.error as string);
             }
-            // chat:thinking and chat:done are handled implicitly
-            // (thinking = no yield yet, done = stream ends naturally)
+            // chat:thinking and chat:done are handled implicitly.
           } catch (e) {
             if (e instanceof SyntaxError) continue;
             throw e;
@@ -188,11 +228,9 @@ function createAdapter({
         }
       }
 
-      // Ensure we yield at least once if we got content
-      if (accumulatedText) {
-        yield {
-          content: [{ type: "text" as const, text: accumulatedText }],
-        };
+      // Ensure we yield at least once if we got content (text or tool steps).
+      if (accumulatedText || toolSteps.length > 0) {
+        yield { content: snapshot() };
       }
 
       if (includeCardContext) {
