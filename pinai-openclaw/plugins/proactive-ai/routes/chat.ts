@@ -18,6 +18,7 @@ import { json, readBody, extractTextContent } from './types.js';
 import { buildChatPrompt, type ChatCardContext } from '../agents/chat.js';
 import { normalizeCardChatMessages } from '../chat-feedback/service.js';
 import { isMainChatSessionKey } from '../conversation-crystallize/service.js';
+import { loadActiveSkillsSection } from '../conversation-crystallize/skill-injection.js';
 import * as db from '../db.js';
 
 /**
@@ -109,6 +110,27 @@ function truncate(value: string, max: number): string {
 }
 
 /**
+ * Load the learned-skills prompt section. Only injected into main-chat
+ * sessions — card chat already has its own tightly-scoped card context.
+ * Failures never block the chat flow.
+ */
+async function loadLearnedSkillsSectionSafe(
+  ctx: RouteContext,
+  sessionKey: string | undefined,
+): Promise<string | undefined> {
+  if (!isMainChatSessionKey(sessionKey)) return undefined;
+  try {
+    const section = await loadActiveSkillsSection();
+    return section || undefined;
+  } catch (err) {
+    ctx.api.logger.warn(
+      `[chat] loadActiveSkillsSection failed: ${err instanceof Error ? err.message : err}`,
+    );
+    return undefined;
+  }
+}
+
+/**
  * Non-blocking hook: increment the cross-session main-chat turn counter when
  * the user sends a real message. Card-chat sessions and card-opener injections
  * are excluded — those flows are handled by chat-feedback.
@@ -159,9 +181,11 @@ export function handleChat(): RouteHandler {
       const sessionKey = body.sessionKey;
       const rawCardCtx = typeof body.cardContext === 'string' && body.cardContext.trim() ? body.cardContext.trim() : undefined;
       const card = tryParseCardContext(rawCardCtx);
+      const learnedSkillsSection = await loadLearnedSkillsSectionSafe(ctx, sessionKey);
       const { systemPrompt, firstMessage } = buildChatPrompt({
         card,
         rawCardContext: card ? undefined : rawCardCtx,
+        learnedSkillsSection,
       });
       const message = resolveIncomingChatMessage({
         message: body.message,
@@ -317,9 +341,11 @@ export function handleChat(): RouteHandler {
       const sessionKey = body.sessionKey ?? `agent:main:proactive-ai:chat:${Date.now().toString(36)}`;
       const rawCtx = typeof body.cardContext === 'string' && body.cardContext.trim() ? body.cardContext.trim() : undefined;
       const card = tryParseCardContext(rawCtx);
+      const learnedSkillsSection = await loadLearnedSkillsSectionSafe(ctx, sessionKey);
       const { systemPrompt, firstMessage } = buildChatPrompt({
         card,
         rawCardContext: card ? undefined : rawCtx,
+        learnedSkillsSection,
       });
       const agentMessage = resolveIncomingChatMessage({
         message: body.message,

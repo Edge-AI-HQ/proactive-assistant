@@ -8,6 +8,7 @@ import { runAgent, parseAgentJsonOrThrow } from './agent-runner.js';
 import { selectBestCards, type ScoredCard } from './card-selection.js';
 import { loadRecentFeedbackSummary, formatRecentFeedbackSummary } from './feedback-summary.js';
 import { loadRecentGeneratedCardsSummary } from './generated-cards-summary.js';
+import { loadActiveSkillsSection } from '../conversation-crystallize/skill-injection.js';
 import * as db from '../db.js';
 
 export interface PipelineOptions {
@@ -39,6 +40,7 @@ export async function runPipeline(
   // Load feedback and history summaries
   let feedbackSummary = '';
   let recentGeneratedCardsSummary = '';
+  let learnedSkillsSection = '';
   try {
     feedbackSummary = formatRecentFeedbackSummary(await loadRecentFeedbackSummary());
   } catch (err) {
@@ -48,6 +50,11 @@ export async function runPipeline(
     recentGeneratedCardsSummary = await loadRecentGeneratedCardsSummary({ limit: 10, since: '14d' });
   } catch (err) {
     api.logger.warn(`Failed to load recent generated cards summary: ${err instanceof Error ? err.message : err}`);
+  }
+  try {
+    learnedSkillsSection = await loadActiveSkillsSection();
+  } catch (err) {
+    api.logger.warn(`Failed to load learned skills section: ${err instanceof Error ? err.message : err}`);
   }
 
   emit({ type: 'pipeline:start', data: { maxIterations: opts.maxIterations } });
@@ -70,6 +77,7 @@ export async function runPipeline(
       recentFeedbackSummary: feedbackSummary,
       recentGeneratedCardsSummary,
       outputLanguage,
+      learnedSkillsSection,
     });
 
     // Single agent call
