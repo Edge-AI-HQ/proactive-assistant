@@ -92,7 +92,7 @@ export default function CrystallizePanel({ enabled }: CrystallizePanelProps) {
       <div className="flex items-center justify-between mb-2.5">
         <div className="flex items-center gap-2">
           <Sparkles size={14} strokeWidth={1.5} className="text-foreground/40" />
-          <span className="text-xs font-medium text-foreground/50">Crystallize</span>
+          <span className="text-xs font-medium text-foreground/50">Chat Learning</span>
           {loading && !state && (
             <Loader2 size={11} className="animate-spin text-foreground/30" strokeWidth={1.5} />
           )}
@@ -142,7 +142,7 @@ export default function CrystallizePanel({ enabled }: CrystallizePanelProps) {
         <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] text-foreground/40 mt-2">
           <span>Last bumped</span>
           <span className="tabular-nums text-right">{relativeTime(state?.state.last_message_at)}</span>
-          <span>Last crystallized</span>
+          <span>Last learned</span>
           <span className="tabular-nums text-right">{relativeTime(state?.state.last_crystallized_at)}</span>
         </div>
       </div>
