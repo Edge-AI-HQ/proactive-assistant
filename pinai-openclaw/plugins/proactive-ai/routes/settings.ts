@@ -35,6 +35,7 @@ export function handleSettings(deps?: SettingsRouteDeps): RouteHandler {
         generation_language: generationLanguage,
         auto_generate: body['auto_generate'] as boolean | undefined,
         auto_dreaming: body['auto_dreaming'] as boolean | undefined,
+        auto_crystallize: body['auto_crystallize'] as boolean | undefined,
         metadata: body['metadata'] as Record<string, unknown> | undefined,
       });
       json(ctx.res, 200, { ok: true });
@@ -86,6 +87,16 @@ export function handleSettings(deps?: SettingsRouteDeps): RouteHandler {
         if (typeof body['enabled'] !== 'boolean') { json(ctx.res, 400, { ok: false, error: 'enabled must be a boolean' }); return true; }
         await updateUserSettings({ auto_dreaming: body['enabled'] as boolean });
         json(ctx.res, 200, { ok: true, enabled: body['enabled'], schedule: null });
+        return true;
+      }
+    }
+    if (ctx.subpath === '/settings/auto-crystallize') {
+      if (ctx.req.method === 'GET') { json(ctx.res, 200, { ok: true, enabled: (await getUserSettings()).auto_crystallize }); return true; }
+      if (ctx.req.method === 'POST') {
+        const body = await readBody(ctx.req);
+        if (typeof body['enabled'] !== 'boolean') { json(ctx.res, 400, { ok: false, error: 'enabled must be a boolean' }); return true; }
+        await updateUserSettings({ auto_crystallize: body['enabled'] as boolean });
+        json(ctx.res, 200, { ok: true, enabled: body['enabled'] });
         return true;
       }
     }
