@@ -78,3 +78,27 @@ export const DEFAULT_CRYSTALLIZE_CONFIG: CrystallizeConfig = {
 
 export const CONVERSATION_CRYSTAL_ANALYSIS_TYPE = 'conversation_crystal';
 export const CONVERSATION_CRYSTAL_MEMORY_KIND = 'conversation_crystal';
+
+/**
+ * Subset of CrystallizeConfig that is safe to expose to the debug panel.
+ * The remaining fields (size caps + timeout) are prompt-safety boundaries
+ * and intentionally not user-tunable.
+ */
+export const TUNABLE_CRYSTALLIZE_KEYS = [
+  'messageThreshold',
+  'cooldownMs',
+  'salienceFloor',
+  'minUserChars',
+] as const;
+
+export type TunableCrystallizeKey = typeof TUNABLE_CRYSTALLIZE_KEYS[number];
+
+export type TunableCrystallizeConfig = Partial<Pick<CrystallizeConfig, TunableCrystallizeKey>>;
+
+/** Hard bounds enforced by both backend route and frontend input controls. */
+export const TUNABLE_BOUNDS: Record<TunableCrystallizeKey, { min: number; max: number; integer: boolean }> = {
+  messageThreshold: { min: 1, max: 100, integer: true },
+  cooldownMs: { min: 0, max: 24 * 60 * 60 * 1000, integer: true },
+  salienceFloor: { min: 0, max: 1, integer: false },
+  minUserChars: { min: 0, max: 10_000, integer: true },
+};

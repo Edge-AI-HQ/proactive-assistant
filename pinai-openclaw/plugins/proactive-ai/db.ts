@@ -1641,6 +1641,44 @@ export async function markCrystallized(): Promise<void> {
   `).run(ts, ts);
 }
 
+/**
+ * Tunable crystallize config overrides — persisted in user_settings.metadata
+ * under the `crystallize` key so we don't add a new column. Only contains
+ * keys the user is allowed to tune (see TUNABLE_CRYSTALLIZE_KEYS in the
+ * conversation-crystallize/types module).
+ */
+export async function getCrystallizeOverride(): Promise<Record<string, number>> {
+  const settings = await getUserSettings();
+  const raw = settings.metadata?.crystallize;
+  if (!raw || typeof raw !== 'object') return {};
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof v === 'number' && Number.isFinite(v)) out[k] = v;
+  }
+  return out;
+}
+
+export async function setCrystallizeOverride(
+  patch: Record<string, number | null>,
+): Promise<Record<string, number>> {
+  const settings = await getUserSettings();
+  const metadata = { ...(settings.metadata ?? {}) };
+  const existing = (metadata.crystallize && typeof metadata.crystallize === 'object'
+    ? (metadata.crystallize as Record<string, unknown>)
+    : {}) as Record<string, number>;
+  const next: Record<string, number> = { ...existing };
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === null) {
+      delete next[k];
+    } else if (typeof v === 'number' && Number.isFinite(v)) {
+      next[k] = v;
+    }
+  }
+  metadata.crystallize = next;
+  await updateUserSettings({ metadata });
+  return next;
+}
+
 // ── User Skills ──
 
 export interface UserSkillRow {

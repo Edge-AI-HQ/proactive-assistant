@@ -18,6 +18,7 @@ import { handleDreaming } from './dreaming.js';
 import { handleBrowser } from './browser.js';
 import { handleMobile } from './mobile.js';
 import { handleSkills } from './skills.js';
+import { handleCrystallize } from './crystallize.js';
 
 export interface PipelineState {
   running: boolean;
@@ -50,6 +51,7 @@ export function createApiHandler(api: OpenClawPluginApi, state: PipelineState, c
     handleBrowser(),
     handleMobile(),
     handleSkills(),
+    handleCrystallize(),
   ];
 
   return async (req: unknown, res: unknown) => {

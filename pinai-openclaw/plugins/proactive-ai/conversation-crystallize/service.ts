@@ -17,11 +17,13 @@ import {
   CONVERSATION_CRYSTAL_ANALYSIS_TYPE,
   CONVERSATION_CRYSTAL_MEMORY_KIND,
   DEFAULT_CRYSTALLIZE_CONFIG,
+  TUNABLE_CRYSTALLIZE_KEYS,
   type CrystallizeConfig,
   type CrystallizeDecision,
   type CrystallizeRunResult,
   type CrystallizeSynthesis,
   type CrystallizeTurn,
+  type TunableCrystallizeConfig,
 } from './types.js';
 
 // ── Session key conventions (mirror chat-feedback/service.ts) ──
@@ -51,28 +53,84 @@ export interface RunCrystallizeDeps {
   addMemory?: typeof db.addMemory;
   addUserSkill?: typeof db.addUserSkill;
   logFeedback?: typeof db.logFeedback;
+  getCrystallizeOverride?: typeof db.getCrystallizeOverride;
   collectTurns?: (api: OpenClawPluginApi, cfg: CrystallizeConfig) => Promise<CrystallizeTurn[]>;
   runEvaluator?: (api: OpenClawPluginApi, turns: CrystallizeTurn[], cfg: CrystallizeConfig) => Promise<CrystallizeSynthesis>;
 }
 
 // ── Main entry point ──
 
+/**
+ * Module-level mutex shared between auto-loop and force-run.
+ * Force-run from the debug panel must not race with the 1-min tick.
+ */
+let _inFlight: Promise<CrystallizeRunResult> | null = null;
+
 export async function runCrystallize(
   api: OpenClawPluginApi,
   opts?: { configOverride?: Partial<CrystallizeConfig>; force?: boolean },
   deps?: RunCrystallizeDeps,
 ): Promise<CrystallizeRunResult> {
-  const cfg: CrystallizeConfig = { ...DEFAULT_CRYSTALLIZE_CONFIG, ...(opts?.configOverride ?? {}) };
-  const d: Required<RunCrystallizeDeps> = {
-    getCrystallizeState: deps?.getCrystallizeState ?? db.getCrystallizeState,
-    markCrystallized: deps?.markCrystallized ?? db.markCrystallized,
-    addMemory: deps?.addMemory ?? db.addMemory,
-    addUserSkill: deps?.addUserSkill ?? db.addUserSkill,
-    logFeedback: deps?.logFeedback ?? db.logFeedback,
-    collectTurns: deps?.collectTurns ?? collectRecentMainChatTurns,
-    runEvaluator: deps?.runEvaluator ?? runCrystallizeSubagent,
-  };
+  if (_inFlight) {
+    return { skipped: true, reason: 'busy: another crystallize run in flight' };
+  }
 
+  const work = (async (): Promise<CrystallizeRunResult> => {
+    const persisted = await safeGetOverride(deps?.getCrystallizeOverride);
+    const filteredPersisted = pickTunable(persisted);
+    const cfg: CrystallizeConfig = {
+      ...DEFAULT_CRYSTALLIZE_CONFIG,
+      ...filteredPersisted,
+      ...(opts?.configOverride ?? {}),
+    };
+    const d: Required<Omit<RunCrystallizeDeps, 'getCrystallizeOverride'>> = {
+      getCrystallizeState: deps?.getCrystallizeState ?? db.getCrystallizeState,
+      markCrystallized: deps?.markCrystallized ?? db.markCrystallized,
+      addMemory: deps?.addMemory ?? db.addMemory,
+      addUserSkill: deps?.addUserSkill ?? db.addUserSkill,
+      logFeedback: deps?.logFeedback ?? db.logFeedback,
+      collectTurns: deps?.collectTurns ?? collectRecentMainChatTurns,
+      runEvaluator: deps?.runEvaluator ?? runCrystallizeSubagent,
+    };
+
+    return runCrystallizeInner(api, opts ?? {}, cfg, d);
+  })();
+
+  _inFlight = work;
+  try {
+    return await work;
+  } finally {
+    _inFlight = null;
+  }
+}
+
+async function safeGetOverride(
+  loader?: typeof db.getCrystallizeOverride,
+): Promise<Record<string, number>> {
+  const fn = loader ?? db.getCrystallizeOverride;
+  try {
+    return await fn();
+  } catch {
+    return {};
+  }
+}
+
+function pickTunable(raw: Record<string, number>): TunableCrystallizeConfig {
+  const out: TunableCrystallizeConfig = {};
+  for (const key of TUNABLE_CRYSTALLIZE_KEYS) {
+    if (typeof raw[key] === 'number' && Number.isFinite(raw[key])) {
+      (out as Record<string, number>)[key] = raw[key];
+    }
+  }
+  return out;
+}
+
+async function runCrystallizeInner(
+  api: OpenClawPluginApi,
+  opts: { configOverride?: Partial<CrystallizeConfig>; force?: boolean },
+  cfg: CrystallizeConfig,
+  d: Required<Omit<RunCrystallizeDeps, 'getCrystallizeOverride'>>,
+): Promise<CrystallizeRunResult> {
   const state = await d.getCrystallizeState();
 
   if (!opts?.force) {
