@@ -155,6 +155,7 @@ interface MobileItemRecord {
   summary: string;
   deviceId: string;
   dedupeKey: string | null;
+  payload?: Record<string, unknown>;
 }
 
 function seedMobileDb(
@@ -170,6 +171,7 @@ function seedMobileDb(
     occurredAt?: string;
     availableAt?: string;
     expiresAt?: string | null;
+    payload?: Record<string, unknown>;
   }>,
 ): void {
   const db = new Database(filename);
@@ -205,9 +207,10 @@ function seedMobileDb(
     INSERT INTO mobile_items (
       id, user_id, device_id, item_type, title, summary, payload_json, salience, confidence, dedupe_key,
       status, occurred_at, available_at, expires_at, processed_at, created_at
-    ) VALUES (?, 'local', ?, ?, ?, ?, '{}', 0.6, 0.7, ?, ?, ?, ?, ?, NULL, ?)
+    ) VALUES (?, 'local', ?, ?, ?, ?, ?, 0.6, 0.7, ?, ?, ?, ?, ?, NULL, ?)
   `);
   const createdAt = new Date("2026-04-16T11:00:00.000Z").toISOString();
+  const defaultExpiresAt = new Date("2099-01-01T00:00:00.000Z").toISOString();
   for (const item of items) {
     const occurredAt = item.occurredAt ?? new Date("2026-04-16T10:00:00.000Z").toISOString();
     insert.run(
@@ -216,11 +219,12 @@ function seedMobileDb(
       item.itemType,
       item.title,
       item.summary,
+      JSON.stringify(item.payload ?? {}),
       item.dedupeKey ?? null,
       item.status ?? "pending",
       occurredAt,
       item.availableAt ?? occurredAt,
-      item.expiresAt ?? new Date("2026-04-17T10:00:00.000Z").toISOString(),
+      item.expiresAt ?? defaultExpiresAt,
       createdAt,
     );
   }
@@ -356,6 +360,65 @@ test("personal mobile items list auto-detects local proactive data directory", a
     assert.equal(stdout.data?.items[0]?.id, "item_auto");
   } finally {
     process.chdir(previousCwd);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("personal mobile items list supports latest-first ordering and returns enriched payload", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pin-mobile-order-"));
+  const dbPath = join(root, "mobile_items.db");
+  try {
+    seedMobileDb(dbPath, [
+      {
+        id: "contact-old",
+        itemType: "contact_directory_snapshot",
+        title: "Contacts snapshot",
+        summary: "Older snapshot",
+        dedupeKey: "contact:old",
+        occurredAt: "2026-04-16T08:00:00.000Z",
+        payload: {
+          contactsCount: 10,
+          contacts: [{ contactId: "old-1", displayName: "Old Contact" }],
+        },
+      },
+      {
+        id: "contact-new",
+        itemType: "contact_directory_snapshot",
+        title: "Contacts snapshot",
+        summary: "Newest snapshot",
+        dedupeKey: "contact:new",
+        occurredAt: "2026-04-17T08:00:00.000Z",
+        payload: {
+          contactsCount: 11,
+          contacts: [{ contactId: "new-1", displayName: "New Contact" }],
+        },
+      },
+    ]);
+
+    const result = await runCli(
+      [
+        "personal",
+        "mobile",
+        "items",
+        "list",
+        "--type",
+        "contact_directory_snapshot",
+        "--order",
+        "desc",
+        "--limit",
+        "1",
+        "--json",
+      ],
+      { env: { PIN_MOBILE_DB_PATH: dbPath }, homeDir: "/Users/test" },
+    );
+    const stdout = result.stdout as PinEnvelope<{ items: MobileItemRecord[] }>;
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(stdout.ok, true);
+    assert.equal(stdout.data?.items.length, 1);
+    assert.equal(stdout.data?.items[0]?.id, "contact-new");
+    assert.deepEqual(stdout.data?.items[0]?.payload?.contacts, [{ contactId: "new-1", displayName: "New Contact" }]);
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });

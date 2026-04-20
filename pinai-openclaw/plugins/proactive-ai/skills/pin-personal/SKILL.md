@@ -1,7 +1,7 @@
 ---
 name: pin-personal
 version: 0.3.0
-description: "个人数据访问：读取用户的第三方应用数据，以及端侧上报的 mobile 高价值 items（attention_item / moment / session_summary）。"
+description: "个人数据访问：读取用户的第三方应用数据，以及端侧上报的 mobile 高价值 items 和最新 snapshot（attention_item / moment / session_summary / contact_directory_snapshot / app_inventory_snapshot）。"
 metadata:
   requires:
     bins: ["pin"]
@@ -80,7 +80,7 @@ pin personal connect --toolkit notion --json
 pin personal wait --toolkit notion --json
 ```
 
-### 6. 读取端侧 mobile 高价值 items
+### 6. 读取端侧 mobile 高价值 items 与最新 snapshot
 
 这些数据不是 Composio 第三方连接，而是手机端已经预处理后上报到个人后端的第一方上下文。适合卡片生成、卡片 follow-up、以及“用户现在在干嘛”的快速判断。
 
@@ -95,12 +95,20 @@ pin personal mobile items list --status pending --type moment --since 6h --limit
 
 # 按设备过滤
 pin personal mobile items list --status pending --device-id device-xxx --limit 20 --json
+
+# 查最新联系人 snapshot（关系/组织/群组/身份线索）
+pin personal mobile items list --type contact_directory_snapshot --order desc --limit 1 --json
+
+# 查最新安装应用 snapshot（工作栈/金融应用/设备软件上下文）
+pin personal mobile items list --type app_inventory_snapshot --order desc --limit 1 --json
 ```
 
 结果里重点关注：
 - `attention_item`：需要处理的提醒、通知、通信、日历变化
 - `session_summary`：语音转录或端侧模型整理过的阶段摘要
 - `moment`：高层状态变化，不是原始传感器流
+- `contact_directory_snapshot`：最新联系人快照，含姓名、组织、title、群组、脱敏身份线索
+- `app_inventory_snapshot`：最新安装应用快照，含 package、label、版本、安装/更新时间
 
 ### 7. 消费 mobile items（高级）
 
@@ -128,7 +136,7 @@ pin personal mobile items commit --run-token run_xxx --json
 | `pin personal tools search --query <q> [--toolkit <name>]` | 搜索可用工具 | read |
 | `pin personal tools schema --name <TOOL_SLUG>` | 获取工具参数 | read |
 | `pin personal exec --tool <TOOL_SLUG> [--input '<json>']` | 执行工具 | write |
-| `pin personal mobile items list [--status <s>] [--type <t>] [--since <d>] [--device-id <id>]` | 查看端侧高价值 items | read |
+| `pin personal mobile items list [--status <s>] [--type <t>] [--since <d>] [--device-id <id>] [--order asc|desc]` | 查看端侧高价值 items 与最新 snapshot | read |
 | `pin personal mobile items claim [--type <t>] [--limit <n>]` | 领取一批端侧 items | write |
 | `pin personal mobile items commit --run-token <token>` | 提交已处理 items | write |
 
@@ -158,8 +166,10 @@ pin personal mobile items commit --run-token run_xxx --json
 
 ```
 1. personal mobile items list    → 看最近端侧高价值上下文
-2. 仅在需要消费队列时使用 claim
-3. 完成处理后再 commit
+2. 若要关系/组织/家人/同事线索，查最新 `contact_directory_snapshot`
+3. 若要工作栈/安装应用/设备软件线索，查最新 `app_inventory_snapshot`
+4. 仅在需要消费队列时使用 claim
+5. 完成处理后再 commit
 ```
 
 卡片生成、用户当前状态判断、卡片 follow-up，通常从 `list` 开始就够了。
@@ -169,4 +179,4 @@ pin personal mobile items commit --run-token run_xxx --json
 - API key 通过环境变量或本地配置文件传递，不硬编码
 - MCP 调用直接从用户机器到 Composio，产品方无法访问用户数据
 - 所有工具执行结果不含原始 OAuth token
-- mobile items 是端侧预处理后的高价值结果，不是原始手机全量日志
+- mobile items 是端侧预处理后的高价值结果；其中 snapshot payload 可包含脱敏后的联系人或应用明细，但不是原始手机全量日志

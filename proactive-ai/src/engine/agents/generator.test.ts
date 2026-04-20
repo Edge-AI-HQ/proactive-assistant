@@ -44,6 +44,8 @@ describe("buildGeneratorPrompt", () => {
     expect(prompt).toContain("pin profile snapshot build --id default --view ranking --json");
     expect(prompt).toContain("pin profile facts get --json");
     expect(prompt).toContain("pin sys schema world.shortlist --json");
+    expect(prompt).toContain("pin personal mobile items list --type contact_directory_snapshot --order desc --limit 1 --json");
+    expect(prompt).toContain("pin personal mobile items list --type app_inventory_snapshot --order desc --limit 1 --json");
   });
 
   it("treats sustained card-chat engagement as a strong signal for adjacent follow-up cards", () => {

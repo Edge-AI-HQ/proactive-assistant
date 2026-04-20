@@ -40,6 +40,7 @@ export function handleMobile(): RouteHandler {
         since: ctx.url.searchParams.get("since") ?? undefined,
         until: ctx.url.searchParams.get("until") ?? undefined,
         deviceId: ctx.url.searchParams.get("deviceId") ?? undefined,
+        order: ctx.url.searchParams.get("order") ?? undefined,
         limit: Number.isFinite(limit) ? limit : 50,
       });
       json(ctx.res, 200, { ok: true, items });

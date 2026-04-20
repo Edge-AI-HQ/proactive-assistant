@@ -127,6 +127,8 @@ Start with personal data before planning:
 - Before execution, inspect the exact parameter contract with \`pin personal tools schema --name <TOOL_SLUG> --json\`.
 - Then execute at least one relevant personal read via \`pin personal exec --tool <TOOL_SLUG> --input '{...}' --json\` and include the raw result inside \`collectedContext.personalData\`.
 - If personal fetches fail, record the failure inside \`collectedContext.personalData.gaps\` with the attempted command/tool and the failure reason.
+- When the candidate card may depend on people, orgs, family, teammates, or relationship context, fetch the latest contacts snapshot with \`pin personal mobile items list --type contact_directory_snapshot --order desc --limit 1 --json\` and include the payload under \`collectedContext.mobileSnapshots.contacts\`.
+- When the candidate card may depend on installed apps, work stack, finance apps, or device software context, fetch the latest app snapshot with \`pin personal mobile items list --type app_inventory_snapshot --order desc --limit 1 --json\` and include the payload under \`collectedContext.mobileSnapshots.apps\`.
 
 Before locking the plan, inspect recent generated card history with \`pin cards recent --limit 10 --json\`. Use that result together with recent pushes and feedback to avoid blindly repeating the same card theme.
 
@@ -154,6 +156,10 @@ Output ONLY a JSON code block:
     "profile": { ... },
     "goals": [ ... ],
     "personalData": { ... },
+    "mobileSnapshots": {
+      "contacts": { ... },
+      "apps": { ... }
+    },
     "worldEvents": [ ... ],
     "recentPushes": [ ... ],
     "feedback": [ ... ],

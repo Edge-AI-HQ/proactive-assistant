@@ -124,12 +124,13 @@ export const registerPersonalCommands = (
 
   mobileItems
     .command("list")
-    .description("List mobile items from local mobile_items.db")
+    .description("List mobile items and snapshots from local mobile_items.db")
     .option("--status <status>", "status filter (pending, claimed, processed, expired)")
-    .option("--type <type>", "item type filter (attention_item, moment, session_summary)")
+    .option("--type <type>", "item type filter (attention_item, moment, session_summary, contact_directory_snapshot, app_inventory_snapshot)")
     .option("--since <since>", "occurred-at lower bound (ISO timestamp)")
     .option("--until <until>", "occurred-at upper bound (ISO timestamp)")
     .option("--device-id <deviceId>", "device ID filter")
+    .option("--order <order>", "sort order (asc, desc)", "asc")
     .option("--limit <limit>", "max results", "50")
     .option("--json")
     .action(async (options) => {
@@ -254,15 +255,16 @@ export const registerPersonalCommands = (
   registerCommand({
     domain: "personal",
     command: "mobile items list",
-    description: "List locally synced mobile high-value items",
+    description: "List locally synced mobile high-value items and snapshots",
     risk: "read",
     supportsDryRun: false,
     flags: [
       { name: "status", type: "string", required: false, description: "Status filter" },
-      { name: "type", type: "string", required: false, description: "Item type filter" },
+      { name: "type", type: "string", required: false, description: "Item type filter, for example attention_item or contact_directory_snapshot" },
       { name: "since", type: "string", required: false, description: "Occurred-at lower bound" },
       { name: "until", type: "string", required: false, description: "Occurred-at upper bound" },
       { name: "device-id", type: "string", required: false, description: "Device ID filter" },
+      { name: "order", type: "string", required: false, default: "asc", description: "Sort order (asc or desc)" },
       { name: "limit", type: "number", required: false, default: "50", description: "Max results" },
     ],
   });

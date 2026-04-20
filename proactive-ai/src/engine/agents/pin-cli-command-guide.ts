@@ -11,6 +11,8 @@ When using pin CLI, prefer these exact commands instead of guessing nested subco
 - Personal tool discovery: \`pin personal tools search --query "recent emails" --json\`
 - Personal tool schema: \`pin personal tools schema --name GMAIL_FETCH_EMAILS --json\`
 - Personal tool execution: \`pin personal exec --tool GMAIL_FETCH_EMAILS --input '{"query":"newer_than:7d","max_results":10,"user_id":"me"}' --json\`
+- Latest contacts snapshot: \`pin personal mobile items list --type contact_directory_snapshot --order desc --limit 1 --json\`
+- Latest installed apps snapshot: \`pin personal mobile items list --type app_inventory_snapshot --order desc --limit 1 --json\`
 - Recent push history: \`pin push history --since 14d --json\`
 - Recent feedback: \`pin feedback list --since 14d --json\`
 - Recent generated cards: \`pin cards recent --limit 10 --json\`

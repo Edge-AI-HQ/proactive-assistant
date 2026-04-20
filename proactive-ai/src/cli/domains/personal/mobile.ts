@@ -14,6 +14,7 @@ export interface MobileListFilters {
   since?: string;
   until?: string;
   deviceId?: string;
+  order?: string;
   limit?: number;
 }
 
@@ -52,6 +53,10 @@ function normalizeIso(value: string | number | undefined): string | null {
 function clampLimit(limit?: number, fallback = 50): number {
   if (!Number.isFinite(limit)) return fallback;
   return Math.max(1, Math.min(Math.trunc(limit ?? fallback), 200));
+}
+
+function normalizeOrder(order?: string): "asc" | "desc" {
+  return order?.trim().toLowerCase() === "desc" ? "desc" : "asc";
 }
 
 function placeholders(count: number): string {
@@ -241,7 +246,8 @@ export function listMobileItems(runtime: CliRuntimeInput, filters: MobileListFil
       args.push(filters.deviceId);
     }
 
-    sql.push("ORDER BY occurred_at ASC");
+    const order = normalizeOrder(filters.order);
+    sql.push(`ORDER BY occurred_at ${order.toUpperCase()}, created_at ${order.toUpperCase()}`);
     sql.push("LIMIT ?");
     args.push(clampLimit(filters.limit));
 

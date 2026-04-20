@@ -161,12 +161,17 @@ export interface ListMobileItemsFilters {
   since?: string;
   until?: string;
   deviceId?: string;
+  order?: string;
   limit?: number;
 }
 
 export interface MobileClaimResult {
   runToken: string | null;
   items: MobileItemRecord[];
+}
+
+function normalizeOrder(order?: string): "ASC" | "DESC" {
+  return order?.trim().toLowerCase() === "desc" ? "DESC" : "ASC";
 }
 
 function mapRow(row: any): MobileItemRecord {
@@ -269,7 +274,8 @@ export function listMobileItems(filters: ListMobileItemsFilters = {}): MobileIte
     parts.push("AND device_id = ?");
     args.push(filters.deviceId);
   }
-  parts.push("ORDER BY occurred_at ASC");
+  const order = normalizeOrder(filters.order);
+  parts.push(`ORDER BY occurred_at ${order}, created_at ${order}`);
   parts.push("LIMIT ?");
   args.push(Math.max(1, Math.min(filters.limit ?? 50, 200)));
   return resolveMobileDb().prepare(parts.join(" ")).all(...args).map(mapRow);
