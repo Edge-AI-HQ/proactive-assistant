@@ -277,7 +277,7 @@ export default function DebugPanel({ health, run, isRunning, iterations, onItera
                       }
                       onChange={(e) => { void modelSelection.change(e.target.value); }}
                       title={isRunning ? "Pipeline is running — cannot switch model" : undefined}
-                      className="w-full rounded-lg bg-white/60 border border-foreground/10 px-2.5 py-1.5 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="w-full rounded-lg bg-white/60 border border-foreground/10 px-2.5 py-1.5 text-[16px] text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {modelSelection.models.map((m) => (
                         <option key={m.ref} value={m.ref}>
@@ -316,7 +316,7 @@ export default function DebugPanel({ health, run, isRunning, iterations, onItera
                       max={8}
                       value={iterations}
                       onChange={(e) => onIterationsChange(Math.max(1, Math.min(8, Number(e.target.value) || 1)))}
-                      className="w-14 rounded-lg bg-white/60 border border-foreground/10 px-2 py-1 text-xs text-foreground font-mono text-center focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className="w-14 rounded-lg bg-white/60 border border-foreground/10 px-2 py-1 text-[16px] text-foreground font-mono text-center focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     <button
                       onClick={onGenerate}
