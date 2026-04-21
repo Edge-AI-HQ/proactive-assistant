@@ -394,6 +394,7 @@ async function handleHistory(ctx: RouteContext): Promise<boolean> {
         id: `${message.role}-${i}`,
         role: message.role,
         content: message.content,
+        createdAt: message.createdAt,
       }));
     json(ctx.res, 200, { ok: true, sessionKey, messages });
   } catch { json(ctx.res, 200, { ok: true, sessionKey, messages: [] }); }

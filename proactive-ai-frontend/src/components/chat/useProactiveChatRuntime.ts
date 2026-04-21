@@ -253,9 +253,17 @@ async function fetchHistory(sessionKey: string): Promise<ThreadMessageLike[]> {
     if (!histData.ok || !Array.isArray(histData.messages)) return [];
 
     return histData.messages.map(
-      (m: { id: string; role: string; content: string }) => ({
+      (m: {
+        id: string;
+        role: string;
+        content: string;
+        createdAt?: number;
+      }) => ({
         role: m.role as "user" | "assistant",
         content: [{ type: "text" as const, text: m.content }],
+        ...(typeof m.createdAt === "number" && Number.isFinite(m.createdAt)
+          ? { createdAt: new Date(m.createdAt) }
+          : {}),
       }),
     );
   } catch {
