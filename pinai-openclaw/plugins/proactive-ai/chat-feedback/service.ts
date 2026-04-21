@@ -32,6 +32,8 @@ interface FeedbackRecordLike {
 export interface NormalizedCardChatMessage {
   role: 'user' | 'assistant';
   content: string;
+  /** Unix ms timestamp when the message was recorded in the subagent session transcript. */
+  createdAt?: number;
 }
 
 interface EligibleCardChat {
@@ -243,11 +245,14 @@ export function getCardChatSessionKey(cardId: string): string {
 export function normalizeCardChatMessages(messages: unknown[]): NormalizedCardChatMessage[] {
   const seenAssistant = new Set<string>();
 
-  return (messages as Array<{ role?: string; content?: unknown }>)
+  return (messages as Array<{ role?: string; content?: unknown; timestamp?: unknown }>)
     .filter((message) => message.role === 'user' || message.role === 'assistant')
     .map((message) => ({
       role: message.role as 'user' | 'assistant',
       content: extractTextContent(message.content),
+      createdAt: typeof message.timestamp === 'number' && Number.isFinite(message.timestamp)
+        ? message.timestamp
+        : undefined,
     }))
     .filter((message) => {
       if (!message.content) return false;
@@ -265,8 +270,11 @@ export function normalizeCardChatMessages(messages: unknown[]): NormalizedCardCh
 export function hashNormalizedCardChatMessages(
   messages: NormalizedCardChatMessage[],
 ): string {
+  // Hash is an equivalence key for "same transcript". Exclude createdAt so adding
+  // or refreshing the timestamp field does not invalidate previously stored hashes.
+  const stable = messages.map(({ role, content }) => ({ role, content }));
   return createHash('sha256')
-    .update(JSON.stringify(messages))
+    .update(JSON.stringify(stable))
     .digest('hex');
 }
 

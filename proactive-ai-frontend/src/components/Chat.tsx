@@ -201,7 +201,7 @@ export default function Chat({
     >
       {/* Header */}
       <div
-        className="shrink-0 px-4 pt-3 pb-3"
+        className="shrink-0 px-4 pt-[calc(env(safe-area-inset-top,0px)+12px)] pb-3"
         style={{
           background: "hsla(0, 0%, 100%, 0.5)",
           borderBottom: "1px solid hsla(0, 0%, 100%, 0.4)",

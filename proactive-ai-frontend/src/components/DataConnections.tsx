@@ -39,8 +39,10 @@ import {
   Zap,
   type LucideIcon,
 } from "lucide-react";
+import { Browser } from "@capacitor/browser";
 import type { ComposioState, Connection } from "@/hooks/useComposio";
 import { extractComposioDisplayIdentity } from "@/lib/composioDisplayIdentity";
+import { isNative } from "@/lib/platform";
 
 /** Resolves when the popup window is closed (+ 3s grace period for OAuth callback processing). */
 function windowClosed(win: Window | null): Promise<void> {
@@ -53,6 +55,26 @@ function windowClosed(win: Window | null): Promise<void> {
       }
     }, 1000);
   });
+}
+
+/**
+ * Opens OAuth URL and resolves when the user closes the auth surface.
+ * Web: popup window + closed-polling. Native (Capacitor): in-app Browser + browserFinished event.
+ * window.open to external origins silently fails inside WKWebView, so native must go through @capacitor/browser.
+ */
+async function openOAuthAndAwaitClose(url: string): Promise<void> {
+  if (isNative) {
+    const closedPromise = new Promise<void>((resolve) => {
+      void Browser.addListener("browserFinished", () => {
+        void Browser.removeAllListeners();
+        setTimeout(resolve, 3000);
+      });
+    });
+    await Browser.open({ url, presentationStyle: "popover" });
+    return closedPromise;
+  }
+  const win = window.open(url, "_blank");
+  return windowClosed(win);
 }
 
 const GOOGLE_FAMILY = new Set([
@@ -454,11 +476,9 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
           );
         return;
       }
-      const oauthWindow = window.open(result.redirectUrl, "_blank");
-
       const { connected } = await Promise.race([
         waitForToolkit(result.connectedAccountId),
-        windowClosed(oauthWindow).then(() => {
+        openOAuthAndAwaitClose(result.redirectUrl).then(() => {
           cancelWait();
           return { connected: false as const };
         }),
