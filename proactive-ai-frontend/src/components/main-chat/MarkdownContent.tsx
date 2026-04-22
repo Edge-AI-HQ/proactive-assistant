@@ -148,7 +148,7 @@ const components: Components = {
 
 export default function MarkdownContent({ text }: { text: string; [key: string]: unknown }) {
   return (
-    <div className="prose prose-sm max-w-none prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5 prose-headings:my-2">
+    <div className="prose max-w-none text-[17px] leading-[1.55] prose-p:my-2 prose-p:text-[17px] prose-ul:my-2 prose-ol:my-2 prose-li:my-1 prose-li:text-[17px] prose-headings:my-2.5">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[[rehypeHighlight, { detect: true, ignoreMissing: true }]]}

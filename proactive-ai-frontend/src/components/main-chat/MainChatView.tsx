@@ -44,6 +44,13 @@ interface MainChatViewProps {
   emptyMessage?: string;
   inputPlaceholder?: string;
   cardContext?: Record<string, unknown>;
+  /**
+   * Rendered inside `<ThreadPrimitive.Empty>`. Defaults to the profile-
+   * building prompt cards used by Main Chat. Card-context surfaces pass
+   * `null` (the agent sends the first message, so the empty slot is
+   * transient and doesn't need suggestions).
+   */
+  emptyState?: ReactNode;
 }
 
 const DEFAULT_PROFILE_PROMPTS: readonly string[] = [
@@ -77,11 +84,12 @@ function UserMessage() {
         initial={{ opacity: 0, y: 4 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.18, ease: "easeOut" }}
-        className="flex justify-end mb-4"
+        className="mb-4 flex flex-col items-end"
       >
-        <div className="max-w-[82%] px-3.5 py-2.5 text-[14px] leading-relaxed whitespace-pre-wrap bg-foreground/90 text-background rounded-2xl rounded-br-md">
+        <div className="max-w-[82%] px-4 py-2.5 text-[17px] leading-relaxed whitespace-pre-wrap bg-foreground/90 text-background rounded-2xl rounded-br-md">
           <MessagePrimitive.Content />
         </div>
+        <MessageActionBar variant="user" />
       </motion.div>
     </MessagePrimitive.Root>
   );
@@ -113,9 +121,9 @@ function AssistantMessage() {
         initial={{ opacity: 0, y: 4 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.22, ease: "easeOut" }}
-        className="mb-5 group"
+        className="mb-5"
       >
-        <div className="px-1 text-[14px] leading-relaxed text-foreground/85">
+        <div className="px-1 text-[17px] leading-[1.55] text-foreground/85">
           <ThinkingIndicator />
           <MessagePrimitive.Content
             components={{
@@ -123,7 +131,7 @@ function AssistantMessage() {
               tools: { Fallback: ToolActivityCard },
             }}
           />
-          <MessageActionBar />
+          <MessageActionBar variant="assistant" />
         </div>
       </motion.div>
     </MessagePrimitive.Root>
@@ -187,6 +195,7 @@ export default function MainChatView({
   emptyMessage = "Send a message to start chatting",
   inputPlaceholder,
   cardContext,
+  emptyState,
 }: MainChatViewProps) {
   const { runtime, historyLoaded } = useProactiveChatRuntime({
     sessionKey,
@@ -284,7 +293,7 @@ export default function MainChatView({
       animate={{ y: 0 }}
       exit={{ y: "100%" }}
       transition={{ type: "spring", damping: 30, stiffness: 300 }}
-      className="absolute inset-0 z-50 flex flex-col"
+      className="absolute inset-0 z-50 flex flex-col font-native"
       style={{
         background: "hsla(220, 30%, 96%, 0.95)",
         backdropFilter: "blur(60px) saturate(1.4)",
@@ -343,10 +352,14 @@ export default function MainChatView({
             <ThreadPrimitive.Root className="flex-1 flex flex-col overflow-hidden">
               <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto px-4 py-4">
                 <ThreadPrimitive.Empty>
-                  <EmptyState
-                    prompts={DEFAULT_PROFILE_PROMPTS}
-                    title="What's on your mind?"
-                  />
+                  {emptyState !== undefined ? (
+                    emptyState
+                  ) : (
+                    <EmptyState
+                      prompts={DEFAULT_PROFILE_PROMPTS}
+                      title="What's on your mind?"
+                    />
+                  )}
                 </ThreadPrimitive.Empty>
 
                 <ThreadPrimitive.Messages

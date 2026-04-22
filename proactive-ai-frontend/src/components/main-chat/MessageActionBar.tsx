@@ -1,9 +1,20 @@
 /**
- * Action bar rendered under each assistant message.
- * Copy (with transient "Copied" state), Retry, and a live relative timestamp.
+ * Action bar rendered under each message.
+ *
+ * Layout stays stable: the bar reserves its height unconditionally and uses
+ * opacity for hover reveal, so hovering an older message never pushes later
+ * messages around (Claude-style behaviour).
+ *
+ * Icons only; the text label moves to `title`/`aria-label` for accessibility
+ * and native tooltips.
+ *
+ * Assistant messages get Copy + relative timestamp, user messages get Copy
+ * only. Retry/Edit are both disabled: the OpenClaw subagent runtime does not
+ * support replace-and-rerun semantics, so exposing them would be a broken
+ * affordance.
  */
 import { useEffect, useState } from "react";
-import { Copy, Check, RotateCcw } from "lucide-react";
+import { Copy, Check } from "lucide-react";
 import { formatDistanceToNowStrict } from "date-fns";
 import {
   ActionBarPrimitive,
@@ -11,6 +22,12 @@ import {
   useMessage,
 } from "@assistant-ui/react";
 import { cn } from "@/lib/utils";
+
+type Variant = "assistant" | "user";
+
+interface Props {
+  variant: Variant;
+}
 
 function formatTimestamp(createdAt: Date | undefined): string | null {
   if (!createdAt) return null;
@@ -39,36 +56,48 @@ function RelativeTimestamp() {
   return <span className="text-[11px] text-foreground/35">{label}</span>;
 }
 
-const ACTION_BUTTON_CLASS = cn(
-  "flex items-center gap-1 px-1.5 py-0.5 rounded",
-  "text-[11px] text-foreground/45 hover:text-foreground/75 hover:bg-foreground/5",
+const ICON_BUTTON_CLASS = cn(
+  "inline-flex items-center justify-center w-6 h-6 rounded",
+  "text-foreground/45 hover:text-foreground/80 hover:bg-foreground/5",
   "transition-colors",
 );
 
-export default function MessageActionBar() {
+function CopyButton() {
+  return (
+    <ActionBarPrimitive.Copy
+      className={ICON_BUTTON_CLASS}
+      title="Copy"
+      aria-label="Copy message"
+    >
+      <MessagePrimitive.If copied>
+        <Check size={13} strokeWidth={2} className="text-emerald-500" />
+      </MessagePrimitive.If>
+      <MessagePrimitive.If copied={false}>
+        <Copy size={13} strokeWidth={1.8} />
+      </MessagePrimitive.If>
+    </ActionBarPrimitive.Copy>
+  );
+}
+
+export default function MessageActionBar({ variant }: Props) {
+  const isAssistant = variant === "assistant";
   return (
     <ActionBarPrimitive.Root
       hideWhenRunning
-      autohide="not-last"
-      className="mt-1.5 flex items-center gap-1"
+      className={cn(
+        // Always visible — matches Claude iOS, and touch devices don't reliably
+        // fire :hover so gating by hover would make the button flicker as
+        // messages scroll in and out of the "last" slot.
+        "mt-1 flex items-center h-7",
+        !isAssistant && "justify-end",
+      )}
     >
-      <ActionBarPrimitive.Copy className={ACTION_BUTTON_CLASS}>
-        <MessagePrimitive.If copied>
-          <Check size={12} strokeWidth={2} className="text-emerald-500" />
-          <span>Copied</span>
-        </MessagePrimitive.If>
-        <MessagePrimitive.If copied={false}>
-          <Copy size={12} strokeWidth={1.8} />
-          <span>Copy</span>
-        </MessagePrimitive.If>
-      </ActionBarPrimitive.Copy>
-      <ActionBarPrimitive.Reload className={ACTION_BUTTON_CLASS}>
-        <RotateCcw size={12} strokeWidth={1.8} />
-        <span>Retry</span>
-      </ActionBarPrimitive.Reload>
-      <div className="ml-auto pr-0.5">
-        <RelativeTimestamp />
-      </div>
+      <CopyButton />
+      {isAssistant && (
+        <div className="ml-auto pr-0.5">
+          <RelativeTimestamp />
+        </div>
+      )}
     </ActionBarPrimitive.Root>
   );
 }

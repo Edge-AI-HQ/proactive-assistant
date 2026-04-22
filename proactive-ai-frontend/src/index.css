@@ -1,4 +1,7 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import "@fontsource/geist-sans/400.css";
+@import "@fontsource/geist-sans/500.css";
+@import "@fontsource/geist-sans/600.css";
 
 @tailwind base;
 @tailwind components;
@@ -80,6 +83,16 @@
 
   .pt-safe-top {
     padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  /* Match Claude's chat typography. Claude uses the licensed Söhne family;
+     Geist is the closest open-source look-alike. Falls back to SF Pro on
+     iOS / system-ui elsewhere if the bundled font fails to load. Scoped so
+     only the Main Chat surface opts in; the rest of the app keeps Inter. */
+  .font-native {
+    font-family: "Geist", -apple-system, BlinkMacSystemFont, "SF Pro Text",
+      system-ui, "Helvetica Neue", Arial, sans-serif;
+    font-feature-settings: "ss01", "cv11";
   }
 }
 
