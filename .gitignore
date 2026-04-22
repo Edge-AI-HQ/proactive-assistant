@@ -96,3 +96,6 @@ composio-consumer-key
 agent-openai-sdk/
 tmp/
 MEMO.md
+
+# Personal per-developer Claude instructions (not checked in)
+CLAUDE.local.md

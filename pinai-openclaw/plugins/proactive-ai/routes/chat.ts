@@ -17,6 +17,7 @@ import type { RouteHandler, RouteContext } from './types.js';
 import { json, readBody, extractTextContent } from './types.js';
 import { buildChatPrompt, type ChatCardContext } from '../agents/chat.js';
 import { normalizeCardChatMessages } from '../chat-feedback/service.js';
+import { mergeChatHistoryTurns } from './chat-history-merge.js';
 import { isTrackableChatSessionKey } from '../conversation-crystallize/service.js';
 import { loadActiveSkillsSection } from '../conversation-crystallize/skill-injection.js';
 import * as db from '../db.js';
@@ -389,13 +390,11 @@ async function handleHistory(ctx: RouteContext): Promise<boolean> {
   if (!sessionKey) { json(ctx.res, 400, { error: 'Missing sessionKey' }); return true; }
   try {
     const result = await ctx.api.runtime.subagent.getSessionMessages({ sessionKey, limit: 50 });
-    const messages = normalizeCardChatMessages(result.messages as unknown[])
-      .map((message, i) => ({
-        id: `${message.role}-${i}`,
-        role: message.role,
-        content: message.content,
-        createdAt: message.createdAt,
-      }));
+    // Merge raw transcript (which records each assistant emission + toolResult
+    // as separate messages) into Claude-style turns: one assistant turn per
+    // LLM call, with text/tool-call parts preserved in order. See
+    // chat-history-merge.ts for the full rationale.
+    const messages = mergeChatHistoryTurns(result.messages as unknown[]);
     json(ctx.res, 200, { ok: true, sessionKey, messages });
   } catch { json(ctx.res, 200, { ok: true, sessionKey, messages: [] }); }
   return true;

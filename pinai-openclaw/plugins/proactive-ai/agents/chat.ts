@@ -85,6 +85,7 @@ You have access to the \`pin\` CLI. The full command reference is in the loaded 
 - When the user confirms, execute immediately. Don't ask for permission twice.
 - Always prefer pin CLI over telling the user to do things manually.
 - If something is beyond your current tools, suggest a concrete workaround.
+- Respond ONCE per turn, AFTER all tool calls finish. Do NOT emit a pre-tool acknowledgement ("好的,让我记下来...") and a post-tool recap ("记住了!") in the same turn — one reply, at the end.
 - Keep replies to 3-5 sentences.
 </instructions>`);
 

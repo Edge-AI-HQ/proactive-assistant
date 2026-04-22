@@ -33,10 +33,7 @@ import {
   buildChatRequestBody,
   shouldBootstrapCardChat,
 } from "./card-chat-session";
-import {
-  buildContentSnapshot,
-  type ProactiveToolStep,
-} from "./tool-steps";
+import { LiveContentBuilder } from "./tool-steps";
 
 export type { ProactiveToolCallArgs } from "./tool-steps";
 
@@ -49,62 +46,6 @@ interface AdapterOptions {
   sessionKey: string;
   cardContextJson?: string;
   bootstrappedSessionsRef: MutableRefObject<Set<string>>;
-}
-
-async function bootstrapCardChatSession(
-  sessionKey: string,
-  cardContextJson: string,
-): Promise<void> {
-  const res = await proxyFetch("/chat-stream/send", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(
-      buildChatRequestBody({
-        sessionKey,
-        cardContextJson,
-        includeCardContext: true,
-      }),
-    ),
-  });
-
-  if (!res.ok || !res.body) {
-    throw new Error(`Card chat bootstrap failed: ${res.status}`);
-  }
-
-  const contentType = res.headers.get("content-type") || "";
-  if (!contentType.includes("text/event-stream")) {
-    const data = (await res.json()) as { error?: string };
-    if (data.error) {
-      throw new Error(data.error);
-    }
-    return;
-  }
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      try {
-        const data = JSON.parse(line.slice(6)) as Record<string, unknown>;
-        if (data.type === "chat:error") {
-          throw new Error(String(data.error ?? "Unknown chat bootstrap error"));
-        }
-      } catch (error) {
-        if (error instanceof SyntaxError) continue;
-        throw error;
-      }
-    }
-  }
 }
 
 function createAdapter({
@@ -121,17 +62,23 @@ function createAdapter({
         .map((p) => p.text)
         .join("\n");
 
-      if (!userText) {
+      const needsBootstrap =
+        Boolean(cardContextJson) &&
+        !bootstrappedSessionsRef.current.has(sessionKey);
+
+      // Card-chat bootstrap: when the thread is empty and we have card
+      // context, we still run — the adapter produces the agent's first
+      // turn from the card context alone. Otherwise (no user text, no
+      // bootstrap) we have nothing to send.
+      if (!userText && !needsBootstrap) {
         return;
       }
 
-      const includeCardContext = Boolean(cardContextJson) &&
-        !bootstrappedSessionsRef.current.has(sessionKey);
       const body = buildChatRequestBody({
         sessionKey,
-        userText,
+        ...(userText ? { userText } : {}),
         cardContextJson,
-        includeCardContext,
+        includeCardContext: needsBootstrap,
       });
 
       const res = await proxyFetch("/chat-stream/send", {
@@ -162,11 +109,7 @@ function createAdapter({
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      let accumulatedText = "";
-      const toolSteps: ProactiveToolStep[] = [];
-      const toolStepIndex = new Map<string, number>();
-
-      const snapshot = () => buildContentSnapshot(toolSteps, accumulatedText);
+      const builder = new LiveContentBuilder();
 
       while (true) {
         const { done, value } = await reader.read();
@@ -183,37 +126,35 @@ function createAdapter({
             const type = data.type as string;
 
             if (type === "chat:delta") {
-              accumulatedText += (data.delta as string) ?? "";
-              yield { content: snapshot() };
+              const delta = typeof data.delta === "string" ? data.delta : "";
+              if (delta) {
+                builder.appendText(delta);
+                yield { content: builder.snapshot() };
+              }
             } else if (type === "chat:reply") {
-              accumulatedText = (data.content as string) ?? "";
-              yield { content: snapshot() };
+              builder.replaceText(typeof data.content === "string" ? data.content : "");
+              yield { content: builder.snapshot() };
             } else if (type === "chat:tool:start") {
               const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : "";
               const name = typeof data.name === "string" ? data.name : "";
               if (!toolCallId || !name) continue;
-              if (!toolStepIndex.has(toolCallId)) {
-                toolStepIndex.set(toolCallId, toolSteps.length);
-                toolSteps.push({
-                  toolCallId,
-                  toolName: name,
-                  meta: typeof data.meta === "string" ? data.meta : undefined,
-                  argsPreview: typeof data.argsPreview === "string" ? data.argsPreview : undefined,
-                  pinCommand: typeof data.pinCommand === "string" ? data.pinCommand : undefined,
-                  status: "running",
-                });
-                yield { content: snapshot() };
-              }
+              builder.openToolCall({
+                toolCallId,
+                toolName: name,
+                meta: typeof data.meta === "string" ? data.meta : undefined,
+                argsPreview: typeof data.argsPreview === "string" ? data.argsPreview : undefined,
+                pinCommand: typeof data.pinCommand === "string" ? data.pinCommand : undefined,
+              });
+              yield { content: builder.snapshot() };
             } else if (type === "chat:tool:result") {
               const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : "";
-              const idx = toolCallId ? toolStepIndex.get(toolCallId) : undefined;
-              if (idx === undefined) continue;
-              const step = toolSteps[idx];
-              step.status = data.isError ? "error" : "ok";
-              if (typeof data.meta === "string" && !step.meta) {
-                step.meta = data.meta;
-              }
-              yield { content: snapshot() };
+              if (!toolCallId) continue;
+              builder.completeToolCall({
+                toolCallId,
+                isError: Boolean(data.isError),
+                meta: typeof data.meta === "string" ? data.meta : undefined,
+              });
+              yield { content: builder.snapshot() };
             } else if (type === "chat:tool:update") {
               // Keep "running" state; no-op snapshot avoids unnecessary churn.
               continue;
@@ -228,12 +169,11 @@ function createAdapter({
         }
       }
 
-      // Ensure we yield at least once if we got content (text or tool steps).
-      if (accumulatedText || toolSteps.length > 0) {
-        yield { content: snapshot() };
+      if (!builder.isEmpty()) {
+        yield { content: builder.snapshot() };
       }
 
-      if (includeCardContext) {
+      if (needsBootstrap) {
         bootstrappedSessionsRef.current.add(sessionKey);
       }
     },
@@ -242,7 +182,61 @@ function createAdapter({
 
 /**
  * Fetch existing chat history from the backend and convert to ThreadMessageLike[].
+ *
+ * Backend returns merged turns (see `chat-history-merge.ts`) with ordered
+ * parts: user messages carry one text part; assistant messages carry a mix
+ * of text and tool-call parts. We map directly into assistant-ui's
+ * ThreadMessageLike content shape so tool-call parts flow through the same
+ * rendering path as live SSE tool events (ToolActivityCard via
+ * MessagePrimitive.Content `tools: { Fallback }`).
  */
+interface HistoryTextPart {
+  type: "text";
+  text: string;
+}
+
+interface HistoryToolCallPart {
+  type: "tool-call";
+  toolCallId: string;
+  toolName: string;
+  status: "running" | "ok" | "error";
+  meta?: string;
+  argsPreview?: string;
+  pinCommand?: string;
+}
+
+type HistoryPart = HistoryTextPart | HistoryToolCallPart;
+
+interface HistoryMessage {
+  id: string;
+  role: "user" | "assistant";
+  parts: HistoryPart[];
+  createdAt?: number;
+}
+
+function toRuntimePart(part: HistoryPart) {
+  if (part.type === "text") {
+    return { type: "text" as const, text: part.text };
+  }
+  const args: Record<string, string> = { status: part.status };
+  if (part.meta) args.meta = part.meta;
+  if (part.argsPreview) args.argsPreview = part.argsPreview;
+  if (part.pinCommand) args.pinCommand = part.pinCommand;
+  return {
+    type: "tool-call" as const,
+    toolCallId: part.toolCallId,
+    toolName: part.toolName,
+    args,
+    argsText: JSON.stringify(args),
+    ...(part.status === "running"
+      ? {}
+      : {
+          result: { ok: part.status === "ok" },
+          ...(part.status === "error" ? { isError: true as const } : {}),
+        }),
+  };
+}
+
 async function fetchHistory(sessionKey: string): Promise<ThreadMessageLike[]> {
   try {
     const histRes = await proxyFetch(
@@ -252,20 +246,13 @@ async function fetchHistory(sessionKey: string): Promise<ThreadMessageLike[]> {
 
     if (!histData.ok || !Array.isArray(histData.messages)) return [];
 
-    return histData.messages.map(
-      (m: {
-        id: string;
-        role: string;
-        content: string;
-        createdAt?: number;
-      }) => ({
-        role: m.role as "user" | "assistant",
-        content: [{ type: "text" as const, text: m.content }],
-        ...(typeof m.createdAt === "number" && Number.isFinite(m.createdAt)
-          ? { createdAt: new Date(m.createdAt) }
-          : {}),
-      }),
-    );
+    return (histData.messages as HistoryMessage[]).map((m) => ({
+      role: m.role,
+      content: m.parts.map(toRuntimePart),
+      ...(typeof m.createdAt === "number" && Number.isFinite(m.createdAt)
+        ? { createdAt: new Date(m.createdAt) }
+        : {}),
+    }));
   } catch {
     return [];
   }
@@ -276,8 +263,12 @@ export function useProactiveChatRuntime(options: UseProactiveChatRuntimeOptions)
     ThreadMessageLike[] | undefined
   >(undefined);
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  // True once, when mount detected "card context + no history" — we hand off
+  // to the adapter via runtime.thread.startRun so the first agent turn
+  // streams through the same LiveContentBuilder path as regular messages.
+  const [pendingBootstrap, setPendingBootstrap] = useState(false);
   const bootstrappedSessionsRef = useRef<Set<string>>(new Set());
-  const bootstrapPromisesRef = useRef<Map<string, Promise<void>>>(new Map());
+  const triggeredBootstrapRef = useRef<Set<string>>(new Set());
   const cardContextJson = useMemo(
     () => (options.cardContext ? JSON.stringify(options.cardContext) : undefined),
     [options.cardContext],
@@ -287,6 +278,7 @@ export function useProactiveChatRuntime(options: UseProactiveChatRuntimeOptions)
     let cancelled = false;
     setHistoryLoaded(false);
     setInitialMessages(undefined);
+    setPendingBootstrap(false);
 
     void (async () => {
       try {
@@ -300,37 +292,21 @@ export function useProactiveChatRuntime(options: UseProactiveChatRuntimeOptions)
           bootstrappedSessionsRef.current.add(options.sessionKey);
         }
 
-        if (
-          cardContextJson &&
-          shouldBootstrapCardChat({
-            hasExistingHistory,
-            hasCardContext: true,
-            alreadyBootstrapped: bootstrappedSessionsRef.current.has(options.sessionKey),
-          })
-        ) {
-          let bootstrapPromise = bootstrapPromisesRef.current.get(options.sessionKey);
-          if (!bootstrapPromise) {
-            bootstrapPromise = bootstrapCardChatSession(options.sessionKey, cardContextJson);
-            bootstrapPromisesRef.current.set(options.sessionKey, bootstrapPromise);
-          }
-          try {
-            await bootstrapPromise;
-            bootstrappedSessionsRef.current.add(options.sessionKey);
-          } catch (error) {
-            console.warn("[Chat] Card bootstrap failed:", error);
-          } finally {
-            if (bootstrapPromisesRef.current.get(options.sessionKey) === bootstrapPromise) {
-              bootstrapPromisesRef.current.delete(options.sessionKey);
-            }
-          }
-        }
-
         const msgs = await fetchHistory(options.sessionKey);
         if (cancelled) return;
         if (msgs.length > 0) {
           bootstrappedSessionsRef.current.add(options.sessionKey);
         }
         setInitialMessages(msgs.length > 0 ? msgs : undefined);
+
+        const shouldBootstrap = shouldBootstrapCardChat({
+          hasExistingHistory: hasExistingHistory || msgs.length > 0,
+          hasCardContext: Boolean(cardContextJson),
+          alreadyBootstrapped: bootstrappedSessionsRef.current.has(options.sessionKey),
+        });
+        if (shouldBootstrap) {
+          setPendingBootstrap(true);
+        }
       } catch {
         if (cancelled) return;
         setInitialMessages(undefined);
@@ -354,6 +330,22 @@ export function useProactiveChatRuntime(options: UseProactiveChatRuntimeOptions)
     [cardContextJson, options.sessionKey],
   );
   const runtime = useLocalRuntime(adapter, { initialMessages });
+
+  // Once the runtime is mounted and the thread is confirmed empty,
+  // kick off an agent-only run so the first card-chat message streams
+  // into the UI in real time (rather than landing as a static bubble
+  // after a silent pre-fetch).
+  useEffect(() => {
+    if (!pendingBootstrap || !historyLoaded) return;
+    if (triggeredBootstrapRef.current.has(options.sessionKey)) return;
+    triggeredBootstrapRef.current.add(options.sessionKey);
+    try {
+      runtime.thread.startRun({ parentId: null });
+    } catch (error) {
+      console.warn("[Chat] startRun for card bootstrap failed:", error);
+    }
+    setPendingBootstrap(false);
+  }, [pendingBootstrap, historyLoaded, options.sessionKey, runtime]);
 
   return { runtime, historyLoaded };
 }

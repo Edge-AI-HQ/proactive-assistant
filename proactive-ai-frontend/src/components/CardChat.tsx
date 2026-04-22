@@ -1,6 +1,6 @@
 import type { IntentCard, EvaluationScore } from "@/types/intent-card";
 import { useMemo } from "react";
-import Chat from "./Chat";
+import MainChatView from "./main-chat/MainChatView";
 
 interface CardChatProps {
   card: IntentCard;
@@ -35,16 +35,23 @@ export default function CardChat({ card, score, onBack }: CardChatProps) {
   );
 
   return (
-    <Chat
+    <MainChatView
       sessionKey={stableSessionKey(card.id)}
       title={card.title}
-      subtitle={`Chat about this card`}
+      subtitle="Chat about this card"
       onBack={onBack}
       cardContext={cardContext}
+      // Card chats bootstrap with an agent-authored first message, so the
+      // profile-prompt empty state from Main Chat isn't applicable here.
+      // `null` suppresses it entirely; ThreadPrimitive shows nothing while
+      // the bootstrap SSE stream is producing the first assistant turn.
+      emptyState={null}
       headerSlot={
         <div className="px-4 pt-3 pb-1">
           <div className="glass-card px-3 py-2 text-[12px] text-foreground/60 leading-relaxed">
-            <span className="font-semibold text-foreground/80">{card.goalBasket.toUpperCase()}</span>
+            <span className="font-semibold text-foreground/80">
+              {card.goalBasket.toUpperCase()}
+            </span>
             {" — "}
             {card.whyNow.length > 120 ? card.whyNow.slice(0, 120) + "..." : card.whyNow}
           </div>

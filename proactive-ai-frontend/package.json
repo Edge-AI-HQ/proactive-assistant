@@ -24,6 +24,7 @@
     "@capacitor/keyboard": "^8.0.3",
     "@capacitor/splash-screen": "^8.0.1",
     "@capacitor/status-bar": "^8.0.2",
+    "@fontsource/geist-sans": "^5.2.5",
     "@supabase/supabase-js": "^2.49.1",
     "@tailwindcss/typography": "^0.5.19",
     "clsx": "^2.1.1",
