@@ -119,6 +119,20 @@ function extractTextContent(content: unknown): string {
   return '';
 }
 
+/**
+ * OpenClaw gateway prepends `[Dow YYYY-MM-DD HH:MM TZ] ` to every user
+ * message before the LLM call (see `openclaw/src/gateway/server-methods/
+ * agent-timestamp.ts`) and the envelope gets persisted into the session
+ * transcript. Strip it here so downstream consumers (history rendering,
+ * feedback analysis, crystallization) never see the metadata as user text.
+ */
+const TIMESTAMP_ENVELOPE_PATTERN =
+  /^\[[^\]\n]*\b\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}[^\]\n]*\]\s*/;
+
+export function stripTimestampEnvelope(content: string): string {
+  return content.replace(TIMESTAMP_ENVELOPE_PATTERN, '');
+}
+
 function extractAssistantText(messages: unknown[]): string {
   const assistantMessages = (messages as Array<{ role?: string; content?: unknown }>)
     .filter((message) => message.role === 'assistant');
@@ -247,13 +261,16 @@ export function normalizeCardChatMessages(messages: unknown[]): NormalizedCardCh
 
   return (messages as Array<{ role?: string; content?: unknown; timestamp?: unknown }>)
     .filter((message) => message.role === 'user' || message.role === 'assistant')
-    .map((message) => ({
-      role: message.role as 'user' | 'assistant',
-      content: extractTextContent(message.content),
-      createdAt: typeof message.timestamp === 'number' && Number.isFinite(message.timestamp)
-        ? message.timestamp
-        : undefined,
-    }))
+    .map((message) => {
+      const role = message.role as 'user' | 'assistant';
+      const rawContent = extractTextContent(message.content);
+      const content = role === 'user' ? stripTimestampEnvelope(rawContent) : rawContent;
+      const normalized: NormalizedCardChatMessage = { role, content };
+      if (typeof message.timestamp === 'number' && Number.isFinite(message.timestamp)) {
+        normalized.createdAt = message.timestamp;
+      }
+      return normalized;
+    })
     .filter((message) => {
       if (!message.content) return false;
       if (message.role === 'user' && message.content.startsWith(INJECTED_CARD_CHAT_PREFIX)) {

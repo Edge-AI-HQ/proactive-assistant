@@ -6,8 +6,40 @@ import {
   getCardChatSessionKey,
   hashNormalizedCardChatMessages,
   normalizeCardChatMessages,
+  stripTimestampEnvelope,
   syncCardChatFeedback,
 } from "./service.ts";
+
+test("stripTimestampEnvelope removes OpenClaw UTC / TZ envelopes", () => {
+  assert.equal(
+    stripTimestampEnvelope("[Wed 2026-04-22 00:03 UTC] 你现在叫小黑"),
+    "你现在叫小黑",
+  );
+  assert.equal(
+    stripTimestampEnvelope("[Tue 2026-04-21 08:15 America/Los_Angeles] hi there"),
+    "hi there",
+  );
+  assert.equal(
+    stripTimestampEnvelope("no envelope here"),
+    "no envelope here",
+  );
+  // A non-envelope bracket at the start must not be stripped.
+  assert.equal(
+    stripTimestampEnvelope("[todo] remember to call mom"),
+    "[todo] remember to call mom",
+  );
+});
+
+test("normalizeCardChatMessages strips timestamp envelope from user messages and preserves timestamp field", () => {
+  const out = normalizeCardChatMessages([
+    { role: "user", content: "[Wed 2026-04-22 00:03 UTC] hello", timestamp: 1_776_470_580_000 },
+    { role: "assistant", content: "hi!", timestamp: 1_776_470_585_000 },
+  ]);
+  assert.deepEqual(out, [
+    { role: "user", content: "hello", createdAt: 1_776_470_580_000 },
+    { role: "assistant", content: "hi!", createdAt: 1_776_470_585_000 },
+  ]);
+});
 
 test("normalizeCardChatMessages filters injected first-turn prompts and duplicate assistant replies", () => {
   const messages = normalizeCardChatMessages([
