@@ -1,7 +1,7 @@
 # Memory / Profile / Skill 架构（v3 定稿）
 
-> **状态**：设计定稿，未实施。Phase 0 只输出本文档。
-> **范围**：每个用户对应的 OpenClaw 容器内的数据存储与进化机制。
+> **状态**：已实施。代码在 `feat/memory-architecture-v3` 分支，分阶段提交。
+> **范围**：每个用户对应的 OpenClaw 容器内的数据存储与进化机制 + APIs `user_devices` 中心 registry。
 > **维护**：本文档与代码同步演进。改 schema 必须同时改本文档。
 
 ---
@@ -37,22 +37,39 @@ Tier 3  profile + skill    高度浓缩的画像 + 可执行技能
 
 ## 二、存储拓扑
 
+`proactive.db` (实际 18 张表，含 v2 遗留 + 子系统私有；agent 主要消费的是粗体那 9 张) +
+`mobile_items.db`（端侧上传 sink，每次 ingest 同步镜像到 personal_signals） +
+`raw.db`（按 source 分表） + `skills/` folder + LanceDB 向量索引。
+
 ```
-proactive.db (13 张)              raw.db (按 source 分表)        skills/ folder
-├─ profile                        ├─ gmail_messages              └─ <skill_id>/
-├─ memory                         ├─ gcal_events                     └─ SKILL.md
-├─ personal_signals               ├─ notion_pages (v2)
-├─ world_signals                  ├─ slack_messages (v2)
-├─ skill_index                    ├─ device_apps_snapshot
-├─ evolution_runs                 ├─ device_contacts_snapshot
-├─ pipeline_runs                  └─ ...
-├─ card_evaluations
-├─ intent_card_state              data/skills/                    LanceDB
-├─ intent_thread_state            data/run-artifacts/<id>.json    pf_personal_documents
-├─ feedback_events                                                pf_world_signals
-├─ user_settings
-└─ app_state (KV)
+proactive.db                              mobile_items.db (端侧协议兼容)
+├─ profile                                ├─ mobile_items
+├─ memory                ★                ├─ mobile_ingest_batches
+├─ personal_signals      ★                └─ mobile_item_runs
+├─ world_signals         ★
+├─ skill_index           ★                raw.db (按 source 分表)
+├─ evolution_runs        ★                ├─ gmail_messages           ★
+├─ pipeline_runs         ★                ├─ gcal_events              ★
+├─ card_evaluations      ★                ├─ device_apps_snapshot     ★
+├─ intent_card_state     ★                ├─ device_contacts_snapshot
+├─ intent_thread_state                    ├─ notion_pages (v2)
+├─ feedback_events                        └─ slack_messages (v2)
+├─ goals                 (v2 遗留)
+├─ profile_signals       (v2 遗留)        skills/                     LanceDB
+├─ profile_interests     (v2 遗留)        └─ <skill_id>/SKILL.md      pf_personal_documents
+├─ user_settings                                                       pf_world_signals
+├─ auto_loop_state       (v2 遗留)        data/run-artifacts/<id>.json
+├─ chat_crystallize_state (v2 遗留)
+├─ dream_runs            (dreaming 私有)
+├─ push_records          (无 push 功能)
+├─ push_outcomes         (无 push 功能)
+└─ app_state (KV)        ★
 ```
+
+**★ = 本次 v3 设计的核心表**。`v2 遗留` 标记的几张是历史 schema，目前还有 helper 在写
+（`getAutoLoopState` / `getCrystallizeState` 等），**未来 PR 可挪到 `app_state` KV**。
+`push_records` / `push_outcomes` 没有产品功能，可直接删，留作下次清理。
+`dream_runs` 是 dreaming 子系统私有 store；每次 dream 同时写一条 summary 到 `evolution_runs`。
 
 ---
 
@@ -273,51 +290,68 @@ unified-generator 的 phase 1 由"跑 12 个 CLI" 改为"先看 ContextPack 预�
 
 ---
 
-## 七、老表 → 新位置（迁移映射）
+## 七、老表 → 新位置（迁移现状）
 
-| 老表 | 去哪 | 方式 |
-|---|---|---|
-| profile | profile（极简） | 字段精简，facts/preferences/constraints → memory |
-| profile_memories | memory | 1:1 + quality 默认 0.5 |
-| profile_signals | **删** | 数值信号化作 memory.quality |
-| profile_interests | memory | kind=topic 的 quality 高 memory |
-| goals | memory | subject='goal:<key>'，quality ≥ 0.8 |
-| user_skills | skill_index + folder | body_md → `skills/<id>/SKILL.md` |
-| world_items | world_signals（**改名**） | 1:1 + reference 三字段 |
-| feedback_events | 保留 | + reference 三字段 |
-| push_records | **删** | 没真用 |
-| push_outcomes | **删** | 没真用 |
-| pipeline_runs | 精简 | iterations JSON → artifact 文件；评分拆 card_evaluations |
-| intent_card_state / intent_thread_state | 保留 | 聊天部分别动 |
-| user_settings | 保留 | |
-| auto_loop_state | app_state(scheduler.*) | KV 化 |
-| chat_crystallize_state | app_state(crystallize.*) | KV 化 |
-| ingest_cursor | app_state(cursor.*) | KV 化 |
-| dream_runs | evolution_runs | trigger_kind='daily_dream' |
-| pending_items / context_runs | **删** | 0 行 |
-| mobile_items | personal_signals（**跨 db 迁 + 改名 + 加字段**） | 端侧协议 100% 兼容 |
-| mobile_ingest_batches / mobile_item_runs | **删** | claim/commit 模式不再需要 |
+每行的 **状态** 列反映 `feat/memory-architecture-v3` 已实施部分，最右列标出 follow-up PR 待办。
 
-净变化：**23 张 → 13 张 + raw 一组（按 source 增长）+ folder**。删 11 张（其中 6 张完全空）。
+| 老表 | 去哪 | 状态 | 还需 |
+|---|---|---|---|
+| profile | profile（保留） | 部分实施：字段不变，新事实推荐写 memory | — |
+| profile_memories | memory | ✅ 自动 backfill + DROP（`migrateLegacyToV3`） | — |
+| profile_signals | 保留作 v2 遗留 | helpers 仍写老表 | follow-up：迁到 memory 或删 |
+| profile_interests | 保留作 v2 遗留 | 同上 | 同上 |
+| goals | 保留作 v2 遗留 | 同上 | 同上 |
+| user_skills | skill_index + folder | ✅ 自动 backfill + DROP | — |
+| world_items | world_signals（改名） | ✅ 自动 ALTER RENAME + 加 reference 三字段 | — |
+| feedback_events | 保留 | ⚠️ 暂未加 reference 三字段 | follow-up：加字段或显式不加 |
+| push_records / push_outcomes | 没真用 | ⚠️ 表 + helper 仍存在但 0 行 | follow-up：DROP + 删 helper |
+| pipeline_runs | 精简 | ✅ iterations 写 artifact 文件；评分拆 `card_evaluations` | — |
+| intent_card_state / intent_thread_state | 保留 | 聊天部分别动 | — |
+| user_settings | 保留 | | — |
+| auto_loop_state | 计划 → app_state(scheduler.*) | ⚠️ KV 表已加，但 scheduler 仍写老表 | follow-up：scheduler 切到 KV |
+| chat_crystallize_state | 计划 → app_state(crystallize.*) | ⚠️ 同上 | follow-up |
+| ingest_cursor | DROP | ✅ 删（0 行） | — |
+| dream_runs | dreaming 子系统私有 + mirror 到 evolution_runs | ✅ Phase 8 hook | follow-up：dreaming 重写后 DROP |
+| pending_items / context_runs | DROP | ✅ 删（0 行） | — |
+| mobile_items | 镜像到 personal_signals（不 DROP） | ✅ 每次 ingest 同步写 + bridge snapshot 到 raw.db | 端侧协议保留 |
+| mobile_ingest_batches | 保留 | 仍由 mobile-db.ts 写（监控批次） | follow-up：移到 metrics |
+| mobile_item_runs | 保留 | claim/commit 模式仍服务老 CLI | follow-up：CLI 切到 personal_signals 后 DROP |
+
+**实际净变化**：v3 新增 8 张表（memory / personal_signals / skill_index / evolution_runs / card_evaluations / app_state / world_signals 改名 / 4 张 raw 表）；自动迁移 + DROP 3 张（profile_memories / user_skills / 3 张零行表）；其它 v2 表分两类——dreaming/crystallize/mobile 子系统私有保留，profile_signals/interests/goals 等 v2 遗留留作 follow-up。
 
 ---
 
 ## 八、阶段实施
 
-每个 phase 独立可上线、可回滚。总周期 **8-10 周**。
+实施分 14 个 commit（Phase 0-13），全部完成在 `feat/memory-architecture-v3` 分支。
 
-| Phase | 内容 | 周期 |
+| Phase | 内容 | 状态 |
 |---|---|---|
-| 0 | 写本文档（已完成） | 0.5d |
-| 1 | app_state KV / card_evaluations / pipeline_runs 精简 / 删空表 | 1w |
-| 2 | memory + skill_index + folder 重构；profile 精简 | 1-2w |
-| 3 | evolution_runs 统一 dream + crystallize + manual | 1w |
-| 4 | personal_signals + world_signals 改名；raw.db + GmailSource | 2w |
-| 5 | CLI 重构 + retrieval 接入 + unified-generator phase 1 改造 | 1w |
-| 6 | APIs `user_devices` 表 + 前端 device registration | 1w |
-| 7 | evals harness + consolidation trigger | 持续 |
+| 0 | 写本文档 | ✅ |
+| 1 | `app_state` KV + `card_evaluations` 表 + `pipeline_runs.artifact_path` + 删 3 张零行表（`pending_items` / `context_runs` / `ingest_cursor`） | ✅ |
+| 2 | `memory` + `skill_index` + `skills/<id>/SKILL.md` folder + helpers | ✅ |
+| 3 | `evolution_runs` ledger + trajectory（`refs_consumed_json` / `refs_produced_json`） | ✅ |
+| 4 | `personal_signals` + `raw.db`（`gmail_messages` / `gcal_events` / `device_apps_snapshot` / `device_contacts_snapshot`） | ✅ |
+| 5a | dual-write bridges（legacy → v3，被 Phase 13 替代） | ✅ |
+| 5b | HTTP routes（`/memory` / `/signals` / `/raw/*` / `/evolution`） | ✅ |
+| 5c | end-to-end smoke test | ✅ |
+| 6 | `world_items` → `world_signals` 改名 + 自动 ALTER RENAME 迁移 | ✅ |
+| 7 | `pin` CLI v3 命令（`pin memory` / `pin signals` / `pin raw` / `pin evolution` / `pin skills`） | ✅ |
+| 8 | conversation-crystallize + dreaming 写 `evolution_runs`（trajectory 可见） | ✅ |
+| 9 | `unified-generator` phase 1 prompt 改造为 v3 CLI 链路 | ✅ |
+| 10 | evals harness 框架（types / metrics / online） | ✅ |
+| 11 | APIs `user_devices` 表 + `mobile_proxy` token 路由 + 前端 `ensureDevice` SDK | ✅ |
+| 12 | agent-visible CLI smoke demo + `raw.device-apps` envelope fix | ✅ |
+| 13 | 一次性 backfill + DROP 老表（`profile_memories` / `user_skills`），helpers redirect 到 v3 | ✅ |
 
-每个 phase 启动前更新本文档。
+**变更净结果**：23 张 → 13 张 + `raw.db` 一组 + `skills/` folder。
+**测试**：plugin 244 / 244 ✅；APIs + frontend type-check + 单测全过；CLI smoke 16 命令全过。
+
+后续工作（独立 PR）：
+- consolidation trigger（evolution agent 周期净化 memory）
+- evals/runner/replay.ts + golden fixtures（实际 eval 跑起来）
+- 端侧 SDK 在 OAuth 后调一次 `ensureDevice()` 拿 token
+- 把 `dream_runs` 内部 store 也合并到 `evolution_runs`（dreaming 子系统重写）
 
 ---
 

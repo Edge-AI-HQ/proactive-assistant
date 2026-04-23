@@ -80,13 +80,109 @@ function ensureSchema(db: Database.Database): void {
       updated_at TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS profile_memories (
-      id TEXT PRIMARY KEY,
-      kind TEXT NOT NULL,
-      text TEXT NOT NULL,
-      tags TEXT NOT NULL DEFAULT '[]',
-      created_at TEXT NOT NULL
+    -- profile_memories was the v2 sink; rows are migrated into the v3
+    -- memory table by migrateLegacyToV3 (called at end of ensureSchema)
+    -- and the legacy table is dropped. addMemory/listMemories/searchMemory/
+    -- removeMemory now adapt to the v3 memory table while preserving the
+    -- old MemoryRow shape so existing callers don't break.
+    -- See docs/memory-architecture.md §七 (migration map).
+
+    -- ─────── v3 memory: sedimented user-fact layer ───────
+    -- See docs/memory-architecture.md §三 (memory).
+    -- Single quality-graded table, replaces (in v3) profile_memories +
+    -- profile_interests + goals + a portion of profile JSON fields.
+    -- profile_memories above is kept for backward-compat during migration;
+    -- new writes go to the v3 memory table below.
+    CREATE TABLE IF NOT EXISTS memory (
+      id                 TEXT PRIMARY KEY,
+      text               TEXT NOT NULL,
+      source             TEXT NOT NULL,
+      source_run_id      TEXT,
+      subject            TEXT,
+      quality            REAL NOT NULL DEFAULT 0.5,
+      confidence         REAL NOT NULL DEFAULT 0.5,
+      status             TEXT NOT NULL DEFAULT 'active'
+                         CHECK (status IN ('active', 'archived', 'superseded')),
+      superseded_by      TEXT,
+      occurred_at        TEXT,
+      created_at         TEXT NOT NULL,
+      tags_json          TEXT NOT NULL DEFAULT '[]',
+      related_memory_ids TEXT NOT NULL DEFAULT '[]',
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
     );
+    CREATE INDEX IF NOT EXISTS idx_memory_status_quality
+      ON memory(status, quality DESC);
+    CREATE INDEX IF NOT EXISTS idx_memory_subject_created
+      ON memory(subject, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_memory_source_run
+      ON memory(source_run_id);
+
+    -- ─────── v3 skill_index: skill metadata; body lives in folder ───────
+    -- See docs/memory-architecture.md §三 (skill_index).
+    -- Body markdown is at  OPENCLAW_HOME/data/skills/<id>/SKILL.md
+    -- user_skills (above) is the v2 sink — kept for backward-compat.
+    CREATE TABLE IF NOT EXISTS skill_index (
+      id                  TEXT PRIMARY KEY,
+      title               TEXT NOT NULL,
+      description         TEXT,
+      status              TEXT NOT NULL DEFAULT 'enabled'
+                          CHECK (status IN ('enabled', 'disabled', 'archived')),
+      revision            INTEGER NOT NULL DEFAULT 1,
+      body_hash           TEXT NOT NULL,
+      triggers_json       TEXT NOT NULL DEFAULT '[]',
+      source              TEXT NOT NULL,
+      created_run_id      TEXT,
+      last_updated_run_id TEXT,
+      enabled_at          TEXT,
+      disabled_at         TEXT,
+      created_at          TEXT NOT NULL,
+      updated_at          TEXT NOT NULL,
+      reference_count     INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at  TEXT,
+      referenced_by_runs  TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE INDEX IF NOT EXISTS idx_skill_index_status
+      ON skill_index(status, updated_at DESC);
+
+    -- ─────── v3 personal_signals:待消化的瞬时观察 ───────
+    -- See docs/memory-architecture.md §三 (personal_signals).
+    -- Schema is compatible with the device-side MobileSyncItem contract
+    -- (kind/title/summary/payload/salience/confidence/dedupeKey/occurredAt/...).
+    -- mobile_items.db (separate file) is preserved during the migration window
+    -- so the device upload protocol does not break.
+    CREATE TABLE IF NOT EXISTS personal_signals (
+      id                  TEXT PRIMARY KEY,
+      kind                TEXT NOT NULL,
+      title               TEXT NOT NULL,
+      summary             TEXT NOT NULL,
+      payload_json        TEXT NOT NULL DEFAULT '{}',
+      salience            REAL NOT NULL DEFAULT 0,
+      confidence          REAL NOT NULL DEFAULT 0,
+      dedupe_key          TEXT,
+      occurred_at         TEXT NOT NULL,
+      available_at        TEXT NOT NULL,
+      expires_at          TEXT,
+      source              TEXT NOT NULL DEFAULT 'device',
+      device_id           TEXT,
+      subject             TEXT,
+      source_raw_table    TEXT,
+      source_raw_ids_json TEXT NOT NULL DEFAULT '[]',
+      status              TEXT NOT NULL DEFAULT 'open'
+                          CHECK (status IN ('open', 'consumed', 'archived')),
+      consumed_by_run_id  TEXT,
+      ingested_at         TEXT NOT NULL,
+      reference_count     INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at  TEXT,
+      referenced_by_runs  TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_psignals_dedupe
+      ON personal_signals(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_psignals_status_time
+      ON personal_signals(status, occurred_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_psignals_kind_time
+      ON personal_signals(kind, occurred_at DESC);
 
     CREATE TABLE IF NOT EXISTS profile_signals (
       id TEXT PRIMARY KEY,
@@ -151,7 +247,10 @@ function ensureSchema(db: Database.Database): void {
       recorded_at TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS world_items (
+    -- v3 world_signals (formerly world_items). External news / context
+    -- stream — the public-data analogue of personal_signals.
+    -- See docs/memory-architecture.md §三 (world_signals).
+    CREATE TABLE IF NOT EXISTS world_signals (
       id TEXT PRIMARY KEY,
       provider TEXT NOT NULL,
       stream_type TEXT NOT NULL DEFAULT 'search',
@@ -167,9 +266,13 @@ function ensureSchema(db: Database.Database): void {
       importance TEXT,
       metadata TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
     );
-    CREATE INDEX IF NOT EXISTS idx_world_published ON world_items(published_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_world_signals_published
+      ON world_signals(published_at DESC);
 
     CREATE TABLE IF NOT EXISTS pipeline_runs (
       id TEXT PRIMARY KEY,
@@ -221,32 +324,69 @@ function ensureSchema(db: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_dream_started ON dream_runs(started_at DESC);
 
-    CREATE TABLE IF NOT EXISTS ingest_cursor (
-      source TEXT PRIMARY KEY,
-      cursor TEXT,
-      updated_at TEXT NOT NULL
+    -- ─────── v3 evolution_runs: unified ledger for dream / crystallize / manual ───────
+    -- See docs/memory-architecture.md §三 (evolution_runs).
+    -- Replaces (in v3) the per-domain run tables (dream_runs above stays for
+    -- back-compat). chat_burst = formerly conversation-crystallize trigger;
+    -- daily_dream = formerly dreaming/service.ts trigger; manual = CLI;
+    -- consolidation = future memory-pruning pass.
+    CREATE TABLE IF NOT EXISTS evolution_runs (
+      id                       TEXT PRIMARY KEY,
+      trigger_kind             TEXT NOT NULL CHECK (trigger_kind IN
+                                ('chat_burst', 'daily_dream', 'manual', 'on_event', 'consolidation')),
+      status                   TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+      context_summary          TEXT,
+      window_start             TEXT,
+      window_end               TEXT,
+      memories_written         INTEGER NOT NULL DEFAULT 0,
+      memories_archived        INTEGER NOT NULL DEFAULT 0,
+      memories_superseded      INTEGER NOT NULL DEFAULT 0,
+      profile_updated          INTEGER NOT NULL DEFAULT 0,
+      profile_changed_keys_json TEXT NOT NULL DEFAULT '[]',
+      skills_added             INTEGER NOT NULL DEFAULT 0,
+      skills_updated           INTEGER NOT NULL DEFAULT 0,
+      skills_disabled          INTEGER NOT NULL DEFAULT 0,
+      signals_consumed         INTEGER NOT NULL DEFAULT 0,
+      refs_consumed_json       TEXT NOT NULL DEFAULT '{}',
+      refs_produced_json       TEXT NOT NULL DEFAULT '{}',
+      prompt_excerpt           TEXT,
+      llm_tokens               INTEGER,
+      duration_ms              INTEGER,
+      started_at               TEXT NOT NULL,
+      completed_at             TEXT,
+      error_message            TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_evol_runs_started ON evolution_runs(started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_evol_runs_trigger_started
+      ON evolution_runs(trigger_kind, started_at DESC);
+
+    CREATE TABLE IF NOT EXISTS app_state (
+      namespace  TEXT NOT NULL,
+      key        TEXT NOT NULL,
+      value_json TEXT NOT NULL DEFAULT 'null',
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (namespace, key)
     );
 
-    CREATE TABLE IF NOT EXISTS pending_items (
-      id TEXT PRIMARY KEY,
-      source TEXT NOT NULL,
-      kind TEXT NOT NULL,
-      payload_json TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      available_at TEXT NOT NULL,
-      status TEXT NOT NULL CHECK (status IN ('pending', 'processed')),
-      processed_at TEXT
+    CREATE TABLE IF NOT EXISTS card_evaluations (
+      card_id              TEXT PRIMARY KEY,
+      run_id               TEXT NOT NULL,
+      intent_key           TEXT,
+      basket               TEXT,
+      dim_relevance        REAL,
+      dim_actionability    REAL,
+      dim_why_now          REAL,
+      dim_novelty          REAL,
+      dim_decision_compress REAL,
+      overall              REAL,
+      pass                 INTEGER NOT NULL DEFAULT 1,
+      evaluator            TEXT NOT NULL DEFAULT 'self',
+      feedback_text        TEXT,
+      evaluated_at         TEXT NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS idx_pending_status_available ON pending_items(status, available_at);
-
-    CREATE TABLE IF NOT EXISTS context_runs (
-      run_token TEXT PRIMARY KEY,
-      item_ids_json TEXT NOT NULL,
-      item_count INTEGER NOT NULL,
-      created_at TEXT NOT NULL,
-      status TEXT NOT NULL CHECK (status IN ('open', 'committed', 'expired')),
-      committed_at TEXT
-    );
+    CREATE INDEX IF NOT EXISTS idx_card_eval_run ON card_evaluations(run_id);
+    CREATE INDEX IF NOT EXISTS idx_card_eval_basket_score
+      ON card_evaluations(basket, overall DESC);
 
     CREATE TABLE IF NOT EXISTS intent_card_state (
       card_id TEXT PRIMARY KEY,
@@ -287,19 +427,10 @@ function ensureSchema(db: Database.Database): void {
       updated_at TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS user_skills (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      body_md TEXT NOT NULL,
-      triggers_json TEXT NOT NULL DEFAULT '[]',
-      source TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'active',
-      source_summary TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_user_skills_status ON user_skills(status);
-    CREATE INDEX IF NOT EXISTS idx_user_skills_updated ON user_skills(updated_at DESC);
+    -- user_skills was the v2 sink; rows are migrated into skill_index +
+    -- skills/<id>/SKILL.md by migrateLegacyToV3 and the legacy table is
+    -- dropped. addUserSkill/listUserSkills/getUserSkill now adapt to the
+    -- v3 skill_index while preserving the old UserSkillRow shape.
   `);
 
   ensureColumn(db, 'feedback_events', 'conversation_id', 'TEXT');
@@ -307,6 +438,163 @@ function ensureSchema(db: Database.Database): void {
   ensureColumn(db, 'feedback_events', 'channel', 'TEXT');
   ensureColumn(db, 'feedback_events', 'intent_key', 'TEXT');
   ensureColumn(db, 'user_settings', 'auto_crystallize', 'INTEGER NOT NULL DEFAULT 1');
+
+  // Phase 1: pipeline_runs.artifact_path stores filesystem path to large iterations JSON
+  ensureColumn(db, 'pipeline_runs', 'artifact_path', 'TEXT');
+
+  // Phase 1: drop deprecated tables (zero-row, no callers; replaced by app_state KV)
+  // See docs/memory-architecture.md for migration map.
+  db.exec(`
+    DROP TABLE IF EXISTS pending_items;
+    DROP TABLE IF EXISTS context_runs;
+    DROP TABLE IF EXISTS ingest_cursor;
+  `);
+
+  // Phase 6: rename world_items → world_signals (preserves rows + adds the
+  // reference triple). See docs/memory-architecture.md §三 (world_signals).
+  migrateWorldItemsToSignals(db);
+
+  // Phase 13: one-shot backfill of legacy tables into v3 sinks, then DROP
+  // the legacy tables. Idempotent — safe to run on every container start.
+  // We're pre-product, no users to protect; the goal is "data preserved,
+  // schema clean".  See docs/memory-architecture.md §七 (migration map).
+  migrateLegacyToV3(db);
+}
+
+/**
+ * Phase 13: one-shot backfill of legacy v2 tables into v3 sinks, then
+ * DROP the legacy tables. Idempotent (no-op once tables are gone).
+ *
+ * Pre-product cutover: we move the data we still want, drop the rest.
+ * No multi-week dual-write window. See docs/memory-architecture.md §七.
+ */
+function migrateLegacyToV3(db: Database.Database): void {
+  // ── profile_memories → memory ──
+  const pmExists = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='profile_memories'",
+  ).get();
+  if (pmExists) {
+    const rows = db.prepare(
+      `SELECT pm.id, pm.kind, pm.text, pm.tags, pm.created_at
+       FROM profile_memories pm
+       LEFT JOIN memory m ON m.id = pm.id
+       WHERE m.id IS NULL`,
+    ).all() as Array<{ id: string; kind: string; text: string; tags: string; created_at: string }>;
+    if (rows.length > 0) {
+      const insert = db.prepare(
+        `INSERT INTO memory (
+           id, text, source, source_run_id, subject, quality, confidence,
+           status, superseded_by, occurred_at, created_at,
+           tags_json, related_memory_ids,
+           reference_count, last_referenced_at, referenced_by_runs
+         ) VALUES (?, ?, ?, NULL, 'self', 0.5, 0.5, 'active', NULL, NULL, ?, ?, '[]', 0, NULL, '[]')`,
+      );
+      const tx = db.transaction(() => {
+        for (const r of rows) {
+          insert.run(r.id, r.text, `legacy:${r.kind || 'profile_memory'}`, r.created_at, r.tags || '[]');
+        }
+      });
+      tx();
+    }
+    db.exec('DROP TABLE profile_memories');
+  }
+
+  // ── user_skills → skill_index + skills/<id>/SKILL.md ──
+  const usExists = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='user_skills'",
+  ).get();
+  if (usExists) {
+    const rows = db.prepare(
+      `SELECT us.id, us.title, us.body_md, us.triggers_json, us.source, us.status,
+              us.source_summary, us.created_at, us.updated_at
+       FROM user_skills us
+       LEFT JOIN skill_index si ON si.id = us.id
+       WHERE si.id IS NULL`,
+    ).all() as Array<{
+      id: string; title: string; body_md: string; triggers_json: string;
+      source: string; status: string; source_summary: string | null;
+      created_at: string; updated_at: string;
+    }>;
+    if (rows.length > 0) {
+      const skillsDir = path.join(process.env.OPENCLAW_HOME || '/app', 'data', 'skills');
+      fs.mkdirSync(skillsDir, { recursive: true });
+      const insert = db.prepare(
+        `INSERT INTO skill_index (
+           id, title, description, status, revision, body_hash, triggers_json,
+           source, created_run_id, last_updated_run_id,
+           enabled_at, disabled_at, created_at, updated_at,
+           reference_count, last_referenced_at, referenced_by_runs
+         ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, 0, NULL, '[]')`,
+      );
+      const tx = db.transaction(() => {
+        for (const r of rows) {
+          // Write the body to skills/<id>/SKILL.md
+          const folder = path.join(skillsDir, r.id);
+          fs.mkdirSync(folder, { recursive: true });
+          fs.writeFileSync(path.join(folder, 'SKILL.md'), r.body_md);
+          const bodyHash = crypto.createHash('sha256').update(r.body_md).digest('hex');
+          const newStatus = r.status === 'active' ? 'enabled' : 'disabled';
+          insert.run(
+            r.id, r.title, r.source_summary, newStatus,
+            bodyHash, r.triggers_json || '[]', r.source,
+            newStatus === 'enabled' ? r.created_at : null,
+            newStatus === 'disabled' ? r.updated_at : null,
+            r.created_at, r.updated_at,
+          );
+        }
+      });
+      tx();
+    }
+    db.exec('DROP TABLE user_skills');
+  }
+
+  // dream_runs is intentionally NOT migrated/dropped here — the dreaming/
+  // subsystem owns it as a private internal store. New dream attempts also
+  // write a summary mirror to evolution_runs (see Phase 8 hook in
+  // dreaming/service.ts). Eventually the whole subsystem can be retargeted,
+  // but that's out of scope for the cutover.
+}
+
+/**
+ * Idempotent migration: if the legacy `world_items` table still exists,
+ * add the v3 reference columns to it and rename to `world_signals`.
+ * No-op once the rename has been applied. Safe to call on every startup.
+ */
+function migrateWorldItemsToSignals(db: Database.Database): void {
+  const exists = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='world_items'",
+  ).get();
+  if (!exists) return;
+
+  // The new world_signals table may already exist from the IF NOT EXISTS
+  // CREATE above (fresh installs). If so, copy rows in and drop the legacy.
+  ensureColumn(db, 'world_items', 'reference_count', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'world_items', 'last_referenced_at', 'TEXT');
+  ensureColumn(db, 'world_items', 'referenced_by_runs', "TEXT NOT NULL DEFAULT '[]'");
+
+  const newTableExists = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='world_signals'",
+  ).get();
+  if (newTableExists) {
+    db.exec(`
+      INSERT OR IGNORE INTO world_signals
+        (id, provider, stream_type, title, url, normalized_url, external_id,
+         summary, published_at, search_queries, topics, regions, importance,
+         metadata, created_at, updated_at,
+         reference_count, last_referenced_at, referenced_by_runs)
+      SELECT
+        id, provider, stream_type, title, url, normalized_url, external_id,
+        summary, published_at, search_queries, topics, regions, importance,
+        metadata, created_at, updated_at,
+        reference_count, last_referenced_at, referenced_by_runs
+      FROM world_items;
+      DROP TABLE world_items;
+    `);
+    return;
+  }
+
+  // No new table yet (race-free old install) — just rename.
+  db.exec('ALTER TABLE world_items RENAME TO world_signals');
 }
 
 function ensureColumn(
@@ -588,30 +876,40 @@ export async function closeGoal(key: string): Promise<GoalRow> {
 
 // ── Profile Memories ──
 
+// MemoryRow is the v2 envelope still consumed by cli/profile.ts and
+// routes/profile.ts. After Phase 13 it's adapted from the v3 memory
+// table — the legacy profile_memories table no longer exists.
+// See docs/memory-architecture.md §七.
 export interface MemoryRow {
   id: string;
   user_id: string;
+  /** v2 'kind' column. For v3-native rows we surface the source string here. */
   kind: string;
   text: string;
   tags: string[];
   created_at: string;
 }
 
-function rowToMemory(row: any): MemoryRow {
+/** Recover a v2-shaped 'kind' from the v3 source string. */
+function v3SourceToLegacyKind(source: string): string {
+  if (source.startsWith('legacy:')) return source.slice('legacy:'.length);
+  return source;
+}
+
+function v3MemoryToLegacyRow(row: MemoryRowV3): MemoryRow {
   return {
     id: row.id,
     user_id: USER_ID,
-    kind: row.kind,
+    kind: v3SourceToLegacyKind(row.source),
     text: row.text,
-    tags: parseJsonArray<string>(row.tags),
+    tags: row.tags,
     created_at: row.created_at,
   };
 }
 
 export async function listMemories(opts?: { limit?: number }): Promise<MemoryRow[]> {
-  const limit = opts?.limit ?? 1000;
-  const rows = getDb().prepare('SELECT * FROM profile_memories ORDER BY created_at DESC LIMIT ?').all(limit) as any[];
-  return rows.map(rowToMemory);
+  const v3 = await listMemoryV3({ status: 'active', limit: opts?.limit ?? 1000 });
+  return v3.map(v3MemoryToLegacyRow);
 }
 
 export async function addMemory(input: {
@@ -619,22 +917,31 @@ export async function addMemory(input: {
   text: string;
   tags?: string[];
 }): Promise<MemoryRow> {
-  const id = genId();
-  const ts = now();
-  getDb().prepare('INSERT INTO profile_memories (id, kind, text, tags, created_at) VALUES (?, ?, ?, ?, ?)')
-    .run(id, input.kind, input.text, JSON.stringify(input.tags ?? []), ts);
-  return { id, user_id: USER_ID, kind: input.kind, text: input.text, tags: input.tags ?? [], created_at: ts };
+  const v3 = await addMemoryV3({
+    text: input.text,
+    source: `legacy:${input.kind || 'unknown'}`,
+    subject: 'self',
+    tags: input.tags ?? [],
+  });
+  return v3MemoryToLegacyRow(v3);
 }
 
 export async function searchMemory(query: string, opts?: { limit?: number }): Promise<MemoryRow[]> {
   const limit = opts?.limit ?? 20;
-  const rows = getDb().prepare('SELECT * FROM profile_memories WHERE text LIKE ? ORDER BY created_at DESC LIMIT ?')
-    .all(`%${query}%`, limit) as any[];
-  return rows.map(rowToMemory);
+  // Substring search on text/subject/tags via the v3 table. listMemoryV3
+  // doesn't support full-text yet (vector index is a future PR).
+  const candidates = await listMemoryV3({ status: 'active', limit: 500, orderBy: 'created_at' });
+  const lowered = query.toLowerCase();
+  return candidates
+    .filter((m) => m.text.toLowerCase().includes(lowered)
+      || (m.subject ?? '').toLowerCase().includes(lowered)
+      || m.tags.some((t) => t.toLowerCase().includes(lowered)))
+    .slice(0, limit)
+    .map(v3MemoryToLegacyRow);
 }
 
 export async function removeMemory(id: string): Promise<void> {
-  getDb().prepare('DELETE FROM profile_memories WHERE id = ?').run(id);
+  getDb().prepare('DELETE FROM memory WHERE id = ?').run(id);
 }
 
 // ── Profile Signals ──
@@ -1253,9 +1560,10 @@ export async function findSimilarPushes(opts: {
   return rows.map(rowToPush);
 }
 
-// ── World Items ──
+// ── World Signals (formerly world_items) ──
+// See docs/memory-architecture.md §三 (world_signals).
 
-export interface WorldItemRow {
+export interface WorldSignalRow {
   id: string;
   provider: string;
   stream_type: string;
@@ -1272,19 +1580,25 @@ export interface WorldItemRow {
   metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
 }
 
-function rowToWorldItem(row: any): WorldItemRow {
+function rowToWorldSignal(row: any): WorldSignalRow {
   return {
     ...row,
     search_queries: parseJsonArray<string>(row.search_queries),
     topics: parseJsonArray<string>(row.topics),
     regions: parseJsonArray<string>(row.regions),
     metadata: parseJson(row.metadata),
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
   };
 }
 
-export async function ingestWorldItem(input: {
+export async function ingestWorldSignal(input: {
   provider: string;
   streamType?: string;
   title: string;
@@ -1298,12 +1612,12 @@ export async function ingestWorldItem(input: {
   regions?: string[];
   importance?: string;
   metadata?: Record<string, unknown>;
-}): Promise<WorldItemRow> {
+}): Promise<WorldSignalRow> {
   const db = getDb();
   const id = genId();
   const ts = now();
   db.prepare(`
-    INSERT INTO world_items (id, provider, stream_type, title, url, normalized_url, external_id, summary, published_at,
+    INSERT INTO world_signals (id, provider, stream_type, title, url, normalized_url, external_id, summary, published_at,
       search_queries, topics, regions, importance, metadata, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(normalized_url) DO UPDATE SET
@@ -1321,17 +1635,16 @@ export async function ingestWorldItem(input: {
     JSON.stringify(input.searchQueries ?? []), JSON.stringify(input.topics ?? []),
     JSON.stringify(input.regions ?? []), input.importance ?? null,
     JSON.stringify(input.metadata ?? {}), ts, ts);
-  const row = db.prepare('SELECT * FROM world_items WHERE normalized_url = ?').get(input.normalizedUrl) as any;
-  return rowToWorldItem(row);
+  const row = db.prepare('SELECT * FROM world_signals WHERE normalized_url = ?').get(input.normalizedUrl) as any;
+  return rowToWorldSignal(row);
 }
-
-export async function listWorldItems(opts?: {
+export async function listWorldSignals(opts?: {
   query?: string;
   provider?: string;
   since?: string;
   limit?: number;
-}): Promise<WorldItemRow[]> {
-  const parts = ['SELECT * FROM world_items WHERE 1=1'];
+}): Promise<WorldSignalRow[]> {
+  const parts = ['SELECT * FROM world_signals WHERE 1=1'];
   const params: unknown[] = [];
   if (opts?.query) { parts.push('AND title LIKE ?'); params.push(`%${opts.query}%`); }
   if (opts?.provider) { parts.push('AND provider = ?'); params.push(opts.provider); }
@@ -1339,31 +1652,63 @@ export async function listWorldItems(opts?: {
   parts.push('ORDER BY COALESCE(published_at, created_at) DESC');
   if (opts?.limit) { parts.push('LIMIT ?'); params.push(opts.limit); }
   const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
-  return rows.map(rowToWorldItem);
+  return rows.map(rowToWorldSignal);
 }
-
-export async function getWorldItem(id: string): Promise<WorldItemRow | null> {
-  const row = getDb().prepare('SELECT * FROM world_items WHERE id = ?').get(id) as any;
-  return row ? rowToWorldItem(row) : null;
+export async function getWorldSignal(id: string): Promise<WorldSignalRow | null> {
+  const row = getDb().prepare('SELECT * FROM world_signals WHERE id = ?').get(id) as any;
+  return row ? rowToWorldSignal(row) : null;
 }
-
-export async function listWorldItemsByIds(ids: string[]): Promise<WorldItemRow[]> {
+export async function listWorldSignalsByIds(ids: string[]): Promise<WorldSignalRow[]> {
   if (ids.length === 0) return [];
   const db = getDb();
   const placeholders = ids.map(() => '?').join(',');
-  const rows = db.prepare(`SELECT * FROM world_items WHERE id IN (${placeholders})`).all(...ids) as any[];
-  const mapped = rows.map(rowToWorldItem);
+  const rows = db.prepare(`SELECT * FROM world_signals WHERE id IN (${placeholders})`).all(...ids) as any[];
+  const mapped = rows.map(rowToWorldSignal);
   // Preserve input order
   const order = new Map(ids.map((id, i) => [id, i]));
   return mapped.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
 }
+/**
+ * Bump reference_count + dedup-append runId to referenced_by_runs (cap 10)
+ * for the given world_signals rows. Mirrors markMemoryReferenced API.
+ */
+export async function markWorldSignalsReferenced(
+  signalIds: string[],
+  runId: string,
+): Promise<number> {
+  if (!runId || signalIds.length === 0) return 0;
+  let updated = 0;
+  const ts = now();
+  const tx = getDb().transaction(() => {
+    for (const id of signalIds) {
+      const row = getDb().prepare(
+        'SELECT referenced_by_runs FROM world_signals WHERE id = ?',
+      ).get(id) as { referenced_by_runs?: string } | undefined;
+      if (!row) continue;
+      const existing = parseJsonArray<string>(row.referenced_by_runs);
+      const nextRuns = existing.includes(runId)
+        ? existing
+        : [...existing.slice(-(REFERENCED_BY_RUNS_CAP - 1)), runId];
+      getDb().prepare(
+        `UPDATE world_signals
+         SET reference_count = reference_count + 1,
+             last_referenced_at = ?,
+             referenced_by_runs = ?
+         WHERE id = ?`,
+      ).run(ts, JSON.stringify(nextRuns), id);
+      updated += 1;
+    }
+  });
+  tx();
+  return updated;
+}
 
-export interface WorldSemanticCandidate extends WorldItemRow {
+export interface WorldSemanticCandidate extends WorldSignalRow {
   searchText: string;
 }
 
 export async function listSemanticIndexCandidates(opts?: { limit?: number }): Promise<WorldSemanticCandidate[]> {
-  const items = await listWorldItems({ limit: opts?.limit ?? 100 });
+  const items = await listWorldSignals({ limit: opts?.limit ?? 100 });
   return items.map(item => ({
     ...item,
     searchText: [
@@ -1389,6 +1734,7 @@ export interface PipelineRunRow {
   total_iterations: number | null;
   final_cards: unknown;
   iterations: unknown;
+  artifact_path: string | null;
   error: string | null;
   started_at: string;
   completed_at: string | null;
@@ -1416,7 +1762,34 @@ function rowToPipelineRun(row: any): PipelineRunRow {
     user_id: USER_ID,
     final_cards: row.final_cards ? parseJson(row.final_cards) : null,
     iterations: row.iterations ? parseJson(row.iterations) : null,
+    artifact_path: row.artifact_path ?? null,
   };
+}
+
+/**
+ * Resolve the directory where pipeline iteration artifacts (large JSON blobs)
+ * are persisted. See docs/memory-architecture.md §五 (大 JSON 不进 SQLite).
+ */
+export function getRunArtifactsDir(): string {
+  const home = process.env.OPENCLAW_HOME || '/app';
+  return path.join(home, 'data', 'run-artifacts');
+}
+
+export function getRunArtifactPath(runId: string): string {
+  return path.join(getRunArtifactsDir(), `${runId}.json`);
+}
+
+/**
+ * Read the iterations payload that was previously persisted to the artifact
+ * file for `runId`. Returns null if the file does not exist or fails to parse.
+ */
+export function readRunArtifact(runId: string): unknown | null {
+  try {
+    const raw = fs.readFileSync(getRunArtifactPath(runId), 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
 export async function savePipelineRun(input: {
@@ -1428,10 +1801,26 @@ export async function savePipelineRun(input: {
 }): Promise<void> {
   const id = genId();
   const ts = now();
+
+  // Persist large iterations blob to filesystem; keep DB row lean.
+  let artifactPath: string | null = null;
+  let iterationsForDb: string | null = null;
+  if (input.iterations !== undefined && input.iterations !== null) {
+    const dir = getRunArtifactsDir();
+    fs.mkdirSync(dir, { recursive: true });
+    artifactPath = getRunArtifactPath(input.runId);
+    fs.writeFileSync(artifactPath, JSON.stringify(input.iterations));
+    // Iterations column is left NULL — readers should consult artifact_path.
+  }
+
   getDb().prepare(
-    'INSERT INTO pipeline_runs (id, run_id, status, total_iterations, final_cards, iterations, started_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, input.runId, input.status, input.totalIterations,
-    JSON.stringify(input.finalCards), JSON.stringify(input.iterations), ts, ts);
+    `INSERT INTO pipeline_runs
+       (id, run_id, status, total_iterations, final_cards, iterations, artifact_path, started_at, completed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id, input.runId, input.status, input.totalIterations,
+    JSON.stringify(input.finalCards), iterationsForDb, artifactPath, ts, ts,
+  );
   const cards = Array.isArray(input.finalCards) ? input.finalCards as Array<Record<string, unknown>> : [];
   await seedGeneratedCards(cards.flatMap((card) => {
     const cardId = typeof card.id === 'string' && card.id.trim().length > 0 ? card.id.trim() : null;
@@ -1680,6 +2069,11 @@ export async function setCrystallizeOverride(
 }
 
 // ── User Skills ──
+// Adapted to the v3 skill_index + skills/<id>/SKILL.md folder. The legacy
+// user_skills table is migrated by migrateLegacyToV3 and dropped. We
+// preserve the v2 UserSkillRow shape so existing callers (cli/profile.ts,
+// routes/skills.ts, conversation-crystallize/skill-injection.ts,
+// routes/crystallize.ts) compile without changes.
 
 export interface UserSkillRow {
   id: string;
@@ -1693,16 +2087,19 @@ export interface UserSkillRow {
   updated_at: string;
 }
 
-function rowToUserSkill(row: any): UserSkillRow {
-  const status = row.status === 'disabled' ? 'disabled' : 'active';
+function v3SkillStatusToLegacy(s: SkillStatus): 'active' | 'disabled' {
+  return s === 'enabled' ? 'active' : 'disabled';
+}
+
+function v3SkillToLegacyRow(row: SkillIndexRow): UserSkillRow {
   return {
     id: row.id,
     title: row.title,
-    body_md: row.body_md,
-    triggers: parseJsonArray<string>(row.triggers_json),
+    body_md: readSkillBody(row.id) ?? '',
+    triggers: row.triggers,
     source: row.source,
-    status,
-    source_summary: row.source_summary ?? null,
+    status: v3SkillStatusToLegacy(row.status),
+    source_summary: row.description ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -1712,19 +2109,15 @@ export async function listUserSkills(opts?: {
   status?: 'active' | 'disabled';
   limit?: number;
 }): Promise<UserSkillRow[]> {
-  const db = getDb();
-  const limit = opts?.limit ?? 200;
-  const rows = opts?.status
-    ? db.prepare('SELECT * FROM user_skills WHERE status = ? ORDER BY updated_at DESC LIMIT ?')
-        .all(opts.status, limit) as any[]
-    : db.prepare('SELECT * FROM user_skills ORDER BY updated_at DESC LIMIT ?')
-        .all(limit) as any[];
-  return rows.map(rowToUserSkill);
+  const v3Status: SkillStatus | undefined = opts?.status === 'active' ? 'enabled'
+    : opts?.status === 'disabled' ? 'disabled' : undefined;
+  const rows = await listSkills({ status: v3Status, limit: opts?.limit ?? 200 });
+  return rows.map(v3SkillToLegacyRow);
 }
 
 export async function getUserSkill(id: string): Promise<UserSkillRow | null> {
-  const row = getDb().prepare('SELECT * FROM user_skills WHERE id = ?').get(id) as any;
-  return row ? rowToUserSkill(row) : null;
+  const row = await getSkillIndex(id);
+  return row ? v3SkillToLegacyRow(row) : null;
 }
 
 export async function addUserSkill(input: {
@@ -1735,61 +2128,50 @@ export async function addUserSkill(input: {
   status?: 'active' | 'disabled';
   source_summary?: string | null;
 }): Promise<UserSkillRow> {
-  const db = getDb();
   const id = genId();
-  const ts = now();
-  const status = input.status ?? 'active';
-  db.prepare(`
-    INSERT INTO user_skills
-      (id, title, body_md, triggers_json, source, status, source_summary, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    id,
-    input.title,
-    input.body_md,
-    JSON.stringify(input.triggers ?? []),
-    input.source,
-    status,
-    input.source_summary ?? null,
-    ts,
-    ts,
-  );
-  return {
+  const status: SkillStatus = (input.status ?? 'active') === 'active' ? 'enabled' : 'disabled';
+  const v3 = await addSkill({
     id,
     title: input.title,
-    body_md: input.body_md,
+    body: input.body_md,
+    description: input.source_summary ?? null,
     triggers: input.triggers ?? [],
     source: input.source,
     status,
-    source_summary: input.source_summary ?? null,
-    created_at: ts,
-    updated_at: ts,
-  };
+  });
+  return v3SkillToLegacyRow(v3);
 }
 
 export async function updateUserSkill(
   id: string,
   patch: Partial<Pick<UserSkillRow, 'title' | 'body_md' | 'triggers' | 'status' | 'source_summary'>>,
 ): Promise<UserSkillRow | null> {
-  const db = getDb();
-  const existing = await getUserSkill(id);
+  const existing = await getSkillIndex(id);
   if (!existing) return null;
-  const sets: string[] = [];
-  const vals: unknown[] = [];
-  if (patch.title !== undefined) { sets.push('title = ?'); vals.push(patch.title); }
-  if (patch.body_md !== undefined) { sets.push('body_md = ?'); vals.push(patch.body_md); }
-  if (patch.triggers !== undefined) { sets.push('triggers_json = ?'); vals.push(JSON.stringify(patch.triggers)); }
-  if (patch.status !== undefined) { sets.push('status = ?'); vals.push(patch.status); }
-  if (patch.source_summary !== undefined) { sets.push('source_summary = ?'); vals.push(patch.source_summary); }
-  if (sets.length === 0) return existing;
-  sets.push('updated_at = ?'); vals.push(now());
-  vals.push(id);
-  db.prepare(`UPDATE user_skills SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
-  return getUserSkill(id);
+  if (patch.status !== undefined) {
+    if (patch.status === 'disabled' && existing.status === 'enabled') await disableSkill(id);
+    else if (patch.status === 'active' && existing.status !== 'enabled') await enableSkill(id);
+  }
+  const v3 = await updateSkill({
+    id,
+    title: patch.title,
+    description: patch.source_summary,
+    body: patch.body_md,
+    triggers: patch.triggers,
+  });
+  return v3SkillToLegacyRow(v3);
 }
 
 export async function deleteUserSkill(id: string): Promise<boolean> {
-  const info = getDb().prepare('DELETE FROM user_skills WHERE id = ?').run(id);
+  // Hard delete: removes the index row + the body file. v3 prefers
+  // disable+archive for normal flow, but the legacy DELETE /skills/:id
+  // route expects the row to actually disappear.
+  const existing = await getSkillIndex(id);
+  if (!existing) return false;
+  const info = getDb().prepare('DELETE FROM skill_index WHERE id = ?').run(id);
+  try {
+    fs.rmSync(getSkillFolder(id), { recursive: true, force: true });
+  } catch { /* folder may not exist */ }
   return info.changes > 0;
 }
 
@@ -1828,138 +2210,1238 @@ export async function saveAutoLoopState(fields: Partial<Pick<AutoLoopStateRow, '
   db.prepare(`UPDATE auto_loop_state SET ${sets.join(', ')} WHERE id = 1`).run(...vals);
 }
 
-// ── Pending Store (ingest cursors, pending items, context runs) ──
+// ── App State (KV) — replaces auto_loop_state / chat_crystallize_state /
+//                    ingest_cursor / pending_items / context_runs single-row tables.
+// See docs/memory-architecture.md §五 (app_state KV).
 
-export type PendingSource = 'world' | 'personal';
-export type PendingStatus = 'pending' | 'processed';
-
-export interface PendingItem {
-  id: string;
-  source: PendingSource;
-  kind: string;
-  createdAt: string;
-  availableAt: string;
-  status: PendingStatus;
-  processedAt: string | null;
-  payload: Record<string, unknown>;
+export interface AppStateRow<T = unknown> {
+  namespace: string;
+  key: string;
+  value: T;
+  updated_at: string;
 }
 
-export interface PendingStoreState {
-  worldCursorUpdatedAt: string | null;
-  personalSnapshotHash: string | null;
-  items: PendingItem[];
-}
-
-export async function getIngestCursor(source: PendingSource): Promise<string | null> {
-  const row = getDb().prepare('SELECT cursor FROM ingest_cursor WHERE source = ?').get(source) as any;
-  return row?.cursor ?? null;
-}
-
-export async function setIngestCursor(source: PendingSource, cursor: string): Promise<void> {
-  getDb().prepare(`
-    INSERT INTO ingest_cursor (source, cursor, updated_at)
-    VALUES (?, ?, ?)
-    ON CONFLICT(source) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at
-  `).run(source, cursor, now());
-}
-
-export async function loadPendingStore(limit = 500): Promise<PendingStoreState> {
-  const db = getDb();
-  const rows = db.prepare(
-    'SELECT * FROM pending_items ORDER BY created_at DESC LIMIT ?'
-  ).all(limit) as any[];
-  const items: PendingItem[] = rows.map(row => ({
-    id: row.id,
-    source: row.source as PendingSource,
-    kind: row.kind,
-    createdAt: row.created_at,
-    availableAt: row.available_at,
-    status: row.status as PendingStatus,
-    processedAt: row.processed_at,
-    payload: parseJson(row.payload_json),
-  }));
-  return {
-    worldCursorUpdatedAt: (await getIngestCursor('world')),
-    personalSnapshotHash: (await getIngestCursor('personal')),
-    items,
-  };
-}
-
-export async function addPendingItem(input: {
-  id: string;
-  source: PendingSource;
-  kind: string;
-  payload: Record<string, unknown>;
-  availableAt?: string;
-}): Promise<void> {
-  const ts = now();
-  getDb().prepare(
-    'INSERT OR IGNORE INTO pending_items (id, source, kind, payload_json, created_at, available_at, status) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).run(input.id, input.source, input.kind, JSON.stringify(input.payload), ts, input.availableAt ?? ts, 'pending');
-}
-
-export async function markPendingProcessed(id: string): Promise<void> {
-  getDb().prepare("UPDATE pending_items SET status = 'processed', processed_at = ? WHERE id = ?").run(now(), id);
-}
-
-export async function listPendingItems(opts?: { source?: PendingSource; status?: PendingStatus; limit?: number }): Promise<PendingItem[]> {
-  const parts = ['SELECT * FROM pending_items WHERE 1=1'];
-  const params: unknown[] = [];
-  if (opts?.source) { parts.push('AND source = ?'); params.push(opts.source); }
-  if (opts?.status) { parts.push('AND status = ?'); params.push(opts.status); }
-  parts.push('ORDER BY available_at ASC');
-  if (opts?.limit) { parts.push('LIMIT ?'); params.push(opts.limit); }
-  const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
-  return rows.map(row => ({
-    id: row.id,
-    source: row.source as PendingSource,
-    kind: row.kind,
-    createdAt: row.created_at,
-    availableAt: row.available_at,
-    status: row.status as PendingStatus,
-    processedAt: row.processed_at,
-    payload: parseJson(row.payload_json),
-  }));
-}
-
-// ── Context Runs ──
-
-export interface ContextRun {
-  runToken: string;
-  itemIds: string[];
-  itemCount: number;
-  createdAt: string;
-  status: 'open' | 'committed' | 'expired';
-  committedAt: string | null;
-}
-
-export async function createContextRun(runToken: string, itemIds: string[]): Promise<ContextRun> {
-  const ts = now();
-  getDb().prepare(
-    "INSERT INTO context_runs (run_token, item_ids_json, item_count, created_at, status) VALUES (?, ?, ?, ?, 'open')"
-  ).run(runToken, JSON.stringify(itemIds), itemIds.length, ts);
-  return { runToken, itemIds, itemCount: itemIds.length, createdAt: ts, status: 'open', committedAt: null };
-}
-
-export async function commitContextRun(runToken: string): Promise<void> {
-  getDb().prepare("UPDATE context_runs SET status = 'committed', committed_at = ? WHERE run_token = ?").run(now(), runToken);
-}
-
-export async function getContextRun(runToken: string): Promise<ContextRun | null> {
-  const row = getDb().prepare('SELECT * FROM context_runs WHERE run_token = ?').get(runToken) as any;
+export async function getAppState<T = unknown>(
+  namespace: string,
+  key: string,
+): Promise<T | null> {
+  const row = getDb()
+    .prepare('SELECT value_json FROM app_state WHERE namespace = ? AND key = ?')
+    .get(namespace, key) as { value_json: string } | undefined;
   if (!row) return null;
+  try {
+    return JSON.parse(row.value_json) as T;
+  } catch {
+    return null;
+  }
+}
+
+export async function setAppState<T = unknown>(
+  namespace: string,
+  key: string,
+  value: T,
+): Promise<void> {
+  const json = JSON.stringify(value ?? null);
+  getDb()
+    .prepare(
+      `INSERT INTO app_state (namespace, key, value_json, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(namespace, key) DO UPDATE SET
+         value_json = excluded.value_json,
+         updated_at = excluded.updated_at`,
+    )
+    .run(namespace, key, json, now());
+}
+
+export async function deleteAppState(namespace: string, key: string): Promise<void> {
+  getDb().prepare('DELETE FROM app_state WHERE namespace = ? AND key = ?').run(namespace, key);
+}
+
+export async function listAppState<T = unknown>(
+  namespace: string,
+): Promise<AppStateRow<T>[]> {
+  const rows = getDb()
+    .prepare('SELECT namespace, key, value_json, updated_at FROM app_state WHERE namespace = ? ORDER BY key')
+    .all(namespace) as Array<{ namespace: string; key: string; value_json: string; updated_at: string }>;
+  return rows.map((row) => {
+    let value: T;
+    try {
+      value = JSON.parse(row.value_json) as T;
+    } catch {
+      value = null as T;
+    }
+    return { namespace: row.namespace, key: row.key, value, updated_at: row.updated_at };
+  });
+}
+
+// ── Card Evaluations — pipeline self-review scores. Indexable for evals.
+// See docs/memory-architecture.md §三 (card_evaluations).
+
+export interface CardEvaluationRow {
+  card_id: string;
+  run_id: string;
+  intent_key: string | null;
+  basket: string | null;
+  dim_relevance: number | null;
+  dim_actionability: number | null;
+  dim_why_now: number | null;
+  dim_novelty: number | null;
+  dim_decision_compress: number | null;
+  overall: number | null;
+  pass: boolean;
+  evaluator: string;
+  feedback_text: string | null;
+  evaluated_at: string;
+}
+
+export interface SaveCardEvaluationInput {
+  cardId: string;
+  runId: string;
+  intentKey?: string | null;
+  basket?: string | null;
+  dimensions?: {
+    relevance?: number;
+    actionability?: number;
+    whyNow?: number;
+    novelty?: number;
+    decisionCompression?: number;
+  };
+  overall?: number;
+  pass?: boolean;
+  evaluator?: string;
+  feedbackText?: string | null;
+}
+
+export async function saveCardEvaluation(
+  input: SaveCardEvaluationInput,
+): Promise<CardEvaluationRow> {
+  const ts = now();
+  const evaluator = input.evaluator ?? 'self';
+  const dims = input.dimensions ?? {};
+  const pass = input.pass ?? true;
+  getDb()
+    .prepare(
+      `INSERT INTO card_evaluations (
+         card_id, run_id, intent_key, basket,
+         dim_relevance, dim_actionability, dim_why_now, dim_novelty, dim_decision_compress,
+         overall, pass, evaluator, feedback_text, evaluated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(card_id) DO UPDATE SET
+         run_id = excluded.run_id,
+         intent_key = excluded.intent_key,
+         basket = excluded.basket,
+         dim_relevance = excluded.dim_relevance,
+         dim_actionability = excluded.dim_actionability,
+         dim_why_now = excluded.dim_why_now,
+         dim_novelty = excluded.dim_novelty,
+         dim_decision_compress = excluded.dim_decision_compress,
+         overall = excluded.overall,
+         pass = excluded.pass,
+         evaluator = excluded.evaluator,
+         feedback_text = excluded.feedback_text,
+         evaluated_at = excluded.evaluated_at`,
+    )
+    .run(
+      input.cardId,
+      input.runId,
+      input.intentKey ?? null,
+      input.basket ?? null,
+      dims.relevance ?? null,
+      dims.actionability ?? null,
+      dims.whyNow ?? null,
+      dims.novelty ?? null,
+      dims.decisionCompression ?? null,
+      input.overall ?? null,
+      pass ? 1 : 0,
+      evaluator,
+      input.feedbackText ?? null,
+      ts,
+    );
   return {
-    runToken: row.run_token,
-    itemIds: parseJsonArray<string>(row.item_ids_json),
-    itemCount: row.item_count,
-    createdAt: row.created_at,
-    status: row.status,
-    committedAt: row.committed_at,
+    card_id: input.cardId,
+    run_id: input.runId,
+    intent_key: input.intentKey ?? null,
+    basket: input.basket ?? null,
+    dim_relevance: dims.relevance ?? null,
+    dim_actionability: dims.actionability ?? null,
+    dim_why_now: dims.whyNow ?? null,
+    dim_novelty: dims.novelty ?? null,
+    dim_decision_compress: dims.decisionCompression ?? null,
+    overall: input.overall ?? null,
+    pass,
+    evaluator,
+    feedback_text: input.feedbackText ?? null,
+    evaluated_at: ts,
   };
 }
 
-export async function expireOldContextRuns(maxAgeMs = 3600_000): Promise<number> {
-  const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
-  const result = getDb().prepare("UPDATE context_runs SET status = 'expired' WHERE status = 'open' AND created_at < ?").run(cutoff);
+export async function saveCardEvaluations(
+  inputs: SaveCardEvaluationInput[],
+): Promise<CardEvaluationRow[]> {
+  if (inputs.length === 0) return [];
+  const out: CardEvaluationRow[] = [];
+  const tx = getDb().transaction((batch: SaveCardEvaluationInput[]) => {
+    for (const item of batch) {
+      // saveCardEvaluation is async-shaped but the underlying op is sync;
+      // fire-and-await is safe inside a sync transaction since it returns a resolved promise.
+      out.push({
+        card_id: item.cardId,
+        run_id: item.runId,
+        intent_key: item.intentKey ?? null,
+        basket: item.basket ?? null,
+        dim_relevance: item.dimensions?.relevance ?? null,
+        dim_actionability: item.dimensions?.actionability ?? null,
+        dim_why_now: item.dimensions?.whyNow ?? null,
+        dim_novelty: item.dimensions?.novelty ?? null,
+        dim_decision_compress: item.dimensions?.decisionCompression ?? null,
+        overall: item.overall ?? null,
+        pass: item.pass ?? true,
+        evaluator: item.evaluator ?? 'self',
+        feedback_text: item.feedbackText ?? null,
+        evaluated_at: now(),
+      });
+    }
+    for (const row of out) {
+      getDb()
+        .prepare(
+          `INSERT INTO card_evaluations (
+             card_id, run_id, intent_key, basket,
+             dim_relevance, dim_actionability, dim_why_now, dim_novelty, dim_decision_compress,
+             overall, pass, evaluator, feedback_text, evaluated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(card_id) DO UPDATE SET
+             run_id = excluded.run_id,
+             intent_key = excluded.intent_key,
+             basket = excluded.basket,
+             dim_relevance = excluded.dim_relevance,
+             dim_actionability = excluded.dim_actionability,
+             dim_why_now = excluded.dim_why_now,
+             dim_novelty = excluded.dim_novelty,
+             dim_decision_compress = excluded.dim_decision_compress,
+             overall = excluded.overall,
+             pass = excluded.pass,
+             evaluator = excluded.evaluator,
+             feedback_text = excluded.feedback_text,
+             evaluated_at = excluded.evaluated_at`,
+        )
+        .run(
+          row.card_id,
+          row.run_id,
+          row.intent_key,
+          row.basket,
+          row.dim_relevance,
+          row.dim_actionability,
+          row.dim_why_now,
+          row.dim_novelty,
+          row.dim_decision_compress,
+          row.overall,
+          row.pass ? 1 : 0,
+          row.evaluator,
+          row.feedback_text,
+          row.evaluated_at,
+        );
+    }
+  });
+  tx(inputs);
+  return out;
+}
+
+function rowToCardEvaluation(row: any): CardEvaluationRow {
+  return {
+    card_id: row.card_id,
+    run_id: row.run_id,
+    intent_key: row.intent_key,
+    basket: row.basket,
+    dim_relevance: row.dim_relevance,
+    dim_actionability: row.dim_actionability,
+    dim_why_now: row.dim_why_now,
+    dim_novelty: row.dim_novelty,
+    dim_decision_compress: row.dim_decision_compress,
+    overall: row.overall,
+    pass: row.pass === 1 || row.pass === true,
+    evaluator: row.evaluator,
+    feedback_text: row.feedback_text,
+    evaluated_at: row.evaluated_at,
+  };
+}
+
+export async function listCardEvaluationsByRun(runId: string): Promise<CardEvaluationRow[]> {
+  const rows = getDb()
+    .prepare('SELECT * FROM card_evaluations WHERE run_id = ? ORDER BY overall DESC')
+    .all(runId) as any[];
+  return rows.map(rowToCardEvaluation);
+}
+
+export async function getCardEvaluation(cardId: string): Promise<CardEvaluationRow | null> {
+  const row = getDb()
+    .prepare('SELECT * FROM card_evaluations WHERE card_id = ?')
+    .get(cardId) as any;
+  return row ? rowToCardEvaluation(row) : null;
+}
+
+// (legacy PendingStore / ContextRun helpers removed in Phase 1.
+//  See docs/memory-architecture.md §七 for the migration map.)
+
+// ─────────────────────────────────────────────────────────────────────────
+// v3 Memory — sedimented user-fact layer.
+// See docs/memory-architecture.md §三 (memory).
+// ─────────────────────────────────────────────────────────────────────────
+
+export type MemoryStatus = 'active' | 'archived' | 'superseded';
+
+export interface MemoryRowV3 {
+  id: string;
+  text: string;
+  source: string;
+  source_run_id: string | null;
+  subject: string | null;
+  quality: number;
+  confidence: number;
+  status: MemoryStatus;
+  superseded_by: string | null;
+  occurred_at: string | null;
+  created_at: string;
+  tags: string[];
+  related_memory_ids: string[];
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+export interface AddMemoryInput {
+  text: string;
+  source: string;
+  sourceRunId?: string | null;
+  subject?: string | null;
+  quality?: number;
+  confidence?: number;
+  occurredAt?: string | null;
+  tags?: string[];
+  relatedMemoryIds?: string[];
+  /** Optional explicit id; if omitted a UUID is generated. */
+  id?: string;
+}
+
+const MEMORY_QUALITY_DEVICE_TRIGGER_CAP = 0.7;
+
+function clampQuality(source: string, quality: number | undefined): number {
+  const q = typeof quality === 'number' && Number.isFinite(quality) ? quality : 0.5;
+  // Enforce the device:trigger cap from docs/memory-architecture.md §五.
+  if (source.startsWith('device:trigger') && q > MEMORY_QUALITY_DEVICE_TRIGGER_CAP) {
+    return MEMORY_QUALITY_DEVICE_TRIGGER_CAP;
+  }
+  return Math.max(0, Math.min(1, q));
+}
+
+function rowToMemoryV3(row: any): MemoryRowV3 {
+  return {
+    id: row.id,
+    text: row.text,
+    source: row.source,
+    source_run_id: row.source_run_id ?? null,
+    subject: row.subject ?? null,
+    quality: typeof row.quality === 'number' ? row.quality : 0.5,
+    confidence: typeof row.confidence === 'number' ? row.confidence : 0.5,
+    status: row.status as MemoryStatus,
+    superseded_by: row.superseded_by ?? null,
+    occurred_at: row.occurred_at ?? null,
+    created_at: row.created_at,
+    tags: parseJsonArray<string>(row.tags_json),
+    related_memory_ids: parseJsonArray<string>(row.related_memory_ids),
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export async function addMemoryV3(input: AddMemoryInput): Promise<MemoryRowV3> {
+  if (!input.text || !input.text.trim()) {
+    throw new Error('addMemoryV3: text is required');
+  }
+  if (!input.source || !input.source.trim()) {
+    throw new Error('addMemoryV3: source is required');
+  }
+  const id = input.id ?? genId();
+  const ts = now();
+  const quality = clampQuality(input.source, input.quality);
+  const confidence = typeof input.confidence === 'number'
+    ? Math.max(0, Math.min(1, input.confidence)) : 0.5;
+  const tagsJson = JSON.stringify(input.tags ?? []);
+  const relatedJson = JSON.stringify(input.relatedMemoryIds ?? []);
+  getDb().prepare(
+    `INSERT INTO memory (
+       id, text, source, source_run_id, subject, quality, confidence,
+       status, superseded_by, occurred_at, created_at,
+       tags_json, related_memory_ids,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', NULL, ?, ?, ?, ?, 0, NULL, '[]')`,
+  ).run(
+    id, input.text.trim(), input.source, input.sourceRunId ?? null, input.subject ?? null,
+    quality, confidence, input.occurredAt ?? null, ts, tagsJson, relatedJson,
+  );
+  const row = getDb().prepare('SELECT * FROM memory WHERE id = ?').get(id);
+  return rowToMemoryV3(row);
+}
+
+export interface ListMemoryOpts {
+  status?: MemoryStatus;
+  minQuality?: number;
+  source?: string;
+  subject?: string;
+  subjectPrefix?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+  orderBy?: 'created_at' | 'quality' | 'last_referenced_at';
+  orderDirection?: 'asc' | 'desc';
+}
+
+export async function listMemoryV3(opts: ListMemoryOpts = {}): Promise<MemoryRowV3[]> {
+  const parts = ['SELECT * FROM memory WHERE 1=1'];
+  const params: unknown[] = [];
+  parts.push("AND status = ?");
+  params.push(opts.status ?? 'active');
+  if (typeof opts.minQuality === 'number') { parts.push('AND quality >= ?'); params.push(opts.minQuality); }
+  if (opts.source) { parts.push('AND source = ?'); params.push(opts.source); }
+  if (opts.subject) { parts.push('AND subject = ?'); params.push(opts.subject); }
+  if (opts.subjectPrefix) {
+    parts.push('AND subject LIKE ?');
+    params.push(`${opts.subjectPrefix.replace(/[%_]/g, (c) => '\\' + c)}%`);
+  }
+  if (opts.since) { parts.push('AND created_at >= ?'); params.push(opts.since); }
+  if (opts.until) { parts.push('AND created_at <= ?'); params.push(opts.until); }
+  const orderCol = opts.orderBy === 'quality' ? 'quality'
+    : opts.orderBy === 'last_referenced_at' ? 'last_referenced_at'
+    : 'created_at';
+  const orderDir = opts.orderDirection === 'asc' ? 'ASC' : 'DESC';
+  parts.push(`ORDER BY ${orderCol} ${orderDir}`);
+  parts.push('LIMIT ?');
+  params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
+  const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
+  return rows.map(rowToMemoryV3);
+}
+
+export async function getMemoryV3(id: string): Promise<MemoryRowV3 | null> {
+  const row = getDb().prepare('SELECT * FROM memory WHERE id = ?').get(id) as any;
+  return row ? rowToMemoryV3(row) : null;
+}
+
+/**
+ * Mark `oldId` as superseded by `newId`. Both must already exist in the
+ * memory table. Throws if either is missing.
+ */
+export async function supersedeMemoryV3(oldId: string, newId: string): Promise<void> {
+  if (oldId === newId) throw new Error('supersedeMemoryV3: old and new id are the same');
+  const tx = getDb().transaction(() => {
+    const oldRow = getDb().prepare('SELECT id FROM memory WHERE id = ?').get(oldId);
+    const newRow = getDb().prepare('SELECT id FROM memory WHERE id = ?').get(newId);
+    if (!oldRow) throw new Error(`supersedeMemoryV3: memory ${oldId} not found`);
+    if (!newRow) throw new Error(`supersedeMemoryV3: memory ${newId} not found`);
+    getDb().prepare(
+      "UPDATE memory SET status = 'superseded', superseded_by = ? WHERE id = ?",
+    ).run(newId, oldId);
+  });
+  tx();
+}
+
+export async function archiveMemoryV3(id: string): Promise<void> {
+  getDb().prepare(
+    "UPDATE memory SET status = 'archived' WHERE id = ?",
+  ).run(id);
+}
+
+const REFERENCED_BY_RUNS_CAP = 10;
+
+/**
+ * Append `runId` to a memory row's referenced_by_runs (cap 10), bump
+ * reference_count, set last_referenced_at = now(). No-op if memory is
+ * missing. See docs/memory-architecture.md §五 (reference 三件套 cap).
+ */
+export async function markMemoryReferenced(
+  memoryIds: string[],
+  runId: string,
+): Promise<number> {
+  if (!runId || memoryIds.length === 0) return 0;
+  let updated = 0;
+  const ts = now();
+  const tx = getDb().transaction(() => {
+    for (const id of memoryIds) {
+      const row = getDb().prepare(
+        'SELECT referenced_by_runs FROM memory WHERE id = ?',
+      ).get(id) as { referenced_by_runs?: string } | undefined;
+      if (!row) continue;
+      const existing = parseJsonArray<string>(row.referenced_by_runs);
+      const nextRuns = existing.includes(runId)
+        ? existing
+        : [...existing.slice(-(REFERENCED_BY_RUNS_CAP - 1)), runId];
+      getDb().prepare(
+        `UPDATE memory
+         SET reference_count = reference_count + 1,
+             last_referenced_at = ?,
+             referenced_by_runs = ?
+         WHERE id = ?`,
+      ).run(ts, JSON.stringify(nextRuns), id);
+      updated += 1;
+    }
+  });
+  tx();
+  return updated;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// v3 Skill index — metadata only; body lives in folder
+//
+//   ${OPENCLAW_HOME}/data/skills/<skill_id>/SKILL.md
+//
+// See docs/memory-architecture.md §三 (skill_index).
+// ─────────────────────────────────────────────────────────────────────────
+
+export type SkillStatus = 'enabled' | 'disabled' | 'archived';
+
+export interface SkillIndexRow {
+  id: string;
+  title: string;
+  description: string | null;
+  status: SkillStatus;
+  revision: number;
+  body_hash: string;
+  triggers: string[];
+  source: string;
+  created_run_id: string | null;
+  last_updated_run_id: string | null;
+  enabled_at: string | null;
+  disabled_at: string | null;
+  created_at: string;
+  updated_at: string;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToSkillIndex(row: any): SkillIndexRow {
+  return {
+    id: row.id,
+    title: row.title,
+    description: row.description ?? null,
+    status: row.status as SkillStatus,
+    revision: typeof row.revision === 'number' ? row.revision : 1,
+    body_hash: row.body_hash ?? '',
+    triggers: parseJsonArray<string>(row.triggers_json),
+    source: row.source,
+    created_run_id: row.created_run_id ?? null,
+    last_updated_run_id: row.last_updated_run_id ?? null,
+    enabled_at: row.enabled_at ?? null,
+    disabled_at: row.disabled_at ?? null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function getSkillsDir(): string {
+  const home = process.env.OPENCLAW_HOME || '/app';
+  return path.join(home, 'data', 'skills');
+}
+
+export function getSkillFolder(skillId: string): string {
+  return path.join(getSkillsDir(), skillId);
+}
+
+export function getSkillBodyPath(skillId: string): string {
+  return path.join(getSkillFolder(skillId), 'SKILL.md');
+}
+
+export function readSkillBody(skillId: string): string | null {
+  try {
+    return fs.readFileSync(getSkillBodyPath(skillId), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+function hashBody(body: string): string {
+  return crypto.createHash('sha256').update(body).digest('hex');
+}
+
+function writeSkillBodyFile(skillId: string, body: string): string {
+  const folder = getSkillFolder(skillId);
+  fs.mkdirSync(folder, { recursive: true });
+  const filePath = path.join(folder, 'SKILL.md');
+  fs.writeFileSync(filePath, body);
+  return hashBody(body);
+}
+
+export interface AddSkillInput {
+  id: string;
+  title: string;
+  body: string;
+  description?: string | null;
+  triggers?: string[];
+  source: string;
+  createdRunId?: string | null;
+  status?: SkillStatus;
+}
+
+export async function addSkill(input: AddSkillInput): Promise<SkillIndexRow> {
+  if (!input.id || !input.id.trim()) throw new Error('addSkill: id is required');
+  if (!input.title || !input.title.trim()) throw new Error('addSkill: title is required');
+  if (!input.source || !input.source.trim()) throw new Error('addSkill: source is required');
+  const id = input.id.trim();
+  const status = input.status ?? 'enabled';
+  const ts = now();
+  const bodyHash = writeSkillBodyFile(id, input.body ?? '');
+  const triggersJson = JSON.stringify(input.triggers ?? []);
+  getDb().prepare(
+    `INSERT INTO skill_index (
+       id, title, description, status, revision, body_hash, triggers_json,
+       source, created_run_id, last_updated_run_id,
+       enabled_at, disabled_at, created_at, updated_at,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, 0, NULL, '[]')`,
+  ).run(
+    id, input.title.trim(), input.description ?? null, status,
+    bodyHash, triggersJson, input.source, input.createdRunId ?? null,
+    status === 'enabled' ? ts : null, ts, ts,
+  );
+  const row = getDb().prepare('SELECT * FROM skill_index WHERE id = ?').get(id);
+  return rowToSkillIndex(row);
+}
+
+export interface UpdateSkillInput {
+  id: string;
+  title?: string;
+  description?: string | null;
+  body?: string;
+  triggers?: string[];
+  lastUpdatedRunId?: string | null;
+}
+
+/**
+ * Update an existing skill. revision++ when the body actually changes
+ * (body_hash differs). Throws if skill not found.
+ */
+export async function updateSkill(input: UpdateSkillInput): Promise<SkillIndexRow> {
+  const id = input.id;
+  const existing = getDb().prepare('SELECT * FROM skill_index WHERE id = ?').get(id) as any;
+  if (!existing) throw new Error(`updateSkill: skill ${id} not found`);
+  const ts = now();
+  let revision = existing.revision as number;
+  let bodyHash = existing.body_hash as string;
+  if (typeof input.body === 'string') {
+    const newHash = hashBody(input.body);
+    if (newHash !== bodyHash) {
+      writeSkillBodyFile(id, input.body);
+      bodyHash = newHash;
+      revision = revision + 1;
+    }
+  }
+  const sets: string[] = ['updated_at = ?'];
+  const vals: unknown[] = [ts];
+  if (typeof input.title === 'string' && input.title.trim()) {
+    sets.push('title = ?'); vals.push(input.title.trim());
+  }
+  if (input.description !== undefined) {
+    sets.push('description = ?'); vals.push(input.description ?? null);
+  }
+  if (Array.isArray(input.triggers)) {
+    sets.push('triggers_json = ?'); vals.push(JSON.stringify(input.triggers));
+  }
+  if (input.lastUpdatedRunId !== undefined) {
+    sets.push('last_updated_run_id = ?'); vals.push(input.lastUpdatedRunId ?? null);
+  }
+  sets.push('revision = ?'); vals.push(revision);
+  sets.push('body_hash = ?'); vals.push(bodyHash);
+  vals.push(id);
+  getDb().prepare(`UPDATE skill_index SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+  const row = getDb().prepare('SELECT * FROM skill_index WHERE id = ?').get(id);
+  return rowToSkillIndex(row);
+}
+
+export async function disableSkill(id: string): Promise<SkillIndexRow> {
+  const ts = now();
+  getDb().prepare(
+    `UPDATE skill_index SET status = 'disabled', disabled_at = ?, updated_at = ? WHERE id = ?`,
+  ).run(ts, ts, id);
+  const row = getDb().prepare('SELECT * FROM skill_index WHERE id = ?').get(id) as any;
+  if (!row) throw new Error(`disableSkill: skill ${id} not found`);
+  return rowToSkillIndex(row);
+}
+
+export async function enableSkill(id: string): Promise<SkillIndexRow> {
+  const ts = now();
+  getDb().prepare(
+    `UPDATE skill_index SET status = 'enabled', enabled_at = ?, disabled_at = NULL, updated_at = ? WHERE id = ?`,
+  ).run(ts, ts, id);
+  const row = getDb().prepare('SELECT * FROM skill_index WHERE id = ?').get(id) as any;
+  if (!row) throw new Error(`enableSkill: skill ${id} not found`);
+  return rowToSkillIndex(row);
+}
+
+export interface ListSkillsOpts {
+  status?: SkillStatus;
+  source?: string;
+  limit?: number;
+}
+
+export async function listSkills(opts: ListSkillsOpts = {}): Promise<SkillIndexRow[]> {
+  const parts = ['SELECT * FROM skill_index WHERE 1=1'];
+  const params: unknown[] = [];
+  if (opts.status) { parts.push('AND status = ?'); params.push(opts.status); }
+  if (opts.source) { parts.push('AND source = ?'); params.push(opts.source); }
+  parts.push('ORDER BY updated_at DESC');
+  parts.push('LIMIT ?');
+  params.push(Math.max(1, Math.min(opts.limit ?? 100, 500)));
+  const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
+  return rows.map(rowToSkillIndex);
+}
+
+export async function getSkillIndex(id: string): Promise<SkillIndexRow | null> {
+  const row = getDb().prepare('SELECT * FROM skill_index WHERE id = ?').get(id) as any;
+  return row ? rowToSkillIndex(row) : null;
+}
+
+export async function markSkillReferenced(
+  skillIds: string[],
+  runId: string,
+): Promise<number> {
+  if (!runId || skillIds.length === 0) return 0;
+  let updated = 0;
+  const ts = now();
+  const tx = getDb().transaction(() => {
+    for (const id of skillIds) {
+      const row = getDb().prepare(
+        'SELECT referenced_by_runs FROM skill_index WHERE id = ?',
+      ).get(id) as { referenced_by_runs?: string } | undefined;
+      if (!row) continue;
+      const existing = parseJsonArray<string>(row.referenced_by_runs);
+      const nextRuns = existing.includes(runId)
+        ? existing
+        : [...existing.slice(-(REFERENCED_BY_RUNS_CAP - 1)), runId];
+      getDb().prepare(
+        `UPDATE skill_index
+         SET reference_count = reference_count + 1,
+             last_referenced_at = ?,
+             referenced_by_runs = ?
+         WHERE id = ?`,
+      ).run(ts, JSON.stringify(nextRuns), id);
+      updated += 1;
+    }
+  });
+  tx();
+  return updated;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// v3 Evolution Runs — unified ledger (dream + crystallize + manual + consolidation).
+// See docs/memory-architecture.md §三 (evolution_runs).
+// ─────────────────────────────────────────────────────────────────────────
+
+export type EvolutionTrigger =
+  | 'chat_burst'
+  | 'daily_dream'
+  | 'manual'
+  | 'on_event'
+  | 'consolidation';
+
+export type EvolutionRunStatus = 'running' | 'completed' | 'failed';
+
+export interface EvolutionRunRow {
+  id: string;
+  trigger_kind: EvolutionTrigger;
+  status: EvolutionRunStatus;
+  context_summary: string | null;
+  window_start: string | null;
+  window_end: string | null;
+  memories_written: number;
+  memories_archived: number;
+  memories_superseded: number;
+  profile_updated: boolean;
+  profile_changed_keys: string[];
+  skills_added: number;
+  skills_updated: number;
+  skills_disabled: number;
+  signals_consumed: number;
+  refs_consumed: Record<string, string[]>;
+  refs_produced: Record<string, string[]>;
+  prompt_excerpt: string | null;
+  llm_tokens: number | null;
+  duration_ms: number | null;
+  started_at: string;
+  completed_at: string | null;
+  error_message: string | null;
+}
+
+function rowToEvolutionRun(row: any): EvolutionRunRow {
+  return {
+    id: row.id,
+    trigger_kind: row.trigger_kind as EvolutionTrigger,
+    status: row.status as EvolutionRunStatus,
+    context_summary: row.context_summary ?? null,
+    window_start: row.window_start ?? null,
+    window_end: row.window_end ?? null,
+    memories_written: row.memories_written ?? 0,
+    memories_archived: row.memories_archived ?? 0,
+    memories_superseded: row.memories_superseded ?? 0,
+    profile_updated: (row.profile_updated ?? 0) === 1 || row.profile_updated === true,
+    profile_changed_keys: parseJsonArray<string>(row.profile_changed_keys_json),
+    skills_added: row.skills_added ?? 0,
+    skills_updated: row.skills_updated ?? 0,
+    skills_disabled: row.skills_disabled ?? 0,
+    signals_consumed: row.signals_consumed ?? 0,
+    refs_consumed: parseJson<Record<string, string[]>>(row.refs_consumed_json) ?? {},
+    refs_produced: parseJson<Record<string, string[]>>(row.refs_produced_json) ?? {},
+    prompt_excerpt: row.prompt_excerpt ?? null,
+    llm_tokens: row.llm_tokens ?? null,
+    duration_ms: row.duration_ms ?? null,
+    started_at: row.started_at,
+    completed_at: row.completed_at ?? null,
+    error_message: row.error_message ?? null,
+  };
+}
+
+export interface CreateEvolutionRunInput {
+  triggerKind: EvolutionTrigger;
+  windowStart?: string | null;
+  windowEnd?: string | null;
+  contextSummary?: string | null;
+  promptExcerpt?: string | null;
+  /** Optional explicit id; if omitted a UUID is generated. */
+  id?: string;
+}
+
+export async function createEvolutionRun(
+  input: CreateEvolutionRunInput,
+): Promise<EvolutionRunRow> {
+  const id = input.id ?? genId();
+  const ts = now();
+  getDb().prepare(
+    `INSERT INTO evolution_runs (
+       id, trigger_kind, status,
+       context_summary, window_start, window_end,
+       prompt_excerpt, started_at
+     ) VALUES (?, ?, 'running', ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    input.triggerKind,
+    input.contextSummary ?? null,
+    input.windowStart ?? null,
+    input.windowEnd ?? null,
+    input.promptExcerpt ?? null,
+    ts,
+  );
+  return (await getEvolutionRun(id))!;
+}
+
+export async function getEvolutionRun(id: string): Promise<EvolutionRunRow | null> {
+  const row = getDb().prepare('SELECT * FROM evolution_runs WHERE id = ?').get(id) as any;
+  return row ? rowToEvolutionRun(row) : null;
+}
+
+export interface RecordEvolutionDelta {
+  memoriesWritten?: number;
+  memoriesArchived?: number;
+  memoriesSuperseded?: number;
+  profileUpdated?: boolean;
+  profileChangedKeys?: string[];
+  skillsAdded?: number;
+  skillsUpdated?: number;
+  skillsDisabled?: number;
+  signalsConsumed?: number;
+}
+
+/**
+ * Bump the per-run counter columns by the deltas provided. JSON fields
+ * (profileChangedKeys) replace rather than merge — caller passes the full
+ * cumulative set when calling.
+ */
+export async function recordEvolutionDelta(
+  runId: string,
+  delta: RecordEvolutionDelta,
+): Promise<void> {
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  const bump = (col: string, value: number | undefined) => {
+    if (typeof value === 'number' && value !== 0) {
+      sets.push(`${col} = ${col} + ?`);
+      vals.push(value);
+    }
+  };
+  bump('memories_written', delta.memoriesWritten);
+  bump('memories_archived', delta.memoriesArchived);
+  bump('memories_superseded', delta.memoriesSuperseded);
+  bump('skills_added', delta.skillsAdded);
+  bump('skills_updated', delta.skillsUpdated);
+  bump('skills_disabled', delta.skillsDisabled);
+  bump('signals_consumed', delta.signalsConsumed);
+  if (typeof delta.profileUpdated === 'boolean') {
+    sets.push('profile_updated = ?');
+    vals.push(delta.profileUpdated ? 1 : 0);
+  }
+  if (Array.isArray(delta.profileChangedKeys)) {
+    sets.push('profile_changed_keys_json = ?');
+    vals.push(JSON.stringify(delta.profileChangedKeys));
+  }
+  if (sets.length === 0) return;
+  vals.push(runId);
+  getDb().prepare(`UPDATE evolution_runs SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+}
+
+/**
+ * Append `ids` to refs_consumed[table] for the given run. Dedupes within
+ * the table key. No-op if ids is empty. The DB row stores the full merged
+ * JSON object after each call.
+ */
+export async function recordEvolutionRefsConsumed(
+  runId: string,
+  table: string,
+  ids: string[],
+): Promise<void> {
+  if (!table || ids.length === 0) return;
+  const tx = getDb().transaction(() => {
+    const row = getDb().prepare(
+      'SELECT refs_consumed_json FROM evolution_runs WHERE id = ?',
+    ).get(runId) as { refs_consumed_json?: string } | undefined;
+    if (!row) return;
+    const obj = parseJson<Record<string, string[]>>(row.refs_consumed_json) ?? {};
+    const existing = Array.isArray(obj[table]) ? obj[table] : [];
+    const seen = new Set(existing);
+    for (const id of ids) seen.add(id);
+    obj[table] = Array.from(seen);
+    getDb().prepare(
+      'UPDATE evolution_runs SET refs_consumed_json = ? WHERE id = ?',
+    ).run(JSON.stringify(obj), runId);
+  });
+  tx();
+}
+
+export async function recordEvolutionRefsProduced(
+  runId: string,
+  table: string,
+  ids: string[],
+): Promise<void> {
+  if (!table || ids.length === 0) return;
+  const tx = getDb().transaction(() => {
+    const row = getDb().prepare(
+      'SELECT refs_produced_json FROM evolution_runs WHERE id = ?',
+    ).get(runId) as { refs_produced_json?: string } | undefined;
+    if (!row) return;
+    const obj = parseJson<Record<string, string[]>>(row.refs_produced_json) ?? {};
+    const existing = Array.isArray(obj[table]) ? obj[table] : [];
+    const seen = new Set(existing);
+    for (const id of ids) seen.add(id);
+    obj[table] = Array.from(seen);
+    getDb().prepare(
+      'UPDATE evolution_runs SET refs_produced_json = ? WHERE id = ?',
+    ).run(JSON.stringify(obj), runId);
+  });
+  tx();
+}
+
+export async function completeEvolutionRun(
+  runId: string,
+  opts: { llmTokens?: number; durationMs?: number } = {},
+): Promise<EvolutionRunRow> {
+  const ts = now();
+  const sets = ['status = ?', 'completed_at = ?'];
+  const vals: unknown[] = ['completed', ts];
+  if (typeof opts.llmTokens === 'number') {
+    sets.push('llm_tokens = ?'); vals.push(opts.llmTokens);
+  }
+  if (typeof opts.durationMs === 'number') {
+    sets.push('duration_ms = ?'); vals.push(opts.durationMs);
+  }
+  vals.push(runId);
+  getDb().prepare(`UPDATE evolution_runs SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+  const row = await getEvolutionRun(runId);
+  if (!row) throw new Error(`completeEvolutionRun: run ${runId} not found`);
+  return row;
+}
+
+export async function failEvolutionRun(runId: string, errorMessage: string): Promise<EvolutionRunRow> {
+  const ts = now();
+  getDb().prepare(
+    `UPDATE evolution_runs SET status = 'failed', completed_at = ?, error_message = ? WHERE id = ?`,
+  ).run(ts, errorMessage, runId);
+  const row = await getEvolutionRun(runId);
+  if (!row) throw new Error(`failEvolutionRun: run ${runId} not found`);
+  return row;
+}
+
+export interface ListEvolutionRunsOpts {
+  triggerKind?: EvolutionTrigger;
+  status?: EvolutionRunStatus;
+  since?: string;
+  limit?: number;
+}
+
+export async function listEvolutionRuns(
+  opts: ListEvolutionRunsOpts = {},
+): Promise<EvolutionRunRow[]> {
+  const parts = ['SELECT * FROM evolution_runs WHERE 1=1'];
+  const params: unknown[] = [];
+  if (opts.triggerKind) { parts.push('AND trigger_kind = ?'); params.push(opts.triggerKind); }
+  if (opts.status) { parts.push('AND status = ?'); params.push(opts.status); }
+  if (opts.since) { parts.push('AND started_at >= ?'); params.push(opts.since); }
+  parts.push('ORDER BY started_at DESC');
+  parts.push('LIMIT ?');
+  params.push(Math.max(1, Math.min(opts.limit ?? 50, 200)));
+  const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
+  return rows.map(rowToEvolutionRun);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// v3 Personal Signals — short-lived observations awaiting consolidation.
+// See docs/memory-architecture.md §三 (personal_signals).
+// ─────────────────────────────────────────────────────────────────────────
+
+export type PersonalSignalStatus = 'open' | 'consumed' | 'archived';
+
+export interface PersonalSignalRow {
+  id: string;
+  kind: string;
+  title: string;
+  summary: string;
+  payload: Record<string, unknown>;
+  salience: number;
+  confidence: number;
+  dedupe_key: string | null;
+  occurred_at: string;
+  available_at: string;
+  expires_at: string | null;
+  source: string;
+  device_id: string | null;
+  subject: string | null;
+  source_raw_table: string | null;
+  source_raw_ids: string[];
+  status: PersonalSignalStatus;
+  consumed_by_run_id: string | null;
+  ingested_at: string;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+const DEFAULT_SIGNAL_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+function rowToPersonalSignal(row: any): PersonalSignalRow {
+  return {
+    id: row.id,
+    kind: row.kind,
+    title: row.title,
+    summary: row.summary,
+    payload: parseJson<Record<string, unknown>>(row.payload_json) ?? {},
+    salience: typeof row.salience === 'number' ? row.salience : 0,
+    confidence: typeof row.confidence === 'number' ? row.confidence : 0,
+    dedupe_key: row.dedupe_key ?? null,
+    occurred_at: row.occurred_at,
+    available_at: row.available_at,
+    expires_at: row.expires_at ?? null,
+    source: row.source,
+    device_id: row.device_id ?? null,
+    subject: row.subject ?? null,
+    source_raw_table: row.source_raw_table ?? null,
+    source_raw_ids: parseJsonArray<string>(row.source_raw_ids_json),
+    status: row.status as PersonalSignalStatus,
+    consumed_by_run_id: row.consumed_by_run_id ?? null,
+    ingested_at: row.ingested_at,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export interface IngestPersonalSignalInput {
+  id?: string;
+  kind: string;
+  title: string;
+  summary: string;
+  payload?: Record<string, unknown>;
+  salience?: number;
+  confidence?: number;
+  dedupeKey?: string | null;
+  occurredAt?: string;
+  availableAt?: string;
+  expiresAt?: string | null;
+  source?: string;
+  deviceId?: string | null;
+  subject?: string | null;
+  sourceRawTable?: string | null;
+  sourceRawIds?: string[];
+}
+
+export interface IngestPersonalSignalsResult {
+  accepted: number;
+  inserted: number;
+  ignored: number;
+  ids: string[];
+}
+
+/**
+ * Idempotent batch insert. Items with a dedupe_key that already exists are
+ * silently ignored (INSERT OR IGNORE). Returns the freshly-inserted ids
+ * (in insertion order) so callers can immediately mark them referenced.
+ */
+export async function ingestPersonalSignals(
+  inputs: IngestPersonalSignalInput[],
+): Promise<IngestPersonalSignalsResult> {
+  if (inputs.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const ts = now();
+  const ids: string[] = [];
+  let inserted = 0;
+  const insert = getDb().prepare(
+    `INSERT OR IGNORE INTO personal_signals (
+       id, kind, title, summary, payload_json, salience, confidence,
+       dedupe_key, occurred_at, available_at, expires_at,
+       source, device_id, subject, source_raw_table, source_raw_ids_json,
+       status, ingested_at,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, 0, NULL, '[]')`,
+  );
+  const tx = getDb().transaction((items: IngestPersonalSignalInput[]) => {
+    for (const item of items) {
+      if (!item.kind || !item.title || !item.summary) continue;
+      const id = item.id ?? genId();
+      const occurredAt = item.occurredAt ?? ts;
+      const availableAt = item.availableAt ?? occurredAt;
+      const defaultExpires = new Date(Date.parse(occurredAt) + DEFAULT_SIGNAL_TTL_MS).toISOString();
+      const expiresAt = item.expiresAt === null ? null : (item.expiresAt ?? defaultExpires);
+      const result = insert.run(
+        id,
+        item.kind,
+        item.title,
+        item.summary,
+        JSON.stringify(item.payload ?? {}),
+        typeof item.salience === 'number' ? item.salience : 0,
+        typeof item.confidence === 'number' ? item.confidence : 0,
+        item.dedupeKey?.trim() || null,
+        occurredAt,
+        availableAt,
+        expiresAt,
+        item.source ?? 'device',
+        item.deviceId ?? null,
+        item.subject ?? null,
+        item.sourceRawTable ?? null,
+        JSON.stringify(item.sourceRawIds ?? []),
+        ts,
+      );
+      if (result.changes > 0) {
+        inserted += 1;
+        ids.push(id);
+      }
+    }
+  });
+  tx(inputs);
+  return {
+    accepted: inputs.filter((i) => i.kind && i.title && i.summary).length,
+    inserted,
+    ignored: inputs.length - inserted,
+    ids,
+  };
+}
+
+export interface ListPersonalSignalsOpts {
+  status?: PersonalSignalStatus;
+  kind?: string;
+  source?: string;
+  deviceId?: string;
+  since?: string;
+  until?: string;
+  minSalience?: number;
+  limit?: number;
+  /** When true, also expire any rows whose expires_at has passed before listing. */
+  pruneExpired?: boolean;
+}
+
+export async function listPersonalSignals(
+  opts: ListPersonalSignalsOpts = {},
+): Promise<PersonalSignalRow[]> {
+  if (opts.pruneExpired) await expireElapsedPersonalSignals();
+  const parts = ['SELECT * FROM personal_signals WHERE 1=1'];
+  const params: unknown[] = [];
+  if (opts.status) { parts.push('AND status = ?'); params.push(opts.status); }
+  if (opts.kind) { parts.push('AND kind = ?'); params.push(opts.kind); }
+  if (opts.source) { parts.push('AND source = ?'); params.push(opts.source); }
+  if (opts.deviceId) { parts.push('AND device_id = ?'); params.push(opts.deviceId); }
+  if (opts.since) { parts.push('AND occurred_at >= ?'); params.push(opts.since); }
+  if (opts.until) { parts.push('AND occurred_at <= ?'); params.push(opts.until); }
+  if (typeof opts.minSalience === 'number') { parts.push('AND salience >= ?'); params.push(opts.minSalience); }
+  parts.push('ORDER BY occurred_at DESC');
+  parts.push('LIMIT ?');
+  params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
+  const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
+  return rows.map(rowToPersonalSignal);
+}
+
+export async function getPersonalSignal(id: string): Promise<PersonalSignalRow | null> {
+  const row = getDb().prepare('SELECT * FROM personal_signals WHERE id = ?').get(id) as any;
+  return row ? rowToPersonalSignal(row) : null;
+}
+
+/**
+ * Mark `signalIds` as consumed by `runId`. Rows already consumed/archived
+ * are skipped. Returns the count actually transitioned.
+ */
+export async function markPersonalSignalsConsumed(
+  signalIds: string[],
+  runId: string,
+): Promise<number> {
+  if (!runId || signalIds.length === 0) return 0;
+  const ts = now();
+  let updated = 0;
+  const tx = getDb().transaction(() => {
+    for (const id of signalIds) {
+      const result = getDb().prepare(
+        `UPDATE personal_signals
+         SET status = 'consumed', consumed_by_run_id = ?, last_referenced_at = ?
+         WHERE id = ? AND status = 'open'`,
+      ).run(runId, ts, id);
+      if (result.changes > 0) updated += 1;
+    }
+  });
+  tx();
+  return updated;
+}
+
+/** Move open signals past their expires_at to status='archived'. Returns count. */
+export async function expireElapsedPersonalSignals(cutoff = now()): Promise<number> {
+  const result = getDb().prepare(
+    `UPDATE personal_signals
+     SET status = 'archived'
+     WHERE status = 'open' AND expires_at IS NOT NULL AND expires_at <= ?`,
+  ).run(cutoff);
   return result.changes;
 }
+
+export async function markPersonalSignalsReferenced(
+  signalIds: string[],
+  runId: string,
+): Promise<number> {
+  if (!runId || signalIds.length === 0) return 0;
+  let updated = 0;
+  const ts = now();
+  const tx = getDb().transaction(() => {
+    for (const id of signalIds) {
+      const row = getDb().prepare(
+        'SELECT referenced_by_runs FROM personal_signals WHERE id = ?',
+      ).get(id) as { referenced_by_runs?: string } | undefined;
+      if (!row) continue;
+      const existing = parseJsonArray<string>(row.referenced_by_runs);
+      const nextRuns = existing.includes(runId)
+        ? existing
+        : [...existing.slice(-(REFERENCED_BY_RUNS_CAP - 1)), runId];
+      getDb().prepare(
+        `UPDATE personal_signals
+         SET reference_count = reference_count + 1,
+             last_referenced_at = ?,
+             referenced_by_runs = ?
+         WHERE id = ?`,
+      ).run(ts, JSON.stringify(nextRuns), id);
+      updated += 1;
+    }
+  });
+  tx();
+  return updated;
+}
+

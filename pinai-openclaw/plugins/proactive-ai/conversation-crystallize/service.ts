@@ -129,7 +129,7 @@ export async function runCrystallize(
       runEvaluator: deps?.runEvaluator ?? runCrystallizeSubagent,
     };
 
-    return runCrystallizeInner(api, opts ?? {}, cfg, d);
+    return runCrystallizeWithEvolutionRun(api, opts ?? {}, cfg, d);
   })();
 
   _inFlight = work;
@@ -137,6 +137,63 @@ export async function runCrystallize(
     return await work;
   } finally {
     _inFlight = null;
+  }
+}
+
+/**
+ * Wraps runCrystallizeInner with v3 evolution_runs lifecycle so the
+ * `pin evolution recent --kind chat_burst` query reflects every
+ * crystallize attempt (skipped or completed). See docs/memory-architecture.md
+ * §三 (evolution_runs).
+ */
+async function runCrystallizeWithEvolutionRun(
+  api: OpenClawPluginApi,
+  opts: { configOverride?: Partial<CrystallizeConfig>; force?: boolean },
+  cfg: CrystallizeConfig,
+  d: Required<Omit<RunCrystallizeDeps, 'getCrystallizeOverride'>>,
+): Promise<CrystallizeRunResult> {
+  const startedAtMs = Date.now();
+  let evolutionRunId: string | null = null;
+  try {
+    const evolutionRun = await db.createEvolutionRun({
+      triggerKind: 'chat_burst',
+      contextSummary: opts.force ? 'forced via debug panel' : 'auto-loop tick',
+    });
+    evolutionRunId = evolutionRun.id;
+  } catch (err) {
+    // evolution_runs is observability — never block crystallize on it.
+    api.logger.warn(`[crystallize] failed to open evolution_run: ${err instanceof Error ? err.message : err}`);
+  }
+
+  try {
+    const result = await runCrystallizeInner(api, opts, cfg, d);
+    if (evolutionRunId) {
+      try {
+        // Only the actual sediment counts as a memory_written / skill_added.
+        const memoriesWritten = !result.skipped && result.memoryId ? 1 : 0;
+        const skillsAdded = !result.skipped && result.skillId ? 1 : 0;
+        await db.recordEvolutionDelta(evolutionRunId, { memoriesWritten, skillsAdded });
+        if (result.memoryId) {
+          await db.recordEvolutionRefsProduced(evolutionRunId, 'memory', [result.memoryId]);
+        }
+        if (result.skillId) {
+          await db.recordEvolutionRefsProduced(evolutionRunId, 'skill_index', [result.skillId]);
+        }
+        await db.completeEvolutionRun(evolutionRunId, {
+          durationMs: Date.now() - startedAtMs,
+        });
+      } catch (err) {
+        api.logger.warn(`[crystallize] failed to close evolution_run ${evolutionRunId}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+    return result;
+  } catch (err) {
+    if (evolutionRunId) {
+      try {
+        await db.failEvolutionRun(evolutionRunId, err instanceof Error ? err.message : String(err));
+      } catch { /* observability is best-effort */ }
+    }
+    throw err;
   }
 }
 

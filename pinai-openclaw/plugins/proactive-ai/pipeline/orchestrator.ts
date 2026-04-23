@@ -10,6 +10,7 @@ import { loadRecentFeedbackSummary, formatRecentFeedbackSummary } from './feedba
 import { loadRecentGeneratedCardsSummary } from './generated-cards-summary.js';
 import { loadActiveSkillsSection } from '../conversation-crystallize/skill-injection.js';
 import * as db from '../db.js';
+import { extractCardEvaluationsForRun, type ScoredCardSource } from './extract-evaluations.js';
 
 export interface PipelineOptions {
   maxIterations: number;
@@ -143,11 +144,31 @@ export async function runPipeline(
     }
   }
 
-  // Save to DB
+  // Save run + iterations artifact to DB / filesystem
   await db.savePipelineRun({
     runId, status: 'completed', totalIterations: iterations.length,
     finalCards, iterations: iterations.map((it, idx) => ({ iteration: idx + 1, ...it })),
   });
+
+  // Phase 1: also persist evaluations to indexable card_evaluations rows so
+  // future evals harness can SQL-query scores per basket / dimension without
+  // re-parsing the iterations JSON blob. See docs/memory-architecture.md §三.
+  try {
+    const cardSources: ScoredCardSource[] = finalCards
+      .filter((c): c is Record<string, unknown> => !!c && typeof c === 'object')
+      .map((c) => ({
+        id: typeof c['id'] === 'string' ? (c['id'] as string) : '',
+        goalBasket: typeof c['goalBasket'] === 'string' ? (c['goalBasket'] as string) : null,
+        intentKey: typeof c['intentKey'] === 'string' ? (c['intentKey'] as string) : null,
+      }))
+      .filter((c) => c.id.length > 0);
+    const evalRows = extractCardEvaluationsForRun(runId, scoreMap, cardSources);
+    if (evalRows.length > 0) {
+      await db.saveCardEvaluations(evalRows);
+    }
+  } catch (err) {
+    api.logger.warn(`Failed to persist card_evaluations: ${err instanceof Error ? err.message : err}`);
+  }
 
   const result = { runId, totalIterations: iterations.length, finalCards, scoreMap };
   emit({ type: 'pipeline:complete', data: result });

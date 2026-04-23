@@ -5,7 +5,7 @@
  * parses XML, normalises URLs, and upserts items via local SQLite.
  */
 import { createHash } from 'node:crypto';
-import { ingestWorldItem } from '../db.js';
+import { ingestWorldSignal } from '../db.js';
 
 // ── Default feed URLs ──
 
@@ -219,7 +219,7 @@ async function fetchAndIngestFeed(request: FeedRequest): Promise<ProviderResult>
     const _id = generateItemId(normalized, item.provider, item.title);
 
     try {
-      await ingestWorldItem({
+      await ingestWorldSignal({
         provider: item.provider,
         streamType: request.streamType,
         title: item.title,

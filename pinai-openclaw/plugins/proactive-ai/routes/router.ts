@@ -19,6 +19,11 @@ import { handleBrowser } from './browser.js';
 import { handleMobile } from './mobile.js';
 import { handleSkills } from './skills.js';
 import { handleCrystallize } from './crystallize.js';
+// v3 memory architecture routes (see docs/memory-architecture.md §六)
+import { handleMemory } from './memory.js';
+import { handleSignals } from './signals.js';
+import { handleRaw } from './raw.js';
+import { handleEvolution } from './evolution.js';
 
 export interface PipelineState {
   running: boolean;
@@ -52,6 +57,11 @@ export function createApiHandler(api: OpenClawPluginApi, state: PipelineState, c
     handleMobile(),
     handleSkills(),
     handleCrystallize(),
+    // v3 routes
+    handleMemory(),
+    handleSignals(),
+    handleRaw(),
+    handleEvolution(),
   ];
 
   return async (req: unknown, res: unknown) => {

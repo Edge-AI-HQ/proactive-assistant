@@ -26,6 +26,11 @@ import {
   getContainerForUser,
   getUserBySupabaseId,
 } from '../domain/proactive/index.js';
+import {
+  registerDevice,
+  listDevicesForUser,
+  revokeDevice,
+} from '../domain/devices/index.js';
 import { getContainerRuntime } from '../domain/container/provider_factory.js';
 import { relayGatewayWs } from '../domain/gateway/gateway_ws_relay.js';
 import { getCurrentModel, setCurrentModel } from '../domain/gateway/gateway_rpc.js';
@@ -101,6 +106,93 @@ router.post('/api/proactive/user/heartbeat', requireProactiveAuth, async (req, r
     res.json({ ok: true });
   } catch (err) {
     console.error('[proactive] heartbeat error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── Device registry ──
+// See docs/memory-architecture.md §三 (APIs user_devices) and apis/db/migrations/002.
+//
+// POST /api/proactive/devices/register   { deviceId, platform, displayName?, appVersion?, metadata? }
+// GET  /api/proactive/devices            list active devices for the current user
+// POST /api/proactive/devices/revoke     { deviceId }
+//
+// On register/rotate, the response includes `device_token` PLAINTEXT — the
+// client MUST store it (Capacitor Preferences / iOS Keychain / Android
+// EncryptedSharedPreferences / web localStorage) and send X-Device-Token
+// + X-Device-Id on every subsequent /api/mobile/* request.
+
+router.post('/api/proactive/devices/register', requireProactiveAuth, async (req, res) => {
+  try {
+    const auth = req.proactiveAuth!;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const deviceId = String(body['deviceId'] ?? '').trim();
+    const platform = String(body['platform'] ?? '').trim() as 'ios' | 'android' | 'web';
+    if (!deviceId || !platform) {
+      res.status(400).json({ error: 'Missing deviceId or platform' });
+      return;
+    }
+    const user = await getUserBySupabaseId(auth.userId);
+    if (!user) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+    const device = await registerDevice({
+      userId: user.id,
+      deviceId,
+      platform,
+      displayName: typeof body['displayName'] === 'string' ? body['displayName'] : null,
+      appVersion: typeof body['appVersion'] === 'string' ? body['appVersion'] : null,
+      metadata: body['metadata'] && typeof body['metadata'] === 'object'
+        ? body['metadata'] as Record<string, unknown> : {},
+    });
+    res.json({
+      ok: true,
+      device: {
+        device_id: device.device_id,
+        platform: device.platform,
+        display_name: device.display_name,
+        registered_at: device.registered_at,
+        status: device.status,
+      },
+      device_token: device.device_token,                 // ← returned ONCE
+    });
+  } catch (err) {
+    console.error('[proactive] devices/register error:', err);
+    if (err instanceof Error && (err as any).code === 'INVALID_INPUT') {
+      res.status(400).json({ error: err.message }); return;
+    }
+    if (err instanceof Error && (err as any).code === 'CONFLICT') {
+      res.status(409).json({ error: err.message }); return;
+    }
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/api/proactive/devices', requireProactiveAuth, async (req, res) => {
+  try {
+    const user = await getUserBySupabaseId(req.proactiveAuth!.userId);
+    if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+    const devices = await listDevicesForUser(user.id);
+    res.json({ ok: true, devices });
+  } catch (err) {
+    console.error('[proactive] devices list error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/api/proactive/devices/revoke', requireProactiveAuth, async (req, res) => {
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const deviceId = String(body['deviceId'] ?? '').trim();
+    if (!deviceId) { res.status(400).json({ error: 'Missing deviceId' }); return; }
+    const user = await getUserBySupabaseId(req.proactiveAuth!.userId);
+    if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+    const revoked = await revokeDevice({ userId: user.id, deviceId });
+    if (!revoked) { res.status(404).json({ error: 'Device not found' }); return; }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[proactive] devices/revoke error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

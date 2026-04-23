@@ -122,7 +122,7 @@ async function refreshAndGetToken(): Promise<string | null> {
   return data.session.access_token;
 }
 
-async function proactiveFetch(
+export async function proactiveFetch(
   path: string,
   init?: RequestInit
 ): Promise<Response> {

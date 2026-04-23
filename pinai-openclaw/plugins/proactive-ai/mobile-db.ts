@@ -3,6 +3,9 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 
+import * as v3Db from "./db.js";
+import * as rawDb from "./raw-db.js";
+
 type BetterSqliteModule = typeof import("better-sqlite3");
 
 const require = createRequire(import.meta.url);
@@ -212,6 +215,9 @@ export function ingestMobileItems(payload: MobileIngestPayload): { accepted: num
     ) VALUES (?, ?, ?, ?, ?, ?)
   `);
 
+  // Track which items actually inserted (for v3 mirror).
+  const newlyInsertedItems: typeof payload.items = [];
+
   const tx = db.transaction(() => {
     payload.items.forEach((item) => {
       const occurredAt = normalizeIso(item.occurredAt, createdAt);
@@ -233,7 +239,10 @@ export function ingestMobileItems(payload: MobileIngestPayload): { accepted: num
         expiresAt,
         createdAt,
       );
-      inserted += result.changes;
+      if (result.changes > 0) {
+        inserted += 1;
+        newlyInsertedItems.push(item);
+      }
     });
     insertBatch.run(
       crypto.randomUUID(),
@@ -246,7 +255,140 @@ export function ingestMobileItems(payload: MobileIngestPayload): { accepted: num
   });
   tx();
 
+  // v3 mirror: write the same items to personal_signals + bridge snapshot
+  // payloads to raw.db device_*_snapshot tables. Synchronous: callers
+  // already await ingestMobileItems() so making this complete before
+  // returning prevents two real bugs the previous fire-and-forget had:
+  //   (a) test cleanup restoring OPENCLAW_HOME mid-mirror (ENOENT errors),
+  //   (b) production /mobile/items/ingest replying 200 while the mirror
+  //       is still in flight, leaving personal_signals silently behind.
+  // Mirror failures are swallowed so the legacy mobile_items result is
+  // still returned. See docs/memory-architecture.md §四.
+  if (newlyInsertedItems.length > 0) {
+    mirrorMobileItemsToV3(payload.deviceId, newlyInsertedItems, createdAt);
+  }
+
   return { accepted, inserted, ignored: accepted - inserted };
+}
+
+// ── v3 mirror ──
+//
+// Synchronous mirror runs immediately after the legacy mobile_items
+// transaction commits. See docs/memory-architecture.md §四.
+
+function mirrorMobileItemsToV3(
+  deviceId: string,
+  items: MobileItemInput[],
+  createdAt: string,
+): void {
+  // 1. Mirror every item into personal_signals (idempotent on dedupe_key).
+  try {
+    v3Db.ingestPersonalSignals(items.map((item) => {
+      const occurredAt = normalizeIso(item.occurredAt, createdAt);
+      const availableAt = normalizeIso(item.availableAt, occurredAt);
+      const expiresAt = normalizeExpiresAt(occurredAt, item.expiresAt);
+      return {
+        id: item.id,
+        kind: item.itemType,
+        title: item.title,
+        summary: item.summary,
+        payload: item.payload ?? {},
+        salience: item.salience ?? 0,
+        confidence: item.confidence ?? 0,
+        dedupeKey: item.dedupeKey?.trim() || `mobile:${deviceId}:${item.id}`,
+        occurredAt,
+        availableAt,
+        expiresAt,
+        source: 'device',
+        deviceId,
+      };
+    })).catch((err) => {
+      console.warn(`[mobile mirror] personal_signals ingest failed: ${err instanceof Error ? err.message : err}`);
+    });
+  } catch (err) {
+    console.warn(`[mobile mirror] personal_signals ingest threw: ${err instanceof Error ? err.message : err}`);
+  }
+
+  // 2. Bridge specific bootstrap snapshot types into raw.db.
+  //    (See ItemDerivationEngine on the device for the type list.)
+  for (const item of items) {
+    try {
+      if (item.itemType === 'app_inventory_bootstrap' || item.itemType === 'app_inventory_snapshot') {
+        const apps = extractAppsFromPayload(item.payload ?? {});
+        if (apps.length > 0) {
+          rawDb.ingestDeviceAppsSnapshot({
+            deviceId,
+            capturedAt: normalizeIso(item.occurredAt, createdAt),
+            apps,
+          });
+        }
+      } else if (item.itemType === 'contact_directory_snapshot' || item.itemType === 'contact_bootstrap') {
+        const contacts = extractContactsFromPayload(item.payload ?? {});
+        if (contacts.length > 0) {
+          rawDb.ingestDeviceContactsSnapshot({
+            deviceId,
+            capturedAt: normalizeIso(item.occurredAt, createdAt),
+            contacts,
+          });
+        }
+      }
+    } catch (err) {
+      console.warn(`[mobile mirror] raw bridge for ${item.itemType} failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+}
+
+function extractAppsFromPayload(payload: Record<string, unknown>): Array<{
+  bundleId: string; appName: string; version?: string | null; lastUsedAt?: string | null;
+}> {
+  // The device-side ItemDerivationEngine packs the full app list under
+  // various keys depending on bootstrap vs incremental; try common shapes.
+  const candidates: unknown[] = [];
+  if (Array.isArray(payload.apps)) candidates.push(...payload.apps);
+  if (Array.isArray(payload.installedApps)) candidates.push(...payload.installedApps);
+  if (Array.isArray(payload.items)) candidates.push(...payload.items);
+  if (Array.isArray(payload.entries)) candidates.push(...payload.entries);
+  return candidates
+    .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object')
+    .map((row) => ({
+      bundleId: typeof row.bundleId === 'string' ? row.bundleId
+        : typeof row.bundle_id === 'string' ? row.bundle_id
+        : typeof row.packageName === 'string' ? row.packageName : '',
+      appName: typeof row.appName === 'string' ? row.appName
+        : typeof row.app_name === 'string' ? row.app_name
+        : typeof row.name === 'string' ? row.name : '',
+      version: typeof row.version === 'string' ? row.version : null,
+      lastUsedAt: typeof row.lastUsedAt === 'string' ? row.lastUsedAt
+        : typeof row.last_used_at === 'string' ? row.last_used_at : null,
+    }))
+    .filter((a) => a.bundleId && a.appName);
+}
+
+function extractContactsFromPayload(payload: Record<string, unknown>): Array<{
+  displayName?: string | null; emails?: string[]; phones?: string[]; lastModified?: string | null;
+}> {
+  const candidates: unknown[] = [];
+  if (Array.isArray(payload.contacts)) candidates.push(...payload.contacts);
+  if (Array.isArray(payload.items)) candidates.push(...payload.items);
+  if (Array.isArray(payload.entries)) candidates.push(...payload.entries);
+  return candidates
+    .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object')
+    .map((row) => {
+      const emails = Array.isArray(row.emails) ? row.emails.filter((e): e is string => typeof e === 'string')
+        : typeof row.email === 'string' ? [row.email] : [];
+      const phones = Array.isArray(row.phones) ? row.phones.filter((p): p is string => typeof p === 'string')
+        : Array.isArray(row.phoneNumbers) ? row.phoneNumbers.filter((p): p is string => typeof p === 'string')
+        : typeof row.phone === 'string' ? [row.phone] : [];
+      return {
+        displayName: typeof row.displayName === 'string' ? row.displayName
+          : typeof row.display_name === 'string' ? row.display_name
+          : typeof row.name === 'string' ? row.name : null,
+        emails,
+        phones,
+        lastModified: typeof row.lastModified === 'string' ? row.lastModified
+          : typeof row.last_modified === 'string' ? row.last_modified : null,
+      };
+    });
 }
 
 export function listMobileItems(filters: ListMobileItemsFilters = {}): MobileItemRecord[] {

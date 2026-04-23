@@ -14,6 +14,12 @@ import { handleFeedback } from './feedback.js';
 import { handlePush } from './push.js';
 import { handleSys } from './sys.js';
 import { handleCards } from './cards.js';
+// v3 memory architecture CLIs (see docs/memory-architecture.md §六)
+import { handleMemory } from './memory.js';
+import { handleSignals } from './signals.js';
+import { handleRaw } from './raw.js';
+import { handleEvolution } from './evolution.js';
+import { handleSkills } from './skills.js';
 
 const DOMAINS: Record<string, (args: string[]) => Promise<string>> = {
   profile: handleProfile,
@@ -23,6 +29,12 @@ const DOMAINS: Record<string, (args: string[]) => Promise<string>> = {
   push: handlePush,
   cards: handleCards,
   sys: handleSys,
+  // v3 domains
+  memory: handleMemory,
+  signals: handleSignals,
+  raw: handleRaw,
+  evolution: handleEvolution,
+  skills: handleSkills,
 };
 
 async function main() {

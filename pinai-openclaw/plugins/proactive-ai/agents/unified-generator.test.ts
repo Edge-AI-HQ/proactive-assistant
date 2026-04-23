@@ -14,17 +14,26 @@ test("buildUnifiedGeneratorPrompt includes all 4 phases", () => {
   assert.match(prompt, /phase_4_self_review/);
 });
 
-test("buildUnifiedGeneratorPrompt includes CLI guide with --full hint", () => {
+test("buildUnifiedGeneratorPrompt includes CLI guide and v3 retrieval commands", () => {
   const prompt = buildUnifiedGeneratorPrompt({
     currentDate: "2026-04-15",
   });
 
+  // The pin CLI command guide block is still injected
   assert.match(prompt, /pin_cli_command_guide/);
-  assert.match(prompt, /--full/);
-  assert.match(prompt, /truncated/);
-  assert.match(prompt, /pin personal mobile items list --status pending --limit 20 --json/);
-  assert.match(prompt, /pin personal mobile items list --type contact_directory_snapshot --order desc --limit 1 --json/);
-  assert.match(prompt, /pin personal mobile items list --type app_inventory_snapshot --order desc --limit 1 --json/);
+
+  // v3 retrieval commands replace the legacy 12-call list
+  assert.match(prompt, /pin profile get --id default --full/);
+  assert.match(prompt, /pin memory list --minQuality 0\.7 --limit 30/);
+  assert.match(prompt, /pin signals recent --hours 24 --limit 30/);
+  assert.match(prompt, /pin raw gmail recent/);
+  assert.match(prompt, /pin raw gcal today/);
+  assert.match(prompt, /pin raw device-apps --top 20/);
+  assert.match(prompt, /pin world shortlist/);
+  assert.match(prompt, /pin feedback list --since 14d/);
+  assert.match(prompt, /pin cards recent --limit 10/);
+  assert.match(prompt, /pin evolution recent --kind daily_dream/);
+  assert.match(prompt, /pin skills list --status enabled/);
 });
 
 test("buildUnifiedGeneratorPrompt includes scoring rubric", () => {
@@ -76,16 +85,19 @@ test("buildUnifiedGeneratorPrompt output format includes evaluations and iterati
   assert.match(prompt, /unified-generator/);
 });
 
-test("buildUnifiedGeneratorPrompt includes mobile items in context gathering", () => {
+test("buildUnifiedGeneratorPrompt includes v3 personal_signals + raw layer guidance", () => {
   const prompt = buildUnifiedGeneratorPrompt({
     currentDate: "2026-04-15",
   });
 
-  assert.match(prompt, /Mobile high-value queue/);
-  assert.match(prompt, /pin personal mobile items list --status pending --limit 20 --json/);
-  assert.match(prompt, /contact_directory_snapshot/);
-  assert.match(prompt, /app_inventory_snapshot/);
-  assert.match(prompt, /attention_item/);
-  assert.match(prompt, /session_summary/);
-  assert.match(prompt, /Only fetch 11 and 12 when cards may depend on those domains/);
+  // v3 layered context: long-term + right-now + behavior history + on-demand
+  assert.match(prompt, /Long-term picture/);
+  assert.match(prompt, /Right-now context/);
+  assert.match(prompt, /待消化/);                                // Chinese label for待消化
+  assert.match(prompt, /Behavior history/);
+  assert.match(prompt, /On-demand deep dives/);
+
+  // The agent is told signals + memory together form the strongest case
+  assert.match(prompt, /personal_signal/);
+  assert.match(prompt, /high-quality memory/);
 });

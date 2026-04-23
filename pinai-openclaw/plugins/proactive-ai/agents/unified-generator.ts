@@ -67,24 +67,38 @@ You will execute 4 phases in sequence. Do not skip any phase.
 ${PIN_CLI_COMMAND_GUIDE}
 
 <phase_1_context_gathering>
-Use the \`pin\` CLI to collect the user's current context. Gather ALL of these:
+Use the \`pin\` CLI to collect the user's current context. The v3 memory
+architecture (docs/memory-architecture.md) gives you fast, local-only
+queries — every command below reads SQLite or markdown files in the
+container, NO network. Gather ALL of these in roughly this order; if a
+command returns empty, that signal is itself useful — note it and continue.
 
-1. **Profile & goals**: \`pin profile get --id default --full --json\`, \`pin profile facts get --json\`
-2. **Interests**: \`pin profile interests list --id default --kind topic --limit 20 --json\`
-3. **Personal connections & tools**: \`pin personal connections list --json\`, \`pin personal tools search --query "recent emails" --json\`
-4. **Recent emails**: \`pin personal exec --tool GMAIL_FETCH_EMAILS --input '{"query":"newer_than:1d","max_results":10,"user_id":"me"}' --json\`
-5. **Calendar**: \`pin personal exec --tool GOOGLECALENDAR_FIND_EVENT --input '{"query":"today","calendar_id":"primary"}' --json\`
-6. **World events**: \`pin world shortlist --profile-id default --limit 10 --json\`
-7. **Recent pushes**: \`pin push history --since 14d --json\`
-8. **Recent feedback**: \`pin feedback list --since 14d --json\`
-9. **Recent generated cards**: \`pin cards recent --limit 10 --json\`
-10. **Mobile high-value queue**: \`pin personal mobile items list --status pending --limit 20 --json\`
-11. **Latest contacts snapshot**: \`pin personal mobile items list --type contact_directory_snapshot --order desc --limit 1 --json\`
-12. **Latest installed apps snapshot**: \`pin personal mobile items list --type app_inventory_snapshot --order desc --limit 1 --json\`
+# Long-term picture (画像 + 已沉淀的事实)
+1. **Profile**: \`pin profile get --id default --full\` — display_name, locale, timezone, summary, attributes
+2. **High-quality memory**: \`pin memory list --minQuality 0.7 --limit 30\` — sedimented facts the evolution agent has confirmed
+3. **Active skills**: \`pin skills list --status enabled\` — and use \`pin skills show --id <id>\` for ones whose triggers might fire now
+4. **Topic interests**: \`pin profile interests list --id default --kind topic --limit 20\` — legacy interest scores
 
-Adapt based on what connections are available. For mobile items, pay attention to \`attention_item\`, \`session_summary\`, and high-signal \`moment\` entries that reveal what the user is doing right now. Only fetch 11 and 12 when cards may depend on those domains: use \`contact_directory_snapshot\` for people, orgs, family, teammates, or relationship context, and use \`app_inventory_snapshot\` for installed apps, work stack, finance apps, or device software context. If a tool returns truncated output, use \`--full\` to fetch the complete data only when the truncated preview looks relevant to card generation.
+# Right-now context (今天/这周新进的 + 待消化的)
+5. **Recent personal signals**: \`pin signals recent --hours 24 --limit 30\` — device triggers, attention items, evolution digests; status='open' means not yet sedimented into memory
+6. **Recent emails**: \`pin raw gmail recent --hours 24 --limit 20\` — synced from Composio Gmail
+7. **Today's calendar**: \`pin raw gcal today\` — events from synced Google Calendar
+8. **Installed apps (latest snapshot)**: \`pin raw device-apps --top 20\` — for device profiling cards
+9. **World events**: \`pin world shortlist --profile-id default --limit 10\` — external news ranked against profile
 
-After collecting, briefly note what you gathered and any gaps.
+# Behavior history (avoid repetition + learn from feedback)
+10. **Recent feedback**: \`pin feedback list --since 14d\` — confirms / dismisses / modifications
+11. **Recent generated cards**: \`pin cards recent --limit 10\` — what we already pushed; thread decisions (advance / refine / hold / suppress)
+12. **Recent evolution runs**: \`pin evolution recent --kind daily_dream --limit 3\` — what the dreaming agent learned recently
+
+# On-demand deep dives (only if a topic above warrants it)
+- \`pin memory search --query "<topic>" --limit 10\` — substring + tag search
+- \`pin raw gmail thread --threadId <tid>\` — pull a full thread
+- \`pin signals get --id <id>\` — full payload of a high-salience signal
+
+After collecting, briefly note what you gathered and any gaps. Pay
+attention to the relationship between layers: a fresh personal_signal +
+related high-quality memory often forms the strongest case for a card.
 </phase_1_context_gathering>
 
 <phase_2_plan>

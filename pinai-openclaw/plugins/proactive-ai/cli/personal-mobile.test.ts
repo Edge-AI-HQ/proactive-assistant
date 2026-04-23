@@ -42,7 +42,7 @@ test("handlePersonal mobile items list returns pending rows", withTempHome(async
         dedupeKey: "session:session-1",
         occurredAt: "2026-04-16T08:00:00.000Z",
         availableAt: "2026-04-16T08:00:00.000Z",
-        expiresAt: "2026-04-17T08:00:00.000Z",
+        expiresAt: "2099-01-01T00:00:00.000Z",
       },
     ],
   });
@@ -68,7 +68,7 @@ test("handlePersonal mobile claim + commit updates item status", withTempHome(as
         dedupeKey: "attention:follow-up",
         occurredAt: "2026-04-16T09:00:00.000Z",
         availableAt: "2026-04-16T09:00:00.000Z",
-        expiresAt: "2026-04-17T09:00:00.000Z",
+        expiresAt: "2099-01-01T00:00:00.000Z",
       },
     ],
   });

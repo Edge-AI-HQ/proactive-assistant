@@ -597,12 +597,29 @@ async function executeDreaming(input: RunDreamingInput): Promise<{ run: DreamRun
   const now = input.now ?? new Date();
   const windowEnd = now.toISOString();
   const windowStart = clampWindowStart(now);
+  const startedAtMs = Date.now();
 
   const run = await store.createRun({
     trigger: input.trigger,
     windowStart,
     windowEnd,
   });
+
+  // Open a v3 evolution_run for trajectory visibility (`pin evolution recent
+  // --kind daily_dream`). Failures are logged but never block dreaming.
+  // See docs/memory-architecture.md §三.
+  let evolutionRunId: string | null = null;
+  try {
+    const evolution = await db.createEvolutionRun({
+      triggerKind: 'daily_dream',
+      windowStart,
+      windowEnd,
+      contextSummary: `dream run ${run.id} (trigger=${input.trigger})`,
+    });
+    evolutionRunId = evolution.id;
+  } catch {
+    // observability best-effort; dreaming continues regardless
+  }
 
   try {
     const currentProfile = await getCurrentProfile();
@@ -705,6 +722,23 @@ async function executeDreaming(input: RunDreamingInput): Promise<{ run: DreamRun
       journalMarkdown: markdown, candidates,
     });
 
+    // Mirror the dream's outcome into evolution_runs so the v3 trajectory
+    // ledger reflects what changed. profile_delta + goal_delta are
+    // applied later via apply* helpers (which run async); here we record
+    // intent only.
+    if (evolutionRunId) {
+      try {
+        const profileChangedKeys = collectProfileDeltaKeys(profileDelta);
+        await db.recordEvolutionDelta(evolutionRunId, {
+          profileUpdated: profileChangedKeys.length > 0,
+          profileChangedKeys,
+        });
+        await db.completeEvolutionRun(evolutionRunId, {
+          durationMs: Date.now() - startedAtMs,
+        });
+      } catch { /* observability best-effort */ }
+    }
+
     return {
       run: completedRun,
       detail: {
@@ -715,8 +749,30 @@ async function executeDreaming(input: RunDreamingInput): Promise<{ run: DreamRun
     };
   } catch (error) {
     await store.failRun(run.id, error instanceof Error ? error.message : String(error));
+    if (evolutionRunId) {
+      try {
+        await db.failEvolutionRun(evolutionRunId, error instanceof Error ? error.message : String(error));
+      } catch { /* observability best-effort */ }
+    }
     throw error;
   }
+}
+
+/**
+ * Extract a flat array of keys touched by the dream's profile delta —
+ * for evolution_runs.profile_changed_keys_json.
+ */
+function collectProfileDeltaKeys(delta: unknown): string[] {
+  if (!delta || typeof delta !== 'object') return [];
+  const out = new Set<string>();
+  const obj = delta as Record<string, unknown>;
+  for (const key of ['facts', 'preferences', 'interests', 'summary']) {
+    const value = obj[key];
+    if (Array.isArray(value) && value.length > 0) out.add(key);
+    else if (value && typeof value === 'object' && Object.keys(value as object).length > 0) out.add(key);
+    else if (typeof value === 'string' && value.trim().length > 0) out.add(key);
+  }
+  return Array.from(out);
 }
 
 // ── Public API ──

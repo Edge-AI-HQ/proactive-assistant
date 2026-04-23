@@ -13,8 +13,8 @@ const getImportanceBoost = (importance?: string | null): number => {
   return 0;
 };
 
-function scoreWorldItemForProfile(
-  item: db.WorldItemRow,
+function scoreWorldSignalForProfile(
+  item: db.WorldSignalRow,
   interests: db.InterestRow[],
 ): { profileScore: number; reasons: Array<{ code: string; value: string | number }> } {
   const reasons: Array<{ code: string; value: string | number }> = [];
@@ -43,8 +43,8 @@ function scoreWorldItemForProfile(
 }
 
 function reciprocalRankFusion(
-  keywordRows: db.WorldItemRow[],
-  semanticRows: Array<{ row: db.WorldItemRow; score: number }>,
+  keywordRows: db.WorldSignalRow[],
+  semanticRows: Array<{ row: db.WorldSignalRow; score: number }>,
 ): Array<{ id: string; score: number; reason: 'keyword' | 'semantic' | 'hybrid' }> {
   const scores = new Map<string, { score: number; sources: Set<string> }>();
   const k = 60;
@@ -75,7 +75,7 @@ function reciprocalRankFusion(
 }
 
 function toWorldSearchResult(
-  row: db.WorldItemRow,
+  row: db.WorldSignalRow,
   score?: number | null,
   matchReason: 'keyword' | 'semantic' | 'hybrid' = 'keyword',
 ): Record<string, unknown> {
@@ -126,13 +126,13 @@ export async function handleWorld(args: string[]): Promise<string> {
     const query = flags['query'];
     if (!query) return failure('world', 'search', 'validation', 'Missing --query');
     const limit = flags['limit'] ? parseInt(flags['limit'], 10) : 20;
-    const items = await db.listWorldItems({ query, limit });
+    const items = await db.listWorldSignals({ query, limit });
     return success('world', 'search', { query, count: items.length, items });
   }
 
   if (sub === 'headlines') {
     const limit = flags['limit'] ? parseInt(flags['limit'], 10) : 20;
-    const items = await db.listWorldItems({ limit });
+    const items = await db.listWorldSignals({ limit });
     return success('world', 'headlines', { count: items.length, items });
   }
 
@@ -141,7 +141,7 @@ export async function handleWorld(args: string[]): Promise<string> {
   }
 
   if (sub === 'list') {
-    const items = await db.listWorldItems({
+    const items = await db.listWorldSignals({
       query: flags['query'],
       since: flags['since'],
       limit: flags['limit'] ? parseInt(flags['limit'], 10) : 20,
@@ -151,7 +151,7 @@ export async function handleWorld(args: string[]): Promise<string> {
 
   if (sub === 'get') {
     if (!flags['id']) return failure('world', 'get', 'validation', 'Missing --id');
-    const item = await db.getWorldItem(flags['id']);
+    const item = await db.getWorldSignal(flags['id']);
     if (!item) return failure('world', 'get', 'not_found', `World item ${flags['id']} not found`);
     return success('world', 'get', item);
   }
@@ -163,7 +163,7 @@ export async function handleWorld(args: string[]): Promise<string> {
   if (sub === 'context') {
     const ids = flags['ids']?.split(',').map(s => s.trim()).filter(Boolean);
     if (!ids?.length) return failure('world', 'context', 'validation', 'Missing --ids');
-    const items = await Promise.all(ids.map(id => db.getWorldItem(id)));
+    const items = await Promise.all(ids.map(id => db.getWorldSignal(id)));
     const found = items.filter(Boolean);
     return success('world', 'context', { requested: ids.length, found: found.length, items: found });
   }
@@ -237,7 +237,7 @@ async function handleFind(flags: Record<string, string>): Promise<string> {
   const limit = flags['limit'] ? parseInt(flags['limit'], 10) : 10;
 
   // Keyword search (always needed for keyword/hybrid)
-  const keywordResults = await db.listWorldItems({
+  const keywordResults = await db.listWorldSignals({
     query,
     since: flags['since'],
     limit,
@@ -294,13 +294,13 @@ async function handleFind(flags: Record<string, string>): Promise<string> {
   }
 
   // Semantic search
-  let semanticItems: Array<{ row: db.WorldItemRow; score: number }> = [];
+  let semanticItems: Array<{ row: db.WorldSignalRow; score: number }> = [];
   try {
     const queryVector = (await embeddingProvider.embedTexts([query]))[0] ?? [];
     const semanticHits = await semanticIndex.search(queryVector, {
       limit: Math.max(limit * 3, 20),
     });
-    const rows = await db.listWorldItemsByIds(semanticHits.map(h => h.id));
+    const rows = await db.listWorldSignalsByIds(semanticHits.map(h => h.id));
     semanticItems = rows
       .filter(row => {
         if (flags['since'] && (row.published_at ?? row.created_at) < flags['since']) return false;
@@ -372,7 +372,7 @@ async function handleShortlist(flags: Record<string, string>): Promise<string> {
   const interests = await db.listInterests({ limit: 100 });
 
   // Fetch more items than needed so scoring can filter/rank
-  const items = await db.listWorldItems({ limit: Math.max(limit * 5, 20) });
+  const items = await db.listWorldSignals({ limit: Math.max(limit * 5, 20) });
 
   if (items.length === 0) {
     return success('world', 'shortlist', { count: 0, items: [], notice: 'No world items found' });
@@ -390,7 +390,7 @@ async function handleShortlist(flags: Record<string, string>): Promise<string> {
 
   const shortlisted = items
     .map(item => {
-      const scored = scoreWorldItemForProfile(item, interests);
+      const scored = scoreWorldSignalForProfile(item, interests);
       return {
         id: item.id,
         title: item.title,

@@ -2,8 +2,9 @@ import type { Request, Response } from 'express';
 import http from 'node:http';
 import type { IncomingHttpHeaders } from 'node:http';
 import type { ProactiveContainerOrchestrator } from './container_orchestrator.js';
-import { getDefaultMobileSyncContainer } from './user_service.js';
-import type { MobileSyncTarget } from './user_service.js';
+import { getDefaultMobileSyncContainer, getContainerByInternalId } from './user_service.js';
+import type { MobileSyncTarget, ContainerWithToken } from './user_service.js';
+import { findDeviceByToken } from '../devices/index.js';
 import { config } from '../common/config.js';
 
 export function isMobileProxyEnabled(): boolean {
@@ -53,10 +54,40 @@ export async function refreshMobileProxyContainer(
   };
 }
 
+/**
+ * Look up the user's container by validated device token.
+ * See docs/memory-architecture.md §三 (APIs user_devices).
+ *
+ * Returns null when:
+ *   - the request did not provide both X-Device-Id and X-Device-Token
+ *   - the token does not validate
+ *   - the user has no container yet
+ */
+async function findContainerByDeviceToken(req: Request): Promise<ContainerWithToken | null> {
+  const deviceId = String(req.header('x-device-id') ?? '').trim();
+  const deviceToken = String(req.header('x-device-token') ?? '').trim();
+  if (!deviceId || !deviceToken) return null;
+  const device = await findDeviceByToken(deviceId, deviceToken);
+  if (!device) return null;
+  return await getContainerByInternalId(device.user_id);
+}
+
 export function createMobileProxy(orchestrator: ProactiveContainerOrchestrator) {
   return async function mobileProxyHandler(req: Request, res: Response): Promise<void> {
-    let container = await getDefaultMobileSyncContainer();
-    container = await refreshMobileProxyContainer(orchestrator, container);
+    // Phase 11: prefer device-token-based routing when the headers are
+    // present. Falls back to the legacy "default container" lookup so
+    // existing clients without device registration keep working.
+    // See docs/memory-architecture.md §三.
+    const tokenContainer = await findContainerByDeviceToken(req);
+    let container: MobileSyncTarget | null = tokenContainer
+      ? { ...tokenContainer, user_key: null }
+      : await getDefaultMobileSyncContainer();
+    if (!tokenContainer) {
+      // user_key is only populated by getDefaultMobileSyncContainer; legacy
+      // path needs it for resume. Token-based path skips reconcile because
+      // we already validated ownership via the device token.
+      container = await refreshMobileProxyContainer(orchestrator, container);
+    }
     if (!container) {
       res.status(503).json({
         error: 'No mobile sync target container is available',
