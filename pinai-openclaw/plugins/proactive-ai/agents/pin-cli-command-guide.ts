@@ -12,7 +12,7 @@ SQLite + folders, no network — milliseconds. Time filters accept ISO
 timestamps for --since / --until and integer hours for --hours.
 
 # Long-term picture (画像 + 已沉淀的事实)
-- Profile snapshot:      \`pin profile get --id default --full\`
+- Profile snapshot:      \`pin profile get\`   (singleton profile + goals)
 - High-quality memory:   \`pin memory list --quality 0.7 --limit 30\`
 - Memory by subject:     \`pin memory list --subjectPrefix person: --limit 20\`
 - Memory search:         \`pin memory search --query "投资 偏好" --limit 10\`

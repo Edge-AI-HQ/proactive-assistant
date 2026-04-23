@@ -260,20 +260,20 @@ LLM 通过 `pin` CLI 拉 context。所有命令本地查 SQLite + folder，**毫
 
 ```bash
 # 画像（最常用）
-pin profile get --id default --full          # profile 表 + goals
+pin profile get                              # singleton profile + goals
 pin memory list --quality 0.7 --limit 30
 pin memory list --subjectPrefix person: --limit 20
-pin memory search --query "投资偏好" --limit 10   # --top 也可
+pin memory search --query "投资偏好" --limit 10   # --top 也可；SQL LIKE，非 top-N 预筛
 pin skills list --status enabled
 pin skills show --id <skill_id>              # cat skills/<id>/SKILL.md
 
 # 即时上下文 (raw 数据 namespaced under `pin raw`)
 pin signals recent --hours 24                # personal_signals.status='open'
 pin raw gmail recent --hours 24 --limit 20
-pin raw gcal today
+pin raw gcal today --timezone Asia/Shanghai  # 不传 --timezone 用 profile.timezone，再退化到 UTC
 pin raw gcal week
 pin raw device-apps --deviceId <id> --top 20
-pin raw device-contacts search --query "张" --deviceId <id>
+pin raw device-contacts search --query "张" --deviceId <id>   # SQL 内过滤，LIMIT 生效于匹配集
 
 # 反思（让 agent 知道自己历史）
 pin evolution recent --kind daily_dream --limit 5
@@ -349,7 +349,7 @@ unified-generator 的 phase 1 由"跑 12 个 CLI" 改为"先看 ContextPack 预�
 | 13 | 一次性 backfill + DROP 老表（`profile_memories` / `user_skills`），helpers redirect 到 v3 | ✅ |
 
 **变更净结果**：23 张 → 13 张 + `raw.db` 一组 + `skills/` folder。
-**测试**：plugin 244 / 244 ✅；APIs + frontend type-check + 单测全过；CLI smoke 16 命令全过。
+**测试**：plugin 260+ / 260+ ✅（数字随 PR 演进）；APIs + frontend type-check + 单测全过；CLI smoke 16 命令全过。
 
 后续工作（独立 PR）：
 - consolidation trigger（evolution agent 周期净化 memory）

@@ -2,24 +2,11 @@
  * `pin memory ...` — v3 sedimented memory CLI.
  * See docs/memory-architecture.md §六 (CLI / agent interface).
  */
-import { parseArgs, success, failure } from './shared.js';
+import {
+  parseArgs, success, failure,
+  parseFiniteNumber, readNumericFlag, readLimitFlag,
+} from './shared.js';
 import * as db from '../db.js';
-
-/**
- * Strict number parse — Number('0.7+') / Number('abc') return NaN, which
- * would otherwise pass `typeof === 'number'` checks downstream and poison
- * SQL WHERE clauses (e.g. `quality >= NaN` matches nothing).
- */
-function parseFiniteNumber(raw: string | undefined): number | undefined {
-  if (raw === undefined || raw === '') return undefined;
-  const n = Number(raw);
-  return Number.isFinite(n) ? n : undefined;
-}
-
-/** Accept --limit, --top, --max as aliases — agents reach for any of them. */
-function parseLimitFlag(flags: Record<string, string>): number | undefined {
-  return parseFiniteNumber(flags['limit'] ?? flags['top'] ?? flags['max']);
-}
 
 export async function handleMemory(args: string[]): Promise<string> {
   const { positional, flags } = parseArgs(args);
@@ -46,15 +33,13 @@ export async function handleMemory(args: string[]): Promise<string> {
   }
 
   if (sub === 'list') {
-    const limit = parseLimitFlag(flags);
-    const minQuality = parseFiniteNumber(flags['minQuality'] ?? flags['quality']);
-    if ((flags['minQuality'] ?? flags['quality']) !== undefined && minQuality === undefined) {
-      return failure('memory', 'list', 'validation',
-        `Invalid --quality value (got "${flags['minQuality'] ?? flags['quality']}"); pass a plain number like 0.7`);
-    }
+    const limitRes = readLimitFlag(flags, 'memory', 'list');
+    if ('failure' in limitRes) return limitRes.failure;
+    const qRes = readNumericFlag(flags, ['minQuality', 'quality'], 'memory', 'list');
+    if ('failure' in qRes) return qRes.failure;
     const memories = await db.listMemoryV3({
       status: (flags['status'] as db.MemoryStatus | undefined) ?? 'active',
-      minQuality,
+      minQuality: qRes.value,
       source: flags['source'],
       subject: flags['subject'],
       subjectPrefix: flags['subjectPrefix'] ?? flags['subject-prefix'],
@@ -62,7 +47,7 @@ export async function handleMemory(args: string[]): Promise<string> {
       until: flags['until'],
       orderBy: flags['orderBy'] as 'created_at' | 'quality' | 'last_referenced_at' | undefined,
       orderDirection: flags['orderDirection'] as 'asc' | 'desc' | undefined,
-      limit,
+      limit: limitRes.value,
     });
     return success('memory', 'list', { count: memories.length, memories });
   }
@@ -82,13 +67,19 @@ export async function handleMemory(args: string[]): Promise<string> {
       return failure('memory', 'add', 'validation',
         'Missing text — pass --text "..." or as a positional arg');
     }
+    // Validate numeric flags loudly — silently dropping them was a bug:
+    // the caller assumed the value took effect and never noticed.
+    const qualityRes = readNumericFlag(flags, ['quality'], 'memory', 'add');
+    if ('failure' in qualityRes) return qualityRes.failure;
+    const confidenceRes = readNumericFlag(flags, ['confidence'], 'memory', 'add');
+    if ('failure' in confidenceRes) return confidenceRes.failure;
     const tags = flags['tags'] ? flags['tags'].split(',').map((t) => t.trim()).filter(Boolean) : [];
     const row = await db.addMemoryV3({
       text,
       source,
       subject: flags['subject'] ?? null,
-      quality: parseFiniteNumber(flags['quality']),
-      confidence: parseFiniteNumber(flags['confidence']),
+      quality: qualityRes.value,
+      confidence: confidenceRes.value,
       occurredAt: flags['occurredAt'] ?? flags['occurred-at'] ?? null,
       tags,
       sourceRunId: flags['sourceRunId'] ?? flags['source-run-id'] ?? null,
@@ -115,24 +106,26 @@ export async function handleMemory(args: string[]): Promise<string> {
   if (sub === 'search') {
     const query = flags['query'] ?? flags['q'];
     if (!query) return failure('memory', 'search', 'validation', 'Missing --query');
-    // v1 uses substring on text; v3 vector index is a future PR
-    const limit = parseLimitFlag(flags) ?? 20;
-    const all = await db.listMemoryV3({
+    const limitRes = readLimitFlag(flags, 'memory', 'search');
+    if ('failure' in limitRes) return limitRes.failure;
+    // v1 substring search: pushed into SQL (LIKE on text/subject/tags_json)
+    // so LIMIT applies to the filtered set. A vector-backed variant is a
+    // future PR; for now this keeps "search" honest on >500-row stores.
+    const matched = await db.listMemoryV3({
       status: 'active',
       since: flags['since'],
       until: flags['until'],
-      limit: 500,
+      textQuery: query,
+      limit: limitRes.value ?? 20,
       orderBy: 'quality',
     });
-    const lowered = query.toLowerCase();
-    const matched = all
-      .filter((m) => m.text.toLowerCase().includes(lowered) ||
-                     (m.subject ?? '').toLowerCase().includes(lowered) ||
-                     m.tags.some((t) => t.toLowerCase().includes(lowered)))
-      .slice(0, limit);
     return success('memory', 'search', { query, count: matched.length, memories: matched });
   }
 
   return failure('memory', sub, 'validation', `Unknown memory command: ${sub}`,
     'Available: list, get, add, archive, supersede, search');
 }
+
+// Re-export for backward-compat with any external importer that used the
+// local helpers before they moved to shared.ts.
+export { parseFiniteNumber };

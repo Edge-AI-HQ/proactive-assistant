@@ -2,7 +2,7 @@
  * `pin signals ...` — v3 personal_signals CLI.
  * See docs/memory-architecture.md §六.
  */
-import { parseArgs, success, failure } from './shared.js';
+import { parseArgs, success, failure, readNumericFlag, readLimitFlag } from './shared.js';
 import * as db from '../db.js';
 
 export async function handleSignals(args: string[]): Promise<string> {
@@ -22,26 +22,32 @@ export async function handleSignals(args: string[]): Promise<string> {
   }
 
   if (sub === 'recent') {
-    const hours = Number(flags['hours'] ?? '24');
+    const hoursRes = readNumericFlag(flags, ['hours'], 'signals', 'recent');
+    if ('failure' in hoursRes) return hoursRes.failure;
+    const limitRes = readLimitFlag(flags, 'signals', 'recent');
+    if ('failure' in limitRes) return limitRes.failure;
+    const minSalienceRes = readNumericFlag(flags, ['minSalience'], 'signals', 'recent');
+    if ('failure' in minSalienceRes) return minSalienceRes.failure;
+    const hours = hoursRes.value ?? 24;
     const since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
-    const limit = flags['limit'] ? Number(flags['limit']) : 30;
-    const minSalience = flags['minSalience'] ? Number(flags['minSalience']) : undefined;
     const rows = await db.listPersonalSignals({
       status: (flags['status'] as db.PersonalSignalStatus | undefined) ?? 'open',
       kind: flags['kind'],
       source: flags['source'],
       deviceId: flags['deviceId'] ?? flags['device-id'],
       since,
-      minSalience,
-      limit,
+      minSalience: minSalienceRes.value,
+      limit: limitRes.value ?? 30,
       pruneExpired: true,
     });
     return success('signals', 'recent', { since, count: rows.length, signals: rows });
   }
 
   if (sub === 'list') {
-    const limit = flags['limit'] ? Number(flags['limit']) : 50;
-    const minSalience = flags['minSalience'] ? Number(flags['minSalience']) : undefined;
+    const limitRes = readLimitFlag(flags, 'signals', 'list');
+    if ('failure' in limitRes) return limitRes.failure;
+    const minSalienceRes = readNumericFlag(flags, ['minSalience'], 'signals', 'list');
+    if ('failure' in minSalienceRes) return minSalienceRes.failure;
     const rows = await db.listPersonalSignals({
       status: (flags['status'] as db.PersonalSignalStatus | undefined) ?? 'open',
       kind: flags['kind'],
@@ -49,8 +55,8 @@ export async function handleSignals(args: string[]): Promise<string> {
       deviceId: flags['deviceId'] ?? flags['device-id'],
       since: flags['since'],
       until: flags['until'],
-      minSalience,
-      limit,
+      minSalience: minSalienceRes.value,
+      limit: limitRes.value ?? 50,
     });
     return success('signals', 'list', { count: rows.length, signals: rows });
   }

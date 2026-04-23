@@ -59,6 +59,28 @@ function parseJsonArray<T = unknown>(raw: string | null | undefined): T[] {
   }
 }
 
+/**
+ * Normalize an ISO-ish datetime string to canonical UTC ISO (`...Z`).
+ * Different gcal providers emit `2026-04-23T08:00:00+08:00` /
+ * `2026-04-23T00:00:00Z` / `2026-04-23` (all-day) etc.; without this,
+ * `start_at >= ?` lexicographic comparisons across offsets are wrong.
+ * Leaves unparseable input untouched so we never lose data, but in practice
+ * every Date.parse-compatible string comes out the other side as UTC.
+ */
+function normalizeToUtcIso(raw: string | null | undefined): string | null {
+  if (raw === null || raw === undefined) return null;
+  const trimmed = String(raw).trim();
+  if (trimmed === '') return null;
+  const d = new Date(trimmed);
+  if (Number.isNaN(d.getTime())) return trimmed;
+  return d.toISOString();
+}
+
+/** Escape a LIKE pattern value so `%` / `_` / `\` match literally. */
+function escapeLike(raw: string): string {
+  return raw.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
 const REFERENCED_BY_RUNS_CAP = 10;
 
 function ensureRawSchema(db: Database.Database): void {
@@ -355,12 +377,16 @@ export function ingestGcalEvents(items: GcalEventInput[]): IngestResult {
       if (!item.calendarId || !item.eventId) continue;
       accepted += 1;
       const id = genId();
-      const occurredAt = item.occurredAt ?? item.startAt ?? ts;
+      // Normalize all time columns to UTC ISO so lexicographic comparisons
+      // in listGcalEvents() are meaningful across mixed-offset sources.
+      const startAt = normalizeToUtcIso(item.startAt ?? null);
+      const endAt = normalizeToUtcIso(item.endAt ?? null);
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? item.startAt ?? ts) ?? ts;
       const dedupe = item.dedupeKey ?? `gcal:evt:${item.calendarId}:${item.eventId}`;
       const result = insert.run(
         id, item.calendarId, item.eventId,
         item.title ?? null, item.description ?? null, item.location ?? null,
-        item.startAt ?? null, item.endAt ?? null,
+        startAt, endAt,
         JSON.stringify(item.attendees ?? []), item.status ?? null,
         occurredAt, ts, dedupe,
       );
@@ -385,8 +411,13 @@ export function listGcalEvents(opts: ListGcalOpts = {}): GcalEventRow[] {
   const db = getRawDb();
   const parts = ['SELECT * FROM gcal_events WHERE 1=1'];
   const params: unknown[] = [];
-  if (opts.since) { parts.push('AND start_at >= ?'); params.push(opts.since); }
-  if (opts.until) { parts.push('AND start_at <= ?'); params.push(opts.until); }
+  // Normalize filter bounds too — caller may pass `2026-04-23` or a
+  // non-UTC ISO. Paired with UTC-normalized `start_at` on ingest, this
+  // keeps lexicographic comparison correct.
+  const since = normalizeToUtcIso(opts.since);
+  const until = normalizeToUtcIso(opts.until);
+  if (since) { parts.push('AND start_at >= ?'); params.push(since); }
+  if (until) { parts.push('AND start_at <= ?'); params.push(until); }
   if (opts.calendarId) { parts.push('AND calendar_id = ?'); params.push(opts.calendarId); }
   parts.push('ORDER BY start_at ASC LIMIT ?');
   params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
@@ -592,16 +623,24 @@ export function listDeviceContacts(opts: {
   if (snapshotId)    { parts.push('AND snapshot_id = ?'); params.push(snapshotId); }
   if (opts.since)    { parts.push('AND occurred_at >= ?'); params.push(opts.since); }
   if (opts.until)    { parts.push('AND occurred_at <= ?'); params.push(opts.until); }
+  // Push search into SQL so the caller's LIMIT applies *after* filtering.
+  // The previous "LIMIT then filter in JS" approach silently dropped
+  // matches outside the default 200-row window. We match against
+  // display_name and the raw JSON blobs for emails/phones — LIKE on the
+  // serialized array is adequate for substring needs and avoids cracking
+  // JSON per row in SQLite.
+  if (opts.search) {
+    const pat = `%${escapeLike(opts.search).toLowerCase()}%`;
+    parts.push(`AND (
+      LOWER(COALESCE(display_name, '')) LIKE ? ESCAPE '\\'
+      OR LOWER(emails_json) LIKE ? ESCAPE '\\'
+      OR LOWER(phones_json) LIKE ? ESCAPE '\\'
+    )`);
+    params.push(pat, pat, pat);
+  }
   parts.push('ORDER BY display_name ASC NULLS LAST LIMIT ?');
   params.push(Math.max(1, Math.min(opts.limit ?? 200, 2000)));
-  const rows = (db.prepare(parts.join(' ')).all(...params) as any[]).map(rowToDeviceContact);
-  if (!opts.search) return rows;
-  const q = opts.search.toLowerCase();
-  return rows.filter((r) =>
-    (r.display_name ?? '').toLowerCase().includes(q)
-    || r.emails.some((e) => e.toLowerCase().includes(q))
-    || r.phones.some((p) => p.toLowerCase().includes(q)),
-  );
+  return (db.prepare(parts.join(' ')).all(...params) as any[]).map(rowToDeviceContact);
 }
 
 export function ingestDeviceContactsSnapshot(input: IngestDeviceContactsInput): IngestResult {
