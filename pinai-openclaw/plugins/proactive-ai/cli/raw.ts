@@ -17,8 +17,10 @@ export async function handleRaw(args: string[]): Promise<string> {
         'pin raw gmail thread --threadId <tid>',
         'pin raw gcal today',
         'pin raw gcal week',
+        'pin raw gcal list --since 2026-04-23 --limit 30',
         'pin raw device-apps --deviceId <id> --top 20',
-        'pin raw device-contacts search --query "张"',
+        'pin raw device-contacts list --deviceId <id> --limit 200',
+        'pin raw device-contacts search --query "张" --deviceId <id>',
       ],
     });
   }
@@ -85,8 +87,19 @@ export async function handleRaw(args: string[]): Promise<string> {
   }
 
   if (sub === 'device-contacts') {
-    return failure('raw', 'device-contacts', 'not_implemented',
-      'pin raw device-contacts not yet wired (use SQL on raw.db.device_contacts_snapshot directly)');
+    const action = positional[1] ?? 'list';
+    const limit = flags['limit'] ? Number(flags['limit']) : (flags['top'] ? Number(flags['top']) : 200);
+    if (action === 'list' || action === 'search') {
+      const contacts = raw.listDeviceContacts({
+        deviceId: flags['deviceId'] ?? flags['device-id'],
+        latestSnapshotOnly: true,
+        search: flags['query'] ?? flags['search'] ?? flags['q'],
+        limit,
+      });
+      return success('raw', `device-contacts.${action}`, { count: contacts.length, contacts });
+    }
+    return failure('raw', `device-contacts.${action}`, 'validation',
+      `Unknown device-contacts action: ${action}`, 'Available: list, search');
   }
 
   return failure('raw', sub, 'validation', `Unknown raw command: ${sub}`,

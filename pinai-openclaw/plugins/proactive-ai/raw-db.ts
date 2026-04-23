@@ -520,6 +520,75 @@ export interface IngestDeviceContactsInput {
   snapshotId?: string;
 }
 
+export interface DeviceContactRow {
+  id: string;
+  snapshot_id: string;
+  device_id: string;
+  display_name: string | null;
+  emails: string[];
+  phones: string[];
+  last_modified: string | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToDeviceContact(row: any): DeviceContactRow {
+  return {
+    id: row.id,
+    snapshot_id: row.snapshot_id,
+    device_id: row.device_id,
+    display_name: row.display_name ?? null,
+    emails: parseJsonArray<string>(row.emails_json),
+    phones: parseJsonArray<string>(row.phones_json),
+    last_modified: row.last_modified ?? null,
+    occurred_at: row.occurred_at,
+    ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function listDeviceContacts(opts: {
+  deviceId?: string;
+  snapshotId?: string;
+  latestSnapshotOnly?: boolean;
+  /** Substring match on display_name / emails / phones (case-insensitive). */
+  search?: string;
+  limit?: number;
+} = {}): DeviceContactRow[] {
+  const db = getRawDb();
+  let snapshotId = opts.snapshotId;
+  if (!snapshotId && opts.latestSnapshotOnly) {
+    const row = db.prepare(
+      `SELECT snapshot_id FROM device_contacts_snapshot
+       ${opts.deviceId ? 'WHERE device_id = ?' : ''}
+       ORDER BY occurred_at DESC LIMIT 1`,
+    ).get(...(opts.deviceId ? [opts.deviceId] : [])) as { snapshot_id?: string } | undefined;
+    snapshotId = row?.snapshot_id;
+    if (!snapshotId) return [];
+  }
+  const parts = ['SELECT * FROM device_contacts_snapshot WHERE 1=1'];
+  const params: unknown[] = [];
+  if (opts.deviceId) { parts.push('AND device_id = ?'); params.push(opts.deviceId); }
+  if (snapshotId) { parts.push('AND snapshot_id = ?'); params.push(snapshotId); }
+  parts.push('ORDER BY display_name ASC NULLS LAST LIMIT ?');
+  params.push(Math.max(1, Math.min(opts.limit ?? 200, 2000)));
+  const rows = (db.prepare(parts.join(' ')).all(...params) as any[]).map(rowToDeviceContact);
+  if (!opts.search) return rows;
+  const q = opts.search.toLowerCase();
+  return rows.filter((r) =>
+    (r.display_name ?? '').toLowerCase().includes(q)
+    || r.emails.some((e) => e.toLowerCase().includes(q))
+    || r.phones.some((p) => p.toLowerCase().includes(q)),
+  );
+}
+
 export function ingestDeviceContactsSnapshot(input: IngestDeviceContactsInput): IngestResult {
   if (!input.deviceId) throw new Error('ingestDeviceContactsSnapshot: deviceId is required');
   if (input.contacts.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };

@@ -260,31 +260,35 @@ LLM 通过 `pin` CLI 拉 context。所有命令本地查 SQLite + folder，**毫
 
 ```bash
 # 画像（最常用）
-pin profile                              # profile 表 + USER.md
-pin profile summary
-pin memory list --quality 0.7+ --limit 30
-pin memory search --query "投资偏好" --top 10
+pin profile get --id default --full          # profile 表 + goals
+pin memory list --quality 0.7 --limit 30
+pin memory list --subjectPrefix person: --limit 20
+pin memory search --query "投资偏好" --limit 10   # --top 也可
 pin skills list --status enabled
-pin skills show <id>                     # cat skills/<id>/SKILL.md
+pin skills show --id <skill_id>              # cat skills/<id>/SKILL.md
 
-# 即时上下文
-pin signals recent --hours 24            # personal_signals.status='open'
-pin gmail recent --hours 24
-pin gcal today
-pin gcal week
-pin device apps --top 20
-pin device contacts --search "张"
+# 即时上下文 (raw 数据 namespaced under `pin raw`)
+pin signals recent --hours 24                # personal_signals.status='open'
+pin raw gmail recent --hours 24 --limit 20
+pin raw gcal today
+pin raw gcal week
+pin raw device-apps --deviceId <id> --top 20
+pin raw device-contacts search --query "张" --deviceId <id>
 
 # 反思（让 agent 知道自己历史）
-pin runs recent --kind evolution --limit 5
+pin evolution recent --kind daily_dream --limit 5
+pin evolution recent --limit 5               # all kinds
 pin cards recent --limit 10
 pin feedback list --since 7d
 
 # 写入（manual / evolution agent）
 pin memory add "<text>" --quality 0.6 --subject self
-pin skills add <id> --from-file SKILL.md
-pin profile set summary "..."
+pin memory add --text "<text>" --source manual --quality 0.7
+pin skills add --id <id> --title "..." --source manual --from-file SKILL.md
+pin profile update --summary "..." --display-name "..."
 ```
+
+> 同事调试时若敲了未实现的命令（例如老文档里的 `pin profile summary` / `pin gmail recent` / `pin runs recent` / `pin device apps`），CLI 会返回 `ok=false` + 错误码。直接以本节为准。
 
 unified-generator 的 phase 1 由"跑 12 个 CLI" 改为"先看 ContextPack 预查 + 按需调用上述 CLI 拓展"。
 

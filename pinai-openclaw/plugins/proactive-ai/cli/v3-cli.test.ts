@@ -80,12 +80,15 @@ test('pin memory add then list and search', async () => {
   });
 });
 
-test('pin memory add: refuses missing text or source', async () => {
+test('pin memory add: refuses missing text; source defaults to manual', async () => {
   await withTempHome(async () => {
-    const r1 = decode(await handleMemory(['add', '--source', 'manual']));
-    assert.equal(r1.ok, false);
-    const r2 = decode(await handleMemory(['add', '--text', 'hi']));
-    assert.equal(r2.ok, false);
+    // No text → fail
+    const noText = decode(await handleMemory(['add', '--source', 'manual']));
+    assert.equal(noText.ok, false);
+    // Text without --source is fine — defaults to source=manual so one-shot calls work
+    const noSource = decode(await handleMemory(['add', '--text', 'hi']));
+    assert.equal(noSource.ok, true);
+    assert.equal(noSource.data.memory.source, 'manual');
   });
 });
 
@@ -99,6 +102,38 @@ test('pin memory archive then list returns empty active', async () => {
     assert.equal(list.data.count, 0);
     const archived = decode(await handleMemory(['list', '--status', 'archived']));
     assert.equal(archived.data.count, 1);
+  });
+});
+
+test('pin memory list: invalid --quality value fails loud, not silent 0 rows', async () => {
+  await withTempHome(async () => {
+    await handleMemory(['add', '--text', 'investment fact', '--source', 'manual', '--quality', '0.8']);
+    // Sanity: valid number works
+    const ok = decode(await handleMemory(['list', '--quality', '0.7']));
+    assert.equal(ok.data.count, 1);
+    // Invalid "0.7+" used to coerce to NaN and return 0 silently — must now fail
+    const bad = decode(await handleMemory(['list', '--quality', '0.7+']));
+    assert.equal(bad.ok, false);
+    assert.ok(bad.error.message.includes('Invalid --quality'));
+  });
+});
+
+test('pin memory search: --top is accepted as an alias of --limit', async () => {
+  await withTempHome(async () => {
+    await handleMemory(['add', '--text', '投资 a', '--source', 'manual']);
+    await handleMemory(['add', '--text', '投资 b', '--source', 'manual']);
+    const limited = decode(await handleMemory(['search', '--query', '投资', '--top', '1']));
+    assert.equal(limited.data.count, 1);
+  });
+});
+
+test('pin memory add: text as positional arg, source defaults to manual', async () => {
+  await withTempHome(async () => {
+    const out = decode(await handleMemory(['add', '用户喜欢咖啡', '--quality', '0.6', '--subject', 'topic:coffee']));
+    assert.equal(out.ok, true);
+    assert.equal(out.data.memory.text, '用户喜欢咖啡');
+    assert.equal(out.data.memory.source, 'manual');
+    assert.equal(out.data.memory.subject, 'topic:coffee');
   });
 });
 
@@ -153,6 +188,30 @@ test('pin raw gmail recent returns ingested rows', async () => {
     const r = decode(await handleRaw(['gmail', 'recent', '--hours', '24']));
     assert.equal(r.ok, true);
     assert.equal(r.data.count, 1);
+  });
+});
+
+test('pin raw device-contacts search filters by query', async () => {
+  await withTempHome(async () => {
+    const { ingestDeviceContactsSnapshot } = await import('../raw-db.ts');
+    ingestDeviceContactsSnapshot({
+      deviceId: 'dev-1',
+      contacts: [
+        { displayName: '妈妈', emails: ['mom@x.com'] },
+        { displayName: 'Alex Chen', emails: ['alex@co.com'] },
+        { displayName: '张三', phones: ['+8613800000000'] },
+      ],
+    });
+    // list all
+    const all = decode(await handleRaw(['device-contacts', 'list', '--deviceId', 'dev-1']));
+    assert.equal(all.data.count, 3);
+    // search 张 — should match only 张三
+    const zhang = decode(await handleRaw(['device-contacts', 'search', '--query', '张', '--deviceId', 'dev-1']));
+    assert.equal(zhang.data.count, 1);
+    assert.equal(zhang.data.contacts[0].display_name, '张三');
+    // search email partial
+    const alex = decode(await handleRaw(['device-contacts', 'search', '--query', 'alex@', '--deviceId', 'dev-1']));
+    assert.equal(alex.data.count, 1);
   });
 });
 
