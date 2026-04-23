@@ -222,6 +222,18 @@ export async function markGoalsApplied(id: string): Promise<DreamRunRecord> {
   return rowToRecord(row);
 }
 
+/**
+ * Drop the cached SQLite handle. Test-only — allows the next call to
+ * resolve a fresh DB path after OPENCLAW_HOME has been swapped to a
+ * tmpdir. Pairs with db.resetDbForTests / raw-db.resetRawDbForTests.
+ */
+export function resetStoreForTests(): void {
+  if (_db) {
+    try { _db.close(); } catch { /* already closed */ }
+    _db = null;
+  }
+}
+
 export async function prune(keepCount = 30): Promise<DreamRunRecord[]> {
   const rows = getDb().prepare('SELECT * FROM dream_runs ORDER BY started_at DESC, id DESC').all() as any[];
   const keep = rows.slice(0, keepCount);
