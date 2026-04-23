@@ -2591,6 +2591,12 @@ export interface ListMemoryOpts {
   subjectPrefix?: string;
   since?: string;
   until?: string;
+  /**
+   * Case-insensitive substring match against `text`, `subject`, and
+   * `tags_json`. Pushed into SQL so `limit` applies after filtering (the
+   * old JS-side filter silently lost matches ranked past the prefetch cap).
+   */
+  textQuery?: string;
   limit?: number;
   orderBy?: 'created_at' | 'quality' | 'last_referenced_at';
   orderDirection?: 'asc' | 'desc';
@@ -2605,11 +2611,20 @@ export async function listMemoryV3(opts: ListMemoryOpts = {}): Promise<MemoryRow
   if (opts.source) { parts.push('AND source = ?'); params.push(opts.source); }
   if (opts.subject) { parts.push('AND subject = ?'); params.push(opts.subject); }
   if (opts.subjectPrefix) {
-    parts.push('AND subject LIKE ?');
-    params.push(`${opts.subjectPrefix.replace(/[%_]/g, (c) => '\\' + c)}%`);
+    parts.push("AND subject LIKE ? ESCAPE '\\'");
+    params.push(`${opts.subjectPrefix.replace(/[\\%_]/g, (c) => '\\' + c)}%`);
   }
   if (opts.since) { parts.push('AND created_at >= ?'); params.push(opts.since); }
   if (opts.until) { parts.push('AND created_at <= ?'); params.push(opts.until); }
+  if (opts.textQuery) {
+    const pat = `%${opts.textQuery.replace(/[\\%_]/g, (c) => '\\' + c).toLowerCase()}%`;
+    parts.push(`AND (
+      LOWER(text) LIKE ? ESCAPE '\\'
+      OR LOWER(COALESCE(subject, '')) LIKE ? ESCAPE '\\'
+      OR LOWER(tags_json) LIKE ? ESCAPE '\\'
+    )`);
+    params.push(pat, pat, pat);
+  }
   const orderCol = opts.orderBy === 'quality' ? 'quality'
     : opts.orderBy === 'last_referenced_at' ? 'last_referenced_at'
     : 'created_at';

@@ -1,3 +1,10 @@
+/**
+ * v3-direct mobile ingest: /mobile/items/ingest writes straight into
+ * personal_signals, and snapshot-type items additionally fan out to
+ * raw.db. Legacy list / claim / commit endpoints are 410 Gone.
+ *
+ * See docs/memory-architecture.md §四.
+ */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
@@ -6,18 +13,21 @@ import os from "node:os";
 import path from "node:path";
 
 import { handleMobile } from "./mobile.ts";
-import { expireOldMobileItemRuns, resetMobileDbForTests } from "../mobile-db.ts";
+import { listPersonalSignals, resetDbForTests } from "../db.ts";
+import { listDeviceApps, listDeviceContacts, resetRawDbForTests } from "../raw-db.ts";
 
 function withTempHome(fn: (home: string) => Promise<void>) {
   return async () => {
     const previous = process.env.OPENCLAW_HOME;
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "mobile-routes-"));
     process.env.OPENCLAW_HOME = home;
-    resetMobileDbForTests();
+    resetDbForTests();
+    resetRawDbForTests();
     try {
       await fn(home);
     } finally {
-      resetMobileDbForTests();
+      resetDbForTests();
+      resetRawDbForTests();
       if (previous === undefined) {
         delete process.env.OPENCLAW_HOME;
       } else {
@@ -57,314 +67,168 @@ function createResponse() {
   return response;
 }
 
-test("handleMobile ingests, lists, claims, and commits mobile items", withTempHome(async () => {
+async function invoke(subpath: string, method: string, body?: Record<string, unknown>) {
   const handler = handleMobile();
-
-  const ingestRes = createResponse();
-  const ingestHandled = await handler({
-    subpath: "/mobile/items/ingest",
-    req: createRequest("POST", {
-      deviceId: "pixel-1",
-      items: [
-        {
-          id: "item-1",
-          itemType: "session_summary",
-          title: "Session summary",
-          summary: "Discussed travel packing and timing.",
-          payload: { sessionId: "session-1" },
-          salience: 0.9,
-          confidence: 0.8,
-          dedupeKey: "session:session-1",
-          occurredAt: "2026-04-16T08:00:00.000Z",
-          availableAt: "2026-04-16T08:00:00.000Z",
-          expiresAt: "2099-04-17T08:00:00.000Z",
-        },
-        {
-          id: "item-2",
-          itemType: "attention_item",
-          title: "Reply to an order message",
-          summary: "A delivery update likely needs action.",
-          payload: { packageName: "com.shop" },
-          salience: 0.7,
-          confidence: 0.6,
-          dedupeKey: "notification:com.shop:1",
-          occurredAt: "2026-04-16T08:05:00.000Z",
-          availableAt: "2026-04-16T08:05:00.000Z",
-          expiresAt: "2099-04-17T08:05:00.000Z",
-        },
-      ],
-    }),
-    res: ingestRes,
-    url: new URL("http://localhost/mobile/items/ingest"),
+  const res = createResponse();
+  const handled = await handler({
+    subpath,
+    req: createRequest(method, body),
+    res,
+    url: new URL(`http://localhost${subpath}`),
     api: {} as never,
   } as never);
+  return { handled, res };
+}
 
-  assert.equal(ingestHandled, true);
-  assert.equal(ingestRes.statusCode, 200);
-  assert.deepEqual(JSON.parse(ingestRes.body), {
-    ok: true,
-    accepted: 2,
-    inserted: 2,
-    ignored: 0,
-  });
-
-  const listRes = createResponse();
-  const listHandled = await handler({
-    subpath: "/mobile/items",
-    req: createRequest("GET"),
-    res: listRes,
-    url: new URL("http://localhost/mobile/items?status=pending&limit=10"),
-    api: {} as never,
-  } as never);
-
-  assert.equal(listHandled, true);
-  assert.equal(listRes.statusCode, 200);
-  const listed = JSON.parse(listRes.body);
-  assert.equal(listed.ok, true);
-  assert.equal(listed.items.length, 2);
-  assert.equal(listed.items[0].id, "item-1");
-  assert.equal(listed.items[1].id, "item-2");
-
-  const claimRes = createResponse();
-  const claimHandled = await handler({
-    subpath: "/mobile/items/claim",
-    req: createRequest("POST", { limit: 1 }),
-    res: claimRes,
-    url: new URL("http://localhost/mobile/items/claim"),
-    api: {} as never,
-  } as never);
-
-  assert.equal(claimHandled, true);
-  assert.equal(claimRes.statusCode, 200);
-  const claimed = JSON.parse(claimRes.body);
-  assert.equal(claimed.ok, true);
-  assert.equal(claimed.items.length, 1);
-  assert.equal(claimed.items[0].id, "item-1");
-  assert.equal(typeof claimed.runToken, "string");
-
-  const commitRes = createResponse();
-  const commitHandled = await handler({
-    subpath: "/mobile/items/commit",
-    req: createRequest("POST", { runToken: claimed.runToken }),
-    res: commitRes,
-    url: new URL("http://localhost/mobile/items/commit"),
-    api: {} as never,
-  } as never);
-
-  assert.equal(commitHandled, true);
-  assert.equal(commitRes.statusCode, 200);
-  assert.deepEqual(JSON.parse(commitRes.body), {
-    ok: true,
-    runToken: claimed.runToken,
-    processed: 1,
-  });
-}));
-
-test("handleMobile ignores duplicate dedupe keys on ingest", withTempHome(async () => {
-  const handler = handleMobile();
-  const body = {
+test("handleMobile /mobile/items/ingest writes all items to personal_signals", withTempHome(async () => {
+  const { handled, res } = await invoke("/mobile/items/ingest", "POST", {
     deviceId: "pixel-1",
     items: [
       {
-        id: "item-a",
-        itemType: "moment",
-        title: "At office",
-        summary: "Arrived at the office",
-        payload: { place: "office" },
-        salience: 0.5,
-        confidence: 0.9,
-        dedupeKey: "moment:office:morning",
-        occurredAt: "2026-04-16T09:00:00.000Z",
-        availableAt: "2026-04-16T09:00:00.000Z",
-        expiresAt: "2026-04-17T09:00:00.000Z",
+        id: "item-1", itemType: "session_summary",
+        title: "Session summary", summary: "Discussed travel packing.",
+        payload: { sessionId: "session-1" },
+        salience: 0.9, confidence: 0.8,
+        dedupeKey: "session:session-1",
+        occurredAt: "2026-04-16T08:00:00.000Z",
       },
       {
-        id: "item-b",
-        itemType: "moment",
-        title: "At office",
-        summary: "Arrived at the office again",
-        payload: { place: "office" },
-        salience: 0.5,
-        confidence: 0.9,
-        dedupeKey: "moment:office:morning",
-        occurredAt: "2026-04-16T09:01:00.000Z",
-        availableAt: "2026-04-16T09:01:00.000Z",
-        expiresAt: "2026-04-17T09:01:00.000Z",
+        id: "item-2", itemType: "attention_item",
+        title: "Reply to an order", summary: "A delivery update.",
+        payload: { packageName: "com.shop" },
+        salience: 0.7, confidence: 0.6,
+        dedupeKey: "notification:com.shop:1",
+        occurredAt: "2026-04-16T08:05:00.000Z",
       },
     ],
-  };
-
-  const firstRes = createResponse();
-  await handler({
-    subpath: "/mobile/items/ingest",
-    req: createRequest("POST", body),
-    res: firstRes,
-    url: new URL("http://localhost/mobile/items/ingest"),
-    api: {} as never,
-  } as never);
-
-  assert.deepEqual(JSON.parse(firstRes.body), {
-    ok: true,
-    accepted: 2,
-    inserted: 1,
-    ignored: 1,
   });
+
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 200);
+  const body = JSON.parse(res.body);
+  assert.equal(body.ok, true);
+  assert.equal(body.accepted, 2);
+  assert.equal(body.inserted, 2);
+
+  const signals = await listPersonalSignals({ status: "open" });
+  assert.equal(signals.length, 2);
+  const kinds = signals.map((s) => s.kind).sort();
+  assert.deepEqual(kinds, ["attention_item", "session_summary"]);
+  const sessionSignal = signals.find((s) => s.kind === "session_summary")!;
+  assert.equal(sessionSignal.device_id, "pixel-1");
+  assert.equal(sessionSignal.source, "device");
 }));
 
-test("handleMobile accepts millisecond timestamps from mobile clients", withTempHome(async () => {
-  const handler = handleMobile();
-  const occurredAt = Date.parse("2027-04-16T10:00:00.000Z");
-
-  const ingestRes = createResponse();
-  await handler({
-    subpath: "/mobile/items/ingest",
-    req: createRequest("POST", {
-      deviceId: "pixel-3",
-      items: [
-        {
-          id: "item-ms",
-          itemType: "moment",
-          title: "Arrived",
-          summary: "Arrived at office",
-          payload: { place: "office" },
-          salience: 0.5,
-          confidence: 0.8,
-          dedupeKey: "moment:office",
-          occurredAt,
-          availableAt: occurredAt,
-          expiresAt: occurredAt + 60_000,
+test("handleMobile /mobile/items/ingest fans snapshot items to raw.db", withTempHome(async () => {
+  const { handled, res } = await invoke("/mobile/items/ingest", "POST", {
+    deviceId: "iphone-1",
+    items: [
+      {
+        id: "apps-1", itemType: "app_inventory_bootstrap",
+        title: "Apps", summary: "3 apps",
+        payload: {
+          apps: [
+            { bundleId: "com.a", appName: "A" },
+            { bundleId: "com.b", appName: "B" },
+            { bundleId: "com.c", appName: "C" },
+          ],
         },
-      ],
-    }),
-    res: ingestRes,
-    url: new URL("http://localhost/mobile/items/ingest"),
-    api: {} as never,
-  } as never);
+        occurredAt: "2026-04-23T08:00:00.000Z",
+      },
+      {
+        id: "contacts-1", itemType: "contact_directory_snapshot",
+        title: "Contacts", summary: "2 contacts",
+        payload: {
+          contacts: [
+            { displayName: "张三", phones: ["+8613800000000"] },
+            { displayName: "Alice", emails: ["alice@x.com"] },
+          ],
+        },
+        occurredAt: "2026-04-23T08:00:00.000Z",
+      },
+    ],
+  });
 
-  const listRes = createResponse();
-  await handler({
-    subpath: "/mobile/items",
-    req: createRequest("GET"),
-    res: listRes,
-    url: new URL("http://localhost/mobile/items?status=pending&limit=10"),
-    api: {} as never,
-  } as never);
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 200);
 
-  const listed = JSON.parse(listRes.body);
-  assert.equal(listed.items[0].occurredAt, "2027-04-16T10:00:00.000Z");
-  assert.equal(listed.items[0].availableAt, "2027-04-16T10:00:00.000Z");
-  assert.equal(listed.items[0].expiresAt, "2027-04-16T10:01:00.000Z");
+  // Both items land in personal_signals (2 open rows)
+  const signals = await listPersonalSignals({ status: "open" });
+  assert.equal(signals.length, 2);
+
+  // Snapshot payloads also fan out to raw.db
+  const apps = listDeviceApps({ deviceId: "iphone-1", latestSnapshotOnly: true });
+  assert.equal(apps.length, 3);
+
+  const contacts = listDeviceContacts({ deviceId: "iphone-1", latestSnapshotOnly: true });
+  assert.equal(contacts.length, 2);
+  const zhang = contacts.find((c) => c.display_name === "张三");
+  assert.ok(zhang);
+  assert.deepEqual(zhang!.phones, ["+8613800000000"]);
 }));
 
-test("handleMobile lists latest-first items when order desc is requested", withTempHome(async () => {
-  const handler = handleMobile();
-
-  await handler({
-    subpath: "/mobile/items/ingest",
-    req: createRequest("POST", {
-      deviceId: "pixel-5",
-      items: [
-        {
-          id: "contact-old",
-          itemType: "contact_directory_snapshot",
-          title: "Contacts snapshot",
-          summary: "Older snapshot",
-          payload: { contacts: [{ contactId: "old-1", displayName: "Old Contact" }] },
-          salience: 0.5,
-          confidence: 0.8,
-          dedupeKey: "contact:old",
-          occurredAt: "2026-04-16T10:00:00.000Z",
-          availableAt: "2026-04-16T10:00:00.000Z",
-          expiresAt: "2026-04-20T10:00:00.000Z",
-        },
-        {
-          id: "contact-new",
-          itemType: "contact_directory_snapshot",
-          title: "Contacts snapshot",
-          summary: "Newer snapshot",
-          payload: { contacts: [{ contactId: "new-1", displayName: "New Contact" }] },
-          salience: 0.5,
-          confidence: 0.8,
-          dedupeKey: "contact:new",
-          occurredAt: "2026-04-17T10:00:00.000Z",
-          availableAt: "2026-04-17T10:00:00.000Z",
-          expiresAt: "2026-04-21T10:00:00.000Z",
-        },
-      ],
-    }),
-    res: createResponse(),
-    url: new URL("http://localhost/mobile/items/ingest"),
-    api: {} as never,
-  } as never);
-
-  const listRes = createResponse();
-  await handler({
-    subpath: "/mobile/items",
-    req: createRequest("GET"),
-    res: listRes,
-    url: new URL("http://localhost/mobile/items?type=contact_directory_snapshot&order=desc&limit=1"),
-    api: {} as never,
-  } as never);
-
-  const listed = JSON.parse(listRes.body);
-  assert.equal(listed.items.length, 1);
-  assert.equal(listed.items[0].id, "contact-new");
-  assert.deepEqual(listed.items[0].payload.contacts, [{ contactId: "new-1", displayName: "New Contact" }]);
+test("handleMobile /mobile/items/ingest: missing deviceId → 400", withTempHome(async () => {
+  const { handled, res } = await invoke("/mobile/items/ingest", "POST", {
+    items: [{ id: "x", itemType: "moment", title: "t", summary: "s" }],
+  });
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 400);
+  const body = JSON.parse(res.body);
+  assert.equal(body.ok, false);
 }));
 
-test("expired claim runs release items back to pending", withTempHome(async () => {
-  const handler = handleMobile();
-  const occurredAt = new Date(Date.now() - 60_000).toISOString();
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-  const ingestRes = createResponse();
-  await handler({
-    subpath: "/mobile/items/ingest",
-    req: createRequest("POST", {
-      deviceId: "pixel-4",
-      items: [
-        {
-          id: "item-reclaim",
-          itemType: "attention_item",
-          title: "Follow up",
-          summary: "Needs response",
-          payload: { source: "notification" },
-          salience: 0.6,
-          confidence: 0.7,
-          dedupeKey: "attention:reclaim",
-          occurredAt,
-          availableAt: occurredAt,
-          expiresAt,
-        },
-      ],
-    }),
-    res: ingestRes,
-    url: new URL("http://localhost/mobile/items/ingest"),
-    api: {} as never,
-  } as never);
+test("handleMobile /mobile/items/ingest: bad items filtered, good ones stored", withTempHome(async () => {
+  const { handled, res } = await invoke("/mobile/items/ingest", "POST", {
+    deviceId: "pixel-1",
+    items: [
+      { id: "", itemType: "moment", title: "t", summary: "s" },            // empty id → filtered
+      { id: "ok", itemType: "moment", title: "t", summary: "s" },
+    ],
+  });
+  assert.equal(handled, true);
+  const body = JSON.parse(res.body);
+  assert.equal(body.accepted, 1);
+  assert.equal(body.inserted, 1);
+}));
 
-  const firstClaimRes = createResponse();
-  await handler({
-    subpath: "/mobile/items/claim",
-    req: createRequest("POST", { limit: 1 }),
-    res: firstClaimRes,
-    url: new URL("http://localhost/mobile/items/claim"),
-    api: {} as never,
-  } as never);
-  const firstClaim = JSON.parse(firstClaimRes.body);
-  assert.equal(firstClaim.items.length, 1);
+test("handleMobile /mobile/items/ingest: duplicate dedupeKey → ignored on second post", withTempHome(async () => {
+  const first = await invoke("/mobile/items/ingest", "POST", {
+    deviceId: "pixel-1",
+    items: [{ id: "d1", itemType: "moment", title: "t", summary: "s", dedupeKey: "k1" }],
+  });
+  assert.equal(JSON.parse(first.res.body).inserted, 1);
+  const second = await invoke("/mobile/items/ingest", "POST", {
+    deviceId: "pixel-1",
+    items: [{ id: "d2", itemType: "moment", title: "t2", summary: "s2", dedupeKey: "k1" }],
+  });
+  const body = JSON.parse(second.res.body);
+  assert.equal(body.accepted, 1);
+  assert.equal(body.inserted, 0);
+  assert.equal(body.ignored, 1);
+}));
 
-  await new Promise((resolve) => setTimeout(resolve, 5));
-  expireOldMobileItemRuns(0);
+test("handleMobile /mobile/items GET now returns 410 Gone", withTempHome(async () => {
+  const { handled, res } = await invoke("/mobile/items", "GET");
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 410);
+  const body = JSON.parse(res.body);
+  assert.equal(body.ok, false);
+  assert.match(body.hint ?? "", /pin signals/);
+}));
 
-  const secondClaimRes = createResponse();
-  await handler({
-    subpath: "/mobile/items/claim",
-    req: createRequest("POST", { limit: 1 }),
-    res: secondClaimRes,
-    url: new URL("http://localhost/mobile/items/claim"),
-    api: {} as never,
-  } as never);
-  const secondClaim = JSON.parse(secondClaimRes.body);
-  assert.equal(secondClaim.items.length, 1);
-  assert.equal(secondClaim.items[0].id, "item-reclaim");
+test("handleMobile /mobile/items/claim now returns 410 Gone", withTempHome(async () => {
+  const { handled, res } = await invoke("/mobile/items/claim", "POST", {});
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 410);
+}));
+
+test("handleMobile /mobile/items/commit now returns 410 Gone", withTempHome(async () => {
+  const { handled, res } = await invoke("/mobile/items/commit", "POST", { runToken: "x" });
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 410);
+}));
+
+test("handleMobile does not claim unrelated paths", withTempHome(async () => {
+  const { handled } = await invoke("/something/else", "GET");
+  assert.equal(handled, false);
 }));

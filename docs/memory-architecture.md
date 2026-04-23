@@ -38,33 +38,36 @@ Tier 3  profile + skill    高度浓缩的画像 + 可执行技能
 ## 二、存储拓扑
 
 `proactive.db` (实际 18 张表，含 v2 遗留 + 子系统私有；agent 主要消费的是粗体那 9 张) +
-`mobile_items.db`（端侧上传 sink，每次 ingest 同步镜像到 personal_signals） +
 `raw.db`（按 source 分表） + `skills/` folder + LanceDB 向量索引。
 
 ```
-proactive.db                              mobile_items.db (端侧协议兼容)
-├─ profile                                ├─ mobile_items
-├─ memory                ★                ├─ mobile_ingest_batches
-├─ personal_signals      ★                └─ mobile_item_runs
-├─ world_signals         ★
-├─ skill_index           ★                raw.db (按 source 分表)
-├─ evolution_runs        ★                ├─ gmail_messages           ★
-├─ pipeline_runs         ★                ├─ gcal_events              ★
-├─ card_evaluations      ★                ├─ device_apps_snapshot     ★
-├─ intent_card_state     ★                ├─ device_contacts_snapshot
-├─ intent_thread_state                    ├─ notion_pages (v2)
-├─ feedback_events                        └─ slack_messages (v2)
-├─ goals                 (v2 遗留)
-├─ profile_signals       (v2 遗留)        skills/                     LanceDB
-├─ profile_interests     (v2 遗留)        └─ <skill_id>/SKILL.md      pf_personal_documents
-├─ user_settings                                                       pf_world_signals
-├─ auto_loop_state       (v2 遗留)        data/run-artifacts/<id>.json
+proactive.db                              raw.db (按 source 分表)
+├─ profile                                ├─ gmail_messages           ★
+├─ memory                ★                ├─ gcal_events              ★
+├─ personal_signals      ★                ├─ device_apps_snapshot     ★
+├─ world_signals         ★                ├─ device_contacts_snapshot
+├─ skill_index           ★                ├─ notion_pages (v2)
+├─ evolution_runs        ★                └─ slack_messages (v2)
+├─ pipeline_runs         ★
+├─ card_evaluations      ★                skills/                     LanceDB
+├─ intent_card_state     ★                └─ <skill_id>/SKILL.md      pf_personal_documents
+├─ intent_thread_state                                                 pf_world_signals
+├─ feedback_events
+├─ goals                 (v2 遗留)        data/run-artifacts/<id>.json
+├─ profile_signals       (v2 遗留)
+├─ profile_interests     (v2 遗留)
+├─ user_settings
+├─ auto_loop_state       (v2 遗留)
 ├─ chat_crystallize_state (v2 遗留)
 ├─ dream_runs            (dreaming 私有)
 ├─ push_records          (无 push 功能)
 ├─ push_outcomes         (无 push 功能)
 └─ app_state (KV)        ★
 ```
+
+> `mobile_items.db` 已在 v3 mobile cutover 里彻底下线。`/mobile/items/ingest`
+> 直接写 `personal_signals`（+ snapshot 类 itemType fan-out 到 `raw.db`），
+> 老的 claim/commit runToken 端点返回 `410 Gone`。
 
 **★ = 本次 v3 设计的核心表**。`v2 遗留` 标记的几张是历史 schema，目前还有 helper 在写
 （`getAutoLoopState` / `getCrystallizeState` 等），**未来 PR 可挪到 `app_state` KV**。
@@ -260,20 +263,20 @@ LLM 通过 `pin` CLI 拉 context。所有命令本地查 SQLite + folder，**毫
 
 ```bash
 # 画像（最常用）
-pin profile get --id default --full          # profile 表 + goals
+pin profile get                              # singleton profile + goals
 pin memory list --quality 0.7 --limit 30
 pin memory list --subjectPrefix person: --limit 20
-pin memory search --query "投资偏好" --limit 10   # --top 也可
+pin memory search --query "投资偏好" --limit 10   # --top 也可；SQL LIKE，非 top-N 预筛
 pin skills list --status enabled
 pin skills show --id <skill_id>              # cat skills/<id>/SKILL.md
 
 # 即时上下文 (raw 数据 namespaced under `pin raw`)
 pin signals recent --hours 24                # personal_signals.status='open'
 pin raw gmail recent --hours 24 --limit 20
-pin raw gcal today
+pin raw gcal today --timezone Asia/Shanghai  # 不传 --timezone 用 profile.timezone，再退化到 UTC
 pin raw gcal week
 pin raw device-apps --deviceId <id> --top 20
-pin raw device-contacts search --query "张" --deviceId <id>
+pin raw device-contacts search --query "张" --deviceId <id>   # SQL 内过滤，LIMIT 生效于匹配集
 
 # 反思（让 agent 知道自己历史）
 pin evolution recent --kind daily_dream --limit 5
@@ -317,9 +320,9 @@ unified-generator 的 phase 1 由"跑 12 个 CLI" 改为"先看 ContextPack 预�
 | ingest_cursor | DROP | ✅ 删（0 行） | — |
 | dream_runs | dreaming 子系统私有 + mirror 到 evolution_runs | ✅ Phase 8 hook | follow-up：dreaming 重写后 DROP |
 | pending_items / context_runs | DROP | ✅ 删（0 行） | — |
-| mobile_items | 镜像到 personal_signals（不 DROP） | ✅ 每次 ingest 同步写 + bridge snapshot 到 raw.db | 端侧协议保留 |
-| mobile_ingest_batches | 保留 | 仍由 mobile-db.ts 写（监控批次） | follow-up：移到 metrics |
-| mobile_item_runs | 保留 | claim/commit 模式仍服务老 CLI | follow-up：CLI 切到 personal_signals 后 DROP |
+| mobile_items | DROP（整个 mobile_items.db 文件废弃） | ✅ `/mobile/items/ingest` 直写 personal_signals + raw.db | — |
+| mobile_ingest_batches | DROP | ✅ 同 mobile_items.db 一起废弃 | — |
+| mobile_item_runs | DROP | ✅ claim/commit 端点返回 410 Gone | — |
 
 **实际净变化**：v3 新增 8 张表（memory / personal_signals / skill_index / evolution_runs / card_evaluations / app_state / world_signals 改名 / 4 张 raw 表）；自动迁移 + DROP 3 张（profile_memories / user_skills / 3 张零行表）；其它 v2 表分两类——dreaming/crystallize/mobile 子系统私有保留，profile_signals/interests/goals 等 v2 遗留留作 follow-up。
 
@@ -347,9 +350,10 @@ unified-generator 的 phase 1 由"跑 12 个 CLI" 改为"先看 ContextPack 预�
 | 11 | APIs `user_devices` 表 + `mobile_proxy` token 路由 + 前端 `ensureDevice` SDK | ✅ |
 | 12 | agent-visible CLI smoke demo + `raw.device-apps` envelope fix | ✅ |
 | 13 | 一次性 backfill + DROP 老表（`profile_memories` / `user_skills`），helpers redirect 到 v3 | ✅ |
+| 14 | Mobile cutover：删除 `mobile_items.db` + `mobile-db.ts`，`/mobile/items/ingest` 直写 `personal_signals` + raw.db fan-out，claim/commit 端点 410 Gone | ✅ |
 
 **变更净结果**：23 张 → 13 张 + `raw.db` 一组 + `skills/` folder。
-**测试**：plugin 244 / 244 ✅；APIs + frontend type-check + 单测全过；CLI smoke 16 命令全过。
+**测试**：plugin 260+ / 260+ ✅（数字随 PR 演进）；APIs + frontend type-check + 单测全过；CLI smoke 16 命令全过。
 
 后续工作（独立 PR）：
 - consolidation trigger（evolution agent 周期净化 memory）

@@ -1,10 +1,5 @@
 import { readFileSync } from 'node:fs';
 import { parseArgs, success, failure } from './shared.js';
-import {
-  claimMobileItems,
-  commitMobileItemRun,
-  listMobileItems,
-} from '../mobile-db.js';
 
 const COMPOSIO_API_BASE = 'https://backend.composio.dev/api/v3';
 const KEY_FILE = '/app/data/composio-api-key';
@@ -45,48 +40,16 @@ export async function handlePersonal(args: string[]): Promise<string> {
   const { positional, flags } = parseArgs(args);
   const sub = positional[0];
 
+  // `personal mobile` was the v2 entry point reading the retired
+  // mobile_items.db sink. In v3 mobile items live in personal_signals —
+  // redirect callers rather than silently ignoring them.
   if (sub === 'mobile') {
-    const area = positional[1];
-    const action = positional[2];
-
-    if (area === 'items' && action === 'list') {
-      const items = listMobileItems({
-        status: flags['status'],
-        itemType: flags['type'],
-        since: flags['since'],
-        until: flags['until'],
-        deviceId: flags['device-id'],
-        limit: flags['limit'] ? Number.parseInt(flags['limit'], 10) : undefined,
-      });
-      return success('personal', 'mobile.items.list', { items });
-    }
-
-    if (area === 'items' && action === 'claim') {
-      const result = claimMobileItems({
-        itemType: flags['type'],
-        since: flags['since'],
-        until: flags['until'],
-        deviceId: flags['device-id'],
-        limit: flags['limit'] ? Number.parseInt(flags['limit'], 10) : undefined,
-      });
-      return success('personal', 'mobile.items.claim', result);
-    }
-
-    if (area === 'items' && action === 'commit') {
-      const runToken = flags['run-token'];
-      if (!runToken) {
-        return failure('personal', 'mobile.items.commit', 'validation', 'Missing --run-token');
-      }
-      const result = commitMobileItemRun(runToken);
-      return success('personal', 'mobile.items.commit', { runToken, ...result });
-    }
-
     return failure(
       'personal',
       'mobile',
-      'validation',
-      `Unknown mobile command: ${[area, action].filter(Boolean).join(' ') || '(empty)'}`,
-      'Available: items list, items claim, items commit',
+      'removed',
+      'pin personal mobile is retired in v3',
+      'Use `pin signals list` / `pin signals recent` to read; `pin signals consume --id <id> --runId <run>` to mark processed.',
     );
   }
 
@@ -226,5 +189,5 @@ export async function handlePersonal(args: string[]): Promise<string> {
     return success('personal', 'exec', { tool, data: result });
   }
 
-  return failure('personal', sub ?? 'unknown', 'validation', `Unknown personal command: ${sub}`, 'Available: status, setup, connections, connect, wait, tools, exec, mobile');
+  return failure('personal', sub ?? 'unknown', 'validation', `Unknown personal command: ${sub}`, 'Available: status, setup, connections, connect, wait, tools, exec');
 }
