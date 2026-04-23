@@ -79,6 +79,9 @@ CI 需要在 GitHub Secrets 设置以下 secrets：
 - `proactive-ai-frontend/src/`：React SPA 前端（Vite + Tailwind + Capacitor，支持 Web/iOS/Android）
 - `ops/litellm/`：LiteLLM 配置与部署脚本
 
+## 关键设计文档
+- [`docs/memory-architecture.md`](docs/memory-architecture.md) — Memory / Profile / Skill 架构定稿（v3）。**改动 memory / profile / skill / personal_signals / world_signals / evolution_runs / raw.db / skills folder 相关代码前必读**。包含三层数据模型、13 张表 schema、端侧上传契约、CLI 接口、老→新表迁移映射、阶段实施。
+
 ## 本地开发
 首次设置：
 ```bash
