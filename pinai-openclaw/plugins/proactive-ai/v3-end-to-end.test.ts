@@ -1,7 +1,7 @@
 /**
  * End-to-end smoke test: simulates the complete v3 data flow.
  *
- *   Device upload → mobile_items + mirror to personal_signals + bridge to raw.db
+ *   Device upload → personal_signals + snapshot bridge to raw.db
  *   ↓
  *   evolution_run created
  *   ↓
@@ -24,10 +24,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { ingestMobileItems, resetMobileDbForTests } from './mobile-db.ts';
+import { ingestMobileItemsV3 } from './routes/mobile.ts';
 import {
   addMemoryV3,
-  addSkill,
   completeEvolutionRun,
   createEvolutionRun,
   getEvolutionRun,
@@ -54,13 +53,11 @@ async function withTempHome<T>(fn: () => Promise<T>): Promise<T> {
   const root = await mkdtemp(join(tmpdir(), 'pin-v3-e2e-'));
   const previous = process.env.OPENCLAW_HOME;
   process.env.OPENCLAW_HOME = root;
-  resetMobileDbForTests();
   resetDbForTests();
   resetRawDbForTests();
   try {
     return await fn();
   } finally {
-    resetMobileDbForTests();
     resetDbForTests();
     resetRawDbForTests();
     if (previous === undefined) {
@@ -72,29 +69,23 @@ async function withTempHome<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
 test('e2e: device GPS-trigger event flows through to a high-quality memory', async () => {
   await withTempHome(async () => {
     // 1. Device side: edge model fires "home → office" trigger.
     //    The mobile SDK posts the item to /api/proxy/mobile/items/ingest,
-    //    which calls ingestMobileItems on the server.
-    ingestMobileItems({
-      deviceId: 'iphone-1',
-      items: [{
-        id: 'mob-1',
-        itemType: 'moment',
-        title: 'home → office',
-        summary: '从家到公司，用时 25 分钟（比平时晚 10 分钟）',
-        salience: 0.65,
-        confidence: 0.7,
-        dedupeKey: 'device:loc:home_to_office:2026-04-23',
-        occurredAt: '2026-04-23T08:00:00Z',
-        expiresAt: '2099-01-01T00:00:00Z',
-        payload: { from: 'place:home', to: 'place:office', duration_min: 25 },
-      }],
-    });
-    await wait(150);                                  // let the async mirror flush
+    //    which calls ingestMobileItemsV3 on the server.
+    await ingestMobileItemsV3('iphone-1', [{
+      id: 'mob-1',
+      itemType: 'moment',
+      title: 'home → office',
+      summary: '从家到公司，用时 25 分钟（比平时晚 10 分钟）',
+      salience: 0.65,
+      confidence: 0.7,
+      dedupeKey: 'device:loc:home_to_office:2026-04-23',
+      occurredAt: '2026-04-23T08:00:00Z',
+      expiresAt: '2099-01-01T00:00:00Z',
+      payload: { from: 'place:home', to: 'place:office', duration_min: 25 },
+    }]);
 
     // Personal_signals row should be present, status='open'.
     const openSignals = await listPersonalSignals({ status: 'open' });
@@ -168,26 +159,22 @@ test('e2e: device GPS-trigger event flows through to a high-quality memory', asy
 test('e2e: device app inventory snapshot flows to raw.db, not memory', async () => {
   await withTempHome(async () => {
     // Device pushes a full app-inventory snapshot.
-    ingestMobileItems({
-      deviceId: 'iphone-1',
-      items: [{
-        id: 'snap-1',
-        itemType: 'app_inventory_bootstrap',
-        title: 'Apps installed',
-        summary: '40 apps',
-        salience: 0.5,
-        occurredAt: '2026-04-23T08:00:00Z',
-        expiresAt: '2099-01-01T00:00:00Z',
-        payload: {
-          apps: [
-            { bundleId: 'com.tencent.wechat', appName: 'WeChat' },
-            { bundleId: 'com.robinhood.android', appName: 'Robinhood' },
-            { bundleId: 'com.spotify.music', appName: 'Spotify' },
-          ],
-        },
-      }],
-    });
-    await wait(150);
+    await ingestMobileItemsV3('iphone-1', [{
+      id: 'snap-1',
+      itemType: 'app_inventory_bootstrap',
+      title: 'Apps installed',
+      summary: '40 apps',
+      salience: 0.5,
+      occurredAt: '2026-04-23T08:00:00Z',
+      expiresAt: '2099-01-01T00:00:00Z',
+      payload: {
+        apps: [
+          { bundleId: 'com.tencent.wechat', appName: 'WeChat' },
+          { bundleId: 'com.robinhood.android', appName: 'Robinhood' },
+          { bundleId: 'com.spotify.music', appName: 'Spotify' },
+        ],
+      },
+    }]);
 
     // raw.db.device_apps_snapshot should hold per-app rows
     const apps = listDeviceApps({ deviceId: 'iphone-1', latestSnapshotOnly: true });
