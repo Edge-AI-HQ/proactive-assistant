@@ -530,3 +530,201 @@ export async function forceCrystallizeRun(): Promise<CrystallizeRunResponse> {
   }
   return res.json();
 }
+
+// ── v3 Skills (debug panel) ──────────────────────────────────────────────
+//
+// Response shape matches plugin `routes/skills.ts` which serves v3 `skill_index`
+// rows plus the `SKILL.md` body on detail requests. See
+// `pinai-openclaw/plugins/proactive-ai/docs/memory-architecture.md` §三.
+
+export type SkillStatus = "enabled" | "disabled" | "archived";
+
+export interface Skill {
+  id: string;
+  title: string;
+  description: string | null;
+  status: SkillStatus;
+  revision: number;
+  body_hash: string;
+  triggers: string[];
+  source: string;
+  created_run_id: string | null;
+  last_updated_run_id: string | null;
+  enabled_at: string | null;
+  disabled_at: string | null;
+  created_at: string;
+  updated_at: string;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+  /** Only populated on detail (GET /skills/:id) and after create/update. */
+  body?: string;
+}
+
+export interface SkillCreateInput {
+  title: string;
+  body: string;
+  description?: string | null;
+  triggers?: string[];
+  status?: "enabled" | "disabled";
+}
+
+export interface SkillPatch {
+  title?: string;
+  description?: string | null;
+  body?: string;
+  triggers?: string[];
+  status?: SkillStatus;
+}
+
+export async function fetchSkills(
+  params?: { status?: SkillStatus; limit?: number },
+  signal?: AbortSignal,
+): Promise<{ ok: boolean; skills: Skill[] }> {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (params?.limit) qs.set("limit", String(params.limit));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  const res = await proxyFetch(`/skills${suffix}`, { signal });
+  if (!res.ok) throw new Error(`/skills failed: ${await readErrorMessage(res)}`);
+  return res.json();
+}
+
+export async function fetchSkill(id: string, signal?: AbortSignal): Promise<{ ok: boolean; skill: Skill }> {
+  const res = await proxyFetch(`/skills/${encodeURIComponent(id)}`, { signal });
+  if (!res.ok) throw new Error(`/skills/${id} failed: ${await readErrorMessage(res)}`);
+  return res.json();
+}
+
+export async function createSkill(input: SkillCreateInput): Promise<{ ok: boolean; skill: Skill }> {
+  const res = await proxyPost("/skills", input);
+  if (!res.ok) throw new Error(`create skill failed: ${await readErrorMessage(res)}`);
+  return res.json();
+}
+
+export async function updateSkill(id: string, patch: SkillPatch): Promise<{ ok: boolean; skill: Skill }> {
+  const res = await proxyFetch(`/skills/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`update skill failed: ${await readErrorMessage(res)}`);
+  return res.json();
+}
+
+/** Soft delete — backend flips status to 'archived'. */
+export async function archiveSkill(id: string): Promise<{ ok: boolean; skill: Skill }> {
+  const res = await proxyFetch(`/skills/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`archive skill failed: ${await readErrorMessage(res)}`);
+  return res.json();
+}
+
+// ── v3 Memory (debug panel) ──────────────────────────────────────────────
+//
+// Response shape matches plugin `routes/memory.ts` (v3 `MemoryRowV3`).
+// DELETE is intentionally unavailable: use archive or supersede.
+
+export type MemoryStatus = "active" | "archived" | "superseded";
+
+export interface Memory {
+  id: string;
+  text: string;
+  source: string;
+  source_run_id: string | null;
+  subject: string | null;
+  quality: number;
+  confidence: number;
+  status: MemoryStatus;
+  superseded_by: string | null;
+  occurred_at: string | null;
+  created_at: string;
+  tags: string[];
+  related_memory_ids: string[];
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+export interface MemoryListFilter {
+  status?: MemoryStatus;
+  source?: string;
+  subject?: string;
+  subjectPrefix?: string;
+  minQuality?: number;
+  since?: string;
+  limit?: number;
+  orderBy?: "created_at" | "quality" | "last_referenced_at";
+  orderDirection?: "asc" | "desc";
+}
+
+export interface MemoryCreateInput {
+  text: string;
+  source: string;
+  subject?: string | null;
+  quality?: number;
+  confidence?: number;
+  tags?: string[];
+  occurredAt?: string | null;
+  sourceRunId?: string | null;
+}
+
+export interface MemoryPatch {
+  text?: string;
+  subject?: string | null;
+  quality?: number;
+  confidence?: number;
+  tags?: string[];
+}
+
+export async function fetchMemories(
+  filter?: MemoryListFilter,
+  signal?: AbortSignal,
+): Promise<{ ok: boolean; memories: Memory[] }> {
+  const qs = new URLSearchParams();
+  if (filter?.status) qs.set("status", filter.status);
+  if (filter?.source) qs.set("source", filter.source);
+  if (filter?.subject) qs.set("subject", filter.subject);
+  if (filter?.subjectPrefix) qs.set("subjectPrefix", filter.subjectPrefix);
+  if (typeof filter?.minQuality === "number") qs.set("minQuality", String(filter.minQuality));
+  if (filter?.since) qs.set("since", filter.since);
+  if (filter?.limit) qs.set("limit", String(filter.limit));
+  if (filter?.orderBy) qs.set("orderBy", filter.orderBy);
+  if (filter?.orderDirection) qs.set("orderDirection", filter.orderDirection);
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  const res = await proxyFetch(`/memory${suffix}`, { signal });
+  if (!res.ok) throw new Error(`/memory failed: ${await readErrorMessage(res)}`);
+  return res.json();
+}
+
+export async function fetchMemory(id: string, signal?: AbortSignal): Promise<{ ok: boolean; memory: Memory }> {
+  const res = await proxyFetch(`/memory/${encodeURIComponent(id)}`, { signal });
+  if (!res.ok) throw new Error(`/memory/${id} failed: ${await readErrorMessage(res)}`);
+  return res.json();
+}
+
+export async function createMemory(input: MemoryCreateInput): Promise<{ ok: boolean; memory: Memory }> {
+  const res = await proxyPost("/memory", input);
+  if (!res.ok) throw new Error(`create memory failed: ${await readErrorMessage(res)}`);
+  return res.json();
+}
+
+export async function updateMemory(id: string, patch: MemoryPatch): Promise<{ ok: boolean; memory: Memory }> {
+  const res = await proxyFetch(`/memory/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`update memory failed: ${await readErrorMessage(res)}`);
+  return res.json();
+}
+
+/** Soft delete — backend flips status to 'archived'. */
+export async function archiveMemory(id: string): Promise<void> {
+  const res = await proxyPost(`/memory/${encodeURIComponent(id)}/archive`, {});
+  if (!res.ok) throw new Error(`archive memory failed: ${await readErrorMessage(res)}`);
+}
+
+export async function supersedeMemory(oldId: string, newId: string): Promise<void> {
+  const res = await proxyPost("/memory/supersede", { oldId, newId });
+  if (!res.ok) throw new Error(`supersede memory failed: ${await readErrorMessage(res)}`);
+}
