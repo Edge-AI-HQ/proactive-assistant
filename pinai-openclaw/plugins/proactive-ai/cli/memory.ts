@@ -119,6 +119,8 @@ export async function handleMemory(args: string[]): Promise<string> {
     const limit = parseLimitFlag(flags) ?? 20;
     const all = await db.listMemoryV3({
       status: 'active',
+      since: flags['since'],
+      until: flags['until'],
       limit: 500,
       orderBy: 'quality',
     });

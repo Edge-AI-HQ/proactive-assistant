@@ -26,11 +26,15 @@ export async function handleSkills(args: string[]): Promise<string> {
 
   if (sub === 'list') {
     const limit = flags['limit'] ? Number(flags['limit']) : 100;
-    const rows = await db.listSkills({
+    const updatedSince = flags['updated-since'] ?? flags['updatedSince'] ?? flags['since'];
+    let rows = await db.listSkills({
       status: (flags['status'] as db.SkillStatus | undefined),
       source: flags['source'],
-      limit,
+      limit: updatedSince ? 1000 : limit,        // pull more if we'll filter
     });
+    if (updatedSince) {
+      rows = rows.filter((s) => s.updated_at >= updatedSince).slice(0, limit);
+    }
     return success('skills', 'list', { count: rows.length, skills: rows });
   }
 

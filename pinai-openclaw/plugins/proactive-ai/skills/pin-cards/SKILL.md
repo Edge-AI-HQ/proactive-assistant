@@ -10,6 +10,12 @@ metadata:
 
 # cards
 
+> v3 提示：`pin cards recent` 是 agent 看"我已经推过哪些卡片"的标准入口；
+> 如需结构化评分指标（5 维），用 `pin evolution recent` + `card_evaluations`
+> 表的关联（intent_card_id 一致）。"用户当前在做什么"建议用
+> `pin signals recent --hours 24`（v3 personal_signals）替代旧的
+> `pin personal mobile items list`，两者数据同源但 v3 有 reference 追踪。
+
 ## Shared contract
 
 - 默认使用 `--json`（或 `--format json`）读取结构化结果

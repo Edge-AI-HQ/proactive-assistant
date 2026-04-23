@@ -484,23 +484,32 @@ export function listDeviceApps(opts: {
   deviceId?: string;
   snapshotId?: string;
   latestSnapshotOnly?: boolean;
+  /** ISO timestamp; only snapshots with occurred_at >= since are considered. */
+  since?: string;
+  /** ISO timestamp; only snapshots with occurred_at <= until are considered. */
+  until?: string;
   limit?: number;
 } = {}): DeviceAppRow[] {
   const db = getRawDb();
   let snapshotId = opts.snapshotId;
   if (!snapshotId && opts.latestSnapshotOnly) {
-    const row = db.prepare(
-      `SELECT snapshot_id FROM device_apps_snapshot
-       ${opts.deviceId ? 'WHERE device_id = ?' : ''}
-       ORDER BY occurred_at DESC LIMIT 1`,
-    ).get(...(opts.deviceId ? [opts.deviceId] : [])) as { snapshot_id?: string } | undefined;
+    // Pick the latest snapshot in the (optional) time window for the device
+    const latestParts = ['SELECT snapshot_id FROM device_apps_snapshot WHERE 1=1'];
+    const latestParams: unknown[] = [];
+    if (opts.deviceId) { latestParts.push('AND device_id = ?'); latestParams.push(opts.deviceId); }
+    if (opts.since)    { latestParts.push('AND occurred_at >= ?'); latestParams.push(opts.since); }
+    if (opts.until)    { latestParts.push('AND occurred_at <= ?'); latestParams.push(opts.until); }
+    latestParts.push('ORDER BY occurred_at DESC LIMIT 1');
+    const row = db.prepare(latestParts.join(' ')).get(...latestParams) as { snapshot_id?: string } | undefined;
     snapshotId = row?.snapshot_id;
     if (!snapshotId) return [];
   }
   const parts = ['SELECT * FROM device_apps_snapshot WHERE 1=1'];
   const params: unknown[] = [];
   if (opts.deviceId) { parts.push('AND device_id = ?'); params.push(opts.deviceId); }
-  if (snapshotId) { parts.push('AND snapshot_id = ?'); params.push(snapshotId); }
+  if (snapshotId)    { parts.push('AND snapshot_id = ?'); params.push(snapshotId); }
+  if (opts.since)    { parts.push('AND occurred_at >= ?'); params.push(opts.since); }
+  if (opts.until)    { parts.push('AND occurred_at <= ?'); params.push(opts.until); }
   parts.push('ORDER BY app_name ASC LIMIT ?');
   params.push(Math.max(1, Math.min(opts.limit ?? 100, 1000)));
   return (db.prepare(parts.join(' ')).all(...params) as any[]).map(rowToDeviceApp);
@@ -558,6 +567,8 @@ export function listDeviceContacts(opts: {
   deviceId?: string;
   snapshotId?: string;
   latestSnapshotOnly?: boolean;
+  since?: string;
+  until?: string;
   /** Substring match on display_name / emails / phones (case-insensitive). */
   search?: string;
   limit?: number;
@@ -565,18 +576,22 @@ export function listDeviceContacts(opts: {
   const db = getRawDb();
   let snapshotId = opts.snapshotId;
   if (!snapshotId && opts.latestSnapshotOnly) {
-    const row = db.prepare(
-      `SELECT snapshot_id FROM device_contacts_snapshot
-       ${opts.deviceId ? 'WHERE device_id = ?' : ''}
-       ORDER BY occurred_at DESC LIMIT 1`,
-    ).get(...(opts.deviceId ? [opts.deviceId] : [])) as { snapshot_id?: string } | undefined;
+    const latestParts = ['SELECT snapshot_id FROM device_contacts_snapshot WHERE 1=1'];
+    const latestParams: unknown[] = [];
+    if (opts.deviceId) { latestParts.push('AND device_id = ?'); latestParams.push(opts.deviceId); }
+    if (opts.since)    { latestParts.push('AND occurred_at >= ?'); latestParams.push(opts.since); }
+    if (opts.until)    { latestParts.push('AND occurred_at <= ?'); latestParams.push(opts.until); }
+    latestParts.push('ORDER BY occurred_at DESC LIMIT 1');
+    const row = db.prepare(latestParts.join(' ')).get(...latestParams) as { snapshot_id?: string } | undefined;
     snapshotId = row?.snapshot_id;
     if (!snapshotId) return [];
   }
   const parts = ['SELECT * FROM device_contacts_snapshot WHERE 1=1'];
   const params: unknown[] = [];
   if (opts.deviceId) { parts.push('AND device_id = ?'); params.push(opts.deviceId); }
-  if (snapshotId) { parts.push('AND snapshot_id = ?'); params.push(snapshotId); }
+  if (snapshotId)    { parts.push('AND snapshot_id = ?'); params.push(snapshotId); }
+  if (opts.since)    { parts.push('AND occurred_at >= ?'); params.push(opts.since); }
+  if (opts.until)    { parts.push('AND occurred_at <= ?'); params.push(opts.until); }
   parts.push('ORDER BY display_name ASC NULLS LAST LIMIT ?');
   params.push(Math.max(1, Math.min(opts.limit ?? 200, 2000)));
   const rows = (db.prepare(parts.join(' ')).all(...params) as any[]).map(rowToDeviceContact);

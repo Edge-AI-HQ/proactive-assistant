@@ -1,74 +1,49 @@
 ---
 name: pin-push
-version: 1.0.0
-description: "推送记录：追踪推送了什么、何时推送、投递结果，支持去重和效果评估。"
+version: 2.0.0-deprecated
+description: "[DEPRECATED v2 only] 推送记录表，v3 没有 push 流程；查看已推卡片用 pin cards recent，查看反馈用 pin feedback list。"
 metadata:
   requires:
     bins: ["pin"]
   cliHelp: "push --help"
 ---
 
-# push
+# push (DEPRECATED — v2 only)
+
+> ⚠️ **v3 中此 skill 不再被推荐**。`push_records` / `push_outcomes` 表
+> 在 v3 schema 中保留但 0 行使用，规划中下个 PR 删除。
+>
+> v3 的等价路径：
+> - 看"agent 已经推过哪些卡片" → `pin cards recent --limit 20`
+> - 看"用户对卡片的反馈" → `pin feedback list --since 14d`
+> - 看"agent 这次跑做了什么" → `pin evolution recent --limit 5` 加上
+>   `pin evolution get --id <run_id>` 看 trajectory
+>
+> CLI 命令本身仍可调用（不会报错），但写入 push_records 的数据没有任何
+> 消费者会读它。**不要在新代码或新 prompt 里推荐这个 skill**。
 
 **先读取 [`../pin-shared/SKILL.md`](../pin-shared/SKILL.md)**
 
-## 核心场景
-
-### 1. 记录推送（关联 intent card）
+## 历史命令（仅作回滚兼容保留）
 
 ```bash
-pin push record --kind proactive_card --title "AI funding roundup" \
-  --intent-card-id ic_001 --basket work --channel telegram \
-  --ref article_set_77 --reason "matches user interest" --json
-```
+# 记录推送
+pin push record --kind proactive_card --title "..." --intent-card-id ic_001 --json
 
-### 2. 查看推送历史
-
-```bash
+# 查看推送历史
 pin push history --since 7d --basket work --json
-pin push history --kind digest --limit 10 --json
-```
-
-### 3. 获取单条推送（含投递结果）
-
-```bash
 pin push get --id push_abc123 --json
-# 返回 { ...record, outcomes: [...] }
-```
-
-### 4. 记录投递结果
-
-```bash
 pin push outcome --id push_abc123 --status clicked --json
-```
-
-### 5. 去重检查
-
-```bash
 pin push find-similar --kind proactive_card --ref article_set_77 --since 14d --json
-pin push find-similar --kind proactive_card --title "funding" --since 7d --json
 ```
 
-## 命令列表
+| 命令 | v3 替代 |
+|---|---|
+| `pin push history --since 7d` | `pin cards recent --limit 50` |
+| `pin push get --id <id>` | `pin cards recent` 找到 + `pin feedback list --intent-card-id <card_id>` |
+| `pin push outcome --id <id> --status clicked` | `pin feedback log --kind card_action --action confirm --intent-card-id <id>` |
+| `pin push find-similar` | `pin cards recent` + agent 自己判断 |
 
-| 命令 | 说明 | 风险 |
-|------|------|------|
-| `pin push record --kind <k> --title <t> [--intent-card-id <id>] [--basket <b>] [--channel <c>] [--ref <r>] [--reason <r>] --json` | 记录推送 | write |
-| `pin push history [--kind <k>] [--basket <b>] [--channel <c>] [--since <d>] [--limit <n>] --json` | 推送历史 | read |
-| `pin push get --id <id> --json` | 获取单条推送（含 outcomes） | read |
-| `pin push outcome --id <id> --status <s> --json` | 记录投递结果 | write |
-| `pin push find-similar --kind <k> [--ref <r>] [--title <t>] [--since <d>] --json` | 查找相似推送（去重） | read |
-
-## 枚举值
-
-- **kind**: `proactive_card` | `notification` | `digest`
-- **basket**: `work` | `health` | `family` | `wealth` | `growth` | `life`
-- **channel**: `telegram` | `web` | `mobile` | `im`
-- **outcome status**: `clicked` | `dismissed` | `ignored` | `converted`
-
-## 设计原则
-
-- CLI 只负责存储和读取事实
-- 是否过于重复，由 Agent 决定
-- `intent_card_id` 为逻辑关联，不校验其存在性（intent domain 独立实现）
-- `push get` 返回关联的 outcomes 数组，便于查看完整推送生命周期
+废弃理由：v3 把"已推卡片"事实归入 `pipeline_runs.final_cards`（通过
+`pin cards recent` 暴露），把"用户响应"归入 `feedback_events`（通过
+`pin feedback list` 暴露），不再需要中间的 push 表。

@@ -77,11 +77,15 @@ export async function handleRaw(args: string[]): Promise<string> {
   }
 
   if (sub === 'device-apps') {
-    const top = flags['top'] ? Number(flags['top']) : 20;
+    const limit = flags['limit'] ? Number(flags['limit'])
+      : flags['top'] ? Number(flags['top']) : 20;
     const apps = raw.listDeviceApps({
       deviceId: flags['deviceId'] ?? flags['device-id'],
-      latestSnapshotOnly: true,
-      limit: top,
+      // Default to latest snapshot only; pass --all-snapshots to disable
+      latestSnapshotOnly: flags['all-snapshots'] !== 'true',
+      since: flags['since'],
+      until: flags['until'],
+      limit,
     });
     return success('raw', 'device-apps', { count: apps.length, apps });
   }
@@ -92,7 +96,9 @@ export async function handleRaw(args: string[]): Promise<string> {
     if (action === 'list' || action === 'search') {
       const contacts = raw.listDeviceContacts({
         deviceId: flags['deviceId'] ?? flags['device-id'],
-        latestSnapshotOnly: true,
+        latestSnapshotOnly: flags['all-snapshots'] !== 'true',
+        since: flags['since'],
+        until: flags['until'],
         search: flags['query'] ?? flags['search'] ?? flags['q'],
         limit,
       });

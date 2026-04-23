@@ -12,6 +12,10 @@ metadata:
 
 **先读取 [`../pin-shared/SKILL.md`](../pin-shared/SKILL.md)**
 
+> v3 提示：底层表 `world_items` 在 v3 已重命名为 `world_signals`（自动迁移
+> 完成），加了 `reference_count` / `referenced_by_runs` 三件套。CLI 命令
+> 名保持不变，无需改 prompt。
+
 ## 核心场景
 
 ### 1. 抓取外部新闻并写入本地 world store
@@ -60,7 +64,7 @@ pin world index refresh --all --limit 100 --json
 - `search` / `headlines` 是写路径：会抓取外部数据并写入本地 store。
 - `find` / `list` / `get` / `shortlist` / `context` 是读路径：只消费本地已存储 world items。
 - 默认返回紧凑输出；排障或需要完整字段时再加 `--full`。
-- `shortlist` 依赖 profile 侧已有兴趣/信号数据，适合和 `pin profile signal rollup` 配合使用。
+- `shortlist` 依赖 profile 侧已有兴趣/信号数据；v3 中可用 `pin memory list --subjectPrefix topic:` 查兴趣，与 v2 的 `pin profile interests list` 等价。
 
 ## 安全规则
 

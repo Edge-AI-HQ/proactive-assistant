@@ -12,6 +12,18 @@ metadata:
 
 **先读取 [`../pin-shared/SKILL.md`](../pin-shared/SKILL.md)**
 
+> v3 提示：本 skill 的 Composio 部分（connections / tools / exec）v3 没动。
+> 但"读端侧上报数据"现在有 v3 等价路径，**优先使用 v3 命令**：
+>
+> | 老命令（仍 work，端侧协议兼容） | v3 推荐 |
+> |---|---|
+> | `pin personal mobile items list --status pending` | `pin signals recent --hours 24` |
+> | `pin personal mobile items list --type contact_directory_snapshot --order desc --limit 1` | `pin raw device-contacts list --deviceId <id>` 或 `pin raw device-contacts search --query <q>` |
+> | `pin personal mobile items list --type app_inventory_snapshot --order desc --limit 1` | `pin raw device-apps --top 20 --deviceId <id>` |
+>
+> v3 命令支持时间过滤（`--hours / --since / --until`）和 reference 追踪
+> （知道哪些 signal 已被前几次 run 用过，避免重复推荐）。
+
 ## 前置条件
 
 1. 用户在 [Composio workspace settings](https://app.composio.dev/settings) 中获取 API key（`ak_...`）
