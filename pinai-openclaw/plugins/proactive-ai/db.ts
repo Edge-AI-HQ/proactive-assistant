@@ -2650,6 +2650,47 @@ export async function archiveMemoryV3(id: string): Promise<void> {
   ).run(id);
 }
 
+export interface UpdateMemoryV3Input {
+  text?: string;
+  subject?: string | null;
+  quality?: number;
+  confidence?: number;
+  tags?: string[];
+}
+
+/**
+ * In-place edit for the v3 memory row. Used by the Debug panel's edit flow;
+ * agent-driven evolution should prefer supersede to preserve the chain.
+ * Returns null if `id` does not exist.
+ */
+export async function updateMemoryV3(
+  id: string,
+  patch: UpdateMemoryV3Input,
+): Promise<MemoryRowV3 | null> {
+  const existing = getDb().prepare('SELECT source FROM memory WHERE id = ?').get(id) as
+    | { source?: string }
+    | undefined;
+  if (!existing) return null;
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  if (patch.text !== undefined) { sets.push('text = ?'); vals.push(patch.text); }
+  if (patch.subject !== undefined) { sets.push('subject = ?'); vals.push(patch.subject); }
+  if (patch.quality !== undefined) {
+    sets.push('quality = ?');
+    vals.push(clampQuality(existing.source ?? '', patch.quality));
+  }
+  if (patch.confidence !== undefined) {
+    sets.push('confidence = ?');
+    vals.push(Math.max(0, Math.min(1, patch.confidence)));
+  }
+  if (patch.tags !== undefined) { sets.push('tags_json = ?'); vals.push(JSON.stringify(patch.tags)); }
+  if (sets.length > 0) {
+    vals.push(id);
+    getDb().prepare(`UPDATE memory SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+  }
+  return getMemoryV3(id);
+}
+
 const REFERENCED_BY_RUNS_CAP = 10;
 
 /**
@@ -2877,6 +2918,20 @@ export async function enableSkill(id: string): Promise<SkillIndexRow> {
   const row = getDb().prepare('SELECT * FROM skill_index WHERE id = ?').get(id) as any;
   if (!row) throw new Error(`enableSkill: skill ${id} not found`);
   return rowToSkillIndex(row);
+}
+
+/**
+ * Soft-delete a skill: flip status to 'archived'. Index row + body file
+ * are kept so the change is reversible; `listSkills({status:'enabled'})`
+ * will no longer surface it. Returns null when the skill does not exist.
+ */
+export async function archiveSkill(id: string): Promise<SkillIndexRow | null> {
+  const ts = now();
+  const info = getDb().prepare(
+    `UPDATE skill_index SET status = 'archived', updated_at = ? WHERE id = ?`,
+  ).run(ts, id);
+  if (info.changes === 0) return null;
+  return getSkillIndex(id);
 }
 
 export interface ListSkillsOpts {

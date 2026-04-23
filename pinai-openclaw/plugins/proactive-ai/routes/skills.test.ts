@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { handleSkills } from './skills.ts';
-import { addUserSkill, resetDbForTests } from '../db.ts';
+import { addSkill, resetDbForTests } from '../db.ts';
 
 function withTempHome(fn: () => Promise<void>) {
   return async () => {
@@ -71,6 +71,16 @@ function makeCtx(method: string, subpath: string, body?: Record<string, unknown>
   return { ctx, res };
 }
 
+async function seedSkill(input: { id: string; title: string; body?: string; status?: 'enabled' | 'disabled' | 'archived' }) {
+  return addSkill({
+    id: input.id,
+    title: input.title,
+    body: input.body ?? 'seed body',
+    source: 'crystallize',
+    status: input.status ?? 'enabled',
+  });
+}
+
 test('GET /skills returns empty list when none exist', withTempHome(async () => {
   const handler = handleSkills();
   const { ctx, res } = makeCtx('GET', '/skills');
@@ -80,17 +90,18 @@ test('GET /skills returns empty list when none exist', withTempHome(async () => 
   assert.deepEqual(JSON.parse(res.body), { ok: true, skills: [] });
 }));
 
-test('GET /skills?status=active filters disabled skills', withTempHome(async () => {
-  await addUserSkill({ title: 'Active one', body_md: 'body a', source: 'crystallize', status: 'active' });
-  await addUserSkill({ title: 'Disabled one', body_md: 'body b', source: 'crystallize', status: 'disabled' });
+test('GET /skills?status=enabled filters disabled skills', withTempHome(async () => {
+  await seedSkill({ id: 's-active', title: 'Active one' });
+  await seedSkill({ id: 's-disabled', title: 'Disabled one', status: 'disabled' });
   const handler = handleSkills();
-  const { ctx, res } = makeCtx('GET', '/skills?status=active');
+  const { ctx, res } = makeCtx('GET', '/skills?status=enabled');
   const handled = await handler(ctx);
   assert.equal(handled, true);
   assert.equal(res.statusCode, 200);
   const parsed = JSON.parse(res.body) as { ok: boolean; skills: Array<{ title: string; status: string }> };
   assert.equal(parsed.skills.length, 1);
   assert.equal(parsed.skills[0]!.title, 'Active one');
+  assert.equal(parsed.skills[0]!.status, 'enabled');
 }));
 
 test('GET /skills/:id returns 404 for unknown id', withTempHome(async () => {
@@ -101,20 +112,69 @@ test('GET /skills/:id returns 404 for unknown id', withTempHome(async () => {
   assert.equal(res.statusCode, 404);
 }));
 
-test('GET /skills/:id returns the skill', withTempHome(async () => {
-  const created = await addUserSkill({ title: 'T', body_md: 'B', source: 'manual' });
+test('GET /skills/:id returns the skill with body', withTempHome(async () => {
+  const created = await seedSkill({ id: 's-show', title: 'T', body: 'Body content' });
   const handler = handleSkills();
   const { ctx, res } = makeCtx('GET', `/skills/${created.id}`);
   const handled = await handler(ctx);
   assert.equal(handled, true);
   assert.equal(res.statusCode, 200);
-  const parsed = JSON.parse(res.body) as { ok: boolean; skill: { id: string; title: string } };
+  const parsed = JSON.parse(res.body) as {
+    ok: boolean;
+    skill: { id: string; title: string; status: string; body: string; revision: number };
+  };
   assert.equal(parsed.skill.id, created.id);
   assert.equal(parsed.skill.title, 'T');
+  assert.equal(parsed.skill.status, 'enabled');
+  assert.equal(parsed.skill.body, 'Body content');
+  assert.equal(parsed.skill.revision, 1);
 }));
 
-test('PATCH /skills/:id updates title, triggers, and status', withTempHome(async () => {
-  const created = await addUserSkill({ title: 'Old', body_md: 'Body', source: 'crystallize' });
+test('POST /skills creates a manual skill with defaults', withTempHome(async () => {
+  const handler = handleSkills();
+  const { ctx, res } = makeCtx('POST', '/skills', {
+    title: 'Manual skill',
+    body: 'Use this when the user asks about X.',
+    description: 'test',
+    triggers: ['asks about x'],
+  });
+  const handled = await handler(ctx);
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 200);
+  const parsed = JSON.parse(res.body) as {
+    ok: boolean;
+    skill: { id: string; title: string; source: string; status: string; body: string; description: string | null };
+  };
+  assert.ok(parsed.skill.id);
+  assert.equal(parsed.skill.title, 'Manual skill');
+  assert.equal(parsed.skill.source, 'manual');
+  assert.equal(parsed.skill.status, 'enabled');
+  assert.equal(parsed.skill.body, 'Use this when the user asks about X.');
+  assert.equal(parsed.skill.description, 'test');
+}));
+
+test('POST /skills rejects empty title', withTempHome(async () => {
+  const handler = handleSkills();
+  const { ctx, res } = makeCtx('POST', '/skills', { title: '   ', body: 'x' });
+  const handled = await handler(ctx);
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 400);
+  const parsed = JSON.parse(res.body) as { ok: boolean; error: string };
+  assert.match(parsed.error, /title/);
+}));
+
+test('POST /skills rejects empty body', withTempHome(async () => {
+  const handler = handleSkills();
+  const { ctx, res } = makeCtx('POST', '/skills', { title: 'ok', body: '  ' });
+  const handled = await handler(ctx);
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 400);
+  const parsed = JSON.parse(res.body) as { ok: boolean; error: string };
+  assert.match(parsed.error, /body/);
+}));
+
+test('PATCH /skills/:id updates title, triggers, and status → disabled', withTempHome(async () => {
+  const created = await seedSkill({ id: 's-patch', title: 'Old' });
   const handler = handleSkills();
   const { ctx, res } = makeCtx('PATCH', `/skills/${created.id}`, {
     title: 'New Title',
@@ -133,8 +193,19 @@ test('PATCH /skills/:id updates title, triggers, and status', withTempHome(async
   assert.deepEqual(parsed.skill.triggers, ['asks about pricing']);
 }));
 
+test('PATCH /skills/:id bumps revision when body changes', withTempHome(async () => {
+  const created = await seedSkill({ id: 's-rev', title: 't', body: 'original body' });
+  assert.equal(created.revision, 1);
+  const handler = handleSkills();
+  const { ctx, res } = makeCtx('PATCH', `/skills/${created.id}`, { body: 'brand new body' });
+  await handler(ctx);
+  const parsed = JSON.parse(res.body) as { skill: { revision: number; body: string } };
+  assert.equal(parsed.skill.revision, 2);
+  assert.equal(parsed.skill.body, 'brand new body');
+}));
+
 test('PATCH /skills/:id rejects invalid status', withTempHome(async () => {
-  const created = await addUserSkill({ title: 't', body_md: 'b', source: 'manual' });
+  const created = await seedSkill({ id: 's-bad-status', title: 't' });
   const handler = handleSkills();
   const { ctx, res } = makeCtx('PATCH', `/skills/${created.id}`, { status: 'banana' });
   const handled = await handler(ctx);
@@ -145,7 +216,7 @@ test('PATCH /skills/:id rejects invalid status', withTempHome(async () => {
 }));
 
 test('PATCH /skills/:id rejects empty title', withTempHome(async () => {
-  const created = await addUserSkill({ title: 't', body_md: 'b', source: 'manual' });
+  const created = await seedSkill({ id: 's-empty-title', title: 't' });
   const handler = handleSkills();
   const { ctx, res } = makeCtx('PATCH', `/skills/${created.id}`, { title: '   ' });
   const handled = await handler(ctx);
@@ -161,18 +232,29 @@ test('PATCH /skills/:id returns 404 for unknown id', withTempHome(async () => {
   assert.equal(res.statusCode, 404);
 }));
 
-test('DELETE /skills/:id removes the skill', withTempHome(async () => {
-  const created = await addUserSkill({ title: 't', body_md: 'b', source: 'manual' });
+test('DELETE /skills/:id archives the skill (soft-delete)', withTempHome(async () => {
+  const created = await seedSkill({ id: 's-del', title: 't' });
   const handler = handleSkills();
 
   const del = makeCtx('DELETE', `/skills/${created.id}`);
   const handled = await handler(del.ctx);
   assert.equal(handled, true);
   assert.equal(del.res.statusCode, 200);
+  const delParsed = JSON.parse(del.res.body) as { ok: boolean; skill: { status: string } };
+  assert.equal(delParsed.skill.status, 'archived');
 
+  // GET on the default (enabled) list no longer shows it
+  const list = makeCtx('GET', '/skills?status=enabled');
+  await handler(list.ctx);
+  const listParsed = JSON.parse(list.res.body) as { skills: Array<{ id: string }> };
+  assert.equal(listParsed.skills.length, 0);
+
+  // but direct GET still returns it with status='archived'
   const get = makeCtx('GET', `/skills/${created.id}`);
   await handler(get.ctx);
-  assert.equal(get.res.statusCode, 404);
+  assert.equal(get.res.statusCode, 200);
+  const getParsed = JSON.parse(get.res.body) as { skill: { status: string } };
+  assert.equal(getParsed.skill.status, 'archived');
 }));
 
 test('DELETE /skills/:id returns 404 for unknown id', withTempHome(async () => {

@@ -137,6 +137,36 @@ test('POST /memory/<id>/archive moves status to archived', withTempHome(async ()
   assert.equal(archived.body.memories.length, 1);
 }));
 
+test('PATCH /memory/<id> updates text / quality / tags in place', withTempHome(async () => {
+  const h = handleMemory();
+  const post = await call(h, {
+    method: 'POST', subpath: '/memory',
+    body: { text: 'v1', source: 'manual', quality: 0.3, tags: ['a'] },
+  });
+  const id = post.body.memory.id;
+  const patched = await call(h, {
+    method: 'PATCH', subpath: `/memory/${id}`,
+    body: { text: 'v2', quality: 0.8, tags: ['a', 'b'] },
+  });
+  assert.equal(patched.status, 200);
+  assert.equal(patched.body.memory.text, 'v2');
+  assert.equal(patched.body.memory.quality, 0.8);
+  assert.deepEqual(patched.body.memory.tags, ['a', 'b']);
+}));
+
+test('PATCH /memory/<id> returns 404 for unknown id', withTempHome(async () => {
+  const h = handleMemory();
+  const r = await call(h, { method: 'PATCH', subpath: '/memory/nope', body: { text: 'x' } });
+  assert.equal(r.status, 404);
+}));
+
+test('PATCH /memory/<id> rejects empty patch', withTempHome(async () => {
+  const h = handleMemory();
+  const post = await call(h, { method: 'POST', subpath: '/memory', body: { text: 'hi', source: 'manual' } });
+  const r = await call(h, { method: 'PATCH', subpath: `/memory/${post.body.memory.id}`, body: {} });
+  assert.equal(r.status, 400);
+}));
+
 test('POST /memory/supersede links rows', withTempHome(async () => {
   const h = handleMemory();
   const a = await call(h, { method: 'POST', subpath: '/memory', body: { text: 'old', source: 'manual' } });

@@ -16,6 +16,8 @@ import { isNative, API_BASE } from "@/lib/platform";
 import { useModelSelection } from "@/hooks/useModelSelection";
 import MainChat from "./MainChat";
 import CrystallizePanel from "./CrystallizePanel";
+import SkillsPanel from "./SkillsPanel";
+import MemoriesPanel from "./MemoriesPanel";
 import type { HealthState, RunState, PipelinePhase } from "@/hooks/usePipeline";
 
 interface DebugPanelProps {
@@ -415,6 +417,12 @@ export default function DebugPanel({ health, run, isRunning, iterations, onItera
 
                 {/* Conversation Crystallize */}
                 <CrystallizePanel enabled={open && health.ok} />
+
+                {/* User Skills */}
+                <SkillsPanel enabled={open && health.ok} />
+
+                {/* User Memories */}
+                <MemoriesPanel enabled={open && health.ok} />
 
                 {/* Iteration Summaries */}
                 {run.totalIterations > 0 && (

@@ -1,11 +1,17 @@
 /**
  * v3 memory HTTP routes:
- *   GET  /memory                  list active, optional ?minQuality / ?subject /
+ *   GET   /memory                 list active, optional ?minQuality / ?subject /
  *                                 ?subjectPrefix / ?since / ?limit / ?orderBy
- *   GET  /memory/<id>             single row
- *   POST /memory                  add a new memory (body: AddMemoryV3Input)
- *   POST /memory/<id>/archive     status='active' → 'archived'
- *   POST /memory/supersede        body: { oldId, newId }
+ *   GET   /memory/<id>            single row
+ *   POST  /memory                 add a new memory (body: AddMemoryV3Input)
+ *   PATCH /memory/<id>            in-place edit (text / subject / quality /
+ *                                 confidence / tags) — used by the Debug panel;
+ *                                 agent evolution should prefer supersede.
+ *   POST  /memory/<id>/archive    status='active' → 'archived'
+ *   POST  /memory/supersede       body: { oldId, newId }
+ *
+ * Deletion is intentionally not supported: v3 treats memory as an append-only
+ * ledger; archive/supersede are the documented removal paths.
  *
  * See docs/memory-architecture.md §六 (CLI / agent interface).
  */
@@ -56,6 +62,46 @@ export function handleMemory(): RouteHandler {
       if (archiveMatch && ctx.req.method === 'POST') {
         await db.archiveMemoryV3(archiveMatch[1]!);
         json(ctx.res, 200, { ok: true });
+        return true;
+      }
+
+      // PATCH /memory/<id>
+      const patchMatch = route.match(/^\/([^/]+)$/);
+      if (patchMatch && ctx.req.method === 'PATCH') {
+        const body = (await readBody(ctx.req)) as Record<string, unknown>;
+        const patch: db.UpdateMemoryV3Input = {};
+        if (typeof body['text'] === 'string') {
+          const trimmed = (body['text'] as string).trim();
+          if (!trimmed) { json(ctx.res, 400, { error: 'text must be non-empty' }); return true; }
+          patch.text = trimmed;
+        }
+        if (body['subject'] === null) {
+          patch.subject = null;
+        } else if (typeof body['subject'] === 'string') {
+          patch.subject = (body['subject'] as string).trim() || null;
+        }
+        if (typeof body['quality'] === 'number') {
+          if (!Number.isFinite(body['quality'])) { json(ctx.res, 400, { error: 'quality must be a number' }); return true; }
+          patch.quality = body['quality'] as number;
+        }
+        if (typeof body['confidence'] === 'number') {
+          if (!Number.isFinite(body['confidence'])) { json(ctx.res, 400, { error: 'confidence must be a number' }); return true; }
+          patch.confidence = body['confidence'] as number;
+        }
+        if (body['tags'] !== undefined) {
+          if (!Array.isArray(body['tags']) || (body['tags'] as unknown[]).some((t) => typeof t !== 'string')) {
+            json(ctx.res, 400, { error: 'tags must be an array of strings' });
+            return true;
+          }
+          patch.tags = body['tags'] as string[];
+        }
+        if (Object.keys(patch).length === 0) {
+          json(ctx.res, 400, { error: 'no editable field provided' });
+          return true;
+        }
+        const updated = await db.updateMemoryV3(patchMatch[1]!, patch);
+        if (!updated) { json(ctx.res, 404, { error: 'Not found' }); return true; }
+        json(ctx.res, 200, { ok: true, memory: updated });
         return true;
       }
 
