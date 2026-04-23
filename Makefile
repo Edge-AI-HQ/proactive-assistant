@@ -13,13 +13,29 @@ LOCAL_IPV4_SUBNET ?= 172.21.0.0/16
 LOCAL_IPV6_SUBNET ?= fd00:21::/64
 COMPOSE_LOCAL := $(COMPOSE) --project-directory $(CURDIR) -f $(LOCAL_COMPOSE_FILE)
 
+# Auto-pick npm registry based on OS timezone: China → npmmirror, else npmjs.
+# Manual override: export NPM_REGISTRY=... in shell before running make.
+# Reads symlink target of /etc/localtime (works on macOS and Linux).
+ifndef NPM_REGISTRY
+NPM_REGISTRY := $(shell \
+    tz=$$(readlink /etc/localtime 2>/dev/null | sed "s|.*zoneinfo/||"); \
+    if [ "$$tz" = Asia/Shanghai ] || [ "$$tz" = Asia/Urumqi ] || [ "$$tz" = PRC ]; then \
+      echo https://registry.npmmirror.com; \
+    else \
+      echo https://registry.npmjs.org; \
+    fi)
+endif
+export NPM_REGISTRY
+
 # Extract VITE_* as shell exports for docker-compose build args.
 # docker-compose.yml references ${VITE_*} in apis.build.args;
 # these exports make them available during `docker compose build`.
+#
+# Sources apis/.env directly (already decrypted by ensure-env-apis) instead of
+# re-running npx dotenvx — npx hits the npm registry on every call and has
+# hung the build before. All ensure-env-* rules guarantee apis/.env exists.
 define export_vite
-export VITE_SUPABASE_URL=$$($(DOTENVX) get VITE_SUPABASE_URL -f apis/.env.dev 2>/dev/null) && \
-export VITE_SUPABASE_PUBLISHABLE_KEY=$$($(DOTENVX) get VITE_SUPABASE_PUBLISHABLE_KEY -f apis/.env.dev 2>/dev/null) && \
-export VITE_API_BASE_URL=$$($(DOTENVX) get VITE_API_BASE_URL -f apis/.env.dev 2>/dev/null)
+set -a && . ./apis/.env && set +a
 endef
 
 help: ## Show this help
@@ -74,10 +90,10 @@ init: ## First-time setup: install deps and show next steps
 
 # ── Build ──
 
-build: ## Build all images (APIs + OpenClaw)
+build: ensure-env-apis ## Build all images (APIs + OpenClaw)
 	$(export_vite) && $(COMPOSE) build apis openclaw-image
 
-build-apis: ## Build only the APIs image
+build-apis: ensure-env-apis ## Build only the APIs image
 	$(export_vite) && $(COMPOSE) build apis
 
 build-openclaw: ## Build only the local OpenClaw image
@@ -155,6 +171,11 @@ migrate: ## Run database migrations
 
 reset: ensure-env ## Stop everything, delete volumes, rebuild and start fresh
 	$(COMPOSE) down -v
+	@ids=$$(docker ps -aq --filter name=proactive-); \
+	if [ -n "$$ids" ]; then \
+		echo "Removing dynamically-created OpenClaw containers"; \
+		echo "$$ids" | xargs docker rm -f; \
+	fi
 	$(export_vite) && $(COMPOSE) build apis openclaw-image
 	$(COMPOSE) up -d
 
@@ -214,11 +235,18 @@ build-openclaw-image: ## Build and push OpenClaw image to shared registry
 #
 # Long-term fix: ask the team admin to invite your Apple ID to Team DH9AJ6A38D.
 
-ios: ensure-env ## Build frontend, sync iOS, and open Xcode (select device + Cmd+R)
+ios: ensure-env ## Build frontend, sync iOS, and open Xcode. Defaults to local docker APIs over LAN; DEV=1 connects to fly dev.
+	@set -a && . ./apis/.env && set +a && \
+	if [ "$(DEV)" = "1" ]; then \
+		echo "Using fly dev APIs at $$VITE_API_BASE_URL"; \
+	else \
+		LAN_IP=$$(ipconfig getifaddr en0); \
+		if [ -z "$$LAN_IP" ]; then LAN_IP=$$(ipconfig getifaddr en1); fi; \
+		if [ -z "$$LAN_IP" ]; then echo "Could not detect LAN IP from en0/en1"; exit 1; fi; \
+		echo "Using local APIs at http://$$LAN_IP:3000"; \
+		VITE_API_BASE_URL="http://$$LAN_IP:3000"; \
+	fi; \
 	cd proactive-ai-frontend && \
-		VITE_API_BASE_URL=$$($(DOTENVX) get VITE_API_BASE_URL -f ../apis/.env.dev 2>/dev/null) \
-		VITE_SUPABASE_URL=$$($(DOTENVX) get VITE_SUPABASE_URL -f ../apis/.env.dev 2>/dev/null) \
-		VITE_SUPABASE_PUBLISHABLE_KEY=$$($(DOTENVX) get VITE_SUPABASE_PUBLISHABLE_KEY -f ../apis/.env.dev 2>/dev/null) \
 		VITE_CAPACITOR=1 npx vite build && \
 		npx cap sync ios && \
 		npx cap open ios
