@@ -3,6 +3,11 @@
 # ============================================================================
 FROM node:22-slim AS builder
 
+# npm registry: default = npmjs.org (best for US/EU/CI/Fly remote builders).
+# For mainland China: --build-arg NPM_REGISTRY=https://registry.npmmirror.com
+# or `export NPM_REGISTRY=...` (docker-compose picks it up).
+ARG NPM_REGISTRY=https://registry.npmjs.org
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     git \
@@ -11,12 +16,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# fetch-timeout bounds each HTTP request; `timeout 900` bounds each full install
+# attempt so a dead TCP socket can't hang a single try past 15 min.
 RUN npm config set fetch-retries 5 \
     && npm config set fetch-retry-mintimeout 20000 \
     && npm config set fetch-retry-maxtimeout 120000 \
-    && npm config set registry https://registry.npmmirror.com \
+    && npm config set fetch-timeout 300000 \
+    && npm config set registry ${NPM_REGISTRY} \
     && for attempt in 1 2 3 4 5; do \
-        npm install -g openclaw@2026.4.5 @googleworkspace/cli && break; \
+        timeout 900 npm install -g openclaw@2026.4.5 @googleworkspace/cli && break; \
         echo "npm install failed on attempt ${attempt}, retrying..." >&2; \
         sleep $((attempt * 10)); \
         [ "$attempt" -eq 5 ] && exit 1; \
@@ -29,6 +37,9 @@ RUN npm config set fetch-retries 5 \
 # Stage 2: Runtime — minimal image with only what's needed to run
 # ============================================================================
 FROM node:22-slim
+
+# ARG scope ends at FROM; redeclare so this stage's npm install can use it too.
+ARG NPM_REGISTRY=https://registry.npmjs.org
 
 # Runtime-only apt deps: git (openclaw skills), curl (used by skills at runtime)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -58,14 +69,13 @@ COPY pinai-openclaw/plugins/proactive-ai/package.json /opt/pinai/plugins/proacti
 # COPY doesn't cover plugin node_modules.
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential python3 \
     && cd /opt/pinai/plugins/proactive-ai \
-    && npm install --omit=dev better-sqlite3 @lancedb/lancedb @browserbasehq/sdk playwright-core 2>/dev/null || true \
+    && timeout 900 npm install --omit=dev --registry=${NPM_REGISTRY} better-sqlite3 @lancedb/lancedb @browserbasehq/sdk playwright-core jpeg-js ws 2>/dev/null || true \
     && apt-get purge -y build-essential \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Warmup layer (cached unless openclaw version or deps change) ──
 # Copy non-frequently-changing plugins + warmup config first.
-COPY pinai-openclaw/plugins/telegram-api-proxy/  /opt/pinai/plugins/telegram-api-proxy/
 COPY pinai-openclaw/plugins/platform-hooks/      /opt/pinai/plugins/platform-hooks/
 COPY pinai-openclaw/image/skills/ /opt/pinai/skills/
 COPY pinai-openclaw/image/warmup-config.json /tmp/warmup-config.json
@@ -80,7 +90,7 @@ RUN mkdir -p /tmp/jiti /app/.openclaw \
     && cp /tmp/warmup-config.json /app/.openclaw/openclaw.json \
     && OPENCLAW_HOME=/app \
        NODE_COMPILE_CACHE=/tmp/node-compile-cache \
-       OPENCLAW_PLUGIN_LOAD_PATHS=/opt/pinai/plugins/telegram-api-proxy:/opt/pinai/plugins/platform-hooks \
+       OPENCLAW_PLUGIN_LOAD_PATHS=/opt/pinai/plugins/platform-hooks \
        timeout 120 openclaw gateway --bind loopback 2>&1 || true \
     && mkdir -p /opt/pinai/jiti-warmup /opt/pinai/node-compile-warmup \
     && cp -r /tmp/jiti/. /opt/pinai/jiti-warmup/ 2>/dev/null || true \
@@ -125,7 +135,7 @@ COPY pinai-openclaw/image/platform-system-guidance.md /opt/pinai/platform-system
 ENV OPENCLAW_HOME="/app"
 ENV OPENCLAW_MODE="headless"
 ENV OPENCLAW_GATEWAY_PORT="18789"
-ENV OPENCLAW_PLUGIN_LOAD_PATHS="/opt/pinai/plugins/telegram-api-proxy:/opt/pinai/plugins/platform-hooks:/opt/pinai/plugins/proactive-ai"
+ENV OPENCLAW_PLUGIN_LOAD_PATHS="/opt/pinai/plugins/platform-hooks:/opt/pinai/plugins/proactive-ai"
 ENV PINAI_SYSTEM_GUIDANCE_PATH="/opt/pinai/platform-system-guidance.md"
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD="1"
 
