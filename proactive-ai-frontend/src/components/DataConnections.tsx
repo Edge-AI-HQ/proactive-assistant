@@ -41,8 +41,79 @@ import {
 } from "lucide-react";
 import { Browser } from "@capacitor/browser";
 import type { ComposioState, Connection } from "@/hooks/useComposio";
+import { useInitTask } from "@/hooks/useInitTask";
 import { extractComposioDisplayIdentity } from "@/lib/composioDisplayIdentity";
 import { isNative } from "@/lib/platform";
+
+/**
+ * Small inline chip that polls a connector.init task and renders a
+ * one-line progress / outcome summary under the connector card.
+ *
+ * Render rules:
+ *   - while running:   "初始化中… stage=fetch · 拉取 42/100"
+ *   - succeeded:       "初始化完成 · 12 facts"  (auto-hides after a moment via parent)
+ *   - failed:          "初始化失败 — short error reason"
+ *   - lookup error:    nothing (silent fallback so we don't litter the UI)
+ *
+ * The hook handles polling lifecycle; this component is just presentation.
+ */
+function InitTaskChip({ taskId }: { taskId: string | null }) {
+  const { task, error, terminal } = useInitTask(taskId);
+  if (!taskId) return null;
+  if (!task) {
+    if (error) return null; // silent — could be 404 after eviction
+    return (
+      <p className="text-[10px] text-foreground/40 truncate flex items-center gap-1">
+        <Loader2 size={9} className="animate-spin" />
+        正在初始化…
+      </p>
+    );
+  }
+  if (terminal) {
+    if (task.status === "succeeded") {
+      const memoriesWritten = Number(task.result?.memoriesWritten ?? 0);
+      const rawInserted = Number(task.result?.rawInserted ?? 0);
+      const skipped = Boolean(task.result?.skipped);
+      if (skipped) {
+        const reason = String(task.result?.reason ?? "skipped");
+        return (
+          <p className="text-[10px] text-foreground/40 truncate">
+            初始化跳过 · {reason}
+          </p>
+        );
+      }
+      return (
+        <p className="text-[10px] text-emerald-600/80 truncate">
+          初始化完成 · 拉取 {rawInserted}{memoriesWritten > 0 ? ` · 提炼 ${memoriesWritten} memories` : ""}
+        </p>
+      );
+    }
+    // failed / timed_out / cancelled / lost — show shortest possible error
+    const shortErr = (task.last_error_message ?? task.last_error_code ?? "未知错误").slice(0, 80);
+    return (
+      <p className="text-[10px] text-red-500/80 truncate">
+        初始化失败 — {shortErr}
+      </p>
+    );
+  }
+  // running / queued — surface stage + progress when present
+  const stage = typeof task.progress?.stage === "string" ? task.progress.stage : null;
+  const limit = Number(task.payload?.limit ?? 0);
+  const progressDetail = (() => {
+    if (!stage) return "排队中";
+    if (stage === "fetch") return `拉取数据${limit ? ` (上限 ${limit})` : ""}`;
+    if (stage === "raw") return "落本地";
+    if (stage === "signals") return "提取观察";
+    if (stage === "evolve") return "提炼记忆";
+    return stage;
+  })();
+  return (
+    <p className="text-[10px] text-foreground/45 truncate flex items-center gap-1">
+      <Loader2 size={9} className="animate-spin" />
+      初始化中 · {progressDetail}
+    </p>
+  );
+}
 
 /** Resolves when the popup window is closed (+ 3s grace period for OAuth callback processing). */
 function windowClosed(win: Window | null): Promise<void> {
@@ -419,6 +490,11 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
   );
   const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
+  // Phase B/C: connector.init task ids returned by /composio/wait, keyed
+  // by connectedAccountId. Populated only when the backend scheduler is on
+  // (BACKGROUND_AUTO_LOOP_TASKS_ENABLED=1) — when off, /wait omits the
+  // initTaskId field and this map stays empty (no chips render).
+  const [initTaskByAccount, setInitTaskByAccount] = useState<Record<string, string>>({});
 
   const connectionsByToolkit = new Map<string, Connection[]>();
   for (const conn of connections) {
@@ -476,15 +552,22 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
           );
         return;
       }
-      const { connected } = await Promise.race([
+      const raceResult = await Promise.race<{ connected: boolean; initTaskId?: string }>([
         waitForToolkit(result.connectedAccountId),
         openOAuthAndAwaitClose(result.redirectUrl).then(() => {
           cancelWait();
-          return { connected: false as const };
+          return { connected: false };
         }),
       ]);
-      if (!connected && !cancelledRef.current)
+      if (!raceResult.connected && !cancelledRef.current)
         setConnectError("Connection not confirmed — please try again");
+      // Stash the init task id (if the backend scheduler is on) so the
+      // chip below this connector starts polling for progress.
+      if (raceResult.connected && raceResult.initTaskId && result.connectedAccountId) {
+        const accountId = result.connectedAccountId;
+        const taskId = raceResult.initTaskId;
+        setInitTaskByAccount((prev) => ({ ...prev, [accountId]: taskId }));
+      }
     } catch (err) {
       if (!cancelledRef.current)
         setConnectError(
@@ -750,6 +833,11 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                 </p>
                                               ) : null;
                                             })()}
+                                          {singleAccount?.connectedAccountId && (
+                                            <InitTaskChip
+                                              taskId={initTaskByAccount[singleAccount.connectedAccountId] ?? null}
+                                            />
+                                          )}
                                         </div>
 
                                         {singleAccount ? (
@@ -914,33 +1002,42 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                           return (
                                             <div
                                               key={conn.connectedAccountId}
-                                              className="group flex items-center gap-2.5 rounded-lg px-3 py-1.5 ml-6 bg-emerald-500/[0.03]"
+                                              className="group flex flex-col gap-0.5 rounded-lg px-3 py-1.5 ml-6 bg-emerald-500/[0.03]"
                                             >
-                                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
-                                              <span className="text-[11px] text-foreground/70 flex-1 truncate">
-                                                {identity ??
-                                                  `${source.name} #${idx + 1}`}
-                                              </span>
-                                              <button
-                                                onClick={(e) => {
-                                                  e.stopPropagation();
-                                                  conn.connectedAccountId &&
-                                                    handleDisconnect(
-                                                      conn.connectedAccountId,
-                                                    );
-                                                }}
-                                                disabled={isDisconnecting}
-                                                className="text-[10px] font-medium rounded-lg px-2 py-0.5 transition-colors disabled:opacity-40 text-foreground/30 hover:text-red-500 hover:bg-red-500/[0.08] opacity-0 group-hover:opacity-100"
-                                              >
-                                                {isDisconnecting ? (
-                                                  <Loader2
-                                                    size={10}
-                                                    className="animate-spin text-red-500"
+                                              <div className="flex items-center gap-2.5">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
+                                                <span className="text-[11px] text-foreground/70 flex-1 truncate">
+                                                  {identity ??
+                                                    `${source.name} #${idx + 1}`}
+                                                </span>
+                                                <button
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    conn.connectedAccountId &&
+                                                      handleDisconnect(
+                                                        conn.connectedAccountId,
+                                                      );
+                                                  }}
+                                                  disabled={isDisconnecting}
+                                                  className="text-[10px] font-medium rounded-lg px-2 py-0.5 transition-colors disabled:opacity-40 text-foreground/30 hover:text-red-500 hover:bg-red-500/[0.08] opacity-0 group-hover:opacity-100"
+                                                >
+                                                  {isDisconnecting ? (
+                                                    <Loader2
+                                                      size={10}
+                                                      className="animate-spin text-red-500"
+                                                    />
+                                                  ) : (
+                                                    "Disconnect"
+                                                  )}
+                                                </button>
+                                              </div>
+                                              {conn.connectedAccountId && (
+                                                <div className="ml-3.5">
+                                                  <InitTaskChip
+                                                    taskId={initTaskByAccount[conn.connectedAccountId] ?? null}
                                                   />
-                                                ) : (
-                                                  "Disconnect"
-                                                )}
-                                              </button>
+                                                </div>
+                                              )}
                                             </div>
                                           );
                                         })}

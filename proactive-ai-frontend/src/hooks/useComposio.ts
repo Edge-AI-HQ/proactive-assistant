@@ -31,7 +31,7 @@ export interface ComposioState {
   saveApiKey: (key: string) => Promise<{ ok: boolean; error?: string }>;
   connectToolkit: (toolkit: string) => Promise<{ ok: boolean; redirectUrl?: string; connectedAccountId?: string; error?: string }>;
   disconnectAccount: (connectedAccountId: string) => Promise<{ ok: boolean; error?: string }>;
-  waitForToolkit: (connectedAccountId: string) => Promise<{ connected: boolean }>;
+  waitForToolkit: (connectedAccountId: string) => Promise<{ connected: boolean; initTaskId?: string }>;
   cancelWait: () => void;
   isToolkitConnected: (toolkit: string) => boolean;
 }
@@ -124,7 +124,7 @@ export function useComposio(): ComposioState {
 
   const waitAbortRef = useRef<AbortController | null>(null);
 
-  const waitForToolkit = useCallback(async (connectedAccountId: string): Promise<{ connected: boolean }> => {
+  const waitForToolkit = useCallback(async (connectedAccountId: string): Promise<{ connected: boolean; initTaskId?: string }> => {
     waitAbortRef.current?.abort();
     const controller = new AbortController();
     waitAbortRef.current = controller;
@@ -133,7 +133,11 @@ export function useComposio(): ComposioState {
       const data = await res.json();
       await loadConnections();
       const status = (data.status ?? "").toUpperCase();
-      return { connected: status === "ACTIVE" };
+      // initTaskId is only present when the backend's task scheduler is on.
+      // When off, the field is absent and the caller skips progress polling
+      // — connector card behaves like the pre-Phase-B UI.
+      const initTaskId = typeof data.initTaskId === "string" ? data.initTaskId : undefined;
+      return { connected: status === "ACTIVE", initTaskId };
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
         return { connected: false };

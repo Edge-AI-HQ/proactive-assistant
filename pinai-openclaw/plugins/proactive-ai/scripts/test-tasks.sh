@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# 一键回归 background_tasks 模块（Phase A 基建 + B connector.init + B.1 evolve + C dreaming）
+# 一键回归 background_tasks 模块（Phase A 基建 + B connector.init + B.1 evolve + C dreaming + 前端 read API）
 #
 # 用法：
 #   bash pinai-openclaw/plugins/proactive-ai/scripts/test-tasks.sh
 #
-# 九层覆盖（顺序很重要，从最底层往上跑，红了立刻退出）：
+# 十层覆盖（顺序很重要，从最底层往上跑，红了立刻退出）：
 #   1. db.background-tasks.test.ts             —— enqueue / claim / heartbeat /
 #                                                 recover / cancel 全路径 + lease 严格校验
 #   2. tasks/scheduler.test.ts                 —— BackgroundTaskScheduler tick / reaper /
@@ -23,6 +23,8 @@
 #                                                 时区按 profile / 同一 local_day 幂等
 #   8. tasks/reconciler.test.ts                —— ACTIVE 扫描 + 幂等 + 失败兜底
 #   9. routes/composio.test.ts                 —— /composio/wait → enqueue 钩子
+#  10. routes/tasks.test.ts                    —— GET /tasks/:id + GET /tasks list
+#                                                 (前端 InitTaskChip 轮询的 read API)
 #
 # 另：scheduler/auto-loop.test.ts 含 Phase C gate 回归（runAutoDreaming 在
 # BACKGROUND_AUTO_LOOP_TASKS_ENABLED=1 时必须 no-op），由 test-memory.sh 跑到。
@@ -48,34 +50,36 @@ run() {
 }
 
 # ─── Phase A：基建 ─────────────────────────────────────────────────────────
-run "[1/9] schema + repository" \
+run "[1/10] schema + repository" \
   db.background-tasks.test.ts
-run "[2/9] scheduler tick + handler" \
+run "[2/10] scheduler tick + handler" \
   tasks/scheduler.test.ts
-run "[3/9] pin tasks CLI" \
+run "[3/10] pin tasks CLI" \
   cli/tasks.test.ts
 
 # ─── Phase B + B.1：connector.init + evolve + 接线 ─────────────────────────
-run "[4/9] connector.init handler (Gmail + GCal, mock Composio)" \
+run "[4/10] connector.init handler (Gmail + GCal, mock Composio)" \
   tasks/handlers/connector-init.test.ts
-run "[5/9] connector-evolve (LLM-injected fact extraction)" \
+run "[5/10] connector-evolve (LLM-injected fact extraction)" \
   tasks/handlers/connector-evolve.test.ts
 
 # ─── Phase C：auto.dreaming on scheduler ──────────────────────────────────
-run "[6/9] auto.dreaming handler" \
+run "[6/10] auto.dreaming handler" \
   tasks/handlers/auto-dreaming.test.ts
-run "[7/9] dreaming-enqueuer (daily-due idempotent enqueue)" \
+run "[7/10] dreaming-enqueuer (daily-due idempotent enqueue)" \
   tasks/dreaming-enqueuer.test.ts
 
-# ─── 接线 ─────────────────────────────────────────────────────────────────
-run "[8/9] reconciler" \
+# ─── 接线 + 前端 read API ─────────────────────────────────────────────────
+run "[8/10] reconciler" \
   tasks/reconciler.test.ts
-run "[9/9] /composio/wait → enqueue hook" \
+run "[9/10] /composio/wait → enqueue hook" \
   routes/composio.test.ts
+run "[10/10] /tasks read API (used by frontend InitTaskChip)" \
+  routes/tasks.test.ts
 
 echo
 echo "──────────────────────────────────────────────────────────────────────"
-echo "✅ background_tasks (Phase A + B + B.1 + C) 全部测试通过。"
-echo "   九层（schema/repo / scheduler / CLI / connector.init / evolve / "
-echo "         auto.dreaming handler / dreaming-enqueuer / reconciler / wait-hook）都没断。"
+echo "✅ background_tasks (Phase A + B + B.1 + C + 前端 read API) 全部测试通过。"
+echo "   十层（schema/repo / scheduler / CLI / connector.init / evolve / "
+echo "         auto.dreaming / dreaming-enqueuer / reconciler / wait-hook / read-api）都没断。"
 echo "──────────────────────────────────────────────────────────────────────"
