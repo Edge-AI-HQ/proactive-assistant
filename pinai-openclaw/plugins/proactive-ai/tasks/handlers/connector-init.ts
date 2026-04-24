@@ -35,6 +35,9 @@ const SUPPORTED_TOOLKITS = [
   'slack',
   'notion',
   'googledrive',
+  // Phase D round 2
+  'github',
+  'outlook',
 ] as const;
 type SupportedToolkit = typeof SUPPORTED_TOOLKITS[number];
 
@@ -179,7 +182,7 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
     let rawInserted = 0;
     let rawIgnored = 0;
     const insertedRawIds: InsertedRawIds = {
-      gmail: [], gcal: [], slack: [], notion: [], gdrive: [],
+      gmail: [], gcal: [], slack: [], notion: [], gdrive: [], github: [], outlook: [],
     };
     if (typedItems.gmail && typedItems.gmail.length > 0) {
       const r = raw.ingestGmailMessages(typedItems.gmail);
@@ -206,6 +209,16 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
       rawInserted += r.inserted; rawIgnored += r.ignored;
       insertedRawIds.gdrive = r.ids;
     }
+    if (typedItems.github && typedItems.github.length > 0) {
+      const r = raw.ingestGithubIssues(typedItems.github);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.github = r.ids;
+    }
+    if (typedItems.outlook && typedItems.outlook.length > 0) {
+      const r = raw.ingestOutlookMessages(typedItems.outlook);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.outlook = r.ids;
+    }
 
     // ── 7. Stage: derive personal_signals ──────────────────────────────
     if (!(await ctx.heartbeat({ stage: 'signals', toolkit, rawInserted }))) {
@@ -223,6 +236,10 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
       notionIds: insertedRawIds.notion,
       gdriveRows: typedItems.gdrive ?? [],
       gdriveIds: insertedRawIds.gdrive,
+      githubRows: typedItems.github ?? [],
+      githubIds: insertedRawIds.github,
+      outlookRows: typedItems.outlook ?? [],
+      outlookIds: insertedRawIds.outlook,
     });
     const signalsRes = await db.ingestPersonalSignals(signalInputs);
 
@@ -254,6 +271,12 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
       if (insertedRawIds.gdrive.length > 0) {
         await db.recordEvolutionRefsConsumed(evo.id, 'gdrive_files', insertedRawIds.gdrive);
       }
+      if (insertedRawIds.github.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'github_issues', insertedRawIds.github);
+      }
+      if (insertedRawIds.outlook.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'outlook_messages', insertedRawIds.outlook);
+      }
       if (signalsRes.ids.length > 0) {
         await db.recordEvolutionRefsConsumed(evo.id, 'personal_signals', signalsRes.ids);
       }
@@ -272,6 +295,8 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
             slack: typedItems.slack,
             notion: typedItems.notion,
             gdrive: typedItems.gdrive,
+            github: typedItems.github,
+            outlook: typedItems.outlook,
           },
           {
             api: deps.api,
@@ -330,6 +355,8 @@ interface TypedFetchedItems {
   slack?: raw.SlackMessageInput[];
   notion?: raw.NotionPageInput[];
   gdrive?: raw.GdriveFileInput[];
+  github?: raw.GithubIssueInput[];
+  outlook?: raw.OutlookMessageInput[];
 }
 
 interface InsertedRawIds {
@@ -338,6 +365,8 @@ interface InsertedRawIds {
   slack: string[];
   notion: string[];
   gdrive: string[];
+  github: string[];
+  outlook: string[];
 }
 
 async function fetchToolkitItems(
@@ -358,6 +387,12 @@ async function fetchToolkitItems(
   }
   if (toolkit === 'googledrive') {
     return { gdrive: await fetchGdriveRecent(opts) };
+  }
+  if (toolkit === 'github') {
+    return { github: await fetchGithubRecent(opts) };
+  }
+  if (toolkit === 'outlook') {
+    return { outlook: await fetchOutlookRecent(opts) };
   }
   // Defensive — isSupportedToolkit already screened this out
   return {};
@@ -454,6 +489,55 @@ async function fetchNotionRecent(opts: FetchToolkitItemsOpts): Promise<raw.Notio
     .slice(0, opts.limit);
 }
 
+async function fetchGithubRecent(opts: FetchToolkitItemsOpts): Promise<raw.GithubIssueInput[]> {
+  // Pull issues + PRs assigned to the authenticated user across all repos
+  // they have access to. Direction=desc puts most-recently-updated first;
+  // since= caps the lookback window. Matches the variant dreaming/sources.ts
+  // line 390 uses for the same toolkit.
+  const since = new Date(Date.now() - 90 * 86_400_000).toISOString();
+  const response = await opts.fetcher('/tools/execute/GITHUB_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {
+        since,
+        state: 'all',
+        filter: 'assigned',
+        per_page: opts.limit,
+        direction: 'desc',
+      },
+    }),
+  });
+  const issues = extractGithubIssues(response);
+  return issues
+    .map(mapGithubIssue)
+    .filter((i): i is raw.GithubIssueInput => !!i?.issueId)
+    .slice(0, opts.limit);
+}
+
+async function fetchOutlookRecent(opts: FetchToolkitItemsOpts): Promise<raw.OutlookMessageInput[]> {
+  // Microsoft Graph: /me/messages with $top, $orderby. Composio's
+  // OUTLOOK_LIST_MESSAGES wraps these args under arguments.{top, orderby}.
+  // We sort by receivedDateTime desc to mirror the Gmail "most recent" UX.
+  const response = await opts.fetcher('/tools/execute/OUTLOOK_LIST_MESSAGES', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {
+        top: opts.limit,
+        orderby: 'receivedDateTime desc',
+      },
+    }),
+  });
+  const messages = extractOutlookMessages(response);
+  return messages
+    .map(mapOutlookMessage)
+    .filter((m): m is raw.OutlookMessageInput => !!m?.messageId)
+    .slice(0, opts.limit);
+}
+
 async function fetchGdriveRecent(opts: FetchToolkitItemsOpts): Promise<raw.GdriveFileInput[]> {
   // Drive's q syntax: filter by modifiedTime, exclude trashed. corpora=user
   // restricts to files owned/shared with the user (vs. domain-wide).
@@ -531,6 +615,28 @@ function extractGdriveFiles(response: unknown): any[] {
   for (const c of candidates) {
     // Drive API: { files: [...] }
     if (Array.isArray(c?.files)) return c.files;
+    if (Array.isArray(c?.items)) return c.items;
+  }
+  return [];
+}
+
+function extractGithubIssues(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // GitHub: top-level array; Composio occasionally wraps under .issues
+    if (Array.isArray(c?.issues)) return c.issues;
+    if (Array.isArray(c)) return c;
+    if (Array.isArray(c?.items)) return c.items;
+  }
+  return [];
+}
+
+function extractOutlookMessages(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // Microsoft Graph: { value: [...] }
+    if (Array.isArray(c?.value)) return c.value;
+    if (Array.isArray(c?.messages)) return c.messages;
     if (Array.isArray(c?.items)) return c.items;
   }
   return [];
@@ -714,6 +820,77 @@ function extractNotionTitle(page: any): string | null {
   return null;
 }
 
+function mapGithubIssue(issue: any): raw.GithubIssueInput | null {
+  if (!issue || typeof issue !== 'object') return null;
+  // GitHub's stable id is `id` (number); we cast to string for storage.
+  const issueId = String(issue.id ?? issue.issue_id ?? '').trim();
+  if (!issueId) return null;
+  // repo_full_name comes either via `repository_url` (.../owner/repo) or
+  // a nested .repository.full_name. Walk both.
+  let repoFullName: string | null = null;
+  if (typeof issue.repository_url === 'string') {
+    const match = issue.repository_url.match(/repos\/([^/]+\/[^/]+)$/);
+    if (match) repoFullName = match[1];
+  }
+  if (!repoFullName && issue.repository?.full_name) {
+    repoFullName = String(issue.repository.full_name);
+  }
+  // body can be huge; cap to a preview
+  const bodyPreview = typeof issue.body === 'string' ? issue.body.slice(0, 800) : null;
+  // labels: GitHub sends [{name: 'bug', ...}, ...] but sometimes just strings
+  const labels = Array.isArray(issue.labels)
+    ? issue.labels.map((l: any) => typeof l === 'string' ? l : (l?.name ?? null)).filter((s: any): s is string => typeof s === 'string')
+    : [];
+  const assignees = Array.isArray(issue.assignees)
+    ? issue.assignees.map((a: any) => a?.login ?? null).filter((s: any): s is string => typeof s === 'string')
+    : [];
+  return {
+    issueId,
+    number: typeof issue.number === 'number' ? issue.number : null,
+    repoFullName,
+    title: typeof issue.title === 'string' ? issue.title : null,
+    bodyPreview,
+    state: typeof issue.state === 'string' ? issue.state : null,
+    htmlUrl: typeof issue.html_url === 'string' ? issue.html_url : null,
+    isPullRequest: !!issue.pull_request,
+    labels,
+    assignees,
+    createdAtRemote: issue.created_at ?? null,
+    updatedAtRemote: issue.updated_at ?? null,
+  };
+}
+
+function mapOutlookMessage(msg: any): raw.OutlookMessageInput | null {
+  if (!msg || typeof msg !== 'object') return null;
+  // Graph's id is an opaque string. Some Composio variants alias it.
+  const messageId = String(msg.id ?? msg.message_id ?? '').trim();
+  if (!messageId) return null;
+  const fromAddr = msg.from?.emailAddress?.address ?? msg.from ?? null;
+  const toRecipients = Array.isArray(msg.toRecipients)
+    ? msg.toRecipients.map((r: any) => r?.emailAddress?.address ?? null).filter((s: any): s is string => typeof s === 'string')
+    : [];
+  const ccRecipients = Array.isArray(msg.ccRecipients)
+    ? msg.ccRecipients.map((r: any) => r?.emailAddress?.address ?? null).filter((s: any): s is string => typeof s === 'string')
+    : [];
+  // bodyPreview is Graph's pre-rendered preview; body.content is full HTML
+  const bodyPreview = typeof msg.bodyPreview === 'string'
+    ? msg.bodyPreview
+    : (typeof msg.body?.content === 'string' ? msg.body.content.slice(0, 800) : null);
+  return {
+    messageId,
+    conversationId: msg.conversationId ?? null,
+    from: typeof fromAddr === 'string' ? fromAddr : null,
+    to: toRecipients,
+    cc: ccRecipients,
+    subject: typeof msg.subject === 'string' ? msg.subject : null,
+    bodyPreview,
+    receivedAt: msg.receivedDateTime ?? msg.received_at ?? null,
+    importance: typeof msg.importance === 'string' ? msg.importance.toLowerCase() : null,
+    hasAttachments: Boolean(msg.hasAttachments),
+    webLink: typeof msg.webLink === 'string' ? msg.webLink : null,
+  };
+}
+
 function mapGdriveFile(file: any): raw.GdriveFileInput | null {
   if (!file || typeof file !== 'object') return null;
   const fileId = String(file.id ?? file.file_id ?? '').trim();
@@ -758,6 +935,10 @@ function buildSignalsForInit(
     notionIds: string[];
     gdriveRows: raw.GdriveFileInput[];
     gdriveIds: string[];
+    githubRows: raw.GithubIssueInput[];
+    githubIds: string[];
+    outlookRows: raw.OutlookMessageInput[];
+    outlookIds: string[];
   },
 ): db.IngestPersonalSignalInput[] {
   const out: db.IngestPersonalSignalInput[] = [];
@@ -857,6 +1038,49 @@ function buildSignalsForInit(
       sourceRawIds: [buckets.gdriveIds[i]!],
       occurredAt: row.modifiedTime ?? undefined,
       dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.fileId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.githubIds.length; i += 1) {
+    const row = buckets.githubRows[i];
+    if (!row) continue;
+    const repoLabel = row.repoFullName ?? 'unknown';
+    const numberLabel = typeof row.number === 'number' ? `#${row.number}` : '';
+    const kindWord = row.isPullRequest ? 'PR' : 'Issue';
+    const title = trimSummary(`${kindWord} ${numberLabel} · ${row.title ?? '(untitled)'} (${repoLabel})`, 120);
+    const summary = trimSummary(row.bodyPreview ?? row.htmlUrl ?? title, 280) || title;
+    out.push({
+      kind: row.isPullRequest ? 'connector.github.pr' : 'connector.github.issue',
+      title,
+      summary,
+      payload: {
+        repo: row.repoFullName, number: row.number, state: row.state,
+        htmlUrl: row.htmlUrl, labels: row.labels, assignees: row.assignees,
+      },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'github_issues',
+      sourceRawIds: [buckets.githubIds[i]!],
+      occurredAt: row.updatedAtRemote ?? row.createdAtRemote ?? undefined,
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.issueId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.outlookIds.length; i += 1) {
+    const row = buckets.outlookRows[i];
+    if (!row) continue;
+    const title = trimSummary(row.subject ?? row.bodyPreview ?? '(no subject)', 120);
+    const summary = trimSummary(row.bodyPreview ?? row.subject ?? title, 280) || title;
+    out.push({
+      kind: 'connector.outlook.message',
+      title,
+      summary,
+      payload: {
+        from: row.from, conversationId: row.conversationId,
+        importance: row.importance, hasAttachments: row.hasAttachments,
+      },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'outlook_messages',
+      sourceRawIds: [buckets.outlookIds[i]!],
+      occurredAt: row.receivedAt ?? undefined,
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.messageId}:init:v1`,
     });
   }
   return out;

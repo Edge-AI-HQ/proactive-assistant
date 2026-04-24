@@ -261,6 +261,69 @@ function ensureRawSchema(db: Database.Database): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_gdrive_dedupe
       ON gdrive_files(dedupe_key) WHERE dedupe_key IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_gdrive_modified ON gdrive_files(modified_time DESC);
+
+    -- GitHub issues + PRs (Composio: GITHUB_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER)
+    --
+    -- GitHub returns PRs through the issues endpoint with a "pull_request"
+    -- object on the row; we keep the boolean as a separate column so
+    -- downstream evolution can split issue-derived facts from PR-derived
+    -- ones if it wants. issue_id is GitHubs stable global id (string-cast
+    -- to keep types simple).
+    CREATE TABLE IF NOT EXISTS github_issues (
+      id                 TEXT PRIMARY KEY,
+      issue_id           TEXT NOT NULL UNIQUE,
+      number             INTEGER,
+      repo_full_name     TEXT,
+      title              TEXT,
+      body_preview       TEXT,
+      state              TEXT,
+      html_url           TEXT,
+      is_pull_request    INTEGER NOT NULL DEFAULT 0,
+      labels_json        TEXT NOT NULL DEFAULT '[]',
+      assignees_json     TEXT NOT NULL DEFAULT '[]',
+      created_at_remote  TEXT,
+      updated_at_remote  TEXT,
+      occurred_at        TEXT NOT NULL,
+      ingested_at        TEXT NOT NULL,
+      dedupe_key         TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_gh_issues_dedupe
+      ON github_issues(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_gh_issues_repo_state
+      ON github_issues(repo_full_name, state, updated_at_remote DESC);
+
+    -- Outlook messages (Composio: OUTLOOK_LIST_MESSAGES — Microsoft Graph)
+    --
+    -- Mirrors gmail_messages with Graph-specific fields: conversation_id
+    -- (Graph's threading id, equivalent to Gmail's thread_id), importance
+    -- ('low' | 'normal' | 'high'), has_attachments boolean.
+    CREATE TABLE IF NOT EXISTS outlook_messages (
+      id              TEXT PRIMARY KEY,
+      message_id      TEXT NOT NULL UNIQUE,
+      conversation_id TEXT,
+      from_addr       TEXT,
+      to_addrs_json   TEXT NOT NULL DEFAULT '[]',
+      cc_addrs_json   TEXT NOT NULL DEFAULT '[]',
+      subject         TEXT,
+      body_preview    TEXT,
+      received_at     TEXT,
+      importance      TEXT,
+      has_attachments INTEGER NOT NULL DEFAULT 0,
+      web_link        TEXT,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_outlook_dedupe
+      ON outlook_messages(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_outlook_received ON outlook_messages(received_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_outlook_conv ON outlook_messages(conversation_id);
   `);
 }
 
@@ -1150,6 +1213,279 @@ export function listGdriveFiles(opts: ListGdriveOpts = {}): GdriveFileRow[] {
   return db.prepare(parts.join(' ')).all(...params).map(rowToGdriveFile);
 }
 
+// ─────── GitHub issues / PRs ───────
+
+export interface GithubIssueInput {
+  issueId: string;
+  number?: number | null;
+  repoFullName?: string | null;     // 'owner/repo'
+  title?: string | null;
+  bodyPreview?: string | null;
+  state?: string | null;             // 'open' | 'closed'
+  htmlUrl?: string | null;
+  isPullRequest?: boolean;
+  labels?: string[];
+  assignees?: string[];
+  createdAtRemote?: string | null;
+  updatedAtRemote?: string | null;
+  /** ISO; falls back to updatedAtRemote then createdAtRemote then now. */
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface GithubIssueRow {
+  id: string;
+  issue_id: string;
+  number: number | null;
+  repo_full_name: string | null;
+  title: string | null;
+  body_preview: string | null;
+  state: string | null;
+  html_url: string | null;
+  is_pull_request: boolean;
+  labels: string[];
+  assignees: string[];
+  created_at_remote: string | null;
+  updated_at_remote: string | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToGithubIssue(row: any): GithubIssueRow {
+  return {
+    id: row.id,
+    issue_id: row.issue_id,
+    number: typeof row.number === 'number' ? row.number : null,
+    repo_full_name: row.repo_full_name ?? null,
+    title: row.title ?? null,
+    body_preview: row.body_preview ?? null,
+    state: row.state ?? null,
+    html_url: row.html_url ?? null,
+    is_pull_request: Boolean(row.is_pull_request),
+    labels: parseJsonArray<string>(row.labels_json),
+    assignees: parseJsonArray<string>(row.assignees_json),
+    created_at_remote: row.created_at_remote ?? null,
+    updated_at_remote: row.updated_at_remote ?? null,
+    occurred_at: row.occurred_at,
+    ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestGithubIssues(items: GithubIssueInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0;
+  let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO github_issues (
+       id, issue_id, number, repo_full_name, title, body_preview, state,
+       html_url, is_pull_request, labels_json, assignees_json,
+       created_at_remote, updated_at_remote,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.issueId) continue;
+      accepted += 1;
+      const id = genId();
+      const updated = normalizeToUtcIso(item.updatedAtRemote ?? null);
+      const created = normalizeToUtcIso(item.createdAtRemote ?? null);
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? updated ?? created ?? ts;
+      // Include updated time in dedupe so a refetched-but-edited issue
+      // would dodge dedupe — same trade-off as notion_pages.
+      const dedupe = item.dedupeKey ?? `github:issue:${item.issueId}:${updated ?? 'noupdate'}`;
+      const result = insert.run(
+        id, item.issueId,
+        typeof item.number === 'number' ? item.number : null,
+        item.repoFullName ?? null,
+        item.title ?? null, item.bodyPreview ?? null,
+        item.state ?? null, item.htmlUrl ?? null,
+        item.isPullRequest ? 1 : 0,
+        JSON.stringify(item.labels ?? []),
+        JSON.stringify(item.assignees ?? []),
+        created, updated,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) {
+        inserted += 1;
+        ids.push(id);
+      }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export interface ListGithubOpts {
+  repoFullName?: string;
+  state?: string;
+  isPullRequest?: boolean;
+  since?: string;
+  until?: string;
+  limit?: number;
+}
+
+export function listGithubIssues(opts: ListGithubOpts = {}): GithubIssueRow[] {
+  const db = getRawDb();
+  const parts = ['SELECT * FROM github_issues WHERE 1=1'];
+  const params: unknown[] = [];
+  if (opts.repoFullName) { parts.push('AND repo_full_name = ?'); params.push(opts.repoFullName); }
+  if (opts.state) { parts.push('AND state = ?'); params.push(opts.state); }
+  if (typeof opts.isPullRequest === 'boolean') {
+    parts.push('AND is_pull_request = ?');
+    params.push(opts.isPullRequest ? 1 : 0);
+  }
+  const since = normalizeToUtcIso(opts.since);
+  const until = normalizeToUtcIso(opts.until);
+  if (since) { parts.push('AND updated_at_remote >= ?'); params.push(since); }
+  if (until) { parts.push('AND updated_at_remote <= ?'); params.push(until); }
+  parts.push('ORDER BY updated_at_remote DESC LIMIT ?');
+  params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
+  return db.prepare(parts.join(' ')).all(...params).map(rowToGithubIssue);
+}
+
+// ─────── Outlook messages ───────
+
+export interface OutlookMessageInput {
+  messageId: string;
+  conversationId?: string | null;
+  from?: string | null;
+  to?: string[];
+  cc?: string[];
+  subject?: string | null;
+  bodyPreview?: string | null;
+  receivedAt?: string | null;
+  importance?: string | null;        // 'low' | 'normal' | 'high'
+  hasAttachments?: boolean;
+  webLink?: string | null;
+  /** ISO; falls back to receivedAt then now. */
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface OutlookMessageRow {
+  id: string;
+  message_id: string;
+  conversation_id: string | null;
+  from_addr: string | null;
+  to_addrs: string[];
+  cc_addrs: string[];
+  subject: string | null;
+  body_preview: string | null;
+  received_at: string | null;
+  importance: string | null;
+  has_attachments: boolean;
+  web_link: string | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToOutlookMessage(row: any): OutlookMessageRow {
+  return {
+    id: row.id,
+    message_id: row.message_id,
+    conversation_id: row.conversation_id ?? null,
+    from_addr: row.from_addr ?? null,
+    to_addrs: parseJsonArray<string>(row.to_addrs_json),
+    cc_addrs: parseJsonArray<string>(row.cc_addrs_json),
+    subject: row.subject ?? null,
+    body_preview: row.body_preview ?? null,
+    received_at: row.received_at ?? null,
+    importance: row.importance ?? null,
+    has_attachments: Boolean(row.has_attachments),
+    web_link: row.web_link ?? null,
+    occurred_at: row.occurred_at,
+    ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestOutlookMessages(items: OutlookMessageInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0;
+  let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO outlook_messages (
+       id, message_id, conversation_id, from_addr, to_addrs_json, cc_addrs_json,
+       subject, body_preview, received_at, importance, has_attachments, web_link,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.messageId) continue;
+      accepted += 1;
+      const id = genId();
+      const received = normalizeToUtcIso(item.receivedAt ?? null);
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? received ?? ts;
+      const dedupe = item.dedupeKey ?? `outlook:msg:${item.messageId}`;
+      const result = insert.run(
+        id, item.messageId, item.conversationId ?? null,
+        item.from ?? null,
+        JSON.stringify(item.to ?? []),
+        JSON.stringify(item.cc ?? []),
+        item.subject ?? null, item.bodyPreview ?? null,
+        received, item.importance ?? null,
+        item.hasAttachments ? 1 : 0,
+        item.webLink ?? null,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) {
+        inserted += 1;
+        ids.push(id);
+      }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export interface ListOutlookOpts {
+  conversationId?: string;
+  importance?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+}
+
+export function listOutlookMessages(opts: ListOutlookOpts = {}): OutlookMessageRow[] {
+  const db = getRawDb();
+  const parts = ['SELECT * FROM outlook_messages WHERE 1=1'];
+  const params: unknown[] = [];
+  if (opts.conversationId) { parts.push('AND conversation_id = ?'); params.push(opts.conversationId); }
+  if (opts.importance) { parts.push('AND importance = ?'); params.push(opts.importance); }
+  const since = normalizeToUtcIso(opts.since);
+  const until = normalizeToUtcIso(opts.until);
+  if (since) { parts.push('AND received_at >= ?'); params.push(since); }
+  if (until) { parts.push('AND received_at <= ?'); params.push(until); }
+  parts.push('ORDER BY received_at DESC LIMIT ?');
+  params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
+  return db.prepare(parts.join(' ')).all(...params).map(rowToOutlookMessage);
+}
+
 // ─────── Reference tracking — uniform across every raw table ───────
 
 const REFERENCE_TABLES = new Set([
@@ -1161,6 +1497,9 @@ const REFERENCE_TABLES = new Set([
   'slack_messages',
   'notion_pages',
   'gdrive_files',
+  // Phase D round 2
+  'github_issues',
+  'outlook_messages',
 ]);
 
 /**

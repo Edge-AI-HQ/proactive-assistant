@@ -32,6 +32,8 @@ import {
   listSlackMessages,
   listNotionPages,
   listGdriveFiles,
+  listGithubIssues,
+  listOutlookMessages,
   resetRawDbForTests,
 } from '../../raw-db.ts';
 import { BackgroundTaskScheduler } from '../scheduler.ts';
@@ -318,12 +320,12 @@ test('payload validation: missing connectedAccountId → terminal failed', async
   });
 });
 
-test('unsupported toolkit (e.g. github — not in Phase D round 1) → succeeded with reason=unsupported_toolkit_v0', async () => {
+test('unsupported toolkit (e.g. asana — not yet in any Phase D round) → succeeded with reason=unsupported_toolkit_v0', async () => {
   await withTempHome(async () => {
     await enqueueBackgroundTask({
       type: 'connector.init',
-      idempotencyKey: 'unsupported-github',
-      payload: { toolkit: 'github', connectedAccountId: 'acc-gh' },
+      idempotencyKey: 'unsupported-asana',
+      payload: { toolkit: 'asana', connectedAccountId: 'acc-as' },
     });
     const { task, result } = await runOneTick({
       fetcher: () => { throw new Error('should not be called'); },
@@ -677,6 +679,126 @@ test('googledrive: full pipeline → raw + signals + evolution_run', async () =>
     assert.deepEqual(roadmap.owners, ['me@example.com']);
     const budget = rows.find((r) => r.name === 'budget.xlsx')!;
     assert.equal(budget.size_bytes, 12345);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// Phase D round 2 — GitHub + Outlook happy paths
+// ──────────────────────────────────────────────────────────────────────
+
+test('github: full pipeline → raw + signals + evolution_run; PRs and issues separated by kind', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'connector.init:github:acc-gh:v1',
+      payload: { toolkit: 'github', connectedAccountId: 'acc-gh', limit: 10 },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/GITHUB_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER': () => ({
+        data: [
+          {
+            id: 901, number: 42, title: 'Token routing P1',
+            body: 'Tokens leak across LiteLLM; reproduce by ...',
+            state: 'open',
+            html_url: 'https://github.com/PIN-AI/PIN-AI-ASSISTANT/issues/42',
+            repository_url: 'https://api.github.com/repos/PIN-AI/PIN-AI-ASSISTANT',
+            labels: [{ name: 'bug' }, { name: 'P1' }],
+            assignees: [{ login: 'alice' }],
+            created_at: '2026-04-22T10:00:00Z',
+            updated_at: '2026-04-23T11:00:00Z',
+            // No pull_request → it's an issue
+          },
+          {
+            id: 902, number: 43, title: 'Add /tasks read API',
+            body: '...', state: 'closed',
+            html_url: 'https://github.com/PIN-AI/PIN-AI-ASSISTANT/pull/43',
+            repository_url: 'https://api.github.com/repos/PIN-AI/PIN-AI-ASSISTANT',
+            labels: ['enhancement'],
+            assignees: [{ login: 'bob' }, { login: 'carol' }],
+            created_at: '2026-04-21T09:00:00Z',
+            updated_at: '2026-04-22T15:00:00Z',
+            pull_request: { url: '...', html_url: '...' },  // marker
+          },
+        ],
+      }),
+    });
+    const { task, result } = await runOneTick({ fetcher });
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.toolkit, 'github');
+    assert.equal(result?.rawInserted, 2);
+    assert.equal(result?.signalsInserted, 2);
+    const rows = listGithubIssues({ limit: 10 });
+    assert.equal(rows.length, 2);
+    const issue42 = rows.find((r) => r.number === 42)!;
+    assert.equal(issue42.repo_full_name, 'PIN-AI/PIN-AI-ASSISTANT');
+    assert.equal(issue42.is_pull_request, false);
+    assert.deepEqual(issue42.labels.sort(), ['P1', 'bug']);
+    assert.deepEqual(issue42.assignees, ['alice']);
+    const pr43 = rows.find((r) => r.number === 43)!;
+    assert.equal(pr43.is_pull_request, true);
+    assert.equal(pr43.state, 'closed');
+
+    // Signal kinds split into .issue vs .pr per is_pull_request
+    const sigs = await import('../../db.ts').then((m) =>
+      m.listPersonalSignals({ limit: 10 }),
+    );
+    assert.equal(sigs.length, 2);
+    const kinds = sigs.map((s) => s.kind).sort();
+    assert.deepEqual(kinds, ['connector.github.issue', 'connector.github.pr']);
+  });
+});
+
+test('outlook: full pipeline → raw + signals + evolution_run', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'connector.init:outlook:acc-o:v1',
+      payload: { toolkit: 'outlook', connectedAccountId: 'acc-o', limit: 10 },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/OUTLOOK_LIST_MESSAGES': () => ({
+        data: {
+          // Microsoft Graph wraps lists under .value
+          value: [
+            {
+              id: 'AAMkADAxMjQ4...', conversationId: 'conv-1',
+              from: { emailAddress: { address: 'manager@x.com', name: 'Manager' } },
+              toRecipients: [{ emailAddress: { address: 'me@x.com' } }],
+              ccRecipients: [],
+              subject: 'Q2 review', bodyPreview: 'Schedule send for next week',
+              body: { contentType: 'html', content: '<p>full body...</p>' },
+              receivedDateTime: '2026-04-23T14:00:00Z',
+              importance: 'High',
+              hasAttachments: true,
+              webLink: 'https://outlook.office.com/...',
+            },
+            {
+              id: 'AAMkADAxMjQ5...', conversationId: 'conv-2',
+              from: { emailAddress: { address: 'newsletter@medium.com' } },
+              toRecipients: [{ emailAddress: { address: 'me@x.com' } }],
+              subject: 'This week in tech',
+              bodyPreview: 'Top stories',
+              receivedDateTime: '2026-04-22T08:00:00Z',
+              importance: 'normal',
+              hasAttachments: false,
+            },
+          ],
+        },
+      }),
+    });
+    const { task, result } = await runOneTick({ fetcher });
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.toolkit, 'outlook');
+    assert.equal(result?.rawInserted, 2);
+    assert.equal(result?.signalsInserted, 2);
+    const rows = listOutlookMessages({ limit: 10 });
+    assert.equal(rows.length, 2);
+    const review = rows.find((r) => r.subject === 'Q2 review')!;
+    assert.equal(review.from_addr, 'manager@x.com');
+    assert.equal(review.importance, 'high');  // lowercased on map
+    assert.equal(review.has_attachments, true);
+    assert.equal(review.conversation_id, 'conv-1');
+    assert.deepEqual(review.to_addrs, ['me@x.com']);
   });
 });
 

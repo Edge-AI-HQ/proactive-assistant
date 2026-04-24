@@ -36,7 +36,9 @@ const NOOP_LOGGER: TaskLogger = {
 export type EvolveToolkit =
   | 'gmail' | 'googlecalendar'
   // Phase D round 1
-  | 'slack' | 'notion' | 'googledrive';
+  | 'slack' | 'notion' | 'googledrive'
+  // Phase D round 2
+  | 'github' | 'outlook';
 
 export interface ConnectorEvolveOpts {
   toolkit: EvolveToolkit;
@@ -50,6 +52,8 @@ export interface ConnectorEvolveOpts {
   slack?: raw.SlackMessageInput[];
   notion?: raw.NotionPageInput[];
   gdrive?: raw.GdriveFileInput[];
+  github?: raw.GithubIssueInput[];
+  outlook?: raw.OutlookMessageInput[];
 }
 
 export interface ConnectorEvolveDeps {
@@ -233,6 +237,8 @@ interface SampledBundle {
   slack: Array<{ user?: string; channel?: string; text?: string; date?: string }>;
   notion: Array<{ title?: string; preview?: string; edited?: string; parentType?: string }>;
   gdrive: Array<{ name?: string; mimeType?: string; modified?: string; owners?: string[] }>;
+  github: Array<{ repo?: string; number?: number; title?: string; state?: string; isPR?: boolean; updated?: string; labels?: string[] }>;
+  outlook: Array<{ from?: string; subject?: string; preview?: string; received?: string }>;
 }
 
 function sampleItems(opts: ConnectorEvolveOpts): SampledBundle {
@@ -241,6 +247,8 @@ function sampleItems(opts: ConnectorEvolveOpts): SampledBundle {
   const slack: SampledBundle['slack'] = [];
   const notion: SampledBundle['notion'] = [];
   const gdrive: SampledBundle['gdrive'] = [];
+  const github: SampledBundle['github'] = [];
+  const outlook: SampledBundle['outlook'] = [];
 
   if (opts.gmail && opts.gmail.length > 0) {
     const sortedGmail = [...opts.gmail]
@@ -302,9 +310,39 @@ function sampleItems(opts: ConnectorEvolveOpts): SampledBundle {
     gdrive.push(...sortedGdrive);
   }
 
+  if (opts.github && opts.github.length > 0) {
+    const sortedGithub = [...opts.github]
+      .sort(byDescUpdatedAtRemote)
+      .slice(0, MAX_PROMPT_ITEMS)
+      .map((i) => ({
+        repo: i.repoFullName ?? undefined,
+        number: typeof i.number === 'number' ? i.number : undefined,
+        title: truncate(i.title ?? '', 120),
+        state: i.state ?? undefined,
+        isPR: Boolean(i.isPullRequest),
+        updated: i.updatedAtRemote ?? undefined,
+        labels: Array.isArray(i.labels) ? i.labels.slice(0, 6) : [],
+      }));
+    github.push(...sortedGithub);
+  }
+  if (opts.outlook && opts.outlook.length > 0) {
+    const sortedOutlook = [...opts.outlook]
+      .sort(byDescReceivedAt)
+      .slice(0, MAX_PROMPT_ITEMS)
+      .map((m) => ({
+        from: m.from ?? undefined,
+        subject: truncate(m.subject ?? '', 120),
+        preview: truncate(m.bodyPreview ?? '', MAX_TEXT_LEN_PER_ITEM),
+        received: m.receivedAt ?? undefined,
+      }));
+    outlook.push(...sortedOutlook);
+  }
+
   return {
-    totalItems: gmail.length + gcal.length + slack.length + notion.length + gdrive.length,
-    gmail, gcal, slack, notion, gdrive,
+    totalItems:
+      gmail.length + gcal.length + slack.length + notion.length +
+      gdrive.length + github.length + outlook.length,
+    gmail, gcal, slack, notion, gdrive, github, outlook,
   };
 }
 
@@ -354,6 +392,25 @@ function buildUserMessage(
       lines.push(`${i + 1}. ${f.name ?? '(unnamed)'}${f.mimeType ? ` · ${f.mimeType}` : ''}`);
       if (f.owners && f.owners.length > 0) lines.push(`   Owners: ${f.owners.join(', ')}`);
       if (f.modified) lines.push(`   Modified: ${f.modified}`);
+    });
+  }
+  if (sampled.github.length > 0) {
+    lines.push('', `GitHub items (${sampled.github.length} most recent):`);
+    sampled.github.forEach((it, i) => {
+      const kindWord = it.isPR ? 'PR' : 'Issue';
+      const numLabel = typeof it.number === 'number' ? `#${it.number}` : '';
+      lines.push(`${i + 1}. ${kindWord} ${numLabel} (${it.repo ?? 'unknown'}) [${it.state ?? '?'}]`);
+      if (it.title) lines.push(`   Title: ${it.title}`);
+      if (it.labels && it.labels.length > 0) lines.push(`   Labels: ${it.labels.join(', ')}`);
+      if (it.updated) lines.push(`   Updated: ${it.updated}`);
+    });
+  }
+  if (sampled.outlook.length > 0) {
+    lines.push('', `Outlook messages (${sampled.outlook.length} most recent):`);
+    sampled.outlook.forEach((m, i) => {
+      lines.push(`${i + 1}. From: ${m.from ?? '(unknown)'}  Subject: ${m.subject ?? '(none)'}`);
+      if (m.preview) lines.push(`   Preview: ${m.preview}`);
+      if (m.received) lines.push(`   Received: ${m.received}`);
     });
   }
   lines.push('', '── Current state ──');
@@ -459,6 +516,22 @@ function byDescLastEdited(a: { lastEditedTime?: string | null }, b: { lastEdited
 function byDescModified(a: { modifiedTime?: string | null }, b: { modifiedTime?: string | null }): number {
   const av = a.modifiedTime ?? '';
   const bv = b.modifiedTime ?? '';
+  return av < bv ? 1 : av > bv ? -1 : 0;
+}
+
+function byDescUpdatedAtRemote(
+  a: { updatedAtRemote?: string | null }, b: { updatedAtRemote?: string | null },
+): number {
+  const av = a.updatedAtRemote ?? '';
+  const bv = b.updatedAtRemote ?? '';
+  return av < bv ? 1 : av > bv ? -1 : 0;
+}
+
+function byDescReceivedAt(
+  a: { receivedAt?: string | null }, b: { receivedAt?: string | null },
+): number {
+  const av = a.receivedAt ?? '';
+  const bv = b.receivedAt ?? '';
   return av < bv ? 1 : av > bv ? -1 : 0;
 }
 

@@ -14,14 +14,18 @@ import {
   ingestDeviceContactsSnapshot,
   ingestGcalEvents,
   ingestGdriveFiles,
+  ingestGithubIssues,
   ingestGmailMessages,
   ingestNotionPages,
+  ingestOutlookMessages,
   ingestSlackMessages,
   listDeviceApps,
   listGcalEvents,
   listGdriveFiles,
+  listGithubIssues,
   listGmailMessages,
   listNotionPages,
+  listOutlookMessages,
   listSlackMessages,
   markRawReferenced,
   resetRawDbForTests,
@@ -354,5 +358,90 @@ test('markRawReferenced: works on the new raw tables (slack/notion/gdrive)', asy
     assert.equal(listSlackMessages({ limit: 1 })[0]!.reference_count, 1);
     assert.equal(listNotionPages({ limit: 1 })[0]!.reference_count, 1);
     assert.equal(listGdriveFiles({ limit: 1 })[0]!.reference_count, 1);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// Phase D round 2 — GitHub issues + Outlook messages
+// ──────────────────────────────────────────────────────────────────────
+
+test('ingestGithubIssues: dedupe via issue_id+updated_at; isPullRequest stored as boolean', async () => {
+  await withTempHome(async () => {
+    const r1 = ingestGithubIssues([
+      { issueId: '900', number: 1, title: 'Issue', state: 'open',
+        repoFullName: 'a/b', updatedAtRemote: '2026-04-23T10:00:00Z' },
+      { issueId: '901', number: 2, title: 'Pull request', state: 'open',
+        repoFullName: 'a/b', isPullRequest: true,
+        updatedAtRemote: '2026-04-22T10:00:00Z',
+        labels: ['bug', 'P1'], assignees: ['alice'] },
+    ]);
+    assert.equal(r1.inserted, 2);
+    // Re-ingest same issue with same updated_at → ignored
+    const r2 = ingestGithubIssues([
+      { issueId: '900', number: 1, updatedAtRemote: '2026-04-23T10:00:00Z' },
+    ]);
+    assert.equal(r2.inserted, 0);
+    const all = listGithubIssues({ limit: 10 });
+    assert.equal(all.length, 2);
+    const pr = all.find((r) => r.is_pull_request)!;
+    assert.equal(pr.number, 2);
+    assert.deepEqual(pr.labels.sort(), ['P1', 'bug']);
+    assert.deepEqual(pr.assignees, ['alice']);
+  });
+});
+
+test('listGithubIssues: filters by repo, state, isPullRequest', async () => {
+  await withTempHome(async () => {
+    ingestGithubIssues([
+      { issueId: '1', repoFullName: 'a/b', state: 'open', updatedAtRemote: '2026-04-20T10:00:00Z' },
+      { issueId: '2', repoFullName: 'a/b', state: 'closed', isPullRequest: true, updatedAtRemote: '2026-04-21T10:00:00Z' },
+      { issueId: '3', repoFullName: 'c/d', state: 'open', updatedAtRemote: '2026-04-22T10:00:00Z' },
+    ]);
+    assert.equal(listGithubIssues({ repoFullName: 'a/b' }).length, 2);
+    assert.equal(listGithubIssues({ state: 'closed' }).length, 1);
+    assert.equal(listGithubIssues({ isPullRequest: true }).length, 1);
+    assert.equal(listGithubIssues({ isPullRequest: false }).length, 2);
+  });
+});
+
+test('ingestOutlookMessages: dedupe via message_id UNIQUE; importance lowercased not enforced (raw layer accepts as-is)', async () => {
+  await withTempHome(async () => {
+    const r1 = ingestOutlookMessages([
+      { messageId: 'm1', subject: 'Hello', importance: 'high',
+        receivedAt: '2026-04-23T10:00:00Z', conversationId: 'c1' },
+      { messageId: 'm2', subject: 'Update', importance: 'normal',
+        receivedAt: '2026-04-22T10:00:00Z', conversationId: 'c2', hasAttachments: true },
+    ]);
+    assert.equal(r1.inserted, 2);
+    const r2 = ingestOutlookMessages([{ messageId: 'm1', subject: 'rewritten' }]);
+    assert.equal(r2.inserted, 0);
+    const rows = listOutlookMessages({ limit: 10 });
+    assert.equal(rows.length, 2);
+    const update = rows.find((r) => r.subject === 'Update')!;
+    assert.equal(update.has_attachments, true);
+    assert.equal(update.conversation_id, 'c2');
+  });
+});
+
+test('listOutlookMessages: filters by conversationId and importance', async () => {
+  await withTempHome(async () => {
+    ingestOutlookMessages([
+      { messageId: 'm1', conversationId: 'c1', importance: 'high', receivedAt: '2026-04-23T10:00:00Z' },
+      { messageId: 'm2', conversationId: 'c1', importance: 'normal', receivedAt: '2026-04-22T10:00:00Z' },
+      { messageId: 'm3', conversationId: 'c2', importance: 'high', receivedAt: '2026-04-21T10:00:00Z' },
+    ]);
+    assert.equal(listOutlookMessages({ conversationId: 'c1' }).length, 2);
+    assert.equal(listOutlookMessages({ importance: 'high' }).length, 2);
+  });
+});
+
+test('markRawReferenced: works on round-2 tables (github_issues / outlook_messages)', async () => {
+  await withTempHome(async () => {
+    const gh = ingestGithubIssues([{ issueId: '99' }]);
+    const ol = ingestOutlookMessages([{ messageId: 'm1' }]);
+    markRawReferenced('github_issues', gh.ids, 'run-1');
+    markRawReferenced('outlook_messages', ol.ids, 'run-1');
+    assert.equal(listGithubIssues({ limit: 1 })[0]!.reference_count, 1);
+    assert.equal(listOutlookMessages({ limit: 1 })[0]!.reference_count, 1);
   });
 });
