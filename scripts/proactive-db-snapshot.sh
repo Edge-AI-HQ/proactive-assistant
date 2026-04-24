@@ -5,7 +5,7 @@ set -euo pipefail
 WATCH=0
 ONCE=0
 INTERVAL_SECONDS="${INTERVAL_SECONDS:-3}"
-OUT_DIR="${SNAPSHOT_OUT_DIR:-/tmp/pin-proactive}"
+OUT_DIR="${SNAPSHOT_OUT_DIR:-${HOME:-/tmp}/db/pin-proactive}"
 SRC_DIR="${SRC_DIR:-}"
 CONTAINER_NAME="${PROACTIVE_CONTAINER:-}"
 
@@ -15,8 +15,8 @@ Usage:
   bash scripts/proactive-db-snapshot.sh [options]
 
 Options:
-  --src-dir <dir>       Source directory that contains proactive.db and mobile_items.db.
-  --out-dir <dir>       Output directory for snapshot DBs. Default: /tmp/pin-proactive
+  --src-dir <dir>       Source directory that contains proactive.db and optional raw.db.
+  --out-dir <dir>       Output directory for snapshot DBs. Default: $HOME/db/pin-proactive
   --container <name>    Running proactive container name. Default: first container matching ^proactive-
   --interval <seconds>  Refresh interval in watch mode. Default: 3
   --once                Run one snapshot pass and exit.
@@ -115,31 +115,50 @@ snapshot_db() {
   mv -f "$tmp_db" "$dst_db"
 }
 
+clean_proactive_snapshot() {
+  local db="$1"
+
+  # The snapshot is an operator-facing v3 view. Drop deprecated/repair-only
+  # tables from the copied DB only; the live runtime DB remains untouched.
+  sqlite3 "$db" <<'SQL'
+DROP TABLE IF EXISTS lost_and_found;
+DROP TABLE IF EXISTS profile_signals;
+DROP TABLE IF EXISTS profile_interests;
+DROP TABLE IF EXISTS auto_loop_state;
+DROP TABLE IF EXISTS chat_crystallize_state;
+SQL
+}
+
 snapshot_all() {
   local source_dir="$1"
   local proactive_src="$source_dir/proactive.db"
-  local mobile_src="$source_dir/mobile_items.db"
+  local raw_src="$source_dir/raw.db"
   local proactive_dst="$OUT_DIR/proactive.snapshot.db"
-  local mobile_dst="$OUT_DIR/mobile_items.snapshot.db"
+  local raw_dst="$OUT_DIR/raw.snapshot.db"
 
   if [[ ! -f "$proactive_src" ]]; then
     echo "Missing source DB: $proactive_src" >&2
     return 1
   fi
-  if [[ ! -f "$mobile_src" ]]; then
-    echo "Missing source DB: $mobile_src" >&2
-    return 1
-  fi
-
   mkdir -p "$OUT_DIR"
 
   snapshot_db "$proactive_src" "$proactive_dst"
-  snapshot_db "$mobile_src" "$mobile_dst"
+  clean_proactive_snapshot "$proactive_dst"
+  rm -f "$OUT_DIR/mobile_items.snapshot.db"
+  if [[ -f "$raw_src" ]]; then
+    snapshot_db "$raw_src" "$raw_dst"
+  else
+    rm -f "$raw_dst"
+  fi
 
   echo "[$(date '+%F %T')] snapshot refreshed"
   echo "  source: $source_dir"
   echo "  proactive: $proactive_dst"
-  echo "  mobile_items: $mobile_dst"
+  if [[ -f "$raw_src" ]]; then
+    echo "  raw: $raw_dst"
+  else
+    echo "  raw: skipped (missing $raw_src)"
+  fi
 }
 
 MAIN_SRC_DIR="$(resolve_src_dir)"

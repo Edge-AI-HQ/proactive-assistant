@@ -150,8 +150,8 @@ function ensureSchema(db: Database.Database): void {
     -- See docs/memory-architecture.md §三 (personal_signals).
     -- Schema is compatible with the device-side MobileSyncItem contract
     -- (kind/title/summary/payload/salience/confidence/dedupeKey/occurredAt/...).
-    -- mobile_items.db (separate file) is preserved during the migration window
-    -- so the device upload protocol does not break.
+    -- Legacy mobile_items.db is no longer a read path; device uploads write
+    -- directly here, with snapshot payloads fanned out to raw.db.
     CREATE TABLE IF NOT EXISTS personal_signals (
       id                  TEXT PRIMARY KEY,
       kind                TEXT NOT NULL,
@@ -3308,6 +3308,7 @@ export interface IngestPersonalSignalInput {
   subject?: string | null;
   sourceRawTable?: string | null;
   sourceRawIds?: string[];
+  status?: PersonalSignalStatus;
 }
 
 export interface IngestPersonalSignalsResult {
@@ -3336,7 +3337,7 @@ export async function ingestPersonalSignals(
        source, device_id, subject, source_raw_table, source_raw_ids_json,
        status, ingested_at,
        reference_count, last_referenced_at, referenced_by_runs
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, 0, NULL, '[]')`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
   );
   const tx = getDb().transaction((items: IngestPersonalSignalInput[]) => {
     for (const item of items) {
@@ -3363,6 +3364,7 @@ export async function ingestPersonalSignals(
         item.subject ?? null,
         item.sourceRawTable ?? null,
         JSON.stringify(item.sourceRawIds ?? []),
+        item.status ?? 'open',
         ts,
       );
       if (result.changes > 0) {
@@ -3483,4 +3485,3 @@ export async function markPersonalSignalsReferenced(
   tx();
   return updated;
 }
-
