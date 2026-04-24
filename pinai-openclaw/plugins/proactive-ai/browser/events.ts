@@ -10,9 +10,6 @@ export interface BrowserOpenedEvent {
   liveViewUrl: string;
   viewport: { width: number; height: number };
   url: string;
-  controlMode?: 'ai' | 'user' | 'idle';
-  takeoverReason?: string | null;
-  controlUpdatedAt?: number;
 }
 
 export interface BrowserNavigatedEvent {
@@ -67,32 +64,7 @@ class BrowserEventBus {
 
   emit(event: BrowserEvent): void {
     if (event.type === 'browser:opened') {
-      this.activeSessions.set(event.sessionKey, {
-        ...event,
-        controlMode: event.controlMode ?? 'ai',
-        takeoverReason: event.takeoverReason ?? null,
-        controlUpdatedAt: event.controlUpdatedAt ?? Date.now(),
-      });
-    } else if (event.type === 'browser:takeover-requested') {
-      const active = this.activeSessions.get(event.sessionKey);
-      if (active && active.browserSessionId === event.browserSessionId) {
-        this.activeSessions.set(event.sessionKey, {
-          ...active,
-          controlMode: 'user',
-          takeoverReason: event.reason,
-          controlUpdatedAt: Date.now(),
-        });
-      }
-    } else if (event.type === 'browser:control') {
-      const active = this.activeSessions.get(event.sessionKey);
-      if (active && active.browserSessionId === event.browserSessionId) {
-        this.activeSessions.set(event.sessionKey, {
-          ...active,
-          controlMode: event.mode,
-          takeoverReason: event.mode === 'ai' ? null : event.reason ?? active.takeoverReason ?? null,
-          controlUpdatedAt: Date.now(),
-        });
-      }
+      this.activeSessions.set(event.sessionKey, event);
     } else if (event.type === 'browser:closed') {
       this.activeSessions.delete(event.sessionKey);
     }

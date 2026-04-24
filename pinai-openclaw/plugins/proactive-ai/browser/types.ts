@@ -2,7 +2,6 @@
  * Browser session types — Browserbase backend.
  */
 import type { Browser, Page } from 'playwright-core';
-import type { BrowserControlMode } from './control-state.js';
 
 export type BrowserSessionStatus = 'creating' | 'connecting' | 'live' | 'closing' | 'closed';
 
@@ -20,11 +19,7 @@ export interface BrowserSession {
   /** Viewport size */
   viewport: { width: number; height: number };
   /** Current control mode */
-  controlMode: BrowserControlMode;
-  /** AI-provided reason when control was handed to the user. */
-  takeoverReason: string | null;
-  /** Last time controlMode/takeoverReason changed. */
-  controlUpdatedAt: number;
+  controlMode: 'ai' | 'user' | 'idle';
   /** Session lifecycle status */
   status: BrowserSessionStatus;
   /** Timestamp when session was created */

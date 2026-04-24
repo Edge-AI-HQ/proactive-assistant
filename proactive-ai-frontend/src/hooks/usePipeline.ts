@@ -16,7 +16,6 @@ import {
 export type { IntentCard, EvaluationScore, EvaluatorOutput };
 
 const STORAGE_KEY = "proactive-ai-run-state";
-const HEALTH_FAILURE_THRESHOLD = 3;
 
 export interface LogEntry {
   id: string;
@@ -120,7 +119,6 @@ function loadRunState(): RunState | null {
 
 export function usePipeline() {
   const sourceRef = useRef<AbortController | null>(null);
-  const healthFailuresRef = useRef(0);
   const [health, setHealth] = useState<HealthState>({
     loading: true, ok: false, pipelineRunning: false, error: null,
   });
@@ -137,18 +135,10 @@ export function usePipeline() {
         if (!res.ok) throw new Error(`Health check failed (${res.status})`);
         const data = await res.json();
         if (controller.signal.aborted) return;
-        healthFailuresRef.current = 0;
         setHealth({ loading: false, ok: Boolean(data.ok), pipelineRunning: Boolean(data.pipelineRunning), error: null });
       } catch (err) {
         if (controller.signal.aborted) return;
-        const error = err instanceof Error ? err.message : String(err);
-        healthFailuresRef.current += 1;
-        setHealth((prev) => {
-          if (prev.ok && healthFailuresRef.current < HEALTH_FAILURE_THRESHOLD) {
-            return { ...prev, loading: false, error: null };
-          }
-          return { loading: false, ok: false, pipelineRunning: false, error };
-        });
+        setHealth({ loading: false, ok: false, pipelineRunning: false, error: err instanceof Error ? err.message : String(err) });
       }
     }
     loadHealth();
