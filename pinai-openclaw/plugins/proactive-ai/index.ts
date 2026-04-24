@@ -171,7 +171,13 @@ const plugin = {
       });
       // Phase B: register connector.init handler. Production handler resolves
       // its Composio fetcher lazily from requireComposioApiKey() on first use.
-      bgTaskScheduler.registerHandler('connector.init', createConnectorInitHandler({}));
+      // Phase B.1: pass `api` so the evolve stage can spawn the fact-extraction
+      // subagent via runAgent(). When BACKGROUND_AUTO_LOOP_TASKS_ENABLED is
+      // off, this whole block is skipped — connector.init won't run at all.
+      bgTaskScheduler.registerHandler('connector.init', createConnectorInitHandler({
+        api,
+        evolveTimeoutMs: Number(process.env.CONNECTOR_INIT_EVOLVE_TIMEOUT_MS ?? 60_000),
+      }));
       bgTaskScheduler.start();
       api.logger.info(`[bg-tasks] scheduler started (worker=${workerId}, handlers=connector.init)`);
 

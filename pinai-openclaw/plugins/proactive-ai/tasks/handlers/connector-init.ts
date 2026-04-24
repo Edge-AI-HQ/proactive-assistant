@@ -12,6 +12,7 @@
  * `defaultComposioFetcher` at registration time, tests pass a mock that
  * returns canned Composio shapes.
  */
+import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import * as db from '../../db.js';
 import * as raw from '../../raw-db.js';
 import {
@@ -19,6 +20,11 @@ import {
   getComposioUserId,
 } from '../../shared/composio-key.js';
 import type { TaskHandler, TaskHandlerResult } from '../scheduler.js';
+import {
+  runConnectorEvolve,
+  type AgentRunFn,
+  type ConnectorEvolveResult,
+} from './connector-evolve.js';
 
 const COMPOSIO_API_BASE = 'https://backend.composio.dev/api/v3';
 
@@ -54,6 +60,20 @@ export interface ConnectorInitDeps {
   fetcher?: ComposioFetcher;
   /** Test override for the Composio user_id. */
   userId?: string;
+  /**
+   * OpenClaw plugin API — used by the Phase B.1 evolve stage to spawn the
+   * fact-extraction subagent. When omitted (Phase B v0 behavior), the
+   * evolve stage opens + completes the evolution_run with refs but does
+   * NOT call any LLM.
+   */
+  api?: OpenClawPluginApi;
+  /** Timeout for the evolve agent call. Default 60_000 ms. */
+  evolveTimeoutMs?: number;
+  /**
+   * Test hook: skip the runAgent path entirely and use this canned LLM
+   * adapter instead. Wins over `api` when both are set.
+   */
+  evolveAgentRun?: AgentRunFn;
 }
 
 export interface ConnectorInitResult {
@@ -62,6 +82,10 @@ export interface ConnectorInitResult {
   rawIgnored: number;
   signalsInserted: number;
   evolutionRunId: string | null;
+  /** Phase B.1: count of memory rows extracted by the evolve agent. */
+  memoriesWritten: number;
+  /** Phase B.1: when set, evolve called LLM but it failed; raw + signals are still valid. */
+  evolveError?: string;
   reason?: string;
 }
 
@@ -180,6 +204,7 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
     }
 
     let evolutionRunId: string | null = null;
+    let evolveResult: ConnectorEvolveResult | null = null;
     try {
       const evo = await db.createEvolutionRun({
         triggerKind: 'on_event',
@@ -195,10 +220,35 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
       if (signalsRes.ids.length > 0) {
         await db.recordEvolutionRefsConsumed(evo.id, 'personal_signals', signalsRes.ids);
       }
-      // No memory/profile/skill writes yet — evolution agent will pick this
-      // run up in Phase B.1. We still mark it completed so it doesn't sit
-      // 'running' forever; refs_consumed is the breadcrumb downstream needs.
-      await db.completeEvolutionRun(evo.id);
+
+      // Phase B.1: evolve. If the caller wired an LLM (api or test agentRun),
+      // run the fact-extraction pass; otherwise leave evolution_run empty.
+      // Either way, the run is marked completed at the end so it doesn't
+      // sit 'running' forever.
+      if (deps.api || deps.evolveAgentRun) {
+        evolveResult = await runConnectorEvolve(
+          {
+            toolkit: toolkit as 'gmail' | 'googlecalendar',
+            evolutionRunId: evo.id,
+            gmail: typedItems.gmail,
+            gcal: typedItems.gcal,
+          },
+          {
+            api: deps.api,
+            agentRun: deps.evolveAgentRun,
+            timeoutMs: deps.evolveTimeoutMs,
+            logger: ctx.logger,
+          },
+        );
+      }
+
+      if (evolveResult?.llmFailed) {
+        await db.failEvolutionRun(evo.id, evolveResult.llmError ?? 'evolve agent failed');
+      } else {
+        await db.completeEvolutionRun(evo.id, {
+          durationMs: evolveResult?.durationMs,
+        });
+      }
     } catch (err) {
       // Evolution bookkeeping failure shouldn't undo the raw + signals
       // writes (those have idempotency on dedupe_key). Log via task error
@@ -213,6 +263,10 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
       rawIgnored,
       signalsInserted: signalsRes.inserted,
       evolutionRunId,
+      memoriesWritten: evolveResult?.memoriesWritten ?? 0,
+      ...(evolveResult?.llmFailed && evolveResult.llmError
+        ? { evolveError: evolveResult.llmError }
+        : {}),
       reason: payload.reason,
     };
     return { status: 'succeeded', result: result as unknown as Record<string, unknown> };

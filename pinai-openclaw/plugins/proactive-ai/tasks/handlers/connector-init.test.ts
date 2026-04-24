@@ -456,3 +456,113 @@ test('Composio response wrapped at unusual nesting (data.response_data.messages)
     assert.equal(result?.rawInserted, 1);
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// Phase B.1 — evolve hook wiring (LLM injected via deps.evolveAgentRun)
+// ──────────────────────────────────────────────────────────────────────
+
+test('evolve enabled: LLM extracts 2 memories → result.memoriesWritten=2, evolution_run completed with delta', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'evolve-happy',
+      payload: { toolkit: 'gmail', connectedAccountId: 'acc-e1', limit: 3 },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/GMAIL_FETCH_EMAILS': () => ({
+        messages: [
+          gmailMessage({ id: 'e1', from: 'pm@anthropic.com', subject: 'Sprint planning notes' }),
+          gmailMessage({ id: 'e2', from: 'tech-lead@anthropic.com', subject: 'PR feedback for Claude Code' }),
+        ],
+      }),
+    });
+    const evolveAgentRun = async () => '```json\n' + JSON.stringify({
+      memories: [
+        { text: 'User collaborates with Anthropic team on Claude Code', subject: 'work:project', quality: 0.7, confidence: 0.85 },
+        { text: 'Frequent contact: pm@anthropic.com', subject: 'person:pm-anthropic', quality: 0.6, confidence: 0.8 },
+      ],
+    }) + '\n```';
+
+    const scheduler = new BackgroundTaskScheduler({ workerId: 't', leaseDurationMs: 60_000 });
+    scheduler.registerHandler('connector.init', createConnectorInitHandler({
+      fetcher, evolveAgentRun,
+    }));
+    await scheduler.tick();
+
+    const tasks = await import('../../db.ts').then((m) => m.listBackgroundTasks({ type: 'connector.init', limit: 5 }));
+    const task = tasks[0]!;
+    assert.equal(task.status, 'succeeded');
+    const result = task.result as unknown as ConnectorInitResult;
+    assert.equal(result.memoriesWritten, 2);
+    assert.ok(result.evolutionRunId);
+
+    const evo = await import('../../db.ts').then((m) => m.getEvolutionRun(result.evolutionRunId!));
+    assert.equal(evo!.status, 'completed');
+    assert.equal(evo!.memories_written, 2);
+    assert.equal(evo!.refs_produced.memory.length, 2);
+  });
+});
+
+test('evolve enabled but LLM throws: connector.init still succeeds, evolution_run is failed (not completed), raw + signals preserved', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'evolve-llm-fail',
+      payload: { toolkit: 'gmail', connectedAccountId: 'acc-ef' },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/GMAIL_FETCH_EMAILS': () => ({
+        messages: [gmailMessage({ id: 'f1', subject: 'Test' })],
+      }),
+    });
+    const evolveAgentRun = async () => { throw new Error('Subagent timeout after 60s'); };
+
+    const scheduler = new BackgroundTaskScheduler({ workerId: 't' });
+    scheduler.registerHandler('connector.init', createConnectorInitHandler({
+      fetcher, evolveAgentRun,
+    }));
+    await scheduler.tick();
+
+    const tasks = await import('../../db.ts').then((m) => m.listBackgroundTasks({ type: 'connector.init', limit: 5 }));
+    const task = tasks[0]!;
+    assert.equal(task.status, 'succeeded'); // raw + signals are valid → task succeeds
+    const result = task.result as unknown as ConnectorInitResult;
+    assert.equal(result.rawInserted, 1);
+    assert.equal(result.memoriesWritten, 0);
+    assert.match(result.evolveError ?? '', /Subagent timeout/);
+
+    const evo = await import('../../db.ts').then((m) => m.getEvolutionRun(result.evolutionRunId!));
+    assert.equal(evo!.status, 'failed');
+    assert.match(evo!.error_message ?? '', /Subagent timeout/);
+
+    // Raw row + personal_signal still present
+    const { listGmailMessages } = await import('../../raw-db.ts');
+    assert.equal(listGmailMessages({ limit: 10 }).length, 1);
+    const sigs = await import('../../db.ts').then((m) => m.listPersonalSignals({ kind: 'connector.gmail.message', limit: 10 }));
+    assert.equal(sigs.length, 1);
+  });
+});
+
+test('evolve disabled (no api, no agentRun): existing Phase B v0 behavior preserved (memoriesWritten=0)', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'evolve-off',
+      payload: { toolkit: 'gmail', connectedAccountId: 'acc-off' },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/GMAIL_FETCH_EMAILS': () => ({
+        messages: [gmailMessage({ id: 'o1', subject: 'X' })],
+      }),
+    });
+    // Note: no evolveAgentRun, no api
+    const { task, result } = await runOneTick({ fetcher });
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.memoriesWritten, 0);
+    assert.equal(result?.evolveError, undefined);
+
+    const evo = await import('../../db.ts').then((m) => m.getEvolutionRun(result!.evolutionRunId!));
+    assert.equal(evo!.status, 'completed');  // marked completed even without LLM
+    assert.equal(evo!.memories_written, 0);
+  });
+});
