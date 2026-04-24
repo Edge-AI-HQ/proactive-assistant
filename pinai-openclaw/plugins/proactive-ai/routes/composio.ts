@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { RouteHandler } from './types.js';
 import { json, readBody } from './types.js';
+import * as db from '../db.js';
 
 const COMPOSIO_API_BASE = 'https://backend.composio.dev/api/v3';
 const KEY_FILE = '/app/data/composio-api-key';
@@ -59,6 +60,39 @@ async function composioApi(apiKey: string, path: string, init?: RequestInit): Pr
   const data = text.trim() ? JSON.parse(text) : {};
   if (!response.ok) throw new Error(`Composio API ${response.status}: ${data.message ?? data.error ?? text.slice(0, 200)}`);
   return data;
+}
+
+/**
+ * Enqueue a connector.init task on first ACTIVE detection. Returns null
+ * (no task) when the scheduler is disabled, when toolkit is missing, or
+ * when enqueue itself fails — /wait must not break for an init plumbing
+ * issue. Idempotency on the task key means /wait can be re-fired safely.
+ *
+ * Phase B: gated by BACKGROUND_AUTO_LOOP_TASKS_ENABLED. When it's off,
+ * /composio/wait keeps its old behavior (no initTaskId field in response).
+ *
+ * Exported for tests; production callers go through /composio/wait.
+ */
+export async function maybeEnqueueConnectorInit(
+  toolkit: string,
+  connectedAccountId: string,
+): Promise<string | null> {
+  if (process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED !== '1') return null;
+  if (!toolkit || !connectedAccountId) return null;
+  const limit = Number(process.env.CONNECTOR_INIT_DEFAULT_LIMIT ?? 100);
+  try {
+    const result = await db.enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: `connector.init:${toolkit}:${connectedAccountId}:v1`,
+      payload: { toolkit, connectedAccountId, limit, reason: 'composio_wait' },
+      priority: 50,
+      maxAttempts: 3,
+    });
+    return result.task.id;
+  } catch {
+    // Don't fail /wait — the reconciler will pick it up on the next sweep.
+    return null;
+  }
 }
 
 /** Read Composio API key: file takes priority over env var. */
@@ -190,7 +224,16 @@ export function handleComposio(): RouteHandler {
           try {
             const account = await composioApi(apiKey, `/connected_accounts/${encodeURIComponent(connectedAccountId)}`);
             if ((account.status ?? '').toUpperCase() === 'ACTIVE') {
-              json(ctx.res, 200, { status: 'ACTIVE', connectedAccountId });
+              // On ACTIVE detection, enqueue connector.init for the toolkit.
+              // The scheduler (when enabled) picks this up to backfill data.
+              // Do NOT block /wait on the init task — return the task id and
+              // let the frontend poll separately. Idempotency means this is
+              // safe to call repeatedly across page reloads / multiple waits.
+              const toolkit = String(
+                account?.toolkit?.slug ?? account?.toolkit ?? body['toolkit'] ?? '',
+              ).trim().toLowerCase();
+              const initTaskId = await maybeEnqueueConnectorInit(toolkit, connectedAccountId);
+              json(ctx.res, 200, { status: 'ACTIVE', connectedAccountId, ...(initTaskId ? { initTaskId } : {}) });
               return true;
             }
           } catch { /* account may not exist yet — keep polling */ }

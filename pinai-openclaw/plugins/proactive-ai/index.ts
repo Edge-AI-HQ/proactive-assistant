@@ -12,6 +12,8 @@ import { registerBrowserTool } from './browser/tool.js';
 import { startAutoLoop, type AutoLoopConfig } from './scheduler/auto-loop.js';
 import { sweepStaleRunningDreams } from './dreaming/store.js';
 import { BackgroundTaskScheduler } from './tasks/scheduler.js';
+import { createConnectorInitHandler } from './tasks/handlers/connector-init.js';
+import { reconcileActiveConnectorAccounts } from './tasks/reconciler.js';
 import * as db from './db.js';
 
 const DEFAULT_CONFIG: PluginConfig = {
@@ -56,6 +58,7 @@ let initialized = false;
 let profileSeeded = false;
 let autoLoopStarted = false;
 let bgTaskScheduler: BackgroundTaskScheduler | null = null;
+let reconcilerTimer: ReturnType<typeof setInterval> | null = null;
 
 const plugin = {
   id: 'proactive-ai-cloud',
@@ -148,12 +151,12 @@ const plugin = {
       }, 10_000);
     }
 
-    // Background task scheduler — Phase A: dormant by default. The plugin
-    // creates the scheduler instance only when explicitly opted in via
-    // BACKGROUND_AUTO_LOOP_TASKS_ENABLED, so the existing setInterval-based
-    // auto-loop above keeps running unchanged. Phase B will register a
-    // connector.init handler and Phase C will move auto.dreaming over.
-    // See docs/plans/2026-04-24-data-connector-init-tasks.mdx (Phase A).
+    // Background task scheduler — Phase A built the queue, Phase B wires
+    // connector.init for Gmail + GCal. Still gated by
+    // BACKGROUND_AUTO_LOOP_TASKS_ENABLED so the existing setInterval-based
+    // auto-loop above keeps running unchanged for users / envs that haven't
+    // opted in. Phase C will move auto.dreaming over.
+    // See docs/plans/2026-04-24-data-connector-init-tasks.mdx.
     if (!bgTaskScheduler && process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED === '1') {
       const workerId = `${process.env.HOSTNAME ?? 'host'}:${process.pid}:${userId.slice(0, 8)}`;
       bgTaskScheduler = new BackgroundTaskScheduler({
@@ -166,10 +169,37 @@ const plugin = {
           error: (msg) => api.logger.error(msg),
         },
       });
-      // No handlers wired yet — scheduler will tick + reap but never claim
-      // anything. Verifies the plumbing is alive without changing behavior.
+      // Phase B: register connector.init handler. Production handler resolves
+      // its Composio fetcher lazily from requireComposioApiKey() on first use.
+      bgTaskScheduler.registerHandler('connector.init', createConnectorInitHandler({}));
       bgTaskScheduler.start();
-      api.logger.info(`[bg-tasks] scheduler started (worker=${workerId})`);
+      api.logger.info(`[bg-tasks] scheduler started (worker=${workerId}, handlers=connector.init)`);
+
+      // Reconciler: scan ACTIVE Composio connections on a slow loop so that
+      // users who close the OAuth tab (and never trigger /composio/wait) still
+      // get their data initialized. The reconciler only ENQUEUES tasks; the
+      // scheduler above runs them. See tasks/reconciler.ts.
+      const reconcilerIntervalMs = Number(
+        process.env.CONNECTOR_INIT_RECONCILER_INTERVAL_MS ?? 600_000,  // 10min
+      );
+      const runReconciler = () => {
+        reconcileActiveConnectorAccounts({}).then((report) => {
+          if (report.failed) {
+            api.logger.warn(`[reconciler] sweep failed: ${report.failedReason}`);
+          } else if (report.enqueued > 0 || report.invalid > 0) {
+            api.logger.info(
+              `[reconciler] scanned=${report.scanned} enqueued=${report.enqueued} alreadyHandled=${report.alreadyHandled} invalid=${report.invalid}`,
+            );
+          }
+        }).catch((err) => {
+          api.logger.error(`[reconciler] threw: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      };
+      // Don't run at boot — wait one interval so we don't pile a Composio
+      // call on top of the cold-start sequence.
+      reconcilerTimer = setInterval(runReconciler, reconcilerIntervalMs);
+      if (typeof reconcilerTimer.unref === 'function') reconcilerTimer.unref();
+      api.logger.info(`[reconciler] scheduled every ${Math.round(reconcilerIntervalMs / 1000)}s`);
     }
 
     api.logger.info(`Proactive AI Cloud ready (user=${userId.slice(0, 8)}…, routes: /proactive-ai/*)`);

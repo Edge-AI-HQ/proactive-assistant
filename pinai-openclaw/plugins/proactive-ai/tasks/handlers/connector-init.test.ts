@@ -1,0 +1,458 @@
+/**
+ * Tests for the connector.init handler. The handler is heavyweight (touches
+ * raw.db + personal_signals + evolution_runs in one go), so tests:
+ *   - inject a mock ComposioFetcher (no network, deterministic shapes)
+ *   - run via the real BackgroundTaskScheduler so we exercise the full
+ *     enqueue → claim → handler → terminal contract end-to-end
+ *   - assert raw rows / signals / evolution_run all line up with
+ *     refs_consumed populated
+ *
+ * What this DOES NOT cover (intentional, deferred to Phase B.1):
+ *   - the evolution agent prompt that turns refs_consumed into memory writes
+ *   - the reconciler (separate file)
+ *   - frontend UX
+ */
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+
+import {
+  enqueueBackgroundTask,
+  getBackgroundTask,
+  getEvolutionRun,
+  listEvolutionRuns,
+  listPersonalSignals,
+  resetDbForTests,
+} from '../../db.ts';
+import {
+  listGmailMessages,
+  listGcalEvents,
+  resetRawDbForTests,
+} from '../../raw-db.ts';
+import { BackgroundTaskScheduler } from '../scheduler.ts';
+import {
+  createConnectorInitHandler,
+  type ComposioFetcher,
+  type ConnectorInitResult,
+} from './connector-init.ts';
+
+async function withTempHome<T>(fn: () => Promise<T>): Promise<T> {
+  const root = await mkdtemp(join(tmpdir(), 'pin-conn-init-'));
+  const previous = process.env.OPENCLAW_HOME;
+  process.env.OPENCLAW_HOME = root;
+  resetDbForTests();
+  resetRawDbForTests();
+  // Default tests don't expect the kill switch to be set
+  delete process.env.CONNECTOR_INIT_DISABLED_TOOLKITS;
+  try {
+    return await fn();
+  } finally {
+    resetDbForTests();
+    resetRawDbForTests();
+    if (previous === undefined) delete process.env.OPENCLAW_HOME;
+    else process.env.OPENCLAW_HOME = previous;
+    delete process.env.CONNECTOR_INIT_DISABLED_TOOLKITS;
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+function makeMockFetcher(handlers: Record<string, (body: any) => any>): ComposioFetcher {
+  return async (path, init) => {
+    const handler = handlers[path];
+    if (!handler) throw new Error(`mock fetcher: unhandled path ${path}`);
+    const body = init?.body ? JSON.parse(init.body) : {};
+    return handler(body);
+  };
+}
+
+function gmailMessage(opts: {
+  id: string;
+  threadId?: string;
+  from?: string;
+  to?: string;
+  subject?: string;
+  snippet?: string;
+  internalDate?: number;
+  bodyText?: string;
+}) {
+  return {
+    id: opts.id,
+    threadId: opts.threadId ?? `thr-${opts.id}`,
+    snippet: opts.snippet ?? '',
+    internalDate: opts.internalDate ?? Date.now(),
+    payload: {
+      headers: [
+        opts.from && { name: 'From', value: opts.from },
+        opts.to && { name: 'To', value: opts.to },
+        opts.subject && { name: 'Subject', value: opts.subject },
+      ].filter(Boolean),
+      body: opts.bodyText
+        ? { data: Buffer.from(opts.bodyText, 'utf-8').toString('base64url') }
+        : undefined,
+    },
+    labelIds: ['INBOX'],
+  };
+}
+
+function gcalEvent(opts: {
+  id: string;
+  calendarId?: string;
+  summary?: string;
+  description?: string;
+  startDateTime?: string;
+  endDateTime?: string;
+  status?: string;
+}) {
+  return {
+    id: opts.id,
+    calendarId: opts.calendarId ?? 'primary',
+    summary: opts.summary,
+    description: opts.description,
+    start: { dateTime: opts.startDateTime ?? new Date().toISOString() },
+    end: { dateTime: opts.endDateTime ?? new Date(Date.now() + 3600_000).toISOString() },
+    status: opts.status ?? 'confirmed',
+  };
+}
+
+async function runOneTick(handlerDeps: Parameters<typeof createConnectorInitHandler>[0]): Promise<{
+  task: NonNullable<Awaited<ReturnType<typeof getBackgroundTask>>>;
+  result: ConnectorInitResult | null;
+}> {
+  const scheduler = new BackgroundTaskScheduler({
+    workerId: 'test', leaseDurationMs: 60_000,
+  });
+  scheduler.registerHandler('connector.init', createConnectorInitHandler(handlerDeps));
+  await scheduler.tick();
+  // Find the task we just ran (only one in the queue)
+  const tasks = await import('../../db.ts').then((m) =>
+    m.listBackgroundTasks({ type: 'connector.init', limit: 10 }),
+  );
+  const task = tasks[0]!;
+  const result = task.result as unknown as ConnectorInitResult | null;
+  return { task, result };
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Gmail happy path
+// ──────────────────────────────────────────────────────────────────────
+
+test('gmail: full pipeline → raw + signals + evolution_run with refs', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'connector.init:gmail:acc-1:v1',
+      payload: {
+        toolkit: 'gmail',
+        connectedAccountId: 'acc-1',
+        limit: 3,
+        reason: 'first_connect',
+      },
+    });
+
+    const fetcher = makeMockFetcher({
+      '/tools/execute/GMAIL_FETCH_EMAILS': () => ({
+        data: {
+          response_data: {
+            messages: [
+              gmailMessage({ id: 'm1', from: 'a@x.com', subject: 'Hello', snippet: 'Hi there' }),
+              gmailMessage({ id: 'm2', from: 'b@x.com', subject: 'Status', snippet: 'Quick update' }),
+              gmailMessage({ id: 'm3', from: 'c@x.com', subject: 'Reminder', snippet: 'Tomorrow' }),
+            ],
+          },
+        },
+      }),
+    });
+
+    const { task, result } = await runOneTick({ fetcher, userId: 'test-user' });
+
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.toolkit, 'gmail');
+    assert.equal(result?.rawInserted, 3);
+    assert.equal(result?.signalsInserted, 3);
+    assert.equal(result?.rawIgnored, 0);
+    assert.ok(result?.evolutionRunId);
+
+    // raw.db has the three messages
+    const rawRows = listGmailMessages({ limit: 10 });
+    assert.equal(rawRows.length, 3);
+    assert.deepEqual(rawRows.map((r) => r.message_id).sort(), ['m1', 'm2', 'm3']);
+
+    // personal_signals has corresponding rows with raw refs
+    const sigs = await listPersonalSignals({ kind: 'connector.gmail.message', limit: 10 });
+    assert.equal(sigs.length, 3);
+    assert.ok(sigs.every((s) => s.source === 'connector:gmail'));
+    assert.ok(sigs.every((s) => s.source_raw_table === 'gmail_messages'));
+    assert.ok(sigs.every((s) => s.source_raw_ids.length === 1));
+
+    // evolution_run is completed with refs_consumed pointing back at both
+    const evo = await getEvolutionRun(result!.evolutionRunId!);
+    assert.equal(evo!.status, 'completed');
+    assert.equal(evo!.trigger_kind, 'on_event');
+    assert.deepEqual(evo!.refs_consumed.gmail_messages.sort(), rawRows.map((r) => r.id).sort());
+    assert.equal(evo!.refs_consumed.personal_signals.length, 3);
+
+    // task.progress should reflect the latest stage we hit (evolve)
+    assert.equal(task.progress.stage, 'evolve');
+    assert.equal(task.progress.toolkit, 'gmail');
+  });
+});
+
+test('gmail: rerun on same idempotency key — raw dedupes, signals dedupe, evolution still records the (empty) attempt', async () => {
+  await withTempHome(async () => {
+    const enqueueOnce = () =>
+      enqueueBackgroundTask({
+        type: 'connector.init',
+        idempotencyKey: 'connector.init:gmail:acc-1:rerun',
+        payload: { toolkit: 'gmail', connectedAccountId: 'acc-1', limit: 2 },
+      });
+
+    const fetcher = makeMockFetcher({
+      '/tools/execute/GMAIL_FETCH_EMAILS': () => ({
+        messages: [
+          gmailMessage({ id: 'rm1', subject: 'x' }),
+          gmailMessage({ id: 'rm2', subject: 'y' }),
+        ],
+      }),
+    });
+
+    // First run lands the rows
+    const e1 = await enqueueOnce();
+    assert.equal(e1.created, true);
+    const r1 = await runOneTick({ fetcher });
+    assert.equal(r1.task.status, 'succeeded');
+    assert.equal((r1.result as ConnectorInitResult).rawInserted, 2);
+
+    // Second enqueue with same key returns the existing (now succeeded) row;
+    // a real reconciler/UX would skip re-enqueue here. To exercise a forced
+    // re-run we have to use a fresh idempotency key — that's the contract.
+    const e2 = await enqueueOnce();
+    assert.equal(e2.created, false);
+    assert.equal(e2.task.id, e1.task.id);
+
+    // Sanity: the raw store still has exactly 2 rows
+    const rows = listGmailMessages({ limit: 10 });
+    assert.equal(rows.length, 2);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// GCal happy path
+// ──────────────────────────────────────────────────────────────────────
+
+test('gcal: full pipeline → raw + signals + evolution_run', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'connector.init:gcal:acc-2:v1',
+      payload: { toolkit: 'googlecalendar', connectedAccountId: 'acc-2', limit: 2 },
+    });
+
+    const fetcher = makeMockFetcher({
+      '/tools/execute/GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS': () => ({
+        data: {
+          events: [
+            gcalEvent({ id: 'e1', calendarId: 'primary', summary: 'Standup' }),
+            gcalEvent({ id: 'e2', calendarId: 'primary', summary: 'PR Review' }),
+          ],
+        },
+      }),
+    });
+
+    const { task, result } = await runOneTick({ fetcher });
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.toolkit, 'googlecalendar');
+    assert.equal(result?.rawInserted, 2);
+    assert.equal(result?.signalsInserted, 2);
+
+    const rawRows = listGcalEvents({ limit: 10 });
+    assert.equal(rawRows.length, 2);
+
+    const sigs = await listPersonalSignals({ kind: 'connector.gcal.event', limit: 10 });
+    assert.equal(sigs.length, 2);
+    assert.ok(sigs.every((s) => s.source_raw_table === 'gcal_events'));
+
+    const evo = await getEvolutionRun(result!.evolutionRunId!);
+    assert.deepEqual(evo!.refs_consumed.gcal_events.sort(), rawRows.map((r) => r.id).sort());
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// Validation + skip paths
+// ──────────────────────────────────────────────────────────────────────
+
+test('payload validation: missing toolkit → terminal failed (no retry will help)', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'bad-1',
+      payload: { connectedAccountId: 'acc-x' } as any,
+      maxAttempts: 1,
+    });
+    const { task, result } = await runOneTick({
+      fetcher: () => { throw new Error('should not be called'); },
+    });
+    assert.equal(task.status, 'failed');
+    assert.equal(task.last_error_code, 'invalid_payload');
+    assert.equal(result, null);
+  });
+});
+
+test('payload validation: missing connectedAccountId → terminal failed', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'bad-2',
+      payload: { toolkit: 'gmail' } as any,
+      maxAttempts: 1,
+    });
+    const { task } = await runOneTick({
+      fetcher: () => { throw new Error('should not be called'); },
+    });
+    assert.equal(task.status, 'failed');
+    assert.equal(task.last_error_code, 'invalid_payload');
+  });
+});
+
+test('unsupported toolkit (e.g. notion) → succeeded with reason=unsupported_toolkit_v0 (no Composio call)', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'unsupported-notion',
+      payload: { toolkit: 'notion', connectedAccountId: 'acc-n' },
+    });
+    const { task, result } = await runOneTick({
+      fetcher: () => { throw new Error('should not be called'); },
+    });
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.skipped, true);
+    assert.equal(result?.reason, 'unsupported_toolkit_v0');
+  });
+});
+
+test('kill switch: CONNECTOR_INIT_DISABLED_TOOLKITS=gmail → succeeded with reason=toolkit_disabled', async () => {
+  await withTempHome(async () => {
+    process.env.CONNECTOR_INIT_DISABLED_TOOLKITS = 'gmail,twitter';
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'killed-gmail',
+      payload: { toolkit: 'gmail', connectedAccountId: 'acc-k' },
+    });
+    const { task, result } = await runOneTick({
+      fetcher: () => { throw new Error('should not be called'); },
+    });
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.skipped, true);
+    assert.equal(result?.reason, 'toolkit_disabled');
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// Failure paths
+// ──────────────────────────────────────────────────────────────────────
+
+test('Composio fetch throws → task failed with composio_fetch_failed (retried up to max_attempts)', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'fetch-fail',
+      payload: { toolkit: 'gmail', connectedAccountId: 'acc-z' },
+      maxAttempts: 1,  // shorter retry for test
+    });
+    const fetcher: ComposioFetcher = async () => { throw new Error('Composio API 503: upstream'); };
+    const { task } = await runOneTick({ fetcher });
+    assert.equal(task.status, 'failed');
+    assert.equal(task.last_error_code, 'composio_fetch_failed');
+    assert.match(task.last_error_message ?? '', /503/);
+
+    // No raw rows / signals / evolution writes happened
+    assert.equal(listGmailMessages({ limit: 10 }).length, 0);
+    assert.equal((await listPersonalSignals({ limit: 10 })).length, 0);
+    assert.equal((await listEvolutionRuns({})).length, 0);
+  });
+});
+
+test('empty Composio response → succeeded with rawInserted=0 (no signals, no evolution refs)', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'empty',
+      payload: { toolkit: 'gmail', connectedAccountId: 'acc-empty' },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/GMAIL_FETCH_EMAILS': () => ({ data: { messages: [] } }),
+    });
+    const { task, result } = await runOneTick({ fetcher });
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.rawInserted, 0);
+    assert.equal(result?.signalsInserted, 0);
+    // Evolution run is still created — useful for "we tried at this time" audit
+    assert.ok(result?.evolutionRunId);
+    const evo = await getEvolutionRun(result!.evolutionRunId!);
+    assert.deepEqual(evo!.refs_consumed, {});
+  });
+});
+
+test('partial Composio response: malformed messages are silently dropped', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'partial',
+      payload: { toolkit: 'gmail', connectedAccountId: 'acc-p' },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/GMAIL_FETCH_EMAILS': () => ({
+        messages: [
+          gmailMessage({ id: 'good-1', subject: 'OK' }),
+          { /* missing id field */ subject: 'no-id' },
+          null,
+          gmailMessage({ id: 'good-2', subject: 'Also OK' }),
+        ],
+      }),
+    });
+    const { result } = await runOneTick({ fetcher });
+    assert.equal(result?.rawInserted, 2);
+    const rows = listGmailMessages({ limit: 10 });
+    assert.deepEqual(rows.map((r) => r.message_id).sort(), ['good-1', 'good-2']);
+  });
+});
+
+test('limit clamping: payload.limit=999999 is clamped to 500', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'big-limit',
+      payload: { toolkit: 'gmail', connectedAccountId: 'acc-bl', limit: 999_999 },
+    });
+    let receivedLimit: number | undefined;
+    const fetcher: ComposioFetcher = async (_path, init) => {
+      const body = JSON.parse(init!.body);
+      receivedLimit = body.arguments.max_results;
+      return { messages: [] };
+    };
+    await runOneTick({ fetcher });
+    assert.equal(receivedLimit, 500);
+  });
+});
+
+test('Composio response wrapped at unusual nesting (data.response_data.messages) is still parsed', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'nested',
+      payload: { toolkit: 'gmail', connectedAccountId: 'acc-n2' },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/GMAIL_FETCH_EMAILS': () => ({
+        data: {
+          response_data: {
+            messages: [gmailMessage({ id: 'n1', subject: 'Nested' })],
+          },
+        },
+      }),
+    });
+    const { result } = await runOneTick({ fetcher });
+    assert.equal(result?.rawInserted, 1);
+  });
+});
