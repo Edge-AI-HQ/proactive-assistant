@@ -1,8 +1,11 @@
-import { readFileSync } from 'node:fs';
 import { parseArgs, success, failure, readJsonFlag, readLimitFlag } from './shared.js';
+import {
+  resolveComposioApiKey,
+  requireComposioApiKey,
+  getComposioUserId,
+} from '../shared/composio-key.js';
 
 const COMPOSIO_API_BASE = 'https://backend.composio.dev/api/v3';
-const DEFAULT_KEY_FILE = '/app/data/composio-api-key';
 
 async function composioApi(apiKey: string, path: string, init?: RequestInit): Promise<Record<string, any>> {
   const response = await fetch(`${COMPOSIO_API_BASE}${path}`, {
@@ -15,26 +18,10 @@ async function composioApi(apiKey: string, path: string, init?: RequestInit): Pr
   return data;
 }
 
-/** Read Composio API key: file takes priority over env var. */
-export function resolveApiKey(): { key: string; source: 'user' | 'env' } | null {
-  try {
-    const fileKey = readFileSync(process.env.COMPOSIO_API_KEY_FILE ?? DEFAULT_KEY_FILE, 'utf-8').trim();
-    if (fileKey) return { key: fileKey, source: 'user' };
-  } catch { /* file not found — fall through */ }
-  const envKey = process.env.COMPOSIO_API_KEY?.trim();
-  if (envKey) return { key: envKey, source: 'env' };
-  return null;
-}
-
-function getApiKey(): string {
-  const resolved = resolveApiKey();
-  if (!resolved) throw new Error('COMPOSIO_API_KEY is not configured');
-  return resolved.key;
-}
-
-function getComposioUserId(): string {
-  return process.env.COMPOSIO_USER_ID?.trim() || process.env.PROACTIVE_USER_ID || 'default';
-}
+// Re-exported so existing callers (cli/sys.ts) keep working without churn.
+// New code should import from shared/composio-key.ts directly.
+export const resolveApiKey = resolveComposioApiKey;
+const getApiKey = requireComposioApiKey;
 
 export async function handlePersonal(args: string[]): Promise<string> {
   const { positional, flags } = parseArgs(args);

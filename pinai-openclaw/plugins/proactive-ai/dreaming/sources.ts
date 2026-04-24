@@ -5,6 +5,7 @@
 
 import type { DreamSourceResult } from './types.js';
 import * as db from '../db.js';
+import { requireComposioApiKey, getComposioUserId as sharedGetUserId } from '../shared/composio-key.js';
 
 // ── Constants ──
 
@@ -63,15 +64,11 @@ interface PersonalToolSchema { parameters?: Record<string, unknown>; }
 interface DynamicPersonalToolCandidate { slug: string; description: string | null; schema: PersonalToolSchema | null; score: number; }
 interface ExecutedPersonalToolRun { slug: string; description: string | null; args: Record<string, unknown>; itemCount: number; payload: unknown; }
 
-function getComposioApiKey(): string {
-  const key = process.env.COMPOSIO_API_KEY?.trim();
-  if (!key) throw new Error('COMPOSIO_API_KEY is not configured');
-  return key;
-}
-
-function getComposioUserId(): string {
-  return process.env.COMPOSIO_USER_ID?.trim() || process.env.PROACTIVE_USER_ID || 'default';
-}
+// Composio API key + user id resolution lives in shared/composio-key.ts so
+// the CLI and the dreaming agent agree on the same lookup order
+// (file → env). See its module doc for why.
+const getComposioApiKey = requireComposioApiKey;
+const getComposioUserId = sharedGetUserId;
 
 async function composioApi(apiKey: string, path: string, init?: RequestInit): Promise<Record<string, any>> {
   const response = await fetch(`${COMPOSIO_API_BASE}${path}`, {

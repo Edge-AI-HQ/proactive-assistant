@@ -35,7 +35,8 @@ run "[1/3] schema + helper" \
   db.intent-state.test.ts \
   db.card-evaluations.test.ts \
   db.pipeline-artifact.test.ts \
-  raw-db.test.ts
+  raw-db.test.ts \
+  shared/composio-key.test.ts
 
 # ─── 2. 迁移回放：v2 → v3 兼容硬保证 ──────────────────────────────────────
 # 每个文件先 CREATE 出 v2 旧表 + 灌入旧数据，再让 openProactiveDb() 跑迁移，
