@@ -377,6 +377,100 @@ function ensureSchema(db: Database.Database): void {
     -- skills/<id>/SKILL.md by migrateLegacyToV3 and the legacy table is
     -- dropped. addUserSkill/listUserSkills/getUserSkill now adapt to the
     -- v3 skill_index while preserving the old UserSkillRow shape.
+
+    -- ─────── background_tasks: durable task queue with lease/heartbeat ───────
+    -- See docs/plans/2026-04-24-data-connector-init-tasks.mdx (Phase A).
+    -- Single-process scheduler claims due tasks atomically; long-running
+    -- handlers (connector init, evolution agent) extend their lease via
+    -- heartbeat. Stale leases (handler crashed, container recycled) are
+    -- recovered on next tick — see recoverStaleBackgroundTasks.
+    --
+    -- We deliberately omit a scheduler_locks table from Phase A: this plugin
+    -- runs single-process per user container, so an in-memory mutex around
+    -- tick() is enough. Re-add a SQL lock if/when we go multi-worker.
+    CREATE TABLE IF NOT EXISTS background_tasks (
+      id                 TEXT PRIMARY KEY,
+      type               TEXT NOT NULL,
+      status             TEXT NOT NULL DEFAULT 'queued'
+                         CHECK (status IN
+                           ('queued','running','succeeded','failed',
+                            'timed_out','cancelled','lost','skipped')),
+      priority           INTEGER NOT NULL DEFAULT 50,
+      run_after          TEXT NOT NULL,
+      idempotency_key    TEXT NOT NULL UNIQUE,
+      payload_json       TEXT NOT NULL DEFAULT '{}',
+      progress_json      TEXT NOT NULL DEFAULT '{}',
+      result_json        TEXT,
+      attempts           INTEGER NOT NULL DEFAULT 0,
+      max_attempts       INTEGER NOT NULL DEFAULT 3,
+      lease_owner        TEXT,
+      lease_token        TEXT,
+      lease_expires_at   TEXT,
+      heartbeat_at       TEXT,
+      last_error_code    TEXT,
+      last_error_message TEXT,
+      created_at         TEXT NOT NULL,
+      updated_at         TEXT NOT NULL,
+      started_at         TEXT,
+      completed_at       TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_background_tasks_due
+      ON background_tasks(status, run_after, priority, created_at);
+    CREATE INDEX IF NOT EXISTS idx_background_tasks_lease
+      ON background_tasks(status, lease_expires_at);
+    CREATE INDEX IF NOT EXISTS idx_background_tasks_type_created
+      ON background_tasks(type, created_at DESC);
+
+    -- ─────── background_task_schedules: recurring-job definitions ───────
+    -- Hermes-style "jobs.json" rows. The scheduler tick materializes due
+    -- schedules into background_tasks (one task per due window, dedup'd by
+    -- the rendered idempotency_key). NOT itself a runtime — it only
+    -- decides "should we enqueue another instance?".
+    CREATE TABLE IF NOT EXISTS background_task_schedules (
+      id                       TEXT PRIMARY KEY,
+      type                     TEXT NOT NULL,
+      enabled                  INTEGER NOT NULL DEFAULT 1,
+      schedule_kind            TEXT NOT NULL
+                               CHECK (schedule_kind IN
+                                 ('interval','daily_local','manual')),
+      schedule_json            TEXT NOT NULL DEFAULT '{}',
+      payload_template_json    TEXT NOT NULL DEFAULT '{}',
+      idempotency_template     TEXT NOT NULL,
+      priority                 INTEGER NOT NULL DEFAULT 50,
+      max_attempts             INTEGER NOT NULL DEFAULT 3,
+      next_run_at              TEXT,
+      last_enqueued_at         TEXT,
+      last_task_id             TEXT,
+      created_at               TEXT NOT NULL,
+      updated_at               TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_background_task_schedules_due
+      ON background_task_schedules(enabled, next_run_at, priority);
+
+    -- ─────── task_attempts: per-claim audit row ───────
+    -- One row per claim attempt — answers "why did Gmail init run three
+    -- times?". Lease/heartbeat state lives on background_tasks; this table
+    -- is append-only history.
+    CREATE TABLE IF NOT EXISTS task_attempts (
+      id              TEXT PRIMARY KEY,
+      task_id         TEXT NOT NULL,
+      attempt_no      INTEGER NOT NULL,
+      worker_id       TEXT NOT NULL,
+      lease_token     TEXT NOT NULL,
+      status          TEXT NOT NULL
+                      CHECK (status IN
+                        ('running','succeeded','failed','timed_out','lost')),
+      started_at      TEXT NOT NULL,
+      heartbeat_at    TEXT,
+      finished_at     TEXT,
+      error_code      TEXT,
+      error_message   TEXT,
+      logs_json       TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_task_attempts_task_attempt
+      ON task_attempts(task_id, attempt_no);
+    CREATE INDEX IF NOT EXISTS idx_task_attempts_status_started
+      ON task_attempts(status, started_at DESC);
   `);
 
   ensureColumn(db, 'feedback_events', 'conversation_id', 'TEXT');
@@ -3804,4 +3898,583 @@ export async function markPersonalSignalsReferenced(
   });
   tx();
   return updated;
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// background_tasks: durable task queue for connector init + auto.dreaming
+// See docs/plans/2026-04-24-data-connector-init-tasks.mdx (Phase A).
+// ──────────────────────────────────────────────────────────────────────
+
+export type BackgroundTaskStatus =
+  | 'queued' | 'running' | 'succeeded' | 'failed'
+  | 'timed_out' | 'cancelled' | 'lost' | 'skipped';
+
+export type BackgroundTaskTerminalStatus =
+  Exclude<BackgroundTaskStatus, 'queued' | 'running'>;
+
+export interface BackgroundTaskRow {
+  id: string;
+  type: string;
+  status: BackgroundTaskStatus;
+  priority: number;
+  run_after: string;
+  idempotency_key: string;
+  payload: Record<string, unknown>;
+  progress: Record<string, unknown>;
+  result: Record<string, unknown> | null;
+  attempts: number;
+  max_attempts: number;
+  lease_owner: string | null;
+  lease_token: string | null;
+  lease_expires_at: string | null;
+  heartbeat_at: string | null;
+  last_error_code: string | null;
+  last_error_message: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface TaskAttemptRow {
+  id: string;
+  task_id: string;
+  attempt_no: number;
+  worker_id: string;
+  lease_token: string;
+  status: 'running' | 'succeeded' | 'failed' | 'timed_out' | 'lost';
+  started_at: string;
+  heartbeat_at: string | null;
+  finished_at: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  logs: Record<string, unknown> | null;
+}
+
+function rowToBackgroundTask(row: any): BackgroundTaskRow {
+  return {
+    id: row.id,
+    type: row.type,
+    status: row.status as BackgroundTaskStatus,
+    priority: typeof row.priority === 'number' ? row.priority : 50,
+    run_after: row.run_after,
+    idempotency_key: row.idempotency_key,
+    payload: parseJson<Record<string, unknown>>(row.payload_json),
+    progress: parseJson<Record<string, unknown>>(row.progress_json),
+    result: row.result_json ? parseJson<Record<string, unknown>>(row.result_json) : null,
+    attempts: typeof row.attempts === 'number' ? row.attempts : 0,
+    max_attempts: typeof row.max_attempts === 'number' ? row.max_attempts : 3,
+    lease_owner: row.lease_owner ?? null,
+    lease_token: row.lease_token ?? null,
+    lease_expires_at: row.lease_expires_at ?? null,
+    heartbeat_at: row.heartbeat_at ?? null,
+    last_error_code: row.last_error_code ?? null,
+    last_error_message: row.last_error_message ?? null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    started_at: row.started_at ?? null,
+    completed_at: row.completed_at ?? null,
+  };
+}
+
+function rowToTaskAttempt(row: any): TaskAttemptRow {
+  return {
+    id: row.id,
+    task_id: row.task_id,
+    attempt_no: row.attempt_no,
+    worker_id: row.worker_id,
+    lease_token: row.lease_token,
+    status: row.status,
+    started_at: row.started_at,
+    heartbeat_at: row.heartbeat_at ?? null,
+    finished_at: row.finished_at ?? null,
+    error_code: row.error_code ?? null,
+    error_message: row.error_message ?? null,
+    logs: row.logs_json ? parseJson<Record<string, unknown>>(row.logs_json) : null,
+  };
+}
+
+export interface EnqueueBackgroundTaskInput {
+  type: string;
+  idempotencyKey: string;
+  payload?: Record<string, unknown>;
+  priority?: number;
+  /** ISO timestamp; defaults to "now". */
+  runAfter?: string;
+  maxAttempts?: number;
+}
+
+export interface EnqueueBackgroundTaskResult {
+  task: BackgroundTaskRow;
+  /** False when an existing task with the same idempotency_key was returned. */
+  created: boolean;
+}
+
+/**
+ * Idempotent task creation.
+ *
+ * If a task with the same `idempotencyKey` already exists, returns it
+ * untouched (created=false). This is the contract /composio/wait relies on:
+ * a user mashing "connect" twice should not enqueue two init tasks. Callers
+ * that want a hard re-init must rotate the idempotency key explicitly.
+ */
+export async function enqueueBackgroundTask(
+  input: EnqueueBackgroundTaskInput,
+): Promise<EnqueueBackgroundTaskResult> {
+  if (!input.type || !input.type.trim()) {
+    throw new Error('enqueueBackgroundTask: type is required');
+  }
+  if (!input.idempotencyKey || !input.idempotencyKey.trim()) {
+    throw new Error('enqueueBackgroundTask: idempotencyKey is required');
+  }
+  const id = genId();
+  const ts = now();
+  const runAfter = input.runAfter ?? ts;
+  const priority = typeof input.priority === 'number' ? input.priority : 50;
+  const maxAttempts = typeof input.maxAttempts === 'number' ? input.maxAttempts : 3;
+  const payloadJson = JSON.stringify(input.payload ?? {});
+
+  // Single statement so we can detect the conflict atomically.
+  const result = getDb().prepare(
+    `INSERT OR IGNORE INTO background_tasks (
+       id, type, status, priority, run_after, idempotency_key,
+       payload_json, progress_json, attempts, max_attempts,
+       created_at, updated_at
+     ) VALUES (?, ?, 'queued', ?, ?, ?, ?, '{}', 0, ?, ?, ?)`,
+  ).run(id, input.type, priority, runAfter, input.idempotencyKey,
+        payloadJson, maxAttempts, ts, ts);
+
+  if (result.changes > 0) {
+    const row = getDb().prepare('SELECT * FROM background_tasks WHERE id = ?').get(id) as any;
+    return { task: rowToBackgroundTask(row), created: true };
+  }
+  // Idempotency hit — return the existing row.
+  const existing = getDb().prepare(
+    'SELECT * FROM background_tasks WHERE idempotency_key = ?',
+  ).get(input.idempotencyKey) as any;
+  return { task: rowToBackgroundTask(existing), created: false };
+}
+
+export async function getBackgroundTask(id: string): Promise<BackgroundTaskRow | null> {
+  const row = getDb().prepare('SELECT * FROM background_tasks WHERE id = ?').get(id) as any;
+  return row ? rowToBackgroundTask(row) : null;
+}
+
+export async function getBackgroundTaskByIdempotencyKey(
+  key: string,
+): Promise<BackgroundTaskRow | null> {
+  const row = getDb().prepare(
+    'SELECT * FROM background_tasks WHERE idempotency_key = ?',
+  ).get(key) as any;
+  return row ? rowToBackgroundTask(row) : null;
+}
+
+export interface ListBackgroundTasksOpts {
+  type?: string;
+  status?: BackgroundTaskStatus | BackgroundTaskStatus[];
+  /** ISO; only tasks with created_at >= since are returned. */
+  since?: string;
+  limit?: number;
+}
+
+export async function listBackgroundTasks(
+  opts: ListBackgroundTasksOpts = {},
+): Promise<BackgroundTaskRow[]> {
+  const parts = ['SELECT * FROM background_tasks WHERE 1=1'];
+  const params: unknown[] = [];
+  if (opts.type) { parts.push('AND type = ?'); params.push(opts.type); }
+  if (opts.status) {
+    const statuses = Array.isArray(opts.status) ? opts.status : [opts.status];
+    if (statuses.length === 1) {
+      parts.push('AND status = ?');
+      params.push(statuses[0]);
+    } else if (statuses.length > 1) {
+      parts.push(`AND status IN (${statuses.map(() => '?').join(',')})`);
+      params.push(...statuses);
+    }
+  }
+  if (opts.since) { parts.push('AND created_at >= ?'); params.push(opts.since); }
+  parts.push('ORDER BY created_at DESC');
+  parts.push('LIMIT ?');
+  params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
+  const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
+  return rows.map(rowToBackgroundTask);
+}
+
+export interface ClaimBackgroundTaskInput {
+  workerId: string;
+  /** Lease window in milliseconds; default 60s. */
+  leaseDurationMs?: number;
+  /** When set, only claim tasks of these types (FIFO across types by priority). */
+  types?: string[];
+  /** Override clock for tests. */
+  nowOverride?: string;
+}
+
+export interface ClaimedBackgroundTask {
+  task: BackgroundTaskRow;
+  attempt: TaskAttemptRow;
+}
+
+/**
+ * Atomically claim the next due `queued` task. Returns null when nothing
+ * is due. The claim:
+ *
+ *   1. picks the highest-priority due task whose attempts < max_attempts
+ *   2. transitions status queued → running
+ *   3. stamps lease_owner / lease_token / lease_expires_at / heartbeat_at
+ *   4. inserts a task_attempts row (audit trail)
+ *
+ * Heartbeat is the holder's responsibility; `recoverStaleBackgroundTasks`
+ * will drag it back to queued (or terminal) if the holder dies.
+ */
+export async function claimNextDueBackgroundTask(
+  input: ClaimBackgroundTaskInput,
+): Promise<ClaimedBackgroundTask | null> {
+  const ts = input.nowOverride ?? now();
+  const leaseMs = input.leaseDurationMs ?? 60_000;
+  const leaseExpiresAt = new Date(Date.parse(ts) + leaseMs).toISOString();
+  const leaseToken = genId();
+  const types = input.types && input.types.length > 0 ? input.types : null;
+
+  let claimed: BackgroundTaskRow | null = null;
+  let attemptRow: TaskAttemptRow | null = null;
+
+  // SQLite better-sqlite3 transactions are synchronous + atomic; safe
+  // against a second tick in the same process. (We don't claim across
+  // processes — single-process per container.)
+  const tx = getDb().transaction(() => {
+    const sql = types
+      ? `SELECT id, attempts FROM background_tasks
+         WHERE status = 'queued' AND run_after <= ?
+           AND attempts < max_attempts
+           AND type IN (${types.map(() => '?').join(',')})
+         ORDER BY priority ASC, run_after ASC, created_at ASC
+         LIMIT 1`
+      : `SELECT id, attempts FROM background_tasks
+         WHERE status = 'queued' AND run_after <= ?
+           AND attempts < max_attempts
+         ORDER BY priority ASC, run_after ASC, created_at ASC
+         LIMIT 1`;
+    const candidate = (types
+      ? getDb().prepare(sql).get(ts, ...types)
+      : getDb().prepare(sql).get(ts)) as { id?: string; attempts?: number } | undefined;
+    if (!candidate?.id) return;
+
+    const nextAttemptNo = (candidate.attempts ?? 0) + 1;
+
+    const updateRes = getDb().prepare(
+      `UPDATE background_tasks
+       SET status = 'running',
+           attempts = attempts + 1,
+           lease_owner = ?,
+           lease_token = ?,
+           lease_expires_at = ?,
+           heartbeat_at = ?,
+           started_at = COALESCE(started_at, ?),
+           updated_at = ?
+       WHERE id = ?
+         AND status = 'queued'
+         AND run_after <= ?
+         AND attempts < max_attempts`,
+    ).run(input.workerId, leaseToken, leaseExpiresAt, ts, ts, ts, candidate.id, ts);
+
+    if (updateRes.changes === 0) return; // raced
+
+    const taskRow = getDb().prepare('SELECT * FROM background_tasks WHERE id = ?').get(candidate.id) as any;
+    claimed = rowToBackgroundTask(taskRow);
+
+    const attemptId = genId();
+    getDb().prepare(
+      `INSERT INTO task_attempts (
+         id, task_id, attempt_no, worker_id, lease_token,
+         status, started_at, heartbeat_at
+       ) VALUES (?, ?, ?, ?, ?, 'running', ?, ?)`,
+    ).run(attemptId, candidate.id, nextAttemptNo, input.workerId, leaseToken, ts, ts);
+
+    const attemptRowDb = getDb().prepare('SELECT * FROM task_attempts WHERE id = ?').get(attemptId) as any;
+    attemptRow = rowToTaskAttempt(attemptRowDb);
+  });
+  tx();
+
+  if (!claimed || !attemptRow) return null;
+  return { task: claimed, attempt: attemptRow };
+}
+
+export interface HeartbeatBackgroundTaskInput {
+  id: string;
+  leaseToken: string;
+  /** Lease window in milliseconds from now; default 60s. */
+  leaseDurationMs?: number;
+  progress?: Record<string, unknown>;
+  /** Override clock for tests. */
+  nowOverride?: string;
+}
+
+/**
+ * Renew the lease on a running task. Returns false if the lease was lost
+ * (recovered by reaper, cancelled, or the task already completed). When
+ * heartbeat returns false, the handler MUST stop writing — its work is
+ * about to be (or has been) re-attempted by another claim.
+ */
+export async function heartbeatBackgroundTask(
+  input: HeartbeatBackgroundTaskInput,
+): Promise<boolean> {
+  const ts = input.nowOverride ?? now();
+  const leaseMs = input.leaseDurationMs ?? 60_000;
+  const leaseExpiresAt = new Date(Date.parse(ts) + leaseMs).toISOString();
+  const progressJson = input.progress ? JSON.stringify(input.progress) : null;
+
+  const tx = getDb().transaction(() => {
+    const sql = progressJson
+      ? `UPDATE background_tasks
+         SET heartbeat_at = ?, lease_expires_at = ?, progress_json = ?, updated_at = ?
+         WHERE id = ? AND status = 'running' AND lease_token = ?`
+      : `UPDATE background_tasks
+         SET heartbeat_at = ?, lease_expires_at = ?, updated_at = ?
+         WHERE id = ? AND status = 'running' AND lease_token = ?`;
+    const res = progressJson
+      ? getDb().prepare(sql).run(ts, leaseExpiresAt, progressJson, ts, input.id, input.leaseToken)
+      : getDb().prepare(sql).run(ts, leaseExpiresAt, ts, input.id, input.leaseToken);
+    if (res.changes === 0) return false;
+    // Mirror heartbeat onto the open attempt row for audit.
+    getDb().prepare(
+      `UPDATE task_attempts
+       SET heartbeat_at = ?
+       WHERE task_id = ? AND lease_token = ? AND status = 'running'`,
+    ).run(ts, input.id, input.leaseToken);
+    return true;
+  });
+  return tx() === true;
+}
+
+export interface CompleteBackgroundTaskInput {
+  id: string;
+  leaseToken: string;
+  result?: Record<string, unknown>;
+  /** Override clock for tests. */
+  nowOverride?: string;
+}
+
+/**
+ * Mark a running task succeeded. Returns false if the lease was lost
+ * (status no longer 'running' or lease_token mismatched) — same protocol
+ * as heartbeat: the handler must accept that its work won't be persisted.
+ */
+export async function completeBackgroundTask(
+  input: CompleteBackgroundTaskInput,
+): Promise<boolean> {
+  const ts = input.nowOverride ?? now();
+  const resultJson = input.result ? JSON.stringify(input.result) : null;
+  const tx = getDb().transaction(() => {
+    const res = getDb().prepare(
+      `UPDATE background_tasks
+       SET status = 'succeeded',
+           result_json = ?,
+           lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
+           completed_at = ?, updated_at = ?
+       WHERE id = ? AND status = 'running' AND lease_token = ?`,
+    ).run(resultJson, ts, ts, input.id, input.leaseToken);
+    if (res.changes === 0) return false;
+    getDb().prepare(
+      `UPDATE task_attempts
+       SET status = 'succeeded', finished_at = ?
+       WHERE task_id = ? AND lease_token = ? AND status = 'running'`,
+    ).run(ts, input.id, input.leaseToken);
+    return true;
+  });
+  return tx() === true;
+}
+
+export interface FailBackgroundTaskInput {
+  id: string;
+  leaseToken: string;
+  errorCode: string;
+  errorMessage: string;
+  /**
+   * Backoff delay in milliseconds before the task can be re-claimed,
+   * if attempts < max_attempts. Defaults to a 30s/2m/10m schedule based
+   * on attempts so far (matches the plan §运行机制 §5).
+   */
+  backoffMs?: number;
+  /** Override clock for tests. */
+  nowOverride?: string;
+}
+
+/**
+ * Mark a running task failed. If attempts < max_attempts, the task is
+ * re-queued with a backoff; otherwise it terminates as 'failed'.
+ *
+ * Returns the updated row (post-transition) or null if the lease was lost.
+ */
+export async function failBackgroundTask(
+  input: FailBackgroundTaskInput,
+): Promise<BackgroundTaskRow | null> {
+  const ts = input.nowOverride ?? now();
+
+  let updated: BackgroundTaskRow | null = null;
+  const tx = getDb().transaction(() => {
+    const current = getDb().prepare(
+      `SELECT attempts, max_attempts FROM background_tasks
+       WHERE id = ? AND status = 'running' AND lease_token = ?`,
+    ).get(input.id, input.leaseToken) as
+      | { attempts: number; max_attempts: number } | undefined;
+    if (!current) return;
+
+    const willRetry = current.attempts < current.max_attempts;
+    const backoffMs = input.backoffMs ?? defaultBackoffForAttempt(current.attempts);
+    const runAfter = new Date(Date.parse(ts) + backoffMs).toISOString();
+
+    if (willRetry) {
+      // The preceding SELECT already verified status='running' + lease_token
+      // match inside this same transaction, so a plain WHERE id = ? suffices
+      // here. Don't repeat the lease check — got bitten by precedence on a
+      // first pass that wrote `WHERE id = ? AND lease_token IS NULL OR
+      // lease_token = ?` (OR binds looser than AND, drops the id filter).
+      getDb().prepare(
+        `UPDATE background_tasks
+         SET status = 'queued',
+             run_after = ?,
+             lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
+             last_error_code = ?, last_error_message = ?,
+             updated_at = ?
+         WHERE id = ?`,
+      ).run(runAfter, input.errorCode, input.errorMessage, ts, input.id);
+    } else {
+      getDb().prepare(
+        `UPDATE background_tasks
+         SET status = 'failed',
+             lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
+             last_error_code = ?, last_error_message = ?,
+             completed_at = ?, updated_at = ?
+         WHERE id = ?`,
+      ).run(input.errorCode, input.errorMessage, ts, ts, input.id);
+    }
+
+    getDb().prepare(
+      `UPDATE task_attempts
+       SET status = 'failed', finished_at = ?, error_code = ?, error_message = ?
+       WHERE task_id = ? AND lease_token = ? AND status = 'running'`,
+    ).run(ts, input.errorCode, input.errorMessage, input.id, input.leaseToken);
+
+    const after = getDb().prepare('SELECT * FROM background_tasks WHERE id = ?').get(input.id) as any;
+    updated = rowToBackgroundTask(after);
+  });
+  tx();
+  return updated;
+}
+
+/** 30s → 2m → 10m → 10m (cap). Matches plan §运行机制 §5. */
+function defaultBackoffForAttempt(attemptsSoFar: number): number {
+  if (attemptsSoFar <= 1) return 30_000;
+  if (attemptsSoFar === 2) return 120_000;
+  return 600_000;
+}
+
+/** Mark a queued or running task cancelled. No-op if already terminal. */
+export async function cancelBackgroundTask(id: string): Promise<boolean> {
+  const ts = now();
+  const res = getDb().prepare(
+    `UPDATE background_tasks
+     SET status = 'cancelled',
+         lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
+         completed_at = ?, updated_at = ?
+     WHERE id = ? AND status IN ('queued','running')`,
+  ).run(ts, ts, id);
+  if (res.changes === 0) return false;
+  // Don't touch task_attempts — heartbeat will discover the lease is dead
+  // on its next call and the running attempt will eventually be marked
+  // 'lost' by the recovery sweep.
+  return true;
+}
+
+export interface RecoverStaleBackgroundTasksInput {
+  /** Override clock for tests. */
+  nowOverride?: string;
+  /** Backoff before requeueing a recovered task; default 30s. */
+  backoffMs?: number;
+}
+
+export interface RecoverStaleBackgroundTasksResult {
+  /** Tasks moved running → queued (will be re-claimed). */
+  requeued: number;
+  /** Tasks moved running → timed_out (max_attempts exhausted). */
+  timedOut: number;
+}
+
+/**
+ * Reaper. For each task with status='running' and lease_expires_at < now:
+ *   - if attempts < max_attempts → status=queued, schedule a new run_after
+ *   - else                       → status=timed_out (terminal)
+ *
+ * Also marks the orphaned task_attempts row 'lost' so audit history is
+ * coherent.
+ *
+ * MUST be called by the scheduler before claiming new tasks; otherwise
+ * a stuck handler can hold the lease indefinitely.
+ */
+export async function recoverStaleBackgroundTasks(
+  input: RecoverStaleBackgroundTasksInput = {},
+): Promise<RecoverStaleBackgroundTasksResult> {
+  const ts = input.nowOverride ?? now();
+  const backoffMs = input.backoffMs ?? 30_000;
+  const runAfter = new Date(Date.parse(ts) + backoffMs).toISOString();
+  let requeued = 0;
+  let timedOut = 0;
+
+  const tx = getDb().transaction(() => {
+    const stale = getDb().prepare(
+      `SELECT id, attempts, max_attempts, lease_token
+       FROM background_tasks
+       WHERE status = 'running'
+         AND lease_expires_at IS NOT NULL
+         AND lease_expires_at < ?`,
+    ).all(ts) as Array<{ id: string; attempts: number; max_attempts: number; lease_token: string | null }>;
+
+    for (const row of stale) {
+      const willRetry = row.attempts < row.max_attempts;
+      if (willRetry) {
+        getDb().prepare(
+          `UPDATE background_tasks
+           SET status = 'queued',
+               run_after = ?,
+               lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
+               last_error_code = 'lease_expired',
+               last_error_message = 'Lease expired before completion',
+               updated_at = ?
+           WHERE id = ?`,
+        ).run(runAfter, ts, row.id);
+        requeued += 1;
+      } else {
+        getDb().prepare(
+          `UPDATE background_tasks
+           SET status = 'timed_out',
+               lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
+               last_error_code = 'lease_expired',
+               last_error_message = 'Lease expired and max attempts exhausted',
+               completed_at = ?, updated_at = ?
+           WHERE id = ?`,
+        ).run(ts, ts, row.id);
+        timedOut += 1;
+      }
+      if (row.lease_token) {
+        getDb().prepare(
+          `UPDATE task_attempts
+           SET status = 'lost', finished_at = ?,
+               error_code = 'lease_expired',
+               error_message = 'Lease expired before completion'
+           WHERE task_id = ? AND lease_token = ? AND status = 'running'`,
+        ).run(ts, row.id, row.lease_token);
+      }
+    }
+  });
+  tx();
+  return { requeued, timedOut };
+}
+
+export async function listTaskAttempts(taskId: string): Promise<TaskAttemptRow[]> {
+  const rows = getDb().prepare(
+    'SELECT * FROM task_attempts WHERE task_id = ? ORDER BY attempt_no ASC',
+  ).all(taskId) as any[];
+  return rows.map(rowToTaskAttempt);
 }

@@ -49,6 +49,7 @@ export async function handleSys(args: string[]): Promise<string> {
       raw: ['help', 'gmail recent', 'gmail thread', 'gcal today', 'gcal week', 'gcal list', 'device-apps', 'device-contacts list', 'device-contacts search'],
       evolution: ['help', 'list', 'get', 'recent', 'create', 'delta', 'refs consumed', 'refs produced', 'complete', 'fail'],
       skills: ['help', 'list', 'show', 'add', 'update', 'enable', 'disable'],
+      tasks: ['help', 'list', 'show', 'attempts', 'cancel', 'enqueue'],
       sys: ['doctor', 'schema'],
     };
     return success('sys', 'schema', { domains });

@@ -19,6 +19,9 @@ import { handleSignals } from './signals.js';
 import { handleRaw } from './raw.js';
 import { handleEvolution } from './evolution.js';
 import { handleSkills } from './skills.js';
+// background_tasks queue admin
+// (docs/plans/2026-04-24-data-connector-init-tasks.mdx Phase A)
+import { handleTasks } from './tasks.js';
 
 const DOMAINS: Record<string, (args: string[]) => Promise<string>> = {
   profile: handleProfile,
@@ -33,6 +36,7 @@ const DOMAINS: Record<string, (args: string[]) => Promise<string>> = {
   raw: handleRaw,
   evolution: handleEvolution,
   skills: handleSkills,
+  tasks: handleTasks,
 };
 
 function resultExitCode(result: string): number {

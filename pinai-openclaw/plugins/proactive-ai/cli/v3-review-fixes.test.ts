@@ -283,8 +283,13 @@ test('pin raw device-contacts list (no --query) still lists the full snapshot', 
 test('pin sys schema lists v3 domains and omits retired personal mobile commands', async () => {
   const r = decode(await handleSys(['schema']));
   assert.equal(r.ok, true);
-  for (const domain of ['memory', 'signals', 'raw', 'evolution', 'skills']) {
+  for (const domain of ['memory', 'signals', 'raw', 'evolution', 'skills', 'tasks']) {
     assert.ok(r.data.domains[domain], `missing ${domain}`);
+  }
+  // tasks domain commands are pinned here so review-fixes catches a CLI
+  // shape regression. See docs/plans/2026-04-24-data-connector-init-tasks.mdx Phase A.
+  for (const cmd of ['list', 'show', 'attempts', 'cancel', 'enqueue']) {
+    assert.ok(r.data.domains.tasks.includes(cmd), `tasks missing ${cmd}`);
   }
   assert.equal(
     r.data.domains.personal.some((cmd: string) => cmd.startsWith('mobile')),
