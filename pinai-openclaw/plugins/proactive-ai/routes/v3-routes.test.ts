@@ -107,6 +107,7 @@ test('POST /memory then GET /memory round-trips', withTempHome(async () => {
 
   const list = await call(h, { method: 'GET', subpath: '/memory' });
   assert.equal(list.status, 200);
+  assert.equal(list.body.total, 1);
   assert.equal(list.body.memories.length, 1);
   assert.equal(list.body.memories[0].id, id);
 
@@ -121,8 +122,23 @@ test('GET /memory respects minQuality query param', withTempHome(async () => {
   await call(h, { method: 'POST', subpath: '/memory', body: { text: 'high', source: 'manual', quality: 0.9 } });
   const list = await call(h, { method: 'GET', subpath: '/memory', query: 'minQuality=0.5' });
   assert.equal(list.status, 200);
+  assert.equal(list.body.total, 1);
   assert.equal(list.body.memories.length, 1);
   assert.equal(list.body.memories[0].text, 'high');
+}));
+
+test('GET /memory keeps total while paging with offset', withTempHome(async () => {
+  const h = handleMemory();
+  for (let i = 0; i < 5; i += 1) {
+    await call(h, { method: 'POST', subpath: '/memory', body: { text: `memory ${i}`, source: 'manual' } });
+  }
+  const first = await call(h, { method: 'GET', subpath: '/memory', query: 'limit=2&offset=0' });
+  const second = await call(h, { method: 'GET', subpath: '/memory', query: 'limit=2&offset=2' });
+  assert.equal(first.body.total, 5);
+  assert.equal(second.body.total, 5);
+  assert.equal(first.body.memories.length, 2);
+  assert.equal(second.body.memories.length, 2);
+  assert.equal(new Set([...first.body.memories, ...second.body.memories].map((row: { id: string }) => row.id)).size, 4);
 }));
 
 test('POST /memory/<id>/archive moves status to archived', withTempHome(async () => {
@@ -132,8 +148,10 @@ test('POST /memory/<id>/archive moves status to archived', withTempHome(async ()
   const arch = await call(h, { method: 'POST', subpath: `/memory/${id}/archive` });
   assert.equal(arch.status, 200);
   const active = await call(h, { method: 'GET', subpath: '/memory' });
+  assert.equal(active.body.total, 0);
   assert.equal(active.body.memories.length, 0);
   const archived = await call(h, { method: 'GET', subpath: '/memory', query: 'status=archived' });
+  assert.equal(archived.body.total, 1);
   assert.equal(archived.body.memories.length, 1);
 }));
 
@@ -197,6 +215,7 @@ test('POST /signals/ingest then GET /signals returns the row', withTempHome(asyn
   assert.equal(ing.status, 200);
   assert.equal(ing.body.inserted, 1);
   const list = await call(h, { method: 'GET', subpath: '/signals' });
+  assert.equal(list.body.total, 1);
   assert.equal(list.body.signals.length, 1);
   assert.equal(list.body.signals[0].title, 'Mom');
 }));
@@ -227,8 +246,31 @@ test('GET /signals filters by minSalience', withTempHome(async () => {
     },
   });
   const r = await call(h, { method: 'GET', subpath: '/signals', query: 'minSalience=0.5' });
+  assert.equal(r.body.total, 1);
   assert.equal(r.body.signals.length, 1);
   assert.equal(r.body.signals[0].title, 'high');
+}));
+
+test('GET /signals keeps total while paging with offset', withTempHome(async () => {
+  const h = handleSignals();
+  await call(h, {
+    method: 'POST', subpath: '/signals/ingest',
+    body: {
+      items: Array.from({ length: 5 }, (_, i) => ({
+        kind: 'm',
+        title: `signal ${i}`,
+        summary: `summary ${i}`,
+        salience: 0.8,
+      })),
+    },
+  });
+  const first = await call(h, { method: 'GET', subpath: '/signals', query: 'limit=2&offset=0' });
+  const second = await call(h, { method: 'GET', subpath: '/signals', query: 'limit=2&offset=2' });
+  assert.equal(first.body.total, 5);
+  assert.equal(second.body.total, 5);
+  assert.equal(first.body.signals.length, 2);
+  assert.equal(second.body.signals.length, 2);
+  assert.equal(new Set([...first.body.signals, ...second.body.signals].map((row: { id: string }) => row.id)).size, 4);
 }));
 
 // ─── /raw ───────────────────────────────────────────────────────────────
@@ -241,6 +283,7 @@ test('GET /raw/gmail returns ingested rows', withTempHome(async () => {
   const h = handleRaw();
   const r = await call(h, { method: 'GET', subpath: '/raw/gmail' });
   assert.equal(r.status, 200);
+  assert.equal(r.body.total, 2);
   assert.equal(r.body.messages.length, 2);
   // Newest first
   assert.equal(r.body.messages[0].subject, 'Welcome');
@@ -262,8 +305,29 @@ test('GET /raw/device-apps with latestSnapshotOnly=1 reads latest snapshot', wit
   const h = handleRaw();
   const r = await call(h, { method: 'GET', subpath: '/raw/device-apps', query: 'deviceId=dev-1&latestSnapshotOnly=1' });
   assert.equal(r.status, 200);
+  assert.equal(r.body.total, 1);
   assert.equal(r.body.apps.length, 1);
   assert.equal(r.body.apps[0].app_name, 'New');
+}));
+
+test('GET /raw/device-contacts with latestSnapshotOnly=1 reads latest snapshot', withTempHome(async () => {
+  const { ingestDeviceContactsSnapshot } = await import('../raw-db.ts');
+  ingestDeviceContactsSnapshot({
+    deviceId: 'dev-1',
+    capturedAt: '2026-04-22T08:00:00Z',
+    contacts: [{ displayName: 'Old Person', emails: ['old@example.com'] }],
+  });
+  ingestDeviceContactsSnapshot({
+    deviceId: 'dev-1',
+    capturedAt: '2026-04-23T08:00:00Z',
+    contacts: [{ displayName: 'New Person', emails: ['new@example.com'] }],
+  });
+  const h = handleRaw();
+  const r = await call(h, { method: 'GET', subpath: '/raw/device-contacts', query: 'deviceId=dev-1&latestSnapshotOnly=1' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.total, 1);
+  assert.equal(r.body.contacts.length, 1);
+  assert.equal(r.body.contacts[0].display_name, 'New Person');
 }));
 
 // ─── /evolution ─────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowRightCircle,
@@ -24,24 +24,35 @@ import {
   DrawerDescription,
 } from "@/components/ui/drawer";
 import {
+  fetchRawDeviceApps,
+  fetchRawDeviceContacts,
+  fetchRawGcal,
+  fetchRawGmail,
+  fetchMemories,
   fetchProfileSnapshot,
-  proxyPost,
+  fetchSignals,
+  type DeviceAppRaw,
+  type DeviceContactRaw,
+  type GcalEvent,
+  type GmailMessage,
   type Goal,
-  type ProfileInterest,
-  type ProfileMemory,
-  type ProfileSignal,
+  type Memory,
+  type PersonalSignal,
   type ProfileSnapshot,
 } from "@/lib/api";
 import { basketMeta } from "@/lib/basket-meta";
+import type { ComposioState } from "@/hooks/useComposio";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 type VisualStatus = "Normal" | "Alert" | "Watch";
-type MemoryTab = "entry" | "event";
 type ProfileGroupKey = "facts" | "preferences" | "constraints" | "metadata";
-type SectionId = "memory" | "signals" | "interests" | "goals";
+type DataPanel = "mirror" | "memory" | "signals" | "raw";
+type RawPanel = "gmail" | "gcal" | "apps" | "contacts";
+type SectionId = DataPanel | "goals";
+type RawSourceKind = "connector" | "device";
 
 interface GoalVisualMeta {
   image: string;
@@ -201,6 +212,52 @@ const EMPTY_SNAPSHOT: ProfileSnapshot = {
   interests: [],
 };
 
+const LIST_PAGE_SIZE = 12;
+const TOPIC_MEMORY_PREVIEW_LIMIT = 8;
+const RAW_PREVIEW_LIMIT = 12;
+
+interface RawPreview {
+  gmail: GmailMessage[];
+  gcal: GcalEvent[];
+  apps: DeviceAppRaw[];
+  contacts: DeviceContactRaw[];
+  gmailTotal: number;
+  gcalTotal: number;
+  appsTotal: number;
+  contactsTotal: number;
+}
+
+interface RawSourceOption {
+  id: RawPanel;
+  label: string;
+  kind: RawSourceKind;
+  count: number;
+  connected: boolean;
+}
+
+const EMPTY_RAW_PREVIEW: RawPreview = {
+  gmail: [],
+  gcal: [],
+  apps: [],
+  contacts: [],
+  gmailTotal: 0,
+  gcalTotal: 0,
+  appsTotal: 0,
+  contactsTotal: 0,
+};
+
+const RAW_SOURCE_CONFIG: Array<{
+  id: RawPanel;
+  label: string;
+  kind: RawSourceKind;
+  connectorToolkits?: string[];
+}> = [
+  { id: "gmail", label: "Gmail", kind: "connector", connectorToolkits: ["gmail"] },
+  { id: "gcal", label: "Calendar", kind: "connector", connectorToolkits: ["googlecalendar"] },
+  { id: "apps", label: "Device Apps", kind: "device" },
+  { id: "contacts", label: "Contacts", kind: "device" },
+];
+
 const GOAL_ICONS: Record<string, { icon: LucideIcon; label: string }> = {
   "career-growth": { icon: Briefcase, label: "Career" },
   "stay-healthy": { icon: Heart, label: "Health" },
@@ -218,13 +275,6 @@ const GOAL_ICONS: Record<string, { icon: LucideIcon; label: string }> = {
 
 const FALLBACK_ICON = { icon: Sparkles, label: "Goal" };
 
-const PRIORITY_STYLE: Record<string, string> = {
-  critical: "bg-violet-500/10 text-violet-600",
-  high: "bg-rose-500/10 text-rose-500",
-  medium: "bg-amber-500/10 text-amber-500",
-  low: "bg-foreground/5 text-foreground/40",
-};
-
 const PROFILE_GROUP_META: Array<{
   key: ProfileGroupKey;
   title: string;
@@ -235,10 +285,6 @@ const PROFILE_GROUP_META: Array<{
   { key: "constraints", title: "Constraints", description: "Rules and boundaries the assistant should honor." },
   { key: "metadata", title: "Metadata", description: "System-managed fields attached to your profile." },
 ];
-
-function goalMeta(key: string) {
-  return GOAL_ICONS[key] ?? GOAL_ICONS[key.split("-")[0]] ?? FALLBACK_ICON;
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -268,8 +314,98 @@ function formatMetric(value: number | null | undefined, digits = 2): string {
   return value.toFixed(digits);
 }
 
-function isEventMemory(memory: ProfileMemory): boolean {
-  return memory.kind.trim().toLowerCase() === "event";
+function mergeUniqueById<T extends { id: string }>(current: T[], next: T[]): T[] {
+  const seen = new Set(current.map((item) => item.id));
+  const merged = [...current];
+  for (const item of next) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    merged.push(item);
+  }
+  return merged;
+}
+
+function hasObjectKeys(value: Record<string, unknown> | null | undefined): boolean {
+  return !!value && Object.keys(value).length > 0;
+}
+
+function rawCount(raw: RawPreview, panel: RawPanel): number {
+  if (panel === "gmail") return raw.gmailTotal;
+  if (panel === "gcal") return raw.gcalTotal;
+  if (panel === "apps") return raw.appsTotal;
+  return raw.contactsTotal;
+}
+
+function normalizeToolkit(toolkit: string): string {
+  return toolkit.trim().toLowerCase().replace(/[-_\s]/g, "");
+}
+
+function buildRawSourceOptions(
+  raw: RawPreview,
+  connections: ComposioState["connections"],
+): RawSourceOption[] {
+  const connectedToolkits = new Set(
+    connections
+      .filter((conn) => conn.status === "ACTIVE")
+      .map((conn) => normalizeToolkit(conn.toolkit)),
+  );
+
+  return RAW_SOURCE_CONFIG
+    .map((source) => {
+      const count = rawCount(raw, source.id);
+      const connected =
+        source.kind === "device"
+          ? count > 0
+          : (source.connectorToolkits ?? []).some((toolkit) => connectedToolkits.has(normalizeToolkit(toolkit)));
+
+      return {
+        id: source.id,
+        label: source.label,
+        kind: source.kind,
+        count,
+        connected,
+      };
+    })
+    .filter((source) => source.connected || source.count > 0);
+}
+
+type PillTone = "neutral" | "source" | "subject" | "quality" | "confidence" | "status" | "device";
+
+const PILL_TONE_CLASS: Record<PillTone, string> = {
+  neutral: "bg-slate-500/[0.08] text-slate-700 ring-slate-500/[0.12]",
+  source: "bg-amber-500/[0.12] text-amber-700 ring-amber-500/[0.18]",
+  subject: "bg-sky-500/[0.12] text-sky-700 ring-sky-500/[0.18]",
+  quality: "bg-emerald-500/[0.12] text-emerald-700 ring-emerald-500/[0.18]",
+  confidence: "bg-violet-500/[0.12] text-violet-700 ring-violet-500/[0.18]",
+  status: "bg-teal-500/[0.12] text-teal-700 ring-teal-500/[0.18]",
+  device: "bg-rose-500/[0.10] text-rose-700 ring-rose-500/[0.16]",
+};
+
+function Pill({ children, tone = "neutral" }: { children: ReactNode; tone?: PillTone }) {
+  return (
+    <span className={`rounded-full px-2 py-1 text-[10px] font-medium ring-1 ${PILL_TONE_CLASS[tone]}`}>
+      {children}
+    </span>
+  );
+}
+
+async function fetchRawPreview(signal?: AbortSignal): Promise<RawPreview> {
+  const [gmail, gcal, apps, contacts] = await Promise.allSettled([
+    fetchRawGmail({ limit: RAW_PREVIEW_LIMIT }, signal),
+    fetchRawGcal({ limit: RAW_PREVIEW_LIMIT }, signal),
+    fetchRawDeviceApps({ latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal),
+    fetchRawDeviceContacts({ latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal),
+  ]);
+  return {
+    gmail: gmail.status === "fulfilled" ? gmail.value.messages : [],
+    gcal: gcal.status === "fulfilled" ? gcal.value.events : [],
+    apps: apps.status === "fulfilled" ? apps.value.apps : [],
+    contacts: contacts.status === "fulfilled" ? contacts.value.contacts : [],
+    gmailTotal: gmail.status === "fulfilled" ? (gmail.value.total ?? gmail.value.messages.length) : 0,
+    gcalTotal: gcal.status === "fulfilled" ? (gcal.value.total ?? gcal.value.events.length) : 0,
+    appsTotal: apps.status === "fulfilled" ? (apps.value.total ?? apps.value.apps.length) : 0,
+    contactsTotal: contacts.status === "fulfilled" ? (contacts.value.total ?? contacts.value.contacts.length) : 0,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -285,14 +421,87 @@ function EmptyState({ title, description }: { title: string; description: string
   );
 }
 
-function SummaryStat({ label, value, onClick }: { label: string; value: number; onClick: () => void }) {
+function countProfileFields(profile: ProfileSnapshot["profile"]): number {
+  if (!profile) return 0;
+  return PROFILE_GROUP_META.reduce((sum, group) => sum + Object.keys(profile[group.key] ?? {}).length, 0);
+}
+
+function MetricCard({
+  label,
+  value,
+  detail,
+  onClick,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  onClick: () => void;
+}) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className="rounded-2xl bg-white/45 px-3 py-3 text-left ring-1 ring-white/50 transition-colors hover:bg-white/75"
+      className="min-h-20 rounded-2xl bg-white/45 px-3 py-3 text-left ring-1 ring-white/55 transition-colors hover:bg-white/75"
     >
-      <div className="text-[10px] uppercase tracking-[0.18em] text-foreground/35">{label}</div>
-      <div className="mt-1 text-lg font-semibold text-foreground">{value}</div>
+      <div className="text-[10px] uppercase tracking-[0.16em] text-foreground/35">{label}</div>
+      <div className="mt-1 flex items-baseline gap-1.5">
+        <span className="text-xl font-semibold text-foreground">{value}</span>
+        <span className="text-[11px] font-medium text-foreground/42">{detail}</span>
+      </div>
+    </button>
+  );
+}
+
+function LoadMoreButton({
+  hasMore,
+  loading,
+  label,
+  onClick,
+}: {
+  hasMore: boolean;
+  loading: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  if (!hasMore) return null;
+  return (
+    <button
+      type="button"
+      disabled={loading}
+      onClick={onClick}
+      className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-white/55 px-4 py-3 text-sm font-medium text-foreground/62 ring-1 ring-white/60 transition-colors hover:bg-white/80 disabled:cursor-wait disabled:opacity-60"
+    >
+      {loading && <Loader2 size={14} className="animate-spin" />}
+      {label}
+    </button>
+  );
+}
+
+function WorkbenchTabButton({
+  active,
+  label,
+  value,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  value: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`min-h-16 rounded-2xl px-3 py-3 text-left ring-1 transition-colors ${
+        active
+          ? "bg-foreground text-background ring-foreground"
+          : "bg-white/50 text-foreground ring-white/60 hover:bg-white/80"
+      }`}
+    >
+      <div className={`text-[10px] uppercase tracking-[0.16em] ${active ? "text-background/60" : "text-foreground/35"}`}>
+        {label}
+      </div>
+      <div className="mt-1 text-base font-semibold">{value}</div>
     </button>
   );
 }
@@ -371,25 +580,25 @@ function ProfileGroupCard({
   );
 }
 
-function MemoryItem({ memory }: { memory: ProfileMemory }) {
+function MemoryItem({ memory }: { memory: Memory }) {
   return (
     <div className="rounded-2xl bg-foreground/[0.03] px-4 py-3">
       <div className="flex items-center justify-between gap-3">
-        <span className="rounded-full bg-foreground/5 px-2 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-foreground/42">
-          {memory.kind}
+        <Pill tone="source">{memory.source}</Pill>
+        <span className="text-[11px] text-foreground/35">
+          {formatDateTime(memory.occurred_at ?? memory.created_at)}
         </span>
-        <span className="text-[11px] text-foreground/35">{formatDateTime(memory.created_at)}</span>
       </div>
       <p className="mt-2 text-sm leading-6 text-foreground/78">{memory.text}</p>
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {memory.subject && <Pill tone="subject">{memory.subject}</Pill>}
+        <Pill tone="quality">quality {formatMetric(memory.quality)}</Pill>
+        <Pill tone="confidence">confidence {formatMetric(memory.confidence)}</Pill>
+      </div>
       {memory.tags.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5">
           {memory.tags.map((tag) => (
-            <span
-              key={`${memory.id}-${tag}`}
-              className="rounded-full bg-white/65 px-2 py-1 text-[10px] font-medium text-foreground/45 ring-1 ring-white/60"
-            >
-              #{tag}
-            </span>
+            <Pill key={`${memory.id}-${tag}`} tone="neutral">#{tag}</Pill>
           ))}
         </div>
       )}
@@ -397,49 +606,367 @@ function MemoryItem({ memory }: { memory: ProfileMemory }) {
   );
 }
 
-function SignalItem({ signal }: { signal: ProfileSignal }) {
+function SignalItem({ signal }: { signal: PersonalSignal }) {
   return (
     <div className="rounded-2xl bg-foreground/[0.03] px-4 py-3">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-sm font-semibold text-foreground">
-            {signal.target_type} / {signal.target_key}
-          </div>
+          <div className="text-sm font-semibold text-foreground">{signal.title}</div>
           <div className="mt-1 text-xs text-foreground/45">
             {signal.kind}
-            {typeof signal.value === "number" ? ` · value ${formatMetric(signal.value)}` : ""}
             {signal.source ? ` · ${signal.source}` : ""}
+            {signal.device_id ? ` · ${signal.device_id}` : ""}
           </div>
         </div>
-        <span className="text-[11px] text-foreground/35">{formatDateTime(signal.occurred_at)}</span>
+        <span className="shrink-0 text-[11px] text-foreground/35">{formatDateTime(signal.occurred_at)}</span>
       </div>
-      {signal.context && Object.keys(signal.context).length > 0 && (
-        <pre className="mt-3 whitespace-pre-wrap break-words rounded-2xl bg-white/55 px-3 py-3 text-[11px] leading-5 text-foreground/62 ring-1 ring-white/60">
-          {formatValue(signal.context)}
-        </pre>
+      {signal.summary && (
+        <p className="mt-2 text-sm leading-6 text-foreground/70">{signal.summary}</p>
+      )}
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        <Pill tone="status">{signal.status}</Pill>
+        <Pill tone="quality">salience {formatMetric(signal.salience)}</Pill>
+        <Pill tone="confidence">confidence {formatMetric(signal.confidence)}</Pill>
+        {signal.subject && <Pill tone="subject">{signal.subject}</Pill>}
+      </div>
+      {hasObjectKeys(signal.payload) && (
+        <details className="mt-3 rounded-2xl bg-white/55 px-3 py-2 text-[11px] leading-5 text-foreground/62 ring-1 ring-white/60">
+          <summary className="cursor-pointer text-foreground/45">Payload</summary>
+          <pre className="mt-2 whitespace-pre-wrap break-words">{formatValue(signal.payload)}</pre>
+        </details>
       )}
     </div>
   );
 }
 
-function InterestItem({ interest }: { interest: ProfileInterest }) {
+function RawRecordItem({
+  source,
+  title,
+  subtitle,
+  time,
+  payload,
+}: {
+  source: string;
+  title: string;
+  subtitle?: string | null;
+  time?: string | null;
+  payload?: Record<string, unknown>;
+}) {
   return (
     <div className="rounded-2xl bg-foreground/[0.03] px-4 py-3">
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-sm font-semibold text-foreground">
-            {interest.kind} / {interest.key}
+        <div className="min-w-0">
+          <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-foreground/38">{source}</div>
+          <div className="mt-1 truncate text-sm font-semibold text-foreground">{title}</div>
+          {subtitle && <p className="mt-1 line-clamp-2 text-xs leading-5 text-foreground/52">{subtitle}</p>}
+        </div>
+        <span className="shrink-0 text-[11px] text-foreground/35">{formatDateTime(time)}</span>
+      </div>
+      {payload && hasObjectKeys(payload) && (
+        <details className="mt-3 rounded-2xl bg-white/55 px-3 py-2 text-[11px] leading-5 text-foreground/62 ring-1 ring-white/60">
+          <summary className="cursor-pointer text-foreground/45">Raw fields</summary>
+          <pre className="mt-2 whitespace-pre-wrap break-words">{formatValue(payload)}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function MirrorPanel({
+  profile,
+  topicMemories,
+  openGroups,
+  onToggleGroup,
+}: {
+  profile: ProfileSnapshot["profile"];
+  topicMemories: Memory[];
+  openGroups: Record<ProfileGroupKey, boolean>;
+  onToggleGroup: (group: ProfileGroupKey) => void;
+}) {
+  return (
+    <div>
+      <div className="mb-3">
+        <h2 className="text-sm font-semibold text-foreground">Mirror</h2>
+        <p className="mt-1 max-w-2xl text-[11px] leading-5 text-foreground/42">
+          Profile facts, preferences, constraints, and topic memory in one derived view.
+        </p>
+      </div>
+
+      <div className="max-h-[58vh] min-h-[360px] space-y-4 overflow-y-auto pr-1">
+        <div className="space-y-3">
+          {PROFILE_GROUP_META.map((group) => (
+            <ProfileGroupCard
+              key={group.key}
+              title={group.title}
+              description={group.description}
+              values={profile?.[group.key] ?? {}}
+              expanded={openGroups[group.key]}
+              onToggle={() => onToggleGroup(group.key)}
+            />
+          ))}
+        </div>
+
+        <div className="rounded-2xl bg-foreground/[0.03] p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold text-foreground">Topic Memory</h3>
+            <span className="text-xs text-foreground/38">{topicMemories.length}</span>
           </div>
-          <div className="mt-1 text-xs text-foreground/45">
-            score {formatMetric(interest.score)} · confidence {formatMetric(interest.confidence)} · evidence {interest.evidence_count}
+          <div className="max-h-72 space-y-3 overflow-y-auto pr-1">
+            {topicMemories.length === 0 ? (
+              <EmptyState
+                title="No topic memory"
+                description="Interest-like data now appears as memory rows, usually under topic subjects."
+              />
+            ) : (
+              topicMemories.map((memory) => <MemoryItem key={memory.id} memory={memory} />)
+            )}
           </div>
         </div>
-        <span className="rounded-full bg-foreground/5 px-2 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-foreground/42">
-          {interest.status}
-        </span>
       </div>
-      <div className="mt-3 text-[11px] text-foreground/38">
-        Last signal: {formatDateTime(interest.last_signal_at)}
+    </div>
+  );
+}
+
+function MemoryPanel({
+  memories,
+  total,
+  hasMore,
+  loadingMore,
+  onLoadMore,
+}: {
+  memories: Memory[];
+  total: number;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
+}) {
+  return (
+    <div>
+      <div className="mb-3 flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-sm font-semibold text-foreground">Memory</h2>
+          <p className="mt-1 text-[11px] leading-5 text-foreground/42">
+            Long-term things the assistant remembers about you. This panel pages without stretching the whole page.
+          </p>
+        </div>
+        <div className="shrink-0 rounded-2xl bg-foreground/5 px-3 py-2 text-right">
+          <div className="text-[10px] uppercase tracking-[0.14em] text-foreground/35">Total</div>
+          <div className="mt-0.5 text-sm font-semibold text-foreground">{total}</div>
+        </div>
+      </div>
+      <div className="max-h-[58vh] min-h-[360px] space-y-3 overflow-y-auto pr-1">
+        {memories.length === 0 ? (
+          <EmptyState title="No memories yet" description="Nothing has been saved as long-term memory yet." />
+        ) : (
+          memories.map((memory) => <MemoryItem key={memory.id} memory={memory} />)
+        )}
+        <LoadMoreButton
+          hasMore={hasMore}
+          loading={loadingMore}
+          label="Load more memories"
+          onClick={onLoadMore}
+        />
+      </div>
+    </div>
+  );
+}
+
+function SignalsPanel({
+  signals,
+  total,
+  hasMore,
+  loadingMore,
+  onLoadMore,
+}: {
+  signals: PersonalSignal[];
+  total: number;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
+}) {
+  return (
+    <div>
+      <div className="mb-3 flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-sm font-semibold text-foreground">Signals</h2>
+          <p className="mt-1 text-[11px] leading-5 text-foreground/42">
+            Recent observations that may become memory after the assistant sees enough context.
+          </p>
+        </div>
+        <div className="shrink-0 rounded-2xl bg-foreground/5 px-3 py-2 text-right">
+          <div className="text-[10px] uppercase tracking-[0.14em] text-foreground/35">Total</div>
+          <div className="mt-0.5 text-sm font-semibold text-foreground">{total}</div>
+        </div>
+      </div>
+      <div className="max-h-[58vh] min-h-[360px] space-y-3 overflow-y-auto pr-1">
+        {signals.length === 0 ? (
+          <EmptyState title="No signals yet" description="Recent observations will appear here after connected sources provide data." />
+        ) : (
+          signals.map((signal) => <SignalItem key={signal.id} signal={signal} />)
+        )}
+        <LoadMoreButton
+          hasMore={hasMore}
+          loading={loadingMore}
+          label="Load more signals"
+          onClick={onLoadMore}
+        />
+      </div>
+    </div>
+  );
+}
+
+function RawPanelContent({
+  raw,
+  sources,
+  activeRawPanel,
+  onChangeRawPanel,
+}: {
+  raw: RawPreview;
+  sources: RawSourceOption[];
+  activeRawPanel: RawPanel;
+  onChangeRawPanel: (panel: RawPanel) => void;
+}) {
+  const activeSource = sources.find((source) => source.id === activeRawPanel) ?? sources[0];
+
+  return (
+    <div>
+      <div className="mb-3 space-y-3">
+        <div>
+          <h2 className="text-sm font-semibold text-foreground">Raw</h2>
+          <p className="mt-1 text-[11px] leading-5 text-foreground/42">
+            Source data from connected apps and devices before it becomes memories or profile details.
+          </p>
+        </div>
+        <div className="rounded-2xl bg-foreground/5 p-2">
+          <label className="mb-1.5 block text-[10px] uppercase tracking-[0.16em] text-foreground/35">
+            Data source
+          </label>
+          <div className="relative">
+            <select
+              value={activeSource?.id ?? ""}
+              disabled={sources.length === 0}
+              onChange={(event) => onChangeRawPanel(event.target.value as RawPanel)}
+              className="h-11 w-full appearance-none rounded-xl bg-white/65 px-3 pr-10 text-sm font-medium text-foreground ring-1 ring-white/70 outline-none transition-colors hover:bg-white/85 disabled:text-foreground/35"
+            >
+              {sources.length === 0 ? (
+                <option value="">No connected data source</option>
+              ) : (
+                sources.map((source) => (
+                  <option key={source.id} value={source.id}>
+                    {source.label} ({source.count})
+                  </option>
+                ))
+              )}
+            </select>
+            <ChevronDown
+              size={15}
+              strokeWidth={1.6}
+              className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-foreground/35"
+            />
+          </div>
+          {activeSource && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <Pill tone={activeSource.kind === "device" ? "device" : "source"}>
+                {activeSource.kind === "device" ? "Device" : "Connector"}
+              </Pill>
+              <Pill tone="quality">{activeSource.count} rows</Pill>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="max-h-[58vh] min-h-[360px] space-y-3 overflow-y-auto pr-1">
+        {!activeSource && (
+          <EmptyState
+            title="No connected data source"
+            description="Connect an app or sync a device to show source data here."
+          />
+        )}
+        {activeSource?.id === "gmail" && (
+          raw.gmail.length === 0 ? (
+            <EmptyState title="No Gmail data" description="No Gmail messages are available right now." />
+          ) : (
+            raw.gmail.map((message) => (
+              <RawRecordItem
+                key={message.id}
+                source="Gmail"
+                title={message.subject || message.message_id}
+                subtitle={message.snippet || message.from_addr}
+                time={message.occurred_at}
+                payload={{
+                  from_addr: message.from_addr,
+                  to_addrs: message.to_addrs,
+                  labels: message.label_ids,
+                  reference_count: message.reference_count,
+                }}
+              />
+            ))
+          )
+        )}
+        {activeSource?.id === "gcal" && (
+          raw.gcal.length === 0 ? (
+            <EmptyState title="No Calendar data" description="No calendar events are available right now." />
+          ) : (
+            raw.gcal.map((event) => (
+              <RawRecordItem
+                key={event.id}
+                source="Calendar"
+                title={event.title || event.event_id}
+                subtitle={event.location || event.status}
+                time={event.start_at ?? event.occurred_at}
+                payload={{
+                  calendar_id: event.calendar_id,
+                  attendees: event.attendees,
+                  end_at: event.end_at,
+                  reference_count: event.reference_count,
+                }}
+              />
+            ))
+          )
+        )}
+        {activeSource?.id === "apps" && (
+          raw.apps.length === 0 ? (
+            <EmptyState title="No device app data" description="No app list from your device is available right now." />
+          ) : (
+            raw.apps.map((app) => (
+              <RawRecordItem
+                key={app.id}
+                source="Device Apps"
+                title={app.app_name}
+                subtitle={app.bundle_id}
+                time={app.last_used_at ?? app.occurred_at}
+                payload={{
+                  device_id: app.device_id,
+                  snapshot_id: app.snapshot_id,
+                  version: app.version,
+                  reference_count: app.reference_count,
+                }}
+              />
+            ))
+          )
+        )}
+        {activeSource?.id === "contacts" && (
+          raw.contacts.length === 0 ? (
+            <EmptyState title="No contact data" description="No contacts from your device are available right now." />
+          ) : (
+            raw.contacts.map((contact) => (
+              <RawRecordItem
+                key={contact.id}
+                source="Contacts"
+                title={contact.display_name || contact.id}
+                subtitle={[...contact.emails, ...contact.phones].slice(0, 3).join(" · ")}
+                time={contact.last_modified ?? contact.occurred_at}
+                payload={{
+                  device_id: contact.device_id,
+                  snapshot_id: contact.snapshot_id,
+                  emails: contact.emails,
+                  phones: contact.phones,
+                  reference_count: contact.reference_count,
+                }}
+              />
+            ))
+          )
+        )}
       </div>
     </div>
   );
@@ -449,27 +976,31 @@ function InterestItem({ interest }: { interest: ProfileInterest }) {
 // Main component
 // ---------------------------------------------------------------------------
 
-export default function GoalsView() {
+interface GoalsViewProps {
+  composio: ComposioState;
+}
+
+export default function GoalsView({ composio }: GoalsViewProps) {
   const [snapshot, setSnapshot] = useState<ProfileSnapshot>(EMPTY_SNAPSHOT);
+  const [memories, setMemories] = useState<Memory[]>([]);
+  const [memoryTotal, setMemoryTotal] = useState(0);
+  const [memoryHasMore, setMemoryHasMore] = useState(false);
+  const [memoryLoadingMore, setMemoryLoadingMore] = useState(false);
+  const [signals, setSignals] = useState<PersonalSignal[]>([]);
+  const [signalTotal, setSignalTotal] = useState(0);
+  const [signalHasMore, setSignalHasMore] = useState(false);
+  const [signalLoadingMore, setSignalLoadingMore] = useState(false);
+  const [topicMemories, setTopicMemories] = useState<Memory[]>([]);
+  const [rawPreview, setRawPreview] = useState<RawPreview>(EMPTY_RAW_PREVIEW);
+  const [activePanel, setActivePanel] = useState<DataPanel>("memory");
+  const [activeRawPanel, setActiveRawPanel] = useState<RawPanel>("apps");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   // Gateway grid drawer state
   const [expandedGoal, setExpandedGoal] = useState<string | null>(null);
 
-  // Upstream goals list expand state
-  const [expandedKey, setExpandedKey] = useState<string | null>(null);
-
-  // Add / close goal forms
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [newKey, setNewKey] = useState("");
-  const [newTitle, setNewTitle] = useState("");
-  const [newPriority, setNewPriority] = useState<"high" | "medium" | "low">("medium");
-  const [saving, setSaving] = useState(false);
-  const [closingKey, setClosingKey] = useState<string | null>(null);
-
   // Upstream profile section state
-  const [memoryTab, setMemoryTab] = useState<MemoryTab>("entry");
   const [openGroups, setOpenGroups] = useState<Record<ProfileGroupKey, boolean>>({
     facts: false,
     preferences: false,
@@ -490,9 +1021,41 @@ export default function GoalsView() {
     setError(null);
 
     try {
-      const data = await fetchProfileSnapshot(controller.signal);
+      const [data, memoryData, signalData, topicData, rawData] = await Promise.all([
+        fetchProfileSnapshot(controller.signal),
+        fetchMemories({
+          status: "active",
+          limit: LIST_PAGE_SIZE,
+          orderBy: "created_at",
+          orderDirection: "desc",
+        }, controller.signal),
+        fetchSignals({
+          status: "open",
+          limit: LIST_PAGE_SIZE,
+          pruneExpired: true,
+        }, controller.signal),
+        fetchMemories({
+          status: "active",
+          subjectPrefix: "topic:",
+          limit: TOPIC_MEMORY_PREVIEW_LIMIT,
+          orderBy: "quality",
+          orderDirection: "desc",
+        }, controller.signal),
+        fetchRawPreview(controller.signal).catch((err) => {
+          console.warn("[GoalsView] fetchRawPreview failed:", err);
+          return EMPTY_RAW_PREVIEW;
+        }),
+      ]);
       if (!controller.signal.aborted) {
         setSnapshot(data);
+        setMemories(memoryData.memories);
+        setMemoryTotal(memoryData.total ?? memoryData.memories.length);
+        setMemoryHasMore(memoryData.memories.length < (memoryData.total ?? memoryData.memories.length));
+        setSignals(signalData.signals);
+        setSignalTotal(signalData.total ?? signalData.signals.length);
+        setSignalHasMore(signalData.signals.length < (signalData.total ?? signalData.signals.length));
+        setTopicMemories(topicData.memories);
+        setRawPreview(rawData);
       }
     } catch (err) {
       if (!controller.signal.aborted) {
@@ -519,68 +1082,72 @@ export default function GoalsView() {
     () => snapshot.goals.filter((goal) => goal.status !== "closed"),
     [snapshot.goals],
   );
-  const closedGoals = useMemo(
-    () => snapshot.goals.filter((goal) => goal.status === "closed"),
-    [snapshot.goals],
+  const rawSources = useMemo(
+    () => buildRawSourceOptions(rawPreview, composio.connections),
+    [rawPreview, composio.connections],
   );
-  const eventMemories = useMemo(
-    () => snapshot.memories.filter(isEventMemory),
-    [snapshot.memories],
-  );
-  const entryMemories = useMemo(
-    () => snapshot.memories.filter((memory) => !isEventMemory(memory)),
-    [snapshot.memories],
-  );
-  const visibleMemories = memoryTab === "event" ? eventMemories : entryMemories;
 
+  useEffect(() => {
+    if (rawSources.some((source) => source.id === activeRawPanel)) return;
+    const nextPanel = rawSources[0]?.id;
+    if (nextPanel && nextPanel !== activeRawPanel) {
+      setActiveRawPanel(nextPanel);
+    }
+  }, [activeRawPanel, rawSources]);
   const scrollToSection = useCallback((sectionId: SectionId) => {
-    const element = document.getElementById(`profile-section-${sectionId}`);
+    if (sectionId !== "goals") {
+      setActivePanel(sectionId);
+    }
+    const element = document.getElementById(sectionId === "goals" ? "profile-section-goals" : "profile-section-workbench");
     element?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
 
-  // ── Goal actions ──
+  const loadMoreMemories = useCallback(async () => {
+    if (memoryLoadingMore || !memoryHasMore) return;
 
-  const handleAddGoal = async () => {
-    const key = newKey.trim().toLowerCase().replace(/\s+/g, "-");
-    const title = newTitle.trim();
-    if (!key || !title) return;
-
-    setSaving(true);
+    setMemoryLoadingMore(true);
+    setError(null);
     try {
-      const res = await proxyPost("/profile/goals", { key, title, priority: newPriority });
-      const data = await res.json();
-      if (!res.ok || !data?.ok) {
-        throw new Error(data?.error ?? `Failed to add goal: ${res.status}`);
-      }
-      setNewKey("");
-      setNewTitle("");
-      setNewPriority("medium");
-      setShowAddForm(false);
-      await loadSnapshot({ silent: true });
+      const data = await fetchMemories({
+        status: "active",
+        limit: LIST_PAGE_SIZE,
+        offset: memories.length,
+        orderBy: "created_at",
+        orderDirection: "desc",
+      });
+      const merged = mergeUniqueById(memories, data.memories);
+      setMemories(merged);
+      setMemoryHasMore(data.memories.length > 0 && merged.length < memoryTotal);
     } catch (err) {
-      console.warn("[GoalsView] addGoal failed:", err);
-      setError(err instanceof Error ? err.message : "Failed to add goal");
+      console.warn("[GoalsView] loadMoreMemories failed:", err);
+      setError(err instanceof Error ? err.message : "Failed to load more memories");
     } finally {
-      setSaving(false);
+      setMemoryLoadingMore(false);
     }
-  };
+  }, [memories, memoryHasMore, memoryLoadingMore, memoryTotal]);
 
-  const handleCloseGoal = async (key: string) => {
-    setClosingKey(key);
+  const loadMoreSignals = useCallback(async () => {
+    if (signalLoadingMore || !signalHasMore) return;
+
+    setSignalLoadingMore(true);
+    setError(null);
     try {
-      const res = await proxyPost("/profile/goals/close", { key });
-      const data = await res.json();
-      if (!res.ok || !data?.ok) {
-        throw new Error(data?.error ?? `Failed to close goal: ${res.status}`);
-      }
-      await loadSnapshot({ silent: true });
+      const data = await fetchSignals({
+        status: "open",
+        limit: LIST_PAGE_SIZE,
+        offset: signals.length,
+        pruneExpired: true,
+      });
+      const merged = mergeUniqueById(signals, data.signals);
+      setSignals(merged);
+      setSignalHasMore(data.signals.length > 0 && merged.length < signalTotal);
     } catch (err) {
-      console.warn("[GoalsView] closeGoal failed:", err);
-      setError(err instanceof Error ? err.message : "Failed to close goal");
+      console.warn("[GoalsView] loadMoreSignals failed:", err);
+      setError(err instanceof Error ? err.message : "Failed to load more signals");
     } finally {
-      setClosingKey(null);
+      setSignalLoadingMore(false);
     }
-  };
+  }, [signals, signalHasMore, signalLoadingMore, signalTotal]);
 
   const toggleGroup = (group: ProfileGroupKey) => {
     setOpenGroups((prev) => ({ ...prev, [group]: !prev[group] }));
@@ -592,6 +1159,12 @@ export default function GoalsView() {
   const selectedVisual = selectedApiGoal ? getVisualMeta(selectedApiGoal.key) : null;
   const selectedBasket = selectedApiGoal ? basketMeta(selectedApiGoal.key) : null;
   const selectedStatus = selectedApiGoal ? priorityToStatus(selectedApiGoal.priority) : "Normal";
+  const rawTotal =
+    rawPreview.gmailTotal +
+    rawPreview.gcalTotal +
+    rawPreview.appsTotal +
+    rawPreview.contactsTotal;
+  const profileFieldCount = countProfileFields(profile);
 
   const sectionMotion = {
     initial: { opacity: 0, y: 12 },
@@ -606,11 +1179,11 @@ export default function GoalsView() {
       {/* Page header */}
       <div className="mb-6 pr-20">
         <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-foreground/35">
-          Profile Snapshot
+          Memory Profile
         </div>
         <h1 className="text-display mt-1 text-2xl text-foreground">Profile</h1>
-        <p className="mt-1 text-sm leading-6 text-muted-foreground">
-          Your current profile, memory, signals, interests, and active goals in one place.
+        <p className="mt-1 truncate text-sm leading-6 text-muted-foreground">
+          What your assistant knows and can use.
         </p>
       </div>
 
@@ -628,83 +1201,11 @@ export default function GoalsView() {
             </motion.section>
           )}
 
-          {/* ────────────────────────────────────────────────────────── */}
-          {/* Section 1: Gateway-style 2-column image grid              */}
-          {/* ────────────────────────────────────────────────────────── */}
-
-          {activeGoals.length === 0 ? (
-            <div className="glass-card-strong p-8 text-center">
-              <Sparkles size={28} className="mx-auto mb-3 text-foreground/50" />
-              <p className="text-display text-foreground mb-1">No active goals</p>
-              <p className="text-sm text-muted-foreground">
-                Add goals to help your AI generate more relevant intent cards
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-3">
-              {activeGoals.map((goal) => {
-                const visual = getVisualMeta(goal.key);
-                const basket = basketMeta(goal.key);
-                const status = priorityToStatus(goal.priority);
-                const Icon = basket.icon;
-
-                return (
-                  <div
-                    key={goal.key}
-                    className="glass-card-strong cursor-pointer active:scale-[0.97] transition-transform overflow-hidden"
-                    onClick={() => setExpandedGoal(goal.key)}
-                  >
-                    <div className="w-full h-24 overflow-hidden bg-foreground/[0.03] flex items-center justify-center">
-                      <img
-                        src={visual.image}
-                        alt={basket.label}
-                        className={`w-auto object-contain ${basket.label === "Growth" ? "h-[70%]" : "h-full"}`}
-                      />
-                    </div>
-                    <div className="p-3.5">
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className="text-foreground"><Icon size={20} /></span>
-                        <span className="text-display text-sm text-foreground">{basket.label}</span>
-                      </div>
-
-                      <div className="w-full h-1.5 rounded-full bg-foreground/10 mb-2 overflow-hidden">
-                        <div
-                          className={`h-full rounded-full ${statusColor[status]} transition-all duration-700 ease-out`}
-                          style={{ width: `${visual.pct}%` }}
-                        />
-                      </div>
-
-                      <div className="flex justify-between items-center mb-2">
-                        <span className="text-display text-lg text-foreground">{visual.pct}%</span>
-                        <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
-                          status === "Alert" ? "bg-rose-50 text-rose-400"
-                          : status === "Watch" ? "bg-amber-50 text-amber-500"
-                          : "bg-emerald-50 text-emerald-500"
-                        }`}>{status}</span>
-                      </div>
-
-                      <div className="flex justify-between items-end">
-                        <p className="text-[11px] text-foreground/50 leading-snug flex-1 line-clamp-2">
-                          {goal.summary || goal.title}
-                        </p>
-                        <ArrowRightCircle size={16} className="text-foreground/25 shrink-0 ml-1" />
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {/* ────────────────────────────────────────────────────────── */}
-          {/* Section 2: Profile Summary                                */}
-          {/* ────────────────────────────────────────────────────────── */}
-
           <motion.section {...sectionMotion} className="glass-card-strong p-5">
-            <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-              <div className="min-w-0 flex-1">
+            <div className="space-y-4">
+              <div className="min-w-0">
                 <div className="text-[11px] uppercase tracking-[0.18em] text-foreground/35">
-                  Current Profile
+                  Current Profile Data
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
                   <h2 className="text-display text-xl text-foreground">
@@ -717,152 +1218,155 @@ export default function GoalsView() {
                     {profile?.timezone ?? "n/a"}
                   </span>
                 </div>
-                <p className="mt-3 max-w-xl text-sm leading-6 text-foreground/65">
+                <p className="mt-3 max-w-[68ch] text-sm leading-6 text-foreground/65 line-clamp-5">
                   {profile?.summary?.trim() || "No summary stored yet. The assistant will still use memories, signals, and goals below."}
                 </p>
               </div>
-              <div className="rounded-3xl bg-white/55 px-4 py-3 text-right ring-1 ring-white/60">
-                <div className="text-[10px] uppercase tracking-[0.18em] text-foreground/35">Status</div>
-                <div className="mt-1 text-sm font-semibold text-foreground">
-                  {profile ? "Live" : "Empty"}
-                </div>
-              </div>
             </div>
 
-            <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <SummaryStat label="Memories" value={snapshot.memories.length} onClick={() => scrollToSection("memory")} />
-              <SummaryStat label="Signals" value={snapshot.signals.length} onClick={() => scrollToSection("signals")} />
-              <SummaryStat label="Interests" value={snapshot.interests.length} onClick={() => scrollToSection("interests")} />
-              <SummaryStat label="Goals" value={activeGoals.length} onClick={() => scrollToSection("goals")} />
-            </div>
-          </motion.section>
-
-          {/* ────────────────────────────────────────────────────────── */}
-          {/* Section 3: Profile Fields                                 */}
-          {/* ────────────────────────────────────────────────────────── */}
-
-          <motion.section {...sectionMotion} className="glass-card-strong p-4">
-            <div className="mb-3">
-              <h2 className="text-sm font-semibold text-foreground">Profile Fields</h2>
-              <p className="mt-1 text-[11px] leading-5 text-foreground/42">
-                Full structured profile data, grouped by how the assistant uses it.
-              </p>
-            </div>
-            <div className="space-y-3">
-              {PROFILE_GROUP_META.map((group) => (
-                <ProfileGroupCard
-                  key={group.key}
-                  title={group.title}
-                  description={group.description}
-                  values={profile?.[group.key] ?? {}}
-                  expanded={openGroups[group.key]}
-                  onToggle={() => toggleGroup(group.key)}
-                />
-              ))}
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <MetricCard
+                label="Profile"
+                value={String(profileFieldCount)}
+                detail="fields"
+                onClick={() => scrollToSection("mirror")}
+              />
+              <MetricCard
+                label="Memory"
+                value={String(memoryTotal)}
+                detail="rows"
+                onClick={() => scrollToSection("memory")}
+              />
+              <MetricCard
+                label="Signals"
+                value={String(signalTotal)}
+                detail="open"
+                onClick={() => scrollToSection("signals")}
+              />
+              <MetricCard
+                label="Raw"
+                value={String(rawTotal)}
+                detail="rows"
+                onClick={() => scrollToSection("raw")}
+              />
             </div>
           </motion.section>
 
-          {/* ────────────────────────────────────────────────────────── */}
-          {/* Section 4: Memory                                         */}
-          {/* ────────────────────────────────────────────────────────── */}
+          <motion.section id="profile-section-goals" {...sectionMotion} className="glass-card-strong p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold text-foreground">Goals</h2>
+              <span className="text-xs text-foreground/38">{activeGoals.length} active</span>
+            </div>
+            {activeGoals.length === 0 ? (
+              <EmptyState title="No active goals" description="Goals stay as a first-class collection in the mirror layer." />
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                {activeGoals.map((goal) => {
+                  const visual = getVisualMeta(goal.key);
+                  const basket = basketMeta(goal.key);
+                  const status = priorityToStatus(goal.priority);
+                  const Icon = basket.icon;
 
-          <motion.section id="profile-section-memory" {...sectionMotion} className="glass-card-strong p-4">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-sm font-semibold text-foreground">Memory</h2>
-                <p className="mt-1 text-[11px] leading-5 text-foreground/42">
-                  Full memory list split into personal entries and event-style records.
-                </p>
+                  return (
+                    <button
+                      key={goal.key}
+                      type="button"
+                      className="glass-card cursor-pointer overflow-hidden text-left transition-transform active:scale-[0.98]"
+                      onClick={() => setExpandedGoal(goal.key)}
+                    >
+                      <div className="flex h-20 items-center justify-center bg-foreground/[0.03]">
+                        <img
+                          src={visual.image}
+                          alt={basket.label}
+                          className={`w-auto object-contain ${basket.label === "Growth" ? "h-[62%]" : "h-full"}`}
+                        />
+                      </div>
+                      <div className="p-3">
+                        <div className="mb-2 flex items-center gap-2">
+                          <Icon size={18} className="text-foreground" />
+                          <span className="text-display text-sm text-foreground">{basket.label}</span>
+                        </div>
+                        <div className="mb-2 h-1.5 w-full overflow-hidden rounded-full bg-foreground/10">
+                          <div className={`h-full rounded-full ${statusColor[status]}`} style={{ width: `${visual.pct}%` }} />
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-display text-base text-foreground">{visual.pct}%</span>
+                          <span className="truncate text-[11px] text-foreground/45">{goal.summary || goal.title}</span>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
-              <div className="shrink-0 rounded-2xl bg-foreground/5 p-0.5">
-                <div className="flex items-center gap-0.5">
-                  {([
-                    { id: "entry", label: "Entry", count: entryMemories.length },
-                    { id: "event", label: "Event", count: eventMemories.length },
-                  ] as const).map((tab) => {
-                    const active = memoryTab === tab.id;
-                    return (
-                      <button
-                        key={tab.id}
-                        onClick={() => setMemoryTab(tab.id)}
-                        className={`whitespace-nowrap rounded-lg px-2 py-0.5 text-[10px] font-medium transition-colors ${
-                          active
-                            ? "bg-foreground text-background"
-                            : "text-foreground/48 hover:bg-white/45"
-                        }`}
-                      >
-                        {tab.label} ({tab.count})
-                      </button>
-                    );
-                  })}
-                </div>
+            )}
+          </motion.section>
+
+          <motion.section id="profile-section-workbench" {...sectionMotion} className="glass-card-strong overflow-hidden p-0">
+            <div className="border-b border-foreground/8 p-4">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <WorkbenchTabButton
+                  active={activePanel === "mirror"}
+                  label="Mirror"
+                  value={profile ? "Profile" : "Empty"}
+                  onClick={() => setActivePanel("mirror")}
+                />
+                <WorkbenchTabButton
+                  active={activePanel === "memory"}
+                  label="Memory"
+                  value={String(memoryTotal)}
+                  onClick={() => setActivePanel("memory")}
+                />
+                <WorkbenchTabButton
+                  active={activePanel === "signals"}
+                  label="Signals"
+                  value={String(signalTotal)}
+                  onClick={() => setActivePanel("signals")}
+                />
+                <WorkbenchTabButton
+                  active={activePanel === "raw"}
+                  label="Raw"
+                  value={String(rawTotal)}
+                  onClick={() => setActivePanel("raw")}
+                />
               </div>
             </div>
-
-            <div className="mt-4 space-y-3" style={{ contentVisibility: "auto" }}>
-              {visibleMemories.length === 0 ? (
-                <EmptyState
-                  title={`No ${memoryTab} memories`}
-                  description="This tab is empty right now, but the rest of the profile snapshot is still available."
+            <div className="p-4">
+              {activePanel === "mirror" && (
+                <MirrorPanel
+                  profile={profile}
+                  topicMemories={topicMemories}
+                  openGroups={openGroups}
+                  onToggleGroup={toggleGroup}
                 />
-              ) : (
-                visibleMemories.map((memory) => (
-                  <MemoryItem key={memory.id} memory={memory} />
-                ))
+              )}
+              {activePanel === "memory" && (
+                <MemoryPanel
+                  memories={memories}
+                  total={memoryTotal}
+                  hasMore={memoryHasMore}
+                  loadingMore={memoryLoadingMore}
+                  onLoadMore={loadMoreMemories}
+                />
+              )}
+              {activePanel === "signals" && (
+                <SignalsPanel
+                  signals={signals}
+                  total={signalTotal}
+                  hasMore={signalHasMore}
+                  loadingMore={signalLoadingMore}
+                  onLoadMore={loadMoreSignals}
+                />
+              )}
+              {activePanel === "raw" && (
+                <RawPanelContent
+                  raw={rawPreview}
+                  sources={rawSources}
+                  activeRawPanel={activeRawPanel}
+                  onChangeRawPanel={setActiveRawPanel}
+                />
               )}
             </div>
           </motion.section>
-
-          {/* ────────────────────────────────────────────────────────── */}
-          {/* Section 5: Signals                                        */}
-          {/* ────────────────────────────────────────────────────────── */}
-
-          <motion.section id="profile-section-signals" {...sectionMotion} className="glass-card-strong p-4">
-            <div className="mb-3">
-              <h2 className="text-sm font-semibold text-foreground">Signals</h2>
-              <p className="mt-1 text-[11px] leading-5 text-foreground/42">
-                Recent behavior and context signals the assistant can use for ranking and personalization.
-              </p>
-            </div>
-            <div className="space-y-3" style={{ contentVisibility: "auto" }}>
-              {snapshot.signals.length === 0 ? (
-                <EmptyState
-                  title="No signals yet"
-                  description="Signals will appear here when the assistant records behavior or environmental context."
-                />
-              ) : (
-                snapshot.signals.map((signal) => (
-                  <SignalItem key={signal.id} signal={signal} />
-                ))
-              )}
-            </div>
-          </motion.section>
-
-          {/* ────────────────────────────────────────────────────────── */}
-          {/* Section 6: Interests                                      */}
-          {/* ────────────────────────────────────────────────────────── */}
-
-          <motion.section id="profile-section-interests" {...sectionMotion} className="glass-card-strong p-4">
-            <div className="mb-3">
-              <h2 className="text-sm font-semibold text-foreground">Interests</h2>
-              <p className="mt-1 text-[11px] leading-5 text-foreground/42">
-                Derived interests rolled up from signals, with score and confidence shown in full.
-              </p>
-            </div>
-            <div className="space-y-3" style={{ contentVisibility: "auto" }}>
-              {snapshot.interests.length === 0 ? (
-                <EmptyState
-                  title="No interests derived yet"
-                  description="Interests will show up after enough signals are collected and summarized."
-                />
-              ) : (
-                snapshot.interests.map((interest) => (
-                  <InterestItem key={interest.id} interest={interest} />
-                ))
-              )}
-            </div>
-          </motion.section>
-
         </div>
       )}
 

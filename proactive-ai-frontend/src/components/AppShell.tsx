@@ -637,7 +637,7 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
                   onChattedId={persistChatted}
                 />
               )}
-              {activeView === "goals" && <GoalsView />}
+              {activeView === "goals" && <GoalsView composio={composio} />}
               {activeView === "control" && <ControlPanel composio={composio} />}
             </motion.div>
           )}

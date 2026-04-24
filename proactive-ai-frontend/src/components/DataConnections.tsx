@@ -750,7 +750,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                           (s) => s.tier === tier,
                         );
                         if (tierSources.length === 0) return null;
-                        const tierLabels = ["Priority", "Extended", "Optional"];
+                        const tierLabels = ["Recommended", "More sources", "Optional"];
                         return (
                           <div key={tier}>
                             <div className="flex items-center gap-2 mb-1.5 mt-2.5">
@@ -764,7 +764,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                 }`}
                               />
                               <span className="text-[10px] font-semibold text-foreground/50 uppercase tracking-wider">
-                                Tier {tier} — {tierLabels[tier]}
+                                {tierLabels[tier]}
                               </span>
                             </div>
                             <div className="space-y-1">

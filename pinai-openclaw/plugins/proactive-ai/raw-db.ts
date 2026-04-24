@@ -567,6 +567,17 @@ export function listGmailMessages(opts: ListGmailOpts = {}): GmailMessageRow[] {
   return db.prepare(parts.join(' ')).all(...params).map(rowToGmailMessage);
 }
 
+export function countGmailMessages(opts: ListGmailOpts = {}): number {
+  const db = getRawDb();
+  const parts = ['SELECT COUNT(*) AS total FROM gmail_messages WHERE 1=1'];
+  const params: unknown[] = [];
+  if (opts.since) { parts.push('AND occurred_at >= ?'); params.push(opts.since); }
+  if (opts.until) { parts.push('AND occurred_at <= ?'); params.push(opts.until); }
+  if (opts.threadId) { parts.push('AND thread_id = ?'); params.push(opts.threadId); }
+  const row = db.prepare(parts.join(' ')).get(...params) as { total?: number } | undefined;
+  return row?.total ?? 0;
+}
+
 // ─────── Google Calendar events ───────
 
 export interface GcalEventInput {
@@ -688,6 +699,19 @@ export function listGcalEvents(opts: ListGcalOpts = {}): GcalEventRow[] {
   parts.push('ORDER BY start_at ASC LIMIT ?');
   params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
   return db.prepare(parts.join(' ')).all(...params).map(rowToGcalEvent);
+}
+
+export function countGcalEvents(opts: ListGcalOpts = {}): number {
+  const db = getRawDb();
+  const parts = ['SELECT COUNT(*) AS total FROM gcal_events WHERE 1=1'];
+  const params: unknown[] = [];
+  const since = normalizeToUtcIso(opts.since);
+  const until = normalizeToUtcIso(opts.until);
+  if (since) { parts.push('AND start_at >= ?'); params.push(since); }
+  if (until) { parts.push('AND start_at <= ?'); params.push(until); }
+  if (opts.calendarId) { parts.push('AND calendar_id = ?'); params.push(opts.calendarId); }
+  const row = db.prepare(parts.join(' ')).get(...params) as { total?: number } | undefined;
+  return row?.total ?? 0;
 }
 
 // ─────── Device snapshots ───────
@@ -812,6 +836,36 @@ export function listDeviceApps(opts: {
   return (db.prepare(parts.join(' ')).all(...params) as any[]).map(rowToDeviceApp);
 }
 
+export function countDeviceApps(opts: {
+  deviceId?: string;
+  snapshotId?: string;
+  latestSnapshotOnly?: boolean;
+  since?: string;
+  until?: string;
+} = {}): number {
+  const db = getRawDb();
+  let snapshotId = opts.snapshotId;
+  if (!snapshotId && opts.latestSnapshotOnly) {
+    const latestParts = ['SELECT snapshot_id FROM device_apps_snapshot WHERE 1=1'];
+    const latestParams: unknown[] = [];
+    if (opts.deviceId) { latestParts.push('AND device_id = ?'); latestParams.push(opts.deviceId); }
+    if (opts.since)    { latestParts.push('AND occurred_at >= ?'); latestParams.push(opts.since); }
+    if (opts.until)    { latestParts.push('AND occurred_at <= ?'); latestParams.push(opts.until); }
+    latestParts.push('ORDER BY occurred_at DESC LIMIT 1');
+    const latest = db.prepare(latestParts.join(' ')).get(...latestParams) as { snapshot_id?: string } | undefined;
+    snapshotId = latest?.snapshot_id;
+    if (!snapshotId) return 0;
+  }
+  const parts = ['SELECT COUNT(*) AS total FROM device_apps_snapshot WHERE 1=1'];
+  const params: unknown[] = [];
+  if (opts.deviceId) { parts.push('AND device_id = ?'); params.push(opts.deviceId); }
+  if (snapshotId)    { parts.push('AND snapshot_id = ?'); params.push(snapshotId); }
+  if (opts.since)    { parts.push('AND occurred_at >= ?'); params.push(opts.since); }
+  if (opts.until)    { parts.push('AND occurred_at <= ?'); params.push(opts.until); }
+  const row = db.prepare(parts.join(' ')).get(...params) as { total?: number } | undefined;
+  return row?.total ?? 0;
+}
+
 export interface DeviceContactSnapshotItem {
   displayName?: string | null;
   emails?: string[];
@@ -907,6 +961,46 @@ export function listDeviceContacts(opts: {
   parts.push('ORDER BY display_name ASC NULLS LAST LIMIT ?');
   params.push(Math.max(1, Math.min(opts.limit ?? 200, 2000)));
   return (db.prepare(parts.join(' ')).all(...params) as any[]).map(rowToDeviceContact);
+}
+
+export function countDeviceContacts(opts: {
+  deviceId?: string;
+  snapshotId?: string;
+  latestSnapshotOnly?: boolean;
+  since?: string;
+  until?: string;
+  search?: string;
+} = {}): number {
+  const db = getRawDb();
+  let snapshotId = opts.snapshotId;
+  if (!snapshotId && opts.latestSnapshotOnly) {
+    const latestParts = ['SELECT snapshot_id FROM device_contacts_snapshot WHERE 1=1'];
+    const latestParams: unknown[] = [];
+    if (opts.deviceId) { latestParts.push('AND device_id = ?'); latestParams.push(opts.deviceId); }
+    if (opts.since)    { latestParts.push('AND occurred_at >= ?'); latestParams.push(opts.since); }
+    if (opts.until)    { latestParts.push('AND occurred_at <= ?'); latestParams.push(opts.until); }
+    latestParts.push('ORDER BY occurred_at DESC LIMIT 1');
+    const latest = db.prepare(latestParts.join(' ')).get(...latestParams) as { snapshot_id?: string } | undefined;
+    snapshotId = latest?.snapshot_id;
+    if (!snapshotId) return 0;
+  }
+  const parts = ['SELECT COUNT(*) AS total FROM device_contacts_snapshot WHERE 1=1'];
+  const params: unknown[] = [];
+  if (opts.deviceId) { parts.push('AND device_id = ?'); params.push(opts.deviceId); }
+  if (snapshotId)    { parts.push('AND snapshot_id = ?'); params.push(snapshotId); }
+  if (opts.since)    { parts.push('AND occurred_at >= ?'); params.push(opts.since); }
+  if (opts.until)    { parts.push('AND occurred_at <= ?'); params.push(opts.until); }
+  if (opts.search) {
+    const pat = `%${escapeLike(opts.search).toLowerCase()}%`;
+    parts.push(`AND (
+      LOWER(COALESCE(display_name, '')) LIKE ? ESCAPE '\\'
+      OR LOWER(emails_json) LIKE ? ESCAPE '\\'
+      OR LOWER(phones_json) LIKE ? ESCAPE '\\'
+    )`);
+    params.push(pat, pat, pat);
+  }
+  const row = db.prepare(parts.join(' ')).get(...params) as { total?: number } | undefined;
+  return row?.total ?? 0;
 }
 
 export function ingestDeviceContactsSnapshot(input: IngestDeviceContactsInput): IngestResult {

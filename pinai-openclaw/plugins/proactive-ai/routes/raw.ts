@@ -3,7 +3,8 @@
  *
  *   GET /raw/gmail            ?since / ?until / ?threadId / ?limit
  *   GET /raw/gcal             ?since / ?until / ?calendarId / ?limit
- *   GET /raw/device-apps      ?deviceId / ?latestSnapshotOnly=1 / ?limit
+ *   GET /raw/device-apps      ?deviceId / ?snapshotId / ?latestSnapshotOnly=1 / ?since / ?until / ?limit
+ *   GET /raw/device-contacts  ?deviceId / ?snapshotId / ?latestSnapshotOnly=1 / ?since / ?until / ?search / ?limit
  *
  * See docs/plans/memory-architecture.mdx §三 (raw.db).
  */
@@ -20,39 +21,65 @@ export function handleRaw(): RouteHandler {
       if (route === '/gmail' && ctx.req.method === 'GET') {
         const p = ctx.url.searchParams;
         const limit = p.get('limit');
-        const messages = raw.listGmailMessages({
+        const opts = {
           since: p.get('since') ?? undefined,
           until: p.get('until') ?? undefined,
           threadId: p.get('threadId') ?? undefined,
           limit: limit !== null ? Number(limit) : undefined,
-        });
-        json(ctx.res, 200, { ok: true, messages });
+        };
+        const messages = raw.listGmailMessages(opts);
+        const total = raw.countGmailMessages(opts);
+        json(ctx.res, 200, { ok: true, messages, total });
         return true;
       }
 
       if (route === '/gcal' && ctx.req.method === 'GET') {
         const p = ctx.url.searchParams;
         const limit = p.get('limit');
-        const events = raw.listGcalEvents({
+        const opts = {
           since: p.get('since') ?? undefined,
           until: p.get('until') ?? undefined,
           calendarId: p.get('calendarId') ?? undefined,
           limit: limit !== null ? Number(limit) : undefined,
-        });
-        json(ctx.res, 200, { ok: true, events });
+        };
+        const events = raw.listGcalEvents(opts);
+        const total = raw.countGcalEvents(opts);
+        json(ctx.res, 200, { ok: true, events, total });
         return true;
       }
 
       if (route === '/device-apps' && ctx.req.method === 'GET') {
         const p = ctx.url.searchParams;
         const limit = p.get('limit');
-        const apps = raw.listDeviceApps({
+        const opts = {
           deviceId: p.get('deviceId') ?? undefined,
           snapshotId: p.get('snapshotId') ?? undefined,
           latestSnapshotOnly: p.get('latestSnapshotOnly') === '1',
+          since: p.get('since') ?? undefined,
+          until: p.get('until') ?? undefined,
           limit: limit !== null ? Number(limit) : undefined,
-        });
-        json(ctx.res, 200, { ok: true, apps });
+        };
+        const apps = raw.listDeviceApps(opts);
+        const total = raw.countDeviceApps(opts);
+        json(ctx.res, 200, { ok: true, apps, total });
+        return true;
+      }
+
+      if (route === '/device-contacts' && ctx.req.method === 'GET') {
+        const p = ctx.url.searchParams;
+        const limit = p.get('limit');
+        const opts = {
+          deviceId: p.get('deviceId') ?? undefined,
+          snapshotId: p.get('snapshotId') ?? undefined,
+          latestSnapshotOnly: p.get('latestSnapshotOnly') === '1',
+          since: p.get('since') ?? undefined,
+          until: p.get('until') ?? undefined,
+          search: p.get('search') ?? undefined,
+          limit: limit !== null ? Number(limit) : undefined,
+        };
+        const contacts = raw.listDeviceContacts(opts);
+        const total = raw.countDeviceContacts(opts);
+        json(ctx.res, 200, { ok: true, contacts, total });
         return true;
       }
     } catch (err) {

@@ -2964,12 +2964,13 @@ export interface ListMemoryOpts {
    */
   textQuery?: string;
   limit?: number;
+  offset?: number;
   orderBy?: 'created_at' | 'quality' | 'last_referenced_at';
   orderDirection?: 'asc' | 'desc';
 }
 
-export async function listMemoryV3(opts: ListMemoryOpts = {}): Promise<MemoryRowV3[]> {
-  const parts = ['SELECT * FROM memory WHERE 1=1'];
+function buildMemoryWhere(opts: ListMemoryOpts): { whereSql: string; params: unknown[] } {
+  const parts = ['WHERE 1=1'];
   const params: unknown[] = [];
   parts.push("AND status = ?");
   params.push(opts.status ?? 'active');
@@ -2991,13 +2992,27 @@ export async function listMemoryV3(opts: ListMemoryOpts = {}): Promise<MemoryRow
     )`);
     params.push(pat, pat, pat);
   }
+  return { whereSql: parts.join(' '), params };
+}
+
+export async function countMemoryV3(opts: ListMemoryOpts = {}): Promise<number> {
+  const { whereSql, params } = buildMemoryWhere(opts);
+  const row = getDb().prepare(`SELECT COUNT(*) AS total FROM memory ${whereSql}`).get(...params) as { total?: number } | undefined;
+  return row?.total ?? 0;
+}
+
+export async function listMemoryV3(opts: ListMemoryOpts = {}): Promise<MemoryRowV3[]> {
+  const { whereSql, params } = buildMemoryWhere(opts);
+  const parts = [`SELECT * FROM memory ${whereSql}`];
   const orderCol = opts.orderBy === 'quality' ? 'quality'
     : opts.orderBy === 'last_referenced_at' ? 'last_referenced_at'
     : 'created_at';
   const orderDir = opts.orderDirection === 'asc' ? 'ASC' : 'DESC';
-  parts.push(`ORDER BY ${orderCol} ${orderDir}`);
-  parts.push('LIMIT ?');
+  const offset = Number.isFinite(opts.offset) ? Math.max(0, Math.floor(opts.offset ?? 0)) : 0;
+  parts.push(`ORDER BY ${orderCol} ${orderDir}, id ${orderDir}`);
+  parts.push('LIMIT ? OFFSET ?');
   params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
+  params.push(offset);
   const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
   return rows.map(rowToMemoryV3);
 }
@@ -3805,6 +3820,7 @@ export interface ListPersonalSignalsOpts {
   until?: string;
   minSalience?: number;
   limit?: number;
+  offset?: number;
   /** When true, also expire any rows whose expires_at has passed before listing. */
   pruneExpired?: boolean;
 }
@@ -3813,7 +3829,19 @@ export async function listPersonalSignals(
   opts: ListPersonalSignalsOpts = {},
 ): Promise<PersonalSignalRow[]> {
   if (opts.pruneExpired) await expireElapsedPersonalSignals();
-  const parts = ['SELECT * FROM personal_signals WHERE 1=1'];
+  const { whereSql, params } = buildPersonalSignalsWhere(opts);
+  const parts = [`SELECT * FROM personal_signals ${whereSql}`];
+  const offset = Number.isFinite(opts.offset) ? Math.max(0, Math.floor(opts.offset ?? 0)) : 0;
+  parts.push('ORDER BY occurred_at DESC, id DESC');
+  parts.push('LIMIT ? OFFSET ?');
+  params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
+  params.push(offset);
+  const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
+  return rows.map(rowToPersonalSignal);
+}
+
+function buildPersonalSignalsWhere(opts: ListPersonalSignalsOpts): { whereSql: string; params: unknown[] } {
+  const parts = ['WHERE 1=1'];
   const params: unknown[] = [];
   if (opts.status) { parts.push('AND status = ?'); params.push(opts.status); }
   if (opts.kind) { parts.push('AND kind = ?'); params.push(opts.kind); }
@@ -3822,11 +3850,16 @@ export async function listPersonalSignals(
   if (opts.since) { parts.push('AND occurred_at >= ?'); params.push(opts.since); }
   if (opts.until) { parts.push('AND occurred_at <= ?'); params.push(opts.until); }
   if (typeof opts.minSalience === 'number') { parts.push('AND salience >= ?'); params.push(opts.minSalience); }
-  parts.push('ORDER BY occurred_at DESC');
-  parts.push('LIMIT ?');
-  params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
-  const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
-  return rows.map(rowToPersonalSignal);
+  return { whereSql: parts.join(' '), params };
+}
+
+export async function countPersonalSignals(
+  opts: ListPersonalSignalsOpts = {},
+): Promise<number> {
+  if (opts.pruneExpired) await expireElapsedPersonalSignals();
+  const { whereSql, params } = buildPersonalSignalsWhere(opts);
+  const row = getDb().prepare(`SELECT COUNT(*) AS total FROM personal_signals ${whereSql}`).get(...params) as { total?: number } | undefined;
+  return row?.total ?? 0;
 }
 
 export async function getPersonalSignal(id: string): Promise<PersonalSignalRow | null> {

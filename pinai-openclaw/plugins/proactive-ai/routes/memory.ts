@@ -1,7 +1,7 @@
 /**
  * v3 memory HTTP routes:
  *   GET   /memory                 list active, optional ?minQuality / ?subject /
- *                                 ?subjectPrefix / ?since / ?limit / ?orderBy
+ *                                 ?subjectPrefix / ?since / ?limit / ?offset / ?orderBy
  *   GET   /memory/<id>            single row
  *   POST  /memory                 add a new memory (body: AddMemoryV3Input)
  *   PATCH /memory/<id>            in-place edit (text / subject / quality /
@@ -119,7 +119,8 @@ export function handleMemory(): RouteHandler {
         const params = ctx.url.searchParams;
         const minQuality = params.get('minQuality');
         const limit = params.get('limit');
-        const rows = await db.listMemoryV3({
+        const offset = params.get('offset');
+        const listOpts: db.ListMemoryOpts = {
           status: (params.get('status') as db.MemoryStatus | null) ?? 'active',
           minQuality: minQuality !== null ? Number(minQuality) : undefined,
           source: params.get('source') ?? undefined,
@@ -130,8 +131,13 @@ export function handleMemory(): RouteHandler {
           orderBy: (params.get('orderBy') as 'created_at' | 'quality' | 'last_referenced_at' | null) ?? undefined,
           orderDirection: (params.get('orderDirection') as 'asc' | 'desc' | null) ?? undefined,
           limit: limit !== null ? Number(limit) : undefined,
-        });
-        json(ctx.res, 200, { ok: true, memories: rows });
+          offset: offset !== null ? Number(offset) : undefined,
+        };
+        const [rows, total] = await Promise.all([
+          db.listMemoryV3(listOpts),
+          db.countMemoryV3(listOpts),
+        ]);
+        json(ctx.res, 200, { ok: true, memories: rows, total });
         return true;
       }
     } catch (err) {

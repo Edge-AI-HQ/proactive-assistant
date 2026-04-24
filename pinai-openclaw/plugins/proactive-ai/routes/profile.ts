@@ -2,6 +2,31 @@ import type { RouteHandler } from './types.js';
 import { json, readBody } from './types.js';
 import * as db from '../db.js';
 
+const PROFILE_SNAPSHOT_PREVIEW_LIMIT = 12;
+const PROFILE_INTEREST_PREVIEW_LIMIT = 24;
+
+function personalSignalToProfileSignal(row: db.PersonalSignalRow) {
+  return {
+    id: row.id,
+    user_id: 'local-user',
+    kind: row.kind,
+    target_type: row.kind,
+    target_key: row.title,
+    value: row.salience,
+    source: row.source,
+    context: {
+      summary: row.summary,
+      status: row.status,
+      confidence: row.confidence,
+      device_id: row.device_id,
+      subject: row.subject,
+      payload: row.payload,
+    },
+    occurred_at: row.occurred_at,
+    created_at: row.ingested_at,
+  };
+}
+
 export function handleProfile(): RouteHandler {
   return async (ctx) => {
     if (!ctx.subpath.startsWith('/profile')) return false;
@@ -28,9 +53,19 @@ export function handleProfile(): RouteHandler {
         return true;
       }
       if (route === '/' && ctx.req.method === 'GET') {
-        const [profile, goals, memories, signals, interests] = await Promise.all([
-          db.getProfile(), db.listGoals(), db.listMemories(), db.listSignals(), db.listInterests(),
+        const [profile, goals, memories, personalSignals, interests] = await Promise.all([
+          db.getProfile(),
+          db.listGoals(),
+          db.listMemories({ limit: PROFILE_SNAPSHOT_PREVIEW_LIMIT }),
+          db.listPersonalSignals({
+            status: 'open',
+            until: new Date().toISOString(),
+            limit: PROFILE_SNAPSHOT_PREVIEW_LIMIT,
+            pruneExpired: true,
+          }),
+          db.listInterests({ limit: PROFILE_INTEREST_PREVIEW_LIMIT }),
         ]);
+        const signals = personalSignals.map(personalSignalToProfileSignal);
         json(ctx.res, 200, { ok: true, profile, goals, memories, signals, interests });
         return true;
       }

@@ -1,7 +1,7 @@
 /**
  * v3 personal_signals HTTP routes:
  *   GET  /signals                 list (defaults: status=open, last 24h, limit 30)
- *                                 ?kind / ?source / ?deviceId / ?since / ?minSalience / ?limit
+ *                                 ?kind / ?source / ?deviceId / ?since / ?minSalience / ?limit / ?offset
  *   POST /signals/ingest          add personal_signals (server-side or future device direct upload)
  *   POST /signals/<id>/consume    mark as consumed (with body { runId })
  *
@@ -63,7 +63,8 @@ export function handleSignals(): RouteHandler {
         const params = ctx.url.searchParams;
         const minSalience = params.get('minSalience');
         const limit = params.get('limit');
-        const rows = await db.listPersonalSignals({
+        const offset = params.get('offset');
+        const listOpts: db.ListPersonalSignalsOpts = {
           status: (params.get('status') as db.PersonalSignalStatus | null) ?? 'open',
           kind: params.get('kind') ?? undefined,
           source: params.get('source') ?? undefined,
@@ -72,9 +73,14 @@ export function handleSignals(): RouteHandler {
           until: params.get('until') ?? undefined,
           minSalience: minSalience !== null ? Number(minSalience) : undefined,
           limit: limit !== null ? Number(limit) : undefined,
+          offset: offset !== null ? Number(offset) : undefined,
           pruneExpired: params.get('pruneExpired') === '1',
-        });
-        json(ctx.res, 200, { ok: true, signals: rows });
+        };
+        const [rows, total] = await Promise.all([
+          db.listPersonalSignals(listOpts),
+          db.countPersonalSignals(listOpts),
+        ]);
+        json(ctx.res, 200, { ok: true, signals: rows, total });
         return true;
       }
     } catch (err) {
