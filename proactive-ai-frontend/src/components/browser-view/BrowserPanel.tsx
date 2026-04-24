@@ -30,6 +30,10 @@ interface BrowserPanelProps {
   iframeReloadKey?: number;
   onIframeReload: () => void;
   onControlChange: (mode: "ai" | "user") => void;
+  onUserInputText: (text: string) => Promise<void>;
+  onUserInputKey: (key: string) => Promise<void>;
+  onUserInputClick: (x: number, y: number) => Promise<void>;
+  onUserInputScroll: (dx: number, dy: number) => Promise<void>;
   onClose: () => void;
   onStageChange?: (stage: SheetStage | "closed") => void;
   onLiveViewUrlRefreshed: (url: string) => void;
@@ -54,6 +58,10 @@ export default function BrowserPanel({
   iframeReloadKey = 0,
   onIframeReload,
   onControlChange,
+  onUserInputText,
+  onUserInputKey,
+  onUserInputClick,
+  onUserInputScroll,
   onClose,
   onStageChange,
   onLiveViewUrlRefreshed,
@@ -215,6 +223,19 @@ export default function BrowserPanel({
     }
   }, [session, onIframeReload, onLiveViewUrlRefreshed]);
 
+  useEffect(() => {
+    if (!session || session.controlMode !== "user") return;
+    const heartbeat = () => {
+      void proxyPost(
+        `/browser/sessions/${session.browserSessionId}/heartbeat`,
+        {},
+      );
+    };
+    heartbeat();
+    const timer = window.setInterval(heartbeat, 25_000);
+    return () => window.clearInterval(timer);
+  }, [session?.browserSessionId, session?.controlMode]);
+
   if (!rendered || !session) return null;
 
   return (
@@ -239,8 +260,13 @@ export default function BrowserPanel({
         takeoverReason={session.takeoverReason ?? null}
         iframeReloadKey={iframeReloadKey}
         sheetStage={stage}
-        canTakeControl={!isNative}
+        isNative={isNative}
+        viewport={session.viewport}
         onControlChange={onControlChange}
+        onUserInputText={onUserInputText}
+        onUserInputKey={onUserInputKey}
+        onUserInputClick={onUserInputClick}
+        onUserInputScroll={onUserInputScroll}
         onCycleStage={cycleStage}
         onRequestClose={onClose}
         onReload={handleReload}

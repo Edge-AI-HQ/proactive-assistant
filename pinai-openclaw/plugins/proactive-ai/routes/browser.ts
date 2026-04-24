@@ -12,6 +12,8 @@ import { json, readBody } from './types.js';
 import { getSharedBrowserManager } from '../browser/tool.js';
 import { browserEvents } from '../browser/events.js';
 
+const MAX_USER_INPUT_TEXT_LENGTH = 2000;
+
 export function handleBrowser(): RouteHandler {
   return async (ctx) => {
     if (!ctx.subpath.startsWith('/browser/')) return false;
@@ -33,10 +35,21 @@ export function handleBrowser(): RouteHandler {
         try { ctx.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* client gone */ }
       };
 
-      // Send current browser state if a session is already active
+      // Send current browser state if a session is already active.
+      // The event bus keeps the latest control state so reconnects do not
+      // lose an AI-requested takeover banner.
+      //
+      // If no session is active, we *still* push a closed marker so that
+      // a reconnecting client can drop any stale session it was holding
+      // onto (for example after the container restarted or the session
+      // was idle-timeout destroyed while the app was backgrounded).
+      // Without this the frontend keeps firing /input requests at a
+      // dead session id and silently 404s.
       const activeSession = browserEvents.getActiveSession(sessionKey);
       if (activeSession) {
         write('browser:opened', activeSession);
+      } else {
+        write('browser:closed', { sessionKey, browserSessionId: null });
       }
 
       // Subscribe to future events for this sessionKey
@@ -95,11 +108,7 @@ export function handleBrowser(): RouteHandler {
     const deleteMatch = route.match(/^\/browser\/sessions\/([^/]+)$/);
     if (deleteMatch && ctx.req.method === 'DELETE') {
       const sessionId = deleteMatch[1];
-      const session = mgr.getSession(sessionId);
       await mgr.destroySession(sessionId);
-      if (session) {
-        browserEvents.emit({ type: 'browser:closed', sessionKey: session.subagentId, browserSessionId: sessionId });
-      }
       json(ctx.res, 200, { ok: true });
       return true;
     }
@@ -137,11 +146,87 @@ export function handleBrowser(): RouteHandler {
         return true;
       }
       mgr.setControlMode(sessionId, mode);
-      const session = mgr.getSession(sessionId);
-      if (session) {
-        browserEvents.emit({ type: 'browser:control', sessionKey: session.subagentId, browserSessionId: sessionId, mode });
-      }
       json(ctx.res, 200, { ok: true, mode });
+      return true;
+    }
+
+    // POST /browser/sessions/:id/heartbeat
+    const heartbeatMatch = route.match(/^\/browser\/sessions\/([^/]+)\/heartbeat$/);
+    if (heartbeatMatch && ctx.req.method === 'POST') {
+      const sessionId = heartbeatMatch[1];
+      try {
+        mgr.heartbeat(sessionId);
+        json(ctx.res, 200, { ok: true });
+      } catch (err) {
+        json(ctx.res, 404, { error: err instanceof Error ? err.message : String(err) });
+      }
+      return true;
+    }
+
+    // POST /browser/sessions/:id/input
+    // Native mobile live-view embedding does not get a real remote keyboard
+    // from Browserbase. The app sends sanitized input events here, and the
+    // manager injects them through Playwright while the user owns control.
+    const inputMatch = route.match(/^\/browser\/sessions\/([^/]+)\/input$/);
+    if (inputMatch && ctx.req.method === 'POST') {
+      const sessionId = inputMatch[1];
+      const body = await readBody(ctx.req);
+      const type = String(body.type ?? '').trim();
+      try {
+        if (type === 'text') {
+          const text = typeof body.text === 'string' ? body.text : '';
+          if (!text) {
+            json(ctx.res, 400, { error: 'Missing text' });
+            return true;
+          }
+          if (text.length > MAX_USER_INPUT_TEXT_LENGTH) {
+            json(ctx.res, 400, { error: `Text is too long (max ${MAX_USER_INPUT_TEXT_LENGTH} characters)` });
+            return true;
+          }
+          ctx.api.logger.info(`[browser-input] text session=${sessionId} length=${text.length}`);
+          await mgr.typeUserInput(sessionId, text);
+          json(ctx.res, 200, { ok: true });
+          return true;
+        }
+        if (type === 'key') {
+          const key = typeof body.key === 'string' ? body.key.trim() : '';
+          if (!key) {
+            json(ctx.res, 400, { error: 'Missing key' });
+            return true;
+          }
+          ctx.api.logger.info(`[browser-input] key session=${sessionId} key=${key}`);
+          await mgr.pressUserKey(sessionId, key);
+          json(ctx.res, 200, { ok: true });
+          return true;
+        }
+        if (type === 'click') {
+          const x = typeof body.x === 'number' ? body.x : NaN;
+          const y = typeof body.y === 'number' ? body.y : NaN;
+          if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            json(ctx.res, 400, { error: 'Missing or invalid x/y' });
+            return true;
+          }
+          ctx.api.logger.info(`[browser-input] click session=${sessionId} x=${x} y=${y}`);
+          await mgr.clickUserAt(sessionId, x, y);
+          json(ctx.res, 200, { ok: true });
+          return true;
+        }
+        if (type === 'scroll') {
+          const dx = typeof body.dx === 'number' ? body.dx : 0;
+          const dy = typeof body.dy === 'number' ? body.dy : 0;
+          if (!Number.isFinite(dx) || !Number.isFinite(dy) || (dx === 0 && dy === 0)) {
+            json(ctx.res, 400, { error: 'Missing or invalid dx/dy' });
+            return true;
+          }
+          ctx.api.logger.info(`[browser-input] scroll session=${sessionId} dx=${dx} dy=${dy}`);
+          await mgr.scrollUser(sessionId, dx, dy);
+          json(ctx.res, 200, { ok: true });
+          return true;
+        }
+        json(ctx.res, 400, { error: 'Invalid input type (text | key | click | scroll)' });
+      } catch (err) {
+        json(ctx.res, 409, { error: err instanceof Error ? err.message : String(err) });
+      }
       return true;
     }
 
