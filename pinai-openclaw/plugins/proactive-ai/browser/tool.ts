@@ -10,6 +10,7 @@
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import { BrowserbaseManager } from './manager.js';
 import { VIEWPORT_PRESETS, type ViewportPreset } from './types.js';
+import { assertBrowserToolAllowed } from './control-state.js';
 
 let manager: BrowserbaseManager | null = null;
 
@@ -178,6 +179,7 @@ export function registerBrowserTool(api: OpenClawPluginApi): void {
             // in order and any silently-dead Browserbase sessions get cleared.
             const existing = mgr.getSessionBySubagent(chatKey);
             if (existing) {
+              assertBrowserToolAllowed(existing, 'open');
               await mgr.destroySession(existing.id);
             }
             const session = await mgr.createSession({ subagentId: chatKey, url, viewport: viewportSize });
@@ -402,6 +404,7 @@ export function registerBrowserTool(api: OpenClawPluginApi): void {
           case 'close': {
             const session = mgr.getSessionBySubagent(chatKey);
             if (!session) return 'Browser session already closed.';
+            assertBrowserToolAllowed(session, 'close');
             await mgr.destroySession(session.id);
             return 'Browser closed.';
           }
