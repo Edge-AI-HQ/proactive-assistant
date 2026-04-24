@@ -223,6 +223,32 @@ export async function markGoalsApplied(id: string): Promise<DreamRunRecord> {
 }
 
 /**
+ * Mark dream_runs that have been status='running' for longer than
+ * `staleAfterMs` as failed. The pre-fix `startDreaming()` shape leaked an
+ * orphan placeholder row whenever the manual-dream button fired (its real
+ * sibling row would complete instead). After the fix the leak is gone,
+ * but old orphans persist in the DB across deploys until something
+ * actively cleans them up — that's this function.
+ *
+ * Returns the number of rows transitioned to 'failed'.
+ *
+ * Called once at plugin start (and re-runnable from tests).
+ */
+export async function sweepStaleRunningDreams(staleAfterMs = 5 * 60_000): Promise<number> {
+  const cutoff = new Date(Date.now() - staleAfterMs).toISOString();
+  const info = getDb().prepare(`
+    UPDATE dream_runs
+       SET status = 'failed',
+           completed_at = ?,
+           error_message = COALESCE(error_message,
+             'Marked failed by sweepStaleRunningDreams: row stuck in running for >' || ? || 'ms (likely an orphan from a deploy or plugin restart)')
+     WHERE status = 'running'
+       AND started_at < ?
+  `).run(new Date().toISOString(), staleAfterMs, cutoff);
+  return info.changes;
+}
+
+/**
  * Drop the cached SQLite handle. Test-only — allows the next call to
  * resolve a fresh DB path after OPENCLAW_HOME has been swapped to a
  * tmpdir. Pairs with db.resetDbForTests / raw-db.resetRawDbForTests.

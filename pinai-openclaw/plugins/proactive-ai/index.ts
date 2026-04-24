@@ -10,6 +10,7 @@ import { createApiHandler } from './routes/router.js';
 import type { PipelineState, PluginConfig } from './routes/router.js';
 import { registerBrowserTool } from './browser/tool.js';
 import { startAutoLoop, type AutoLoopConfig } from './scheduler/auto-loop.js';
+import { sweepStaleRunningDreams } from './dreaming/store.js';
 import * as db from './db.js';
 
 const DEFAULT_CONFIG: PluginConfig = {
@@ -113,6 +114,19 @@ const plugin = {
     const apiHandler = createApiHandler(api, state, config);
     api.registerHttpRoute({ path: '/proactive-ai/api', auth: 'gateway', match: 'prefix', replaceExisting: true, handler: apiHandler });
     api.registerHttpRoute({ path: '/proactive-ai/rpc', auth: 'plugin', match: 'prefix', replaceExisting: true, handler: apiHandler });
+
+    // Sweep stale 'running' dream_runs left over by older builds (the
+    // pre-fix startDreaming() created an orphan placeholder per click).
+    // Best-effort — never block plugin start. Matches the
+    // ensureDefaultProfile() fire-and-forget pattern above; register() is
+    // synchronous so we cannot await here.
+    sweepStaleRunningDreams().then((swept) => {
+      if (swept > 0) {
+        api.logger.info(`Marked ${swept} stale running dream_run(s) as failed at boot`);
+      }
+    }).catch((err) => {
+      api.logger.warn(`sweepStaleRunningDreams failed: ${err instanceof Error ? err.message : err}`);
+    });
 
     // Start auto-loop scheduler (after profile seed, routes registered)
     if (!autoLoopStarted) {

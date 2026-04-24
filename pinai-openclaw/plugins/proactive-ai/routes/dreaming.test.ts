@@ -17,7 +17,7 @@ import path from 'node:path';
 
 import { handleDreaming } from './dreaming.ts';
 import * as store from '../dreaming/store.ts';
-import { resetStoreForTests as resetDreamStoreForTests } from '../dreaming/store.ts';
+import { resetStoreForTests as resetDreamStoreForTests, sweepStaleRunningDreams } from '../dreaming/store.ts';
 import {
   getProfile,
   upsertProfile,
@@ -279,3 +279,69 @@ test('handleDreaming returns false for unrelated paths', withTempHome(async () =
   const handled = await handler(ctx);
   assert.equal(handled, false);
 }));
+
+// ── 7. sweepStaleRunningDreams: cleans up pre-fix orphan rows ───────────
+
+test('sweepStaleRunningDreams: marks running rows older than threshold as failed',
+  withTempHome(async () => {
+    // Old running row (predates the threshold)
+    const old = await store.createRun({
+      trigger: 'manual',
+      windowStart: '2026-04-01T00:00:00Z',
+      windowEnd: '2026-04-01T00:00:00Z',
+    });
+    // Backdate it manually so it looks > 5 min old
+    const sevenMinAgo = new Date(Date.now() - 7 * 60_000).toISOString();
+    // Use the same handle that store uses
+    const { default: Database } = await import('better-sqlite3');
+    const dbPath = `${process.env.OPENCLAW_HOME}/data/proactive.db`;
+    const conn = new Database(dbPath);
+    conn.prepare(`UPDATE dream_runs SET started_at = ? WHERE id = ?`).run(sevenMinAgo, old.id);
+    conn.close();
+    resetDreamStoreForTests();
+
+    // Fresh running row (within threshold)
+    const fresh = await store.createRun({
+      trigger: 'manual',
+      windowStart: new Date().toISOString(),
+      windowEnd: new Date().toISOString(),
+    });
+
+    const swept = await sweepStaleRunningDreams();
+    assert.equal(swept, 1, 'only the > 5min row should flip');
+
+    const oldAfter = await store.getRun(old.id);
+    const freshAfter = await store.getRun(fresh.id);
+    assert.equal(oldAfter!.status, 'failed');
+    assert.match(oldAfter!.error_message ?? '', /sweepStaleRunningDreams/);
+    assert.equal(freshAfter!.status, 'running');
+  }));
+
+test('sweepStaleRunningDreams: leaves completed/failed rows untouched',
+  withTempHome(async () => {
+    const r = await store.createRun({
+      trigger: 'manual',
+      windowStart: '2026-04-01T00:00:00Z',
+      windowEnd: '2026-04-01T00:00:00Z',
+    });
+    // Complete it
+    await store.completeRun(r.id, {
+      sourceStats: {}, summary: { kind: 'no_new_data', text: '', sourceCount: 0, candidateCount: 0 },
+      profileDelta: { facts: { before: {}, after: {} }, preferences: { before: {}, after: {} },
+                      interests: { before: [], after: [] }, snapshots: { before: [], after: [] }},
+      goalDelta: { changes: [] },
+      journalMarkdown: 'done', candidates: [],
+    });
+    // Backdate
+    const { default: Database } = await import('better-sqlite3');
+    const conn = new Database(`${process.env.OPENCLAW_HOME}/data/proactive.db`);
+    conn.prepare(`UPDATE dream_runs SET started_at = ? WHERE id = ?`)
+      .run(new Date(Date.now() - 60 * 60_000).toISOString(), r.id);
+    conn.close();
+    resetDreamStoreForTests();
+
+    const swept = await sweepStaleRunningDreams();
+    assert.equal(swept, 0);
+    const after = await store.getRun(r.id);
+    assert.equal(after!.status, 'completed', 'completed runs are not touched');
+  }));
