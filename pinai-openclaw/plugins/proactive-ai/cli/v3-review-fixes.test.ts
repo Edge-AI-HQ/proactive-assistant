@@ -11,13 +11,22 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { promisify } from 'node:util';
 
+import { handleEvolution } from './evolution.ts';
+import { handleFeedback } from './feedback.ts';
 import { handleMemory } from './memory.ts';
+import { handlePersonal } from './personal.ts';
+import { handleProfile } from './profile.ts';
 import { handleSignals } from './signals.ts';
 import { handleRaw } from './raw.ts';
+import { handleSys } from './sys.ts';
+import { handleSkills } from './skills.ts';
+import { handleWorld } from './world.ts';
 
 import {
   addMemoryV3,
@@ -29,6 +38,8 @@ import {
   listGcalEvents,
   resetRawDbForTests,
 } from '../raw-db.ts';
+
+const execFileAsync = promisify(execFile);
 
 async function withTempHome<T>(fn: (root: string) => Promise<T>): Promise<T> {
   const root = await mkdtemp(join(tmpdir(), 'pin-v3-review-'));
@@ -83,6 +94,15 @@ test('pin raw device-apps --top abc: returns VALIDATION', async () => {
     const r = decode(await handleRaw(['device-apps', '--top', 'abc']));
     assert.equal(r.ok, false);
     assert.equal(r.error.code, 'VALIDATION');
+  });
+});
+
+test('pin evolution recent --limit abc: returns VALIDATION, not INTERNAL', async () => {
+  await withTempHome(async () => {
+    const r = decode(await handleEvolution(['recent', '--limit', 'abc']));
+    assert.equal(r.ok, false);
+    assert.equal(r.error.code, 'VALIDATION');
+    assert.ok(r.error.message.toLowerCase().includes('limit'));
   });
 });
 
@@ -254,5 +274,123 @@ test('pin raw device-contacts list (no --query) still lists the full snapshot', 
     const r = decode(await handleRaw(['device-contacts', 'list', '--deviceId', 'd']));
     assert.equal(r.ok, true);
     assert.equal(r.data.count, 2);
+  });
+});
+
+test('pin sys schema lists v3 domains and omits retired personal mobile commands', async () => {
+  const r = decode(await handleSys(['schema']));
+  assert.equal(r.ok, true);
+  for (const domain of ['memory', 'signals', 'raw', 'evolution', 'skills']) {
+    assert.ok(r.data.domains[domain], `missing ${domain}`);
+  }
+  assert.equal(
+    r.data.domains.personal.some((cmd: string) => cmd.startsWith('mobile')),
+    false,
+  );
+});
+
+test('pin sys doctor uses the same Composio key resolution as personal commands', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pin-v3-review-key-'));
+  const keyPath = join(root, 'composio-api-key');
+  const previousFile = process.env.COMPOSIO_API_KEY_FILE;
+  const previousEnv = process.env.COMPOSIO_API_KEY;
+  process.env.COMPOSIO_API_KEY_FILE = keyPath;
+  delete process.env.COMPOSIO_API_KEY;
+  try {
+    await import('node:fs/promises').then((fs) => fs.writeFile(keyPath, 'ak_file_test\n'));
+    const r = decode(await handleSys(['doctor']));
+    const composio = r.data.checks.find((check: any) => check.name === 'composio');
+    assert.equal(composio.status, 'ok');
+    assert.match(composio.message, /user key file/);
+  } finally {
+    if (previousFile === undefined) delete process.env.COMPOSIO_API_KEY_FILE;
+    else process.env.COMPOSIO_API_KEY_FILE = previousFile;
+    if (previousEnv === undefined) delete process.env.COMPOSIO_API_KEY;
+    else process.env.COMPOSIO_API_KEY = previousEnv;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('pin exits non-zero for failure envelopes', async () => {
+  await withTempHome(async (root) => {
+    const binPath = join(process.cwd(), 'pinai-openclaw/plugins/proactive-ai/cli/bin.ts');
+    await assert.rejects(
+      execFileAsync('npx', ['tsx', binPath, 'memory', 'get'], {
+        env: { ...process.env, OPENCLAW_HOME: root },
+      }),
+      (err: any) => {
+        assert.equal(err.code, 1);
+        const r = decode(err.stdout);
+        assert.equal(r.ok, false);
+        assert.equal(r.error.code, 'VALIDATION');
+        return true;
+      },
+    );
+  });
+});
+
+test('legacy pin list commands reject invalid --limit values', async () => {
+  await withTempHome(async () => {
+    const cases: Array<[string, () => Promise<string>]> = [
+      ['world.search', () => handleWorld(['search', '--query', 'x', '--limit', 'abc'])],
+      ['world.headlines', () => handleWorld(['headlines', '--limit', 'abc'])],
+      ['world.find', () => handleWorld(['find', '--query', 'x', '--limit', 'abc'])],
+      ['world.shortlist', () => handleWorld(['shortlist', '--limit', 'abc'])],
+      ['skills.list', () => handleSkills(['list', '--limit', 'abc'])],
+      ['feedback.list', () => handleFeedback(['list', '--limit', 'abc'])],
+      ['profile.memory.list', () => handleProfile(['memory', 'list', '--limit', 'abc'])],
+      ['profile.memory.search', () => handleProfile(['memory', 'search', '--query', 'x', '--limit', 'abc'])],
+      ['profile.interests.list', () => handleProfile(['interests', 'list', '--limit', 'abc'])],
+      ['personal.tools.search', () => handlePersonal(['tools', 'search', '--query', 'gmail', '--limit', 'abc'])],
+    ];
+    for (const [name, run] of cases) {
+      const r = decode(await run());
+      assert.equal(r.ok, false, name);
+      assert.equal(r.error.code, 'VALIDATION', name);
+      assert.match(r.error.message, /limit/i, name);
+    }
+  });
+});
+
+test('pin JSON flags return VALIDATION on malformed JSON', async () => {
+  await withTempHome(async () => {
+    const cases: Array<[string, () => Promise<string>]> = [
+      ['feedback.log', () => handleFeedback(['log', '--kind', 'test', '--metadata', '{bad'])],
+      ['personal.exec', () => handlePersonal(['exec', '--tool', 'SOME_TOOL', '--input', '{bad'])],
+      ['profile.update', () => handleProfile(['update', '--metadata', '{bad'])],
+      ['profile.facts.set', () => handleProfile(['facts', 'set', '--key', 'k', '--value-json', '{bad'])],
+      ['profile.preferences.set', () => handleProfile(['preferences', 'set', '--key', 'k', '--value-json', '{bad'])],
+      ['profile.constraints.set', () => handleProfile(['constraints', 'set', '--key', 'k', '--value-json', '{bad'])],
+      ['profile.memory.add', () => handleProfile(['memory', 'add', '--kind', 'note', '--text', 'hi', '--tags-json', '{bad'])],
+    ];
+    for (const [name, run] of cases) {
+      const r = decode(await run());
+      assert.equal(r.ok, false, name);
+      assert.equal(r.error.code, 'VALIDATION', name);
+      assert.match(r.error.message, /json/i, name);
+    }
+  });
+});
+
+test('legacy pin numeric flags reject non-finite values', async () => {
+  await withTempHome(async () => {
+    const run = decode(await handleEvolution(['create', '--triggerKind', 'manual']));
+    assert.equal(run.ok, true);
+    const runId = run.data.run.id;
+
+    const cases: Array<[string, () => Promise<string>, RegExp]> = [
+      ['profile.signal.add', () => handleProfile([
+        'signal', 'add', '--kind', 'k', '--target-type', 'topic', '--target-key', 'x', '--value', 'abc',
+      ]), /value/i],
+      ['profile.signal.rollup', () => handleProfile(['signal', 'rollup', '--since', 'abc']), /since/i],
+      ['evolution.delta', () => handleEvolution(['delta', '--id', runId, '--memoriesWritten', 'abc']), /memoriesWritten/i],
+      ['evolution.complete.llmTokens', () => handleEvolution(['complete', '--id', runId, '--llmTokens', 'abc']), /llmTokens/i],
+    ];
+    for (const [name, run, pattern] of cases) {
+      const r = decode(await run());
+      assert.equal(r.ok, false, name);
+      assert.equal(r.error.code, 'VALIDATION', name);
+      assert.match(r.error.message, pattern, name);
+    }
   });
 });

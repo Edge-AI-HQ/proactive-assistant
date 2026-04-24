@@ -2,7 +2,7 @@
  * `pin evolution ...` — v3 evolution_runs CLI.
  * See docs/memory-architecture.md §六.
  */
-import { parseArgs, success, failure } from './shared.js';
+import { parseArgs, success, failure, readLimitFlag, readNumericFlag } from './shared.js';
 import * as db from '../db.js';
 
 export async function handleEvolution(args: string[]): Promise<string> {
@@ -27,7 +27,9 @@ export async function handleEvolution(args: string[]): Promise<string> {
   }
 
   if (sub === 'recent' || sub === 'list') {
-    const limit = flags['limit'] ? Number(flags['limit']) : (sub === 'recent' ? 10 : 50);
+    const limitRes = readLimitFlag(flags, 'evolution', sub);
+    if ('failure' in limitRes) return limitRes.failure;
+    const limit = limitRes.value ?? (sub === 'recent' ? 10 : 50);
     const triggerKind = (flags['kind'] ?? flags['triggerKind']) as db.EvolutionTrigger | undefined;
     const status = flags['status'] as db.EvolutionRunStatus | undefined;
     const rows = await db.listEvolutionRuns({ triggerKind, status, since: flags['since'], limit });
@@ -59,18 +61,32 @@ export async function handleEvolution(args: string[]): Promise<string> {
 
   if (sub === 'delta') {
     if (!flags['id']) return failure('evolution', 'delta', 'validation', 'Missing --id');
-    const num = (k: string) => (flags[k] !== undefined ? Number(flags[k]) : undefined);
+    const num = (k: string) => readNumericFlag(flags, [k], 'evolution', 'delta');
+    const memoriesWritten = num('memoriesWritten');
+    if ('failure' in memoriesWritten) return memoriesWritten.failure;
+    const memoriesArchived = num('memoriesArchived');
+    if ('failure' in memoriesArchived) return memoriesArchived.failure;
+    const memoriesSuperseded = num('memoriesSuperseded');
+    if ('failure' in memoriesSuperseded) return memoriesSuperseded.failure;
+    const skillsAdded = num('skillsAdded');
+    if ('failure' in skillsAdded) return skillsAdded.failure;
+    const skillsUpdated = num('skillsUpdated');
+    if ('failure' in skillsUpdated) return skillsUpdated.failure;
+    const skillsDisabled = num('skillsDisabled');
+    if ('failure' in skillsDisabled) return skillsDisabled.failure;
+    const signalsConsumed = num('signalsConsumed');
+    if ('failure' in signalsConsumed) return signalsConsumed.failure;
     await db.recordEvolutionDelta(flags['id'], {
-      memoriesWritten: num('memoriesWritten'),
-      memoriesArchived: num('memoriesArchived'),
-      memoriesSuperseded: num('memoriesSuperseded'),
+      memoriesWritten: memoriesWritten.value,
+      memoriesArchived: memoriesArchived.value,
+      memoriesSuperseded: memoriesSuperseded.value,
       profileUpdated: flags['profileUpdated'] === 'true' ? true : (flags['profileUpdated'] === 'false' ? false : undefined),
       profileChangedKeys: flags['profileChangedKeys']
         ? flags['profileChangedKeys'].split(',').map((k) => k.trim()).filter(Boolean) : undefined,
-      skillsAdded: num('skillsAdded'),
-      skillsUpdated: num('skillsUpdated'),
-      skillsDisabled: num('skillsDisabled'),
-      signalsConsumed: num('signalsConsumed'),
+      skillsAdded: skillsAdded.value,
+      skillsUpdated: skillsUpdated.value,
+      skillsDisabled: skillsDisabled.value,
+      signalsConsumed: signalsConsumed.value,
     });
     return success('evolution', 'delta', { id: flags['id'] });
   }
@@ -96,9 +112,13 @@ export async function handleEvolution(args: string[]): Promise<string> {
 
   if (sub === 'complete') {
     if (!flags['id']) return failure('evolution', 'complete', 'validation', 'Missing --id');
+    const llmTokens = readNumericFlag(flags, ['llmTokens'], 'evolution', 'complete');
+    if ('failure' in llmTokens) return llmTokens.failure;
+    const durationMs = readNumericFlag(flags, ['durationMs'], 'evolution', 'complete');
+    if ('failure' in durationMs) return durationMs.failure;
     const row = await db.completeEvolutionRun(flags['id'], {
-      llmTokens: flags['llmTokens'] ? Number(flags['llmTokens']) : undefined,
-      durationMs: flags['durationMs'] ? Number(flags['durationMs']) : undefined,
+      llmTokens: llmTokens.value,
+      durationMs: durationMs.value,
     });
     return success('evolution', 'complete', { run: row });
   }

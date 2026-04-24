@@ -1,4 +1,5 @@
 import { success, failure } from './shared.js';
+import { resolveApiKey } from './personal.js';
 
 export async function handleSys(args: string[]): Promise<string> {
   const sub = args[0];
@@ -16,9 +17,15 @@ export async function handleSys(args: string[]): Promise<string> {
       checks.push({ name: 'database', status: exists ? 'ok' : 'ok', message: exists ? `SQLite: ${dbPath}` : `SQLite: will be created at ${dbPath}` });
     } catch { checks.push({ name: 'database', status: 'ok', message: 'SQLite (auto-created on first use)' }); }
 
-    // Check Composio
-    const composioKey = process.env.COMPOSIO_API_KEY;
-    checks.push({ name: 'composio', status: composioKey ? 'ok' : 'not_configured', message: composioKey ? 'API key present' : 'COMPOSIO_API_KEY not set' });
+    // Check Composio using the same resolution path as `pin personal ...`.
+    const composioKey = resolveApiKey();
+    checks.push({
+      name: 'composio',
+      status: composioKey ? 'ok' : 'not_configured',
+      message: composioKey
+        ? (composioKey.source === 'user' ? 'user key file present' : 'COMPOSIO_API_KEY present')
+        : 'Composio API key not configured',
+    });
 
     // Check user ID
     const userId = process.env.PROACTIVE_USER_ID;
@@ -32,11 +39,16 @@ export async function handleSys(args: string[]): Promise<string> {
     // Command introspection
     const domains = {
       profile: ['get', 'list', 'create', 'update', 'facts', 'preferences', 'constraints', 'goals', 'memory', 'signal', 'interests', 'snapshot'],
-      personal: ['status', 'setup', 'connections', 'connect', 'wait', 'tools search', 'tools schema', 'exec', 'mobile items list', 'mobile items claim', 'mobile items commit'],
+      personal: ['status', 'setup', 'connections list', 'connect', 'wait', 'tools search', 'tools schema', 'exec'],
       world: ['search', 'headlines', 'find', 'list', 'get', 'shortlist', 'context', 'index'],
       feedback: ['log', 'list', 'get', 'stats'],
       push: ['record', 'history', 'get', 'outcome', 'find-similar'],
       cards: ['recent'],
+      memory: ['help', 'list', 'get', 'add', 'archive', 'supersede', 'search'],
+      signals: ['help', 'recent', 'list', 'get', 'consume'],
+      raw: ['help', 'gmail recent', 'gmail thread', 'gcal today', 'gcal week', 'gcal list', 'device-apps', 'device-contacts list', 'device-contacts search'],
+      evolution: ['help', 'list', 'get', 'recent', 'create', 'delta', 'refs consumed', 'refs produced', 'complete', 'fail'],
+      skills: ['help', 'list', 'show', 'add', 'update', 'enable', 'disable'],
       sys: ['doctor', 'schema'],
     };
     return success('sys', 'schema', { domains });

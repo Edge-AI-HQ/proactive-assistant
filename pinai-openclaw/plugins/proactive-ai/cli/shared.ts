@@ -103,3 +103,23 @@ export function readLimitFlag(
 ): { value: number | undefined } | { failure: string } {
   return readNumericFlag(flags, ['limit', 'top', 'max'], domain, command);
 }
+
+/** Parse a JSON flag and report malformed JSON as VALIDATION, not INTERNAL. */
+export function readJsonFlag<T = unknown>(
+  flags: Record<string, string>,
+  key: string,
+  domain: string,
+  command: string,
+): { value: T | undefined } | { failure: string } {
+  const raw = flags[key];
+  if (raw === undefined) return { value: undefined };
+  try {
+    return { value: JSON.parse(raw) as T };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      failure: failure(domain, command, 'validation',
+        `Invalid --${key} JSON: ${detail}`),
+    };
+  }
+}

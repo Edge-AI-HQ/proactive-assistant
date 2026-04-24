@@ -3,7 +3,7 @@
  * See docs/memory-architecture.md §六.
  */
 import { readFileSync } from 'node:fs';
-import { parseArgs, success, failure } from './shared.js';
+import { parseArgs, success, failure, readLimitFlag } from './shared.js';
 import * as db from '../db.js';
 
 export async function handleSkills(args: string[]): Promise<string> {
@@ -25,7 +25,9 @@ export async function handleSkills(args: string[]): Promise<string> {
   }
 
   if (sub === 'list') {
-    const limit = flags['limit'] ? Number(flags['limit']) : 100;
+    const limitRes = readLimitFlag(flags, 'skills', 'list');
+    if ('failure' in limitRes) return limitRes.failure;
+    const limit = limitRes.value ?? 100;
     const updatedSince = flags['updated-since'] ?? flags['updatedSince'] ?? flags['since'];
     let rows = await db.listSkills({
       status: (flags['status'] as db.SkillStatus | undefined),

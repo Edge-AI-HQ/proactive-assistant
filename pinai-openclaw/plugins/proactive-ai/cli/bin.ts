@@ -35,6 +35,15 @@ const DOMAINS: Record<string, (args: string[]) => Promise<string>> = {
   skills: handleSkills,
 };
 
+function resultExitCode(result: string): number {
+  try {
+    const parsed = JSON.parse(result) as { ok?: unknown };
+    return parsed.ok === false ? 1 : 0;
+  } catch {
+    return 0;
+  }
+}
+
 async function main() {
   // Strip --json and --format flags (we always output JSON)
   const rawArgs = process.argv.slice(2).filter((a: string) => a !== '--json' && !a.startsWith('--format'));
@@ -55,7 +64,7 @@ async function main() {
   try {
     const result = await handler(rest);
     console.log(result);
-    process.exit(0);
+    process.exit(resultExitCode(result));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.log(failure(domain, rest[0] ?? 'unknown', 'internal', message));

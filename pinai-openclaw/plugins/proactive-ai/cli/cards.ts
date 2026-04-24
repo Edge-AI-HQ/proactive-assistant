@@ -1,5 +1,5 @@
 import * as db from '../db.js';
-import { parseArgs, success, failure } from './shared.js';
+import { parseArgs, success, failure, readLimitFlag } from './shared.js';
 
 interface CardsCliDeps {
   listRecentGeneratedCards?: typeof db.listRecentGeneratedCards;
@@ -11,8 +11,10 @@ export async function handleCards(args: string[], deps?: CardsCliDeps): Promise<
   const listRecentGeneratedCards = deps?.listRecentGeneratedCards ?? db.listRecentGeneratedCards;
 
   if (sub === 'recent') {
+    const limitRes = readLimitFlag(flags, 'cards', 'recent');
+    if ('failure' in limitRes) return limitRes.failure;
     const records = await listRecentGeneratedCards({
-      limit: flags['limit'] ? parseInt(flags['limit'], 10) : undefined,
+      limit: limitRes.value,
       basket: flags['basket'],
       since: flags['since'],
     });

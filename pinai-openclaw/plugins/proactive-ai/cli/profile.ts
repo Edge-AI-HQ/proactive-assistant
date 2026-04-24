@@ -1,4 +1,4 @@
-import { parseArgs, success, failure } from './shared.js';
+import { parseArgs, success, failure, readJsonFlag, readLimitFlag, readNumericFlag } from './shared.js';
 import * as db from '../db.js';
 
 export async function handleProfile(args: string[]): Promise<string> {
@@ -44,7 +44,9 @@ export async function handleProfile(args: string[]): Promise<string> {
     if (flags['locale']) fields.locale = flags['locale'];
     if (flags['timezone']) fields.timezone = flags['timezone'];
     if (flags['summary']) fields.summary = flags['summary'];
-    if (flags['metadata']) fields.metadata = JSON.parse(flags['metadata']);
+    const metadataRes = readJsonFlag(flags, 'metadata', 'profile', 'update');
+    if ('failure' in metadataRes) return metadataRes.failure;
+    if (metadataRes.value !== undefined) fields.metadata = metadataRes.value;
     const profile = await db.updateProfile(fields as any);
     return success('profile', 'update', profile);
   }
@@ -65,7 +67,9 @@ async function handleFacts(args: string[], flags: Record<string, string>): Promi
   }
   if (action === 'set') {
     if (!flags['key']) return failure('profile', 'facts.set', 'validation', 'Missing --key');
-    const value = flags['value-json'] ? JSON.parse(flags['value-json']) : flags['value'] ?? null;
+    const valueRes = readJsonFlag(flags, 'value-json', 'profile', 'facts.set');
+    if ('failure' in valueRes) return valueRes.failure;
+    const value = valueRes.value !== undefined ? valueRes.value : flags['value'] ?? null;
     const data = await db.setFact(flags['key'], value);
     return success('profile', 'facts.set', data);
   }
@@ -85,7 +89,9 @@ async function handlePreferences(args: string[], flags: Record<string, string>):
   }
   if (action === 'set') {
     if (!flags['key']) return failure('profile', 'preferences.set', 'validation', 'Missing --key');
-    const value = flags['value-json'] ? JSON.parse(flags['value-json']) : flags['value'] ?? null;
+    const valueRes = readJsonFlag(flags, 'value-json', 'profile', 'preferences.set');
+    if ('failure' in valueRes) return valueRes.failure;
+    const value = valueRes.value !== undefined ? valueRes.value : flags['value'] ?? null;
     const data = await db.setPreference(flags['key'], value);
     return success('profile', 'preferences.set', data);
   }
@@ -105,7 +111,9 @@ async function handleConstraints(args: string[], flags: Record<string, string>):
   }
   if (action === 'set') {
     if (!flags['key']) return failure('profile', 'constraints.set', 'validation', 'Missing --key');
-    const value = flags['value-json'] ? JSON.parse(flags['value-json']) : flags['value'] ?? null;
+    const valueRes = readJsonFlag(flags, 'value-json', 'profile', 'constraints.set');
+    if ('failure' in valueRes) return valueRes.failure;
+    const value = valueRes.value !== undefined ? valueRes.value : flags['value'] ?? null;
     const data = await db.setConstraint(flags['key'], value);
     return success('profile', 'constraints.set', data);
   }
@@ -139,18 +147,25 @@ async function handleGoals(args: string[], flags: Record<string, string>): Promi
 async function handleMemory(args: string[], flags: Record<string, string>): Promise<string> {
   const action = args[0];
   if (action === 'list') {
-    const memories = await db.listMemories({ limit: flags['limit'] ? parseInt(flags['limit'], 10) : undefined });
+    const limitRes = readLimitFlag(flags, 'profile', 'memory.list');
+    if ('failure' in limitRes) return limitRes.failure;
+    const memories = await db.listMemories({ limit: limitRes.value });
     return success('profile', 'memory.list', { memories });
   }
   if (action === 'add') {
     if (!flags['kind'] || !flags['text']) return failure('profile', 'memory.add', 'validation', 'Missing --kind or --text');
-    const tags = flags['tags-json'] ? JSON.parse(flags['tags-json']) : [];
+    const tagsRes = readJsonFlag<unknown[]>(flags, 'tags-json', 'profile', 'memory.add');
+    if ('failure' in tagsRes) return tagsRes.failure;
+    const tags = tagsRes.value ?? [];
+    if (!Array.isArray(tags)) return failure('profile', 'memory.add', 'validation', '--tags-json must be a JSON array');
     const memory = await db.addMemory({ kind: flags['kind'], text: flags['text'], tags });
     return success('profile', 'memory.add', memory);
   }
   if (action === 'search') {
     if (!flags['query']) return failure('profile', 'memory.search', 'validation', 'Missing --query');
-    const memories = await db.searchMemory(flags['query'], { limit: flags['limit'] ? parseInt(flags['limit'], 10) : undefined });
+    const limitRes = readLimitFlag(flags, 'profile', 'memory.search');
+    if ('failure' in limitRes) return limitRes.failure;
+    const memories = await db.searchMemory(flags['query'], { limit: limitRes.value });
     return success('profile', 'memory.search', { query: flags['query'], memories });
   }
   if (action === 'remove') {
@@ -167,17 +182,24 @@ async function handleSignal(args: string[], flags: Record<string, string>): Prom
     if (!flags['kind'] || !flags['target-type'] || !flags['target-key']) {
       return failure('profile', 'signal.add', 'validation', 'Missing --kind, --target-type, or --target-key');
     }
+    const valueRes = readNumericFlag(flags, ['value'], 'profile', 'signal.add');
+    if ('failure' in valueRes) return valueRes.failure;
     const signal = await db.addSignal({
       kind: flags['kind'],
       targetType: flags['target-type'],
       targetKey: flags['target-key'],
-      value: flags['value'] ? parseFloat(flags['value']) : undefined,
+      value: valueRes.value,
       source: flags['source'],
     });
     return success('profile', 'signal.add', signal);
   }
   if (action === 'rollup') {
-    const since = flags['since'] ? parseInt(flags['since'].replace('d', ''), 10) : 30;
+    const rawSince = flags['since'];
+    const since = rawSince === undefined ? 30 : Number(rawSince.replace(/d$/i, ''));
+    if (!Number.isFinite(since)) {
+      return failure('profile', 'signal.rollup', 'validation',
+        `Invalid --since value (got "${rawSince}"); pass days like 30 or 30d.`);
+    }
     const interests = await db.rollupSignals(since);
     return success('profile', 'signal.rollup', { count: interests.length, interests });
   }
@@ -187,9 +209,11 @@ async function handleSignal(args: string[], flags: Record<string, string>): Prom
 async function handleInterests(args: string[], flags: Record<string, string>): Promise<string> {
   const action = args[0];
   if (action === 'list') {
+    const limitRes = readLimitFlag(flags, 'profile', 'interests.list');
+    if ('failure' in limitRes) return limitRes.failure;
     const interests = await db.listInterests({
       kind: flags['kind'],
-      limit: flags['limit'] ? parseInt(flags['limit'], 10) : 20,
+      limit: limitRes.value ?? 20,
     });
     return success('profile', 'interests.list', { interests });
   }

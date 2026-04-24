@@ -1,4 +1,4 @@
-import { parseArgs, success, failure } from './shared.js';
+import { parseArgs, success, failure, readLimitFlag } from './shared.js';
 import * as db from '../db.js';
 import { getWorldSemanticIndex } from '../world/semantic_index.js';
 import { getWorldEmbeddingProvider } from '../world/embedding.js';
@@ -125,13 +125,17 @@ export async function handleWorld(args: string[]): Promise<string> {
   if (sub === 'search') {
     const query = flags['query'];
     if (!query) return failure('world', 'search', 'validation', 'Missing --query');
-    const limit = flags['limit'] ? parseInt(flags['limit'], 10) : 20;
+    const limitRes = readLimitFlag(flags, 'world', 'search');
+    if ('failure' in limitRes) return limitRes.failure;
+    const limit = limitRes.value ?? 20;
     const items = await db.listWorldSignals({ query, limit });
     return success('world', 'search', { query, count: items.length, items });
   }
 
   if (sub === 'headlines') {
-    const limit = flags['limit'] ? parseInt(flags['limit'], 10) : 20;
+    const limitRes = readLimitFlag(flags, 'world', 'headlines');
+    if ('failure' in limitRes) return limitRes.failure;
+    const limit = limitRes.value ?? 20;
     const items = await db.listWorldSignals({ limit });
     return success('world', 'headlines', { count: items.length, items });
   }
@@ -141,10 +145,12 @@ export async function handleWorld(args: string[]): Promise<string> {
   }
 
   if (sub === 'list') {
+    const limitRes = readLimitFlag(flags, 'world', 'list');
+    if ('failure' in limitRes) return limitRes.failure;
     const items = await db.listWorldSignals({
       query: flags['query'],
       since: flags['since'],
-      limit: flags['limit'] ? parseInt(flags['limit'], 10) : 20,
+      limit: limitRes.value ?? 20,
     });
     return success('world', 'list', { count: items.length, items });
   }
@@ -182,7 +188,9 @@ async function handleIndex(args: string[], flags: Record<string, string>): Promi
 
   if (action === 'refresh') {
     const all = flags['all'] === 'true' || flags['all'] === '1';
-    const limit = flags['limit'] ? parseInt(flags['limit'], 10) : 100;
+    const limitRes = readLimitFlag(flags, 'world', 'index.refresh');
+    if ('failure' in limitRes) return limitRes.failure;
+    const limit = limitRes.value ?? 100;
 
     const candidates = await db.listSemanticIndexCandidates({ limit });
     if (candidates.length === 0) {
@@ -234,7 +242,9 @@ async function handleFind(flags: Record<string, string>): Promise<string> {
   if (!query) return failure('world', 'find', 'validation', 'Missing --query');
 
   const strategy = flags['strategy'] ?? 'keyword';
-  const limit = flags['limit'] ? parseInt(flags['limit'], 10) : 10;
+  const limitRes = readLimitFlag(flags, 'world', 'find');
+  if ('failure' in limitRes) return limitRes.failure;
+  const limit = limitRes.value ?? 10;
 
   // Keyword search (always needed for keyword/hybrid)
   const keywordResults = await db.listWorldSignals({
@@ -368,7 +378,9 @@ async function handleFind(flags: Record<string, string>): Promise<string> {
 // ── Profile-scored shortlist ──
 
 async function handleShortlist(flags: Record<string, string>): Promise<string> {
-  const limit = flags['limit'] ? parseInt(flags['limit'], 10) : 10;
+  const limitRes = readLimitFlag(flags, 'world', 'shortlist');
+  if ('failure' in limitRes) return limitRes.failure;
+  const limit = limitRes.value ?? 10;
   const interests = await db.listInterests({ limit: 100 });
 
   // Fetch more items than needed so scoring can filter/rank

@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
-import { parseArgs, success, failure } from './shared.js';
+import { parseArgs, success, failure, readJsonFlag, readLimitFlag } from './shared.js';
 
 const COMPOSIO_API_BASE = 'https://backend.composio.dev/api/v3';
-const KEY_FILE = '/app/data/composio-api-key';
+const DEFAULT_KEY_FILE = '/app/data/composio-api-key';
 
 async function composioApi(apiKey: string, path: string, init?: RequestInit): Promise<Record<string, any>> {
   const response = await fetch(`${COMPOSIO_API_BASE}${path}`, {
@@ -16,9 +16,9 @@ async function composioApi(apiKey: string, path: string, init?: RequestInit): Pr
 }
 
 /** Read Composio API key: file takes priority over env var. */
-function resolveApiKey(): { key: string; source: 'user' | 'env' } | null {
+export function resolveApiKey(): { key: string; source: 'user' | 'env' } | null {
   try {
-    const fileKey = readFileSync(KEY_FILE, 'utf-8').trim();
+    const fileKey = readFileSync(process.env.COMPOSIO_API_KEY_FILE ?? DEFAULT_KEY_FILE, 'utf-8').trim();
     if (fileKey) return { key: fileKey, source: 'user' };
   } catch { /* file not found — fall through */ }
   const envKey = process.env.COMPOSIO_API_KEY?.trim();
@@ -138,11 +138,13 @@ export async function handlePersonal(args: string[]): Promise<string> {
 
   if (sub === 'tools') {
     const action = positional[1];
-    const apiKey = getApiKey();
     if (action === 'search') {
       const query = flags['query'];
       if (!query) return failure('personal', 'tools.search', 'validation', 'Missing --query');
-      const params = new URLSearchParams({ query, limit: flags['limit'] ?? '20', toolkit_versions: 'latest' });
+      const limitRes = readLimitFlag(flags, 'personal', 'tools.search');
+      if ('failure' in limitRes) return limitRes.failure;
+      const apiKey = getApiKey();
+      const params = new URLSearchParams({ query, limit: String(limitRes.value ?? 20), toolkit_versions: 'latest' });
       if (flags['toolkit']) params.set('toolkit_slug', flags['toolkit']);
       const data = await composioApi(apiKey, `/tools?${params}`);
       const items = Array.isArray(data.items) ? data.items : [];
@@ -152,6 +154,7 @@ export async function handlePersonal(args: string[]): Promise<string> {
     if (action === 'schema') {
       const name = flags['name'];
       if (!name) return failure('personal', 'tools.schema', 'validation', 'Missing --name');
+      const apiKey = getApiKey();
       const tool = await composioApi(apiKey, `/tools/${encodeURIComponent(name)}?toolkit_versions=latest`);
       return success('personal', 'tools.schema', { slug: tool.slug ?? name, description: tool.description ?? null, parameters: tool.input_parameters ?? tool.inputSchema ?? {} });
     }
@@ -159,12 +162,14 @@ export async function handlePersonal(args: string[]): Promise<string> {
   }
 
   if (sub === 'exec') {
-    const apiKey = getApiKey();
-    const userId = getComposioUserId();
     const tool = flags['tool'];
     if (!tool) return failure('personal', 'exec', 'validation', 'Missing --tool');
-    const input = flags['input'] ? JSON.parse(flags['input']) : {};
+    const inputRes = readJsonFlag<Record<string, unknown>>(flags, 'input', 'personal', 'exec');
+    if ('failure' in inputRes) return inputRes.failure;
+    const input = inputRes.value ?? {};
     const accountId = flags['account-id'];
+    const apiKey = getApiKey();
+    const userId = getComposioUserId();
 
     // If no account-id, find the latest active connection for the tool's toolkit
     let resolvedAccountId = accountId;
