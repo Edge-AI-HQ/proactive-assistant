@@ -161,7 +161,15 @@ async function runDetectAndLoop(
 
 // ── Auto-dreaming ──
 
-async function runAutoDreaming(api: OpenClawPluginApi): Promise<void> {
+/**
+ * `opts.now` is test-only: it pins the wall clock the due-window check
+ * sees, so unit tests aren't flaky depending on the host's real time of
+ * day. Production callers leave it undefined.
+ */
+export async function runAutoDreaming(
+  api: OpenClawPluginApi,
+  opts?: { now?: Date },
+): Promise<void> {
   if (state.dreamInFlight) return;
 
   state.dreamInFlight = true;
@@ -185,16 +193,13 @@ async function runAutoDreaming(api: OpenClawPluginApi): Promise<void> {
     const lastAutoCompletedAt =
       runs.find((run) => run.trigger === 'auto' && run.status === 'completed')?.completed_at ?? null;
 
-    if (!isDreamingDue({
-      now: new Date(),
-      timezone,
-      lastAutoCompletedAt,
-    })) {
+    const now = opts?.now ?? new Date();
+    if (!isDreamingDue({ now, timezone, lastAutoCompletedAt })) {
       return;
     }
 
     // Trigger dreaming
-    const run = await startDreaming({ api, trigger: 'auto' });
+    const run = await startDreaming({ api, trigger: 'auto', now });
     api.logger.info(`[auto-dreaming] started runId=${run.id} timezone=${timezone}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -210,7 +215,7 @@ interface AutoLoopChatFeedbackDeps {
 
 // ── Auto-crystallize (main-chat conversation distillation) ──
 
-async function runAutoCrystallize(api: OpenClawPluginApi): Promise<void> {
+export async function runAutoCrystallize(api: OpenClawPluginApi): Promise<void> {
   if (state.crystallizeInFlight) return;
 
   state.crystallizeInFlight = true;

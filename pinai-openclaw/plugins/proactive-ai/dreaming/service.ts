@@ -593,17 +593,20 @@ function createDefaultSources(): DreamSourceDefinition[] {
 
 // ── Main execution ──
 
-async function executeDreaming(input: RunDreamingInput): Promise<{ run: DreamRunRecord; detail: DreamRunDetail }> {
-  const now = input.now ?? new Date();
-  const windowEnd = now.toISOString();
-  const windowStart = clampWindowStart(now);
+/**
+ * Run dreaming against a *pre-created* dream_run row. Both startDreaming
+ * (fire-and-forget) and runDreaming (sync) share this body so we never
+ * create the row twice — the previous shape leaked an orphan placeholder
+ * stuck in 'running' whenever startDreaming was used by the route handler.
+ */
+async function executeDreamingForRun(
+  input: RunDreamingInput,
+  run: DreamRunRecord,
+  now: Date,
+): Promise<{ run: DreamRunRecord; detail: DreamRunDetail }> {
+  const windowEnd = run.window_end;
+  const windowStart = run.window_start;
   const startedAtMs = Date.now();
-
-  const run = await store.createRun({
-    trigger: input.trigger,
-    windowStart,
-    windowEnd,
-  });
 
   // Open a v3 evolution_run for trajectory visibility (`pin evolution recent
   // --kind daily_dream`). Failures are logged but never block dreaming.
@@ -777,17 +780,23 @@ function collectProfileDeltaKeys(delta: unknown): string[] {
 
 // ── Public API ──
 
-export async function runDreaming(input: RunDreamingInput): Promise<{ run: DreamRunRecord; detail: DreamRunDetail }> {
-  return await executeDreaming(input);
-}
-
-export async function startDreaming(input: RunDreamingInput): Promise<DreamRunRecord> {
+async function createDreamRun(input: RunDreamingInput): Promise<{ run: DreamRunRecord; now: Date }> {
   const now = input.now ?? new Date();
   const windowEnd = now.toISOString();
   const windowStart = clampWindowStart(now);
   const run = await store.createRun({ trigger: input.trigger, windowStart, windowEnd });
-  void executeDreaming(input).catch(() => {
-    // The run state is persisted as failed inside executeDreaming.
+  return { run, now };
+}
+
+export async function runDreaming(input: RunDreamingInput): Promise<{ run: DreamRunRecord; detail: DreamRunDetail }> {
+  const { run, now } = await createDreamRun(input);
+  return await executeDreamingForRun(input, run, now);
+}
+
+export async function startDreaming(input: RunDreamingInput): Promise<DreamRunRecord> {
+  const { run, now } = await createDreamRun(input);
+  void executeDreamingForRun(input, run, now).catch(() => {
+    // The run state is persisted as failed inside executeDreamingForRun.
   });
   return run;
 }
