@@ -34,6 +34,10 @@ import {
   listGdriveFiles,
   listGithubIssues,
   listOutlookMessages,
+  listGdocsDocuments,
+  listGsheetsSpreadsheets,
+  listStripeInvoices,
+  listDiscordGuilds,
   resetRawDbForTests,
 } from '../../raw-db.ts';
 import { BackgroundTaskScheduler } from '../scheduler.ts';
@@ -575,6 +579,163 @@ test('REGRESSION: real GoogleCalendar GOOGLECALENDAR_EVENTS_LIST shape (data.ite
     const mtg = rows.find((r) => r.title === 'Standup')!;
     assert.equal(mtg.attendees.length, 2);
     assert.match(mtg.start_at ?? '', /^2026-04-23T17:00/);  // 10am PST = 17:00 UTC
+  });
+});
+
+// Round 3: googledocs verified live; gsheets/stripe/discord schema-derived
+// (no live account on this user). Each test mocks the schema-implied shape.
+
+test('REGRESSION: real Composio GoogleDocs shape (data.documents, verified live)', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init', idempotencyKey: 'real-gdocs',
+      payload: { toolkit: 'googledocs', connectedAccountId: 'acc-d', limit: 5 },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/GOOGLEDOCS_SEARCH_DOCUMENTS': () => ({
+        data: {
+          documents: [
+            {
+              id: 'doc-1', name: 'Roadmap',
+              modifiedTime: '2026-04-23T10:00:00Z', createdTime: '2026-04-20T08:00:00Z',
+              webViewLink: 'https://docs.google.com/document/d/doc-1',
+              owners: [{ emailAddress: 'me@example.com', displayName: 'Me' }],
+              lastModifyingUser: { emailAddress: 'colleague@example.com', displayName: 'Colleague' },
+              starred: true, trashed: false, shared: true,
+              mimeType: 'application/vnd.google-apps.document',
+            },
+            {
+              id: 'doc-2', name: 'Standup notes',
+              modifiedTime: '2026-04-22T15:00:00Z',
+              owners: [{ emailAddress: 'me@example.com' }],
+            },
+          ],
+          next_page_token: null, total_found: 2,
+        },
+      }),
+    });
+    const { task, result } = await runOneTick({ fetcher });
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.toolkit, 'googledocs');
+    assert.equal(result?.rawInserted, 2);
+    assert.equal(result?.signalsInserted, 2);
+    const rows = listGdocsDocuments({ limit: 5 });
+    assert.equal(rows.length, 2);
+    const roadmap = rows.find((r) => r.name === 'Roadmap')!;
+    assert.equal(roadmap.last_modifying_user, 'colleague@example.com');
+    assert.equal(roadmap.starred, true);
+    assert.deepEqual(roadmap.owners, ['me@example.com']);
+  });
+});
+
+test('schema-derived: GoogleSheets pipeline (no live account; mock matches Composio shape)', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init', idempotencyKey: 'real-gsheets',
+      payload: { toolkit: 'googlesheets', connectedAccountId: 'acc-s', limit: 5 },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/GOOGLESHEETS_SEARCH_SPREADSHEETS': () => ({
+        data: {
+          spreadsheets: [
+            {
+              id: 'sheet-1', name: 'Q2 OKRs',
+              modifiedTime: '2026-04-23T11:00:00Z',
+              webViewLink: 'https://docs.google.com/spreadsheets/d/sheet-1',
+              owners: [{ emailAddress: 'me@example.com' }],
+            },
+          ],
+        },
+      }),
+    });
+    const { task, result } = await runOneTick({ fetcher });
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.rawInserted, 1);
+    assert.equal(listGsheetsSpreadsheets({ limit: 5 })[0]!.name, 'Q2 OKRs');
+  });
+});
+
+test('schema-derived: Stripe invoices pipeline (epoch→ISO conversion + amount cents)', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init', idempotencyKey: 'real-stripe',
+      payload: { toolkit: 'stripe', connectedAccountId: 'acc-st', limit: 5 },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/STRIPE_LIST_INVOICES': () => ({
+        // Stripe's standard list shape: { object: 'list', data: [...] }
+        data: [
+          {
+            id: 'in_1NlqpyHSvCp9qmjI5xYZ', object: 'invoice',
+            number: 'D87BE5DA-0001', status: 'paid',
+            amount_due: 2999, amount_paid: 2999, amount_remaining: 0,
+            currency: 'usd',
+            customer: 'cus_OVHRgQqJSf2cEW',
+            customer_email: 'jane@example.com',
+            customer_name: 'Jane Smith',
+            collection_method: 'charge_automatically',
+            created: 1714063221,  // epoch seconds
+            due_date: 1714668021,
+            hosted_invoice_url: 'https://invoice.stripe.com/i/...',
+            invoice_pdf: 'https://pay.stripe.com/...',
+          },
+          {
+            id: 'in_2', number: 'D87BE5DA-0002', status: 'open',
+            amount_due: 5000, currency: 'usd', customer: 'cus_OVHRgQqJSf2cEW',
+            created: 1714063300,
+          },
+        ],
+      }),
+    });
+    const { task, result } = await runOneTick({ fetcher });
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.rawInserted, 2);
+    const rows = listStripeInvoices({ limit: 5 });
+    assert.equal(rows.length, 2);
+    const paid = rows.find((r) => r.status === 'paid')!;
+    assert.equal(paid.amount_due, 2999);
+    assert.equal(paid.customer_email, 'jane@example.com');
+    assert.equal(paid.created_at_remote, '2024-04-25T16:40:21.000Z');  // 1714063221 epoch s → ISO
+  });
+});
+
+test('schema-derived: Discord guilds pipeline (empty members count tolerated)', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init', idempotencyKey: 'real-discord',
+      payload: { toolkit: 'discord', connectedAccountId: 'acc-dis', limit: 5 },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/DISCORD_LIST_MY_GUILDS': () => ({
+        // Discord raw API returns a top-level array.
+        data: [
+          {
+            id: '123456789012345678', name: 'Indie Hackers',
+            icon: 'abcdef', owner: false,
+            permissions: '562949953421311',
+            features: ['ANIMATED_BANNER', 'COMMUNITY'],
+            approximate_member_count: 12450,
+            approximate_presence_count: 1820,
+          },
+          {
+            id: '987654321098765432', name: 'My Server', owner: true,
+            features: [],
+          },
+        ],
+      }),
+    });
+    const { task, result } = await runOneTick({ fetcher });
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.rawInserted, 2);
+    const rows = listDiscordGuilds({ limit: 5 });
+    assert.equal(rows.length, 2);
+    const ih = rows.find((r) => r.name === 'Indie Hackers')!;
+    assert.equal(ih.is_owner, false);
+    assert.equal(ih.approximate_member_count, 12450);
+    assert.deepEqual(ih.features, ['ANIMATED_BANNER', 'COMMUNITY']);
+    const mine = rows.find((r) => r.name === 'My Server')!;
+    assert.equal(mine.is_owner, true);
+    assert.equal(mine.approximate_member_count, null);
   });
 });
 

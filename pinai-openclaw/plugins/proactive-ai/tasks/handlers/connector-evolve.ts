@@ -38,7 +38,9 @@ export type EvolveToolkit =
   // Phase D round 1
   | 'slack' | 'notion' | 'googledrive'
   // Phase D round 2
-  | 'github' | 'outlook';
+  | 'github' | 'outlook'
+  // Phase D round 3
+  | 'googledocs' | 'googlesheets' | 'stripe' | 'discord';
 
 export interface ConnectorEvolveOpts {
   toolkit: EvolveToolkit;
@@ -54,6 +56,10 @@ export interface ConnectorEvolveOpts {
   gdrive?: raw.GdriveFileInput[];
   github?: raw.GithubIssueInput[];
   outlook?: raw.OutlookMessageInput[];
+  gdocs?: raw.GdocsDocumentInput[];
+  gsheets?: raw.GsheetsSpreadsheetInput[];
+  stripe?: raw.StripeInvoiceInput[];
+  discord?: raw.DiscordGuildInput[];
 }
 
 export interface ConnectorEvolveDeps {
@@ -239,6 +245,10 @@ interface SampledBundle {
   gdrive: Array<{ name?: string; mimeType?: string; modified?: string; owners?: string[] }>;
   github: Array<{ repo?: string; number?: number; title?: string; state?: string; isPR?: boolean; updated?: string; labels?: string[] }>;
   outlook: Array<{ from?: string; subject?: string; preview?: string; received?: string }>;
+  gdocs: Array<{ name?: string; modified?: string; owners?: string[]; lastModifyingUser?: string }>;
+  gsheets: Array<{ name?: string; modified?: string; owners?: string[]; lastModifyingUser?: string }>;
+  stripe: Array<{ number?: string; status?: string; amountDue?: number; currency?: string; customer?: string; created?: string }>;
+  discord: Array<{ name?: string; isOwner?: boolean; memberCount?: number; features?: string[] }>;
 }
 
 function sampleItems(opts: ConnectorEvolveOpts): SampledBundle {
@@ -249,6 +259,10 @@ function sampleItems(opts: ConnectorEvolveOpts): SampledBundle {
   const gdrive: SampledBundle['gdrive'] = [];
   const github: SampledBundle['github'] = [];
   const outlook: SampledBundle['outlook'] = [];
+  const gdocs: SampledBundle['gdocs'] = [];
+  const gsheets: SampledBundle['gsheets'] = [];
+  const stripe: SampledBundle['stripe'] = [];
+  const discord: SampledBundle['discord'] = [];
 
   if (opts.gmail && opts.gmail.length > 0) {
     const sortedGmail = [...opts.gmail]
@@ -338,11 +352,66 @@ function sampleItems(opts: ConnectorEvolveOpts): SampledBundle {
     outlook.push(...sortedOutlook);
   }
 
+  if (opts.gdocs && opts.gdocs.length > 0) {
+    const sortedGdocs = [...opts.gdocs]
+      .sort(byDescModified)
+      .slice(0, MAX_PROMPT_ITEMS)
+      .map((d) => ({
+        name: truncate(d.name ?? '', 160),
+        modified: d.modifiedTime ?? undefined,
+        owners: Array.isArray(d.owners) ? d.owners.slice(0, 6) : [],
+        lastModifyingUser: d.lastModifyingUser ?? undefined,
+      }));
+    gdocs.push(...sortedGdocs);
+  }
+  if (opts.gsheets && opts.gsheets.length > 0) {
+    const sortedGsheets = [...opts.gsheets]
+      .sort(byDescModified)
+      .slice(0, MAX_PROMPT_ITEMS)
+      .map((s) => ({
+        name: truncate(s.name ?? '', 160),
+        modified: s.modifiedTime ?? undefined,
+        owners: Array.isArray(s.owners) ? s.owners.slice(0, 6) : [],
+        lastModifyingUser: s.lastModifyingUser ?? undefined,
+      }));
+    gsheets.push(...sortedGsheets);
+  }
+  if (opts.stripe && opts.stripe.length > 0) {
+    const sortedStripe = [...opts.stripe]
+      .sort(byDescCreatedAtRemote)
+      .slice(0, MAX_PROMPT_ITEMS)
+      .map((inv) => ({
+        number: inv.number ?? undefined,
+        status: inv.status ?? undefined,
+        amountDue: typeof inv.amountDue === 'number' ? inv.amountDue : undefined,
+        currency: inv.currency ?? undefined,
+        customer: inv.customerName ?? inv.customerEmail ?? inv.customerId ?? undefined,
+        created: inv.createdAtRemote ?? undefined,
+      }));
+    stripe.push(...sortedStripe);
+  }
+  if (opts.discord && opts.discord.length > 0) {
+    // Discord guilds aren't time-ordered; sort by member count desc as a
+    // weak "importance" proxy.
+    const sortedDiscord = [...opts.discord]
+      .sort((a, b) => (b.approximateMemberCount ?? 0) - (a.approximateMemberCount ?? 0))
+      .slice(0, MAX_PROMPT_ITEMS)
+      .map((g) => ({
+        name: g.name ?? undefined,
+        isOwner: Boolean(g.isOwner),
+        memberCount: g.approximateMemberCount ?? undefined,
+        features: Array.isArray(g.features) ? g.features.slice(0, 5) : [],
+      }));
+    discord.push(...sortedDiscord);
+  }
+
   return {
     totalItems:
       gmail.length + gcal.length + slack.length + notion.length +
-      gdrive.length + github.length + outlook.length,
+      gdrive.length + github.length + outlook.length +
+      gdocs.length + gsheets.length + stripe.length + discord.length,
     gmail, gcal, slack, notion, gdrive, github, outlook,
+    gdocs, gsheets, stripe, discord,
   };
 }
 
@@ -411,6 +480,42 @@ function buildUserMessage(
       lines.push(`${i + 1}. From: ${m.from ?? '(unknown)'}  Subject: ${m.subject ?? '(none)'}`);
       if (m.preview) lines.push(`   Preview: ${m.preview}`);
       if (m.received) lines.push(`   Received: ${m.received}`);
+    });
+  }
+  if (sampled.gdocs.length > 0) {
+    lines.push('', `Google Docs documents (${sampled.gdocs.length} most recent):`);
+    sampled.gdocs.forEach((d, i) => {
+      lines.push(`${i + 1}. ${d.name ?? '(unnamed)'}`);
+      if (d.lastModifyingUser) lines.push(`   Last edited by: ${d.lastModifyingUser}`);
+      if (d.modified) lines.push(`   Modified: ${d.modified}`);
+    });
+  }
+  if (sampled.gsheets.length > 0) {
+    lines.push('', `Google Sheets spreadsheets (${sampled.gsheets.length} most recent):`);
+    sampled.gsheets.forEach((s, i) => {
+      lines.push(`${i + 1}. ${s.name ?? '(unnamed)'}`);
+      if (s.lastModifyingUser) lines.push(`   Last edited by: ${s.lastModifyingUser}`);
+      if (s.modified) lines.push(`   Modified: ${s.modified}`);
+    });
+  }
+  if (sampled.stripe.length > 0) {
+    lines.push('', `Stripe invoices (${sampled.stripe.length} most recent):`);
+    sampled.stripe.forEach((inv, i) => {
+      const amt = typeof inv.amountDue === 'number' && inv.currency
+        ? ` ${(inv.amountDue / 100).toFixed(2)} ${inv.currency.toUpperCase()}`
+        : '';
+      lines.push(`${i + 1}. Invoice ${inv.number ?? '(?)'} · ${inv.customer ?? '(no customer)'}${amt}`);
+      if (inv.status) lines.push(`   Status: ${inv.status}`);
+      if (inv.created) lines.push(`   Created: ${inv.created}`);
+    });
+  }
+  if (sampled.discord.length > 0) {
+    lines.push('', `Discord guilds the user belongs to (${sampled.discord.length} top by member count):`);
+    sampled.discord.forEach((g, i) => {
+      const role = g.isOwner ? ' [owner]' : '';
+      const members = typeof g.memberCount === 'number' ? ` · ${g.memberCount} members` : '';
+      lines.push(`${i + 1}. ${g.name ?? '(unnamed)'}${role}${members}`);
+      if (g.features && g.features.length > 0) lines.push(`   Features: ${g.features.join(', ')}`);
     });
   }
   lines.push('', '── Current state ──');
@@ -524,6 +629,14 @@ function byDescUpdatedAtRemote(
 ): number {
   const av = a.updatedAtRemote ?? '';
   const bv = b.updatedAtRemote ?? '';
+  return av < bv ? 1 : av > bv ? -1 : 0;
+}
+
+function byDescCreatedAtRemote(
+  a: { createdAtRemote?: string | null }, b: { createdAtRemote?: string | null },
+): number {
+  const av = a.createdAtRemote ?? '';
+  const bv = b.createdAtRemote ?? '';
   return av < bv ? 1 : av > bv ? -1 : 0;
 }
 

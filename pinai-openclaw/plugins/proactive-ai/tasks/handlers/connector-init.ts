@@ -38,6 +38,11 @@ const SUPPORTED_TOOLKITS = [
   // Phase D round 2
   'github',
   'outlook',
+  // Phase D round 3 — schema-derived; only googledocs is live-verified
+  'googledocs',
+  'googlesheets',
+  'stripe',
+  'discord',
 ] as const;
 type SupportedToolkit = typeof SUPPORTED_TOOLKITS[number];
 
@@ -183,6 +188,7 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
     let rawIgnored = 0;
     const insertedRawIds: InsertedRawIds = {
       gmail: [], gcal: [], slack: [], notion: [], gdrive: [], github: [], outlook: [],
+      gdocs: [], gsheets: [], stripe: [], discord: [],
     };
     if (typedItems.gmail && typedItems.gmail.length > 0) {
       const r = raw.ingestGmailMessages(typedItems.gmail);
@@ -219,6 +225,26 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
       rawInserted += r.inserted; rawIgnored += r.ignored;
       insertedRawIds.outlook = r.ids;
     }
+    if (typedItems.gdocs && typedItems.gdocs.length > 0) {
+      const r = raw.ingestGdocsDocuments(typedItems.gdocs);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.gdocs = r.ids;
+    }
+    if (typedItems.gsheets && typedItems.gsheets.length > 0) {
+      const r = raw.ingestGsheetsSpreadsheets(typedItems.gsheets);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.gsheets = r.ids;
+    }
+    if (typedItems.stripe && typedItems.stripe.length > 0) {
+      const r = raw.ingestStripeInvoices(typedItems.stripe);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.stripe = r.ids;
+    }
+    if (typedItems.discord && typedItems.discord.length > 0) {
+      const r = raw.ingestDiscordGuilds(typedItems.discord);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.discord = r.ids;
+    }
 
     // ── 7. Stage: derive personal_signals ──────────────────────────────
     if (!(await ctx.heartbeat({ stage: 'signals', toolkit, rawInserted }))) {
@@ -240,6 +266,14 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
       githubIds: insertedRawIds.github,
       outlookRows: typedItems.outlook ?? [],
       outlookIds: insertedRawIds.outlook,
+      gdocsRows: typedItems.gdocs ?? [],
+      gdocsIds: insertedRawIds.gdocs,
+      gsheetsRows: typedItems.gsheets ?? [],
+      gsheetsIds: insertedRawIds.gsheets,
+      stripeRows: typedItems.stripe ?? [],
+      stripeIds: insertedRawIds.stripe,
+      discordRows: typedItems.discord ?? [],
+      discordIds: insertedRawIds.discord,
     });
     const signalsRes = await db.ingestPersonalSignals(signalInputs);
 
@@ -277,6 +311,18 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
       if (insertedRawIds.outlook.length > 0) {
         await db.recordEvolutionRefsConsumed(evo.id, 'outlook_messages', insertedRawIds.outlook);
       }
+      if (insertedRawIds.gdocs.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'gdocs_documents', insertedRawIds.gdocs);
+      }
+      if (insertedRawIds.gsheets.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'gsheets_spreadsheets', insertedRawIds.gsheets);
+      }
+      if (insertedRawIds.stripe.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'stripe_invoices', insertedRawIds.stripe);
+      }
+      if (insertedRawIds.discord.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'discord_guilds', insertedRawIds.discord);
+      }
       if (signalsRes.ids.length > 0) {
         await db.recordEvolutionRefsConsumed(evo.id, 'personal_signals', signalsRes.ids);
       }
@@ -297,6 +343,10 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
             gdrive: typedItems.gdrive,
             github: typedItems.github,
             outlook: typedItems.outlook,
+            gdocs: typedItems.gdocs,
+            gsheets: typedItems.gsheets,
+            stripe: typedItems.stripe,
+            discord: typedItems.discord,
           },
           {
             api: deps.api,
@@ -357,6 +407,10 @@ interface TypedFetchedItems {
   gdrive?: raw.GdriveFileInput[];
   github?: raw.GithubIssueInput[];
   outlook?: raw.OutlookMessageInput[];
+  gdocs?: raw.GdocsDocumentInput[];
+  gsheets?: raw.GsheetsSpreadsheetInput[];
+  stripe?: raw.StripeInvoiceInput[];
+  discord?: raw.DiscordGuildInput[];
 }
 
 interface InsertedRawIds {
@@ -367,6 +421,10 @@ interface InsertedRawIds {
   gdrive: string[];
   github: string[];
   outlook: string[];
+  gdocs: string[];
+  gsheets: string[];
+  stripe: string[];
+  discord: string[];
 }
 
 async function fetchToolkitItems(
@@ -393,6 +451,18 @@ async function fetchToolkitItems(
   }
   if (toolkit === 'outlook') {
     return { outlook: await fetchOutlookRecent(opts) };
+  }
+  if (toolkit === 'googledocs') {
+    return { gdocs: await fetchGdocsRecent(opts) };
+  }
+  if (toolkit === 'googlesheets') {
+    return { gsheets: await fetchGsheetsRecent(opts) };
+  }
+  if (toolkit === 'stripe') {
+    return { stripe: await fetchStripeRecent(opts) };
+  }
+  if (toolkit === 'discord') {
+    return { discord: await fetchDiscordRecent(opts) };
   }
   // Defensive — isSupportedToolkit already screened this out
   return {};
@@ -536,6 +606,94 @@ async function fetchGithubRecent(opts: FetchToolkitItemsOpts): Promise<raw.Githu
     .slice(0, opts.limit);
 }
 
+async function fetchGdocsRecent(opts: FetchToolkitItemsOpts): Promise<raw.GdocsDocumentInput[]> {
+  // GOOGLEDOCS_SEARCH_DOCUMENTS — verified live 2026-04-24. Returns
+  // Drive-API rows under data.documents. Default order is modifiedTime
+  // desc which matches what we want for "what has the user been writing
+  // lately".
+  const response = await opts.fetcher('/tools/execute/GOOGLEDOCS_SEARCH_DOCUMENTS', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {
+        max_results: opts.limit,
+        order_by: 'modifiedTime desc',
+        include_trashed: false,
+      },
+    }),
+  });
+  const docs = extractGdocsDocuments(response);
+  return docs
+    .map(mapGdocsDocument)
+    .filter((d): d is raw.GdocsDocumentInput => !!d?.documentId)
+    .slice(0, opts.limit);
+}
+
+async function fetchGsheetsRecent(opts: FetchToolkitItemsOpts): Promise<raw.GsheetsSpreadsheetInput[]> {
+  // GOOGLESHEETS_SEARCH_SPREADSHEETS — schema-derived (not live-verified).
+  // Same arg/response pattern as GOOGLEDOCS_SEARCH_DOCUMENTS.
+  const response = await opts.fetcher('/tools/execute/GOOGLESHEETS_SEARCH_SPREADSHEETS', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {
+        max_results: opts.limit,
+        order_by: 'modifiedTime desc',
+        include_trashed: false,
+      },
+    }),
+  });
+  const sheets = extractGsheetsSpreadsheets(response);
+  return sheets
+    .map(mapGsheetsSpreadsheet)
+    .filter((s): s is raw.GsheetsSpreadsheetInput => !!s?.spreadsheetId)
+    .slice(0, opts.limit);
+}
+
+async function fetchStripeRecent(opts: FetchToolkitItemsOpts): Promise<raw.StripeInvoiceInput[]> {
+  // STRIPE_LIST_INVOICES — schema-derived. Stripe's standard List API
+  // returns { object: 'list', data: [...], has_more, ... }. limit caps
+  // at 100 per Stripe's docs.
+  const response = await opts.fetcher('/tools/execute/STRIPE_LIST_INVOICES', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {
+        limit: Math.min(opts.limit, 100),
+      },
+    }),
+  });
+  const invoices = extractStripeInvoices(response);
+  return invoices
+    .map(mapStripeInvoice)
+    .filter((i): i is raw.StripeInvoiceInput => !!i?.invoiceId)
+    .slice(0, opts.limit);
+}
+
+async function fetchDiscordRecent(opts: FetchToolkitItemsOpts): Promise<raw.DiscordGuildInput[]> {
+  // DISCORD_LIST_MY_GUILDS — schema-derived. Returns up to 200 guilds
+  // (servers). with_counts=true gets the member/presence counts.
+  const response = await opts.fetcher('/tools/execute/DISCORD_LIST_MY_GUILDS', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {
+        limit: Math.min(opts.limit, 200),
+        with_counts: true,
+      },
+    }),
+  });
+  const guilds = extractDiscordGuilds(response);
+  return guilds
+    .map(mapDiscordGuild)
+    .filter((g): g is raw.DiscordGuildInput => !!g?.guildId)
+    .slice(0, opts.limit);
+}
+
 async function fetchOutlookRecent(opts: FetchToolkitItemsOpts): Promise<raw.OutlookMessageInput[]> {
   // Microsoft Graph: /me/messages with $top, $orderby. Composio's
   // OUTLOOK_LIST_MESSAGES wraps these args under arguments.{top, orderby}.
@@ -660,6 +818,51 @@ function extractOutlookMessages(response: unknown): any[] {
     // Microsoft Graph: { value: [...] }
     if (Array.isArray(c?.value)) return c.value;
     if (Array.isArray(c?.messages)) return c.messages;
+    if (Array.isArray(c?.items)) return c.items;
+  }
+  return [];
+}
+
+function extractGdocsDocuments(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // Verified live 2026-04-24: data.documents
+    if (Array.isArray(c?.documents)) return c.documents;
+    if (Array.isArray(c?.files)) return c.files;
+    if (Array.isArray(c?.items)) return c.items;
+  }
+  return [];
+}
+
+function extractGsheetsSpreadsheets(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // Schema-derived; mirroring GoogleDocs' shape since both wrap Drive.
+    if (Array.isArray(c?.spreadsheets)) return c.spreadsheets;
+    if (Array.isArray(c?.documents)) return c.documents;
+    if (Array.isArray(c?.files)) return c.files;
+    if (Array.isArray(c?.items)) return c.items;
+  }
+  return [];
+}
+
+function extractStripeInvoices(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // Stripe's standard list shape: { object: 'list', data: [...] }
+    if (Array.isArray(c?.data)) return c.data;
+    if (Array.isArray(c?.invoices)) return c.invoices;
+    if (Array.isArray(c?.items)) return c.items;
+  }
+  return [];
+}
+
+function extractDiscordGuilds(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // Discord raw API returns a top-level array; Composio likely wraps under data.guilds.
+    if (Array.isArray(c?.guilds)) return c.guilds;
+    if (Array.isArray(c)) return c;
     if (Array.isArray(c?.items)) return c.items;
   }
   return [];
@@ -974,6 +1177,126 @@ function mapOutlookMessage(msg: any): raw.OutlookMessageInput | null {
   };
 }
 
+function flattenDriveOwners(file: any): string[] {
+  if (!Array.isArray(file?.owners)) return [];
+  return file.owners
+    .map((o: any) => o?.emailAddress ?? o?.displayName ?? null)
+    .filter((s: any): s is string => typeof s === 'string' && s.length > 0);
+}
+
+function flattenDriveLastModifyingUser(file: any): string | null {
+  const lmu = file?.lastModifyingUser;
+  if (!lmu || typeof lmu !== 'object') return null;
+  return lmu.emailAddress ?? lmu.displayName ?? null;
+}
+
+function mapGdocsDocument(doc: any): raw.GdocsDocumentInput | null {
+  if (!doc || typeof doc !== 'object') return null;
+  const documentId = String(doc.id ?? doc.document_id ?? '').trim();
+  if (!documentId) return null;
+  return {
+    documentId,
+    name: doc.name ?? null,
+    modifiedTime: doc.modifiedTime ?? doc.modified_time ?? null,
+    createdTime: doc.createdTime ?? doc.created_time ?? null,
+    webViewLink: doc.webViewLink ?? doc.web_view_link ?? null,
+    owners: flattenDriveOwners(doc),
+    lastModifyingUser: flattenDriveLastModifyingUser(doc),
+    starred: Boolean(doc.starred),
+    trashed: Boolean(doc.trashed),
+    shared: Boolean(doc.shared),
+  };
+}
+
+function mapGsheetsSpreadsheet(sheet: any): raw.GsheetsSpreadsheetInput | null {
+  if (!sheet || typeof sheet !== 'object') return null;
+  const spreadsheetId = String(sheet.id ?? sheet.spreadsheet_id ?? '').trim();
+  if (!spreadsheetId) return null;
+  return {
+    spreadsheetId,
+    name: sheet.name ?? null,
+    modifiedTime: sheet.modifiedTime ?? sheet.modified_time ?? null,
+    createdTime: sheet.createdTime ?? sheet.created_time ?? null,
+    webViewLink: sheet.webViewLink ?? sheet.web_view_link ?? null,
+    owners: flattenDriveOwners(sheet),
+    lastModifyingUser: flattenDriveLastModifyingUser(sheet),
+    starred: Boolean(sheet.starred),
+    trashed: Boolean(sheet.trashed),
+    shared: Boolean(sheet.shared),
+  };
+}
+
+function mapStripeInvoice(inv: any): raw.StripeInvoiceInput | null {
+  if (!inv || typeof inv !== 'object') return null;
+  const invoiceId = String(inv.id ?? inv.invoice_id ?? '').trim();
+  if (!invoiceId) return null;
+  // Stripe's customer field is either an id string or an expanded object.
+  let customerId: string | null = null;
+  let customerEmail: string | null = null;
+  let customerName: string | null = null;
+  if (typeof inv.customer === 'string') {
+    customerId = inv.customer;
+    // customer_email / customer_name are top-level even when customer is just an id
+    customerEmail = inv.customer_email ?? null;
+    customerName = inv.customer_name ?? null;
+  } else if (inv.customer && typeof inv.customer === 'object') {
+    customerId = inv.customer.id ?? null;
+    customerEmail = inv.customer.email ?? inv.customer_email ?? null;
+    customerName = inv.customer.name ?? inv.customer_name ?? null;
+  } else {
+    customerEmail = inv.customer_email ?? null;
+    customerName = inv.customer_name ?? null;
+  }
+  // created is epoch seconds; convert to ISO
+  const createdAtRemote = stripeEpochToIso(inv.created);
+  const dueDate = stripeEpochToIso(inv.due_date);
+  return {
+    invoiceId,
+    number: inv.number ?? null,
+    status: inv.status ?? null,
+    amountDue: typeof inv.amount_due === 'number' ? inv.amount_due : null,
+    amountPaid: typeof inv.amount_paid === 'number' ? inv.amount_paid : null,
+    amountRemaining: typeof inv.amount_remaining === 'number' ? inv.amount_remaining : null,
+    currency: inv.currency ?? null,
+    customerId,
+    customerEmail,
+    customerName,
+    collectionMethod: inv.collection_method ?? null,
+    createdAtRemote,
+    dueDate,
+    hostedInvoiceUrl: inv.hosted_invoice_url ?? null,
+    invoicePdf: inv.invoice_pdf ?? null,
+  };
+}
+
+function stripeEpochToIso(value: unknown): string | null {
+  if (value == null) return null;
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  // Stripe consistently uses epoch seconds (10-digit) in 2026.
+  return new Date(n * 1000).toISOString();
+}
+
+function mapDiscordGuild(guild: any): raw.DiscordGuildInput | null {
+  if (!guild || typeof guild !== 'object') return null;
+  const guildId = String(guild.id ?? guild.guild_id ?? '').trim();
+  if (!guildId) return null;
+  return {
+    guildId,
+    name: guild.name ?? null,
+    icon: guild.icon ?? null,
+    isOwner: Boolean(guild.owner),
+    permissions: typeof guild.permissions === 'string' ? guild.permissions : null,
+    features: Array.isArray(guild.features)
+      ? guild.features.filter((f: any): f is string => typeof f === 'string')
+      : [],
+    approximateMemberCount: typeof guild.approximate_member_count === 'number'
+      ? guild.approximate_member_count : null,
+    approximatePresenceCount: typeof guild.approximate_presence_count === 'number'
+      ? guild.approximate_presence_count : null,
+  };
+}
+
 function mapGdriveFile(file: any): raw.GdriveFileInput | null {
   if (!file || typeof file !== 'object') return null;
   const fileId = String(file.id ?? file.file_id ?? '').trim();
@@ -1022,6 +1345,14 @@ function buildSignalsForInit(
     githubIds: string[];
     outlookRows: raw.OutlookMessageInput[];
     outlookIds: string[];
+    gdocsRows: raw.GdocsDocumentInput[];
+    gdocsIds: string[];
+    gsheetsRows: raw.GsheetsSpreadsheetInput[];
+    gsheetsIds: string[];
+    stripeRows: raw.StripeInvoiceInput[];
+    stripeIds: string[];
+    discordRows: raw.DiscordGuildInput[];
+    discordIds: string[];
   },
 ): db.IngestPersonalSignalInput[] {
   const out: db.IngestPersonalSignalInput[] = [];
@@ -1164,6 +1495,91 @@ function buildSignalsForInit(
       sourceRawIds: [buckets.outlookIds[i]!],
       occurredAt: row.receivedAt ?? undefined,
       dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.messageId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.gdocsIds.length; i += 1) {
+    const row = buckets.gdocsRows[i];
+    if (!row) continue;
+    const title = trimSummary(row.name ?? '(unnamed document)', 120);
+    const summary = trimSummary(row.webViewLink ?? title, 280) || title;
+    out.push({
+      kind: 'connector.googledocs.document',
+      title,
+      summary,
+      payload: { webViewLink: row.webViewLink, owners: row.owners, lastModifyingUser: row.lastModifyingUser },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'gdocs_documents',
+      sourceRawIds: [buckets.gdocsIds[i]!],
+      occurredAt: row.modifiedTime ?? undefined,
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.documentId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.gsheetsIds.length; i += 1) {
+    const row = buckets.gsheetsRows[i];
+    if (!row) continue;
+    const title = trimSummary(row.name ?? '(unnamed spreadsheet)', 120);
+    const summary = trimSummary(row.webViewLink ?? title, 280) || title;
+    out.push({
+      kind: 'connector.googlesheets.spreadsheet',
+      title,
+      summary,
+      payload: { webViewLink: row.webViewLink, owners: row.owners, lastModifyingUser: row.lastModifyingUser },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'gsheets_spreadsheets',
+      sourceRawIds: [buckets.gsheetsIds[i]!],
+      occurredAt: row.modifiedTime ?? undefined,
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.spreadsheetId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.stripeIds.length; i += 1) {
+    const row = buckets.stripeRows[i];
+    if (!row) continue;
+    const customerLabel = row.customerName ?? row.customerEmail ?? row.customerId ?? 'unknown';
+    const amountLabel = row.amountDue != null && row.currency
+      ? `${(row.amountDue / 100).toFixed(2)} ${row.currency.toUpperCase()}`
+      : '';
+    const title = trimSummary(`Invoice ${row.number ?? row.invoiceId} · ${customerLabel}${amountLabel ? ` · ${amountLabel}` : ''}`, 120);
+    const summary = trimSummary(`status=${row.status ?? '?'} · ${row.hostedInvoiceUrl ?? title}`, 280) || title;
+    out.push({
+      kind: 'connector.stripe.invoice',
+      title,
+      summary,
+      payload: {
+        status: row.status, customerId: row.customerId,
+        amountDue: row.amountDue, amountPaid: row.amountPaid, currency: row.currency,
+        hostedInvoiceUrl: row.hostedInvoiceUrl,
+      },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'stripe_invoices',
+      sourceRawIds: [buckets.stripeIds[i]!],
+      occurredAt: row.createdAtRemote ?? undefined,
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.invoiceId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.discordIds.length; i += 1) {
+    const row = buckets.discordRows[i];
+    if (!row) continue;
+    const memberLabel = row.approximateMemberCount != null
+      ? ` · ${row.approximateMemberCount} members`
+      : '';
+    const title = trimSummary(`#${row.name ?? row.guildId}${memberLabel}`, 120);
+    const summary = trimSummary(
+      `${row.isOwner ? 'owner' : 'member'}${row.features && row.features.length ? ` · features: ${row.features.slice(0, 3).join(', ')}` : ''}`,
+      280,
+    ) || title;
+    out.push({
+      kind: 'connector.discord.guild',
+      title,
+      summary,
+      payload: {
+        isOwner: row.isOwner, memberCount: row.approximateMemberCount,
+        presenceCount: row.approximatePresenceCount, features: row.features,
+      },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'discord_guilds',
+      sourceRawIds: [buckets.discordIds[i]!],
+      // Discord doesn't have a per-guild "occurred" time; leave undefined → defaults to now
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.guildId}:init:v1`,
     });
   }
   return out;

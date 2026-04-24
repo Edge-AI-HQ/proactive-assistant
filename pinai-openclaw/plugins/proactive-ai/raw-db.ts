@@ -324,6 +324,124 @@ function ensureRawSchema(db: Database.Database): void {
       ON outlook_messages(dedupe_key) WHERE dedupe_key IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_outlook_received ON outlook_messages(received_at DESC);
     CREATE INDEX IF NOT EXISTS idx_outlook_conv ON outlook_messages(conversation_id);
+
+    -- Google Docs documents (Composio: GOOGLEDOCS_SEARCH_DOCUMENTS — verified live)
+    --
+    -- Returns the same Drive-API row shape as gdrive_files but filtered to
+    -- mime_type=application/vnd.google-apps.document. Kept as a separate
+    -- table per the "one toolkit, one typed table" rule so connector
+    -- boundaries are clean even when payload shapes overlap.
+    CREATE TABLE IF NOT EXISTS gdocs_documents (
+      id              TEXT PRIMARY KEY,
+      document_id     TEXT NOT NULL UNIQUE,
+      name            TEXT,
+      modified_time   TEXT,
+      created_time    TEXT,
+      web_view_link   TEXT,
+      owners_json     TEXT NOT NULL DEFAULT '[]',
+      last_modifying_user TEXT,
+      starred         INTEGER NOT NULL DEFAULT 0,
+      trashed         INTEGER NOT NULL DEFAULT 0,
+      shared          INTEGER NOT NULL DEFAULT 0,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_gdocs_dedupe
+      ON gdocs_documents(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_gdocs_modified ON gdocs_documents(modified_time DESC);
+
+    -- Google Sheets spreadsheets (Composio: GOOGLESHEETS_SEARCH_SPREADSHEETS)
+    --
+    -- Same Drive-API shape but for application/vnd.google-apps.spreadsheet.
+    CREATE TABLE IF NOT EXISTS gsheets_spreadsheets (
+      id              TEXT PRIMARY KEY,
+      spreadsheet_id  TEXT NOT NULL UNIQUE,
+      name            TEXT,
+      modified_time   TEXT,
+      created_time    TEXT,
+      web_view_link   TEXT,
+      owners_json     TEXT NOT NULL DEFAULT '[]',
+      last_modifying_user TEXT,
+      starred         INTEGER NOT NULL DEFAULT 0,
+      trashed         INTEGER NOT NULL DEFAULT 0,
+      shared          INTEGER NOT NULL DEFAULT 0,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_gsheets_dedupe
+      ON gsheets_spreadsheets(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_gsheets_modified ON gsheets_spreadsheets(modified_time DESC);
+
+    -- Stripe invoices (Composio: STRIPE_LIST_INVOICES — schema-derived,
+    -- not live-verified — first deploy with a connected Stripe account
+    -- should expect minor field-naming surprises and tighten the mapper).
+    --
+    -- Picked invoices over customers/charges for highest user-meaning per
+    -- row. Amounts as INTEGER cents matching Stripe's wire format.
+    -- customer_email/name denormalized so personal_signals derivation
+    -- doesn't need a second customer-fetch round-trip.
+    CREATE TABLE IF NOT EXISTS stripe_invoices (
+      id              TEXT PRIMARY KEY,
+      invoice_id      TEXT NOT NULL UNIQUE,
+      number          TEXT,
+      status          TEXT,
+      amount_due      INTEGER,
+      amount_paid     INTEGER,
+      amount_remaining INTEGER,
+      currency        TEXT,
+      customer_id     TEXT,
+      customer_email  TEXT,
+      customer_name   TEXT,
+      collection_method TEXT,
+      created_at_remote TEXT,
+      due_date        TEXT,
+      hosted_invoice_url TEXT,
+      invoice_pdf     TEXT,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_stripe_inv_dedupe
+      ON stripe_invoices(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_stripe_inv_created
+      ON stripe_invoices(created_at_remote DESC);
+    CREATE INDEX IF NOT EXISTS idx_stripe_inv_status
+      ON stripe_invoices(status);
+
+    -- Discord guilds (Composio: DISCORD_LIST_MY_GUILDS — schema-derived,
+    -- not live-verified). Discords public API for end-users is
+    -- intentionally narrow — no "list my recent messages" surface,
+    -- so we settle for guilds (servers) as the primary signal source.
+    CREATE TABLE IF NOT EXISTS discord_guilds (
+      id              TEXT PRIMARY KEY,
+      guild_id        TEXT NOT NULL UNIQUE,
+      name            TEXT,
+      icon            TEXT,
+      is_owner        INTEGER NOT NULL DEFAULT 0,
+      permissions     TEXT,
+      features_json   TEXT NOT NULL DEFAULT '[]',
+      approximate_member_count INTEGER,
+      approximate_presence_count INTEGER,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_discord_guilds_dedupe
+      ON discord_guilds(dedupe_key) WHERE dedupe_key IS NOT NULL;
   `);
 }
 
@@ -1490,6 +1608,495 @@ export function listOutlookMessages(opts: ListOutlookOpts = {}): OutlookMessageR
   return db.prepare(parts.join(' ')).all(...params).map(rowToOutlookMessage);
 }
 
+// ─────── Google Docs documents ───────
+
+export interface GdocsDocumentInput {
+  documentId: string;
+  name?: string | null;
+  modifiedTime?: string | null;
+  createdTime?: string | null;
+  webViewLink?: string | null;
+  /** Email or display name of each owner; flattened from {emailAddress|displayName}. */
+  owners?: string[];
+  lastModifyingUser?: string | null;
+  starred?: boolean;
+  trashed?: boolean;
+  shared?: boolean;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface GdocsDocumentRow {
+  id: string;
+  document_id: string;
+  name: string | null;
+  modified_time: string | null;
+  created_time: string | null;
+  web_view_link: string | null;
+  owners: string[];
+  last_modifying_user: string | null;
+  starred: boolean;
+  trashed: boolean;
+  shared: boolean;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToGdocsDocument(row: any): GdocsDocumentRow {
+  return {
+    id: row.id,
+    document_id: row.document_id,
+    name: row.name ?? null,
+    modified_time: row.modified_time ?? null,
+    created_time: row.created_time ?? null,
+    web_view_link: row.web_view_link ?? null,
+    owners: parseJsonArray<string>(row.owners_json),
+    last_modifying_user: row.last_modifying_user ?? null,
+    starred: Boolean(row.starred),
+    trashed: Boolean(row.trashed),
+    shared: Boolean(row.shared),
+    occurred_at: row.occurred_at,
+    ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestGdocsDocuments(items: GdocsDocumentInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0;
+  let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO gdocs_documents (
+       id, document_id, name, modified_time, created_time, web_view_link,
+       owners_json, last_modifying_user, starred, trashed, shared,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.documentId) continue;
+      accepted += 1;
+      const id = genId();
+      const modified = normalizeToUtcIso(item.modifiedTime ?? null);
+      const created = normalizeToUtcIso(item.createdTime ?? null);
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? modified ?? created ?? ts;
+      const dedupe = item.dedupeKey ?? `gdocs:doc:${item.documentId}:${modified ?? 'nomod'}`;
+      const result = insert.run(
+        id, item.documentId, item.name ?? null,
+        modified, created, item.webViewLink ?? null,
+        JSON.stringify(item.owners ?? []),
+        item.lastModifyingUser ?? null,
+        item.starred ? 1 : 0, item.trashed ? 1 : 0, item.shared ? 1 : 0,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) {
+        inserted += 1;
+        ids.push(id);
+      }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export interface ListGdocsOpts {
+  since?: string;
+  until?: string;
+  limit?: number;
+  includeTrashed?: boolean;
+}
+
+export function listGdocsDocuments(opts: ListGdocsOpts = {}): GdocsDocumentRow[] {
+  const db = getRawDb();
+  const parts = ['SELECT * FROM gdocs_documents WHERE 1=1'];
+  const params: unknown[] = [];
+  if (!opts.includeTrashed) { parts.push('AND trashed = 0'); }
+  const since = normalizeToUtcIso(opts.since);
+  const until = normalizeToUtcIso(opts.until);
+  if (since) { parts.push('AND modified_time >= ?'); params.push(since); }
+  if (until) { parts.push('AND modified_time <= ?'); params.push(until); }
+  parts.push('ORDER BY modified_time DESC LIMIT ?');
+  params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
+  return db.prepare(parts.join(' ')).all(...params).map(rowToGdocsDocument);
+}
+
+// ─────── Google Sheets spreadsheets ───────
+
+export interface GsheetsSpreadsheetInput {
+  spreadsheetId: string;
+  name?: string | null;
+  modifiedTime?: string | null;
+  createdTime?: string | null;
+  webViewLink?: string | null;
+  owners?: string[];
+  lastModifyingUser?: string | null;
+  starred?: boolean;
+  trashed?: boolean;
+  shared?: boolean;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface GsheetsSpreadsheetRow {
+  id: string;
+  spreadsheet_id: string;
+  name: string | null;
+  modified_time: string | null;
+  created_time: string | null;
+  web_view_link: string | null;
+  owners: string[];
+  last_modifying_user: string | null;
+  starred: boolean;
+  trashed: boolean;
+  shared: boolean;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToGsheetsSpreadsheet(row: any): GsheetsSpreadsheetRow {
+  return {
+    id: row.id,
+    spreadsheet_id: row.spreadsheet_id,
+    name: row.name ?? null,
+    modified_time: row.modified_time ?? null,
+    created_time: row.created_time ?? null,
+    web_view_link: row.web_view_link ?? null,
+    owners: parseJsonArray<string>(row.owners_json),
+    last_modifying_user: row.last_modifying_user ?? null,
+    starred: Boolean(row.starred),
+    trashed: Boolean(row.trashed),
+    shared: Boolean(row.shared),
+    occurred_at: row.occurred_at,
+    ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestGsheetsSpreadsheets(items: GsheetsSpreadsheetInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0;
+  let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO gsheets_spreadsheets (
+       id, spreadsheet_id, name, modified_time, created_time, web_view_link,
+       owners_json, last_modifying_user, starred, trashed, shared,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.spreadsheetId) continue;
+      accepted += 1;
+      const id = genId();
+      const modified = normalizeToUtcIso(item.modifiedTime ?? null);
+      const created = normalizeToUtcIso(item.createdTime ?? null);
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? modified ?? created ?? ts;
+      const dedupe = item.dedupeKey ?? `gsheets:sheet:${item.spreadsheetId}:${modified ?? 'nomod'}`;
+      const result = insert.run(
+        id, item.spreadsheetId, item.name ?? null,
+        modified, created, item.webViewLink ?? null,
+        JSON.stringify(item.owners ?? []),
+        item.lastModifyingUser ?? null,
+        item.starred ? 1 : 0, item.trashed ? 1 : 0, item.shared ? 1 : 0,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) {
+        inserted += 1;
+        ids.push(id);
+      }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export function listGsheetsSpreadsheets(opts: ListGdocsOpts = {}): GsheetsSpreadsheetRow[] {
+  const db = getRawDb();
+  const parts = ['SELECT * FROM gsheets_spreadsheets WHERE 1=1'];
+  const params: unknown[] = [];
+  if (!opts.includeTrashed) { parts.push('AND trashed = 0'); }
+  const since = normalizeToUtcIso(opts.since);
+  const until = normalizeToUtcIso(opts.until);
+  if (since) { parts.push('AND modified_time >= ?'); params.push(since); }
+  if (until) { parts.push('AND modified_time <= ?'); params.push(until); }
+  parts.push('ORDER BY modified_time DESC LIMIT ?');
+  params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
+  return db.prepare(parts.join(' ')).all(...params).map(rowToGsheetsSpreadsheet);
+}
+
+// ─────── Stripe invoices ───────
+
+export interface StripeInvoiceInput {
+  invoiceId: string;
+  number?: string | null;
+  status?: string | null;
+  amountDue?: number | null;
+  amountPaid?: number | null;
+  amountRemaining?: number | null;
+  currency?: string | null;
+  customerId?: string | null;
+  customerEmail?: string | null;
+  customerName?: string | null;
+  collectionMethod?: string | null;
+  /** epoch seconds; mapper converts. */
+  createdAtRemote?: string | null;
+  dueDate?: string | null;
+  hostedInvoiceUrl?: string | null;
+  invoicePdf?: string | null;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface StripeInvoiceRow {
+  id: string;
+  invoice_id: string;
+  number: string | null;
+  status: string | null;
+  amount_due: number | null;
+  amount_paid: number | null;
+  amount_remaining: number | null;
+  currency: string | null;
+  customer_id: string | null;
+  customer_email: string | null;
+  customer_name: string | null;
+  collection_method: string | null;
+  created_at_remote: string | null;
+  due_date: string | null;
+  hosted_invoice_url: string | null;
+  invoice_pdf: string | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToStripeInvoice(row: any): StripeInvoiceRow {
+  return {
+    id: row.id,
+    invoice_id: row.invoice_id,
+    number: row.number ?? null,
+    status: row.status ?? null,
+    amount_due: typeof row.amount_due === 'number' ? row.amount_due : null,
+    amount_paid: typeof row.amount_paid === 'number' ? row.amount_paid : null,
+    amount_remaining: typeof row.amount_remaining === 'number' ? row.amount_remaining : null,
+    currency: row.currency ?? null,
+    customer_id: row.customer_id ?? null,
+    customer_email: row.customer_email ?? null,
+    customer_name: row.customer_name ?? null,
+    collection_method: row.collection_method ?? null,
+    created_at_remote: row.created_at_remote ?? null,
+    due_date: row.due_date ?? null,
+    hosted_invoice_url: row.hosted_invoice_url ?? null,
+    invoice_pdf: row.invoice_pdf ?? null,
+    occurred_at: row.occurred_at,
+    ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestStripeInvoices(items: StripeInvoiceInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0;
+  let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO stripe_invoices (
+       id, invoice_id, number, status,
+       amount_due, amount_paid, amount_remaining, currency,
+       customer_id, customer_email, customer_name,
+       collection_method, created_at_remote, due_date,
+       hosted_invoice_url, invoice_pdf,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.invoiceId) continue;
+      accepted += 1;
+      const id = genId();
+      const created = normalizeToUtcIso(item.createdAtRemote ?? null);
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? created ?? ts;
+      const dedupe = item.dedupeKey ?? `stripe:inv:${item.invoiceId}`;
+      const result = insert.run(
+        id, item.invoiceId, item.number ?? null, item.status ?? null,
+        intOrNull(item.amountDue), intOrNull(item.amountPaid), intOrNull(item.amountRemaining),
+        item.currency ?? null,
+        item.customerId ?? null, item.customerEmail ?? null, item.customerName ?? null,
+        item.collectionMethod ?? null, created, item.dueDate ?? null,
+        item.hostedInvoiceUrl ?? null, item.invoicePdf ?? null,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) {
+        inserted += 1;
+        ids.push(id);
+      }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+function intOrNull(value: number | null | undefined): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return Math.floor(value);
+}
+
+export interface ListStripeInvoiceOpts {
+  status?: string;
+  customerId?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+}
+
+export function listStripeInvoices(opts: ListStripeInvoiceOpts = {}): StripeInvoiceRow[] {
+  const db = getRawDb();
+  const parts = ['SELECT * FROM stripe_invoices WHERE 1=1'];
+  const params: unknown[] = [];
+  if (opts.status) { parts.push('AND status = ?'); params.push(opts.status); }
+  if (opts.customerId) { parts.push('AND customer_id = ?'); params.push(opts.customerId); }
+  const since = normalizeToUtcIso(opts.since);
+  const until = normalizeToUtcIso(opts.until);
+  if (since) { parts.push('AND created_at_remote >= ?'); params.push(since); }
+  if (until) { parts.push('AND created_at_remote <= ?'); params.push(until); }
+  parts.push('ORDER BY created_at_remote DESC LIMIT ?');
+  params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
+  return db.prepare(parts.join(' ')).all(...params).map(rowToStripeInvoice);
+}
+
+// ─────── Discord guilds ───────
+
+export interface DiscordGuildInput {
+  guildId: string;
+  name?: string | null;
+  icon?: string | null;
+  isOwner?: boolean;
+  permissions?: string | null;
+  features?: string[];
+  approximateMemberCount?: number | null;
+  approximatePresenceCount?: number | null;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface DiscordGuildRow {
+  id: string;
+  guild_id: string;
+  name: string | null;
+  icon: string | null;
+  is_owner: boolean;
+  permissions: string | null;
+  features: string[];
+  approximate_member_count: number | null;
+  approximate_presence_count: number | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToDiscordGuild(row: any): DiscordGuildRow {
+  return {
+    id: row.id,
+    guild_id: row.guild_id,
+    name: row.name ?? null,
+    icon: row.icon ?? null,
+    is_owner: Boolean(row.is_owner),
+    permissions: row.permissions ?? null,
+    features: parseJsonArray<string>(row.features_json),
+    approximate_member_count: typeof row.approximate_member_count === 'number'
+      ? row.approximate_member_count : null,
+    approximate_presence_count: typeof row.approximate_presence_count === 'number'
+      ? row.approximate_presence_count : null,
+    occurred_at: row.occurred_at,
+    ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestDiscordGuilds(items: DiscordGuildInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0;
+  let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO discord_guilds (
+       id, guild_id, name, icon, is_owner, permissions, features_json,
+       approximate_member_count, approximate_presence_count,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.guildId) continue;
+      accepted += 1;
+      const id = genId();
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? ts;
+      // Discord membership is mostly stable; dedupe on guild_id alone so
+      // re-fetching the same server is a no-op.
+      const dedupe = item.dedupeKey ?? `discord:guild:${item.guildId}`;
+      const result = insert.run(
+        id, item.guildId, item.name ?? null, item.icon ?? null,
+        item.isOwner ? 1 : 0, item.permissions ?? null,
+        JSON.stringify(item.features ?? []),
+        intOrNull(item.approximateMemberCount), intOrNull(item.approximatePresenceCount),
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) {
+        inserted += 1;
+        ids.push(id);
+      }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export function listDiscordGuilds(opts: { limit?: number } = {}): DiscordGuildRow[] {
+  const db = getRawDb();
+  return db.prepare(
+    `SELECT * FROM discord_guilds ORDER BY name ASC LIMIT ?`,
+  ).all(Math.max(1, Math.min(opts.limit ?? 50, 500))).map(rowToDiscordGuild);
+}
+
 // ─────── Reference tracking — uniform across every raw table ───────
 
 const REFERENCE_TABLES = new Set([
@@ -1504,6 +2111,11 @@ const REFERENCE_TABLES = new Set([
   // Phase D round 2
   'github_issues',
   'outlook_messages',
+  // Phase D round 3
+  'gdocs_documents',
+  'gsheets_spreadsheets',
+  'stripe_invoices',
+  'discord_guilds',
 ]);
 
 /**
