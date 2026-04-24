@@ -33,8 +33,13 @@ const NOOP_LOGGER: TaskLogger = {
   error: () => {},
 };
 
+export type EvolveToolkit =
+  | 'gmail' | 'googlecalendar'
+  // Phase D round 1
+  | 'slack' | 'notion' | 'googledrive';
+
 export interface ConnectorEvolveOpts {
-  toolkit: 'gmail' | 'googlecalendar';
+  toolkit: EvolveToolkit;
   evolutionRunId: string;
   /**
    * Items that were just freshly inserted into raw.db. We re-sample these
@@ -42,6 +47,9 @@ export interface ConnectorEvolveOpts {
    */
   gmail?: raw.GmailMessageInput[];
   gcal?: raw.GcalEventInput[];
+  slack?: raw.SlackMessageInput[];
+  notion?: raw.NotionPageInput[];
+  gdrive?: raw.GdriveFileInput[];
 }
 
 export interface ConnectorEvolveDeps {
@@ -222,14 +230,19 @@ interface SampledBundle {
   totalItems: number;
   gmail: Array<{ from?: string; subject?: string; snippet?: string; date?: string }>;
   gcal: Array<{ title?: string; start?: string; attendees?: string[] }>;
+  slack: Array<{ user?: string; channel?: string; text?: string; date?: string }>;
+  notion: Array<{ title?: string; preview?: string; edited?: string; parentType?: string }>;
+  gdrive: Array<{ name?: string; mimeType?: string; modified?: string; owners?: string[] }>;
 }
 
 function sampleItems(opts: ConnectorEvolveOpts): SampledBundle {
   const gmail: SampledBundle['gmail'] = [];
   const gcal: SampledBundle['gcal'] = [];
+  const slack: SampledBundle['slack'] = [];
+  const notion: SampledBundle['notion'] = [];
+  const gdrive: SampledBundle['gdrive'] = [];
 
   if (opts.gmail && opts.gmail.length > 0) {
-    // Most-recent first. occurredAt → ISO; falls back to internalDate.
     const sortedGmail = [...opts.gmail]
       .sort(byDescOccurredAt)
       .slice(0, MAX_PROMPT_ITEMS)
@@ -252,8 +265,47 @@ function sampleItems(opts: ConnectorEvolveOpts): SampledBundle {
       }));
     gcal.push(...sortedGcal);
   }
+  if (opts.slack && opts.slack.length > 0) {
+    const sortedSlack = [...opts.slack]
+      .sort(byDescOccurredAt)
+      .slice(0, MAX_PROMPT_ITEMS)
+      .map((m) => ({
+        user: m.userName ?? m.userId ?? undefined,
+        channel: m.channelName ?? m.channelId ?? undefined,
+        text: truncate(m.text ?? '', MAX_TEXT_LEN_PER_ITEM),
+        date: m.occurredAt,
+      }));
+    slack.push(...sortedSlack);
+  }
+  if (opts.notion && opts.notion.length > 0) {
+    const sortedNotion = [...opts.notion]
+      .sort(byDescLastEdited)
+      .slice(0, MAX_PROMPT_ITEMS)
+      .map((p) => ({
+        title: truncate(p.title ?? '', 120),
+        preview: truncate(p.contentPreview ?? '', MAX_TEXT_LEN_PER_ITEM),
+        edited: p.lastEditedTime ?? undefined,
+        parentType: p.parentType ?? undefined,
+      }));
+    notion.push(...sortedNotion);
+  }
+  if (opts.gdrive && opts.gdrive.length > 0) {
+    const sortedGdrive = [...opts.gdrive]
+      .sort(byDescModified)
+      .slice(0, MAX_PROMPT_ITEMS)
+      .map((f) => ({
+        name: truncate(f.name ?? '', 160),
+        mimeType: f.mimeType ?? undefined,
+        modified: f.modifiedTime ?? undefined,
+        owners: Array.isArray(f.owners) ? f.owners.slice(0, 6) : [],
+      }));
+    gdrive.push(...sortedGdrive);
+  }
 
-  return { totalItems: gmail.length + gcal.length, gmail, gcal };
+  return {
+    totalItems: gmail.length + gcal.length + slack.length + notion.length + gdrive.length,
+    gmail, gcal, slack, notion, gdrive,
+  };
 }
 
 function buildUserMessage(
@@ -278,6 +330,30 @@ function buildUserMessage(
       lines.push(`${i + 1}. Title: ${e.title ?? '(no title)'}`);
       if (e.start) lines.push(`   Start: ${e.start}`);
       if (e.attendees && e.attendees.length > 0) lines.push(`   Attendees: ${e.attendees.join(', ')}`);
+    });
+  }
+  if (sampled.slack.length > 0) {
+    lines.push('', `Slack messages (${sampled.slack.length} most recent):`);
+    sampled.slack.forEach((m, i) => {
+      lines.push(`${i + 1}. ${m.user ?? '(unknown)'} in #${m.channel ?? 'unknown'}`);
+      if (m.text) lines.push(`   ${m.text}`);
+      if (m.date) lines.push(`   At: ${m.date}`);
+    });
+  }
+  if (sampled.notion.length > 0) {
+    lines.push('', `Notion pages (${sampled.notion.length} most recent):`);
+    sampled.notion.forEach((p, i) => {
+      lines.push(`${i + 1}. Title: ${p.title ?? '(untitled)'}${p.parentType ? ` [${p.parentType}]` : ''}`);
+      if (p.preview) lines.push(`   Preview: ${p.preview}`);
+      if (p.edited) lines.push(`   Edited: ${p.edited}`);
+    });
+  }
+  if (sampled.gdrive.length > 0) {
+    lines.push('', `Google Drive files (${sampled.gdrive.length} most recent):`);
+    sampled.gdrive.forEach((f, i) => {
+      lines.push(`${i + 1}. ${f.name ?? '(unnamed)'}${f.mimeType ? ` · ${f.mimeType}` : ''}`);
+      if (f.owners && f.owners.length > 0) lines.push(`   Owners: ${f.owners.join(', ')}`);
+      if (f.modified) lines.push(`   Modified: ${f.modified}`);
     });
   }
   lines.push('', '── Current state ──');
@@ -371,6 +447,18 @@ function byDescOccurredAt(a: { occurredAt?: string }, b: { occurredAt?: string }
 function byDescStartAt(a: { startAt?: string | null }, b: { startAt?: string | null }): number {
   const av = a.startAt ?? '';
   const bv = b.startAt ?? '';
+  return av < bv ? 1 : av > bv ? -1 : 0;
+}
+
+function byDescLastEdited(a: { lastEditedTime?: string | null }, b: { lastEditedTime?: string | null }): number {
+  const av = a.lastEditedTime ?? '';
+  const bv = b.lastEditedTime ?? '';
+  return av < bv ? 1 : av > bv ? -1 : 0;
+}
+
+function byDescModified(a: { modifiedTime?: string | null }, b: { modifiedTime?: string | null }): number {
+  const av = a.modifiedTime ?? '';
+  const bv = b.modifiedTime ?? '';
   return av < bv ? 1 : av > bv ? -1 : 0;
 }
 

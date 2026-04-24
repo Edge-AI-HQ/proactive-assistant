@@ -13,10 +13,16 @@ import {
   ingestDeviceAppsSnapshot,
   ingestDeviceContactsSnapshot,
   ingestGcalEvents,
+  ingestGdriveFiles,
   ingestGmailMessages,
+  ingestNotionPages,
+  ingestSlackMessages,
   listDeviceApps,
   listGcalEvents,
+  listGdriveFiles,
   listGmailMessages,
+  listNotionPages,
+  listSlackMessages,
   markRawReferenced,
   resetRawDbForTests,
 } from './raw-db.ts';
@@ -227,5 +233,126 @@ test('markRawReferenced: throws on unknown table name (defense)', async () => {
       () => markRawReferenced('not_a_table', ['id'], 'run-1'),
       /unknown raw table/,
     );
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// Phase D round 1 — Slack / Notion / GoogleDrive raw tables
+// ──────────────────────────────────────────────────────────────────────
+
+test('ingestSlackMessages: dedupe via (channel_id, ts) natural key', async () => {
+  await withTempHome(async () => {
+    const r1 = ingestSlackMessages([
+      { channelId: 'C01', ts: '1714063221.000400', text: 'hi', userId: 'U01' },
+      { channelId: 'C01', ts: '1714063300.000500', text: 'hello again', userId: 'U02' },
+    ]);
+    assert.equal(r1.inserted, 2);
+    // re-ingest the same message ts → dedupe
+    const r2 = ingestSlackMessages([
+      { channelId: 'C01', ts: '1714063221.000400', text: 'hi (refetched)', userId: 'U01' },
+    ]);
+    assert.equal(r2.inserted, 0);
+    assert.equal(r2.ignored, 1);
+    // same ts in a different channel → distinct row (natural key is composite)
+    const r3 = ingestSlackMessages([
+      { channelId: 'C02', ts: '1714063221.000400', text: 'cross-channel', userId: 'U03' },
+    ]);
+    assert.equal(r3.inserted, 1);
+    const all = listSlackMessages({ limit: 10 });
+    assert.equal(all.length, 3);
+  });
+});
+
+test('ingestSlackMessages: occurredAt derives from ts when absent', async () => {
+  await withTempHome(async () => {
+    ingestSlackMessages([{ channelId: 'C01', ts: '1714063221.000400' }]);
+    const rows = listSlackMessages({ limit: 1 });
+    // 1714063221 = 2024-04-25T15:20:21Z (approx)
+    assert.match(rows[0]!.occurred_at, /^2024-04-25/);
+  });
+});
+
+test('ingestNotionPages: dedupe via page_id UNIQUE; archived filter on list', async () => {
+  await withTempHome(async () => {
+    const r1 = ingestNotionPages([
+      { pageId: 'p1', title: 'Active page', lastEditedTime: '2026-04-23T10:00:00Z' },
+      { pageId: 'p2', title: 'Archived page', archived: true, lastEditedTime: '2026-04-22T10:00:00Z' },
+    ]);
+    assert.equal(r1.inserted, 2);
+    // Re-ingest same page_id → ignored
+    const r2 = ingestNotionPages([{ pageId: 'p1', title: 'Renamed' }]);
+    assert.equal(r2.inserted, 0);
+    // Default list excludes archived
+    const visible = listNotionPages({ limit: 10 });
+    assert.equal(visible.length, 1);
+    assert.equal(visible[0]!.title, 'Active page');
+    // includeArchived=true returns both
+    const all = listNotionPages({ limit: 10, includeArchived: true });
+    assert.equal(all.length, 2);
+  });
+});
+
+test('ingestNotionPages: skips items with falsy pageId', async () => {
+  await withTempHome(async () => {
+    const r = ingestNotionPages([
+      { pageId: '', title: 'no id' },
+      { pageId: 'good', title: 'OK' },
+    ]);
+    assert.equal(r.inserted, 1);
+  });
+});
+
+test('ingestGdriveFiles: dedupe via file_id UNIQUE; trashed filter on list', async () => {
+  await withTempHome(async () => {
+    const r1 = ingestGdriveFiles([
+      { fileId: 'f1', name: 'doc1.docx', modifiedTime: '2026-04-23T10:00:00Z' },
+      { fileId: 'f2', name: 'sheet1.xlsx', modifiedTime: '2026-04-22T10:00:00Z', trashed: true },
+    ]);
+    assert.equal(r1.inserted, 2);
+    const r2 = ingestGdriveFiles([{ fileId: 'f1', name: 'doc1-renamed.docx' }]);
+    assert.equal(r2.inserted, 0);
+    const visible = listGdriveFiles({ limit: 10 });
+    assert.equal(visible.length, 1);
+    assert.equal(visible[0]!.file_id, 'f1');
+    const all = listGdriveFiles({ limit: 10, includeTrashed: true });
+    assert.equal(all.length, 2);
+  });
+});
+
+test('ingestGdriveFiles: numeric size from string (Drive API returns "12345"); null for missing', async () => {
+  await withTempHome(async () => {
+    ingestGdriveFiles([
+      { fileId: 'f1', name: 'doc.pdf', sizeBytes: 0 },  // 0 is a valid size
+      { fileId: 'f2', name: 'gdoc' },                    // no size — should be null
+    ]);
+    const rows = listGdriveFiles({ limit: 5 });
+    assert.equal(rows.find((r) => r.file_id === 'f1')!.size_bytes, 0);
+    assert.equal(rows.find((r) => r.file_id === 'f2')!.size_bytes, null);
+  });
+});
+
+test('listGdriveFiles: filters by mime_type', async () => {
+  await withTempHome(async () => {
+    ingestGdriveFiles([
+      { fileId: 'f1', name: 'a', mimeType: 'application/vnd.google-apps.document' },
+      { fileId: 'f2', name: 'b', mimeType: 'application/pdf' },
+      { fileId: 'f3', name: 'c', mimeType: 'application/vnd.google-apps.document' },
+    ]);
+    const docs = listGdriveFiles({ mimeType: 'application/vnd.google-apps.document', limit: 10 });
+    assert.equal(docs.length, 2);
+  });
+});
+
+test('markRawReferenced: works on the new raw tables (slack/notion/gdrive)', async () => {
+  await withTempHome(async () => {
+    const slack = ingestSlackMessages([{ channelId: 'C01', ts: '1.0' }]);
+    const notion = ingestNotionPages([{ pageId: 'p1' }]);
+    const gdrive = ingestGdriveFiles([{ fileId: 'f1' }]);
+    markRawReferenced('slack_messages', slack.ids, 'run-1');
+    markRawReferenced('notion_pages', notion.ids, 'run-1');
+    markRawReferenced('gdrive_files', gdrive.ids, 'run-1');
+    assert.equal(listSlackMessages({ limit: 1 })[0]!.reference_count, 1);
+    assert.equal(listNotionPages({ limit: 1 })[0]!.reference_count, 1);
+    assert.equal(listGdriveFiles({ limit: 1 })[0]!.reference_count, 1);
   });
 });

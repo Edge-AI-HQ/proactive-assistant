@@ -28,7 +28,14 @@ import {
 
 const COMPOSIO_API_BASE = 'https://backend.composio.dev/api/v3';
 
-const SUPPORTED_TOOLKITS = ['gmail', 'googlecalendar'] as const;
+const SUPPORTED_TOOLKITS = [
+  'gmail',
+  'googlecalendar',
+  // Phase D round 1
+  'slack',
+  'notion',
+  'googledrive',
+] as const;
 type SupportedToolkit = typeof SUPPORTED_TOOLKITS[number];
 
 const DEFAULT_LIMIT = 100;
@@ -147,7 +154,7 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
       return abortLeaseLost('fetch');
     }
 
-    let typedItems: { gmail?: raw.GmailMessageInput[]; gcal?: raw.GcalEventInput[] };
+    let typedItems: TypedFetchedItems;
     try {
       typedItems = await fetchToolkitItems(toolkit, {
         fetcher,
@@ -171,18 +178,33 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
 
     let rawInserted = 0;
     let rawIgnored = 0;
-    const insertedRawIds: { gmail: string[]; gcal: string[] } = { gmail: [], gcal: [] };
+    const insertedRawIds: InsertedRawIds = {
+      gmail: [], gcal: [], slack: [], notion: [], gdrive: [],
+    };
     if (typedItems.gmail && typedItems.gmail.length > 0) {
       const r = raw.ingestGmailMessages(typedItems.gmail);
-      rawInserted += r.inserted;
-      rawIgnored += r.ignored;
+      rawInserted += r.inserted; rawIgnored += r.ignored;
       insertedRawIds.gmail = r.ids;
     }
     if (typedItems.gcal && typedItems.gcal.length > 0) {
       const r = raw.ingestGcalEvents(typedItems.gcal);
-      rawInserted += r.inserted;
-      rawIgnored += r.ignored;
+      rawInserted += r.inserted; rawIgnored += r.ignored;
       insertedRawIds.gcal = r.ids;
+    }
+    if (typedItems.slack && typedItems.slack.length > 0) {
+      const r = raw.ingestSlackMessages(typedItems.slack);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.slack = r.ids;
+    }
+    if (typedItems.notion && typedItems.notion.length > 0) {
+      const r = raw.ingestNotionPages(typedItems.notion);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.notion = r.ids;
+    }
+    if (typedItems.gdrive && typedItems.gdrive.length > 0) {
+      const r = raw.ingestGdriveFiles(typedItems.gdrive);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.gdrive = r.ids;
     }
 
     // ── 7. Stage: derive personal_signals ──────────────────────────────
@@ -195,6 +217,12 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
       gmailIds: insertedRawIds.gmail,
       gcalRows: typedItems.gcal ?? [],
       gcalIds: insertedRawIds.gcal,
+      slackRows: typedItems.slack ?? [],
+      slackIds: insertedRawIds.slack,
+      notionRows: typedItems.notion ?? [],
+      notionIds: insertedRawIds.notion,
+      gdriveRows: typedItems.gdrive ?? [],
+      gdriveIds: insertedRawIds.gdrive,
     });
     const signalsRes = await db.ingestPersonalSignals(signalInputs);
 
@@ -217,6 +245,15 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
       if (insertedRawIds.gcal.length > 0) {
         await db.recordEvolutionRefsConsumed(evo.id, 'gcal_events', insertedRawIds.gcal);
       }
+      if (insertedRawIds.slack.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'slack_messages', insertedRawIds.slack);
+      }
+      if (insertedRawIds.notion.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'notion_pages', insertedRawIds.notion);
+      }
+      if (insertedRawIds.gdrive.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'gdrive_files', insertedRawIds.gdrive);
+      }
       if (signalsRes.ids.length > 0) {
         await db.recordEvolutionRefsConsumed(evo.id, 'personal_signals', signalsRes.ids);
       }
@@ -228,10 +265,13 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
       if (deps.api || deps.evolveAgentRun) {
         evolveResult = await runConnectorEvolve(
           {
-            toolkit: toolkit as 'gmail' | 'googlecalendar',
+            toolkit: toolkit as SupportedToolkit,
             evolutionRunId: evo.id,
             gmail: typedItems.gmail,
             gcal: typedItems.gcal,
+            slack: typedItems.slack,
+            notion: typedItems.notion,
+            gdrive: typedItems.gdrive,
           },
           {
             api: deps.api,
@@ -284,15 +324,40 @@ interface FetchToolkitItemsOpts {
   limit: number;
 }
 
+interface TypedFetchedItems {
+  gmail?: raw.GmailMessageInput[];
+  gcal?: raw.GcalEventInput[];
+  slack?: raw.SlackMessageInput[];
+  notion?: raw.NotionPageInput[];
+  gdrive?: raw.GdriveFileInput[];
+}
+
+interface InsertedRawIds {
+  gmail: string[];
+  gcal: string[];
+  slack: string[];
+  notion: string[];
+  gdrive: string[];
+}
+
 async function fetchToolkitItems(
   toolkit: SupportedToolkit,
   opts: FetchToolkitItemsOpts,
-): Promise<{ gmail?: raw.GmailMessageInput[]; gcal?: raw.GcalEventInput[] }> {
+): Promise<TypedFetchedItems> {
   if (toolkit === 'gmail') {
     return { gmail: await fetchGmailRecent(opts) };
   }
   if (toolkit === 'googlecalendar') {
     return { gcal: await fetchGcalRecent(opts) };
+  }
+  if (toolkit === 'slack') {
+    return { slack: await fetchSlackRecent(opts) };
+  }
+  if (toolkit === 'notion') {
+    return { notion: await fetchNotionRecent(opts) };
+  }
+  if (toolkit === 'googledrive') {
+    return { gdrive: await fetchGdriveRecent(opts) };
   }
   // Defensive — isSupportedToolkit already screened this out
   return {};
@@ -343,6 +408,76 @@ async function fetchGcalRecent(opts: FetchToolkitItemsOpts): Promise<raw.GcalEve
     .slice(0, opts.limit);
 }
 
+async function fetchSlackRecent(opts: FetchToolkitItemsOpts): Promise<raw.SlackMessageInput[]> {
+  // Slack search returns recent messages user has access to across all
+  // channels they're in. `*` is the catch-all; sort=timestamp puts most
+  // recent first (matching the dreaming/sources.ts variant).
+  const response = await opts.fetcher('/tools/execute/SLACK_SEARCH_MESSAGES', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {
+        query: '*',
+        count: opts.limit,
+        sort: 'timestamp',
+        sort_dir: 'desc',
+        include_bots: false,
+      },
+    }),
+  });
+  const messages = extractSlackMessages(response);
+  return messages
+    .map(mapSlackMessage)
+    .filter((m): m is raw.SlackMessageInput => !!m?.channelId && !!m?.ts)
+    .slice(0, opts.limit);
+}
+
+async function fetchNotionRecent(opts: FetchToolkitItemsOpts): Promise<raw.NotionPageInput[]> {
+  // Notion's NOTION_FETCH_DATA with fetch_type=get_all returns the user's
+  // accessible pages. page_size caps it; sort isn't a stable surface.
+  const response = await opts.fetcher('/tools/execute/NOTION_FETCH_DATA', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {
+        fetch_type: 'get_all',
+        page_size: opts.limit,
+      },
+    }),
+  });
+  const pages = extractNotionPages(response);
+  return pages
+    .map(mapNotionPage)
+    .filter((p): p is raw.NotionPageInput => !!p?.pageId)
+    .slice(0, opts.limit);
+}
+
+async function fetchGdriveRecent(opts: FetchToolkitItemsOpts): Promise<raw.GdriveFileInput[]> {
+  // Drive's q syntax: filter by modifiedTime, exclude trashed. corpora=user
+  // restricts to files owned/shared with the user (vs. domain-wide).
+  const since = new Date(Date.now() - 90 * 86_400_000).toISOString();
+  const response = await opts.fetcher('/tools/execute/GOOGLEDRIVE_FIND_FILE', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {
+        q: `modifiedTime > '${since}' and trashed = false`,
+        page_size: opts.limit,
+        spaces: 'drive',
+        corpora: 'user',
+      },
+    }),
+  });
+  const files = extractGdriveFiles(response);
+  return files
+    .map(mapGdriveFile)
+    .filter((f): f is raw.GdriveFileInput => !!f?.fileId)
+    .slice(0, opts.limit);
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Composio response shape extractors — defensive against API shape drift.
 // Composio wraps the real payload variously: { data: {...} } /
@@ -363,6 +498,39 @@ function extractGcalEvents(response: unknown): any[] {
   const candidates = unwrapDataPaths(response);
   for (const c of candidates) {
     if (Array.isArray(c?.events)) return c.events;
+    if (Array.isArray(c?.items)) return c.items;
+  }
+  return [];
+}
+
+function extractSlackMessages(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // Slack's search response wraps under messages.matches[]
+    if (c?.messages && Array.isArray(c.messages?.matches)) return c.messages.matches;
+    if (Array.isArray(c?.matches)) return c.matches;
+    if (Array.isArray(c?.messages)) return c.messages;
+    if (Array.isArray(c?.items)) return c.items;
+  }
+  return [];
+}
+
+function extractNotionPages(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // Notion API: { results: [...] }; Composio sometimes also nests under .pages
+    if (Array.isArray(c?.results)) return c.results;
+    if (Array.isArray(c?.pages)) return c.pages;
+    if (Array.isArray(c?.items)) return c.items;
+  }
+  return [];
+}
+
+function extractGdriveFiles(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // Drive API: { files: [...] }
+    if (Array.isArray(c?.files)) return c.files;
     if (Array.isArray(c?.items)) return c.items;
   }
   return [];
@@ -472,6 +640,106 @@ function extractGcalTimestamp(node: any): string | null {
   return node.dateTime ?? node.date ?? null;
 }
 
+function mapSlackMessage(msg: any): raw.SlackMessageInput | null {
+  if (!msg || typeof msg !== 'object') return null;
+  const ts = String(msg.ts ?? msg.timestamp ?? '').trim();
+  // Slack search nests channel under .channel.{id,name}; raw API has channel as a string
+  const channelObj = msg.channel;
+  const channelId = String(
+    (channelObj && typeof channelObj === 'object' ? channelObj.id : channelObj) ?? msg.channel_id ?? '',
+  ).trim();
+  const channelName = (channelObj && typeof channelObj === 'object')
+    ? channelObj.name ?? null : null;
+  if (!ts || !channelId) return null;
+  // user nested similarly
+  const userObj = msg.user;
+  const userId = (userObj && typeof userObj === 'object') ? userObj.id ?? null
+    : (typeof userObj === 'string' ? userObj : null);
+  const userName = (userObj && typeof userObj === 'object')
+    ? userObj.name ?? userObj.real_name ?? null
+    : msg.username ?? null;
+  return {
+    channelId,
+    channelName: channelName ?? null,
+    ts,
+    threadTs: msg.thread_ts ?? null,
+    userId,
+    userName,
+    text: typeof msg.text === 'string' ? msg.text : null,
+    permalink: msg.permalink ?? null,
+  };
+}
+
+function mapNotionPage(page: any): raw.NotionPageInput | null {
+  if (!page || typeof page !== 'object') return null;
+  const pageId = String(page.id ?? page.page_id ?? '').trim();
+  if (!pageId) return null;
+  // Notion's title lives at properties.title.title[0].plain_text — and at
+  // properties.Name.title[0].plain_text for database rows. Walk both.
+  const title = extractNotionTitle(page);
+  // Parent: { type: 'page_id'|'database_id'|'workspace', page_id?: ..., database_id?: ... }
+  const parent = page.parent ?? {};
+  const parentType = parent.type ?? null;
+  const parentId = parent.page_id ?? parent.database_id ?? null;
+  // Icon: { type: 'emoji', emoji: '🎯' } or external/file URL
+  const iconNode = page.icon;
+  const icon = iconNode?.emoji ?? iconNode?.external?.url ?? iconNode?.file?.url ?? null;
+  return {
+    pageId,
+    title,
+    url: page.url ?? null,
+    parentId,
+    parentType,
+    icon,
+    lastEditedTime: page.last_edited_time ?? null,
+    createdTime: page.created_time ?? null,
+    contentPreview: typeof page.content_preview === 'string' ? page.content_preview : null,
+    archived: Boolean(page.archived),
+  };
+}
+
+function extractNotionTitle(page: any): string | null {
+  // Try common title locations in order
+  const props = page.properties;
+  if (props && typeof props === 'object') {
+    for (const key of ['title', 'Title', 'Name', 'name']) {
+      const prop = props[key];
+      const arr = prop?.title;
+      if (Array.isArray(arr) && arr[0]?.plain_text) {
+        return String(arr[0].plain_text).trim() || null;
+      }
+    }
+  }
+  if (typeof page.title === 'string') return page.title;
+  return null;
+}
+
+function mapGdriveFile(file: any): raw.GdriveFileInput | null {
+  if (!file || typeof file !== 'object') return null;
+  const fileId = String(file.id ?? file.file_id ?? '').trim();
+  if (!fileId) return null;
+  const owners = Array.isArray(file.owners)
+    ? file.owners
+        .map((o: any) => o?.emailAddress ?? o?.displayName ?? null)
+        .filter((s: any): s is string => typeof s === 'string' && s.length > 0)
+    : [];
+  const sizeRaw = file.size;
+  const sizeBytes = typeof sizeRaw === 'number' ? sizeRaw
+    : typeof sizeRaw === 'string' && /^\d+$/.test(sizeRaw) ? Number.parseInt(sizeRaw, 10)
+    : null;
+  return {
+    fileId,
+    name: file.name ?? null,
+    mimeType: file.mimeType ?? file.mime_type ?? null,
+    modifiedTime: file.modifiedTime ?? file.modified_time ?? null,
+    createdTime: file.createdTime ?? file.created_time ?? null,
+    sizeBytes,
+    webViewLink: file.webViewLink ?? file.web_view_link ?? null,
+    owners,
+    trashed: Boolean(file.trashed),
+  };
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Signal derivation — one signal per ingested raw row, with refs.
 // ──────────────────────────────────────────────────────────────────────
@@ -484,6 +752,12 @@ function buildSignalsForInit(
     gmailIds: string[];
     gcalRows: raw.GcalEventInput[];
     gcalIds: string[];
+    slackRows: raw.SlackMessageInput[];
+    slackIds: string[];
+    notionRows: raw.NotionPageInput[];
+    notionIds: string[];
+    gdriveRows: raw.GdriveFileInput[];
+    gdriveIds: string[];
   },
 ): db.IngestPersonalSignalInput[] {
   const out: db.IngestPersonalSignalInput[] = [];
@@ -529,6 +803,60 @@ function buildSignalsForInit(
       sourceRawIds: [buckets.gcalIds[i]!],
       occurredAt: startAt,
       dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.calendarId}:${row.eventId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.slackIds.length; i += 1) {
+    const row = buckets.slackRows[i];
+    if (!row) continue;
+    const channelLabel = row.channelName ?? row.channelId;
+    const userLabel = row.userName ?? row.userId ?? 'unknown user';
+    const title = trimSummary(`#${channelLabel} · ${userLabel}`, 120);
+    const summary = trimSummary(row.text ?? title, 280) || title;
+    out.push({
+      kind: 'connector.slack.message',
+      title,
+      summary,
+      payload: { channelId: row.channelId, threadTs: row.threadTs, userId: row.userId },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'slack_messages',
+      sourceRawIds: [buckets.slackIds[i]!],
+      occurredAt: row.occurredAt,
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.channelId}:${row.ts}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.notionIds.length; i += 1) {
+    const row = buckets.notionRows[i];
+    if (!row) continue;
+    const title = trimSummary(row.title ?? '(untitled page)', 120);
+    const summary = trimSummary(row.contentPreview ?? row.url ?? title, 280) || title;
+    out.push({
+      kind: 'connector.notion.page',
+      title,
+      summary,
+      payload: { url: row.url, parentType: row.parentType, parentId: row.parentId },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'notion_pages',
+      sourceRawIds: [buckets.notionIds[i]!],
+      occurredAt: row.lastEditedTime ?? undefined,
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.pageId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.gdriveIds.length; i += 1) {
+    const row = buckets.gdriveRows[i];
+    if (!row) continue;
+    const title = trimSummary(row.name ?? '(unnamed file)', 120);
+    const mime = row.mimeType ? trimSummary(row.mimeType, 120) : '';
+    const summary = trimSummary([mime, row.webViewLink].filter(Boolean).join(' · ') || title, 280) || title;
+    out.push({
+      kind: 'connector.googledrive.file',
+      title,
+      summary,
+      payload: { mimeType: row.mimeType, webViewLink: row.webViewLink, owners: row.owners },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'gdrive_files',
+      sourceRawIds: [buckets.gdriveIds[i]!],
+      occurredAt: row.modifiedTime ?? undefined,
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.fileId}:init:v1`,
     });
   }
   return out;

@@ -29,6 +29,9 @@ import {
 import {
   listGmailMessages,
   listGcalEvents,
+  listSlackMessages,
+  listNotionPages,
+  listGdriveFiles,
   resetRawDbForTests,
 } from '../../raw-db.ts';
 import { BackgroundTaskScheduler } from '../scheduler.ts';
@@ -315,12 +318,12 @@ test('payload validation: missing connectedAccountId → terminal failed', async
   });
 });
 
-test('unsupported toolkit (e.g. notion) → succeeded with reason=unsupported_toolkit_v0 (no Composio call)', async () => {
+test('unsupported toolkit (e.g. github — not in Phase D round 1) → succeeded with reason=unsupported_toolkit_v0', async () => {
   await withTempHome(async () => {
     await enqueueBackgroundTask({
       type: 'connector.init',
-      idempotencyKey: 'unsupported-notion',
-      payload: { toolkit: 'notion', connectedAccountId: 'acc-n' },
+      idempotencyKey: 'unsupported-github',
+      payload: { toolkit: 'github', connectedAccountId: 'acc-gh' },
     });
     const { task, result } = await runOneTick({
       fetcher: () => { throw new Error('should not be called'); },
@@ -540,6 +543,140 @@ test('evolve enabled but LLM throws: connector.init still succeeds, evolution_ru
     assert.equal(listGmailMessages({ limit: 10 }).length, 1);
     const sigs = await import('../../db.ts').then((m) => m.listPersonalSignals({ kind: 'connector.gmail.message', limit: 10 }));
     assert.equal(sigs.length, 1);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// Phase D round 1 — Slack + Notion + Google Drive happy paths
+// ──────────────────────────────────────────────────────────────────────
+
+test('slack: full pipeline → raw + signals + evolution_run', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'connector.init:slack:acc-s:v1',
+      payload: { toolkit: 'slack', connectedAccountId: 'acc-s', limit: 5 },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/SLACK_SEARCH_MESSAGES': () => ({
+        data: {
+          messages: {
+            matches: [
+              {
+                ts: '1714063221.000400', text: 'Sprint planning notes',
+                channel: { id: 'C01', name: 'eng-general' },
+                user: { id: 'U01', name: 'alice' },
+                permalink: 'https://x.slack.com/archives/C01/p1714063221000400',
+              },
+              {
+                ts: '1714063300.000500', text: 'PR feedback for the connector init',
+                channel: { id: 'C01', name: 'eng-general' },
+                user: { id: 'U02', name: 'bob' },
+                thread_ts: '1714063221.000400',
+              },
+            ],
+          },
+        },
+      }),
+    });
+    const { task, result } = await runOneTick({ fetcher });
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.toolkit, 'slack');
+    assert.equal(result?.rawInserted, 2);
+    assert.equal(result?.signalsInserted, 2);
+    const rows = listSlackMessages({ limit: 10 });
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0]!.channel_name, 'eng-general');
+    assert.equal(rows[0]!.user_name, 'bob');  // most-recent first
+  });
+});
+
+test('notion: full pipeline → raw + signals + evolution_run', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'connector.init:notion:acc-n:v1',
+      payload: { toolkit: 'notion', connectedAccountId: 'acc-n', limit: 5 },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/NOTION_FETCH_DATA': () => ({
+        data: {
+          results: [
+            {
+              id: 'page-1', url: 'https://notion.so/page-1',
+              last_edited_time: '2026-04-23T10:00:00Z',
+              created_time: '2026-04-20T08:00:00Z',
+              parent: { type: 'workspace' },
+              properties: { title: { title: [{ plain_text: 'Project planning' }] } },
+              icon: { emoji: '🎯' },
+              content_preview: 'Q2 roadmap for the connector init feature',
+            },
+            {
+              id: 'page-2', url: 'https://notion.so/page-2',
+              last_edited_time: '2026-04-22T12:00:00Z',
+              parent: { type: 'database_id', database_id: 'db-1' },
+              properties: { Name: { title: [{ plain_text: 'OKR Q2' }] } },
+              archived: false,
+            },
+          ],
+        },
+      }),
+    });
+    const { task, result } = await runOneTick({ fetcher });
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.toolkit, 'notion');
+    assert.equal(result?.rawInserted, 2);
+    assert.equal(result?.signalsInserted, 2);
+    const rows = listNotionPages({ limit: 10 });
+    assert.equal(rows.length, 2);
+    const planning = rows.find((r) => r.title === 'Project planning')!;
+    assert.equal(planning.parent_type, 'workspace');
+    assert.equal(planning.icon, '🎯');
+  });
+});
+
+test('googledrive: full pipeline → raw + signals + evolution_run', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'connector.init:googledrive:acc-d:v1',
+      payload: { toolkit: 'googledrive', connectedAccountId: 'acc-d', limit: 5 },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/GOOGLEDRIVE_FIND_FILE': () => ({
+        data: {
+          files: [
+            {
+              id: 'file-1', name: 'Roadmap.docx',
+              mimeType: 'application/vnd.google-apps.document',
+              modifiedTime: '2026-04-23T15:00:00Z',
+              createdTime: '2026-04-20T10:00:00Z',
+              webViewLink: 'https://docs.google.com/document/d/file-1',
+              owners: [{ emailAddress: 'me@example.com', displayName: 'Me' }],
+            },
+            {
+              id: 'file-2', name: 'budget.xlsx',
+              mimeType: 'application/vnd.google-apps.spreadsheet',
+              modifiedTime: '2026-04-22T11:00:00Z',
+              size: '12345',
+              owners: [{ emailAddress: 'cfo@example.com' }],
+            },
+          ],
+        },
+      }),
+    });
+    const { task, result } = await runOneTick({ fetcher });
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.toolkit, 'googledrive');
+    assert.equal(result?.rawInserted, 2);
+    assert.equal(result?.signalsInserted, 2);
+    const rows = listGdriveFiles({ limit: 10 });
+    assert.equal(rows.length, 2);
+    const roadmap = rows.find((r) => r.name === 'Roadmap.docx')!;
+    assert.equal(roadmap.mime_type, 'application/vnd.google-apps.document');
+    assert.deepEqual(roadmap.owners, ['me@example.com']);
+    const budget = rows.find((r) => r.name === 'budget.xlsx')!;
+    assert.equal(budget.size_bytes, 12345);
   });
 });
 

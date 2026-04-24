@@ -176,6 +176,91 @@ function ensureRawSchema(db: Database.Database): void {
       ON device_contacts_snapshot(dedupe_key) WHERE dedupe_key IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_contacts_device_captured
       ON device_contacts_snapshot(device_id, occurred_at DESC);
+
+    -- Slack messages (Composio: SLACK_SEARCH_MESSAGES)
+    --
+    -- ts is the Slack-native id ("1714063221.000400"); not unique on its
+    -- own across channels, so the natural-key index pairs (channel_id, ts).
+    -- thread_ts is set when this message is a reply (or itself the parent
+    -- of a thread); it's the parent ts.
+    CREATE TABLE IF NOT EXISTS slack_messages (
+      id              TEXT PRIMARY KEY,
+      channel_id      TEXT NOT NULL,
+      channel_name    TEXT,
+      ts              TEXT NOT NULL,
+      thread_ts       TEXT,
+      user_id         TEXT,
+      user_name       TEXT,
+      text            TEXT,
+      permalink       TEXT,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_slack_dedupe
+      ON slack_messages(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_slack_natural
+      ON slack_messages(channel_id, ts);
+    CREATE INDEX IF NOT EXISTS idx_slack_occurred ON slack_messages(occurred_at DESC);
+
+    -- Notion pages (Composio: NOTION_FETCH_DATA, fetch_type='get_all')
+    --
+    -- page_id is the Notion-native id (UUID with dashes preserved as-is).
+    -- parent_type captures whether this lives directly in workspace, under
+    -- another page, or inside a database row — useful when downstream
+    -- evolution wants to ignore database rows, or vice versa.
+    CREATE TABLE IF NOT EXISTS notion_pages (
+      id              TEXT PRIMARY KEY,
+      page_id         TEXT NOT NULL UNIQUE,
+      title           TEXT,
+      url             TEXT,
+      parent_id       TEXT,
+      parent_type     TEXT,
+      icon            TEXT,
+      last_edited_time TEXT,
+      created_time    TEXT,
+      content_preview TEXT,
+      archived        INTEGER NOT NULL DEFAULT 0,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_notion_dedupe
+      ON notion_pages(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_notion_edited ON notion_pages(last_edited_time DESC);
+
+    -- Google Drive files (Composio: GOOGLEDRIVE_FIND_FILE)
+    --
+    -- size_bytes is nullable since Google Docs/Sheets/Slides are server-
+    -- computed and don't report a file size. mime_type is the Workspace
+    -- MIME (application/vnd.google-apps.document etc.) for Docs.
+    CREATE TABLE IF NOT EXISTS gdrive_files (
+      id              TEXT PRIMARY KEY,
+      file_id         TEXT NOT NULL UNIQUE,
+      name            TEXT,
+      mime_type       TEXT,
+      modified_time   TEXT,
+      created_time    TEXT,
+      size_bytes      INTEGER,
+      web_view_link   TEXT,
+      owners_json     TEXT NOT NULL DEFAULT '[]',
+      trashed         INTEGER NOT NULL DEFAULT 0,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_gdrive_dedupe
+      ON gdrive_files(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_gdrive_modified ON gdrive_files(modified_time DESC);
   `);
 }
 
@@ -684,11 +769,398 @@ export function ingestDeviceContactsSnapshot(input: IngestDeviceContactsInput): 
 
 // ─────── Reference tracking — uniform across every raw table ───────
 
+// ─────── Slack messages ───────
+
+export interface SlackMessageInput {
+  channelId: string;
+  channelName?: string | null;
+  ts: string;                  // Slack-native message id
+  threadTs?: string | null;
+  userId?: string | null;
+  userName?: string | null;
+  text?: string | null;
+  permalink?: string | null;
+  /** ISO timestamp; falls back to deriving from `ts`. */
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface SlackMessageRow {
+  id: string;
+  channel_id: string;
+  channel_name: string | null;
+  ts: string;
+  thread_ts: string | null;
+  user_id: string | null;
+  user_name: string | null;
+  text: string | null;
+  permalink: string | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToSlackMessage(row: any): SlackMessageRow {
+  return {
+    id: row.id,
+    channel_id: row.channel_id,
+    channel_name: row.channel_name ?? null,
+    ts: row.ts,
+    thread_ts: row.thread_ts ?? null,
+    user_id: row.user_id ?? null,
+    user_name: row.user_name ?? null,
+    text: row.text ?? null,
+    permalink: row.permalink ?? null,
+    occurred_at: row.occurred_at,
+    ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+/**
+ * Idempotent batch insert. Slack timestamps look like "1714063221.000400";
+ * we treat them as seconds-since-epoch + microseconds and convert to ISO
+ * for occurred_at. Items with falsy channelId or ts are silently skipped.
+ */
+export function ingestSlackMessages(items: SlackMessageInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0;
+  let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO slack_messages (
+       id, channel_id, channel_name, ts, thread_ts,
+       user_id, user_name, text, permalink,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.channelId || !item.ts) continue;
+      accepted += 1;
+      const id = genId();
+      const occurredAt = item.occurredAt ?? slackTsToIso(item.ts) ?? ts;
+      const dedupe = item.dedupeKey ?? `slack:msg:${item.channelId}:${item.ts}`;
+      const result = insert.run(
+        id, item.channelId, item.channelName ?? null,
+        item.ts, item.threadTs ?? null,
+        item.userId ?? null, item.userName ?? null,
+        item.text ?? null, item.permalink ?? null,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) {
+        inserted += 1;
+        ids.push(id);
+      }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+function slackTsToIso(ts: string): string | null {
+  const seconds = Number.parseFloat(ts);
+  if (!Number.isFinite(seconds)) return null;
+  return new Date(seconds * 1000).toISOString();
+}
+
+export interface ListSlackOpts {
+  channelId?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+}
+
+export function listSlackMessages(opts: ListSlackOpts = {}): SlackMessageRow[] {
+  const db = getRawDb();
+  const parts = ['SELECT * FROM slack_messages WHERE 1=1'];
+  const params: unknown[] = [];
+  if (opts.channelId) { parts.push('AND channel_id = ?'); params.push(opts.channelId); }
+  const since = normalizeToUtcIso(opts.since);
+  const until = normalizeToUtcIso(opts.until);
+  if (since) { parts.push('AND occurred_at >= ?'); params.push(since); }
+  if (until) { parts.push('AND occurred_at <= ?'); params.push(until); }
+  parts.push('ORDER BY occurred_at DESC LIMIT ?');
+  params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
+  return db.prepare(parts.join(' ')).all(...params).map(rowToSlackMessage);
+}
+
+// ─────── Notion pages ───────
+
+export interface NotionPageInput {
+  pageId: string;
+  title?: string | null;
+  url?: string | null;
+  parentId?: string | null;
+  parentType?: string | null;     // 'workspace' | 'page_id' | 'database_id'
+  icon?: string | null;
+  lastEditedTime?: string | null;
+  createdTime?: string | null;
+  contentPreview?: string | null;
+  archived?: boolean;
+  /** ISO timestamp; falls back to lastEditedTime then createdTime then now. */
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface NotionPageRow {
+  id: string;
+  page_id: string;
+  title: string | null;
+  url: string | null;
+  parent_id: string | null;
+  parent_type: string | null;
+  icon: string | null;
+  last_edited_time: string | null;
+  created_time: string | null;
+  content_preview: string | null;
+  archived: boolean;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToNotionPage(row: any): NotionPageRow {
+  return {
+    id: row.id,
+    page_id: row.page_id,
+    title: row.title ?? null,
+    url: row.url ?? null,
+    parent_id: row.parent_id ?? null,
+    parent_type: row.parent_type ?? null,
+    icon: row.icon ?? null,
+    last_edited_time: row.last_edited_time ?? null,
+    created_time: row.created_time ?? null,
+    content_preview: row.content_preview ?? null,
+    archived: Boolean(row.archived),
+    occurred_at: row.occurred_at,
+    ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+/**
+ * Idempotent batch insert. Notion's page_id is the natural primary key;
+ * dedupe_key folds in last_edited_time so re-fetches that contain newer
+ * edits create a new row (rather than silently dropping the update).
+ *
+ * That said, with INSERT OR IGNORE on page_id UNIQUE, the second write
+ * for the same page WILL be ignored. If we want "edit-aware re-ingest"
+ * later, we'd switch to upsert. For Phase D round 1 we accept the
+ * "first-write wins" semantics — same as gmail/gcal.
+ */
+export function ingestNotionPages(items: NotionPageInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0;
+  let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO notion_pages (
+       id, page_id, title, url, parent_id, parent_type, icon,
+       last_edited_time, created_time, content_preview, archived,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.pageId) continue;
+      accepted += 1;
+      const id = genId();
+      const lastEdited = normalizeToUtcIso(item.lastEditedTime ?? null);
+      const createdTime = normalizeToUtcIso(item.createdTime ?? null);
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? lastEdited ?? createdTime ?? ts;
+      const dedupe = item.dedupeKey ?? `notion:page:${item.pageId}:${lastEdited ?? 'noedit'}`;
+      const result = insert.run(
+        id, item.pageId, item.title ?? null, item.url ?? null,
+        item.parentId ?? null, item.parentType ?? null, item.icon ?? null,
+        lastEdited, createdTime, item.contentPreview ?? null,
+        item.archived ? 1 : 0,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) {
+        inserted += 1;
+        ids.push(id);
+      }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export interface ListNotionOpts {
+  since?: string;
+  until?: string;
+  limit?: number;
+  includeArchived?: boolean;
+}
+
+export function listNotionPages(opts: ListNotionOpts = {}): NotionPageRow[] {
+  const db = getRawDb();
+  const parts = ['SELECT * FROM notion_pages WHERE 1=1'];
+  const params: unknown[] = [];
+  if (!opts.includeArchived) { parts.push('AND archived = 0'); }
+  const since = normalizeToUtcIso(opts.since);
+  const until = normalizeToUtcIso(opts.until);
+  if (since) { parts.push('AND last_edited_time >= ?'); params.push(since); }
+  if (until) { parts.push('AND last_edited_time <= ?'); params.push(until); }
+  parts.push('ORDER BY last_edited_time DESC LIMIT ?');
+  params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
+  return db.prepare(parts.join(' ')).all(...params).map(rowToNotionPage);
+}
+
+// ─────── Google Drive files ───────
+
+export interface GdriveFileInput {
+  fileId: string;
+  name?: string | null;
+  mimeType?: string | null;
+  modifiedTime?: string | null;
+  createdTime?: string | null;
+  sizeBytes?: number | null;
+  webViewLink?: string | null;
+  /** Email addresses or display names of file owners. */
+  owners?: string[];
+  trashed?: boolean;
+  /** ISO; falls back to modifiedTime then createdTime then now. */
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface GdriveFileRow {
+  id: string;
+  file_id: string;
+  name: string | null;
+  mime_type: string | null;
+  modified_time: string | null;
+  created_time: string | null;
+  size_bytes: number | null;
+  web_view_link: string | null;
+  owners: string[];
+  trashed: boolean;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToGdriveFile(row: any): GdriveFileRow {
+  return {
+    id: row.id,
+    file_id: row.file_id,
+    name: row.name ?? null,
+    mime_type: row.mime_type ?? null,
+    modified_time: row.modified_time ?? null,
+    created_time: row.created_time ?? null,
+    size_bytes: typeof row.size_bytes === 'number' ? row.size_bytes : null,
+    web_view_link: row.web_view_link ?? null,
+    owners: parseJsonArray<string>(row.owners_json),
+    trashed: Boolean(row.trashed),
+    occurred_at: row.occurred_at,
+    ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestGdriveFiles(items: GdriveFileInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0;
+  let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO gdrive_files (
+       id, file_id, name, mime_type, modified_time, created_time,
+       size_bytes, web_view_link, owners_json, trashed,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.fileId) continue;
+      accepted += 1;
+      const id = genId();
+      const modified = normalizeToUtcIso(item.modifiedTime ?? null);
+      const created = normalizeToUtcIso(item.createdTime ?? null);
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? modified ?? created ?? ts;
+      const dedupe = item.dedupeKey ?? `gdrive:file:${item.fileId}:${modified ?? 'nomod'}`;
+      const sizeBytes = typeof item.sizeBytes === 'number' && Number.isFinite(item.sizeBytes)
+        ? Math.floor(item.sizeBytes) : null;
+      const result = insert.run(
+        id, item.fileId, item.name ?? null, item.mimeType ?? null,
+        modified, created, sizeBytes, item.webViewLink ?? null,
+        JSON.stringify(item.owners ?? []),
+        item.trashed ? 1 : 0,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) {
+        inserted += 1;
+        ids.push(id);
+      }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export interface ListGdriveOpts {
+  since?: string;
+  until?: string;
+  mimeType?: string;
+  limit?: number;
+  includeTrashed?: boolean;
+}
+
+export function listGdriveFiles(opts: ListGdriveOpts = {}): GdriveFileRow[] {
+  const db = getRawDb();
+  const parts = ['SELECT * FROM gdrive_files WHERE 1=1'];
+  const params: unknown[] = [];
+  if (!opts.includeTrashed) { parts.push('AND trashed = 0'); }
+  if (opts.mimeType) { parts.push('AND mime_type = ?'); params.push(opts.mimeType); }
+  const since = normalizeToUtcIso(opts.since);
+  const until = normalizeToUtcIso(opts.until);
+  if (since) { parts.push('AND modified_time >= ?'); params.push(since); }
+  if (until) { parts.push('AND modified_time <= ?'); params.push(until); }
+  parts.push('ORDER BY modified_time DESC LIMIT ?');
+  params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
+  return db.prepare(parts.join(' ')).all(...params).map(rowToGdriveFile);
+}
+
+// ─────── Reference tracking — uniform across every raw table ───────
+
 const REFERENCE_TABLES = new Set([
   'gmail_messages',
   'gcal_events',
   'device_apps_snapshot',
   'device_contacts_snapshot',
+  // Phase D round 1
+  'slack_messages',
+  'notion_pages',
+  'gdrive_files',
 ]);
 
 /**
