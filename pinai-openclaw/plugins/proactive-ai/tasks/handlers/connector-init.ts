@@ -399,12 +399,13 @@ async function fetchToolkitItems(
 }
 
 async function fetchGmailRecent(opts: FetchToolkitItemsOpts): Promise<raw.GmailMessageInput[]> {
-  // Composio caps each tools/execute response payload (~6 MB last seen).
-  // verbose=true + include_payload=true at max_results=100 blows the cap;
-  // the API responds 413 "tool response payload is too large".
-  // include_payload=true is required (otherwise we get id+threadId only,
-  // no headers — useless for signal derivation), so drop verbose and let
-  // the snippet stand in for body content.
+  // verbose=false is the magic flag: the schema docs it as "optimized
+  // concurrent metadata fetching for faster performance (~75%
+  // improvement)" — and crucially it shrinks the response enough to
+  // pull 100+ messages without hitting Composio's payload cap. With
+  // verbose=true (default) anything > ~30 messages 413s.
+  // include_payload=true keeps headers + body so signal derivation has
+  // real text to work with.
   const response = await opts.fetcher('/tools/execute/GMAIL_FETCH_EMAILS', {
     method: 'POST',
     body: JSON.stringify({
@@ -412,6 +413,7 @@ async function fetchGmailRecent(opts: FetchToolkitItemsOpts): Promise<raw.GmailM
       connected_account_id: opts.connectedAccountId,
       arguments: {
         max_results: opts.limit,
+        verbose: false,
         include_payload: true,
       },
     }),
@@ -424,20 +426,25 @@ async function fetchGcalRecent(opts: FetchToolkitItemsOpts): Promise<raw.GcalEve
   // GCal is a window-not-count source. We pull a 30-day-back / 90-day-forward
   // band so the user sees both recent past + near-future when the chip first
   // turns green. limit caps total event count after the merge.
+  //
+  // Slug is GOOGLECALENDAR_EVENTS_LIST (the _ALL_CALENDARS variant doesn't
+  // exist as a Composio tool). Single calendar at a time — we hit primary;
+  // if a user wants secondary calendars, we'd need a separate fetch loop.
+  // Args are camelCase: timeMin, timeMax, singleEvents, maxResults.
   const now = Date.now();
   const timeMin = new Date(now - 30 * 86_400_000).toISOString();
   const timeMax = new Date(now + 90 * 86_400_000).toISOString();
-  const response = await opts.fetcher('/tools/execute/GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS', {
+  const response = await opts.fetcher('/tools/execute/GOOGLECALENDAR_EVENTS_LIST', {
     method: 'POST',
     body: JSON.stringify({
       user_id: opts.userId,
       connected_account_id: opts.connectedAccountId,
       arguments: {
-        time_min: timeMin,
-        time_max: timeMax,
-        single_events: true,
-        summary_only: false,
-        max_results: opts.limit,
+        calendarId: 'primary',
+        timeMin,
+        timeMax,
+        singleEvents: true,
+        maxResults: opts.limit,
       },
     }),
   });
@@ -474,15 +481,20 @@ async function fetchSlackRecent(opts: FetchToolkitItemsOpts): Promise<raw.SlackM
 }
 
 async function fetchNotionRecent(opts: FetchToolkitItemsOpts): Promise<raw.NotionPageInput[]> {
-  // Notion's NOTION_FETCH_DATA with fetch_type=get_all returns the user's
-  // accessible pages. page_size caps it; sort isn't a stable surface.
+  // Composio's NOTION_FETCH_DATA expects a boolean flag picker
+  // (get_pages | get_databases | get_all), NOT a "fetch_type" string.
+  // The schema docs misled us; the live error is "Exactly one data fetch
+  // option must be selected".
+  // Returns a SLIM shape: data.values: [{id, title, type}] only — no
+  // last_edited_time, no parent, no body. The mapper picks up just what's
+  // there; richer fields would need a per-page follow-up call.
   const response = await opts.fetcher('/tools/execute/NOTION_FETCH_DATA', {
     method: 'POST',
     body: JSON.stringify({
       user_id: opts.userId,
       connected_account_id: opts.connectedAccountId,
       arguments: {
-        fetch_type: 'get_all',
+        get_pages: true,
         page_size: opts.limit,
       },
     }),
@@ -500,7 +512,10 @@ async function fetchGithubRecent(opts: FetchToolkitItemsOpts): Promise<raw.Githu
   // since= caps the lookback window. Matches the variant dreaming/sources.ts
   // line 390 uses for the same toolkit.
   const since = new Date(Date.now() - 90 * 86_400_000).toISOString();
-  const response = await opts.fetcher('/tools/execute/GITHUB_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER', {
+  // Slug is GITHUB_LIST_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER (with the
+  // LIST_ prefix). The non-LIST form returns 404 — this caught us in the
+  // first live smoke. Composio also caps per_page at 100.
+  const response = await opts.fetcher('/tools/execute/GITHUB_LIST_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER', {
     method: 'POST',
     body: JSON.stringify({
       user_id: opts.userId,
@@ -607,7 +622,9 @@ function extractSlackMessages(response: unknown): any[] {
 function extractNotionPages(response: unknown): any[] {
   const candidates = unwrapDataPaths(response);
   for (const c of candidates) {
-    // Notion API: { results: [...] }; Composio sometimes also nests under .pages
+    // Composio NOTION_FETCH_DATA returns { data: { values: [...] } } — the
+    // primary path. Notion's raw API uses { results: [...] }. Accept both.
+    if (Array.isArray(c?.values)) return c.values;
     if (Array.isArray(c?.results)) return c.results;
     if (Array.isArray(c?.pages)) return c.pages;
     if (Array.isArray(c?.items)) return c.items;
@@ -628,7 +645,8 @@ function extractGdriveFiles(response: unknown): any[] {
 function extractGithubIssues(response: unknown): any[] {
   const candidates = unwrapDataPaths(response);
   for (const c of candidates) {
-    // GitHub: top-level array; Composio occasionally wraps under .issues
+    // Composio wraps under data.issues (verified 2026-04-24 live).
+    // Raw GitHub API returns a top-level array; keep both fallbacks.
     if (Array.isArray(c?.issues)) return c.issues;
     if (Array.isArray(c)) return c;
     if (Array.isArray(c?.items)) return c.items;
@@ -839,14 +857,20 @@ function mapNotionPage(page: any): raw.NotionPageInput | null {
   if (!page || typeof page !== 'object') return null;
   const pageId = String(page.id ?? page.page_id ?? '').trim();
   if (!pageId) return null;
-  // Notion's title lives at properties.title.title[0].plain_text — and at
-  // properties.Name.title[0].plain_text for database rows. Walk both.
-  const title = extractNotionTitle(page);
-  // Parent: { type: 'page_id'|'database_id'|'workspace', page_id?: ..., database_id?: ... }
+  // Composio's NOTION_FETCH_DATA returns a slim shape: {id, title, type}
+  // — no parent / icon / last_edited_time / properties. The title is a
+  // plain string already, not a Notion-API-shaped { properties.title.title[]
+  // .plain_text } structure.
+  // Raw Notion API (test fixtures, future direct calls) uses the rich
+  // shape; extractNotionTitle still handles that fallback.
+  const title = typeof page.title === 'string' && page.title
+    ? page.title
+    : extractNotionTitle(page);
+  // type ('page' | 'database') maps to parent_type for filtering downstream.
+  // Real parent (workspace/page_id/database_id) would need a per-page fetch.
   const parent = page.parent ?? {};
-  const parentType = parent.type ?? null;
+  const parentType = parent.type ?? (typeof page.type === 'string' ? page.type : null);
   const parentId = parent.page_id ?? parent.database_id ?? null;
-  // Icon: { type: 'emoji', emoji: '🎯' } or external/file URL
   const iconNode = page.icon;
   const icon = iconNode?.emoji ?? iconNode?.external?.url ?? iconNode?.file?.url ?? null;
   return {
@@ -1208,11 +1232,16 @@ function makeDefaultFetcher(apiKey: string): ComposioFetcher {
 
 function safeJsonParse(text: string): unknown {
   try { return JSON.parse(text); } catch { /* try sanitized */ }
-  // Composio occasionally returns email/document content with raw
-  // control chars (\x00-\x1F minus \t/\n/\r) that JSON.parse rejects
-  // even though the rest of the response is well-formed. Strip them
-  // and retry once before giving up.
-  const sanitized = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ' ');
+  // Composio returns email/document content with raw unescaped control
+  // chars inside string literals (verified live: Gmail responses at
+  // limit=100 contain unescaped \n, \r, and \x00-\x1F bytes inside
+  // message body content). JSON spec requires these to be \-escaped
+  // inside strings, so JSON.parse rejects the whole payload. We can't
+  // surgically escape them (we don't know which bytes are inside string
+  // values vs. whitespace between tokens), so we replace the entire
+  // 0x00-0x1F range with spaces. Loses newline structure inside
+  // body content but keeps the message readable.
+  const sanitized = text.replace(/[\x00-\x1F]/g, ' ');
   try { return JSON.parse(sanitized); } catch { return null; }
 }
 

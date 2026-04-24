@@ -255,7 +255,7 @@ test('gcal: full pipeline → raw + signals + evolution_run', async () => {
     });
 
     const fetcher = makeMockFetcher({
-      '/tools/execute/GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS': () => ({
+      '/tools/execute/GOOGLECALENDAR_EVENTS_LIST': () => ({
         data: {
           events: [
             gcalEvent({ id: 'e1', calendarId: 'primary', summary: 'Standup' }),
@@ -438,6 +438,164 @@ test('limit clamping: payload.limit=999999 is clamped to 500', async () => {
     };
     await runOneTick({ fetcher });
     assert.equal(receivedLimit, 500);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// REGRESSION SET — real Composio response shapes verified 2026-04-24
+// against the live API. These mocks mirror exactly what the live API
+// returns; future mapper edits can't silently regress real-world parsing.
+// ──────────────────────────────────────────────────────────────────────
+
+test('REGRESSION: real Composio Slack shape (channel as object, user as string id, username as display name)', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'real-slack',
+      payload: { toolkit: 'slack', connectedAccountId: 'acc-s', limit: 5 },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/SLACK_SEARCH_MESSAGES': () => ({
+        data: {
+          messages: {
+            matches: [
+              {
+                ts: '1777005797.639519',
+                channel: { id: 'C09BZ578WDA', name: 'dev', is_archived: false },
+                user: 'U08K1734PV0',          // string user id (NOT an object)
+                username: 'smile',              // display name as string
+                text: '这些都没那么重要',
+                permalink: 'https://x.slack.com/...',
+                type: 'message',
+                score: 0.42,
+                iid: 'iid-1',
+                db_message: {},
+              },
+              {
+                ts: '1777005700.123456',
+                channel: { id: 'C09BZ578WDA', name: 'dev' },
+                user: 'U08K1734PV1',
+                username: 'pis',
+                text: '当前用 mintlify 肯定是够了',
+              },
+            ],
+          },
+        },
+      }),
+    });
+    const { task, result } = await runOneTick({ fetcher });
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.rawInserted, 2);
+    const rows = listSlackMessages({ limit: 10 });
+    assert.equal(rows.length, 2);
+    const first = rows.find((r) => r.ts === '1777005797.639519')!;
+    assert.equal(first.channel_id, 'C09BZ578WDA');
+    assert.equal(first.channel_name, 'dev');
+    assert.equal(first.user_id, 'U08K1734PV0');
+    assert.equal(first.user_name, 'smile');
+    assert.equal(first.text, '这些都没那么重要');
+  });
+});
+
+test('REGRESSION: real Composio Notion slim shape (data.values: [{id, title, type}] only)', async () => {
+  // Composio NOTION_FETCH_DATA with get_pages returns just id+title+type
+  // — none of the rich Notion API fields (no properties, no parent,
+  // no last_edited_time). Mapper must accept the slim shape.
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'real-notion',
+      payload: { toolkit: 'notion', connectedAccountId: 'acc-n', limit: 5 },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/NOTION_FETCH_DATA': () => ({
+        data: {
+          values: [
+            { id: '24fe8c5c-301e-80f2-8a62-efc04fa43082', title: '每日胡思-每天的 context', type: 'page' },
+            { id: '34ce8c5c-301e-803e-ab13-f3c5a2427106', title: '李继刚圆桌 prompt', type: 'page' },
+            { id: '132e8c5c-301e-8023-bdcb-e9abdf199b75', title: 'Dev-基础信息', type: 'page' },
+          ],
+        },
+      }),
+    });
+    const { task, result } = await runOneTick({ fetcher });
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.rawInserted, 3);
+    const rows = listNotionPages({ limit: 10, includeArchived: true });
+    assert.equal(rows.length, 3);
+    const planning = rows.find((r) => r.title === '每日胡思-每天的 context')!;
+    assert.equal(planning.parent_type, 'page');  // Composio gives type='page', mapper falls through
+    assert.equal(planning.last_edited_time, null);
+    assert.equal(planning.url, null);
+  });
+});
+
+test('REGRESSION: real GoogleCalendar GOOGLECALENDAR_EVENTS_LIST shape (data.items, all-day vs timed events)', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'real-gcal',
+      payload: { toolkit: 'googlecalendar', connectedAccountId: 'acc-c', limit: 5 },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/GOOGLECALENDAR_EVENTS_LIST': () => ({
+        data: {
+          items: [
+            // all-day event: start/end have .date, no .dateTime
+            {
+              id: 'evt-allday', summary: 'Home',
+              start: { date: '2026-03-30' },
+              end: { date: '2026-03-31' },
+              organizer: { email: 'smile@pinai.io', self: true },
+              status: 'confirmed', eventType: 'default',
+              htmlLink: 'https://www.google.com/calendar/event?eid=...',
+            },
+            // timed event with attendees
+            {
+              id: 'evt-mtg', summary: 'Standup',
+              start: { dateTime: '2026-04-23T10:00:00-07:00' },
+              end: { dateTime: '2026-04-23T10:30:00-07:00' },
+              organizer: { email: 'pm@x.com' },
+              attendees: [{ email: 'me@x.com' }, { email: 'tl@x.com' }],
+              status: 'confirmed',
+            },
+          ],
+          accessRole: 'owner', timeZone: 'America/Los_Angeles',
+        },
+      }),
+    });
+    const { task, result } = await runOneTick({ fetcher });
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.rawInserted, 2);
+    const rows = listGcalEvents({ limit: 10 });
+    assert.equal(rows.length, 2);
+    const allday = rows.find((r) => r.title === 'Home')!;
+    // All-day events store the .date as start_at (normalized to UTC midnight)
+    assert.match(allday.start_at ?? '', /^2026-03-30T/);
+    const mtg = rows.find((r) => r.title === 'Standup')!;
+    assert.equal(mtg.attendees.length, 2);
+    assert.match(mtg.start_at ?? '', /^2026-04-23T17:00/);  // 10am PST = 17:00 UTC
+  });
+});
+
+test('REGRESSION: real GitHub LIST_ISSUES (data.issues array, possibly empty)', async () => {
+  // Empty array is the common case for users with no assignments — the
+  // task should still succeed cleanly with rawInserted=0.
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'real-github-empty',
+      payload: { toolkit: 'github', connectedAccountId: 'acc-g', limit: 100 },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/GITHUB_LIST_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER': () => ({
+        data: { issues: [] },
+      }),
+    });
+    const { task, result } = await runOneTick({ fetcher });
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.rawInserted, 0);
+    assert.equal(result?.signalsInserted, 0);
   });
 });
 
@@ -767,7 +925,7 @@ test('github: full pipeline → raw + signals + evolution_run; PRs and issues se
       payload: { toolkit: 'github', connectedAccountId: 'acc-gh', limit: 10 },
     });
     const fetcher = makeMockFetcher({
-      '/tools/execute/GITHUB_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER': () => ({
+      '/tools/execute/GITHUB_LIST_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER': () => ({
         data: [
           {
             id: 901, number: 42, title: 'Token routing P1',
