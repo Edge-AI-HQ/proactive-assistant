@@ -262,15 +262,14 @@ test('sweepStaleRunningDreams: marks running rows older than threshold as failed
       windowStart: '2026-04-01T00:00:00Z',
       windowEnd: '2026-04-01T00:00:00Z',
     });
-    // Backdate it manually so it looks > 5 min old
+    // Backdate it manually. Phase 2d: dream_runs is gone — the row lives
+    // in evolution_runs now under the same id.
     const sevenMinAgo = new Date(Date.now() - 7 * 60_000).toISOString();
-    // Use the same handle that store uses
     const { default: Database } = await import('better-sqlite3');
     const dbPath = `${process.env.OPENCLAW_HOME}/data/proactive.db`;
     const conn = new Database(dbPath);
-    conn.prepare(`UPDATE dream_runs SET started_at = ? WHERE id = ?`).run(sevenMinAgo, old.id);
+    conn.prepare(`UPDATE evolution_runs SET started_at = ? WHERE id = ?`).run(sevenMinAgo, old.id);
     conn.close();
-    resetDreamStoreForTests();
 
     // Fresh running row (within threshold)
     const fresh = await store.createRun({
@@ -304,13 +303,12 @@ test('sweepStaleRunningDreams: leaves completed/failed rows untouched',
       goalDelta: { changes: [] },
       journalMarkdown: 'done', candidates: [],
     });
-    // Backdate
+    // Backdate. Phase 2d: row lives in evolution_runs now.
     const { default: Database } = await import('better-sqlite3');
     const conn = new Database(`${process.env.OPENCLAW_HOME}/data/proactive.db`);
-    conn.prepare(`UPDATE dream_runs SET started_at = ? WHERE id = ?`)
+    conn.prepare(`UPDATE evolution_runs SET started_at = ? WHERE id = ?`)
       .run(new Date(Date.now() - 60 * 60_000).toISOString(), r.id);
     conn.close();
-    resetDreamStoreForTests();
 
     const swept = await sweepStaleRunningDreams();
     assert.equal(swept, 0);

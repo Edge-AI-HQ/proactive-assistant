@@ -194,14 +194,13 @@ async function handleSignal(args: string[], flags: Record<string, string>): Prom
     return success('profile', 'signal.add', signal);
   }
   if (action === 'rollup') {
-    const rawSince = flags['since'];
-    const since = rawSince === undefined ? 30 : Number(rawSince.replace(/d$/i, ''));
-    if (!Number.isFinite(since)) {
-      return failure('profile', 'signal.rollup', 'validation',
-        `Invalid --since value (got "${rawSince}"); pass days like 30 or 30d.`);
-    }
-    const interests = await db.rollupSignals(since);
-    return success('profile', 'signal.rollup', { count: interests.length, interests });
+    // Phase 2c: rollupSignals computed weighted-decay scores into the
+    // retired profile_interests table. The dream agent now produces
+    // interest-as-memory rows directly, so there's no v2-style manual
+    // rollup. Surface the change so any wired script fails loudly.
+    return failure('profile', 'signal.rollup', 'removed',
+      '`pin profile signal rollup` was retired in Phase 2c',
+      'Interests now live in memory{subject:"<kind>:<key>"} written by the dream agent. Use `pin memory list --subject-prefix topic:` to inspect them.');
   }
   return failure('profile', 'signal', 'validation', `Unknown signal action: ${action}`);
 }

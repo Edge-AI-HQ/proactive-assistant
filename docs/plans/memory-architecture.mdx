@@ -42,38 +42,51 @@ Tier 3  profile + skill    高度浓缩的画像 + 可执行技能
 
 ## 二、存储拓扑
 
-`proactive.db` (实际 18 张表，含 v2 遗留 + 子系统私有；agent 主要消费的是粗体那 9 张) +
-`raw.db`（按 source 分表） + `skills/` folder + LanceDB 向量索引。
+v3 SSOT 收敛之后 `proactive.db` 只剩 14 张表（11 v3 核心 + 3 操作性表）+
+`raw.db` 一组 + `skills/` folder + LanceDB 向量索引。
 
 ```
 proactive.db                              raw.db (按 source 分表)
-├─ profile                                ├─ gmail_messages           ★
+├─ profile               ★                ├─ gmail_messages           ★
 ├─ memory                ★                ├─ gcal_events              ★
 ├─ personal_signals      ★                ├─ device_apps_snapshot     ★
 ├─ world_signals         ★                ├─ device_contacts_snapshot
 ├─ skill_index           ★                ├─ notion_pages (v2)
-├─ evolution_runs        ★                └─ slack_messages (v2)
+├─ evolution_runs        ★ (含 details_json)  └─ slack_messages (v2)
 ├─ pipeline_runs         ★
 ├─ card_evaluations      ★                skills/                     LanceDB
 ├─ intent_card_state     ★                └─ <skill_id>/SKILL.md      pf_personal_documents
 ├─ intent_thread_state                                                 pf_world_signals
-├─ feedback_events
-├─ goals                 (v2 遗留)        data/run-artifacts/<id>.json
-├─ profile_signals       (v2 遗留 — Phase 2 拟迁 personal_signals)
-├─ profile_interests     (v2 遗留 — Phase 2 拟迁 memory)
+├─ feedback_events                        data/run-artifacts/<id>.json
+├─ goals                 ★ (v3 reference triple, Phase 2e)
 ├─ user_settings
-├─ dream_runs            (dreaming 私有 — Phase 2 拟并入 evolution_runs)
-└─ app_state (KV)        ★ 也承载 scheduler.autoLoopState / crystallize.state
+└─ app_state (KV)        ★ 承载 scheduler.autoLoopState / crystallize.state
 ```
 
 > `mobile_items.db` 已在 v3 mobile cutover 里彻底下线（Phase 14）。
 > `/mobile/items/ingest` 直接写 `personal_signals`（+ snapshot 类 itemType
 > fan-out 到 `raw.db`），老的 claim/commit runToken 端点返回 `410 Gone`。
 >
-> **Phase 15** 已完成的清理（这次 PR）：
-> - `push_records` / `push_outcomes` + 5 个 helper + `pin push` CLI 全部删除（无产品功能）
-> - `auto_loop_state` 单行表 → `app_state['scheduler.autoLoopState']`（带 backfill）
-> - `chat_crystallize_state` 单行表 → `app_state['crystallize.state']`（带 backfill）
+> **已完成的清理 PR 列表**：
+> - **Phase 14** Mobile cutover：删除 `mobile_items.db`
+> - **Phase 15** v3 cleanup：DROP `push_records` / `push_outcomes`；
+>   `auto_loop_state` + `chat_crystallize_state` → `app_state` KV
+> - **Phase 2a** Dreaming write-through：dream 完成的同时直接写 profile /
+>   interests / goals，删 `applyDreamProfile` / `applyDreamGoals` 两步 apply
+> - **Phase 2b** `profile_signals` → `personal_signals`：legacy `addSignal` /
+>   `listSignals` helpers 改为对 `personal_signals` 的 projection；DROP `profile_signals`
+> - **Phase 2c** `profile_interests` → `memory{subject:'<kind>:<key>'}`：
+>   `upsertInterestAsMemory` 用确定性 id `interest:<kind>:<key>` 写 memory，
+>   重复出现 bumps reference_count；`listInterests` 是 v3 memory 的 projection；
+>   DROP `profile_interests`
+> - **Phase 2d** `dream_runs` → `evolution_runs.details_json`：dream 不再有
+>   独立表，整个 payload（journal_markdown / candidates / profile_delta /
+>   goal_delta / source_stats / summary）走 evolution_runs.details_json；
+>   `dreaming/store.ts` 改成 evolution_runs 的薄 projection；DROP `dream_runs`
+> - **Phase 2e** `goals` 加 v3 reference triple：保留 first-class（priority +
+>   status + closed_at 语义保留），加 reference_count / last_referenced_at /
+>   referenced_by_runs；dreaming 写 goal 时通过 `markGoalsReferenced` 同步
+>   bump 引用三元组
 
 **★ = 本次 v3 设计的核心表**。`v2 遗留` 标记的几张仍在 dreaming
 applyProfile 里被写（`upsertInterest` 等），不是纯 dead code，迁移要改语义；
@@ -313,9 +326,9 @@ unified-generator 的 phase 1 由"跑 12 个 CLI" 改为"先看 ContextPack 预�
 |---|---|---|---|
 | profile | profile（保留） | 部分实施：字段不变，新事实推荐写 memory | — |
 | profile_memories | memory | ✅ 自动 backfill + DROP（`migrateLegacyToV3`） | — |
-| profile_signals | 保留作 v2 遗留 | helpers 仍写老表 | Phase 2：迁到 personal_signals |
-| profile_interests | 保留作 v2 遗留 | dreaming.applyDreamProfile 仍写 upsertInterest | Phase 2：迁到 memory（quality 替代 score） |
-| goals | 保留作 v2 遗留 | dreaming.applyDreamGoals 仍写 upsertGoal | Phase 2：评估是否并入 memory.subject='goal:*' |
+| profile_signals | personal_signals | ✅ Phase 2b：backfill + DROP，addSignal/listSignals 改为 projection | — |
+| profile_interests | memory{subject:'<kind>:<key>'} | ✅ Phase 2c：backfill + DROP；upsertInterestAsMemory 确定性 id；listInterests 改为 projection | — |
+| goals | 保留 first-class + 加 v3 reference triple | ✅ Phase 2e：reference_count / last_referenced_at / referenced_by_runs；dreaming 写 goal 时同步 bump | — |
 | user_skills | skill_index + folder | ✅ 自动 backfill + DROP | — |
 | world_items | world_signals（改名） | ✅ 自动 ALTER RENAME + 加 reference 三字段 | — |
 | feedback_events | 保留 | ⚠️ 暂未加 reference 三字段 | follow-up：加字段或显式不加 |
@@ -326,7 +339,7 @@ unified-generator 的 phase 1 由"跑 12 个 CLI" 改为"先看 ContextPack 预�
 | auto_loop_state | app_state['scheduler.autoLoopState'] | ✅ Phase 15：backfill + DROP，helpers 改读写 KV | — |
 | chat_crystallize_state | app_state['crystallize.state'] | ✅ Phase 15：backfill + DROP，helpers 改读写 KV | — |
 | ingest_cursor | DROP | ✅ 删（0 行） | — |
-| dream_runs | dreaming 子系统私有 + mirror 到 evolution_runs | ✅ Phase 8 hook | follow-up：dreaming 重写后 DROP |
+| dream_runs | evolution_runs.details_json | ✅ Phase 2d：backfill + DROP；dreaming/store.ts 是 evolution_runs 的 projection | — |
 | pending_items / context_runs | DROP | ✅ 删（0 行） | — |
 | mobile_items | DROP（整个 mobile_items.db 文件废弃） | ✅ `/mobile/items/ingest` 直写 personal_signals + raw.db | — |
 | mobile_ingest_batches | DROP | ✅ 同 mobile_items.db 一起废弃 | — |
@@ -361,9 +374,13 @@ unified-generator 的 phase 1 由"跑 12 个 CLI" 改为"先看 ContextPack 预�
 | 14 | Mobile cutover：删除 `mobile_items.db` + `mobile-db.ts`，`/mobile/items/ingest` 直写 `personal_signals` + raw.db fan-out，claim/commit 端点 410 Gone | ✅ |
 | 15 | v3 cleanup：DROP `push_records`/`push_outcomes`（无产品功能）+ 删 helpers + `pin push` CLI；`auto_loop_state` 与 `chat_crystallize_state` 单行表收敛到 `app_state` KV（带 backfill）；修文档 §二 / §七 表的真实状态 | ✅ |
 | 2a | dreaming 改为 write-through：`applyDreamProfile` / `applyDreamGoals` 的体内联进 `executeDreamingForRun`，dream 完成的同时把 profile.facts / profile_interests / goals 直接写完。删 2 个公共导出 + `/dreaming/runs/:id/apply-{profile,goals}` 两条路由（返 410 Gone）+ 前端两枚 Apply 按钮（改成纯状态徽章）；`evolution_runs.refs_produced.{profile_interests,goals}` 列出本次实际触动的 key | ✅ |
+| 2b | `profile_signals` → `personal_signals`：`migrateProfileSignalsToPersonalSignals` backfill + DROP；`addSignal` / `listSignals` 改为 v3 projection（保 SignalRow shape，0 caller 改动）；dreaming.collectSignals 自然走 v3 | ✅ |
+| 2c | `profile_interests` → `memory{subject:'<kind>:<key>'}`：`migrateProfileInterestsToMemory` backfill + DROP；新 `upsertInterestAsMemory` 用确定性 id `interest:<kind>:<key>`，重复出现 bumps reference_count；`listInterests` 是 v3 memory 的 projection；dreaming applyDreamDeltaInline 改写为 addMemoryV3-语义；`pin profile signal rollup` 返 410 Gone（无 v3 等价） | ✅ |
+| 2d | `dream_runs` → `evolution_runs.details_json`：`migrateDreamRunsToEvolutionRuns` backfill + DROP；新 `setEvolutionRunDetails` helper；`dreaming/store.ts` 改成 evolution_runs 的薄 projection（同样 DreamRunRecord 接口，0 caller 改动）；evolution_run.id 现在 = dream id（一个 ledger） | ✅ |
+| 2e | `goals` 加 v3 reference triple（reference_count / last_referenced_at / referenced_by_runs）；新 `markGoalsReferenced` helper；dreaming 写 goal 时同步 bump 引用三元组；evolution_runs.refs_produced.goals 不变 | ✅ |
 
-**变更净结果（截至 Phase 2a）**：v2 起步 23 张表 → 当前 18 张（13 v3 核心 + 5 v2 遗留待 Phase 2b/c/d）+ `raw.db` 一组 + `skills/` folder + `app_state` KV 承载所有 single-row 状态。所有进化路径都是 write-through，没有 deferred apply。
-**测试**：plugin 318+ / 318+ ✅（数字随 PR 演进）；APIs + frontend type-check + 单测全过；CLI smoke 16 命令全过。
+**变更净结果（截至 Phase 2e）**：v2 起步 23 张表 → 当前 14 张表全部 v3 SSOT（11 核心 + 3 操作性：feedback_events / user_settings / pipeline_runs）+ `raw.db` 一组 + `skills/` folder + `app_state` KV 承载所有 single-row 状态 + LanceDB 向量索引。所有进化路径 write-through，所有 v2 遗留表都已迁移到 v3 sink。
+**测试**：plugin 337 / 337 ✅；APIs + frontend type-check + 单测全过。
 
 **Phase 2b/c/d（继续 SSOT 收敛）—— 真正 v3 干净版的剩余迁移**：
 - 2b: `profile_signals` → `personal_signals`（schema 几乎一样，重写 dreaming.collectSignals 改读源）

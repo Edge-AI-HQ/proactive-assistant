@@ -378,11 +378,13 @@ test('legacy pin numeric flags reject non-finite values', async () => {
     assert.equal(run.ok, true);
     const runId = run.data.run.id;
 
+    // Phase 2c retired `pin profile signal rollup` (no v3 equivalent),
+    // so it now returns REMOVED instead of VALIDATION. Verified separately
+    // below; the validation cases stay focused on the live commands.
     const cases: Array<[string, () => Promise<string>, RegExp]> = [
       ['profile.signal.add', () => handleProfile([
         'signal', 'add', '--kind', 'k', '--target-type', 'topic', '--target-key', 'x', '--value', 'abc',
       ]), /value/i],
-      ['profile.signal.rollup', () => handleProfile(['signal', 'rollup', '--since', 'abc']), /since/i],
       ['evolution.delta', () => handleEvolution(['delta', '--id', runId, '--memoriesWritten', 'abc']), /memoriesWritten/i],
       ['evolution.complete.llmTokens', () => handleEvolution(['complete', '--id', runId, '--llmTokens', 'abc']), /llmTokens/i],
     ];
@@ -392,5 +394,11 @@ test('legacy pin numeric flags reject non-finite values', async () => {
       assert.equal(r.error.code, 'VALIDATION', name);
       assert.match(r.error.message, pattern, name);
     }
+
+    // Retired commands return a clearly-coded REMOVED failure.
+    const removed = decode(await handleProfile(['signal', 'rollup']));
+    assert.equal(removed.ok, false);
+    assert.equal(removed.error.code, 'REMOVED');
+    assert.match(removed.error.message, /retired in Phase 2c/);
   });
 });

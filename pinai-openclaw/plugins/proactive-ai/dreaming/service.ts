@@ -608,21 +608,11 @@ async function executeDreamingForRun(
   const windowStart = run.window_start;
   const startedAtMs = Date.now();
 
-  // Open a v3 evolution_run for trajectory visibility (`pin evolution recent
-  // --kind daily_dream`). Failures are logged but never block dreaming.
-  // See docs/plans/memory-architecture.mdx §三.
-  let evolutionRunId: string | null = null;
-  try {
-    const evolution = await db.createEvolutionRun({
-      triggerKind: 'daily_dream',
-      windowStart,
-      windowEnd,
-      contextSummary: `dream run ${run.id} (trigger=${input.trigger})`,
-    });
-    evolutionRunId = evolution.id;
-  } catch {
-    // observability best-effort; dreaming continues regardless
-  }
+  // Phase 2d: dream_runs is collapsed into evolution_runs, so the dream
+  // run *is* the evolution run — no separate mirror call. The id is
+  // shared (run.id === evolution_runs.id).
+  // See docs/plans/memory-architecture.mdx §八 Phase 2d.
+  const evolutionRunId: string = run.id;
 
   try {
     const currentProfile = await getCurrentProfile();
@@ -725,7 +715,7 @@ async function executeDreamingForRun(
     // stores the delta for observability — but applied_at + goals_applied_at
     // are stamped right here, never deferred. See Phase 15 / Phase 2 in
     // docs/memory-architecture.md.
-    const applied = await applyDreamDeltaInline(profileDelta, goalDelta);
+    const applied = await applyDreamDeltaInline(profileDelta, goalDelta, evolutionRunId);
 
     await store.completeRun(run.id, {
       sourceStats, summary, profileDelta, goalDelta,
@@ -739,19 +729,25 @@ async function executeDreamingForRun(
 
     // Mirror the dream's outcome into evolution_runs so the v3 trajectory
     // ledger reflects what changed. refs_produced lists exactly which
-    // profile_interests / goals rows were touched.
+    // memory + goals rows were touched (Phase 2c moved interests into the
+    // memory table, so they're listed under 'memory' not the retired
+    // 'profile_interests'). Phase 2e bumps the v3 reference triple on
+    // each goal we wrote so `pin goals --recent` works.
     if (evolutionRunId) {
       try {
         const profileChangedKeys = collectProfileDeltaKeys(profileDelta);
         await db.recordEvolutionDelta(evolutionRunId, {
           profileUpdated: profileChangedKeys.length > 0,
           profileChangedKeys,
+          memoriesWritten: applied.interestMemoryIds.length,
         });
-        if (applied.interestKeys.length > 0) {
-          await db.recordEvolutionRefsProduced(evolutionRunId, 'profile_interests', applied.interestKeys);
+        if (applied.interestMemoryIds.length > 0) {
+          await db.recordEvolutionRefsProduced(evolutionRunId, 'memory', applied.interestMemoryIds);
+          await db.markMemoryReferenced(applied.interestMemoryIds, evolutionRunId);
         }
         if (applied.goalKeys.length > 0) {
           await db.recordEvolutionRefsProduced(evolutionRunId, 'goals', applied.goalKeys);
+          await db.markGoalsReferenced(applied.goalKeys, evolutionRunId);
         }
         await db.completeEvolutionRun(evolutionRunId, {
           durationMs: Date.now() - startedAtMs,
@@ -768,12 +764,9 @@ async function executeDreamingForRun(
       },
     };
   } catch (error) {
+    // store.failRun already flips evolution_runs (Phase 2d: same row),
+    // no need for a separate db.failEvolutionRun call.
     await store.failRun(run.id, error instanceof Error ? error.message : String(error));
-    if (evolutionRunId) {
-      try {
-        await db.failEvolutionRun(evolutionRunId, error instanceof Error ? error.message : String(error));
-      } catch { /* observability best-effort */ }
-    }
     throw error;
   }
 }
@@ -790,8 +783,9 @@ async function executeDreamingForRun(
 async function applyDreamDeltaInline(
   profileDelta: DreamProfileDelta,
   goalDelta: DreamGoalDelta,
-): Promise<{ interestKeys: string[]; goalKeys: string[] }> {
-  const interestKeys: string[] = [];
+  evolutionRunId: string | null,
+): Promise<{ interestMemoryIds: string[]; goalKeys: string[] }> {
+  const interestMemoryIds: string[] = [];
   const goalKeys: string[] = [];
 
   // Profile facts/preferences: setFact / setPreference are no-ops if the
@@ -804,19 +798,22 @@ async function applyDreamDeltaInline(
     await db.setPreference(key, value);
   }
 
-  // Interests: idempotent upsert, returns the row by (kind, key).
+  // Interests: Phase 2c — write through to memory{subject:'<kind>:<key>'}
+  // instead of the retired profile_interests table. The deterministic id
+  // makes upserts idempotent across dream re-runs (re-mention bumps
+  // reference_count instead of duplicating).
   for (const interest of profileDelta.interests.after) {
     const kind = compactText(interest.kind);
     const key = compactText(interest.key);
     if (!kind || !key) continue;
-    await db.upsertInterest({
+    const row = await db.upsertInterestAsMemory({
       kind, key,
       score: typeof interest.score === 'number' ? interest.score : 0.5,
       confidence: typeof interest.confidence === 'number' ? interest.confidence : 0.5,
-      evidenceCount: typeof interest.evidenceCount === 'number' ? interest.evidenceCount : 1,
-      lastSignalAt: typeof interest.lastSignalAt === 'string' ? interest.lastSignalAt : undefined,
+      sourceRunId: evolutionRunId,
+      occurredAt: typeof interest.lastSignalAt === 'string' ? interest.lastSignalAt : null,
     });
-    interestKeys.push(`${kind}:${key}`);
+    interestMemoryIds.push(row.id);
   }
 
   // Goals: open / update / close.
@@ -837,7 +834,7 @@ async function applyDreamDeltaInline(
     goalKeys.push(change.key);
   }
 
-  return { interestKeys, goalKeys };
+  return { interestMemoryIds, goalKeys };
 }
 
 /**

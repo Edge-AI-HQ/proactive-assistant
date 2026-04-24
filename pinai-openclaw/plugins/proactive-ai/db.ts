@@ -184,30 +184,17 @@ function ensureSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_psignals_kind_time
       ON personal_signals(kind, occurred_at DESC);
 
-    CREATE TABLE IF NOT EXISTS profile_signals (
-      id TEXT PRIMARY KEY,
-      kind TEXT NOT NULL,
-      target_type TEXT NOT NULL,
-      target_key TEXT NOT NULL,
-      value REAL,
-      source TEXT,
-      context TEXT,
-      occurred_at TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_signals_occurred ON profile_signals(occurred_at DESC);
+    -- profile_signals was the v2 sink for manual signal injection
+    -- ("pin profile signal add ..."). v3 stores signals in
+    -- personal_signals (the device-upload sink) — same row purpose, same
+    -- v3 reference triple. migrateProfileSignalsToPersonalSignals
+    -- backfills + DROPs the table on first schema init after this code
+    -- lands. See Phase 2b.
 
-    CREATE TABLE IF NOT EXISTS profile_interests (
-      id TEXT PRIMARY KEY,
-      kind TEXT NOT NULL,
-      key TEXT NOT NULL,
-      score REAL NOT NULL DEFAULT 0,
-      confidence REAL NOT NULL DEFAULT 0,
-      evidence_count INTEGER NOT NULL DEFAULT 0,
-      status TEXT NOT NULL DEFAULT 'active',
-      last_signal_at TEXT,
-      UNIQUE(kind, key)
-    );
+    -- profile_interests was the v2 sink; v3 stores interests as
+    -- memory{subject:'<kind>:<key>', source:'extract:dream_interest'}.
+    -- migrateProfileInterestsToMemory backfills + DROPs the table on
+    -- the first schema init after this code lands. See Phase 2c.
 
     CREATE TABLE IF NOT EXISTS feedback_events (
       id TEXT PRIMARY KEY,
@@ -284,25 +271,9 @@ function ensureSchema(db: Database.Database): void {
     -- summary; collapsed into app_state['scheduler.autoLoopState'] in
     -- Phase 15. Dropped via migrateAutoLoopStateToAppState below.
 
-    CREATE TABLE IF NOT EXISTS dream_runs (
-      id TEXT PRIMARY KEY,
-      trigger_kind TEXT NOT NULL CHECK (trigger_kind IN ('auto', 'manual')),
-      status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
-      window_start TEXT NOT NULL,
-      window_end TEXT NOT NULL,
-      started_at TEXT NOT NULL,
-      completed_at TEXT,
-      source_stats TEXT,
-      summary TEXT,
-      profile_delta TEXT,
-      goal_delta TEXT,
-      journal_markdown TEXT,
-      candidates TEXT,
-      applied_at TEXT,
-      goals_applied_at TEXT,
-      error_message TEXT
-    );
-    CREATE INDEX IF NOT EXISTS idx_dream_started ON dream_runs(started_at DESC);
+    -- dream_runs was the standalone dreaming-subsystem store; folded into
+    -- evolution_runs.details_json in Phase 2d. migrateDreamRunsToEvolutionRuns
+    -- backfills + DROPs the table on first schema init after this code lands.
 
     -- ─────── v3 evolution_runs: unified ledger for dream / crystallize / manual ───────
     -- See docs/plans/memory-architecture.mdx §三 (evolution_runs).
@@ -413,6 +384,15 @@ function ensureSchema(db: Database.Database): void {
   ensureColumn(db, 'feedback_events', 'channel', 'TEXT');
   ensureColumn(db, 'feedback_events', 'intent_key', 'TEXT');
   ensureColumn(db, 'user_settings', 'auto_crystallize', 'INTEGER NOT NULL DEFAULT 1');
+  // Phase 2d: per-trigger payload (dream journal/candidates/etc) on the
+  // unified evolution_runs row — replaces the standalone dream_runs table.
+  ensureColumn(db, 'evolution_runs', 'details_json', 'TEXT');
+  // Phase 2e: goals stay first-class (priority + status semantics warrant
+  // it), but get the v3 reference triple so the dream agent can mark
+  // which goals it touched and `pin goals` can sort by recently-referenced.
+  ensureColumn(db, 'goals', 'reference_count', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'goals', 'last_referenced_at', 'TEXT');
+  ensureColumn(db, 'goals', 'referenced_by_runs', "TEXT NOT NULL DEFAULT '[]'");
 
   // Phase 1: pipeline_runs.artifact_path stores filesystem path to large iterations JSON
   ensureColumn(db, 'pipeline_runs', 'artifact_path', 'TEXT');
@@ -440,6 +420,21 @@ function ensureSchema(db: Database.Database): void {
   // See docs/memory-architecture.md §八 Phase 15.
   migrateAutoLoopStateToAppState(db);
   migrateCrystallizeStateToAppState(db);
+
+  // Phase 2c: profile_interests rows become memory{subject:'<kind>:<key>'}
+  // with source='extract:dream_interest'. Idempotent, drops the legacy
+  // table after the backfill. See docs/memory-architecture.md §八 Phase 2c.
+  migrateProfileInterestsToMemory(db);
+
+  // Phase 2b: profile_signals rows become personal_signals rows
+  // (subject='<target_type>:<target_key>'). Idempotent, drops the legacy
+  // table after the backfill. See docs/memory-architecture.md §八 Phase 2b.
+  migrateProfileSignalsToPersonalSignals(db);
+
+  // Phase 2d: dream_runs rows fold into evolution_runs.details_json
+  // (one unified ledger). Idempotent, drops dream_runs after backfill.
+  // See docs/memory-architecture.md §八 Phase 2d.
+  migrateDreamRunsToEvolutionRuns(db);
 }
 
 /**
@@ -611,6 +606,206 @@ function migrateAutoLoopStateToAppState(db: Database.Database): void {
   }
 
   db.exec('DROP TABLE auto_loop_state');
+}
+
+/**
+ * Phase 2d: backfill `dream_runs` rows into `evolution_runs.details_json`.
+ * Each dream maps to a fresh evolution_runs row (trigger_kind='daily_dream',
+ * status copied) holding the dream's payload (journal_markdown, candidates,
+ * profile_delta, etc) under details_json. Drops dream_runs after the
+ * backfill. Idempotent — no-op once the table is gone.
+ *
+ * Note: pre-Phase-2d, dreaming/service.ts ALSO wrote a thin mirror to
+ * evolution_runs (just status + context_summary). To avoid duplicate
+ * rows after the backfill, we look those up by the
+ * "dream run <id> (trigger=...)" context_summary marker and update the
+ * existing row in place if found — otherwise insert fresh.
+ */
+function migrateDreamRunsToEvolutionRuns(db: Database.Database): void {
+  const exists = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='dream_runs'",
+  ).get();
+  if (!exists) return;
+
+  const drRows = db.prepare(
+    `SELECT id, trigger_kind, status, window_start, window_end,
+            started_at, completed_at, source_stats, summary,
+            profile_delta, goal_delta, journal_markdown, candidates,
+            applied_at, goals_applied_at, error_message
+       FROM dream_runs ORDER BY started_at`,
+  ).all() as Array<{
+    id: string; trigger_kind: 'auto' | 'manual'; status: string;
+    window_start: string; window_end: string;
+    started_at: string; completed_at: string | null;
+    source_stats: string | null; summary: string | null;
+    profile_delta: string | null; goal_delta: string | null;
+    journal_markdown: string | null; candidates: string | null;
+    applied_at: string | null; goals_applied_at: string | null;
+    error_message: string | null;
+  }>;
+
+  const findMirror = db.prepare(
+    `SELECT id FROM evolution_runs
+       WHERE trigger_kind = 'daily_dream' AND context_summary LIKE ?
+       ORDER BY started_at DESC LIMIT 1`,
+  );
+  const insertEvol = db.prepare(
+    `INSERT INTO evolution_runs (
+       id, trigger_kind, status,
+       context_summary, window_start, window_end,
+       started_at, completed_at, error_message,
+       details_json
+     ) VALUES (?, 'daily_dream', ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const updateEvol = db.prepare(
+    `UPDATE evolution_runs
+        SET status = ?, completed_at = ?, error_message = ?,
+            details_json = ?, window_start = ?, window_end = ?
+      WHERE id = ?`,
+  );
+
+  for (const dr of drRows) {
+    const details = {
+      trigger: dr.trigger_kind,
+      source_stats: dr.source_stats ? JSON.parse(dr.source_stats) : null,
+      summary: dr.summary ? JSON.parse(dr.summary) : null,
+      profile_delta: dr.profile_delta ? JSON.parse(dr.profile_delta) : null,
+      goal_delta: dr.goal_delta ? JSON.parse(dr.goal_delta) : null,
+      journal_markdown: dr.journal_markdown,
+      candidates: dr.candidates ? JSON.parse(dr.candidates) : null,
+      applied_at: dr.applied_at,
+      goals_applied_at: dr.goals_applied_at,
+    };
+    const detailsJson = JSON.stringify(details);
+    const mirror = findMirror.get(`dream run ${dr.id}%`) as { id: string } | undefined;
+    if (mirror) {
+      updateEvol.run(
+        dr.status, dr.completed_at, dr.error_message, detailsJson,
+        dr.window_start, dr.window_end, mirror.id,
+      );
+    } else {
+      insertEvol.run(
+        genId(), dr.status,
+        `dream run ${dr.id} (trigger=${dr.trigger_kind})`,
+        dr.window_start, dr.window_end,
+        dr.started_at, dr.completed_at, dr.error_message,
+        detailsJson,
+      );
+    }
+  }
+
+  db.exec('DROP TABLE dream_runs');
+}
+
+/**
+ * Phase 2b: backfill `profile_signals` rows into `personal_signals`,
+ * then DROP the legacy table. Same row semantics ("the user did/saw X
+ * at time T") just under v3 schema. The dedupe_key is set to the
+ * legacy id so re-runs of the migration are idempotent.
+ */
+function migrateProfileSignalsToPersonalSignals(db: Database.Database): void {
+  const exists = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='profile_signals'",
+  ).get();
+  if (!exists) return;
+
+  const rows = db.prepare(
+    `SELECT id, kind, target_type, target_key, value, source, context,
+            occurred_at, created_at
+       FROM profile_signals`,
+  ).all() as Array<{
+    id: string; kind: string; target_type: string; target_key: string;
+    value: number | null; source: string | null; context: string | null;
+    occurred_at: string; created_at: string;
+  }>;
+
+  const insertStmt = db.prepare(
+    `INSERT OR IGNORE INTO personal_signals (
+       id, kind, title, summary, payload_json, salience, confidence,
+       dedupe_key, occurred_at, available_at, expires_at,
+       source, device_id, subject, source_raw_table, source_raw_ids_json,
+       status, ingested_at,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '[]', 'open', ?, 0, NULL, '[]')`,
+  );
+  for (const row of rows) {
+    const subject = `${row.target_type}:${row.target_key}`;
+    const title = `${row.kind} ${subject}`;
+    const summary = (() => {
+      try {
+        const ctx = row.context ? JSON.parse(row.context) : null;
+        if (ctx && typeof ctx === 'object') {
+          const keys = Object.keys(ctx).slice(0, 3);
+          if (keys.length > 0) return keys.map((k) => `${k}=${JSON.stringify((ctx as Record<string, unknown>)[k])}`).join(' ');
+        }
+      } catch { /* ignore */ }
+      return `${row.kind} on ${subject}`;
+    })();
+    const payload = JSON.stringify({
+      legacy_kind: row.kind,
+      target_type: row.target_type,
+      target_key: row.target_key,
+      value: row.value,
+      context: row.context ? (() => { try { return JSON.parse(row.context); } catch { return row.context; } })() : null,
+    });
+    const salience = typeof row.value === 'number' ? Math.max(0, Math.min(1, row.value)) : 0.5;
+    insertStmt.run(
+      row.id, 'legacy_profile_signal', title, summary, payload,
+      salience, 0.5, row.id, row.occurred_at, row.occurred_at, null,
+      row.source ?? 'legacy:profile_signal', null, subject, row.created_at,
+    );
+  }
+
+  db.exec('DROP TABLE profile_signals');
+}
+
+/**
+ * Phase 2c: backfill `profile_interests` rows into `memory` with the
+ * v3 shape (subject='<kind>:<key>', source='extract:dream_interest',
+ * id='interest:<kind>:<key>'), then DROP the legacy table. Idempotent —
+ * subsequent boots see no table and no-op. The deterministic id matches
+ * what `upsertInterestAsMemory` would write so the dream agent's next
+ * tick can bump (not re-create) the row.
+ */
+function migrateProfileInterestsToMemory(db: Database.Database): void {
+  const exists = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='profile_interests'",
+  ).get();
+  if (!exists) return;
+
+  const rows = db.prepare(
+    `SELECT kind, key, score, confidence, evidence_count, status, last_signal_at
+       FROM profile_interests`,
+  ).all() as Array<{
+    kind: string; key: string; score: number; confidence: number;
+    evidence_count: number; status: string; last_signal_at: string | null;
+  }>;
+
+  const insertStmt = db.prepare(
+    `INSERT OR IGNORE INTO memory (
+       id, text, source, source_run_id, subject, quality, confidence,
+       status, superseded_by, occurred_at, created_at,
+       tags_json, related_memory_ids,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, NULL, ?, ?, ?, '[]', ?, ?, '[]')`,
+  );
+  const ts = new Date().toISOString();
+  for (const row of rows) {
+    const id = `interest:${row.kind}:${row.key}`;
+    const subject = `${row.kind}:${row.key}`;
+    const text = `User has an interest in ${row.key}`;
+    const tagsJson = JSON.stringify([row.kind, 'interest']);
+    const status = row.status === 'active' ? 'active' : 'archived';
+    const lastSignal = row.last_signal_at;
+    const refCount = Math.max(0, row.evidence_count - 1);
+    insertStmt.run(
+      id, text, 'extract:dream_interest', subject,
+      row.score, row.confidence, status, lastSignal, ts,
+      tagsJson, refCount, lastSignal,
+    );
+  }
+
+  db.exec('DROP TABLE profile_interests');
 }
 
 /**
@@ -887,10 +1082,50 @@ export interface GoalRow {
   summary: string | null;
   created_at: string;
   updated_at: string;
+  // Phase 2e v3 reference triple — bumped each time an evolution_run
+  // (dream / consolidation / manual) touches the goal.
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
 }
 
 function rowToGoal(row: any): GoalRow {
-  return { ...row, user_id: USER_ID };
+  return {
+    ...row,
+    user_id: USER_ID,
+    reference_count: row.reference_count ?? 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+/**
+ * Phase 2e: bump the reference triple on each goal touched by an
+ * evolution run. Capped at the most recent 10 runIds — same convention
+ * as memory.referenced_by_runs / world_signals.referenced_by_runs.
+ */
+export async function markGoalsReferenced(goalKeys: string[], runId: string): Promise<void> {
+  if (goalKeys.length === 0) return;
+  const ts = now();
+  const db = getDb();
+  const tx = db.transaction((keys: string[]) => {
+    const fetch = db.prepare('SELECT key, referenced_by_runs FROM goals WHERE key = ?');
+    const update = db.prepare(
+      `UPDATE goals
+          SET reference_count = reference_count + 1,
+              last_referenced_at = ?,
+              referenced_by_runs = ?
+        WHERE key = ?`,
+    );
+    for (const key of keys) {
+      const row = fetch.get(key) as { referenced_by_runs: string | null } | undefined;
+      if (!row) continue;
+      const existing = parseJsonArray<string>(row.referenced_by_runs);
+      const next = [runId, ...existing.filter((r) => r !== runId)].slice(0, 10);
+      update.run(ts, JSON.stringify(next), key);
+    }
+  });
+  tx(goalKeys);
 }
 
 export async function listGoals(): Promise<GoalRow[]> {
@@ -1000,7 +1235,13 @@ export async function removeMemory(id: string): Promise<void> {
   getDb().prepare('DELETE FROM memory WHERE id = ?').run(id);
 }
 
-// ── Profile Signals ──
+// ── Profile Signals (Phase 2b: now backed by personal_signals) ──
+// The legacy SignalRow shape is preserved so all existing callers (CLI,
+// routes, dreaming.collectSignals) keep working unchanged. Under the
+// hood we read/write personal_signals — the v3 single-source signal
+// layer. profile_signals.target_type:target_key maps to
+// personal_signals.subject; payload_json stores the legacy fields for
+// round-trip projection.
 
 export interface SignalRow {
   id: string;
@@ -1015,22 +1256,35 @@ export interface SignalRow {
   created_at: string;
 }
 
-function rowToSignal(row: any): SignalRow {
+const LEGACY_SIGNAL_KIND = 'legacy_profile_signal';
+
+function personalSignalToLegacy(row: PersonalSignalRow): SignalRow {
+  const payload = (row.payload as Record<string, unknown>) ?? {};
+  const subject = row.subject ?? '';
+  const [defaultType, ...rest] = subject.split(':');
+  const defaultKey = rest.join(':');
   return {
-    ...row,
+    id: row.id,
     user_id: USER_ID,
-    context: row.context ? parseJson(row.context) : null,
+    kind: typeof payload.legacy_kind === 'string' ? payload.legacy_kind : row.kind,
+    target_type: typeof payload.target_type === 'string' ? payload.target_type : (defaultType || ''),
+    target_key: typeof payload.target_key === 'string' ? payload.target_key : (defaultKey || ''),
+    value: typeof payload.value === 'number' ? payload.value : null,
+    source: row.source,
+    context: payload.context && typeof payload.context === 'object'
+      ? payload.context as Record<string, unknown> : null,
+    occurred_at: row.occurred_at,
+    created_at: row.ingested_at,
   };
 }
 
 export async function listSignals(opts?: { since?: string; limit?: number }): Promise<SignalRow[]> {
-  const parts = ['SELECT * FROM profile_signals'];
-  const params: unknown[] = [];
-  if (opts?.since) { parts.push('WHERE occurred_at >= ?'); params.push(opts.since); }
-  parts.push('ORDER BY occurred_at DESC');
-  parts.push('LIMIT ?'); params.push(opts?.limit ?? 1000);
-  const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
-  return rows.map(rowToSignal);
+  const rows = await listPersonalSignals({
+    kind: LEGACY_SIGNAL_KIND,
+    since: opts?.since,
+    limit: opts?.limit ?? 1000,
+  });
+  return rows.map(personalSignalToLegacy);
 }
 
 export async function addSignal(input: {
@@ -1042,20 +1296,117 @@ export async function addSignal(input: {
   context?: Record<string, unknown>;
 }): Promise<SignalRow> {
   const id = genId();
-  const ts = now();
-  getDb().prepare(
-    'INSERT INTO profile_signals (id, kind, target_type, target_key, value, source, context, occurred_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, input.kind, input.targetType, input.targetKey, input.value ?? null, input.source ?? null,
-    input.context ? JSON.stringify(input.context) : null, ts, ts);
-  return {
-    id, user_id: USER_ID, kind: input.kind, target_type: input.targetType, target_key: input.targetKey,
-    value: input.value ?? null, source: input.source ?? null, context: input.context ?? null,
-    occurred_at: ts, created_at: ts,
+  const subject = `${input.targetType}:${input.targetKey}`;
+  const title = `${input.kind} ${subject}`;
+  const summary = `${input.kind} on ${subject}`;
+  const payload = {
+    legacy_kind: input.kind,
+    target_type: input.targetType,
+    target_key: input.targetKey,
+    value: input.value ?? null,
+    context: input.context ?? null,
   };
+  const salience = typeof input.value === 'number' ? Math.max(0, Math.min(1, input.value)) : 0.5;
+  await ingestPersonalSignals([{
+    id,
+    kind: LEGACY_SIGNAL_KIND,
+    title,
+    summary,
+    payload,
+    salience,
+    confidence: 0.5,
+    dedupeKey: id,
+    source: input.source ?? 'legacy:profile_signal',
+    deviceId: null,
+    subject,
+  }]);
+  const stored = await getPersonalSignal(id);
+  if (!stored) {
+    // The ingestion must have hit a dedupe; surface the requested shape.
+    return {
+      id, user_id: USER_ID,
+      kind: input.kind,
+      target_type: input.targetType, target_key: input.targetKey,
+      value: input.value ?? null, source: input.source ?? null,
+      context: input.context ?? null,
+      occurred_at: now(), created_at: now(),
+    };
+  }
+  return personalSignalToLegacy(stored);
 }
 
-// ── Profile Interests ──
+// ── Interests as memory (Phase 2c) ──
+// The old profile_interests table held one row per (kind, key) with a
+// score that the dream agent updated each cycle. v3 collapses these into
+// `memory{subject:'<kind>:<key>', source:'extract:dream_interest'}`:
+// score → quality, evidenceCount → bumps reference_count via the v3
+// reference triple, and the row is searchable through `pin memory list`
+// alongside everything else. See docs/memory-architecture.md §八 Phase 2c.
 
+function interestMemoryId(kind: string, key: string): string {
+  return `interest:${kind}:${key}`;
+}
+
+const INTEREST_MEMORY_SOURCE = 'extract:dream_interest';
+
+/**
+ * Upsert an "interest in <key>" memory row with a deterministic id keyed
+ * by (kind, key) — idempotent across dream re-runs. The first dream that
+ * mentions a (kind, key) creates the row; subsequent mentions refresh
+ * quality/confidence and bump the reference triple.
+ */
+export async function upsertInterestAsMemory(input: {
+  kind: string;
+  key: string;
+  score: number;
+  confidence: number;
+  sourceRunId?: string | null;
+  occurredAt?: string | null;
+}): Promise<MemoryRowV3> {
+  const id = interestMemoryId(input.kind, input.key);
+  const subject = `${input.kind}:${input.key}`;
+  const text = `User has an interest in ${input.key}`;
+  const tags = [input.kind, 'interest'];
+  const ts = now();
+  const quality = clampQuality(INTEREST_MEMORY_SOURCE, input.score);
+  const confidence = Math.max(0, Math.min(1, input.confidence));
+  const tagsJson = JSON.stringify(tags);
+  const occurredAt = input.occurredAt ?? null;
+
+  const db = getDb();
+  // INSERT-or-bump: try fresh insert first; if the row already exists,
+  // refresh quality/confidence and bump the reference triple to record
+  // that another dream re-evidenced this interest.
+  const insertResult = db.prepare(
+    `INSERT OR IGNORE INTO memory (
+       id, text, source, source_run_id, subject, quality, confidence,
+       status, superseded_by, occurred_at, created_at,
+       tags_json, related_memory_ids,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', NULL, ?, ?, ?, '[]', 0, NULL, '[]')`,
+  ).run(id, text, INTEREST_MEMORY_SOURCE, input.sourceRunId ?? null, subject,
+        quality, confidence, occurredAt, ts, tagsJson);
+
+  if (insertResult.changes === 0) {
+    // Already present — refresh quality and bump reference.
+    db.prepare(
+      `UPDATE memory
+         SET quality = ?, confidence = ?, source_run_id = ?,
+             reference_count = reference_count + 1,
+             last_referenced_at = ?
+       WHERE id = ?`,
+    ).run(quality, confidence, input.sourceRunId ?? null, ts, id);
+  }
+
+  return (await getMemoryV3(id))!;
+}
+
+/**
+ * Backwards-compatible read: the old profile_interests row shape projected
+ * out of the v3 memory table. Used by `pin profile interests list` /
+ * `pin profile snapshot` / routes/profile.ts which still serve the
+ * legacy field names.
+ */
 export interface InterestRow {
   id: string;
   user_id: string;
@@ -1068,79 +1419,31 @@ export interface InterestRow {
   last_signal_at: string | null;
 }
 
-function rowToInterest(row: any): InterestRow {
-  return { ...row, user_id: USER_ID };
-}
-
 export async function listInterests(opts?: { kind?: string; limit?: number }): Promise<InterestRow[]> {
-  const parts = ["SELECT * FROM profile_interests WHERE status = 'active'"];
-  const params: unknown[] = [];
-  if (opts?.kind) { parts.push('AND kind = ?'); params.push(opts.kind); }
-  parts.push('ORDER BY score DESC');
-  if (opts?.limit) { parts.push('LIMIT ?'); params.push(opts.limit); }
-  const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
-  return rows.map(rowToInterest);
-}
-
-export async function upsertInterest(input: {
-  kind: string;
-  key: string;
-  score: number;
-  confidence: number;
-  evidenceCount: number;
-  lastSignalAt?: string;
-}): Promise<InterestRow> {
-  const db = getDb();
-  const id = genId();
-  const lastSignal = input.lastSignalAt ?? now();
-  db.prepare(`
-    INSERT INTO profile_interests (id, kind, key, score, confidence, evidence_count, status, last_signal_at)
-    VALUES (?, ?, ?, ?, ?, ?, 'active', ?)
-    ON CONFLICT(kind, key) DO UPDATE SET
-      score = excluded.score,
-      confidence = excluded.confidence,
-      evidence_count = excluded.evidence_count,
-      last_signal_at = excluded.last_signal_at
-  `).run(id, input.kind, input.key, input.score, input.confidence, input.evidenceCount, lastSignal);
-  const row = db.prepare('SELECT * FROM profile_interests WHERE kind = ? AND key = ?').get(input.kind, input.key) as any;
-  return rowToInterest(row);
-}
-
-export async function rollupSignals(sinceDays = 30): Promise<InterestRow[]> {
-  const since = new Date(Date.now() - sinceDays * 86400_000).toISOString();
-  const signals = await listSignals({ since, limit: 1000 });
-
-  const DECAY_HALF_LIFE_DAYS = 7;
-  const nowMs = Date.now();
-  const groups = new Map<string, { kind: string; key: string; total: number; count: number; lastAt: string }>();
-
-  for (const sig of signals) {
-    const gKey = `${sig.target_type}:${sig.target_key}`;
-    const ageDays = (nowMs - new Date(sig.occurred_at).getTime()) / 86400_000;
-    const weight = Math.pow(0.5, ageDays / DECAY_HALF_LIFE_DAYS) * (sig.value ?? 1);
-    const existing = groups.get(gKey);
-    if (existing) {
-      existing.total += weight;
-      existing.count += 1;
-      if (sig.occurred_at > existing.lastAt) existing.lastAt = sig.occurred_at;
-    } else {
-      groups.set(gKey, { kind: sig.target_type, key: sig.target_key, total: weight, count: 1, lastAt: sig.occurred_at });
-    }
-  }
-
-  const maxScore = Math.max(...[...groups.values()].map(v => v.total), 1);
-  const results: InterestRow[] = [];
-  for (const g of groups.values()) {
-    results.push(await upsertInterest({
-      kind: g.kind,
-      key: g.key,
-      score: Math.round((g.total / maxScore) * 1000) / 1000,
-      confidence: Math.round(Math.min(1, g.count / 10) * 1000) / 1000,
-      evidenceCount: g.count,
-      lastSignalAt: g.lastAt,
-    }));
-  }
-  return results;
+  const subjectPrefix = opts?.kind ? `${opts.kind}:` : undefined;
+  const memories = await listMemoryV3({
+    status: 'active',
+    source: INTEREST_MEMORY_SOURCE,
+    subjectPrefix,
+    limit: opts?.limit,
+    orderBy: 'quality',
+    orderDirection: 'desc',
+  });
+  return memories.map((m) => {
+    const [k, ...rest] = (m.subject ?? ':').split(':');
+    const key = rest.join(':');
+    return {
+      id: m.id,
+      user_id: USER_ID,
+      kind: k || 'topic',
+      key: key || '',
+      score: m.quality,
+      confidence: m.confidence,
+      evidence_count: m.reference_count + 1, // +1 for the original write
+      status: m.status,
+      last_signal_at: m.last_referenced_at ?? m.created_at,
+    };
+  });
 }
 
 // ── Feedback ──
@@ -3010,6 +3313,8 @@ export interface EvolutionRunRow {
   started_at: string;
   completed_at: string | null;
   error_message: string | null;
+  /** Per-trigger payload — Phase 2d collapsed dream_runs into here. */
+  details: Record<string, unknown> | null;
 }
 
 function rowToEvolutionRun(row: any): EvolutionRunRow {
@@ -3037,7 +3342,22 @@ function rowToEvolutionRun(row: any): EvolutionRunRow {
     started_at: row.started_at,
     completed_at: row.completed_at ?? null,
     error_message: row.error_message ?? null,
+    details: row.details_json ? parseJson<Record<string, unknown>>(row.details_json) : null,
   };
+}
+
+/**
+ * Phase 2d: write the per-trigger payload (e.g. dream journal_markdown +
+ * candidates + summary + profile_delta) onto the evolution_runs row.
+ * Replaces the standalone dream_runs table; same data lives in this
+ * single JSON column on the unified runs ledger.
+ */
+export async function setEvolutionRunDetails(
+  runId: string,
+  details: Record<string, unknown>,
+): Promise<void> {
+  const json = JSON.stringify(details);
+  getDb().prepare('UPDATE evolution_runs SET details_json = ? WHERE id = ?').run(json, runId);
 }
 
 export interface CreateEvolutionRunInput {

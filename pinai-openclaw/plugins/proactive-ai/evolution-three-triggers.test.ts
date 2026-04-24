@@ -312,7 +312,7 @@ test('daily_dream (auto): writes dream_run + evolution_run + applyProfile materi
     assert.ok(evolRuns[0]!.profile_changed_keys.includes('interests'));
 
     // Phase 2a: write-through, no separate apply step. The dream's
-    // commit already wrote profile.facts.dreaming + profile_interests +
+    // commit already wrote profile.facts.dreaming + interests-as-memory +
     // goals — assert they exist immediately, no apply call needed.
     assert.ok(run.applied_at, 'applied_at must be stamped during the run');
     assert.ok(run.goals_applied_at, 'goals_applied_at must be stamped during the run');
@@ -325,11 +325,15 @@ test('daily_dream (auto): writes dream_run + evolution_run + applyProfile materi
     const interestKeys = interests.map((i) => i.key).sort();
     assert.deepEqual(interestKeys, ['coffee', 'commute']);
 
-    // refs_produced lists the interest + goal keys actually touched.
+    // refs_produced lists the memory ids (Phase 2c: interests now live
+    // in memory{subject:'topic:*'} with deterministic id 'interest:<kind>:<key>')
+    // and goal keys actually touched.
     const evolAfter = (await listEvolutionRuns({ triggerKind: 'daily_dream', limit: 1 }))[0]!;
-    assert.deepEqual((evolAfter.refs_produced.profile_interests ?? []).sort(),
-      ['topic:coffee', 'topic:commute']);
+    assert.deepEqual((evolAfter.refs_produced.memory ?? []).sort(),
+      ['interest:topic:coffee', 'interest:topic:commute']);
     assert.deepEqual(evolAfter.refs_produced.goals, ['morning-coffee-routine']);
+    assert.equal(evolAfter.memories_written, 2,
+      'Phase 2c: interests counted as memories_written');
   });
 });
 
@@ -535,11 +539,17 @@ test('all three triggers coexist: chat_burst + dream side effects survive togeth
       trigger: 'auto',
     });
 
-    // Final state: 1 active memory, 2 active interests, profile.facts.dreaming present.
+    // Final state (Phase 2c): 3 active memory rows total — 1 from
+    // chat_burst (the explicit memorize) + 2 dream interests now living
+    // in memory{subject:'topic:*'}. Plus profile.facts.dreaming.
     const memories = await listMemoryV3({ status: 'active', limit: 50 });
-    assert.equal(memories.length, 1);
-    assert.equal(memories[0]!.id, cb.memoryId);
+    assert.equal(memories.length, 3);
+    const memoryIds = memories.map((m) => m.id).sort();
+    assert.ok(memoryIds.includes(cb.memoryId!));
+    assert.ok(memoryIds.includes('interest:topic:coffee'));
+    assert.ok(memoryIds.includes('interest:topic:commute'));
 
+    // listInterests is now a thin projection over memory; same observable.
     const interests = await listInterests({ limit: 50 });
     const keys = interests.map((i) => i.key).sort();
     assert.deepEqual(keys, ['coffee', 'commute']);
