@@ -69,7 +69,7 @@ COPY pinai-openclaw/plugins/proactive-ai/package.json /opt/pinai/plugins/proacti
 # COPY doesn't cover plugin node_modules.
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential python3 \
     && cd /opt/pinai/plugins/proactive-ai \
-    && timeout 900 npm install --omit=dev --registry=${NPM_REGISTRY} better-sqlite3 @lancedb/lancedb @browserbasehq/sdk playwright-core jpeg-js ws 2>/dev/null || true \
+    && timeout 900 npm install --omit=dev --registry=${NPM_REGISTRY} better-sqlite3 @lancedb/lancedb @browserbasehq/sdk playwright-core jpeg-js ws jsonrepair 2>/dev/null || true \
     && apt-get purge -y build-essential \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*

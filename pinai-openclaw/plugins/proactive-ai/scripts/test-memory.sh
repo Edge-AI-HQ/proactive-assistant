@@ -63,7 +63,8 @@ run "[3/3] end-to-end + CLI + routes smoke" \
   routes/v3-routes.test.ts \
   routes/dreaming.test.ts \
   routes/crystallize.test.ts \
-  routes/mobile.test.ts
+  routes/mobile.test.ts \
+  pipeline/agent-runner.test.ts
 
 echo
 echo "──────────────────────────────────────────────────────────────────────"

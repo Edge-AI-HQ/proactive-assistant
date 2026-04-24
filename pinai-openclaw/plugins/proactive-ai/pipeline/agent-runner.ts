@@ -2,6 +2,7 @@
  * Agent runner — spawns OpenClaw subagents and extracts their text output.
  */
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
+import { jsonrepair } from 'jsonrepair';
 
 export async function runAgent(
   api: OpenClawPluginApi,
@@ -54,7 +55,12 @@ export function parseAgentJson<T>(text: string): T | null {
   if (!text) return null;
   const match = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/) ?? text.match(/(\{[\s\S]*\})/);
   if (!match?.[1]) return null;
-  try { return JSON.parse(match[1]) as T; } catch { return null; }
+  const raw = match[1];
+  try { return JSON.parse(raw) as T; } catch { /* fall through to repair */ }
+  // LLMs (especially with CJK content) regularly emit unescaped " inside
+  // strings or trailing commas. jsonrepair handles those structural quirks
+  // without us having to babysit the prompt for every model.
+  try { return JSON.parse(jsonrepair(raw)) as T; } catch { return null; }
 }
 
 export function parseAgentJsonOrThrow<T>(text: string, tag: string): T {

@@ -219,5 +219,12 @@ After completing all 4 phases, output ONLY a JSON code block with this structure
 - Include ONLY cards that passed (overall >= 5.0). Drop failed cards entirely.
 - One evaluation per card in the final output.
 - All score values between 0.0 and 1.0 for card fields, 0.0-10.0 for evaluation dimensions.
+
+JSON quoting (CRITICAL — invalid JSON discards the whole batch):
+- When quoting a Chinese term inside a string field, use 「」 or《》, NEVER ASCII ".
+  WRONG: "whyNow": "现在是从"关注"转向"实际体验"的最佳时机"
+  RIGHT: "whyNow": "现在是从「关注」转向「实际体验」的最佳时机"
+- For English nested quotes inside a string, escape: \" or use single quotes.
+- No trailing commas, no comments, no prose outside the json fence.
 </output_format>`;
 }
