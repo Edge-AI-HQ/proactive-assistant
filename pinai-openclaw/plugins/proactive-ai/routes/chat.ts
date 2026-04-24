@@ -304,7 +304,11 @@ export function handleChat(): RouteHandler {
         ctx.res.on('close', unsubscribe);
 
         try {
-          const result = await ctx.api.runtime.subagent.waitForRun({ runId, timeoutMs: 120_000 });
+          // 10-minute cap for tool-heavy runs (browser automation, multi-step
+          // agent loops). Short caps (e.g. 120s) produce a bad UX: the SSE
+          // closes and the frontend shows chat:done while the subagent keeps
+          // calling tools in the background with no visible progress.
+          const result = await ctx.api.runtime.subagent.waitForRun({ runId, timeoutMs: 600_000 });
           if (result.status !== 'ok') {
             write({ type: 'chat:error', error: result.error ?? `Agent failed: ${result.status}` });
             ctx.res.end();
@@ -369,7 +373,9 @@ export function handleChat(): RouteHandler {
           extraSystemPrompt: systemPrompt,
           idempotencyKey: `proactive-ai:chat:${Date.now().toString(36)}`, deliver: false,
         });
-        const result = await ctx.api.runtime.subagent.waitForRun({ runId, timeoutMs: 120_000 });
+        // Same 10-minute cap as the streaming variant — tool-heavy runs
+        // (browser automation, multi-step loops) can easily exceed a 2-min cap.
+        const result = await ctx.api.runtime.subagent.waitForRun({ runId, timeoutMs: 600_000 });
         if (result.status !== 'ok') { json(ctx.res, 500, { ok: false, error: result.error ?? `Agent failed: ${result.status}` }); return true; }
         const messages = await ctx.api.runtime.subagent.getSessionMessages({ sessionKey, limit: 5 });
         const last = (messages.messages as Array<{ role?: string; content?: unknown }>).filter(m => m.role === 'assistant').pop();

@@ -33,7 +33,26 @@ export interface BrowserControlEvent {
   reason?: string;
 }
 
-export type BrowserEvent = BrowserOpenedEvent | BrowserNavigatedEvent | BrowserClosedEvent | BrowserControlEvent;
+/**
+ * AI has hit a step it cannot complete autonomously (captcha, 2FA, ambiguous
+ * UI) and is asking the human to drive the browser. Distinct from
+ * browser:control so the frontend can show a dedicated "AI is waiting for
+ * you" overlay with the reason — plain mode=user switches (the user
+ * clicking "Take Control" themselves) should not trigger that overlay.
+ */
+export interface BrowserTakeoverRequestedEvent {
+  type: 'browser:takeover-requested';
+  sessionKey: string;
+  browserSessionId: string;
+  reason: string;
+}
+
+export type BrowserEvent =
+  | BrowserOpenedEvent
+  | BrowserNavigatedEvent
+  | BrowserClosedEvent
+  | BrowserControlEvent
+  | BrowserTakeoverRequestedEvent;
 
 class BrowserEventBus {
   private emitter = new EventEmitter();

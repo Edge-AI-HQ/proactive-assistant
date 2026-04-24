@@ -31,8 +31,37 @@ export interface BrowserSession {
 /** Internal session with Playwright refs (not exposed to clients). */
 export interface InternalSession extends BrowserSession {
   browser: Browser | null;
-  /** The single controlled page. */
-  page: Page | null;
+  /** All open tabs in creation order. Tabs opened via target=_blank or
+   *  window.open are auto-appended through a context `page` listener. */
+  pages: Page[];
+  /** Index into `pages` of the active tab. Every action method (click, type,
+   *  snapshot, etc.) operates on this tab. */
+  activePageIdx: number;
+  /** True once a snapshot has been taken — used to give the agent a useful
+   *  error instead of a raw "locator not found" when it guesses a ref
+   *  without calling snapshot first. Reset to false on tab switch or
+   *  fresh tab open since refs are page-local. */
+  hasSnapshotted: boolean;
+  /** Recent console messages (JS errors / warnings / logs) captured from
+   *  all tabs, oldest first, capped to prevent unbounded growth. */
+  consoleBuffer: ConsoleEntry[];
+}
+
+export interface ConsoleEntry {
+  /** Timestamp ms. */
+  at: number;
+  /** Playwright console msg type: log / info / warn / error / debug / ... */
+  level: string;
+  text: string;
+  /** Which tab emitted it (index into session.pages at the time). */
+  tabIndex: number;
+}
+
+export interface TabInfo {
+  index: number;
+  url: string;
+  title: string;
+  active: boolean;
 }
 
 export interface CreateSessionOpts {
@@ -40,3 +69,10 @@ export interface CreateSessionOpts {
   url?: string;
   viewport?: { width: number; height: number };
 }
+
+/** Named viewport presets the tool exposes. */
+export const VIEWPORT_PRESETS = {
+  mobile: { width: 390, height: 844 },
+  desktop: { width: 1280, height: 800 },
+} as const;
+export type ViewportPreset = keyof typeof VIEWPORT_PRESETS;
