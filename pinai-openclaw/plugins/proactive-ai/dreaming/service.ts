@@ -578,7 +578,7 @@ function createDefaultSources(): DreamSourceDefinition[] {
     },
     {
       id: 'signals',
-      async collect({ windowStart }) { return await collectSignals(windowStart); },
+      async collect({ windowStart, windowEnd }) { return await collectSignals(windowStart, windowEnd); },
     },
     {
       id: 'feedback',

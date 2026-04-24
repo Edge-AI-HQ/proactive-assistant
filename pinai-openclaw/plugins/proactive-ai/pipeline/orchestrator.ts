@@ -28,6 +28,29 @@ interface UnifiedGeneratorOutput {
 
 type EventSink = (event: { type: string; data: unknown }) => void;
 
+function collectCardText(card: Record<string, unknown>): string {
+  const sources = Array.isArray(card.sources)
+    ? card.sources.filter((item): item is string => typeof item === 'string')
+    : [];
+  return [
+    card.title,
+    card.whyNow,
+    card.summary,
+    ...sources,
+  ]
+    .filter((item): item is string => typeof item === 'string')
+    .join('\n');
+}
+
+function isGenericHomeCalendarCard(card: Record<string, unknown>): boolean {
+  const text = collectCardText(card);
+  const lower = text.toLowerCase();
+  const hasHome = /\bhome\b/i.test(text);
+  const hasCalendarSource = /gcal|calendar|google calendar|日历/.test(lower);
+  const looksLikePlaceholder = /placeholder|all-day|占位|全天|连续|远程办公|休假|jun-jul|6月|7月|42\s*days/.test(lower);
+  return hasHome && hasCalendarSource && looksLikePlaceholder;
+}
+
 export async function runPipeline(
   api: OpenClawPluginApi,
   opts: PipelineOptions,
@@ -133,7 +156,16 @@ export async function runPipeline(
     });
   }
 
-  const finalCards = selectBestCards(lastScoredCards);
+  const selectableCards = lastScoredCards.filter((entry) => {
+    const card = entry.card;
+    if (!card || typeof card !== 'object') return true;
+    return !isGenericHomeCalendarCard(card as Record<string, unknown>);
+  });
+  const suppressedCount = lastScoredCards.length - selectableCards.length;
+  if (suppressedCount > 0) {
+    api.logger.info(`Suppressed ${suppressedCount} generic Home calendar card(s) from final selection`);
+  }
+  const finalCards = selectBestCards(selectableCards);
 
   // Build score map
   const scoreMap: Record<string, unknown> = {};
@@ -149,10 +181,15 @@ export async function runPipeline(
     runId, status: 'completed', totalIterations: iterations.length,
     finalCards, iterations: iterations.map((it, idx) => ({ iteration: idx + 1, ...it })),
   });
+  const persistedRun = await db.getPipelineRun(runId);
+  if (!persistedRun) {
+    throw new Error(`Pipeline run ${runId} was not persisted`);
+  }
 
   // Phase 1: also persist evaluations to indexable card_evaluations rows so
   // future evals harness can SQL-query scores per basket / dimension without
   // re-parsing the iterations JSON blob. See docs/plans/memory-architecture.mdx §三.
+  let persistedEvaluations = 0;
   try {
     const cardSources: ScoredCardSource[] = finalCards
       .filter((c): c is Record<string, unknown> => !!c && typeof c === 'object')
@@ -165,12 +202,17 @@ export async function runPipeline(
     const evalRows = extractCardEvaluationsForRun(runId, scoreMap, cardSources);
     if (evalRows.length > 0) {
       await db.saveCardEvaluations(evalRows);
+      persistedEvaluations = evalRows.length;
     }
   } catch (err) {
     api.logger.warn(`Failed to persist card_evaluations: ${err instanceof Error ? err.message : err}`);
   }
 
   const result = { runId, totalIterations: iterations.length, finalCards, scoreMap };
+  emit({
+    type: 'pipeline:persisted',
+    data: { runId, cards: finalCards.length, evaluations: persistedEvaluations },
+  });
   emit({ type: 'pipeline:complete', data: result });
   return result;
 }

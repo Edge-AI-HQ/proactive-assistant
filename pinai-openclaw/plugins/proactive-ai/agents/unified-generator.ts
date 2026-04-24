@@ -99,6 +99,19 @@ command returns empty, that signal is itself useful — note it and continue.
 After collecting, briefly note what you gathered and any gaps. Pay
 attention to the relationship between layers: a fresh personal_signal +
 related high-quality memory often forms the strongest case for a card.
+
+Freshness rules:
+- Current raw commands are the freshest truth. If \`pin raw gmail recent\`
+  or \`pin raw gcal today\` returns ok with rows, treat older
+  \`COMPOSIO_API_KEY\` missing, connection unavailable, or connector-error
+  messages from profile, recent cards, or evolution runs as stale unless the
+  same current raw command also fails.
+- Do not generate connector-fix or auth-fix cards from stale connector errors
+  when the current raw connector reads succeeded.
+- Treat generic all-day calendar placeholders such as "Home" as low signal.
+  Do not infer travel, vacation, or meeting conflicts from them unless a
+  current raw calendar event or high-salience personal_signal provides
+  concrete evidence.
 </phase_1_context_gathering>
 
 <phase_2_plan>

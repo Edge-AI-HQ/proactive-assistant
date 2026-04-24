@@ -4,9 +4,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { runAutoCardChatFeedback, runAutoDreaming, runAutoCrystallize } from "./auto-loop.ts";
+import { runAutoCardChatFeedback, runAutoDreaming, runAutoCrystallize, runDetectAndLoop } from "./auto-loop.ts";
 import {
   bumpCrystallizeTurn,
+  listPipelineRuns,
   listEvolutionRuns,
   resetDbForTests,
   updateUserSettings,
@@ -97,6 +98,40 @@ test("runAutoCardChatFeedback skips sync while pipeline is running", async () =>
     },
   );
   assert.equal(called, false);
+});
+
+test("runDetectAndLoop: does not save a pipeline run twice", async () => {
+  await withTempHome(async () => {
+    await updateUserSettings({ auto_generate: true });
+    const generatorOutput = {
+      reasoning: "auto generate test",
+      cards: [{
+        title: "Reply to teammate",
+        whyNow: "A teammate asked a direct question today.",
+        summary: "The user can answer with existing context.",
+        primaryAction: { label: "Reply" },
+        goalBasket: "work",
+      }],
+      evaluations: [{ cardId: "draft-1", overall: 8, pass: true }],
+      iterationFeedback: "keep",
+    };
+
+    await runDetectAndLoop(
+      makeApi(generatorOutput),
+      {
+        auto_ingest_interval_ms: 300_000,
+        auto_detect_interval_ms: 60_000,
+        auto_loop_min_interval_ms: 0,
+        max_iterations: 1,
+        cards_per_iteration: 1,
+        agent_timeout_ms: 1000,
+      },
+      { running: false, phase: null, iteration: null },
+    );
+
+    const runs = await listPipelineRuns({ limit: 5 });
+    assert.equal(runs.length, 1);
+  });
 });
 
 // ── runAutoDreaming ──────────────────────────────────────────────────────

@@ -34,9 +34,18 @@ test('collectSignals includes connector personal signals for profile dreaming', 
         salience: 0.7,
         confidence: 0.8,
       },
+      {
+        kind: 'connector.gcal.event',
+        title: 'Future placeholder Home event',
+        summary: 'A future all-day placeholder should not affect today profile dreaming.',
+        source: 'connector:gcal',
+        occurredAt: '2100-01-01T00:00:00Z',
+        salience: 0.9,
+        confidence: 0.8,
+      },
     ]);
 
-    const result = await collectSignals('2026-04-24T00:00:00Z');
+    const result = await collectSignals('2026-04-24T00:00:00Z', '2026-04-24T23:59:59Z');
 
     assert.equal(result.status, 'ok');
     assert.equal(result.count, 1);

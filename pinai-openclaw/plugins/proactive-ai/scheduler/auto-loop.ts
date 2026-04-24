@@ -99,7 +99,7 @@ async function runIngest(api: OpenClawPluginApi, _config: AutoLoopConfig): Promi
 
 // ── Auto-detect-and-loop ──
 
-async function runDetectAndLoop(
+export async function runDetectAndLoop(
   api: OpenClawPluginApi,
   config: AutoLoopConfig,
   pipelineState: PipelineState,
@@ -136,15 +136,6 @@ async function runDetectAndLoop(
 
     state.lastLoopFinishedAt = new Date().toISOString();
     state.lastLoopStatus = 'completed';
-
-    // Save pipeline run to DB
-    await db.savePipelineRun({
-      runId: result.runId,
-      status: 'completed',
-      totalIterations: result.totalIterations,
-      finalCards: result.finalCards,
-      iterations: [],
-    });
 
     api.logger.info(
       `[auto-loop] completed runId=${result.runId} cards=${result.finalCards.length}`,

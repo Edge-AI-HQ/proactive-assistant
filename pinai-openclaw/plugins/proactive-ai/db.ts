@@ -2188,6 +2188,13 @@ export async function getLatestPipelineRun(): Promise<PipelineRunRow | null> {
   return row ? rowToPipelineRun(row) : null;
 }
 
+export async function getPipelineRun(runId: string): Promise<PipelineRunRow | null> {
+  const row = getDb()
+    .prepare('SELECT * FROM pipeline_runs WHERE run_id = ? ORDER BY started_at DESC LIMIT 1')
+    .get(runId) as any;
+  return row ? rowToPipelineRun(row) : null;
+}
+
 export async function listPipelineRuns(opts?: { since?: string; limit?: number }): Promise<PipelineRunRow[]> {
   const parts = ['SELECT * FROM pipeline_runs WHERE 1=1'];
   const params: unknown[] = [];

@@ -166,6 +166,22 @@ test('pin signals recent: filters by hours window', async () => {
   });
 });
 
+test('pin signals recent: excludes future-dated signals', async () => {
+  await withTempHome(async () => {
+    await ingestPersonalSignals([
+      { kind: 'm', title: 'now', summary: 'n', occurredAt: new Date(Date.now() - 60_000).toISOString() },
+      { kind: 'm', title: 'future', summary: 'f', occurredAt: '2100-01-01T00:00:00Z' },
+    ]);
+
+    const r = decode(await handleSignals(['recent', '--hours', '24']));
+
+    assert.equal(r.ok, true);
+    assert.equal(r.data.count, 1);
+    assert.equal(r.data.signals[0].title, 'now');
+    assert.equal(typeof r.data.until, 'string');
+  });
+});
+
 test('pin signals consume: requires --id and --runId', async () => {
   await withTempHome(async () => {
     const ing = await ingestPersonalSignals([{ kind: 'm', title: 't', summary: 's' }]);

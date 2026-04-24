@@ -29,6 +29,7 @@ export async function handleSignals(args: string[]): Promise<string> {
     const minSalienceRes = readNumericFlag(flags, ['minSalience'], 'signals', 'recent');
     if ('failure' in minSalienceRes) return minSalienceRes.failure;
     const hours = hoursRes.value ?? 24;
+    const until = new Date().toISOString();
     const since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
     const rows = await db.listPersonalSignals({
       status: (flags['status'] as db.PersonalSignalStatus | undefined) ?? 'open',
@@ -36,11 +37,12 @@ export async function handleSignals(args: string[]): Promise<string> {
       source: flags['source'],
       deviceId: flags['deviceId'] ?? flags['device-id'],
       since,
+      until,
       minSalience: minSalienceRes.value,
       limit: limitRes.value ?? 30,
       pruneExpired: true,
     });
-    return success('signals', 'recent', { since, count: rows.length, signals: rows });
+    return success('signals', 'recent', { since, until, count: rows.length, signals: rows });
   }
 
   if (sub === 'list') {

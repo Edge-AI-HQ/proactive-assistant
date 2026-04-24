@@ -695,10 +695,11 @@ async function executeDynamicConnectorTools(
 
 // ── Source collectors ──
 
-export async function collectSignals(windowStart: string): Promise<DreamSourceResult> {
+export async function collectSignals(windowStart: string, windowEnd = new Date().toISOString()): Promise<DreamSourceResult> {
   const signals = await db.listPersonalSignals({
     status: 'open',
     since: windowStart,
+    until: windowEnd,
     limit: 500,
     pruneExpired: true,
   });

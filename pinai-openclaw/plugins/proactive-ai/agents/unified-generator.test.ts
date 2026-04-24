@@ -101,3 +101,15 @@ test("buildUnifiedGeneratorPrompt includes v3 personal_signals + raw layer guida
   assert.match(prompt, /personal_signal/);
   assert.match(prompt, /high-quality memory/);
 });
+
+test("buildUnifiedGeneratorPrompt prefers fresh raw connector reads over stale connector errors", () => {
+  const prompt = buildUnifiedGeneratorPrompt({
+    currentDate: "2026-04-15",
+  });
+
+  assert.match(prompt, /Current raw commands are the freshest truth/);
+  assert.match(prompt, /COMPOSIO_API_KEY/);
+  assert.match(prompt, /pin raw gmail recent/);
+  assert.match(prompt, /pin raw gcal today/);
+  assert.match(prompt, /Home/);
+});
