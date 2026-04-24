@@ -225,27 +225,11 @@ function ensureSchema(db: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback_events(created_at DESC);
 
-    CREATE TABLE IF NOT EXISTS push_records (
-      id TEXT PRIMARY KEY,
-      intent_card_id TEXT,
-      kind TEXT NOT NULL,
-      basket TEXT,
-      title TEXT NOT NULL,
-      ref TEXT,
-      reason TEXT,
-      pushed_at TEXT NOT NULL,
-      metadata TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_push_pushed ON push_records(pushed_at DESC);
-
-    CREATE TABLE IF NOT EXISTS push_outcomes (
-      id TEXT PRIMARY KEY,
-      push_id TEXT NOT NULL REFERENCES push_records(id),
-      status TEXT NOT NULL,
-      metadata TEXT NOT NULL DEFAULT '{}',
-      recorded_at TEXT NOT NULL
-    );
+    -- push_records / push_outcomes were carried over from a v2 push-feature
+    -- experiment that was never shipped. Dropped in the Phase 15 cleanup
+    -- pass — see docs/memory-architecture.md §八.
+    DROP TABLE IF EXISTS push_outcomes;
+    DROP TABLE IF EXISTS push_records;
 
     -- v3 world_signals (formerly world_items). External news / context
     -- stream — the public-data analogue of personal_signals.
@@ -296,13 +280,9 @@ function ensureSchema(db: Database.Database): void {
       updated_at TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS auto_loop_state (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      last_started_at TEXT,
-      last_finished_at TEXT,
-      last_status TEXT,
-      updated_at TEXT NOT NULL
-    );
+    -- auto_loop_state was a single-row table with the latest auto-loop tick
+    -- summary; collapsed into app_state['scheduler.autoLoopState'] in
+    -- Phase 15. Dropped via migrateAutoLoopStateToAppState below.
 
     CREATE TABLE IF NOT EXISTS dream_runs (
       id TEXT PRIMARY KEY,
@@ -418,14 +398,9 @@ function ensureSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_intent_thread_state_updated ON intent_thread_state(updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_intent_thread_state_goal_basket ON intent_thread_state(goal_basket);
 
-    CREATE TABLE IF NOT EXISTS chat_crystallize_state (
-      id TEXT PRIMARY KEY DEFAULT 'default',
-      turn_count INTEGER NOT NULL DEFAULT 0,
-      last_crystallized_at TEXT,
-      last_session_key TEXT,
-      last_message_at TEXT,
-      updated_at TEXT NOT NULL
-    );
+    -- chat_crystallize_state was a single-row table tracking the crystallize
+    -- counter / cooldown. Collapsed into app_state['crystallize.state'] in
+    -- Phase 15. Dropped via migrateCrystallizeStateToAppState below.
 
     -- user_skills was the v2 sink; rows are migrated into skill_index +
     -- skills/<id>/SKILL.md by migrateLegacyToV3 and the legacy table is
@@ -459,6 +434,12 @@ function ensureSchema(db: Database.Database): void {
   // We're pre-product, no users to protect; the goal is "data preserved,
   // schema clean".  See docs/memory-architecture.md §七 (migration map).
   migrateLegacyToV3(db);
+
+  // Phase 15: collapse the two single-row "state" tables into the
+  // app_state KV (which already exists for this exact use). Idempotent.
+  // See docs/memory-architecture.md §八 Phase 15.
+  migrateAutoLoopStateToAppState(db);
+  migrateCrystallizeStateToAppState(db);
 }
 
 /**
@@ -595,6 +576,81 @@ function migrateWorldItemsToSignals(db: Database.Database): void {
 
   // No new table yet (race-free old install) — just rename.
   db.exec('ALTER TABLE world_items RENAME TO world_signals');
+}
+
+/**
+ * Phase 15: backfill auto_loop_state's single row into app_state then DROP
+ * the table. The KV layout intentionally matches the AutoLoopStateRow
+ * shape minus `user_id` (single-tenant container, no need to store it).
+ * Idempotent — no-op once the table is gone.
+ */
+function migrateAutoLoopStateToAppState(db: Database.Database): void {
+  const exists = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='auto_loop_state'",
+  ).get();
+  if (!exists) return;
+
+  const row = db.prepare(
+    'SELECT last_started_at, last_finished_at, last_status, updated_at FROM auto_loop_state WHERE id = 1',
+  ).get() as { last_started_at: string | null; last_finished_at: string | null; last_status: string | null; updated_at: string } | undefined;
+
+  if (row) {
+    const value = JSON.stringify({
+      last_started_at: row.last_started_at,
+      last_finished_at: row.last_finished_at,
+      last_status: row.last_status,
+      updated_at: row.updated_at,
+    });
+    db.prepare(
+      `INSERT INTO app_state (namespace, key, value_json, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(namespace, key) DO UPDATE SET
+         value_json = excluded.value_json,
+         updated_at = excluded.updated_at`,
+    ).run('scheduler', 'autoLoopState', value, row.updated_at);
+  }
+
+  db.exec('DROP TABLE auto_loop_state');
+}
+
+/**
+ * Phase 15: backfill chat_crystallize_state's single row into app_state
+ * then DROP the table. Same shape as ChatCrystallizeStateRow minus the
+ * synthetic `id`. Idempotent — no-op once the table is gone.
+ */
+function migrateCrystallizeStateToAppState(db: Database.Database): void {
+  const exists = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='chat_crystallize_state'",
+  ).get();
+  if (!exists) return;
+
+  const row = db.prepare(
+    `SELECT turn_count, last_crystallized_at, last_session_key, last_message_at, updated_at
+       FROM chat_crystallize_state WHERE id = 'default'`,
+  ).get() as {
+    turn_count: number; last_crystallized_at: string | null;
+    last_session_key: string | null; last_message_at: string | null;
+    updated_at: string;
+  } | undefined;
+
+  if (row) {
+    const value = JSON.stringify({
+      turn_count: row.turn_count,
+      last_crystallized_at: row.last_crystallized_at,
+      last_session_key: row.last_session_key,
+      last_message_at: row.last_message_at,
+      updated_at: row.updated_at,
+    });
+    db.prepare(
+      `INSERT INTO app_state (namespace, key, value_json, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(namespace, key) DO UPDATE SET
+         value_json = excluded.value_json,
+         updated_at = excluded.updated_at`,
+    ).run('crystallize', 'state', value, row.updated_at);
+  }
+
+  db.exec('DROP TABLE chat_crystallize_state');
 }
 
 function ensureColumn(
@@ -1454,112 +1510,6 @@ export async function getThreadContext(intentKey: string): Promise<ThreadContext
   };
 }
 
-// ── Push Records ──
-
-export interface PushRecordRow {
-  id: string;
-  user_id: string;
-  intent_card_id: string | null;
-  kind: string;
-  basket: string | null;
-  title: string;
-  ref: string | null;
-  reason: string | null;
-  pushed_at: string;
-  metadata: Record<string, unknown>;
-  created_at: string;
-}
-
-export interface PushOutcomeRow {
-  id: string;
-  push_id: string;
-  status: string;
-  metadata: Record<string, unknown>;
-  recorded_at: string;
-}
-
-function rowToPush(row: any): PushRecordRow {
-  return { ...row, user_id: USER_ID, metadata: parseJson(row.metadata) };
-}
-
-function rowToOutcome(row: any): PushOutcomeRow {
-  return { ...row, metadata: parseJson(row.metadata) };
-}
-
-export async function recordPush(input: {
-  kind: string;
-  title: string;
-  intentCardId?: string;
-  basket?: string;
-  channel?: string;
-  ref?: string;
-  reason?: string;
-  metadata?: Record<string, unknown>;
-}): Promise<PushRecordRow> {
-  const id = genId();
-  const ts = now();
-  const meta = { ...(input.metadata ?? {}), ...(input.channel ? { channel: input.channel } : {}) };
-  getDb().prepare(
-    'INSERT INTO push_records (id, intent_card_id, kind, basket, title, ref, reason, pushed_at, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, input.intentCardId ?? null, input.kind, input.basket ?? null, input.title,
-    input.ref ?? null, input.reason ?? null, ts, JSON.stringify(meta), ts);
-  return {
-    id, user_id: USER_ID, intent_card_id: input.intentCardId ?? null,
-    kind: input.kind, basket: input.basket ?? null, title: input.title,
-    ref: input.ref ?? null, reason: input.reason ?? null,
-    pushed_at: ts, metadata: meta, created_at: ts,
-  };
-}
-
-export async function pushHistory(opts?: {
-  kind?: string;
-  basket?: string;
-  since?: string;
-  limit?: number;
-}): Promise<PushRecordRow[]> {
-  const parts = ['SELECT * FROM push_records WHERE 1=1'];
-  const params: unknown[] = [];
-  if (opts?.kind) { parts.push('AND kind = ?'); params.push(opts.kind); }
-  if (opts?.basket) { parts.push('AND basket = ?'); params.push(opts.basket); }
-  if (opts?.since) { parts.push('AND pushed_at >= ?'); params.push(opts.since); }
-  parts.push('ORDER BY pushed_at DESC');
-  if (opts?.limit) { parts.push('LIMIT ?'); params.push(opts.limit); }
-  const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
-  return rows.map(rowToPush);
-}
-
-export async function getPush(id: string): Promise<{ record: PushRecordRow; outcomes: PushOutcomeRow[] } | null> {
-  const row = getDb().prepare('SELECT * FROM push_records WHERE id = ?').get(id) as any;
-  if (!row) return null;
-  const outcomes = getDb().prepare('SELECT * FROM push_outcomes WHERE push_id = ? ORDER BY recorded_at DESC').all(id) as any[];
-  return { record: rowToPush(row), outcomes: outcomes.map(rowToOutcome) };
-}
-
-export async function recordOutcome(pushId: string, status: string, metadata?: Record<string, unknown>): Promise<PushOutcomeRow> {
-  const id = genId();
-  const ts = now();
-  const meta = JSON.stringify(metadata ?? {});
-  getDb().prepare('INSERT INTO push_outcomes (id, push_id, status, metadata, recorded_at) VALUES (?, ?, ?, ?, ?)')
-    .run(id, pushId, status, meta, ts);
-  return { id, push_id: pushId, status, metadata: metadata ?? {}, recorded_at: ts };
-}
-
-export async function findSimilarPushes(opts: {
-  kind: string;
-  ref?: string;
-  title?: string;
-  since?: string;
-}): Promise<PushRecordRow[]> {
-  const parts = ['SELECT * FROM push_records WHERE kind = ?'];
-  const params: unknown[] = [opts.kind];
-  if (opts.since) { parts.push('AND pushed_at >= ?'); params.push(opts.since); }
-  if (opts.ref) { parts.push('AND ref = ?'); params.push(opts.ref); }
-  if (opts.title) { parts.push('AND title LIKE ?'); params.push(`%${opts.title}%`); }
-  parts.push('ORDER BY pushed_at DESC LIMIT 20');
-  const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
-  return rows.map(rowToPush);
-}
-
 // ── World Signals (formerly world_items) ──
 // See docs/memory-architecture.md §三 (world_signals).
 
@@ -1973,7 +1923,10 @@ export async function updateUserSettings(
   db.prepare(`UPDATE user_settings SET ${sets.join(', ')} WHERE id = 1`).run(...vals);
 }
 
-// ── Chat Crystallize State ──
+// ── Chat Crystallize State (KV-backed in app_state['crystallize.state']) ──
+// Phase 15: collapsed from a single-row table into the app_state KV. The
+// migration runs on every container start (idempotent). See
+// docs/memory-architecture.md §八 Phase 15.
 
 export interface ChatCrystallizeStateRow {
   turn_count: number;
@@ -1983,51 +1936,49 @@ export interface ChatCrystallizeStateRow {
   updated_at: string;
 }
 
-function ensureCrystallizeStateRow(db: Database.Database): void {
-  db.prepare(
-    "INSERT OR IGNORE INTO chat_crystallize_state (id, turn_count, updated_at) VALUES ('default', 0, ?)",
-  ).run(now());
-}
+const CRYSTALLIZE_NS = 'crystallize';
+const CRYSTALLIZE_KEY = 'state';
 
-export async function getCrystallizeState(): Promise<ChatCrystallizeStateRow> {
-  const db = getDb();
-  ensureCrystallizeStateRow(db);
-  const row = db.prepare("SELECT * FROM chat_crystallize_state WHERE id = 'default'").get() as any;
+function emptyCrystallizeState(ts: string): ChatCrystallizeStateRow {
   return {
-    turn_count: Number(row.turn_count ?? 0),
-    last_crystallized_at: row.last_crystallized_at ?? null,
-    last_session_key: row.last_session_key ?? null,
-    last_message_at: row.last_message_at ?? null,
-    updated_at: row.updated_at,
+    turn_count: 0,
+    last_crystallized_at: null,
+    last_session_key: null,
+    last_message_at: null,
+    updated_at: ts,
   };
 }
 
+export async function getCrystallizeState(): Promise<ChatCrystallizeStateRow> {
+  const stored = await getAppState<ChatCrystallizeStateRow>(CRYSTALLIZE_NS, CRYSTALLIZE_KEY);
+  return stored ?? emptyCrystallizeState(now());
+}
+
 export async function bumpCrystallizeTurn(sessionKey: string): Promise<ChatCrystallizeStateRow> {
-  const db = getDb();
   const ts = now();
-  ensureCrystallizeStateRow(db);
-  db.prepare(`
-    UPDATE chat_crystallize_state
-    SET turn_count = turn_count + 1,
-        last_session_key = ?,
-        last_message_at = ?,
-        updated_at = ?
-    WHERE id = 'default'
-  `).run(sessionKey, ts, ts);
-  return getCrystallizeState();
+  const current = await getCrystallizeState();
+  const next: ChatCrystallizeStateRow = {
+    turn_count: current.turn_count + 1,
+    last_crystallized_at: current.last_crystallized_at,
+    last_session_key: sessionKey,
+    last_message_at: ts,
+    updated_at: ts,
+  };
+  await setAppState(CRYSTALLIZE_NS, CRYSTALLIZE_KEY, next);
+  return next;
 }
 
 export async function markCrystallized(): Promise<void> {
-  const db = getDb();
   const ts = now();
-  ensureCrystallizeStateRow(db);
-  db.prepare(`
-    UPDATE chat_crystallize_state
-    SET turn_count = 0,
-        last_crystallized_at = ?,
-        updated_at = ?
-    WHERE id = 'default'
-  `).run(ts, ts);
+  const current = await getCrystallizeState();
+  const next: ChatCrystallizeStateRow = {
+    turn_count: 0,
+    last_crystallized_at: ts,
+    last_session_key: current.last_session_key,
+    last_message_at: current.last_message_at,
+    updated_at: ts,
+  };
+  await setAppState(CRYSTALLIZE_NS, CRYSTALLIZE_KEY, next);
 }
 
 /**
@@ -2175,7 +2126,10 @@ export async function deleteUserSkill(id: string): Promise<boolean> {
   return info.changes > 0;
 }
 
-// ── Auto-Loop State ──
+// ── Auto-Loop State (KV-backed in app_state['scheduler.autoLoopState']) ──
+// Phase 15: collapsed from a single-row table into the app_state KV. The
+// migration runs on every container start (idempotent). See
+// docs/memory-architecture.md §八 Phase 15.
 
 export interface AutoLoopStateRow {
   user_id: string;
@@ -2185,29 +2139,44 @@ export interface AutoLoopStateRow {
   updated_at: string;
 }
 
+interface AutoLoopStateValue {
+  last_started_at: string | null;
+  last_finished_at: string | null;
+  last_status: string | null;
+  updated_at: string;
+}
+
+const AUTO_LOOP_NS = 'scheduler';
+const AUTO_LOOP_KEY = 'autoLoopState';
+
+function emptyAutoLoopValue(ts: string): AutoLoopStateValue {
+  return { last_started_at: null, last_finished_at: null, last_status: null, updated_at: ts };
+}
+
 export async function getAutoLoopState(): Promise<AutoLoopStateRow> {
-  const db = getDb();
-  db.prepare("INSERT OR IGNORE INTO auto_loop_state (id, updated_at) VALUES (1, ?)").run(now());
-  const row = db.prepare('SELECT * FROM auto_loop_state WHERE id = 1').get() as any;
+  const stored = await getAppState<AutoLoopStateValue>(AUTO_LOOP_NS, AUTO_LOOP_KEY);
+  const value = stored ?? emptyAutoLoopValue(now());
   return {
     user_id: USER_ID,
-    last_started_at: row.last_started_at,
-    last_finished_at: row.last_finished_at,
-    last_status: row.last_status,
-    updated_at: row.updated_at,
+    last_started_at: value.last_started_at,
+    last_finished_at: value.last_finished_at,
+    last_status: value.last_status,
+    updated_at: value.updated_at,
   };
 }
 
-export async function saveAutoLoopState(fields: Partial<Pick<AutoLoopStateRow, 'last_started_at' | 'last_finished_at' | 'last_status'>>): Promise<void> {
-  const db = getDb();
+export async function saveAutoLoopState(
+  fields: Partial<Pick<AutoLoopStateRow, 'last_started_at' | 'last_finished_at' | 'last_status'>>,
+): Promise<void> {
   const ts = now();
-  db.prepare("INSERT OR IGNORE INTO auto_loop_state (id, updated_at) VALUES (1, ?)").run(ts);
-  const sets: string[] = ['updated_at = ?'];
-  const vals: unknown[] = [ts];
-  if (fields.last_started_at !== undefined) { sets.push('last_started_at = ?'); vals.push(fields.last_started_at); }
-  if (fields.last_finished_at !== undefined) { sets.push('last_finished_at = ?'); vals.push(fields.last_finished_at); }
-  if (fields.last_status !== undefined) { sets.push('last_status = ?'); vals.push(fields.last_status); }
-  db.prepare(`UPDATE auto_loop_state SET ${sets.join(', ')} WHERE id = 1`).run(...vals);
+  const current = (await getAppState<AutoLoopStateValue>(AUTO_LOOP_NS, AUTO_LOOP_KEY)) ?? emptyAutoLoopValue(ts);
+  const next: AutoLoopStateValue = {
+    last_started_at: fields.last_started_at !== undefined ? fields.last_started_at : current.last_started_at,
+    last_finished_at: fields.last_finished_at !== undefined ? fields.last_finished_at : current.last_finished_at,
+    last_status: fields.last_status !== undefined ? fields.last_status : current.last_status,
+    updated_at: ts,
+  };
+  await setAppState(AUTO_LOOP_NS, AUTO_LOOP_KEY, next);
 }
 
 // ── App State (KV) — replaces auto_loop_state / chat_crystallize_state /
