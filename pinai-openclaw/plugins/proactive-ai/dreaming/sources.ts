@@ -696,7 +696,12 @@ async function executeDynamicConnectorTools(
 // ── Source collectors ──
 
 export async function collectSignals(windowStart: string): Promise<DreamSourceResult> {
-  const signals = await db.listSignals({ since: windowStart });
+  const signals = await db.listPersonalSignals({
+    status: 'open',
+    since: windowStart,
+    limit: 500,
+    pruneExpired: true,
+  });
   return { status: 'ok', count: signals.length, raw: signals, normalized: signals };
 }
 
