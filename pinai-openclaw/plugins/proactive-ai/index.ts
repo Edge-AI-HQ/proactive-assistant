@@ -13,7 +13,9 @@ import { startAutoLoop, type AutoLoopConfig } from './scheduler/auto-loop.js';
 import { sweepStaleRunningDreams } from './dreaming/store.js';
 import { BackgroundTaskScheduler } from './tasks/scheduler.js';
 import { createConnectorInitHandler } from './tasks/handlers/connector-init.js';
+import { createAutoDreamingHandler } from './tasks/handlers/auto-dreaming.js';
 import { reconcileActiveConnectorAccounts } from './tasks/reconciler.js';
+import { maybeEnqueueDailyDreaming } from './tasks/dreaming-enqueuer.js';
 import * as db from './db.js';
 
 const DEFAULT_CONFIG: PluginConfig = {
@@ -152,10 +154,12 @@ const plugin = {
     }
 
     // Background task scheduler — Phase A built the queue, Phase B wires
-    // connector.init for Gmail + GCal. Still gated by
-    // BACKGROUND_AUTO_LOOP_TASKS_ENABLED so the existing setInterval-based
-    // auto-loop above keeps running unchanged for users / envs that haven't
-    // opted in. Phase C will move auto.dreaming over.
+    // connector.init for Gmail + GCal, Phase C migrates auto.dreaming. Still
+    // gated by BACKGROUND_AUTO_LOOP_TASKS_ENABLED so the existing setInterval-
+    // based auto-loop above keeps running unchanged for users / envs that
+    // haven't opted in. The legacy in-process runAutoDreaming honors the
+    // same flag and returns early when it's set, so the two paths can never
+    // double-trigger.
     // See docs/plans/2026-04-24-data-connector-init-tasks.mdx.
     if (!bgTaskScheduler && process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED === '1') {
       const workerId = `${process.env.HOSTNAME ?? 'host'}:${process.pid}:${userId.slice(0, 8)}`;
@@ -169,17 +173,17 @@ const plugin = {
           error: (msg) => api.logger.error(msg),
         },
       });
-      // Phase B: register connector.init handler. Production handler resolves
-      // its Composio fetcher lazily from requireComposioApiKey() on first use.
-      // Phase B.1: pass `api` so the evolve stage can spawn the fact-extraction
-      // subagent via runAgent(). When BACKGROUND_AUTO_LOOP_TASKS_ENABLED is
-      // off, this whole block is skipped — connector.init won't run at all.
+      // Phase B + B.1: connector.init handler with evolve agent.
       bgTaskScheduler.registerHandler('connector.init', createConnectorInitHandler({
         api,
         evolveTimeoutMs: Number(process.env.CONNECTOR_INIT_EVOLVE_TIMEOUT_MS ?? 60_000),
       }));
+      // Phase C: auto.dreaming handler. Pairs with the dreaming-enqueuer
+      // periodic check below — enqueuer decides "is today's slot due?",
+      // handler runs the dream when the scheduler claims the task.
+      bgTaskScheduler.registerHandler('auto.dreaming', createAutoDreamingHandler({ api }));
       bgTaskScheduler.start();
-      api.logger.info(`[bg-tasks] scheduler started (worker=${workerId}, handlers=connector.init)`);
+      api.logger.info(`[bg-tasks] scheduler started (worker=${workerId}, handlers=connector.init,auto.dreaming)`);
 
       // Reconciler: scan ACTIVE Composio connections on a slow loop so that
       // users who close the OAuth tab (and never trigger /composio/wait) still
@@ -206,6 +210,31 @@ const plugin = {
       reconcilerTimer = setInterval(runReconciler, reconcilerIntervalMs);
       if (typeof reconcilerTimer.unref === 'function') reconcilerTimer.unref();
       api.logger.info(`[reconciler] scheduled every ${Math.round(reconcilerIntervalMs / 1000)}s`);
+
+      // Phase C: dreaming-enqueuer. Cheap, idempotent — runs every minute
+      // and only writes a row when "user has auto_dreaming on" + "past 06:00
+      // local" + "no dream completed today" + "no auto.dreaming task already
+      // queued for today's local day". The handler registered above runs the
+      // task once it's claimed.
+      const dreamEnqueuerIntervalMs = Number(
+        process.env.DREAMING_ENQUEUER_INTERVAL_MS ?? 60_000,  // 1min, matches old auto-loop cadence
+      );
+      const runDreamEnqueuer = () => {
+        maybeEnqueueDailyDreaming({}).then((report) => {
+          if (report.reason === 'enqueued') {
+            api.logger.info(`[auto-dreaming] enqueued ${report.taskId} for ${report.localDay} (${report.timezone})`);
+          } else if (report.reason === 'enqueue_failed') {
+            api.logger.warn(`[auto-dreaming] enqueue failed: ${report.errorMessage}`);
+          }
+          // setting_off / not_due / already_enqueued are silent; they fire
+          // every minute and would otherwise spam the log.
+        }).catch((err) => {
+          api.logger.error(`[auto-dreaming] enqueuer threw: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      };
+      const dreamEnqueuerTimer = setInterval(runDreamEnqueuer, dreamEnqueuerIntervalMs);
+      if (typeof dreamEnqueuerTimer.unref === 'function') dreamEnqueuerTimer.unref();
+      api.logger.info(`[auto-dreaming] enqueuer scheduled every ${Math.round(dreamEnqueuerIntervalMs / 1000)}s`);
     }
 
     api.logger.info(`Proactive AI Cloud ready (user=${userId.slice(0, 8)}…, routes: /proactive-ai/*)`);

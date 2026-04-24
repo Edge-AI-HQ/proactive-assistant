@@ -189,6 +189,29 @@ test("runAutoDreaming: re-fires next local day", async () => {
   });
 });
 
+// Phase C regression: when the background_tasks scheduler owns dreaming,
+// the legacy in-process runAutoDreaming MUST be a no-op. Otherwise a user
+// running both paths gets two dreams a day.
+test("runAutoDreaming: no-op when BACKGROUND_AUTO_LOOP_TASKS_ENABLED=1 (Phase C gate)", async () => {
+  await withTempHome(async () => {
+    await updateUserSettings({ auto_dreaming: true });
+    await upsertProfile({ displayName: "T", locale: "en", timezone: "UTC" });
+
+    const previous = process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED;
+    process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED = '1';
+    try {
+      await runAutoDreaming(makeApi(), { now: NOW_AFTER_6AM });
+      // Settle any pending fire-and-forget — none should land
+      await new Promise((r) => setTimeout(r, 100));
+      const runs = await listDreamRuns();
+      assert.equal(runs.length, 0, "scheduler-owned mode must NOT create dream_runs in-process");
+    } finally {
+      if (previous === undefined) delete process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED;
+      else process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED = previous;
+    }
+  });
+});
+
 // ── runAutoCrystallize ──────────────────────────────────────────────────
 //
 // Same shape: respects the auto_crystallize setting; calling it with the

@@ -172,6 +172,11 @@ export async function runAutoDreaming(
 ): Promise<void> {
   if (state.dreamInFlight) return;
 
+  // Phase C: when the background_tasks scheduler is on, dreaming is owned
+  // by tasks/handlers/auto-dreaming.ts (enqueued by tasks/dreaming-enqueuer.ts).
+  // Skip the legacy in-process path so we don't double-trigger.
+  if (process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED === '1') return;
+
   state.dreamInFlight = true;
   try {
     // Check user setting
