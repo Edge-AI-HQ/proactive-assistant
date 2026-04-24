@@ -13,9 +13,11 @@ import { startAutoLoop, type AutoLoopConfig } from './scheduler/auto-loop.js';
 import { sweepStaleRunningDreams } from './dreaming/store.js';
 import { BackgroundTaskScheduler } from './tasks/scheduler.js';
 import { createConnectorInitHandler } from './tasks/handlers/connector-init.js';
+import { createConnectorSyncHandler } from './tasks/handlers/connector-sync.js';
 import { createAutoDreamingHandler } from './tasks/handlers/auto-dreaming.js';
 import { reconcileActiveConnectorAccounts } from './tasks/reconciler.js';
 import { maybeEnqueueDailyDreaming } from './tasks/dreaming-enqueuer.js';
+import { enqueueDueConnectorSyncs } from './tasks/connector-sync-enqueuer.js';
 import * as db from './db.js';
 
 const DEFAULT_CONFIG: PluginConfig = {
@@ -178,12 +180,19 @@ const plugin = {
         api,
         evolveTimeoutMs: Number(process.env.CONNECTOR_INIT_EVOLVE_TIMEOUT_MS ?? 60_000),
       }));
+      // Phase D follow-up: connector.sync handler (incremental). Default 12h
+      // cadence per CONNECTOR_SYNC_INTERVAL_MS — see connector-sync-enqueuer
+      // wiring below. Reuses init's evolve agent timeout.
+      bgTaskScheduler.registerHandler('connector.sync', createConnectorSyncHandler({
+        api,
+        evolveTimeoutMs: Number(process.env.CONNECTOR_INIT_EVOLVE_TIMEOUT_MS ?? 60_000),
+      }));
       // Phase C: auto.dreaming handler. Pairs with the dreaming-enqueuer
       // periodic check below — enqueuer decides "is today's slot due?",
       // handler runs the dream when the scheduler claims the task.
       bgTaskScheduler.registerHandler('auto.dreaming', createAutoDreamingHandler({ api }));
       bgTaskScheduler.start();
-      api.logger.info(`[bg-tasks] scheduler started (worker=${workerId}, handlers=connector.init,auto.dreaming)`);
+      api.logger.info(`[bg-tasks] scheduler started (worker=${workerId}, handlers=connector.init,connector.sync,auto.dreaming)`);
 
       // Reconciler: scan ACTIVE Composio connections on a slow loop so that
       // users who close the OAuth tab (and never trigger /composio/wait) still
@@ -235,6 +244,31 @@ const plugin = {
       const dreamEnqueuerTimer = setInterval(runDreamEnqueuer, dreamEnqueuerIntervalMs);
       if (typeof dreamEnqueuerTimer.unref === 'function') dreamEnqueuerTimer.unref();
       api.logger.info(`[auto-dreaming] enqueuer scheduled every ${Math.round(dreamEnqueuerIntervalMs / 1000)}s`);
+
+      // Phase D follow-up: connector-sync enqueuer. Scans ACTIVE Composio
+      // accounts on a slow timer (default 5min), but the per-account gate
+      // keyed off CONNECTOR_SYNC_INTERVAL_MS (default 12h) caps how often
+      // any single account actually gets a sync task. Cheap if no account
+      // is due. See tasks/connector-sync-enqueuer.ts for window math.
+      const syncEnqueuerIntervalMs = Number(
+        process.env.CONNECTOR_SYNC_ENQUEUER_INTERVAL_MS ?? 300_000,
+      );
+      const runSyncEnqueuer = () => {
+        enqueueDueConnectorSyncs({}).then((report) => {
+          if (report.failed) {
+            api.logger.warn(`[connector-sync] enqueuer sweep failed: ${report.failedReason}`);
+          } else if (report.enqueued > 0 || report.invalid > 0) {
+            api.logger.info(
+              `[connector-sync] scanned=${report.scanned} enqueued=${report.enqueued} alreadyHandled=${report.alreadyHandled} awaitingInit=${report.awaitingInit} invalid=${report.invalid}`,
+            );
+          }
+        }).catch((err) => {
+          api.logger.error(`[connector-sync] enqueuer threw: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      };
+      const syncEnqueuerTimer = setInterval(runSyncEnqueuer, syncEnqueuerIntervalMs);
+      if (typeof syncEnqueuerTimer.unref === 'function') syncEnqueuerTimer.unref();
+      api.logger.info(`[connector-sync] enqueuer scheduled every ${Math.round(syncEnqueuerIntervalMs / 1000)}s (sync interval = ${Math.round(Number(process.env.CONNECTOR_SYNC_INTERVAL_MS ?? 12 * 60 * 60 * 1000) / 1000)}s)`);
     }
 
     api.logger.info(`Proactive AI Cloud ready (user=${userId.slice(0, 8)}…, routes: /proactive-ai/*)`);

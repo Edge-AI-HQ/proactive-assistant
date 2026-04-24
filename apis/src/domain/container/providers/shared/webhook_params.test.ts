@@ -180,6 +180,9 @@ test("buildBaseContainerEnv forwards background_tasks scheduler env from process
     CONNECTOR_INIT_RECONCILER_INTERVAL_MS: "300000",
     CONNECTOR_INIT_EVOLVE_TIMEOUT_MS: "20000",
     CONNECTOR_INIT_DISABLED_TOOLKITS: "stripe,discord",
+    CONNECTOR_SYNC_INTERVAL_MS: "43200000",
+    CONNECTOR_SYNC_ENQUEUER_INTERVAL_MS: "300000",
+    CONNECTOR_SYNC_DISABLED_TOOLKITS: "stripe",
     DREAMING_ENQUEUER_INTERVAL_MS: "120000",
   };
   const previous: Record<string, string | undefined> = {};
@@ -213,6 +216,9 @@ test("buildBaseContainerEnv skips scheduler env keys that are unset or empty", (
     "CONNECTOR_INIT_RECONCILER_INTERVAL_MS",
     "CONNECTOR_INIT_EVOLVE_TIMEOUT_MS",
     "CONNECTOR_INIT_DISABLED_TOOLKITS",
+    "CONNECTOR_SYNC_INTERVAL_MS",
+    "CONNECTOR_SYNC_ENQUEUER_INTERVAL_MS",
+    "CONNECTOR_SYNC_DISABLED_TOOLKITS",
     "DREAMING_ENQUEUER_INTERVAL_MS",
   ];
   const previous: Record<string, string | undefined> = {};

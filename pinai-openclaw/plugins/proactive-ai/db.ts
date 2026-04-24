@@ -471,6 +471,23 @@ function ensureSchema(db: Database.Database): void {
       ON task_attempts(task_id, attempt_no);
     CREATE INDEX IF NOT EXISTS idx_task_attempts_status_started
       ON task_attempts(status, started_at DESC);
+
+    -- ─────── connector_sync_cursors: per-account incremental sync state ───────
+    -- One row per (toolkit, connectedAccountId). last_synced_at is the upper
+    -- bound of the most recent successful sync; the next sync uses it as the
+    -- "since" lower bound. toolkit_cursor_json is reserved for toolkits that
+    -- expose a native sync token (e.g. GCal nextSyncToken) — empty for now.
+    -- The connector-sync-enqueuer reads this table on every tick to decide
+    -- whether the account is due for another sync (now - last_synced_at >=
+    -- CONNECTOR_SYNC_INTERVAL_MS, default 12h).
+    CREATE TABLE IF NOT EXISTS connector_sync_cursors (
+      toolkit              TEXT NOT NULL,
+      connected_account_id TEXT NOT NULL,
+      last_synced_at       TEXT NOT NULL,
+      toolkit_cursor_json  TEXT,
+      updated_at           TEXT NOT NULL,
+      PRIMARY KEY (toolkit, connected_account_id)
+    );
   `);
 
   ensureColumn(db, 'feedback_events', 'conversation_id', 'TEXT');
@@ -4517,4 +4534,78 @@ export async function listTaskAttempts(taskId: string): Promise<TaskAttemptRow[]
     'SELECT * FROM task_attempts WHERE task_id = ? ORDER BY attempt_no ASC',
   ).all(taskId) as any[];
   return rows.map(rowToTaskAttempt);
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// connector_sync_cursors: per-(toolkit, account) incremental sync state.
+// Read by connector-sync-enqueuer to gate "is this account due?", written
+// by connector.sync handler on success.
+// ──────────────────────────────────────────────────────────────────────
+
+export interface ConnectorSyncCursorRow {
+  toolkit: string;
+  connected_account_id: string;
+  last_synced_at: string;
+  toolkit_cursor: Record<string, unknown> | null;
+  updated_at: string;
+}
+
+function rowToConnectorSyncCursor(row: any): ConnectorSyncCursorRow {
+  return {
+    toolkit: row.toolkit,
+    connected_account_id: row.connected_account_id,
+    last_synced_at: row.last_synced_at,
+    toolkit_cursor: row.toolkit_cursor_json
+      ? parseJson<Record<string, unknown>>(row.toolkit_cursor_json)
+      : null,
+    updated_at: row.updated_at,
+  };
+}
+
+export async function getConnectorSyncCursor(
+  toolkit: string,
+  connectedAccountId: string,
+): Promise<ConnectorSyncCursorRow | null> {
+  const row = getDb().prepare(
+    'SELECT * FROM connector_sync_cursors WHERE toolkit = ? AND connected_account_id = ?',
+  ).get(toolkit, connectedAccountId) as any;
+  return row ? rowToConnectorSyncCursor(row) : null;
+}
+
+export interface UpsertConnectorSyncCursorInput {
+  toolkit: string;
+  connectedAccountId: string;
+  lastSyncedAt: string;
+  toolkitCursor?: Record<string, unknown> | null;
+}
+
+export async function upsertConnectorSyncCursor(
+  input: UpsertConnectorSyncCursorInput,
+): Promise<ConnectorSyncCursorRow> {
+  const ts = new Date().toISOString();
+  getDb().prepare(
+    `INSERT INTO connector_sync_cursors
+       (toolkit, connected_account_id, last_synced_at, toolkit_cursor_json, updated_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT (toolkit, connected_account_id) DO UPDATE SET
+       last_synced_at = excluded.last_synced_at,
+       toolkit_cursor_json = excluded.toolkit_cursor_json,
+       updated_at = excluded.updated_at`,
+  ).run(
+    input.toolkit,
+    input.connectedAccountId,
+    input.lastSyncedAt,
+    input.toolkitCursor ? JSON.stringify(input.toolkitCursor) : null,
+    ts,
+  );
+  const row = await getConnectorSyncCursor(input.toolkit, input.connectedAccountId);
+  if (!row) throw new Error('upsertConnectorSyncCursor: row not found after upsert');
+  return row;
+}
+
+export async function listConnectorSyncCursors(): Promise<ConnectorSyncCursorRow[]> {
+  const rows = getDb().prepare(
+    'SELECT * FROM connector_sync_cursors ORDER BY updated_at DESC',
+  ).all() as any[];
+  return rows.map(rowToConnectorSyncCursor);
 }

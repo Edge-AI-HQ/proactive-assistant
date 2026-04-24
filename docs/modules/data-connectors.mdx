@@ -9,9 +9,9 @@ description: "Composio、device、mobile 数据接入与 connector.init 后台�
 
 Data Connectors 负责"数据源怎么接进来"，不负责后续记忆提炼。三条主链路：
 
-- **Composio**：连接 SaaS 账号（OAuth + identity cache）；连接 ACTIVE 后由 `connector.init` 后台任务从 Composio 拉一批最近数据写到 `raw.db` typed 表 + `personal_signals`，并打开 `evolution_runs(trigger_kind='on_event')` 给 Memory 模块的 evolve agent 消费。
+- **Composio**：连接 SaaS 账号（OAuth + identity cache）；连接 ACTIVE 后由 `connector.init` 后台任务从 Composio 拉一批最近数据写到 `raw.db` typed 表 + `personal_signals`，并打开 `evolution_runs(trigger_kind='on_event')` 给 Memory 模块的 evolve agent 消费。之后由 `connector.sync` 每隔 `CONNECTOR_SYNC_INTERVAL_MS`（默认 12h）做增量拉取，靠 `connector_sync_cursors.last_synced_at` 当 since 下界。
 - **Device / mobile**：作为第一方数据源，通过 device token 路由到用户容器，写入 `personal_signals`，snapshot 类 payload 同时 fan-out 到 `raw.db`。
-- **Background scheduler**：`connector.init` 跑在共用的 `background_tasks` 队列上（lease + heartbeat + reaper + 单 worker mutex），同一队列还承载 `auto.dreaming`。`/composio/wait` ACTIVE 触发 + 周期性 reconciler 兜底两条入队路径。
+- **Background scheduler**：`connector.init` / `connector.sync` / `auto.dreaming` 都跑在共用的 `background_tasks` 队列上（lease + heartbeat + reaper + 单 worker mutex）。`connector.init` 入队靠 `/composio/wait` ACTIVE 触发 + 周期性 reconciler 兜底；`connector.sync` 入队靠 `connector-sync-enqueuer` 周期扫 ACTIVE 账号 + window/cursor 双重 gate。
 
 ```mermaid
 flowchart LR
@@ -20,10 +20,17 @@ flowchart LR
   Composio --> Wait["/composio/wait ACTIVE"]
   Wait --> Tasks["background_tasks queue"]
   Recon["reconciler (10min)"] --> Tasks
-  Tasks --> Handler["connector.init handler"]
-  Handler --> Raw["raw.db typed tables"]
-  Handler --> PS["personal_signals"]
-  Handler --> Evo["evolution_runs (on_event)"]
+  SyncEnq["sync-enqueuer (5min)"] --> Tasks
+  Cursors[("connector_sync_cursors")] --> SyncEnq
+  Tasks --> InitH["connector.init handler"]
+  Tasks --> SyncH["connector.sync handler"]
+  InitH --> Raw["raw.db typed tables"]
+  InitH --> PS["personal_signals"]
+  InitH --> Evo["evolution_runs (on_event)"]
+  SyncH --> Raw
+  SyncH --> PS
+  SyncH --> Evo
+  SyncH --> Cursors
   Mobile["Mobile app"] --> MobileProxy["/api/mobile/*"]
   MobileProxy --> MobileRoute["/mobile/items/ingest"]
   MobileRoute --> PS
@@ -38,7 +45,9 @@ flowchart LR
 - connected accounts 状态和 identity 展示。
 - `/composio/wait` ACTIVE 后入队 `connector.init` 后台任务。
 - `connector.init` handler：从 Composio 拉一批数据 → 写 `raw.db` typed 表 → 派生 `personal_signals` → 打开 `evolution_run`。
-- `tasks/reconciler.ts`：周期扫 ACTIVE accounts，给没有 task 的账号补一个。
+- `connector.sync` handler：用 `connector_sync_cursors.last_synced_at` 当 since 下界，向 Composio 增量取，写同样的 `raw.db` / `personal_signals` / `evolution_run`，成功后 upsert cursor。
+- `tasks/reconciler.ts`：周期扫 ACTIVE accounts，给没有 init task 的账号补一个。
+- `tasks/connector-sync-enqueuer.ts`：周期扫 ACTIVE accounts；当 init 已 succeeded 且当前 window 还没 sync 过时入队 `connector.sync`。
 - `user_devices` 注册、token 轮换、撤销和校验。
 - `/api/mobile/*` 到用户容器内 `/proactive-ai/api/mobile/*` 的代理。
 - `/mobile/items/ingest` 写入 `personal_signals` 和 raw snapshot 表。
@@ -54,7 +63,8 @@ flowchart LR
 | 来源 | 当前作用 | 代码入口 | 数据落点 |
 |---|---|---|---|
 | Composio (OAuth + identity) | 连接 SaaS 账号，展示 ACTIVE 连接和身份 | `routes/composio.ts`、`useComposio.ts`、`DataConnections.tsx` | 连接状态来自 Composio；identity cache 在容器 `/app/data/composio-identity-cache.json` |
-| Composio (`connector.init`) | ACTIVE 后台拉数据 | `tasks/handlers/connector-init.ts`、`tasks/reconciler.ts` | 各 toolkit 自己的 raw 表 + `personal_signals` + `evolution_runs(trigger_kind='on_event')` |
+| Composio (`connector.init`) | ACTIVE 后台首次拉一批数据 | `tasks/handlers/connector-init.ts`、`tasks/reconciler.ts` | 各 toolkit 自己的 raw 表 + `personal_signals` + `evolution_runs(trigger_kind='on_event')` |
+| Composio (`connector.sync`) | 周期增量拉取，按 cursor 续游 | `tasks/handlers/connector-sync.ts`、`tasks/connector-sync-enqueuer.ts` | 同上 raw / signals / evolution_runs；额外 upsert `connector_sync_cursors` |
 | Device registry | 给 web/iOS/Android 设备发 token，用于后续 mobile sync | `apis/src/domain/devices/index.ts`、`proactive_routes.ts` | APIs Postgres `user_devices` |
 | Mobile ingest | 接收端侧整理后的高价值 item | `mobile_proxy.ts`、`routes/mobile.ts` | `personal_signals`；snapshot fan-out 到 `raw.db.device_*_snapshot` |
 
@@ -119,6 +129,50 @@ OAuth 完成但用户关掉页面时，`/composio/wait` 不会触发。`tasks/re
 CONNECTOR_INIT_RECONCILER_INTERVAL_MS=60000
 ```
 
+### `connector.sync` 增量拉取
+
+```mermaid
+sequenceDiagram
+  participant Enq as sync-enqueuer (timer)
+  participant C as Composio API
+  participant Q as background_tasks
+  participant Sched as scheduler tick
+  participant H as connector.sync handler
+  participant Cur as connector_sync_cursors
+
+  Enq->>C: /connected_accounts?statuses=ACTIVE
+  C-->>Enq: [{toolkit, accountId}, ...]
+  Enq->>Q: getBackgroundTaskByIdempotencyKey(connector.init:..:v1)
+  Note right of Enq: skip if init not succeeded yet
+  Enq->>Cur: getConnectorSyncCursor(toolkit, accountId)
+  Note right of Enq: skip if last_synced_at >= floor(now/interval)
+  Enq->>Q: enqueue connector.sync:<tk>:<acc>:<windowStart>
+  Sched->>Q: claim due task
+  Sched->>H: invoke handler
+  H->>Cur: read cursor → since (or now-24h bootstrap)
+  H->>C: /tools/execute/<slug> with after/since/updatedMin
+  H->>H: write raw.db / personal_signals / evolution_run
+  H->>Cur: upsert last_synced_at = startedAt
+  H-->>Sched: succeeded
+```
+
+关键点：
+- **Window 模型**：`windowStart = floor(now / CONNECTOR_SYNC_INTERVAL_MS) * interval`，进 idempotency key。同一 window 内多次 enqueue 撞 key 自动去重。默认 interval 12h，本地测试可调小（如 60_000）。
+- **Init gate**：handler 只检查 toolkit 支持，但 enqueuer 额外要求 `connector.init` 已 `succeeded`，避免 init 还在跑时 sync 抢 raw 表。
+- **Cursor**：成功才写 `last_synced_at = startedAt`；失败保留旧 cursor，下次 sync 重拉同一窗口（raw / signal `dedupe_key UNIQUE` 自然吸收重复）。
+- **Bootstrap**：首次 sync（cursor 不存在）回看 24h，足以补上 init 之后到首次 sync 之间漏的内容。
+- **Discord 例外**：guild list 没有增量语义，handler 直接 `skipped` with `reason='no_incremental_sync_v0'`。
+- **Per-toolkit since 参数**：Gmail 用 `query: after:<unix>`；GCal 用 `updatedMin`；Slack 用 `query: after:YYYY-MM-DD`（多回看 1 天容错）；Drive / Docs / Sheets 用 `q: modifiedTime > '<iso>'`；GitHub / Outlook / Stripe 用各自原生 since 参数；Notion 客户端按 `last_edited_time` 过滤。
+
+```bash
+# 默认 12h；本地调试想看实时入队改成 60s：
+CONNECTOR_SYNC_INTERVAL_MS=60000
+# enqueuer 扫描频率（默认 5 分钟）：
+CONNECTOR_SYNC_ENQUEUER_INTERVAL_MS=60000
+# 临时禁掉某个 toolkit 的 sync（init 不受影响）：
+CONNECTOR_SYNC_DISABLED_TOOLKITS=gmail,slack
+```
+
 ### Device / mobile
 
 ```mermaid
@@ -142,6 +196,7 @@ sequenceDiagram
 - Composio API key 优先读 `/app/data/composio-api-key`（用户提供），再读 `COMPOSIO_API_KEY` env。统一通过 `shared/composio-key.ts`，CLI / dreaming / connector.init 同一份逻辑。
 - Composio connected accounts 只查询 `ACTIVE`，identity 缺失时尝试通过 toolkit-specific action 补齐，并缓存 24 小时。
 - `connector.init` 默认每个 toolkit 拉 100 条，`max_attempts=3`，lease 60s（handler 内部按需 heartbeat 续约）。kill switch：`CONNECTOR_INIT_DISABLED_TOOLKITS=gmail,slack` 跳过指定 toolkit。
+- `connector.sync` 同样默认 100 条，`max_attempts=2`（sync 失败下个 window 还有机会，不靠重试硬扛），lease 60s + heartbeat。kill switch：`CONNECTOR_SYNC_DISABLED_TOOLKITS=gmail,slack`。
 - `/composio/wait` 只在 `BACKGROUND_AUTO_LOOP_TASKS_ENABLED=1` 时返回 `initTaskId`；关时保持旧行为，前端 chip 不渲染。
 - `personal_signals.dedupe_key` 包含 `connectedAccountId` + 自然主键 + `:init:v1`，相同 toolkit 多账号不会重复入。
 - 每个 raw 表都带 `dedupe_key UNIQUE` + reference 三元组（`reference_count` / `last_referenced_at` / `referenced_by_runs`）。
@@ -156,8 +211,9 @@ sequenceDiagram
 | Composio 连接按钮、OAuth 流程、init progress chip | `proactive-ai-frontend/src/components/DataConnections.tsx`、`proactive-ai-frontend/src/hooks/useComposio.ts`、`proactive-ai-frontend/src/hooks/useInitTask.ts` |
 | Composio 容器路由 + `/wait` enqueue 钩子 | `pinai-openclaw/plugins/proactive-ai/routes/composio.ts` |
 | 加新 toolkit 到 connector.init | `tasks/handlers/connector-init.ts`（SUPPORTED_TOOLKITS + fetch + extract + map + signal）、`raw-db.ts`（typed table + ingest + list）、`tasks/handlers/connector-evolve.ts`（sampling） |
+| 加新 toolkit 到 connector.sync | `tasks/handlers/connector-sync.ts`（fetchXxxSince）；mapper / extractor / signal builder 直接 import 自 connector-init.ts |
 | 后台 task 队列 / scheduler | `tasks/scheduler.ts`、`db.ts` 里的 `background_tasks` 段 |
-| Reconciler / dreaming-enqueuer 周期 | `tasks/reconciler.ts`、`tasks/dreaming-enqueuer.ts`、`index.ts` 启动接线 |
+| Reconciler / dreaming-enqueuer / sync-enqueuer 周期 | `tasks/reconciler.ts`、`tasks/dreaming-enqueuer.ts`、`tasks/connector-sync-enqueuer.ts`、`index.ts` 启动接线 |
 | `pin tasks` CLI / `/tasks` HTTP | `cli/tasks.ts`、`routes/tasks.ts` |
 | Device 注册和 token | `apis/src/domain/devices/index.ts`、`apis/src/controller/proactive_routes.ts` |
 | Mobile proxy / ingest | `apis/src/domain/proactive/mobile_proxy.ts`、`pinai-openclaw/plugins/proactive-ai/routes/mobile.ts` |
@@ -167,13 +223,13 @@ sequenceDiagram
 
 ### 一键回归
 
-改完 connector.init / scheduler / reconciler / `/tasks` / pin tasks / pin raw 任一处后跑：
+改完 connector.init / connector.sync / scheduler / reconciler / sync-enqueuer / `/tasks` / pin tasks / pin raw 任一处后跑：
 
 ```bash
 bash pinai-openclaw/plugins/proactive-ai/scripts/test-tasks.sh
 ```
 
-10 层覆盖：schema/repo → scheduler → CLI → connector.init handler → connector-evolve → auto.dreaming → dreaming-enqueuer → reconciler → /composio/wait 钩子 → /tasks read API。
+12 层覆盖：schema/repo → scheduler → CLI → connector.init handler → connector-evolve → auto.dreaming → dreaming-enqueuer → connector.sync handler → connector-sync-enqueuer → reconciler → /composio/wait 钩子 → /tasks read API。
 
 mobile / device / 旧 mobile route 形状回归走 memory 模块的：
 
@@ -186,6 +242,12 @@ bash pinai-openclaw/plugins/proactive-ai/scripts/test-memory.sh
 ```bash
 # connector.init 各 toolkit 端到端 (mock Composio)
 npx tsx --test pinai-openclaw/plugins/proactive-ai/tasks/handlers/connector-init.test.ts
+
+# connector.sync cursor + 增量 + 与 init 去重
+npx tsx --test pinai-openclaw/plugins/proactive-ai/tasks/handlers/connector-sync.test.ts
+
+# sync-enqueuer init/window gate
+npx tsx --test pinai-openclaw/plugins/proactive-ai/tasks/connector-sync-enqueuer.test.ts
 
 # reconciler ACTIVE 扫描 + 幂等
 npx tsx --test pinai-openclaw/plugins/proactive-ai/tasks/reconciler.test.ts
@@ -211,7 +273,8 @@ export COMPOSIO_USER_ID=285d35b0-e031-4cfd-97b3-0e21064d0d0e
 ### 手工验证
 
 ```bash
-pin tasks list --type connector.init                    # 看入队历史
+pin tasks list --type connector.init                    # 看 init 入队历史
+pin tasks list --type connector.sync                    # 看 sync 入队历史
 pin tasks show --id <task_id>                           # 单个任务全状态 + lease
 pin tasks attempts --id <task_id>                       # 多次 attempt audit
 pin raw gmail recent --hours 720 --limit 10             # gmail
@@ -221,7 +284,7 @@ pin raw gdrive list --mimeType application/vnd.google-apps.document
 pin raw github list --state open --isPullRequest false
 pin raw outlook list --importance high
 pin signals recent --kind connector.gmail.message
-pin evolution recent --kind on_event                    # connector.init 产物
+pin evolution recent --kind on_event                    # connector.init / connector.sync 产物
 pin memory list --source 'connector_init:gmail'         # evolve 写入的事实
 ```
 

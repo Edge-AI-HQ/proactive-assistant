@@ -26,9 +26,9 @@ import {
   type ConnectorEvolveResult,
 } from './connector-evolve.js';
 
-const COMPOSIO_API_BASE = 'https://backend.composio.dev/api/v3';
+export const COMPOSIO_API_BASE = 'https://backend.composio.dev/api/v3';
 
-const SUPPORTED_TOOLKITS = [
+export const SUPPORTED_TOOLKITS = [
   'gmail',
   'googlecalendar',
   // Phase D round 1
@@ -44,7 +44,7 @@ const SUPPORTED_TOOLKITS = [
   'stripe',
   'discord',
 ] as const;
-type SupportedToolkit = typeof SUPPORTED_TOOLKITS[number];
+export type SupportedToolkit = typeof SUPPORTED_TOOLKITS[number];
 
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
@@ -747,7 +747,7 @@ async function fetchGdriveRecent(opts: FetchToolkitItemsOpts): Promise<raw.Gdriv
 // nesting paths, then fall back to "any array of objects on the top level".
 // ──────────────────────────────────────────────────────────────────────
 
-function extractGmailMessages(response: unknown): any[] {
+export function extractGmailMessages(response: unknown): any[] {
   const candidates = unwrapDataPaths(response);
   for (const c of candidates) {
     if (Array.isArray(c?.messages)) return c.messages;
@@ -756,7 +756,7 @@ function extractGmailMessages(response: unknown): any[] {
   return [];
 }
 
-function extractGcalEvents(response: unknown): any[] {
+export function extractGcalEvents(response: unknown): any[] {
   const candidates = unwrapDataPaths(response);
   for (const c of candidates) {
     if (Array.isArray(c?.events)) return c.events;
@@ -765,7 +765,7 @@ function extractGcalEvents(response: unknown): any[] {
   return [];
 }
 
-function extractSlackMessages(response: unknown): any[] {
+export function extractSlackMessages(response: unknown): any[] {
   const candidates = unwrapDataPaths(response);
   for (const c of candidates) {
     // Slack's search response wraps under messages.matches[]
@@ -777,7 +777,7 @@ function extractSlackMessages(response: unknown): any[] {
   return [];
 }
 
-function extractNotionPages(response: unknown): any[] {
+export function extractNotionPages(response: unknown): any[] {
   const candidates = unwrapDataPaths(response);
   for (const c of candidates) {
     // Composio NOTION_FETCH_DATA returns { data: { values: [...] } } — the
@@ -790,7 +790,7 @@ function extractNotionPages(response: unknown): any[] {
   return [];
 }
 
-function extractGdriveFiles(response: unknown): any[] {
+export function extractGdriveFiles(response: unknown): any[] {
   const candidates = unwrapDataPaths(response);
   for (const c of candidates) {
     // Drive API: { files: [...] }
@@ -800,7 +800,7 @@ function extractGdriveFiles(response: unknown): any[] {
   return [];
 }
 
-function extractGithubIssues(response: unknown): any[] {
+export function extractGithubIssues(response: unknown): any[] {
   const candidates = unwrapDataPaths(response);
   for (const c of candidates) {
     // Composio wraps under data.issues (verified 2026-04-24 live).
@@ -812,7 +812,7 @@ function extractGithubIssues(response: unknown): any[] {
   return [];
 }
 
-function extractOutlookMessages(response: unknown): any[] {
+export function extractOutlookMessages(response: unknown): any[] {
   const candidates = unwrapDataPaths(response);
   for (const c of candidates) {
     // Microsoft Graph: { value: [...] }
@@ -823,7 +823,7 @@ function extractOutlookMessages(response: unknown): any[] {
   return [];
 }
 
-function extractGdocsDocuments(response: unknown): any[] {
+export function extractGdocsDocuments(response: unknown): any[] {
   const candidates = unwrapDataPaths(response);
   for (const c of candidates) {
     // Verified live 2026-04-24: data.documents
@@ -834,7 +834,7 @@ function extractGdocsDocuments(response: unknown): any[] {
   return [];
 }
 
-function extractGsheetsSpreadsheets(response: unknown): any[] {
+export function extractGsheetsSpreadsheets(response: unknown): any[] {
   const candidates = unwrapDataPaths(response);
   for (const c of candidates) {
     // Schema-derived; mirroring GoogleDocs' shape since both wrap Drive.
@@ -846,7 +846,7 @@ function extractGsheetsSpreadsheets(response: unknown): any[] {
   return [];
 }
 
-function extractStripeInvoices(response: unknown): any[] {
+export function extractStripeInvoices(response: unknown): any[] {
   const candidates = unwrapDataPaths(response);
   for (const c of candidates) {
     // Stripe's standard list shape: { object: 'list', data: [...] }
@@ -857,7 +857,7 @@ function extractStripeInvoices(response: unknown): any[] {
   return [];
 }
 
-function extractDiscordGuilds(response: unknown): any[] {
+export function extractDiscordGuilds(response: unknown): any[] {
   const candidates = unwrapDataPaths(response);
   for (const c of candidates) {
     // Discord raw API returns a top-level array; Composio likely wraps under data.guilds.
@@ -880,7 +880,7 @@ function unwrapDataPaths(response: unknown): any[] {
   return out;
 }
 
-function mapGmailMessage(msg: any): raw.GmailMessageInput | null {
+export function mapGmailMessage(msg: any): raw.GmailMessageInput | null {
   if (!msg || typeof msg !== 'object') return null;
   const messageId = String(msg.id ?? msg.messageId ?? '').trim();
   if (!messageId) return null;
@@ -997,7 +997,7 @@ function msOrSecondsToIso(n: number): string | undefined {
   return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
 }
 
-function mapGcalEvent(evt: any): raw.GcalEventInput | null {
+export function mapGcalEvent(evt: any): raw.GcalEventInput | null {
   if (!evt || typeof evt !== 'object') return null;
   const eventId = String(evt.id ?? evt.eventId ?? '').trim();
   // Composio's event objects don't always carry the calendarId; default to
@@ -1026,7 +1026,7 @@ function extractGcalTimestamp(node: any): string | null {
   return node.dateTime ?? node.date ?? null;
 }
 
-function mapSlackMessage(msg: any): raw.SlackMessageInput | null {
+export function mapSlackMessage(msg: any): raw.SlackMessageInput | null {
   if (!msg || typeof msg !== 'object') return null;
   const ts = String(msg.ts ?? msg.timestamp ?? '').trim();
   // Slack search nests channel under .channel.{id,name}; raw API has channel as a string
@@ -1056,7 +1056,7 @@ function mapSlackMessage(msg: any): raw.SlackMessageInput | null {
   };
 }
 
-function mapNotionPage(page: any): raw.NotionPageInput | null {
+export function mapNotionPage(page: any): raw.NotionPageInput | null {
   if (!page || typeof page !== 'object') return null;
   const pageId = String(page.id ?? page.page_id ?? '').trim();
   if (!pageId) return null;
@@ -1106,7 +1106,7 @@ function extractNotionTitle(page: any): string | null {
   return null;
 }
 
-function mapGithubIssue(issue: any): raw.GithubIssueInput | null {
+export function mapGithubIssue(issue: any): raw.GithubIssueInput | null {
   if (!issue || typeof issue !== 'object') return null;
   // GitHub's stable id is `id` (number); we cast to string for storage.
   const issueId = String(issue.id ?? issue.issue_id ?? '').trim();
@@ -1146,7 +1146,7 @@ function mapGithubIssue(issue: any): raw.GithubIssueInput | null {
   };
 }
 
-function mapOutlookMessage(msg: any): raw.OutlookMessageInput | null {
+export function mapOutlookMessage(msg: any): raw.OutlookMessageInput | null {
   if (!msg || typeof msg !== 'object') return null;
   // Graph's id is an opaque string. Some Composio variants alias it.
   const messageId = String(msg.id ?? msg.message_id ?? '').trim();
@@ -1190,7 +1190,7 @@ function flattenDriveLastModifyingUser(file: any): string | null {
   return lmu.emailAddress ?? lmu.displayName ?? null;
 }
 
-function mapGdocsDocument(doc: any): raw.GdocsDocumentInput | null {
+export function mapGdocsDocument(doc: any): raw.GdocsDocumentInput | null {
   if (!doc || typeof doc !== 'object') return null;
   const documentId = String(doc.id ?? doc.document_id ?? '').trim();
   if (!documentId) return null;
@@ -1208,7 +1208,7 @@ function mapGdocsDocument(doc: any): raw.GdocsDocumentInput | null {
   };
 }
 
-function mapGsheetsSpreadsheet(sheet: any): raw.GsheetsSpreadsheetInput | null {
+export function mapGsheetsSpreadsheet(sheet: any): raw.GsheetsSpreadsheetInput | null {
   if (!sheet || typeof sheet !== 'object') return null;
   const spreadsheetId = String(sheet.id ?? sheet.spreadsheet_id ?? '').trim();
   if (!spreadsheetId) return null;
@@ -1226,7 +1226,7 @@ function mapGsheetsSpreadsheet(sheet: any): raw.GsheetsSpreadsheetInput | null {
   };
 }
 
-function mapStripeInvoice(inv: any): raw.StripeInvoiceInput | null {
+export function mapStripeInvoice(inv: any): raw.StripeInvoiceInput | null {
   if (!inv || typeof inv !== 'object') return null;
   const invoiceId = String(inv.id ?? inv.invoice_id ?? '').trim();
   if (!invoiceId) return null;
@@ -1277,7 +1277,7 @@ function stripeEpochToIso(value: unknown): string | null {
   return new Date(n * 1000).toISOString();
 }
 
-function mapDiscordGuild(guild: any): raw.DiscordGuildInput | null {
+export function mapDiscordGuild(guild: any): raw.DiscordGuildInput | null {
   if (!guild || typeof guild !== 'object') return null;
   const guildId = String(guild.id ?? guild.guild_id ?? '').trim();
   if (!guildId) return null;
@@ -1297,7 +1297,7 @@ function mapDiscordGuild(guild: any): raw.DiscordGuildInput | null {
   };
 }
 
-function mapGdriveFile(file: any): raw.GdriveFileInput | null {
+export function mapGdriveFile(file: any): raw.GdriveFileInput | null {
   if (!file || typeof file !== 'object') return null;
   const fileId = String(file.id ?? file.file_id ?? '').trim();
   if (!fileId) return null;
@@ -1327,7 +1327,7 @@ function mapGdriveFile(file: any): raw.GdriveFileInput | null {
 // Signal derivation — one signal per ingested raw row, with refs.
 // ──────────────────────────────────────────────────────────────────────
 
-function buildSignalsForInit(
+export function buildSignalsForInit(
   toolkit: string,
   connectedAccountId: string,
   buckets: {
@@ -1589,11 +1589,11 @@ function buildSignalsForInit(
 // Misc
 // ──────────────────────────────────────────────────────────────────────
 
-function isSupportedToolkit(t: string): t is SupportedToolkit {
+export function isSupportedToolkit(t: string): t is SupportedToolkit {
   return (SUPPORTED_TOOLKITS as readonly string[]).includes(t);
 }
 
-function clampLimit(limit: number | undefined): number {
+export function clampLimit(limit: number | undefined): number {
   if (typeof limit !== 'number' || !Number.isFinite(limit)) return DEFAULT_LIMIT;
   return Math.max(1, Math.min(MAX_LIMIT, Math.floor(limit)));
 }
@@ -1604,17 +1604,17 @@ function parseDisabledToolkits(): Set<string> {
   return new Set(raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean));
 }
 
-function trimSummary(value: string | null | undefined, maxLen: number): string {
+export function trimSummary(value: string | null | undefined, maxLen: number): string {
   if (!value) return '';
   const trimmed = value.trim();
   return trimmed.length > maxLen ? trimmed.slice(0, maxLen - 3) + '...' : trimmed;
 }
 
-function failHard(code: string, message: string): TaskHandlerResult {
+export function failHard(code: string, message: string): TaskHandlerResult {
   return { status: 'failed', errorCode: code, errorMessage: message };
 }
 
-function abortLeaseLost(stage: string): TaskHandlerResult {
+export function abortLeaseLost(stage: string): TaskHandlerResult {
   // When heartbeat returns false, the scheduler/reaper will reattempt.
   // Returning failed here ties up the attempt count, but the lease-lost
   // path in the scheduler also bypasses persistence. Treat as failed so
@@ -1626,7 +1626,7 @@ function abortLeaseLost(stage: string): TaskHandlerResult {
   };
 }
 
-function makeDefaultFetcher(apiKey: string): ComposioFetcher {
+export function makeDefaultFetcher(apiKey: string): ComposioFetcher {
   return async (path, init) => {
     const response = await fetch(`${COMPOSIO_API_BASE}${path}`, {
       ...(init as any),
@@ -1646,7 +1646,7 @@ function makeDefaultFetcher(apiKey: string): ComposioFetcher {
   };
 }
 
-function safeJsonParse(text: string): unknown {
+export function safeJsonParse(text: string): unknown {
   try { return JSON.parse(text); } catch { /* try sanitized */ }
   // Composio returns email/document content with raw unescaped control
   // chars inside string literals (verified live: Gmail responses at
@@ -1661,7 +1661,7 @@ function safeJsonParse(text: string): unknown {
   try { return JSON.parse(sanitized); } catch { return null; }
 }
 
-function formatComposioError(data: unknown): string | null {
+export function formatComposioError(data: unknown): string | null {
   if (!data || typeof data !== 'object') return null;
   const d = data as Record<string, unknown>;
   if (typeof d.message === 'string') return d.message;
