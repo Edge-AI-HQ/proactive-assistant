@@ -79,8 +79,28 @@ CI 需要在 GitHub Secrets 设置以下 secrets：
 - `proactive-ai-frontend/src/`：React SPA 前端（Vite + Tailwind + Capacitor，支持 Web/iOS/Android）
 - `ops/litellm/`：LiteLLM 配置与部署脚本
 
-## 关键设计文档
-- [`docs/memory-architecture.md`](docs/memory-architecture.md) — Memory / Profile / Skill 架构定稿（v3）。**改动 memory / profile / skill / personal_signals / world_signals / evolution_runs / raw.db / skills folder 相关代码前必读**。包含三层数据模型、13 张表 schema、端侧上传契约、CLI 接口、老→新表迁移映射、阶段实施。
+## 文档读取规则（AI 必读）
+`docs/` 是团队开发和 AI agent 查询的统一上下文。读取顺序必须渐进式展开：
+
+1. 先读 [`docs/index.mdx`](docs/index.mdx)，确认该任务属于哪个模块。
+2. 再读相关的 `docs/modules/*.mdx`。模块文档是当前事实，改代码前以它为准。
+3. 只有当模块文档底部出现 `相关 AI Plans`，或任务明确涉及对应设计取舍时，才继续读 `docs/plans/*.mdx`。
+4. 不要把 `docs/plans/` 当历史归档。plan 只是可引用的 AI 设计计划，不替代模块文档。
+5. 如果代码行为和文档冲突，以代码核实当前事实，并同步更新对应模块文档。
+
+## 文档维护规则
+- `docs/modules/*.mdx`：每个模块一篇当前事实文档，必须包含边界、核心链路、开发入口、验证方式、踩坑。
+- `docs/plans/*.mdx`：只保留仍然能解释当前设计的 AI plans。除 `docs/plans/README.mdx` 外，每个 plan 必须被至少一个模块文档的 `相关 AI Plans` 引用。
+- 新增 plan 的默认路径是 `docs/plans/YYYY-MM-DD-<topic>.mdx`；长期架构计划可以使用稳定 slug。
+- plan 被模块文档完全吸收、过期或不再被引用时，删除它，不新建 archive。
+- Mintlify 主导航只放 `docs/index.mdx` 和 `docs/modules/*.mdx`；plans 通过模块页渐进式访问。
+
+## 当前模块文档
+- [`docs/modules/data-connectors.mdx`](docs/modules/data-connectors.mdx) — Composio、device registry、mobile proxy、mobile ingest、连接状态矩阵。
+- [`docs/modules/memory.mdx`](docs/modules/memory.mdx) — raw.db、personal_signals、world_signals、memory、profile、skill、evolution。**改动 memory / profile / skill / personal_signals / world_signals / evolution_runs / raw.db / skills folder 相关代码前必读**；需要 schema 和迁移细节时再读 [`docs/plans/memory-architecture.mdx`](docs/plans/memory-architecture.mdx)。
+- [`docs/modules/generation.mdx`](docs/modules/generation.mdx) — `/generate`、pipeline、unified generator、evaluation、card selection、auto-generate。
+- [`docs/modules/feedback.mdx`](docs/modules/feedback.mdx) — feedback events、card action、card chat feedback、intent state、学习回流。
+- [`docs/modules/runtime-deployment.mdx`](docs/modules/runtime-deployment.mdx) — 本地启动、APIs proxy、container、gateway、LiteLLM、dotenvx、CI/CD、prod 规则、billing 概览。
 
 ## 本地开发
 首次设置：

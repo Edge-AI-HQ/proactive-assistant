@@ -1,6 +1,6 @@
 /**
  * Tests for v3 memory table — sedimented user-fact layer.
- * See docs/memory-architecture.md §三 (memory).
+ * See docs/plans/memory-architecture.mdx §三 (memory).
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';

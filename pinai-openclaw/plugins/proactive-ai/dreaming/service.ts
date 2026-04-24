@@ -610,7 +610,7 @@ async function executeDreamingForRun(
 
   // Open a v3 evolution_run for trajectory visibility (`pin evolution recent
   // --kind daily_dream`). Failures are logged but never block dreaming.
-  // See docs/memory-architecture.md §三.
+  // See docs/plans/memory-architecture.mdx §三.
   let evolutionRunId: string | null = null;
   try {
     const evolution = await db.createEvolutionRun({

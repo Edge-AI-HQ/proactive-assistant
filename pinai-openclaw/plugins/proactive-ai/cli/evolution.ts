@@ -1,6 +1,6 @@
 /**
  * `pin evolution ...` — v3 evolution_runs CLI.
- * See docs/memory-architecture.md §六.
+ * See docs/plans/memory-architecture.mdx §六.
  */
 import { parseArgs, success, failure, readLimitFlag, readNumericFlag } from './shared.js';
 import * as db from '../db.js';

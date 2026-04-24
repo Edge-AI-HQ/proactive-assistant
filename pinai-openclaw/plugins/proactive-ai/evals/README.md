@@ -90,4 +90,4 @@ This harness is **scaffolding only** — runner + scorers are stubs that
 return shaped-but-not-meaningful data. Real implementation will land in
 its own PR after the v3 storage layer has run in dev for a week.
 
-See [`docs/memory-architecture.md`](../../../../docs/memory-architecture.md) §八 (阶段实施).
+See [`docs/plans/memory-architecture.mdx`](../../../../docs/plans/memory-architecture.mdx) §八 (阶段实施).

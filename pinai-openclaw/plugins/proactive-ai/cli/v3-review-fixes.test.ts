@@ -7,7 +7,7 @@
  * - P2: memory search must find matches beyond the previous 500-row prefetch
  * - P3: device-contacts `search` requires --query (else it silently lists all)
  *
- * See docs/memory-architecture.md §五 / §六.
+ * See docs/plans/memory-architecture.mdx §五 / §六.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';

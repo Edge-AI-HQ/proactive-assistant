@@ -3,7 +3,7 @@
  * → input rows for `db.saveCardEvaluations`.
  *
  * Extracted from orchestrator.ts so the conversion is unit-testable
- * without a live LLM. See docs/memory-architecture.md §三 (card_evaluations).
+ * without a live LLM. See docs/plans/memory-architecture.mdx §三 (card_evaluations).
  */
 
 import type { SaveCardEvaluationInput } from '../db.js';

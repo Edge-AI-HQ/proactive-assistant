@@ -16,7 +16,7 @@
  * No live LLM, no HTTP server — this exercises the integrated DB layer
  * to confirm the plumbing is end-to-end correct.
  *
- * See docs/memory-architecture.md §四 (data-flow scenarios).
+ * See docs/plans/memory-architecture.mdx §四 (data-flow scenarios).
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';

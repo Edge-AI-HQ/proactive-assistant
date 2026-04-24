@@ -1,0 +1,26 @@
+---
+title: "AI Plans"
+description: "AI coding 过程中保留的设计和实施计划。"
+---
+
+# AI Plans
+
+## 结论
+
+`docs/plans/` 只放仍然值得 AI 和团队读取的设计计划。它不是历史归档，也不是临时草稿堆。
+
+主事实仍在 `docs/modules/*.mdx`。AI plan 只解释某个设计为什么这样做、实施时拆过哪些阶段、还有哪些约束需要保留。
+
+## 使用规则
+
+- 除本目录说明页 `README.mdx` 外，一个 plan 必须被至少一个模块文档的 `相关 AI Plans` 引用。
+- 如果 plan 的结论已经完全吸收到模块文档，且不再提供额外上下文，就删除 plan。
+- 新 plan 只在跨模块设计、schema 设计、迁移方案、长期约束值得复用时新增。
+- 临时 debug 记录、一次性执行日志、过期探索不要放进这里。
+- AI 读取顺序是：先读 `docs/index.mdx`，再读相关 `docs/modules/*.mdx`，最后按模块底部的 `相关 AI Plans` 继续展开。
+
+## 当前 Plans
+
+| Plan | 什么时候看 |
+|---|---|
+| [Memory Architecture](./memory-architecture) | 改 memory / profile / skill / signals / evolution / raw.db 相关代码，需要理解 v3 设计取舍和 schema 细节时。 |

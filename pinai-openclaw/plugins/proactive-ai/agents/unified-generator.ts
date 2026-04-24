@@ -68,7 +68,7 @@ ${PIN_CLI_COMMAND_GUIDE}
 
 <phase_1_context_gathering>
 Use the \`pin\` CLI to collect the user's current context. The v3 memory
-architecture (docs/memory-architecture.md) gives you fast, local-only
+architecture (docs/plans/memory-architecture.mdx) gives you fast, local-only
 queries — every command below reads SQLite or markdown files in the
 container, NO network. Gather ALL of these in roughly this order; if a
 command returns empty, that signal is itself useful — note it and continue.

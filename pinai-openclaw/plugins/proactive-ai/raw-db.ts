@@ -11,7 +11,7 @@
  * Connector specifics (e.g. gmail.from_addr, gcal.start_at) are first-class
  * columns. New connectors → new migration table.
  *
- * See docs/memory-architecture.md §三 (raw.db) and §五 (reference cap).
+ * See docs/plans/memory-architecture.mdx §三 (raw.db) and §五 (reference cap).
  */
 
 import crypto from 'node:crypto';

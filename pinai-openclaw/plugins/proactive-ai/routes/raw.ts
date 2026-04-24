@@ -5,7 +5,7 @@
  *   GET /raw/gcal             ?since / ?until / ?calendarId / ?limit
  *   GET /raw/device-apps      ?deviceId / ?latestSnapshotOnly=1 / ?limit
  *
- * See docs/memory-architecture.md §三 (raw.db).
+ * See docs/plans/memory-architecture.mdx §三 (raw.db).
  */
 import type { RouteHandler } from './types.js';
 import { json } from './types.js';

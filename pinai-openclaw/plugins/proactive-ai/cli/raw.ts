@@ -1,6 +1,6 @@
 /**
  * `pin raw ...` — read-only access to raw.db (gmail / gcal / device snapshots).
- * See docs/memory-architecture.md §六.
+ * See docs/plans/memory-architecture.mdx §六.
  */
 import { parseArgs, success, failure, readNumericFlag, readLimitFlag } from './shared.js';
 import * as raw from '../raw-db.js';

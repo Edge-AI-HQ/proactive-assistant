@@ -5,7 +5,7 @@
  * Plus a small DB integration confirming that the rows produced here are
  * accepted by db.saveCardEvaluations.
  *
- * See docs/memory-architecture.md §三 (card_evaluations).
+ * See docs/plans/memory-architecture.mdx §三 (card_evaluations).
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';

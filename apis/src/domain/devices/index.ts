@@ -1,6 +1,6 @@
 /**
  * user_devices — multi-device registry.
- * See docs/memory-architecture.md §三 (APIs user_devices) and migration 002.
+ * See docs/plans/memory-architecture.mdx §三 (APIs user_devices) and migration 002.
  *
  * Token lifecycle:
  *   1. Client calls POST /api/proactive/devices/register with deviceId + platform.

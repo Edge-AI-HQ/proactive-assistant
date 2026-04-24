@@ -56,7 +56,7 @@ export async function refreshMobileProxyContainer(
 
 /**
  * Look up the user's container by validated device token.
- * See docs/memory-architecture.md §三 (APIs user_devices).
+ * See docs/plans/memory-architecture.mdx §三 (APIs user_devices).
  *
  * Returns null when:
  *   - the request did not provide both X-Device-Id and X-Device-Token
@@ -77,7 +77,7 @@ export function createMobileProxy(orchestrator: ProactiveContainerOrchestrator) 
     // Phase 11: prefer device-token-based routing when the headers are
     // present. Falls back to the legacy "default container" lookup so
     // existing clients without device registration keep working.
-    // See docs/memory-architecture.md §三.
+    // See docs/plans/memory-architecture.mdx §三.
     const tokenContainer = await findContainerByDeviceToken(req);
     let container: MobileSyncTarget | null = tokenContainer
       ? { ...tokenContainer, user_key: null }

@@ -1,6 +1,6 @@
 /**
  * `pin signals ...` — v3 personal_signals CLI.
- * See docs/memory-architecture.md §六.
+ * See docs/plans/memory-architecture.mdx §六.
  */
 import { parseArgs, success, failure, readNumericFlag, readLimitFlag } from './shared.js';
 import * as db from '../db.js';

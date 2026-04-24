@@ -6,7 +6,7 @@
  *   /evolution   (handleEvolution)
  *
  * Uses a mock req/res pair (same pattern as routes/mobile.test.ts).
- * See docs/memory-architecture.md §六.
+ * See docs/plans/memory-architecture.mdx §六.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';

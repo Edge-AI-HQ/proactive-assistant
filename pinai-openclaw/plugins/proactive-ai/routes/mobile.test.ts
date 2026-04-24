@@ -3,7 +3,7 @@
  * personal_signals, and snapshot-type items additionally fan out to
  * raw.db. Legacy list / claim / commit endpoints are 410 Gone.
  *
- * See docs/memory-architecture.md §四.
+ * See docs/plans/memory-architecture.mdx §四.
  */
 import test from "node:test";
 import assert from "node:assert/strict";

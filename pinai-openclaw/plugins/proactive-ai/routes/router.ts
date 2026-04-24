@@ -19,7 +19,7 @@ import { handleBrowser } from './browser.js';
 import { handleMobile } from './mobile.js';
 import { handleSkills } from './skills.js';
 import { handleCrystallize } from './crystallize.js';
-// v3 memory architecture routes (see docs/memory-architecture.md §六)
+// v3 memory architecture routes (see docs/plans/memory-architecture.mdx §六)
 import { handleMemory } from './memory.js';
 import { handleSignals } from './signals.js';
 import { handleRaw } from './raw.js';

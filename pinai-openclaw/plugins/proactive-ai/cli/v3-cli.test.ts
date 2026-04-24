@@ -2,7 +2,7 @@
  * Tests for the v3 CLI domains: memory, signals, raw, evolution, skills.
  * Each handler returns a JSON envelope (see cli/shared.ts).
  *
- * See docs/memory-architecture.md §六.
+ * See docs/plans/memory-architecture.mdx §六.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';

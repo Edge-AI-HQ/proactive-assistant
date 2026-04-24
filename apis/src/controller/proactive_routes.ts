@@ -111,7 +111,7 @@ router.post('/api/proactive/user/heartbeat', requireProactiveAuth, async (req, r
 });
 
 // ── Device registry ──
-// See docs/memory-architecture.md §三 (APIs user_devices) and apis/db/migrations/002.
+// See docs/plans/memory-architecture.mdx §三 (APIs user_devices) and apis/db/migrations/002.
 //
 // POST /api/proactive/devices/register   { deviceId, platform, displayName?, appVersion?, metadata? }
 // GET  /api/proactive/devices            list active devices for the current user

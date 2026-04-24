@@ -32,7 +32,7 @@ const DEFAULT_LIMIT = 100;
 /**
  * Read + mutate v3 memory rows for the debug panel.
  *
- * Semantics follow `docs/memory-architecture.md`:
+ * Semantics follow `docs/plans/memory-architecture.mdx`:
  *   - archive: soft-delete, sets status='archived' (reversible).
  *   - supersede: create a new memory and link the old one via superseded_by.
  *   - update: in-place edit of text / quality / subject / tags (convenience

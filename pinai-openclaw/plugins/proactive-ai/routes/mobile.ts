@@ -5,7 +5,7 @@
  * store and its claim/commit run-token flow have been removed — pre-product
  * cutover, no consumers.
  *
- * See docs/memory-architecture.md §一 / §四 for the two-tier design.
+ * See docs/plans/memory-architecture.mdx §一 / §四 for the two-tier design.
  */
 import * as v3Db from "../db.js";
 import * as rawDb from "../raw-db.js";

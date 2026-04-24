@@ -74,7 +74,18 @@ proactive-ai-frontend/build/
 .claude/
 .worktrees/
 product_specs/
-docs/
+
+# Project docs: keep the curated Mintlify docs tracked, but ignore ad-hoc
+# local files that people may drop under docs/.
+docs/*
+!docs/README.md
+!docs/docs.json
+!docs/index.mdx
+!docs/memory-architecture.md
+!docs/modules/
+!docs/modules/**
+!docs/plans/
+!docs/plans/**
 
 # Payment module specific
 apps/master-bot-api/.env

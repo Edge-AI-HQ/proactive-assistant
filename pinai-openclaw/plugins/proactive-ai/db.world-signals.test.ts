@@ -1,7 +1,7 @@
 /**
  * Tests for world_signals (formerly world_items) — verifies the rename
  * preserves behaviour and the new reference triple works.
- * See docs/memory-architecture.md §三 (world_signals).
+ * See docs/plans/memory-architecture.mdx §三 (world_signals).
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';

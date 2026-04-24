@@ -85,10 +85,10 @@ function ensureSchema(db: Database.Database): void {
     -- and the legacy table is dropped. addMemory/listMemories/searchMemory/
     -- removeMemory now adapt to the v3 memory table while preserving the
     -- old MemoryRow shape so existing callers don't break.
-    -- See docs/memory-architecture.md §七 (migration map).
+    -- See docs/plans/memory-architecture.mdx §七 (migration map).
 
     -- ─────── v3 memory: sedimented user-fact layer ───────
-    -- See docs/memory-architecture.md §三 (memory).
+    -- See docs/plans/memory-architecture.mdx §三 (memory).
     -- Single quality-graded table, replaces (in v3) profile_memories +
     -- profile_interests + goals + a portion of profile JSON fields.
     -- profile_memories above is kept for backward-compat during migration;
@@ -120,7 +120,7 @@ function ensureSchema(db: Database.Database): void {
       ON memory(source_run_id);
 
     -- ─────── v3 skill_index: skill metadata; body lives in folder ───────
-    -- See docs/memory-architecture.md §三 (skill_index).
+    -- See docs/plans/memory-architecture.mdx §三 (skill_index).
     -- Body markdown is at  OPENCLAW_HOME/data/skills/<id>/SKILL.md
     -- user_skills (above) is the v2 sink — kept for backward-compat.
     CREATE TABLE IF NOT EXISTS skill_index (
@@ -147,7 +147,7 @@ function ensureSchema(db: Database.Database): void {
       ON skill_index(status, updated_at DESC);
 
     -- ─────── v3 personal_signals:待消化的瞬时观察 ───────
-    -- See docs/memory-architecture.md §三 (personal_signals).
+    -- See docs/plans/memory-architecture.mdx §三 (personal_signals).
     -- Schema is compatible with the device-side MobileSyncItem contract
     -- (kind/title/summary/payload/salience/confidence/dedupeKey/occurredAt/...).
     -- Legacy mobile_items.db is no longer a read path; device uploads write
@@ -233,7 +233,7 @@ function ensureSchema(db: Database.Database): void {
 
     -- v3 world_signals (formerly world_items). External news / context
     -- stream — the public-data analogue of personal_signals.
-    -- See docs/memory-architecture.md §三 (world_signals).
+    -- See docs/plans/memory-architecture.mdx §三 (world_signals).
     CREATE TABLE IF NOT EXISTS world_signals (
       id TEXT PRIMARY KEY,
       provider TEXT NOT NULL,
@@ -305,7 +305,7 @@ function ensureSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_dream_started ON dream_runs(started_at DESC);
 
     -- ─────── v3 evolution_runs: unified ledger for dream / crystallize / manual ───────
-    -- See docs/memory-architecture.md §三 (evolution_runs).
+    -- See docs/plans/memory-architecture.mdx §三 (evolution_runs).
     -- Replaces (in v3) the per-domain run tables (dream_runs above stays for
     -- back-compat). chat_burst = formerly conversation-crystallize trigger;
     -- daily_dream = formerly dreaming/service.ts trigger; manual = CLI;
@@ -418,7 +418,7 @@ function ensureSchema(db: Database.Database): void {
   ensureColumn(db, 'pipeline_runs', 'artifact_path', 'TEXT');
 
   // Phase 1: drop deprecated tables (zero-row, no callers; replaced by app_state KV)
-  // See docs/memory-architecture.md for migration map.
+  // See docs/plans/memory-architecture.mdx for migration map.
   db.exec(`
     DROP TABLE IF EXISTS pending_items;
     DROP TABLE IF EXISTS context_runs;
@@ -426,13 +426,13 @@ function ensureSchema(db: Database.Database): void {
   `);
 
   // Phase 6: rename world_items → world_signals (preserves rows + adds the
-  // reference triple). See docs/memory-architecture.md §三 (world_signals).
+  // reference triple). See docs/plans/memory-architecture.mdx §三 (world_signals).
   migrateWorldItemsToSignals(db);
 
   // Phase 13: one-shot backfill of legacy tables into v3 sinks, then DROP
   // the legacy tables. Idempotent — safe to run on every container start.
   // We're pre-product, no users to protect; the goal is "data preserved,
-  // schema clean".  See docs/memory-architecture.md §七 (migration map).
+  // schema clean".  See docs/plans/memory-architecture.mdx §七 (migration map).
   migrateLegacyToV3(db);
 
   // Phase 15: collapse the two single-row "state" tables into the
@@ -447,7 +447,7 @@ function ensureSchema(db: Database.Database): void {
  * DROP the legacy tables. Idempotent (no-op once tables are gone).
  *
  * Pre-product cutover: we move the data we still want, drop the rest.
- * No multi-week dual-write window. See docs/memory-architecture.md §七.
+ * No multi-week dual-write window. See docs/plans/memory-architecture.mdx §七.
  */
 function migrateLegacyToV3(db: Database.Database): void {
   // ── profile_memories → memory ──
@@ -935,7 +935,7 @@ export async function closeGoal(key: string): Promise<GoalRow> {
 // MemoryRow is the v2 envelope still consumed by cli/profile.ts and
 // routes/profile.ts. After Phase 13 it's adapted from the v3 memory
 // table — the legacy profile_memories table no longer exists.
-// See docs/memory-architecture.md §七.
+// See docs/plans/memory-architecture.mdx §七.
 export interface MemoryRow {
   id: string;
   user_id: string;
@@ -1511,7 +1511,7 @@ export async function getThreadContext(intentKey: string): Promise<ThreadContext
 }
 
 // ── World Signals (formerly world_items) ──
-// See docs/memory-architecture.md §三 (world_signals).
+// See docs/plans/memory-architecture.mdx §三 (world_signals).
 
 export interface WorldSignalRow {
   id: string;
@@ -1718,7 +1718,7 @@ function rowToPipelineRun(row: any): PipelineRunRow {
 
 /**
  * Resolve the directory where pipeline iteration artifacts (large JSON blobs)
- * are persisted. See docs/memory-architecture.md §五 (大 JSON 不进 SQLite).
+ * are persisted. See docs/plans/memory-architecture.mdx §五 (大 JSON 不进 SQLite).
  */
 export function getRunArtifactsDir(): string {
   const home = process.env.OPENCLAW_HOME || '/app';
@@ -2181,7 +2181,7 @@ export async function saveAutoLoopState(
 
 // ── App State (KV) — replaces auto_loop_state / chat_crystallize_state /
 //                    ingest_cursor / pending_items / context_runs single-row tables.
-// See docs/memory-architecture.md §五 (app_state KV).
+// See docs/plans/memory-architecture.mdx §五 (app_state KV).
 
 export interface AppStateRow<T = unknown> {
   namespace: string;
@@ -2244,7 +2244,7 @@ export async function listAppState<T = unknown>(
 }
 
 // ── Card Evaluations — pipeline self-review scores. Indexable for evals.
-// See docs/memory-architecture.md §三 (card_evaluations).
+// See docs/plans/memory-architecture.mdx §三 (card_evaluations).
 
 export interface CardEvaluationRow {
   card_id: string;
@@ -2449,11 +2449,11 @@ export async function getCardEvaluation(cardId: string): Promise<CardEvaluationR
 }
 
 // (legacy PendingStore / ContextRun helpers removed in Phase 1.
-//  See docs/memory-architecture.md §七 for the migration map.)
+//  See docs/plans/memory-architecture.mdx §七 for the migration map.)
 
 // ─────────────────────────────────────────────────────────────────────────
 // v3 Memory — sedimented user-fact layer.
-// See docs/memory-architecture.md §三 (memory).
+// See docs/plans/memory-architecture.mdx §三 (memory).
 // ─────────────────────────────────────────────────────────────────────────
 
 export type MemoryStatus = 'active' | 'archived' | 'superseded';
@@ -2495,7 +2495,7 @@ const MEMORY_QUALITY_DEVICE_TRIGGER_CAP = 0.7;
 
 function clampQuality(source: string, quality: number | undefined): number {
   const q = typeof quality === 'number' && Number.isFinite(quality) ? quality : 0.5;
-  // Enforce the device:trigger cap from docs/memory-architecture.md §五.
+  // Enforce the device:trigger cap from docs/plans/memory-architecture.mdx §五.
   if (source.startsWith('device:trigger') && q > MEMORY_QUALITY_DEVICE_TRIGGER_CAP) {
     return MEMORY_QUALITY_DEVICE_TRIGGER_CAP;
   }
@@ -2680,7 +2680,7 @@ const REFERENCED_BY_RUNS_CAP = 10;
 /**
  * Append `runId` to a memory row's referenced_by_runs (cap 10), bump
  * reference_count, set last_referenced_at = now(). No-op if memory is
- * missing. See docs/memory-architecture.md §五 (reference 三件套 cap).
+ * missing. See docs/plans/memory-architecture.mdx §五 (reference 三件套 cap).
  */
 export async function markMemoryReferenced(
   memoryIds: string[],
@@ -2718,7 +2718,7 @@ export async function markMemoryReferenced(
 //
 //   ${OPENCLAW_HOME}/data/skills/<skill_id>/SKILL.md
 //
-// See docs/memory-architecture.md §三 (skill_index).
+// See docs/plans/memory-architecture.mdx §三 (skill_index).
 // ─────────────────────────────────────────────────────────────────────────
 
 export type SkillStatus = 'enabled' | 'disabled' | 'archived';
@@ -2974,7 +2974,7 @@ export async function markSkillReferenced(
 
 // ─────────────────────────────────────────────────────────────────────────
 // v3 Evolution Runs — unified ledger (dream + crystallize + manual + consolidation).
-// See docs/memory-architecture.md §三 (evolution_runs).
+// See docs/plans/memory-architecture.mdx §三 (evolution_runs).
 // ─────────────────────────────────────────────────────────────────────────
 
 export type EvolutionTrigger =
@@ -3232,7 +3232,7 @@ export async function listEvolutionRuns(
 
 // ─────────────────────────────────────────────────────────────────────────
 // v3 Personal Signals — short-lived observations awaiting consolidation.
-// See docs/memory-architecture.md §三 (personal_signals).
+// See docs/plans/memory-architecture.mdx §三 (personal_signals).
 // ─────────────────────────────────────────────────────────────────────────
 
 export type PersonalSignalStatus = 'open' | 'consumed' | 'archived';

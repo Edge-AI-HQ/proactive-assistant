@@ -1,6 +1,6 @@
 /**
  * `pin memory ...` — v3 sedimented memory CLI.
- * See docs/memory-architecture.md §六 (CLI / agent interface).
+ * See docs/plans/memory-architecture.mdx §六 (CLI / agent interface).
  */
 import {
   parseArgs, success, failure,

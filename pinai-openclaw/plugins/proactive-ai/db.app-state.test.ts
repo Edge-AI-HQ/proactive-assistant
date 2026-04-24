@@ -1,7 +1,7 @@
 /**
  * Tests for app_state KV table — replaces the per-domain single-row
  * state tables (auto_loop_state, chat_crystallize_state, ingest_cursor).
- * See docs/memory-architecture.md §三 (app_state).
+ * See docs/plans/memory-architecture.mdx §三 (app_state).
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';

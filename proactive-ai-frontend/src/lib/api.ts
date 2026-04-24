@@ -535,7 +535,7 @@ export async function forceCrystallizeRun(): Promise<CrystallizeRunResponse> {
 //
 // Response shape matches plugin `routes/skills.ts` which serves v3 `skill_index`
 // rows plus the `SKILL.md` body on detail requests. See
-// `pinai-openclaw/plugins/proactive-ai/docs/memory-architecture.md` §三.
+// `docs/plans/memory-architecture.mdx` §三.
 
 export type SkillStatus = "enabled" | "disabled" | "archived";
 

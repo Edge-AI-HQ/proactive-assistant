@@ -1,7 +1,7 @@
 /**
  * Tests for pipeline_runs.artifact_path — large iterations JSON is now
  * persisted to data/run-artifacts/<run_id>.json instead of inline DB column.
- * See docs/memory-architecture.md §五 (大 JSON 不进 SQLite).
+ * See docs/plans/memory-architecture.mdx §五 (大 JSON 不进 SQLite).
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';

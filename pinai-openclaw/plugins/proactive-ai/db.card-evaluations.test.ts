@@ -1,7 +1,7 @@
 /**
  * Tests for card_evaluations — pipeline self-review scores stored as
  * indexable rows (replaces the JSON blob inside pipeline_runs.iterations).
- * See docs/memory-architecture.md §三 (card_evaluations).
+ * See docs/plans/memory-architecture.mdx §三 (card_evaluations).
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';

@@ -10,7 +10,7 @@
  *   POST /evolution/<id>/complete    body: { llmTokens?, durationMs? }
  *   POST /evolution/<id>/fail        body: { error }
  *
- * See docs/memory-architecture.md §三 (evolution_runs).
+ * See docs/plans/memory-architecture.mdx §三 (evolution_runs).
  */
 import type { RouteHandler } from './types.js';
 import { json, readBody } from './types.js';

@@ -13,7 +13,7 @@
  *                                   (kept reversible; no hard delete).
  *
  * Response shape is the v3 native `SkillIndexRow` plus an optional `body`
- * field on detail responses. See docs/memory-architecture.md §三 (skill_index).
+ * field on detail responses. See docs/plans/memory-architecture.mdx §三 (skill_index).
  */
 import type { RouteHandler } from './types.js';
 import { json, readBody } from './types.js';

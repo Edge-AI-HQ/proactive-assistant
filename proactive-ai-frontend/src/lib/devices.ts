@@ -7,7 +7,7 @@
  * to every /api/mobile/* request, letting the cloud route uploads to the
  * correct user (vs the legacy "default mobile container" lookup).
  *
- * See docs/memory-architecture.md §三 (APIs user_devices).
+ * See docs/plans/memory-architecture.mdx §三 (APIs user_devices).
  */
 import { Capacitor } from "@capacitor/core";
 import { proactiveFetch } from "./api";

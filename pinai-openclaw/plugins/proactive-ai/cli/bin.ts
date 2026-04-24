@@ -13,7 +13,7 @@ import { handleWorld } from './world.js';
 import { handleFeedback } from './feedback.js';
 import { handleSys } from './sys.js';
 import { handleCards } from './cards.js';
-// v3 memory architecture CLIs (see docs/memory-architecture.md §六)
+// v3 memory architecture CLIs (see docs/plans/memory-architecture.mdx §六)
 import { handleMemory } from './memory.js';
 import { handleSignals } from './signals.js';
 import { handleRaw } from './raw.js';

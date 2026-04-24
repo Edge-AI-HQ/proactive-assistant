@@ -1,7 +1,7 @@
 /**
  * Tests for v3 evolution_runs — unified ledger for dream / crystallize /
  * manual / consolidation runs.
- * See docs/memory-architecture.md §三 (evolution_runs).
+ * See docs/plans/memory-architecture.mdx §三 (evolution_runs).
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';

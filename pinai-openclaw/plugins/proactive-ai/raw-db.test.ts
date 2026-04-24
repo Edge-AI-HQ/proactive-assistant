@@ -1,6 +1,6 @@
 /**
  * Tests for raw.db — source-typed tables for connector / device snapshots.
- * See docs/memory-architecture.md §三 (raw.db).
+ * See docs/plans/memory-architecture.mdx §三 (raw.db).
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';

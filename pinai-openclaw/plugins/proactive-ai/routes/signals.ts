@@ -5,7 +5,7 @@
  *   POST /signals/ingest          add personal_signals (server-side or future device direct upload)
  *   POST /signals/<id>/consume    mark as consumed (with body { runId })
  *
- * See docs/memory-architecture.md §三 (personal_signals).
+ * See docs/plans/memory-architecture.mdx §三 (personal_signals).
  */
 import type { RouteHandler } from './types.js';
 import { json, readBody } from './types.js';

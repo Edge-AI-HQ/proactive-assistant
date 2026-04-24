@@ -143,7 +143,7 @@ export async function runCrystallize(
 /**
  * Wraps runCrystallizeInner with v3 evolution_runs lifecycle so the
  * `pin evolution recent --kind chat_burst` query reflects every
- * crystallize attempt (skipped or completed). See docs/memory-architecture.md
+ * crystallize attempt (skipped or completed). See docs/plans/memory-architecture.mdx
  * §三 (evolution_runs).
  */
 async function runCrystallizeWithEvolutionRun(

@@ -152,7 +152,7 @@ export async function runPipeline(
 
   // Phase 1: also persist evaluations to indexable card_evaluations rows so
   // future evals harness can SQL-query scores per basket / dimension without
-  // re-parsing the iterations JSON blob. See docs/memory-architecture.md §三.
+  // re-parsing the iterations JSON blob. See docs/plans/memory-architecture.mdx §三.
   try {
     const cardSources: ScoredCardSource[] = finalCards
       .filter((c): c is Record<string, unknown> => !!c && typeof c === 'object')

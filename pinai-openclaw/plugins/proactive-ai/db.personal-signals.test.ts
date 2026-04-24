@@ -1,7 +1,7 @@
 /**
  * Tests for v3 personal_signals table — short-lived observations awaiting
  * consolidation. Compatible with device-side MobileSyncItem schema.
- * See docs/memory-architecture.md §三 (personal_signals).
+ * See docs/plans/memory-architecture.mdx §三 (personal_signals).
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';

@@ -19,7 +19,7 @@
  * are stubbed via `RunCrystallizeDeps.runEvaluator` for crystallize and via a
  * fake `api.runtime.subagent` for dreaming.
  *
- * See docs/memory-architecture.md §三 (evolution_runs) and §八 Phase 2a.
+ * See docs/plans/memory-architecture.mdx §三 (evolution_runs) and §八 Phase 2a.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';

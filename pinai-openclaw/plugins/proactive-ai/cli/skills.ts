@@ -1,6 +1,6 @@
 /**
  * `pin skills ...` — v3 skill_index + skills/<id>/SKILL.md folder CLI.
- * See docs/memory-architecture.md §六.
+ * See docs/plans/memory-architecture.mdx §六.
  */
 import { readFileSync } from 'node:fs';
 import { parseArgs, success, failure, readLimitFlag } from './shared.js';

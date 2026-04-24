@@ -6,7 +6,7 @@
  * triggers ensureSchema + migration). After migration, the legacy tables
  * must be dropped and the rows must appear in the v3 sinks.
  *
- * See docs/memory-architecture.md §七.
+ * See docs/plans/memory-architecture.mdx §七.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';

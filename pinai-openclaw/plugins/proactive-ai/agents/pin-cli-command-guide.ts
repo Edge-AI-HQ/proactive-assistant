@@ -1,6 +1,6 @@
 /**
  * Injected into the unified-generator phase 1 prompt every pipeline run.
- * KEEP THIS IN LOCKSTEP with cli/*.ts and docs/memory-architecture.md §六.
+ * KEEP THIS IN LOCKSTEP with cli/*.ts and docs/plans/memory-architecture.mdx §六.
  *
  * The guide is the agent's authoritative reference for *what works right
  * now*; aspirational commands belong in docs, not here.

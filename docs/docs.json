@@ -1,0 +1,39 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "PIN AI Docs",
+  "description": "PIN AI Assistant team development docs.",
+  "theme": "mint",
+  "icons": {
+    "library": "lucide"
+  },
+  "colors": {
+    "primary": "#2563EB",
+    "dark": "#60A5FA",
+    "light": "#1D4ED8"
+  },
+  "navigation": {
+    "languages": [
+      {
+        "language": "zh",
+        "tabs": [
+          {
+            "tab": "开发文档",
+            "groups": [
+              {
+                "group": "当前事实",
+                "pages": [
+                  "index",
+                  "modules/data-connectors",
+                  "modules/memory",
+                  "modules/generation",
+                  "modules/feedback",
+                  "modules/runtime-deployment"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

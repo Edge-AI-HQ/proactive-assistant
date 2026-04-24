@@ -13,7 +13,7 @@
  * Deletion is intentionally not supported: v3 treats memory as an append-only
  * ledger; archive/supersede are the documented removal paths.
  *
- * See docs/memory-architecture.md §六 (CLI / agent interface).
+ * See docs/plans/memory-architecture.mdx §六 (CLI / agent interface).
  */
 import type { RouteHandler } from './types.js';
 import { json, readBody } from './types.js';

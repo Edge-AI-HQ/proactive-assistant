@@ -1,6 +1,6 @@
 /**
  * Tests for v3 skill_index — index in DB, body markdown in folder.
- * See docs/memory-architecture.md §三 (skill_index).
+ * See docs/plans/memory-architecture.mdx §三 (skill_index).
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
