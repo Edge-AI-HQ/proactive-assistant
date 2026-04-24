@@ -21,10 +21,14 @@ import type { ContainerWithToken } from './user_service.js';
 import { config } from '../common/config.js';
 import { buildAssistantOpenclawConfig } from '../container/providers/shared/openclaw_config.js';
 import { ensureProactiveLiteLLMKey } from './litellm_key_service.js';
+import { getOrCreateBrowserContext } from './browser_context_service.js';
 import { pool } from '../common/db/core.js';
 
 /** Build env vars for a proactive-ai container. */
-function buildContainerEnv(params: ProactiveContainerParams): Record<string, string> {
+function buildContainerEnv(
+  params: ProactiveContainerParams,
+  browserContextId?: string | null,
+): Record<string, string> {
   const litellmApiKey = params.litellmApiKey || process.env.LITELLM_API_KEY || '';
 
   const openclawConfigContext = {
@@ -83,6 +87,7 @@ function buildContainerEnv(params: ProactiveContainerParams): Record<string, str
   if (process.env.COMPOSIO_API_KEY) env.COMPOSIO_API_KEY = process.env.COMPOSIO_API_KEY;
   if (process.env.BROWSERBASE_API_KEY) env.BROWSERBASE_API_KEY = process.env.BROWSERBASE_API_KEY;
   if (process.env.BROWSERBASE_PROJECT_ID) env.BROWSERBASE_PROJECT_ID = process.env.BROWSERBASE_PROJECT_ID;
+  if (browserContextId) env.BROWSERBASE_CONTEXT_ID = browserContextId;
 
   env.OPENCLAW_PLUGIN_LOAD_PATHS = '/opt/pinai/plugins/proactive-ai';
 
@@ -408,7 +413,23 @@ export class ProactiveContainerOrchestrator {
       gatewayToken,
       litellmApiKey,
     };
-    const env = buildContainerEnv(params);
+
+    // Bind a persistent Browserbase context to this user so the AI's
+    // browser sessions restore cookies/login across runs. Fail open:
+    // if Browserbase isn't configured or the API call fails, fall back
+    // to anonymous sessions — we prefer a working container without
+    // persistent browser state over a blocked spawn.
+    let browserContextId: string | null = null;
+    try {
+      browserContextId = await getOrCreateBrowserContext(pool, supabaseUserId);
+    } catch (err) {
+      console.warn(
+        '[orchestrator] Browserbase context provisioning failed, spawning without persistent context:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+
+    const env = buildContainerEnv(params, browserContextId);
 
     const created = this.runtime.createGenericContainer
       ? await this.runtime.createGenericContainer({

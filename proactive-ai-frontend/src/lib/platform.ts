@@ -24,6 +24,9 @@ const platform = Capacitor.getPlatform(); // "ios" | "android" | "web"
 const safeBottom =
   platform === "ios" ? "34px" : platform === "android" ? "12px" : "0px";
 document.documentElement.style.setProperty("--safe-bottom", safeBottom);
+// --kb-height 在键盘弹起时由 main.tsx 的 keyboard listener 更新，静息状态 0px。
+// 预置在这里是为了 CSS 即便在 listener 绑定前引用也拿得到合法值。
+document.documentElement.style.setProperty("--kb-height", "0px");
 
 // Log platform info for debugging native issues
 if (isNative) {

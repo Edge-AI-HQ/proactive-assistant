@@ -104,6 +104,28 @@ export function handleBrowser(): RouteHandler {
       return true;
     }
 
+    // POST /browser/sessions/:id/refresh-live-view-url
+    // Frontend Reload button — when the iframe shows "Debugging connection
+    // was closed", the Browserbase signed URL has expired. Re-fetch a fresh
+    // one without tearing down the CDP session, return to the client, let
+    // the iframe remount with the new src.
+    const refreshMatch = route.match(/^\/browser\/sessions\/([^/]+)\/refresh-live-view-url$/);
+    if (refreshMatch && ctx.req.method === 'POST') {
+      const sessionId = refreshMatch[1];
+      if (!mgr.getSession(sessionId)) {
+        json(ctx.res, 404, { error: 'Session not found' });
+        return true;
+      }
+      try {
+        const liveViewUrl = await mgr.refreshLiveViewUrl(sessionId);
+        json(ctx.res, 200, { ok: true, liveViewUrl });
+      } catch (err) {
+        ctx.api.logger.warn(`[browser] refresh-live-view-url failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`);
+        json(ctx.res, 503, { error: err instanceof Error ? err.message : String(err) });
+      }
+      return true;
+    }
+
     // POST /browser/sessions/:id/control
     const controlMatch = route.match(/^\/browser\/sessions\/([^/]+)\/control$/);
     if (controlMatch && ctx.req.method === 'POST') {

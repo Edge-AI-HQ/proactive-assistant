@@ -58,10 +58,12 @@
     overflow: hidden;
     overscroll-behavior: none;
     -webkit-overflow-scrolling: touch;
+    /* 键盘在 iOS 上弹起瞬间，若 html 背景透明会让下层 UIWindow 黑色露出。
+       两者都显式铺色，彻底不给 transparent 钻空子。 */
+    background: hsl(var(--background));
   }
 
   body {
-    background: hsl(var(--background));
     color: hsl(var(--foreground));
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
