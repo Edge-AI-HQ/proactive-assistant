@@ -1303,8 +1303,12 @@ export function ingestGithubIssues(items: GithubIssueInput[]): IngestResult {
       const updated = normalizeToUtcIso(item.updatedAtRemote ?? null);
       const created = normalizeToUtcIso(item.createdAtRemote ?? null);
       const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? updated ?? created ?? ts;
-      // Include updated time in dedupe so a refetched-but-edited issue
-      // would dodge dedupe — same trade-off as notion_pages.
+      // First-write wins: issue_id UNIQUE means a re-fetched issue (even
+      // with newer updated_at) gets ignored. Switch to upsert if we ever
+      // want edit-aware history. Same trade-off as gmail_messages and
+      // notion_pages. The updated_at suffix in dedupe_key is informational
+      // only — it doesn't actually open a second slot because issue_id is
+      // the binding constraint.
       const dedupe = item.dedupeKey ?? `github:issue:${item.issueId}:${updated ?? 'noupdate'}`;
       const result = insert.run(
         id, item.issueId,

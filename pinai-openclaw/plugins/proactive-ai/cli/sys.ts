@@ -46,7 +46,12 @@ export async function handleSys(args: string[]): Promise<string> {
       cards: ['recent'],
       memory: ['help', 'list', 'get', 'add', 'archive', 'supersede', 'search'],
       signals: ['help', 'recent', 'list', 'get', 'consume'],
-      raw: ['help', 'gmail recent', 'gmail thread', 'gcal today', 'gcal week', 'gcal list', 'device-apps', 'device-contacts list', 'device-contacts search'],
+      raw: [
+        'help',
+        'gmail recent', 'gmail thread', 'gcal today', 'gcal week', 'gcal list',
+        'slack list', 'notion list', 'gdrive list', 'github list', 'outlook list',
+        'device-apps', 'device-contacts list', 'device-contacts search',
+      ],
       evolution: ['help', 'list', 'get', 'recent', 'create', 'delta', 'refs consumed', 'refs produced', 'complete', 'fail'],
       skills: ['help', 'list', 'show', 'add', 'update', 'enable', 'disable'],
       tasks: ['help', 'list', 'show', 'attempts', 'cancel', 'enqueue'],

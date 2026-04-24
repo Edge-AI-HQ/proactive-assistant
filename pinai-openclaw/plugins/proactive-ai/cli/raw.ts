@@ -67,17 +67,28 @@ export async function handleRaw(args: string[]): Promise<string> {
 
   if (!sub || sub === 'help') {
     return success('raw', 'help', {
-      commands: ['gmail', 'gcal', 'device-apps', 'device-contacts'],
+      commands: [
+        'gmail', 'gcal', 'device-apps', 'device-contacts',
+        // Phase D round 1+2 connectors:
+        'slack', 'notion', 'gdrive', 'github', 'outlook',
+      ],
       examples: [
         'pin raw gmail recent --hours 24 --limit 20',
         'pin raw gmail thread --threadId <tid>',
-        'pin raw gcal today',
         'pin raw gcal today --timezone Asia/Shanghai',
         'pin raw gcal week',
-        'pin raw gcal list --since 2026-04-23 --limit 30',
+        'pin raw slack list --limit 20',
+        'pin raw slack list --channelId C01 --limit 10',
+        'pin raw notion list --limit 20',
+        'pin raw notion list --includeArchived true',
+        'pin raw gdrive list --limit 20',
+        'pin raw gdrive list --mimeType application/vnd.google-apps.document',
+        'pin raw github list --limit 20',
+        'pin raw github list --state open --isPullRequest true',
+        'pin raw outlook list --limit 20',
+        'pin raw outlook list --conversationId <cid>',
         'pin raw device-apps --deviceId <id> --top 20',
         'pin raw device-contacts list --deviceId <id> --limit 200',
-        'pin raw device-contacts search --query "张" --deviceId <id>',
       ],
     });
   }
@@ -178,6 +189,96 @@ export async function handleRaw(args: string[]): Promise<string> {
     return success('raw', `device-contacts.${action}`, { count: contacts.length, contacts });
   }
 
+  if (sub === 'slack') {
+    const action = positional[1] ?? 'list';
+    if (action !== 'list') {
+      return failure('raw', `slack.${action}`, 'validation',
+        `Unknown slack action: ${action}`, 'Available: list');
+    }
+    const limitRes = readLimitFlag(flags, 'raw', 'slack.list');
+    if ('failure' in limitRes) return limitRes.failure;
+    const messages = raw.listSlackMessages({
+      channelId: flags['channelId'] ?? flags['channel-id'],
+      since: flags['since'],
+      until: flags['until'],
+      limit: limitRes.value ?? 30,
+    });
+    return success('raw', 'slack.list', { count: messages.length, messages });
+  }
+
+  if (sub === 'notion') {
+    const action = positional[1] ?? 'list';
+    if (action !== 'list') {
+      return failure('raw', `notion.${action}`, 'validation',
+        `Unknown notion action: ${action}`, 'Available: list');
+    }
+    const limitRes = readLimitFlag(flags, 'raw', 'notion.list');
+    if ('failure' in limitRes) return limitRes.failure;
+    const pages = raw.listNotionPages({
+      since: flags['since'],
+      until: flags['until'],
+      includeArchived: flags['includeArchived'] === 'true' || flags['include-archived'] === 'true',
+      limit: limitRes.value ?? 30,
+    });
+    return success('raw', 'notion.list', { count: pages.length, pages });
+  }
+
+  if (sub === 'gdrive') {
+    const action = positional[1] ?? 'list';
+    if (action !== 'list') {
+      return failure('raw', `gdrive.${action}`, 'validation',
+        `Unknown gdrive action: ${action}`, 'Available: list');
+    }
+    const limitRes = readLimitFlag(flags, 'raw', 'gdrive.list');
+    if ('failure' in limitRes) return limitRes.failure;
+    const files = raw.listGdriveFiles({
+      mimeType: flags['mimeType'] ?? flags['mime-type'],
+      since: flags['since'],
+      until: flags['until'],
+      includeTrashed: flags['includeTrashed'] === 'true' || flags['include-trashed'] === 'true',
+      limit: limitRes.value ?? 30,
+    });
+    return success('raw', 'gdrive.list', { count: files.length, files });
+  }
+
+  if (sub === 'github') {
+    const action = positional[1] ?? 'list';
+    if (action !== 'list') {
+      return failure('raw', `github.${action}`, 'validation',
+        `Unknown github action: ${action}`, 'Available: list');
+    }
+    const limitRes = readLimitFlag(flags, 'raw', 'github.list');
+    if ('failure' in limitRes) return limitRes.failure;
+    const isPR = flags['isPullRequest'] ?? flags['is-pull-request'];
+    const issues = raw.listGithubIssues({
+      repoFullName: flags['repo'] ?? flags['repoFullName'] ?? flags['repo-full-name'],
+      state: flags['state'],
+      isPullRequest: isPR === 'true' ? true : isPR === 'false' ? false : undefined,
+      since: flags['since'],
+      until: flags['until'],
+      limit: limitRes.value ?? 30,
+    });
+    return success('raw', 'github.list', { count: issues.length, issues });
+  }
+
+  if (sub === 'outlook') {
+    const action = positional[1] ?? 'list';
+    if (action !== 'list') {
+      return failure('raw', `outlook.${action}`, 'validation',
+        `Unknown outlook action: ${action}`, 'Available: list');
+    }
+    const limitRes = readLimitFlag(flags, 'raw', 'outlook.list');
+    if ('failure' in limitRes) return limitRes.failure;
+    const messages = raw.listOutlookMessages({
+      conversationId: flags['conversationId'] ?? flags['conversation-id'],
+      importance: flags['importance'],
+      since: flags['since'],
+      until: flags['until'],
+      limit: limitRes.value ?? 30,
+    });
+    return success('raw', 'outlook.list', { count: messages.length, messages });
+  }
+
   return failure('raw', sub, 'validation', `Unknown raw command: ${sub}`,
-    'Available: gmail, gcal, device-apps, device-contacts');
+    'Available: gmail, gcal, slack, notion, gdrive, github, outlook, device-apps, device-contacts');
 }
