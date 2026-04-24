@@ -1,6 +1,6 @@
 import type { RouteHandler } from './types.js';
 import { json } from './types.js';
-import { listDreamRuns, getDreamRun, getDreamRunDetail, startDreaming, applyDreamProfile, applyDreamGoals } from '../dreaming/service.js';
+import { listDreamRuns, getDreamRunDetail, startDreaming } from '../dreaming/service.js';
 
 export function handleDreaming(): RouteHandler {
   return async (ctx) => {
@@ -27,27 +27,16 @@ export function handleDreaming(): RouteHandler {
       return true;
     }
 
-    // POST /dreaming/runs/:id/apply-profile
-    const applyMatch = ctx.subpath.match(/^\/dreaming\/runs\/([^/]+)\/apply-profile$/);
-    if (applyMatch && ctx.req.method === 'POST') {
-      try {
-        const run = await applyDreamProfile(applyMatch[1]!);
-        json(ctx.res, 200, { ok: true, run });
-      } catch (err) {
-        json(ctx.res, 409, { ok: false, error: err instanceof Error ? err.message : String(err) });
-      }
-      return true;
-    }
-
-    // POST /dreaming/runs/:id/apply-goals
-    const applyGoalsMatch = ctx.subpath.match(/^\/dreaming\/runs\/([^/]+)\/apply-goals$/);
-    if (applyGoalsMatch && ctx.req.method === 'POST') {
-      try {
-        const run = await applyDreamGoals(applyGoalsMatch[1]!);
-        json(ctx.res, 200, { ok: true, run });
-      } catch (err) {
-        json(ctx.res, 409, { ok: false, error: err instanceof Error ? err.message : String(err) });
-      }
+    // Phase 2a: dreams write through during executeDreamingForRun, so
+    // there's no longer an "apply" step. Any stale frontend that still
+    // POSTs here should fail loud rather than silently succeed.
+    if (ctx.subpath.match(/^\/dreaming\/runs\/[^/]+\/apply-(profile|goals)$/)
+        && ctx.req.method === 'POST') {
+      json(ctx.res, 410, {
+        ok: false,
+        error: 'endpoint removed',
+        hint: 'Dreams now apply directly during the run (no separate Apply step). Inspect run.applied_at / run.goals_applied_at to confirm.',
+      });
       return true;
     }
 

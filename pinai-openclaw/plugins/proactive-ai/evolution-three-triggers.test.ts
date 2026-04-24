@@ -2,14 +2,14 @@
  * End-to-end coverage for the three evolution triggers.
  *
  *   1. chat_burst        — runCrystallize() (auto-loop or "force" from debug
- *                          panel). Writes memory + optional skill, opens
- *                          evolution_run with trigger_kind='chat_burst'.
+ *                          panel). Writes memory + optional skill directly,
+ *                          opens evolution_run with trigger_kind='chat_burst'.
  *   2. daily_dream / manual dream — runDreaming(trigger='auto'|'manual').
- *                          Writes profile_delta + goal_delta into dream_runs;
- *                          applyDreamProfile / applyDreamGoals materialize them
- *                          into profile facts/preferences/interests + goals.
- *                          Mirrors the run into evolution_runs with
- *                          trigger_kind='daily_dream'.
+ *                          Writes profile facts/preferences/interests +
+ *                          goals INLINE during the run (Phase 2a write-
+ *                          through — no separate Apply step). Mirrors the
+ *                          run into evolution_runs with trigger_kind='daily_dream',
+ *                          stamping refs_produced for each affected key.
  *   3. manual via pin CLI — `pin evolution create --triggerKind manual`
  *                          followed by delta/refs/complete is a pure
  *                          bookkeeping ledger; useful when an external system
@@ -19,7 +19,7 @@
  * are stubbed via `RunCrystallizeDeps.runEvaluator` for crystallize and via a
  * fake `api.runtime.subagent` for dreaming.
  *
- * See docs/memory-architecture.md §三 (evolution_runs) and §六 (CLI).
+ * See docs/memory-architecture.md §三 (evolution_runs) and §八 Phase 2a.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -29,11 +29,7 @@ import { tmpdir } from 'node:os';
 
 import { runCrystallize } from './conversation-crystallize/service.ts';
 import { DEFAULT_CRYSTALLIZE_CONFIG } from './conversation-crystallize/types.ts';
-import {
-  runDreaming,
-  applyDreamProfile,
-  applyDreamGoals,
-} from './dreaming/service.ts';
+import { runDreaming } from './dreaming/service.ts';
 import { resetStoreForTests as resetDreamStoreForTests } from './dreaming/store.ts';
 import { handleEvolution } from './cli/evolution.ts';
 import {
@@ -315,9 +311,11 @@ test('daily_dream (auto): writes dream_run + evolution_run + applyProfile materi
     // interests gets a new key when interestTopics is non-empty.
     assert.ok(evolRuns[0]!.profile_changed_keys.includes('interests'));
 
-    // Materialize delta → profile facts + interests are real rows now.
-    const appliedRun = await applyDreamProfile(run.id);
-    assert.ok(appliedRun.applied_at, 'applied_at should be set');
+    // Phase 2a: write-through, no separate apply step. The dream's
+    // commit already wrote profile.facts.dreaming + profile_interests +
+    // goals — assert they exist immediately, no apply call needed.
+    assert.ok(run.applied_at, 'applied_at must be stamped during the run');
+    assert.ok(run.goals_applied_at, 'goals_applied_at must be stamped during the run');
 
     const profile = await getProfile();
     assert.ok(profile);
@@ -327,9 +325,11 @@ test('daily_dream (auto): writes dream_run + evolution_run + applyProfile materi
     const interestKeys = interests.map((i) => i.key).sort();
     assert.deepEqual(interestKeys, ['coffee', 'commute']);
 
-    // Materialize goals as well.
-    const goalsApplied = await applyDreamGoals(run.id);
-    assert.ok(goalsApplied.goals_applied_at, 'goals_applied_at should be set');
+    // refs_produced lists the interest + goal keys actually touched.
+    const evolAfter = (await listEvolutionRuns({ triggerKind: 'daily_dream', limit: 1 }))[0]!;
+    assert.deepEqual((evolAfter.refs_produced.profile_interests ?? []).sort(),
+      ['topic:coffee', 'topic:commute']);
+    assert.deepEqual(evolAfter.refs_produced.goals, ['morning-coffee-routine']);
   });
 });
 
@@ -341,15 +341,12 @@ test('manual dream: same flow as auto but trigger="manual" recorded on dream_run
 
     assert.equal(run.trigger, 'manual', 'manual dream stamps trigger="manual" on dream_runs');
     assert.equal(run.status, 'completed');
+    assert.ok(run.applied_at, 'manual dreams also write through during the run');
 
-    // The evolution_run mirror, however, uses 'daily_dream' as the trigger
-    // kind regardless of dream trigger — see dreaming/service.ts createEvolutionRun call.
     const evolRuns = await listEvolutionRuns({ triggerKind: 'daily_dream', limit: 5 });
     assert.equal(evolRuns.length, 1);
     assert.match(evolRuns[0]!.context_summary ?? '', /trigger=manual/);
 
-    // Apply path is the same.
-    await applyDreamProfile(run.id);
     const interests = await listInterests({ limit: 50 });
     assert.equal(interests.length, 2);
   });
@@ -496,15 +493,14 @@ test('all three triggers coexist: pin evolution recent returns each kind', async
     assert.equal(manuals.data.count, 1);
 
     // Persisted side effects: 1 memory (chat_burst), 0 skills, 2 interests
-    // (from dream), profile.facts.dreaming key set after applyDreamProfile.
+    // (from dream), profile.facts.dreaming key set — all already there
+    // because both triggers write through during the run (Phase 2a).
     const memories = await listMemoryV3({ status: 'active', limit: 50 });
     assert.ok(memories.length >= 1, 'chat_burst seeded a memory');
 
-    // Apply the dream's profile to materialize interests.
     const dreamRun = (await listEvolutionRuns({ triggerKind: 'daily_dream', limit: 1 }))[0]!;
-    // The dream_run id is separate from the evolution_run id; fetch from
-    // dreaming/store via listDreamRuns. We only assert evolution_run is intact.
     assert.equal(dreamRun.status, 'completed');
+    assert.equal(dreamRun.profile_updated, true, 'dream wrote profile during the run');
   });
 });
 
@@ -533,12 +529,11 @@ test('all three triggers coexist: chat_burst + dream side effects survive togeth
     );
     assert.ok(cb.memoryId);
 
-    // daily_dream → profile facts + interests
-    const dream = await runDreaming({
+    // daily_dream → profile facts + interests (write-through, no apply call)
+    await runDreaming({
       api: makeDreamingApi(DREAM_SYNTHESIS_FIXTURE),
       trigger: 'auto',
     });
-    await applyDreamProfile(dream.run.id);
 
     // Final state: 1 active memory, 2 active interests, profile.facts.dreaming present.
     const memories = await listMemoryV3({ status: 'active', limit: 50 });

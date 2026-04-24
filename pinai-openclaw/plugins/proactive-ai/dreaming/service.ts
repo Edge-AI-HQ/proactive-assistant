@@ -720,15 +720,26 @@ async function executeDreamingForRun(
       { highlights, interestTopics },
     );
 
-    const completedRun = await store.completeRun(run.id, {
+    // ── Phase 2a: write-through. Apply the delta to memory/profile/goals
+    // immediately (no separate "apply" button). The dream_runs row still
+    // stores the delta for observability — but applied_at + goals_applied_at
+    // are stamped right here, never deferred. See Phase 15 / Phase 2 in
+    // docs/memory-architecture.md.
+    const applied = await applyDreamDeltaInline(profileDelta, goalDelta);
+
+    await store.completeRun(run.id, {
       sourceStats, summary, profileDelta, goalDelta,
       journalMarkdown: markdown, candidates,
     });
+    await store.markApplied(run.id);
+    await store.markGoalsApplied(run.id);
+    // Re-fetch so the returned record reflects all three writes
+    // (status=completed, applied_at, goals_applied_at) in one snapshot.
+    const completedRun = (await store.getRun(run.id))!;
 
     // Mirror the dream's outcome into evolution_runs so the v3 trajectory
-    // ledger reflects what changed. profile_delta + goal_delta are
-    // applied later via apply* helpers (which run async); here we record
-    // intent only.
+    // ledger reflects what changed. refs_produced lists exactly which
+    // profile_interests / goals rows were touched.
     if (evolutionRunId) {
       try {
         const profileChangedKeys = collectProfileDeltaKeys(profileDelta);
@@ -736,6 +747,12 @@ async function executeDreamingForRun(
           profileUpdated: profileChangedKeys.length > 0,
           profileChangedKeys,
         });
+        if (applied.interestKeys.length > 0) {
+          await db.recordEvolutionRefsProduced(evolutionRunId, 'profile_interests', applied.interestKeys);
+        }
+        if (applied.goalKeys.length > 0) {
+          await db.recordEvolutionRefsProduced(evolutionRunId, 'goals', applied.goalKeys);
+        }
         await db.completeEvolutionRun(evolutionRunId, {
           durationMs: Date.now() - startedAtMs,
         });
@@ -759,6 +776,68 @@ async function executeDreamingForRun(
     }
     throw error;
   }
+}
+
+/**
+ * Phase 2a: write-through application of the dream's synthesized delta.
+ * Replaces the previous applyDreamProfile + applyDreamGoals two-step
+ * apply (which left the user with a "Apply" button to click after every
+ * dream). Now: dream finishes → these writes commit → run is done.
+ *
+ * Returns the lists of keys actually written so the caller can stamp them
+ * into evolution_runs.refs_produced for downstream traceability.
+ */
+async function applyDreamDeltaInline(
+  profileDelta: DreamProfileDelta,
+  goalDelta: DreamGoalDelta,
+): Promise<{ interestKeys: string[]; goalKeys: string[] }> {
+  const interestKeys: string[] = [];
+  const goalKeys: string[] = [];
+
+  // Profile facts/preferences: setFact / setPreference are no-ops if the
+  // profile row doesn't exist yet, which mirrors the old applyDreamProfile
+  // behavior and keeps tests that don't seed a profile happy.
+  for (const [key, value] of Object.entries(profileDelta.facts.after)) {
+    await db.setFact(key, value);
+  }
+  for (const [key, value] of Object.entries(profileDelta.preferences.after)) {
+    await db.setPreference(key, value);
+  }
+
+  // Interests: idempotent upsert, returns the row by (kind, key).
+  for (const interest of profileDelta.interests.after) {
+    const kind = compactText(interest.kind);
+    const key = compactText(interest.key);
+    if (!kind || !key) continue;
+    await db.upsertInterest({
+      kind, key,
+      score: typeof interest.score === 'number' ? interest.score : 0.5,
+      confidence: typeof interest.confidence === 'number' ? interest.confidence : 0.5,
+      evidenceCount: typeof interest.evidenceCount === 'number' ? interest.evidenceCount : 1,
+      lastSignalAt: typeof interest.lastSignalAt === 'string' ? interest.lastSignalAt : undefined,
+    });
+    interestKeys.push(`${kind}:${key}`);
+  }
+
+  // Goals: open / update / close.
+  for (const change of goalDelta.changes) {
+    if (change.action === 'close') {
+      await db.closeGoal(change.key);
+      goalKeys.push(change.key);
+      continue;
+    }
+    const after = change.after ?? {};
+    const title = compactText(after.title);
+    if (!title) continue; // upsertGoal would throw on missing title — skip silently
+    await db.upsertGoal({
+      key: change.key,
+      title,
+      priority: compactText(after.priority) ?? undefined,
+    });
+    goalKeys.push(change.key);
+  }
+
+  return { interestKeys, goalKeys };
 }
 
 /**
@@ -834,67 +913,8 @@ export async function getDreamRunDetail(runId: string): Promise<{ run: DreamRunR
   };
 }
 
-export async function applyDreamProfile(runId: string): Promise<DreamRunRecord> {
-  const run = await store.getRun(runId);
-  if (!run) throw new Error(`Dream run ${runId} not found`);
-  if (run.applied_at) return run;
-  if (run.status !== 'completed') throw new Error(`Dream run ${runId} is not completed`);
-  if (!run.profile_delta) throw new Error(`Dream run ${runId} has no profile delta`);
-
-  const delta = run.profile_delta;
-
-  // Apply facts
-  for (const [key, value] of Object.entries(delta.facts.after)) {
-    await db.setFact(key, value);
-  }
-
-  // Apply preferences
-  for (const [key, value] of Object.entries(delta.preferences.after)) {
-    await db.setPreference(key, value);
-  }
-
-  // Apply interests
-  for (const interest of delta.interests.after) {
-    const kind = compactText(interest.kind);
-    const key = compactText(interest.key);
-    if (!kind || !key) continue;
-    await db.upsertInterest({
-      kind, key,
-      score: typeof interest.score === 'number' ? interest.score : 0.5,
-      confidence: typeof interest.confidence === 'number' ? interest.confidence : 0.5,
-      evidenceCount: typeof interest.evidenceCount === 'number' ? interest.evidenceCount : 1,
-      lastSignalAt: typeof interest.lastSignalAt === 'string' ? interest.lastSignalAt : undefined,
-    });
-  }
-
-  return await store.markApplied(runId);
-}
-
-export async function applyDreamGoals(runId: string): Promise<DreamRunRecord> {
-  const run = await store.getRun(runId);
-  if (!run) throw new Error(`Dream run ${runId} not found`);
-  if (run.goals_applied_at) return run;
-  if (run.status !== 'completed') throw new Error(`Dream run ${runId} is not completed`);
-
-  const goalDelta = run.goal_delta ?? emptyGoalDelta();
-  if (goalDelta.changes.length === 0) {
-    return await store.markGoalsApplied(runId);
-  }
-
-  for (const change of goalDelta.changes) {
-    if (change.action === 'close') {
-      await db.closeGoal(change.key);
-      continue;
-    }
-    const after = change.after ?? {};
-    const title = compactText(after.title);
-    if (!title) throw new Error(`Goal change ${change.key} is missing a title`);
-    await db.upsertGoal({
-      key: change.key,
-      title,
-      priority: compactText(after.priority) ?? undefined,
-    });
-  }
-
-  return await store.markGoalsApplied(runId);
-}
+// Phase 2a: applyDreamProfile + applyDreamGoals were the deferred-apply
+// helpers that backed the "Apply Profile" / "Apply Goals" buttons in the
+// debug panel. The dream now write-throughs during executeDreamingForRun
+// (see applyDreamDeltaInline above), so these public exports are gone.
+// The two HTTP routes return 410 Gone for back-compat surfaces.

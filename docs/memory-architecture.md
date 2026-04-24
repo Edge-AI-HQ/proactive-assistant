@@ -355,15 +355,16 @@ unified-generator 的 phase 1 由"跑 12 个 CLI" 改为"先看 ContextPack 预�
 | 13 | 一次性 backfill + DROP 老表（`profile_memories` / `user_skills`），helpers redirect 到 v3 | ✅ |
 | 14 | Mobile cutover：删除 `mobile_items.db` + `mobile-db.ts`，`/mobile/items/ingest` 直写 `personal_signals` + raw.db fan-out，claim/commit 端点 410 Gone | ✅ |
 | 15 | v3 cleanup：DROP `push_records`/`push_outcomes`（无产品功能）+ 删 helpers + `pin push` CLI；`auto_loop_state` 与 `chat_crystallize_state` 单行表收敛到 `app_state` KV（带 backfill）；修文档 §二 / §七 表的真实状态 | ✅ |
+| 2a | dreaming 改为 write-through：`applyDreamProfile` / `applyDreamGoals` 的体内联进 `executeDreamingForRun`，dream 完成的同时把 profile.facts / profile_interests / goals 直接写完。删 2 个公共导出 + `/dreaming/runs/:id/apply-{profile,goals}` 两条路由（返 410 Gone）+ 前端两枚 Apply 按钮（改成纯状态徽章）；`evolution_runs.refs_produced.{profile_interests,goals}` 列出本次实际触动的 key | ✅ |
 
-**变更净结果（截至 Phase 15）**：v2 起步 23 张表 → 当前 18 张（13 v3 核心 + 5 v2 遗留待 Phase 2）+ `raw.db` 一组 + `skills/` folder + `app_state` KV 承载所有 single-row 状态。
-**测试**：plugin 320+ / 320+ ✅（数字随 PR 演进）；APIs + frontend type-check + 单测全过；CLI smoke 16 命令全过。
+**变更净结果（截至 Phase 2a）**：v2 起步 23 张表 → 当前 18 张（13 v3 核心 + 5 v2 遗留待 Phase 2b/c/d）+ `raw.db` 一组 + `skills/` folder + `app_state` KV 承载所有 single-row 状态。所有进化路径都是 write-through，没有 deferred apply。
+**测试**：plugin 318+ / 318+ ✅（数字随 PR 演进）；APIs + frontend type-check + 单测全过；CLI smoke 16 命令全过。
 
-**Phase 2（仍待规划）—— 把"过渡态"做成真正 SSOT 的最终表清单**：
-- `dream_runs` 折进 `evolution_runs`（设计选型：JSON detail 列 vs satellite `evolution_run_details(evolution_run_id, …)` 表）
-- `profile_signals` → `personal_signals`（schema 几乎一样，重写 dreaming.collectSignals）
-- `profile_interests` → `memory`（语义改：score+evidence_count → quality+reference_count）
-- `goals`：评估是否完全改用 `memory{subject:'goal:*'}`，或保留为独立 first-class 概念
+**Phase 2b/c/d（继续 SSOT 收敛）—— 真正 v3 干净版的剩余迁移**：
+- 2b: `profile_signals` → `personal_signals`（schema 几乎一样，重写 dreaming.collectSignals 改读源）
+- 2c: `profile_interests` → `memory`（语义改：score+evidence_count → quality+reference_count；改写 dreaming applyDreamDeltaInline 走 addMemoryV3）
+- 2d: `dream_runs` 折进 `evolution_runs`（journal_markdown + candidates 用 satellite `evolution_run_details(evolution_run_id, …)` 表）
+- 2e: `goals` 决定保留为 first-class 还是塞进 `memory{subject:'goal:*'}`
 - consolidation trigger（evolution agent 周期净化 memory）
 - evals/runner/replay.ts + golden fixtures（实际 eval 跑起来）
 - 端侧 SDK 在 OAuth 后调一次 `ensureDevice()` 拿 token

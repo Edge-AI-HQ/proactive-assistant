@@ -401,43 +401,9 @@ export default function AutoDreamingSettings() {
     }
   };
 
-  const handleApply = async () => {
-    if (!detail) return;
-    setError(null);
-    setNotice(null);
-    try {
-      const res = await proxyPost(`/dreaming/runs/${detail.run.id}/apply-profile`, {});
-      const data = await res.json() as { ok: boolean; run: AutoDreamingRun; error?: string };
-      if (!res.ok || !data.ok) {
-        setError(data.error ?? "Failed to apply profile changes");
-        return;
-      }
-      setDetail((current) => current ? { ...current, run: data.run } : current);
-      setNotice("Profile changes applied.");
-      await loadHistory(true);
-    } catch {
-      setError("Failed to apply profile changes");
-    }
-  };
-
-  const handleApplyGoals = async () => {
-    if (!detail) return;
-    setError(null);
-    setNotice(null);
-    try {
-      const res = await proxyPost(`/dreaming/runs/${detail.run.id}/apply-goals`, {});
-      const data = await res.json() as { ok: boolean; run: AutoDreamingRun; error?: string };
-      if (!res.ok || !data.ok) {
-        setError(data.error ?? "Failed to apply goal changes");
-        return;
-      }
-      setDetail((current) => current ? { ...current, run: data.run } : current);
-      setNotice("Goal changes applied.");
-      await loadHistory(true);
-    } catch {
-      setError("Failed to apply goal changes");
-    }
-  };
+  // Phase 2a: dreams write through during the run, so there's no
+  // separate Apply step. handleApply / handleApplyGoals removed; the
+  // detail panel below renders a status badge instead of action buttons.
 
   // ── History view ──
   if (view === "history") {
@@ -759,29 +725,36 @@ export default function AutoDreamingSettings() {
           )}
         </div>
 
-        <button
-          type="button"
-          onClick={() => void handleApply()}
-          disabled={Boolean(detail.run.appliedAt) || detail.run.status !== "completed" || detail.run.superseded}
-          className="w-full rounded-2xl bg-primary px-3 py-2 text-xs font-medium text-background disabled:opacity-50 hover:bg-primary/85 transition-colors"
-        >
-          {detail.run.appliedAt ? "Applied" : detail.run.superseded ? "Superseded" : detail.run.status === "running" ? "Waiting For Completion" : "Apply Profile Changes"}
-        </button>
+        {/* Phase 2a status badges — dreams write through automatically */}
+        <div className="flex items-center justify-between rounded-2xl bg-foreground/[0.04] px-3 py-2 text-xs">
+          <span className="text-foreground/70">Profile changes</span>
+          <span className="font-medium text-foreground">
+            {detail.run.status === "running"
+              ? "Pending — dream still in progress"
+              : detail.run.status === "failed"
+                ? "Skipped — dream failed"
+                : detail.run.appliedAt
+                  ? "Applied during the run"
+                  : detail.run.superseded
+                    ? "Superseded by a newer dream"
+                    : "Applied"}
+          </span>
+        </div>
 
-        <button
-          type="button"
-          onClick={() => void handleApplyGoals()}
-          disabled={Boolean(detail.run.goalsAppliedAt) || detail.run.status !== "completed" || detail.run.superseded}
-          className="w-full rounded-2xl bg-foreground/[0.06] px-3 py-2 text-xs font-medium text-foreground disabled:opacity-50 hover:bg-foreground/[0.10] transition-colors"
-        >
-          {detail.run.goalsAppliedAt
-            ? "Goal Changes Applied"
-            : detail.run.superseded
-              ? "Superseded"
-              : detail.run.status === "running"
-                ? "Waiting For Completion"
-                : "Apply Goal Changes"}
-        </button>
+        <div className="flex items-center justify-between rounded-2xl bg-foreground/[0.04] px-3 py-2 text-xs">
+          <span className="text-foreground/70">Goal changes</span>
+          <span className="font-medium text-foreground">
+            {detail.run.status === "running"
+              ? "Pending — dream still in progress"
+              : detail.run.status === "failed"
+                ? "Skipped — dream failed"
+                : detail.run.goalsAppliedAt
+                  ? "Applied during the run"
+                  : detail.run.superseded
+                    ? "Superseded by a newer dream"
+                    : "Applied"}
+          </span>
+        </div>
       </div>
     );
   }

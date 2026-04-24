@@ -193,83 +193,55 @@ test('GET /dreaming/runs/:id returns detail; 404 for unknown', withTempHome(asyn
   assert.equal(miss.res.statusCode, 404);
 }));
 
-// ── 4. POST /dreaming/runs/:id/apply-profile ─────────────────────────────
+// ── 4. Phase 2a: dreams write through, no separate apply step ──────────
 
-test('POST /dreaming/runs/:id/apply-profile materializes interests + facts',
+test('write-through: completing the run materializes interests + facts immediately',
   withTempHome(async (api) => {
     // Profile must exist for setFact updates to land.
     await upsertProfile({ displayName: 'Tester', locale: 'en', timezone: 'UTC' });
 
-    // Drive a real dream end-to-end so the run is 'completed' with a real delta.
+    // Drive a real dream end-to-end. With Phase 2a there's no follow-up
+    // /apply-profile call — the dream's own commit applies the delta.
     const handler = handleDreaming();
     const start = makeCtx(api, 'POST', '/dreaming/run');
     await handler(start.ctx);
     const startBody = JSON.parse(start.res.body);
     assert.equal(await waitForDreamFinal(startBody.runId), 'completed');
 
-    const apply = makeCtx(api, 'POST', `/dreaming/runs/${startBody.runId}/apply-profile`);
-    await handler(apply.ctx);
-    assert.equal(apply.res.statusCode, 200);
-    const applyBody = JSON.parse(apply.res.body);
-    assert.equal(applyBody.ok, true);
-    assert.ok(applyBody.run.applied_at, 'applied_at should be stamped');
-
-    // Side effects: profile.facts.dreaming has a key, profile_interests has rows.
+    // Side effects already happened — no Apply Profile button needed.
     const profile = await getProfile();
     assert.ok((profile!.facts as Record<string, unknown>).dreaming);
     const interests = await listInterests({ limit: 50 });
     assert.deepEqual(interests.map((i) => i.key).sort(), ['coffee', 'commute']);
+
+    // The run's applied_at + goals_applied_at are stamped during the run.
+    const detail = makeCtx(api, 'GET', `/dreaming/runs/${startBody.runId}`);
+    await handler(detail.ctx);
+    const detailBody = JSON.parse(detail.res.body);
+    assert.ok(detailBody.run.applied_at, 'applied_at must be stamped during the run');
+    assert.ok(detailBody.run.goals_applied_at, 'goals_applied_at must be stamped during the run');
   }));
 
-test('POST /dreaming/runs/:id/apply-profile returns 409 when run is still running',
+// ── 5. Legacy /apply-profile + /apply-goals routes return 410 Gone ─────
+
+test('POST /dreaming/runs/:id/apply-profile → 410 Gone (Phase 2a removed)',
   withTempHome(async () => {
-    const r = await store.createRun({
-      trigger: 'manual', windowStart: '2026-04-23T00:00:00Z', windowEnd: '2026-04-24T00:00:00Z',
-    });
-    // Don't complete it — leave status='running'.
     const handler = handleDreaming();
-    const apply = makeCtx(makeDreamingApi(), 'POST', `/dreaming/runs/${r.id}/apply-profile`);
+    const apply = makeCtx(makeDreamingApi(), 'POST', '/dreaming/runs/dream_anything/apply-profile');
     await handler(apply.ctx);
-    assert.equal(apply.res.statusCode, 409, 'expected 409 Conflict for unfinished run');
+    assert.equal(apply.res.statusCode, 410);
     const body = JSON.parse(apply.res.body);
     assert.equal(body.ok, false);
-    assert.match(body.error, /not completed/);
+    assert.match(body.hint, /apply directly during the run/);
   }));
 
-test('POST /dreaming/runs/:id/apply-profile returns 409 for unknown run',
+test('POST /dreaming/runs/:id/apply-goals → 410 Gone (Phase 2a removed)',
   withTempHome(async () => {
     const handler = handleDreaming();
-    const apply = makeCtx(makeDreamingApi(), 'POST', '/dreaming/runs/dream_no_such/apply-profile');
+    const apply = makeCtx(makeDreamingApi(), 'POST', '/dreaming/runs/dream_anything/apply-goals');
     await handler(apply.ctx);
-    assert.equal(apply.res.statusCode, 409);
-    assert.match(JSON.parse(apply.res.body).error, /not found/);
+    assert.equal(apply.res.statusCode, 410);
   }));
-
-// ── 5. POST /dreaming/runs/:id/apply-goals ───────────────────────────────
-
-test('POST /dreaming/runs/:id/apply-goals stamps goals_applied_at on completed run',
-  withTempHome(async (api) => {
-    await upsertProfile({ displayName: 'Tester', locale: 'en', timezone: 'UTC' });
-    const handler = handleDreaming();
-    const start = makeCtx(api, 'POST', '/dreaming/run');
-    await handler(start.ctx);
-    const startBody = JSON.parse(start.res.body);
-    assert.equal(await waitForDreamFinal(startBody.runId), 'completed');
-
-    const apply = makeCtx(api, 'POST', `/dreaming/runs/${startBody.runId}/apply-goals`);
-    await handler(apply.ctx);
-    assert.equal(apply.res.statusCode, 200);
-    const body = JSON.parse(apply.res.body);
-    assert.equal(body.ok, true);
-    assert.ok(body.run.goals_applied_at, 'goals_applied_at should be stamped');
-  }));
-
-test('POST /dreaming/runs/:id/apply-goals → 409 for unknown run', withTempHome(async () => {
-  const handler = handleDreaming();
-  const apply = makeCtx(makeDreamingApi(), 'POST', '/dreaming/runs/dream_no_such/apply-goals');
-  await handler(apply.ctx);
-  assert.equal(apply.res.statusCode, 409);
-}));
 
 // ── 6. Unrelated subpaths fall through ──────────────────────────────────
 
