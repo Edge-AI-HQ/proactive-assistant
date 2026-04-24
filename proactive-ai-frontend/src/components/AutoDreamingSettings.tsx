@@ -8,17 +8,22 @@ interface AutoDreamingSchedule {
   timezone: string;
 }
 
+// The backend returns snake_case keys (mirrors the dream_runs row shape).
+// Pre-Phase-2a, only the Apply buttons read these fields and the buttons
+// were always disabled before user clicked, so the camelCase mismatch
+// silently rendered "Not applied" — harmless. Phase 2a turned the badges
+// into the only signal, so the field names must actually match the API.
 interface AutoDreamingRun {
   id: string;
   trigger?: string;
   status: string;
-  startedAt?: string;
-  completedAt?: string | null;
-  appliedAt?: string | null;
-  goalsAppliedAt?: string | null;
+  started_at?: string;
+  completed_at?: string | null;
+  applied_at?: string | null;
+  goals_applied_at?: string | null;
   superseded?: boolean;
-  summaryJson?: { text?: string } | null;
-  sourceStatsJson?: Record<string, { status?: string; count?: number; message?: string }> | null;
+  summary?: { text?: string } | null;
+  source_stats?: Record<string, { status?: string; count?: number; message?: string }> | null;
 }
 
 interface DreamSourceBreakdown {
@@ -84,8 +89,8 @@ function formatTimestamp(value?: string | null): string {
 }
 
 function formatDreamRunTitle(run: AutoDreamingRun): string {
-  if (!run.startedAt) return run.id;
-  const date = new Date(run.startedAt);
+  if (!run.started_at) return run.id;
+  const date = new Date(run.started_at);
   if (Number.isNaN(date.getTime())) return run.id;
   const day = [
     date.getFullYear(),
@@ -96,8 +101,8 @@ function formatDreamRunTitle(run: AutoDreamingRun): string {
 }
 
 function runDayKey(run: AutoDreamingRun): string {
-  if (!run.startedAt) return "Unknown";
-  const date = new Date(run.startedAt);
+  if (!run.started_at) return "Unknown";
+  const date = new Date(run.started_at);
   if (Number.isNaN(date.getTime())) return "Unknown";
   return [
     date.getFullYear(),
@@ -453,7 +458,7 @@ export default function AutoDreamingSettings() {
                     </div>
                     <div className={`space-y-2 ${group.runs.length > DEFAULT_VISIBLE_RUNS_PER_DAY ? "max-h-72 overflow-y-auto pr-1" : ""}`}>
                     {(isHistoryDayShowingAll(group.day) ? group.runs : group.runs.slice(0, DEFAULT_VISIBLE_RUNS_PER_DAY)).map((run) => {
-                      const activeSourceCount = Object.values(run.sourceStatsJson ?? {}).filter((item) => Number(item?.count ?? 0) > 0).length;
+                      const activeSourceCount = Object.values(run.source_stats ?? {}).filter((item) => Number(item?.count ?? 0) > 0).length;
                       return (
                         <button
                           key={run.id}
@@ -469,13 +474,13 @@ export default function AutoDreamingSettings() {
                           </div>
                           <div className="text-[10px] text-foreground/35">{run.id}</div>
                           <div className="text-[11px] text-foreground/55">
-                            {run.summaryJson?.text ?? "No summary yet"}
+                            {run.summary?.text ?? "No summary yet"}
                           </div>
                           <div className="flex flex-wrap gap-2 text-[10px] text-foreground/45">
                             <span>{run.trigger ?? "manual"}</span>
-                            <span>{formatTimestamp(run.startedAt)}</span>
+                            <span>{formatTimestamp(run.started_at)}</span>
                             <span>{activeSourceCount} active source(s)</span>
-                            <span>{run.appliedAt ? "Applied" : run.superseded ? "Superseded" : "Not applied"}</span>
+                            <span>{run.applied_at ? "Applied" : run.superseded ? "Superseded" : "Not applied"}</span>
                           </div>
                         </button>
                       );
@@ -527,9 +532,9 @@ export default function AutoDreamingSettings() {
           </div>
           <p className="text-xs text-foreground/70">{detail.detail.summary.text}</p>
           <div className="flex flex-wrap gap-2 text-[10px] text-foreground/45">
-            <span>Started {formatTimestamp(detail.run.startedAt)}</span>
-            <span>Completed {formatTimestamp(detail.run.completedAt)}</span>
-            <span>{detail.run.appliedAt ? "Profile applied" : "Profile pending apply"}</span>
+            <span>Started {formatTimestamp(detail.run.started_at)}</span>
+            <span>Completed {formatTimestamp(detail.run.completed_at)}</span>
+            <span>{detail.run.applied_at ? "Profile applied" : "Profile pending apply"}</span>
           </div>
         </div>
 
@@ -733,7 +738,7 @@ export default function AutoDreamingSettings() {
               ? "Pending — dream still in progress"
               : detail.run.status === "failed"
                 ? "Skipped — dream failed"
-                : detail.run.appliedAt
+                : detail.run.applied_at
                   ? "Applied during the run"
                   : detail.run.superseded
                     ? "Superseded by a newer dream"
@@ -748,7 +753,7 @@ export default function AutoDreamingSettings() {
               ? "Pending — dream still in progress"
               : detail.run.status === "failed"
                 ? "Skipped — dream failed"
-                : detail.run.goalsAppliedAt
+                : detail.run.goals_applied_at
                   ? "Applied during the run"
                   : detail.run.superseded
                     ? "Superseded by a newer dream"
@@ -800,8 +805,8 @@ export default function AutoDreamingSettings() {
               {formatStatusLabel(latestRun.status)}
             </span>
           </div>
-          <p className="text-[11px] text-foreground/60">{latestRun.summaryJson?.text ?? "No summary yet."}</p>
-          <p className="text-[10px] text-foreground/40">{formatTimestamp(latestRun.startedAt)}</p>
+          <p className="text-[11px] text-foreground/60">{latestRun.summary?.text ?? "No summary yet."}</p>
+          <p className="text-[10px] text-foreground/40">{formatTimestamp(latestRun.started_at)}</p>
         </div>
       )}
 
