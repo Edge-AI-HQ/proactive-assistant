@@ -42,9 +42,9 @@ flowchart LR
 
 | 层 | 存储 | 作用 |
 |---|---|---|
-| Tier 0 raw | `raw.db` | Gmail、Calendar、device app/contact snapshot 等字段化批量数据。 |
-| Tier 1 signals | `personal_signals`、`world_signals` | 短期观察，默认先给 pipeline / evolution 消费。 |
-| Tier 2 memory | `memory` | evolution/manual 沉淀出的长期事实，有 `quality`、`confidence`、`status`。 |
+| Tier 0 raw | `raw.db` | Gmail / Calendar / Slack / Notion / Drive / GitHub / Docs / Outlook / Sheets / Stripe / Discord / device app/contact snapshot 等字段化批量数据。每个 Composio toolkit 一张 typed 表。 |
+| Tier 1 signals | `personal_signals`、`world_signals` | 短期观察，默认先给 pipeline / evolution 消费。`connector.init` 落的信号 `kind=connector.<toolkit>.<entity>`。 |
+| Tier 2 memory | `memory` | evolution/manual 沉淀出的长期事实，有 `quality`、`confidence`、`status`。connector init 写入的 `source='connector_init:<toolkit>'`。 |
 | Tier 3 profile/skill | `profile`、`skill_index`、`skills/` | 高浓缩画像和可执行技能。 |
 
 关键规则：
@@ -55,6 +55,8 @@ flowchart LR
 - `raw.db` 是独立 SQLite 文件，路径为 `${OPENCLAW_HOME}/data/raw.db`。
 - `proactive.db` 是主 SQLite 文件，路径为 `${OPENCLAW_HOME}/data/proactive.db`。
 - 需要追溯的表使用 `reference_count` / `last_referenced_at` / `referenced_by_runs`。
+- `evolution_runs.trigger_kind` 现在有 5 种来源：`chat_burst`（crystallize）、`daily_dream`（auto.dreaming）、`manual`（CLI / 手动）、`on_event`（connector.init 拉数据后开的）、`consolidation`（预留）。
+- connector init 的 evolve agent（`tasks/handlers/connector-evolve.ts`）专门处理 `on_event`：把刚 ingest 的 raw + signals sample 进 prompt，让 LLM 抽出 durable facts 写到 `memory`，`source='connector_init:<toolkit>'`、`sourceRunId=<evolution_run_id>`。失败时 `evolution_runs.status='failed'`，`memory` 不写，`raw + signals` 仍然保留。
 
 ## 核心链路
 
@@ -85,6 +87,23 @@ flowchart LR
   CLI --> Evo["evolution agent"]
   Evo --> Memory["memory"]
 ```
+
+### connector.init → evolution → memory
+
+`connector.init` 在 [Data Connectors](./data-connectors) 那边拉好数据后，handler 会创建一行 `evolution_runs(trigger_kind='on_event')` 并把 `refs_consumed` 填为 `gmail_messages` / `slack_messages` / 等的新插入 id。`tasks/handlers/connector-evolve.ts` 立刻在同一 task 内执行：sample 20 条 → 拼 prompt（含 profile summary + recent memory subjects 防止重复）→ 跑 subagent → parse JSON → `addMemoryV3({source:'connector_init:<toolkit>', sourceRunId, ...})`。
+
+```mermaid
+flowchart LR
+  Init["connector.init handler"] --> Raw["raw.db typed tables"]
+  Raw --> Refs["evolution_runs.refs_consumed"]
+  Refs --> Evolve["connector-evolve agent"]
+  Profile["profile.summary"] --> Evolve
+  Subjects["recent memory subjects"] --> Evolve
+  Evolve --> Memory["memory rows\nsource=connector_init:<toolkit>"]
+  Evolve --> Refs2["evolution_runs.refs_produced"]
+```
+
+LLM 失败 / 超时 / 解析不出 JSON 时不抛出：`evolution_runs.status='failed'` + `error_message`，但 `connector.init` task 仍 `succeeded`（raw + signals 是独立有效产物，不应该因为 LLM 失败而回滚）。
 
 ## 开发入口
 
@@ -170,3 +189,9 @@ pin evolution recent --limit 5
 ## 相关 AI Plans
 
 - [Memory Architecture](../plans/memory-architecture)：Memory / Profile / Skill v3 的详细 schema、迁移映射和实施计划。
+
+## 与其他模块的边界
+
+- **入站接入**：connector.init 拉数据写 raw + signals → 看 [Data Connectors](./data-connectors)。
+- **出站消费**：generation pipeline 怎么读 memory + signals 进 prompt → 看 [Generation](./generation)。
+- **scheduler / lease / heartbeat / `pin tasks`**：通用基建在 [Runtime & Deployment](./runtime-deployment#background_tasks-scheduler) 里讲。

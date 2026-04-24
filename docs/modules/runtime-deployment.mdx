@@ -161,6 +161,79 @@ make deploy-litellm-prod
 make build-openclaw-image
 ```
 
+## background_tasks scheduler
+
+用户容器内的 proactive-ai plugin 跑两套并行调度，分别由两套 inFlight / lease 机制保护：
+
+| 路径 | 触发 | 当前承载的 job | 状态 |
+|---|---|---|---|
+| 旧 setInterval `auto-loop` | `scheduler/auto-loop.ts` 启动 5 个 timer | `auto.world_ingest` / `auto.generate` / `auto.feedback.sync` / `auto.crystallize` | 永远运行 |
+| 新 `background_tasks` 队列 | `tasks/scheduler.ts` 单 process tick + lease + reaper + audit | `connector.init`（Composio 拉数据）+ `auto.dreaming`（每天一次） | 仅在 `BACKGROUND_AUTO_LOOP_TASKS_ENABLED=1` 启动 |
+
+两套互不重叠：scheduler 开启时，`scheduler/auto-loop.ts` 里的 `runAutoDreaming` 检测到 env flag 后立即 return，避免双跑。
+
+```mermaid
+flowchart LR
+  AutoLoop["auto-loop setInterval timers"]
+  AutoLoop --> AutoIngest["auto.world_ingest"]
+  AutoLoop --> AutoGen["auto.generate"]
+  AutoLoop --> AutoFb["auto.feedback.sync"]
+  AutoLoop --> AutoCryst["auto.crystallize"]
+  Sched["BackgroundTaskScheduler"]
+  Sched --> Reaper["reaper (recover stale leases)"]
+  Sched --> Claim["claim due task"]
+  Claim --> CI["connector.init handler"]
+  Claim --> AD["auto.dreaming handler"]
+  CompWait["/composio/wait ACTIVE"] --> Q["background_tasks"]
+  Recon["reconciler (10min)"] --> Q
+  DreamEnq["dreaming-enqueuer (1min)"] --> Q
+  Q --> Sched
+```
+
+### 相关环境变量
+
+```
+# 总开关（不设 = 默认 0 = 旧 auto-loop 全跑、scheduler 不启动）
+BACKGROUND_AUTO_LOOP_TASKS_ENABLED=1
+
+# scheduler 调速
+BACKGROUND_TASK_TICK_MS=60000          # 多久跑一次 tick
+BACKGROUND_TASK_LEASE_MS=60000         # 默认 lease 长度（handler 内部按需 heartbeat 续约）
+
+# connector.init
+CONNECTOR_INIT_DEFAULT_LIMIT=100                # 单次拉多少条
+CONNECTOR_INIT_RECONCILER_INTERVAL_MS=600000    # reconciler 周期，默认 10min
+CONNECTOR_INIT_EVOLVE_TIMEOUT_MS=60000          # evolve agent 超时
+CONNECTOR_INIT_DISABLED_TOOLKITS=stripe,discord # kill switch（逗号分隔，匹配 toolkit 跳过）
+
+# auto.dreaming enqueuer
+DREAMING_ENQUEUER_INTERVAL_MS=60000             # 多久检查一次 "今天是否到了 06:00"
+```
+
+prod 启用前先在 dev：`flyctl secrets set BACKGROUND_AUTO_LOOP_TASKS_ENABLED=1 -a proactive-ai-assistant-dev`。开后 reconciler 会在 10 分钟内把所有 ACTIVE Composio 账号补上 init task。
+
+### 调试入口
+
+```bash
+pin tasks list                              # 看队列全状态
+pin tasks list --type connector.init --status failed
+pin tasks show --id <task_id>               # 包含 lease/heartbeat/result
+pin tasks attempts --id <task_id>           # audit 历史
+pin tasks cancel --id <task_id>             # 强制终止 queued/running
+pin tasks enqueue --type connector.init \   # 手动入队（管理员调试）
+  --idempotencyKey 'manual:gmail:acc-x:v1' \
+  --payload '{"toolkit":"gmail","connectedAccountId":"acc-x"}'
+```
+
+HTTP 只读 API（前端 InitTaskChip 用）：
+
+```
+GET /proactive-ai/api/tasks/:id
+GET /proactive-ai/api/tasks?type=connector.init&status=running&limit=10
+```
+
+写路径只在 `pin tasks` CLI 暴露，HTTP 不能改任务，避免 UI 误触。
+
 ## LiteLLM
 
 - LiteLLM 使用单进程模式，不使用 `--num_workers`。
