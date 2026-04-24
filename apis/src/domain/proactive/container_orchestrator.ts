@@ -20,6 +20,7 @@ import {
 import type { ContainerWithToken } from './user_service.js';
 import { config } from '../common/config.js';
 import { buildAssistantOpenclawConfig } from '../container/providers/shared/openclaw_config.js';
+import { SCHEDULER_PASSTHROUGH_KEYS } from '../container/providers/shared/webhook_params.js';
 import { ensureProactiveLiteLLMKey } from './litellm_key_service.js';
 import { getOrCreateBrowserContext } from './browser_context_service.js';
 import { pool } from '../common/db/core.js';
@@ -90,6 +91,11 @@ function buildContainerEnv(
   if (browserContextId) env.BROWSERBASE_CONTEXT_ID = browserContextId;
 
   env.OPENCLAW_PLUGIN_LOAD_PATHS = '/opt/pinai/plugins/proactive-ai';
+
+  for (const key of SCHEDULER_PASSTHROUGH_KEYS) {
+    const value = process.env[key]?.trim();
+    if (value) env[key] = value;
+  }
 
   return env;
 }

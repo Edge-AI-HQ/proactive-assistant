@@ -48,6 +48,22 @@ export const buildWebhookParams = (
   };
 };
 
+// Plugin-side knobs the proactive-ai background_tasks scheduler reads from
+// process.env at boot. Forwarded from the APIs process so the user container
+// honors the same flag/cadence config the operator sets on the APIs Fly app.
+// Keep in sync with pinai-openclaw/plugins/proactive-ai/index.ts and the
+// "background_tasks scheduler" section of docs/modules/runtime-deployment.mdx.
+export const SCHEDULER_PASSTHROUGH_KEYS = [
+  "BACKGROUND_AUTO_LOOP_TASKS_ENABLED",
+  "BACKGROUND_TASK_TICK_MS",
+  "BACKGROUND_TASK_LEASE_MS",
+  "CONNECTOR_INIT_DEFAULT_LIMIT",
+  "CONNECTOR_INIT_RECONCILER_INTERVAL_MS",
+  "CONNECTOR_INIT_EVOLVE_TIMEOUT_MS",
+  "CONNECTOR_INIT_DISABLED_TOOLKITS",
+  "DREAMING_ENQUEUER_INTERVAL_MS",
+] as const;
+
 /**
  * Common container env vars shared by Docker and Fly providers.
  */
@@ -83,5 +99,11 @@ export const buildBaseContainerEnv = (
     if (baseUrl) env.LITELLM_BASE_URL = baseUrl;
     if (apiKey) env.LITELLM_API_KEY = apiKey;
   }
+
+  for (const key of SCHEDULER_PASSTHROUGH_KEYS) {
+    const value = process.env[key]?.trim();
+    if (value) env[key] = value;
+  }
+
   return env;
 };

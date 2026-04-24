@@ -169,3 +169,72 @@ test("buildBaseContainerEnv omits LiteLLM env when disabled", () => {
   assert.equal(env.LITELLM_BASE_URL, undefined);
   assert.equal(env.LITELLM_API_KEY, undefined);
 });
+
+test("buildBaseContainerEnv forwards background_tasks scheduler env from process.env", () => {
+  // Set/restore each key around the call so other tests are unaffected.
+  const setKeys: Record<string, string> = {
+    BACKGROUND_AUTO_LOOP_TASKS_ENABLED: "1",
+    BACKGROUND_TASK_TICK_MS: "30000",
+    BACKGROUND_TASK_LEASE_MS: "45000",
+    CONNECTOR_INIT_DEFAULT_LIMIT: "75",
+    CONNECTOR_INIT_RECONCILER_INTERVAL_MS: "300000",
+    CONNECTOR_INIT_EVOLVE_TIMEOUT_MS: "20000",
+    CONNECTOR_INIT_DISABLED_TOOLKITS: "stripe,discord",
+    DREAMING_ENQUEUER_INTERVAL_MS: "120000",
+  };
+  const previous: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(setKeys)) {
+    previous[k] = process.env[k];
+    process.env[k] = v;
+  }
+  try {
+    const env = buildBaseContainerEnv(
+      buildConfig(), 42, 8787, 8788,
+      "https://api.example.com",
+      "/app/google/credentials.json",
+    );
+    for (const [k, v] of Object.entries(setKeys)) {
+      assert.equal(env[k], v, `expected ${k} forwarded`);
+    }
+  } finally {
+    for (const [k, v] of Object.entries(previous)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+});
+
+test("buildBaseContainerEnv skips scheduler env keys that are unset or empty", () => {
+  const keys = [
+    "BACKGROUND_AUTO_LOOP_TASKS_ENABLED",
+    "BACKGROUND_TASK_TICK_MS",
+    "BACKGROUND_TASK_LEASE_MS",
+    "CONNECTOR_INIT_DEFAULT_LIMIT",
+    "CONNECTOR_INIT_RECONCILER_INTERVAL_MS",
+    "CONNECTOR_INIT_EVOLVE_TIMEOUT_MS",
+    "CONNECTOR_INIT_DISABLED_TOOLKITS",
+    "DREAMING_ENQUEUER_INTERVAL_MS",
+  ];
+  const previous: Record<string, string | undefined> = {};
+  for (const k of keys) {
+    previous[k] = process.env[k];
+    delete process.env[k];
+  }
+  // Set one to empty string to confirm we treat blank as "unset".
+  process.env.BACKGROUND_TASK_TICK_MS = "   ";
+  try {
+    const env = buildBaseContainerEnv(
+      buildConfig(), 42, 8787, 8788,
+      "https://api.example.com",
+      "/app/google/credentials.json",
+    );
+    for (const k of keys) {
+      assert.equal(env[k], undefined, `expected ${k} not forwarded`);
+    }
+  } finally {
+    for (const [k, v] of Object.entries(previous)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+});
