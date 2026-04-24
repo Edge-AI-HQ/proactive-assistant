@@ -61,15 +61,16 @@ WORKDIR /app
 RUN mkdir -p /app/.openclaw && ln -sfn /app/.openclaw /root/.openclaw
 
 # ── Plugin dependency layer (cached unless package.json changes) ──
-# Copy only package.json first so npm install is cached across plugin code changes.
+# Copy only package manifests first so npm install is cached across plugin code changes.
 COPY pinai-openclaw/plugins/proactive-ai/package.json /opt/pinai/plugins/proactive-ai/package.json
+COPY pinai-openclaw/plugins/proactive-ai/package-lock.json /opt/pinai/plugins/proactive-ai/package-lock.json
 
 # Install runtime npm deps for proactive-ai plugin (native modules)
 # better-sqlite3 needs build tools — install in runtime since builder
 # COPY doesn't cover plugin node_modules.
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential python3 \
     && cd /opt/pinai/plugins/proactive-ai \
-    && timeout 900 npm install --omit=dev --registry=${NPM_REGISTRY} better-sqlite3 @lancedb/lancedb @browserbasehq/sdk playwright-core jpeg-js ws jsonrepair 2>/dev/null || true \
+    && timeout 900 npm ci --omit=dev --registry=${NPM_REGISTRY} \
     && apt-get purge -y build-essential \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
