@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
@@ -12,7 +13,6 @@ import {
   X,
   AlertCircle,
   RotateCw,
-  Info,
 } from "lucide-react";
 
 export type SheetStage = "mini" | "medium" | "full";
@@ -24,8 +24,21 @@ interface BrowserViewProps {
   takeoverReason?: string | null;
   iframeReloadKey?: number;
   sheetStage: SheetStage;
-  canTakeControl: boolean;
+  isNative: boolean;
+  /** Remote page viewport in CSS px — needed to scale overlay-local
+   *  tap/swipe coordinates into remote page coordinates when we forward
+   *  gestures through /input. Defaults fine-tuned for mobile preset. */
+  viewport: { width: number; height: number };
   onControlChange: (mode: "ai" | "user") => void;
+  onUserInputText: (text: string) => Promise<void>;
+  onUserInputKey: (key: string) => Promise<void>;
+  /** Sent when the user taps (short press, no significant drag) inside
+   *  the overlay. x/y are already scaled to remote viewport coordinates. */
+  onUserInputClick: (x: number, y: number) => Promise<void>;
+  /** Sent on pan end with the total drag delta already scaled to remote
+   *  viewport coordinates. We only forward one scroll per gesture to
+   *  keep the HTTP chatter bounded; inertia is up to Browserbase. */
+  onUserInputScroll: (dx: number, dy: number) => Promise<void>;
   onCycleStage: () => void;
   onRequestClose: () => void;
   onReload: () => void;
@@ -39,8 +52,13 @@ export default function BrowserView({
   takeoverReason,
   iframeReloadKey = 0,
   sheetStage,
-  canTakeControl,
+  isNative,
+  viewport,
   onControlChange,
+  onUserInputText,
+  onUserInputKey,
+  onUserInputClick,
+  onUserInputScroll,
   onCycleStage,
   onRequestClose,
   onReload,
@@ -48,20 +66,15 @@ export default function BrowserView({
 }: BrowserViewProps) {
   const [iframeLoaded, setIframeLoaded] = useState(false);
   const [confirmingClose, setConfirmingClose] = useState(false);
-  const [showTakeControlTip, setShowTakeControlTip] = useState(false);
   const [reloading, setReloading] = useState(false);
+  const [mobileInput, setMobileInput] = useState("");
+  const [sendingInput, setSendingInput] = useState(false);
 
   useEffect(() => {
     if (!confirmingClose) return;
     const t = setTimeout(() => setConfirmingClose(false), 4000);
     return () => clearTimeout(t);
   }, [confirmingClose]);
-
-  useEffect(() => {
-    if (!showTakeControlTip) return;
-    const t = setTimeout(() => setShowTakeControlTip(false), 3500);
-    return () => clearTimeout(t);
-  }, [showTakeControlTip]);
 
   useEffect(() => {
     if (!reloading) return;
@@ -71,6 +84,79 @@ export default function BrowserView({
 
   const isMini = sheetStage === "mini";
   const stopDrag = (e: ReactPointerEvent) => e.stopPropagation();
+
+  // Transparent touch overlay (native + user mode): tap → /input click,
+  // pan → /input scroll. Browserbase's DevTools-based Live View doesn't
+  // forward native mobile touches to the remote page reliably, so we
+  // capture them here and forward scaled coordinates to Playwright.
+  const overlayActive =
+    isNative && !isMini && controlMode === "user";
+  const TAP_THRESHOLD_PX = 8;
+  type OverlayGesture = {
+    pointerId: number;
+    startX: number;
+    startY: number;
+    lastX: number;
+    lastY: number;
+    startTime: number;
+    moved: boolean;
+    rect: DOMRect;
+  };
+  const gestureRef = useRef<OverlayGesture | null>(null);
+
+  const handleOverlayPointerDown = (e: ReactPointerEvent) => {
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    gestureRef.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      lastX: e.clientX,
+      lastY: e.clientY,
+      startTime: performance.now(),
+      moved: false,
+      rect,
+    };
+  };
+
+  const handleOverlayPointerMove = (e: ReactPointerEvent) => {
+    const g = gestureRef.current;
+    if (!g || g.pointerId !== e.pointerId) return;
+    const dx = e.clientX - g.startX;
+    const dy = e.clientY - g.startY;
+    if (!g.moved && Math.hypot(dx, dy) > TAP_THRESHOLD_PX) g.moved = true;
+    g.lastX = e.clientX;
+    g.lastY = e.clientY;
+  };
+
+  const handleOverlayPointerUp = (e: ReactPointerEvent) => {
+    const g = gestureRef.current;
+    if (!g || g.pointerId !== e.pointerId) return;
+    gestureRef.current = null;
+    const { rect } = g;
+    if (rect.width === 0 || rect.height === 0) return;
+    const scaleX = viewport.width / rect.width;
+    const scaleY = viewport.height / rect.height;
+    if (!g.moved) {
+      const x = (g.lastX - rect.left) * scaleX;
+      const y = (g.lastY - rect.top) * scaleY;
+      void onUserInputClick(x, y);
+      return;
+    }
+    // Swipe up on the screen (lastY < startY → dy negative) should scroll
+    // the remote page content DOWN (reveal content below), which in
+    // wheel coordinates is positive dy. Hence negate the sign.
+    const dx = -(g.lastX - g.startX) * scaleX;
+    const dy = -(g.lastY - g.startY) * scaleY;
+    if (Math.hypot(dx, dy) < 1) return;
+    void onUserInputScroll(dx, dy);
+  };
+
+  const handleOverlayPointerCancel = (e: ReactPointerEvent) => {
+    if (gestureRef.current?.pointerId === e.pointerId) {
+      gestureRef.current = null;
+    }
+  };
 
   const statusDot = (
     <span
@@ -91,6 +177,28 @@ export default function BrowserView({
   const handleReload = () => {
     setReloading(true);
     onReload();
+  };
+
+  const sendMobileText = async () => {
+    const text = mobileInput;
+    if (!text || sendingInput) return;
+    setSendingInput(true);
+    try {
+      await onUserInputText(text);
+      setMobileInput("");
+    } finally {
+      setSendingInput(false);
+    }
+  };
+
+  const sendMobileKey = async (key: string) => {
+    if (sendingInput) return;
+    setSendingInput(true);
+    try {
+      await onUserInputKey(key);
+    } finally {
+      setSendingInput(false);
+    }
   };
 
   // Cycle chevron:
@@ -131,7 +239,11 @@ export default function BrowserView({
             ? "h-0 overflow-hidden"
             : "relative flex-1 overflow-hidden bg-black"
         }
-        style={isMini ? undefined : { touchAction: "auto" }}
+        style={
+          isMini
+            ? undefined
+            : { touchAction: overlayActive ? "none" : "auto" }
+        }
       >
         {!iframeLoaded && !isMini && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-[1]">
@@ -149,10 +261,28 @@ export default function BrowserView({
             setReloading(false);
           }}
           className="w-full h-full border-0 block"
-          style={{ touchAction: "auto", pointerEvents: "auto" }}
+          style={{
+            touchAction: "auto",
+            // When our touch overlay is active (native + user mode),
+            // iframe must be click-through so the overlay catches every
+            // pointer; otherwise on desktop user mode the iframe's own
+            // Browserbase DevTools UI receives clicks directly.
+            pointerEvents:
+              controlMode === "user" && !overlayActive ? "auto" : "none",
+          }}
           allow="clipboard-read; clipboard-write; fullscreen"
           title={`Browser session ${sessionId}`}
         />
+        {overlayActive && (
+          <div
+            className="absolute inset-0 z-[2]"
+            style={{ touchAction: "none", pointerEvents: "auto" }}
+            onPointerDown={handleOverlayPointerDown}
+            onPointerMove={handleOverlayPointerMove}
+            onPointerUp={handleOverlayPointerUp}
+            onPointerCancel={handleOverlayPointerCancel}
+          />
+        )}
       </div>
 
       {/* Mini spacer — pushes chrome to panel bottom so translateY reveals
@@ -177,6 +307,49 @@ export default function BrowserView({
           >
             Done
           </button>
+        </div>
+      )}
+
+      {isNative && !isMini && controlMode === "user" && (
+        <div
+          onPointerDown={stopDrag}
+          className="mx-3 mt-2 flex flex-col gap-2 rounded-xl border border-white/10 bg-black/35 p-2"
+        >
+          <div className="flex items-center gap-1.5">
+            <input
+              value={mobileInput}
+              onChange={(e) => setMobileInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                void sendMobileText();
+              }}
+              className="min-w-0 flex-1 rounded-lg bg-white/10 px-2.5 py-2 text-[16px] text-white outline-none placeholder:text-white/35"
+              placeholder="Type into browser"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+            />
+            <button
+              onClick={() => void sendMobileText()}
+              disabled={!mobileInput || sendingInput}
+              className="shrink-0 rounded-lg bg-white/15 px-3 py-2 text-[12px] font-medium text-white disabled:opacity-35"
+            >
+              Send
+            </button>
+          </div>
+          <div className="flex items-center gap-1.5">
+            {["Enter", "Tab", "Backspace"].map((key) => (
+              <button
+                key={key}
+                onClick={() => void sendMobileKey(key)}
+                disabled={sendingInput}
+                className="rounded-lg bg-white/[0.08] px-2.5 py-1.5 text-[11.5px] text-white/80 disabled:opacity-35"
+              >
+                {key}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -206,32 +379,12 @@ export default function BrowserView({
               {controlMode === "ai" ? (
                 <div className="relative">
                   <button
-                    onClick={() =>
-                      canTakeControl
-                        ? onControlChange("user")
-                        : setShowTakeControlTip(true)
-                    }
-                    aria-disabled={!canTakeControl}
-                    className={
-                      canTakeControl
-                        ? "flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/[0.08] hover:bg-white/15 active:bg-white/20 text-white/85 text-[11.5px] transition-colors"
-                        : "flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/[0.04] text-white/40 text-[11.5px] cursor-not-allowed"
-                    }
+                    onClick={() => onControlChange("user")}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/[0.08] hover:bg-white/15 active:bg-white/20 text-white/85 text-[11.5px] transition-colors"
                   >
                     <Hand size={12} strokeWidth={2} />
                     <span>Take over</span>
-                    {!canTakeControl && (
-                      <Info size={11} strokeWidth={2} className="ml-0.5 text-white/50" />
-                    )}
                   </button>
-                  {showTakeControlTip && (
-                    <div
-                      className="absolute left-0 bottom-full mb-1.5 w-[220px] px-2.5 py-2 rounded-lg bg-black/95 text-white/90 text-[11px] leading-snug shadow-lg z-10 pointer-events-none"
-                      style={{ touchAction: "none" }}
-                    >
-                      Manual control isn't supported on mobile yet — use desktop to take over.
-                    </div>
-                  )}
                 </div>
               ) : (
                 <button

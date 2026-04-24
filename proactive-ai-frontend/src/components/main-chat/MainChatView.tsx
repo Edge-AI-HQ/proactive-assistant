@@ -86,6 +86,10 @@ function parseSSELines(
   return remainder;
 }
 
+function parseControlMode(value: unknown): BrowserSession["controlMode"] {
+  return value === "user" || value === "idle" ? value : "ai";
+}
+
 function UserMessage() {
   return (
     <MessagePrimitive.Root asChild>
@@ -274,22 +278,27 @@ export default function MainChatView({
               width: 390,
               height: 844,
             },
-          controlMode: "ai",
-          takeoverReason: null,
+          controlMode: parseControlMode(data.controlMode),
+          takeoverReason:
+            typeof data.takeoverReason === "string"
+              ? data.takeoverReason
+              : null,
         });
       } else if (type === "browser:closed") {
         setBrowserSession(null);
       } else if (type === "browser:control") {
-        const nextMode = data.mode as "ai" | "user";
+        const nextMode = parseControlMode(data.mode);
+        const reason =
+          typeof data.reason === "string" && data.reason
+            ? data.reason
+            : null;
         setBrowserSession((prev) =>
           prev
             ? {
                 ...prev,
                 controlMode: nextMode,
-                // Only browser:takeover-requested sets the reason.
-                // browser:control alone (user flip) should clear any stale
-                // banner and plain AI reclaim also clears it.
-                takeoverReason: nextMode === "ai" ? null : prev.takeoverReason,
+                takeoverReason:
+                  nextMode === "ai" ? null : reason ?? prev.takeoverReason,
               }
             : null,
         );
@@ -389,6 +398,46 @@ export default function MainChatView({
     setBrowserSession((prev) => (prev ? { ...prev, liveViewUrl: url } : null));
   }, []);
 
+  // /input callbacks share the same stale-session handling: if the backend
+  // says the session is gone (404) we drop the local reference so the
+  // panel unmounts instead of letting the user keep firing dead POSTs.
+  // Any other non-2xx is logged but not propagated — keeps UX quiet while
+  // still surfacing in devtools if needed.
+  const postInput = useCallback(
+    async (body: Record<string, unknown>) => {
+      if (!browserSession) return;
+      const res = await proxyPost(
+        `/browser/sessions/${browserSession.browserSessionId}/input`,
+        body,
+      );
+      if (res.ok) return;
+      if (res.status === 404) {
+        console.warn("[MainChatView] /input 404 — session gone, clearing local state");
+        setBrowserSession(null);
+        return;
+      }
+      console.warn("[MainChatView] /input non-ok", res.status);
+    },
+    [browserSession],
+  );
+
+  const handleUserInputText = useCallback(
+    (text: string) => postInput({ type: "text", text }),
+    [postInput],
+  );
+  const handleUserInputKey = useCallback(
+    (key: string) => postInput({ type: "key", key }),
+    [postInput],
+  );
+  const handleUserInputClick = useCallback(
+    (x: number, y: number) => postInput({ type: "click", x, y }),
+    [postInput],
+  );
+  const handleUserInputScroll = useCallback(
+    (dx: number, dy: number) => postInput({ type: "scroll", dx, dy }),
+    [postInput],
+  );
+
   return (
     <motion.div
       initial={{ y: "100%" }}
@@ -460,6 +509,10 @@ export default function MainChatView({
           iframeReloadKey={iframeReloadKey}
           onIframeReload={handleIframeReload}
           onControlChange={handleBrowserControlChange}
+          onUserInputText={handleUserInputText}
+          onUserInputKey={handleUserInputKey}
+          onUserInputClick={handleUserInputClick}
+          onUserInputScroll={handleUserInputScroll}
           onClose={handleBrowserClose}
           onStageChange={setBrowserStage}
           onLiveViewUrlRefreshed={handleLiveViewUrlRefreshed}
