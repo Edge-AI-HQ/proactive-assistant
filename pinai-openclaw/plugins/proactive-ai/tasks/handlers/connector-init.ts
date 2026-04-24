@@ -399,6 +399,12 @@ async function fetchToolkitItems(
 }
 
 async function fetchGmailRecent(opts: FetchToolkitItemsOpts): Promise<raw.GmailMessageInput[]> {
+  // Composio caps each tools/execute response payload (~6 MB last seen).
+  // verbose=true + include_payload=true at max_results=100 blows the cap;
+  // the API responds 413 "tool response payload is too large".
+  // include_payload=true is required (otherwise we get id+threadId only,
+  // no headers — useless for signal derivation), so drop verbose and let
+  // the snippet stand in for body content.
   const response = await opts.fetcher('/tools/execute/GMAIL_FETCH_EMAILS', {
     method: 'POST',
     body: JSON.stringify({
@@ -407,7 +413,6 @@ async function fetchGmailRecent(opts: FetchToolkitItemsOpts): Promise<raw.GmailM
       arguments: {
         max_results: opts.limit,
         include_payload: true,
-        verbose: true,
       },
     }),
   });
@@ -658,19 +663,54 @@ function mapGmailMessage(msg: any): raw.GmailMessageInput | null {
   if (!msg || typeof msg !== 'object') return null;
   const messageId = String(msg.id ?? msg.messageId ?? '').trim();
   if (!messageId) return null;
+  // Composio's GMAIL_FETCH_EMAILS returns a flattened shape (verified
+  // 2026-04-24 against live API):
+  //   {
+  //     messageId, threadId, subject (string), sender (string),
+  //     to (string — comma-separated, NOT an array),
+  //     preview ({body, subject} — object, NOT a snippet string),
+  //     messageText (full body string),
+  //     messageTimestamp (ISO string like "2026-04-24T00:50:54Z"),
+  //     labelIds (array), attachmentList (array), payload {body,filename,headers}
+  //   }
+  // Raw Gmail API instead returns:
+  //   { id, threadId, payload: { headers: [{name,value}] }, snippet, internalDate (ms) }
+  // Walk both shapes carefully because each field can be a string OR object
+  // OR array depending on which producer fed us.
   const headers = readGmailHeaders(msg);
+  // `to`/`cc` may be string ("a@x.com, b@x.com"), array, or absent
+  const toList = Array.isArray(msg.to) ? msg.to.filter((s: any): s is string => typeof s === 'string')
+    : typeof msg.to === 'string' ? parseAddressList(msg.to)
+    : parseAddressList(headers['to']);
+  const ccList = Array.isArray(msg.cc) ? msg.cc.filter((s: any): s is string => typeof s === 'string')
+    : typeof msg.cc === 'string' ? parseAddressList(msg.cc)
+    : parseAddressList(headers['cc']);
+  // `preview` may be a string snippet (raw Gmail) OR an object {body,subject} (Composio)
+  const snippetStr = typeof msg.snippet === 'string' ? msg.snippet
+    : typeof msg.preview === 'string' ? msg.preview
+    : (msg.preview && typeof msg.preview === 'object' && typeof msg.preview.body === 'string')
+      ? msg.preview.body
+      : null;
+  // Body: Composio gives messageText, raw Gmail gives msg.body or payload.body
+  const bodyStr = typeof msg.messageText === 'string' ? msg.messageText
+    : typeof msg.body === 'string' ? msg.body
+    : extractGmailBody(msg);
+  // Timestamp: Composio gives ISO string; raw Gmail gives ms-as-string
+  const ts = msg.messageTimestamp ?? msg.internalDate ?? msg.internal_date;
   return {
     messageId,
     threadId: msg.threadId ?? msg.thread_id ?? null,
-    from: headers['from'] ?? msg.from ?? null,
-    to: parseAddressList(headers['to']),
-    cc: parseAddressList(headers['cc']),
-    subject: headers['subject'] ?? msg.subject ?? null,
-    snippet: msg.snippet ?? null,
-    body: typeof msg.body === 'string' ? msg.body : extractGmailBody(msg) ?? null,
+    from: typeof msg.sender === 'string' ? msg.sender
+      : typeof msg.from === 'string' ? msg.from
+      : headers['from'] ?? null,
+    to: toList,
+    cc: ccList,
+    subject: typeof msg.subject === 'string' ? msg.subject : headers['subject'] ?? null,
+    snippet: snippetStr,
+    body: bodyStr,
     labelIds: Array.isArray(msg.labelIds) ? msg.labelIds : [],
-    internalDate: msg.internalDate ?? msg.internal_date ?? null,
-    occurredAt: parseGmailTimestamp(msg.internalDate ?? msg.internal_date),
+    internalDate: msg.internalDate ?? msg.internal_date ?? msg.messageTimestamp ?? null,
+    occurredAt: parseGmailTimestamp(ts),
   };
 }
 
@@ -710,11 +750,30 @@ function extractGmailBody(msg: any): string | null {
 }
 
 function parseGmailTimestamp(value: unknown): string | undefined {
-  // Gmail's internalDate is a string of milliseconds since epoch.
+  // Three shapes seen in production:
+  //   - Gmail raw API: string of milliseconds since epoch ("1714063221000")
+  //   - Composio flat: ISO string ("2026-04-24T00:50:54Z")
+  //   - Number (defensive): seconds- or ms-since-epoch
   if (value == null) return undefined;
-  const ms = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(ms)) return undefined;
-  return new Date(ms).toISOString();
+  if (typeof value === 'string') {
+    // ISO short-circuit: Date parses these directly
+    if (/[T:Z]/.test(value)) {
+      const d = new Date(value);
+      return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
+    }
+    const n = Number(value);
+    if (!Number.isFinite(n)) return undefined;
+    return msOrSecondsToIso(n);
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) return msOrSecondsToIso(value);
+  return undefined;
+}
+
+function msOrSecondsToIso(n: number): string | undefined {
+  // < 10^12 → seconds (anything else would be after year 33000); scale up
+  const ms = n < 1e12 ? n * 1000 : n;
+  const d = new Date(ms);
+  return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
 }
 
 function mapGcalEvent(evt: any): raw.GcalEventInput | null {
@@ -1134,11 +1193,39 @@ function makeDefaultFetcher(apiKey: string): ComposioFetcher {
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
     });
     const text = await response.text();
-    const data = text.trim() ? JSON.parse(text) : {};
+    const data = text.trim() ? safeJsonParse(text) : null;
     if (!response.ok) {
-      const msg = data?.message ?? data?.error ?? text.slice(0, 200);
+      // Composio surfaces errors in a few shapes: {message:'...'},
+      // {error:'...'}, {error:{message:'...'}}, {detail:[...]}. Walk
+      // them, then fall through to the raw text. JSON.stringify the
+      // object so we don't print "[object Object]".
+      const msg = formatComposioError(data) ?? text.slice(0, 400);
       throw new Error(`Composio API ${response.status}: ${msg}`);
     }
-    return data;
+    return data ?? {};
   };
+}
+
+function safeJsonParse(text: string): unknown {
+  try { return JSON.parse(text); } catch { /* try sanitized */ }
+  // Composio occasionally returns email/document content with raw
+  // control chars (\x00-\x1F minus \t/\n/\r) that JSON.parse rejects
+  // even though the rest of the response is well-formed. Strip them
+  // and retry once before giving up.
+  const sanitized = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ' ');
+  try { return JSON.parse(sanitized); } catch { return null; }
+}
+
+function formatComposioError(data: unknown): string | null {
+  if (!data || typeof data !== 'object') return null;
+  const d = data as Record<string, unknown>;
+  if (typeof d.message === 'string') return d.message;
+  if (typeof d.error === 'string') return d.error;
+  if (d.error && typeof d.error === 'object') {
+    const inner = d.error as Record<string, unknown>;
+    if (typeof inner.message === 'string') return inner.message;
+  }
+  if (typeof d.detail === 'string') return d.detail;
+  // Fallback: stringify (capped) so the operator at least sees the shape.
+  try { return JSON.stringify(d).slice(0, 400); } catch { return null; }
 }

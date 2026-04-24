@@ -441,6 +441,79 @@ test('limit clamping: payload.limit=999999 is clamped to 500', async () => {
   });
 });
 
+test('REGRESSION: real Composio flat shape (verified 2026-04-24 against live API)', async () => {
+  // Composio's GMAIL_FETCH_EMAILS does not return raw Gmail format.
+  // It returns a FLATTENED shape with quirks that broke the first
+  // Phase D run against live data:
+  //   - to / cc are STRINGS (comma-separated), NOT arrays
+  //   - preview is an OBJECT {body, subject}, NOT a snippet string
+  //   - messageTimestamp is an ISO string, NOT ms-since-epoch
+  //   - sender is the from address (not "from")
+  //   - body comes via messageText
+  // This test pins the shape so future mapper edits can't silently
+  // drop fields.
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'composio-flat-shape',
+      payload: { toolkit: 'gmail', connectedAccountId: 'acc-flat', limit: 2 },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/GMAIL_FETCH_EMAILS': () => ({
+        data: {
+          messages: [
+            {
+              messageId: 'mid-1',
+              threadId: 'tid-1',
+              subject: 'Sprint planning',
+              sender: 'PM <pm@x.com>',
+              to: 'me@x.com, alice@x.com',           // STRING, not array
+              cc: 'cto@x.com',                        // STRING
+              preview: { body: 'Quick prep notes', subject: 'Sprint planning' },  // OBJECT
+              messageText: 'Full body content here.',
+              messageTimestamp: '2026-04-23T10:00:00Z',  // ISO string
+              labelIds: ['INBOX', 'IMPORTANT'],
+              attachmentList: [],
+              payload: { headers: [], body: {}, filename: '' },
+            },
+            {
+              messageId: 'mid-2',
+              threadId: 'tid-2',
+              subject: 'Code review',
+              sender: 'tech-lead@x.com',
+              to: 'me@x.com',
+              preview: { body: 'PR ready' },
+              messageText: 'See PR #42',
+              messageTimestamp: '2026-04-22T15:00:00Z',
+              labelIds: ['INBOX'],
+            },
+          ],
+        },
+      }),
+    });
+    const { task, result } = await runOneTick({ fetcher });
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.rawInserted, 2);
+    assert.equal(result?.signalsInserted, 2);
+
+    const rows = listGmailMessages({ limit: 5 });
+    assert.equal(rows.length, 2);
+    const sprint = rows.find((r) => r.subject === 'Sprint planning')!;
+    // String to → parsed into address list
+    assert.deepEqual(sprint.to_addrs, ['me@x.com', 'alice@x.com']);
+    assert.deepEqual(sprint.cc_addrs, ['cto@x.com']);
+    // sender → from
+    assert.equal(sprint.from_addr, 'PM <pm@x.com>');
+    // preview.body → snippet
+    assert.equal(sprint.snippet, 'Quick prep notes');
+    // messageText → body
+    assert.equal(sprint.body, 'Full body content here.');
+    // ISO messageTimestamp → ISO occurred_at (not NaN, not ms-fudged)
+    assert.equal(sprint.occurred_at, '2026-04-23T10:00:00.000Z');
+    assert.deepEqual(sprint.label_ids, ['INBOX', 'IMPORTANT']);
+  });
+});
+
 test('Composio response wrapped at unusual nesting (data.response_data.messages) is still parsed', async () => {
   await withTempHome(async () => {
     await enqueueBackgroundTask({

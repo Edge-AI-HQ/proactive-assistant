@@ -157,11 +157,16 @@ function makeDefaultFetcher(apiKey: string): ComposioFetcher {
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
     });
     const text = await response.text();
-    const data = text.trim() ? JSON.parse(text) : {};
+    let data: unknown = null;
+    try { data = text.trim() ? JSON.parse(text) : null; } catch { /* keep null */ }
     if (!response.ok) {
-      const msg = data?.message ?? data?.error ?? text.slice(0, 200);
+      const obj = data && typeof data === 'object' ? data as Record<string, unknown> : null;
+      const msg = (typeof obj?.message === 'string' && obj.message)
+        || (typeof obj?.error === 'string' && obj.error)
+        || (obj && typeof obj === 'object' && (() => { try { return JSON.stringify(obj).slice(0, 400); } catch { return null; } })())
+        || text.slice(0, 400);
       throw new Error(`Composio API ${response.status}: ${msg}`);
     }
-    return data;
+    return (data as any) ?? {};
   };
 }
