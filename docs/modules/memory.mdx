@@ -100,22 +100,59 @@ flowchart LR
 
 ## 验证方式
 
+### 一键回归
+
+改完 memory / signals / raw / profile / skill / evolution / dreaming / crystallize 任一处后，先跑这一条：
+
 ```bash
-npx tsx --test pinai-openclaw/plugins/proactive-ai/db.memory.test.ts
-npx tsx --test pinai-openclaw/plugins/proactive-ai/db.personal-signals.test.ts
-npx tsx --test pinai-openclaw/plugins/proactive-ai/db.skill-index.test.ts
-npx tsx --test pinai-openclaw/plugins/proactive-ai/db.evolution-runs.test.ts
-npx tsx --test pinai-openclaw/plugins/proactive-ai/raw-db.test.ts
-npx tsx --test pinai-openclaw/plugins/proactive-ai/routes/v3-routes.test.ts
-npx tsx --test pinai-openclaw/plugins/proactive-ai/cli/v3-cli.test.ts
+bash pinai-openclaw/plugins/proactive-ai/scripts/test-memory.sh
 ```
 
-手工查询常用命令：
+它把以下三类测试串成一遍跑完：
+
+1. **schema + helper 单测**：`db.memory` / `db.personal-signals` / `db.world-signals` / `db.evolution-runs` / `db.skill-index` / `db.app-state` / `raw-db`。验证表结构和读写助手。
+2. **迁移回放**：`db.legacy-migration` / `db.phase15-migration` / `db.phase2b-migration` / `db.phase2c-migration` / `db.phase2d-migration` / `db.phase2e-goals-references`。每个文件先建出 v2 旧表 + 旧数据，再让 `openProactiveDb()` 跑迁移，断言数据进了 v3 sink、旧表 DROP 干净。**这是"我没把以前数据兼容坏"的硬保证。**
+3. **端到端 + CLI 烟雾**：`v3-end-to-end` / `cli/v3-cli` / `cli/v3-review-fixes` / `evolution-three-triggers`。从 mobile ingest → personal_signals → 三种 evolution 触发（chat_burst / daily_dream / manual）→ memory + profile + goals 写入 → reference 三元组 bump，全链路在临时 DB 里跑一遍。所有 `pin xxx` 子命令都有最小烟雾用例。
+
+任意一步红，对应的 PR 不进。绿就说明：v3 SSOT 数据流没断、旧数据兼容没掉、CLI/路由形状没变。
+
+### 单跑
+
+需要单独诊断时按层挑一个跑：
+
+```bash
+# schema/helper
+npx tsx --test pinai-openclaw/plugins/proactive-ai/db.memory.test.ts
+
+# 迁移回放（v2→v3 兼容）
+npx tsx --test pinai-openclaw/plugins/proactive-ai/db.phase2c-migration.test.ts
+
+# 端到端 + 三种 evolution 触发
+npx tsx --test pinai-openclaw/plugins/proactive-ai/v3-end-to-end.test.ts
+npx tsx --test pinai-openclaw/plugins/proactive-ai/evolution-three-triggers.test.ts
+
+# CLI 全量烟雾
+npx tsx --test pinai-openclaw/plugins/proactive-ai/cli/v3-cli.test.ts
+npx tsx --test pinai-openclaw/plugins/proactive-ai/cli/v3-review-fixes.test.ts
+```
+
+### 真 HTTP + 真 DB 演练（可选）
+
+不跑 LLM、跑真 http.Server + 真 SQLite，看三条 evolution 路径在 wire 上的反应：
+
+```bash
+cd pinai-openclaw/plugins/proactive-ai && npx tsx scripts/evolution-smoke.ts
+```
+
+输出包含每个 HTTP 请求的状态码、响应体，以及 `evolution_runs` / `memory` / `skills` 的最终行。
+
+### 手工查询
 
 ```bash
 pin profile get
 pin signals recent --hours 24
 pin memory search --query "投资偏好" --limit 10
+pin memory list --subject-prefix topic:        # interests 现在以 memory 形式存
 pin raw gcal today --timezone Asia/Shanghai
 pin skills list
 pin evolution recent --limit 5
@@ -126,8 +163,9 @@ pin evolution recent --limit 5
 - 不要把上游连接状态当成 memory；连接属于 Data Connectors。
 - 不要让 device trigger 直接写高质量长期事实；高 `quality` memory 应由 evolution/manual 产生。
 - 不要把大 JSON 长期堆进 SQLite 行；大 run artifact 应落到 `data/run-artifacts/`。
-- 旧 `profile_memories`、`profile_interests`、`goals` 仍有兼容代码，改动时要确认调用方是否还读旧 shape。
-- `mobile_items.db` 已废弃，不是当前 read/write path。
+- v2 satellite 表已全部撤掉：`profile_signals` → `personal_signals`、`profile_interests` → `memory{subject:"<kind>:<key>"}`、`dream_runs` → `evolution_runs(trigger_kind='daily_dream')`、`auto_loop_state` / `chat_crystallize_state` → `app_state` KV、`push_records` / `push_outcomes` 整张干掉。改动前不要再去查这些表。
+- `mobile_items.db` 整个文件已撤；mobile 数据走 `personal_signals` + `raw.db` 双轨，不存在第三个 SQLite 文件。
+- `goals` 表保留（一等集合），但带 `reference_count` / `last_referenced_at` / `referenced_by_runs` 三元组，evolution 引用 goal 时要 `markGoalsReferenced()`。
 
 ## 相关 AI Plans
 

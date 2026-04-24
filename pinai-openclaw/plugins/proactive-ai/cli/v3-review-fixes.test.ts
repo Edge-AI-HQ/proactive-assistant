@@ -13,9 +13,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 import { handleEvolution } from './evolution.ts';
 import { handleFeedback } from './feedback.ts';
@@ -313,7 +316,7 @@ test('pin sys doctor uses the same Composio key resolution as personal commands'
 
 test('pin exits non-zero for failure envelopes', async () => {
   await withTempHome(async (root) => {
-    const binPath = join(process.cwd(), 'pinai-openclaw/plugins/proactive-ai/cli/bin.ts');
+    const binPath = join(__dirname, 'bin.ts');
     await assert.rejects(
       execFileAsync('npx', ['tsx', binPath, 'memory', 'get'], {
         env: { ...process.env, OPENCLAW_HOME: root },
