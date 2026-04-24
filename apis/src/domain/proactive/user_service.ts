@@ -10,7 +10,6 @@
 import crypto from 'node:crypto';
 import { pool } from '../common/db/core.js';
 import type { ProactiveUser, ProactiveContainer } from './types.js';
-import { deleteBrowserContext } from './browser_context_service.js';
 
 // ---------------------------------------------------------------------------
 // User upsert / lookup
@@ -252,19 +251,6 @@ export async function deleteContainer(internalUserId: number): Promise<void> {
 export async function deleteUserAccount(supabaseUserId: string): Promise<void> {
   const user = await getUserBySupabaseId(supabaseUserId);
   if (!user) return;
-
-  // Cascade Browserbase context cleanup: without this the remote context
-  // stays allocated on Browserbase with no DB pointer back to it.
-  // Failure-tolerant — we must not block account deletion on Browserbase
-  // being reachable.
-  try {
-    await deleteBrowserContext(pool, supabaseUserId);
-  } catch (err) {
-    console.warn(
-      '[user_service] deleteBrowserContext failed during account deletion (proceeding):',
-      err instanceof Error ? err.message : err,
-    );
-  }
 
   await pool.query(
     `DELETE FROM runtime_instances WHERE owner_user_id = $1`,

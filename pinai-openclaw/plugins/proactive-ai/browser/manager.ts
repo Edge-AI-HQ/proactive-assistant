@@ -22,7 +22,6 @@ import { randomUUID } from 'node:crypto';
 import type { BrowserSession, InternalSession, CreateSessionOpts, ConsoleEntry, TabInfo } from './types.js';
 import { VIEWPORT_PRESETS, type ViewportPreset } from './types.js';
 import { browserEvents } from './events.js';
-import { assertBrowserToolAllowed, type BrowserControlMode } from './control-state.js';
 
 const CONSOLE_BUFFER_MAX = 200;
 
@@ -42,36 +41,6 @@ const BB_SESSION_TIMEOUT = parseInt(process.env.BROWSERBASE_SESSION_TIMEOUT ?? '
 /** Browserbase session statuses that mean the remote browser is gone. */
 const DEAD_STATUSES = new Set(['COMPLETED', 'TIMED_OUT', 'ERROR']);
 
-/**
- * How long after a destroySession we must wait before reusing the same
- * persistent context. Browserbase docs: "wait a few seconds before
- * reusing the Context to ensure data is synchronized." Tuned a little
- * above the "few seconds" to be safe without being noticeable.
- */
-const CONTEXT_SYNC_WAIT_MS = 3000;
-
-/**
- * Detect errors from `bb.sessions.create({ context: { id } })` that
- * indicate the referenced context no longer exists on Browserbase.
- * We widen matching because the SDK's error shape isn't documented —
- * match on HTTP 404 and on common wording so future minor changes
- * don't leave us failing silently.
- */
-function isStaleContextError(err: unknown): boolean {
-  if (!err) return false;
-  const e = err as { status?: number; statusCode?: number; message?: string };
-  const status = e.status ?? e.statusCode;
-  if (status === 404) return true;
-  const msg = String(e.message ?? err).toLowerCase();
-  if (status === 400 && msg.includes('context')) return true;
-  return (
-    msg.includes('context') &&
-    (msg.includes('not found') ||
-      msg.includes('invalid') ||
-      msg.includes('does not exist'))
-  );
-}
-
 interface Logger {
   info: (msg: string) => void;
   warn: (msg: string) => void;
@@ -85,22 +54,6 @@ export class BrowserbaseManager {
   private healthTimer: ReturnType<typeof setInterval> | null = null;
   private shuttingDown = false;
   private reconnecting = new Set<string>();
-
-  /**
-   * Promise chain that serializes createSession calls across the
-   * manager. Browserbase explicitly recommends against simultaneous
-   * sessions on the same persistent context (cookie writes on close
-   * can race). Since every session in this container shares the same
-   * BROWSERBASE_CONTEXT_ID, a single chain is enough.
-   */
-  private createChain: Promise<unknown> = Promise.resolve();
-
-  /**
-   * Time of the most recent destroySession completion. createSession
-   * waits CONTEXT_SYNC_WAIT_MS past this mark before asking Browserbase
-   * to boot a new session on the same context.
-   */
-  private lastContextDestroyAt = 0;
 
   constructor(logger?: Logger) {
     this.logger = logger ?? { info: console.log, warn: console.warn, error: console.error };
@@ -119,23 +72,6 @@ export class BrowserbaseManager {
   // ── Public API ────────────────────────────────────────────────────────
 
   async createSession(opts: CreateSessionOpts): Promise<BrowserSession> {
-    // Serialize concurrent create calls. Each caller queues onto the
-    // previous promise; the .catch() ensures one caller's failure
-    // doesn't poison subsequent ones.
-    const prev = this.createChain;
-    let release!: () => void;
-    this.createChain = new Promise<void>((r) => {
-      release = r;
-    });
-    await prev.catch(() => {});
-    try {
-      return await this.createSessionLocked(opts);
-    } finally {
-      release();
-    }
-  }
-
-  private async createSessionLocked(opts: CreateSessionOpts): Promise<BrowserSession> {
     // Defense in depth: if a prior session for this subagent is still on
     // record (e.g. the Browserbase session died silently and health check
     // hasn't caught it yet), destroy it first. Otherwise the events bus
@@ -144,20 +80,6 @@ export class BrowserbaseManager {
     const prior = this.getSessionBySubagent(opts.subagentId);
     if (prior) {
       await this.destroySession(prior.id).catch(() => {});
-    }
-
-    // After a destroy on this context, wait a beat for Browserbase to
-    // sync cookies/localStorage back to the persistent context. Skipping
-    // this risks booting the next session with pre-destroy state.
-    if (this.lastContextDestroyAt > 0) {
-      const elapsed = Date.now() - this.lastContextDestroyAt;
-      if (elapsed < CONTEXT_SYNC_WAIT_MS) {
-        const wait = CONTEXT_SYNC_WAIT_MS - elapsed;
-        this.logger.info(
-          `[browserbase] Waiting ${wait}ms for persisted context to sync before new session`,
-        );
-        await new Promise((r) => setTimeout(r, wait));
-      }
     }
 
     if (this.sessions.size >= MAX_SESSIONS) {
@@ -176,8 +98,6 @@ export class BrowserbaseManager {
       liveViewUrl: '',
       viewport,
       controlMode: 'ai',
-      takeoverReason: null,
-      controlUpdatedAt: now,
       status: 'creating',
       createdAt: now,
       lastActivityAt: now,
@@ -208,41 +128,12 @@ export class BrowserbaseManager {
         this.logger.info(`[browserbase] Using persistent context ${contextId}`);
       }
 
-      const bbCreateOpts = {
+      const bbSession = await this.bb.sessions.create({
         projectId: process.env.BROWSERBASE_PROJECT_ID!,
         browserSettings,
         keepAlive: true,
         timeout: BB_SESSION_TIMEOUT,
-      };
-
-      // Stale-context recovery: if the orchestrator-injected context has
-      // been deleted on Browserbase's side (manual cleanup, project
-      // rotation, etc.), `sessions.create` fails. Rather than crashing
-      // the tool call we retry anonymously so the agent can still do
-      // this turn's work. The DB still points at the dead context, but
-      // the orchestrator will create a fresh one on the next container
-      // spawn; user-visible impact is just losing saved logins for a
-      // single conversation.
-      let bbSession;
-      try {
-        bbSession = await this.bb.sessions.create(bbCreateOpts);
-      } catch (err) {
-        if (contextId && isStaleContextError(err)) {
-          this.logger.warn(
-            `[browserbase] Context ${contextId} appears stale (${
-              err instanceof Error ? err.message : String(err)
-            }); falling back to anonymous session`,
-          );
-          const fallbackSettings: typeof browserSettings = { ...browserSettings };
-          delete fallbackSettings.context;
-          bbSession = await this.bb.sessions.create({
-            ...bbCreateOpts,
-            browserSettings: fallbackSettings,
-          });
-        } else {
-          throw err;
-        }
-      }
+      });
 
       session.browserbaseSessionId = bbSession.id;
       session.connectUrl = bbSession.connectUrl;
@@ -292,9 +183,6 @@ export class BrowserbaseManager {
         liveViewUrl: session.liveViewUrl,
         viewport: session.viewport,
         url: opts.url ?? '',
-        controlMode: session.controlMode,
-        takeoverReason: session.takeoverReason,
-        controlUpdatedAt: session.controlUpdatedAt,
       });
 
       return this.toPublicSession(session);
@@ -327,10 +215,6 @@ export class BrowserbaseManager {
     session.status = 'closed';
     this.sessions.delete(sessionId);
 
-    // Mark so the next createSession on this context waits for
-    // Browserbase to sync persisted state before reusing it.
-    this.lastContextDestroyAt = Date.now();
-
     browserEvents.emit({
       type: 'browser:closed',
       sessionKey: session.subagentId,
@@ -339,7 +223,6 @@ export class BrowserbaseManager {
   }
 
   async navigate(sessionId: string, url: string): Promise<{ title: string; snapshot: string }> {
-    this.assertAiCanUse(sessionId, 'navigate');
     const page = this.requirePage(sessionId);
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     this.touch(sessionId);
@@ -391,7 +274,6 @@ export class BrowserbaseManager {
   }
 
   async clickRef(sessionId: string, ref: string): Promise<string> {
-    this.assertAiCanUse(sessionId, 'click');
     const page = this.requirePage(sessionId);
     const locator = this.resolveLocator(page, sessionId, ref);
     await locator.click({ timeout: 15_000 });
@@ -411,7 +293,6 @@ export class BrowserbaseManager {
     text: string,
     opts?: { clear?: boolean },
   ): Promise<string> {
-    this.assertAiCanUse(sessionId, 'type');
     const page = this.requirePage(sessionId);
     const locator = this.resolveLocator(page, sessionId, ref);
     if (opts?.clear === false) {
@@ -427,7 +308,6 @@ export class BrowserbaseManager {
 
   /** Press a keyboard key (Enter / Tab / Escape / ArrowDown / etc.). */
   async pressKey(sessionId: string, key: string): Promise<string> {
-    this.assertAiCanUse(sessionId, 'press_key');
     const page = this.requirePage(sessionId);
     await page.keyboard.press(key);
     await this.settle(page);
@@ -440,7 +320,6 @@ export class BrowserbaseManager {
     ref: string,
     value: string | string[],
   ): Promise<string> {
-    this.assertAiCanUse(sessionId, 'select');
     const page = this.requirePage(sessionId);
     const locator = this.resolveLocator(page, sessionId, ref);
     await locator.selectOption(value, { timeout: 15_000 });
@@ -458,7 +337,6 @@ export class BrowserbaseManager {
       timeoutMs?: number;
     },
   ): Promise<string> {
-    this.assertAiCanUse(sessionId, 'wait');
     const page = this.requirePage(sessionId);
     const timeout = opts.timeoutMs ?? 10_000;
 
@@ -477,7 +355,6 @@ export class BrowserbaseManager {
   }
 
   async scroll(sessionId: string, deltaY: number): Promise<string> {
-    this.assertAiCanUse(sessionId, 'scroll');
     const page = this.requirePage(sessionId);
     await page.mouse.wheel(0, deltaY);
     await this.settle(page);
@@ -489,7 +366,6 @@ export class BrowserbaseManager {
     sessionId: string,
     viewport: ViewportPreset | { width: number; height: number },
   ): Promise<string> {
-    this.assertAiCanUse(sessionId, 'set_viewport');
     const page = this.requirePage(sessionId);
     const size = typeof viewport === 'string' ? VIEWPORT_PRESETS[viewport] : viewport;
     await page.setViewportSize(size);
@@ -509,7 +385,6 @@ export class BrowserbaseManager {
   /** Read trimmed text content of an element. Useful for reading OTP codes,
    *  confirmation numbers, or any on-page info the agent needs as a value. */
   async getText(sessionId: string, ref: string): Promise<string> {
-    this.assertAiCanUse(sessionId, 'get_text');
     const page = this.requirePage(sessionId);
     const locator = this.resolveLocator(page, sessionId, ref);
     const raw = await locator.textContent({ timeout: 5_000 });
@@ -518,7 +393,6 @@ export class BrowserbaseManager {
   }
 
   async scrollToRef(sessionId: string, ref: string): Promise<string> {
-    this.assertAiCanUse(sessionId, 'scroll_to');
     const page = this.requirePage(sessionId);
     const locator = this.resolveLocator(page, sessionId, ref);
     await locator.scrollIntoViewIfNeeded({ timeout: 10_000 });
@@ -528,7 +402,6 @@ export class BrowserbaseManager {
   }
 
   async goBack(sessionId: string): Promise<string> {
-    this.assertAiCanUse(sessionId, 'go_back');
     const page = this.requirePage(sessionId);
     await page.goBack({ timeout: 15_000, waitUntil: 'domcontentloaded' });
     await this.settle(page);
@@ -537,7 +410,6 @@ export class BrowserbaseManager {
   }
 
   async goForward(sessionId: string): Promise<string> {
-    this.assertAiCanUse(sessionId, 'go_forward');
     const page = this.requirePage(sessionId);
     await page.goForward({ timeout: 15_000, waitUntil: 'domcontentloaded' });
     await this.settle(page);
@@ -546,7 +418,6 @@ export class BrowserbaseManager {
   }
 
   async reload(sessionId: string): Promise<string> {
-    this.assertAiCanUse(sessionId, 'reload');
     const page = this.requirePage(sessionId);
     await page.reload({ timeout: 30_000, waitUntil: 'domcontentloaded' });
     await this.settle(page);
@@ -558,7 +429,6 @@ export class BrowserbaseManager {
    *  file-input element identified by ref. Used for "upload document"
    *  style flows. */
   async uploadFile(sessionId: string, ref: string, filePath: string): Promise<string> {
-    this.assertAiCanUse(sessionId, 'upload_file');
     const page = this.requirePage(sessionId);
     const locator = this.resolveLocator(page, sessionId, ref);
     await locator.setInputFiles(filePath, { timeout: 15_000 });
@@ -570,7 +440,6 @@ export class BrowserbaseManager {
   // ── Tier 3: tabs ──────────────────────────────────────────────────
 
   async newTab(sessionId: string, url?: string): Promise<string> {
-    this.assertAiCanUse(sessionId, 'new_tab');
     const session = this.sessions.get(sessionId);
     if (!session || !session.browser) throw new Error(`No active session ${sessionId}`);
     const context = session.browser.contexts()[0];
@@ -590,7 +459,6 @@ export class BrowserbaseManager {
   }
 
   async switchTab(sessionId: string, index: number): Promise<string> {
-    this.assertAiCanUse(sessionId, 'switch_tab');
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`No session ${sessionId}`);
     if (index < 0 || index >= session.pages.length) {
@@ -603,7 +471,6 @@ export class BrowserbaseManager {
   }
 
   async closeTab(sessionId: string, index: number): Promise<string> {
-    this.assertAiCanUse(sessionId, 'close_tab');
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`No session ${sessionId}`);
     if (session.pages.length <= 1) {
@@ -649,7 +516,6 @@ export class BrowserbaseManager {
    * dialog — Playwright dialogs block page execution until responded to.
    */
   armDialog(sessionId: string, policy: 'accept' | 'dismiss', promptText?: string): void {
-    this.assertAiCanUse(sessionId, 'handle_dialog');
     const page = this.requirePage(sessionId);
     const handler = async (dialog: { type: () => string; message: () => string; accept: (t?: string) => Promise<void>; dismiss: () => Promise<void> }) => {
       this.logger.info(`[browserbase] Dialog ${dialog.type()}: ${dialog.message()} → ${policy}`);
@@ -678,7 +544,6 @@ export class BrowserbaseManager {
     saveToPath: string,
     timeoutMs = 60_000,
   ): Promise<{ path: string; suggestedFilename: string }> {
-    this.assertAiCanUse(sessionId, 'download');
     const page = this.requirePage(sessionId);
     const locator = this.resolveLocator(page, sessionId, triggerRef);
     const [download] = await Promise.all([
@@ -717,22 +582,9 @@ export class BrowserbaseManager {
     return [...this.sessions.values()].map(s => this.toPublicSession(s));
   }
 
-  setControlMode(sessionId: string, mode: BrowserControlMode, reason?: string): BrowserSession | undefined {
+  setControlMode(sessionId: string, mode: 'ai' | 'user' | 'idle'): void {
     const session = this.sessions.get(sessionId);
-    if (!session) return undefined;
-    session.controlMode = mode;
-    session.takeoverReason = mode === 'ai' ? null : reason ?? session.takeoverReason ?? null;
-    session.controlUpdatedAt = Date.now();
-    this.touch(sessionId);
-
-    browserEvents.emit({
-      type: 'browser:control',
-      sessionKey: session.subagentId,
-      browserSessionId: sessionId,
-      mode,
-      reason: session.takeoverReason ?? undefined,
-    });
-    return this.toPublicSession(session);
+    if (session) session.controlMode = mode;
   }
 
   /**
@@ -763,8 +615,6 @@ export class BrowserbaseManager {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`No session ${sessionId}`);
     session.controlMode = 'user';
-    session.takeoverReason = reason;
-    session.controlUpdatedAt = Date.now();
     this.touch(sessionId);
 
     browserEvents.emit({
@@ -780,83 +630,6 @@ export class BrowserbaseManager {
       mode: 'user',
       reason,
     });
-  }
-
-  heartbeat(sessionId: string): void {
-    const session = this.sessions.get(sessionId);
-    if (!session) throw new Error(`No session ${sessionId}`);
-    this.touch(sessionId);
-  }
-
-  async typeUserInput(sessionId: string, text: string): Promise<void> {
-    const session = this.sessions.get(sessionId);
-    if (!session) throw new Error(`No session ${sessionId}`);
-    if (session.controlMode !== 'user') throw new Error('User input is only allowed while the user controls the browser.');
-    const page = this.requirePage(sessionId);
-    await page.keyboard.type(text);
-    await this.settle(page);
-    this.touch(sessionId);
-  }
-
-  async pressUserKey(sessionId: string, key: string): Promise<void> {
-    const session = this.sessions.get(sessionId);
-    if (!session) throw new Error(`No session ${sessionId}`);
-    if (session.controlMode !== 'user') throw new Error('User input is only allowed while the user controls the browser.');
-    const page = this.requirePage(sessionId);
-    await page.keyboard.press(key);
-    await this.settle(page);
-    this.touch(sessionId);
-  }
-
-  /**
-   * Forward a user tap to a page coordinate during user takeover.
-   * Coordinates are in remote page viewport units (the frontend scales
-   * its overlay-local x/y against session.viewport before calling).
-   * Browserbase Live View's DevTools UI doesn't reliably turn a native
-   * tap on the iframe into a page click on mobile, so the frontend
-   * captures the tap on a transparent overlay and POSTs it here.
-   */
-  async clickUserAt(sessionId: string, x: number, y: number): Promise<void> {
-    const session = this.sessions.get(sessionId);
-    if (!session) throw new Error(`No session ${sessionId}`);
-    if (session.controlMode !== 'user') throw new Error('User input is only allowed while the user controls the browser.');
-    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) {
-      throw new Error('Invalid click coordinates');
-    }
-    const vp = session.viewport;
-    if (x > vp.width * 1.1 || y > vp.height * 1.1) {
-      // Guard against runaway coordinates (e.g. frontend forgot to scale).
-      // Small over-spill is fine (scroll beyond fold).
-      throw new Error(`Click coordinate (${x},${y}) out of viewport (${vp.width}x${vp.height})`);
-    }
-    const page = this.requirePage(sessionId);
-    await page.mouse.click(x, y);
-    await this.settle(page);
-    this.touch(sessionId);
-  }
-
-  /**
-   * Forward a user scroll gesture. dx/dy in CSS pixels; positive dy
-   * scrolls content up (page content moves up as the user swipes up).
-   * Clamped to reasonable per-call magnitudes because a single fast
-   * swipe on mobile can produce thousand-pixel deltas that, when
-   * multiplied by the imperfect viewport scaling, cause Playwright
-   * to wheel past what the user actually saw.
-   */
-  async scrollUser(sessionId: string, dx: number, dy: number): Promise<void> {
-    const session = this.sessions.get(sessionId);
-    if (!session) throw new Error(`No session ${sessionId}`);
-    if (session.controlMode !== 'user') throw new Error('User input is only allowed while the user controls the browser.');
-    if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
-      throw new Error('Invalid scroll deltas');
-    }
-    const CLAMP = 2000;
-    const cdx = Math.max(-CLAMP, Math.min(CLAMP, dx));
-    const cdy = Math.max(-CLAMP, Math.min(CLAMP, dy));
-    const page = this.requirePage(sessionId);
-    await page.mouse.wheel(cdx, cdy);
-    await this.settle(page);
-    this.touch(sessionId);
   }
 
   async destroyAll(): Promise<void> {
@@ -881,12 +654,6 @@ export class BrowserbaseManager {
       throw new Error(`No active page for session ${sessionId}`);
     }
     return page;
-  }
-
-  private assertAiCanUse(sessionId: string, action: string): void {
-    const session = this.sessions.get(sessionId);
-    if (!session) throw new Error(`No session ${sessionId}`);
-    assertBrowserToolAllowed(session, action);
   }
 
   /**
@@ -957,8 +724,6 @@ export class BrowserbaseManager {
       liveViewUrl: s.liveViewUrl,
       viewport: s.viewport,
       controlMode: s.controlMode,
-      takeoverReason: s.takeoverReason,
-      controlUpdatedAt: s.controlUpdatedAt,
       status: s.status,
       createdAt: s.createdAt,
       lastActivityAt: s.lastActivityAt,

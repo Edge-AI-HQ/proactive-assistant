@@ -25,9 +25,7 @@ import {
   touchUserActivity,
   getContainerForUser,
   getUserBySupabaseId,
-  deleteBrowserContext,
 } from '../domain/proactive/index.js';
-import { pool } from '../domain/common/db/core.js';
 import {
   registerDevice,
   listDevicesForUser,
@@ -240,21 +238,6 @@ router.post('/api/proactive/container/reset', requireProactiveAuth, async (req, 
   } catch (err) {
     console.error('[proactive] container/reset error:', err);
     res.status(500).json({ error: 'Failed to reset container' });
-  }
-});
-
-// Clear the user's Browserbase context ("reset saved logins/cookies").
-// Effect is DB-side immediate, but any running container still has the
-// old context id in its env — the fresh empty context is used on the
-// next container spawn. Callers that want instant effect should destroy
-// the container too.
-router.delete('/api/proactive/browser/context', requireProactiveAuth, async (req, res) => {
-  try {
-    await deleteBrowserContext(pool, req.proactiveAuth!.userId);
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('[proactive] browser/context delete error:', err);
-    res.status(500).json({ error: 'Failed to reset browser context' });
   }
 });
 
