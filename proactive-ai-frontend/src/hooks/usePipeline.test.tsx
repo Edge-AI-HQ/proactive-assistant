@@ -112,4 +112,58 @@ describe("usePipeline health polling", () => {
 
     unmount();
   });
+
+  test("settles stale restored running state when backend is no longer running", async () => {
+    sessionStorage.setItem(
+      "proactive-ai-run-state",
+      JSON.stringify({
+        runId: "run_previous",
+        status: "running",
+        maxIterations: 2,
+        activeIteration: 2,
+        activePhase: "generating",
+        startedAt: "2026-04-24T23:20:00.000Z",
+        completedAt: null,
+        finalCards: [
+          {
+            id: "card_1",
+            goalBasket: "work",
+            title: "Recovered card",
+            whyNow: "Because the previous run completed",
+            primaryAction: { label: "Do it", type: "confirm" },
+            secondaryActions: [],
+            confidence: 0.8,
+            urgency: 0.5,
+            importance: 0.7,
+            sources: [],
+          },
+        ],
+        iterationDetails: {},
+        scoreMap: {},
+        logEntries: [],
+        error: null,
+        totalIterations: 2,
+      }),
+    );
+
+    mockProxyFetch.mockImplementation(async (path) => {
+      if (path === "/health") {
+        return jsonResponse({ ok: true, pipelineRunning: false });
+      }
+      if (path === "/status") {
+        return jsonResponse({ pipelineRunning: false });
+      }
+      throw new Error(`unexpected proxy path ${path}`);
+    });
+
+    const { result, unmount } = renderHook(() => usePipeline());
+    await flushAsyncWork();
+
+    expect(result.current.run.status).toBe("complete");
+    expect(result.current.isRunning).toBe(false);
+    expect(result.current.run.finalCards).toHaveLength(1);
+    expect(result.current.run.activePhase).toBe("complete");
+
+    unmount();
+  });
 });

@@ -118,6 +118,10 @@ function loadRunState(): RunState | null {
   }
 }
 
+function isActiveRunStatus(status: RunStatus): boolean {
+  return status === "running" || status === "connecting";
+}
+
 export function usePipeline() {
   const sourceRef = useRef<AbortController | null>(null);
   const healthFailuresRef = useRef(0);
@@ -127,6 +131,41 @@ export function usePipeline() {
   const [run, setRun] = useState<RunState>(() => loadRunState() ?? createInitialRunState());
 
   useEffect(() => { saveRunState(run); }, [run]);
+
+  useEffect(() => {
+    if (health.loading || health.pipelineRunning) return;
+
+    setRun((prev) => {
+      if (!isActiveRunStatus(prev.status) || sourceRef.current) return prev;
+
+      if (prev.finalCards.length > 0) {
+        return {
+          ...prev,
+          status: "complete",
+          activePhase: "complete",
+          completedAt: prev.completedAt ?? new Date().toISOString(),
+          error: null,
+          logEntries: [
+            makeLogEntry("system", "Run settled", "Backend is no longer running; keeping recovered cards"),
+            ...prev.logEntries,
+          ].slice(0, 80),
+        };
+      }
+
+      return {
+        ...prev,
+        status: "idle",
+        activeIteration: null,
+        activePhase: null,
+        error: null,
+        completedAt: prev.completedAt ?? new Date().toISOString(),
+        logEntries: [
+          makeLogEntry("system", "Run settled", "Backend is no longer running"),
+          ...prev.logEntries,
+        ].slice(0, 80),
+      };
+    });
+  }, [health.loading, health.pipelineRunning]);
 
   // Health polling via proxy
   useEffect(() => {
