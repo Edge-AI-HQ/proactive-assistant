@@ -348,3 +348,106 @@ test('sanitization: clamp out-of-range quality/confidence', async () => {
     void result;
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// Supersedes — agent claims new fact replaces an existing memory
+// ──────────────────────────────────────────────────────────────────────
+
+test('supersedes: agent points to existing memory id → old row archived as superseded, new row written', async () => {
+  await withTempHome(async () => {
+    // Seed an existing memory the agent will claim to supersede.
+    const old = await addMemoryV3({
+      text: 'User works at Acme as a backend engineer.',
+      source: 'manual',
+      subject: 'work:acme',
+      quality: 0.7,
+    });
+
+    const evo = await createEvolutionRun({ triggerKind: 'on_event' });
+    const agentRun: AgentRunFn = async () => '```json\n' + JSON.stringify({
+      memories: [
+        {
+          text: 'User now works at Globex as a staff engineer (left Acme).',
+          subject: 'work:globex',
+          quality: 0.8,
+          confidence: 0.9,
+          tags: ['career-history'],
+          supersedes: old.id,
+        },
+      ],
+    }) + '\n```';
+
+    const result = await runConnectorEvolve(
+      { toolkit: 'gmail', evolutionRunId: evo.id, gmail: [gmailRow({ id: 'm1' })] },
+      { agentRun },
+    );
+
+    assert.equal(result.memoriesWritten, 1, 'one new memory written');
+    const newRow = await getMemoryV3(result.memoryIds[0]!);
+    assert.ok(newRow, 'new memory row exists');
+    assert.equal(newRow.subject, 'work:globex');
+
+    const oldRow = await getMemoryV3(old.id);
+    assert.ok(oldRow, 'old row still readable');
+    assert.equal(oldRow.status, 'superseded', 'old row marked superseded');
+    assert.equal(oldRow.superseded_by, newRow.id, 'old row points at new row');
+
+    // Evolution row counters must reflect the supersede.
+    const evoFinal = await getEvolutionRun(evo.id);
+    assert.equal(evoFinal?.memories_written, 1);
+    assert.equal(evoFinal?.memories_superseded, 1);
+  });
+});
+
+test('supersedes: bogus id (no such memory) → new row still written, supersede skipped, no error', async () => {
+  await withTempHome(async () => {
+    const evo = await createEvolutionRun({ triggerKind: 'on_event' });
+    const agentRun: AgentRunFn = async () => '```json\n' + JSON.stringify({
+      memories: [
+        { text: 'A new fact', subject: 'topic:x', quality: 0.6, supersedes: 'nonexistent-id-xyz' },
+      ],
+    }) + '\n```';
+
+    const result = await runConnectorEvolve(
+      { toolkit: 'gmail', evolutionRunId: evo.id, gmail: [gmailRow({ id: 'm1' })] },
+      { agentRun },
+    );
+
+    assert.equal(result.memoriesWritten, 1, 'new row still written despite bogus supersedes');
+    const evoFinal = await getEvolutionRun(evo.id);
+    assert.equal(evoFinal?.memories_written, 1);
+    // memories_superseded should NOT be incremented when supersede target doesn't exist.
+    assert.equal(evoFinal?.memories_superseded, 0, 'no superseded counter bump for bogus id');
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// Existing-memories block in user prompt
+// ──────────────────────────────────────────────────────────────────────
+
+test('user prompt: existing memories block lists id + subject + text excerpt for dedup', async () => {
+  await withTempHome(async () => {
+    await addMemoryV3({ text: 'User runs marathons every spring in Berlin.', source: 'manual', subject: 'topic:running', quality: 0.7 });
+    await addMemoryV3({ text: 'User has a daughter named Mei aged 4.', source: 'manual', subject: 'person:mei', quality: 0.7 });
+
+    const evo = await createEvolutionRun({ triggerKind: 'on_event' });
+    let receivedUserMessage = '';
+    const agentRun: AgentRunFn = async (_sys, user) => {
+      receivedUserMessage = user;
+      return '```json\n{ "memories": [] }\n```';
+    };
+
+    await runConnectorEvolve(
+      { toolkit: 'gmail', evolutionRunId: evo.id, gmail: [gmailRow({ id: 'm1' })] },
+      { agentRun },
+    );
+
+    // The new prompt block lists each existing memory with [id] (subject) excerpt
+    // so the agent can dedup or supersede by id.
+    assert.match(receivedUserMessage, /Existing memories \(\d+ most recent/);
+    assert.match(receivedUserMessage, /User runs marathons every spring in Berlin/);
+    assert.match(receivedUserMessage, /User has a daughter named Mei/);
+    assert.match(receivedUserMessage, /topic:running/);
+    assert.match(receivedUserMessage, /person:mei/);
+  });
+});

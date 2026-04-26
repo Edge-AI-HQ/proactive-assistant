@@ -23,7 +23,12 @@ import { runAgent, parseAgentJson } from '../../pipeline/agent-runner.js';
 import type { TaskLogger } from '../scheduler.js';
 
 const MAX_PROMPT_ITEMS = 20;
-const MAX_RECENT_MEMORY_SUBJECTS = 25;
+// Recent-memory snapshot pool given to the agent for dedup. Subject-only
+// dedup misses rephrasings (e.g. "tech stack: Foo, Bar" being re-emitted as
+// "User knows Foo and Bar"); a 60-row snapshot with id + 200-char excerpt
+// lets the agent compare full text and either skip or supersede.
+const MAX_RECENT_MEMORY_SNAPSHOTS = 60;
+const MEMORY_SNAPSHOT_TEXT_LEN = 200;
 const MAX_TEXT_LEN_PER_ITEM = 320;
 const DEFAULT_TIMEOUT_MS = 60_000;
 
@@ -97,6 +102,9 @@ interface AgentMemoryWrite {
   quality?: unknown;
   confidence?: unknown;
   tags?: unknown;
+  /** Existing memory id this new row replaces. Optional; when set, we mark
+   *  the old row status='superseded' after the new row is written. */
+  supersedes?: unknown;
 }
 
 interface AgentMemoryEnvelope {
@@ -137,10 +145,10 @@ export async function runConnectorEvolve(
   }
 
   const profile = await db.getProfile().catch(() => null);
-  const recentSubjects = await snapshotRecentMemorySubjects().catch(() => []);
+  const recentMemories = await snapshotRecentMemories().catch(() => []);
 
   const systemPrompt = buildSystemPrompt(opts.toolkit);
-  const userMessage = buildUserMessage(opts.toolkit, sampled, profile, recentSubjects);
+  const userMessage = buildUserMessage(opts.toolkit, sampled, profile, recentMemories);
 
   let agentText: string;
   try {
@@ -173,6 +181,7 @@ export async function runConnectorEvolve(
 
   const writes = sanitizeMemoryWrites(parsed.memories);
   const memoryIds: string[] = [];
+  let supersededCount = 0;
   for (const w of writes) {
     try {
       const row = await db.addMemoryV3({
@@ -185,6 +194,17 @@ export async function runConnectorEvolve(
         tags: w.tags,
       });
       memoryIds.push(row.id);
+      if (w.supersedes) {
+        // Mark the prior row status='superseded'. If the agent supplied a
+        // bogus id (hallucinated, or already archived), don't sink the
+        // whole batch — log and continue.
+        try {
+          await db.supersedeMemoryV3(w.supersedes, row.id);
+          supersededCount++;
+        } catch (err) {
+          logger.warn(`[connector-evolve] supersede ${w.supersedes} -> ${row.id} skipped: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
     } catch (err) {
       // One bad row shouldn't sink the rest. Log and continue.
       logger.warn(`[connector-evolve] memory write rejected: ${err instanceof Error ? err.message : String(err)}`);
@@ -192,7 +212,10 @@ export async function runConnectorEvolve(
   }
 
   if (memoryIds.length > 0) {
-    await db.recordEvolutionDelta(opts.evolutionRunId, { memoriesWritten: memoryIds.length });
+    await db.recordEvolutionDelta(opts.evolutionRunId, {
+      memoriesWritten: memoryIds.length,
+      memoriesSuperseded: supersededCount > 0 ? supersededCount : undefined,
+    });
     await db.recordEvolutionRefsProduced(opts.evolutionRunId, 'memory', memoryIds);
     await db.markMemoryReferenced(memoryIds, opts.evolutionRunId);
   }
@@ -211,28 +234,35 @@ export async function runConnectorEvolve(
 // ──────────────────────────────────────────────────────────────────────
 
 function buildSystemPrompt(toolkit: string): string {
-  return `You extract DURABLE user facts from a fresh batch of ${toolkit} items the user just connected. Output is a single JSON object inside one fenced \`\`\`json block, with this shape:
+  return `You extract DURABLE NEW user facts from a fresh batch of ${toolkit} items the user just connected. Output is a single JSON object inside one fenced \`\`\`json block, with this shape:
 
 {
   "memories": [
     {
       "text": "Short factual sentence about the user (≤200 chars).",
       "subject": "topic:<key>" | "work:<key>" | "person:<name>" | "preference:<key>" | null,
-      "quality": 0.0-1.0,
+      "quality": 0.4-0.85,
       "confidence": 0.0-1.0,
-      "tags": ["string", ...]
+      "tags": ["string", ...],
+      "supersedes": "<existing memory id from \\"Existing memories\\" block>" | null
     }
   ]
 }
 
 Rules:
 - Capture stable things: ongoing projects, recurring contacts, expressed interests, role/employer hints, schedule patterns. NOT one-off events.
-- Skip routine signal: newsletters, automated notifications, OAuth confirmations, password resets, marketing email.
-- quality dial: 0.4-0.6 for inferred facts, 0.6-0.8 for clearly-stated facts. Never above 0.85.
-- confidence dial: how sure are you the fact is correct.
-- Subject is a stable scoped key for de-duplication; reuse existing subjects from "Recent memory subjects" when they apply.
-- DO NOT duplicate facts that already appear in "Recent memory subjects" — extend, supersede, or skip.
-- Output valid JSON only. If nothing extractable: { "memories": [] }.
+- Skip noise: newsletters, automated notifications, OAuth confirmations, password resets, marketing emails the user hasn't engaged with.
+- Quality calibration (3 buckets — never above 0.85):
+    * 0.40-0.55: inferred from indirect signal (e.g. "user probably interested in X because they receive newsletters about it").
+    * 0.55-0.70: clearly observable in source (e.g. "user sent a Slack message saying X", "calendar shows recurring meeting").
+    * 0.70-0.85: user-stated about themselves (resume claims, profile facts, explicit preferences expressed in writing).
+- Confidence: how sure the fact is correct (separate from durability).
+- Subject is a stable scoped key for de-duplication; reuse existing subjects from "Existing memories" when they apply.
+- DEDUP IS HARD RULE: scan the "Existing memories" block (id + subject + text excerpt). If a candidate fact is the same as an existing row in meaning even when phrased differently, do ONE of:
+    a. SKIP it (no new row).
+    b. If you have NEW information that replaces the old fact (e.g. updated role, new employer), emit the new row AND set "supersedes" to the existing memory id. The old row will be archived.
+  Examples to skip: "User knows ERC-4337 and RAG" when an existing memory already lists those tech stacks. Just rephrasing is not new information.
+- Output valid JSON only. If nothing genuinely new is extractable: { "memories": [] }. An empty result is preferable to a duplicate.
 - No prose outside the json fence. Quote any internal quotes with 「」 or escape with \\".`;
 }
 
@@ -415,11 +445,13 @@ function sampleItems(opts: ConnectorEvolveOpts): SampledBundle {
   };
 }
 
+interface ExistingMemorySnapshot { id: string; subject: string | null; textExcerpt: string }
+
 function buildUserMessage(
   toolkit: string,
   sampled: SampledBundle,
   profile: db.ProfileRow | null,
-  recentSubjects: string[],
+  existingMemories: ExistingMemorySnapshot[],
 ): string {
   const lines: string[] = [];
   lines.push(`Toolkit: ${toolkit}`);
@@ -522,10 +554,14 @@ function buildUserMessage(
   if (profile?.summary) {
     lines.push(`Profile summary: ${truncate(profile.summary, 600)}`);
   }
-  if (recentSubjects.length > 0) {
-    lines.push(`Recent memory subjects: ${recentSubjects.slice(0, MAX_RECENT_MEMORY_SUBJECTS).join(', ')}`);
+  if (existingMemories.length > 0) {
+    lines.push('', `Existing memories (${existingMemories.length} most recent — use these to dedup; reference by id in "supersedes" if you replace):`);
+    existingMemories.forEach((m) => {
+      const subj = m.subject ?? '—';
+      lines.push(`[${m.id}] (${subj}) ${m.textExcerpt}`);
+    });
   }
-  lines.push('', 'Extract durable facts now.');
+  lines.push('', 'Extract durable NEW facts now. Skip rephrasings of existing memories.');
   return lines.join('\n');
 }
 
@@ -539,6 +575,7 @@ interface SanitizedMemoryWrite {
   quality: number;
   confidence: number;
   tags: string[];
+  supersedes: string | null;
 }
 
 function sanitizeMemoryWrites(input: AgentMemoryWrite[] | undefined): SanitizedMemoryWrite[] {
@@ -552,12 +589,14 @@ function sanitizeMemoryWrites(input: AgentMemoryWrite[] | undefined): SanitizedM
     const quality = clampScore(w.quality, 0.5);
     const confidence = clampScore(w.confidence, 0.5);
     const tags = sanitizeTags(w.tags);
+    const supersedes = typeof w.supersedes === 'string' && w.supersedes.trim() ? w.supersedes.trim() : null;
     out.push({
       text: truncate(text, 240),
       subject,
       quality,
       confidence,
       tags,
+      supersedes,
     });
   }
   return out;
@@ -586,18 +625,21 @@ function sanitizeTags(value: unknown): string[] {
 // Helpers
 // ──────────────────────────────────────────────────────────────────────
 
-async function snapshotRecentMemorySubjects(): Promise<string[]> {
-  const rows = await db.listMemoryV3({ limit: 80, orderBy: 'created_at', orderDirection: 'desc' });
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const row of rows) {
-    if (!row.subject) continue;
-    if (seen.has(row.subject)) continue;
-    seen.add(row.subject);
-    out.push(row.subject);
-    if (out.length >= MAX_RECENT_MEMORY_SUBJECTS) break;
-  }
-  return out;
+async function snapshotRecentMemories(): Promise<ExistingMemorySnapshot[]> {
+  // Returns id + subject + 200-char text excerpt for the N most recent active
+  // memories. Subject-only dedup misses rephrasings — the agent needs the
+  // text body to recognize "tech stack: Foo, Bar" === "User knows Foo and Bar".
+  const rows = await db.listMemoryV3({
+    status: 'active',
+    limit: MAX_RECENT_MEMORY_SNAPSHOTS,
+    orderBy: 'created_at',
+    orderDirection: 'desc',
+  });
+  return rows.map((row) => ({
+    id: row.id,
+    subject: row.subject ?? null,
+    textExcerpt: truncate(row.text ?? '', MEMORY_SNAPSHOT_TEXT_LEN).replace(/\s+/g, ' '),
+  }));
 }
 
 function byDescOccurredAt(a: { occurredAt?: string }, b: { occurredAt?: string }): number {

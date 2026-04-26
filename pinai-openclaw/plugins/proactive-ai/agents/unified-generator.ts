@@ -159,6 +159,33 @@ When recent generated-card history includes thread decisions:
 - \`suppress\`: avoid near-duplicate cards for that thread unless a concrete new trigger overrides the prior negative signal
 </phase_3_generate>
 
+<grounding_rules>
+These rules are non-negotiable. Violating one auto-fails the card in self-review.
+
+**G1. Literal citation for named entities**
+Any product name, model version, version number, dollar amount, percentage, person name, or specific date that appears in title / whyNow / summary / primaryAction.label MUST be a literal substring of a source you collected in Phase 1. If you cannot point at the literal string in a \`pin raw gmail thread\`, \`pin raw gcal\`, \`pin memory\`, or \`pin signals\` result, REPLACE the specific term with the generic decision form.
+- BAD: "Migrate to Sonnet 4.6" when the email only says "1M context beta retires" without naming the replacement.
+  GOOD: "Decide which Sonnet variant to migrate to before the 4月30日 cutoff".
+- If you only saw the email subject + snippet via \`pin raw gmail recent\`, pull the full body via \`pin raw gmail thread --threadId <tid>\` BEFORE citing any named entity from it.
+
+**G2. Match action scope to source weight**
+A marketing email, announcement, product launch, newsletter, or invitation maps to a "decide whether to engage / RSVP / read" card — NOT a deep technical evaluation card. Only escalate to deep work when the user has DIRECTLY produced a signal (replied, signed up, scheduled, asked).
+- BAD: A Hacken compliance-panel invitation → "Evaluate MiCAR/DORA impact on AA wallet" (deep eval).
+  GOOD: Same invitation → "Decide whether to attend the 5月X日 MiCAR/DORA panel".
+
+**G3. Genericness filter**
+If your card title would make sense for any AI engineer, any remote worker, or any person with goal X, regenerate it. Cards must hinge on something specific to *this* user's memories or signals (a named project, a stated preference, a captured decision, a recent personal_signal).
+- BAD: "Schedule 2 cardio sessions this week" (any user with stay-healthy goal).
+  GOOD: A health card needs a personal anchor — recent biometric signal, named friend joining, scheduled appointment.
+
+**G4. Source citation format**
+Each entry in \`sources\` must include the source kind, the subject/sender/title, the date if known, and ideally a ≤12-char quoted phrase from the source. Free-form "user has interest in X" is not a citation.
+- BAD: "memory: user is interested in LLM benchmarks"
+  GOOD: "memory:[topic:llm model benchmarks] (q=0.78) 'Sonnet 4 1M context beta'"
+
+After drafting each card, audit each named entity. If unsupported, rewrite. The Phase 4 review will check these rules and fail any card that violates them, regardless of the dimension scores.
+</grounding_rules>
+
 <phase_4_self_review>
 Critically evaluate EVERY card you generated. Score each on 5 dimensions (0.0-10.0):
 
@@ -177,9 +204,15 @@ Critically evaluate EVERY card you generated. Score each on 5 dimensions (0.0-10
 **Decision Compression** — How much thinking does this save?
   0-3: User still needs to research | 4-6: Some context | 7-8: Most thinking done | 9-10: Complete decision package
 
-**overall** = average of 5 dimensions. **pass** = overall >= 5.0.
+**overall** = average of 5 dimensions. **pass** = overall >= 5.0 AND no grounding rule violation.
 
-Be strict — do not inflate scores. If a card scores below 5.0, drop it from the final output.
+Grounding audit (run before scoring):
+- G1: every named product / model / version / amount / person / date in the card has a literal substring match in a Phase-1 source.
+- G2: cards built on marketing / invitation / announcement signals are scoped as "decide whether to engage", not deep execution.
+- G3: removing the user-specific anchor would not leave the card readable as generic advice.
+- G4: every \`sources\` entry names kind + subject + date.
+
+Any G1-G4 violation = auto-fail; drop the card and regenerate or omit. Self-review tends to inflate by ~1 point — calibrate down: a card you naturally want to give 8.5 should probably be 7.5.
 If you see a fixable issue during review, fix the card inline before scoring rather than leaving it broken.
 </phase_4_self_review>
 ${feedbackSection}${recentGeneratedCardsSection}${learnedSkillsBlock}
