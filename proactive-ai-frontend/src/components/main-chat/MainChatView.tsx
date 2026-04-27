@@ -398,14 +398,6 @@ export default function MainChatView({
     }
   }, [browserSession]);
 
-  const handleIframeReload = useCallback(() => {
-    setIframeReloadKey((k) => k + 1);
-  }, []);
-
-  const handleLiveViewUrlRefreshed = useCallback((url: string) => {
-    setBrowserSession((prev) => (prev ? { ...prev, liveViewUrl: url } : null));
-  }, []);
-
   // /input callbacks share the same stale-session handling: if the backend
   // says the session is gone (404) we drop the local reference so the
   // panel unmounts instead of letting the user keep firing dead POSTs.
@@ -437,31 +429,16 @@ export default function MainChatView({
     (key: string) => postInput({ type: "key", key }),
     [postInput],
   );
+  // Tap → click and pan → scroll, both forwarded as remote-viewport coords
+  // (the BrowserView has already inverted its CSS transform scale before
+  // posting). Browserbase's iframe doesn't pass these through inside iOS
+  // WKWebView when sandboxed and cross-origin.
   const handleUserInputClick = useCallback(
     (x: number, y: number) => postInput({ type: "click", x, y }),
     [postInput],
   );
   const handleUserInputScroll = useCallback(
     (dx: number, dy: number) => postInput({ type: "scroll", dx, dy }),
-    [postInput],
-  );
-  // Navigation actions — these are always available to the user, even
-  // while AI is browsing. Backend auto-acquires user control when one of
-  // these arrives so the implicit-takeover stays atomic with the action.
-  const handleUserNavigate = useCallback(
-    (url: string) => postInput({ type: "navigate", url }),
-    [postInput],
-  );
-  const handleUserBack = useCallback(
-    () => postInput({ type: "back" }),
-    [postInput],
-  );
-  const handleUserForward = useCallback(
-    () => postInput({ type: "forward" }),
-    [postInput],
-  );
-  const handleUserPageReload = useCallback(
-    () => postInput({ type: "page-reload" }),
     [postInput],
   );
 
@@ -534,19 +511,13 @@ export default function MainChatView({
         <BrowserPanel
           session={browserSession}
           iframeReloadKey={iframeReloadKey}
-          onIframeReload={handleIframeReload}
           onControlChange={handleBrowserControlChange}
           onUserInputText={handleUserInputText}
           onUserInputKey={handleUserInputKey}
           onUserInputClick={handleUserInputClick}
           onUserInputScroll={handleUserInputScroll}
-          onUserNavigate={handleUserNavigate}
-          onUserBack={handleUserBack}
-          onUserForward={handleUserForward}
-          onUserPageReload={handleUserPageReload}
           onClose={handleBrowserClose}
           onStageChange={setBrowserStage}
-          onLiveViewUrlRefreshed={handleLiveViewUrlRefreshed}
           composerFocused={composerFocused}
         />
       </div>

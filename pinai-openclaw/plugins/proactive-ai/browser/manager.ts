@@ -165,7 +165,11 @@ export class BrowserbaseManager {
     }
 
     const id = randomUUID();
-    const viewport = opts.viewport ?? { width: 390, height: 844 };
+    // Default to desktop. Browserbase's iframe live view forwards clicks /
+    // scroll natively in desktop mode (Manus-style); mobile-emulated viewports
+    // require an event-relay overlay that proved to be a fragile UX. Users can
+    // pinch-zoom in iOS Safari to read on a phone, or hit our zoom toggle.
+    const viewport = opts.viewport ?? { width: 1280, height: 800 };
     const now = Date.now();
 
     const session: InternalSession = {
@@ -263,7 +267,6 @@ export class BrowserbaseManager {
       session.pages = [firstPage];
       session.activePageIdx = 0;
       this.attachPageInstrumentation(session, firstPage);
-      await this.applyDeviceEmulation(firstPage, viewport);
 
       // Auto-track new tabs opened by the page (target=_blank, window.open, OAuth).
       if (context) {
@@ -272,7 +275,6 @@ export class BrowserbaseManager {
           if (!s || s.pages.includes(p)) return;
           s.pages.push(p);
           this.attachPageInstrumentation(s, p);
-          void this.applyDeviceEmulation(p, s.viewport);
           this.logger.info(`[browserbase] Session ${id} new tab at ${p.url()} (now ${s.pages.length} tabs)`);
         });
       }
@@ -811,12 +813,11 @@ export class BrowserbaseManager {
   }
 
   /**
-   * Forward a user tap to a page coordinate during user takeover.
-   * Coordinates are in remote page viewport units (the frontend scales
-   * its overlay-local x/y against session.viewport before calling).
-   * Browserbase Live View's DevTools UI doesn't reliably turn a native
-   * tap on the iframe into a page click on mobile, so the frontend
-   * captures the tap on a transparent overlay and POSTs it here.
+   * Forward a user tap to a remote page coordinate during user takeover.
+   * Frontend computes coordinates in the remote viewport coord system
+   * (1280x800 for desktop preset) by inverting the iframe's CSS transform
+   * scale before posting. Iframe click pass-through doesn't work in iOS
+   * WKWebView when the iframe is cross-origin + sandboxed, so we relay.
    */
   async clickUserAt(sessionId: string, x: number, y: number): Promise<void> {
     const session = this.sessions.get(sessionId);
@@ -827,8 +828,6 @@ export class BrowserbaseManager {
     }
     const vp = session.viewport;
     if (x > vp.width * 1.1 || y > vp.height * 1.1) {
-      // Guard against runaway coordinates (e.g. frontend forgot to scale).
-      // Small over-spill is fine (scroll beyond fold).
       throw new Error(`Click coordinate (${x},${y}) out of viewport (${vp.width}x${vp.height})`);
     }
     const page = this.requirePage(sessionId);
@@ -838,12 +837,9 @@ export class BrowserbaseManager {
   }
 
   /**
-   * Forward a user scroll gesture. dx/dy in CSS pixels; positive dy
-   * scrolls content up (page content moves up as the user swipes up).
-   * Clamped to reasonable per-call magnitudes because a single fast
-   * swipe on mobile can produce thousand-pixel deltas that, when
-   * multiplied by the imperfect viewport scaling, cause Playwright
-   * to wheel past what the user actually saw.
+   * Forward a user scroll gesture. dx/dy are in remote-viewport CSS pixels
+   * (already scaled by the frontend). Clamped per call so a single fast
+   * swipe can't wheel past what the user actually saw.
    */
   async scrollUser(sessionId: string, dx: number, dy: number): Promise<void> {
     const session = this.sessions.get(sessionId);
@@ -996,48 +992,6 @@ export class BrowserbaseManager {
     });
   }
 
-  /**
-   * Pin a page to iPhone 15 Pro mobile emulation via CDP.
-   * Browserbase creates contexts through its own API, so we can't pass
-   * Playwright's `deviceScaleFactor/isMobile/hasTouch` at newContext time —
-   * we override per-page over the existing CDP connection instead. This is
-   * what makes responsive sites render as mobile (media queries, touch
-   * events, high-DPR assets) instead of a squashed desktop layout.
-   * Failure is non-fatal: the tab still works, just without mobile UX.
-   */
-  private async applyDeviceEmulation(
-    page: Page,
-    viewport: { width: number; height: number },
-  ): Promise<void> {
-    try {
-      const cdp = await page.context().newCDPSession(page);
-      await cdp.send('Emulation.setDeviceMetricsOverride', {
-        width: viewport.width,
-        height: viewport.height,
-        deviceScaleFactor: 3,
-        mobile: true,
-        screenWidth: viewport.width,
-        screenHeight: viewport.height,
-        positionX: 0,
-        positionY: 0,
-        screenOrientation: { type: 'portraitPrimary', angle: 0 },
-      });
-      await cdp.send('Emulation.setTouchEmulationEnabled', {
-        enabled: true,
-        maxTouchPoints: 5,
-      });
-      await cdp.send('Emulation.setUserAgentOverride', {
-        userAgent:
-          'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
-        platform: 'iPhone',
-      });
-    } catch (err) {
-      this.logger.warn(
-        `[browserbase] Device emulation failed: ${err instanceof Error ? err.message : err}`,
-      );
-    }
-  }
-
   /** Resolve a snapshot ref back to a Playwright Locator via the aria-ref engine. */
   private resolveLocator(page: Page, sessionId: string, ref: string): Locator {
     const session = this.sessions.get(sessionId);
@@ -1153,7 +1107,6 @@ export class BrowserbaseManager {
           session.hasSnapshotted = false;
           for (const p of session.pages) {
             this.attachPageInstrumentation(session, p);
-            void this.applyDeviceEmulation(p, session.viewport);
           }
 
           this.attachDisconnectHandler(session, browser);
