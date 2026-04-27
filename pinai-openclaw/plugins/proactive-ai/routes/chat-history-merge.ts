@@ -23,6 +23,15 @@ import {
 } from '../chat-feedback/service.js';
 import { previewToolArgs, detectPinCommand } from './chat.js';
 
+/**
+ * Matches OpenClaw's reply-routing directives — `[[reply_to_current]]` or
+ * `[[reply_to:<id>]]`, with optional whitespace inside. See
+ * `openclaw/src/utils/directive-tags.ts` REPLY_TAG_RE for the canonical
+ * regex; we duplicate it here because that submodule is read-only and we
+ * only need the strip behavior on history reload.
+ */
+const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\]/gi;
+
 export interface HistoryTextPart {
   type: 'text';
   text: string;
@@ -145,7 +154,15 @@ export function mergeChatHistoryTurns(raw: readonly unknown[]): HistoryMessage[]
       for (const part of content) {
         if (!part || typeof part !== 'object') continue;
         if (part.type === 'text' && typeof part.text === 'string' && part.text) {
-          pendingAssistant.parts.push({ type: 'text', text: part.text });
+          // OpenClaw's system prompt makes the LLM start every assistant
+          // reply with [[reply_to_current]] (or [[reply_to:<id>]]) as a
+          // routing directive. The streaming pipeline strips it inline,
+          // but transcripts persist the raw tagged text. Strip here so
+          // history reload doesn't surface the directive as user-visible
+          // chat content.
+          const cleaned = part.text.replace(REPLY_TAG_RE, '').replace(/^\n+/, '');
+          if (!cleaned) continue;
+          pendingAssistant.parts.push({ type: 'text', text: cleaned });
           continue;
         }
         if (
