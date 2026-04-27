@@ -19,6 +19,7 @@ import {
   Plus,
   Minus,
   CornerDownLeft,
+  GripHorizontal,
 } from "lucide-react";
 
 export type SheetStage = "mini" | "medium" | "full";
@@ -202,29 +203,64 @@ export default function BrowserView({
   // controls (↑ ↓ + −) that translate to backend commands — see below.
   const overlayActive = false;
 
-  // Step sizes for the floating control buttons. SCROLL_STEP_PX is in
-  // remote-viewport CSS pixels; one click ≈ a quarter-page nudge, which
-  // matches what users expect from a desktop scroll button.
-  const SCROLL_STEP_PX = 200;
   const ZOOM_STEP = 1.2;
   // Floor at fit-to-height. Going smaller leaves a black letterbox at the
   // panel's right + bottom (transform-origin is top-left), and "smaller
   // than fits exactly" has no real use case.
   const ZOOM_MIN = 1;
   const ZOOM_MAX = 4;
-
-  const scrollPageUp = () => {
-    void onUserInputScroll(0, -SCROLL_STEP_PX);
-  };
-  const scrollPageDown = () => {
-    void onUserInputScroll(0, SCROLL_STEP_PX);
-  };
   const zoomInStep = () => {
     setUserZoom((z) => Math.min(ZOOM_MAX, z * ZOOM_STEP));
   };
   const zoomOutStep = () => {
     setUserZoom((z) => Math.max(ZOOM_MIN, z / ZOOM_STEP));
   };
+
+  // Drag-pad scroll: one finger pixel maps to DRAG_PAD_GAIN remote-viewport
+  // pixels, accumulated and flushed at most once per animation frame so a
+  // long drag doesn't spam /input. Gain is tuned so a comfortable thumb
+  // throw (~80 px on a phone) covers roughly one screen of remote content.
+  const DRAG_PAD_GAIN = 5;
+  const dragStartRef = useRef<{ lastY: number; pointerId: number } | null>(null);
+  const accumDyRef = useRef(0);
+  const rafIdRef = useRef<number | null>(null);
+  const flushDragScroll = () => {
+    rafIdRef.current = null;
+    const dy = Math.round(accumDyRef.current);
+    accumDyRef.current = 0;
+    if (dy !== 0) void onUserInputScroll(0, dy);
+  };
+  const handleDragPadDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragStartRef.current = { lastY: e.clientY, pointerId: e.pointerId };
+  };
+  const handleDragPadMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragStartRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    const rawDy = e.clientY - drag.lastY;
+    drag.lastY = e.clientY;
+    accumDyRef.current += rawDy * DRAG_PAD_GAIN;
+    if (rafIdRef.current === null) {
+      rafIdRef.current = requestAnimationFrame(flushDragScroll);
+    }
+  };
+  const handleDragPadUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    dragStartRef.current = null;
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+      flushDragScroll();
+    }
+  };
+  // Cancel any pending rAF on unmount so a flushed scroll doesn't fire
+  // after the panel is gone (would hit a dead session).
+  useEffect(() => {
+    return () => {
+      if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current);
+    };
+  }, []);
   const pressEnter = () => {
     void onUserInputKey("Enter");
   };
@@ -356,7 +392,7 @@ export default function BrowserView({
         {!isMini && controlMode === "user" && (
           <div
             onPointerDown={stopDrag}
-            className="pointer-events-none absolute bottom-3 right-3 z-[3] flex flex-col gap-1.5"
+            className="pointer-events-none absolute bottom-3 right-3 z-[3] flex flex-col gap-3"
           >
             <div className="pointer-events-auto flex flex-col rounded-lg overflow-hidden bg-black/60 backdrop-blur-sm border border-white/10">
               <button
@@ -374,21 +410,19 @@ export default function BrowserView({
                 <Minus size={16} strokeWidth={2.5} />
               </button>
             </div>
-            <div className="pointer-events-auto flex flex-col rounded-lg overflow-hidden bg-black/60 backdrop-blur-sm border border-white/10">
-              <button
-                onClick={scrollPageUp}
-                className="p-2 hover:bg-white/15 active:bg-white/25 text-white/85"
-                title="Scroll up"
-              >
-                <ChevronUp size={16} strokeWidth={2.5} />
-              </button>
-              <button
-                onClick={scrollPageDown}
-                className="p-2 hover:bg-white/15 active:bg-white/25 text-white/85 border-t border-white/10"
-                title="Scroll down"
-              >
-                <ChevronDown size={16} strokeWidth={2.5} />
-              </button>
+            <div
+              onPointerDown={handleDragPadDown}
+              onPointerMove={handleDragPadMove}
+              onPointerUp={handleDragPadUp}
+              onPointerCancel={handleDragPadUp}
+              // touch-action: none keeps iOS from claiming the gesture for
+              // its own page scroll/zoom while we're capturing pointer
+              // moves to forward as remote scroll deltas.
+              style={{ touchAction: "none" }}
+              title="Drag to scroll"
+              className="pointer-events-auto flex items-center justify-center w-9 h-24 rounded-lg bg-black/60 backdrop-blur-sm border border-white/10 active:bg-black/75 cursor-grab active:cursor-grabbing"
+            >
+              <GripHorizontal size={16} className="text-white/65" />
             </div>
           </div>
         )}
