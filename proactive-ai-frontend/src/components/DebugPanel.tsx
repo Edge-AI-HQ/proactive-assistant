@@ -295,7 +295,7 @@ export default function DebugPanel({ health, run, isRunning, iterations, onItera
                         {modelSelection.error}
                       </p>
                       <button
-                        onClick={() => { void modelSelection.refetch(); }}
+                        onClick={() => { void modelSelection.retry(); }}
                         className="text-[11px] font-medium text-foreground/50 hover:text-foreground/70 underline shrink-0"
                       >
                         Retry

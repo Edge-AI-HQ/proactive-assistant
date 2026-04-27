@@ -10,6 +10,10 @@ export interface UseModelSelectionResult {
   error: string | null;
   change: (ref: string) => Promise<void>;
   refetch: () => Promise<void>;
+  /** Retry the most recent failed `change`. If no change has been
+   *  attempted yet, falls back to refetching the model list so the
+   *  Retry button still does something useful. */
+  retry: () => Promise<void>;
 }
 
 /**
@@ -27,6 +31,10 @@ export function useModelSelection(enabled: boolean): UseModelSelectionResult {
 
   const fetchAbortRef = useRef<AbortController | null>(null);
   const changeAbortRef = useRef<AbortController | null>(null);
+  // Track the model ref of the most recent change attempt so the Retry
+  // button can re-fire the same /models/change request rather than just
+  // refetching the list (which leaves the bad state in place).
+  const lastAttemptedRef = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     fetchAbortRef.current?.abort();
@@ -50,6 +58,7 @@ export function useModelSelection(enabled: boolean): UseModelSelectionResult {
   }, []);
 
   const change = useCallback(async (ref: string) => {
+    lastAttemptedRef.current = ref;
     changeAbortRef.current?.abort();
     const controller = new AbortController();
     changeAbortRef.current = controller;
@@ -69,6 +78,15 @@ export function useModelSelection(enabled: boolean): UseModelSelectionResult {
     }
   }, [load]);
 
+  const retry = useCallback(async () => {
+    const ref = lastAttemptedRef.current;
+    if (ref) {
+      await change(ref);
+    } else {
+      await load();
+    }
+  }, [change, load]);
+
   useEffect(() => {
     if (!enabled) return;
     void load();
@@ -87,5 +105,6 @@ export function useModelSelection(enabled: boolean): UseModelSelectionResult {
     error,
     change,
     refetch: load,
+    retry,
   };
 }
