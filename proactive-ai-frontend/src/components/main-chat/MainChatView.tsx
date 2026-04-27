@@ -34,6 +34,8 @@ interface BrowserSession {
   browserSessionId: string;
   liveViewUrl: string;
   viewport: { width: number; height: number };
+  /** Last-known remote page URL — drives the URL bar in the panel header. */
+  currentUrl: string;
   controlMode: "ai" | "user" | "idle";
   /**
    * Set when the AI asks the user to take over (e.g. captcha / 2FA).
@@ -278,6 +280,7 @@ export default function MainChatView({
               width: 390,
               height: 844,
             },
+          currentUrl: typeof data.url === "string" ? data.url : "",
           controlMode: parseControlMode(data.controlMode),
           takeoverReason:
             typeof data.takeoverReason === "string"
@@ -286,6 +289,11 @@ export default function MainChatView({
         });
       } else if (type === "browser:closed") {
         setBrowserSession(null);
+      } else if (type === "browser:navigated") {
+        const nextUrl = typeof data.url === "string" ? data.url : "";
+        setBrowserSession((prev) =>
+          prev ? { ...prev, currentUrl: nextUrl } : null,
+        );
       } else if (type === "browser:control") {
         const nextMode = parseControlMode(data.mode);
         const reason =
@@ -437,6 +445,25 @@ export default function MainChatView({
     (dx: number, dy: number) => postInput({ type: "scroll", dx, dy }),
     [postInput],
   );
+  // Navigation actions — these are always available to the user, even
+  // while AI is browsing. Backend auto-acquires user control when one of
+  // these arrives so the implicit-takeover stays atomic with the action.
+  const handleUserNavigate = useCallback(
+    (url: string) => postInput({ type: "navigate", url }),
+    [postInput],
+  );
+  const handleUserBack = useCallback(
+    () => postInput({ type: "back" }),
+    [postInput],
+  );
+  const handleUserForward = useCallback(
+    () => postInput({ type: "forward" }),
+    [postInput],
+  );
+  const handleUserPageReload = useCallback(
+    () => postInput({ type: "page-reload" }),
+    [postInput],
+  );
 
   return (
     <motion.div
@@ -513,6 +540,10 @@ export default function MainChatView({
           onUserInputKey={handleUserInputKey}
           onUserInputClick={handleUserInputClick}
           onUserInputScroll={handleUserInputScroll}
+          onUserNavigate={handleUserNavigate}
+          onUserBack={handleUserBack}
+          onUserForward={handleUserForward}
+          onUserPageReload={handleUserPageReload}
           onClose={handleBrowserClose}
           onStageChange={setBrowserStage}
           onLiveViewUrlRefreshed={handleLiveViewUrlRefreshed}

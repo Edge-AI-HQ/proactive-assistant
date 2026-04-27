@@ -172,6 +172,17 @@ export function handleBrowser(): RouteHandler {
       const sessionId = inputMatch[1];
       const body = await readBody(ctx.req);
       const type = String(body.type ?? '').trim();
+      // Navigation actions (URL bar / back / forward / reload) are always
+      // available to the user, even while AI is browsing. Implicitly take
+      // over so the manager methods (which require user mode) succeed and
+      // the frontend's control-state SSE catches up.
+      const NAV_TYPES = new Set(['navigate', 'back', 'forward', 'page-reload']);
+      if (NAV_TYPES.has(type)) {
+        const session = mgr.getSession(sessionId);
+        if (session && session.controlMode !== 'user') {
+          mgr.setControlMode(sessionId, 'user', 'You took control of the browser');
+        }
+      }
       try {
         if (type === 'text') {
           const text = typeof body.text === 'string' ? body.text : '';
@@ -223,7 +234,36 @@ export function handleBrowser(): RouteHandler {
           json(ctx.res, 200, { ok: true });
           return true;
         }
-        json(ctx.res, 400, { error: 'Invalid input type (text | key | click | scroll)' });
+        if (type === 'navigate') {
+          const url = typeof body.url === 'string' ? body.url.trim() : '';
+          if (!url) {
+            json(ctx.res, 400, { error: 'Missing url' });
+            return true;
+          }
+          ctx.api.logger.info(`[browser-input] navigate session=${sessionId} url=${url}`);
+          await mgr.navigateUserTo(sessionId, url);
+          json(ctx.res, 200, { ok: true });
+          return true;
+        }
+        if (type === 'back') {
+          ctx.api.logger.info(`[browser-input] back session=${sessionId}`);
+          await mgr.goBackUser(sessionId);
+          json(ctx.res, 200, { ok: true });
+          return true;
+        }
+        if (type === 'forward') {
+          ctx.api.logger.info(`[browser-input] forward session=${sessionId}`);
+          await mgr.goForwardUser(sessionId);
+          json(ctx.res, 200, { ok: true });
+          return true;
+        }
+        if (type === 'page-reload') {
+          ctx.api.logger.info(`[browser-input] page-reload session=${sessionId}`);
+          await mgr.reloadPageUser(sessionId);
+          json(ctx.res, 200, { ok: true });
+          return true;
+        }
+        json(ctx.res, 400, { error: 'Invalid input type (text | key | click | scroll | navigate | back | forward | page-reload)' });
       } catch (err) {
         json(ctx.res, 409, { error: err instanceof Error ? err.message : String(err) });
       }

@@ -263,6 +263,7 @@ export class BrowserbaseManager {
       session.pages = [firstPage];
       session.activePageIdx = 0;
       this.attachPageInstrumentation(session, firstPage);
+      await this.applyDeviceEmulation(firstPage, viewport);
 
       // Auto-track new tabs opened by the page (target=_blank, window.open, OAuth).
       if (context) {
@@ -271,6 +272,7 @@ export class BrowserbaseManager {
           if (!s || s.pages.includes(p)) return;
           s.pages.push(p);
           this.attachPageInstrumentation(s, p);
+          void this.applyDeviceEmulation(p, s.viewport);
           this.logger.info(`[browserbase] Session ${id} new tab at ${p.url()} (now ${s.pages.length} tabs)`);
         });
       }
@@ -794,7 +796,7 @@ export class BrowserbaseManager {
     if (session.controlMode !== 'user') throw new Error('User input is only allowed while the user controls the browser.');
     const page = this.requirePage(sessionId);
     await page.keyboard.type(text);
-    await this.settle(page);
+    await this.quickSettle(page);
     this.touch(sessionId);
   }
 
@@ -804,7 +806,7 @@ export class BrowserbaseManager {
     if (session.controlMode !== 'user') throw new Error('User input is only allowed while the user controls the browser.');
     const page = this.requirePage(sessionId);
     await page.keyboard.press(key);
-    await this.settle(page);
+    await this.quickSettle(page);
     this.touch(sessionId);
   }
 
@@ -831,7 +833,7 @@ export class BrowserbaseManager {
     }
     const page = this.requirePage(sessionId);
     await page.mouse.click(x, y);
-    await this.settle(page);
+    await this.quickSettle(page);
     this.touch(sessionId);
   }
 
@@ -855,8 +857,75 @@ export class BrowserbaseManager {
     const cdy = Math.max(-CLAMP, Math.min(CLAMP, dy));
     const page = this.requirePage(sessionId);
     await page.mouse.wheel(cdx, cdy);
-    await this.settle(page);
+    await this.quickSettle(page);
     this.touch(sessionId);
+  }
+
+  /**
+   * User-driven navigation. Mirrors {@link navigate} / {@link goBack} /
+   * {@link goForward} / {@link reload} but gated to user control mode and
+   * skips the snapshot — the user is watching the iframe directly, not
+   * consuming an aria tree. Each emits `browser:navigated` so the frontend
+   * URL bar updates without polling.
+   */
+  async navigateUserTo(sessionId: string, url: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`No session ${sessionId}`);
+    if (session.controlMode !== 'user') throw new Error('User input is only allowed while the user controls the browser.');
+    const page = this.requirePage(sessionId);
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    this.touch(sessionId);
+    browserEvents.emit({
+      type: 'browser:navigated',
+      sessionKey: session.subagentId,
+      browserSessionId: sessionId,
+      url: page.url(),
+    });
+  }
+
+  async goBackUser(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`No session ${sessionId}`);
+    if (session.controlMode !== 'user') throw new Error('User input is only allowed while the user controls the browser.');
+    const page = this.requirePage(sessionId);
+    await page.goBack({ timeout: 15_000, waitUntil: 'domcontentloaded' });
+    this.touch(sessionId);
+    browserEvents.emit({
+      type: 'browser:navigated',
+      sessionKey: session.subagentId,
+      browserSessionId: sessionId,
+      url: page.url(),
+    });
+  }
+
+  async goForwardUser(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`No session ${sessionId}`);
+    if (session.controlMode !== 'user') throw new Error('User input is only allowed while the user controls the browser.');
+    const page = this.requirePage(sessionId);
+    await page.goForward({ timeout: 15_000, waitUntil: 'domcontentloaded' });
+    this.touch(sessionId);
+    browserEvents.emit({
+      type: 'browser:navigated',
+      sessionKey: session.subagentId,
+      browserSessionId: sessionId,
+      url: page.url(),
+    });
+  }
+
+  async reloadPageUser(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`No session ${sessionId}`);
+    if (session.controlMode !== 'user') throw new Error('User input is only allowed while the user controls the browser.');
+    const page = this.requirePage(sessionId);
+    await page.reload({ timeout: 30_000, waitUntil: 'domcontentloaded' });
+    this.touch(sessionId);
+    browserEvents.emit({
+      type: 'browser:navigated',
+      sessionKey: session.subagentId,
+      browserSessionId: sessionId,
+      url: page.url(),
+    });
   }
 
   async destroyAll(): Promise<void> {
@@ -927,6 +996,48 @@ export class BrowserbaseManager {
     });
   }
 
+  /**
+   * Pin a page to iPhone 15 Pro mobile emulation via CDP.
+   * Browserbase creates contexts through its own API, so we can't pass
+   * Playwright's `deviceScaleFactor/isMobile/hasTouch` at newContext time —
+   * we override per-page over the existing CDP connection instead. This is
+   * what makes responsive sites render as mobile (media queries, touch
+   * events, high-DPR assets) instead of a squashed desktop layout.
+   * Failure is non-fatal: the tab still works, just without mobile UX.
+   */
+  private async applyDeviceEmulation(
+    page: Page,
+    viewport: { width: number; height: number },
+  ): Promise<void> {
+    try {
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send('Emulation.setDeviceMetricsOverride', {
+        width: viewport.width,
+        height: viewport.height,
+        deviceScaleFactor: 3,
+        mobile: true,
+        screenWidth: viewport.width,
+        screenHeight: viewport.height,
+        positionX: 0,
+        positionY: 0,
+        screenOrientation: { type: 'portraitPrimary', angle: 0 },
+      });
+      await cdp.send('Emulation.setTouchEmulationEnabled', {
+        enabled: true,
+        maxTouchPoints: 5,
+      });
+      await cdp.send('Emulation.setUserAgentOverride', {
+        userAgent:
+          'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+        platform: 'iPhone',
+      });
+    } catch (err) {
+      this.logger.warn(
+        `[browserbase] Device emulation failed: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
   /** Resolve a snapshot ref back to a Playwright Locator via the aria-ref engine. */
   private resolveLocator(page: Page, sessionId: string, ref: string): Locator {
     const session = this.sessions.get(sessionId);
@@ -941,6 +1052,17 @@ export class BrowserbaseManager {
     await page.waitForTimeout(POST_ACTION_SETTLE_MS);
     // Best-effort: many SPAs never truly idle, so don't let that propagate.
     await page.waitForLoadState('domcontentloaded', { timeout: 2000 }).catch(() => {});
+  }
+
+  /**
+   * Fast settle for user-takeover input — the user is watching the iframe
+   * screencast live, so we don't need to block the HTTP response until the
+   * remote DOM is quiescent. Just give CDP a frame to push the visual
+   * update and return; lets the next tap/keypress dispatch immediately
+   * instead of queuing behind a 400-2400ms waitForLoadState.
+   */
+  private async quickSettle(page: Page): Promise<void> {
+    await page.waitForTimeout(50);
   }
 
   private touch(sessionId: string): void {
@@ -1029,7 +1151,10 @@ export class BrowserbaseManager {
             session.activePageIdx = 0;
           }
           session.hasSnapshotted = false;
-          for (const p of session.pages) this.attachPageInstrumentation(session, p);
+          for (const p of session.pages) {
+            this.attachPageInstrumentation(session, p);
+            void this.applyDeviceEmulation(p, session.viewport);
+          }
 
           this.attachDisconnectHandler(session, browser);
 

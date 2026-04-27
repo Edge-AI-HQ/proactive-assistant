@@ -21,6 +21,7 @@ interface BrowserSession {
   browserSessionId: string;
   liveViewUrl: string;
   viewport: { width: number; height: number };
+  currentUrl: string;
   controlMode: "ai" | "user" | "idle";
   takeoverReason?: string | null;
 }
@@ -34,6 +35,10 @@ interface BrowserPanelProps {
   onUserInputKey: (key: string) => Promise<void>;
   onUserInputClick: (x: number, y: number) => Promise<void>;
   onUserInputScroll: (dx: number, dy: number) => Promise<void>;
+  onUserNavigate: (url: string) => Promise<void>;
+  onUserBack: () => Promise<void>;
+  onUserForward: () => Promise<void>;
+  onUserPageReload: () => Promise<void>;
   onClose: () => void;
   onStageChange?: (stage: SheetStage | "closed") => void;
   onLiveViewUrlRefreshed: (url: string) => void;
@@ -43,12 +48,21 @@ interface BrowserPanelProps {
   composerFocused: boolean;
 }
 
-const MINI_HEIGHT = 40;
-const MEDIUM_HEIGHT = 240;
+const MINI_HEIGHT = 28;
 
-/** Full-stage height: clamp so composer below always has room. */
-function fullHeight(availableH: number): number {
+/** Medium = the previous "full": ~55% of viewport, leaves room for composer. */
+function mediumHeight(availableH: number): number {
   return Math.min(Math.round(availableH * 0.55), availableH - 140);
+}
+
+/** Full = the entire chat region (header-bottom down to the window bottom).
+ *  Panel is `absolute top-0` inside MainChatView's `relative flex-1` wrapper,
+ *  which sits below the header. Stretching the panel to availableH
+ *  (== window.innerHeight) lets it extend past the composer all the way to
+ *  the window bottom; the parent has no overflow:hidden so the overflow
+ *  simply covers the composer area — which is what "full" means here. */
+function fullHeight(availableH: number): number {
+  return availableH;
 }
 
 const SPRING = { type: "spring" as const, damping: 32, stiffness: 340 };
@@ -62,30 +76,50 @@ export default function BrowserPanel({
   onUserInputKey,
   onUserInputClick,
   onUserInputScroll,
+  onUserNavigate,
+  onUserBack,
+  onUserForward,
+  onUserPageReload,
   onClose,
   onStageChange,
   onLiveViewUrlRefreshed,
   composerFocused,
 }: BrowserPanelProps) {
   const [stage, setStage] = useState<SheetStage>("medium");
+  // Measure the panel's actual parent (the `.relative.flex-1` chat-region
+  // div in MainChatView). Using window.innerHeight overshoots by the header
+  // height, which makes the panel taller than its absolute container — the
+  // bottom chrome (drag handle + close button) gets pushed offscreen and
+  // the user can't escape `full` stage anymore.
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Best guess before first measure — close enough that the initial spring
+  // doesn't visibly snap when the ResizeObserver swaps in the real value.
   const [availableH, setAvailableH] = useState(() =>
-    typeof window === "undefined" ? 800 : window.innerHeight,
+    typeof window === "undefined"
+      ? 700
+      : Math.max(0, window.innerHeight - 80),
   );
   const [rendered, setRendered] = useState(false);
 
   useEffect(() => {
-    const onResize = () => setAvailableH(window.innerHeight);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
+    if (!rendered) return;
+    const parent = panelRef.current?.parentElement;
+    if (!parent) return;
+    const measure = () => setAvailableH(parent.clientHeight);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(parent);
+    return () => ro.disconnect();
+  }, [rendered]);
 
   const fullH = useMemo(() => fullHeight(availableH), [availableH]);
+  const mediumH = useMemo(() => mediumHeight(availableH), [availableH]);
   // Panel height is fixed at fullH; translateY hides part of it.
-  //   mini:   y = -(fullH - MINI_HEIGHT)   — only bottom 32px visible
-  //   medium: y = -(fullH - MEDIUM_HEIGHT) — bottom 240px visible
-  //   full:   y = 0                        — entire panel visible
+  //   mini:   y = -(fullH - MINI_HEIGHT)  — only bottom 28px visible (drag handle)
+  //   medium: y = -(fullH - mediumH)      — bottom ~55%vh visible
+  //   full:   y = 0                       — entire panel visible (covers composer)
   const miniY = -(fullH - MINI_HEIGHT);
-  const mediumY = -(fullH - MEDIUM_HEIGHT);
+  const mediumY = -(fullH - mediumH);
   const fullY = 0;
 
   const yForStage = useCallback(
@@ -202,24 +236,31 @@ export default function BrowserPanel({
 
   const handleReload = useCallback(async () => {
     if (!session) return;
+    // Only bump iframe key on success. Bumping on failure re-mounts the iframe
+    // with the *same* (possibly expired) URL, and Browserbase then renders a
+    // "Debugging connection was closed" page — visually indistinguishable from
+    // the browser panel "disappearing."
     try {
       const res = await proxyPost(
         `/browser/sessions/${session.browserSessionId}/refresh-live-view-url`,
         {},
       );
       if (!res.ok) {
-        console.warn("[BrowserPanel] refresh-live-view-url failed", res.status);
-        onIframeReload();
+        console.warn(
+          "[BrowserPanel] refresh-live-view-url failed",
+          res.status,
+        );
         return;
       }
       const data = (await res.json()) as { ok?: boolean; liveViewUrl?: string };
-      if (data.ok && data.liveViewUrl) {
-        onLiveViewUrlRefreshed(data.liveViewUrl);
+      if (!data.ok || !data.liveViewUrl) {
+        console.warn("[BrowserPanel] refresh-live-view-url bad payload", data);
+        return;
       }
+      onLiveViewUrlRefreshed(data.liveViewUrl);
       onIframeReload();
     } catch (err) {
       console.warn("[BrowserPanel] refresh-live-view-url error", err);
-      onIframeReload();
     }
   }, [session, onIframeReload, onLiveViewUrlRefreshed]);
 
@@ -240,6 +281,7 @@ export default function BrowserPanel({
 
   return (
     <motion.div
+      ref={panelRef}
       className="absolute left-0 right-0 top-0 z-30"
       style={{
         height: fullH,
@@ -256,6 +298,7 @@ export default function BrowserPanel({
       <BrowserView
         liveViewUrl={session.liveViewUrl}
         sessionId={session.browserSessionId}
+        currentUrl={session.currentUrl}
         controlMode={session.controlMode === "idle" ? "ai" : session.controlMode}
         takeoverReason={session.takeoverReason ?? null}
         iframeReloadKey={iframeReloadKey}
@@ -267,6 +310,10 @@ export default function BrowserPanel({
         onUserInputKey={onUserInputKey}
         onUserInputClick={onUserInputClick}
         onUserInputScroll={onUserInputScroll}
+        onUserNavigate={onUserNavigate}
+        onUserBack={onUserBack}
+        onUserForward={onUserForward}
+        onUserPageReload={onUserPageReload}
         onCycleStage={cycleStage}
         onRequestClose={onClose}
         onReload={handleReload}

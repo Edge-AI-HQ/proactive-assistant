@@ -7,6 +7,7 @@ function renderBrowserView(overrides: Partial<Parameters<typeof BrowserView>[0]>
   const props: Parameters<typeof BrowserView>[0] = {
     liveViewUrl: "https://live.example.test",
     sessionId: "session-1",
+    currentUrl: "https://example.test/page",
     controlMode: "ai",
     takeoverReason: null,
     sheetStage: "medium",
@@ -17,6 +18,10 @@ function renderBrowserView(overrides: Partial<Parameters<typeof BrowserView>[0]>
     onUserInputKey: vi.fn(async () => undefined),
     onUserInputClick: vi.fn(async () => undefined),
     onUserInputScroll: vi.fn(async () => undefined),
+    onUserNavigate: vi.fn(async () => undefined),
+    onUserBack: vi.fn(async () => undefined),
+    onUserForward: vi.fn(async () => undefined),
+    onUserPageReload: vi.fn(async () => undefined),
     onCycleStage: vi.fn(),
     onRequestClose: vi.fn(),
     onReload: vi.fn(),

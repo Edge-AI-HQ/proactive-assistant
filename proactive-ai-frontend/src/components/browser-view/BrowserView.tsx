@@ -13,6 +13,8 @@ import {
   X,
   AlertCircle,
   RotateCw,
+  ArrowLeft,
+  ArrowRight,
 } from "lucide-react";
 
 export type SheetStage = "mini" | "medium" | "full";
@@ -20,6 +22,8 @@ export type SheetStage = "mini" | "medium" | "full";
 interface BrowserViewProps {
   liveViewUrl: string;
   sessionId: string;
+  /** Last-known remote page URL — drives the URL bar in the toolbar. */
+  currentUrl: string;
   controlMode: "ai" | "user" | "idle";
   takeoverReason?: string | null;
   iframeReloadKey?: number;
@@ -39,15 +43,33 @@ interface BrowserViewProps {
    *  viewport coordinates. We only forward one scroll per gesture to
    *  keep the HTTP chatter bounded; inertia is up to Browserbase. */
   onUserInputScroll: (dx: number, dy: number) => Promise<void>;
+  /** URL bar / back / forward / page-reload — backend auto-acquires user
+   *  control on receipt, so these work even while AI is in control. */
+  onUserNavigate: (url: string) => Promise<void>;
+  onUserBack: () => Promise<void>;
+  onUserForward: () => Promise<void>;
+  onUserPageReload: () => Promise<void>;
   onCycleStage: () => void;
   onRequestClose: () => void;
   onReload: () => void;
   onChromePointerDown: (e: ReactPointerEvent) => void;
 }
 
+/**
+ * Height (in CSS px) of Browserbase's own debugger UI bar that ships
+ * with `debuggerFullscreenUrl` — the URL field + nav arrows + reload
+ * button visible at the top of the iframe. We don't want those (we
+ * render our own chrome below), but Browserbase has no documented
+ * parameter to hide them, so we crop it out with a negative margin-top
+ * on the iframe and `overflow:hidden` on its container. Measured from
+ * the live debugger page; adjust if Browserbase changes their UI.
+ */
+const BROWSERBASE_CHROME_PX = 40;
+
 export default function BrowserView({
   liveViewUrl,
   sessionId,
+  currentUrl,
   controlMode,
   takeoverReason,
   iframeReloadKey = 0,
@@ -59,6 +81,10 @@ export default function BrowserView({
   onUserInputKey,
   onUserInputClick,
   onUserInputScroll,
+  onUserNavigate,
+  onUserBack,
+  onUserForward,
+  onUserPageReload,
   onCycleStage,
   onRequestClose,
   onReload,
@@ -68,7 +94,13 @@ export default function BrowserView({
   const [confirmingClose, setConfirmingClose] = useState(false);
   const [reloading, setReloading] = useState(false);
   const [mobileInput, setMobileInput] = useState("");
-  const [sendingInput, setSendingInput] = useState(false);
+  // URL bar — local draft so user-typed text isn't clobbered by a
+  // browser:navigated event arriving mid-keystroke.
+  const [urlDraft, setUrlDraft] = useState(currentUrl);
+  const [urlFocused, setUrlFocused] = useState(false);
+  useEffect(() => {
+    if (!urlFocused) setUrlDraft(currentUrl);
+  }, [currentUrl, urlFocused]);
 
   useEffect(() => {
     if (!confirmingClose) return;
@@ -179,26 +211,31 @@ export default function BrowserView({
     onReload();
   };
 
-  const sendMobileText = async () => {
+  // Fire-and-forget: don't block the UI while the backend executes. The user
+  // sees the result through the iframe screencast, not the HTTP response.
+  // Locking the input for 400ms+ per keypress is what made takeover feel
+  // sluggish compared to a native browser.
+  const sendMobileText = () => {
     const text = mobileInput;
-    if (!text || sendingInput) return;
-    setSendingInput(true);
-    try {
-      await onUserInputText(text);
-      setMobileInput("");
-    } finally {
-      setSendingInput(false);
-    }
+    if (!text) return;
+    setMobileInput("");
+    void onUserInputText(text);
   };
 
-  const sendMobileKey = async (key: string) => {
-    if (sendingInput) return;
-    setSendingInput(true);
-    try {
-      await onUserInputKey(key);
-    } finally {
-      setSendingInput(false);
-    }
+  const sendMobileKey = (key: string) => {
+    void onUserInputKey(key);
+  };
+
+  const submitUrl = () => {
+    const trimmed = urlDraft.trim();
+    if (!trimmed) return;
+    // Auto-prepend https:// for bare hostnames (Safari does the same).
+    const target = /^[a-z]+:\/\//i.test(trimmed)
+      ? trimmed
+      : `https://${trimmed}`;
+    void onUserNavigate(target);
+    // Blur so the soft keyboard goes away — user wants to see the page now.
+    (document.activeElement as HTMLElement | null)?.blur?.();
   };
 
   // Cycle chevron:
@@ -225,6 +262,57 @@ export default function BrowserView({
           "0 18px 48px -18px hsla(230, 60%, 8%, 0.5), 0 1px 0 hsla(0, 0%, 100%, 0.06) inset",
       }}
     >
+      {/* URL toolbar — back / forward / URL bar / reload. Always visible in
+          medium+full so the user can navigate even while AI is in control;
+          backend auto-acquires user mode on any of these actions (option B).
+          Hidden in mini since the iframe collapses there too. */}
+      {!isMini && (
+        <div
+          onPointerDown={stopDrag}
+          className="shrink-0 flex items-center gap-1 px-2 py-1.5 border-b border-white/[0.06]"
+        >
+          <button
+            onClick={() => void onUserBack()}
+            className="p-1.5 rounded-md hover:bg-white/10 active:bg-white/15 text-white/65"
+            title="Back"
+          >
+            <ArrowLeft size={16} strokeWidth={2} />
+          </button>
+          <button
+            onClick={() => void onUserForward()}
+            className="p-1.5 rounded-md hover:bg-white/10 active:bg-white/15 text-white/65"
+            title="Forward"
+          >
+            <ArrowRight size={16} strokeWidth={2} />
+          </button>
+          <input
+            value={urlDraft}
+            onChange={(e) => setUrlDraft(e.target.value)}
+            onFocus={() => setUrlFocused(true)}
+            onBlur={() => setUrlFocused(false)}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              e.preventDefault();
+              submitUrl();
+            }}
+            className="min-w-0 flex-1 rounded-md bg-white/[0.08] px-2.5 py-1.5 text-[16px] text-white outline-none placeholder:text-white/35"
+            placeholder="https://"
+            inputMode="url"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            enterKeyHint="go"
+          />
+          <button
+            onClick={() => void onUserPageReload()}
+            className="p-1.5 rounded-md hover:bg-white/10 active:bg-white/15 text-white/65"
+            title="Reload page"
+          >
+            <RotateCw size={16} strokeWidth={2} />
+          </button>
+        </div>
+      )}
+
       {/* iframe container at panel top. Collapsed to h-0 in mini so the
           panel becomes just the drag bar (WebSocket stays live because the
           iframe is still in the DOM; only its height is 0).
@@ -260,9 +348,16 @@ export default function BrowserView({
             setIframeLoaded(true);
             setReloading(false);
           }}
-          className="w-full h-full border-0 block"
+          className="w-full border-0 block"
           style={{
             touchAction: "auto",
+            // Pull the iframe up by BROWSERBASE_CHROME_PX so Browserbase's
+            // built-in URL bar / reload / nav arrows fall outside the
+            // container's overflow:hidden box. Our own chrome (below) owns
+            // those actions, and the visible area becomes just the remote
+            // page — same feel as the native iOS browser.
+            marginTop: -BROWSERBASE_CHROME_PX,
+            height: `calc(100% + ${BROWSERBASE_CHROME_PX}px)`,
             // When our touch overlay is active (native + user mode),
             // iframe must be click-through so the overlay catches every
             // pointer; otherwise on desktop user mode the iframe's own
@@ -322,7 +417,7 @@ export default function BrowserView({
               onKeyDown={(e) => {
                 if (e.key !== "Enter") return;
                 e.preventDefault();
-                void sendMobileText();
+                sendMobileText();
               }}
               className="min-w-0 flex-1 rounded-lg bg-white/10 px-2.5 py-2 text-[16px] text-white outline-none placeholder:text-white/35"
               placeholder="Type into browser"
@@ -331,8 +426,8 @@ export default function BrowserView({
               spellCheck={false}
             />
             <button
-              onClick={() => void sendMobileText()}
-              disabled={!mobileInput || sendingInput}
+              onClick={sendMobileText}
+              disabled={!mobileInput}
               className="shrink-0 rounded-lg bg-white/15 px-3 py-2 text-[12px] font-medium text-white disabled:opacity-35"
             >
               Send
@@ -342,9 +437,8 @@ export default function BrowserView({
             {["Enter", "Tab", "Backspace"].map((key) => (
               <button
                 key={key}
-                onClick={() => void sendMobileKey(key)}
-                disabled={sendingInput}
-                className="rounded-lg bg-white/[0.08] px-2.5 py-1.5 text-[11.5px] text-white/80 disabled:opacity-35"
+                onClick={() => sendMobileKey(key)}
+                className="rounded-lg bg-white/[0.08] px-2.5 py-1.5 text-[11.5px] text-white/80"
               >
                 {key}
               </button>
@@ -356,11 +450,18 @@ export default function BrowserView({
       {/* Chrome at panel bottom — entire region is the drag source.
           Structure: [controls row (top)] [drag handle (bottom)] — so in mini
           (only bottom ~32px visible) the user sees the drag handle and
-          nothing else. */}
+          nothing else.
+          Non-mini stages get safe-area-bottom padding so the drag handle
+          floats above the iOS home-indicator zone — without it, swiping up
+          on the handle from the bottom edge of the screen gets recognized
+          as a system home gesture and kicks the user out of the app. */}
       <div
         className="shrink-0 select-none"
         onPointerDown={onChromePointerDown}
-        style={{ touchAction: "none" }}
+        style={{
+          touchAction: "none",
+          paddingBottom: isMini ? 0 : "env(safe-area-inset-bottom, 0px)",
+        }}
       >
         {/* Controls row — hidden in mini (no room, and intentionally no
             controls there so the user commits to expanding before acting). */}
@@ -454,22 +555,23 @@ export default function BrowserView({
         )}
 
         {/* Drag handle — bottom of chrome, so in mini it's the only thing
-            visible (panel bottom ≈ drag handle). In mini we stretch the
-            wrapper to the full 40px panel-visible height so the whole strip
-            is a tap target (iOS recommends ≥44, this gets close and works
-            fine with a pointerdown-captured drag). */}
+            visible (panel bottom ≈ drag handle).
+            Non-mini gets a fat tap target (py-3.5 + bigger pill) so users
+            don't have to land on a pixel-thin line — that pixel-hunt was
+            what made full→medium swipes drift off the handle and into the
+            iOS home gesture zone, kicking the user out of the app. */}
         <div
           className={
             isMini
               ? "flex items-center justify-center min-h-[40px]"
-              : "flex justify-center py-2.5"
+              : "flex justify-center py-3.5"
           }
         >
           <div
             className={
               isMini
                 ? "h-1.5 w-14 rounded-full bg-white/55"
-                : "h-1 w-9 rounded-full bg-white/30"
+                : "h-1.5 w-14 rounded-full bg-white/45"
             }
           />
         </div>
