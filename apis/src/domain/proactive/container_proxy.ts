@@ -84,77 +84,118 @@ export function createProactiveProxy(orchestrator: ProactiveContainerOrchestrato
       proxyHeaders['origin'] = `http://${target.hostOverride}`;
     }
 
-    const proxyReq = http.request(
-      targetUrl,
-      {
-        method: req.method,
-        headers: proxyHeaders,
-        timeout: 600_000, // 10 minutes for long pipeline runs
-      },
-      (proxyRes) => {
-        const contentType = proxyRes.headers['content-type'] ?? '';
-        const isSSE = contentType.includes('text/event-stream');
+    // Body has to be replayable for retries to be safe. JSON bodies on
+    // POST/PUT/PATCH get serialized once and re-sent on each attempt; raw
+    // request streams (the legacy fallback below) can only be consumed
+    // once, so we mark those non-retryable.
+    const methodHasBody = ['POST', 'PUT', 'PATCH'].includes(req.method);
+    let bufferedBody: string | null = null;
+    let canRetryBody = true;
+    if (methodHasBody) {
+      if (req.body && typeof req.body === 'object') {
+        bufferedBody = JSON.stringify(req.body);
+      } else {
+        // Raw stream — pipe directly, but this means we can't retry.
+        canRetryBody = false;
+      }
+    }
 
-        // Set response headers
-        const responseHeaders: Record<string, string | string[]> = {};
-        for (const [key, value] of Object.entries(proxyRes.headers)) {
-          if (value && !['transfer-encoding', 'connection'].includes(key)) {
-            responseHeaders[key] = value as string | string[];
+    /**
+     * Transient TCP-level errors that signal the upstream socket vanished
+     * mid-handshake. The user's gateway sends SIGUSR1 to reload itself
+     * after a config.patch (model change), which closes idle keep-alive
+     * sockets the apis container is still holding. Without a retry, the
+     * very next /api/proxy/* request 502s and the frontend's readiness
+     * loop reports loading forever.
+     */
+    const isTransient = (err: Error & { code?: string }): boolean => {
+      if (err.code === 'ECONNRESET' || err.code === 'EPIPE' || err.code === 'ETIMEDOUT') return true;
+      return /socket hang up/i.test(err.message);
+    };
+
+    const MAX_RETRIES = 1;
+    const RETRY_BACKOFF_MS = 200;
+
+    const attempt = (n: number): void => {
+      const proxyReq = http.request(
+        targetUrl,
+        {
+          method: req.method,
+          headers: proxyHeaders,
+          timeout: 600_000, // 10 minutes for long pipeline runs
+        },
+        (proxyRes) => {
+          const contentType = proxyRes.headers['content-type'] ?? '';
+          const isSSE = contentType.includes('text/event-stream');
+
+          const responseHeaders: Record<string, string | string[]> = {};
+          for (const [key, value] of Object.entries(proxyRes.headers)) {
+            if (value && !['transfer-encoding', 'connection'].includes(key)) {
+              responseHeaders[key] = value as string | string[];
+            }
+          }
+
+          if (isSSE) {
+            responseHeaders['cache-control'] = 'no-cache';
+            responseHeaders['x-accel-buffering'] = 'no';
+          }
+
+          const origin = req.headers.origin;
+          if (origin) {
+            responseHeaders['access-control-allow-origin'] = origin;
+            responseHeaders['access-control-allow-credentials'] = 'true';
+          }
+
+          res.writeHead(proxyRes.statusCode ?? 502, responseHeaders);
+
+          if (isSSE) {
+            proxyRes.on('data', (chunk: Buffer) => {
+              res.write(chunk);
+              const flush = (res as Response & { flush?: () => void }).flush;
+              if (typeof flush === 'function') flush.call(res);
+            });
+            proxyRes.on('end', () => res.end());
+          } else {
+            proxyRes.pipe(res);
           }
         }
+      );
 
-        // SSE: disable buffering
-        if (isSSE) {
-          responseHeaders['cache-control'] = 'no-cache';
-          responseHeaders['x-accel-buffering'] = 'no';
+      proxyReq.on('error', (err: Error & { code?: string }) => {
+        if (
+          n < MAX_RETRIES &&
+          !res.headersSent &&
+          canRetryBody &&
+          isTransient(err)
+        ) {
+          console.warn(
+            `[proxy] transient error for user ${auth.userId}, retry ${n + 1}/${MAX_RETRIES}: ${err.message}`,
+          );
+          setTimeout(() => attempt(n + 1), RETRY_BACKOFF_MS * (n + 1));
+          return;
         }
-
-        // CORS headers
-        const origin = req.headers.origin;
-        if (origin) {
-          responseHeaders['access-control-allow-origin'] = origin;
-          responseHeaders['access-control-allow-credentials'] = 'true';
-        }
-
-        res.writeHead(proxyRes.statusCode ?? 502, responseHeaders);
-
-        // Stream response
-        if (isSSE) {
-          // Flush immediately for SSE
-          proxyRes.on('data', (chunk: Buffer) => {
-            res.write(chunk);
-            if (typeof (res as any).flush === 'function') {
-              (res as any).flush();
-            }
-          });
-          proxyRes.on('end', () => res.end());
+        console.error(`[proxy] Request to container failed for user ${auth.userId}:`, err.message);
+        if (!res.headersSent) {
+          res.status(502).json({ error: 'Container proxy error', code: 'PROXY_ERROR' });
         } else {
-          proxyRes.pipe(res);
+          res.end();
         }
-      }
-    );
+      });
 
-    proxyReq.on('error', (err) => {
-      console.error(`[proxy] Request to container failed for user ${auth.userId}:`, err.message);
-      if (!res.headersSent) {
-        res.status(502).json({ error: 'Container proxy error', code: 'PROXY_ERROR' });
+      if (methodHasBody) {
+        if (bufferedBody !== null) {
+          proxyReq.setHeader('content-type', 'application/json');
+          proxyReq.setHeader('content-length', Buffer.byteLength(bufferedBody));
+          proxyReq.end(bufferedBody);
+        } else {
+          // Stream forwarding — no retry available. First attempt only.
+          req.pipe(proxyReq);
+        }
       } else {
-        res.end();
+        proxyReq.end();
       }
-    });
+    };
 
-    // Forward request body
-    if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
-      if (req.body && typeof req.body === 'object') {
-        const bodyStr = JSON.stringify(req.body);
-        proxyReq.setHeader('content-type', 'application/json');
-        proxyReq.setHeader('content-length', Buffer.byteLength(bodyStr));
-        proxyReq.end(bodyStr);
-      } else {
-        req.pipe(proxyReq);
-      }
-    } else {
-      proxyReq.end();
-    }
+    attempt(0);
   };
 }
