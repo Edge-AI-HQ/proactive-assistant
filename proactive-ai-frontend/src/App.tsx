@@ -6,9 +6,9 @@ import AppShell from "@/components/AppShell";
 
 export default function App() {
   const { loading: authLoading, user, signInWithGoogle, signOut } = useAuth();
-  const { status, loading: containerLoading, initialChecking, error, ensure, cancel } = useContainer(!!user);
+  const container = useContainer(!!user);
 
-  if (authLoading || (user && initialChecking)) {
+  if (authLoading) {
     return (
       <div className="relative flex h-full items-center justify-center overflow-hidden">
         <div className="absolute inset-0 animate-bg-flow opacity-60" />
@@ -18,13 +18,11 @@ export default function App() {
     );
   }
 
-  // Not authenticated
   if (!user) {
     return <LoginPage onSignIn={signInWithGoogle} />;
   }
 
-  // Authenticated + container running
-  if (status === "running") {
+  if (container.status === "ready") {
     return (
       <AppShell
         userName={user.user_metadata?.full_name ?? user.email ?? null}
@@ -33,16 +31,18 @@ export default function App() {
     );
   }
 
-  // All other states: show Dashboard with inline container status
   return (
     <Dashboard
       user={user}
-      containerStatus={status}
-      containerLoading={containerLoading}
-      containerError={error}
+      status={container.status}
+      connectAttempt={container.connectAttempt}
+      connectMaxAttempts={container.connectMaxAttempts}
+      firstTime={container.firstTime}
+      error={container.error}
       onSignOut={signOut}
-      onLaunchContainer={ensure}
-      onStopContainer={cancel}
+      onRecreate={container.recreate}
+      onReconnect={container.reconnect}
+      onCancel={container.cancel}
     />
   );
 }

@@ -1,44 +1,56 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
-  ensureContainer,
   fetchContainerStatus,
   probeGatewayHealth,
   destroyContainer,
+  resetContainer,
 } from "@/lib/api";
 
-export type ContainerState =
-  | "none"
-  | "creating"
-  | "running"
-  | "stopped"
-  | "suspended"
-  | "error"
-  | "missing";
+/**
+ * Public state machine — kept intentionally small.
+ *
+ * - `unknown`     — auth just resolved, initial status request still in flight
+ * - `connecting`  — backend reports creating/running but gateway hasn't proven
+ *                   itself healthy yet. Bounded by a probe budget (see below).
+ * - `ready`       — gateway responded OK; AppShell can render.
+ * - `unhealthy`   — anything else (no container, error state, probe budget
+ *                   exhausted, hard failure). User decides next step.
+ *
+ * Login is never gated on container readiness. App.tsx renders Dashboard while
+ * status is `unknown`/`connecting`/`unhealthy` and only swaps in AppShell when
+ * status flips to `ready`.
+ */
+export type ContainerState = "unknown" | "connecting" | "ready" | "unhealthy";
 
 interface ContainerInfo {
   status: ContainerState;
-  loading: boolean;
-  initialChecking: boolean;
+  /** 1-based attempt counter for the current connecting phase. */
+  connectAttempt: number;
+  connectMaxAttempts: number;
+  /**
+   * True when we have no record of a successfully provisioned container in
+   * this session — drives the "Start your assistant" vs "Reconnect/Recreate"
+   * choice in the unhealthy UI.
+   */
+  firstTime: boolean;
   error: string | null;
 }
 
-const GATEWAY_FAILURE_THRESHOLD = 3;
-const CONTAINER_REMOVED_ERROR = "Container was removed. Launch again.";
+const PROBE_INTERVAL_MS = 3000;
+// Cold start of an OpenClaw container on shared-cpu-1x is ~30-60s. Probe
+// every 3s up to 60s so a healthy-but-slow boot still resolves on its own.
+const CONNECT_BUDGET_MS = 60_000;
+const MAX_PROBE_ATTEMPTS = Math.ceil(CONNECT_BUDGET_MS / PROBE_INTERVAL_MS);
 
-
-/**
- * Manages the lifecycle of the user's container.
- *
- * Container creation is NOT automatic — the user must call `ensure()` manually.
- * The user can call `cancel()` to stop/destroy a creating container.
- */
 export function useContainer(authenticated: boolean) {
   const [info, setInfo] = useState<ContainerInfo>({
-    status: "none",
-    loading: false,
-    initialChecking: true,
+    status: "unknown",
+    connectAttempt: 0,
+    connectMaxAttempts: MAX_PROBE_ATTEMPTS,
+    firstTime: true,
     error: null,
   });
+
   const pollRef = useRef<ReturnType<typeof setInterval>>();
   const mountedRef = useRef(true);
 
@@ -54,203 +66,210 @@ export function useContainer(authenticated: boolean) {
     }
   }, []);
 
-  const setTerminalState = useCallback(
-    (status: Exclude<ContainerState, "creating" | "running">, error: string | null = null) => {
-      stopPolling();
-      setInfo({
-        status,
-        loading: false,
-        initialChecking: false,
-        error,
-      });
-    },
-    [stopPolling],
-  );
-
-  const syncStatusAfterGatewayFailure = useCallback(
-    async (fallbackError: string | null = null): Promise<ContainerState | null> => {
-      try {
-        const result = await fetchContainerStatus();
-        if (!mountedRef.current) return null;
-
-        const status = result.status as ContainerState;
-        if (status === "running") {
-          return status;
-        }
-
-        if (status === "creating") {
-          setInfo({ status, loading: true, initialChecking: false, error: null });
-          return status;
-        }
-
-        setTerminalState(status, fallbackError);
-        return status;
-      } catch (err) {
-        if (!mountedRef.current) return null;
-        setTerminalState(
-          "error",
-          err instanceof Error ? err.message : "Unknown error",
-        );
-        return "error";
-      }
-    },
-    [setTerminalState],
-  );
-
-  /** Poll gateway health until it responds OK. */
-  const waitForGateway = useCallback(() => {
-    setInfo((prev) => ({ ...prev, status: "creating", loading: true, error: null }));
+  /**
+   * Run a bounded gateway probe loop. On success → `ready`; on terminal
+   * backend state or budget exhaustion → `unhealthy`. Used for both the
+   * initial post-login check and for explicit `reconnect()` / `recreate()`.
+   */
+  const startConnecting = useCallback(() => {
     stopPolling();
-    let consecutiveFailures = 0;
+    setInfo((prev) => ({
+      ...prev,
+      status: "connecting",
+      connectAttempt: 0,
+      connectMaxAttempts: MAX_PROBE_ATTEMPTS,
+      error: null,
+    }));
 
-    async function probe() {
-      const result = await probeGatewayHealth();
+    let attempt = 0;
+
+    const tick = async () => {
+      attempt += 1;
       if (!mountedRef.current) return;
-      if (result.ok) {
+      setInfo((prev) => ({ ...prev, connectAttempt: attempt }));
+
+      const probe = await probeGatewayHealth();
+      if (!mountedRef.current) return;
+
+      if (probe.ok) {
         stopPolling();
-        setInfo({ status: "running", loading: false, initialChecking: false, error: null });
+        setInfo((prev) => ({
+          ...prev,
+          status: "ready",
+          firstTime: false,
+          error: null,
+        }));
         return;
       }
 
-      if (result.code === "NO_CONTAINER") {
-        await syncStatusAfterGatewayFailure(
-          result.message ? `${result.message}. Launch again.` : CONTAINER_REMOVED_ERROR,
-        );
+      // Gateway explicitly says "no container" — short-circuit.
+      if (probe.code === "NO_CONTAINER") {
+        stopPolling();
+        setInfo((prev) => ({
+          ...prev,
+          status: "unhealthy",
+          firstTime: true,
+          error: null,
+        }));
         return;
       }
 
-      if (
-        result.code === "CONTAINER_NOT_RUNNING" ||
-        result.code === "RESUMING"
-      ) {
-        const status = await syncStatusAfterGatewayFailure();
-        if (status === "running" || status === "creating") {
-          consecutiveFailures = 0;
+      // Periodically check backend state to bail out early on hard failures.
+      if (attempt % 2 === 0) {
+        try {
+          const result = await fetchContainerStatus();
+          if (!mountedRef.current) return;
+          if (result.status === "error") {
+            stopPolling();
+            setInfo((prev) => ({
+              ...prev,
+              status: "unhealthy",
+              error: probe.message ?? "Container failed to start.",
+            }));
+            return;
+          }
+          if (result.status === "missing" || result.status === "none") {
+            stopPolling();
+            setInfo((prev) => ({
+              ...prev,
+              status: "unhealthy",
+              firstTime: true,
+              error: null,
+            }));
+            return;
+          }
+        } catch {
+          // ignore — keep probing until budget is exhausted
         }
-        return;
       }
 
-      consecutiveFailures += 1;
-      if (consecutiveFailures < GATEWAY_FAILURE_THRESHOLD) {
-        return;
+      if (attempt >= MAX_PROBE_ATTEMPTS) {
+        stopPolling();
+        setInfo((prev) => ({
+          ...prev,
+          status: "unhealthy",
+          error: probe.message ?? "Connection timed out.",
+        }));
       }
+    };
 
-      const status = await syncStatusAfterGatewayFailure();
-      if (status === "running" || status === "creating") {
-        consecutiveFailures = 0;
-      }
-    }
+    void tick();
+    pollRef.current = setInterval(() => { void tick(); }, PROBE_INTERVAL_MS);
+  }, [stopPolling]);
 
-    void probe();
-    pollRef.current = setInterval(() => {
-      void probe();
-    }, 3000);
-  }, [stopPolling, syncStatusAfterGatewayFailure]);
-
-  /** Poll container status until it reaches a terminal state. */
-  const pollStatus = useCallback(() => {
-    stopPolling();
-    pollRef.current = setInterval(async () => {
-      try {
-        const result = await fetchContainerStatus();
-        if (!mountedRef.current) return;
-        const status = result.status as ContainerState;
-
-        if (status === "running") {
-          waitForGateway();
-        } else if (
-          status === "error" ||
-          status === "none" ||
-          status === "stopped" ||
-          status === "suspended" ||
-          status === "missing"
-        ) {
-          setTerminalState(status);
-        } else if (status === "creating") {
-          setInfo({ status, loading: true, initialChecking: false, error: null });
-        }
-      } catch {
-        // Silently ignore poll errors
-      }
-    }, 3000);
-  }, [setTerminalState, stopPolling, waitForGateway]);
-
-  /** Manually trigger container creation/ensure. */
-  const ensure = useCallback(async () => {
-    setInfo({ status: "creating", loading: true, initialChecking: false, error: null });
-    try {
-      const result = await ensureContainer();
-      if (!mountedRef.current) return null;
-      const status = result.status as ContainerState;
-
-      if (status === "running") {
-        waitForGateway();
-      } else {
-        setInfo({ status, loading: true, initialChecking: false, error: null });
-        pollStatus();
-      }
-
-      return result;
-    } catch (err) {
-      if (!mountedRef.current) return null;
-      setInfo({
-        status: "error",
-        loading: false,
-        initialChecking: false,
-        error: err instanceof Error ? err.message : "Unknown error",
-      });
-      return null;
-    }
-  }, [waitForGateway, pollStatus]);
-
-  /** Cancel container creation — stop polling and destroy the container. */
+  /**
+   * Cancel an in-flight connection attempt: stop polling, destroy the
+   * container, drop into `unhealthy` with `firstTime=true` so the UI shows
+   * "Start your assistant" rather than "Reconnect".
+   */
   const cancel = useCallback(async () => {
     stopPolling();
-    setInfo({ status: "none", loading: true, initialChecking: false, error: null });
+    setInfo((prev) => ({
+      ...prev,
+      status: "unhealthy",
+      firstTime: true,
+      error: null,
+    }));
     try {
       await destroyContainer();
     } catch {
-      // Ignore destroy errors
-    }
-    if (mountedRef.current) {
-      setInfo({ status: "none", loading: false, initialChecking: false, error: null });
+      // best-effort; user's next action will reconcile
     }
   }, [stopPolling]);
 
-  /** On auth, check existing container status (but don't create). */
+  /** Re-run the probe budget without touching the container. */
+  const reconnect = useCallback(() => {
+    startConnecting();
+  }, [startConnecting]);
+
+  /**
+   * Destroy + ensure via /reset (idempotent: destroy is a no-op when nothing
+   * exists). Single entry point for both first-time creation and recovery.
+   */
+  const recreate = useCallback(async () => {
+    stopPolling();
+    setInfo((prev) => ({
+      ...prev,
+      status: "connecting",
+      connectAttempt: 0,
+      connectMaxAttempts: MAX_PROBE_ATTEMPTS,
+      error: null,
+    }));
+    try {
+      await resetContainer();
+      if (mountedRef.current) startConnecting();
+    } catch (err) {
+      if (!mountedRef.current) return;
+      setInfo((prev) => ({
+        ...prev,
+        status: "unhealthy",
+        error: err instanceof Error ? err.message : "Failed to create container.",
+      }));
+    }
+  }, [startConnecting, stopPolling]);
+
+  // Initial check on auth: peek at backend status, then either probe gateway
+  // (for running/creating containers) or drop into unhealthy.
   useEffect(() => {
-    if (!authenticated) return;
+    if (!authenticated) {
+      stopPolling();
+      setInfo({
+        status: "unknown",
+        connectAttempt: 0,
+        connectMaxAttempts: MAX_PROBE_ATTEMPTS,
+        firstTime: true,
+        error: null,
+      });
+      return;
+    }
 
     let cancelled = false;
 
-    async function checkExisting() {
+    (async () => {
       try {
         const result = await fetchContainerStatus();
         if (cancelled) return;
-        const status = result.status as ContainerState;
-        if (status === "running") {
-          waitForGateway();
-        } else {
-          setInfo({
-            status,
-            loading: status === "creating",
-            initialChecking: false,
-            error: null,
-          });
-        }
-      } catch {
-        if (!cancelled) {
-          setInfo({ status: "none", loading: false, initialChecking: false, error: null });
-        }
-      }
-    }
 
-    checkExisting();
+        const exists =
+          result.status === "running" ||
+          result.status === "creating" ||
+          result.status === "stopped" ||
+          result.status === "suspended" ||
+          result.status === "error";
+
+        if (result.status === "running" || result.status === "creating") {
+          setInfo((prev) => ({ ...prev, firstTime: false }));
+          startConnecting();
+          return;
+        }
+
+        setInfo((prev) => ({
+          ...prev,
+          status: "unhealthy",
+          firstTime: !exists,
+          error: result.status === "error" ? "Container is in an error state." : null,
+        }));
+      } catch (err) {
+        if (cancelled) return;
+        setInfo((prev) => ({
+          ...prev,
+          status: "unhealthy",
+          firstTime: true,
+          error: err instanceof Error ? err.message : null,
+        }));
+      }
+    })();
+
     return () => {
       cancelled = true;
       stopPolling();
     };
-  }, [authenticated, waitForGateway, stopPolling]);
+  }, [authenticated, startConnecting, stopPolling]);
 
-  return { ...info, ensure, cancel };
+  return {
+    ...info,
+    cancel,
+    reconnect,
+    recreate,
+  };
 }

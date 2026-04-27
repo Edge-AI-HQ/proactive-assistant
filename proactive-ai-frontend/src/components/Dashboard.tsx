@@ -1,26 +1,32 @@
 import { useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import type { ContainerState } from "@/hooks/useContainer";
-import { LogOut, Rocket, Square } from "lucide-react";
+import { LogOut, Rocket, RefreshCw, Square, Trash2 } from "lucide-react";
 
 interface DashboardProps {
   user: User;
-  containerStatus: ContainerState;
-  containerLoading: boolean;
-  containerError: string | null;
+  status: ContainerState;
+  connectAttempt: number;
+  connectMaxAttempts: number;
+  firstTime: boolean;
+  error: string | null;
   onSignOut: () => void;
-  onLaunchContainer: () => Promise<unknown>;
-  onStopContainer: () => Promise<void>;
+  onRecreate: () => Promise<unknown> | unknown;
+  onReconnect: () => void;
+  onCancel: () => Promise<void>;
 }
 
 export default function Dashboard({
   user,
-  containerStatus,
-  containerLoading,
-  containerError,
+  status,
+  connectAttempt,
+  connectMaxAttempts,
+  firstTime,
+  error,
   onSignOut,
-  onLaunchContainer,
-  onStopContainer,
+  onRecreate,
+  onReconnect,
+  onCancel,
 }: DashboardProps) {
   const [actionInProgress, setActionInProgress] = useState(false);
 
@@ -29,21 +35,10 @@ export default function Dashboard({
   const email = user.email ?? "";
   const provider = user.app_metadata?.provider ?? "unknown";
 
-  const isCreating = containerStatus === "creating" || (containerLoading && containerStatus !== "none");
-
-  const handleLaunch = async () => {
+  const handle = async (fn: () => Promise<unknown> | unknown) => {
     setActionInProgress(true);
     try {
-      await onLaunchContainer();
-    } finally {
-      setActionInProgress(false);
-    }
-  };
-
-  const handleStop = async () => {
-    setActionInProgress(true);
-    try {
-      await onStopContainer();
+      await fn();
     } finally {
       setActionInProgress(false);
     }
@@ -78,82 +73,86 @@ export default function Dashboard({
 
         <div className="h-px bg-foreground/10 mb-6" />
 
-        {/* Container Status & Actions */}
+        {/* Container status panel */}
         <div className="text-center mb-6">
-          {isCreating ? (
+          {status === "unknown" && (
+            <>
+              <div className="mx-auto mb-3 h-6 w-6 animate-spin rounded-full border-2 border-foreground/15 border-t-primary" />
+              <p className="text-sm text-foreground/60">Checking your environment…</p>
+            </>
+          )}
+
+          {status === "connecting" && (
             <>
               <div className="mx-auto mb-3 h-6 w-6 animate-spin rounded-full border-2 border-foreground/15 border-t-primary" />
               <p className="text-sm text-blue-500 font-medium mb-1">
-                Creating your environment...
+                Connecting to your environment…
               </p>
               <p className="text-xs text-foreground/40 mb-4">
-                This may take 30-60 seconds on first launch.
+                Attempt {Math.max(connectAttempt, 1)} / {connectMaxAttempts}. First boot can take up to a minute.
               </p>
               <button
-                onClick={handleStop}
+                onClick={() => handle(onCancel)}
                 disabled={actionInProgress}
                 className="flex w-full items-center justify-center gap-2 rounded-xl border border-foreground/15 px-6 py-2.5 text-sm font-medium text-foreground/60 transition-colors hover:text-foreground/80 hover:bg-foreground/5 disabled:opacity-50"
               >
                 <Square size={14} />
-                Stop
+                Cancel
               </button>
             </>
-          ) : containerStatus === "error" ? (
-            <>
-              <p className="text-sm text-red-500 font-medium mb-1">Container error</p>
-              {containerError && (
-                <p className="text-xs text-red-400 mb-4">{containerError}</p>
-              )}
-              <button
-                onClick={handleLaunch}
-                disabled={actionInProgress}
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-foreground px-6 py-3 text-sm font-medium text-background shadow-sm transition-colors hover:bg-foreground/85 disabled:opacity-50"
-              >
-                <Rocket size={16} />
-                Retry
-              </button>
-            </>
-          ) : containerStatus === "stopped" || containerStatus === "suspended" ? (
-            <>
-              <p className="text-sm text-amber-500 font-medium mb-2">
-                Container {containerStatus}
-              </p>
-              {containerError && (
-                <p className="text-xs text-amber-500/80 mb-4">{containerError}</p>
-              )}
-              <button
-                onClick={handleLaunch}
-                disabled={actionInProgress}
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-foreground px-6 py-3 text-sm font-medium text-background shadow-sm transition-colors hover:bg-foreground/85 disabled:opacity-50"
-              >
-                <Rocket size={16} />
-                Resume Container
-              </button>
-            </>
-          ) : (
+          )}
+
+          {status === "unhealthy" && firstTime && (
             <>
               <p className="text-sm text-foreground/60 mb-4">
                 Launch your personal AI environment to get started.
               </p>
-              {containerError && (
-                <p className="text-xs text-amber-500/80 mb-4">{containerError}</p>
+              {error && (
+                <p className="text-xs text-amber-500/80 mb-4">{error}</p>
               )}
               <button
-                onClick={handleLaunch}
+                onClick={() => handle(onRecreate)}
                 disabled={actionInProgress}
                 className="flex w-full items-center justify-center gap-2 rounded-xl bg-foreground px-6 py-3 text-sm font-medium text-background shadow-sm transition-colors hover:bg-foreground/85 disabled:opacity-50"
               >
                 {actionInProgress ? (
                   <>
                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-background/30 border-t-background" />
-                    Launching...
+                    Starting…
                   </>
                 ) : (
                   <>
                     <Rocket size={16} />
-                    Launch Container
+                    Start your assistant
                   </>
                 )}
+              </button>
+            </>
+          )}
+
+          {status === "unhealthy" && !firstTime && (
+            <>
+              <p className="text-sm text-red-500 font-medium mb-1">
+                Can't reach your environment
+              </p>
+              <p className="text-xs text-foreground/50 mb-4">
+                {error ?? "The container didn't respond. Try reconnecting, or recreate it if the problem persists."}
+              </p>
+              <button
+                onClick={() => handle(onReconnect)}
+                disabled={actionInProgress}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-foreground px-6 py-3 text-sm font-medium text-background shadow-sm transition-colors hover:bg-foreground/85 disabled:opacity-50 mb-2"
+              >
+                <RefreshCw size={16} />
+                Reconnect
+              </button>
+              <button
+                onClick={() => handle(onRecreate)}
+                disabled={actionInProgress}
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-red-500/30 px-6 py-2.5 text-sm font-medium text-red-500 transition-colors hover:bg-red-500/5 disabled:opacity-50"
+              >
+                <Trash2 size={14} />
+                Recreate container
               </button>
             </>
           )}
