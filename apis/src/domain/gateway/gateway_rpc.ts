@@ -16,9 +16,19 @@ import {
 
 const RPC_TIMEOUT_MS = 10_000;
 
+/**
+ * Bounded retry for `rpcCall`. Container cold start can leave the gateway
+ * unable to accept new WebSockets for a few seconds — the first call after
+ * login almost always 502s without retry. Only handshake-stage failures are
+ * retried (see {@link rpcCallOnce}); post-auth failures aren't, because we
+ * can't tell whether the server already processed our request.
+ */
+const RPC_MAX_ATTEMPTS = 3;
+const RPC_RETRY_BACKOFF_MS = [300, 1000] as const;
+
 type RpcResult<T = unknown> =
   | { ok: true; payload: T }
-  | { ok: false; error: string };
+  | { ok: false; error: string; retryable?: boolean };
 
 const extractErrorMessage = (error: unknown): string => {
   if (typeof error === "string") return error;
@@ -72,10 +82,15 @@ const buildConnectParams = (
 });
 
 /**
- * Open a WebSocket to the gateway, authenticate via `connect`, send a single
- * RPC request, and return the response payload.
+ * Single attempt: open a WebSocket to the gateway, authenticate via `connect`,
+ * send one RPC request, return the response.
+ *
+ * Each failure path marks `retryable` based on whether our request was
+ * actually sent. Pre-`authenticated` failures (handshake-stage) are safe to
+ * retry; post-`authenticated` failures aren't, since the gateway may have
+ * processed `config.patch` before the connection died.
  */
-const rpcCall = <T = unknown>(
+const rpcCallOnce = <T = unknown>(
   target: GatewayTarget,
   gatewayToken: string,
   method: string,
@@ -102,12 +117,16 @@ const rpcCall = <T = unknown>(
       resolve(result);
     };
 
+    let authenticated = false;
+
     const timeout = setTimeout(() => {
-      finish({ ok: false, error: "Gateway RPC timed out" });
+      finish({
+        ok: false,
+        error: "Gateway RPC timed out",
+        retryable: !authenticated,
+      });
     }, RPC_TIMEOUT_MS);
     timeout.unref();
-
-    let authenticated = false;
 
     ws.on("open", () => {
       ws.send(
@@ -132,9 +151,12 @@ const rpcCall = <T = unknown>(
       if (data.type === "res" && data.id === connectId) {
         if (!data.ok) {
           clearTimeout(timeout);
+          // Connect-ack rejected = auth/protocol mismatch. The server is up
+          // and answering; retry won't fix a bad token. Don't retry.
           finish({
             ok: false,
             error: extractErrorMessage(data.error),
+            retryable: false,
           });
           return;
         }
@@ -156,9 +178,12 @@ const rpcCall = <T = unknown>(
         if (data.ok) {
           finish({ ok: true, payload: data.payload as T });
         } else {
+          // Business-level rejection (e.g. baseHash mismatch). Surface it;
+          // retrying the same request would just hit the same error.
           finish({
             ok: false,
             error: extractErrorMessage(data.error),
+            retryable: false,
           });
         }
       }
@@ -166,7 +191,13 @@ const rpcCall = <T = unknown>(
 
     ws.on("close", () => {
       clearTimeout(timeout);
-      finish({ ok: false, error: "Gateway WebSocket closed unexpectedly" });
+      finish({
+        ok: false,
+        error: authenticated
+          ? "Gateway WebSocket closed mid-request"
+          : "Gateway WebSocket closed before connect ack",
+        retryable: !authenticated,
+      });
     });
 
     ws.on("error", (err) => {
@@ -174,9 +205,39 @@ const rpcCall = <T = unknown>(
       finish({
         ok: false,
         error: `Gateway WebSocket error: ${err.message}`,
+        retryable: !authenticated,
       });
     });
   });
+
+/**
+ * Open a WebSocket to the gateway, authenticate via `connect`, send a single
+ * RPC request, and return the response payload.
+ *
+ * Wraps {@link rpcCallOnce} with bounded retry on handshake-stage failures.
+ * Backoff: immediate, 300ms, 1000ms (3 attempts total).
+ */
+const rpcCall = async <T = unknown>(
+  target: GatewayTarget,
+  gatewayToken: string,
+  method: string,
+  params: Record<string, unknown> = {},
+): Promise<RpcResult<T>> => {
+  let lastResult: RpcResult<T> = {
+    ok: false,
+    error: "Unknown gateway error",
+  };
+  for (let attempt = 0; attempt < RPC_MAX_ATTEMPTS; attempt++) {
+    if (attempt > 0) {
+      const delay = RPC_RETRY_BACKOFF_MS[attempt - 1] ?? 1000;
+      await new Promise((r) => setTimeout(r, delay));
+    }
+    lastResult = await rpcCallOnce<T>(target, gatewayToken, method, params);
+    if (lastResult.ok) return lastResult;
+    if (!lastResult.retryable) return lastResult;
+  }
+  return lastResult;
+};
 
 // ---------------------------------------------------------------------------
 // Public API

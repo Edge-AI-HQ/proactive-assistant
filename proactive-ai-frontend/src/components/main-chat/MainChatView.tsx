@@ -34,6 +34,8 @@ interface BrowserSession {
   browserSessionId: string;
   liveViewUrl: string;
   viewport: { width: number; height: number };
+  /** Last-known remote page URL — drives the URL bar in the panel header. */
+  currentUrl: string;
   controlMode: "ai" | "user" | "idle";
   /**
    * Set when the AI asks the user to take over (e.g. captcha / 2FA).
@@ -278,6 +280,7 @@ export default function MainChatView({
               width: 390,
               height: 844,
             },
+          currentUrl: typeof data.url === "string" ? data.url : "",
           controlMode: parseControlMode(data.controlMode),
           takeoverReason:
             typeof data.takeoverReason === "string"
@@ -286,6 +289,11 @@ export default function MainChatView({
         });
       } else if (type === "browser:closed") {
         setBrowserSession(null);
+      } else if (type === "browser:navigated") {
+        const nextUrl = typeof data.url === "string" ? data.url : "";
+        setBrowserSession((prev) =>
+          prev ? { ...prev, currentUrl: nextUrl } : null,
+        );
       } else if (type === "browser:control") {
         const nextMode = parseControlMode(data.mode);
         const reason =
@@ -390,14 +398,6 @@ export default function MainChatView({
     }
   }, [browserSession]);
 
-  const handleIframeReload = useCallback(() => {
-    setIframeReloadKey((k) => k + 1);
-  }, []);
-
-  const handleLiveViewUrlRefreshed = useCallback((url: string) => {
-    setBrowserSession((prev) => (prev ? { ...prev, liveViewUrl: url } : null));
-  }, []);
-
   // /input callbacks share the same stale-session handling: if the backend
   // says the session is gone (404) we drop the local reference so the
   // panel unmounts instead of letting the user keep firing dead POSTs.
@@ -429,6 +429,10 @@ export default function MainChatView({
     (key: string) => postInput({ type: "key", key }),
     [postInput],
   );
+  // Tap → click and pan → scroll, both forwarded as remote-viewport coords
+  // (the BrowserView has already inverted its CSS transform scale before
+  // posting). Browserbase's iframe doesn't pass these through inside iOS
+  // WKWebView when sandboxed and cross-origin.
   const handleUserInputClick = useCallback(
     (x: number, y: number) => postInput({ type: "click", x, y }),
     [postInput],
@@ -507,7 +511,6 @@ export default function MainChatView({
         <BrowserPanel
           session={browserSession}
           iframeReloadKey={iframeReloadKey}
-          onIframeReload={handleIframeReload}
           onControlChange={handleBrowserControlChange}
           onUserInputText={handleUserInputText}
           onUserInputKey={handleUserInputKey}
@@ -515,7 +518,6 @@ export default function MainChatView({
           onUserInputScroll={handleUserInputScroll}
           onClose={handleBrowserClose}
           onStageChange={setBrowserStage}
-          onLiveViewUrlRefreshed={handleLiveViewUrlRefreshed}
           composerFocused={composerFocused}
         />
       </div>

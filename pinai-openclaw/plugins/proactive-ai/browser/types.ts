@@ -75,9 +75,11 @@ export interface CreateSessionOpts {
   viewport?: { width: number; height: number };
 }
 
-/** Named viewport presets the tool exposes. */
+/** Named viewport presets the tool exposes. Desktop is the default — see
+ *  manager.ts createSession. Mobile preset stays available for AI tool calls
+ *  that explicitly want a mobile fingerprint (e.g. testing responsive sites). */
 export const VIEWPORT_PRESETS = {
-  mobile: { width: 390, height: 844 },
   desktop: { width: 1280, height: 800 },
+  mobile: { width: 390, height: 844 },
 } as const;
 export type ViewportPreset = keyof typeof VIEWPORT_PRESETS;

@@ -21,14 +21,16 @@ interface BrowserSession {
   browserSessionId: string;
   liveViewUrl: string;
   viewport: { width: number; height: number };
+  currentUrl: string;
   controlMode: "ai" | "user" | "idle";
   takeoverReason?: string | null;
 }
 
 interface BrowserPanelProps {
   session: BrowserSession | null;
+  /** Foreground-bump key for the iframe — passed through to force a remount
+   *  when iOS resumes the app and the Browserbase WebSocket is dead. */
   iframeReloadKey?: number;
-  onIframeReload: () => void;
   onControlChange: (mode: "ai" | "user") => void;
   onUserInputText: (text: string) => Promise<void>;
   onUserInputKey: (key: string) => Promise<void>;
@@ -36,19 +38,25 @@ interface BrowserPanelProps {
   onUserInputScroll: (dx: number, dy: number) => Promise<void>;
   onClose: () => void;
   onStageChange?: (stage: SheetStage | "closed") => void;
-  onLiveViewUrlRefreshed: (url: string) => void;
   /** When the composer in MainChatView gains focus (keyboard coming up),
    *  panel demotes from full → medium so the composer isn't covered.
    *  Medium / mini stay put — that's the user's explicit choice. */
   composerFocused: boolean;
 }
 
-const MINI_HEIGHT = 40;
-const MEDIUM_HEIGHT = 240;
+const MINI_HEIGHT = 28;
 
-/** Full-stage height: clamp so composer below always has room. */
-function fullHeight(availableH: number): number {
+/** Medium = previous "full": ~55% of viewport, leaves room for composer. */
+function mediumHeight(availableH: number): number {
   return Math.min(Math.round(availableH * 0.55), availableH - 140);
+}
+
+/** Full = entire chat region (header-bottom down to the window bottom).
+ *  Panel is `absolute top-0` inside MainChatView's `relative flex-1` wrapper
+ *  which sits below the header. Stretching to availableH (parent.clientHeight,
+ *  measured by ResizeObserver) lets the panel cover the composer area. */
+function fullHeight(availableH: number): number {
+  return availableH;
 }
 
 const SPRING = { type: "spring" as const, damping: 32, stiffness: 340 };
@@ -56,7 +64,6 @@ const SPRING = { type: "spring" as const, damping: 32, stiffness: 340 };
 export default function BrowserPanel({
   session,
   iframeReloadKey = 0,
-  onIframeReload,
   onControlChange,
   onUserInputText,
   onUserInputKey,
@@ -64,28 +71,34 @@ export default function BrowserPanel({
   onUserInputScroll,
   onClose,
   onStageChange,
-  onLiveViewUrlRefreshed,
   composerFocused,
 }: BrowserPanelProps) {
   const [stage, setStage] = useState<SheetStage>("medium");
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Best guess before first measure — close enough that the initial spring
+  // doesn't visibly snap when the ResizeObserver swaps in the real value.
   const [availableH, setAvailableH] = useState(() =>
-    typeof window === "undefined" ? 800 : window.innerHeight,
+    typeof window === "undefined"
+      ? 700
+      : Math.max(0, window.innerHeight - 80),
   );
   const [rendered, setRendered] = useState(false);
 
   useEffect(() => {
-    const onResize = () => setAvailableH(window.innerHeight);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
+    if (!rendered) return;
+    const parent = panelRef.current?.parentElement;
+    if (!parent) return;
+    const measure = () => setAvailableH(parent.clientHeight);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(parent);
+    return () => ro.disconnect();
+  }, [rendered]);
 
   const fullH = useMemo(() => fullHeight(availableH), [availableH]);
-  // Panel height is fixed at fullH; translateY hides part of it.
-  //   mini:   y = -(fullH - MINI_HEIGHT)   — only bottom 32px visible
-  //   medium: y = -(fullH - MEDIUM_HEIGHT) — bottom 240px visible
-  //   full:   y = 0                        — entire panel visible
+  const mediumH = useMemo(() => mediumHeight(availableH), [availableH]);
   const miniY = -(fullH - MINI_HEIGHT);
-  const mediumY = -(fullH - MEDIUM_HEIGHT);
+  const mediumY = -(fullH - mediumH);
   const fullY = 0;
 
   const yForStage = useCallback(
@@ -113,7 +126,7 @@ export default function BrowserPanel({
     return undefined;
   }, [session, rendered, fullH, mediumY, y]);
 
-  // Reset to full when a different session arrives.
+  // Reset to medium when a different session arrives.
   const lastSessionIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (!session) {
@@ -134,7 +147,6 @@ export default function BrowserPanel({
   }, [session?.takeoverReason, stage]);
 
   // Composer focus → auto-demote from full to medium only.
-  // Mini/medium stay — that's the user's explicit choice.
   useEffect(() => {
     if (composerFocused && stage === "full") {
       setStage("medium");
@@ -149,7 +161,7 @@ export default function BrowserPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fullH]);
 
-  // Stage change (via cycle button, takeover promotion, composer focus):
+  // Stage change (cycle button, takeover promotion, composer focus):
   // spring-animate y.
   useEffect(() => {
     if (!rendered) return;
@@ -176,7 +188,6 @@ export default function BrowserPanel({
         Math.abs(c.y - projectedY) < Math.abs(best.y - projectedY) ? c : best,
       );
       if (nearest.stage === stage) {
-        // Same stage — effect won't rerun. Snap y back manually.
         animate(y, yForStage(stage), SPRING);
       } else {
         setStage(nearest.stage);
@@ -185,8 +196,6 @@ export default function BrowserPanel({
     [y, miniY, mediumY, fullY, stage, yForStage],
   );
 
-  // Cycle button: full → medium → mini → full (only reachable from medium/full
-  // since chrome buttons are hidden in mini).
   const cycleStage = useCallback(() => {
     setStage((prev) =>
       prev === "full" ? "medium" : prev === "medium" ? "mini" : "full",
@@ -200,29 +209,8 @@ export default function BrowserPanel({
     [dragControls],
   );
 
-  const handleReload = useCallback(async () => {
-    if (!session) return;
-    try {
-      const res = await proxyPost(
-        `/browser/sessions/${session.browserSessionId}/refresh-live-view-url`,
-        {},
-      );
-      if (!res.ok) {
-        console.warn("[BrowserPanel] refresh-live-view-url failed", res.status);
-        onIframeReload();
-        return;
-      }
-      const data = (await res.json()) as { ok?: boolean; liveViewUrl?: string };
-      if (data.ok && data.liveViewUrl) {
-        onLiveViewUrlRefreshed(data.liveViewUrl);
-      }
-      onIframeReload();
-    } catch (err) {
-      console.warn("[BrowserPanel] refresh-live-view-url error", err);
-      onIframeReload();
-    }
-  }, [session, onIframeReload, onLiveViewUrlRefreshed]);
-
+  // Heartbeat while user controls the browser — keeps the backend's idle
+  // timer from destroying the session under us.
   useEffect(() => {
     if (!session || session.controlMode !== "user") return;
     const heartbeat = () => {
@@ -240,6 +228,7 @@ export default function BrowserPanel({
 
   return (
     <motion.div
+      ref={panelRef}
       className="absolute left-0 right-0 top-0 z-30"
       style={{
         height: fullH,
@@ -269,7 +258,6 @@ export default function BrowserPanel({
         onUserInputScroll={onUserInputScroll}
         onCycleStage={cycleStage}
         onRequestClose={onClose}
-        onReload={handleReload}
         onChromePointerDown={startDrag}
       />
     </motion.div>

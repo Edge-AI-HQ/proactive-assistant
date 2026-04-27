@@ -171,7 +171,12 @@ export function registerBrowserTool(api: OpenClawPluginApi): void {
             const url = asString(args.url);
             if (!url) return 'Error: "url" is required for the "open" action.';
             const vp = resolveViewport(args.viewport);
-            const viewportSize = typeof vp === 'string' ? VIEWPORT_PRESETS[vp] : vp ?? VIEWPORT_PRESETS.mobile;
+            // Default to desktop. Mobile-emulated browsing was reverted in
+            // favor of an embeddable desktop viewport that the user can
+            // pinch / zoom natively, with full Chrome layout for the AI to
+            // reason over. Agents can still pass viewport: 'mobile' if a
+            // specific task requires the responsive variant.
+            const viewportSize = typeof vp === 'string' ? VIEWPORT_PRESETS[vp] : vp ?? VIEWPORT_PRESETS.desktop;
             // open always produces a fresh browser. If the agent wants to
             // change URL inside the current browser, it should use "navigate".
             // Calling open on top of an existing session destroys the old one

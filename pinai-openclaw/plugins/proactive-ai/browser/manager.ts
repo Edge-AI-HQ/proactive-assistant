@@ -165,7 +165,11 @@ export class BrowserbaseManager {
     }
 
     const id = randomUUID();
-    const viewport = opts.viewport ?? { width: 390, height: 844 };
+    // Default to desktop. Browserbase's iframe live view forwards clicks /
+    // scroll natively in desktop mode (Manus-style); mobile-emulated viewports
+    // require an event-relay overlay that proved to be a fragile UX. Users can
+    // pinch-zoom in iOS Safari to read on a phone, or hit our zoom toggle.
+    const viewport = opts.viewport ?? { width: 1280, height: 800 };
     const now = Date.now();
 
     const session: InternalSession = {
@@ -794,7 +798,7 @@ export class BrowserbaseManager {
     if (session.controlMode !== 'user') throw new Error('User input is only allowed while the user controls the browser.');
     const page = this.requirePage(sessionId);
     await page.keyboard.type(text);
-    await this.settle(page);
+    await this.quickSettle(page);
     this.touch(sessionId);
   }
 
@@ -804,17 +808,16 @@ export class BrowserbaseManager {
     if (session.controlMode !== 'user') throw new Error('User input is only allowed while the user controls the browser.');
     const page = this.requirePage(sessionId);
     await page.keyboard.press(key);
-    await this.settle(page);
+    await this.quickSettle(page);
     this.touch(sessionId);
   }
 
   /**
-   * Forward a user tap to a page coordinate during user takeover.
-   * Coordinates are in remote page viewport units (the frontend scales
-   * its overlay-local x/y against session.viewport before calling).
-   * Browserbase Live View's DevTools UI doesn't reliably turn a native
-   * tap on the iframe into a page click on mobile, so the frontend
-   * captures the tap on a transparent overlay and POSTs it here.
+   * Forward a user tap to a remote page coordinate during user takeover.
+   * Frontend computes coordinates in the remote viewport coord system
+   * (1280x800 for desktop preset) by inverting the iframe's CSS transform
+   * scale before posting. Iframe click pass-through doesn't work in iOS
+   * WKWebView when the iframe is cross-origin + sandboxed, so we relay.
    */
   async clickUserAt(sessionId: string, x: number, y: number): Promise<void> {
     const session = this.sessions.get(sessionId);
@@ -825,23 +828,18 @@ export class BrowserbaseManager {
     }
     const vp = session.viewport;
     if (x > vp.width * 1.1 || y > vp.height * 1.1) {
-      // Guard against runaway coordinates (e.g. frontend forgot to scale).
-      // Small over-spill is fine (scroll beyond fold).
       throw new Error(`Click coordinate (${x},${y}) out of viewport (${vp.width}x${vp.height})`);
     }
     const page = this.requirePage(sessionId);
     await page.mouse.click(x, y);
-    await this.settle(page);
+    await this.quickSettle(page);
     this.touch(sessionId);
   }
 
   /**
-   * Forward a user scroll gesture. dx/dy in CSS pixels; positive dy
-   * scrolls content up (page content moves up as the user swipes up).
-   * Clamped to reasonable per-call magnitudes because a single fast
-   * swipe on mobile can produce thousand-pixel deltas that, when
-   * multiplied by the imperfect viewport scaling, cause Playwright
-   * to wheel past what the user actually saw.
+   * Forward a user scroll gesture. dx/dy are in remote-viewport CSS pixels
+   * (already scaled by the frontend). Clamped per call so a single fast
+   * swipe can't wheel past what the user actually saw.
    */
   async scrollUser(sessionId: string, dx: number, dy: number): Promise<void> {
     const session = this.sessions.get(sessionId);
@@ -855,8 +853,75 @@ export class BrowserbaseManager {
     const cdy = Math.max(-CLAMP, Math.min(CLAMP, dy));
     const page = this.requirePage(sessionId);
     await page.mouse.wheel(cdx, cdy);
-    await this.settle(page);
+    await this.quickSettle(page);
     this.touch(sessionId);
+  }
+
+  /**
+   * User-driven navigation. Mirrors {@link navigate} / {@link goBack} /
+   * {@link goForward} / {@link reload} but gated to user control mode and
+   * skips the snapshot — the user is watching the iframe directly, not
+   * consuming an aria tree. Each emits `browser:navigated` so the frontend
+   * URL bar updates without polling.
+   */
+  async navigateUserTo(sessionId: string, url: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`No session ${sessionId}`);
+    if (session.controlMode !== 'user') throw new Error('User input is only allowed while the user controls the browser.');
+    const page = this.requirePage(sessionId);
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    this.touch(sessionId);
+    browserEvents.emit({
+      type: 'browser:navigated',
+      sessionKey: session.subagentId,
+      browserSessionId: sessionId,
+      url: page.url(),
+    });
+  }
+
+  async goBackUser(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`No session ${sessionId}`);
+    if (session.controlMode !== 'user') throw new Error('User input is only allowed while the user controls the browser.');
+    const page = this.requirePage(sessionId);
+    await page.goBack({ timeout: 15_000, waitUntil: 'domcontentloaded' });
+    this.touch(sessionId);
+    browserEvents.emit({
+      type: 'browser:navigated',
+      sessionKey: session.subagentId,
+      browserSessionId: sessionId,
+      url: page.url(),
+    });
+  }
+
+  async goForwardUser(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`No session ${sessionId}`);
+    if (session.controlMode !== 'user') throw new Error('User input is only allowed while the user controls the browser.');
+    const page = this.requirePage(sessionId);
+    await page.goForward({ timeout: 15_000, waitUntil: 'domcontentloaded' });
+    this.touch(sessionId);
+    browserEvents.emit({
+      type: 'browser:navigated',
+      sessionKey: session.subagentId,
+      browserSessionId: sessionId,
+      url: page.url(),
+    });
+  }
+
+  async reloadPageUser(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`No session ${sessionId}`);
+    if (session.controlMode !== 'user') throw new Error('User input is only allowed while the user controls the browser.');
+    const page = this.requirePage(sessionId);
+    await page.reload({ timeout: 30_000, waitUntil: 'domcontentloaded' });
+    this.touch(sessionId);
+    browserEvents.emit({
+      type: 'browser:navigated',
+      sessionKey: session.subagentId,
+      browserSessionId: sessionId,
+      url: page.url(),
+    });
   }
 
   async destroyAll(): Promise<void> {
@@ -941,6 +1006,17 @@ export class BrowserbaseManager {
     await page.waitForTimeout(POST_ACTION_SETTLE_MS);
     // Best-effort: many SPAs never truly idle, so don't let that propagate.
     await page.waitForLoadState('domcontentloaded', { timeout: 2000 }).catch(() => {});
+  }
+
+  /**
+   * Fast settle for user-takeover input — the user is watching the iframe
+   * screencast live, so we don't need to block the HTTP response until the
+   * remote DOM is quiescent. Just give CDP a frame to push the visual
+   * update and return; lets the next tap/keypress dispatch immediately
+   * instead of queuing behind a 400-2400ms waitForLoadState.
+   */
+  private async quickSettle(page: Page): Promise<void> {
+    await page.waitForTimeout(50);
   }
 
   private touch(sessionId: string): void {
@@ -1029,7 +1105,9 @@ export class BrowserbaseManager {
             session.activePageIdx = 0;
           }
           session.hasSnapshotted = false;
-          for (const p of session.pages) this.attachPageInstrumentation(session, p);
+          for (const p of session.pages) {
+            this.attachPageInstrumentation(session, p);
+          }
 
           this.attachDisconnectHandler(session, browser);
 
