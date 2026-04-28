@@ -338,13 +338,29 @@ export function useProactiveChatRuntime(options: UseProactiveChatRuntimeOptions)
   useEffect(() => {
     if (!pendingBootstrap || !historyLoaded) return;
     if (triggeredBootstrapRef.current.has(options.sessionKey)) return;
-    triggeredBootstrapRef.current.add(options.sessionKey);
-    try {
-      runtime.thread.startRun({ parentId: null });
-    } catch (error) {
-      console.warn("[Chat] startRun for card bootstrap failed:", error);
-    }
-    setPendingBootstrap(false);
+
+    // Defer startRun to the next macrotask so React's commit phase
+    // (including StrictMode dev's setup→cleanup→setup pair) and
+    // useLocalRuntime's internal LocalThreadRuntimeCore detach→reattach
+    // both settle first. Without this, the synchronous startRun lands on
+    // a thread runtime that's about to be detached, the in-flight fetch
+    // is aborted, and the wedged ref marker prevents any re-trigger.
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      if (cancelled) return;
+      triggeredBootstrapRef.current.add(options.sessionKey);
+      try {
+        runtime.thread.startRun({ parentId: null });
+      } catch (error) {
+        console.warn("[Chat] startRun for card bootstrap failed:", error);
+      }
+      setPendingBootstrap(false);
+    }, 0);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [pendingBootstrap, historyLoaded, options.sessionKey, runtime]);
 
   return { runtime, historyLoaded };
