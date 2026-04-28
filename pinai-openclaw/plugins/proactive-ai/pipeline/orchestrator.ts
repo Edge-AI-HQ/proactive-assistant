@@ -11,6 +11,7 @@ import { loadRecentGeneratedCardsSummary } from './generated-cards-summary.js';
 import { loadActiveSkillsSection } from '../conversation-crystallize/skill-injection.js';
 import * as db from '../db.js';
 import { extractCardEvaluationsForRun, type ScoredCardSource } from './extract-evaluations.js';
+import { makeIntentKey } from '../shared/intent-key.js';
 
 export interface PipelineOptions {
   maxIterations: number;
@@ -55,7 +56,13 @@ export async function runPipeline(
   api: OpenClawPluginApi,
   opts: PipelineOptions,
   onEvent?: EventSink,
-): Promise<{ runId: string; totalIterations: number; finalCards: Array<Record<string, unknown>>; scoreMap: Record<string, unknown> }> {
+): Promise<{
+  runId: string;
+  totalIterations: number;
+  finalCards: Array<Record<string, unknown>>;
+  scoreMap: Record<string, unknown>;
+  signalDelta: { openBefore: number; openAfter: number; consumedByRun: number };
+}> {
   const emit: EventSink = (event) => { try { onEvent?.(event); } catch { /* SSE write failure */ } };
   const currentDate = new Date().toISOString().slice(0, 10);
   const outputLanguage = opts.outputLanguage ?? DEFAULT_GENERATION_LANGUAGE;
@@ -84,6 +91,25 @@ export async function runPipeline(
   }
 
   emit({ type: 'pipeline:start', data: { maxIterations: opts.maxIterations } });
+
+  // Observability: surface context-loading outcome and the size of the
+  // incremental signal layer before the agent runs. Lets us judge whether
+  // signals are actually being consumed run-over-run.
+  let openSignalsBefore = 0;
+  try {
+    openSignalsBefore = await db.countPersonalSignals({ status: 'open' });
+  } catch (err) {
+    api.logger.warn(`Failed to count open personal_signals: ${err instanceof Error ? err.message : err}`);
+  }
+  emit({
+    type: 'pipeline:context',
+    data: {
+      feedbackLoaded: feedbackSummary.length > 0,
+      cardsHistoryLoaded: recentGeneratedCardsSummary.length > 0,
+      skillsLoaded: learnedSkillsSection.length > 0,
+      openSignalCount: openSignalsBefore,
+    },
+  });
 
   const iterations: Array<{
     plan: Record<string, unknown>;
@@ -151,6 +177,40 @@ export async function runPipeline(
       return { card, score: { cardId, overall: evalScore?.overall ?? 7.0, pass: evalScore?.pass ?? true } };
     });
 
+    // Observability: per-iteration summary so we can decide later whether
+    // reasoning / iterationFeedback / rejected-card feedback is worth piping
+    // back into the next iteration's prompt.
+    const cardsById = new Map<string, Record<string, unknown>>(
+      cards.map((card) => [String(card['id'] ?? ''), card]),
+    );
+    const rejectedCards = evaluations
+      .filter((entry) => entry?.pass === false)
+      .map((entry) => {
+        const cardId = typeof entry.cardId === 'string' ? entry.cardId : '';
+        const card = cardId ? cardsById.get(cardId) : undefined;
+        return {
+          cardId,
+          title: typeof card?.['title'] === 'string' ? card['title'] : null,
+          goalBasket: typeof card?.['goalBasket'] === 'string' ? card['goalBasket'] : null,
+          overall: typeof entry.overall === 'number' ? entry.overall : null,
+          feedback: typeof (entry as { feedback?: unknown }).feedback === 'string'
+            ? (entry as { feedback?: string }).feedback ?? null
+            : null,
+        };
+      });
+    emit({
+      type: 'pipeline:iteration-summary',
+      data: {
+        iteration: i,
+        reasoning: output.reasoning ?? '',
+        iterationFeedback: output.iterationFeedback ?? '',
+        generatedCount: cards.length,
+        passedCount: evaluations.filter((entry) => entry?.pass !== false).length,
+        rejectedCount: rejectedCards.length,
+        rejectedCards,
+      },
+    });
+
     iterations.push({
       plan: { reasoning: output.reasoning ?? '' },
       cards,
@@ -167,6 +227,63 @@ export async function runPipeline(
   if (suppressedCount > 0) {
     api.logger.info(`Suppressed ${suppressedCount} generic Home calendar card(s) from final selection`);
   }
+
+  // Observability: tag each selectable card with its existing intent_thread
+  // decision (suppress / hold / refine / advance) without affecting the
+  // selection ranking. Lets us see how often candidates collide with prior
+  // dismiss/hold threads before deciding on hard or soft de-dup.
+  const threadMatchDetails: Array<{
+    cardId: string;
+    title: string | null;
+    intentKey: string;
+    score: number;
+    threadDecision: db.ThreadDecision;
+    latestCardOutcome: db.CardOutcome;
+    hasAnyDismissedCard: boolean;
+  }> = [];
+  for (const entry of selectableCards) {
+    const card = entry.card;
+    const basket = typeof card['goalBasket'] === 'string' ? (card['goalBasket'] as string) : 'unknown';
+    const title = typeof card['title'] === 'string' ? (card['title'] as string) : '';
+    if (!title) continue;
+    const intentKey = makeIntentKey(basket, title);
+    let context: db.ThreadContext;
+    try {
+      context = await db.getThreadContext(intentKey);
+    } catch (err) {
+      api.logger.warn(`Failed to load thread context for ${intentKey}: ${err instanceof Error ? err.message : err}`);
+      continue;
+    }
+    if (context.threadDecision === 'hold' && context.latestCardOutcome === 'none') {
+      // 'hold' is the default for any intent_key without a real prior thread,
+      // so emitting it for every brand-new card would be noise. Only surface
+      // the match when the thread carries a real prior outcome or non-hold
+      // decision (suppress / refine / advance).
+      continue;
+    }
+    threadMatchDetails.push({
+      cardId: typeof card['id'] === 'string' ? (card['id'] as string) : '',
+      title,
+      intentKey,
+      score: entry.score.overall,
+      threadDecision: context.threadDecision,
+      latestCardOutcome: context.latestCardOutcome,
+      hasAnyDismissedCard: context.hasAnyDismissedCard,
+    });
+  }
+  if (threadMatchDetails.length > 0) {
+    emit({
+      type: 'pipeline:thread-matches',
+      data: {
+        suppressMatches: threadMatchDetails.filter((t) => t.threadDecision === 'suppress').length,
+        holdMatches: threadMatchDetails.filter((t) => t.threadDecision === 'hold').length,
+        refineMatches: threadMatchDetails.filter((t) => t.threadDecision === 'refine').length,
+        advanceMatches: threadMatchDetails.filter((t) => t.threadDecision === 'advance').length,
+        details: threadMatchDetails,
+      },
+    });
+  }
+
   const finalCards = selectBestCards(selectableCards);
 
   // Build score map
@@ -210,7 +327,23 @@ export async function runPipeline(
     api.logger.warn(`Failed to persist card_evaluations: ${err instanceof Error ? err.message : err}`);
   }
 
-  const result = { runId, totalIterations: iterations.length, finalCards, scoreMap };
+  // Observability: re-count open signals after the run so we can see whether
+  // the agent actually consumed anything via `pin signals consume`. Today
+  // consumption depends entirely on LLM tool-calling; this delta tells us
+  // when (or if) we need an orchestrator-level fallback.
+  let openSignalsAfter = openSignalsBefore;
+  try {
+    openSignalsAfter = await db.countPersonalSignals({ status: 'open' });
+  } catch (err) {
+    api.logger.warn(`Failed to re-count open personal_signals: ${err instanceof Error ? err.message : err}`);
+  }
+  const signalDelta = {
+    openBefore: openSignalsBefore,
+    openAfter: openSignalsAfter,
+    consumedByRun: Math.max(0, openSignalsBefore - openSignalsAfter),
+  };
+
+  const result = { runId, totalIterations: iterations.length, finalCards, scoreMap, signalDelta };
   emit({
     type: 'pipeline:persisted',
     data: { runId, cards: finalCards.length, evaluations: persistedEvaluations },
