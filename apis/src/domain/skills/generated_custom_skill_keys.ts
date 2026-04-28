@@ -7,4 +7,5 @@ export const CUSTOM_SKILL_KEYS = [
   "gws-shared",
   "openai-image-gen-by-pinai",
   "openai-whisper-api-by-pinai",
+  "pin",
 ] as const;

@@ -76,12 +76,17 @@ export const DEFAULT_SKILLS_CATALOG: SkillCatalogItem[] = [
     name: "OpenAI Image Gen (PinAI)",
     description: "Image generation via OpenAI DALL-E / image API.",
   },
+  {
+    key: "pin",
+    name: "Proactive AI Context (pin CLI)",
+    description: "Local SQLite + file context layer (profile / memory / signals / raw / world / cards / feedback / evolution / skills / tasks).",
+  },
 ];
 
 /** Skills always injected into every assistant config — both when runtime
  *  metadata exists (via readSkillsConfigFromRuntimeMetadata) and as the
  *  fallback when no metadata is present (via buildAssistantOpenclawConfig).
- *  Auto-generated from infra/container-manager/images/openclaw/skills/ via
+ *  Auto-generated from pinai-openclaw/image/skills/ via
  *  scripts/sync-skills-manifest.mjs — run it after adding/removing skills. */
 export const DEFAULT_PREINSTALLED_BUNDLED_SKILLS = CUSTOM_SKILL_KEYS;
 

@@ -8,12 +8,13 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..");
 
+// Skills baked into the container image. Was at infra/container-manager/...
+// in the standalone container-manager era; now lives next to the openclaw
+// Dockerfile under pinai-openclaw/image/skills.
 const skillsDir = path.join(
   repoRoot,
-  "infra",
-  "container-manager",
-  "images",
-  "openclaw",
+  "pinai-openclaw",
+  "image",
   "skills",
 );
 const outputFile = path.join(
