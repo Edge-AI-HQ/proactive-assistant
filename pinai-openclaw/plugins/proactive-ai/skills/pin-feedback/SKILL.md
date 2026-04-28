@@ -1,11 +1,11 @@
 ---
 name: pin-feedback
-version: 1.0.0
+version: 1.1.0
 description: "反馈系统：记录和查询用户/Agent 反馈事件，关联 intent_card_id 用于卡片质量评估。"
 metadata:
   requires:
     bins: ["pin"]
-  cliHelp: "feedback --help"
+  cliHelp: "pin sys schema"
 ---
 
 # feedback
@@ -14,7 +14,7 @@ metadata:
 
 > v3 提示：feedback 表本身没动；与 v3 卡片评估联动靠 `intent_card_id`
 > 与 `card_evaluations` JOIN。计算 hit rate 时分母用 `pin cards recent`
-> 数量而不是已废弃的 `pin push history`。
+> 数量。
 
 ## 核心场景
 
@@ -23,13 +23,13 @@ metadata:
 ```bash
 pin feedback log --kind card_action --action confirm \
   --intent-card-id ic_001 --basket work --channel telegram \
-  --source user_direct --json
+  --source user_direct
 
 pin feedback log --kind explicit_rating --action thumbs_up \
-  --intent-card-id ic_001 --source user_direct --json
+  --intent-card-id ic_001 --source user_direct
 
 pin feedback log --kind dismiss --intent-card-id ic_002 \
-  --basket health --source user_direct --json
+  --basket health --source user_direct
 ```
 
 ### 2. Agent 写入文字反馈
@@ -39,21 +39,21 @@ pin feedback log --kind dismiss --intent-card-id ic_002 \
 pin feedback log --kind text_feedback \
   --text "用户表示不想再收到健康类早间提醒" \
   --source user_derived --basket health \
-  --conversation-id conv_abc --message-id msg_456 --json
+  --conversation-id conv_abc --message-id msg_456
 
 # Agent 自身分析
 pin feedback log --kind text_feedback \
   --text "近 3 天 work basket confirm rate 显著下降，建议降低推送频率" \
-  --source agent_analysis --basket work --json
+  --source agent_analysis --basket work
 ```
 
 ### 3. 查询近期反馈信号（用于 Intent 生成排序）
 
 ```bash
-pin feedback list --since 7d --json
-pin feedback list --since 7d --kind card_action --action confirm --json
-pin feedback list --intent-card-id ic_001 --json
-pin feedback list --source agent_analysis --since 3d --json
+pin feedback list --since 7d
+pin feedback list --since 7d --kind card_action --action confirm
+pin feedback list --intent-card-id ic_001
+pin feedback stats --since 14d --basket work
 ```
 
 ### 4. 计算 v3 卡片质量指标
@@ -63,8 +63,8 @@ join 看每张卡的"自评分 vs 用户行为"：
 
 ```bash
 # 卡片评分 + 反馈拼一下 (agent 端 JOIN)
-pin cards recent --limit 100 --json     # 分母 + dim_relevance / overall
-pin feedback list --since 14d --json    # 分子（confirm / dismiss）
+pin cards recent --limit 100     # 分母 + dim_relevance / overall
+pin feedback list --since 14d    # 分子（confirm / dismiss）
 ```
 
 聚合：confirm rate per basket、dismiss rate per basket、self-eval 与
@@ -75,10 +75,10 @@ confirm 的相关性 — 详见 `pinai-openclaw/plugins/proactive-ai/evals/onlin
 
 | 命令 | 说明 | 风险 |
 |------|------|------|
-| `pin feedback log --kind <k> --json` | 记录反馈事件 | write |
-| `pin feedback list [--since <d>] --json` | 列出反馈事件 | read |
-| `pin feedback get --id <id> --json` | 获取单条反馈 | read |
-| `pin feedback stats [--since <d>] --json` | 聚合指标统计（kind/action/basket 分布） | read |
+| `pin feedback log --kind <k>` | 记录反馈事件 | write |
+| `pin feedback list [--since <d>] [--kind <k>] [--action <a>] [--intent-card-id <id>]` | 列出反馈事件 | read |
+| `pin feedback get --id <id>` | 获取单条反馈 | read |
+| `pin feedback stats [--since <d>] [--basket <b>]` | 聚合指标统计 | read |
 
 ## 反馈类型（kind）
 
@@ -121,5 +121,4 @@ confirm 的相关性 — 详见 `pinai-openclaw/plugins/proactive-ai/evals/onlin
 ## 安全规则
 
 - text 字段会经过危险 Unicode 字符过滤
-- `--dry-run` 支持 log 命令的写操作预览
 - 不在 CLI 内做任何 LLM 调用

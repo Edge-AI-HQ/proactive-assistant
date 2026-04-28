@@ -68,16 +68,18 @@ ${PIN_CLI_COMMAND_GUIDE}
 
 <phase_1_context_gathering>
 Use the \`pin\` CLI to collect the user's current context. The v3 memory
-architecture (docs/plans/memory-architecture.mdx) gives you fast, local-only
-queries — every command below reads SQLite or markdown files in the
-container, NO network. Gather ALL of these in roughly this order; if a
-command returns empty, that signal is itself useful — note it and continue.
+architecture (docs/plans/memory-architecture.mdx) gives you fast local
+queries over SQLite and markdown files. Composio data has already been
+ingested by connector.init / connector.sync into raw.db and personal_signals:
+direct Composio tool commands are disabled and must not be used during
+generation. Gather ALL of these in roughly this order; if a command returns
+empty, that signal is itself useful — note it and continue.
 
 # Long-term picture (画像 + 已沉淀的事实)
 1. **Profile**: \`pin profile get --id default --full\` — display_name, locale, timezone, summary, attributes
 2. **High-quality memory**: \`pin memory list --minQuality 0.7 --limit 30\` — sedimented facts the evolution agent has confirmed
 3. **Active skills**: \`pin skills list --status enabled\` — and use \`pin skills show --id <id>\` for ones whose triggers might fire now
-4. **Topic interests**: \`pin profile interests list --id default --kind topic --limit 20\` — legacy interest scores
+4. **Topic interests**: \`pin memory list --subjectPrefix topic: --quality 0.6 --limit 20\` — topic interests projected into v3 memory
 
 # Right-now context (今天/这周新进的 + 待消化的)
 5. **Recent personal signals**: \`pin signals recent --hours 24 --limit 30\` — device triggers, attention items, evolution digests; status='open' means not yet sedimented into memory

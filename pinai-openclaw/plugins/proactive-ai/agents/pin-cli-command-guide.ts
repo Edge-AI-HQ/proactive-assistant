@@ -7,9 +7,12 @@
  */
 export const PIN_CLI_COMMAND_GUIDE = `
 <pin_cli_command_guide>
-All commands return a JSON envelope { ok, data, meta, error }. Read local
-SQLite + folders, no network — milliseconds. Time filters accept ISO
-timestamps for --since / --until and integer hours for --hours.
+All commands return a JSON envelope { ok, data, meta, error }. For card
+generation and dreaming, context reads must come from local SQLite + folders:
+\`pin raw\`, \`pin signals\`, \`pin memory\`, and \`pin profile\`. Composio data
+is ingested upstream by connector.init / connector.sync into raw.db and
+personal_signals; do not call Composio tools from the generator. Time filters
+accept ISO timestamps for --since / --until and integer hours for --hours.
 
 # Long-term picture (画像 + 已沉淀的事实)
 - Profile snapshot:      \`pin profile get\`   (singleton profile + goals)
@@ -63,16 +66,11 @@ timestamps for --since / --until and integer hours for --hours.
 - An empty result is success with \`data.count = 0\` — that itself is a useful
   signal, not an error.
 
-# Do NOT use (legacy v2 — removed or migrated)
-- \`pin profile memory list\` → use \`pin memory list\`
-- \`pin profile interests list\` → still works for v2 interest table; for v3
-  fact lookup prefer \`pin memory list --subjectPrefix topic:\`
-- \`pin profile facts get\` → still works (v2 profile.facts JSONB) but new
-  facts should be written as \`pin memory add ... --subject self\`
-- \`pin profile snapshot build\` → no v3 equivalent; just run the queries above
-- \`pin push history\` → push tables are unused in v3; use
-  \`pin cards recent\` + \`pin feedback list\` instead
-- \`pin personal mobile items list\` → still works (端侧上传 sink) but
-  mirrored data is also in \`pin signals recent\` with richer filtering
+# Disabled surfaces
+- Direct Composio tool commands are disabled; generators should never pull
+  Composio data directly.
+- Behavior history comes from \`pin cards recent\` + \`pin feedback list\`.
+- Live user context comes from \`pin signals recent/list\` plus the relevant
+  \`pin raw ...\` command.
 </pin_cli_command_guide>
 `;

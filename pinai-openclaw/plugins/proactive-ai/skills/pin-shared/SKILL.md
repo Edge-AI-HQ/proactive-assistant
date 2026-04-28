@@ -1,7 +1,7 @@
 ---
 name: pin-shared
-version: 0.2.0
-description: "PIN CLI 通用基础：安装、配置、安全规则、输出契约。所有 pin-* skills 的前置依赖。"
+version: 0.3.0
+description: "PIN CLI 通用基础：v3 命令入口、输出契约、数据目录、安全规则。所有 pin-* skills 的前置依赖。"
 metadata:
   requires:
     bins: ["pin"]
@@ -16,17 +16,29 @@ metadata:
 
 PIN CLI 运行在单用户环境（用户容器或本地机器），无需 `--user` 标志。
 
+当前云端插件的 `pin` 由 `pinai-openclaw/plugins/proactive-ai/cli/bin.ts`
+构建，注册的主 domain 是：
+
+```text
+profile, personal, world, feedback, cards, sys,
+memory, signals, raw, evolution, skills, tasks
+```
+
 ```bash
 # 验证安装
-pin sys doctor --json
+pin --help
+pin sys doctor
 
 # 数据目录
-# 默认: ~/.pin/   可通过 PIN_DATA_ROOT 环境变量覆盖
+# 默认: ${OPENCLAW_HOME}/data，容器内通常是 /app/data
+# 主库: proactive.db
+# 原始接入库: raw.db
 ```
 
 ## 输出契约
 
-所有命令支持 `--format json | table | ndjson | pretty`，默认 `json`。`--json` 是 `--format json` 的简写。
+当前 cloud CLI 总是输出 JSON。`--json` 和 `--format ...` 会被入口层剥离，
+保留只是为了兼容 agent 习惯。
 
 ### 成功响应
 
@@ -34,9 +46,8 @@ pin sys doctor --json
 {
   "ok": true,
   "data": { ... },
-  "meta": { "domain": "...", "command": "...", "requestId": "req_...", "timestamp": "..." },
-  "error": null,
-  "_notice": null
+  "meta": { "domain": "...", "command": "...", "timestamp": "..." },
+  "error": null
 }
 ```
 
@@ -46,14 +57,13 @@ pin sys doctor --json
 {
   "ok": false,
   "data": null,
-  "meta": { "domain": "...", "command": "...", "requestId": "req_...", "timestamp": "..." },
+  "meta": { "domain": "...", "command": "...", "timestamp": "..." },
   "error": {
-    "type": "not_found | conflict | validation | provider_unavailable | not_implemented | internal",
-    "code": "NOT_FOUND",
+    "type": "not_found | removed | validation | provider_unavailable | internal",
+    "code": "VALIDATION",
     "message": "human-readable description",
     "hint": "run `pin ...` to fix"
-  },
-  "_notice": null
+  }
 }
 ```
 
@@ -62,22 +72,9 @@ pin sys doctor --json
 | 退出码 | 含义 |
 |--------|------|
 | `0` | 成功 |
-| `1` | 业务错误（通过 error.type 细分） |
-| `2` | 参数校验失败 |
+| `1` | 失败响应（通过 `error.type` 细分） |
 
 **关键**：收到错误时，优先读取 `error.hint` 字段，它包含可直接执行的修复命令。
-
-### _notice 字段
-
-非阻塞系统通知，不影响主响应。例如数据库需要 reindex 时会附带在响应中。
-
-## Dry-run
-
-所有写操作支持 `--dry-run`，返回操作预览而不实际执行：
-
-```bash
-pin profile create --id test --display-name Alice --dry-run --json
-```
 
 ## 安全规则
 
@@ -90,10 +87,13 @@ pin profile create --id test --display-name Alice --dry-run --json
 
 ```bash
 # 查看所有已注册命令
-pin sys schema --json
+pin --help
+pin sys schema
 
-# 查看单个命令的参数定义
-pin sys schema profile.create --json
+# 具体参数以各 domain help / error.hint / cli/*.ts 为准
+pin memory help
+pin raw help
+pin signals help
 ```
 
 ## 健康检查
@@ -102,4 +102,6 @@ pin sys schema profile.create --json
 pin sys doctor --json
 ```
 
-返回检查清单，每项含 status（pass/fail/warn/skip）和 hint（修复指引）。
+返回检查清单，每项含 `status`（如 `ok`、`not_configured`、`error`）和
+`message`。Composio 未配置通常是 `not_configured`，不代表本地 memory/raw
+读取不可用。

@@ -1,4 +1,4 @@
-import { parseArgs, success, failure, readJsonFlag, readLimitFlag } from './shared.js';
+import { parseArgs, success, failure } from './shared.js';
 import {
   resolveComposioApiKey,
   requireComposioApiKey,
@@ -37,6 +37,16 @@ export async function handlePersonal(args: string[]): Promise<string> {
       'removed',
       'pin personal mobile is retired in v3',
       'Use `pin signals list` / `pin signals recent` to read; `pin signals consume --id <id> --runId <run>` to mark processed.',
+    );
+  }
+
+  if (sub === 'tools' || sub === 'exec') {
+    return failure(
+      'personal',
+      sub,
+      'removed',
+      '`pin personal tools` and `pin personal exec` are disabled in v3',
+      'Use connector.init / connector.sync to ingest Composio data, then read with `pin raw ...`, `pin signals ...`, `pin memory ...`, and `pin profile get`.',
     );
   }
 
@@ -123,63 +133,5 @@ export async function handlePersonal(args: string[]): Promise<string> {
     return success('personal', 'wait', { toolkit, status: 'TIMEOUT' });
   }
 
-  if (sub === 'tools') {
-    const action = positional[1];
-    if (action === 'search') {
-      const query = flags['query'];
-      if (!query) return failure('personal', 'tools.search', 'validation', 'Missing --query');
-      const limitRes = readLimitFlag(flags, 'personal', 'tools.search');
-      if ('failure' in limitRes) return limitRes.failure;
-      const apiKey = getApiKey();
-      const params = new URLSearchParams({ query, limit: String(limitRes.value ?? 20), toolkit_versions: 'latest' });
-      if (flags['toolkit']) params.set('toolkit_slug', flags['toolkit']);
-      const data = await composioApi(apiKey, `/tools?${params}`);
-      const items = Array.isArray(data.items) ? data.items : [];
-      const tools = items.map((item: any) => ({ slug: item.slug ?? 'unknown', description: item.description ?? null, toolkit: item.toolkit?.slug ?? null }));
-      return success('personal', 'tools.search', { query, count: tools.length, tools });
-    }
-    if (action === 'schema') {
-      const name = flags['name'];
-      if (!name) return failure('personal', 'tools.schema', 'validation', 'Missing --name');
-      const apiKey = getApiKey();
-      const tool = await composioApi(apiKey, `/tools/${encodeURIComponent(name)}?toolkit_versions=latest`);
-      return success('personal', 'tools.schema', { slug: tool.slug ?? name, description: tool.description ?? null, parameters: tool.input_parameters ?? tool.inputSchema ?? {} });
-    }
-    return failure('personal', 'tools', 'validation', `Unknown tools action: ${action}`);
-  }
-
-  if (sub === 'exec') {
-    const tool = flags['tool'];
-    if (!tool) return failure('personal', 'exec', 'validation', 'Missing --tool');
-    const inputRes = readJsonFlag<Record<string, unknown>>(flags, 'input', 'personal', 'exec');
-    if ('failure' in inputRes) return inputRes.failure;
-    const input = inputRes.value ?? {};
-    const accountId = flags['account-id'];
-    const apiKey = getApiKey();
-    const userId = getComposioUserId();
-
-    // If no account-id, find the latest active connection for the tool's toolkit
-    let resolvedAccountId = accountId;
-    if (!resolvedAccountId) {
-      const toolDetails = await composioApi(apiKey, `/tools/${encodeURIComponent(tool)}?toolkit_versions=latest`);
-      const toolkit = toolDetails.toolkit?.slug ?? (typeof toolDetails.toolkit === 'string' ? toolDetails.toolkit : null);
-      if (toolkit) {
-        const accounts = await composioApi(apiKey, `/connected_accounts?user_ids=${userId}&toolkit_slugs=${toolkit}&statuses=ACTIVE&limit=1`);
-        const items = Array.isArray(accounts.items) ? accounts.items : [];
-        resolvedAccountId = items[0]?.id ?? items[0]?.connected_account_id;
-      }
-    }
-
-    const result = await composioApi(apiKey, `/tools/execute/${encodeURIComponent(tool)}`, {
-      method: 'POST',
-      body: JSON.stringify({
-        user_id: userId,
-        ...(resolvedAccountId ? { connected_account_id: resolvedAccountId } : {}),
-        arguments: input,
-      }),
-    });
-    return success('personal', 'exec', { tool, data: result });
-  }
-
-  return failure('personal', sub ?? 'unknown', 'validation', `Unknown personal command: ${sub}`, 'Available: status, setup, connections, connect, wait, tools, exec');
+  return failure('personal', sub ?? 'unknown', 'validation', `Unknown personal command: ${sub}`, 'Available: status, setup, connections, connect, wait');
 }

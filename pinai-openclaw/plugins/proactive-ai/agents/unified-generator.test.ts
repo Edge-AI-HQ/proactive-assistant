@@ -34,6 +34,8 @@ test("buildUnifiedGeneratorPrompt includes CLI guide and v3 retrieval commands",
   assert.match(prompt, /pin cards recent --limit 10/);
   assert.match(prompt, /pin evolution recent --kind daily_dream/);
   assert.match(prompt, /pin skills list --status enabled/);
+  assert.match(prompt, /direct Composio tool commands are disabled/);
+  assert.match(prompt, /connector\.init \/ connector\.sync/);
 });
 
 test("buildUnifiedGeneratorPrompt includes scoring rubric", () => {

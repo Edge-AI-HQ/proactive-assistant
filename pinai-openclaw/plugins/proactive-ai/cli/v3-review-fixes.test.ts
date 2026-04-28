@@ -295,6 +295,11 @@ test('pin sys schema lists v3 domains and omits retired personal mobile commands
     r.data.domains.personal.some((cmd: string) => cmd.startsWith('mobile')),
     false,
   );
+  assert.equal(
+    r.data.domains.personal.some((cmd: string) => cmd.startsWith('tools') || cmd === 'exec'),
+    false,
+  );
+  assert.equal('push' in r.data.domains, false);
 });
 
 test('pin sys doctor uses the same Composio key resolution as personal commands', async () => {
@@ -349,7 +354,6 @@ test('legacy pin list commands reject invalid --limit values', async () => {
       ['profile.memory.list', () => handleProfile(['memory', 'list', '--limit', 'abc'])],
       ['profile.memory.search', () => handleProfile(['memory', 'search', '--query', 'x', '--limit', 'abc'])],
       ['profile.interests.list', () => handleProfile(['interests', 'list', '--limit', 'abc'])],
-      ['personal.tools.search', () => handlePersonal(['tools', 'search', '--query', 'gmail', '--limit', 'abc'])],
     ];
     for (const [name, run] of cases) {
       const r = decode(await run());
@@ -364,7 +368,6 @@ test('pin JSON flags return VALIDATION on malformed JSON', async () => {
   await withTempHome(async () => {
     const cases: Array<[string, () => Promise<string>]> = [
       ['feedback.log', () => handleFeedback(['log', '--kind', 'test', '--metadata', '{bad'])],
-      ['personal.exec', () => handlePersonal(['exec', '--tool', 'SOME_TOOL', '--input', '{bad'])],
       ['profile.update', () => handleProfile(['update', '--metadata', '{bad'])],
       ['profile.facts.set', () => handleProfile(['facts', 'set', '--key', 'k', '--value-json', '{bad'])],
       ['profile.preferences.set', () => handleProfile(['preferences', 'set', '--key', 'k', '--value-json', '{bad'])],
@@ -378,6 +381,19 @@ test('pin JSON flags return VALIDATION on malformed JSON', async () => {
       assert.match(r.error.message, /json/i, name);
     }
   });
+});
+
+test('pin personal direct tool commands are disabled in v3', async () => {
+  for (const [name, args] of [
+    ['tools.search', ['tools', 'search', '--query', 'gmail']],
+    ['tools.schema', ['tools', 'schema', '--name', 'GMAIL_FETCH_EMAILS']],
+    ['exec', ['exec', '--tool', 'GMAIL_FETCH_EMAILS']],
+  ] as const) {
+    const r = decode(await handlePersonal([...args]));
+    assert.equal(r.ok, false, name);
+    assert.equal(r.error.type, 'removed', name);
+    assert.match(r.error.hint, /pin raw/i, name);
+  }
 });
 
 test('legacy pin numeric flags reject non-finite values', async () => {
