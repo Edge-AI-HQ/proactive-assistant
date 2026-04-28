@@ -197,7 +197,12 @@ make build-openclaw-image # 构建 OpenClaw 镜像到共用 registry
 **MD 内容规则**：
 - 一个 skill 一篇 MD，不要拆 `pin-shared` / `pin-memory` 这种"前置依赖" sub-skill——agent 不会自动跟随引用，那只是文本，徒增维护成本。
 - 时间过滤用 ISO 时间戳（`2026-04-21T00:00:00Z`），不要写 `--since 14d` 这种相对量——DB 层是直接 `created_at >= ?` SQL 字符串比较，`'14d'` 比任何 ISO 都小，过滤等于不过滤。
-- **增量消费优于固定时间窗**。卡片生成 / dreaming 读 feedback / cards 时，先 `pin evolution recent --kind manual --status completed --limit 1` 拿上次成功 run 的 `started_at`，把它作为 `--since` 锚点；首次或拿不到锚点就只用 `--limit`。signals 永远默认 `--status open`（CLI 已经 filter 未消费过的）。raw 用 `--hours N` 控近端窗口，N 按用途选。
+- **不同数据层用不同的"读哪些"策略，不要套同一个时间窗**：
+  - **Signals 是真·增量层**：`personal_signals.status` 是 `open / consumed / archived` 状态机，`consumed_by_run_id` 记谁消费的。卡片生成的核心输入就是这层，永远默认 `pin signals recent --status open`；当前 run 真用了某条 signal 之后调 `pin signals consume --id ... --runId ...` 标掉。
+  - **Memory 沉淀层**：质量过滤就够（`--quality 0.7`），不存在 consumed 概念。
+  - **Raw 用 `--hours N`**：raw 数据量大，按用途选窗口（24h / 168h）。
+  - **Feedback / Cards 是 recency-bounded 参考层，不是消费层**：表里没有 status / consumed_by 字段，作用是"避免重复推卡 + 学习偏好"。直接 `--limit N`，不要硬塞 `--since`。
+  - **Evolution 是元记录**：debug 用，不是 consumption tracker，别拿它当 `--since` 锚点。
 
 ## 数据库变更规则
 - 每次 schema 变更写新的 migration 文件到 `apis/db/migrations/`。

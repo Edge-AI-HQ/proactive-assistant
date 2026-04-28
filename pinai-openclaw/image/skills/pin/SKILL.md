@@ -67,49 +67,59 @@ flowchart LR
 | Skills | `pin skills list/show` | 用户运行时学到的执行技能 |
 | Tasks | `pin tasks list/show` | 后台队列（connector.init / connector.sync / auto.dreaming） |
 
-## 增量消费原则（先读这条）
+## 增量消费 vs 历史参考（先读这条）
 
-不要用固定时间窗（"过去 14 天" 之类）来决定读哪些数据。**目标永远是
-"上次消化到现在新增的部分"**：
+每一类数据的"应该读哪些"逻辑不一样，不要套同一个时间窗：
 
-- **Signals**：默认 `--status open`，CLI 已经过滤未被任何 run 消费过的
-  那批；明确使用一个 signal 之后再 `pin signals consume` 把它标掉。
-- **Feedback / cards**：以"上次成功生成的 evolution run 时间"为锚——
-  先 `pin evolution recent --kind manual --status completed --limit 1`
-  拿到 `started_at`，再把它作为 `--since <iso>` 传下去。如果是首次运行
-  或拿不到锚点，直接靠 `--limit` 取最近 N 条（recency-ordered）。
-- **Raw（Gmail / Calendar / Device）**：用 `--hours N` 控近端窗口，N
-  按用途选（"今天上下文" 24h；"周计划" 168h）。这是 raw 数据量大的折衷，
-  不是固定窗口的等价物。
-
-固定 `--since 14d` 这种相对字符串在 SQL 层是 no-op（字符串比较任何 ISO
-都更大），写了等于没写——上游已经发现并去掉了。
+- **Signals**（真·增量消费层）：`personal_signals.status` 是 `open /
+  consumed / archived` 的状态机，`consumed_by_run_id` 记谁消费的。**这是
+  系统里唯一标的"未被任何 run 处理过"的层**。卡片生成的核心输入就在这
+  里——`pin signals recent --status open --limit 30` 默认只返回 open。
+  当前 run 真的用了某条之后，再 `pin signals consume --id <id> --runId
+  <run_id>` 把它标掉。
+- **Memory**（已沉淀长期事实）：质量过滤就够，`pin memory list --quality
+  0.7 --limit 30`、`pin memory list --subjectPrefix topic: --quality
+  0.6`。沉淀过的事实没有"消费/未消费"概念。
+- **Raw**（Gmail / Calendar / Device 原文）：用 `--hours N` 控近端窗口，
+  N 按用途选——"今天上下文" 24h、"周计划" 168h。这是 raw 数据量大的折衷。
+- **Feedback / Cards**（行为历史参考，不是消费层）：`feedback_events` /
+  `pipeline_runs` 没有 status 字段、没有 consumed_by。它们的作用是"避免
+  重复推卡 + 学习偏好"，不是"消费这一批就完事"。用 `--limit` 拿最近 N
+  条就够了，**不要给它们硬塞 `--since`**——尤其不要写 `--since 14d` 之类
+  的相对字符串，DB 层是直接 SQL `created_at >= ?` 字符串比，'14d' 比任
+  何 ISO 都小，过滤等于不过滤。
+- **Evolution**：是元记录（debug 用），不是 consumption tracker。读它的
+  价值是"看上次 dream agent 沉淀了什么"或"诊断某次 run 读写了哪些表"。
+  不要把它当成 incremental consumption 的锚点。
 
 ## 卡片生成的标准读取顺序
 
 ```bash
-# 0. 锚定上次成功 run 的时间（用于下面的 --since）
-pin evolution recent --kind manual --status completed --limit 1
-# → 用返回里的 started_at 作为下面 LAST_RUN
+# 1. 真·增量层：未被任何 run 消费过的信号 —— 卡片的核心输入
+pin signals recent --status open --limit 30        # CLI 默认就 open
+pin raw gmail recent --hours 24 --limit 20
+pin raw gcal today
+pin raw device-apps --top 20
 
-# 1. 长期画像
+# 2. 长期画像（沉淀的事实）
 pin profile get
 pin memory list --quality 0.7 --limit 30
 pin memory list --subjectPrefix topic: --quality 0.6 --limit 20
 pin skills list --status enabled
 
-# 2. 当前未消化信号 + 原始数据
-pin signals recent --status open --limit 30        # 默认就 open
-pin raw gmail recent --hours 24 --limit 20
-pin raw gcal today
-pin raw device-apps --top 20
+# 3. 世界信号
 pin world shortlist --profile-id default --limit 10
 
-# 3. 行为历史（增量：以 LAST_RUN 为锚；首次运行可省略 --since）
-pin feedback list --since <LAST_RUN> --limit 50
-pin cards recent --since <LAST_RUN> --limit 10
-pin evolution recent --kind daily_dream --limit 3
+# 4. 行为历史（recency-bounded 参考，不是消费层）
+pin feedback list --limit 50
+pin cards recent --limit 10
+pin evolution recent --kind daily_dream --limit 3   # 看上次 dream 沉淀了啥
 ```
+
+**核心提示**：第 1 步的 `pin signals recent --status open` 是系统里唯一
+"上次到现在新增且未被处理"的真切信号。卡片生成的内核就是消费这批
+signals。当前 run 真用了哪条 signal，结束前要 `pin signals consume --id
+... --runId ...` 把它标掉，不然下一次还会出现在 open 列表里。
 
 raw 读到的是最新真相。如果 `pin raw gmail recent` / `pin raw gcal today`
 返回 ok 且有数据，就忽略旧 profile / 旧 evolution 里残留的 connector
@@ -200,7 +210,7 @@ pin world index refresh --all --limit 100                        # 写语义索�
 # 卡片历史（生成前避免重复）
 pin cards recent --limit 10
 pin cards recent --basket work --limit 10
-pin cards recent --basket health --since <LAST_RUN>   # ISO 时间戳
+pin cards recent --basket health --limit 10
 
 # 反馈记录
 pin feedback log --kind card_action --action confirm \
@@ -211,11 +221,11 @@ pin feedback log --kind text_feedback \
   --source user_derived --basket health \
   --conversation-id conv_abc --message-id msg_456
 
-# 反馈查询（增量：用 evolution recent 拿 LAST_RUN，--since 接 ISO）
-pin feedback list --since <LAST_RUN>
-pin feedback list --since <LAST_RUN> --kind card_action --action confirm
+# 反馈查询（recency-bounded 参考；不要塞相对 --since）
+pin feedback list --limit 50
+pin feedback list --kind card_action --action confirm --limit 50
 pin feedback list --intent-card-id ic_001
-pin feedback stats --since <LAST_RUN> --basket work
+pin feedback stats --basket work
 ```
 
 反馈 kind：`card_open / card_action / explicit_rating / dismiss / snooze / text_feedback`。

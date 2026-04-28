@@ -82,19 +82,22 @@ empty, that signal is itself useful — note it and continue.
 4. **Topic interests**: \`pin memory list --subjectPrefix topic: --quality 0.6 --limit 20\` — topic interests projected into v3 memory
 
 # Right-now context (今天/这周新进的 + 待消化的)
-5. **Recent personal signals**: \`pin signals recent --hours 24 --limit 30\` — device triggers, attention items, evolution digests; status='open' means not yet sedimented into memory
+# personal_signals is THE incremental-consumption layer: status='open' means
+# no prior run has consumed it yet. This is the primary input that drives
+# what new cards to generate. Always read it first and prefer cards rooted
+# in fresh open signals over cards rooted in already-sedimented memory.
+5. **Open signals (NEW since last run)**: \`pin signals recent --status open --limit 30\` — the main incremental layer; if you actually use one, mark it with \`pin signals consume --id <id> --runId <run_id>\` before finishing
 6. **Recent emails**: \`pin raw gmail recent --hours 24 --limit 20\` — synced from Composio Gmail
 7. **Today's calendar**: \`pin raw gcal today\` — events from synced Google Calendar
 8. **Installed apps (latest snapshot)**: \`pin raw device-apps --top 20\` — for device profiling cards
 9. **World events**: \`pin world shortlist --profile-id default --limit 10\` — external news ranked against profile
 
 # Behavior history (avoid repetition + learn from feedback)
-# Read incrementally: anchor on the last successful run's started_at, NOT a
-# fixed time window. First call \`pin evolution recent --kind manual --status
-# completed --limit 1\` and feed its started_at to the --since flags below.
-# If the result is empty (first run / no prior history), drop --since and
-# rely on --limit for recency-ordered reads.
-10. **Recent feedback**: \`pin feedback list --since <last_run_started_at> --limit 50\` — confirms / dismisses / modifications
+# These tables don't have a "consumed" status — they're recency-bounded
+# reference, not an incremental consumption layer. The actual incremental
+# layer is personal_signals (status='open' filter), already covered in
+# step 5 above. Just take the most recent N rows here.
+10. **Recent feedback**: \`pin feedback list --limit 50\` — confirms / dismisses / modifications
 11. **Recent generated cards**: \`pin cards recent --limit 10\` — what we already pushed; thread decisions (advance / refine / hold / suppress)
 12. **Recent evolution runs**: \`pin evolution recent --kind daily_dream --limit 3\` — what the dreaming agent learned recently
 
