@@ -17,7 +17,17 @@ import bcrypt from 'bcryptjs';
 import { pool } from '../common/db/core.js';
 import { DomainError } from '../common/errors.js';
 
-export type DevicePlatform = 'ios' | 'android' | 'web';
+export type DevicePlatform =
+  | 'ios'
+  | 'android'
+  | 'web'
+  | 'wearable'   // omi pendant / friend / 智能项链等
+  | 'sensor'     // 智能戒指 / 健康设备等无屏被动设备
+  | 'embedded';  // 兜底(未来 ESP32 自研硬件等)
+
+const VALID_PLATFORMS: ReadonlySet<DevicePlatform> = new Set([
+  'ios', 'android', 'web', 'wearable', 'sensor', 'embedded',
+]);
 
 export interface UserDeviceRow {
   id: number;
@@ -26,6 +36,7 @@ export interface UserDeviceRow {
   platform: DevicePlatform;
   display_name: string | null;
   app_version: string | null;
+  model: string | null;
   registered_at: string;
   last_seen_at: string | null;
   status: 'active' | 'revoked';
@@ -58,12 +69,13 @@ export async function registerDevice(params: {
   platform: DevicePlatform;
   displayName?: string | null;
   appVersion?: string | null;
+  model?: string | null;
   metadata?: Record<string, unknown>;
 }): Promise<RegisteredDevice> {
   if (!params.deviceId || params.deviceId.trim().length < 8) {
     throw new DomainError('INVALID_INPUT', 'deviceId must be at least 8 characters');
   }
-  if (params.platform !== 'ios' && params.platform !== 'android' && params.platform !== 'web') {
+  if (!VALID_PLATFORMS.has(params.platform)) {
     throw new DomainError('INVALID_INPUT', `unsupported platform: ${params.platform}`);
   }
 
@@ -85,23 +97,24 @@ export async function registerDevice(params: {
     const { rows } = await pool.query<UserDeviceRow>(
       `UPDATE user_devices
          SET device_token_hash = $1, platform = $2, display_name = $3,
-             app_version = $4, metadata = $5::jsonb,
+             app_version = $4, model = $5, metadata = $6::jsonb,
              status = 'active', registered_at = now(), last_seen_at = now()
-       WHERE device_id = $6
+       WHERE device_id = $7
        RETURNING *`,
       [tokenHash, params.platform, params.displayName ?? null,
-       params.appVersion ?? null, metadataJson, params.deviceId],
+       params.appVersion ?? null, params.model ?? null, metadataJson, params.deviceId],
     );
     return { ...rows[0]!, device_token: token };
   }
 
   const { rows } = await pool.query<UserDeviceRow>(
     `INSERT INTO user_devices
-       (device_id, user_id, device_token_hash, platform, display_name, app_version, metadata)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+       (device_id, user_id, device_token_hash, platform, display_name, app_version, model, metadata)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
      RETURNING *`,
     [params.deviceId, params.userId, tokenHash, params.platform,
-     params.displayName ?? null, params.appVersion ?? null, metadataJson],
+     params.displayName ?? null, params.appVersion ?? null,
+     params.model ?? null, metadataJson],
   );
   return { ...rows[0]!, device_token: token };
 }
@@ -159,6 +172,7 @@ export async function findDeviceByToken(
     platform: row.platform,
     display_name: row.display_name,
     app_version: row.app_version,
+    model: row.model,
     registered_at: row.registered_at,
     last_seen_at: row.last_seen_at,
     status: row.status,

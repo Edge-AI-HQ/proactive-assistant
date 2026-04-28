@@ -32,6 +32,7 @@ import {
   registerDevice,
   listDevicesForUser,
   revokeDevice,
+  type DevicePlatform,
 } from '../domain/devices/index.js';
 import { getContainerRuntime } from '../domain/container/provider_factory.js';
 import { relayGatewayWs } from '../domain/gateway/gateway_ws_relay.js';
@@ -129,7 +130,7 @@ router.post('/api/proactive/devices/register', requireProactiveAuth, async (req,
     const auth = req.proactiveAuth!;
     const body = (req.body ?? {}) as Record<string, unknown>;
     const deviceId = String(body['deviceId'] ?? '').trim();
-    const platform = String(body['platform'] ?? '').trim() as 'ios' | 'android' | 'web';
+    const platform = String(body['platform'] ?? '').trim() as DevicePlatform;
     if (!deviceId || !platform) {
       res.status(400).json({ error: 'Missing deviceId or platform' });
       return;
@@ -145,6 +146,7 @@ router.post('/api/proactive/devices/register', requireProactiveAuth, async (req,
       platform,
       displayName: typeof body['displayName'] === 'string' ? body['displayName'] : null,
       appVersion: typeof body['appVersion'] === 'string' ? body['appVersion'] : null,
+      model: typeof body['model'] === 'string' ? body['model'] : null,
       metadata: body['metadata'] && typeof body['metadata'] === 'object'
         ? body['metadata'] as Record<string, unknown> : {},
     });
@@ -153,6 +155,7 @@ router.post('/api/proactive/devices/register', requireProactiveAuth, async (req,
       device: {
         device_id: device.device_id,
         platform: device.platform,
+        model: device.model,
         display_name: device.display_name,
         registered_at: device.registered_at,
         status: device.status,
@@ -416,6 +419,16 @@ router.all('/api/proxy/*', requireProactiveAuth, async (req, res) => {
 });
 
 if (isMobileProxyEnabled()) {
+  // Preferred device-ingest path. New clients should use this.
+  // Pinned to /ingest so we don't shadow the device-management routes
+  // declared above (/devices/register, /devices, /devices/revoke).
+  router.post('/api/proactive/devices/ingest', async (req, res) => {
+    const orchestrator = getOrchestrator();
+    const proxy = createMobileProxy(orchestrator);
+    await proxy(req, res);
+  });
+  // Legacy alias kept for old mobile clients (MOBILE_ITEMS_INGEST_PATH).
+  // Same proxy + rewrite logic; will be removed once all clients cut over.
   router.all('/api/mobile/*', async (req, res) => {
     const orchestrator = getOrchestrator();
     const proxy = createMobileProxy(orchestrator);

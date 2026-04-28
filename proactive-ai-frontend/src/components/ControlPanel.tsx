@@ -1,4 +1,5 @@
 import DataConnections from "./DataConnections";
+import DeviceConnections from "./DeviceConnections";
 import AutoDreamingSettings from "./AutoDreamingSettings";
 import AutoGenerateSettings from "./AutoGenerateSettings";
 import GenerationLanguageSettings from "./GenerationLanguageSettings";
@@ -26,6 +27,17 @@ export default function ControlPanel({ composio }: ControlPanelProps) {
               </p>
             </div>
             <DataConnections composio={composio} />
+          </section>
+
+          <section className="glass-card-strong p-4">
+            <div className="mb-3">
+              <h2 className="text-sm font-semibold text-foreground">Hardware Devices</h2>
+              <p className="text-[11px] text-foreground/42 mt-1">
+                Pair wearables / sensors / embedded boards. Each device pushes
+                to <code>/api/proactive/devices/ingest</code> with its own token.
+              </p>
+            </div>
+            <DeviceConnections />
           </section>
 
           <section className="glass-card-strong p-4">

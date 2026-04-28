@@ -13,8 +13,26 @@ export function isMobileProxyEnabled(): boolean {
   return nodeEnv !== 'production';
 }
 
+/**
+ * Path rewrites for the device-ingest proxy:
+ *
+ *   /api/proactive/devices/ingest      → /proactive-ai/api/devices/ingest
+ *   /api/mobile/items/ingest (legacy)  → /proactive-ai/api/devices/ingest
+ *   /api/mobile/<rest>       (legacy)  → /proactive-ai/api/devices/<rest>
+ *
+ * The /api/mobile/* prefix is kept for backwards-compatibility with mobile
+ * clients shipped before the device-ingest unification. New clients should
+ * use /api/proactive/devices/ingest directly.
+ */
 export function rewriteMobileProxyPath(originalUrl: string): string {
-  return originalUrl.replace(/^\/api\/mobile\/?/, '/proactive-ai/api/mobile/');
+  if (originalUrl.startsWith('/api/proactive/devices/')) {
+    return originalUrl.replace(/^\/api\/proactive\/devices\/?/, '/proactive-ai/api/devices/');
+  }
+  // Legacy: rewrite both /api/mobile/items/ingest and any other /api/mobile/*.
+  if (originalUrl.startsWith('/api/mobile/items/ingest')) {
+    return originalUrl.replace(/^\/api\/mobile\/items\/ingest/, '/proactive-ai/api/devices/ingest');
+  }
+  return originalUrl.replace(/^\/api\/mobile\/?/, '/proactive-ai/api/devices/');
 }
 
 export function buildMobileProxyHeaders(

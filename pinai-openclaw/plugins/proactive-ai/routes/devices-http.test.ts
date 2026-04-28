@@ -1,7 +1,7 @@
 /**
- * End-to-end HTTP test: boot a real http.Server, wrap handleMobile() as the
+ * End-to-end HTTP test: boot a real http.Server, wrap handleDevices() as the
  * request handler, and POST the exact JSON shape the Android client sends
- * (MobileSyncConfig.kt / MOBILE_ITEMS_INGEST_PATH = "/api/mobile/items/ingest").
+ * (MobileSyncConfig.kt / MOBILE_ITEMS_INGEST_PATH = "/api/devices/ingest").
  * Asserts the response envelope and that rows landed in the v3 stores.
  *
  * This exercises the v3-direct path end-to-end: no more mobile_items.db,
@@ -14,7 +14,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { handleMobile } from "./mobile.ts";
+import { handleDevices } from "./devices.ts";
 import { listPersonalSignals, resetDbForTests } from "../db.ts";
 import { listDeviceApps, listDeviceContacts, resetRawDbForTests } from "../raw-db.ts";
 
@@ -26,7 +26,7 @@ function withTempHome(fn: (baseUrl: string) => Promise<void>) {
     resetDbForTests();
     resetRawDbForTests();
 
-    const handler = handleMobile();
+    const handler = handleDevices();
     const server = http.createServer(async (req, res) => {
       const url = new URL(req.url ?? "/", "http://localhost");
       const ctx = {
@@ -72,8 +72,8 @@ async function postJson(url: string, body: unknown): Promise<{ status: number; b
   return { status: res.status, body: text ? JSON.parse(text) : null };
 }
 
-test("POST /mobile/items/ingest — moment + attention_item land in personal_signals", withTempHome(async (baseUrl) => {
-  const { status, body } = await postJson(`${baseUrl}/mobile/items/ingest`, {
+test("POST /devices/ingest — moment + attention_item land in personal_signals", withTempHome(async (baseUrl) => {
+  const { status, body } = await postJson(`${baseUrl}/devices/ingest`, {
     deviceId: "pixel-e2e",
     items: [
       {
@@ -118,8 +118,8 @@ test("POST /mobile/items/ingest — moment + attention_item land in personal_sig
   assert.equal(byKind["moment"]!.occurred_at, "2026-04-23T08:00:00.000Z");
 }));
 
-test("POST /mobile/items/ingest — app inventory snapshot also fans out to raw.db", withTempHome(async (baseUrl) => {
-  const { status, body } = await postJson(`${baseUrl}/mobile/items/ingest`, {
+test("POST /devices/ingest — app inventory snapshot also fans out to raw.db", withTempHome(async (baseUrl) => {
+  const { status, body } = await postJson(`${baseUrl}/devices/ingest`, {
     deviceId: "pixel-apps",
     items: [{
       id: "snap-apps-1",
@@ -153,8 +153,8 @@ test("POST /mobile/items/ingest — app inventory snapshot also fans out to raw.
   assert.deepEqual(names, ["Robinhood", "Spotify", "WeChat"]);
 }));
 
-test("POST /mobile/items/ingest — contact snapshot fans out + is searchable", withTempHome(async (baseUrl) => {
-  const { status, body } = await postJson(`${baseUrl}/mobile/items/ingest`, {
+test("POST /devices/ingest — contact snapshot fans out + is searchable", withTempHome(async (baseUrl) => {
+  const { status, body } = await postJson(`${baseUrl}/devices/ingest`, {
     deviceId: "iphone-contacts",
     items: [{
       id: "snap-contacts-1",
@@ -184,7 +184,7 @@ test("POST /mobile/items/ingest — contact snapshot fans out + is searchable", 
   assert.equal(searched[0]!.display_name, "妈妈");
 }));
 
-test("POST /mobile/items/ingest — repost with same dedupeKey is idempotent", withTempHome(async (baseUrl) => {
+test("POST /devices/ingest — repost with same dedupeKey is idempotent", withTempHome(async (baseUrl) => {
   const payload = {
     deviceId: "dedupe-dev",
     items: [{
@@ -196,10 +196,10 @@ test("POST /mobile/items/ingest — repost with same dedupeKey is idempotent", w
       occurredAt: "2026-04-23T08:00:00Z",
     }],
   };
-  const first = await postJson(`${baseUrl}/mobile/items/ingest`, payload);
+  const first = await postJson(`${baseUrl}/devices/ingest`, payload);
   assert.equal(first.body.inserted, 1);
 
-  const second = await postJson(`${baseUrl}/mobile/items/ingest`, {
+  const second = await postJson(`${baseUrl}/devices/ingest`, {
     ...payload,
     items: [{ ...payload.items[0]!, id: "dedup-2", title: "twice", summary: "twice only" }],
   });
@@ -212,16 +212,16 @@ test("POST /mobile/items/ingest — repost with same dedupeKey is idempotent", w
   assert.equal(signals[0]!.title, "once", "first write wins — idempotent");
 }));
 
-test("POST /mobile/items/ingest — missing deviceId → HTTP 400", withTempHome(async (baseUrl) => {
-  const { status, body } = await postJson(`${baseUrl}/mobile/items/ingest`, {
+test("POST /devices/ingest — missing deviceId → HTTP 400", withTempHome(async (baseUrl) => {
+  const { status, body } = await postJson(`${baseUrl}/devices/ingest`, {
     items: [{ id: "x", itemType: "moment", title: "t", summary: "s" }],
   });
   assert.equal(status, 400);
   assert.equal(body.ok, false);
 }));
 
-test("POST /mobile/items/ingest — empty items array → accepted=0, no rows", withTempHome(async (baseUrl) => {
-  const { status, body } = await postJson(`${baseUrl}/mobile/items/ingest`, {
+test("POST /devices/ingest — empty items array → accepted=0, no rows", withTempHome(async (baseUrl) => {
+  const { status, body } = await postJson(`${baseUrl}/devices/ingest`, {
     deviceId: "empty-dev",
     items: [],
   });
@@ -232,10 +232,88 @@ test("POST /mobile/items/ingest — empty items array → accepted=0, no rows", 
   assert.equal(signals.length, 0);
 }));
 
-test("GET /mobile/items → HTTP 410 with migration hint", withTempHome(async (baseUrl) => {
-  const res = await fetch(`${baseUrl}/mobile/items`);
-  assert.equal(res.status, 410);
-  const body = await res.json();
-  assert.equal(body.ok, false);
-  assert.match(body.hint ?? "", /pin signals/);
-}));
+test("POST /devices/ingest — ambient image_chunk persists JPEG to FS, signal points to file_path",
+  withTempHome(async (baseUrl) => {
+    const home = process.env.OPENCLAW_HOME!;
+    const fakeJpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x01, 0x02, 0x03]);
+    const { status, body } = await postJson(`${baseUrl}/devices/ingest`, {
+      deviceId: "omi-pendant-1",
+      items: [{
+        id: "frame-1",
+        kind: "ambient.image_chunk",
+        title: "frame",
+        summary: "1 frame from omi pendant",
+        occurredAt: "2026-04-28T12:00:00Z",
+        payload: {
+          width: 640, height: 480, orientation: 1,
+          binary_b64: fakeJpeg.toString("base64"),
+        },
+      }],
+    });
+    assert.equal(status, 200);
+    assert.equal(body.accepted, 1);
+    assert.equal(body.inserted, 1);
+
+    const signals = await listPersonalSignals({ kind: "ambient.image_chunk" });
+    assert.equal(signals.length, 1);
+    const filePath = (signals[0]!.payload as { file_path?: string; binary_b64?: string }).file_path;
+    assert.ok(filePath?.startsWith("media/omi-pendant-1/2026-04-28/"), `path: ${filePath}`);
+    // base64 should be stripped from the payload — only the path remains.
+    assert.equal((signals[0]!.payload as { binary_b64?: string }).binary_b64, undefined);
+
+    const onDisk = fs.readFileSync(path.join(home, "data", filePath!));
+    assert.deepEqual(onDisk, fakeJpeg);
+  }),
+);
+
+test("GET /devices/media/<path> — serves the JPEG that ingest persisted",
+  withTempHome(async (baseUrl) => {
+    const fakeJpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0xaa, 0xbb, 0xcc]);
+    const ingestRes = await postJson(`${baseUrl}/devices/ingest`, {
+      deviceId: "omi-3",
+      items: [{
+        id: "frame-getme",
+        kind: "ambient.image_chunk",
+        title: "frame", summary: "served",
+        occurredAt: "2026-04-28T00:00:00Z",
+        payload: { width: 1, height: 1, orientation: 0, binary_b64: fakeJpeg.toString("base64") },
+      }],
+    });
+    assert.equal(ingestRes.status, 200);
+
+    const signals = await listPersonalSignals({ kind: "ambient.image_chunk" });
+    const filePath = (signals[0]!.payload as { file_path?: string }).file_path!;
+
+    // Now serve it back.
+    const res = await fetch(`${baseUrl}/devices/media/${filePath}`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("content-type"), "image/jpeg");
+    const buf = Buffer.from(await res.arrayBuffer());
+    assert.deepEqual(buf, fakeJpeg);
+  }),
+);
+
+test("GET /devices/media — rejects paths that don't start with media/",
+  withTempHome(async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/devices/media/etc/passwd`);
+    assert.equal(res.status, 400);
+  }),
+);
+
+test("POST /devices/ingest — `kind` field preferred over legacy `itemType`",
+  withTempHome(async (baseUrl) => {
+    const { status } = await postJson(`${baseUrl}/devices/ingest`, {
+      deviceId: "omi-2",
+      items: [{
+        id: "k1",
+        kind: "moment",          // new clients send `kind`
+        itemType: "should_lose", // ignored when kind is present
+        title: "t", summary: "s",
+      }],
+    });
+    assert.equal(status, 200);
+    const signals = await listPersonalSignals({});
+    assert.equal(signals.length, 1);
+    assert.equal(signals[0]!.kind, "moment");
+  }),
+);

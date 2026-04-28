@@ -96,6 +96,9 @@ services:
       # Docker-out-of-Docker: tell APIs the host-side data path
       - HOST_DATA_DIR=${PWD}/data
       - DOCKER_HOST_ADDRESS=host.docker.internal
+      # Dev: every request maps to a single fixed local user (no token,
+      # no Supabase). Production unaffected (NODE_ENV=production gates it).
+      - NODE_ENV=development
     ports:
       - "3000:3000"
     volumes:

@@ -273,6 +273,53 @@ test('GET /signals keeps total while paging with offset', withTempHome(async () 
   assert.equal(new Set([...first.body.signals, ...second.body.signals].map((row: { id: string }) => row.id)).size, 4);
 }));
 
+test('GET /signals paginates by `before` cursor (keyset)', withTempHome(async () => {
+  const h = handleSignals();
+  // 5 items with strictly decreasing occurred_at (newest first when listed).
+  await call(h, {
+    method: 'POST', subpath: '/signals/ingest',
+    body: {
+      items: Array.from({ length: 5 }, (_, i) => ({
+        kind: 'm',
+        title: `cursor ${i}`,
+        summary: `summary ${i}`,
+        salience: 0.5,
+        occurredAt: new Date(Date.UTC(2026, 3, 28, 12, 0, i)).toISOString(),
+      })),
+    },
+  });
+
+  const p1 = await call(h, { method: 'GET', subpath: '/signals', query: 'limit=2' });
+  assert.equal(p1.body.signals.length, 2);
+  assert.equal(p1.body.has_more, true);
+  assert.ok(p1.body.next_cursor, `expected next_cursor, got: ${p1.body.next_cursor}`);
+
+  const p2 = await call(h, {
+    method: 'GET',
+    subpath: '/signals',
+    query: `limit=2&before=${encodeURIComponent(p1.body.next_cursor as string)}`,
+  });
+  assert.equal(p2.body.signals.length, 2);
+  assert.equal(p2.body.has_more, true);
+
+  const p3 = await call(h, {
+    method: 'GET',
+    subpath: '/signals',
+    query: `limit=2&before=${encodeURIComponent(p2.body.next_cursor as string)}`,
+  });
+  assert.equal(p3.body.signals.length, 1);
+  assert.equal(p3.body.has_more, false);
+  assert.equal(p3.body.next_cursor, null);
+
+  // No duplicates across pages.
+  const ids = [...p1.body.signals, ...p2.body.signals, ...p3.body.signals]
+    .map((r: { id: string }) => r.id);
+  assert.equal(new Set(ids).size, 5);
+
+  // total is suppressed (-1) when paginating by cursor.
+  assert.equal(p2.body.total, -1);
+}));
+
 // ─── /raw ───────────────────────────────────────────────────────────────
 
 test('GET /raw/gmail returns ingested rows', withTempHome(async () => {
