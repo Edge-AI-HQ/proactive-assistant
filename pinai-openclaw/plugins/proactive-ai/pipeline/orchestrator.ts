@@ -110,13 +110,21 @@ export async function runPipeline(
       openSignalCount: openSignalsBefore,
     },
   });
+  api.logger.info(
+    `[pipeline:context] feedbackLoaded=${feedbackSummary.length > 0} cardsHistoryLoaded=${recentGeneratedCardsSummary.length > 0} skillsLoaded=${learnedSkillsSection.length > 0} openSignalCount=${openSignalsBefore}`,
+  );
 
   const iterations: Array<{
     plan: Record<string, unknown>;
     cards: Array<Record<string, unknown>>;
     evaluation: Record<string, unknown> | null;
   }> = [];
-  let lastScoredCards: ScoredCard[] = [];
+  // Accumulate scored cards across all iterations. Previously this was
+  // `lastScoredCards` and got overwritten each loop, which silently
+  // discarded earlier iterations' output — multi-iteration runs would
+  // throw away iter 1's cards entirely and use only the last iteration.
+  // Now selectBestCards picks from the union of all iterations.
+  const allScoredCards: ScoredCard[] = [];
 
   for (let i = 1; i <= opts.maxIterations; i++) {
     api.logger.info(`Pipeline iteration ${i}/${opts.maxIterations}`);
@@ -170,12 +178,14 @@ export async function runPipeline(
     };
     emit({ type: 'pipeline:evaluation', data: { iteration: i, evaluation } });
 
-    // Build scored cards
-    lastScoredCards = cards.map((card) => {
+    // Build scored cards and append to the run-wide pool (one entry per
+    // generated card across all iterations).
+    const iterationScored: ScoredCard[] = cards.map((card) => {
       const cardId = card['id'] as string;
       const evalScore = evaluations.find(e => e.cardId === cardId);
       return { card, score: { cardId, overall: evalScore?.overall ?? 7.0, pass: evalScore?.pass ?? true } };
     });
+    allScoredCards.push(...iterationScored);
 
     // Observability: per-iteration summary so we can decide later whether
     // reasoning / iterationFeedback / rejected-card feedback is worth piping
@@ -198,6 +208,7 @@ export async function runPipeline(
             : null,
         };
       });
+    const passedCount = evaluations.filter((entry) => entry?.pass !== false).length;
     emit({
       type: 'pipeline:iteration-summary',
       data: {
@@ -205,11 +216,23 @@ export async function runPipeline(
         reasoning: output.reasoning ?? '',
         iterationFeedback: output.iterationFeedback ?? '',
         generatedCount: cards.length,
-        passedCount: evaluations.filter((entry) => entry?.pass !== false).length,
+        passedCount,
         rejectedCount: rejectedCards.length,
         rejectedCards,
       },
     });
+    const reasoningPreview = (output.reasoning ?? '').replace(/\s+/g, ' ').slice(0, 160);
+    const iterationFeedbackPreview = (output.iterationFeedback ?? '').replace(/\s+/g, ' ').slice(0, 160);
+    api.logger.info(
+      `[pipeline:iteration-summary] iteration=${i} generated=${cards.length} passed=${passedCount} rejected=${rejectedCards.length} reasoning="${reasoningPreview}" iterationFeedback="${iterationFeedbackPreview}"`,
+    );
+    if (rejectedCards.length > 0) {
+      for (const r of rejectedCards) {
+        api.logger.info(
+          `[pipeline:iteration-summary] rejected iteration=${i} cardId=${r.cardId} basket=${r.goalBasket ?? 'unknown'} overall=${r.overall ?? 'n/a'} title="${(r.title ?? '').slice(0, 80)}" feedback="${(r.feedback ?? '').slice(0, 160)}"`,
+        );
+      }
+    }
 
     iterations.push({
       plan: { reasoning: output.reasoning ?? '' },
@@ -218,12 +241,12 @@ export async function runPipeline(
     });
   }
 
-  const selectableCards = lastScoredCards.filter((entry) => {
+  const selectableCards = allScoredCards.filter((entry) => {
     const card = entry.card;
     if (!card || typeof card !== 'object') return true;
     return !isGenericHomeCalendarCard(card as Record<string, unknown>);
   });
-  const suppressedCount = lastScoredCards.length - selectableCards.length;
+  const suppressedCount = allScoredCards.length - selectableCards.length;
   if (suppressedCount > 0) {
     api.logger.info(`Suppressed ${suppressedCount} generic Home calendar card(s) from final selection`);
   }
@@ -272,25 +295,42 @@ export async function runPipeline(
     });
   }
   if (threadMatchDetails.length > 0) {
+    const suppressMatches = threadMatchDetails.filter((t) => t.threadDecision === 'suppress').length;
+    const holdMatches = threadMatchDetails.filter((t) => t.threadDecision === 'hold').length;
+    const refineMatches = threadMatchDetails.filter((t) => t.threadDecision === 'refine').length;
+    const advanceMatches = threadMatchDetails.filter((t) => t.threadDecision === 'advance').length;
     emit({
       type: 'pipeline:thread-matches',
       data: {
-        suppressMatches: threadMatchDetails.filter((t) => t.threadDecision === 'suppress').length,
-        holdMatches: threadMatchDetails.filter((t) => t.threadDecision === 'hold').length,
-        refineMatches: threadMatchDetails.filter((t) => t.threadDecision === 'refine').length,
-        advanceMatches: threadMatchDetails.filter((t) => t.threadDecision === 'advance').length,
+        suppressMatches,
+        holdMatches,
+        refineMatches,
+        advanceMatches,
         details: threadMatchDetails,
       },
     });
+    api.logger.info(
+      `[pipeline:thread-matches] suppress=${suppressMatches} hold=${holdMatches} refine=${refineMatches} advance=${advanceMatches}`,
+    );
+    for (const detail of threadMatchDetails) {
+      api.logger.info(
+        `[pipeline:thread-matches] cardId=${detail.cardId} decision=${detail.threadDecision} latestOutcome=${detail.latestCardOutcome} score=${detail.score} title="${(detail.title ?? '').slice(0, 80)}"`,
+      );
+    }
   }
 
   const finalCards = selectBestCards(selectableCards);
 
-  // Build score map
+  // Build score map across ALL iterations (was previously only the last
+  // iteration's evaluations, which paired with the lastScoredCards bug
+  // erased earlier scores). Card ids are globally unique within a run
+  // (`${runId}_i${i}_${j}`), so concatenating cannot produce key
+  // collisions across iterations.
   const scoreMap: Record<string, unknown> = {};
-  const lastEval = iterations[iterations.length - 1]?.evaluation as { evaluations?: Array<Record<string, unknown>> } | undefined;
-  if (lastEval?.evaluations) {
-    for (const score of lastEval.evaluations) {
+  for (const iter of iterations) {
+    const evals = (iter.evaluation as { evaluations?: Array<Record<string, unknown>> } | null | undefined)?.evaluations;
+    if (!evals) continue;
+    for (const score of evals) {
       if (typeof score['cardId'] === 'string') scoreMap[score['cardId'] as string] = score;
     }
   }
@@ -342,6 +382,9 @@ export async function runPipeline(
     openAfter: openSignalsAfter,
     consumedByRun: Math.max(0, openSignalsBefore - openSignalsAfter),
   };
+  api.logger.info(
+    `[pipeline:signalDelta] runId=${runId} openBefore=${signalDelta.openBefore} openAfter=${signalDelta.openAfter} consumedByRun=${signalDelta.consumedByRun}`,
+  );
 
   const result = { runId, totalIterations: iterations.length, finalCards, scoreMap, signalDelta };
   emit({

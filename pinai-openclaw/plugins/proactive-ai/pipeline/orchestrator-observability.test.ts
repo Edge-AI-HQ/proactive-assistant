@@ -63,6 +63,39 @@ function makeApi(agentText: string) {
   };
 }
 
+/**
+ * Multi-call API mock: the agent returns a different payload per iteration.
+ * Used to simulate multi-iteration runs where each iteration produces its
+ * own cards.
+ */
+function makeMultiCallApi(agentTexts: string[]) {
+  let callIdx = 0;
+  let lastSessionKey = '';
+  return {
+    logger: {
+      info: () => undefined,
+      warn: () => undefined,
+      error: () => undefined,
+      debug: () => undefined,
+    },
+    runtime: {
+      subagent: {
+        run: async ({ sessionKey }: { sessionKey: string }) => {
+          lastSessionKey = sessionKey;
+          return { runId: `agent-run-${callIdx + 1}` };
+        },
+        waitForRun: async () => ({ status: 'ok' }),
+        getSessionMessages: async ({ sessionKey }: { sessionKey: string }) => {
+          assert.equal(sessionKey, lastSessionKey);
+          const text = agentTexts[callIdx] ?? agentTexts[agentTexts.length - 1];
+          callIdx += 1;
+          return { messages: [{ role: 'assistant', content: text }] };
+        },
+      },
+    },
+  };
+}
+
 const TWO_CARDS_ONE_REJECTED = `\`\`\`json
 {
   "reasoning": "Pulled gmail recent + signals open + cards recent.",
@@ -187,6 +220,74 @@ test('runPipeline emits pipeline:thread-matches when a candidate hits a suppress
     assert.ok(detail);
     assert.equal(detail.threadDecision, 'suppress');
     assert.equal(detail.latestCardOutcome, 'dismiss');
+  });
+});
+
+test('runPipeline accumulates cards across all iterations (was previously only last iter)', async () => {
+  await withTempHome(async () => {
+    // Iteration 1: produces a high-scoring "iter-1-only" card.
+    // Iteration 2: produces a different lower-scoring card.
+    // The fix means BOTH should appear in the final selection pool, not
+    // just iter 2's. Before the fix, iter 1's card was silently dropped.
+    const iter1 = `\`\`\`json
+{
+  "reasoning": "Iter 1 reasoning.",
+  "cards": [
+    {
+      "title": "Iter1 high-value work card",
+      "whyNow": "Iter1 specific trigger.",
+      "summary": "Concrete iter 1 card.",
+      "primaryAction": { "label": "Do it" },
+      "goalBasket": "work",
+      "sources": ["a"]
+    }
+  ],
+  "evaluations": [
+    { "cardId": "draft-1", "overall": 9.0, "pass": true }
+  ],
+  "iterationFeedback": "iter1"
+}
+\`\`\``;
+    const iter2 = `\`\`\`json
+{
+  "reasoning": "Iter 2 reasoning.",
+  "cards": [
+    {
+      "title": "Iter2 mid-value health card",
+      "whyNow": "Iter2 trigger.",
+      "summary": "Concrete iter 2 card.",
+      "primaryAction": { "label": "Do it" },
+      "goalBasket": "health",
+      "sources": ["b"]
+    }
+  ],
+  "evaluations": [
+    { "cardId": "draft-1", "overall": 6.5, "pass": true }
+  ],
+  "iterationFeedback": "iter2"
+}
+\`\`\``;
+
+    const result = await runPipeline(
+      makeMultiCallApi([iter1, iter2]) as never,
+      { maxIterations: 2, cardsPerIteration: 1, agentTimeoutMs: 1000 },
+    );
+
+    // Both iterations' cards must show up — the high-value iter 1 card
+    // should rank first because of its overall=9.0 score.
+    assert.equal(result.finalCards.length, 2);
+    const titles = result.finalCards.map((c) => c['title']);
+    assert.ok(titles.includes('Iter1 high-value work card'), `iter 1 card missing — got ${titles.join(', ')}`);
+    assert.ok(titles.includes('Iter2 mid-value health card'), `iter 2 card missing — got ${titles.join(', ')}`);
+    assert.equal(result.finalCards[0]?.title, 'Iter1 high-value work card');
+
+    // scoreMap must include scores from ALL iterations, not just last.
+    const scoreEntries = Object.values(result.scoreMap) as Array<{ overall?: number }>;
+    const overalls = scoreEntries
+      .map((s) => (typeof s?.overall === 'number' ? s.overall : null))
+      .filter((v): v is number => v !== null)
+      .sort();
+    assert.deepEqual(overalls, [6.5, 9.0]);
   });
 });
 
