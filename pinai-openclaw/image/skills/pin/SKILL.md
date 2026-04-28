@@ -127,6 +127,40 @@ error，不要据此生成 connector-fix 卡。
 
 `Home` 这种全天日历占位事件信息量低，不要据此推断旅行/会议冲突。
 
+## 进化产物去哪儿了（evolution 是壳，不是终点）
+
+`evolution_runs` 表只是元记录——记每次进化 who / when / what was touched，
+**不是 agent 该用的"用户最近学到什么"的入口**。每次进化的真实写入会落到
+profile / memory / skills 这三处，按触发源不同分两条主线：
+
+| 进化源 | 真实写入到 | 范例 |
+|---|---|---|
+| **daily dream**（睡眠时跑） | profile.facts / preferences、interests-as-memory（subject `topic:xxx` / `app:xxx`）、goals（open / update / close） | 用户连续 3 天用某 app → memory{subject:"app:notion"} 兴趣条；周末睡眠不足 → profile.preferences.early_bedtime |
+| **chat-burst crystallize**（对话结束沉淀） | 二选一：(a) 新 memory 行；(b) **新增**一条用户 skill（`pin skills add` 走 `source=crystallize`），并附带一条 pointer memory 记录这个 skill 的来源 | 用户教 agent "我以后下午 3 点提醒我喝水" → 新 skill 一条 + memory pointer 一条 |
+
+**"用户最近学到什么"该读哪里**：
+
+```bash
+# 最近沉淀的事实和兴趣（dream 写的）
+pin memory list --quality 0.7 --limit 30
+pin memory list --subjectPrefix topic: --limit 20
+
+# 最近 dream / crystallize 跑过什么（看产出，不是看 evolution 本身）
+pin evolution recent --limit 5         # 拿到 run_id
+pin evolution get --id <run_id>        # 里面 refs_produced 告诉你这次写了哪些 memory/skill ID
+pin memory get --id <memory_id>        # 直接读那条 memory
+pin skills show --id <skill_id>        # 直接读那条 skill
+
+# 用户运行时学到的 skill（不是仓库里 image/skills/* 那种系统 skill）
+pin skills list --status enabled       # 跟系统 skill 同走 OpenClaw skill 加载器；source 字段区分来源
+pin skills list --source crystallize   # 只看 chat-burst 学到的
+```
+
+**生成卡片时怎么用**：dream 刚沉淀进 memory 的 fresh 兴趣条 + crystallize
+新加的用户 skill 是"用户最新偏好"的最高密度信号——比 raw / signal 更适合
+当 long-term anchor。如果一条 open signal 正好命中刚沉淀的兴趣或刚学的
+skill，那就是当前最强的卡片素材，优先级高于"昨天又来了一封普通 Gmail"。
+
 ## Memory 维护
 
 ```bash
