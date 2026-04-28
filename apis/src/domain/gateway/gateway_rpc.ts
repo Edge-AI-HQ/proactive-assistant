@@ -14,7 +14,8 @@ import {
 // and returns the result.
 // ---------------------------------------------------------------------------
 
-const RPC_TIMEOUT_MS = 10_000;
+const READ_RPC_TIMEOUT_MS = 10_000;
+const PATCH_RPC_TIMEOUT_MS = 30_000;
 
 /**
  * Bounded retry for `rpcCall`. Container cold start can leave the gateway
@@ -95,6 +96,7 @@ const rpcCallOnce = <T = unknown>(
   gatewayToken: string,
   method: string,
   params: Record<string, unknown> = {},
+  timeoutMs = READ_RPC_TIMEOUT_MS,
 ): Promise<RpcResult<T>> =>
   new Promise((resolve) => {
     const ws = new WebSocket(target.wsBaseUrl, {
@@ -125,7 +127,7 @@ const rpcCallOnce = <T = unknown>(
         error: "Gateway RPC timed out",
         retryable: !authenticated,
       });
-    }, RPC_TIMEOUT_MS);
+    }, timeoutMs);
     timeout.unref();
 
     ws.on("open", () => {
@@ -222,6 +224,7 @@ const rpcCall = async <T = unknown>(
   gatewayToken: string,
   method: string,
   params: Record<string, unknown> = {},
+  timeoutMs = READ_RPC_TIMEOUT_MS,
 ): Promise<RpcResult<T>> => {
   let lastResult: RpcResult<T> = {
     ok: false,
@@ -232,7 +235,13 @@ const rpcCall = async <T = unknown>(
       const delay = RPC_RETRY_BACKOFF_MS[attempt - 1] ?? 1000;
       await new Promise((r) => setTimeout(r, delay));
     }
-    lastResult = await rpcCallOnce<T>(target, gatewayToken, method, params);
+    lastResult = await rpcCallOnce<T>(
+      target,
+      gatewayToken,
+      method,
+      params,
+      timeoutMs,
+    );
     if (lastResult.ok) return lastResult;
     if (!lastResult.retryable) return lastResult;
   }
@@ -266,10 +275,16 @@ export const patchGatewayConfig = async (
   partialConfig: Record<string, unknown>,
   baseHash: string,
 ): Promise<RpcResult> => {
-  return rpcCall(target, gatewayToken, "config.patch", {
-    raw: JSON.stringify(partialConfig),
-    baseHash,
-  });
+  return rpcCall(
+    target,
+    gatewayToken,
+    "config.patch",
+    {
+      raw: JSON.stringify(partialConfig),
+      baseHash,
+    },
+    PATCH_RPC_TIMEOUT_MS,
+  );
 };
 
 // ---------------------------------------------------------------------------
@@ -312,6 +327,18 @@ const deepSet = (
 // Model-specific helpers
 // ---------------------------------------------------------------------------
 
+const getPrimaryModelFromConfig = (
+  config: Record<string, unknown>,
+): string | null => {
+  const primary = deepGet(config, "agents.defaults.model.primary");
+  if (typeof primary === "string") return primary;
+
+  const model = deepGet(config, "agents.defaults.model");
+  if (typeof model === "string") return model;
+
+  return null;
+};
+
 /**
  * Read the current primary model from a running gateway.
  * Returns the model ref string (e.g. `litellm/claude-opus-4-6`) or null.
@@ -324,14 +351,7 @@ export const getCurrentModel = async (
   if (!result.ok) return null;
 
   try {
-    const primary = deepGet(
-      result.payload.config,
-      "agents.defaults.model.primary",
-    );
-    if (typeof primary === "string") return primary;
-
-    const model = deepGet(result.payload.config, "agents.defaults.model");
-    if (typeof model === "string") return model;
+    return getPrimaryModelFromConfig(result.payload.config);
   } catch {
     // ignore parse failures
   }
@@ -352,6 +372,11 @@ export const setCurrentModel = async (
   const current = await getGatewayConfig(target, gatewayToken);
   if (!current.ok) {
     return { ok: false, error: `Failed to read config: ${current.error}` };
+  }
+
+  const configuredModel = getPrimaryModelFromConfig(current.payload.config);
+  if (configuredModel === modelRef) {
+    return { ok: true, payload: undefined };
   }
 
   const baseHash = current.payload.hash;
