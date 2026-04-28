@@ -67,30 +67,97 @@ flowchart LR
 | Skills | `pin skills list/show` | 用户运行时学到的执行技能 |
 | Tasks | `pin tasks list/show` | 后台队列（connector.init / connector.sync / auto.dreaming） |
 
-## 增量消费 vs 历史参考（先读这条）
+## 数据层优先级与含义（命令是第一层，理解是第二层）
 
-每一类数据的"应该读哪些"逻辑不一样，不要套同一个时间窗：
+卡片生成回答的问题永远是：**"用户面前现在有什么决策值得被推上来？"**
+各层数据回答这个问题的角色和优先级不一样——记住下面的等级，再决定每一
+层读多深。
 
-- **Signals**（真·增量消费层）：`personal_signals.status` 是 `open /
-  consumed / archived` 的状态机，`consumed_by_run_id` 记谁消费的。**这是
-  系统里唯一标的"未被任何 run 处理过"的层**。卡片生成的核心输入就在这
-  里——`pin signals recent --status open --limit 30` 默认只返回 open。
-  当前 run 真的用了某条之后，再 `pin signals consume --id <id> --runId
-  <run_id>` 把它标掉。
-- **Memory**（已沉淀长期事实）：质量过滤就够，`pin memory list --quality
-  0.7 --limit 30`、`pin memory list --subjectPrefix topic: --quality
-  0.6`。沉淀过的事实没有"消费/未消费"概念。
-- **Raw**（Gmail / Calendar / Device 原文）：用 `--hours N` 控近端窗口，
-  N 按用途选——"今天上下文" 24h、"周计划" 168h。这是 raw 数据量大的折衷。
-- **Feedback / Cards**（行为历史参考，不是消费层）：`feedback_events` /
-  `pipeline_runs` 没有 status 字段、没有 consumed_by。它们的作用是"避免
-  重复推卡 + 学习偏好"，不是"消费这一批就完事"。用 `--limit` 拿最近 N
-  条就够了，**不要给它们硬塞 `--since`**——尤其不要写 `--since 14d` 之类
-  的相对字符串，DB 层是直接 SQL `created_at >= ?` 字符串比，'14d' 比任
-  何 ISO 都小，过滤等于不过滤。
-- **Evolution**：是元记录（debug 用），不是 consumption tracker。读它的
-  价值是"看上次 dream agent 沉淀了什么"或"诊断某次 run 读写了哪些表"。
-  不要把它当成 incremental consumption 的锚点。
+### 1. personal_signals — 按时间排序的待处理观察（最高优先级）
+
+过去 X 小时收上来、**还没被任何 run 处理过**的瞬时观察：手机推送、邮件
+主题变化、日历更新、设备活动突变、用户主动汇报。`personal_signals.status`
+是 `open / consumed / archived` 状态机，`consumed_by_run_id` 记谁消费的
+——这是系统里**唯一**有"消费/未消费"概念的层。
+
+**为什么是核心**：它直接对应"自上次生成至今，世界变化了什么"，是卡片
+"why now" 的天然来源。一条 `open` signal 既没被处理、又不是噪声，
+**不推就是漏**。
+
+**CLI**：`pin signals recent --status open --limit 30`（按 occurred_at
+倒序）。当前 run 真用了哪条之后立刻 `pin signals consume --id ... --runId
+<run_id>` 标掉，不然下一次它还会出现在 open 列表里、被重复处理。
+
+### 2. memory — 已沉淀的长期事实（锚定 signal 是否真信号）
+
+memory 是 dream / crystallize 已沉淀过的 long-lived 事实：兴趣、偏好、
+人际、习惯、目标。subject 字段区分类别（`self / topic:xxx / app:xxx /
+person:xxx`），quality 字段标可信度。
+
+**什么时候用**：
+- 判断 signal 是否真信号：signal 命中已知兴趣/偏好/目标 → 真信号；跟所
+  有 memory 都对不上 → 多半噪声，不要做成卡。
+- 当卡片的 long-term anchor，让 "why now" 不只是 "今天发生了 X"，而是
+  **"X 跟你长期关心的 Y 撞上了"**——这是高质量卡片的判断标准。
+
+memory 不存在 "consumed" 概念——它是累积层，每次从最近高质量条目里挑相
+关的，老条目可以反复参考。
+
+**CLI**：`pin memory list --quality 0.7 --limit 30`、`pin memory list
+--subjectPrefix topic: --limit 20`、`pin memory search --query "..."`。
+
+### 3. raw — 原始数据（深 dive 或 signal 稀疏时补充）
+
+Gmail / Calendar / Slack / Notion / Drive / GitHub / Outlook / device
+原文。量大、近端、按 `--hours N` 窗口读。
+
+**什么时候用**：
+- 当一条 signal 或 memory 命中具体话题、需要看细节时——"这个 PR 现在卡
+  在哪条 review comment"、"今天会议跟谁开"。
+- signals 层稀疏（早期用户、刚 onboard），从 raw 补"用户当下在做什么"
+  ——今天什么会、谁来邮件、装了什么 app。
+
+raw 本身**不驱动**生成——一封 "你的快递明日送达" 邮件没价值，只有当它
+命中某个 memory / signal 时才升级为有用素材。
+
+**CLI**：`pin raw gmail recent --hours 24`、`pin raw gcal today`、
+`pin raw device-apps --top 20` 等。
+
+### 4. world — 外部新闻 / 公共信号
+
+profile-scored 的 world_signals（已经按用户 memory 里的兴趣条打过分）。
+
+**什么时候用**：用户 memory 里有 `topic:investing` / `topic:ai` 之类兴
+趣条 → 拉对应话题今天的 headlines 看有没有进展。**没有命中已知兴趣的
+世界信号不要进卡片**——会变噪音。
+
+**CLI**：`pin world shortlist --profile-id default --limit 10`。
+
+### 参考层：feedback / cards / evolution（不驱动生成，回避用）
+
+这三层回答 "我们已经做过什么、效果如何"，不是 "接下来该做什么"：
+
+- `pin feedback list --limit 50`：用户最近怎么反应卡片
+  （confirm/dismiss/modify）—— 学偏好、避雷区。
+- `pin cards recent --limit 10`：避免最近主题重复推。
+- `pin evolution recent --limit 5`：debug 用；想看上次 dream 沉淀了什么，
+  直接 `pin memory list` 看产物，**不是** `pin evolution`。
+
+**不要给这三个塞 `--since` 时间过滤**——表里没 status / consumed_by 字
+段，"自上次以来"在这一层没有意义；尤其不要写 `--since 14d`（DB 层 SQL
+字符串比 `'14d'` 比任何 ISO 都小，过滤等于不过滤）。直接 `--limit N`。
+
+### 决策原则
+
+```
+卡片质量 ≈ open signal × memory anchor × raw 细节
+
+三者都有       = 高质量卡（why now 强 + 长期相关 + 可执行）
+signal + anchor = 中等（why now 在 + 长期相关，可能缺细节）
+仅 signal       = 低（why now 在但不知道为什么对这个用户重要）
+仅 memory       = 不要生成（没 why now，跟今天没关系）
+仅 raw          = 噪声（没驱动 + 没相关性）
+```
 
 ## 卡片生成的标准读取顺序
 
