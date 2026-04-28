@@ -2,10 +2,10 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 vi.mock("@/lib/api", () => ({
-  ensureContainer: vi.fn(),
   fetchContainerStatus: vi.fn(),
   probeGatewayHealth: vi.fn(),
   destroyContainer: vi.fn(),
+  resetContainer: vi.fn(),
 }));
 
 import * as api from "@/lib/api";
@@ -13,10 +13,10 @@ import { useContainer } from "./useContainer";
 
 type GatewayProbeResult = Awaited<ReturnType<typeof api.probeGatewayHealth>>;
 
-const mockEnsureContainer = vi.mocked(api.ensureContainer);
 const mockFetchContainerStatus = vi.mocked(api.fetchContainerStatus);
 const mockProbeGatewayHealth = vi.mocked(api.probeGatewayHealth);
 const mockDestroyContainer = vi.mocked(api.destroyContainer);
+const mockResetContainer = vi.mocked(api.resetContainer);
 
 const successProbe = (): GatewayProbeResult => ({
   ok: true,
@@ -52,11 +52,12 @@ const advancePolling = async (ms = 3000): Promise<void> => {
 describe("useContainer", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    mockEnsureContainer.mockReset();
     mockFetchContainerStatus.mockReset();
     mockProbeGatewayHealth.mockReset();
     mockDestroyContainer.mockReset();
+    mockResetContainer.mockReset();
     mockDestroyContainer.mockResolvedValue({ ok: true });
+    mockResetContainer.mockResolvedValue({ ok: true, containerId: "c1", ready: true });
   });
 
   afterEach(() => {
@@ -64,74 +65,83 @@ describe("useContainer", () => {
     vi.useRealTimers();
   });
 
-  test("marks the container as running when gateway health succeeds immediately", async () => {
+  test("flips to ready when an existing running container's gateway probe succeeds", async () => {
     mockFetchContainerStatus.mockResolvedValue({ status: "running" });
     mockProbeGatewayHealth.mockResolvedValue(successProbe());
 
     const { result } = renderHook(() => useContainer(true));
     await flushAsyncWork();
 
-    expect(result.current.status).toBe("running");
-    expect(result.current.loading).toBe(false);
-    expect(result.current.initialChecking).toBe(false);
+    expect(result.current.status).toBe("ready");
+    expect(result.current.firstTime).toBe(false);
+    expect(result.current.error).toBeNull();
   });
 
-  test("falls back to none when a previously running container is deleted", async () => {
-    mockFetchContainerStatus
-      .mockResolvedValueOnce({ status: "running" })
-      .mockResolvedValueOnce({ status: "none" });
+  test("starts in unknown and lands in unhealthy + firstTime when no container exists", async () => {
+    mockFetchContainerStatus.mockResolvedValue({ status: "none" });
+
+    const { result } = renderHook(() => useContainer(true));
+    expect(result.current.status).toBe("unknown");
+
+    await flushAsyncWork();
+
+    expect(result.current.status).toBe("unhealthy");
+    expect(result.current.firstTime).toBe(true);
+    expect(result.current.error).toBeNull();
+  });
+
+  test("short-circuits to unhealthy + firstTime when gateway reports NO_CONTAINER", async () => {
+    mockFetchContainerStatus.mockResolvedValue({ status: "running" });
     mockProbeGatewayHealth.mockResolvedValue(
-      failedProbe("NO_CONTAINER", 503, "Container not ready"),
+      failedProbe("NO_CONTAINER", 503, "Container not available"),
     );
 
     const { result } = renderHook(() => useContainer(true));
     await flushAsyncWork();
 
-    expect(result.current.status).toBe("none");
-    expect(result.current.loading).toBe(false);
-    expect(result.current.initialChecking).toBe(false);
-    expect(result.current.error).toContain("Launch again");
+    expect(result.current.status).toBe("unhealthy");
+    expect(result.current.firstTime).toBe(true);
   });
 
-  test("keeps polling after a transient proxy error and becomes running once health recovers", async () => {
-    mockFetchContainerStatus.mockResolvedValue({ status: "none" });
-    mockEnsureContainer.mockResolvedValue({
-      containerId: "container-1",
-      ready: true,
-      status: "running",
-    });
+  test("reaches ready when a transient probe error recovers within the budget", async () => {
+    mockFetchContainerStatus.mockResolvedValue({ status: "running" });
     mockProbeGatewayHealth
-      .mockResolvedValueOnce(
-        failedProbe("PROXY_ERROR", 502, "Container proxy error"),
-      )
+      .mockResolvedValueOnce(failedProbe("PROXY_ERROR", 502, "Container proxy error"))
       .mockResolvedValueOnce(successProbe());
 
     const { result } = renderHook(() => useContainer(true));
     await flushAsyncWork();
 
-    await act(async () => {
-      await result.current.ensure();
-    });
-    await flushAsyncWork();
-
-    expect(result.current.status).toBe("creating");
-    expect(result.current.loading).toBe(true);
+    expect(result.current.status).toBe("connecting");
 
     await advancePolling();
 
-    expect(result.current.status).toBe("running");
-    expect(result.current.loading).toBe(false);
+    expect(result.current.status).toBe("ready");
+    expect(result.current.error).toBeNull();
   });
 
-  test("stops infinite loading after repeated gateway failures when the container status becomes stopped", async () => {
-    mockFetchContainerStatus
-      .mockResolvedValueOnce({ status: "none" })
-      .mockResolvedValueOnce({ status: "stopped" });
-    mockEnsureContainer.mockResolvedValue({
-      containerId: "container-2",
-      ready: true,
-      status: "running",
+  test("recreate() calls /reset and re-enters the probe loop", async () => {
+    mockFetchContainerStatus.mockResolvedValue({ status: "none" });
+    mockProbeGatewayHealth.mockResolvedValue(successProbe());
+
+    const { result } = renderHook(() => useContainer(true));
+    await flushAsyncWork();
+
+    expect(result.current.status).toBe("unhealthy");
+    expect(result.current.firstTime).toBe(true);
+
+    await act(async () => {
+      await result.current.recreate();
     });
+    await flushAsyncWork();
+
+    expect(mockResetContainer).toHaveBeenCalledTimes(1);
+    expect(result.current.status).toBe("ready");
+    expect(result.current.firstTime).toBe(false);
+  });
+
+  test("cancel() destroys the container and drops into unhealthy + firstTime", async () => {
+    mockFetchContainerStatus.mockResolvedValue({ status: "running" });
     mockProbeGatewayHealth.mockResolvedValue(
       failedProbe("PROXY_ERROR", 502, "Container proxy error"),
     );
@@ -139,16 +149,14 @@ describe("useContainer", () => {
     const { result } = renderHook(() => useContainer(true));
     await flushAsyncWork();
 
+    expect(result.current.status).toBe("connecting");
+
     await act(async () => {
-      await result.current.ensure();
+      await result.current.cancel();
     });
-    await flushAsyncWork();
 
-    await advancePolling();
-    await advancePolling();
-
-    expect(result.current.status).toBe("stopped");
-    expect(result.current.loading).toBe(false);
-    expect(result.current.initialChecking).toBe(false);
+    expect(mockDestroyContainer).toHaveBeenCalledTimes(1);
+    expect(result.current.status).toBe("unhealthy");
+    expect(result.current.firstTime).toBe(true);
   });
 });
