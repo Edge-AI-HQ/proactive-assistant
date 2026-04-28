@@ -174,6 +174,31 @@ make build-openclaw-image # 构建 OpenClaw 镜像到共用 registry
 3. `container_status=running` 不等于服务可用；必须等 HTTP 探测通过。
 4. 本机全局代理会导致 `flyctl` 和 Docker push 失败，deploy 命令已内置 `env -u` 处理。
 
+## Skill 管理规则（OpenClaw skills）
+
+`pin / gws-* / openai-*-by-pinai` 这些 skill MD 是注入到用户容器、所有 OpenClaw agent（unified-generator / chat / dreaming）共用的指令文档。
+
+**唯一允许的位置**：`pinai-openclaw/image/skills/<key>/SKILL.md`。
+- Dockerfile L81 把这个目录拷到容器内 `/opt/pinai/skills/`。
+- `apis/src/domain/container/providers/shared/openclaw_config.ts` 把 `/opt/pinai/skills` 注入到 `extraDirs`，OpenClaw runtime 启动时扫描这里加载所有 skill。
+- 不要把 SKILL.md 放在 plugin 自己的 `skills/` 子目录里——OpenClaw runtime 不扫那里（不在 extraDirs 里），文件等于 dead docs。
+
+**新增 skill 的步骤**：
+1. 建 `pinai-openclaw/image/skills/<key>/SKILL.md`，frontmatter 至少含 `name / version / description`。
+2. 跑 `node scripts/sync-skills-manifest.mjs` 重新生成 `apis/src/domain/skills/generated_custom_skill_keys.ts`。
+3. 在 `apis/src/domain/skills/openclaw_skills.ts` 的 `DEFAULT_SKILLS_CATALOG` 加一条 `{ key, name, description }`（前端展示用）。
+4. 重新 build openclaw 镜像（本地 `make build-openclaw-local`，dev 走 CI 自动）。
+
+**SKILL.md 同时要被 plugin 代码拼到 prompt 里时**（如 `pin-cli-command-guide.ts`）：
+- 用 `fs.readFileSync` 读，不要把 MD 内容复制到 TS 常量——会立刻漂移。
+- 路径 candidate 先容器再 dev：`/opt/pinai/skills/<key>/SKILL.md` → `<repo>/pinai-openclaw/image/skills/<key>/SKILL.md`。`existsSync` 选第一个存在的。
+- 范例：`pinai-openclaw/plugins/proactive-ai/agents/pin-cli-command-guide.ts`。
+
+**MD 内容规则**：
+- 一个 skill 一篇 MD，不要拆 `pin-shared` / `pin-memory` 这种"前置依赖" sub-skill——agent 不会自动跟随引用，那只是文本，徒增维护成本。
+- 时间过滤用 ISO 时间戳（`2026-04-21T00:00:00Z`），不要写 `--since 14d` 这种相对量——DB 层是直接 `created_at >= ?` SQL 字符串比较，`'14d'` 比任何 ISO 都小，过滤等于不过滤。
+- **增量消费优于固定时间窗**。卡片生成 / dreaming 读 feedback / cards 时，先 `pin evolution recent --kind manual --status completed --limit 1` 拿上次成功 run 的 `started_at`，把它作为 `--since` 锚点；首次或拿不到锚点就只用 `--limit`。signals 永远默认 `--status open`（CLI 已经 filter 未消费过的）。raw 用 `--hours N` 控近端窗口，N 按用途选。
+
 ## 数据库变更规则
 - 每次 schema 变更写新的 migration 文件到 `apis/db/migrations/`。
 - migration 文件一旦 merge 到 main，禁止修改。

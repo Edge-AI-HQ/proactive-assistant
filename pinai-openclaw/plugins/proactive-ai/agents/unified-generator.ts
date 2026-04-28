@@ -89,7 +89,12 @@ empty, that signal is itself useful — note it and continue.
 9. **World events**: \`pin world shortlist --profile-id default --limit 10\` — external news ranked against profile
 
 # Behavior history (avoid repetition + learn from feedback)
-10. **Recent feedback**: \`pin feedback list --since 14d\` — confirms / dismisses / modifications
+# Read incrementally: anchor on the last successful run's started_at, NOT a
+# fixed time window. First call \`pin evolution recent --kind manual --status
+# completed --limit 1\` and feed its started_at to the --since flags below.
+# If the result is empty (first run / no prior history), drop --since and
+# rely on --limit for recency-ordered reads.
+10. **Recent feedback**: \`pin feedback list --since <last_run_started_at> --limit 50\` — confirms / dismisses / modifications
 11. **Recent generated cards**: \`pin cards recent --limit 10\` — what we already pushed; thread decisions (advance / refine / hold / suppress)
 12. **Recent evolution runs**: \`pin evolution recent --kind daily_dream --limit 3\` — what the dreaming agent learned recently
 

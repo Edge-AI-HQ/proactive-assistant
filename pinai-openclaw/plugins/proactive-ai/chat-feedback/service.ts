@@ -9,7 +9,6 @@ import { makeIntentKey, makeTitleKey } from '../shared/intent-key.js';
 export const CARD_CHAT_INTEREST_ANALYSIS_TYPE = 'card_chat_interest';
 export const INJECTED_CARD_CHAT_PREFIX = 'The user opened ';
 
-const DEFAULT_LOOKBACK = '14d';
 const DEFAULT_CARD_LIMIT = 40;
 const DEFAULT_SESSION_MESSAGE_LIMIT = 50;
 const MIN_USER_TURNS = 2;
@@ -332,8 +331,11 @@ export async function syncCardChatFeedback(
       ?? ((chats) => runChatFeedbackSummarizer(input.api, chats)),
   };
 
+  // No since default: '14d' was a no-op (SQL string compare against ISO
+  // always passes). Callers can still pass an ISO --since explicitly if they
+  // want to bound the scan; otherwise --limit + recency ordering is enough.
   const rows = await deps.listRecentGeneratedCards({
-    since: input.since ?? DEFAULT_LOOKBACK,
+    since: input.since,
     limit: input.limit ?? DEFAULT_CARD_LIMIT,
   });
 

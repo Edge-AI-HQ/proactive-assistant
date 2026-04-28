@@ -30,7 +30,8 @@ test("buildUnifiedGeneratorPrompt includes CLI guide and v3 retrieval commands",
   assert.match(prompt, /pin raw gcal today/);
   assert.match(prompt, /pin raw device-apps --top 20/);
   assert.match(prompt, /pin world shortlist/);
-  assert.match(prompt, /pin feedback list --since 14d/);
+  assert.match(prompt, /pin feedback list --since <last_run_started_at>/);
+  assert.match(prompt, /Read incrementally/);
   assert.match(prompt, /pin cards recent --limit 10/);
   assert.match(prompt, /pin evolution recent --kind daily_dream/);
   assert.match(prompt, /pin skills list --status enabled/);

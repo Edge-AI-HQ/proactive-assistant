@@ -71,7 +71,9 @@ export async function runPipeline(
     api.logger.warn(`Failed to load feedback summary: ${err instanceof Error ? err.message : err}`);
   }
   try {
-    recentGeneratedCardsSummary = await loadRecentGeneratedCardsSummary({ limit: 10, since: '14d' });
+    // No --since: '14d' was a no-op (SQL string compare against ISO always
+    // passes). Rely on --limit + recency ordering.
+    recentGeneratedCardsSummary = await loadRecentGeneratedCardsSummary({ limit: 10 });
   } catch (err) {
     api.logger.warn(`Failed to load recent generated cards summary: ${err instanceof Error ? err.message : err}`);
   }

@@ -67,9 +67,31 @@ flowchart LR
 | Skills | `pin skills list/show` | 用户运行时学到的执行技能 |
 | Tasks | `pin tasks list/show` | 后台队列（connector.init / connector.sync / auto.dreaming） |
 
+## 增量消费原则（先读这条）
+
+不要用固定时间窗（"过去 14 天" 之类）来决定读哪些数据。**目标永远是
+"上次消化到现在新增的部分"**：
+
+- **Signals**：默认 `--status open`，CLI 已经过滤未被任何 run 消费过的
+  那批；明确使用一个 signal 之后再 `pin signals consume` 把它标掉。
+- **Feedback / cards**：以"上次成功生成的 evolution run 时间"为锚——
+  先 `pin evolution recent --kind manual --status completed --limit 1`
+  拿到 `started_at`，再把它作为 `--since <iso>` 传下去。如果是首次运行
+  或拿不到锚点，直接靠 `--limit` 取最近 N 条（recency-ordered）。
+- **Raw（Gmail / Calendar / Device）**：用 `--hours N` 控近端窗口，N
+  按用途选（"今天上下文" 24h；"周计划" 168h）。这是 raw 数据量大的折衷，
+  不是固定窗口的等价物。
+
+固定 `--since 14d` 这种相对字符串在 SQL 层是 no-op（字符串比较任何 ISO
+都更大），写了等于没写——上游已经发现并去掉了。
+
 ## 卡片生成的标准读取顺序
 
 ```bash
+# 0. 锚定上次成功 run 的时间（用于下面的 --since）
+pin evolution recent --kind manual --status completed --limit 1
+# → 用返回里的 started_at 作为下面 LAST_RUN
+
 # 1. 长期画像
 pin profile get
 pin memory list --quality 0.7 --limit 30
@@ -77,15 +99,15 @@ pin memory list --subjectPrefix topic: --quality 0.6 --limit 20
 pin skills list --status enabled
 
 # 2. 当前未消化信号 + 原始数据
-pin signals recent --hours 24 --limit 30
+pin signals recent --status open --limit 30        # 默认就 open
 pin raw gmail recent --hours 24 --limit 20
 pin raw gcal today
 pin raw device-apps --top 20
 pin world shortlist --profile-id default --limit 10
 
-# 3. 行为历史
-pin feedback list --since 2026-04-14T00:00:00Z
-pin cards recent --limit 10
+# 3. 行为历史（增量：以 LAST_RUN 为锚；首次运行可省略 --since）
+pin feedback list --since <LAST_RUN> --limit 50
+pin cards recent --since <LAST_RUN> --limit 10
 pin evolution recent --kind daily_dream --limit 3
 ```
 
@@ -178,7 +200,7 @@ pin world index refresh --all --limit 100                        # 写语义索�
 # 卡片历史（生成前避免重复）
 pin cards recent --limit 10
 pin cards recent --basket work --limit 10
-pin cards recent --basket health --since 2026-04-14T00:00:00Z
+pin cards recent --basket health --since <LAST_RUN>   # ISO 时间戳
 
 # 反馈记录
 pin feedback log --kind card_action --action confirm \
@@ -189,11 +211,11 @@ pin feedback log --kind text_feedback \
   --source user_derived --basket health \
   --conversation-id conv_abc --message-id msg_456
 
-# 反馈查询（--since 必须 ISO）
-pin feedback list --since 2026-04-21T00:00:00Z
-pin feedback list --since 2026-04-21T00:00:00Z --kind card_action --action confirm
+# 反馈查询（增量：用 evolution recent 拿 LAST_RUN，--since 接 ISO）
+pin feedback list --since <LAST_RUN>
+pin feedback list --since <LAST_RUN> --kind card_action --action confirm
 pin feedback list --intent-card-id ic_001
-pin feedback stats --since 2026-04-14T00:00:00Z --basket work
+pin feedback stats --since <LAST_RUN> --basket work
 ```
 
 反馈 kind：`card_open / card_action / explicit_rating / dismiss / snooze / text_feedback`。
