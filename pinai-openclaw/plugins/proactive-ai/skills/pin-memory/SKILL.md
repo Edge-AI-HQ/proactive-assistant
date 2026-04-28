@@ -5,7 +5,7 @@ description: "Memory 模块总入口：当 agent 需要读取或维护用户上�
 metadata:
   requires:
     bins: ["pin"]
-  cliHelp: "memory help"
+  cliHelp: "pin sys schema"
 ---
 
 # memory

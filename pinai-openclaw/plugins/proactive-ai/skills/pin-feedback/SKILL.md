@@ -49,11 +49,13 @@ pin feedback log --kind text_feedback \
 
 ### 3. 查询近期反馈信号（用于 Intent 生成排序）
 
+`--since` 接 ISO 时间戳（直接进 SQL `created_at >= ?` 比较）。
+
 ```bash
-pin feedback list --since 7d
-pin feedback list --since 7d --kind card_action --action confirm
+pin feedback list --since 2026-04-21T00:00:00Z
+pin feedback list --since 2026-04-21T00:00:00Z --kind card_action --action confirm
 pin feedback list --intent-card-id ic_001
-pin feedback stats --since 14d --basket work
+pin feedback stats --since 2026-04-14T00:00:00Z --basket work
 ```
 
 ### 4. 计算 v3 卡片质量指标
@@ -63,8 +65,8 @@ join 看每张卡的"自评分 vs 用户行为"：
 
 ```bash
 # 卡片评分 + 反馈拼一下 (agent 端 JOIN)
-pin cards recent --limit 100     # 分母 + dim_relevance / overall
-pin feedback list --since 14d    # 分子（confirm / dismiss）
+pin cards recent --limit 100                      # 分母 + dim_relevance / overall
+pin feedback list --since 2026-04-14T00:00:00Z    # 分子（confirm / dismiss）
 ```
 
 聚合：confirm rate per basket、dismiss rate per basket、self-eval 与
@@ -76,9 +78,9 @@ confirm 的相关性 — 详见 `pinai-openclaw/plugins/proactive-ai/evals/onlin
 | 命令 | 说明 | 风险 |
 |------|------|------|
 | `pin feedback log --kind <k>` | 记录反馈事件 | write |
-| `pin feedback list [--since <d>] [--kind <k>] [--action <a>] [--intent-card-id <id>]` | 列出反馈事件 | read |
+| `pin feedback list [--since <iso>] [--kind <k>] [--action <a>] [--intent-card-id <id>]` | 列出反馈事件（`--since` 是 ISO 时间戳） | read |
 | `pin feedback get --id <id>` | 获取单条反馈 | read |
-| `pin feedback stats [--since <d>] [--basket <b>]` | 聚合指标统计 | read |
+| `pin feedback stats [--since <iso>] [--basket <b>]` | 聚合指标统计 | read |
 
 ## 反馈类型（kind）
 

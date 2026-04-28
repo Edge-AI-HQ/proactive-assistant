@@ -5,46 +5,41 @@ description: "已生成 Intent Card 历史：查询最近生成过的卡片主�
 metadata:
   requires:
     bins: ["pin"]
-  cliHelp: "cards recent"
+  cliHelp: "pin sys schema"
 ---
 
 # cards
+
+**先读取 [`../pin-shared/SKILL.md`](../pin-shared/SKILL.md)**
 
 > v3 提示：`pin cards recent` 是 agent 看"我已经推过哪些卡片"的标准入口；
 > 如需结构化评分指标（5 维），用 `pin evolution recent` + `card_evaluations`
 > 表的关联（intent_card_id 一致）。"用户当前在做什么"建议用
 > `pin signals recent --hours 24` 和 `pin raw ...`。
 
-## Shared contract
-
-- 当前 CLI 总是输出 JSON；`--json` / `--format json` 会被入口层剥离
-- 出错先看 `error.hint`
-- 不确定 domain 时先用 `pin --help` / `pin sys schema`；具体参数以
-  `error.hint` 和 `cli/*.ts` 为准
-
 ## 核心场景
 
 ### 1. 查看最近生成的 Intent Cards
 
 ```bash
-pin cards recent --json
-pin cards recent --limit 10 --json
+pin cards recent
+pin cards recent --limit 10
 ```
 
 ### 2. 按 basket 查看近期生成历史
 
 ```bash
-pin cards recent --basket work --limit 10 --json
-pin cards recent --basket health --since 14d --json
+pin cards recent --basket work --limit 10
+pin cards recent --basket health --since 2026-04-14T00:00:00Z
 ```
 
 ### 3. 在生成前做近期主题感知
 
 ```bash
-pin cards recent --limit 10 --json
-pin signals recent --hours 24 --limit 30 --json
-pin raw device-contacts list --limit 200 --json
-pin raw device-apps --top 20 --json
+pin cards recent --limit 10
+pin signals recent --hours 24 --limit 30
+pin raw device-contacts list --limit 200
+pin raw device-apps --top 20
 ```
 
 读取结果时重点关注：
@@ -59,4 +54,4 @@ pin raw device-apps --top 20 --json
 
 | 命令 | 说明 | 风险 |
 |------|------|------|
-| `pin cards recent [--limit <n>] [--basket <b>] [--since <d>] --json` | 查看最近生成的 Intent Cards | read |
+| `pin cards recent [--limit <n>] [--basket <b>] [--since <iso>]` | 查看最近生成的 Intent Cards（`--since` 是 ISO 时间戳） | read |
