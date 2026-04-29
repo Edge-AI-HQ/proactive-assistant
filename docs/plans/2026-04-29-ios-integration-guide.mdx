@@ -1,0 +1,202 @@
+---
+title: "iOS 接入指南"
+description: "iOS 客户端如何登录、注册设备、上报数据。一屏看完。"
+---
+
+# iOS 接入指南
+
+写给独立 iOS 客户端开发者。三件事:**登录 → 注册设备 → 上报**。
+
+后端契约的完整版在 [PersonalSignal 范式 + 配对设计](./2026-04-29-personal-signal-and-pairing.mdx);这一份只讲 iOS 实现要做什么。
+
+## 一、整体流程
+
+```
+App 启动
+  ↓ Supabase Google OAuth → access_token
+  ↓ POST /api/proactive/container/ensure  (Bearer access_token)
+  ↓ POST /api/proactive/devices/register  (Bearer access_token) → device_token
+  ↓ device_token 存 Keychain
+之后每次有数据要传:
+  POST /api/proactive/devices/ingest
+       (X-Device-Id + X-Device-Token + 一批 PersonalSignal)
+```
+
+`access_token`(短期) 和 `device_token`(长期 PSK) 是两套凭据,**不混用**。
+register 用 access_token,后续 ingest 只用 device_token。
+
+## 二、API_BASE 怎么定
+
+| 场景 | API_BASE |
+|---|---|
+| 本地真机调试 | App 内提供一个文本框,粘 `make ngrok` 给的 `https://xxx.ngrok-free.app` |
+| 测 dev | `https://proactive-ai-api-dev.fly.dev` |
+| 生产 | `https://proactive-ai-api-prod.fly.dev` |
+
+Supabase URL 和 publishable key **三档共享一个**。从 `proactive-ai-frontend/.env.dev` 或 `.env.production` 取(都指向同一个 Supabase 项目)。
+
+## 三、Supabase 登录
+
+iOS 用 `supabase-swift`(SDK):
+
+```swift
+let supabase = SupabaseClient(supabaseURL: ..., supabaseKey: ...)
+// PKCE flow + Custom URL Scheme callback
+try await supabase.auth.signInWithOAuth(provider: .google,
+    redirectTo: URL(string: "ai.pin.proactive://auth/callback"))
+```
+
+OAuth callback 用 deep link。在 Info.plist 加 URL scheme `ai.pin.proactive`,在 SceneDelegate 把 incoming URL 喂给 `supabase.auth.session(from: url)` 完成 PKCE 兑换。
+
+完成后:
+```swift
+let token = try await supabase.auth.session.accessToken  // Bearer
+let userId = supabase.auth.currentUser?.id              // Supabase user UUID
+```
+
+## 四、注册设备 + 拿 device_token
+
+```http
+POST {API_BASE}/api/proactive/container/ensure
+Authorization: Bearer {access_token}
+
+{ }
+```
+
+返回 `{ ok: true, containerId, status: "running" }`。失败可忽略,继续。
+
+```http
+POST {API_BASE}/api/proactive/devices/register
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "deviceId": "<本地生成的 UUID v4,首次启动后写 Keychain>",
+  "platform": "ios",
+  "displayName": "iPhone 15 / smile",
+  "model": "iPhone15,3",
+  "appVersion": "0.1.0"
+}
+```
+
+返回:
+```json
+{
+  "ok": true,
+  "device": {"device_id": "...", "platform": "ios", ...},
+  "device_token": "<plaintext PSK,只回这一次>"
+}
+```
+
+**`device_token` 必须存 Keychain**(不要 UserDefaults,丢了只能重 register)。重传同一个 deviceId 会自动 rotate token,所以丢了不至于死,但每次新 token 都要更新 Keychain。
+
+## 五、上报 PersonalSignal
+
+接口:
+```http
+POST {API_BASE}/api/proactive/devices/ingest
+X-Device-Id:    {deviceId}
+X-Device-Token: {device_token}
+Content-Type:   application/json
+
+[
+  PersonalSignal,
+  PersonalSignal,
+  ...
+]
+```
+
+**body 是顶层数组**,不是 `{deviceId, items: [...]}` 包一层。
+
+### PersonalSignal 字段
+
+```json
+{
+  "id":          "uuid",                      // 客户端生成,幂等键
+  "source":      "device:<deviceId>",         // scheme 限定: device | mobile | web
+  "kind":        "moment" | "ambient.image" | "..." ,
+  "occurred_at": "2026-04-29T10:30:00Z",      // ISO 8601,端侧时间
+  "title":       "短标题",
+  "summary":     "一句话摘要",
+  "payload":     { /* 任意 JSON */ }
+}
+```
+
+- 必填: `id` / `source` / `kind` / `occurred_at`
+- 强烈建议: `title` / `summary` / `payload`
+- 可选: `salience`(0-1) / `confidence`(0-1) / `dedupe_key`(业务级去重) / `expires_at`
+
+### `kind` 命名规则
+
+格式: `<source_class>.<event_name>`,蛇形小写。
+
+例子:
+- 文本类: `moment` / `attention_item` / `app_inventory_snapshot`
+- 媒体类: `ambient.image` / `ambient.audio` / `ambient.video`
+- 未来自由扩展: `health.steps` / `screentime.daily` / `location.update`
+
+后端按 `kind` 路由,不强校验 `payload` 内部结构。新增 kind 不需要改后端。
+
+### 二进制(图 / 音 / 视频 / 文件)
+
+塞在 `payload` 里:
+
+```json
+{
+  "id": "...", "source": "device:...", "kind": "ambient.image",
+  "occurred_at": "...", "title": "frame", "summary": "桌前一景",
+  "payload": {
+    "width": 4032, "height": 3024, "orientation": 1,
+    "mime": "image/jpeg",
+    "binary_b64": "<base64-encoded JPEG>"
+  }
+}
+```
+
+后端识别 `kind` 在媒体白名单(`ambient.* / device.media.*`)且 `payload.binary_b64` 非空时,base64 解码 → 写到 user 容器的本地 FS,然后把 `binary_b64` 从 payload 拿掉,换成 `file_path` + `byte_len`。**用户读取**通过 `GET {API_BASE}/api/proxy/devices/media/{file_path}` 拿原文件。
+
+base64 体积膨胀 33%,对单张图(几十 KB)没问题。等单文件 > 1MB 再考虑 multipart。
+
+## 六、批量 + 重试 + 心跳
+
+- **攒批**: 不要每条事件触发一次 HTTP。本地 buffer 5-10 秒一批推。
+- **重试 + 去重**: 网络挂了写本地 SQLite,网络回来批量推。给每条带 `dedupe_key`(自己业务的天然唯一键),后端**自动去重**,所以重试是安全的。
+- **没有心跳协议**: 每次 ingest 自动刷新设备的 `last_seen_at`。不需要定时 ping。
+- **`occurred_at` 用端侧时间**: 不要写 server now,否则 buffer 之后丢失原始时序。
+
+## 七、错误处理
+
+| HTTP | 含义 | 客户端做什么 |
+|---|---|---|
+| 200 | OK | continue |
+| 401 | device_token 无效 | 清 Keychain → 重 register → 重试 ingest |
+| 429 | rate limit(60 ingest/min/device) | 退避(指数,起步 5s),不要循环重试 |
+| 502 | 用户容器没起来 | 重试 ensure_container,然后再 ingest |
+| 4xx 其它 | body 不合法 | 看 response.error,修客户端 bug |
+| 5xx | 服务器问题 | 退避重试 |
+
+## 八、最简验证流程(带到真机调试)
+
+1. `make up` + `make ngrok` 拿到隧道 URL
+2. iOS App 启动 → 走 Google 登录 → 自动 register
+3. 在调试视图触发一次 ingest:
+   ```json
+   [{"id":"<uuid>","source":"device:<deviceId>","kind":"moment",
+     "occurred_at":"<ISO>","title":"hi","summary":"first signal"}]
+   ```
+4. Mac 上验证:
+   ```bash
+   docker exec proactive-<...> pin signals recent --limit 5
+   ```
+   能看到 kind=moment,source=device:&lt;deviceId&gt;,user_id 是 Supabase user UUID。
+
+5. 网页 Web 端 Control → Hardware Devices,你的 iPhone 设备会出现在列表里,点进去能看到 timeline。
+
+## 九、不需要做的事
+
+- **配对码**: 那是给"无屏 BLE 硬件"用的(智能项链 / 戒指),手机有 Supabase 登录就用不上。
+- **JSON-RPC / GraphQL / gRPC**: 都不要,接口就是 REST + JSON,信封是 PersonalSignal。
+- **WebSocket**: 当前不需要。
+- **multipart 上传**: base64 in payload 已经够用。
+
+如果有问题,后端契约和决策记录看 [PersonalSignal 范式 + 配对设计](./2026-04-29-personal-signal-and-pairing.mdx) §三 / §六 / §八。
