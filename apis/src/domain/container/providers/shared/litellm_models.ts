@@ -15,6 +15,10 @@ const inferReasoningByModelId = (id: string): boolean => {
     normalized.includes('thinking') ||
     normalized.includes('reason') ||
     normalized.includes('r1') ||
+    normalized.includes('kimi') ||
+    normalized.includes('claude-opus') ||
+    normalized.includes('claude-sonnet') ||
+    normalized.includes('claude-haiku') ||
     normalized.startsWith('o1') ||
     normalized.startsWith('o3') ||
     normalized.startsWith('o4')
@@ -77,19 +81,29 @@ export const buildLiteLLMProviderConfig = (
     baseUrl: normalizeLiteLLMBaseUrlForOpenClaw(litellm.baseUrl),
     apiKey,
     api: 'openai-completions',
-    models: modelIds.map((id) => ({
-      id,
-      name: id,
-      reasoning: inferReasoningByModelId(id),
-      input: ['text', 'image'],
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0
-      },
-      contextWindow: 200000,
-      maxTokens: 64000
-    }))
+    models: modelIds.map((id) => {
+      const reasoning = inferReasoningByModelId(id);
+      // OpenClaw treats any custom baseUrl as "proxy-like" and auto-disables
+      // `supportsReasoningEffort` (see openai-completions-compat.ts). LiteLLM
+      // is a proxy but DOES forward `reasoning_effort` correctly to upstream
+      // (Moonshot OpenAI-compat, Anthropic translated to `thinking`), so
+      // explicitly opt back in via the documented compat override.
+      const compat = reasoning ? { supportsReasoningEffort: true } : undefined;
+      return {
+        id,
+        name: id,
+        reasoning,
+        input: ['text', 'image'],
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0
+        },
+        contextWindow: 200000,
+        maxTokens: 64000,
+        ...(compat ? { compat } : {})
+      };
+    })
   };
 };

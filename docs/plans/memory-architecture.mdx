@@ -274,7 +274,7 @@ evolution_run (daily_dream) 跑
 | **memory.source enum** | 字符串 enum：`crystallize` / `dream` / `manual` / `device:trigger` / `extract:<source>`；不建 source 表 |
 | **memory 写入** | 不前置 LLM 判重，靠时间覆盖；显式 `supersede(old_id, new_id)` 才有 superseded 链 |
 | **skill update（v1）** | evolution agent 永远只 add，update 留给 manual；revision 字段为 v2 self-improve 预留 |
-| **大 JSON 不进 SQLite** | pipeline_runs.iterations / evolution_runs.detail 这种 18KB+ JSON 改写 `data/run-artifacts/<id>.json` |
+| **大 JSON 不进 SQLite** | pipeline_runs 的 plan/cards/evaluation 详细 / evolution_runs.detail 这种 18KB+ JSON 改写 `data/run-artifacts/<id>.json` |
 
 ---
 
@@ -338,7 +338,7 @@ unified-generator 的 phase 1 由"跑 12 个 CLI" 改为"先看 ContextPack 预�
 | world_items | world_signals（改名） | ✅ 自动 ALTER RENAME + 加 reference 三字段 | — |
 | feedback_events | 保留 | ⚠️ 暂未加 reference 三字段 | follow-up：加字段或显式不加 |
 | push_records / push_outcomes | 没真用 | ✅ Phase 15 DROP + 删 5 helper + `pin push` CLI 整体下线 | — |
-| pipeline_runs | 精简 | ✅ iterations 写 artifact 文件；评分拆 `card_evaluations` | — |
+| pipeline_runs | 精简 | ✅ plan/cards/evaluation 详细写 artifact 文件；评分拆 `card_evaluations` | — |
 | intent_card_state / intent_thread_state | 保留 | 聊天部分别动 | — |
 | user_settings | 保留 | | — |
 | auto_loop_state | app_state['scheduler.autoLoopState'] | ✅ Phase 15：backfill + DROP，helpers 改读写 KV | — |

@@ -7,23 +7,29 @@
 
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import { createApiHandler } from './routes/router.js';
-import type { PipelineState, PluginConfig } from './routes/router.js';
+import type { PluginConfig } from './routes/router.js';
 import { registerBrowserTool } from './browser/tool.js';
-import { startAutoLoop, type AutoLoopConfig } from './scheduler/auto-loop.js';
+import { startAutoLoop, type AutoLoopConfig, type PipelineState } from './scheduler/auto-loop.js';
 import { sweepStaleRunningDreams } from './dreaming/store.js';
 import { BackgroundTaskScheduler } from './tasks/scheduler.js';
 import { createConnectorInitHandler } from './tasks/handlers/connector-init.js';
 import { createConnectorSyncHandler } from './tasks/handlers/connector-sync.js';
 import { createAutoDreamingHandler } from './tasks/handlers/auto-dreaming.js';
+import {
+  createPipelineReconcileHandler,
+  PIPELINE_RECONCILE_TASK_TYPE,
+  pipelineReconcileIdempotencyKey,
+} from './tasks/handlers/pipeline-reconcile.js';
 import { reconcileActiveConnectorAccounts } from './tasks/reconciler.js';
 import { maybeEnqueueDailyDreaming } from './tasks/dreaming-enqueuer.js';
 import { enqueueDueConnectorSyncs } from './tasks/connector-sync-enqueuer.js';
 import { isBackgroundAutoLoopTasksEnabled } from './shared/background-auto-loop-tasks.js';
+import { collectAgentText } from './pipeline/agent-runner.js';
+import { finalizePipelineRun } from './pipeline/dispatch-finalize.js';
 import * as db from './db.js';
 
 const DEFAULT_CONFIG: PluginConfig = {
-  max_iterations: 1,
-  cards_per_iteration: 8,
+  cards_to_generate: 8,
   agent_timeout_ms: 300_000,
   auto_loop_min_interval_ms: 900_000,
   auto_poll_enabled: true,
@@ -72,8 +78,7 @@ const plugin = {
   configSchema: {
     type: 'object' as const,
     properties: {
-      max_iterations: { type: 'number' as const, default: 1 },
-      cards_per_iteration: { type: 'number' as const, default: 8 },
+      cards_to_generate: { type: 'number' as const, default: 8 },
       agent_timeout_ms: { type: 'number' as const, default: 300_000 },
       auto_loop_min_interval_ms: { type: 'number' as const, default: 900_000 },
       auto_poll_enabled: { type: 'boolean' as const, default: true },
@@ -88,10 +93,14 @@ const plugin = {
       ...(api.pluginConfig as Partial<PluginConfig>),
     };
 
+    // pipelineState is kept solely for legacy auto-loop helpers
+    // (runAutoCardChatFeedback / runAutoDreaming) that still take it as a
+    // parameter. The new generation path is sourced entirely from DB
+    // (db.getActivePipelineRun()) so /generate, /auto-run, and the auto-loop
+    // dispatcher do not consult this struct.
     const state: PipelineState = {
       running: false,
       phase: null,
-      iteration: null,
     };
 
     if (!initialized) {
@@ -121,7 +130,7 @@ const plugin = {
     }
 
     // Register HTTP routes
-    const apiHandler = createApiHandler(api, state, config);
+    const apiHandler = createApiHandler(api, config);
     api.registerHttpRoute({ path: '/proactive-ai/api', auth: 'gateway', match: 'prefix', replaceExisting: true, handler: apiHandler });
     api.registerHttpRoute({ path: '/proactive-ai/rpc', auth: 'plugin', match: 'prefix', replaceExisting: true, handler: apiHandler });
 
@@ -146,8 +155,7 @@ const plugin = {
         auto_ingest_interval_ms: config.auto_ingest_interval_ms,
         auto_detect_interval_ms: config.auto_detect_interval_ms,
         auto_loop_min_interval_ms: config.auto_loop_min_interval_ms,
-        max_iterations: config.max_iterations,
-        cards_per_iteration: config.cards_per_iteration,
+        cards_to_generate: config.cards_to_generate,
         agent_timeout_ms: config.agent_timeout_ms,
       };
       // Delay scheduler start to give the system time to fully initialize
@@ -191,8 +199,31 @@ const plugin = {
       // periodic check below — enqueuer decides "is today's slot due?",
       // handler runs the dream when the scheduler claims the task.
       bgTaskScheduler.registerHandler('auto.dreaming', createAutoDreamingHandler({ api }));
+      // Durable pipeline runs: short-poll waitForRun on a previously-
+      // dispatched unified-generator subagent and finalize the run when it
+      // returns. /generate (fast-path-timeout) and the auto-loop both enqueue
+      // this. See tasks/handlers/pipeline-reconcile.ts.
+      bgTaskScheduler.registerHandler(
+        PIPELINE_RECONCILE_TASK_TYPE,
+        createPipelineReconcileHandler({ api }),
+      );
       bgTaskScheduler.start();
-      api.logger.info(`[bg-tasks] scheduler started (worker=${workerId}, handlers=connector.init,connector.sync,auto.dreaming)`);
+      api.logger.info(`[bg-tasks] scheduler started (worker=${workerId}, handlers=connector.init,connector.sync,auto.dreaming,pipeline.reconcile)`);
+
+      // Startup recovery for stranded pipeline_runs: a prior process death
+      // can leave rows stuck in 'running' / 'reconciling'. Best-effort
+      // salvage by reading the subagent session directly (waitForRun would
+      // hang against a stale runId because the gateway's in-memory wait
+      // cache doesn't survive restart). If the agent finished writing
+      // before the crash, finalizePipelineRun resurrects the cards.
+      // Otherwise we mark the run failed and re-enqueue the reconciler in
+      // case the actual subagent runtime is still alive (rare but cheap to
+      // try).
+      void recoverStrandedPipelineRuns(api).catch((err) => {
+        api.logger.warn(
+          `[pipeline:recover] sweep failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
 
       // Reconciler: scan ACTIVE Composio connections on a slow loop so that
       // users who close the OAuth tab (and never trigger /composio/wait) still
@@ -274,6 +305,74 @@ const plugin = {
     api.logger.info(`Proactive AI Cloud ready (user=${userId.slice(0, 8)}…, routes: /proactive-ai/*)`);
   },
 };
+
+/**
+ * Best-effort recovery for pipeline_runs left in 'running' / 'reconciling'
+ * by a prior process crash. For each stranded row:
+ *
+ *   1. Try collectAgentText with skipWait=true. The gateway's in-memory
+ *      waitForRun cache doesn't survive restart, so a fresh wait would just
+ *      hang for the full timeout. Reading the persisted session messages is
+ *      the only way to salvage the agent's last words.
+ *   2. If the JSON output is there → finalizePipelineRun (status=completed).
+ *   3. Otherwise the in-process agent died with the previous boot —
+ *      mark the run failed. (Re-enqueueing reconciler would just hang on
+ *      waitForRun.)
+ */
+async function recoverStrandedPipelineRuns(api: OpenClawPluginApi): Promise<void> {
+  const stranded = await db.listPipelineRunsByStatus(['running', 'reconciling']);
+  if (stranded.length === 0) return;
+  api.logger.info(`[pipeline:recover] found ${stranded.length} stranded run(s)`);
+
+  for (const run of stranded) {
+    if (!run.subagent_run_id || !run.subagent_session_key) {
+      await db.markPipelineRunFailed({
+        runId: run.run_id,
+        error: 'startup recovery: missing subagent metadata',
+      });
+      api.logger.warn(`[pipeline:recover] runId=${run.run_id} missing subagent metadata; marked failed`);
+      continue;
+    }
+
+    let salvaged = false;
+    try {
+      const collect = await collectAgentText(api, {
+        runId: run.subagent_run_id,
+        sessionKey: run.subagent_session_key,
+        // Unused because skipWait=true, but the type still requires it.
+        timeoutMs: 0,
+        skipWait: true,
+      });
+      if (collect.status === 'ok' && collect.text) {
+        try {
+          const finalized = await finalizePipelineRun(api, run.run_id, collect.text);
+          if (finalized.applied) {
+            salvaged = true;
+            api.logger.info(
+              `[pipeline:recover] runId=${run.run_id} salvaged cards=${finalized.finalCards.length}`,
+            );
+          }
+        } catch (err) {
+          api.logger.warn(
+            `[pipeline:recover] runId=${run.run_id} finalize failed: ${err instanceof Error ? err.message : err}`,
+          );
+        }
+      }
+    } catch (err) {
+      api.logger.warn(
+        `[pipeline:recover] runId=${run.run_id} collect failed: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+
+    if (!salvaged) {
+      await db.markPipelineRunFailed({
+        runId: run.run_id,
+        error: 'startup recovery: subagent state lost (process restart)',
+      });
+      api.logger.warn(`[pipeline:recover] runId=${run.run_id} could not salvage; marked failed`);
+    }
+  }
+}
 
 /** Test-only accessor for the background task scheduler instance. */
 export function getBackgroundTaskSchedulerForTests(): BackgroundTaskScheduler | null {

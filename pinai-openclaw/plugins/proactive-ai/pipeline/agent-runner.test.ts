@@ -74,7 +74,7 @@ test('parseAgentJsonOrThrow: succeeds on the prod failure payload', () => {
   ]
 }
 \`\`\``;
-  const out = parseAgentJsonOrThrow<{ reasoning: string; cards: Array<{ id: string; title: string; whyNow: string }> }>(text, 'generate:1');
+  const out = parseAgentJsonOrThrow<{ reasoning: string; cards: Array<{ id: string; title: string; whyNow: string }> }>(text, 'generate');
   assert.equal(out.cards.length, 1);
   assert.equal(out.cards[0].id, 'card-1');
   assert.match(out.cards[0].whyNow, /关注/);

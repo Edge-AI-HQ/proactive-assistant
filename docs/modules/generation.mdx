@@ -9,19 +9,19 @@ description: "卡片生成 pipeline 的当前事实。"
 
 当前在线卡片生成主链路是：
 
-`GET /generate -> runPipeline() -> buildUnifiedGeneratorPrompt() -> runAgent() -> selectBestCards()`
+`POST /generate -> dispatchPipelineAgent() -> buildUnifiedGeneratorPrompt() -> dispatchAgent() -> finalizePipelineRun() -> selectBestCards()`
 
-前端通过 `/api/proxy/generate?iterations=N` 打到用户容器，后端用 SSE 推送 pipeline 事件。
+前端 POST `/api/proxy/generate` 打到用户容器，后端走"先快路返回，慢路走 reconciler"两段式：fast path 在 `FAST_PATH_WAIT_MS` 内完成就 inline 返回完整结果；超时则把 reconcile 任务塞到后台队列，前端轮询 `/runs/:id` 拿终态。每次只跑一次 unified-generator agent，没有多 iteration 概念。
 
 ```mermaid
 flowchart LR
   UI["usePipeline / NowFeed"] --> Proxy["/api/proxy/generate"]
   Proxy --> Route["routes/generate.ts"]
-  Route --> Pipeline["pipeline/orchestrator.ts"]
-  Pipeline --> Prompt["agents/unified-generator.ts"]
-  Pipeline --> Agent["runtime subagent"]
-  Agent --> Cards["cards + evaluations"]
-  Cards --> Select["card-selection.ts"]
+  Route --> Dispatch["pipeline/dispatch-finalize.ts"]
+  Dispatch --> Prompt["agents/unified-generator.ts"]
+  Dispatch --> Agent["runtime subagent"]
+  Agent --> Finalize["finalizePipelineRun()"]
+  Finalize --> Select["card-selection.ts"]
   Select --> Store["pipeline_runs + card_evaluations"]
 ```
 
@@ -33,7 +33,7 @@ flowchart LR
 - prompt 构建、agent 调用、JSON 解析。
 - self-review evaluation、card selection、多样性约束。
 - pipeline run 和 evaluation 持久化。
-- 前端 run state、SSE 消费、NowFeed 展示。
+- 前端 run state、`/runs/:id` 轮询、NowFeed 展示。
 
 不包含：
 
@@ -47,19 +47,20 @@ flowchart LR
 sequenceDiagram
   participant FE as Frontend usePipeline
   participant Route as /generate route
-  participant P as runPipeline
+  participant D as dispatchPipelineAgent
   participant A as unified generator agent
+  participant F as finalizePipelineRun
   participant DB as proactive.db
 
-  FE->>Route: GET /generate?iterations=N
-  Route-->>FE: text/event-stream
-  Route->>P: runPipeline(opts, sendEvent)
-  P->>DB: load feedback summary / recent cards / active skills
-  P->>A: prompt + task
-  A-->>P: JSON cards + evaluations
-  P->>P: selectBestCards()
-  P->>DB: save pipeline_runs + card_evaluations
-  P-->>FE: pipeline:complete
+  FE->>Route: POST /generate
+  Route->>D: load feedback / recent cards / active skills
+  D->>A: prompt + task
+  D->>DB: pipeline_runs row (status=running)
+  Route->>A: collectAgentText (fast path)
+  A-->>Route: JSON cards + evaluations
+  Route->>F: parse + selectBestCards()
+  F->>DB: pipeline_runs (status=completed) + card_evaluations
+  Route-->>FE: 200 { runId, status: completed, cards }
 ```
 
 ## 当前设计
@@ -70,21 +71,22 @@ sequenceDiagram
 | 输出语言 | 读取 `user_settings.generation_language`，规范值是 `zh-Hans` / `en`。 |
 | 反馈输入 | generation 前会调用 `syncCardChatFeedback()`，失败只 warn，不阻断生成。 |
 | prompt 输入 | recent feedback summary、recent generated cards summary、active skills section。 |
-| agent 输出 | 期待 JSON，包含 `cards`、`evaluations`、`iterationFeedback`。 |
+| agent 输出 | 期待 JSON，包含 `cards`、`evaluations`、`batchFeedback`。 |
 | 选卡 | `PASS_THRESHOLD = 5.0`，最多 10 张，每个 `goalBasket` 最多 3 张。 |
-| 持久化 | `pipeline_runs` 存 run 和 iterations；`card_evaluations` 存可 SQL 查询的评价行。 |
-| 前端状态 | `usePipeline.ts` 用 sessionStorage 恢复 run state，消费 SSE data line。 |
+| 持久化 | `pipeline_runs` 行 + `data/run-artifacts/<runId>.json`（plan/cards/evaluation 详细）；`card_evaluations` 存可 SQL 查询的评价行。 |
+| 前端状态 | `usePipeline.ts` 用 sessionStorage 恢复 run state，慢路通过轮询 `/runs/:id` 拿终态。 |
 
 ## 开发入口
 
 | 改动 | 先看 |
 |---|---|
-| 生成 HTTP/SSE | `pinai-openclaw/plugins/proactive-ai/routes/generate.ts` |
-| pipeline 编排 | `pinai-openclaw/plugins/proactive-ai/pipeline/orchestrator.ts` |
+| 生成 HTTP 入口 | `pinai-openclaw/plugins/proactive-ai/routes/generate.ts` |
+| dispatch / finalize 生命周期 | `pinai-openclaw/plugins/proactive-ai/pipeline/dispatch-finalize.ts` |
 | prompt / 输出契约 | `pinai-openclaw/plugins/proactive-ai/agents/unified-generator.ts` |
 | agent 调用和 JSON 解析 | `pinai-openclaw/plugins/proactive-ai/pipeline/agent-runner.ts` |
 | 选卡规则 | `pinai-openclaw/plugins/proactive-ai/pipeline/card-selection.ts` |
 | evaluation 提取 | `pinai-openclaw/plugins/proactive-ai/pipeline/extract-evaluations.ts` |
+| 慢路 reconcile | `pinai-openclaw/plugins/proactive-ai/tasks/handlers/pipeline-reconcile.ts` |
 | 自动生成 | `scheduler/auto-loop.ts`、`routes/settings.ts` |
 | 前端 | `proactive-ai-frontend/src/hooks/usePipeline.ts`、`components/NowFeed.tsx`、`components/AutoGenerateSettings.tsx` |
 
@@ -96,22 +98,23 @@ npx tsx --test pinai-openclaw/plugins/proactive-ai/agents/unified-generator.test
 npx tsx --test pinai-openclaw/plugins/proactive-ai/pipeline/orchestrator-evaluations.test.ts
 npx tsx --test pinai-openclaw/plugins/proactive-ai/pipeline/generated-cards-summary.test.ts
 npx tsx --test pinai-openclaw/plugins/proactive-ai/scheduler/auto-loop.test.ts
+npx tsx --test pinai-openclaw/plugins/proactive-ai/tasks/handlers/pipeline-reconcile.test.ts
 npm run type-check
 ```
 
 手工验证：
 
 - 登录 proactive frontend，确保 container running。
-- 点击 generate，Network 应看到 `/api/proxy/generate?iterations=...`。
-- SSE 应出现 `pipeline:start`、`pipeline:iteration`、`pipeline:cards`、`pipeline:evaluation`、`pipeline:complete`。
+- 点击 generate，Network 应看到 `POST /api/proxy/generate`。
+- 快路返回 200 `{ runId, status: 'completed', cards }`；慢路返回 202 `{ runId, status: 'reconciling' }`，前端轮询 `/runs/:id` 直到 `completed`。
 - 生成后可查最近 `pipeline_runs` 和 `card_evaluations`。
 
 ## 踩坑
 
-- `/generate` 是 GET + SSE，不是 JSON POST。
+- `/generate` 是 RESTful POST + JSON，不再走 SSE。返回值是 `{ runId, status, cards? }`。
 - `PASS_THRESHOLD` 现在是 5.0；不要按旧 README 里的 7.0 判断。
 - `syncCardChatFeedback()` 失败不会中断生成，这是为了避免反馈总结故障拖垮主路径。
-- agent 可能输出 placeholder card id，pipeline 会按 run id 重新赋全局唯一 id。
+- agent 可能输出 placeholder card id，finalize 会按 run id 重新赋全局唯一 id。
 - auto loop 和手动 `/generate` 不是完全同一个入口，改动时要分别验证。
 
 ## 相关模块

@@ -185,9 +185,13 @@ export const buildOpenclawConfig = (
     );
     next.models = liteLlmSections.models;
     next.agents = liteLlmSections.agents;
-    // Set elevated default to "full" — auto-approve all exec on gateway host
     const agentsDefaults = next.agents as { defaults: UnknownRecord };
+    // Auto-approve all exec on gateway host
     agentsDefaults.defaults.elevatedDefault = "full";
+    // Default thinking level for all agents. Requires the active model to be
+    // marked `reasoning: true` in the LiteLLM provider catalog (see
+    // `litellm_models.ts:inferReasoningByModelId`); otherwise OpenClaw drops it.
+    agentsDefaults.defaults.thinkingDefault = "high";
   }
 
   if (options.skillsConfig && Object.keys(options.skillsConfig).length > 0) {

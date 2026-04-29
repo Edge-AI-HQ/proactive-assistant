@@ -8,7 +8,7 @@
  */
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import * as db from '../db.js';
-import { runPipeline } from '../pipeline/orchestrator.js';
+import { dispatchPipelineAgent } from '../pipeline/dispatch-finalize.js';
 import { normalizeGenerationLanguage } from '../agents/generation-language.js';
 import { resolveDreamingTimezone, isDreamingDue, toDreamingLocalDayKey } from '../dreaming/schedule.js';
 import { startDreaming, listDreamRuns } from '../dreaming/service.js';
@@ -16,14 +16,19 @@ import type { DreamRunRecord } from '../dreaming/types.js';
 import { syncCardChatFeedback } from '../chat-feedback/service.js';
 import { runCrystallize } from '../conversation-crystallize/service.js';
 import { isBackgroundAutoLoopTasksEnabled } from '../shared/background-auto-loop-tasks.js';
+import {
+  PIPELINE_RECONCILE_TASK_TYPE,
+  pipelineReconcileIdempotencyKey,
+} from '../tasks/handlers/pipeline-reconcile.js';
+
+const AUTO_LOOP_RECONCILE_MAX_ATTEMPTS = 5;
 
 export interface AutoLoopConfig {
   auto_poll_enabled: boolean;
   auto_ingest_interval_ms: number;    // default 300_000 (5min)
   auto_detect_interval_ms: number;    // default 60_000 (1min)
   auto_loop_min_interval_ms: number;  // default 900_000 (15min cooldown)
-  max_iterations: number;
-  cards_per_iteration: number;
+  cards_to_generate: number;
   agent_timeout_ms: number;
 }
 
@@ -32,15 +37,13 @@ export const DEFAULT_AUTO_LOOP_CONFIG: AutoLoopConfig = {
   auto_ingest_interval_ms: 300_000,
   auto_detect_interval_ms: 60_000,
   auto_loop_min_interval_ms: 900_000,
-  max_iterations: 1,
-  cards_per_iteration: 8,
+  cards_to_generate: 8,
   agent_timeout_ms: 300_000,
 };
 
 export interface PipelineState {
   running: boolean;
   phase: string | null;
-  iteration: number | null;
 }
 
 interface AutoLoopState {
@@ -111,10 +114,13 @@ async function runIngest(api: OpenClawPluginApi, _config: AutoLoopConfig): Promi
 export async function runDetectAndLoop(
   api: OpenClawPluginApi,
   config: AutoLoopConfig,
-  pipelineState: PipelineState,
+  // pipelineState is retained as a parameter for backwards compatibility with
+  // the existing caller signature, but we no longer trust an in-memory mutex —
+  // db.getActivePipelineRun() is the single source of truth for "is something
+  // running right now?" and survives process restart.
+  _pipelineState: PipelineState,
 ): Promise<void> {
   if (state.loopInFlight) return;
-  if (pipelineState.running) return;
 
   state.loopInFlight = true;
   try {
@@ -124,7 +130,9 @@ export async function runDetectAndLoop(
       return;
     }
 
-    // Check cooldown
+    // Check cooldown — keyed off the last successfully-dispatched auto-loop
+    // tick, not pipeline finish, since the run is now durable and may still
+    // be reconciling when the next tick fires.
     const lastFinishedMs = parseIsoTimestamp(state.lastLoopFinishedAt);
     const cooldownMs = Math.max(0, config.auto_loop_min_interval_ms);
     if (lastFinishedMs !== null && Date.now() - lastFinishedMs < cooldownMs) {
@@ -134,20 +142,64 @@ export async function runDetectAndLoop(
       return;
     }
 
-    // Run pipeline directly (no need for gateway HTTP since we're in the same process)
+    // Concurrency guard sourced from DB so a manual /generate or a still-
+    // reconciling prior auto-loop both block a fresh dispatch.
+    const active = await db.getActivePipelineRun();
+    if (active) {
+      api.logger.info(
+        `[auto-loop] skipped: pipeline_run ${active.run_id} status=${active.status} still in flight`,
+      );
+      return;
+    }
+
     const outputLanguage = normalizeGenerationLanguage(userSettings.generation_language);
-    const result = await runPipeline(api, {
-      maxIterations: config.max_iterations,
-      cardsPerIteration: config.cards_per_iteration,
-      agentTimeoutMs: config.agent_timeout_ms,
-      outputLanguage,
-    });
+
+    let dispatched: Awaited<ReturnType<typeof dispatchPipelineAgent>>;
+    try {
+      dispatched = await dispatchPipelineAgent(api, {
+        cardsToGenerate: config.cards_to_generate,
+        outputLanguage,
+        trigger: 'auto-loop',
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      state.lastLoopFinishedAt = new Date().toISOString();
+      state.lastLoopStatus = 'dispatch_failed';
+      api.logger.error(`[auto-loop] dispatch failed: ${msg}`);
+      return;
+    }
+
+    // Auto-loop is server-side: never wait inline. Hand off to the reconciler
+    // immediately so the timer thread comes back fast and the per-tick
+    // bookkeeping (lastLoopFinishedAt) reflects "we kicked off this run",
+    // not "we waited for it to finish."
+    try {
+      await db.touchPipelineRunReconciling(dispatched.pipelineRunId);
+      await db.enqueueBackgroundTask({
+        type: PIPELINE_RECONCILE_TASK_TYPE,
+        payload: { pipelineRunId: dispatched.pipelineRunId },
+        idempotencyKey: pipelineReconcileIdempotencyKey(dispatched.pipelineRunId),
+        runAfter: new Date(Date.now() + 5_000).toISOString(),
+        maxAttempts: AUTO_LOOP_RECONCILE_MAX_ATTEMPTS,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      api.logger.error(
+        `[auto-loop] enqueue reconcile failed runId=${dispatched.pipelineRunId}: ${msg}`,
+      );
+      await db.markPipelineRunFailed({
+        runId: dispatched.pipelineRunId,
+        error: `enqueue reconcile: ${msg}`,
+      });
+      state.lastLoopFinishedAt = new Date().toISOString();
+      state.lastLoopStatus = 'enqueue_failed';
+      return;
+    }
 
     state.lastLoopFinishedAt = new Date().toISOString();
-    state.lastLoopStatus = 'completed';
-
+    state.lastLoopStatus = 'dispatched';
     api.logger.info(
-      `[auto-loop] completed runId=${result.runId} cards=${result.finalCards.length}`,
+      `[auto-loop] dispatched runId=${dispatched.pipelineRunId} subagent=${dispatched.subagentRunId}`,
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

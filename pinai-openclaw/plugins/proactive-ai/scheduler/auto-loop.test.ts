@@ -100,7 +100,7 @@ test("runAutoCardChatFeedback syncs when pipeline is idle", async () => {
   const calls: string[] = [];
   await runAutoCardChatFeedback(
     { logger: { error: () => undefined } } as never,
-    { running: false, phase: null, iteration: null },
+    { running: false, phase: null },
     {
       syncCardChatFeedback: async () => { calls.push("sync"); },
     },
@@ -112,7 +112,7 @@ test("runAutoCardChatFeedback skips sync while pipeline is running", async () =>
   let called = false;
   await runAutoCardChatFeedback(
     { logger: { error: () => undefined } } as never,
-    { running: true, phase: "manual", iteration: 1 },
+    { running: true, phase: "manual" },
     {
       syncCardChatFeedback: async () => { called = true; },
     },
@@ -120,7 +120,7 @@ test("runAutoCardChatFeedback skips sync while pipeline is running", async () =>
   assert.equal(called, false);
 });
 
-test("runDetectAndLoop: does not save a pipeline run twice", async () => {
+test("runDetectAndLoop: dispatches a pipeline_run in 'running' / 'reconciling' state and enqueues reconciler", async () => {
   await withTempHome(async () => {
     await updateUserSettings({ auto_generate: true });
     const generatorOutput = {
@@ -133,24 +133,63 @@ test("runDetectAndLoop: does not save a pipeline run twice", async () => {
         goalBasket: "work",
       }],
       evaluations: [{ cardId: "draft-1", overall: 8, pass: true }],
-      iterationFeedback: "keep",
+      batchFeedback: "keep",
     };
 
     await runDetectAndLoop(
       makeApi(generatorOutput),
       {
+        auto_poll_enabled: true,
         auto_ingest_interval_ms: 300_000,
         auto_detect_interval_ms: 60_000,
         auto_loop_min_interval_ms: 0,
-        max_iterations: 1,
-        cards_per_iteration: 1,
+        cards_to_generate: 1,
         agent_timeout_ms: 1000,
       },
-      { running: false, phase: null, iteration: null },
+      { running: false, phase: null },
     );
 
     const runs = await listPipelineRuns({ limit: 5 });
     assert.equal(runs.length, 1);
+    // After durable refactor, dispatch leaves the row in 'running' (or
+    // 'reconciling' if the touch ran first). Finalization happens when
+    // pipeline.reconcile picks up the task — out of scope for this test.
+    assert.ok(
+      runs[0]!.status === 'running' || runs[0]!.status === 'reconciling',
+      `expected dispatched run to be in flight, got status=${runs[0]!.status}`,
+    );
+    assert.ok(runs[0]!.subagent_run_id, 'expected subagent_run_id to be recorded');
+    assert.equal(runs[0]!.trigger, 'auto-loop');
+  });
+});
+
+test("runDetectAndLoop: skips when an active pipeline_run already exists", async () => {
+  await withTempHome(async () => {
+    await updateUserSettings({ auto_generate: true });
+    const api = makeApi();
+
+    // First tick dispatches a run; second tick should observe the active row
+    // and bail without creating a second.
+    await runDetectAndLoop(api, {
+      auto_poll_enabled: true,
+      auto_ingest_interval_ms: 300_000,
+      auto_detect_interval_ms: 60_000,
+      auto_loop_min_interval_ms: 0,
+      cards_to_generate: 1,
+      agent_timeout_ms: 1000,
+    }, { running: false, phase: null });
+
+    await runDetectAndLoop(api, {
+      auto_poll_enabled: true,
+      auto_ingest_interval_ms: 300_000,
+      auto_detect_interval_ms: 60_000,
+      auto_loop_min_interval_ms: 0,
+      cards_to_generate: 1,
+      agent_timeout_ms: 1000,
+    }, { running: false, phase: null });
+
+    const runs = await listPipelineRuns({ limit: 5 });
+    assert.equal(runs.length, 1, 'second tick should not create another run');
   });
 });
 

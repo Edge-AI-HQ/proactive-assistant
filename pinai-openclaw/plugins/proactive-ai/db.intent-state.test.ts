@@ -37,7 +37,6 @@ test("listRecentGeneratedCards returns default threadContext and card outcomes u
     await savePipelineRun({
       runId: "run_manual_1",
       status: "completed",
-      totalIterations: 1,
       finalCards: [
         {
           id: "card_1",
@@ -55,7 +54,7 @@ test("listRecentGeneratedCards returns default threadContext and card outcomes u
           createdAt: "2026-04-10",
         },
       ],
-      iterations: [],
+      details: null,
     });
 
     let rows = await listRecentGeneratedCards({ limit: 10 });

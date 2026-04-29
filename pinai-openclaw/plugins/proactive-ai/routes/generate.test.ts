@@ -1,49 +1,56 @@
+/**
+ * /generate route smoke tests.
+ *
+ * Full integration of the dispatch + finalize lifecycle is exercised by the
+ * pipeline-reconcile and auto-loop integration tests. This file just
+ * verifies the cheap routing predicates (HTTP method gating, no-op on wrong
+ * subpath).
+ */
 import test from "node:test";
 import assert from "node:assert/strict";
 
 import { handleGenerate } from "./generate.ts";
 
-test("handleGenerate best-effort syncs card-chat feedback before pipeline execution", async () => {
-  const state = { running: false, phase: null, iteration: null };
-  const calls: string[] = [];
-
-  const handler = handleGenerate(
-    state,
-    { max_iterations: 1, cards_per_iteration: 8, agent_timeout_ms: 60_000 },
-    {
-      getUserSettings: async () => ({ generation_language: "en" }),
-      syncCardChatFeedback: async () => {
-        calls.push("sync");
-      },
-      runPipeline: async (_api, _opts, onEvent) => {
-        calls.push("pipeline");
-        onEvent?.({ type: "pipeline:start", data: { maxIterations: 1 } });
-        return { runId: "run-1", totalIterations: 1, finalCards: [], scoreMap: {} };
-      },
-    },
-  );
-
+function makeStubResponse() {
   const writes: string[] = [];
-  const response = {
-    writeHead: () => undefined,
-    write: (chunk: string) => {
-      writes.push(chunk);
-      return true;
-    },
-    end: () => undefined,
+  return {
+    writes,
+    res: {
+      writeHead: () => undefined,
+      write: (chunk: string) => {
+        writes.push(chunk);
+        return true;
+      },
+      end: (chunk?: string) => {
+        if (typeof chunk === "string") writes.push(chunk);
+      },
+      setHeader: () => undefined,
+    } as unknown,
   };
+}
 
+test("handleGenerate ignores subpath that is not /generate", async () => {
+  const handler = handleGenerate({ cards_to_generate: 8 });
+  const stub = makeStubResponse();
+  const handled = await handler({
+    subpath: "/health",
+    req: { method: "GET" } as never,
+    res: stub.res as never,
+    url: new URL("http://localhost/health"),
+    api: { logger: { info: () => undefined, warn: () => undefined, error: () => undefined } } as never,
+  });
+  assert.equal(handled, false);
+});
+
+test("handleGenerate ignores non-GET/POST methods", async () => {
+  const handler = handleGenerate({ cards_to_generate: 8 });
+  const stub = makeStubResponse();
   const handled = await handler({
     subpath: "/generate",
-    req: { method: "GET" },
-    res: response,
+    req: { method: "DELETE" } as never,
+    res: stub.res as never,
     url: new URL("http://localhost/generate"),
-    api: { logger: { error: () => undefined } },
-  } as never);
-
-  assert.equal(handled, true);
-  assert.deepEqual(calls, ["sync", "pipeline"]);
-  assert.equal(state.running, false);
-  assert.equal(state.phase, null);
-  assert.match(writes.join(""), /pipeline:start/);
+    api: { logger: { info: () => undefined, warn: () => undefined, error: () => undefined } } as never,
+  });
+  assert.equal(handled, false);
 });

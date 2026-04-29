@@ -327,7 +327,7 @@ async function seedAll(): Promise<{ runIds: { evol: string; pipeline: string } }
   // ─── pipeline_runs + card_evaluations + push records ───
   const pipelineRunId = `run_${Date.now().toString(36)}`;
   await savePipelineRun({
-    runId: pipelineRunId, status: 'completed', totalIterations: 1,
+    runId: pipelineRunId, status: 'completed',
     finalCards: [
       {
         id: 'card-1', goalBasket: 'family', intentKey: 'family/mom-call',
@@ -340,7 +340,7 @@ async function seedAll(): Promise<{ runIds: { evol: string; pipeline: string } }
         whyNow: '今日单日流入 $1.4B 历史第一', summary: '...',
       },
     ],
-    iterations: [{ iteration: 1, plan: 'short demo', cards: [], evaluation: {} }],
+    details: { plan: 'short demo', cards: [], evaluation: {} },
   });
   await saveCardEvaluation({
     cardId: 'card-1', runId: pipelineRunId, intentKey: 'family/mom-call', basket: 'family',

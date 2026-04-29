@@ -40,12 +40,6 @@ export interface EvaluationScore {
   pass: boolean;
 }
 
-export interface EvaluatorOutput {
-  evaluations: EvaluationScore[];
-  bestCards: IntentCard[];
-  iterationFeedback: string;
-}
-
 export type SupportedGenerationLanguage = 'en' | 'zh-Hans' | 'ja' | 'ko' | 'es' | 'fr' | 'de' | 'pt';
 
 export const GENERATION_LANGUAGE_OPTIONS: { value: SupportedGenerationLanguage; label: string }[] = [
