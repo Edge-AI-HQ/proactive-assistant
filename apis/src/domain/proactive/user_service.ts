@@ -1,10 +1,10 @@
 /**
  * Proactive AI user service — uses the unified `users` + `runtime_instances`
- * tables (migrations 001-016).
+ * tables (migrations 001-005).
  *
  * OAuth users are identified by `users.supabase_user_id` (UUID from Supabase Auth).
  * Container state lives in `runtime_instances` with scope = 'user'.
- * The `gateway_token` lives on the `users` table (not runtime_instances).
+ * The per-user proxy secret lives on `users.container_proxy_secret`.
  */
 
 import crypto from 'node:crypto';
@@ -16,7 +16,18 @@ import { deleteBrowserContext } from './browser_context_service.js';
 // User upsert / lookup
 // ---------------------------------------------------------------------------
 
-/** Upsert an OAuth user on login. Creates a new `users` row if not found. */
+/**
+ * Upsert an OAuth user on login. Creates a new `users` row if not found.
+ *
+ * Called on every authenticated request (via requireProactiveAuth) so the
+ * UPDATE branch must avoid re-writing rows that haven't changed. We touch
+ * `last_active_at` only when it's older than ACTIVITY_REFRESH_INTERVAL — that
+ * keeps high-frequency proxy/SSE traffic from turning the users table into a
+ * write hotspot. `updated_at` follows the same throttle since identity fields
+ * (email/name/avatar) don't actually change request-to-request.
+ */
+const ACTIVITY_REFRESH_INTERVAL = '30 seconds';
+
 export async function upsertUser(params: {
   userId: string;    // Supabase UUID
   email: string;
@@ -24,17 +35,23 @@ export async function upsertUser(params: {
   avatarUrl?: string | undefined;
   authProvider?: string | undefined;
 }): Promise<ProactiveUser> {
-  const gatewayToken = crypto.randomUUID();
+  const proxySecret = crypto.randomUUID();
   const { rows } = await pool.query<ProactiveUser>(
-    `INSERT INTO users (supabase_user_id, email, display_name, avatar_url, auth_provider, gateway_token)
+    `INSERT INTO users (supabase_user_id, email, display_name, avatar_url, auth_provider, container_proxy_secret)
      VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (supabase_user_id) DO UPDATE SET
        email = COALESCE(EXCLUDED.email, users.email),
        display_name = COALESCE(EXCLUDED.display_name, users.display_name),
        avatar_url = COALESCE(EXCLUDED.avatar_url, users.avatar_url),
        auth_provider = COALESCE(EXCLUDED.auth_provider, users.auth_provider),
-       last_active_at = NOW(),
-       updated_at = NOW()
+       last_active_at = CASE
+         WHEN users.last_active_at < NOW() - INTERVAL '${ACTIVITY_REFRESH_INTERVAL}'
+         THEN NOW() ELSE users.last_active_at
+       END,
+       updated_at = CASE
+         WHEN users.last_active_at < NOW() - INTERVAL '${ACTIVITY_REFRESH_INTERVAL}'
+         THEN NOW() ELSE users.updated_at
+       END
      RETURNING *`,
     [
       params.userId,
@@ -42,18 +59,10 @@ export async function upsertUser(params: {
       params.name ?? null,
       params.avatarUrl ?? null,
       params.authProvider ?? null,
-      gatewayToken,
+      proxySecret,
     ]
   );
   return rows[0]!;
-}
-
-/** Update last_active_at (called by heartbeat endpoint). */
-export async function touchUserActivity(supabaseUserId: string): Promise<void> {
-  await pool.query(
-    `UPDATE users SET last_active_at = NOW() WHERE supabase_user_id = $1`,
-    [supabaseUserId]
-  );
 }
 
 /** Get user by Supabase UUID. */
@@ -70,16 +79,16 @@ export async function getUserBySupabaseId(supabaseUserId: string): Promise<Proac
 // ---------------------------------------------------------------------------
 
 /**
- * Extended container info that includes the user's gateway_token
- * (which lives on the `users` table, not `runtime_instances`).
+ * Extended container info bundled with the user's container_proxy_secret —
+ * callers proxying into the user container need both pieces in one shot.
  */
-export type ContainerWithToken = ProactiveContainer & { gateway_token: string };
+export type ContainerWithToken = ProactiveContainer & { container_proxy_secret: string };
 export type MobileSyncTarget = ContainerWithToken & { user_key: string | null };
 
-/** Get user-scope container for a user, including gateway_token from users. */
+/** Get user-scope container for a user, including container_proxy_secret from users. */
 export async function getContainerForUser(supabaseUserId: string): Promise<ContainerWithToken | null> {
   const { rows } = await pool.query<ContainerWithToken>(
-    `SELECT ri.*, u.gateway_token
+    `SELECT ri.*, u.container_proxy_secret
      FROM runtime_instances ri
      JOIN users u ON u.id = ri.owner_user_id
      WHERE u.supabase_user_id = $1
@@ -101,21 +110,10 @@ export async function getDefaultMobileSyncContainer(): Promise<MobileSyncTarget 
   const configuredUserId = process.env.MOBILE_SYNC_TARGET_USER_ID?.trim();
   if (configuredUserId) {
     const { rows } = await pool.query<MobileSyncTarget>(
-      `SELECT
-         ri.*,
-         u.gateway_token,
-         COALESCE(
-           to_jsonb(u) ->> 'supabase_user_id',
-           to_jsonb(u) ->> 'id',
-           to_jsonb(u) ->> 'telegram_user_id'
-         ) AS user_key
+      `SELECT ri.*, u.container_proxy_secret, u.supabase_user_id::text AS user_key
        FROM runtime_instances ri
        JOIN users u ON u.id = ri.owner_user_id
-       WHERE COALESCE(
-         to_jsonb(u) ->> 'supabase_user_id',
-         to_jsonb(u) ->> 'id',
-         to_jsonb(u) ->> 'telegram_user_id'
-       ) = $1
+       WHERE u.supabase_user_id::text = $1
          AND ri.scope = 'user'
        LIMIT 1`,
       [configuredUserId],
@@ -124,14 +122,7 @@ export async function getDefaultMobileSyncContainer(): Promise<MobileSyncTarget 
   }
 
   const { rows } = await pool.query<MobileSyncTarget>(
-    `SELECT
-       ri.*,
-       u.gateway_token,
-       COALESCE(
-         to_jsonb(u) ->> 'supabase_user_id',
-         to_jsonb(u) ->> 'id',
-         to_jsonb(u) ->> 'telegram_user_id'
-       ) AS user_key
+    `SELECT ri.*, u.container_proxy_secret, u.supabase_user_id::text AS user_key
      FROM runtime_instances ri
      JOIN users u ON u.id = ri.owner_user_id
      WHERE ri.scope = 'user'
@@ -141,10 +132,10 @@ export async function getDefaultMobileSyncContainer(): Promise<MobileSyncTarget 
   return rows[0] ?? null;
 }
 
-/** Get container by internal user ID, including gateway_token. */
+/** Get container by internal user ID, including container_proxy_secret. */
 export async function getContainerByInternalId(internalUserId: number): Promise<ContainerWithToken | null> {
   const { rows } = await pool.query<ContainerWithToken>(
-    `SELECT ri.*, u.gateway_token
+    `SELECT ri.*, u.container_proxy_secret
      FROM runtime_instances ri
      JOIN users u ON u.id = ri.owner_user_id
      WHERE ri.owner_user_id = $1 AND ri.scope = 'user'
@@ -179,7 +170,7 @@ export async function upsertContainer(params: {
          updated_at = NOW()
        RETURNING *
      )
-     SELECT upserted.*, u.gateway_token
+     SELECT upserted.*, u.container_proxy_secret
      FROM upserted
      JOIN users u ON u.id = upserted.owner_user_id`,
     [

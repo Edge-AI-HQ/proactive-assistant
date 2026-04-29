@@ -77,7 +77,7 @@ const MODEL_DISPLAY: Record<string, ModelDisplayInfo> = {
   "gpt-4-turbo": { name: "GPT-4 Turbo", desc: "OpenAI high-performance model", icon: IconCpu },
   "gemini-2.5-pro": { name: "Gemini 2.5 Pro", desc: "Google's advanced model", icon: IconBot },
   "gemini-2.0-flash": { name: "Gemini 2.0 Flash", desc: "Google's fast model", icon: IconZap },
-  "kimi-k2.5": { name: "Kimi K2.5", desc: "Moonshot's reasoning model", icon: IconGlobe },
+  "kimi-k2.6": { name: "Kimi K2.6", desc: "Moonshot's reasoning model", icon: IconGlobe },
   "kimi-k2": { name: "Kimi K2", desc: "Moonshot's versatile model", icon: IconGlobe },
   "minimax-m2.7": { name: "MiniMax M2.7", desc: "MiniMax latest flagship model", icon: IconWand },
   "minimax-m2.5": { name: "MiniMax M2.5", desc: "MiniMax multimodal model", icon: IconWand },

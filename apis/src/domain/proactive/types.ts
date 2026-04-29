@@ -9,7 +9,13 @@ export interface ProactiveUser {
   display_name: string | null;
   avatar_url: string | null;
   auth_provider: string | null;   // 'google', 'microsoft', etc.
-  gateway_token: string;
+  /**
+   * Secret APIs uses to authenticate when proxying to the user container's
+   * OpenClaw gateway. Server-to-container only — never sent to clients.
+   * (The OpenClaw side calls this its "gateway token", hence the name in
+   * function params; the storage column is `container_proxy_secret`.)
+   */
+  container_proxy_secret: string;
   created_at: string;
   updated_at: string;
   last_active_at: string;
@@ -41,7 +47,5 @@ export interface ProactiveContainerParams {
 
 export interface ProactiveAuthPayload {
   userId: string;           // Supabase UUID (from JWT sub)
-  email: string;
-  name?: string | undefined;
-  avatarUrl?: string | undefined;
+  user: ProactiveUser;      // Local users row (upserted by requireProactiveAuth)
 }

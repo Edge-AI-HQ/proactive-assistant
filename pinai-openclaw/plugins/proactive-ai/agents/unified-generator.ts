@@ -269,7 +269,7 @@ After completing all 4 phases, output ONLY a JSON code block with this structure
       "pass": true
     }
   ],
-  "iterationFeedback": "Overall assessment of this batch. What worked, what was missing, what should improve next time."
+  "batchFeedback": "Overall assessment of this batch. What worked, what was missing, what should improve next time."
 }
 \`\`\`
 

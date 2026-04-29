@@ -1,13 +1,13 @@
 import { useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import type { ContainerState } from "@/hooks/useContainer";
-import { LogOut, Rocket, RefreshCw, Square, Trash2 } from "lucide-react";
+import { LogOut, Rocket, RefreshCw, Square, Trash2, UserX } from "lucide-react";
+import { deleteAccount } from "@/lib/api";
+import { supabase } from "@/lib/supabase";
 
 interface DashboardProps {
   user: User;
   status: ContainerState;
-  connectAttempt: number;
-  connectMaxAttempts: number;
   firstTime: boolean;
   error: string | null;
   onSignOut: () => void;
@@ -19,8 +19,6 @@ interface DashboardProps {
 export default function Dashboard({
   user,
   status,
-  connectAttempt,
-  connectMaxAttempts,
   firstTime,
   error,
   onSignOut,
@@ -29,6 +27,7 @@ export default function Dashboard({
   onCancel,
 }: DashboardProps) {
   const [actionInProgress, setActionInProgress] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   const name = user.user_metadata?.full_name ?? user.email ?? "User";
   const avatarUrl = user.user_metadata?.avatar_url as string | undefined;
@@ -41,6 +40,21 @@ export default function Dashboard({
       await fn();
     } finally {
       setActionInProgress(false);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!confirm("Are you sure you want to delete your account? This will destroy your container, volume, and all user data. This cannot be undone.")) return;
+    setDeleteLoading(true);
+    try {
+      await deleteAccount();
+      await supabase.auth.signOut();
+      window.location.replace("/proactive/");
+    } catch (err) {
+      console.error("Failed to delete account:", err);
+      alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
@@ -89,7 +103,7 @@ export default function Dashboard({
                 Connecting to your environment…
               </p>
               <p className="text-xs text-foreground/40 mb-4">
-                Attempt {Math.max(connectAttempt, 1)} / {connectMaxAttempts}. First boot can take up to a minute.
+                First boot can take a couple of minutes.
               </p>
               <button
                 onClick={() => handle(onCancel)}
@@ -165,6 +179,16 @@ export default function Dashboard({
         >
           <LogOut size={14} />
           Sign Out
+        </button>
+
+        {/* Delete Account — terminal action, mirrors Debug Panel's Danger Zone */}
+        <button
+          onClick={handleDeleteAccount}
+          disabled={deleteLoading}
+          className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl border border-red-500/30 px-4 py-2.5 text-xs font-medium text-red-500 transition-colors hover:bg-red-500/5 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <UserX size={14} />
+          {deleteLoading ? "Deleting…" : "Delete Account"}
         </button>
       </div>
     </div>

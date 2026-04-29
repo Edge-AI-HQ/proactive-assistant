@@ -6,8 +6,8 @@ import { isSubscriptionActiveForService } from "./subscriptionPolicy.js";
  * 按「当前时间落在的周期」判定，与定时任务一致。
  */
 export async function hasActiveSubscriptionForService(
-  telegramUserId: string,
+  supabaseUserId: string,
 ): Promise<boolean> {
-  const current = await db.getCurrentPeriodByTelegramId(telegramUserId);
+  const current = await db.getCurrentPeriodBySupabaseId(supabaseUserId);
   return isSubscriptionActiveForService(current);
 }

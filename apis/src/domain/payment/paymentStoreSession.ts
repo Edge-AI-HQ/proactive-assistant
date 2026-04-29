@@ -19,8 +19,8 @@ export const createPaymentSessionStore = (
     async createPaymentSession(data) {
       const user = await resolveOrCreateUser(
         pool,
-        data.telegram_user_id,
-        data.telegram_username ?? null,
+        data.supabase_user_id,
+        data.display_name ?? null,
       );
 
       await pool.query(
@@ -30,7 +30,7 @@ export const createPaymentSessionStore = (
             session_token,
             assistant_id,
             plan_code,
-            telegram_username_snapshot,
+            display_name_snapshot,
             expires_at
           ) VALUES ($1, $2, $3, $4, $5, $6::timestamptz)
         `,
@@ -39,7 +39,7 @@ export const createPaymentSessionStore = (
           data.token,
           data.assistant_id ?? null,
           data.plan_code ?? null,
-          normalizeUsername(data.telegram_username),
+          normalizeUsername(data.display_name),
           data.expires_at,
         ],
       );
@@ -52,8 +52,8 @@ export const createPaymentSessionStore = (
             payment_sessions.id,
             payment_sessions.session_token AS token,
             payment_sessions.user_id,
-            users.telegram_user_id::text AS telegram_user_id,
-            COALESCE(payment_sessions.telegram_username_snapshot, users.telegram_username) AS telegram_username,
+            users.supabase_user_id::text AS supabase_user_id,
+            COALESCE(payment_sessions.display_name_snapshot, users.display_name) AS display_name,
             payment_sessions.assistant_id,
             payment_sessions.plan_code,
             payment_sessions.used,

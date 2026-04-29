@@ -6,14 +6,13 @@ import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import type { RouteContext, RouteHandler } from './types.js';
 import { json } from './types.js';
 import { handleHealth } from './health.js';
-import { handleGenerate } from './generate.js';
+import { handleGenerate, handleAutoRunDispatch } from './generate.js';
 import { handleRuns } from './runs.js';
 import { handleChat } from './chat.js';
 import { handleFeedback } from './feedback.js';
 import { handleComposio } from './composio.js';
 import { handleProfile } from './profile.js';
 import { handleSettings } from './settings.js';
-import { handleAutoRun } from './auto-run.js';
 import { handleDreaming } from './dreaming.js';
 import { handleBrowser } from './browser.js';
 import { handleMobile } from './mobile.js';
@@ -27,15 +26,8 @@ import { handleEvolution } from './evolution.js';
 // background_tasks read API (Frontend init progress chip; internal pin tasks CLI is the write side)
 import { handleTasks } from './tasks.js';
 
-export interface PipelineState {
-  running: boolean;
-  phase: string | null;
-  iteration: number | null;
-}
-
 export interface PluginConfig {
-  max_iterations: number;
-  cards_per_iteration: number;
+  cards_to_generate: number;
   agent_timeout_ms: number;
   auto_loop_min_interval_ms: number;
   auto_poll_enabled: boolean;
@@ -43,17 +35,17 @@ export interface PluginConfig {
   auto_detect_interval_ms: number;
 }
 
-export function createApiHandler(api: OpenClawPluginApi, state: PipelineState, config: PluginConfig) {
+export function createApiHandler(api: OpenClawPluginApi, config: PluginConfig) {
   const handlers: RouteHandler[] = [
-    handleHealth(state),
-    handleGenerate(state, config),
+    handleHealth(),
+    handleGenerate(config),
+    handleAutoRunDispatch(config),
     handleRuns(),
     handleChat(),
     handleFeedback(),
     handleComposio(),
     handleProfile(),
     handleSettings(),
-    handleAutoRun(state, config),
     handleDreaming(),
     handleBrowser(),
     handleMobile(),

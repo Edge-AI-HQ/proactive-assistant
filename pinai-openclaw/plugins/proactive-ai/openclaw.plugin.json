@@ -1,12 +1,10 @@
 {
   "id": "proactive-ai-cloud",
-  "skills": ["./skills"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "max_iterations": { "type": "number", "default": 2 },
-      "cards_per_iteration": { "type": "number", "default": 8 },
+      "cards_to_generate": { "type": "number", "default": 8 },
       "agent_timeout_ms": { "type": "number", "default": 300000 },
       "auto_loop_min_interval_ms": { "type": "number", "default": 900000 }
     }

@@ -1,19 +1,19 @@
 import { normalizeUsername, resolveOrCreateUser } from './userRegistry.js';
 import type { PaymentStore } from './paymentStore.js';
-import { firstRow, readUserIdentityByTelegramId, type Queryable, type UserIdentity } from './paymentStoreCore.js';
+import { firstRow, readUserIdentityBySupabaseId, type Queryable, type UserIdentity } from './paymentStoreCore.js';
 
 export const createIdentityStore = (
   pool: Queryable
-): Pick<PaymentStore, 'getUserIdentityByTelegramId' | 'getLiteLLMKeyByTelegramId' | 'upsertUserLiteLLMIdentity'> => {
+): Pick<PaymentStore, 'getUserIdentityBySupabaseId' | 'getLiteLLMKeyBySupabaseId' | 'upsertUserLiteLLMIdentity'> => {
   return {
-    async getUserIdentityByTelegramId(telegram_user_id) {
-      return readUserIdentityByTelegramId(pool, telegram_user_id);
+    async getUserIdentityBySupabaseId(supabase_user_id) {
+      return readUserIdentityBySupabaseId(pool, supabase_user_id);
     },
 
-    async getLiteLLMKeyByTelegramId(telegram_user_id) {
+    async getLiteLLMKeyBySupabaseId(supabase_user_id) {
       const result = await pool.query<{ litellm_virtual_key: string | null }>(
-        `SELECT litellm_virtual_key FROM users WHERE telegram_user_id = $1::bigint AND litellm_virtual_key IS NOT NULL AND litellm_virtual_key != '' LIMIT 1`,
-        [telegram_user_id]
+        `SELECT litellm_virtual_key FROM users WHERE supabase_user_id = $1::bigint AND litellm_virtual_key IS NOT NULL AND litellm_virtual_key != '' LIMIT 1`,
+        [supabase_user_id]
       );
       const row = firstRow(result.rows);
       const key = row?.litellm_virtual_key?.trim();
@@ -21,7 +21,7 @@ export const createIdentityStore = (
     },
 
     async upsertUserLiteLLMIdentity(data) {
-      const user = await resolveOrCreateUser(pool, data.telegram_user_id, data.telegram_username);
+      const user = await resolveOrCreateUser(pool, data.supabase_user_id, data.display_name);
       const litellmUserId = data.litellm_user_id.trim();
       const litellmAlias = normalizeUsername(data.litellm_user_alias);
       const spendUsd =
@@ -64,8 +64,8 @@ export const createIdentityStore = (
           WHERE id = $1
           RETURNING
             id,
-            telegram_user_id::text,
-            telegram_username,
+            supabase_user_id::text,
+            display_name,
             litellm_user_id,
             litellm_user_alias
         `,
@@ -74,7 +74,7 @@ export const createIdentityStore = (
 
       const updated = firstRow(result.rows);
       if (!updated) {
-        throw new Error(`Failed to update LiteLLM identity for telegram user ${data.telegram_user_id}`);
+        throw new Error(`Failed to update LiteLLM identity for supabase user ${data.supabase_user_id}`);
       }
 
       return updated;

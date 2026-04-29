@@ -6,7 +6,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Settings, Activity, Circle, Clock, Hash, ChevronDown,
+  Settings, Activity, Circle, Clock,
   ExternalLink, X, Zap, Cpu, MessageSquare,
 } from "lucide-react";
 import { Browser } from "@capacitor/browser";
@@ -24,8 +24,6 @@ interface DebugPanelProps {
   health: HealthState;
   run: RunState;
   isRunning: boolean;
-  iterations: number;
-  onIterationsChange: (n: number) => void;
   onGenerate: () => void;
 }
 
@@ -100,10 +98,9 @@ function phaseStatus(phase: string, activePhase: string | null, status: string) 
   return "pending";
 }
 
-export default function DebugPanel({ health, run, isRunning, iterations, onIterationsChange, onGenerate }: DebugPanelProps) {
+export default function DebugPanel({ health, run, isRunning, onGenerate }: DebugPanelProps) {
   const [open, setOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
-  const [expandedIter, setExpandedIter] = useState<number | null>(null);
   const [gatewayLoading, setGatewayLoading] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -310,25 +307,14 @@ export default function DebugPanel({ health, run, isRunning, iterations, onItera
                     <Zap size={14} strokeWidth={1.5} className="text-foreground/40" />
                     <span className="text-xs font-medium text-foreground/50">Generate Cards</span>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <label className="text-[11px] text-foreground/40 shrink-0">Iterations</label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={8}
-                      value={iterations}
-                      onChange={(e) => onIterationsChange(Math.max(1, Math.min(8, Number(e.target.value) || 1)))}
-                      className="w-14 rounded-lg bg-white/60 border border-foreground/10 px-2 py-1 text-[16px] text-foreground font-mono text-center focus:outline-none focus:ring-2 focus:ring-primary/30"
-                    />
-                    <button
-                      onClick={onGenerate}
-                      disabled={isRunning || !health.ok}
-                      className="flex-1 flex items-center justify-center gap-1.5 rounded-lg bg-foreground text-background text-[11px] font-semibold py-1.5 transition-colors hover:bg-foreground/85 disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      <Zap size={12} strokeWidth={2} />
-                      {isRunning ? "Running..." : "Generate"}
-                    </button>
-                  </div>
+                  <button
+                    onClick={onGenerate}
+                    disabled={isRunning || !health.ok}
+                    className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-foreground text-background text-[11px] font-semibold py-1.5 transition-colors hover:bg-foreground/85 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <Zap size={12} strokeWidth={2} />
+                    {isRunning ? "Running..." : "Generate"}
+                  </button>
                 </div>
 
                 {/* Phase Strip */}
@@ -423,86 +409,6 @@ export default function DebugPanel({ health, run, isRunning, iterations, onItera
 
                 {/* User Memories */}
                 <MemoriesPanel enabled={open && health.ok} />
-
-                {/* Iteration Summaries */}
-                {run.totalIterations > 0 && (
-                  <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-3.5">
-                    <div className="flex items-center gap-2 mb-2.5">
-                      <Hash size={12} strokeWidth={1.5} className="text-foreground/40" />
-                      <span className="text-[11px] font-medium text-foreground/40 uppercase tracking-wider">
-                        Iterations
-                      </span>
-                    </div>
-                    <div className="space-y-1">
-                      {Array.from({ length: run.totalIterations }, (_, i) => i + 1).map((n) => {
-                        const detail = run.iterationDetails[n];
-                        const cardCount = detail?.cards?.length ?? 0;
-                        const evalResult = detail?.evaluation;
-                        const isOpen = expandedIter === n;
-
-                        let passCount = 0;
-                        let failCount = 0;
-                        if (evalResult) {
-                          passCount = evalResult.evaluations.filter((e) => e.pass).length;
-                          failCount = evalResult.evaluations.length - passCount;
-                        }
-
-                        return (
-                          <div key={n}>
-                            <button
-                              onClick={() => setExpandedIter(isOpen ? null : n)}
-                              className="w-full flex items-center gap-2 rounded-lg bg-white/60 hover:bg-foreground/5 border border-foreground/10 px-3 py-2 transition-colors"
-                            >
-                              <span className="text-xs font-semibold text-foreground/50 w-5">#{n}</span>
-                              <span className="text-[11px] text-foreground/40 flex-1 text-left">
-                                {cardCount} card{cardCount !== 1 ? "s" : ""}
-                              </span>
-                              {evalResult && (
-                                <div className="flex items-center gap-1.5">
-                                  {passCount > 0 && (
-                                    <span className="text-[10px] font-medium text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">
-                                      {passCount} pass
-                                    </span>
-                                  )}
-                                  {failCount > 0 && (
-                                    <span className="text-[10px] font-medium text-red-500 bg-red-50 px-1.5 py-0.5 rounded-full">
-                                      {failCount} fail
-                                    </span>
-                                  )}
-                                </div>
-                              )}
-                              <ChevronDown
-                                size={12}
-                                strokeWidth={1.5}
-                                className={`text-foreground/30 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
-                              />
-                            </button>
-                            <AnimatePresence>
-                              {isOpen && detail && (
-                                <motion.div
-                                  initial={{ opacity: 0, height: 0 }}
-                                  animate={{ opacity: 1, height: "auto" }}
-                                  exit={{ opacity: 0, height: 0 }}
-                                  transition={{ duration: 0.2 }}
-                                  className="overflow-hidden"
-                                >
-                                  <div className="px-3 py-2 text-[11px] text-foreground/40 space-y-1">
-                                    {detail.cards?.map((card, ci) => (
-                                      <div key={ci} className="flex items-center gap-1.5">
-                                        <span className="w-1 h-1 rounded-full bg-foreground/30 shrink-0" />
-                                        <span className="truncate">{card.title ?? `Card ${ci + 1}`}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
 
                 {/* Run Info */}
                 <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-3.5">

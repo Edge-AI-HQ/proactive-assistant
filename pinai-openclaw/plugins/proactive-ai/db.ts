@@ -505,8 +505,22 @@ function ensureSchema(db: Database.Database): void {
   ensureColumn(db, 'goals', 'last_referenced_at', 'TEXT');
   ensureColumn(db, 'goals', 'referenced_by_runs', "TEXT NOT NULL DEFAULT '[]'");
 
-  // Phase 1: pipeline_runs.artifact_path stores filesystem path to large iterations JSON
+  // pipeline_runs.artifact_path: filesystem path to the run's details JSON
+  // (plan / cards / evaluation). Keeps the SQLite row lean.
   ensureColumn(db, 'pipeline_runs', 'artifact_path', 'TEXT');
+
+  // Durable pipeline runs: dispatch + reconcile pattern. See docs/plans/durable-pipeline-runs.mdx.
+  // status now also takes 'running' / 'reconciling' (not just 'completed' / 'failed').
+  // subagent_run_id / subagent_session_key let the reconciler resume after the
+  // primary wait times out (or after a process restart).
+  ensureColumn(db, 'pipeline_runs', 'subagent_run_id', 'TEXT');
+  ensureColumn(db, 'pipeline_runs', 'subagent_session_key', 'TEXT');
+  ensureColumn(db, 'pipeline_runs', 'trigger', 'TEXT');
+  ensureColumn(db, 'pipeline_runs', 'updated_at', 'TEXT');
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_pipeline_runs_status_started
+      ON pipeline_runs(status, started_at DESC);
+  `);
 
   // Phase 1: drop deprecated tables (zero-row, no callers; replaced by app_state KV)
   // See docs/plans/memory-architecture.mdx for migration map.
@@ -2095,13 +2109,15 @@ export interface PipelineRunRow {
   user_id: string;
   run_id: string;
   status: string;
-  total_iterations: number | null;
   final_cards: unknown;
-  iterations: unknown;
   artifact_path: string | null;
   error: string | null;
   started_at: string;
   completed_at: string | null;
+  subagent_run_id: string | null;
+  subagent_session_key: string | null;
+  trigger: string | null;
+  updated_at: string | null;
 }
 
 export interface RecentGeneratedCardRow {
@@ -2122,17 +2138,26 @@ export interface RecentGeneratedCardRow {
 
 function rowToPipelineRun(row: any): PipelineRunRow {
   return {
-    ...row,
+    id: row.id,
     user_id: USER_ID,
+    run_id: row.run_id,
+    status: row.status,
     final_cards: row.final_cards ? parseJson(row.final_cards) : null,
-    iterations: row.iterations ? parseJson(row.iterations) : null,
     artifact_path: row.artifact_path ?? null,
+    error: row.error ?? null,
+    started_at: row.started_at,
+    completed_at: row.completed_at ?? null,
+    subagent_run_id: row.subagent_run_id ?? null,
+    subagent_session_key: row.subagent_session_key ?? null,
+    trigger: row.trigger ?? null,
+    updated_at: row.updated_at ?? null,
   };
 }
 
 /**
- * Resolve the directory where pipeline iteration artifacts (large JSON blobs)
- * are persisted. See docs/plans/memory-architecture.mdx §五 (大 JSON 不进 SQLite).
+ * Resolve the directory where pipeline run artifacts (large JSON blobs:
+ * plan, raw cards, evaluation) are persisted.
+ * See docs/plans/memory-architecture.mdx §五 (大 JSON 不进 SQLite).
  */
 export function getRunArtifactsDir(): string {
   const home = process.env.OPENCLAW_HOME || '/app';
@@ -2144,8 +2169,8 @@ export function getRunArtifactPath(runId: string): string {
 }
 
 /**
- * Read the iterations payload that was previously persisted to the artifact
- * file for `runId`. Returns null if the file does not exist or fails to parse.
+ * Read the run details that were previously persisted to the artifact file
+ * for `runId`. Returns null if the file does not exist or fails to parse.
  */
 export function readRunArtifact(runId: string): unknown | null {
   try {
@@ -2159,33 +2184,152 @@ export function readRunArtifact(runId: string): unknown | null {
 export async function savePipelineRun(input: {
   runId: string;
   status: string;
-  totalIterations: number;
   finalCards: unknown;
-  iterations: unknown;
+  details: unknown;
 }): Promise<void> {
   const id = genId();
   const ts = now();
 
-  // Persist large iterations blob to filesystem; keep DB row lean.
   let artifactPath: string | null = null;
-  let iterationsForDb: string | null = null;
-  if (input.iterations !== undefined && input.iterations !== null) {
+  if (input.details !== undefined && input.details !== null) {
     const dir = getRunArtifactsDir();
     fs.mkdirSync(dir, { recursive: true });
     artifactPath = getRunArtifactPath(input.runId);
-    fs.writeFileSync(artifactPath, JSON.stringify(input.iterations));
-    // Iterations column is left NULL — readers should consult artifact_path.
+    fs.writeFileSync(artifactPath, JSON.stringify(input.details));
   }
 
   getDb().prepare(
     `INSERT INTO pipeline_runs
-       (id, run_id, status, total_iterations, final_cards, iterations, artifact_path, started_at, completed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (id, run_id, status, final_cards, artifact_path, started_at, completed_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
-    id, input.runId, input.status, input.totalIterations,
-    JSON.stringify(input.finalCards), iterationsForDb, artifactPath, ts, ts,
+    id, input.runId, input.status,
+    JSON.stringify(input.finalCards), artifactPath, ts, ts, ts,
   );
-  const cards = Array.isArray(input.finalCards) ? input.finalCards as Array<Record<string, unknown>> : [];
+  await seedGeneratedCardsFromFinalCards(input.finalCards, ts);
+}
+
+/**
+ * Insert a pipeline_run in the 'running' state before the subagent finishes.
+ * The reconciler (and / or the synchronous /generate path) finalizes it later
+ * via markPipelineRunCompleted / markPipelineRunFailed.
+ */
+export async function savePipelineRunStart(input: {
+  runId: string;
+  trigger: string;
+  subagentRunId: string;
+  subagentSessionKey: string;
+}): Promise<void> {
+  const id = genId();
+  const ts = now();
+  getDb().prepare(
+    `INSERT INTO pipeline_runs
+       (id, run_id, status, final_cards, artifact_path,
+        started_at, completed_at, updated_at,
+        subagent_run_id, subagent_session_key, trigger)
+     VALUES (?, ?, 'running', NULL, NULL, ?, NULL, ?, ?, ?, ?)`
+  ).run(id, input.runId, ts, ts, input.subagentRunId, input.subagentSessionKey, input.trigger);
+}
+
+/**
+ * Transition a 'running' / 'reconciling' run to 'completed' and write its
+ * final cards + run artifact. UPDATE is guarded by status so a second
+ * invocation (e.g. duplicate reconciler attempt) is a no-op rather than
+ * double-writing artifacts.
+ *
+ * Returns the number of rows updated (0 if the run was already terminal).
+ */
+export async function markPipelineRunCompleted(input: {
+  runId: string;
+  finalCards: unknown;
+  details: unknown;
+}): Promise<number> {
+  const ts = now();
+  let artifactPath: string | null = null;
+  if (input.details !== undefined && input.details !== null) {
+    const dir = getRunArtifactsDir();
+    fs.mkdirSync(dir, { recursive: true });
+    artifactPath = getRunArtifactPath(input.runId);
+    fs.writeFileSync(artifactPath, JSON.stringify(input.details));
+  }
+  const result = getDb().prepare(
+    `UPDATE pipeline_runs
+        SET status = 'completed', final_cards = ?,
+            artifact_path = COALESCE(?, artifact_path),
+            completed_at = ?, updated_at = ?, error = NULL
+      WHERE run_id = ? AND status IN ('running', 'reconciling')`
+  ).run(
+    JSON.stringify(input.finalCards),
+    artifactPath, ts, ts, input.runId,
+  );
+  if (result.changes > 0) {
+    await seedGeneratedCardsFromFinalCards(input.finalCards, ts);
+  }
+  return result.changes;
+}
+
+/**
+ * Transition a 'running' / 'reconciling' run to 'failed'. Idempotent — a
+ * second call updates the error message but doesn't move state again.
+ *
+ * Returns the number of rows updated (0 if the run was already terminal).
+ */
+export async function markPipelineRunFailed(input: {
+  runId: string;
+  error: string;
+}): Promise<number> {
+  const ts = now();
+  const result = getDb().prepare(
+    `UPDATE pipeline_runs
+        SET status = 'failed', error = ?, updated_at = ?, completed_at = ?
+      WHERE run_id = ? AND status IN ('running', 'reconciling')`
+  ).run(input.error.slice(0, 1000), ts, ts, input.runId);
+  return result.changes;
+}
+
+/**
+ * Move a 'running' run to 'reconciling' so the frontend can distinguish
+ * "primary wait still in flight" from "background queue is owning this".
+ */
+export async function touchPipelineRunReconciling(runId: string): Promise<void> {
+  const ts = now();
+  getDb().prepare(
+    `UPDATE pipeline_runs
+        SET status = 'reconciling', updated_at = ?
+      WHERE run_id = ? AND status = 'running'`
+  ).run(ts, runId);
+}
+
+/**
+ * Returns the most recent pipeline_run that is still in flight ('running' or
+ * 'reconciling'). Used both by /runs/active and as a concurrency guard before
+ * dispatching a new run. There should be at most one in practice.
+ */
+export async function getActivePipelineRun(): Promise<PipelineRunRow | null> {
+  const row = getDb().prepare(
+    `SELECT * FROM pipeline_runs
+      WHERE status IN ('running', 'reconciling')
+      ORDER BY started_at DESC LIMIT 1`,
+  ).get() as any;
+  return row ? rowToPipelineRun(row) : null;
+}
+
+/**
+ * Pull every pipeline_run currently in one of the supplied statuses. Used by
+ * the plugin startup hook to find runs that were stranded by a prior process
+ * crash.
+ */
+export async function listPipelineRunsByStatus(statuses: string[]): Promise<PipelineRunRow[]> {
+  if (statuses.length === 0) return [];
+  const placeholders = statuses.map(() => '?').join(',');
+  const rows = getDb().prepare(
+    `SELECT * FROM pipeline_runs WHERE status IN (${placeholders}) ORDER BY started_at ASC`,
+  ).all(...statuses) as any[];
+  return rows.map(rowToPipelineRun);
+}
+
+async function seedGeneratedCardsFromFinalCards(finalCards: unknown, ts: string): Promise<void> {
+  const cards = Array.isArray(finalCards) ? finalCards as Array<Record<string, unknown>> : [];
   await seedGeneratedCards(cards.flatMap((card) => {
     const cardId = typeof card.id === 'string' && card.id.trim().length > 0 ? card.id.trim() : null;
     const goalBasket = typeof card.goalBasket === 'string' ? card.goalBasket : null;

@@ -24,9 +24,6 @@ export type ContainerState = "unknown" | "connecting" | "ready" | "unhealthy";
 
 interface ContainerInfo {
   status: ContainerState;
-  /** 1-based attempt counter for the current connecting phase. */
-  connectAttempt: number;
-  connectMaxAttempts: number;
   /**
    * True when we have no record of a successfully provisioned container in
    * this session — drives the "Start your assistant" vs "Reconnect/Recreate"
@@ -37,16 +34,16 @@ interface ContainerInfo {
 }
 
 const PROBE_INTERVAL_MS = 3000;
-// Cold start of an OpenClaw container on shared-cpu-1x is ~30-60s. Probe
-// every 3s up to 60s so a healthy-but-slow boot still resolves on its own.
-const CONNECT_BUDGET_MS = 60_000;
+// First boot includes image pull, jiti/node-compile cache copy from warmup,
+// and plugin dep install — easily 1.5–3min on shared-cpu-1x. Backend Fly
+// probe is 120s; give the UI a bit more headroom so we don't drop into
+// unhealthy while the gateway is still coming up.
+const CONNECT_BUDGET_MS = 180_000;
 const MAX_PROBE_ATTEMPTS = Math.ceil(CONNECT_BUDGET_MS / PROBE_INTERVAL_MS);
 
 export function useContainer(authenticated: boolean) {
   const [info, setInfo] = useState<ContainerInfo>({
     status: "unknown",
-    connectAttempt: 0,
-    connectMaxAttempts: MAX_PROBE_ATTEMPTS,
     firstTime: true,
     error: null,
   });
@@ -76,8 +73,6 @@ export function useContainer(authenticated: boolean) {
     setInfo((prev) => ({
       ...prev,
       status: "connecting",
-      connectAttempt: 0,
-      connectMaxAttempts: MAX_PROBE_ATTEMPTS,
       error: null,
     }));
 
@@ -86,7 +81,6 @@ export function useContainer(authenticated: boolean) {
     const tick = async () => {
       attempt += 1;
       if (!mountedRef.current) return;
-      setInfo((prev) => ({ ...prev, connectAttempt: attempt }));
 
       const probe = await probeGatewayHealth();
       if (!mountedRef.current) return;
@@ -191,8 +185,6 @@ export function useContainer(authenticated: boolean) {
     setInfo((prev) => ({
       ...prev,
       status: "connecting",
-      connectAttempt: 0,
-      connectMaxAttempts: MAX_PROBE_ATTEMPTS,
       error: null,
     }));
     try {
@@ -215,8 +207,6 @@ export function useContainer(authenticated: boolean) {
       stopPolling();
       setInfo({
         status: "unknown",
-        connectAttempt: 0,
-        connectMaxAttempts: MAX_PROBE_ATTEMPTS,
         firstTime: true,
         error: null,
       });

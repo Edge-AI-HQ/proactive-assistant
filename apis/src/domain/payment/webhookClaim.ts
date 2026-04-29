@@ -1,31 +1,31 @@
 import Stripe from "stripe";
 
-const extractTelegramUserId = (payload: unknown): string | undefined => {
+const extractSupabaseUserId = (payload: unknown): string | undefined => {
   if (!payload || typeof payload !== "object") return undefined;
 
   const obj = payload as any;
 
   // 优先从 metadata 提取
   const metadata = obj.metadata;
-  let telegramUserId =
-    typeof metadata?.telegram_user_id === "string"
-      ? metadata.telegram_user_id.trim()
+  let supabaseUserId =
+    typeof metadata?.supabase_user_id === "string"
+      ? metadata.supabase_user_id.trim()
       : "";
 
-  if (telegramUserId) return telegramUserId;
+  if (supabaseUserId) return supabaseUserId;
 
   // 对于 Invoice：从 parent.subscription_details.metadata 提取
   const parentMeta = obj.parent?.subscription_details?.metadata;
-  if (parentMeta?.telegram_user_id) {
-    telegramUserId = parentMeta.telegram_user_id.trim();
-    if (telegramUserId) return telegramUserId;
+  if (parentMeta?.supabase_user_id) {
+    supabaseUserId = parentMeta.supabase_user_id.trim();
+    if (supabaseUserId) return supabaseUserId;
   }
 
   // 对于 Invoice：从 lines[0].metadata 提取
   const firstLine = obj.lines?.data?.[0];
-  if (firstLine?.metadata?.telegram_user_id) {
-    telegramUserId = firstLine.metadata.telegram_user_id.trim();
-    if (telegramUserId) return telegramUserId;
+  if (firstLine?.metadata?.supabase_user_id) {
+    supabaseUserId = firstLine.metadata.supabase_user_id.trim();
+    if (supabaseUserId) return supabaseUserId;
   }
 
   return undefined;
@@ -115,7 +115,7 @@ export interface StripeEventClaimPayload {
   stripe_event_id: string;
   event_type: string;
   raw_data: unknown;
-  telegram_user_id?: string;
+  supabase_user_id?: string;
   assistant_id?: number;
   amount?: number;
   currency?: string;
@@ -132,16 +132,16 @@ export const buildStripeEventClaimPayload = (
     raw_data: eventObject,
   };
 
-  const telegramUserId = extractTelegramUserId(eventObject);
+  const supabaseUserId = extractSupabaseUserId(eventObject);
   const assistantId = extractAssistantId(eventObject);
   const amount = extractAmount(eventObject);
   const currency = extractCurrency(eventObject);
   const status = extractStatus(eventObject);
 
   // 调试日志：记录提取结果
-  if (!telegramUserId) {
+  if (!supabaseUserId) {
     console.warn(
-      `[webhook] Failed to extract telegram_user_id from ${event.type}`,
+      `[webhook] Failed to extract supabase_user_id from ${event.type}`,
       {
         stripe_event_id: event.id,
         has_metadata: Boolean((eventObject as any)?.metadata),
@@ -154,7 +154,7 @@ export const buildStripeEventClaimPayload = (
     );
   }
 
-  if (telegramUserId) claimPayload.telegram_user_id = telegramUserId;
+  if (supabaseUserId) claimPayload.supabase_user_id = supabaseUserId;
   if (assistantId !== undefined) claimPayload.assistant_id = assistantId;
   if (amount !== undefined) claimPayload.amount = amount;
   if (currency !== undefined) claimPayload.currency = currency;
@@ -162,7 +162,7 @@ export const buildStripeEventClaimPayload = (
 
   console.log(`[webhook] Claim payload for ${event.type}:`, {
     stripe_event_id: event.id,
-    telegram_user_id: telegramUserId || "NULL",
+    supabase_user_id: supabaseUserId || "NULL",
     assistant_id: assistantId !== undefined ? assistantId : "NULL",
   });
 

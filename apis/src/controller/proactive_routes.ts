@@ -2,9 +2,12 @@
  * Proactive AI API routes.
  *
  * /proactive              -> SPA entry (static HTML)
- * /api/proactive/auth/me  -> Current user info
  * /api/proactive/user/*   -> User + container management
  * /api/proxy/*            -> Reverse proxy to user's container
+ *
+ * Auth: requireProactiveAuth verifies the Supabase JWT and upserts the local
+ * users row, exposing it as `req.proactiveAuth.user`. Handlers should use that
+ * directly instead of re-querying by Supabase id.
  */
 
 import { Router, type Application } from 'express';
@@ -21,12 +24,11 @@ import {
   createGatewayProxy,
   createGatewayTicket,
   getSessionUserIdRaw,
-  upsertUser,
-  touchUserActivity,
   getContainerForUser,
   getUserBySupabaseId,
   deleteBrowserContext,
 } from '../domain/proactive/index.js';
+import { sendDomainError, sendError } from './http_error.js';
 import { pool } from '../domain/common/db/core.js';
 import {
   registerDevice,
@@ -70,46 +72,12 @@ router.options(CORS_PATHS, (_req, res) => {
   res.status(204).end();
 });
 
-// -- Auth routes --
-
-router.get('/api/proactive/auth/me', requireProactiveAuth, async (req, res) => {
-  try {
-    const auth = req.proactiveAuth!;
-    const user = await upsertUser({
-      userId: auth.userId,
-      email: auth.email,
-      name: auth.name,
-      avatarUrl: auth.avatarUrl,
-    });
-    const container = await getContainerForUser(auth.userId);
-    res.json({
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.display_name,
-        avatar_url: user.avatar_url,
-      },
-      container: container ? {
-        status: container.status,
-        created_at: container.created_at,
-      } : null,
-    });
-  } catch (err) {
-    console.error('[proactive] /auth/me error:', err);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
 // -- User / Container management --
 
-router.post('/api/proactive/user/heartbeat', requireProactiveAuth, async (req, res) => {
-  try {
-    await touchUserActivity(req.proactiveAuth!.userId);
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('[proactive] heartbeat error:', err);
-    res.status(500).json({ error: 'Internal server error' });
-  }
+// requireProactiveAuth already refreshes last_active_at via upsertUser, so the
+// handler just needs to acknowledge the call.
+router.post('/api/proactive/user/heartbeat', requireProactiveAuth, (_req, res) => {
+  res.json({ ok: true });
 });
 
 // ── Device registry ──
@@ -131,16 +99,11 @@ router.post('/api/proactive/devices/register', requireProactiveAuth, async (req,
     const deviceId = String(body['deviceId'] ?? '').trim();
     const platform = String(body['platform'] ?? '').trim() as 'ios' | 'android' | 'web';
     if (!deviceId || !platform) {
-      res.status(400).json({ error: 'Missing deviceId or platform' });
-      return;
-    }
-    const user = await getUserBySupabaseId(auth.userId);
-    if (!user) {
-      res.status(404).json({ error: 'User not found' });
+      sendDomainError(res, 'INVALID_INPUT', 'Missing deviceId or platform');
       return;
     }
     const device = await registerDevice({
-      userId: user.id,
+      userId: auth.user.id,
       deviceId,
       platform,
       displayName: typeof body['displayName'] === 'string' ? body['displayName'] : null,
@@ -161,25 +124,17 @@ router.post('/api/proactive/devices/register', requireProactiveAuth, async (req,
     });
   } catch (err) {
     console.error('[proactive] devices/register error:', err);
-    if (err instanceof Error && (err as any).code === 'INVALID_INPUT') {
-      res.status(400).json({ error: err.message }); return;
-    }
-    if (err instanceof Error && (err as any).code === 'CONFLICT') {
-      res.status(409).json({ error: err.message }); return;
-    }
-    res.status(500).json({ error: 'Internal server error' });
+    sendError(res, err);
   }
 });
 
 router.get('/api/proactive/devices', requireProactiveAuth, async (req, res) => {
   try {
-    const user = await getUserBySupabaseId(req.proactiveAuth!.userId);
-    if (!user) { res.status(404).json({ error: 'User not found' }); return; }
-    const devices = await listDevicesForUser(user.id);
+    const devices = await listDevicesForUser(req.proactiveAuth!.user.id);
     res.json({ ok: true, devices });
   } catch (err) {
     console.error('[proactive] devices list error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    sendError(res, err);
   }
 });
 
@@ -187,25 +142,25 @@ router.post('/api/proactive/devices/revoke', requireProactiveAuth, async (req, r
   try {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const deviceId = String(body['deviceId'] ?? '').trim();
-    if (!deviceId) { res.status(400).json({ error: 'Missing deviceId' }); return; }
-    const user = await getUserBySupabaseId(req.proactiveAuth!.userId);
-    if (!user) { res.status(404).json({ error: 'User not found' }); return; }
-    const revoked = await revokeDevice({ userId: user.id, deviceId });
-    if (!revoked) { res.status(404).json({ error: 'Device not found' }); return; }
+    if (!deviceId) {
+      sendDomainError(res, 'INVALID_INPUT', 'Missing deviceId');
+      return;
+    }
+    const revoked = await revokeDevice({ userId: req.proactiveAuth!.user.id, deviceId });
+    if (!revoked) {
+      sendDomainError(res, 'NOT_FOUND', 'Device not found');
+      return;
+    }
     res.json({ ok: true });
   } catch (err) {
     console.error('[proactive] devices/revoke error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    sendError(res, err);
   }
 });
 
 router.post('/api/proactive/container/ensure', requireProactiveAuth, async (req, res) => {
   try {
     const auth = req.proactiveAuth!;
-
-    // Upsert user first
-    await upsertUser({ userId: auth.userId, email: auth.email, name: auth.name, avatarUrl: auth.avatarUrl });
-
     const orchestrator = getOrchestrator();
     const result = await orchestrator.ensureContainer(auth.userId);
     const container = await getContainerForUser(auth.userId);
@@ -217,18 +172,18 @@ router.post('/api/proactive/container/ensure', requireProactiveAuth, async (req,
     });
   } catch (err) {
     console.error('[proactive] container/ensure error:', err);
-    res.status(500).json({ error: 'Failed to ensure container' });
+    sendError(res, err, 'Failed to ensure container');
   }
 });
 
-router.delete('/api/proactive/user/account', requireProactiveAuth, async (req, res) => {
+router.post('/api/proactive/user/delete', requireProactiveAuth, async (req, res) => {
   try {
     const orchestrator = getOrchestrator();
     await orchestrator.deleteAccount(req.proactiveAuth!.userId);
     res.json({ ok: true });
   } catch (err) {
-    console.error('[proactive] delete account error:', err);
-    res.status(500).json({ error: 'Failed to delete account' });
+    console.error('[proactive] user/delete error:', err);
+    sendError(res, err, 'Failed to delete account');
   }
 });
 
@@ -239,7 +194,7 @@ router.post('/api/proactive/container/reset', requireProactiveAuth, async (req, 
     res.json({ ok: true, containerId: result.containerId, ready: result.ready });
   } catch (err) {
     console.error('[proactive] container/reset error:', err);
-    res.status(500).json({ error: 'Failed to reset container' });
+    sendError(res, err, 'Failed to reset container');
   }
 });
 
@@ -248,13 +203,13 @@ router.post('/api/proactive/container/reset', requireProactiveAuth, async (req, 
 // old context id in its env — the fresh empty context is used on the
 // next container spawn. Callers that want instant effect should destroy
 // the container too.
-router.delete('/api/proactive/browser/context', requireProactiveAuth, async (req, res) => {
+router.post('/api/proactive/browser/context/reset', requireProactiveAuth, async (req, res) => {
   try {
     await deleteBrowserContext(pool, req.proactiveAuth!.userId);
     res.json({ ok: true });
   } catch (err) {
-    console.error('[proactive] browser/context delete error:', err);
-    res.status(500).json({ error: 'Failed to reset browser context' });
+    console.error('[proactive] browser/context/reset error:', err);
+    sendError(res, err, 'Failed to reset browser context');
   }
 });
 
@@ -265,7 +220,7 @@ router.post('/api/proactive/container/destroy', requireProactiveAuth, async (req
     res.json({ ok: true, destroyed });
   } catch (err) {
     console.error('[proactive] container/destroy error:', err);
-    res.status(500).json({ error: 'Failed to destroy container' });
+    sendError(res, err, 'Failed to destroy container');
   }
 });
 
@@ -283,7 +238,7 @@ router.get('/api/proactive/container/status', requireProactiveAuth, async (req, 
     });
   } catch (err) {
     console.error('[proactive] container/status error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    sendError(res, err);
   }
 });
 
@@ -298,13 +253,12 @@ router.get('/api/proactive/models', requireProactiveAuth, async (req, res) => {
     const defaultModel = config.litellm.openclawDefaultModel;
 
     let currentModel: string | null = null;
-    const user = await getUserBySupabaseId(auth.userId);
     const container = await getContainerForUser(auth.userId);
-    if (user?.gateway_token && container?.status === 'running') {
+    if (container?.status === 'running') {
       const target = getOrchestrator().resolveTarget(container);
       if (target) {
         try {
-          currentModel = await getCurrentModel(target, user.gateway_token);
+          currentModel = await getCurrentModel(target, auth.user.container_proxy_secret);
         } catch {
           // Gateway unreachable — fall back to default below
         }
@@ -319,7 +273,7 @@ router.get('/api/proactive/models', requireProactiveAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('[proactive] /models error:', err);
-    res.status(500).json({ error: 'Failed to read models' });
+    sendError(res, err, 'Failed to read models');
   }
 });
 
@@ -329,7 +283,7 @@ router.post('/api/proactive/models/change', requireProactiveAuth, async (req, re
     const body = req.body as { model?: unknown } | undefined;
     const modelRef = typeof body?.model === 'string' ? body.model.trim() : '';
     if (!modelRef) {
-      res.status(400).json({ error: 'model is required (e.g. litellm/claude-opus-4-6)' });
+      sendDomainError(res, 'INVALID_INPUT', 'model is required (e.g. litellm/claude-opus-4-6)');
       return;
     }
 
@@ -338,40 +292,34 @@ router.post('/api/proactive/models/change', requireProactiveAuth, async (req, re
       ? config.litellm.allowedModels
       : [config.litellm.openclawDefaultModel];
     if (!allowedModels.includes(bareId)) {
-      res.status(400).json({ error: `Model "${bareId}" is not in the allowed list.`, allowed: allowedModels });
+      sendDomainError(res, 'INVALID_INPUT', `Model "${bareId}" is not in the allowed list.`);
       return;
     }
 
     const normalizedRef = modelRef.startsWith('litellm/') ? modelRef : `litellm/${modelRef}`;
 
-    const user = await getUserBySupabaseId(auth.userId);
-    if (!user?.gateway_token) {
-      res.status(500).json({ error: 'Gateway token missing.' });
-      return;
-    }
-
     const container = await getContainerForUser(auth.userId);
     if (!container || container.status !== 'running') {
-      res.status(503).json({ error: 'Container not running. Please wait for it to start.' });
+      sendDomainError(res, 'UNAVAILABLE', 'Container not running. Please wait for it to start.');
       return;
     }
 
     const target = getOrchestrator().resolveTarget(container);
     if (!target) {
-      res.status(502).json({ error: 'Failed to resolve gateway target.' });
+      sendDomainError(res, 'UNAVAILABLE', 'Failed to resolve gateway target.', 502);
       return;
     }
 
-    const result = await setCurrentModel(target, user.gateway_token, normalizedRef);
+    const result = await setCurrentModel(target, auth.user.container_proxy_secret, normalizedRef);
     if (!result.ok) {
-      res.status(502).json({ error: `Gateway rejected model change: ${result.error}` });
+      sendDomainError(res, 'UNAVAILABLE', `Gateway rejected model change: ${result.error}`, 502);
       return;
     }
 
     res.json({ ok: true, model: normalizedRef });
   } catch (err) {
     console.error('[proactive] /models/change error:', err);
-    res.status(500).json({ error: 'Failed to change model' });
+    sendError(res, err, 'Failed to change model');
   }
 });
 
@@ -382,14 +330,14 @@ router.post('/api/proactive/gateway/ticket', requireProactiveAuth, async (req, r
     const auth = req.proactiveAuth!;
     const container = await getContainerForUser(auth.userId);
     if (!container || container.status !== 'running') {
-      res.status(503).json({ error: 'Container not running' });
+      sendDomainError(res, 'UNAVAILABLE', 'Container not running');
       return;
     }
     const { ticket, expiresIn } = createGatewayTicket(auth.userId);
     res.json({ ticket, expiresIn, url: `/api/gateway/?ticket=${ticket}` });
   } catch (err) {
     console.error('[proactive] gateway/ticket error:', err);
-    res.status(500).json({ error: 'Failed to create gateway ticket' });
+    sendError(res, err, 'Failed to create gateway ticket');
   }
 });
 
@@ -490,7 +438,7 @@ export function registerProactiveWsRoutes(server: Server): void {
       }
 
       req.url = '/';
-      relayGatewayWs(req, socket, head, target, user.gateway_token);
+      relayGatewayWs(req, socket, head, target, user.container_proxy_secret);
     })().catch((err: unknown) => {
       console.error('[proactive] gateway WS upgrade error:', err);
       rejectUpgrade(socket, '500 Internal Server Error');

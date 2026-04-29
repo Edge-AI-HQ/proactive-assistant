@@ -119,8 +119,6 @@ describe("usePipeline health polling", () => {
       JSON.stringify({
         runId: "run_previous",
         status: "running",
-        maxIterations: 2,
-        activeIteration: 2,
         activePhase: "generating",
         startedAt: "2026-04-24T23:20:00.000Z",
         completedAt: null,
@@ -138,11 +136,9 @@ describe("usePipeline health polling", () => {
             sources: [],
           },
         ],
-        iterationDetails: {},
         scoreMap: {},
         logEntries: [],
         error: null,
-        totalIterations: 2,
       }),
     );
 

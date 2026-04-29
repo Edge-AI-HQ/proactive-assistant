@@ -24,7 +24,7 @@ export const requireStripeWebhookSecret = (): string => {
   return stripeWebhookSecret;
 };
 
-export const parseTelegramUserId = (value: unknown): string | null => {
+export const parseSupabaseUserId = (value: unknown): string | null => {
   const raw = typeof value === 'string' ? value.trim() : typeof value === 'number' ? String(value) : '';
   if (!/^\d+$/.test(raw)) return null;
   return raw;

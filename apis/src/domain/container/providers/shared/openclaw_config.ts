@@ -1,4 +1,8 @@
-import type { ContainerManagerConfig } from "../../types.js";
+import type {
+  ElevenLabsConfig,
+  LiteLLMConfig,
+  OpenclawConfig,
+} from "../../../../types/index.js";
 import {
   buildLiteLLMFallbackModelRefs,
   buildLiteLLMModelsAllowlist,
@@ -13,30 +17,11 @@ import {
 
 export type GatewayBindMode = "lan" | "loopback";
 
-type OpenclawConfigContext = Pick<
-  ContainerManagerConfig,
-  "openclaw" | "litellm" | "elevenLabs"
->;
-type TelegramWebhookConfig = {
-  enabled?: boolean;
-  url?: string;
-  secret?: string;
-  path?: string;
-  host?: string;
-  port?: number;
-};
-
-const buildOwnerAllowFrom = (
-  ownerTelegramUserId?: string | null,
-): string[] | undefined => {
-  const normalized = (ownerTelegramUserId || "").trim();
-  if (!normalized) return undefined;
-  const values = new Set<string>([normalized]);
-  if (/^\d+$/.test(normalized)) {
-    values.add(`tg:${normalized}`);
-  }
-  return Array.from(values);
-};
+export interface OpenclawConfigContext {
+  openclaw: OpenclawConfig;
+  litellm: LiteLLMConfig;
+  elevenLabs: ElevenLabsConfig;
+}
 
 export const buildGatewayConfigSection = (
   context: OpenclawConfigContext,
@@ -107,72 +92,6 @@ export const buildGatewayConfigSection = (
   };
 };
 
-export const buildTtsConfigSection = (
-  _context: OpenclawConfigContext,
-): UnknownRecord => {
-  void _context;
-  return { auto: "off" };
-};
-
-export const buildTalkConfigSection = (
-  _context: OpenclawConfigContext,
-): UnknownRecord | null => {
-  void _context;
-  return null;
-};
-
-export const buildTelegramChannelConfigSection = (
-  assistantBotToken: string,
-  webhookConfig?: TelegramWebhookConfig,
-): UnknownRecord => {
-  const config: UnknownRecord = {
-    enabled: webhookConfig?.enabled ?? true,
-    dmPolicy: "open",
-    botToken: assistantBotToken,
-    allowFrom: ["*"],
-    groupAllowFrom: [],
-    groupPolicy: "open",
-    groups: {
-      "*": {
-        requireMention: true,
-      },
-    },
-    // Use "partial" streaming so OpenClaw sends incremental drafts via
-    // sendMessageDraft (Bot API 9.3+) while generating, then finalises
-    // with sendMessage.  Vision requests are still forced non-stream by
-    // the telegram-router-proxy LiteLLM adapter to avoid broken chunks.
-    streaming: "partial",
-    actions: {
-      sendMessage: true,
-      deleteMessage: false,
-      sticker: true,
-    },
-  };
-
-  // Webhook 模式配置：保持 provider 启用，由 router 转发 update 到本地 listener
-  const webhookUrl = webhookConfig?.url?.trim();
-  if (webhookUrl) {
-    config.webhookUrl = webhookUrl;
-  }
-  if (webhookConfig?.secret?.trim()) {
-    config.webhookSecret = webhookConfig.secret.trim();
-  }
-  if (webhookConfig?.path?.trim()) {
-    config.webhookPath = webhookConfig.path.trim();
-  }
-  if (webhookConfig?.host?.trim()) {
-    config.webhookHost = webhookConfig.host.trim();
-  }
-  if (
-    typeof webhookConfig?.port === "number" &&
-    Number.isFinite(webhookConfig.port)
-  ) {
-    config.webhookPort = webhookConfig.port;
-  }
-
-  return config;
-};
-
 export const buildLiteLLMModelsSection = (
   context: OpenclawConfigContext,
   liteLlmApiKey: string,
@@ -221,51 +140,17 @@ export const buildLiteLLMModelsSection = (
   };
 };
 
-interface BuildAssistantOpenclawConfigOptions {
+export interface BuildOpenclawConfigOptions {
   gatewayToken: string;
   gatewayBind: GatewayBindMode;
-  ownerTelegramUserId?: string | null;
-  assistantBotToken?: string | null;
-  quickStartSyntheticBotToken?: string | null;
   liteLlmApiKey?: string | null;
-  includeTelegramPlugin?: boolean;
-  telegramWebhookMode?: boolean;
-  telegramWebhookUrl?: string;
-  telegramWebhookSecret?: string;
-  telegramWebhookPath?: string;
-  telegramWebhookHost?: string;
-  telegramWebhookPort?: number;
-  telegramPrivateWebhookPort?: number;
-  pluginLoadPaths?: string[];
   controlOrigin?: string;
   skillsConfig?: UnknownRecord | null;
 }
 
-const normalizeWebhookPath = (value?: string): string => {
-  const trimmed = (value || "").trim();
-  if (!trimmed) return "/telegram-webhook";
-  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-};
-
-const toPrivateWebhookUrl = (value?: string): string | undefined => {
-  const trimmed = (value || "").trim();
-  if (!trimmed) return undefined;
-  return trimmed.endsWith("/private")
-    ? trimmed
-    : `${trimmed.replace(/\/+$/, "")}/private`;
-};
-
-const withWebhookConfig = (
-  base: TelegramWebhookConfig,
-  overrides: Partial<TelegramWebhookConfig>,
-): TelegramWebhookConfig => ({
-  ...base,
-  ...overrides,
-});
-
-export const buildAssistantOpenclawConfig = (
+export const buildOpenclawConfig = (
   context: OpenclawConfigContext,
-  options: BuildAssistantOpenclawConfigOptions,
+  options: BuildOpenclawConfigOptions,
 ): UnknownRecord => {
   const normalizedGatewayToken = options.gatewayToken.trim();
   if (!normalizedGatewayToken) {
@@ -274,10 +159,6 @@ export const buildAssistantOpenclawConfig = (
     );
   }
 
-  const normalizedAssistantBotToken = (options.assistantBotToken || "").trim();
-  const normalizedQuickStartSyntheticBotToken = (
-    options.quickStartSyntheticBotToken || ""
-  ).trim();
   const normalizedLiteLLMApiKey = (options.liteLlmApiKey || "").trim();
   if (context.litellm.enabled && !normalizedLiteLLMApiKey) {
     throw new Error(
@@ -293,14 +174,9 @@ export const buildAssistantOpenclawConfig = (
       options.controlOrigin?.trim() || undefined,
     ),
     messages: {
-      tts: buildTtsConfigSection(context),
+      tts: { auto: "off" },
     },
   };
-
-  const talk = buildTalkConfigSection(context);
-  if (talk) {
-    next.talk = talk;
-  }
 
   if (context.litellm.enabled) {
     const liteLlmSections = buildLiteLLMModelsSection(
@@ -309,9 +185,13 @@ export const buildAssistantOpenclawConfig = (
     );
     next.models = liteLlmSections.models;
     next.agents = liteLlmSections.agents;
-    // Set elevated default to "full" — auto-approve all exec on gateway host
     const agentsDefaults = next.agents as { defaults: UnknownRecord };
+    // Auto-approve all exec on gateway host
     agentsDefaults.defaults.elevatedDefault = "full";
+    // Default thinking level for all agents. Requires the active model to be
+    // marked `reasoning: true` in the LiteLLM provider catalog (see
+    // `litellm_models.ts:inferReasoningByModelId`); otherwise OpenClaw drops it.
+    agentsDefaults.defaults.thinkingDefault = "high";
   }
 
   if (options.skillsConfig && Object.keys(options.skillsConfig).length > 0) {
@@ -340,103 +220,8 @@ export const buildAssistantOpenclawConfig = (
     };
   }
 
-  const baseWebhookConfig: TelegramWebhookConfig = { enabled: true };
-  if (options.telegramWebhookMode) {
-    const normalizedWebhookPath = normalizeWebhookPath(
-      options.telegramWebhookPath,
-    );
-    const normalizedPrivateWebhookPort =
-      typeof options.telegramPrivateWebhookPort === "number" &&
-      Number.isFinite(options.telegramPrivateWebhookPort)
-        ? options.telegramPrivateWebhookPort
-        : typeof options.telegramWebhookPort === "number" &&
-            Number.isFinite(options.telegramWebhookPort)
-          ? options.telegramWebhookPort + 1
-          : undefined;
-
-    baseWebhookConfig.path = normalizedWebhookPath;
-
-    if (options.telegramWebhookUrl?.trim()) {
-      baseWebhookConfig.url = options.telegramWebhookUrl.trim();
-    }
-    if (options.telegramWebhookSecret?.trim()) {
-      baseWebhookConfig.secret = options.telegramWebhookSecret.trim();
-    }
-    if (options.telegramWebhookHost?.trim()) {
-      baseWebhookConfig.host = options.telegramWebhookHost.trim();
-    }
-    if (
-      typeof options.telegramWebhookPort === "number" &&
-      Number.isFinite(options.telegramWebhookPort)
-    ) {
-      baseWebhookConfig.port = options.telegramWebhookPort;
-    }
-
-    // Assistant-scoped token only. Platform-wide Telegram bot credentials
-    // must never be injected into user container config.
-    if (normalizedAssistantBotToken) {
-      const privateWebhookUrl = toPrivateWebhookUrl(baseWebhookConfig.url);
-      next.channels = {
-        telegram: buildTelegramChannelConfigSection(
-          normalizedAssistantBotToken,
-          withWebhookConfig(baseWebhookConfig, {
-            ...(privateWebhookUrl ? { url: privateWebhookUrl } : {}),
-            path: `${normalizedWebhookPath}/private`,
-            ...(typeof normalizedPrivateWebhookPort === "number"
-              ? { port: normalizedPrivateWebhookPort }
-              : {}),
-          }),
-        ),
-      };
-    }
-  }
-
-  if (!next.channels && normalizedAssistantBotToken) {
-    const telegramWebhookConfig: Record<string, unknown> = { enabled: true };
-    if (options.telegramWebhookMode) {
-      const mapping: [string, unknown][] = [
-        ["url", options.telegramWebhookUrl],
-        ["secret", options.telegramWebhookSecret],
-        ["path", options.telegramWebhookPath],
-        ["host", options.telegramWebhookHost],
-        ["port", options.telegramWebhookPort],
-      ];
-      for (const [key, value] of mapping) {
-        const present =
-          (typeof value === "string" && value.trim() !== "") ||
-          typeof value === "number";
-        if (present) {
-          telegramWebhookConfig[key] = value;
-        }
-      }
-    }
-
-    next.channels = {
-      telegram: buildTelegramChannelConfigSection(
-        normalizedAssistantBotToken,
-        telegramWebhookConfig,
-      ),
-    };
-  } else if (
-    !next.channels &&
-    options.telegramWebhookMode &&
-    normalizedQuickStartSyntheticBotToken
-  ) {
-    // Quick Start mode (no dedicated assistant token): enable Telegram channel
-    // with a non-sensitive synthetic token. Outbound Telegram requests are
-    // proxied by telegram-router-proxy and authenticated by APIs.
-    next.channels = {
-      telegram: buildTelegramChannelConfigSection(
-        normalizedQuickStartSyntheticBotToken,
-        baseWebhookConfig,
-      ),
-    };
-  }
-
-  // Plugin config — two independent plugins replace the old monolithic
-  // telegram-router-proxy.  Each handles a single concern:
-  //   telegram-api-proxy:     Telegram API URL rewrite + method blocking
-  //   platform-hooks:         Cron delivery + device auto-pairing
+  // Web search provider plugin (v4.5+: provider config moved from
+  // tools.web.search.<provider> to plugins.entries.<provider>.config.webSearch)
   const plugins: {
     entries: Record<string, UnknownRecord>;
     load?: { paths: string[] };
@@ -444,22 +229,6 @@ export const buildAssistantOpenclawConfig = (
     entries: {},
   };
 
-  if (options.includeTelegramPlugin) {
-    plugins.entries.telegram = { enabled: true };
-  }
-
-  if (options.telegramWebhookMode) {
-    plugins.entries["telegram-api-proxy"] = { enabled: true };
-    plugins.entries["platform-hooks"] = { enabled: true };
-
-    const paths = options.pluginLoadPaths?.filter((p) => p.trim());
-    if (paths?.length) {
-      plugins.load = { paths };
-    }
-  }
-
-  // Web search provider plugin (v4.5+: provider config moved from
-  // tools.web.search.<provider> to plugins.entries.<provider>.config.webSearch)
   if (context.litellm.enabled && normalizedLiteLLMApiKey) {
     plugins.entries.perplexity = {
       enabled: true,
@@ -528,7 +297,7 @@ export const buildAssistantOpenclawConfig = (
               models: [
                 {
                   provider: "moonshot",
-                  model: "kimi-k2.5",
+                  model: "kimi-k2.6",
                   baseUrl: context.litellm.baseUrl.replace(/\/+$/, ""),
                 },
               ],
@@ -543,7 +312,7 @@ export const buildAssistantOpenclawConfig = (
               models: [
                 {
                   provider: "moonshot",
-                  model: "kimi-k2.5",
+                  model: "kimi-k2.6",
                   baseUrl: context.litellm.baseUrl.replace(/\/+$/, ""),
                 },
               ],
@@ -556,7 +325,7 @@ export const buildAssistantOpenclawConfig = (
   };
 
   // Enable all commands, including runtime config edits via /config
-  const commands: UnknownRecord = {
+  next.commands = {
     native: true,
     text: true,
     bash: true,
@@ -564,11 +333,6 @@ export const buildAssistantOpenclawConfig = (
     debug: true,
     restart: true,
   };
-  const ownerAllowFrom = buildOwnerAllowFrom(options.ownerTelegramUserId);
-  if (ownerAllowFrom?.length) {
-    commands.ownerAllowFrom = ownerAllowFrom;
-  }
-  next.commands = commands;
 
   // Disable built-in agent-browser (replaced by Browserbase plugin)
   next.browser = {

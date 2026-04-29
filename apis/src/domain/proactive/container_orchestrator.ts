@@ -5,7 +5,7 @@
  * One user = one container (scope = 'user', no assistant/bot concept).
  */
 
-import type { ContainerRuntime, ContainerRef } from '../container/contracts.js';
+import type { ContainerRuntime, ContainerRef, ProbeOptions } from '../container/contracts.js';
 import type { ProactiveContainer, ProactiveContainerParams } from './types.js';
 import {
   upsertContainer,
@@ -19,10 +19,27 @@ import {
 } from './user_service.js';
 import type { ContainerWithToken } from './user_service.js';
 import { config } from '../common/config.js';
-import { buildAssistantOpenclawConfig } from '../container/providers/shared/openclaw_config.js';
-import { SCHEDULER_PASSTHROUGH_KEYS } from '../container/providers/shared/webhook_params.js';
+import { buildOpenclawConfig } from '../container/providers/shared/openclaw_config.js';
+/**
+ * Env vars forwarded as-is from APIs into each user container so the in-container
+ * background scheduler (proactive-ai plugin) can read them. APIs does not consume
+ * them itself.
+ */
+const SCHEDULER_PASSTHROUGH_KEYS = [
+  'BACKGROUND_AUTO_LOOP_TASKS_ENABLED',
+  'BACKGROUND_TASK_TICK_MS',
+  'BACKGROUND_TASK_LEASE_MS',
+  'CONNECTOR_INIT_DEFAULT_LIMIT',
+  'CONNECTOR_INIT_RECONCILER_INTERVAL_MS',
+  'CONNECTOR_INIT_EVOLVE_TIMEOUT_MS',
+  'CONNECTOR_INIT_DISABLED_TOOLKITS',
+  'CONNECTOR_SYNC_INTERVAL_MS',
+  'CONNECTOR_SYNC_ENQUEUER_INTERVAL_MS',
+  'CONNECTOR_SYNC_DISABLED_TOOLKITS',
+  'DREAMING_ENQUEUER_INTERVAL_MS',
+] as const;
 import { ensureProactiveLiteLLMKey } from './litellm_key_service.js';
-import { getOrCreateBrowserContext } from './browser_context_service.js';
+import { getOrCreateBrowserContext, deleteBrowserContext } from './browser_context_service.js';
 import { pool } from '../common/db/core.js';
 
 /** Build env vars for a proactive-ai container. */
@@ -38,14 +55,10 @@ function buildContainerEnv(
     litellm: config.litellm,
   };
 
-  const openclawConfig = buildAssistantOpenclawConfig(openclawConfigContext, {
+  const openclawConfig = buildOpenclawConfig(openclawConfigContext, {
     gatewayToken: params.gatewayToken,
     gatewayBind: config.container.runtime === 'docker' ? 'lan' : 'loopback',
-    ownerTelegramUserId: null,
-    assistantBotToken: null,
     liteLlmApiKey: litellmApiKey || null,
-    includeTelegramPlugin: false,
-    telegramWebhookMode: false,
   }) as Record<string, unknown>;
 
   // Merge proactive-ai plugin entries
@@ -135,7 +148,7 @@ export class ProactiveContainerOrchestrator {
     if (existing) {
       const result = await existing;
       const container = await getContainerForUser(supabaseUserId);
-      return { ...result, gatewayToken: container?.gateway_token ?? '' };
+      return { ...result, gatewayToken: container?.container_proxy_secret ?? '' };
     }
 
     const job = withUserLock(supabaseUserId, () => this.runEnsure(supabaseUserId)).finally(() => {
@@ -148,7 +161,7 @@ export class ProactiveContainerOrchestrator {
 
     const result = await job;
     const container = await getContainerForUser(supabaseUserId);
-    return { ...result, gatewayToken: container?.gateway_token ?? '' };
+    return { ...result, gatewayToken: container?.container_proxy_secret ?? '' };
   }
 
   async suspendContainer(supabaseUserId: string): Promise<boolean> {
@@ -210,33 +223,52 @@ export class ProactiveContainerOrchestrator {
     return true;
   }
 
+  /**
+   * Tear down every per-user persistent resource. Order matters:
+   *   1. container/machine — stop the runtime first so nothing keeps writing
+   *   2. volume / host bind-mount — wipe persisted OpenClaw state
+   *   3. Browserbase remote context — delete cookies/login profile on Browserbase
+   *   4. LiteLLM key + user — release LLM quota / billing
+   *   5. DB users row — cascades to runtime_instances, proactive_browser_context,
+   *      and user_devices (FK ON DELETE CASCADE)
+   *
+   * Each step is best-effort: a remote-API failure on (3)/(4) leaves an
+   * orphan on the third-party side but doesn't block local deletion.
+   */
   async deleteAccount(supabaseUserId: string): Promise<void> {
+    const uid = supabaseUserId.slice(0, 8);
     const container = await getContainerForUser(supabaseUserId);
+    const containerName = container?.container_name
+      ?? `proactive-${supabaseUserId.slice(0, 8)}`;
+    const volumeKey = `proactive_${supabaseUserId.replace(/-/g, '').slice(0, 16)}`;
 
+    // 1. Container / machine
     if (container?.runtime_ref) {
       const ref = await this.runtime.findContainer(container.runtime_ref, [container.container_name]);
       if (ref) {
-        await this.runtime.destroyContainer(ref.id);
-      }
-    }
-
-    // Destroy volume (Fly-specific)
-    if (container) {
-      try {
-        const volumeKey = `proactive_${supabaseUserId.replace(/-/g, '').slice(0, 16)}`;
-        const { listVolumes, destroyVolume } = await import('../container/providers/fly/fly_client.js');
-        const volumes = await listVolumes();
-        for (const vol of volumes) {
-          if (vol.name === volumeKey && vol.state !== 'pending_destroy') {
-            await destroyVolume(vol.id);
-          }
+        try {
+          await this.runtime.destroyContainer(ref.id);
+        } catch (err) {
+          console.error(`[proactive] destroyContainer failed for user ${uid}`, err);
         }
-      } catch (err) {
-        console.error(`[proactive] Failed to destroy volume for user ${supabaseUserId.slice(0, 8)}`, err);
       }
     }
 
-    // Delete LiteLLM key + user (keys stored on users table)
+    // 2. Persistent volume (host bind-mount on Docker, Fly volume on Fly)
+    try {
+      await this.runtime.destroyContainerVolume({ containerName, volumeKey });
+    } catch (err) {
+      console.error(`[proactive] destroyContainerVolume failed for user ${uid}`, err);
+    }
+
+    // 3. Browserbase remote context (cookies/login persistence)
+    try {
+      await deleteBrowserContext(pool, supabaseUserId);
+    } catch (err) {
+      console.error(`[proactive] deleteBrowserContext failed for user ${uid}`, err);
+    }
+
+    // 4. LiteLLM key + user
     try {
       const { deleteLiteLLMKey, deleteLiteLLMUser, isLiteLLMClientEnabled } = await import('../litellm/client.js');
       if (isLiteLLMClientEnabled()) {
@@ -252,12 +284,13 @@ export class ProactiveContainerOrchestrator {
         }
       }
     } catch (err) {
-      console.error(`[proactive] Failed to clean up LiteLLM for user ${supabaseUserId.slice(0, 8)}`, err);
+      console.error(`[proactive] LiteLLM cleanup failed for user ${uid}`, err);
     }
 
+    // 5. DB user row (cascades the rest)
     await deleteUserAccount(supabaseUserId);
     this.invalidateReconcileCache(supabaseUserId);
-    console.log(`[proactive] Account deleted for user ${supabaseUserId.slice(0, 8)}`);
+    console.log(`[proactive] Account deleted for user ${uid}`);
   }
 
   resolveTarget(container: { runtime_ref: string | null; container_name: string; metadata?: Record<string, unknown> }) {
@@ -404,7 +437,7 @@ export class ProactiveContainerOrchestrator {
     }
 
     // Create new container
-    const gatewayToken = user.gateway_token;
+    const gatewayToken = user.container_proxy_secret;
     const dbRecord = await upsertContainer({
       internalUserId: user.id,
       containerName,
@@ -437,22 +470,12 @@ export class ProactiveContainerOrchestrator {
 
     const env = buildContainerEnv(params, browserContextId);
 
-    const created = this.runtime.createGenericContainer
-      ? await this.runtime.createGenericContainer({
-          containerName,
-          gatewayToken,
-          env,
-          volumeKey: `proactive_${supabaseUserId.replace(/-/g, '').slice(0, 16)}`,
-        })
-      : await this.runtime.createContainer({
-          assistantBotId: 0,
-          assistantId: 0,
-          ownerTelegramUserId: null,
-          containerName,
-          gatewayToken,
-          assistantBotToken: null,
-          liteLlmApiKey: params.litellmApiKey,
-        } as any);
+    const created = await this.runtime.createGenericContainer({
+      containerName,
+      gatewayToken,
+      env,
+      volumeKey: `proactive_${supabaseUserId.replace(/-/g, '').slice(0, 16)}`,
+    });
 
     await updateContainerStatus(user.id, {
       status: created.state === 'running' ? 'running' : 'creating',
@@ -460,18 +483,95 @@ export class ProactiveContainerOrchestrator {
       metadata: created.metadata as any,
     });
 
+    let runningRef: ContainerRef;
     if (created.state === 'running') {
-      return { containerId: created.id, ready: true };
+      runningRef = created;
+    } else {
+      try {
+        runningRef = await this.runtime.startContainer(created.id);
+        await updateContainerStatus(user.id, {
+          status: 'running',
+          runtime_ref: runningRef.id,
+          metadata: runningRef.metadata as any,
+        });
+      } catch (err) {
+        console.error(`[proactive] Failed to start container for user ${supabaseUserId}`, err);
+        await updateContainerStatus(user.id, { status: 'error' });
+        return { containerId: created.id, ready: false };
+      }
     }
 
-    try {
-      const started = await this.runtime.startContainer(created.id);
-      await updateContainerStatus(user.id, { status: 'running', runtime_ref: started.id, metadata: started.metadata as any });
-      return { containerId: started.id, ready: true };
-    } catch (err) {
-      console.error(`[proactive] Failed to start container for user ${supabaseUserId}`, err);
-      await updateContainerStatus(user.id, { status: 'error' });
-      return { containerId: created.id, ready: false };
+    // Don't lie to the frontend: only flag ready=true after the gateway has
+    // proven stably reachable. Cold starts on OpenClaw run multiple plugin
+    // installs that each trigger a SIGUSR1 reload (5+ reloads observed in
+    // a single boot), each one closing all WebSockets — apis returning
+    // ready=true on first start_container ack causes the frontend to fire
+    // a wave of /api/proxy/* requests right into a reload window, all
+    // hitting socket-hang-up and reporting `unhealthy` to the user.
+    const ready = await waitForStableReady(this.runtime, runningRef, {
+      gatewayToken,
+      gatewayPort: config.openclaw.gatewayPort,
+    });
+    if (!ready) {
+      console.warn(
+        `[proactive] Container ${runningRef.id.slice(0, 12)} for user ${supabaseUserId.slice(0, 8)} did not stabilize within budget; proceeding optimistically`,
+      );
     }
+    return { containerId: runningRef.id, ready };
   }
+}
+
+/**
+ * Probe the gateway twice with `stablePeriodMs` between to verify it stayed
+ * up — single-probe success is not enough during OpenClaw plugin reload
+ * storms (5+ reloads observed in one cold boot). Returns false on overall
+ * timeout; the caller decides whether to surface that to the frontend.
+ *
+ * Exported as a standalone helper so the policy is unit-testable against a
+ * scripted ContainerRuntime mock without spinning up a real container.
+ */
+export interface StableReadyOptions {
+  gatewayToken: string;
+  gatewayPort: number;
+  stablePeriodMs?: number;
+  totalTimeoutMs?: number;
+  perProbeTimeoutMs?: number;
+  /** Override for tests; defaults to setTimeout-based sleep. */
+  sleepImpl?: (ms: number) => Promise<void>;
+}
+
+const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+export async function waitForStableReady(
+  runtime: ContainerRuntime,
+  ref: ContainerRef,
+  opts: StableReadyOptions,
+): Promise<boolean> {
+  const stablePeriodMs = opts.stablePeriodMs ?? 3_000;
+  const totalTimeoutMs = opts.totalTimeoutMs ?? 120_000;
+  const perProbeTimeoutMs = opts.perProbeTimeoutMs ?? 15_000;
+  const sleep = opts.sleepImpl ?? realSleep;
+
+  const probeOpts: ProbeOptions = {
+    timeoutMs: perProbeTimeoutMs,
+    gatewayToken: opts.gatewayToken,
+    gatewayPort: opts.gatewayPort,
+  };
+  const deadline = Date.now() + totalTimeoutMs;
+
+  while (Date.now() < deadline) {
+    const ok = await runtime.probeReady(ref, probeOpts).catch(() => false);
+    if (!ok) {
+      await sleep(1_000);
+      continue;
+    }
+
+    // Up — verify it stays up across stablePeriodMs (defends against the
+    // plugin-install-triggered reload window that closes all sockets).
+    await sleep(stablePeriodMs);
+    const stillOk = await runtime.probeReady(ref, probeOpts).catch(() => false);
+    if (stillOk) return true;
+    // Reload happened mid-window — restart the cycle.
+  }
+  return false;
 }

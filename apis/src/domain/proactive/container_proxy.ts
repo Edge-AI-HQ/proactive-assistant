@@ -9,7 +9,19 @@
 import type { Request, Response } from 'express';
 import http from 'node:http';
 import type { ProactiveContainerOrchestrator } from './container_orchestrator.js';
-import { getContainerForUser, touchUserActivity } from './user_service.js';
+import { getContainerForUser } from './user_service.js';
+
+/**
+ * Dedicated agent for /api/proxy/* requests with keep-alive disabled.
+ *
+ * OpenClaw fires SIGUSR1 reloads on plugin install / model change, closing
+ * every WebSocket and HTTP socket on the gateway side. A keep-alive pool on
+ * apis would happily hand out those (now-dead) sockets to the next request,
+ * which then surfaces as `socket hang up`. Burning a fresh TCP connection
+ * per proxied request is sub-millisecond on host.docker.internal, well
+ * worth the trade for invariant correctness.
+ */
+const proxyAgent = new http.Agent({ keepAlive: false });
 
 export function createProactiveProxy(orchestrator: ProactiveContainerOrchestrator) {
   return async function proxyHandler(req: Request, res: Response): Promise<void> {
@@ -19,10 +31,8 @@ export function createProactiveProxy(orchestrator: ProactiveContainerOrchestrato
       return;
     }
 
-    // Touch activity for idle suspend tracking
-    void touchUserActivity(auth.userId).catch(() => {});
-
     // Reconcile DB with runtime before trusting container state
+    // (last_active_at is refreshed by requireProactiveAuth's upsertUser)
     let container = await orchestrator.reconcileContainer(auth.userId);
 
     if (!container) {
@@ -72,7 +82,7 @@ export function createProactiveProxy(orchestrator: ProactiveContainerOrchestrato
       ...Object.fromEntries(
         Object.entries(req.headers).filter(([, v]) => typeof v === 'string')
       ) as Record<string, string>,
-      Authorization: `Bearer ${container.gateway_token}`,
+      Authorization: `Bearer ${container.container_proxy_secret}`,
       host: target.hostOverride ?? new URL(target.httpBaseUrl).host,
     };
 
@@ -122,6 +132,7 @@ export function createProactiveProxy(orchestrator: ProactiveContainerOrchestrato
         {
           method: req.method,
           headers: proxyHeaders,
+          agent: proxyAgent,                    // no keep-alive: avoid stale sockets
           timeout: 600_000, // 10 minutes for long pipeline runs
         },
         (proxyRes) => {

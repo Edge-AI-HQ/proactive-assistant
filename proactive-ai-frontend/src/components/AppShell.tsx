@@ -24,6 +24,7 @@ import DebugPanel from "./DebugPanel";
 import CardChat from "./CardChat";
 import CardDetailBody from "./CardDetailBody";
 import AiSphere from "./AiSphere";
+import { GenerationIndicator } from "./GenerationIndicator";
 import {
   Drawer,
   DrawerContent,
@@ -93,7 +94,6 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
     const saved = sessionStorage.getItem("proactive-ai:activeView");
     return saved && ["now", "chat", "goals", "control"].includes(saved) ? saved as MenuId : "now";
   });
-  const [iterations, setIterations] = useState(2);
   const [chatTarget, setChatTarget] = useState<{ card: IntentCard; score?: EvaluationScore | null } | null>(null);
   const [selectedCard, setSelectedCard] = useState<IntentCard | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -390,7 +390,7 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
         {/* Weather + Greeting */}
         <div className="relative z-20 px-5 pt-3 pb-2">
           {weather && (
-            <div className="flex items-center mb-3">
+            <div className="flex items-center gap-2 mb-3">
               <div className="glass-card-strong px-3 py-1.5 flex items-center gap-1.5 flex-nowrap whitespace-nowrap max-w-full">
                 <weather.icon size={14} strokeWidth={1.5} className="text-foreground/60 shrink-0" />
                 <span className="text-sm font-medium text-foreground shrink-0">{weather.temp}&deg;</span>
@@ -402,6 +402,12 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
                   </>
                 )}
               </div>
+              <GenerationIndicator />
+            </div>
+          )}
+          {!weather && (
+            <div className="mb-3">
+              <GenerationIndicator />
             </div>
           )}
           <h1 className="text-2xl font-light text-foreground leading-tight">
@@ -568,9 +574,7 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
           <DebugPanel
             health={health}
             run={run}
-            iterations={iterations}
-            onIterationsChange={setIterations}
-            onGenerate={() => generate(iterations)}
+            onGenerate={() => generate()}
             isRunning={isRunning}
           />
           <button

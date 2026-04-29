@@ -18,7 +18,6 @@ import { basketMeta } from "@/lib/basket-meta";
 interface StoredRun {
   id: string;
   completedAt: string;
-  totalIterations: number;
   finalCards: IntentCard[];
   scoreMap?: Record<string, EvaluationScore>;
 }

@@ -1,31 +1,17 @@
-export { configureContainerManagerRuntime } from "./runtime.js";
 export {
-  destroyAssistantContainer,
-  ensureAssistantContainer,
-  prepareContainerRuntime,
-  resolveGatewayTargetForAssistant,
-  resumeAssistantContainer,
-  stopAssistantContainer,
-  suspendAssistantContainer,
-} from "./service.js";
-export type {
-  ContainerRuntime,
-  ContainerRef,
-  ContainerState,
-  AssistantContainerParams,
-  ProbeOptions,
-  GatewayTarget,
+  gatewayHostHeaders,
+  type ContainerRuntime,
+  type ContainerRef,
+  type ContainerState,
+  type GenericContainerParams,
+  type GatewayTarget,
+  type ProbeOptions,
 } from "./contracts.js";
-export type {
-  AssistantMutableFields,
-  AssistantRecord,
-  ContainerManagerConfig,
-  ContainerManagerRuntime,
-  ContainerNotifier,
-  ContainerStateStore,
-  ReadAssistantLiteLLMVirtualKey,
-  ReadUserLiteLLMVirtualKey,
-  UserMutableFields,
-  UserRecord,
-} from "./types.js";
-export { ContainerOrchestrator } from "./orchestrator.js";
+export { getContainerRuntime } from "./provider_factory.js";
+
+// Provider runtime initialization. Only Fly currently has prepare-time work
+// (image digest check); Docker is a no-op. Called once from server bootstrap.
+import { getContainerRuntime } from "./provider_factory.js";
+export const prepareContainerRuntime = async (): Promise<void> => {
+  await getContainerRuntime().prepare();
+};

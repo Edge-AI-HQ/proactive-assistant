@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage: DATABASE_URL="..." ./scripts/cleanup-user.sh [-y] <telegram_user_id>
-# DATABASE_URL="postgresql://postgres:REDACTED@db.ighqvjvsjpmbjdjfahvl.supabase.co:5432/postgres" ./scripts/cleanup-user.sh 6142814327
-# DATABASE_URL="postgresql://postgres:REDACTED@db.ighqvjvsjpmbjdjfahvl.supabase.co:5432/postgres" ./scripts/cleanup-user.sh 5572561504
+# Usage: DATABASE_URL="..." ./scripts/cleanup-user.sh [-y] <supabase_user_id>
 # Destroys the user's Fly machine and deletes all DB records (cascade).
 # Requires: psql, flyctl
 
@@ -13,19 +11,18 @@ while getopts "y" opt; do
 done
 shift $((OPTIND - 1))
 
-TELEGRAM_USER_ID="${1:?Usage: $0 [-y] <telegram_user_id>}"
-FLY_APP="${FLY_APP:-pinclaw-api-dev}"
+SUPABASE_USER_ID="${1:?Usage: $0 [-y] <supabase_user_id>}"
+FLY_APP="${FLY_APP:-proactive-ai-assistant-dev}"
 DATABASE_URL="${DATABASE_URL:?Set DATABASE_URL (Supabase postgres connection string)}"
 
-echo "🔍 Looking up telegram_user_id=${TELEGRAM_USER_ID} ..."
+echo "🔍 Looking up supabase_user_id=${SUPABASE_USER_ID} ..."
 
 ROW=$(psql "$DATABASE_URL" -t -A -F'|' -c "
-  SELECT u.id, u.telegram_username,
+  SELECT u.id, u.email,
     r.runtime_ref, r.container_name, r.status
   FROM users u
-  LEFT JOIN assistants a ON a.owner_user_id = u.id
-  LEFT JOIN runtime_instances r ON (r.assistant_id = a.id OR r.owner_user_id = u.id)
-  WHERE u.telegram_user_id = ${TELEGRAM_USER_ID}
+  LEFT JOIN runtime_instances r ON r.owner_user_id = u.id AND r.scope = 'user'
+  WHERE u.supabase_user_id = '${SUPABASE_USER_ID}'::uuid
   LIMIT 1;
 ")
 
@@ -34,11 +31,11 @@ if [ -z "$ROW" ]; then
   exit 1
 fi
 
-IFS='|' read -r USER_ID TG_USERNAME RUNTIME_REF CONTAINER_NAME RUNTIME_STATUS <<< "$ROW"
+IFS='|' read -r USER_ID EMAIL RUNTIME_REF CONTAINER_NAME RUNTIME_STATUS <<< "$ROW"
 
 echo ""
 echo "  user_id:        ${USER_ID}"
-echo "  username:       ${TG_USERNAME}"
+echo "  email:          ${EMAIL}"
 echo "  container:      ${CONTAINER_NAME:-none}"
 echo "  runtime_ref:    ${RUNTIME_REF:-none}"
 echo "  status:         ${RUNTIME_STATUS:-none}"
@@ -69,4 +66,4 @@ echo "🗑️  Deleting DB records (user_id=${USER_ID}, cascade) ..."
 psql "$DATABASE_URL" -c "DELETE FROM users WHERE id = ${USER_ID};"
 
 echo ""
-echo "✅ Done. telegram_user_id=${TELEGRAM_USER_ID} fully cleaned up."
+echo "✅ Done. supabase_user_id=${SUPABASE_USER_ID} fully cleaned up."

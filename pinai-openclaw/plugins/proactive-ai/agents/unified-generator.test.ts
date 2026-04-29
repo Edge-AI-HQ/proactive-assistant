@@ -87,13 +87,13 @@ test("buildUnifiedGeneratorPrompt omits empty feedback and card history sections
   assert.doesNotMatch(prompt, /Recent Generated Card History/);
 });
 
-test("buildUnifiedGeneratorPrompt output format includes evaluations and iterationFeedback", () => {
+test("buildUnifiedGeneratorPrompt output format includes evaluations and batchFeedback", () => {
   const prompt = buildUnifiedGeneratorPrompt({
     currentDate: "2026-04-15",
   });
 
   assert.match(prompt, /"evaluations"/);
-  assert.match(prompt, /"iterationFeedback"/);
+  assert.match(prompt, /"batchFeedback"/);
   assert.match(prompt, /"cards"/);
   assert.match(prompt, /unified-generator/);
 });

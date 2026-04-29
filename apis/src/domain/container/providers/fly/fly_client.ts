@@ -1,11 +1,5 @@
-import { getContainerManagerRuntime } from "../../runtime.js";
-import type { ContainerManagerConfig } from "../../types.js";
 import type { FlyMachine, FlyVolume } from "./types.js";
-
-const config = new Proxy({} as ContainerManagerConfig, {
-  get: (_target, prop) =>
-    getContainerManagerRuntime().config[prop as keyof ContainerManagerConfig],
-});
+import { config } from "../../../common/config.js";
 
 class FlyApiError extends Error {
   readonly status: number;

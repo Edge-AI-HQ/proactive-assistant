@@ -1,21 +1,20 @@
-import { getContainerManagerRuntime } from "../../runtime.js";
-import type { ContainerManagerConfig } from "../../types.js";
 import type {
-  AssistantContainerParams,
-  GenericContainerParams,
   ContainerRef,
   ContainerRuntime,
   ContainerState,
   GatewayTarget,
+  GenericContainerParams,
   ProbeOptions,
 } from "../../contracts.js";
-import { isAssistantContainerName } from "../../naming.js";
 import {
   createMachine as createFlyMachine,
+  createVolume,
   destroyMachine,
+  destroyVolume,
   getMachine,
   isNotFoundError,
   listMachines,
+  listVolumes,
   startMachine,
   stopMachine,
   suspendMachine,
@@ -24,25 +23,8 @@ import {
   formatHostForUrl,
   probeGatewayReady,
 } from "../shared/gateway_probe.js";
-import { ensureFlyOpenclawImageDigestPullable } from "./image_digest_guard.js";
-import {
-  createAssistantMachine as provisionAssistantMachine,
-  shouldRecreateAssistantMachine,
-} from "./assistant_machine.js";
 import type { FlyMachine } from "./types.js";
-
-// ---------------------------------------------------------------------------
-// Config proxy — lazily reads from the global runtime singleton
-// ---------------------------------------------------------------------------
-
-const config = new Proxy({} as ContainerManagerConfig, {
-  get: (_target, prop) =>
-    getContainerManagerRuntime().config[prop as keyof ContainerManagerConfig],
-});
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
+import { config } from "../../../common/config.js";
 
 const FLY_REF_PREFIX = "fly:";
 /** 20GB encrypted volume formatting takes ~5-6 min; extend wait accordingly. */
@@ -51,25 +33,16 @@ const FLY_MACHINE_WAIT_TIMEOUT_MS = 360_000;
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
-// ---------------------------------------------------------------------------
-// Fly ref encoding / decoding
-// ---------------------------------------------------------------------------
-
 const parseFlyContainerRef = (
   value: string | null | undefined,
 ): { machineId: string; privateIp?: string } | null => {
   if (!value) return null;
-
   if (value.startsWith(FLY_REF_PREFIX)) {
     const payload = value.slice(FLY_REF_PREFIX.length);
     const [machineId, privateIpRaw] = payload.split("|", 2);
     const privateIp = privateIpRaw?.trim();
     if (!machineId) return null;
     return privateIp ? { machineId, privateIp } : { machineId };
-  }
-
-  if (isAssistantContainerName(value)) {
-    return null;
   }
   return { machineId: value };
 };
@@ -82,10 +55,6 @@ const encodeFlyContainerRef = (
     ? `${FLY_REF_PREFIX}${machineId}|${privateIp}`
     : `${FLY_REF_PREFIX}${machineId}`;
 
-// ---------------------------------------------------------------------------
-// Helpers: FlyMachine → ContainerRef conversion
-// ---------------------------------------------------------------------------
-
 const normalizeMachineState = (machine: FlyMachine): ContainerState => {
   const state = (machine.state || "").toLowerCase();
   if (state === "started" || state === "running") return "running";
@@ -97,15 +66,8 @@ const normalizeMachineState = (machine: FlyMachine): ContainerState => {
 };
 
 const machineToContainerRef = (machine: FlyMachine): ContainerRef => {
-  const metadata: Record<string, string> = {};
+  const metadata: Record<string, string> = { machineId: machine.id };
   if (machine.private_ip) metadata.privateIp = machine.private_ip;
-  metadata.machineId = machine.id;
-
-  // Preserve init.exec so needsRecreation can check it without re-fetching
-  const initExec = machine.config?.init?.exec;
-  if (Array.isArray(initExec) && initExec.length > 0) {
-    metadata.initExec = JSON.stringify(initExec);
-  }
 
   const resources: ContainerRef["resources"] = {};
   if (machine.config?.guest?.memory_mb != null) {
@@ -127,10 +89,6 @@ const machineToContainerRef = (machine: FlyMachine): ContainerRef => {
     metadata,
   };
 };
-
-// ---------------------------------------------------------------------------
-// Internal: machine resolution
-// ---------------------------------------------------------------------------
 
 const resolveMachineByRef = async (
   containerId: string | null | undefined,
@@ -172,10 +130,6 @@ const waitForMachineState = async (
   return getMachine(machineId);
 };
 
-// ---------------------------------------------------------------------------
-// Gateway target resolution
-// ---------------------------------------------------------------------------
-
 const toGatewayTarget = (host: string, port: number): GatewayTarget => {
   const urlHost = formatHostForUrl(host);
   return {
@@ -191,14 +145,12 @@ const toGatewayTarget = (host: string, port: number): GatewayTarget => {
 };
 
 const resolveHostFromRef = (ref: ContainerRef): string => {
-  // Prefer metadata (set when ContainerRef comes from listContainers/findContainer)
   const privateIp = ref.metadata.privateIp;
   const machineId = ref.metadata.machineId;
   if (privateIp) return privateIp;
   if (machineId)
     return `${machineId}.vm.${config.fly.assistantAppName}.internal`;
 
-  // Fallback: parse from ref.id (e.g. when built from a DB record by the orchestrator)
   const parsed = parseFlyContainerRef(ref.id);
   if (parsed?.privateIp) return parsed.privateIp;
   if (parsed?.machineId)
@@ -207,15 +159,11 @@ const resolveHostFromRef = (ref: ContainerRef): string => {
   throw new Error(`Cannot resolve Fly host for container ${ref.id}`);
 };
 
-// ---------------------------------------------------------------------------
-// ContainerRuntime implementation
-// ---------------------------------------------------------------------------
-
 export const flyContainerRuntime: ContainerRuntime = {
   name: "fly",
 
   async prepare(): Promise<void> {
-    await ensureFlyOpenclawImageDigestPullable();
+    // No-op: image digest validation removed alongside legacy assistant flow.
   },
 
   async findContainer(
@@ -236,38 +184,12 @@ export const flyContainerRuntime: ContainerRuntime = {
     return machineToContainerRef(fresh);
   },
 
-  async createContainer(
-    params: AssistantContainerParams,
-  ): Promise<ContainerRef> {
-    const machine = await provisionAssistantMachine({
-      assistantBotId: params.assistantBotId,
-      machineName: params.containerName,
-      ownerTelegramUserId: params.ownerTelegramUserId,
-      gatewayToken: params.gatewayToken,
-      assistantBotToken: params.assistantBotToken,
-      ...(params.googleCredentialsB64 !== undefined
-        ? { googleCredentialsB64: params.googleCredentialsB64 }
-        : {}),
-      liteLlmApiKey: params.liteLlmApiKey,
-      ...(params.onboardingProfileText !== undefined
-        ? { onboardingProfileText: params.onboardingProfileText }
-        : {}),
-      ...(params.onboardingProfileSource !== undefined
-        ? { onboardingProfileSource: params.onboardingProfileSource }
-        : {}),
-      ...(params.skillsConfig ? { skillsConfig: params.skillsConfig } : {}),
-    });
-    return machineToContainerRef(machine);
-  },
-
   async createGenericContainer(
     params: GenericContainerParams,
   ): Promise<ContainerRef> {
     const volumeKey = params.volumeKey ?? params.containerName;
     const volumeName = volumeKey.replace(/[^a-z0-9_]/g, "_").slice(0, 30);
 
-    // Try to find or create a volume
-    const { listVolumes, createVolume } = await import("./fly_client.js");
     const volumes = await listVolumes();
     let volume = volumes.find(
       (v: { name: string; state?: string }) =>
@@ -297,13 +219,8 @@ export const flyContainerRuntime: ContainerRuntime = {
           memory_mb: config.container.memoryMb,
         },
         mounts: [{ volume: volume.id, path: "/app" }],
-        restart: {
-          policy: "on-failure",
-          max_retries: 3,
-        },
-        init: {
-          exec: ["sh", "-lc", "exec pinai-entrypoint.sh"],
-        },
+        restart: { policy: "on-failure", max_retries: 3 },
+        init: { exec: ["sh", "-lc", "exec pinai-entrypoint.sh"] },
       },
     };
 
@@ -363,6 +280,28 @@ export const flyContainerRuntime: ContainerRuntime = {
     }
   },
 
+  async destroyContainerVolume(params: { containerName: string; volumeKey?: string }): Promise<void> {
+    const volumeName = (params.volumeKey ?? params.containerName)
+      .replace(/[^a-z0-9_]/g, "_")
+      .slice(0, 30);
+    let volumes;
+    try {
+      volumes = await listVolumes();
+    } catch (err) {
+      console.warn(`[fly] listVolumes failed during volume cleanup:`, err);
+      return;
+    }
+    for (const vol of volumes) {
+      if (vol.name === volumeName && vol.state !== 'pending_destroy') {
+        try {
+          await destroyVolume(vol.id);
+        } catch (err) {
+          console.warn(`[fly] destroyVolume(${vol.id}) failed:`, err);
+        }
+      }
+    }
+  },
+
   async listContainers(): Promise<ContainerRef[]> {
     const machines = await listMachines();
     return machines.map(machineToContainerRef);
@@ -388,49 +327,6 @@ export const flyContainerRuntime: ContainerRuntime = {
         ...(options.httpProbes ? { httpProbes: options.httpProbes } : {}),
       },
       options,
-    );
-  },
-
-  async needsRecreation(
-    ref: ContainerRef,
-    params: AssistantContainerParams,
-  ): Promise<boolean> {
-    // Reconstruct a minimal FlyMachine from ContainerRef to reuse
-    // shouldRecreateAssistantMachine without an extra Fly API call.
-    const initExec = ref.metadata.initExec
-      ? (JSON.parse(ref.metadata.initExec) as string[])
-      : undefined;
-
-    const machineConfig: FlyMachine["config"] = {
-      guest: {
-        memory_mb: ref.resources?.memoryMb ?? 0,
-        cpus: ref.resources?.cpus ?? 0,
-      },
-    };
-    if (ref.image != null) machineConfig.image = ref.image;
-    if (ref.env != null) machineConfig.env = ref.env;
-    if (initExec) machineConfig.init = { exec: initExec };
-
-    const machine: FlyMachine = {
-      id: ref.metadata.machineId || "",
-      config: machineConfig,
-    };
-    if (ref.name) machine.name = ref.name;
-    if (ref.state) machine.state = ref.state;
-    if (ref.metadata.privateIp) machine.private_ip = ref.metadata.privateIp;
-    if (ref.createdAt) machine.created_at = ref.createdAt;
-    if (ref.updatedAt) machine.updated_at = ref.updatedAt;
-
-    return shouldRecreateAssistantMachine(
-      machine,
-      params.assistantBotId,
-      params.gatewayToken,
-      params.ownerTelegramUserId,
-      params.assistantBotToken,
-      params.liteLlmApiKey,
-      params.onboardingProfileText,
-      params.onboardingProfileSource,
-      params.skillsConfig,
     );
   },
 };

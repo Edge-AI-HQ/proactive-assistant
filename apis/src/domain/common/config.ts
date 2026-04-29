@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
-import type { Config, RequiredSecret } from '../../types.js';
+import type { Config, RequiredSecret } from '../../types/index.js';
 
 const findWorkspaceDir = (startDir: string): string => {
   let current = path.resolve(startDir);
@@ -105,11 +105,6 @@ export const config: Config = {
   port,
   publicBaseUrl,
   apiAuthToken: toTrimmed(process.env.API_INTERNAL_TOKEN),
-  telegram: {
-    token: process.env.TELEGRAM_BOT_TOKEN || '',
-    webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || '',
-    botUsername: process.env.TELEGRAM_BOT_USERNAME || ''
-  },
   openclaw: {
     image: process.env.OPENCLAW_IMAGE || 'pinai-openclaw:latest',
     gatewayPort: toInt(process.env.OPENCLAW_GATEWAY_PORT, 18789),
@@ -121,13 +116,13 @@ export const config: Config = {
     masterKey: toTrimmed(process.env.LITELLM_MASTER_KEY),
     requestTimeoutMs: toInt(process.env.LITELLM_REQUEST_TIMEOUT_MS, 15000),
     syncIntervalMs: toInt(process.env.LITELLM_SYNC_INTERVAL_MS, 300000),
-    keyAliasPrefix: toTrimmed(process.env.LITELLM_KEY_ALIAS_PREFIX, 'claw-assistant-'),
+    keyAliasPrefix: toTrimmed(process.env.LITELLM_KEY_ALIAS_PREFIX, 'proactive-ai-'),
     defaultBudgetUsd: toNullableFloat(process.env.LITELLM_DEFAULT_BUDGET_USD) ?? 0,
     defaultBudgetDuration: toTrimmed(process.env.LITELLM_DEFAULT_BUDGET_DURATION, '30d'),
     defaultRpmLimit: toNullableInt(process.env.LITELLM_DEFAULT_RPM_LIMIT),
     defaultTpmLimit: toNullableInt(process.env.LITELLM_DEFAULT_TPM_LIMIT),
     allowedModels: splitCsv(process.env.LITELLM_ALLOWED_MODELS),
-    openclawDefaultModel: toTrimmed(process.env.LITELLM_OPENCLAW_DEFAULT_MODEL, 'kimi-k2.5')
+    openclawDefaultModel: toTrimmed(process.env.LITELLM_OPENCLAW_DEFAULT_MODEL, 'kimi-k2.6')
   },
   anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
   openaiApiKey: process.env.OPENAI_API_KEY || '',
@@ -140,15 +135,12 @@ export const config: Config = {
   },
   payment: {
     requestTimeoutMs: toInt(process.env.PAYMENT_REQUEST_TIMEOUT_MS, 10000),
-    /** Telegram bot API 调用超时（需要更长时间，因为包含容器创建） */
-    telegramBotRequestTimeoutMs: toInt(process.env.TELEGRAM_BOT_REQUEST_TIMEOUT_MS, 120000),
     stripeSecretKey: toTrimmed(process.env.STRIPE_SECRET_KEY),
     stripeWebhookSecret: toTrimmed(process.env.STRIPE_WEBHOOK_SECRET),
     stripePriceIdBasic: toTrimmed(process.env.STRIPE_PRICE_ID_BASIC),
     stripePriceIdPro: toTrimmed(process.env.STRIPE_PRICE_ID_PRO),
     stripePriceIdMax: toTrimmed(process.env.STRIPE_PRICE_ID_MAX),
     publicBaseUrl: stripTrailingSlash(toTrimmed(process.env.PAYMENT_PUBLIC_BASE_URL)),
-    telegramBotUsername: toTrimmed(process.env.TELEGRAM_BOT_USERNAME),
     cronSecret: toTrimmed(process.env.CRON_SECRET)
   },
   container: {
@@ -163,21 +155,6 @@ export const config: Config = {
         ? 10 * 60 * 1000   // prod: 10 minutes
         : 60 * 1000,        // dev: 1 minute
     ),
-  },
-  telegramRouter: {
-    webhookUrl: toTrimmed(
-      process.env.TELEGRAM_ROUTER_WEBHOOK_URL,
-      `${stripTrailingSlash(publicBaseUrl)}/webhook/telegram`
-    ),
-    webhookPath: toTrimmed(process.env.OPENCLAW_TELEGRAM_WEBHOOK_PATH, '/telegram-webhook'),
-    webhookHost: toTrimmed(process.env.OPENCLAW_TELEGRAM_WEBHOOK_HOST, '0.0.0.0'),
-    webhookPort: toInt(process.env.OPENCLAW_TELEGRAM_WEBHOOK_PORT, 8787),
-    pluginLoadPaths: (
-      toTrimmed(
-        process.env.OPENCLAW_PLUGIN_LOAD_PATHS,
-        '/opt/pinai/plugins/telegram-api-proxy:/opt/pinai/plugins/platform-hooks'
-      )
-    ).split(':').map(p => p.trim()).filter(Boolean)
   },
   fly: {
     apiBaseUrl: process.env.FLY_API_BASE_URL || 'https://api.machines.dev/v1',
@@ -198,21 +175,8 @@ export const config: Config = {
   },
   featureFlags: {
     allowMissingSecrets: toBool(process.env.ALLOW_MISSING_SECRETS, false)
-  },
-  legacyProfile: {
-    mysqlUrl: toTrimmed(
-      process.env.PIN_MINING_MYSQL_URL || process.env.LEGACY_PROFILE_MYSQL_URL
-    )
-  },
-  miniapp: {
-    localDevEnabled: toBool(process.env.MINIAPP_LOCAL_DEV, false),
-    devTelegramUserId: toNullablePositiveInt(process.env.MINIAPP_DEV_TELEGRAM_USER_ID),
   }
 };
-
-if (config.miniapp.localDevEnabled && config.container.runtime !== 'docker') {
-  throw new Error('MINIAPP_LOCAL_DEV is only supported when CONTAINER_RUNTIME=docker');
-}
 
 export const requiredSecrets: RequiredSecret[] = (() => {
   const secrets: RequiredSecret[] = [
@@ -224,7 +188,6 @@ export const requiredSecrets: RequiredSecret[] = (() => {
   }
 
   secrets.push(
-    ['STRIPE_SECRET_KEY', config.payment.stripeSecretKey],
     ['API_INTERNAL_TOKEN', config.apiAuthToken]
   );
 

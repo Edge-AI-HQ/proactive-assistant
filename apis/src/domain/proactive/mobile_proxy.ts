@@ -7,6 +7,9 @@ import type { MobileSyncTarget, ContainerWithToken } from './user_service.js';
 import { findDeviceByToken } from '../devices/index.js';
 import { config } from '../common/config.js';
 
+// See container_proxy.ts for rationale — same SIGUSR1 reload concern.
+const mobileProxyAgent = new http.Agent({ keepAlive: false });
+
 export function isMobileProxyEnabled(): boolean {
   if (process.env.MOBILE_SYNC_PROXY_ENABLED?.trim() === '1') return true;
   const nodeEnv = (process.env.NODE_ENV ?? config.nodeEnv).trim().toLowerCase();
@@ -134,7 +137,7 @@ export function createMobileProxy(orchestrator: ProactiveContainerOrchestrator) 
     const proxyPath = rewriteMobileProxyPath(req.originalUrl);
     const targetUrl = new URL(proxyPath, target.httpBaseUrl);
     const proxyHeaders = buildMobileProxyHeaders(req.headers, {
-      gatewayToken: container.gateway_token,
+      gatewayToken: container.container_proxy_secret,
       targetBaseUrl: target.httpBaseUrl,
       ...(target.hostOverride ? { hostOverride: target.hostOverride } : {}),
     });
@@ -144,6 +147,7 @@ export function createMobileProxy(orchestrator: ProactiveContainerOrchestrator) 
       {
         method: req.method,
         headers: proxyHeaders,
+        agent: mobileProxyAgent,
         timeout: 60_000,
       },
       (proxyRes) => {

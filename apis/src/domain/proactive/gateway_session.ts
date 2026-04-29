@@ -43,6 +43,17 @@ function verifySignature(payload: string, sig: string): boolean {
 
 // ── Ticket (stateless, 60s TTL) ──
 
+/**
+ * Issue a short-lived ticket that the browser exchanges for a session cookie.
+ *
+ * SECURITY INVARIANT: this function MUST only be called from a route protected
+ * by `requireProactiveAuth`. That middleware is the single point that
+ * upserts the local `users` row, so once a ticket is signed, downstream WS
+ * upgrade handlers can trust that `getUserBySupabaseId(userId)` will resolve
+ * a row. If you add a new ticket-issuing route, keep it behind
+ * `requireProactiveAuth` — otherwise WS gateway proxy will return 503 for
+ * brand-new users whose row hasn't been created yet.
+ */
 export function createTicket(userId: string): { ticket: string; expiresIn: number } {
   const expiresAt = Date.now() + TICKET_TTL_MS;
   const payload = `${userId}:${expiresAt}`;
