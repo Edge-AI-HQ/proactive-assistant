@@ -11,7 +11,7 @@ description: "background_tasks 队列 + scheduler + handler 的当前事实(后�
 
 `enqueuer -> background_tasks 队列 -> scheduler tick claim -> handler 跑 -> heartbeat 续 lease -> reaper 回收过期`
 
-服务于三类长跑任务:**connector init / connector sync / auto-dreaming**。框架本身只管调度(claim、lease、retry、reaper),具体业务逻辑在各 handler 里。整套系统由 `BACKGROUND_AUTO_LOOP_TASKS_ENABLED='1'` 门禁启停,Phase A 默认关闭。
+服务于三类长跑任务:**connector init / connector sync / auto-dreaming**。框架本身只管调度(claim、lease、retry、reaper),具体业务逻辑在各 handler 里。整套系统**默认开启**(commit `1fd08ab6` 起),可显式设 `BACKGROUND_AUTO_LOOP_TASKS_ENABLED=0` 关闭(回退到老的 setInterval-based auto-loop)。
 
 ```mermaid
 flowchart LR
@@ -75,7 +75,7 @@ sequenceDiagram
 | Claim | 选状态 `queued`、`run_after <= now`、type 在已注册集合里、按 `priority` 排序的最高任务。 |
 | Lease | 默认 60s(`BACKGROUND_TASK_LEASE_MS`);handler 通过 `ctx.heartbeat()` 续期,可指定 `leaseDurationMs` 单次拉长(如 auto-dreaming 显式 600s)。 |
 | Reaper | 每 tick 第一步 `recoverStaleBackgroundTasks()`:`lease_expires_at < now` 的任务回到 queued 或终态 `lost`,按 retry 策略走。 |
-| 启动门禁 | `BACKGROUND_AUTO_LOOP_TASKS_ENABLED='1'` 才 start;Phase A 默认关。 |
+| 启动门禁 | **默认开启**(`isBackgroundAutoLoopTasksEnabled()` helper,见 `pinai-openclaw/plugins/proactive-ai/shared/background-auto-loop-tasks.ts`);要关掉显式设 `BACKGROUND_AUTO_LOOP_TASKS_ENABLED=0`。 |
 | 启动位置 | `index.ts` plugin.register():注册 handler、起 scheduler、起 reconciler、起 enqueuer 定时器。 |
 
 ### Handler
@@ -179,7 +179,7 @@ npm run type-check
 - 单进程假设是刻意的(Phase A);如果以后跑多 worker 必须加 SQL row lock,现在没有。
 - handler 跑成功但 lease 已被 reaper 抢走是已知 race:reaper 下次会重新 claim,业务侧靠 `idempotency_key` 兜底,**不要**在 handler 里假设独占性写入。
 - `auto.dreaming` 默认 60s lease 不够,handler 自己 heartbeat 续到 10min;改 dreaming 业务时别忘记保留 heartbeat 调用。
-- `BACKGROUND_AUTO_LOOP_TASKS_ENABLED` 默认关,本地起 plugin 不会自动跑后台任务;调试时显式 export `BACKGROUND_AUTO_LOOP_TASKS_ENABLED=1`。
+- `BACKGROUND_AUTO_LOOP_TASKS_ENABLED` 现在**默认开**(commit `1fd08ab6` 起),本地起 plugin 后台任务会自动跑;要关闭后台调度回退到老 auto-loop 时显式 export `BACKGROUND_AUTO_LOOP_TASKS_ENABLED=0`。
 - reconciler 失败只 `failed=true` 不抛异常,定时器继续转;别指望它能把错误冒泡。
 - schema 走 `CREATE TABLE IF NOT EXISTS` 不走 migration:加列要写在 `db.ts` 的 `ensureDb()` 里,旧容器升级后冷启动会自动 ALTER。
 - `connector.evolve` 是 init/sync 内联的子流程,不是独立任务;别误改成 handler,会破坏入队链路。
