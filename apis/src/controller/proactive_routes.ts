@@ -42,6 +42,7 @@ import {
   cancelPairingCode,
 } from '../domain/devices/pairing.js';
 import { isDomainError } from '../domain/common/errors.js';
+import { createRateLimit } from '../domain/common/rate_limit.js';
 import { getContainerRuntime } from '../domain/container/provider_factory.js';
 import { relayGatewayWs } from '../domain/gateway/gateway_ws_relay.js';
 import { getCurrentModel, setCurrentModel } from '../domain/gateway/gateway_rpc.js';
@@ -121,6 +122,51 @@ router.post('/api/proactive/user/heartbeat', requireProactiveAuth, async (req, r
   }
 });
 
+// ── Rate limiters for device endpoints ──
+//
+// Per-IP for unauthenticated endpoints (pair-code request/poll/cancel,
+// register), per-device-id for authenticated ingest. Numbers picked to
+// be comfortable for normal traffic (a phone batching every minute, a
+// device polling every 3s during pairing) but to make brute force /
+// runaway scripts visibly fail.
+//
+// In-memory + per-process: behind a single Fly machine today; revisit
+// when we replicate. Defined here (above the routes that reference them)
+// so all router.post() calls can pin the middleware in one place.
+
+const ipKey = (req: { ip?: string | undefined; header(name: string): string | undefined }) =>
+  req.header('x-forwarded-for')?.split(',')[0]?.trim() || req.ip || 'unknown-ip';
+
+const ingestLimit = createRateLimit({
+  name: 'devices/ingest',
+  keyFn: (req) => req.header('x-device-id') ?? ipKey(req),
+  capacity: 60, refillPerSec: 1,        // ≤60 ingest calls per minute per device
+});
+
+const registerLimit = createRateLimit({
+  name: 'devices/register',
+  keyFn: ipKey,
+  capacity: 10, refillPerSec: 10 / 60,   // ≤10 per minute per IP
+});
+
+const pairCodeRequestLimit = createRateLimit({
+  name: 'pair-code/request',
+  keyFn: ipKey,
+  capacity: 5, refillPerSec: 5 / 60,     // ≤5 per minute per IP
+});
+
+const pairCodePollLimit = createRateLimit({
+  name: 'pair-code/poll',
+  keyFn: ipKey,
+  capacity: 30, refillPerSec: 30 / 60,   // ≤30 per minute per IP
+});
+
+const pairCodeClaimLimit = createRateLimit({
+  name: 'pair-code/claim',
+  keyFn: ipKey,
+  capacity: 10, refillPerSec: 10 / 60,
+});
+
 // ── Device registry ──
 // See docs/plans/memory-architecture.mdx §三 (APIs user_devices) and apis/db/migrations/002.
 //
@@ -133,7 +179,7 @@ router.post('/api/proactive/user/heartbeat', requireProactiveAuth, async (req, r
 // EncryptedSharedPreferences / web localStorage) and send X-Device-Token
 // + X-Device-Id on every subsequent /api/mobile/* request.
 
-router.post('/api/proactive/devices/register', requireProactiveAuth, async (req, res) => {
+router.post('/api/proactive/devices/register', registerLimit, requireProactiveAuth, async (req, res) => {
   try {
     const auth = req.proactiveAuth!;
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -223,7 +269,7 @@ function sendDomainError(res: Response, err: unknown, fallback: string): void {
   res.status(500).json({ error: 'Internal server error' });
 }
 
-router.post('/api/proactive/devices/pair-code/request', async (req, res) => {
+router.post('/api/proactive/devices/pair-code/request', pairCodeRequestLimit, async (req, res) => {
   try {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const deviceClass = String(body['deviceClass'] ?? body['device_class'] ?? 'wearable').trim() as DevicePlatform;
@@ -235,7 +281,7 @@ router.post('/api/proactive/devices/pair-code/request', async (req, res) => {
   }
 });
 
-router.get('/api/proactive/devices/pair-code/poll', async (req, res) => {
+router.get('/api/proactive/devices/pair-code/poll', pairCodePollLimit, async (req, res) => {
   try {
     const code = String(req.query['code'] ?? '').trim();
     const result = await pollPairingCode(code);
@@ -245,7 +291,7 @@ router.get('/api/proactive/devices/pair-code/poll', async (req, res) => {
   }
 });
 
-router.post('/api/proactive/devices/pair-code/claim', requireProactiveAuth, async (req, res) => {
+router.post('/api/proactive/devices/pair-code/claim', pairCodeClaimLimit, requireProactiveAuth, async (req, res) => {
   try {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const code = String(body['code'] ?? '').trim().toUpperCase();
@@ -530,14 +576,15 @@ if (isMobileProxyEnabled()) {
   // Preferred device-ingest path. New clients should use this.
   // Pinned to /ingest so we don't shadow the device-management routes
   // declared above (/devices/register, /devices, /devices/revoke).
-  router.post('/api/proactive/devices/ingest', async (req, res) => {
+  // Rate limited per device_id (falls back to per-IP when no header).
+  router.post('/api/proactive/devices/ingest', ingestLimit, async (req, res) => {
     const orchestrator = getOrchestrator();
     const proxy = createMobileProxy(orchestrator);
     await proxy(req, res);
   });
   // Legacy alias kept for old mobile clients (MOBILE_ITEMS_INGEST_PATH).
   // Same proxy + rewrite logic; will be removed once all clients cut over.
-  router.all('/api/mobile/*', async (req, res) => {
+  router.all('/api/mobile/*', ingestLimit, async (req, res) => {
     const orchestrator = getOrchestrator();
     const proxy = createMobileProxy(orchestrator);
     await proxy(req, res);

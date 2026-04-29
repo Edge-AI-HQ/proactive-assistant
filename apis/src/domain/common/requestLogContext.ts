@@ -169,9 +169,35 @@ const previewBuffer = (buffer: Buffer): string => {
   });
 };
 
+// Keys that must NEVER appear plaintext in logs. Match is case-insensitive
+// and exact (no substring) so a benign field like "tokens_used" still
+// passes through. Add to this set when introducing a new secret-bearing
+// response field; do not loosen the existing entries.
+const SENSITIVE_LOG_KEYS = new Set([
+  "device_token",
+  "device_token_temp",
+  "deviceToken",
+  "access_token",
+  "accessToken",
+  "refresh_token",
+  "refreshToken",
+  "authorization",
+  "Authorization",
+  "x-device-token",
+  "X-Device-Token",
+  "supabase_jwt",
+  "password",
+  "secret",
+]);
+
 const safeJsonStringify = (value: unknown): string => {
   const seen = new WeakSet<object>();
-  return JSON.stringify(value, (_key, raw) => {
+  return JSON.stringify(value, (key, raw) => {
+    // Redact sensitive values before any other handling so we never
+    // accidentally serialise plaintext credentials.
+    if (typeof key === "string" && SENSITIVE_LOG_KEYS.has(key) && raw != null) {
+      return "[REDACTED]";
+    }
     if (typeof raw === "bigint") return raw.toString();
     if (Buffer.isBuffer(raw)) return previewBuffer(raw);
     if (raw instanceof Error) {
@@ -203,7 +229,11 @@ const previewValue = (value: unknown): unknown => {
   if (value === undefined) return undefined;
   if (Buffer.isBuffer(value)) return previewBuffer(value);
   if (typeof value === "string") return value;
-  return safeJsonStringify(value);
+  // Return the object as-is so the outer log stringification walks
+  // every nested key through safeJsonStringify's replacer (which redacts
+  // SENSITIVE_LOG_KEYS). Pre-stringifying here would freeze the JSON
+  // into a string that the replacer can no longer reach.
+  return value;
 };
 
 const patchConsole = (): void => {
@@ -242,16 +272,29 @@ export const requestLogContextMiddleware: RequestHandler = (req, res, next) => {
   };
   const startedAt = Date.now();
   let responseBodyPreview: unknown;
+  // Express implements res.json by stringifying the body and calling
+  // res.send internally — that means res.send fires AFTER res.json, with
+  // an already-stringified blob. We want the structured object res.json
+  // saw (so the redacting JSON replacer can walk it), so we lock the
+  // preview to the first capture and let res.send only fill in for
+  // routes that bypass res.json.
+  let previewLocked = false;
 
   const originalJson = res.json.bind(res);
   res.json = (body: unknown) => {
-    responseBodyPreview = previewValue(body);
+    if (!previewLocked) {
+      responseBodyPreview = previewValue(body);
+      previewLocked = true;
+    }
     return originalJson(body);
   };
 
   const originalSend = res.send.bind(res);
   res.send = (body: unknown) => {
-    responseBodyPreview = previewValue(body);
+    if (!previewLocked) {
+      responseBodyPreview = previewValue(body);
+      previewLocked = true;
+    }
     return originalSend(body);
   };
 
