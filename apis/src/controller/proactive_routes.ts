@@ -7,7 +7,7 @@
  * /api/proxy/*            -> Reverse proxy to user's container
  */
 
-import { Router, type Application } from 'express';
+import { Router, type Application, type Response } from 'express';
 import type { Server } from 'node:http';
 import type { IncomingMessage } from 'node:http';
 import type { Socket } from 'node:net';
@@ -34,6 +34,13 @@ import {
   revokeDevice,
   type DevicePlatform,
 } from '../domain/devices/index.js';
+import {
+  requestPairingCode,
+  pollPairingCode,
+  claimPairingCode,
+  cancelPairingCode,
+} from '../domain/devices/pairing.js';
+import { isDomainError } from '../domain/common/errors.js';
 import { getContainerRuntime } from '../domain/container/provider_factory.js';
 import { relayGatewayWs } from '../domain/gateway/gateway_ws_relay.js';
 import { getCurrentModel, setCurrentModel } from '../domain/gateway/gateway_rpc.js';
@@ -183,6 +190,87 @@ router.get('/api/proactive/devices', requireProactiveAuth, async (req, res) => {
   } catch (err) {
     console.error('[proactive] devices list error:', err);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── Pair Code (RFC 8628 simplified) ──
+// Spec: docs/plans/2026-04-29-personal-signal-and-pairing.mdx §三 Class B.
+//
+// Device flow:
+//   POST  /devices/pair-code/request  → { code, poll_url, poll_interval, expires_in }
+//   GET   /devices/pair-code/poll?code=...  → { status, [device_id, device_token] when claimed }
+//   POST  /devices/pair-code/cancel  { code }   (device or user gives up)
+// User flow:
+//   POST  /devices/pair-code/claim   { code, displayName?, model? }   (Supabase auth required)
+
+const DOMAIN_ERROR_TO_STATUS: Record<string, number> = {
+  INVALID_INPUT: 400,
+  NOT_FOUND: 404,
+  CONFLICT: 409,
+  UNAUTHORIZED: 401,
+  UNAVAILABLE: 503,
+  INTERNAL: 500,
+};
+
+function sendDomainError(res: Response, err: unknown, fallback: string): void {
+  if (isDomainError(err)) {
+    const status = DOMAIN_ERROR_TO_STATUS[err.code] ?? 500;
+    res.status(status).json({ error: err.message, code: err.code });
+    return;
+  }
+  console.error(fallback, err);
+  res.status(500).json({ error: 'Internal server error' });
+}
+
+router.post('/api/proactive/devices/pair-code/request', async (req, res) => {
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const deviceClass = String(body['deviceClass'] ?? body['device_class'] ?? 'wearable').trim() as DevicePlatform;
+    const model = typeof body['model'] === 'string' ? body['model'] : null;
+    const result = await requestPairingCode({ deviceClass, model });
+    res.json(result);
+  } catch (err) {
+    sendDomainError(res, err, '[proactive] pair-code/request error:');
+  }
+});
+
+router.get('/api/proactive/devices/pair-code/poll', async (req, res) => {
+  try {
+    const code = String(req.query['code'] ?? '').trim();
+    const result = await pollPairingCode(code);
+    res.json(result);
+  } catch (err) {
+    sendDomainError(res, err, '[proactive] pair-code/poll error:');
+  }
+});
+
+router.post('/api/proactive/devices/pair-code/claim', requireProactiveAuth, async (req, res) => {
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const code = String(body['code'] ?? '').trim().toUpperCase();
+    const user = await getUserBySupabaseId(req.proactiveAuth!.userId);
+    if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+    const result = await claimPairingCode({
+      userId: user.id,
+      code,
+      displayName: typeof body['displayName'] === 'string' ? body['displayName'] : null,
+      model: typeof body['model'] === 'string' ? body['model'] : null,
+    });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    sendDomainError(res, err, '[proactive] pair-code/claim error:');
+  }
+});
+
+router.post('/api/proactive/devices/pair-code/cancel', async (req, res) => {
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const code = String(body['code'] ?? '').trim();
+    if (!code) { res.status(400).json({ error: 'code required' }); return; }
+    await cancelPairingCode(code);
+    res.json({ ok: true });
+  } catch (err) {
+    sendDomainError(res, err, '[proactive] pair-code/cancel error:');
   }
 });
 
