@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
-import { ChevronRight, Cpu, KeyRound, Loader2, Plus, Smartphone, Trash2, Watch } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ChevronRight, Cpu, KeyRound, Loader2, Plus, Send, Smartphone, Trash2, Watch } from "lucide-react";
 import { useUserDevices } from "@/hooks/useUserDevices";
 import { claimPairCode, type UserDevice, type UserDevicePlatform } from "@/lib/api";
+import { ensureDevice, ingestSignals, type DeviceCredentials } from "@/lib/devices";
 import DeviceTimeline from "./DeviceTimeline";
 
 /**
@@ -30,6 +31,11 @@ export default function DeviceConnections() {
 
   return (
     <div className="space-y-3">
+      <SelfDevicePanel
+        devices={devices}
+        onIngested={() => { void refresh(); }}
+        onOpenTimeline={(d) => setSelectedDevice(d)}
+      />
       <div className="flex items-center justify-between gap-2">
         <p className="text-[11px] text-foreground/50">
           Wearables, sensors, and other hardware that push to your container.
@@ -165,6 +171,112 @@ function DeviceRow({
         <ChevronRight size={16} />
       </button>
     </li>
+  );
+}
+
+// ── Self device panel ───────────────────────────────────────────────────
+
+/**
+ * Bootstraps "this device" against the server: calls ensureDevice() so the
+ * Web / iOS / Android client appears in user_devices, then exposes a
+ * "Send test signal" button that pushes one PersonalSignal to the user's
+ * own container. This is the smallest end-to-end demo of "phone ingest"
+ * working — once it shows up in the timeline, the upload pipe is live.
+ */
+function SelfDevicePanel({
+  devices,
+  onIngested,
+  onOpenTimeline,
+}: {
+  devices: UserDevice[];
+  onIngested: (deviceId: string) => void;
+  onOpenTimeline: (device: UserDevice) => void;
+}) {
+  const [creds, setCreds] = useState<DeviceCredentials | null>(null);
+  const [bootstrapErr, setBootstrapErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [lastResult, setLastResult] = useState<string | null>(null);
+
+  // Lazy ensureDevice on first mount. Already-registered devices return
+  // immediately from the local cache; first-time devices hit the server.
+  useEffect(() => {
+    let cancelled = false;
+    setBootstrapErr(null);
+    ensureDevice()
+      .then((c) => { if (!cancelled) setCreds(c); })
+      .catch((err) => { if (!cancelled) setBootstrapErr(err.message ?? String(err)); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const selfDevice = useMemo(
+    () => (creds ? devices.find((d) => d.device_id === creds.deviceId) : undefined),
+    [creds, devices],
+  );
+
+  const sendTest = async () => {
+    if (!creds) return;
+    setBusy(true);
+    setLastResult(null);
+    try {
+      const r = await ingestSignals(creds, [
+        {
+          kind: "moment",
+          title: "test signal from this device",
+          summary: `Sent from ${creds.platform} at ${new Date().toLocaleTimeString()}`,
+          payload: { producer: "ui-test-button" },
+          salience: 0.4,
+          confidence: 1.0,
+        },
+      ]);
+      setLastResult(`Inserted ${r.inserted} signal(s)`);
+      onIngested(creds.deviceId);
+    } catch (err) {
+      setLastResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="glass-card p-3 space-y-2">
+      <div className="flex items-center gap-2">
+        <Smartphone size={14} className="text-foreground/60" />
+        <span className="text-xs font-medium">This device</span>
+        <span className="text-[10px] text-foreground/40 ml-auto">
+          {creds
+            ? `${creds.platform} · ${creds.deviceId.slice(0, 12)}…`
+            : bootstrapErr ? "bootstrap failed" : "registering…"}
+        </span>
+      </div>
+
+      {bootstrapErr && (
+        <div className="text-[10px] text-red-500/80 px-1">{bootstrapErr}</div>
+      )}
+
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => void sendTest()}
+          disabled={!creds || busy}
+          className="text-[11px] px-3 py-1.5 rounded-md bg-foreground/85 text-background hover:bg-foreground transition flex items-center gap-1.5 disabled:opacity-40"
+        >
+          {busy ? <Loader2 size={11} className="animate-spin" /> : <Send size={11} />}
+          Send test signal
+        </button>
+        {lastResult && (
+          <span className={`text-[10px] ${lastResult.startsWith("Error") ? "text-red-500/80" : "text-emerald-600/80"}`}>
+            {lastResult}
+          </span>
+        )}
+        {selfDevice && (
+          <button
+            onClick={() => onOpenTimeline(selfDevice)}
+            className="text-[10px] text-foreground/60 hover:text-foreground transition ml-auto flex items-center gap-1"
+          >
+            View timeline <ChevronRight size={10} />
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 
