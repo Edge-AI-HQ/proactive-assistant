@@ -315,6 +315,48 @@ export async function revokeUserDevice(deviceId: string): Promise<void> {
   if (!res.ok) throw new Error(`/devices/revoke failed: ${await readErrorMessage(res)}`);
 }
 
+// ── Pair Code (RFC 8628 simplified) ──
+
+export interface PairCodeClaimResult {
+  device_id: string;
+  display_name: string;
+  device_token: string;
+}
+
+/**
+ * The Web user enters the 6-char code shown on the device, optionally with
+ * a friendly display_name + model. On success the pairing_codes row flips
+ * to 'claimed', a user_devices row is created for this user, and a
+ * one-shot token is stashed for the device's next poll.
+ */
+export async function claimPairCode(
+  code: string,
+  displayName?: string,
+  model?: string,
+): Promise<PairCodeClaimResult> {
+  const trimmed = code.trim().toUpperCase();
+  const res = await proactiveFetch("/api/proactive/devices/pair-code/claim", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      code: trimmed,
+      ...(displayName ? { displayName } : {}),
+      ...(model ? { model } : {}),
+    }),
+  });
+  if (!res.ok) {
+    // Surface the domain error code so the UI can render specific copy
+    // ("code expired", "already claimed", etc.) instead of a generic message.
+    let detail: { error?: string; code?: string } = {};
+    try { detail = await res.json(); } catch { /* keep empty */ }
+    const e = new Error(detail.error ?? `pair-code claim failed: ${res.status}`) as Error & { domainCode?: string; status?: number };
+    e.domainCode = detail.code;
+    e.status = res.status;
+    throw e;
+  }
+  return res.json();
+}
+
 /**
  * Build a URL to fetch a device-uploaded media blob through the APIs proxy.
  * The container exposes GET /devices/media/<rel-path>; the path stored on
