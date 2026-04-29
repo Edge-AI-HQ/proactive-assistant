@@ -2,8 +2,9 @@
  * Read-only HTTP surface for the background_tasks queue.
  *
  * Used by the Data Connections UI to poll a connector.init task's
- * progress after /composio/wait returns an initTaskId. The pin tasks
- * CLI is the write-side surface (cancel, enqueue) — this route is
+ * progress after /composio/wait returns an initTaskId. The internal
+ * `PIN_CLI_SURFACE=internal pin tasks` CLI is the write-side surface
+ * (cancel, enqueue) — this route is
  * deliberately read-only so the UI can't accidentally mutate the queue.
  *
  * Endpoints:

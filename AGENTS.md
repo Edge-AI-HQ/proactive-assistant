@@ -198,11 +198,13 @@ make build-openclaw-image # 构建 OpenClaw 镜像到共用 registry
 - 一个 skill 一篇 MD，不要拆 `pin-shared` / `pin-memory` 这种"前置依赖" sub-skill——agent 不会自动跟随引用，那只是文本，徒增维护成本。
 - 时间过滤用 ISO 时间戳（`2026-04-21T00:00:00Z`），不要写 `--since 14d` 这种相对量——DB 层是直接 `created_at >= ?` SQL 字符串比较，`'14d'` 比任何 ISO 都小，过滤等于不过滤。
 - **不同数据层用不同的"读哪些"策略，不要套同一个时间窗**：
-  - **Signals 是真·增量层**：`personal_signals.status` 是 `open / consumed / archived` 状态机，`consumed_by_run_id` 记谁消费的。卡片生成的核心输入就是这层，永远默认 `pin signals recent --status open`；当前 run 真用了某条 signal 之后调 `pin signals consume --id ... --runId ...` 标掉。
+  - **Public PCI 默认只读**：默认 `pin` 入口只暴露 `pin sys schema` 返回的 public PCI 命令；`tasks / skills / evolution / memory add / signals consume / feedback log` 等内部或写命令必须显式用 `PIN_CLI_SURFACE=internal pin ...` 做本地/管理员调试，不能写进对外 agent 指引。
+  - **Signals 是真·增量层**：`personal_signals.status` 是 `open / consumed / archived` 状态机，`consumed_by_run_id` 记谁消费的。卡片生成的核心输入就是这层，public agent 永远默认 `pin signals recent --status open`；public PCI 不暴露 `signals consume` 写入命令。
   - **Memory 沉淀层**：质量过滤就够（`--quality 0.7`），不存在 consumed 概念。
   - **Raw 用 `--hours N`**：raw 数据量大，按用途选窗口（24h / 168h）。
   - **Feedback / Cards 是 recency-bounded 参考层，不是消费层**：表里没有 status / consumed_by 字段，作用是"避免重复推卡 + 学习偏好"。直接 `--limit N`，不要硬塞 `--since`。
   - **Evolution 是元记录**：debug 用，不是 consumption tracker，别拿它当 `--since` 锚点。
+  - **Personal exec 必须受控**：read/query 类 Composio tool 默认可走 `pin personal exec`；有副作用的 tool 只有代码 allowlist 内的 `GMAIL_CREATE_EMAIL_DRAFT` / `GMAIL_SEND_DRAFT` 可执行，且必须显式传 `--allow-side-effect true`。不要指导 agent 用 `GMAIL_SEND_EMAIL` 或 allowlist 外任意 create/update/delete/send tool。
 
 ## 数据库变更规则
 - 每次 schema 变更写新的 migration 文件到 `apis/db/migrations/`。

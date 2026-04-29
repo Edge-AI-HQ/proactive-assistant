@@ -21,10 +21,15 @@ test("buildUnifiedGeneratorPrompt includes CLI guide and v3 retrieval commands",
 
   // The pin CLI command guide block is still injected
   assert.match(prompt, /pin_cli_command_guide/);
+  assert.match(prompt, /获取数据层/);
+  assert.match(prompt, /执行层/);
+  assert.match(prompt, /World 流/);
+  assert.match(prompt, /Gmail 执行样例/);
 
   // v3 retrieval commands replace the legacy 12-call list
-  assert.match(prompt, /pin profile get --id default --full/);
+  assert.match(prompt, /pin profile get/);
   assert.match(prompt, /pin memory list --minQuality 0\.7 --limit 30/);
+  assert.match(prompt, /pin profile snapshot/);
   assert.match(prompt, /pin signals recent --status open --limit 30/);
   assert.match(prompt, /pin raw gmail recent/);
   assert.match(prompt, /pin raw gcal today/);
@@ -33,9 +38,14 @@ test("buildUnifiedGeneratorPrompt includes CLI guide and v3 retrieval commands",
   assert.match(prompt, /pin feedback list --limit 50/);
   assert.match(prompt, /they're recency-bounded/);
   assert.match(prompt, /pin cards recent --limit 10/);
-  assert.match(prompt, /pin evolution recent --kind daily_dream/);
-  assert.match(prompt, /pin skills list --status enabled/);
-  assert.match(prompt, /direct Composio tool commands are disabled/);
+  assert.doesNotMatch(prompt, /pin evolution recent/);
+  assert.doesNotMatch(prompt, /pin skills list/);
+  assert.doesNotMatch(prompt, /pin signals consume/);
+  assert.match(prompt, /Direct `pin personal exec` is a\s+controlled fallback/i);
+  assert.match(prompt, /GMAIL_CREATE_EMAIL_DRAFT/);
+  assert.match(prompt, /GMAIL_SEND_DRAFT/);
+  assert.match(prompt, /GMAIL_SEND_EMAIL[\s\S]*allowlist 外/);
+  assert.doesNotMatch(prompt, /smiletoye@gmail\.com|PIN test|controlled PCI test/i);
   assert.match(prompt, /connector\.init \/ connector\.sync/);
 });
 

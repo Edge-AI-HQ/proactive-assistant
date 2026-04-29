@@ -30,6 +30,7 @@ import { handleRaw } from './raw.ts';
 import { handleSys } from './sys.ts';
 import { handleSkills } from './skills.ts';
 import { handleWorld } from './world.ts';
+import { PUBLIC_CLI_SCHEMA } from './public-surface.ts';
 
 import {
   addMemoryV3,
@@ -280,25 +281,30 @@ test('pin raw device-contacts list (no --query) still lists the full snapshot', 
   });
 });
 
-test('pin sys schema lists v3 domains and omits retired personal mobile commands', async () => {
+test('pin sys schema exposes only the public PCI surface', async () => {
   const r = decode(await handleSys(['schema']));
   assert.equal(r.ok, true);
-  for (const domain of ['memory', 'signals', 'raw', 'evolution', 'skills', 'tasks']) {
-    assert.ok(r.data.domains[domain], `missing ${domain}`);
-  }
-  // tasks domain commands are pinned here so review-fixes catches a CLI
-  // shape regression. See docs/plans/2026-04-24-data-connector-init-tasks.mdx Phase A.
-  for (const cmd of ['list', 'show', 'attempts', 'cancel', 'enqueue']) {
-    assert.ok(r.data.domains.tasks.includes(cmd), `tasks missing ${cmd}`);
-  }
+  assert.deepEqual(r.data.domains, PUBLIC_CLI_SCHEMA);
+  assert.deepEqual(Object.keys(r.data.domains).sort(), [
+    'cards', 'feedback', 'memory', 'personal', 'profile', 'raw', 'signals', 'sys', 'world',
+  ].sort());
+  assert.deepEqual(r.data.domains.profile, ['get', 'snapshot']);
+  assert.deepEqual(r.data.domains.memory, ['list', 'get', 'search']);
+  assert.deepEqual(r.data.domains.signals, ['recent', 'list', 'get']);
+  assert.deepEqual(r.data.domains.feedback, ['list', 'get', 'stats']);
+  assert.deepEqual(r.data.domains.cards, ['recent']);
+  assert.deepEqual(r.data.domains.personal, [
+    'status', 'connections list', 'connect', 'wait', 'tools search', 'tools schema', 'exec',
+  ]);
+  assert.deepEqual(r.data.domains.sys, ['schema']);
+  assert.equal(r.data.domains.world.includes('index'), false);
   assert.equal(
     r.data.domains.personal.some((cmd: string) => cmd.startsWith('mobile')),
     false,
   );
-  assert.equal(
-    r.data.domains.personal.some((cmd: string) => cmd.startsWith('tools') || cmd === 'exec'),
-    false,
-  );
+  assert.equal('skills' in r.data.domains, false);
+  assert.equal('tasks' in r.data.domains, false);
+  assert.equal('evolution' in r.data.domains, false);
   assert.equal('push' in r.data.domains, false);
 });
 
@@ -339,6 +345,72 @@ test('pin exits non-zero for failure envelopes', async () => {
         return true;
       },
     );
+  });
+});
+
+test('pin public dispatcher hides and rejects internal commands by default', async () => {
+  await withTempHome(async (root) => {
+    const binPath = join(__dirname, 'bin.ts');
+    const publicEnv = { ...process.env, OPENCLAW_HOME: root };
+    delete publicEnv.PIN_CLI_SURFACE;
+    delete publicEnv.PIN_CLI_INTERNAL;
+
+    const help = await execFileAsync('npx', ['tsx', binPath, '--help'], { env: publicEnv });
+    const helpEnvelope = decode(help.stdout);
+    assert.deepEqual(helpEnvelope.data.domains.sort(), [
+      'cards', 'feedback', 'memory', 'personal', 'profile', 'raw', 'signals', 'sys', 'world',
+    ].sort());
+
+    await assert.rejects(
+      execFileAsync('npx', ['tsx', binPath, 'tasks', 'list', '--limit', '1'], { env: publicEnv }),
+      (err: any) => {
+        assert.equal(err.code, 1);
+        const r = decode(err.stdout);
+        assert.equal(r.ok, false);
+        assert.equal(r.error.code, 'FORBIDDEN');
+        assert.equal(r.error.message.includes('--limit'), false);
+        assert.equal(r.error.message.includes(' 1 '), false);
+        return true;
+      },
+    );
+
+    await assert.rejects(
+      execFileAsync('npx', ['tsx', binPath, 'unknown'], { env: publicEnv }),
+      (err: any) => {
+        assert.equal(err.code, 1);
+        const r = decode(err.stdout);
+        assert.equal(r.ok, false);
+        assert.equal(r.error.code, 'NOT_FOUND');
+        assert.doesNotMatch(r.error.hint, /tasks|skills|evolution/);
+        return true;
+      },
+    );
+
+    await assert.rejects(
+      execFileAsync('npx', ['tsx', binPath, 'memory', 'add', '--text', '__pci_public_probe__'], { env: publicEnv }),
+      (err: any) => {
+        assert.equal(err.code, 1);
+        const r = decode(err.stdout);
+        assert.equal(r.ok, false);
+        assert.equal(r.error.code, 'FORBIDDEN');
+        return true;
+      },
+    );
+
+    const memories = decode(await handleMemory(['list', '--status', 'active', '--limit', '10']));
+    assert.equal(memories.data.memories.some((m: any) => m.text === '__pci_public_probe__'), false);
+  });
+});
+
+test('pin internal dispatcher is opt-in for admin commands', async () => {
+  await withTempHome(async (root) => {
+    const binPath = join(__dirname, 'bin.ts');
+    const internalEnv = { ...process.env, OPENCLAW_HOME: root, PIN_CLI_SURFACE: 'internal' };
+    const help = await execFileAsync('npx', ['tsx', binPath, '--help'], { env: internalEnv });
+    const helpEnvelope = decode(help.stdout);
+    assert.ok(helpEnvelope.data.domains.includes('tasks'));
+    assert.ok(helpEnvelope.data.domains.includes('skills'));
+    assert.ok(helpEnvelope.data.domains.includes('evolution'));
   });
 });
 
@@ -383,16 +455,141 @@ test('pin JSON flags return VALIDATION on malformed JSON', async () => {
   });
 });
 
-test('pin personal direct tool commands are disabled in v3', async () => {
-  for (const [name, args] of [
-    ['tools.search', ['tools', 'search', '--query', 'gmail']],
-    ['tools.schema', ['tools', 'schema', '--name', 'GMAIL_FETCH_EMAILS']],
-    ['exec', ['exec', '--tool', 'GMAIL_FETCH_EMAILS']],
-  ] as const) {
-    const r = decode(await handlePersonal([...args]));
-    assert.equal(r.ok, false, name);
-    assert.equal(r.error.type, 'removed', name);
-    assert.match(r.error.hint, /pin raw/i, name);
+test('pin personal direct tool commands call Composio tools APIs', async () => {
+  const previousKey = process.env.COMPOSIO_API_KEY;
+  const previousUserId = process.env.COMPOSIO_USER_ID;
+  const previousFetch = globalThis.fetch;
+  const calls: Array<{ url: string; body: any }> = [];
+  process.env.COMPOSIO_API_KEY = 'ak_test';
+  process.env.COMPOSIO_USER_ID = 'user_test';
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const body = typeof init?.body === 'string' ? JSON.parse(init.body) : null;
+    calls.push({ url, body });
+    if (url.includes('/tools?')) {
+      return new Response(JSON.stringify({
+        items: [{ slug: 'GMAIL_FETCH_EMAILS', description: 'Fetch Gmail emails', toolkit: { slug: 'gmail' } }],
+      }), { status: 200 });
+    }
+    if (url.includes('/tools/GMAIL_FETCH_EMAILS')) {
+      return new Response(JSON.stringify({
+        slug: 'GMAIL_FETCH_EMAILS',
+        input_parameters: { type: 'object', properties: { query: { type: 'string' } } },
+      }), { status: 200 });
+    }
+    if (url.includes('/tools/execute/GMAIL_FETCH_EMAILS')) {
+      return new Response(JSON.stringify({ data: { messages: [{ id: 'm1' }] } }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ error: 'unexpected url' }), { status: 500 });
+  };
+  try {
+    const search = decode(await handlePersonal(['tools', 'search', '--query', 'gmail']));
+    assert.equal(search.ok, true);
+    assert.equal(search.data.tools[0].slug, 'GMAIL_FETCH_EMAILS');
+
+    const schema = decode(await handlePersonal(['tools', 'schema', '--tool', 'GMAIL_FETCH_EMAILS']));
+    assert.equal(schema.ok, true);
+    assert.deepEqual(schema.data.parameters.properties.query, { type: 'string' });
+
+    const exec = decode(await handlePersonal([
+      'exec', '--tool', 'GMAIL_FETCH_EMAILS', '--input', '{"query":"after:1776960000"}',
+    ]));
+    assert.equal(exec.ok, true);
+    assert.deepEqual(calls.at(-1)?.body, {
+      user_id: 'user_test',
+      arguments: { query: 'after:1776960000' },
+    });
+    assert.deepEqual(exec.data.result.data.messages, [{ id: 'm1' }]);
+  } finally {
+    if (previousKey === undefined) delete process.env.COMPOSIO_API_KEY;
+    else process.env.COMPOSIO_API_KEY = previousKey;
+    if (previousUserId === undefined) delete process.env.COMPOSIO_USER_ID;
+    else process.env.COMPOSIO_USER_ID = previousUserId;
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test('pin personal tool provider errors stringify object payloads', async () => {
+  const previousKey = process.env.COMPOSIO_API_KEY;
+  const previousFetch = globalThis.fetch;
+  process.env.COMPOSIO_API_KEY = 'ak_test';
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    message: { reason: 'bad_user', detail: 'No connected account' },
+  }), { status: 400 });
+  try {
+    await assert.rejects(
+      handlePersonal(['exec', '--tool', 'GMAIL_FETCH_EMAILS', '--input', '{}']),
+      /bad_user/,
+    );
+  } finally {
+    if (previousKey === undefined) delete process.env.COMPOSIO_API_KEY;
+    else process.env.COMPOSIO_API_KEY = previousKey;
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test('pin personal exec rejects side-effect tool slugs before provider call', async () => {
+  const previousKey = process.env.COMPOSIO_API_KEY;
+  const previousUserId = process.env.COMPOSIO_USER_ID;
+  const previousFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  process.env.COMPOSIO_API_KEY = 'ak_test';
+  process.env.COMPOSIO_USER_ID = 'user_test';
+  globalThis.fetch = async () => {
+    fetchCalls++;
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  };
+  try {
+    const r = decode(await handlePersonal(['exec', '--tool', 'GMAIL_SEND_EMAIL', '--input', '{}']));
+    assert.equal(r.ok, false);
+    assert.equal(r.error.type, 'validation');
+    assert.match(r.error.message, /side effect/i);
+    assert.equal(fetchCalls, 0);
+  } finally {
+    if (previousKey === undefined) delete process.env.COMPOSIO_API_KEY;
+    else process.env.COMPOSIO_API_KEY = previousKey;
+    if (previousUserId === undefined) delete process.env.COMPOSIO_USER_ID;
+    else process.env.COMPOSIO_USER_ID = previousUserId;
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test('pin personal exec allows only explicit side-effect tool allowlist with flag', async () => {
+  const previousKey = process.env.COMPOSIO_API_KEY;
+  const previousUserId = process.env.COMPOSIO_USER_ID;
+  const previousFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  process.env.COMPOSIO_API_KEY = 'ak_test';
+  process.env.COMPOSIO_USER_ID = 'user_test';
+  globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+    fetchCalls++;
+    return new Response(JSON.stringify({
+      ok: true,
+      body: typeof init?.body === 'string' ? JSON.parse(init.body) : null,
+    }), { status: 200 });
+  };
+  try {
+    const denied = decode(await handlePersonal([
+      'exec', '--tool', 'GMAIL_SEND_EMAIL', '--input', '{"to":"smiletoye@gmail.com"}',
+      '--allow-side-effect', 'true',
+    ]));
+    assert.equal(denied.ok, false);
+    assert.equal(denied.error.type, 'validation');
+    assert.equal(fetchCalls, 0);
+
+    const r = decode(await handlePersonal([
+      'exec', '--tool', 'GMAIL_CREATE_EMAIL_DRAFT', '--input', '{"recipient_email":"smiletoye@gmail.com"}',
+      '--allow-side-effect', 'true',
+    ]));
+    assert.equal(r.ok, true);
+    assert.equal(r.data.sideEffectAllowed, true);
+    assert.equal(fetchCalls, 1);
+  } finally {
+    if (previousKey === undefined) delete process.env.COMPOSIO_API_KEY;
+    else process.env.COMPOSIO_API_KEY = previousKey;
+    if (previousUserId === undefined) delete process.env.COMPOSIO_USER_ID;
+    else process.env.COMPOSIO_USER_ID = previousUserId;
+    globalThis.fetch = previousFetch;
   }
 });
 

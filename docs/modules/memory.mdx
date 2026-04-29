@@ -57,6 +57,8 @@ flowchart LR
 - 需要追溯的表使用 `reference_count` / `last_referenced_at` / `referenced_by_runs`。
 - `evolution_runs.trigger_kind` 现在有 5 种来源：`chat_burst`（crystallize）、`daily_dream`（auto.dreaming）、`manual`（CLI / 手动）、`on_event`（connector.init 拉数据后开的）、`consolidation`（预留）。
 - connector init 的 evolve agent（`tasks/handlers/connector-evolve.ts`）专门处理 `on_event`：把刚 ingest 的 raw + signals sample 进 prompt，让 LLM 抽出 durable facts 写到 `memory`，`source='connector_init:<toolkit>'`、`sourceRunId=<evolution_run_id>`。失败时 `evolution_runs.status='failed'`，`memory` 不写，`raw + signals` 仍然保留。
+- 默认 `pin` 入口是 **Public PCI surface**，只允许读取层和受控 `personal` 执行层：`raw`、`signals recent/list/get`、`memory list/get/search`、`profile get/snapshot`、`world` 查询、`cards recent`、`feedback list/get/stats`、`personal status/connections/connect/wait/tools/exec`、`sys schema`。`skills / evolution / tasks` 以及 `memory add/archive/supersede`、`signals consume`、`feedback log` 等写命令只保留为 internal/admin surface，必须显式 `PIN_CLI_SURFACE=internal pin ...`。
+- `pin personal exec` 默认只允许 read/query 类 Composio tool；有副作用的 tool 目前只允许 `GMAIL_CREATE_EMAIL_DRAFT` 和 `GMAIL_SEND_DRAFT`，且必须带 `--allow-side-effect true`。
 
 ## 核心链路
 
@@ -112,7 +114,9 @@ LLM 失败 / 超时 / 解析不出 JSON 时不抛出：`evolution_runs.status='f
 | 主 DB schema / helpers | `pinai-openclaw/plugins/proactive-ai/db.ts` |
 | raw DB schema / helpers | `pinai-openclaw/plugins/proactive-ai/raw-db.ts` |
 | HTTP routes | `routes/memory.ts`、`routes/signals.ts`、`routes/raw.ts`、`routes/profile.ts`、`routes/skills.ts`、`routes/evolution.ts` |
-| CLI | `cli/memory.ts`、`cli/signals.ts`、`cli/raw.ts`、`cli/profile.ts`、`cli/skills.ts`、`cli/evolution.ts` |
+| Public CLI dispatcher / schema | `cli/bin.ts`、`cli/sys.ts` |
+| Public CLI handlers | `cli/memory.ts`、`cli/signals.ts`、`cli/raw.ts`、`cli/profile.ts`、`cli/world.ts`、`cli/cards.ts`、`cli/feedback.ts`、`cli/personal.ts` |
+| Internal CLI handlers | `cli/skills.ts`、`cli/evolution.ts`、`cli/tasks.ts`（必须 `PIN_CLI_SURFACE=internal`） |
 | crystallize | `conversation-crystallize/` |
 | dreaming | `dreaming/` |
 | world signals | `world/`、`cli/world.ts` |
@@ -173,8 +177,11 @@ pin signals recent --hours 24
 pin memory search --query "投资偏好" --limit 10
 pin memory list --subject-prefix topic:        # interests 现在以 memory 形式存
 pin raw gcal today --timezone Asia/Shanghai
-pin skills list
-pin evolution recent --limit 5
+pin sys schema                                  # public PCI surface
+
+# internal/admin only
+PIN_CLI_SURFACE=internal pin skills list
+PIN_CLI_SURFACE=internal pin evolution recent --limit 5
 ```
 
 ## 踩坑
@@ -194,4 +201,4 @@ pin evolution recent --limit 5
 
 - **入站接入**：connector.init 拉数据写 raw + signals → 看 [Data Connectors](./data-connectors)。
 - **出站消费**：generation pipeline 怎么读 memory + signals 进 prompt → 看 [Generation](./generation)。
-- **scheduler / lease / heartbeat / `pin tasks`**：通用基建在 [Runtime & Deployment](./runtime-deployment#background_tasks-scheduler) 里讲。
+- **scheduler / lease / heartbeat / internal `pin tasks`**：通用基建在 [Runtime & Deployment](./runtime-deployment#background_tasks-scheduler) 里讲。

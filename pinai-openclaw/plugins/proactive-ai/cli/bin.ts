@@ -22,6 +22,7 @@ import { handleSkills } from './skills.js';
 // background_tasks queue admin
 // (docs/plans/2026-04-24-data-connector-init-tasks.mdx Phase A)
 import { handleTasks } from './tasks.js';
+import { isPublicCliCommand, publicCliDomains } from './public-surface.js';
 
 const DOMAINS: Record<string, (args: string[]) => Promise<string>> = {
   profile: handleProfile,
@@ -39,6 +40,19 @@ const DOMAINS: Record<string, (args: string[]) => Promise<string>> = {
   tasks: handleTasks,
 };
 
+function isInternalSurface(): boolean {
+  return process.env.PIN_CLI_SURFACE === 'internal' || process.env.PIN_CLI_INTERNAL === '1';
+}
+
+function publicCommandLabel(domain: string, rest: string[]): string {
+  const parts = [domain, ...parseArgs(rest).positional.slice(0, 2)];
+  return `pin ${parts.join(' ')}`.trim();
+}
+
+function availableDomains(): string[] {
+  return isInternalSurface() ? Object.keys(DOMAINS) : publicCliDomains();
+}
+
 function resultExitCode(result: string): number {
   try {
     const parsed = JSON.parse(result) as { ok?: unknown };
@@ -55,13 +69,24 @@ async function main() {
   const rest = rawArgs.slice(1);
 
   if (!domain || domain === '--help' || domain === '-h') {
-    console.log(JSON.stringify({ ok: true, data: { domains: Object.keys(DOMAINS) }, meta: { domain: 'sys', command: 'help', timestamp: new Date().toISOString() }, error: null }));
+    const domains = isInternalSurface() ? Object.keys(DOMAINS) : publicCliDomains();
+    console.log(JSON.stringify({ ok: true, data: { domains }, meta: { domain: 'sys', command: 'help', timestamp: new Date().toISOString() }, error: null }));
     process.exit(0);
   }
 
   const handler = DOMAINS[domain];
   if (!handler) {
-    console.log(failure('sys', 'dispatch', 'not_found', `Unknown domain: ${domain}`, `Available: ${Object.keys(DOMAINS).join(', ')}`));
+    console.log(failure('sys', 'dispatch', 'not_found', `Unknown domain: ${domain}`, `Available: ${availableDomains().join(', ')}`));
+    process.exit(1);
+  }
+  if (!isInternalSurface() && !isPublicCliCommand(domain, rest)) {
+    console.log(failure(
+      domain,
+      rest[0] ?? 'unknown',
+      'forbidden',
+      `${publicCommandLabel(domain, rest)} is not part of the public PCI CLI surface`,
+      'Use `pin sys schema` to discover public commands. Set `PIN_CLI_SURFACE=internal` only for local/admin debugging.',
+    ));
     process.exit(1);
   }
 

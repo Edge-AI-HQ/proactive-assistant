@@ -280,7 +280,7 @@ evolution_run (daily_dream) 跑
 
 ## 六、CLI 接口（agent 一等公民）
 
-LLM 通过 `pin` CLI 拉 context。所有命令本地查 SQLite + folder，**毫秒级**。
+LLM 通过默认 public `pin` CLI 拉 context。所有 public 命令本地查 SQLite + folder，**毫秒级**。内部/管理员命令仍保留，但必须显式 `PIN_CLI_SURFACE=internal pin ...`，不能作为对外 agent 指引。
 
 ```bash
 # 画像（最常用）
@@ -288,8 +288,7 @@ pin profile get                              # singleton profile + goals
 pin memory list --quality 0.7 --limit 30
 pin memory list --subjectPrefix person: --limit 20
 pin memory search --query "投资偏好" --limit 10   # --top 也可；SQL LIKE，非 top-N 预筛
-pin skills list --status enabled
-pin skills show --id <skill_id>              # cat skills/<id>/SKILL.md
+pin profile snapshot
 
 # 即时上下文 (raw 数据 namespaced under `pin raw`)
 pin signals recent --hours 24                # personal_signals.status='open'
@@ -300,16 +299,22 @@ pin raw device-apps --deviceId <id> --top 20
 pin raw device-contacts search --query "张" --deviceId <id>   # SQL 内过滤，LIMIT 生效于匹配集
 
 # 反思（让 agent 知道自己历史）
-pin evolution recent --kind daily_dream --limit 5
-pin evolution recent --limit 5               # all kinds
 pin cards recent --limit 10
-pin feedback list --since 7d
+pin feedback list --limit 50
 
-# 写入（manual / evolution agent）
-pin memory add "<text>" --quality 0.6 --subject self
-pin memory add --text "<text>" --source manual --quality 0.7
-pin skills add --id <id> --title "..." --source manual --from-file SKILL.md
-pin profile update --summary "..." --display-name "..."
+# 受控 direct tool 执行
+pin personal tools search --query "gmail emails"
+pin personal tools schema --tool GMAIL_FETCH_EMAILS
+pin personal exec --tool GMAIL_FETCH_EMAILS --input '{"query":"newer_than:7d","max_results":1}'
+
+# 有副作用的 exec 只允许 Gmail draft/send draft allowlist，并且必须显式确认
+pin personal exec --tool GMAIL_CREATE_EMAIL_DRAFT --input '{"recipient_email":"user@example.com","subject":"...","body":"..."}' --allow-side-effect true
+pin personal exec --tool GMAIL_SEND_DRAFT --input '{"draft_id":"<draft_id>","user_id":"me"}' --allow-side-effect true
+
+# 内部/管理员调试才可用
+PIN_CLI_SURFACE=internal pin evolution recent --kind daily_dream --limit 5
+PIN_CLI_SURFACE=internal pin skills list --status enabled
+PIN_CLI_SURFACE=internal pin memory add --text "..." --source manual --quality 0.7
 ```
 
 > 同事调试时若敲了未实现的命令（例如老文档里的 `pin profile summary` / `pin gmail recent` / `pin runs recent` / `pin device apps`），CLI 会返回 `ok=false` + 错误码。直接以本节为准。
@@ -364,7 +369,7 @@ unified-generator 的 phase 1 由"跑 12 个 CLI" 改为"先看 ContextPack 预�
 | 5b | HTTP routes（`/memory` / `/signals` / `/raw/*` / `/evolution`） | ✅ |
 | 5c | end-to-end smoke test | ✅ |
 | 6 | `world_items` → `world_signals` 改名 + 自动 ALTER RENAME 迁移 | ✅ |
-| 7 | `pin` CLI v3 命令（`pin memory` / `pin signals` / `pin raw` / `pin evolution` / `pin skills`） | ✅ |
+| 7 | `pin` CLI v3 命令：默认 public PCI surface（`pin memory` / `pin signals` / `pin raw` / `pin profile` / `pin world` / `pin cards` / `pin feedback` / `pin personal`），`pin evolution` / `pin skills` / `pin tasks` 保留为 `PIN_CLI_SURFACE=internal` 管理面 | ✅ |
 | 8 | conversation-crystallize + dreaming 写 `evolution_runs`（trajectory 可见） | ✅ |
 | 9 | `unified-generator` phase 1 prompt 改造为 v3 CLI 链路 | ✅ |
 | 10 | evals harness 框架（types / metrics / online） | ✅ |

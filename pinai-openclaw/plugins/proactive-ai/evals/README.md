@@ -67,8 +67,8 @@ of the v3 rollout). The `online.ts` scorer joins it against
 Run via:
 
 ```bash
-pin evolution recent --limit 50    # spot-check trajectory
-pin cards recent --limit 100       # spot-check generated card stream
+PIN_CLI_SURFACE=internal pin evolution recent --limit 50  # spot-check trajectory
+pin cards recent --limit 100                              # spot-check generated card stream
 ```
 
 ## Golden set

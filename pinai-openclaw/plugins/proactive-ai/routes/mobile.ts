@@ -219,7 +219,7 @@ export function handleMobile(): RouteHandler {
       json(ctx.res, 410, {
         ok: false,
         error: "endpoint removed",
-        hint: "Mobile items live in personal_signals now. Query via `pin signals list` / `pin signals recent`; consume via `pin signals consume --id <id> --runId <run>`.",
+        hint: "Mobile items live in personal_signals now. Query via public `pin signals list` / `pin signals recent`.",
       });
       return true;
     }

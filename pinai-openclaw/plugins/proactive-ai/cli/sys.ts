@@ -1,5 +1,6 @@
 import { success, failure } from './shared.js';
 import { resolveApiKey } from './personal.js';
+import { PUBLIC_CLI_SCHEMA } from './public-surface.js';
 
 export async function handleSys(args: string[]): Promise<string> {
   const sub = args[0];
@@ -36,27 +37,7 @@ export async function handleSys(args: string[]): Promise<string> {
   }
 
   if (sub === 'schema') {
-    // Command introspection
-    const domains = {
-      profile: ['get', 'list', 'create', 'update', 'facts', 'preferences', 'constraints', 'goals', 'memory', 'signal', 'interests', 'snapshot'],
-      personal: ['status', 'setup', 'connections list', 'connect', 'wait'],
-      world: ['search', 'headlines', 'find', 'list', 'get', 'shortlist', 'context', 'index'],
-      feedback: ['log', 'list', 'get', 'stats'],
-      cards: ['recent'],
-      memory: ['help', 'list', 'get', 'add', 'archive', 'supersede', 'search'],
-      signals: ['help', 'recent', 'list', 'get', 'consume'],
-      raw: [
-        'help',
-        'gmail recent', 'gmail thread', 'gcal today', 'gcal week', 'gcal list',
-        'slack list', 'notion list', 'gdrive list', 'github list', 'outlook list',
-        'device-apps', 'device-contacts list', 'device-contacts search',
-      ],
-      evolution: ['help', 'list', 'get', 'recent', 'create', 'delta', 'refs consumed', 'refs produced', 'complete', 'fail'],
-      skills: ['help', 'list', 'show', 'add', 'update', 'enable', 'disable'],
-      tasks: ['help', 'list', 'show', 'attempts', 'cancel', 'enqueue'],
-      sys: ['doctor', 'schema'],
-    };
-    return success('sys', 'schema', { domains });
+    return success('sys', 'schema', { domains: PUBLIC_CLI_SCHEMA });
   }
 
   return failure('sys', sub ?? 'unknown', 'not_found', `Unknown sys command: ${sub}`);

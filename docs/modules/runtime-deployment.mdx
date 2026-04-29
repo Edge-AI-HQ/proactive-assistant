@@ -215,12 +215,12 @@ prod 启用前先在 dev：`flyctl secrets set BACKGROUND_AUTO_LOOP_TASKS_ENABLE
 ### 调试入口
 
 ```bash
-pin tasks list                              # 看队列全状态
-pin tasks list --type connector.init --status failed
-pin tasks show --id <task_id>               # 包含 lease/heartbeat/result
-pin tasks attempts --id <task_id>           # audit 历史
-pin tasks cancel --id <task_id>             # 强制终止 queued/running
-pin tasks enqueue --type connector.init \   # 手动入队（管理员调试）
+PIN_CLI_SURFACE=internal pin tasks list                              # 看队列全状态
+PIN_CLI_SURFACE=internal pin tasks list --type connector.init --status failed
+PIN_CLI_SURFACE=internal pin tasks show --id <task_id>               # 包含 lease/heartbeat/result
+PIN_CLI_SURFACE=internal pin tasks attempts --id <task_id>           # audit 历史
+PIN_CLI_SURFACE=internal pin tasks cancel --id <task_id>             # 强制终止 queued/running
+PIN_CLI_SURFACE=internal pin tasks enqueue --type connector.init \   # 手动入队（管理员调试）
   --idempotencyKey 'manual:gmail:acc-x:v1' \
   --payload '{"toolkit":"gmail","connectedAccountId":"acc-x"}'
 ```
@@ -232,7 +232,7 @@ GET /proactive-ai/api/tasks/:id
 GET /proactive-ai/api/tasks?type=connector.init&status=running&limit=10
 ```
 
-写路径只在 `pin tasks` CLI 暴露，HTTP 不能改任务，避免 UI 误触。
+写路径只在 internal `pin tasks` CLI 暴露，HTTP 不能改任务，避免 UI 误触。默认 public `pin` 会拒绝 `tasks` 域；本地/管理员调试必须显式带 `PIN_CLI_SURFACE=internal`。
 
 ## LiteLLM
 

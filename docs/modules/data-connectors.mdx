@@ -86,7 +86,7 @@ flowchart LR
 | `stripe` | `STRIPE_LIST_INVOICES` | `stripe_invoices` | ⚠ schema only |
 | `discord` | `DISCORD_LIST_MY_GUILDS` | `discord_guilds` | ⚠ schema only |
 
-⚠ 标记表示靠 Composio `/tools/<slug>` schema 推导，handler / mapper 实现按 schema 写但没真实数据跑过；首次部署应观察 `pin tasks list --status failed` 看是否需要修。
+⚠ 标记表示靠 Composio `/tools/<slug>` schema 推导，handler / mapper 实现按 schema 写但没真实数据跑过；首次部署应观察 `PIN_CLI_SURFACE=internal pin tasks list --status failed` 看是否需要修。
 
 非 Composio toolkit（前端列出但不属于 connector.init 范畴）：strava / oura / apple-health / twitter / linkedin / discord 之外的 personal 类、jira / asana / hubspot / spotify / youtube / calendly / zoom / dropbox / todoist / trello / figma / clickup —— 当前都返回 `unsupported_toolkit_v0`，不会拉数据，但前端展示连接状态正常。
 
@@ -214,7 +214,7 @@ sequenceDiagram
 | 加新 toolkit 到 connector.sync | `tasks/handlers/connector-sync.ts`（fetchXxxSince）；mapper / extractor / signal builder 直接 import 自 connector-init.ts |
 | 后台 task 队列 / scheduler | `tasks/scheduler.ts`、`db.ts` 里的 `background_tasks` 段 |
 | Reconciler / dreaming-enqueuer / sync-enqueuer 周期 | `tasks/reconciler.ts`、`tasks/dreaming-enqueuer.ts`、`tasks/connector-sync-enqueuer.ts`、`index.ts` 启动接线 |
-| `pin tasks` CLI / `/tasks` HTTP | `cli/tasks.ts`、`routes/tasks.ts` |
+| internal `pin tasks` CLI / `/tasks` HTTP | `cli/tasks.ts`、`routes/tasks.ts` |
 | Device 注册和 token | `apis/src/domain/devices/index.ts`、`apis/src/controller/proactive_routes.ts` |
 | Mobile proxy / ingest | `apis/src/domain/proactive/mobile_proxy.ts`、`pinai-openclaw/plugins/proactive-ai/routes/mobile.ts` |
 | raw snapshot 表 | `pinai-openclaw/plugins/proactive-ai/raw-db.ts` |
@@ -223,7 +223,7 @@ sequenceDiagram
 
 ### 一键回归
 
-改完 connector.init / connector.sync / scheduler / reconciler / sync-enqueuer / `/tasks` / pin tasks / pin raw 任一处后跑：
+改完 connector.init / connector.sync / scheduler / reconciler / sync-enqueuer / `/tasks` / internal pin tasks / public pin raw 任一处后跑：
 
 ```bash
 bash pinai-openclaw/plugins/proactive-ai/scripts/test-tasks.sh
@@ -273,10 +273,10 @@ export COMPOSIO_USER_ID=285d35b0-e031-4cfd-97b3-0e21064d0d0e
 ### 手工验证
 
 ```bash
-pin tasks list --type connector.init                    # 看 init 入队历史
-pin tasks list --type connector.sync                    # 看 sync 入队历史
-pin tasks show --id <task_id>                           # 单个任务全状态 + lease
-pin tasks attempts --id <task_id>                       # 多次 attempt audit
+PIN_CLI_SURFACE=internal pin tasks list --type connector.init   # 看 init 入队历史
+PIN_CLI_SURFACE=internal pin tasks list --type connector.sync   # 看 sync 入队历史
+PIN_CLI_SURFACE=internal pin tasks show --id <task_id>          # 单个任务全状态 + lease
+PIN_CLI_SURFACE=internal pin tasks attempts --id <task_id>      # 多次 attempt audit
 pin raw gmail recent --hours 720 --limit 10             # gmail
 pin raw slack list --channelId C01                      # slack
 pin raw notion list                                     # notion
@@ -284,7 +284,7 @@ pin raw gdrive list --mimeType application/vnd.google-apps.document
 pin raw github list --state open --isPullRequest false
 pin raw outlook list --importance high
 pin signals recent --kind connector.gmail.message
-pin evolution recent --kind on_event                    # connector.init / connector.sync 产物
+PIN_CLI_SURFACE=internal pin evolution recent --kind on_event   # connector.init / connector.sync 元记录
 pin memory list --source 'connector_init:gmail'         # evolve 写入的事实
 ```
 

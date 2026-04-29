@@ -24,7 +24,7 @@ import { handleMemory } from './memory.js';
 import { handleSignals } from './signals.js';
 import { handleRaw } from './raw.js';
 import { handleEvolution } from './evolution.js';
-// background_tasks read API (Frontend init progress chip; pin tasks CLI is the write side)
+// background_tasks read API (Frontend init progress chip; internal pin tasks CLI is the write side)
 import { handleTasks } from './tasks.js';
 
 export interface PipelineState {

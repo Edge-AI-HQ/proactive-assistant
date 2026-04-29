@@ -71,22 +71,23 @@ Use the \`pin\` CLI to collect the user's current context. The v3 memory
 architecture (docs/plans/memory-architecture.mdx) gives you fast local
 queries over SQLite and markdown files. Composio data has already been
 ingested by connector.init / connector.sync into raw.db and personal_signals:
-direct Composio tool commands are disabled and must not be used during
-generation. Gather ALL of these in roughly this order; if a command returns
-empty, that signal is itself useful — note it and continue.
+prefer raw/signals reads for generation. Direct \`pin personal exec\` is a
+controlled fallback for explicit read/query tools only; do not use side-effect
+tools during card generation. Gather ALL of these in roughly this order; if a
+command returns empty, that signal is itself useful — note it and continue.
 
 # Long-term picture (画像 + 已沉淀的事实)
-1. **Profile**: \`pin profile get --id default --full\` — display_name, locale, timezone, summary, attributes
+1. **Profile**: \`pin profile get\` — display_name, locale, timezone, summary, attributes
 2. **High-quality memory**: \`pin memory list --minQuality 0.7 --limit 30\` — sedimented facts the evolution agent has confirmed
-3. **Active skills**: \`pin skills list --status enabled\` — and use \`pin skills show --id <id>\` for ones whose triggers might fire now
-4. **Topic interests**: \`pin memory list --subjectPrefix topic: --quality 0.6 --limit 20\` — topic interests projected into v3 memory
+3. **Topic interests**: \`pin memory list --subjectPrefix topic: --quality 0.6 --limit 20\` — topic interests projected into v3 memory
+4. **Profile snapshot**: \`pin profile snapshot\` — compact profile/memory/signal overview
 
 # Right-now context (今天/这周新进的 + 待消化的)
 # personal_signals is THE incremental-consumption layer: status='open' means
 # no prior run has consumed it yet. This is the primary input that drives
 # what new cards to generate. Always read it first and prefer cards rooted
 # in fresh open signals over cards rooted in already-sedimented memory.
-5. **Open signals (NEW since last run)**: \`pin signals recent --status open --limit 30\` — the main incremental layer; if you actually use one, mark it with \`pin signals consume --id <id> --runId <run_id>\` before finishing
+5. **Open signals (NEW since last run)**: \`pin signals recent --status open --limit 30\` — the main incremental layer. Public PCI is read-only here; do not call \`signals consume\`.
 6. **Recent emails**: \`pin raw gmail recent --hours 24 --limit 20\` — synced from Composio Gmail
 7. **Today's calendar**: \`pin raw gcal today\` — events from synced Google Calendar
 8. **Installed apps (latest snapshot)**: \`pin raw device-apps --top 20\` — for device profiling cards
@@ -99,12 +100,12 @@ empty, that signal is itself useful — note it and continue.
 # step 5 above. Just take the most recent N rows here.
 10. **Recent feedback**: \`pin feedback list --limit 50\` — confirms / dismisses / modifications
 11. **Recent generated cards**: \`pin cards recent --limit 10\` — what we already pushed; thread decisions (advance / refine / hold / suppress)
-12. **Recent evolution runs**: \`pin evolution recent --kind daily_dream --limit 3\` — what the dreaming agent learned recently
 
 # On-demand deep dives (only if a topic above warrants it)
 - \`pin memory search --query "<topic>" --limit 10\` — substring + tag search
 - \`pin raw gmail thread --threadId <tid>\` — pull a full thread
 - \`pin signals get --id <id>\` — full payload of a high-salience signal
+- \`pin personal tools schema --tool <slug>\` and read-only \`pin personal exec --tool <slug> --input <json>\` — only when raw/signals lack an explicit detail you need
 
 After collecting, briefly note what you gathered and any gaps. Pay
 attention to the relationship between layers: a fresh personal_signal +
