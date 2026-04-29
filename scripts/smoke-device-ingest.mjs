@@ -61,19 +61,20 @@ async function registerDevice() {
   return { deviceId: data.device.device_id, deviceToken: data.device_token };
 }
 
-function makeItems(count) {
+function makeItems(deviceId, count) {
   const now = Date.now();
+  const source = `device:${deviceId}`;
   const items = [];
   for (let i = 0; i < count; i++) {
-    const occurredAt = new Date(now - i * 90_000).toISOString();
+    const occurred_at = new Date(now - i * 90_000).toISOString();
     const roll = i % 5;
     if (roll === 0) {
       items.push({
-        id: randomUUID(),
+        id: randomUUID(), source,
         kind: "ambient.image_chunk",
         title: `frame #${i}`,
         summary: `omi 抓拍 ${i + 1}`,
-        occurredAt,
+        occurred_at,
         payload: {
           width: 640, height: 480, orientation: 1,
           mime: "image/jpeg",
@@ -82,11 +83,11 @@ function makeItems(count) {
       });
     } else if (roll === 1) {
       items.push({
-        id: randomUUID(),
+        id: randomUUID(), source,
         kind: "ambient.audio_chunk",
         title: `audio #${i}`,
         summary: `5s 音频片段 ${i + 1}`,
-        occurredAt,
+        occurred_at,
         payload: {
           duration_ms: 5000, sample_rate: 16000, codec_id: 21,
           mime: "audio/opus",
@@ -95,33 +96,33 @@ function makeItems(count) {
       });
     } else if (roll === 2) {
       items.push({
-        id: randomUUID(),
+        id: randomUUID(), source,
         kind: "moment",
         title: `moment ${i + 1}`,
         summary: `用户在桌前工作 (#${i})`,
-        occurredAt,
-        payload: { source: "smoke-seed", emotion: "focused" },
+        occurred_at,
+        payload: { producer: "smoke-seed", emotion: "focused" },
         salience: 0.5, confidence: 0.85,
       });
     } else if (roll === 3) {
       items.push({
-        id: randomUUID(),
+        id: randomUUID(), source,
         kind: "attention_item",
         title: `提醒 ${i + 1}`,
         summary: `今天还需要回复一封邮件 (#${i})`,
-        occurredAt,
-        payload: { source: "smoke-seed", urgency: i % 2 ? "high" : "normal" },
+        occurred_at,
+        payload: { producer: "smoke-seed", urgency: i % 2 ? "high" : "normal" },
         salience: 0.8, confidence: 0.9,
       });
     } else {
       items.push({
-        id: randomUUID(),
+        id: randomUUID(), source,
         kind: "app_inventory_snapshot",
         title: `app inventory ${i + 1}`,
         summary: `本机当前安装的应用列表`,
-        occurredAt,
+        occurred_at,
         payload: {
-          source: "smoke-seed",
+          producer: "smoke-seed",
           apps: [
             { bundleId: "com.apple.Safari", appName: "Safari", version: "18.0" },
             { bundleId: "com.tencent.xin", appName: "微信", version: "8.0.49" },
@@ -134,10 +135,13 @@ function makeItems(count) {
   return items;
 }
 
+// PersonalSignal envelope: top-level array; deviceId comes from each
+// signal's `source: "device:<id>"`. Auth still goes via the X-Device-*
+// headers because that's how the APIs proxy resolves the user container.
 async function ingestBatch(deviceId, deviceToken, items) {
   return postJson(
     "/api/proactive/devices/ingest",
-    { deviceId, items },
+    items,
     { "X-Device-Id": deviceId, "X-Device-Token": deviceToken },
   );
 }
@@ -157,7 +161,7 @@ async function ingestBatch(deviceId, deviceToken, items) {
     console.log(`[smoke] reusing deviceId=${deviceId}`);
   }
 
-  const items = makeItems(SEED_COUNT);
+  const items = makeItems(deviceId, SEED_COUNT);
   console.log(`[smoke] seeding ${items.length} items in batches of 10…`);
   for (let i = 0; i < items.length; i += 10) {
     const batch = items.slice(i, i + 10);

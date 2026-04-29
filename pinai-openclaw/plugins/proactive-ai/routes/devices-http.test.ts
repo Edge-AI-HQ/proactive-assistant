@@ -300,6 +300,73 @@ test("GET /devices/media — rejects paths that don't start with media/",
   }),
 );
 
+test("POST /devices/ingest — PersonalSignal envelope: top-level array + envelope `source`",
+  withTempHome(async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/devices/ingest`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify([
+        {
+          id: "e2e-personal-signal-1",
+          source: "device:omi-x42",
+          kind: "moment",
+          occurred_at: "2026-04-29T10:00:00Z",
+          title: "envelope test",
+          summary: "PersonalSignal envelope smoke",
+          payload: { foo: "bar" },
+        },
+        {
+          id: "e2e-personal-signal-2",
+          source: "device:ring-y91",     // different device in same batch
+          kind: "ring.heart_rate",
+          occurred_at: "2026-04-29T10:00:05Z",
+          title: "hr sample",
+          summary: "72 bpm",
+          payload: { bpm: 72 },
+        },
+      ]),
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.accepted, 2);
+    assert.equal(body.inserted, 2);
+
+    // Different deviceIds means each ended up routed separately.
+    const omi = await listPersonalSignals({ deviceId: "omi-x42" });
+    const ring = await listPersonalSignals({ deviceId: "ring-y91" });
+    assert.equal(omi.length, 1);
+    assert.equal(ring.length, 1);
+    assert.equal(omi[0]!.kind, "moment");
+    assert.equal(ring[0]!.kind, "ring.heart_rate");
+  }),
+);
+
+test("POST /devices/ingest — snake_case `occurred_at` / `dedupe_key` accepted",
+  withTempHome(async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/devices/ingest`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify([
+        {
+          id: "snake-case-1",
+          source: "device:dev-snake",
+          kind: "moment",
+          occurred_at: "2026-04-29T11:00:00Z",
+          title: "snake-case",
+          summary: "ok",
+          dedupe_key: "snake:1",
+          payload: {},
+        },
+      ]),
+    });
+    assert.equal(res.status, 200);
+    const signals = await listPersonalSignals({ deviceId: "dev-snake" });
+    assert.equal(signals.length, 1);
+    assert.equal(signals[0]!.dedupe_key, "snake:1");
+    assert.equal(signals[0]!.occurred_at, "2026-04-29T11:00:00.000Z");
+  }),
+);
+
 test("POST /devices/ingest — `kind` field preferred over legacy `itemType`",
   withTempHome(async (baseUrl) => {
     const { status } = await postJson(`${baseUrl}/devices/ingest`, {

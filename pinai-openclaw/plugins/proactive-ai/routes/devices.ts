@@ -279,33 +279,112 @@ export async function ingestDeviceItems(
   };
 }
 
+/**
+ * Pluck a string field that may live under several legacy aliases.
+ * Returns the first non-empty hit or `undefined`.
+ */
+function strField(item: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const k of keys) {
+    const v = item[k];
+    if (typeof v === "string" && v.length > 0) return v;
+  }
+  return undefined;
+}
+
+function strOrNumField(item: Record<string, unknown>, ...keys: string[]): string | number | undefined {
+  for (const k of keys) {
+    const v = item[k];
+    if (typeof v === "string" && v.length > 0) return v;
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+  }
+  return undefined;
+}
+
+/**
+ * Parse a `source: "<scheme>:<id>"` string. scheme is one of
+ *   device | mobile | connector | web
+ * Returns null when malformed; caller falls back to header / explicit deviceId.
+ */
+function parseSource(raw: unknown): { scheme: string; id: string } | null {
+  if (typeof raw !== "string") return null;
+  const idx = raw.indexOf(":");
+  if (idx <= 0 || idx === raw.length - 1) return null;
+  const scheme = raw.slice(0, idx);
+  if (!["device", "mobile", "connector", "web"].includes(scheme)) return null;
+  return { scheme, id: raw.slice(idx + 1) };
+}
+
 export function handleDevices(): RouteHandler {
   return async (ctx) => {
     if (ctx.subpath === "/devices/ingest" && ctx.req.method === "POST") {
       const body = await readBody(ctx.req);
-      const deviceId = typeof body.deviceId === "string" ? body.deviceId.trim() : "";
-      const itemsRaw = Array.isArray(body.items) ? body.items : [];
-      if (!deviceId) {
-        json(ctx.res, 400, { ok: false, error: "deviceId is required" });
-        return true;
+
+      // PersonalSignal envelope accepts two body shapes:
+      //   - PREFERRED: top-level array of signals, each carries
+      //       `source: "device:<id>"` (scheme picks routing, id is the
+      //       device_id this row belongs to).
+      //   - LEGACY:   { deviceId, items: [...] } — current callers / smoke
+      //       script. deviceId from the wrapper is used as fallback when a
+      //       signal doesn't carry its own `source`.
+      const isArrayBody = Array.isArray(body);
+      const wrapperDeviceId = !isArrayBody && typeof body.deviceId === "string"
+        ? body.deviceId.trim() : "";
+      const itemsRaw = isArrayBody
+        ? body
+        : Array.isArray(body.items) ? body.items : [];
+
+      // Group items by deviceId so a single batch can fan out to multiple
+      // devices when callers use envelope `source` (a phone bridging
+      // multiple BLE sub-devices, for example).
+      const byDevice = new Map<string, DeviceItemInput[]>();
+      for (const raw of itemsRaw) {
+        if (!raw || typeof raw !== "object") continue;
+        const item = raw as Record<string, unknown>;
+        const sourceParsed = parseSource(item.source);
+        const deviceId = sourceParsed?.id ?? wrapperDeviceId;
+        if (!deviceId) continue;
+        const id = strField(item, "id") ?? "";
+        // Accept `kind` (preferred) and `itemType` (legacy alias).
+        const itemType = strField(item, "kind", "itemType") ?? "";
+        const title = strField(item, "title") ?? "";
+        const summary = strField(item, "summary") ?? "";
+        if (!id || !itemType || !title || !summary) continue;
+        const occurredAt = strOrNumField(item, "occurred_at", "occurredAt");
+        const availableAt = strOrNumField(item, "available_at", "availableAt");
+        const expiresAt = strOrNumField(item, "expires_at", "expiresAt");
+        const dedupeKey = strField(item, "dedupe_key", "dedupeKey");
+        const payload = typeof item.payload === "object" && item.payload !== null
+          ? item.payload as Record<string, unknown> : {};
+        const list = byDevice.get(deviceId) ?? [];
+        list.push({
+          id, itemType, title, summary, payload,
+          salience: typeof item.salience === "number" ? item.salience : 0,
+          confidence: typeof item.confidence === "number" ? item.confidence : 0,
+          dedupeKey,
+          occurredAt,
+          availableAt,
+          expiresAt,
+        });
+        byDevice.set(deviceId, list);
       }
-      const items: DeviceItemInput[] = itemsRaw.map((item) => ({
-        id: typeof item?.id === "string" ? item.id : "",
-        // Accept both `kind` (preferred) and `itemType` (legacy alias).
-        itemType: typeof item?.kind === "string" ? item.kind
-          : typeof item?.itemType === "string" ? item.itemType : "",
-        title: typeof item?.title === "string" ? item.title : "",
-        summary: typeof item?.summary === "string" ? item.summary : "",
-        payload: typeof item?.payload === "object" && item.payload !== null ? item.payload as Record<string, unknown> : {},
-        salience: typeof item?.salience === "number" ? item.salience : 0,
-        confidence: typeof item?.confidence === "number" ? item.confidence : 0,
-        dedupeKey: typeof item?.dedupeKey === "string" ? item.dedupeKey : undefined,
-        occurredAt: typeof item?.occurredAt === "string" || typeof item?.occurredAt === "number" ? item.occurredAt : undefined,
-        availableAt: typeof item?.availableAt === "string" || typeof item?.availableAt === "number" ? item.availableAt : undefined,
-        expiresAt: typeof item?.expiresAt === "string" || typeof item?.expiresAt === "number" ? item.expiresAt : undefined,
-      })).filter((item) => item.id && item.itemType && item.title && item.summary);
-      const result = await ingestDeviceItems(deviceId, items);
-      json(ctx.res, 200, { ok: true, ...result });
+
+      if (byDevice.size === 0) {
+        // No usable items + no fallback deviceId means the request is
+        // malformed regardless of which body shape was used.
+        if (!wrapperDeviceId) {
+          json(ctx.res, 400, { ok: false, error: "deviceId or signal `source` required" });
+          return true;
+        }
+      }
+
+      let accepted = 0, inserted = 0, ignored = 0;
+      for (const [deviceId, items] of byDevice) {
+        const r = await ingestDeviceItems(deviceId, items);
+        accepted += r.accepted;
+        inserted += r.inserted;
+        ignored += r.ignored;
+      }
+      json(ctx.res, 200, { ok: true, accepted, inserted, ignored });
       return true;
     }
 
