@@ -143,6 +143,36 @@ export async function revokeDevice(params: {
 }
 
 /**
+ * Rotate a device's token in-place. The caller authenticates with the
+ * *current* token; on success a fresh plaintext token is returned and
+ * the old hash is replaced atomically (the old token stops working
+ * immediately after this returns).
+ *
+ * This is the standard "key rotation" path for long-lived hardware
+ * tokens — devices can rotate on a 30-day cadence without user action.
+ * If a device loses its current token it has to re-pair (Pair Code) to
+ * recover; rotation never repairs a lost secret.
+ */
+export async function rotateDeviceToken(params: {
+  deviceId: string;
+  currentToken: string;
+}): Promise<{ device_token: string; user_id: number }> {
+  const verified = await findDeviceByToken(params.deviceId, params.currentToken);
+  if (!verified) {
+    throw new DomainError('UNAUTHORIZED', 'invalid device token');
+  }
+  const token = generateToken();
+  const tokenHash = await bcrypt.hash(token, BCRYPT_ROUNDS);
+  await pool.query(
+    `UPDATE user_devices
+       SET device_token_hash = $1, last_seen_at = now()
+     WHERE id = $2`,
+    [tokenHash, verified.id],
+  );
+  return { device_token: token, user_id: verified.user_id };
+}
+
+/**
  * Look up a device by device_id and verify the supplied token. Returns
  * the device row + user_id when valid; null on any mismatch (do not leak
  * which check failed).

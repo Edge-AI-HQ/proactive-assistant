@@ -32,6 +32,7 @@ import {
   registerDevice,
   listDevicesForUser,
   revokeDevice,
+  rotateDeviceToken,
   type DevicePlatform,
 } from '../domain/devices/index.js';
 import {
@@ -271,6 +272,25 @@ router.post('/api/proactive/devices/pair-code/cancel', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     sendDomainError(res, err, '[proactive] pair-code/cancel error:');
+  }
+});
+
+// Token rotation: device authenticates with its *current* PSK and gets a
+// fresh one back. Old token stops working immediately. No user JWT needed
+// — the current token is the credential. Devices should rotate on a
+// 30-day cadence to bound exposure if a token leaks.
+router.post('/api/proactive/devices/rotate-token', async (req, res) => {
+  try {
+    const deviceId = String(req.header('x-device-id') ?? '').trim();
+    const currentToken = String(req.header('x-device-token') ?? '').trim();
+    if (!deviceId || !currentToken) {
+      res.status(400).json({ error: 'X-Device-Id and X-Device-Token required' });
+      return;
+    }
+    const result = await rotateDeviceToken({ deviceId, currentToken });
+    res.json({ ok: true, device_token: result.device_token });
+  } catch (err) {
+    sendDomainError(res, err, '[proactive] devices/rotate-token error:');
   }
 });
 

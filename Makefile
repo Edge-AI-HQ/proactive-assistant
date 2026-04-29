@@ -235,6 +235,13 @@ build-openclaw-image: ## Build and push OpenClaw image to shared registry
 #
 # Long-term fix: ask the team admin to invite your Apple ID to Team DH9AJ6A38D.
 
+ngrok: ## Expose local APIs (:3000) over public ngrok tunnel for mobile dev. Requires `ngrok` on PATH.
+	@command -v ngrok >/dev/null 2>&1 || { echo "ngrok not found. brew install ngrok or download from https://ngrok.com/download"; exit 1; }
+	@echo "Starting ngrok → http://localhost:3000"
+	@echo "On the phone: paste the printed https URL into Settings → API Base URL."
+	@echo "Press Ctrl+C to stop."
+	@ngrok http 3000
+
 ios: ensure-env ## Build frontend, sync iOS, and open Xcode. Defaults to local docker APIs over LAN; DEV=1 connects to fly dev.
 	@set -a && . ./apis/.env && set +a && \
 	if [ "$(DEV)" = "1" ]; then \
