@@ -48,6 +48,22 @@ interface AdapterOptions {
   bootstrappedSessionsRef: MutableRefObject<Set<string>>;
 }
 
+/**
+ * OpenClaw forwards a `chat:error` event when its gateway is mid-restart —
+ * after a model swap (config patch sends SIGUSR1), idle-wake, or admin
+ * action. The agent run lane is drained for a few seconds and rejects new
+ * tasks with `GatewayDrainingError` / `CommandLaneClearedError`, which the
+ * plugin chat route surfaces verbatim. These are transient by nature, so
+ * the SSE adapter retries the whole fetch instead of leaving the user
+ * staring at an empty thread.
+ */
+function isTransientChatError(errMsg: string): boolean {
+  return /gateway.*draining|draining.*gateway|command lane cleared/i.test(errMsg);
+}
+
+const MAX_TRANSIENT_RETRIES = 2;
+const TRANSIENT_RETRY_BACKOFF_MS = 1500;
+
 function createAdapter({
   sessionKey,
   cardContextJson,
@@ -81,51 +97,67 @@ function createAdapter({
         includeCardContext: needsBootstrap,
       });
 
-      const res = await proxyFetch("/chat-stream/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: abortSignal,
-      });
-
-      if (!res.ok || !res.body) {
-        throw new Error(`Chat stream failed: ${res.status}`);
-      }
-
-      const contentType = res.headers.get("content-type") || "";
-      const isSSE = contentType.includes("text/event-stream");
-
-      if (!isSSE) {
-        // Fallback: legacy JSON response { ok, reply }
-        const data = await res.json() as { ok?: boolean; reply?: string; error?: string };
-        if (data.error) throw new Error(data.error);
-        if (data.reply) {
-          yield { content: [{ type: "text" as const, text: data.reply }] };
+      // Retry loop wraps the whole fetch + SSE parse so that a transient
+      // chat:error (gateway draining for restart) starts over on a fresh
+      // request — the in-flight stream is unrecoverable once the run lane
+      // has been cleared. We only retry while the builder is still empty;
+      // once any visible delta has streamed to the user, restarting from
+      // scratch would feel jarring, so we surface the error instead.
+      for (let attempt = 0; attempt <= MAX_TRANSIENT_RETRIES; attempt++) {
+        if (attempt > 0) {
+          await new Promise((r) => setTimeout(r, TRANSIENT_RETRY_BACKOFF_MS * attempt));
         }
-        return;
-      }
+        if (abortSignal?.aborted) return;
 
-      // SSE stream: read data: {...} lines
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      const builder = new LiveContentBuilder();
+        const res = await proxyFetch("/chat-stream/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: abortSignal,
+        });
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        if (!res.ok || !res.body) {
+          throw new Error(`Chat stream failed: ${res.status}`);
+        }
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
+        const contentType = res.headers.get("content-type") || "";
+        const isSSE = contentType.includes("text/event-stream");
 
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const data = JSON.parse(line.slice(6)) as Record<string, unknown>;
-            const type = data.type as string;
+        if (!isSSE) {
+          // Fallback: legacy JSON response { ok, reply }
+          const data = await res.json() as { ok?: boolean; reply?: string; error?: string };
+          if (data.error) throw new Error(data.error);
+          if (data.reply) {
+            yield { content: [{ type: "text" as const, text: data.reply }] };
+          }
+          if (needsBootstrap) {
+            bootstrappedSessionsRef.current.add(sessionKey);
+          }
+          return;
+        }
 
-            if (type === "chat:delta") {
+        // SSE stream: read data: {...} lines
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        const builder = new LiveContentBuilder();
+        let transient = false;
+
+        sseLoop: while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            try {
+              const data = JSON.parse(line.slice(6)) as Record<string, unknown>;
+              const type = data.type as string;
+
+              if (type === "chat:delta") {
               const delta = typeof data.delta === "string" ? data.delta : "";
               if (delta) {
                 builder.appendText(delta);
@@ -159,23 +191,41 @@ function createAdapter({
               // Keep "running" state; no-op snapshot avoids unnecessary churn.
               continue;
             } else if (type === "chat:error") {
-              throw new Error(data.error as string);
+              const errMsg = typeof data.error === "string" ? data.error : "Unknown chat error";
+              // Only retry while we haven't streamed anything visible yet
+              // and budget remains. If the user has already seen partial
+              // output, surface the error rather than silently restarting.
+              if (
+                isTransientChatError(errMsg) &&
+                builder.isEmpty() &&
+                attempt < MAX_TRANSIENT_RETRIES
+              ) {
+                transient = true;
+                break sseLoop;
+              }
+              throw new Error(errMsg);
             }
             // chat:thinking and chat:done are handled implicitly.
-          } catch (e) {
-            if (e instanceof SyntaxError) continue;
-            throw e;
+            } catch (e) {
+              if (e instanceof SyntaxError) continue;
+              throw e;
+            }
           }
         }
+
+        if (transient) continue;
+
+        if (!builder.isEmpty()) {
+          yield { content: builder.snapshot() };
+        }
+        if (needsBootstrap) {
+          bootstrappedSessionsRef.current.add(sessionKey);
+        }
+        return;
       }
 
-      if (!builder.isEmpty()) {
-        yield { content: builder.snapshot() };
-      }
-
-      if (needsBootstrap) {
-        bootstrappedSessionsRef.current.add(sessionKey);
-      }
+      // Exhausted retries with transient errors
+      throw new Error("Server is restarting, please try again in a moment.");
     },
   };
 }
