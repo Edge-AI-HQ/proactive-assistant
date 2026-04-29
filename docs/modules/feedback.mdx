@@ -113,6 +113,12 @@ npm run type-check
 - chat feedback 有阈值：消息数、用户 turn 数、用户文本长度都太低时不会总结。
 - `agent_analysis` 是派生反馈，不等同用户直接表达。
 
+## 相关模块
+
+- [Generation](./generation)：feedback summary 和 intent state 进入下一轮 generation prompt。
+- [Execution](./execution)：card chat transcript 由执行层产出，再被 chat-feedback 总结成 `agent_analysis` 反馈。
+- [Memory](./memory)：长期沉淀走 conversation-crystallize 而非 feedback；两者用同一份归一化 transcript。
+
 ## 相关 AI Plans
 
 - [Memory Architecture](../plans/memory-architecture)：intent state、feedback summary 与长期 memory 回流的设计背景。

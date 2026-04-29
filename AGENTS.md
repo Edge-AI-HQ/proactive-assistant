@@ -90,16 +90,20 @@ CI 需要在 GitHub Secrets 设置以下 secrets：
 
 ## 文档维护规则
 - `docs/modules/*.mdx`：每个模块一篇当前事实文档，必须包含边界、核心链路、开发入口、验证方式、踩坑。
-- `docs/plans/*.mdx`：只保留仍然能解释当前设计的 AI plans。除 `docs/plans/README.mdx` 外，每个 plan 必须被至少一个模块文档的 `相关 AI Plans` 引用。
+- `docs/plans/*.mdx`：只保留仍然能解释当前设计的 AI plans 或正在 brainstorm 的设计草稿。
 - 新增 plan 的默认路径是 `docs/plans/YYYY-MM-DD-<topic>.mdx`；长期架构计划可以使用稳定 slug。
-- plan 被模块文档完全吸收、过期或不再被引用时，删除它，不新建 archive。
-- Mintlify 主导航只放 `docs/index.mdx` 和 `docs/modules/*.mdx`；plans 通过模块页渐进式访问。
+- 新增 plan 后必须在 `docs/plans/README.mdx` 表格里登记一行(标状态:brainstorm 草稿 / 已定稿)。
+- plan 推荐被模块文档的 `相关 AI Plans` 引用;brainstorm 草稿可以先只挂在 `plans/README` 索引上。
+- plan 必须等到**对应实现已上线、模块文档已完整吸收设计要点**后,才能删除并从 README 索引移除,不新建 archive。设计阶段或实现进行中的 plan 一律保留。
+- Mintlify 侧边栏只放 `docs/index.mdx` + `docs/modules/*.mdx` + `docs/plans/README.mdx`(AI Plans 索引);具体 plan 不进侧边栏,通过索引或模块页 `相关 AI Plans` 跳转。
 
 ## 当前模块文档
 - [`docs/modules/data-connectors.mdx`](docs/modules/data-connectors.mdx) — Composio、device registry、mobile proxy、mobile ingest、连接状态矩阵。
 - [`docs/modules/memory.mdx`](docs/modules/memory.mdx) — raw.db、personal_signals、world_signals、memory、profile、skill、evolution。**改动 memory / profile / skill / personal_signals / world_signals / evolution_runs / raw.db / skills folder 相关代码前必读**；需要 schema 和迁移细节时再读 [`docs/plans/memory-architecture.mdx`](docs/plans/memory-architecture.mdx)。
 - [`docs/modules/generation.mdx`](docs/modules/generation.mdx) — `/generate`、pipeline、unified generator、evaluation、card selection、auto-generate。
+- [`docs/modules/execution.mdx`](docs/modules/execution.mdx) — chat-stream、card chat、agent prompt、browser tool、control mode、conversation crystallize。**改动 routes/chat / browser / agents/chat / conversation-crystallize / 前端 MainChatView / useProactiveChatRuntime 相关代码前必读**。
 - [`docs/modules/feedback.mdx`](docs/modules/feedback.mdx) — feedback events、card action、card chat feedback、intent state、学习回流。
+- [`docs/modules/background-tasks.mdx`](docs/modules/background-tasks.mdx) — `background_tasks` 队列、scheduler tick、reconciler、connector init/sync/evolve、auto-dreaming。**改动 tasks/ 子目录或 db.ts 里 background_tasks / task_attempts schema 前必读**。
 - [`docs/modules/runtime-deployment.mdx`](docs/modules/runtime-deployment.mdx) — 本地启动、APIs proxy、container、gateway、LiteLLM、dotenvx、CI/CD、prod 规则、billing 概览。
 
 ## 本地开发

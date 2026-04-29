@@ -26,8 +26,16 @@
                   "modules/data-connectors",
                   "modules/memory",
                   "modules/generation",
+                  "modules/execution",
                   "modules/feedback",
+                  "modules/background-tasks",
                   "modules/runtime-deployment"
+                ]
+              },
+              {
+                "group": "AI Plans",
+                "pages": [
+                  "plans/README"
                 ]
               }
             ]

@@ -332,7 +332,7 @@ unified-generator 的 phase 1 由"跑 12 个 CLI" 改为"先看 ContextPack 预�
 | profile | profile（保留） | 部分实施：字段不变，新事实推荐写 memory | — |
 | profile_memories | memory | ✅ 自动 backfill + DROP（`migrateLegacyToV3`） | — |
 | profile_signals | personal_signals | ✅ Phase 2b：backfill + DROP，addSignal/listSignals 改为 projection | — |
-| profile_interests | memory{subject:'<kind>:<key>'} | ✅ Phase 2c：backfill + DROP；upsertInterestAsMemory 确定性 id；listInterests 改为 projection | — |
+| profile_interests | `memory{subject:'<kind>:<key>'}` | ✅ Phase 2c：backfill + DROP；upsertInterestAsMemory 确定性 id；listInterests 改为 projection | — |
 | goals | 保留 first-class + 加 v3 reference triple | ✅ Phase 2e：reference_count / last_referenced_at / referenced_by_runs；dreaming 写 goal 时同步 bump | — |
 | user_skills | skill_index + folder | ✅ 自动 backfill + DROP | — |
 | world_items | world_signals（改名） | ✅ 自动 ALTER RENAME + 加 reference 三字段 | — |
