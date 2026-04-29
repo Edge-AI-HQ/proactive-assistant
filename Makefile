@@ -176,6 +176,16 @@ reset: ensure-env ## Stop everything, delete volumes, rebuild and start fresh
 		echo "Removing dynamically-created OpenClaw containers"; \
 		echo "$$ids" | xargs docker rm -f; \
 	fi
+	@# OpenClaw persists per-user state (config integrity backup, exec
+	@# approvals, agent caches) under data/proactive-<id>/. After a postgres
+	@# wipe new users get a fresh container_proxy_secret, but the on-disk
+	@# .openclaw/openclaw.json.bak still carries the previous run's token —
+	@# OpenClaw's config-integrity check then "restores" the stale config and
+	@# the apis proxy gets `socket hang up` on every request. Wipe to match.
+	@if ls data/proactive-* >/dev/null 2>&1; then \
+		echo "Removing dynamically-created OpenClaw data dirs (data/proactive-*)"; \
+		rm -rf data/proactive-*; \
+	fi
 	$(export_vite) && $(COMPOSE) build apis openclaw-image
 	$(COMPOSE) up -d
 

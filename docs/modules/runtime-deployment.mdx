@@ -115,7 +115,7 @@ npm run test --workspace @pin-ai/apis
 
 运行态验证：
 
-- 前端登录后 `/api/proactive/auth/me` 返回当前 Supabase user 和 container 状态。
+- 前端登录后任意 `/api/proactive/*` 请求都会触发 `requireProactiveAuth` 中间件验证 JWT 并 upsert 本地 `users` 行,后续 endpoint 直接读 `req.proactiveAuth.user`,不再有"User not found"分支。
 - container running 后 `/api/proxy/health` 返回 plugin health。
 - LiteLLM 本地变更后重新创建容器，并验证 `/health/liveliness` 和一次真实 `/v1/chat/completions`。
 - 部署相关改动以 GitHub Actions 为准，本地 deploy 只作为 CI 不可用时的备用路径。
@@ -130,9 +130,9 @@ npm run test --workspace @pin-ai/apis
 常用 dotenvx：
 
 ```bash
-npx dotenvx get -f apis/.env.dev
-npx dotenvx set NEW_KEY "value" -f apis/.env.dev
-npx dotenvx run -f apis/.env.dev -- node dist/src/server.js
+npx @dotenvx/dotenvx get -f apis/.env.dev
+npx @dotenvx/dotenvx set NEW_KEY "value" -f apis/.env.dev
+npx @dotenvx/dotenvx run -f apis/.env.dev -- node dist/src/server.js
 make env-local
 ```
 

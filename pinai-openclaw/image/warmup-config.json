@@ -1,4 +1,5 @@
 {
+  "_comment": "Build-time warmup config. Mirrors the proactive-ai runtime config (apis/src/domain/container/providers/shared/openclaw_config.ts buildOpenclawConfig) closely enough that the same set of bundled plugins activate during build as at runtime. Two side effects we want: (1) V8 compiles the production module graph into NODE_COMPILE_CACHE, (2) OpenClaw's own plugin loader stages every missing runtime dep into OPENCLAW_PLUGIN_STAGE_DIR — so cold container starts skip the 5-reload SIGUSR1 install storm.",
   "gateway": {
     "mode": "local",
     "port": 18789,
@@ -16,6 +17,21 @@
         "models": [
           { "id": "claude-opus-4-6", "name": "Claude Opus 4.6" }
         ]
+      },
+      "openai": {
+        "baseUrl": "http://127.0.0.1:4000",
+        "apiKey": "warmup-dummy",
+        "models": []
+      },
+      "anthropic": {
+        "baseUrl": "http://127.0.0.1:4000",
+        "apiKey": "warmup-dummy",
+        "models": []
+      },
+      "moonshot": {
+        "baseUrl": "http://127.0.0.1:4000",
+        "apiKey": "warmup-dummy",
+        "models": []
       }
     }
   },
@@ -30,39 +46,27 @@
       "elevatedDefault": "full"
     }
   },
-  "channels": {
-    "telegram": {
-      "enabled": true,
-      "dmPolicy": "open",
-      "botToken": "0:warmup-dummy-token",
-      "allowFrom": ["*"],
-      "groupAllowFrom": [],
-      "groupPolicy": "open",
-      "groups": { "*": { "requireMention": true } },
-      "streaming": "partial",
-      "actions": {
-        "sendMessage": true,
-        "deleteMessage": false,
-        "sticker": true
-      },
-      "webhookUrl": "http://127.0.0.1:3000/webhook/telegram",
-      "webhookSecret": "warmup-dummy-secret",
-      "webhookPath": "/telegram-webhook",
-      "webhookPort": 8787
-    }
-  },
   "skills": {
     "load": { "extraDirs": ["/opt/pinai/skills"] }
   },
   "plugins": {
+    "_comment": "The Dockerfile warmup step dynamically inserts an `enabled: true` entry for every bundled plugin under /usr/local/lib/node_modules/openclaw/dist/extensions/, so we don't list them here. Use `enabled: false` here to opt a specific plugin out of the build-time bake.",
     "entries": {
-      "telegram": { "enabled": true },
-      "telegram-api-proxy": { "enabled": true },
-      "platform-hooks": { "enabled": true }
+      "platform-hooks": { "enabled": true },
+      "perplexity": {
+        "enabled": true,
+        "config": {
+          "webSearch": {
+            "apiKey": "warmup-dummy",
+            "baseUrl": "http://127.0.0.1:4000",
+            "model": "sonar-pro"
+          }
+        }
+      },
+      "browser": { "enabled": false }
     },
     "load": {
       "paths": [
-        "/opt/pinai/plugins/telegram-api-proxy",
         "/opt/pinai/plugins/platform-hooks"
       ]
     }
@@ -81,13 +85,31 @@
       "notifyOnExit": true
     },
     "web": {
-      "search": { "enabled": false },
+      "search": { "enabled": true, "maxResults": 10, "provider": "perplexity" },
       "fetch": { "enabled": true, "maxChars": 50000 }
     },
     "media": {
       "concurrency": 2,
-      "audio": { "enabled": true, "maxBytes": 20971520 },
-      "video": { "enabled": true, "maxBytes": 52428800 }
+      "audio": {
+        "enabled": true,
+        "maxBytes": 20971520,
+        "models": [
+          { "provider": "openai", "model": "gpt-4o-mini-transcribe", "baseUrl": "http://127.0.0.1:4000" }
+        ]
+      },
+      "image": {
+        "enabled": true,
+        "models": [
+          { "provider": "moonshot", "model": "kimi-k2.5", "baseUrl": "http://127.0.0.1:4000" }
+        ]
+      },
+      "video": {
+        "enabled": true,
+        "maxBytes": 52428800,
+        "models": [
+          { "provider": "moonshot", "model": "kimi-k2.5", "baseUrl": "http://127.0.0.1:4000" }
+        ]
+      }
     },
     "sessions": { "visibility": "all" },
     "loopDetection": { "enabled": false }

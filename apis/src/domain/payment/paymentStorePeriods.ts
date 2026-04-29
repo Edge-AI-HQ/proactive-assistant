@@ -1,4 +1,4 @@
-import { lookupUserByTelegramId, resolveOrCreateUser } from "./userRegistry.js";
+import { lookupUserBySupabaseId, resolveOrCreateUser } from "./userRegistry.js";
 import type { PaymentStore } from "./paymentStore.js";
 import {
   firstRow,
@@ -10,8 +10,8 @@ import {
 } from "./paymentStoreCore.js";
 
 export interface EndedSubscriptionUser {
-  telegram_user_id: string;
-  telegram_username: string | null;
+  supabase_user_id: string;
+  display_name: string | null;
 }
 
 const resolveValidAssistantId = async (
@@ -55,7 +55,7 @@ export const createSubscriptionPeriodStore = (
   | "upsertSubscriptionPeriod"
   | "getPeriodsToApplyBudget"
   | "markPeriodBudgetApplied"
-  | "getCurrentPeriodByTelegramId"
+  | "getCurrentPeriodBySupabaseId"
   | "getSubscriptionInfoByStripeSubscriptionId"
   | "getSubscriptionInfoByStripeCustomerId"
   | "getUsersWithEndedSubscriptionNoCurrentPeriod"
@@ -65,14 +65,14 @@ export const createSubscriptionPeriodStore = (
   | "claimStripeEvent"
   | "markStripeEventProcessed"
   | "markStripeEventFailed"
-  | "ensureUserForTelegram"
+  | "ensureUser"
 > => {
   return {
     async upsertSubscriptionPeriod(data) {
-      const user = await lookupUserByTelegramId(pool, data.telegram_user_id);
+      const user = await lookupUserBySupabaseId(pool, data.supabase_user_id);
       if (!user) {
         throw new Error(
-          `Cannot upsert subscription period: user not found for telegram_user_id ${data.telegram_user_id}`,
+          `Cannot upsert subscription period: user not found for supabase_user_id ${data.supabase_user_id}`,
         );
       }
 
@@ -142,8 +142,8 @@ export const createSubscriptionPeriodStore = (
           SELECT
             sp.id,
             sp.user_id,
-            users.telegram_user_id::text AS telegram_user_id,
-            users.telegram_username,
+            users.supabase_user_id::text AS supabase_user_id,
+            users.display_name,
             sp.stripe_subscription_id,
             sp.stripe_customer_id,
             sp.stripe_invoice_id,
@@ -168,7 +168,7 @@ export const createSubscriptionPeriodStore = (
       return result.rows;
     },
 
-    async getCurrentPeriodByTelegramId(telegram_user_id, now) {
+    async getCurrentPeriodBySupabaseId(supabase_user_id, now) {
       const nowIso =
         now instanceof Date && Number.isFinite(now.getTime())
           ? now.toISOString()
@@ -182,8 +182,8 @@ export const createSubscriptionPeriodStore = (
       >(
         `
           SELECT
-            users.telegram_user_id::text AS telegram_user_id,
-            users.telegram_username,
+            users.supabase_user_id::text AS supabase_user_id,
+            users.display_name,
             sp.stripe_customer_id,
             sp.stripe_subscription_id,
             sp.plan_id,
@@ -193,19 +193,19 @@ export const createSubscriptionPeriodStore = (
             sp.period_end::text AS current_period_end
           FROM subscription_periods sp
           JOIN users ON users.id = sp.user_id
-          WHERE users.telegram_user_id = $1::bigint
+          WHERE users.supabase_user_id = $1::bigint
             AND sp.period_start <= $2::timestamptz
             AND sp.period_end > $2::timestamptz
           ORDER BY sp.period_start DESC, sp.updated_at DESC, sp.period_end DESC
           LIMIT 1
         `,
-        [telegram_user_id, nowIso],
+        [supabase_user_id, nowIso],
       );
       const row = firstRow(result.rows);
       if (!row) return null;
       return {
-        telegram_user_id: row.telegram_user_id,
-        telegram_username: row.telegram_username,
+        supabase_user_id: row.supabase_user_id,
+        display_name: row.display_name,
         stripe_customer_id: row.stripe_customer_id,
         stripe_subscription_id: row.stripe_subscription_id,
         plan_id: row.plan_id,
@@ -220,8 +220,8 @@ export const createSubscriptionPeriodStore = (
       const result = await pool.query<SubscriptionInfoByStripe>(
         `
           SELECT
-            users.telegram_user_id::text AS telegram_user_id,
-            users.telegram_username,
+            users.supabase_user_id::text AS supabase_user_id,
+            users.display_name,
             sp.stripe_subscription_id,
             sp.plan_id
           FROM subscription_periods sp
@@ -239,8 +239,8 @@ export const createSubscriptionPeriodStore = (
       const result = await pool.query<SubscriptionInfoByStripe>(
         `
           SELECT
-            users.telegram_user_id::text AS telegram_user_id,
-            users.telegram_username,
+            users.supabase_user_id::text AS supabase_user_id,
+            users.display_name,
             sp.stripe_subscription_id,
             sp.plan_id
           FROM subscription_periods sp
@@ -262,8 +262,8 @@ export const createSubscriptionPeriodStore = (
       const result = await pool.query<EndedSubscriptionUser>(
         `
           SELECT DISTINCT
-            u.telegram_user_id::text AS telegram_user_id,
-            u.telegram_username
+            u.supabase_user_id::text AS supabase_user_id,
+            u.display_name
           FROM users u
           WHERE EXISTS (
             SELECT 1 FROM subscription_periods sp
@@ -346,8 +346,8 @@ export const createSubscriptionPeriodStore = (
       return (result.rowCount ?? 0) > 0;
     },
 
-    async ensureUserForTelegram(telegram_user_id, telegram_username) {
-      return resolveOrCreateUser(pool, telegram_user_id, telegram_username);
+    async ensureUser(supabase_user_id, display_name) {
+      return resolveOrCreateUser(pool, supabase_user_id, display_name);
     },
 
     async claimSubscriptionEventOrder(data) {
@@ -387,8 +387,8 @@ export const createSubscriptionPeriodStore = (
     },
 
     async claimStripeEvent(data) {
-      const user = data.telegram_user_id
-        ? await resolveOrCreateUser(pool, data.telegram_user_id, undefined)
+      const user = data.supabase_user_id
+        ? await resolveOrCreateUser(pool, data.supabase_user_id, undefined)
         : null;
       const assistantId = await resolveValidAssistantId(
         pool,

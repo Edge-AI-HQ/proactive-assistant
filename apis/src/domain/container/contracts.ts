@@ -1,5 +1,3 @@
-import type { AssistantRecord } from "./types.js";
-
 // ---------------------------------------------------------------------------
 // Gateway Target
 // ---------------------------------------------------------------------------
@@ -48,41 +46,6 @@ export const gatewayHostHeaders = (
 };
 
 // ---------------------------------------------------------------------------
-// Assistant record projections (used by callers of the public API)
-// ---------------------------------------------------------------------------
-
-export type AssistantContainerRuntimeRef = Pick<
-  AssistantRecord,
-  | "id"
-  | "owner_telegram_user_id"
-  | "assistant_bot_id"
-  | "assistant_bot_token"
-  | "litellm_user_id"
-  | "litellm_key_alias"
-  | "litellm_virtual_key"
-  | "litellm_key_last4"
-  | "litellm_spend_usd"
-  | "litellm_budget_usd"
-  | "litellm_budget_duration"
-  | "litellm_rpm_limit"
-  | "litellm_tpm_limit"
-  | "litellm_last_synced_at"
-  | "container_name"
-  | "container_id"
-  | "container_port"
->;
-
-export type AssistantContainerDestroyRef = Pick<
-  AssistantRecord,
-  "id" | "assistant_bot_id" | "container_name" | "container_id"
->;
-
-export type AssistantContainerGatewayRef = Pick<
-  AssistantRecord,
-  "assistant_bot_id" | "container_id" | "container_port"
->;
-
-// ---------------------------------------------------------------------------
 // ContainerRuntime — pure infrastructure abstraction (no DB, no notifications)
 // ---------------------------------------------------------------------------
 
@@ -110,24 +73,8 @@ export interface ContainerRef {
   metadata: Record<string, string>;
 }
 
-export interface AssistantContainerParams {
-  assistantBotId: number;
-  assistantId: number;
-  ownerTelegramUserId: string | null;
-  containerName: string;
-  gatewayToken: string;
-  assistantBotToken: string | null;
-  liteLlmApiKey: string | null;
-  onboardingProfileText?: string | null;
-  onboardingProfileSource?: "connector" | "privy" | null;
-  googleCredentialsB64?: string | null;
-  skillsConfig?: Record<string, unknown> | null;
-  /** Docker needs a pre-allocated host port. */
-  containerPort?: number;
-}
-
 /**
- * Generic container creation params — runtime-agnostic, no Telegram coupling.
+ * Generic container creation params — runtime-agnostic.
  * Used by the proactive-ai container orchestrator.
  */
 export interface GenericContainerParams {
@@ -160,14 +107,8 @@ export interface ContainerRuntime {
     fallbackNames: string[],
   ): Promise<ContainerRef | null>;
 
-  /** Create a new container. Returns the created container ref. */
-  createContainer(params: AssistantContainerParams): Promise<ContainerRef>;
-
-  /**
-   * Create a container with explicit env vars (no Telegram assumptions).
-   * Falls back to createContainer with a cast if not implemented.
-   */
-  createGenericContainer?(params: GenericContainerParams): Promise<ContainerRef>;
+  /** Create a container with explicit env vars. */
+  createGenericContainer(params: GenericContainerParams): Promise<ContainerRef>;
 
   /** Start a stopped/created container. Waits until running or error. */
   startContainer(containerId: string): Promise<ContainerRef>;
@@ -181,8 +122,23 @@ export interface ContainerRuntime {
    */
   suspendContainer(containerId: string): Promise<void>;
 
-  /** Destroy a container permanently. */
+  /** Destroy a container permanently. Persistent state (host bind-mount /
+   *  Fly volume) is preserved — see destroyContainerVolume for that. */
   destroyContainer(containerId: string): Promise<void>;
+
+  /**
+   * Destroy the persistent state owned by a container (host bind-mount
+   * directory on Docker, named volume on Fly).
+   *
+   * MUST only be called by `deleteAccount`. `destroyContainer` and
+   * `resetContainer` deliberately leave persistent state intact so that
+   * "Recreate" preserves user workspace, agents, and OpenClaw caches.
+   */
+  destroyContainerVolume(params: {
+    containerName: string;
+    /** Provider-specific volume identifier; falls back to containerName. */
+    volumeKey?: string;
+  }): Promise<void>;
 
   /** List all managed containers (for state sync). */
   listContainers(): Promise<ContainerRef[]>;
@@ -192,10 +148,4 @@ export interface ContainerRuntime {
 
   /** Pure infrastructure probe — no side effects. */
   probeReady(ref: ContainerRef, options: ProbeOptions): Promise<boolean>;
-
-  /** Check if a container's config has drifted from desired params. */
-  needsRecreation(
-    ref: ContainerRef,
-    params: AssistantContainerParams,
-  ): Promise<boolean>;
 }

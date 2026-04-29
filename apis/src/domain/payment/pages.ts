@@ -184,9 +184,9 @@ const miniPageStyles = `
   .brand { margin-top: 20px; font-size: 12px; color: hsl(270 10% 70%); }
 `;
 
-const readTelegramReturnUrl = (): string => {
-  const username = (process.env.TELEGRAM_BOT_USERNAME || "").trim().replace(/^@/, "");
-  return username ? `https://t.me/${username}` : "tg://resolve";
+const readReturnUrl = (): string => {
+  const explicit = (process.env.PAYMENT_PUBLIC_BASE_URL || "").trim().replace(/\/+$/, "");
+  return explicit || "/";
 };
 
 const renderMiniPage = (opts: {
@@ -198,7 +198,7 @@ const renderMiniPage = (opts: {
   description: string;
   buttonLabel: string;
 }): string => {
-  const url = readTelegramReturnUrl();
+  const url = readReturnUrl();
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -232,7 +232,7 @@ export const renderSuccessPage = (mode?: string): string => {
     description: isDowngrade
       ? "Your new plan will take effect at the next billing cycle. Current credits remain available until then."
       : "Payment complete! Your credits are active and your assistant will be ready shortly.",
-    buttonLabel: "Back to Telegram",
+    buttonLabel: "Back to App",
   });
 };
 
@@ -243,8 +243,8 @@ export const renderCancelPage = (): string => {
     icon: "—",
     iconColor: "#a1a1aa",
     iconBg: "rgba(161,161,170,0.1)",
-    description: "No charge was made. You can subscribe anytime from the Mini App in Telegram.",
-    buttonLabel: "Back to Telegram",
+    description: "No charge was made. You can subscribe anytime from the dashboard.",
+    buttonLabel: "Back to App",
   });
 };
 
@@ -254,10 +254,10 @@ export const renderSubscribeUnavailablePage = (options?: {
   const reason = options?.reason ?? "unavailable";
   const description =
     reason === "expired"
-      ? "This link has expired for security reasons. Please return to Telegram and request a new one."
+      ? "This link has expired for security reasons. Please return to the app and request a new one."
       : reason === "invalid"
-        ? "This link is no longer valid. Please open a new one from Telegram."
-        : "Something went wrong. Please go back to Telegram and try again.";
+        ? "This link is no longer valid. Please open a new one from the app."
+        : "Something went wrong. Please go back to the app and try again.";
   return renderMiniPage({
     title: "Link Unavailable",
     pageTitle: "Unavailable",
@@ -265,7 +265,7 @@ export const renderSubscribeUnavailablePage = (options?: {
     iconColor: "#ef4444",
     iconBg: "rgba(239,68,68,0.1)",
     description,
-    buttonLabel: "Back to Telegram",
+    buttonLabel: "Back to App",
   });
 };
 

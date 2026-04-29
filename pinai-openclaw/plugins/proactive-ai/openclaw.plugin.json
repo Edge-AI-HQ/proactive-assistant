@@ -1,6 +1,5 @@
 {
   "id": "proactive-ai-cloud",
-  "skills": ["./skills"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

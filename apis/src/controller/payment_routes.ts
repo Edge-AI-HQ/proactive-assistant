@@ -5,6 +5,7 @@ import express, {
   type Response,
 } from "express";
 import { isDomainError } from "../domain/common/errors.js";
+import { sendDomainError, sendError } from "./http_error.js";
 import {
   assertSubscribeTokenUsable,
   cancelStripeSubscription,
@@ -34,12 +35,6 @@ import {
   processStripeEvent,
 } from "../domain/payment/webhook.js";
 
-const respondKnownError = (res: Response, error: unknown): boolean => {
-  if (!isDomainError(error)) return false;
-  res.status(error.status).json({ error: error.message });
-  return true;
-};
-
 const readCronToken = (req: Request): string => {
   const authHeader =
     typeof req.headers.authorization === "string"
@@ -60,7 +55,7 @@ const ensureInternalOrCronAuth = (req: Request, res: Response): boolean => {
   const apiAuth = verifyInternalApiKey(req);
   const cronAuth = isCronAuthorized(req);
   if (!apiAuth.ok && !cronAuth) {
-    res.status(401).json({ error: apiAuth.reason });
+    sendDomainError(res, "UNAUTHORIZED", apiAuth.reason);
     return false;
   }
   return true;
@@ -92,9 +87,7 @@ export const createPaymentRouter = (): Router => {
       const response = await listActivePlansForApi();
       res.status(200).json(response);
     } catch (error: unknown) {
-      if (respondKnownError(res, error)) return;
-      const message = error instanceof Error ? error.message : "Unknown error";
-      res.status(500).json({ error: message });
+      sendError(res, error);
     }
   });
 
@@ -103,7 +96,7 @@ export const createPaymentRouter = (): Router => {
     async (req: Request, res: Response) => {
       const auth = verifyInternalApiKey(req);
       if (!auth.ok) {
-        res.status(401).json({ error: auth.reason });
+        sendDomainError(res, "UNAUTHORIZED", auth.reason);
         return;
       }
 
@@ -112,10 +105,7 @@ export const createPaymentRouter = (): Router => {
         const response = await createInternalPaymentSession(req, body);
         res.status(200).json(response);
       } catch (error: unknown) {
-        if (respondKnownError(res, error)) return;
-        const message =
-          error instanceof Error ? error.message : "Unknown error";
-        res.status(500).json({ error: message });
+        sendError(res, error);
       }
     },
   );
@@ -123,19 +113,17 @@ export const createPaymentRouter = (): Router => {
   router.get("/internal/subscription", async (req: Request, res: Response) => {
     const auth = verifyInternalApiKey(req);
     if (!auth.ok) {
-      res.status(401).json({ error: auth.reason });
+      sendDomainError(res, "UNAUTHORIZED", auth.reason);
       return;
     }
 
     try {
       const response = await readInternalSubscription(
-        req.query.telegram_user_id,
+        req.query.supabase_user_id,
       );
       res.status(200).json(response);
     } catch (error: unknown) {
-      if (respondKnownError(res, error)) return;
-      const message = error instanceof Error ? error.message : "Unknown error";
-      res.status(500).json({ error: message });
+      sendError(res, error);
     }
   });
 
@@ -144,7 +132,7 @@ export const createPaymentRouter = (): Router => {
     async (req: Request, res: Response) => {
       const auth = verifyInternalApiKey(req);
       if (!auth.ok) {
-        res.status(401).json({ error: auth.reason });
+        sendDomainError(res, "UNAUTHORIZED", auth.reason);
         return;
       }
 
@@ -152,10 +140,7 @@ export const createPaymentRouter = (): Router => {
         const response = await validateInternalPaymentSession(req.query.token);
         res.status(200).json(response);
       } catch (error: unknown) {
-        if (respondKnownError(res, error)) return;
-        const message =
-          error instanceof Error ? error.message : "Unknown error";
-        res.status(500).json({ error: message });
+        sendError(res, error);
       }
     },
   );
@@ -171,10 +156,7 @@ export const createPaymentRouter = (): Router => {
         const response = await runCreditsMaintenance(limit);
         res.status(200).json(response);
       } catch (error: unknown) {
-        if (respondKnownError(res, error)) return;
-        const message =
-          error instanceof Error ? error.message : "Unknown error";
-        res.status(500).json({ error: message });
+        sendError(res, error);
       }
     },
   );
@@ -189,10 +171,7 @@ export const createPaymentRouter = (): Router => {
         const response = await runCreditsMaintenance(limit);
         res.status(200).json(response);
       } catch (error: unknown) {
-        if (respondKnownError(res, error)) return;
-        const message =
-          error instanceof Error ? error.message : "Unknown error";
-        res.status(500).json({ error: message });
+        sendError(res, error);
       }
     },
   );
@@ -206,10 +185,7 @@ export const createPaymentRouter = (): Router => {
         const response = await applySubscriptionPeriodBudgetsWithLock();
         res.status(200).json(response);
       } catch (error: unknown) {
-        if (respondKnownError(res, error)) return;
-        const message =
-          error instanceof Error ? error.message : "Unknown error";
-        res.status(500).json({ error: message });
+        sendError(res, error);
       }
     },
   );
@@ -260,9 +236,7 @@ export const createPaymentRouter = (): Router => {
       const response = await createCheckoutSession(req, body);
       res.status(200).json(response);
     } catch (error: unknown) {
-      if (respondKnownError(res, error)) return;
-      const message = error instanceof Error ? error.message : "Unknown error";
-      res.status(500).json({ error: message });
+      sendError(res, error);
     }
   });
 
@@ -275,9 +249,7 @@ export const createPaymentRouter = (): Router => {
       const response = await previewPromotionCode(body);
       res.status(200).json(response);
     } catch (error: unknown) {
-      if (respondKnownError(res, error)) return;
-      const message = error instanceof Error ? error.message : "Unknown error";
-      res.status(500).json({ error: message });
+      sendError(res, error);
     }
   });
 
@@ -294,21 +266,19 @@ export const createPaymentRouter = (): Router => {
     res.send(renderCancelPage());
   });
 
-  router.post("/cancel-subscription", async (req: Request, res: Response) => {
+  router.post("/internal/cancel-subscription", async (req: Request, res: Response) => {
     const auth = verifyInternalApiKey(req);
     if (!auth.ok) {
-      res.status(401).json({ error: auth.reason });
+      sendDomainError(res, "UNAUTHORIZED", auth.reason);
       return;
     }
 
     try {
       const body = req.body as Record<string, unknown> | undefined;
-      const response = await cancelStripeSubscription(body?.telegram_user_id);
+      const response = await cancelStripeSubscription(body?.supabase_user_id);
       res.status(200).json(response);
     } catch (error: unknown) {
-      if (respondKnownError(res, error)) return;
-      const message = error instanceof Error ? error.message : "Unknown error";
-      res.status(500).json({ error: message });
+      sendError(res, error);
     }
   });
 
@@ -326,8 +296,7 @@ export const createPaymentWebhookRouter = (): Router => {
         requireStripe();
         requireStripeWebhookSecret();
       } catch (error: unknown) {
-        if (respondKnownError(res, error)) return;
-        res.status(500).json({ error: "Payment service is not configured" });
+        sendError(res, error);
         return;
       }
 
@@ -336,7 +305,7 @@ export const createPaymentWebhookRouter = (): Router => {
           ? req.headers["stripe-signature"]
           : "";
       if (!sig) {
-        res.status(400).json({ error: "Missing stripe-signature header" });
+        sendDomainError(res, "INVALID_INPUT", "Missing stripe-signature header");
         return;
       }
 
@@ -355,6 +324,7 @@ export const createPaymentWebhookRouter = (): Router => {
             ? err.message
             : "Unknown signature verification error";
         console.error("Webhook signature verification failed:", message);
+        // Stripe dashboard surfaces this as plain text in the event delivery log.
         res.status(400).send(`Webhook Error: ${message}`);
         return;
       }
@@ -363,12 +333,8 @@ export const createPaymentWebhookRouter = (): Router => {
         const processed = await processStripeEvent(event);
         res.status(200).json({ received: true, ...processed });
       } catch (error: unknown) {
-        const message =
-          error instanceof Error
-            ? error.message
-            : "Unknown webhook handler error";
         console.error("Webhook handler error:", error);
-        res.status(500).json({ error: message });
+        sendError(res, error);
       }
     },
   );

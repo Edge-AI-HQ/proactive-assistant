@@ -1,5 +1,5 @@
 import Stripe from "stripe";
-import { setLogContextTelegramIdentity } from "../common/requestLogContext.js";
+import { setLogContextIdentity } from "../common/requestLogContext.js";
 import { db } from "./db.js";
 import {
   handleCheckoutCompleted,
@@ -9,18 +9,18 @@ import {
 import { requireStripe, requireStripeWebhookSecret } from "./stripeClient.js";
 import { buildStripeEventClaimPayload } from "./webhookClaim.js";
 
-const toTgIdFromString = (value: unknown): string | null => {
+const toUserIdFromString = (value: unknown): string | null => {
   const raw = typeof value === "string" ? value.trim() : "";
   return /^\d+$/.test(raw) ? raw : null;
 };
 
-const toTgName = (value: unknown): string | undefined => {
+const toDisplayName = (value: unknown): string | undefined => {
   if (typeof value !== "string") return undefined;
   const normalized = value.trim().replace(/^@+/, "");
   return normalized || undefined;
 };
 
-const bindWebhookTelegramId = (event: Stripe.Event): void => {
+const bindWebhookIdentity = (event: Stripe.Event): void => {
   const obj = event.data.object as Record<string, unknown> | undefined;
   if (!obj || typeof obj !== "object") return;
 
@@ -28,10 +28,10 @@ const bindWebhookTelegramId = (event: Stripe.Event): void => {
     typeof obj.metadata === "object" && obj.metadata !== null
       ? (obj.metadata as Record<string, unknown>)
       : null;
-  const idFromMetadata = toTgIdFromString(metadata?.telegram_user_id);
-  const nameFromMetadata = toTgName(metadata?.telegram_username);
+  const idFromMetadata = toUserIdFromString(metadata?.supabase_user_id);
+  const nameFromMetadata = toDisplayName(metadata?.display_name);
   if (idFromMetadata) {
-    setLogContextTelegramIdentity(idFromMetadata, nameFromMetadata);
+    setLogContextIdentity(idFromMetadata, nameFromMetadata);
     return;
   }
 
@@ -42,10 +42,10 @@ const bindWebhookTelegramId = (event: Stripe.Event): void => {
       typeof customerObj.metadata === "object" && customerObj.metadata !== null
         ? (customerObj.metadata as Record<string, unknown>)
         : null;
-    const fromCustomerMeta = toTgIdFromString(customerMeta?.telegram_user_id);
-    const fromCustomerName = toTgName(customerMeta?.telegram_username);
+    const fromCustomerMeta = toUserIdFromString(customerMeta?.supabase_user_id);
+    const fromCustomerName = toDisplayName(customerMeta?.display_name);
     if (fromCustomerMeta) {
-      setLogContextTelegramIdentity(fromCustomerMeta, fromCustomerName);
+      setLogContextIdentity(fromCustomerMeta, fromCustomerName);
     }
   }
 };
@@ -73,7 +73,7 @@ export const claimStripeEventForProcessing = async (
 export const processStripeEvent = async (
   event: Stripe.Event,
 ): Promise<{ skipped: boolean }> => {
-  bindWebhookTelegramId(event);
+  bindWebhookIdentity(event);
   console.log("[payment] webhook:received", {
     event_id: event.id,
     event_type: event.type,

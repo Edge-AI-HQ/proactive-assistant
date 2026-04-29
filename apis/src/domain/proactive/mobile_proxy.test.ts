@@ -83,7 +83,7 @@ test("refreshMobileProxyContainer prefers reconciled container data when availab
     created_at: "2026-04-18T00:00:00.000Z",
     updated_at: "2026-04-18T00:00:00.000Z",
     last_active_at: null,
-    gateway_token: "gateway-token",
+    container_proxy_secret: "gateway-token",
     user_key: "285d35b0-e031-4cfd-97b3-0e21064d0d0e",
   };
   const refreshed = await refreshMobileProxyContainer(

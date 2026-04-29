@@ -13,7 +13,7 @@ const startGateway = async (options: {
   getPatchCount: () => number;
   target: GatewayTarget;
 }> => {
-  const currentModel = options.currentModel ?? "litellm/kimi-k2.5";
+  const currentModel = options.currentModel ?? "litellm/kimi-k2.6";
   const patchDelayMs = options.patchDelayMs ?? 0;
   let patchCount = 0;
   const server = new WebSocketServer({ port: 0 });
@@ -101,13 +101,13 @@ test("setCurrentModel waits for slow config.patch responses", async () => {
 
 test("setCurrentModel skips config.patch when the model is unchanged", async () => {
   const gateway = await startGateway({
-    currentModel: "litellm/kimi-k2.5",
+    currentModel: "litellm/kimi-k2.6",
   });
   try {
     const result = await setCurrentModel(
       gateway.target,
       "gateway-token",
-      "litellm/kimi-k2.5",
+      "litellm/kimi-k2.6",
     );
 
     assert.deepEqual(result, { ok: true, payload: undefined });

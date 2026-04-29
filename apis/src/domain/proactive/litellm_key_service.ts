@@ -2,9 +2,10 @@
  * LiteLLM virtual key management for proactive-ai users.
  *
  * Reuses the existing LiteLLM client (generateLiteLLMKey, createLiteLLMUser)
- * to provision per-user virtual keys with budget limits. Keys are stored on
- * the `users` table (litellm_virtual_key, litellm_user_id, etc.) — the same
- * columns used by Telegram-based users, avoiding a separate table.
+ * to provision per-user virtual keys with budget limits. Keys are cached on
+ * the `users` table (litellm_virtual_key, litellm_user_id, litellm_key_alias,
+ * litellm_key_last4, litellm_budget_usd); LiteLLM itself remains the source
+ * of truth for the key state.
  */
 
 import { pool } from '../common/db/core.js';

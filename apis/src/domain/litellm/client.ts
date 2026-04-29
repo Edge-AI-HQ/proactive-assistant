@@ -1,14 +1,4 @@
-import { getLiteLLMRuntime } from "./runtime.js";
-
-const config = new Proxy(
-  {} as { litellm: ReturnType<typeof getLiteLLMRuntime>["config"]["litellm"] },
-  {
-    get: (_target, prop) =>
-      getLiteLLMRuntime().config[
-        prop as keyof ReturnType<typeof getLiteLLMRuntime>["config"]
-      ],
-  },
-);
+import { config } from "../common/config.js";
 
 type JsonRecord = Record<string, unknown>;
 

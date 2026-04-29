@@ -1,4 +1,4 @@
-import { lookupUserByTelegramId } from "./userRegistry.js";
+import { lookupUserBySupabaseId } from "./userRegistry.js";
 
 export type Queryable = {
   query: <T = Record<string, unknown>>(
@@ -33,8 +33,8 @@ export const toIsoOrNull = (value: Date | undefined): string | null => {
 export interface UserSubscription {
   id: number;
   user_id: number;
-  telegram_user_id: string;
-  telegram_username: string | null;
+  supabase_user_id: string;
+  display_name: string | null;
   stripe_customer_id: string;
   stripe_subscription_id?: string;
   plan_id?: string;
@@ -60,8 +60,8 @@ export interface PaymentSessionRecord {
   id: number;
   token: string;
   user_id: number;
-  telegram_user_id: string;
-  telegram_username: string | null;
+  supabase_user_id: string;
+  display_name: string | null;
   assistant_id?: number | null;
   plan_code?: string | null;
   used: boolean;
@@ -83,8 +83,8 @@ export interface BillingPlan {
 
 export interface UserIdentity {
   id: number;
-  telegram_user_id: string;
-  telegram_username: string | null;
+  supabase_user_id: string;
+  display_name: string | null;
   litellm_user_id: string | null;
   litellm_user_alias: string | null;
 }
@@ -95,8 +95,8 @@ export type StripeEventClaimResult = "process" | "skip";
 export interface SubscriptionPeriod {
   id: number;
   user_id: number;
-  telegram_user_id: string;
-  telegram_username: string | null;
+  supabase_user_id: string;
+  display_name: string | null;
   stripe_subscription_id: string;
   stripe_customer_id: string | null;
   stripe_invoice_id: string | null;
@@ -113,8 +113,8 @@ export interface SubscriptionPeriod {
 
 /** 当前生效周期视图：供 subscriptionGuard / checkout / litellmBudget 使用，与「按时间判定生效」一致 */
 export interface CurrentSubscriptionView {
-  telegram_user_id: string;
-  telegram_username: string | null;
+  supabase_user_id: string;
+  display_name: string | null;
   stripe_customer_id: string | null;
   stripe_subscription_id: string;
   plan_id: string | null;
@@ -126,8 +126,8 @@ export interface CurrentSubscriptionView {
 
 /** 从 Stripe 解析出的订阅方信息（用于 invoice 等） */
 export interface SubscriptionInfoByStripe {
-  telegram_user_id: string;
-  telegram_username: string | null;
+  supabase_user_id: string;
+  display_name: string | null;
   stripe_subscription_id: string;
   plan_id: string | null;
 }
@@ -136,8 +136,8 @@ export const subscriptionSelectSql = `
   SELECT
     user_subscriptions.id,
     user_subscriptions.user_id,
-    users.telegram_user_id::text AS telegram_user_id,
-    users.telegram_username,
+    users.supabase_user_id::text AS supabase_user_id,
+    users.display_name,
     user_subscriptions.stripe_customer_id,
     user_subscriptions.stripe_subscription_id,
     user_subscriptions.plan_id,
@@ -181,19 +181,19 @@ export const readPlanByCode = async (
   return firstRow(result.rows);
 };
 
-export const readUserIdentityByTelegramId = async (
+export const readUserIdentityBySupabaseId = async (
   queryable: QueryExecutor,
-  telegramUserId: string,
+  supabaseUserId: string,
 ): Promise<UserIdentity | null> => {
-  const user = await lookupUserByTelegramId(queryable, telegramUserId);
+  const user = await lookupUserBySupabaseId(queryable, supabaseUserId);
   if (!user) return null;
 
   const result = await queryable.query<UserIdentity>(
     `
       SELECT
         id,
-        telegram_user_id::text,
-        telegram_username,
+        supabase_user_id::text,
+        display_name,
         litellm_user_id,
         litellm_user_alias
       FROM users

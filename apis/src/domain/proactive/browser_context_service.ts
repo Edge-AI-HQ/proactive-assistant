@@ -203,7 +203,7 @@ export async function getOrCreateBrowserContext(
  *
  * Called by:
  *   - deleteUserAccount (cascade on account deletion)
- *   - DELETE /api/proactive/browser/context (user-facing "clear cookies")
+ *   - POST /api/proactive/browser/context/reset (user-facing "clear cookies")
  *
  * Note: this only clears server-side state. A container that's already
  * running with BROWSERBASE_CONTEXT_ID pointing at the old context will

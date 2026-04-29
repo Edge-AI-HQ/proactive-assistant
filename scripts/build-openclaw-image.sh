@@ -110,8 +110,8 @@ echo
 echo "Update OPENCLAW_IMAGE for each environment:"
 echo
 echo "  # dev"
-echo "  npx dotenvx set OPENCLAW_IMAGE \"${DIGEST_REF}\" -f apis/.env.dev"
+echo "  npx @dotenvx/dotenvx set OPENCLAW_IMAGE \"${DIGEST_REF}\" -f apis/.env.dev"
 echo
 echo "  # production (after dev verification)"
-echo "  npx dotenvx set OPENCLAW_IMAGE \"${DIGEST_REF}\" -f apis/.env.production"
+echo "  npx @dotenvx/dotenvx set OPENCLAW_IMAGE \"${DIGEST_REF}\" -f apis/.env.production"
 echo

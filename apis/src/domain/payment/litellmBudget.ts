@@ -16,13 +16,13 @@ const buildDefaultLiteLLMUserId = (userId: number): string =>
   String(Math.max(0, Math.trunc(userId)));
 
 const buildDefaultLiteLLMAlias = (
-  telegramUserId: string,
-  telegramUsername: string | null,
+  supabaseUserId: string,
+  displayName: string | null,
 ): string => {
-  const username = (telegramUsername || "").trim();
+  const username = (displayName || "").trim();
   return username
-    ? `telegram:${telegramUserId}:@${username}`
-    : `telegram:${telegramUserId}`;
+    ? `user:${supabaseUserId}:@${username}`
+    : `user:${supabaseUserId}`;
 };
 
 const creditsToUsd = (credits: number): number => {
@@ -49,7 +49,7 @@ const normalizeBudgetUsd = (value: number): number => {
  */
 export const resolveBudgetForUser = async (input: {
   litellm_user_id: string;
-  telegram_user_id: string;
+  supabase_user_id: string;
 }): Promise<number | null> => {
   if (isLiteLLMClientEnabled()) {
     try {
@@ -66,7 +66,7 @@ export const resolveBudgetForUser = async (input: {
     }
   }
 
-  const current = await db.getCurrentPeriodByTelegramId(input.telegram_user_id);
+  const current = await db.getCurrentPeriodBySupabaseId(input.supabase_user_id);
   const activeStatuses = ["active", "trialing", "past_due"] as const;
   if (current) {
     if (
@@ -92,13 +92,13 @@ export const resolveBudgetForUser = async (input: {
 };
 
 interface BudgetSyncInput {
-  telegram_user_id: string;
-  telegram_username?: string | null | undefined;
+  supabase_user_id: string;
+  display_name?: string | null | undefined;
   source: string;
 }
 
 type LiteLLMResolvedIdentity = NonNullable<
-  Awaited<ReturnType<typeof db.getUserIdentityByTelegramId>>
+  Awaited<ReturnType<typeof db.getUserIdentityBySupabaseId>>
 >;
 
 const resolveLiteLLMIdentity = async (
@@ -108,12 +108,12 @@ const resolveLiteLLMIdentity = async (
   litellmUserId: string;
   litellmUserAlias: string;
 } | null> => {
-  const identity = await db.getUserIdentityByTelegramId(input.telegram_user_id);
+  const identity = await db.getUserIdentityBySupabaseId(input.supabase_user_id);
   if (!identity) {
     console.warn(
       "[payment] skip litellm budget sync: user identity not found",
       {
-        telegramUserId: input.telegram_user_id,
+        supabaseUserId: input.supabase_user_id,
         source: input.source,
       },
     );
@@ -126,8 +126,8 @@ const resolveLiteLLMIdentity = async (
   const litellmUserAlias =
     (identity.litellm_user_alias || "").trim() ||
     buildDefaultLiteLLMAlias(
-      input.telegram_user_id,
-      input.telegram_username ?? identity.telegram_username,
+      input.supabase_user_id,
+      input.display_name ?? identity.display_name,
     );
 
   return {
@@ -170,7 +170,7 @@ export const syncLiteLLMBudgetAbsolute = async (
       autoCreateKey: false,
       metadata: {
         source: input.source,
-        telegram_user_id: input.telegram_user_id,
+        supabase_user_id: input.supabase_user_id,
         user_id: identity.id,
         ...(input.metadata ?? {}),
       },
@@ -196,8 +196,8 @@ export const syncLiteLLMBudgetAbsolute = async (
     // CRITICAL: Also reset key-level spend!
     // LiteLLM checks BOTH user.spend and key.spend against their respective budgets.
     // If we only reset user spend, the key will still exceed its budget on next use.
-    const litellmKey = await db.getLiteLLMKeyByTelegramId(
-      input.telegram_user_id,
+    const litellmKey = await db.getLiteLLMKeyBySupabaseId(
+      input.supabase_user_id,
     );
     if (litellmKey) {
       try {
@@ -210,7 +210,7 @@ export const syncLiteLLMBudgetAbsolute = async (
           "[payment] Failed to reset LiteLLM key spend - USER MAY HIT BUDGET LIMIT",
           {
             userId: litellmUserId,
-            telegramUserId: input.telegram_user_id,
+            supabaseUserId: input.supabase_user_id,
             error: error instanceof Error ? error.message : String(error),
           },
         );
@@ -218,7 +218,7 @@ export const syncLiteLLMBudgetAbsolute = async (
     } else {
       console.warn("[payment] No LiteLLM key found to reset spend", {
         userId: litellmUserId,
-        telegramUserId: input.telegram_user_id,
+        supabaseUserId: input.supabase_user_id,
         source: input.source,
       });
     }
@@ -231,7 +231,7 @@ export const syncLiteLLMBudgetAbsolute = async (
     budgetDuration: null, // Disable auto-reset, we manage budget manually via subscription periods
   });
 
-  const litellmKey = await db.getLiteLLMKeyByTelegramId(input.telegram_user_id);
+  const litellmKey = await db.getLiteLLMKeyBySupabaseId(input.supabase_user_id);
   if (litellmKey) {
     try {
       await updateLiteLLMKey({
@@ -242,15 +242,15 @@ export const syncLiteLLMBudgetAbsolute = async (
       });
     } catch (e) {
       console.warn("[payment] key budget sync failed (non-fatal)", {
-        telegramUserId: input.telegram_user_id,
+        supabaseUserId: input.supabase_user_id,
         error: e instanceof Error ? e.message : String(e),
       });
     }
   }
 
   await db.upsertUserLiteLLMIdentity({
-    telegram_user_id: input.telegram_user_id,
-    telegram_username: input.telegram_username ?? identity.telegram_username,
+    supabase_user_id: input.supabase_user_id,
+    display_name: input.display_name ?? identity.display_name,
     litellm_user_id: litellmUserId,
     litellm_user_alias: litellmUserAlias,
     litellm_last_synced_at: new Date().toISOString(),
@@ -258,8 +258,8 @@ export const syncLiteLLMBudgetAbsolute = async (
 };
 
 export const syncLiteLLMBudgetFromPlan = async (input: {
-  telegram_user_id: string;
-  telegram_username?: string | null;
+  supabase_user_id: string;
+  display_name?: string | null;
   plan_code: string;
   source: string;
   reset_spend?: boolean;
@@ -269,7 +269,7 @@ export const syncLiteLLMBudgetFromPlan = async (input: {
   const plan = await db.getPlanByCode(input.plan_code);
   if (!plan) {
     console.warn("[payment] skip litellm budget sync: plan not found", {
-      telegramUserId: input.telegram_user_id,
+      supabaseUserId: input.supabase_user_id,
       planCode: input.plan_code,
       source: input.source,
     });
@@ -278,8 +278,8 @@ export const syncLiteLLMBudgetFromPlan = async (input: {
 
   const targetBudgetUsd = planBudgetUsd(plan.monthly_refresh_credits);
   await syncLiteLLMBudgetAbsolute({
-    telegram_user_id: input.telegram_user_id,
-    telegram_username: input.telegram_username,
+    supabase_user_id: input.supabase_user_id,
+    display_name: input.display_name,
     source: input.source,
     budget_usd: targetBudgetUsd,
     ...(input.reset_spend != null ? { reset_spend: input.reset_spend } : {}),

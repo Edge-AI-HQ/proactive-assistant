@@ -138,6 +138,14 @@ async function readErrorMessage(res: Response): Promise<string> {
 
     try {
       const data = JSON.parse(text) as { error?: unknown };
+      // New shape: { error: { code, message } } — Stripe / Google Cloud convention.
+      if (data?.error && typeof data.error === "object" && data.error !== null) {
+        const obj = data.error as { code?: unknown; message?: unknown };
+        if (typeof obj.message === "string" && obj.message.trim()) {
+          return `${res.status} ${obj.message}`;
+        }
+      }
+      // Legacy shape: { error: "string" }.
       if (typeof data?.error === "string" && data.error.trim()) {
         return `${res.status} ${data.error}`;
       }
@@ -187,15 +195,6 @@ export async function proactiveFetch(
 
 // ── APIs endpoints (/api/proactive/*) ──
 
-export async function fetchMe(): Promise<{
-  user: { id: string; email: string; name: string | null; avatar_url: string | null };
-  container: { status: string; created_at: string } | null;
-}> {
-  const res = await proactiveFetch("/api/proactive/auth/me");
-  if (!res.ok) throw new Error(`/auth/me failed: ${await readErrorMessage(res)}`);
-  return res.json();
-}
-
 export async function heartbeat(): Promise<void> {
   await proactiveFetch("/api/proactive/user/heartbeat", {
     method: "POST",
@@ -242,10 +241,10 @@ export async function fetchContainerStatus(): Promise<{
 // ── Account deletion ──
 
 export async function deleteAccount(): Promise<void> {
-  const res = await proactiveFetch("/api/proactive/user/account", {
-    method: "DELETE",
+  const res = await proactiveFetch("/api/proactive/user/delete", {
+    method: "POST",
   });
-  if (!res.ok) throw new Error(`/user/account delete failed: ${await readErrorMessage(res)}`);
+  if (!res.ok) throw new Error(`/user/delete failed: ${await readErrorMessage(res)}`);
 }
 
 // ── Model management ──

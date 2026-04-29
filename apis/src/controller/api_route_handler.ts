@@ -1,19 +1,9 @@
 import type { Application } from "express";
 import type { Server } from "node:http";
-import { registerAuthRoutes } from "./auth_routes.js";
-import {
-  registerDashboardApiRoutes,
-  registerDashboardRoutes,
-  registerDashboardWsRoutes,
-} from "./dashboard_routes.js";
-import { registerUserRoutes } from "./user_routes.js";
-import { registerClawAssistantRoutes } from "./claw_assistant_routes.js";
-import { registerContainerRoutes } from "./container_routes.js";
 import {
   registerPaymentRoutes,
   registerPaymentWebhookRoutes,
 } from "./payment_routes.js";
-import vncRoutes, { registerVncWebSocketProxy } from "./vnc_routes.js";
 import { registerProactiveRoutes, registerProactiveWsRoutes } from "./proactive_routes.js";
 
 export const registerRawBodyRoutes = (app: Application): void => {
@@ -22,20 +12,10 @@ export const registerRawBodyRoutes = (app: Application): void => {
 };
 
 export const registerHttpRoutes = (app: Application): void => {
-  registerUserRoutes(app);
-  registerClawAssistantRoutes(app);
-  registerContainerRoutes(app);
-  registerDashboardApiRoutes(app);
   registerPaymentRoutes(app);
-  app.use(vncRoutes);
-
   registerProactiveRoutes(app);
-  registerAuthRoutes(app);
-  registerDashboardRoutes(app);
 };
 
 export const registerWsRoutes = (server: Server): void => {
-  registerDashboardWsRoutes(server);
   registerProactiveWsRoutes(server);
-  registerVncWebSocketProxy(server);
 };

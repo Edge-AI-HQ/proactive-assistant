@@ -35,8 +35,6 @@ export default function App() {
     <Dashboard
       user={user}
       status={container.status}
-      connectAttempt={container.connectAttempt}
-      connectMaxAttempts={container.connectMaxAttempts}
       firstTime={container.firstTime}
       error={container.error}
       onSignOut={signOut}

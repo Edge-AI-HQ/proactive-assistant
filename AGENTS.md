@@ -33,37 +33,16 @@ LiteLLM 作为 LLM 路由代理，统一管理模型调用（Claude、GPT、Elev
 OpenClaw 镜像 registry 只有一个，dev 和 prod 通过 digest 区分版本。
 
 ## Secrets 管理（dotenvx）
-所有环境变量（后端 secrets + 前端 VITE_*）统一用 [dotenvx](https://dotenvx.com/) 加密后 checkin 到 git。每个环境一把私钥。
+所有环境变量（后端 secrets + 前端 VITE_*）用 [dotenvx](https://dotenvx.com/) 加密 checkin，每环境一把私钥。
 
 ```
-apis/.env.dev          # dev 所有变量（加密，已 checkin，含 VITE_*）
-apis/.env.production   # prod 所有变量（加密，已 checkin，含 VITE_*）
-apis/.env.keys         # 私钥（不 checkin，找团队成员获取）
-ops/litellm/.env.dev / .env.production / .env.keys  # 同上
+apis/.env.dev / .env.production       # 后端 + VITE_* 加密真源（已 checkin）
+ops/litellm/.env.dev / .env.production # LiteLLM 加密真源
+apis/.env.keys / ops/litellm/.env.keys  # 私钥，不 checkin，找团队成员获取
+apis/.env / ops/litellm/.env           # 本地明文，make ensure-env 自动生成，不要手改、不要 commit
 ```
 
-本地明文 `.env` 由 `make ensure-env` 自动从加密文件解密生成，不 checkin：
-- `apis/.env` — docker-compose runtime 读取
-- `ops/litellm/.env` — docker-compose runtime 读取
-- 前端 VITE_* 在 `make up` 时自动从加密文件提取，通过 docker-compose build args 注入
-
-常用操作：
-```bash
-npx dotenvx get -f apis/.env.dev                          # 查看所有 key 明文
-npx dotenvx set NEW_KEY "value" -f apis/.env.dev           # 加/改 key
-npx dotenvx run -f apis/.env.dev -- node dist/src/server.js  # 解密运行
-make env-local                                             # 强制重新解密所有 .env
-```
-
-Fly.io 上每个 app 只需设一个 secret（私钥），容器启动时自动解密：
-```bash
-flyctl secrets set DOTENV_PRIVATE_KEY_DEV="..." -a proactive-ai-api-dev
-```
-
-CI 需要在 GitHub Secrets 设置以下 secrets：
-- `FLY_API_TOKEN` — 所有 deploy workflow
-- `DOTENV_PRIVATE_KEY_DEV` — deploy-dev workflow（构建 OpenClaw 镜像时更新 digest + 解密 .env.dev 提取 VITE_* build args）
-- `DOTENV_PRIVATE_KEY_PRODUCTION` — deploy-prod workflow（解密 .env.production，提取 VITE_* build args）
+dotenvx CLI、Fly secret 设置、CI secrets 配置详见 [`docs/modules/runtime-deployment.mdx`](docs/modules/runtime-deployment.mdx)。
 
 ## 高频目录
 - `apis/src/server.ts`：服务入口
@@ -136,6 +115,17 @@ npm run type-check
 npm run test --workspace @pin-ai/apis
 ```
 
+改完怎么验证（按改动范围选最轻的）：
+- 纯类型/逻辑 → `npm run type-check` + 相关 `npm test`
+- 改 `apis/` 代码 → `make restart`，看 `make logs-apis` 起得来 + 打一下目标接口
+- 改 `pinai-openclaw/` 镜像或 plugin → `make build-openclaw-local && make restart`
+- 改前端 → `npm run dev`（端口 3003）在浏览器点
+- 动容器编排 / gateway / entrypoint → `make up` 全栈，看 `make status` + logs
+
+**测试-修复 loop 边界**：失败先看 log 找根因再改，**最多 2 轮**仍不通就停下来，把现象、已尝试的修复、当前怀疑点报给 user，不要继续硬改。
+
+**docker healthy ≠ 功能对**：本地容器起来只是"代码能站起来"。依赖 Supabase token / 真实用户数据 / 第三方 webhook 的链路本地验不出来，如实声明"本地只验证启动 + 类型"，不要把容器 healthy 当通过。
+
 完整命令：`make help`
 
 ## 变更与部署
@@ -152,14 +142,7 @@ push 到 `proactive-ai-v2` 后根据改动范围自动部署，不需要手动�
 - 部署 APIs + 前端 + LiteLLM
 
 ### 本地部署（备用）
-CI/CD 不可用时可以本地直接部署：
-```bash
-make deploy-dev           # APIs dev
-make deploy-prod          # APIs prod（有 3 秒确认）
-make deploy-litellm-dev   # LiteLLM dev
-make deploy-litellm-prod  # LiteLLM prod
-make build-openclaw-image # 构建 OpenClaw 镜像到共用 registry
-```
+CI/CD 不可用时走 `make deploy-dev` / `deploy-prod` / `deploy-litellm-*` / `build-openclaw-image`，命令详情见 runtime-deployment.mdx。
 
 ## 生产环境硬性规则
 - 生产部署优先走 GitHub Actions（有审计日志和 approval）。

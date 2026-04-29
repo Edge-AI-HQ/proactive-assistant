@@ -1,4 +1,4 @@
-import type { ContainerManagerConfig } from '../../types.js';
+import type { LiteLLMConfig } from '../../../../types/index.js';
 
 export type UnknownRecord = Record<string, unknown>;
 
@@ -21,7 +21,7 @@ const inferReasoningByModelId = (id: string): boolean => {
   );
 };
 
-export const buildLiteLLMModelIds = (litellm: ContainerManagerConfig['litellm']): string[] => {
+export const buildLiteLLMModelIds = (litellm: LiteLLMConfig): string[] => {
   const ids: string[] = [];
   const pushUnique = (candidate: string): void => {
     const normalized = normalizeLiteLLMModelId(candidate);
@@ -39,10 +39,10 @@ export const buildLiteLLMModelIds = (litellm: ContainerManagerConfig['litellm'])
   return ids;
 };
 
-export const buildLiteLLMPrimaryModelRef = (litellm: ContainerManagerConfig['litellm']): string =>
+export const buildLiteLLMPrimaryModelRef = (litellm: LiteLLMConfig): string =>
   `litellm/${buildLiteLLMModelIds(litellm)[0]}`;
 
-export const buildLiteLLMFallbackModelRefs = (litellm: ContainerManagerConfig['litellm']): string[] =>
+export const buildLiteLLMFallbackModelRefs = (litellm: LiteLLMConfig): string[] =>
   buildLiteLLMModelIds(litellm).slice(1).map((id) => `litellm/${id}`);
 
 const inferAliasByModelId = (id: string): string => {
@@ -59,7 +59,7 @@ const inferAliasByModelId = (id: string): string => {
   return id;
 };
 
-export const buildLiteLLMModelsAllowlist = (litellm: ContainerManagerConfig['litellm']): UnknownRecord => {
+export const buildLiteLLMModelsAllowlist = (litellm: LiteLLMConfig): UnknownRecord => {
   const modelIds = buildLiteLLMModelIds(litellm);
   const allowlist: UnknownRecord = {};
   for (const id of modelIds) {
@@ -69,7 +69,7 @@ export const buildLiteLLMModelsAllowlist = (litellm: ContainerManagerConfig['lit
 };
 
 export const buildLiteLLMProviderConfig = (
-  litellm: ContainerManagerConfig['litellm'],
+  litellm: LiteLLMConfig,
   apiKey: string
 ): UnknownRecord => {
   const modelIds = buildLiteLLMModelIds(litellm);

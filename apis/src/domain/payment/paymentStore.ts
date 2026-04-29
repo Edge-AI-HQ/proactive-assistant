@@ -34,7 +34,7 @@ export interface PaymentStore {
     event_id: string;
   }): Promise<StripeEventClaimResult>;
   claimStripeEvent(data: {
-    telegram_user_id?: string;
+    supabase_user_id?: string;
     assistant_id?: number;
     stripe_event_id: string;
     event_type: string;
@@ -48,17 +48,17 @@ export interface PaymentStore {
     stripe_event_id: string,
     errorMessage: string,
   ): Promise<void>;
-  ensureUserForTelegram(
-    telegram_user_id: string,
-    telegram_username?: string | null,
+  ensureUser(
+    supabase_user_id: string,
+    display_name?: string | null,
   ): Promise<{
     id: number;
-    telegram_user_id: string;
-    telegram_username: string | null;
+    supabase_user_id: string;
+    display_name: string | null;
   }>;
   upsertSubscriptionPeriod(data: {
-    telegram_user_id: string;
-    telegram_username?: string | null;
+    supabase_user_id: string;
+    display_name?: string | null;
     stripe_subscription_id: string;
     stripe_customer_id?: string | null;
     stripe_invoice_id?: string | null;
@@ -72,8 +72,8 @@ export interface PaymentStore {
   }): Promise<void>;
   getPeriodsToApplyBudget(now?: Date): Promise<SubscriptionPeriod[]>;
   markPeriodBudgetApplied(periodId: number): Promise<boolean>;
-  getCurrentPeriodByTelegramId(
-    telegram_user_id: string,
+  getCurrentPeriodBySupabaseId(
+    supabase_user_id: string,
     now?: Date,
   ): Promise<CurrentSubscriptionView | null>;
   getSubscriptionInfoByStripeSubscriptionId(
@@ -85,7 +85,7 @@ export interface PaymentStore {
   getUsersWithEndedSubscriptionNoCurrentPeriod(
     now?: Date,
   ): Promise<
-    Array<{ telegram_user_id: string; telegram_username: string | null }>
+    Array<{ supabase_user_id: string; display_name: string | null }>
   >;
   updateSubscriptionCancelFlag(
     stripe_subscription_id: string,
@@ -99,8 +99,8 @@ export interface PaymentStore {
   ): Promise<boolean>;
   createPaymentSession(data: {
     token: string;
-    telegram_user_id: string;
-    telegram_username?: string;
+    supabase_user_id: string;
+    display_name?: string;
     assistant_id?: number | null;
     plan_code?: string | null;
     expires_at: string;
@@ -111,13 +111,13 @@ export interface PaymentStore {
   listActivePlans(): Promise<BillingPlan[]>;
   getPlanByCode(planCode: string): Promise<BillingPlan | null>;
   getPlanByStripePriceId(stripePriceId: string): Promise<BillingPlan | null>;
-  getUserIdentityByTelegramId(
-    telegram_user_id: string,
+  getUserIdentityBySupabaseId(
+    supabase_user_id: string,
   ): Promise<UserIdentity | null>;
-  getLiteLLMKeyByTelegramId(telegram_user_id: string): Promise<string | null>;
+  getLiteLLMKeyBySupabaseId(supabase_user_id: string): Promise<string | null>;
   upsertUserLiteLLMIdentity(data: {
-    telegram_user_id: string;
-    telegram_username?: string | null;
+    supabase_user_id: string;
+    display_name?: string | null;
     litellm_user_id: string;
     litellm_user_alias?: string | null;
     litellm_spend_usd?: number | null;

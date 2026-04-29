@@ -3,13 +3,13 @@ import Stripe from "stripe";
 import type { Request } from "express";
 import { DomainError } from "../common/errors.js";
 import {
-  setLogContextTelegramIdentity,
-  setLogContextTelegramUserId,
+  setLogContextIdentity,
+  setLogContextUserId,
 } from "../common/requestLogContext.js";
 import { db } from "./db.js";
 import { syncLiteLLMBudgetFromPlan } from "./litellmBudget.js";
 import { readPaymentPublicBaseUrl } from "./publicBaseUrl.js";
-import { parseTelegramUserId, requireStripe, stripe } from "./stripeClient.js";
+import { parseSupabaseUserId, requireStripe, stripe } from "./stripeClient.js";
 
 // Local mapping for checkout API backward compatibility
 const mapStripeSubscriptionStatus = (
@@ -136,26 +136,26 @@ export const createInternalPaymentSession = async (
   req: Request,
   body: Record<string, unknown> | undefined,
 ): Promise<{ token: string; expires_at: string; subscribe_url: string }> => {
-  const telegramUserId = parseTelegramUserId(body?.telegram_user_id);
-  if (!telegramUserId) {
+  const supabaseUserId = parseSupabaseUserId(body?.supabase_user_id);
+  if (!supabaseUserId) {
     throw new DomainError(
       "INVALID_INPUT",
-      "Invalid body. telegram_user_id is required.",
+      "Invalid body. supabase_user_id is required.",
     );
   }
 
-  const telegramUsername =
-    typeof body?.telegram_username === "string" && body.telegram_username.trim()
-      ? body.telegram_username.trim()
+  const displayName =
+    typeof body?.display_name === "string" && body.display_name.trim()
+      ? body.display_name.trim()
       : undefined;
 
   const ttlSeconds = parseTtlSeconds(body?.ttl_seconds);
   const token = crypto.randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
   const subscribeUrl = `${readPaymentPublicBaseUrl(req)}/api/payment/subscribe?token=${encodeURIComponent(token)}`;
-  setLogContextTelegramIdentity(telegramUserId, telegramUsername);
+  setLogContextIdentity(supabaseUserId, displayName);
   console.log("[payment] create_internal_session:start", {
-    telegram_user_id: telegramUserId,
+    supabase_user_id: supabaseUserId,
     ttl_seconds: ttlSeconds,
     token_ref: summarizeToken(token),
   });
@@ -176,24 +176,24 @@ export const createInternalPaymentSession = async (
 
   const sessionPayload: {
     token: string;
-    telegram_user_id: string;
+    supabase_user_id: string;
     expires_at: string;
-    telegram_username?: string;
+    display_name?: string;
     assistant_id?: number;
     plan_code?: string;
   } = {
     token,
-    telegram_user_id: telegramUserId,
+    supabase_user_id: supabaseUserId,
     expires_at: expiresAt,
   };
-  if (telegramUsername) sessionPayload.telegram_username = telegramUsername;
+  if (displayName) sessionPayload.display_name = displayName;
   if (assistantId) sessionPayload.assistant_id = assistantId;
   if (typeof body?.plan_code === "string" && body.plan_code.trim()) {
     sessionPayload.plan_code = body.plan_code.trim();
   }
   await db.createPaymentSession(sessionPayload);
   console.log("[payment] create_internal_session:ok", {
-    telegram_user_id: telegramUserId,
+    supabase_user_id: supabaseUserId,
     assistant_id: assistantId ?? null,
     plan_code: sessionPayload.plan_code ?? null,
     expires_at: expiresAt,
@@ -208,17 +208,17 @@ export const createInternalPaymentSession = async (
 };
 
 export const readInternalSubscription = async (
-  telegramUserIdRaw: unknown,
+  supabaseUserIdRaw: unknown,
 ): Promise<{
-  subscription: Awaited<ReturnType<typeof db.getCurrentPeriodByTelegramId>>;
+  subscription: Awaited<ReturnType<typeof db.getCurrentPeriodBySupabaseId>>;
   downgrade_lock_until: string | null;
   pending_plan_id: string | null;
 }> => {
-  const telegramUserId = parseTelegramUserId(telegramUserIdRaw);
-  if (!telegramUserId) {
-    throw new DomainError("INVALID_INPUT", "telegram_user_id is required");
+  const supabaseUserId = parseSupabaseUserId(supabaseUserIdRaw);
+  if (!supabaseUserId) {
+    throw new DomainError("INVALID_INPUT", "supabase_user_id is required");
   }
-  const subscription = await db.getCurrentPeriodByTelegramId(telegramUserId);
+  const subscription = await db.getCurrentPeriodBySupabaseId(supabaseUserId);
   
   let downgradeLockUntil: string | null = null;
   let pendingPlanId: string | null = null;
@@ -273,8 +273,8 @@ export const validateInternalPaymentSession = async (
   tokenRaw: unknown,
 ): Promise<{
   token: string;
-  telegram_user_id: string;
-  telegram_username: string | null;
+  supabase_user_id: string;
+  display_name: string | null;
   used: false;
   expires_at: string;
 }> => {
@@ -298,8 +298,8 @@ export const validateInternalPaymentSession = async (
 
   return {
     token: session.token,
-    telegram_user_id: session.telegram_user_id,
-    telegram_username: session.telegram_username,
+    supabase_user_id: session.supabase_user_id,
+    display_name: session.display_name,
     used: false,
     expires_at: new Date(session.expires_at).toISOString(),
   };
@@ -532,7 +532,7 @@ export const createCheckoutSession = async (
   if (session.used) {
     console.warn("[payment] checkout:token_used", {
       token_ref: summarizeToken(token),
-      telegram_user_id: session.telegram_user_id,
+      supabase_user_id: session.supabase_user_id,
     });
     throw new DomainError("INVALID_INPUT", "Token already used");
   }
@@ -540,7 +540,7 @@ export const createCheckoutSession = async (
   if (new Date(session.expires_at) < new Date()) {
     console.warn("[payment] checkout:token_expired", {
       token_ref: summarizeToken(token),
-      telegram_user_id: session.telegram_user_id,
+      supabase_user_id: session.supabase_user_id,
       expires_at: session.expires_at,
     });
     throw new DomainError("INVALID_INPUT", "Token expired");
@@ -556,18 +556,18 @@ export const createCheckoutSession = async (
   }
   const stripePriceId = requireStripePriceId(selectedPlan);
 
-  const telegramUserId = session.telegram_user_id;
-  const telegramUsername = session.telegram_username;
-  setLogContextTelegramIdentity(telegramUserId, telegramUsername);
+  const supabaseUserId = session.supabase_user_id;
+  const displayName = session.display_name;
+  setLogContextIdentity(supabaseUserId, displayName);
   console.log("[payment] checkout:validated", {
-    telegram_user_id: telegramUserId,
+    supabase_user_id: supabaseUserId,
     assistant_id: session.assistant_id ?? null,
     plan_code: selectedPlan.plan_code,
     stripe_price_id: stripePriceId,
     token_ref: summarizeToken(token),
   });
 
-  const existingSub = await db.getCurrentPeriodByTelegramId(telegramUserId);
+  const existingSub = await db.getCurrentPeriodBySupabaseId(supabaseUserId);
   let customerId = existingSub?.stripe_customer_id ?? null;
 
   if (customerId) {
@@ -584,13 +584,13 @@ export const createCheckoutSession = async (
   if (!customerId) {
     const customer = await stripe.customers.create({
       metadata: {
-        telegram_user_id: telegramUserId,
-        telegram_username: telegramUsername || "",
+        supabase_user_id: supabaseUserId,
+        display_name: displayName || "",
       },
     });
     customerId = customer.id;
     console.log("[payment] checkout:stripe_customer_created", {
-      telegram_user_id: telegramUserId,
+      supabase_user_id: supabaseUserId,
       stripe_customer_id: customerId,
     });
   }
@@ -616,7 +616,7 @@ export const createCheckoutSession = async (
 
         if (currentPlan.plan_code === selectedPlan.plan_code) {
           console.warn("[payment] checkout:same_plan", {
-            telegram_user_id: telegramUserId,
+            supabase_user_id: supabaseUserId,
             plan_code: selectedPlan.plan_code,
             stripe_subscription_id: existingSub.stripe_subscription_id,
           });
@@ -640,8 +640,8 @@ export const createCheckoutSession = async (
 
         // Build shared metadata with assistant_id so invoice.paid creates correct period
         const sharedMetadata: Record<string, string> = {
-          telegram_user_id: telegramUserId,
-          telegram_username: telegramUsername || "",
+          supabase_user_id: supabaseUserId,
+          display_name: displayName || "",
           plan: selectedPlan.plan_code,
         };
         if (session.assistant_id) {
@@ -678,7 +678,7 @@ export const createCheckoutSession = async (
           ).catch(() => {/* non-fatal */});
           await db.markPaymentSessionUsed(token);
           console.log("[payment] checkout:upgrade_applied", {
-            telegram_user_id: telegramUserId,
+            supabase_user_id: supabaseUserId,
             stripe_subscription_id: existingSub.stripe_subscription_id,
             from_plan: currentPlan.plan_code,
             to_plan: selectedPlan.plan_code,
@@ -703,7 +703,7 @@ export const createCheckoutSession = async (
           if (lockUntil && nowSec < lockUntil) {
             const lockDate = new Date(lockUntil * 1000).toISOString();
             console.warn("[payment] checkout:downgrade_blocked_by_upgrade_lock", {
-              telegram_user_id: telegramUserId,
+              supabase_user_id: supabaseUserId,
               stripe_subscription_id: existingSub.stripe_subscription_id,
               from_plan: currentPlan.plan_code,
               to_plan: selectedPlan.plan_code,
@@ -723,7 +723,7 @@ export const createCheckoutSession = async (
           });
           await db.markPaymentSessionUsed(token);
           console.log("[payment] checkout:downgrade_scheduled", {
-            telegram_user_id: telegramUserId,
+            supabase_user_id: supabaseUserId,
             stripe_subscription_id: existingSub.stripe_subscription_id,
             from_plan: currentPlan.plan_code,
             to_plan: selectedPlan.plan_code,
@@ -759,8 +759,8 @@ export const createCheckoutSession = async (
           body.cancelUrl ||
           `${landingBaseUrl}/api/payment/subscribe?token=${token}`,
         metadata: {
-          telegram_user_id: telegramUserId,
-          telegram_username: telegramUsername || "",
+          supabase_user_id: supabaseUserId,
+          display_name: displayName || "",
           plan: selectedPlan.plan_code,
           payment_token: token,
           ...(promotionCode ? { promotion_code: promotionCode } : {}),
@@ -770,8 +770,8 @@ export const createCheckoutSession = async (
         },
         subscription_data: {
           metadata: {
-            telegram_user_id: telegramUserId,
-            telegram_username: telegramUsername || "",
+            supabase_user_id: supabaseUserId,
+            display_name: displayName || "",
             plan: selectedPlan.plan_code,
             ...(promotionCode ? { promotion_code: promotionCode } : {}),
             ...(session.assistant_id
@@ -786,7 +786,7 @@ export const createCheckoutSession = async (
     const message = error instanceof Error ? error.message.toLowerCase() : "";
     if (message.includes("idempotent")) {
       console.warn("[payment] checkout:idempotency_conflict", {
-        telegram_user_id: telegramUserId,
+        supabase_user_id: supabaseUserId,
         token_ref: summarizeToken(token),
       });
       throw new DomainError(
@@ -796,7 +796,7 @@ export const createCheckoutSession = async (
       );
     }
     console.error("[payment] checkout:stripe_create_failed", {
-      telegram_user_id: telegramUserId,
+      supabase_user_id: supabaseUserId,
       token_ref: summarizeToken(token),
       plan_code: selectedPlan.plan_code,
       error: error instanceof Error ? error.message : String(error ?? ""),
@@ -805,7 +805,7 @@ export const createCheckoutSession = async (
   }
 
   console.log("[payment] checkout:created", {
-    telegram_user_id: telegramUserId,
+    supabase_user_id: supabaseUserId,
     token_ref: summarizeToken(token),
     stripe_checkout_session_id: checkoutSession.id,
     stripe_customer_id: customerId,
@@ -815,10 +815,10 @@ export const createCheckoutSession = async (
 };
 
 export const cancelStripeSubscriptionImmediately = async (
-  telegramUserId: string,
+  supabaseUserId: string,
 ): Promise<void> => {
   if (!stripe) return;
-  const subscription = await db.getCurrentPeriodByTelegramId(telegramUserId);
+  const subscription = await db.getCurrentPeriodBySupabaseId(supabaseUserId);
   if (!subscription?.stripe_subscription_id) return;
 
   try {
@@ -833,7 +833,7 @@ export const cancelStripeSubscriptionImmediately = async (
 };
 
 export const cancelStripeSubscription = async (
-  telegramUserIdRaw: unknown,
+  supabaseUserIdRaw: unknown,
 ): Promise<{
   ok: true;
   status: "active" | "paused" | "canceled" | "pending";
@@ -842,19 +842,19 @@ export const cancelStripeSubscription = async (
   already_scheduled?: boolean;
 }> => {
   const stripe = requireStripe();
-  const telegramUserId = parseTelegramUserId(telegramUserIdRaw);
-  if (!telegramUserId) {
-    throw new DomainError("INVALID_INPUT", "telegram_user_id is required");
+  const supabaseUserId = parseSupabaseUserId(supabaseUserIdRaw);
+  if (!supabaseUserId) {
+    throw new DomainError("INVALID_INPUT", "supabase_user_id is required");
   }
-  setLogContextTelegramUserId(telegramUserId);
+  setLogContextUserId(supabaseUserId);
   console.log("[payment] cancel_subscription:start", {
-    telegram_user_id: telegramUserId,
+    supabase_user_id: supabaseUserId,
   });
 
-  const subscription = await db.getCurrentPeriodByTelegramId(telegramUserId);
+  const subscription = await db.getCurrentPeriodBySupabaseId(supabaseUserId);
   if (!subscription || !subscription.stripe_subscription_id) {
     console.warn("[payment] cancel_subscription:not_found", {
-      telegram_user_id: telegramUserId,
+      supabase_user_id: supabaseUserId,
     });
     throw new DomainError("NOT_FOUND", "Active subscription not found");
   }
@@ -865,7 +865,7 @@ export const cancelStripeSubscription = async (
     subscription.current_period_end
   ) {
     console.log("[payment] cancel_subscription:already_scheduled", {
-      telegram_user_id: telegramUserId,
+      supabase_user_id: supabaseUserId,
       stripe_subscription_id: subscription.stripe_subscription_id,
       current_period_end: subscription.current_period_end,
     });
@@ -897,7 +897,7 @@ export const cancelStripeSubscription = async (
   );
 
   console.log("[payment] cancel_subscription:ok", {
-    telegram_user_id: telegramUserId,
+    supabase_user_id: supabaseUserId,
     stripe_subscription_id: subscription.stripe_subscription_id,
     current_period_end: currentPeriodEnd,
   });
@@ -911,7 +911,7 @@ export const cancelStripeSubscription = async (
 };
 
 export const resumeStripeSubscription = async (
-  telegramUserIdRaw: unknown,
+  supabaseUserIdRaw: unknown,
 ): Promise<{
   ok: true;
   status: "active" | "paused" | "canceled" | "pending";
@@ -920,26 +920,26 @@ export const resumeStripeSubscription = async (
   already_active?: boolean;
 }> => {
   const stripe = requireStripe();
-  const telegramUserId = parseTelegramUserId(telegramUserIdRaw);
-  if (!telegramUserId) {
-    throw new DomainError("INVALID_INPUT", "telegram_user_id is required");
+  const supabaseUserId = parseSupabaseUserId(supabaseUserIdRaw);
+  if (!supabaseUserId) {
+    throw new DomainError("INVALID_INPUT", "supabase_user_id is required");
   }
-  setLogContextTelegramUserId(telegramUserId);
+  setLogContextUserId(supabaseUserId);
   console.log("[payment] resume_subscription:start", {
-    telegram_user_id: telegramUserId,
+    supabase_user_id: supabaseUserId,
   });
 
-  const subscription = await db.getCurrentPeriodByTelegramId(telegramUserId);
+  const subscription = await db.getCurrentPeriodBySupabaseId(supabaseUserId);
   if (!subscription || !subscription.stripe_subscription_id) {
     console.warn("[payment] resume_subscription:not_found", {
-      telegram_user_id: telegramUserId,
+      supabase_user_id: supabaseUserId,
     });
     throw new DomainError("NOT_FOUND", "Active subscription not found");
   }
 
   if (subscription.cancel_at_period_end !== true) {
     console.log("[payment] resume_subscription:already_active", {
-      telegram_user_id: telegramUserId,
+      supabase_user_id: supabaseUserId,
       stripe_subscription_id: subscription.stripe_subscription_id,
       current_period_end: subscription.current_period_end,
     });
@@ -971,7 +971,7 @@ export const resumeStripeSubscription = async (
   );
 
   console.log("[payment] resume_subscription:ok", {
-    telegram_user_id: telegramUserId,
+    supabase_user_id: supabaseUserId,
     stripe_subscription_id: subscription.stripe_subscription_id,
     current_period_end: currentPeriodEnd,
   });

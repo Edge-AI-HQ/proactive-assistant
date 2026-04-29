@@ -21,6 +21,10 @@ import type { Request, Response } from 'express';
 import type { ProactiveContainerOrchestrator } from './container_orchestrator.js';
 import { validateTicket, setSessionCookie, getSessionUserId } from './gateway_session.js';
 
+// See container_proxy.ts for rationale — keep-alive disabled to dodge
+// stale sockets after OpenClaw SIGUSR1 reload.
+const gatewayProxyAgent = new http.Agent({ keepAlive: false });
+
 /**
  * Gateway UI proxy handler.
  *
@@ -83,7 +87,7 @@ export function createGatewayProxy(orchestrator: ProactiveContainerOrchestrator)
         proxyHeaders[key] = value;
       }
     }
-    proxyHeaders['authorization'] = `Bearer ${container.gateway_token}`;
+    proxyHeaders['authorization'] = `Bearer ${container.container_proxy_secret}`;
     proxyHeaders['host'] = target.hostOverride ?? new URL(target.httpBaseUrl).host;
     if (target.hostOverride) {
       proxyHeaders['origin'] = `http://${target.hostOverride}`;
@@ -95,6 +99,7 @@ export function createGatewayProxy(orchestrator: ProactiveContainerOrchestrator)
       {
         method: req.method,
         headers: proxyHeaders,
+        agent: gatewayProxyAgent,
         timeout: 30_000,
       },
       (proxyRes) => {
