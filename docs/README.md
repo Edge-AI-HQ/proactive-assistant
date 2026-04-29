@@ -10,7 +10,9 @@
 - [Data Connectors](modules/data-connectors.mdx)
 - [Memory](modules/memory.mdx)
 - [Generation](modules/generation.mdx)
+- [Execution](modules/execution.mdx)
 - [Feedback](modules/feedback.mdx)
+- [Background Tasks](modules/background-tasks.mdx)
 - [Runtime & Deployment](modules/runtime-deployment.mdx)
 
 ## 维护规则
