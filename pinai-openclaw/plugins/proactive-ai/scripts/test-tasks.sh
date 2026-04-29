@@ -5,8 +5,10 @@
 #   bash pinai-openclaw/plugins/proactive-ai/scripts/test-tasks.sh
 #
 # 十二层覆盖（顺序很重要，从最底层往上跑，红了立刻退出）：
-#   1.  db.background-tasks.test.ts             —— enqueue / claim / heartbeat /
-#                                                  recover / cancel 全路径 + lease 严格校验
+#   1.  shared/background-auto-loop-tasks.test.ts +
+#       db.background-tasks.test.ts             —— env 总开关默认值 + enqueue /
+#                                                  claim / heartbeat / recover /
+#                                                  cancel 全路径 + lease 严格校验
 #   2.  tasks/scheduler.test.ts                 —— BackgroundTaskScheduler tick / reaper /
 #                                                  handler crash retry / 重入串行化
 #   3.  cli/tasks.test.ts                       —— pin tasks list/show/attempts/cancel/enqueue
@@ -19,8 +21,11 @@
 #                                                  memory_write + delta + refs_produced
 #   6.  tasks/handlers/auto-dreaming.test.ts    —— Phase C 处理器: dreamRunner 注入 /
 #                                                  dream throw / max_attempts=1 / lease 心跳
-#   7.  tasks/dreaming-enqueuer.test.ts         —— Phase C 入队器: setting/due 检查 /
-#                                                  时区按 profile / 同一 local_day 幂等
+#   7.  tasks/dreaming-enqueuer.test.ts +
+#       scheduler/auto-loop.test.ts             —— Phase C 入队器 + legacy gate:
+#                                                  setting/due 检查 / 时区按 profile /
+#                                                  同一 local_day 幂等 / scheduler
+#                                                  默认开时 legacy dreaming no-op
 #   8.  tasks/handlers/connector-sync.test.ts   —— Phase D 增量: cursor bootstrap / 续游 /
 #                                                  失败保留 cursor / discord 跳过 / 与 init 去重
 #   9.  tasks/connector-sync-enqueuer.test.ts   —— Phase D 入队器: init gate / window gate /
@@ -29,9 +34,6 @@
 #  11.  routes/composio.test.ts                 —— /composio/wait → enqueue 钩子
 #  12.  routes/tasks.test.ts                    —— GET /tasks/:id + GET /tasks list
 #                                                  (前端 InitTaskChip 轮询的 read API)
-#
-# 另：scheduler/auto-loop.test.ts 含 Phase C gate 回归（runAutoDreaming 在
-# BACKGROUND_AUTO_LOOP_TASKS_ENABLED=1 时必须 no-op），由 test-memory.sh 跑到。
 #
 # 这套脚本和 test-memory.sh 的关系：
 # - test-memory.sh 守 v3 memory/personal_signals/evolution_runs/auto-loop 的契约。
@@ -55,6 +57,7 @@ run() {
 
 # ─── Phase A：基建 ─────────────────────────────────────────────────────────
 run "[1/12] schema + repository" \
+  shared/background-auto-loop-tasks.test.ts \
   db.background-tasks.test.ts
 run "[2/12] scheduler tick + handler" \
   tasks/scheduler.test.ts
@@ -71,7 +74,8 @@ run "[5/12] connector-evolve (LLM-injected fact extraction)" \
 run "[6/12] auto.dreaming handler" \
   tasks/handlers/auto-dreaming.test.ts
 run "[7/12] dreaming-enqueuer (daily-due idempotent enqueue)" \
-  tasks/dreaming-enqueuer.test.ts
+  tasks/dreaming-enqueuer.test.ts \
+  scheduler/auto-loop.test.ts
 
 # ─── Phase D：connector.sync 增量拉取 ─────────────────────────────────────
 run "[8/12] connector.sync handler (cursor bootstrap / resume / dedupe)" \

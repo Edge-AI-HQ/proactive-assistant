@@ -168,9 +168,9 @@ make build-openclaw-image
 | 路径 | 触发 | 当前承载的 job | 状态 |
 |---|---|---|---|
 | 旧 setInterval `auto-loop` | `scheduler/auto-loop.ts` 启动 5 个 timer | `auto.world_ingest` / `auto.generate` / `auto.feedback.sync` / `auto.crystallize` | 永远运行 |
-| 新 `background_tasks` 队列 | `tasks/scheduler.ts` 单 process tick + lease + reaper + audit | `connector.init`（Composio 拉数据）+ `auto.dreaming`（每天一次） | 仅在 `BACKGROUND_AUTO_LOOP_TASKS_ENABLED=1` 启动 |
+| 新 `background_tasks` 队列 | `tasks/scheduler.ts` 单 process tick + lease + reaper + audit | `connector.init`（Composio 拉数据）+ `auto.dreaming`（每天一次） | 默认启动；仅 `BACKGROUND_AUTO_LOOP_TASKS_ENABLED=0` 关闭 |
 
-两套互不重叠：scheduler 开启时，`scheduler/auto-loop.ts` 里的 `runAutoDreaming` 检测到 env flag 后立即 return，避免双跑。
+两套互不重叠：scheduler 开启时，`scheduler/auto-loop.ts` 里的 `runAutoDreaming` 检测到 env flag 默认开启后立即 return，避免双跑。
 
 ```mermaid
 flowchart LR
@@ -193,7 +193,7 @@ flowchart LR
 ### 相关环境变量
 
 ```
-# 总开关（不设 = 默认 0 = 旧 auto-loop 全跑、scheduler 不启动）
+# 总开关（不设或空值 = 默认 1 = scheduler 启动；显式 0/false/off/no/disabled 才关闭）
 BACKGROUND_AUTO_LOOP_TASKS_ENABLED=1
 
 # scheduler 调速
@@ -210,7 +210,7 @@ CONNECTOR_INIT_DISABLED_TOOLKITS=stripe,discord # kill switch（逗号分隔，�
 DREAMING_ENQUEUER_INTERVAL_MS=60000             # 多久检查一次 "今天是否到了 06:00"
 ```
 
-prod 启用前先在 dev：`flyctl secrets set BACKGROUND_AUTO_LOOP_TASKS_ENABLED=1 -a proactive-ai-assistant-dev`。开后 reconciler 会在 10 分钟内把所有 ACTIVE Composio 账号补上 init task。
+默认会启用 scheduler。需要临时回退旧路径时显式设置：`flyctl secrets set BACKGROUND_AUTO_LOOP_TASKS_ENABLED=0 -a proactive-ai-assistant-dev`。启用后 reconciler 会在 10 分钟内把所有 ACTIVE Composio 账号补上 init task。
 
 ### 调试入口
 

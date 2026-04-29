@@ -13,10 +13,9 @@
  * container; an in-process Mutex on tick() is enough. See review notes
  * in docs/plans/2026-04-24-data-connector-init-tasks.mdx evaluation.
  *
- * The scheduler does NOT auto-start: callers must call .start() and the
- * plugin only does so when BACKGROUND_AUTO_LOOP_TASKS_ENABLED is truthy.
- * This keeps the new path dormant until we explicitly opt in, so the
- * existing setInterval-based auto-loop continues unchanged.
+ * The scheduler does NOT auto-start: callers must call .start(). The plugin
+ * starts it by default unless BACKGROUND_AUTO_LOOP_TASKS_ENABLED is explicitly
+ * disabled.
  */
 import * as db from '../db.js';
 

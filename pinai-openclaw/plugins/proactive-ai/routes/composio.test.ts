@@ -4,7 +4,8 @@
  * The /wait HTTP polling loop itself is hard to test without a Composio
  * mock server, so this file targets the enqueue helper that the route
  * calls when ACTIVE is detected. Failure modes covered:
- *   - scheduler disabled → no task created, returns null
+ *   - scheduler disabled explicitly → no task created, returns null
+ *   - scheduler env unset → defaults on, task created
  *   - missing toolkit or account id → no task, returns null
  *   - happy path → task created with the expected idempotency key
  *   - re-enqueue with same key → returns existing task id, no duplicate row
@@ -24,13 +25,17 @@ import {
 } from '../db.ts';
 import { maybeEnqueueConnectorInit } from './composio.ts';
 
-async function withTempHomeAndScheduler(opts: { schedulerOn: boolean }, fn: () => Promise<void>): Promise<void> {
+async function withTempHomeAndScheduler(
+  opts: { scheduler: 'on' | 'off' | 'unset' },
+  fn: () => Promise<void>,
+): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), 'pin-composio-wait-'));
   const previousHome = process.env.OPENCLAW_HOME;
   const previousFlag = process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED;
   const previousLimit = process.env.CONNECTOR_INIT_DEFAULT_LIMIT;
   process.env.OPENCLAW_HOME = root;
-  if (opts.schedulerOn) process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED = '1';
+  if (opts.scheduler === 'on') process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED = '1';
+  else if (opts.scheduler === 'off') process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED = '0';
   else delete process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED;
   resetDbForTests();
   try {
@@ -47,8 +52,8 @@ async function withTempHomeAndScheduler(opts: { schedulerOn: boolean }, fn: () =
   }
 }
 
-test('maybeEnqueueConnectorInit: scheduler disabled → null, no task created', async () => {
-  await withTempHomeAndScheduler({ schedulerOn: false }, async () => {
+test('maybeEnqueueConnectorInit: scheduler explicitly disabled → null, no task created', async () => {
+  await withTempHomeAndScheduler({ scheduler: 'off' }, async () => {
     const id = await maybeEnqueueConnectorInit('gmail', 'acc-1');
     assert.equal(id, null);
     const tasks = await listBackgroundTasks({ type: 'connector.init' });
@@ -56,8 +61,18 @@ test('maybeEnqueueConnectorInit: scheduler disabled → null, no task created', 
   });
 });
 
+test('maybeEnqueueConnectorInit: unset scheduler env defaults to enabled', async () => {
+  await withTempHomeAndScheduler({ scheduler: 'unset' }, async () => {
+    const id = await maybeEnqueueConnectorInit('gmail', 'acc-default');
+    assert.ok(id);
+    const tasks = await listBackgroundTasks({ type: 'connector.init' });
+    assert.equal(tasks.length, 1);
+    assert.equal(tasks[0]!.idempotency_key, 'connector.init:gmail:acc-default:v1');
+  });
+});
+
 test('maybeEnqueueConnectorInit: missing toolkit → null, no task', async () => {
-  await withTempHomeAndScheduler({ schedulerOn: true }, async () => {
+  await withTempHomeAndScheduler({ scheduler: 'on' }, async () => {
     const id = await maybeEnqueueConnectorInit('', 'acc-1');
     assert.equal(id, null);
     const tasks = await listBackgroundTasks({ type: 'connector.init' });
@@ -66,14 +81,14 @@ test('maybeEnqueueConnectorInit: missing toolkit → null, no task', async () =>
 });
 
 test('maybeEnqueueConnectorInit: missing accountId → null, no task', async () => {
-  await withTempHomeAndScheduler({ schedulerOn: true }, async () => {
+  await withTempHomeAndScheduler({ scheduler: 'on' }, async () => {
     const id = await maybeEnqueueConnectorInit('gmail', '');
     assert.equal(id, null);
   });
 });
 
 test('maybeEnqueueConnectorInit: happy path → task created with canonical idempotency key', async () => {
-  await withTempHomeAndScheduler({ schedulerOn: true }, async () => {
+  await withTempHomeAndScheduler({ scheduler: 'on' }, async () => {
     const id = await maybeEnqueueConnectorInit('gmail', 'acc-42');
     assert.ok(id);
     const task = await getBackgroundTask(id!);
@@ -88,7 +103,7 @@ test('maybeEnqueueConnectorInit: happy path → task created with canonical idem
 });
 
 test('maybeEnqueueConnectorInit: env CONNECTOR_INIT_DEFAULT_LIMIT propagates into payload', async () => {
-  await withTempHomeAndScheduler({ schedulerOn: true }, async () => {
+  await withTempHomeAndScheduler({ scheduler: 'on' }, async () => {
     process.env.CONNECTOR_INIT_DEFAULT_LIMIT = '25';
     const id = await maybeEnqueueConnectorInit('googlecalendar', 'acc-c');
     const task = await getBackgroundTask(id!);
@@ -97,7 +112,7 @@ test('maybeEnqueueConnectorInit: env CONNECTOR_INIT_DEFAULT_LIMIT propagates int
 });
 
 test('maybeEnqueueConnectorInit: re-call with same toolkit+account → same task id, no duplicate', async () => {
-  await withTempHomeAndScheduler({ schedulerOn: true }, async () => {
+  await withTempHomeAndScheduler({ scheduler: 'on' }, async () => {
     const a = await maybeEnqueueConnectorInit('gmail', 'acc-x');
     const b = await maybeEnqueueConnectorInit('gmail', 'acc-x');
     assert.ok(a);
@@ -108,7 +123,7 @@ test('maybeEnqueueConnectorInit: re-call with same toolkit+account → same task
 });
 
 test('maybeEnqueueConnectorInit: distinct (toolkit, account) pairs → distinct tasks', async () => {
-  await withTempHomeAndScheduler({ schedulerOn: true }, async () => {
+  await withTempHomeAndScheduler({ scheduler: 'on' }, async () => {
     const gmail = await maybeEnqueueConnectorInit('gmail', 'acc-x');
     const gcal = await maybeEnqueueConnectorInit('googlecalendar', 'acc-x');
     const slack = await maybeEnqueueConnectorInit('slack', 'acc-y');
@@ -123,7 +138,7 @@ test('maybeEnqueueConnectorInit: case-insensitive toolkit normalization', async 
   // /composio/wait may receive `GMAIL` (uppercase) from Composio's response;
   // we lowercase both at enqueue and at handler dispatch, so the same
   // toolkit always shares one idempotency key.
-  await withTempHomeAndScheduler({ schedulerOn: true }, async () => {
+  await withTempHomeAndScheduler({ scheduler: 'on' }, async () => {
     const lower = await maybeEnqueueConnectorInit('gmail', 'acc-z');
     // NB: enqueue does not lowercase — that's the route's responsibility.
     // The route lowercases before calling. So callers passing 'GMAIL' here

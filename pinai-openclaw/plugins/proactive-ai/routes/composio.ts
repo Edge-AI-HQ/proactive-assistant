@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import type { RouteHandler } from './types.js';
 import { json, readBody } from './types.js';
 import * as db from '../db.js';
+import { isBackgroundAutoLoopTasksEnabled } from '../shared/background-auto-loop-tasks.js';
 
 const COMPOSIO_API_BASE = 'https://backend.composio.dev/api/v3';
 const KEY_FILE = '/app/data/composio-api-key';
@@ -68,8 +69,9 @@ async function composioApi(apiKey: string, path: string, init?: RequestInit): Pr
  * when enqueue itself fails — /wait must not break for an init plumbing
  * issue. Idempotency on the task key means /wait can be re-fired safely.
  *
- * Phase B: gated by BACKGROUND_AUTO_LOOP_TASKS_ENABLED. When it's off,
- * /composio/wait keeps its old behavior (no initTaskId field in response).
+ * Phase B: gated by BACKGROUND_AUTO_LOOP_TASKS_ENABLED. It is on by
+ * default; when explicitly disabled, /composio/wait keeps its old behavior
+ * (no initTaskId field in response).
  *
  * Exported for tests; production callers go through /composio/wait.
  */
@@ -77,7 +79,7 @@ export async function maybeEnqueueConnectorInit(
   toolkit: string,
   connectedAccountId: string,
 ): Promise<string | null> {
-  if (process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED !== '1') return null;
+  if (!isBackgroundAutoLoopTasksEnabled()) return null;
   if (!toolkit || !connectedAccountId) return null;
   const limit = Number(process.env.CONNECTOR_INIT_DEFAULT_LIMIT ?? 100);
   try {

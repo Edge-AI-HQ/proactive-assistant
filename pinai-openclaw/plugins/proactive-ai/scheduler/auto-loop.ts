@@ -10,10 +10,12 @@ import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import * as db from '../db.js';
 import { runPipeline } from '../pipeline/orchestrator.js';
 import { normalizeGenerationLanguage } from '../agents/generation-language.js';
-import { resolveDreamingTimezone, isDreamingDue } from '../dreaming/schedule.js';
+import { resolveDreamingTimezone, isDreamingDue, toDreamingLocalDayKey } from '../dreaming/schedule.js';
 import { startDreaming, listDreamRuns } from '../dreaming/service.js';
+import type { DreamRunRecord } from '../dreaming/types.js';
 import { syncCardChatFeedback } from '../chat-feedback/service.js';
 import { runCrystallize } from '../conversation-crystallize/service.js';
+import { isBackgroundAutoLoopTasksEnabled } from '../shared/background-auto-loop-tasks.js';
 
 export interface AutoLoopConfig {
   auto_poll_enabled: boolean;
@@ -75,6 +77,13 @@ function parseIsoTimestamp(value: string | null): number | null {
   if (!value) return null;
   const ms = Date.parse(value);
   return Number.isFinite(ms) ? ms : null;
+}
+
+function getDreamRunLocalDayKey(run: DreamRunRecord, timezone: string): string | null {
+  const timestamp = run.window_end || run.completed_at || run.started_at;
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) return null;
+  return toDreamingLocalDayKey(date, timezone);
 }
 
 // ── Auto-ingest ──
@@ -163,10 +172,9 @@ export async function runAutoDreaming(
 ): Promise<void> {
   if (state.dreamInFlight) return;
 
-  // Phase C: when the background_tasks scheduler is on, dreaming is owned
-  // by tasks/handlers/auto-dreaming.ts (enqueued by tasks/dreaming-enqueuer.ts).
-  // Skip the legacy in-process path so we don't double-trigger.
-  if (process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED === '1') return;
+  // When background_tasks is enabled, dreaming is owned by
+  // tasks/handlers/auto-dreaming.ts (enqueued by tasks/dreaming-enqueuer.ts).
+  if (isBackgroundAutoLoopTasksEnabled()) return;
 
   state.dreamInFlight = true;
   try {
@@ -184,12 +192,25 @@ export async function runAutoDreaming(
       Intl.DateTimeFormat().resolvedOptions().timeZone,
     );
 
-    // Check last auto-completed dream
+    // Check last auto dream. A running same-day run also blocks duplicate
+    // starts because this legacy path fire-and-forgets startDreaming().
     const runs = await listDreamRuns();
-    const lastAutoCompletedAt =
-      runs.find((run) => run.trigger === 'auto' && run.status === 'completed')?.completed_at ?? null;
-
     const now = opts?.now ?? new Date();
+    const currentDay = toDreamingLocalDayKey(now, timezone);
+    const autoDreamAlreadyStartedToday = runs.some((run) => (
+      run.trigger === 'auto' &&
+      (run.status === 'running' || run.status === 'completed') &&
+      getDreamRunLocalDayKey(run, timezone) === currentDay
+    ));
+    if (autoDreamAlreadyStartedToday) {
+      return;
+    }
+
+    const lastAutoCompleted = runs.find((run) => run.trigger === 'auto' && run.status === 'completed');
+    const lastAutoCompletedAt = lastAutoCompleted
+      ? (lastAutoCompleted.window_end || lastAutoCompleted.completed_at)
+      : null;
+
     if (!isDreamingDue({ now, timezone, lastAutoCompletedAt })) {
       return;
     }

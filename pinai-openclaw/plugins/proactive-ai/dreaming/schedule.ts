@@ -22,7 +22,7 @@ function formatLocalParts(date: Date, timezone: string): Record<string, string> 
   }, {});
 }
 
-function toLocalDayKey(date: Date, timezone: string): string {
+export function toDreamingLocalDayKey(date: Date, timezone: string): string {
   const parts = formatLocalParts(date, timezone);
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
@@ -49,5 +49,5 @@ export function isDreamingDue(input: DreamingDueInput): boolean {
   if (!afterSix) return false;
   if (!input.lastAutoCompletedAt) return true;
   const lastAutoDate = new Date(input.lastAutoCompletedAt);
-  return toLocalDayKey(lastAutoDate, input.timezone) !== toLocalDayKey(now, input.timezone);
+  return toDreamingLocalDayKey(lastAutoDate, input.timezone) !== toDreamingLocalDayKey(now, input.timezone);
 }

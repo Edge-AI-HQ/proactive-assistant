@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { runAutoCardChatFeedback, runAutoDreaming, runAutoCrystallize, runDetectAndLoop } from "./auto-loop.ts";
 import {
   bumpCrystallizeTurn,
+  createEvolutionRun,
   listPipelineRuns,
   listEvolutionRuns,
   resetDbForTests,
@@ -72,6 +73,25 @@ async function waitFor(predicate: () => Promise<boolean>, timeoutMs = 4000): Pro
     await new Promise((r) => setTimeout(r, 25));
   }
   return false;
+}
+
+async function withBackgroundTasksEnv<T>(
+  value: string | undefined,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const previous = process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED;
+  if (value === undefined) delete process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED;
+  else process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED = value;
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) delete process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED;
+    else process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED = previous;
+  }
+}
+
+async function withLegacyAutoDreaming<T>(fn: () => Promise<T>): Promise<T> {
+  return await withBackgroundTasksEnv('0', fn);
 }
 
 // ── runAutoCardChatFeedback (existing tests) ─────────────────────────────
@@ -142,17 +162,19 @@ test("runDetectAndLoop: does not save a pipeline run twice", async () => {
 
 test("runAutoDreaming: skipped when auto_dreaming setting is off", async () => {
   await withTempHome(async () => {
-    await updateUserSettings({ auto_dreaming: false });
-    await upsertProfile({ displayName: "T", locale: "en", timezone: "UTC" });
+    await withLegacyAutoDreaming(async () => {
+      await updateUserSettings({ auto_dreaming: false });
+      await upsertProfile({ displayName: "T", locale: "en", timezone: "UTC" });
 
-    await runAutoDreaming(makeApi());
+      await runAutoDreaming(makeApi());
 
-    // No dream_run row should have been created.
-    const runs = await listDreamRuns();
-    assert.equal(runs.length, 0);
-    // No evolution_run mirror either.
-    const evol = await listEvolutionRuns({ triggerKind: "daily_dream", limit: 5 });
-    assert.equal(evol.length, 0);
+      // No dream_run row should have been created.
+      const runs = await listDreamRuns();
+      assert.equal(runs.length, 0);
+      // No evolution_run mirror either.
+      const evol = await listEvolutionRuns({ triggerKind: "daily_dream", limit: 5 });
+      assert.equal(evol.length, 0);
+    });
   });
 });
 
@@ -163,64 +185,107 @@ const NEXT_DAY_AFTER_6AM = new Date('2026-04-25T08:00:00Z');
 
 test("runAutoDreaming: with setting on + due window, fires startDreaming and creates rows", async () => {
   await withTempHome(async () => {
-    await updateUserSettings({ auto_dreaming: true });
-    await upsertProfile({ displayName: "T", locale: "en", timezone: "UTC" });
+    await withLegacyAutoDreaming(async () => {
+      await updateUserSettings({ auto_dreaming: true });
+      await upsertProfile({ displayName: "T", locale: "en", timezone: "UTC" });
 
-    await runAutoDreaming(makeApi(), { now: NOW_AFTER_6AM });
+      await runAutoDreaming(makeApi(), { now: NOW_AFTER_6AM });
 
-    // The tick fires startDreaming which is fire-and-forget; wait for the
-    // background task to land at least one dream_run row.
-    const seenRow = await waitFor(async () => (await listDreamRuns()).length > 0);
-    assert.equal(seenRow, true, "expected runAutoDreaming to create a dream_run");
+      // The tick fires startDreaming which is fire-and-forget; wait for the
+      // background task to land at least one dream_run row.
+      const seenRow = await waitFor(async () => (await listDreamRuns()).length > 0);
+      assert.equal(seenRow, true, "expected runAutoDreaming to create a dream_run");
 
-    const runs = await listDreamRuns();
-    assert.equal(runs.length, 1);
-    assert.equal(runs[0]!.trigger, "auto");
+      const runs = await listDreamRuns();
+      assert.equal(runs.length, 1);
+      assert.equal(runs[0]!.trigger, "auto");
 
-    // Wait for the run to complete (with stubbed subagent it should be fast).
-    const completed = await waitFor(async () => {
-      const r = await listDreamRuns();
-      return r[0]?.status === "completed";
+      // Wait for the run to complete (with stubbed subagent it should be fast).
+      const completed = await waitFor(async () => {
+        const r = await listDreamRuns();
+        return r[0]?.status === "completed";
+      });
+      assert.equal(completed, true);
+
+      const evol = await listEvolutionRuns({ triggerKind: "daily_dream", limit: 5 });
+      assert.equal(evol.length, 1);
+      assert.equal(evol[0]!.status, "completed");
     });
-    assert.equal(completed, true);
-
-    const evol = await listEvolutionRuns({ triggerKind: "daily_dream", limit: 5 });
-    assert.equal(evol.length, 1);
-    assert.equal(evol[0]!.status, "completed");
   });
 });
 
 test("runAutoDreaming: skipped when a dream already completed today (same local day)", async () => {
   await withTempHome(async () => {
-    await updateUserSettings({ auto_dreaming: true });
-    await upsertProfile({ displayName: "T", locale: "en", timezone: "UTC" });
+    await withLegacyAutoDreaming(async () => {
+      await updateUserSettings({ auto_dreaming: true });
+      await upsertProfile({ displayName: "T", locale: "en", timezone: "UTC" });
 
-    // First tick: should kick off + complete one auto dream.
-    await runAutoDreaming(makeApi(), { now: NOW_AFTER_6AM });
-    await waitFor(async () => (await listDreamRuns())[0]?.status === "completed");
-    assert.equal((await listDreamRuns()).length, 1);
+      // First tick: should kick off + complete one auto dream.
+      await runAutoDreaming(makeApi(), { now: NOW_AFTER_6AM });
+      await waitFor(async () => (await listDreamRuns())[0]?.status === "completed");
+      assert.equal((await listDreamRuns()).length, 1);
 
-    // Second tick (same day, +30min): the due-window check should suppress it.
-    const sameDayLater = new Date(NOW_AFTER_6AM.getTime() + 30 * 60_000);
-    await runAutoDreaming(makeApi(), { now: sameDayLater });
-    await new Promise((r) => setTimeout(r, 100));
+      // Second tick (same day, +30min): the due-window check should suppress it.
+      const sameDayLater = new Date(NOW_AFTER_6AM.getTime() + 30 * 60_000);
+      await runAutoDreaming(makeApi(), { now: sameDayLater });
+      await new Promise((r) => setTimeout(r, 100));
 
-    const runs = await listDreamRuns();
-    assert.equal(runs.length, 1, "second tick must not create a second dream the same day");
+      const runs = await listDreamRuns();
+      assert.equal(runs.length, 1, "second tick must not create a second dream the same day");
+    });
+  });
+});
+
+test("runAutoDreaming: skipped when an auto dream is already running for the same local day", async () => {
+  await withTempHome(async () => {
+    await withLegacyAutoDreaming(async () => {
+      await updateUserSettings({ auto_dreaming: true });
+      await upsertProfile({ displayName: "T", locale: "en", timezone: "UTC" });
+      await createEvolutionRun({
+        triggerKind: "daily_dream",
+        windowStart: "2026-04-24T00:00:00.000Z",
+        windowEnd: "2026-04-24T08:00:00.000Z",
+        contextSummary: "dream run (trigger=auto)",
+      });
+
+      await runAutoDreaming(makeApi(), { now: NOW_AFTER_6AM });
+      await new Promise((r) => setTimeout(r, 100));
+
+      const runs = await listDreamRuns();
+      assert.equal(runs.length, 1, "same-day running auto dream must block duplicate start");
+      assert.equal(runs[0]!.status, "running");
+    });
   });
 });
 
 test("runAutoDreaming: re-fires next local day", async () => {
   await withTempHome(async () => {
-    await updateUserSettings({ auto_dreaming: true });
-    await upsertProfile({ displayName: "T", locale: "en", timezone: "UTC" });
+    await withLegacyAutoDreaming(async () => {
+      await updateUserSettings({ auto_dreaming: true });
+      await upsertProfile({ displayName: "T", locale: "en", timezone: "UTC" });
 
-    await runAutoDreaming(makeApi(), { now: NOW_AFTER_6AM });
-    await waitFor(async () => (await listDreamRuns())[0]?.status === "completed");
+      await runAutoDreaming(makeApi(), { now: NOW_AFTER_6AM });
+      await waitFor(async () => (await listDreamRuns())[0]?.status === "completed");
 
-    await runAutoDreaming(makeApi(), { now: NEXT_DAY_AFTER_6AM });
-    const seenSecond = await waitFor(async () => (await listDreamRuns()).length === 2);
-    assert.equal(seenSecond, true, "next-day tick must produce a 2nd dream_run");
+      await runAutoDreaming(makeApi(), { now: NEXT_DAY_AFTER_6AM });
+      const seenSecond = await waitFor(async () => (await listDreamRuns()).length === 2);
+      assert.equal(seenSecond, true, "next-day tick must produce a 2nd dream_run");
+    });
+  });
+});
+
+test("runAutoDreaming: no-op when BACKGROUND_AUTO_LOOP_TASKS_ENABLED is unset (default scheduler-owned mode)", async () => {
+  await withTempHome(async () => {
+    await withBackgroundTasksEnv(undefined, async () => {
+      await updateUserSettings({ auto_dreaming: true });
+      await upsertProfile({ displayName: "T", locale: "en", timezone: "UTC" });
+
+      await runAutoDreaming(makeApi(), { now: NOW_AFTER_6AM });
+      await new Promise((r) => setTimeout(r, 100));
+
+      const runs = await listDreamRuns();
+      assert.equal(runs.length, 0, "unset env defaults to scheduler-owned mode");
+    });
   });
 });
 
@@ -229,21 +294,16 @@ test("runAutoDreaming: re-fires next local day", async () => {
 // running both paths gets two dreams a day.
 test("runAutoDreaming: no-op when BACKGROUND_AUTO_LOOP_TASKS_ENABLED=1 (Phase C gate)", async () => {
   await withTempHome(async () => {
-    await updateUserSettings({ auto_dreaming: true });
-    await upsertProfile({ displayName: "T", locale: "en", timezone: "UTC" });
+    await withBackgroundTasksEnv('1', async () => {
+      await updateUserSettings({ auto_dreaming: true });
+      await upsertProfile({ displayName: "T", locale: "en", timezone: "UTC" });
 
-    const previous = process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED;
-    process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED = '1';
-    try {
       await runAutoDreaming(makeApi(), { now: NOW_AFTER_6AM });
       // Settle any pending fire-and-forget — none should land
       await new Promise((r) => setTimeout(r, 100));
       const runs = await listDreamRuns();
       assert.equal(runs.length, 0, "scheduler-owned mode must NOT create dream_runs in-process");
-    } finally {
-      if (previous === undefined) delete process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED;
-      else process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED = previous;
-    }
+    });
   });
 });
 

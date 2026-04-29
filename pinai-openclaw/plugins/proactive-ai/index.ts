@@ -18,6 +18,7 @@ import { createAutoDreamingHandler } from './tasks/handlers/auto-dreaming.js';
 import { reconcileActiveConnectorAccounts } from './tasks/reconciler.js';
 import { maybeEnqueueDailyDreaming } from './tasks/dreaming-enqueuer.js';
 import { enqueueDueConnectorSyncs } from './tasks/connector-sync-enqueuer.js';
+import { isBackgroundAutoLoopTasksEnabled } from './shared/background-auto-loop-tasks.js';
 import * as db from './db.js';
 
 const DEFAULT_CONFIG: PluginConfig = {
@@ -156,14 +157,13 @@ const plugin = {
     }
 
     // Background task scheduler — Phase A built the queue, Phase B wires
-    // connector.init for Gmail + GCal, Phase C migrates auto.dreaming. Still
-    // gated by BACKGROUND_AUTO_LOOP_TASKS_ENABLED so the existing setInterval-
-    // based auto-loop above keeps running unchanged for users / envs that
-    // haven't opted in. The legacy in-process runAutoDreaming honors the
-    // same flag and returns early when it's set, so the two paths can never
-    // double-trigger.
+    // connector.init for Gmail + GCal, Phase C migrates auto.dreaming. It is
+    // on by default; set BACKGROUND_AUTO_LOOP_TASKS_ENABLED=0 to force the
+    // legacy dreaming path. The legacy in-process runAutoDreaming honors the
+    // same flag and returns early when this scheduler owns dreaming, so the
+    // two paths can never double-trigger.
     // See docs/plans/2026-04-24-data-connector-init-tasks.mdx.
-    if (!bgTaskScheduler && process.env.BACKGROUND_AUTO_LOOP_TASKS_ENABLED === '1') {
+    if (!bgTaskScheduler && isBackgroundAutoLoopTasksEnabled()) {
       const workerId = `${process.env.HOSTNAME ?? 'host'}:${process.pid}:${userId.slice(0, 8)}`;
       bgTaskScheduler = new BackgroundTaskScheduler({
         workerId,

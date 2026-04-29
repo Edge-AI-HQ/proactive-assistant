@@ -197,7 +197,7 @@ sequenceDiagram
 - Composio connected accounts 只查询 `ACTIVE`，identity 缺失时尝试通过 toolkit-specific action 补齐，并缓存 24 小时。
 - `connector.init` 默认每个 toolkit 拉 100 条，`max_attempts=3`，lease 60s（handler 内部按需 heartbeat 续约）。kill switch：`CONNECTOR_INIT_DISABLED_TOOLKITS=gmail,slack` 跳过指定 toolkit。
 - `connector.sync` 同样默认 100 条，`max_attempts=2`（sync 失败下个 window 还有机会，不靠重试硬扛），lease 60s + heartbeat。kill switch：`CONNECTOR_SYNC_DISABLED_TOOLKITS=gmail,slack`。
-- `/composio/wait` 只在 `BACKGROUND_AUTO_LOOP_TASKS_ENABLED=1` 时返回 `initTaskId`；关时保持旧行为，前端 chip 不渲染。
+- `/composio/wait` 默认返回 `initTaskId`；仅在 `BACKGROUND_AUTO_LOOP_TASKS_ENABLED=0` 等显式关闭值时保持旧行为，前端 chip 不渲染。
 - `personal_signals.dedupe_key` 包含 `connectedAccountId` + 自然主键 + `:init:v1`，相同 toolkit 多账号不会重复入。
 - 每个 raw 表都带 `dedupe_key UNIQUE` + reference 三元组（`reference_count` / `last_referenced_at` / `referenced_by_runs`）。
 - Device token 只在注册/轮换时明文返回一次，服务端只保存 bcrypt hash。
@@ -299,4 +299,4 @@ pin memory list --source 'connector_init:gmail'         # evolve 写入的事实
 - **Composio 返回的字段名经常和原生 API 不一致**（Gmail `to` 是 string 而非 array、`preview` 是 object 而非 string；Calendar 用 camelCase；Notion 是 slim shape `{id,title,type}`）。改 mapper 前先 probe。
 - **GitHub slug 是 `GITHUB_LIST_ISSUES_...`**，没 `LIST_` 的版本 404。改 toolkit 先 search slug。
 - LinkedIn / Twitter 现有 Composio 表面只有 `GET_MY_INFO` / `BOOKMARKS`，没法做 init batch；保持 `unsupported_toolkit_v0` 直到有合适的 list/fetch action。
-- `/composio/wait` 在 scheduler 关闭时（`BACKGROUND_AUTO_LOOP_TASKS_ENABLED ≠ 1`）不返回 `initTaskId`；前端 chip 设计上就不渲染，避免老路径出 bug。
+- `/composio/wait` 在 scheduler 显式关闭时（`BACKGROUND_AUTO_LOOP_TASKS_ENABLED=0/false/off/no/disabled`）不返回 `initTaskId`；前端 chip 设计上就不渲染，避免老路径出 bug。
