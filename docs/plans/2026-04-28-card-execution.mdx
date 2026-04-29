@@ -5,8 +5,8 @@ description: "卡片预执行 + halt + confirm 模式的设计计划(2026-04-28,
 
 # Card Execution Architecture
 
-> **状态**:决策完成,Q1–Q5 全部已拍板,**待 user review 后进入 implementation plan 阶段**。
-> User 通过后,会被 [Execution](../modules/execution) 和 [Background Tasks](../modules/background-tasks) 在"相关 AI Plans"段引用。
+> **状态**:决策完成 + Phase 1 文档已 commit(本 plan 落在 `bf41a28e`,后续在 `7d8212cf` 同步同事 commit `1fd08ab6` 引入的"background_tasks 默认 on"事实),**可进 `/writing-plans` 阶段**。
+> 模块文档进入 implementation 后会在"相关 AI Plans"段引用本 plan(目前未引用,brainstorm 草稿期不强制)。
 
 ## 产品方向
 
@@ -109,7 +109,7 @@ Phase 1 起,卡片执行的主路径必须从 `POST /cards/:id/confirm` 进入,�
 | 用户进卡后 | chat 默认入口,agent 从零开始 | 直接看 plan + draft + trajectory,confirm 一键跑 |
 | chat 角色 | 主路径(所有动作在 chat 里) | 修改路径(只在用户对方案不满意时进入) |
 | 工具调用时机 | 用户点开 card 后边聊边跑 | 卡片生成后台预跑到 halt 点,chat-confirm 跑剩余 |
-| 工具误选 | agent 自由发挥,常用错 | plan 携带 `recommended_tool`,agent 按 plan 走 |
+| 工具误选 | agent 自由发挥,常用错 | exec-LLM 输出结构化 JSON,thin validator 强制 schema + side-effect flag 阶段校验,fallback 到 browser tool(详见"工具调用架构"段) |
 | 用户感知 | "AI 在帮我想" | "AI 已经替我做好了一半,我审批就行" |
 
 ## 架构决定:全部在执行层做
@@ -132,6 +132,8 @@ Phase 1 起,卡片执行的主路径必须从 `POST /cards/:id/confirm` 进入,�
 
 ## 架构图
 
+> **本图展示 Phase 2 完成态**。Phase 1 中 `chat-stream patch mode` 退化为 rerun(整张 CardExecution 重置 + 重新 `enqueue card.pre-execute`,跟图右上 enqueue 路径一致),`Patch --> CE` 这条线 Phase 1 不存在。
+
 ```mermaid
 flowchart LR
   Pipeline["generation pipeline"] -->|"出 IntentCard"| Card["IntentCard"]
@@ -151,7 +153,7 @@ flowchart LR
   Patch --> CE
 ```
 
-## 数据模型(草稿)
+## 数据模型
 
 新表 `card_executions`(SQLite,落在 user 容器内 proactive.db):
 
@@ -168,6 +170,8 @@ flowchart LR
 | `created_at` / `updated_at` | iso | |
 
 `schema 变更`:走 `db.ts` 的 `ensureDb()` `CREATE TABLE IF NOT EXISTS`(跟 `background_tasks` 一致),不走 `apis/db/migrations/`(那是 APIs Postgres,不是用户容器 SQLite)。
+
+**Retry 期间状态**:`background_tasks` 自带 retry(`max_attempts=3`,backoff 30s / 2min / 10min)。重试期间 `CardExecution.state` 保持 `drafting`,只在 `max_attempts` 用完才转 `failed`;前端不展示 "重试中" 中间态。
 
 ## 触发链路
 
@@ -186,7 +190,7 @@ sequenceDiagram
   Gen-->>Enq: 出卡事件 (pipeline:complete hook)
   Enq->>DB: enqueue card.pre-execute(intentCardId)
   Sch->>H: claim & 跑
-  H->>H: plan-LLM 想出 plan_steps + halt 索引
+  H->>H: plan-LLM 想出 plan_steps + isHalt 标记
   H->>DB: 写 CardExecution(state=drafting, plan_steps)
   H->>H: 按 plan 跑 halt 前的步骤(查询、起草)
   H->>DB: 持续更新 trajectory + draft
@@ -244,6 +248,16 @@ sequenceDiagram
 - **pin CLI 是干净的 execution facade**:统一 JSON envelope、标准化 `error.code` / `error.hint`(见 `cli/shared.ts`)、side-effect allowlist 已 hardcoded 在 `cli/personal.ts`(当前 `SIDE_EFFECT_TOOL_ALLOWLIST = {GMAIL_CREATE_EMAIL_DRAFT, GMAIL_SEND_DRAFT}`)。
 - **真正的 gap**:agent 输出 shell 字符串(`pin personal exec --tool X --input '{...}' --allow-side-effect true`),**无 schema 校验**,参数错才发现失败。
 
+### 三类 agent 的 prompt 注入需求(implementation 前先核实)
+
+新模型实际上有三类 agent,prompt 注入需求各不同。文档此前笼统说"agent 注入 SKILL.md",这里拆开:
+
+| Agent | 触发场景 | 当前 SKILL.md 注入状态 | Phase 1 要做什么 |
+|---|---|---|---|
+| **plan-LLM**(pre-execute handler 内) | auto-loop 出卡后异步触发 | `unified-generator.ts` 已显式注入 `PIN_CLI_COMMAND_GUIDE` | 复用同一注入路径(plan-LLM prompt 头加 guide) |
+| **exec-LLM**(pre-execute / final-step runner 内调工具) | 同上 + confirm 触发 final-step | **未确认**;它是真正调工具的角色,必须看到 SKILL.md | implementation 前明确注入路径,加测试断言 prompt 含 pin CLI 执行约束 |
+| **chat agent**(rerun / patch 输入) | 用户点 💬 进入修改 | **未显式注入**(仅依赖一句 "loaded skill documents") | 显式 import 同一 guide,或落地依赖 OpenClaw skill loader 的真实注入边界,**用测试锁住** |
+
 ### Phase 1 决策:方案 A(渐进式增强)
 
 不动 pin CLI / 不动 OpenClaw runtime / SKILL.md 保留。只在 PIN AI 这边的 pre-execute / final-step handler 里加 ~200-300 行 thin validator + retry。
@@ -281,6 +295,7 @@ agent 输出的 JSON 形状(LiteLLM JSON mode 强制):
 ### Thin validator 约束补充
 
 - validator 只接受结构化 object,不接受 agent 拼好的 shell 字符串。
+- `flags.input` 是 object;validator 要先 `JSON.stringify` 再传给 `pin --input '<json>'`(pin CLI 接受 JSON 字符串,不是 object)。
 - 执行命令时用 `spawn('pin', args, { shell: false })`,避免 quoting / injection 问题。
 - `pin personal tools schema --tool <slug>` 的结果要做短 TTL cache(建议落 `app_state` 或进程内 Map + 过期时间),同一批卡预执行时不要重复拉 schema。
 - pre-execute 阶段即使 LLM 输出 `allow-side-effect: true`,validator 也必须拒绝;final-step 阶段才允许把该 flag 传给 CLI。
@@ -315,7 +330,7 @@ agent 输出的 JSON 形状(LiteLLM JSON mode 强制):
 | Generation self-eval 看不到 plan 维度 | execution 跑完 pre-execute 写 `execution_signal` 进 feedback_events,影响下一轮 generation 偏置。 |
 | 数据所有权分散 | 文档边界写明:IntentCard 是 generation 真源、CardExecution 是 execution 真源。前端做 merge。 |
 | Pre-execute 慢(30s-2min) | auto-loop 后置异步跑,绝大多数情况发生在用户不在场时,用户开 App 直接看到 awaiting_approval。边角情况(用户撞上跑预执行的窗口)前端 fallback skeleton + SSE 等 ready。 |
-| 多张卡排队时被 tick 间隔拖慢 | 这不是"串行执行"的问题,而是"任务之间空等"的问题。保持单 worker 串行,但预执行入队后 `wake()` scheduler;每次 tick 允许最多连续 claim N 个 due task(`maxTasksPerTick`,优先 `card.pre-execute`),直到队列空或达到上限。 |
+| 多张卡排队时被 tick 间隔拖慢 | 这不是"串行执行"的问题,而是"任务之间空等"的问题。保持单 worker 串行,但预执行入队后 `wake()` scheduler;每次 tick 允许最多连续 claim N 个 due task(`maxTasksPerTick`),直到队列空或达到上限。`maxTasksPerTick` 的目的是**限制单 tick 跑的任务数,防止 connector sync / dreaming 饿死**,**不是给 `card.pre-execute` 加优先级** — 任务平等排队,只去掉 60s tick 之间的空等。 |
 | Pre-execute 失败 | state=failed,卡片仍可展示但带"重试 / 进 chat 解决"。background_tasks 自带 retry。 |
 | Halt 点判错(LLM 把 halt 标在 send email 之后) | 硬规则兜底:Composio 的 mutation 工具(send / create / delete)前一步**强制 halt**,LLM 提议只在硬规则允许范围内生效。 |
 | 用户在 chat 改了影响下游决策的内容 | 触发 rerun(整张 CardExecution 重置 + 重新 enqueue),不做局部重跑 — 大改动靠"全重跑 + 用户指令做最高优先级约束"保证一致性。 |
@@ -327,7 +342,7 @@ agent 输出的 JSON 形状(LiteLLM JSON mode 强制):
 ## 分期建议
 
 - **Phase 1 (MVP, 1-1.5 周)**:
-  - 异步预执行(Q1-E):auto-loop 出卡 → enqueue → 跑到 awaiting_approval。
+  - 异步预执行(Q1-E):auto-loop 出卡 → enqueue → 跑到 awaiting_approval。`BACKGROUND_AUTO_LOOP_TASKS_ENABLED` 现在默认 on(同事 commit `1fd08ab6`),本地起 plugin 不需要额外 export 这个 flag。
   - 硬规则 halt + 5 层 defense-in-depth(Q4-C)。
   - `card_executions` 表(数据完整,trajectory 也存,Phase 1 只是 UI 不渲染)。
   - 卡片状态机(drafting / awaiting_approval / executing / done / failed / rejected)。
