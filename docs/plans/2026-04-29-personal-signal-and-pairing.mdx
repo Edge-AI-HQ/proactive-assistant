@@ -288,7 +288,15 @@ make ios DEV=ngrok    # iOS build 时把 ngrok URL 注入 VITE_API_BASE_URL
 - 单测覆盖:request → poll(pending) → claim → poll(claimed) → token 可用
 - Web UI Hardware Devices 加 Pair Code tab
 
-### Phase 3:本地 ngrok 工作流(开发体验,可选)
+### Phase 3:Web UI Pair Code tab(必做,跟 Phase 2 同 PR)
+- `proactive-ai-frontend/src/components/DeviceConnections.tsx` 改两个 tab:
+  - **"Pair with code"** (默认):大输入框收 6 位 code,点 Pair → 调 `/pair-code/claim` → 成功后设备自动出现在列表
+  - **"Manual register"** (折叠到 "Developer" 区域):保留现在直接输 deviceId/platform/displayName 的表单,给 curl 测试 / 调试用
+- 显示倒计时 + 失败原因(`code_not_found` / `code_expired` / `code_already_claimed`)
+- `proactive-ai-frontend/src/lib/api.ts` 加 `claimPairCode(code, displayName?, model?)`
+- `proactive-ai-frontend/src/components/DeviceConnections.tsx` 复用 `useUserDevices` 的 refresh 让新设备直接出现
+
+### Phase 4:本地 ngrok 工作流(开发体验,可选)
 - `make ngrok` target
 - iOS App 加 dev menu 接受 runtime API_BASE override
 - 文档化在 `docs/modules/runtime-deployment.mdx`
