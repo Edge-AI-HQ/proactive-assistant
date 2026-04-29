@@ -275,6 +275,13 @@ make ios DEV=ngrok    # iOS build 时把 ngrok URL 注入 VITE_API_BASE_URL
 
 ## 七、Roadmap
 
+> **状态(2026-04-29):** Phase 1 / 2 / 3 已合并到 `feat/devices-ingest`。
+> Phase 4 ngrok target 已加 (`make ngrok`)。Token rotate endpoint
+> (`POST /devices/rotate-token`) 已加,在配对建议里属于 ⭐⭐⭐ 的
+> hardening,顺手做了。Phase 5 omi 子设备模型仍待真接入 omi 时再做。
+> Mobile App 仓库 `proactive-ai-mobile` 的 `feat/personal-signal-and-pairing`
+> 分支已对齐到新 envelope + 自动 register。
+
 ### Phase 1:PersonalSignal 范式 rename(必做,1 PR)
 - ingest handler 加 snake_case 字段读取,保留 camelCase fallback
 - 接受 envelope `source` 字段
