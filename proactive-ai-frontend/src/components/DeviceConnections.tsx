@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, Cpu, KeyRound, Loader2, Plus, Send, Smartphone, Trash2, Watch } from "lucide-react";
+import { ChevronRight, Cpu, Loader2, Plus, Send, Smartphone, Trash2, Watch } from "lucide-react";
 import { useUserDevices } from "@/hooks/useUserDevices";
-import { claimPairCode, type UserDevice, type UserDevicePlatform } from "@/lib/api";
+import { type UserDevice, type UserDevicePlatform } from "@/lib/api";
 import { ensureDevice, ingestSignals, type DeviceCredentials } from "@/lib/devices";
 import DeviceTimeline from "./DeviceTimeline";
 
@@ -14,7 +14,7 @@ import DeviceTimeline from "./DeviceTimeline";
  *   peer devices. The current web browser remains in SelfDevicePanel.
  * - Tapping a device drills into its time-axis waterfall view.
  */
-type AddTab = null | "pair-code" | "manual";
+type AddTab = null | "manual";
 
 export default function DeviceConnections() {
   const { devices, loading, error, registerDevice, revoke, refresh } = useUserDevices(true);
@@ -41,17 +41,7 @@ export default function DeviceConnections() {
         <p className="text-[11px] leading-relaxed text-foreground/50">
           Mobile apps, wearables, sensors, and embedded devices that push to your container.
         </p>
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            onClick={() => setAddTab(addTab === "pair-code" ? null : "pair-code")}
-            className={`min-h-8 justify-center whitespace-nowrap text-[11px] transition px-2.5 py-1.5 rounded-md border flex items-center gap-1 ${
-              addTab === "pair-code"
-                ? "bg-foreground/85 text-background border-foreground/85"
-                : "text-foreground/70 hover:text-foreground border-foreground/15"
-            }`}
-          >
-            <KeyRound size={11} /> Pair with code
-          </button>
+        <div className="grid grid-cols-1 gap-2">
           <button
             onClick={() => setAddTab(addTab === "manual" ? null : "manual")}
             className={`min-h-8 justify-center whitespace-nowrap text-[11px] transition px-2.5 py-1.5 rounded-md border flex items-center gap-1 ${
@@ -65,15 +55,6 @@ export default function DeviceConnections() {
           </button>
         </div>
       </div>
-
-      {addTab === "pair-code" && (
-        <PairCodeForm
-          onPaired={() => {
-            setAddTab(null);
-            void refresh();
-          }}
-        />
-      )}
 
       {addTab === "manual" && (
         <AddDeviceForm
@@ -96,8 +77,7 @@ export default function DeviceConnections() {
         </div>
       ) : peerDevices.length === 0 && addTab === null ? (
         <div className="text-xs text-foreground/40 py-4 text-center">
-          No other devices paired yet. Sign in on the mobile app, or tap "Pair with code"
-          for hardware that shows a 6-character code.
+          No other devices paired yet. Sign in on the mobile app to have it appear here.
         </div>
       ) : (
         <ul className="space-y-2">
@@ -285,105 +265,6 @@ function SelfDevicePanel({
   );
 }
 
-// ── Pair code form ──────────────────────────────────────────────────────
-
-function PairCodeForm({ onPaired }: { onPaired: () => void }) {
-  const [code, setCode] = useState("");
-  const [displayName, setDisplayName] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [confirmed, setConfirmed] = useState<{ name: string; id: string } | null>(null);
-
-  const submit = async () => {
-    const trimmed = code.trim().toUpperCase();
-    if (trimmed.length !== 6) {
-      setErr("Code must be 6 characters.");
-      return;
-    }
-    setErr(null);
-    setBusy(true);
-    try {
-      const result = await claimPairCode(
-        trimmed,
-        displayName.trim() || undefined,
-      );
-      setConfirmed({ name: result.display_name, id: result.device_id });
-      // Give the user a beat to read the confirmation, then close.
-      setTimeout(onPaired, 1200);
-    } catch (e) {
-      const code = (e as { domainCode?: string }).domainCode;
-      const status = (e as { status?: number }).status;
-      // Map server's domain codes to specific copy.
-      if (status === 404) setErr("Code not found. Double-check the 6 characters on the device.");
-      else if (code === "CONFLICT") setErr(
-        (e as Error).message?.includes("expired")
-          ? "Code has expired — restart pairing on the device."
-          : "Code has already been claimed."
-      );
-      else setErr((e as Error).message ?? "Pairing failed.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (confirmed) {
-    return (
-      <div className="glass-card p-3 text-xs text-emerald-600/90 border border-emerald-500/20">
-        ✓ Paired <strong>{confirmed.name}</strong>. The device will receive its token on
-        its next poll.
-      </div>
-    );
-  }
-
-  return (
-    <div className="glass-card p-3 space-y-2">
-      <label className="text-[10px] text-foreground/50 block">
-        Code from the device
-        <input
-          autoFocus
-          value={code}
-          onChange={(e) => {
-            // Force uppercase + restrict to alphabet (32 chars,
-            // 23456789ABCDEFGHJKLMNPQRSTUVWXYZ — but accepting all and
-            // letting the server reject keeps the UI simple).
-            const cleaned = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
-            setCode(cleaned);
-            if (err) setErr(null);
-          }}
-          onKeyDown={(e) => { if (e.key === "Enter") void submit(); }}
-          placeholder="6 characters,e.g. ANUNAV"
-          className="mt-1 w-full px-2 py-2 text-base font-mono tracking-[0.4em] rounded-md bg-foreground/5 border border-foreground/10 focus:border-foreground/30 outline-none uppercase"
-          maxLength={6}
-        />
-      </label>
-      <label className="text-[10px] text-foreground/50 block">
-        Display name (optional)
-        <input
-          value={displayName}
-          onChange={(e) => setDisplayName(e.target.value)}
-          placeholder="e.g. OMI on my desk"
-          className="mt-1 w-full px-2 py-1.5 text-xs rounded-md bg-foreground/5 border border-foreground/10 focus:border-foreground/30 outline-none"
-        />
-      </label>
-      {err && <div className="text-[10px] text-red-500/80 px-1">{err}</div>}
-      <div className="flex justify-end gap-2 pt-1">
-        <button
-          onClick={() => void submit()}
-          disabled={busy || code.length !== 6}
-          className="text-[11px] px-3 py-1 rounded-md bg-foreground/85 text-background hover:bg-foreground transition flex items-center gap-1 disabled:opacity-40"
-        >
-          {busy && <Loader2 size={11} className="animate-spin" />}
-          Pair
-        </button>
-      </div>
-      <p className="text-[10px] text-foreground/40 leading-relaxed">
-        Devices show a code on their screen when they boot in pairing mode.
-        The code expires after 5 minutes.
-      </p>
-    </div>
-  );
-}
-
 // ── Add device form ─────────────────────────────────────────────────────
 
 interface AddInput {
@@ -477,11 +358,11 @@ function AddDeviceForm({
           className="text-[11px] px-3 py-1 rounded-md bg-foreground/85 text-background hover:bg-foreground transition flex items-center gap-1 disabled:opacity-50"
         >
           {busy && <Loader2 size={11} className="animate-spin" />}
-          Pair device
+          Register device
         </button>
       </div>
       <p className="text-[10px] text-foreground/40 leading-relaxed">
-        On pair we generate a device id + token. The token is shown once
+        On register we generate a device id + token. The token is shown once
         (paste it into the device app). It authenticates uploads to{" "}
         <code>/api/proactive/devices/ingest</code>.
       </p>
