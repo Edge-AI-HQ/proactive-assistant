@@ -16,8 +16,26 @@ export function isMobileProxyEnabled(): boolean {
   return nodeEnv !== 'production';
 }
 
+/**
+ * Path rewrites for the device-ingest proxy:
+ *
+ *   /api/proactive/devices/ingest      → /proactive-ai/api/devices/ingest
+ *   /api/mobile/items/ingest (legacy)  → /proactive-ai/api/devices/ingest
+ *   /api/mobile/<rest>       (legacy)  → /proactive-ai/api/devices/<rest>
+ *
+ * The /api/mobile/* prefix is kept for backwards-compatibility with mobile
+ * clients shipped before the device-ingest unification. New clients should
+ * use /api/proactive/devices/ingest directly.
+ */
 export function rewriteMobileProxyPath(originalUrl: string): string {
-  return originalUrl.replace(/^\/api\/mobile\/?/, '/proactive-ai/api/mobile/');
+  if (originalUrl.startsWith('/api/proactive/devices/')) {
+    return originalUrl.replace(/^\/api\/proactive\/devices\/?/, '/proactive-ai/api/devices/');
+  }
+  // Legacy: rewrite both /api/mobile/items/ingest and any other /api/mobile/*.
+  if (originalUrl.startsWith('/api/mobile/items/ingest')) {
+    return originalUrl.replace(/^\/api\/mobile\/items\/ingest/, '/proactive-ai/api/devices/ingest');
+  }
+  return originalUrl.replace(/^\/api\/mobile\/?/, '/proactive-ai/api/devices/');
 }
 
 export function buildMobileProxyHeaders(
@@ -61,18 +79,33 @@ export async function refreshMobileProxyContainer(
  * Look up the user's container by validated device token.
  * See docs/plans/memory-architecture.mdx §三 (APIs user_devices).
  *
- * Returns null when:
- *   - the request did not provide both X-Device-Id and X-Device-Token
- *   - the token does not validate
- *   - the user has no container yet
+ * Distinguishes "legacy client without device headers" from "new client
+ * sent device headers, but they don't validate". Only the first case may
+ * fall back to the legacy default container.
  */
-async function findContainerByDeviceToken(req: Request): Promise<ContainerWithToken | null> {
+async function findContainerByDeviceToken(req: Request): Promise<{
+  headersProvided: boolean;
+  tokenValid: boolean;
+  container: ContainerWithToken | null;
+}> {
   const deviceId = String(req.header('x-device-id') ?? '').trim();
   const deviceToken = String(req.header('x-device-token') ?? '').trim();
-  if (!deviceId || !deviceToken) return null;
+  const headersProvided = Boolean(deviceId || deviceToken);
+  if (!headersProvided) {
+    return { headersProvided: false, tokenValid: false, container: null };
+  }
+  if (!deviceId || !deviceToken) {
+    return { headersProvided: true, tokenValid: false, container: null };
+  }
   const device = await findDeviceByToken(deviceId, deviceToken);
-  if (!device) return null;
-  return await getContainerByInternalId(device.user_id);
+  if (!device) {
+    return { headersProvided: true, tokenValid: false, container: null };
+  }
+  return {
+    headersProvided: true,
+    tokenValid: true,
+    container: await getContainerByInternalId(device.user_id),
+  };
 }
 
 export function createMobileProxy(orchestrator: ProactiveContainerOrchestrator) {
@@ -81,11 +114,26 @@ export function createMobileProxy(orchestrator: ProactiveContainerOrchestrator) 
     // present. Falls back to the legacy "default container" lookup so
     // existing clients without device registration keep working.
     // See docs/plans/memory-architecture.mdx §三.
-    const tokenContainer = await findContainerByDeviceToken(req);
-    let container: MobileSyncTarget | null = tokenContainer
-      ? { ...tokenContainer, user_key: null }
+    const tokenLookup = await findContainerByDeviceToken(req);
+    if (tokenLookup.headersProvided && !tokenLookup.tokenValid) {
+      res.status(401).json({
+        error: 'Invalid device credentials',
+        code: 'INVALID_DEVICE_TOKEN',
+      });
+      return;
+    }
+    if (tokenLookup.headersProvided && !tokenLookup.container) {
+      res.status(503).json({
+        error: 'No mobile sync target container is available',
+        code: 'NO_MOBILE_TARGET',
+      });
+      return;
+    }
+
+    let container: MobileSyncTarget | null = tokenLookup.container
+      ? { ...tokenLookup.container, user_key: null }
       : await getDefaultMobileSyncContainer();
-    if (!tokenContainer) {
+    if (!tokenLookup.container) {
       // user_key is only populated by getDefaultMobileSyncContainer; legacy
       // path needs it for resume. Token-based path skips reconcile because
       // we already validated ownership via the device token.

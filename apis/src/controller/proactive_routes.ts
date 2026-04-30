@@ -10,7 +10,7 @@
  * directly instead of re-querying by Supabase id.
  */
 
-import { Router, type Application } from 'express';
+import { Router, type Application, type Response } from 'express';
 import type { Server } from 'node:http';
 import type { IncomingMessage } from 'node:http';
 import type { Socket } from 'node:net';
@@ -34,7 +34,17 @@ import {
   registerDevice,
   listDevicesForUser,
   revokeDevice,
+  rotateDeviceToken,
+  type DevicePlatform,
 } from '../domain/devices/index.js';
+import {
+  requestPairingCode,
+  pollPairingCode,
+  claimPairingCode,
+  cancelPairingCode,
+} from '../domain/devices/pairing.js';
+import { isDomainError } from '../domain/common/errors.js';
+import { createRateLimit } from '../domain/common/rate_limit.js';
 import { getContainerRuntime } from '../domain/container/provider_factory.js';
 import { relayGatewayWs } from '../domain/gateway/gateway_ws_relay.js';
 import { getCurrentModel, setCurrentModel } from '../domain/gateway/gateway_rpc.js';
@@ -80,6 +90,51 @@ router.post('/api/proactive/user/heartbeat', requireProactiveAuth, (_req, res) =
   res.json({ ok: true });
 });
 
+// ── Rate limiters for device endpoints ──
+//
+// Per-IP for unauthenticated endpoints (pair-code request/poll/cancel,
+// register), per-device-id for authenticated ingest. Numbers picked to
+// be comfortable for normal traffic (a phone batching every minute, a
+// device polling every 3s during pairing) but to make brute force /
+// runaway scripts visibly fail.
+//
+// In-memory + per-process: behind a single Fly machine today; revisit
+// when we replicate. Defined here (above the routes that reference them)
+// so all router.post() calls can pin the middleware in one place.
+
+const ipKey = (req: { ip?: string | undefined; header(name: string): string | undefined }) =>
+  req.header('x-forwarded-for')?.split(',')[0]?.trim() || req.ip || 'unknown-ip';
+
+const ingestLimit = createRateLimit({
+  name: 'devices/ingest',
+  keyFn: (req) => req.header('x-device-id') ?? ipKey(req),
+  capacity: 60, refillPerSec: 1,        // ≤60 ingest calls per minute per device
+});
+
+const registerLimit = createRateLimit({
+  name: 'devices/register',
+  keyFn: ipKey,
+  capacity: 10, refillPerSec: 10 / 60,   // ≤10 per minute per IP
+});
+
+const pairCodeRequestLimit = createRateLimit({
+  name: 'pair-code/request',
+  keyFn: ipKey,
+  capacity: 5, refillPerSec: 5 / 60,     // ≤5 per minute per IP
+});
+
+const pairCodePollLimit = createRateLimit({
+  name: 'pair-code/poll',
+  keyFn: ipKey,
+  capacity: 30, refillPerSec: 30 / 60,   // ≤30 per minute per IP
+});
+
+const pairCodeClaimLimit = createRateLimit({
+  name: 'pair-code/claim',
+  keyFn: ipKey,
+  capacity: 10, refillPerSec: 10 / 60,
+});
+
 // ── Device registry ──
 // See docs/plans/memory-architecture.mdx §三 (APIs user_devices) and apis/db/migrations/002.
 //
@@ -92,12 +147,12 @@ router.post('/api/proactive/user/heartbeat', requireProactiveAuth, (_req, res) =
 // EncryptedSharedPreferences / web localStorage) and send X-Device-Token
 // + X-Device-Id on every subsequent /api/mobile/* request.
 
-router.post('/api/proactive/devices/register', requireProactiveAuth, async (req, res) => {
+router.post('/api/proactive/devices/register', registerLimit, requireProactiveAuth, async (req, res) => {
   try {
     const auth = req.proactiveAuth!;
     const body = (req.body ?? {}) as Record<string, unknown>;
     const deviceId = String(body['deviceId'] ?? '').trim();
-    const platform = String(body['platform'] ?? '').trim() as 'ios' | 'android' | 'web';
+    const platform = String(body['platform'] ?? '').trim() as DevicePlatform;
     if (!deviceId || !platform) {
       sendDomainError(res, 'INVALID_INPUT', 'Missing deviceId or platform');
       return;
@@ -108,6 +163,7 @@ router.post('/api/proactive/devices/register', requireProactiveAuth, async (req,
       platform,
       displayName: typeof body['displayName'] === 'string' ? body['displayName'] : null,
       appVersion: typeof body['appVersion'] === 'string' ? body['appVersion'] : null,
+      model: typeof body['model'] === 'string' ? body['model'] : null,
       metadata: body['metadata'] && typeof body['metadata'] === 'object'
         ? body['metadata'] as Record<string, unknown> : {},
     });
@@ -116,6 +172,7 @@ router.post('/api/proactive/devices/register', requireProactiveAuth, async (req,
       device: {
         device_id: device.device_id,
         platform: device.platform,
+        model: device.model,
         display_name: device.display_name,
         registered_at: device.registered_at,
         status: device.status,
@@ -135,6 +192,106 @@ router.get('/api/proactive/devices', requireProactiveAuth, async (req, res) => {
   } catch (err) {
     console.error('[proactive] devices list error:', err);
     sendError(res, err);
+  }
+});
+
+// ── Pair Code (RFC 8628 simplified) ──
+// Spec: docs/plans/2026-04-29-personal-signal-and-pairing.mdx §三 Class B.
+//
+// Device flow:
+//   POST  /devices/pair-code/request  → { code, poll_url, poll_interval, expires_in }
+//   GET   /devices/pair-code/poll?code=...  → { status, [device_id, device_token] when claimed }
+//   POST  /devices/pair-code/cancel  { code }   (device or user gives up)
+// User flow:
+//   POST  /devices/pair-code/claim   { code, displayName?, model? }   (Supabase auth required)
+
+const DOMAIN_ERROR_TO_STATUS: Record<string, number> = {
+  INVALID_INPUT: 400,
+  NOT_FOUND: 404,
+  CONFLICT: 409,
+  UNAUTHORIZED: 401,
+  UNAVAILABLE: 503,
+  INTERNAL: 500,
+};
+
+function sendDeviceFlowError(res: Response, err: unknown, fallback: string): void {
+  if (isDomainError(err)) {
+    const status = DOMAIN_ERROR_TO_STATUS[err.code] ?? 500;
+    res.status(status).json({ error: err.message, code: err.code });
+    return;
+  }
+  console.error(fallback, err);
+  res.status(500).json({ error: 'Internal server error' });
+}
+
+router.post('/api/proactive/devices/pair-code/request', pairCodeRequestLimit, async (req, res) => {
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const deviceClass = String(body['deviceClass'] ?? body['device_class'] ?? 'wearable').trim() as DevicePlatform;
+    const model = typeof body['model'] === 'string' ? body['model'] : null;
+    const result = await requestPairingCode({ deviceClass, model });
+    res.json(result);
+  } catch (err) {
+    sendDeviceFlowError(res, err, '[proactive] pair-code/request error:');
+  }
+});
+
+router.get('/api/proactive/devices/pair-code/poll', pairCodePollLimit, async (req, res) => {
+  try {
+    const code = String(req.query['code'] ?? '').trim();
+    const result = await pollPairingCode(code);
+    res.json(result);
+  } catch (err) {
+    sendDeviceFlowError(res, err, '[proactive] pair-code/poll error:');
+  }
+});
+
+router.post('/api/proactive/devices/pair-code/claim', pairCodeClaimLimit, requireProactiveAuth, async (req, res) => {
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const code = String(body['code'] ?? '').trim().toUpperCase();
+    const user = await getUserBySupabaseId(req.proactiveAuth!.userId);
+    if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+    const result = await claimPairingCode({
+      userId: user.id,
+      code,
+      displayName: typeof body['displayName'] === 'string' ? body['displayName'] : null,
+      model: typeof body['model'] === 'string' ? body['model'] : null,
+    });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    sendDeviceFlowError(res, err, '[proactive] pair-code/claim error:');
+  }
+});
+
+router.post('/api/proactive/devices/pair-code/cancel', async (req, res) => {
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const code = String(body['code'] ?? '').trim();
+    if (!code) { res.status(400).json({ error: 'code required' }); return; }
+    await cancelPairingCode(code);
+    res.json({ ok: true });
+  } catch (err) {
+    sendDeviceFlowError(res, err, '[proactive] pair-code/cancel error:');
+  }
+});
+
+// Token rotation: device authenticates with its *current* PSK and gets a
+// fresh one back. Old token stops working immediately. No user JWT needed
+// — the current token is the credential. Devices should rotate on a
+// 30-day cadence to bound exposure if a token leaks.
+router.post('/api/proactive/devices/rotate-token', async (req, res) => {
+  try {
+    const deviceId = String(req.header('x-device-id') ?? '').trim();
+    const currentToken = String(req.header('x-device-token') ?? '').trim();
+    if (!deviceId || !currentToken) {
+      res.status(400).json({ error: 'X-Device-Id and X-Device-Token required' });
+      return;
+    }
+    const result = await rotateDeviceToken({ deviceId, currentToken });
+    res.json({ ok: true, device_token: result.device_token });
+  } catch (err) {
+    sendDeviceFlowError(res, err, '[proactive] devices/rotate-token error:');
   }
 });
 
@@ -364,7 +521,18 @@ router.all('/api/proxy/*', requireProactiveAuth, async (req, res) => {
 });
 
 if (isMobileProxyEnabled()) {
-  router.all('/api/mobile/*', async (req, res) => {
+  // Preferred device-ingest path. New clients should use this.
+  // Pinned to /ingest so we don't shadow the device-management routes
+  // declared above (/devices/register, /devices, /devices/revoke).
+  // Rate limited per device_id (falls back to per-IP when no header).
+  router.post('/api/proactive/devices/ingest', ingestLimit, async (req, res) => {
+    const orchestrator = getOrchestrator();
+    const proxy = createMobileProxy(orchestrator);
+    await proxy(req, res);
+  });
+  // Legacy alias kept for old mobile clients (MOBILE_ITEMS_INGEST_PATH).
+  // Same proxy + rewrite logic; will be removed once all clients cut over.
+  router.all('/api/mobile/*', ingestLimit, async (req, res) => {
     const orchestrator = getOrchestrator();
     const proxy = createMobileProxy(orchestrator);
     await proxy(req, res);

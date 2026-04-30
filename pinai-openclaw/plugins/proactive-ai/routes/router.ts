@@ -15,7 +15,7 @@ import { handleProfile } from './profile.js';
 import { handleSettings } from './settings.js';
 import { handleDreaming } from './dreaming.js';
 import { handleBrowser } from './browser.js';
-import { handleMobile } from './mobile.js';
+import { handleDevices } from './devices.js';
 import { handleSkills } from './skills.js';
 import { handleCrystallize } from './crystallize.js';
 // v3 memory architecture routes (see docs/plans/memory-architecture.mdx §六)
@@ -48,7 +48,7 @@ export function createApiHandler(api: OpenClawPluginApi, config: PluginConfig) {
     handleSettings(),
     handleDreaming(),
     handleBrowser(),
-    handleMobile(),
+    handleDevices(),
     handleSkills(),
     handleCrystallize(),
     // v3 routes

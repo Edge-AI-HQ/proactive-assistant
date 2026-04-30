@@ -24,7 +24,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { ingestMobileItemsV3 } from './routes/mobile.ts';
+import { ingestDeviceItems } from './routes/devices.ts';
 import {
   addMemoryV3,
   completeEvolutionRun,
@@ -72,9 +72,9 @@ async function withTempHome<T>(fn: () => Promise<T>): Promise<T> {
 test('e2e: device GPS-trigger event flows through to a high-quality memory', async () => {
   await withTempHome(async () => {
     // 1. Device side: edge model fires "home → office" trigger.
-    //    The mobile SDK posts the item to /api/proxy/mobile/items/ingest,
-    //    which calls ingestMobileItemsV3 on the server.
-    await ingestMobileItemsV3('iphone-1', [{
+    //    The mobile SDK posts the item to /api/proxy/devices/ingest,
+    //    which calls ingestDeviceItems on the server.
+    await ingestDeviceItems('iphone-1', [{
       id: 'mob-1',
       itemType: 'moment',
       title: 'home → office',
@@ -159,7 +159,7 @@ test('e2e: device GPS-trigger event flows through to a high-quality memory', asy
 test('e2e: device app inventory snapshot flows to raw.db, not memory', async () => {
   await withTempHome(async () => {
     // Device pushes a full app-inventory snapshot.
-    await ingestMobileItemsV3('iphone-1', [{
+    await ingestDeviceItems('iphone-1', [{
       id: 'snap-1',
       itemType: 'app_inventory_bootstrap',
       title: 'Apps installed',

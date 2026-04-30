@@ -3,18 +3,32 @@ import assert from "node:assert/strict";
 
 import { buildMobileProxyHeaders, isMobileProxyEnabled, refreshMobileProxyContainer, rewriteMobileProxyPath } from "./mobile_proxy.js";
 
-test("rewriteMobileProxyPath rewrites /api/mobile prefix to plugin mobile route", () => {
+test("rewriteMobileProxyPath rewrites legacy /api/mobile/items/ingest to /devices/ingest", () => {
   assert.equal(
     rewriteMobileProxyPath("/api/mobile/items/ingest?foo=1"),
-    "/proactive-ai/api/mobile/items/ingest?foo=1",
+    "/proactive-ai/api/devices/ingest?foo=1",
+  );
+});
+
+test("rewriteMobileProxyPath rewrites preferred /api/proactive/devices/* to /devices/*", () => {
+  assert.equal(
+    rewriteMobileProxyPath("/api/proactive/devices/ingest?foo=1"),
+    "/proactive-ai/api/devices/ingest?foo=1",
   );
   assert.equal(
+    rewriteMobileProxyPath("/api/proactive/devices/something?x=1"),
+    "/proactive-ai/api/devices/something?x=1",
+  );
+});
+
+test("rewriteMobileProxyPath also rewrites bare /api/mobile/* fallback paths", () => {
+  assert.equal(
     rewriteMobileProxyPath("/api/mobile/items?status=pending&limit=10"),
-    "/proactive-ai/api/mobile/items?status=pending&limit=10",
+    "/proactive-ai/api/devices/items?status=pending&limit=10",
   );
   assert.equal(
     rewriteMobileProxyPath("/api/mobile"),
-    "/proactive-ai/api/mobile/",
+    "/proactive-ai/api/devices/",
   );
 });
 

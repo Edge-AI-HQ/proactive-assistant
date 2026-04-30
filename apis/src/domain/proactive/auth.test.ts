@@ -137,6 +137,28 @@ test('TOKEN_MISSING when Authorization is not a Bearer token', async () => {
   assert.deepEqual(res.body, { error: 'Missing authorization token', code: 'TOKEN_MISSING' });
 });
 
+test('dev fallback can synthesize a fixed local user when Authorization is absent', async () => {
+  const { deps, spy } = buildDeps({ allowDevFallback: true });
+  const middleware = createRequireProactiveAuth(deps);
+  const req = makeReq();
+  const res = makeRes();
+  let nextCalled = false;
+  await middleware(req, res as unknown as Response, () => { nextCalled = true; });
+
+  assert.equal(nextCalled, true);
+  assert.equal(res.statusCode, null);
+  assert.equal(spy.verifyTokenCalls.length, 0, 'dev fallback should not verify a missing token');
+  assert.deepEqual(spy.upsertUserCalls[0], {
+    userId: '00000000-0000-4000-8000-000000000001',
+    email: 'dev@local.test',
+    name: 'dev',
+    authProvider: 'dev',
+  });
+  const reqAny = req as unknown as { proactiveAuth?: { userId: string; user: ProactiveUser } };
+  assert.equal(reqAny.proactiveAuth?.userId, '00000000-0000-4000-8000-000000000001');
+  assert.equal(reqAny.proactiveAuth?.user.id, 1);
+});
+
 test('TOKEN_INVALID surfaces invalid-token verifier failures', async () => {
   const { deps } = buildDeps({
     verifyToken: async () => {

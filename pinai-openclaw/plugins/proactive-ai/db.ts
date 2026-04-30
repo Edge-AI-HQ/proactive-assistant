@@ -3989,6 +3989,13 @@ export interface ListPersonalSignalsOpts {
   minSalience?: number;
   limit?: number;
   offset?: number;
+  /**
+   * Keyset cursor: return rows strictly older than (occurredAt, id) under the
+   * default DESC ordering. Mutually exclusive with `offset` (cursor wins).
+   * Use this for stable, fast timeline pagination — `offset` degrades on
+   * large tables.
+   */
+  before?: { occurredAt: string; id: string };
   /** When true, also expire any rows whose expires_at has passed before listing. */
   pruneExpired?: boolean;
 }
@@ -3999,10 +4006,15 @@ export async function listPersonalSignals(
   if (opts.pruneExpired) await expireElapsedPersonalSignals();
   const { whereSql, params } = buildPersonalSignalsWhere(opts);
   const parts = [`SELECT * FROM personal_signals ${whereSql}`];
-  const offset = Number.isFinite(opts.offset) ? Math.max(0, Math.floor(opts.offset ?? 0)) : 0;
   parts.push('ORDER BY occurred_at DESC, id DESC');
   parts.push('LIMIT ? OFFSET ?');
-  params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
+  const limit = Math.max(1, Math.min(opts.limit ?? 50, 500));
+  // When a cursor is supplied, OFFSET is meaningless (the cursor already
+  // anchors position) — pin to 0 so caller doesn't accidentally skip rows.
+  const offset = opts.before
+    ? 0
+    : Number.isFinite(opts.offset) ? Math.max(0, Math.floor(opts.offset ?? 0)) : 0;
+  params.push(limit);
   params.push(offset);
   const rows = getDb().prepare(parts.join(' ')).all(...params) as any[];
   return rows.map(rowToPersonalSignal);
@@ -4018,6 +4030,11 @@ function buildPersonalSignalsWhere(opts: ListPersonalSignalsOpts): { whereSql: s
   if (opts.since) { parts.push('AND occurred_at >= ?'); params.push(opts.since); }
   if (opts.until) { parts.push('AND occurred_at <= ?'); params.push(opts.until); }
   if (typeof opts.minSalience === 'number') { parts.push('AND salience >= ?'); params.push(opts.minSalience); }
+  if (opts.before) {
+    // (occurred_at, id) < cursor under DESC ordering.
+    parts.push('AND (occurred_at < ? OR (occurred_at = ? AND id < ?))');
+    params.push(opts.before.occurredAt, opts.before.occurredAt, opts.before.id);
+  }
   return { whereSql: parts.join(' '), params };
 }
 

@@ -245,9 +245,24 @@ build-openclaw-image: ## Build and push OpenClaw image to shared registry
 #
 # Long-term fix: ask the team admin to invite your Apple ID to Team DH9AJ6A38D.
 
-ios: ensure-env ## Build frontend, sync iOS, and open Xcode. Defaults to local docker APIs over LAN; DEV=1 connects to fly dev.
+ngrok: ## Expose local APIs (:3000) over public ngrok tunnel for mobile dev. Requires `ngrok` on PATH.
+	@command -v ngrok >/dev/null 2>&1 || { echo "ngrok not found. brew install ngrok or download from https://ngrok.com/download"; exit 1; }
+	@echo "Starting ngrok → http://localhost:3000"
+	@echo "On the phone: paste the printed https URL into Settings → API Base URL."
+	@echo "Press Ctrl+C to stop."
+	@ngrok http 3000
+
+ios: ensure-env ## Build frontend, sync iOS, and open Xcode. Backend selection (priority order): NGROK=<url> | DEV=1 (fly dev) | PROD=1 (fly prod) | default = local LAN.
 	@set -a && . ./apis/.env && set +a && \
-	if [ "$(DEV)" = "1" ]; then \
+	if [ -n "$(NGROK)" ]; then \
+		echo "Using ngrok tunnel at $(NGROK)"; \
+		VITE_API_BASE_URL="$(NGROK)"; \
+	elif [ "$(PROD)" = "1" ]; then \
+		PROD_URL=$$(npx -y dotenvx get VITE_API_BASE_URL -f apis/.env.production 2>/dev/null); \
+		if [ -z "$$PROD_URL" ]; then echo "Could not read VITE_API_BASE_URL from apis/.env.production"; exit 1; fi; \
+		echo "Using fly prod APIs at $$PROD_URL"; \
+		VITE_API_BASE_URL="$$PROD_URL"; \
+	elif [ "$(DEV)" = "1" ]; then \
 		echo "Using fly dev APIs at $$VITE_API_BASE_URL"; \
 	else \
 		LAN_IP=$$(ipconfig getifaddr en0); \
@@ -257,7 +272,7 @@ ios: ensure-env ## Build frontend, sync iOS, and open Xcode. Defaults to local d
 		VITE_API_BASE_URL="http://$$LAN_IP:3000"; \
 	fi; \
 	cd proactive-ai-frontend && \
-		VITE_CAPACITOR=1 npx vite build && \
+		VITE_CAPACITOR=1 VITE_API_BASE_URL="$$VITE_API_BASE_URL" npx vite build && \
 		npx cap sync ios && \
 		npx cap open ios
 	@echo ""

@@ -23,12 +23,27 @@ declare global {
   }
 }
 
+const IS_PRODUCTION = (process.env.NODE_ENV ?? '').toLowerCase() === 'production';
+
+// Dev shortcut: when not in production and no Bearer token is provided,
+// route the request through a single fixed local user. Mobile/local web
+// sessions that do provide a Supabase token still resolve to the real user,
+// so device registration and ingest test the same ownership path as prod.
+//
+// Production paths still require a real Supabase JWT — the prod env never
+// sets NODE_ENV=development, so this branch can't trigger there.
+const DEV_USER = {
+  // Stable UUID v4 — `users.supabase_user_id` is UUID type, so we pin one.
+  userId: '00000000-0000-4000-8000-000000000001',
+  email: 'dev@local.test',
+  name: 'dev',
+};
 const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? '';
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
   ?? process.env.VITE_SUPABASE_PUBLISHABLE_KEY
   ?? '';
 
-if (!SUPABASE_URL || !SUPABASE_KEY) {
+if (IS_PRODUCTION && (!SUPABASE_URL || !SUPABASE_KEY)) {
   console.warn('[proactive-auth] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY / VITE_SUPABASE_PUBLISHABLE_KEY — auth will fail');
 }
 
@@ -134,6 +149,28 @@ const sendAuthError = (
   res.status(401).json({ error: message, code });
 };
 
+async function applyDevFallback(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+  deps: ProactiveAuthDeps,
+): Promise<void> {
+  try {
+    const user = await deps.upsertUser({
+      userId: DEV_USER.userId,
+      email: DEV_USER.email,
+      name: DEV_USER.name,
+      authProvider: 'dev',
+    });
+    req.proactiveAuth = { userId: DEV_USER.userId, user };
+    deps.setLogContextIdentity(DEV_USER.userId, user.display_name ?? user.email ?? DEV_USER.email);
+    next();
+  } catch (err) {
+    console.error('[proactive-auth] dev user upsert failed:', err);
+    res.status(500).json({ error: 'Dev auth bootstrap failed', code: 'DEV_AUTH_FAILED' });
+  }
+}
+
 export interface ProactiveAuthDeps {
   /** Verifies a Bearer token and returns the Supabase user; throws TokenVerifyError on auth failure. */
   verifyToken: (token: string) => Promise<SupabaseUser>;
@@ -146,6 +183,8 @@ export interface ProactiveAuthDeps {
     userId: number | string | null | undefined,
     username?: string | null,
   ) => void;
+  /** Allows local development requests with no Bearer token to use DEV_USER. */
+  allowDevFallback?: boolean;
 }
 
 const defaultCache = createTokenCache();
@@ -155,6 +194,7 @@ const defaultDeps: ProactiveAuthDeps = {
   cache: defaultCache,
   upsertUser: defaultUpsertUser,
   setLogContextIdentity: defaultSetLogContextIdentity,
+  allowDevFallback: false,
 };
 
 /**
@@ -169,6 +209,10 @@ export function createRequireProactiveAuth(
   return async function requireProactiveAuth(req, res, next) {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
+      if (deps.allowDevFallback && !IS_PRODUCTION) {
+        await applyDevFallback(req, res, next, deps);
+        return;
+      }
       sendAuthError(res, 'TOKEN_MISSING', 'Missing authorization token');
       return;
     }
@@ -211,4 +255,10 @@ export function createRequireProactiveAuth(
   };
 }
 
-export const requireProactiveAuth = createRequireProactiveAuth();
+/**
+ * In dev: use a real Supabase JWT when present; otherwise synthesize a fixed user.
+ * In prod: require a valid Supabase JWT in Authorization header.
+ */
+export const requireProactiveAuth = createRequireProactiveAuth({
+  allowDevFallback: !IS_PRODUCTION,
+});

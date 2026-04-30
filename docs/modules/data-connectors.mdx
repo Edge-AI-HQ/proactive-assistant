@@ -31,8 +31,8 @@ flowchart LR
   SyncH --> PS
   SyncH --> Evo
   SyncH --> Cursors
-  Mobile["Mobile app"] --> MobileProxy["/api/mobile/*"]
-  MobileProxy --> MobileRoute["/mobile/items/ingest"]
+  Mobile["Mobile app"] --> MobileProxy["/api/proactive/devices/ingest"]
+  MobileProxy --> MobileRoute["/devices/ingest"]
   MobileRoute --> PS
   MobileRoute --> Raw
 ```
@@ -49,8 +49,8 @@ flowchart LR
 - `tasks/reconciler.ts`：周期扫 ACTIVE accounts，给没有 init task 的账号补一个。
 - `tasks/connector-sync-enqueuer.ts`：周期扫 ACTIVE accounts；当 init 已 succeeded 且当前 window 还没 sync 过时入队 `connector.sync`。
 - `user_devices` 注册、token 轮换、撤销和校验。
-- `/api/mobile/*` 到用户容器内 `/proactive-ai/api/mobile/*` 的代理。
-- `/mobile/items/ingest` 写入 `personal_signals` 和 raw snapshot 表。
+- `/api/proactive/devices/ingest` 到用户容器内 `/proactive-ai/api/devices/ingest` 的代理；`/api/mobile/*` 只作为旧客户端兼容入口。
+- `/devices/ingest` 写入 `personal_signals` 和 raw snapshot 表，并返回 item-level `results[]` 给端侧确认哪些 item 已入库或已存在。
 
 不包含：
 
@@ -66,7 +66,7 @@ flowchart LR
 | Composio (`connector.init`) | ACTIVE 后台首次拉一批数据 | `tasks/handlers/connector-init.ts`、`tasks/reconciler.ts` | 各 toolkit 自己的 raw 表 + `personal_signals` + `evolution_runs(trigger_kind='on_event')` |
 | Composio (`connector.sync`) | 周期增量拉取，按 cursor 续游 | `tasks/handlers/connector-sync.ts`、`tasks/connector-sync-enqueuer.ts` | 同上 raw / signals / evolution_runs；额外 upsert `connector_sync_cursors` |
 | Device registry | 给 web/iOS/Android 设备发 token，用于后续 mobile sync | `apis/src/domain/devices/index.ts`、`proactive_routes.ts` | APIs Postgres `user_devices` |
-| Mobile ingest | 接收端侧整理后的高价值 item | `mobile_proxy.ts`、`routes/mobile.ts` | `personal_signals`；snapshot fan-out 到 `raw.db.device_*_snapshot` |
+| Mobile ingest | 接收端侧整理后的高价值 item | `mobile_proxy.ts`、`routes/devices.ts` | `personal_signals`；snapshot fan-out 到 `raw.db.device_*_snapshot` |
 
 ## 当前支持的 Composio toolkit（11 个）
 
@@ -185,9 +185,9 @@ sequenceDiagram
   FE->>APIs: POST /api/proactive/devices/register
   APIs->>DB: bcrypt hash device token
   APIs-->>FE: plaintext token returned once
-  FE->>APIs: POST /api/mobile/items/ingest + X-Device-*
+  FE->>APIs: POST /api/proactive/devices/ingest + X-Device-*
   APIs->>DB: validate token
-  APIs->>OC: proxy to /proactive-ai/api/mobile/items/ingest
+  APIs->>OC: proxy to /proactive-ai/api/devices/ingest
   OC->>OC: write personal_signals + raw.db snapshots
 ```
 
@@ -202,7 +202,7 @@ sequenceDiagram
 - 每个 raw 表都带 `dedupe_key UNIQUE` + reference 三元组（`reference_count` / `last_referenced_at` / `referenced_by_runs`）。
 - Device token 只在注册/轮换时明文返回一次，服务端只保存 bcrypt hash。
 - mobile proxy 默认非生产可用；生产需显式 `MOBILE_SYNC_PROXY_ENABLED=1`。
-- `/mobile/items/ingest` 是当前唯一 mobile 写入入口；旧 `/mobile/items`、`/mobile/items/claim`、`/mobile/items/commit` 已返回 `410 Gone`。
+- `/devices/ingest` 是当前 mobile 写入入口；`/api/mobile/items/ingest` 只做兼容重写到新路由。旧 `/mobile/items`、`/mobile/items/claim`、`/mobile/items/commit` 已返回 `410 Gone`。
 
 ## 开发入口
 
@@ -216,7 +216,7 @@ sequenceDiagram
 | Reconciler / dreaming-enqueuer / sync-enqueuer 周期 | `tasks/reconciler.ts`、`tasks/dreaming-enqueuer.ts`、`tasks/connector-sync-enqueuer.ts`、`index.ts` 启动接线 |
 | internal `pin tasks` CLI / `/tasks` HTTP | `cli/tasks.ts`、`routes/tasks.ts` |
 | Device 注册和 token | `apis/src/domain/devices/index.ts`、`apis/src/controller/proactive_routes.ts` |
-| Mobile proxy / ingest | `apis/src/domain/proactive/mobile_proxy.ts`、`pinai-openclaw/plugins/proactive-ai/routes/mobile.ts` |
+| Mobile proxy / ingest | `apis/src/domain/proactive/mobile_proxy.ts`、`pinai-openclaw/plugins/proactive-ai/routes/devices.ts` |
 | raw snapshot 表 | `pinai-openclaw/plugins/proactive-ai/raw-db.ts` |
 
 ## 验证方式

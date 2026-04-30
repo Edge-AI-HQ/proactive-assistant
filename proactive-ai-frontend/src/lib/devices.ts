@@ -11,7 +11,7 @@
  */
 import { Capacitor } from "@capacitor/core";
 import { proactiveFetch } from "./api";
-import { isNative } from "./platform";
+import { API_BASE, isNative } from "./platform";
 
 const DEVICE_ID_KEY = "pin.deviceId";
 const DEVICE_TOKEN_KEY = "pin.deviceToken";
@@ -130,4 +130,86 @@ export function withDeviceHeaders(
 
 export function clearDeviceCredentials(): void {
   clearStored();
+}
+
+// ── Ingest signals ───────────────────────────────────────────────────────
+
+/**
+ * One PersonalSignal in the wire format the server expects.
+ * `id` and `occurred_at` will be filled in if the caller doesn't supply
+ * them — most code paths just want to push a kind + summary and move on.
+ */
+export interface PersonalSignalInput {
+  id?: string;
+  source?: string;            // defaults to "device:<creds.deviceId>"
+  kind: string;
+  title: string;
+  summary: string;
+  payload?: Record<string, unknown>;
+  occurred_at?: string;       // ISO 8601, defaults to now()
+  available_at?: string;
+  expires_at?: string;
+  salience?: number;
+  confidence?: number;
+  dedupe_key?: string;
+}
+
+export interface IngestResult {
+  ok: boolean;
+  accepted: number;
+  inserted: number;
+  ignored: number;
+}
+
+/**
+ * Push a batch of PersonalSignals from this client up to the user's
+ * OpenClaw container. Auth is the X-Device-Id + X-Device-Token PSK we
+ * got back from /devices/register; the token never leaves the device.
+ *
+ * Caller-friendly: missing `id`s are auto-filled (UUID), missing
+ * `source` defaults to "device:<deviceId>", missing `occurred_at`
+ * defaults to now. The wire shape is the standard PersonalSignal
+ * envelope (top-level array).
+ */
+export async function ingestSignals(
+  creds: DeviceCredentials,
+  items: PersonalSignalInput[],
+): Promise<IngestResult> {
+  if (items.length === 0) {
+    return { ok: true, accepted: 0, inserted: 0, ignored: 0 };
+  }
+  const now = new Date().toISOString();
+  const source = `device:${creds.deviceId}`;
+  const wire = items.map((it) => ({
+    id: it.id ?? generateDeviceId(), // UUID-ish; collision is fine, server dedupe_key wins
+    source: it.source ?? source,
+    kind: it.kind,
+    title: it.title,
+    summary: it.summary,
+    payload: it.payload ?? {},
+    occurred_at: it.occurred_at ?? now,
+    ...(it.available_at ? { available_at: it.available_at } : {}),
+    ...(it.expires_at ? { expires_at: it.expires_at } : {}),
+    ...(typeof it.salience === "number" ? { salience: it.salience } : {}),
+    ...(typeof it.confidence === "number" ? { confidence: it.confidence } : {}),
+    ...(it.dedupe_key ? { dedupe_key: it.dedupe_key } : {}),
+  }));
+
+  const res = await fetch(`${API_BASE}/api/proactive/devices/ingest`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Device-Id": creds.deviceId,
+      "X-Device-Token": creds.deviceToken,
+    },
+    body: JSON.stringify(wire),
+  });
+  if (!res.ok) {
+    if (res.status === 401) {
+      // Stale token — drop the cache so next ensureDevice() re-registers.
+      clearStored();
+    }
+    throw new Error(`/devices/ingest failed: ${res.status} ${await res.text().catch(() => "")}`);
+  }
+  return res.json();
 }

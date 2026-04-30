@@ -87,7 +87,8 @@ export interface PersonalSignal {
 }
 
 export interface SignalListFilter {
-  status?: PersonalSignalStatus;
+  /** 'all' bypasses the server-side status filter (timeline view). */
+  status?: PersonalSignalStatus | "all";
   kind?: string;
   source?: string;
   deviceId?: string;
@@ -96,7 +97,21 @@ export interface SignalListFilter {
   minSalience?: number;
   limit?: number;
   offset?: number;
+  /**
+   * Keyset cursor returned in `next_cursor`. Prefer this over `offset` for
+   * timelines — it stays O(limit) regardless of how many pages back you go.
+   */
+  before?: string;
   pruneExpired?: boolean;
+}
+
+export interface SignalListResponse {
+  ok: boolean;
+  signals: PersonalSignal[];
+  /** -1 when paginating by cursor (server skips the COUNT). */
+  total: number;
+  next_cursor: string | null;
+  has_more: boolean;
 }
 
 export interface ProfileInterest {
@@ -236,6 +251,118 @@ export async function fetchContainerStatus(): Promise<{
   const res = await proactiveFetch("/api/proactive/container/status");
   if (!res.ok) throw new Error(`/container/status failed: ${await readErrorMessage(res)}`);
   return res.json();
+}
+
+// ── User devices (multi-device registry) ──
+
+export type UserDevicePlatform =
+  | "ios" | "android" | "web"
+  | "wearable" | "sensor" | "embedded";
+
+export interface UserDevice {
+  device_id: string;
+  platform: UserDevicePlatform;
+  display_name: string | null;
+  app_version: string | null;
+  model: string | null;
+  registered_at: string;
+  last_seen_at: string | null;
+  status: "active" | "revoked";
+  metadata: Record<string, unknown>;
+}
+
+export interface RegisterDeviceInput {
+  deviceId: string;
+  platform: UserDevicePlatform;
+  displayName?: string | null;
+  appVersion?: string | null;
+  model?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export async function listUserDevices(): Promise<UserDevice[]> {
+  const res = await proactiveFetch("/api/proactive/devices");
+  if (!res.ok) throw new Error(`/devices list failed: ${await readErrorMessage(res)}`);
+  const data = (await res.json()) as { devices?: UserDevice[] };
+  return Array.isArray(data.devices) ? data.devices : [];
+}
+
+export async function registerUserDevice(
+  input: RegisterDeviceInput,
+): Promise<{ device: UserDevice; deviceToken: string }> {
+  const res = await proactiveFetch("/api/proactive/devices/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(`/devices/register failed: ${await readErrorMessage(res)}`);
+  const data = (await res.json()) as {
+    device: UserDevice;
+    device_token?: string;
+    deviceToken?: string;
+  };
+  const token = data.device_token ?? data.deviceToken ?? "";
+  return { device: data.device, deviceToken: token };
+}
+
+export async function revokeUserDevice(deviceId: string): Promise<void> {
+  const res = await proactiveFetch("/api/proactive/devices/revoke", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ deviceId }),
+  });
+  if (!res.ok) throw new Error(`/devices/revoke failed: ${await readErrorMessage(res)}`);
+}
+
+// ── Pair Code (RFC 8628 simplified) ──
+
+export interface PairCodeClaimResult {
+  device_id: string;
+  display_name: string;
+  device_token: string;
+}
+
+/**
+ * The Web user enters the 6-char code shown on the device, optionally with
+ * a friendly display_name + model. On success the pairing_codes row flips
+ * to 'claimed', a user_devices row is created for this user, and a
+ * one-shot token is stashed for the device's next poll.
+ */
+export async function claimPairCode(
+  code: string,
+  displayName?: string,
+  model?: string,
+): Promise<PairCodeClaimResult> {
+  const trimmed = code.trim().toUpperCase();
+  const res = await proactiveFetch("/api/proactive/devices/pair-code/claim", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      code: trimmed,
+      ...(displayName ? { displayName } : {}),
+      ...(model ? { model } : {}),
+    }),
+  });
+  if (!res.ok) {
+    // Surface the domain error code so the UI can render specific copy
+    // ("code expired", "already claimed", etc.) instead of a generic message.
+    let detail: { error?: string; code?: string } = {};
+    try { detail = await res.json(); } catch { /* keep empty */ }
+    const e = new Error(detail.error ?? `pair-code claim failed: ${res.status}`) as Error & { domainCode?: string; status?: number };
+    e.domainCode = detail.code;
+    e.status = res.status;
+    throw e;
+  }
+  return res.json();
+}
+
+/**
+ * Build a URL to fetch a device-uploaded media blob through the APIs proxy.
+ * The container exposes GET /devices/media/<rel-path>; the path stored on
+ * personal_signals.payload.file_path is exactly the rel-path we need.
+ */
+export function deviceMediaUrl(filePath: string): string {
+  return `${API_BASE}/api/proxy/devices/media/${filePath}`;
 }
 
 // ── Account deletion ──
@@ -434,7 +561,7 @@ export async function fetchProfileSnapshot(
 export async function fetchSignals(
   filter?: SignalListFilter,
   signal?: AbortSignal,
-): Promise<{ ok: boolean; signals: PersonalSignal[]; total: number }> {
+): Promise<SignalListResponse> {
   const qs = new URLSearchParams();
   if (filter?.status) qs.set("status", filter.status);
   if (filter?.kind) qs.set("kind", filter.kind);
@@ -445,11 +572,19 @@ export async function fetchSignals(
   if (typeof filter?.minSalience === "number") qs.set("minSalience", String(filter.minSalience));
   if (filter?.limit) qs.set("limit", String(filter.limit));
   if (typeof filter?.offset === "number") qs.set("offset", String(filter.offset));
+  if (filter?.before) qs.set("before", filter.before);
   if (filter?.pruneExpired) qs.set("pruneExpired", "1");
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   const res = await proxyFetch(`/signals${suffix}`, { signal });
   if (!res.ok) throw new Error(`/signals failed: ${await readErrorMessage(res)}`);
-  return res.json();
+  const data = (await res.json()) as Partial<SignalListResponse>;
+  return {
+    ok: data.ok ?? false,
+    signals: Array.isArray(data.signals) ? data.signals : [],
+    total: typeof data.total === "number" ? data.total : -1,
+    next_cursor: typeof data.next_cursor === "string" ? data.next_cursor : null,
+    has_more: data.has_more ?? false,
+  };
 }
 
 export interface RawListFilter {
