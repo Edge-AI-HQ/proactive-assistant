@@ -28,6 +28,7 @@ import {
   fetchRawDeviceContacts,
   fetchRawGcal,
   fetchRawGmail,
+  fetchRawTable,
   fetchMemories,
   fetchProfileSnapshot,
   fetchSignals,
@@ -39,6 +40,7 @@ import {
   type Memory,
   type PersonalSignal,
   type ProfileSnapshot,
+  type RawTableRow,
 } from "@/lib/api";
 import { basketMeta } from "@/lib/basket-meta";
 import type { ComposioState } from "@/hooks/useComposio";
@@ -50,9 +52,14 @@ import type { ComposioState } from "@/hooks/useComposio";
 type VisualStatus = "Normal" | "Alert" | "Watch";
 type ProfileGroupKey = "facts" | "preferences" | "constraints" | "metadata";
 type DataPanel = "mirror" | "memory" | "signals" | "raw";
-type RawPanel = "gmail" | "gcal" | "apps" | "contacts";
+/** RawPanel is the source slug. Specialized panels keep their friendly
+ * names ('gmail' / 'gcal' / 'apps' / 'contacts'); generic panels use the
+ * raw.db table name (e.g. 'spotify_recent_tracks'). */
+type RawPanel = string;
 type SectionId = DataPanel | "goals";
 type RawSourceKind = "connector" | "device";
+
+const SPECIALIZED_RAW_PANELS = new Set(["gmail", "gcal", "apps", "contacts"]);
 
 interface GoalVisualMeta {
   image: string;
@@ -246,16 +253,61 @@ const EMPTY_RAW_PREVIEW: RawPreview = {
   contactsTotal: 0,
 };
 
+/**
+ * Every raw source the Profile workbench can display. Specialized entries
+ * (no `table` field) flow through dedicated fetchers + custom renderers.
+ * Generic entries (with `table` field) flow through `/raw/<table>` and
+ * the generic row renderer below — added per Phase D round 4/5 toolkit.
+ *
+ * The dropdown filter rule:
+ *   - device sources show when count > 0
+ *   - connector sources show when ANY of their connectorToolkits is ACTIVE
+ * Sources that don't match are hidden so the dropdown stays short.
+ */
 const RAW_SOURCE_CONFIG: Array<{
   id: RawPanel;
   label: string;
   kind: RawSourceKind;
   connectorToolkits?: string[];
+  /** Raw.db table name. When set, this entry is fetched via the generic
+   * /raw/<table> endpoint and rendered with the generic row component. */
+  table?: string;
 }> = [
+  // ── Specialized ──
   { id: "gmail", label: "Gmail", kind: "connector", connectorToolkits: ["gmail"] },
   { id: "gcal", label: "Calendar", kind: "connector", connectorToolkits: ["googlecalendar"] },
   { id: "apps", label: "Device Apps", kind: "device" },
   { id: "contacts", label: "Contacts", kind: "device" },
+  // ── Generic (Phase D rounds 1-5) ──
+  { id: "slack_messages", label: "Slack messages", kind: "connector", connectorToolkits: ["slack"], table: "slack_messages" },
+  { id: "notion_pages", label: "Notion pages", kind: "connector", connectorToolkits: ["notion"], table: "notion_pages" },
+  { id: "gdrive_files", label: "Drive files", kind: "connector", connectorToolkits: ["googledrive"], table: "gdrive_files" },
+  { id: "github_issues", label: "GitHub issues", kind: "connector", connectorToolkits: ["github"], table: "github_issues" },
+  { id: "outlook_messages", label: "Outlook", kind: "connector", connectorToolkits: ["outlook"], table: "outlook_messages" },
+  { id: "gdocs_documents", label: "Google Docs", kind: "connector", connectorToolkits: ["googledocs"], table: "gdocs_documents" },
+  { id: "gsheets_spreadsheets", label: "Google Sheets", kind: "connector", connectorToolkits: ["googlesheets"], table: "gsheets_spreadsheets" },
+  { id: "stripe_invoices", label: "Stripe invoices", kind: "connector", connectorToolkits: ["stripe"], table: "stripe_invoices" },
+  { id: "discord_guilds", label: "Discord servers", kind: "connector", connectorToolkits: ["discord"], table: "discord_guilds" },
+  { id: "spotify_recent_tracks", label: "Spotify history", kind: "connector", connectorToolkits: ["spotify"], table: "spotify_recent_tracks" },
+  { id: "strava_activities", label: "Strava activities", kind: "connector", connectorToolkits: ["strava"], table: "strava_activities" },
+  { id: "todoist_tasks", label: "Todoist tasks", kind: "connector", connectorToolkits: ["todoist"], table: "todoist_tasks" },
+  { id: "youtube_subscriptions", label: "YouTube subs", kind: "connector", connectorToolkits: ["youtube"], table: "youtube_subscriptions" },
+  { id: "trello_boards", label: "Trello boards", kind: "connector", connectorToolkits: ["trello"], table: "trello_boards" },
+  { id: "jira_projects", label: "Jira projects", kind: "connector", connectorToolkits: ["jira"], table: "jira_projects" },
+  { id: "twitter_bookmarks", label: "Twitter bookmarks", kind: "connector", connectorToolkits: ["twitter"], table: "twitter_bookmarks" },
+  { id: "calendly_events", label: "Calendly events", kind: "connector", connectorToolkits: ["calendly"], table: "calendly_events" },
+  { id: "linkedin_profile", label: "LinkedIn profile", kind: "connector", connectorToolkits: ["linkedin"], table: "linkedin_profile" },
+  { id: "linkedin_organizations", label: "LinkedIn orgs", kind: "connector", connectorToolkits: ["linkedin"], table: "linkedin_organizations" },
+  { id: "figma_user", label: "Figma user", kind: "connector", connectorToolkits: ["figma"], table: "figma_user" },
+  { id: "zoom_user", label: "Zoom user", kind: "connector", connectorToolkits: ["zoom"], table: "zoom_user" },
+  { id: "zoom_marketplace_apps", label: "Zoom apps", kind: "connector", connectorToolkits: ["zoom"], table: "zoom_marketplace_apps" },
+  { id: "dropbox_account", label: "Dropbox account", kind: "connector", connectorToolkits: ["dropbox"], table: "dropbox_account" },
+  { id: "dropbox_files", label: "Dropbox files", kind: "connector", connectorToolkits: ["dropbox"], table: "dropbox_files" },
+  { id: "asana_workspaces", label: "Asana workspaces", kind: "connector", connectorToolkits: ["asana"], table: "asana_workspaces" },
+  { id: "asana_tasks", label: "Asana tasks", kind: "connector", connectorToolkits: ["asana"], table: "asana_tasks" },
+  { id: "hubspot_contacts", label: "HubSpot contacts", kind: "connector", connectorToolkits: ["hubspot"], table: "hubspot_contacts" },
+  { id: "clickup_user", label: "ClickUp user", kind: "connector", connectorToolkits: ["clickup"], table: "clickup_user" },
+  { id: "clickup_workspaces", label: "ClickUp workspaces", kind: "connector", connectorToolkits: ["clickup"], table: "clickup_workspaces" },
 ];
 
 const GOAL_ICONS: Record<string, { icon: LucideIcon; label: string }> = {
@@ -329,11 +381,16 @@ function hasObjectKeys(value: Record<string, unknown> | null | undefined): boole
   return !!value && Object.keys(value).length > 0;
 }
 
-function rawCount(raw: RawPreview, panel: RawPanel): number {
+function rawCount(
+  raw: RawPreview,
+  generic: Record<string, { rows: RawTableRow[]; total: number }>,
+  panel: RawPanel,
+): number {
   if (panel === "gmail") return raw.gmailTotal;
   if (panel === "gcal") return raw.gcalTotal;
   if (panel === "apps") return raw.appsTotal;
-  return raw.contactsTotal;
+  if (panel === "contacts") return raw.contactsTotal;
+  return generic[panel]?.total ?? 0;
 }
 
 function normalizeToolkit(toolkit: string): string {
@@ -342,6 +399,7 @@ function normalizeToolkit(toolkit: string): string {
 
 function buildRawSourceOptions(
   raw: RawPreview,
+  generic: Record<string, { rows: RawTableRow[]; total: number }>,
   connections: ComposioState["connections"],
 ): RawSourceOption[] {
   const connectedToolkits = new Set(
@@ -352,7 +410,7 @@ function buildRawSourceOptions(
 
   return RAW_SOURCE_CONFIG
     .map((source) => {
-      const count = rawCount(raw, source.id);
+      const count = rawCount(raw, generic, source.id);
       const connected =
         source.kind === "device"
           ? count > 0
@@ -639,6 +697,78 @@ function SignalItem({ signal }: { signal: PersonalSignal }) {
   );
 }
 
+/** Pick a reasonable display title from a generic raw row by walking
+ * common name-like columns. Returns the row's natural-id column as a
+ * last-resort label so we never show empty strings. */
+function pickGenericTitle(row: RawTableRow): string {
+  const candidates = [
+    "name", "title", "subject", "track_name", "content", "channel_title",
+    "display_name", "headline", "username", "email", "path_display", "project_key",
+  ];
+  for (const key of candidates) {
+    const v = row[key];
+    if (typeof v === "string" && v.trim().length > 0) return v;
+  }
+  // Fall back to the natural id columns used by various toolkits
+  const idKeys = ["track_id", "activity_id", "task_id", "tweet_id", "event_uri", "file_id", "id"];
+  for (const key of idKeys) {
+    const v = row[key];
+    if (typeof v === "string" && v.trim().length > 0) return v;
+  }
+  return "(unnamed row)";
+}
+
+function pickGenericSubtitle(row: RawTableRow): string | null {
+  const candidates = [
+    "snippet", "description", "notes", "preview", "body_preview",
+    "company", "channel_description", "publisher", "album_name", "context_type",
+    "lifecycle_stage", "role", "status",
+  ];
+  for (const key of candidates) {
+    const v = row[key];
+    if (typeof v === "string" && v.trim().length > 0) return v;
+  }
+  return null;
+}
+
+function pickGenericTime(row: RawTableRow): string | null {
+  const candidates = [
+    "occurred_at", "modified_at_remote", "last_activity_at", "modified_time",
+    "played_at", "start_date", "start_at", "subscribed_at", "created_at_remote",
+    "ingested_at",
+  ];
+  for (const key of candidates) {
+    const v = row[key];
+    if (typeof v === "string" && v.trim().length > 0) return v;
+  }
+  return null;
+}
+
+function GenericRawRowItem({ source, row }: { source: string; row: RawTableRow }) {
+  const title = pickGenericTitle(row);
+  const subtitle = pickGenericSubtitle(row);
+  const time = pickGenericTime(row);
+  // Strip noisy columns from the JSON detail dump so the open block is
+  // useful at a glance. We omit the ones already shown above + the
+  // reference-tracking trio that's pure plumbing.
+  const HIDDEN_KEYS = new Set([
+    "id", "ingested_at", "occurred_at", "dedupe_key",
+    "reference_count", "last_referenced_at", "referenced_by_runs",
+  ]);
+  const payload = Object.fromEntries(
+    Object.entries(row).filter(([k]) => !HIDDEN_KEYS.has(k)),
+  );
+  return (
+    <RawRecordItem
+      source={source}
+      title={title}
+      subtitle={subtitle}
+      time={time}
+      payload={payload}
+    />
+  );
+}
+
 function RawRecordItem({
   source,
   title,
@@ -817,11 +947,15 @@ function SignalsPanel({
 
 function RawPanelContent({
   raw,
+  generic,
+  genericLoading,
   sources,
   activeRawPanel,
   onChangeRawPanel,
 }: {
   raw: RawPreview;
+  generic: Record<string, { rows: RawTableRow[]; total: number }>;
+  genericLoading: Set<string>;
   sources: RawSourceOption[];
   activeRawPanel: RawPanel;
   onChangeRawPanel: (panel: RawPanel) => void;
@@ -967,6 +1101,41 @@ function RawPanelContent({
             ))
           )
         )}
+        {activeSource && !SPECIALIZED_RAW_PANELS.has(activeSource.id) && (() => {
+          const cached = generic[activeSource.id];
+          const isLoading = genericLoading.has(activeSource.id);
+          if (!cached && isLoading) {
+            return (
+              <div className="flex items-center justify-center gap-2 py-8 text-foreground/45">
+                <Loader2 size={14} className="animate-spin" />
+                <span className="text-xs">Loading {activeSource.label}…</span>
+              </div>
+            );
+          }
+          if (!cached) {
+            return (
+              <EmptyState
+                title="Not loaded yet"
+                description="Switching to this source will fetch its rows."
+              />
+            );
+          }
+          if (cached.rows.length === 0) {
+            return (
+              <EmptyState
+                title={`No ${activeSource.label} data`}
+                description="This connector is connected but no rows have been ingested yet. Reconciler usually catches up within ~10 minutes."
+              />
+            );
+          }
+          return cached.rows.map((row) => (
+            <GenericRawRowItem
+              key={String(row.id)}
+              source={activeSource.label}
+              row={row}
+            />
+          ));
+        })()}
       </div>
     </div>
   );
@@ -992,6 +1161,11 @@ export default function GoalsView({ composio }: GoalsViewProps) {
   const [signalLoadingMore, setSignalLoadingMore] = useState(false);
   const [topicMemories, setTopicMemories] = useState<Memory[]>([]);
   const [rawPreview, setRawPreview] = useState<RawPreview>(EMPTY_RAW_PREVIEW);
+  // Lazy cache for generic /raw/<table> data: keyed by panel slug. Populated
+  // when the user picks a panel from the dropdown so we don't fan out 22
+  // requests on every page load.
+  const [genericRaw, setGenericRaw] = useState<Record<string, { rows: RawTableRow[]; total: number }>>({});
+  const [genericLoading, setGenericLoading] = useState<Set<string>>(new Set());
   const [activePanel, setActivePanel] = useState<DataPanel>("memory");
   const [activeRawPanel, setActiveRawPanel] = useState<RawPanel>("apps");
   const [loading, setLoading] = useState(true);
@@ -1083,8 +1257,8 @@ export default function GoalsView({ composio }: GoalsViewProps) {
     [snapshot.goals],
   );
   const rawSources = useMemo(
-    () => buildRawSourceOptions(rawPreview, composio.connections),
-    [rawPreview, composio.connections],
+    () => buildRawSourceOptions(rawPreview, genericRaw, composio.connections),
+    [rawPreview, genericRaw, composio.connections],
   );
 
   useEffect(() => {
@@ -1094,6 +1268,38 @@ export default function GoalsView({ composio }: GoalsViewProps) {
       setActiveRawPanel(nextPanel);
     }
   }, [activeRawPanel, rawSources]);
+
+  // Lazy-fetch generic raw rows when user selects a non-specialized panel.
+  // Cache hits skip the fetch; in-flight requests are deduped via genericLoading.
+  useEffect(() => {
+    if (SPECIALIZED_RAW_PANELS.has(activeRawPanel)) return;
+    if (genericRaw[activeRawPanel]) return;
+    const cfg = RAW_SOURCE_CONFIG.find((s) => s.id === activeRawPanel);
+    if (!cfg?.table) return;
+    if (genericLoading.has(activeRawPanel)) return;
+    setGenericLoading((prev) => {
+      const next = new Set(prev);
+      next.add(activeRawPanel);
+      return next;
+    });
+    fetchRawTable(cfg.table, { limit: RAW_PREVIEW_LIMIT })
+      .then((res) => {
+        setGenericRaw((prev) => ({
+          ...prev,
+          [activeRawPanel]: { rows: res.rows, total: res.total },
+        }));
+      })
+      .catch((err) => {
+        console.warn(`[GoalsView] fetchRawTable ${cfg.table} failed:`, err);
+      })
+      .finally(() => {
+        setGenericLoading((prev) => {
+          const next = new Set(prev);
+          next.delete(activeRawPanel);
+          return next;
+        });
+      });
+  }, [activeRawPanel, genericRaw, genericLoading]);
   const scrollToSection = useCallback((sectionId: SectionId) => {
     if (sectionId !== "goals") {
       setActivePanel(sectionId);
@@ -1360,6 +1566,8 @@ export default function GoalsView({ composio }: GoalsViewProps) {
               {activePanel === "raw" && (
                 <RawPanelContent
                   raw={rawPreview}
+                  generic={genericRaw}
+                  genericLoading={genericLoading}
                   sources={rawSources}
                   activeRawPanel={activeRawPanel}
                   onChangeRawPanel={setActiveRawPanel}

@@ -743,6 +743,35 @@ export async function fetchRawDeviceContacts(
 }
 
 /**
+ * Generic raw-table fetcher. Backed by the `/raw/<table>` HTTP dispatcher,
+ * which whitelists table names server-side. The shape is identical for
+ * every table — `rows` is an array of free-form snake_case records (the
+ * raw row as stored in SQLite, including the `id`, `dedupe_key`, and
+ * timing columns). UI is expected to dig out display fields from each
+ * row generically rather than typing every toolkit individually here.
+ */
+export interface RawTableRow extends Record<string, unknown> {
+  id: string;
+  occurred_at?: string;
+  ingested_at?: string;
+}
+
+export async function fetchRawTable(
+  table: string,
+  filter?: RawListFilter,
+  signal?: AbortSignal,
+): Promise<{ ok: boolean; rows: RawTableRow[]; total: number; table: string }> {
+  const suffix = rawQuery({
+    since: filter?.since,
+    until: filter?.until,
+    limit: filter?.limit,
+  });
+  const res = await proxyFetch(`/raw/${encodeURIComponent(table)}${suffix}`, { signal });
+  if (!res.ok) throw new Error(`/raw/${table} failed: ${await readErrorMessage(res)}`);
+  return res.json();
+}
+
+/**
  * SSE stream from the container proxy.
  * Returns an async iterator of parsed JSON events.
  */

@@ -1,11 +1,20 @@
 /**
  * v3 raw.db read routes (no writes — connector / device adapters write directly).
  *
+ * Specialized routes (toolkit-specific filters):
  *   GET /raw/gmail            ?since / ?until / ?threadId / ?limit
  *   GET /raw/gcal             ?since / ?until / ?calendarId / ?limit
  *   GET /raw/device-apps      ?deviceId / ?snapshotId / ?latestSnapshotOnly=1 / ?since / ?until / ?limit
  *   GET /raw/device-contacts  ?deviceId / ?snapshotId / ?latestSnapshotOnly=1 / ?since / ?until / ?search / ?limit
  *   GET /raw/device-health    ?deviceId / ?observationType / ?metric / ?localDate / ?since / ?until / ?limit
+ *
+ * Generic dispatcher (any other registered raw table — see
+ * REFERENCE_TABLES in raw-db.ts):
+ *   GET /raw/<table_name>     ?since / ?until / ?limit
+ *
+ *   Examples: /raw/spotify_recent_tracks, /raw/strava_activities,
+ *   /raw/linkedin_organizations. Returns { ok, rows, total }. The table
+ *   name is whitelisted server-side; unknown names fall through to 404.
  *
  * See docs/plans/memory-architecture.mdx §三 (raw.db).
  */
@@ -99,6 +108,34 @@ export function handleRaw(): RouteHandler {
         const observations = raw.listDeviceHealthObservations(opts);
         const total = raw.countDeviceHealthObservations(opts);
         json(ctx.res, 200, { ok: true, observations, total });
+        return true;
+      }
+
+      // Generic /raw/<table_name> for any other registered raw table.
+      // Skips tables already handled above by their specialized routes
+      // so the dedicated handlers (with toolkit-specific filters like
+      // threadId / observationType) keep their custom behavior; everything
+      // else gets a simple since/until/limit-filtered list+count.
+      if (route.length > 1 && ctx.req.method === 'GET') {
+        const slug = route.slice(1);
+        // Reject paths with sub-segments — those should go to specialized handlers.
+        if (slug.includes('/')) return false;
+        const SPECIALIZED = new Set([
+          'gmail', 'gcal', 'device-apps', 'device-contacts', 'device-health',
+        ]);
+        if (SPECIALIZED.has(slug)) return false;
+        const known = new Set(raw.listRegisteredRawTables());
+        if (!known.has(slug)) return false;
+        const p = ctx.url.searchParams;
+        const limit = p.get('limit');
+        const opts = {
+          since: p.get('since') ?? undefined,
+          until: p.get('until') ?? undefined,
+          limit: limit !== null ? Number(limit) : undefined,
+        };
+        const rows = raw.listRawTable(slug, opts);
+        const total = raw.countRawTable(slug, opts);
+        json(ctx.res, 200, { ok: true, rows, total, table: slug });
         return true;
       }
     } catch (err) {
