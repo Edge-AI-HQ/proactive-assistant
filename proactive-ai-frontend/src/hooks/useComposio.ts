@@ -34,6 +34,12 @@ export interface ComposioState {
   waitForToolkit: (connectedAccountId: string) => Promise<{ connected: boolean; initTaskId?: string }>;
   cancelWait: () => void;
   isToolkitConnected: (toolkit: string) => boolean;
+  /** Trigger a fresh connector.init for an existing ACTIVE account.
+   * Bypasses the v1 idempotency key (key includes a timestamp) so the
+   * pipeline re-pulls 100 items, re-derives signals, and re-runs evolve.
+   * Existing raw / signal rows are NOT deleted — dedupe absorbs.
+   * Returns the new task id so the caller can poll progress. */
+  reconnectAccount: (toolkit: string, connectedAccountId: string) => Promise<{ ok: boolean; initTaskId?: string; error?: string }>;
 }
 
 export function useComposio(): ComposioState {
@@ -160,5 +166,23 @@ export function useComposio(): ComposioState {
     );
   }, [connections]);
 
-  return { keyStatus, connections, statusLoading, loadingConns, loadStatus, loadConnections, saveApiKey, connectToolkit, disconnectAccount, waitForToolkit, cancelWait, isToolkitConnected };
+  const reconnectAccount = useCallback(async (
+    toolkit: string,
+    connectedAccountId: string,
+  ): Promise<{ ok: boolean; initTaskId?: string; error?: string }> => {
+    try {
+      const res = await proxyPost("/composio/reconnect", { toolkit, connectedAccountId });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        return { ok: false, error: data.error?.message ?? data.error ?? `Reconnect failed (${res.status})` };
+      }
+      const data = await res.json();
+      const initTaskId = typeof data.initTaskId === "string" ? data.initTaskId : undefined;
+      return { ok: true, initTaskId };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }, []);
+
+  return { keyStatus, connections, statusLoading, loadingConns, loadStatus, loadConnections, saveApiKey, connectToolkit, disconnectAccount, waitForToolkit, cancelWait, isToolkitConnected, reconnectAccount };
 }

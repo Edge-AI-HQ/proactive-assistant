@@ -601,6 +601,7 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
             run={run}
             onGenerate={() => generate()}
             isRunning={isRunning}
+            composio={composio}
           />
           <button
             onClick={() => setMenuOpen(true)}

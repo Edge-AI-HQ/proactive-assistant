@@ -97,6 +97,41 @@ export async function maybeEnqueueConnectorInit(
   }
 }
 
+/**
+ * Enqueue a fresh connector.init that bypasses the v1 idempotency key —
+ * used by the debug "Reconnect" button. The new key includes a timestamp
+ * so it never collides with the original v1 task or another reconnect.
+ *
+ * Raw rows / signals dedupe naturally via dedupe_key (most rows are the
+ * same and get ignored on re-ingest); rows that are new since the last
+ * pull land as fresh entries, and the evolve agent runs again on whatever
+ * was inserted, giving the user a chance to surface fresh memory.
+ *
+ * No data is deleted. Caller is expected to be authenticated through the
+ * gateway — same surface as /composio/wait.
+ */
+export async function enqueueReconnect(
+  toolkit: string,
+  connectedAccountId: string,
+): Promise<string | null> {
+  if (!isBackgroundAutoLoopTasksEnabled()) return null;
+  if (!toolkit || !connectedAccountId) return null;
+  const limit = Number(process.env.CONNECTOR_INIT_DEFAULT_LIMIT ?? 100);
+  const ts = Date.now();
+  try {
+    const result = await db.enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: `connector.init:${toolkit}:${connectedAccountId}:reconnect:${ts}`,
+      payload: { toolkit, connectedAccountId, limit, reason: 'reconnect' },
+      priority: 40,  // slightly higher than reconciler-initiated (50) so user sees progress sooner
+      maxAttempts: 3,
+    });
+    return result.task.id;
+  } catch {
+    return null;
+  }
+}
+
 /** Read Composio API key: file takes priority over env var. */
 function getComposioApiKey(): { key: string; source: 'user' | 'env' } | null {
   try {
@@ -215,6 +250,32 @@ export function handleComposio(): RouteHandler {
         if (!id) { json(ctx.res, 400, { error: 'Missing connectedAccountId' }); return true; }
         await composioApi(apiKey, `/connected_accounts/${encodeURIComponent(id)}`, { method: 'DELETE' });
         json(ctx.res, 200, { ok: true });
+        return true;
+      }
+
+      if (route === '/reconnect' && ctx.req.method === 'POST') {
+        const connectedAccountId = String(body['connectedAccountId'] ?? '').trim();
+        const toolkitParam = String(body['toolkit'] ?? '').trim().toLowerCase();
+        if (!connectedAccountId) { json(ctx.res, 400, { error: 'Missing connectedAccountId' }); return true; }
+        // Resolve toolkit if not provided: ask Composio. Lets the frontend
+        // get away with sending only the accountId.
+        let toolkit = toolkitParam;
+        if (!toolkit) {
+          try {
+            const account = await composioApi(apiKey, `/connected_accounts/${encodeURIComponent(connectedAccountId)}`);
+            toolkit = String(account?.toolkit?.slug ?? account?.toolkit ?? '').trim().toLowerCase();
+          } catch (err) {
+            json(ctx.res, 404, { error: `Account not found: ${err instanceof Error ? err.message : String(err)}` });
+            return true;
+          }
+        }
+        if (!toolkit) { json(ctx.res, 400, { error: 'Could not resolve toolkit for account' }); return true; }
+        const initTaskId = await enqueueReconnect(toolkit, connectedAccountId);
+        if (!initTaskId) {
+          json(ctx.res, 503, { error: 'Background scheduler disabled or enqueue failed' });
+          return true;
+        }
+        json(ctx.res, 200, { ok: true, toolkit, connectedAccountId, initTaskId });
         return true;
       }
 

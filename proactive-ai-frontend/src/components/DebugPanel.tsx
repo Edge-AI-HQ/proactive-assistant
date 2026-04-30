@@ -7,24 +7,27 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Settings, Activity, Circle, Clock,
-  ExternalLink, X, Zap, Cpu, MessageSquare,
+  ExternalLink, X, Zap, Cpu, MessageSquare, RefreshCw, Plug, Loader2,
 } from "lucide-react";
 import { Browser } from "@capacitor/browser";
 import { getGatewayTicket, resetContainer, deleteAccount } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import { isNative, API_BASE } from "@/lib/platform";
 import { useModelSelection } from "@/hooks/useModelSelection";
+import { useInitTask } from "@/hooks/useInitTask";
 import MainChat from "./MainChat";
 import CrystallizePanel from "./CrystallizePanel";
 import SkillsPanel from "./SkillsPanel";
 import MemoriesPanel from "./MemoriesPanel";
 import type { HealthState, RunState, PipelinePhase } from "@/hooks/usePipeline";
+import type { ComposioState } from "@/hooks/useComposio";
 
 interface DebugPanelProps {
   health: HealthState;
   run: RunState;
   isRunning: boolean;
   onGenerate: () => void;
+  composio: ComposioState;
 }
 
 const PHASES: PipelinePhase[] = ["planning", "generating", "evaluating", "complete"];
@@ -98,7 +101,111 @@ function phaseStatus(phase: string, activePhase: string | null, status: string) 
   return "pending";
 }
 
-export default function DebugPanel({ health, run, isRunning, onGenerate }: DebugPanelProps) {
+/** Renders one connected account row with a Reconnect button.
+ *
+ * Reconnect = re-enqueue connector.init for this (toolkit, account) pair
+ * with a fresh idempotency key. Re-pulls 100 items, re-derives signals,
+ * and re-runs the evolve agent. Existing raw / signal rows are kept;
+ * dedupe_key absorbs duplicates so this is safe to spam.
+ *
+ * Uses useInitTask (read-only poll) to surface the resulting task's
+ * status inline. The chip auto-stops polling when the task hits a
+ * terminal state.
+ */
+function ConnectorReconnectRow({
+  toolkit,
+  identityLabel,
+  connectedAccountId,
+  onReconnect,
+}: {
+  toolkit: string;
+  identityLabel: string;
+  connectedAccountId: string;
+  onReconnect: (toolkit: string, accountId: string) => Promise<{ ok: boolean; initTaskId?: string; error?: string }>;
+}) {
+  const [taskId, setTaskId] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { task, terminal } = useInitTask(taskId);
+
+  const handleClick = useCallback(async () => {
+    setPending(true);
+    setError(null);
+    setTaskId(null);
+    try {
+      const result = await onReconnect(toolkit, connectedAccountId);
+      if (!result.ok) {
+        setError(result.error ?? "Reconnect failed");
+      } else if (result.initTaskId) {
+        setTaskId(result.initTaskId);
+      }
+    } finally {
+      setPending(false);
+    }
+  }, [onReconnect, toolkit, connectedAccountId]);
+
+  // Status chip text — terse, fits in the row's right edge.
+  let chipText: string | null = null;
+  let chipTone: "neutral" | "running" | "ok" | "fail" = "neutral";
+  if (error) { chipText = error; chipTone = "fail"; }
+  else if (pending) { chipText = "Enqueuing..."; chipTone = "running"; }
+  else if (task) {
+    if (task.status === "queued") { chipText = "Queued"; chipTone = "running"; }
+    else if (task.status === "running") {
+      const stage = (task.progress?.stage as string | undefined) ?? "running";
+      chipText = `Running · ${stage}`;
+      chipTone = "running";
+    }
+    else if (task.status === "succeeded") {
+      const memWritten = (task.result?.memoriesWritten as number | undefined) ?? 0;
+      const rawIns = (task.result?.rawInserted as number | undefined) ?? 0;
+      chipText = `Done · ${rawIns} raw, ${memWritten} mem`;
+      chipTone = "ok";
+    }
+    else if (task.status === "skipped") {
+      chipText = `Skipped: ${(task.result?.reason as string | undefined) ?? "—"}`;
+      chipTone = "neutral";
+    }
+    else { chipText = task.status; chipTone = "fail"; }
+  }
+
+  const chipClass = chipTone === "fail"
+    ? "bg-red-100 text-red-600"
+    : chipTone === "ok"
+      ? "bg-emerald-100 text-emerald-700"
+      : chipTone === "running"
+        ? "bg-amber-100 text-amber-700"
+        : "bg-foreground/10 text-foreground/60";
+  const isWorking = pending || (task && !terminal);
+
+  return (
+    <div className="flex items-center gap-2 py-1.5">
+      <div className="min-w-0 flex-1">
+        <div className="text-[11px] font-medium text-foreground/75 truncate">
+          {toolkit}
+          <span className="text-foreground/35 font-normal ml-1.5">{identityLabel}</span>
+        </div>
+        {chipText && (
+          <span className={`mt-0.5 inline-block rounded-full px-2 py-0.5 text-[10px] font-medium ${chipClass}`}>
+            {chipText}
+          </span>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={!!isWorking}
+        title="Re-pull 100 items + re-run evolve. Existing raw rows are preserved."
+        className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-foreground/15 bg-white/55 px-2.5 py-1.5 text-[11px] font-medium text-foreground/65 transition-colors hover:bg-white/85 disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        {isWorking ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} strokeWidth={1.6} />}
+        Reconnect
+      </button>
+    </div>
+  );
+}
+
+export default function DebugPanel({ health, run, isRunning, onGenerate, composio }: DebugPanelProps) {
   const [open, setOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [gatewayLoading, setGatewayLoading] = useState(false);
@@ -439,6 +546,53 @@ export default function DebugPanel({ health, run, isRunning, onGenerate }: Debug
                   {run.error && (
                     <div className="mt-2.5 rounded-lg bg-red-50 border border-red-200 px-3 py-2">
                       <p className="text-[11px] text-red-600 leading-snug">{run.error}</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Connectors — Reconnect button per ACTIVE account */}
+                <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-3.5">
+                  <div className="flex items-center gap-2 mb-2.5">
+                    <Plug size={14} strokeWidth={1.5} className="text-foreground/40" />
+                    <span className="text-xs font-medium text-foreground/50">Connectors</span>
+                    <span className="text-[10px] text-foreground/30 ml-auto tabular-nums">
+                      {composio.connections.filter((c) => c.status === "ACTIVE").length} active
+                    </span>
+                  </div>
+                  <p className="text-[10px] leading-relaxed text-foreground/40 mb-2">
+                    Reconnect re-pulls 100 items and re-runs evolve for that account. Existing raw rows are kept.
+                  </p>
+                  {composio.loadingConns && composio.connections.length === 0 ? (
+                    <p className="text-[11px] text-foreground/30 py-2">Loading connections…</p>
+                  ) : composio.connections.filter((c) => c.status === "ACTIVE").length === 0 ? (
+                    <p className="text-[11px] text-foreground/40 py-2">
+                      No active connections. Visit the Data Connections page to set one up.
+                    </p>
+                  ) : (
+                    <div className="divide-y divide-foreground/5">
+                      {composio.connections
+                        .filter((conn) => conn.status === "ACTIVE" && conn.connectedAccountId)
+                        .map((conn) => {
+                          const accountId = conn.connectedAccountId as string;
+                          const info = conn.userInfo ?? {};
+                          const pickIdentity = (...keys: string[]): string => {
+                            for (const key of keys) {
+                              const v = info[key];
+                              if (typeof v === "string" && v.trim()) return v;
+                            }
+                            return `…${accountId.slice(-6)}`;
+                          };
+                          const identity = pickIdentity("email", "username", "handle", "name", "display_name");
+                          return (
+                            <ConnectorReconnectRow
+                              key={accountId}
+                              toolkit={conn.toolkit}
+                              identityLabel={identity}
+                              connectedAccountId={accountId}
+                              onReconnect={composio.reconnectAccount}
+                            />
+                          );
+                        })}
                     </div>
                   )}
                 </div>

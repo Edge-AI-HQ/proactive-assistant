@@ -23,7 +23,7 @@ import {
   listBackgroundTasks,
   resetDbForTests,
 } from '../db.ts';
-import { maybeEnqueueConnectorInit } from './composio.ts';
+import { maybeEnqueueConnectorInit, enqueueReconnect } from './composio.ts';
 
 async function withTempHomeAndScheduler(
   opts: { scheduler: 'on' | 'off' | 'unset' },
@@ -147,5 +147,58 @@ test('maybeEnqueueConnectorInit: case-insensitive toolkit normalization', async 
     assert.equal(lower, upper);
     const lookup = await getBackgroundTaskByIdempotencyKey('connector.init:gmail:acc-z:v1');
     assert.ok(lookup);
+  });
+});
+
+test('enqueueReconnect: produces a distinct task with a fresh idempotency key', async () => {
+  // Reconnect bypasses the v1 key — every call creates a new task that
+  // re-runs init for the same (toolkit, account). Two reconnect calls in
+  // a row produce two separate tasks (timestamps differ) so the user can
+  // re-trigger if the first run fails.
+  await withTempHomeAndScheduler({ scheduler: 'on' }, async () => {
+    const initial = await maybeEnqueueConnectorInit('gmail', 'acc-r');
+    assert.ok(initial);
+
+    const r1 = await enqueueReconnect('gmail', 'acc-r');
+    assert.ok(r1);
+    assert.notEqual(r1, initial, 'reconnect should not collide with v1 init');
+
+    // Tiny gap to ensure a new ms in the timestamp suffix.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const r2 = await enqueueReconnect('gmail', 'acc-r');
+    assert.ok(r2);
+    assert.notEqual(r2, r1, 'a second reconnect should always make a new task');
+
+    const all = await listBackgroundTasks({ type: 'connector.init', limit: 10 });
+    assert.equal(all.length, 3);
+    const reconnectTasks = all.filter((t) => t.payload.reason === 'reconnect');
+    assert.equal(reconnectTasks.length, 2);
+    for (const t of reconnectTasks) {
+      assert.ok(
+        t.idempotency_key.startsWith('connector.init:gmail:acc-r:reconnect:'),
+        `unexpected key: ${t.idempotency_key}`,
+      );
+      assert.equal(t.payload.toolkit, 'gmail');
+      assert.equal(t.payload.connectedAccountId, 'acc-r');
+      assert.equal(t.payload.limit, 100);
+    }
+  });
+});
+
+test('enqueueReconnect: scheduler disabled → null, no task created', async () => {
+  await withTempHomeAndScheduler({ scheduler: 'off' }, async () => {
+    const id = await enqueueReconnect('gmail', 'acc-r2');
+    assert.equal(id, null);
+    const all = await listBackgroundTasks({ type: 'connector.init' });
+    assert.equal(all.length, 0);
+  });
+});
+
+test('enqueueReconnect: missing toolkit or accountId → null, no task', async () => {
+  await withTempHomeAndScheduler({ scheduler: 'on' }, async () => {
+    assert.equal(await enqueueReconnect('', 'acc-1'), null);
+    assert.equal(await enqueueReconnect('gmail', ''), null);
+    const all = await listBackgroundTasks({ type: 'connector.init' });
+    assert.equal(all.length, 0);
   });
 });
