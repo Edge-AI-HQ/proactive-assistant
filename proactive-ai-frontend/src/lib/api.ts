@@ -664,6 +664,26 @@ export interface DeviceContactRaw {
   referenced_by_runs: string[];
 }
 
+export interface DeviceHealthRaw {
+  id: string;
+  device_id: string;
+  observation_type: string;
+  metric: string | null;
+  value: number | null;
+  unit: string | null;
+  start_at: string | null;
+  end_at: string | null;
+  local_date: string | null;
+  source_app: string | null;
+  payload: Record<string, unknown>;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
 function rawQuery(params?: Record<string, string | number | boolean | undefined>): string {
   const qs = new URLSearchParams();
   for (const [key, value] of Object.entries(params ?? {})) {
@@ -739,6 +759,24 @@ export async function fetchRawDeviceContacts(
   });
   const res = await proxyFetch(`/raw/device-contacts${suffix}`, { signal });
   if (!res.ok) throw new Error(`/raw/device-contacts failed: ${await readErrorMessage(res)}`);
+  return res.json();
+}
+
+export async function fetchRawDeviceHealth(
+  filter?: RawListFilter & { deviceId?: string; observationType?: string; metric?: string; localDate?: string },
+  signal?: AbortSignal,
+): Promise<{ ok: boolean; observations: DeviceHealthRaw[]; total: number }> {
+  const suffix = rawQuery({
+    since: filter?.since,
+    until: filter?.until,
+    deviceId: filter?.deviceId,
+    observationType: filter?.observationType,
+    metric: filter?.metric,
+    localDate: filter?.localDate,
+    limit: filter?.limit,
+  });
+  const res = await proxyFetch(`/raw/device-health${suffix}`, { signal });
+  if (!res.ok) throw new Error(`/raw/device-health failed: ${await readErrorMessage(res)}`);
   return res.json();
 }
 

@@ -42,7 +42,7 @@ import {
 import { Browser } from "@capacitor/browser";
 import type { ComposioState, Connection } from "@/hooks/useComposio";
 import { useInitTask } from "@/hooks/useInitTask";
-import { extractComposioDisplayIdentity } from "@/lib/composioDisplayIdentity";
+import { resolveComposioConnectionIdentity } from "@/lib/composioDisplayIdentity";
 import { isNative } from "@/lib/platform";
 
 /**
@@ -148,36 +148,11 @@ async function openOAuthAndAwaitClose(url: string): Promise<void> {
   return windowClosed(win);
 }
 
-const GOOGLE_FAMILY = new Set([
-  "googlecalendar",
-  "googledrive",
-  "googledocs",
-  "googlesheets",
-]);
-
 function resolveIdentity(
   conn: Connection,
   allConnections: Connection[],
 ): string | null {
-  const direct = extractComposioDisplayIdentity(conn.userInfo);
-  if (direct) return direct;
-  if (!GOOGLE_FAMILY.has(conn.toolkit)) return null;
-
-  const gmailIdentities = allConnections
-    .filter((c) => c.toolkit === "gmail" && c.status === "ACTIVE" && c.userInfo)
-    .map((c) => extractComposioDisplayIdentity(c.userInfo))
-    .filter((id): id is string => !!id);
-
-  if (gmailIdentities.length === 0) return null;
-
-  const sameToolkit = allConnections.filter(
-    (c) => c.toolkit === conn.toolkit && c.status === "ACTIVE",
-  );
-  const idx = sameToolkit.findIndex(
-    (c) => c.connectedAccountId === conn.connectedAccountId,
-  );
-
-  return gmailIdentities[idx % gmailIdentities.length] ?? gmailIdentities[0];
+  return resolveComposioConnectionIdentity(conn, allConnections);
 }
 
 interface DataSource {

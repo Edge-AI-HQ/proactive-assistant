@@ -13,6 +13,7 @@ import {
 
 export interface UseMemoriesResult {
   memories: Memory[];
+  total: number;
   loading: boolean;
   mutating: boolean;
   error: string | null;
@@ -27,7 +28,7 @@ export interface UseMemoriesResult {
 }
 
 const POLL_INTERVAL_MS = 10_000;
-const DEFAULT_LIMIT = 100;
+const DEFAULT_LIMIT = 5;
 
 /**
  * Read + mutate v3 memory rows for the debug panel.
@@ -41,12 +42,14 @@ const DEFAULT_LIMIT = 100;
  */
 export function useMemories(enabled: boolean): UseMemoriesResult {
   const [memories, setMemories] = useState<Memory[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [mutating, setMutating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilterState] = useState<MemoryListFilter>({
     status: "active",
     limit: DEFAULT_LIMIT,
+    offset: 0,
     orderBy: "created_at",
     orderDirection: "desc",
   });
@@ -67,6 +70,7 @@ export function useMemories(enabled: boolean): UseMemoriesResult {
       const data = await fetchMemories(filterRef.current, controller.signal);
       if (controller.signal.aborted) return;
       setMemories(data.memories);
+      setTotal(data.total ?? data.memories.length);
     } catch (err) {
       if (controller.signal.aborted) return;
       setError(err instanceof Error ? err.message : String(err));
@@ -160,6 +164,7 @@ export function useMemories(enabled: boolean): UseMemoriesResult {
 
   return {
     memories,
+    total,
     loading,
     mutating,
     error,

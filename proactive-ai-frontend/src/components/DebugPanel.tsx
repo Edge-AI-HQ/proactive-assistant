@@ -15,6 +15,10 @@ import { supabase } from "@/lib/supabase";
 import { isNative, API_BASE } from "@/lib/platform";
 import { useModelSelection } from "@/hooks/useModelSelection";
 import { useInitTask } from "@/hooks/useInitTask";
+import {
+  formatOptionalComposioConnectionIdentity,
+  formatComposioToolkitName,
+} from "@/lib/composioDisplayIdentity";
 import MainChat from "./MainChat";
 import CrystallizePanel from "./CrystallizePanel";
 import SkillsPanel from "./SkillsPanel";
@@ -114,12 +118,14 @@ function phaseStatus(phase: string, activePhase: string | null, status: string) 
  */
 function ConnectorReconnectRow({
   toolkit,
+  toolkitLabel,
   identityLabel,
   connectedAccountId,
   onReconnect,
 }: {
   toolkit: string;
-  identityLabel: string;
+  toolkitLabel: string;
+  identityLabel: string | null;
   connectedAccountId: string;
   onReconnect: (toolkit: string, accountId: string) => Promise<{ ok: boolean; initTaskId?: string; error?: string }>;
 }) {
@@ -181,9 +187,16 @@ function ConnectorReconnectRow({
   return (
     <div className="flex items-center gap-2 py-1.5">
       <div className="min-w-0 flex-1">
-        <div className="text-[11px] font-medium text-foreground/75 truncate">
-          {toolkit}
-          <span className="text-foreground/35 font-normal ml-1.5">{identityLabel}</span>
+        <div className="flex min-w-0 items-baseline gap-1.5 text-[11px] font-medium text-foreground/75">
+          <span className="shrink-0">{toolkitLabel}</span>
+          {identityLabel && (
+            <span
+              className="min-w-0 truncate font-normal text-foreground/45"
+              title={identityLabel}
+            >
+              {identityLabel}
+            </span>
+          )}
         </div>
         {chipText && (
           <span className={`mt-0.5 inline-block rounded-full px-2 py-0.5 text-[10px] font-medium ${chipClass}`}>
@@ -574,19 +587,12 @@ export default function DebugPanel({ health, run, isRunning, onGenerate, composi
                         .filter((conn) => conn.status === "ACTIVE" && conn.connectedAccountId)
                         .map((conn) => {
                           const accountId = conn.connectedAccountId as string;
-                          const info = conn.userInfo ?? {};
-                          const pickIdentity = (...keys: string[]): string => {
-                            for (const key of keys) {
-                              const v = info[key];
-                              if (typeof v === "string" && v.trim()) return v;
-                            }
-                            return `…${accountId.slice(-6)}`;
-                          };
-                          const identity = pickIdentity("email", "username", "handle", "name", "display_name");
+                          const identity = formatOptionalComposioConnectionIdentity(conn, composio.connections);
                           return (
                             <ConnectorReconnectRow
                               key={accountId}
                               toolkit={conn.toolkit}
+                              toolkitLabel={formatComposioToolkitName(conn.toolkit)}
                               identityLabel={identity}
                               connectedAccountId={accountId}
                               onReconnect={composio.reconnectAccount}

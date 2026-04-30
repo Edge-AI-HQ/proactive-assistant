@@ -13,6 +13,8 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   Brain,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Loader2,
   Plus,
   RefreshCw,
@@ -42,6 +44,7 @@ const STATUS_STYLES: Record<MemoryStatus, string> = {
 };
 
 const SUBJECT_PRESETS = ["", "self", "person:", "topic:", "goal:", "place:"];
+const PAGE_SIZE = 5;
 
 function relativeTime(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -65,17 +68,26 @@ function qualityColor(q: number): string {
 }
 
 export default function MemoriesPanel({ enabled }: MemoriesPanelProps) {
-  const { memories, loading, mutating, error, filter, setFilter, refetch, create, update, archive, supersede } =
+  const { memories, total, loading, mutating, error, filter, setFilter, refetch, create, update, archive, supersede } =
     useMemories(enabled);
 
   const [creating, setCreating] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const status = filter.status ?? "active";
-  const setStatus = (next: MemoryStatus) => setFilter({ ...filter, status: next });
+  const pageSize = filter.limit ?? PAGE_SIZE;
+  const page = Math.floor((filter.offset ?? 0) / pageSize);
+  const maxPage = Math.max(0, Math.ceil(total / pageSize) - 1);
+  const firstVisible = total === 0 ? 0 : page * pageSize + 1;
+  const lastVisible = Math.min(total, page * pageSize + memories.length);
+  const setStatus = (next: MemoryStatus) => setFilter({ ...filter, status: next, limit: pageSize, offset: 0 });
 
   const subjectPrefix = filter.subjectPrefix ?? "";
   const minQuality = filter.minQuality ?? 0;
+  const setPage = (nextPage: number) => {
+    const bounded = Math.max(0, Math.min(maxPage, nextPage));
+    setFilter({ ...filter, limit: pageSize, offset: bounded * pageSize });
+  };
 
   return (
     <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-3.5">
@@ -128,7 +140,12 @@ export default function MemoriesPanel({ enabled }: MemoriesPanelProps) {
       <div className="flex items-center gap-1.5 mb-2">
         <select
           value={subjectPrefix}
-          onChange={(e) => setFilter({ ...filter, subjectPrefix: e.target.value || undefined })}
+          onChange={(e) => setFilter({
+            ...filter,
+            subjectPrefix: e.target.value || undefined,
+            limit: pageSize,
+            offset: 0,
+          })}
           className="rounded-md bg-white/60 border border-foreground/10 px-1.5 py-1 text-[10px] focus:outline-none focus:ring-1 focus:ring-primary/30"
         >
           {SUBJECT_PRESETS.map((s) => (
@@ -147,13 +164,18 @@ export default function MemoriesPanel({ enabled }: MemoriesPanelProps) {
             value={minQuality}
             onChange={(e) => {
               const v = Number(e.target.value);
-              setFilter({ ...filter, minQuality: Number.isFinite(v) && v > 0 ? v : undefined });
+              setFilter({
+                ...filter,
+                minQuality: Number.isFinite(v) && v > 0 ? v : undefined,
+                limit: pageSize,
+                offset: 0,
+              });
             }}
             className="w-14 rounded-md bg-white/60 border border-foreground/10 px-1.5 py-0.5 text-[10px] font-mono focus:outline-none focus:ring-1 focus:ring-primary/30"
           />
         </label>
         <span className="text-[10px] text-foreground/40 ml-auto tabular-nums">
-          {memories.length} row{memories.length !== 1 ? "s" : ""}
+          {total === 0 ? "0 rows" : `${firstVisible}-${lastVisible} of ${total}`}
         </span>
       </div>
 
@@ -204,6 +226,32 @@ export default function MemoriesPanel({ enabled }: MemoriesPanelProps) {
             }
           />
         ))}
+      </div>
+
+      <div className="mt-2 flex items-center justify-between border-t border-foreground/5 pt-2">
+        <span className="text-[10px] text-foreground/35 tabular-nums">
+          Page {total === 0 ? 0 : page + 1} / {total === 0 ? 0 : maxPage + 1}
+        </span>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setPage(page - 1)}
+            disabled={page <= 0 || loading}
+            title="Previous page"
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-foreground/10 bg-white/60 text-foreground/45 hover:bg-white/90 disabled:opacity-35 disabled:cursor-not-allowed"
+          >
+            <ChevronLeft size={13} strokeWidth={1.7} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setPage(page + 1)}
+            disabled={page >= maxPage || loading || total === 0}
+            title="Next page"
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-foreground/10 bg-white/60 text-foreground/45 hover:bg-white/90 disabled:opacity-35 disabled:cursor-not-allowed"
+          >
+            <ChevronRight size={13} strokeWidth={1.7} />
+          </button>
+        </div>
       </div>
 
       {error && <p className="mt-2 text-[10px] text-red-500 leading-snug">{error}</p>}
@@ -263,15 +311,19 @@ function MemoryRow({ memory, expanded, mutating, onToggle, onUpdate, onArchive, 
         >
           {memory.status}
         </span>
-        <div className="flex-1 min-w-0">
-          <p className="text-[11px] text-foreground leading-snug line-clamp-2">{memory.text}</p>
-          <div className="mt-0.5 flex items-center gap-1.5 text-[9px] text-foreground/40">
+          <div className="min-w-0 flex-1 overflow-hidden">
+            <p className="text-[11px] text-foreground leading-snug line-clamp-2">{memory.text}</p>
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden text-[9px] text-foreground/40">
             {memory.subject && (
-              <span className="rounded bg-foreground/5 px-1 py-px font-medium">{memory.subject}</span>
+              <span className="min-w-0 max-w-[72px] truncate rounded bg-foreground/5 px-1 py-px font-medium">
+                {memory.subject}
+              </span>
             )}
-            <span className="rounded bg-foreground/5 px-1 py-px">{memory.source}</span>
+            <span className="min-w-0 max-w-[92px] truncate rounded bg-foreground/5 px-1 py-px">
+              {memory.source}
+            </span>
             {memory.tags.slice(0, 3).map((t) => (
-              <span key={t} className="rounded bg-blue-50 text-blue-700 px-1 py-px">#{t}</span>
+              <span key={t} className="max-w-[76px] truncate rounded bg-blue-50 px-1 py-px text-blue-700">#{t}</span>
             ))}
             {memory.tags.length > 3 && <span className="text-foreground/30">+{memory.tags.length - 3}</span>}
           </div>

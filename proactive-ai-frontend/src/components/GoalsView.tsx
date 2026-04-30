@@ -26,14 +26,17 @@ import {
 import {
   fetchRawDeviceApps,
   fetchRawDeviceContacts,
+  fetchRawDeviceHealth,
   fetchRawGcal,
   fetchRawGmail,
   fetchRawTable,
   fetchMemories,
   fetchProfileSnapshot,
   fetchSignals,
+  listUserDevices,
   type DeviceAppRaw,
   type DeviceContactRaw,
+  type DeviceHealthRaw,
   type GcalEvent,
   type GmailMessage,
   type Goal,
@@ -41,6 +44,7 @@ import {
   type PersonalSignal,
   type ProfileSnapshot,
   type RawTableRow,
+  type UserDevice,
 } from "@/lib/api";
 import { basketMeta } from "@/lib/basket-meta";
 import type { ComposioState } from "@/hooks/useComposio";
@@ -52,14 +56,15 @@ import type { ComposioState } from "@/hooks/useComposio";
 type VisualStatus = "Normal" | "Alert" | "Watch";
 type ProfileGroupKey = "facts" | "preferences" | "constraints" | "metadata";
 type DataPanel = "mirror" | "memory" | "signals" | "raw";
-/** RawPanel is the source slug. Specialized panels keep their friendly
- * names ('gmail' / 'gcal' / 'apps' / 'contacts'); generic panels use the
- * raw.db table name (e.g. 'spotify_recent_tracks'). */
+/** RawPanel is the source slug. Specialized panels keep friendly names
+ * (`gmail` / `gcal`) or a `device:<id>` panel; generic panels use the
+ * raw.db table name (e.g. `spotify_recent_tracks`). */
 type RawPanel = string;
 type SectionId = DataPanel | "goals";
 type RawSourceKind = "connector" | "device";
 
-const SPECIALIZED_RAW_PANELS = new Set(["gmail", "gcal", "apps", "contacts"]);
+const DEVICE_PANEL_PREFIX = "device:";
+const SPECIALIZED_RAW_PANELS = new Set(["gmail", "gcal"]);
 
 interface GoalVisualMeta {
   image: string;
@@ -219,19 +224,30 @@ const EMPTY_SNAPSHOT: ProfileSnapshot = {
   interests: [],
 };
 
-const LIST_PAGE_SIZE = 12;
+const MEMORY_PAGE_SIZE = 5;
+const SIGNAL_PAGE_SIZE = 12;
 const TOPIC_MEMORY_PREVIEW_LIMIT = 8;
 const RAW_PREVIEW_LIMIT = 12;
+
+interface DeviceRawPreview {
+  deviceId: string;
+  device: UserDevice | null;
+  label: string;
+  apps: DeviceAppRaw[];
+  contacts: DeviceContactRaw[];
+  health: DeviceHealthRaw[];
+  appsTotal: number;
+  contactsTotal: number;
+  healthTotal: number;
+  total: number;
+}
 
 interface RawPreview {
   gmail: GmailMessage[];
   gcal: GcalEvent[];
-  apps: DeviceAppRaw[];
-  contacts: DeviceContactRaw[];
+  devices: DeviceRawPreview[];
   gmailTotal: number;
   gcalTotal: number;
-  appsTotal: number;
-  contactsTotal: number;
 }
 
 interface RawSourceOption {
@@ -240,17 +256,15 @@ interface RawSourceOption {
   kind: RawSourceKind;
   count: number;
   connected: boolean;
+  deviceId?: string;
 }
 
 const EMPTY_RAW_PREVIEW: RawPreview = {
   gmail: [],
   gcal: [],
-  apps: [],
-  contacts: [],
+  devices: [],
   gmailTotal: 0,
   gcalTotal: 0,
-  appsTotal: 0,
-  contactsTotal: 0,
 };
 
 /**
@@ -260,7 +274,7 @@ const EMPTY_RAW_PREVIEW: RawPreview = {
  * the generic row renderer below — added per Phase D round 4/5 toolkit.
  *
  * The dropdown filter rule:
- *   - device sources show when count > 0
+ *   - device sources are built dynamically from `user_devices` + raw rows
  *   - connector sources show when ANY of their connectorToolkits is ACTIVE
  * Sources that don't match are hidden so the dropdown stays short.
  */
@@ -276,8 +290,6 @@ const RAW_SOURCE_CONFIG: Array<{
   // ── Specialized ──
   { id: "gmail", label: "Gmail", kind: "connector", connectorToolkits: ["gmail"] },
   { id: "gcal", label: "Calendar", kind: "connector", connectorToolkits: ["googlecalendar"] },
-  { id: "apps", label: "Device Apps", kind: "device" },
-  { id: "contacts", label: "Contacts", kind: "device" },
   // ── Generic (Phase D rounds 1-5) ──
   { id: "slack_messages", label: "Slack messages", kind: "connector", connectorToolkits: ["slack"], table: "slack_messages" },
   { id: "notion_pages", label: "Notion pages", kind: "connector", connectorToolkits: ["notion"], table: "notion_pages" },
@@ -388,13 +400,38 @@ function rawCount(
 ): number {
   if (panel === "gmail") return raw.gmailTotal;
   if (panel === "gcal") return raw.gcalTotal;
-  if (panel === "apps") return raw.appsTotal;
-  if (panel === "contacts") return raw.contactsTotal;
+  const deviceId = deviceIdFromPanel(panel);
+  if (deviceId) return raw.devices.find((device) => device.deviceId === deviceId)?.total ?? 0;
   return generic[panel]?.total ?? 0;
+}
+
+function devicePanelId(deviceId: string): RawPanel {
+  return `${DEVICE_PANEL_PREFIX}${encodeURIComponent(deviceId)}`;
+}
+
+function deviceIdFromPanel(panel: RawPanel): string | null {
+  if (!panel.startsWith(DEVICE_PANEL_PREFIX)) return null;
+  const encoded = panel.slice(DEVICE_PANEL_PREFIX.length);
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    return encoded;
+  }
+}
+
+function isSpecializedRawPanel(panel: RawPanel): boolean {
+  return SPECIALIZED_RAW_PANELS.has(panel) || deviceIdFromPanel(panel) !== null;
 }
 
 function normalizeToolkit(toolkit: string): string {
   return toolkit.trim().toLowerCase().replace(/[-_\s]/g, "");
+}
+
+function formatDeviceSourceLabel(deviceId: string, device: UserDevice | null | undefined): string {
+  const name = device?.display_name?.trim() || device?.model?.trim();
+  const platform = device?.platform ? device.platform.toUpperCase() : "DEVICE";
+  const shortId = deviceId.length > 12 ? `${deviceId.slice(0, 12)}...` : deviceId;
+  return name ? `${name} (${platform})` : `Device ${shortId}`;
 }
 
 function buildRawSourceOptions(
@@ -408,13 +445,10 @@ function buildRawSourceOptions(
       .map((conn) => normalizeToolkit(conn.toolkit)),
   );
 
-  return RAW_SOURCE_CONFIG
+  const connectorSources = RAW_SOURCE_CONFIG
     .map((source) => {
       const count = rawCount(raw, generic, source.id);
-      const connected =
-        source.kind === "device"
-          ? count > 0
-          : (source.connectorToolkits ?? []).some((toolkit) => connectedToolkits.has(normalizeToolkit(toolkit)));
+      const connected = (source.connectorToolkits ?? []).some((toolkit) => connectedToolkits.has(normalizeToolkit(toolkit)));
 
       return {
         id: source.id,
@@ -425,6 +459,22 @@ function buildRawSourceOptions(
       };
     })
     .filter((source) => source.connected || source.count > 0);
+
+  const deviceSources: RawSourceOption[] = raw.devices
+    .map((device) => ({
+      id: devicePanelId(device.deviceId),
+      label: device.label,
+      kind: "device" as const,
+      count: device.total,
+      connected: device.total > 0 || !!device.device,
+      deviceId: device.deviceId,
+    }))
+    .filter((source) => source.connected || source.count > 0);
+
+  const primaryConnectors = connectorSources.filter((source) => source.id === "gmail" || source.id === "gcal");
+  const otherConnectors = connectorSources.filter((source) => source.id !== "gmail" && source.id !== "gcal");
+
+  return [...primaryConnectors, ...deviceSources, ...otherConnectors];
 }
 
 type PillTone = "neutral" | "source" | "subject" | "quality" | "confidence" | "status" | "device";
@@ -448,21 +498,64 @@ function Pill({ children, tone = "neutral" }: { children: ReactNode; tone?: Pill
 }
 
 async function fetchRawPreview(signal?: AbortSignal): Promise<RawPreview> {
-  const [gmail, gcal, apps, contacts] = await Promise.allSettled([
+  const [gmail, gcal, deviceList, appsSeed, contactsSeed, healthSeed] = await Promise.allSettled([
     fetchRawGmail({ limit: RAW_PREVIEW_LIMIT }, signal),
     fetchRawGcal({ limit: RAW_PREVIEW_LIMIT }, signal),
+    listUserDevices(),
     fetchRawDeviceApps({ latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal),
     fetchRawDeviceContacts({ latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal),
+    fetchRawDeviceHealth({ limit: RAW_PREVIEW_LIMIT }, signal),
   ]);
+
+  const devicesById = new Map<string, UserDevice | null>();
+  if (deviceList.status === "fulfilled") {
+    for (const device of deviceList.value) {
+      if (device.status === "revoked") continue;
+      devicesById.set(device.device_id, device);
+    }
+  }
+
+  const seedDeviceId = (deviceId: string | null | undefined) => {
+    if (deviceId && !devicesById.has(deviceId)) devicesById.set(deviceId, null);
+  };
+  if (appsSeed.status === "fulfilled") appsSeed.value.apps.forEach((app) => seedDeviceId(app.device_id));
+  if (contactsSeed.status === "fulfilled") contactsSeed.value.contacts.forEach((contact) => seedDeviceId(contact.device_id));
+  if (healthSeed.status === "fulfilled") healthSeed.value.observations.forEach((item) => seedDeviceId(item.device_id));
+
+  const devices = await Promise.all(
+    [...devicesById.entries()].map(async ([deviceId, device]) => {
+      const [apps, contacts, health] = await Promise.allSettled([
+        fetchRawDeviceApps({ deviceId, latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal),
+        fetchRawDeviceContacts({ deviceId, latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal),
+        fetchRawDeviceHealth({ deviceId, limit: RAW_PREVIEW_LIMIT }, signal),
+      ]);
+      const appsRows = apps.status === "fulfilled" ? apps.value.apps : [];
+      const contactsRows = contacts.status === "fulfilled" ? contacts.value.contacts : [];
+      const healthRows = health.status === "fulfilled" ? health.value.observations : [];
+      const appsTotal = apps.status === "fulfilled" ? (apps.value.total ?? appsRows.length) : 0;
+      const contactsTotal = contacts.status === "fulfilled" ? (contacts.value.total ?? contactsRows.length) : 0;
+      const healthTotal = health.status === "fulfilled" ? (health.value.total ?? healthRows.length) : 0;
+      return {
+        deviceId,
+        device,
+        label: formatDeviceSourceLabel(deviceId, device),
+        apps: appsRows,
+        contacts: contactsRows,
+        health: healthRows,
+        appsTotal,
+        contactsTotal,
+        healthTotal,
+        total: appsTotal + contactsTotal + healthTotal,
+      };
+    }),
+  );
+
   return {
     gmail: gmail.status === "fulfilled" ? gmail.value.messages : [],
     gcal: gcal.status === "fulfilled" ? gcal.value.events : [],
-    apps: apps.status === "fulfilled" ? apps.value.apps : [],
-    contacts: contacts.status === "fulfilled" ? contacts.value.contacts : [],
+    devices: devices.sort((a, b) => b.total - a.total || a.label.localeCompare(b.label)),
     gmailTotal: gmail.status === "fulfilled" ? (gmail.value.total ?? gmail.value.messages.length) : 0,
     gcalTotal: gcal.status === "fulfilled" ? (gcal.value.total ?? gcal.value.events.length) : 0,
-    appsTotal: apps.status === "fulfilled" ? (apps.value.total ?? apps.value.apps.length) : 0,
-    contactsTotal: contacts.status === "fulfilled" ? (contacts.value.total ?? contacts.value.contacts.length) : 0,
   };
 }
 
@@ -647,7 +740,7 @@ function MemoryItem({ memory }: { memory: Memory }) {
           {formatDateTime(memory.occurred_at ?? memory.created_at)}
         </span>
       </div>
-      <p className="mt-2 text-sm leading-6 text-foreground/78">{memory.text}</p>
+      <p className="mt-2 line-clamp-3 text-sm leading-6 text-foreground/78">{memory.text}</p>
       <div className="mt-3 flex flex-wrap gap-1.5">
         {memory.subject && <Pill tone="subject">{memory.subject}</Pill>}
         <Pill tone="quality">quality {formatMetric(memory.quality)}</Pill>
@@ -802,6 +895,117 @@ function RawRecordItem({
   );
 }
 
+function DeviceRawSection({
+  title,
+  total,
+  children,
+}: {
+  title: string;
+  total: number;
+  children: ReactNode;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3 px-1">
+        <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground/45">{title}</h3>
+        <span className="text-[11px] tabular-nums text-foreground/38">{total}</span>
+      </div>
+      <div className="space-y-3">{children}</div>
+    </div>
+  );
+}
+
+function DeviceRawRecords({ preview }: { preview: DeviceRawPreview }) {
+  if (preview.total === 0) {
+    return (
+      <EmptyState
+        title="No device data"
+        description="This device is registered, but no raw rows have been ingested yet."
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <DeviceRawSection title="Apps" total={preview.appsTotal}>
+        {preview.apps.length === 0 ? (
+          <EmptyState title="No app snapshot" description="No app inventory rows are available for this device." />
+        ) : (
+          preview.apps.map((app) => (
+            <RawRecordItem
+              key={app.id}
+              source="Apps"
+              title={app.app_name}
+              subtitle={app.bundle_id}
+              time={app.last_used_at ?? app.occurred_at}
+              payload={{
+                device_id: app.device_id,
+                snapshot_id: app.snapshot_id,
+                version: app.version,
+                reference_count: app.reference_count,
+              }}
+            />
+          ))
+        )}
+      </DeviceRawSection>
+
+      <DeviceRawSection title="Contacts" total={preview.contactsTotal}>
+        {preview.contacts.length === 0 ? (
+          <EmptyState title="No contacts" description="No contact snapshot rows are available for this device." />
+        ) : (
+          preview.contacts.map((contact) => (
+            <RawRecordItem
+              key={contact.id}
+              source="Contacts"
+              title={contact.display_name || contact.id}
+              subtitle={[...contact.emails, ...contact.phones].slice(0, 3).join(" · ")}
+              time={contact.last_modified ?? contact.occurred_at}
+              payload={{
+                device_id: contact.device_id,
+                snapshot_id: contact.snapshot_id,
+                emails: contact.emails,
+                phones: contact.phones,
+                reference_count: contact.reference_count,
+              }}
+            />
+          ))
+        )}
+      </DeviceRawSection>
+
+      <DeviceRawSection title="Health" total={preview.healthTotal}>
+        {preview.health.length === 0 ? (
+          <EmptyState title="No health observations" description="No health rows are available for this device." />
+        ) : (
+          preview.health.map((item) => (
+            <RawRecordItem
+              key={item.id}
+              source="Health"
+              title={[item.metric, item.observation_type].filter(Boolean).join(" · ") || item.id}
+              subtitle={[
+                typeof item.value === "number" ? `${item.value}${item.unit ? ` ${item.unit}` : ""}` : null,
+                item.source_app,
+                item.local_date,
+              ].filter(Boolean).join(" · ")}
+              time={item.end_at ?? item.start_at ?? item.occurred_at}
+              payload={{
+                device_id: item.device_id,
+                observation_type: item.observation_type,
+                metric: item.metric,
+                value: item.value,
+                unit: item.unit,
+                local_date: item.local_date,
+                source_app: item.source_app,
+                payload: item.payload,
+                reference_count: item.reference_count,
+              }}
+            />
+          ))
+        )}
+      </DeviceRawSection>
+    </div>
+  );
+}
+
 function MirrorPanel({
   profile,
   topicMemories,
@@ -860,16 +1064,24 @@ function MirrorPanel({
 function MemoryPanel({
   memories,
   total,
-  hasMore,
-  loadingMore,
-  onLoadMore,
+  page,
+  pageSize,
+  loadingPage,
+  onPageChange,
 }: {
   memories: Memory[];
   total: number;
-  hasMore: boolean;
-  loadingMore: boolean;
-  onLoadMore: () => void;
+  page: number;
+  pageSize: number;
+  loadingPage: boolean;
+  onPageChange: (nextPage: number) => void;
 }) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const hasPrevious = page > 0;
+  const hasNext = page + 1 < totalPages;
+  const firstVisible = total === 0 ? 0 : page * pageSize + 1;
+  const lastVisible = Math.min(total, page * pageSize + memories.length);
+
   return (
     <div>
       <div className="mb-3 flex items-start justify-between gap-4">
@@ -890,12 +1102,32 @@ function MemoryPanel({
         ) : (
           memories.map((memory) => <MemoryItem key={memory.id} memory={memory} />)
         )}
-        <LoadMoreButton
-          hasMore={hasMore}
-          loading={loadingMore}
-          label="Load more memories"
-          onClick={onLoadMore}
-        />
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-3 rounded-2xl bg-white/45 px-3 py-2 ring-1 ring-white/60">
+        <div className="text-[11px] text-foreground/45">
+          {total === 0 ? "0 memories" : `${firstVisible}-${lastVisible} of ${total}`}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={!hasPrevious || loadingPage}
+            onClick={() => onPageChange(page - 1)}
+            className="rounded-xl bg-foreground/5 px-3 py-1.5 text-[11px] font-medium text-foreground/55 transition-colors hover:bg-foreground/10 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Prev
+          </button>
+          <span className="min-w-12 text-center text-[11px] tabular-nums text-foreground/40">
+            {loadingPage ? <Loader2 size={12} className="mx-auto animate-spin" /> : `${page + 1}/${totalPages}`}
+          </span>
+          <button
+            type="button"
+            disabled={!hasNext || loadingPage}
+            onClick={() => onPageChange(page + 1)}
+            className="rounded-xl bg-foreground/5 px-3 py-1.5 text-[11px] font-medium text-foreground/55 transition-colors hover:bg-foreground/10 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Next
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -961,6 +1193,10 @@ function RawPanelContent({
   onChangeRawPanel: (panel: RawPanel) => void;
 }) {
   const activeSource = sources.find((source) => source.id === activeRawPanel) ?? sources[0];
+  const activeDeviceId = activeSource ? deviceIdFromPanel(activeSource.id) : null;
+  const activeDevice = activeDeviceId
+    ? raw.devices.find((device) => device.deviceId === activeDeviceId) ?? null
+    : null;
 
   return (
     <div>
@@ -1058,50 +1294,14 @@ function RawPanelContent({
             ))
           )
         )}
-        {activeSource?.id === "apps" && (
-          raw.apps.length === 0 ? (
-            <EmptyState title="No device app data" description="No app list from your device is available right now." />
+        {activeSource && activeDeviceId && (
+          activeDevice ? (
+            <DeviceRawRecords preview={activeDevice} />
           ) : (
-            raw.apps.map((app) => (
-              <RawRecordItem
-                key={app.id}
-                source="Device Apps"
-                title={app.app_name}
-                subtitle={app.bundle_id}
-                time={app.last_used_at ?? app.occurred_at}
-                payload={{
-                  device_id: app.device_id,
-                  snapshot_id: app.snapshot_id,
-                  version: app.version,
-                  reference_count: app.reference_count,
-                }}
-              />
-            ))
+            <EmptyState title="No device data" description="This device source is not available right now." />
           )
         )}
-        {activeSource?.id === "contacts" && (
-          raw.contacts.length === 0 ? (
-            <EmptyState title="No contact data" description="No contacts from your device are available right now." />
-          ) : (
-            raw.contacts.map((contact) => (
-              <RawRecordItem
-                key={contact.id}
-                source="Contacts"
-                title={contact.display_name || contact.id}
-                subtitle={[...contact.emails, ...contact.phones].slice(0, 3).join(" · ")}
-                time={contact.last_modified ?? contact.occurred_at}
-                payload={{
-                  device_id: contact.device_id,
-                  snapshot_id: contact.snapshot_id,
-                  emails: contact.emails,
-                  phones: contact.phones,
-                  reference_count: contact.reference_count,
-                }}
-              />
-            ))
-          )
-        )}
-        {activeSource && !SPECIALIZED_RAW_PANELS.has(activeSource.id) && (() => {
+        {activeSource && !isSpecializedRawPanel(activeSource.id) && (() => {
           const cached = generic[activeSource.id];
           const isLoading = genericLoading.has(activeSource.id);
           if (!cached && isLoading) {
@@ -1153,8 +1353,8 @@ export default function GoalsView({ composio }: GoalsViewProps) {
   const [snapshot, setSnapshot] = useState<ProfileSnapshot>(EMPTY_SNAPSHOT);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [memoryTotal, setMemoryTotal] = useState(0);
-  const [memoryHasMore, setMemoryHasMore] = useState(false);
-  const [memoryLoadingMore, setMemoryLoadingMore] = useState(false);
+  const [memoryPage, setMemoryPage] = useState(0);
+  const [memoryLoadingPage, setMemoryLoadingPage] = useState(false);
   const [signals, setSignals] = useState<PersonalSignal[]>([]);
   const [signalTotal, setSignalTotal] = useState(0);
   const [signalHasMore, setSignalHasMore] = useState(false);
@@ -1167,7 +1367,7 @@ export default function GoalsView({ composio }: GoalsViewProps) {
   const [genericRaw, setGenericRaw] = useState<Record<string, { rows: RawTableRow[]; total: number }>>({});
   const [genericLoading, setGenericLoading] = useState<Set<string>>(new Set());
   const [activePanel, setActivePanel] = useState<DataPanel>("memory");
-  const [activeRawPanel, setActiveRawPanel] = useState<RawPanel>("apps");
+  const [activeRawPanel, setActiveRawPanel] = useState<RawPanel>("gmail");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -1199,13 +1399,13 @@ export default function GoalsView({ composio }: GoalsViewProps) {
         fetchProfileSnapshot(controller.signal),
         fetchMemories({
           status: "active",
-          limit: LIST_PAGE_SIZE,
+          limit: MEMORY_PAGE_SIZE,
           orderBy: "created_at",
           orderDirection: "desc",
         }, controller.signal),
         fetchSignals({
           status: "open",
-          limit: LIST_PAGE_SIZE,
+          limit: SIGNAL_PAGE_SIZE,
           pruneExpired: true,
         }, controller.signal),
         fetchMemories({
@@ -1224,7 +1424,7 @@ export default function GoalsView({ composio }: GoalsViewProps) {
         setSnapshot(data);
         setMemories(memoryData.memories);
         setMemoryTotal(memoryData.total ?? memoryData.memories.length);
-        setMemoryHasMore(memoryData.memories.length < (memoryData.total ?? memoryData.memories.length));
+        setMemoryPage(0);
         setSignals(signalData.signals);
         setSignalTotal(signalData.total ?? signalData.signals.length);
         setSignalHasMore(signalData.signals.length < (signalData.total ?? signalData.signals.length));
@@ -1272,7 +1472,8 @@ export default function GoalsView({ composio }: GoalsViewProps) {
   // Lazy-fetch generic raw rows when user selects a non-specialized panel.
   // Cache hits skip the fetch; in-flight requests are deduped via genericLoading.
   useEffect(() => {
-    if (SPECIALIZED_RAW_PANELS.has(activeRawPanel)) return;
+    if (activePanel !== "raw") return;
+    if (isSpecializedRawPanel(activeRawPanel)) return;
     if (genericRaw[activeRawPanel]) return;
     const cfg = RAW_SOURCE_CONFIG.find((s) => s.id === activeRawPanel);
     if (!cfg?.table) return;
@@ -1299,7 +1500,7 @@ export default function GoalsView({ composio }: GoalsViewProps) {
           return next;
         });
       });
-  }, [activeRawPanel, genericRaw, genericLoading]);
+  }, [activePanel, activeRawPanel, genericRaw, genericLoading]);
   const scrollToSection = useCallback((sectionId: SectionId) => {
     if (sectionId !== "goals") {
       setActivePanel(sectionId);
@@ -1308,29 +1509,30 @@ export default function GoalsView({ composio }: GoalsViewProps) {
     element?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
 
-  const loadMoreMemories = useCallback(async () => {
-    if (memoryLoadingMore || !memoryHasMore) return;
+  const loadMemoryPage = useCallback(async (nextPage: number) => {
+    if (memoryLoadingPage || nextPage < 0) return;
 
-    setMemoryLoadingMore(true);
+    setMemoryLoadingPage(true);
     setError(null);
     try {
       const data = await fetchMemories({
         status: "active",
-        limit: LIST_PAGE_SIZE,
-        offset: memories.length,
+        limit: MEMORY_PAGE_SIZE,
+        offset: nextPage * MEMORY_PAGE_SIZE,
         orderBy: "created_at",
         orderDirection: "desc",
       });
-      const merged = mergeUniqueById(memories, data.memories);
-      setMemories(merged);
-      setMemoryHasMore(data.memories.length > 0 && merged.length < memoryTotal);
+      const total = data.total ?? data.memories.length;
+      setMemories(data.memories);
+      setMemoryTotal(total);
+      setMemoryPage(nextPage);
     } catch (err) {
-      console.warn("[GoalsView] loadMoreMemories failed:", err);
-      setError(err instanceof Error ? err.message : "Failed to load more memories");
+      console.warn("[GoalsView] loadMemoryPage failed:", err);
+      setError(err instanceof Error ? err.message : "Failed to load memory page");
     } finally {
-      setMemoryLoadingMore(false);
+      setMemoryLoadingPage(false);
     }
-  }, [memories, memoryHasMore, memoryLoadingMore, memoryTotal]);
+  }, [memoryLoadingPage]);
 
   const loadMoreSignals = useCallback(async () => {
     if (signalLoadingMore || !signalHasMore) return;
@@ -1340,7 +1542,7 @@ export default function GoalsView({ composio }: GoalsViewProps) {
     try {
       const data = await fetchSignals({
         status: "open",
-        limit: LIST_PAGE_SIZE,
+        limit: SIGNAL_PAGE_SIZE,
         offset: signals.length,
         pruneExpired: true,
       });
@@ -1365,11 +1567,7 @@ export default function GoalsView({ composio }: GoalsViewProps) {
   const selectedVisual = selectedApiGoal ? getVisualMeta(selectedApiGoal.key) : null;
   const selectedBasket = selectedApiGoal ? basketMeta(selectedApiGoal.key) : null;
   const selectedStatus = selectedApiGoal ? priorityToStatus(selectedApiGoal.priority) : "Normal";
-  const rawTotal =
-    rawPreview.gmailTotal +
-    rawPreview.gcalTotal +
-    rawPreview.appsTotal +
-    rawPreview.contactsTotal;
+  const rawTotal = rawSources.reduce((sum, source) => sum + source.count, 0);
   const profileFieldCount = countProfileFields(profile);
 
   const sectionMotion = {
@@ -1549,9 +1747,10 @@ export default function GoalsView({ composio }: GoalsViewProps) {
                 <MemoryPanel
                   memories={memories}
                   total={memoryTotal}
-                  hasMore={memoryHasMore}
-                  loadingMore={memoryLoadingMore}
-                  onLoadMore={loadMoreMemories}
+                  page={memoryPage}
+                  pageSize={MEMORY_PAGE_SIZE}
+                  loadingPage={memoryLoadingPage}
+                  onPageChange={loadMemoryPage}
                 />
               )}
               {activePanel === "signals" && (

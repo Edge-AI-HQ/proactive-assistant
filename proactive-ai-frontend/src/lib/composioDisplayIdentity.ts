@@ -11,6 +11,33 @@ const OAUTH_OR_MACHINE_KEY =
 const LEGACY_SKIP_KEYS =
   /token|secret|key|password|code|cursor|etag|sync|url|endpoint|slug|status|type|version|id$/i;
 
+const GOOGLE_FAMILY = new Set([
+  "googlecalendar",
+  "googledrive",
+  "googledocs",
+  "googlesheets",
+]);
+
+const TOOLKIT_LABELS: Record<string, string> = {
+  gmail: "Gmail",
+  googlecalendar: "Google Calendar",
+  googledrive: "Google Drive",
+  googledocs: "Google Docs",
+  googlesheets: "Google Sheets",
+  slack: "Slack",
+  github: "GitHub",
+  linkedin: "LinkedIn",
+  notion: "Notion",
+  zoom: "Zoom",
+};
+
+export interface ComposioIdentityConnection {
+  toolkit: string;
+  status?: string;
+  connectedAccountId?: string | null;
+  userInfo?: Record<string, unknown> | null;
+}
+
 function isIdentityNoiseValue(value: string): boolean {
   const t = value.trim();
   if (!t) return true;
@@ -54,9 +81,15 @@ export function extractComposioDisplayIdentity(
   const preferred = getStringFieldCI(
     info,
     "email",
+    "emailAddress",
+    "email_address",
     "mail",
     "primaryEmailAddress",
     "primary_email",
+    "accountEmail",
+    "account_email",
+    "userEmail",
+    "user_email",
     "userPrincipalName",
     "user_principal_name",
     "displayName",
@@ -91,4 +124,57 @@ export function extractComposioDisplayIdentity(
   }
 
   return null;
+}
+
+export function formatComposioToolkitName(toolkit: string): string {
+  const normalized = toolkit.trim().toLowerCase();
+  if (!normalized) return "Connector";
+  const label = TOOLKIT_LABELS[normalized];
+  if (label) return label;
+  return normalized
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+export function resolveComposioConnectionIdentity(
+  conn: ComposioIdentityConnection,
+  allConnections: ComposioIdentityConnection[],
+): string | null {
+  const direct = extractComposioDisplayIdentity(conn.userInfo);
+  if (direct) return direct;
+
+  const toolkit = conn.toolkit.trim().toLowerCase();
+  if (!GOOGLE_FAMILY.has(toolkit)) return null;
+
+  const gmailIdentities = allConnections
+    .filter((c) => c.toolkit.trim().toLowerCase() === "gmail" && c.status === "ACTIVE" && c.userInfo)
+    .map((c) => extractComposioDisplayIdentity(c.userInfo))
+    .filter((id): id is string => !!id);
+
+  if (gmailIdentities.length === 0) return null;
+
+  const sameToolkit = allConnections.filter(
+    (c) => c.toolkit.trim().toLowerCase() === toolkit && c.status === "ACTIVE",
+  );
+  const idx = sameToolkit.findIndex(
+    (c) => c.connectedAccountId === conn.connectedAccountId,
+  );
+
+  return gmailIdentities[idx % gmailIdentities.length] ?? gmailIdentities[0];
+}
+
+export function formatComposioConnectionIdentity(
+  conn: ComposioIdentityConnection,
+  allConnections: ComposioIdentityConnection[],
+): string {
+  return resolveComposioConnectionIdentity(conn, allConnections) ?? "Account details unavailable";
+}
+
+export function formatOptionalComposioConnectionIdentity(
+  conn: ComposioIdentityConnection,
+  allConnections: ComposioIdentityConnection[],
+): string | null {
+  return resolveComposioConnectionIdentity(conn, allConnections);
 }
