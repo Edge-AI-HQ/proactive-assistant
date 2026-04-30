@@ -121,7 +121,9 @@ export async function registerDevice(params: {
 
 export async function listDevicesForUser(userId: number): Promise<UserDeviceRow[]> {
   const { rows } = await pool.query<UserDeviceRow>(
-    `SELECT * FROM user_devices
+    `SELECT id, device_id, user_id, platform, display_name, app_version, model,
+            registered_at, last_seen_at, status, metadata
+       FROM user_devices
      WHERE user_id = $1 AND status = 'active'
      ORDER BY last_seen_at DESC NULLS LAST, registered_at DESC`,
     [userId],

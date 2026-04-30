@@ -118,6 +118,13 @@ export interface DeviceIngestResult {
   accepted: number;
   inserted: number;
   ignored: number;
+  results: DeviceIngestItemResult[];
+}
+
+export interface DeviceIngestItemResult {
+  id: string;
+  dedupe_key?: string;
+  status: "inserted" | "duplicate";
 }
 
 /**
@@ -197,7 +204,7 @@ export async function ingestDeviceItems(
   deviceId: string,
   items: DeviceItemInput[],
 ): Promise<DeviceIngestResult> {
-  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0 };
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, results: [] };
   const createdAt = nowIso();
 
   const signals = items.map((item) => {
@@ -241,6 +248,12 @@ export async function ingestDeviceItems(
   });
 
   const result = await v3Db.ingestPersonalSignals(signals);
+  const insertedIds = new Set(result.ids);
+  const itemResults: DeviceIngestItemResult[] = signals.map((signal) => ({
+    id: signal.id,
+    ...(signal.dedupeKey ? { dedupe_key: signal.dedupeKey } : {}),
+    status: insertedIds.has(signal.id) ? "inserted" : "duplicate",
+  }));
 
   // Fan out snapshot-type payloads to raw.db so evolution agents can query
   // them tabularly ("top 20 apps", "search contact by name"). Failures here
@@ -276,6 +289,7 @@ export async function ingestDeviceItems(
     accepted: items.length,
     inserted: result.inserted ?? 0,
     ignored: (items.length - (result.inserted ?? 0)),
+    results: itemResults,
   };
 }
 
@@ -378,13 +392,15 @@ export function handleDevices(): RouteHandler {
       }
 
       let accepted = 0, inserted = 0, ignored = 0;
+      const results: DeviceIngestItemResult[] = [];
       for (const [deviceId, items] of byDevice) {
         const r = await ingestDeviceItems(deviceId, items);
         accepted += r.accepted;
         inserted += r.inserted;
         ignored += r.ignored;
+        results.push(...r.results);
       }
-      json(ctx.res, 200, { ok: true, accepted, inserted, ignored });
+      json(ctx.res, 200, { ok: true, accepted, inserted, ignored, results });
       return true;
     }
 

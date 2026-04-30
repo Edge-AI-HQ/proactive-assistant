@@ -22,9 +22,10 @@ declare global {
 
 const IS_PRODUCTION = (process.env.NODE_ENV ?? '').toLowerCase() === 'production';
 
-// Dev shortcut: when not in production, route every request through a
-// single fixed local user. No token, no Supabase, no Google login. This
-// keeps the data path the only thing we're testing.
+// Dev shortcut: when not in production and no Bearer token is provided,
+// route the request through a single fixed local user. Mobile/local web
+// sessions that do provide a Supabase token still resolve to the real user,
+// so device registration and ingest test the same ownership path as prod.
 //
 // Production paths still require a real Supabase JWT — the prod env never
 // sets NODE_ENV=development, so this branch can't trigger there.
@@ -59,31 +60,19 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
 
-/**
- * In dev: synthesise a fixed user, no auth required.
- * In prod: require a valid Supabase JWT in Authorization header.
- */
-export function requireProactiveAuth(req: Request, res: Response, next: NextFunction): void {
-  if (!IS_PRODUCTION) {
-    ensureDevUser()
-      .then(() => {
-        req.proactiveAuth = { userId: DEV_USER.userId, email: DEV_USER.email };
-        next();
-      })
-      .catch((err) => {
-        console.error('[proactive-auth] dev user upsert failed:', err);
-        res.status(500).json({ error: 'Dev auth bootstrap failed' });
-      });
-    return;
-  }
+function applyDevAuth(req: Request, res: Response, next: NextFunction): void {
+  ensureDevUser()
+    .then(() => {
+      req.proactiveAuth = { userId: DEV_USER.userId, email: DEV_USER.email };
+      next();
+    })
+    .catch((err) => {
+      console.error('[proactive-auth] dev user upsert failed:', err);
+      res.status(500).json({ error: 'Dev auth bootstrap failed' });
+    });
+}
 
-  const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Missing authorization token' });
-    return;
-  }
-  const token = authHeader.slice(7);
-
+function applySupabaseAuth(token: string, req: Request, res: Response, next: NextFunction): void {
   supabase.auth.getUser(token).then(({ data, error }) => {
     if (error || !data.user) {
       console.error('[proactive-auth] getUser failed', { error: error?.message, status: error?.status, hasUser: !!data?.user });
@@ -102,4 +91,22 @@ export function requireProactiveAuth(req: Request, res: Response, next: NextFunc
     console.error('[proactive-auth] Token verification error:', err);
     res.status(401).json({ error: 'Token verification failed' });
   });
+}
+
+/**
+ * In dev: use a real Supabase JWT when present; otherwise synthesize a fixed user.
+ * In prod: require a valid Supabase JWT in Authorization header.
+ */
+export function requireProactiveAuth(req: Request, res: Response, next: NextFunction): void {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) {
+    if (!IS_PRODUCTION) {
+      applyDevAuth(req, res, next);
+      return;
+    }
+    res.status(401).json({ error: 'Missing authorization token' });
+    return;
+  }
+  const token = authHeader.slice(7);
+  applySupabaseAuth(token, req, res, next);
 }

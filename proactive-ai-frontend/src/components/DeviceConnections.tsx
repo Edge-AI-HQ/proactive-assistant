@@ -9,8 +9,9 @@ import DeviceTimeline from "./DeviceTimeline";
  * Hardware Devices section in Control Center.
  * - Lists active devices from /api/proactive/devices.
  * - "Add hardware" opens an inline form to register a new device
- *   (platform=wearable | sensor | embedded; phone/web are auto-registered
- *   on app launch and not exposed here).
+ *   (platform=wearable | sensor | embedded).
+ * - Native phones are auto-registered by the app and listed here as
+ *   peer devices. The current web browser remains in SelfDevicePanel.
  * - Tapping a device drills into its time-axis waterfall view.
  */
 type AddTab = null | "pair-code" | "manual";
@@ -20,8 +21,8 @@ export default function DeviceConnections() {
   const [addTab, setAddTab] = useState<AddTab>(null);
   const [selectedDevice, setSelectedDevice] = useState<UserDevice | null>(null);
 
-  const hardwareDevices = useMemo(
-    () => devices.filter((d) => d.platform !== "ios" && d.platform !== "android" && d.platform !== "web"),
+  const peerDevices = useMemo(
+    () => devices.filter((d) => d.platform !== "web"),
     [devices],
   );
 
@@ -30,20 +31,20 @@ export default function DeviceConnections() {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 min-w-0">
       <SelfDevicePanel
         devices={devices}
         onIngested={() => { void refresh(); }}
         onOpenTimeline={(d) => setSelectedDevice(d)}
       />
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-[11px] text-foreground/50">
-          Wearables, sensors, and other hardware that push to your container.
+      <div className="space-y-2">
+        <p className="text-[11px] leading-relaxed text-foreground/50">
+          Mobile apps, wearables, sensors, and embedded devices that push to your container.
         </p>
-        <div className="flex items-center gap-1.5">
+        <div className="grid grid-cols-2 gap-2">
           <button
             onClick={() => setAddTab(addTab === "pair-code" ? null : "pair-code")}
-            className={`text-[11px] transition px-2 py-1 rounded-md border flex items-center gap-1 ${
+            className={`min-h-8 justify-center whitespace-nowrap text-[11px] transition px-2.5 py-1.5 rounded-md border flex items-center gap-1 ${
               addTab === "pair-code"
                 ? "bg-foreground/85 text-background border-foreground/85"
                 : "text-foreground/70 hover:text-foreground border-foreground/15"
@@ -53,7 +54,7 @@ export default function DeviceConnections() {
           </button>
           <button
             onClick={() => setAddTab(addTab === "manual" ? null : "manual")}
-            className={`text-[10px] transition px-2 py-1 rounded-md border flex items-center gap-1 ${
+            className={`min-h-8 justify-center whitespace-nowrap text-[11px] transition px-2.5 py-1.5 rounded-md border flex items-center gap-1 ${
               addTab === "manual"
                 ? "bg-foreground/85 text-background border-foreground/85"
                 : "text-foreground/40 hover:text-foreground/70 border-foreground/10"
@@ -89,18 +90,18 @@ export default function DeviceConnections() {
         </div>
       )}
 
-      {loading && hardwareDevices.length === 0 ? (
+      {loading && peerDevices.length === 0 ? (
         <div className="flex items-center gap-2 text-xs text-foreground/50 py-4 justify-center">
           <Loader2 size={12} className="animate-spin" /> Loading devices…
         </div>
-      ) : hardwareDevices.length === 0 && addTab === null ? (
+      ) : peerDevices.length === 0 && addTab === null ? (
         <div className="text-xs text-foreground/40 py-4 text-center">
-          No hardware paired yet. Tap "Pair with code" — a device shows a 6-character
-          code, you enter it here.
+          No other devices paired yet. Sign in on the mobile app, or tap "Pair with code"
+          for hardware that shows a 6-character code.
         </div>
       ) : (
         <ul className="space-y-2">
-          {hardwareDevices.map((d) => (
+          {peerDevices.map((d) => (
             <DeviceRow
               key={d.device_id}
               device={d}
@@ -238,42 +239,46 @@ function SelfDevicePanel({
   };
 
   return (
-    <div className="glass-card p-3 space-y-2">
-      <div className="flex items-center gap-2">
+    <div className="glass-card p-3 space-y-2.5 min-w-0">
+      <div className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-2">
         <Smartphone size={14} className="text-foreground/60" />
-        <span className="text-xs font-medium">This device</span>
-        <span className="text-[10px] text-foreground/40 ml-auto">
-          {creds
-            ? `${creds.platform} · ${creds.deviceId.slice(0, 12)}…`
-            : bootstrapErr ? "bootstrap failed" : "registering…"}
-        </span>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium shrink-0">This device</span>
+            <span className="min-w-0 flex-1 truncate text-right text-[10px] text-foreground/40">
+              {creds
+                ? `${creds.platform} · ${creds.deviceId.slice(0, 12)}…`
+                : bootstrapErr ? "bootstrap failed" : "registering…"}
+            </span>
+          </div>
+          {selfDevice && (
+            <button
+              onClick={() => onOpenTimeline(selfDevice)}
+              className="mt-1 ml-auto flex items-center gap-1 text-[10px] text-foreground/55 hover:text-foreground transition"
+            >
+              View timeline <ChevronRight size={10} />
+            </button>
+          )}
+        </div>
       </div>
 
       {bootstrapErr && (
         <div className="text-[10px] text-red-500/80 px-1">{bootstrapErr}</div>
       )}
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <button
           onClick={() => void sendTest()}
           disabled={!creds || busy}
-          className="text-[11px] px-3 py-1.5 rounded-md bg-foreground/85 text-background hover:bg-foreground transition flex items-center gap-1.5 disabled:opacity-40"
+          className="min-h-8 whitespace-nowrap text-[11px] px-3 py-1.5 rounded-md bg-foreground/85 text-background hover:bg-foreground transition flex items-center gap-1.5 disabled:opacity-40"
         >
           {busy ? <Loader2 size={11} className="animate-spin" /> : <Send size={11} />}
           Send test signal
         </button>
         {lastResult && (
-          <span className={`text-[10px] ${lastResult.startsWith("Error") ? "text-red-500/80" : "text-emerald-600/80"}`}>
+          <span className={`min-w-0 text-[10px] ${lastResult.startsWith("Error") ? "text-red-500/80" : "text-emerald-600/80"}`}>
             {lastResult}
           </span>
-        )}
-        {selfDevice && (
-          <button
-            onClick={() => onOpenTimeline(selfDevice)}
-            className="text-[10px] text-foreground/60 hover:text-foreground transition ml-auto flex items-center gap-1"
-          >
-            View timeline <ChevronRight size={10} />
-          </button>
         )}
       </div>
     </div>

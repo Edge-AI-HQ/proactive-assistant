@@ -205,6 +205,9 @@ test("handleDevices /devices/ingest: duplicate dedupeKey → ignored on second p
   assert.equal(body.accepted, 1);
   assert.equal(body.inserted, 0);
   assert.equal(body.ignored, 1);
+  assert.deepEqual(body.results, [
+    { id: "d2", dedupe_key: "k1", status: "duplicate" },
+  ]);
 }));
 
 test("handleDevices does not claim unrelated paths", withTempHome(async () => {

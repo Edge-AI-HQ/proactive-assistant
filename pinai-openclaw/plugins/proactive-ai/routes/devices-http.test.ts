@@ -228,6 +228,7 @@ test("POST /devices/ingest — empty items array → accepted=0, no rows", withT
   assert.equal(status, 200);
   assert.equal(body.accepted, 0);
   assert.equal(body.inserted, 0);
+  assert.deepEqual(body.results, []);
   const signals = await listPersonalSignals({ status: "open" });
   assert.equal(signals.length, 0);
 }));
