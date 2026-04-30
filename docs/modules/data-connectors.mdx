@@ -10,7 +10,7 @@ description: "Composio、device、mobile 数据接入与 connector.init 后台�
 Data Connectors 负责"数据源怎么接进来"，不负责后续记忆提炼。三条主链路：
 
 - **Composio**：连接 SaaS 账号（OAuth + identity cache）；连接 ACTIVE 后由 `connector.init` 后台任务从 Composio 拉一批最近数据写到 `raw.db` typed 表 + `personal_signals`，并打开 `evolution_runs(trigger_kind='on_event')` 给 Memory 模块的 evolve agent 消费。之后由 `connector.sync` 每隔 `CONNECTOR_SYNC_INTERVAL_MS`（默认 12h）做增量拉取，靠 `connector_sync_cursors.last_synced_at` 当 since 下界。
-- **Device / mobile**：作为第一方数据源，通过 device token 路由到用户容器，写入 `personal_signals`，snapshot 类 payload 同时 fan-out 到 `raw.db`。
+- **Device / mobile**：作为第一方数据源，通过 device token 路由到用户容器。`/devices/ingest` 先按云端 `kind` policy 判断落点：事件类进 `personal_signals`，app/contact snapshot 双写 raw + signal，健康批量数据进 `raw.db.device_health_observations`；unknown `kind` 默认 fallback 到 signal。`sync_mode` 放在 payload 外，缺省 `incremental`，显式 `full` 才走全量替代语义。
 - **Background scheduler**：`connector.init` / `connector.sync` / `auto.dreaming` 都跑在共用的 `background_tasks` 队列上（lease + heartbeat + reaper + 单 worker mutex）。`connector.init` 入队靠 `/composio/wait` ACTIVE 触发 + 周期性 reconciler 兜底；`connector.sync` 入队靠 `connector-sync-enqueuer` 周期扫 ACTIVE 账号 + window/cursor 双重 gate。
 
 ```mermaid
@@ -33,8 +33,9 @@ flowchart LR
   SyncH --> Cursors
   Mobile["Mobile app"] --> MobileProxy["/api/proactive/devices/ingest"]
   MobileProxy --> MobileRoute["/devices/ingest"]
-  MobileRoute --> PS
-  MobileRoute --> Raw
+  MobileRoute --> Policy["DeviceIngestPolicyRegistry"]
+  Policy --> PS
+  Policy --> Raw
 ```
 
 ## 边界
@@ -50,7 +51,7 @@ flowchart LR
 - `tasks/connector-sync-enqueuer.ts`：周期扫 ACTIVE accounts；当 init 已 succeeded 且当前 window 还没 sync 过时入队 `connector.sync`。
 - `user_devices` 注册、token 轮换、撤销和校验。
 - `/api/proactive/devices/ingest` 到用户容器内 `/proactive-ai/api/devices/ingest` 的代理；`/api/mobile/*` 只作为旧客户端兼容入口。
-- `/devices/ingest` 写入 `personal_signals` 和 raw snapshot 表，并返回 item-level `results[]` 给端侧确认哪些 item 已入库或已存在。
+- `/devices/ingest` 按云端 policy 写入 `personal_signals` / typed raw 表 / 双写，并返回 item-level `results[]` 给端侧确认哪些 item 已入库或已存在。
 
 不包含：
 
@@ -66,7 +67,7 @@ flowchart LR
 | Composio (`connector.init`) | ACTIVE 后台首次拉一批数据 | `tasks/handlers/connector-init.ts`、`tasks/reconciler.ts` | 各 toolkit 自己的 raw 表 + `personal_signals` + `evolution_runs(trigger_kind='on_event')` |
 | Composio (`connector.sync`) | 周期增量拉取，按 cursor 续游 | `tasks/handlers/connector-sync.ts`、`tasks/connector-sync-enqueuer.ts` | 同上 raw / signals / evolution_runs；额外 upsert `connector_sync_cursors` |
 | Device registry | 给 web/iOS/Android 设备发 token，用于后续 mobile sync | `apis/src/domain/devices/index.ts`、`proactive_routes.ts` | APIs Postgres `user_devices` |
-| Mobile ingest | 接收端侧整理后的高价值 item | `mobile_proxy.ts`、`routes/devices.ts` | `personal_signals`；snapshot fan-out 到 `raw.db.device_*_snapshot` |
+| Mobile ingest | 接收端侧整理后的 item / snapshot / 健康 observation | `mobile_proxy.ts`、`routes/devices.ts`、`device-ingest/policies.ts` | 由云端 policy 决定：`personal_signals`、`raw.db.device_apps_snapshot`、`raw.db.device_contacts_snapshot`、`raw.db.device_health_observations` |
 
 ## 当前支持的 Composio toolkit（11 个）
 
@@ -188,7 +189,8 @@ sequenceDiagram
   FE->>APIs: POST /api/proactive/devices/ingest + X-Device-*
   APIs->>DB: validate token
   APIs->>OC: proxy to /proactive-ai/api/devices/ingest
-  OC->>OC: write personal_signals + raw.db snapshots
+  OC->>OC: resolve kind policy + sync_mode
+  OC->>OC: write personal_signals / typed raw / dual
 ```
 
 ## 当前设计
@@ -203,6 +205,10 @@ sequenceDiagram
 - Device token 只在注册/轮换时明文返回一次，服务端只保存 bcrypt hash。
 - mobile proxy 默认开启；`MOBILE_SYNC_PROXY_ENABLED=0|false|off|no` 只作为紧急 kill switch。
 - `/devices/ingest` 是当前 mobile 写入入口；`/api/mobile/items/ingest` 只做兼容重写到新路由。旧 `/mobile/items`、`/mobile/items/claim`、`/mobile/items/commit` 已返回 `410 Gone`。
+- `kind` 只表达数据类型，端侧不能指定 `destination=raw/signal`；落点由 `DeviceIngestPolicyRegistry` 控制。
+- `sync_mode` 是 item envelope 字段，支持 `incremental` / `full`。缺省或非法值按 `incremental` 处理；`full` 只对已注册 raw policy 生效。
+- `app_inventory` / `app_inventory_bootstrap` / `app_inventory_snapshot` 共用 app inventory policy；`contact_directory` / `contact_bootstrap` / `contact_directory_snapshot` 共用联系人 policy。
+- `health.observation` 是第一版唯一健康 raw `kind`，写 `raw.db.device_health_observations`，不默认写 signal；parse 失败或 unsafe full scope 会 fallback 到 signal 并在 payload 标 `ingest_fallback_reason`。健康 full 只替换 scope 内未被引用的旧 raw 行，避免断开 evolution/memory 已记录的证据引用。
 
 ## 开发入口
 
@@ -217,7 +223,8 @@ sequenceDiagram
 | internal `pin tasks` CLI / `/tasks` HTTP | `cli/tasks.ts`、`routes/tasks.ts` |
 | Device 注册和 token | `apis/src/domain/devices/index.ts`、`apis/src/controller/proactive_routes.ts` |
 | Mobile proxy / ingest | `apis/src/domain/proactive/mobile_proxy.ts`、`pinai-openclaw/plugins/proactive-ai/routes/devices.ts` |
-| raw snapshot 表 | `pinai-openclaw/plugins/proactive-ai/raw-db.ts` |
+| Device ingest policy | `pinai-openclaw/plugins/proactive-ai/device-ingest/policies.ts`、`pinai-openclaw/plugins/proactive-ai/device-ingest/health.ts` |
+| raw snapshot / health 表 | `pinai-openclaw/plugins/proactive-ai/raw-db.ts` |
 
 ## 验证方式
 
@@ -283,6 +290,7 @@ pin raw notion list                                     # notion
 pin raw gdrive list --mimeType application/vnd.google-apps.document
 pin raw github list --state open --isPullRequest false
 pin raw outlook list --importance high
+pin raw device-health list --localDate 2026-04-30
 pin signals recent --kind connector.gmail.message
 PIN_CLI_SURFACE=internal pin evolution recent --kind on_event   # connector.init / connector.sync 元记录
 pin memory list --source 'connector_init:gmail'         # evolve 写入的事实
@@ -290,7 +298,7 @@ pin memory list --source 'connector_init:gmail'         # evolve 写入的事实
 
 ## 踩坑
 
-- 不要恢复 `mobile_items.db` 读写链路；mobile 数据已经直写 `personal_signals`。
+- 不要恢复 `mobile_items.db` 读写链路；mobile 数据已经直走 `/devices/ingest`，再由云端 policy 写 `personal_signals` / typed raw 表。
 - `container_status=running` 不代表 mobile target 可用，proxy 仍可能因容器未就绪返回 503。
 - Composio 连接状态是外部平台事实，不能只信前端本地状态。
 - Device token 不能写日志，不能存明文到 APIs DB。

@@ -297,6 +297,7 @@ test('pin sys schema exposes only the public PCI surface', async () => {
     'status', 'connections list', 'connect', 'wait', 'tools search', 'tools schema', 'exec',
   ]);
   assert.deepEqual(r.data.domains.sys, ['schema']);
+  assert.equal(r.data.domains.raw.includes('device-health list'), true);
   assert.equal(r.data.domains.world.includes('index'), false);
   assert.equal(
     r.data.domains.personal.some((cmd: string) => cmd.startsWith('mobile')),

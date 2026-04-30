@@ -1,7 +1,8 @@
 /**
  * Unified device intake. All devices (phone / wearable / sensor / etc.)
- * push items here. Each item lands in `personal_signals` (proactive.db);
- * snapshot itemTypes additionally fan out to `raw.db.device_*_snapshot`;
+ * push items here. Cloud-side kind policies decide whether an item lands in
+ * `personal_signals`, a typed `raw.db` table, or both. Unknown kinds fall
+ * back to `personal_signals` so uploads are not dropped.
  * itemTypes carrying base64 binary (ambient.image_chunk / ambient.audio_chunk)
  * have their bytes written to the FS under
  * `<OPENCLAW_HOME>/data/media/<deviceId>/<YYYY-MM-DD>/<id>.<ext>` and
@@ -15,6 +16,15 @@ import fs from "node:fs";
 import path from "node:path";
 import * as v3Db from "../db.js";
 import * as rawDb from "../raw-db.js";
+import {
+  buildDefaultDeviceSignal,
+  normalizeDeviceSyncMode,
+  resolveDeviceIngestPolicy,
+  type DeviceIngestItem,
+  type DeviceRawReplaceScope,
+  type DeviceRawWrite,
+  type DeviceSyncMode,
+} from "../device-ingest/policies.js";
 import type { RouteHandler } from "./types.js";
 import { json, readBody } from "./types.js";
 
@@ -47,6 +57,7 @@ export interface DeviceItemInput {
    * HTTP boundary).
    */
   itemType: string;
+  syncMode?: DeviceSyncMode;
   title: string;
   summary: string;
   payload?: Record<string, unknown>;
@@ -56,62 +67,6 @@ export interface DeviceItemInput {
   occurredAt?: string | number;
   availableAt?: string | number;
   expiresAt?: string | number;
-}
-
-/**
- * Pull the app list out of a snapshot payload. The on-device
- * ItemDerivationEngine packs things under different keys depending on
- * bootstrap vs incremental, so we try the common shapes.
- */
-function extractAppsFromPayload(payload: Record<string, unknown>): Array<{
-  bundleId: string; appName: string; version?: string | null; lastUsedAt?: string | null;
-}> {
-  const candidates: unknown[] = [];
-  if (Array.isArray(payload.apps)) candidates.push(...payload.apps);
-  if (Array.isArray(payload.installedApps)) candidates.push(...payload.installedApps);
-  if (Array.isArray(payload.items)) candidates.push(...payload.items);
-  if (Array.isArray(payload.entries)) candidates.push(...payload.entries);
-  return candidates
-    .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
-    .map((row) => ({
-      bundleId: typeof row.bundleId === "string" ? row.bundleId
-        : typeof row.bundle_id === "string" ? row.bundle_id
-        : typeof row.packageName === "string" ? row.packageName : "",
-      appName: typeof row.appName === "string" ? row.appName
-        : typeof row.app_name === "string" ? row.app_name
-        : typeof row.name === "string" ? row.name : "",
-      version: typeof row.version === "string" ? row.version : null,
-      lastUsedAt: typeof row.lastUsedAt === "string" ? row.lastUsedAt
-        : typeof row.last_used_at === "string" ? row.last_used_at : null,
-    }))
-    .filter((a) => a.bundleId && a.appName);
-}
-
-function extractContactsFromPayload(payload: Record<string, unknown>): Array<{
-  displayName?: string | null; emails?: string[]; phones?: string[]; lastModified?: string | null;
-}> {
-  const candidates: unknown[] = [];
-  if (Array.isArray(payload.contacts)) candidates.push(...payload.contacts);
-  if (Array.isArray(payload.items)) candidates.push(...payload.items);
-  if (Array.isArray(payload.entries)) candidates.push(...payload.entries);
-  return candidates
-    .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
-    .map((row) => {
-      const emails = Array.isArray(row.emails) ? row.emails.filter((e): e is string => typeof e === "string")
-        : typeof row.email === "string" ? [row.email] : [];
-      const phones = Array.isArray(row.phones) ? row.phones.filter((p): p is string => typeof p === "string")
-        : Array.isArray(row.phoneNumbers) ? row.phoneNumbers.filter((p): p is string => typeof p === "string")
-        : typeof row.phone === "string" ? [row.phone] : [];
-      return {
-        displayName: typeof row.displayName === "string" ? row.displayName
-          : typeof row.display_name === "string" ? row.display_name
-          : typeof row.name === "string" ? row.name : null,
-        emails,
-        phones,
-        lastModified: typeof row.lastModified === "string" ? row.lastModified
-          : typeof row.last_modified === "string" ? row.last_modified : null,
-      };
-    });
 }
 
 export interface DeviceIngestResult {
@@ -191,10 +146,38 @@ function persistBinary(
   return { filePath: relPath, byteLen: buf.length };
 }
 
+function writeRaw(
+  write: DeviceRawWrite,
+  syncMode: DeviceSyncMode,
+  scope: DeviceRawReplaceScope | null,
+): rawDb.IngestResult {
+  if (write.table === "device_apps_snapshot") {
+    return syncMode === "full"
+      ? rawDb.replaceDeviceAppsSnapshot(write.input)
+      : rawDb.ingestDeviceAppsSnapshot(write.input);
+  }
+  if (write.table === "device_contacts_snapshot") {
+    return syncMode === "full"
+      ? rawDb.replaceDeviceContactsSnapshot(write.input)
+      : rawDb.ingestDeviceContactsSnapshot(write.input);
+  }
+  if (write.table === "device_health_observations") {
+    if (syncMode === "full") {
+      if (!scope || scope.table !== "device_health_observations") {
+        return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+      }
+      return rawDb.replaceDeviceHealthObservations(scope, write.input);
+    }
+    return rawDb.ingestDeviceHealthObservations(write.input);
+  }
+  return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+}
+
 /**
  * Core write path. Shared between the HTTP handler and test code.
- * Writes every item to `personal_signals` (dedupe_key enforced) and
- * additionally fans snapshot-type payloads out to raw.db.
+ * Applies the device ingest policy registry. Most event-like kinds write to
+ * `personal_signals`; registered raw kinds write to typed raw tables; `dual`
+ * policies do both.
  *
  * For media items (kind ∈ {ambient.image_chunk, ambient.audio_chunk, ...}),
  * the base64 bytes on payload.binary_b64 are written to the FS and the
@@ -207,7 +190,7 @@ export async function ingestDeviceItems(
   if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, results: [] };
   const createdAt = nowIso();
 
-  const signals = items.map((item) => {
+  const normalizedItems: DeviceIngestItem[] = items.map((item) => {
     const occurredAt = normalizeIso(item.occurredAt, createdAt);
     const availableAt = normalizeIso(item.availableAt, occurredAt);
     const expiresAt = normalizeExpiresAt(occurredAt, item.expiresAt);
@@ -232,7 +215,9 @@ export async function ingestDeviceItems(
 
     return {
       id: item.id,
+      deviceId,
       kind: item.itemType,
+      syncMode: item.syncMode ?? "incremental",
       title: item.title,
       summary: item.summary,
       payload,
@@ -242,53 +227,82 @@ export async function ingestDeviceItems(
       occurredAt,
       availableAt,
       expiresAt,
-      source: "device",
-      deviceId,
     };
   });
 
-  const result = await v3Db.ingestPersonalSignals(signals);
-  const insertedIds = new Set(result.ids);
-  const itemResults: DeviceIngestItemResult[] = signals.map((signal) => ({
-    id: signal.id,
-    ...(signal.dedupeKey ? { dedupe_key: signal.dedupeKey } : {}),
-    status: insertedIds.has(signal.id) ? "inserted" : "duplicate",
-  }));
+  const signalWrites: Array<{ itemId: string; input: v3Db.IngestPersonalSignalInput }> = [];
+  const rawInsertedByItem = new Map<string, boolean>();
 
-  // Fan out snapshot-type payloads to raw.db so evolution agents can query
-  // them tabularly ("top 20 apps", "search contact by name"). Failures here
-  // are logged but must not fail the overall ingest — personal_signals is
-  // the source of truth for "we got the upload".
-  for (const item of items) {
+  for (const item of normalizedItems) {
+    const policy = resolveDeviceIngestPolicy(item.kind);
+    let rawSucceeded = false;
+    let rawFailed = false;
+
     try {
-      if (item.itemType === "app_inventory_bootstrap" || item.itemType === "app_inventory_snapshot") {
-        const apps = extractAppsFromPayload(item.payload ?? {});
-        if (apps.length > 0) {
-          rawDb.ingestDeviceAppsSnapshot({
-            deviceId,
-            capturedAt: normalizeIso(item.occurredAt, createdAt),
-            apps,
-          });
+      if (policy.mode === "raw_only" || policy.mode === "dual") {
+        const rawWrites = policy.parseRaw?.(item) ?? [];
+        if (rawWrites.length === 0) {
+          const fallback = buildDefaultDeviceSignal(item, { fallbackReason: "raw_parse_failed" });
+          signalWrites.push({ itemId: item.id, input: fallback });
+          continue;
         }
-      } else if (item.itemType === "contact_directory_snapshot" || item.itemType === "contact_bootstrap") {
-        const contacts = extractContactsFromPayload(item.payload ?? {});
-        if (contacts.length > 0) {
-          rawDb.ingestDeviceContactsSnapshot({
-            deviceId,
-            capturedAt: normalizeIso(item.occurredAt, createdAt),
-            contacts,
-          });
+        const scope = item.syncMode === "full" ? policy.fullReplaceScope?.(item) ?? null : null;
+        if (item.syncMode === "full" && !scope) {
+          const fallback = buildDefaultDeviceSignal(item, { fallbackReason: "unsupported_full_sync" });
+          signalWrites.push({ itemId: item.id, input: fallback });
+          continue;
+        }
+        for (const write of rawWrites) {
+          const rawResult = writeRaw(write, item.syncMode, scope);
+          rawSucceeded = rawSucceeded || rawResult.inserted > 0;
         }
       }
     } catch (err) {
-      console.warn(`[device ingest] raw bridge for ${item.itemType} failed: ${err instanceof Error ? err.message : err}`);
+      rawFailed = true;
+      console.warn(`[device ingest] raw policy for ${item.kind} failed: ${err instanceof Error ? err.message : err}`);
+    }
+
+    rawInsertedByItem.set(item.id, rawSucceeded);
+
+    if (rawFailed && policy.mode === "raw_only") {
+      signalWrites.push({
+        itemId: item.id,
+        input: buildDefaultDeviceSignal(item, { fallbackReason: "raw_write_failed" }),
+      });
+      continue;
+    }
+
+    if (policy.mode === "signal_only" || policy.mode === "dual") {
+      const signal = policy.buildSignal?.(item) ?? buildDefaultDeviceSignal(item);
+      if (signal) signalWrites.push({ itemId: item.id, input: signal });
     }
   }
 
+  const signalInputs = signalWrites.map((write) => write.input);
+  const signalResult = await v3Db.ingestPersonalSignals(signalInputs);
+  const insertedSignalIds = new Set(signalResult.ids);
+  const signalInsertedByItem = new Map<string, boolean>();
+  for (const write of signalWrites) {
+    signalInsertedByItem.set(
+      write.itemId,
+      (signalInsertedByItem.get(write.itemId) ?? false) || insertedSignalIds.has(write.input.id ?? ""),
+    );
+  }
+
+  const itemResults: DeviceIngestItemResult[] = normalizedItems.map((item) => {
+    const inserted = (rawInsertedByItem.get(item.id) ?? false) || (signalInsertedByItem.get(item.id) ?? false);
+    return {
+      id: item.id,
+      dedupe_key: item.dedupeKey,
+      status: inserted ? "inserted" : "duplicate",
+    };
+  });
+  const inserted = itemResults.filter((item) => item.status === "inserted").length;
+
   return {
     accepted: items.length,
-    inserted: result.inserted ?? 0,
-    ignored: (items.length - (result.inserted ?? 0)),
+    inserted,
+    ignored: items.length - inserted,
     results: itemResults,
   };
 }
@@ -367,11 +381,16 @@ export function handleDevices(): RouteHandler {
         const availableAt = strOrNumField(item, "available_at", "availableAt");
         const expiresAt = strOrNumField(item, "expires_at", "expiresAt");
         const dedupeKey = strField(item, "dedupe_key", "dedupeKey");
+        const syncRaw = item.sync_mode ?? item.syncMode;
+        const syncMode = normalizeDeviceSyncMode(syncRaw);
+        if (syncRaw !== undefined && syncRaw !== "incremental" && syncRaw !== "full") {
+          console.warn(`[device ingest] invalid sync_mode for ${itemType}: ${String(syncRaw)}; defaulting to incremental`);
+        }
         const payload = typeof item.payload === "object" && item.payload !== null
           ? item.payload as Record<string, unknown> : {};
         const list = byDevice.get(deviceId) ?? [];
         list.push({
-          id, itemType, title, summary, payload,
+          id, itemType, syncMode, title, summary, payload,
           salience: typeof item.salience === "number" ? item.salience : 0,
           confidence: typeof item.confidence === "number" ? item.confidence : 0,
           dedupeKey,

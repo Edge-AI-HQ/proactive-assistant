@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import {
   ingestDeviceAppsSnapshot,
   ingestDeviceContactsSnapshot,
+  ingestDeviceHealthObservations,
   ingestGcalEvents,
   ingestGdriveFiles,
   ingestGithubIssues,
@@ -20,6 +21,8 @@ import {
   ingestOutlookMessages,
   ingestSlackMessages,
   listDeviceApps,
+  listDeviceContacts,
+  listDeviceHealthObservations,
   listGcalEvents,
   listGdriveFiles,
   listGithubIssues,
@@ -28,6 +31,8 @@ import {
   listOutlookMessages,
   listSlackMessages,
   markRawReferenced,
+  replaceDeviceAppsSnapshot,
+  replaceDeviceHealthObservations,
   resetRawDbForTests,
 } from './raw-db.ts';
 
@@ -177,6 +182,30 @@ test('listDeviceApps: latestSnapshotOnly returns only the most recent batch', as
   });
 });
 
+test('replaceDeviceAppsSnapshot: full replacement writes a new latest snapshot without deleting history', async () => {
+  await withTempHome(async () => {
+    ingestDeviceAppsSnapshot({
+      deviceId: 'dev-1',
+      capturedAt: '2026-04-22T08:00:00Z',
+      apps: [{ bundleId: 'com.old', appName: 'Old App' }],
+    });
+    replaceDeviceAppsSnapshot({
+      deviceId: 'dev-1',
+      capturedAt: '2026-04-23T08:00:00Z',
+      apps: [
+        { bundleId: 'com.new1', appName: 'New App 1' },
+        { bundleId: 'com.new2', appName: 'New App 2' },
+      ],
+    });
+
+    const latest = listDeviceApps({ deviceId: 'dev-1', latestSnapshotOnly: true });
+    assert.deepEqual(latest.map((a) => a.app_name).sort(), ['New App 1', 'New App 2']);
+
+    const all = listDeviceApps({ deviceId: 'dev-1' });
+    assert.equal(all.length, 3);
+  });
+});
+
 test('ingestDeviceAppsSnapshot: throws on missing deviceId', async () => {
   await withTempHome(async () => {
     assert.throws(
@@ -201,12 +230,130 @@ test('ingestDeviceContactsSnapshot: stores emails/phones as JSON arrays', async 
   });
 });
 
+test('listDeviceContacts: latestSnapshotOnly returns only the most recent batch', async () => {
+  await withTempHome(async () => {
+    ingestDeviceContactsSnapshot({
+      deviceId: 'dev-1',
+      capturedAt: '2026-04-22T08:00:00Z',
+      contacts: [{ displayName: 'Old', emails: ['old@example.com'] }],
+    });
+    ingestDeviceContactsSnapshot({
+      deviceId: 'dev-1',
+      capturedAt: '2026-04-23T08:00:00Z',
+      contacts: [{ displayName: 'New', emails: ['new@example.com'] }],
+    });
+
+    const latest = listDeviceContacts({ deviceId: 'dev-1', latestSnapshotOnly: true });
+    assert.equal(latest.length, 1);
+    assert.equal(latest[0]!.display_name, 'New');
+  });
+});
+
 test('ingestDeviceContactsSnapshot: throws on missing deviceId', async () => {
   await withTempHome(async () => {
     assert.throws(
       () => ingestDeviceContactsSnapshot({ deviceId: '', contacts: [{ displayName: 'x' }] }),
       /deviceId is required/,
     );
+  });
+});
+
+// ─── Device health observations ────────────────────────────────────────
+
+test('ingestDeviceHealthObservations: stores typed observations and payload_json', async () => {
+  await withTempHome(async () => {
+    const r = ingestDeviceHealthObservations({
+      deviceId: 'watch-1',
+      observations: [
+        {
+          observationType: 'sample',
+          metric: 'heart_rate',
+          value: 72,
+          unit: 'bpm',
+          startAt: '2026-04-30T09:59:00Z',
+          endAt: '2026-04-30T10:00:00Z',
+          sourceApp: 'healthkit',
+          payload: { raw_id: 'hr-1' },
+        },
+        {
+          observationType: 'daily_summary',
+          metric: 'steps',
+          value: 8120,
+          unit: 'count',
+          localDate: '2026-04-30',
+          sourceApp: 'healthkit',
+        },
+      ],
+    });
+
+    assert.equal(r.accepted, 2);
+    assert.equal(r.inserted, 2);
+
+    const rows = listDeviceHealthObservations({ deviceId: 'watch-1', localDate: '2026-04-30' });
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.metric, 'steps');
+    assert.equal(rows[0]!.payload.raw_id, undefined);
+
+    const heartRate = listDeviceHealthObservations({ deviceId: 'watch-1', metric: 'heart_rate' });
+    assert.equal(heartRate.length, 1);
+    assert.equal(heartRate[0]!.payload.raw_id, 'hr-1');
+  });
+});
+
+test('replaceDeviceHealthObservations: full replacement is scoped by device_id + local_date', async () => {
+  await withTempHome(async () => {
+    ingestDeviceHealthObservations({
+      deviceId: 'watch-1',
+      observations: [
+        { observationType: 'daily_summary', metric: 'steps', value: 1000, unit: 'count', localDate: '2026-04-30' },
+        { observationType: 'daily_summary', metric: 'steps', value: 2000, unit: 'count', localDate: '2026-05-01' },
+      ],
+    });
+
+    replaceDeviceHealthObservations(
+      { deviceId: 'watch-1', localDate: '2026-04-30' },
+      {
+        deviceId: 'watch-1',
+        observations: [
+          { observationType: 'daily_summary', metric: 'steps', value: 3000, unit: 'count', localDate: '2026-04-30' },
+        ],
+      },
+    );
+
+    const april30 = listDeviceHealthObservations({ deviceId: 'watch-1', localDate: '2026-04-30' });
+    assert.equal(april30.length, 1);
+    assert.equal(april30[0]!.value, 3000);
+
+    const may1 = listDeviceHealthObservations({ deviceId: 'watch-1', localDate: '2026-05-01' });
+    assert.equal(may1.length, 1);
+    assert.equal(may1[0]!.value, 2000);
+  });
+});
+
+test('replaceDeviceHealthObservations: preserves referenced raw rows in the replace scope', async () => {
+  await withTempHome(async () => {
+    ingestDeviceHealthObservations({
+      deviceId: 'watch-1',
+      observations: [
+        { id: 'health-old-referenced', observationType: 'daily_summary', metric: 'steps', value: 1000, unit: 'count', localDate: '2026-04-30' },
+        { id: 'health-old-unreferenced', observationType: 'daily_summary', metric: 'steps', value: 2000, unit: 'count', localDate: '2026-04-30' },
+      ],
+    });
+    markRawReferenced('device_health_observations', ['health-old-referenced'], 'run-1');
+
+    replaceDeviceHealthObservations(
+      { deviceId: 'watch-1', localDate: '2026-04-30' },
+      {
+        deviceId: 'watch-1',
+        observations: [
+          { id: 'health-new', observationType: 'daily_summary', metric: 'steps', value: 3000, unit: 'count', localDate: '2026-04-30' },
+        ],
+      },
+    );
+
+    const april30 = listDeviceHealthObservations({ deviceId: 'watch-1', localDate: '2026-04-30' });
+    assert.deepEqual(april30.map((row) => row.id).sort(), ['health-new', 'health-old-referenced']);
+    assert.equal(april30.find((row) => row.id === 'health-old-referenced')!.reference_count, 1);
   });
 });
 

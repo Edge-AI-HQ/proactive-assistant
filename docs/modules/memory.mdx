@@ -42,7 +42,7 @@ flowchart LR
 
 | 层 | 存储 | 作用 |
 |---|---|---|
-| Tier 0 raw | `raw.db` | Gmail / Calendar / Slack / Notion / Drive / GitHub / Docs / Outlook / Sheets / Stripe / Discord / device app/contact snapshot 等字段化批量数据。每个 Composio toolkit 一张 typed 表。 |
+| Tier 0 raw | `raw.db` | Gmail / Calendar / Slack / Notion / Drive / GitHub / Docs / Outlook / Sheets / Stripe / Discord / device app/contact snapshot / device health observations 等字段化批量数据。每个 Composio toolkit 或 device source 一张 typed 表。 |
 | Tier 1 signals | `personal_signals`、`world_signals` | 短期观察，默认先给 pipeline / evolution 消费。`connector.init` 落的信号 `kind=connector.<toolkit>.<entity>`。 |
 | Tier 2 memory | `memory` | evolution/manual 沉淀出的长期事实，有 `quality`、`confidence`、`status`。connector init 写入的 `source='connector_init:<toolkit>'`。 |
 | Tier 3 profile/skill | `profile`、`skill_index`、`skills/` | 高浓缩画像和可执行技能。 |
@@ -55,6 +55,7 @@ flowchart LR
 - `raw.db` 是独立 SQLite 文件，路径为 `${OPENCLAW_HOME}/data/raw.db`。
 - `proactive.db` 是主 SQLite 文件，路径为 `${OPENCLAW_HOME}/data/proactive.db`。
 - 需要追溯的表使用 `reference_count` / `last_referenced_at` / `referenced_by_runs`。
+- Device raw 目前包含 `device_apps_snapshot`、`device_contacts_snapshot`、`device_health_observations`。app/contact 的 `sync_mode: "full"` 通过新 `snapshot_id` 表达当前视图替代，保留历史 snapshot；健康 raw 的 full 第一版只允许安全的 `device_id + local_date` scope，且只清理 scope 内 `reference_count = 0` 的旧行，已被 evolution/memory 引用的 raw 证据保留。
 - `evolution_runs.trigger_kind` 现在有 5 种来源：`chat_burst`（crystallize）、`daily_dream`（auto.dreaming）、`manual`（CLI / 手动）、`on_event`（connector.init 拉数据后开的）、`consolidation`（预留）。
 - connector init 的 evolve agent（`tasks/handlers/connector-evolve.ts`）专门处理 `on_event`：把刚 ingest 的 raw + signals sample 进 prompt，让 LLM 抽出 durable facts 写到 `memory`，`source='connector_init:<toolkit>'`、`sourceRunId=<evolution_run_id>`。失败时 `evolution_runs.status='failed'`，`memory` 不写，`raw + signals` 仍然保留。
 - 默认 `pin` 入口是 **Public PCI surface**，只允许读取层和受控 `personal` 执行层：`raw`、`signals recent/list/get`、`memory list/get/search`、`profile get/snapshot`、`world` 查询、`cards recent`、`feedback list/get/stats`、`personal status/connections/connect/wait/tools/exec`、`sys schema`。`skills / evolution / tasks` 以及 `memory add/archive/supersede`、`signals consume`、`feedback log` 等写命令只保留为 internal/admin surface，必须显式 `PIN_CLI_SURFACE=internal pin ...`。
@@ -84,7 +85,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-  Snapshot["device/contact/app snapshot"] --> Raw["raw.db source table"]
+  Snapshot["device/contact/app snapshot\nhealth.observation"] --> Raw["raw.db source table"]
   Raw --> CLI["pin raw ..."]
   CLI --> Evo["evolution agent"]
   Evo --> Memory["memory"]
@@ -113,6 +114,7 @@ LLM 失败 / 超时 / 解析不出 JSON 时不抛出：`evolution_runs.status='f
 |---|---|
 | 主 DB schema / helpers | `pinai-openclaw/plugins/proactive-ai/db.ts` |
 | raw DB schema / helpers | `pinai-openclaw/plugins/proactive-ai/raw-db.ts` |
+| device ingest policy | `pinai-openclaw/plugins/proactive-ai/device-ingest/policies.ts`、`pinai-openclaw/plugins/proactive-ai/device-ingest/health.ts` |
 | HTTP routes | `routes/memory.ts`、`routes/signals.ts`、`routes/raw.ts`、`routes/profile.ts`、`routes/skills.ts`、`routes/evolution.ts` |
 | Public CLI dispatcher / schema | `cli/bin.ts`、`cli/sys.ts` |
 | Public CLI handlers | `cli/memory.ts`、`cli/signals.ts`、`cli/raw.ts`、`cli/profile.ts`、`cli/world.ts`、`cli/cards.ts`、`cli/feedback.ts`、`cli/personal.ts` |
@@ -177,6 +179,7 @@ pin signals recent --hours 24
 pin memory search --query "投资偏好" --limit 10
 pin memory list --subject-prefix topic:        # interests 现在以 memory 形式存
 pin raw gcal today --timezone Asia/Shanghai
+pin raw device-health list --hours 24 --limit 20
 pin sys schema                                  # public PCI surface
 
 # internal/admin only
@@ -190,12 +193,13 @@ PIN_CLI_SURFACE=internal pin evolution recent --limit 5
 - 不要让 device trigger 直接写高质量长期事实；高 `quality` memory 应由 evolution/manual 产生。
 - 不要把大 JSON 长期堆进 SQLite 行；大 run artifact 应落到 `data/run-artifacts/`。
 - v2 satellite 表已全部撤掉：`profile_signals` → `personal_signals`、`profile_interests` → `memory{subject:"<kind>:<key>"}`、`dream_runs` → `evolution_runs(trigger_kind='daily_dream')`、`auto_loop_state` / `chat_crystallize_state` → `app_state` KV、`push_records` / `push_outcomes` 整张干掉。改动前不要再去查这些表。
-- `mobile_items.db` 整个文件已撤；mobile 数据走 `personal_signals` + `raw.db` 双轨，不存在第三个 SQLite 文件。
+- `mobile_items.db` 整个文件已撤；mobile 数据走 `/devices/ingest`，再由云端 policy 写 `personal_signals` / typed `raw.db`，不存在第三个 SQLite 文件。
 - `goals` 表保留（一等集合），但带 `reference_count` / `last_referenced_at` / `referenced_by_runs` 三元组，evolution 引用 goal 时要 `markGoalsReferenced()`。
 
 ## 相关 AI Plans
 
 - [Memory Architecture](../plans/memory-architecture)：Memory / Profile / Skill v3 的详细 schema、迁移映射和实施计划。
+- [Device Ingest Policy + Health Raw](../plans/2026-04-30-device-ingest-policy-and-health-raw)：端侧 `kind` policy、`sync_mode`、unknown fallback、健康 raw 表的设计取舍。
 
 ## 与其他模块的边界
 

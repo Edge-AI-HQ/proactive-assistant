@@ -16,7 +16,7 @@ import path from "node:path";
 
 import { handleDevices } from "./devices.ts";
 import { listPersonalSignals, resetDbForTests } from "../db.ts";
-import { listDeviceApps, listDeviceContacts, resetRawDbForTests } from "../raw-db.ts";
+import { listDeviceApps, listDeviceContacts, listDeviceHealthObservations, resetRawDbForTests } from "../raw-db.ts";
 
 function withTempHome(fn: (baseUrl: string) => Promise<void>) {
   return async () => {
@@ -182,6 +182,181 @@ test("POST /devices/ingest — contact snapshot fans out + is searchable", withT
   });
   assert.equal(searched.length, 1);
   assert.equal(searched[0]!.display_name, "妈妈");
+}));
+
+test("POST /devices/ingest — app_inventory with sync_mode=full replaces the latest raw view", withTempHome(async (baseUrl) => {
+  const first = await postJson(`${baseUrl}/devices/ingest`, {
+    deviceId: "pixel-apps-full",
+    items: [{
+      id: "apps-full-1",
+      kind: "app_inventory",
+      sync_mode: "full",
+      title: "Apps installed",
+      summary: "2 apps",
+      occurred_at: "2026-04-23T08:00:00Z",
+      payload: {
+        apps: [
+          { bundleId: "com.old.a", appName: "Old A" },
+          { bundleId: "com.old.b", appName: "Old B" },
+        ],
+      },
+    }],
+  });
+  assert.equal(first.status, 200);
+  assert.equal(first.body.inserted, 1);
+
+  const second = await postJson(`${baseUrl}/devices/ingest`, {
+    deviceId: "pixel-apps-full",
+    items: [{
+      id: "apps-full-2",
+      kind: "app_inventory",
+      sync_mode: "full",
+      title: "Apps installed",
+      summary: "1 app",
+      occurred_at: "2026-04-24T08:00:00Z",
+      payload: {
+        apps: [
+          { bundleId: "com.new.only", appName: "New Only" },
+        ],
+      },
+    }],
+  });
+  assert.equal(second.status, 200);
+  assert.equal(second.body.inserted, 1);
+
+  const latest = listDeviceApps({ deviceId: "pixel-apps-full", latestSnapshotOnly: true });
+  assert.deepEqual(latest.map((a) => a.app_name), ["New Only"]);
+
+  const all = listDeviceApps({ deviceId: "pixel-apps-full" });
+  assert.equal(all.length, 3, "full sync keeps historical snapshots for reference tracking");
+}));
+
+test("POST /devices/ingest — invalid sync_mode defaults to incremental", withTempHome(async (baseUrl) => {
+  const { status, body } = await postJson(`${baseUrl}/devices/ingest`, {
+    deviceId: "sync-default",
+    items: [{
+      id: "bad-sync-mode",
+      kind: "moment",
+      sync_mode: "replace_everything",
+      title: "bad sync mode",
+      summary: "still accepted as incremental",
+      payload: {},
+    }],
+  });
+
+  assert.equal(status, 200);
+  assert.equal(body.accepted, 1);
+  assert.equal(body.inserted, 1);
+
+  const signals = await listPersonalSignals({ deviceId: "sync-default" });
+  assert.equal(signals.length, 1);
+  assert.equal(signals[0]!.kind, "moment");
+}));
+
+test("POST /devices/ingest — health.observation writes raw only", withTempHome(async (baseUrl) => {
+  const { status, body } = await postJson(`${baseUrl}/devices/ingest`, {
+    deviceId: "watch-raw",
+    items: [{
+      id: "health-1",
+      kind: "health.observation",
+      title: "Health observations",
+      summary: "2 observations",
+      occurred_at: "2026-04-30T10:00:00Z",
+      payload: {
+        observations: [
+          {
+            observation_type: "sample",
+            metric: "heart_rate",
+            value: 72,
+            unit: "bpm",
+            start_at: "2026-04-30T09:59:00Z",
+            end_at: "2026-04-30T10:00:00Z",
+            source_app: "healthkit",
+          },
+          {
+            observation_type: "daily_summary",
+            metric: "steps",
+            value: 8120,
+            unit: "count",
+            local_date: "2026-04-30",
+            source_app: "healthkit",
+          },
+        ],
+      },
+    }],
+  });
+
+  assert.equal(status, 200);
+  assert.equal(body.accepted, 1);
+  assert.equal(body.inserted, 1);
+
+  const signals = await listPersonalSignals({ deviceId: "watch-raw" });
+  assert.equal(signals.length, 0);
+
+  const rows = listDeviceHealthObservations({ deviceId: "watch-raw" });
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows.map((row) => row.metric).sort(), ["heart_rate", "steps"]);
+}));
+
+test("POST /devices/ingest — health.observation parse failure falls back to signal", withTempHome(async (baseUrl) => {
+  const { status, body } = await postJson(`${baseUrl}/devices/ingest`, {
+    deviceId: "watch-fallback",
+    items: [{
+      id: "health-bad",
+      kind: "health.observation",
+      title: "Health observations",
+      summary: "invalid observations",
+      payload: { observations: [{ metric: "steps", value: 1 }] },
+    }],
+  });
+
+  assert.equal(status, 200);
+  assert.equal(body.accepted, 1);
+  assert.equal(body.inserted, 1);
+
+  const rows = listDeviceHealthObservations({ deviceId: "watch-fallback" });
+  assert.equal(rows.length, 0);
+
+  const signals = await listPersonalSignals({ deviceId: "watch-fallback" });
+  assert.equal(signals.length, 1);
+  assert.equal(signals[0]!.kind, "health.observation");
+  assert.equal(signals[0]!.payload.ingest_fallback_reason, "raw_parse_failed");
+}));
+
+test("POST /devices/ingest — health.observation full sync without safe scope falls back to signal", withTempHome(async (baseUrl) => {
+  const { status, body } = await postJson(`${baseUrl}/devices/ingest`, {
+    deviceId: "watch-full-unsafe",
+    items: [{
+      id: "health-full-unsafe",
+      kind: "health.observation",
+      sync_mode: "full",
+      title: "Health observations",
+      summary: "missing local date",
+      payload: {
+        observations: [
+          {
+            observation_type: "sample",
+            metric: "heart_rate",
+            value: 72,
+            unit: "bpm",
+            start_at: "2026-04-30T09:59:00Z",
+            end_at: "2026-04-30T10:00:00Z",
+          },
+        ],
+      },
+    }],
+  });
+
+  assert.equal(status, 200);
+  assert.equal(body.accepted, 1);
+  assert.equal(body.inserted, 1);
+
+  const rows = listDeviceHealthObservations({ deviceId: "watch-full-unsafe" });
+  assert.equal(rows.length, 0);
+
+  const signals = await listPersonalSignals({ deviceId: "watch-full-unsafe" });
+  assert.equal(signals.length, 1);
+  assert.equal(signals[0]!.payload.ingest_fallback_reason, "unsupported_full_sync");
 }));
 
 test("POST /devices/ingest — repost with same dedupeKey is idempotent", withTempHome(async (baseUrl) => {

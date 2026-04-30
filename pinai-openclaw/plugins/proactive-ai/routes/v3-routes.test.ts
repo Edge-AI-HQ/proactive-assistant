@@ -20,7 +20,7 @@ import { handleSignals } from './signals.ts';
 import { handleRaw } from './raw.ts';
 import { handleEvolution } from './evolution.ts';
 import { resetDbForTests } from '../db.ts';
-import { ingestGmailMessages, resetRawDbForTests } from '../raw-db.ts';
+import { ingestDeviceHealthObservations, ingestGmailMessages, resetRawDbForTests } from '../raw-db.ts';
 
 function withTempHome(fn: () => Promise<void>) {
   return async () => {
@@ -375,6 +375,28 @@ test('GET /raw/device-contacts with latestSnapshotOnly=1 reads latest snapshot',
   assert.equal(r.body.total, 1);
   assert.equal(r.body.contacts.length, 1);
   assert.equal(r.body.contacts[0].display_name, 'New Person');
+}));
+
+test('GET /raw/device-health lists health observations', withTempHome(async () => {
+  ingestDeviceHealthObservations({
+    deviceId: 'watch-1',
+    observations: [
+      { observationType: 'daily_summary', metric: 'steps', value: 8120, unit: 'count', localDate: '2026-04-30' },
+      { observationType: 'sample', metric: 'heart_rate', value: 72, unit: 'bpm', startAt: '2026-04-30T09:59:00Z' },
+    ],
+  });
+
+  const h = handleRaw();
+  const r = await call(h, {
+    method: 'GET',
+    subpath: '/raw/device-health',
+    query: 'deviceId=watch-1&localDate=2026-04-30',
+  });
+
+  assert.equal(r.status, 200);
+  assert.equal(r.body.total, 1);
+  assert.equal(r.body.observations.length, 1);
+  assert.equal(r.body.observations[0].metric, 'steps');
 }));
 
 // ─── /evolution ─────────────────────────────────────────────────────────

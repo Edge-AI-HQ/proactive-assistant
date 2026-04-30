@@ -3,7 +3,7 @@ export const PUBLIC_COMMANDS = {
     ['gmail', 'recent'], ['gmail', 'thread'],
     ['gcal', 'today'], ['gcal', 'week'], ['gcal', 'list'],
     ['slack', 'list'], ['notion', 'list'], ['gdrive', 'list'], ['github', 'list'], ['outlook', 'list'],
-    ['device-apps'], ['device-contacts', 'list'], ['device-contacts', 'search'],
+    ['device-apps'], ['device-contacts', 'list'], ['device-contacts', 'search'], ['device-health', 'list'],
   ],
   signals: [['recent'], ['list'], ['get']],
   memory: [['list'], ['get'], ['search']],

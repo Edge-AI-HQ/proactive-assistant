@@ -92,15 +92,16 @@ command returns empty, that signal is itself useful — note it and continue.
 6. **Recent emails**: \`pin raw gmail recent --hours 24 --limit 20\` — synced from Composio Gmail
 7. **Today's calendar**: \`pin raw gcal today\` — events from synced Google Calendar
 8. **Installed apps (latest snapshot)**: \`pin raw device-apps --top 20\` — for device profiling cards
-9. **World events**: \`pin world shortlist --profile-id default --limit 10\` — external news ranked against profile
+9. **Device health observations**: \`pin raw device-health list --hours 24 --limit 20\` — for health cards with recent biometric or activity evidence
+10. **World events**: \`pin world shortlist --profile-id default --limit 10\` — external news ranked against profile
 
 # Behavior history (avoid repetition + learn from feedback)
 # These tables don't have a "consumed" status — they're recency-bounded
 # reference, not an incremental consumption layer. The actual incremental
 # layer is personal_signals (status='open' filter), already covered in
 # step 5 above. Just take the most recent N rows here.
-10. **Recent feedback**: \`pin feedback list --limit 50\` — confirms / dismisses / modifications
-11. **Recent generated cards**: \`pin cards recent --limit 10\` — what we already pushed; thread decisions (advance / refine / hold / suppress)
+11. **Recent feedback**: \`pin feedback list --limit 50\` — confirms / dismisses / modifications
+12. **Recent generated cards**: \`pin cards recent --limit 10\` — what we already pushed; thread decisions (advance / refine / hold / suppress)
 
 # On-demand deep dives (only if a topic above warrants it)
 - \`pin memory search --query "<topic>" --limit 10\` — substring + tag search

@@ -5,6 +5,7 @@
  *   GET /raw/gcal             ?since / ?until / ?calendarId / ?limit
  *   GET /raw/device-apps      ?deviceId / ?snapshotId / ?latestSnapshotOnly=1 / ?since / ?until / ?limit
  *   GET /raw/device-contacts  ?deviceId / ?snapshotId / ?latestSnapshotOnly=1 / ?since / ?until / ?search / ?limit
+ *   GET /raw/device-health    ?deviceId / ?observationType / ?metric / ?localDate / ?since / ?until / ?limit
  *
  * See docs/plans/memory-architecture.mdx §三 (raw.db).
  */
@@ -80,6 +81,24 @@ export function handleRaw(): RouteHandler {
         const contacts = raw.listDeviceContacts(opts);
         const total = raw.countDeviceContacts(opts);
         json(ctx.res, 200, { ok: true, contacts, total });
+        return true;
+      }
+
+      if (route === '/device-health' && ctx.req.method === 'GET') {
+        const p = ctx.url.searchParams;
+        const limit = p.get('limit');
+        const opts = {
+          deviceId: p.get('deviceId') ?? undefined,
+          observationType: p.get('observationType') ?? undefined,
+          metric: p.get('metric') ?? undefined,
+          localDate: p.get('localDate') ?? undefined,
+          since: p.get('since') ?? undefined,
+          until: p.get('until') ?? undefined,
+          limit: limit !== null ? Number(limit) : undefined,
+        };
+        const observations = raw.listDeviceHealthObservations(opts);
+        const total = raw.countDeviceHealthObservations(opts);
+        json(ctx.res, 200, { ok: true, observations, total });
         return true;
       }
     } catch (err) {

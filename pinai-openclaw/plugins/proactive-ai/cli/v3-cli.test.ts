@@ -23,6 +23,7 @@ import {
 import {
   ingestGmailMessages,
   ingestDeviceAppsSnapshot,
+  ingestDeviceHealthObservations,
   resetRawDbForTests,
 } from '../raw-db.ts';
 
@@ -243,6 +244,28 @@ test('pin raw device-apps shows latest snapshot', async () => {
     const r = decode(await handleRaw(['device-apps', '--deviceId', 'dev-1', '--top', '10']));
     assert.equal(r.ok, true);
     assert.equal(r.data.count, 2);
+  });
+});
+
+test('pin raw device-health list returns health observations', async () => {
+  await withTempHome(async () => {
+    ingestDeviceHealthObservations({
+      deviceId: 'watch-1',
+      observations: [
+        { observationType: 'daily_summary', metric: 'steps', value: 8120, unit: 'count', localDate: '2026-04-30' },
+        { observationType: 'sample', metric: 'heart_rate', value: 72, unit: 'bpm', startAt: '2026-04-30T09:59:00Z' },
+      ],
+    });
+
+    const r = decode(await handleRaw([
+      'device-health', 'list',
+      '--deviceId', 'watch-1',
+      '--localDate', '2026-04-30',
+    ]));
+
+    assert.equal(r.ok, true);
+    assert.equal(r.data.count, 1);
+    assert.equal(r.data.observations[0].metric, 'steps');
   });
 });
 

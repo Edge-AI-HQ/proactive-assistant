@@ -1,5 +1,5 @@
 /**
- * `pin raw ...` — read-only access to raw.db (gmail / gcal / device snapshots).
+ * `pin raw ...` — read-only access to raw.db (gmail / gcal / device snapshots / health).
  * See docs/plans/memory-architecture.mdx §六.
  */
 import { parseArgs, success, failure, readNumericFlag, readLimitFlag } from './shared.js';
@@ -68,7 +68,7 @@ export async function handleRaw(args: string[]): Promise<string> {
   if (!sub || sub === 'help') {
     return success('raw', 'help', {
       commands: [
-        'gmail', 'gcal', 'device-apps', 'device-contacts',
+        'gmail', 'gcal', 'device-apps', 'device-contacts', 'device-health',
         // Phase D round 1+2 connectors:
         'slack', 'notion', 'gdrive', 'github', 'outlook',
       ],
@@ -89,6 +89,7 @@ export async function handleRaw(args: string[]): Promise<string> {
         'pin raw outlook list --conversationId <cid>',
         'pin raw device-apps --deviceId <id> --top 20',
         'pin raw device-contacts list --deviceId <id> --limit 200',
+        'pin raw device-health list --deviceId <id> --localDate 2026-04-30',
       ],
     });
   }
@@ -189,6 +190,31 @@ export async function handleRaw(args: string[]): Promise<string> {
     return success('raw', `device-contacts.${action}`, { count: contacts.length, contacts });
   }
 
+  if (sub === 'device-health') {
+    const action = positional[1] ?? 'list';
+    if (action !== 'list') {
+      return failure('raw', `device-health.${action}`, 'validation',
+        `Unknown device-health action: ${action}`, 'Available: list');
+    }
+    const limitRes = readLimitFlag(flags, 'raw', 'device-health.list');
+    if ('failure' in limitRes) return limitRes.failure;
+    const hoursRes = readNumericFlag(flags, ['hours'], 'raw', 'device-health.list');
+    if ('failure' in hoursRes) return hoursRes.failure;
+    const since = flags['since'] ?? (hoursRes.value !== undefined
+      ? new Date(Date.now() - hoursRes.value * 3600 * 1000).toISOString()
+      : undefined);
+    const observations = raw.listDeviceHealthObservations({
+      deviceId: flags['deviceId'] ?? flags['device-id'],
+      observationType: flags['observationType'] ?? flags['observation-type'] ?? flags['type'],
+      metric: flags['metric'],
+      localDate: flags['localDate'] ?? flags['local-date'],
+      since,
+      until: flags['until'],
+      limit: limitRes.value ?? 200,
+    });
+    return success('raw', 'device-health.list', { count: observations.length, observations });
+  }
+
   if (sub === 'slack') {
     const action = positional[1] ?? 'list';
     if (action !== 'list') {
@@ -280,5 +306,5 @@ export async function handleRaw(args: string[]): Promise<string> {
   }
 
   return failure('raw', sub, 'validation', `Unknown raw command: ${sub}`,
-    'Available: gmail, gcal, slack, notion, gdrive, github, outlook, device-apps, device-contacts');
+    'Available: gmail, gcal, slack, notion, gdrive, github, outlook, device-apps, device-contacts, device-health');
 }

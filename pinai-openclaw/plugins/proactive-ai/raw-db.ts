@@ -59,6 +59,16 @@ function parseJsonArray<T = unknown>(raw: string | null | undefined): T[] {
   }
 }
 
+function parseJsonObject<T extends Record<string, unknown> = Record<string, unknown>>(raw: string | null | undefined): T {
+  if (!raw) return {} as T;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as T : {} as T;
+  } catch {
+    return {} as T;
+  }
+}
+
 /**
  * Normalize an ISO-ish datetime string to canonical UTC ISO (`...Z`).
  * Different gcal providers emit `2026-04-23T08:00:00+08:00` /
@@ -176,6 +186,37 @@ function ensureRawSchema(db: Database.Database): void {
       ON device_contacts_snapshot(dedupe_key) WHERE dedupe_key IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_contacts_device_captured
       ON device_contacts_snapshot(device_id, occurred_at DESC);
+
+    -- Device-side typed health observations. One table covers samples,
+    -- daily summaries, sleep, workouts, alerts, and insights; query-critical
+    -- fields stay first-class columns and payload_json keeps source detail.
+    CREATE TABLE IF NOT EXISTS device_health_observations (
+      id                  TEXT PRIMARY KEY,
+      device_id           TEXT NOT NULL,
+      observation_type    TEXT NOT NULL,
+      metric              TEXT,
+      value               REAL,
+      unit                TEXT,
+      start_at            TEXT,
+      end_at              TEXT,
+      local_date          TEXT,
+      source_app          TEXT,
+      payload_json        TEXT NOT NULL DEFAULT '{}',
+      occurred_at         TEXT NOT NULL,
+      ingested_at         TEXT NOT NULL,
+      dedupe_key          TEXT,
+      reference_count     INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at  TEXT,
+      referenced_by_runs  TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_health_dedupe
+      ON device_health_observations(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_health_device_time
+      ON device_health_observations(device_id, occurred_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_health_metric_time
+      ON device_health_observations(metric, occurred_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_health_local_date
+      ON device_health_observations(device_id, local_date);
 
     -- Slack messages (Composio: SLACK_SEARCH_MESSAGES)
     --
@@ -767,6 +808,13 @@ export function ingestDeviceAppsSnapshot(input: IngestDeviceAppsInput): IngestRe
   return { accepted: input.apps.length, inserted, ignored: input.apps.length - inserted, ids };
 }
 
+export function replaceDeviceAppsSnapshot(input: IngestDeviceAppsInput): IngestResult {
+  // Full sync semantics for snapshot tables are "new current snapshot",
+  // not historical deletion. Readers that want current state already use
+  // latestSnapshotOnly, so old rows remain available for references.
+  return ingestDeviceAppsSnapshot(input);
+}
+
 export interface DeviceAppRow {
   id: string;
   snapshot_id: string;
@@ -1040,6 +1088,222 @@ export function ingestDeviceContactsSnapshot(input: IngestDeviceContactsInput): 
   });
   tx();
   return { accepted: input.contacts.length, inserted, ignored: input.contacts.length - inserted, ids };
+}
+
+export function replaceDeviceContactsSnapshot(input: IngestDeviceContactsInput): IngestResult {
+  return ingestDeviceContactsSnapshot(input);
+}
+
+// ─────── Device health observations ───────
+
+export interface DeviceHealthObservationInput {
+  id?: string;
+  observationType: string;
+  metric?: string | null;
+  value?: number | null;
+  unit?: string | null;
+  startAt?: string | null;
+  endAt?: string | null;
+  localDate?: string | null;
+  sourceApp?: string | null;
+  payload?: Record<string, unknown>;
+  occurredAt?: string | null;
+  dedupeKey?: string | null;
+}
+
+export interface IngestDeviceHealthInput {
+  deviceId: string;
+  observations: DeviceHealthObservationInput[];
+}
+
+export interface DeviceHealthReplaceScope {
+  deviceId: string;
+  localDate?: string | null;
+  metric?: string | null;
+}
+
+export interface DeviceHealthObservationRow {
+  id: string;
+  device_id: string;
+  observation_type: string;
+  metric: string | null;
+  value: number | null;
+  unit: string | null;
+  start_at: string | null;
+  end_at: string | null;
+  local_date: string | null;
+  source_app: string | null;
+  payload: Record<string, unknown>;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToDeviceHealthObservation(row: any): DeviceHealthObservationRow {
+  return {
+    id: row.id,
+    device_id: row.device_id,
+    observation_type: row.observation_type,
+    metric: row.metric ?? null,
+    value: typeof row.value === 'number' ? row.value : null,
+    unit: row.unit ?? null,
+    start_at: row.start_at ?? null,
+    end_at: row.end_at ?? null,
+    local_date: row.local_date ?? null,
+    source_app: row.source_app ?? null,
+    payload: parseJsonObject<Record<string, unknown>>(row.payload_json),
+    occurred_at: row.occurred_at,
+    ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+function defaultHealthDedupe(deviceId: string, item: DeviceHealthObservationInput): string {
+  if (item.dedupeKey?.trim()) return item.dedupeKey.trim();
+  if (item.id?.trim()) return `device_health:${deviceId}:id:${item.id.trim()}`;
+  const timeKey = item.startAt ?? item.endAt ?? item.localDate ?? item.occurredAt ?? 'unknown_time';
+  return [
+    'device_health',
+    deviceId,
+    item.observationType,
+    item.metric ?? '',
+    timeKey,
+    item.unit ?? '',
+    item.sourceApp ?? '',
+  ].join(':');
+}
+
+function insertDeviceHealthObservations(
+  db: Database.Database,
+  input: IngestDeviceHealthInput,
+  ingestedAt: string,
+): IngestResult {
+  const ids: string[] = [];
+  let accepted = 0;
+  let inserted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO device_health_observations (
+       id, device_id, observation_type, metric, value, unit,
+       start_at, end_at, local_date, source_app, payload_json,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  for (const item of input.observations) {
+    if (!item.observationType) continue;
+    accepted += 1;
+    const id = item.id ?? genId();
+    const startAt = normalizeToUtcIso(item.startAt);
+    const endAt = normalizeToUtcIso(item.endAt);
+    const occurredAt = normalizeToUtcIso(item.occurredAt)
+      ?? endAt
+      ?? startAt
+      ?? ingestedAt;
+    const dedupe = defaultHealthDedupe(input.deviceId, item);
+    const result = insert.run(
+      id,
+      input.deviceId,
+      item.observationType,
+      item.metric ?? null,
+      typeof item.value === 'number' && Number.isFinite(item.value) ? item.value : null,
+      item.unit ?? null,
+      startAt,
+      endAt,
+      item.localDate ?? null,
+      item.sourceApp ?? null,
+      JSON.stringify(item.payload ?? {}),
+      occurredAt,
+      ingestedAt,
+      dedupe,
+    );
+    if (result.changes > 0) {
+      inserted += 1;
+      ids.push(id);
+    }
+  }
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export function ingestDeviceHealthObservations(input: IngestDeviceHealthInput): IngestResult {
+  if (!input.deviceId) throw new Error('ingestDeviceHealthObservations: deviceId is required');
+  if (input.observations.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const tx = db.transaction(() => insertDeviceHealthObservations(db, input, ts));
+  return tx();
+}
+
+export function replaceDeviceHealthObservations(
+  scope: DeviceHealthReplaceScope,
+  input: IngestDeviceHealthInput,
+): IngestResult {
+  if (!scope.deviceId || !input.deviceId) throw new Error('replaceDeviceHealthObservations: deviceId is required');
+  if (scope.deviceId !== input.deviceId) throw new Error('replaceDeviceHealthObservations: scope deviceId must match input deviceId');
+  if (!scope.localDate && !scope.metric) {
+    throw new Error('replaceDeviceHealthObservations: localDate or metric scope is required');
+  }
+  const db = getRawDb();
+  const ts = nowIso();
+  const tx = db.transaction(() => {
+    // Full health sync refreshes only the unreferenced current slice; referenced rows are immutable raw evidence.
+    const parts = ['DELETE FROM device_health_observations WHERE device_id = ? AND reference_count = 0'];
+    const params: unknown[] = [scope.deviceId];
+    if (scope.localDate) { parts.push('AND local_date = ?'); params.push(scope.localDate); }
+    if (scope.metric) { parts.push('AND metric = ?'); params.push(scope.metric); }
+    db.prepare(parts.join(' ')).run(...params);
+    return insertDeviceHealthObservations(db, input, ts);
+  });
+  return tx();
+}
+
+export function listDeviceHealthObservations(opts: {
+  deviceId?: string;
+  observationType?: string;
+  metric?: string;
+  localDate?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+} = {}): DeviceHealthObservationRow[] {
+  const db = getRawDb();
+  const parts = ['SELECT * FROM device_health_observations WHERE 1=1'];
+  const params: unknown[] = [];
+  if (opts.deviceId) { parts.push('AND device_id = ?'); params.push(opts.deviceId); }
+  if (opts.observationType) { parts.push('AND observation_type = ?'); params.push(opts.observationType); }
+  if (opts.metric) { parts.push('AND metric = ?'); params.push(opts.metric); }
+  if (opts.localDate) { parts.push('AND local_date = ?'); params.push(opts.localDate); }
+  if (opts.since) { parts.push('AND occurred_at >= ?'); params.push(opts.since); }
+  if (opts.until) { parts.push('AND occurred_at <= ?'); params.push(opts.until); }
+  parts.push('ORDER BY occurred_at DESC, id DESC LIMIT ?');
+  params.push(Math.max(1, Math.min(opts.limit ?? 200, 2000)));
+  return (db.prepare(parts.join(' ')).all(...params) as any[]).map(rowToDeviceHealthObservation);
+}
+
+export function countDeviceHealthObservations(opts: {
+  deviceId?: string;
+  observationType?: string;
+  metric?: string;
+  localDate?: string;
+  since?: string;
+  until?: string;
+} = {}): number {
+  const db = getRawDb();
+  const parts = ['SELECT COUNT(*) AS total FROM device_health_observations WHERE 1=1'];
+  const params: unknown[] = [];
+  if (opts.deviceId) { parts.push('AND device_id = ?'); params.push(opts.deviceId); }
+  if (opts.observationType) { parts.push('AND observation_type = ?'); params.push(opts.observationType); }
+  if (opts.metric) { parts.push('AND metric = ?'); params.push(opts.metric); }
+  if (opts.localDate) { parts.push('AND local_date = ?'); params.push(opts.localDate); }
+  if (opts.since) { parts.push('AND occurred_at >= ?'); params.push(opts.since); }
+  if (opts.until) { parts.push('AND occurred_at <= ?'); params.push(opts.until); }
+  const row = db.prepare(parts.join(' ')).get(...params) as { total?: number } | undefined;
+  return row?.total ?? 0;
 }
 
 // ─────── Reference tracking — uniform across every raw table ───────
@@ -2198,6 +2462,7 @@ const REFERENCE_TABLES = new Set([
   'gcal_events',
   'device_apps_snapshot',
   'device_contacts_snapshot',
+  'device_health_observations',
   // Phase D round 1
   'slack_messages',
   'notion_pages',
