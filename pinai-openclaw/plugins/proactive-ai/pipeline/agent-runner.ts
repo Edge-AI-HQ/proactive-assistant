@@ -56,10 +56,12 @@ export interface CollectAgentTextOptions {
   sessionKey: string;
   timeoutMs: number;
   /**
-   * Skip waitForRun and read session messages directly. Used by the startup
-   * recovery path where waitForRun against a stale runId would hang for the
-   * full timeout because OpenClaw's in-memory wait registry doesn't survive
-   * restart.
+   * Skip waitForRun and read session messages directly. Used by:
+   *   - The pipeline.reconcile poll loop, which polls every 5s and has
+   *     no use for waitForRun's blocking semantics.
+   *   - The startup recovery sweep, where waitForRun against a stale
+   *     runId would hang for the full timeout because OpenClaw's
+   *     in-memory wait registry doesn't survive process restart.
    */
   skipWait?: boolean;
   /**
@@ -72,9 +74,10 @@ export interface CollectAgentTextOptions {
    * after the agent finished), so its signal is treated as a hint, not as
    * the source of truth. The session jsonl is the source of truth.
    *
-   * If the predicate rejects, we return `timeout` so the caller's retry
-   * envelope (reconciler backoff, /generate fast-path → reconciler handoff)
-   * can come back later when the agent has actually emitted its final turn.
+   * If the predicate rejects, we return `timeout` so the caller can come
+   * back later — pipeline.reconcile loops on POLL_INTERVAL_MS, /generate's
+   * fast path hands off to that loop, the startup sweep marks the run
+   * failed (the agent state is gone after a restart anyway).
    *
    * If `validateFinal` is omitted, behavior matches the legacy contract:
    * - waitForRun ok → return ok with whatever extractAgentText finds
