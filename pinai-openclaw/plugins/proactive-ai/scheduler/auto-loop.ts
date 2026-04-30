@@ -2,9 +2,9 @@
  * Auto-loop scheduler for the cloud proactive-ai plugin.
  *
  * Runs 3 concurrent timers:
- * 1. Auto-ingest: Periodically fetches world data (every 5min)
- * 2. Auto-detect-and-loop: Checks cooldown and triggers pipeline (every 1min)
- * 3. Auto-dreaming: Checks if dreaming is due (daily at 6am local) and triggers it (every 1min)
+ * 1. Auto-ingest: Periodically fetches world data (every 30min)
+ * 2. Auto-detect-and-loop: Checks cooldown and triggers pipeline (every 5min)
+ * 3. Auto-dreaming: Checks if dreaming is due (daily at 6am local) and triggers it (every 5min)
  */
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import * as db from '../db.js';
@@ -25,18 +25,18 @@ const AUTO_LOOP_RECONCILE_MAX_ATTEMPTS = 5;
 
 export interface AutoLoopConfig {
   auto_poll_enabled: boolean;
-  auto_ingest_interval_ms: number;    // default 300_000 (5min)
-  auto_detect_interval_ms: number;    // default 60_000 (1min)
-  auto_loop_min_interval_ms: number;  // default 900_000 (15min cooldown)
+  auto_ingest_interval_ms: number;    // default 1_800_000 (30min)
+  auto_detect_interval_ms: number;    // default 300_000 (5min)
+  auto_loop_min_interval_ms: number;  // default 14_400_000 (4h cooldown)
   cards_to_generate: number;
   agent_timeout_ms: number;
 }
 
 export const DEFAULT_AUTO_LOOP_CONFIG: AutoLoopConfig = {
   auto_poll_enabled: true,
-  auto_ingest_interval_ms: 300_000,
-  auto_detect_interval_ms: 60_000,
-  auto_loop_min_interval_ms: 900_000,
+  auto_ingest_interval_ms: 1_800_000,
+  auto_detect_interval_ms: 300_000,
+  auto_loop_min_interval_ms: 14_400_000,
   cards_to_generate: 8,
   agent_timeout_ms: 300_000,
 };

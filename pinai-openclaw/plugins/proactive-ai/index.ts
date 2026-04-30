@@ -31,10 +31,10 @@ import * as db from './db.js';
 const DEFAULT_CONFIG: PluginConfig = {
   cards_to_generate: 8,
   agent_timeout_ms: 300_000,
-  auto_loop_min_interval_ms: 900_000,
+  auto_loop_min_interval_ms: 14_400_000,
   auto_poll_enabled: true,
-  auto_ingest_interval_ms: 300_000,
-  auto_detect_interval_ms: 60_000,
+  auto_ingest_interval_ms: 1_800_000,
+  auto_detect_interval_ms: 300_000,
 };
 
 async function ensureDefaultProfile(api: OpenClawPluginApi): Promise<void> {
@@ -80,10 +80,10 @@ const plugin = {
     properties: {
       cards_to_generate: { type: 'number' as const, default: 8 },
       agent_timeout_ms: { type: 'number' as const, default: 300_000 },
-      auto_loop_min_interval_ms: { type: 'number' as const, default: 900_000 },
+      auto_loop_min_interval_ms: { type: 'number' as const, default: 14_400_000 },
       auto_poll_enabled: { type: 'boolean' as const, default: true },
-      auto_ingest_interval_ms: { type: 'number' as const, default: 300_000 },
-      auto_detect_interval_ms: { type: 'number' as const, default: 60_000 },
+      auto_ingest_interval_ms: { type: 'number' as const, default: 1_800_000 },
+      auto_detect_interval_ms: { type: 'number' as const, default: 300_000 },
     },
   },
 
