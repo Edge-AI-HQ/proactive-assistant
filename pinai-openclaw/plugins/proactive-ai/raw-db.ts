@@ -483,6 +483,524 @@ function ensureRawSchema(db: Database.Database): void {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_discord_guilds_dedupe
       ON discord_guilds(dedupe_key) WHERE dedupe_key IS NOT NULL;
+
+    -- Spotify recently played tracks (Composio: SPOTIFY_GET_RECENTLY_PLAYED_TRACKS)
+    --
+    -- Each row is a play event, NOT a track. The same track id can repeat
+    -- across rows because the user replays it. Natural key is
+    -- (track_id, played_at). artist_names_json is a flat list of artist
+    -- names — the full artist objects from Spotify aren't needed for signal
+    -- derivation. context_type captures whether the play came from a
+    -- playlist / album / artist page (handy for evolve to spot listening
+    -- habits — "user often listens via artist radio").
+    CREATE TABLE IF NOT EXISTS spotify_recent_tracks (
+      id              TEXT PRIMARY KEY,
+      track_id        TEXT NOT NULL,
+      track_name      TEXT,
+      artist_names_json TEXT NOT NULL DEFAULT '[]',
+      album_name      TEXT,
+      duration_ms     INTEGER,
+      popularity      INTEGER,
+      track_url       TEXT,
+      played_at       TEXT NOT NULL,
+      context_type    TEXT,
+      context_uri     TEXT,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_spotify_recent_dedupe
+      ON spotify_recent_tracks(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_spotify_recent_natural
+      ON spotify_recent_tracks(track_id, played_at);
+    CREATE INDEX IF NOT EXISTS idx_spotify_recent_played
+      ON spotify_recent_tracks(played_at DESC);
+
+    -- Strava activities (Composio: STRAVA_LIST_ATHLETE_ACTIVITIES)
+    --
+    -- Each row is one workout. activity_id is Strava's globally-unique
+    -- numeric id (we store as TEXT since SQLite's INTEGER caps before
+    -- bigints in some bindings). distance / time use SI units (meters,
+    -- seconds, m/s) — matches what Strava returns natively, no conversion.
+    -- Heartrate fields nullable because not all activities/devices report.
+    CREATE TABLE IF NOT EXISTS strava_activities (
+      id              TEXT PRIMARY KEY,
+      activity_id     TEXT NOT NULL UNIQUE,
+      name            TEXT,
+      activity_type   TEXT,
+      distance_meters REAL,
+      moving_time_seconds   INTEGER,
+      elapsed_time_seconds  INTEGER,
+      elevation_gain_meters REAL,
+      start_date      TEXT,
+      timezone        TEXT,
+      average_speed_mps     REAL,
+      max_speed_mps   REAL,
+      average_heartrate INTEGER,
+      max_heartrate   INTEGER,
+      kudos_count     INTEGER,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_strava_dedupe
+      ON strava_activities(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_strava_start
+      ON strava_activities(start_date DESC);
+
+    -- Todoist tasks (Composio: TODOIST_GET_ALL_TASKS)
+    --
+    -- Snapshot of incomplete tasks at fetch time. parent_task_id is set
+    -- for sub-tasks. labels_json is a flat list of label strings.
+    -- priority is 1-4 (1=normal, 4=urgent). Re-fetching the same task
+    -- updates nothing (INSERT OR IGNORE on dedupe_key); on sync we re-
+    -- pull and just see the same rows — Todoist doesn't ship a clean
+    -- "modified-since" filter, so the dedup absorbs.
+    CREATE TABLE IF NOT EXISTS todoist_tasks (
+      id              TEXT PRIMARY KEY,
+      task_id         TEXT NOT NULL UNIQUE,
+      content         TEXT,
+      description     TEXT,
+      project_id      TEXT,
+      parent_task_id  TEXT,
+      priority        INTEGER,
+      labels_json     TEXT NOT NULL DEFAULT '[]',
+      due_at          TEXT,
+      is_completed    INTEGER NOT NULL DEFAULT 0,
+      created_at_remote TEXT,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_todoist_dedupe
+      ON todoist_tasks(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_todoist_project
+      ON todoist_tasks(project_id);
+
+    -- YouTube subscriptions (Composio: YOUTUBE_LIST_USER_SUBSCRIPTIONS)
+    --
+    -- Channel-level snapshot — one row per channel the user follows.
+    -- subscribed_at tracks when the user added the subscription (from the
+    -- snippet.publishedAt field). YouTube doesn't expose watch history
+    -- via Data API, so subs are the best proxy for "what the user cares
+    -- about" available to us.
+    CREATE TABLE IF NOT EXISTS youtube_subscriptions (
+      id              TEXT PRIMARY KEY,
+      subscription_id TEXT NOT NULL UNIQUE,
+      channel_id      TEXT NOT NULL,
+      channel_title   TEXT,
+      channel_description TEXT,
+      thumbnail_url   TEXT,
+      subscribed_at   TEXT,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_youtube_subs_dedupe
+      ON youtube_subscriptions(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_youtube_subs_channel
+      ON youtube_subscriptions(channel_id);
+
+    -- Trello boards (Composio: TRELLO_GET_MEMBERS_BOARDS_BY_ID_MEMBER)
+    --
+    -- One row per board the user has access to. closed=true means the
+    -- board is archived. starred and pinned are user-level preference
+    -- flags useful as importance signals.
+    CREATE TABLE IF NOT EXISTS trello_boards (
+      id              TEXT PRIMARY KEY,
+      board_id        TEXT NOT NULL UNIQUE,
+      name            TEXT,
+      description     TEXT,
+      url             TEXT,
+      organization_id TEXT,
+      closed          INTEGER NOT NULL DEFAULT 0,
+      starred         INTEGER NOT NULL DEFAULT 0,
+      pinned          INTEGER NOT NULL DEFAULT 0,
+      last_activity_at TEXT,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_trello_boards_dedupe
+      ON trello_boards(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_trello_boards_activity
+      ON trello_boards(last_activity_at DESC);
+
+    -- Jira recent projects (Composio: JIRA_GET_RECENT_PROJECTS)
+    --
+    -- The action returns projects the authenticated user has accessed
+    -- recently. project_key is the human-readable short code (e.g. PROJ).
+    -- We dedupe on project_id (numeric Jira id) — re-fetching is idempotent.
+    CREATE TABLE IF NOT EXISTS jira_projects (
+      id              TEXT PRIMARY KEY,
+      project_id      TEXT NOT NULL UNIQUE,
+      project_key     TEXT,
+      name            TEXT,
+      description     TEXT,
+      project_type    TEXT,
+      lead_name       TEXT,
+      url             TEXT,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_jira_projects_dedupe
+      ON jira_projects(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_jira_projects_key
+      ON jira_projects(project_key);
+
+    -- Twitter bookmarks (Composio: TWITTER_BOOKMARKS_BY_USER, id='me')
+    --
+    -- Each row is a bookmarked tweet. Same tweet bookmarked → unbookmarked →
+    -- bookmarked again will dedup naturally on tweet_id; that's fine for
+    -- our "what does the user save" signal.
+    CREATE TABLE IF NOT EXISTS twitter_bookmarks (
+      id              TEXT PRIMARY KEY,
+      tweet_id        TEXT NOT NULL UNIQUE,
+      author_username TEXT,
+      author_id       TEXT,
+      text            TEXT,
+      lang            TEXT,
+      created_at_remote TEXT,
+      url             TEXT,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_twitter_bookmarks_dedupe
+      ON twitter_bookmarks(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_twitter_bookmarks_created
+      ON twitter_bookmarks(created_at_remote DESC);
+
+    -- Calendly scheduled events (Composio: CALENDLY_LIST_SCHEDULED_EVENTS)
+    --
+    -- Note: the action requires the user URI as a parameter, which the
+    -- handler resolves first via CALENDLY_GET_USER (uuid='me'). Each row
+    -- is one booking. invitees_json captures attendee names/emails
+    -- when present (Calendly's "invitees" sub-resource).
+    CREATE TABLE IF NOT EXISTS calendly_events (
+      id              TEXT PRIMARY KEY,
+      event_uri       TEXT NOT NULL UNIQUE,
+      name            TEXT,
+      status          TEXT,
+      start_at        TEXT,
+      end_at          TEXT,
+      location_type   TEXT,
+      location_value  TEXT,
+      invitees_json   TEXT NOT NULL DEFAULT '[]',
+      meeting_url     TEXT,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_calendly_events_dedupe
+      ON calendly_events(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_calendly_events_start
+      ON calendly_events(start_at DESC);
+
+    -- LinkedIn profile (Composio: LINKEDIN_GET_MY_INFO)
+    -- Singleton: 1 row per LinkedIn account. Re-fetch overwrites via
+    -- dedupe on linkedin_id; fields like headline/picture do change so
+    -- we want the latest snapshot but no history.
+    CREATE TABLE IF NOT EXISTS linkedin_profile (
+      id              TEXT PRIMARY KEY,
+      linkedin_id     TEXT NOT NULL UNIQUE,
+      first_name      TEXT,
+      last_name       TEXT,
+      localized_name  TEXT,
+      headline        TEXT,
+      vanity_name     TEXT,
+      picture_url     TEXT,
+      profile_url     TEXT,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_linkedin_profile_dedupe
+      ON linkedin_profile(dedupe_key) WHERE dedupe_key IS NOT NULL;
+
+    -- LinkedIn organizations (Composio: LINKEDIN_GET_COMPANY_INFO)
+    -- Each row = (organization, role) pair the user holds. The same org
+    -- with the user holding two roles → 2 rows. role_state distinguishes
+    -- APPROVED vs REQUESTED memberships.
+    CREATE TABLE IF NOT EXISTS linkedin_organizations (
+      id              TEXT PRIMARY KEY,
+      org_urn         TEXT NOT NULL,
+      org_id          TEXT,
+      role            TEXT,
+      role_state      TEXT,
+      org_name        TEXT,
+      org_url         TEXT,
+      logo_url        TEXT,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_linkedin_orgs_dedupe
+      ON linkedin_organizations(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_linkedin_orgs_role ON linkedin_organizations(role);
+
+    -- Figma user (Composio: FIGMA_GET_CURRENT_USER)
+    -- Singleton; activity logs are Enterprise-only and skipped.
+    CREATE TABLE IF NOT EXISTS figma_user (
+      id              TEXT PRIMARY KEY,
+      figma_id        TEXT NOT NULL UNIQUE,
+      email           TEXT,
+      handle          TEXT,
+      img_url         TEXT,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_figma_user_dedupe
+      ON figma_user(dedupe_key) WHERE dedupe_key IS NOT NULL;
+
+    -- Zoom user (Composio: ZOOM_GET_USER, userId='me')
+    -- Singleton. account_type encodes Basic/Licensed/On-Prem; useful as
+    -- "user has paid Zoom" / "user is on org plan" signal.
+    CREATE TABLE IF NOT EXISTS zoom_user (
+      id              TEXT PRIMARY KEY,
+      zoom_id         TEXT NOT NULL UNIQUE,
+      email           TEXT,
+      first_name      TEXT,
+      last_name       TEXT,
+      display_name    TEXT,
+      account_type    INTEGER,
+      role_name       TEXT,
+      department      TEXT,
+      timezone        TEXT,
+      location        TEXT,
+      language        TEXT,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_zoom_user_dedupe
+      ON zoom_user(dedupe_key) WHERE dedupe_key IS NOT NULL;
+
+    -- Zoom marketplace user apps (Composio: ZOOM_GET_MARKETPLACE_USER_APPS, id='me')
+    -- The user's installed Zoom integrations (Salesforce, HubSpot, Slack
+    -- bridges, etc.) — strong workflow signal: tells us what other tools
+    -- the user has wired into Zoom.
+    CREATE TABLE IF NOT EXISTS zoom_marketplace_apps (
+      id              TEXT PRIMARY KEY,
+      app_install_id  TEXT NOT NULL UNIQUE,
+      app_id          TEXT,
+      name            TEXT,
+      publisher       TEXT,
+      install_state   TEXT,
+      app_type        TEXT,
+      installed_at    TEXT,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_zoom_apps_dedupe
+      ON zoom_marketplace_apps(dedupe_key) WHERE dedupe_key IS NOT NULL;
+
+    -- Dropbox account (Composio: DROPBOX_GET_ABOUT_ME)
+    -- Singleton. account_type is one of basic/pro/business — useful for
+    -- "user has paid Dropbox" / "user is in a business team" signals.
+    CREATE TABLE IF NOT EXISTS dropbox_account (
+      id              TEXT PRIMARY KEY,
+      account_id      TEXT NOT NULL UNIQUE,
+      email           TEXT,
+      display_name    TEXT,
+      given_name      TEXT,
+      surname         TEXT,
+      account_type    TEXT,
+      country         TEXT,
+      locale          TEXT,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_dropbox_account_dedupe
+      ON dropbox_account(dedupe_key) WHERE dedupe_key IS NOT NULL;
+
+    -- Dropbox files (Composio: DROPBOX_LIST_FOLDER, path='')
+    -- Root-level files and folders. tag distinguishes 'file' vs 'folder'.
+    -- Init pulls root only; deeper paths can be added later if needed.
+    CREATE TABLE IF NOT EXISTS dropbox_files (
+      id              TEXT PRIMARY KEY,
+      file_id         TEXT NOT NULL UNIQUE,
+      tag             TEXT,
+      name            TEXT,
+      path_lower      TEXT,
+      path_display    TEXT,
+      size_bytes      INTEGER,
+      server_modified TEXT,
+      client_modified TEXT,
+      rev             TEXT,
+      is_downloadable INTEGER NOT NULL DEFAULT 1,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_dropbox_files_dedupe
+      ON dropbox_files(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_dropbox_files_modified
+      ON dropbox_files(server_modified DESC);
+
+    -- Asana workspaces (Composio: ASANA_GET_WORKSPACES)
+    -- One row per workspace the user has access to.
+    CREATE TABLE IF NOT EXISTS asana_workspaces (
+      id              TEXT PRIMARY KEY,
+      workspace_gid   TEXT NOT NULL UNIQUE,
+      name            TEXT,
+      resource_type   TEXT,
+      is_organization INTEGER NOT NULL DEFAULT 0,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_asana_ws_dedupe
+      ON asana_workspaces(dedupe_key) WHERE dedupe_key IS NOT NULL;
+
+    -- Asana tasks (Composio: ASANA_GET_MULTIPLE_TASKS, assignee='me' per workspace)
+    -- Two-step fetch: first list workspaces, then for each workspace
+    -- query tasks assigned to me. Tasks across workspaces share this
+    -- table; workspace_gid column tracks origin.
+    CREATE TABLE IF NOT EXISTS asana_tasks (
+      id              TEXT PRIMARY KEY,
+      task_gid        TEXT NOT NULL UNIQUE,
+      workspace_gid   TEXT,
+      project_gid     TEXT,
+      name            TEXT,
+      notes           TEXT,
+      completed       INTEGER NOT NULL DEFAULT 0,
+      assignee_status TEXT,
+      due_at          TEXT,
+      due_on          TEXT,
+      modified_at_remote TEXT,
+      created_at_remote  TEXT,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_asana_tasks_dedupe
+      ON asana_tasks(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_asana_tasks_modified
+      ON asana_tasks(modified_at_remote DESC);
+
+    -- HubSpot contacts (Composio: HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA)
+    -- Pulls the most recently-modified contacts from the user's CRM
+    -- portal — strong signal for B2B / sales-role users about who they
+    -- engage with. We don't filter by owner because that requires a
+    -- separate owner-id discovery step; the broad view is OK for evolve.
+    CREATE TABLE IF NOT EXISTS hubspot_contacts (
+      id              TEXT PRIMARY KEY,
+      contact_id      TEXT NOT NULL UNIQUE,
+      email           TEXT,
+      first_name      TEXT,
+      last_name       TEXT,
+      company         TEXT,
+      jobtitle        TEXT,
+      lifecycle_stage TEXT,
+      lead_status     TEXT,
+      created_at_remote TEXT,
+      modified_at_remote TEXT,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_hubspot_contacts_dedupe
+      ON hubspot_contacts(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_hubspot_contacts_modified
+      ON hubspot_contacts(modified_at_remote DESC);
+
+    -- ClickUp user (Composio: CLICKUP_GET_AUTHORIZED_USER)
+    CREATE TABLE IF NOT EXISTS clickup_user (
+      id              TEXT PRIMARY KEY,
+      clickup_id      TEXT NOT NULL UNIQUE,
+      username        TEXT,
+      email           TEXT,
+      color           TEXT,
+      profile_picture TEXT,
+      timezone        TEXT,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_clickup_user_dedupe
+      ON clickup_user(dedupe_key) WHERE dedupe_key IS NOT NULL;
+
+    -- ClickUp workspaces (Composio: CLICKUP_AUTHORIZATION_GET_WORK_SPACE_LIST)
+    -- ClickUp calls these "Teams" but the API word is workspace. Members
+    -- count is derived from the array length on each row at fetch time.
+    CREATE TABLE IF NOT EXISTS clickup_workspaces (
+      id              TEXT PRIMARY KEY,
+      workspace_id    TEXT NOT NULL UNIQUE,
+      name            TEXT,
+      color           TEXT,
+      avatar          TEXT,
+      members_count   INTEGER,
+      occurred_at     TEXT NOT NULL,
+      ingested_at     TEXT NOT NULL,
+      dedupe_key      TEXT,
+      reference_count    INTEGER NOT NULL DEFAULT 0,
+      last_referenced_at TEXT,
+      referenced_by_runs TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_clickup_ws_dedupe
+      ON clickup_workspaces(dedupe_key) WHERE dedupe_key IS NOT NULL;
   `);
 }
 
@@ -2455,6 +2973,1937 @@ export function listDiscordGuilds(opts: { limit?: number } = {}): DiscordGuildRo
   ).all(Math.max(1, Math.min(opts.limit ?? 50, 500))).map(rowToDiscordGuild);
 }
 
+// ─────── Spotify recently played tracks ───────
+
+export interface SpotifyRecentTrackInput {
+  trackId: string;
+  trackName?: string | null;
+  artistNames?: string[];
+  albumName?: string | null;
+  durationMs?: number | null;
+  popularity?: number | null;
+  trackUrl?: string | null;
+  /** ISO timestamp the track was played; primary order key. */
+  playedAt: string;
+  contextType?: string | null;
+  contextUri?: string | null;
+  /** ISO; falls back to playedAt. */
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface SpotifyRecentTrackRow {
+  id: string;
+  track_id: string;
+  track_name: string | null;
+  artist_names: string[];
+  album_name: string | null;
+  duration_ms: number | null;
+  popularity: number | null;
+  track_url: string | null;
+  played_at: string;
+  context_type: string | null;
+  context_uri: string | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToSpotifyRecentTrack(row: any): SpotifyRecentTrackRow {
+  return {
+    id: row.id,
+    track_id: row.track_id,
+    track_name: row.track_name ?? null,
+    artist_names: parseJsonArray<string>(row.artist_names_json),
+    album_name: row.album_name ?? null,
+    duration_ms: typeof row.duration_ms === 'number' ? row.duration_ms : null,
+    popularity: typeof row.popularity === 'number' ? row.popularity : null,
+    track_url: row.track_url ?? null,
+    played_at: row.played_at,
+    context_type: row.context_type ?? null,
+    context_uri: row.context_uri ?? null,
+    occurred_at: row.occurred_at,
+    ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestSpotifyRecentTracks(items: SpotifyRecentTrackInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0;
+  let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO spotify_recent_tracks (
+       id, track_id, track_name, artist_names_json, album_name,
+       duration_ms, popularity, track_url,
+       played_at, context_type, context_uri,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.trackId || !item.playedAt) continue;
+      accepted += 1;
+      const id = genId();
+      const playedAt = normalizeToUtcIso(item.playedAt) ?? item.playedAt;
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? playedAt;
+      // Track + timestamp = unique play event. Same track replayed gets a
+      // new row; same play event re-fetched (init or sync collision)
+      // dedupes correctly.
+      const dedupe = item.dedupeKey ?? `spotify:recent:${item.trackId}:${playedAt}`;
+      const result = insert.run(
+        id, item.trackId, item.trackName ?? null,
+        JSON.stringify(item.artistNames ?? []),
+        item.albumName ?? null,
+        intOrNull(item.durationMs ?? null),
+        intOrNull(item.popularity ?? null),
+        item.trackUrl ?? null,
+        playedAt, item.contextType ?? null, item.contextUri ?? null,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) {
+        inserted += 1;
+        ids.push(id);
+      }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export interface ListSpotifyRecentOpts {
+  since?: string;
+  until?: string;
+  artistName?: string;
+  limit?: number;
+}
+
+export function listSpotifyRecentTracks(opts: ListSpotifyRecentOpts = {}): SpotifyRecentTrackRow[] {
+  const db = getRawDb();
+  const parts = ['SELECT * FROM spotify_recent_tracks WHERE 1=1'];
+  const params: unknown[] = [];
+  const since = normalizeToUtcIso(opts.since);
+  const until = normalizeToUtcIso(opts.until);
+  if (since) { parts.push('AND played_at >= ?'); params.push(since); }
+  if (until) { parts.push('AND played_at <= ?'); params.push(until); }
+  if (opts.artistName) {
+    // Naive substring match on the JSON-encoded array; good enough for
+    // small-N read-side filters and avoids json_each indexing.
+    parts.push("AND artist_names_json LIKE ?");
+    params.push(`%${opts.artistName.replace(/[%_]/g, (m) => '\\' + m)}%`);
+  }
+  parts.push('ORDER BY played_at DESC LIMIT ?');
+  params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
+  return db.prepare(parts.join(' ')).all(...params).map(rowToSpotifyRecentTrack);
+}
+
+// ─────── Strava activities ───────
+
+export interface StravaActivityInput {
+  activityId: string;
+  name?: string | null;
+  activityType?: string | null;
+  distanceMeters?: number | null;
+  movingTimeSeconds?: number | null;
+  elapsedTimeSeconds?: number | null;
+  elevationGainMeters?: number | null;
+  startDate?: string | null;
+  timezone?: string | null;
+  averageSpeedMps?: number | null;
+  maxSpeedMps?: number | null;
+  averageHeartrate?: number | null;
+  maxHeartrate?: number | null;
+  kudosCount?: number | null;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface StravaActivityRow {
+  id: string;
+  activity_id: string;
+  name: string | null;
+  activity_type: string | null;
+  distance_meters: number | null;
+  moving_time_seconds: number | null;
+  elapsed_time_seconds: number | null;
+  elevation_gain_meters: number | null;
+  start_date: string | null;
+  timezone: string | null;
+  average_speed_mps: number | null;
+  max_speed_mps: number | null;
+  average_heartrate: number | null;
+  max_heartrate: number | null;
+  kudos_count: number | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToStravaActivity(row: any): StravaActivityRow {
+  return {
+    id: row.id,
+    activity_id: row.activity_id,
+    name: row.name ?? null,
+    activity_type: row.activity_type ?? null,
+    distance_meters: typeof row.distance_meters === 'number' ? row.distance_meters : null,
+    moving_time_seconds: typeof row.moving_time_seconds === 'number' ? row.moving_time_seconds : null,
+    elapsed_time_seconds: typeof row.elapsed_time_seconds === 'number' ? row.elapsed_time_seconds : null,
+    elevation_gain_meters: typeof row.elevation_gain_meters === 'number' ? row.elevation_gain_meters : null,
+    start_date: row.start_date ?? null,
+    timezone: row.timezone ?? null,
+    average_speed_mps: typeof row.average_speed_mps === 'number' ? row.average_speed_mps : null,
+    max_speed_mps: typeof row.max_speed_mps === 'number' ? row.max_speed_mps : null,
+    average_heartrate: typeof row.average_heartrate === 'number' ? row.average_heartrate : null,
+    max_heartrate: typeof row.max_heartrate === 'number' ? row.max_heartrate : null,
+    kudos_count: typeof row.kudos_count === 'number' ? row.kudos_count : null,
+    occurred_at: row.occurred_at,
+    ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestStravaActivities(items: StravaActivityInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0;
+  let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO strava_activities (
+       id, activity_id, name, activity_type,
+       distance_meters, moving_time_seconds, elapsed_time_seconds, elevation_gain_meters,
+       start_date, timezone, average_speed_mps, max_speed_mps,
+       average_heartrate, max_heartrate, kudos_count,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.activityId) continue;
+      accepted += 1;
+      const id = genId();
+      const startDate = normalizeToUtcIso(item.startDate ?? null);
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? startDate ?? ts;
+      const dedupe = item.dedupeKey ?? `strava:activity:${item.activityId}`;
+      const result = insert.run(
+        id, item.activityId, item.name ?? null, item.activityType ?? null,
+        typeof item.distanceMeters === 'number' ? item.distanceMeters : null,
+        intOrNull(item.movingTimeSeconds ?? null),
+        intOrNull(item.elapsedTimeSeconds ?? null),
+        typeof item.elevationGainMeters === 'number' ? item.elevationGainMeters : null,
+        startDate, item.timezone ?? null,
+        typeof item.averageSpeedMps === 'number' ? item.averageSpeedMps : null,
+        typeof item.maxSpeedMps === 'number' ? item.maxSpeedMps : null,
+        intOrNull(item.averageHeartrate ?? null),
+        intOrNull(item.maxHeartrate ?? null),
+        intOrNull(item.kudosCount ?? null),
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) {
+        inserted += 1;
+        ids.push(id);
+      }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export function listStravaActivities(opts: { since?: string; until?: string; limit?: number } = {}): StravaActivityRow[] {
+  const db = getRawDb();
+  const parts = ['SELECT * FROM strava_activities WHERE 1=1'];
+  const params: unknown[] = [];
+  const since = normalizeToUtcIso(opts.since);
+  const until = normalizeToUtcIso(opts.until);
+  if (since) { parts.push('AND start_date >= ?'); params.push(since); }
+  if (until) { parts.push('AND start_date <= ?'); params.push(until); }
+  parts.push('ORDER BY start_date DESC LIMIT ?');
+  params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
+  return db.prepare(parts.join(' ')).all(...params).map(rowToStravaActivity);
+}
+
+// ─────── Todoist tasks ───────
+
+export interface TodoistTaskInput {
+  taskId: string;
+  content?: string | null;
+  description?: string | null;
+  projectId?: string | null;
+  parentTaskId?: string | null;
+  priority?: number | null;
+  labels?: string[];
+  dueAt?: string | null;
+  isCompleted?: boolean;
+  createdAtRemote?: string | null;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface TodoistTaskRow {
+  id: string;
+  task_id: string;
+  content: string | null;
+  description: string | null;
+  project_id: string | null;
+  parent_task_id: string | null;
+  priority: number | null;
+  labels: string[];
+  due_at: string | null;
+  is_completed: boolean;
+  created_at_remote: string | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToTodoistTask(row: any): TodoistTaskRow {
+  return {
+    id: row.id,
+    task_id: row.task_id,
+    content: row.content ?? null,
+    description: row.description ?? null,
+    project_id: row.project_id ?? null,
+    parent_task_id: row.parent_task_id ?? null,
+    priority: typeof row.priority === 'number' ? row.priority : null,
+    labels: parseJsonArray<string>(row.labels_json),
+    due_at: row.due_at ?? null,
+    is_completed: Boolean(row.is_completed),
+    created_at_remote: row.created_at_remote ?? null,
+    occurred_at: row.occurred_at,
+    ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestTodoistTasks(items: TodoistTaskInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0;
+  let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO todoist_tasks (
+       id, task_id, content, description, project_id, parent_task_id,
+       priority, labels_json, due_at, is_completed, created_at_remote,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.taskId) continue;
+      accepted += 1;
+      const id = genId();
+      const createdRemote = normalizeToUtcIso(item.createdAtRemote ?? null);
+      const dueAt = normalizeToUtcIso(item.dueAt ?? null);
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? createdRemote ?? ts;
+      const dedupe = item.dedupeKey ?? `todoist:task:${item.taskId}`;
+      const result = insert.run(
+        id, item.taskId, item.content ?? null, item.description ?? null,
+        item.projectId ?? null, item.parentTaskId ?? null,
+        intOrNull(item.priority ?? null),
+        JSON.stringify(item.labels ?? []),
+        dueAt, item.isCompleted ? 1 : 0, createdRemote,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) {
+        inserted += 1;
+        ids.push(id);
+      }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export function listTodoistTasks(opts: { projectId?: string; limit?: number } = {}): TodoistTaskRow[] {
+  const db = getRawDb();
+  const parts = ['SELECT * FROM todoist_tasks WHERE 1=1'];
+  const params: unknown[] = [];
+  if (opts.projectId) { parts.push('AND project_id = ?'); params.push(opts.projectId); }
+  parts.push('ORDER BY occurred_at DESC LIMIT ?');
+  params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
+  return db.prepare(parts.join(' ')).all(...params).map(rowToTodoistTask);
+}
+
+// ─────── YouTube subscriptions ───────
+
+export interface YoutubeSubscriptionInput {
+  subscriptionId: string;
+  channelId: string;
+  channelTitle?: string | null;
+  channelDescription?: string | null;
+  thumbnailUrl?: string | null;
+  subscribedAt?: string | null;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface YoutubeSubscriptionRow {
+  id: string;
+  subscription_id: string;
+  channel_id: string;
+  channel_title: string | null;
+  channel_description: string | null;
+  thumbnail_url: string | null;
+  subscribed_at: string | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToYoutubeSubscription(row: any): YoutubeSubscriptionRow {
+  return {
+    id: row.id,
+    subscription_id: row.subscription_id,
+    channel_id: row.channel_id,
+    channel_title: row.channel_title ?? null,
+    channel_description: row.channel_description ?? null,
+    thumbnail_url: row.thumbnail_url ?? null,
+    subscribed_at: row.subscribed_at ?? null,
+    occurred_at: row.occurred_at,
+    ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestYoutubeSubscriptions(items: YoutubeSubscriptionInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0;
+  let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO youtube_subscriptions (
+       id, subscription_id, channel_id, channel_title, channel_description,
+       thumbnail_url, subscribed_at,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.subscriptionId || !item.channelId) continue;
+      accepted += 1;
+      const id = genId();
+      const subscribedAt = normalizeToUtcIso(item.subscribedAt ?? null);
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? subscribedAt ?? ts;
+      const dedupe = item.dedupeKey ?? `youtube:sub:${item.subscriptionId}`;
+      const result = insert.run(
+        id, item.subscriptionId, item.channelId,
+        item.channelTitle ?? null, item.channelDescription ?? null,
+        item.thumbnailUrl ?? null, subscribedAt,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) {
+        inserted += 1;
+        ids.push(id);
+      }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export function listYoutubeSubscriptions(opts: { limit?: number } = {}): YoutubeSubscriptionRow[] {
+  const db = getRawDb();
+  return db.prepare(
+    `SELECT * FROM youtube_subscriptions ORDER BY channel_title ASC LIMIT ?`,
+  ).all(Math.max(1, Math.min(opts.limit ?? 50, 500))).map(rowToYoutubeSubscription);
+}
+
+// ─────── Trello boards ───────
+
+export interface TrelloBoardInput {
+  boardId: string;
+  name?: string | null;
+  description?: string | null;
+  url?: string | null;
+  organizationId?: string | null;
+  closed?: boolean;
+  starred?: boolean;
+  pinned?: boolean;
+  lastActivityAt?: string | null;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface TrelloBoardRow {
+  id: string;
+  board_id: string;
+  name: string | null;
+  description: string | null;
+  url: string | null;
+  organization_id: string | null;
+  closed: boolean;
+  starred: boolean;
+  pinned: boolean;
+  last_activity_at: string | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToTrelloBoard(row: any): TrelloBoardRow {
+  return {
+    id: row.id,
+    board_id: row.board_id,
+    name: row.name ?? null,
+    description: row.description ?? null,
+    url: row.url ?? null,
+    organization_id: row.organization_id ?? null,
+    closed: Boolean(row.closed),
+    starred: Boolean(row.starred),
+    pinned: Boolean(row.pinned),
+    last_activity_at: row.last_activity_at ?? null,
+    occurred_at: row.occurred_at,
+    ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestTrelloBoards(items: TrelloBoardInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0;
+  let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO trello_boards (
+       id, board_id, name, description, url, organization_id,
+       closed, starred, pinned, last_activity_at,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.boardId) continue;
+      accepted += 1;
+      const id = genId();
+      const lastActivityAt = normalizeToUtcIso(item.lastActivityAt ?? null);
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? lastActivityAt ?? ts;
+      const dedupe = item.dedupeKey ?? `trello:board:${item.boardId}`;
+      const result = insert.run(
+        id, item.boardId, item.name ?? null, item.description ?? null,
+        item.url ?? null, item.organizationId ?? null,
+        item.closed ? 1 : 0, item.starred ? 1 : 0, item.pinned ? 1 : 0,
+        lastActivityAt, occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) {
+        inserted += 1;
+        ids.push(id);
+      }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export function listTrelloBoards(opts: { includeClosed?: boolean; limit?: number } = {}): TrelloBoardRow[] {
+  const db = getRawDb();
+  const parts = ['SELECT * FROM trello_boards WHERE 1=1'];
+  if (!opts.includeClosed) parts.push('AND closed = 0');
+  parts.push('ORDER BY last_activity_at DESC, name ASC LIMIT ?');
+  return db.prepare(parts.join(' ')).all(Math.max(1, Math.min(opts.limit ?? 50, 500))).map(rowToTrelloBoard);
+}
+
+// ─────── Jira projects ───────
+
+export interface JiraProjectInput {
+  projectId: string;
+  projectKey?: string | null;
+  name?: string | null;
+  description?: string | null;
+  projectType?: string | null;
+  leadName?: string | null;
+  url?: string | null;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface JiraProjectRow {
+  id: string;
+  project_id: string;
+  project_key: string | null;
+  name: string | null;
+  description: string | null;
+  project_type: string | null;
+  lead_name: string | null;
+  url: string | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToJiraProject(row: any): JiraProjectRow {
+  return {
+    id: row.id,
+    project_id: row.project_id,
+    project_key: row.project_key ?? null,
+    name: row.name ?? null,
+    description: row.description ?? null,
+    project_type: row.project_type ?? null,
+    lead_name: row.lead_name ?? null,
+    url: row.url ?? null,
+    occurred_at: row.occurred_at,
+    ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestJiraProjects(items: JiraProjectInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0;
+  let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO jira_projects (
+       id, project_id, project_key, name, description, project_type,
+       lead_name, url,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.projectId) continue;
+      accepted += 1;
+      const id = genId();
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? ts;
+      const dedupe = item.dedupeKey ?? `jira:project:${item.projectId}`;
+      const result = insert.run(
+        id, item.projectId, item.projectKey ?? null,
+        item.name ?? null, item.description ?? null, item.projectType ?? null,
+        item.leadName ?? null, item.url ?? null,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) {
+        inserted += 1;
+        ids.push(id);
+      }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export function listJiraProjects(opts: { limit?: number } = {}): JiraProjectRow[] {
+  const db = getRawDb();
+  return db.prepare(
+    `SELECT * FROM jira_projects ORDER BY name ASC LIMIT ?`,
+  ).all(Math.max(1, Math.min(opts.limit ?? 50, 500))).map(rowToJiraProject);
+}
+
+// ─────── Twitter bookmarks ───────
+
+export interface TwitterBookmarkInput {
+  tweetId: string;
+  authorUsername?: string | null;
+  authorId?: string | null;
+  text?: string | null;
+  lang?: string | null;
+  createdAtRemote?: string | null;
+  url?: string | null;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface TwitterBookmarkRow {
+  id: string;
+  tweet_id: string;
+  author_username: string | null;
+  author_id: string | null;
+  text: string | null;
+  lang: string | null;
+  created_at_remote: string | null;
+  url: string | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToTwitterBookmark(row: any): TwitterBookmarkRow {
+  return {
+    id: row.id,
+    tweet_id: row.tweet_id,
+    author_username: row.author_username ?? null,
+    author_id: row.author_id ?? null,
+    text: row.text ?? null,
+    lang: row.lang ?? null,
+    created_at_remote: row.created_at_remote ?? null,
+    url: row.url ?? null,
+    occurred_at: row.occurred_at,
+    ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestTwitterBookmarks(items: TwitterBookmarkInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0;
+  let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO twitter_bookmarks (
+       id, tweet_id, author_username, author_id, text, lang,
+       created_at_remote, url,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.tweetId) continue;
+      accepted += 1;
+      const id = genId();
+      const createdRemote = normalizeToUtcIso(item.createdAtRemote ?? null);
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? createdRemote ?? ts;
+      const dedupe = item.dedupeKey ?? `twitter:bookmark:${item.tweetId}`;
+      const result = insert.run(
+        id, item.tweetId, item.authorUsername ?? null, item.authorId ?? null,
+        item.text ?? null, item.lang ?? null,
+        createdRemote, item.url ?? null,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) {
+        inserted += 1;
+        ids.push(id);
+      }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export function listTwitterBookmarks(opts: { limit?: number } = {}): TwitterBookmarkRow[] {
+  const db = getRawDb();
+  return db.prepare(
+    `SELECT * FROM twitter_bookmarks ORDER BY created_at_remote DESC LIMIT ?`,
+  ).all(Math.max(1, Math.min(opts.limit ?? 50, 500))).map(rowToTwitterBookmark);
+}
+
+// ─────── Calendly scheduled events ───────
+
+export interface CalendlyEventInput {
+  eventUri: string;
+  name?: string | null;
+  status?: string | null;
+  startAt?: string | null;
+  endAt?: string | null;
+  locationType?: string | null;
+  locationValue?: string | null;
+  invitees?: Array<{ name?: string | null; email?: string | null }>;
+  meetingUrl?: string | null;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface CalendlyEventRow {
+  id: string;
+  event_uri: string;
+  name: string | null;
+  status: string | null;
+  start_at: string | null;
+  end_at: string | null;
+  location_type: string | null;
+  location_value: string | null;
+  invitees: Array<{ name?: string | null; email?: string | null }>;
+  meeting_url: string | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToCalendlyEvent(row: any): CalendlyEventRow {
+  return {
+    id: row.id,
+    event_uri: row.event_uri,
+    name: row.name ?? null,
+    status: row.status ?? null,
+    start_at: row.start_at ?? null,
+    end_at: row.end_at ?? null,
+    location_type: row.location_type ?? null,
+    location_value: row.location_value ?? null,
+    invitees: parseJsonArray<{ name?: string | null; email?: string | null }>(row.invitees_json),
+    meeting_url: row.meeting_url ?? null,
+    occurred_at: row.occurred_at,
+    ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestCalendlyEvents(items: CalendlyEventInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0;
+  let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO calendly_events (
+       id, event_uri, name, status, start_at, end_at,
+       location_type, location_value, invitees_json, meeting_url,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.eventUri) continue;
+      accepted += 1;
+      const id = genId();
+      const startAt = normalizeToUtcIso(item.startAt ?? null);
+      const endAt = normalizeToUtcIso(item.endAt ?? null);
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? startAt ?? ts;
+      const dedupe = item.dedupeKey ?? `calendly:event:${item.eventUri}`;
+      const result = insert.run(
+        id, item.eventUri, item.name ?? null, item.status ?? null,
+        startAt, endAt,
+        item.locationType ?? null, item.locationValue ?? null,
+        JSON.stringify(item.invitees ?? []),
+        item.meetingUrl ?? null,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) {
+        inserted += 1;
+        ids.push(id);
+      }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export function listCalendlyEvents(opts: { since?: string; until?: string; limit?: number } = {}): CalendlyEventRow[] {
+  const db = getRawDb();
+  const parts = ['SELECT * FROM calendly_events WHERE 1=1'];
+  const params: unknown[] = [];
+  const since = normalizeToUtcIso(opts.since);
+  const until = normalizeToUtcIso(opts.until);
+  if (since) { parts.push('AND start_at >= ?'); params.push(since); }
+  if (until) { parts.push('AND start_at <= ?'); params.push(until); }
+  parts.push('ORDER BY start_at DESC LIMIT ?');
+  params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
+  return db.prepare(parts.join(' ')).all(...params).map(rowToCalendlyEvent);
+}
+
+// ─────── LinkedIn profile ───────
+
+export interface LinkedinProfileInput {
+  linkedinId: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  localizedName?: string | null;
+  headline?: string | null;
+  vanityName?: string | null;
+  pictureUrl?: string | null;
+  profileUrl?: string | null;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface LinkedinProfileRow {
+  id: string;
+  linkedin_id: string;
+  first_name: string | null;
+  last_name: string | null;
+  localized_name: string | null;
+  headline: string | null;
+  vanity_name: string | null;
+  picture_url: string | null;
+  profile_url: string | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToLinkedinProfile(row: any): LinkedinProfileRow {
+  return {
+    id: row.id, linkedin_id: row.linkedin_id,
+    first_name: row.first_name ?? null, last_name: row.last_name ?? null,
+    localized_name: row.localized_name ?? null,
+    headline: row.headline ?? null, vanity_name: row.vanity_name ?? null,
+    picture_url: row.picture_url ?? null, profile_url: row.profile_url ?? null,
+    occurred_at: row.occurred_at, ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestLinkedinProfile(items: LinkedinProfileInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0; let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO linkedin_profile (
+       id, linkedin_id, first_name, last_name, localized_name,
+       headline, vanity_name, picture_url, profile_url,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.linkedinId) continue;
+      accepted += 1;
+      const id = genId();
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? ts;
+      const dedupe = item.dedupeKey ?? `linkedin:profile:${item.linkedinId}`;
+      const result = insert.run(
+        id, item.linkedinId, item.firstName ?? null, item.lastName ?? null,
+        item.localizedName ?? null, item.headline ?? null, item.vanityName ?? null,
+        item.pictureUrl ?? null, item.profileUrl ?? null,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) { inserted += 1; ids.push(id); }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export function listLinkedinProfile(): LinkedinProfileRow[] {
+  const db = getRawDb();
+  return db.prepare(`SELECT * FROM linkedin_profile LIMIT 1`).all().map(rowToLinkedinProfile);
+}
+
+// ─────── LinkedIn organizations ───────
+
+export interface LinkedinOrganizationInput {
+  orgUrn: string;
+  orgId?: string | null;
+  role?: string | null;
+  roleState?: string | null;
+  orgName?: string | null;
+  orgUrl?: string | null;
+  logoUrl?: string | null;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface LinkedinOrganizationRow {
+  id: string;
+  org_urn: string;
+  org_id: string | null;
+  role: string | null;
+  role_state: string | null;
+  org_name: string | null;
+  org_url: string | null;
+  logo_url: string | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToLinkedinOrganization(row: any): LinkedinOrganizationRow {
+  return {
+    id: row.id, org_urn: row.org_urn,
+    org_id: row.org_id ?? null, role: row.role ?? null, role_state: row.role_state ?? null,
+    org_name: row.org_name ?? null, org_url: row.org_url ?? null, logo_url: row.logo_url ?? null,
+    occurred_at: row.occurred_at, ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestLinkedinOrganizations(items: LinkedinOrganizationInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0; let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO linkedin_organizations (
+       id, org_urn, org_id, role, role_state, org_name, org_url, logo_url,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.orgUrn) continue;
+      accepted += 1;
+      const id = genId();
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? ts;
+      // dedupe on (org, role) pair so re-fetching is idempotent but the
+      // user holding two different roles at the same org doesn't collapse.
+      const dedupe = item.dedupeKey
+        ?? `linkedin:org:${item.orgUrn}:${item.role ?? '_'}`;
+      const result = insert.run(
+        id, item.orgUrn, item.orgId ?? null,
+        item.role ?? null, item.roleState ?? null,
+        item.orgName ?? null, item.orgUrl ?? null, item.logoUrl ?? null,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) { inserted += 1; ids.push(id); }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export function listLinkedinOrganizations(opts: { limit?: number } = {}): LinkedinOrganizationRow[] {
+  const db = getRawDb();
+  return db.prepare(`SELECT * FROM linkedin_organizations ORDER BY org_name ASC LIMIT ?`)
+    .all(Math.max(1, Math.min(opts.limit ?? 50, 500))).map(rowToLinkedinOrganization);
+}
+
+// ─────── Figma user ───────
+
+export interface FigmaUserInput {
+  figmaId: string;
+  email?: string | null;
+  handle?: string | null;
+  imgUrl?: string | null;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface FigmaUserRow {
+  id: string;
+  figma_id: string;
+  email: string | null;
+  handle: string | null;
+  img_url: string | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToFigmaUser(row: any): FigmaUserRow {
+  return {
+    id: row.id, figma_id: row.figma_id,
+    email: row.email ?? null, handle: row.handle ?? null, img_url: row.img_url ?? null,
+    occurred_at: row.occurred_at, ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestFigmaUser(items: FigmaUserInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0; let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO figma_user (
+       id, figma_id, email, handle, img_url,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.figmaId) continue;
+      accepted += 1;
+      const id = genId();
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? ts;
+      const dedupe = item.dedupeKey ?? `figma:user:${item.figmaId}`;
+      const result = insert.run(
+        id, item.figmaId, item.email ?? null, item.handle ?? null,
+        item.imgUrl ?? null, occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) { inserted += 1; ids.push(id); }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export function listFigmaUser(): FigmaUserRow[] {
+  const db = getRawDb();
+  return db.prepare(`SELECT * FROM figma_user LIMIT 1`).all().map(rowToFigmaUser);
+}
+
+// ─────── Zoom user ───────
+
+export interface ZoomUserInput {
+  zoomId: string;
+  email?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  displayName?: string | null;
+  accountType?: number | null;
+  roleName?: string | null;
+  department?: string | null;
+  timezone?: string | null;
+  location?: string | null;
+  language?: string | null;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface ZoomUserRow {
+  id: string;
+  zoom_id: string;
+  email: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  display_name: string | null;
+  account_type: number | null;
+  role_name: string | null;
+  department: string | null;
+  timezone: string | null;
+  location: string | null;
+  language: string | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToZoomUser(row: any): ZoomUserRow {
+  return {
+    id: row.id, zoom_id: row.zoom_id,
+    email: row.email ?? null,
+    first_name: row.first_name ?? null, last_name: row.last_name ?? null,
+    display_name: row.display_name ?? null,
+    account_type: typeof row.account_type === 'number' ? row.account_type : null,
+    role_name: row.role_name ?? null, department: row.department ?? null,
+    timezone: row.timezone ?? null, location: row.location ?? null,
+    language: row.language ?? null,
+    occurred_at: row.occurred_at, ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestZoomUser(items: ZoomUserInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0; let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO zoom_user (
+       id, zoom_id, email, first_name, last_name, display_name,
+       account_type, role_name, department, timezone, location, language,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.zoomId) continue;
+      accepted += 1;
+      const id = genId();
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? ts;
+      const dedupe = item.dedupeKey ?? `zoom:user:${item.zoomId}`;
+      const result = insert.run(
+        id, item.zoomId, item.email ?? null,
+        item.firstName ?? null, item.lastName ?? null, item.displayName ?? null,
+        intOrNull(item.accountType ?? null),
+        item.roleName ?? null, item.department ?? null,
+        item.timezone ?? null, item.location ?? null, item.language ?? null,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) { inserted += 1; ids.push(id); }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export function listZoomUser(): ZoomUserRow[] {
+  const db = getRawDb();
+  return db.prepare(`SELECT * FROM zoom_user LIMIT 1`).all().map(rowToZoomUser);
+}
+
+// ─────── Zoom marketplace apps ───────
+
+export interface ZoomMarketplaceAppInput {
+  appInstallId: string;
+  appId?: string | null;
+  name?: string | null;
+  publisher?: string | null;
+  installState?: string | null;
+  appType?: string | null;
+  installedAt?: string | null;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface ZoomMarketplaceAppRow {
+  id: string;
+  app_install_id: string;
+  app_id: string | null;
+  name: string | null;
+  publisher: string | null;
+  install_state: string | null;
+  app_type: string | null;
+  installed_at: string | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToZoomMarketplaceApp(row: any): ZoomMarketplaceAppRow {
+  return {
+    id: row.id, app_install_id: row.app_install_id, app_id: row.app_id ?? null,
+    name: row.name ?? null, publisher: row.publisher ?? null,
+    install_state: row.install_state ?? null, app_type: row.app_type ?? null,
+    installed_at: row.installed_at ?? null,
+    occurred_at: row.occurred_at, ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestZoomMarketplaceApps(items: ZoomMarketplaceAppInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0; let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO zoom_marketplace_apps (
+       id, app_install_id, app_id, name, publisher, install_state, app_type, installed_at,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.appInstallId) continue;
+      accepted += 1;
+      const id = genId();
+      const installedAt = normalizeToUtcIso(item.installedAt ?? null);
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? installedAt ?? ts;
+      const dedupe = item.dedupeKey ?? `zoom:app:${item.appInstallId}`;
+      const result = insert.run(
+        id, item.appInstallId, item.appId ?? null,
+        item.name ?? null, item.publisher ?? null,
+        item.installState ?? null, item.appType ?? null, installedAt,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) { inserted += 1; ids.push(id); }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export function listZoomMarketplaceApps(opts: { limit?: number } = {}): ZoomMarketplaceAppRow[] {
+  const db = getRawDb();
+  return db.prepare(`SELECT * FROM zoom_marketplace_apps ORDER BY name ASC LIMIT ?`)
+    .all(Math.max(1, Math.min(opts.limit ?? 50, 500))).map(rowToZoomMarketplaceApp);
+}
+
+// ─────── Dropbox account ───────
+
+export interface DropboxAccountInput {
+  accountId: string;
+  email?: string | null;
+  displayName?: string | null;
+  givenName?: string | null;
+  surname?: string | null;
+  accountType?: string | null;
+  country?: string | null;
+  locale?: string | null;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface DropboxAccountRow {
+  id: string;
+  account_id: string;
+  email: string | null;
+  display_name: string | null;
+  given_name: string | null;
+  surname: string | null;
+  account_type: string | null;
+  country: string | null;
+  locale: string | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToDropboxAccount(row: any): DropboxAccountRow {
+  return {
+    id: row.id, account_id: row.account_id,
+    email: row.email ?? null, display_name: row.display_name ?? null,
+    given_name: row.given_name ?? null, surname: row.surname ?? null,
+    account_type: row.account_type ?? null,
+    country: row.country ?? null, locale: row.locale ?? null,
+    occurred_at: row.occurred_at, ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestDropboxAccount(items: DropboxAccountInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0; let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO dropbox_account (
+       id, account_id, email, display_name, given_name, surname,
+       account_type, country, locale,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.accountId) continue;
+      accepted += 1;
+      const id = genId();
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? ts;
+      const dedupe = item.dedupeKey ?? `dropbox:account:${item.accountId}`;
+      const result = insert.run(
+        id, item.accountId,
+        item.email ?? null, item.displayName ?? null,
+        item.givenName ?? null, item.surname ?? null,
+        item.accountType ?? null, item.country ?? null, item.locale ?? null,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) { inserted += 1; ids.push(id); }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export function listDropboxAccount(): DropboxAccountRow[] {
+  const db = getRawDb();
+  return db.prepare(`SELECT * FROM dropbox_account LIMIT 1`).all().map(rowToDropboxAccount);
+}
+
+// ─────── Dropbox files ───────
+
+export interface DropboxFileInput {
+  fileId: string;
+  tag?: string | null;
+  name?: string | null;
+  pathLower?: string | null;
+  pathDisplay?: string | null;
+  sizeBytes?: number | null;
+  serverModified?: string | null;
+  clientModified?: string | null;
+  rev?: string | null;
+  isDownloadable?: boolean;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface DropboxFileRow {
+  id: string;
+  file_id: string;
+  tag: string | null;
+  name: string | null;
+  path_lower: string | null;
+  path_display: string | null;
+  size_bytes: number | null;
+  server_modified: string | null;
+  client_modified: string | null;
+  rev: string | null;
+  is_downloadable: boolean;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToDropboxFile(row: any): DropboxFileRow {
+  return {
+    id: row.id, file_id: row.file_id, tag: row.tag ?? null, name: row.name ?? null,
+    path_lower: row.path_lower ?? null, path_display: row.path_display ?? null,
+    size_bytes: typeof row.size_bytes === 'number' ? row.size_bytes : null,
+    server_modified: row.server_modified ?? null,
+    client_modified: row.client_modified ?? null,
+    rev: row.rev ?? null,
+    is_downloadable: Boolean(row.is_downloadable),
+    occurred_at: row.occurred_at, ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestDropboxFiles(items: DropboxFileInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0; let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO dropbox_files (
+       id, file_id, tag, name, path_lower, path_display,
+       size_bytes, server_modified, client_modified, rev, is_downloadable,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.fileId) continue;
+      accepted += 1;
+      const id = genId();
+      const serverMod = normalizeToUtcIso(item.serverModified ?? null);
+      const clientMod = normalizeToUtcIso(item.clientModified ?? null);
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? serverMod ?? clientMod ?? ts;
+      const dedupe = item.dedupeKey ?? `dropbox:file:${item.fileId}`;
+      const result = insert.run(
+        id, item.fileId, item.tag ?? null, item.name ?? null,
+        item.pathLower ?? null, item.pathDisplay ?? null,
+        intOrNull(item.sizeBytes ?? null),
+        serverMod, clientMod, item.rev ?? null,
+        item.isDownloadable === false ? 0 : 1,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) { inserted += 1; ids.push(id); }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export function listDropboxFiles(opts: { limit?: number } = {}): DropboxFileRow[] {
+  const db = getRawDb();
+  return db.prepare(`SELECT * FROM dropbox_files ORDER BY server_modified DESC LIMIT ?`)
+    .all(Math.max(1, Math.min(opts.limit ?? 50, 500))).map(rowToDropboxFile);
+}
+
+// ─────── Asana workspaces ───────
+
+export interface AsanaWorkspaceInput {
+  workspaceGid: string;
+  name?: string | null;
+  resourceType?: string | null;
+  isOrganization?: boolean;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface AsanaWorkspaceRow {
+  id: string;
+  workspace_gid: string;
+  name: string | null;
+  resource_type: string | null;
+  is_organization: boolean;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToAsanaWorkspace(row: any): AsanaWorkspaceRow {
+  return {
+    id: row.id, workspace_gid: row.workspace_gid,
+    name: row.name ?? null, resource_type: row.resource_type ?? null,
+    is_organization: Boolean(row.is_organization),
+    occurred_at: row.occurred_at, ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestAsanaWorkspaces(items: AsanaWorkspaceInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0; let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO asana_workspaces (
+       id, workspace_gid, name, resource_type, is_organization,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.workspaceGid) continue;
+      accepted += 1;
+      const id = genId();
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? ts;
+      const dedupe = item.dedupeKey ?? `asana:workspace:${item.workspaceGid}`;
+      const result = insert.run(
+        id, item.workspaceGid, item.name ?? null,
+        item.resourceType ?? null, item.isOrganization ? 1 : 0,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) { inserted += 1; ids.push(id); }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export function listAsanaWorkspaces(opts: { limit?: number } = {}): AsanaWorkspaceRow[] {
+  const db = getRawDb();
+  return db.prepare(`SELECT * FROM asana_workspaces ORDER BY name ASC LIMIT ?`)
+    .all(Math.max(1, Math.min(opts.limit ?? 50, 500))).map(rowToAsanaWorkspace);
+}
+
+// ─────── Asana tasks ───────
+
+export interface AsanaTaskInput {
+  taskGid: string;
+  workspaceGid?: string | null;
+  projectGid?: string | null;
+  name?: string | null;
+  notes?: string | null;
+  completed?: boolean;
+  assigneeStatus?: string | null;
+  dueAt?: string | null;
+  dueOn?: string | null;
+  modifiedAtRemote?: string | null;
+  createdAtRemote?: string | null;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface AsanaTaskRow {
+  id: string;
+  task_gid: string;
+  workspace_gid: string | null;
+  project_gid: string | null;
+  name: string | null;
+  notes: string | null;
+  completed: boolean;
+  assignee_status: string | null;
+  due_at: string | null;
+  due_on: string | null;
+  modified_at_remote: string | null;
+  created_at_remote: string | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToAsanaTask(row: any): AsanaTaskRow {
+  return {
+    id: row.id, task_gid: row.task_gid,
+    workspace_gid: row.workspace_gid ?? null, project_gid: row.project_gid ?? null,
+    name: row.name ?? null, notes: row.notes ?? null,
+    completed: Boolean(row.completed),
+    assignee_status: row.assignee_status ?? null,
+    due_at: row.due_at ?? null, due_on: row.due_on ?? null,
+    modified_at_remote: row.modified_at_remote ?? null,
+    created_at_remote: row.created_at_remote ?? null,
+    occurred_at: row.occurred_at, ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestAsanaTasks(items: AsanaTaskInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0; let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO asana_tasks (
+       id, task_gid, workspace_gid, project_gid, name, notes,
+       completed, assignee_status, due_at, due_on,
+       modified_at_remote, created_at_remote,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.taskGid) continue;
+      accepted += 1;
+      const id = genId();
+      const dueAt = normalizeToUtcIso(item.dueAt ?? null);
+      const modified = normalizeToUtcIso(item.modifiedAtRemote ?? null);
+      const created = normalizeToUtcIso(item.createdAtRemote ?? null);
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? modified ?? created ?? ts;
+      const dedupe = item.dedupeKey ?? `asana:task:${item.taskGid}`;
+      const result = insert.run(
+        id, item.taskGid, item.workspaceGid ?? null, item.projectGid ?? null,
+        item.name ?? null, item.notes ?? null,
+        item.completed ? 1 : 0, item.assigneeStatus ?? null,
+        dueAt, item.dueOn ?? null,
+        modified, created,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) { inserted += 1; ids.push(id); }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export function listAsanaTasks(opts: { limit?: number; workspaceGid?: string } = {}): AsanaTaskRow[] {
+  const db = getRawDb();
+  const parts = ['SELECT * FROM asana_tasks WHERE 1=1'];
+  const params: unknown[] = [];
+  if (opts.workspaceGid) { parts.push('AND workspace_gid = ?'); params.push(opts.workspaceGid); }
+  parts.push('ORDER BY modified_at_remote DESC LIMIT ?');
+  params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
+  return db.prepare(parts.join(' ')).all(...params).map(rowToAsanaTask);
+}
+
+// ─────── HubSpot contacts ───────
+
+export interface HubspotContactInput {
+  contactId: string;
+  email?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  company?: string | null;
+  jobtitle?: string | null;
+  lifecycleStage?: string | null;
+  leadStatus?: string | null;
+  createdAtRemote?: string | null;
+  modifiedAtRemote?: string | null;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface HubspotContactRow {
+  id: string;
+  contact_id: string;
+  email: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  company: string | null;
+  jobtitle: string | null;
+  lifecycle_stage: string | null;
+  lead_status: string | null;
+  created_at_remote: string | null;
+  modified_at_remote: string | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToHubspotContact(row: any): HubspotContactRow {
+  return {
+    id: row.id, contact_id: row.contact_id,
+    email: row.email ?? null,
+    first_name: row.first_name ?? null, last_name: row.last_name ?? null,
+    company: row.company ?? null, jobtitle: row.jobtitle ?? null,
+    lifecycle_stage: row.lifecycle_stage ?? null, lead_status: row.lead_status ?? null,
+    created_at_remote: row.created_at_remote ?? null,
+    modified_at_remote: row.modified_at_remote ?? null,
+    occurred_at: row.occurred_at, ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestHubspotContacts(items: HubspotContactInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0; let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO hubspot_contacts (
+       id, contact_id, email, first_name, last_name, company, jobtitle,
+       lifecycle_stage, lead_status, created_at_remote, modified_at_remote,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.contactId) continue;
+      accepted += 1;
+      const id = genId();
+      const created = normalizeToUtcIso(item.createdAtRemote ?? null);
+      const modified = normalizeToUtcIso(item.modifiedAtRemote ?? null);
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? modified ?? created ?? ts;
+      const dedupe = item.dedupeKey ?? `hubspot:contact:${item.contactId}`;
+      const result = insert.run(
+        id, item.contactId, item.email ?? null,
+        item.firstName ?? null, item.lastName ?? null,
+        item.company ?? null, item.jobtitle ?? null,
+        item.lifecycleStage ?? null, item.leadStatus ?? null,
+        created, modified,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) { inserted += 1; ids.push(id); }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export function listHubspotContacts(opts: { limit?: number } = {}): HubspotContactRow[] {
+  const db = getRawDb();
+  return db.prepare(`SELECT * FROM hubspot_contacts ORDER BY modified_at_remote DESC LIMIT ?`)
+    .all(Math.max(1, Math.min(opts.limit ?? 50, 500))).map(rowToHubspotContact);
+}
+
+// ─────── ClickUp user ───────
+
+export interface ClickupUserInput {
+  clickupId: string;
+  username?: string | null;
+  email?: string | null;
+  color?: string | null;
+  profilePicture?: string | null;
+  timezone?: string | null;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface ClickupUserRow {
+  id: string;
+  clickup_id: string;
+  username: string | null;
+  email: string | null;
+  color: string | null;
+  profile_picture: string | null;
+  timezone: string | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToClickupUser(row: any): ClickupUserRow {
+  return {
+    id: row.id, clickup_id: row.clickup_id,
+    username: row.username ?? null, email: row.email ?? null,
+    color: row.color ?? null, profile_picture: row.profile_picture ?? null,
+    timezone: row.timezone ?? null,
+    occurred_at: row.occurred_at, ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestClickupUser(items: ClickupUserInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0; let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO clickup_user (
+       id, clickup_id, username, email, color, profile_picture, timezone,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.clickupId) continue;
+      accepted += 1;
+      const id = genId();
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? ts;
+      const dedupe = item.dedupeKey ?? `clickup:user:${item.clickupId}`;
+      const result = insert.run(
+        id, item.clickupId, item.username ?? null, item.email ?? null,
+        item.color ?? null, item.profilePicture ?? null, item.timezone ?? null,
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) { inserted += 1; ids.push(id); }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export function listClickupUser(): ClickupUserRow[] {
+  const db = getRawDb();
+  return db.prepare(`SELECT * FROM clickup_user LIMIT 1`).all().map(rowToClickupUser);
+}
+
+// ─────── ClickUp workspaces ───────
+
+export interface ClickupWorkspaceInput {
+  workspaceId: string;
+  name?: string | null;
+  color?: string | null;
+  avatar?: string | null;
+  membersCount?: number | null;
+  occurredAt?: string;
+  dedupeKey?: string;
+}
+
+export interface ClickupWorkspaceRow {
+  id: string;
+  workspace_id: string;
+  name: string | null;
+  color: string | null;
+  avatar: string | null;
+  members_count: number | null;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+  last_referenced_at: string | null;
+  referenced_by_runs: string[];
+}
+
+function rowToClickupWorkspace(row: any): ClickupWorkspaceRow {
+  return {
+    id: row.id, workspace_id: row.workspace_id,
+    name: row.name ?? null, color: row.color ?? null, avatar: row.avatar ?? null,
+    members_count: typeof row.members_count === 'number' ? row.members_count : null,
+    occurred_at: row.occurred_at, ingested_at: row.ingested_at,
+    dedupe_key: row.dedupe_key ?? null,
+    reference_count: typeof row.reference_count === 'number' ? row.reference_count : 0,
+    last_referenced_at: row.last_referenced_at ?? null,
+    referenced_by_runs: parseJsonArray<string>(row.referenced_by_runs),
+  };
+}
+
+export function ingestClickupWorkspaces(items: ClickupWorkspaceInput[]): IngestResult {
+  if (items.length === 0) return { accepted: 0, inserted: 0, ignored: 0, ids: [] };
+  const db = getRawDb();
+  const ts = nowIso();
+  const ids: string[] = [];
+  let inserted = 0; let accepted = 0;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO clickup_workspaces (
+       id, workspace_id, name, color, avatar, members_count,
+       occurred_at, ingested_at, dedupe_key,
+       reference_count, last_referenced_at, referenced_by_runs
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '[]')`,
+  );
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.workspaceId) continue;
+      accepted += 1;
+      const id = genId();
+      const occurredAt = normalizeToUtcIso(item.occurredAt ?? null) ?? ts;
+      const dedupe = item.dedupeKey ?? `clickup:workspace:${item.workspaceId}`;
+      const result = insert.run(
+        id, item.workspaceId, item.name ?? null,
+        item.color ?? null, item.avatar ?? null,
+        intOrNull(item.membersCount ?? null),
+        occurredAt, ts, dedupe,
+      );
+      if (result.changes > 0) { inserted += 1; ids.push(id); }
+    }
+  });
+  tx();
+  return { accepted, inserted, ignored: accepted - inserted, ids };
+}
+
+export function listClickupWorkspaces(opts: { limit?: number } = {}): ClickupWorkspaceRow[] {
+  const db = getRawDb();
+  return db.prepare(`SELECT * FROM clickup_workspaces ORDER BY name ASC LIMIT ?`)
+    .all(Math.max(1, Math.min(opts.limit ?? 50, 500))).map(rowToClickupWorkspace);
+}
+
 // ─────── Reference tracking — uniform across every raw table ───────
 
 const REFERENCE_TABLES = new Set([
@@ -2475,7 +4924,82 @@ const REFERENCE_TABLES = new Set([
   'gsheets_spreadsheets',
   'stripe_invoices',
   'discord_guilds',
+  // Phase D round 4
+  'spotify_recent_tracks',
+  'strava_activities',
+  'todoist_tasks',
+  'youtube_subscriptions',
+  'trello_boards',
+  'jira_projects',
+  'twitter_bookmarks',
+  'calendly_events',
+  // Phase D round 5
+  'linkedin_profile',
+  'linkedin_organizations',
+  'figma_user',
+  'zoom_user',
+  'zoom_marketplace_apps',
+  'dropbox_account',
+  'dropbox_files',
+  'asana_workspaces',
+  'asana_tasks',
+  'hubspot_contacts',
+  'clickup_user',
+  'clickup_workspaces',
 ]);
+
+/**
+ * Generic list of any registered raw table. Used by the HTTP `/raw/<table>`
+ * dispatcher and the Profile page workbench.
+ *
+ * All raw tables share the `occurred_at` ISO column, so since/until filtering
+ * works uniformly. The table name is whitelisted via REFERENCE_TABLES to
+ * prevent SQL injection (the table name is interpolated into the query
+ * string because SQLite doesn't bind table identifiers).
+ */
+export function listRawTable(
+  table: string,
+  opts: { since?: string; until?: string; limit?: number } = {},
+): Record<string, unknown>[] {
+  if (!REFERENCE_TABLES.has(table)) {
+    throw new Error(`listRawTable: unknown raw table ${table}`);
+  }
+  const db = getRawDb();
+  const parts = [`SELECT * FROM ${table} WHERE 1=1`];
+  const params: unknown[] = [];
+  const since = normalizeToUtcIso(opts.since);
+  const until = normalizeToUtcIso(opts.until);
+  if (since) { parts.push('AND occurred_at >= ?'); params.push(since); }
+  if (until) { parts.push('AND occurred_at <= ?'); params.push(until); }
+  parts.push('ORDER BY occurred_at DESC LIMIT ?');
+  params.push(Math.max(1, Math.min(opts.limit ?? 50, 500)));
+  return db.prepare(parts.join(' ')).all(...params) as Record<string, unknown>[];
+}
+
+export function countRawTable(
+  table: string,
+  opts: { since?: string; until?: string } = {},
+): number {
+  if (!REFERENCE_TABLES.has(table)) {
+    throw new Error(`countRawTable: unknown raw table ${table}`);
+  }
+  const db = getRawDb();
+  const parts = [`SELECT COUNT(*) AS total FROM ${table} WHERE 1=1`];
+  const params: unknown[] = [];
+  const since = normalizeToUtcIso(opts.since);
+  const until = normalizeToUtcIso(opts.until);
+  if (since) { parts.push('AND occurred_at >= ?'); params.push(since); }
+  if (until) { parts.push('AND occurred_at <= ?'); params.push(until); }
+  const row = db.prepare(parts.join(' ')).get(...params) as { total?: number } | undefined;
+  return row?.total ?? 0;
+}
+
+/** Snake_case names of every raw table that the generic `/raw/<table>`
+ * dispatcher will accept. Tracks REFERENCE_TABLES; exported so the HTTP
+ * route layer doesn't need to duplicate this list. */
+export function listRegisteredRawTables(): string[] {
+  return Array.from(REFERENCE_TABLES).sort();
+}
 
 /**
  * Bump reference_count + dedup-append runId to referenced_by_runs (cap 10)

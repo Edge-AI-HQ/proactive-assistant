@@ -330,12 +330,12 @@ test('discord: skipped with no_incremental_sync_v0 — no Composio call, no curs
 // Unsupported toolkit
 // ──────────────────────────────────────────────────────────────────────
 
-test('unsupported toolkit (asana): skipped with unsupported_toolkit_v0', async () => {
+test('unsupported toolkit (oura): skipped with unsupported_toolkit_v0', async () => {
   await withTempHome(async () => {
     await enqueueBackgroundTask({
       type: 'connector.sync',
-      idempotencyKey: 'connector.sync:asana:acc-x:1',
-      payload: { toolkit: 'asana', connectedAccountId: 'acc-x', limit: 5 },
+      idempotencyKey: 'connector.sync:oura:acc-x:1',
+      payload: { toolkit: 'oura', connectedAccountId: 'acc-x', limit: 5 },
     });
     const { fetcher } = makeRecordingFetcher({});
     const { task } = await runOneTick({ fetcher });

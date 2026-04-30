@@ -45,11 +45,29 @@ export type EvolveToolkit =
   // Phase D round 2
   | 'github' | 'outlook'
   // Phase D round 3
-  | 'googledocs' | 'googlesheets' | 'stripe' | 'discord';
+  | 'googledocs' | 'googlesheets' | 'stripe' | 'discord'
+  // Phase D round 4
+  | 'spotify'
+  | 'strava' | 'todoist' | 'youtube' | 'trello' | 'jira' | 'twitter' | 'calendly'
+  // Phase D round 5
+  | 'linkedin' | 'figma' | 'zoom' | 'dropbox' | 'asana' | 'hubspot' | 'clickup';
 
 export interface ConnectorEvolveOpts {
   toolkit: EvolveToolkit;
   evolutionRunId: string;
+  /**
+   * The Composio connected_account_id this batch came from. Surfaced into
+   * the prompt so the LLM knows "this is one of possibly several accounts
+   * of this toolkit" — without it, the second Gmail account is almost
+   * always full-dedup'd against the first account's memories and writes
+   * nothing. With it the LLM can emit account-scoped memories (e.g.
+   * "account A is the user's work email; account B is personal").
+   *
+   * Optional so tests can omit. When present we also include the last 6
+   * chars in the user prompt so the LLM has a concrete account label to
+   * cite in its emitted memory text without leaking the full id.
+   */
+  connectedAccountId?: string;
   /**
    * Items that were just freshly inserted into raw.db. We re-sample these
    * for the prompt; passing all 100 would blow the context budget.
@@ -65,6 +83,26 @@ export interface ConnectorEvolveOpts {
   gsheets?: raw.GsheetsSpreadsheetInput[];
   stripe?: raw.StripeInvoiceInput[];
   discord?: raw.DiscordGuildInput[];
+  spotifyRecent?: raw.SpotifyRecentTrackInput[];
+  stravaActivities?: raw.StravaActivityInput[];
+  todoistTasks?: raw.TodoistTaskInput[];
+  youtubeSubs?: raw.YoutubeSubscriptionInput[];
+  trelloBoards?: raw.TrelloBoardInput[];
+  jiraProjects?: raw.JiraProjectInput[];
+  twitterBookmarks?: raw.TwitterBookmarkInput[];
+  calendlyEvents?: raw.CalendlyEventInput[];
+  linkedinProfile?: raw.LinkedinProfileInput[];
+  linkedinOrgs?: raw.LinkedinOrganizationInput[];
+  figmaUser?: raw.FigmaUserInput[];
+  zoomUser?: raw.ZoomUserInput[];
+  zoomApps?: raw.ZoomMarketplaceAppInput[];
+  dropboxAccount?: raw.DropboxAccountInput[];
+  dropboxFiles?: raw.DropboxFileInput[];
+  asanaWorkspaces?: raw.AsanaWorkspaceInput[];
+  asanaTasks?: raw.AsanaTaskInput[];
+  hubspotContacts?: raw.HubspotContactInput[];
+  clickupUser?: raw.ClickupUserInput[];
+  clickupWorkspaces?: raw.ClickupWorkspaceInput[];
 }
 
 export interface ConnectorEvolveDeps {
@@ -148,7 +186,13 @@ export async function runConnectorEvolve(
   const recentMemories = await snapshotRecentMemories().catch(() => []);
 
   const systemPrompt = buildSystemPrompt(opts.toolkit);
-  const userMessage = buildUserMessage(opts.toolkit, sampled, profile, recentMemories);
+  const userMessage = buildUserMessage(
+    opts.toolkit,
+    sampled,
+    profile,
+    recentMemories,
+    opts.connectedAccountId ?? null,
+  );
 
   let agentText: string;
   try {
@@ -263,7 +307,12 @@ Rules:
     b. If you have NEW information that replaces the old fact (e.g. updated role, new employer), emit the new row AND set "supersedes" to the existing memory id. The old row will be archived.
   Examples to skip: "User knows ERC-4337 and RAG" when an existing memory already lists those tech stacks. Just rephrasing is not new information.
 - Output valid JSON only. If nothing genuinely new is extractable: { "memories": [] }. An empty result is preferable to a duplicate.
-- No prose outside the json fence. Quote any internal quotes with 「」 or escape with \\".`;
+- No prose outside the json fence. Quote any internal quotes with 「」 or escape with \\".
+
+Multi-account note: a single ${toolkit} toolkit may be connected with TWO OR MORE accounts (e.g. user has a work Gmail and a personal Gmail). Earlier accounts have already produced person-level facts. For SUBSEQUENT accounts of the same toolkit, person-level facts will mostly dedup — that is expected and correct. Look INSTEAD for account-specific patterns:
+- If items in this batch suggest the account is used for a particular CONTEXT (e.g. "this account receives mostly work / billing / newsletter / family / school traffic"), emit ONE concise memory naming that pattern. Subject like "account:<toolkit>:<short_id>" and reference the short id (last 6 chars) supplied below in "Account label". Example: "Gmail account ending …a1b2c3 is primarily used for finance/billing emails (Stripe, Plaid, banks)."
+- If the items reveal a NEW employer / school / role / city not yet in memory, emit it normally (with supersedes if updating an existing role).
+- Otherwise it is OK to return { "memories": [] } — silent dedup is correct.`;
 }
 
 interface SampledBundle {
@@ -279,6 +328,26 @@ interface SampledBundle {
   gsheets: Array<{ name?: string; modified?: string; owners?: string[]; lastModifyingUser?: string }>;
   stripe: Array<{ number?: string; status?: string; amountDue?: number; currency?: string; customer?: string; created?: string }>;
   discord: Array<{ name?: string; isOwner?: boolean; memberCount?: number; features?: string[] }>;
+  spotifyRecent: Array<{ track?: string; artists?: string[]; album?: string; context?: string; playedAt?: string }>;
+  stravaActivities: Array<{ name?: string; type?: string; distanceKm?: number; movingMin?: number; startDate?: string }>;
+  todoistTasks: Array<{ content?: string; description?: string; priority?: number; labels?: string[]; dueAt?: string }>;
+  youtubeSubs: Array<{ title?: string; description?: string }>;
+  trelloBoards: Array<{ name?: string; description?: string; starred?: boolean; closed?: boolean }>;
+  jiraProjects: Array<{ key?: string; name?: string; description?: string; type?: string }>;
+  twitterBookmarks: Array<{ author?: string; text?: string; lang?: string; createdAt?: string }>;
+  calendlyEvents: Array<{ name?: string; status?: string; startAt?: string; invitees?: string[] }>;
+  linkedinProfile: Array<{ name?: string; headline?: string; vanityName?: string }>;
+  linkedinOrgs: Array<{ orgName?: string; role?: string; roleState?: string }>;
+  figmaUser: Array<{ handle?: string; email?: string }>;
+  zoomUser: Array<{ name?: string; email?: string; accountType?: string; department?: string; timezone?: string }>;
+  zoomApps: Array<{ name?: string; publisher?: string; appType?: string }>;
+  dropboxAccount: Array<{ email?: string; displayName?: string; accountType?: string; country?: string }>;
+  dropboxFiles: Array<{ name?: string; tag?: string; pathDisplay?: string; sizeBytes?: number }>;
+  asanaWorkspaces: Array<{ name?: string; isOrganization?: boolean }>;
+  asanaTasks: Array<{ name?: string; notes?: string; completed?: boolean; dueOn?: string }>;
+  hubspotContacts: Array<{ name?: string; email?: string; company?: string; jobtitle?: string; lifecycleStage?: string }>;
+  clickupUser: Array<{ username?: string; email?: string }>;
+  clickupWorkspaces: Array<{ name?: string; membersCount?: number }>;
 }
 
 function sampleItems(opts: ConnectorEvolveOpts): SampledBundle {
@@ -293,6 +362,26 @@ function sampleItems(opts: ConnectorEvolveOpts): SampledBundle {
   const gsheets: SampledBundle['gsheets'] = [];
   const stripe: SampledBundle['stripe'] = [];
   const discord: SampledBundle['discord'] = [];
+  const spotifyRecent: SampledBundle['spotifyRecent'] = [];
+  const stravaActivities: SampledBundle['stravaActivities'] = [];
+  const todoistTasks: SampledBundle['todoistTasks'] = [];
+  const youtubeSubs: SampledBundle['youtubeSubs'] = [];
+  const trelloBoards: SampledBundle['trelloBoards'] = [];
+  const jiraProjects: SampledBundle['jiraProjects'] = [];
+  const twitterBookmarks: SampledBundle['twitterBookmarks'] = [];
+  const calendlyEvents: SampledBundle['calendlyEvents'] = [];
+  const linkedinProfile: SampledBundle['linkedinProfile'] = [];
+  const linkedinOrgs: SampledBundle['linkedinOrgs'] = [];
+  const figmaUser: SampledBundle['figmaUser'] = [];
+  const zoomUser: SampledBundle['zoomUser'] = [];
+  const zoomApps: SampledBundle['zoomApps'] = [];
+  const dropboxAccount: SampledBundle['dropboxAccount'] = [];
+  const dropboxFiles: SampledBundle['dropboxFiles'] = [];
+  const asanaWorkspaces: SampledBundle['asanaWorkspaces'] = [];
+  const asanaTasks: SampledBundle['asanaTasks'] = [];
+  const hubspotContacts: SampledBundle['hubspotContacts'] = [];
+  const clickupUser: SampledBundle['clickupUser'] = [];
+  const clickupWorkspaces: SampledBundle['clickupWorkspaces'] = [];
 
   if (opts.gmail && opts.gmail.length > 0) {
     const sortedGmail = [...opts.gmail]
@@ -434,14 +523,240 @@ function sampleItems(opts: ConnectorEvolveOpts): SampledBundle {
       }));
     discord.push(...sortedDiscord);
   }
+  if (opts.spotifyRecent && opts.spotifyRecent.length > 0) {
+    const sortedSpotify = [...opts.spotifyRecent]
+      .sort(byDescPlayedAt)
+      .slice(0, MAX_PROMPT_ITEMS)
+      .map((t) => ({
+        track: truncate(t.trackName ?? '', 80),
+        artists: Array.isArray(t.artistNames) ? t.artistNames.slice(0, 3) : [],
+        album: truncate(t.albumName ?? '', 80),
+        context: t.contextType ?? undefined,
+        playedAt: t.playedAt,
+      }));
+    spotifyRecent.push(...sortedSpotify);
+  }
+  if (opts.stravaActivities && opts.stravaActivities.length > 0) {
+    const sorted = [...opts.stravaActivities]
+      .sort((a, b) => (b.startDate ?? '') < (a.startDate ?? '') ? -1 : 1)
+      .slice(0, MAX_PROMPT_ITEMS)
+      .map((a) => ({
+        name: truncate(a.name ?? '', 80),
+        type: a.activityType ?? undefined,
+        distanceKm: typeof a.distanceMeters === 'number'
+          ? Number((a.distanceMeters / 1000).toFixed(2)) : undefined,
+        movingMin: typeof a.movingTimeSeconds === 'number'
+          ? Math.round(a.movingTimeSeconds / 60) : undefined,
+        startDate: a.startDate ?? undefined,
+      }));
+    stravaActivities.push(...sorted);
+  }
+  if (opts.todoistTasks && opts.todoistTasks.length > 0) {
+    // Sort by priority desc (urgent first), then by content for stability.
+    const sorted = [...opts.todoistTasks]
+      .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))
+      .slice(0, MAX_PROMPT_ITEMS)
+      .map((t) => ({
+        content: truncate(t.content ?? '', 120),
+        description: truncate(t.description ?? '', MAX_TEXT_LEN_PER_ITEM),
+        priority: t.priority ?? undefined,
+        labels: Array.isArray(t.labels) ? t.labels.slice(0, 5) : [],
+        dueAt: t.dueAt ?? undefined,
+      }));
+    todoistTasks.push(...sorted);
+  }
+  if (opts.youtubeSubs && opts.youtubeSubs.length > 0) {
+    const sorted = [...opts.youtubeSubs]
+      .slice(0, MAX_PROMPT_ITEMS)
+      .map((s) => ({
+        title: truncate(s.channelTitle ?? '', 80),
+        description: truncate(s.channelDescription ?? '', MAX_TEXT_LEN_PER_ITEM),
+      }));
+    youtubeSubs.push(...sorted);
+  }
+  if (opts.trelloBoards && opts.trelloBoards.length > 0) {
+    // starred boards first.
+    const sorted = [...opts.trelloBoards]
+      .sort((a, b) => (b.starred ? 1 : 0) - (a.starred ? 1 : 0))
+      .slice(0, MAX_PROMPT_ITEMS)
+      .map((b) => ({
+        name: truncate(b.name ?? '', 80),
+        description: truncate(b.description ?? '', MAX_TEXT_LEN_PER_ITEM),
+        starred: Boolean(b.starred),
+        closed: Boolean(b.closed),
+      }));
+    trelloBoards.push(...sorted);
+  }
+  if (opts.jiraProjects && opts.jiraProjects.length > 0) {
+    const sorted = [...opts.jiraProjects]
+      .slice(0, MAX_PROMPT_ITEMS)
+      .map((p) => ({
+        key: p.projectKey ?? undefined,
+        name: truncate(p.name ?? '', 80),
+        description: truncate(p.description ?? '', MAX_TEXT_LEN_PER_ITEM),
+        type: p.projectType ?? undefined,
+      }));
+    jiraProjects.push(...sorted);
+  }
+  if (opts.twitterBookmarks && opts.twitterBookmarks.length > 0) {
+    const sorted = [...opts.twitterBookmarks]
+      .sort((a, b) => (b.createdAtRemote ?? '') < (a.createdAtRemote ?? '') ? -1 : 1)
+      .slice(0, MAX_PROMPT_ITEMS)
+      .map((b) => ({
+        author: b.authorUsername ?? undefined,
+        text: truncate(b.text ?? '', MAX_TEXT_LEN_PER_ITEM),
+        lang: b.lang ?? undefined,
+        createdAt: b.createdAtRemote ?? undefined,
+      }));
+    twitterBookmarks.push(...sorted);
+  }
+  if (opts.calendlyEvents && opts.calendlyEvents.length > 0) {
+    const sorted = [...opts.calendlyEvents]
+      .sort((a, b) => (b.startAt ?? '') < (a.startAt ?? '') ? -1 : 1)
+      .slice(0, MAX_PROMPT_ITEMS)
+      .map((e) => ({
+        name: truncate(e.name ?? '', 80),
+        status: e.status ?? undefined,
+        startAt: e.startAt ?? undefined,
+        invitees: (e.invitees ?? [])
+          .map((inv) => inv?.name ?? inv?.email ?? null)
+          .filter((s): s is string => typeof s === 'string' && s.length > 0)
+          .slice(0, 5),
+      }));
+    calendlyEvents.push(...sorted);
+  }
+  if (opts.linkedinProfile && opts.linkedinProfile.length > 0) {
+    for (const p of opts.linkedinProfile.slice(0, 1)) {
+      linkedinProfile.push({
+        name: truncate([p.firstName, p.lastName].filter(Boolean).join(' ') || p.localizedName || '', 80),
+        headline: truncate(p.headline ?? '', MAX_TEXT_LEN_PER_ITEM),
+        vanityName: p.vanityName ?? undefined,
+      });
+    }
+  }
+  if (opts.linkedinOrgs && opts.linkedinOrgs.length > 0) {
+    for (const o of opts.linkedinOrgs.slice(0, MAX_PROMPT_ITEMS)) {
+      linkedinOrgs.push({
+        orgName: truncate(o.orgName ?? '', 80),
+        role: o.role ?? undefined,
+        roleState: o.roleState ?? undefined,
+      });
+    }
+  }
+  if (opts.figmaUser && opts.figmaUser.length > 0) {
+    for (const u of opts.figmaUser.slice(0, 1)) {
+      figmaUser.push({ handle: u.handle ?? undefined, email: u.email ?? undefined });
+    }
+  }
+  if (opts.zoomUser && opts.zoomUser.length > 0) {
+    for (const u of opts.zoomUser.slice(0, 1)) {
+      const accountType = u.accountType === 1 ? 'Basic' : u.accountType === 2 ? 'Licensed' : u.accountType === 3 ? 'On-prem' : undefined;
+      zoomUser.push({
+        name: truncate(u.displayName ?? [u.firstName, u.lastName].filter(Boolean).join(' ') ?? '', 80),
+        email: u.email ?? undefined,
+        accountType,
+        department: u.department ?? undefined,
+        timezone: u.timezone ?? undefined,
+      });
+    }
+  }
+  if (opts.zoomApps && opts.zoomApps.length > 0) {
+    for (const a of opts.zoomApps.slice(0, MAX_PROMPT_ITEMS)) {
+      zoomApps.push({
+        name: truncate(a.name ?? '', 80),
+        publisher: a.publisher ?? undefined,
+        appType: a.appType ?? undefined,
+      });
+    }
+  }
+  if (opts.dropboxAccount && opts.dropboxAccount.length > 0) {
+    for (const a of opts.dropboxAccount.slice(0, 1)) {
+      dropboxAccount.push({
+        email: a.email ?? undefined,
+        displayName: a.displayName ?? undefined,
+        accountType: a.accountType ?? undefined,
+        country: a.country ?? undefined,
+      });
+    }
+  }
+  if (opts.dropboxFiles && opts.dropboxFiles.length > 0) {
+    const sorted = [...opts.dropboxFiles]
+      .sort((a, b) => (b.serverModified ?? '') < (a.serverModified ?? '') ? -1 : 1)
+      .slice(0, MAX_PROMPT_ITEMS)
+      .map((f) => ({
+        name: truncate(f.name ?? '', 80),
+        tag: f.tag ?? undefined,
+        pathDisplay: truncate(f.pathDisplay ?? '', 120),
+        sizeBytes: typeof f.sizeBytes === 'number' ? f.sizeBytes : undefined,
+      }));
+    dropboxFiles.push(...sorted);
+  }
+  if (opts.asanaWorkspaces && opts.asanaWorkspaces.length > 0) {
+    for (const w of opts.asanaWorkspaces.slice(0, MAX_PROMPT_ITEMS)) {
+      asanaWorkspaces.push({
+        name: truncate(w.name ?? '', 80),
+        isOrganization: Boolean(w.isOrganization),
+      });
+    }
+  }
+  if (opts.asanaTasks && opts.asanaTasks.length > 0) {
+    const sorted = [...opts.asanaTasks]
+      .sort((a, b) => (b.modifiedAtRemote ?? '') < (a.modifiedAtRemote ?? '') ? -1 : 1)
+      .slice(0, MAX_PROMPT_ITEMS)
+      .map((t) => ({
+        name: truncate(t.name ?? '', 80),
+        notes: truncate(t.notes ?? '', MAX_TEXT_LEN_PER_ITEM),
+        completed: Boolean(t.completed),
+        dueOn: t.dueOn ?? undefined,
+      }));
+    asanaTasks.push(...sorted);
+  }
+  if (opts.hubspotContacts && opts.hubspotContacts.length > 0) {
+    const sorted = [...opts.hubspotContacts]
+      .sort((a, b) => (b.modifiedAtRemote ?? '') < (a.modifiedAtRemote ?? '') ? -1 : 1)
+      .slice(0, MAX_PROMPT_ITEMS)
+      .map((c) => ({
+        name: truncate([c.firstName, c.lastName].filter(Boolean).join(' ') || c.email || '', 80),
+        email: c.email ?? undefined,
+        company: c.company ?? undefined,
+        jobtitle: c.jobtitle ?? undefined,
+        lifecycleStage: c.lifecycleStage ?? undefined,
+      }));
+    hubspotContacts.push(...sorted);
+  }
+  if (opts.clickupUser && opts.clickupUser.length > 0) {
+    for (const u of opts.clickupUser.slice(0, 1)) {
+      clickupUser.push({ username: u.username ?? undefined, email: u.email ?? undefined });
+    }
+  }
+  if (opts.clickupWorkspaces && opts.clickupWorkspaces.length > 0) {
+    for (const w of opts.clickupWorkspaces.slice(0, MAX_PROMPT_ITEMS)) {
+      clickupWorkspaces.push({
+        name: truncate(w.name ?? '', 80),
+        membersCount: typeof w.membersCount === 'number' ? w.membersCount : undefined,
+      });
+    }
+  }
 
   return {
     totalItems:
       gmail.length + gcal.length + slack.length + notion.length +
       gdrive.length + github.length + outlook.length +
-      gdocs.length + gsheets.length + stripe.length + discord.length,
+      gdocs.length + gsheets.length + stripe.length + discord.length +
+      spotifyRecent.length + stravaActivities.length + todoistTasks.length +
+      youtubeSubs.length + trelloBoards.length + jiraProjects.length +
+      twitterBookmarks.length + calendlyEvents.length +
+      linkedinProfile.length + linkedinOrgs.length + figmaUser.length +
+      zoomUser.length + zoomApps.length + dropboxAccount.length + dropboxFiles.length +
+      asanaWorkspaces.length + asanaTasks.length + hubspotContacts.length +
+      clickupUser.length + clickupWorkspaces.length,
     gmail, gcal, slack, notion, gdrive, github, outlook,
-    gdocs, gsheets, stripe, discord,
+    gdocs, gsheets, stripe, discord, spotifyRecent,
+    stravaActivities, todoistTasks, youtubeSubs, trelloBoards,
+    jiraProjects, twitterBookmarks, calendlyEvents,
+    linkedinProfile, linkedinOrgs, figmaUser, zoomUser, zoomApps,
+    dropboxAccount, dropboxFiles, asanaWorkspaces, asanaTasks,
+    hubspotContacts, clickupUser, clickupWorkspaces,
   };
 }
 
@@ -452,9 +767,16 @@ function buildUserMessage(
   sampled: SampledBundle,
   profile: db.ProfileRow | null,
   existingMemories: ExistingMemorySnapshot[],
+  connectedAccountId: string | null,
 ): string {
   const lines: string[] = [];
   lines.push(`Toolkit: ${toolkit}`);
+  if (connectedAccountId) {
+    // Surface only the trailing 6 chars: enough for the LLM to disambiguate
+    // multiple accounts of the same toolkit without leaking the whole id.
+    const shortId = connectedAccountId.slice(-6);
+    lines.push(`Account label: …${shortId} (this is ONE account of ${toolkit}; user may have others)`);
+  }
   if (sampled.gmail.length > 0) {
     lines.push('', `Gmail items (${sampled.gmail.length} most recent):`);
     sampled.gmail.forEach((m, i) => {
@@ -548,6 +870,162 @@ function buildUserMessage(
       const members = typeof g.memberCount === 'number' ? ` · ${g.memberCount} members` : '';
       lines.push(`${i + 1}. ${g.name ?? '(unnamed)'}${role}${members}`);
       if (g.features && g.features.length > 0) lines.push(`   Features: ${g.features.join(', ')}`);
+    });
+  }
+  if (sampled.spotifyRecent.length > 0) {
+    lines.push('', `Spotify recently played tracks (${sampled.spotifyRecent.length} most recent):`);
+    sampled.spotifyRecent.forEach((t, i) => {
+      const artistList = t.artists && t.artists.length > 0 ? t.artists.join(', ') : '(unknown artist)';
+      lines.push(`${i + 1}. ${t.track || '(untitled)'} — ${artistList}`);
+      if (t.album) lines.push(`   Album: ${t.album}`);
+      if (t.context) lines.push(`   Context: ${t.context}`);
+      if (t.playedAt) lines.push(`   Played: ${t.playedAt}`);
+    });
+  }
+  if (sampled.stravaActivities.length > 0) {
+    lines.push('', `Strava activities (${sampled.stravaActivities.length} most recent):`);
+    sampled.stravaActivities.forEach((a, i) => {
+      const typ = a.type ? ` ${a.type}` : '';
+      const dist = typeof a.distanceKm === 'number' ? ` · ${a.distanceKm}km` : '';
+      const time = typeof a.movingMin === 'number' ? ` · ${a.movingMin}min` : '';
+      lines.push(`${i + 1}.${typ} ${a.name ?? '(untitled)'}${dist}${time}`);
+      if (a.startDate) lines.push(`   Started: ${a.startDate}`);
+    });
+  }
+  if (sampled.todoistTasks.length > 0) {
+    lines.push('', `Todoist tasks (${sampled.todoistTasks.length} top-priority):`);
+    sampled.todoistTasks.forEach((t, i) => {
+      const prio = t.priority ? ` [p${t.priority}]` : '';
+      lines.push(`${i + 1}.${prio} ${t.content ?? '(untitled)'}`);
+      if (t.description) lines.push(`   ${t.description}`);
+      if (t.labels && t.labels.length > 0) lines.push(`   Labels: ${t.labels.join(', ')}`);
+      if (t.dueAt) lines.push(`   Due: ${t.dueAt}`);
+    });
+  }
+  if (sampled.youtubeSubs.length > 0) {
+    lines.push('', `YouTube channels the user subscribes to (${sampled.youtubeSubs.length} sample):`);
+    sampled.youtubeSubs.forEach((s, i) => {
+      lines.push(`${i + 1}. ${s.title || '(untitled)'}`);
+      if (s.description) lines.push(`   ${s.description}`);
+    });
+  }
+  if (sampled.trelloBoards.length > 0) {
+    lines.push('', `Trello boards (${sampled.trelloBoards.length} top — starred first):`);
+    sampled.trelloBoards.forEach((b, i) => {
+      const flags = [b.starred ? 'starred' : null, b.closed ? 'closed' : null].filter(Boolean).join(', ');
+      lines.push(`${i + 1}. ${b.name ?? '(untitled)'}${flags ? ` (${flags})` : ''}`);
+      if (b.description) lines.push(`   ${b.description}`);
+    });
+  }
+  if (sampled.jiraProjects.length > 0) {
+    lines.push('', `Jira projects (${sampled.jiraProjects.length} recently accessed):`);
+    sampled.jiraProjects.forEach((p, i) => {
+      lines.push(`${i + 1}. [${p.key ?? '?'}] ${p.name ?? '(unnamed)'}${p.type ? ` · ${p.type}` : ''}`);
+      if (p.description) lines.push(`   ${p.description}`);
+    });
+  }
+  if (sampled.twitterBookmarks.length > 0) {
+    lines.push('', `Twitter bookmarks (${sampled.twitterBookmarks.length} most recent):`);
+    sampled.twitterBookmarks.forEach((b, i) => {
+      const author = b.author ? `@${b.author}` : '(unknown)';
+      lines.push(`${i + 1}. ${author}: ${b.text ?? ''}`);
+      if (b.createdAt) lines.push(`   Posted: ${b.createdAt}`);
+    });
+  }
+  if (sampled.calendlyEvents.length > 0) {
+    lines.push('', `Calendly scheduled events (${sampled.calendlyEvents.length} most recent):`);
+    sampled.calendlyEvents.forEach((e, i) => {
+      lines.push(`${i + 1}. ${e.name ?? '(untitled)'}${e.status ? ` [${e.status}]` : ''}`);
+      if (e.startAt) lines.push(`   Start: ${e.startAt}`);
+      if (e.invitees && e.invitees.length > 0) lines.push(`   With: ${e.invitees.join(', ')}`);
+    });
+  }
+  if (sampled.linkedinProfile.length > 0) {
+    lines.push('', 'LinkedIn profile:');
+    sampled.linkedinProfile.forEach((p) => {
+      if (p.name) lines.push(`Name: ${p.name}${p.vanityName ? ` (@${p.vanityName})` : ''}`);
+      if (p.headline) lines.push(`Headline: ${p.headline}`);
+    });
+  }
+  if (sampled.linkedinOrgs.length > 0) {
+    lines.push('', `LinkedIn organizations user has roles at (${sampled.linkedinOrgs.length}):`);
+    sampled.linkedinOrgs.forEach((o, i) => {
+      const stateNote = o.roleState && o.roleState !== 'APPROVED' ? ` [${o.roleState}]` : '';
+      lines.push(`${i + 1}. ${o.role ?? 'role'} at ${o.orgName ?? '?'}${stateNote}`);
+    });
+  }
+  if (sampled.figmaUser.length > 0) {
+    lines.push('', 'Figma user:');
+    sampled.figmaUser.forEach((u) => {
+      if (u.handle) lines.push(`Handle: @${u.handle}`);
+      if (u.email) lines.push(`Email: ${u.email}`);
+    });
+  }
+  if (sampled.zoomUser.length > 0) {
+    lines.push('', 'Zoom user:');
+    sampled.zoomUser.forEach((u) => {
+      if (u.name) lines.push(`Name: ${u.name}${u.accountType ? ` · ${u.accountType} plan` : ''}`);
+      if (u.email) lines.push(`Email: ${u.email}`);
+      if (u.department) lines.push(`Dept: ${u.department}`);
+      if (u.timezone) lines.push(`Timezone: ${u.timezone}`);
+    });
+  }
+  if (sampled.zoomApps.length > 0) {
+    lines.push('', `Zoom integrations the user has installed (${sampled.zoomApps.length}):`);
+    sampled.zoomApps.forEach((a, i) => {
+      lines.push(`${i + 1}. ${a.name ?? '(unnamed)'}${a.publisher ? ` by ${a.publisher}` : ''}`);
+    });
+  }
+  if (sampled.dropboxAccount.length > 0) {
+    lines.push('', 'Dropbox account:');
+    sampled.dropboxAccount.forEach((a) => {
+      if (a.displayName) lines.push(`Name: ${a.displayName}${a.accountType ? ` · ${a.accountType} plan` : ''}`);
+      if (a.email) lines.push(`Email: ${a.email}`);
+      if (a.country) lines.push(`Country: ${a.country}`);
+    });
+  }
+  if (sampled.dropboxFiles.length > 0) {
+    lines.push('', `Dropbox root-level entries (${sampled.dropboxFiles.length} most recent):`);
+    sampled.dropboxFiles.forEach((f, i) => {
+      const tag = f.tag === 'folder' ? '📁' : '📄';
+      lines.push(`${i + 1}. ${tag} ${f.name ?? '(unnamed)'}${f.pathDisplay ? ` — ${f.pathDisplay}` : ''}`);
+    });
+  }
+  if (sampled.asanaWorkspaces.length > 0) {
+    lines.push('', `Asana workspaces (${sampled.asanaWorkspaces.length}):`);
+    sampled.asanaWorkspaces.forEach((w, i) => {
+      lines.push(`${i + 1}. ${w.name ?? '(unnamed)'}${w.isOrganization ? ' [organization]' : ''}`);
+    });
+  }
+  if (sampled.asanaTasks.length > 0) {
+    lines.push('', `Asana tasks assigned to user (${sampled.asanaTasks.length} most recent):`);
+    sampled.asanaTasks.forEach((t, i) => {
+      const status = t.completed ? '[done]' : '[open]';
+      lines.push(`${i + 1}. ${status} ${t.name ?? '(untitled)'}`);
+      if (t.notes) lines.push(`   ${t.notes}`);
+      if (t.dueOn) lines.push(`   Due: ${t.dueOn}`);
+    });
+  }
+  if (sampled.hubspotContacts.length > 0) {
+    lines.push('', `HubSpot contacts (${sampled.hubspotContacts.length} most recent):`);
+    sampled.hubspotContacts.forEach((c, i) => {
+      lines.push(`${i + 1}. ${c.name ?? '(unknown)'}${c.company ? ` @ ${c.company}` : ''}${c.jobtitle ? ` — ${c.jobtitle}` : ''}`);
+      if (c.email) lines.push(`   ${c.email}`);
+      if (c.lifecycleStage) lines.push(`   Stage: ${c.lifecycleStage}`);
+    });
+  }
+  if (sampled.clickupUser.length > 0) {
+    lines.push('', 'ClickUp user:');
+    sampled.clickupUser.forEach((u) => {
+      if (u.username) lines.push(`Username: ${u.username}`);
+      if (u.email) lines.push(`Email: ${u.email}`);
+    });
+  }
+  if (sampled.clickupWorkspaces.length > 0) {
+    lines.push('', `ClickUp workspaces (${sampled.clickupWorkspaces.length}):`);
+    sampled.clickupWorkspaces.forEach((w, i) => {
+      const members = typeof w.membersCount === 'number' ? ` · ${w.membersCount} members` : '';
+      lines.push(`${i + 1}. ${w.name ?? '(unnamed)'}${members}`);
     });
   }
   lines.push('', '── Current state ──');
@@ -687,6 +1165,14 @@ function byDescReceivedAt(
 ): number {
   const av = a.receivedAt ?? '';
   const bv = b.receivedAt ?? '';
+  return av < bv ? 1 : av > bv ? -1 : 0;
+}
+
+function byDescPlayedAt(
+  a: { playedAt?: string | null }, b: { playedAt?: string | null },
+): number {
+  const av = a.playedAt ?? '';
+  const bv = b.playedAt ?? '';
   return av < bv ? 1 : av > bv ? -1 : 0;
 }
 

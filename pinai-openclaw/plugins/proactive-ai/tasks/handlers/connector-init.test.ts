@@ -38,6 +38,7 @@ import {
   listGsheetsSpreadsheets,
   listStripeInvoices,
   listDiscordGuilds,
+  listSpotifyRecentTracks,
   resetRawDbForTests,
 } from '../../raw-db.ts';
 import { BackgroundTaskScheduler } from '../scheduler.ts';
@@ -324,12 +325,12 @@ test('payload validation: missing connectedAccountId → terminal failed', async
   });
 });
 
-test('unsupported toolkit (e.g. asana — not yet in any Phase D round) → succeeded with reason=unsupported_toolkit_v0', async () => {
+test('unsupported toolkit (e.g. oura — non-Composio device-path toolkit) → succeeded with reason=unsupported_toolkit_v0', async () => {
   await withTempHome(async () => {
     await enqueueBackgroundTask({
       type: 'connector.init',
-      idempotencyKey: 'unsupported-asana',
-      payload: { toolkit: 'asana', connectedAccountId: 'acc-as' },
+      idempotencyKey: 'unsupported-oura',
+      payload: { toolkit: 'oura', connectedAccountId: 'acc-oura' },
     });
     const { task, result } = await runOneTick({
       fetcher: () => { throw new Error('should not be called'); },
@@ -736,6 +737,77 @@ test('schema-derived: Discord guilds pipeline (empty members count tolerated)', 
     const mine = rows.find((r) => r.name === 'My Server')!;
     assert.equal(mine.is_owner, true);
     assert.equal(mine.approximate_member_count, null);
+  });
+});
+
+test('schema-derived: Spotify recently played pipeline (track replay produces 2 rows; mixed shapes tolerated)', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init', idempotencyKey: 'real-spotify',
+      payload: { toolkit: 'spotify', connectedAccountId: 'acc-spot', limit: 5 },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/SPOTIFY_GET_RECENTLY_PLAYED_TRACKS': () => ({
+        // Standard Spotify Web API shape: items[].track + played_at
+        data: {
+          items: [
+            {
+              track: {
+                id: 'tr_001', name: 'Holocene',
+                artists: [{ id: 'a_1', name: 'Bon Iver' }],
+                album: { name: 'Bon Iver, Bon Iver', images: [] },
+                duration_ms: 337000, popularity: 71,
+                external_urls: { spotify: 'https://open.spotify.com/track/tr_001' },
+              },
+              played_at: '2026-04-30T10:00:00Z',
+              context: { type: 'playlist', uri: 'spotify:playlist:p1' },
+            },
+            {
+              // Same track replayed → distinct row by played_at
+              track: {
+                id: 'tr_001', name: 'Holocene',
+                artists: [{ id: 'a_1', name: 'Bon Iver' }],
+                album: { name: 'Bon Iver, Bon Iver' },
+              },
+              played_at: '2026-04-30T11:30:00Z',
+              context: { type: 'artist', uri: 'spotify:artist:a_1' },
+            },
+            {
+              // Multiple artists; missing context (radio / on-demand)
+              track: {
+                id: 'tr_002', name: 'Midnight City',
+                artists: [{ name: 'M83' }, { name: 'Susanne Sundfor' }],
+                album: { name: 'Hurry Up, We\'re Dreaming' },
+                duration_ms: 244000,
+              },
+              played_at: '2026-04-29T22:15:00Z',
+            },
+          ],
+          cursors: { after: '1714478100000', before: '1714471800000' },
+          limit: 50,
+        },
+      }),
+    });
+    const { task, result } = await runOneTick({ fetcher });
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.rawInserted, 3);
+    assert.equal(result?.signalsInserted, 3);
+    const rows = listSpotifyRecentTracks({ limit: 10 });
+    assert.equal(rows.length, 3);
+    // Most recent play first (10:00 vs 11:30 — sort desc).
+    // played_at gets normalized to ms-precision ISO by normalizeToUtcIso.
+    assert.equal(rows[0]!.played_at, '2026-04-30T11:30:00.000Z');
+    assert.equal(rows[0]!.track_id, 'tr_001');
+    assert.deepEqual(rows[0]!.artist_names, ['Bon Iver']);
+    assert.equal(rows[0]!.context_type, 'artist');
+    // Replay of same track at 10:00 lands as a separate row
+    const earlierPlay = rows.find((r) => r.played_at === '2026-04-30T10:00:00.000Z')!;
+    assert.equal(earlierPlay.track_id, 'tr_001');
+    assert.equal(earlierPlay.context_type, 'playlist');
+    // Multi-artist track preserved
+    const multi = rows.find((r) => r.track_id === 'tr_002')!;
+    assert.deepEqual(multi.artist_names, ['M83', 'Susanne Sundfor']);
+    assert.equal(multi.context_type, null);
   });
 });
 

@@ -43,6 +43,23 @@ export const SUPPORTED_TOOLKITS = [
   'googlesheets',
   'stripe',
   'discord',
+  // Phase D round 4
+  'spotify',
+  'strava',
+  'todoist',
+  'youtube',
+  'trello',
+  'jira',
+  'twitter',
+  'calendly',
+  // Phase D round 5
+  'linkedin',
+  'figma',
+  'zoom',
+  'dropbox',
+  'asana',
+  'hubspot',
+  'clickup',
 ] as const;
 export type SupportedToolkit = typeof SUPPORTED_TOOLKITS[number];
 
@@ -188,7 +205,12 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
     let rawIgnored = 0;
     const insertedRawIds: InsertedRawIds = {
       gmail: [], gcal: [], slack: [], notion: [], gdrive: [], github: [], outlook: [],
-      gdocs: [], gsheets: [], stripe: [], discord: [],
+      gdocs: [], gsheets: [], stripe: [], discord: [], spotifyRecent: [],
+      stravaActivities: [], todoistTasks: [], youtubeSubs: [], trelloBoards: [],
+      jiraProjects: [], twitterBookmarks: [], calendlyEvents: [],
+      linkedinProfile: [], linkedinOrgs: [], figmaUser: [], zoomUser: [], zoomApps: [],
+      dropboxAccount: [], dropboxFiles: [], asanaWorkspaces: [], asanaTasks: [],
+      hubspotContacts: [], clickupUser: [], clickupWorkspaces: [],
     };
     if (typedItems.gmail && typedItems.gmail.length > 0) {
       const r = raw.ingestGmailMessages(typedItems.gmail);
@@ -245,6 +267,106 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
       rawInserted += r.inserted; rawIgnored += r.ignored;
       insertedRawIds.discord = r.ids;
     }
+    if (typedItems.spotifyRecent && typedItems.spotifyRecent.length > 0) {
+      const r = raw.ingestSpotifyRecentTracks(typedItems.spotifyRecent);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.spotifyRecent = r.ids;
+    }
+    if (typedItems.stravaActivities && typedItems.stravaActivities.length > 0) {
+      const r = raw.ingestStravaActivities(typedItems.stravaActivities);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.stravaActivities = r.ids;
+    }
+    if (typedItems.todoistTasks && typedItems.todoistTasks.length > 0) {
+      const r = raw.ingestTodoistTasks(typedItems.todoistTasks);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.todoistTasks = r.ids;
+    }
+    if (typedItems.youtubeSubs && typedItems.youtubeSubs.length > 0) {
+      const r = raw.ingestYoutubeSubscriptions(typedItems.youtubeSubs);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.youtubeSubs = r.ids;
+    }
+    if (typedItems.trelloBoards && typedItems.trelloBoards.length > 0) {
+      const r = raw.ingestTrelloBoards(typedItems.trelloBoards);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.trelloBoards = r.ids;
+    }
+    if (typedItems.jiraProjects && typedItems.jiraProjects.length > 0) {
+      const r = raw.ingestJiraProjects(typedItems.jiraProjects);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.jiraProjects = r.ids;
+    }
+    if (typedItems.twitterBookmarks && typedItems.twitterBookmarks.length > 0) {
+      const r = raw.ingestTwitterBookmarks(typedItems.twitterBookmarks);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.twitterBookmarks = r.ids;
+    }
+    if (typedItems.calendlyEvents && typedItems.calendlyEvents.length > 0) {
+      const r = raw.ingestCalendlyEvents(typedItems.calendlyEvents);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.calendlyEvents = r.ids;
+    }
+    if (typedItems.linkedinProfile && typedItems.linkedinProfile.length > 0) {
+      const r = raw.ingestLinkedinProfile(typedItems.linkedinProfile);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.linkedinProfile = r.ids;
+    }
+    if (typedItems.linkedinOrgs && typedItems.linkedinOrgs.length > 0) {
+      const r = raw.ingestLinkedinOrganizations(typedItems.linkedinOrgs);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.linkedinOrgs = r.ids;
+    }
+    if (typedItems.figmaUser && typedItems.figmaUser.length > 0) {
+      const r = raw.ingestFigmaUser(typedItems.figmaUser);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.figmaUser = r.ids;
+    }
+    if (typedItems.zoomUser && typedItems.zoomUser.length > 0) {
+      const r = raw.ingestZoomUser(typedItems.zoomUser);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.zoomUser = r.ids;
+    }
+    if (typedItems.zoomApps && typedItems.zoomApps.length > 0) {
+      const r = raw.ingestZoomMarketplaceApps(typedItems.zoomApps);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.zoomApps = r.ids;
+    }
+    if (typedItems.dropboxAccount && typedItems.dropboxAccount.length > 0) {
+      const r = raw.ingestDropboxAccount(typedItems.dropboxAccount);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.dropboxAccount = r.ids;
+    }
+    if (typedItems.dropboxFiles && typedItems.dropboxFiles.length > 0) {
+      const r = raw.ingestDropboxFiles(typedItems.dropboxFiles);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.dropboxFiles = r.ids;
+    }
+    if (typedItems.asanaWorkspaces && typedItems.asanaWorkspaces.length > 0) {
+      const r = raw.ingestAsanaWorkspaces(typedItems.asanaWorkspaces);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.asanaWorkspaces = r.ids;
+    }
+    if (typedItems.asanaTasks && typedItems.asanaTasks.length > 0) {
+      const r = raw.ingestAsanaTasks(typedItems.asanaTasks);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.asanaTasks = r.ids;
+    }
+    if (typedItems.hubspotContacts && typedItems.hubspotContacts.length > 0) {
+      const r = raw.ingestHubspotContacts(typedItems.hubspotContacts);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.hubspotContacts = r.ids;
+    }
+    if (typedItems.clickupUser && typedItems.clickupUser.length > 0) {
+      const r = raw.ingestClickupUser(typedItems.clickupUser);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.clickupUser = r.ids;
+    }
+    if (typedItems.clickupWorkspaces && typedItems.clickupWorkspaces.length > 0) {
+      const r = raw.ingestClickupWorkspaces(typedItems.clickupWorkspaces);
+      rawInserted += r.inserted; rawIgnored += r.ignored;
+      insertedRawIds.clickupWorkspaces = r.ids;
+    }
 
     // ── 7. Stage: derive personal_signals ──────────────────────────────
     if (!(await ctx.heartbeat({ stage: 'signals', toolkit, rawInserted }))) {
@@ -274,6 +396,46 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
       stripeIds: insertedRawIds.stripe,
       discordRows: typedItems.discord ?? [],
       discordIds: insertedRawIds.discord,
+      spotifyRecentRows: typedItems.spotifyRecent ?? [],
+      spotifyRecentIds: insertedRawIds.spotifyRecent,
+      stravaRows: typedItems.stravaActivities ?? [],
+      stravaIds: insertedRawIds.stravaActivities,
+      todoistRows: typedItems.todoistTasks ?? [],
+      todoistIds: insertedRawIds.todoistTasks,
+      youtubeSubsRows: typedItems.youtubeSubs ?? [],
+      youtubeSubsIds: insertedRawIds.youtubeSubs,
+      trelloRows: typedItems.trelloBoards ?? [],
+      trelloIds: insertedRawIds.trelloBoards,
+      jiraRows: typedItems.jiraProjects ?? [],
+      jiraIds: insertedRawIds.jiraProjects,
+      twitterRows: typedItems.twitterBookmarks ?? [],
+      twitterIds: insertedRawIds.twitterBookmarks,
+      calendlyRows: typedItems.calendlyEvents ?? [],
+      calendlyIds: insertedRawIds.calendlyEvents,
+      linkedinProfileRows: typedItems.linkedinProfile ?? [],
+      linkedinProfileIds: insertedRawIds.linkedinProfile,
+      linkedinOrgRows: typedItems.linkedinOrgs ?? [],
+      linkedinOrgIds: insertedRawIds.linkedinOrgs,
+      figmaUserRows: typedItems.figmaUser ?? [],
+      figmaUserIds: insertedRawIds.figmaUser,
+      zoomUserRows: typedItems.zoomUser ?? [],
+      zoomUserIds: insertedRawIds.zoomUser,
+      zoomAppRows: typedItems.zoomApps ?? [],
+      zoomAppIds: insertedRawIds.zoomApps,
+      dropboxAccountRows: typedItems.dropboxAccount ?? [],
+      dropboxAccountIds: insertedRawIds.dropboxAccount,
+      dropboxFileRows: typedItems.dropboxFiles ?? [],
+      dropboxFileIds: insertedRawIds.dropboxFiles,
+      asanaWorkspaceRows: typedItems.asanaWorkspaces ?? [],
+      asanaWorkspaceIds: insertedRawIds.asanaWorkspaces,
+      asanaTaskRows: typedItems.asanaTasks ?? [],
+      asanaTaskIds: insertedRawIds.asanaTasks,
+      hubspotContactRows: typedItems.hubspotContacts ?? [],
+      hubspotContactIds: insertedRawIds.hubspotContacts,
+      clickupUserRows: typedItems.clickupUser ?? [],
+      clickupUserIds: insertedRawIds.clickupUser,
+      clickupWorkspaceRows: typedItems.clickupWorkspaces ?? [],
+      clickupWorkspaceIds: insertedRawIds.clickupWorkspaces,
     });
     const signalsRes = await db.ingestPersonalSignals(signalInputs);
 
@@ -323,6 +485,66 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
       if (insertedRawIds.discord.length > 0) {
         await db.recordEvolutionRefsConsumed(evo.id, 'discord_guilds', insertedRawIds.discord);
       }
+      if (insertedRawIds.spotifyRecent.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'spotify_recent_tracks', insertedRawIds.spotifyRecent);
+      }
+      if (insertedRawIds.stravaActivities.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'strava_activities', insertedRawIds.stravaActivities);
+      }
+      if (insertedRawIds.todoistTasks.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'todoist_tasks', insertedRawIds.todoistTasks);
+      }
+      if (insertedRawIds.youtubeSubs.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'youtube_subscriptions', insertedRawIds.youtubeSubs);
+      }
+      if (insertedRawIds.trelloBoards.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'trello_boards', insertedRawIds.trelloBoards);
+      }
+      if (insertedRawIds.jiraProjects.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'jira_projects', insertedRawIds.jiraProjects);
+      }
+      if (insertedRawIds.twitterBookmarks.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'twitter_bookmarks', insertedRawIds.twitterBookmarks);
+      }
+      if (insertedRawIds.calendlyEvents.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'calendly_events', insertedRawIds.calendlyEvents);
+      }
+      if (insertedRawIds.linkedinProfile.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'linkedin_profile', insertedRawIds.linkedinProfile);
+      }
+      if (insertedRawIds.linkedinOrgs.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'linkedin_organizations', insertedRawIds.linkedinOrgs);
+      }
+      if (insertedRawIds.figmaUser.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'figma_user', insertedRawIds.figmaUser);
+      }
+      if (insertedRawIds.zoomUser.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'zoom_user', insertedRawIds.zoomUser);
+      }
+      if (insertedRawIds.zoomApps.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'zoom_marketplace_apps', insertedRawIds.zoomApps);
+      }
+      if (insertedRawIds.dropboxAccount.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'dropbox_account', insertedRawIds.dropboxAccount);
+      }
+      if (insertedRawIds.dropboxFiles.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'dropbox_files', insertedRawIds.dropboxFiles);
+      }
+      if (insertedRawIds.asanaWorkspaces.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'asana_workspaces', insertedRawIds.asanaWorkspaces);
+      }
+      if (insertedRawIds.asanaTasks.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'asana_tasks', insertedRawIds.asanaTasks);
+      }
+      if (insertedRawIds.hubspotContacts.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'hubspot_contacts', insertedRawIds.hubspotContacts);
+      }
+      if (insertedRawIds.clickupUser.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'clickup_user', insertedRawIds.clickupUser);
+      }
+      if (insertedRawIds.clickupWorkspaces.length > 0) {
+        await db.recordEvolutionRefsConsumed(evo.id, 'clickup_workspaces', insertedRawIds.clickupWorkspaces);
+      }
       if (signalsRes.ids.length > 0) {
         await db.recordEvolutionRefsConsumed(evo.id, 'personal_signals', signalsRes.ids);
       }
@@ -336,6 +558,7 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
           {
             toolkit: toolkit as SupportedToolkit,
             evolutionRunId: evo.id,
+            connectedAccountId: payload.connectedAccountId,
             gmail: typedItems.gmail,
             gcal: typedItems.gcal,
             slack: typedItems.slack,
@@ -347,6 +570,26 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
             gsheets: typedItems.gsheets,
             stripe: typedItems.stripe,
             discord: typedItems.discord,
+            spotifyRecent: typedItems.spotifyRecent,
+            stravaActivities: typedItems.stravaActivities,
+            todoistTasks: typedItems.todoistTasks,
+            youtubeSubs: typedItems.youtubeSubs,
+            trelloBoards: typedItems.trelloBoards,
+            jiraProjects: typedItems.jiraProjects,
+            twitterBookmarks: typedItems.twitterBookmarks,
+            calendlyEvents: typedItems.calendlyEvents,
+            linkedinProfile: typedItems.linkedinProfile,
+            linkedinOrgs: typedItems.linkedinOrgs,
+            figmaUser: typedItems.figmaUser,
+            zoomUser: typedItems.zoomUser,
+            zoomApps: typedItems.zoomApps,
+            dropboxAccount: typedItems.dropboxAccount,
+            dropboxFiles: typedItems.dropboxFiles,
+            asanaWorkspaces: typedItems.asanaWorkspaces,
+            asanaTasks: typedItems.asanaTasks,
+            hubspotContacts: typedItems.hubspotContacts,
+            clickupUser: typedItems.clickupUser,
+            clickupWorkspaces: typedItems.clickupWorkspaces,
           },
           {
             api: deps.api,
@@ -411,6 +654,26 @@ interface TypedFetchedItems {
   gsheets?: raw.GsheetsSpreadsheetInput[];
   stripe?: raw.StripeInvoiceInput[];
   discord?: raw.DiscordGuildInput[];
+  spotifyRecent?: raw.SpotifyRecentTrackInput[];
+  stravaActivities?: raw.StravaActivityInput[];
+  todoistTasks?: raw.TodoistTaskInput[];
+  youtubeSubs?: raw.YoutubeSubscriptionInput[];
+  trelloBoards?: raw.TrelloBoardInput[];
+  jiraProjects?: raw.JiraProjectInput[];
+  twitterBookmarks?: raw.TwitterBookmarkInput[];
+  calendlyEvents?: raw.CalendlyEventInput[];
+  linkedinProfile?: raw.LinkedinProfileInput[];
+  linkedinOrgs?: raw.LinkedinOrganizationInput[];
+  figmaUser?: raw.FigmaUserInput[];
+  zoomUser?: raw.ZoomUserInput[];
+  zoomApps?: raw.ZoomMarketplaceAppInput[];
+  dropboxAccount?: raw.DropboxAccountInput[];
+  dropboxFiles?: raw.DropboxFileInput[];
+  asanaWorkspaces?: raw.AsanaWorkspaceInput[];
+  asanaTasks?: raw.AsanaTaskInput[];
+  hubspotContacts?: raw.HubspotContactInput[];
+  clickupUser?: raw.ClickupUserInput[];
+  clickupWorkspaces?: raw.ClickupWorkspaceInput[];
 }
 
 interface InsertedRawIds {
@@ -425,6 +688,26 @@ interface InsertedRawIds {
   gsheets: string[];
   stripe: string[];
   discord: string[];
+  spotifyRecent: string[];
+  stravaActivities: string[];
+  todoistTasks: string[];
+  youtubeSubs: string[];
+  trelloBoards: string[];
+  jiraProjects: string[];
+  twitterBookmarks: string[];
+  calendlyEvents: string[];
+  linkedinProfile: string[];
+  linkedinOrgs: string[];
+  figmaUser: string[];
+  zoomUser: string[];
+  zoomApps: string[];
+  dropboxAccount: string[];
+  dropboxFiles: string[];
+  asanaWorkspaces: string[];
+  asanaTasks: string[];
+  hubspotContacts: string[];
+  clickupUser: string[];
+  clickupWorkspaces: string[];
 }
 
 async function fetchToolkitItems(
@@ -463,6 +746,70 @@ async function fetchToolkitItems(
   }
   if (toolkit === 'discord') {
     return { discord: await fetchDiscordRecent(opts) };
+  }
+  if (toolkit === 'spotify') {
+    return { spotifyRecent: await fetchSpotifyRecent(opts) };
+  }
+  if (toolkit === 'strava') {
+    return { stravaActivities: await fetchStravaRecent(opts) };
+  }
+  if (toolkit === 'todoist') {
+    return { todoistTasks: await fetchTodoistRecent(opts) };
+  }
+  if (toolkit === 'youtube') {
+    return { youtubeSubs: await fetchYoutubeRecent(opts) };
+  }
+  if (toolkit === 'trello') {
+    return { trelloBoards: await fetchTrelloRecent(opts) };
+  }
+  if (toolkit === 'jira') {
+    return { jiraProjects: await fetchJiraRecent(opts) };
+  }
+  if (toolkit === 'twitter') {
+    return { twitterBookmarks: await fetchTwitterRecent(opts) };
+  }
+  if (toolkit === 'calendly') {
+    return { calendlyEvents: await fetchCalendlyRecent(opts) };
+  }
+  if (toolkit === 'linkedin') {
+    const [profile, orgs] = await Promise.all([
+      fetchLinkedinProfileRecent(opts),
+      fetchLinkedinOrgsRecent(opts),
+    ]);
+    return { linkedinProfile: profile, linkedinOrgs: orgs };
+  }
+  if (toolkit === 'figma') {
+    return { figmaUser: await fetchFigmaUserRecent(opts) };
+  }
+  if (toolkit === 'zoom') {
+    const [user, apps] = await Promise.all([
+      fetchZoomUserRecent(opts),
+      fetchZoomAppsRecent(opts),
+    ]);
+    return { zoomUser: user, zoomApps: apps };
+  }
+  if (toolkit === 'dropbox') {
+    const [account, files] = await Promise.all([
+      fetchDropboxAccountRecent(opts),
+      fetchDropboxFilesRecent(opts),
+    ]);
+    return { dropboxAccount: account, dropboxFiles: files };
+  }
+  if (toolkit === 'asana') {
+    // Two-step: list workspaces first, then per-workspace assignee=me tasks.
+    const workspaces = await fetchAsanaWorkspacesRecent(opts);
+    const tasks = await fetchAsanaTasksAcrossWorkspaces(opts, workspaces);
+    return { asanaWorkspaces: workspaces, asanaTasks: tasks };
+  }
+  if (toolkit === 'hubspot') {
+    return { hubspotContacts: await fetchHubspotContactsRecent(opts) };
+  }
+  if (toolkit === 'clickup') {
+    const [user, workspaces] = await Promise.all([
+      fetchClickupUserRecent(opts),
+      fetchClickupWorkspacesRecent(opts),
+    ]);
+    return { clickupUser: user, clickupWorkspaces: workspaces };
   }
   // Defensive — isSupportedToolkit already screened this out
   return {};
@@ -694,6 +1041,398 @@ async function fetchDiscordRecent(opts: FetchToolkitItemsOpts): Promise<raw.Disc
     .slice(0, opts.limit);
 }
 
+async function fetchSpotifyRecent(opts: FetchToolkitItemsOpts): Promise<raw.SpotifyRecentTrackInput[]> {
+  // SPOTIFY_GET_RECENTLY_PLAYED_TRACKS — Spotify Web API caps at 50 items
+  // per call. We clamp to 50 even if caller asked for more; users rarely
+  // need a deeper history on init (sync picks up the rest with `after`).
+  const response = await opts.fetcher('/tools/execute/SPOTIFY_GET_RECENTLY_PLAYED_TRACKS', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {
+        limit: Math.min(opts.limit, 50),
+      },
+    }),
+  });
+  const items = extractSpotifyRecentTracks(response);
+  return items
+    .map(mapSpotifyRecentTrack)
+    .filter((t): t is raw.SpotifyRecentTrackInput => !!t?.trackId && !!t?.playedAt)
+    .slice(0, opts.limit);
+}
+
+async function fetchStravaRecent(opts: FetchToolkitItemsOpts): Promise<raw.StravaActivityInput[]> {
+  // STRAVA_LIST_ATHLETE_ACTIVITIES — paginated; per_page max 200. No
+  // params required. Sort is implicitly start_date desc on Strava's side.
+  const response = await opts.fetcher('/tools/execute/STRAVA_LIST_ATHLETE_ACTIVITIES', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {
+        per_page: Math.min(opts.limit, 200),
+      },
+    }),
+  });
+  return extractStravaActivities(response)
+    .map(mapStravaActivity)
+    .filter((a): a is raw.StravaActivityInput => !!a?.activityId)
+    .slice(0, opts.limit);
+}
+
+async function fetchTodoistRecent(opts: FetchToolkitItemsOpts): Promise<raw.TodoistTaskInput[]> {
+  // TODOIST_GET_ALL_TASKS — returns all incomplete tasks. No required
+  // params. Todoist API caps page size at 200. Cursor pagination exists
+  // but for init we take only the first page; users rarely have >200
+  // active tasks and the sync handler will pick up new ones later.
+  const response = await opts.fetcher('/tools/execute/TODOIST_GET_ALL_TASKS', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {
+        limit: Math.min(opts.limit, 200),
+      },
+    }),
+  });
+  return extractTodoistTasks(response)
+    .map(mapTodoistTask)
+    .filter((t): t is raw.TodoistTaskInput => !!t?.taskId)
+    .slice(0, opts.limit);
+}
+
+async function fetchYoutubeRecent(opts: FetchToolkitItemsOpts): Promise<raw.YoutubeSubscriptionInput[]> {
+  // YOUTUBE_LIST_USER_SUBSCRIPTIONS — `mine: true` scopes to the
+  // authenticated user. part includes snippet so we get channel title
+  // and description. maxResults caps at 50 per call (YouTube Data v3).
+  const response = await opts.fetcher('/tools/execute/YOUTUBE_LIST_USER_SUBSCRIPTIONS', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {
+        mine: true,
+        part: 'snippet,contentDetails',
+        maxResults: Math.min(opts.limit, 50),
+      },
+    }),
+  });
+  return extractYoutubeSubscriptions(response)
+    .map(mapYoutubeSubscription)
+    .filter((s): s is raw.YoutubeSubscriptionInput => !!s?.subscriptionId && !!s?.channelId)
+    .slice(0, opts.limit);
+}
+
+async function fetchTrelloRecent(opts: FetchToolkitItemsOpts): Promise<raw.TrelloBoardInput[]> {
+  // TRELLO_GET_MEMBERS_BOARDS_BY_ID_MEMBER with idMember=me returns the
+  // authenticated user's boards. filter=open excludes archived; we DON'T
+  // filter here so evolve can see "X archived projects" as a signal.
+  const response = await opts.fetcher('/tools/execute/TRELLO_GET_MEMBERS_BOARDS_BY_ID_MEMBER', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {
+        idMember: 'me',
+        fields: 'name,desc,url,closed,starred,pinned,idOrganization,dateLastActivity',
+      },
+    }),
+  });
+  return extractTrelloBoards(response)
+    .map(mapTrelloBoard)
+    .filter((b): b is raw.TrelloBoardInput => !!b?.boardId)
+    .slice(0, opts.limit);
+}
+
+async function fetchJiraRecent(opts: FetchToolkitItemsOpts): Promise<raw.JiraProjectInput[]> {
+  // JIRA_GET_RECENT_PROJECTS — projects the authenticated user has
+  // accessed recently. No params strictly required.
+  const response = await opts.fetcher('/tools/execute/JIRA_GET_RECENT_PROJECTS', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {},
+    }),
+  });
+  return extractJiraProjects(response)
+    .map(mapJiraProject)
+    .filter((p): p is raw.JiraProjectInput => !!p?.projectId)
+    .slice(0, opts.limit);
+}
+
+async function fetchTwitterRecent(opts: FetchToolkitItemsOpts): Promise<raw.TwitterBookmarkInput[]> {
+  // TWITTER_BOOKMARKS_BY_USER — id='me' returns the authenticated user's
+  // bookmarks. Twitter v2 caps at 100 per page; expansions=author_id
+  // pulls author username/display name into includes.users for join.
+  const response = await opts.fetcher('/tools/execute/TWITTER_BOOKMARKS_BY_USER', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {
+        id: 'me',
+        max_results: Math.min(opts.limit, 100),
+        'tweet.fields': 'created_at,lang,author_id',
+        expansions: 'author_id',
+        'user.fields': 'username,name',
+      },
+    }),
+  });
+  const authors = extractTwitterUserIncludes(response);
+  return extractTwitterBookmarks(response)
+    .map((t) => mapTwitterBookmark(t, authors))
+    .filter((b): b is raw.TwitterBookmarkInput => !!b?.tweetId)
+    .slice(0, opts.limit);
+}
+
+async function fetchCalendlyRecent(opts: FetchToolkitItemsOpts): Promise<raw.CalendlyEventInput[]> {
+  // Two-step: first resolve the user URI via CALENDLY_GET_USER (uuid='me'),
+  // then list events scoped to that user. Calendly explicitly rejects
+  // shortcuts like 'me' on /scheduled_events — must pass the full URI.
+  const userResponse = await opts.fetcher('/tools/execute/CALENDLY_GET_USER', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: { uuid: 'me' },
+    }),
+  });
+  const userUri = extractCalendlyUserUri(userResponse);
+  if (!userUri) return [];
+  const response = await opts.fetcher('/tools/execute/CALENDLY_LIST_SCHEDULED_EVENTS', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {
+        user: userUri,
+        sort: 'start_time:desc',
+        count: Math.min(opts.limit, 100),
+      },
+    }),
+  });
+  return extractCalendlyEvents(response)
+    .map(mapCalendlyEvent)
+    .filter((e): e is raw.CalendlyEventInput => !!e?.eventUri)
+    .slice(0, opts.limit);
+}
+
+async function fetchLinkedinProfileRecent(opts: FetchToolkitItemsOpts): Promise<raw.LinkedinProfileInput[]> {
+  const response = await opts.fetcher('/tools/execute/LINKEDIN_GET_MY_INFO', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {},
+    }),
+  });
+  const mapped = mapLinkedinProfile(unwrapDataPaths(response)[0] ?? response);
+  return mapped ? [mapped] : [];
+}
+
+async function fetchLinkedinOrgsRecent(opts: FetchToolkitItemsOpts): Promise<raw.LinkedinOrganizationInput[]> {
+  const response = await opts.fetcher('/tools/execute/LINKEDIN_GET_COMPANY_INFO', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: { count: Math.min(opts.limit, 50) },
+    }),
+  });
+  return extractLinkedinOrganizations(response)
+    .map(mapLinkedinOrganization)
+    .filter((o): o is raw.LinkedinOrganizationInput => !!o?.orgUrn)
+    .slice(0, opts.limit);
+}
+
+async function fetchFigmaUserRecent(opts: FetchToolkitItemsOpts): Promise<raw.FigmaUserInput[]> {
+  const response = await opts.fetcher('/tools/execute/FIGMA_GET_CURRENT_USER', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {},
+    }),
+  });
+  const mapped = mapFigmaUser(unwrapDataPaths(response)[0] ?? response);
+  return mapped ? [mapped] : [];
+}
+
+async function fetchZoomUserRecent(opts: FetchToolkitItemsOpts): Promise<raw.ZoomUserInput[]> {
+  const response = await opts.fetcher('/tools/execute/ZOOM_GET_USER', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: { userId: 'me' },
+    }),
+  });
+  const mapped = mapZoomUser(unwrapDataPaths(response)[0] ?? response);
+  return mapped ? [mapped] : [];
+}
+
+async function fetchZoomAppsRecent(opts: FetchToolkitItemsOpts): Promise<raw.ZoomMarketplaceAppInput[]> {
+  // Some accounts will 403 here (admin-scoped action on org-controlled
+  // installs). Treat that as "no apps to report" and return [] rather
+  // than failing the whole init.
+  try {
+    const response = await opts.fetcher('/tools/execute/ZOOM_GET_MARKETPLACE_USER_APPS', {
+      method: 'POST',
+      body: JSON.stringify({
+        user_id: opts.userId,
+        connected_account_id: opts.connectedAccountId,
+        arguments: { id: 'me', page_size: Math.min(opts.limit, 100) },
+      }),
+    });
+    return extractZoomMarketplaceApps(response)
+      .map(mapZoomMarketplaceApp)
+      .filter((a): a is raw.ZoomMarketplaceAppInput => !!a?.appInstallId)
+      .slice(0, opts.limit);
+  } catch {
+    return [];
+  }
+}
+
+async function fetchDropboxAccountRecent(opts: FetchToolkitItemsOpts): Promise<raw.DropboxAccountInput[]> {
+  const response = await opts.fetcher('/tools/execute/DROPBOX_GET_ABOUT_ME', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {},
+    }),
+  });
+  const mapped = mapDropboxAccount(unwrapDataPaths(response)[0] ?? response);
+  return mapped ? [mapped] : [];
+}
+
+async function fetchDropboxFilesRecent(opts: FetchToolkitItemsOpts): Promise<raw.DropboxFileInput[]> {
+  // Dropbox list_folder with path='' returns root-level entries. We don't
+  // recurse — recursive listing of an entire account would be huge and
+  // is best left for a deliberate background job.
+  const response = await opts.fetcher('/tools/execute/DROPBOX_LIST_FOLDER', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: { path: '', limit: Math.min(opts.limit, 2000) },
+    }),
+  });
+  return extractDropboxFiles(response)
+    .map(mapDropboxFile)
+    .filter((f): f is raw.DropboxFileInput => !!f?.fileId)
+    .slice(0, opts.limit);
+}
+
+async function fetchAsanaWorkspacesRecent(opts: FetchToolkitItemsOpts): Promise<raw.AsanaWorkspaceInput[]> {
+  const response = await opts.fetcher('/tools/execute/ASANA_GET_WORKSPACES', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: { limit: 100 },
+    }),
+  });
+  return extractAsanaList(response)
+    .map(mapAsanaWorkspace)
+    .filter((w): w is raw.AsanaWorkspaceInput => !!w?.workspaceGid);
+}
+
+async function fetchAsanaTasksAcrossWorkspaces(
+  opts: FetchToolkitItemsOpts,
+  workspaces: raw.AsanaWorkspaceInput[],
+): Promise<raw.AsanaTaskInput[]> {
+  // Pull tasks per workspace — Asana's GET_MULTIPLE_TASKS requires a
+  // workspace gid when filtering by assignee. We cap the per-workspace
+  // budget so a user with many workspaces doesn't explode the call count.
+  const perWorkspaceLimit = Math.max(10, Math.floor(opts.limit / Math.max(workspaces.length, 1)));
+  const results: raw.AsanaTaskInput[] = [];
+  for (const ws of workspaces) {
+    try {
+      const response = await opts.fetcher('/tools/execute/ASANA_GET_MULTIPLE_TASKS', {
+        method: 'POST',
+        body: JSON.stringify({
+          user_id: opts.userId,
+          connected_account_id: opts.connectedAccountId,
+          arguments: {
+            workspace: ws.workspaceGid,
+            assignee: 'me',
+            completed_since: 'now',  // incomplete only
+            limit: Math.min(perWorkspaceLimit, 100),
+          },
+        }),
+      });
+      const tasks = extractAsanaList(response)
+        .map((t: any) => mapAsanaTask(t, ws.workspaceGid))
+        .filter((t): t is raw.AsanaTaskInput => !!t?.taskGid);
+      results.push(...tasks);
+      if (results.length >= opts.limit) break;
+    } catch {
+      // Per-workspace failure (auth, rate limit) shouldn't sink the rest.
+    }
+  }
+  return results.slice(0, opts.limit);
+}
+
+async function fetchHubspotContactsRecent(opts: FetchToolkitItemsOpts): Promise<raw.HubspotContactInput[]> {
+  // Search for contacts ordered by lastmodifieddate desc. The "broad
+  // filter" trick: filter on createdate >= epoch(0) is always true, but
+  // HubSpot's search API requires at least one filter to return data.
+  const response = await opts.fetcher('/tools/execute/HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {
+        filterGroups: [{
+          filters: [{ propertyName: 'createdate', operator: 'GT', value: '0' }],
+        }],
+        sorts: [{ propertyName: 'lastmodifieddate', direction: 'DESCENDING' }],
+        properties: [
+          'email', 'firstname', 'lastname', 'company', 'jobtitle',
+          'lifecyclestage', 'hs_lead_status',
+          'createdate', 'lastmodifieddate',
+        ],
+        limit: Math.min(opts.limit, 100),
+      },
+    }),
+  });
+  return extractHubspotContacts(response)
+    .map(mapHubspotContact)
+    .filter((c): c is raw.HubspotContactInput => !!c?.contactId)
+    .slice(0, opts.limit);
+}
+
+async function fetchClickupUserRecent(opts: FetchToolkitItemsOpts): Promise<raw.ClickupUserInput[]> {
+  const response = await opts.fetcher('/tools/execute/CLICKUP_GET_AUTHORIZED_USER', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {},
+    }),
+  });
+  const mapped = mapClickupUser(unwrapDataPaths(response)[0] ?? response);
+  return mapped ? [mapped] : [];
+}
+
+async function fetchClickupWorkspacesRecent(opts: FetchToolkitItemsOpts): Promise<raw.ClickupWorkspaceInput[]> {
+  const response = await opts.fetcher('/tools/execute/CLICKUP_AUTHORIZATION_GET_WORK_SPACE_LIST', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      connected_account_id: opts.connectedAccountId,
+      arguments: {},
+    }),
+  });
+  return extractClickupWorkspaces(response)
+    .map(mapClickupWorkspace)
+    .filter((w): w is raw.ClickupWorkspaceInput => !!w?.workspaceId)
+    .slice(0, opts.limit);
+}
+
 async function fetchOutlookRecent(opts: FetchToolkitItemsOpts): Promise<raw.OutlookMessageInput[]> {
   // Microsoft Graph: /me/messages with $top, $orderby. Composio's
   // OUTLOOK_LIST_MESSAGES wraps these args under arguments.{top, orderby}.
@@ -868,7 +1607,196 @@ export function extractDiscordGuilds(response: unknown): any[] {
   return [];
 }
 
-function unwrapDataPaths(response: unknown): any[] {
+export function extractSpotifyRecentTracks(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // Spotify Web API: { items: [{ track: {...}, played_at: "..." }, ...] }
+    if (Array.isArray(c?.items)) return c.items;
+    if (Array.isArray(c?.tracks)) return c.tracks;
+  }
+  return [];
+}
+
+export function extractStravaActivities(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // Strava raw API returns a top-level array; Composio likely wraps it.
+    if (Array.isArray(c?.activities)) return c.activities;
+    if (Array.isArray(c)) return c;
+    if (Array.isArray(c?.items)) return c.items;
+  }
+  return [];
+}
+
+export function extractTodoistTasks(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // Todoist v2: { results: [...], next_cursor }; v1: top-level array.
+    if (Array.isArray(c?.results)) return c.results;
+    if (Array.isArray(c?.tasks)) return c.tasks;
+    if (Array.isArray(c)) return c;
+    if (Array.isArray(c?.items)) return c.items;
+  }
+  return [];
+}
+
+export function extractYoutubeSubscriptions(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // YouTube Data v3: { items: [...], pageInfo, nextPageToken }
+    if (Array.isArray(c?.items)) return c.items;
+    if (Array.isArray(c?.subscriptions)) return c.subscriptions;
+  }
+  return [];
+}
+
+export function extractTrelloBoards(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // Trello: top-level array. Composio likely wraps as data.boards or data.
+    if (Array.isArray(c?.boards)) return c.boards;
+    if (Array.isArray(c)) return c;
+    if (Array.isArray(c?.items)) return c.items;
+  }
+  return [];
+}
+
+export function extractJiraProjects(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // Jira: GET_RECENT_PROJECTS may return either a top-level array or
+    // wrapped under data.projects / data.values (paginated shape).
+    if (Array.isArray(c?.projects)) return c.projects;
+    if (Array.isArray(c?.values)) return c.values;
+    if (Array.isArray(c)) return c;
+    if (Array.isArray(c?.items)) return c.items;
+  }
+  return [];
+}
+
+export function extractTwitterBookmarks(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // Twitter v2: { data: [...], includes: { users: [...] }, meta }.
+    // Note this collides with our outer unwrapDataPaths which already
+    // peels `data` once — by the time we look at candidates, c.data may
+    // be the bookmark array directly.
+    if (Array.isArray(c?.data)) return c.data;
+    if (Array.isArray(c?.bookmarks)) return c.bookmarks;
+    if (Array.isArray(c)) return c;
+  }
+  return [];
+}
+
+export function extractTwitterUserIncludes(response: unknown): Record<string, { username?: string; name?: string }> {
+  const out: Record<string, { username?: string; name?: string }> = {};
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    const users = c?.includes?.users;
+    if (Array.isArray(users)) {
+      for (const u of users) {
+        if (u && typeof u === 'object' && typeof u.id === 'string') {
+          out[u.id] = { username: u.username, name: u.name };
+        }
+      }
+    }
+  }
+  return out;
+}
+
+export function extractCalendlyUserUri(response: unknown): string | null {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // Calendly: { resource: { uri: "https://api.calendly.com/users/<uuid>" } }
+    const uri = c?.resource?.uri ?? c?.uri;
+    if (typeof uri === 'string' && uri.startsWith('https://api.calendly.com/users/')) {
+      return uri;
+    }
+  }
+  return null;
+}
+
+export function extractCalendlyEvents(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // Calendly: { collection: [...], pagination } per their docs.
+    if (Array.isArray(c?.collection)) return c.collection;
+    if (Array.isArray(c?.events)) return c.events;
+    if (Array.isArray(c?.items)) return c.items;
+  }
+  return [];
+}
+
+export function extractLinkedinOrganizations(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // LinkedIn returns under `elements` (paginated collection) typically.
+    if (Array.isArray(c?.elements)) return c.elements;
+    if (Array.isArray(c?.organizations)) return c.organizations;
+    if (Array.isArray(c)) return c;
+    if (Array.isArray(c?.items)) return c.items;
+  }
+  return [];
+}
+
+export function extractZoomMarketplaceApps(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // Zoom marketplace: `{ apps: [...], page_size, next_page_token }`
+    if (Array.isArray(c?.apps)) return c.apps;
+    if (Array.isArray(c?.installations)) return c.installations;
+    if (Array.isArray(c?.items)) return c.items;
+  }
+  return [];
+}
+
+export function extractDropboxFiles(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // Dropbox list_folder: `{ entries: [...], cursor, has_more }`
+    if (Array.isArray(c?.entries)) return c.entries;
+    if (Array.isArray(c?.files)) return c.files;
+    if (Array.isArray(c?.items)) return c.items;
+  }
+  return [];
+}
+
+export function extractAsanaList(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // Asana: `{ data: [...], next_page }` — but unwrapDataPaths peels
+    // `data` first; check both. Workspaces & tasks share the same shape.
+    if (Array.isArray(c?.data)) return c.data;
+    if (Array.isArray(c)) return c;
+    if (Array.isArray(c?.items)) return c.items;
+  }
+  return [];
+}
+
+export function extractHubspotContacts(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // HubSpot search: `{ total, results: [...], paging }`
+    if (Array.isArray(c?.results)) return c.results;
+    if (Array.isArray(c?.contacts)) return c.contacts;
+    if (Array.isArray(c?.items)) return c.items;
+  }
+  return [];
+}
+
+export function extractClickupWorkspaces(response: unknown): any[] {
+  const candidates = unwrapDataPaths(response);
+  for (const c of candidates) {
+    // ClickUp: `{ teams: [...] }` — they call workspaces "teams" in API.
+    if (Array.isArray(c?.teams)) return c.teams;
+    if (Array.isArray(c?.workspaces)) return c.workspaces;
+    if (Array.isArray(c)) return c;
+    if (Array.isArray(c?.items)) return c.items;
+  }
+  return [];
+}
+
+export function unwrapDataPaths(response: unknown): any[] {
   if (response == null || typeof response !== 'object') return [];
   const out: any[] = [response];
   const r = response as Record<string, unknown>;
@@ -1297,6 +2225,479 @@ export function mapDiscordGuild(guild: any): raw.DiscordGuildInput | null {
   };
 }
 
+export function mapSpotifyRecentTrack(item: any): raw.SpotifyRecentTrackInput | null {
+  if (!item || typeof item !== 'object') return null;
+  // Spotify Web API: each item is { track: {...}, played_at: ISO, context: {...} }.
+  // Composio sometimes flattens it ({...track props, played_at}); be defensive.
+  const track = item.track && typeof item.track === 'object' ? item.track : item;
+  const trackId = String(track?.id ?? track?.trackId ?? '').trim();
+  const playedAtRaw = item.played_at ?? item.playedAt ?? track?.played_at ?? null;
+  const playedAt = typeof playedAtRaw === 'string' ? playedAtRaw.trim() : '';
+  if (!trackId || !playedAt) return null;
+  const artists = Array.isArray(track.artists)
+    ? track.artists
+        .map((a: any) => (typeof a?.name === 'string' ? a.name : (typeof a === 'string' ? a : null)))
+        .filter((s: any): s is string => typeof s === 'string' && s.length > 0)
+    : [];
+  const album = track.album && typeof track.album === 'object'
+    ? (typeof track.album.name === 'string' ? track.album.name : null)
+    : null;
+  const trackUrl = track.external_urls && typeof track.external_urls === 'object'
+    ? (typeof track.external_urls.spotify === 'string' ? track.external_urls.spotify : null)
+    : (typeof track.url === 'string' ? track.url : null);
+  const ctx = item.context && typeof item.context === 'object' ? item.context : null;
+  const contextType = ctx && typeof ctx.type === 'string' ? ctx.type : null;
+  const contextUri = ctx && typeof ctx.uri === 'string' ? ctx.uri : null;
+  return {
+    trackId,
+    trackName: typeof track.name === 'string' ? track.name : null,
+    artistNames: artists,
+    albumName: album,
+    durationMs: typeof track.duration_ms === 'number' ? track.duration_ms : null,
+    popularity: typeof track.popularity === 'number' ? track.popularity : null,
+    trackUrl,
+    playedAt,
+    contextType,
+    contextUri,
+  };
+}
+
+export function mapStravaActivity(act: any): raw.StravaActivityInput | null {
+  if (!act || typeof act !== 'object') return null;
+  // Strava ids are bigints; preserve precision by storing as string.
+  const idRaw = act.id ?? act.activity_id ?? act.activityId ?? null;
+  const activityId = typeof idRaw === 'string' ? idRaw.trim()
+    : typeof idRaw === 'number' ? String(idRaw)
+    : '';
+  if (!activityId) return null;
+  return {
+    activityId,
+    name: typeof act.name === 'string' ? act.name : null,
+    activityType: typeof act.type === 'string' ? act.type
+      : typeof act.sport_type === 'string' ? act.sport_type : null,
+    distanceMeters: typeof act.distance === 'number' ? act.distance : null,
+    movingTimeSeconds: typeof act.moving_time === 'number' ? act.moving_time : null,
+    elapsedTimeSeconds: typeof act.elapsed_time === 'number' ? act.elapsed_time : null,
+    elevationGainMeters: typeof act.total_elevation_gain === 'number' ? act.total_elevation_gain : null,
+    startDate: typeof act.start_date === 'string' ? act.start_date : null,
+    timezone: typeof act.timezone === 'string' ? act.timezone : null,
+    averageSpeedMps: typeof act.average_speed === 'number' ? act.average_speed : null,
+    maxSpeedMps: typeof act.max_speed === 'number' ? act.max_speed : null,
+    averageHeartrate: typeof act.average_heartrate === 'number' ? act.average_heartrate : null,
+    maxHeartrate: typeof act.max_heartrate === 'number' ? act.max_heartrate : null,
+    kudosCount: typeof act.kudos_count === 'number' ? act.kudos_count : null,
+  };
+}
+
+export function mapTodoistTask(task: any): raw.TodoistTaskInput | null {
+  if (!task || typeof task !== 'object') return null;
+  const taskId = String(task.id ?? task.task_id ?? '').trim();
+  if (!taskId) return null;
+  // Todoist `due` is an object {date, datetime, timezone, string}; we
+  // prefer datetime when set, fall back to date.
+  const due = task.due && typeof task.due === 'object'
+    ? (typeof task.due.datetime === 'string' ? task.due.datetime
+       : typeof task.due.date === 'string' ? task.due.date : null)
+    : null;
+  return {
+    taskId,
+    content: typeof task.content === 'string' ? task.content : null,
+    description: typeof task.description === 'string' ? task.description : null,
+    projectId: task.project_id != null ? String(task.project_id) : null,
+    parentTaskId: task.parent_id != null ? String(task.parent_id) : null,
+    priority: typeof task.priority === 'number' ? task.priority : null,
+    labels: Array.isArray(task.labels)
+      ? task.labels.filter((l: any): l is string => typeof l === 'string')
+      : [],
+    dueAt: due,
+    isCompleted: Boolean(task.is_completed ?? task.completed),
+    createdAtRemote: typeof task.created_at === 'string' ? task.created_at : null,
+  };
+}
+
+export function mapYoutubeSubscription(sub: any): raw.YoutubeSubscriptionInput | null {
+  if (!sub || typeof sub !== 'object') return null;
+  const subscriptionId = String(sub.id ?? sub.subscription_id ?? '').trim();
+  // Channel id lives in snippet.resourceId.channelId (YouTube Data v3 quirk).
+  const snippet = sub.snippet && typeof sub.snippet === 'object' ? sub.snippet : {};
+  const channelId = String(snippet?.resourceId?.channelId ?? snippet?.channelId ?? sub.channel_id ?? '').trim();
+  if (!subscriptionId || !channelId) return null;
+  const thumbnails = snippet?.thumbnails ?? null;
+  const thumbnailUrl = thumbnails && typeof thumbnails === 'object'
+    ? (typeof thumbnails.default?.url === 'string' ? thumbnails.default.url
+       : typeof thumbnails.medium?.url === 'string' ? thumbnails.medium.url
+       : null)
+    : null;
+  return {
+    subscriptionId,
+    channelId,
+    channelTitle: typeof snippet.title === 'string' ? snippet.title : null,
+    channelDescription: typeof snippet.description === 'string' ? snippet.description : null,
+    thumbnailUrl,
+    subscribedAt: typeof snippet.publishedAt === 'string' ? snippet.publishedAt : null,
+  };
+}
+
+export function mapTrelloBoard(board: any): raw.TrelloBoardInput | null {
+  if (!board || typeof board !== 'object') return null;
+  const boardId = String(board.id ?? board.board_id ?? '').trim();
+  if (!boardId) return null;
+  // Trello uses `desc` (truncated) and `descData` (markdown source).
+  const description = typeof board.desc === 'string' ? board.desc
+    : typeof board.description === 'string' ? board.description : null;
+  return {
+    boardId,
+    name: typeof board.name === 'string' ? board.name : null,
+    description,
+    url: typeof board.url === 'string' ? board.url : null,
+    organizationId: board.idOrganization != null ? String(board.idOrganization) : null,
+    closed: Boolean(board.closed),
+    starred: Boolean(board.starred),
+    pinned: Boolean(board.pinned),
+    lastActivityAt: typeof board.dateLastActivity === 'string' ? board.dateLastActivity : null,
+  };
+}
+
+export function mapJiraProject(proj: any): raw.JiraProjectInput | null {
+  if (!proj || typeof proj !== 'object') return null;
+  const projectId = String(proj.id ?? proj.project_id ?? '').trim();
+  if (!projectId) return null;
+  const lead = proj.lead && typeof proj.lead === 'object'
+    ? (typeof proj.lead.displayName === 'string' ? proj.lead.displayName
+       : typeof proj.lead.name === 'string' ? proj.lead.name : null)
+    : null;
+  return {
+    projectId,
+    projectKey: typeof proj.key === 'string' ? proj.key : null,
+    name: typeof proj.name === 'string' ? proj.name : null,
+    description: typeof proj.description === 'string' ? proj.description : null,
+    projectType: typeof proj.projectTypeKey === 'string' ? proj.projectTypeKey
+      : typeof proj.style === 'string' ? proj.style : null,
+    leadName: lead,
+    url: typeof proj.self === 'string' ? proj.self : null,
+  };
+}
+
+/**
+ * Twitter bookmark mapper. Needs the includes.users join from the
+ * SAME response to resolve author username — caller must build that
+ * lookup once via extractTwitterUserIncludes and pass it as the
+ * second arg. We expose the single-arg signature too because the init
+ * fetcher wires the lookup itself.
+ */
+export function mapTwitterBookmark(
+  tweet: any,
+  authors: Record<string, { username?: string; name?: string }> = {},
+): raw.TwitterBookmarkInput | null {
+  if (!tweet || typeof tweet !== 'object') return null;
+  const tweetId = String(tweet.id ?? tweet.tweet_id ?? '').trim();
+  if (!tweetId) return null;
+  const authorId = typeof tweet.author_id === 'string' ? tweet.author_id : null;
+  const author = authorId ? authors[authorId] ?? null : null;
+  const username = author?.username ?? null;
+  return {
+    tweetId,
+    authorUsername: username,
+    authorId,
+    text: typeof tweet.text === 'string' ? tweet.text : null,
+    lang: typeof tweet.lang === 'string' ? tweet.lang : null,
+    createdAtRemote: typeof tweet.created_at === 'string' ? tweet.created_at : null,
+    url: username ? `https://twitter.com/${username}/status/${tweetId}` : null,
+  };
+}
+
+export function mapCalendlyEvent(evt: any): raw.CalendlyEventInput | null {
+  if (!evt || typeof evt !== 'object') return null;
+  const eventUri = String(evt.uri ?? evt.event_uri ?? '').trim();
+  if (!eventUri) return null;
+  const loc = evt.location && typeof evt.location === 'object' ? evt.location : null;
+  // Calendly invitees live at /scheduled_events/{uuid}/invitees — we
+  // don't fetch them per-event on init (would N+1 explode). Pull whatever
+  // is inlined; common shape includes `event_memberships` for hosts.
+  const invitees: Array<{ name?: string | null; email?: string | null }> = [];
+  if (Array.isArray(evt.event_memberships)) {
+    for (const m of evt.event_memberships) {
+      if (m && typeof m === 'object') {
+        invitees.push({
+          name: typeof m.user_name === 'string' ? m.user_name : null,
+          email: typeof m.user_email === 'string' ? m.user_email : null,
+        });
+      }
+    }
+  }
+  return {
+    eventUri,
+    name: typeof evt.name === 'string' ? evt.name : null,
+    status: typeof evt.status === 'string' ? evt.status : null,
+    startAt: typeof evt.start_time === 'string' ? evt.start_time : null,
+    endAt: typeof evt.end_time === 'string' ? evt.end_time : null,
+    locationType: loc && typeof loc.type === 'string' ? loc.type : null,
+    locationValue: loc && typeof loc.location === 'string' ? loc.location
+      : loc && typeof loc.join_url === 'string' ? loc.join_url : null,
+    invitees,
+    meetingUrl: loc && typeof loc.join_url === 'string' ? loc.join_url : null,
+  };
+}
+
+export function mapLinkedinProfile(profile: any): raw.LinkedinProfileInput | null {
+  if (!profile || typeof profile !== 'object') return null;
+  // LinkedIn returns localizedFirstName / localizedLastName as flat strings
+  // when v2 /me is queried with default locale; otherwise nested under
+  // firstName.localized.<locale>. Walk both shapes.
+  const linkedinId = String(profile.id ?? profile.sub ?? profile.linkedin_id ?? '').trim();
+  if (!linkedinId) return null;
+  const firstName = typeof profile.localizedFirstName === 'string' ? profile.localizedFirstName
+    : typeof profile.firstName?.localized === 'object'
+      ? (Object.values(profile.firstName.localized)[0] as string | undefined)
+      : typeof profile.firstName === 'string' ? profile.firstName : null;
+  const lastName = typeof profile.localizedLastName === 'string' ? profile.localizedLastName
+    : typeof profile.lastName?.localized === 'object'
+      ? (Object.values(profile.lastName.localized)[0] as string | undefined)
+      : typeof profile.lastName === 'string' ? profile.lastName : null;
+  const headline = typeof profile.localizedHeadline === 'string' ? profile.localizedHeadline
+    : typeof profile.headline === 'string' ? profile.headline : null;
+  const picture = profile.profilePicture && typeof profile.profilePicture === 'object'
+    ? (typeof profile.profilePicture.displayImage === 'string' ? profile.profilePicture.displayImage
+       : typeof profile.profilePicture.original === 'string' ? profile.profilePicture.original : null)
+    : (typeof profile.picture === 'string' ? profile.picture : null);
+  return {
+    linkedinId,
+    firstName: firstName ?? null,
+    lastName: lastName ?? null,
+    localizedName: typeof profile.name === 'string' ? profile.name : null,
+    headline: headline ?? null,
+    vanityName: typeof profile.vanityName === 'string' ? profile.vanityName : null,
+    pictureUrl: picture ?? null,
+    profileUrl: typeof profile.profileUrl === 'string' ? profile.profileUrl : null,
+  };
+}
+
+export function mapLinkedinOrganization(item: any): raw.LinkedinOrganizationInput | null {
+  if (!item || typeof item !== 'object') return null;
+  // The LINKEDIN_GET_COMPANY_INFO action returns "organizational entity
+  // ACL" entries: { roleAssignee, role, state, organization, organizationalTarget }.
+  // organization or organizationalTarget contains the URN; org details
+  // (name, url) may be inlined or require a separate fetch — accept whichever shape.
+  const orgUrn = String(
+    item.organization
+    ?? item.organizationalTarget
+    ?? item.org_urn
+    ?? item.urn
+    ?? '',
+  ).trim();
+  if (!orgUrn) return null;
+  const orgIdMatch = orgUrn.match(/(\d+)$/);
+  const orgId = orgIdMatch ? orgIdMatch[1] : null;
+  return {
+    orgUrn,
+    orgId,
+    role: typeof item.role === 'string' ? item.role : null,
+    roleState: typeof item.state === 'string' ? item.state
+      : typeof item.role_state === 'string' ? item.role_state : null,
+    orgName: typeof item.organizationName === 'string' ? item.organizationName
+      : typeof item.org_name === 'string' ? item.org_name
+      : typeof item.name === 'string' ? item.name : null,
+    orgUrl: typeof item.organizationUrl === 'string' ? item.organizationUrl
+      : typeof item.org_url === 'string' ? item.org_url : null,
+    logoUrl: typeof item.logoUrl === 'string' ? item.logoUrl : null,
+  };
+}
+
+export function mapFigmaUser(user: any): raw.FigmaUserInput | null {
+  if (!user || typeof user !== 'object') return null;
+  const figmaId = String(user.id ?? user.figma_id ?? '').trim();
+  if (!figmaId) return null;
+  return {
+    figmaId,
+    email: typeof user.email === 'string' ? user.email : null,
+    handle: typeof user.handle === 'string' ? user.handle : null,
+    imgUrl: typeof user.img_url === 'string' ? user.img_url
+      : typeof user.imgUrl === 'string' ? user.imgUrl : null,
+  };
+}
+
+export function mapZoomUser(user: any): raw.ZoomUserInput | null {
+  if (!user || typeof user !== 'object') return null;
+  const zoomId = String(user.id ?? user.zoom_id ?? '').trim();
+  if (!zoomId) return null;
+  // Zoom: type is integer (1=Basic, 2=Licensed, 3=On-prem). language is
+  // localized string. department/role_name are admin-set fields.
+  return {
+    zoomId,
+    email: typeof user.email === 'string' ? user.email : null,
+    firstName: typeof user.first_name === 'string' ? user.first_name : null,
+    lastName: typeof user.last_name === 'string' ? user.last_name : null,
+    displayName: typeof user.display_name === 'string' ? user.display_name : null,
+    accountType: typeof user.type === 'number' ? user.type
+      : typeof user.account_type === 'number' ? user.account_type : null,
+    roleName: typeof user.role_name === 'string' ? user.role_name : null,
+    department: typeof user.dept === 'string' ? user.dept
+      : typeof user.department === 'string' ? user.department : null,
+    timezone: typeof user.timezone === 'string' ? user.timezone : null,
+    location: typeof user.location === 'string' ? user.location : null,
+    language: typeof user.language === 'string' ? user.language : null,
+  };
+}
+
+export function mapZoomMarketplaceApp(app: any): raw.ZoomMarketplaceAppInput | null {
+  if (!app || typeof app !== 'object') return null;
+  // The unique identifier is the install (per-user instance), not the app
+  // family. install_id || installation_id || id all show up depending on
+  // Zoom's iteration of this endpoint.
+  const appInstallId = String(
+    app.install_id
+    ?? app.installation_id
+    ?? app.id
+    ?? '',
+  ).trim();
+  if (!appInstallId) return null;
+  return {
+    appInstallId,
+    appId: typeof app.app_id === 'string' ? app.app_id : null,
+    name: typeof app.name === 'string' ? app.name : null,
+    publisher: typeof app.publisher === 'string' ? app.publisher
+      : typeof app.developer === 'string' ? app.developer : null,
+    installState: typeof app.install_state === 'string' ? app.install_state
+      : typeof app.state === 'string' ? app.state : null,
+    appType: typeof app.app_type === 'string' ? app.app_type
+      : typeof app.type === 'string' ? app.type : null,
+    installedAt: typeof app.installed_on === 'string' ? app.installed_on
+      : typeof app.installed_at === 'string' ? app.installed_at : null,
+  };
+}
+
+export function mapDropboxAccount(account: any): raw.DropboxAccountInput | null {
+  if (!account || typeof account !== 'object') return null;
+  const accountId = String(account.account_id ?? account.account ?? '').trim();
+  if (!accountId) return null;
+  // name is nested {given_name, surname, familiar_name, display_name}.
+  const name = account.name && typeof account.name === 'object' ? account.name : {};
+  const accountTypeTag = account.account_type && typeof account.account_type === 'object'
+    ? (typeof account.account_type['.tag'] === 'string' ? account.account_type['.tag'] : null)
+    : (typeof account.account_type === 'string' ? account.account_type : null);
+  return {
+    accountId,
+    email: typeof account.email === 'string' ? account.email : null,
+    displayName: typeof name.display_name === 'string' ? name.display_name : null,
+    givenName: typeof name.given_name === 'string' ? name.given_name : null,
+    surname: typeof name.surname === 'string' ? name.surname : null,
+    accountType: accountTypeTag,
+    country: typeof account.country === 'string' ? account.country : null,
+    locale: typeof account.locale === 'string' ? account.locale : null,
+  };
+}
+
+export function mapDropboxFile(entry: any): raw.DropboxFileInput | null {
+  if (!entry || typeof entry !== 'object') return null;
+  // Dropbox `.tag` distinguishes file/folder. id starts with 'id:' for files,
+  // folders also have ids. Use whichever exists.
+  const fileId = String(entry.id ?? entry.path_lower ?? '').trim();
+  if (!fileId) return null;
+  const tag = typeof entry['.tag'] === 'string' ? entry['.tag'] : null;
+  return {
+    fileId,
+    tag,
+    name: typeof entry.name === 'string' ? entry.name : null,
+    pathLower: typeof entry.path_lower === 'string' ? entry.path_lower : null,
+    pathDisplay: typeof entry.path_display === 'string' ? entry.path_display : null,
+    sizeBytes: typeof entry.size === 'number' ? entry.size : null,
+    serverModified: typeof entry.server_modified === 'string' ? entry.server_modified : null,
+    clientModified: typeof entry.client_modified === 'string' ? entry.client_modified : null,
+    rev: typeof entry.rev === 'string' ? entry.rev : null,
+    isDownloadable: entry.is_downloadable !== false,
+  };
+}
+
+export function mapAsanaWorkspace(ws: any): raw.AsanaWorkspaceInput | null {
+  if (!ws || typeof ws !== 'object') return null;
+  const workspaceGid = String(ws.gid ?? ws.id ?? '').trim();
+  if (!workspaceGid) return null;
+  return {
+    workspaceGid,
+    name: typeof ws.name === 'string' ? ws.name : null,
+    resourceType: typeof ws.resource_type === 'string' ? ws.resource_type : null,
+    isOrganization: Boolean(ws.is_organization),
+  };
+}
+
+export function mapAsanaTask(task: any, workspaceGid: string | null = null): raw.AsanaTaskInput | null {
+  if (!task || typeof task !== 'object') return null;
+  const taskGid = String(task.gid ?? task.id ?? '').trim();
+  if (!taskGid) return null;
+  // Pick first project gid from `projects` if present; tasks typically
+  // belong to one but the API returns an array.
+  const firstProject = Array.isArray(task.projects) && task.projects.length > 0
+    ? (task.projects[0]?.gid ?? null)
+    : null;
+  return {
+    taskGid,
+    workspaceGid,
+    projectGid: typeof firstProject === 'string' ? firstProject : null,
+    name: typeof task.name === 'string' ? task.name : null,
+    notes: typeof task.notes === 'string' ? task.notes : null,
+    completed: Boolean(task.completed),
+    assigneeStatus: typeof task.assignee_status === 'string' ? task.assignee_status : null,
+    dueAt: typeof task.due_at === 'string' ? task.due_at : null,
+    dueOn: typeof task.due_on === 'string' ? task.due_on : null,
+    modifiedAtRemote: typeof task.modified_at === 'string' ? task.modified_at : null,
+    createdAtRemote: typeof task.created_at === 'string' ? task.created_at : null,
+  };
+}
+
+export function mapHubspotContact(contact: any): raw.HubspotContactInput | null {
+  if (!contact || typeof contact !== 'object') return null;
+  const contactId = String(contact.id ?? contact.contact_id ?? '').trim();
+  if (!contactId) return null;
+  // HubSpot search returns `{ id, properties: { email, firstname, ... },
+  // createdAt, updatedAt }`. Pull from properties bag.
+  const props = contact.properties && typeof contact.properties === 'object' ? contact.properties : {};
+  return {
+    contactId,
+    email: typeof props.email === 'string' ? props.email : null,
+    firstName: typeof props.firstname === 'string' ? props.firstname : null,
+    lastName: typeof props.lastname === 'string' ? props.lastname : null,
+    company: typeof props.company === 'string' ? props.company : null,
+    jobtitle: typeof props.jobtitle === 'string' ? props.jobtitle : null,
+    lifecycleStage: typeof props.lifecyclestage === 'string' ? props.lifecyclestage : null,
+    leadStatus: typeof props.hs_lead_status === 'string' ? props.hs_lead_status : null,
+    createdAtRemote: typeof contact.createdAt === 'string' ? contact.createdAt
+      : typeof props.createdate === 'string' ? props.createdate : null,
+    modifiedAtRemote: typeof contact.updatedAt === 'string' ? contact.updatedAt
+      : typeof props.lastmodifieddate === 'string' ? props.lastmodifieddate : null,
+  };
+}
+
+export function mapClickupUser(item: any): raw.ClickupUserInput | null {
+  if (!item || typeof item !== 'object') return null;
+  // ClickUp wraps under `{ user: {...} }`.
+  const user = item.user && typeof item.user === 'object' ? item.user : item;
+  const clickupId = String(user.id ?? user.user_id ?? '').trim();
+  if (!clickupId) return null;
+  return {
+    clickupId,
+    username: typeof user.username === 'string' ? user.username : null,
+    email: typeof user.email === 'string' ? user.email : null,
+    color: typeof user.color === 'string' ? user.color : null,
+    profilePicture: typeof user.profilePicture === 'string' ? user.profilePicture
+      : typeof user.profile_picture === 'string' ? user.profile_picture : null,
+    timezone: typeof user.timezone === 'string' ? user.timezone : null,
+  };
+}
+
+export function mapClickupWorkspace(team: any): raw.ClickupWorkspaceInput | null {
+  if (!team || typeof team !== 'object') return null;
+  const workspaceId = String(team.id ?? team.workspace_id ?? '').trim();
+  if (!workspaceId) return null;
+  const membersCount = Array.isArray(team.members) ? team.members.length : null;
+  return {
+    workspaceId,
+    name: typeof team.name === 'string' ? team.name : null,
+    color: typeof team.color === 'string' ? team.color : null,
+    avatar: typeof team.avatar === 'string' ? team.avatar : null,
+    membersCount,
+  };
+}
+
 export function mapGdriveFile(file: any): raw.GdriveFileInput | null {
   if (!file || typeof file !== 'object') return null;
   const fileId = String(file.id ?? file.file_id ?? '').trim();
@@ -1353,6 +2754,46 @@ export function buildSignalsForInit(
     stripeIds: string[];
     discordRows: raw.DiscordGuildInput[];
     discordIds: string[];
+    spotifyRecentRows: raw.SpotifyRecentTrackInput[];
+    spotifyRecentIds: string[];
+    stravaRows: raw.StravaActivityInput[];
+    stravaIds: string[];
+    todoistRows: raw.TodoistTaskInput[];
+    todoistIds: string[];
+    youtubeSubsRows: raw.YoutubeSubscriptionInput[];
+    youtubeSubsIds: string[];
+    trelloRows: raw.TrelloBoardInput[];
+    trelloIds: string[];
+    jiraRows: raw.JiraProjectInput[];
+    jiraIds: string[];
+    twitterRows: raw.TwitterBookmarkInput[];
+    twitterIds: string[];
+    calendlyRows: raw.CalendlyEventInput[];
+    calendlyIds: string[];
+    linkedinProfileRows: raw.LinkedinProfileInput[];
+    linkedinProfileIds: string[];
+    linkedinOrgRows: raw.LinkedinOrganizationInput[];
+    linkedinOrgIds: string[];
+    figmaUserRows: raw.FigmaUserInput[];
+    figmaUserIds: string[];
+    zoomUserRows: raw.ZoomUserInput[];
+    zoomUserIds: string[];
+    zoomAppRows: raw.ZoomMarketplaceAppInput[];
+    zoomAppIds: string[];
+    dropboxAccountRows: raw.DropboxAccountInput[];
+    dropboxAccountIds: string[];
+    dropboxFileRows: raw.DropboxFileInput[];
+    dropboxFileIds: string[];
+    asanaWorkspaceRows: raw.AsanaWorkspaceInput[];
+    asanaWorkspaceIds: string[];
+    asanaTaskRows: raw.AsanaTaskInput[];
+    asanaTaskIds: string[];
+    hubspotContactRows: raw.HubspotContactInput[];
+    hubspotContactIds: string[];
+    clickupUserRows: raw.ClickupUserInput[];
+    clickupUserIds: string[];
+    clickupWorkspaceRows: raw.ClickupWorkspaceInput[];
+    clickupWorkspaceIds: string[];
   },
 ): db.IngestPersonalSignalInput[] {
   const out: db.IngestPersonalSignalInput[] = [];
@@ -1580,6 +3021,420 @@ export function buildSignalsForInit(
       sourceRawIds: [buckets.discordIds[i]!],
       // Discord doesn't have a per-guild "occurred" time; leave undefined → defaults to now
       dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.guildId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.spotifyRecentIds.length; i += 1) {
+    const row = buckets.spotifyRecentRows[i];
+    if (!row) continue;
+    const artistLabel = row.artistNames && row.artistNames.length > 0
+      ? row.artistNames.slice(0, 3).join(', ')
+      : 'unknown artist';
+    const title = trimSummary(`${row.trackName ?? '(untitled)'} — ${artistLabel}`, 120);
+    const summary = trimSummary(
+      [
+        row.albumName ? `Album: ${row.albumName}` : null,
+        row.contextType ? `Context: ${row.contextType}` : null,
+      ].filter(Boolean).join(' · ') || title,
+      280,
+    ) || title;
+    out.push({
+      kind: 'connector.spotify.played_track',
+      title,
+      summary,
+      payload: {
+        trackId: row.trackId,
+        artists: row.artistNames,
+        album: row.albumName,
+        contextType: row.contextType,
+        contextUri: row.contextUri,
+        durationMs: row.durationMs,
+        popularity: row.popularity,
+        url: row.trackUrl,
+      },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'spotify_recent_tracks',
+      sourceRawIds: [buckets.spotifyRecentIds[i]!],
+      occurredAt: row.playedAt,
+      // Same track played at the same instant on two pulls dedupes; replays
+      // at different times produce distinct signals.
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.trackId}:${row.playedAt}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.stravaIds.length; i += 1) {
+    const row = buckets.stravaRows[i];
+    if (!row) continue;
+    const distKm = typeof row.distanceMeters === 'number'
+      ? `${(row.distanceMeters / 1000).toFixed(1)}km`
+      : null;
+    const title = trimSummary(`${row.activityType ?? 'Activity'} · ${row.name ?? '(untitled)'}`, 120);
+    const summary = trimSummary(
+      [distKm, row.movingTimeSeconds ? `${Math.round(row.movingTimeSeconds / 60)}min` : null].filter(Boolean).join(' · ') || title,
+      280,
+    ) || title;
+    out.push({
+      kind: 'connector.strava.activity',
+      title,
+      summary,
+      payload: {
+        type: row.activityType,
+        distanceMeters: row.distanceMeters,
+        movingTimeSeconds: row.movingTimeSeconds,
+        elevationGainMeters: row.elevationGainMeters,
+        averageHeartrate: row.averageHeartrate,
+      },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'strava_activities',
+      sourceRawIds: [buckets.stravaIds[i]!],
+      occurredAt: row.startDate ?? undefined,
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.activityId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.todoistIds.length; i += 1) {
+    const row = buckets.todoistRows[i];
+    if (!row) continue;
+    const title = trimSummary(row.content ?? '(untitled task)', 120);
+    const summary = trimSummary(row.description ?? row.content ?? title, 280) || title;
+    out.push({
+      kind: 'connector.todoist.task',
+      title,
+      summary,
+      payload: {
+        projectId: row.projectId,
+        priority: row.priority,
+        labels: row.labels,
+        dueAt: row.dueAt,
+      },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'todoist_tasks',
+      sourceRawIds: [buckets.todoistIds[i]!],
+      occurredAt: row.createdAtRemote ?? undefined,
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.taskId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.youtubeSubsIds.length; i += 1) {
+    const row = buckets.youtubeSubsRows[i];
+    if (!row) continue;
+    const title = trimSummary(row.channelTitle ?? row.channelId, 120);
+    const summary = trimSummary(row.channelDescription ?? title, 280) || title;
+    out.push({
+      kind: 'connector.youtube.subscription',
+      title,
+      summary,
+      payload: { channelId: row.channelId },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'youtube_subscriptions',
+      sourceRawIds: [buckets.youtubeSubsIds[i]!],
+      occurredAt: row.subscribedAt ?? undefined,
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.subscriptionId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.trelloIds.length; i += 1) {
+    const row = buckets.trelloRows[i];
+    if (!row) continue;
+    const flags = [
+      row.starred ? 'starred' : null,
+      row.pinned ? 'pinned' : null,
+      row.closed ? 'closed' : null,
+    ].filter(Boolean).join(', ');
+    const title = trimSummary(row.name ?? row.boardId, 120);
+    const summary = trimSummary(
+      [row.description, flags ? `(${flags})` : null].filter(Boolean).join(' · ') || title,
+      280,
+    ) || title;
+    out.push({
+      kind: 'connector.trello.board',
+      title,
+      summary,
+      payload: {
+        organizationId: row.organizationId,
+        starred: row.starred, pinned: row.pinned, closed: row.closed,
+      },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'trello_boards',
+      sourceRawIds: [buckets.trelloIds[i]!],
+      occurredAt: row.lastActivityAt ?? undefined,
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.boardId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.jiraIds.length; i += 1) {
+    const row = buckets.jiraRows[i];
+    if (!row) continue;
+    const title = trimSummary(`[${row.projectKey ?? '?'}] ${row.name ?? '(unnamed project)'}`, 120);
+    const summary = trimSummary(row.description ?? title, 280) || title;
+    out.push({
+      kind: 'connector.jira.project',
+      title,
+      summary,
+      payload: { projectKey: row.projectKey, projectType: row.projectType, leadName: row.leadName },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'jira_projects',
+      sourceRawIds: [buckets.jiraIds[i]!],
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.projectId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.twitterIds.length; i += 1) {
+    const row = buckets.twitterRows[i];
+    if (!row) continue;
+    const author = row.authorUsername ? `@${row.authorUsername}` : '(unknown)';
+    const title = trimSummary(`${author}: ${row.text ?? ''}`, 120);
+    const summary = trimSummary(row.text ?? title, 280) || title;
+    out.push({
+      kind: 'connector.twitter.bookmark',
+      title,
+      summary,
+      payload: { authorUsername: row.authorUsername, lang: row.lang, url: row.url },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'twitter_bookmarks',
+      sourceRawIds: [buckets.twitterIds[i]!],
+      occurredAt: row.createdAtRemote ?? undefined,
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.tweetId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.calendlyIds.length; i += 1) {
+    const row = buckets.calendlyRows[i];
+    if (!row) continue;
+    const inviteeNames = (row.invitees ?? [])
+      .map((inv) => inv?.name ?? inv?.email ?? null)
+      .filter((s): s is string => typeof s === 'string' && s.length > 0)
+      .slice(0, 5);
+    const title = trimSummary(row.name ?? '(untitled event)', 120);
+    const summary = trimSummary(
+      [
+        inviteeNames.length > 0 ? `with ${inviteeNames.join(', ')}` : null,
+        row.locationType ? `via ${row.locationType}` : null,
+      ].filter(Boolean).join(' · ') || title,
+      280,
+    ) || title;
+    out.push({
+      kind: 'connector.calendly.event',
+      title,
+      summary,
+      payload: {
+        status: row.status,
+        startAt: row.startAt, endAt: row.endAt,
+        locationType: row.locationType,
+        meetingUrl: row.meetingUrl,
+      },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'calendly_events',
+      sourceRawIds: [buckets.calendlyIds[i]!],
+      occurredAt: row.startAt ?? undefined,
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.eventUri}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.linkedinProfileIds.length; i += 1) {
+    const row = buckets.linkedinProfileRows[i];
+    if (!row) continue;
+    const fullName = [row.firstName, row.lastName].filter(Boolean).join(' ') || row.localizedName || '(unknown)';
+    const title = trimSummary(`LinkedIn: ${fullName}`, 120);
+    const summary = trimSummary(row.headline ?? title, 280) || title;
+    out.push({
+      kind: 'connector.linkedin.profile',
+      title, summary,
+      payload: { vanityName: row.vanityName, profileUrl: row.profileUrl },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'linkedin_profile',
+      sourceRawIds: [buckets.linkedinProfileIds[i]!],
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.linkedinId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.linkedinOrgIds.length; i += 1) {
+    const row = buckets.linkedinOrgRows[i];
+    if (!row) continue;
+    const title = trimSummary(`${row.role ?? 'role'} at ${row.orgName ?? row.orgUrn}`, 120);
+    const summary = trimSummary(
+      [row.roleState ? `(${row.roleState})` : null, row.orgUrl].filter(Boolean).join(' · ') || title,
+      280,
+    ) || title;
+    out.push({
+      kind: 'connector.linkedin.organization',
+      title, summary,
+      payload: { role: row.role, roleState: row.roleState, orgUrl: row.orgUrl },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'linkedin_organizations',
+      sourceRawIds: [buckets.linkedinOrgIds[i]!],
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.orgUrn}:${row.role ?? '_'}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.figmaUserIds.length; i += 1) {
+    const row = buckets.figmaUserRows[i];
+    if (!row) continue;
+    const title = trimSummary(`Figma: @${row.handle ?? row.email ?? row.figmaId}`, 120);
+    const summary = trimSummary(row.email ?? title, 280) || title;
+    out.push({
+      kind: 'connector.figma.user',
+      title, summary,
+      payload: { handle: row.handle, email: row.email },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'figma_user',
+      sourceRawIds: [buckets.figmaUserIds[i]!],
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.figmaId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.zoomUserIds.length; i += 1) {
+    const row = buckets.zoomUserRows[i];
+    if (!row) continue;
+    const accountTypeLabel = row.accountType === 1 ? 'Basic'
+      : row.accountType === 2 ? 'Licensed'
+      : row.accountType === 3 ? 'On-prem' : '?';
+    const title = trimSummary(`Zoom: ${row.displayName ?? row.email ?? row.zoomId} (${accountTypeLabel})`, 120);
+    const summary = trimSummary(
+      [row.department, row.timezone].filter(Boolean).join(' · ') || title,
+      280,
+    ) || title;
+    out.push({
+      kind: 'connector.zoom.user',
+      title, summary,
+      payload: { accountType: row.accountType, department: row.department, timezone: row.timezone },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'zoom_user',
+      sourceRawIds: [buckets.zoomUserIds[i]!],
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.zoomId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.zoomAppIds.length; i += 1) {
+    const row = buckets.zoomAppRows[i];
+    if (!row) continue;
+    const title = trimSummary(`Zoom app: ${row.name ?? row.appId ?? '(unknown)'}`, 120);
+    const summary = trimSummary(
+      [row.publisher, row.installState].filter(Boolean).join(' · ') || title,
+      280,
+    ) || title;
+    out.push({
+      kind: 'connector.zoom.app',
+      title, summary,
+      payload: { publisher: row.publisher, installState: row.installState, appType: row.appType },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'zoom_marketplace_apps',
+      sourceRawIds: [buckets.zoomAppIds[i]!],
+      occurredAt: row.installedAt ?? undefined,
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.appInstallId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.dropboxAccountIds.length; i += 1) {
+    const row = buckets.dropboxAccountRows[i];
+    if (!row) continue;
+    const title = trimSummary(`Dropbox: ${row.displayName ?? row.email ?? row.accountId} (${row.accountType ?? '?'})`, 120);
+    const summary = trimSummary(
+      [row.email, row.country, row.locale].filter(Boolean).join(' · ') || title,
+      280,
+    ) || title;
+    out.push({
+      kind: 'connector.dropbox.account',
+      title, summary,
+      payload: { accountType: row.accountType, country: row.country },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'dropbox_account',
+      sourceRawIds: [buckets.dropboxAccountIds[i]!],
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.accountId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.dropboxFileIds.length; i += 1) {
+    const row = buckets.dropboxFileRows[i];
+    if (!row) continue;
+    const title = trimSummary(`${row.tag === 'folder' ? '📁' : '📄'} ${row.name ?? row.pathDisplay ?? row.fileId}`, 120);
+    const summary = trimSummary(
+      [row.pathDisplay, typeof row.sizeBytes === 'number' ? `${row.sizeBytes}B` : null].filter(Boolean).join(' · ') || title,
+      280,
+    ) || title;
+    out.push({
+      kind: 'connector.dropbox.file',
+      title, summary,
+      payload: { tag: row.tag, pathDisplay: row.pathDisplay, sizeBytes: row.sizeBytes },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'dropbox_files',
+      sourceRawIds: [buckets.dropboxFileIds[i]!],
+      occurredAt: row.serverModified ?? undefined,
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.fileId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.asanaWorkspaceIds.length; i += 1) {
+    const row = buckets.asanaWorkspaceRows[i];
+    if (!row) continue;
+    const title = trimSummary(`Asana workspace: ${row.name ?? row.workspaceGid}`, 120);
+    out.push({
+      kind: 'connector.asana.workspace',
+      title, summary: title,
+      payload: { isOrganization: row.isOrganization },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'asana_workspaces',
+      sourceRawIds: [buckets.asanaWorkspaceIds[i]!],
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.workspaceGid}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.asanaTaskIds.length; i += 1) {
+    const row = buckets.asanaTaskRows[i];
+    if (!row) continue;
+    const title = trimSummary(row.name ?? '(untitled task)', 120);
+    const summary = trimSummary(row.notes ?? title, 280) || title;
+    out.push({
+      kind: 'connector.asana.task',
+      title, summary,
+      payload: {
+        completed: row.completed, assigneeStatus: row.assigneeStatus,
+        workspaceGid: row.workspaceGid, projectGid: row.projectGid, dueOn: row.dueOn,
+      },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'asana_tasks',
+      sourceRawIds: [buckets.asanaTaskIds[i]!],
+      occurredAt: row.modifiedAtRemote ?? row.createdAtRemote ?? undefined,
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.taskGid}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.hubspotContactIds.length; i += 1) {
+    const row = buckets.hubspotContactRows[i];
+    if (!row) continue;
+    const fullName = [row.firstName, row.lastName].filter(Boolean).join(' ') || row.email || '(unknown)';
+    const title = trimSummary(`HubSpot: ${fullName}${row.company ? ` @ ${row.company}` : ''}`, 120);
+    const summary = trimSummary(
+      [row.jobtitle, row.lifecycleStage, row.leadStatus].filter(Boolean).join(' · ') || title,
+      280,
+    ) || title;
+    out.push({
+      kind: 'connector.hubspot.contact',
+      title, summary,
+      payload: {
+        email: row.email, company: row.company,
+        lifecycleStage: row.lifecycleStage, leadStatus: row.leadStatus,
+      },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'hubspot_contacts',
+      sourceRawIds: [buckets.hubspotContactIds[i]!],
+      occurredAt: row.modifiedAtRemote ?? row.createdAtRemote ?? undefined,
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.contactId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.clickupUserIds.length; i += 1) {
+    const row = buckets.clickupUserRows[i];
+    if (!row) continue;
+    const title = trimSummary(`ClickUp: ${row.username ?? row.email ?? row.clickupId}`, 120);
+    const summary = trimSummary(row.email ?? title, 280) || title;
+    out.push({
+      kind: 'connector.clickup.user',
+      title, summary,
+      payload: { email: row.email, timezone: row.timezone },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'clickup_user',
+      sourceRawIds: [buckets.clickupUserIds[i]!],
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.clickupId}:init:v1`,
+    });
+  }
+  for (let i = 0; i < buckets.clickupWorkspaceIds.length; i += 1) {
+    const row = buckets.clickupWorkspaceRows[i];
+    if (!row) continue;
+    const title = trimSummary(`ClickUp workspace: ${row.name ?? row.workspaceId}`, 120);
+    const summary = trimSummary(
+      typeof row.membersCount === 'number' ? `${row.membersCount} members` : title,
+      280,
+    ) || title;
+    out.push({
+      kind: 'connector.clickup.workspace',
+      title, summary,
+      payload: { membersCount: row.membersCount },
+      source: `connector:${toolkit}`,
+      sourceRawTable: 'clickup_workspaces',
+      sourceRawIds: [buckets.clickupWorkspaceIds[i]!],
+      dedupeKey: `connector:${toolkit}:${connectedAccountId}:${row.workspaceId}:init:v1`,
     });
   }
   return out;

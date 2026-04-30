@@ -69,7 +69,7 @@ flowchart LR
 | Device registry | 给 web/iOS/Android 设备发 token，用于后续 mobile sync | `apis/src/domain/devices/index.ts`、`proactive_routes.ts` | APIs Postgres `user_devices` |
 | Mobile ingest | 接收端侧整理后的 item / snapshot / 健康 observation | `mobile_proxy.ts`、`routes/devices.ts`、`device-ingest/policies.ts` | 由云端 policy 决定：`personal_signals`、`raw.db.device_apps_snapshot`、`raw.db.device_contacts_snapshot`、`raw.db.device_health_observations` |
 
-## 当前支持的 Composio toolkit（11 个）
+## 当前支持的 Composio toolkit（26 个）
 
 `connector.init` 的 `SUPPORTED_TOOLKITS` 决定哪些 toolkit 真去拉数据；其他的入队后立即返回 `succeeded` + `reason: 'unsupported_toolkit_v0'`，reconciler 不会反复重试。
 
@@ -86,10 +86,25 @@ flowchart LR
 | `googlesheets` | `GOOGLESHEETS_SEARCH_SPREADSHEETS` | `gsheets_spreadsheets` | ⚠ schema only |
 | `stripe` | `STRIPE_LIST_INVOICES` | `stripe_invoices` | ⚠ schema only |
 | `discord` | `DISCORD_LIST_MY_GUILDS` | `discord_guilds` | ⚠ schema only |
+| `spotify` | `SPOTIFY_GET_RECENTLY_PLAYED_TRACKS` (Phase D round 4) | `spotify_recent_tracks` | ⚠ schema only |
+| `strava` | `STRAVA_LIST_ATHLETE_ACTIVITIES` (`after` 增量) | `strava_activities` | ⚠ schema only |
+| `todoist` | `TODOIST_GET_ALL_TASKS` (snapshot) | `todoist_tasks` | ⚠ schema only |
+| `youtube` | `YOUTUBE_LIST_USER_SUBSCRIPTIONS` (snapshot) | `youtube_subscriptions` | ⚠ schema only |
+| `trello` | `TRELLO_GET_MEMBERS_BOARDS_BY_ID_MEMBER` (snapshot) | `trello_boards` | ⚠ schema only |
+| `jira` | `JIRA_GET_RECENT_PROJECTS` (snapshot) | `jira_projects` | ⚠ schema only |
+| `twitter` | `TWITTER_BOOKMARKS_BY_USER` (snapshot) | `twitter_bookmarks` | ⚠ schema only |
+| `calendly` | `CALENDLY_GET_USER` → `CALENDLY_LIST_SCHEDULED_EVENTS` (`min_start_time` 增量) | `calendly_events` | ⚠ schema only |
+| `linkedin` | `LINKEDIN_GET_MY_INFO` + `LINKEDIN_GET_COMPANY_INFO` | `linkedin_profile` + `linkedin_organizations` | ⚠ schema only |
+| `figma` | `FIGMA_GET_CURRENT_USER` | `figma_user` | ⚠ schema only（活动日志 Enterprise-only，未接） |
+| `zoom` | `ZOOM_GET_USER('me')` + `ZOOM_GET_MARKETPLACE_USER_APPS('me')` | `zoom_user` + `zoom_marketplace_apps` | ⚠ schema only |
+| `dropbox` | `DROPBOX_GET_ABOUT_ME` + `DROPBOX_LIST_FOLDER(path='')` | `dropbox_account` + `dropbox_files` | ⚠ schema only |
+| `asana` | `ASANA_GET_WORKSPACES` → 每 ws 跑 `ASANA_GET_MULTIPLE_TASKS(assignee='me')` | `asana_workspaces` + `asana_tasks` | ⚠ schema only |
+| `hubspot` | `HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA` (按 lastmodifieddate desc) | `hubspot_contacts` | ⚠ schema only |
+| `clickup` | `CLICKUP_GET_AUTHORIZED_USER` + `CLICKUP_AUTHORIZATION_GET_WORK_SPACE_LIST` | `clickup_user` + `clickup_workspaces` | ⚠ schema only |
 
 ⚠ 标记表示靠 Composio `/tools/<slug>` schema 推导，handler / mapper 实现按 schema 写但没真实数据跑过；首次部署应观察 `PIN_CLI_SURFACE=internal pin tasks list --status failed` 看是否需要修。
 
-非 Composio toolkit（前端列出但不属于 connector.init 范畴）：strava / oura / apple-health / twitter / linkedin / discord 之外的 personal 类、jira / asana / hubspot / spotify / youtube / calendly / zoom / dropbox / todoist / trello / figma / clickup —— 当前都返回 `unsupported_toolkit_v0`，不会拉数据，但前端展示连接状态正常。
+前端列出但仍未接入 connector.init 的 toolkit：**只剩 oura / apple-health**（走 device 链路，不是 Composio OAuth）—— 这些当前都返回 `unsupported_toolkit_v0`。
 
 ## 核心链路
 
