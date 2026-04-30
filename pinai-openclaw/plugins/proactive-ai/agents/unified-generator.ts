@@ -5,6 +5,7 @@
 import { buildOutputLanguageInstruction } from './output-language.js';
 import { DEFAULT_GENERATION_LANGUAGE, type SupportedGenerationLanguage } from './generation-language.js';
 import { PIN_CLI_COMMAND_GUIDE } from './pin-cli-command-guide.js';
+import { parseAgentJson } from '../pipeline/agent-runner.js';
 
 export interface UnifiedGeneratorPromptParams {
   currentDate: string;
@@ -284,4 +285,69 @@ JSON quoting (CRITICAL — invalid JSON discards the whole batch):
 - For English nested quotes inside a string, escape: \" or use single quotes.
 - No trailing commas, no comments, no prose outside the json fence.
 </output_format>`;
+}
+
+/**
+ * Detect whether `text` (the latest assistant message body) looks like a
+ * COMPLETED unified-generator run, vs a streaming intermediate snapshot.
+ *
+ * Used by `collectAgentText` to decide if a session jsonl scan can be trusted
+ * when OpenClaw's `waitForRun` timed out (or wasn't called at all). The
+ * underlying session writer appends one message per atomic write
+ * (see external/openclaw .../session-manager.js: appendFileSync with
+ * JSON.stringify(entry) + newline), so we never read a half-written line —
+ * but `waitForRun` returning timeout doesn't guarantee the latest message is
+ * the final turn. The agent might still be mid-tool-loop with one earlier
+ * assistant text block that happens to look JSON-ish.
+ *
+ * Predicate (in order of strictness, cheapest first):
+ *   1. Closed `\`\`\`json\n...\n\`\`\`` fence at end of string. Streaming
+ *      intermediates lack the closing fence; fully-emitted final turns
+ *      always have it because the prompt mandates the wrapper.
+ *   2. `parseAgentJson` succeeds (allows jsonrepair so unescaped CJK
+ *      quotes — a known recurring LLM quirk — don't trip a real completion).
+ *   3. `cards` is a non-empty array. `finalizePipelineRun` throws on empty
+ *      cards anyway, and an intermediate snapshot would rarely already have
+ *      the full cards array.
+ *   4. Each card has a non-empty string `title`. `title` is the only field
+ *      that's irreplaceable downstream: `seedGeneratedCardsFromFinalCards`
+ *      uses it for `intentKey`, the UI uses it as the only required label.
+ *      Other fields (whyNow, summary, primaryAction, sources, confidence)
+ *      are intentionally skipped — `normalizeIntentCards` on the frontend
+ *      and `extractCardEvaluationsForRun` on the backend tolerate missing
+ *      values, so requiring them here would turn "model violated a small
+ *      contract" into "all 5 reconcile attempts fail" instead of "user
+ *      gets N-1 cards plus one fallback."
+ *   5. `evaluations` is an array (may be empty). `finalizePipelineRun`
+ *      iterates with `j < cards.length` so length mismatch is fine; we just
+ *      need it to be array-shaped so the field is unambiguously present.
+ */
+export function isUnifiedGeneratorCompleteOutput(text: string): boolean {
+  if (!text) return false;
+  // 1. Closed JSON fence at end. Anchoring with `\s*$` is what excludes
+  //    streaming intermediates: a partial assistant block has open content
+  //    after the fence body, not a trailing fence.
+  if (!/```json\s*\n[\s\S]*?\n```\s*$/.test(text)) return false;
+
+  // 2. Parse (with jsonrepair tolerance — same as finalize does).
+  const parsed = parseAgentJson<{
+    cards?: unknown;
+    evaluations?: unknown;
+  }>(text);
+  if (!parsed || typeof parsed !== 'object') return false;
+
+  // 3. cards must be a non-empty array.
+  if (!Array.isArray(parsed.cards) || parsed.cards.length === 0) return false;
+
+  // 4. each card must be an object with a non-empty title.
+  for (const card of parsed.cards) {
+    if (!card || typeof card !== 'object') return false;
+    const title = (card as Record<string, unknown>).title;
+    if (typeof title !== 'string' || title.trim().length === 0) return false;
+  }
+
+  // 5. evaluations must be array-shaped (may be empty).
+  if (!Array.isArray(parsed.evaluations)) return false;
+
+  return true;
 }

@@ -22,6 +22,7 @@ import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import type { RouteHandler } from './types.js';
 import { json } from './types.js';
 import { normalizeGenerationLanguage } from '../agents/generation-language.js';
+import { isUnifiedGeneratorCompleteOutput } from '../agents/unified-generator.js';
 import * as db from '../db.js';
 import { syncCardChatFeedback } from '../chat-feedback/service.js';
 import {
@@ -145,10 +146,17 @@ async function runDispatch(
   }
 
   // Fast path — try to finish inline so simple cases don't pay polling latency.
+  // validateFinal: even when waitForRun says ok, confirm the session jsonl
+  // has a complete fenced JSON with at least one card. Catches the case
+  // where waitForRun reports timeout long after the agent finished (the
+  // OpenClaw in-memory wait registry race observed on dev) — the predicate
+  // sees the final assistant turn and we return ok without waiting for the
+  // reconciler.
   const collect = await collectAgentText(api, {
     runId: dispatched.subagentRunId,
     sessionKey: dispatched.sessionKey,
     timeoutMs: FAST_PATH_WAIT_MS,
+    validateFinal: isUnifiedGeneratorCompleteOutput,
   });
 
   if (collect.status === 'ok' && collect.text) {

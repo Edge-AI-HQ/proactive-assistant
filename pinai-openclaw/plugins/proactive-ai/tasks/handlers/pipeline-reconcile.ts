@@ -32,6 +32,7 @@ import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import * as db from '../../db.js';
 import { collectAgentText } from '../../pipeline/agent-runner.js';
 import { finalizePipelineRun } from '../../pipeline/dispatch-finalize.js';
+import { isUnifiedGeneratorCompleteOutput } from '../../agents/unified-generator.js';
 import type { TaskHandler, TaskHandlerResult } from '../scheduler.js';
 
 export const PIPELINE_RECONCILE_TASK_TYPE = 'pipeline.reconcile';
@@ -102,10 +103,16 @@ export function createPipelineReconcileHandler(deps: PipelineReconcileDeps): Tas
       return failTransient('lease_lost', 'lease lost before subagent poll');
     }
 
+    // validateFinal — see routes/generate.ts for rationale. The reconciler
+    // is the path where this matters most: each retry's 30s waitForRun has
+    // been observed returning timeout even after the agent finished writing,
+    // so trusting that signal alone wedges the run for 22+ minutes until
+    // PIPELINE_RUN_MAX_WAIT_MS forces it failed.
     const result = await collectAgentText(deps.api, {
       runId: run.subagent_run_id,
       sessionKey: run.subagent_session_key,
       timeoutMs: POLL_TIMEOUT_MS,
+      validateFinal: isUnifiedGeneratorCompleteOutput,
     });
 
     if (result.status === 'ok' && result.text) {
