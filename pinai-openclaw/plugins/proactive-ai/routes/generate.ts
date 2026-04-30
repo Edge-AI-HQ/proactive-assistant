@@ -44,15 +44,24 @@ import {
 const FAST_PATH_WAIT_MS = 90_000;
 
 /**
- * Reconciler retry envelope — chosen to cover ~22 minutes of poll/backoff
- * (5 attempts × {30s,2m,10m,10m,10m}). If the subagent isn't done by then,
- * the handler's PIPELINE_RUN_MAX_WAIT_MS gate marks the run failed anyway.
+ * The reconcile handler is now a long-running poll loop (single attempt
+ * walks the agent to completion, see tasks/handlers/pipeline-reconcile.ts),
+ * not a retry-with-backoff loop. `attempts` only increases when a reaper
+ * sweep finds the lease expired — i.e. the worker process died mid-poll.
+ * 2 attempts means "give a crashed run one fresh worker; if THAT also
+ * dies, mark failed and stop wasting compute."
  */
-const RECONCILE_MAX_ATTEMPTS = 5;
+const RECONCILE_MAX_ATTEMPTS = 2;
 
 interface GenerateRouteDeps {
   getUserSettings?: typeof db.getUserSettings;
   syncCardChatFeedback?: typeof syncCardChatFeedback;
+  /**
+   * Called after enqueueing the pipeline.reconcile task so the scheduler
+   * picks it up on the next tick instead of waiting out the default
+   * tickIntervalMs (60s). See routes/router.ts RouterDeps.wakeScheduler.
+   */
+  wakeScheduler?: () => void;
 }
 
 export function handleGenerate(
@@ -74,6 +83,7 @@ export function handleGenerate(
 export interface AutoRunRouteDeps {
   getUserSettings?: typeof db.getUserSettings;
   syncCardChatFeedback?: typeof syncCardChatFeedback;
+  wakeScheduler?: () => void;
 }
 
 /**
@@ -209,9 +219,17 @@ async function runDispatch(
       type: PIPELINE_RECONCILE_TASK_TYPE,
       payload: { pipelineRunId: dispatched.pipelineRunId },
       idempotencyKey: pipelineReconcileIdempotencyKey(dispatched.pipelineRunId),
-      runAfter: new Date(Date.now() + 5_000).toISOString(),
+      // Run immediately; wake() below pulls it forward to the next tick
+      // anyway, but using a past timestamp makes the intent explicit and
+      // also handles the case where the scheduler isn't running (tests).
+      runAfter: new Date().toISOString(),
       maxAttempts: RECONCILE_MAX_ATTEMPTS,
     });
+    // Without this the scheduler waits out tickIntervalMs (60s default)
+    // before claiming. The handler is a long-running polling loop so it'll
+    // catch up either way, but waking shaves the worst-case "indicator
+    // still spinning even though the agent is done" window from 60s to ~5s.
+    params.deps?.wakeScheduler?.();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     api.logger.error(

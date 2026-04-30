@@ -130,8 +130,13 @@ const plugin = {
       registerBrowserTool(api);
     }
 
-    // Register HTTP routes
-    const apiHandler = createApiHandler(api, config);
+    // Register HTTP routes. wakeScheduler is a lazy closure over the
+    // module-level bgTaskScheduler — it can be null at registration time
+    // (the scheduler is created below this block) but will be live by the
+    // time the first /generate request actually fires.
+    const apiHandler = createApiHandler(api, config, {
+      wakeScheduler: () => bgTaskScheduler?.wake(),
+    });
     api.registerHttpRoute({ path: '/proactive-ai/api', auth: 'gateway', match: 'prefix', replaceExisting: true, handler: apiHandler });
     api.registerHttpRoute({ path: '/proactive-ai/rpc', auth: 'plugin', match: 'prefix', replaceExisting: true, handler: apiHandler });
 
@@ -159,9 +164,14 @@ const plugin = {
         cards_to_generate: config.cards_to_generate,
         agent_timeout_ms: config.agent_timeout_ms,
       };
-      // Delay scheduler start to give the system time to fully initialize
+      // Delay scheduler start to give the system time to fully initialize.
+      // wakeScheduler closes over module-level bgTaskScheduler so it picks
+      // up whichever instance is current at call time (matches the same
+      // pattern used in createApiHandler above).
       setTimeout(() => {
-        startAutoLoop(api, autoLoopConfig, state);
+        startAutoLoop(api, autoLoopConfig, state, {
+          wakeScheduler: () => bgTaskScheduler?.wake(),
+        });
       }, 10_000);
     }
 
