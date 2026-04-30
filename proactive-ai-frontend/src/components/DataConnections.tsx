@@ -72,6 +72,7 @@ function InitTaskChip({ taskId }: { taskId: string | null }) {
   if (terminal) {
     if (task.status === "succeeded") {
       const memoriesWritten = Number(task.result?.memoriesWritten ?? 0);
+      const skillsAdded = Number(task.result?.skillsAdded ?? 0);
       const rawInserted = Number(task.result?.rawInserted ?? 0);
       const skipped = Boolean(task.result?.skipped);
       if (skipped) {
@@ -84,7 +85,7 @@ function InitTaskChip({ taskId }: { taskId: string | null }) {
       }
       return (
         <p className="text-[10px] text-emerald-600/80 truncate">
-          初始化完成 · 拉取 {rawInserted}{memoriesWritten > 0 ? ` · 提炼 ${memoriesWritten} memories` : ""}
+          初始化完成 · 拉取 {rawInserted}{memoriesWritten > 0 ? ` · 提炼 ${memoriesWritten} memories` : ""}{skillsAdded > 0 ? ` · 生成 ${skillsAdded} skills` : ""}
         </p>
       );
     }

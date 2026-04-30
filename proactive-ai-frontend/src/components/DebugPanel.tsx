@@ -164,8 +164,9 @@ function ConnectorReconnectRow({
     }
     else if (task.status === "succeeded") {
       const memWritten = (task.result?.memoriesWritten as number | undefined) ?? 0;
+      const skillsAdded = (task.result?.skillsAdded as number | undefined) ?? 0;
       const rawIns = (task.result?.rawInserted as number | undefined) ?? 0;
-      chipText = `Done · ${rawIns} raw, ${memWritten} mem`;
+      chipText = `Done · ${rawIns} raw, ${memWritten} mem, ${skillsAdded} skill`;
       chipTone = "ok";
     }
     else if (task.status === "skipped") {

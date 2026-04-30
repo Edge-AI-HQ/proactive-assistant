@@ -71,6 +71,8 @@ import {
   extractHubspotContacts, mapHubspotContact,
   mapClickupUser, extractClickupWorkspaces, mapClickupWorkspace,
   unwrapDataPaths,
+  isComposioToolNotFound,
+  fetchZoomUserViaProxy,
 } from './connector-init.js';
 import {
   runConnectorEvolve,
@@ -115,6 +117,7 @@ export interface ConnectorSyncResult {
   signalsInserted: number;
   evolutionRunId: string | null;
   memoriesWritten: number;
+  skillsAdded: number;
   /** ISO lower bound used for this sync's `since`/`after` query. */
   sinceUsed: string;
   /** ISO timestamp written to the cursor on success (== task start time). */
@@ -525,6 +528,7 @@ export function createConnectorSyncHandler(deps: ConnectorSyncDeps = {}): TaskHa
       signalsInserted: signalsRes.inserted,
       evolutionRunId,
       memoriesWritten: evolveResult?.memoriesWritten ?? 0,
+      skillsAdded: evolveResult?.skillsAdded ?? 0,
       sinceUsed: since.toISOString(),
       syncedThrough: startedIso,
       ...(evolveResult?.llmFailed && evolveResult.llmError
@@ -830,7 +834,7 @@ async function fetchGithubSince(opts: FetchSinceOpts): Promise<raw.GithubIssueIn
       arguments: {
         since: opts.since.toISOString(),
         state: 'all',
-        filter: 'assigned',
+        filter: 'all',
         per_page: opts.limit,
         direction: 'desc',
       },
@@ -1142,15 +1146,20 @@ async function fetchFigmaUserSince(opts: FetchSinceOpts): Promise<raw.FigmaUserI
 }
 
 async function fetchZoomUserSince(opts: FetchSinceOpts): Promise<raw.ZoomUserInput[]> {
-  const response = await opts.fetcher('/tools/execute/ZOOM_GET_USER', {
-    method: 'POST',
-    body: JSON.stringify({
-      user_id: opts.userId, connected_account_id: opts.connectedAccountId,
-      arguments: { userId: 'me' },
-    }),
-  });
-  const mapped = mapZoomUser(unwrapDataPaths(response)[0] ?? response);
-  return mapped ? [mapped] : [];
+  try {
+    const response = await opts.fetcher('/tools/execute/ZOOM_GET_USER', {
+      method: 'POST',
+      body: JSON.stringify({
+        user_id: opts.userId, connected_account_id: opts.connectedAccountId,
+        arguments: { userId: 'me' },
+      }),
+    });
+    const mapped = mapZoomUser(unwrapDataPaths(response)[0] ?? response);
+    return mapped ? [mapped] : [];
+  } catch (err) {
+    if (isComposioToolNotFound(err, 'ZOOM_GET_USER')) return fetchZoomUserViaProxy(opts);
+    throw err;
+  }
 }
 
 async function fetchZoomAppsSince(opts: FetchSinceOpts): Promise<raw.ZoomMarketplaceAppInput[]> {

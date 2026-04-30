@@ -57,7 +57,7 @@ flowchart LR
 - 需要追溯的表使用 `reference_count` / `last_referenced_at` / `referenced_by_runs`。
 - Device raw 目前包含 `device_apps_snapshot`、`device_contacts_snapshot`、`device_health_observations`。app/contact 的 `sync_mode: "full"` 通过新 `snapshot_id` 表达当前视图替代，保留历史 snapshot；健康 raw 的 full 第一版只允许安全的 `device_id + local_date` scope，且只清理 scope 内 `reference_count = 0` 的旧行，已被 evolution/memory 引用的 raw 证据保留。
 - `evolution_runs.trigger_kind` 现在有 5 种来源：`chat_burst`（crystallize）、`daily_dream`（auto.dreaming）、`manual`（CLI / 手动）、`on_event`（connector.init 拉数据后开的）、`consolidation`（预留）。
-- connector init 的 evolve agent（`tasks/handlers/connector-evolve.ts`）专门处理 `on_event`：把刚 ingest 的 raw + signals sample 进 prompt，让 LLM 抽出 durable facts 写到 `memory`，`source='connector_init:<toolkit>'`、`sourceRunId=<evolution_run_id>`。失败时 `evolution_runs.status='failed'`，`memory` 不写，`raw + signals` 仍然保留。
+- connector init 的 evolve agent（`tasks/handlers/connector-evolve.ts`）专门处理 `on_event`：把刚 ingest 的 raw + signals sample 进 prompt，让 LLM 抽出 durable facts 写到 `memory`，并在有明确复用价值时抽出高置信 reusable skill candidate 写到 `skill_index + skills/<id>/SKILL.md`。memory 使用 `source='connector_init:<toolkit>'`、`sourceRunId=<evolution_run_id>`；skill 使用 `source='connector_init:<toolkit>'`、`created_run_id=<evolution_run_id>`。失败时 `evolution_runs.status='failed'`，`memory/skill` 不写，`raw + signals` 仍然保留。
 - 默认 `pin` 入口是 **Public PCI surface**，只允许读取层和受控 `personal` 执行层：`raw`、`signals recent/list/get`、`memory list/get/search`、`profile get/snapshot`、`world` 查询、`cards recent`、`feedback list/get/stats`、`personal status/connections/connect/wait/tools/exec`、`sys schema`。`skills / evolution / tasks` 以及 `memory add/archive/supersede`、`signals consume`、`feedback log` 等写命令只保留为 internal/admin surface，必须显式 `PIN_CLI_SURFACE=internal pin ...`。
 - `pin personal exec` 默认只允许 read/query 类 Composio tool；有副作用的 tool 目前只允许 `GMAIL_CREATE_EMAIL_DRAFT` 和 `GMAIL_SEND_DRAFT`，且必须带 `--allow-side-effect true`。
 
@@ -91,9 +91,9 @@ flowchart LR
   Evo --> Memory["memory"]
 ```
 
-### connector.init → evolution → memory
+### connector.init → evolution → memory / skill
 
-`connector.init` 在 [Data Connectors](./data-connectors) 那边拉好数据后，handler 会创建一行 `evolution_runs(trigger_kind='on_event')` 并把 `refs_consumed` 填为 `gmail_messages` / `slack_messages` / 等的新插入 id。`tasks/handlers/connector-evolve.ts` 立刻在同一 task 内执行：sample 20 条 → 拼 prompt（含 profile summary + recent memory subjects 防止重复）→ 跑 subagent → parse JSON → `addMemoryV3({source:'connector_init:<toolkit>', sourceRunId, ...})`。
+`connector.init` 在 [Data Connectors](./data-connectors) 那边拉好数据后，handler 会创建一行 `evolution_runs(trigger_kind='on_event')` 并把 `refs_consumed` 填为 `gmail_messages` / `slack_messages` / 等的新插入 id。`tasks/handlers/connector-evolve.ts` 立刻在同一 task 内执行：sample 20 条 → 拼 prompt（含 profile summary + recent memory subjects 防止重复）→ 跑 subagent → parse JSON → `addMemoryV3({source:'connector_init:<toolkit>', sourceRunId, ...})`；如果 LLM 返回的是可复用的高置信 skill candidate，则同步 `addSkill({source:'connector_init:<toolkit>', createdRunId, ...})`。
 
 ```mermaid
 flowchart LR
@@ -103,10 +103,11 @@ flowchart LR
   Profile["profile.summary"] --> Evolve
   Subjects["recent memory subjects"] --> Evolve
   Evolve --> Memory["memory rows\nsource=connector_init:<toolkit>"]
+  Evolve --> Skill["skill_index + SKILL.md\nsource=connector_init:<toolkit>"]
   Evolve --> Refs2["evolution_runs.refs_produced"]
 ```
 
-LLM 失败 / 超时 / 解析不出 JSON 时不抛出：`evolution_runs.status='failed'` + `error_message`，但 `connector.init` task 仍 `succeeded`（raw + signals 是独立有效产物，不应该因为 LLM 失败而回滚）。
+LLM 失败 / 超时 / 解析不出 JSON 时不抛出：`evolution_runs.status='failed'` + `error_message`，但 `connector.init` task 仍 `succeeded`（raw + signals 是独立有效产物，不应该因为 LLM 失败而回滚）。skill 写入比 memory 更保守：只有能形成可执行复用流程、且置信度达到阈值的 candidate 才会落库；普通事实继续只写 memory。
 
 ## 开发入口
 

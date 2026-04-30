@@ -28,7 +28,9 @@ import {
   createEvolutionRun,
   getEvolutionRun,
   getMemoryV3,
+  listSkills,
   listMemoryV3,
+  readSkillBody,
   resetDbForTests,
   upsertProfile,
 } from '../../db.ts';
@@ -117,6 +119,94 @@ test('happy path: 3 valid memories → addMemoryV3 + delta + refs_produced + ref
     const after = await getEvolutionRun(evo.id);
     assert.equal(after!.memories_written, 3);
     assert.deepEqual(after!.refs_produced.memory.sort(), result.memoryIds.sort());
+  });
+});
+
+test('happy path: reusable skill candidates are written to skill_index and referenced by evolution run', async () => {
+  await withTempHome(async () => {
+    const evo = await createEvolutionRun({ triggerKind: 'on_event' });
+
+    const agentRun: AgentRunFn = async () => {
+      return '```json\n' + JSON.stringify({
+        memories: [],
+        skills: [
+          {
+            title: 'Prepare investor-meeting context',
+            description: 'Use when calendar and documents show investor prep.',
+            triggers: ['Calendar event mentions investor meeting', 'Docs include investor update material'],
+            bodyMarkdown: '## When to use\nUse before investor meetings.\n\n## How to respond\n- Pull recent investor docs.\n- Summarize open questions.',
+            confidence: 0.82,
+          },
+        ],
+      }) + '\n```';
+    };
+
+    const result = await runConnectorEvolve(
+      {
+        toolkit: 'googlecalendar',
+        evolutionRunId: evo.id,
+        gcal: [gcalRow({ id: 'e1', title: 'Investor update prep' })],
+      },
+      { agentRun },
+    );
+
+    assert.equal(result.memoriesWritten, 0);
+    assert.equal(result.skillsAdded, 1);
+    assert.equal(result.skillIds.length, 1);
+
+    const skills = await listSkills({ status: 'enabled', limit: 10 });
+    assert.equal(skills.length, 1);
+    assert.equal(skills[0]!.title, 'Prepare investor-meeting context');
+    assert.equal(skills[0]!.source, 'connector_init:googlecalendar');
+    assert.equal(skills[0]!.created_run_id, evo.id);
+    assert.deepEqual(skills[0]!.triggers, [
+      'Calendar event mentions investor meeting',
+      'Docs include investor update material',
+    ]);
+    assert.match(readSkillBody(skills[0]!.id) ?? '', /Pull recent investor docs/);
+
+    const after = await getEvolutionRun(evo.id);
+    assert.equal(after!.skills_added, 1);
+    assert.deepEqual(after!.refs_produced.skill_index, result.skillIds);
+  });
+});
+
+test('skill candidates require explicit confidence at or above threshold', async () => {
+  await withTempHome(async () => {
+    const evo = await createEvolutionRun({ triggerKind: 'on_event' });
+    const agentRun: AgentRunFn = async () => '```json\n' + JSON.stringify({
+      memories: [],
+      skills: [
+        {
+          title: 'Missing confidence',
+          bodyMarkdown: '## When to use\nNever.\n\n## How to respond\n- Skip.',
+        },
+        {
+          title: 'Low confidence',
+          bodyMarkdown: '## When to use\nNever.\n\n## How to respond\n- Skip.',
+          confidence: 0.64,
+        },
+        {
+          title: 'Explicit high confidence',
+          bodyMarkdown: '## When to use\nUse for repeated investor prep.\n\n## How to respond\n- Gather recent investor materials.',
+          confidence: '0.65',
+        },
+      ],
+    }) + '\n```';
+
+    const result = await runConnectorEvolve(
+      {
+        toolkit: 'gmail',
+        evolutionRunId: evo.id,
+        gmail: [gmailRow({ id: 'm1', subject: 'Investor prep ritual' })],
+      },
+      { agentRun },
+    );
+
+    assert.equal(result.skillsAdded, 1);
+    const skills = await listSkills({ status: 'enabled', limit: 10 });
+    assert.equal(skills.length, 1);
+    assert.equal(skills[0]!.title, 'Explicit high confidence');
   });
 });
 

@@ -116,6 +116,8 @@ export interface ConnectorInitResult {
   evolutionRunId: string | null;
   /** Phase B.1: count of memory rows extracted by the evolve agent. */
   memoriesWritten: number;
+  /** Phase B.1: count of skill rows extracted by the evolve agent. */
+  skillsAdded: number;
   /** Phase B.1: when set, evolve called LLM but it failed; raw + signals are still valid. */
   evolveError?: string;
   reason?: string;
@@ -622,6 +624,7 @@ export function createConnectorInitHandler(deps: ConnectorInitDeps = {}): TaskHa
       signalsInserted: signalsRes.inserted,
       evolutionRunId,
       memoriesWritten: evolveResult?.memoriesWritten ?? 0,
+      skillsAdded: evolveResult?.skillsAdded ?? 0,
       ...(evolveResult?.llmFailed && evolveResult.llmError
         ? { evolveError: evolveResult.llmError }
         : {}),
@@ -924,10 +927,10 @@ async function fetchNotionRecent(opts: FetchToolkitItemsOpts): Promise<raw.Notio
 }
 
 async function fetchGithubRecent(opts: FetchToolkitItemsOpts): Promise<raw.GithubIssueInput[]> {
-  // Pull issues + PRs assigned to the authenticated user across all repos
-  // they have access to. Direction=desc puts most-recently-updated first;
-  // since= caps the lookback window. Matches the variant dreaming/sources.ts
-  // line 390 uses for the same toolkit.
+  // Pull visible issues + PRs for the authenticated user across all repos
+  // they have access to. `filter=assigned` is too narrow for profile data:
+  // users often authored or participated in PRs without being assigned.
+  // Direction=desc puts most-recently-updated first; since= caps the lookback.
   const since = new Date(Date.now() - 90 * 86_400_000).toISOString();
   // Slug is GITHUB_LIST_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER (with the
   // LIST_ prefix). The non-LIST form returns 404 — this caught us in the
@@ -940,7 +943,7 @@ async function fetchGithubRecent(opts: FetchToolkitItemsOpts): Promise<raw.Githu
       arguments: {
         since,
         state: 'all',
-        filter: 'assigned',
+        filter: 'all',
         per_page: opts.limit,
         direction: 'desc',
       },
@@ -1261,12 +1264,33 @@ async function fetchFigmaUserRecent(opts: FetchToolkitItemsOpts): Promise<raw.Fi
 }
 
 async function fetchZoomUserRecent(opts: FetchToolkitItemsOpts): Promise<raw.ZoomUserInput[]> {
-  const response = await opts.fetcher('/tools/execute/ZOOM_GET_USER', {
+  try {
+    const response = await opts.fetcher('/tools/execute/ZOOM_GET_USER', {
+      method: 'POST',
+      body: JSON.stringify({
+        user_id: opts.userId,
+        connected_account_id: opts.connectedAccountId,
+        arguments: { userId: 'me' },
+      }),
+    });
+    const mapped = mapZoomUser(unwrapDataPaths(response)[0] ?? response);
+    return mapped ? [mapped] : [];
+  } catch (err) {
+    if (isComposioToolNotFound(err, 'ZOOM_GET_USER')) return fetchZoomUserViaProxy(opts);
+    throw err;
+  }
+}
+
+export async function fetchZoomUserViaProxy(opts: {
+  fetcher: ComposioFetcher;
+  connectedAccountId: string;
+}): Promise<raw.ZoomUserInput[]> {
+  const response = await opts.fetcher('/tools/execute/proxy', {
     method: 'POST',
     body: JSON.stringify({
-      user_id: opts.userId,
       connected_account_id: opts.connectedAccountId,
-      arguments: { userId: 'me' },
+      endpoint: '/users/me',
+      method: 'GET',
     }),
   });
   const mapped = mapZoomUser(unwrapDataPaths(response)[0] ?? response);
@@ -1798,14 +1822,27 @@ export function extractClickupWorkspaces(response: unknown): any[] {
 
 export function unwrapDataPaths(response: unknown): any[] {
   if (response == null || typeof response !== 'object') return [];
-  const out: any[] = [response];
+  const out: any[] = [];
+  const push = (value: unknown) => {
+    if (value && typeof value === 'object' && !out.includes(value)) out.push(value);
+  };
   const r = response as Record<string, unknown>;
-  if (r.data && typeof r.data === 'object') out.push(r.data);
-  if (r.response_data && typeof r.response_data === 'object') out.push(r.response_data);
-  // Composio sometimes wraps inside .data.response_data
-  const inner = (r.data as any)?.response_data;
-  if (inner && typeof inner === 'object') out.push(inner);
+  // Prefer the deepest common Composio wrappers first so singleton mappers
+  // see the actual payload instead of the outer envelope.
+  push((r.data as any)?.response_dict);
+  push((r.data as any)?.response_data);
+  push((r.response_data as any)?.response_dict);
+  push((r.response_data as any)?.response_data);
+  push(r.response_dict);
+  push(r.response_data);
+  push(r.data);
+  push(response);
   return out;
+}
+
+export function isComposioToolNotFound(err: unknown, slug: string): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes('Composio API 404') && message.includes(`Tool ${slug} not found`);
 }
 
 export function mapGmailMessage(msg: any): raw.GmailMessageInput | null {
@@ -2449,11 +2486,13 @@ export function mapLinkedinProfile(profile: any): raw.LinkedinProfileInput | nul
   const firstName = typeof profile.localizedFirstName === 'string' ? profile.localizedFirstName
     : typeof profile.firstName?.localized === 'object'
       ? (Object.values(profile.firstName.localized)[0] as string | undefined)
-      : typeof profile.firstName === 'string' ? profile.firstName : null;
+      : typeof profile.firstName === 'string' ? profile.firstName
+      : typeof profile.given_name === 'string' ? profile.given_name : null;
   const lastName = typeof profile.localizedLastName === 'string' ? profile.localizedLastName
     : typeof profile.lastName?.localized === 'object'
       ? (Object.values(profile.lastName.localized)[0] as string | undefined)
-      : typeof profile.lastName === 'string' ? profile.lastName : null;
+      : typeof profile.lastName === 'string' ? profile.lastName
+      : typeof profile.family_name === 'string' ? profile.family_name : null;
   const headline = typeof profile.localizedHeadline === 'string' ? profile.localizedHeadline
     : typeof profile.headline === 'string' ? profile.headline : null;
   const picture = profile.profilePicture && typeof profile.profilePicture === 'object'

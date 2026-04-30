@@ -24,6 +24,7 @@ import {
   getEvolutionRun,
   listEvolutionRuns,
   listPersonalSignals,
+  listSkills,
   resetDbForTests,
 } from '../../db.ts';
 import {
@@ -33,12 +34,14 @@ import {
   listNotionPages,
   listGdriveFiles,
   listGithubIssues,
+  listLinkedinProfile,
   listOutlookMessages,
   listGdocsDocuments,
   listGsheetsSpreadsheets,
   listStripeInvoices,
   listDiscordGuilds,
   listSpotifyRecentTracks,
+  listZoomUser,
   resetRawDbForTests,
 } from '../../raw-db.ts';
 import { BackgroundTaskScheduler } from '../scheduler.ts';
@@ -832,6 +835,100 @@ test('REGRESSION: real GitHub LIST_ISSUES (data.issues array, possibly empty)', 
   });
 });
 
+test('REGRESSION: github init requests all visible issues, not only assigned ones', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'github-filter-all',
+      payload: { toolkit: 'github', connectedAccountId: 'acc-gh', limit: 25 },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/GITHUB_LIST_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER': (body) => {
+        assert.equal(body.arguments.filter, 'all');
+        return { data: { issues: [] } };
+      },
+    });
+    const { task } = await runOneTick({ fetcher });
+    assert.equal(task.status, 'succeeded');
+  });
+});
+
+test('REGRESSION: linkedin profile unwraps Composio data.response_dict shape', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'linkedin-response-dict',
+      payload: { toolkit: 'linkedin', connectedAccountId: 'acc-li', limit: 10 },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/LINKEDIN_GET_MY_INFO': () => ({
+        data: {
+          response_dict: {
+            sub: 'B8viGASiJZ',
+            email: 'smiletoye@gmail.com',
+            family_name: 'Hu',
+            given_name: 'Xing',
+            name: 'Xing Hu',
+            picture: 'https://media.licdn.com/profile.jpg',
+          },
+        },
+      }),
+      '/tools/execute/LINKEDIN_GET_COMPANY_INFO': () => ({ data: [] }),
+    });
+    const { task, result } = await runOneTick({ fetcher });
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.rawInserted, 1);
+    const rows = listLinkedinProfile();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.linkedin_id, 'B8viGASiJZ');
+    assert.equal(rows[0]!.first_name, 'Xing');
+    assert.equal(rows[0]!.last_name, 'Hu');
+  });
+});
+
+test('REGRESSION: zoom profile falls back to Composio proxy when action execute is unavailable', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'connector.init',
+      idempotencyKey: 'zoom-proxy-fallback',
+      payload: { toolkit: 'zoom', connectedAccountId: 'acc-zoom', limit: 10 },
+    });
+    const fetcher = makeMockFetcher({
+      '/tools/execute/ZOOM_GET_USER': () => {
+        throw new Error('Composio API 404: Tool ZOOM_GET_USER not found');
+      },
+      '/tools/execute/proxy': (body) => {
+        assert.equal(body.connected_account_id, 'acc-zoom');
+        assert.equal(body.endpoint, '/users/me');
+        assert.equal(body.method, 'GET');
+        return {
+          data: {
+            id: 'YMM_ioprQKy01Kg3jnV82A',
+            first_name: 'Smile',
+            last_name: 'Hu',
+            display_name: 'Smile Hu',
+            email: 'smile@pinai.io',
+            type: 2,
+            role_name: 'Owner',
+            timezone: 'Asia/Shanghai',
+          },
+          status: 200,
+        };
+      },
+      '/tools/execute/ZOOM_GET_MARKETPLACE_USER_APPS': () => {
+        throw new Error('Composio API 404: Tool ZOOM_GET_MARKETPLACE_USER_APPS not found');
+      },
+    });
+    const { task, result } = await runOneTick({ fetcher });
+    assert.equal(task.status, 'succeeded');
+    assert.equal(result?.rawInserted, 1);
+    const rows = listZoomUser();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.zoom_id, 'YMM_ioprQKy01Kg3jnV82A');
+    assert.equal(rows[0]!.email, 'smile@pinai.io');
+  });
+});
+
 test('REGRESSION: real Composio flat shape (verified 2026-04-24 against live API)', async () => {
   // Composio's GMAIL_FETCH_EMAILS does not return raw Gmail format.
   // It returns a FLATTENED shape with quirks that broke the first
@@ -930,7 +1027,7 @@ test('Composio response wrapped at unusual nesting (data.response_data.messages)
 // Phase B.1 — evolve hook wiring (LLM injected via deps.evolveAgentRun)
 // ──────────────────────────────────────────────────────────────────────
 
-test('evolve enabled: LLM extracts 2 memories → result.memoriesWritten=2, evolution_run completed with delta', async () => {
+test('evolve enabled: LLM extracts memories and skills → task result and evolution_run expose both deltas', async () => {
   await withTempHome(async () => {
     await enqueueBackgroundTask({
       type: 'connector.init',
@@ -950,6 +1047,13 @@ test('evolve enabled: LLM extracts 2 memories → result.memoriesWritten=2, evol
         { text: 'User collaborates with Anthropic team on Claude Code', subject: 'work:project', quality: 0.7, confidence: 0.85 },
         { text: 'Frequent contact: pm@anthropic.com', subject: 'person:pm-anthropic', quality: 0.6, confidence: 0.8 },
       ],
+      skills: [
+        {
+          title: 'Prepare Claude Code sprint context',
+          bodyMarkdown: '## When to use\nUse for repeated Claude Code sprint planning.\n\n## How to respond\n- Gather recent PR and planning context.',
+          confidence: 0.8,
+        },
+      ],
     }) + '\n```';
 
     const scheduler = new BackgroundTaskScheduler({ workerId: 't', leaseDurationMs: 60_000 });
@@ -963,12 +1067,18 @@ test('evolve enabled: LLM extracts 2 memories → result.memoriesWritten=2, evol
     assert.equal(task.status, 'succeeded');
     const result = task.result as unknown as ConnectorInitResult;
     assert.equal(result.memoriesWritten, 2);
+    assert.equal(result.skillsAdded, 1);
     assert.ok(result.evolutionRunId);
 
     const evo = await import('../../db.ts').then((m) => m.getEvolutionRun(result.evolutionRunId!));
     assert.equal(evo!.status, 'completed');
     assert.equal(evo!.memories_written, 2);
+    assert.equal(evo!.skills_added, 1);
     assert.equal(evo!.refs_produced.memory.length, 2);
+    assert.equal(evo!.refs_produced.skill_index.length, 1);
+    const skills = await listSkills({ source: 'connector_init:gmail', limit: 10 });
+    assert.equal(skills.length, 1);
+    assert.equal(skills[0]!.title, 'Prepare Claude Code sprint context');
   });
 });
 
@@ -998,6 +1108,7 @@ test('evolve enabled but LLM throws: connector.init still succeeds, evolution_ru
     const result = task.result as unknown as ConnectorInitResult;
     assert.equal(result.rawInserted, 1);
     assert.equal(result.memoriesWritten, 0);
+    assert.equal(result.skillsAdded, 0);
     assert.match(result.evolveError ?? '', /Subagent timeout/);
 
     const evo = await import('../../db.ts').then((m) => m.getEvolutionRun(result.evolutionRunId!));

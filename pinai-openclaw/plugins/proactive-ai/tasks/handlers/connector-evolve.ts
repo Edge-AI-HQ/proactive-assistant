@@ -16,6 +16,7 @@
  * run but DO NOT raise — the connector.init task should still succeed
  * because raw + signals are valid even when extraction fails.
  */
+import crypto from 'node:crypto';
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import * as db from '../../db.js';
 import * as raw from '../../raw-db.js';
@@ -31,6 +32,11 @@ const MAX_RECENT_MEMORY_SNAPSHOTS = 60;
 const MEMORY_SNAPSHOT_TEXT_LEN = 200;
 const MAX_TEXT_LEN_PER_ITEM = 320;
 const DEFAULT_TIMEOUT_MS = 60_000;
+const MAX_SKILL_CANDIDATES = 3;
+const MAX_SKILL_TITLE_LEN = 120;
+const MAX_SKILL_DESCRIPTION_LEN = 300;
+const MAX_SKILL_BODY_LEN = 1800;
+const MIN_SKILL_CONFIDENCE = 0.65;
 
 const NOOP_LOGGER: TaskLogger = {
   info: () => {},
@@ -126,6 +132,8 @@ export type AgentRunFn = (systemPrompt: string, userMessage: string) => Promise<
 export interface ConnectorEvolveResult {
   memoriesWritten: number;
   memoryIds: string[];
+  skillsAdded: number;
+  skillIds: string[];
   durationMs: number;
   /** True when the LLM call or parse failed; the evolution run records the error. */
   llmFailed: boolean;
@@ -145,8 +153,19 @@ interface AgentMemoryWrite {
   supersedes?: unknown;
 }
 
+interface AgentSkillWrite {
+  title?: unknown;
+  description?: unknown;
+  triggers?: unknown;
+  bodyMarkdown?: unknown;
+  body_md?: unknown;
+  body?: unknown;
+  confidence?: unknown;
+}
+
 interface AgentMemoryEnvelope {
   memories?: AgentMemoryWrite[];
+  skills?: AgentSkillWrite[];
 }
 
 export async function runConnectorEvolve(
@@ -165,6 +184,8 @@ export async function runConnectorEvolve(
     return {
       memoriesWritten: 0,
       memoryIds: [],
+      skillsAdded: 0,
+      skillIds: [],
       durationMs: Date.now() - startedAt,
       llmFailed: false,
       itemsSampled: 0,
@@ -176,6 +197,8 @@ export async function runConnectorEvolve(
     return {
       memoriesWritten: 0,
       memoryIds: [],
+      skillsAdded: 0,
+      skillIds: [],
       durationMs: Date.now() - startedAt,
       llmFailed: false,
       itemsSampled: 0,
@@ -203,6 +226,8 @@ export async function runConnectorEvolve(
     return {
       memoriesWritten: 0,
       memoryIds: [],
+      skillsAdded: 0,
+      skillIds: [],
       durationMs: Date.now() - startedAt,
       llmFailed: true,
       llmError: truncate(msg, 500),
@@ -216,6 +241,8 @@ export async function runConnectorEvolve(
     return {
       memoriesWritten: 0,
       memoryIds: [],
+      skillsAdded: 0,
+      skillIds: [],
       durationMs: Date.now() - startedAt,
       llmFailed: true,
       llmError: 'agent output not parseable as JSON',
@@ -255,6 +282,26 @@ export async function runConnectorEvolve(
     }
   }
 
+  const skillWrites = sanitizeSkillWrites(parsed.skills);
+  const skillIds: string[] = [];
+  for (const w of skillWrites) {
+    try {
+      const row = await db.addSkill({
+        id: makeGeneratedSkillId(opts.toolkit),
+        title: w.title,
+        body: w.body,
+        description: w.description,
+        triggers: w.triggers,
+        source: `connector_init:${opts.toolkit}`,
+        createdRunId: opts.evolutionRunId,
+        status: 'enabled',
+      });
+      skillIds.push(row.id);
+    } catch (err) {
+      logger.warn(`[connector-evolve] skill write rejected: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   if (memoryIds.length > 0) {
     await db.recordEvolutionDelta(opts.evolutionRunId, {
       memoriesWritten: memoryIds.length,
@@ -263,10 +310,17 @@ export async function runConnectorEvolve(
     await db.recordEvolutionRefsProduced(opts.evolutionRunId, 'memory', memoryIds);
     await db.markMemoryReferenced(memoryIds, opts.evolutionRunId);
   }
+  if (skillIds.length > 0) {
+    await db.recordEvolutionDelta(opts.evolutionRunId, { skillsAdded: skillIds.length });
+    await db.recordEvolutionRefsProduced(opts.evolutionRunId, 'skill_index', skillIds);
+    await db.markSkillReferenced(skillIds, opts.evolutionRunId);
+  }
 
   return {
     memoriesWritten: memoryIds.length,
     memoryIds,
+    skillsAdded: skillIds.length,
+    skillIds,
     durationMs: Date.now() - startedAt,
     llmFailed: false,
     itemsSampled: sampled.totalItems,
@@ -290,6 +344,15 @@ function buildSystemPrompt(toolkit: string): string {
       "tags": ["string", ...],
       "supersedes": "<existing memory id from \\"Existing memories\\" block>" | null
     }
+  ],
+  "skills": [
+    {
+      "title": "Short action-led reusable instruction title.",
+      "description": "One sentence explaining when this skill is useful.",
+      "triggers": ["When X recurring situation appears", "..."],
+      "bodyMarkdown": "## When to use\\n...\\n\\n## How to respond\\n- ...",
+      "confidence": 0.65-1.0
+    }
   ]
 }
 
@@ -307,6 +370,9 @@ Rules:
     b. If you have NEW information that replaces the old fact (e.g. updated role, new employer), emit the new row AND set "supersedes" to the existing memory id. The old row will be archived.
   Examples to skip: "User knows ERC-4337 and RAG" when an existing memory already lists those tech stacks. Just rephrasing is not new information.
 - Output valid JSON only. If nothing genuinely new is extractable: { "memories": [] }. An empty result is preferable to a duplicate.
+- Skills are reusable procedures, not facts. Emit a skill only when the fresh connector data shows a recurring workflow or stable response pattern the assistant should reuse later.
+- Do NOT turn generic profile facts into skills. "User uses Zoom" is a memory, not a skill. "Before investor meetings, gather recent investor docs and open questions" can be a skill if grounded by evidence.
+- Emit at most ${MAX_SKILL_CANDIDATES} skills. Use "skills": [] unless confidence is at least ${MIN_SKILL_CONFIDENCE}.
 - No prose outside the json fence. Quote any internal quotes with 「」 or escape with \\".
 
 Multi-account note: a single ${toolkit} toolkit may be connected with TWO OR MORE accounts (e.g. user has a work Gmail and a personal Gmail). Earlier accounts have already produced person-level facts. For SUBSEQUENT accounts of the same toolkit, person-level facts will mostly dedup — that is expected and correct. Look INSTEAD for account-specific patterns:
@@ -1039,7 +1105,7 @@ function buildUserMessage(
       lines.push(`[${m.id}] (${subj}) ${m.textExcerpt}`);
     });
   }
-  lines.push('', 'Extract durable NEW facts now. Skip rephrasings of existing memories.');
+  lines.push('', 'Extract durable NEW facts and reusable skill candidates now. Skip rephrasings of existing memories.');
   return lines.join('\n');
 }
 
@@ -1054,6 +1120,13 @@ interface SanitizedMemoryWrite {
   confidence: number;
   tags: string[];
   supersedes: string | null;
+}
+
+interface SanitizedSkillWrite {
+  title: string;
+  description: string | null;
+  triggers: string[];
+  body: string;
 }
 
 function sanitizeMemoryWrites(input: AgentMemoryWrite[] | undefined): SanitizedMemoryWrite[] {
@@ -1078,6 +1151,51 @@ function sanitizeMemoryWrites(input: AgentMemoryWrite[] | undefined): SanitizedM
     });
   }
   return out;
+}
+
+function sanitizeSkillWrites(input: AgentSkillWrite[] | undefined): SanitizedSkillWrite[] {
+  if (!Array.isArray(input)) return [];
+  const out: SanitizedSkillWrite[] = [];
+  for (const w of input) {
+    if (!w || typeof w !== 'object') continue;
+    const title = typeof w.title === 'string' ? w.title.trim() : '';
+    const bodyRaw =
+      typeof w.bodyMarkdown === 'string' ? w.bodyMarkdown
+        : typeof w.body_md === 'string' ? w.body_md
+          : typeof w.body === 'string' ? w.body
+            : '';
+    const body = bodyRaw.trim();
+    if (!title || !body) continue;
+    const confidence = parseExplicitScore(w.confidence);
+    if (confidence == null) continue;
+    if (confidence < MIN_SKILL_CONFIDENCE) continue;
+    const description = typeof w.description === 'string' && w.description.trim()
+      ? truncate(w.description.trim(), MAX_SKILL_DESCRIPTION_LEN)
+      : null;
+    out.push({
+      title: truncate(title, MAX_SKILL_TITLE_LEN),
+      description,
+      triggers: sanitizeTags(w.triggers),
+      body: truncate(body, MAX_SKILL_BODY_LEN),
+    });
+    if (out.length >= MAX_SKILL_CANDIDATES) break;
+  }
+  return out;
+}
+
+function makeGeneratedSkillId(toolkit: string): string {
+  const safeToolkit = toolkit.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'connector';
+  return `connector-${safeToolkit}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+function parseExplicitScore(value: unknown): number | null {
+  const n = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && value.trim()
+      ? Number(value)
+      : Number.NaN;
+  if (!Number.isFinite(n)) return null;
+  return Math.max(0, Math.min(1, n));
 }
 
 function clampScore(value: unknown, fallback: number): number {
