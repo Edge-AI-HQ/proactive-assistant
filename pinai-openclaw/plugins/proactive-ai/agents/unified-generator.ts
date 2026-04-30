@@ -306,15 +306,20 @@ JSON quoting (CRITICAL — invalid JSON discards the whole batch):
  *      always have it because the prompt mandates the wrapper.
  *   2. `parseAgentJson` succeeds (allows jsonrepair so unescaped CJK
  *      quotes — a known recurring LLM quirk — don't trip a real completion).
- *   3. `cards` is a non-empty array. `finalizePipelineRun` throws on empty
- *      cards anyway, and an intermediate snapshot would rarely already have
- *      the full cards array.
- *   4. Each card has a non-empty string `title`. `title` is the only field
- *      that's irreplaceable downstream: `seedGeneratedCardsFromFinalCards`
- *      uses it for `intentKey`, the UI uses it as the only required label.
- *      Other fields (whyNow, summary, primaryAction, sources, confidence)
- *      are intentionally skipped — `normalizeIntentCards` on the frontend
- *      and `extractCardEvaluationsForRun` on the backend tolerate missing
+ *   3. `cards` is an array. EMPTY IS VALID — the agent legitimately decides
+ *      not to generate when it found no usable signals (e.g., new user with
+ *      no connectors yet, or the prompt's G3 genericness filter rejected
+ *      every candidate). The caller (`finalizePipelineRun`) treats
+ *      `cards: []` as a successful completion with `batchFeedback`
+ *      explaining why. Bullet 4 below skips automatically when the array
+ *      is empty.
+ *   4. Each present card is an object with a non-empty string `title`.
+ *      `title` is the only field that's irreplaceable downstream
+ *      (`seedGeneratedCardsFromFinalCards` derives `intentKey` from it,
+ *      the UI uses it as the only required label). Other fields (whyNow,
+ *      summary, primaryAction, sources, confidence) are intentionally
+ *      skipped — `normalizeIntentCards` on the frontend and
+ *      `extractCardEvaluationsForRun` on the backend tolerate missing
  *      values, so requiring them here would turn "model violated a small
  *      contract" into "all 5 reconcile attempts fail" instead of "user
  *      gets N-1 cards plus one fallback."
@@ -336,10 +341,10 @@ export function isUnifiedGeneratorCompleteOutput(text: string): boolean {
   }>(text);
   if (!parsed || typeof parsed !== 'object') return false;
 
-  // 3. cards must be a non-empty array.
-  if (!Array.isArray(parsed.cards) || parsed.cards.length === 0) return false;
+  // 3. cards must be array-shaped. Empty is valid (see doc comment above).
+  if (!Array.isArray(parsed.cards)) return false;
 
-  // 4. each card must be an object with a non-empty title.
+  // 4. each present card must have a non-empty title. cards=[] skips loop.
   for (const card of parsed.cards) {
     if (!card || typeof card !== 'object') return false;
     const title = (card as Record<string, unknown>).title;

@@ -146,9 +146,13 @@ export async function finalizePipelineRun(
 ): Promise<FinalizePipelineResult> {
   const output = parseAgentJsonOrThrow<UnifiedGeneratorOutput>(agentText, 'generate');
   const cards = output.cards ?? [];
-  if (!cards.length) {
-    throw new Error(`generate returned no cards`);
-  }
+  // Empty cards is a valid agent decision, not an error — it means the
+  // unified-generator finished context gathering and judged that no candidate
+  // cleared the quality bar (typical for new users without connected
+  // toolkits, or when the prompt's G3 genericness filter rejects every
+  // option). We persist this as a completed run with `batchFeedback`
+  // explaining why, so the frontend can show the user the agent's reasoning
+  // instead of treating it as a generation failure.
 
   for (let j = 0; j < cards.length; j++) {
     cards[j]!['id'] = `${pipelineRunId}_${j + 1}`;
@@ -266,6 +270,14 @@ export async function finalizePipelineRun(
   api.logger.info(
     `[pipeline:finalize] runId=${pipelineRunId} status=completed cards=${finalCards.length}`,
   );
+  if (finalCards.length === 0) {
+    // Surface this case clearly so ops can distinguish "agent declined to
+    // generate" from "agent failed". batchFeedback explains the why.
+    const bf = (output.batchFeedback ?? '').slice(0, 200);
+    api.logger.info(
+      `[pipeline:finalize] runId=${pipelineRunId} agent declined to generate; batchFeedback="${bf}"`,
+    );
+  }
 
   return { applied: true, finalCards };
 }

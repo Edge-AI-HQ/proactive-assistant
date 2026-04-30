@@ -38,6 +38,14 @@ export interface RunState {
   scoreMap: Record<string, EvaluationScore>;
   logEntries: LogEntry[];
   error: string | null;
+  /**
+   * Agent's batch-level commentary, populated by /runs/:id. Most useful when
+   * `status='complete' && finalCards.length===0` so the UI can explain why
+   * the agent declined to generate (e.g., "no connected toolkits yet" or
+   * "G3 genericness filter rejected all candidates"). null when the agent
+   * didn't emit one or the run hasn't completed.
+   */
+  batchFeedback: string | null;
 }
 
 export interface HealthState {
@@ -62,6 +70,7 @@ function createInitialRunState(): RunState {
     status: "idle", activePhase: null,
     startedAt: null, completedAt: null, finalCards: [],
     scoreMap: {}, logEntries: [], error: null,
+    batchFeedback: null,
   };
 }
 
@@ -97,6 +106,9 @@ function loadRunState(): RunState | null {
     return {
       ...parsed,
       finalCards: normalizeIntentCards(parsed.finalCards),
+      // Older sessionStorage entries may not have batchFeedback; default
+      // to null instead of leaving it undefined.
+      batchFeedback: typeof parsed.batchFeedback === "string" ? parsed.batchFeedback : null,
     };
   } catch {
     return null;
@@ -195,15 +207,21 @@ export function usePipeline() {
           }));
           appendLog(makeLogEntry("system", "Reconnected", "Pipeline is still running on the backend"));
         } else if (!data.pipelineRunning && data.lastResult && run.status !== "complete" && run.finalCards.length === 0) {
+          const recoveredCards = normalizeIntentCards(data.lastResult.finalCards);
+          const recoveredFeedback =
+            typeof data.lastResult.batchFeedback === "string"
+              ? data.lastResult.batchFeedback
+              : null;
           setRun((prev) => ({
             ...prev,
             runId: data.lastResult.id ?? prev.runId,
             status: "complete",
             activePhase: "complete",
-            finalCards: normalizeIntentCards(data.lastResult.finalCards),
+            finalCards: recoveredCards,
+            batchFeedback: recoveredFeedback,
             completedAt: data.lastResult.completedAt ?? new Date().toISOString(),
           }));
-          appendLog(makeLogEntry("system", "Recovered results", `${data.lastResult.finalCards?.length ?? 0} cards from previous run`));
+          appendLog(makeLogEntry("system", "Recovered results", `${recoveredCards.length} cards from previous run`));
         }
       } catch (err) { console.warn("[usePipeline] /status check failed:", err); }
     }
@@ -253,7 +271,7 @@ export function usePipeline() {
 
     (async () => {
       let runId: string | null = null;
-      let cards: IntentCard[] | null = null;
+      let outcome: { finalCards: IntentCard[]; batchFeedback: string | null } | null = null;
       try {
         const res = await proxyFetch(`/generate`, {
           method: "POST",
@@ -287,10 +305,10 @@ export function usePipeline() {
         if (payload.status === "completed") {
           // Fast path: backend finished inline. Cards aren't returned in the
           // dispatch response (only count) — fetch the run row for the
-          // canonical finalCards.
+          // canonical finalCards + batchFeedback.
           const ok = await pollRunOnce(runId, controller.signal);
           if (ok) {
-            cards = ok.finalCards;
+            outcome = { finalCards: ok.finalCards, batchFeedback: ok.batchFeedback };
           }
           setHealth((h) => ({ ...h, pipelineRunning: false }));
           return;
@@ -311,7 +329,7 @@ export function usePipeline() {
           ),
         );
 
-        cards = await waitForTerminal(runId, controller.signal);
+        outcome = await waitForTerminal(runId, controller.signal);
       } catch (err) {
         if (controller.signal.aborted) return;
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -324,20 +342,24 @@ export function usePipeline() {
         appendLog(makeLogEntry("error", "Generate failed", errMsg));
         setHealth((h) => ({ ...h, pipelineRunning: false }));
       } finally {
-        if (cards && !controller.signal.aborted) {
+        const settled = outcome;
+        if (settled && !controller.signal.aborted) {
           setRun((prev) => ({
             ...prev,
             runId: runId ?? prev.runId,
             status: "complete",
             activePhase: "complete",
             completedAt: new Date().toISOString(),
-            finalCards: cards!,
+            finalCards: settled.finalCards,
+            batchFeedback: settled.batchFeedback,
           }));
           appendLog(
             makeLogEntry(
               "complete",
-              "Pipeline complete",
-              `${cards.length} card(s) ready`,
+              settled.finalCards.length > 0 ? "Pipeline complete" : "No new cards",
+              settled.finalCards.length > 0
+                ? `${settled.finalCards.length} card(s) ready`
+                : (settled.batchFeedback ?? "Agent declined to generate this run"),
             ),
           );
         }
@@ -348,7 +370,7 @@ export function usePipeline() {
     async function pollRunOnce(
       runIdArg: string | null,
       signal: AbortSignal,
-    ): Promise<{ status: string; finalCards: IntentCard[] } | null> {
+    ): Promise<{ status: string; finalCards: IntentCard[]; batchFeedback: string | null } | null> {
       if (!runIdArg) return null;
       try {
         const res = await proxyFetch(`/runs/${encodeURIComponent(runIdArg)}`, { signal });
@@ -358,7 +380,9 @@ export function usePipeline() {
         const run = data.run as Record<string, unknown>;
         const status = typeof run.status === "string" ? run.status : "unknown";
         const finalCards = normalizeIntentCards(run.finalCards);
-        return { status, finalCards };
+        const batchFeedback =
+          typeof run.batchFeedback === "string" ? run.batchFeedback : null;
+        return { status, finalCards, batchFeedback };
       } catch {
         return null;
       }
@@ -367,7 +391,7 @@ export function usePipeline() {
     async function waitForTerminal(
       runIdArg: string | null,
       signal: AbortSignal,
-    ): Promise<IntentCard[] | null> {
+    ): Promise<{ finalCards: IntentCard[]; batchFeedback: string | null } | null> {
       if (!runIdArg) return null;
       const POLL_MS = 2_000;
       const HARD_DEADLINE_MS = Date.now() + 25 * 60_000;
@@ -375,7 +399,9 @@ export function usePipeline() {
         const tick = await pollRunOnce(runIdArg, signal);
         if (signal.aborted) return null;
         if (tick) {
-          if (tick.status === "completed") return tick.finalCards;
+          if (tick.status === "completed") {
+            return { finalCards: tick.finalCards, batchFeedback: tick.batchFeedback };
+          }
           if (tick.status === "failed") {
             setRun((prev) => ({
               ...prev,

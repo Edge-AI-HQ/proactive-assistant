@@ -154,11 +154,19 @@ test("isUnifiedGeneratorCompleteOutput rejects an unclosed json fence (mid-strea
   assert.equal(isUnifiedGeneratorCompleteOutput(partial), false);
 });
 
-test("isUnifiedGeneratorCompleteOutput rejects when cards is missing or empty", () => {
+test("isUnifiedGeneratorCompleteOutput rejects when cards is missing", () => {
   const noCards = '```json\n{\n  "evaluations": []\n}\n```';
   assert.equal(isUnifiedGeneratorCompleteOutput(noCards), false);
-  const emptyCards = '```json\n{\n  "cards": [],\n  "evaluations": []\n}\n```';
-  assert.equal(isUnifiedGeneratorCompleteOutput(emptyCards), false);
+});
+
+test("isUnifiedGeneratorCompleteOutput accepts empty cards array (agent declined to generate)", () => {
+  // The agent legitimately decides to generate nothing — e.g., new user with
+  // no connectors, or genericness filter rejected all candidates. Caller
+  // (finalizePipelineRun) treats this as a successful completion with
+  // batchFeedback explaining why; the predicate must NOT reject it as
+  // "still running" or the run will be retried until max_attempts.
+  const declined = '```json\n{\n  "reasoning": "no usable signals",\n  "cards": [],\n  "evaluations": [],\n  "batchFeedback": "User has no connected toolkits yet."\n}\n```';
+  assert.equal(isUnifiedGeneratorCompleteOutput(declined), true);
 });
 
 test("isUnifiedGeneratorCompleteOutput rejects when any card lacks a non-empty title", () => {
