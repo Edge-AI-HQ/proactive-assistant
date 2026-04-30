@@ -55,19 +55,20 @@ test("buildMobileProxyHeaders overwrites auth and host for the target container"
   assert.equal("connection" in headers, false);
 });
 
-test("isMobileProxyEnabled is disabled in production unless explicitly overridden", () => {
+test("isMobileProxyEnabled defaults on in production and keeps env as a kill switch", () => {
   const previousNodeEnv = process.env.NODE_ENV;
   const previousOverride = process.env.MOBILE_SYNC_PROXY_ENABLED;
   try {
     process.env.NODE_ENV = "production";
     delete process.env.MOBILE_SYNC_PROXY_ENABLED;
-    assert.equal(isMobileProxyEnabled(), false);
-
-    process.env.MOBILE_SYNC_PROXY_ENABLED = "1";
     assert.equal(isMobileProxyEnabled(), true);
 
-    process.env.NODE_ENV = "development";
-    delete process.env.MOBILE_SYNC_PROXY_ENABLED;
+    for (const value of ["0", "false", "off", "no"]) {
+      process.env.MOBILE_SYNC_PROXY_ENABLED = value;
+      assert.equal(isMobileProxyEnabled(), false);
+    }
+
+    process.env.MOBILE_SYNC_PROXY_ENABLED = "1";
     assert.equal(isMobileProxyEnabled(), true);
   } finally {
     if (previousNodeEnv === undefined) {

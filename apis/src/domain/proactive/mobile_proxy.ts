@@ -5,15 +5,16 @@ import type { ProactiveContainerOrchestrator } from './container_orchestrator.js
 import { getDefaultMobileSyncContainer, getContainerByInternalId } from './user_service.js';
 import type { MobileSyncTarget, ContainerWithToken } from './user_service.js';
 import { findDeviceByToken } from '../devices/index.js';
-import { config } from '../common/config.js';
 
 // See container_proxy.ts for rationale — same SIGUSR1 reload concern.
 const mobileProxyAgent = new http.Agent({ keepAlive: false });
 
 export function isMobileProxyEnabled(): boolean {
-  if (process.env.MOBILE_SYNC_PROXY_ENABLED?.trim() === '1') return true;
-  const nodeEnv = (process.env.NODE_ENV ?? config.nodeEnv).trim().toLowerCase();
-  return nodeEnv !== 'production';
+  const override = process.env.MOBILE_SYNC_PROXY_ENABLED?.trim().toLowerCase();
+  if (override === '0' || override === 'false' || override === 'off' || override === 'no') {
+    return false;
+  }
+  return true;
 }
 
 /**

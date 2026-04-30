@@ -201,7 +201,7 @@ sequenceDiagram
 - `personal_signals.dedupe_key` 包含 `connectedAccountId` + 自然主键 + `:init:v1`，相同 toolkit 多账号不会重复入。
 - 每个 raw 表都带 `dedupe_key UNIQUE` + reference 三元组（`reference_count` / `last_referenced_at` / `referenced_by_runs`）。
 - Device token 只在注册/轮换时明文返回一次，服务端只保存 bcrypt hash。
-- mobile proxy 默认非生产可用；生产需显式 `MOBILE_SYNC_PROXY_ENABLED=1`。
+- mobile proxy 默认开启；`MOBILE_SYNC_PROXY_ENABLED=0|false|off|no` 只作为紧急 kill switch。
 - `/devices/ingest` 是当前 mobile 写入入口；`/api/mobile/items/ingest` 只做兼容重写到新路由。旧 `/mobile/items`、`/mobile/items/claim`、`/mobile/items/commit` 已返回 `410 Gone`。
 
 ## 开发入口
