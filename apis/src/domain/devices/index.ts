@@ -8,9 +8,9 @@
  *      the hash, returns the plaintext token ONCE.
  *   3. Client stores the plaintext (Capacitor Preferences / iOS Keychain /
  *      Android EncryptedSharedPreferences / web localStorage).
- *   4. Subsequent /api/mobile/* calls send X-Device-Id + X-Device-Token.
- *      Server looks up the device, bcrypt-compares, routes to the user's
- *      container.
+ *   4. Subsequent /api/proactive/devices/ingest calls send X-Device-Id +
+ *      X-Device-Token. Server looks up the device, bcrypt-compares, routes
+ *      to the user's container.
  */
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';

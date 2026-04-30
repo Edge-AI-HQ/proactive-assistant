@@ -415,6 +415,8 @@ A：raw 各表全量保留（用户决策）。膨胀监控：每周扫 `SELECT 
 **Q：端侧协议要改吗？**
 A：v1 不改。云端 handler 兼容现有 `/api/mobile/items/ingest`，自动把上传的 item 写入 personal_signals + bridge snapshot 类 payload 到 raw 各表。端侧 SDK 文档可独立演进。
 
+> 2026-04 update：兼容入口已 retired。端侧统一走 `POST /api/proactive/devices/ingest`，必须带 `X-Device-Id` + `X-Device-Token`，没有匿名兜底。当前事实见 [Data Connectors](../modules/data-connectors)。
+
 **Q：world 和 personal 都叫 signals，要合并表吗？**
 A：不合并。schema 差异大（world 有 url/provider/topics/regions，personal 有 device_id/source_raw_table）。但概念对齐、CLI 形态对齐：`pin signals recent` 和 `pin world recent` 心智一致。
 

@@ -64,7 +64,7 @@ function getOrchestrator(): ProactiveContainerOrchestrator {
 }
 
 // -- CORS for API routes --
-const CORS_PATHS = ['/api/proactive/*', '/api/proxy/*', '/api/gateway/*', '/api/mobile/*'];
+const CORS_PATHS = ['/api/proactive/*', '/api/proxy/*', '/api/gateway/*'];
 
 router.use(CORS_PATHS, (req, res, next) => {
   const origin = req.headers.origin;
@@ -145,7 +145,7 @@ const pairCodeClaimLimit = createRateLimit({
 // On register/rotate, the response includes `device_token` PLAINTEXT — the
 // client MUST store it (Capacitor Preferences / iOS Keychain / Android
 // EncryptedSharedPreferences / web localStorage) and send X-Device-Token
-// + X-Device-Id on every subsequent /api/mobile/* request.
+// + X-Device-Id on every subsequent /api/proactive/devices/ingest request.
 
 router.post('/api/proactive/devices/register', registerLimit, requireProactiveAuth, async (req, res) => {
   try {
@@ -521,18 +521,13 @@ router.all('/api/proxy/*', requireProactiveAuth, async (req, res) => {
 });
 
 if (isMobileProxyEnabled()) {
-  // Preferred device-ingest path. New clients should use this.
+  // Device-ingest path. Auth is per-device (X-Device-Id + X-Device-Token
+  // validated inside the proxy), not Supabase JWT — the request comes from
+  // the registered mobile client, not from a logged-in browser session.
   // Pinned to /ingest so we don't shadow the device-management routes
   // declared above (/devices/register, /devices, /devices/revoke).
   // Rate limited per device_id (falls back to per-IP when no header).
   router.post('/api/proactive/devices/ingest', ingestLimit, async (req, res) => {
-    const orchestrator = getOrchestrator();
-    const proxy = createMobileProxy(orchestrator);
-    await proxy(req, res);
-  });
-  // Legacy alias kept for old mobile clients (MOBILE_ITEMS_INGEST_PATH).
-  // Same proxy + rewrite logic; will be removed once all clients cut over.
-  router.all('/api/mobile/*', ingestLimit, async (req, res) => {
     const orchestrator = getOrchestrator();
     const proxy = createMobileProxy(orchestrator);
     await proxy(req, res);

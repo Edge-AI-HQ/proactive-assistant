@@ -50,7 +50,7 @@ flowchart LR
 - `tasks/reconciler.ts`：周期扫 ACTIVE accounts，给没有 init task 的账号补一个。
 - `tasks/connector-sync-enqueuer.ts`：周期扫 ACTIVE accounts；当 init 已 succeeded 且当前 window 还没 sync 过时入队 `connector.sync`。
 - `user_devices` 注册、token 轮换、撤销和校验。
-- `/api/proactive/devices/ingest` 到用户容器内 `/proactive-ai/api/devices/ingest` 的代理；`/api/mobile/*` 只作为旧客户端兼容入口。
+- `/api/proactive/devices/ingest` 到用户容器内 `/proactive-ai/api/devices/ingest` 的代理。鉴权走 `X-Device-Id` + `X-Device-Token`（device 注册时 APIs 颁发），无 token 一律 401，没有匿名兜底。
 - `/devices/ingest` 按云端 policy 写入 `personal_signals` / typed raw 表 / 双写，并返回 item-level `results[]` 给端侧确认哪些 item 已入库或已存在。
 
 不包含：
@@ -219,7 +219,7 @@ sequenceDiagram
 - 每个 raw 表都带 `dedupe_key UNIQUE` + reference 三元组（`reference_count` / `last_referenced_at` / `referenced_by_runs`）。
 - Device token 只在注册/轮换时明文返回一次，服务端只保存 bcrypt hash。
 - mobile proxy 默认开启；`MOBILE_SYNC_PROXY_ENABLED=0|false|off|no` 只作为紧急 kill switch。
-- `/devices/ingest` 是当前 mobile 写入入口；`/api/mobile/items/ingest` 只做兼容重写到新路由。旧 `/mobile/items`、`/mobile/items/claim`、`/mobile/items/commit` 已返回 `410 Gone`。
+- `/api/proactive/devices/ingest` 是 mobile 唯一写入入口。`X-Device-Id` + `X-Device-Token` 必须同时存在并匹配活跃 device，否则 401；container 非 running 时返回 503，等 chat 路径或 reconciler 恢复后再重试。旧 `/api/mobile/*` 路由和 `MOBILE_SYNC_TARGET_USER_ID` 默认容器兜底已删除（2026-04 retired）。
 - `kind` 只表达数据类型，端侧不能指定 `destination=raw/signal`；落点由 `DeviceIngestPolicyRegistry` 控制。
 - `sync_mode` 是 item envelope 字段，支持 `incremental` / `full`。缺省或非法值按 `incremental` 处理；`full` 只对已注册 raw policy 生效。
 - `app_inventory` / `app_inventory_bootstrap` / `app_inventory_snapshot` 共用 app inventory policy；`contact_directory` / `contact_bootstrap` / `contact_directory_snapshot` 共用联系人 policy。

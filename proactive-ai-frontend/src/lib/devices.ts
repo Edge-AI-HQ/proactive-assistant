@@ -4,8 +4,8 @@
  * On first launch the app generates a UUID v4 device id and exchanges
  * it for a long-lived token via POST /api/proactive/devices/register.
  * The token is stored locally and attached as X-Device-Id + X-Device-Token
- * to every /api/mobile/* request, letting the cloud route uploads to the
- * correct user (vs the legacy "default mobile container" lookup).
+ * to every POST /api/proactive/devices/ingest request, letting the cloud
+ * route uploads to the correct user.
  *
  * See docs/plans/memory-architecture.mdx §三 (APIs user_devices).
  */
@@ -112,9 +112,11 @@ export async function ensureDevice(): Promise<DeviceCredentials> {
 }
 
 /**
- * Attach device credentials to a Headers object for outgoing /api/mobile/*
- * requests. Falls back to a no-op when no credentials are stored — the
- * legacy default-container path on the server will still work.
+ * Attach device credentials to a Headers object for outgoing
+ * /api/proactive/devices/ingest requests. The server now requires both
+ * headers (no legacy default-container fallback), so any caller that
+ * needs to ingest must provide credentials — this helper just spares
+ * callers the typo-prone header keys.
  */
 export function withDeviceHeaders(
   base: Record<string, string>,

@@ -10,7 +10,7 @@ description: "把 mobile / ambient(omi) / 未来硬件都收敛到一个配对 +
 所有 device（手机 / omi 一类硬件 / 未来任何硬件）共用：
 - **一张表**：`user_devices`（已有，扩 platform CHECK + 加可选 `model` 字段）
 - **一个配对入口**：`POST /api/proactive/devices/register`（已有，复用）
-- **一个 ingest 入口**：`POST /api/proactive/devices/ingest`（新建，吃掉旧的 `/api/mobile/items/ingest`）
+- **一个 ingest 入口**：`POST /api/proactive/devices/ingest`（新建，吃掉旧的 `/api/mobile/items/ingest`；2026-04 已 retired——`/api/mobile/*` 路由 + 默认容器兜底全部移除，新接口强制 `X-Device-Id` + `X-Device-Token`）
 - **一个落点**：`personal_signals`（必写）+ 选择性 fan-out 到 `raw.db.device_*_snapshot`（已有）+ 二进制走 FS
 
 `ambient` 分支引入的 `media.db` ring buffer、`ambient.db` archive、`ambient_events` 表、WS ingest 全部砍掉。

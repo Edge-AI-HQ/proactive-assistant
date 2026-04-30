@@ -1,15 +1,18 @@
 -- Migration 002: user_devices registry for multi-device routing.
 -- See docs/memory-architecture.md §三 (APIs user_devices 表) and §五 (decision 6).
 --
--- Why: today mobile_proxy uses getDefaultMobileSyncContainer() which routes
--- every incoming /api/mobile/* request to "the most active container". With
--- multiple users (or multiple devices per user), this is wrong. After this
--- migration, mobile uploads carry an X-Device-Id + X-Device-Token header,
--- and the proxy routes to the user that owns that device.
+-- Why: mobile_proxy originally fell back to getDefaultMobileSyncContainer()
+-- when a request didn't carry device credentials, which routed the upload
+-- to "the most active container" — wrong as soon as more than one user is
+-- live. This migration introduces device-scoped credentials so the proxy
+-- can route by ownership instead. The token is created at device
+-- registration time and returned to the client ONCE; only its bcrypt hash
+-- is stored here.
 --
--- The token is created at device registration time and returned to the
--- client ONCE; only its bcrypt hash is stored here.
-
+-- 2026-04 follow-up: the default-container fallback and the legacy
+-- /api/mobile/* alias have been removed. X-Device-Id + X-Device-Token are
+-- now mandatory on POST /api/proactive/devices/ingest; there is no
+-- anonymous path. user_devices is the only routing source.
 CREATE TABLE IF NOT EXISTS user_devices (
   id                 BIGSERIAL PRIMARY KEY,
   device_id          TEXT NOT NULL,                    -- client-generated UUID v4

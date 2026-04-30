@@ -1,16 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildMobileProxyHeaders, isMobileProxyEnabled, refreshMobileProxyContainer, rewriteMobileProxyPath } from "./mobile_proxy.js";
+import { buildMobileProxyHeaders, isMobileProxyEnabled, rewriteMobileProxyPath } from "./mobile_proxy.js";
 
-test("rewriteMobileProxyPath rewrites legacy /api/mobile/items/ingest to /devices/ingest", () => {
-  assert.equal(
-    rewriteMobileProxyPath("/api/mobile/items/ingest?foo=1"),
-    "/proactive-ai/api/devices/ingest?foo=1",
-  );
-});
-
-test("rewriteMobileProxyPath rewrites preferred /api/proactive/devices/* to /devices/*", () => {
+test("rewriteMobileProxyPath rewrites /api/proactive/devices/* to /devices/*", () => {
   assert.equal(
     rewriteMobileProxyPath("/api/proactive/devices/ingest?foo=1"),
     "/proactive-ai/api/devices/ingest?foo=1",
@@ -21,14 +14,17 @@ test("rewriteMobileProxyPath rewrites preferred /api/proactive/devices/* to /dev
   );
 });
 
-test("rewriteMobileProxyPath also rewrites bare /api/mobile/* fallback paths", () => {
+test("rewriteMobileProxyPath leaves unrelated paths unchanged", () => {
+  // Defensive: only the /api/proactive/devices/ prefix is supposed to
+  // hit this function (the route mount point), but if anything else
+  // sneaks in we shouldn't silently rewrite it to /devices/*.
   assert.equal(
-    rewriteMobileProxyPath("/api/mobile/items?status=pending&limit=10"),
-    "/proactive-ai/api/devices/items?status=pending&limit=10",
+    rewriteMobileProxyPath("/api/mobile/items/ingest"),
+    "/api/mobile/items/ingest",
   );
   assert.equal(
-    rewriteMobileProxyPath("/api/mobile"),
-    "/proactive-ai/api/devices/",
+    rewriteMobileProxyPath("/some/other/path"),
+    "/some/other/path",
   );
 });
 
@@ -82,39 +78,4 @@ test("isMobileProxyEnabled defaults on in production and keeps env as a kill swi
       process.env.MOBILE_SYNC_PROXY_ENABLED = previousOverride;
     }
   }
-});
-
-test("refreshMobileProxyContainer prefers reconciled container data when available", async () => {
-  const container = {
-    id: 1,
-    owner_user_id: 1,
-    scope: "user" as const,
-    runtime_provider: "docker" as const,
-    container_name: "proactive-285d35b0",
-    runtime_ref: "old-ref",
-    host_port: 55004,
-    status: "running" as const,
-    metadata: { hostPort: "55004" },
-    created_at: "2026-04-18T00:00:00.000Z",
-    updated_at: "2026-04-18T00:00:00.000Z",
-    last_active_at: null,
-    container_proxy_secret: "gateway-token",
-    user_key: "285d35b0-e031-4cfd-97b3-0e21064d0d0e",
-  };
-  const refreshed = await refreshMobileProxyContainer(
-    {
-      reconcileContainer: async () => ({
-        ...container,
-        runtime_ref: "new-ref",
-        host_port: 55005,
-        metadata: { hostPort: "55005" },
-      }),
-    } as any,
-    container,
-  );
-
-  assert.equal(refreshed?.runtime_ref, "new-ref");
-  assert.equal(refreshed?.host_port, 55005);
-  assert.deepEqual(refreshed?.metadata, { hostPort: "55005" });
-  assert.equal(refreshed?.user_key, container.user_key);
 });

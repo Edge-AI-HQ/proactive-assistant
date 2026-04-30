@@ -24,7 +24,7 @@ flowchart LR
 包含：
 
 - 本地启动、验证命令。
-- `/api/proactive/*`、`/api/proxy/*`、`/api/mobile/*` 的运行边界。
+- `/api/proactive/*`、`/api/proxy/*` 的运行边界。
 - container / gateway / LiteLLM / dotenvx / CI/CD。
 - P0 secrets、production 规则。
 - Billing 概览。
@@ -63,9 +63,8 @@ sequenceDiagram
 
 前端请求边界：
 
-- `/api/proactive/*`：APIs 控制面，比如 auth、container、device。
+- `/api/proactive/*`：APIs 控制面，比如 auth、container、device。device-ingest 入口 `POST /api/proactive/devices/ingest` 走的是 `X-Device-Id` + `X-Device-Token` 鉴权（不是 Supabase JWT），APIs 校验通过后转发到该 device 所属用户的容器。
 - `/api/proxy/*`：转发到用户容器内 proactive-ai plugin。
-- `/api/mobile/*`：device/mobile 入口，APIs 校验 device token 后转发到用户容器。
 
 ## 本地开发
 

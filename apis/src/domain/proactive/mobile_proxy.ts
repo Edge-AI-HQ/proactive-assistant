@@ -2,8 +2,8 @@ import type { Request, Response } from 'express';
 import http from 'node:http';
 import type { IncomingHttpHeaders } from 'node:http';
 import type { ProactiveContainerOrchestrator } from './container_orchestrator.js';
-import { getDefaultMobileSyncContainer, getContainerByInternalId } from './user_service.js';
-import type { MobileSyncTarget, ContainerWithToken } from './user_service.js';
+import { getContainerByInternalId } from './user_service.js';
+import type { ContainerWithToken } from './user_service.js';
 import { findDeviceByToken } from '../devices/index.js';
 
 // See container_proxy.ts for rationale — same SIGUSR1 reload concern.
@@ -18,25 +18,16 @@ export function isMobileProxyEnabled(): boolean {
 }
 
 /**
- * Path rewrites for the device-ingest proxy:
+ * Path rewrite for the device-ingest proxy:
  *
- *   /api/proactive/devices/ingest      → /proactive-ai/api/devices/ingest
- *   /api/mobile/items/ingest (legacy)  → /proactive-ai/api/devices/ingest
- *   /api/mobile/<rest>       (legacy)  → /proactive-ai/api/devices/<rest>
+ *   /api/proactive/devices/<rest>  →  /proactive-ai/api/devices/<rest>
  *
- * The /api/mobile/* prefix is kept for backwards-compatibility with mobile
- * clients shipped before the device-ingest unification. New clients should
- * use /api/proactive/devices/ingest directly.
+ * Only this single rewrite is supported. The legacy /api/mobile/* prefix
+ * was retired once all clients (web SPA + Capacitor iOS/Android) cut over
+ * to the explicit /api/proactive/devices/ingest path.
  */
 export function rewriteMobileProxyPath(originalUrl: string): string {
-  if (originalUrl.startsWith('/api/proactive/devices/')) {
-    return originalUrl.replace(/^\/api\/proactive\/devices\/?/, '/proactive-ai/api/devices/');
-  }
-  // Legacy: rewrite both /api/mobile/items/ingest and any other /api/mobile/*.
-  if (originalUrl.startsWith('/api/mobile/items/ingest')) {
-    return originalUrl.replace(/^\/api\/mobile\/items\/ingest/, '/proactive-ai/api/devices/ingest');
-  }
-  return originalUrl.replace(/^\/api\/mobile\/?/, '/proactive-ai/api/devices/');
+  return originalUrl.replace(/^\/api\/proactive\/devices\/?/, '/proactive-ai/api/devices/');
 }
 
 export function buildMobileProxyHeaders(
@@ -63,118 +54,60 @@ export function buildMobileProxyHeaders(
   return proxyHeaders;
 }
 
-export async function refreshMobileProxyContainer(
-  orchestrator: ProactiveContainerOrchestrator,
-  container: MobileSyncTarget | null,
-): Promise<MobileSyncTarget | null> {
-  if (!container?.user_key) return container;
-  const reconciled = await orchestrator.reconcileContainer(container.user_key);
-  if (!reconciled) return container;
-  return {
-    ...reconciled,
-    user_key: container.user_key,
-  };
-}
-
 /**
- * Look up the user's container by validated device token.
- * See docs/plans/memory-architecture.mdx §三 (APIs user_devices).
+ * Resolve the user's container from a validated `(deviceId, deviceToken)`
+ * pair. Returns null when the token doesn't match a registered device.
+ * Caller is responsible for ensuring both inputs are non-empty.
  *
- * Distinguishes "legacy client without device headers" from "new client
- * sent device headers, but they don't validate". Only the first case may
- * fall back to the legacy default container.
+ * See docs/plans/memory-architecture.mdx §三 (APIs user_devices).
  */
-async function findContainerByDeviceToken(req: Request): Promise<{
-  headersProvided: boolean;
-  tokenValid: boolean;
-  container: ContainerWithToken | null;
-}> {
-  const deviceId = String(req.header('x-device-id') ?? '').trim();
-  const deviceToken = String(req.header('x-device-token') ?? '').trim();
-  const headersProvided = Boolean(deviceId || deviceToken);
-  if (!headersProvided) {
-    return { headersProvided: false, tokenValid: false, container: null };
-  }
-  if (!deviceId || !deviceToken) {
-    return { headersProvided: true, tokenValid: false, container: null };
-  }
+async function findContainerByDeviceToken(
+  deviceId: string,
+  deviceToken: string,
+): Promise<ContainerWithToken | null> {
   const device = await findDeviceByToken(deviceId, deviceToken);
-  if (!device) {
-    return { headersProvided: true, tokenValid: false, container: null };
-  }
-  return {
-    headersProvided: true,
-    tokenValid: true,
-    container: await getContainerByInternalId(device.user_id),
-  };
+  if (!device) return null;
+  return getContainerByInternalId(device.user_id);
 }
 
 export function createMobileProxy(orchestrator: ProactiveContainerOrchestrator) {
   return async function mobileProxyHandler(req: Request, res: Response): Promise<void> {
-    // Phase 11: prefer device-token-based routing when the headers are
-    // present. Falls back to the legacy "default container" lookup so
-    // existing clients without device registration keep working.
-    // See docs/plans/memory-architecture.mdx §三.
-    const tokenLookup = await findContainerByDeviceToken(req);
-    if (tokenLookup.headersProvided && !tokenLookup.tokenValid) {
+    // Auth: every request MUST carry a valid X-Device-Id + X-Device-Token
+    // pair. There is no anonymous fallback — the device-token check is the
+    // only thing standing between the public ingest endpoint and another
+    // user's data.
+    const deviceId = String(req.header('x-device-id') ?? '').trim();
+    const deviceToken = String(req.header('x-device-token') ?? '').trim();
+    if (!deviceId || !deviceToken) {
+      res.status(401).json({
+        error: 'X-Device-Id and X-Device-Token headers are required',
+        code: 'DEVICE_AUTH_REQUIRED',
+      });
+      return;
+    }
+
+    const container = await findContainerByDeviceToken(deviceId, deviceToken);
+    if (!container) {
       res.status(401).json({
         error: 'Invalid device credentials',
         code: 'INVALID_DEVICE_TOKEN',
       });
       return;
     }
-    if (tokenLookup.headersProvided && !tokenLookup.container) {
-      res.status(503).json({
-        error: 'No mobile sync target container is available',
-        code: 'NO_MOBILE_TARGET',
-      });
-      return;
-    }
 
-    let container: MobileSyncTarget | null = tokenLookup.container
-      ? { ...tokenLookup.container, user_key: null }
-      : await getDefaultMobileSyncContainer();
-    if (!tokenLookup.container) {
-      // user_key is only populated by getDefaultMobileSyncContainer; legacy
-      // path needs it for resume. Token-based path skips reconcile because
-      // we already validated ownership via the device token.
-      container = await refreshMobileProxyContainer(orchestrator, container);
-    }
-    if (!container) {
-      res.status(503).json({
-        error: 'No mobile sync target container is available',
-        code: 'NO_MOBILE_TARGET',
-      });
-      return;
-    }
-
+    // The proxy doesn't auto-resume suspended containers — when the
+    // user's container isn't running we surface 503 and let the next
+    // ingest retry land after the reconciler / chat-level resume path
+    // has woken it up. That's the only place container lifecycle is
+    // owned, and forcing the device-ingest path to drive resumes
+    // would duplicate that responsibility here.
     if (container.status !== 'running') {
-      try {
-        if (container.user_key) {
-          await orchestrator.resumeContainer(container.user_key);
-        }
-      } catch (err) {
-        console.error('[mobile-proxy] Failed to resume mobile sync target:', err);
-      }
-      const resumed = await getDefaultMobileSyncContainer();
-      if (resumed) {
-        container = await refreshMobileProxyContainer(orchestrator, resumed);
-      }
-      if (!container) {
-        res.status(503).json({
-          error: 'No mobile sync target container is available',
-          code: 'NO_MOBILE_TARGET',
-        });
-        return;
-      }
-      if (container.status !== 'running') {
-        res.status(503).json({
-          error: `Mobile sync target is ${container.status}`,
-          code: 'TARGET_NOT_RUNNING',
-          status: container.status,
-        });
-        return;
-      }
+      res.status(503).json({
+        error: `Mobile sync target is ${container.status}`,
+        code: 'TARGET_NOT_RUNNING',
+        status: container.status,
+      });
+      return;
     }
 
     const target = orchestrator.resolveTarget(container);
