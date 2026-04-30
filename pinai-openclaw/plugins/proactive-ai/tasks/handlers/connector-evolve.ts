@@ -251,37 +251,65 @@ export async function runConnectorEvolve(
   }
 
   const writes = sanitizeMemoryWrites(parsed.memories);
-  const memoryIds: string[] = [];
-  let supersededCount = 0;
-  for (const w of writes) {
+
+  // Memory writes go through a single transaction: insert + supersedes +
+  // delta + refs_produced + reference 三件套. Replaces the previous per-row
+  // commit loop where a worker crash mid-batch could leave partial memory
+  // rows with no bookkeeping. When the LLM emits no memories we just skip
+  // the call — the empty-result accumulator covers the return shape.
+  let batch: db.ConnectorEvolveBatchResult = {
+    memoryIds: [],
+    memoriesWritten: 0,
+    memoriesSuperseded: 0,
+    perItem: [],
+  };
+  if (writes.length > 0) {
     try {
-      const row = await db.addMemoryV3({
-        text: w.text,
-        source: `connector_init:${opts.toolkit}`,
-        sourceRunId: opts.evolutionRunId,
-        subject: w.subject,
-        quality: w.quality,
-        confidence: w.confidence,
-        tags: w.tags,
+      batch = await db.commitConnectorEvolveBatch({
+        evolutionRunId: opts.evolutionRunId,
+        memories: writes.map((w) => ({
+          text: w.text,
+          source: `connector_init:${opts.toolkit}`,
+          sourceRunId: opts.evolutionRunId,
+          subject: w.subject,
+          quality: w.quality,
+          confidence: w.confidence,
+          tags: w.tags,
+          supersedes: w.supersedes,
+        })),
       });
-      memoryIds.push(row.id);
-      if (w.supersedes) {
-        // Mark the prior row status='superseded'. If the agent supplied a
-        // bogus id (hallucinated, or already archived), don't sink the
-        // whole batch — log and continue.
-        try {
-          await db.supersedeMemoryV3(w.supersedes, row.id);
-          supersededCount++;
-        } catch (err) {
-          logger.warn(`[connector-evolve] supersede ${w.supersedes} -> ${row.id} skipped: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
     } catch (err) {
-      // One bad row shouldn't sink the rest. Log and continue.
-      logger.warn(`[connector-evolve] memory write rejected: ${err instanceof Error ? err.message : String(err)}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(`[connector-evolve] memory batch commit rejected: ${msg}`);
+      return {
+        memoriesWritten: 0,
+        memoryIds: [],
+        skillsAdded: 0,
+        skillIds: [],
+        durationMs: Date.now() - startedAt,
+        llmFailed: true,
+        llmError: truncate(msg, 500),
+        itemsSampled: sampled.totalItems,
+      };
+    }
+
+    // Surface dropped supersedes (hallucinated / already-archived prior ids)
+    // for the same audit visibility the per-row loop used to give.
+    for (let i = 0; i < writes.length; i++) {
+      const w = writes[i]!;
+      const r = batch.perItem[i];
+      if (w.supersedes && r && !r.supersededOldId) {
+        logger.warn(`[connector-evolve] supersede ${w.supersedes} -> ${r.memoryId} skipped: prior row missing`);
+      }
     }
   }
 
+  // Skills: kept as a per-row loop because addSkill writes a SKILL.md file
+  // alongside the DB row, and SQLite transactions can't roll back FS writes.
+  // The 5-step bookkeeping (loop → delta → refs_produced → reference 三件套)
+  // therefore stays best-effort here — a worker crash mid-loop can leave
+  // skill rows on disk with no evolution_run delta recorded. Acceptable
+  // tradeoff vs. orphan SKILL.md files.
   const skillWrites = sanitizeSkillWrites(parsed.skills);
   const skillIds: string[] = [];
   for (const w of skillWrites) {
@@ -302,14 +330,6 @@ export async function runConnectorEvolve(
     }
   }
 
-  if (memoryIds.length > 0) {
-    await db.recordEvolutionDelta(opts.evolutionRunId, {
-      memoriesWritten: memoryIds.length,
-      memoriesSuperseded: supersededCount > 0 ? supersededCount : undefined,
-    });
-    await db.recordEvolutionRefsProduced(opts.evolutionRunId, 'memory', memoryIds);
-    await db.markMemoryReferenced(memoryIds, opts.evolutionRunId);
-  }
   if (skillIds.length > 0) {
     await db.recordEvolutionDelta(opts.evolutionRunId, { skillsAdded: skillIds.length });
     await db.recordEvolutionRefsProduced(opts.evolutionRunId, 'skill_index', skillIds);
@@ -317,8 +337,8 @@ export async function runConnectorEvolve(
   }
 
   return {
-    memoriesWritten: memoryIds.length,
-    memoryIds,
+    memoriesWritten: batch.memoriesWritten,
+    memoryIds: batch.memoryIds,
     skillsAdded: skillIds.length,
     skillIds,
     durationMs: Date.now() - startedAt,

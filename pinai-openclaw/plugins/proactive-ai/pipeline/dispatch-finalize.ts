@@ -186,8 +186,13 @@ export async function finalizePipelineRun(
     };
   });
 
-  const passedCount = evaluations.filter((entry) => entry?.pass !== false).length;
-  const rejectedCount = evaluations.filter((entry) => entry?.pass === false).length;
+  // Count over allScoredCards (one entry per generated card), not over the
+  // evaluations array — when the agent emits fewer evaluations than cards,
+  // missing rows fall through to score.pass=true (see the .find() above).
+  // Counting evaluations directly produced misleading "generated=3 passed=2"
+  // log lines where passed+rejected didn't sum to generated.
+  const passedCount = allScoredCards.filter((entry) => entry.score.pass !== false).length;
+  const rejectedCount = allScoredCards.length - passedCount;
   api.logger.info(
     `[pipeline:finalize] runId=${pipelineRunId} generated=${cards.length} passed=${passedCount} rejected=${rejectedCount}`,
   );

@@ -11,6 +11,9 @@ import { tmpdir } from 'node:os';
 import {
   addMemoryV3,
   archiveMemoryV3,
+  commitConnectorEvolveBatch,
+  createEvolutionRun,
+  getEvolutionRun,
   getMemoryV3,
   listMemoryV3,
   markMemoryReferenced,
@@ -195,5 +198,125 @@ test('markMemoryReferenced: empty inputs are no-op', async () => {
     assert.equal(await markMemoryReferenced([], 'run-1'), 0);
     const m = await addMemoryV3({ text: 'x', source: 'manual' });
     assert.equal(await markMemoryReferenced([m.id], ''), 0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// commitConnectorEvolveBatch — atomic batch writer for connector-evolve.
+// ─────────────────────────────────────────────────────────────────────────
+
+test('commitConnectorEvolveBatch: writes memories + delta + refs + reference 三件套 in one shot', async () => {
+  await withTempHome(async () => {
+    const run = await createEvolutionRun({
+      triggerKind: 'on_event',
+      contextSummary: 'connector.init gmail batch',
+    });
+
+    const result = await commitConnectorEvolveBatch({
+      evolutionRunId: run.id,
+      memories: [
+        { text: 'works at PINAI', source: 'connector_init:gmail', sourceRunId: run.id, subject: 'work:employer', quality: 0.7 },
+        { text: 'lives in Shanghai', source: 'connector_init:gmail', sourceRunId: run.id, subject: 'fact:city', quality: 0.6 },
+      ],
+    });
+
+    assert.equal(result.memoriesWritten, 2);
+    assert.equal(result.memoriesSuperseded, 0);
+    assert.equal(result.memoryIds.length, 2);
+    assert.equal(result.perItem.length, 2);
+    assert.equal(result.perItem[0]!.supersededOldId, null);
+
+    // Memory rows are persisted, active, with reference 三件套 initialized.
+    const row1 = await getMemoryV3(result.memoryIds[0]!);
+    assert.equal(row1!.text, 'works at PINAI');
+    assert.equal(row1!.status, 'active');
+    assert.equal(row1!.source_run_id, run.id);
+    assert.equal(row1!.reference_count, 1);
+    assert.deepEqual(row1!.referenced_by_runs, [run.id]);
+    assert.notEqual(row1!.last_referenced_at, null);
+
+    // evolution_run delta + refs_produced both reflect the batch.
+    const updated = await getEvolutionRun(run.id);
+    assert.equal(updated!.memories_written, 2);
+    assert.equal(updated!.memories_superseded, 0);
+    assert.deepEqual(updated!.refs_produced['memory'], result.memoryIds);
+  });
+});
+
+test('commitConnectorEvolveBatch: applies supersedes to existing memory rows', async () => {
+  await withTempHome(async () => {
+    const oldMem = await addMemoryV3({ text: 'old role: junior eng', source: 'manual', subject: 'work:role' });
+
+    const run = await createEvolutionRun({ triggerKind: 'on_event', contextSummary: 'role update' });
+    const result = await commitConnectorEvolveBatch({
+      evolutionRunId: run.id,
+      memories: [
+        { text: 'role: senior eng', source: 'connector_init:gmail', sourceRunId: run.id, subject: 'work:role', supersedes: oldMem.id },
+      ],
+    });
+
+    assert.equal(result.memoriesSuperseded, 1);
+    assert.equal(result.perItem[0]!.supersededOldId, oldMem.id);
+
+    const oldRow = await getMemoryV3(oldMem.id);
+    assert.equal(oldRow!.status, 'superseded');
+    assert.equal(oldRow!.superseded_by, result.memoryIds[0]);
+
+    const updated = await getEvolutionRun(run.id);
+    assert.equal(updated!.memories_superseded, 1);
+  });
+});
+
+test('commitConnectorEvolveBatch: bogus supersedes id is silently dropped, batch still lands', async () => {
+  await withTempHome(async () => {
+    const run = await createEvolutionRun({ triggerKind: 'on_event', contextSummary: 'hallucinated supersede' });
+    const result = await commitConnectorEvolveBatch({
+      evolutionRunId: run.id,
+      memories: [
+        { text: 'fact A', source: 'connector_init:gmail', sourceRunId: run.id, supersedes: 'no-such-id' },
+        { text: 'fact B', source: 'connector_init:gmail', sourceRunId: run.id },
+      ],
+    });
+
+    // Both memories land; the bogus supersede is reported as null.
+    assert.equal(result.memoriesWritten, 2);
+    assert.equal(result.memoriesSuperseded, 0);
+    assert.equal(result.perItem[0]!.supersededOldId, null);
+    assert.equal(result.perItem[1]!.supersededOldId, null);
+  });
+});
+
+test('commitConnectorEvolveBatch: empty memories array is a no-op', async () => {
+  await withTempHome(async () => {
+    const run = await createEvolutionRun({ triggerKind: 'on_event', contextSummary: 'empty' });
+    const result = await commitConnectorEvolveBatch({ evolutionRunId: run.id, memories: [] });
+    assert.equal(result.memoriesWritten, 0);
+    assert.equal(result.memoryIds.length, 0);
+
+    const updated = await getEvolutionRun(run.id);
+    assert.equal(updated!.memories_written, 0);
+    assert.deepEqual(updated!.refs_produced, {});
+  });
+});
+
+test('commitConnectorEvolveBatch: missing required fields throw before any write', async () => {
+  await withTempHome(async () => {
+    const run = await createEvolutionRun({ triggerKind: 'on_event', contextSummary: 'validation' });
+
+    await assert.rejects(
+      () => commitConnectorEvolveBatch({
+        evolutionRunId: run.id,
+        memories: [
+          { text: 'good', source: 'connector_init:gmail', sourceRunId: run.id },
+          { text: '', source: 'connector_init:gmail', sourceRunId: run.id },
+        ],
+      }),
+      /memory.text is required/,
+    );
+
+    // Validation runs before the transaction opens, so nothing is written.
+    const updated = await getEvolutionRun(run.id);
+    assert.equal(updated!.memories_written, 0);
+    assert.deepEqual(updated!.refs_produced, {});
   });
 });

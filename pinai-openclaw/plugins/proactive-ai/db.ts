@@ -3317,6 +3317,148 @@ export async function markMemoryReferenced(
   return updated;
 }
 
+export interface ConnectorEvolveBatchMemoryInput {
+  text: string;
+  source: string;
+  sourceRunId: string;
+  subject?: string | null;
+  quality?: number;
+  confidence?: number;
+  tags?: string[];
+  /** Optional existing memory id to mark superseded after the new row inserts.
+   *  Bogus / already-archived ids are silently ignored — the new row still lands. */
+  supersedes?: string | null;
+}
+
+export interface ConnectorEvolveBatchResult {
+  memoryIds: string[];
+  memoriesWritten: number;
+  memoriesSuperseded: number;
+  perItem: Array<{ memoryId: string; supersededOldId: string | null }>;
+}
+
+/**
+ * Atomic batch writer for connector-evolve.
+ *
+ * Wraps the entire post-LLM persistence into a single SQLite transaction:
+ *   1. INSERT one memory row per input
+ *   2. Mark prior memory rows as 'superseded' for inputs that supplied
+ *      a valid `supersedes` id
+ *   3. Increment `evolution_runs.memories_written` / `memories_superseded`
+ *   4. Append the new memory ids to `evolution_runs.refs_produced_json.memory`
+ *   5. Initialize the reference 三件套 on every new memory
+ *      (reference_count=1, last_referenced_at=now, referenced_by_runs=[runId])
+ *
+ * Either the whole batch lands or none of it does. Replaces the previous
+ * mid-loop crash window in `runConnectorEvolve` where partial memory writes
+ * could leave an evolution_run with no delta recorded and the connector.init
+ * task stuck on retry.
+ */
+export async function commitConnectorEvolveBatch(input: {
+  evolutionRunId: string;
+  memories: ConnectorEvolveBatchMemoryInput[];
+}): Promise<ConnectorEvolveBatchResult> {
+  if (!input.evolutionRunId) {
+    throw new Error('commitConnectorEvolveBatch: evolutionRunId is required');
+  }
+  if (!Array.isArray(input.memories) || input.memories.length === 0) {
+    return { memoryIds: [], memoriesWritten: 0, memoriesSuperseded: 0, perItem: [] };
+  }
+
+  // Pre-validate before opening the transaction so a single bad row
+  // doesn't roll the whole batch back from inside the SQL boundary.
+  for (const m of input.memories) {
+    if (!m.text || !m.text.trim()) {
+      throw new Error('commitConnectorEvolveBatch: memory.text is required');
+    }
+    if (!m.source || !m.source.trim()) {
+      throw new Error('commitConnectorEvolveBatch: memory.source is required');
+    }
+    if (!m.sourceRunId) {
+      throw new Error('commitConnectorEvolveBatch: memory.sourceRunId is required');
+    }
+  }
+
+  const ts = now();
+  const memoryIds: string[] = [];
+  const perItem: ConnectorEvolveBatchResult['perItem'] = [];
+  let supersededCount = 0;
+
+  const tx = getDb().transaction(() => {
+    for (const m of input.memories) {
+      const id = genId();
+      const quality = clampQuality(m.source, m.quality);
+      const confidence = typeof m.confidence === 'number'
+        ? Math.max(0, Math.min(1, m.confidence)) : 0.5;
+      const tagsJson = JSON.stringify(m.tags ?? []);
+      // referenced_by_runs starts as [evolutionRunId] (cap 10 isn't reached
+      // on insert), reference_count=1, last_referenced_at=now — saves a
+      // follow-up UPDATE per row.
+      getDb().prepare(
+        `INSERT INTO memory (
+           id, text, source, source_run_id, subject, quality, confidence,
+           status, superseded_by, occurred_at, created_at,
+           tags_json, related_memory_ids,
+           reference_count, last_referenced_at, referenced_by_runs
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', NULL, NULL, ?, ?, '[]', 1, ?, ?)`,
+      ).run(
+        id, m.text.trim(), m.source, m.sourceRunId, m.subject ?? null,
+        quality, confidence, ts, tagsJson, ts, JSON.stringify([input.evolutionRunId]),
+      );
+
+      let supersededOldId: string | null = null;
+      if (m.supersedes && m.supersedes !== id) {
+        const oldRow = getDb().prepare(
+          'SELECT id FROM memory WHERE id = ?',
+        ).get(m.supersedes);
+        if (oldRow) {
+          getDb().prepare(
+            "UPDATE memory SET status = 'superseded', superseded_by = ? WHERE id = ?",
+          ).run(id, m.supersedes);
+          supersededOldId = m.supersedes;
+          supersededCount += 1;
+        }
+        // Else: hallucinated / already-archived id — drop the supersede,
+        // keep the new row. Logged at the caller via perItem.supersededOldId=null.
+      }
+
+      memoryIds.push(id);
+      perItem.push({ memoryId: id, supersededOldId });
+    }
+
+    // Bump evolution_run delta counters in one UPDATE.
+    getDb().prepare(
+      `UPDATE evolution_runs
+         SET memories_written = memories_written + ?,
+             memories_superseded = memories_superseded + ?
+         WHERE id = ?`,
+    ).run(memoryIds.length, supersededCount, input.evolutionRunId);
+
+    // Append the new memory ids to refs_produced.memory.
+    const runRow = getDb().prepare(
+      'SELECT refs_produced_json FROM evolution_runs WHERE id = ?',
+    ).get(input.evolutionRunId) as { refs_produced_json?: string } | undefined;
+    if (runRow) {
+      const obj = parseJson<Record<string, string[]>>(runRow.refs_produced_json) ?? {};
+      const existing = Array.isArray(obj['memory']) ? obj['memory'] : [];
+      const seen = new Set(existing);
+      for (const id of memoryIds) seen.add(id);
+      obj['memory'] = Array.from(seen);
+      getDb().prepare(
+        'UPDATE evolution_runs SET refs_produced_json = ? WHERE id = ?',
+      ).run(JSON.stringify(obj), input.evolutionRunId);
+    }
+  });
+  tx();
+
+  return {
+    memoryIds,
+    memoriesWritten: memoryIds.length,
+    memoriesSuperseded: supersededCount,
+    perItem,
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // v3 Skill index — metadata only; body lives in folder
 //
