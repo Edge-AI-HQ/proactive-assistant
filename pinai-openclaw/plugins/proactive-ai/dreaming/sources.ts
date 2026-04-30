@@ -712,7 +712,7 @@ export async function collectFeedback(windowStart: string, windowEnd: string): P
 }
 
 export async function collectCards(windowStart: string): Promise<DreamSourceResult> {
-  const latestRun = await db.getLatestPipelineRun();
+  const latestRun = await db.getLatestCompletedPipelineRun();
   if (!latestRun || !latestRun.started_at || latestRun.started_at < windowStart) {
     return { status: 'skipped', count: 0, raw: [], normalized: [], message: 'No recent cards' };
   }

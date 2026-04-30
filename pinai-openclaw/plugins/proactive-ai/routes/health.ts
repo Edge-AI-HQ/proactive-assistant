@@ -12,8 +12,21 @@ export function handleHealth(): RouteHandler {
     if (ctx.subpath === '/status' && ctx.req.method === 'GET') {
       const [active, lastRun] = await Promise.all([
         db.getActivePipelineRun(),
-        db.getLatestPipelineRun(),
+        db.getLatestCompletedPipelineRun(),
       ]);
+      // Pull batchFeedback from the artifact so a frontend reloading on a
+      // fresh device (no sessionStorage) can still explain why the latest
+      // completed run produced 0 cards. Cheap — only fires on /status hits,
+      // not on every poll. Returns null silently if the artifact is missing.
+      const artifact = lastRun
+        ? (db.readRunArtifact(lastRun.run_id) as
+            | { evaluation?: { batchFeedback?: unknown } }
+            | null)
+        : null;
+      const lastBatchFeedback =
+        typeof artifact?.evaluation?.batchFeedback === 'string'
+          ? artifact.evaluation.batchFeedback
+          : null;
       json(ctx.res, 200, {
         ok: true,
         pipelineRunning: !!active,
@@ -26,6 +39,7 @@ export function handleHealth(): RouteHandler {
               status: lastRun.status,
               completedAt: lastRun.completed_at,
               finalCards: lastRun.final_cards,
+              batchFeedback: lastBatchFeedback,
             }
           : null,
       });

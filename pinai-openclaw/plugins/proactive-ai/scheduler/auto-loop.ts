@@ -21,7 +21,13 @@ import {
   pipelineReconcileIdempotencyKey,
 } from '../tasks/handlers/pipeline-reconcile.js';
 
-const AUTO_LOOP_RECONCILE_MAX_ATTEMPTS = 5;
+/**
+ * Same rationale as routes/generate.ts: the reconcile handler is a single
+ * long-running poll loop, not a retry-with-backoff loop. attempts only
+ * grows when the reaper finds a stale lease, which means the worker
+ * crashed mid-poll. 2 attempts gives one fresh worker after a crash.
+ */
+const AUTO_LOOP_RECONCILE_MAX_ATTEMPTS = 2;
 
 export interface AutoLoopConfig {
   auto_poll_enabled: boolean;
@@ -57,6 +63,14 @@ interface AutoLoopState {
   crystallizeInFlight: boolean;
   lastLoopFinishedAt: string | null;
   lastLoopStatus: string | null;
+  /**
+   * Lazy reference to the background-task scheduler's wake() entry point.
+   * Set by startAutoLoop (closes over the module-level scheduler instance
+   * in index.ts). Called after enqueueing pipeline.reconcile so the
+   * scheduler claims it on the next tick instead of waiting out
+   * tickIntervalMs.
+   */
+  wakeScheduler: (() => void) | null;
 }
 
 const state: AutoLoopState = {
@@ -70,6 +84,7 @@ const state: AutoLoopState = {
   crystallizeInFlight: false,
   lastLoopFinishedAt: null,
   lastLoopStatus: null,
+  wakeScheduler: null,
 };
 
 export function getAutoLoopState() { return { ...state }; }
@@ -179,9 +194,10 @@ export async function runDetectAndLoop(
         type: PIPELINE_RECONCILE_TASK_TYPE,
         payload: { pipelineRunId: dispatched.pipelineRunId },
         idempotencyKey: pipelineReconcileIdempotencyKey(dispatched.pipelineRunId),
-        runAfter: new Date(Date.now() + 5_000).toISOString(),
+        runAfter: new Date().toISOString(),
         maxAttempts: AUTO_LOOP_RECONCILE_MAX_ATTEMPTS,
       });
+      state.wakeScheduler?.();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       api.logger.error(
@@ -335,10 +351,22 @@ export async function runAutoCardChatFeedback(
 
 // ── Start / Stop ──
 
+export interface AutoLoopDeps {
+  /**
+   * Wake the background-task scheduler after enqueueing
+   * pipeline.reconcile. Optional — when omitted, the scheduler still
+   * picks up the task on its next regular tick (default 60s), but
+   * waking shaves the worst-case "agent done, indicator still spinning"
+   * window. See routes/router.ts RouterDeps.wakeScheduler.
+   */
+  wakeScheduler?: () => void;
+}
+
 export function startAutoLoop(
   api: OpenClawPluginApi,
   config: AutoLoopConfig,
   pipelineState: PipelineState,
+  deps: AutoLoopDeps = {},
 ): void {
   if (!config.auto_poll_enabled) {
     api.logger.info('[auto-loop] disabled by config');
@@ -346,6 +374,7 @@ export function startAutoLoop(
   }
   if (state.started) return;
   state.started = true;
+  state.wakeScheduler = deps.wakeScheduler ?? null;
 
   // Run initial ingest immediately
   void runIngest(api, config);

@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildUnifiedGeneratorPrompt } from "./unified-generator.ts";
+import {
+  buildUnifiedGeneratorPrompt,
+  isUnifiedGeneratorCompleteOutput,
+} from "./unified-generator.ts";
 
 test("buildUnifiedGeneratorPrompt includes all 4 phases", () => {
   const prompt = buildUnifiedGeneratorPrompt({
@@ -125,4 +128,70 @@ test("buildUnifiedGeneratorPrompt prefers fresh raw connector reads over stale c
   assert.match(prompt, /pin raw gmail recent/);
   assert.match(prompt, /pin raw gcal today/);
   assert.match(prompt, /Home/);
+});
+
+// ── isUnifiedGeneratorCompleteOutput ──
+//
+// Predicate is consulted by collectAgentText to decide whether a session
+// jsonl read represents a completed final turn vs a streaming intermediate.
+// Tests cover: positive, the closing-fence guard, schema-shape rejections,
+// and the jsonrepair-tolerant CJK-quote case (regression: strict parse
+// would have rejected real completions on dev; see agent-runner notes).
+
+const MINIMAL_VALID_OUTPUT = '```json\n{\n  "cards": [\n    { "title": "Review Brex card limit", "goalBasket": "work" }\n  ],\n  "evaluations": []\n}\n```';
+
+test("isUnifiedGeneratorCompleteOutput accepts a complete fenced output", () => {
+  assert.equal(isUnifiedGeneratorCompleteOutput(MINIMAL_VALID_OUTPUT), true);
+});
+
+test("isUnifiedGeneratorCompleteOutput rejects empty / undefined text", () => {
+  assert.equal(isUnifiedGeneratorCompleteOutput(""), false);
+});
+
+test("isUnifiedGeneratorCompleteOutput rejects an unclosed json fence (mid-stream)", () => {
+  // No trailing ``` — looks like agent is still writing the body.
+  const partial = '```json\n{\n  "cards": [\n    { "title": "Review Brex card limit", "goalBasket": "work" }\n  ],\n  "evaluations": []';
+  assert.equal(isUnifiedGeneratorCompleteOutput(partial), false);
+});
+
+test("isUnifiedGeneratorCompleteOutput rejects when cards is missing", () => {
+  const noCards = '```json\n{\n  "evaluations": []\n}\n```';
+  assert.equal(isUnifiedGeneratorCompleteOutput(noCards), false);
+});
+
+test("isUnifiedGeneratorCompleteOutput accepts empty cards array (agent declined to generate)", () => {
+  // The agent legitimately decides to generate nothing — e.g., new user with
+  // no connectors, or genericness filter rejected all candidates. Caller
+  // (finalizePipelineRun) treats this as a successful completion with
+  // batchFeedback explaining why; the predicate must NOT reject it as
+  // "still running" or the run will be retried until max_attempts.
+  const declined = '```json\n{\n  "reasoning": "no usable signals",\n  "cards": [],\n  "evaluations": [],\n  "batchFeedback": "User has no connected toolkits yet."\n}\n```';
+  assert.equal(isUnifiedGeneratorCompleteOutput(declined), true);
+});
+
+test("isUnifiedGeneratorCompleteOutput rejects when any card lacks a non-empty title", () => {
+  const blankTitle = '```json\n{\n  "cards": [\n    { "title": "", "goalBasket": "work" }\n  ],\n  "evaluations": []\n}\n```';
+  assert.equal(isUnifiedGeneratorCompleteOutput(blankTitle), false);
+  const missingTitle = '```json\n{\n  "cards": [\n    { "goalBasket": "work" }\n  ],\n  "evaluations": []\n}\n```';
+  assert.equal(isUnifiedGeneratorCompleteOutput(missingTitle), false);
+});
+
+test("isUnifiedGeneratorCompleteOutput rejects when evaluations is not an array", () => {
+  const noEvals = '```json\n{\n  "cards": [\n    { "title": "T", "goalBasket": "work" }\n  ]\n}\n```';
+  assert.equal(isUnifiedGeneratorCompleteOutput(noEvals), false);
+});
+
+test("isUnifiedGeneratorCompleteOutput accepts CJK-quoted strings via jsonrepair tolerance", () => {
+  // LLMs frequently emit unescaped " inside CJK strings. parseAgentJson uses
+  // jsonrepair to fix this — the predicate must accept it, otherwise real
+  // completions would be flagged as intermediate.
+  const cjkUnescaped = '```json\n{\n  "cards": [\n    { "title": "现在是从"关注"转向"实际体验"的最佳时机", "goalBasket": "work" }\n  ],\n  "evaluations": []\n}\n```';
+  assert.equal(isUnifiedGeneratorCompleteOutput(cjkUnescaped), true);
+});
+
+test("isUnifiedGeneratorCompleteOutput rejects a structurally-broken body even if fence closes", () => {
+  // Closing fence present, but body is truncated mid-string → parse fails
+  // (jsonrepair can't recover this).
+  const broken = '```json\n{\n  "cards": [\n    { "title": "abc\n```';
+  assert.equal(isUnifiedGeneratorCompleteOutput(broken), false);
 });

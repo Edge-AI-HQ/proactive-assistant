@@ -51,30 +51,79 @@ export interface CollectAgentResult {
   error?: string;
 }
 
+export interface CollectAgentTextOptions {
+  runId: string;
+  sessionKey: string;
+  timeoutMs: number;
+  /**
+   * Skip waitForRun and read session messages directly. Used by:
+   *   - The pipeline.reconcile poll loop, which polls every 5s and has
+   *     no use for waitForRun's blocking semantics.
+   *   - The startup recovery sweep, where waitForRun against a stale
+   *     runId would hang for the full timeout because OpenClaw's
+   *     in-memory wait registry doesn't survive process restart.
+   */
+  skipWait?: boolean;
+  /**
+   * Predicate that decides whether `text` (the latest assistant message)
+   * represents a completed final turn vs a streaming intermediate snapshot.
+   *
+   * When provided, ALL paths that reach session-read consult this predicate
+   * — including a successful waitForRun. The reason: waitForRun has been
+   * observed to return ok prematurely (and, more often, return timeout long
+   * after the agent finished), so its signal is treated as a hint, not as
+   * the source of truth. The session jsonl is the source of truth.
+   *
+   * If the predicate rejects, we return `timeout` so the caller can come
+   * back later — pipeline.reconcile loops on POLL_INTERVAL_MS, /generate's
+   * fast path hands off to that loop, the startup sweep marks the run
+   * failed (the agent state is gone after a restart anyway).
+   *
+   * If `validateFinal` is omitted, behavior matches the legacy contract:
+   * - waitForRun ok → return ok with whatever extractAgentText finds
+   * - waitForRun timeout → return timeout immediately, no session read
+   * Callers without a schema (tests, ad-hoc tools) keep the old shape.
+   */
+  validateFinal?: (text: string) => boolean;
+}
+
 /**
  * Wait for a previously-dispatched subagent run to finish, then read its
  * final assistant text. Returns a discriminated result instead of throwing
  * so the reconciler can distinguish "still running" from "fatal" without
  * paying for stack traces in the hot polling loop.
  *
- * Pass `skipWait=true` after a process restart: waitForRun against a stale
- * runId will hang for the full timeout because the gateway's in-memory cache
- * is gone. Reading session messages directly is the only thing that can
- * salvage agent text written before the crash.
+ * Why we always fall through to session-read when `validateFinal` is set:
+ * production observation showed `waitForRun` returning timeout 20+ minutes
+ * after the agent had already written its final assistant message to the
+ * session jsonl (see fly machine 48e619eb060d68 case 2026-04-30, run
+ * `run_manual_mokzougs`). The session file IS the durable record; OpenClaw's
+ * in-memory wait state is just an optimization. So we use waitForRun to
+ * gate latency (skip the file read until the agent should plausibly be
+ * done) but always validate the actual session content before declaring ok.
  */
 export async function collectAgentText(
   api: OpenClawPluginApi,
-  params: { runId: string; sessionKey: string; timeoutMs: number; skipWait?: boolean },
+  params: CollectAgentTextOptions,
 ): Promise<CollectAgentResult> {
+  // Wait phase — used only to decide WHEN to read the session, not WHETHER
+  // the agent is done. error is still terminal (the runtime is telling us
+  // something failed structurally, not that it timed out).
   if (!params.skipWait) {
     const wait = await api.runtime.subagent.waitForRun({
       runId: params.runId,
       timeoutMs: params.timeoutMs,
     });
-    if (wait.status === 'timeout') return { status: 'timeout' };
     if (wait.status === 'error') {
       return { status: 'error', error: wait.error ?? 'subagent error' };
     }
+    // Legacy mode: no validator means trust waitForRun's verdict. Preserves
+    // existing behavior for callers that haven't migrated.
+    if (wait.status === 'timeout' && !params.validateFinal) {
+      return { status: 'timeout' };
+    }
+    // wait.status === 'ok' OR (timeout with validator) — fall through to
+    // session-read. The validator decides the final outcome.
   }
 
   const messages = await api.runtime.subagent.getSessionMessages({
@@ -87,8 +136,21 @@ export async function collectAgentText(
   }
   const text = extractAgentText(messages);
   if (!text) {
-    return { status: 'error', error: 'agent returned empty text' };
+    // Empty session = agent hasn't written anything yet. Treated as
+    // "still running" so the caller retries instead of marking the run
+    // failed. Legacy behavior reported error here, but with the
+    // session-as-truth model, "no text yet" is just a too-early read.
+    return params.validateFinal || params.skipWait
+      ? { status: 'timeout' }
+      : { status: 'error', error: 'agent returned empty text' };
   }
+
+  if (params.validateFinal && !params.validateFinal(text)) {
+    // Have text, but caller's schema says it's an intermediate. Wait for
+    // the next attempt.
+    return { status: 'timeout' };
+  }
+
   return { status: 'ok', text };
 }
 

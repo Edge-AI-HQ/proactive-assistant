@@ -35,11 +35,31 @@ export interface PluginConfig {
   auto_detect_interval_ms: number;
 }
 
-export function createApiHandler(api: OpenClawPluginApi, config: PluginConfig) {
+/**
+ * Cross-cutting deps the router passes down to individual route handlers.
+ * Kept narrow on purpose — each new dep should be load-bearing for the
+ * route's correctness, not a convenience.
+ */
+export interface RouterDeps {
+  /**
+   * Trigger the background-task scheduler to claim a due task on the next
+   * tick instead of waiting up to `tickIntervalMs` (default 60s). The
+   * /generate slow path enqueues a pipeline.reconcile task and waking is
+   * what cuts "agent already finished, frontend still spinning" from up to
+   * 60s to ~immediately. Optional so tests can omit it.
+   */
+  wakeScheduler?: () => void;
+}
+
+export function createApiHandler(
+  api: OpenClawPluginApi,
+  config: PluginConfig,
+  deps: RouterDeps = {},
+) {
   const handlers: RouteHandler[] = [
     handleHealth(),
-    handleGenerate(config),
-    handleAutoRunDispatch(config),
+    handleGenerate(config, { wakeScheduler: deps.wakeScheduler }),
+    handleAutoRunDispatch(config, { wakeScheduler: deps.wakeScheduler }),
     handleRuns(),
     handleChat(),
     handleFeedback(),

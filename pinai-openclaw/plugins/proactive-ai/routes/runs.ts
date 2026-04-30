@@ -16,7 +16,7 @@ export function handleRuns(): RouteHandler {
     if (ctx.req.method !== 'GET') return false;
 
     if (ctx.subpath === '/runs') {
-      const lastRun = await db.getLatestPipelineRun();
+      const lastRun = await db.getLatestCompletedPipelineRun();
       json(ctx.res, 200, {
         ok: true,
         runs: lastRun
@@ -75,7 +75,34 @@ function toRunSummary(row: db.PipelineRunRow): Record<string, unknown> {
   };
 }
 
+interface ArtifactShape {
+  plan?: { reasoning?: unknown };
+  evaluation?: { batchFeedback?: unknown };
+}
+
+/**
+ * Pull `reasoning` and `batchFeedback` out of the run artifact. These let
+ * the frontend render a meaningful empty state when `finalCards=[]`
+ * (the agent legitimately declined to generate; see
+ * pipeline/dispatch-finalize.ts handling for empty cards). Returns nulls
+ * if the artifact is missing or malformed — callers should treat both as
+ * "no explanation available."
+ */
+function readArtifactExplanation(runId: string): {
+  reasoning: string | null;
+  batchFeedback: string | null;
+} {
+  const artifact = db.readRunArtifact(runId) as ArtifactShape | null;
+  const reasoning = artifact?.plan?.reasoning;
+  const batchFeedback = artifact?.evaluation?.batchFeedback;
+  return {
+    reasoning: typeof reasoning === 'string' ? reasoning : null,
+    batchFeedback: typeof batchFeedback === 'string' ? batchFeedback : null,
+  };
+}
+
 function toRunDetail(row: db.PipelineRunRow): Record<string, unknown> {
+  const explanation = readArtifactExplanation(row.run_id);
   return {
     id: row.run_id,
     status: row.status,
@@ -85,5 +112,7 @@ function toRunDetail(row: db.PipelineRunRow): Record<string, unknown> {
     completedAt: row.completed_at,
     finalCards: row.final_cards,
     error: row.error,
+    reasoning: explanation.reasoning,
+    batchFeedback: explanation.batchFeedback,
   };
 }

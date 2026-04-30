@@ -2344,8 +2344,32 @@ async function seedGeneratedCardsFromFinalCards(finalCards: unknown, ts: string)
   }));
 }
 
-export async function getLatestPipelineRun(): Promise<PipelineRunRow | null> {
-  const row = getDb().prepare('SELECT * FROM pipeline_runs ORDER BY started_at DESC LIMIT 1').get() as any;
+/**
+ * Latest pipeline_run that reached `status='completed'`. Used by surfaces
+ * that want "the most recent finished result with cards on it":
+ *
+ *   - GET /runs (ChatTimeline history)
+ *   - GET /status (frontend usePipeline restore-on-refresh)
+ *   - dreaming/sources.collectCards (recent-cards window)
+ *
+ * Filtered on `completed` because in-flight rows have `final_cards = NULL`
+ * and would erase a real completed result from these surfaces while a new
+ * generation is mid-flight (see fly-machine-48e619eb060d68 case 2026-04-30:
+ * starting run #2 made the run #1 cards disappear from CHAT timeline).
+ *
+ * Failed runs are also excluded — they have no usable final_cards either,
+ * so callers asking for "the last good result" don't want them either.
+ *
+ * Sorted by `completed_at` (not `started_at`) so retroactive finalization
+ * via the reconciler/recovery path orders by when cards actually became
+ * visible, not when the run was kicked off.
+ */
+export async function getLatestCompletedPipelineRun(): Promise<PipelineRunRow | null> {
+  const row = getDb().prepare(
+    `SELECT * FROM pipeline_runs
+      WHERE status = 'completed'
+      ORDER BY completed_at DESC LIMIT 1`,
+  ).get() as any;
   return row ? rowToPipelineRun(row) : null;
 }
 

@@ -475,6 +475,31 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
             </div>
           )}
 
+          {/* Empty-completion overlay: agent finished but produced no cards
+              (typical for new users without connectors, or when the
+              genericness filter rejected every candidate). batchFeedback,
+              when present, explains why so the user isn't left guessing. */}
+          {!isRunning && run.status === "complete" && visibleCards.length === 0 && (
+            <div className="absolute inset-0 flex items-center justify-center z-20 px-6">
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="glass-card-strong px-5 py-4 text-center max-w-[320px]"
+              >
+                <div className="flex items-center gap-2 justify-center mb-2">
+                  <Sparkles size={14} className="text-foreground/50" />
+                  <span className="text-sm font-medium text-foreground/80">
+                    暂无新卡片
+                  </span>
+                </div>
+                <p className="text-[12px] text-foreground/60 leading-relaxed">
+                  {run.batchFeedback ??
+                    "AI 分析后判断目前没有需要你处理的事项。连接更多数据源或稍后再试。"}
+                </p>
+              </motion.div>
+            </div>
+          )}
+
           {/* Floating cards. Cards stay mounted across swipes; left/top change
               on reshuffle and the CSS transition below slides them smoothly to
               their new slot. AnimatePresence only handles per-card dismissal
