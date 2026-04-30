@@ -6,11 +6,20 @@ import * as db from '../db.js';
  * Pipeline run query API.
  *
  *   GET /runs           — backwards-compat: latest completed run only.
+ *                         Kept singleton because `dreaming/sources` and
+ *                         `health` still rely on `getLatestCompletedPipelineRun`.
+ *                         For the frontend timeline use `/cards`.
  *   GET /runs/active    — single in-flight run ('running' or 'reconciling') or null.
  *                         Source of truth for the frontend "generating" indicator.
  *   GET /runs/:id       — detailed view of a specific run, including final cards
  *                         when status='completed'.
+ *   GET /cards?limit=N  — flat list of cards across recent completed runs,
+ *                         newest run first. Backs ChatTimeline (full history)
+ *                         and the NOW view (cross-run "what's still relevant").
+ *                         Default limit=200, capped at 1000.
  */
+const DEFAULT_CARDS_LIMIT = 200;
+
 export function handleRuns(): RouteHandler {
   return async (ctx) => {
     if (ctx.req.method !== 'GET') return false;
@@ -30,6 +39,23 @@ export function handleRuns(): RouteHandler {
               },
             ]
           : [],
+      });
+      return true;
+    }
+
+    if (ctx.subpath === '/cards') {
+      const limitParam = ctx.url.searchParams.get('limit');
+      const parsed = limitParam ? Number.parseInt(limitParam, 10) : NaN;
+      const limit = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CARDS_LIMIT;
+      const rows = await db.listVisibleCards({ limit });
+      json(ctx.res, 200, {
+        ok: true,
+        cards: rows.map((row) => ({
+          card: row.card,
+          runId: row.runId,
+          runCompletedAt: row.runCompletedAt,
+          score: row.score,
+        })),
       });
       return true;
     }

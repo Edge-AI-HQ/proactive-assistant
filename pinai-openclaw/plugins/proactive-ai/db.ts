@@ -2390,6 +2390,83 @@ export async function listPipelineRuns(opts?: { since?: string; limit?: number }
   return rows.map(rowToPipelineRun);
 }
 
+/**
+ * One row per card emitted by a completed pipeline_run, newest run first,
+ * card order preserved within a run. Backs `GET /cards` (ChatTimeline +
+ * NOW view): the singleton `GET /runs` only returns the latest completed
+ * run, which means the frontend timeline appeared to "lose" old cards
+ * every time a new run finished. This walks the recent run history so
+ * the frontend can render a real history.
+ *
+ * No dedup here — the same `intentKey` (basket+title) regenerated across
+ * runs returns multiple rows, and each caller decides whether to dedup
+ * (NOW view dedups; CHAT timeline keeps each occurrence as a separate
+ * history entry).
+ *
+ * Score is attached opportunistically from `card_evaluations` so the
+ * frontend can render quality metadata without a second round-trip.
+ */
+export interface VisibleCardRow {
+  card: Record<string, unknown>;
+  runId: string;
+  runCompletedAt: string;
+  score: { overall: number; pass: boolean } | null;
+}
+
+export async function listVisibleCards(opts?: {
+  limit?: number;
+}): Promise<VisibleCardRow[]> {
+  const cardLimit = Math.max(1, Math.min(opts?.limit ?? 200, 1000));
+  // Look back over enough runs to fill the limit even when individual
+  // runs only emit 1-3 cards. 50 runs × ~5 cards is comfortably above
+  // the default 200-card cap.
+  const runs = getDb().prepare(
+    `SELECT * FROM pipeline_runs
+      WHERE status = 'completed'
+      ORDER BY completed_at DESC LIMIT 50`,
+  ).all() as any[];
+
+  if (runs.length === 0) return [];
+
+  const evalRows = getDb().prepare(
+    `SELECT card_id, overall, pass FROM card_evaluations
+      WHERE run_id IN (${runs.map(() => '?').join(',')})`,
+  ).all(...runs.map((r) => r.run_id)) as Array<{
+    card_id: string;
+    overall: number;
+    pass: number | boolean;
+  }>;
+  const scoreByCardId = new Map<string, { overall: number; pass: boolean }>();
+  for (const row of evalRows) {
+    scoreByCardId.set(row.card_id, {
+      overall: row.overall,
+      pass: row.pass === 1 || row.pass === true,
+    });
+  }
+
+  const out: VisibleCardRow[] = [];
+  for (const rawRun of runs) {
+    if (out.length >= cardLimit) break;
+    const run = rowToPipelineRun(rawRun);
+    const cards = Array.isArray(run.final_cards)
+      ? (run.final_cards as Array<Record<string, unknown>>)
+      : [];
+    const completedAt = run.completed_at ?? run.started_at;
+    for (const card of cards) {
+      if (out.length >= cardLimit) break;
+      if (!card || typeof card !== 'object') continue;
+      const cardId = typeof card.id === 'string' ? card.id : '';
+      out.push({
+        card,
+        runId: run.run_id,
+        runCompletedAt: completedAt,
+        score: cardId ? scoreByCardId.get(cardId) ?? null : null,
+      });
+    }
+  }
+  return out;
+}
+
 export async function listRecentGeneratedCards(opts?: {
   since?: string;
   limit?: number;

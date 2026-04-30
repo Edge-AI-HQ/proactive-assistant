@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { heartbeat, proxyFetch, proxyPost } from "@/lib/api";
 import { usePipeline } from "@/hooks/usePipeline";
+import { useCards } from "@/hooks/useCards";
 import { useComposio } from "@/hooks/useComposio";
 import { useWeather } from "@/hooks/useWeather";
 import { basketMeta } from "@/lib/basket-meta";
@@ -126,8 +127,22 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
 
   const pipeline = usePipeline();
   const { health, run, generate, isRunning } = pipeline;
+  const cardsState = useCards();
+  const refreshCards = cardsState.refresh;
   const composio = useComposio();
   const weather = useWeather();
+
+  // Pull cards forward as soon as a generate run reports `status='complete'`.
+  // Without this the NOW view would wait up to one full /cards polling tick
+  // (30s) before the freshly generated cards show up, even though the
+  // backend has them durably stored.
+  const lastCompleteRunIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (run.status !== "complete" || !run.runId) return;
+    if (run.runId === lastCompleteRunIdRef.current) return;
+    lastCompleteRunIdRef.current = run.runId;
+    void refreshCards();
+  }, [run.runId, run.status, refreshCards]);
 
   // ── Heartbeat (keep container alive) ──
 
@@ -176,17 +191,40 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
   }, [activeView]);
 
   // ── Visible cards for NOW view ──
+  // Pulls from /cards (cross-run history) instead of `run.finalCards`
+  // (latest run only), so prior cards stay visible until the user
+  // dismisses or completes them. Dedup by basket+title — the same intent
+  // regenerated across runs floats once, with the freshest version
+  // winning since cardsState.cards is sorted newest-run-first.
 
   const hiddenIds = new Set([...dismissedIds, ...doneIds]);
-  const visibleCards: FloatingCard[] = run.finalCards
-    .filter((c) => !hiddenIds.has(c.id))
-    .slice(0, 8)
-    .map((c, i) => ({ ...c, slotIndex: i }));
+  const visibleCards: FloatingCard[] = (() => {
+    const seenIntents = new Set<string>();
+    const out: FloatingCard[] = [];
+    for (const entry of cardsState.cards) {
+      if (out.length >= 8) break;
+      if (hiddenIds.has(entry.card.id)) continue;
+      const intentKey = `${entry.card.goalBasket}:${entry.card.title.trim().toLowerCase()}`;
+      if (seenIntents.has(intentKey)) continue;
+      seenIntents.add(intentKey);
+      out.push({ ...entry.card, slotIndex: out.length });
+    }
+    return out;
+  })();
 
-  // Mark new cards when pipeline produces results
+  // Mark new cards when fresh ones appear in /cards. First load seeds
+  // seenCardIds without firing the 10s "new" highlight timer — without
+  // this, every card on initial mount would briefly glow.
+  const cardsCards = cardsState.cards;
+  const cardsInitializedRef = useRef(false);
   useEffect(() => {
-    if (run.finalCards.length === 0) return;
-    const currentIds = new Set(run.finalCards.map((c) => c.id));
+    if (cardsCards.length === 0) return;
+    const currentIds = new Set(cardsCards.map((e) => e.card.id));
+    if (!cardsInitializedRef.current) {
+      cardsInitializedRef.current = true;
+      setSeenCardIds(currentIds);
+      return;
+    }
     const newIds = new Set<string>();
     for (const id of currentIds) {
       if (!seenCardIds.has(id)) newIds.add(id);
@@ -203,7 +241,7 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
       return () => clearTimeout(timer);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [run.finalCards]);
+  }, [cardsCards]);
 
   // ── Card action handlers ──
 
