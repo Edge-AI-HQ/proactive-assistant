@@ -16,7 +16,7 @@ export function handleRuns(): RouteHandler {
     if (ctx.req.method !== 'GET') return false;
 
     if (ctx.subpath === '/runs') {
-      const lastRun = await db.getLatestPipelineRun();
+      const lastRun = await db.getLatestCompletedPipelineRun();
       json(ctx.res, 200, {
         ok: true,
         runs: lastRun

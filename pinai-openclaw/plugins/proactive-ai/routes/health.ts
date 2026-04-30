@@ -12,7 +12,7 @@ export function handleHealth(): RouteHandler {
     if (ctx.subpath === '/status' && ctx.req.method === 'GET') {
       const [active, lastRun] = await Promise.all([
         db.getActivePipelineRun(),
-        db.getLatestPipelineRun(),
+        db.getLatestCompletedPipelineRun(),
       ]);
       json(ctx.res, 200, {
         ok: true,
