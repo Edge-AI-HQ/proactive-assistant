@@ -4,7 +4,7 @@
 .PHONY: logs logs-apis logs-litellm logs-postgres
 .PHONY: migrate reset clean
 .PHONY: deploy-dev deploy-prod deploy-litellm-dev deploy-litellm-prod build-openclaw-image
-.PHONY: ios
+.PHONY: ios android
 
 COMPOSE := docker compose
 DOTENVX := npx @dotenvx/dotenvx
@@ -277,3 +277,111 @@ ios: ensure-env ## Build frontend, sync iOS, and open Xcode. Backend selection (
 		npx cap open ios
 	@echo ""
 	@echo "Xcode is open. Select your device at the top, then press Cmd+R to build and run."
+
+android: ensure-env ## Build frontend, sync Android, install debug APK to a USB device, and launch it. Backend selection: NGROK=<url> | DEV=1 | PROD=1 | default = local LAN. Device: ANDROID_SERIAL=<serial>.
+	@set -e; \
+	set -a && . ./apis/.env && set +a; \
+	if [ -n "$(NGROK)" ]; then \
+		echo "Using ngrok tunnel at $(NGROK)"; \
+		VITE_API_BASE_URL="$(NGROK)"; \
+	elif [ "$(PROD)" = "1" ]; then \
+		PROD_URL=$$(npx -y dotenvx get VITE_API_BASE_URL -f apis/.env.production 2>/dev/null); \
+		if [ -z "$$PROD_URL" ]; then echo "Could not read VITE_API_BASE_URL from apis/.env.production"; exit 1; fi; \
+		echo "Using fly prod APIs at $$PROD_URL"; \
+		VITE_API_BASE_URL="$$PROD_URL"; \
+	elif [ "$(DEV)" = "1" ]; then \
+		echo "Using fly dev APIs at $$VITE_API_BASE_URL"; \
+	else \
+		LAN_IP=$$(ipconfig getifaddr en0); \
+		if [ -z "$$LAN_IP" ]; then LAN_IP=$$(ipconfig getifaddr en1); fi; \
+		if [ -z "$$LAN_IP" ]; then echo "Could not detect LAN IP from en0/en1"; exit 1; fi; \
+		echo "Using local APIs at http://$$LAN_IP:3000"; \
+		VITE_API_BASE_URL="http://$$LAN_IP:3000"; \
+	fi; \
+	if ! command -v adb >/dev/null 2>&1; then \
+		echo "adb not found. Install Android platform-tools first."; \
+		exit 1; \
+	fi; \
+	DEVICE_SERIAL="$(ANDROID_SERIAL)"; \
+	if [ -z "$$DEVICE_SERIAL" ]; then \
+		DEVICE_SERIALS=$$(adb devices | awk 'NR > 1 && $$2 == "device" { print $$1 }'); \
+		DEVICE_COUNT=$$(printf "%s\n" "$$DEVICE_SERIALS" | sed '/^$$/d' | wc -l | tr -d ' '); \
+		if [ "$$DEVICE_COUNT" = "0" ]; then \
+			echo "No authorized Android device found. Connect a phone and accept USB debugging."; \
+			exit 1; \
+		fi; \
+		if [ "$$DEVICE_COUNT" != "1" ]; then \
+			echo "Multiple Android devices found. Re-run with ANDROID_SERIAL=<serial>."; \
+			printf "%s\n" "$$DEVICE_SERIALS"; \
+			exit 1; \
+		fi; \
+		DEVICE_SERIAL="$$DEVICE_SERIALS"; \
+	fi; \
+	if [ "$$(adb -s "$$DEVICE_SERIAL" get-state 2>/dev/null)" != "device" ]; then \
+		if [ -n "$(ANDROID_SERIAL)" ]; then \
+			echo "Android device $$DEVICE_SERIAL is not ready yet; building now and will wait before install."; \
+			echo "Current adb devices:"; \
+			adb devices -l; \
+		else \
+			echo "Android device $$DEVICE_SERIAL is not ready."; \
+			echo "Current adb devices:"; \
+			adb devices -l; \
+			exit 1; \
+		fi; \
+	fi; \
+	JAVA_SELECTED=""; \
+	java_major() { "$$1/bin/java" -version 2>&1 | awk -F'[".]' '/version/ { print ($$2 == "1" ? $$3 : $$2); exit }'; }; \
+	try_java_home() { \
+		CANDIDATE="$$1"; \
+		if [ -n "$$CANDIDATE" ] && [ -x "$$CANDIDATE/bin/java" ]; then \
+			MAJOR=$$(java_major "$$CANDIDATE"); \
+			if [ -n "$$MAJOR" ] && [ "$$MAJOR" -ge 21 ]; then \
+				JAVA_SELECTED="$$CANDIDATE"; \
+				return 0; \
+			fi; \
+		fi; \
+		return 1; \
+	}; \
+	wait_for_android_device() { \
+		for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do \
+			if [ "$$(adb -s "$$DEVICE_SERIAL" get-state 2>/dev/null)" = "device" ]; then \
+				return 0; \
+			fi; \
+			sleep 2; \
+		done; \
+		echo "Android device $$DEVICE_SERIAL is not ready."; \
+		echo "Current adb devices:"; \
+		adb devices -l; \
+		return 1; \
+	}; \
+	if ! try_java_home "$(ANDROID_JAVA_HOME)"; then \
+		if ! try_java_home "$${JAVA_HOME:-}"; then \
+			BREW_OPENJDK=""; \
+			BREW_OPENJDK21=""; \
+			if command -v brew >/dev/null 2>&1; then \
+				BREW_OPENJDK=$$(brew --prefix openjdk 2>/dev/null || true); \
+				BREW_OPENJDK21=$$(brew --prefix openjdk@21 2>/dev/null || true); \
+			fi; \
+			if ! try_java_home "$$BREW_OPENJDK/libexec/openjdk.jdk/Contents/Home"; then \
+				if ! try_java_home "$$BREW_OPENJDK21/libexec/openjdk.jdk/Contents/Home"; then \
+					USR_JAVA21=$$(/usr/libexec/java_home -v 21 2>/dev/null || true); \
+					if ! try_java_home "$$USR_JAVA21"; then \
+						echo "Android build requires JDK 21+. Install it with: brew install openjdk@21"; \
+						echo "Or pass ANDROID_JAVA_HOME=/path/to/jdk21-or-newer."; \
+						exit 1; \
+					fi; \
+				fi; \
+			fi; \
+		fi; \
+	fi; \
+	echo "Using Android device $$DEVICE_SERIAL"; \
+	echo "Using Java $$("$$JAVA_SELECTED/bin/java" -version 2>&1 | head -n 1)"; \
+	cd proactive-ai-frontend; \
+	VITE_CAPACITOR=1 VITE_API_BASE_URL="$$VITE_API_BASE_URL" npx vite build; \
+	npx cap sync android; \
+	cd android; \
+	chmod +x ./gradlew; \
+	JAVA_HOME="$$JAVA_SELECTED" ./gradlew :app:assembleDebug --no-daemon --warning-mode all; \
+	wait_for_android_device; \
+	adb -s "$$DEVICE_SERIAL" install -r app/build/outputs/apk/debug/app-debug.apk; \
+	adb -s "$$DEVICE_SERIAL" shell am start -W -n ai.pin.proactive/.MainActivity
