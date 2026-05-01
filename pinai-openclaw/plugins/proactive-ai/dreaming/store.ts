@@ -191,22 +191,13 @@ export async function markGoalsApplied(id: string): Promise<DreamRunRecord> {
  * Returns the number of rows transitioned to 'failed'.
  */
 export async function sweepStaleRunningDreams(staleAfterMs = 5 * 60_000): Promise<number> {
-  const stale = await db.listEvolutionRuns({
+  const cutoffIso = new Date(Date.now() - staleAfterMs).toISOString();
+  return await db.failStaleRunningEvolutionRuns({
     triggerKind: DREAM_TRIGGER_KIND,
-    status: 'running',
-    limit: 200,
-  });
-  const cutoffMs = Date.now() - staleAfterMs;
-  let swept = 0;
-  for (const row of stale) {
-    const startedMs = Date.parse(row.started_at);
-    if (Number.isNaN(startedMs) || startedMs >= cutoffMs) continue;
-    await db.failEvolutionRun(row.id,
+    startedBefore: cutoffIso,
+    errorMessage:
       `Marked failed by sweepStaleRunningDreams: row stuck in running for >${staleAfterMs}ms (likely an orphan from a deploy or plugin restart)`,
-    );
-    swept += 1;
-  }
-  return swept;
+  });
 }
 
 /**

@@ -4,7 +4,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { runAutoCardChatFeedback, runAutoDreaming, runAutoCrystallize, runDetectAndLoop } from "./auto-loop.ts";
+import {
+  runAutoCardChatFeedback,
+  runAutoDreaming,
+  runAutoCrystallize,
+  runDetectAndLoop,
+  startAutoLoop,
+  stopAutoLoop,
+} from "./auto-loop.ts";
 import {
   bumpCrystallizeTurn,
   createEvolutionRun,
@@ -93,6 +100,41 @@ async function withBackgroundTasksEnv<T>(
 async function withLegacyAutoDreaming<T>(fn: () => Promise<T>): Promise<T> {
   return await withBackgroundTasksEnv('0', fn);
 }
+
+// ── startAutoLoop ────────────────────────────────────────────────────────
+
+test("startAutoLoop: does not run world ingest on cold start", async () => {
+  await withTempHome(async () => {
+    let fetchCalls = 0;
+    const previousFetch = globalThis.fetch;
+    const stubFetch: typeof fetch = async () => {
+      fetchCalls += 1;
+      throw new Error("fetch should not run during startAutoLoop cold start");
+    };
+    globalThis.fetch = stubFetch;
+
+    try {
+      startAutoLoop(
+        makeApi(),
+        {
+          auto_poll_enabled: true,
+          auto_ingest_interval_ms: 60_000,
+          auto_detect_interval_ms: 60_000,
+          auto_loop_min_interval_ms: 0,
+          cards_to_generate: 1,
+          agent_timeout_ms: 1000,
+        },
+        { running: false, phase: null },
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      assert.equal(fetchCalls, 0);
+    } finally {
+      stopAutoLoop();
+      globalThis.fetch = previousFetch;
+    }
+  });
+});
 
 // ── runAutoCardChatFeedback (existing tests) ─────────────────────────────
 

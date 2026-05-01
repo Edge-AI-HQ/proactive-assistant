@@ -376,10 +376,8 @@ export function startAutoLoop(
   state.started = true;
   state.wakeScheduler = deps.wakeScheduler ?? null;
 
-  // Run initial ingest immediately
-  void runIngest(api, config);
-
-  // Start ingest timer
+  // Do not run ingest on cold start. Gateway readiness and user reconnects
+  // should not wait behind slow external RSS/network fetches.
   state.ingestTimer = setInterval(() => {
     void runIngest(api, config);
   }, config.auto_ingest_interval_ms);

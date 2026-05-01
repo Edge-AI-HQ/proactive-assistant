@@ -3809,6 +3809,7 @@ export interface CreateEvolutionRunInput {
   windowEnd?: string | null;
   contextSummary?: string | null;
   promptExcerpt?: string | null;
+  startedAt?: string;
   /** Optional explicit id; if omitted a UUID is generated. */
   id?: string;
 }
@@ -3817,7 +3818,7 @@ export async function createEvolutionRun(
   input: CreateEvolutionRunInput,
 ): Promise<EvolutionRunRow> {
   const id = input.id ?? genId();
-  const ts = now();
+  const ts = input.startedAt ?? now();
   getDb().prepare(
     `INSERT INTO evolution_runs (
        id, trigger_kind, status,
@@ -3969,6 +3970,33 @@ export async function failEvolutionRun(runId: string, errorMessage: string): Pro
   const row = await getEvolutionRun(runId);
   if (!row) throw new Error(`failEvolutionRun: run ${runId} not found`);
   return row;
+}
+
+export interface FailStaleRunningEvolutionRunsInput {
+  triggerKind: EvolutionTrigger;
+  startedBefore: string;
+  errorMessage: string;
+  completedAt?: string;
+}
+
+export async function failStaleRunningEvolutionRuns(
+  input: FailStaleRunningEvolutionRunsInput,
+): Promise<number> {
+  const result = getDb().prepare(
+    `UPDATE evolution_runs
+       SET status = 'failed',
+           completed_at = ?,
+           error_message = ?
+     WHERE trigger_kind = ?
+       AND status = 'running'
+       AND started_at < ?`,
+  ).run(
+    input.completedAt ?? now(),
+    input.errorMessage,
+    input.triggerKind,
+    input.startedBefore,
+  );
+  return result.changes;
 }
 
 export interface ListEvolutionRunsOpts {

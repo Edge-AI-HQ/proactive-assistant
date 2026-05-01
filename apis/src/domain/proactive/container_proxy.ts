@@ -22,6 +22,20 @@ import { getContainerForUser } from './user_service.js';
  * worth the trade for invariant correctness.
  */
 const proxyAgent = new http.Agent({ keepAlive: false });
+const LONG_RUNNING_PROXY_TIMEOUT_MS = 600_000;
+const HEALTH_PROXY_TIMEOUT_MS = 4_000;
+
+export function rewriteProactiveProxyPath(originalUrl: string): string {
+  return originalUrl.replace(/^\/api\/proxy\/?/, '/proactive-ai/api/');
+}
+
+export function getProactiveProxyTimeoutMs(method: string, proxyPath: string): number {
+  const pathname = proxyPath.split('?', 1)[0];
+  if (method.toUpperCase() === 'GET' && pathname === '/proactive-ai/api/health') {
+    return HEALTH_PROXY_TIMEOUT_MS;
+  }
+  return LONG_RUNNING_PROXY_TIMEOUT_MS;
+}
 
 export function createProactiveProxy(orchestrator: ProactiveContainerOrchestrator) {
   return async function proxyHandler(req: Request, res: Response): Promise<void> {
@@ -73,7 +87,8 @@ export function createProactiveProxy(orchestrator: ProactiveContainerOrchestrato
     }
 
     // Rewrite path: /api/proxy/generate → /proactive-ai/api/generate
-    const proxyPath = req.originalUrl.replace(/^\/api\/proxy\/?/, '/proactive-ai/api/');
+    const proxyPath = rewriteProactiveProxyPath(req.originalUrl);
+    const upstreamTimeoutMs = getProactiveProxyTimeoutMs(req.method, proxyPath);
 
     // Proxy the request
     const targetUrl = new URL(proxyPath, target.httpBaseUrl);
@@ -133,7 +148,7 @@ export function createProactiveProxy(orchestrator: ProactiveContainerOrchestrato
           method: req.method,
           headers: proxyHeaders,
           agent: proxyAgent,                    // no keep-alive: avoid stale sockets
-          timeout: 600_000, // 10 minutes for long pipeline runs
+          timeout: upstreamTimeoutMs,
         },
         (proxyRes) => {
           const contentType = proxyRes.headers['content-type'] ?? '';
@@ -171,6 +186,14 @@ export function createProactiveProxy(orchestrator: ProactiveContainerOrchestrato
           }
         }
       );
+
+      proxyReq.setTimeout(upstreamTimeoutMs, () => {
+        const err = new Error(
+          `Container proxy timeout after ${upstreamTimeoutMs}ms`,
+        ) as Error & { code?: string };
+        err.code = 'ETIMEDOUT';
+        proxyReq.destroy(err);
+      });
 
       proxyReq.on('error', (err: Error & { code?: string }) => {
         if (

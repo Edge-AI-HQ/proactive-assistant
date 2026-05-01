@@ -13,6 +13,7 @@ import {
   completeEvolutionRun,
   createEvolutionRun,
   failEvolutionRun,
+  failStaleRunningEvolutionRuns,
   getEvolutionRun,
   listEvolutionRuns,
   recordEvolutionDelta,
@@ -130,6 +131,46 @@ test('failEvolutionRun: sets status=failed and stores error_message', async () =
     assert.equal(failed.status, 'failed');
     assert.equal(failed.error_message, 'LLM timeout');
     assert.ok(failed.completed_at);
+  });
+});
+
+test('failStaleRunningEvolutionRuns: marks all matching stale rows failed', async () => {
+  await withTempHome(async () => {
+    const staleStartedAt = '2026-04-23T00:00:00.000Z';
+    const freshStartedAt = '2026-04-24T00:04:59.000Z';
+    const cutoff = '2026-04-24T00:00:00.000Z';
+
+    for (let index = 0; index < 250; index++) {
+      await createEvolutionRun({
+        triggerKind: 'daily_dream',
+        startedAt: staleStartedAt,
+        id: `stale-dream-${index}`,
+      });
+    }
+    const fresh = await createEvolutionRun({
+      triggerKind: 'daily_dream',
+      startedAt: freshStartedAt,
+      id: 'fresh-dream',
+    });
+    const otherTrigger = await createEvolutionRun({
+      triggerKind: 'chat_burst',
+      startedAt: staleStartedAt,
+      id: 'stale-chat',
+    });
+
+    const changed = await failStaleRunningEvolutionRuns({
+      triggerKind: 'daily_dream',
+      startedBefore: cutoff,
+      errorMessage: 'stale daily dream',
+      completedAt: '2026-04-24T00:05:00.000Z',
+    });
+
+    assert.equal(changed, 250);
+    assert.equal((await listEvolutionRuns({ triggerKind: 'daily_dream', status: 'running' })).length, 1);
+    assert.equal((await getEvolutionRun(fresh.id))!.status, 'running');
+    assert.equal((await getEvolutionRun(otherTrigger.id))!.status, 'running');
+    assert.equal((await getEvolutionRun('stale-dream-0'))!.status, 'failed');
+    assert.equal((await getEvolutionRun('stale-dream-249'))!.error_message, 'stale daily dream');
   });
 });
 
