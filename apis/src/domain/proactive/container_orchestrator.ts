@@ -58,6 +58,7 @@ function buildContainerEnv(
   const openclawConfig = buildOpenclawConfig(openclawConfigContext, {
     gatewayToken: params.gatewayToken,
     gatewayBind: config.container.runtime === 'docker' ? 'lan' : 'loopback',
+    mdnsMode: config.container.runtime === 'fly' ? 'off' : undefined,
     liteLlmApiKey: litellmApiKey || null,
   }) as Record<string, unknown>;
 

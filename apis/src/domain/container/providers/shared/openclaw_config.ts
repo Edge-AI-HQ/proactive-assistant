@@ -16,6 +16,7 @@ import {
 } from "../../../skills/openclaw_skills.js";
 
 export type GatewayBindMode = "lan" | "loopback";
+export type MdnsDiscoveryMode = "off";
 
 export interface OpenclawConfigContext {
   openclaw: OpenclawConfig;
@@ -143,6 +144,7 @@ export const buildLiteLLMModelsSection = (
 export interface BuildOpenclawConfigOptions {
   gatewayToken: string;
   gatewayBind: GatewayBindMode;
+  mdnsMode?: MdnsDiscoveryMode | undefined;
   liteLlmApiKey?: string | null;
   controlOrigin?: string;
   skillsConfig?: UnknownRecord | null;
@@ -177,6 +179,12 @@ export const buildOpenclawConfig = (
       tts: { auto: "off" },
     },
   };
+
+  if (options.mdnsMode) {
+    next.discovery = {
+      mdns: { mode: options.mdnsMode },
+    };
+  }
 
   if (context.litellm.enabled) {
     const liteLlmSections = buildLiteLLMModelsSection(

@@ -282,6 +282,7 @@ GET /proactive-ai/api/tasks?type=connector.init&status=running&limit=10
 - 本机全局代理可能导致 `flyctl` 和 Docker push 失败，deploy 命令已内置 `env -u` 处理。
 - LiteLLM budget 错误可能来自 DB spend/max_budget 状态，不一定是 API key 缺失。
 - APIs proxy、desktop OpenClaw auth、用户容器内 plugin 是不同 runtime，排障时不要混在一起。
+- Fly assistant machine 的 OpenClaw 配置必须关 mDNS：`discovery.mdns.mode=off`。mDNS/Bonjour 是局域网发现机制，在 Fly 容器里不提供前端连接所需能力，反而可能拖住 gateway readiness；不要用 `BACKGROUND_AUTO_LOOP_TASKS_ENABLED=0` 当作长期绕过。
 
 ## 相关模块
 
