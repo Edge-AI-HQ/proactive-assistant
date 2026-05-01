@@ -25,6 +25,7 @@ import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import type { TaskHandler, TaskHandlerResult } from '../scheduler.js';
 
 const DREAM_HEARTBEAT_LEASE_MS = 600_000;  // 10 min per heartbeat
+const DREAM_HEARTBEAT_INTERVAL_MS = 60_000;
 
 export interface AutoDreamingHandlerDeps {
   /** Production: pass api so the handler can call runDreaming(api, ...). */
@@ -34,6 +35,10 @@ export interface AutoDreamingHandlerDeps {
    * When provided, wins over deps.api.
    */
   dreamRunner?: AutoDreamingRunner;
+  /**
+   * Test injection. Production keeps a 60s cadence, well inside the 10m lease.
+   */
+  heartbeatIntervalMs?: number;
 }
 
 export type AutoDreamingRunner = () => Promise<AutoDreamingRunResult>;
@@ -52,13 +57,14 @@ export function createAutoDreamingHandler(deps: AutoDreamingHandlerDeps): TaskHa
 
     // Long heartbeat lease — dreaming can take minutes. The reaper won't
     // touch us as long as we stay under leaseDurationMs after the last
-    // heartbeat. We heartbeat once at start (next bump happens at the
-    // 'completed' marker below).
+    // heartbeat. Heartbeat once before starting, then keep renewing while
+    // the dream pipeline is running.
     if (!(await ctx.heartbeat({ stage: 'running' }, { leaseDurationMs: DREAM_HEARTBEAT_LEASE_MS }))) {
       return abortLeaseLost();
     }
 
     const startedAt = Date.now();
+    const heartbeat = startPeriodicHeartbeat(ctx, startedAt, deps.heartbeatIntervalMs);
     let result: AutoDreamingRunResult;
     try {
       if (deps.dreamRunner) {
@@ -84,6 +90,12 @@ export function createAutoDreamingHandler(deps: AutoDreamingHandlerDeps): TaskHa
         errorCode: 'dream_failed',
         errorMessage: truncate(msg, 800),
       };
+    } finally {
+      heartbeat.stop();
+    }
+
+    if (heartbeat.leaseWasLost()) {
+      return abortLeaseLost();
     }
 
     return {
@@ -97,6 +109,51 @@ export function createAutoDreamingHandler(deps: AutoDreamingHandlerDeps): TaskHa
   };
 }
 
+function startPeriodicHeartbeat(
+  ctx: Parameters<TaskHandler>[0],
+  startedAt: number,
+  intervalMs = DREAM_HEARTBEAT_INTERVAL_MS,
+): { stop(): void; leaseWasLost(): boolean } {
+  let stopped = false;
+  let leaseLost = false;
+  let heartbeatCount = 0;
+  let inFlight = false;
+
+  const timer = setInterval(() => {
+    if (stopped || inFlight) return;
+    inFlight = true;
+    heartbeatCount += 1;
+    void ctx.heartbeat({
+      stage: 'running',
+      heartbeatCount,
+      elapsedMs: Date.now() - startedAt,
+    }, { leaseDurationMs: DREAM_HEARTBEAT_LEASE_MS })
+      .then((ok) => {
+        if (!ok) {
+          leaseLost = true;
+          stopped = true;
+          clearInterval(timer);
+        }
+      })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.logger.warn(`[auto.dreaming] heartbeat failed: ${msg}`);
+      })
+      .finally(() => {
+        inFlight = false;
+      });
+  }, intervalMs);
+  if (typeof timer.unref === 'function') timer.unref();
+
+  return {
+    stop: () => {
+      stopped = true;
+      clearInterval(timer);
+    },
+    leaseWasLost: () => leaseLost,
+  };
+}
+
 function failHard(code: string, message: string): TaskHandlerResult {
   return { status: 'failed', errorCode: code, errorMessage: message };
 }
@@ -105,7 +162,7 @@ function abortLeaseLost(): TaskHandlerResult {
   return {
     status: 'failed',
     errorCode: 'lease_lost',
-    errorMessage: 'lease lost before dream started',
+    errorMessage: 'lease lost while running dream',
   };
 }
 

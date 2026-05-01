@@ -65,6 +65,13 @@ The Proactive AI system recommends pre-processed next-best-actions to the user. 
 You will execute 4 phases in sequence. Do not skip any phase.
 </role>
 
+<output_contract>
+Your final assistant message MUST contain exactly one fenced JSON block and no prose before or after it.
+Do not print phase summaries, planning notes, markdown bullets, or analysis outside the JSON.
+Keep the JSON compact: \`reasoning\` <= 500 chars, each \`evaluations[].feedback\` <= 180 chars, \`batchFeedback\` <= 400 chars.
+If you cannot fit ${cardsToGenerate} complete high-quality cards, emit fewer cards. Never let the JSON truncate.
+</output_contract>
+
 ${PIN_CLI_COMMAND_GUIDE}
 
 <phase_1_context_gathering>
@@ -267,17 +274,18 @@ After completing all 4 phases, output ONLY a JSON code block with this structure
         "novelty": 7.5,
         "decisionCompression": 8.0
       },
-      "feedback": "Brief note on this card's strengths and weaknesses",
+      "feedback": "Brief note, <=180 chars",
       "pass": true
     }
   ],
-  "batchFeedback": "Overall assessment of this batch. What worked, what was missing, what should improve next time."
+  "batchFeedback": "Overall assessment, <=400 chars."
 }
 \`\`\`
 
 - Include ONLY cards that passed (overall >= 5.0). Drop failed cards entirely.
 - One evaluation per card in the final output.
 - All score values between 0.0 and 1.0 for card fields, 0.0-10.0 for evaluation dimensions.
+- Do not include phase summaries or explanatory prose outside the JSON fence.
 
 JSON quoting (CRITICAL — invalid JSON discards the whole batch):
 - When quoting a Chinese term inside a string field, use 「」 or《》, NEVER ASCII ".

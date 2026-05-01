@@ -73,6 +73,28 @@ async function updateLiteLLMFields(internalUserId: number, params: {
 const KEY_ALIAS_PREFIX = 'proactive-';
 const DEFAULT_BUDGET_USD = 10; // $10 default per-user budget
 
+const normalizeModelId = (value: string): string => value.trim().replace(/^litellm\//i, '');
+
+export function buildProactiveLiteLLMKeyModels(): string[] {
+  const models: string[] = [];
+  const pushUnique = (candidate: string): void => {
+    const normalized = normalizeModelId(candidate);
+    if (!normalized || models.includes(normalized)) return;
+    models.push(normalized);
+  };
+
+  pushUnique(config.litellm.openclawDefaultModel);
+  config.litellm.allowedModels.forEach(pushUnique);
+
+  return models;
+}
+
+function cachedKeyMayHaveStaleModelAllowlist(): boolean {
+  const defaultModel = normalizeModelId(config.litellm.openclawDefaultModel);
+  if (!defaultModel || config.litellm.allowedModels.length === 0) return false;
+  return !config.litellm.allowedModels.some((model) => normalizeModelId(model) === defaultModel);
+}
+
 /**
  * Ensure a proactive user has a LiteLLM virtual key.
  * Returns the key (creates LiteLLM user + key if missing).
@@ -94,7 +116,12 @@ export async function ensureProactiveLiteLLMKey(userId: string): Promise<string>
   // DB is the single source of truth for usable keys. Only trust sk-* values;
   // anything else (NULL, empty, or a hashed token from a previous bug) is stale.
   const cachedKey = user.litellm_virtual_key?.trim();
-  if (cachedKey && cachedKey.startsWith(LITELLM_VIRTUAL_KEY_PREFIX)) {
+  const desiredModels = buildProactiveLiteLLMKeyModels();
+  if (
+    cachedKey &&
+    cachedKey.startsWith(LITELLM_VIRTUAL_KEY_PREFIX) &&
+    !cachedKeyMayHaveStaleModelAllowlist()
+  ) {
     return cachedKey;
   }
 
@@ -102,6 +129,10 @@ export async function ensureProactiveLiteLLMKey(userId: string): Promise<string>
 
   const litellmUserId = `proactive-${userId}`;
   const keyAlias = `${KEY_ALIAS_PREFIX}${userId.slice(0, 8)}`;
+
+  if (cachedKey?.startsWith(LITELLM_VIRTUAL_KEY_PREFIX)) {
+    await deleteLiteLLMKey([cachedKey]).catch(() => {});
+  }
 
   // Create LiteLLM user (idempotent — 409 is swallowed)
   await createLiteLLMUser({
@@ -128,7 +159,7 @@ export async function ensureProactiveLiteLLMKey(userId: string): Promise<string>
     budgetDuration: config.litellm.defaultBudgetDuration || '30d',
     rpmLimit: config.litellm.defaultRpmLimit ?? null,
     tpmLimit: config.litellm.defaultTpmLimit ?? null,
-    models: config.litellm.allowedModels.length > 0 ? config.litellm.allowedModels : [],
+    models: desiredModels,
     metadata: { source: 'proactive-ai', proactive_user_id: userId },
   });
 

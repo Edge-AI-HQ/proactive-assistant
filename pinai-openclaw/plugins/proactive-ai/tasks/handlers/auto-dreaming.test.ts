@@ -161,3 +161,33 @@ test('handler heartbeats with extended lease before calling the dream', async ()
     assert.ok(fromNow > 60_000, `lease should be > 60s out, got ${fromNow}ms`);
   });
 });
+
+test('handler keeps heartbeating while dreamRunner is in flight', async () => {
+  await withTempHome(async () => {
+    await enqueueBackgroundTask({
+      type: 'auto.dreaming',
+      idempotencyKey: 'lease-renew-while-running',
+      maxAttempts: 1,
+      payload: { trigger: 'auto' },
+    });
+
+    const s = new BackgroundTaskScheduler({
+      workerId: 'w',
+      leaseDurationMs: 10_000,
+    });
+    s.registerHandler('auto.dreaming', createAutoDreamingHandler({
+      heartbeatIntervalMs: 5,
+      dreamRunner: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return { runId: 'r' };
+      },
+    }));
+
+    await s.tick();
+
+    const task = await getBackgroundTask((await listBackgroundTasks({ type: 'auto.dreaming', limit: 1 }))[0]!.id);
+    assert.equal(task?.status, 'succeeded');
+    const heartbeatCount = Number(task?.progress?.heartbeatCount ?? 0);
+    assert.ok(heartbeatCount >= 1, `expected periodic heartbeat, got ${heartbeatCount}`);
+  });
+});
