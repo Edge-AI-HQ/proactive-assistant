@@ -206,7 +206,33 @@ export function usePipeline() {
             activePhase: data.phase ?? prev.activePhase,
           }));
           appendLog(makeLogEntry("system", "Reconnected", "Pipeline is still running on the backend"));
-        } else if (!data.pipelineRunning && data.lastResult && run.status !== "complete" && run.finalCards.length === 0) {
+        } else if (!data.pipelineRunning && data.latestRun?.status === "failed" && run.status !== "error") {
+          setRun((prev) => ({
+            ...prev,
+            runId: typeof data.latestRun.id === "string" ? data.latestRun.id : prev.runId,
+            status: "error",
+            activePhase: null,
+            finalCards: [],
+            error: typeof data.latestRun.error === "string" ? data.latestRun.error : "Pipeline failed",
+            completedAt:
+              typeof data.latestRun.completedAt === "string"
+                ? data.latestRun.completedAt
+                : new Date().toISOString(),
+          }));
+          appendLog(
+            makeLogEntry(
+              "error",
+              "Pipeline failed",
+              typeof data.latestRun.error === "string" ? data.latestRun.error : "Backend returned failed",
+            ),
+          );
+        } else if (
+          !data.pipelineRunning &&
+          data.lastResult &&
+          (!data.latestRun || data.latestRun.status === "completed") &&
+          run.status !== "complete" &&
+          run.finalCards.length === 0
+        ) {
           const recoveredCards = normalizeIntentCards(data.lastResult.finalCards);
           const recoveredFeedback =
             typeof data.lastResult.batchFeedback === "string"

@@ -162,4 +162,54 @@ describe("usePipeline health polling", () => {
 
     unmount();
   });
+
+  test("does not recover stale cards when latest backend run failed", async () => {
+    mockProxyFetch.mockImplementation(async (path) => {
+      if (path === "/health") {
+        return jsonResponse({ ok: true, pipelineRunning: false });
+      }
+      if (path === "/status") {
+        return jsonResponse({
+          ok: true,
+          pipelineRunning: false,
+          latestRun: {
+            id: "run_new_failed",
+            status: "failed",
+            completedAt: "2026-05-01T03:46:48.820Z",
+            error: "subagent aborted",
+          },
+          lastResult: {
+            id: "run_old_completed",
+            status: "completed",
+            completedAt: "2026-04-16T04:51:05.050Z",
+            finalCards: [
+              {
+                id: "old_1",
+                goalBasket: "work",
+                title: "Old English card",
+                whyNow: "Because an old run completed",
+                primaryAction: { label: "Do it", type: "confirm" },
+                secondaryActions: [],
+                confidence: 0.8,
+                urgency: 0.5,
+                importance: 0.7,
+                sources: [],
+              },
+            ],
+          },
+        });
+      }
+      throw new Error(`unexpected proxy path ${path}`);
+    });
+
+    const { result, unmount } = renderHook(() => usePipeline());
+    await flushAsyncWork();
+
+    expect(result.current.run.status).toBe("error");
+    expect(result.current.run.runId).toBe("run_new_failed");
+    expect(result.current.run.finalCards).toHaveLength(0);
+    expect(result.current.run.error).toBe("subagent aborted");
+
+    unmount();
+  });
 });
