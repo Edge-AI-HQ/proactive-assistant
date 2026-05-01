@@ -278,6 +278,10 @@ ios: ensure-env ## Build frontend, sync iOS, and open Xcode. Backend selection (
 	@echo ""
 	@echo "Xcode is open. Select your device at the top, then press Cmd+R to build and run."
 
+# Capacitor 8 emits Java 21 bytecode. This target selects a JDK 21+ before
+# invoking Gradle, so verify phone installs through `make android` first.
+# Direct `android/gradlew` under the shell's JAVA_HOME is only for debugging
+# this target itself.
 android: ensure-env ## Build frontend, sync Android, install debug APK to a USB device, and launch it. Backend selection: NGROK=<url> | DEV=1 | PROD=1 | default = local LAN. Device: ANDROID_SERIAL=<serial>.
 	@set -e; \
 	set -a && . ./apis/.env && set +a; \
