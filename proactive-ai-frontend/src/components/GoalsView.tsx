@@ -396,12 +396,14 @@ function hasObjectKeys(value: Record<string, unknown> | null | undefined): boole
 function rawCount(
   raw: RawPreview,
   generic: Record<string, { rows: RawTableRow[]; total: number }>,
+  genericCounts: Record<string, number>,
   panel: RawPanel,
 ): number {
   if (panel === "gmail") return raw.gmailTotal;
   if (panel === "gcal") return raw.gcalTotal;
   const deviceId = deviceIdFromPanel(panel);
   if (deviceId) return raw.devices.find((device) => device.deviceId === deviceId)?.total ?? 0;
+  if (typeof genericCounts[panel] === "number") return genericCounts[panel];
   return generic[panel]?.total ?? 0;
 }
 
@@ -437,6 +439,7 @@ function formatDeviceSourceLabel(deviceId: string, device: UserDevice | null | u
 function buildRawSourceOptions(
   raw: RawPreview,
   generic: Record<string, { rows: RawTableRow[]; total: number }>,
+  genericCounts: Record<string, number>,
   connections: ComposioState["connections"],
 ): RawSourceOption[] {
   const connectedToolkits = new Set(
@@ -447,7 +450,7 @@ function buildRawSourceOptions(
 
   const connectorSources = RAW_SOURCE_CONFIG
     .map((source) => {
-      const count = rawCount(raw, generic, source.id);
+      const count = rawCount(raw, generic, genericCounts, source.id);
       const connected = (source.connectorToolkits ?? []).some((toolkit) => connectedToolkits.has(normalizeToolkit(toolkit)));
 
       return {
@@ -475,6 +478,22 @@ function buildRawSourceOptions(
   const otherConnectors = connectorSources.filter((source) => source.id !== "gmail" && source.id !== "gcal");
 
   return [...primaryConnectors, ...deviceSources, ...otherConnectors];
+}
+
+function connectedGenericRawSources(
+  connections: ComposioState["connections"],
+): Array<{ id: RawPanel; table: string }> {
+  const connectedToolkits = new Set(
+    connections
+      .filter((conn) => conn.status === "ACTIVE")
+      .map((conn) => normalizeToolkit(conn.toolkit)),
+  );
+
+  return RAW_SOURCE_CONFIG.flatMap((source) => {
+    if (!source.table) return [];
+    const connected = (source.connectorToolkits ?? []).some((toolkit) => connectedToolkits.has(normalizeToolkit(toolkit)));
+    return connected ? [{ id: source.id, table: source.table }] : [];
+  });
 }
 
 type PillTone = "neutral" | "source" | "subject" | "quality" | "confidence" | "status" | "device";
@@ -574,7 +593,14 @@ function EmptyState({ title, description }: { title: string; description: string
 
 function countProfileFields(profile: ProfileSnapshot["profile"]): number {
   if (!profile) return 0;
-  return PROFILE_GROUP_META.reduce((sum, group) => sum + Object.keys(profile[group.key] ?? {}).length, 0);
+  const topLevelFields = [
+    profile.display_name,
+    profile.locale,
+    profile.timezone,
+    profile.summary,
+  ].filter((value) => typeof value === "string" && value.trim().length > 0).length;
+  const groupedFields = PROFILE_GROUP_META.reduce((sum, group) => sum + Object.keys(profile[group.key] ?? {}).length, 0);
+  return topLevelFields + groupedFields;
 }
 
 function MetricCard({
@@ -1365,7 +1391,9 @@ export default function GoalsView({ composio }: GoalsViewProps) {
   // when the user picks a panel from the dropdown so we don't fan out 22
   // requests on every page load.
   const [genericRaw, setGenericRaw] = useState<Record<string, { rows: RawTableRow[]; total: number }>>({});
+  const [genericRawCounts, setGenericRawCounts] = useState<Record<string, number>>({});
   const [genericLoading, setGenericLoading] = useState<Set<string>>(new Set());
+  const genericCountLoadingRef = useRef<Set<string>>(new Set());
   const [activePanel, setActivePanel] = useState<DataPanel>("memory");
   const [activeRawPanel, setActiveRawPanel] = useState<RawPanel>("gmail");
   const [loading, setLoading] = useState(true);
@@ -1457,8 +1485,12 @@ export default function GoalsView({ composio }: GoalsViewProps) {
     [snapshot.goals],
   );
   const rawSources = useMemo(
-    () => buildRawSourceOptions(rawPreview, genericRaw, composio.connections),
-    [rawPreview, genericRaw, composio.connections],
+    () => buildRawSourceOptions(rawPreview, genericRaw, genericRawCounts, composio.connections),
+    [rawPreview, genericRaw, genericRawCounts, composio.connections],
+  );
+  const genericCountTargets = useMemo(
+    () => connectedGenericRawSources(composio.connections),
+    [composio.connections],
   );
 
   useEffect(() => {
@@ -1468,6 +1500,53 @@ export default function GoalsView({ composio }: GoalsViewProps) {
       setActiveRawPanel(nextPanel);
     }
   }, [activeRawPanel, rawSources]);
+
+  // Keep the headline Raw total honest for connected generic connectors
+  // without eagerly loading full row previews for every table.
+  useEffect(() => {
+    const targets = genericCountTargets.filter(
+      (source) => genericRawCounts[source.id] === undefined && !genericCountLoadingRef.current.has(source.id),
+    );
+    if (targets.length === 0) return;
+
+    let cancelled = false;
+    const controller = new AbortController();
+    const targetIds = targets.map((source) => source.id);
+
+    targetIds.forEach((id) => genericCountLoadingRef.current.add(id));
+
+    Promise.allSettled(
+      targets.map(async (source) => {
+        const res = await fetchRawTable(source.table, { limit: 1 }, controller.signal);
+        return { id: source.id, total: res.total };
+      }),
+    )
+      .then((results) => {
+        if (cancelled) return;
+        setGenericRawCounts((prev) => {
+          const next = { ...prev };
+          results.forEach((result, index) => {
+            const id = targetIds[index];
+            if (!id) return;
+            if (result.status === "fulfilled") {
+              next[id] = result.value.total;
+            } else {
+              console.warn(`[GoalsView] fetchRawTable count ${id} failed:`, result.reason);
+              next[id] = prev[id] ?? genericRaw[id]?.total ?? 0;
+            }
+          });
+          return next;
+        });
+      })
+      .finally(() => {
+        targetIds.forEach((id) => genericCountLoadingRef.current.delete(id));
+      });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [genericCountTargets, genericRawCounts, genericRaw]);
 
   // Lazy-fetch generic raw rows when user selects a non-specialized panel.
   // Cache hits skip the fetch; in-flight requests are deduped via genericLoading.
@@ -1488,6 +1567,10 @@ export default function GoalsView({ composio }: GoalsViewProps) {
         setGenericRaw((prev) => ({
           ...prev,
           [activeRawPanel]: { rows: res.rows, total: res.total },
+        }));
+        setGenericRawCounts((prev) => ({
+          ...prev,
+          [activeRawPanel]: res.total,
         }));
       })
       .catch((err) => {

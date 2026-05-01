@@ -82,17 +82,17 @@ const mockFetchRawTable = vi.mocked(api.fetchRawTable);
 const mockFetchSignals = vi.mocked(api.fetchSignals);
 const mockListUserDevices = vi.mocked(api.listUserDevices);
 
-function makeComposioState(): ComposioState {
+function makeComposioState(connections: ComposioState["connections"] = [
+  {
+    toolkit: "slack",
+    status: "ACTIVE",
+    connectedAccountId: "slack-account",
+    userInfo: null,
+  },
+]): ComposioState {
   return {
     keyStatus: { configured: true },
-    connections: [
-      {
-        toolkit: "slack",
-        status: "ACTIVE",
-        connectedAccountId: "slack-account",
-        userInfo: null,
-      },
-    ],
+    connections,
     statusLoading: false,
     loadingConns: false,
     loadStatus: vi.fn(async () => undefined),
@@ -135,8 +135,8 @@ describe("GoalsView", () => {
     mockFetchRawTable.mockResolvedValue({ ok: true, rows: [], total: 0, table: "slack_messages" });
   });
 
-  test("does not fetch generic raw tables on initial profile load", async () => {
-    render(<GoalsView composio={makeComposioState()} />);
+  test("does not fetch generic raw counts when no generic connector is active", async () => {
+    render(<GoalsView composio={makeComposioState([])} />);
 
     await waitFor(() => expect(mockFetchProfileSnapshot).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(mockFetchRawDeviceHealth).toHaveBeenCalledTimes(1));
@@ -145,13 +145,60 @@ describe("GoalsView", () => {
     expect(mockFetchRawTable).not.toHaveBeenCalled();
   });
 
+  test("counts populated top-level profile fields in the profile metric", async () => {
+    mockFetchProfileSnapshot.mockResolvedValueOnce({
+      profile: {
+        id: "profile-1",
+        user_id: "local-user",
+        display_name: "Smile",
+        locale: "zh-CN",
+        timezone: "Asia/Shanghai",
+        summary: "Builds proactive AI products.",
+        facts: {},
+        preferences: {},
+        constraints: {},
+        metadata: {},
+      },
+      goals: [],
+      memories: [],
+      signals: [],
+      interests: [],
+    });
+
+    render(<GoalsView composio={makeComposioState([])} />);
+
+    await waitFor(() => {
+      const hasProfileCount = screen.getAllByRole("button").some((button) => (
+        /Profile\s*4\s*fields/i.test(button.textContent ?? "")
+      ));
+      expect(hasProfileCount).toBe(true);
+    });
+  });
+
+  test("includes active generic connector raw counts in the profile raw total", async () => {
+    mockFetchRawGmail.mockResolvedValueOnce({ ok: true, messages: [], total: 200 });
+    mockFetchRawGcal.mockResolvedValueOnce({ ok: true, events: [], total: 100 });
+    mockFetchRawTable.mockResolvedValueOnce({ ok: true, rows: [], total: 17, table: "slack_messages" });
+
+    render(<GoalsView composio={makeComposioState()} />);
+
+    await waitFor(() => {
+      expect(mockFetchRawTable).toHaveBeenCalledWith("slack_messages", { limit: 1 }, expect.any(AbortSignal));
+    });
+    await waitFor(() => {
+      expect(screen.getAllByText("317").length).toBeGreaterThan(0);
+    });
+  });
+
   test("fetches generic raw table after the raw panel opens", async () => {
     render(<GoalsView composio={makeComposioState()} />);
 
     await waitFor(() => expect(mockFetchProfileSnapshot).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(mockFetchRawDeviceHealth).toHaveBeenCalledTimes(1));
     await flushEffects();
-    expect(mockFetchRawTable).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(mockFetchRawTable).toHaveBeenCalledWith("slack_messages", { limit: 1 }, expect.any(AbortSignal));
+    });
 
     const rawButtons = screen.getAllByRole("button", { name: /Raw/i });
     fireEvent.click(rawButtons[rawButtons.length - 1]);
