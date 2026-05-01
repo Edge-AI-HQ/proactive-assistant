@@ -4,12 +4,24 @@ import {
   Zap, ArrowRight, Pencil, MessageCircle, CheckCircle2, X,
   Clock, Send, CircleCheck,
 } from "lucide-react";
-import type { IntentCard, EvaluationScore } from "@/types/intent-card";
+import type { IntentCard } from "@/types/intent-card";
 import { basketMeta } from "@/lib/basket-meta";
+
+/**
+ * Minimal score shape the detail panel actually reads. Loosened from the
+ * full EvaluationScore so the cross-run /cards endpoint (which only carries
+ * overall+pass) and the legacy run.scoreMap entries (full EvaluationScore)
+ * both satisfy it structurally.
+ */
+type DetailScore = {
+  overall: number;
+  pass?: boolean;
+  feedback?: string;
+};
 
 interface CardDetailBodyProps {
   card: IntentCard;
-  score?: EvaluationScore | null;
+  score?: DetailScore | null;
   onChat: () => void;
   onDismiss: () => void;
   onConfirm: () => void;

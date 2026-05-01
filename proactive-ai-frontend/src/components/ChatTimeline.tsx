@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
   Loader2, CheckCircle2, Circle, Sparkles,
 } from "lucide-react";
@@ -10,22 +10,15 @@ import {
   DrawerDescription,
 } from "@/components/ui/drawer";
 import CardDetailBody from "./CardDetailBody";
-import type { IntentCard, EvaluationScore } from "@/types/intent-card";
-import { normalizeIntentCards } from "@/types/intent-card";
-import { proxyFetch, proxyPost } from "@/lib/api";
+import type { IntentCard } from "@/types/intent-card";
+import { proxyPost } from "@/lib/api";
 import { basketMeta } from "@/lib/basket-meta";
-
-interface StoredRun {
-  id: string;
-  completedAt: string;
-  finalCards: IntentCard[];
-  scoreMap?: Record<string, EvaluationScore>;
-}
+import { useCards, type CardScore } from "@/hooks/useCards";
 
 type TimelineCard = IntentCard & {
   runId: string;
   runDate: string;
-  score: EvaluationScore | null;
+  score: CardScore | null;
 };
 
 interface ChatTimelineProps {
@@ -69,8 +62,7 @@ export default function ChatTimeline({
   onProcessingId,
   onChattedId,
 }: ChatTimelineProps) {
-  const [historicalRuns, setHistoricalRuns] = useState<StoredRun[]>([]);
-  const [loadingRuns, setLoadingRuns] = useState(true);
+  const cards = useCards();
   const [selectedCard, setSelectedCard] = useState<TimelineCard | null>(null);
 
   const handleDismiss = () => {
@@ -162,39 +154,12 @@ export default function ChatTimeline({
     }).catch(() => {});
   };
 
-  useEffect(() => {
-    const controller = new AbortController();
-    async function fetchRuns() {
-      try {
-        const res = await proxyFetch("/runs", { signal: controller.signal });
-        const data = await res.json();
-        if (!controller.signal.aborted && data.ok) {
-          setHistoricalRuns(
-            (data.runs ?? []).map((run: StoredRun) => ({
-              ...run,
-              finalCards: normalizeIntentCards(run.finalCards),
-            })),
-          );
-        }
-      } catch {
-        /* ignore */
-      } finally {
-        if (!controller.signal.aborted) setLoadingRuns(false);
-      }
-    }
-    fetchRuns();
-    const interval = window.setInterval(fetchRuns, 30_000);
-    return () => { controller.abort(); window.clearInterval(interval); };
-  }, []);
-
-  const allCards: TimelineCard[] = historicalRuns.flatMap((run) =>
-    (run.finalCards ?? []).map((card) => ({
-      ...card,
-      runId: run.id,
-      runDate: run.completedAt,
-      score: run.scoreMap?.[card.id] ?? null,
-    }))
-  );
+  const allCards: TimelineCard[] = cards.cards.map((entry) => ({
+    ...entry.card,
+    runId: entry.runId,
+    runDate: entry.runCompletedAt,
+    score: entry.score,
+  }));
 
   const grouped = new Map<string, TimelineCard[]>();
   for (const card of allCards) {
@@ -208,7 +173,7 @@ export default function ChatTimeline({
       <h1 className="text-display text-2xl text-foreground mb-1 pr-20">Timeline</h1>
       <p className="text-sm text-muted-foreground mb-6">AI memory &amp; action log</p>
 
-      {loadingRuns && (
+      {cards.loading && (
         <div className="flex items-center justify-center py-8 gap-2">
           <Loader2 size={16} className="animate-spin text-foreground/40" />
           <span className="text-[13px] text-foreground/40">Loading history...</span>
@@ -289,7 +254,7 @@ export default function ChatTimeline({
         </div>
       ))}
 
-      {!loadingRuns && allCards.length === 0 && (
+      {!cards.loading && allCards.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
           <div className="glass-card p-4 rounded-full">
             <Sparkles size={28} strokeWidth={1.5} className="text-foreground/40" />
