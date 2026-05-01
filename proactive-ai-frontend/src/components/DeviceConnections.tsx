@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronRight, Cpu, Loader2, Plus, Send, Smartphone, Trash2, Watch } from "lucide-react";
 import { useUserDevices } from "@/hooks/useUserDevices";
 import { type UserDevice, type UserDevicePlatform } from "@/lib/api";
@@ -21,6 +21,10 @@ export default function DeviceConnections() {
   const [addTab, setAddTab] = useState<AddTab>(null);
   const [selectedDevice, setSelectedDevice] = useState<UserDevice | null>(null);
 
+  const refreshDeviceList = useCallback(() => {
+    void refresh();
+  }, [refresh]);
+
   const peerDevices = useMemo(
     () => devices.filter((d) => d.platform !== "web"),
     [devices],
@@ -34,7 +38,8 @@ export default function DeviceConnections() {
     <div className="space-y-3 min-w-0">
       <SelfDevicePanel
         devices={devices}
-        onIngested={() => { void refresh(); }}
+        onDeviceReady={refreshDeviceList}
+        onIngested={refreshDeviceList}
         onOpenTimeline={(d) => setSelectedDevice(d)}
       />
       <div className="space-y-2">
@@ -166,10 +171,12 @@ function DeviceRow({
  */
 function SelfDevicePanel({
   devices,
+  onDeviceReady,
   onIngested,
   onOpenTimeline,
 }: {
   devices: UserDevice[];
+  onDeviceReady: (deviceId: string) => void;
   onIngested: (deviceId: string) => void;
   onOpenTimeline: (device: UserDevice) => void;
 }) {
@@ -184,10 +191,14 @@ function SelfDevicePanel({
     let cancelled = false;
     setBootstrapErr(null);
     ensureDevice()
-      .then((c) => { if (!cancelled) setCreds(c); })
+      .then((c) => {
+        if (cancelled) return;
+        setCreds(c);
+        onDeviceReady(c.deviceId);
+      })
       .catch((err) => { if (!cancelled) setBootstrapErr(err.message ?? String(err)); });
     return () => { cancelled = true; };
-  }, []);
+  }, [onDeviceReady]);
 
   const selfDevice = useMemo(
     () => (creds ? devices.find((d) => d.device_id === creds.deviceId) : undefined),
