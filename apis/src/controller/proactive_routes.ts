@@ -138,14 +138,15 @@ const pairCodeClaimLimit = createRateLimit({
 // ── Device registry ──
 // See docs/plans/memory-architecture.mdx §三 (APIs user_devices) and apis/db/migrations/002.
 //
-// POST /api/proactive/devices/register   { deviceId, platform, displayName?, appVersion?, metadata? }
+// POST /api/proactive/devices/register   { deviceId, platform, displayName?, appVersion?, deviceFingerprint?, metadata? }
 // GET  /api/proactive/devices            list active devices for the current user
 // POST /api/proactive/devices/revoke     { deviceId }
 //
 // On register/rotate, the response includes `device_token` PLAINTEXT — the
-// client MUST store it (Capacitor Preferences / iOS Keychain / Android
-// EncryptedSharedPreferences / web localStorage) and send X-Device-Token
-// + X-Device-Id on every subsequent /api/proactive/devices/ingest request.
+// client MUST store it securely (native secure storage / web localStorage) and
+// send X-Device-Token + X-Device-Id on every subsequent
+// /api/proactive/devices/ingest request. Native clients may also send an
+// app-scoped secure-storage UUID as deviceFingerprint for same-device dedupe.
 
 router.post('/api/proactive/devices/register', registerLimit, requireProactiveAuth, async (req, res) => {
   try {
@@ -153,6 +154,9 @@ router.post('/api/proactive/devices/register', registerLimit, requireProactiveAu
     const body = (req.body ?? {}) as Record<string, unknown>;
     const deviceId = String(body['deviceId'] ?? '').trim();
     const platform = String(body['platform'] ?? '').trim() as DevicePlatform;
+    const deviceFingerprint = typeof body['deviceFingerprint'] === 'string'
+      ? body['deviceFingerprint']
+      : null;
     if (!deviceId || !platform) {
       sendDomainError(res, 'INVALID_INPUT', 'Missing deviceId or platform');
       return;
@@ -164,6 +168,7 @@ router.post('/api/proactive/devices/register', registerLimit, requireProactiveAu
       displayName: typeof body['displayName'] === 'string' ? body['displayName'] : null,
       appVersion: typeof body['appVersion'] === 'string' ? body['appVersion'] : null,
       model: typeof body['model'] === 'string' ? body['model'] : null,
+      deviceFingerprint,
       metadata: body['metadata'] && typeof body['metadata'] === 'object'
         ? body['metadata'] as Record<string, unknown> : {},
     });

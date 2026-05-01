@@ -3,18 +3,20 @@
  *
  * On first launch the app generates a UUID v4 device id and exchanges
  * it for a long-lived token via POST /api/proactive/devices/register.
- * The token is stored locally and attached as X-Device-Id + X-Device-Token
- * to every POST /api/proactive/devices/ingest request, letting the cloud
- * route uploads to the correct user.
+ * Native clients persist the token in secure storage (iOS Keychain /
+ * Android Keystore-backed storage) and attach it as X-Device-Id +
+ * X-Device-Token to every POST /api/proactive/devices/ingest request.
  *
  * See docs/plans/memory-architecture.mdx §三 (APIs user_devices).
  */
 import { Capacitor } from "@capacitor/core";
+import { KeychainAccess, SecureStorage } from "@aparajita/capacitor-secure-storage";
 import { proactiveFetch } from "./api";
 import { API_BASE, isNative } from "./platform";
 
 const DEVICE_ID_KEY = "pin.deviceId";
 const DEVICE_TOKEN_KEY = "pin.deviceToken";
+const DEVICE_FINGERPRINT_KEY = "pin.deviceFingerprint";
 
 export type DevicePlatform = "ios" | "android" | "web";
 
@@ -39,7 +41,7 @@ function generateDeviceId(): string {
   return `dev-${Date.now().toString(36)}-${rand}`;
 }
 
-function readStored(): { deviceId: string | null; deviceToken: string | null } {
+function readLocalStored(): { deviceId: string | null; deviceToken: string | null } {
   try {
     return {
       deviceId: localStorage.getItem(DEVICE_ID_KEY),
@@ -50,7 +52,7 @@ function readStored(): { deviceId: string | null; deviceToken: string | null } {
   }
 }
 
-function writeStored(deviceId: string, deviceToken: string): void {
+function writeLocalStored(deviceId: string, deviceToken: string): void {
   try {
     localStorage.setItem(DEVICE_ID_KEY, deviceId);
     localStorage.setItem(DEVICE_TOKEN_KEY, deviceToken);
@@ -60,13 +62,79 @@ function writeStored(deviceId: string, deviceToken: string): void {
   }
 }
 
-function clearStored(): void {
+function clearLocalStored(): void {
   try {
     localStorage.removeItem(DEVICE_ID_KEY);
     localStorage.removeItem(DEVICE_TOKEN_KEY);
   } catch {
     /* ignore */
   }
+}
+
+async function readSecureValue(key: string): Promise<string | null> {
+  try {
+    return await SecureStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+async function writeSecureValue(key: string, value: string): Promise<void> {
+  await SecureStorage.set(key, value, false, false, KeychainAccess.afterFirstUnlockThisDeviceOnly);
+}
+
+async function removeSecureValue(key: string): Promise<void> {
+  try {
+    await SecureStorage.removeItem(key);
+  } catch {
+    /* ignore */
+  }
+}
+
+async function readStored(): Promise<{ deviceId: string | null; deviceToken: string | null }> {
+  if (!isNative) return readLocalStored();
+
+  const secureStored = {
+    deviceId: await readSecureValue(DEVICE_ID_KEY),
+    deviceToken: await readSecureValue(DEVICE_TOKEN_KEY),
+  };
+  if (secureStored.deviceId && secureStored.deviceToken) return secureStored;
+
+  const legacyStored = readLocalStored();
+  if (legacyStored.deviceId && legacyStored.deviceToken) {
+    await writeSecureValue(DEVICE_ID_KEY, legacyStored.deviceId);
+    await writeSecureValue(DEVICE_TOKEN_KEY, legacyStored.deviceToken);
+    return legacyStored;
+  }
+
+  return secureStored;
+}
+
+async function writeStored(deviceId: string, deviceToken: string): Promise<void> {
+  if (!isNative) {
+    writeLocalStored(deviceId, deviceToken);
+    return;
+  }
+  await writeSecureValue(DEVICE_ID_KEY, deviceId);
+  await writeSecureValue(DEVICE_TOKEN_KEY, deviceToken);
+}
+
+async function clearStored(): Promise<void> {
+  if (!isNative) {
+    clearLocalStored();
+    return;
+  }
+  await removeSecureValue(DEVICE_ID_KEY);
+  await removeSecureValue(DEVICE_TOKEN_KEY);
+}
+
+async function ensureDeviceFingerprint(): Promise<string | null> {
+  if (!isNative) return null;
+  const stored = await readSecureValue(DEVICE_FINGERPRINT_KEY);
+  if (stored) return stored;
+  const next = generateDeviceId();
+  await writeSecureValue(DEVICE_FINGERPRINT_KEY, next);
+  return next;
 }
 
 interface RegisterResponse {
@@ -84,26 +152,39 @@ interface RegisterResponse {
  */
 export async function ensureDevice(): Promise<DeviceCredentials> {
   const platform = detectPlatform();
-  const { deviceId: storedId, deviceToken: storedToken } = readStored();
+  const { deviceId: storedId, deviceToken: storedToken } = await readStored();
   if (storedId && storedToken) {
     return { deviceId: storedId, deviceToken: storedToken, platform };
   }
 
   const deviceId = storedId ?? generateDeviceId();
+  const deviceFingerprint = await ensureDeviceFingerprint();
   const displayName = isNative
     ? `${platform[0]?.toUpperCase()}${platform.slice(1)} app`
     : "Web";
+  const metadata = isNative
+    ? {
+        credential_store: "secure-storage",
+        device_fingerprint_source: "secure-storage-uuid",
+      }
+    : {};
 
   const res = await proactiveFetch("/api/proactive/devices/register", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ deviceId, platform, displayName }),
+    body: JSON.stringify({
+      deviceId,
+      platform,
+      displayName,
+      ...(deviceFingerprint ? { deviceFingerprint } : {}),
+      metadata,
+    }),
   });
   if (!res.ok) {
     throw new Error(`/devices/register failed: ${res.status}`);
   }
   const data = (await res.json()) as RegisterResponse;
-  writeStored(data.device.device_id, data.device_token);
+  await writeStored(data.device.device_id, data.device_token);
   return {
     deviceId: data.device.device_id,
     deviceToken: data.device_token,
@@ -130,8 +211,8 @@ export function withDeviceHeaders(
   };
 }
 
-export function clearDeviceCredentials(): void {
-  clearStored();
+export async function clearDeviceCredentials(): Promise<void> {
+  await clearStored();
 }
 
 // ── Ingest signals ───────────────────────────────────────────────────────
@@ -209,7 +290,7 @@ export async function ingestSignals(
   if (!res.ok) {
     if (res.status === 401) {
       // Stale token — drop the cache so next ensureDevice() re-registers.
-      clearStored();
+      await clearStored();
     }
     throw new Error(`/devices/ingest failed: ${res.status} ${await res.text().catch(() => "")}`);
   }

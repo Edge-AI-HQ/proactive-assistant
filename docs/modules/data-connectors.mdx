@@ -217,7 +217,7 @@ sequenceDiagram
 - `/composio/wait` 默认返回 `initTaskId`；仅在 `BACKGROUND_AUTO_LOOP_TASKS_ENABLED=0` 等显式关闭值时保持旧行为，前端 chip 不渲染。
 - `personal_signals.dedupe_key` 包含 `connectedAccountId` + 自然主键 + `:init:v1`，相同 toolkit 多账号不会重复入。
 - 每个 raw 表都带 `dedupe_key UNIQUE` + reference 三元组（`reference_count` / `last_referenced_at` / `referenced_by_runs`）。
-- Device token 只在注册/轮换时明文返回一次，服务端只保存 bcrypt hash。
+- Device token 只在注册/轮换时明文返回一次，服务端只保存 bcrypt hash。native 端同时维护一个 app-scoped secure-storage UUID（iOS Keychain / Android secure storage）作为 `deviceFingerprint`，服务端只保存其 sha256 hash，并按 `user_id + platform + fingerprint_hash` 复用同一台逻辑设备、撤销同 fingerprint 的其它 active row。
 - mobile proxy 默认开启；`MOBILE_SYNC_PROXY_ENABLED=0|false|off|no` 只作为紧急 kill switch。
 - `/api/proactive/devices/ingest` 是 mobile 唯一写入入口。`X-Device-Id` + `X-Device-Token` 必须同时存在并匹配活跃 device，否则 401；container 非 running 时返回 503，等 chat 路径或 reconciler 恢复后再重试。旧 `/api/mobile/*` 路由和 `MOBILE_SYNC_TARGET_USER_ID` 默认容器兜底已删除（2026-04 retired）。
 - `kind` 只表达数据类型，端侧不能指定 `destination=raw/signal`；落点由 `DeviceIngestPolicyRegistry` 控制。

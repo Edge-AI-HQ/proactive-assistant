@@ -41,6 +41,7 @@ export interface UserDeviceRow {
   last_seen_at: string | null;
   status: 'active' | 'revoked';
   metadata: Record<string, unknown>;
+  device_fingerprint_hash?: string | null;
 }
 
 export interface RegisteredDevice extends UserDeviceRow {
@@ -53,6 +54,66 @@ const BCRYPT_ROUNDS = 10;
 
 function generateToken(): string {
   return crypto.randomBytes(TOKEN_BYTES).toString('base64url');
+}
+
+function hashDeviceFingerprint(platform: DevicePlatform, fingerprint: string | null | undefined): string | null {
+  const normalized = fingerprint?.trim();
+  if (!normalized || normalized.length < 8) return null;
+  return crypto
+    .createHash('sha256')
+    .update(`${platform}:${normalized}`)
+    .digest('hex');
+}
+
+async function revokeOtherActiveFingerprintDevices(params: {
+  userId: number;
+  platform: DevicePlatform;
+  fingerprintHash: string | null;
+  keepId: number;
+}): Promise<void> {
+  if (!params.fingerprintHash) return;
+  await pool.query(
+    `UPDATE user_devices
+        SET status = 'revoked'
+      WHERE user_id = $1
+        AND platform = $2
+        AND device_fingerprint_hash = $3
+        AND status = 'active'
+        AND id <> $4`,
+    [params.userId, params.platform, params.fingerprintHash, params.keepId],
+  );
+}
+
+async function refreshRegisteredDevice(params: {
+  rowId: number;
+  userId: number;
+  platform: DevicePlatform;
+  tokenHash: string;
+  displayName: string | null | undefined;
+  appVersion: string | null | undefined;
+  model: string | null | undefined;
+  metadataJson: string;
+  fingerprintHash: string | null;
+}): Promise<UserDeviceRow> {
+  await revokeOtherActiveFingerprintDevices({
+    userId: params.userId,
+    platform: params.platform,
+    fingerprintHash: params.fingerprintHash,
+    keepId: params.rowId,
+  });
+  const { rows } = await pool.query<UserDeviceRow>(
+    `UPDATE user_devices
+       SET device_token_hash = $1, platform = $2, display_name = $3,
+           app_version = $4, model = $5, metadata = $6::jsonb,
+           device_fingerprint_hash = COALESCE($7, device_fingerprint_hash),
+           status = 'active', registered_at = now(), last_seen_at = now()
+     WHERE id = $8
+     RETURNING *`,
+    [params.tokenHash, params.platform, params.displayName ?? null,
+     params.appVersion ?? null, params.model ?? null, params.metadataJson,
+     params.fingerprintHash, params.rowId],
+  );
+  return rows[0]!;
 }
 
 /**
@@ -70,6 +131,7 @@ export async function registerDevice(params: {
   displayName?: string | null;
   appVersion?: string | null;
   model?: string | null;
+  deviceFingerprint?: string | null;
   metadata?: Record<string, unknown>;
 }): Promise<RegisteredDevice> {
   if (!params.deviceId || params.deviceId.trim().length < 8) {
@@ -81,6 +143,7 @@ export async function registerDevice(params: {
 
   const token = generateToken();
   const tokenHash = await bcrypt.hash(token, BCRYPT_ROUNDS);
+  const fingerprintHash = hashDeviceFingerprint(params.platform, params.deviceFingerprint);
   const metadataJson = JSON.stringify(params.metadata ?? {});
 
   // Look up first to enforce ownership
@@ -94,27 +157,59 @@ export async function registerDevice(params: {
       throw new DomainError('CONFLICT', 'device_id is registered to a different user');
     }
     // Same user → rotate token + refresh metadata
-    const { rows } = await pool.query<UserDeviceRow>(
-      `UPDATE user_devices
-         SET device_token_hash = $1, platform = $2, display_name = $3,
-             app_version = $4, model = $5, metadata = $6::jsonb,
-             status = 'active', registered_at = now(), last_seen_at = now()
-       WHERE device_id = $7
-       RETURNING *`,
-      [tokenHash, params.platform, params.displayName ?? null,
-       params.appVersion ?? null, params.model ?? null, metadataJson, params.deviceId],
+    const refreshed = await refreshRegisteredDevice({
+      rowId: row.id,
+      userId: params.userId,
+      platform: params.platform,
+      tokenHash,
+      displayName: params.displayName,
+      appVersion: params.appVersion,
+      model: params.model,
+      metadataJson,
+      fingerprintHash,
+    });
+    return { ...refreshed, device_token: token };
+  }
+
+  if (fingerprintHash) {
+    const fingerprintExisting = await pool.query<UserDeviceRow>(
+      `SELECT * FROM user_devices
+        WHERE user_id = $1
+          AND platform = $2
+          AND device_fingerprint_hash = $3
+        ORDER BY
+          CASE status WHEN 'active' THEN 0 ELSE 1 END,
+          last_seen_at DESC NULLS LAST,
+          registered_at DESC
+        LIMIT 1`,
+      [params.userId, params.platform, fingerprintHash],
     );
-    return { ...rows[0]!, device_token: token };
+    const row = fingerprintExisting.rows[0];
+    if (row) {
+      const refreshed = await refreshRegisteredDevice({
+        rowId: row.id,
+        userId: params.userId,
+        platform: params.platform,
+        tokenHash,
+        displayName: params.displayName,
+        appVersion: params.appVersion,
+        model: params.model,
+        metadataJson,
+        fingerprintHash,
+      });
+      return { ...refreshed, device_token: token };
+    }
   }
 
   const { rows } = await pool.query<UserDeviceRow>(
     `INSERT INTO user_devices
-       (device_id, user_id, device_token_hash, platform, display_name, app_version, model, metadata)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+       (device_id, user_id, device_token_hash, platform, display_name,
+        app_version, model, metadata, device_fingerprint_hash)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
      RETURNING *`,
     [params.deviceId, params.userId, tokenHash, params.platform,
      params.displayName ?? null, params.appVersion ?? null,
-     params.model ?? null, metadataJson],
+     params.model ?? null, metadataJson, fingerprintHash],
   );
   return { ...rows[0]!, device_token: token };
 }
