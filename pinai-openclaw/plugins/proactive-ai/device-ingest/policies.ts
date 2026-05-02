@@ -73,6 +73,15 @@ function extractContactsFromPayload(payload: Record<string, unknown>): raw.Devic
   if (Array.isArray(payload.contacts)) candidates.push(...payload.contacts);
   if (Array.isArray(payload.items)) candidates.push(...payload.items);
   if (Array.isArray(payload.entries)) candidates.push(...payload.entries);
+  for (const rawJson of [payload.contacts_json, payload.contactsJson]) {
+    if (typeof rawJson !== "string" || rawJson.trim() === "") continue;
+    try {
+      const parsed = JSON.parse(rawJson) as unknown;
+      if (Array.isArray(parsed)) candidates.push(...parsed);
+    } catch {
+      // Let the caller fall back to personal_signals when no valid rows parse.
+    }
+  }
   return candidates
     .filter((x): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x))
     .map((row) => {

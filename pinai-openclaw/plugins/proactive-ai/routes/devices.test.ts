@@ -167,6 +167,36 @@ test("handleDevices /devices/ingest fans snapshot items to raw.db", withTempHome
   assert.deepEqual(zhang!.phones, ["+8613800000000"]);
 }));
 
+test("handleDevices /devices/ingest accepts contacts_json snapshots from string-map clients", withTempHome(async () => {
+  const { handled, res } = await invoke("/devices/ingest", "POST", {
+    deviceId: "ios-contacts-json",
+    items: [
+      {
+        id: "contacts-json-1",
+        itemType: "contact_directory_snapshot",
+        title: "Contacts",
+        summary: "2 contacts",
+        payload: {
+          contacts_json: JSON.stringify([
+            { displayName: "Alice Chen", emails: ["alice@example.com"] },
+            { displayName: "张三", phones: ["+8613800000000"] },
+          ]),
+        },
+        occurredAt: "2026-04-23T08:00:00.000Z",
+      },
+    ],
+  });
+
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 200);
+
+  const contacts = listDeviceContacts({ deviceId: "ios-contacts-json", latestSnapshotOnly: true });
+  assert.equal(contacts.length, 2);
+  const alice = contacts.find((c) => c.display_name === "Alice Chen");
+  assert.ok(alice);
+  assert.deepEqual(alice!.emails, ["alice@example.com"]);
+}));
+
 test("handleDevices /devices/ingest: missing deviceId → 400", withTempHome(async () => {
   const { handled, res } = await invoke("/devices/ingest", "POST", {
     items: [{ id: "x", itemType: "moment", title: "t", summary: "s" }],
