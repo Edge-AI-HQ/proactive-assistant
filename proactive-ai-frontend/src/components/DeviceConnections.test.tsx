@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import DeviceConnections from "./DeviceConnections";
 
@@ -6,14 +6,15 @@ vi.mock("@/lib/api", () => ({
   claimPairCode: vi.fn(),
 }));
 
-const { refreshMock, ensureDeviceMock } = vi.hoisted(() => ({
+const { devicesState, refreshMock, ensureDeviceMock } = vi.hoisted(() => ({
+  devicesState: { devices: [] as any[] },
   refreshMock: vi.fn(),
   ensureDeviceMock: vi.fn(),
 }));
 
 vi.mock("@/hooks/useUserDevices", () => ({
   useUserDevices: () => ({
-    devices: [],
+    devices: devicesState.devices,
     loading: false,
     error: null,
     refresh: refreshMock,
@@ -29,6 +30,7 @@ vi.mock("@/lib/devices", () => ({
 
 describe("DeviceConnections", () => {
   beforeEach(() => {
+    devicesState.devices = [];
     refreshMock.mockClear();
     ensureDeviceMock.mockReset();
     ensureDeviceMock.mockImplementation(() => new Promise(() => {}));
@@ -41,17 +43,55 @@ describe("DeviceConnections", () => {
     expect(screen.queryByText(/6-character code/i)).toBeNull();
   });
 
-  test("refreshes the device list after this client registers itself", async () => {
-    ensureDeviceMock.mockResolvedValueOnce({
-      deviceId: "android-device-id",
-      deviceToken: "device-token",
-      platform: "android",
-    });
+  test("hides manual registration and this-device bootstrap controls", () => {
+    render(<DeviceConnections />);
+
+    expect(screen.queryByRole("button", { name: /manual/i })).toBeNull();
+    expect(screen.queryByText(/this device/i)).toBeNull();
+    expect(ensureDeviceMock).not.toHaveBeenCalled();
+  });
+
+  test("renders platform-specific icons for phones and hardware devices", () => {
+    devicesState.devices = [
+      {
+        device_id: "ios-device-id",
+        platform: "ios",
+        display_name: "iPhone",
+        app_version: "1.0",
+        model: "iPhone",
+        registered_at: "2026-05-02T00:00:00.000Z",
+        last_seen_at: "2026-05-02T01:00:00.000Z",
+        status: "active",
+        metadata: {},
+      },
+      {
+        device_id: "android-device-id",
+        platform: "android",
+        display_name: "Xiaomi 23127PN0CC",
+        app_version: "16",
+        model: "23127PN0CC",
+        registered_at: "2026-05-02T00:00:00.000Z",
+        last_seen_at: "2026-05-02T01:00:00.000Z",
+        status: "active",
+        metadata: {},
+      },
+      {
+        device_id: "wearable-device-id",
+        platform: "wearable",
+        display_name: "OMI pendant",
+        app_version: null,
+        model: "omi_pendant_v1",
+        registered_at: "2026-05-02T00:00:00.000Z",
+        last_seen_at: null,
+        status: "active",
+        metadata: {},
+      },
+    ];
 
     render(<DeviceConnections />);
 
-    await waitFor(() => {
-      expect(refreshMock).toHaveBeenCalled();
-    });
+    expect(screen.getByLabelText("iOS device")).toBeTruthy();
+    expect(screen.getByLabelText("Android device")).toBeTruthy();
+    expect(screen.getByLabelText("Wearable device")).toBeTruthy();
   });
 });
