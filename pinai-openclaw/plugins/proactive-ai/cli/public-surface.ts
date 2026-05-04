@@ -13,6 +13,10 @@ export const PUBLIC_COMMANDS = {
   feedback: [['list'], ['get'], ['stats']],
   personal: [['status'], ['connections', 'list'], ['connect'], ['wait'], ['tools', 'search'], ['tools', 'schema'], ['exec']],
   sys: [['schema']],
+  // Tier 4 fallback: read-only HTTPS fetcher for the chat agent.
+  // SSRF defense + content-type allowlist + body cap enforced inside the
+  // handler — public surface exposure is safe.
+  web: [['fetch']],
 } as const satisfies Record<string, readonly (readonly string[])[]>;
 
 export const PUBLIC_CLI_SCHEMA: Record<string, string[]> = Object.fromEntries(

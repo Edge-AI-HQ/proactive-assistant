@@ -47,7 +47,7 @@ test("buildUnifiedGeneratorPrompt includes CLI guide and v3 retrieval commands",
   assert.match(prompt, /Direct `pin personal exec` is a\s+controlled fallback/i);
   assert.match(prompt, /GMAIL_CREATE_EMAIL_DRAFT/);
   assert.match(prompt, /GMAIL_SEND_DRAFT/);
-  assert.match(prompt, /GMAIL_SEND_EMAIL[\s\S]*allowlist 外/);
+  assert.match(prompt, /GMAIL_SEND_EMAIL[\s\S]*(继续禁止|draft|DRAFT)/);
   assert.doesNotMatch(prompt, /smiletoye@gmail\.com|PIN test|controlled PCI test/i);
   assert.match(prompt, /connector\.init \/ connector\.sync/);
 });

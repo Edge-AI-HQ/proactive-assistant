@@ -20,6 +20,11 @@ import { normalizeCardChatMessages } from '../chat-feedback/service.js';
 import { mergeChatHistoryTurns } from './chat-history-merge.js';
 import { isTrackableChatSessionKey } from '../conversation-crystallize/service.js';
 import { loadActiveSkillsSection } from '../conversation-crystallize/skill-injection.js';
+import { shouldBlockBrowserOpen } from '../execution-policy.js';
+import {
+  clearExecutionPolicyRunContext,
+  registerExecutionPolicyRunContext,
+} from '../execution-policy-runtime.js';
 import * as db from '../db.js';
 
 /**
@@ -94,6 +99,28 @@ export function detectPinCommand(
   const match = trimmed.match(/(?:^|[\s;&|])pin\s+([^\n]+)/);
   if (!match) return undefined;
   return truncate(match[1].trim(), TOOL_ARG_PREVIEW_MAX);
+}
+
+export interface InterceptInput {
+  toolName: string;
+  toolArgs: unknown;
+  priorToolCallsInRun: Array<{ name: string; args: unknown }>;
+  userMessage: string;
+}
+
+export interface InterceptResult {
+  intercept: boolean;
+  reminder?: string;
+}
+
+export function shouldInterceptBrowserFirstCall(input: InterceptInput): InterceptResult {
+  const decision = shouldBlockBrowserOpen({
+    toolName: input.toolName,
+    args: input.toolArgs,
+    priorToolCalls: input.priorToolCallsInRun,
+    userMessage: input.userMessage,
+  });
+  return { intercept: decision.block, reminder: decision.reason };
 }
 
 function safeStringify(value: unknown): string {
@@ -229,6 +256,7 @@ export function handleChat(): RouteHandler {
           idempotencyKey: `proactive-ai:chat-stream:${Date.now().toString(36)}`,
           deliver: false,
         });
+        registerExecutionPolicyRunContext({ runId, sessionKey, userMessage: message });
 
         // Stream assistant deltas and tool lifecycle events via the agent
         // event bus. Assistant deltas become chat:delta frames; tool events
@@ -320,6 +348,7 @@ export function handleChat(): RouteHandler {
               `[chat-stream] run-complete runId=${runId} toolEvents=${toolEventsSeen} streamedText=${streamed}`,
             );
           }
+          clearExecutionPolicyRunContext(runId);
           unsubscribe();
         }
 
@@ -373,9 +402,15 @@ export function handleChat(): RouteHandler {
           extraSystemPrompt: systemPrompt,
           idempotencyKey: `proactive-ai:chat:${Date.now().toString(36)}`, deliver: false,
         });
-        // Same 10-minute cap as the streaming variant — tool-heavy runs
-        // (browser automation, multi-step loops) can easily exceed a 2-min cap.
-        const result = await ctx.api.runtime.subagent.waitForRun({ runId, timeoutMs: 600_000 });
+        registerExecutionPolicyRunContext({ runId, sessionKey, userMessage: agentMessage });
+        let result: Awaited<ReturnType<typeof ctx.api.runtime.subagent.waitForRun>>;
+        try {
+          // Same 10-minute cap as the streaming variant — tool-heavy runs
+          // (browser automation, multi-step loops) can easily exceed a 2-min cap.
+          result = await ctx.api.runtime.subagent.waitForRun({ runId, timeoutMs: 600_000 });
+        } finally {
+          clearExecutionPolicyRunContext(runId);
+        }
         if (result.status !== 'ok') { json(ctx.res, 500, { ok: false, error: result.error ?? `Agent failed: ${result.status}` }); return true; }
         const messages = await ctx.api.runtime.subagent.getSessionMessages({ sessionKey, limit: 5 });
         const last = (messages.messages as Array<{ role?: string; content?: unknown }>).filter(m => m.role === 'assistant').pop();

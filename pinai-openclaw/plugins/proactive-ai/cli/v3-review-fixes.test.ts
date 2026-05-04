@@ -286,7 +286,7 @@ test('pin sys schema exposes only the public PCI surface', async () => {
   assert.equal(r.ok, true);
   assert.deepEqual(r.data.domains, PUBLIC_CLI_SCHEMA);
   assert.deepEqual(Object.keys(r.data.domains).sort(), [
-    'cards', 'feedback', 'memory', 'personal', 'profile', 'raw', 'signals', 'sys', 'world',
+    'cards', 'feedback', 'memory', 'personal', 'profile', 'raw', 'signals', 'sys', 'web', 'world',
   ].sort());
   assert.deepEqual(r.data.domains.profile, ['get', 'snapshot']);
   assert.deepEqual(r.data.domains.memory, ['list', 'get', 'search']);
@@ -359,7 +359,7 @@ test('pin public dispatcher hides and rejects internal commands by default', asy
     const help = await execFileAsync('npx', ['tsx', binPath, '--help'], { env: publicEnv });
     const helpEnvelope = decode(help.stdout);
     assert.deepEqual(helpEnvelope.data.domains.sort(), [
-      'cards', 'feedback', 'memory', 'personal', 'profile', 'raw', 'signals', 'sys', 'world',
+      'cards', 'feedback', 'memory', 'personal', 'profile', 'raw', 'signals', 'sys', 'web', 'world',
     ].sort());
 
     await assert.rejects(
@@ -555,7 +555,7 @@ test('pin personal exec rejects side-effect tool slugs before provider call', as
   }
 });
 
-test('pin personal exec allows only explicit side-effect tool allowlist with flag', async () => {
+test('pin personal exec allows safe side-effect tools across Composio toolkits with flag', async () => {
   const previousKey = process.env.COMPOSIO_API_KEY;
   const previousUserId = process.env.COMPOSIO_USER_ID;
   const previousFetch = globalThis.fetch;
@@ -570,21 +570,37 @@ test('pin personal exec allows only explicit side-effect tool allowlist with fla
     }), { status: 200 });
   };
   try {
-    const denied = decode(await handlePersonal([
+    const deniedDangerous = decode(await handlePersonal([
+      'exec', '--tool', 'GOOGLECALENDAR_DELETE_EVENT', '--input', '{"event_id":"abc"}',
+      '--allow-side-effect', 'true',
+    ]));
+    assert.equal(deniedDangerous.ok, false);
+    assert.equal(deniedDangerous.error.type, 'validation');
+    assert.equal(fetchCalls, 0);
+
+    const deniedDirectSend = decode(await handlePersonal([
       'exec', '--tool', 'GMAIL_SEND_EMAIL', '--input', '{"to":"smiletoye@gmail.com"}',
       '--allow-side-effect', 'true',
     ]));
-    assert.equal(denied.ok, false);
-    assert.equal(denied.error.type, 'validation');
+    assert.equal(deniedDirectSend.ok, false);
+    assert.equal(deniedDirectSend.error.type, 'validation');
     assert.equal(fetchCalls, 0);
 
-    const r = decode(await handlePersonal([
-      'exec', '--tool', 'GMAIL_CREATE_EMAIL_DRAFT', '--input', '{"recipient_email":"smiletoye@gmail.com"}',
+    const calendar = decode(await handlePersonal([
+      'exec', '--tool', 'GOOGLECALENDAR_CREATE_EVENT', '--input', '{"summary":"1:1"}',
       '--allow-side-effect', 'true',
     ]));
-    assert.equal(r.ok, true);
-    assert.equal(r.data.sideEffectAllowed, true);
+    assert.equal(calendar.ok, true);
+    assert.equal(calendar.data.sideEffectAllowed, true);
     assert.equal(fetchCalls, 1);
+
+    const slack = decode(await handlePersonal([
+      'exec', '--tool', 'SLACK_SEND_MESSAGE', '--input', '{"channel":"C1","text":"hi"}',
+      '--allow-side-effect', 'true',
+    ]));
+    assert.equal(slack.ok, true);
+    assert.equal(slack.data.sideEffectAllowed, true);
+    assert.equal(fetchCalls, 2);
   } finally {
     if (previousKey === undefined) delete process.env.COMPOSIO_API_KEY;
     else process.env.COMPOSIO_API_KEY = previousKey;

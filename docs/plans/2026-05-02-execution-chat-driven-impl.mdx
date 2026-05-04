@@ -1,0 +1,1298 @@
+---
+title: "执行层 Plan 1 实施计划:chat-driven 执行 + Tier 工具政策"
+description: "把 spec 2026-05-01-execution-chat-driven 拆成 1-A → 1-E 五步骤、6 个独立 commit、file-level patch direction。2026-05-02。"
+---
+
+# 执行层 Plan 1 实施计划
+
+> **配套 spec**:[2026-05-01-execution-chat-driven](./2026-05-01-execution-chat-driven)。本文档只拆 **怎么做**,设计取舍以 spec 为准。
+
+**目标**:把 spec §选定方案 落到代码,产出 5 步顺序 commit。完成后:`card_executions` 状态机 + Tool Registry + 前端 execution UI 全没;chat agent 主导 + Tier 1-4 工具决策政策 + 一处轻硬拦截。
+
+**架构**:
+
+- **1-A**(2 commits):先把 working tree 里 `cli/web.ts`(`pin web fetch`)收成一个干净的 commit 锚住"保留";再做大 reset(删 state machine + Tool Registry + 前端 execution UI)。
+- **1-B**(1 commit):重写 `agents/chat.ts` system prompt 加 Tier 1-4 决策表 + 反例 + cache boundary;`pin SKILL.md` 重写"标准获取顺序"段;`browser/tool.ts` description 加"何时不要用我"段。
+- **1-C**(1 commit):`routes/chat.ts` 加 browser-first-call 拦截 hook + 测试。
+- **1-D**(1 commit):重写 `docs/modules/execution.mdx` 成 chat-driven + Tier 政策版。
+- **1-E**(0 commits):实地联调 6 个代表性场景。
+
+**技术栈**:TypeScript + node:test + better-sqlite3 + Mintlify (mdx)。
+
+**起点参考**(branch 现状,2026-05-01 commit `12179931`):
+
+- 已 commit "保留"增量:`cli/personal.ts` verb-based gate(commit `57a2931c`)、`tasks/scheduler.ts` `wake()` + `maxTasksPerTick`(commit `5c4cefae`)、`apis/src/domain/gateway/gateway_rpc.ts` hot reload(commit `34e71f64`)、`pin SKILL.md` 副作用边界段(commit `a8dc99f`)。
+- 未提交"保留"工作:`cli/web.ts` + `cli/web.test.ts`(untracked)、`cli/bin.ts` 和 `cli/public-surface.ts` 里 `web` 注册行(unstaged)。
+- 未提交"删除"工作(Plan B 残留,1-A.2 一并清):`agents/card-research-prompt.ts`、`agents/research-findings.ts` + test、`tasks/handlers/card-research-loop.ts` + test、`tools/registry/intents/web.ts`、`db.card-execution-evidence.test.ts`、`db.ts` 里 `card_execution_evidence` 表 + helpers + `research_findings` patch whitelist regex、`agents/card-pre-execute-prompt.ts` 改动、`tools/pin-cli-validator.ts` / `tools/registry/index.ts` / `routes/cards.ts` 等的 unstaged Plan B 改动。
+
+---
+
+## File structure 总览
+
+| 类别 | 数量 | 范围 |
+|---|---:|---|
+| 1-A.1 commit:`cli/web.ts` 和注册行 | 4 文件 | 新增 `cli/web.ts` + `cli/web.test.ts`;`cli/bin.ts` + `cli/public-surface.ts` 加 web 注册 |
+| 1-A.2 commit 后端删除 | ~22 文件 | 见 §1-A.2 §逐文件清单 |
+| 1-A.2 commit 后端 reset/surgical edit | ~7 文件 | `db.ts` / `index.ts` / `routes/router.ts` / `routes/chat.ts` / `routes/chat.test.ts` / `agents/chat.ts` / `agents/chat.test.ts` / `pipeline/orchestrator.ts` 等 |
+| 1-A.2 commit 前端 reset | 6 文件 | `CardDetailBody.tsx` / `CardChat.tsx` / `NowFeed.tsx` / `AppShell.tsx`(选择性)/ `intent-card.ts` / `useProactiveChatRuntime.ts` |
+| 1-A.2 commit 前端删除 | 4 文件 | `cards-api.ts` / `chat/card-chat-session.ts` + test / `verify-phase-1.sh` + `verify-phase-2.sh` |
+| 1-B commit | 4 文件 | `agents/chat.ts` + test、`pin SKILL.md`、`browser/tool.ts` |
+| 1-C commit | 2 文件 | `routes/chat.ts` + test |
+| 1-D commit | 2 文件 | `docs/modules/execution.mdx`、`docs/plans/README.mdx`(行项核对) |
+
+---
+
+## Step 1-A.1:把 `pin web fetch` 收成一个干净 commit
+
+**为什么先做这步**:`cli/web.ts` 是 spec §文件清单里的"保留"项,但目前在 working tree 未 commit。如果让 working tree 里其他 Plan B 残留(evidence / research-findings 等)跟 `cli/web.ts` 一起进 1-A.2 大 reset 的 git 操作,会让大 reset 的 diff 不干净。这一步只把 `pin web fetch` 干净落地,Plan B 残留通过 1-A.2 的删除路径处理。
+
+### Files
+
+- Create:`pinai-openclaw/plugins/proactive-ai/cli/web.ts`(已在 working tree,427 行)
+- Create:`pinai-openclaw/plugins/proactive-ai/cli/web.test.ts`(已在 working tree,425 行)
+- Modify:`pinai-openclaw/plugins/proactive-ai/cli/bin.ts`(unstaged 已加 `import { handleWeb }` + `web: handleWeb` 路由)
+- Modify:`pinai-openclaw/plugins/proactive-ai/cli/public-surface.ts`(unstaged 已加 `web: [['fetch']]`)
+
+### 步骤
+
+- [ ] **Step 1:确认 working tree 内容跟"保留"语义一致**
+
+```bash
+# 看 cli/web.ts 头部是否 SSRF defense + content-type allowlist + body cap
+sed -n '1,30p' pinai-openclaw/plugins/proactive-ai/cli/web.ts
+# 看 web.test.ts 测试列表
+grep -nE "^test\(" pinai-openclaw/plugins/proactive-ai/cli/web.test.ts
+```
+
+预期:`web.ts` 是 read-only HTTPS fetcher,`web.test.ts` 至少覆盖 SSRF / 内网 IP / content-type / body cap。
+
+- [ ] **Step 2:跑测试验证 `pin web fetch` 单测自身能过**
+
+```bash
+npx tsx --test pinai-openclaw/plugins/proactive-ai/cli/web.test.ts
+```
+
+预期:全绿。如果有失败,先停下来排查(可能是 working tree 的部分 Plan B 改动让它依赖了未存在的东西)。
+
+- [ ] **Step 3:挑出 `bin.ts` 和 `public-surface.ts` 里仅 `web` 注册行 stage,排除其他改动**
+
+`bin.ts` unstaged 改动只有:加 `import { handleWeb }` + 路由表里加 `web: handleWeb`(整体 5 行)。`public-surface.ts` unstaged 只有:`web: [['fetch']]` 一行 + 注释(整体 4 行)。两个文件别的地方应该没动。检查一下:
+
+```bash
+git diff pinai-openclaw/plugins/proactive-ai/cli/bin.ts
+git diff pinai-openclaw/plugins/proactive-ai/cli/public-surface.ts
+```
+
+如果只有 web 相关改动,可以整个文件 stage:
+
+```bash
+git add pinai-openclaw/plugins/proactive-ai/cli/web.ts \
+        pinai-openclaw/plugins/proactive-ai/cli/web.test.ts \
+        pinai-openclaw/plugins/proactive-ai/cli/bin.ts \
+        pinai-openclaw/plugins/proactive-ai/cli/public-surface.ts
+```
+
+如果有非 web 的改动混在 `bin.ts` / `public-surface.ts` 里,改用 `git add -p` 逐 hunk 选。
+
+- [ ] **Step 4:type-check 确保 stage 后世界仍然一致**
+
+```bash
+npm run type-check
+```
+
+预期:零错误。如果出错通常是因为 working tree 里其他文件(`db.ts`、`agents/card-pre-execute-prompt.ts` 等)的 unstaged 改动影响了这一行类型,**不要试图修**——这些改动在 1-A.2 一起删,这里只要 stage 的 4 个文件本身类型自洽就行。如果是真错,回头检查 stage 内容。
+
+- [ ] **Step 5:Commit**
+
+```bash
+git commit -m "$(cat <<'EOF'
+feat(cli): add pin web fetch read-only HTTPS fetcher
+
+Tier 4 兜底工具:让 chat agent 读公开 URL 不开 browser。SSRF defense + 内网 IP 拒绝
++ content-type allowlist + body cap 全在 CLI 层做。Public surface 暴露 `pin web fetch`。
+
+EOF
+)"
+```
+
+### 风险
+
+- working tree 里 `bin.ts` / `public-surface.ts` 注释提到 "Plan B" —— 不影响功能,1-A 后语义就是 Tier 4。1-D 改文档时注释可一并清。或在 1-A.1 commit 顺便改成 "Tier 4 read-only HTTPS fetcher"(注释短一行,不算 unrelated 改动)。
+
+---
+
+## Step 1-A.2:大 reset —— 删 state machine + Tool Registry + 前端 execution UI
+
+**这一步是整个 Plan 1 最大的 commit,但它不是 risky**:删除 / reset 后栈起得来 + type-check 通过 + 余下测试不退化就 ok。
+
+### 目标终态
+
+栈跑起来等价于"v2 + cli/personal.ts verb-based + cli/web.ts(1-A.1 落地)+ scheduler.ts perf + gateway_rpc fix + pin SKILL.md 副作用边界改写"。chat agent 行为退到 v2 自由度(无 modify-mode、无 execution UI、CardChat 跟 MainChat 共用 MainChatView)。
+
+### 逐文件清单
+
+#### 后端删除(直接 `git rm`,不留)
+
+```bash
+# State machine handlers / 入队
+git rm pinai-openclaw/plugins/proactive-ai/tasks/handlers/card-pre-execute.ts
+git rm pinai-openclaw/plugins/proactive-ai/tasks/handlers/card-pre-execute.test.ts
+git rm pinai-openclaw/plugins/proactive-ai/tasks/card-pre-execute-enqueuer.ts
+git rm pinai-openclaw/plugins/proactive-ai/tasks/card-pre-execute-enqueuer.test.ts
+
+# Plan B 残留(working tree only,untracked,直接 rm 不需要 git rm)
+rm -f pinai-openclaw/plugins/proactive-ai/tasks/handlers/card-research-loop.ts
+rm -f pinai-openclaw/plugins/proactive-ai/tasks/handlers/card-research-loop.test.ts
+rm -f pinai-openclaw/plugins/proactive-ai/agents/card-research-prompt.ts
+rm -f pinai-openclaw/plugins/proactive-ai/agents/research-findings.ts
+rm -f pinai-openclaw/plugins/proactive-ai/agents/research-findings.test.ts
+rm -f pinai-openclaw/plugins/proactive-ai/db.card-execution-evidence.test.ts
+rm -f pinai-openclaw/plugins/proactive-ai/tools/registry/intents/web.ts
+
+# Prompt builders
+git rm pinai-openclaw/plugins/proactive-ai/agents/card-pre-execute-prompt.ts
+git rm pinai-openclaw/plugins/proactive-ai/agents/card-pre-execute-prompt.test.ts
+git rm pinai-openclaw/plugins/proactive-ai/agents/card-summarize-prompt.ts
+git rm pinai-openclaw/plugins/proactive-ai/agents/card-summarize-prompt.test.ts
+
+# Tool Registry 整目录
+git rm -r pinai-openclaw/plugins/proactive-ai/tools/registry
+git rm pinai-openclaw/plugins/proactive-ai/tools/executor.ts
+git rm pinai-openclaw/plugins/proactive-ai/tools/pin-cli-validator.ts
+git rm pinai-openclaw/plugins/proactive-ai/tools/pin-cli-validator.test.ts
+
+# 类型
+git rm pinai-openclaw/plugins/proactive-ai/types/card-execution.ts
+git rm pinai-openclaw/plugins/proactive-ai/types/card-execution.test.ts
+
+# Card execution routes / SSE
+git rm pinai-openclaw/plugins/proactive-ai/routes/cards.ts
+git rm pinai-openclaw/plugins/proactive-ai/routes/cards.test.ts
+git rm pinai-openclaw/plugins/proactive-ai/routes/cards-events.ts
+
+# DB tests(对应 helpers 删后失效)
+git rm pinai-openclaw/plugins/proactive-ai/db.card-executions.test.ts
+git rm pinai-openclaw/plugins/proactive-ai/db.card-execution-patch.test.ts
+
+# Pipeline integration(本分支新增的 dispatch-finalize)
+git rm pinai-openclaw/plugins/proactive-ai/pipeline/dispatch-finalize.ts
+```
+
+#### 前端删除
+
+```bash
+git rm proactive-ai-frontend/src/lib/cards-api.ts
+git rm proactive-ai-frontend/src/components/chat/card-chat-session.ts
+git rm proactive-ai-frontend/src/components/chat/card-chat-session.test.ts
+
+# 旧 verify scripts
+git rm scripts/verify-phase-1.sh
+git rm scripts/verify-phase-2.sh
+```
+
+#### 后端 reset / surgical edit
+
+| 文件 | 动作 | 依据 |
+|---|---|---|
+| `pinai-openclaw/plugins/proactive-ai/db.ts` | **surgical edit**:删 `card_executions` table + 索引(L424-455 段)、删 `card_execution_evidence` table(working tree 加的)、删 5002 行起所有 `*CardExecution*` helpers 含 row 解析 / insert / get / update / appendToolLogEntry / setDraft / mergeDraftCompletion / applyCardExecutionPatch / setError / setActionKind / setClarificationQuestions / setClarificationAnswers / resetCardExecutionForRerun;删 `PATCH_WHITELIST_REGEX` 和 `isPathOnWhitelist`;留 `card_executions` 表本身在 SQLite 里(spec §风险与测试 决定不写自动 DROP,无人访问 = 审计痕迹)。其他 schema(raw / signals / memory / background_tasks)不动。 | spec §文件清单 "Reset db.ts:砍 card_executions 表 + 所有 helpers + card_execution_evidence" |
+| `pinai-openclaw/plugins/proactive-ai/index.ts` | **surgical edit**:删 `card.pre-execute` 和 `card.execute-final` 两条 `bgTaskScheduler.registerHandler(...)` 注册(L232-239)+ 上面的 import + log 字符串里 handler 列表去掉这两个。 | spec §文件清单 "Reset index.ts:砍 card.pre-execute / card.execute-final handler 注册" |
+| `pinai-openclaw/plugins/proactive-ai/routes/router.ts` | **surgical edit**:删 `import { handleCards } from './cards.js'` + handlers 数组里的 `handleCards()`。 | spec §文件清单 |
+| `pinai-openclaw/plugins/proactive-ai/routes/chat.ts` | **reset 到 v2**:`git checkout origin/proactive-ai-v2 -- pinai-openclaw/plugins/proactive-ai/routes/chat.ts`。本分支加的 modify-mode patch/rerun 解析 + cardExecution patch SSE emit + structured output contract 全没,回到 v2 单一 chat-stream 路径。 | spec §文件清单 "Reset routes/chat.ts:砍 modify-mode patch/rerun 解析;reset 到 v2"。1-C 会再给它加轻硬拦截。 |
+| `pinai-openclaw/plugins/proactive-ai/routes/chat.test.ts` | **reset 到 v2**:`git checkout origin/proactive-ai-v2 -- pinai-openclaw/plugins/proactive-ai/routes/chat.test.ts`。本分支加的 modify-mode + patch + rerun + cardExecution events 测试全没。 | 同上 |
+| `pinai-openclaw/plugins/proactive-ai/agents/chat.ts` | **reset 到 v2**:`git checkout origin/proactive-ai-v2 -- pinai-openclaw/plugins/proactive-ai/agents/chat.ts`。本分支加的 `hasCardExecution` modify-mode 分支 + patch contract + PIN_CLI_COMMAND_GUIDE 注入全没。1-B 会在 v2 基础上加 Tier 内容。 | spec §文件清单 "Reset agents/chat.ts:reset 到 v2;实施时再加 Tier prompt 内容" |
+| `pinai-openclaw/plugins/proactive-ai/agents/chat.test.ts` | **reset 到 v2**:同 chat.ts。本分支加的 `hasCardExecution` 分支断言、patch contract 断言全没。1-B 会加 Tier 内容断言。 | 同上 |
+
+#### 前端 reset
+
+| 文件 | 动作 |
+|---|---|
+| `proactive-ai-frontend/src/components/CardDetailBody.tsx` | `git checkout origin/proactive-ai-v2 -- ...`,execution UI(plan_steps / draft / clarification / patch highlight / 双按钮) 全没,回到 v2 简单 detail body。 |
+| `proactive-ai-frontend/src/components/CardChat.tsx` | `git checkout origin/proactive-ai-v2 -- ...`,薄壳套 MainChatView,无 cardExecution 引用。 |
+| `proactive-ai-frontend/src/components/NowFeed.tsx` | `git checkout origin/proactive-ai-v2 -- ...`,无 ExecutionStateDot badge。 |
+| `proactive-ai-frontend/src/components/AppShell.tsx` | **surgical edit**:删 `cards-api` import、`CardExecutionView` import、`cardExecutions` state、`recentlyPatchedFields` state、`visibleCardIdsRef`、`subscribeToCardEvents` SSE 订阅 useEffect、prefetch executionState useEffect、`visibleCards` 里 `executionState` 注入、`chatTarget` / `selectedCard` 渲染时 `executionState` 注入。本分支没加 ContainerStatus import(grep 验证),所以"保留 ContainerStatus 集成"实际是 no-op,只要不引入新依赖就行。 |
+| `proactive-ai-frontend/src/types/intent-card.ts` | `git checkout origin/proactive-ai-v2 -- ...`,删 `CardExecutionState` / `PlanStepView` / `ToolLogEntryView` / `ClarificationQuestion` / `CardExecutionView` 类型 + `IntentCard.executionState` 字段。 |
+| `proactive-ai-frontend/src/components/chat/useProactiveChatRuntime.ts` | `git checkout origin/proactive-ai-v2 -- ...`,删 `hasCardExecution` 抑制 bootstrap 逻辑。 |
+
+#### 保留(动都不动)
+
+- `pinai-openclaw/plugins/proactive-ai/cli/personal.ts` + test:verb-based gate(已 commit)
+- `pinai-openclaw/plugins/proactive-ai/cli/web.ts` + test + `bin.ts`/`public-surface.ts` web 注册:1-A.1 已 commit
+- `pinai-openclaw/plugins/proactive-ai/tasks/scheduler.ts` + test:`wake()` + `maxTasksPerTick`(已 commit)
+- `apis/src/domain/gateway/gateway_rpc.ts` + test:hot reload 修复(已 commit)
+- `pinai-openclaw/image/skills/pin/SKILL.md`:副作用边界段(已 commit);标准获取顺序段会在 1-B 改
+- `proactive-ai-frontend/src/components/ContainerStatus.tsx`:文件留着(spec 列在保留)
+- `pinai-openclaw/plugins/proactive-ai/agents/chat.ts` 重新生成:1-A.2 reset 到 v2,1-B 再补 Tier 内容
+
+### 步骤
+
+- [ ] **Step 1:确认所有"保留"位置已干净**
+
+```bash
+git status --short pinai-openclaw/plugins/proactive-ai/cli/web.ts \
+                   pinai-openclaw/plugins/proactive-ai/cli/web.test.ts
+# 预期:无输出(1-A.1 已 commit)
+```
+
+- [ ] **Step 2:执行 §逐文件清单 §后端删除 块的 git rm 和 rm**
+
+复制粘贴 §后端删除 部分的 bash 块。
+
+- [ ] **Step 3:执行 §前端删除 块**
+
+- [ ] **Step 4:逐个 surgical edit / reset**
+
+按 §后端 reset / surgical edit 表格和 §前端 reset 表格,逐个 `git checkout origin/proactive-ai-v2 -- <file>` 或用 Edit tool 做 surgical 删减。重点:
+
+`db.ts` 的 surgical edit(最复杂的一个):需要找到并删除以下段:
+1. **L424-455**(card_executions table + 两个 index)
+2. **L424 上方** card_execution_evidence table(working tree 新加的,1-A.2 一并删)
+3. **L5002-L5407** 整段 card_executions helpers + types(`CardExecutionState` / `PlanStep` / `CardExecutionRow` / `InsertCardExecutionInput` / 各 `*CardExecution*` 函数)
+4. **L5407 起 working tree 加的** `card_execution_evidence` helpers 段
+5. **L5219 附近** `PATCH_WHITELIST_REGEX` array + `isPathOnWhitelist` helper
+6. 用 `grep -n 'CardExecution\|card_execution\|PlanStep\|ToolLogEntry\|ClarificationQuestion\|PATCH_WHITELIST' pinai-openclaw/plugins/proactive-ai/db.ts` 二次扫,确保零残留(import 段、export 段都要扫)
+
+`index.ts` 的 surgical edit(简单):删 L223-239 段两个 `bgTaskScheduler.registerHandler(...)` + 改 L241 log 字符串。`grep -n 'card-pre-execute\|card-execute-final\|card.pre-execute\|card.execute-final' pinai-openclaw/plugins/proactive-ai/index.ts` 确保零残留。
+
+`routes/router.ts` 的 surgical edit(简单):删 `handleCards` import + 数组项。
+
+`AppShell.tsx` 的 surgical edit(中等):用 Edit tool 按上面 §前端 reset 列出的 7 项逐项删。删完后 `grep -n 'cards-api\|CardExecutionView\|cardExecutions\|subscribeToCardEvents\|recentlyPatchedFields\|visibleCardIdsRef\|executionState' AppShell.tsx` 应零结果。
+
+- [ ] **Step 5:残留扫描**
+
+整个仓库扫一遍,确保没有任何代码引用已删的符号:
+
+```bash
+# Backend
+grep -RIn --include='*.ts' --include='*.tsx' \
+  'card_executions\|CardExecution[A-Z]\|cardExecutionEvents\|cards-api\|tool_registry\|registry/intents\|pin-cli-validator\|tools/executor' \
+  pinai-openclaw/plugins/proactive-ai/ \
+  proactive-ai-frontend/src/ \
+  apis/src/
+
+# Routes
+grep -RIn 'handleCards\|/cards/events\|/cards/.*confirm\|/cards/.*clarify\|/cards/.*reject' \
+  pinai-openclaw/plugins/proactive-ai/
+
+# Tasks
+grep -RIn "card.pre-execute\|card.execute-final" \
+  pinai-openclaw/plugins/proactive-ai/
+```
+
+预期:零 hits 或只在 docs/ 文件里(1-D 会清)。
+
+- [ ] **Step 6:type-check 双侧**
+
+```bash
+npm run type-check
+cd proactive-ai-frontend && npm run type-check && cd ..
+```
+
+预期:零错误。如果有错,通常是 §残留扫描 漏了某个引用。
+
+- [ ] **Step 7:跑保留下来的 plugin 测试,确认无回归**
+
+```bash
+npx tsx --test pinai-openclaw/plugins/proactive-ai/cli/personal.test.ts
+npx tsx --test pinai-openclaw/plugins/proactive-ai/cli/web.test.ts
+npx tsx --test pinai-openclaw/plugins/proactive-ai/tasks/scheduler.test.ts
+npx tsx --test pinai-openclaw/plugins/proactive-ai/routes/chat.test.ts
+npx tsx --test pinai-openclaw/plugins/proactive-ai/agents/chat.test.ts
+npx tsx --test pinai-openclaw/plugins/proactive-ai/conversation-crystallize/service.test.ts
+npx tsx --test pinai-openclaw/plugins/proactive-ai/browser/control-state.test.ts
+```
+
+预期:全绿。`routes/chat.test.ts` 和 `agents/chat.test.ts` 是 v2 baseline(1-A.2 reset 到 v2),不含 modify-mode 任何断言。
+
+- [ ] **Step 8:实地 `make up` healthy 验证(硬验证 reset 完整性)**
+
+```bash
+# 先确认本地默认模型 override 还在
+test -f docker-compose.override.yml && grep LITELLM_OPENCLAW_DEFAULT_MODEL docker-compose.override.yml
+# 应输出:- LITELLM_OPENCLAW_DEFAULT_MODEL=claude-sonnet-4-6
+
+make up
+make status
+# 等服务起来后,捞容器日志看有没 schema 找不到 / handler 找不到 / route 找不到 之类报错
+make logs-apis | tail -50
+```
+
+预期:`make status` 显示 apis / postgres / litellm / openclaw 全 healthy;`make logs-apis` 不出现 `card.pre-execute` / `card.execute-final` / `card_executions` / `handleCards` 等找不到的错。
+
+如果起不来或报错,先看是不是 §Step 5 残留扫描 漏了。
+
+- [ ] **Step 9:Commit**
+
+```bash
+git commit -m "$(cat <<'EOF'
+refactor(execution): drop card_executions state machine + Tool Registry
+
+回到 chat-driven 执行,为 Plan 1 的 Tier 工具政策腾出空间。
+
+- 删 card_executions table + 所有 helpers,以及 card_execution_evidence(working tree 上 Plan B 残留)
+- 删 card.pre-execute / card.execute-final handlers + 入队
+- 删 Tool Registry(tools/registry/、tools/executor.ts、tools/pin-cli-validator.ts)
+- 删 plan-LLM / summarize-LLM / research prompt builders
+- 删 routes/cards.ts + cards-events.ts
+- 前端 reset:CardDetailBody / CardChat / NowFeed / AppShell(选择性)/ intent-card.ts / useProactiveChatRuntime.ts 回到 v2 形态;cards-api.ts 删
+- 保留:cli/personal.ts verb-based gate / cli/web.ts / scheduler.ts perf / gateway_rpc fix
+
+行为等价 v2 + 上述四项独立增量。Tier 政策由 1-B 加。
+
+EOF
+)"
+```
+
+### 风险
+
+- **db.ts surgical edit 最容易漏**:删 helpers 时容易漏掉一两个交叉引用(比如 `setActionKind` 在哪个地方还被某个 export 列出)。Step 5 `grep` 扫描是兜底。
+- **AppShell.tsx 选择性 reset 需要小心**:本分支 AppShell 1003 行,v2 780 行,差额 ~220 行全是 cardExecution 相关。一个干净的方法是 `git checkout origin/proactive-ai-v2 -- AppShell.tsx`(因为 grep 显示分支没加 ContainerStatus 引用)。但如果你担心 v2 之后有别的 fix 落到这个文件上,先 `git log origin/proactive-ai-v2..HEAD -- proactive-ai-frontend/src/components/AppShell.tsx` 看一下 commit 列表是不是清一色 cardExecution 相关——如果是,直接 reset 到 v2 最干净。
+- **删的文件忘了 git rm 反而 rm**:Step 2 写 `git rm` 是为了让删除被记入 commit;如果不小心用 `rm` 而没 `git rm`,后面 `git commit -a` 才会捡到。建议先 `git status` 确认每个删除文件都是 `D` 状态。
+- **`card_executions` SQLite 表保留不删**:已存在用户容器里 SQLite 文件保留这张表,无人访问 = 等价于不存在。不要在 1-A.2 加 `DROP TABLE` —— 那会让现存测试容器掉数据,审计也丢。新启动的容器 `ensureSchema()` 不再 `CREATE` 这张表(因为表定义被删了),所以新容器没有这张表,符合"清理"语义。
+
+---
+
+## Step 1-B:Tier 1-4 软约束写进 prompt + SKILL.md + browser description
+
+### 目标
+
+在 1-A.2 reset 到 v2 的 `agents/chat.ts` 基础上,加 Tier 1-4 决策表 + 5-7 反例 + 副作用规则,中间用 `<!-- OPENCLAW_CACHE_BOUNDARY -->` 切 stable prefix(role + tier 表 + 反例 + 输出风格)/ volatile suffix(`card_context` / `learnedSkillsSection` / `firstMessage`)。
+
+`pin SKILL.md` 重写"标准获取顺序"段(L80 起 ~ L120),加 Tier 1-4 表 + 决策反例。副作用边界段(已 commit)不动。
+
+`browser/tool.ts` 在 description 头部加"何时不要用我"段。
+
+### Files
+
+- Modify:`pinai-openclaw/plugins/proactive-ai/agents/chat.ts`
+- Modify:`pinai-openclaw/plugins/proactive-ai/agents/chat.test.ts`
+- Modify:`pinai-openclaw/image/skills/pin/SKILL.md`
+- Modify:`pinai-openclaw/plugins/proactive-ai/browser/tool.ts`
+
+### 步骤
+
+- [ ] **Step 1:先写测试,断言 Tier 内容 + cache boundary 稳定**
+
+往 `agents/chat.test.ts` 追加(在 1-A.2 reset 后的 v2 baseline 上,文件应该只有 v2 测试 + plain chat 测试):
+
+```typescript
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { buildChatPrompt } from './chat.ts';
+
+const baseCard = {
+  title: 'Reply to Andy',
+  summary: 'Andy needs an answer about Tuesday',
+  primaryAction: { label: 'Reply', type: 'confirm' as const },
+  urgency: 0.5,
+};
+
+// ── Tier 政策内容断言 ──────────────────────────────────────────────────
+
+test('chat prompt contains Tier 1-4 decision table', () => {
+  const { systemPrompt } = buildChatPrompt({});
+  assert.match(systemPrompt, /Tier 1.*Local read/i);
+  assert.match(systemPrompt, /Tier 2.*Composio read/i);
+  assert.match(systemPrompt, /Tier 3.*Composio write/i);
+  assert.match(systemPrompt, /Tier 4.*Browser/i);
+  // pin CLI prefix mentions
+  assert.match(systemPrompt, /pin raw/);
+  assert.match(systemPrompt, /pin signals/);
+  assert.match(systemPrompt, /pin personal exec/);
+  assert.match(systemPrompt, /pin web fetch/);
+  // browser as last resort
+  assert.match(systemPrompt, /last.resort|最后手段|绝不.*browser/i);
+});
+
+test('chat prompt contains side-effect rules (verb-based + draft-before-send)', () => {
+  const { systemPrompt } = buildChatPrompt({});
+  assert.match(systemPrompt, /--allow-side-effect/);
+  assert.match(systemPrompt, /SEND|CREATE|UPDATE|DELETE/);
+  // GMAIL_SEND_EMAIL black-listed
+  assert.match(systemPrompt, /GMAIL_SEND_EMAIL/);
+  // Draft → user OK → send loop
+  assert.match(systemPrompt, /draft.*user|起草.*用户|preview.*confirm/i);
+});
+
+test('chat prompt contains at least 5 concrete routing examples', () => {
+  const { systemPrompt } = buildChatPrompt({});
+  // 反例题:用户问 X → 应该用 Y 工具(spec §Tier 政策 列了几个)
+  // 不强求每个具体短语,但至少 5 个 "user asks" / "用户问" 的例子
+  const exampleCount = (systemPrompt.match(/user asks|用户问|用户询问|user wants/gi) || []).length;
+  assert.ok(exampleCount >= 5, `expected ≥5 routing examples, got ${exampleCount}`);
+});
+
+// ── Cache boundary 稳定性断言(spec §风险与测试 列项)──────────────────
+
+const BOUNDARY = '<!-- OPENCLAW_CACHE_BOUNDARY -->';
+
+test('cache boundary marker exists exactly once in system prompt', () => {
+  const { systemPrompt } = buildChatPrompt({ card: baseCard });
+  const occurrences = systemPrompt.split(BOUNDARY).length - 1;
+  assert.equal(occurrences, 1, `boundary must appear exactly once, got ${occurrences}`);
+});
+
+test('cache prefix is identical for any card_context / learned skills / first message', () => {
+  // Stable prefix(role + Tier 表 + 反例 + 副作用规则 + 输出风格)
+  // 不应被 card_context、learnedSkillsSection、firstMessage、outputLanguage 污染。
+  const promptA = buildChatPrompt({ card: baseCard }).systemPrompt;
+  const promptB = buildChatPrompt({
+    card: { ...baseCard, title: 'Different card', summary: 'Different summary' },
+  }).systemPrompt;
+  const promptC = buildChatPrompt({
+    card: baseCard,
+    learnedSkillsSection: '## Learned Skill\n- prefer morning meetings',
+  }).systemPrompt;
+  const promptD = buildChatPrompt({}).systemPrompt;
+
+  const prefixA = promptA.split(BOUNDARY)[0];
+  const prefixB = promptB.split(BOUNDARY)[0];
+  const prefixC = promptC.split(BOUNDARY)[0];
+  const prefixD = promptD.split(BOUNDARY)[0];
+
+  assert.equal(prefixA, prefixB, 'prefix differs across card titles');
+  assert.equal(prefixA, prefixC, 'prefix differs when learnedSkillsSection added');
+  assert.equal(prefixA, prefixD, 'prefix differs between card / no-card');
+});
+
+test('volatile suffix carries card_context and learned skills, not prefix', () => {
+  const { systemPrompt } = buildChatPrompt({
+    card: baseCard,
+    learnedSkillsSection: '## Learned\n- prefer morning',
+  });
+  const [prefix, suffix] = systemPrompt.split(BOUNDARY);
+  assert.equal(prefix.includes(baseCard.title), false, 'card title must not leak into prefix');
+  assert.equal(prefix.includes('prefer morning'), false, 'learned skill must not leak into prefix');
+  assert.match(suffix, new RegExp(baseCard.title));
+  assert.match(suffix, /prefer morning/);
+});
+```
+
+- [ ] **Step 2:跑测试,确认全部 fail**
+
+```bash
+npx tsx --test pinai-openclaw/plugins/proactive-ai/agents/chat.test.ts
+```
+
+预期:Tier 政策 / cache boundary 相关测试全 fail(prompt 里没这些内容)。
+
+- [ ] **Step 3:重写 `agents/chat.ts` `buildChatPrompt`**
+
+整体结构(伪代码):
+
+```typescript
+export function buildChatPrompt(params: ChatPromptParams): ChatPromptResult {
+  const { card, rawCardContext, outputLanguage = DEFAULT_GENERATION_LANGUAGE, learnedSkillsSection } = params;
+
+  // ── 1. STABLE PREFIX(进 cache 的部分,任何 input 不污染)──
+  const stablePrefix: string[] = [
+    'You are the **Chat** agent in the Proactive AI system.',
+    // outputLanguage 也是动态的 —— 但是它"语言名"维度非常有限(en/zh)。
+    // 如果担心污染 cache,可以用条件分支生成两个 fixed 版本。简单做法:
+    // outputLanguage 也丢 stable prefix(默认 en),由 LiteLLM cache key 区分。
+    buildOutputLanguageInstruction(outputLanguage, { fieldsDescription: 'All reply text' }),
+
+    // ── Tier 1-4 决策表 ──
+    `<tool_decision_policy>
+Always prefer upper Tier first. Browser is the last-resort tool.
+
+Tier 1 — Local read (pin raw / signals / memory / profile / cards / feedback / world):
+  Any need for "data the user has already synced" — Gmail, Calendar, Slack, Notion,
+  device apps/contacts, etc. Highest priority. Try here first.
+
+Tier 2 — Composio read (pin personal exec --tool <READ_TOOL>):
+  Use when Tier 1 has no data, data is stale (>12h), or user explicitly asks for
+  "right now" state. Slug must contain a read verb (GET/FETCH/SEARCH/LIST/READ).
+
+Tier 3 — Composio write (pin personal exec --tool <WRITE_TOOL> --allow-side-effect=true):
+  ONLY when the user has explicitly approved a side-effect action (drafting/sending
+  email, creating events, posting messages, creating Notion page, etc.).
+  NEVER write before grounding via Tier 1/2. Always show a draft to the user first
+  in chat, wait for explicit OK, THEN call the write tool. Slug must contain a write
+  verb (SEND/CREATE/POST/UPDATE/DELETE/SCHEDULE/PUBLISH/SUBMIT/UPLOAD/...). Verb-based
+  gate allows any toolkit (Gmail/Calendar/Slack/Notion/GitHub/...) — no per-tool allowlist.
+
+Tier 4 — Last-resort tools (Browser + public web fetch):
+  - Public web articles → \`pin web fetch --url <https-url>\` (NOT browser).
+  - Browser (\`browser open/click/type/...\`) → ONLY when site has no Composio adapter,
+    OAuth/captcha/2FA needed, or multi-step interactive UI no API can replicate.
+    NEVER use browser for Gmail/GCal/Slack/Notion/GitHub data — those have Tier 1/2.
+</tool_decision_policy>`,
+
+    // ── 反例(spec §Tier 政策 / §轻硬拦截 列了几个)──
+    `<routing_examples>
+- user asks "what meetings today?" → \`pin raw gcal today\`. NOT browser.
+- user asks "did Sarah email me last week?" → \`pin raw gmail recent --hours 168\`. If miss → Tier 2 \`GMAIL_FETCH_EMAILS --query "from:sarah@..."\`.
+- user asks "summarize this Forbes article: <url>" → \`pin web fetch --url <url>\`. NOT browser.
+- user asks "schedule 1on1 with Sarah Wed 3pm" → first \`pin raw gcal week\` to check conflicts, draft event details in chat, wait for OK, THEN \`pin personal exec --tool GOOGLECALENDAR_CREATE_EVENT --allow-side-effect=true ...\`.
+- user asks "send Andy a Slack" → first ground via \`pin raw slack list\` for context, draft message in chat, wait for OK, THEN \`pin personal exec --tool SLACK_SEND_MESSAGE --allow-side-effect=true ...\`.
+- user asks "open Gmail web to check" → use Tier 1/2 first (\`pin raw gmail recent\` / Composio fetch). Only fall to browser if Tier 1/2 explicitly fail.
+- user explicitly says "open browser to <site>" / "navigate to <url>" → browser is OK (user-directed override).
+</routing_examples>`,
+
+    // ── 副作用边界(冗余复述,因为 SKILL.md 也会写,但 chat agent 直读 prompt 比读 skill 文件可靠)──
+    `<side_effect_rules>
+Verb-based gate: pin personal exec auto-allows any tool whose slug contains a write
+verb, IF you pass --allow-side-effect=true. No allowlist per slug.
+
+NEVER use:
+  - GMAIL_SEND_EMAIL (use GMAIL_CREATE_EMAIL_DRAFT → user OK → GMAIL_SEND_DRAFT)
+  - High-risk verbs you didn't ground first: *_DELETE_* / STRIPE_CHARGE_* / *_TRANSFER_*
+    → stop and ask the user explicitly before considering.
+
+Approval loop (always):
+  1. Draft the action's content in chat (subject/body/event time/message text/...).
+  2. Wait for user's explicit OK ("yes" / "send it" / "go").
+  3. THEN call pin personal exec --allow-side-effect=true.
+  Don't skip step 2 even if the user seemed to approve earlier in the thread for a
+  different action.
+</side_effect_rules>`,
+
+    // ── 输出风格 ──
+    `<output_style>
+- Be specific: "I'll pull up that email from Gmail right now" not generic platitudes.
+- One reply per turn, after all tool calls finish. No pre-tool ack + post-tool recap.
+- Keep replies to 3-5 sentences.
+- If something is beyond your tools, suggest a concrete workaround.
+</output_style>`,
+  ];
+
+  // ── BOUNDARY ──
+  const cacheBoundary = '<!-- OPENCLAW_CACHE_BOUNDARY -->';
+
+  // ── 2. VOLATILE SUFFIX(每次 invocation 不同的部分,不进 cache prefix)──
+  const volatileSuffix: string[] = [];
+  const cardBlock = card ? JSON.stringify(card, null, 2) : rawCardContext;
+  if (cardBlock) {
+    volatileSuffix.push(`<card_context>\n${cardBlock}\n</card_context>`);
+  }
+  if (learnedSkillsSection && learnedSkillsSection.trim().length > 0) {
+    volatileSuffix.push(learnedSkillsSection.trim());
+  }
+
+  const systemPrompt = [...stablePrefix, cacheBoundary, ...volatileSuffix].join('\n\n');
+  const firstMessage = buildFirstMessage(card, rawCardContext);
+  return { systemPrompt, firstMessage };
+}
+```
+
+`buildFirstMessage` 在 v2 拷贝基础上加一条 source_kind 路由提示(spec §选定方案 §5):
+
+```typescript
+function buildFirstMessage(
+  card: ChatCardContext | undefined,
+  rawCardContext: string | undefined,
+): string {
+  if (!card && !rawCardContext) return '';
+  if (!card) {
+    return 'The user opened an intent card. Greet briefly and suggest what you can do based on the card context.';
+  }
+
+  const { primaryAction, urgency = 0, title, sources } = card;
+
+  // ── source-kind hint(spec §Tier 政策 / §选定方案 §5)──
+  // 让 agent 在第一时间走对应 Tier 1/2 路径,而不是临场决策。
+  // sources 字段格式 `<source_kind>:[<metadata>] '<quoted>'`
+  const sourceKinds = (sources ?? [])
+    .map((s) => s.split(':')[0])
+    .filter(Boolean);
+  const uniqueKinds = Array.from(new Set(sourceKinds));
+  const sourceHint = uniqueKinds.length > 0
+    ? ` Sources: ${uniqueKinds.join(', ')}. Use the matching pin Tier 1/2 path first (e.g. \`pin raw gmail\` for gmail, \`pin raw gcal\` for gcal, \`pin memory\` for memory:topic, \`pin world\` for world).`
+    : '';
+
+  if (urgency >= 0.7 && primaryAction.type === 'confirm') {
+    return `The user opened "${title}" and wants to proceed. Execute: "${primaryAction.label}". If anything is ambiguous, ask one question.${sourceHint}`;
+  }
+  if (primaryAction.type === 'confirm') {
+    return `The user opened "${title}". Suggested action: "${primaryAction.label}". Confirm details briefly, then execute.${sourceHint}`;
+  }
+  return `The user opened "${title}". Help them with: ${card.summary}${sourceHint}`;
+}
+```
+
+注意 `ChatCardContext` 接口需要把 `sources?: string[]` 加进去(v2 baseline 可能没有),并在前端 `CardChat.tsx` 传 cardContext 时把 `card.sources` 也带上(v2 已经在传 — `proactive-ai-frontend/src/components/CardChat.tsx` 里 cardContext 包含 `sources: card.sources`,1-A.2 reset 到 v2 后这一行还在,所以前端无需改)。
+
+- [ ] **Step 4:跑测试,确认全过**
+
+```bash
+npx tsx --test pinai-openclaw/plugins/proactive-ai/agents/chat.test.ts
+```
+
+预期:全绿。如果还 fail,检查测试用的关键字 / 段落标题 vs prompt 实际文本。
+
+- [ ] **Step 5:重写 `pin SKILL.md` 标准获取顺序段**
+
+定位"### 标准获取顺序"标题(SKILL.md L80 附近)。**保留**整个 mermaid + 数据获取层表格。**改写**这个标题之后的内容,加 Tier 1-4 决策表 + 反例。
+
+旧的 `pin signals recent --status open --limit 30` / `pin raw gmail recent --hours 24 ...` 大段保留作为 Tier 1 sample;后面加 Tier 2/3/4 sample 各一段。
+
+新版结构:
+
+```markdown
+### 标准获取顺序
+
+Chat agent 决策时,**优先级从上到下**:
+
+| Tier | 工具前缀 | 何时用 | 何时不用 |
+|---|---|---|---|
+| 1 Local read | `pin raw / signals / memory / profile / cards / feedback / world` | 任何"读用户已同步数据"。**优先级最高**。 | 数据 >12h 没同步 + latency 敏感 → Tier 2 |
+| 2 Composio read | `pin personal exec --tool <READ_TOOL>`(slug 含 GET/FETCH/SEARCH/LIST/READ) | Tier 1 没数据 / 太旧 / 用户要"现在" | Tier 1 已有时不重复拉 |
+| 3 Composio write | `pin personal exec --tool <WRITE_TOOL> --allow-side-effect=true`(slug 含 SEND/CREATE/POST/UPDATE/DELETE 等;**verb-based 跨 toolkit 允许**) | 用户**明确**要求对外部系统写动作 | 用户没批准前不要直接 Tier 3 |
+| 4 Last resort | `pin web fetch`(public web)/ `browser`(captcha/OAuth/无 API 站点) | 真没别的办法 | Tier 1-3 能做的,绝不 browser |
+
+(下面接 Tier 1/2/3/4 sample 命令各一段,从原"标准获取顺序"段下挪过来 + 补 Tier 2/3/4)
+```
+
+`pin SKILL.md` 用 unified-generator 也共用,所以只改"标准获取顺序"段是 minimum-blast 的方式(spec §风险与测试)。
+
+- [ ] **Step 6:`browser/tool.ts` description 加 "何时不要用我" 段**
+
+定位 `description: [...]` 数组(L52-90 附近)。在 `'Control a web browser. The user can see what you do live.'` 这条之前 / 之后(具体看顺序),插入:
+
+```typescript
+description: [
+  'Control a web browser. **LAST-RESORT TOOL** — only use when:',
+  '  - The site has no Composio adapter (try `pin personal tools search` first).',
+  '  - An OAuth / login / captcha / 2FA flow needs the user.',
+  '  - Multi-step interactive UI manipulation no API can replicate.',
+  '',
+  'DO NOT use for:',
+  '  - Reading Gmail / GCal / Slack / Notion / GitHub data — use `pin raw` or `pin personal exec`.',
+  '  - Reading public articles — use `pin web fetch --url <url>`.',
+  '  - Sending emails / creating events / posting messages — use `pin personal exec` with `--allow-side-effect=true`.',
+  '',
+  'The user can see what you do live. One browser per conversation with a single tab.',
+  '',
+  'IMPORTANT — Snapshot-first workflow:',
+  // ... 原来的 snapshot-first 段保留 ...
+  // ... 原来的 actions list 保留 ...
+].join('\n'),
+```
+
+- [ ] **Step 7:再跑一次 type-check + 测试**
+
+```bash
+npm run type-check
+npx tsx --test pinai-openclaw/plugins/proactive-ai/agents/chat.test.ts
+```
+
+预期:全绿。
+
+- [ ] **Step 8:Commit**
+
+```bash
+git commit -m "$(cat <<'EOF'
+feat(execution): Tier 1-4 工具决策政策 (软约束)
+
+把 spec §Tier 政策 的决策表 + 反例 + 副作用规则写进 chat agent prompt 和 pin SKILL.md;
+browser tool description 加"何时不要用我"段,显式标注 Gmail/GCal/Slack/Notion/GitHub
+等不应该走 browser。
+
+prompt 用 OPENCLAW_CACHE_BOUNDARY 切稳定 prefix(role + tier 表 + 反例 + 副作用规则
++ 输出风格)/ 易变 suffix(card_context / learned skills),保 cache hit。测试断言
+volatile 字段不污染 prefix。
+
+EOF
+)"
+```
+
+### 风险
+
+- **Cache prefix 污染**:`outputLanguage` / `learnedSkillsSection` / `card_context` 都是动态的。如果不小心把 outputLanguage 进 stable prefix,而 outputLanguage 在 zh/en 间切换,就会撞 cache。当前实现把 `buildOutputLanguageInstruction(outputLanguage, ...)` 放进 stable prefix —— OK,因为同一用户的 outputLanguage 在一个 session 里基本不变;LiteLLM 的 cache key 也包含完整 prompt hash,所以 outputLanguage 切换会命中不同 cache slot,不互相污染。
+- **`browser/tool.ts` description 过长**:OpenClaw runtime 把 tool description 注入 system prompt,长 description 也吃 token。Phase 1 倾向"简明 + 决策性",不要列每个 toolkit 名(那是 SKILL.md 的工作);prompt 里只列 Gmail / GCal / Slack / Notion / GitHub 这几个最易撞 case 就够了。
+- **`pin SKILL.md` 改了影响 unified-generator**:spec §风险与测试 已确认:Tier 表对 generation 也有用(generator 也用 pin),理论上不损坏 generation;实地验证留 1-E。
+
+---
+
+## Step 1-C:`routes/chat.ts` 加 browser-first-call 轻硬拦截
+
+### 目标
+
+Tool-call 转发路径上加 hook:**当 agent 第一个 tool call 是 `browser open` 且当前 conversation 还没有任何 `pin raw` / `pin personal exec` 调用时,拦截一次,inject 一条系统提醒消息**(让 agent 重新决策)。再次重试仍选 browser,放行(可能真的需要)。
+
+边角:**用户最近一条消息显式提到 "browser" / "网页" / "网站" / "browse" / "open <url>" 等**时直接放行,不拦(spec §风险与测试)。
+
+### Files
+
+- Modify:`pinai-openclaw/plugins/proactive-ai/routes/chat.ts`
+- Modify:`pinai-openclaw/plugins/proactive-ai/routes/chat.test.ts`
+
+### 步骤
+
+- [ ] **Step 1:写测试,断言三种 case**
+
+往 `routes/chat.test.ts` 追加(在 1-A.2 reset 到 v2 的 baseline 上):
+
+```typescript
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { shouldInterceptBrowserFirstCall } from './chat.ts';
+
+// ── 拦截 hook 单元测试 ──────────────────────────────────────────────────
+
+test('intercept: first tool call browser open with no prior pin tool → intercept', () => {
+  const result = shouldInterceptBrowserFirstCall({
+    toolName: 'browser',
+    toolArgs: { action: 'open', url: 'https://mail.google.com' },
+    priorToolCallsInRun: [],
+    userMessage: 'check my emails',
+  });
+  assert.equal(result.intercept, true);
+  assert.match(result.reminder ?? '', /Tier|pin raw|pin personal exec/i);
+});
+
+test('intercept: prior pin raw call exists → do not intercept', () => {
+  const result = shouldInterceptBrowserFirstCall({
+    toolName: 'browser',
+    toolArgs: { action: 'open', url: 'https://mail.google.com' },
+    priorToolCallsInRun: [
+      { name: 'exec', args: { command: 'pin raw gmail recent --hours 24' } },
+    ],
+    userMessage: 'check my emails',
+  });
+  assert.equal(result.intercept, false);
+});
+
+test('intercept: prior pin personal exec call exists → do not intercept', () => {
+  const result = shouldInterceptBrowserFirstCall({
+    toolName: 'browser',
+    toolArgs: { action: 'open', url: 'https://mail.google.com' },
+    priorToolCallsInRun: [
+      { name: 'exec', args: { command: 'pin personal exec --tool GMAIL_FETCH_EMAILS' } },
+    ],
+    userMessage: 'check my emails',
+  });
+  assert.equal(result.intercept, false);
+});
+
+test('intercept: user explicitly mentions browser → do not intercept', () => {
+  const result = shouldInterceptBrowserFirstCall({
+    toolName: 'browser',
+    toolArgs: { action: 'open', url: 'https://mail.google.com' },
+    priorToolCallsInRun: [],
+    userMessage: 'open Gmail in the browser to look at it',
+  });
+  assert.equal(result.intercept, false);
+});
+
+test('intercept: user mentions Chinese 网页 / 网站 → do not intercept', () => {
+  for (const message of ['打开网页', '我想看那个网站', '帮我浏览一下']) {
+    const result = shouldInterceptBrowserFirstCall({
+      toolName: 'browser',
+      toolArgs: { action: 'open', url: 'https://example.com' },
+      priorToolCallsInRun: [],
+      userMessage: message,
+    });
+    assert.equal(result.intercept, false, `should not intercept: "${message}"`);
+  }
+});
+
+test('intercept: non-browser tool → do not intercept', () => {
+  const result = shouldInterceptBrowserFirstCall({
+    toolName: 'exec',
+    toolArgs: { command: 'pin raw gmail recent' },
+    priorToolCallsInRun: [],
+    userMessage: 'check my emails',
+  });
+  assert.equal(result.intercept, false);
+});
+
+test('intercept: browser action other than open → do not intercept (already past first open)', () => {
+  // 假设 agent 已 open,后面 click / type 等不再受此 hook 限制 ——
+  // 拦截只针对"打开 browser 的瞬间",一旦 open 通过(或被 inject 后 retry 通过),
+  // 后续 same-session browser actions 不再走这个 hook。
+  const result = shouldInterceptBrowserFirstCall({
+    toolName: 'browser',
+    toolArgs: { action: 'click', ref: 'e3' },
+    priorToolCallsInRun: [],
+    userMessage: 'click submit',
+  });
+  assert.equal(result.intercept, false);
+});
+
+test('intercept: agent retries browser open after inject → do not intercept again', () => {
+  // 第二次进 hook 时,prior list 应该已含上一次 browser open(即使被 intercept,
+  // tool call 事件本身存在)。这里用 prior 含 browser open 验证不重拦。
+  const result = shouldInterceptBrowserFirstCall({
+    toolName: 'browser',
+    toolArgs: { action: 'open', url: 'https://mail.google.com' },
+    priorToolCallsInRun: [
+      { name: 'browser', args: { action: 'open', url: 'https://mail.google.com' } },
+    ],
+    userMessage: 'check my emails',
+  });
+  assert.equal(result.intercept, false);
+});
+```
+
+- [ ] **Step 2:跑测试,确认全部 fail**
+
+```bash
+npx tsx --test pinai-openclaw/plugins/proactive-ai/routes/chat.test.ts -t '^intercept:'
+```
+
+预期:`shouldInterceptBrowserFirstCall` 不存在,全部 fail。
+
+- [ ] **Step 3:在 `routes/chat.ts` 实现 `shouldInterceptBrowserFirstCall`**
+
+```typescript
+// ── Tier 政策轻硬拦截(spec §轻硬拦截)──────────────────────────────────
+// 当 agent 第一次 tool call 是 browser open 且本次 run 还没有任何 pin raw /
+// pin personal exec 调用时,拦截一次,inject Tier 政策提醒。
+//
+// 边角:用户最近一条消息显式提到 browser/网页/网站/browse 等关键词时直接放行
+// (spec §风险与测试 列项;避免误伤 user-directed 流程)。
+
+const USER_BROWSER_KEYWORDS = /browser|网页|网站|browse|navigate|打开.*url|open.*http/i;
+
+export interface InterceptInput {
+  toolName: string;
+  toolArgs: unknown;
+  priorToolCallsInRun: Array<{ name: string; args: unknown }>;
+  userMessage: string;
+}
+
+export interface InterceptResult {
+  intercept: boolean;
+  reminder?: string;
+}
+
+export function shouldInterceptBrowserFirstCall(input: InterceptInput): InterceptResult {
+  if (input.toolName !== 'browser') return { intercept: false };
+  const args = input.toolArgs as { action?: string } | null;
+  if (!args || args.action !== 'open') return { intercept: false };
+
+  // User 显式提到 browser → 放行
+  if (USER_BROWSER_KEYWORDS.test(input.userMessage)) return { intercept: false };
+
+  // Prior 已有 browser open(说明这是 retry 第二次)→ 放行
+  for (const prior of input.priorToolCallsInRun) {
+    if (prior.name === 'browser') {
+      const a = prior.args as { action?: string } | null;
+      if (a?.action === 'open') return { intercept: false };
+    }
+    if (prior.name === 'exec') {
+      const a = prior.args as { command?: string } | null;
+      const cmd = typeof a?.command === 'string' ? a.command : '';
+      if (/\bpin\s+raw\b/.test(cmd) || /\bpin\s+personal\s+exec\b/.test(cmd)) {
+        return { intercept: false };
+      }
+    }
+  }
+
+  return {
+    intercept: true,
+    reminder: [
+      '[Tier policy reminder]',
+      'Browser is the LAST-RESORT tool. Try Tier 1 first:',
+      '  - Reading Gmail/GCal/Slack/Notion data → `pin raw <toolkit>` or `pin personal exec --tool <READ_TOOL>`',
+      '  - Reading public articles → `pin web fetch --url <url>`',
+      '  - Side effects → `pin personal exec --tool <WRITE_TOOL> --allow-side-effect=true`',
+      'Reconsider: which Tier 1-3 tool fits this task? If browser truly is the only path',
+      '(captcha / 2FA / no API), retry the same browser call and it will go through.',
+    ].join('\n'),
+  };
+}
+```
+
+- [ ] **Step 4:把 hook 接到 SSE 流转发路径**
+
+在 `handleChat()` 的 `onAgentEvent` 闭包里,`tool` stream + `phase === 'start'` 之前调 hook。如果 `intercept = true`,**不**写 `chat:tool:start` 帧,而是:
+- 调 OpenClaw runtime 的 `subagent.injectSystemMessage` / 类似 API(或最 minimal 实现:用 `subagent.run` + 一个新 message 把 reminder 注入)。如果 runtime 不支持 mid-run inject,minimal 版本是:emit 一条 `chat:tool:result` 把 intercept reminder 当作"tool result"返还给 agent,让 agent 看到提醒并重新决策。
+- 把 `priorToolCallsInRun` 数组在 closure 里 append(包括被 intercept 的这次 call,这样下次 retry 走 prior-has-browser 路径放行)。
+
+具体集成方法取决于 OpenClaw subagent runtime 提供的 API。如果不确定,先用最简版:**inject reminder 走"chat:tool:result"**(content = reminder text),让 agent 自己 LLM-loop 决策下一步。这种实现的妥协是 reminder 进了 transcript(用户能在 history 里看到它),不是隐式 system 提醒——这点 acceptable 给 1-C,Plan 2 时可以重做。
+
+实际接 hook 处的伪代码(`handleChat()` 内 `onAgentEvent` 闭包,phase === 'start' 分支头部):
+
+```typescript
+if (phase === 'start') {
+  const args = evt.data.args;
+  // ── Tier 政策轻硬拦截(spec §轻硬拦截)──
+  const interceptCheck = shouldInterceptBrowserFirstCall({
+    toolName: name,
+    toolArgs: args,
+    priorToolCallsInRun: priorToolCalls,  // closure 内累积的数组
+    userMessage: body.message ?? '',
+  });
+  if (interceptCheck.intercept) {
+    ctx.api.logger.info(`[chat-stream] intercepted browser-first-call toolCallId=${toolCallId}`);
+    // 把 reminder 当作 "tool result" 返给 agent,让它自己重决策
+    write({
+      type: 'chat:tool:result',
+      toolCallId,
+      name,
+      isError: false,
+      meta: interceptCheck.reminder,
+      timestamp: Date.now(),
+    });
+    // 关键:把这次 call 计入 prior,下次 retry browser open 不再拦
+    priorToolCalls.push({ name, args });
+    // ⚠ TODO:实际让 OpenClaw subagent runtime 把 reminder 当系统消息回灌给 agent。
+    //   minimal 版只 emit SSE → agent 自己 transcript 里看不到——需用 runtime API
+    //   inject。具体待 1-C 实施时确认 OpenClaw subagent.injectMessage 是否存在。
+    return;
+  }
+  // ... 原有 tool:start 转发逻辑 ...
+  priorToolCalls.push({ name, args });  // 正常 tool call 也累积
+  // ...
+}
+```
+
+**注意点**:`priorToolCalls` 数组要在 `onAgentEvent` 监听器外、`runId` 闭包内创建(`const priorToolCalls: Array<{name, args}> = []`),不然每条 event 进来时数组又被 reset。
+
+- [ ] **Step 5:跑测试,确认全过**
+
+```bash
+npx tsx --test pinai-openclaw/plugins/proactive-ai/routes/chat.test.ts
+```
+
+预期:全绿。
+
+- [ ] **Step 6:type-check**
+
+```bash
+npm run type-check
+```
+
+- [ ] **Step 7:Commit**
+
+```bash
+git commit -m "$(cat <<'EOF'
+feat(execution): browser-first-call light hard intercept
+
+routes/chat.ts 加 hook,当 agent 第一个 tool call 是 browser open 且会话内
+没有任何 pin raw / pin personal exec 调用时,拦截一次 inject Tier 政策提醒,
+让 agent 重决策。重试再选 browser 放行(可能真的需要 OAuth/captcha)。
+
+边角:用户最近一条消息显式含 browser/网页/网站/browse 等关键词时直接放行,
+避免误伤 user-directed 流程。
+
+EOF
+)"
+```
+
+### 风险
+
+- **OpenClaw runtime 没有 mid-run inject API**:如果实地查证 runtime 不支持 mid-run system inject,fallback 到 `chat:tool:result` 把 reminder 当"工具失败/警告结果"返给 agent。Agent LLM 看到一个失败的工具结果会自动 reconsider,这种妥协对 LLM 决策仍然有效。Plan 2 重 UI 时可以把这个 reminder 用更原生的"系统提醒"渲染。
+- **拦截影响 SSE streaming**:hook 同步执行,纯 JS 检查 + 字符串匹配,不阻塞;不影响其他 `chat:delta` / `chat:tool:*` 流。
+- **`priorToolCalls` 数组只在单次 SSE run 闭包内累积,不跨 run**:意味着用户再发一条新消息开启新 run 时数组为空,如果用户**明确说**"刚才 browser 没成功,再试试" → agent 第一调 browser open 又会被拦。但因为 `userMessage` 含 "browser" 关键词,USER_BROWSER_KEYWORDS 正则会放行 —— 这种 case 边界 ok。
+- **Edge case:`browser` tool 第一次就是 `snapshot`(没 open 过)**:正常 agent 不会这样 —— snapshot 必须先 open。如果出现,hook 不拦(action !== 'open'),`browser` 工具实现会自己报错。
+
+---
+
+## Step 1-D:重写 `docs/modules/execution.mdx` 成 chat-driven + Tier 政策版
+
+### 目标
+
+把 1-A.2 reset 到 v2 baseline 的 `docs/modules/execution.mdx`(其实 1-A.2 时还没专门 reset,这一步实际是**重写整个文档**,直接覆盖 HEAD 内容)写成 chat-driven + Tier 政策版,反映 1-A/1-B/1-C 落地后的事实。删旧的 card-execution / Tool Registry / state machine / modify-mode 全部段落。
+
+### Files
+
+- Modify:`docs/modules/execution.mdx`
+- Modify:`docs/plans/README.mdx`(确认 Plan 1 / Plan 2 行项还在,旧 plan 行已清)
+
+### 步骤
+
+- [ ] **Step 1:重写 `docs/modules/execution.mdx`**
+
+新结构(对照 docs/modules/* 风格):
+
+```markdown
+---
+title: "Execution"
+description: "Chat-driven 执行的当前事实(用户/agent 在 card 或 main 上下文里调工具完成任务)。"
+---
+
+# Execution
+
+## 结论
+
+执行层是 chat-stream 单一链路:用户 → MainChatView / CardChat → POST /chat-stream/send → routes/chat.ts → runtime subagent → agent 自由调工具(pin CLI 全集 + browser + pin web fetch)→ SSE 推 chat:delta / chat:tool:*。
+
+agent 的工具决策由 **Tier 1-4 政策**收敛:Local read(pin raw / signals / memory / profile / cards / feedback / world)→ Composio read(pin personal exec READ_TOOL)→ Composio write(pin personal exec WRITE_TOOL --allow-side-effect=true,verb-based 跨 toolkit)→ Last resort(pin web fetch / browser)。Browser 是最后手段,有一处轻硬拦截(routes/chat.ts hook):agent 第一调 browser open 且会话无 pin 工具调用时拦一次提醒。
+
+(mermaid 图:UI → /chat-stream/send → chat agent → Tier 决策 → 工具 → SSE 回 UI)
+
+## 边界
+
+包含:
+- POST /chat-stream/send / /chat-stream/init / GET /chat-stream/history
+- agent system prompt(Tier 决策表 + 反例 + 副作用规则,cache boundary 切稳定 prefix)
+- pin SKILL.md 标准获取顺序段(Tier 1-4 表)
+- browser tool description "何时不要用我" 段
+- routes/chat.ts browser-first-call 轻硬拦截
+- 副作用 verb-based 门(cli/personal.ts;Plan B 上线已替代硬 allowlist)
+- pin web fetch(cli/web.ts,Tier 4 兜底)
+- chat-feedback / conversation-crystallize(沿用 v2)
+
+不包含:
+- card_executions 状态机 / Tool Registry / 形式化 plan_steps —— 已删,见 [执行层 Plan 1](../plans/2026-05-01-execution-chat-driven)
+- card-as-thread UI —— Plan 2,见 [执行层 Plan 2](../plans/2026-05-01-card-as-chat-ux)
+- generation pipeline / 卡片选择 —— [Generation](./generation)
+- 副作用反馈 / intent_card_state —— [Feedback](./feedback)
+
+## 核心链路
+
+(sequence:用户发消息 → routes/chat.ts → subagent.run → agent → tool → SSE)
+
+## 当前设计
+
+### Tier 1-4 工具决策政策
+
+(从 spec §选定方案 §2 复制四行表格,加一段 "决策提示来自 IntentCard.sources" 说明)
+
+### 决策强制方式:软约束 + 一处轻硬拦截
+
+软约束三处:
+- agents/chat.ts system prompt(Tier 决策表 + 反例 + 副作用规则)
+- pin SKILL.md 标准获取顺序段(Tier 1-4 表 + sample 命令)
+- browser/tool.ts description("何时不要用我"段)
+
+硬拦截一处:
+- routes/chat.ts shouldInterceptBrowserFirstCall:browser open 第一调 + 会话无 pin 工具 → inject 提醒。USER_BROWSER_KEYWORDS 关键词放行。retry 再选 browser 放行。
+
+### 副作用闭环(verb-based)
+
+cli/personal.ts validateControlledExecTool:slug 含 SEND/CREATE/POST/UPDATE/DELETE 等 → 必须 --allow-side-effect=true 放行;含 GET/FETCH/SEARCH/LIST/READ → 默认放行;两类都不含 → 拒。
+
+agent 在 Tier 3 写动作前必须先在 chat 里把内容草稿展示给用户 → 等用户回 OK → 再调发送 tool。GMAIL_SEND_EMAIL 在 prompt 显式黑名单(走 CREATE_DRAFT → SEND_DRAFT 链路)。高风险动词(*_DELETE_* / STRIPE_CHARGE_* / *_TRANSFER_*)prompt 提示先停下问用户。
+
+### Chat 路由
+
+(从 v2 docs/modules/execution.mdx §Chat 路由 段拷贝,删除 modify-mode 引用)
+
+### Chat agent prompt(cache boundary)
+
+stable prefix(进 cache):
+- role(You are the Chat agent)
+- outputLanguage instruction
+- Tier 1-4 决策表
+- 反例段
+- 副作用规则段
+- 输出风格段
+
+`<!-- OPENCLAW_CACHE_BOUNDARY -->`
+
+volatile suffix(每次不同):
+- card_context JSON
+- learnedSkillsSection
+
+测试断言(`agents/chat.test.ts`):不同 card / 不同 learned skills / 有无 card 时,prefix 完全相同。
+
+### Browser 工具 / 路由
+
+(从 v2 docs/modules/execution.mdx §Browser 段拷贝)
+
+### Conversation crystallize
+
+(从 v2 拷贝;不变)
+
+## 开发入口
+
+(对照新结构调整,删 Card Execution / Tool Registry / patch / clarification 入口,加 Tier 政策 / 拦截 hook 入口)
+
+## 验证方式
+
+```bash
+npx tsx --test pinai-openclaw/plugins/proactive-ai/agents/chat.test.ts
+npx tsx --test pinai-openclaw/plugins/proactive-ai/routes/chat.test.ts
+npx tsx --test pinai-openclaw/plugins/proactive-ai/cli/personal.test.ts
+npx tsx --test pinai-openclaw/plugins/proactive-ai/cli/web.test.ts
+npx tsx --test pinai-openclaw/plugins/proactive-ai/conversation-crystallize/service.test.ts
+npm run type-check
+```
+
+手工验证(进容器跑 6 个代表性场景,见 [Plan 1](../plans/2026-05-01-execution-chat-driven) §手工验证)。
+
+## 踩坑
+
+- chat agent prompt 的 cache boundary 必须严格切在 stable prefix / volatile suffix 之间;改 prompt 时不要把 card_context / learnedSkills / firstMessage 内容混进 prefix(测试硬 fail)。
+- pin SKILL.md 同时被 unified-generator 用,改"标准获取顺序"段对 generation 也有效。Tier 表对 generation 也是有用的提示;副作用边界段不要为 chat 改坏 generation。
+- routes/chat.ts 拦截 hook 的 priorToolCalls 数组在单次 SSE run 闭包内累积,不跨 run;新 message 开启新 run 时数组重置。User 显式说"再试 browser"通常含 USER_BROWSER_KEYWORDS,不会被反复拦。
+- card_executions SQLite 表保留没访问 = 等价于不存在(Plan 1 不写 DROP,审计痕迹)。
+- pin web fetch SSRF defense 在 CLI 层做,public surface 暴露后只能 fetch HTTPS / 拒内网 IP / 拒非 text/html / body cap;不要在 chat agent 里再加防御层。
+
+## 相关模块
+
+- [Generation](./generation) — IntentCard 真源,本模块通过 cardContext 接入
+- [Feedback](./feedback) — card_action / intent_card_state(不进 chat SSE)
+- [Memory](./memory) — crystallize 沉淀的 memory / skill
+- [Background Tasks](./background-tasks) — connector.init/sync/auto-dreaming(跟 chat 无关)
+
+## 相关 AI Plans
+
+- [执行层 Plan 1:chat-driven 执行 + Tier 工具政策](../plans/2026-05-01-execution-chat-driven) — 本模块当前形态的设计依据。
+- [执行层 Plan 2:Card-as-Chat UX 深化](../plans/2026-05-01-card-as-chat-ux) — Plan 1 上线后开。
+```
+
+(新版 ~150 行,去掉了 Plan A 的 ~310 行 state machine 内容)
+
+- [ ] **Step 2:核对 `docs/plans/README.mdx`**
+
+确认表格里:
+- [Memory Architecture] 行还在
+- [Device Ingest Policy + Health Raw] 行还在
+- [执行层 Plan 1:chat-driven 执行 + Tier 工具政策] 行还在
+- [执行层 Plan 2:Card-as-Chat UX 深化] 行还在
+- 没有 [Tool Registry] / [Phase 1 / Phase 2 implementation] / [Plan B agent loop] / [Plan C unified harness] 等旧行(commit `66162a83` 已清)
+
+预期:无需改动。如果发现旧行残留,删掉。
+
+- [ ] **Step 3:Mintlify 本地预览**
+
+```bash
+cd docs && npx --yes mintlify dev --port 3333
+# 浏览器打开 http://localhost:3333/modules/execution
+# 看链接 / mermaid / 表格渲染 ok
+```
+
+- [ ] **Step 4:Commit**
+
+```bash
+git commit -m "$(cat <<'EOF'
+docs(execution): rewrite module doc to chat-driven + Tier policy
+
+Plan 1 落地后的当前事实:chat-stream 单一链路,Tier 1-4 工具决策政策,
+软约束(prompt + SKILL.md + browser description)+ 一处 routes/chat.ts
+轻硬拦截 + cli/personal.ts verb-based 副作用门 + pin web fetch 兜底。
+
+删 v2 时代的 card_executions 状态机 / Tool Registry / modify-mode patch /
+clarification 全部段。
+
+EOF
+)"
+```
+
+### 风险
+
+- 文档里链接路径要相对正确(mintlify 的相对路径渲染会生效)。`(../plans/2026-05-01-execution-chat-driven)` 这种路径在 modules/ 下生效;放在 plans/ 子目录就要再调。
+- 不要在 execution.mdx 里写 Plan 2 的 UX 细节(card-as-thread / message types / option chips / browser embed) —— 那是 Plan 2 的范围。
+
+---
+
+## Step 1-E:实地联调(无 commit,user 来验)
+
+### 准备
+
+- [ ] **Step 1:确认 `docker-compose.override.yml` 仍然把 model 锁到 sonnet 4.6**
+
+```bash
+test -f docker-compose.override.yml && \
+  grep -q 'LITELLM_OPENCLAW_DEFAULT_MODEL=claude-sonnet-4-6' docker-compose.override.yml && \
+  echo "OK: override 存在且 model 正确" || \
+  echo "WARN: override 缺失或 model 不对"
+```
+
+如果缺失,**用户已明确要求保留**,照 CLAUDE.local.md "本地默认模型 override" 节建一个,内容:
+
+```yaml
+services:
+  apis:
+    environment:
+      - LITELLM_OPENCLAW_DEFAULT_MODEL=claude-sonnet-4-6
+```
+
+- [ ] **Step 2:全栈起来 + 确认旧用户容器清掉**
+
+```bash
+make restart
+docker ps --format '{{.Names}}' | grep -E '^proactive-|^assistant-' | while read name; do
+  docker rm -f "$name"
+  rm -rf "data/$name"
+done
+```
+
+(老的容器跑老镜像,直接销 + 清 data;前端 sign-in 时会拉新容器。)
+
+### 6 个手工场景(spec §手工验证)
+
+每个场景在 iOS / Web 任一端打开 chat,发对应消息,然后看容器日志确认 agent 走了正确的 Tier。
+
+| # | 场景 | 用户消息 | 期望 agent 行为 | 容器 log 期望 |
+|---|---|---|---|---|
+| 1 | Tier 1 路径 | "今天有什么会?" | `pin raw gcal today` | `tool-start name=exec ... pin=raw gcal today`,**无** `browser:opened` |
+| 2 | Tier 2 路径 | "今早有什么新邮件?"(Gmail >12h 没同步) | `pin personal exec --tool GMAIL_FETCH_EMAILS --input '{"query":"newer_than:1d"}'` | `tool-start ... pin=personal exec ...` |
+| 3 | Tier 3 路径(起草) | "建一个周三 3pm 跟 Sarah 的 1on1" | 先 `pin raw gcal week` 看冲突 → 在 chat 起草事件细节 → 等用户回 OK(本地不真发,验证起草环节) | log 有 raw gcal call,无 `--allow-side-effect=true` 调用直到用户明确确认 |
+| 4 | Tier 4 web 路径 | "帮我读一下这篇 https://forbes.com/... 文章" | `pin web fetch --url ...` 直接拉文本总结 | `tool-start ... pin=web fetch ...`,**无** `browser:opened` |
+| 5 | 轻硬拦截路径 | "去 Gmail 网页看 Sarah 的邮件" | agent 第一调 `browser open https://mail.google.com` → 应被拦 → 看到 reminder → 重决策走 `pin raw gmail recent` | log 出现 `[chat-stream] intercepted browser-first-call`;后面有 raw gmail 调用 |
+| 6 | 用户关键词放行 | "在 browser 里打开 https://example.com 给我看" | agent 第一调 browser open,**不**被拦 | log **无** intercepted 字样;`browser:opened` 出现 |
+
+### 容器日志捞法
+
+```bash
+docker ps --format '{{.Names}}' | grep -E '^proactive-|^assistant-'
+# 拿到容器名后:
+docker logs <容器名> 2>&1 | grep -E 'chat-stream|tool-start|tool-result|run-complete|browser:|intercepted' | tail -60
+```
+
+### 完成后流程(用户要求)
+
+1. 把 1-A.1 / 1-A.2 / 1-B / 1-C / 1-D 五个 commit 全 push 上 feature/proactive-ai-frontend(或保留本地,由用户决定 push 时机)
+2. `git fetch origin && git rebase origin/proactive-ai-v2`(把 v2 期间漂移过来的 commit 拉进来 rebase 一遍)
+3. rebase 完跑一次 `npm run type-check` + 关键测试,确认 rebase 没引入冲突或回归
+4. `make restart` 起服务
+5. 用户接手做 §6 个手工场景
+
+### 风险
+
+- **本地不能完整验 Tier 3 副作用闭环**(需要真实 Composio account + 真发邮件 / 真建日程)。本地只验到"agent 起草 + 等用户 OK"环节。完整闭环留 dev 部署后或在 prod 用户机器实地验。
+- **场景 3 起草环节的语义判定**:agent 起草后用户回 OK,agent 是否真发取决于本地 Composio account 接入状态;如果账号未连,会失败 —— 这是预期,不算 Plan 1 失败。
+- **场景 5 拦截 hook 实际行为**:取决于 §1-C §Step 4 选用的注入方式(SSE tool-result vs runtime inject)。SSE tool-result 路径下 reminder 会出现在 transcript 里,用户能看到;如果不希望用户看到,这是 Plan 2 的 UX 改造范围。
+- **Rebase 风险**:如果 v2 这两天有人合了别的 commit 导致 rebase 冲突,优先用代码语义判断(不要无脑 accept HEAD 或 incoming);如果冲突在 1-A reset 涉及的文件,小心 v2 的 commit 不要被覆盖回去。
+
+---
+
+## 整体验证清单(全部 5 步合并后)
+
+```bash
+# Type check 双侧
+npm run type-check
+cd proactive-ai-frontend && npm run type-check && cd ..
+
+# Plugin 测试
+npx tsx --test pinai-openclaw/plugins/proactive-ai/agents/chat.test.ts
+npx tsx --test pinai-openclaw/plugins/proactive-ai/routes/chat.test.ts
+npx tsx --test pinai-openclaw/plugins/proactive-ai/cli/personal.test.ts
+npx tsx --test pinai-openclaw/plugins/proactive-ai/cli/web.test.ts
+npx tsx --test pinai-openclaw/plugins/proactive-ai/tasks/scheduler.test.ts
+npx tsx --test pinai-openclaw/plugins/proactive-ai/conversation-crystallize/service.test.ts
+npx tsx --test pinai-openclaw/plugins/proactive-ai/browser/control-state.test.ts
+npx tsx --test pinai-openclaw/plugins/proactive-ai/browser/events.test.ts
+npx tsx --test pinai-openclaw/plugins/proactive-ai/routes/chat-history-merge.test.ts
+
+# 残留扫描:不应有任何引用
+grep -RIn --include='*.ts' --include='*.tsx' \
+  'card_executions\|CardExecutionRow\|cardExecutionEvents\|cards-api\|tool_registry\|registry/intents\|pin-cli-validator\|tools/executor' \
+  pinai-openclaw/plugins/proactive-ai/ \
+  proactive-ai-frontend/src/ \
+  apis/src/
+
+# 栈起来
+make restart
+make status
+```
+
+预期:type-check 全过、tests 全绿、grep 零结果、make status 全 healthy。
+
+---
+
+## 与 spec 对照检查清单
+
+| spec 项 | 在哪一步落地 |
+|---|---|
+| §选定方案 §1 砍 card_executions 状态机 | 1-A.2 |
+| §选定方案 §2 Tier 1-4 工具决策政策 | 1-B(prompt + SKILL.md + browser description) |
+| §选定方案 §3 软约束 + 轻硬拦截 | 1-B(软)+ 1-C(轻硬) |
+| §选定方案 §4 verb-based 副作用扩展 | 已上线(commit `57a2931c`),不动 |
+| §选定方案 §5 pin SKILL.md / chat.ts / browser tool description 改造 | 1-B |
+| §选定方案 §6 用户审批闭环 | 1-B(prompt 引导)+ 1-D(文档说清) |
+| §文件清单 删除 22 项 | 1-A.2 §逐文件清单 §后端删除 |
+| §文件清单 Reset 11 项 | 1-A.2 §逐文件清单 §reset 部分 |
+| §文件清单 修改 4 项(SKILL.md / chat.ts / browser tool / chat.ts route) | 1-B + 1-C |
+| §文件清单 保留 6 项 | 全程不动 |
+| §分期实施 1-A → 1-E | 本文档 5 步 1:1 对应 |
+| §风险与测试 cache boundary 测试 | 1-B §Step 1 测试断言 |
+| §风险与测试 拦截误伤(用户关键词) | 1-C §Step 1 / Step 3 USER_BROWSER_KEYWORDS |
+| §风险与测试 删历史卡 SQLite 表保留不删 | 1-A.2 §逐文件清单 §db.ts 注释 |
+| §手工验证 6 场景 | 1-E |

@@ -11,10 +11,11 @@ import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import { BrowserbaseManager } from './manager.js';
 import { VIEWPORT_PRESETS, type ViewportPreset } from './types.js';
 import { assertBrowserToolAllowed } from './control-state.js';
+import { renderBrowserLastResortDescription } from '../execution-policy.js';
 
 let manager: BrowserbaseManager | null = null;
 
-function getManager(api: OpenClawPluginApi): BrowserbaseManager {
+export function getBrowserManager(api: OpenClawPluginApi): BrowserbaseManager {
   if (!manager) {
     manager = new BrowserbaseManager({
       info: (msg) => api.logger.info(msg),
@@ -49,8 +50,18 @@ export function registerBrowserTool(api: OpenClawPluginApi): void {
   api.registerTool((ctx: { sessionKey?: string }) => ({
     name: 'browser',
     description: [
-      'Control a web browser. The user can see what you do live.',
-      'One browser per conversation with a single tab.',
+      'Control a web browser. **LAST-RESORT TOOL** — only use when:',
+      renderBrowserLastResortDescription(),
+      '  • The site has no Composio adapter (try `pin personal tools search` first).',
+      '  • An OAuth / login / captcha / 2FA flow needs the user.',
+      '  • Multi-step interactive UI manipulation that no API can replicate.',
+      '',
+      'DO NOT use for:',
+      '  • Reading Gmail / GCal / Slack / Notion / GitHub data — use `pin raw` or `pin personal exec`.',
+      '  • Reading public articles — use `read_web(url, intent)`.',
+      '  • Sending emails / creating events / posting messages — use `pin personal exec` with `--allow-side-effect=true`.',
+      '',
+      'The user can see what you do live. One browser per conversation with a single tab.',
       '',
       'IMPORTANT — Snapshot-first workflow:',
       '  1. Call "open" with a URL to start. It returns an accessibility snapshot.',
@@ -155,7 +166,7 @@ export function registerBrowserTool(api: OpenClawPluginApi): void {
     },
 
     execute: async (_toolCallId: string, args: Record<string, unknown>) => {
-      const mgr = getManager(api);
+      const mgr = getBrowserManager(api);
       const chatKey = ctx.sessionKey ?? 'unknown';
       const action = String(args.action ?? '');
       api.logger.info(`[browser-tool] action=${action} sessionKey=${chatKey}`);

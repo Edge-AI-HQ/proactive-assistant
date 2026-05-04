@@ -9,6 +9,8 @@ import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import { createApiHandler } from './routes/router.js';
 import type { PluginConfig } from './routes/router.js';
 import { registerBrowserTool } from './browser/tool.js';
+import { registerReadWebTool } from './browser/read-web-tool.js';
+import { registerExecutionPolicyHooks } from './execution-policy-runtime.js';
 import { startAutoLoop, type AutoLoopConfig, type PipelineState } from './scheduler/auto-loop.js';
 import { sweepStaleRunningDreams } from './dreaming/store.js';
 import { BackgroundTaskScheduler } from './tasks/scheduler.js';
@@ -116,6 +118,8 @@ const plugin = {
       return;
     }
     // Local SQLite — no external DB required.
+    registerExecutionPolicyHooks(api);
+    registerReadWebTool(api);
 
     // Seed default profile on first load
     if (!profileSeeded) {
@@ -188,6 +192,11 @@ const plugin = {
         workerId,
         tickIntervalMs: Number(process.env.BACKGROUND_TASK_TICK_MS ?? 60_000),
         leaseDurationMs: Number(process.env.BACKGROUND_TASK_LEASE_MS ?? 60_000),
+        // Drain up to N tasks per tick (default 5) so a burst of enqueued
+        // tasks doesn't sit idle waiting for the 60s tick. Hard-capped at
+        // 50 inside the scheduler to avoid starving connector sync /
+        // dreaming.
+        maxTasksPerTick: Number(process.env.BACKGROUND_TASK_MAX_PER_TICK ?? 5),
         logger: {
           info: (msg) => api.logger.info(msg),
           warn: (msg) => api.logger.warn(msg),

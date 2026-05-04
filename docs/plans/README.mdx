@@ -25,6 +25,8 @@ description: "AI coding 过程中保留的设计和实施计划。"
 | Plan | 状态 | 什么时候看 |
 |---|---|---|
 | [Memory Architecture](./memory-architecture) | 已定稿 | 改 memory / profile / skill / signals / evolution / raw.db 相关代码,需要理解 v3 设计取舍和 schema 细节时。 |
-| [Card Execution](./2026-04-28-card-execution) | brainstorm 草稿 | 设计卡片预执行 + halt + confirm 模型(Naro 模式)。设计 execution / background-tasks 改造前必读。 |
 | [Device Ingest Policy + Health Raw](./2026-04-30-device-ingest-policy-and-health-raw) | 实施中 | 改 `/devices/ingest`、端侧 `kind` 路由、`sync_mode`、unknown fallback signal、健康 raw 表时必读。 |
 | [iOS Mobile Data Android Parity](./2026-05-01-ios-mobile-data-android-parity) | 实施计划 | 改 iOS 端侧本地存储、rule-based derivation、device token、`/api/proactive/devices/ingest` 上报、后台同步和调试面板时必读。 |
+| [执行层 Plan 1:回归 chat-driven 执行 + Tier 工具政策](./2026-05-01-execution-chat-driven) | 已实施 | 砍掉 `card_executions` 状态机 + Tool Registry,执行回到 chat agent 主导;通过 Tier 1-4 工具决策政策 + verb-based 副作用扩展 + 一处轻量硬拦截,解决 agent 工具滥用(尤其"该用 pin 时上 browser")。改 `agents/chat.ts` / `pin SKILL.md` / `browser/tool.ts` description / `routes/chat.ts` 前必读。**Plan 2 的前置**。 |
+| [执行层 Plan 1 实施计划](./2026-05-02-execution-chat-driven-impl) | 已实施 | Plan 1 的 file-level 拆分:1-A.1 land pin web fetch / 1-A.2 大 reset / 1-B Tier prompt / 1-C 拦截 hook / 1-D 文档重写 / 1-E 联调。回查实施步骤、文件清单、风险点时看。 |
+| [执行层 Plan 2:Card-as-Chat UX 深化](./2026-05-01-card-as-chat-ux) | brainstorm 草稿(待 Plan 1 联调通过后开) | Plan 1 稳定后做 UI 层统一:Card Detail = Chat Thread,工具结果 / draft / option chips / browser embed 全部以 message 形态内嵌,卡片状态从 thread 末尾消息推断。改 CardDetailBody / CardChat / chat 消息渲染 / NowFeed badge 之前必读。 |

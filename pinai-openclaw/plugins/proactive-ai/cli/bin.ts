@@ -22,6 +22,10 @@ import { handleSkills } from './skills.js';
 // background_tasks queue admin
 // (docs/plans/2026-04-24-data-connector-init-tasks.mdx Phase A)
 import { handleTasks } from './tasks.js';
+// Tier 4 fallback: pin web fetch — read-only HTTPS fetcher with SSRF
+// defense. Chat agent uses it to pull public article text instead of
+// opening a browser.
+import { handleWeb } from './web.js';
 import { isPublicCliCommand, publicCliDomains } from './public-surface.js';
 
 const DOMAINS: Record<string, (args: string[]) => Promise<string>> = {
@@ -38,6 +42,7 @@ const DOMAINS: Record<string, (args: string[]) => Promise<string>> = {
   evolution: handleEvolution,
   skills: handleSkills,
   tasks: handleTasks,
+  web: handleWeb,
 };
 
 function isInternalSurface(): boolean {

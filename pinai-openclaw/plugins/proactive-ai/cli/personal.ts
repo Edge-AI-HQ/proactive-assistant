@@ -4,17 +4,11 @@ import {
   requireComposioApiKey,
   getComposioUserId,
 } from '../shared/composio-key.js';
+import { validateComposioExecTool } from '../execution-policy.js';
 
 const COMPOSIO_API_BASE = 'https://backend.composio.dev/api/v3';
 const DEFAULT_TOOL_SEARCH_LIMIT = 20;
 const MAX_TOOL_SEARCH_LIMIT = 50;
-const READ_TOOL_VERBS = new Set(['FETCH', 'FIND', 'GET', 'LIST', 'LOOKUP', 'QUERY', 'READ', 'RETRIEVE', 'SEARCH']);
-const SIDE_EFFECT_TOOL_VERBS = new Set([
-  'ADD', 'ARCHIVE', 'CANCEL', 'CREATE', 'DELETE', 'DRAFT', 'EXECUTE', 'FORWARD',
-  'INSERT', 'INVITE', 'MOVE', 'PATCH', 'POST', 'PUBLISH', 'REMOVE', 'REPLY',
-  'RUN', 'SCHEDULE', 'SEND', 'SUBMIT', 'UPDATE', 'UPLOAD',
-]);
-const SIDE_EFFECT_TOOL_ALLOWLIST = new Set(['GMAIL_CREATE_EMAIL_DRAFT', 'GMAIL_SEND_DRAFT']);
 
 async function composioApi(apiKey: string, path: string, init?: RequestInit): Promise<Record<string, any>> {
   const response = await fetch(`${COMPOSIO_API_BASE}${path}`, {
@@ -86,14 +80,14 @@ export async function handlePersonal(args: string[]): Promise<string> {
     const slug = readToolSlug(flags, positional[1]);
     if (!slug) return failure('personal', 'exec', 'validation', 'Missing --tool');
     const allowSideEffect = flags['allowSideEffect'] === 'true' || flags['allow-side-effect'] === 'true';
-    const controlError = validateControlledExecTool(slug, { allowSideEffect });
+    const controlError = validateComposioExecTool(slug, { allowSideEffect });
     if (controlError) {
       return failure(
         'personal',
         'exec',
         'validation',
         controlError,
-        'Public PCI exec allows read/query tools by default. Only allowlisted side effects can run, and they require `--allow-side-effect true` after inspecting `pin personal tools schema --tool <slug>`.',
+        'Public PCI exec allows read/query tools by default. Safe write tools require `--allow-side-effect true` after inspecting `pin personal tools schema --tool <slug>`. Dangerous writes and unknown verbs are blocked.',
       );
     }
     const inputRes = readJsonFlag<Record<string, unknown>>(flags, 'input', 'personal', 'exec');
@@ -227,27 +221,6 @@ function normalizeTool(item: any): Record<string, unknown> {
     description: item.description ?? null,
     toolkit: item.toolkit?.slug ?? item.toolkit_slug ?? item.toolkit ?? null,
   };
-}
-
-function validateControlledExecTool(slug: string, opts: { allowSideEffect: boolean }): string | null {
-  const normalizedSlug = slug.toUpperCase();
-  const tokens = slug.toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
-  const sideEffectVerb = tokens.find((token) => SIDE_EFFECT_TOOL_VERBS.has(token));
-  const allowedSideEffect = SIDE_EFFECT_TOOL_ALLOWLIST.has(normalizedSlug);
-  if (allowedSideEffect) {
-    if (!opts.allowSideEffect) {
-      return `Tool ${slug} is a side-effect tool and requires --allow-side-effect true.`;
-    }
-    return null;
-  }
-  if (sideEffectVerb) {
-    return `Tool ${slug} is not in the public PCI side effect allowlist (${sideEffectVerb.toLowerCase()}).`;
-  }
-  const hasReadVerb = tokens.some((token) => READ_TOOL_VERBS.has(token));
-  if (!hasReadVerb) {
-    return `Tool ${slug} is not allowed for public PCI exec because it is not clearly read/query-only.`;
-  }
-  return null;
 }
 
 function formatComposioError(data: Record<string, any>, text: string): string {

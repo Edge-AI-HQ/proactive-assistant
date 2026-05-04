@@ -77,13 +77,37 @@ flowchart LR
 
 ### 标准获取顺序
 
-卡片生成或 assistant 规划时，优先按这个形状拿数据：
+Chat agent 决策时,**优先级从上到下**;只有上层真的拿不到才退到下一层。Browser
+是最后手段。
+
+| Tier | 工具前缀 | 何时用 | 何时不用 |
+|---|---|---|---|
+| **1 Local read** | `pin raw / signals / memory / profile / cards / feedback / world` | 任何"读用户已同步数据"。**优先级最高**。 | 数据 >12h 没同步 + latency 敏感 → Tier 2 |
+| **2 Composio read** | `pin personal exec --tool <READ_TOOL>` (slug 含 GET/FETCH/SEARCH/LIST/READ/QUERY/LOOKUP/RETRIEVE/FIND) | Tier 1 没数据 / 太旧 / 用户要"现在" | Tier 1 已能满足时不重复拉 |
+| **3 Composio write** | `pin personal exec --tool <WRITE_TOOL> --allow-side-effect=true` (普通写 slug 含 SEND/CREATE/POST/UPDATE/REPLY/DRAFT/SCHEDULE/PUBLISH/UPLOAD 等;**verb-based 跨 toolkit 允许**) | 用户**明确**要求对外部系统写动作 | 用户没批准前不要直接 Tier 3；DELETE/REMOVE/CANCEL/TRANSFER/CHARGE/PAY/PURCHASE/ARCHIVE/MOVE/EXECUTE/RUN 这类高风险动词暂时拒绝 |
+| **4 Last resort**(强制 two-step) | **Step 1**: agent tool 用 `read_web(url, intent)`；CLI fallback 用 `pin web fetch --url <https-url>`。任何 https URL 先打这一步,不预判。**Step 2**: `browser open / click / type / ...` —— **仅当** fetch 返回 login wall(401/403)/ 空 body / JS-only SPA shell / 内容不足 / 真需交互(captcha / 2FA / 多步表单)才升级 | 真没别的办法,且**先 Step 1 后 Step 2** | Tier 1-3 能做的,绝不 browser;**绝不**跳过 Step 1 直接 browser |
+
+**决策反例**:
+
+- "今天有什么会?" → `pin raw gcal today`,**不**开 browser。
+- "Sarah 上周给我发邮件没?" → `pin raw gmail recent --hours 168`,没命中再
+  `pin personal exec --tool GMAIL_FETCH_EMAILS --input '{"query":"from:sarah@..."}'`。
+- "帮我读一下这篇 Forbes 文章" → agent tool 用 `read_web(url, intent)`,CLI fallback 才用 `pin web fetch --url <url>`,**不**直接开 browser。
+- 任何 public 商城 / 促销页 / 价格表 / 公开文档 → 先 `read_web`(Step 1)。**仅当** fetch 返回 login wall / 空 SPA shell / 内容不足 才升级 browser,且要在回复里写明 fetch 失败的具体证据,不靠"我猜要交互"。
+- "打开 <url> 看一下" → 仍然先 `read_web`(Step 1),用户没说 "browser" 就别直接开。
+- "建一个 Wed 3pm 跟 Sarah 的 1on1" → 先 `pin raw gcal week` 看冲突 → 在 chat
+  起草事件 → 等用户回 OK → `pin personal exec --tool GOOGLECALENDAR_CREATE_EVENT
+  --allow-side-effect=true ...`。
+- "帮 Andy 发条 Slack" → 先 `pin raw slack list` 拉上下文 → 起草消息 → 等用户
+  OK → `pin personal exec --tool SLACK_SEND_MESSAGE --allow-side-effect=true ...`。
+
+**Tier 1 标准获取顺序**(卡片生成 / 长链路规划时,优先按这个形状拿数据):
 
 ```bash
-# 新鲜观察：最强 "why now" 来源
+# 新鲜观察:最强 "why now" 来源
 pin signals recent --status open --limit 30
 
-# 原始 personal 数据：补细节
+# 原始 personal 数据:补细节
 pin raw gmail recent --hours 24 --limit 20
 pin raw gcal today --timezone Asia/Shanghai
 pin raw device-apps --top 20
@@ -95,13 +119,33 @@ pin memory list --quality 0.7 --limit 30
 pin memory list --subjectPrefix topic: --quality 0.6 --limit 20
 pin memory search --query "投资 偏好" --limit 10
 
-# World 流：按用户兴趣打分后的公共信号
+# World 流:按用户兴趣打分后的公共信号
 pin world shortlist --profile-id default --limit 10
 
 # 避免重复和打扰
 pin cards recent --limit 10
 pin feedback list --limit 50
 pin feedback stats
+```
+
+**Tier 2 / Tier 3 / Tier 4 样例**:
+
+```bash
+# Tier 2:Composio live read
+pin personal tools search --query "fetch" --toolkit gmail
+pin personal tools schema --tool GMAIL_FETCH_EMAILS
+pin personal exec --tool GMAIL_FETCH_EMAILS --input '{"query":"newer_than:1d"}'
+
+# Tier 3:必须先 Tier 1/2 grounding + 用户明确 OK
+pin personal exec --tool GMAIL_CREATE_EMAIL_DRAFT --allow-side-effect=true \
+  --input '{"to":"andy@...","subject":"...","body":"..."}'
+pin personal exec --tool GMAIL_SEND_DRAFT --allow-side-effect=true \
+  --input '{"draftId":"r-..."}'
+
+# Tier 4:public web 文章
+# agent tool: read_web(url, intent)
+# CLI fallback:
+pin web fetch --url https://example.com/article
 ```
 
 ### 数据判断规则
@@ -235,15 +279,20 @@ CLI 会在调用 Composio 前拒绝。
 
 ### 副作用边界
 
-`--allow-side-effect true` 不是万能开关。Public PCI 只允许这个 allowlist：
+`--allow-side-effect true` 不是万能开关。Public PCI 现在按 Composio tool slug
+里的动词统一分类，所有 toolkit 走同一套规则：
 
-```text
-GMAIL_CREATE_EMAIL_DRAFT
-GMAIL_SEND_DRAFT
-```
+- Read 默认允许：GET / FETCH / SEARCH / LIST / READ / QUERY / LOOKUP /
+  RETRIEVE / FIND。
+- 普通 Write 必须用户明确要求，并显式加 `--allow-side-effect true`：
+  CREATE / UPDATE / SEND / POST / REPLY / DRAFT / SCHEDULE / PUBLISH /
+  UPLOAD / ADD / INSERT / PATCH / SUBMIT / FORWARD / INVITE。
+- 高风险 Write 暂时拒绝：DELETE / REMOVE / CANCEL / TRANSFER / CHARGE /
+  PAY / PURCHASE / ARCHIVE / MOVE / EXECUTE / RUN。
+- 未知动词拒绝：slug 里判断不出来读写，就不执行。
 
-两者都必须显式加 `--allow-side-effect true`。不要使用 `GMAIL_SEND_EMAIL`，
-也不要使用 allowlist 外的 create/update/delete/send tool。
+`GMAIL_SEND_EMAIL` 继续禁止。Gmail 发送必须走
+`GMAIL_CREATE_EMAIL_DRAFT` → 用户 review → `GMAIL_SEND_DRAFT`。
 
 ### Gmail 执行样例
 
@@ -275,7 +324,7 @@ pin personal exec \
   --allow-side-effect true
 ```
 
-遇到其他 side-effect tool，停下来请求产品决策，不要尝试绕过 allowlist。
+遇到高风险或未知 side-effect tool，停下来请求产品决策，不要尝试绕过 policy。
 
 ## 常见失败处理
 
@@ -296,4 +345,4 @@ pin personal connections list
 2. 如果 synced raw 已经有需要的数据，优先用获取数据层，不要直接 exec。
 3. tool input 不确定时，exec 前先看 schema。
 4. 常规 agent 工作不要开启 internal surface。
-5. 不要使用 explicit allowlist 之外的 side-effect tool。
+5. 不要绕过 verb-based side-effect policy；高风险或未知动词先拒绝。
