@@ -1,7 +1,7 @@
-.PHONY: help init env-local ensure-env ensure-env-apis ensure-env-litellm
-.PHONY: up down build build-apis build-openclaw restart status
+.PHONY: help init env-local ensure-env ensure-env-apis ensure-env-litellm ensure-env-pinai-agents
+.PHONY: up down build build-apis build-openclaw build-pinai-agents restart restart-pinai-agents status
 .PHONY: ensure-local-compose build-apis-local build-openclaw-local up-local down-local status-local logs-local restart-apis-local
-.PHONY: logs logs-apis logs-litellm logs-postgres
+.PHONY: logs logs-apis logs-litellm logs-postgres logs-pinai-agents
 .PHONY: migrate reset clean
 .PHONY: deploy-dev deploy-prod deploy-litellm-dev deploy-litellm-prod build-openclaw-image
 .PHONY: ios android
@@ -45,7 +45,7 @@ help: ## Show this help
 # Triggers when .env is missing or .env.dev is newer.
 # Requires .env.keys (get from team members).
 
-ensure-env: ensure-env-apis ensure-env-litellm ## Auto-decrypt all .env files if needed
+ensure-env: ensure-env-apis ensure-env-litellm ensure-env-pinai-agents ## Auto-decrypt all .env files if needed
 
 ensure-env-apis:
 	@if [ ! -f apis/.env ] || [ apis/.env.dev -nt apis/.env ]; then \
@@ -73,8 +73,21 @@ ensure-env-litellm:
 			> ops/litellm/.env; \
 	fi
 
+ensure-env-pinai-agents:
+	@if [ ! -f pinai-agents/.env ] || [ pinai-agents/.env.dev -nt pinai-agents/.env ]; then \
+		if [ ! -f pinai-agents/.env.keys ]; then \
+			echo "Missing pinai-agents/.env.keys"; \
+			echo "  Get .env.keys from team members"; \
+			exit 1; \
+		fi; \
+		echo "Decrypting pinai-agents/.env.dev -> pinai-agents/.env"; \
+		$(DOTENVX) get -f pinai-agents/.env.dev --format json 2>/dev/null \
+			| python3 -c 'import json,sys;[print(k+"="+chr(39)+str(v)+chr(39)) for k,v in json.load(sys.stdin).items() if not k.startswith("DOTENV_PUBLIC_KEY")]' \
+			> pinai-agents/.env; \
+	fi
+
 env-local: ## Force re-decrypt all .env files
-	@rm -f apis/.env ops/litellm/.env
+	@rm -f apis/.env ops/litellm/.env pinai-agents/.env
 	@$(MAKE) --no-print-directory ensure-env
 
 # ── Setup ──
@@ -90,14 +103,17 @@ init: ## First-time setup: install deps and show next steps
 
 # ── Build ──
 
-build: ensure-env-apis ## Build all images (APIs + OpenClaw)
-	$(export_vite) && $(COMPOSE) build apis openclaw-image
+build: ensure-env-apis ## Build all images (APIs + OpenClaw + pinai-agents)
+	$(export_vite) && $(COMPOSE) build apis openclaw-image pinai-agents
 
 build-apis: ensure-env-apis ## Build only the APIs image
 	$(export_vite) && $(COMPOSE) build apis
 
 build-openclaw: ## Build only the local OpenClaw image
 	$(COMPOSE) build openclaw-image
+
+build-pinai-agents: ## Build only the pinai-agents image
+	$(COMPOSE) build pinai-agents
 
 ensure-local-compose: ## Generate a local compose file with a non-conflicting Docker subnet
 	@python3 -c "from pathlib import Path; src = Path('docker-compose.yml').read_text(); src = src.replace('172.18.0.0/16', '$(LOCAL_IPV4_SUBNET)').replace('fd00:18::/64', '$(LOCAL_IPV6_SUBNET)'); Path('$(LOCAL_COMPOSE_FILE)').write_text(src)"
@@ -120,7 +136,7 @@ build-openclaw-local: ## Build the OpenClaw image locally without BuildKit remot
 # ── Run ──
 
 up: ensure-env ## Build and start all services
-	$(export_vite) && $(COMPOSE) build apis openclaw-image
+	$(export_vite) && $(COMPOSE) build apis openclaw-image pinai-agents
 	$(COMPOSE) up -d
 
 down: ## Stop all services
@@ -129,6 +145,10 @@ down: ## Stop all services
 restart: ensure-env ## Restart all services (rebuild APIs to pick up changes)
 	$(export_vite) && $(COMPOSE) build apis
 	$(COMPOSE) up -d --force-recreate apis
+
+restart-pinai-agents: ## Rebuild and recreate only the pinai-agents container
+	$(COMPOSE) build pinai-agents
+	$(COMPOSE) up -d --force-recreate --no-deps pinai-agents
 
 status: ## Show running containers
 	$(COMPOSE) ps
@@ -161,6 +181,9 @@ logs-litellm: ## Tail LiteLLM logs
 
 logs-postgres: ## Tail Postgres logs
 	$(COMPOSE) logs -f postgres
+
+logs-pinai-agents: ## Tail pinai-agents logs
+	$(COMPOSE) logs -f pinai-agents
 
 # ── Database ──
 

@@ -2,8 +2,9 @@
  * Custom ChatModelAdapter for the proactive-ai backend.
  *
  * POST /chat-stream/send returns an SSE stream:
- *   data: { type: "chat:thinking", ... }
- *   data: { type: "chat:delta", delta: "...", ... }
+ *   data: { type: "chat:thinking", ... }                   // stream open signal
+ *   data: { type: "chat:reasoning:delta", delta: "..." }    // extended thinking
+ *   data: { type: "chat:delta", delta: "...", ... }         // final answer text
  *   data: { type: "chat:reply", content: "...", ... }
  *   data: { type: "chat:tool:start",  toolCallId, name, meta?, argsPreview?, pinCommand?, ... }
  *   data: { type: "chat:tool:update", toolCallId, name, ... }
@@ -12,9 +13,8 @@
  *   data: { type: "chat:done", ... }
  *
  * The adapter yields accumulated content snapshots as required by assistant-ui.
- * Tool events are surfaced as `tool-call` content parts so the UI can render
- * the agent's current tool usage (e.g. exec / browser / pin CLI invocations)
- * inline with the streaming reply.
+ * `reasoning` parts surface Claude's extended-thinking content and render
+ * before the final assistant text. Tool events surface as `tool-call` parts.
  */
 import {
   useEffect,
@@ -161,6 +161,13 @@ function createAdapter({
               const delta = typeof data.delta === "string" ? data.delta : "";
               if (delta) {
                 builder.appendText(delta);
+                yield { content: builder.snapshot() };
+              }
+            } else if (type === "chat:reasoning:delta") {
+              // Claude extended-thinking content. Streamed before final text.
+              const delta = typeof data.delta === "string" ? data.delta : "";
+              if (delta) {
+                builder.appendReasoning(delta);
                 yield { content: builder.snapshot() };
               }
             } else if (type === "chat:reply") {

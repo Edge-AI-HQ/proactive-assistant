@@ -45,6 +45,7 @@ import {
 } from '../domain/devices/pairing.js';
 import { isDomainError } from '../domain/common/errors.js';
 import { createRateLimit } from '../domain/common/rate_limit.js';
+import { chatHandler, chatInitHandler, generateHandler } from '../domain/proactive/agents_proxy.js';
 import { getContainerRuntime } from '../domain/container/provider_factory.js';
 import { relayGatewayWs } from '../domain/gateway/gateway_ws_relay.js';
 import { getCurrentModel, setCurrentModel } from '../domain/gateway/gateway_rpc.js';
@@ -518,6 +519,21 @@ router.all('/api/gateway', async (req, res) => {
 });
 
 // -- Proxy routes --
+
+// Step 1.7: forward agent flows (generate / chat) to the pinai-agents
+// Python service instead of the user's OpenClaw container. Order matters —
+// these specific routes must register BEFORE the catch-all `/api/proxy/*`
+// below, otherwise the catch-all's container proxy claims them first.
+// See docs/plans/2026-05-04-step1-deepagents-skeleton.mdx.
+router.post('/api/proxy/generate', requireProactiveAuth, async (req, res) => {
+  await generateHandler(req, res);
+});
+router.post('/api/proxy/chat-stream/send', requireProactiveAuth, async (req, res) => {
+  await chatHandler(req, res);
+});
+router.post('/api/proxy/chat-stream/init', requireProactiveAuth, async (req, res) => {
+  await chatInitHandler(req, res);
+});
 
 router.all('/api/proxy/*', requireProactiveAuth, async (req, res) => {
   const orchestrator = getOrchestrator();

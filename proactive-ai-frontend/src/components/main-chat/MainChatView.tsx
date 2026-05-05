@@ -23,6 +23,7 @@ import {
 import "highlight.js/styles/github.css";
 import { useProactiveChatRuntime } from "../chat/useProactiveChatRuntime";
 import ToolActivityCard from "./ToolActivityCard";
+import ReasoningContent from "./ReasoningContent";
 import MessageActionBar from "./MessageActionBar";
 import MarkdownContent from "./MarkdownContent";
 import BrowserPanel from "../browser-view/BrowserPanel";
@@ -143,6 +144,7 @@ function AssistantMessage() {
           <MessagePrimitive.Content
             components={{
               Text: MarkdownContent,
+              Reasoning: ReasoningContent,
               tools: { Fallback: ToolActivityCard },
             }}
           />
