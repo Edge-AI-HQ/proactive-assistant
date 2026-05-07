@@ -173,7 +173,15 @@ class DefaultDispatcher:
     async def _handle_kind(self, task: ScheduledTaskRow, run_id: str) -> None:
         kind = task.kind
         if kind == "auto.dreaming":
-            await self._call_chat("/agent/run/dream", task, run_id)
+            # Pass trigger_kind through so the dream agent records the
+            # right value in pai_evolution_runs (the dream-history panel
+            # filters on trigger_kind in 'daily_dream' | 'manual').
+            payload_trigger = (task.payload or {}).get("trigger")
+            trigger_kind = "manual" if payload_trigger == "manual" else "daily_dream"
+            await self._call_chat(
+                "/agent/run/dream", task, run_id,
+                extra={"trigger_kind": trigger_kind},
+            )
         elif kind == "connector.evolve":
             await self._call_chat(
                 "/agent/run/evolve", task, run_id,
