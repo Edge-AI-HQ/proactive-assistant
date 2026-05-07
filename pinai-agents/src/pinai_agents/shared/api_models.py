@@ -343,6 +343,24 @@ class ChatHistoryResponse(_CamelModel):
     messages: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class ChatThreadItem(_CamelModel):
+    """Single thread row for the /api/chat-stream/threads list endpoint.
+    Mirrors pai_chat_threads + minor camelCase wrapping."""
+
+    thread_id: str
+    kind: str  # 'main' | 'card'
+    card_id: str | None = None
+    title: str | None = None
+    archived: bool = False
+    created_at: datetime
+    last_message_at: datetime | None = None
+    message_count: int = 0
+
+
+class ChatThreadListResponse(_CamelModel):
+    threads: list[ChatThreadItem]
+
+
 class ChatSendRequest(_CamelModel):
     session_key: str = Field(min_length=1, max_length=200)
     # Always non-empty: every chat-stream/send call carries either a
