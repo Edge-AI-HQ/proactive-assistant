@@ -16,6 +16,13 @@ primary_region = 'iad'
 
 [env]
   DEPLOY_ENV = 'test'
+  # Inter-process URLs — defaults in code use docker-compose service
+  # names (`pinai-web` / `pinai-chat`) which don't resolve on fly's
+  # 6PN. Override with the per-process-group fly hostnames so:
+  #   * chat → web   (sandbox phantom mints, native @tool callbacks)
+  #   * web → chat   (browser SSE, scheduler dispatch, chat-stream)
+  WEB_INTERNAL_URL = "http://web.process.proactive-ai-agents-test.internal:8000"
+  CHAT_INTERNAL_URL = "http://chat.process.proactive-ai-agents-test.internal:8001"
 
 [processes]
   # Secrets come from `flyctl secrets set --process-group=<web|chat> ...` —
