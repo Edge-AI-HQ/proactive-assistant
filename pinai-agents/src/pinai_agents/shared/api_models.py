@@ -345,7 +345,12 @@ class ChatHistoryResponse(_CamelModel):
 
 class ChatSendRequest(_CamelModel):
     session_key: str = Field(min_length=1, max_length=200)
-    message: str = Field(min_length=1, max_length=8000)
+    # `message` is optional: card-chat bootstrap (an empty thread with
+    # cardContext) lets the agent produce the opening turn from the card
+    # alone. Frontend `buildChatRequestBody` omits this field in that
+    # case, so requiring it 422'd those requests. Plain user-typed
+    # messages still flow as before — non-empty strings up to 8000 chars.
+    message: str | None = Field(default=None, max_length=8000)
     card_context: dict[str, Any] | None = None
 
 
