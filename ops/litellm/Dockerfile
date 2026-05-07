@@ -8,7 +8,7 @@ RUN apk add --no-cache curl && curl -sfS https://dotenvx.sh/install.sh | sh && a
 COPY litellm_config.yaml config.yaml
 
 # Copy encrypted .env files (decrypted at runtime via DOTENV_PRIVATE_KEY_*)
-COPY .env.dev .env.production ./
+COPY .env.dev .env.test .env.production ./
 
 EXPOSE 4000
 
