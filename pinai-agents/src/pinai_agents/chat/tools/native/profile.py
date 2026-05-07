@@ -46,15 +46,39 @@ class ProfileUpsertInput(BaseModel):
     )
     facts: dict[str, Any] | None = Field(
         default=None,
-        description="Structured persona facts bucket (role, employer, family). Replaces the entire facts JSONB; merge client-side if you want to preserve fields.",
+        description=(
+            "Structured persona facts bucket (role, employer, family, etc.). "
+            "Each VALUE is a descriptive sentence — *what + evidence + when* — "
+            "not a single-word tag. Good: "
+            "`facts.employer = 'Founder + software engineer at PIN-AI; "
+            "works on the PIN-AI-ASSISTANT repo on refactor/deepagents.'`. "
+            "Bad: `facts.employer = 'PIN-AI'` — too thin to ground future "
+            "card generation. Replaces the entire facts JSONB; "
+            "read-merge-write client-side to preserve sibling keys."
+        ),
     )
     preferences: dict[str, Any] | None = Field(
         default=None,
-        description="Structured preferences bucket (communication_style, working_hours, dietary). Replaces the entire JSONB.",
+        description=(
+            "Structured preferences bucket (communication_style, working_hours, "
+            "dietary, tooling, etc.). Each VALUE is a descriptive sentence — "
+            "*what + why / when observed*. Good: `preferences.trading_platform "
+            "= 'Uses Robinhood for both individual and Roth IRA; trades large-"
+            "lot leveraged ETFs and runs daily crypto DCA.'`. Bad: "
+            "`preferences.trading_platform = 'Robinhood'`. Replaces the entire "
+            "JSONB."
+        ),
     )
     constraints: dict[str, Any] | None = Field(
         default=None,
-        description="Structured constraints bucket (no_meetings_before, allergies, hard_deadlines). Replaces the entire JSONB.",
+        description=(
+            "Structured constraints bucket (no_meetings_before, allergies, "
+            "hard_deadlines, etc.). Each VALUE is a descriptive sentence — "
+            "*the constraint + scope + source*. Good: `constraints."
+            "deep_work_hours = 'Reserves 9–11 AM PT for deep work; declines "
+            "meetings in that window unless flagged urgent.'`. Bad: "
+            "`constraints.deep_work_hours = '9-11am'`. Replaces the entire JSONB."
+        ),
     )
 
 

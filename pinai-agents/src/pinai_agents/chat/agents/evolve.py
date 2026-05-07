@@ -86,6 +86,13 @@ layers; each has a different durability and editing rule.
   *replaced wholesale* by upsert. To add a single new key, read the
   current bucket from the gather, merge in your new key, and pass the
   merged dict — otherwise you'll wipe siblings.
+- Profile bucket VALUES are descriptive sentences, not tag-words.
+  Each value answers *what + evidence + when/frequency*. Good:
+  `facts.employer = "Founder + engineer at PIN-AI; active on the
+  PIN-AI-ASSISTANT refactor/deepagents branch since 2026-03."`
+  Bad: `facts.employer = "PIN-AI"` — a future generation pass can't
+  do anything with that. Same rule applies to preferences and
+  constraints.
 - goals: only `client.profile.upsert_goal(...)` when you see REPEATED
   evidence across multiple raw rows (≥3 events / messages over a
   sustained window). Use a stable slug for `key` so the same goal
