@@ -71,10 +71,20 @@ async def init_checkpointer() -> AsyncPostgresSaver:
     # search_path: <schema>,public ensures (a) AsyncPostgresSaver DDL targets
     # our schema, (b) any built-in functions resolved via public still work.
     options = f"-c search_path={schema},public"
+    # Stale-connection protection: chat checkpointer is low-traffic (only
+    # chat-stream send path touches it), so pool connections sit idle for
+    # minutes between turns. fly→Supabase NAT/keepalive timeouts silently
+    # kill those idle TCP sessions, leaving the pool with dead handles
+    # that hang for 7+ seconds with `psycopg.OperationalError: consuming
+    # input failed: could not receive data from server` on the next query.
+    # `check=` runs a tiny SELECT 1 before each borrow; `max_idle=300`
+    # proactively recycles conns that haven't been used in 5 min.
     _pool = AsyncConnectionPool(
         conninfo=settings.database_url,
         max_size=10,
+        max_idle=300,
         kwargs={"autocommit": True, "row_factory": dict_row, "options": options},
+        check=AsyncConnectionPool.check_connection,
         open=False,
     )
     await _pool.open()
