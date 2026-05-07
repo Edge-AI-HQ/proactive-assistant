@@ -205,7 +205,6 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_PIN_API_URL: ${VITE_PIN_API_URL:-http://localhost:8000}
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
         VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
         VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY:-}
     image: proactive-ai-frontend:latest

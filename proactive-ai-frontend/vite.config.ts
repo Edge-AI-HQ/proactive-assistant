@@ -16,8 +16,8 @@ export default defineConfig(({ mode }) => {
     if (!String(env.VITE_SUPABASE_PUBLISHABLE_KEY ?? "").trim()) {
       missing.push("VITE_SUPABASE_PUBLISHABLE_KEY");
     }
-    if (!String(env.VITE_API_BASE_URL ?? "").trim())
-      missing.push("VITE_API_BASE_URL");
+    if (!String(env.VITE_PIN_API_URL ?? "").trim())
+      missing.push("VITE_PIN_API_URL");
     if (missing.length > 0) {
       throw new Error(
         `[Capacitor] 缺少环境变量: ${missing.join(", ")}。\n` +
