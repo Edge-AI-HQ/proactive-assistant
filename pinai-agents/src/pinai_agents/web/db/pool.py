@@ -29,15 +29,15 @@ async def open_pool(*, dsn: str | None = None, max_size: int | None = None) -> A
     """Open and warm an async pool. Caller owns shutdown via `pool.close()`.
 
     Args:
-        dsn: override connection string. Defaults to web settings supabase_db_url.
+        dsn: override connection string. Defaults to web settings database_url.
         max_size: override pool ceiling. Defaults to web settings.
 
     Raises RuntimeError if no DSN is configured (web won't boot without DB).
     """
     settings = get_web_settings()
-    conninfo = dsn or settings.supabase_db_url
+    conninfo = dsn or settings.database_url
     if not conninfo:
-        msg = "SUPABASE_DB_URL not set; web process needs a DB connection"
+        msg = "DATABASE_URL not set; web process needs a DB connection"
         raise RuntimeError(msg)
 
     pool = AsyncConnectionPool(

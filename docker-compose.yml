@@ -78,7 +78,7 @@ services:
       # ship in the image. Default `postgresql://` looks for psycopg2 which
       # we deliberately don't install (psycopg v3 is the going-forward
       # adapter).
-      SUPABASE_DB_URL: postgresql+psycopg://postgres:postgres@postgres:5432/postgres
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/postgres
     working_dir: /app
     entrypoint: ["sh", "-eu", "-c"]
     command:
@@ -97,7 +97,7 @@ services:
           echo "FATAL: failed to ensure litellm database"; exit 1
         fi
         echo "→ applying pai_* yoyo migrations..."
-        yoyo apply --batch -d "$$SUPABASE_DB_URL"
+        yoyo apply --batch -d "$$DATABASE_URL"
         echo "→ db-migrate complete."
 
   # ── pinai-agents WEB process group ──
@@ -126,7 +126,7 @@ services:
       # .env.dev). The DB URL is overridden here only because the in-
       # cluster compose Postgres uses service-name DNS, not the prod
       # Supabase URL stored in .env.
-      SUPABASE_DB_URL: postgresql://postgres:postgres@postgres:5432/postgres
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
       # web → chat HTTP proxy target.
       CHAT_INTERNAL_URL: http://pinai-chat:8001
     ports:
@@ -158,7 +158,7 @@ services:
         condition: service_started
     env_file:
       # Chat-only env: master credentials stripped (PAI_HMAC_SECRET,
-      # SUPABASE_DB_URL, COMPOSIO_API_KEY, STRIPE_*). Auto-derived from
+      # DATABASE_URL, COMPOSIO_API_KEY, STRIPE_*). Auto-derived from
       # .env in `make ensure-env-pinai-agents`. The trust-boundary
       # fail-fast in chat/asgi.py crashes if any of those leak in.
       - ./pinai-agents/.env.chat

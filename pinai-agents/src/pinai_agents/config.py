@@ -44,7 +44,11 @@ class WebSettings(_BaseAppSettings):
     # `current_setting('app.user_id')::bigint` matching row user_id —
     # repository code wraps every query in BEGIN; SET LOCAL; ...; COMMIT
     # so RLS fires per request.
-    supabase_db_url: str | None = None
+    # Aligned with Python ORM / LangGraph / LiteLLM convention. The
+    # web pool and the chat checkpointer both read this from env, but
+    # they're scoped to different schemas: web → pai_*, chat →
+    # langgraph (see ChatSettings.langgraph_schema below).
+    database_url: str | None = None
     # pg.Pool tuning. 12 mirrors apis pool size; raise as workload grows.
     db_pool_max: int = 12
     db_pool_min: int = 1

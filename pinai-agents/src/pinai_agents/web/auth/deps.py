@@ -70,7 +70,7 @@ def get_pool(request: Request) -> AsyncConnectionPool:
     if pool is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="DB pool not initialized — check SUPABASE_DB_URL",
+            detail="DB pool not initialized — check DATABASE_URL",
         )
     return pool
 

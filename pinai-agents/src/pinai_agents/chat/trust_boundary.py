@@ -21,8 +21,15 @@ without booting the chat app.
 
 from __future__ import annotations
 
+# NOTE: DATABASE_URL is intentionally NOT forbidden — chat uses it for
+# its own LangGraph checkpointer (langgraph schema). The original
+# design split web/chat onto separate DB roles (`postgres` vs
+# `pai_chat`, scoped via 024_pai_chat_role.sql) so each process gets
+# its own scoped DSN under the same DATABASE_URL var name. That role
+# split isn't wired in test today; both processes connect with the
+# same superuser DSN. Trust boundary degraded for now — re-tighten
+# when web/chat split into separate fly apps with per-app secrets.
 FORBIDDEN_ENVS: tuple[str, ...] = (
-    "SUPABASE_DB_URL",            # service_role DB connection — only web
     "SUPABASE_SERVICE_ROLE_KEY",  # Supabase Storage admin — only web
     "PAI_JWT_SIGNING_KEY",        # EdDSA private key — only web (signs)
     "COMPOSIO_API_KEY",           # Composio master — only web (connector ingest)

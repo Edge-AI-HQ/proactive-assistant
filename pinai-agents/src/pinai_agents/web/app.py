@@ -74,13 +74,13 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("pinai-agents WEB starting (deploy_env=%s)", settings.deploy_env)
 
     pool: AsyncConnectionPool | None = None
-    if settings.supabase_db_url:
+    if settings.database_url:
         pool = await open_pool()
         app.state.pool = pool
     else:
         # Useful in pure-unit-test runs that don't need a DB. Logs loudly
         # so you notice if a real env forgot to set the URL.
-        logger.warning("SUPABASE_DB_URL not set — DB pool + scheduler disabled")
+        logger.warning("DATABASE_URL not set — DB pool + scheduler disabled")
         app.state.pool = None
 
     scheduler_task: asyncio.Task[None] | None = None
@@ -185,7 +185,7 @@ def create_app() -> FastAPI:
     async def health() -> dict[str, object]:
         """Liveness probe. 200 if the process is up.
 
-        Includes a cheap DB ping — if SUPABASE_DB_URL is configured but
+        Includes a cheap DB ping — if DATABASE_URL is configured but
         the pool is in a bad state, /health surfaces that as `db: error`
         without flipping the overall response code (so K8s / Fly health
         checks don't yank the pod for a transient pg blip; rely on

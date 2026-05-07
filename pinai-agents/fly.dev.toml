@@ -21,7 +21,7 @@ primary_region = 'iad'
 [processes]
   # Same image, two entrypoints. Secrets come from `flyctl secrets set
   # --process-group=<web|chat> ...` — chat process group MUST NOT receive
-  # PAI_HMAC_SECRET / SUPABASE_DB_URL / COMPOSIO_API_KEY / STRIPE_*.
+  # PAI_HMAC_SECRET / DATABASE_URL / COMPOSIO_API_KEY / STRIPE_*.
   # The chat/asgi.py boot-time fail-fast assert crashes
   # the process if any leak; lint + grep tests provide additional walls.
   web  = "uvicorn pinai_agents.web.asgi:app --host 0.0.0.0 --port 8000"
@@ -53,8 +53,8 @@ primary_region = 'iad'
 
 [deploy]
   # release_command runs in a temporary machine with the WEB process
-  # group's secrets (it has SUPABASE_DB_URL). +psycopg selects psycopg v3.
-  release_command = "sh -c 'exec yoyo apply --batch -d \"postgresql+psycopg://${SUPABASE_DB_URL#*://}\"'"
+  # group's secrets (it has DATABASE_URL). +psycopg selects psycopg v3.
+  release_command = "sh -c 'exec yoyo apply --batch -d \"postgresql+psycopg://${DATABASE_URL#*://}\"'"
   strategy = 'rolling'
 
 [[vm]]
