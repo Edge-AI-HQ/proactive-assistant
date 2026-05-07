@@ -1,5 +1,4 @@
-"""Sync a dotenvx-encrypted .env file to a fly app's secrets, splitting
-per process group so the chat process never receives master creds.
+"""Sync a dotenvx-encrypted .env file to a fly app's secrets.
 
 Used by `.github/workflows/deploy-test.yml` before each pinai-agents
 test deploy. Also runnable locally for emergency rotation:
@@ -10,15 +9,18 @@ test deploy. Also runnable locally for emergency rotation:
         --app proactive-ai-agents-test \\
         --env-file .env.test
 
-The forbidden-for-chat list is imported from
-`pinai_agents.chat.trust_boundary` — that module is the single source
-of truth, kept side-effect free precisely so this script can import
-it without booting the chat app.
+Behavior: secrets travel only via stdin pipe to `flyctl secrets
+import` — they never appear in argv, so no Python traceback or shell
+trace can leak them. Default `--stage` so the next `flyctl deploy`
+applies them atomically with the image.
 
-Default behavior: stages secrets via `flyctl secrets set --stage` so
-the caller's subsequent `flyctl deploy` applies them atomically with
-the new image. Use `--no-stage` to apply immediately (which triggers
-an immediate fly redeploy on its own).
+NOTE: per-process-group secrets are not supported by flyctl
+(verified on 0.4.48 — `flyctl secrets set --help` has no such flag).
+fly secrets are app-level and visible to every process group. The
+trust boundary previously planned in chat/trust_boundary.py is
+TEMPORARILY DISABLED — see chat/asgi.py for the commented-out boot
+guard. When/if web and chat split into separate fly apps, the
+import here can scope to one app each, and the boot guard re-enables.
 """
 
 from __future__ import annotations
@@ -27,9 +29,6 @@ import argparse
 import json
 import subprocess
 import sys
-from collections.abc import Iterable
-
-from pinai_agents.chat.trust_boundary import FORBIDDEN_ENVS
 
 
 def _decrypt_env(env_file: str) -> dict[str, str]:
@@ -46,20 +45,22 @@ def _decrypt_env(env_file: str) -> dict[str, str]:
     return {k: v for k, v in decoded.items() if not k.startswith("DOTENV_PUBLIC_KEY")}
 
 
-def _flyctl_set(
-    app: str,
-    process_group: str,
-    kvs: Iterable[tuple[str, str]],
-    *,
-    stage: bool,
-) -> None:
-    args = ["flyctl", "secrets", "set", "--app", app, f"--process-group={process_group}"]
+def _flyctl_import(app: str, kvs: dict[str, str], *, stage: bool) -> None:
+    """Pipe KEY=VAL\\n lines into `flyctl secrets import` via stdin.
+
+    secrets never enter argv. If flyctl exits non-zero we sys.exit
+    with a deliberately scrubbed message — the default Python traceback
+    would echo subprocess.run's args, which is the leak vector that
+    burned us in the previous run.
+    """
+    payload = "".join(f"{k}={v}\n" for k, v in kvs.items())
+    args = ["flyctl", "secrets", "import", "--app", app]
     if stage:
         args.append("--stage")
-    args.extend(f"{k}={v}" for k, v in kvs)
-    # subprocess.run handles arg quoting; values with spaces / quotes / newlines
-    # are passed through cleanly because we never go through a shell.
-    subprocess.run(args, check=True)
+    try:
+        subprocess.run(args, input=payload, text=True, check=True)
+    except subprocess.CalledProcessError as exc:
+        sys.exit(f"ERROR: flyctl secrets import exited {exc.returncode} for app={app} (stdin contained {len(kvs)} secrets — not echoed)")
 
 
 def main() -> int:
@@ -78,19 +79,12 @@ def main() -> int:
         print(f"ERROR: no decrypted entries from {args.env_file} — check DOTENV_PRIVATE_KEY_*", file=sys.stderr)
         return 1
 
-    forbidden = set(FORBIDDEN_ENVS)
-    web_kvs = list(kvs.items())
-    chat_kvs = [(k, v) for k, v in kvs.items() if k not in forbidden]
-    filtered = sorted(set(kvs) & forbidden)
-
     print(f"Source: {args.env_file} ({len(kvs)} keys after dotenvx decode)")
-    print(f"Forbidden-for-chat (single source: trust_boundary.py): {sorted(forbidden)}")
-    print(f"  → {args.app}/web:  {len(web_kvs)} keys")
-    print(f"  → {args.app}/chat: {len(chat_kvs)} keys (filtered out {len(filtered)}: {filtered})")
+    print(f"Importing into {args.app} (app-level — both web and chat process groups)")
+    print(f"Keys: {sorted(kvs)}")
 
     stage = not args.no_stage
-    _flyctl_set(args.app, "web", web_kvs, stage=stage)
-    _flyctl_set(args.app, "chat", chat_kvs, stage=stage)
+    _flyctl_import(args.app, kvs, stage=stage)
 
     suffix = "(staged — apply on next `flyctl deploy`)" if stage else "(applied immediately)"
     print(f"OK {suffix}")
