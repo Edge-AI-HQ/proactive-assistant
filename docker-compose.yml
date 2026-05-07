@@ -211,6 +211,13 @@ services:
     image: proactive-ai-frontend:latest
     container_name: pin-ai-frontend
     restart: unless-stopped
+    # nginx upstream + resolver come from env vars at container start
+    # (envsubst'd into the rendered config). docker-compose sets the
+    # internal DNS + the compose-network service name; fly overrides
+    # these via [env] in proactive-ai-frontend/fly.<env>.toml.
+    environment:
+      NGINX_RESOLVER: "127.0.0.11 ipv6=off"
+      NGINX_UPSTREAM: "pinai-web:8000"
     ports:
       - "3000:8080"
     depends_on:

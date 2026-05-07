@@ -43,11 +43,21 @@ FROM nginx:1.27-alpine
 #                        from the browser's POV, so no CORS preflight)
 #   /<anything else>   → SPA fallback to index.html (React Router)
 #
-# Upstream is hard-coded to the docker-compose service name `pinai-web`.
-# On fly.io the frontend image is rebuilt with this swapped to whatever
-# the agents app's internal hostname is (e.g. proactive-ai-agents-dev.internal).
-COPY <<'EOF' /etc/nginx/conf.d/default.conf
-resolver 127.0.0.11 ipv6=off valid=10s;
+# Runtime config via nginx:alpine's standard envsubst template
+# mechanism (https://github.com/nginxinc/docker-nginx — `templates/`
+# is processed at startup by /docker-entrypoint.d/20-envsubst-on-templates.sh).
+# One image, three envs — the upstream + resolver come from env vars
+# set per environment:
+#   * docker-compose: NGINX_UPSTREAM=pinai-web:8000, NGINX_RESOLVER=127.0.0.11 ipv6=off
+#   * fly test/dev/prod: NGINX_UPSTREAM=web.process.<app>.internal:8000,
+#                        NGINX_RESOLVER=[fdaa::3]
+#
+# NGINX_ENVSUBST_FILTER restricts substitution to NGINX_* so nginx's own
+# $host / $remote_addr / etc. variables are left alone.
+ENV NGINX_ENVSUBST_FILTER="^NGINX_"
+
+COPY <<'EOF' /etc/nginx/templates/default.conf.template
+resolver ${NGINX_RESOLVER} valid=10s;
 
 server {
     listen 8080;
@@ -71,7 +81,7 @@ server {
     # nginx's response buffer. Long read/send timeouts cover multi-minute
     # agent turns (Daytona sandbox + LLM tool calls).
     location /api/ {
-        proxy_pass http://pinai-web:8000;
+        proxy_pass http://${NGINX_UPSTREAM};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -86,7 +96,7 @@ server {
 
     # /health — backend liveness probe used by lib/api.ts probeBackendHealth.
     location = /health {
-        proxy_pass http://pinai-web:8000/health;
+        proxy_pass http://${NGINX_UPSTREAM}/health;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_read_timeout 10s;
