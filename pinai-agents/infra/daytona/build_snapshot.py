@@ -106,6 +106,24 @@ def main() -> int:
             if existing:
                 print(f"  → deleting existing snapshot {name}")
                 sdk.snapshot.delete(existing)
+                # Daytona's delete is async — control returns before the
+                # snapshot is actually gone from the org-level index.
+                # Without waiting, the create() below races and Daytona
+                # returns DaytonaConflictError("already exists"). Poll
+                # until snapshot.get() raises (i.e. NotFound), with a
+                # bounded timeout so we don't hang the CI run forever
+                # if Daytona is degraded.
+                import time  # noqa: PLC0415  — local import keeps the module side-effect-free
+                deadline = time.monotonic() + 60
+                while time.monotonic() < deadline:
+                    try:
+                        sdk.snapshot.get(name)
+                    except Exception:
+                        print("  → delete confirmed")
+                        break
+                    time.sleep(2)
+                else:
+                    print("  WARN: snapshot still visible 60s after delete; create may still conflict")
         except Exception as e:
             # Most likely "not found" — fine.
             print(f"  (no prior snapshot to delete: {type(e).__name__})")
