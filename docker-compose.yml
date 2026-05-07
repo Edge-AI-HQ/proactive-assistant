@@ -216,7 +216,7 @@ services:
     # these via [env] in proactive-ai-frontend/fly.<env>.toml.
     environment:
       NGINX_RESOLVER: "127.0.0.11 ipv6=off"
-      NGINX_UPSTREAM: "pinai-web:8000"
+      NGINX_UPSTREAM_URL: "http://pinai-web:8000"
     ports:
       - "3000:8080"
     depends_on:

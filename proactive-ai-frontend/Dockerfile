@@ -44,11 +44,18 @@ FROM nginx:1.27-alpine
 # Runtime config via nginx:alpine's standard envsubst template
 # mechanism (https://github.com/nginxinc/docker-nginx — `templates/`
 # is processed at startup by /docker-entrypoint.d/20-envsubst-on-templates.sh).
-# One image, three envs — the upstream + resolver come from env vars
-# set per environment:
-#   * docker-compose: NGINX_UPSTREAM=pinai-web:8000, NGINX_RESOLVER=127.0.0.11 ipv6=off
-#   * fly test/dev/prod: NGINX_UPSTREAM=web.process.<app>.internal:8000,
+# One image, three envs — the upstream is a full URL with scheme so
+# the same template handles plain-HTTP (compose) and HTTPS-via-fly-proxy
+# (fly) without branching:
+#   * docker-compose: NGINX_UPSTREAM_URL=http://pinai-web:8000,
+#                     NGINX_RESOLVER="127.0.0.11 ipv6=off"
+#   * fly test/dev/prod: NGINX_UPSTREAM_URL=https://<agents-app>.fly.dev,
 #                        NGINX_RESOLVER=[fdaa::3]
+#
+# Fly path goes through public anycast (rather than 6PN direct) because
+# the agents `web` process binds only IPv4 (fly-proxy needs IPv4 for
+# same-machine forwarding); 6PN direct would require dual-stack on the
+# app side. See pinai-agents/fly.test.toml for the bind rationale.
 #
 # NGINX_ENVSUBST_FILTER restricts substitution to NGINX_* so nginx's own
 # $host / $remote_addr / etc. variables are left alone.
@@ -74,17 +81,28 @@ server {
     # browser, so no CORS preflight + the Authorization header rides
     # straight through.
     #
+    # Host header set to $proxy_host (derived from NGINX_UPSTREAM_URL),
+    # not $host, so the upstream fly-proxy sees its own hostname for
+    # SNI/routing — the original browser Host (frontend's domain) would
+    # not match any backend app and would 404 at fly-proxy.
+    # `proxy_ssl_server_name on` + `proxy_ssl_name $proxy_host` makes
+    # the TLS handshake send SNI = backend hostname, so fly-proxy picks
+    # the right cert and routes to the right app. Both no-ops for the
+    # plain-HTTP compose path.
+    #
     # `proxy_buffering off` is required for /api/chat-stream/send SSE so
     # tokens stream to the browser in real time instead of stalling in
     # nginx's response buffer. Long read/send timeouts cover multi-minute
     # agent turns (Daytona sandbox + LLM tool calls).
     location /api/ {
-        proxy_pass http://${NGINX_UPSTREAM};
+        proxy_pass ${NGINX_UPSTREAM_URL};
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
+        proxy_set_header Host $proxy_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_ssl_server_name on;
+        proxy_ssl_name $proxy_host;
         proxy_buffering off;
         proxy_cache off;
         proxy_request_buffering off;
@@ -94,9 +112,11 @@ server {
 
     # /health — backend liveness probe used by lib/api.ts probeBackendHealth.
     location = /health {
-        proxy_pass http://${NGINX_UPSTREAM}/health;
+        proxy_pass ${NGINX_UPSTREAM_URL}/health;
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
+        proxy_set_header Host $proxy_host;
+        proxy_ssl_server_name on;
+        proxy_ssl_name $proxy_host;
         proxy_read_timeout 10s;
     }
 

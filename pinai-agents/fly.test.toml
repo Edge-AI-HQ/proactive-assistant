@@ -16,12 +16,23 @@ primary_region = 'iad'
 
 [env]
   DEPLOY_ENV = 'test'
-  # Inter-process URLs — defaults in code use docker-compose service
-  # names (`pinai-web` / `pinai-chat`) which don't resolve on fly's
-  # 6PN. Override with the per-process-group fly hostnames so:
-  #   * chat → web   (sandbox phantom mints, native @tool callbacks)
-  #   * web → chat   (browser SSE, scheduler dispatch, chat-stream)
-  WEB_INTERNAL_URL = "http://web.process.proactive-ai-agents-test.internal:8000"
+  # Inter-process URLs — code defaults to docker-compose service names
+  # (`pinai-web` / `pinai-chat`) which don't resolve on fly's 6PN.
+  # web and chat have asymmetric exposure needs, so they use different
+  # transport paths:
+  #   * chat→web: public anycast (HTTPS). web must be public-facing for
+  #     the Daytona sandbox callback (PAI_API_URL); reusing that URL
+  #     here keeps one entry point for everyone reaching web. fly-proxy
+  #     edge short-circuits same-region traffic, ~1ms overhead.
+  #   * web→chat: 6PN service-discovery direct (HTTP/IPv6). chat must
+  #     NOT be reachable from the public internet — it runs the LLM
+  #     loop with virtual_key + Daytona token. Fly's flycast can't be
+  #     restricted to internal-only on apps that also have a public IP
+  #     (allocating `[[services.ports]]` exposes the same port on
+  #     anycast too). 6PN direct skips fly-proxy entirely; chat binds
+  #     `--host ::` so only IPv6 service-discovery callers can reach
+  #     it, and there is no anycast listener to route public traffic.
+  WEB_INTERNAL_URL = "https://proactive-ai-agents-test.fly.dev"
   CHAT_INTERNAL_URL = "http://chat.process.proactive-ai-agents-test.internal:8001"
   # Daytona sandboxes run OUTSIDE fly's 6PN — they can't resolve
   # *.internal hostnames. PAI_API_URL is what chat injects into each
@@ -40,23 +51,19 @@ primary_region = 'iad'
   # chat MUST NOT receive master credentials. See fly.dev.toml comment
   # block for the full trust-boundary rationale.
   #
-  # `--host ::` (IPv6 wildcard) is required so other fly machines can
-  # reach this listener over 6PN — fly's private network is IPv6-only.
-  # Linux dual-stack accepts IPv4 traffic on the same socket via
-  # IPv4-mapped IPv6 addresses, so docker-compose / public-anycast IPv4
-  # paths keep working. `--host 0.0.0.0` would silently break the
-  # frontend nginx proxy_pass on 6PN with TCP RST.
-  web  = "uvicorn pinai_agents.web.asgi:app --host :: --port 8000"
+  # Asymmetric host bind matches asymmetric exposure (see [env] comment):
+  #   * web `0.0.0.0` (IPv4): fly-proxy public anycast forwards
+  #     same-machine over IPv4. Without IPv4, public traffic gets
+  #     `[PC01] instance refused connection`.
+  #   * chat `::` (IPv6): only reachable over Fly's IPv6-only 6PN
+  #     service-discovery DNS. No fly-proxy listener (no [[services]]
+  #     ports = anycast), so the public internet has no path in.
+  web  = "uvicorn pinai_agents.web.asgi:app --host 0.0.0.0 --port 8000"
   chat = "uvicorn pinai_agents.chat.asgi:app --host :: --port 8001"
 
-# Public HTTPS edge → web only.
-#
-# auto_stop_machines = false (NOT 'suspend'): the frontend nginx
-# reaches web through fly's 6PN at web.process.<app>.internal:8000.
-# Public requests trigger anycast proxy which wakes suspended
-# machines, but 6PN traffic bypasses that proxy — DNS would still
-# resolve to the suspended machine's IPv6 and nginx would get
-# connection-refused (502). Keeping web always-on avoids the gap.
+# Public HTTPS edge → web only. All inbound web traffic (sandbox
+# callbacks, frontend nginx /api/* proxy, chat→web internal calls)
+# enters here, so this is the single anycast listener for web.
 [http_service]
   internal_port = 8000
   force_https = true
@@ -70,11 +77,13 @@ primary_region = 'iad'
     hard_limit = 80
     soft_limit = 50
 
-# chat is reachable only on the internal 6PN at chat.process.app.internal:8001.
-[[services]]
-  protocol = 'tcp'
-  internal_port = 8001
-  processes = ['chat']
+# chat has NO fly-proxy services entry on purpose. Reachable only via
+# Fly's 6PN service-discovery DNS (chat.process.<app>.internal:8001),
+# which routes IPv6 directly to the chat machine — never through
+# fly-proxy. Adding `[[services.ports]]` here would expose chat on
+# both flycast AND public anycast (you cannot restrict to flycast on
+# an app that has any public IP), which would leak the LLM loop +
+# its credentials to the internet.
 
 [deploy]
   release_command = "sh -c 'exec yoyo apply --batch -d \"postgresql+psycopg://${DATABASE_URL#*://}\"'"
