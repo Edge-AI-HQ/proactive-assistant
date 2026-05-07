@@ -22,8 +22,8 @@ BUILD_LOG="$IOS_DIR/build/xcodebuild.log"
 
 ENV="${1:-dev}"
 case "$ENV" in
-  dev)  ENV_FILE="$REPO_ROOT/apis/.env.dev" ;;
-  prod) ENV_FILE="$REPO_ROOT/apis/.env.production" ;;
+  dev)  ENV_FILE="$REPO_ROOT/pinai-agents/.env.dev" ;;
+  prod) ENV_FILE="$REPO_ROOT/pinai-agents/.env.production" ;;
   *)    echo "Usage: $0 [dev|prod]" >&2; exit 1 ;;
 esac
 
@@ -37,21 +37,21 @@ echo "==> Reading VITE_* from $ENV_FILE"
 
 get_env() { npx @dotenvx/dotenvx get "$1" -f "$ENV_FILE" 2>/dev/null; }
 
-export VITE_API_BASE_URL
+export VITE_PIN_API_URL
 export VITE_SUPABASE_URL
 export VITE_SUPABASE_PUBLISHABLE_KEY
-VITE_API_BASE_URL="$(get_env VITE_API_BASE_URL)"
+VITE_PIN_API_URL="$(get_env VITE_PIN_API_URL)"
 VITE_SUPABASE_URL="$(get_env VITE_SUPABASE_URL)"
 VITE_SUPABASE_PUBLISHABLE_KEY="$(get_env VITE_SUPABASE_PUBLISHABLE_KEY)"
 
-for var in VITE_API_BASE_URL VITE_SUPABASE_URL VITE_SUPABASE_PUBLISHABLE_KEY; do
+for var in VITE_PIN_API_URL VITE_SUPABASE_URL VITE_SUPABASE_PUBLISHABLE_KEY; do
   if [ -z "${!var}" ]; then
     echo "Error: $var is empty after reading from $ENV_FILE" >&2
     exit 1
   fi
 done
 
-echo "    VITE_API_BASE_URL=$VITE_API_BASE_URL"
+echo "    VITE_PIN_API_URL=$VITE_PIN_API_URL"
 
 # ── Validate ASC credentials ──
 
@@ -83,8 +83,8 @@ npx cap sync ios
 
 echo "==> Verifying build output..."
 BUILT_JS="$IOS_DIR/App/public/assets/index-"*.js
-if ! grep -q "$VITE_API_BASE_URL" $BUILT_JS 2>/dev/null; then
-  echo "Error: VITE_API_BASE_URL not found in built JS — aborting" >&2
+if ! grep -q "$VITE_PIN_API_URL" $BUILT_JS 2>/dev/null; then
+  echo "Error: VITE_PIN_API_URL not found in built JS — aborting" >&2
   exit 1
 fi
 echo "    API URL verified in build output"
