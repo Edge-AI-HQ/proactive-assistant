@@ -23,6 +23,12 @@ primary_region = 'iad'
   #   * web → chat   (browser SSE, scheduler dispatch, chat-stream)
   WEB_INTERNAL_URL = "http://web.process.proactive-ai-agents-test.internal:8000"
   CHAT_INTERNAL_URL = "http://chat.process.proactive-ai-agents-test.internal:8001"
+  # LiteLLM lives in a separate fly app. Going through public anycast
+  # (HTTPS) instead of 6PN — the LiteLLM container binds 0.0.0.0
+  # (IPv4 only) and 6PN is IPv6 only, so internal would refuse.
+  # Public hop is ~negligible for /user/new and /key/generate admin
+  # ops, fine for embed + completion too in test.
+  LITELLM_BASE_URL = "https://proactive-ai-litellm-test.fly.dev/v1"
 
 [processes]
   # Secrets come from `flyctl secrets set --process-group=<web|chat> ...` —
