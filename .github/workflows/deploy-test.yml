@@ -11,6 +11,10 @@ name: Deploy Test
 # intentionally not deployed — test exercises the
 # frontend → pinai-agents → LiteLLM path only.
 #
+# Daytona snapshot is rebuilt on every run before deploy-agents so
+# sandbox.py forks from it (~5-10s) instead of declarative image
+# building (~30-50s) on the first chat message.
+#
 # Secret injection model:
 #   * pinai-agents — fly secrets per process group (web vs chat).
 #     The sync step calls scripts/sync_fly_secrets.py, which imports
@@ -30,8 +34,44 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Bake/refresh the Daytona sandbox snapshot before pinai-agents deploys.
+  # sandbox.py's PINAI_DAYTONA_SNAPSHOT path forks from this snapshot in
+  # ~5-10s instead of the ~30-50s declarative image build. Tag is fixed
+  # ("pinai-sandbox:test"), --recreate forces a fresh build each run so
+  # the snapshot tracks the current pinai_sdk source — no version bump
+  # ritual needed.
+  build-daytona-snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v4
+
+      - name: Decrypt DAYTONA_API_KEY from .env.test
+        working-directory: pinai-agents
+        env:
+          DOTENV_PRIVATE_KEY_TEST: ${{ secrets.DOTENV_PRIVATE_KEY_TEST }}
+        run: |
+          DAYTONA_API_KEY=$(npx @dotenvx/dotenvx get DAYTONA_API_KEY -f .env.test)
+          # Mask before exporting so it never appears in subsequent step logs.
+          echo "::add-mask::$DAYTONA_API_KEY"
+          echo "DAYTONA_API_KEY=$DAYTONA_API_KEY" >> "$GITHUB_ENV"
+
+      - name: Build/refresh Daytona snapshot (pinai-sandbox:test)
+        working-directory: pinai-agents
+        run: |
+          uv sync --no-dev
+          uv run python infra/daytona/build_snapshot.py --version test --recreate
+
   deploy-agents:
     runs-on: ubuntu-latest
+    needs: build-daytona-snapshot
     steps:
       - uses: actions/checkout@v4
         with:

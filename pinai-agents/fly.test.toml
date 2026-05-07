@@ -45,6 +45,15 @@ primary_region = 'iad'
   # Public hop is ~negligible for /user/new and /key/generate admin
   # ops, fine for embed + completion too in test.
   LITELLM_BASE_URL = "https://proactive-ai-litellm-test.fly.dev/v1"
+  # Daytona snapshot — a pre-baked image of `infra/daytona/Dockerfile`
+  # (slim Python 3.12 + pinai_sdk preinstalled). Without this set,
+  # sandbox.py falls back to declarative image build, which costs
+  # ~30-50s per first sandbox in a 24h cache window and shows up as
+  # a "first message hangs forever" UX. Deploy Test builds /
+  # refreshes this snapshot on every run, so the tag is stable across
+  # SDK version bumps — see .github/workflows/deploy-test.yml
+  # build-daytona-snapshot job.
+  PINAI_DAYTONA_SNAPSHOT = "pinai-sandbox:test"
 
 [processes]
   # Secrets come from `flyctl secrets set --process-group=<web|chat> ...` —
