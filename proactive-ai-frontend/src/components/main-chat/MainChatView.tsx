@@ -40,6 +40,13 @@ interface MainChatViewProps {
   inputPlaceholder?: string;
   cardContext?: Record<string, unknown>;
   /**
+   * If non-empty, the runtime auto-fires on mount with this text as the
+   * user's first message (fresh thread only). Used by card "Confirm"
+   * paths so the agent receives the user's intent immediately. Card
+   * "Chat" path leaves it undefined → empty thread waits for input.
+   */
+  bootstrapMessage?: string;
+  /**
    * Rendered inside `<ThreadPrimitive.Empty>`. Defaults to the profile-
    * building prompt cards used by Main Chat. Card-context surfaces pass
    * `null` (the agent sends the first message, so the empty slot is
@@ -175,6 +182,7 @@ export default function MainChatView({
   emptyMessage = "Send a message to start chatting",
   inputPlaceholder,
   cardContext,
+  bootstrapMessage,
   emptyState,
 }: MainChatViewProps) {
   const { session: browserSession, setControl, sendInput, refreshLiveView, close: closeBrowser } =
@@ -318,6 +326,7 @@ export default function MainChatView({
         <ChatRuntimeScope
           sessionKey={sessionKey}
           cardContext={cardContext}
+          bootstrapMessage={bootstrapMessage}
           topOffset={browserStage === "mini" ? 32 : 0}
           emptyState={emptyState}
           inputPlaceholder={inputPlaceholder}
@@ -366,6 +375,7 @@ export default function MainChatView({
 function ChatRuntimeScope({
   sessionKey,
   cardContext,
+  bootstrapMessage,
   topOffset,
   emptyState,
   inputPlaceholder,
@@ -373,6 +383,7 @@ function ChatRuntimeScope({
 }: {
   sessionKey: string;
   cardContext?: Record<string, unknown>;
+  bootstrapMessage?: string;
   /** px of top padding so messages aren't clipped behind the mini drag bar. */
   topOffset: number;
   emptyState?: ReactNode;
@@ -401,6 +412,7 @@ function ChatRuntimeScope({
   const { runtime, historyLoaded } = useProactiveChatRuntime({
     sessionKey,
     cardContext,
+    bootstrapMessage,
   });
 
   if (!historyLoaded) {

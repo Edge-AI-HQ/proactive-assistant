@@ -40,11 +40,17 @@ export type { ProactiveToolCallArgs } from "./tool-steps";
 interface UseProactiveChatRuntimeOptions {
   sessionKey: string;
   cardContext?: Record<string, unknown>;
+  // Non-empty → adapter auto-fires on mount as if the user typed this
+  // (fresh thread only). Used by the card "Confirm" path to send the
+  // primaryAction text as the user's first turn. Card "Chat" path
+  // (just open, let user type) leaves this undefined.
+  bootstrapMessage?: string;
 }
 
 interface AdapterOptions {
   sessionKey: string;
   cardContext?: Record<string, unknown>;
+  bootstrapMessage?: string;
   bootstrappedSessionsRef: MutableRefObject<Set<string>>;
 }
 
@@ -66,6 +72,7 @@ const TRANSIENT_RETRY_BACKOFF_MS = 1500;
 function createAdapter({
   sessionKey,
   cardContext,
+  bootstrapMessage,
   bootstrappedSessionsRef,
 }: AdapterOptions): ChatModelAdapter {
   return {
@@ -77,23 +84,24 @@ function createAdapter({
         .map((p) => p.text)
         .join("\n");
 
-      const needsBootstrap =
+      const isFreshThread =
         Boolean(cardContext) &&
         !bootstrappedSessionsRef.current.has(sessionKey);
 
-      // Card-chat bootstrap: when the thread is empty and we have card
-      // context, we still run — the adapter produces the agent's first
-      // turn from the card context alone. Otherwise (no user text, no
-      // bootstrap) we have nothing to send.
-      if (!userText && !needsBootstrap) {
+      // Card-chat bootstrap: caller-provided `bootstrapMessage` (e.g. the
+      // card's primaryAction text on Confirm) gets sent as if the user
+      // typed it. Without it, an empty thread + no user text means the
+      // user just opened Chat — bail out and wait for them to type.
+      const effectiveText = userText || (isFreshThread ? bootstrapMessage : undefined);
+      if (!effectiveText) {
         return;
       }
 
       const body = buildChatRequestBody({
         sessionKey,
-        ...(userText ? { userText } : {}),
+        userText: effectiveText,
         cardContext,
-        includeCardContext: needsBootstrap,
+        includeCardContext: isFreshThread,
       });
 
       // Retry loop wraps the whole fetch + SSE parse so that a transient
@@ -129,7 +137,7 @@ function createAdapter({
           if (data.reply) {
             yield { content: [{ type: "text" as const, text: data.reply }] };
           }
-          if (needsBootstrap) {
+          if (isFreshThread) {
             bootstrappedSessionsRef.current.add(sessionKey);
           }
           return;
@@ -231,7 +239,7 @@ function createAdapter({
         if (!builder.isEmpty()) {
           yield { content: builder.snapshot() };
         }
-        if (needsBootstrap) {
+        if (isFreshThread) {
           bootstrappedSessionsRef.current.add(sessionKey);
         }
         return;
@@ -378,6 +386,7 @@ export function useProactiveChatRuntime(options: UseProactiveChatRuntimeOptions)
           hasExistingHistory: hasExistingHistory || msgs.length > 0,
           hasCardContext: Boolean(cardContextJson),
           alreadyBootstrapped: bootstrappedSessionsRef.current.has(options.sessionKey),
+          bootstrapMessage: options.bootstrapMessage,
         });
         if (shouldBootstrap) {
           setPendingBootstrap(true);
@@ -400,12 +409,13 @@ export function useProactiveChatRuntime(options: UseProactiveChatRuntimeOptions)
       createAdapter({
         sessionKey: options.sessionKey,
         cardContext: options.cardContext,
+        bootstrapMessage: options.bootstrapMessage,
         bootstrappedSessionsRef,
       }),
     // cardContextJson is the string-stable dep — the closure reads the
     // current options.cardContext object at the time the memo recomputes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [cardContextJson, options.sessionKey],
+    [cardContextJson, options.sessionKey, options.bootstrapMessage],
   );
   const runtime = useLocalRuntime(adapter, { initialMessages });
 

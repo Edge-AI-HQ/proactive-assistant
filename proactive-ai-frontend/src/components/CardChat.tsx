@@ -6,6 +6,15 @@ interface CardChatProps {
   card: IntentCard;
   score?: EvaluationScore | null;
   onBack: () => void;
+  /**
+   * Non-empty → adapter auto-fires this as the user's first turn on
+   * mount. Set by the "Confirm" button path (typically the card's
+   * primaryAction text). The "Chat" button leaves this undefined →
+   * empty thread waits for user to type. Empty bootstrap is rejected
+   * by the backend's strict ChatSendRequest schema, so the FE simply
+   * never auto-fires when the field is absent.
+   */
+  bootstrapMessage?: string;
 }
 
 // Backend (`pinai-agents/.../chat/routes/chat.py`) detects card-mode chats by
@@ -16,7 +25,7 @@ function stableSessionKey(cardId: string): string {
   return `card-thread-${cardId}`;
 }
 
-export default function CardChat({ card, score, onBack }: CardChatProps) {
+export default function CardChat({ card, score, onBack, bootstrapMessage }: CardChatProps) {
   const cardContext = useMemo(
     () => ({
       title: card.title,
@@ -45,6 +54,7 @@ export default function CardChat({ card, score, onBack }: CardChatProps) {
       subtitle="Chat about this card"
       onBack={onBack}
       cardContext={cardContext}
+      bootstrapMessage={bootstrapMessage}
       // Card chats bootstrap with an agent-authored first message, so the
       // profile-prompt empty state from Main Chat isn't applicable here.
       // `null` suppresses it entirely; ThreadPrimitive shows nothing while

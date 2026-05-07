@@ -22,7 +22,10 @@ type TimelineCard = IntentCard & {
 };
 
 interface ChatTimelineProps {
-  onOpenChat: (card: IntentCard) => void;
+  // bootstrapMessage carries Confirm intent: when present, the chat
+  // auto-fires it as the user's first turn so the agent starts working
+  // on the card. Plain "Chat" path passes nothing → empty thread.
+  onOpenChat: (card: IntentCard, bootstrapMessage?: string) => void;
   dismissedIds: Set<string>;
   confirmedIds: Set<string>;
   processingIds: Set<string>;
@@ -92,7 +95,12 @@ export default function ChatTimeline({
       channel: "web",
     }).catch(() => {});
     setSelectedCard(null);
-    onOpenChat(selectedCard);
+    // Send the card's primaryAction label (or fall back to title) as
+    // the user's first message — that's what "Confirm" semantically
+    // means. primaryAction is {label, type}; we send its label.
+    const bootstrap =
+      (selectedCard.primaryAction?.label || selectedCard.title || "").trim();
+    onOpenChat(selectedCard, bootstrap || undefined);
   };
 
   const handleChat = () => {
@@ -100,6 +108,7 @@ export default function ChatTimeline({
     onProcessingId(selectedCard.id);
     onChattedId(selectedCard.id);
     setSelectedCard(null);
+    // No bootstrap — just enter the chat, let the user type.
     onOpenChat(selectedCard);
   };
 

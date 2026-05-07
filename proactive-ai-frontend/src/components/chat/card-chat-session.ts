@@ -12,6 +12,10 @@ export interface ShouldBootstrapCardChatParams {
   hasExistingHistory: boolean;
   hasCardContext: boolean;
   alreadyBootstrapped: boolean;
+  /** Caller-provided text to send as the user's first message. Without it,
+   *  bootstrap is suppressed — opening a card via the "Chat" button just
+   *  reveals an empty thread and waits for the user to type. */
+  bootstrapMessage?: string;
 }
 
 export function buildChatRequestBody(
@@ -36,6 +40,7 @@ export function shouldBootstrapCardChat(
   return (
     params.hasCardContext &&
     !params.hasExistingHistory &&
-    !params.alreadyBootstrapped
+    !params.alreadyBootstrapped &&
+    Boolean(params.bootstrapMessage?.trim())
   );
 }

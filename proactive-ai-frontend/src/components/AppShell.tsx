@@ -92,7 +92,16 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
     const saved = sessionStorage.getItem("proactive-ai:activeView");
     return saved && ["now", "chat", "goals", "control"].includes(saved) ? saved as MenuId : "now";
   });
-  const [chatTarget, setChatTarget] = useState<{ card: IntentCard; score?: EvaluationScore | null } | null>(null);
+  // bootstrapMessage carries the "Confirm" intent: when the drawer's
+  // Confirm button (or ChatTimeline's Confirm action) fires, the card's
+  // primaryAction text is sent as the user's first turn so the agent
+  // starts working immediately. The Chat button path leaves it
+  // undefined → empty thread waits for the user to type.
+  const [chatTarget, setChatTarget] = useState<{
+    card: IntentCard;
+    score?: EvaluationScore | null;
+    bootstrapMessage?: string;
+  } | null>(null);
   const [selectedCard, setSelectedCard] = useState<IntentCard | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -285,7 +294,19 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
         channel: "web",
       }).catch(() => {});
       persistChatted(cardId);
-      setChatTarget({ card: selectedCard, score: run.scoreMap[cardId] ?? null });
+      // Confirm intent: send the card's primaryAction label (or fall
+      // back to title) as the user's first message so the agent starts
+      // working on it immediately. Without this the chat opens to a
+      // blank thread, which contradicts the "I confirmed, do it"
+      // gesture. primaryAction is a button-shape object {label, type};
+      // we send its label.
+      const bootstrap =
+        (selectedCard.primaryAction?.label || selectedCard.title || "").trim();
+      setChatTarget({
+        card: selectedCard,
+        score: run.scoreMap[cardId] ?? null,
+        bootstrapMessage: bootstrap || undefined,
+      });
     }
     setDrawerOpen(false);
     setSelectedCard(null);
@@ -362,10 +383,12 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
     setSelectedCard(null);
   }, [selectedCard, run.scoreMap, persistChatted]);
 
-  const handleOpenChatDirect = useCallback((card: IntentCard) => {
+  // Caller passes `bootstrapMessage` to opt into auto-fire-on-mount
+  // (Confirm semantics). Plain "Chat" path omits it → empty thread.
+  const handleOpenChatDirect = useCallback((card: IntentCard, bootstrapMessage?: string) => {
     setProcessingIds((prev) => new Set(prev).add(card.id));
     persistChatted(card.id);
-    setChatTarget({ card, score: null });
+    setChatTarget({ card, score: null, bootstrapMessage });
   }, [persistChatted]);
 
   const handleMenuNav = (id: MenuId) => {
@@ -645,6 +668,7 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
               <CardChat
                 card={chatTarget.card}
                 score={chatTarget.score}
+                bootstrapMessage={chatTarget.bootstrapMessage}
                 onBack={() => setChatTarget(null)}
               />
             </motion.div>
