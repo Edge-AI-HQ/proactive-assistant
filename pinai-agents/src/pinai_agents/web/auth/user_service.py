@@ -76,14 +76,19 @@ async def upsert_user_by_supabase_id(
         browserbase_context_id=row.get("browserbase_context_id"),
     )
 
-    # Provision LiteLLM key on the INSERT branch (xmax=0 means the row
-    # came from INSERT, not ON CONFLICT). Done synchronously so the
-    # caller can rely on user.litellm_virtual_key being populated; on
-    # LiteLLM failure we degrade to NULL and the next chat-send retries.
-    if row.get("inserted") and not user.litellm_virtual_key:
-        from ..services.litellm_provisioning import (  # noqa: PLC0415
-            provision_user_litellm_key,
-        )
-        user = await provision_user_litellm_key(pool, user)
+    # First-touch bootstrap on the INSERT branch (xmax=0 means the row
+    # came from INSERT, not ON CONFLICT). Both steps are best-effort —
+    # LiteLLM downtime degrades to NULL key + lazy-retry on chat-send,
+    # goal seeding failure logs and is recoverable via the agent's
+    # evolve / goal_upsert path.
+    if row.get("inserted"):
+        if not user.litellm_virtual_key:
+            from ..services.litellm_provisioning import (  # noqa: PLC0415
+                provision_user_litellm_key,
+            )
+            user = await provision_user_litellm_key(pool, user)
+
+        from ..services.default_goals import seed_default_goals  # noqa: PLC0415
+        await seed_default_goals(pool, user.id)
 
     return user
