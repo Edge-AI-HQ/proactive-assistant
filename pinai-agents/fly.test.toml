@@ -21,8 +21,15 @@ primary_region = 'iad'
   # Secrets come from `flyctl secrets set --process-group=<web|chat> ...` —
   # chat MUST NOT receive master credentials. See fly.dev.toml comment
   # block for the full trust-boundary rationale.
-  web  = "uvicorn pinai_agents.web.asgi:app --host 0.0.0.0 --port 8000"
-  chat = "uvicorn pinai_agents.chat.asgi:app --host 0.0.0.0 --port 8001"
+  #
+  # `--host ::` (IPv6 wildcard) is required so other fly machines can
+  # reach this listener over 6PN — fly's private network is IPv6-only.
+  # Linux dual-stack accepts IPv4 traffic on the same socket via
+  # IPv4-mapped IPv6 addresses, so docker-compose / public-anycast IPv4
+  # paths keep working. `--host 0.0.0.0` would silently break the
+  # frontend nginx proxy_pass on 6PN with TCP RST.
+  web  = "uvicorn pinai_agents.web.asgi:app --host :: --port 8000"
+  chat = "uvicorn pinai_agents.chat.asgi:app --host :: --port 8001"
 
 # Public HTTPS edge → web only.
 #
