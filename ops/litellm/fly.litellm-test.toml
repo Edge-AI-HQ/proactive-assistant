@@ -23,7 +23,15 @@ primary_region = 'iad'
     soft_limit = 40
 
   [[http_service.checks]]
-    grace_period = "60s"
+    # First-time deploy into a fresh `litellm` schema runs all 200+
+    # prisma migrations inline before uvicorn opens port 4000.
+    # Several migrations hit idempotent-resolve cycles (~1 min each),
+    # so first deploy can take 6-8 min. Subsequent deploys are quick
+    # — keep the long grace_period anyway (it costs nothing on warm
+    # boot, only matters on cold starts). default fly grace was 60s
+    # which caused `flyctl deploy` to time out before migration
+    # finished even though the machine self-recovered.
+    grace_period = "10m"
     interval = "30s"
     method = "GET"
     timeout = "10s"
