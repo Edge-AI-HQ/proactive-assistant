@@ -79,7 +79,7 @@ class ChatThreadsRepository(UserScopedRepository):
              wins, which is what the user almost certainly wants back)
           3. created_at DESC — final tiebreaker for fully-tied rows
         """
-        async with self.conn.cursor() as cur:
+        async with self.conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 """
                 SELECT thread_id FROM pai_chat_threads
@@ -92,7 +92,7 @@ class ChatThreadsRepository(UserScopedRepository):
                 (self.user_id,),
             )
             row = await cur.fetchone()
-            return row[0] if row else None
+            return row["thread_id"] if row else None
 
     async def list_threads(
         self,

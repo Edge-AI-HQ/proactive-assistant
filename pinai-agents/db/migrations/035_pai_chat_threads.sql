@@ -80,6 +80,13 @@ CREATE POLICY pai_chat_threads_service_role ON pai_chat_threads
 -- One-time at-migration-apply. After this, pai_chat_threads is the
 -- source of truth and chat-stream/init writes new rows on its own.
 --
+-- Wrapped in a DO block + table-exists check so the migration is
+-- safe to run on a fresh database where the chat process has never
+-- booted (LangGraph creates its schema on first checkpointer init).
+-- If langgraph.checkpoints is absent, no rows to backfill — this is
+-- not an error, the table will be populated by chat-stream/init
+-- going forward.
+--
 -- Two thread shapes to handle:
 --   main-{user_id}-{uuid}            user_id parsed from thread_id
 --   card-thread-{card_id}            user_id resolved via
@@ -91,44 +98,52 @@ CREATE POLICY pai_chat_threads_service_role ON pai_chat_threads
 -- after any newly-active threads since live updates set NOW() too —
 -- relative ordering is preserved.
 
-INSERT INTO pai_chat_threads (user_id, thread_id, kind, card_id, last_message_at, message_count)
-WITH lg_threads AS (
-  SELECT
-    thread_id,
-    COUNT(*) AS cp_count
-  FROM langgraph.checkpoints
-  GROUP BY thread_id
-),
-parsed AS (
-  -- main threads
-  SELECT
-    CAST(split_part(thread_id, '-', 2) AS BIGINT) AS user_id,
-    thread_id,
-    'main'::TEXT AS kind,
-    NULL::TEXT AS card_id,
-    cp_count
-  FROM lg_threads
-  WHERE thread_id LIKE 'main-%-%'
-  UNION ALL
-  -- card threads — JOIN pai_intent_card_state to find owner
-  SELECT
-    s.user_id,
-    lg.thread_id,
-    'card'::TEXT AS kind,
-    SUBSTRING(lg.thread_id FROM 13)::TEXT AS card_id,  -- strip 'card-thread-' (12 chars)
-    lg.cp_count
-  FROM lg_threads lg
-  JOIN pai_intent_card_state s
-    ON s.card_id = SUBSTRING(lg.thread_id FROM 13)
-  WHERE lg.thread_id LIKE 'card-thread-%'
-)
-SELECT
-  user_id,
-  thread_id,
-  kind,
-  card_id,
-  NOW() AS last_message_at,
-  cp_count AS message_count
-FROM parsed
-WHERE user_id IS NOT NULL
-ON CONFLICT (user_id, thread_id) DO NOTHING;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'langgraph' AND table_name = 'checkpoints'
+  ) THEN
+    INSERT INTO pai_chat_threads (user_id, thread_id, kind, card_id, last_message_at, message_count)
+    WITH lg_threads AS (
+      SELECT
+        thread_id,
+        COUNT(*) AS cp_count
+      FROM langgraph.checkpoints
+      GROUP BY thread_id
+    ),
+    parsed AS (
+      -- main threads
+      SELECT
+        CAST(split_part(thread_id, '-', 2) AS BIGINT) AS user_id,
+        thread_id,
+        'main'::TEXT AS kind,
+        NULL::TEXT AS card_id,
+        cp_count
+      FROM lg_threads
+      WHERE thread_id LIKE 'main-%-%'
+      UNION ALL
+      -- card threads — JOIN pai_intent_card_state to find owner
+      SELECT
+        s.user_id,
+        lg.thread_id,
+        'card'::TEXT AS kind,
+        SUBSTRING(lg.thread_id FROM 13)::TEXT AS card_id,  -- strip 'card-thread-' (12 chars)
+        lg.cp_count
+      FROM lg_threads lg
+      JOIN pai_intent_card_state s
+        ON s.card_id = SUBSTRING(lg.thread_id FROM 13)
+      WHERE lg.thread_id LIKE 'card-thread-%'
+    )
+    SELECT
+      user_id,
+      thread_id,
+      kind,
+      card_id,
+      NOW() AS last_message_at,
+      cp_count AS message_count
+    FROM parsed
+    WHERE user_id IS NOT NULL
+    ON CONFLICT (user_id, thread_id) DO NOTHING;
+  END IF;
+END$$;
