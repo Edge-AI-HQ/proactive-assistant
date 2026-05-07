@@ -361,6 +361,20 @@ class World(_Endpoint):
         )
         return payload.get("items", []) if isinstance(payload, dict) else []
 
+    async def search(
+        self,
+        *,
+        q: str,
+        limit: int = 10,
+        status: str = "open",
+    ) -> list[dict[str, Any]]:
+        """Hybrid keyword + semantic search. Server runs tsvector full-text
+        and pgvector cosine in parallel, fuses by RRF (k=60). Use when
+        you need world-news context for a SPECIFIC topic — `recent()` is
+        for the "what's salient lately" pull."""
+        payload = await self._get("/search", q=q, limit=limit, status=status)
+        return payload.get("items", []) if isinstance(payload, dict) else []
+
     async def score(
         self,
         *,

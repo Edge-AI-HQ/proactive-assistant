@@ -33,6 +33,9 @@ dependencies = [
     "pyjwt>=2.12.1",
     "cryptography>=48.0.0",
     "httpx>=0.28.1",
+    # World signals ingester — feedparser handles RSS / Atom edge cases
+    # (broken feeds, encoding fallback, date parsing) the stdlib doesn't.
+    "feedparser>=6.0.10",
     # bcrypt for device-token hashing — same scheme as apis (bcrypt rounds=10).
     "bcrypt>=4.2.0",
     # Supabase Storage SDK — replaces openclaw's local-FS media writes for

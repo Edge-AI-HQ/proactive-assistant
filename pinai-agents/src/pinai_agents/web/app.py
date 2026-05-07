@@ -84,6 +84,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.pool = None
 
     scheduler_task: asyncio.Task[None] | None = None
+    world_ingest_task: asyncio.Task[None] | None = None
     if pool is not None:
         scheduler_task = asyncio.create_task(
             tick_loop(
@@ -93,15 +94,26 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             ),
             name="pinai-scheduler-tick",
         )
+        # World signals ingest is a GLOBAL loop (one RSS pull serves
+        # every user) — it can't ride on pai_scheduled_tasks because that
+        # table requires user_id. Single asyncio task instead, sibling
+        # to the per-user scheduler tick. Multi-replica safety comes from
+        # the ingest_world UPSERT: idempotent on normalized_url.
+        from .services.world_ingest import loop as world_ingest_loop  # noqa: PLC0415
+        world_ingest_task = asyncio.create_task(
+            world_ingest_loop(pool),
+            name="pinai-world-ingest",
+        )
 
     try:
         yield
     finally:
         logger.info("pinai-agents WEB shutting down")
-        if scheduler_task is not None:
-            scheduler_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await scheduler_task
+        for t in (scheduler_task, world_ingest_task):
+            if t is not None:
+                t.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await t
         if pool is not None:
             await close_pool(pool)
 

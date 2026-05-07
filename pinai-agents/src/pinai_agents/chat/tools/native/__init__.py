@@ -28,7 +28,7 @@ from .profile import goal_upsert, profile_get, profile_upsert
 from .raw import raw_gcal_today, raw_gcal_week, raw_gmail_recent, raw_list
 from .signals import signals_get, signals_recent
 from .tavily import tavily_search
-from .world import world_recent
+from .world import world_recent, world_search
 
 ALL_TOOLS = [
     # Memory (long-term user fact layer)
@@ -36,7 +36,7 @@ ALL_TOOLS = [
     # Signals (increment layer — open / consumed / archived)
     signals_recent, signals_get,
     # Profile + goals (persona / trajectory) + world context
-    profile_get, profile_upsert, goal_upsert, world_recent,
+    profile_get, profile_upsert, goal_upsert, world_recent, world_search,
     # Raw (high-frequency named tools + generic long-tail)
     raw_gmail_recent, raw_gcal_today, raw_gcal_week, raw_list,
     # Cards + feedback (recency-bounded reference)
@@ -72,4 +72,5 @@ __all__ = [
     "signals_recent",
     "tavily_search",
     "world_recent",
+    "world_search",
 ]

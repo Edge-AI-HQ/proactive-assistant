@@ -67,3 +67,46 @@ async def world_recent(
         }
         for s in items
     ]
+
+
+class WorldSearchInput(BaseModel):
+    q: str = Field(
+        min_length=1, max_length=500,
+        description="Natural-language query — server embeds it then runs hybrid keyword + semantic match over recent news.",
+    )
+    limit: int = Field(default=10, ge=1, le=30)
+    status: str = Field(
+        default="open",
+        pattern="^(open|consumed|archived|all|new)$",
+        description="Per-user lifecycle filter. Default 'open'; pass 'all' to search across everything regardless of consume state.",
+    )
+
+
+@tool("world_search", args_schema=WorldSearchInput)
+async def world_search(q: str, limit: int, status: str):
+    """Hybrid (keyword + semantic) search over world news for a SPECIFIC
+    topic / query. Server runs tsvector full-text and pgvector cosine in
+    parallel and fuses by RRF. Use when the user asks about a particular
+    subject ('what's happening with X') — `world_recent` is for browsing
+    the latest by salience without a query."""
+    payload = await http_client.get(
+        "/api/agent/world/search", q=q, limit=limit, status=status,
+    )
+    if isinstance(payload, dict) and payload.get("error"):
+        return payload
+    items = payload.get("items", []) if isinstance(payload, dict) else []
+    return [
+        {
+            "id": s["id"],
+            "provider": s.get("provider"),
+            "title": s.get("title"),
+            "summary": (s.get("summary") or "")[:200],
+            "url": s.get("url"),
+            "publishedAt": s.get("publishedAt"),
+            "salience": s.get("salience"),
+            "rrfScore": s.get("rrfScore"),
+            "kwRank": s.get("kwRank"),
+            "semRank": s.get("semRank"),
+        }
+        for s in items
+    ]

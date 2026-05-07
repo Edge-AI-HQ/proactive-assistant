@@ -37,6 +37,7 @@ Why share one sandbox backend:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from deepagents import create_deep_agent
@@ -90,7 +91,8 @@ from pathlib import Path
 from pinai_sdk import client
 
 async def main():
-    profile, memory, signals, gmail, gcal, cards_recent, feedback = await asyncio.gather(
+    (profile, memory, signals, gmail, gcal,
+     cards_recent, feedback, world) = await asyncio.gather(
         client.profile.get(),
         client.memory.list(min_quality=0.7, limit=30),
         client.signals.recent(status="open", hours=24),
@@ -98,11 +100,15 @@ async def main():
         client.raw.gcal.today(),
         client.cards.recent(limit=30),
         client.feedback.list(limit=50),
+        client.world.recent(status="open", limit=10),
         return_exceptions=True,
     )
-    keys = ["profile","memory","signals","gmail","gcal","cards_recent","feedback"]
+    keys = ["profile","memory","signals","gmail","gcal",
+            "cards_recent","feedback","world"]
+    vals = [profile, memory, signals, gmail, gcal,
+            cards_recent, feedback, world]
     digest = {}
-    for k, v in zip(keys, [profile, memory, signals, gmail, gcal, cards_recent, feedback]):
+    for k, v in zip(keys, vals):
         if isinstance(v, BaseException):
             digest[k] = {"_error": f"{type(v).__name__}: {v}"}
         else:
@@ -217,8 +223,11 @@ Every card must meet ALL:
 - sources: at least one verbatim citation per source layer used,
   formatted as "signal id=sig_..., title=...", "memory id=mem_...,
   text=...", "gmail message id=..., subject=...", "profile id=primary,
-  display_name='...', summary='...'", etc. The reader (evaluator
-  subagent) MUST be able to find each cited id back in phase1.json.
+  display_name='...', summary='...'", "world id=world_..., title=..."
+  (for items pulled from phase1's `world` layer — global news), etc.
+  The reader (evaluator subagent) MUST be able to find each cited id
+  back in phase1.json. World-signal citations are how downstream
+  auto-consume identifies which news items the run actually used.
 - {lang_clause}. For Chinese strings, use 「」 or 《》 — NEVER ASCII
   double-quote inside a JSON string field.
 </card_quality_rules>
@@ -296,7 +305,7 @@ You MUST execute these four `task` calls in this exact order. Do not
 skip, reorder, or run in parallel — each step depends on the previous
 step's side-effects (sandbox files) or its returned JSON.
 
-1. `task(subagent_type="data-collector", description="Pull all 7 sources and persist /state/phase1.json. Today is {current_date}. Target {cards_to_generate} cards.")`
+1. `task(subagent_type="data-collector", description="Pull all 8 sources (profile / memory / signals / gmail / gcal / cards_recent / feedback / world) and persist /state/phase1.json. Today is {current_date}. Target {cards_to_generate} cards.")`
    → Returns a one-line summary. Sandbox file `/state/phase1.json` is
    now populated. If the summary reports a fatal error (auth /
    sandbox), STOP and emit a GeneratorOutput with cards=[],
@@ -513,8 +522,70 @@ async def run_generator(
             f"got {type(structured).__name__}. run_id={run_id}."
         )
         raise ValueError(msg)
+
+    # ── auto-consume world signals cited in cards ──────────────────
+    # The card-generator's prompt instructs it to cite world items as
+    # "world id=world_xxx, title=...". We scan the final cards' sources
+    # array and POST consume for each id we find. This flips the user's
+    # pai_world_signal_user_view row from 'open' → 'consumed' so the
+    # next ingest cycle / next generator run won't re-surface the same
+    # news item. Best-effort: consume failures don't fail the run
+    # (the cards have already been generated; consume is bookkeeping).
+    consumed = await _auto_consume_world_signals(
+        cards=structured.cards, run_jwt=run_jwt, run_id=run_id,
+    )
+
     logger.info(
-        "generator ok run_id=%s cards=%d evals=%d",
-        run_id, len(structured.cards), len(structured.evaluations),
+        "generator ok run_id=%s cards=%d evals=%d world_consumed=%d",
+        run_id, len(structured.cards), len(structured.evaluations), consumed,
     )
     return structured
+
+
+# Match `world id=world_xxx` (with optional whitespace) in a sources entry.
+_WORLD_ID_RE = re.compile(r"world\s+id\s*=\s*(world_[A-Za-z0-9_-]{8,64})", re.IGNORECASE)
+
+
+async def _auto_consume_world_signals(
+    *,
+    cards: list[Any],
+    run_jwt: str,
+    run_id: str,
+) -> int:
+    """Scan cards' sources for `world id=world_...` patterns and POST
+    /api/agent/world/consume for each unique id. Returns count of
+    successful consumes."""
+    import os  # noqa: PLC0415
+    import httpx  # noqa: PLC0415
+
+    seen: set[str] = set()
+    for card in cards:
+        for src in getattr(card, "sources", []) or []:
+            for m in _WORLD_ID_RE.finditer(src or ""):
+                seen.add(m.group(1))
+    if not seen:
+        return 0
+
+    base = os.environ.get("WEB_INTERNAL_URL", "http://pinai-web:8000")
+    headers = {"Authorization": f"Bearer {run_jwt}"}
+    consumed = 0
+    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)) as cli:
+        for sig_id in seen:
+            try:
+                resp = await cli.post(
+                    f"{base}/api/agent/world/consume",
+                    headers=headers,
+                    json={"id": sig_id, "runId": run_id},
+                )
+                if resp.status_code in (200, 204):
+                    consumed += 1
+                else:
+                    logger.warning(
+                        "world.consume failed run_id=%s id=%s status=%s",
+                        run_id, sig_id, resp.status_code,
+                    )
+            except Exception:
+                logger.warning(
+                    "world.consume error run_id=%s id=%s", run_id, sig_id, exc_info=True,
+                )
+    return consumed
