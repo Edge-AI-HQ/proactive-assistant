@@ -88,14 +88,22 @@ class DefaultDispatcher:
         return self._lease_seconds
 
     async def dispatch(self, task: ScheduledTaskRow) -> None:
-        # Strong-link IDs: task.id == run_id == domain row id (for
-        # generator: pai_pipeline_runs.run_id; for dream/evolve:
-        # pai_evolution_runs.id). Single id everywhere lets the FE
-        # poll one /api/tasks/<id> endpoint and join across infra +
-        # domain tables without an extra lookup. Old behavior generated
-        # a separate `run_<uuid>` here, which forced every cross-table
-        # query to go via pai_scheduled_task_runs.task_id ↔ run_id.
-        run_id = task.id
+        # Each fire gets a fresh run_id so retriable tasks (reconnect,
+        # cron, retry-with-backoff) can fire the same task multiple
+        # times without colliding on pai_scheduled_task_runs.id PK.
+        # We keep `task.id` as a prefix for grep-ability — a run_id
+        # like "init.gmail.ca_xxx.f3a8b1c4" still tells you at a glance
+        # which task it belongs to. The race-protection guarantee comes
+        # from the (user_id, task_id, scheduled_for) UNIQUE in
+        # pai_scheduled_task_runs, NOT from `id` collision — so giving
+        # each fire its own id costs us nothing.
+        #
+        # /api/tasks/<task_id> already JOINs LATERAL ORDER BY fired_at
+        # DESC LIMIT 1 to surface the latest run, so frontend polling
+        # works unchanged. Domain tables (pai_pipeline_runs,
+        # pai_evolution_runs) key on their own ids set by the chat
+        # worker, not on this run_id, so they're unaffected too.
+        run_id = f"{task.id}.{uuid.uuid4().hex[:8]}"
         scheduled_for = task.last_run_at  # type: ignore[assignment]
         if scheduled_for is None:
             logger.warning(
