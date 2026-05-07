@@ -1,0 +1,114 @@
+name: Deploy Test
+
+# Test env: deploy any branch via Actions UI dispatch.
+#
+# How discovery works: this workflow file MUST exist on the default
+# branch (proactive-ai-v2) for the "Run workflow" button to appear.
+# Once the dropdown is up, GitHub uses the YAML and code from the
+# branch you select.
+#
+# Scope (this version): pinai-agents + LiteLLM + frontend. apis is
+# intentionally not deployed — test exercises the
+# frontend → pinai-agents → LiteLLM path only.
+#
+# Secret injection model:
+#   * pinai-agents — fly secrets per process group (web vs chat).
+#     The sync step calls scripts/sync_fly_secrets.py, which imports
+#     FORBIDDEN_ENVS from pinai_agents.chat.trust_boundary (the
+#     single source of truth, also consumed by chat/asgi.py boot
+#     fail-fast and by the Makefile .env.chat derivation).
+#   * LiteLLM — Docker CMD wraps `dotenvx run`. Needs
+#     DOTENV_PRIVATE_KEY_TEST set as a fly secret so the container
+#     can decrypt .env.test at startup.
+#   * frontend — VITE_* baked at build time via --build-arg.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-test
+  cancel-in-progress: true
+
+jobs:
+  deploy-agents:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Sync fly secrets from .env.test (per process group)
+        working-directory: pinai-agents
+        env:
+          DOTENV_PRIVATE_KEY_TEST: ${{ secrets.DOTENV_PRIVATE_KEY_TEST }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PYTHONPATH: src
+        run: |
+          python3 scripts/sync_fly_secrets.py \
+            --app proactive-ai-agents-test \
+            --env-file .env.test
+
+      - name: Deploy pinai-agents to test
+        working-directory: pinai-agents
+        run: flyctl deploy --config fly.test.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  deploy-litellm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Stage DOTENV_PRIVATE_KEY_TEST as fly secret
+        run: |
+          flyctl secrets set --app proactive-ai-litellm-test --stage \
+            "DOTENV_PRIVATE_KEY_TEST=${DOTENV_PRIVATE_KEY_TEST}"
+        env:
+          DOTENV_PRIVATE_KEY_TEST: ${{ secrets.DOTENV_PRIVATE_KEY_TEST }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Deploy LiteLLM to test
+        working-directory: ops/litellm
+        run: flyctl deploy --config fly.litellm-test.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  deploy-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Extract VITE_* build args from encrypted env
+        run: |
+          VITE_PIN_API_URL=$(npx @dotenvx/dotenvx get VITE_PIN_API_URL -f pinai-agents/.env.test)
+          VITE_SUPABASE_URL=$(npx @dotenvx/dotenvx get VITE_SUPABASE_URL -f pinai-agents/.env.test)
+          VITE_SUPABASE_PUBLISHABLE_KEY=$(npx @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f pinai-agents/.env.test)
+          echo "VITE_PIN_API_URL=$VITE_PIN_API_URL" >> "$GITHUB_ENV"
+          echo "VITE_SUPABASE_URL=$VITE_SUPABASE_URL" >> "$GITHUB_ENV"
+          echo "VITE_SUPABASE_PUBLISHABLE_KEY=$VITE_SUPABASE_PUBLISHABLE_KEY" >> "$GITHUB_ENV"
+        env:
+          DOTENV_PRIVATE_KEY_TEST: ${{ secrets.DOTENV_PRIVATE_KEY_TEST }}
+
+      - name: Deploy frontend to test
+        working-directory: proactive-ai-frontend
+        run: |
+          flyctl deploy --config fly.test.toml --remote-only \
+            --build-arg VITE_PIN_API_URL="$VITE_PIN_API_URL" \
+            --build-arg VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
+            --build-arg VITE_SUPABASE_PUBLISHABLE_KEY="$VITE_SUPABASE_PUBLISHABLE_KEY"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

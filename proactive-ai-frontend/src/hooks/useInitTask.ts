@@ -51,12 +51,36 @@ export interface UseInitTaskState {
 }
 
 const POLL_INTERVAL_MS = isNative ? 10_000 : 5_000;
+const FRESH_WINDOW_MS = 60 * 60 * 1000; // 1h
+
+/**
+ * True when a task is worth surfacing in the UI:
+ *   - non-terminal (queued / running) → always
+ *   - terminal → only if it completed within FRESH_WINDOW_MS
+ *
+ * Connector init task ids are deterministic (`init.<toolkit>.<cid>`), so a
+ * row hangs around forever once written. Without this filter, opening the
+ * page next week would resurrect a "Done" chip from the last reconnect.
+ */
+export function isInitTaskFresh(task: InitTaskRow | null): boolean {
+  if (!task) return false;
+  if (!TERMINAL.has(task.status)) return true;
+  if (!task.completed_at) return false;
+  return Date.now() - Date.parse(task.completed_at) < FRESH_WINDOW_MS;
+}
 
 /**
  * Read-poll a background_tasks row. Pass null to disable polling entirely.
  * Returns the latest known task state plus loading/error/terminal flags.
+ *
+ * `restartToken` lets the caller force polling to resume after a terminal
+ * status (we stop polling once a task is done, so re-enqueueing the same
+ * task id needs an explicit kick — e.g. user clicks Reconnect twice).
  */
-export function useInitTask(taskId: string | null): UseInitTaskState {
+export function useInitTask(
+  taskId: string | null,
+  restartToken: number = 0,
+): UseInitTaskState {
   const [task, setTask] = useState<InitTaskRow | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -113,7 +137,7 @@ export function useInitTask(taskId: string | null): UseInitTaskState {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [taskId]);
+  }, [taskId, restartToken]);
 
   return {
     task,

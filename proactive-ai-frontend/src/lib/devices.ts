@@ -2,17 +2,16 @@
  * Device registration + token storage.
  *
  * On first launch the app generates a UUID v4 device id and exchanges
- * it for a long-lived token via POST /api/proactive/devices/register.
- * Native clients persist the token in secure storage (iOS Keychain /
- * Android Keystore-backed storage) and attach it as X-Device-Id +
- * X-Device-Token to every POST /api/proactive/devices/ingest request.
- *
- * See docs/plans/memory-architecture.mdx §三 (APIs user_devices).
+ * it for a long-lived token via POST /api/devices/register on
+ * pinai-agents. Native clients persist the token in secure storage
+ * (iOS Keychain / Android Keystore-backed storage) and attach it as
+ * X-Device-Id + X-Device-Token to every POST /api/devices/ingest
+ * request.
  */
 import { Capacitor } from "@capacitor/core";
 import { KeychainAccess, SecureStorage } from "@aparajita/capacitor-secure-storage";
-import { proactiveFetch } from "./api";
-import { API_BASE, isNative } from "./platform";
+import { authHeaders } from "./api";
+import { PIN_API_BASE, isNative } from "./platform";
 
 const DEVICE_ID_KEY = "pin.deviceId";
 const DEVICE_TOKEN_KEY = "pin.deviceToken";
@@ -138,9 +137,11 @@ async function ensureDeviceFingerprint(): Promise<string | null> {
 }
 
 interface RegisterResponse {
-  ok: boolean;
-  device: { device_id: string; platform: DevicePlatform };
-  device_token: string;
+  // pinai-agents shape: flat object with camelCase + the secret token.
+  deviceId: string;
+  deviceToken: string;
+  platform: DevicePlatform;
+  registeredAt: string;
 }
 
 /**
@@ -169,9 +170,12 @@ export async function ensureDevice(): Promise<DeviceCredentials> {
       }
     : {};
 
-  const res = await proactiveFetch("/api/proactive/devices/register", {
+  const res = await fetch(`${PIN_API_BASE}/api/devices/register`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      ...(await authHeaders()),
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify({
       deviceId,
       platform,
@@ -184,20 +188,19 @@ export async function ensureDevice(): Promise<DeviceCredentials> {
     throw new Error(`/devices/register failed: ${res.status}`);
   }
   const data = (await res.json()) as RegisterResponse;
-  await writeStored(data.device.device_id, data.device_token);
+  await writeStored(data.deviceId, data.deviceToken);
   return {
-    deviceId: data.device.device_id,
-    deviceToken: data.device_token,
+    deviceId: data.deviceId,
+    deviceToken: data.deviceToken,
     platform,
   };
 }
 
 /**
  * Attach device credentials to a Headers object for outgoing
- * /api/proactive/devices/ingest requests. The server now requires both
- * headers (no legacy default-container fallback), so any caller that
- * needs to ingest must provide credentials — this helper just spares
- * callers the typo-prone header keys.
+ * /api/devices/ingest requests. The server requires both headers, so
+ * any caller that needs to ingest must provide credentials — this
+ * helper just spares callers the typo-prone header keys.
  */
 export function withDeviceHeaders(
   base: Record<string, string>,
@@ -245,9 +248,9 @@ export interface IngestResult {
 }
 
 /**
- * Push a batch of PersonalSignals from this client up to the user's
- * OpenClaw container. Auth is the X-Device-Id + X-Device-Token PSK we
- * got back from /devices/register; the token never leaves the device.
+ * Push a batch of PersonalSignals from this client up to pinai-agents.
+ * Auth is the X-Device-Id + X-Device-Token PSK we got back from
+ * /api/devices/register; the token never leaves the device.
  *
  * Caller-friendly: missing `id`s are auto-filled (UUID), missing
  * `source` defaults to "device:<deviceId>", missing `occurred_at`
@@ -278,7 +281,7 @@ export async function ingestSignals(
     ...(it.dedupe_key ? { dedupe_key: it.dedupe_key } : {}),
   }));
 
-  const res = await fetch(`${API_BASE}/api/proactive/devices/ingest`, {
+  const res = await fetch(`${PIN_API_BASE}/api/devices/ingest`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

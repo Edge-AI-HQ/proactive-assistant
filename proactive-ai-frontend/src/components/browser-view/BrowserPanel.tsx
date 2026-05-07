@@ -14,7 +14,6 @@ import {
   type PanInfo,
 } from "framer-motion";
 import BrowserView, { type SheetStage } from "./BrowserView";
-import { proxyPost } from "@/lib/api";
 import { isNative } from "@/lib/platform";
 
 interface BrowserSession {
@@ -209,20 +208,8 @@ export default function BrowserPanel({
     [dragControls],
   );
 
-  // Heartbeat while user controls the browser — keeps the backend's idle
-  // timer from destroying the session under us.
-  useEffect(() => {
-    if (!session || session.controlMode !== "user") return;
-    const heartbeat = () => {
-      void proxyPost(
-        `/browser/sessions/${session.browserSessionId}/heartbeat`,
-        {},
-      );
-    };
-    heartbeat();
-    const timer = window.setInterval(heartbeat, 25_000);
-    return () => window.clearInterval(timer);
-  }, [session?.browserSessionId, session?.controlMode]);
+  // Heartbeat / lifecycle ownership lives in useBrowserSession — this
+  // component is purely presentational over the session prop.
 
   if (!rendered || !session) return null;
 

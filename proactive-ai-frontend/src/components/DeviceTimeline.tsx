@@ -190,12 +190,35 @@ export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) 
 
 // ── Single row renderer ─────────────────────────────────────────────────
 
+// Resolve the signed URL for a storage_path lazily — pinai-agents only
+// hands out TTL-bounded URLs, so we don't bake a permanent URL into
+// the row at render time.
+function useDeviceMediaUrl(filePath: string | null): string | null {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!filePath) { setUrl(null); return; }
+    let cancelled = false;
+    void deviceMediaUrl(filePath).then((u) => {
+      if (!cancelled) setUrl(u);
+    });
+    return () => { cancelled = true; };
+  }, [filePath]);
+  return url;
+}
+
 function SignalRow({ signal }: { signal: PersonalSignal }) {
   const filePath = useMemo(() => {
-    const fp = (signal.payload as { file_path?: unknown }).file_path;
-    return typeof fp === "string" && fp.length > 0 ? fp : null;
+    // pinai-agents writes payload.storage_path; legacy plugin wrote file_path.
+    // Read both during the cutover; storage_path takes precedence.
+    const p = signal.payload as { storage_path?: unknown; file_path?: unknown };
+    const sp = typeof p.storage_path === "string" && p.storage_path.length > 0
+      ? p.storage_path : null;
+    const fp = typeof p.file_path === "string" && p.file_path.length > 0
+      ? p.file_path : null;
+    return sp ?? fp;
   }, [signal.payload]);
 
+  const mediaUrl = useDeviceMediaUrl(filePath);
   const mediaKind = useMemo(() => classifyMediaKind(signal.kind, filePath), [signal.kind, filePath]);
   const occurred = useMemo(() => formatTime(signal.occurred_at), [signal.occurred_at]);
 
@@ -213,41 +236,41 @@ function SignalRow({ signal }: { signal: PersonalSignal }) {
         <p className="text-[11px] text-foreground/60 leading-relaxed">{signal.summary}</p>
       )}
 
-      {mediaKind === "image" && filePath && (
+      {mediaKind === "image" && mediaUrl && (
         <img
-          src={deviceMediaUrl(filePath)}
+          src={mediaUrl}
           alt={signal.title}
           loading="lazy"
           className="w-full max-h-80 object-contain rounded-md bg-foreground/5"
         />
       )}
 
-      {mediaKind === "video" && filePath && (
+      {mediaKind === "video" && mediaUrl && (
         <video
-          src={deviceMediaUrl(filePath)}
+          src={mediaUrl}
           controls
           preload="metadata"
           className="w-full max-h-80 rounded-md bg-foreground/5"
         />
       )}
 
-      {mediaKind === "audio" && filePath && (
+      {mediaKind === "audio" && mediaUrl && (
         <audio
-          src={deviceMediaUrl(filePath)}
+          src={mediaUrl}
           controls
           preload="metadata"
           className="w-full"
         />
       )}
 
-      {mediaKind === "file" && filePath && (
+      {mediaKind === "file" && mediaUrl && (
         <a
-          href={deviceMediaUrl(filePath)}
+          href={mediaUrl}
           target="_blank"
           rel="noopener noreferrer"
           className="text-[11px] text-primary underline break-all"
         >
-          Download {filePath.split("/").pop()}
+          Download {filePath?.split("/").pop()}
         </a>
       )}
     </li>

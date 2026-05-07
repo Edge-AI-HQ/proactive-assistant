@@ -1,12 +1,20 @@
 import { useAuth } from "@/hooks/useAuth";
-import { useContainer } from "@/hooks/useContainer";
 import LoginPage from "@/components/LoginPage";
-import Dashboard from "@/components/Dashboard";
 import AppShell from "@/components/AppShell";
 
+/**
+ * Top-level router after the apis + openclaw retirement:
+ *   loading → spinner
+ *   no user → LoginPage (Supabase Google OAuth)
+ *   user    → AppShell directly
+ *
+ * The pre-cutover Dashboard / useContainer flow waited on a per-user
+ * OpenClaw container to spin up. There's no per-user container anymore
+ * (pinai-agents is multi-tenant), so login lands the user straight in
+ * the chat shell.
+ */
 export default function App() {
   const { loading: authLoading, user, signInWithGoogle, signOut } = useAuth();
-  const container = useContainer(!!user);
 
   if (authLoading) {
     return (
@@ -22,25 +30,10 @@ export default function App() {
     return <LoginPage onSignIn={signInWithGoogle} />;
   }
 
-  if (container.status === "ready") {
-    return (
-      <AppShell
-        userName={user.user_metadata?.full_name ?? user.email ?? null}
-        onSignOut={signOut}
-      />
-    );
-  }
-
   return (
-    <Dashboard
-      user={user}
-      status={container.status}
-      firstTime={container.firstTime}
-      error={container.error}
+    <AppShell
+      userName={user.user_metadata?.full_name ?? user.email ?? null}
       onSignOut={signOut}
-      onRecreate={container.recreate}
-      onReconnect={container.reconnect}
-      onCancel={container.cancel}
     />
   );
 }

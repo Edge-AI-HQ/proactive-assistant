@@ -67,7 +67,7 @@ export default function CrystallizePanel({ enabled }: CrystallizePanelProps) {
   const threshold = state?.config.effective.messageThreshold ?? 10;
   const turnCount = state?.state.turn_count ?? 0;
   const progress = useMemo(() => Math.min(1, turnCount / Math.max(1, threshold)), [turnCount, threshold]);
-  const autoEnabled = state?.settings.auto_crystallize ?? true;
+  const autoEnabled = state?.settings?.auto_crystallize ?? true;
 
   const commitNumber = async (key: TunableCrystallizeKey, raw: string) => {
     if (!state) return;

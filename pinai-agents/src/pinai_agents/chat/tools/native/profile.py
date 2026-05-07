@@ -1,0 +1,143 @@
+"""Profile + Goals native @tool wrappers."""
+
+from __future__ import annotations
+
+from typing import Any, Literal
+
+from langchain_core.tools import tool
+from pydantic import BaseModel, Field
+
+from .. import http_client
+
+
+class ProfileGetInput(BaseModel):
+    pass
+
+
+@tool("profile_get", args_schema=ProfileGetInput)
+async def profile_get():
+    """Fetch user's profile + active goals snapshot. Use as first call
+    when starting a new conversation thread to ground replies in the
+    user's persona."""
+    return await http_client.get("/api/agent/profile/get")
+
+
+class ProfileUpsertInput(BaseModel):
+    """Partial update — pass ONLY fields the user just clarified.
+    Omitted fields keep their existing value; passing a value overwrites
+    that field. Use this for structured persona attributes, not free-form
+    facts (those go into `memory_add`)."""
+
+    display_name: str | None = Field(
+        default=None, max_length=200,
+        description="User's preferred display name. Set when the user introduces themselves or asks to be called something specific.",
+    )
+    locale: str | None = Field(
+        default=None, max_length=20,
+        description="BCP-47 locale tag, e.g. 'en-US', 'zh-Hans'. Set when the user reveals their language preference.",
+    )
+    timezone: str | None = Field(
+        default=None, max_length=64,
+        description="IANA timezone, e.g. 'America/Los_Angeles', 'Asia/Shanghai'. Set when the user states their location/timezone.",
+    )
+    summary: str | None = Field(
+        default=None, max_length=2000,
+        description="One-paragraph persona summary the agent uses to ground future replies. Rewrite when the user's high-level situation shifts.",
+    )
+    facts: dict[str, Any] | None = Field(
+        default=None,
+        description="Structured persona facts bucket (role, employer, family). Replaces the entire facts JSONB; merge client-side if you want to preserve fields.",
+    )
+    preferences: dict[str, Any] | None = Field(
+        default=None,
+        description="Structured preferences bucket (communication_style, working_hours, dietary). Replaces the entire JSONB.",
+    )
+    constraints: dict[str, Any] | None = Field(
+        default=None,
+        description="Structured constraints bucket (no_meetings_before, allergies, hard_deadlines). Replaces the entire JSONB.",
+    )
+
+
+@tool("profile_upsert", args_schema=ProfileUpsertInput)
+async def profile_upsert(
+    display_name: str | None,
+    locale: str | None,
+    timezone: str | None,
+    summary: str | None,
+    facts: dict[str, Any] | None,
+    preferences: dict[str, Any] | None,
+    constraints: dict[str, Any] | None,
+):
+    """Persist a structured persona update the user just stated. Use ONLY
+    when the user explicitly clarified one of: display name, locale,
+    timezone, persona summary, or one of the structured facts /
+    preferences / constraints buckets. Free-form one-liner facts
+    ("likes coffee black") go to `memory_add`, not here. Long-term named
+    goals go to `goal_upsert`. Pass only the fields that changed —
+    omitted fields are preserved."""
+    return await http_client.post(
+        "/api/agent/profile/upsert",
+        {
+            "displayName": display_name,
+            "locale": locale,
+            "timezone": timezone,
+            "summary": summary,
+            "facts": facts,
+            "preferences": preferences,
+            "constraints": constraints,
+        },
+    )
+
+
+class GoalUpsertInput(BaseModel):
+    key: str = Field(
+        min_length=1, max_length=120,
+        description="Stable slug for this goal (e.g. 'staff-promo-2026', 'sub3-marathon'). Used to update the same goal across conversations.",
+    )
+    title: str = Field(
+        min_length=1, max_length=200,
+        description="One-sentence goal statement, action-led with a target/timeframe.",
+    )
+    id: str | None = Field(
+        default=None,
+        description="Existing goal id to update. Omit to let the server generate a new id (insert path).",
+    )
+    priority: Literal["low", "medium", "high"] = Field(
+        default="medium",
+        description="Goal priority. Default 'medium'.",
+    )
+    status: Literal["active", "archived"] = Field(
+        default="active",
+        description="'active' for live goals; pass 'archived' to retire one in place (alternative to a separate close call).",
+    )
+    summary: str | None = Field(
+        default=None, max_length=2000,
+        description="Optional longer description / context that helps future cards reason about this goal.",
+    )
+
+
+@tool("goal_upsert", args_schema=GoalUpsertInput)
+async def goal_upsert(
+    key: str,
+    title: str,
+    id: str | None,
+    priority: Literal["low", "medium", "high"],
+    status: Literal["active", "archived"],
+    summary: str | None,
+):
+    """Persist a long-term named goal the user just declared (career,
+    health, family, wealth, growth, life — typically a 90-day or longer
+    trajectory). Use a stable `key` slug so subsequent calls update the
+    same goal. For one-off tasks or short reminders, use the card / chat
+    surface instead, not a goal."""
+    return await http_client.post(
+        "/api/agent/profile/goals/upsert",
+        {
+            "id": id,
+            "key": key,
+            "title": title,
+            "priority": priority,
+            "status": status,
+            "summary": summary,
+        },
+    )

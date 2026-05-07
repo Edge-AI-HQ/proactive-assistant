@@ -1,15 +1,16 @@
 /**
- * API client for the proactive-ai cloud service.
+ * API client for the pinai-agents cloud service.
  *
- * All calls go through the APIs reverse proxy:
- *   /api/proactive/*   → APIs endpoints (auth, container management)
- *   /api/proxy/*       → user's container (pipeline, chat, etc.)
+ * Single backend: every call goes to pinai-agents via PIN_API_BASE. The
+ * old apis Node service has been retired — container management, gateway
+ * tickets, per-user model switching are gone (multi-tenant pinai-agents,
+ * deployment-wide model selection on LiteLLM).
  *
- * Auth: Supabase JWT is attached automatically via getAccessToken().
+ * Auth: Supabase JWT is attached automatically via authHeaders().
  */
 
 import { supabase } from "./supabase";
-import { API_BASE } from "./platform";
+import { PIN_API_BASE } from "./platform";
 
 export interface Goal {
   id: string;
@@ -141,7 +142,7 @@ async function getAccessToken(): Promise<string | null> {
   return session?.access_token ?? null;
 }
 
-async function authHeaders(): Promise<Record<string, string>> {
+export async function authHeaders(): Promise<Record<string, string>> {
   const token = await getAccessToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
@@ -177,80 +178,29 @@ async function readErrorMessage(res: Response): Promise<string> {
 /**
  * Refresh the Supabase session and return a fresh access token.
  * Returns null if refresh fails (user should be signed out).
+ *
+ * Concurrent callers (e.g. multiple panels firing /api/* on AppShell
+ * mount and all hitting 401 simultaneously) share one in-flight refresh
+ * via the module-level promise cache. Without this, parallel
+ * `refreshSession()` calls race against gotrue's single-use refresh
+ * token semantics: the first call consumes the refresh token, the rest
+ * get "Invalid Refresh Token" and supabase fires SIGNED_OUT — kicking
+ * the user back to LoginPage right after login.
  */
+let refreshPromise: Promise<string | null> | null = null;
+
 async function refreshAndGetToken(): Promise<string | null> {
-  const { data, error } = await supabase.auth.refreshSession();
-  if (error || !data.session) return null;
-  return data.session.access_token;
-}
-
-export async function proactiveFetch(
-  path: string,
-  init?: RequestInit
-): Promise<Response> {
-  const headers: Record<string, string> = {
-    ...(await authHeaders()),
-    ...((init?.headers as Record<string, string>) ?? {}),
-  };
-
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
-  if (res.status !== 401) return res;
-
-  const freshToken = await refreshAndGetToken();
-  if (!freshToken) return res;
-
-  return fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      ...headers,
-      Authorization: `Bearer ${freshToken}`,
-    },
-  });
-}
-
-// ── APIs endpoints (/api/proactive/*) ──
-
-export async function heartbeat(): Promise<void> {
-  await proactiveFetch("/api/proactive/user/heartbeat", {
-    method: "POST",
-  });
-}
-
-export async function ensureContainer(): Promise<{
-  containerId: string;
-  ready: boolean;
-  status: string;
-}> {
-  const res = await proactiveFetch("/api/proactive/container/ensure", {
-    method: "POST",
-  });
-  if (!res.ok) throw new Error(`/container/ensure failed: ${await readErrorMessage(res)}`);
-  return res.json();
-}
-
-export async function resetContainer(): Promise<{ ok: boolean; containerId: string; ready: boolean }> {
-  const res = await proactiveFetch("/api/proactive/container/reset", {
-    method: "POST",
-  });
-  if (!res.ok) throw new Error(`/container/reset failed: ${await readErrorMessage(res)}`);
-  return res.json();
-}
-
-export async function destroyContainer(): Promise<{ ok: boolean }> {
-  const res = await proactiveFetch("/api/proactive/container/destroy", {
-    method: "POST",
-  });
-  if (!res.ok) throw new Error(`/container/destroy failed: ${await readErrorMessage(res)}`);
-  return res.json();
-}
-
-export async function fetchContainerStatus(): Promise<{
-  status: string;
-  created_at?: string;
-}> {
-  const res = await proactiveFetch("/api/proactive/container/status");
-  if (!res.ok) throw new Error(`/container/status failed: ${await readErrorMessage(res)}`);
-  return res.json();
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = (async () => {
+    try {
+      const { data, error } = await supabase.auth.refreshSession();
+      if (error || !data.session) return null;
+      return data.session.access_token;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+  return refreshPromise;
 }
 
 // ── User devices (multi-device registry) ──
@@ -280,33 +230,88 @@ export interface RegisterDeviceInput {
   metadata?: Record<string, unknown>;
 }
 
+async function pinaiFetch(
+  path: string,
+  init?: RequestInit,
+): Promise<Response> {
+  const headers: Record<string, string> = {
+    ...(await authHeaders()),
+    ...((init?.headers as Record<string, string>) ?? {}),
+  };
+  const url = `${PIN_API_BASE}${path}`;
+  const res = await fetch(url, { ...init, headers });
+  if (res.status !== 401) return res;
+  const freshToken = await refreshAndGetToken();
+  if (!freshToken) return res;
+  return fetch(url, {
+    ...init,
+    headers: { ...headers, Authorization: `Bearer ${freshToken}` },
+  });
+}
+
 export async function listUserDevices(): Promise<UserDevice[]> {
-  const res = await proactiveFetch("/api/proactive/devices");
-  if (!res.ok) throw new Error(`/devices list failed: ${await readErrorMessage(res)}`);
-  const data = (await res.json()) as { devices?: UserDevice[] };
-  return Array.isArray(data.devices) ? data.devices : [];
+  const res = await pinaiFetch("/api/devices/list");
+  if (!res.ok) throw new Error(`/devices/list failed: ${await readErrorMessage(res)}`);
+  // pinai-agents returns { items: [...] } with camelCase fields; normalize
+  // back to the snake_case UserDevice shape callers expect.
+  const data = (await res.json()) as {
+    items?: Array<{
+      deviceId: string;
+      platform: UserDevicePlatform;
+      displayName: string | null;
+      appVersion: string | null;
+      model: string | null;
+      registeredAt: string;
+      lastSeenAt: string | null;
+      status: "active" | "revoked";
+    }>;
+  };
+  return (data.items ?? []).map((d) => ({
+    device_id: d.deviceId,
+    platform: d.platform,
+    display_name: d.displayName,
+    app_version: d.appVersion,
+    model: d.model,
+    registered_at: d.registeredAt,
+    last_seen_at: d.lastSeenAt,
+    status: d.status,
+    metadata: {},
+  }));
 }
 
 export async function registerUserDevice(
   input: RegisterDeviceInput,
 ): Promise<{ device: UserDevice; deviceToken: string }> {
-  const res = await proactiveFetch("/api/proactive/devices/register", {
+  const res = await pinaiFetch("/api/devices/register", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
   if (!res.ok) throw new Error(`/devices/register failed: ${await readErrorMessage(res)}`);
   const data = (await res.json()) as {
-    device: UserDevice;
-    device_token?: string;
-    deviceToken?: string;
+    deviceId: string;
+    deviceToken: string;
+    platform: UserDevicePlatform;
+    registeredAt: string;
   };
-  const token = data.device_token ?? data.deviceToken ?? "";
-  return { device: data.device, deviceToken: token };
+  return {
+    device: {
+      device_id: data.deviceId,
+      platform: data.platform,
+      display_name: input.displayName ?? null,
+      app_version: input.appVersion ?? null,
+      model: input.model ?? null,
+      registered_at: data.registeredAt,
+      last_seen_at: null,
+      status: "active",
+      metadata: input.metadata ?? {},
+    },
+    deviceToken: data.deviceToken,
+  };
 }
 
 export async function revokeUserDevice(deviceId: string): Promise<void> {
-  const res = await proactiveFetch("/api/proactive/devices/revoke", {
+  const res = await pinaiFetch("/api/devices/revoke", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ deviceId }),
@@ -314,196 +319,24 @@ export async function revokeUserDevice(deviceId: string): Promise<void> {
   if (!res.ok) throw new Error(`/devices/revoke failed: ${await readErrorMessage(res)}`);
 }
 
-// ── Pair Code (RFC 8628 simplified) ──
-
-export interface PairCodeClaimResult {
-  device_id: string;
-  display_name: string;
-  device_token: string;
-}
-
 /**
- * The Web user enters the 6-char code shown on the device, optionally with
- * a friendly display_name + model. On success the pairing_codes row flips
- * to 'claimed', a user_devices row is created for this user, and a
- * one-shot token is stashed for the device's next poll.
+ * Fetch a TTL-bounded signed URL for a device-uploaded media blob.
+ * The path is the storage_path stored on personal_signals.payload.
+ * Returns null when storage isn't configured (dev without Supabase
+ * Storage); UI should render a placeholder.
  */
-export async function claimPairCode(
-  code: string,
-  displayName?: string,
-  model?: string,
-): Promise<PairCodeClaimResult> {
-  const trimmed = code.trim().toUpperCase();
-  const res = await proactiveFetch("/api/proactive/devices/pair-code/claim", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      code: trimmed,
-      ...(displayName ? { displayName } : {}),
-      ...(model ? { model } : {}),
-    }),
-  });
-  if (!res.ok) {
-    // Surface the domain error code so the UI can render specific copy
-    // ("code expired", "already claimed", etc.) instead of a generic message.
-    let detail: { error?: string; code?: string } = {};
-    try { detail = await res.json(); } catch { /* keep empty */ }
-    const e = new Error(detail.error ?? `pair-code claim failed: ${res.status}`) as Error & { domainCode?: string; status?: number };
-    e.domainCode = detail.code;
-    e.status = res.status;
-    throw e;
-  }
-  return res.json();
+export async function deviceMediaUrl(storagePath: string): Promise<string | null> {
+  const res = await pinaiFetch(`/api/devices/media/${storagePath}`);
+  if (!res.ok) return null;
+  const data = (await res.json()) as { signedUrl?: string };
+  return data.signedUrl ?? null;
 }
 
-/**
- * Build a URL to fetch a device-uploaded media blob through the APIs proxy.
- * The container exposes GET /devices/media/<rel-path>; the path stored on
- * personal_signals.payload.file_path is exactly the rel-path we need.
- */
-export function deviceMediaUrl(filePath: string): string {
-  return `${API_BASE}/api/proxy/devices/media/${filePath}`;
-}
-
-// ── Account deletion ──
-
-export async function deleteAccount(): Promise<void> {
-  const res = await proactiveFetch("/api/proactive/user/delete", {
-    method: "POST",
-  });
-  if (!res.ok) throw new Error(`/user/delete failed: ${await readErrorMessage(res)}`);
-}
-
-// ── Model management ──
-
-export interface ModelOption {
-  id: string;
-  ref: string;
-}
-
-export interface ModelsResponse {
-  ok: boolean;
-  current_model: string;
-  default_model: string;
-  available_models: ModelOption[];
-}
-
-export type GatewayProbeCode =
-  | "NO_CONTAINER"
-  | "PROXY_ERROR"
-  | "RESUMING"
-  | "CONTAINER_NOT_RUNNING";
-
-export interface GatewayProbeResult {
-  ok: boolean;
-  httpStatus: number | null;
-  code?: GatewayProbeCode;
-  message?: string;
-}
-
-function toGatewayProbeCode(value: unknown): GatewayProbeCode | undefined {
-  switch (value) {
-    case "NO_CONTAINER":
-    case "PROXY_ERROR":
-    case "RESUMING":
-    case "CONTAINER_NOT_RUNNING":
-      return value;
-    default:
-      return undefined;
-  }
-}
-
-export async function fetchModels(signal?: AbortSignal): Promise<ModelsResponse> {
-  const res = await proactiveFetch("/api/proactive/models", { signal });
-  if (!res.ok) throw new Error(`/models failed: ${await readErrorMessage(res)}`);
-  return res.json();
-}
-
-export async function changeModel(
-  modelRef: string,
-  signal?: AbortSignal
-): Promise<{ ok: boolean; model: string }> {
-  const res = await proactiveFetch("/api/proactive/models/change", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: modelRef }),
-    signal,
-  });
-  if (!res.ok) throw new Error(`/models/change failed: ${await readErrorMessage(res)}`);
-  return res.json();
-}
-
-// ── Gateway ticket ──
-
-export async function getGatewayTicket(): Promise<{
-  ticket: string;
-  expiresIn: number;
-  url: string;
-}> {
-  const res = await proactiveFetch("/api/proactive/gateway/ticket", {
-    method: "POST",
-  });
-  if (!res.ok) throw new Error(`/gateway/ticket failed: ${await readErrorMessage(res)}`);
-  return res.json();
-}
-
-// ── Gateway readiness probe ──
-
-export async function probeGatewayHealth(): Promise<GatewayProbeResult> {
-  try {
-    const res = await fetch(`${API_BASE}/api/proxy/health`, {
-      headers: await authHeaders(),
-      signal: AbortSignal.timeout(5000),
-    });
-    let data: Record<string, unknown> | null = null;
-    try {
-      const parsed = await res.json();
-      data =
-        parsed && typeof parsed === "object"
-          ? (parsed as Record<string, unknown>)
-          : null;
-    } catch {
-      data = null;
-    }
-
-    const message =
-      typeof data?.error === "string"
-        ? data.error
-        : typeof data?.message === "string"
-          ? data.message
-          : undefined;
-    const code = toGatewayProbeCode(data?.code);
-
-    if (!res.ok) {
-      return {
-        ok: false,
-        httpStatus: res.status,
-        code,
-        message: message || res.statusText || "Gateway health check failed",
-      };
-    }
-
-    return {
-      ok: typeof data?.ok === "boolean" ? data.ok : true,
-      httpStatus: res.status,
-      code,
-      message,
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      httpStatus: null,
-      message: error instanceof Error ? error.message : "Gateway health check failed",
-    };
-  }
-}
-
-// ── Container proxy endpoints (/api/proxy/*) ──
-
-/**
- * Fetch via the container proxy.  Automatically retries once on 401
- * after refreshing the Supabase session token.
- */
+// ── pinai-agents /api/* endpoints ──
+//
+// `proxyFetch(path)` → `${PIN_API_BASE}/api${path}`. Name kept for caller
+// readability — every UI call goes through one helper. Auth header is
+// attached + retried once on 401 with a refreshed Supabase session.
 export async function proxyFetch(
   path: string,
   init?: RequestInit
@@ -512,7 +345,8 @@ export async function proxyFetch(
     ...(await authHeaders()),
     ...((init?.headers as Record<string, string>) ?? {}),
   };
-  const res = await fetch(`${API_BASE}/api/proxy${path}`, { ...init, headers });
+  const url = `${PIN_API_BASE}/api${path}`;
+  const res = await fetch(url, { ...init, headers });
 
   // Retry once with a refreshed token on 401
   if (res.status === 401) {
@@ -522,7 +356,7 @@ export async function proxyFetch(
         ...headers,
         Authorization: `Bearer ${freshToken}`,
       };
-      return fetch(`${API_BASE}/api/proxy${path}`, { ...init, headers: retryHeaders });
+      return fetch(url, { ...init, headers: retryHeaders });
     }
   }
 

@@ -97,7 +97,6 @@ function makeComposioState(connections: ComposioState["connections"] = [
     loadingConns: false,
     loadStatus: vi.fn(async () => undefined),
     loadConnections: vi.fn(async () => []),
-    saveApiKey: vi.fn(async () => ({ ok: true })),
     connectToolkit: vi.fn(async () => ({ ok: true })),
     disconnectAccount: vi.fn(async () => ({ ok: true })),
     waitForToolkit: vi.fn(async () => ({ connected: true })),

@@ -1,0 +1,61 @@
+app = 'proactive-ai-agents-test'
+primary_region = 'iad'
+
+# Mirrors fly.dev.toml. Two changes:
+#   1. app name + DEPLOY_ENV = 'test'
+#   2. min_machines_running stays at 1 (test env, no warmup requirement)
+#
+# Test env hosts an isolated Supabase project; upstream SDK keys
+# (LiteLLM master, Daytona, Composio, Stripe, ElevenLabs) are reused
+# from dev — see docs/modules/runtime-deployment.mdx § test 环境.
+
+[build]
+  dockerfile = 'Dockerfile'
+  [build.args]
+    DEPLOY_ENV = 'test'
+
+[env]
+  DEPLOY_ENV = 'test'
+
+[processes]
+  # Secrets come from `flyctl secrets set --process-group=<web|chat> ...` —
+  # chat MUST NOT receive master credentials. See fly.dev.toml comment
+  # block for the full trust-boundary rationale.
+  web  = "uvicorn pinai_agents.web.asgi:app --host 0.0.0.0 --port 8000"
+  chat = "uvicorn pinai_agents.chat.asgi:app --host 0.0.0.0 --port 8001"
+
+# Public HTTPS edge → web only.
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = 'suspend'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['web']
+
+  [http_service.concurrency]
+    type = 'connections'
+    hard_limit = 80
+    soft_limit = 50
+
+# chat is reachable only on the internal 6PN at chat.process.app.internal:8001.
+[[services]]
+  protocol = 'tcp'
+  internal_port = 8001
+  processes = ['chat']
+
+[deploy]
+  release_command = "sh -c 'exec yoyo apply --batch -d \"postgresql+psycopg://${SUPABASE_DB_URL#*://}\"'"
+  strategy = 'rolling'
+
+[[vm]]
+  processes = ['web']
+  memory = '2gb'
+  cpu_kind = 'shared'
+  cpus = 2
+
+[[vm]]
+  processes = ['chat']
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1

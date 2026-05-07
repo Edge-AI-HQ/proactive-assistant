@@ -24,6 +24,34 @@ dependencies = [
     "langgraph-checkpoint-postgres>=2.0.0",
     "psycopg[binary]>=3.2.0",
     "psycopg-pool>=3.2.0",
+    # Migration runner — pure SQL, no ORM. Used by fly release_command in
+    # prod and by the pinai-db-migrate docker-compose service in dev. Lives
+    # in main deps (not dev) because the runtime image needs it for
+    # release_command to work.
+    "yoyo-migrations>=9.0.0",
+    "croniter>=6.2.2",
+    "pyjwt>=2.12.1",
+    "cryptography>=48.0.0",
+    "httpx>=0.28.1",
+    # bcrypt for device-token hashing — same scheme as apis (bcrypt rounds=10).
+    "bcrypt>=4.2.0",
+    # Supabase Storage SDK — replaces openclaw's local-FS media writes for
+    # device ambient image / audio / video chunks. Storage bucket "pai-media"
+    # holds per-user objects; signed URLs returned to authenticated clients.
+    "supabase>=2.10.0",
+    # Stripe — payment / subscriptions. SDK pinned to a major to avoid
+    # surprise breaking changes in webhook event payload shapes; bump
+    # explicitly when we want a new Stripe API version.
+    "stripe>=11.0.0,<13.0",
+    # Browserbase Python SDK + Playwright — chat agent's browser tool.
+    # Browserbase manages remote chromium + Live View URL the frontend
+    # iframes; playwright-async drives it via CDP. Ports plugin/browser/.
+    "browserbase>=1.0.0,<2.0",
+    "playwright>=1.49.0,<2.0",
+    # Tavily web search — chat agent's `tavily_search` tool. Partner
+    # package (langchain_tavily) is the current home; legacy
+    # `langchain_community.tools.tavily_search` is the previous gen.
+    "langchain-tavily>=0.2.13",
 ]
 
 [dependency-groups]
@@ -46,8 +74,38 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "SIM"]
-ignore = ["E501"]  # line length handled by formatter
+select = ["E", "F", "I", "B", "UP", "SIM", "TID"]
+ignore = [
+  "E501",   # line length handled by formatter
+  "TID252", # 允许相对 import — Python 包内 sibling 模块用相对路径是社区主流写法
+  "B008",   # FastAPI 的 Depends() / Query() / Body() 必须在 default 里 call,B008 跟它冲突
+]
+
+# Trust-boundary 第 1 道墙(对应 docs/plans/2026-05-04-pinai-agents-backend-consolidation.mdx).
+# web 持 master credentials,chat 是 LLM loop / 不可信 input 入口。
+# 互相 import 等于把 master 暴露给 LLM injection attack 面 → 禁。
+# shared/ 是纯 pure model + protocol,可以被双方 import,但 shared 自己不许碰 web/chat。
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"pinai_agents.web" = { msg = "chat 进程不能 import pinai_agents.web(防持 master credentials);跨边界走 HTTPS + HS256 JWT。" }
+"pinai_agents.chat" = { msg = "web 进程不能 import pinai_agents.chat(防 LLM 入侵面扩散到 master 进程);跨边界走 HTTPS + HS256 JWT。" }
+
+# Per-file-ignore 放开 chat/ 跟 web/ 内部 + 入口 + tests。
+#
+# 注意:ruff 把相对 import(`from ..config`)解析成 absolute 路径再匹配
+# banned-api,所以 chat/ 内部的 sibling import 也会触发禁 chat 规则。
+# 用 per-file-ignore 整个子树是必要的逃生口,代价是 banned-api 失去
+# directional 表达力(无法只禁"chat → web"方向)。
+#
+# 真正的方向性检查靠 scripts/check_trust_boundary.sh + Makefile 跑的
+# grep-based 静态检查兜底。banned-api 配置在这里仍然有用:
+#   1. 当文档:声明"chat 跟 web 不能互相 import",阅读者一眼看到
+#   2. web/asgi.py / chat/asgi.py 这两个 entry shim 真的会被 ruff 拦
+#      —— 反向 entry(web 入口误 import chat,反之亦然)等于 process
+#      group 配置错乱,这是会爆的事
+[tool.ruff.lint.per-file-ignores]
+"src/pinai_agents/web/**/*.py"  = ["TID251"]
+"src/pinai_agents/chat/**/*.py" = ["TID251"]
+"tests/**/*.py"                 = ["TID251"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

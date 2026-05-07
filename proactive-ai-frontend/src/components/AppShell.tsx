@@ -1,8 +1,6 @@
 /**
- * AppShell — main layout once authenticated and container is running.
- * Combines the gateway's visual design (floating cards, hamburger menu,
- * weather widget, greeting) with the cloud frontend's API layer
- * (proxyFetch/proxyPost, Supabase auth, heartbeat).
+ * AppShell — main layout once authenticated. Floating cards, hamburger
+ * menu, weather widget, greeting; chat / goals / control sub-views.
  */
 
 import { useState, useEffect, useRef, useCallback, Suspense } from "react";
@@ -10,7 +8,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Menu, X, Sparkles, Zap, MessageCircle, Target, Settings, ArrowRight,
 } from "lucide-react";
-import { heartbeat, proxyFetch, proxyPost } from "@/lib/api";
+import { proxyFetch, proxyPost } from "@/lib/api";
 import { usePipeline } from "@/hooks/usePipeline";
 import { useCards } from "@/hooks/useCards";
 import { useComposio } from "@/hooks/useComposio";
@@ -22,6 +20,7 @@ import ChatTimeline from "./ChatTimeline";
 import GoalsView from "./GoalsView";
 import ControlPanel from "./ControlPanel";
 import DebugPanel from "./DebugPanel";
+import AgentRunIndicator from "./AgentRunIndicator";
 import CardChat from "./CardChat";
 import CardDetailBody from "./CardDetailBody";
 import AiSphere from "./AiSphere";
@@ -50,8 +49,6 @@ const MENU_ITEMS = [
   { id: "control", label: "CONTROL", icon: Settings },
 ] as const;
 type MenuId = (typeof MENU_ITEMS)[number]["id"];
-
-const HEARTBEAT_INTERVAL_MS = 60_000;
 
 const SLOT_LAYOUTS = [
   [
@@ -126,7 +123,7 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
   const [greetIdx, setGreetIdx] = useState(0);
 
   const pipeline = usePipeline();
-  const { health, run, generate, isRunning } = pipeline;
+  const { run, generate, isRunning } = pipeline;
   const cardsState = useCards();
   const refreshCards = cardsState.refresh;
   const composio = useComposio();
@@ -143,20 +140,6 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
     lastCompleteRunIdRef.current = run.runId;
     void refreshCards();
   }, [run.runId, run.status, refreshCards]);
-
-  // ── Heartbeat (keep container alive) ──
-
-  const sendHeartbeat = useCallback(() => {
-    heartbeat().catch((err) =>
-      console.warn("[AppShell] heartbeat failed:", err),
-    );
-  }, []);
-
-  useEffect(() => {
-    sendHeartbeat();
-    const id = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, [sendHeartbeat]);
 
   // ── Load dismissed IDs from backend on mount ──
 
@@ -634,8 +617,8 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
             parent's padding-top (safe-area) + pt-3 (12px), so these
             absolute buttons need safe-area + 12px too. */}
         <div className="absolute top-[calc(env(safe-area-inset-top,0px)+12px)] right-4 z-30 flex items-center gap-2">
+          <AgentRunIndicator />
           <DebugPanel
-            health={health}
             run={run}
             onGenerate={() => generate()}
             isRunning={isRunning}

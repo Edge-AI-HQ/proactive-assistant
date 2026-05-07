@@ -374,6 +374,16 @@ export default function AutoDreamingSettings() {
     }
     try {
       const res = await proxyFetch(`/dreaming/runs/${runId}`);
+      // 404 = dispatcher hasn't materialized the run row yet (manual
+      // trigger races scheduler tick). Don't blow away an existing
+      // `detail` with the error body — the caller is polling, the
+      // next tick will succeed.
+      if (!res.ok) {
+        if (!options?.background) {
+          setError(res.status === 404 ? "Run not started yet — try again in a moment" : "Failed to load dream run detail");
+        }
+        return;
+      }
       const data = await res.json() as DreamRunDetailResponse;
       setDetail(data);
       if (!options?.background) setExpandedGroups({});
@@ -391,14 +401,17 @@ export default function AutoDreamingSettings() {
     setNotice(null);
     try {
       const res = await proxyPost("/dreaming/run", {});
-      const data = await res.json() as { ok: boolean; runId: string; status: string; error?: string };
-      if (!res.ok || !data.ok) {
+      const data = await res.json() as { ok?: boolean; runId?: string; taskId?: string; status?: string; error?: string };
+      if (!res.ok) {
         setError(data.error ?? "Failed to start dreaming");
         return;
       }
-      setNotice(`Dreaming started: ${data.runId}`);
+      const runRef = data.runId ?? data.taskId;
+      setNotice(`Dreaming started${runRef ? `: ${runRef}` : ""}`);
+      // Don't loadDetail — the dispatcher hasn't created the run row
+      // yet; loadHistory's background poll will surface it once the
+      // scheduler tick claims the task.
       await loadHistory(true);
-      await loadDetail(data.runId);
     } catch {
       setError("Failed to start dreaming");
     } finally {

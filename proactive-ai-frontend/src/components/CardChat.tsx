@@ -8,8 +8,12 @@ interface CardChatProps {
   onBack: () => void;
 }
 
+// Backend (`pinai-agents/.../chat/routes/chat.py`) detects card-mode chats by
+// `_CARD_THREAD_PREFIX = "card-thread-"`. Threads matching this prefix get the
+// card-aware system prompt + card_context tooling; anything else falls through
+// to main-chat. Card IDs are globally unique, so no per-user suffix is needed.
 function stableSessionKey(cardId: string): string {
-  return `agent:main:proactive-ai:chat:card:${cardId}`;
+  return `card-thread-${cardId}`;
 }
 
 export default function CardChat({ card, score, onBack }: CardChatProps) {

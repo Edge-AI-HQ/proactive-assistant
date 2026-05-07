@@ -16,36 +16,19 @@ import {
   AssistantRuntimeProvider,
   ThreadPrimitive,
   MessagePrimitive,
-  ComposerPrimitive,
   useMessage,
   useThreadRuntime,
 } from "@assistant-ui/react";
+import { useAuiState } from "@assistant-ui/store";
 import "highlight.js/styles/github.css";
 import { useProactiveChatRuntime } from "../chat/useProactiveChatRuntime";
 import ToolActivityCard from "./ToolActivityCard";
-import ReasoningContent from "./ReasoningContent";
 import MessageActionBar from "./MessageActionBar";
 import MarkdownContent from "./MarkdownContent";
+import ReasoningBlock from "./ReasoningBlock";
 import BrowserPanel from "../browser-view/BrowserPanel";
 import type { SheetStage } from "../browser-view/BrowserView";
-import { proxyFetch, proxyPost } from "@/lib/api";
-import { isNative } from "@/lib/platform";
-
-interface BrowserSession {
-  browserSessionId: string;
-  liveViewUrl: string;
-  viewport: { width: number; height: number };
-  /** Last-known remote page URL — drives the URL bar in the panel header. */
-  currentUrl: string;
-  controlMode: "ai" | "user" | "idle";
-  /**
-   * Set when the AI asks the user to take over (e.g. captcha / 2FA).
-   * Cleared when control returns to AI. Plain user-initiated "Take
-   * Control" clicks do not set this — it's specifically the AI-requested
-   * handoff overlay.
-   */
-  takeoverReason?: string | null;
-}
+import { useBrowserSession } from "@/hooks/useBrowserSession";
 
 interface MainChatViewProps {
   sessionKey: string;
@@ -72,26 +55,6 @@ const DEFAULT_PROFILE_PROMPTS: readonly string[] = [
   "What's something new you want to try or learn this month?",
 ];
 
-function parseSSELines(
-  buffer: string,
-  onEvent: (data: Record<string, unknown>) => void,
-): string {
-  const lines = buffer.split("\n");
-  const remainder = lines.pop() || "";
-  for (const line of lines) {
-    if (!line.startsWith("data: ")) continue;
-    try {
-      onEvent(JSON.parse(line.slice(6)) as Record<string, unknown>);
-    } catch {
-      /* skip non-JSON */
-    }
-  }
-  return remainder;
-}
-
-function parseControlMode(value: unknown): BrowserSession["controlMode"] {
-  return value === "user" || value === "idle" ? value : "ai";
-}
 
 function UserMessage() {
   return (
@@ -144,7 +107,7 @@ function AssistantMessage() {
           <MessagePrimitive.Content
             components={{
               Text: MarkdownContent,
-              Reasoning: ReasoningContent,
+              Reasoning: ReasoningBlock,
               tools: { Fallback: ToolActivityCard },
             }}
           />
@@ -214,9 +177,9 @@ export default function MainChatView({
   cardContext,
   emptyState,
 }: MainChatViewProps) {
-  const [browserSession, setBrowserSession] = useState<BrowserSession | null>(
-    null,
-  );
+  const { session: browserSession, setControl, sendInput, refreshLiveView, close: closeBrowser } =
+    useBrowserSession(sessionKey);
+
   // Reported by BrowserPanel on each snap so ChatRuntimeScope can leave
   // top padding for the mini drag bar. medium/full deliberately cover the
   // chat (that's the point of expanding), no offset there.
@@ -226,14 +189,12 @@ export default function MainChatView({
   // Composer focus → BrowserPanel demotes full → medium so the typing area
   // isn't covered when the keyboard comes up.
   const [composerFocused, setComposerFocused] = useState(false);
-  const browserSseRef = useRef<AbortController | null>(null);
 
   // When the app returns to the foreground, iOS may have paused the
-  // Browserbase Live View's WebSocket and left the iframe blank. Bump a
-  // key on the iframe to force a clean reload. We intentionally do NOT
-  // remount ChatRuntimeScope — doing that destroys the composer's draft
-  // and any in-flight streaming state. History refresh on foreground is
-  // a separate, opt-in gesture we'll wire to a pull-to-refresh later.
+  // Browserbase Live View's WebSocket AND its signed iframe URL may have
+  // expired. We refresh the URL first so the remount loads a fresh token,
+  // then bump the iframe key. NOT remounting ChatRuntimeScope —
+  // that would drop the composer draft / in-flight streaming.
   const [iframeReloadKey, setIframeReloadKey] = useState(0);
   const lastReloadAtRef = useRef(0);
 
@@ -242,7 +203,10 @@ export default function MainChatView({
       const now = Date.now();
       if (now - lastReloadAtRef.current < 1500) return;
       lastReloadAtRef.current = now;
-      setIframeReloadKey((k) => k + 1);
+      void (async () => {
+        await refreshLiveView();
+        setIframeReloadKey((k) => k + 1);
+      })();
     };
 
     const onVisibility = () => {
@@ -251,198 +215,48 @@ export default function MainChatView({
     document.addEventListener("visibilitychange", onVisibility);
 
     let capListener: { remove: () => Promise<void> } | null = null;
-    if (isNative) {
-      void import("@capacitor/app").then(({ App }) =>
-        App.addListener("appStateChange", (state) => {
-          if (state.isActive) bump();
-        }),
-      ).then((l) => {
-        capListener = l;
-      }).catch(() => {});
-    }
+    void import("@capacitor/app").then(({ App }) =>
+      App.addListener("appStateChange", (state) => {
+        if (state.isActive) bump();
+      }),
+    ).then((l) => {
+      capListener = l;
+    }).catch(() => {});
 
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
       void capListener?.remove();
     };
-  }, []);
+  }, [refreshLiveView]);
 
-  useEffect(() => {
-    let cancelled = false;
-    let activeController: AbortController | null = null;
-
-    const handleEvent = (data: Record<string, unknown>) => {
-      const type = data.type as string | undefined;
-      if (type === "browser:opened") {
-        setBrowserSession({
-          browserSessionId: data.browserSessionId as string,
-          liveViewUrl: data.liveViewUrl as string,
-          viewport:
-            (data.viewport as { width: number; height: number }) ?? {
-              width: 390,
-              height: 844,
-            },
-          currentUrl: typeof data.url === "string" ? data.url : "",
-          controlMode: parseControlMode(data.controlMode),
-          takeoverReason:
-            typeof data.takeoverReason === "string"
-              ? data.takeoverReason
-              : null,
-        });
-      } else if (type === "browser:closed") {
-        setBrowserSession(null);
-      } else if (type === "browser:navigated") {
-        const nextUrl = typeof data.url === "string" ? data.url : "";
-        setBrowserSession((prev) =>
-          prev ? { ...prev, currentUrl: nextUrl } : null,
-        );
-      } else if (type === "browser:control") {
-        const nextMode = parseControlMode(data.mode);
-        const reason =
-          typeof data.reason === "string" && data.reason
-            ? data.reason
-            : null;
-        setBrowserSession((prev) =>
-          prev
-            ? {
-                ...prev,
-                controlMode: nextMode,
-                takeoverReason:
-                  nextMode === "ai" ? null : reason ?? prev.takeoverReason,
-              }
-            : null,
-        );
-      } else if (type === "browser:takeover-requested") {
-        const reason =
-          typeof data.reason === "string" && data.reason
-            ? data.reason
-            : "AI needs your help";
-        setBrowserSession((prev) =>
-          prev
-            ? { ...prev, controlMode: "user", takeoverReason: reason }
-            : null,
-        );
-      }
-    };
-
-    // Auto-reconnect loop. Some proxy layer (gateway / fly.io / Cloudflare)
-    // closes this SSE after ~20s idle even though the backend heartbeats
-    // every 15s; agents also open browsers long after the initial stream
-    // ended. Without reconnect we'd miss every browser:opened that fires
-    // past the first connection. Backend replays the current active session
-    // state on each new connection (routes/browser.ts getActiveSession),
-    // so reconnecting is safe and catches us up on anything we missed.
-    const connectLoop = async () => {
-      while (!cancelled) {
-        const controller = new AbortController();
-        activeController = controller;
-        browserSseRef.current = controller;
-
-        try {
-          const res = await proxyFetch(
-            `/browser/events?sessionKey=${encodeURIComponent(sessionKey)}`,
-            { signal: controller.signal },
-          );
-          if (!res.ok || !res.body) {
-            throw new Error(`SSE request failed: ${res.status}`);
-          }
-
-          const reader = res.body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = "";
-
-          while (!cancelled) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            buffer = parseSSELines(buffer, handleEvent);
-          }
-        } catch (err) {
-          if (controller.signal.aborted || cancelled) return;
-          console.warn("[MainChatView] Browser SSE dropped, reconnecting:", err);
-        }
-
-        if (cancelled) return;
-        // Small backoff so transient failures don't hot-loop.
-        await new Promise((r) => setTimeout(r, 1500));
-      }
-    };
-
-    void connectLoop();
-
-    return () => {
-      cancelled = true;
-      activeController?.abort();
-    };
-  }, [sessionKey]);
-
-  const handleBrowserControlChange = useCallback(
-    (mode: "ai" | "user") => {
-      setBrowserSession((prev) =>
-        prev ? { ...prev, controlMode: mode } : null,
-      );
-      if (browserSession) {
-        void proxyPost(
-          `/browser/sessions/${browserSession.browserSessionId}/control`,
-          { mode },
-        );
-      }
-    },
-    [browserSession],
-  );
-
-  const handleBrowserClose = useCallback(() => {
-    if (browserSession) {
-      void proxyFetch(`/browser/sessions/${browserSession.browserSessionId}`, {
-        method: "DELETE",
-      });
-      setBrowserSession(null);
-    }
-  }, [browserSession]);
-
-  // /input callbacks share the same stale-session handling: if the backend
-  // says the session is gone (404) we drop the local reference so the
-  // panel unmounts instead of letting the user keep firing dead POSTs.
-  // Any other non-2xx is logged but not propagated — keeps UX quiet while
-  // still surfacing in devtools if needed.
-  const postInput = useCallback(
-    async (body: Record<string, unknown>) => {
-      if (!browserSession) return;
-      const res = await proxyPost(
-        `/browser/sessions/${browserSession.browserSessionId}/input`,
-        body,
-      );
-      if (res.ok) return;
-      if (res.status === 404) {
-        console.warn("[MainChatView] /input 404 — session gone, clearing local state");
-        setBrowserSession(null);
-        return;
-      }
-      console.warn("[MainChatView] /input non-ok", res.status);
-    },
-    [browserSession],
-  );
-
+  // BrowserPanel still operates in (mode, x, y, dx, dy) primitives — wrap
+  // the hook's typed `sendInput` so the panel doesn't have to know about
+  // the wire shape.
   const handleUserInputText = useCallback(
-    (text: string) => postInput({ type: "text", text }),
-    [postInput],
+    (text: string) => sendInput({ type: "text", text }),
+    [sendInput],
   );
   const handleUserInputKey = useCallback(
-    (key: string) => postInput({ type: "key", key }),
-    [postInput],
+    (key: string) => sendInput({ type: "key", key }),
+    [sendInput],
   );
-  // Tap → click and pan → scroll, both forwarded as remote-viewport coords
-  // (the BrowserView has already inverted its CSS transform scale before
-  // posting). Browserbase's iframe doesn't pass these through inside iOS
-  // WKWebView when sandboxed and cross-origin.
   const handleUserInputClick = useCallback(
-    (x: number, y: number) => postInput({ type: "click", x, y }),
-    [postInput],
+    (x: number, y: number) => sendInput({ type: "click", x, y }),
+    [sendInput],
   );
   const handleUserInputScroll = useCallback(
-    (dx: number, dy: number) => postInput({ type: "scroll", dx, dy }),
-    [postInput],
+    (dx: number, dy: number) => sendInput({ type: "scroll", dx, dy }),
+    [sendInput],
   );
+  const handleBrowserControlChange = useCallback(
+    (mode: "ai" | "user") => {
+      void setControl(mode);
+    },
+    [setControl],
+  );
+  const handleBrowserClose = useCallback(() => {
+    void closeBrowser();
+  }, [closeBrowser]);
 
   return (
     <motion.div
@@ -511,7 +325,18 @@ export default function MainChatView({
         />
 
         <BrowserPanel
-          session={browserSession}
+          session={
+            browserSession
+              ? {
+                  browserSessionId: browserSession.sessionKey,
+                  liveViewUrl: browserSession.liveViewUrl,
+                  viewport: browserSession.viewport,
+                  currentUrl: browserSession.currentUrl,
+                  controlMode: browserSession.controlMode,
+                  takeoverReason: browserSession.takeoverReason,
+                }
+              : null
+          }
           iframeReloadKey={iframeReloadKey}
           onControlChange={handleBrowserControlChange}
           onUserInputText={handleUserInputText}
@@ -522,6 +347,7 @@ export default function MainChatView({
           onStageChange={setBrowserStage}
           composerFocused={composerFocused}
         />
+
       </div>
     </motion.div>
   );
@@ -631,48 +457,118 @@ function ChatRuntimeScope({
             <ChevronDown size={16} className="text-foreground/60" />
           </ThreadPrimitive.ScrollToBottom>
 
-          <div
-            className="shrink-0 px-3 pb-3 pt-2"
-            style={{
-              background: "hsla(0, 0%, 100%, 0.35)",
-              borderTop: "1px solid hsla(0, 0%, 100%, 0.3)",
-            }}
-          >
-            <ComposerPrimitive.Root
-              className="glass-card-strong flex items-end gap-1 px-4 py-2 rounded-2xl"
-              onFocusCapture={() => onComposerFocusChange(true)}
-              onBlurCapture={() => onComposerFocusChange(false)}
-            >
-              <ComposerPrimitive.Input
-                placeholder={inputPlaceholder ?? "Type a message..."}
-                className="flex-1 bg-transparent text-[16px] text-foreground placeholder:text-foreground/35 outline-none resize-none max-h-32 py-1"
-                rows={1}
-              />
-              {kbVisible && (
-                <button
-                  type="button"
-                  // onMouseDown preventDefault so the composer input doesn't
-                  // lose focus before our click handler runs — we need the
-                  // focused element to blur explicitly on click.
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={handleDismissKeyboard}
-                  className="p-2 rounded-xl transition-colors hover:bg-foreground/10 text-foreground/50"
-                  title="Dismiss keyboard"
-                >
-                  <ChevronDown size={18} strokeWidth={1.8} />
-                </button>
-              )}
-              <ComposerPrimitive.Send className="p-2 rounded-xl transition-colors disabled:opacity-30 hover:bg-foreground/10">
-                <Send
-                  size={18}
-                  strokeWidth={1.8}
-                  className="text-foreground/60"
-                />
-              </ComposerPrimitive.Send>
-            </ComposerPrimitive.Root>
-          </div>
+          <ChatComposer
+            inputPlaceholder={inputPlaceholder}
+            kbVisible={kbVisible}
+            onDismissKeyboard={handleDismissKeyboard}
+            onComposerFocusChange={onComposerFocusChange}
+          />
         </ThreadPrimitive.Root>
       </div>
     </AssistantRuntimeProvider>
+  );
+}
+
+/**
+ * Composer with a plain controlled <textarea>. We deliberately avoid
+ * assistant-ui's `ComposerPrimitive.Input` here: its internal value
+ * binding goes through useAuiState(s.composer.text) which can race with
+ * the message-list-scope re-render after each turn (typed chars get
+ * eaten as `value` snaps back to "").
+ *
+ * Local React state owns the textarea value end-to-end; on submit we
+ * call `threadRuntime.append({...})` which adds the user message and
+ * triggers the run, identical to what ComposerPrimitive.Send would do.
+ * `isRunning` from useAuiState gates the submit button.
+ */
+function ChatComposer({
+  inputPlaceholder,
+  kbVisible,
+  onDismissKeyboard,
+  onComposerFocusChange,
+}: {
+  inputPlaceholder?: string;
+  kbVisible: boolean;
+  onDismissKeyboard: () => void;
+  onComposerFocusChange: (focused: boolean) => void;
+}) {
+  const threadRuntime = useThreadRuntime();
+  const isRunning = useAuiState((s) => s.thread.isRunning);
+  const [text, setText] = useState("");
+  const taRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-grow up to ~6 rows (~128px) — matches the max-h-32 ceiling on
+  // the previous TextareaAutosize. Recompute on every change.
+  useEffect(() => {
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${Math.min(ta.scrollHeight, 128)}px`;
+  }, [text]);
+
+  const submit = useCallback(async () => {
+    const trimmed = text.trim();
+    if (!trimmed || isRunning) return;
+    setText("");
+    await threadRuntime.append({
+      role: "user",
+      content: [{ type: "text", text: trimmed }],
+    });
+  }, [text, isRunning, threadRuntime]);
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.nativeEvent.isComposing) return; // IME compose
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      void submit();
+    }
+  };
+
+  return (
+    <div
+      className="shrink-0 px-3 pb-3 pt-2"
+      style={{
+        background: "hsla(0, 0%, 100%, 0.35)",
+        borderTop: "1px solid hsla(0, 0%, 100%, 0.3)",
+      }}
+    >
+      <div
+        className="glass-card-strong flex items-end gap-1 px-4 py-2 rounded-2xl"
+        onFocusCapture={() => onComposerFocusChange(true)}
+        onBlurCapture={() => onComposerFocusChange(false)}
+      >
+        <textarea
+          ref={taRef}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder={inputPlaceholder ?? "Type a message..."}
+          rows={1}
+          className="flex-1 bg-transparent text-[16px] text-foreground placeholder:text-foreground/35 outline-none resize-none max-h-32 py-1"
+        />
+        {kbVisible && (
+          <button
+            type="button"
+            // preventDefault so click doesn't blur the textarea before
+            // our handler runs.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={onDismissKeyboard}
+            className="p-2 rounded-xl transition-colors hover:bg-foreground/10 text-foreground/50"
+            title="Dismiss keyboard"
+          >
+            <ChevronDown size={18} strokeWidth={1.8} />
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => void submit()}
+          disabled={!text.trim() || isRunning}
+          className="p-2 rounded-xl transition-colors disabled:opacity-30 hover:bg-foreground/10"
+          aria-label="Send"
+        >
+          <Send size={18} strokeWidth={1.8} className="text-foreground/60" />
+        </button>
+      </div>
+    </div>
   );
 }

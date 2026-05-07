@@ -1,7 +1,10 @@
 export interface BuildChatRequestBodyParams {
   sessionKey: string;
   userText?: string;
-  cardContextJson?: string;
+  /** Original card object (NOT a JSON string). The fetch layer JSON-
+   *  encodes the body once for us; if we double-stringify here the
+   *  backend receives a quoted string instead of an object. */
+  cardContext?: Record<string, unknown>;
   includeCardContext: boolean;
 }
 
@@ -21,8 +24,8 @@ export function buildChatRequestBody(
   if (trimmedUserText) {
     body.message = trimmedUserText;
   }
-  if (params.includeCardContext && params.cardContextJson) {
-    body.cardContext = params.cardContextJson;
+  if (params.includeCardContext && params.cardContext) {
+    body.cardContext = params.cardContext;
   }
   return body;
 }

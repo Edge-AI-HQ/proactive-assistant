@@ -1,7 +1,10 @@
 services:
   # ── Database ──
   postgres:
-    image: postgres:15-alpine
+    # pgvector/pgvector ships pgvector preinstalled. Supabase prod has the
+    # extension built-in, so dev mirrors prod here. Keeping pg15 to match
+    # the previous image's major version (no schema migration needed).
+    image: pgvector/pgvector:pg15
     container_name: pin-ai-postgres
     restart: unless-stopped
     environment:
@@ -19,29 +22,6 @@ services:
       retries: 5
 
   # ── Database migration (runs once, then exits) ──
-  db-migrate:
-    image: postgres:15-alpine
-    container_name: pin-ai-db-migrate
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      PGPASSWORD: postgres
-    volumes:
-      - ./apis/db/migrations:/migrations:ro
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        echo "Creating litellm database..."
-        psql -h postgres -U postgres -d postgres -c "SELECT 1 FROM pg_database WHERE datname='litellm'" | grep -q 1 \
-          || psql -h postgres -U postgres -d postgres -c "CREATE DATABASE litellm;" 2>&1
-        echo "Running app migrations..."
-        for f in $$(ls /migrations/*.sql | sort); do
-          echo "  Applying $$(basename $$f)..."
-          psql -h postgres -U postgres -d postgres -f "$$f" 2>&1 || true
-        done
-        echo "Migrations complete."
-
   # ── LiteLLM proxy ──
   litellm:
     image: docker.litellm.ai/berriai/litellm:main-v1.82.0.dev1
@@ -68,66 +48,68 @@ services:
       retries: 60
       start_period: 120s
 
-  # ── APIs ──
-  apis:
-    build:
-      context: .
-      dockerfile: apis/Dockerfile
-      args:
-        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
-        VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY:-}
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
-    container_name: pin-ai-apis
-    restart: unless-stopped
-    depends_on:
-      db-migrate:
-        condition: service_completed_successfully
-      litellm:
-        condition: service_healthy
-    env_file:
-      - ./apis/.env
-    environment:
-      # Local overrides (take precedence over env_file)
-      - SUPABASE_DB_URL=postgresql://postgres:postgres@postgres:5432/postgres
-      - CONTAINER_RUNTIME=docker
-      - OPENCLAW_IMAGE=pinai-openclaw:latest
-      - MOBILE_SYNC_PROXY_ENABLED=1
-      - LITELLM_BASE_URL=http://host.docker.internal:4000
-      # pinai-agents (Step 1.7): /api/proxy/generate and /chat-stream/*
-      # forward here. Service-name DNS within the docker network.
-      - PINAI_AGENTS_URL=http://pinai-agents:8000
-      # Docker-out-of-Docker: tell APIs the host-side data path
-      - HOST_DATA_DIR=${PWD}/data
-      - DOCKER_HOST_ADDRESS=host.docker.internal
-      # Dev: every request maps to a single fixed local user (no token,
-      # no Supabase). Production unaffected (NODE_ENV=production gates it).
-      - NODE_ENV=development
-    ports:
-      - "3000:3000"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./data:/app/apis/data
+  # ── apis + openclaw retired ──
+  # The legacy Node apis service (auth / container-orchestration / payment /
+  # gateway / mobile-proxy) and the per-user OpenClaw runtime image have
+  # both been folded into pinai-agents. See
+  # docs/plans/2026-05-04-pinai-agents-backend-consolidation.mdx § retirement.
+  # Source code stays in the repo for git history; nothing builds or runs.
 
-  # ── OpenClaw image (build only, no running container) ──
-  openclaw-image:
-    build:
-      context: .
-      dockerfile: pinai-openclaw/image/Dockerfile
-    image: pinai-openclaw:latest
-    entrypoint: ["true"]
-    restart: "no"
-
-  # ── pinai-agents (Python LangChain + DeepAgents service) ──
-  # Hosts the proactive-ai agents (generator / chat) replacing OpenClaw's
-  # in-container runtime. APIs forwards /api/proxy/generate and
-  # /chat-stream/* to this service. See docs/plans/2026-05-04-step1-deepagents-skeleton.mdx.
-  pinai-agents:
-    build:
+  # ── DB bootstrap ──
+  # One-shot: creates the litellm database (LiteLLM expects it to exist
+  # before its own migrations run), then applies pai_* yoyo migrations.
+  # Combining both into one container removes the confusing two-migrate-
+  # container layout. Uses the pinai-agents image which already ships
+  # postgresql-client + yoyo.
+  db-migrate:
+    build: &pinai-build
       context: ./pinai-agents
       dockerfile: Dockerfile
       args:
         DEPLOY_ENV: dev
-    container_name: pin-ai-pinai-agents
+    image: pinai-agents:latest
+    container_name: pin-ai-db-migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: postgres
+      # `+psycopg` selects psycopg v3 driver — the only Postgres adapter we
+      # ship in the image. Default `postgresql://` looks for psycopg2 which
+      # we deliberately don't install (psycopg v3 is the going-forward
+      # adapter).
+      SUPABASE_DB_URL: postgresql+psycopg://postgres:postgres@postgres:5432/postgres
+    working_dir: /app
+    entrypoint: ["sh", "-eu", "-c"]
+    command:
+      - |
+        echo "→ ensuring litellm database exists..."
+        if ! python3 -c "
+        import psycopg
+        conn = psycopg.connect('postgresql://postgres:postgres@postgres:5432/postgres', autocommit=True)
+        cur = conn.execute(\"SELECT 1 FROM pg_database WHERE datname='litellm'\")
+        if not cur.fetchone():
+          conn.execute('CREATE DATABASE litellm')
+          print('  created litellm database')
+        else:
+          print('  litellm database already present')
+        "; then
+          echo "FATAL: failed to ensure litellm database"; exit 1
+        fi
+        echo "→ applying pai_* yoyo migrations..."
+        yoyo apply --batch -d "$$SUPABASE_DB_URL"
+        echo "→ db-migrate complete."
+
+  # ── pinai-agents WEB process group ──
+  # Trust-bearing: holds Supabase service_role + HMAC signing key + Composio
+  # master (all to be added in Step A-C). Currently only /health is mounted.
+  # Single image, single source — see pinai-chat below for the LLM-loop
+  # process group sharing this image. Reference:
+  # docs/plans/2026-05-04-pinai-agents-backend-consolidation.mdx § 部署形态.
+  pinai-web:
+    build: *pinai-build
+    image: pinai-agents:latest
+    container_name: pin-ai-pinai-web
     restart: unless-stopped
     depends_on:
       litellm:
@@ -137,12 +119,16 @@ services:
     env_file:
       - ./pinai-agents/.env
     environment:
-      # Override the .env.dev default: in compose litellm is reachable via
-      # service-name DNS, in fly we point to the prod URL via env.
-      - LITELLM_BASE_URL=http://litellm:4000/v1
-      # LangGraph checkpointer Postgres URL (Step 1.4). Schema-isolated
-      # under `langgraph` so checkpoints don't pollute public.
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/postgres
+      ENTRYPOINT_MODULE: pinai_agents.web.asgi:app
+      ENTRYPOINT_PORT: "8000"
+      LITELLM_BASE_URL: http://litellm:4000/v1
+      # Master credentials live in pinai-agents/.env (encrypted source:
+      # .env.dev). The DB URL is overridden here only because the in-
+      # cluster compose Postgres uses service-name DNS, not the prod
+      # Supabase URL stored in .env.
+      SUPABASE_DB_URL: postgresql://postgres:postgres@postgres:5432/postgres
+      # web → chat HTTP proxy target.
+      CHAT_INTERNAL_URL: http://pinai-chat:8001
     ports:
       - "8000:8000"
     healthcheck:
@@ -153,14 +139,110 @@ services:
       retries: 20
       start_period: 30s
 
+  # ── pinai-agents CHAT process group ──
+  # Untrusted runtime: runs DeepAgents / LangGraph LLM loop. Same image as
+  # pinai-web; entrypoint flipped to chat/asgi which fail-fasts on master
+  # credential leak. Step F-1 will swap APIs proxy target to call web first
+  # and have web HS256-sign + forward to here.
+  pinai-chat:
+    build: *pinai-build
+    image: pinai-agents:latest
+    container_name: pin-ai-pinai-chat
+    restart: unless-stopped
+    depends_on:
+      litellm:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+      pinai-web:
+        condition: service_started
+    env_file:
+      # Chat-only env: master credentials stripped (PAI_HMAC_SECRET,
+      # SUPABASE_DB_URL, COMPOSIO_API_KEY, STRIPE_*). Auto-derived from
+      # .env in `make ensure-env-pinai-agents`. The trust-boundary
+      # fail-fast in chat/asgi.py crashes if any of those leak in.
+      - ./pinai-agents/.env.chat
+    environment:
+      ENTRYPOINT_MODULE: pinai_agents.chat.asgi:app
+      ENTRYPOINT_PORT: "8001"
+      LITELLM_BASE_URL: http://litellm:4000/v1
+      # LangGraph checkpointer Postgres URL — separate role from web's
+      # service_role (post-migration 024_pai_chat_role.sql).
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
+      WEB_INTERNAL_URL: http://pinai-web:8000
+      # PAI_API_URL is what python_exec injects into the Daytona sandbox
+      # so pinai_sdk can call /api/agent/*. The compose internal URL
+      # (pinai-web:8000) only resolves inside this docker network — a
+      # cloud sandbox can't reach it. For real SDK usage, override via
+      # `make tunnel-up`, which puts a public ngrok URL in shell env
+      # (sourced from ./.env). Default keeps internal URL so chat still
+      # boots when the tunnel is down.
+      PAI_API_URL: ${PAI_API_URL:-http://pinai-web:8000}
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test:
+        ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health')\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+
+  # ── Frontend (proactive-ai-frontend) ──
+  # Static SPA built with Vite + served by nginx. VITE_* build args bake
+  # into the bundle at build time. For local dev, point VITE_PIN_API_URL
+  # at the host's pinai-web port (8000) — the SPA runs in the user's
+  # browser, not inside the docker network, so service-name DNS doesn't
+  # resolve. http://localhost:8000 is the same machine pinai-web is
+  # bound to via the 8000:8000 port mapping above.
+  #
+  # Served at http://localhost:3000/ — root path SPA. nginx in the image
+  # also reverse-proxies /api/* + /health to pinai-web so the browser
+  # sees same-origin requests (no CORS preflight).
+  frontend:
+    build:
+      context: ./proactive-ai-frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_PIN_API_URL: ${VITE_PIN_API_URL:-http://localhost:8000}
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
+        VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY:-}
+    image: proactive-ai-frontend:latest
+    container_name: pin-ai-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:8080"
+    depends_on:
+      pinai-web:
+        condition: service_healthy
+
+  # ── ngrok tunnel (opt-in via --profile tunnel) ──
+  # Exposes pinai-web:8000 to the public internet so Daytona cloud
+  # sandboxes can reach the SDK endpoints (/api/agent/*). Only needed
+  # for local development of the generator/dreaming agents; chat without
+  # python_exec works fine without this.
+  #
+  # Config lives in project-root ./.env (per-developer, gitignored).
+  # See .env.example for setup instructions.
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: pin-ai-ngrok
+    restart: unless-stopped
+    profiles: ["tunnel"]
+    depends_on:
+      pinai-web:
+        condition: service_healthy
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-}
+    command:
+      - "http"
+      - "pinai-web:8000"
+      - "--domain=${NGROK_DOMAIN:-}"
+      - "--log=stdout"
+    ports:
+      # ngrok inspector — http://localhost:4040 to see tunnel + traffic.
+      - "4040:4040"
+
 volumes:
   pgdata:
-
-networks:
-  default:
-    driver: bridge
-    enable_ipv6: true
-    ipam:
-      config:
-        - subnet: 172.18.0.0/16
-        - subnet: fd00:18::/64

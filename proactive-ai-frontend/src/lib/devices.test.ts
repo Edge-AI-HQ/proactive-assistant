@@ -1,6 +1,8 @@
 /**
  * Tests for the device registration helper.
- * Mocks fetch + localStorage to isolate the SDK contract from the network.
+ * Mocks global fetch + secure storage to isolate the SDK contract from
+ * the network. The endpoint is /api/devices/register on pinai-agents
+ * (no longer /api/proactive/devices/register on legacy apis).
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -15,12 +17,11 @@ const { platformState, secureStore } = vi.hoisted(() => ({
   secureStore: new Map<string, string>(),
 }));
 
-// We mock the entire api module so proactiveFetch is replaceable.
 vi.mock("./api", () => ({
-  proactiveFetch: vi.fn(),
+  authHeaders: vi.fn(async () => ({})),
 }));
 vi.mock("./platform", () => ({
-  API_BASE: "",
+  PIN_API_BASE: "",
   get isNative() {
     return platformState.isNative;
   },
@@ -38,8 +39,10 @@ vi.mock("@aparajita/capacitor-secure-storage", () => ({
   },
 }));
 
-import { proactiveFetch } from "./api";
-const mockedFetch = proactiveFetch as unknown as ReturnType<typeof vi.fn>;
+const fetchMock = vi.fn();
+beforeEach(() => {
+  vi.stubGlobal("fetch", fetchMock);
+});
 
 describe("ensureDevice", () => {
   beforeEach(() => {
@@ -47,7 +50,7 @@ describe("ensureDevice", () => {
     platformState.platform = "web";
     secureStore.clear();
     localStorage.clear();
-    mockedFetch.mockReset();
+    fetchMock.mockReset();
   });
 
   afterEach(async () => {
@@ -55,13 +58,14 @@ describe("ensureDevice", () => {
   });
 
   test("registers a new device on first call and persists the token", async () => {
-    mockedFetch.mockResolvedValueOnce({
+    fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => ({
-        ok: true,
-        device: { device_id: "any-id-server-canonical", platform: "web" },
-        device_token: "secret-token-once",
+        deviceId: "any-id-server-canonical",
+        deviceToken: "secret-token-once",
+        platform: "web",
+        registeredAt: new Date().toISOString(),
       }),
     });
 
@@ -71,10 +75,9 @@ describe("ensureDevice", () => {
     expect(localStorage.getItem("pin.deviceId")).toBe("any-id-server-canonical");
     expect(localStorage.getItem("pin.deviceToken")).toBe("secret-token-once");
 
-    // Server received POST with deviceId + platform
-    expect(mockedFetch).toHaveBeenCalledTimes(1);
-    const call = mockedFetch.mock.calls[0]!;
-    expect(call[0]).toBe("/api/proactive/devices/register");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const call = fetchMock.mock.calls[0]!;
+    expect(call[0]).toBe("/api/devices/register");
     const body = JSON.parse((call[1] as RequestInit).body as string);
     expect(body.platform).toBe("web");
     expect(typeof body.deviceId).toBe("string");
@@ -87,7 +90,7 @@ describe("ensureDevice", () => {
     const creds = await ensureDevice();
     expect(creds.deviceId).toBe("cached-id");
     expect(creds.deviceToken).toBe("cached-token");
-    expect(mockedFetch).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   test("native clients migrate cached localStorage credentials into secure storage", async () => {
@@ -102,26 +105,27 @@ describe("ensureDevice", () => {
     expect(creds.deviceToken).toBe("cached-ios-token");
     expect(secureStore.get("pin.deviceId")).toBe("cached-ios-id");
     expect(secureStore.get("pin.deviceToken")).toBe("cached-ios-token");
-    expect(mockedFetch).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   test("native registration sends a stable fingerprint for server-side dedupe", async () => {
     platformState.isNative = true;
     platformState.platform = "ios";
-    mockedFetch.mockResolvedValueOnce({
+    fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => ({
-        ok: true,
-        device: { device_id: "server-logical-device-id", platform: "ios" },
-        device_token: "secret-token-once",
+        deviceId: "server-logical-device-id",
+        deviceToken: "secret-token-once",
+        platform: "ios",
+        registeredAt: new Date().toISOString(),
       }),
     });
 
     const creds = await ensureDevice();
 
     expect(creds.deviceId).toBe("server-logical-device-id");
-    const call = mockedFetch.mock.calls[0]!;
+    const call = fetchMock.mock.calls[0]!;
     const body = JSON.parse((call[1] as RequestInit).body as string);
     expect(body.platform).toBe("ios");
     expect(typeof body.deviceFingerprint).toBe("string");
@@ -130,7 +134,7 @@ describe("ensureDevice", () => {
   });
 
   test("propagates server error so caller can decide retry policy", async () => {
-    mockedFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) });
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) });
     await expect(ensureDevice()).rejects.toThrow(/devices\/register failed: 500/);
     expect(localStorage.getItem("pin.deviceToken")).toBeNull();
   });

@@ -79,27 +79,25 @@ function toolPart(args: ProactiveToolCallArgs & { toolCallId: string; toolName: 
  *
  * Contract:
  *   - Consecutive `appendText` calls fold into the current trailing text part.
- *   - `openToolCall` closes the current text part (so a later `appendText`
- *     starts a new text part AFTER this tool).
+ *   - Consecutive `appendReasoning` calls fold into the current trailing
+ *     reasoning part. Reasoning and text are siblings in `parts` (matching
+ *     Anthropic's actual block ordering: thinking arrives before answer).
+ *   - `openToolCall` closes both text and reasoning so later deltas start a
+ *     new part AFTER this tool.
  *   - `completeToolCall` updates the matching tool part in place without
- *     disturbing order or the text cursor.
+ *     disturbing order or the open cursors.
  */
 export class LiveContentBuilder {
   private readonly parts: ProactiveContentPart[] = [];
   /** Index of the text part currently open for append; -1 when none. */
   private openTextIdx = -1;
-  /** Index of the reasoning part currently open for append; -1 when none.
-   *  Independent from text — reasoning streams concurrently before text. */
+  /** Index of the reasoning part currently open for append; -1 when none. */
   private openReasoningIdx = -1;
   /** toolCallId → index in `parts`, for O(1) result lookup. */
   private readonly toolIndex = new Map<string, number>();
 
   appendText(delta: string): void {
     if (!delta) return;
-    // Text starting after reasoning closes the reasoning block (any later
-    // chat:reasoning:delta will start a new reasoning part if it ever
-    // happens, though Claude streams reasoning fully before text).
-    this.openReasoningIdx = -1;
     if (this.openTextIdx >= 0) {
       const existing = this.parts[this.openTextIdx];
       if (existing.type === "text") {
@@ -111,9 +109,6 @@ export class LiveContentBuilder {
     this.openTextIdx = this.parts.length - 1;
   }
 
-  /** Append extended-thinking / reasoning content. Folds into the current
-   *  open reasoning part so consecutive deltas accumulate; a new text or
-   *  tool-call closes it. */
   appendReasoning(delta: string): void {
     if (!delta) return;
     if (this.openReasoningIdx >= 0) {
@@ -125,9 +120,6 @@ export class LiveContentBuilder {
     }
     this.parts.push({ type: "reasoning", text: delta });
     this.openReasoningIdx = this.parts.length - 1;
-    // Reasoning chunk closes any open text part — text after reasoning
-    // starts a new text block.
-    this.openTextIdx = -1;
   }
 
   openToolCall(step: ToolStart): void {
@@ -144,7 +136,7 @@ export class LiveContentBuilder {
       }),
     );
     this.toolIndex.set(step.toolCallId, idx);
-    // Future text / reasoning deltas should start a new part after this tool.
+    // Future deltas should start fresh parts after this tool.
     this.openTextIdx = -1;
     this.openReasoningIdx = -1;
   }
@@ -172,20 +164,23 @@ export class LiveContentBuilder {
   }
 
   /**
-   * Replace the entire text content while keeping tool parts. Used for
-   * `chat:reply` finalization events that resend the full assistant text.
+   * Replace the entire text content while keeping tool and reasoning
+   * parts. Used for `chat:reply` finalization events that resend the full
+   * assistant text — reasoning was streamed separately and must stay.
    */
   replaceText(fullText: string): void {
-    const toolsOnly = this.parts.filter((p) => p.type === "tool-call");
+    const kept = this.parts.filter(
+      (p) => p.type === "tool-call" || p.type === "reasoning",
+    );
     this.parts.length = 0;
     this.toolIndex.clear();
     this.openTextIdx = -1;
     this.openReasoningIdx = -1;
-    for (const part of toolsOnly) {
+    for (const part of kept) {
       if (part.type === "tool-call") {
         this.toolIndex.set(part.toolCallId, this.parts.length);
-        this.parts.push(part);
       }
+      this.parts.push(part);
     }
     if (fullText) {
       this.parts.push({ type: "text", text: fullText });

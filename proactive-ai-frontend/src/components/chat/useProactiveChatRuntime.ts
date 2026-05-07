@@ -44,21 +44,20 @@ interface UseProactiveChatRuntimeOptions {
 
 interface AdapterOptions {
   sessionKey: string;
-  cardContextJson?: string;
+  cardContext?: Record<string, unknown>;
   bootstrappedSessionsRef: MutableRefObject<Set<string>>;
 }
 
 /**
- * OpenClaw forwards a `chat:error` event when its gateway is mid-restart —
- * after a model swap (config patch sends SIGUSR1), idle-wake, or admin
- * action. The agent run lane is drained for a few seconds and rejects new
- * tasks with `GatewayDrainingError` / `CommandLaneClearedError`, which the
- * plugin chat route surfaces verbatim. These are transient by nature, so
- * the SSE adapter retries the whole fetch instead of leaving the user
- * staring at an empty thread.
+ * Backend transient errors during chat-stream/send. Rare path — the chat
+ * worker emits a `chat:error` event when its sandbox provisioning blips
+ * mid-stream and the run state is unrecoverable in place. Retrying the
+ * whole fetch (cheap) is preferable to surfacing a half-empty thread.
  */
 function isTransientChatError(errMsg: string): boolean {
-  return /gateway.*draining|draining.*gateway|command lane cleared/i.test(errMsg);
+  return /sandbox.*(provisioning|unavailable)|temporarily unavailable/i.test(
+    errMsg,
+  );
 }
 
 const MAX_TRANSIENT_RETRIES = 2;
@@ -66,7 +65,7 @@ const TRANSIENT_RETRY_BACKOFF_MS = 1500;
 
 function createAdapter({
   sessionKey,
-  cardContextJson,
+  cardContext,
   bootstrappedSessionsRef,
 }: AdapterOptions): ChatModelAdapter {
   return {
@@ -79,7 +78,7 @@ function createAdapter({
         .join("\n");
 
       const needsBootstrap =
-        Boolean(cardContextJson) &&
+        Boolean(cardContext) &&
         !bootstrappedSessionsRef.current.has(sessionKey);
 
       // Card-chat bootstrap: when the thread is empty and we have card
@@ -93,7 +92,7 @@ function createAdapter({
       const body = buildChatRequestBody({
         sessionKey,
         ...(userText ? { userText } : {}),
-        cardContextJson,
+        cardContext,
         includeCardContext: needsBootstrap,
       });
 
@@ -156,49 +155,56 @@ function createAdapter({
             try {
               const data = JSON.parse(line.slice(6)) as Record<string, unknown>;
               const type = data.type as string;
+              // Unified SSE envelope (Step 3): event payload lives under
+              // `data.data`. Tolerate flat shape too in case some emitter
+              // hasn't migrated yet.
+              const payload = (
+                (data.data && typeof data.data === "object")
+                  ? (data.data as Record<string, unknown>)
+                  : data
+              );
 
               if (type === "chat:delta") {
-              const delta = typeof data.delta === "string" ? data.delta : "";
+              const delta = typeof payload.delta === "string" ? payload.delta : "";
               if (delta) {
                 builder.appendText(delta);
                 yield { content: builder.snapshot() };
               }
             } else if (type === "chat:reasoning:delta") {
-              // Claude extended-thinking content. Streamed before final text.
-              const delta = typeof data.delta === "string" ? data.delta : "";
+              const delta = typeof payload.delta === "string" ? payload.delta : "";
               if (delta) {
                 builder.appendReasoning(delta);
                 yield { content: builder.snapshot() };
               }
             } else if (type === "chat:reply") {
-              builder.replaceText(typeof data.content === "string" ? data.content : "");
+              builder.replaceText(typeof payload.content === "string" ? payload.content : "");
               yield { content: builder.snapshot() };
             } else if (type === "chat:tool:start") {
-              const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : "";
-              const name = typeof data.name === "string" ? data.name : "";
+              const toolCallId = typeof payload.toolCallId === "string" ? payload.toolCallId : "";
+              const name = typeof payload.name === "string" ? payload.name : "";
               if (!toolCallId || !name) continue;
               builder.openToolCall({
                 toolCallId,
                 toolName: name,
-                meta: typeof data.meta === "string" ? data.meta : undefined,
-                argsPreview: typeof data.argsPreview === "string" ? data.argsPreview : undefined,
-                pinCommand: typeof data.pinCommand === "string" ? data.pinCommand : undefined,
+                meta: typeof payload.meta === "string" ? payload.meta : undefined,
+                argsPreview: typeof payload.argsPreview === "string" ? payload.argsPreview : undefined,
+                pinCommand: typeof payload.pinCommand === "string" ? payload.pinCommand : undefined,
               });
               yield { content: builder.snapshot() };
             } else if (type === "chat:tool:result") {
-              const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : "";
+              const toolCallId = typeof payload.toolCallId === "string" ? payload.toolCallId : "";
               if (!toolCallId) continue;
               builder.completeToolCall({
                 toolCallId,
-                isError: Boolean(data.isError),
-                meta: typeof data.meta === "string" ? data.meta : undefined,
+                isError: Boolean(payload.isError),
+                meta: typeof payload.meta === "string" ? payload.meta : undefined,
               });
               yield { content: builder.snapshot() };
             } else if (type === "chat:tool:update") {
               // Keep "running" state; no-op snapshot avoids unnecessary churn.
               continue;
             } else if (type === "chat:error") {
-              const errMsg = typeof data.error === "string" ? data.error : "Unknown chat error";
+              const errMsg = typeof payload.error === "string" ? payload.error : "Unknown chat error";
               // Only retry while we haven't streamed anything visible yet
               // and budget remains. If the user has already seen partial
               // output, surface the error rather than silently restarting.
@@ -252,6 +258,11 @@ interface HistoryTextPart {
   text: string;
 }
 
+interface HistoryReasoningPart {
+  type: "reasoning";
+  text: string;
+}
+
 interface HistoryToolCallPart {
   type: "tool-call";
   toolCallId: string;
@@ -262,7 +273,7 @@ interface HistoryToolCallPart {
   pinCommand?: string;
 }
 
-type HistoryPart = HistoryTextPart | HistoryToolCallPart;
+type HistoryPart = HistoryTextPart | HistoryReasoningPart | HistoryToolCallPart;
 
 interface HistoryMessage {
   id: string;
@@ -274,6 +285,9 @@ interface HistoryMessage {
 function toRuntimePart(part: HistoryPart) {
   if (part.type === "text") {
     return { type: "text" as const, text: part.text };
+  }
+  if (part.type === "reasoning") {
+    return { type: "reasoning" as const, text: part.text };
   }
   const args: Record<string, string> = { status: part.status };
   if (part.meta) args.meta = part.meta;
@@ -326,6 +340,10 @@ export function useProactiveChatRuntime(options: UseProactiveChatRuntimeOptions)
   const [pendingBootstrap, setPendingBootstrap] = useState(false);
   const bootstrappedSessionsRef = useRef<Set<string>>(new Set());
   const triggeredBootstrapRef = useRef<Set<string>>(new Set());
+  // Stable string view of the card context for use as a memo / effect dep.
+  // The hook receives `options.cardContext` as an object whose identity may
+  // change every render even when the content is the same — using the
+  // serialized form as the dep avoids re-running effects on every render.
   const cardContextJson = useMemo(
     () => (options.cardContext ? JSON.stringify(options.cardContext) : undefined),
     [options.cardContext],
@@ -381,9 +399,12 @@ export function useProactiveChatRuntime(options: UseProactiveChatRuntimeOptions)
     () =>
       createAdapter({
         sessionKey: options.sessionKey,
-        cardContextJson,
+        cardContext: options.cardContext,
         bootstrappedSessionsRef,
       }),
+    // cardContextJson is the string-stable dep — the closure reads the
+    // current options.cardContext object at the time the memo recomputes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [cardContextJson, options.sessionKey],
   );
   const runtime = useLocalRuntime(adapter, { initialMessages });

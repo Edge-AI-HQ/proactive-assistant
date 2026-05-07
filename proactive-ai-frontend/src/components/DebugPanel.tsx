@@ -1,20 +1,19 @@
 /**
  * DebugPanel — slide-over panel triggered by gear icon in header.
- * Shows gateway health, "Open Gateway" button, pipeline phases, event log, run info.
+ * Shows Main Chat entry, pipeline phases, event log,
+ * run info, crystallize / skills / memories diagnostics, connectors,
+ * sign-out.
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Settings, Activity, Circle, Clock,
-  ExternalLink, X, Zap, Cpu, MessageSquare, RefreshCw, Plug, Loader2,
+  Settings, Clock,
+  X, Zap, MessageSquare, RefreshCw, Plug, Loader2,
 } from "lucide-react";
-import { Browser } from "@capacitor/browser";
-import { getGatewayTicket, resetContainer, deleteAccount } from "@/lib/api";
-import { supabase } from "@/lib/supabase";
-import { isNative, API_BASE } from "@/lib/platform";
-import { useModelSelection } from "@/hooks/useModelSelection";
-import { useInitTask } from "@/hooks/useInitTask";
+import { useAuth } from "@/hooks/useAuth";
+import { useInitTask, isInitTaskFresh } from "@/hooks/useInitTask";
+import { buildConnectorInitTaskId } from "@/hooks/useComposio";
 import {
   formatOptionalComposioConnectionIdentity,
   formatComposioToolkitName,
@@ -23,11 +22,10 @@ import MainChat from "./MainChat";
 import CrystallizePanel from "./CrystallizePanel";
 import SkillsPanel from "./SkillsPanel";
 import MemoriesPanel from "./MemoriesPanel";
-import type { HealthState, RunState, PipelinePhase } from "@/hooks/usePipeline";
+import type { RunState, PipelinePhase } from "@/hooks/usePipeline";
 import type { ComposioState } from "@/hooks/useComposio";
 
 interface DebugPanelProps {
-  health: HealthState;
   run: RunState;
   isRunning: boolean;
   onGenerate: () => void;
@@ -69,31 +67,6 @@ function PhaseTimer({ isRunning }: { isRunning: boolean }) {
   );
 }
 
-function HealthPill({ health }: { health: HealthState }) {
-  if (health.loading) {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium bg-amber-100 text-amber-700">
-        <Circle size={6} fill="currentColor" className="animate-pulse" />
-        Checking
-      </span>
-    );
-  }
-  if (health.ok) {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium bg-emerald-100 text-emerald-700">
-        <Circle size={6} fill="currentColor" />
-        OK
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium bg-red-100 text-red-600">
-      <Circle size={6} fill="currentColor" />
-      Unavailable
-    </span>
-  );
-}
-
 function phaseStatus(phase: string, activePhase: string | null, status: string) {
   if (status === "complete" || status === "done") return "done";
   if (!activePhase) return "pending";
@@ -129,22 +102,28 @@ function ConnectorReconnectRow({
   connectedAccountId: string;
   onReconnect: (toolkit: string, accountId: string) => Promise<{ ok: boolean; initTaskId?: string; error?: string }>;
 }) {
-  const [taskId, setTaskId] = useState<string | null>(null);
+  // Reconnect's task id is deterministic: same (toolkit, account) maps to
+  // the same row in pai_scheduled_tasks (requeue_once is INSERT-or-RESET).
+  // That gives us free polling-resume across page reloads AND lets the
+  // DataConnections InitTaskChip share the same source of truth — no
+  // shared state plumbing needed.
+  const taskId = buildConnectorInitTaskId(toolkit, connectedAccountId);
+  // Bumped on each click to force useInitTask to restart polling — needed
+  // because the row may be terminal from a prior run; without a kick the
+  // hook would stay quiescent and never observe the post-requeue reset.
+  const [restartToken, setRestartToken] = useState(0);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { task, terminal } = useInitTask(taskId);
+  const { task, terminal } = useInitTask(taskId, restartToken);
+  const fresh = isInitTaskFresh(task);
 
   const handleClick = useCallback(async () => {
     setPending(true);
     setError(null);
-    setTaskId(null);
+    setRestartToken((n) => n + 1);
     try {
       const result = await onReconnect(toolkit, connectedAccountId);
-      if (!result.ok) {
-        setError(result.error ?? "Reconnect failed");
-      } else if (result.initTaskId) {
-        setTaskId(result.initTaskId);
-      }
+      if (!result.ok) setError(result.error ?? "Reconnect failed");
     } finally {
       setPending(false);
     }
@@ -155,7 +134,7 @@ function ConnectorReconnectRow({
   let chipTone: "neutral" | "running" | "ok" | "fail" = "neutral";
   if (error) { chipText = error; chipTone = "fail"; }
   else if (pending) { chipText = "Enqueuing..."; chipTone = "running"; }
-  else if (task) {
+  else if (task && fresh) {
     if (task.status === "queued") { chipText = "Queued"; chipTone = "running"; }
     else if (task.status === "running") {
       const stage = (task.progress?.stage as string | undefined) ?? "running";
@@ -183,7 +162,7 @@ function ConnectorReconnectRow({
       : chipTone === "running"
         ? "bg-amber-100 text-amber-700"
         : "bg-foreground/10 text-foreground/60";
-  const isWorking = pending || (task && !terminal);
+  const isWorking = pending || (task && !terminal && fresh);
 
   return (
     <div className="flex items-center gap-2 py-1.5">
@@ -219,16 +198,12 @@ function ConnectorReconnectRow({
   );
 }
 
-export default function DebugPanel({ health, run, isRunning, onGenerate, composio }: DebugPanelProps) {
+export default function DebugPanel({ run, isRunning, onGenerate, composio }: DebugPanelProps) {
+  const { signOut } = useAuth();
   const [open, setOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
-  const [gatewayLoading, setGatewayLoading] = useState(false);
-  const [resetLoading, setResetLoading] = useState(false);
-  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [signOutLoading, setSignOutLoading] = useState(false);
   const logContainerRef = useRef<HTMLDivElement>(null);
-
-  // Only fetch model list when panel is open and gateway is healthy.
-  const modelSelection = useModelSelection(open && health.ok);
 
   useEffect(() => {
     if (!open && !chatOpen) return;
@@ -246,55 +221,18 @@ export default function DebugPanel({ health, run, isRunning, onGenerate, composi
     if (logContainerRef.current) logContainerRef.current.scrollTop = 0;
   }, [run.logEntries.length]);
 
-  const openGateway = useCallback(async () => {
-    setGatewayLoading(true);
+  const handleSignOut = useCallback(async () => {
+    if (!confirm("Sign out?")) return;
+    setSignOutLoading(true);
     try {
-      const { url } = await getGatewayTicket();
-      // API returns a relative path; native browser needs an absolute URL.
-      const fullUrl = url.startsWith("http") ? url : `${API_BASE}${url}`;
-      if (isNative) {
-        await Browser.open({ url: fullUrl, presentationStyle: "popover" });
-      } else {
-        window.open(url, "_blank");
-      }
+      await signOut();
     } catch (err) {
-      console.error("Failed to get gateway ticket:", err);
-      if (isNative) {
-        alert(`Gateway error: ${err instanceof Error ? err.message : String(err)}`);
-      }
+      console.error("Sign out failed:", err);
+      alert(`Sign out failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
-      setGatewayLoading(false);
+      setSignOutLoading(false);
     }
-  }, []);
-
-  const handleResetContainer = useCallback(async () => {
-    if (!confirm("Reset container? This will destroy the current container and create a new one.")) return;
-    setResetLoading(true);
-    try {
-      await resetContainer();
-      window.location.reload();
-    } catch (err) {
-      console.error("Failed to reset container:", err);
-      alert(`Reset failed: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setResetLoading(false);
-    }
-  }, []);
-
-  const handleDeleteAccount = useCallback(async () => {
-    if (!confirm("Are you sure you want to delete your account? This will destroy your container, volume, and all user data. This cannot be undone.")) return;
-    setDeleteLoading(true);
-    try {
-      await deleteAccount();
-      await supabase.auth.signOut();
-      window.location.replace("/proactive/");
-    } catch (err) {
-      console.error("Failed to delete account:", err);
-      alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setDeleteLoading(false);
-    }
-  }, []);
+  }, [signOut]);
 
   return (
     <>
@@ -339,87 +277,19 @@ export default function DebugPanel({ health, run, isRunning, onGenerate, composi
 
               {/* Scrollable content */}
               <div className="flex-1 overflow-y-auto px-5 pb-5 space-y-4">
-                {/* Gateway Health */}
+                {/* Main Chat */}
                 <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-3.5">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Activity size={14} strokeWidth={1.5} className="text-foreground/40" />
-                      <span className="text-xs font-medium text-foreground/50">Gateway</span>
-                    </div>
-                    <HealthPill health={health} />
+                  <div className="flex items-center gap-2 mb-2.5">
+                    <MessageSquare size={14} strokeWidth={1.5} className="text-foreground/40" />
+                    <span className="text-xs font-medium text-foreground/50">Main Chat</span>
                   </div>
-                  {health.error && (
-                    <p className="text-[11px] text-red-500 mt-2 leading-snug">{health.error}</p>
-                  )}
-                  <button
-                    onClick={openGateway}
-                    disabled={!health.ok || gatewayLoading}
-                    className="mt-2.5 w-full flex items-center justify-center gap-1.5 rounded-lg bg-foreground/10 hover:bg-foreground/15 text-foreground/50 hover:text-foreground/70 text-[11px] font-medium py-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    <ExternalLink size={12} strokeWidth={1.5} />
-                    {gatewayLoading ? "Opening..." : "Open Gateway"}
-                  </button>
                   <button
                     onClick={() => setChatOpen(true)}
-                    disabled={!health.ok}
-                    className="mt-2 w-full flex items-center justify-center gap-1.5 rounded-lg bg-foreground/10 hover:bg-foreground/15 text-foreground/50 hover:text-foreground/70 text-[11px] font-medium py-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-foreground/10 hover:bg-foreground/15 text-foreground/60 hover:text-foreground/80 text-[11px] font-medium py-1.5 transition-colors"
                   >
                     <MessageSquare size={12} strokeWidth={1.5} />
                     Open Main Chat
                   </button>
-                </div>
-
-                {/* Model Selection */}
-                <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-3.5">
-                  <div className="flex items-center justify-between mb-2.5">
-                    <div className="flex items-center gap-2">
-                      <Cpu size={14} strokeWidth={1.5} className="text-foreground/40" />
-                      <span className="text-xs font-medium text-foreground/50">Model</span>
-                    </div>
-                    {modelSelection.changing && (
-                      <span className="text-[10px] text-foreground/40">Applying…</span>
-                    )}
-                  </div>
-                  {modelSelection.loading && modelSelection.models.length === 0 ? (
-                    <p className="text-[11px] text-foreground/30 py-1">Loading models…</p>
-                  ) : modelSelection.models.length === 0 ? (
-                    <p className="text-[11px] text-foreground/40 py-1">
-                      {health.ok ? "No models configured" : "Gateway unavailable"}
-                    </p>
-                  ) : (
-                    <select
-                      value={modelSelection.currentModel ?? ""}
-                      disabled={
-                        isRunning ||
-                        modelSelection.changing ||
-                        modelSelection.loading ||
-                        !health.ok
-                      }
-                      onChange={(e) => { void modelSelection.change(e.target.value); }}
-                      title={isRunning ? "Pipeline is running — cannot switch model" : undefined}
-                      className="w-full rounded-lg bg-white/60 border border-foreground/10 px-2.5 py-1.5 text-[16px] text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {modelSelection.models.map((m) => (
-                        <option key={m.ref} value={m.ref}>
-                          {m.id}
-                          {m.ref === modelSelection.defaultModel ? " (default)" : ""}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  {modelSelection.error && (
-                    <div className="mt-2 flex items-center justify-between gap-2">
-                      <p className="text-[11px] text-red-500 leading-snug flex-1">
-                        {modelSelection.error}
-                      </p>
-                      <button
-                        onClick={() => { void modelSelection.retry(); }}
-                        className="text-[11px] font-medium text-foreground/50 hover:text-foreground/70 underline shrink-0"
-                      >
-                        Retry
-                      </button>
-                    </div>
-                  )}
                 </div>
 
                 {/* Generate Controls */}
@@ -430,7 +300,7 @@ export default function DebugPanel({ health, run, isRunning, onGenerate, composi
                   </div>
                   <button
                     onClick={onGenerate}
-                    disabled={isRunning || !health.ok}
+                    disabled={isRunning}
                     className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-foreground text-background text-[11px] font-semibold py-1.5 transition-colors hover:bg-foreground/85 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <Zap size={12} strokeWidth={2} />
@@ -523,13 +393,13 @@ export default function DebugPanel({ health, run, isRunning, onGenerate, composi
                 </div>
 
                 {/* Conversation Crystallize */}
-                <CrystallizePanel enabled={open && health.ok} />
+                <CrystallizePanel enabled={open} />
 
                 {/* User Skills */}
-                <SkillsPanel enabled={open && health.ok} />
+                <SkillsPanel enabled={open} />
 
                 {/* User Memories */}
-                <MemoriesPanel enabled={open && health.ok} />
+                <MemoriesPanel enabled={open} />
 
                 {/* Run Info */}
                 <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-3.5">
@@ -604,24 +474,17 @@ export default function DebugPanel({ health, run, isRunning, onGenerate, composi
                   )}
                 </div>
 
-                {/* Danger Zone */}
-                <div className="rounded-xl border border-red-200 bg-red-50/50 p-3.5">
-                  <span className="text-[11px] font-medium text-red-400 uppercase tracking-wider block mb-2">
-                    Danger Zone
+                {/* Account */}
+                <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-3.5">
+                  <span className="text-[11px] font-medium text-foreground/40 uppercase tracking-wider block mb-2">
+                    Account
                   </span>
                   <button
-                    onClick={handleResetContainer}
-                    disabled={resetLoading}
-                    className="w-full flex items-center justify-center gap-1.5 rounded-lg border border-red-300 text-red-600 text-[11px] font-medium py-2 mb-2 transition-colors hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    onClick={handleSignOut}
+                    disabled={signOutLoading}
+                    className="w-full flex items-center justify-center gap-1.5 rounded-lg border border-foreground/15 text-foreground/60 text-[11px] font-medium py-2 transition-colors hover:bg-foreground/5 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {resetLoading ? "Resetting..." : "Reset Container"}
-                  </button>
-                  <button
-                    onClick={handleDeleteAccount}
-                    disabled={deleteLoading}
-                    className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-red-500 hover:bg-red-600 text-white text-[11px] font-medium py-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {deleteLoading ? "Deleting..." : "Delete Account"}
+                    {signOutLoading ? "Signing out..." : "Sign Out"}
                   </button>
                 </div>
               </div>

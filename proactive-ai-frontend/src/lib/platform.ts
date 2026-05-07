@@ -4,13 +4,18 @@ import { Capacitor } from "@capacitor/core";
 export const isNative = Capacitor.isNativePlatform();
 
 /**
- * Base URL for all API requests.
+ * Base URL for the pinai-agents backend. Single backend for the product —
+ * chat / generate / memory / signals / profile / devices / payment all
+ * land here.
  *
- * - Web: empty string (same-origin, routed via Vite proxy or reverse proxy).
- * - Native: absolute cloud URL (no same-origin available).
+ * Web: empty string (same-origin, routed via Vite dev proxy or production
+ * reverse proxy).
+ * Native: absolute cloud URL via VITE_PIN_API_URL; falls back to the
+ * legacy VITE_API_BASE_URL for envs that haven't been re-bootstrapped yet.
  */
-export const API_BASE: string = isNative
-  ? (import.meta.env.VITE_API_BASE_URL as string)
+export const PIN_API_BASE: string = isNative
+  ? ((import.meta.env.VITE_PIN_API_URL as string | undefined) ??
+     (import.meta.env.VITE_API_BASE_URL as string))
   : "";
 
 /**

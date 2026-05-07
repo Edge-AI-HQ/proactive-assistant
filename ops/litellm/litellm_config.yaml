@@ -13,7 +13,10 @@ litellm_settings:
 router_settings:
   routing_strategy: simple-shuffle
   num_retries: 1
-  timeout: 60
+  # 180s upstream timeout — generator 一次输出 8 张卡片 + thinking_budget=8000
+  # 实测 60-100s 真实生成时间，原 60s 会在 stream 未读完时切断。
+  # 提到 180 留余量，对 chat / evolve 等短调用无影响（只是上限）。
+  timeout: 180
 
 model_list:
   # Anthropic
@@ -72,6 +75,12 @@ model_list:
     litellm_params:
       model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
+  # gpt-5.5 — used as cross-family evaluator for the generator subagent.
+  # Stable alias (no version suffix) so we ride point releases automatically.
+  - model_name: gpt-5.5
+    litellm_params:
+      model: openai/gpt-5.5
+      api_key: os.environ/OPENAI_API_KEY
   - model_name: gpt-image-1
     litellm_params:
       model: openai/gpt-image-1
@@ -107,3 +116,16 @@ model_list:
     litellm_params:
       model: perplexity/sonar-pro
       api_key: os.environ/PERPLEXITYAI_API_KEY
+
+  # Embeddings — drives pgvector semantic memory search.
+  # Pinned at 1536 dims to match the vector column declared in
+  # pinai-agents/db/migrations/029_pgvector_semantic_memory.sql.
+  # Bumping to a different-dim model requires a schema migration
+  # (drop + recreate the embedding columns).
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: embedding
+      input_cost_per_token: 0.00000002

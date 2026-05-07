@@ -4,7 +4,9 @@ import path from "node:path";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const apiProxyTarget = env.VITE_API_PROXY_TARGET || "http://127.0.0.1:3001";
+  // pinai-agents is the only backend after the apis + openclaw retirement.
+  // /api/* in dev hits pinai-web:8000 directly via the proxy below.
+  const pinApiTarget = env.VITE_PIN_API_PROXY_TARGET || "http://127.0.0.1:8000";
   const isCapacitor = !!(process.env.VITE_CAPACITOR || env.VITE_CAPACITOR);
 
   if (isCapacitor && mode === "production") {
@@ -26,25 +28,29 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
-    base: isCapacitor ? "/" : "/proactive/",
+    // Single base path "/" everywhere. Frontend is served at the root
+    // of its own host (apis-era /proactive/ subpath retired along with apis).
+    base: "/",
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "src"),
       },
     },
     server: {
-      port: 3003,
+      port: 3000,
       proxy: {
+        // pinai-agents: every /api/* call. The legacy /api/proactive/*
+        // entry was removed along with the apis service.
         "/api": {
-          target: apiProxyTarget,
+          target: pinApiTarget,
           ws: true,
         },
       },
     },
     build: {
-      outDir: isCapacitor
-        ? path.resolve(__dirname, "dist")
-        : path.resolve(__dirname, "../apis/public/proactive"),
+      // Single output dir for both web and capacitor. The web Dockerfile
+      // copies dist/ into nginx; capacitor's `npx cap sync` reads dist/.
+      outDir: path.resolve(__dirname, "dist"),
       emptyOutDir: true,
       rollupOptions: {
         input: path.resolve(__dirname, "index.html"),

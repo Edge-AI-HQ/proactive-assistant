@@ -1,0 +1,21 @@
+# Test env mirror of fly.toml.
+# VITE_PIN_API_URL points at proactive-ai-agents-test fly URL.
+# VITE_SUPABASE_* point at the dedicated test Supabase project.
+
+app = "proactive-ai-frontend-test"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "256mb"

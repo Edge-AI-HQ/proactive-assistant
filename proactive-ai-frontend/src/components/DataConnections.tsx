@@ -26,7 +26,6 @@ import {
   Code,
   BarChart3,
   Handshake,
-  Key,
   Loader2,
   XCircle,
   Plus,
@@ -41,7 +40,8 @@ import {
 } from "lucide-react";
 import { Browser } from "@capacitor/browser";
 import type { ComposioState, Connection } from "@/hooks/useComposio";
-import { useInitTask } from "@/hooks/useInitTask";
+import { buildConnectorInitTaskId } from "@/hooks/useComposio";
+import { useInitTask, isInitTaskFresh } from "@/hooks/useInitTask";
 import { resolveComposioConnectionIdentity } from "@/lib/composioDisplayIdentity";
 import { isNative } from "@/lib/platform";
 
@@ -49,19 +49,26 @@ import { isNative } from "@/lib/platform";
  * Small inline chip that polls a connector.init task and renders a
  * one-line progress / outcome summary under the connector card.
  *
+ * Reconstructs the deterministic backend task id from (toolkit, account)
+ * so the chip survives page reloads without any persisted state — the
+ * DebugPanel's reconnect chip uses the same id, so both panels poll the
+ * same row. Once a task hits terminal status, it's only surfaced for
+ * `FRESH_WINDOW_MS` (see useInitTask) — beyond that we treat the row as
+ * historical and render nothing.
+ *
  * Render rules:
  *   - while running:   "初始化中… stage=fetch · 拉取 42/100"
- *   - succeeded:       "初始化完成 · 12 facts"  (auto-hides after a moment via parent)
- *   - failed:          "初始化失败 — short error reason"
+ *   - succeeded:       "初始化完成 · 12 facts"  (hidden 1h after completion)
+ *   - failed:          "初始化失败 — short error reason"  (same window)
  *   - lookup error:    nothing (silent fallback so we don't litter the UI)
- *
- * The hook handles polling lifecycle; this component is just presentation.
  */
-function InitTaskChip({ taskId }: { taskId: string | null }) {
+function InitTaskChip({ toolkit, connectedAccountId }: { toolkit: string; connectedAccountId: string }) {
+  const taskId = buildConnectorInitTaskId(toolkit, connectedAccountId);
   const { task, error, terminal } = useInitTask(taskId);
-  if (!taskId) return null;
   if (!task) {
-    if (error) return null; // silent — could be 404 after eviction
+    // Pre-first-fetch: keep loader silent on errors (the row may not exist
+    // yet — e.g. user never triggered connect on this device).
+    if (error) return null;
     return (
       <p className="text-[10px] text-foreground/40 truncate flex items-center gap-1">
         <Loader2 size={9} className="animate-spin" />
@@ -69,6 +76,7 @@ function InitTaskChip({ taskId }: { taskId: string | null }) {
       </p>
     );
   }
+  if (!isInitTaskFresh(task)) return null; // stale terminal — silent
   if (terminal) {
     if (task.status === "succeeded") {
       const memoriesWritten = Number(task.result?.memoriesWritten ?? 0);
@@ -450,7 +458,6 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
     keyStatus,
     connections,
     statusLoading,
-    saveApiKey,
     connectToolkit,
     disconnectAccount,
     waitForToolkit,
@@ -458,19 +465,11 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
   } = composio;
 
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
-  const [apiKeyInput, setApiKeyInput] = useState("");
-  const [savingKey, setSavingKey] = useState(false);
-  const [keyError, setKeyError] = useState<string | null>(null);
   const [connectingToolkit, setConnectingToolkit] = useState<string | null>(
     null,
   );
   const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
-  // Phase B/C: connector.init task ids returned by /composio/wait, keyed
-  // by connectedAccountId. Populated only when the backend scheduler is on
-  // (BACKGROUND_AUTO_LOOP_TASKS_ENABLED=1) — when off, /wait omits the
-  // initTaskId field and this map stays empty (no chips render).
-  const [initTaskByAccount, setInitTaskByAccount] = useState<Record<string, string>>({});
 
   const connectionsByToolkit = new Map<string, Connection[]>();
   for (const conn of connections) {
@@ -494,20 +493,6 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
     (sum, c) => sum + c.sources.length,
     0,
   );
-
-  const handleSaveKey = async () => {
-    const key = apiKeyInput.trim();
-    if (!key) return;
-    setSavingKey(true);
-    setKeyError(null);
-    try {
-      const result = await saveApiKey(key);
-      if (!result.ok) setKeyError(result.error ?? "Failed to save key");
-      else setApiKeyInput("");
-    } finally {
-      setSavingKey(false);
-    }
-  };
 
   const cancelledRef = useRef(false);
 
@@ -537,13 +522,9 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
       ]);
       if (!raceResult.connected && !cancelledRef.current)
         setConnectError("Connection not confirmed — please try again");
-      // Stash the init task id (if the backend scheduler is on) so the
-      // chip below this connector starts polling for progress.
-      if (raceResult.connected && raceResult.initTaskId && result.connectedAccountId) {
-        const accountId = result.connectedAccountId;
-        const taskId = raceResult.initTaskId;
-        setInitTaskByAccount((prev) => ({ ...prev, [accountId]: taskId }));
-      }
+      // No need to thread initTaskId — the chip rebuilds it from
+      // (toolkit, connectedAccountId) and polls on mount once the
+      // connection appears in `connections`.
     } catch (err) {
       if (!cancelledRef.current)
         setConnectError(
@@ -572,55 +553,20 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
     }
   };
 
-  const configured = keyStatus?.configured;
+  // The backend holds the master Composio key. `configured=false` only
+  // happens if the deploy is missing COMPOSIO_API_KEY env — surface a
+  // service-unavailable banner rather than asking the user for a key.
+  const configured = keyStatus?.configured ?? false;
 
   return (
     <div>
-      {/* API key setup */}
       {!configured && !statusLoading && (
-        <div className="glass-card p-4 mb-4 space-y-3">
-          <div className="flex items-center gap-2 mb-1">
-            <Key size={14} className="text-foreground/50" />
-            <span className="text-xs font-medium text-foreground/70">
-              Connect your apps
-            </span>
-          </div>
-          <p className="text-[11px] text-foreground/40">
-            Enter your Composio API key to connect apps. Find it in your
-            Composio workspace settings
-          </p>
-          <div className="flex gap-2">
-            <input
-              value={apiKeyInput}
-              onChange={(e) => {
-                setApiKeyInput(e.target.value);
-                setKeyError(null);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleSaveKey();
-              }}
-              placeholder="ak_..."
-              type="password"
-              className="flex-1 rounded-lg bg-foreground/5 border border-foreground/10 px-3 py-1.5 text-xs font-mono text-foreground placeholder:text-foreground/25 focus:outline-none focus:ring-2 focus:ring-primary/30"
-            />
-            <button
-              onClick={handleSaveKey}
-              disabled={savingKey || !apiKeyInput.trim()}
-              className="px-4 py-1.5 rounded-lg text-xs font-semibold bg-foreground text-background hover:bg-foreground/85 transition-colors disabled:opacity-40"
-            >
-              {savingKey ? (
-                <Loader2 size={12} className="animate-spin" />
-              ) : (
-                "Save"
-              )}
-            </button>
-          </div>
-          {keyError && (
-            <div className="flex items-start gap-1.5 text-[11px] text-red-500">
-              <XCircle size={12} className="mt-0.5 flex-shrink-0" />
-              <span>{keyError}</span>
-            </div>
-          )}
+        <div className="glass-card p-4 mb-4 flex items-start gap-1.5 text-[11px] text-foreground/60">
+          <XCircle size={12} className="mt-0.5 flex-shrink-0 text-red-500" />
+          <span>
+            Composio is not configured on this deployment. Connections will be
+            unavailable until the backend operator sets it up.
+          </span>
         </div>
       )}
 
@@ -809,9 +755,10 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                 </p>
                                               ) : null;
                                             })()}
-                                          {singleAccount?.connectedAccountId && (
+                                          {singleAccount?.connectedAccountId && source.composioId && (
                                             <InitTaskChip
-                                              taskId={initTaskByAccount[singleAccount.connectedAccountId] ?? null}
+                                              toolkit={source.composioId}
+                                              connectedAccountId={singleAccount.connectedAccountId}
                                             />
                                           )}
                                         </div>
@@ -1010,7 +957,8 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                               {conn.connectedAccountId && (
                                                 <div className="ml-3.5">
                                                   <InitTaskChip
-                                                    taskId={initTaskByAccount[conn.connectedAccountId] ?? null}
+                                                    toolkit={conn.toolkit}
+                                                    connectedAccountId={conn.connectedAccountId}
                                                   />
                                                 </div>
                                               )}

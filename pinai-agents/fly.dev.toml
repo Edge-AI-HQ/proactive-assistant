@@ -1,0 +1,70 @@
+app = 'proactive-ai-agents-dev'
+primary_region = 'iad'
+
+# Dual process group, single image — see
+# docs/plans/2026-05-04-pinai-agents-backend-consolidation.mdx § 部署形态.
+# `web` holds master credentials and serves the public edge.
+# `chat` runs the LLM loop, gets only LiteLLM virtual_key + Daytona token.
+# Trust separation enforced by:
+#   1. ruff banned-api lint (pyproject.toml)
+#   2. chat/asgi.py boot-time fail-fast assert
+#   3. fly secrets scoping to processes (NOT yet wired — Step C)
+
+[build]
+  dockerfile = 'Dockerfile'
+  [build.args]
+    DEPLOY_ENV = 'dev'
+
+[env]
+  DEPLOY_ENV = 'dev'
+
+[processes]
+  # Same image, two entrypoints. Secrets come from `flyctl secrets set
+  # --process-group=<web|chat> ...` — chat process group MUST NOT receive
+  # PAI_HMAC_SECRET / SUPABASE_DB_URL / COMPOSIO_API_KEY / STRIPE_*.
+  # The chat/asgi.py boot-time fail-fast assert crashes
+  # the process if any leak; lint + grep tests provide additional walls.
+  web  = "uvicorn pinai_agents.web.asgi:app --host 0.0.0.0 --port 8000"
+  chat = "uvicorn pinai_agents.chat.asgi:app --host 0.0.0.0 --port 8001"
+
+# Public HTTPS edge → web only. chat is internal-only via 6PN
+# (chat-worker.internal:8001 from web). No [http_service] for chat.
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = 'suspend'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['web']
+
+  [http_service.concurrency]
+    type = 'connections'
+    hard_limit = 80
+    soft_limit = 50
+
+# chat is reachable only on the internal 6PN at chat.process.app.internal:8001.
+# Listed as a [[services]] (not [http_service]) so fly knows to expose the
+# port internally. NO [[services.ports]] entries — public anycast does not
+# route here.
+[[services]]
+  protocol = 'tcp'
+  internal_port = 8001
+  processes = ['chat']
+
+[deploy]
+  # release_command runs in a temporary machine with the WEB process
+  # group's secrets (it has SUPABASE_DB_URL). +psycopg selects psycopg v3.
+  release_command = "sh -c 'exec yoyo apply --batch -d \"postgresql+psycopg://${SUPABASE_DB_URL#*://}\"'"
+  strategy = 'rolling'
+
+[[vm]]
+  processes = ['web']
+  memory = '2gb'
+  cpu_kind = 'shared'
+  cpus = 2
+
+[[vm]]
+  processes = ['chat']
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1

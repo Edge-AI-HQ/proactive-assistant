@@ -7,6 +7,22 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { proxyFetch, proxyPost } from "@/lib/api";
 
+/**
+ * Backend-stable id of the per-(toolkit, connectedAccount) connector.init
+ * row in `pai_scheduled_tasks`. Both /composio/connect→/wait and
+ * /composio/reconnect upsert this same id (`requeue_once` /
+ * `enqueue_once`), so the frontend can always reconstruct it without
+ * threading a server-returned task id through component state. Used to let
+ * any panel (DataConnections, DebugPanel) reattach polling after a refresh
+ * — see useInitTask.
+ *
+ * Must stay in lockstep with `init_task_id()` in
+ * pinai-agents/src/pinai_agents/web/routes/ui/composio.py.
+ */
+export function buildConnectorInitTaskId(toolkit: string, connectedAccountId: string): string {
+  return `init.${toolkit.toLowerCase()}.${connectedAccountId}`;
+}
+
 export interface Connection {
   toolkit: string;
   status: string;
@@ -15,10 +31,11 @@ export interface Connection {
 }
 
 export interface ComposioStatus {
+  /** True when the backend has a master Composio key configured. The key
+   *  itself never reaches the browser — composio is multi-tenant on a
+   *  single org-level key, scoped per user via Composio's user_id field. */
   configured: boolean;
   keyPrefix?: string;
-  source?: string;
-  mode?: string;
 }
 
 export interface ComposioState {
@@ -28,7 +45,6 @@ export interface ComposioState {
   loadingConns: boolean;
   loadStatus: () => Promise<void>;
   loadConnections: () => Promise<Connection[]>;
-  saveApiKey: (key: string) => Promise<{ ok: boolean; error?: string }>;
   connectToolkit: (toolkit: string) => Promise<{ ok: boolean; redirectUrl?: string; connectedAccountId?: string; error?: string }>;
   disconnectAccount: (connectedAccountId: string) => Promise<{ ok: boolean; error?: string }>;
   waitForToolkit: (connectedAccountId: string) => Promise<{ connected: boolean; initTaskId?: string }>;
@@ -81,20 +97,6 @@ export function useComposio(): ComposioState {
   }, [loadConnections]);
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
-
-  const saveApiKey = useCallback(async (key: string): Promise<{ ok: boolean; error?: string }> => {
-    try {
-      const res = await proxyPost("/composio/setup", { key });
-      const data = await res.json();
-      if (!res.ok) {
-        return { ok: false, error: data.error?.message ?? data.error ?? "Invalid key" };
-      }
-      await loadStatus();
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
-    }
-  }, [loadStatus]);
 
   const connectToolkit = useCallback(async (toolkit: string): Promise<{ ok: boolean; redirectUrl?: string; connectedAccountId?: string; error?: string }> => {
     try {
@@ -184,5 +186,5 @@ export function useComposio(): ComposioState {
     }
   }, []);
 
-  return { keyStatus, connections, statusLoading, loadingConns, loadStatus, loadConnections, saveApiKey, connectToolkit, disconnectAccount, waitForToolkit, cancelWait, isToolkitConnected, reconnectAccount };
+  return { keyStatus, connections, statusLoading, loadingConns, loadStatus, loadConnections, connectToolkit, disconnectAccount, waitForToolkit, cancelWait, isToolkitConnected, reconnectAccount };
 }

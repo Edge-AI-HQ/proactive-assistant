@@ -126,7 +126,59 @@ npm run test --workspace @pin-ai/apis
 
 **docker healthy ≠ 功能对**：本地容器起来只是"代码能站起来"。依赖 Supabase token / 真实用户数据 / 第三方 webhook 的链路本地验不出来，如实声明"本地只验证启动 + 类型"，不要把容器 healthy 当通过。
 
+**测试用空库可以 mock 数据**：本地 DB 里 personal_signals / memory / cards / feedback 等表为空时，链路跑不到要测的分支。可以临时插一批最小可用的 mock 行（同一 user_id + 必要的 status / created_at 字段）把测试跑通，但要做到：(1) 仅本地/dev，禁止灌 prod；(2) mock 数据用可识别的 marker（比如 `note='__mock__'` 或固定前缀 id）方便清理；(3) 测完清掉，不要留在共享 dev DB 里污染别人。优先用脚本（`apis/scripts/` 下加一次性 seed）而不是手敲 SQL。
+
+**不用担心 LLM token 或 Daytona 计费**：测试时直接跑就行，不要为了"省调用"刻意缩小用例、跳过链路、或者改成 mock。该真跑就真跑。
+
 完整命令：`make help`
+
+## Tracing 调试（LangSmith）
+agent 链路（chat / generator / pipeline 等）已经接到 [LangSmith](https://docs.langchain.com/langsmith) tracing。要 debug agent 的 prompt、工具调用、token、错误时，用 LangSmith CLI 直接拉 trace，不用打开 web UI。
+
+安装（一次性，已装可跳过）：
+```bash
+curl -fsSL https://cli.langsmith.com/install.sh | sh   # 装到 ~/.local/bin/langsmith
+langsmith self-update                                  # 升级
+```
+
+`LANGSMITH_API_KEY` / `LANGSMITH_PROJECT` 已在 `pinai-agents/.env`（dotenvx 解密自 `.env.dev`，dev project 是 `pinai-agents-dev`）。本地用之前 source 一下：
+```bash
+set -a && . pinai-agents/.env && set +a
+```
+
+常用命令：
+```bash
+langsmith project list                                       # 看有哪些 tracing project
+langsmith trace list --project pinai-agents-dev --format pretty   # 拉最近的 trace
+langsmith run list --project pinai-agents-dev --run-type llm      # 看 LLM 调用
+langsmith thread list --project pinai-agents-dev                  # chat 按 thread 查
+```
+默认 JSON 输出（方便 grep / jq），加 `--format pretty` 看表格。完整文档：<https://docs.langchain.com/langsmith/langsmith-cli>。
+
+## Sandbox 调试（Daytona）
+`pinai-agents` 的 chat / generate 路由把 Python 工具（`python_exec`、browser 等）跑在 [Daytona](https://www.daytona.io/docs/) sandbox 里。要查 sandbox 状态、看快照、远程跑命令时，用 Daytona CLI，不用打开 web 控制台。
+
+安装（任选一种，已装可跳过）：
+```bash
+brew install daytonaio/cli/daytona                                            # 官方推荐
+# 或下载 darwin-arm64 binary 到 ~/.local/bin/daytona（brew 装不上时的 fallback）
+curl -fsSL -o ~/.local/bin/daytona https://github.com/daytonaio/daytona/releases/latest/download/daytona-darwin-arm64 && chmod +x ~/.local/bin/daytona
+```
+
+`DAYTONA_API_KEY` 同样在 `pinai-agents/.env`（dotenvx 解密自 `.env.dev`）。首次需要写入本地 profile：
+```bash
+set -a && . pinai-agents/.env && set +a
+daytona login --api-key "$DAYTONA_API_KEY"   # 一次性，profile 存到 ~/.daytona
+```
+
+常用命令：
+```bash
+daytona list                        # 列出所有 sandbox（id / 状态 / region / 最近活动）
+daytona info <sandbox-id>           # 看单个 sandbox 详情（资源、镜像、env）
+daytona exec <sandbox-id> -- <cmd>  # 在 sandbox 里直接跑命令
+daytona snapshot list               # 看可用快照（chat/generate 默认用的镜像就是从这里来）
+```
+注意：`organization` 子命令在 API key auth 下不可用（CLI 会要求改用浏览器登录）。完整文档：<https://www.daytona.io/docs/en/tools/cli/>。
 
 ## 变更与部署
 

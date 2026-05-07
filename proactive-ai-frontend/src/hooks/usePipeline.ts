@@ -1,11 +1,17 @@
 /**
  * Pipeline hook for the cloud frontend.
- * Adapted from proactive-ai/src/ui/hooks/use-pipeline.ts.
- * Uses proxyFetch for all container API calls.
+ *
+ * Phase 1 architecture: the generator runs as a `generator` task in the
+ * scheduler. This hook owns the local RunState (cards, logs, status)
+ * but no longer drives its own polling loop — it subscribes to
+ * useActiveAgentRuns and reacts when the matching generator run
+ * transitions. F5 mid-run keeps everything intact because
+ * useActiveAgentRuns hydrates from `/api/agent-runs/active`.
  */
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { proxyFetch } from "@/lib/api";
+import { useActiveAgentRuns, type ActiveAgentRun } from "@/hooks/useActiveAgentRuns";
 import {
   normalizeIntentCards,
   type IntentCard,
@@ -15,7 +21,6 @@ import {
 export type { IntentCard, EvaluationScore };
 
 const STORAGE_KEY = "proactive-ai-run-state";
-const HEALTH_FAILURE_THRESHOLD = 3;
 
 export interface LogEntry {
   id: string;
@@ -46,13 +51,6 @@ export interface RunState {
    * didn't emit one or the run hasn't completed.
    */
   batchFeedback: string | null;
-}
-
-export interface HealthState {
-  loading: boolean;
-  ok: boolean;
-  pipelineRunning: boolean;
-  error: string | null;
 }
 
 function makeLogEntry(kind: string, title: string, detail: string, extra?: Partial<LogEntry>): LogEntry {
@@ -121,17 +119,14 @@ function isActiveRunStatus(status: RunStatus): boolean {
 
 export function usePipeline() {
   const sourceRef = useRef<AbortController | null>(null);
-  const healthFailuresRef = useRef(0);
-  const [health, setHealth] = useState<HealthState>({
-    loading: true, ok: false, pipelineRunning: false, error: null,
-  });
   const [run, setRun] = useState<RunState>(() => loadRunState() ?? createInitialRunState());
 
   useEffect(() => { saveRunState(run); }, [run]);
 
+  // Page-reload safety net: if localStorage restored an active run
+  // but no SSE connection took over, settle back to idle (or
+  // 'complete' when cards survived). Fires once on mount.
   useEffect(() => {
-    if (health.loading || health.pipelineRunning) return;
-
     setRun((prev) => {
       if (!isActiveRunStatus(prev.status) || sourceRef.current) return prev;
 
@@ -161,34 +156,7 @@ export function usePipeline() {
         ].slice(0, 80),
       };
     });
-  }, [health.loading, health.pipelineRunning]);
-
-  // Health polling via proxy
-  useEffect(() => {
-    const controller = new AbortController();
-    async function loadHealth() {
-      try {
-        const res = await proxyFetch("/health", { signal: controller.signal });
-        if (!res.ok) throw new Error(`Health check failed (${res.status})`);
-        const data = await res.json();
-        if (controller.signal.aborted) return;
-        healthFailuresRef.current = 0;
-        setHealth({ loading: false, ok: Boolean(data.ok), pipelineRunning: Boolean(data.pipelineRunning), error: null });
-      } catch (err) {
-        if (controller.signal.aborted) return;
-        const error = err instanceof Error ? err.message : String(err);
-        healthFailuresRef.current += 1;
-        setHealth((prev) => {
-          if (prev.ok && healthFailuresRef.current < HEALTH_FAILURE_THRESHOLD) {
-            return { ...prev, loading: false, error: null };
-          }
-          return { loading: false, ok: false, pipelineRunning: false, error };
-        });
-      }
-    }
-    loadHealth();
-    const interval = window.setInterval(loadHealth, 15_000);
-    return () => { controller.abort(); window.clearInterval(interval); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // On mount: check /api/status to recover from refresh
@@ -263,20 +231,16 @@ export function usePipeline() {
     if (sourceRef.current) { sourceRef.current.abort(); sourceRef.current = null; }
   }, []);
 
+  // Subscribe to the global agent-runs feed. usePipeline drives RunState
+  // off the `generator` kind specifically — other agents (dream, evolve,
+  // etc.) are surfaced via the AgentRunIndicator pill, not here.
+  const { runs, refresh: refreshAgentRuns } = useActiveAgentRuns();
+
   /**
-   * Kick off a generate run and follow it via /runs/:id polling.
-   *
-   * Backend flow (durable pipeline runs):
-   *   1. POST /generate returns { runId, status }:
-   *      - 200 { status: 'completed', cards } when the agent finished within
-   *        the fast-path window — render cards immediately.
-   *      - 202 { status: 'running' | 'reconciling' } when the agent is still
-   *        running in the background. We poll /runs/:id until it's terminal.
-   *      - 409 means another run is already in flight; surface as error.
-   *   2. Poll /runs/:id every 2s. Stop on status='completed' (success) or
-   *      'failed' (error). Polling is best-effort: closeSource() (called by
-   *      generate() on next click, or by component unmount) cancels in-flight
-   *      requests and skips further ticks.
+   * Enqueue a generator task. Returns immediately with the task_id;
+   * scheduler dispatcher does the actual LLM run. Idempotent: clicking
+   * twice while a generator is already in flight is a no-op (server
+   * dedupes and returns the existing task_id).
    */
   const generate = useCallback(() => {
     if (sourceRef.current) closeSource();
@@ -290,14 +254,11 @@ export function usePipeline() {
       ],
     };
     setRun(freshState);
-    setHealth((h) => ({ ...h, pipelineRunning: true }));
 
     const controller = new AbortController();
     sourceRef.current = controller;
 
     (async () => {
-      let runId: string | null = null;
-      let outcome: { finalCards: IntentCard[]; batchFeedback: string | null } | null = null;
       try {
         const res = await proxyFetch(`/generate`, {
           method: "POST",
@@ -308,54 +269,49 @@ export function usePipeline() {
         try {
           payload = (await res.json()) as Record<string, unknown>;
         } catch {
-          /* non-JSON body — fall through to status check */
+          /* non-JSON body — fall through */
         }
-
-        runId = typeof payload.runId === "string" ? payload.runId : null;
 
         if (!res.ok) {
           const errMsg =
             typeof payload.error === "string" ? payload.error : `HTTP ${res.status}`;
           setRun((prev) => ({
             ...prev,
-            runId: runId ?? prev.runId,
             status: "error",
             error: errMsg,
             completedAt: new Date().toISOString(),
           }));
           appendLog(makeLogEntry("error", "Dispatch failed", errMsg));
-          setHealth((h) => ({ ...h, pipelineRunning: false }));
           return;
         }
 
-        if (payload.status === "completed") {
-          // Fast path: backend finished inline. Cards aren't returned in the
-          // dispatch response (only count) — fetch the run row for the
-          // canonical finalCards + batchFeedback.
-          const ok = await pollRunOnce(runId, controller.signal);
-          if (ok) {
-            outcome = { finalCards: ok.finalCards, batchFeedback: ok.batchFeedback };
-          }
-          setHealth((h) => ({ ...h, pipelineRunning: false }));
-          return;
-        }
+        const taskId =
+          typeof payload.taskId === "string"
+            ? payload.taskId
+            : typeof payload.runId === "string"
+              ? payload.runId
+              : null;
+        const deduped = payload.deduped === true;
 
-        // Slow path: poll until terminal or aborted.
         setRun((prev) => ({
           ...prev,
-          runId: runId ?? prev.runId,
+          runId: taskId ?? prev.runId,
           status: "running",
           activePhase: "generating",
         }));
         appendLog(
           makeLogEntry(
             "system",
-            "Run queued",
-            `Generation handed off to background; polling status`,
+            deduped ? "Already running" : "Run queued",
+            deduped
+              ? "An existing generator run is in flight; following it"
+              : `taskId=${taskId ?? "?"}`,
           ),
         );
 
-        outcome = await waitForTerminal(runId, controller.signal);
+        // Yank a fresh /agent-runs/active so the indicator pill appears
+        // without waiting for the next poll tick.
+        await refreshAgentRuns();
       } catch (err) {
         if (controller.signal.aborted) return;
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -366,86 +322,153 @@ export function usePipeline() {
           completedAt: new Date().toISOString(),
         }));
         appendLog(makeLogEntry("error", "Generate failed", errMsg));
-        setHealth((h) => ({ ...h, pipelineRunning: false }));
       } finally {
-        const settled = outcome;
-        if (settled && !controller.signal.aborted) {
+        if (sourceRef.current === controller) sourceRef.current = null;
+      }
+    })();
+  }, [appendLog, closeSource, refreshAgentRuns]);
+
+  // ── React to the matched generator run finishing ────────────────────
+  // We track which run id we've already settled so the same succeeded
+  // row doesn't re-trigger when the indicator's 30s grace window
+  // re-emits it.
+  const settledRunIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!run.runId) return;
+    const match: ActiveAgentRun | undefined = runs.find(
+      (r) => r.kind === "generator" && r.id === run.runId,
+    );
+    if (!match) return;
+
+    if (match.status === "running" && run.status !== "running") {
+      setRun((prev) => ({ ...prev, status: "running", activePhase: "generating" }));
+      return;
+    }
+
+    if (match.status === "succeeded" && settledRunIdRef.current !== match.id) {
+      settledRunIdRef.current = match.id;
+      // Fetch the canonical pipeline row to get final cards + feedback.
+      void (async () => {
+        try {
+          const res = await proxyFetch(`/runs/${encodeURIComponent(match.id)}`);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
+          const r = (data.run ?? {}) as Record<string, unknown>;
+          const finalCards = normalizeIntentCards(r.finalCards);
+          const batchFeedback =
+            typeof r.batchFeedback === "string" ? r.batchFeedback : null;
           setRun((prev) => ({
             ...prev,
-            runId: runId ?? prev.runId,
             status: "complete",
             activePhase: "complete",
             completedAt: new Date().toISOString(),
-            finalCards: settled.finalCards,
-            batchFeedback: settled.batchFeedback,
+            finalCards,
+            batchFeedback,
           }));
           appendLog(
             makeLogEntry(
               "complete",
-              settled.finalCards.length > 0 ? "Pipeline complete" : "No new cards",
-              settled.finalCards.length > 0
-                ? `${settled.finalCards.length} card(s) ready`
-                : (settled.batchFeedback ?? "Agent declined to generate this run"),
+              finalCards.length > 0 ? "Pipeline complete" : "No new cards",
+              finalCards.length > 0
+                ? `${finalCards.length} card(s) ready`
+                : (batchFeedback ?? "Agent declined to generate this run"),
+            ),
+          );
+        } catch (err) {
+          appendLog(
+            makeLogEntry(
+              "error",
+              "Failed to load cards",
+              err instanceof Error ? err.message : String(err),
             ),
           );
         }
-        if (sourceRef.current === controller) sourceRef.current = null;
-      }
-    })();
-
-    async function pollRunOnce(
-      runIdArg: string | null,
-      signal: AbortSignal,
-    ): Promise<{ status: string; finalCards: IntentCard[]; batchFeedback: string | null } | null> {
-      if (!runIdArg) return null;
-      try {
-        const res = await proxyFetch(`/runs/${encodeURIComponent(runIdArg)}`, { signal });
-        if (!res.ok) return null;
-        const data = await res.json();
-        if (!data?.ok || !data?.run) return null;
-        const run = data.run as Record<string, unknown>;
-        const status = typeof run.status === "string" ? run.status : "unknown";
-        const finalCards = normalizeIntentCards(run.finalCards);
-        const batchFeedback =
-          typeof run.batchFeedback === "string" ? run.batchFeedback : null;
-        return { status, finalCards, batchFeedback };
-      } catch {
-        return null;
-      }
+      })();
     }
 
-    async function waitForTerminal(
-      runIdArg: string | null,
-      signal: AbortSignal,
-    ): Promise<{ finalCards: IntentCard[]; batchFeedback: string | null } | null> {
-      if (!runIdArg) return null;
-      const POLL_MS = 2_000;
-      const HARD_DEADLINE_MS = Date.now() + 25 * 60_000;
-      while (!signal.aborted && Date.now() < HARD_DEADLINE_MS) {
-        const tick = await pollRunOnce(runIdArg, signal);
-        if (signal.aborted) return null;
-        if (tick) {
-          if (tick.status === "completed") {
-            return { finalCards: tick.finalCards, batchFeedback: tick.batchFeedback };
-          }
-          if (tick.status === "failed") {
-            setRun((prev) => ({
-              ...prev,
-              status: "error",
-              error: "Pipeline failed",
-              completedAt: new Date().toISOString(),
-            }));
-            appendLog(makeLogEntry("error", "Pipeline failed", "Backend returned failed"));
-            return null;
-          }
-        }
-        await new Promise((r) => setTimeout(r, POLL_MS));
-      }
-      return null;
+    if (match.status === "failed" && settledRunIdRef.current !== match.id) {
+      settledRunIdRef.current = match.id;
+      const errMsg = match.lastError ?? "Pipeline failed";
+      setRun((prev) => ({
+        ...prev,
+        status: "error",
+        error: errMsg,
+        completedAt: new Date().toISOString(),
+      }));
+      appendLog(makeLogEntry("error", "Pipeline failed", errMsg));
     }
-  }, [appendLog, closeSource]);
+  }, [runs, run.runId, run.status, appendLog]);
 
-  const isRunning = run.status === "running" || run.status === "connecting";
+  // ── F5 recovery ─────────────────────────────────────────────────────
+  // If sessionStorage thinks a run is active but the server has no
+  // matching active run, settle back to idle / complete. Runs in `runs`
+  // are server-truth.
+  useEffect(() => {
+    if (run.status !== "running") return;
+    if (!run.runId) return;
+    const match = runs.find((r) => r.id === run.runId);
+    if (match) return; // still tracked by server, leave as-is
+    // Server doesn't have the run — and we haven't observed it through
+    // an explicit `succeeded` row either. Likely it's archived past the
+    // 30s window; fall back to whatever cards we already have.
+    setRun((prev) =>
+      prev.finalCards.length > 0
+        ? { ...prev, status: "complete", activePhase: "complete" }
+        : { ...prev, status: "idle", activePhase: null, error: null },
+    );
+  }, [runs, run.status, run.runId]);
 
-  return { health, run, generate, isRunning, closeSource };
+  // ── Adopt orphan generator runs ─────────────────────────────────────
+  // Across F5 the local sessionStorage may be empty / stale, but the
+  // server may already have a generator run in flight (e.g. user clicked
+  // Generate before refreshing, or another tab kicked one off). Without
+  // this effect the local state stays "idle" and the Generate button
+  // would re-enable, letting the user spawn a duplicate (which the
+  // backend dedupes — but we shouldn't put the user in that confusing
+  // race-the-button position in the first place).
+  useEffect(() => {
+    // Already tracking a run? leave it to the other effects.
+    if (run.runId) return;
+    if (run.status === "running" || run.status === "connecting") return;
+    const orphan = runs.find(
+      (r) =>
+        r.kind === "generator" &&
+        (r.status === "queued" || r.status === "running"),
+    );
+    if (!orphan) return;
+    setRun((prev) => ({
+      ...prev,
+      runId: orphan.id,
+      status: "running",
+      activePhase: "generating",
+      startedAt: orphan.startedAt ?? prev.startedAt ?? new Date().toISOString(),
+      logEntries: [
+        makeLogEntry(
+          "system",
+          "Resumed",
+          `Following existing generator run ${orphan.id}`,
+        ),
+        ...prev.logEntries,
+      ].slice(0, 80),
+    }));
+  }, [runs, run.runId, run.status]);
+
+  // `isRunning` reflects server truth, not just local state. The
+  // Generate button (and PhaseTimer / chip text) consults this — so
+  // after F5 the button stays disabled if a generator run is still
+  // mid-flight on the server. Without this, the FE'd briefly show
+  // Generate as enabled until the orphan-adoption effect fires next
+  // poll, and an over-eager second click would race the dedup.
+  const hasServerActiveGenerator = runs.some(
+    (r) =>
+      r.kind === "generator" &&
+      (r.status === "queued" || r.status === "running"),
+  );
+  const isRunning =
+    run.status === "running" ||
+    run.status === "connecting" ||
+    hasServerActiveGenerator;
+
+  return { run, generate, isRunning, closeSource };
 }

@@ -34,7 +34,7 @@ export default function ControlPanel({ composio }: ControlPanelProps) {
               <h2 className="text-sm font-semibold text-foreground">Hardware Devices</h2>
               <p className="text-[11px] text-foreground/42 mt-1">
                 Pair wearables / sensors / embedded boards. Each device pushes
-                to <code>/api/proactive/devices/ingest</code> with its own token.
+                to <code>/api/devices/ingest</code> with its own token.
               </p>
             </div>
             <DeviceConnections />

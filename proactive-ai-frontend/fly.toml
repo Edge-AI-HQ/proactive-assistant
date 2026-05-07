@@ -1,0 +1,29 @@
+# proactive-ai-frontend on Fly.io.
+#
+# Static SPA served by nginx (see Dockerfile). Build-time VITE_* args are
+# wired through `fly deploy --build-arg KEY=VALUE` or, for stable values,
+# the [[build.args]] block below.
+#
+# Two apps will exist (one per env), keyed by the same Dockerfile:
+#   * proactive-ai-frontend-dev  — VITE_PIN_API_URL = pinai-agents-dev fly URL
+#   * proactive-ai-frontend-prod — VITE_PIN_API_URL = pinai-agents-prod fly URL
+#
+# Switching between them: `flyctl deploy -a proactive-ai-frontend-dev`.
+
+app = "proactive-ai-frontend-dev"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "256mb"
