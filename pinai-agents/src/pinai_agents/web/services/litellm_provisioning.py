@@ -128,6 +128,7 @@ async def provision_user_litellm_key(
         supabase_user_id=user.supabase_user_id,
         email=user.email,
         litellm_virtual_key=raw_key,
+        browserbase_context_id=user.browserbase_context_id,
     )
 
 
@@ -147,4 +148,5 @@ async def ensure_user_litellm_key(
         supabase_user_id=user.supabase_user_id,
         email=user.email,
         litellm_virtual_key=raw_key,
+        browserbase_context_id=user.browserbase_context_id,
     )
