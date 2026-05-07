@@ -71,19 +71,37 @@ async def init_checkpointer() -> AsyncPostgresSaver:
     # search_path: <schema>,public ensures (a) AsyncPostgresSaver DDL targets
     # our schema, (b) any built-in functions resolved via public still work.
     options = f"-c search_path={schema},public"
-    # Stale-connection protection: chat checkpointer is low-traffic (only
-    # chat-stream send path touches it), so pool connections sit idle for
-    # minutes between turns. fly→Supabase NAT/keepalive timeouts silently
-    # kill those idle TCP sessions, leaving the pool with dead handles
-    # that hang for 7+ seconds with `psycopg.OperationalError: consuming
-    # input failed: could not receive data from server` on the next query.
-    # `check=` runs a tiny SELECT 1 before each borrow; `max_idle=300`
-    # proactively recycles conns that haven't been used in 5 min.
+    # Stale-connection protection — three independent layers because
+    # cloud-Postgres + idle-pool combinations can each fail differently:
+    #   1. TCP keepalive (kernel-level): probes start after 15s idle,
+    #      socket errored within ~30s of detecting a dead peer. Without
+    #      this, a borrow that hits a NAT-killed socket hangs for the
+    #      full statement_timeout (10+ min) on Linux defaults.
+    #   2. tcp_user_timeout: hard cap on outstanding TCP packets without
+    #      ack. Any pool operation on a dead socket bubbles up as an
+    #      error within 10s instead of multi-minute hangs.
+    #   3. max_idle=60: proactively recycle conns idle > 60s, shorter
+    #      than the typical fly-NAT idle window (~90-300s) so we never
+    #      hand out stale handles in the first place. min_size=0 avoids
+    #      the pool re-warming idle conns that immediately re-stale.
+    # `check=` is kept as a final SELECT-1 borrow guard; under this
+    # config it almost never has anything to recover from.
     _pool = AsyncConnectionPool(
         conninfo=settings.database_url,
+        min_size=0,
         max_size=10,
-        max_idle=300,
-        kwargs={"autocommit": True, "row_factory": dict_row, "options": options},
+        max_idle=60,
+        kwargs={
+            "autocommit": True,
+            "row_factory": dict_row,
+            "options": options,
+            "keepalives": 1,
+            "keepalives_idle": 15,
+            "keepalives_interval": 5,
+            "keepalives_count": 3,
+            "connect_timeout": 5,
+            "tcp_user_timeout": 10000,
+        },
         check=AsyncConnectionPool.check_connection,
         open=False,
     )

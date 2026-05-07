@@ -40,17 +40,26 @@ async def open_pool(*, dsn: str | None = None, max_size: int | None = None) -> A
         msg = "DATABASE_URL not set; web process needs a DB connection"
         raise RuntimeError(msg)
 
-    # Stale-connection protection — see chat/runtime/checkpoint.py for the
-    # same pattern + rationale. Web pool sees enough polling traffic that
-    # idle conns rarely linger long enough to go stale, but it costs
-    # nothing to be defensive: SELECT-1 on borrow + 5-min idle recycle
-    # means a fly↔Supabase NAT timeout never surfaces as a cold-path hang.
+    # Stale-connection protection — see chat/runtime/checkpoint.py for
+    # the same three-layer pattern + rationale (TCP keepalive + tcp
+    # user timeout + max_idle proactive recycle + check on borrow).
+    # Web pool sees enough polling traffic that idle conns rarely sit
+    # long enough to go stale, but the same defenses cost nothing and
+    # keep behavior identical between the two pools.
     pool = AsyncConnectionPool(
         conninfo=conninfo,
         min_size=settings.db_pool_min,
         max_size=max_size or settings.db_pool_max,
-        max_idle=300,
-        kwargs={"row_factory": dict_row},
+        max_idle=60,
+        kwargs={
+            "row_factory": dict_row,
+            "keepalives": 1,
+            "keepalives_idle": 15,
+            "keepalives_interval": 5,
+            "keepalives_count": 3,
+            "connect_timeout": 5,
+            "tcp_user_timeout": 10000,
+        },
         check=AsyncConnectionPool.check_connection,
         # Lazy open — caller decides when to actually connect (lifespan
         # startup) so import-time side effects stay zero.
