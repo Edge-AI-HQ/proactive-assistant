@@ -25,10 +25,17 @@ primary_region = 'iad'
   chat = "uvicorn pinai_agents.chat.asgi:app --host 0.0.0.0 --port 8001"
 
 # Public HTTPS edge → web only.
+#
+# auto_stop_machines = false (NOT 'suspend'): the frontend nginx
+# reaches web through fly's 6PN at web.process.<app>.internal:8000.
+# Public requests trigger anycast proxy which wakes suspended
+# machines, but 6PN traffic bypasses that proxy — DNS would still
+# resolve to the suspended machine's IPv6 and nginx would get
+# connection-refused (502). Keeping web always-on avoids the gap.
 [http_service]
   internal_port = 8000
   force_https = true
-  auto_stop_machines = 'suspend'
+  auto_stop_machines = false
   auto_start_machines = true
   min_machines_running = 1
   processes = ['web']
