@@ -33,39 +33,42 @@ from ...db.rls import user_scoped_tx
 router = APIRouter(prefix="/api/raw", tags=["raw"])
 
 
-# Generic /raw/<table> fallback only accepts these tables. Same allowlist
-# as routes/agent/raw.py — order matters only for readability.
-_GENERIC_TABLES: frozenset[str] = frozenset({
-    "pai_raw_gmail_messages",
-    "pai_raw_gcal_events",
-    "pai_raw_gdrive_files",
-    "pai_raw_gdocs_documents",
-    "pai_raw_gsheets_spreadsheets",
-    "pai_raw_outlook_messages",
-    "pai_raw_dropbox_account",
-    "pai_raw_dropbox_files",
-    "pai_raw_slack_messages",
-    "pai_raw_notion_pages",
-    "pai_raw_discord_guilds",
-    "pai_raw_github_issues",
-    "pai_raw_jira_projects",
-    "pai_raw_asana_workspaces",
-    "pai_raw_asana_tasks",
-    "pai_raw_trello_boards",
-    "pai_raw_clickup_user",
-    "pai_raw_clickup_workspaces",
-    "pai_raw_figma_user",
-    "pai_raw_hubspot_contacts",
-    "pai_raw_linkedin_profile",
-    "pai_raw_linkedin_organizations",
-    "pai_raw_calendly_events",
-    "pai_raw_spotify_recent_tracks",
-    "pai_raw_strava_activities",
-    "pai_raw_stripe_invoices",
-    "pai_raw_todoist_tasks",
-    "pai_raw_device_apps_snapshot",
-    "pai_raw_device_contacts_snapshot",
-    "pai_raw_device_health_observations",
+# Generic /raw/<slug> fallback only accepts these slugs. Slug = the
+# physical table name with the `pai_raw_` prefix dropped — keeps the
+# public API hiding the internal table-name convention. Frontend
+# `fetchRawTable` (proactive-ai-frontend GoalsView RAW_SOURCE_CONFIG)
+# is the source of truth for these slugs.
+_GENERIC_RAW_SLUGS: frozenset[str] = frozenset({
+    "gmail_messages",
+    "gcal_events",
+    "gdrive_files",
+    "gdocs_documents",
+    "gsheets_spreadsheets",
+    "outlook_messages",
+    "dropbox_account",
+    "dropbox_files",
+    "slack_messages",
+    "notion_pages",
+    "discord_guilds",
+    "github_issues",
+    "jira_projects",
+    "asana_workspaces",
+    "asana_tasks",
+    "trello_boards",
+    "clickup_user",
+    "clickup_workspaces",
+    "figma_user",
+    "hubspot_contacts",
+    "linkedin_profile",
+    "linkedin_organizations",
+    "calendly_events",
+    "spotify_recent_tracks",
+    "strava_activities",
+    "stripe_invoices",
+    "todoist_tasks",
+    "device_apps_snapshot",
+    "device_contacts_snapshot",
+    "device_health_observations",
 })
 
 
@@ -293,30 +296,31 @@ async def _device_snapshot_query(
     )
 
 
-# ── Generic fallback: /api/raw/<table> ──────────────────────────────────
+# ── Generic fallback: /api/raw/<slug> ──────────────────────────────────
 
 
-@router.get("/{table}")
+@router.get("/{slug}")
 async def list_generic(
-    table: str,
+    slug: str,
     user: User = Depends(current_user),
     pool=Depends(get_pool),
     since: datetime | None = Query(None),
     until: datetime | None = Query(None),
     limit: int = Query(50, ge=1, le=500),
 ):
-    """Generic fallback for connector tables not in the typed endpoints
-    list. Allowlist-gated; `pai_raw_*` only.
+    """Generic fallback for connector tables not covered by the typed
+    endpoints. Allowlist-gated by slug — physical table is `pai_raw_<slug>`.
 
-    Frontend `fetchRawTable` calls this with the FULL table name (eg
-    `pai_raw_slack_messages`). Tables not on the allowlist 404. The
-    typed endpoints above (gmail / gcal / device-*) take precedence
-    when the table name happens to match — FastAPI matches static
-    routes before parametric ones."""
-    if table not in _GENERIC_TABLES:
+    Frontend `fetchRawTable` (GoalsView RAW_SOURCE_CONFIG) calls this
+    with the slug only (eg `slack_messages`). Slugs not on the allowlist
+    404. The typed endpoints above (gmail / gcal / device-*) take
+    precedence when the path matches — FastAPI matches static routes
+    before parametric ones."""
+    if slug not in _GENERIC_RAW_SLUGS:
         raise HTTPException(
-            status_code=404, detail=f"unknown raw table: {table}",
+            status_code=404, detail=f"unknown raw slug: {slug}",
         )
+    table = f"pai_raw_{slug}"
     rows, total = await _select_recent(
         pool, user_id=user.id, table=table,
         since=since, until=until, limit=limit,
