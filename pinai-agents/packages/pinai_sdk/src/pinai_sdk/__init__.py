@@ -20,6 +20,6 @@ env (or defaults to http://pinai-web:8000 for compose dev).
 
 from __future__ import annotations
 
-from ._client import client
+from ._client import SDK_CHEAT_SHEET, SUPPORTED_RAW_SOURCES, client
 
-__all__ = ["client"]
+__all__ = ["SDK_CHEAT_SHEET", "SUPPORTED_RAW_SOURCES", "client"]

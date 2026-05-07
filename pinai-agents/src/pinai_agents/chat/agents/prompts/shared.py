@@ -9,13 +9,94 @@ Conventions:
   * Stable byte-for-byte across releases. Anthropic prompt cache hits
     on identical prefixes — keep these constant unless you really
     need to change them.
+
+The SDK_CHEAT_SHEET block embedded in SANDBOX_PREAMBLE is a verbatim
+copy of `pinai_sdk._client.SDK_CHEAT_SHEET`. We can't `import pinai_sdk`
+here (it's only installed in the Daytona sandbox, not in the chat
+process) so the two are kept in sync by hand. If you change the SDK
+public surface, update both the SDK source AND this string. The
+`tests/chat/test_sdk_cheat_sheet_sync.py` test asserts they match.
 """
 
 from __future__ import annotations
 
+# Mirror of `pinai_sdk._client.SDK_CHEAT_SHEET`. Update both together.
+_SDK_CHEAT_SHEET = """\
+client.memory
+  .list(*, min_quality=0.7, subject=None, subject_prefix=None,
+        since=None, limit=30, offset=0, order_by="created_at_desc") -> list
+  .search(*, q, min_quality=None, limit=10) -> list
+  .get(id) -> dict | None
+  .add(*, text, source="agent", subject=None, quality=0.6,
+       confidence=0.5, source_run_id=None, tags=None, id=None) -> dict
+  .archive(id) -> dict | None
+  .supersede(*, old_id, new_id) -> dict | None
+
+client.signals
+  .recent(*, status="open", kind=None, hours=24,
+          min_salience=None, limit=30) -> list      # status: open|consumed|archived|all
+  .get(id) -> dict | None
+  .consume(*, id, run_id) -> None
+  .add(*, kind, title, summary="", salience=0.0, confidence=0.0,
+       dedupe_key=None, subject=None, source="agent",
+       payload=None, occurred_at=None, id=None) -> dict
+  .ingest(**fields) -> dict                          # legacy; prefer .add
+
+client.profile
+  .get() -> {"profile": ... | None, "goals": [...]}
+  .upsert(*, display_name=None, locale=None, timezone=None,
+          summary=None, facts=None, preferences=None,
+          constraints=None) -> dict                  # JSONB buckets replaced wholesale
+  .upsert_goal(*, key, title, id=None, priority="medium",
+               status="active", summary=None) -> dict
+
+client.cards
+  .recent(*, limit=30) -> list
+
+client.feedback
+  .list(*, kind=None, action=None, since=None, limit=50) -> list
+  .log(*, kind, action=None, intent_card_id=None, intent_key=None,
+       source="agent", basket=None, value=None, text=None,
+       metadata=None, channel=None) -> dict
+
+client.world
+  .recent(*, status="open", provider=None, hours=None,
+          min_salience=None, limit=30) -> list
+  .score(*, id, salience, scored_reason=None, status="open") -> None
+  .consume(*, id, run_id) -> None
+  .reference(*, id, run_id) -> None
+
+client.raw                                           # canonical entry: .list(toolkit, entity, ...)
+  .list(toolkit, entity, *, hours=None, since=None, until=None,
+        limit=50, dedupe_key=None) -> list           # pass hours OR since, not both
+  .gmail.recent(*, hours=24, limit=20) -> list       # convenience
+  .gcal.today(*, hours=48, limit=20) -> list         # convenience
+  # other toolkits: use .list("slack","messages"), .list("github","issues"),
+  #                 .list("notion","pages"), .list("gdrive","files"), ...
+  # client.raw.slack / .github / etc DO NOT EXIST — use .list(...)
+
+Supported (toolkit, entity) for raw.list:
+  gmail/messages, gcal/events, gdrive/files, gdocs/documents,
+  gsheets/spreadsheets, outlook/messages, dropbox/{account,files},
+  slack/messages, notion/pages, discord/guilds, github/issues,
+  jira/projects, asana/{workspaces,tasks}, trello/boards,
+  clickup/{user,workspaces}, figma/user, hubspot/contacts,
+  linkedin/{profile,organizations}, calendly/events,
+  spotify/recent_tracks, strava/activities, stripe/invoices,
+  todoist/tasks, device/{apps,contacts,health}
+
+All methods are async — `await` everything. Errors return
+`{"error": "http_4xx", "detail": "..."}` instead of raising; check
+`isinstance(res, dict) and "error" in res`."""
+
+
 # What the sandbox is, what's preinstalled, what auth looks like.
 # Embedded by every agent that runs sandbox code (all 5 of them).
-SANDBOX_PREAMBLE = """\
+# The cheat sheet is inlined here so the FIRST tool call has the full
+# SDK shape — fixes the observed pattern of agents inventing methods
+# (raw.slack.messages / raw.github.commits / signals.upsert) on the
+# first gather, then burning 5+ rounds on dir() / inspect introspection.
+SANDBOX_PREAMBLE = f"""\
 <sandbox>
 You have a sandbox where you can write and run Python. The
 `pinai_sdk` module is preinstalled with auth pre-injected — just
@@ -25,13 +106,15 @@ import and call:
     rows = await client.memory.list(min_quality=0.7, limit=30)
     signals = await client.signals.recent(status="open", hours=24)
 
-Surface: `client.memory` / `client.signals` / `client.profile` /
-`client.world` / `client.raw` (gmail, gcal, plus per-toolkit). All
-methods are async. The chat-driving JWT and the user's virtual_key
-are NOT in the sandbox — the SDK uses an opaque per-sandbox token.
+The chat-driving JWT and the user's virtual_key are NOT in the
+sandbox — the SDK uses an opaque per-sandbox token.
 
 The sandbox can also reach the public internet via httpx (e.g. for
 fetching a URL the user mentioned) but no other internal hosts.
+
+<sdk_surface>
+{_SDK_CHEAT_SHEET}
+</sdk_surface>
 </sandbox>"""
 
 

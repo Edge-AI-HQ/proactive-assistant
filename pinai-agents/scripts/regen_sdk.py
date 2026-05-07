@@ -64,11 +64,28 @@ def _check() -> int:
     if client is None:
         print("FAIL: pinai_sdk.client missing", file=sys.stderr)
         return 1
-    for ns in ("memory", "signals", "profile", "world", "raw"):
+    for ns in ("memory", "signals", "profile", "world", "raw", "cards", "feedback"):
         if not hasattr(client, ns):
             print(f"FAIL: pinai_sdk.client.{ns} missing", file=sys.stderr)
             return 1
-    print("ok: pinai_sdk imports + has memory/signals/profile/world/raw namespaces")
+    # raw.list is the canonical raw entry; raw.<toolkit> for unknown
+    # toolkits must NOT exist (prior __getattr__ magic taught agents to
+    # invent methods like raw.slack.messages).
+    if not hasattr(client.raw, "list"):
+        print("FAIL: pinai_sdk.client.raw.list missing", file=sys.stderr)
+        return 1
+    if hasattr(client.raw, "slack") or hasattr(client.raw, "github"):
+        print(
+            "FAIL: pinai_sdk.client.raw.<unknown-toolkit> resolved — "
+            "Raw.__getattr__ magic must stay removed",
+            file=sys.stderr,
+        )
+        return 1
+    cheat = getattr(mod, "SDK_CHEAT_SHEET", None)
+    if not isinstance(cheat, str) or "client.raw" not in cheat:
+        print("FAIL: pinai_sdk.SDK_CHEAT_SHEET missing or malformed", file=sys.stderr)
+        return 1
+    print("ok: pinai_sdk imports + namespaces + raw.list + cheat sheet present")
     return 0
 
 
