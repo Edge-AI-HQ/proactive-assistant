@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 import uuid
 from typing import Protocol
 
@@ -34,6 +35,7 @@ import httpx
 from psycopg_pool import AsyncConnectionPool
 
 from ..auth.agent_jwt import sign_agent_run_jwt
+from ..db.repositories.evolution import EvolutionRepository
 from ..db.repositories.scheduled_tasks import (
     ScheduledTaskRow,
     archive_after_success,
@@ -42,7 +44,7 @@ from ..db.repositories.scheduled_tasks import (
     insert_run,
     record_failure_and_decide,
 )
-from ..db.rls import service_tx
+from ..db.rls import service_tx, user_scoped_tx
 
 logger = logging.getLogger(__name__)
 
@@ -173,15 +175,7 @@ class DefaultDispatcher:
     async def _handle_kind(self, task: ScheduledTaskRow, run_id: str) -> None:
         kind = task.kind
         if kind == "auto.dreaming":
-            # Pass trigger_kind through so the dream agent records the
-            # right value in pai_evolution_runs (the dream-history panel
-            # filters on trigger_kind in 'daily_dream' | 'manual').
-            payload_trigger = (task.payload or {}).get("trigger")
-            trigger_kind = "manual" if payload_trigger == "manual" else "daily_dream"
-            await self._call_chat(
-                "/agent/run/dream", task, run_id,
-                extra={"trigger_kind": trigger_kind},
-            )
+            await self._dispatch_dream(task, run_id)
         elif kind == "connector.evolve":
             await self._call_chat(
                 "/agent/run/evolve", task, run_id,
@@ -213,6 +207,80 @@ class DefaultDispatcher:
             await connector_ingest.run(self._pool, task, run_id)
         else:
             logger.warning("unknown task.kind=%s — no-op", kind)
+
+    async def _dispatch_dream(
+        self, task: ScheduledTaskRow, run_id: str,
+    ) -> None:
+        """auto.dreaming dispatch + pai_evolution_runs lifecycle wrap.
+
+        Why this lives here (web side) and not in chat/agents/dream.py:
+          * Same process / pool as the DB — no HTTP roundtrip, no JWT
+            timeout risk on long dreams (10-15 min agent loops).
+          * Survives chat-worker crashes: if the chat container is OOM-
+            killed mid-run, the outer try/except still flips the row
+            from 'running' → 'failed' so the panel doesn't show a
+            forever-running ghost.
+          * Single source of truth for the run's id: the row's id is
+            the same `run_id` (task.id + fire suffix) that LangSmith
+            traces and pai_scheduled_task_runs already key on, so all
+            three surfaces join cleanly.
+
+        Bookkeeping failures are best-effort — the dream's primary side
+        effects (memory.add / profile.upsert from inside the sandbox)
+        write directly to their tables and don't depend on this row
+        existing.
+        """
+        payload_trigger = (task.payload or {}).get("trigger")
+        # Dream-history panel filter: trigger_kind in
+        # ('daily_dream', 'manual'). Other values write the row but
+        # won't surface in the panel.
+        trigger_kind = "manual" if payload_trigger == "manual" else "daily_dream"
+        started = time.monotonic()
+
+        evol_id: str | None = None
+        try:
+            async with user_scoped_tx(self._pool, task.user_id) as conn:
+                repo = EvolutionRepository(task.user_id, conn)
+                row = await repo.create(
+                    trigger_kind=trigger_kind,
+                    context_summary=f"Dream run {run_id}",
+                    run_id=run_id,
+                )
+                evol_id = row.id
+        except Exception:
+            logger.exception(
+                "evolution.create failed user=%d run_id=%s — dream history will miss this row",
+                task.user_id, run_id,
+            )
+
+        try:
+            await self._call_chat("/agent/run/dream", task, run_id)
+        except Exception as e:
+            if evol_id is not None:
+                try:
+                    async with user_scoped_tx(self._pool, task.user_id) as conn:
+                        await EvolutionRepository(task.user_id, conn).fail(
+                            evol_id, error_message=f"{type(e).__name__}: {e}"[:1000],
+                        )
+                except Exception:
+                    logger.exception(
+                        "evolution.fail bookkeeping failed evol_id=%s — row stuck 'running'",
+                        evol_id,
+                    )
+            raise
+
+        if evol_id is not None:
+            try:
+                async with user_scoped_tx(self._pool, task.user_id) as conn:
+                    await EvolutionRepository(task.user_id, conn).complete(
+                        evol_id,
+                        duration_ms=int((time.monotonic() - started) * 1000),
+                    )
+            except Exception:
+                logger.exception(
+                    "evolution.complete bookkeeping failed evol_id=%s — row stuck 'running'",
+                    evol_id,
+                )
 
     async def _run_generator(
         self, task: ScheduledTaskRow, run_id: str,

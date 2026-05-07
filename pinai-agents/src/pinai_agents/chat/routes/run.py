@@ -54,11 +54,6 @@ async def post_run_dream(
         virtual_key=virtual_key, user_id=user_id, run_id=run_id,
         run_jwt=run_jwt,
         model=body.get("model"),
-        # Dispatcher derives this from task.payload.trigger so the
-        # pai_evolution_runs row matches the dream-history panel's
-        # filter (trigger_kind in 'daily_dream' | 'manual'). Default to
-        # 'daily_dream' if a stale dispatcher omits it.
-        trigger_kind=body.get("trigger_kind", "daily_dream"),
     )
     return summary
 
