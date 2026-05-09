@@ -35,7 +35,7 @@ async def list_signals(
         since = datetime.now(UTC) - timedelta(hours=hours)
     async with user_scoped_tx(pool, run.user_id) as conn:
         repo = PersonalSignalsRepository(run.user_id, conn)
-        rows = await repo.list_recent(
+        rows, _total = await repo.list_recent(
             status=actual_status, kind=kind,
             min_salience=min_salience, since=since, limit=limit,
         )

@@ -173,13 +173,20 @@ class PersonalSignalsRepository(UserScopedRepository):
         min_salience: float | None = None,
         limit: int = 30,
         offset: int = 0,
-    ) -> list[PersonalSignalRow]:
+    ) -> tuple[list[PersonalSignalRow], int]:
         """Default: status='open' (active increment layer). Pass status=None
-        to scan everything."""
+        to scan everything.
+
+        Returns `(rows, total)` where `total` is the count of all rows
+        matching the filters BEFORE limit/offset (via `COUNT(*) OVER()`),
+        so callers can paginate without a second query and without filter
+        drift between the page query and the count query.
+        """
         async with self._conn.cursor() as cur:
             await cur.execute(
                 """
-                SELECT * FROM pai_personal_signals
+                SELECT *, COUNT(*) OVER () AS total_count
+                FROM pai_personal_signals
                 WHERE user_id = %s
                   AND (%s::text IS NULL OR status = %s)
                   AND (%s::text IS NULL OR kind = %s)
@@ -204,7 +211,14 @@ class PersonalSignalsRepository(UserScopedRepository):
                 ),
             )
             rows = await cur.fetchall()
-        return [PersonalSignalRow.from_record(r) for r in rows]
+        # Empty page → total=0. Same trade-off as MemoryRepository.list_active:
+        # accepting the "offset past end of filtered set" edge case (frontend
+        # paginators clamp on next refetch) avoids re-introducing a second
+        # query whose WHERE clause could drift from this one.
+        if not rows:
+            return [], 0
+        total = int(rows[0]["total_count"])
+        return [PersonalSignalRow.from_record(r) for r in rows], total
 
     async def mark_consumed(self, signal_id: str, run_id: str) -> bool:
         """open → consumed. Idempotent: same run consuming again is no-op.

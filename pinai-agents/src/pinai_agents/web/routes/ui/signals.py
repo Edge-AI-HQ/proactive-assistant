@@ -56,15 +56,18 @@ async def list_signals(
     so the SPA's `Signals N open` metric reads a real number instead of
     falling back to -1.
 
-    `total` is the page-size count — the SPA only uses it to know "did
-    we fill the page" for has_more, so we don't pay for a separate
-    COUNT query. If pagination ever needs a true unfiltered total, plug
-    in a dedicated repo.count_recent here.
+    `total` is the count of all rows matching the filters (via
+    `COUNT(*) OVER()` inside list_recent), not just the current page,
+    so the SPA's "Signals N open" metric and load-more pagination both
+    show the truth. `has_more` is computed from `offset + len(rows)`
+    against `total` rather than `len(rows) >= limit`, which avoids the
+    false-positive when the filtered set happens to fill exactly one
+    page.
     """
     actual_status = None if status_filter == "all" else status_filter
     async with user_scoped_tx(pool, user.id) as conn:
         repo = PersonalSignalsRepository(user.id, conn)
-        rows = await repo.list_recent(
+        rows, total = await repo.list_recent(
             status=actual_status, kind=kind, source=source,
             device_id=device_id, since=since, before=before,
             min_salience=min_salience, limit=limit, offset=offset,
@@ -73,8 +76,8 @@ async def list_signals(
     return {
         "ok": True,
         "signals": [s.model_dump(by_alias=True, mode="json") for s in items],
-        "total": len(items),
-        "has_more": len(items) >= limit,
+        "total": total,
+        "has_more": offset + len(rows) < total,
         "next_cursor": None,
     }
 
