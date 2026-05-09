@@ -1,8 +1,7 @@
-"""gdrive + gdocs connectors — extractor / mapper / DB round-trip.
+"""Google Drive connector — extractor / mapper / DB round-trip.
 
-Both share Drive metadata semantics (owners[].emailAddress,
-modifiedTime, mime/web links). gdocs is technically a Drive subset
-filtered to docs; tests pin the field shape distinctions.
+Drive metadata semantics (owners[].emailAddress, modifiedTime,
+mime/web links).
 """
 
 from __future__ import annotations
@@ -82,54 +81,6 @@ def test_map_gdrive_file_returns_none_without_id():
     assert connector_ingest._map_gdrive_file({"name": "no id"}) is None
 
 
-def test_extract_drive_files_unwraps_files_key():
-    response = {"data": {"files": [{"id": "1"}, {"id": "2"}]}}
-    out = connector_ingest._extract_drive_files(response)
-    assert len(out) == 2
-
-
-# ── gdocs mapper ────────────────────────────────────────────────────────
-
-
-def test_map_gdocs_document_basic():
-    raw = {
-        "id": "doc-1",
-        "name": "spec.gdoc",
-        "modifiedTime": "2026-04-15T12:00:00Z",
-        "createdTime": "2026-04-01T00:00:00Z",
-        "webViewLink": "https://docs.google.com/document/d/doc-1",
-        "owners": [{"emailAddress": "owner@x.com"}],
-        "lastModifyingUser": {"emailAddress": "editor@x.com"},
-        "starred": True,
-        "shared": True,
-    }
-    mapped = connector_ingest._map_gdocs_document(raw)
-    assert mapped is not None
-    assert mapped["document_id"] == "doc-1"
-    assert mapped["owners"] == ["owner@x.com"]
-    assert mapped["last_modifying_user"] == "editor@x.com"
-    assert mapped["starred"] is True
-    assert mapped["shared"] is True
-    assert mapped["modified_time"].year == 2026
-
-
-def test_extract_gdocs_documents_composio_documents_key():
-    """Composio wraps under data.documents per plugin notes."""
-    response = {"data": {"documents": [{"id": "d1"}]}}
-    out = connector_ingest._extract_gdocs_documents(response)
-    assert out == [{"id": "d1"}]
-
-
-def test_extract_gdocs_documents_raw_drive_files_fallback():
-    response = {"data": {"files": [{"id": "f1"}]}}
-    out = connector_ingest._extract_gdocs_documents(response)
-    assert out == [{"id": "f1"}]
-
-
-def test_map_gdocs_document_returns_none_without_id():
-    assert connector_ingest._map_gdocs_document({"name": "no id"}) is None
-
-
 # ── DB round-trip: gdrive sync mutates row on second fire ──────────────
 
 
@@ -150,22 +101,17 @@ def _sync_task(toolkit: str, user_id: int, cid: str) -> ScheduledTaskRow:
 
 
 def _patch_fetch(monkeypatch, toolkit: str, items_box: dict):
-    real = connector_ingest._ADAPTERS[toolkit]
+    """Replace ingest_runner.run_fetch so connector_ingest gets test items
+    without hitting Composio. Real upserter still runs against the DB."""
+    from pinai_agents.web.services import ingest_runner
 
-    async def fake_fetch(api_key, cx_user_id, cid, limit, since):
-        return list(items_box["items"])
+    async def fake_fetch(user_id, tk, cid, *, limit=100, since=None):
+        if tk == toolkit:
+            return list(items_box["items"])
+        return []
 
-    monkeypatch.setitem(
-        connector_ingest._ADAPTERS, toolkit,
-        connector_ingest.ToolkitAdapter(
-            toolkit=toolkit, raw_table=real.raw_table,
-            fetch=fake_fetch, upsert=real.upsert,
-        ),
-    )
-    monkeypatch.setattr(
-        connector_ingest, "get_web_settings",
-        lambda: SimpleNamespace(composio_api_key="test-key"),
-    )
+    monkeypatch.setattr(ingest_runner, "run_fetch", fake_fetch)
+    _ = SimpleNamespace
 
 
 @pytest.mark.asyncio
@@ -211,40 +157,5 @@ async def test_gdrive_sync_renames_file_in_place(pool, user_ids, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_gdocs_sync_writes_doc(pool, user_ids, monkeypatch):
-    user_a, _ = user_ids
-    box = {"items": [
-        {
-            "id": "doc-A",
-            "name": "RFC 0001",
-            "modifiedTime": "2026-04-15T00:00:00Z",
-            "owners": [{"displayName": "Alice"}],
-        },
-    ]}
-    _patch_fetch(monkeypatch, "googledocs", box)
-
-    async with user_scoped_tx(pool, user_a) as conn:
-        await enqueue_once(
-            conn, user_id=user_a, task_id="sync.googledocs.cidGOD",
-            kind="connector.sync",
-            payload={"toolkit": "googledocs", "connectedAccountId": "cidGOD"},
-        )
-
-    await connector_ingest.run(pool, _sync_task("googledocs", user_a, "cidGOD"), "rdoc1")
-
-    async with service_tx(pool) as conn:
-        cur = await conn.execute(
-            "SELECT document_id, name, owners FROM pai_raw_gdocs_documents "
-            "WHERE user_id = %s",
-            (user_a,),
-        )
-        rows = await cur.fetchall()
-    assert len(rows) == 1
-    assert rows[0]["document_id"] == "doc-A"
-    assert rows[0]["owners"] == ["Alice"]
-
-
-@pytest.mark.asyncio
-async def test_drive_docs_registered():
+async def test_gdrive_registered():
     assert "googledrive" in connector_ingest.supported_toolkits()
-    assert "googledocs" in connector_ingest.supported_toolkits()

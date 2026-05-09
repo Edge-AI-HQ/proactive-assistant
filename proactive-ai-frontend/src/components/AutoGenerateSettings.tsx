@@ -1,66 +1,50 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
-import { proxyFetch, proxyPost } from "@/lib/api";
+import { useUserSettings } from "@/hooks/useUserSettings";
+
+// Preset interval buckets surfaced in the UI. Server enforces 15–1440min
+// via Pydantic / DB CHECK; the bucket list here is purely UX.
+const PRESETS_MINUTES = [30, 60, 120, 240, 720, 1440] as const;
+
+function formatPreset(min: number): string {
+  if (min < 60) return `${min} min`;
+  if (min % 60 !== 0) return `${(min / 60).toFixed(1)} h`;
+  const h = min / 60;
+  if (h < 24) return `${h} h`;
+  return `${h / 24} day${h === 24 ? "" : "s"}`;
+}
 
 export default function AutoGenerateSettings() {
-  const [enabled, setEnabled] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { settings, loading, saving, error, patch } = useUserSettings();
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const savedTimerRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    let mounted = true;
-    async function loadSettings() {
-      try {
-        const res = await proxyFetch("/settings/auto-generate");
-        const data = await res.json();
-        if (!mounted) return;
-        if (res.ok && data.ok) {
-          setEnabled(data.enabled);
-          setError(null);
-        } else {
-          setError(data.error ?? "Failed to load auto-generate setting");
-        }
-      } catch {
-        if (!mounted) return;
-        setError("Failed to load auto-generate setting");
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    }
-    loadSettings();
-    return () => {
-      mounted = false;
-      if (savedTimerRef.current) window.clearTimeout(savedTimerRef.current);
-    };
+  useEffect(() => () => {
+    if (savedTimerRef.current) window.clearTimeout(savedTimerRef.current);
   }, []);
 
+  // Defaults match the DB column DEFAULTs (`pai_user_settings`):
+  // auto_generate=TRUE, interval=720min. Server lazy-creates the row
+  // with these on first GET, so this fallback is only the loading-flash
+  // visual before the response lands.
+  const enabled = settings?.autoGenerate ?? true;
+  const intervalMinutes = settings?.autoGenerateIntervalMinutes ?? 720;
+
+  const flashSaved = () => {
+    setSavedAt(Date.now());
+    if (savedTimerRef.current) window.clearTimeout(savedTimerRef.current);
+    savedTimerRef.current = window.setTimeout(() => setSavedAt(null), 1500);
+  };
+
   const handleToggle = async () => {
-    const previous = enabled;
     const next = !enabled;
-    setEnabled(next);
-    setSaving(true);
-    setError(null);
-    try {
-      const res = await proxyPost("/settings/auto-generate", { enabled: next });
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
-        setEnabled(previous);
-        setError(data.error ?? "Failed to save");
-        return;
-      }
-      setEnabled(data.enabled);
-      setSavedAt(Date.now());
-      if (savedTimerRef.current) window.clearTimeout(savedTimerRef.current);
-      savedTimerRef.current = window.setTimeout(() => setSavedAt(null), 1500);
-    } catch {
-      setEnabled(previous);
-      setError("Failed to save");
-    } finally {
-      setSaving(false);
-    }
+    if (await patch({ autoGenerate: next })) flashSaved();
+  };
+
+  const handleIntervalChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const next = Number(e.target.value);
+    if (!Number.isFinite(next) || next === intervalMinutes) return;
+    if (await patch({ autoGenerateIntervalMinutes: next })) flashSaved();
   };
 
   return (
@@ -76,7 +60,7 @@ export default function AutoGenerateSettings() {
           role="switch"
           aria-checked={enabled}
           disabled={loading || saving}
-          onClick={handleToggle}
+          onClick={() => void handleToggle()}
           className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${
             enabled ? "bg-primary border-primary" : "bg-foreground/15 border-foreground/15"
           }`}
@@ -89,6 +73,19 @@ export default function AutoGenerateSettings() {
       <p className="text-[11px] text-foreground/40 mt-1">
         Automatically generate cards based on new data from your connected sources.
       </p>
+      <div className="mt-2 flex items-center gap-2">
+        <label className="text-[11px] text-foreground/60">Every</label>
+        <select
+          value={intervalMinutes}
+          disabled={loading || saving || !enabled}
+          onChange={(e) => void handleIntervalChange(e)}
+          className="text-[11px] bg-background border border-foreground/15 rounded px-2 py-1 disabled:opacity-40"
+        >
+          {PRESETS_MINUTES.map((m) => (
+            <option key={m} value={m}>{formatPreset(m)}</option>
+          ))}
+        </select>
+      </div>
       {error && <p className="text-[11px] text-red-500 mt-1">{error}</p>}
     </div>
   );

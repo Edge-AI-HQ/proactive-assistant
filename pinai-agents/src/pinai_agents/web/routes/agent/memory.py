@@ -56,7 +56,7 @@ async def list_memory(
 ):
     async with user_scoped_tx(pool, run.user_id) as conn:
         repo = MemoryRepository(run.user_id, conn)
-        rows = await repo.list_active(
+        rows, _total = await repo.list_active(
             min_quality=min_quality, subject=subject,
             subject_prefix=subject_prefix, since=since,
             limit=limit, offset=offset, order_by=order_by,

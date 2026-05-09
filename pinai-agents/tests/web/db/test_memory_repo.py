@@ -47,15 +47,25 @@ async def test_list_active_filters(pool, user_ids):
         repo = MemoryRepository(user_a, conn)
 
         # min_quality filters out m_lo
-        high = await repo.list_active(min_quality=0.5)
+        high, total_high = await repo.list_active(min_quality=0.5)
         ids_high = {m.id for m in high}
         assert "m_hi" in ids_high
         assert "m_work" in ids_high
         assert "m_lo" not in ids_high
+        # total tracks the filter, not the page slice — locks down the
+        # COUNT(*) OVER() contract so future filter additions don't
+        # silently desync.
+        assert total_high == len(high) == 2
 
         # subject filter
-        only_work = await repo.list_active(subject="work")
+        only_work, total_work = await repo.list_active(subject="work")
         assert {m.id for m in only_work} == {"m_work"}
+        assert total_work == 1
+
+        # pagination: total stays at the filter total even when limited.
+        page1, total_all = await repo.list_active(min_quality=0.0, limit=1, offset=0)
+        assert len(page1) == 1
+        assert total_all == 3
 
 
 @pytest.mark.asyncio
@@ -88,7 +98,7 @@ async def test_archive_and_supersede_state_machine(pool, user_ids):
     # active list should now contain only m_new
     async with user_scoped_tx(pool, user_a) as conn:
         repo = MemoryRepository(user_a, conn)
-        active = await repo.list_active(min_quality=0.0)
+        active, _ = await repo.list_active(min_quality=0.0)
         assert {m.id for m in active} == {"m_new"}
 
 

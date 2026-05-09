@@ -1,8 +1,8 @@
 """/api/composio/* — connector OAuth flow (frontend Supabase JWT auth).
 
-Wraps the Composio v3 REST API. The shared `COMPOSIO_API_KEY` env var
-authenticates pinai-agents to Composio; per-user separation comes from
-passing the user's internal id as Composio's `user_id`.
+Wraps `composio_service` for the user-facing OAuth lifecycle. Composio
+is reached via the SDK; per-user separation comes from passing each
+user's internal id (mapped to `pai-{id}`) as the SDK's `user_id`.
 
 Frontend flow:
   GET  /status      → has the env-level master key been configured?
@@ -22,13 +22,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi import status as http_status
 
 from ...auth.deps import User, current_user, get_pool
-from ...composio import (
+from ...composio_service import (
     ComposioError,
-    connect_toolkit,
+    _get_connection,
+    connect,
     disconnect,
+    evict_session,
     list_connections,
-    status,
-    wait_for_active,
+    wait_active,
 )
 from ...db.repositories.scheduled_tasks import (
     enqueue_once,
@@ -40,32 +41,37 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/composio", tags=["composio"])
 
 
-def _api_key_or_400() -> str:
-    from ....config import get_web_settings  # noqa: PLC0415
-    s = get_web_settings()
-    if not s.composio_api_key:
-        raise HTTPException(
-            status_code=http_status.HTTP_400_BAD_REQUEST,
-            detail="COMPOSIO_API_KEY not configured",
-        )
-    return s.composio_api_key
-
-
 @router.get("/status")
 async def composio_status(user: User = Depends(current_user)) -> dict:
+    """Reports whether the master Composio API key is configured. The
+    SPA gates the connect UX on this."""
     from ....config import get_web_settings  # noqa: PLC0415
+
     s = get_web_settings()
-    return await status(s.composio_api_key)
+    if not s.composio_api_key:
+        return {"configured": False, "keyPrefix": None}
+    return {"configured": True, "keyPrefix": s.composio_api_key[:6] + "…"}
 
 
 @router.get("/connections")
 async def composio_connections(user: User = Depends(current_user)) -> dict:
-    api_key = _api_key_or_400()
     try:
-        items = await list_connections(api_key, user.id)
+        items = await list_connections(user.id)
     except ComposioError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
-    return {"connections": items}
+    # Frontend shape: legacy `connections` list with snake_case from the
+    # service models converted to the camelCase the SPA expects.
+    return {
+        "connections": [
+            {
+                "toolkit": c.toolkit,
+                "status": c.status,
+                "connectedAccountId": c.connected_account_id,
+                "userInfo": c.user_info,
+            }
+            for c in items
+        ],
+    }
 
 
 @router.post("/connect")
@@ -73,11 +79,16 @@ async def composio_connect(body: dict, user: User = Depends(current_user)) -> di
     toolkit = str(body.get("toolkit") or "").strip().lower()
     if not toolkit:
         raise HTTPException(status_code=400, detail="Missing toolkit")
-    api_key = _api_key_or_400()
     try:
-        return await connect_toolkit(api_key, user.id, toolkit)
+        init = await connect(user.id, toolkit)
     except ComposioError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
+    return {
+        "toolkit": init.toolkit,
+        "status": init.status,
+        "connectedAccountId": init.connected_account_id,
+        "redirectUrl": init.redirect_url,
+    }
 
 
 @router.post("/disconnect", status_code=http_status.HTTP_204_NO_CONTENT)
@@ -87,11 +98,14 @@ async def composio_disconnect(
     cid = str(body.get("connectedAccountId") or "").strip()
     if not cid:
         raise HTTPException(status_code=400, detail="Missing connectedAccountId")
-    api_key = _api_key_or_400()
     try:
-        await disconnect(api_key, cid)
+        await disconnect(cid)
     except ComposioError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
+    # Drop any cached Tool Router session so the next chat call sees the
+    # fresh connection state (e.g. user just disconnected one of two
+    # accounts on the same toolkit).
+    await evict_session(user.id)
     return None
 
 
@@ -102,13 +116,19 @@ async def composio_wait(
     cid = str(body.get("connectedAccountId") or "").strip()
     if not cid:
         raise HTTPException(status_code=400, detail="Missing connectedAccountId")
-    api_key = _api_key_or_400()
-    result = await wait_for_active(api_key, cid)
-    if result.get("status") != "ACTIVE":
-        return {"status": result.get("status"), "connectedAccountId": cid}
+    try:
+        result = await wait_active(cid)
+    except ComposioError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    if result.status != "ACTIVE":
+        return {"status": result.status, "connectedAccountId": cid}
     # Newly active — enqueue connector.init backfill task.
-    toolkit = result.get("toolkit") or str(body.get("toolkit") or "").strip().lower()
-    init_task_id = await _enqueue_connector_init(pool, user.id, toolkit, cid) if toolkit else None
+    toolkit = result.toolkit or str(body.get("toolkit") or "").strip().lower()
+    init_task_id = (
+        await _enqueue_connector_init(pool, user.id, toolkit, cid)
+        if toolkit and toolkit != "unknown"
+        else None
+    )
     out: dict = {"status": "ACTIVE", "connectedAccountId": cid}
     if init_task_id:
         out["initTaskId"] = init_task_id
@@ -123,22 +143,15 @@ async def composio_reconnect(
     toolkit = str(body.get("toolkit") or "").strip().lower()
     if not cid:
         raise HTTPException(status_code=400, detail="Missing connectedAccountId")
-    api_key = _api_key_or_400()
-    # If toolkit not provided, ask Composio (mirrors TS plugin behavior).
     if not toolkit:
-        from ...composio import _request  # noqa: PLC0415  — internal helper reuse
+        # Fetch toolkit from Composio if caller didn't provide it.
         try:
-            account = await _request(api_key, f"/connected_accounts/{cid}")
+            conn = await _get_connection(cid)
         except ComposioError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
-        tk = account.get("toolkit") or {}
-        toolkit = str(
-            (tk.get("slug") if isinstance(tk, dict) else tk) or "",
-        ).strip().lower()
-    if not toolkit:
+        toolkit = conn.toolkit
+    if not toolkit or toolkit == "unknown":
         raise HTTPException(status_code=400, detail="Could not resolve toolkit")
-    # Reconnect = "run init again". Use requeue (atomic INSERT-or-RESET)
-    # so a prior archived row gets reactivated in one statement.
     init_task_id = await _requeue_connector_init(pool, user.id, toolkit, cid)
     if not init_task_id:
         raise HTTPException(
@@ -152,18 +165,16 @@ async def composio_reconnect(
 
 def _init_task_id(toolkit: str, connected_account_id: str) -> str:
     """Stable id for connector.init scheduled tasks. PK on
-    (user_id, id) gives us idempotency for free — same toolkit+cid maps
-    to the same row across retries / duplicate /wait calls."""
+    (user_id, id) gives idempotency for free — same toolkit+cid maps to
+    the same row across retries / duplicate /wait calls."""
     return f"init.{toolkit}.{connected_account_id}"
 
 
 async def _enqueue_connector_init(
     pool, user_id: int, toolkit: str, connected_account_id: str,
 ) -> str | None:
-    """Insert a connector.init once-shot task into pai_scheduled_tasks.
-
-    Returns the task id on success (newly inserted or pre-existing),
-    None on failure — failing the OAuth flow over a backend enqueue blip
+    """Insert a connector.init once-shot task. Returns the task id on
+    success, None on failure — failing OAuth over a backend enqueue blip
     would be hostile; reconciler / next /wait still catches it."""
     if pool is None:
         return None
@@ -181,8 +192,6 @@ async def _enqueue_connector_init(
                 user_id=user_id, task_id=task_id, kind="connector.init",
                 payload=payload, max_attempts=3,
             )
-        # Whether inserted or already-present, the deterministic id is
-        # what callers need to poll status with.
         return task_id
     except Exception as e:
         logger.warning(

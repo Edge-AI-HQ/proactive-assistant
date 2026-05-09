@@ -1,16 +1,19 @@
-"""connector.init / connector.sync handler — fetch a connector's items
-from Composio, upsert into the typed pai_raw_* tables, then enqueue a
-connector.evolve task so the LLM agent distills them into signals + memory.
+"""connector.init / connector.sync handler — drive Composio fetch via
+the recipe-based ingest_runner, upsert into typed pai_raw_* tables,
+then enqueue a connector.evolve task so the LLM agent distills them
+into signals + memory.
 
-Adapters are registered in `_ADAPTERS` (one per toolkit). Adding a new
-toolkit is a 3-step localized change:
-  1. Write `_fetch_<toolkit>` (Composio call + envelope unwrap).
-  2. Write `_upsert_<toolkit>` (insert into the typed pai_raw_* table).
-  3. Append a `ToolkitAdapter` entry to `_ADAPTERS`.
+Fetch half lives in `services/ingest_runner.py` (yaml recipe → Composio
+SDK call). This module owns the upsert half: per-toolkit
+`_upsert_<toolkit>` functions targeting the typed raw tables. Adding a
+new toolkit:
+  1. Write `db/ingest_recipes/<toolkit>.yaml` (fetch spec).
+  2. Write `_upsert_<toolkit>` here (typed-raw insert).
+  3. Append to `_UPSERTERS` map.
 
-Anything not in `_ADAPTERS` hits the "skipped (unsupported_v0)" path so
-the scheduler treats the task as done — the frontend chip shows
-"初始化跳过 · unsupported_v0" and the reconciler doesn't keep poking.
+A toolkit with a recipe but no upserter (stripe / twitter / youtube /
+linkedin in batch 1) hits the "skipped (unsupported_v0)" path until
+its upserter lands.
 
 Design notes:
   * Stage transitions are written to pai_scheduled_tasks.progress between
@@ -21,9 +24,6 @@ Design notes:
   * Failures bubble. The dispatcher's record_failure_and_decide handles
     retry/backoff. We don't catch anything here — the only catch points
     are dispatcher-level so that retries respect attempts/max_attempts.
-  * Fetcher signature accepts an optional `since: datetime` for incremental
-    sync (PR2). Init mode always passes `since=None` and adapters fall back
-    to a toolkit-natural recent window.
 """
 
 from __future__ import annotations
@@ -33,16 +33,12 @@ import logging
 import re
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import httpx
 from psycopg import AsyncConnection
 from psycopg_pool import AsyncConnectionPool
 
-from ...config import get_web_settings
-from ..composio import composio_user_id
 from ..db.repositories.connectors import ConnectorsRepository
 from ..db.repositories.scheduled_tasks import (
     ScheduledTaskRow,
@@ -50,37 +46,30 @@ from ..db.repositories.scheduled_tasks import (
     update_progress,
 )
 from ..db.rls import user_scoped_tx
+from . import ingest_runner
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_LIMIT = 100
 _MAX_LIMIT = 500
-_COMPOSIO_BASE_V3 = "https://backend.composio.dev/api/v3"
 
 # After init succeeds, we schedule a periodic connector.sync for the same
 # (toolkit, cid). 30 minutes balances freshness (chat answers feel current)
-# vs. Composio API quota (7 connectors × N users × 48 syncs/day). Tune
-# per-toolkit later if needed.
+# vs. Composio API quota (7 connectors × N users × 48 syncs/day).
+# Per-toolkit override is in the recipe's `sync_interval_hours` field —
+# but the cron itself is fixed; future versions can render the cron from
+# the recipe.
 _SYNC_CRON_EXPR = "*/30 * * * *"
 
 # First sync after init: cursor doesn't exist yet, so we look back this
 # far. Init already pulled the most recent items, so this window mostly
-# overlaps — raw-table dedupe absorbs duplicates. Set to 24h matching the
-# plugin's BOOTSTRAP_LOOKBACK_MS.
+# overlaps — raw-table dedupe absorbs duplicates.
 _BOOTSTRAP_LOOKBACK = timedelta(hours=24)
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Adapter registry
+# Upserter registry
 # ──────────────────────────────────────────────────────────────────────
-
-# Fetcher: (api_key, cx_user_id, connectedAccountId, limit, since) → list[dict]
-# `since` is optional; init mode passes None (toolkit picks a default
-# recent window), sync mode passes the cursor's last_synced_at.
-Fetcher = Callable[
-    [str, str, str, int, datetime | None],
-    Awaitable[list[dict[str, Any]]],
-]
 
 # Upserter: (conn, user_id, items) → newly-inserted count.
 Upserter = Callable[
@@ -88,20 +77,8 @@ Upserter = Callable[
     Awaitable[int],
 ]
 
-
-@dataclass(frozen=True)
-class ToolkitAdapter:
-    """One entry per supported toolkit. Bundling fetch + upsert means the
-    fetched payload shape is locked to its consumer — no implicit contract
-    drift between the two halves."""
-    toolkit: str         # canonical Composio toolkit slug (lowercase)
-    raw_table: str       # for logs/diagnostics; SQL is inside upsert
-    fetch: Fetcher
-    upsert: Upserter
-
-
-# Populated below after fetcher/upsert defs (forward-ref dance).
-_ADAPTERS: dict[str, ToolkitAdapter] = {}
+# Populated below after upsert defs (forward-ref dance).
+_UPSERTERS: dict[str, Upserter] = {}
 
 
 def _clamp_limit(value: Any) -> int:
@@ -228,17 +205,11 @@ async def _run_init(
     toolkit_raw, cid, limit = _validate_payload(task)
     user_id = task.user_id
 
-    adapter = _ADAPTERS.get(toolkit_raw)
-    if adapter is None:
+    upserter = _UPSERTERS.get(toolkit_raw)
+    recipe = ingest_runner.load_recipe(toolkit_raw)
+    if upserter is None or recipe is None or not recipe.is_ingestable():
         await _mark_skipped(pool, task, toolkit_raw, log_prefix="[connector.init]")
         return
-
-    settings = get_web_settings()
-    api_key = settings.composio_api_key
-    if not api_key:
-        msg = "COMPOSIO_API_KEY not configured"
-        raise RuntimeError(msg)
-    cx_user_id = composio_user_id(user_id)
 
     async with user_scoped_tx(pool, user_id) as conn:
         await update_progress(
@@ -246,15 +217,18 @@ async def _run_init(
             progress={"stage": "fetch", "toolkit": toolkit_raw, "limit": limit},
         )
 
-    # Init mode: since=None — adapter picks its toolkit-natural default window.
-    items = await adapter.fetch(api_key, cx_user_id, cid, limit, None)
+    # Init mode: since=None — recipe omits the cursor arg; toolkit's
+    # natural default window applies.
+    items = await ingest_runner.run_fetch(
+        user_id, toolkit_raw, cid, limit=limit, since=None,
+    )
 
     async with user_scoped_tx(pool, user_id) as conn:
         await update_progress(
             conn, user_id=user_id, task_id=task.id,
             progress={"stage": "raw", "toolkit": toolkit_raw, "fetched": len(items)},
         )
-        inserted = await adapter.upsert(conn, user_id, items)
+        inserted = await upserter(conn, user_id, items)
 
         evolve_task_id = await _enqueue_evolve(
             conn, user_id=user_id, toolkit=toolkit_raw, cid=cid,
@@ -286,25 +260,19 @@ async def _run_sync(
     task: ScheduledTaskRow,
     run_id: str,
 ) -> None:
-    """Incremental pull: cursor.last_synced_at → fetcher's `since`. On
-    raw-insert success, advances cursor to this run's start time. On
+    """Incremental pull: cursor.last_synced_at → recipe's `since` arg.
+    On raw-insert success, advances cursor to this run's start time. On
     failure (anywhere — fetch, raw, evolve enqueue), the cursor stays
     put so the next attempt re-pulls; raw dedupe absorbs the overlap."""
     toolkit_raw, cid, limit = _validate_payload(task)
     user_id = task.user_id
     started_at = datetime.now(UTC)  # cursor advances to this on success
 
-    adapter = _ADAPTERS.get(toolkit_raw)
-    if adapter is None:
+    upserter = _UPSERTERS.get(toolkit_raw)
+    recipe = ingest_runner.load_recipe(toolkit_raw)
+    if upserter is None or recipe is None or not recipe.is_ingestable():
         await _mark_skipped(pool, task, toolkit_raw, log_prefix="[connector.sync]")
         return
-
-    settings = get_web_settings()
-    api_key = settings.composio_api_key
-    if not api_key:
-        msg = "COMPOSIO_API_KEY not configured"
-        raise RuntimeError(msg)
-    cx_user_id = composio_user_id(user_id)
 
     # ── Stage: read cursor ──
     async with user_scoped_tx(pool, user_id) as conn:
@@ -326,7 +294,9 @@ async def _run_sync(
             },
         )
 
-    items = await adapter.fetch(api_key, cx_user_id, cid, limit, since)
+    items = await ingest_runner.run_fetch(
+        user_id, toolkit_raw, cid, limit=limit, since=since,
+    )
 
     # ── Stage: raw + cursor ──
     async with user_scoped_tx(pool, user_id) as conn:
@@ -334,7 +304,7 @@ async def _run_sync(
             conn, user_id=user_id, task_id=task.id,
             progress={"stage": "raw", "toolkit": toolkit_raw, "fetched": len(items)},
         )
-        inserted = await adapter.upsert(conn, user_id, items)
+        inserted = await upserter(conn, user_id, items)
         # Advance cursor to started_at (NOT now()) — captures the lower
         # bound for the *next* sync. Using now() would skip events created
         # during this run.
@@ -374,152 +344,12 @@ async def _run_sync(
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Composio fetch helpers
-# ──────────────────────────────────────────────────────────────────────
-
-
-async def _composio_execute(
-    api_key: str, slug: str, body: dict[str, Any],
-) -> dict[str, Any]:
-    """POST to Composio /tools/execute/<slug>. Returns the parsed JSON
-    body verbatim; caller unwraps via _unwrap_data_paths because the
-    envelope nesting depth varies across toolkits.
-
-    Errors include the slug + status so retries / failure logs are
-    actionable. We deliberately don't import the existing _request from
-    composio.py because that function is GET-defaulted and tied to the
-    /connected_accounts subset — keeping fetch logic close to the
-    handler avoids cross-coupling."""
-    headers = {
-        "Content-Type": "application/json",
-        "x-api-key": api_key,
-    }
-    timeout = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0)
-    async with httpx.AsyncClient(timeout=timeout) as cli:
-        resp = await cli.post(
-            f"{_COMPOSIO_BASE_V3}/tools/execute/{slug}",
-            headers=headers, json=body,
-        )
-    if not resp.is_success:
-        text = resp.text[:500]
-        msg = f"Composio /tools/execute/{slug} {resp.status_code}: {text}"
-        raise RuntimeError(msg)
-    if not resp.text.strip():
-        return {}
-    return resp.json()
-
-
-def _unwrap_data_paths(response: Any) -> list[dict[str, Any]]:
-    """Walk Composio's variable nesting. Returns candidate dicts ordered
-    deepest-first so toolkit-specific extractors find the actual payload
-    before the outer envelope. Mirrors the TS plugin's unwrapDataPaths
-    helper — Composio wraps payloads as {data:{response_dict|response_data:...}}
-    or directly as {response_data:...}."""
-    if not isinstance(response, dict):
-        return []
-    out: list[dict[str, Any]] = []
-    seen: list[int] = []
-
-    def push(v: Any) -> None:
-        if isinstance(v, dict) and id(v) not in seen:
-            out.append(v)
-            seen.append(id(v))
-
-    data = response.get("data")
-    response_data = response.get("response_data")
-    if isinstance(data, dict):
-        push(data.get("response_dict"))
-        push(data.get("response_data"))
-    if isinstance(response_data, dict):
-        push(response_data.get("response_dict"))
-        push(response_data.get("response_data"))
-    push(response.get("response_dict"))
-    push(response_data)
-    push(data)
-    push(response)
-    return out
-
-
-async def _fetch_gmail(
-    api_key: str, cx_user_id: str, cid: str, limit: int,
-    since: datetime | None = None,
-) -> list[dict[str, Any]]:
-    """GMAIL_FETCH_EMAILS with verbose=false (smaller payload, avoids the
-    413 cap that hits at ~30 messages with verbose=true) +
-    include_payload=true so the body is preserved for evolve.
-
-    Sync mode passes `since` → translated to Gmail's `q='after:<unix>'`
-    syntax (Gmail's only timestamp filter). Init mode (since=None) uses
-    Gmail's default ordering (most-recent-first) capped at `limit`."""
-    arguments: dict[str, Any] = {
-        "max_results": limit,
-        "verbose": False,
-        "include_payload": True,
-    }
-    if since is not None:
-        # Gmail's `after:` operator takes seconds-since-epoch.
-        arguments["query"] = f"after:{int(since.timestamp())}"
-    response = await _composio_execute(
-        api_key, "GMAIL_FETCH_EMAILS",
-        {
-            "user_id": cx_user_id,
-            "connected_account_id": cid,
-            "arguments": arguments,
-        },
-    )
-    for candidate in _unwrap_data_paths(response):
-        msgs = candidate.get("messages") if isinstance(candidate, dict) else None
-        if isinstance(msgs, list):
-            return [m for m in msgs if isinstance(m, dict)]
-        items = candidate.get("items") if isinstance(candidate, dict) else None
-        if isinstance(items, list):
-            return [m for m in items if isinstance(m, dict)]
-    return []
-
-
-async def _fetch_gcal(
-    api_key: str, cx_user_id: str, cid: str, limit: int,
-    since: datetime | None = None,
-) -> list[dict[str, Any]]:
-    """GOOGLECALENDAR_EVENTS_LIST primary calendar.
-
-    Init mode: ±30/+90 day window so the user sees recent past + near
-    future when the chip flips green.
-    Sync mode (`since` set): uses `updatedMin=since` so we pick up edits
-    + new events created since last sync — different from `timeMin`,
-    which would miss past events that were added/edited after creation."""
-    now = datetime.now(UTC)
-    arguments: dict[str, Any] = {
-        "calendarId": "primary",
-        "singleEvents": True,
-        "maxResults": limit,
-    }
-    if since is not None:
-        arguments["updatedMin"] = since.isoformat()
-    else:
-        arguments["timeMin"] = (now - timedelta(days=30)).isoformat()
-        arguments["timeMax"] = (now + timedelta(days=90)).isoformat()
-    response = await _composio_execute(
-        api_key, "GOOGLECALENDAR_EVENTS_LIST",
-        {
-            "user_id": cx_user_id,
-            "connected_account_id": cid,
-            "arguments": arguments,
-        },
-    )
-    for candidate in _unwrap_data_paths(response):
-        events = candidate.get("events") if isinstance(candidate, dict) else None
-        if isinstance(events, list):
-            return [e for e in events if isinstance(e, dict)][:limit]
-        items = candidate.get("items") if isinstance(candidate, dict) else None
-        if isinstance(items, list):
-            return [e for e in items if isinstance(e, dict)][:limit]
-    return []
-
-
-# ──────────────────────────────────────────────────────────────────────
 # Composio response → typed raw row mappers
 # ──────────────────────────────────────────────────────────────────────
+# Mappers (`_map_<toolkit>`) translate Composio response items into row
+# shape for the typed pai_raw_* tables. They're kept close to their
+# `_upsert_<toolkit>` consumer so contract drift between the two halves
+# is impossible. Fetch happens upstream via ingest_runner + yaml recipe.
 
 
 def _parse_address_list(value: Any) -> list[str]:
@@ -785,54 +615,6 @@ async def _upsert_gcal(
 # ──────────────────────────────────────────────────────────────────────
 
 
-async def _fetch_github(
-    api_key: str, cx_user_id: str, cid: str, limit: int,
-    since: datetime | None = None,
-) -> list[dict[str, Any]]:
-    """GITHUB_LIST_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER (note the
-    LIST_ prefix — the non-LIST form 404s).
-
-    Scope: only issues assigned to the user (high signal density per
-    user — exactly what they're being held accountable for).
-    `state='all'` includes both open and closed; `direction='desc'`
-    returns most-recently-updated first.
-
-    `since` is GitHub's native `since` param (filter on updated_at >=
-    since). Init mode (since=None) omits it for the full recent window."""
-    arguments: dict[str, Any] = {
-        "state": "all",
-        "filter": "all",
-        "per_page": limit,
-        "direction": "desc",
-    }
-    if since is not None:
-        # GitHub accepts ISO8601; strip microseconds for cleaner logs.
-        arguments["since"] = since.replace(microsecond=0).isoformat()
-    response = await _composio_execute(
-        api_key, "GITHUB_LIST_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER",
-        {
-            "user_id": cx_user_id,
-            "connected_account_id": cid,
-            "arguments": arguments,
-        },
-    )
-    # Raw GitHub API form (response.data is itself a list).
-    # _unwrap_data_paths drops non-dict values, so check it directly first.
-    if isinstance(response, dict):
-        data = response.get("data")
-        if isinstance(data, list):
-            return [m for m in data if isinstance(m, dict)][:limit]
-    # Composio wraps under data.issues (verified in plugin live tests).
-    for candidate in _unwrap_data_paths(response):
-        if not isinstance(candidate, dict):
-            continue
-        for key in ("issues", "items"):
-            v = candidate.get(key)
-            if isinstance(v, list):
-                return [m for m in v if isinstance(m, dict)][:limit]
-    return []
-
-
 _GITHUB_REPO_URL_RE = re.compile(r"repos/([^/]+/[^/]+)$")
 
 
@@ -978,84 +760,17 @@ async def _upsert_github_issues(
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Adapter registration
+# Upserter registration
 # ──────────────────────────────────────────────────────────────────────
-# Append a new ToolkitAdapter row when adding a connector. Toolkit slugs
-# must match Composio's canonical lowercase slug (e.g. "googlecalendar"
-# not "gcal" — the latter is just our raw-table prefix). Adding here is
-# the only place outside the toolkit's own fetch/upsert that needs to
-# change.
+# Pair an upsert function with a Composio toolkit slug. Slugs MUST match
+# Composio's canonical lowercase slug (e.g. "googlecalendar", not "gcal"
+# — the latter is just our raw-table prefix). Toolkits with a recipe
+# but no upserter (stripe / twitter / youtube / linkedin in batch 1)
+# fall through to "skipped (unsupported_v0)" until their upserter lands.
 
 # ──────────────────────────────────────────────────────────────────────
 # Slack
 # ──────────────────────────────────────────────────────────────────────
-
-
-async def _fetch_slack(
-    api_key: str, cx_user_id: str, cid: str, limit: int,
-    since: datetime | None = None,
-) -> list[dict[str, Any]]:
-    """SLACK_SEARCH_MESSAGES with query='*' — pulls recent messages from
-    every channel the user has access to, sorted by timestamp DESC. The
-    plugin verified this slug live 2026-04-24.
-
-    Per-channel fairness was considered (list channels then fetch
-    history per channel) but rejected: it requires Composio slugs we
-    can't verify without hitting their docs, and timestamp-ordered
-    results across channels naturally interleave busy + quiet channels
-    in a way that matches what the memory layer wants (signal-density
-    weighted).
-
-    Slack's search API has no native "since" filter — we filter
-    client-side after the response. Init mode (since=None) keeps
-    everything; sync mode trims by occurred_at."""
-    response = await _composio_execute(
-        api_key, "SLACK_SEARCH_MESSAGES",
-        {
-            "user_id": cx_user_id,
-            "connected_account_id": cid,
-            "arguments": {
-                "query": "*",
-                "count": limit,
-                "sort": "timestamp",
-                "sort_dir": "desc",
-                "include_bots": False,
-            },
-        },
-    )
-    messages = _extract_slack_messages(response)
-    if since is None:
-        return messages[:limit]
-    # Slack ts is "1234567890.123456" — seconds-since-epoch as string.
-    since_ts = since.timestamp()
-    out: list[dict[str, Any]] = []
-    for m in messages:
-        try:
-            mts = float(str(m.get("ts") or m.get("timestamp") or 0))
-        except (TypeError, ValueError):
-            continue
-        if mts >= since_ts:
-            out.append(m)
-        if len(out) >= limit:
-            break
-    return out
-
-
-def _extract_slack_messages(response: Any) -> list[dict[str, Any]]:
-    """Slack's search response wraps under messages.matches[]."""
-    for c in _unwrap_data_paths(response):
-        if not isinstance(c, dict):
-            continue
-        msgs = c.get("messages")
-        if isinstance(msgs, dict):
-            matches = msgs.get("matches")
-            if isinstance(matches, list):
-                return [m for m in matches if isinstance(m, dict)]
-        for key in ("matches", "messages", "items"):
-            v = c.get(key)
-            if isinstance(v, list):
-                return [m for m in v if isinstance(m, dict)]
-    return []
 
 
 def _slack_ts_to_datetime(ts: str) -> datetime | None:
@@ -1176,187 +891,7 @@ async def _upsert_slack_messages(
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Notion
-# ──────────────────────────────────────────────────────────────────────
-
-
-async def _fetch_notion(
-    api_key: str, cx_user_id: str, cid: str, limit: int,
-    since: datetime | None = None,
-) -> list[dict[str, Any]]:
-    """NOTION_FETCH_DATA with get_pages=true. Composio's slug expects a
-    boolean flag picker (one of get_pages/get_databases/get_all), NOT a
-    fetch_type string — the schema docs are misleading; the live error
-    is "Exactly one data fetch option must be selected".
-
-    Returns a SLIM shape: data.values: [{id, title, type}] only. No
-    last_edited_time, no body content. The mapper picks up just what's
-    there.
-
-    Notion has no `since` parameter on this endpoint; sync mode falls
-    back to client-side filtering by last_edited_time on the mapper
-    output (most pages won't have it, so we bias toward inclusion)."""
-    response = await _composio_execute(
-        api_key, "NOTION_FETCH_DATA",
-        {
-            "user_id": cx_user_id,
-            "connected_account_id": cid,
-            "arguments": {
-                "get_pages": True,
-                "page_size": limit,
-            },
-        },
-    )
-    pages = _extract_notion_pages(response)
-    return pages[:limit]
-
-
-def _extract_notion_pages(response: Any) -> list[dict[str, Any]]:
-    """Composio NOTION_FETCH_DATA returns { data: { values: [...] } }
-    primary; raw Notion API uses { results: [...] }. Accept both."""
-    for c in _unwrap_data_paths(response):
-        if not isinstance(c, dict):
-            continue
-        for key in ("values", "results", "pages", "items"):
-            v = c.get(key)
-            if isinstance(v, list):
-                return [p for p in v if isinstance(p, dict)]
-    return []
-
-
-def _extract_notion_title(page: dict[str, Any]) -> str | None:
-    """Try common title locations in order."""
-    direct = page.get("title")
-    if isinstance(direct, str) and direct.strip():
-        return direct.strip()
-    props = page.get("properties")
-    if isinstance(props, dict):
-        for key in ("title", "Title", "Name", "name"):
-            prop = props.get(key)
-            if isinstance(prop, dict):
-                arr = prop.get("title")
-                if isinstance(arr, list) and arr:
-                    head = arr[0]
-                    if isinstance(head, dict):
-                        plain = head.get("plain_text")
-                        if isinstance(plain, str) and plain.strip():
-                            return plain.strip()
-    return None
-
-
-def _map_notion_page(page: dict[str, Any]) -> dict[str, Any] | None:
-    """Notion page → pai_raw_notion_pages row.
-
-    Composio's slim shape ({id, title, type}) supplies most fields; raw
-    Notion API rich shape (with parent / icon / properties) is also
-    handled for future direct calls."""
-    raw_id = page.get("id") or page.get("page_id")
-    page_id = str(raw_id).strip() if raw_id is not None else ""
-    if not page_id:
-        return None
-
-    title = _extract_notion_title(page)
-
-    parent = page.get("parent") if isinstance(page.get("parent"), dict) else {}
-    parent_type = (
-        parent.get("type")
-        if isinstance(parent.get("type"), str)
-        else (page.get("type") if isinstance(page.get("type"), str) else None)
-    )
-    parent_id = (
-        parent.get("page_id") or parent.get("database_id")
-        if isinstance(parent.get("page_id"), str)
-        or isinstance(parent.get("database_id"), str)
-        else None
-    )
-
-    icon: str | None = None
-    icon_node = page.get("icon")
-    if isinstance(icon_node, dict):
-        icon = (
-            icon_node.get("emoji")
-            or (icon_node.get("external") or {}).get("url")
-            or (icon_node.get("file") or {}).get("url")
-        )
-        if not isinstance(icon, str):
-            icon = None
-
-    last_edited = _parse_iso(page.get("last_edited_time"))
-    created = _parse_iso(page.get("created_time"))
-    occurred = last_edited or created or datetime.now(UTC)
-    content_preview = (
-        page.get("content_preview")
-        if isinstance(page.get("content_preview"), str)
-        else None
-    )
-
-    return {
-        "page_id": page_id,
-        "title": title,
-        "url": page.get("url") if isinstance(page.get("url"), str) else None,
-        "parent_id": parent_id,
-        "parent_type": parent_type,
-        "icon": icon,
-        "last_edited_time": last_edited,
-        "created_time": created,
-        "content_preview": content_preview,
-        "archived": bool(page.get("archived")),
-        "occurred_at": occurred,
-    }
-
-
-async def _upsert_notion_pages(
-    conn: AsyncConnection, user_id: int, items: list[dict[str, Any]],
-) -> int:
-    """ON CONFLICT (user_id, page_id) DO UPDATE — Notion pages get
-    re-edited, archived, renamed; treat them like github issues
-    (mutable-by-id), not like gmail (immutable)."""
-    inserted = 0
-    for item in items:
-        mapped = _map_notion_page(item)
-        if mapped is None:
-            continue
-        row_id = _gen_raw_id()
-        dedupe = f"notion:page:{mapped['page_id']}"
-        async with conn.cursor() as cur:
-            await cur.execute(
-                """
-                INSERT INTO pai_raw_notion_pages (
-                  user_id, id, page_id, title, url, parent_id, parent_type,
-                  icon, last_edited_time, created_time, content_preview,
-                  archived, occurred_at, dedupe_key
-                ) VALUES (
-                  %s, %s, %s, %s, %s, %s, %s,
-                  %s, %s, %s, %s,
-                  %s, %s, %s
-                )
-                ON CONFLICT (user_id, page_id) DO UPDATE SET
-                  title = EXCLUDED.title,
-                  url = EXCLUDED.url,
-                  parent_id = EXCLUDED.parent_id,
-                  parent_type = EXCLUDED.parent_type,
-                  icon = EXCLUDED.icon,
-                  last_edited_time = EXCLUDED.last_edited_time,
-                  content_preview = EXCLUDED.content_preview,
-                  archived = EXCLUDED.archived,
-                  occurred_at = EXCLUDED.occurred_at
-                """,
-                (
-                    user_id, row_id,
-                    mapped["page_id"], mapped["title"], mapped["url"],
-                    mapped["parent_id"], mapped["parent_type"],
-                    mapped["icon"], mapped["last_edited_time"],
-                    mapped["created_time"], mapped["content_preview"],
-                    mapped["archived"], mapped["occurred_at"], dedupe,
-                ),
-            )
-            if (cur.rowcount or 0) > 0:
-                inserted += 1
-    return inserted
-
-
-# ──────────────────────────────────────────────────────────────────────
-# Google Drive + Google Docs (Drive metadata variants)
+# Google Drive
 # ──────────────────────────────────────────────────────────────────────
 
 
@@ -1386,45 +921,6 @@ def _flatten_drive_last_modifying_user(file: dict[str, Any]) -> str | None:
         return None
     val = lmu.get("emailAddress") or lmu.get("displayName")
     return val if isinstance(val, str) else None
-
-
-async def _fetch_gdrive(
-    api_key: str, cx_user_id: str, cid: str, limit: int,
-    since: datetime | None = None,
-) -> list[dict[str, Any]]:
-    """GOOGLEDRIVE_FIND_FILE — Drive's `q` syntax filters by modifiedTime.
-    Init mode looks back 90 days; sync mode uses the cursor's
-    last_synced_at as the lower bound. corpora=user restricts to files
-    owned/shared with the user (vs. domain-wide)."""
-    cutoff = since if since is not None else (datetime.now(UTC) - timedelta(days=90))
-    cutoff_iso = cutoff.replace(microsecond=0).isoformat()
-    response = await _composio_execute(
-        api_key, "GOOGLEDRIVE_FIND_FILE",
-        {
-            "user_id": cx_user_id,
-            "connected_account_id": cid,
-            "arguments": {
-                "q": f"modifiedTime > '{cutoff_iso}' and trashed = false",
-                "page_size": limit,
-                "spaces": "drive",
-                "corpora": "user",
-            },
-        },
-    )
-    files = _extract_drive_files(response)
-    return files[:limit]
-
-
-def _extract_drive_files(response: Any) -> list[dict[str, Any]]:
-    """Drive API: { files: [...] }. Composio wraps + sometimes nests."""
-    for c in _unwrap_data_paths(response):
-        if not isinstance(c, dict):
-            continue
-        for key in ("files", "items"):
-            v = c.get(key)
-            if isinstance(v, list):
-                return [f for f in v if isinstance(f, dict)]
-    return []
 
 
 def _map_gdrive_file(file: dict[str, Any]) -> dict[str, Any] | None:
@@ -1517,219 +1013,9 @@ async def _upsert_gdrive_files(
     return inserted
 
 
-async def _fetch_gdocs(
-    api_key: str, cx_user_id: str, cid: str, limit: int,
-    since: datetime | None = None,
-) -> list[dict[str, Any]]:
-    """GOOGLEDOCS_SEARCH_DOCUMENTS — verified live in plugin 2026-04-24.
-    Returns Drive-API rows under data.documents. Default sort
-    (`order_by='modifiedTime desc'`) matches "what has the user been
-    writing lately".
-
-    No native `since`; sync mode filters client-side after extraction."""
-    response = await _composio_execute(
-        api_key, "GOOGLEDOCS_SEARCH_DOCUMENTS",
-        {
-            "user_id": cx_user_id,
-            "connected_account_id": cid,
-            "arguments": {
-                "max_results": limit,
-                "order_by": "modifiedTime desc",
-                "include_trashed": False,
-            },
-        },
-    )
-    docs = _extract_gdocs_documents(response)
-    if since is None:
-        return docs[:limit]
-    out: list[dict[str, Any]] = []
-    for d in docs:
-        modified = _parse_iso(d.get("modifiedTime") or d.get("modified_time"))
-        if modified is None or modified >= since:
-            out.append(d)
-        if len(out) >= limit:
-            break
-    return out
-
-
-def _extract_gdocs_documents(response: Any) -> list[dict[str, Any]]:
-    """Composio docs wrap under data.documents; raw Drive API uses
-    .files. Both observed in plugin tests."""
-    for c in _unwrap_data_paths(response):
-        if not isinstance(c, dict):
-            continue
-        for key in ("documents", "files", "items"):
-            v = c.get(key)
-            if isinstance(v, list):
-                return [d for d in v if isinstance(d, dict)]
-    return []
-
-
-def _map_gdocs_document(doc: dict[str, Any]) -> dict[str, Any] | None:
-    raw_id = doc.get("id") or doc.get("document_id")
-    document_id = str(raw_id).strip() if raw_id is not None else ""
-    if not document_id:
-        return None
-
-    modified = _parse_iso(doc.get("modifiedTime") or doc.get("modified_time"))
-    created = _parse_iso(doc.get("createdTime") or doc.get("created_time"))
-    occurred = modified or created or datetime.now(UTC)
-
-    return {
-        "document_id": document_id,
-        "name": doc.get("name") if isinstance(doc.get("name"), str) else None,
-        "modified_time": modified,
-        "created_time": created,
-        "web_view_link": (
-            doc.get("webViewLink") or doc.get("web_view_link")
-            if isinstance(doc.get("webViewLink"), str)
-            or isinstance(doc.get("web_view_link"), str)
-            else None
-        ),
-        "owners": _flatten_drive_owners(doc),
-        "last_modifying_user": _flatten_drive_last_modifying_user(doc),
-        "starred": bool(doc.get("starred")),
-        "trashed": bool(doc.get("trashed")),
-        "shared": bool(doc.get("shared")),
-        "occurred_at": occurred,
-    }
-
-
-async def _upsert_gdocs_documents(
-    conn: AsyncConnection, user_id: int, items: list[dict[str, Any]],
-) -> int:
-    """ON CONFLICT (user_id, document_id) DO UPDATE — same mutability
-    semantics as gdrive."""
-    inserted = 0
-    for item in items:
-        mapped = _map_gdocs_document(item)
-        if mapped is None:
-            continue
-        row_id = _gen_raw_id()
-        dedupe = f"gdocs:doc:{mapped['document_id']}"
-        async with conn.cursor() as cur:
-            await cur.execute(
-                """
-                INSERT INTO pai_raw_gdocs_documents (
-                  user_id, id, document_id, name,
-                  modified_time, created_time, web_view_link,
-                  owners, last_modifying_user,
-                  starred, trashed, shared,
-                  occurred_at, dedupe_key
-                ) VALUES (
-                  %s, %s, %s, %s,
-                  %s, %s, %s,
-                  %s::jsonb, %s,
-                  %s, %s, %s,
-                  %s, %s
-                )
-                ON CONFLICT (user_id, document_id) DO UPDATE SET
-                  name = EXCLUDED.name,
-                  modified_time = EXCLUDED.modified_time,
-                  web_view_link = EXCLUDED.web_view_link,
-                  owners = EXCLUDED.owners,
-                  last_modifying_user = EXCLUDED.last_modifying_user,
-                  starred = EXCLUDED.starred,
-                  trashed = EXCLUDED.trashed,
-                  shared = EXCLUDED.shared,
-                  occurred_at = EXCLUDED.occurred_at
-                """,
-                (
-                    user_id, row_id,
-                    mapped["document_id"], mapped["name"],
-                    mapped["modified_time"], mapped["created_time"],
-                    mapped["web_view_link"],
-                    json.dumps(mapped["owners"]), mapped["last_modifying_user"],
-                    mapped["starred"], mapped["trashed"], mapped["shared"],
-                    mapped["occurred_at"], dedupe,
-                ),
-            )
-            if (cur.rowcount or 0) > 0:
-                inserted += 1
-    return inserted
-
-
 # ──────────────────────────────────────────────────────────────────────
 # Calendly
 # ──────────────────────────────────────────────────────────────────────
-
-
-async def _fetch_calendly(
-    api_key: str, cx_user_id: str, cid: str, limit: int,
-    since: datetime | None = None,
-) -> list[dict[str, Any]]:
-    """Two-step: CALENDLY_GET_USER (uuid='me') → CALENDLY_LIST_SCHEDULED_EVENTS.
-
-    Calendly explicitly rejects shortcuts like 'me' on /scheduled_events
-    — must pass the full user URI from /users/me. The plugin verified
-    both slugs.
-
-    Sync mode: passes `min_start_time = since` to the events list call
-    (Calendly's native filter)."""
-    user_response = await _composio_execute(
-        api_key, "CALENDLY_GET_USER",
-        {
-            "user_id": cx_user_id,
-            "connected_account_id": cid,
-            "arguments": {"uuid": "me"},
-        },
-    )
-    user_uri = _extract_calendly_user_uri(user_response)
-    if not user_uri:
-        return []
-
-    arguments: dict[str, Any] = {
-        "user": user_uri,
-        "sort": "start_time:desc",
-        "count": min(limit, 100),
-    }
-    if since is not None:
-        arguments["min_start_time"] = since.replace(microsecond=0).isoformat()
-
-    response = await _composio_execute(
-        api_key, "CALENDLY_LIST_SCHEDULED_EVENTS",
-        {
-            "user_id": cx_user_id,
-            "connected_account_id": cid,
-            "arguments": arguments,
-        },
-    )
-    return _extract_calendly_events(response)[:limit]
-
-
-def _extract_calendly_user_uri(response: Any) -> str | None:
-    """Calendly: { resource: { uri: "https://api.calendly.com/users/<uuid>" } }
-    is the canonical path; some envelopes flatten to top-level `uri`."""
-    for c in _unwrap_data_paths(response):
-        if not isinstance(c, dict):
-            continue
-        resource = c.get("resource")
-        if isinstance(resource, dict):
-            uri = resource.get("uri")
-            if (
-                isinstance(uri, str)
-                and uri.startswith("https://api.calendly.com/users/")
-            ):
-                return uri
-        uri = c.get("uri")
-        if (
-            isinstance(uri, str)
-            and uri.startswith("https://api.calendly.com/users/")
-        ):
-            return uri
-    return None
-
-
-def _extract_calendly_events(response: Any) -> list[dict[str, Any]]:
-    """Calendly: { collection: [...], pagination } per their docs."""
-    for c in _unwrap_data_paths(response):
-        if not isinstance(c, dict):
-            continue
-        for key in ("collection", "events", "items"):
-            v = c.get(key)
-            if isinstance(v, list):
-                return [e for e in v if isinstance(e, dict)]
-    return []
 
 
 def _map_calendly_event(evt: dict[str, Any]) -> dict[str, Any] | None:
@@ -1833,223 +1119,19 @@ async def _upsert_calendly_events(
     return inserted
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Todoist
-# ──────────────────────────────────────────────────────────────────────
-
-
-async def _fetch_todoist(
-    api_key: str, cx_user_id: str, cid: str, limit: int,
-    since: datetime | None = None,
-) -> list[dict[str, Any]]:
-    """TODOIST_GET_ALL_TASKS — returns all incomplete tasks. No required
-    params. Todoist API caps page size at 200; we don't paginate (>200
-    active tasks is rare; sync picks up new ones).
-
-    Todoist has no native `since`; sync mode filters client-side by
-    `created_at` from the mapper output. New + edited tasks both pass."""
-    response = await _composio_execute(
-        api_key, "TODOIST_GET_ALL_TASKS",
-        {
-            "user_id": cx_user_id,
-            "connected_account_id": cid,
-            "arguments": {"limit": min(limit, 200)},
-        },
-    )
-    tasks = _extract_todoist_tasks(response)
-    if since is None:
-        return tasks[:limit]
-    out: list[dict[str, Any]] = []
-    for t in tasks:
-        created = _parse_iso(t.get("created_at"))
-        if created is None or created >= since:
-            out.append(t)
-        if len(out) >= limit:
-            break
-    return out
-
-
-def _extract_todoist_tasks(response: Any) -> list[dict[str, Any]]:
-    """Todoist v2: { results: [...], next_cursor }; v1: top-level array
-    (response.data is itself the array — _unwrap_data_paths discards it
-    because the helper only pushes dicts, so we look at response.data
-    directly first)."""
-    if isinstance(response, dict):
-        data = response.get("data")
-        if isinstance(data, list):
-            return [t for t in data if isinstance(t, dict)]
-    for c in _unwrap_data_paths(response):
-        if not isinstance(c, dict):
-            continue
-        for key in ("results", "tasks", "items"):
-            v = c.get(key)
-            if isinstance(v, list):
-                return [t for t in v if isinstance(t, dict)]
-    return []
-
-
-def _map_todoist_task(task: dict[str, Any]) -> dict[str, Any] | None:
-    raw_id = task.get("id") or task.get("task_id")
-    task_id = str(raw_id).strip() if raw_id is not None else ""
-    if not task_id:
-        return None
-
-    # Todoist `due` is an object {date, datetime, timezone, string}; we
-    # prefer datetime when set, fall back to date (a YYYY-MM-DD string).
-    due_at: datetime | None = None
-    due = task.get("due")
-    if isinstance(due, dict):
-        dt_val = due.get("datetime")
-        if isinstance(dt_val, str) and dt_val.strip():
-            due_at = _parse_iso(dt_val)
-        else:
-            d_val = due.get("date")
-            if isinstance(d_val, str) and d_val.strip():
-                # Date-only → midnight UTC. Loses TZ info but the column
-                # is timestamptz — better than dropping the value.
-                try:
-                    due_at = datetime.fromisoformat(d_val).replace(tzinfo=UTC)
-                except ValueError:
-                    due_at = None
-
-    labels: list[str] = []
-    raw_labels = task.get("labels")
-    if isinstance(raw_labels, list):
-        labels = [s for s in raw_labels if isinstance(s, str)]
-
-    project_id_raw = task.get("project_id")
-    project_id = str(project_id_raw) if project_id_raw is not None else None
-    parent_id_raw = task.get("parent_id")
-    parent_task_id = str(parent_id_raw) if parent_id_raw is not None else None
-
-    is_completed = bool(task.get("is_completed") or task.get("completed"))
-    created_at_remote = _parse_iso(task.get("created_at"))
-    occurred = created_at_remote or due_at or datetime.now(UTC)
-
-    return {
-        "task_id": task_id,
-        "content": task.get("content") if isinstance(task.get("content"), str) else None,
-        "description": task.get("description") if isinstance(task.get("description"), str) else None,
-        "project_id": project_id,
-        "parent_task_id": parent_task_id,
-        "priority": task.get("priority") if isinstance(task.get("priority"), int) else None,
-        "labels": labels,
-        "due_at": due_at,
-        "is_completed": is_completed,
-        "created_at_remote": created_at_remote,
-        "occurred_at": occurred,
-    }
-
-
-async def _upsert_todoist_tasks(
-    conn: AsyncConnection, user_id: int, items: list[dict[str, Any]],
-) -> int:
-    """ON CONFLICT (user_id, task_id) DO UPDATE — Todoist tasks mutate
-    (priority change, completion, content edit, label add/remove)."""
-    inserted = 0
-    for item in items:
-        mapped = _map_todoist_task(item)
-        if mapped is None:
-            continue
-        row_id = _gen_raw_id()
-        dedupe = f"todoist:task:{mapped['task_id']}"
-        async with conn.cursor() as cur:
-            await cur.execute(
-                """
-                INSERT INTO pai_raw_todoist_tasks (
-                  user_id, id, task_id, content, description,
-                  project_id, parent_task_id, priority,
-                  labels, due_at, is_completed,
-                  created_at_remote, occurred_at, dedupe_key
-                ) VALUES (
-                  %s, %s, %s, %s, %s,
-                  %s, %s, %s,
-                  %s::jsonb, %s, %s,
-                  %s, %s, %s
-                )
-                ON CONFLICT (user_id, task_id) DO UPDATE SET
-                  content = EXCLUDED.content,
-                  description = EXCLUDED.description,
-                  project_id = EXCLUDED.project_id,
-                  parent_task_id = EXCLUDED.parent_task_id,
-                  priority = EXCLUDED.priority,
-                  labels = EXCLUDED.labels,
-                  due_at = EXCLUDED.due_at,
-                  is_completed = EXCLUDED.is_completed,
-                  occurred_at = EXCLUDED.occurred_at
-                """,
-                (
-                    user_id, row_id,
-                    mapped["task_id"], mapped["content"], mapped["description"],
-                    mapped["project_id"], mapped["parent_task_id"], mapped["priority"],
-                    json.dumps(mapped["labels"]), mapped["due_at"], mapped["is_completed"],
-                    mapped["created_at_remote"], mapped["occurred_at"], dedupe,
-                ),
-            )
-            if (cur.rowcount or 0) > 0:
-                inserted += 1
-    return inserted
-
-
-_ADAPTERS.update({
-    "gmail": ToolkitAdapter(
-        toolkit="gmail",
-        raw_table="pai_raw_gmail_messages",
-        fetch=_fetch_gmail,
-        upsert=_upsert_gmail,
-    ),
-    "googlecalendar": ToolkitAdapter(
-        toolkit="googlecalendar",
-        raw_table="pai_raw_gcal_events",
-        fetch=_fetch_gcal,
-        upsert=_upsert_gcal,
-    ),
-    "github": ToolkitAdapter(
-        toolkit="github",
-        raw_table="pai_raw_github_issues",
-        fetch=_fetch_github,
-        upsert=_upsert_github_issues,
-    ),
-    "slack": ToolkitAdapter(
-        toolkit="slack",
-        raw_table="pai_raw_slack_messages",
-        fetch=_fetch_slack,
-        upsert=_upsert_slack_messages,
-    ),
-    "notion": ToolkitAdapter(
-        toolkit="notion",
-        raw_table="pai_raw_notion_pages",
-        fetch=_fetch_notion,
-        upsert=_upsert_notion_pages,
-    ),
-    "googledrive": ToolkitAdapter(
-        toolkit="googledrive",
-        raw_table="pai_raw_gdrive_files",
-        fetch=_fetch_gdrive,
-        upsert=_upsert_gdrive_files,
-    ),
-    "googledocs": ToolkitAdapter(
-        toolkit="googledocs",
-        raw_table="pai_raw_gdocs_documents",
-        fetch=_fetch_gdocs,
-        upsert=_upsert_gdocs_documents,
-    ),
-    "calendly": ToolkitAdapter(
-        toolkit="calendly",
-        raw_table="pai_raw_calendly_events",
-        fetch=_fetch_calendly,
-        upsert=_upsert_calendly_events,
-    ),
-    "todoist": ToolkitAdapter(
-        toolkit="todoist",
-        raw_table="pai_raw_todoist_tasks",
-        fetch=_fetch_todoist,
-        upsert=_upsert_todoist_tasks,
-    ),
+_UPSERTERS.update({
+    "gmail": _upsert_gmail,
+    "googlecalendar": _upsert_gcal,
+    "github": _upsert_github_issues,
+    "slack": _upsert_slack_messages,
+    "googledrive": _upsert_gdrive_files,
+    "calendly": _upsert_calendly_events,
 })
 
 
 def supported_toolkits() -> frozenset[str]:
-    """Public read-only view of registered toolkit slugs. Used by tests
-    + diagnostics; not for runtime dispatch (use `_ADAPTERS.get(...)`)."""
-    return frozenset(_ADAPTERS.keys())
+    """Public read-only view of toolkits with a working upserter.
+    Used by tests + diagnostics. A toolkit must additionally have an
+    ingestable recipe (see ingest_runner.ingestable_toolkits()) for
+    end-to-end ingest to actually run."""
+    return frozenset(_UPSERTERS.keys())

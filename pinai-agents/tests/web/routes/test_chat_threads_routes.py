@@ -27,7 +27,6 @@ from pinai_agents.web.app import create_app
 from pinai_agents.web.auth import supabase_jwt as supabase_jwt_module
 from pinai_agents.web.services import chat_proxy as chat_proxy_module
 
-
 HMAC_SECRET = "test-hmac-secret-must-be-long-enough!"
 
 

@@ -15,12 +15,15 @@ from pinai_agents.chat.runtime.ctx import run_context
 from pinai_agents.chat.tools import http_client
 from pinai_agents.chat.tools.native import (
     cards_recent,
+    composio_get_tool_schemas,
+    composio_manage_connections,
+    composio_multi_execute_tool,
+    composio_search_tools,
     feedback_list,
     memory_add,
     memory_get,
     memory_list,
     memory_search,
-    personal_exec,
     profile_get,
     raw_gcal_today,
     raw_gcal_week,
@@ -180,13 +183,43 @@ async def test_feedback_list_path(mock_http, jwt_ctx):
 
 
 @pytest.mark.asyncio
-async def test_personal_exec_post(mock_http, jwt_ctx):
-    await personal_exec.ainvoke({
-        "tool": "GMAIL_CREATE_EMAIL_DRAFT",
-        "args": {"to": "x@y", "subject": "hi"},
+async def test_composio_search_tools_post(mock_http, jwt_ctx):
+    await composio_search_tools.ainvoke({
+        "queries": [{"use_case": "send a quick email to recipient"}],
     })
     call = mock_http[0]
     assert call["method"] == "POST"
-    assert call["path"] == "/api/agent/personal/exec"
-    assert call["body"]["tool"] == "GMAIL_CREATE_EMAIL_DRAFT"
-    assert call["body"]["args"] == {"to": "x@y", "subject": "hi"}
+    assert call["path"] == "/api/agent/composio/meta/SEARCH_TOOLS"
+    assert call["body"]["args"]["queries"][0]["use_case"].startswith("send")
+
+
+@pytest.mark.asyncio
+async def test_composio_get_tool_schemas_post(mock_http, jwt_ctx):
+    await composio_get_tool_schemas.ainvoke({
+        "tool_slugs": ["GMAIL_CREATE_EMAIL_DRAFT"],
+    })
+    call = mock_http[0]
+    assert call["path"] == "/api/agent/composio/meta/GET_TOOL_SCHEMAS"
+    assert call["body"]["args"]["tool_slugs"] == ["GMAIL_CREATE_EMAIL_DRAFT"]
+
+
+@pytest.mark.asyncio
+async def test_composio_multi_execute_post(mock_http, jwt_ctx):
+    await composio_multi_execute_tool.ainvoke({
+        "calls": [
+            {"tool_slug": "GMAIL_CREATE_EMAIL_DRAFT",
+             "arguments": {"to": "x@y", "subject": "hi"}},
+        ],
+    })
+    call = mock_http[0]
+    assert call["method"] == "POST"
+    assert call["path"] == "/api/agent/composio/meta/MULTI_EXECUTE_TOOL"
+    assert call["body"]["args"]["calls"][0]["tool_slug"] == "GMAIL_CREATE_EMAIL_DRAFT"
+
+
+@pytest.mark.asyncio
+async def test_composio_manage_connections_post(mock_http, jwt_ctx):
+    await composio_manage_connections.ainvoke({"toolkits": ["gmail", "gcal"]})
+    call = mock_http[0]
+    assert call["path"] == "/api/agent/composio/meta/MANAGE_CONNECTIONS"
+    assert call["body"]["args"]["toolkits"] == ["gmail", "gcal"]

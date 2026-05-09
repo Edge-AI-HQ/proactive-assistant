@@ -218,13 +218,12 @@ async def test_sweep_drops_old_expired(
         n = await sweep_expired(conn, retain_days=7)
     assert n >= 1
     # Row is gone.
-    async with service_tx(pool) as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                "SELECT 1 FROM pai_sandbox_phantom_tokens WHERE token_hash = %s",
-                (token_hash,),
-            )
-            assert await cur.fetchone() is None
+    async with service_tx(pool) as conn, conn.cursor() as cur:
+        await cur.execute(
+            "SELECT 1 FROM pai_sandbox_phantom_tokens WHERE token_hash = %s",
+            (token_hash,),
+        )
+        assert await cur.fetchone() is None
     # Silence unused-warning on the round-tripped raw value.
     assert raw.startswith(PHANTOM_PREFIX)
 

@@ -72,18 +72,23 @@ client.raw                                           # canonical entry: .list(to
   .gmail.recent(*, hours=24, limit=20) -> list       # convenience
   .gcal.today(*, hours=48, limit=20) -> list         # convenience
   # other toolkits: use .list("slack","messages"), .list("github","issues"),
-  #                 .list("notion","pages"), .list("gdrive","files"), ...
+  #                 .list("gdrive","files"), .list("calendly","events"), ...
   # client.raw.slack / .github / etc DO NOT EXIST — use .list(...)
 
 Supported (toolkit, entity) for raw.list:
-  gmail/messages, gcal/events, gdrive/files, gdocs/documents,
-  gsheets/spreadsheets, outlook/messages, dropbox/{account,files},
-  slack/messages, notion/pages, discord/guilds, github/issues,
-  jira/projects, asana/{workspaces,tasks}, trello/boards,
-  clickup/{user,workspaces}, figma/user, hubspot/contacts,
-  linkedin/{profile,organizations}, calendly/events,
-  spotify/recent_tracks, strava/activities, stripe/invoices,
-  todoist/tasks, device/{apps,contacts,health}
+  gmail/messages, gcal/events, gdrive/files, slack/messages,
+  github/issues, calendly/events, stripe/invoices,
+  twitter/bookmarks, youtube/subscriptions, linkedin/profile,
+  device/{apps,contacts,health}
+
+client.composio                                      # live SaaS access via Composio Tool Router
+  .connections() -> list                             # ACTIVE connected toolkits for the user
+  .search(query, *, toolkit=None, limit=10) -> list  # discover tool slugs by use case
+  .schema(slug) -> dict                              # full JSON schema for one slug
+  .execute(slug, args=None, *,                       # run one tool
+           connected_account_id=None) -> dict        # → {successful, data, error}
+  .multi_execute(calls, *, parallelism=8) -> list    # run many in parallel
+                                                      # calls: [{slug, args, connected_account_id?}]
 
 All methods are async — `await` everything. Errors return
 `{"error": "http_4xx", "detail": "..."}` instead of raising; check

@@ -55,6 +55,7 @@ dependencies = [
     # package (langchain_tavily) is the current home; legacy
     # `langchain_community.tools.tavily_search` is the previous gen.
     "langchain-tavily>=0.2.13",
+    "composio>=0.13.0",
 ]
 
 [dependency-groups]

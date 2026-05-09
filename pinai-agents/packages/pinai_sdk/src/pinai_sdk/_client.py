@@ -36,29 +36,18 @@ import httpx
 # raw sources exist instead of probing. Server still enforces; this is
 # advisory.
 SUPPORTED_RAW_SOURCES: dict[str, tuple[str, ...]] = {
+    # Composio toolkits (Discord is connect_only — no raw table)
     "gmail": ("messages",),
     "gcal": ("events",),
     "gdrive": ("files",),
-    "gdocs": ("documents",),
-    "gsheets": ("spreadsheets",),
-    "outlook": ("messages",),
-    "dropbox": ("account", "files"),
     "slack": ("messages",),
-    "notion": ("pages",),
-    "discord": ("guilds",),
     "github": ("issues",),
-    "jira": ("projects",),
-    "asana": ("workspaces", "tasks"),
-    "trello": ("boards",),
-    "clickup": ("user", "workspaces"),
-    "figma": ("user",),
-    "hubspot": ("contacts",),
-    "linkedin": ("profile", "organizations"),
     "calendly": ("events",),
-    "spotify": ("recent_tracks",),
-    "strava": ("activities",),
     "stripe": ("invoices",),
-    "todoist": ("tasks",),
+    "twitter": ("bookmarks",),
+    "youtube": ("subscriptions",),
+    "linkedin": ("profile",),
+    # Device (mobile sync)
     "device": ("apps", "contacts", "health"),
 }
 
@@ -495,6 +484,85 @@ class _GcalRaw:
         )
 
 
+class Composio(_Endpoint):
+    """Composio Tool Router access for SDK code-mode agents (generator /
+    dream / evolve / crystallize). Backs onto the SAME endpoints the
+    chat-process native @tools forward to, but exposes them as method
+    calls suitable for use inside a Python sandbox script.
+
+    Use cases:
+      * Live SaaS reads (fresh inbox state, just-now calendar, …) when
+        the offline-ingested raw cache isn't fresh enough.
+      * Cross-toolkit aggregation in one Python script (Gmail + GCal +
+        GitHub joined locally, distilled output piped back).
+      * Side-effect actions (send email, create event) — no per-call
+        gating yet; treat with the same care as `personal_exec`.
+    """
+
+    def __init__(self, parent: _Client) -> None:
+        super().__init__(parent, "/api/agent/composio")
+
+    async def connections(self) -> list[dict[str, Any]]:
+        """List the user's ACTIVE Composio connections."""
+        payload = await self._get("/connections")
+        if isinstance(payload, dict) and "items" in payload:
+            return payload["items"]
+        return []
+
+    async def search(
+        self,
+        query: str,
+        *,
+        toolkit: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Search Composio's tool catalog by use-case query. Returns
+        ranked tool slugs + descriptions; call .schema() for full args.
+        """
+        payload = await self._post("/search", {
+            "query": query, "toolkit": toolkit, "limit": limit,
+        })
+        if isinstance(payload, dict) and "items" in payload:
+            return payload["items"]
+        return []
+
+    async def schema(self, slug: str) -> dict[str, Any]:
+        """Fetch full input/output JSON Schema for one tool slug."""
+        return await self._get(f"/schema/{slug}")
+
+    async def execute(
+        self,
+        slug: str,
+        args: dict[str, Any] | None = None,
+        *,
+        connected_account_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Execute one Composio tool. `args` matches the tool's input
+        schema (use .schema(slug) to confirm). Errors come back inside
+        the response (`{successful: false, error: "..."}`)."""
+        return await self._post("/execute", {
+            "slug": slug,
+            "args": args or {},
+            "connected_account_id": connected_account_id,
+        })
+
+    async def multi_execute(
+        self,
+        calls: list[dict[str, Any]],
+        *,
+        parallelism: int = 8,
+    ) -> list[dict[str, Any]]:
+        """Run multiple Composio tools in parallel. Each call:
+        {slug, args, connected_account_id?}. Returns one ExecuteResult
+        per call in the same order."""
+        payload = await self._post("/multi_execute", {
+            "calls": calls, "parallelism": parallelism,
+        })
+        if isinstance(payload, dict) and "results" in payload:
+            return payload["results"]
+        return []
+
+
 class _Client:
     def __init__(self) -> None:
         self._client: httpx.AsyncClient | None = None
@@ -505,6 +573,7 @@ class _Client:
         self.feedback = Feedback(self)
         self.world = World(self)
         self.raw = Raw(self)
+        self.composio = Composio(self)
 
     def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -603,18 +672,23 @@ client.raw                                           # canonical entry: .list(to
   .gmail.recent(*, hours=24, limit=20) -> list       # convenience
   .gcal.today(*, hours=48, limit=20) -> list         # convenience
   # other toolkits: use .list("slack","messages"), .list("github","issues"),
-  #                 .list("notion","pages"), .list("gdrive","files"), ...
+  #                 .list("gdrive","files"), .list("calendly","events"), ...
   # client.raw.slack / .github / etc DO NOT EXIST — use .list(...)
 
 Supported (toolkit, entity) for raw.list:
-  gmail/messages, gcal/events, gdrive/files, gdocs/documents,
-  gsheets/spreadsheets, outlook/messages, dropbox/{account,files},
-  slack/messages, notion/pages, discord/guilds, github/issues,
-  jira/projects, asana/{workspaces,tasks}, trello/boards,
-  clickup/{user,workspaces}, figma/user, hubspot/contacts,
-  linkedin/{profile,organizations}, calendly/events,
-  spotify/recent_tracks, strava/activities, stripe/invoices,
-  todoist/tasks, device/{apps,contacts,health}
+  gmail/messages, gcal/events, gdrive/files, slack/messages,
+  github/issues, calendly/events, stripe/invoices,
+  twitter/bookmarks, youtube/subscriptions, linkedin/profile,
+  device/{apps,contacts,health}
+
+client.composio                                      # live SaaS access via Composio Tool Router
+  .connections() -> list                             # ACTIVE connected toolkits for the user
+  .search(query, *, toolkit=None, limit=10) -> list  # discover tool slugs by use case
+  .schema(slug) -> dict                              # full JSON schema for one slug
+  .execute(slug, args=None, *,                       # run one tool
+           connected_account_id=None) -> dict        # → {successful, data, error}
+  .multi_execute(calls, *, parallelism=8) -> list    # run many in parallel
+                                                      # calls: [{slug, args, connected_account_id?}]
 
 All methods are async — `await` everything. Errors return
 `{"error": "http_4xx", "detail": "..."}` instead of raising; check

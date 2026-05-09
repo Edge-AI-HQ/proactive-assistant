@@ -10,13 +10,12 @@ Validates the full security boundary the phantom-token design enforces:
 from __future__ import annotations
 
 import base64
-import os
 
 import httpx
 import pytest
 import pytest_asyncio
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from pinai_agents.web.app import create_app
 from pinai_agents.web.auth.agent_jwt import sign_agent_run_jwt

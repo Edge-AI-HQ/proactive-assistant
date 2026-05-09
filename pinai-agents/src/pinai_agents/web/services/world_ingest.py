@@ -379,6 +379,7 @@ if __name__ == "__main__":
     # Standalone entrypoint: `python -m pinai_agents.web.services.world_ingest`.
     # Useful for one-off ops triggers without spinning up the whole web app.
     import os
+
     from psycopg.rows import dict_row
     from psycopg_pool import AsyncConnectionPool
 

@@ -29,6 +29,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, status
 
 from ....shared.api_models import GenerateRequest
 from ...auth.deps import User, current_user, get_pool
+from ...db.repositories.profile import ProfileRepository
 from ...db.repositories.scheduled_tasks import enqueue_once
 from ...db.rls import user_scoped_tx
 
@@ -230,13 +231,21 @@ async def generate(
                 "asOf": datetime.now(UTC).isoformat(),
                 "deduped": True,
             }
+        # Resolve output_language: explicit body value wins (admin / A-B
+        # debug); otherwise read user's persisted setting. Fixes the case
+        # where the UI never sent the param and every run silently fell
+        # back to "en" regardless of `generation_language`.
+        output_language = body.output_language
+        if output_language is None:
+            settings = await ProfileRepository(user.id, conn).get_settings()
+            output_language = settings.generation_language
         task_id = f"gen.{uuid.uuid4().hex[:12]}"
         await enqueue_once(
             conn,
             user_id=user.id, task_id=task_id, kind="generator",
             payload={
                 "cards_to_generate": body.cards_to_generate,
-                "output_language": body.output_language,
+                "output_language": output_language,
                 "trigger": trigger,
             },
             max_attempts=2,  # keep low — generator is expensive, retry once max

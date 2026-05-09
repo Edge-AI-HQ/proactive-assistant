@@ -1,0 +1,18 @@
+toolkit: gmail
+slug: GMAIL_FETCH_EMAILS
+args_template:
+  max_results: 100
+  verbose: false
+  include_payload: true
+since_param: query
+since_format: gmail_query
+result_path: [messages]
+id_field: messageId
+sync_interval_hours: 12
+description: "User's recent inbox / sent / labelled email, payload included for evolve."
+notes: |
+  - Results NOT sorted by recency; downstream sorts by internalDate (ms epoch).
+  - verbose=false + include_payload=true is the stable combo for ~100 msgs (verbose=true blows up the payload).
+  - `after:` accepts unix seconds (avoids YYYY/MM/DD timezone day-boundary off-by-ones).
+  - Pagination via nextPageToken; concurrent calls >10 trigger 403 userRateLimitExceeded.
+  - GMAIL_LIST_MESSAGES is deprecated; GMAIL_FETCH_EMAILS is canonical.

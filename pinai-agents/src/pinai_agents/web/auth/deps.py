@@ -123,6 +123,8 @@ async def current_agent_run(
     from ..db.repositories.jti_revocations import is_revoked  # noqa: PLC0415
     from ..db.repositories.sandbox_phantom_tokens import (  # noqa: PLC0415
         PHANTOM_PREFIX,
+    )
+    from ..db.repositories.sandbox_phantom_tokens import (
         resolve as resolve_phantom,
     )
     from ..db.rls import service_tx  # noqa: PLC0415

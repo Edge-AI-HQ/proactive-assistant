@@ -1,12 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
 import { proxyFetch, proxyPost } from "@/lib/api";
+import { useUserSettings } from "@/hooks/useUserSettings";
 
+// Auto-dreaming runs daily at 06:00 UTC; the cadence is fixed in the
+// scheduler (`scheduler/dispatcher.py` auto-dreaming kind) so the UI
+// just hardcodes the same constant. If we ever expose a per-user
+// schedule, lift this back into `pai_user_settings` and the hook.
 interface AutoDreamingSchedule {
   type: "daily";
   hour: number;
   minute: number;
   timezone: string;
 }
+
+const DREAMING_SCHEDULE: AutoDreamingSchedule = {
+  type: "daily", hour: 6, minute: 0, timezone: "UTC",
+};
 
 // The backend returns snake_case keys (mirrors the dream_runs row shape).
 // Pre-Phase-2a, only the Apply buttons read these fields and the buttons
@@ -242,10 +251,8 @@ function inferRawConnectorItemCount(connectorRaw: unknown): number {
 }
 
 export default function AutoDreamingSettings() {
-  const [enabled, setEnabled] = useState(false);
-  const [schedule, setSchedule] = useState<AutoDreamingSchedule | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const { settings, loading: settingsLoading, saving, error: settingsError, patch } = useUserSettings();
+  const [runsLoading, setRunsLoading] = useState(true);
   const [startingRun, setStartingRun] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [view, setView] = useState<ViewMode>("home");
@@ -256,35 +263,31 @@ export default function AutoDreamingSettings() {
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [visibleHistoryDays, setVisibleHistoryDays] = useState(DEFAULT_VISIBLE_HISTORY_DAYS);
 
+  const enabled = settings?.autoDreaming ?? false;
+  const schedule = DREAMING_SCHEDULE;
+  const loading = settingsLoading || runsLoading;
+
   useEffect(() => {
     let mounted = true;
-
-    async function loadSettings() {
+    (async () => {
       try {
-        const res = await proxyFetch("/settings/auto-dreaming");
-        const data = await res.json() as {
-          ok: boolean;
-          enabled: boolean;
-          schedule: AutoDreamingSchedule;
-        };
-        if (!mounted) return;
-        setEnabled(Boolean(data.enabled));
-        setSchedule(data.schedule);
         const runsRes = await proxyFetch("/dreaming/runs");
         const runsData = await runsRes.json() as { ok: boolean; runs: AutoDreamingRun[] };
         if (!mounted) return;
         setRuns(runsData.runs ?? []);
       } catch {
         if (!mounted) return;
-        setError("Failed to load auto dreaming");
+        setError("Failed to load dreaming runs");
       } finally {
-        if (mounted) setLoading(false);
+        if (mounted) setRunsLoading(false);
       }
-    }
-
-    loadSettings();
+    })();
     return () => { mounted = false; };
   }, []);
+
+  useEffect(() => {
+    if (settingsError) setError(settingsError);
+  }, [settingsError]);
 
   useEffect(() => {
     if (view !== "detail" || detail?.run.status !== "running") return;
@@ -320,33 +323,14 @@ export default function AutoDreamingSettings() {
   const isHistoryDayShowingAll = (day: string): boolean => Boolean(expandedGroups[`history-all:${day}`]);
 
   const handleToggle = async () => {
-    const previous = enabled;
     const next = !enabled;
-    setEnabled(next);
-    setSaving(true);
     setError(null);
     setNotice(null);
-    try {
-      const res = await proxyPost("/settings/auto-dreaming", { enabled: next });
-      const data = await res.json() as {
-        ok: boolean;
-        enabled: boolean;
-        schedule: AutoDreamingSchedule;
-        error?: string;
-      };
-      if (!res.ok || !data.ok) {
-        setEnabled(previous);
-        setError(data.error ?? "Failed to save auto dreaming");
-        return;
-      }
-      setEnabled(Boolean(data.enabled));
-      setSchedule(data.schedule);
+    const result = await patch({ autoDreaming: next });
+    if (result) {
       setNotice(next ? "Auto Dreaming enabled." : "Auto Dreaming disabled.");
-    } catch {
-      setEnabled(previous);
-      setError("Failed to save auto dreaming");
-    } finally {
-      setSaving(false);
+    } else {
+      setError(settingsError ?? "Failed to save auto dreaming");
     }
   };
 

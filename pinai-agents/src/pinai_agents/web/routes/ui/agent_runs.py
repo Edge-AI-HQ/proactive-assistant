@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 
 from ...auth.deps import User, current_user, get_pool
 from ...db.rls import user_scoped_tx

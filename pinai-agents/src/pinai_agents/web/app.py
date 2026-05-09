@@ -31,10 +31,10 @@ from .db.pool import close_pool, open_pool
 from .middleware.audit import AgentAuditMiddleware
 from .payment.routes import router as ui_payment_router
 from .routes.agent.cards import router as agent_cards_router
+from .routes.agent.composio import router as agent_composio_router
 from .routes.agent.evolution import router as agent_evolution_router
 from .routes.agent.feedback import router as agent_feedback_router
 from .routes.agent.memory import router as agent_memory_router
-from .routes.agent.personal import router as agent_personal_router
 from .routes.agent.pipeline import router as agent_pipeline_router
 from .routes.agent.profile import router as agent_profile_router
 from .routes.agent.raw import router as agent_raw_router
@@ -43,6 +43,7 @@ from .routes.agent.signals import router as agent_signals_router
 from .routes.agent.skills import router as agent_skills_router
 from .routes.agent.state import router as agent_state_router
 from .routes.agent.world import router as agent_world_router
+from .routes.ui.agent_runs import router as ui_agent_runs_router
 from .routes.ui.browser import router as ui_browser_router
 from .routes.ui.chat import router as ui_chat_router
 from .routes.ui.composio import router as ui_composio_router
@@ -54,11 +55,10 @@ from .routes.ui.jwt_revoke import router as ui_jwt_revoke_router
 from .routes.ui.memory import router as ui_memory_router
 from .routes.ui.profile import router as ui_profile_router
 from .routes.ui.profile import settings_router as ui_settings_router
+from .routes.ui.raw import router as ui_raw_router
 from .routes.ui.runs_and_cards import router as ui_runs_router
 from .routes.ui.signals import router as ui_signals_router
 from .routes.ui.skills import router as ui_skills_router
-from .routes.ui.agent_runs import router as ui_agent_runs_router
-from .routes.ui.raw import router as ui_raw_router
 from .routes.ui.stubs import (
     crystallize_router as ui_crystallize_router,
 )
@@ -185,7 +185,7 @@ def create_app() -> FastAPI:
     app.include_router(agent_state_router)
     app.include_router(agent_profile_router)
     app.include_router(agent_skills_router)
-    app.include_router(agent_personal_router)
+    app.include_router(agent_composio_router)
     app.include_router(agent_raw_router)
     app.include_router(agent_cards_router)
     app.include_router(agent_feedback_router)

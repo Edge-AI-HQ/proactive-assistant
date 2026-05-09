@@ -176,8 +176,13 @@ class MemoryRepository(UserScopedRepository):
         limit: int = 50,
         offset: int = 0,
         order_by: str = "created_at_desc",
-    ) -> list[MemoryRow]:
+    ) -> tuple[list[MemoryRow], int]:
         """List status='active' memories with common filters.
+
+        Returns `(rows, total)` where `total` is the count of all rows
+        matching the filters BEFORE limit/offset (via `COUNT(*) OVER()`),
+        so callers can paginate without a second query and without filter
+        drift between the page query and the count query.
 
         order_by accepts: 'created_at_desc' (default) | 'quality_desc' |
         'last_referenced_desc'. Other values raise ValueError to prevent
@@ -193,7 +198,8 @@ class MemoryRepository(UserScopedRepository):
             raise ValueError(msg)
 
         sql = """
-            SELECT * FROM pai_memory
+            SELECT *, COUNT(*) OVER () AS total_count
+            FROM pai_memory
             WHERE user_id = %s
               AND status = 'active'
               AND quality >= %s
@@ -215,7 +221,15 @@ class MemoryRepository(UserScopedRepository):
                 ),
             )
             rows = await cur.fetchall()
-        return [MemoryRow.from_record(r) for r in rows]
+        # Empty page → total=0. This is technically wrong only in the
+        # "offset past end of filtered set" edge case; not worth a second
+        # query (would re-introduce filter-drift surface). Frontend
+        # paginators clamp to page 0 when total is 0, which recovers on
+        # the next refetch.
+        if not rows:
+            return [], 0
+        total = int(rows[0]["total_count"])
+        return [MemoryRow.from_record(r) for r in rows], total
 
     async def archive(self, memory_id: str) -> MemoryRow | None:
         """active → archived. No-op if already archived/superseded."""

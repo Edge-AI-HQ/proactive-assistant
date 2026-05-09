@@ -1,0 +1,16 @@
+toolkit: stripe
+slug: STRIPE_LIST_INVOICES
+args_template:
+  limit: 100
+since_param: created.gte
+since_format: stripe_nested_unix
+result_path: []
+id_field: id
+sync_interval_hours: 12
+description: "Stripe invoices created since cursor (B2B only; non-merchant users return empty)."
+notes: |
+  - **Filter is a NESTED OBJECT**: args.created = {gte: <unix>} — NOT URL-bracket form created[gte].
+  - Stripe list shape is {object:'list', data:[...], has_more, url} — Composio passes through; result_path: [] takes top-level data array.
+  - limit max 100; larger ranges use starting_after cursor pagination.
+  - Only meaningful for Stripe merchants; for non-business users this returns 0 rows on first ingest — should auto-downgrade to connect_only after N empty syncs.
+  - Companion candidates: STRIPE_LIST_CHARGES (payment events) / STRIPE_LIST_EVENTS (audit log; high noise).

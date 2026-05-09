@@ -77,7 +77,7 @@ async def list_memory(
     SDK callers."""
     async with user_scoped_tx(pool, user.id) as conn:
         repo = MemoryRepository(user.id, conn)
-        rows = await repo.list_active(
+        rows, total = await repo.list_active(
             min_quality=min_quality, subject=subject,
             subject_prefix=subject_prefix, since=since,
             limit=limit, offset=offset,
@@ -90,7 +90,7 @@ async def list_memory(
     return {
         "ok": True,
         "memories": [m.model_dump(by_alias=True, mode="json") for m in items],
-        "total": len(items),
+        "total": total,
     }
 
 

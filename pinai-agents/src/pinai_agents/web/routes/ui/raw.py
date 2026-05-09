@@ -39,33 +39,18 @@ router = APIRouter(prefix="/api/raw", tags=["raw"])
 # `fetchRawTable` (proactive-ai-frontend GoalsView RAW_SOURCE_CONFIG)
 # is the source of truth for these slugs.
 _GENERIC_RAW_SLUGS: frozenset[str] = frozenset({
+    # Composio toolkits (Discord is connect_only — no raw table)
     "gmail_messages",
     "gcal_events",
     "gdrive_files",
-    "gdocs_documents",
-    "gsheets_spreadsheets",
-    "outlook_messages",
-    "dropbox_account",
-    "dropbox_files",
     "slack_messages",
-    "notion_pages",
-    "discord_guilds",
     "github_issues",
-    "jira_projects",
-    "asana_workspaces",
-    "asana_tasks",
-    "trello_boards",
-    "clickup_user",
-    "clickup_workspaces",
-    "figma_user",
-    "hubspot_contacts",
-    "linkedin_profile",
-    "linkedin_organizations",
     "calendly_events",
-    "spotify_recent_tracks",
-    "strava_activities",
     "stripe_invoices",
-    "todoist_tasks",
+    "twitter_bookmarks",
+    "youtube_subscriptions",
+    "linkedin_profile",
+    # Device (mobile sync)
     "device_apps_snapshot",
     "device_contacts_snapshot",
     "device_health_observations",
@@ -76,9 +61,7 @@ def _row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
     """ISO-format datetime/date columns; pass everything else verbatim."""
     out: dict[str, Any] = {}
     for k, v in row.items():
-        if isinstance(v, datetime):
-            out[k] = v.isoformat()
-        elif hasattr(v, "isoformat"):  # date / time objects
+        if isinstance(v, datetime) or hasattr(v, "isoformat"):
             out[k] = v.isoformat()
         else:
             out[k] = v

@@ -9,15 +9,16 @@ Verifies the run-time invariants of incremental sync:
   * Empty syncs (inserted=0) skip the evolve enqueue.
   * `_run_init` ensures the recurring sync schedule on success.
 
-Tests use a fake toolkit registered into `_ADAPTERS` via monkeypatch so
-no real Composio calls happen. DB is real because the cursor + scheduled
-task tables are exactly what's under test.
+Tests use a fake toolkit by monkeypatching `ingest_runner.run_fetch`
+and registering an upserter for "fake" so no real Composio calls
+happen. DB is real because the cursor + scheduled task tables are
+exactly what's under test. We also stub a recipe for "fake" so the
+connector_ingest skip-check passes.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 
 import pytest
 
@@ -27,7 +28,7 @@ from pinai_agents.web.db.repositories.scheduled_tasks import (
     enqueue_once,
 )
 from pinai_agents.web.db.rls import service_tx, user_scoped_tx
-from pinai_agents.web.services import connector_ingest
+from pinai_agents.web.services import connector_ingest, ingest_runner
 
 
 def _sync_task(user_id: int, cid: str, *, task_id: str | None = None) -> ScheduledTaskRow:
@@ -64,16 +65,29 @@ def _init_task(user_id: int, cid: str) -> ScheduledTaskRow:
 
 @pytest.fixture
 def fake_adapter(monkeypatch):
-    """Register a 'fake' toolkit adapter that records its inputs and
-    returns whatever the test stages. Yields a (captures, set_items)
-    pair: `captures['since']` shows the `since` arg the fetcher saw,
-    `set_items(list)` swaps what the fetcher returns."""
+    """Stub a 'fake' toolkit so `connector_ingest._run_sync` proceeds:
+      * `ingest_runner.load_recipe('fake')` → a fake ingestable Recipe
+      * `ingest_runner.run_fetch(...)` → returns whatever the test stages
+      * `_UPSERTERS['fake']` → ack-all upserter
+
+    Returns (captures, set_items): captures['since'] shows the `since`
+    arg the runner saw; set_items(list) swaps what fetch returns."""
     state: dict = {"items": []}
     captured: dict = {}
 
-    async def fake_fetch(api_key, cx_user_id, cid, limit, since):
-        captured["api_key"] = api_key
-        captured["cx_user_id"] = cx_user_id
+    fake_recipe = ingest_runner.Recipe(
+        toolkit="fake", slug="FAKE_LIST", connect_only=False,
+    )
+
+    def fake_load_recipe(toolkit: str):
+        if toolkit == "fake":
+            return fake_recipe
+        return None
+
+    async def fake_fetch(user_id, toolkit, cid, *, limit=100, since=None):
+        if toolkit != "fake":
+            return []
+        captured["user_id"] = user_id
         captured["cid"] = cid
         captured["limit"] = limit
         captured["since"] = since
@@ -83,15 +97,9 @@ def fake_adapter(monkeypatch):
         # Ack everything; tests count via what fake_fetch returned.
         return len(items)
 
-    adapter = connector_ingest.ToolkitAdapter(
-        toolkit="fake", raw_table="pai_raw_fake",
-        fetch=fake_fetch, upsert=fake_upsert,
-    )
-    monkeypatch.setitem(connector_ingest._ADAPTERS, "fake", adapter)
-    monkeypatch.setattr(
-        connector_ingest, "get_web_settings",
-        lambda: SimpleNamespace(composio_api_key="test-key"),
-    )
+    monkeypatch.setattr(ingest_runner, "load_recipe", fake_load_recipe)
+    monkeypatch.setattr(ingest_runner, "run_fetch", fake_fetch)
+    monkeypatch.setitem(connector_ingest._UPSERTERS, "fake", fake_upsert)
 
     def set_items(items: list[dict]) -> None:
         state["items"] = items
@@ -167,6 +175,13 @@ async def test_sync_failure_leaves_cursor_untouched(pool, user_ids, monkeypatch)
     user_a, _ = user_ids
     prior = datetime(2026, 5, 1, 10, 0, 0, tzinfo=UTC)
 
+    fake_recipe = ingest_runner.Recipe(
+        toolkit="fake", slug="FAKE_LIST", connect_only=False,
+    )
+
+    def fake_load_recipe(toolkit: str):
+        return fake_recipe if toolkit == "fake" else None
+
     async def boom_fetch(*args, **kwargs):
         msg = "composio 503"
         raise RuntimeError(msg)
@@ -174,15 +189,9 @@ async def test_sync_failure_leaves_cursor_untouched(pool, user_ids, monkeypatch)
     async def noop_upsert(conn, user_id, items):
         return 0
 
-    adapter = connector_ingest.ToolkitAdapter(
-        toolkit="fake", raw_table="pai_raw_fake",
-        fetch=boom_fetch, upsert=noop_upsert,
-    )
-    monkeypatch.setitem(connector_ingest._ADAPTERS, "fake", adapter)
-    monkeypatch.setattr(
-        connector_ingest, "get_web_settings",
-        lambda: SimpleNamespace(composio_api_key="test-key"),
-    )
+    monkeypatch.setattr(ingest_runner, "load_recipe", fake_load_recipe)
+    monkeypatch.setattr(ingest_runner, "run_fetch", boom_fetch)
+    monkeypatch.setitem(connector_ingest._UPSERTERS, "fake", noop_upsert)
 
     async with user_scoped_tx(pool, user_a) as conn:
         await ConnectorsRepository(user_a, conn).set_cursor(

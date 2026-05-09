@@ -25,7 +25,7 @@ import logging
 import secrets
 from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from threading import Lock
 
 from psycopg import AsyncConnection
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 # LRU bounded to defend against an attacker spraying random tokens to
 # pin DB by hammering the cache miss path.
 _CACHE_MAX = 10_000
-_cache: OrderedDict[str, "_PhantomResolved | None"] = OrderedDict()
+_cache: OrderedDict[str, _PhantomResolved | None] = OrderedDict()
 _cache_lock = Lock()
 
 
@@ -72,7 +72,7 @@ def _generate_raw_token() -> str:
     return f"{PHANTOM_PREFIX}{secrets.token_urlsafe(32)}"
 
 
-def _cache_get(token_hash: str) -> "_PhantomResolved | None | _Sentinel":
+def _cache_get(token_hash: str) -> _PhantomResolved | None | _Sentinel:
     """Three-state result: hit-positive (resolved), hit-negative (None),
     miss (sentinel) — caller must distinguish "we cached the negative"
     from "we never looked"."""
@@ -83,7 +83,7 @@ def _cache_get(token_hash: str) -> "_PhantomResolved | None | _Sentinel":
         return _CACHE_MISS
 
 
-def _cache_put(token_hash: str, resolved: "_PhantomResolved | None") -> None:
+def _cache_put(token_hash: str, resolved: _PhantomResolved | None) -> None:
     with _cache_lock:
         _cache[token_hash] = resolved
         _cache.move_to_end(token_hash)
@@ -122,7 +122,7 @@ async def mint(
     """
     raw = _generate_raw_token()
     token_hash = _hash_token(raw)
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+    expires_at = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
     async with conn.cursor() as cur:
         await cur.execute(
             """

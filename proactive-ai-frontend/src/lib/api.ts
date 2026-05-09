@@ -768,8 +768,12 @@ export async function patchCrystallizeConfig(
 }
 
 export async function setAutoCrystallize(enabled: boolean): Promise<void> {
-  const res = await proxyPost("/settings/auto-crystallize", { enabled });
-  if (!res.ok) throw new Error(`/settings/auto-crystallize failed: ${res.status}`);
+  // Routes through the unified `/api/settings` PATCH-style endpoint.
+  // Previously POST'd to `/settings/auto-crystallize` which was never
+  // implemented on the backend (silent 404). Field name maps to the
+  // `auto_crystallize` column on `pai_user_settings`.
+  const res = await proxyPost("/settings", { autoCrystallize: enabled });
+  if (!res.ok) throw new Error(`/settings failed: ${res.status}`);
 }
 
 export async function forceCrystallizeRun(): Promise<CrystallizeRunResponse> {

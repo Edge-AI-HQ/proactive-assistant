@@ -14,16 +14,24 @@ Python invoked through it).
 
 Each tool below is a LangChain BaseTool. Most call back to web
 /api/agent/* via http_client; tavily_search calls Tavily directly;
-browser_tool drives Browserbase.
+browser_tool drives Browserbase. Composio meta-tools forward to
+/api/agent/composio/meta/{NAME} which uses a per-user Tool Router
+session to reach Composio Cloud — see
+docs/plans/2026-05-07-composio-architecture-redesign.mdx.
 """
 
 from __future__ import annotations
 
 from ...browser.tools import browser_tool
 from .cards import cards_recent
+from .composio_meta import (
+    composio_get_tool_schemas,
+    composio_manage_connections,
+    composio_multi_execute_tool,
+    composio_search_tools,
+)
 from .feedback import feedback_list
 from .memory import memory_add, memory_get, memory_list, memory_search
-from .personal_exec import personal_exec
 from .profile import goal_upsert, profile_get, profile_upsert
 from .raw import raw_gcal_today, raw_gcal_week, raw_gmail_recent, raw_list
 from .signals import signals_get, signals_recent
@@ -37,14 +45,20 @@ ALL_TOOLS = [
     signals_recent, signals_get,
     # Profile + goals (persona / trajectory) + world context
     profile_get, profile_upsert, goal_upsert, world_recent, world_search,
-    # Raw (high-frequency named tools + generic long-tail)
+    # Raw (high-frequency named tools + generic long-tail). These read
+    # the offline-ingested raw tables (gmail / gcal / etc.) — for
+    # FRESH SaaS data the model goes through the Composio meta-tools.
     raw_gmail_recent, raw_gcal_today, raw_gcal_week, raw_list,
     # Cards + feedback (recency-bounded reference)
     cards_recent, feedback_list,
     # Web search (Tavily)
     tavily_search,
-    # Side-effect surface
-    personal_exec,
+    # Composio Tool Router meta-tools (discovery + execution across
+    # 1000+ SaaS apps in one constant-token surface).
+    composio_search_tools,
+    composio_get_tool_schemas,
+    composio_multi_execute_tool,
+    composio_manage_connections,
     # Stateful + escalation. Code execution comes from DeepAgents
     # middleware (`execute` / `write_file` / etc.), not this list.
     browser_tool,
@@ -55,13 +69,16 @@ __all__ = [
     "ALL_TOOLS",
     "browser_tool",
     "cards_recent",
+    "composio_get_tool_schemas",
+    "composio_manage_connections",
+    "composio_multi_execute_tool",
+    "composio_search_tools",
     "feedback_list",
     "goal_upsert",
     "memory_add",
     "memory_get",
     "memory_list",
     "memory_search",
-    "personal_exec",
     "profile_get",
     "profile_upsert",
     "raw_gcal_today",

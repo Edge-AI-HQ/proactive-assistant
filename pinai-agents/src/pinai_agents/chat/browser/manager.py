@@ -29,9 +29,11 @@ from playwright.async_api import (
     Browser,
     BrowserContext,
     ConsoleMessage,
-    Error as PlaywrightError,
     Page,
     async_playwright,
+)
+from playwright.async_api import (
+    Error as PlaywrightError,
 )
 
 from ...shared.sse_envelope import (

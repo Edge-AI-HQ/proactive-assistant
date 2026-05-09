@@ -4,17 +4,86 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import asdict
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, status
+from psycopg import AsyncConnection
 
 from ....shared.api_models import (
     GoalUpsertRequest,
     ProfileResponse,
+    SettingsResponse,
     SettingsUpdateRequest,
 )
 from ...auth.deps import User, current_user, get_pool
-from ...db.repositories.profile import ProfileRepository
+from ...db.repositories.profile import ProfileRepository, UserSettingsRow
+from ...db.repositories.scheduled_tasks import ScheduledTasksRepository
 from ...db.rls import user_scoped_tx
+
+
+def _auto_generate_task_id(user_id: int) -> str:
+    return f"gen.auto.{user_id}"
+
+
+async def _sync_auto_generate_schedule(
+    conn: AsyncConnection, *, user_id: int, settings: UserSettingsRow,
+) -> None:
+    """Reflect (auto_generate, interval, generation_language) into the
+    recurring `generator` schedule task. One row per user, idempotent.
+    Disabled = status='archived' so the tick loop skips it but we don't
+    lose the row's history. Called unconditionally on settings updates —
+    cheap, and it's the only place that owns the schedule's payload
+    (output_language) so any settings change must re-stamp it.
+    """
+    task_id = _auto_generate_task_id(user_id)
+    if settings.auto_generate:
+        interval_seconds = settings.auto_generate_interval_minutes * 60
+        await ScheduledTasksRepository(user_id, conn).upsert(
+            id=task_id, kind="generator", trigger_kind="schedule",
+            interval_seconds=interval_seconds,
+            next_run_at=datetime.now(UTC) + timedelta(seconds=interval_seconds),
+            payload={
+                "cards_to_generate": 4,
+                "output_language": settings.generation_language,
+                "trigger": "auto",
+            },
+            status="active",
+        )
+    else:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "UPDATE pai_scheduled_tasks "
+                "SET status='archived', next_run_at=NULL, updated_at=NOW() "
+                "WHERE user_id=%s AND id=%s",
+                (user_id, task_id),
+            )
+
+
+async def _ensure_auto_generate_schedule(
+    conn: AsyncConnection, *, user_id: int, settings: UserSettingsRow,
+) -> None:
+    """Read-path counterpart to `_sync_auto_generate_schedule`: only acts
+    when the schedule task row is missing for an enabled user. Used on
+    GET so brand-new users (lazy-created settings row from DB DEFAULTs
+    = ON / 12h) actually get a schedule, without bumping `next_run_at`
+    on every page refresh — that would push the fire indefinitely.
+    """
+    if not settings.auto_generate:
+        return
+    task_id = _auto_generate_task_id(user_id)
+    async with conn.cursor() as cur:
+        await cur.execute(
+            "SELECT 1 FROM pai_scheduled_tasks WHERE user_id=%s AND id=%s",
+            (user_id, task_id),
+        )
+        if await cur.fetchone() is not None:
+            return
+    await _sync_auto_generate_schedule(conn, user_id=user_id, settings=settings)
+
+
+def _settings_response(row: UserSettingsRow) -> SettingsResponse:
+    return SettingsResponse(**asdict(row))
+
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 
@@ -29,10 +98,13 @@ async def get_profile_snapshot(
         profile = await repo.get_profile()
         goals = await repo.list_goals()
         settings = await repo.get_settings()
+        await _ensure_auto_generate_schedule(
+            conn, user_id=user.id, settings=settings,
+        )
     return ProfileResponse(
         profile=asdict(profile) if profile else None,
         goals=[asdict(g) for g in goals],
-        settings=asdict(settings) if settings else None,
+        settings=_settings_response(settings),
     )
 
 
@@ -81,117 +153,45 @@ async def close_goal(
 settings_router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
-@settings_router.get("")
+@settings_router.get("", response_model=SettingsResponse)
 async def get_settings(
     user: User = Depends(current_user),
     pool=Depends(get_pool),
 ):
+    """Single source for all user settings — frontend reads here, then
+    PATCHes individual toggles via POST. Per-key endpoints used to exist
+    (`/auto-generate`, `/auto-dreaming`, `/generation-language`) but
+    each invented its own wire shape; collapsing to one resource removes
+    that drift class. Auto-crystallize toggle (`useCrystallize.toggleAuto`)
+    also routes here.
+    """
     async with user_scoped_tx(pool, user.id) as conn:
-        repo = ProfileRepository(user.id, conn)
-        s = await repo.get_settings()
-    return asdict(s) if s else {}
+        s = await ProfileRepository(user.id, conn).get_settings()
+        await _ensure_auto_generate_schedule(conn, user_id=user.id, settings=s)
+    return _settings_response(s)
 
 
-@settings_router.post("")
+@settings_router.post("", response_model=SettingsResponse)
 async def update_settings(
     body: SettingsUpdateRequest,
     user: User = Depends(current_user),
     pool=Depends(get_pool),
 ):
+    """Partial update — only fields present in the body change.
+
+    `_sync_auto_generate_schedule` runs unconditionally because changing
+    `generation_language` alone must re-stamp the schedule payload's
+    `output_language` field. The sync is one upsert/update either way.
+    """
     async with user_scoped_tx(pool, user.id) as conn:
         repo = ProfileRepository(user.id, conn)
         row = await repo.upsert_settings(
             generation_language=body.generation_language,
             auto_generate=body.auto_generate,
+            auto_generate_interval_minutes=body.auto_generate_interval_minutes,
             auto_dreaming=body.auto_dreaming,
             auto_crystallize=body.auto_crystallize,
             metadata=body.metadata,
         )
-    return asdict(row)
-
-
-@settings_router.get("/auto-generate")
-async def get_auto_generate(
-    user: User = Depends(current_user),
-    pool=Depends(get_pool),
-):
-    async with user_scoped_tx(pool, user.id) as conn:
-        repo = ProfileRepository(user.id, conn)
-        s = await repo.get_settings()
-    return {"autoGenerate": bool(s.auto_generate) if s else False}
-
-
-@settings_router.post("/auto-generate")
-async def set_auto_generate(
-    body: dict,
-    user: User = Depends(current_user),
-    pool=Depends(get_pool),
-):
-    val = bool(body.get("autoGenerate") or body.get("auto_generate"))
-    async with user_scoped_tx(pool, user.id) as conn:
-        repo = ProfileRepository(user.id, conn)
-        await repo.upsert_settings(auto_generate=val)
-    return {"autoGenerate": val}
-
-
-@settings_router.get("/generation-language")
-async def get_generation_language(
-    user: User = Depends(current_user),
-    pool=Depends(get_pool),
-):
-    async with user_scoped_tx(pool, user.id) as conn:
-        repo = ProfileRepository(user.id, conn)
-        s = await repo.get_settings()
-    return {
-        "generationLanguage": (s.generation_language if s else "zh-Hans"),
-        "options": ["en", "zh-Hans"],
-    }
-
-
-@settings_router.post("/generation-language")
-async def set_generation_language(
-    body: dict,
-    user: User = Depends(current_user),
-    pool=Depends(get_pool),
-):
-    lang = body.get("generationLanguage") or body.get("generation_language") or "zh-Hans"
-    async with user_scoped_tx(pool, user.id) as conn:
-        repo = ProfileRepository(user.id, conn)
-        await repo.upsert_settings(generation_language=lang)
-    return {"generationLanguage": lang}
-
-
-# Auto-dreaming runs every 24h via scheduler; the schedule itself is
-# fixed (06:00 UTC) so the wire shape is mostly the boolean toggle.
-# Frontend AutoDreamingSettings reads `{ok, enabled, schedule}`.
-_DREAMING_SCHEDULE = {
-    "type": "daily", "hour": 6, "minute": 0, "timezone": "UTC",
-}
-
-
-@settings_router.get("/auto-dreaming")
-async def get_auto_dreaming(
-    user: User = Depends(current_user),
-    pool=Depends(get_pool),
-):
-    async with user_scoped_tx(pool, user.id) as conn:
-        repo = ProfileRepository(user.id, conn)
-        s = await repo.get_settings()
-    return {
-        "ok": True,
-        "enabled": bool(s.auto_dreaming) if s else False,
-        "schedule": _DREAMING_SCHEDULE,
-    }
-
-
-@settings_router.post("/auto-dreaming")
-async def set_auto_dreaming(
-    body: dict,
-    user: User = Depends(current_user),
-    pool=Depends(get_pool),
-):
-    val = bool(body.get("enabled") or body.get("autoDreaming") or body.get("auto_dreaming"))
-    async with user_scoped_tx(pool, user.id) as conn:
-        repo = ProfileRepository(user.id, conn)
-        await repo.upsert_settings(auto_dreaming=val)
-    return {"ok": True, "enabled": val, "schedule": _DREAMING_SCHEDULE}
+        await _sync_auto_generate_schedule(conn, user_id=user.id, settings=row)
+    return _settings_response(row)

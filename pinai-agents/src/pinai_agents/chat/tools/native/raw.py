@@ -6,9 +6,9 @@ Two patterns:
    `raw_gcal_week`) — well-named for the LLM, default time windows tuned
    to common chat questions.
 2. Generic `raw_list(toolkit, entity)` — covers the long tail
-   (slack / notion / gdrive / github / outlook / device / spotify / strava
-   / etc.). Server-side allowlist in `web/routes/agent/raw.py:_RAW_TABLES`
-   is the source of truth for valid (toolkit, entity) pairs.
+   (slack / gdrive / github / device / etc.). Server-side allowlist in
+   `web/routes/agent/raw.py:_RAW_TABLES` is the source of truth for
+   valid (toolkit, entity) pairs.
 
 Wire detail: backend `/api/agent/raw/{toolkit}/{entity}` accepts `since`
 (ISO-8601 datetime), not `hours` — wrappers convert before sending.
@@ -74,13 +74,9 @@ async def raw_gcal_week(hours: int, limit: int):
 # tool description so the LLM knows what's valid; server still 404s on
 # invalid pairs as the real gate.
 _RAW_VALID_PAIRS = (
-    "gmail/messages, gcal/events, gdrive/files, gdocs/documents, "
-    "gsheets/spreadsheets, outlook/messages, dropbox/files, "
-    "slack/messages, notion/pages, github/issues, jira/projects, "
-    "asana/tasks, trello/boards, clickup/workspaces, figma/user, "
-    "hubspot/contacts, linkedin/profile, "
-    "calendly/events, spotify/recent_tracks, strava/activities, "
-    "stripe/invoices, todoist/tasks, "
+    "gmail/messages, gcal/events, gdrive/files, slack/messages, "
+    "github/issues, calendly/events, stripe/invoices, "
+    "twitter/bookmarks, youtube/subscriptions, linkedin/profile, "
     "device/apps, device/contacts, device/health"
 )
 
@@ -89,8 +85,8 @@ class RawListGenericInput(BaseModel):
     toolkit: str = Field(
         min_length=1, max_length=40,
         description=(
-            "Connector toolkit (e.g. 'slack', 'notion', 'gdrive', 'github', "
-            "'outlook'). See description for valid pairs."
+            "Connector toolkit (e.g. 'slack', 'gdrive', 'github', "
+            "'calendly'). See description for valid pairs."
         ),
     )
     entity: str = Field(

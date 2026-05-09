@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
 
 from ...auth.deps import AgentRun, current_agent_run, get_pool
 from ...db.repositories.world_signals import WorldSignalsRepository

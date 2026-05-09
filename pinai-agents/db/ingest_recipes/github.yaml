@@ -1,0 +1,18 @@
+toolkit: github
+slug: GITHUB_LIST_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER
+args_template:
+  state: "all"
+  filter: "all"
+  direction: "desc"
+  per_page: 100
+since_param: since
+since_format: iso
+result_path: [issues]
+id_field: id
+sync_interval_hours: 12
+description: "Issues + PRs the user is involved in (assigned/created/mentioned/subscribed)."
+notes: |
+  - Slug MUST include the LIST_ prefix; the non-LIST variant 404s.
+  - Each item has `pull_request` field distinguishing PRs from issues.
+  - Body can be huge; downstream truncates to ~800 chars for preview.
+  - Labels can be objects {name} or strings; assignees are {login} objects — mapper handles both.

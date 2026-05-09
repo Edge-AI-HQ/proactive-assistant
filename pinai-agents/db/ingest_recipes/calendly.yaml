@@ -1,0 +1,22 @@
+toolkit: calendly
+slug: CALENDLY_LIST_SCHEDULED_EVENTS
+prereqs:
+  - slug: CALENDLY_GET_USER
+    args: {uuid: "me"}
+    inject_arg: user
+    inject_path: [resource, uri]
+args_template:
+  sort: "start_time:desc"
+  count: 100
+  status: "active"
+since_param: min_start_time
+since_format: iso
+result_path: [collection]
+id_field: uri
+sync_interval_hours: 12
+description: "User's Calendly scheduled meetings (event_memberships includes hosts, not invitees)."
+notes: |
+  - Two-step: GET_USER(uuid='me') first to resolve user URI; inject as `user` arg.
+  - Invitee details (name, email) live at /scheduled_events/{uuid}/invitees — N+1; fetch on-demand only.
+  - id_field is the full URI (not bare uuid).
+  - Pagination via page_token (NOT cursor); OAuth2 only.

@@ -1,0 +1,18 @@
+toolkit: youtube
+slug: YOUTUBE_LIST_USER_SUBSCRIPTIONS
+args_template:
+  mine: true
+  part: "snippet,contentDetails"
+  maxResults: 50
+since_param: null
+since_format: null
+result_path: [items]
+id_field: id
+sync_interval_hours: 168
+description: "Channels the user subscribes to (taste graph snapshot, no incremental cursor)."
+notes: |
+  - Google removed watch history from the Data API in 2024 — there's no per-user watch endpoint.
+  - No publishedAfter on subscriptions; full re-pull every cycle, raw.dedupe_key absorbs.
+  - Real downstream value is snippet.resourceId.channelId (use that as the join key, not subscription id).
+  - "Latest uploads from subscribed channels" wants YOUTUBE_GET_CHANNEL_ACTIVITIES + publishedAfter — N+1 per channel; agent calls on-demand, not in batch ingest.
+  - Default Composio shared OAuth has tight quota; production needs custom YouTube Data API credentials.

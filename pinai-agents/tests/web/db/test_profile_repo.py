@@ -140,16 +140,35 @@ async def test_settings_upsert_partial_fields(pool, user_ids):
         repo = ProfileRepository(user_a, conn)
         s1 = await repo.upsert_settings(generation_language="zh-Hans")
     assert s1.generation_language == "zh-Hans"
-    assert s1.auto_generate is False  # default
+    assert s1.auto_generate is True  # default (038)
     assert s1.auto_crystallize is True  # default
+    assert s1.auto_generate_interval_minutes == 720  # default (038)
 
-    # Toggle just auto_generate; other fields should stay put.
+    # Toggle just auto_generate off; other fields should stay put.
     async with user_scoped_tx(pool, user_a) as conn:
         repo = ProfileRepository(user_a, conn)
-        s2 = await repo.upsert_settings(auto_generate=True)
-    assert s2.auto_generate is True
+        s2 = await repo.upsert_settings(auto_generate=False)
+    assert s2.auto_generate is False
     assert s2.generation_language == "zh-Hans"  # preserved
     assert s2.auto_crystallize is True  # preserved
+
+
+@pytest.mark.asyncio
+async def test_settings_lazy_create_returns_defaults(pool, user_ids):
+    """`get_settings` is the single entry point — it lazy-creates on first
+    read so callers never need a `None` branch and DB column DEFAULTs are
+    the only source of truth for initial values."""
+    user_a, _ = user_ids
+    async with user_scoped_tx(pool, user_a) as conn:
+        repo = ProfileRepository(user_a, conn)
+        s = await repo.get_settings()
+    # Column defaults from 010_pai_core_state.sql + 037_*.sql + 038_*.sql
+    assert s.generation_language == "zh-Hans"
+    assert s.auto_generate is True
+    assert s.auto_generate_interval_minutes == 720
+    assert s.auto_dreaming is False
+    assert s.auto_crystallize is True
+    assert s.metadata == {}
 
 
 @pytest.mark.asyncio

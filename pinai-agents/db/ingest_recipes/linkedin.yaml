@@ -1,0 +1,15 @@
+toolkit: linkedin
+slug: LINKEDIN_GET_MY_INFO
+args_template: {}
+since_param: null
+since_format: null
+result_path: []
+id_field: id
+sync_interval_hours: 720
+description: "User's LinkedIn profile (identity signal — title, company, education)."
+notes: |
+  - LinkedIn public API is heavily restricted; Composio's 22 actions cover only profile + org_admin (no feed/posts/messages/notifications).
+  - Single-object response (not array); downstream wraps as [profile] before insert.
+  - Companion candidate: LINKEDIN_GET_COMPANY_INFO (orgs the user admins) — same sync_interval; result_path: [elements], id_field: organizationalTarget URN.
+  - Scope conflict: w_member_social + r_organization_admin can't coexist; default OAuth grants only profile + org-info read.
+  - Production should bring its own LinkedIn OAuth app — Composio's shared app has tight rate limits.

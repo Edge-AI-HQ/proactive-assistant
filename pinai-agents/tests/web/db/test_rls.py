@@ -57,7 +57,7 @@ async def test_repository_user_id_invariant(pool, user_ids):
         got = await repo_b.get("mem_a_only")
         assert got is None
         # B's own list of active memories should not include A's row
-        rows = await repo_b.list_active(min_quality=0.0)
+        rows, _ = await repo_b.list_active(min_quality=0.0)
         assert all(r.id != "mem_a_only" for r in rows)
 
 

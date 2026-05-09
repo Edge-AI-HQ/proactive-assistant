@@ -120,10 +120,29 @@ class PersonalSignalConsumeRequest(_CamelModel):
 
 
 # ── Profile / Goals / Settings ──
+# Generation language whitelist — server bound, frontend mirrors this in
+# `types/intent-card.ts:GENERATION_LANGUAGE_OPTIONS`. Keep in sync.
+SupportedLanguage = Literal[
+    "en", "zh-Hans", "ja", "ko", "es", "fr", "de", "pt",
+]
+
+
+class SettingsResponse(_CamelModel):
+    """User-settings wire shape — typed counterpart to UserSettingsRow."""
+
+    generation_language: SupportedLanguage
+    auto_generate: bool
+    auto_generate_interval_minutes: int
+    auto_dreaming: bool
+    auto_crystallize: bool
+    metadata: dict[str, Any]
+    updated_at: datetime
+
+
 class ProfileResponse(_CamelModel):
     profile: dict[str, Any] | None
     goals: list[dict[str, Any]]
-    settings: dict[str, Any] | None
+    settings: SettingsResponse | None
 
 
 class GoalUpsertRequest(_CamelModel):
@@ -151,8 +170,9 @@ class ProfileUpsertRequest(_CamelModel):
 
 
 class SettingsUpdateRequest(_CamelModel):
-    generation_language: str | None = None
+    generation_language: SupportedLanguage | None = None
     auto_generate: bool | None = None
+    auto_generate_interval_minutes: int | None = Field(default=None, ge=15, le=1440)
     auto_dreaming: bool | None = None
     auto_crystallize: bool | None = None
     metadata: dict[str, Any] | None = None
@@ -166,7 +186,9 @@ class AppStateValue(_CamelModel):
 # ── Generate / Run ──
 class GenerateRequest(_CamelModel):
     cards_to_generate: int = Field(default=8, ge=1, le=10)
-    output_language: str = "en"
+    # None → fall back to user's `generation_language` setting at the
+    # route boundary. Explicit value (admin / A-B / debug) overrides.
+    output_language: SupportedLanguage | None = None
 
 
 class GenerateResponse(_CamelModel):

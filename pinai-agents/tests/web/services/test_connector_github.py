@@ -132,22 +132,16 @@ async def test_github_sync_inserts_then_state_flip_updates(
         },
     ]}
 
-    async def fake_fetch(api_key, cx_user_id, cid, limit, since):
-        return list(state["items"])
+    from pinai_agents.web.services import ingest_runner
 
-    # Override only the fetcher, keep the real upsert against the DB.
-    real = connector_ingest._ADAPTERS["github"]
-    monkeypatch.setitem(
-        connector_ingest._ADAPTERS, "github",
-        connector_ingest.ToolkitAdapter(
-            toolkit="github", raw_table="pai_raw_github_issues",
-            fetch=fake_fetch, upsert=real.upsert,
-        ),
-    )
-    monkeypatch.setattr(
-        connector_ingest, "get_web_settings",
-        lambda: SimpleNamespace(composio_api_key="test-key"),
-    )
+    async def fake_fetch(user_id, tk, cid, *, limit=100, since=None):
+        if tk == "github":
+            return list(state["items"])
+        return []
+
+    # Override only the fetcher; the real upserter still runs against the DB.
+    monkeypatch.setattr(ingest_runner, "run_fetch", fake_fetch)
+    _ = SimpleNamespace
 
     async with user_scoped_tx(pool, user_a) as conn:
         await enqueue_once(
@@ -192,8 +186,7 @@ async def test_github_sync_inserts_then_state_flip_updates(
 
 
 @pytest.mark.asyncio
-async def test_github_registered_as_supported(monkeypatch):
-    """Smoke: registry resolves and adapter shape is intact."""
+async def test_github_registered_as_supported():
+    """Smoke: registry resolves and points at the github upserter."""
     assert "github" in connector_ingest.supported_toolkits()
-    adapter = connector_ingest._ADAPTERS["github"]
-    assert adapter.raw_table == "pai_raw_github_issues"
+    assert connector_ingest._UPSERTERS["github"] is connector_ingest._upsert_github_issues

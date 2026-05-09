@@ -1,0 +1,18 @@
+toolkit: googledrive
+slug: GOOGLEDRIVE_FIND_FILE
+args_template:
+  spaces: "drive"
+  corpora: "user"
+  page_size: 100
+  orderBy: "modifiedTime desc"
+since_param: q
+since_format: gdrive_query
+result_path: [files]
+id_field: id
+sync_interval_hours: 12
+description: "User's recently modified / shared Drive files (excluding trash and folders)."
+notes: |
+  - There is no separate GOOGLEDRIVE_LIST_FILES; FIND_FILE is the unified list+search entry.
+  - q is Drive query DSL: combine with `and trashed = false` / `and mimeType != 'application/vnd.google-apps.folder'`.
+  - For docs / sheets only, use GOOGLEDOCS_SEARCH_DOCUMENTS / GOOGLESHEETS_SEARCH_SPREADSHEETS (same DSL).
+  - Pagination via pageToken (opaque string).

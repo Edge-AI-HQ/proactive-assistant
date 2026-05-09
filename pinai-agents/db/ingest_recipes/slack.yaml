@@ -1,0 +1,20 @@
+toolkit: slack
+slug: SLACK_SEARCH_MESSAGES
+args_template:
+  query: "*"
+  count: 100
+  sort: "timestamp"
+  sort_dir: "desc"
+  include_bots: false
+since_param: query
+since_format: slack_query
+result_path: [messages, matches]
+id_field: ts
+sync_interval_hours: 12
+description: "Workspace messages reachable to the user (DMs + member channels), full-query sweep."
+notes: |
+  - `after:` granularity is per-day; cursor logic should subtract 1 day to avoid boundary loss; raw dedupe absorbs overlap.
+  - Real uniqueness is (channel.id, ts), not ts alone — dedupe_key in raw must combine both.
+  - Output shape differs from SLACK_FETCH_CONVERSATION_HISTORY: search nests channel as {id,name}, history returns flat strings — mapper handles both.
+  - Private channels / DMs only return when the authenticated user is a member.
+  - Use SLACKBOT_* for bot-token scenarios; we use user-token Slack toolkit.

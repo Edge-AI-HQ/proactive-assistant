@@ -38,7 +38,6 @@ from ...services.chat_proxy import (
     stream_chat,
 )
 
-
 _CARD_THREAD_PREFIX = "card-thread-"
 
 

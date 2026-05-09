@@ -46,16 +46,6 @@ def test_clamp_limit_defaults_and_bounds():
     assert connector_ingest._clamp_limit(42) == 42
 
 
-def test_unwrap_data_paths_handles_nested_envelopes():
-    response = {
-        "data": {"response_data": {"messages": ["a"]}},
-        "response_data": {"messages": ["b"]},
-    }
-    candidates = connector_ingest._unwrap_data_paths(response)
-    # First candidate is the deepest data.response_data
-    assert candidates[0] == {"messages": ["a"]}
-
-
 def test_map_gmail_message_basic():
     raw = {
         "id": "abc123",

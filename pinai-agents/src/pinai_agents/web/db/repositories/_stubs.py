@@ -48,9 +48,10 @@ class TasksRepository(UserScopedRepository):
 
 
 class RawRepository(UserScopedRepository):
-    """Generic reader for the 33 typed pai_raw_* tables.
-    Step C-raw — likely a single .list(toolkit, entity, **filters) method
-    that builds SQL by table-name resolution from a static map."""
+    """Generic reader for the typed pai_raw_* tables (10 Composio + 3 device
+    after the 11-toolkit scope trim in migration 036). Step C-raw — likely
+    a single .list(toolkit, entity, **filters) method that builds SQL by
+    table-name resolution from a static map."""
 
 
 class WorldFeedRepository(UserScopedRepository):

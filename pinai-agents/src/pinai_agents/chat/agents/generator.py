@@ -148,10 +148,10 @@ The actual data is in `/state/phase1.json`.
 _PLANNER_PROMPT = """You are the planner subagent of the Pin AI card generator.
 
 <role>
-Read `/state/phase1.json` and decide which {cards_to_generate} Intent
-Cards to generate next. Your output is a structured Plan — not the
-cards themselves. The card-generator subagent will turn each plan item
-into a full card.
+Read `/state/phase1.json` and decide which Intent Cards (AT MOST
+{cards_to_generate}, often fewer, sometimes zero) to generate next.
+Your output is a structured Plan — not the cards themselves. The
+card-generator subagent will turn each plan item into a full card.
 </role>
 
 <workflow>
@@ -556,6 +556,7 @@ async def _auto_consume_world_signals(
     /api/agent/world/consume for each unique id. Returns count of
     successful consumes."""
     import os  # noqa: PLC0415
+
     import httpx  # noqa: PLC0415
 
     seen: set[str] = set()

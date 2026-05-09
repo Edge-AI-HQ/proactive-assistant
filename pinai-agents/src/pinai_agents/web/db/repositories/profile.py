@@ -81,6 +81,7 @@ class GoalRow:
 class UserSettingsRow:
     generation_language: str
     auto_generate: bool
+    auto_generate_interval_minutes: int
     auto_dreaming: bool
     auto_crystallize: bool
     metadata: dict[str, Any]
@@ -91,6 +92,7 @@ class UserSettingsRow:
         return cls(
             generation_language=row["generation_language"],
             auto_generate=row["auto_generate"],
+            auto_generate_interval_minutes=row["auto_generate_interval_minutes"],
             auto_dreaming=row["auto_dreaming"],
             auto_crystallize=row["auto_crystallize"],
             metadata=_as_dict(row["metadata"]),
@@ -258,53 +260,72 @@ class ProfileRepository(UserScopedRepository):
             return (cur.rowcount or 0) > 0
 
     # ── pai_user_settings ─────────────────────────────────────────
-    async def get_settings(self) -> UserSettingsRow | None:
+    async def get_settings(self) -> UserSettingsRow:
+        """Lazy-create on first read, then return the row.
+
+        Defaults live exclusively on `pai_user_settings` columns
+        (`010_pai_core_state.sql`, `037_pai_user_settings_auto_generate_interval.sql`).
+        We INSERT with only `user_id` so column DEFAULTs apply, then SELECT.
+        Net effect: every authenticated user always has exactly one row,
+        and callers never need a `None` branch.
+        """
         async with self._conn.cursor() as cur:
+            await cur.execute(
+                "INSERT INTO pai_user_settings (user_id) VALUES (%s) "
+                "ON CONFLICT (user_id) DO NOTHING",
+                (self._user_id,),
+            )
             await cur.execute(
                 "SELECT * FROM pai_user_settings WHERE user_id = %s",
                 (self._user_id,),
             )
             row = await cur.fetchone()
-        return UserSettingsRow.from_record(row) if row else None
+        if row is None:
+            msg = "settings get returned no row after lazy-create"
+            raise RuntimeError(msg)
+        return UserSettingsRow.from_record(row)
 
     async def upsert_settings(
         self,
         *,
         generation_language: str | None = None,
         auto_generate: bool | None = None,
+        auto_generate_interval_minutes: int | None = None,
         auto_dreaming: bool | None = None,
         auto_crystallize: bool | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> UserSettingsRow:
-        """Upsert with COALESCE — pass only the fields you want to change."""
+        """Partial upsert — pass only the fields you want to change.
+
+        Two-step: ensure-row-exists (column DEFAULTs apply) + UPDATE with
+        COALESCE preserving missing fields. Defaults are NOT duplicated in
+        application code; `pai_user_settings` column DEFAULTs are the
+        single source of truth.
+        """
         async with self._conn.cursor() as cur:
             await cur.execute(
+                "INSERT INTO pai_user_settings (user_id) VALUES (%s) "
+                "ON CONFLICT (user_id) DO NOTHING",
+                (self._user_id,),
+            )
+            await cur.execute(
                 """
-                INSERT INTO pai_user_settings
-                  (user_id, generation_language, auto_generate,
-                   auto_dreaming, auto_crystallize, metadata)
-                VALUES
-                  (%s,
-                   COALESCE(%s, 'zh-Hans'),
-                   COALESCE(%s, FALSE),
-                   COALESCE(%s, FALSE),
-                   COALESCE(%s, TRUE),
-                   COALESCE(%s::jsonb, '{}'::jsonb))
-                ON CONFLICT (user_id) DO UPDATE SET
-                  generation_language = COALESCE(%s, pai_user_settings.generation_language),
-                  auto_generate       = COALESCE(%s, pai_user_settings.auto_generate),
-                  auto_dreaming       = COALESCE(%s, pai_user_settings.auto_dreaming),
-                  auto_crystallize    = COALESCE(%s, pai_user_settings.auto_crystallize),
-                  metadata            = COALESCE(%s::jsonb, pai_user_settings.metadata),
+                UPDATE pai_user_settings SET
+                  generation_language            = COALESCE(%s, generation_language),
+                  auto_generate                  = COALESCE(%s, auto_generate),
+                  auto_generate_interval_minutes = COALESCE(%s, auto_generate_interval_minutes),
+                  auto_dreaming                  = COALESCE(%s, auto_dreaming),
+                  auto_crystallize               = COALESCE(%s, auto_crystallize),
+                  metadata                       = COALESCE(%s::jsonb, metadata),
                   updated_at = NOW()
+                WHERE user_id = %s
                 RETURNING *
                 """,
                 (
+                    generation_language, auto_generate, auto_generate_interval_minutes,
+                    auto_dreaming, auto_crystallize,
+                    json.dumps(metadata) if metadata is not None else None,
                     self._user_id,
-                    generation_language, auto_generate, auto_dreaming, auto_crystallize,
-                    json.dumps(metadata) if metadata is not None else None,
-                    generation_language, auto_generate, auto_dreaming, auto_crystallize,
-                    json.dumps(metadata) if metadata is not None else None,
                 ),
             )
             row = await cur.fetchone()
