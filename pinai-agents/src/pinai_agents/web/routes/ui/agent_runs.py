@@ -113,16 +113,18 @@ _BASE_SELECT = """
 """
 
 _ACTIVE_FILTER = """
-      -- "Active" has three sources of truth, OR'd together:
-      --   1. st.status='active'  → queued, never claimed yet
-      --   2. run.status='running' → claimed, agent still working. Once
-      --      tasks are archived as soon as the tick fires (long before
-      --      the LLM finishes), so st.status='archived' alone doesn't
-      --      mean "done" — the run row's status does.
+      -- "Active" sources of truth, OR'd together:
+      --   1. once-task with st.status='active' → queued, never claimed.
+      --      Recurring schedules also sit in status='active' between
+      --      fires, but `next_run_at` may be hours away — those are NOT
+      --      in flight. The trigger_kind gate keeps us honest.
+      --   2. run.status='running' → claimed, agent currently working.
+      --      For recurring schedules this is the only signal that
+      --      surfaces them (st.status stays 'active' across all fires).
       --   3. recently completed (within 30s) → for the brief
       --      success/failure flash before the pill disappears.
       AND (
-        st.status = 'active'
+        (st.status = 'active' AND st.trigger_kind = 'once')
         OR run.status = 'running'
         OR (st.status = 'archived' AND st.updated_at >= NOW() - INTERVAL '30 seconds')
       )

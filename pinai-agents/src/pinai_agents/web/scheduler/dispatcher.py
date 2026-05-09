@@ -293,22 +293,44 @@ class DefaultDispatcher:
         persistence here so the FE only needs to read pai_pipeline_runs
         keyed by `run_id == task.id`.
         """
+        from ..auth.user_service import User  # noqa: PLC0415
         from ..routes.ui.generate import persist_generator_run  # noqa: PLC0415
         from ..services.chat_proxy import call_generate  # noqa: PLC0415
+        from ..services.litellm_provisioning import (  # noqa: PLC0415
+            ensure_user_litellm_key,
+        )
 
+        # Lazy-provision the LiteLLM key. The manual /generate path uses
+        # `_ensure_virtual_key` for this — without mirroring it here,
+        # scheduler-driven runs for users who never pressed Generate
+        # (e.g. fresh accounts after auto_generate=TRUE became default)
+        # would silently no-op every interval. We fetch the full row so
+        # ensure_user_litellm_key has a User dataclass to work with.
         async with service_tx(self._pool) as conn:
             cur = await conn.execute(
-                "SELECT litellm_virtual_key FROM users WHERE id = %s",
+                "SELECT id, supabase_user_id, email, litellm_virtual_key, "
+                "browserbase_context_id FROM users WHERE id = %s",
                 (task.user_id,),
             )
             row = await cur.fetchone()
-        virtual_key = (row or {}).get("litellm_virtual_key") or ""
+        if row is None:
+            msg = f"_run_generator: user={task.user_id} not found"
+            raise RuntimeError(msg)
+        user = User(
+            id=row["id"],
+            supabase_user_id=row["supabase_user_id"],
+            email=row.get("email"),
+            litellm_virtual_key=row.get("litellm_virtual_key"),
+            browserbase_context_id=row.get("browserbase_context_id"),
+        )
+        # ensure_user_litellm_key raises on LiteLLM failure → dispatcher's
+        # outer try/except catches it, marks the run failed, applies
+        # backoff. No silent success path.
+        user = await ensure_user_litellm_key(self._pool, user)
+        virtual_key = user.litellm_virtual_key or ""
         if not virtual_key:
-            logger.warning(
-                "skip generator dispatch: user=%d has no litellm_virtual_key",
-                task.user_id,
-            )
-            return
+            msg = f"_run_generator: ensure_user_litellm_key returned empty for user={task.user_id}"
+            raise RuntimeError(msg)
 
         payload = task.payload or {}
         cards_to_generate = int(payload.get("cards_to_generate") or 4)
