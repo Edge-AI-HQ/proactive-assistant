@@ -611,12 +611,48 @@ async def get_or_create_session(
 
     `toolkits` / `tools` lists let callers physically filter the slug
     surface at session creation (the current side-effect guard).
+
+    Per-user connection wiring: Composio Tool Router does NOT auto-derive
+    `connected_accounts` from `user_id` — without an explicit dict the
+    session reports every toolkit as unconnected and the LLM falls into
+    a `MANAGE_CONNECTIONS` re-OAuth loop. We resolve this user's ACTIVE
+    connections via `list_connections` (server-side filtered to
+    `user_ids=[pai-{X}]`) and pass them in. The connections fingerprint
+    is folded into the cache key so adding/removing a connection
+    invalidates any stale session naturally.
+
+    Cross-user isolation invariant:
+      * `cid`s only ever come from `list_connections(internal_user_id)`,
+        which Composio filters server-side to this user — cids cannot
+        cross user namespaces.
+      * Cache key is prefixed by `internal_user_id`, so user A can never
+        receive a session built for user B.
     """
     cx_user = composio_user_id(internal_user_id)
+
+    # Resolve THIS user's ACTIVE connections. Filtered to `toolkits` if
+    # the caller narrowed the session surface. First ACTIVE wins per
+    # toolkit — Composio's `multi_account` config isn't wired yet, so
+    # users with two accounts on the same toolkit get whichever the API
+    # returns first; agent code can override per-call via the existing
+    # `connected_account_id` arg on `execute()` / `multi_execute()`.
+    user_conns = await list_connections(internal_user_id)
+    connected_accounts: dict[str, str] = {}
+    for c in user_conns:
+        if c.status != "ACTIVE":
+            continue
+        if toolkits and c.toolkit not in toolkits:
+            continue
+        connected_accounts.setdefault(c.toolkit, c.connected_account_id)
+
+    ca_fingerprint = ",".join(
+        f"{tk}={cid}" for tk, cid in sorted(connected_accounts.items())
+    )
     config_key = (
         f"tk={','.join(sorted(toolkits)) if toolkits else '*'}"
         f"|tl={','.join(sorted(tools)) if tools else '*'}"
         f"|mc={int(manage_connections)}"
+        f"|ca={ca_fingerprint}"
     )
     cache_key = _session_cache_key(internal_user_id, config_key)
     now = time.monotonic()
@@ -646,6 +682,8 @@ async def get_or_create_session(
             # toolkit grouping, group on caller side and pass via
             # `toolkits=` instead.
             kwargs["tools"] = {"*": {"allowed": list(tools)}}
+        if connected_accounts:
+            kwargs["connected_accounts"] = connected_accounts
         return _composio().create(**kwargs)
 
     session = await _to_thread(_create)

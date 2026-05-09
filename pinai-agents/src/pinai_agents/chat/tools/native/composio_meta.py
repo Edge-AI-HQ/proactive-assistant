@@ -76,9 +76,15 @@ async def composio_multi_execute_tool(calls: list[dict[str, Any]]):
     """Execute one or many Composio tool calls in parallel. Each call
     is {tool_slug, arguments}. Use this for both single executions and
     cross-toolkit data extraction (e.g. Gmail + Calendar in one turn)."""
+    # Composio's actual MULTI_EXECUTE_TOOL slug expects `tools` (not
+    # `calls`) and a required `sync_response_to_workbench` flag. We keep
+    # the LLM-facing arg name as `calls` to match the prompt + avoid an
+    # Anthropic prompt cache invalidation; rename inside the wrapper.
+    # `sync_response_to_workbench=False` keeps the full response inline —
+    # the workbench is a separate Composio-managed sandbox we don't use.
     return await http_client.post(
         "/api/agent/composio/meta/MULTI_EXECUTE_TOOL",
-        {"args": {"calls": calls}},
+        {"args": {"tools": calls, "sync_response_to_workbench": False}},
     )
 
 
