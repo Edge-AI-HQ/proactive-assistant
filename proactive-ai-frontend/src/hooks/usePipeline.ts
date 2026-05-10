@@ -243,7 +243,14 @@ export function usePipeline() {
    * dedupes and returns the existing task_id).
    */
   const generate = useCallback(() => {
-    if (sourceRef.current) closeSource();
+    // Synchronous re-entrancy gate. sourceRef is set inside the same
+    // event-handler tick (below), so a second click during React's
+    // current render batch — or before /generate's POST resolves — hits
+    // this branch and is a true no-op (no aborted-POST noise, no double
+    // dispatch on the server). The `disabled={isRunning}` on the button
+    // already prevents most double-clicks, but only after the render
+    // commits; this ref closes the same-tick window.
+    if (sourceRef.current) return;
 
     const freshState: RunState = {
       ...createInitialRunState(),
@@ -403,20 +410,25 @@ export function usePipeline() {
   // ── F5 recovery ─────────────────────────────────────────────────────
   // If sessionStorage thinks a run is active but the server has no
   // matching active run, settle back to idle / complete. Runs in `runs`
-  // are server-truth.
+  // are server-truth — but they're polled, not live, so we mustn't fire
+  // on the gap between /generate returning a runId and refreshAgentRuns
+  // bringing it into the feed. A short grace window covers both real F5
+  // recovery (feed stays empty across reload + first poll) and the
+  // dispatch race (feed catches up within ~50–200ms typical, longer on
+  // bad networks). Effect cleanup cancels the timer the moment the run
+  // appears in the feed.
   useEffect(() => {
     if (run.status !== "running") return;
     if (!run.runId) return;
-    const match = runs.find((r) => r.id === run.runId);
-    if (match) return; // still tracked by server, leave as-is
-    // Server doesn't have the run — and we haven't observed it through
-    // an explicit `succeeded` row either. Likely it's archived past the
-    // 30s window; fall back to whatever cards we already have.
-    setRun((prev) =>
-      prev.finalCards.length > 0
-        ? { ...prev, status: "complete", activePhase: "complete" }
-        : { ...prev, status: "idle", activePhase: null, error: null },
-    );
+    if (runs.some((r) => r.id === run.runId)) return; // server has it
+    const id = window.setTimeout(() => {
+      setRun((prev) =>
+        prev.finalCards.length > 0
+          ? { ...prev, status: "complete", activePhase: "complete" }
+          : { ...prev, status: "idle", activePhase: null, error: null },
+      );
+    }, 5_000);
+    return () => window.clearTimeout(id);
   }, [runs, run.status, run.runId]);
 
   // ── Adopt orphan generator runs ─────────────────────────────────────
