@@ -33,7 +33,8 @@ _AGENT_KINDS = (
     "connector.init",
     "connector.evolve",
     "crystallize",
-    "generator",
+    "generator.manual",
+    "generator.auto",
     "user.prompt",
 )
 

@@ -39,7 +39,7 @@ async def _sync_auto_generate_schedule(
     if settings.auto_generate:
         interval_seconds = settings.auto_generate_interval_minutes * 60
         await ScheduledTasksRepository(user_id, conn).upsert(
-            id=task_id, kind="generator", trigger_kind="schedule",
+            id=task_id, kind="generator.auto", trigger_kind="schedule",
             interval_seconds=interval_seconds,
             next_run_at=datetime.now(UTC) + timedelta(seconds=interval_seconds),
             payload={

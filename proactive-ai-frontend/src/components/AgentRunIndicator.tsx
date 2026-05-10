@@ -25,7 +25,8 @@ const KIND_LABEL: Record<AgentRunKind, string> = {
   "connector.init": "Connecting source",
   "connector.evolve": "Distilling signals",
   crystallize: "Crystallizing chat",
-  generator: "Generating cards",
+  "generator.manual": "Generating cards",
+  "generator.auto": "Generating cards",
   "user.prompt": "Synthetic prompt",
 };
 

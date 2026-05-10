@@ -184,25 +184,18 @@ async def _persist_evaluations(
 
 
 async def _find_active_generator_task(conn, user_id: int) -> str | None:
-    """Idempotency probe — returns the task_id of any in-flight *manual*
-    generator task for this user, or None.
+    """Idempotency probe — return the task_id of any in-flight manual
+    generator click, or None.
 
-    Constraint to `trigger_kind='once'` is load-bearing: the recurring
-    `gen.auto.{uid}` schedule task (auto-generate) also has
-    `kind='generator' AND status='active'` between fires, but its
-    `next_run_at` may be hours away — it must NOT mask a fresh manual
-    click. Manual + auto run independently by design.
-
-    Within once-tasks, `status='active'` covers queued (next_run_at
-    pending), running (claimed but archive happens on completion), and
-    failed-with-retries-left.
+    `kind='generator.manual'` is the only thing we dedupe against;
+    auto-fires (`generator.auto`) are a sibling kind and don't mask the
+    user's button. `status='active'` covers queued, running (archive
+    happens on success), and failed-with-retries-left.
     """
     cur = await conn.execute(
         """
         SELECT id FROM pai_scheduled_tasks
-        WHERE user_id = %s AND kind = 'generator'
-          AND trigger_kind = 'once'
-          AND status = 'active'
+        WHERE user_id = %s AND kind = 'generator.manual' AND status = 'active'
         ORDER BY created_at DESC LIMIT 1
         """,
         (user_id,),
@@ -248,7 +241,7 @@ async def generate(
         task_id = f"gen.{uuid.uuid4().hex[:12]}"
         await enqueue_once(
             conn,
-            user_id=user.id, task_id=task_id, kind="generator",
+            user_id=user.id, task_id=task_id, kind="generator.manual",
             payload={
                 "cards_to_generate": body.cards_to_generate,
                 "output_language": output_language,

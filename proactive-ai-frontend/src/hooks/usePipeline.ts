@@ -337,7 +337,7 @@ export function usePipeline() {
   useEffect(() => {
     if (!run.runId) return;
     const match: ActiveAgentRun | undefined = runs.find(
-      (r) => r.kind === "generator" && r.id === run.runId,
+      (r) => r.kind === "generator.manual" && r.id === run.runId,
     );
     if (!match) return;
 
@@ -433,7 +433,7 @@ export function usePipeline() {
     if (run.status === "running" || run.status === "connecting") return;
     const orphan = runs.find(
       (r) =>
-        r.kind === "generator" &&
+        r.kind === "generator.manual" &&
         (r.status === "queued" || r.status === "running"),
     );
     if (!orphan) return;
@@ -462,7 +462,7 @@ export function usePipeline() {
   // poll, and an over-eager second click would race the dedup.
   const hasServerActiveGenerator = runs.some(
     (r) =>
-      r.kind === "generator" &&
+      r.kind === "generator.manual" &&
       (r.status === "queued" || r.status === "running"),
   );
   const isRunning =

@@ -32,7 +32,8 @@ export type AgentRunKind =
   | "connector.init"
   | "connector.evolve"
   | "crystallize"
-  | "generator"
+  | "generator.manual"
+  | "generator.auto"
   | "user.prompt"
   | string;
 

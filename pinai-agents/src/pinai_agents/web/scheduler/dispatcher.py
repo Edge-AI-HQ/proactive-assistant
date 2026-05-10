@@ -190,7 +190,10 @@ class DefaultDispatcher:
                 "/agent/run/crystallize", task, run_id,
                 extra={"session_key": (task.payload or {}).get("session_key", "")},
             )
-        elif kind == "generator":
+        elif kind in ("generator.manual", "generator.auto"):
+            # Both kinds → same handler. The kind name is the only place
+            # the manual-vs-recurring distinction lives now (see migration
+            # 039); _run_generator is correctly trigger-kind-agnostic.
             await self._run_generator(task, run_id)
         elif kind in ("connector.init", "connector.sync"):
             # In-process Composio ingest. The handler updates progress
