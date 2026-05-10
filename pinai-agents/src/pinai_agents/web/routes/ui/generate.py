@@ -184,19 +184,25 @@ async def _persist_evaluations(
 
 
 async def _find_active_generator_task(conn, user_id: int) -> str | None:
-    """Idempotency probe — returns the task_id of any non-terminal
+    """Idempotency probe — returns the task_id of any in-flight *manual*
     generator task for this user, or None.
 
-    "Active" = task.status='active' (not yet archived). This catches
-    both `queued` (next_run_at not yet hit) and `running` (currently
-    leased by a worker) cases, since archive happens on success.
-    Failed-with-retries-left rows also stay status='active' which is
-    fine — we don't want to spawn a fresh task on top of a retry.
+    Constraint to `trigger_kind='once'` is load-bearing: the recurring
+    `gen.auto.{uid}` schedule task (auto-generate) also has
+    `kind='generator' AND status='active'` between fires, but its
+    `next_run_at` may be hours away — it must NOT mask a fresh manual
+    click. Manual + auto run independently by design.
+
+    Within once-tasks, `status='active'` covers queued (next_run_at
+    pending), running (claimed but archive happens on completion), and
+    failed-with-retries-left.
     """
     cur = await conn.execute(
         """
         SELECT id FROM pai_scheduled_tasks
-        WHERE user_id = %s AND kind = 'generator' AND status = 'active'
+        WHERE user_id = %s AND kind = 'generator'
+          AND trigger_kind = 'once'
+          AND status = 'active'
         ORDER BY created_at DESC LIMIT 1
         """,
         (user_id,),
