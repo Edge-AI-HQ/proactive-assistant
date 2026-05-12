@@ -81,12 +81,13 @@ V2 自己在 `e8803aee feat(ambient-ai): introduce AmbientAi facade`(2026-05-10)
 **做法**:V3 frontend 没有 `services/` 目录,而且不是只 cp 一个目录就完事——下面这些 cp 之外的硬依赖都要补,缺一个 ambient 都跑不起来:
 
 1. **根目录工作区**:V3 `package.json:8` 当前 `"workspaces": ["proactive-ai-frontend"]`,加回 `"capacitor-plugins/*"`。同时加 V2 的 `postinstall: patch-package` 钩子和 `patches/@capacitor-community+contacts+7.2.0.patch` 文件。
-2. **frontend deps**:V3 `proactive-ai-frontend/package.json` 当前只有 stock `@capacitor/*`,要加 V2 同步的 5 个:
+2. **frontend deps**:V3 `proactive-ai-frontend/package.json` 当前只有 stock `@capacitor/*`,要加 6 个(V2 同步的 5 个 + outbox SQLite 持久化):
    - `@pin/capacitor-ambient-ai`(`file:../capacitor-plugins/ambient-ai` workspace 链接)
    - `@capacitor-community/contacts` ^7.2.0(配合 patch)
    - `@capacitor/geolocation` ^8.2.0
    - `@capgo/capacitor-barometer` ^8.0.11
    - `@capgo/capacitor-health` ^8.4.9
+   - `@capacitor-community/sqlite`(outbox 持久化,见风险 #1)
 3. **代码 cp**:把 V2 `proactive-ai-frontend/src/services/ambient/` 整目录 cp 过来,把 `AmbientAudioDebugPanel.tsx` / `AmbientSourcesPanel.tsx` + 各自 test cp 到 V3 `src/components/`。
 4. **API base URL + endpoint**:`lib/devices.ts` 把 ambient ingest 从 V2 的 `/api/proactive/devices/ingest` 改成 V3 实际路径 **`/api/devices/ingest`**(注意:V3 路由是固定 path,没有 `{deviceId}` 段,`deviceId` 走 `X-Device-Id` header + body 里的 `deviceId` / 每 item `source` 字段)。
 5. **Body shape**:V2 `ingestSignals` 当前 `JSON.stringify(wire)` 发的是 array(`devices.ts:295`),V3 现状 `body: dict` 直接 422——**这要在 step 1 修服务端,改成 `body: dict | list` 并让 dead code `is_array` 真正生效**;step 3 只继承 V2 的 array shape,不改前端。
@@ -336,7 +337,7 @@ V3 现有测试(在 `pinai-agents/tests/web/devices/`):
    - **完成标志**:`uv run pytest pinai-agents/tests/web/devices/` 全绿 + D-4 timeline endpoint + D-5 settings schema 上线。step 3 在这之前不开始。
 2. **Capacitor 插件平移 + web/iOS 双 build 验证**(原 A)——和 step 1 平行。
    - 根目录 `package.json` workspaces 加 `"capacitor-plugins/*"` + `postinstall: patch-package`。
-   - `cp -r capacitor-plugins/ambient-ai/` 从 V2 worktree 到 V3(仅这一个,proactive-engine 不要)。
+   - `cp -r capacitor-plugins/ambient-ai/` + `cp -r capacitor-plugins/demo/` 从 V2 worktree 到 V3(proactive-engine 不要,V2 自己已删)。Demo 顺带,workspaces glob `capacitor-plugins/*` 一并收。
    - `cp -r patches/` 从 V2(`@capacitor-community+contacts+7.2.0.patch`)。
    - `proactive-ai-frontend/package.json` 加 5 个 deps(见 C 段第 2 项)。
    - iOS `Podfile` / `CapApp-SPM/Package.swift` 平台最低 17.0。
@@ -361,6 +362,7 @@ V3 现有测试(在 `pinai-agents/tests/web/devices/`):
      - `AmbientSourcesPanel` 改成既显示 source 状态又可 toggle,toggle 写 user settings。
      - 登录成功后:`startAmbientUpload({ enabledSources })`,内部只对 `enabled=true` 的 source 调 `runtime.startSource(<key>)`,**不调** `runtime.autoStart()`。
      - 没有任何 source 被 enable → 只 drain outbox,不启动任何采集。
+   - **Outbox SQLite 持久化**:`services/ambient/outbox.ts` 补 `SqliteOutboxStore implements OutboxStore` 类(基于 `@capacitor-community/sqlite`,schema 见风险 #1)。`getAmbientRuntime()` 工厂在 `isNative` 时挂 sqlite store,web build fallback 到现有 `MemoryOutboxStore`。
    - Outbox **按 5 态判 status**(见契约 section 的 outbox 处理规则),`inserted`/`duplicate` 移除,`rejected`/`parse_failed` 移除+日志,`retryable_failed` 保留 retry。
    - **`DeviceTimeline.tsx` 切到统一 timeline endpoint**:`fetchSignals` → `fetchDeviceTimeline(deviceId, ...)`(step 1 D-4 新建的 `GET /api/devices/{deviceId}/timeline`),按 envelope `items[].type` 分发到 `HealthObservationCard` 或现有 signal 渲染。**不**做 frontend k-way merge——前期 reviewer 高优指出那个方案会丢数据。
    - **Build 验证**:`npm run type-check` + `npm run build`(web)+ `make ios DEV=1`(iOS)都过,不只跑 iOS。
@@ -372,18 +374,27 @@ V3 现有测试(在 `pinai-agents/tests/web/devices/`):
    - 触发一个 `sync_mode=full` 上传,verify reference_count > 0 的旧行没被删(D-1 reference_count 过滤生效)。
    - 触发一个故意 parse 失败的 item,verify response `status="parse_failed"`,outbox 移除不 retry。
    - **fault-injection**:临时 stub repository 抛异常,verify response `status="retryable_failed"`,outbox 保留并随后 retry——这条是 reviewer 高优指出的核心 invariant,验证后才能说 step 1 D-3 真的落地了。
+   - **Outbox 持久化**:断网状态下 ambient 上传 N 条进 outbox → kill app → 重启 app → verify outbox 还有这 N 条 → 联网后正常 drain。验证 SqliteOutboxStore 真持久,不是 in-memory 假装。
 5. **文档同步**。把 V2 的 `docs/plans/2026-05-10-ambient-ai-plugin.mdx` + `2026-05-05-mobile-health-data-upload-reloop.mdx` cp 到 V3 `docs/plans/`,在 `docs/plans/README.mdx` 表格里登记。V3 `docs/modules/data-connectors.mdx` 补 mobile ambient ingest 章节,引用本契约表 + step 1 的 5 态 status 表。
 
 ## 风险 / 待确认
 
-契约相关的(endpoint shape / auth / body / response status / replace 语义)都已经在上面契约 section + D 段拍死并进入 step 1。这里只列剩下的未决项:
+契约相关的(endpoint shape / auth / body / response status / replace 语义)都已经在上面契约 section + D 段拍死并进入 step 1。剩余事项已经按用户拍板收口:
 
-1. **iOS Android parity**:V2 plan 文档 `2026-05-01-ios-mobile-data-android-parity.mdx` 在 V3 也存在,V3 的 Android 端 ambient 仍未实现。Android 接力工作是后续单独排期,本计划只把 V2 现有 iOS 实现完整带过来,不试图同时补 Android。
-2. **Demo 包**:`capacitor-plugins/demo/` 是给插件开发者跑的调试 app,不是 production frontend。本计划只 cp `capacitor-plugins/ambient-ai/` 一个包,不带 demo。
-3. **CI**:V3 CI workflow 在 `.github/workflows/` 下没有 capacitor 相关 build job,iOS 部分(`544ed2c3` 的 app store signing / `69d6d5c4` 的 build capacitor plugins for iOS)平移完插件后要补对应 step,但这部分不影响开发,可以分开排期。
-4. **Outbox 持久化兼容**:V2 outbox 用什么存储(IndexedDB / Capacitor Preferences / SQLite),dedupe key 字段名是 `dedupeKey` 还是 `dedupe_key`,要在 step 3 cp 前在 V2 worktree 实测一次。Server 同时接受两种命名(`populate_by_name=True`),outbox 自己用哪种都行,但跨 schema 漂会让重传判定错位。
-5. **`/api/raw/device-health` 的 pagination 兼容**:D-4 frontend dual-fetch 需要 cursor-based pagination 才能和 signals 那路对齐 keyset。V3 `raw.py:211` 的 `list_device_health` 当前支持哪些 query param 要在 step 1 查一遍,缺 `since` / `until` / `before` 就顺手补,不要等到 step 3 才发现没法分页。
-6. **`reference_count` 列**:✅ V3 schema 已经有(`019_pai_raw_device.sql`),D-1 不用新加 migration,只动 `replace_health` 的 DELETE SQL 即可。不过 V3 当前**没有任何代码会把 reference_count 增到 > 0**——memory / signal 引用 raw 时的"+1"逻辑在 V3 还没实装(`grep -rn "reference_count" pinai-agents/src/` 自查),意味着 D-1 加的过滤短期内不会真正保护任何行。但 V2 思路是 raw 引用机制后续会上,**现在就把 DELETE 限制带 `AND reference_count = 0` 是为了将来引用机制上线时不需要再回头改 SQL**。算前置防御,不算紧迫修复。
+1. **Outbox 持久化用 `@capacitor-community/sqlite`**(拍板)。V2 `outbox.ts` 只实装了 `MemoryOutboxStore`,`OutboxKind = "memory" | "sqlite"` 里的 `"sqlite"` 是 placeholder——内存 outbox 后台被杀就丢数据,mobile 场景下不可接受。最佳实践 = SQLite 真持久化跨重启。Step 3 实施时:
+   - frontend deps 加 `@capacitor-community/sqlite`(C 段 deps 清单加一条)。
+   - 在 `services/ambient/outbox.ts` 补 `SqliteOutboxStore implements OutboxStore` 类(`OutboxStore` interface 已经定义好,字段名 `dedupeKey` 已定,直接实装即可)。
+   - `getAmbientRuntime()` 工厂在 `isNative` 时默认用 sqlite store,否则 fallback memory(web build 兼容)。
+   - 表 schema:`(id PRIMARY KEY, item TEXT JSON, dedupe_key TEXT UNIQUE, status TEXT, attempt_count INTEGER, last_error TEXT, next_retry_at INTEGER, inserted_at INTEGER, synced_at INTEGER)`。Index on `(status, next_retry_at)`。
+   - 测试至少覆盖:enqueue 去重(dedupe_key UNIQUE 触发)、pending 按 retry time 排序、`markSynced` / `markFailed`、prune TTL、app 重启后还能读到。
+2. **`/api/raw/device-health` pagination**:D-4 走 server-side UNION timeline endpoint(`GET /api/devices/{deviceId}/timeline`),不再需要单独给 `/raw/device-health` 补 cursor——timeline endpoint 自己有 keyset cursor。`/raw/device-health` 保留现状用于 debug / direct query,不强求 cursor。这一项**等价于已解决**。
+3. **`reference_count` 列**:✅ V3 schema 已经有(`019_pai_raw_device.sql`),D-1 不用新加 migration,只动 `replace_health` 的 DELETE SQL 即可。V3 当前**没有任何代码会把 reference_count 增到 > 0**——memory / signal 引用 raw 时的"+1"逻辑在 V3 还没实装,意味着 D-1 加的过滤短期内不会真正保护任何行。但 raw 引用机制后续会上,**现在就把 DELETE 限制带 `AND reference_count = 0` 是为了将来引用机制上线时不需要再回头改 SQL**。前置防御,不紧迫。
+
+**砍掉但记录在案的事项**(用户拍板,不在本计划范围):
+
+- **iOS Android parity**:V2 ambient-ai `capacitor-plugins/ambient-ai/android/` 当前只有 `.gitkeep`,Android 端补齐**不在本计划内**,后续单独排期。
+- **CI capacitor build job**:V3 CI workflow 保持现状,不新增 capacitor 相关 build step。V2 commit `544ed2c3` / `69d6d5c4` 这两条不平移。
+- **`capacitor-plugins/demo/`**:跟 `ambient-ai/` 一起 cp(见 step 2),不单独排除。
 
 ## 相关 commit list(完整 63 条)
 
