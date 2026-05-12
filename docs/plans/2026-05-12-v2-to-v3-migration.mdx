@@ -1,0 +1,390 @@
+---
+title: "V2 → V3 功能迁移计划"
+description: "把 proactive-ai-v2 在分叉点 c63f56f7 之后开发的功能挑选性地迁移到 proactive-ai-v3(pinai-agents 单仓 + Python 后端)。"
+---
+
+# V2 → V3 功能迁移计划
+
+## 结论
+
+- 分叉点:`c63f56f7`(2026-05-04 18:25 UTC,`chore: update OPENCLAW_IMAGE digest`)。
+- V2 在分叉点之后 **63 commits**,V3 在分叉点之后 **46 commits**。V3 的 46 commits 是后端大重构(`apis/` + `pinai-openclaw/` + `miniapp/` 三个老仓搬进 `pinai-agents/`,Python / FastAPI / LangChain + DeepAgents,web/chat 双进程 + 强 trust boundary)。
+- V2 的 63 commits 集中在 **两块**(原以为三块,proactive-engine 那块需要剔除):
+  1. Capacitor 插件统一为 `@pin/capacitor-ambient-ai` + 补 iOS native;
+  2. 前端 ambient ingest 链路 + 调试面板 + 健康观测 metric-scoped replace。
+  3. ~~iOS `ProactiveEngine` 包~~ — V2 自己在 `e8803aee`(2026-05-10)已删除整个 `capacitor-plugins/proactive-engine/`,facade 化为 `@pin/capacitor-ambient-ai`。**不迁移,不复活历史 commit**。
+- 迁移按用户拍板砍掉两块:**Data Studio feature(`features/data-studio/` + mini app builder UI)** 完全不要;**单独的 health 视图不做**。注意:V3 当前 health 观测策略是 `raw_only`(`policies.py:245`)只写 `pai_raw_device_health_observations`,**`DeviceTimeline` 只 fetch `personal_signals`,健康数据现在压根不会展示**——D-4 落地方案是**让 `DeviceTimeline` 加一路 `/api/raw/device-health` fetch + client merge sort**;**不**走"health policy 改 dual",因为 health 观测频率高,per-observation 写 signal 会让 `pai_personal_signals` 表灌爆(reviewer 高优指出)。
+- 迁移工作量:**Capacitor 插件 + iOS native = 文件级 cp + 一堆 frontend deps + 工作区配置 + iOS Info.plist 隐私权 + patches/**(不只是 cp 目录,见 C 段);**前端 `services/ambient/` ingest 链路 = cp + 改 API base URL + 加 lifecycle wiring + outbox/server status 对齐**(V3 frontend 没有 `services/`);**后端 health policy + replace 修正 + ingest 签名修正 = Python 重写 ~150 行**(详见 D 段,不只是 metric scope)。
+- **契约先行 + 几个真 V3 bug**:V3 `/api/devices/ingest` 当前签名 `body: dict`(`devices.py:237`)会让 V2 那种 array body 直接返回 422,**`is_array = isinstance(body, list)` 是 dead code**;`Header(..., alias=...)` 缺头也是 422 不是 401;`replace_health`(`raw_device.py:176`)无条件 DELETE,丢失 V2 的 `reference_count = 0` 保护;`results[i].status` 当前只 `inserted | duplicate`,把"真重复 / 0-row insert / 服务端写入异常"折叠成同一个值,outbox 没法可靠区分。**关键**:服务端写入异常必须返回独立的 `retryable_failed`,不能折叠到 `rejected`,否则 DB 一抽风就让用户事件被永久删除(reviewer 高优 #2 review 指出)。Status 共 5 态:`inserted | duplicate | rejected | parse_failed | retryable_failed`。这些**全部在 step 1 修完**,然后 step 3 前端才有契约依据。
+- **Privacy invariant(reviewer 第三轮高优指出)**:V2 `startAmbientUpload()` 默认 autoStart 启动 sound_classifier / visit / activity / location 等 source,登录即采集是隐私回归。V3 必须在 step 1 加 `ambient_sources` user settings,step 3 让 `AmbientSourcesPanel` 成为 opt-in 开关,登录后只对 enabled source 调 `runtime.startSource(<key>)`,绝不调 `autoStart()`。Step 4 真机验证里这条单独列出来,验不过 plan 不算完成。
+- **Web build 守护**:Capacitor 插件平移后,V3 web build 必须不挂——V2 commit `893df821` 就是修这个的。所有触碰 native plugin 的代码要 `isNative` 短路,UI 组件用 `React.lazy`。Step 2 + step 3 的 build 验证清单**强制要求** `npm run build`(web)+ `make ios`(iOS)都过,只跑一个不算 land。
+- CORS、CI workflow、iOS bundle id 这些边角项视具体情况单独处理,在 V3 上多半已经不适用或已经覆盖。
+
+## 仓库 layout 对比
+
+| 维度 | V2 | V3 |
+|---|---|---|
+| 后端 | `apis/`(TS / Express) + `pinai-openclaw/plugins/proactive-ai/`(TS / Per-user 容器) + `miniapp/` | `pinai-agents/`(Python / FastAPI / LangChain + DeepAgents,web + chat 双进程,Daytona sandbox) |
+| 容器编排 | `apis/src/domain/container/`(Docker + Fly 双 provider)+ OpenClaw 用户机器 | 退役。前端直接打 `pinai-agents` HTTP/SSE,LLM 工具跑在 Daytona |
+| Capacitor 插件 | `capacitor-plugins/ambient-ai/` + `capacitor-plugins/proactive-engine/` + `capacitor-plugins/demo/` | **不存在**。V3 frontend 只依赖 stock `@capacitor/*` + `@aparajita/capacitor-secure-storage`,没有自研插件 |
+| 前端 ambient 链路 | `proactive-ai-frontend/src/services/ambient/`(outbox / buffer / sync-scheduler / ingest-bridge / sound-classifier 等) | **不存在**。V3 frontend 没有 `services/` 目录 |
+| 前端 Data Studio | `proactive-ai-frontend/src/features/data-studio/` | **不存在**(用户拍板砍掉) |
+| 前端调试面板 | `AmbientAudioDebugPanel.tsx` + `AmbientSourcesPanel.tsx` | **不存在** |
+| 前端 device 展示 | `DeviceConnections.tsx` + `DeviceTimeline.tsx` | 已具备(V3 已含) |
+| Health raw 查询 | OpenClaw plugin `raw-db.ts` 提供 latest + rollup | V3 已有 `/api/raw/device-health` 返回 `pai_raw_device_health_observations` 行 |
+| Health metric-scoped replace | V2 commit `089e1f94` 已落地,`(device_id, local_date, metric)` 三键 | **缺**。V3 `device_ingest/health.py` 只在 `(device_id, local_date)` 一层 |
+
+## 迁移按 commit 分桶
+
+### A. 需要迁移到 V3 — Capacitor 插件 + iOS native(文件级 cp)
+
+V3 frontend 上没有 `capacitor-plugins/` 目录,这一组 commits 全部需要从 V2 cp 过来。**Android 实现仍是空的(只有 `.gitkeep`),迁移时一并把 Android 跳过这一现状继承下来,后续单独排期。**
+
+| Commit | 主题 | 触碰路径(简) | 备注 |
+|---|---|---|---|
+| `2fb57587` | Capacitor 插件 + ambient services 雏形 | `capacitor-plugins/*` + `proactive-ai-frontend/src/services/ambient/*` | 大头基础 |
+| `41061a71` | 统一 `@pin/capacitor-ambient-ai` 包 | `capacitor-plugins/ambient-ai/` | 单包整合,后续都基于这个 |
+| `56b436bf` | iOS native plugins | `capacitor-plugins/ambient-ai/ios/Sources/AmbientAi/Plugins/*.swift` | AudioCapture / Calendar / VisitMonitor / MediaNotebook / NearbyConnectivity / NotificationUsage / DeviceState |
+| `ff437505` + `26513afb` | demo 迁移到统一包 + deprecate 旧子包 | `capacitor-plugins/demo/` | demo 不上 V3 也行,优先级低 |
+| `8347ddd9` + `05a946da` | Phase 2: SensorFusion + HealthConnect | `capacitor-plugins/ambient-ai/src/modules/sensor-fusion/`, `health-connect/` | iOS Health 数据采集 |
+| `61214097` + `6c1d2b6d` | Phase 3: NotificationUsage / MediaNotebook / Communication | `capacitor-plugins/ambient-ai/src/modules/notification-usage/`, `media-notebook/`,`contacts/` | |
+| `87828dd0` + `2697631b` | Phase 4: NearbyConnectivity + AudioAmbient | `capacitor-plugins/ambient-ai/src/modules/nearby-connectivity/`, `audio-ambient/` | |
+| `ca226e89` + `4f88e09f` + `5f8b434c` | iOS 17 minimum + AudioAmbient crash + BLE 权限 | iOS Podspec + Plugin code | 平移时一起带 |
+| `96aea64e` + `478a5868` + `b84e2976` | refactor 为 community plugins + TS adapter,frontend 切到统一包 | `capacitor-plugins/ambient-ai/src/facade/*` + `proactive-ai-frontend/src/services/ambient/sources/*` | 最终形态 |
+| `e8803aee` + `54e6ed6c` + `a914195e` | AmbientAi facade + AudioCapture bridge + iOS audio core 迁移 | `capacitor-plugins/ambient-ai/src/facade/ambient-ai.ts` + `ios/Sources/AmbientAi/Audio/*` | 转录链路核心 |
+| `cd0ae6cd` | locale-aware speech recognition(中英双语 fallback) | iOS `AudioStreamManager.swift` + facade types + Debug Panel UI | 必带,zh-CN / en-US fallback |
+| `5e61c812` | 节流 classification debug event | iOS Plugin code | 边角修复 |
+| `c8209649` | 文档更新 | `docs/plans/2026-05-10-ambient-ai-plugin.mdx` 等 | 迁移到 V3 时,把 plan 文档也 cp 到 V3 `docs/plans/` 并在 README 索引里登记 |
+
+**做法**:从 V2 worktree 直接 `cp -r capacitor-plugins/ proactive-ai-frontend/src/services/ambient/` 到 V3,然后:
+1. 检查 V3 `proactive-ai-frontend/package.json`,把 `@pin/capacitor-ambient-ai`(workspace 依赖)挂上。
+2. iOS `Podfile` / `CapApp-SPM/Package.swift` 平台最低 17.0(V2 commit `4f88e09f` / `472de56a`)。
+3. Android 仍是 stub,Makefile 的 Android build 路径需要 verify。
+
+### B. ~~iOS ProactiveEngine 包~~ — **不迁移**
+
+V2 自己在 `e8803aee feat(ambient-ai): introduce AmbientAi facade`(2026-05-10)里把整个 `capacitor-plugins/proactive-engine/` 删掉了——`b037d620` / `c863c320` / `e09e9f37` / `6c426952` / `40a9595c` / `2d36c683` 这一连串提交合在 V2 head 之前已经被废弃,目录在 `origin/proactive-ai-v2` 当前 tree 里**不存在**。
+
+如果未来真要复活 ProactiveEngine,需要从历史 commit 单独捞,不在本计划范围。
+
+### C. 需要迁移到 V3 — 前端 ambient ingest 链路 + 调试面板
+
+| Commit | 主题 | V2 路径 | V3 落点 |
+|---|---|---|---|
+| `2cff5b68` | AmbientAudioDebugPanel 雏形 | `proactive-ai-frontend/src/components/AmbientAudioDebugPanel.tsx` + test | 直接 cp |
+| `06fa7152` | 调试面板暴露 recording state | 同上 | 一起带 |
+| `8d6837c0` | 前端 ingest ambient transcripts → `session_summary` PersonalSignal | `proactive-ai-frontend/src/services/ambient/sources/sound-classifier.ts` + test | 整套 `services/ambient/` 平移 |
+| `bc63451f` | auto-start ambient upload with outbox | `services/ambient/lifecycle.ts` + `outbox.ts` | 一起带 |
+| `9d9a3099` | 用 proactive API client 鉴权 ambient device ingest | `proactive-ai-frontend/src/lib/devices.ts` + `services/ambient/sync-scheduler.ts` | 改 API base URL 后平移 |
+| `a5bc1bfb` | stabilize browser view tests | frontend tests | 看 V3 是否已经稳定 |
+
+**做法**:V3 frontend 没有 `services/` 目录,而且不是只 cp 一个目录就完事——下面这些 cp 之外的硬依赖都要补,缺一个 ambient 都跑不起来:
+
+1. **根目录工作区**:V3 `package.json:8` 当前 `"workspaces": ["proactive-ai-frontend"]`,加回 `"capacitor-plugins/*"`。同时加 V2 的 `postinstall: patch-package` 钩子和 `patches/@capacitor-community+contacts+7.2.0.patch` 文件。
+2. **frontend deps**:V3 `proactive-ai-frontend/package.json` 当前只有 stock `@capacitor/*`,要加 V2 同步的 5 个:
+   - `@pin/capacitor-ambient-ai`(`file:../capacitor-plugins/ambient-ai` workspace 链接)
+   - `@capacitor-community/contacts` ^7.2.0(配合 patch)
+   - `@capacitor/geolocation` ^8.2.0
+   - `@capgo/capacitor-barometer` ^8.0.11
+   - `@capgo/capacitor-health` ^8.4.9
+3. **代码 cp**:把 V2 `proactive-ai-frontend/src/services/ambient/` 整目录 cp 过来,把 `AmbientAudioDebugPanel.tsx` / `AmbientSourcesPanel.tsx` + 各自 test cp 到 V3 `src/components/`。
+4. **API base URL + endpoint**:`lib/devices.ts` 把 ambient ingest 从 V2 的 `/api/proactive/devices/ingest` 改成 V3 实际路径 **`/api/devices/ingest`**(注意:V3 路由是固定 path,没有 `{deviceId}` 段,`deviceId` 走 `X-Device-Id` header + body 里的 `deviceId` / 每 item `source` 字段)。
+5. **Body shape**:V2 `ingestSignals` 当前 `JSON.stringify(wire)` 发的是 array(`devices.ts:295`),V3 现状 `body: dict` 直接 422——**这要在 step 1 修服务端,改成 `body: dict | list` 并让 dead code `is_array` 真正生效**;step 3 只继承 V2 的 array shape,不改前端。
+6. **Lifecycle wiring**(V2 `main.tsx:23-26` + `App.tsx:14-15`,**不能照抄,要拆**):
+   - **outbox drain(always-on)**:`main.tsx` 启动 `bindAmbientLifecycle()`,绑 Capacitor `App.addListener("appStateChange", ...)`,前后台切换时 `runtime.drain()`。这条没有隐私问题,只是把已经在 outbox 里的事件继续上传。
+   - **source autoStart(必须用户显式 opt-in 才启动)**:V2 `startAmbientUpload()` 里直接 `runtime.autoStart()` 会**默认启动** `sound_classifier` / `visit` / `activity` / `location` 等 source,这些会向 OS 申请并占用麦克风 / 音频采集 / 定位流。**用户只是登录,没主动开启 ambient → 不应该被采集**。如果 V2 已经在 OS 层 grant 过权限,直接 autoStart 等于绕过 V3 的同意流程,是隐私回归。
+   - **正确做法**:V3 必须有"每个 ambient source 的用户设置"(`pai_user_settings` 加一组 `ambient_sources` JSON,或者新增 `pai_ambient_source_consents` 表),登录后**只对用户已 opt-in 的 source 调 `runtime.startSource(<key>)`**。`AmbientSourcesPanel` 既是显示也是开关。`startAmbientUpload` 必须读这个 user settings,不存在 / 全空 → 不启动任何 source,只 drain outbox。
+   - **本计划范围内**:V3 user settings schema 加 `ambientSources` 字段(per-source `enabled` boolean),`AmbientSourcesPanel` 增加 toggle UI,`startAmbientUpload` 改成"按 settings 过滤"。这一段需要在 step 3 完整做完才算 land,不能"先 cp 跑通再补"——cp 跑通的那一刻就有隐私问题。
+7. **iOS Info.plist 隐私权 + 后台模式**(V2 `proactive-ai-frontend/ios/App/App/Info.plist` 有,V3 没):
+   - `NSLocationAlwaysAndWhenInUseUsageDescription` / `NSLocationWhenInUseUsageDescription`
+   - `NSMicrophoneUsageDescription`
+   - `NSMotionUsageDescription`
+   - `NSSpeechRecognitionUsageDescription`
+   - `UIBackgroundModes`(audio / location 看 V2 实际值)
+8. **Outbox 字段名**:V2 outbox 持久化的 dedupe key 字段在 `services/ambient/outbox.ts` 里实测一遍(driver 是 IndexedDB / Capacitor Preferences / SQLite),保证 retry 时和 server 接受的字段名一致;server 同时接受 `dedupeKey` / `dedupe_key`(`populate_by_name=True`),outbox 用哪种都行,但跨 schema 漂会让旧数据重传。
+9. **Outbox 成功判定**:**不要**直接拿 `results[i].status === "inserted"`,当前 server 把"真 duplicate / 0-row 写 / 内部异常吞 logger.warning"三种情况都返回 `duplicate`,outbox 把 duplicate 当失败会无限 retry,当成功会丢真错误。Step 1 已经把 server status 扩成 5 态 `inserted | duplicate | rejected | parse_failed | retryable_failed`,outbox 在 step 3 cp 之后**按 5 态判**:
+   - `inserted` / `duplicate` → 成功,从 outbox 移除。
+   - `rejected` / `parse_failed` → 永久失败,从 outbox 移除并记日志,不 retry(reason 写日志,方便后端排查 client schema bug)。
+   - `retryable_failed` → **保留**在 outbox 里,按指数退避 retry,不要因为 HTTP 200 OK 就移除。
+
+10. **`DeviceTimeline` dual-fetch**:V3 当前 `DeviceTimeline.tsx:57` 只拉 signals,health 上传成功也不会显示(health policy 是 `raw_only`)。Step 3 在 `DeviceTimeline` 加一路 `fetchDeviceHealth(...)`(已有 `/api/raw/device-health` endpoint),两路 `Promise.all` 各拿 page,client merge sort 按 `occurred_at` 取最新 N 条。新增 `HealthObservationCard` 渲染组件展示 metric / value / unit / source_app。**不**改后端 `_HEALTH_POLICY`——见 D-4 详细论证。
+
+### D. 需要迁移到 V3 — 后端:health 观测 metric-scoped replace + 真 V3 bug 修正
+
+**比原计划大**——除了平移 V2 `089e1f94` 的 metric scope,V3 当前还有三处独立 bug 必须一起修,否则 step 3 前端 cp 之后会撞上:
+
+#### D-1. health full replace 加 metric scope **+ `reference_count = 0` 过滤**
+
+V2 `replaceDeviceHealthObservations`(`raw-db.ts:1934`)的 SQL 头是:
+```sql
+DELETE FROM device_health_observations WHERE device_id = ? AND reference_count = 0
+```
+注释明说"Full health sync refreshes only the unreferenced current slice; referenced rows are immutable raw evidence"。V3 `raw_device.py:176-198` 的 `replace_health` 当前**无条件 DELETE 整个 scope**,会把 memory / signal 已经引用的 raw evidence 一起干掉,这是 silent 数据丢失。
+
+实施:
+1. `DeviceHealthReplaceScope` 加可选 `metric: str | None`。
+2. `health_full_replace_scope` 在所有 observations 共享同一 `metric` 时返回三键 scope。
+3. `RawDeviceRepository.replace_health` 重写 DELETE SQL,**强制带 `AND reference_count = 0`**,scope 含 metric 时再加 `AND metric = %s`。
+4. 平移 V2 commit `089e1f94` 的 5 个 contract test 到 `tests/web/devices/test_health_replace.py`,**额外加一个测试**:replace 不能删 `reference_count > 0` 的行。
+
+#### D-2. `/api/devices/ingest` 签名修正(让 array body 真能进 handler)
+
+V3 `devices.py:237` 当前 `body: dict`,FastAPI/pydantic 在 array body 上直接 422。下面 `is_array = isinstance(body, list)`(`devices.py:252`)是 dead code。V2 前端 `ingestSignals` 发的就是 array(`devices.ts:295`)。
+
+修法二选一:
+- (推荐)签名改成 `body: list | dict`(Python 3.10+ syntax)或显式 `Union`,handler 的 `is_array` 分支立刻生效。
+- 用 `Request` 拿原始 body 自己 json.loads。
+
+加 HTTP 端到端测试覆盖 array 和 wrapper 两种 shape。
+
+#### D-3. `results[i].status` 扩展(从 2 态扩到 5 态)
+
+`devices.py:435-441` 当前:
+```python
+ok = raw_inserted.get(n.id, False) or signal_inserted.get(n.id, False)
+results.append({..., "status": "inserted" if ok else "duplicate"})
+```
+"duplicate" 实际把三种情况合在一起:
+1. 真 dedupe(server 已有同 key,正确"no-op success")
+2. raw insert 返回 0 但无 exception(也是 success-like)
+3. signal `ingest_one` 抛异常被 `logger.warning` 吞掉(真失败,client 无感)—— **第二轮 review 高优指出:这种 transient failure 绝不能折叠成 client 永久失败**
+
+outbox 无法区分这三种 → 没法决定 retry 还是 abandon。
+
+实施 5 态:
+- `inserted`:raw 或 signal 至少一处实写入。
+- `duplicate`:server 已有同 dedupe_key,**由 ON CONFLICT 触发**(必须能从 INSERT 的 `RETURNING xmax = 0` 或类似机制区分,不允许用"0 rows affected"启发式——那会和 raw insert 写 0 行的情况混)。真 idempotent no-op。
+- `rejected`:**只放确定性的语义校验失败**——missing kind / cross-device dispatch / unsupported_full_sync / 跨 device 静默丢弃。client side 永久 bug,outbox 移除。
+- `parse_failed`:`IngestItemIn.model_validate` 抛异常那条 item(当前直接 continue 不返回 result,修)。client schema bug,outbox 移除。
+- `retryable_failed`:**服务端写入抛异常**——`raw_repo` / `signals_repo` 的 transaction 抛了异常被 `logger.warning` 吞掉的那条 item。本质 transient,outbox **必须保留并 retry**。
+- 当前代码里两处 `try/except` + `logger.warning` 的地方(`devices.py:395-397` 的 raw transaction,`devices.py:430-431` 的 signal_ingest)改成:把异常类型放进 result 的 `reason`,`status` 设为 `retryable_failed`,**不再闷掉**。
+
+加 HTTP 端到端测试覆盖 5 态——尤其测一个 fault-injection 用例:repository mock 抛异常,verify response `status="retryable_failed"` 而不是 `rejected` 或 `inserted`。
+
+#### D-4. **`DeviceTimeline` 加 `/api/raw/device-health` 合并展示**(不改 policy)
+
+用户拍板"健康数据在 device data 里能显示就行,不要单独 health 视图",但 V3 现状是:
+- `policies.py:245` `_HEALTH_POLICY` mode = `raw_only`,**只写 `pai_raw_device_health_observations`,不写 `pai_personal_signals`**。
+- `DeviceTimeline.tsx:57` 只调 `fetchSignals(...)`,**根本不 fetch `/api/raw/device-health`**。
+- 结果:health 上传成功也不会出现在 `DeviceTimeline`。
+
+**~~曾经考虑改 `_HEALTH_POLICY` 为 `dual`~~**——直接放弃。Health 观测频率天然高(steps / heart rate 分钟级,sleep / activity 小时级),per-observation 写一条 signal 会:
+- `pai_personal_signals` 行数膨胀几个数量级,影响 timeline query / memory pipeline / 下游 signal processing(generator / dream 都按 signal 计费 + 选卡)。
+- 噪声把真信号(message / event / 用户动作)淹没。
+- 后期再想往回收(去 dual)代价更大——已经写下去的 signal 行还得迁。
+
+**两条候选路线,任选一条**(reviewer 高优指出之前的"PAGE_SIZE 各取 + merge top N + 两边推进"是错的——一边流量大就会让另一边没渲染的行被 cursor 推进吞掉):
+
+**路线 A:server-side merged timeline endpoint(推荐)**
+
+- 新增 `GET /api/devices/{deviceId}/timeline`,server 端 union signals + raw health,按 `occurred_at DESC` 合并 + keyset cursor。
+- 返回统一 envelope:`{ items: [{ type: "signal" | "health", row: {...} }], next_cursor, has_more }`。
+- 前端 `DeviceTimeline` 只调一个 endpoint,游标干干净净。
+- 工作量:~80 行 Python 实现 + ~60 行测试;frontend ~30 行 UI(`HealthObservationCard` + 把 `fetchSignals` 换成 `fetchDeviceTimeline`)。
+- 风险:server 端 UNION 跨表 query,加索引,但 V3 schema 已经在两张表都有 `(user_id, device_id, occurred_at)` 索引。
+
+**路线 B:frontend k-way merge with per-source buffers**
+
+- 各自 keyset cursor,每路维护一个 buffer。
+- 渲染时从两个 buffer 头部取 `occurred_at` 较大者,**只对实际消费掉的那一路推进 cursor**,没消费的 buffer 留着下次合并。
+- buffer 见底时再拉一页。
+- 工作量:frontend ~150 行 + 测试覆盖偏斜流(只有 signals / 只有 health / 两边交错 / 一边空了 / cursor=null 终止),后端 ~30 行(补 `since` / `until` / `before` query param)。
+- 风险:复杂度更高,边界条件更多;V3 `fetchSignals` 返回 `next_cursor: null`(单页)和 raw health 当前**没有 `before` cursor 也没有任何 cursor 字段**,这两个 endpoint 都需要先补 cursor 才能做。
+
+**默认路线 A**——后端工作量差不多但 frontend 不用碰复杂 k-way merge;另外把"是 signal 还是 health"的判断收回到 server,前端只渲染 item type,后续要再加 device-state / device-apps timeline item 都很自然。
+
+**工作量**(按路线 A):Python 端 D-1 ~80 + D-2 ~10 + D-3 ~50 + D-4 ~80(新 timeline endpoint)= 共 ~220 行实现 + ~350 行测试;Frontend 端 D-4 part = ~30 行 UI(进 step 3 做)。
+
+### E. CORS / CI / iOS bundle id
+
+| Commit | 主题 | V3 处理 |
+|---|---|---|
+| `236e6266` + `814f9240` | CORS 放行 `X-Device-Id` / `X-Device-Token` | V3 `web/app.py:153` 已经 `allow_headers=["*"]`,**不需要再做** |
+| `f2471b94` + `1b5267e9` | `Deploy Test` workflow 注册 | V3 已经有 `deploy-test.yml`,**不需要再做** |
+| `84e0cbdc` | align iOS Capacitor bundle id | V3 frontend iOS 路径独立维护,如果 bundle id 仍是历史值,迁 ambient-ai 插件后顺手对齐 |
+| `544ed2c3` + `69d6d5c4` | CI 用 app store signing / build capacitor plugins for iOS | V3 CI 需要新增 capacitor-plugins workspace 后再补 |
+| `d8142b64` | restore Android Capacitor device build | 平移 ambient-ai 后看 Android 是否能 build |
+| `5782ee1d` | docker web mode build 跑通 | V3 没有这个 docker compose path,**不需要** |
+| `d99ab4aa` + `545a9f68` + `2b2f95bf` + `472de56a` | lockfile pin / iOS 17 deployment target | 平移插件时一起带 |
+| `6a5c0629` + `1032de0d` | demo 验证 UI / lockfile | 优先级低 |
+
+### F. 完全砍掉 — Data Studio + Mini App + 独立 Health 视图
+
+按用户拍板**完全不迁移**:
+
+| Commit / 路径 | 说明 |
+|---|---|
+| `be89eed9 feat(data-studio): add mini app builder` | V2 在 `proactive-ai-frontend/src/features/data-studio/`(`DataStudioRoot.tsx` + `DataStudioEntryCard.tsx` + `api.ts` + `dataStudioBridge.ts`)。整个 `features/data-studio/` 目录不要。 |
+| 注意:`be89eed9` 同时在 OpenClaw plugin `raw-db.ts` 加了 health latest + rollup read surfaces | 这部分**不迁完整 rollup**:V3 的 `/api/raw/device-health`(`raw.py:211`)已经能拉 `pai_raw_device_health_observations` 行,D-4 选定的"frontend dual-fetch"路线就用这个,**不需要 rollup endpoint**。raw API 可能要补 `since` / `until` / `before` 参数(D-4 ~30 行)。 |
+| 任何"单独 health 视图"的 UI | 不做。`DeviceTimeline` 在 step 3 改为 dual-fetch(signals + raw health),按时间合并展示。详见 D 段 D-4 + step 3。 |
+| `miniapp/`(V2 老仓目录) | V3 已经删,不恢复 |
+
+## V3 device ingest 契约(step 3 启动前必须先验证完成)
+
+来源:`pinai-agents/src/pinai_agents/web/routes/ui/devices.py`(2026-05-12 实测)。下表是前端 `services/ambient/sync-scheduler.ts` cp 之前的硬契约,不要靠"先 copy + 跑起来对一对"。
+
+### Routes(prefix `/api/devices`)
+
+| 路径 | 方法 | Auth | 用途 |
+|---|---|---|---|
+| `/register` | POST | Supabase JWT(`current_user`)| 注册 device,返回 `deviceToken` |
+| `/list` | GET | Supabase JWT | 列出活跃 device |
+| `/revoke` | POST | Supabase JWT | 失效 device |
+| `/rotate` | POST | Supabase JWT | 轮转 device token,旧 token 校验失败 → 401 |
+| `/ingest` | POST | **device token only**(`X-Device-Id` + `X-Device-Token`)| 批量上报 items |
+| `/media/{storage_path:path}` | GET | Supabase JWT | 签名 URL,要求 `storage_path` 以 `<user_id>/` 开头 |
+
+### `/ingest` 契约细节(前端 ambient 上传链路的唯一入口)
+
+> ⚠️ 下面带 **【V3 当前 bug,step 1 修】** 标记的项是 V3 实际行为,**和正确目标行为不同**。Step 1(D 段)落地后,这些 bug 消失,契约变成"目标行为"。
+
+- **Auth headers**:`X-Device-Id` + `X-Device-Token` 必带。
+  - 任一**缺**(header 不存在)→ **【V3 当前 bug】FastAPI `Header(...)` 默认返回 `422 Unprocessable Entity`,不是 401**。前端 outbox 把 422 当永久失败可能也行,但和 V2 行为(401 时清缓存重 register)不一致。step 1 用 `Header(None, ...)` + handler 内显式校验,改成统一返回 401 `missing device credentials`。
+  - 任一**错**(header 存在但值不匹配)→ 401 `invalid device credentials`(handler 里 `find_device_by_token` 抛 `DeviceTokenInvalid` 转 401,这条没问题)。
+- **JWT**:**不需要**。Service-role 直查 `pai_devices` 拿 `user_id`,RLS 走 service_role fallback。前端可以走 proactive API client 顺手带 JWT,但服务端不读它。
+- **Body shape**:目标接受两种 shape(plugin 1:1):
+  - Array: `[{...item}, ...]`(每个 item 可带 `source: "device:<id>"`)
+  - Wrapper: `{ deviceId: "...", items: [...] }`(wrapper deviceId 作为 fallback)
+  - **【V3 当前 bug】** handler 签名 `body: dict`(`devices.py:237`)让 array body 直接 422,下游 `is_array = isinstance(body, list)` 是 dead code。V2 前端 `ingestSignals`(`devices.ts:295`)发的就是 array,如果不修,step 3 cp 完 100% 跑不通。step 1 改签名为 `body: list | dict`(或用 `Request` 拿原始 body)。
+- **跨 device 限制**:item `source: "device:<id>"` 若不等于 token-verified 的 `deviceId`,**该 item 静默丢弃**(`devices.py:279-281` 只 `continue`)。MVP 只允许 self,不支持 fan-out。step 1 把这种 item 在 `results[]` 里返回 `status: "rejected"` + reason,而不是从 result 数组里消失。
+- **错误码**(step 1 后的目标):
+  - 400 `items must be an array` — items 字段不是 array
+  - 400 `deviceId or signal source required` — 既没 wrapper deviceId 也没任何带 source 的 item
+  - 401 device credential 不对(包括缺 header)
+- **成功 response shape**(step 1 后的目标):
+  ```json
+  {
+    "ok": true,
+    "accepted": <int>,       // 收到的 raw_items 数
+    "inserted": <int>,       // 真写库的(raw 或 signal 至少一处实写入)
+    "ignored": <int>,        // accepted - inserted
+    "results": [
+      {
+        "id": "<item.id>",
+        "dedupeKey": "<server-resolved>",
+        "status": "inserted" | "duplicate" | "rejected" | "parse_failed" | "retryable_failed",
+        "reason": "<string,可选,非 inserted/duplicate 时给>"
+      }
+    ]
+  }
+  ```
+  - `inserted`:raw 或 signal 至少一处实写入。**outbox 视为 success,从队列移除。**
+  - `duplicate`:server 已有同 dedupe_key,真 idempotent no-op(由 ON CONFLICT 触发,**不依赖** "0 rows affected" 启发式判断)。**outbox 视为 success,从队列移除。**
+  - `rejected`:**确定性的语义校验失败**——missing required field / cross-device dispatch / unsupported_full_sync / 跨 device 静默丢弃 等,重传也不会变好。**outbox 视为永久失败,移除并记日志,不要 retry。**
+  - `parse_failed`:`IngestItemIn.model_validate` 抛异常,本地客户端 schema bug。**outbox 视为永久失败,移除并记日志。**
+  - `retryable_failed`:**服务端写入抛异常**——DB 连接断、SAVEPOINT 失败、repository bug、Supabase Storage 一时不可用、等。本质是 transient,重试有机会成功。**outbox 视为可重试失败,保留在队列里按指数退避 retry**,不要因为 200 OK 就把它当成功移除。
+  - 网络错误 / 5xx / 4xx(非 200 整体):**outbox 视为可重试失败,按指数退避 retry。**
+  - **【V3 当前 bug】** 现状只有 `inserted | duplicate` 两态,把"真 dedupe / 0-row insert / signal_ingest 抛异常被 logger.warning 吞"折叠成同一个 `duplicate`,outbox 没法可靠区分。step 1 不修这个,**禁止开始 step 3**。
+  - **关键区分(reviewer 高优指出):** 不要把"服务端写入异常"折叠到 `rejected`。`rejected` 只放确定性 client-side bug;服务端抛异常必须走 `retryable_failed`,否则一次 DB 抽风会让用户事件被永久删除而 client 完全无感(200 OK + outbox 移除)。
+
+### `IngestItemIn` schema(client → server,`devices.py:72`)
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `id` | string | ✅ | item 唯一 id |
+| `kind` | string | ✅(或 `itemType` 给 legacy)| 路由到 raw / signal 策略 |
+| `itemType` | string | — | 老 alias,新代码用 `kind` |
+| `title` | string | ✅ | |
+| `summary` | string | ✅ | |
+| `payload` | object | — | 任意 JSON;media kind 带 `binary_b64` + `mime` 服务端会上传 Supabase Storage 后替换成 `storage_path` |
+| `salience` | float | 默认 0.0 | |
+| `confidence` | float | 默认 0.0 | |
+| `dedupeKey` / `dedupe_key` | string | — | 缺省时服务端自动生成 `device:<device_id>:<item.id>` |
+| `occurredAt` / `occurred_at` | ISO string \| epoch ms | — | 默认服务器当前时间 |
+| `availableAt` / `available_at` | ISO string \| epoch ms | — | 默认 = occurredAt |
+| `expiresAt` / `expires_at` | ISO string \| epoch ms | — | 默认 = occurredAt + 30 天 |
+| `syncMode` / `sync_mode` | string | — | `incremental` \| `full`(走 `normalize_sync_mode`)|
+| `source` | string | — | per-item override:`"device:<id>"`,跨 device 路由 |
+
+`model_config = {"populate_by_name": True}` → camelCase 和 snake_case 都接受。**前端 ambient 用哪种风格不重要**,但 outbox 持久化的字段名要稳定,不能跨 schema 漂。
+
+### Replace / dedupe 语义
+
+- **Dedupe key**:server 端会保底生成。**outbox 的本地 key 必须等于 server 看到的 key**——客户端如果显式发 `dedupeKey`,就用自己的;如果不发,outbox 也得用 `device:<deviceId>:<item.id>` 作本地 key,否则重传判定会错位。
+- **sync_mode**:
+  - `incremental`(默认):append-style ingest
+  - `full`:按 policy 走 replace_scope。
+    - `device_health_observations`:**【V3 两个 bug】** (a) 当前只 `(device_id, local_date)` 缺 metric tightening,step 1 D-1 加;(b) 当前 `replace_health` 无条件 DELETE,**V2 是只删 `reference_count = 0` 的行**(`raw-db.ts:1934`),保护已被 memory / signal 引用的 raw evidence。step 1 D-1 也修这个,SQL 强制带 `AND reference_count = 0`。
+    - `device_apps_snapshot` / `device_contacts_snapshot`:走全 device 替换。
+- **part-success**:per-item 各自 SAVEPOINT(`devices.py:391-393`),单条坏行不污染整批。step 1 D-3 后,outbox 按 `results[i].status` **5 态**处理。
+
+### 已有测试覆盖 + 缺口
+
+V3 现有测试(在 `pinai-agents/tests/web/devices/`):
+- `test_policies.py`:**单元测试** policy 解析、kind 路由、`normalize_sync_mode`、parse_apps / parse_contacts / parse_health 的字段提取、unknown kind fallback。
+- `test_token.py`:device token 生成 + 校验。
+
+**契约缺口**(step 3 之前必须补):
+- **没有 HTTP-level 端到端测试**触发 `/api/devices/ingest`,所以 response shape / 错误码 / multi-item part-success 行为目前只靠代码读出来。grep `client.post.*devices.*ingest` 在整个 `pinai-agents/tests/` 是空。
+- **任务 D 的 5 个 V2 contract test**(metric-scoped replace、v1 envelope、legacy iOS flat payload、sensor-fallback metadata、metric-scoped preserve siblings)在 V3 仍未移植,要先补。
+
+**建议**:step 3 之前补两类测试:
+1. 一组 `pinai-agents/tests/web/devices/test_ingest_http.py` 端到端,覆盖:200 + accepted/inserted/ignored 计数、part-success(单 item bad)、401 缺 token、400 缺 deviceId、wrapper + array 两种 body shape、`source: device:<id>` 路由、跨 device 静默丢弃。
+2. 任务 D 的 5 个 health metric-scoped contract test 平移。
+
+## 推荐执行顺序
+
+5 步,每步独立可验证。**Step 1 是大头**(D 段 4 个子任务 + 契约测试),step 2 和 step 1 可以平行做。
+
+1. **后端 D 段 + HTTP 契约测试**(原以为半天,现在 ~1.5 天)。
+   - **D-1**:health metric scope + `replace_health` 加 `WHERE reference_count = 0` 过滤。
+   - **D-2**:`/api/devices/ingest` 签名 `body: dict` → `body: list | dict`(或 `Request` 拿 raw body),让 array body 真能进 handler;`Header(...)` → `Header(None, ...)` + handler 内显式校验,缺 header 返回 401 而非 422。
+   - **D-3**:`results[i].status` 扩 **5 态**(`inserted | duplicate | rejected | parse_failed | retryable_failed` + 可选 `reason`)。**关键区分**:`rejected` 只放确定性 client-side 失败(missing kind / cross-device / unsupported_full_sync);**服务端写入异常走 `retryable_failed`**,outbox 会保留重试,不能被 logger.warning 吞成 `rejected` 让 client 永久丢数据。`IngestItemIn.model_validate` 失败的 item 也加入 `results[]`(`status="parse_failed"`)而不是 silent continue。`duplicate` 必须由 ON CONFLICT 明确触发,不允许"0 rows affected"启发式。
+   - **D-4**:**不改后端 policy**。`_HEALTH_POLICY` 留 `raw_only`。**新增 `GET /api/devices/{deviceId}/timeline`**——server 端 UNION signals + raw health 按 `occurred_at DESC` 排序 + keyset cursor,统一 envelope `{ items: [{ type: "signal" | "health", row }], next_cursor, has_more }`(详见 D-4 section)。前端在 step 3 把 `DeviceTimeline` 从 `fetchSignals` 切到 `fetchDeviceTimeline`,加 `HealthObservationCard` 渲染。
+   - **D-5(新增)**:user settings schema 加 `ambient_sources` 字段。`pai_user_settings`(verify 是否存在,如果没,加 migration)新增 JSON 列或新表 `pai_ambient_source_consents(user_id, source_key, enabled, created_at, updated_at)`。`GET / PUT /api/user/settings` 增加 `ambientSources: { [key]: { enabled: boolean } }`。
+   - **测试**:平移 V2 `089e1f94` 的 5 个 health 契约测试 + 新增 `tests/web/devices/test_ingest_http.py` 端到端覆盖 wrapper/array、5 态 status(尤其 `retryable_failed` 的 fault-injection 用例)、reference_count 保护、缺/错 header、跨 device rejected。新增 `test_timeline.py` 覆盖 D-4 的 `/api/devices/{deviceId}/timeline`(只 signal / 只 health / 两个交错 / cursor 边界 / empty)。**不**测 health signal 写入(D-4 决定不走 dual)。
+   - **完成标志**:`uv run pytest pinai-agents/tests/web/devices/` 全绿 + D-4 timeline endpoint + D-5 settings schema 上线。step 3 在这之前不开始。
+2. **Capacitor 插件平移 + web/iOS 双 build 验证**(原 A)——和 step 1 平行。
+   - 根目录 `package.json` workspaces 加 `"capacitor-plugins/*"` + `postinstall: patch-package`。
+   - `cp -r capacitor-plugins/ambient-ai/` 从 V2 worktree 到 V3(仅这一个,proactive-engine 不要)。
+   - `cp -r patches/` 从 V2(`@capacitor-community+contacts+7.2.0.patch`)。
+   - `proactive-ai-frontend/package.json` 加 5 个 deps(见 C 段第 2 项)。
+   - iOS `Podfile` / `CapApp-SPM/Package.swift` 平台最低 17.0。
+   - `proactive-ai-frontend/ios/App/App/Info.plist` 加 5 个 Usage Description + UIBackgroundModes(从 V2 cp 对应 key)。
+   - **Web build 守护(reviewer 高优指出 V2 有此步,V3 不能丢)**:
+     - `AmbientAudioDebugPanel` / `AmbientSourcesPanel` 等触碰 `@pin/capacitor-ambient-ai` 的组件用 `React.lazy` + `Suspense` 包,**只在 `isNative` 时挂载**。直接 import native 模块会让 Vite 把 native 代码拉进 web bundle,production build 直接挂。
+     - `services/ambient/` 内部所有触碰 native plugin 的代码,顶层都要 `isNative` 短路(V2 的 `lifecycle.ts:9` 已经这么写,follow 同样模式)。
+     - `vite.config.ts` 看是否需要把 `@pin/capacitor-ambient-ai` 标为 web build 的 external / mark 成 `optional`。可以先 build 一次看错误,有问题再补 config(参考 V2 commit `893df821 fix(frontend): resolve web build failure caused by capacitor native plugin imports`)。
+   - **Build 验证清单**(三项都要绿,不能只跑 iOS):
+     - `cd proactive-ai-frontend && npm run type-check`
+     - `cd proactive-ai-frontend && npm run build`(web build)
+     - `npx cap sync ios && make ios DEV=1`(iOS 真机 build)
+   - Android 仍 stub,不强求 build 通过,但不能让 sync 报错。
+3. **前端 ambient ingest 链路 + lifecycle wiring + DeviceTimeline 切 endpoint + 用户 opt-in UI**(C)。**前置**:step 1 全绿、step 2 web/iOS build 都通过。
+   - `cp -r proactive-ai-frontend/src/services/ambient/` 从 V2 到 V3。
+   - `AmbientAudioDebugPanel.tsx` / `AmbientSourcesPanel.tsx`(+ tests) cp 到 V3 `src/components/`,在 `DebugPanel.tsx` 挂上,**用 `React.lazy` + `isNative` 守 web build**。
+   - `lib/devices.ts` ingest URL 改 `/api/devices/ingest`(注意:没有 `{deviceId}` 段)。
+   - V3 `main.tsx` 加 V2 `main.tsx:23-26` 那 4 行 dynamic import + `bindAmbientLifecycle()`(只 drain outbox,**不**启动 source)。
+   - **不**直接照搬 V2 `App.tsx:14-15` 的 `startAmbientUpload()`——见下面 user-settings 项。
+   - **User settings + per-source opt-in**(reviewer 高优指出,**privacy invariant**):
+     - V3 user settings(`useUserSettings.ts` + 后端 `pai_user_settings`)加 `ambientSources` 字段(per-source `enabled: boolean`,默认全部 `false`)。
+     - `AmbientSourcesPanel` 改成既显示 source 状态又可 toggle,toggle 写 user settings。
+     - 登录成功后:`startAmbientUpload({ enabledSources })`,内部只对 `enabled=true` 的 source 调 `runtime.startSource(<key>)`,**不调** `runtime.autoStart()`。
+     - 没有任何 source 被 enable → 只 drain outbox,不启动任何采集。
+   - Outbox **按 5 态判 status**(见契约 section 的 outbox 处理规则),`inserted`/`duplicate` 移除,`rejected`/`parse_failed` 移除+日志,`retryable_failed` 保留 retry。
+   - **`DeviceTimeline.tsx` 切到统一 timeline endpoint**:`fetchSignals` → `fetchDeviceTimeline(deviceId, ...)`(step 1 D-4 新建的 `GET /api/devices/{deviceId}/timeline`),按 envelope `items[].type` 分发到 `HealthObservationCard` 或现有 signal 渲染。**不**做 frontend k-way merge——前期 reviewer 高优指出那个方案会丢数据。
+   - **Build 验证**:`npm run type-check` + `npm run build`(web)+ `make ios DEV=1`(iOS)都过,不只跑 iOS。
+4. **iOS 真机端到端验证**。`make ios DEV=1` 或 `make ngrok` + 真机装包,验证:
+   - **Privacy invariant**:全新用户登录后,`AmbientSourcesPanel` 所有 toggle 默认关闭,无任何采集启动(查 Console / Xcode logs:没有 AudioCapture 启动、没有 location stream 开)。手动开启一个 source 后,采集启动 + outbox 写入开始。退出登录或关 toggle 后,采集停止。**这一条不验证 = 隐私回归 land**。
+   - ambient 转录 → outbox → V3 `/api/devices/ingest` 200。
+   - DB 检查:`pai_raw_device_health_observations` 有 row(D-1 生效)。**不**期待 `pai_personal_signals` 有 health 行(D-4 决定不走 dual)。
+   - 前端 `DeviceTimeline` 同时展示 signal + health item(D-4 统一 timeline endpoint 生效)。
+   - 触发一个 `sync_mode=full` 上传,verify reference_count > 0 的旧行没被删(D-1 reference_count 过滤生效)。
+   - 触发一个故意 parse 失败的 item,verify response `status="parse_failed"`,outbox 移除不 retry。
+   - **fault-injection**:临时 stub repository 抛异常,verify response `status="retryable_failed"`,outbox 保留并随后 retry——这条是 reviewer 高优指出的核心 invariant,验证后才能说 step 1 D-3 真的落地了。
+5. **文档同步**。把 V2 的 `docs/plans/2026-05-10-ambient-ai-plugin.mdx` + `2026-05-05-mobile-health-data-upload-reloop.mdx` cp 到 V3 `docs/plans/`,在 `docs/plans/README.mdx` 表格里登记。V3 `docs/modules/data-connectors.mdx` 补 mobile ambient ingest 章节,引用本契约表 + step 1 的 5 态 status 表。
+
+## 风险 / 待确认
+
+契约相关的(endpoint shape / auth / body / response status / replace 语义)都已经在上面契约 section + D 段拍死并进入 step 1。这里只列剩下的未决项:
+
+1. **iOS Android parity**:V2 plan 文档 `2026-05-01-ios-mobile-data-android-parity.mdx` 在 V3 也存在,V3 的 Android 端 ambient 仍未实现。Android 接力工作是后续单独排期,本计划只把 V2 现有 iOS 实现完整带过来,不试图同时补 Android。
+2. **Demo 包**:`capacitor-plugins/demo/` 是给插件开发者跑的调试 app,不是 production frontend。本计划只 cp `capacitor-plugins/ambient-ai/` 一个包,不带 demo。
+3. **CI**:V3 CI workflow 在 `.github/workflows/` 下没有 capacitor 相关 build job,iOS 部分(`544ed2c3` 的 app store signing / `69d6d5c4` 的 build capacitor plugins for iOS)平移完插件后要补对应 step,但这部分不影响开发,可以分开排期。
+4. **Outbox 持久化兼容**:V2 outbox 用什么存储(IndexedDB / Capacitor Preferences / SQLite),dedupe key 字段名是 `dedupeKey` 还是 `dedupe_key`,要在 step 3 cp 前在 V2 worktree 实测一次。Server 同时接受两种命名(`populate_by_name=True`),outbox 自己用哪种都行,但跨 schema 漂会让重传判定错位。
+5. **`/api/raw/device-health` 的 pagination 兼容**:D-4 frontend dual-fetch 需要 cursor-based pagination 才能和 signals 那路对齐 keyset。V3 `raw.py:211` 的 `list_device_health` 当前支持哪些 query param 要在 step 1 查一遍,缺 `since` / `until` / `before` 就顺手补,不要等到 step 3 才发现没法分页。
+6. **`reference_count` 列**:✅ V3 schema 已经有(`019_pai_raw_device.sql`),D-1 不用新加 migration,只动 `replace_health` 的 DELETE SQL 即可。不过 V3 当前**没有任何代码会把 reference_count 增到 > 0**——memory / signal 引用 raw 时的"+1"逻辑在 V3 还没实装(`grep -rn "reference_count" pinai-agents/src/` 自查),意味着 D-1 加的过滤短期内不会真正保护任何行。但 V2 思路是 raw 引用机制后续会上,**现在就把 DELETE 限制带 `AND reference_count = 0` 是为了将来引用机制上线时不需要再回头改 SQL**。算前置防御,不算紧迫修复。
+
+## 相关 commit list(完整 63 条)
+
+为方便回查,V2 在分叉点之后的全部 commits 见 `git log --oneline c63f56f7..origin/proactive-ai-v2`。已经在上面分到 A/B/C/D/E/F 桶中。
