@@ -366,9 +366,16 @@ async def connect(internal_user_id: int, toolkit: str) -> ConnectInit:
         raise ComposioError(500, msg)
 
     # Step 2: link → redirect URL.
+    # `allow_multiple=True`: Composio's SDK defaults to False, raising
+    # ComposioMultipleConnectedAccountsError if this user already has an
+    # ACTIVE connection on the same auth_config. We support N accounts
+    # per (user, toolkit) — a user can connect multiple Gmail / Slack /
+    # GitHub identities — so the dedup guard would block the second
+    # `+add` click in the UI.
     def _link() -> Any:
         return _composio().connected_accounts.link(
             user_id=cx_user, auth_config_id=auth_config_id,
+            allow_multiple=True,
         )
 
     link = await _to_thread(_link)
