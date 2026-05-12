@@ -27,6 +27,10 @@ export interface Connection {
   toolkit: string;
   status: string;
   connectedAccountId: string | null;
+  /** Backend-resolved display label (email / username / etc.). Always
+   *  populated post-migration 040; backend falls back to a stable
+   *  "toolkit (...{cid-suffix})" string if the identity action failed. */
+  label: string | null;
   userInfo: Record<string, unknown> | null;
 }
 

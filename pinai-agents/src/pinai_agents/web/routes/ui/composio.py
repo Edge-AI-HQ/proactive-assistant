@@ -26,11 +26,15 @@ from ...composio_service import (
     ComposioError,
     _get_connection,
     connect,
+    delete_label,
     disconnect,
     evict_session,
+    fallback_label,
     list_connections,
+    resolve_and_persist_label,
     wait_active,
 )
+from ...db.repositories.connector_labels import ConnectorLabelsRepository
 from ...db.repositories.scheduled_tasks import (
     enqueue_once,
     requeue_once,
@@ -54,24 +58,55 @@ async def composio_status(user: User = Depends(current_user)) -> dict:
 
 
 @router.get("/connections")
-async def composio_connections(user: User = Depends(current_user)) -> dict:
+async def composio_connections(
+    user: User = Depends(current_user), pool=Depends(get_pool),
+) -> dict:
     try:
         items = await list_connections(user.id)
     except ComposioError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
-    # Frontend shape: legacy `connections` list with snake_case from the
-    # service models converted to the camelCase the SPA expects.
-    return {
-        "connections": [
-            {
-                "toolkit": c.toolkit,
-                "status": c.status,
-                "connectedAccountId": c.connected_account_id,
-                "userInfo": c.user_info,
-            }
-            for c in items
-        ],
-    }
+
+    # Join cached labels from pai_connector_labels. The eager-resolve at
+    # /wait time normally guarantees a row exists; the missing-row branch
+    # handles legacy connections (created before migration 040) by firing
+    # an inline resolve.
+    labels_by_cid: dict[str, str | None] = {}
+    raw_info_by_cid: dict[str, dict | None] = {}
+    if pool is not None:
+        async with user_scoped_tx(pool, user.id) as conn:
+            rows = await ConnectorLabelsRepository(user.id, conn).list_for_current_user()
+        for r in rows:
+            labels_by_cid[r.connected_account_id] = r.label
+            raw_info_by_cid[r.connected_account_id] = r.raw_user_info
+
+    out: list[dict] = []
+    for c in items:
+        cid = c.connected_account_id
+        if cid in labels_by_cid:
+            label = labels_by_cid[cid] or fallback_label(c.toolkit, cid)
+            raw = raw_info_by_cid.get(cid) or c.user_info
+        else:
+            # Legacy / row missing — resolve inline so the next call is fast.
+            # Bounded by `resolve_and_persist_label`'s single SDK roundtrip.
+            try:
+                resolved = await resolve_and_persist_label(pool, user.id, cid, c.toolkit)
+            except Exception as e:  # noqa: BLE001 — best-effort, must not 502 the list
+                logger.warning(
+                    "composio: inline label resolve failed user=%s cid=%s: %s",
+                    user.id, cid, e,
+                )
+                resolved = None
+            label = resolved or fallback_label(c.toolkit, cid)
+            raw = c.user_info
+        out.append({
+            "toolkit": c.toolkit,
+            "status": c.status,
+            "connectedAccountId": cid,
+            "label": label,
+            "userInfo": raw,
+        })
+
+    return {"connections": out}
 
 
 @router.post("/connect")
@@ -93,7 +128,7 @@ async def composio_connect(body: dict, user: User = Depends(current_user)) -> di
 
 @router.post("/disconnect", status_code=http_status.HTTP_204_NO_CONTENT)
 async def composio_disconnect(
-    body: dict, user: User = Depends(current_user),
+    body: dict, user: User = Depends(current_user), pool=Depends(get_pool),
 ) -> None:
     cid = str(body.get("connectedAccountId") or "").strip()
     if not cid:
@@ -102,6 +137,15 @@ async def composio_disconnect(
         await disconnect(cid)
     except ComposioError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
+    # Clean up the cached label so the row doesn't outlive the connection.
+    if pool is not None:
+        try:
+            await delete_label(pool, user.id, cid)
+        except Exception as e:  # noqa: BLE001 — best-effort cleanup
+            logger.warning(
+                "composio: delete label failed user=%s cid=%s: %s",
+                user.id, cid, e,
+            )
     # Drop any cached Tool Router session so the next chat call sees the
     # fresh connection state (e.g. user just disconnected one of two
     # accounts on the same toolkit).
@@ -122,13 +166,25 @@ async def composio_wait(
         raise HTTPException(status_code=502, detail=str(e)) from e
     if result.status != "ACTIVE":
         return {"status": result.status, "connectedAccountId": cid}
-    # Newly active — enqueue connector.init backfill task.
+    # Newly active — enqueue connector.init backfill task + resolve label.
     toolkit = result.toolkit or str(body.get("toolkit") or "").strip().lower()
     init_task_id = (
         await _enqueue_connector_init(pool, user.id, toolkit, cid)
         if toolkit and toolkit != "unknown"
         else None
     )
+    # Eager label resolution: one extra Composio call here so the
+    # subsequent /connections request returns the human label without
+    # blocking. Failures get recorded to pai_connector_labels and
+    # lazy-retried on the next /connections call.
+    if toolkit and toolkit != "unknown" and pool is not None:
+        try:
+            await resolve_and_persist_label(pool, user.id, cid, toolkit)
+        except Exception as e:  # noqa: BLE001 — label is best-effort, must not break /wait
+            logger.warning(
+                "composio: eager label resolve failed user=%s cid=%s tk=%s: %s",
+                user.id, cid, toolkit, e,
+            )
     out: dict = {"status": "ACTIVE", "connectedAccountId": cid}
     if init_task_id:
         out["initTaskId"] = init_task_id
@@ -157,6 +213,16 @@ async def composio_reconnect(
         raise HTTPException(
             status_code=503, detail="Scheduler unavailable or enqueue failed",
         )
+    # Reconnect can change the identity (rare, e.g. user re-OAuths from a
+    # different profile); refresh the label proactively.
+    if pool is not None:
+        try:
+            await resolve_and_persist_label(pool, user.id, cid, toolkit)
+        except Exception as e:  # noqa: BLE001 — best-effort
+            logger.warning(
+                "composio: label refresh on reconnect failed user=%s cid=%s: %s",
+                user.id, cid, e,
+            )
     return {
         "ok": True, "toolkit": toolkit,
         "connectedAccountId": cid, "initTaskId": init_task_id,

@@ -59,7 +59,7 @@ flowchart LR
 
 | 来源 | 当前作用 | 代码入口 | 数据落点 |
 |---|---|---|---|
-| Composio(`/api/composio/*`) | OAuth、ACTIVE 状态、user_info 展示、入队 connector.init | `web/routes/ui/composio.py`、`web/composio_service.py`、`useComposio.ts` | 状态来自 Composio API;identity 24h LRU cache;ACTIVE 入队 `connector.init` |
+| Composio(`/api/composio/*`) | OAuth、ACTIVE 状态、label 展示、入队 connector.init | `web/routes/ui/composio.py`、`web/composio_service.py`、`useComposio.ts` | 状态来自 Composio API;label 持久化在 `pai_connector_labels`(eager resolve on /wait,lazy retry on /connections);ACTIVE 入队 `connector.init`;支持多账号(`allow_multiple=True`) |
 | `connector.init` handler | ACTIVE 后首次拉一批 | `web/services/connector_ingest.py:_run_init` | `pai_raw_<toolkit>` + `pai_personal_signals` + 入 `connector.evolve` + 建立 `connector.sync` schedule |
 | `connector.sync` handler | 周期增量拉取(cron `*/30 * * * *`) | `web/services/connector_ingest.py:_run_sync` | 同上 raw / signals;成功才前推 `pai_connector_sync_cursors.last_synced_at` |
 | Device registry | 给 web / iOS / Android / wearable 等设备发 token | `web/routes/ui/devices.py`、`web/db/repositories/devices.py` | `pai_user_devices`(`device_token_hash` 是 bcrypt rounds=10) |
@@ -181,9 +181,10 @@ sequenceDiagram
 
 - `web/composio_service.py` 是单一真源:
   - SDK 直调(connection 生命周期、tool discovery、execute)→ 给 ingest_runner 用。
-  - 每用户 `ToolRouterSession` LRU + 24h TTL → 给 chat 端 meta-tool 用(`/api/agent/composio/meta/*`)。
-  - identity 24h LRU,在 `list_connections()` 时按需 GET_PROFILE 补 user_info。
+  - 每用户 `ToolRouterSession` LRU + 1h idle TTL → 给 chat 端 meta-tool 用(`/api/agent/composio/meta/*`)。
+  - **Label / identity 解析**:`_IDENTITY_SPECS` 给 11 个 toolkit 各登记一个 "get me" action + extractor(gmail → GMAIL_GET_PROFILE → emailAddress;googlecalendar → GOOGLECALENDAR_GET_CALENDAR(`primary`) → id;youtube → YOUTUBE_GET_CHANNEL_STATISTICS(`mine=true`) → snippet.title 等)。`/api/composio/wait` 命中 ACTIVE 时 eager-resolve 一次,结果写 `pai_connector_labels`(PK = `user_id, connected_account_id`)。`/api/composio/connections` 直接 join 这张表,~0 延迟。失败行带 `resolve_attempts / last_attempt_error`,下次 `/connections` lazy-retry。Stripe 没有 identity action,fallback 到 `fallback_label("stripe", cid)`。
 - Composio master key 从 env `COMPOSIO_API_KEY`(只在 web 进程,FORBIDDEN_ENVS 名单内,chat 看不到)。
+- 同一 `(user_id, toolkit)` 支持多账号(`connected_accounts.link(allow_multiple=True)`)。前端 `+add` 按钮触发后端新建独立 `connected_account_id`,所有 per-account 状态(label / sync cursor / `init.{toolkit}.{cid}` 任务)按 cid 区分。
 - `/api/agent/composio/*` 是 sandbox 内 `pinai_sdk.composio` 的对端,执行有 allowlist 守门。
 
 ### Ingest recipe 机制
@@ -251,7 +252,8 @@ device 三张表(`pai_raw_device_apps_snapshot`、`pai_raw_device_contacts_snaps
 | Composio UI 按钮 / OAuth / init chip | `proactive-ai-frontend/src/components/DataConnections.tsx`、`hooks/useComposio.ts`、`hooks/useInitTask.ts` |
 | Composio web 路由 + `/wait` 入队钩子 | `pinai-agents/src/pinai_agents/web/routes/ui/composio.py` |
 | Composio sandbox 路由 | `web/routes/agent/composio.py` |
-| Composio SDK / session pool / identity cache | `web/composio_service.py` |
+| Composio SDK / session pool / label resolution (`_IDENTITY_SPECS`) | `web/composio_service.py` |
+| `pai_connector_labels` 持久化 | `web/db/repositories/connector_labels.py`, migration `040_pai_connector_labels.sql` |
 | 加新 toolkit 到 ingest | `web/services/connector_ingest.py`(`_map_<tk>` + `_upsert_<tk>` + 注册);`db/ingest_recipes/<tk>.yaml`;raw 表 migration |
 | Recipe schema / since 格式化 | `web/services/ingest_runner.py`、`scripts/validate_ingest_recipe.py` |
 | Cursor 推进 | `web/db/repositories/connectors.py`(`pai_connector_sync_cursors` 读写) |
@@ -269,7 +271,7 @@ cd pinai-agents && uv run pytest tests/web/services/test_connector_gmail.py     
 cd pinai-agents && uv run pytest tests/web/services/test_connector_slack.py
 cd pinai-agents && uv run pytest tests/web/services/test_connector_drive.py
 cd pinai-agents && uv run pytest tests/web/services/test_connector_calendly.py
-cd pinai-agents && uv run pytest tests/web/test_composio_service.py            # SDK wrapper / identity cache
+cd pinai-agents && uv run pytest tests/web/test_composio_service.py            # SDK wrapper / label extractors
 cd pinai-agents && uv run pytest tests/web/devices                              # token + ingest policies
 cd pinai-agents && uv run pytest tests/web/db/repositories/test_connectors_repo.py
 cd pinai-agents && uv run pytest tests/web/routes/                              # 路由集成

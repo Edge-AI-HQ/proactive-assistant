@@ -87,6 +87,7 @@ function makeComposioState(connections: ComposioState["connections"] = [
     toolkit: "slack",
     status: "ACTIVE",
     connectedAccountId: "slack-account",
+    label: null,
     userInfo: null,
   },
 ]): ComposioState {

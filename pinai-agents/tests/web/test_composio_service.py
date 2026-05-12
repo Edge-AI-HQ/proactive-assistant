@@ -18,13 +18,11 @@ from pinai_agents.web import composio_service as cs
 
 @pytest.fixture(autouse=True)
 def reset_caches():
-    """Clear identity + session caches between tests so leakage doesn't
-    mask stale-state bugs. Module-level state is the trade-off for
-    singleton patterns."""
-    cs._identity_cache.clear()
+    """Clear session cache between tests so leakage doesn't mask
+    stale-state bugs. Identity is now persisted to pai_connector_labels
+    (migration 040), no in-memory cache to reset."""
     cs._SESSION_REGISTRY.clear()
     yield
-    cs._identity_cache.clear()
     cs._SESSION_REGISTRY.clear()
 
 
@@ -92,57 +90,98 @@ async def test_list_connections_filters_by_user(mock_sdk):
 
 
 @pytest.mark.asyncio
-async def test_list_connections_uses_inline_user_info(mock_sdk, monkeypatch):
-    """user_info already on the response should not trigger an extra
-    GET_PROFILE call."""
-    monkeypatch.setattr(cs, "_IDENTITY_ACTIONS", {"gmail": "GMAIL_GET_PROFILE"})
+async def test_list_connections_passes_inline_user_info(mock_sdk):
+    """Pure SDK pass-through: user_info on the connected_account object
+    (when Composio happens to populate it) is forwarded as-is. Label
+    resolution + caching live in the route + repository, not here."""
     mock_sdk.connected_accounts.list.return_value = SimpleNamespace(items=[
         _account(cid="ca_1", toolkit="gmail",
                  user_info={"emailAddress": "alice@example.com"}),
     ])
     out = await cs.list_connections(7)
     assert out[0].user_info == {"emailAddress": "alice@example.com"}
+    # list_connections is pure SDK now — no extra identity action call.
     mock_sdk.tools.execute.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_list_connections_resolves_identity_when_missing(mock_sdk, monkeypatch):
-    monkeypatch.setattr(cs, "_IDENTITY_ACTIONS", {"gmail": "GMAIL_GET_PROFILE"})
+async def test_list_connections_no_identity_call(mock_sdk):
+    """Regression: list_connections used to fire per-toolkit GET_PROFILE
+    calls inline. Post-migration-040 it must not — the route joins
+    pai_connector_labels itself. Re-introducing inline resolution would
+    re-introduce the N-Composio-calls-per-page-load latency cliff."""
     mock_sdk.connected_accounts.list.return_value = SimpleNamespace(items=[
         _account(cid="ca_1", toolkit="gmail"),
     ])
-    profile_resp = MagicMock()
-    profile_resp.model_dump.return_value = {
-        "data": {"emailAddress": "bob@x.com"},
-    }
-    mock_sdk.tools.execute.return_value = profile_resp
-    out = await cs.list_connections(7)
-    assert out[0].user_info == {"emailAddress": "bob@x.com"}
-
-    # Second call must hit the cache (no extra execute).
-    mock_sdk.tools.execute.reset_mock()
     await cs.list_connections(7)
     mock_sdk.tools.execute.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_list_connections_drops_stale_cache(mock_sdk, monkeypatch):
-    """When a previously-active account is no longer in the list, its
-    identity cache entry is dropped."""
-    monkeypatch.setattr(cs, "_IDENTITY_ACTIONS", {"gmail": "GMAIL_GET_PROFILE"})
-    mock_sdk.connected_accounts.list.return_value = SimpleNamespace(items=[
-        _account(cid="ca_1", toolkit="gmail"),
-    ])
-    profile_resp = MagicMock()
-    profile_resp.model_dump.return_value = {"data": {"emailAddress": "x@y"}}
-    mock_sdk.tools.execute.return_value = profile_resp
-    await cs.list_connections(7)
-    assert "ca_1" in cs._identity_cache
+# ── Label extractors ────────────────────────────────────────────────────
 
-    # Second list returns no accounts → cache for ca_1 should drop.
-    mock_sdk.connected_accounts.list.return_value = SimpleNamespace(items=[])
-    await cs.list_connections(7)
-    assert "ca_1" not in cs._identity_cache
+
+@pytest.mark.parametrize(
+    ("toolkit", "raw", "expected"),
+    [
+        ("gmail", {"emailAddress": "boliang@pinai.io"}, "boliang@pinai.io"),
+        ("gmail", {"email": "fallback@x.com"}, "fallback@x.com"),
+        ("github", {"login": "boliangzhang"}, "boliangzhang"),
+        ("calendly",
+         {"resource": {"email": "user@example.com", "name": "User"}},
+         "user@example.com"),
+        ("slack",
+         {"user": {"email": "u@slack.com", "name": "slacker"}},
+         "u@slack.com"),
+        ("discord", {"username": "boliang", "email": "b@d.com"}, "b@d.com"),
+        ("discord", {"username": "boliang"}, "boliang"),
+        ("googledrive",
+         {"user": {"emailAddress": "g@drive.com", "displayName": "G"}},
+         "g@drive.com"),
+        ("googlecalendar",
+         {"id": "boliang@gmail.com", "summary": "boliang"},
+         "boliang@gmail.com"),
+        ("youtube",
+         {"items": [{"snippet": {"title": "MyChannel", "customUrl": "@mych"}}]},
+         "@mych"),
+        ("youtube",
+         {"items": [{"snippet": {"title": "MyChannel"}}]},
+         "MyChannel"),
+        ("twitter", {"data": {"username": "boliangz", "name": "Boliang"}}, "boliangz"),
+        ("linkedin",
+         {"name": {"first_name": "Boliang", "last_name": "Zhang"}},
+         "Boliang Zhang"),
+    ],
+)
+def test_label_extractors(toolkit, raw, expected):
+    spec = cs._IDENTITY_SPECS[toolkit]
+    assert spec.extract(raw) == expected
+
+
+def test_label_extractor_missing_fields_returns_none():
+    # Empty / unexpected payload → extractor returns None; the
+    # resolve_and_persist_label caller then writes None to DB and the
+    # route surfaces fallback_label().
+    for toolkit in ("gmail", "slack", "github", "discord", "googledrive",
+                    "googlecalendar", "youtube", "twitter"):
+        spec = cs._IDENTITY_SPECS[toolkit]
+        assert spec.extract({}) is None
+
+
+def test_fallback_label_stable_and_unique():
+    assert cs.fallback_label("stripe", "ca_AbCdEf123456") == "stripe (...123456)"
+    assert cs.fallback_label("stripe", "") == "stripe (...?)"
+    # Different cids produce different fallbacks.
+    a = cs.fallback_label("gmail", "ca_aaaaaa111111")
+    b = cs.fallback_label("gmail", "ca_bbbbbb222222")
+    assert a != b
+
+
+def test_stripe_has_no_identity_spec():
+    """Stripe's Composio catalog doesn't expose an account-retrieve action.
+    Documented absence — resolve_and_persist_label takes the None-spec
+    branch and writes a row with label=NULL so list_connections falls
+    back to fallback_label() consistently."""
+    assert "stripe" not in cs._IDENTITY_SPECS
 
 
 # ── search_tools ────────────────────────────────────────────────────────
@@ -342,10 +381,11 @@ async def test_connect_rejects_empty_toolkit(mock_sdk):
 
 
 @pytest.mark.asyncio
-async def test_disconnect_clears_identity_cache(mock_sdk):
-    cs._identity_cache["ca_1"] = ({"x": 1}, 0.0)
+async def test_disconnect_calls_sdk_delete(mock_sdk):
+    """disconnect() at the service layer only revokes via SDK. The
+    pai_connector_labels row cleanup happens in the route via
+    delete_label() — it needs the pool dep + RLS scoping."""
     await cs.disconnect("ca_1")
-    assert "ca_1" not in cs._identity_cache
     mock_sdk.connected_accounts.delete.assert_called_once_with("ca_1")
 
 

@@ -11,13 +11,6 @@ const OAUTH_OR_MACHINE_KEY =
 const LEGACY_SKIP_KEYS =
   /token|secret|key|password|code|cursor|etag|sync|url|endpoint|slug|status|type|version|id$/i;
 
-const GOOGLE_FAMILY = new Set([
-  "googlecalendar",
-  "googledrive",
-  "googledocs",
-  "googlesheets",
-]);
-
 const TOOLKIT_LABELS: Record<string, string> = {
   gmail: "Gmail",
   googlecalendar: "Google Calendar",
@@ -35,6 +28,10 @@ export interface ComposioIdentityConnection {
   toolkit: string;
   status?: string;
   connectedAccountId?: string | null;
+  /** Authoritative label from backend (pai_connector_labels). When
+   *  present, callers should display it directly without running the
+   *  heuristics below. */
+  label?: string | null;
   userInfo?: Record<string, unknown> | null;
 }
 
@@ -140,29 +137,16 @@ export function formatComposioToolkitName(toolkit: string): string {
 
 export function resolveComposioConnectionIdentity(
   conn: ComposioIdentityConnection,
-  allConnections: ComposioIdentityConnection[],
+  _allConnections: ComposioIdentityConnection[],
 ): string | null {
-  const direct = extractComposioDisplayIdentity(conn.userInfo);
-  if (direct) return direct;
-
-  const toolkit = conn.toolkit.trim().toLowerCase();
-  if (!GOOGLE_FAMILY.has(toolkit)) return null;
-
-  const gmailIdentities = allConnections
-    .filter((c) => c.toolkit.trim().toLowerCase() === "gmail" && c.status === "ACTIVE" && c.userInfo)
-    .map((c) => extractComposioDisplayIdentity(c.userInfo))
-    .filter((id): id is string => !!id);
-
-  if (gmailIdentities.length === 0) return null;
-
-  const sameToolkit = allConnections.filter(
-    (c) => c.toolkit.trim().toLowerCase() === toolkit && c.status === "ACTIVE",
-  );
-  const idx = sameToolkit.findIndex(
-    (c) => c.connectedAccountId === conn.connectedAccountId,
-  );
-
-  return gmailIdentities[idx % gmailIdentities.length] ?? gmailIdentities[0];
+  // Backend-resolved label is authoritative. Populated for every
+  // connection post-migration 040 (eager resolve at /wait time, lazy
+  // retry on /connections). The `userInfo` heuristic stays as a fallback
+  // for the brief deployment window where new frontend talks to old
+  // backend, and for transient cases where the label hasn't been
+  // persisted yet (legacy pre-040 connections without a row).
+  if (conn.label) return conn.label;
+  return extractComposioDisplayIdentity(conn.userInfo);
 }
 
 export function formatComposioConnectionIdentity(

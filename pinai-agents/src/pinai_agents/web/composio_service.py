@@ -10,8 +10,11 @@ Python SDK (sync) wrapped in `asyncio.to_thread`:
      to `/api/agent/composio/{search,schema,execute,multi_execute}`).
   2. Session pool: per-user `ToolRouterSession` cached LRU + TTL, used
      to forward Composio meta-tool calls from chat process native @tools.
-  3. Identity cache: 24h LRU enriching `list_connections` with user_info
-     fetched via per-toolkit GET_PROFILE actions (best-effort, optional).
+  3. Label resolution: per-toolkit "get me" actions whose result is
+     persisted to `pai_connector_labels` (migration 040) at OAuth-
+     completion time. Authoritative source for the per-account display
+     name surfaced to the UI and (later) the chat agent's
+     account-disambiguation prompt.
 
 Trust split: lives in `web/` and reads `composio_api_key` only from web
 settings. Chat / sandbox never import this module — they always go
@@ -36,6 +39,7 @@ from typing import Any, Literal
 from composio import Composio
 from composio.exceptions import ComposioError as _SDKComposioError
 from composio.exceptions import HTTPError as _SDKHTTPError
+
 # composio_client errors are a parallel hierarchy from the underlying
 # REST client. They derive from their own ComposioError base (NOT the
 # composio.exceptions one), so a separate except clause is needed; we
@@ -66,6 +70,7 @@ class Connection(BaseModel):
     toolkit: str
     status: ConnectionStatus
     connected_account_id: str
+    label: str | None = None
     user_info: dict[str, Any] | None = None
 
 
@@ -174,70 +179,219 @@ async def _to_thread(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         raise ComposioError(400, str(e)) from e
 
 
-# ── Identity cache ─────────────────────────────────────────────────────
+# ── Identity / label resolution ────────────────────────────────────────
+#
+# Composio does NOT populate identity on the connected_account object —
+# each toolkit needs its own "get me" action call. We resolve once at
+# OAuth-completion time and persist to pai_connector_labels (migration
+# 040); list_connections then joins from DB at ~0 latency.
+#
+# Per-toolkit spec: action slug + (often empty) extra args + extractor.
+# The extractor reads the action's response shape and pulls out the
+# most unique-and-stable label (typically email or handle).
+#
+# Stripe is intentionally absent — Composio's catalog doesn't expose an
+# account-retrieve action. Stripe connections fall back to
+# `fallback_label()` ("Stripe (...cid-suffix)").
 
 
-_IDENTITY_TTL_SEC = 24 * 60 * 60
+@dataclass(frozen=True)
+class _IdentitySpec:
+    action: str
+    args: dict[str, Any]
+    extract: Callable[[dict[str, Any]], str | None]
 
-# Toolkit slug → action that returns user identity. Only verified slugs
-# are listed; speculative entries cause silent 404s on every connections
-# fetch. Keep this minimal — adding here requires confirming the action
-# exists for the toolkit's Composio version.
-_IDENTITY_ACTIONS: dict[str, str] = {
-    # Verified live against Composio 2026-05 catalog. Composio renames
-    # action slugs occasionally — the original `SLACK_LIST_AUTH_IDENTITY`
-    # and `LINKEDIN_LINKEDIN_GET_CURRENT_USER_PROFILE` 404 today.
-    # Keep this list short; identity is decorative, every entry adds an
-    # extra Composio call per `list_connections` for that toolkit.
-    "gmail": "GMAIL_GET_PROFILE",
-    "slack": "SLACK_RETRIEVE_A_USER_S_IDENTITY_DETAILS",
-    "github": "GITHUB_GET_THE_AUTHENTICATED_USER",
-    "linkedin": "LINKEDIN_GET_MY_INFO",
-    "calendly": "CALENDLY_GET_USER",
+
+def _gmail_label(d: dict[str, Any]) -> str | None:
+    return _first_str(d.get("emailAddress"), d.get("email"))
+
+
+def _slack_label(d: dict[str, Any]) -> str | None:
+    user = d.get("user") if isinstance(d.get("user"), dict) else {}
+    return _first_str(user.get("email"), user.get("real_name"), user.get("name"))
+
+
+def _github_label(d: dict[str, Any]) -> str | None:
+    return _first_str(d.get("login"), d.get("email"), d.get("name"))
+
+
+def _linkedin_label(d: dict[str, Any]) -> str | None:
+    name = d.get("name")
+    if isinstance(name, dict):
+        first = _first_str(name.get("first_name"), name.get("localized"))
+        last = _first_str(name.get("last_name"))
+        joined = " ".join(s for s in (first, last) if s)
+        if joined:
+            return joined
+    return _first_str(d.get("email"), name if isinstance(name, str) else None)
+
+
+def _calendly_label(d: dict[str, Any]) -> str | None:
+    resource = d.get("resource") if isinstance(d.get("resource"), dict) else d
+    return _first_str(resource.get("email"), resource.get("name"))
+
+
+def _discord_label(d: dict[str, Any]) -> str | None:
+    # DISCORD_GET_MY_USER returns the user object directly. `email` is
+    # only present when the OAuth `email` scope was granted; `username`
+    # is the stable handle.
+    return _first_str(d.get("email"), d.get("global_name"), d.get("username"))
+
+
+def _googledrive_label(d: dict[str, Any]) -> str | None:
+    # GOOGLEDRIVE_GET_ABOUT response shape: {user: {emailAddress, displayName, ...}, ...}.
+    user = d.get("user") if isinstance(d.get("user"), dict) else {}
+    return _first_str(user.get("emailAddress"), user.get("displayName"))
+
+
+def _googlecalendar_label(d: dict[str, Any]) -> str | None:
+    # GOOGLECALENDAR_GET_CALENDAR(calendar_id="primary"): primary calendar's
+    # `id` IS the user's email per Google Calendar API convention.
+    return _first_str(d.get("id"), d.get("summary"))
+
+
+def _youtube_label(d: dict[str, Any]) -> str | None:
+    # YOUTUBE_GET_CHANNEL_STATISTICS(mine=true, part="snippet,statistics"):
+    # response shape: {items: [{snippet: {title, customUrl, ...}, ...}, ...], ...}
+    items = d.get("items") if isinstance(d.get("items"), list) else []
+    if not items or not isinstance(items[0], dict):
+        return None
+    snippet = items[0].get("snippet") if isinstance(items[0].get("snippet"), dict) else {}
+    return _first_str(snippet.get("customUrl"), snippet.get("title"))
+
+
+def _twitter_label(d: dict[str, Any]) -> str | None:
+    # TWITTER_USER_LOOKUP_ME: {data: {username, name, id, ...}, ...}.
+    data = d.get("data") if isinstance(d.get("data"), dict) else d
+    return _first_str(data.get("username"), data.get("name"))
+
+
+def _first_str(*values: Any) -> str | None:
+    for v in values:
+        if isinstance(v, str):
+            s = v.strip()
+            if s:
+                return s
+    return None
+
+
+_IDENTITY_SPECS: dict[str, _IdentitySpec] = {
+    "gmail":          _IdentitySpec("GMAIL_GET_PROFILE", {}, _gmail_label),
+    "slack":          _IdentitySpec("SLACK_RETRIEVE_A_USER_S_IDENTITY_DETAILS", {}, _slack_label),
+    "github":         _IdentitySpec("GITHUB_GET_THE_AUTHENTICATED_USER", {}, _github_label),
+    "linkedin":       _IdentitySpec("LINKEDIN_GET_MY_INFO", {}, _linkedin_label),
+    "calendly":       _IdentitySpec("CALENDLY_GET_USER", {}, _calendly_label),
+    "discord":        _IdentitySpec("DISCORD_GET_MY_USER", {}, _discord_label),
+    "googledrive":    _IdentitySpec("GOOGLEDRIVE_GET_ABOUT", {}, _googledrive_label),
+    "googlecalendar": _IdentitySpec(
+        # No "get user info" action exists; Google Calendar API convention
+        # is that primary calendar's id equals the user's email.
+        "GOOGLECALENDAR_GET_CALENDAR", {"calendar_id": "primary"}, _googlecalendar_label,
+    ),
+    "youtube":        _IdentitySpec(
+        "YOUTUBE_GET_CHANNEL_STATISTICS",
+        {"mine": True, "part": "snippet,statistics"},
+        _youtube_label,
+    ),
+    "twitter":        _IdentitySpec("TWITTER_USER_LOOKUP_ME", {}, _twitter_label),
 }
 
-_identity_cache: dict[str, tuple[dict[str, Any], float]] = {}
-_identity_lock = asyncio.Lock()
+
+def fallback_label(toolkit: str, connected_account_id: str) -> str:
+    """Last-resort label when identity action is unavailable / failed.
+    Stable + unique per connected_account_id."""
+    suffix = connected_account_id[-6:] if connected_account_id else "?"
+    return f"{toolkit} (...{suffix})"
 
 
-async def _resolve_identity(
-    toolkit: str, user_id: str, connected_account_id: str,
+async def _call_identity_action(
+    toolkit: str, cx_user: str, connected_account_id: str,
 ) -> dict[str, Any] | None:
-    """Cache → fall back to identity action → cache. Returns None on any
-    failure (best-effort; identity is decorative)."""
-    now = time.time()
-    async with _identity_lock:
-        cached = _identity_cache.get(connected_account_id)
-        if cached and (now - cached[1]) < _IDENTITY_TTL_SEC:
-            return cached[0]
-
-    action_slug = _IDENTITY_ACTIONS.get(toolkit)
-    if not action_slug:
+    """Fire the per-toolkit identity action, return its normalized data
+    dict. Returns None if the toolkit has no spec; raises ComposioError
+    on upstream failure so the caller can record the attempt."""
+    spec = _IDENTITY_SPECS.get(toolkit)
+    if spec is None:
         return None
-    try:
-        resp = await _to_thread(
-            _composio().tools.execute,
-            action_slug,
-            {},
-            user_id=user_id,
-            connected_account_id=connected_account_id,
-            dangerously_skip_version_check=True,
-        )
-    except ComposioError:
-        return None
+    resp = await _to_thread(
+        _composio().tools.execute,
+        spec.action,
+        dict(spec.args),
+        user_id=cx_user,
+        connected_account_id=connected_account_id,
+        dangerously_skip_version_check=True,
+    )
     data = _normalize_response_data(resp)
-    if not isinstance(data, dict) or not data:
+    return data if isinstance(data, dict) else None
+
+
+async def resolve_and_persist_label(
+    pool: Any,
+    internal_user_id: int,
+    connected_account_id: str,
+    toolkit: str,
+) -> str | None:
+    """Call this toolkit's identity action, extract the label, and write
+    the result (success or failure) into pai_connector_labels. Returns
+    the resolved label, or None if resolution failed / toolkit has no
+    spec — callers should fall back to `fallback_label()` for UI.
+
+    Failure modes are recorded (resolve_attempts + last_attempt_error)
+    so /api/composio/connections can lazy-retry within a bounded budget.
+    """
+    from .db.repositories.connector_labels import (  # noqa: PLC0415
+        ConnectorLabelsRepository,
+    )
+    from .db.rls import user_scoped_tx  # noqa: PLC0415
+
+    spec = _IDENTITY_SPECS.get(toolkit)
+    if spec is None:
+        # No identity action exposed for this toolkit (e.g. Stripe). Still
+        # write the row so list_connections sees a "resolved with None
+        # label" entry and stops asking.
+        async with user_scoped_tx(pool, internal_user_id) as conn:
+            await ConnectorLabelsRepository(internal_user_id, conn).upsert_resolved(
+                connected_account_id=connected_account_id,
+                toolkit=toolkit, label=None, raw_user_info=None,
+            )
         return None
-    async with _identity_lock:
-        _identity_cache[connected_account_id] = (data, now)
-    return data
+
+    cx_user = composio_user_id(internal_user_id)
+    try:
+        raw = await _call_identity_action(toolkit, cx_user, connected_account_id)
+    except ComposioError as e:
+        logger.warning(
+            "composio: identity action failed user=%s tk=%s cid=%s: %s",
+            internal_user_id, toolkit, connected_account_id, e,
+        )
+        async with user_scoped_tx(pool, internal_user_id) as conn:
+            await ConnectorLabelsRepository(internal_user_id, conn).record_attempt_failure(
+                connected_account_id=connected_account_id,
+                toolkit=toolkit, error=str(e),
+            )
+        return None
+
+    label = spec.extract(raw) if raw else None
+    async with user_scoped_tx(pool, internal_user_id) as conn:
+        await ConnectorLabelsRepository(internal_user_id, conn).upsert_resolved(
+            connected_account_id=connected_account_id,
+            toolkit=toolkit, label=label, raw_user_info=raw,
+        )
+    return label
 
 
-def _drop_stale_identity_cache_locked(active_ids: set[str]) -> None:
-    """Caller holds `_identity_lock`. Removes cache entries whose
-    connected account is no longer reported as active."""
-    for stale in [k for k in _identity_cache if k not in active_ids]:
-        _identity_cache.pop(stale, None)
+async def delete_label(
+    pool: Any, internal_user_id: int, connected_account_id: str,
+) -> None:
+    from .db.repositories.connector_labels import (  # noqa: PLC0415
+        ConnectorLabelsRepository,
+    )
+    from .db.rls import user_scoped_tx  # noqa: PLC0415
+
+    async with user_scoped_tx(pool, internal_user_id) as conn:
+        await ConnectorLabelsRepository(internal_user_id, conn).delete(
+            connected_account_id,
+        )
 
 
 def _toolkit_slug(toolkit_field: Any) -> str:
@@ -280,8 +434,13 @@ def _normalize_response_data(resp: Any) -> dict[str, Any] | Any:
 
 
 async def list_connections(internal_user_id: int) -> list[Connection]:
-    """List ACTIVE connected accounts for the user, enriched with
-    cached / fresh user_info for the toolkits we know how to identify."""
+    """List ACTIVE connected accounts for the user. Pure SDK call — does
+    NOT enrich with labels; the route joins pai_connector_labels itself
+    (see `composio_connections` in routes/ui/composio.py).
+
+    Callers that need labels should go through the route or query the
+    repository directly. Tool Router session building only needs cid +
+    toolkit, so it's unaffected."""
     cx_user = composio_user_id(internal_user_id)
 
     def _list() -> Any:
@@ -295,30 +454,17 @@ async def list_connections(internal_user_id: int) -> list[Connection]:
     items = getattr(resp, "items", None) or []
 
     out: list[Connection] = []
-    active_ids: set[str] = set()
     for item in items:
-        # Items can be dataclass-style or model — coerce to dict.
         d = item.model_dump() if hasattr(item, "model_dump") else dict(item)
         cid = d.get("id") or d.get("connected_account_id")
         if not cid:
             continue
-        toolkit_slug = _toolkit_slug(d.get("toolkit"))
-        status = str(d.get("status") or "INACTIVE").upper()
-
-        info = d.get("user_info") or d.get("current_user_info")
-        if not info:
-            info = await _resolve_identity(toolkit_slug, cx_user, cid)
-
         out.append(Connection(
-            toolkit=toolkit_slug,
-            status=status,  # type: ignore[arg-type]
+            toolkit=_toolkit_slug(d.get("toolkit")),
+            status=str(d.get("status") or "INACTIVE").upper(),  # type: ignore[arg-type]
             connected_account_id=cid,
-            user_info=info,
+            user_info=d.get("user_info") or d.get("current_user_info"),
         ))
-        active_ids.add(cid)
-
-    async with _identity_lock:
-        _drop_stale_identity_cache_locked(active_ids)
 
     return out
 
@@ -444,8 +590,9 @@ async def disconnect(connected_account_id: str) -> None:
         return _composio().connected_accounts.delete(connected_account_id)
 
     await _to_thread(_delete)
-    async with _identity_lock:
-        _identity_cache.pop(connected_account_id, None)
+    # pai_connector_labels cleanup happens in the disconnect route via
+    # delete_label() — the route has the pool dep already and can scope
+    # the DELETE under user_scoped_tx for RLS.
 
 
 # ── Tool discovery ─────────────────────────────────────────────────────
@@ -749,5 +896,4 @@ def metrics_snapshot() -> dict[str, int]:
     return {
         "session_registry_size": len(_SESSION_REGISTRY),
         "session_registry_max": _SESSION_MAX,
-        "identity_cache_size": len(_identity_cache),
     }
