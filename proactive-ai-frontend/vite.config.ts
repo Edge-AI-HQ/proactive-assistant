@@ -54,6 +54,24 @@ export default defineConfig(({ mode }) => {
       emptyOutDir: true,
       rollupOptions: {
         input: path.resolve(__dirname, "index.html"),
+        // Native-only modules: marked external for the web build so
+        // Rollup doesn't try to resolve them at bundle time. They live
+        // in the chunks that App.tsx / DebugPanel load via dynamic
+        // import inside `isNative` guards — never executed in the
+        // browser. For the Capacitor build (`VITE_CAPACITOR=1`) they're
+        // real deps and get bundled normally. Mirrors V2 commit
+        // `893df821 fix(frontend): resolve web build failure caused by
+        // capacitor native plugin imports`.
+        external: isCapacitor
+          ? []
+          : [
+              "@pin/capacitor-ambient-ai",
+              "@capacitor-community/contacts",
+              "@capacitor-community/sqlite",
+              "@capacitor/geolocation",
+              "@capgo/capacitor-barometer",
+              "@capgo/capacitor-health",
+            ],
       },
     },
     test: {

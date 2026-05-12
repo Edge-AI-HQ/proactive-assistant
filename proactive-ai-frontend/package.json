@@ -31,7 +31,6 @@
     "@capgo/capacitor-barometer": "^8.0.11",
     "@capgo/capacitor-health": "^8.4.9",
     "@fontsource/geist-sans": "^5.2.5",
-    "@pin/capacitor-ambient-ai": "file:../capacitor-plugins/ambient-ai",
     "@supabase/supabase-js": "^2.49.1",
     "@tailwindcss/typography": "^0.5.19",
     "clsx": "^2.1.1",
@@ -46,6 +45,9 @@
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.5.0",
     "vaul": "^1.1.2"
+  },
+  "optionalDependencies": {
+    "@pin/capacitor-ambient-ai": "file:../capacitor-plugins/ambient-ai"
   },
   "devDependencies": {
     "@capacitor/android": "^8.3.0",
