@@ -64,6 +64,7 @@ dev = [
     "pytest-asyncio>=0.24.0",
     "httpx>=0.27.0",
     "ruff>=0.7.0",
+    "mypy>=1.13.0",
 ]
 
 [build-system]
@@ -114,3 +115,18 @@ ignore = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+# mypy — minimal baseline so CI can run `uv run mypy src` without
+# forcing strict mode across a codebase that doesn't have full type
+# coverage yet. Tighten as we add annotations (disallow_untyped_defs,
+# strict_optional, etc.). ignore_missing_imports keeps third-party
+# packages without type stubs (langchain, deepagents, daytona, ...)
+# from drowning the run in import errors — flip it off per-module
+# once we've covered them.
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = "src"
+exclude = ["packages/", "tests/", "infra/"]

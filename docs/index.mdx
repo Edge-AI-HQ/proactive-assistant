@@ -35,13 +35,13 @@ flowchart LR
 
 | 文档 | 什么时候看 |
 |---|---|
-| [Data Connectors](./modules/data-connectors) | Composio、device registry、mobile proxy、mobile ingest、数据源状态。 |
-| [Memory](./modules/memory) | raw.db、signals、memory、profile、skill、evolution、CLI。 |
-| [Generation](./modules/generation) | `/generate`、pipeline、generator、evaluation、card selection、auto-generate。 |
-| [Execution](./modules/execution) | chat-stream、card chat、agent、browser tool、control mode、conversation crystallize。 |
-| [Feedback](./modules/feedback) | feedback events、card action、card chat feedback、intent state、学习回流。 |
-| [Background Tasks](./modules/background-tasks) | background_tasks 队列、scheduler、reconciler、connector init/sync、auto-dreaming。 |
-| [Runtime & Deployment](./modules/runtime-deployment) | 本地启动、APIs proxy、container、gateway、LiteLLM、dotenvx、CI/CD、生产规则。 |
+| [Data Connectors](./modules/data-connectors) | Composio、device registry、device ingest、connector.init/sync、toolkit 矩阵。 |
+| [Memory](./modules/memory) | `pai_raw_*`、personal/world signals、memory、profile、skill、evolution、pgvector、pinai_sdk。 |
+| [Generation](./modules/generation) | `POST /api/generate`、generator scheduler kind、4 subagent pipeline、evaluator、card persistence、auto-generate。 |
+| [Execution](./modules/execution) | chat-stream、card chat、main_chat / card_execution agent、native tool、Daytona python_exec、browser、Composio side-effect gate。 |
+| [Feedback](./modules/feedback) | `pai_feedback_events`、card action、chat-feedback、intent state、planner 偏置回流。 |
+| [Background Tasks](./modules/background-tasks) | `pai_scheduled_tasks` + `pai_scheduled_task_runs`、tick loop、dispatcher kind、lease/heartbeat/retry。 |
+| [Runtime & Deployment](./modules/runtime-deployment) | 本地启动、web/chat 进程、信任边界、Daytona、yoyo migration、LiteLLM、dotenvx、CI/CD、生产规则。 |
 
 ## 维护规则
 

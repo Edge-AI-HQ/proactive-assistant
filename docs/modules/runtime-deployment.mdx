@@ -7,284 +7,282 @@ description: "本地启动、运行拓扑、部署、安全和 billing 概览。
 
 ## 结论
 
-Proactive AI 的运行链路是：frontend 走 APIs，APIs 管用户容器和 proxy，用户容器内跑 OpenClaw proactive-ai plugin，LLM 统一经 LiteLLM。
+整个后端收敛到 **pinai-agents**(Python / FastAPI / DeepAgents),单镜像两进程:`web` 拿 master credentials 做控制面,`chat` 跑 LLM loop。前端 **proactive-ai-frontend** 直接打 pinai-agents,中间没有 proxy。LLM 走 **LiteLLM**,长任务通过 web 进程的 scheduler tick loop 派到 chat。旧的 `apis/`(Node) + `pinai-openclaw/`(用户容器)整套已经退役。
 
 ```mermaid
 flowchart LR
-  FE["proactive-ai-frontend"] --> APIs["APIs"]
-  APIs --> Auth["Supabase Auth"]
-  APIs --> Container["Docker/Fly user container"]
-  Container --> Plugin["proactive-ai plugin"]
-  Plugin --> LiteLLM["LiteLLM"]
-  APIs --> Stripe["Stripe / billing"]
+  FE["proactive-ai-frontend"] --> Web["pinai-web :8000"]
+  Web --> Auth["Supabase Auth"]
+  Web --> PG[("Postgres pai_* + langgraph schema")]
+  Web --> Chat["pinai-chat :8001"]
+  Chat --> LiteLLM["LiteLLM"]
+  Chat --> Sandbox["Daytona sandbox (python_exec)"]
+  Sandbox --> Web
+  Web --> Stripe["Stripe"]
 ```
 
 ## 边界
 
-包含：
+包含:
 
 - 本地启动、验证命令。
-- `/api/proactive/*`、`/api/proxy/*` 的运行边界。
-- container / gateway / LiteLLM / dotenvx / CI/CD。
-- P0 secrets、production 规则。
-- Billing 概览。
+- `pinai-web` / `pinai-chat` 进程拆分与信任边界。
+- HTTP / SSE 入口、`/api/*` 与 `/agent/*` 表面。
+- 鉴权链(Supabase JWT、agent-run JWT、phantom token、device token)。
+- Daytona sandbox、yoyo 迁移、LiteLLM、dotenvx、Fly CI/CD、Stripe billing 概述。
 
-不包含：
+不包含:
 
-- connector 细节，看 [Data Connectors](./data-connectors)。
-- memory/generation/feedback 内部逻辑，看对应模块文档。
+- scheduler 内部、`pai_scheduled_tasks` 表结构、连接器/dreaming/generator 任务调度,看 [Background Tasks](./background-tasks)。
+- connector 业务,看 [Data Connectors](./data-connectors)。
+- memory / generation / execution / feedback 模块内部,看对应模块。
 
-## 核心链路
+## 进程拓扑
 
-```mermaid
-sequenceDiagram
-  participant FE as proactive-ai-frontend
-  participant APIs as APIs
-  participant OC as user OpenClaw container
-  participant LLM as LiteLLM
+| 进程 | 端口 | 入口 | 角色 |
+|---|---|---|---|
+| `pinai-web` | 8000 | `pinai_agents.web.asgi:app` | 控制面 + 出口流量。持有 master credentials(`SUPABASE_SERVICE_ROLE_KEY` / `PAI_JWT_SIGNING_KEY` / `COMPOSIO_API_KEY` / `STRIPE_*` / `LITELLM_MASTER_KEY`)。挂 `/api/*`、`/api/agent/*`、`/payment/*`、`/health`。lifespan 起 scheduler tick loop + world signals ingest。 |
+| `pinai-chat` | 8001 | `pinai_agents.chat.asgi:app` | LLM loop。**不能**看到 master credentials,启动前 `chat/asgi.py` 检测到 forbidden var 直接 exit。挂 `/agent/chat`、`/agent/generate`、`/agent/run/*`、`/agent/history`、`/health`。lifespan 起 LangGraph Postgres checkpointer + Daytona sandbox idle GC(5 分钟一轮)。 |
 
-  FE->>APIs: /api/proactive/* control plane
-  FE->>APIs: /api/proxy/* container proxy
-  APIs->>OC: gateway token + container target
-  OC->>LLM: model calls
-  OC-->>APIs: plugin HTTP/SSE response
-  APIs-->>FE: JSON / SSE / proxy response
-```
+两个进程共用一个镜像、共用 Postgres pool;web → chat 的内部调用走 `WEB_INTERNAL_URL` / `CHAT_INTERNAL_URL`,签 EdDSA (Ed25519) 每 run JWT。
 
-## 当前设计
+## 信任边界
 
-| 层 | 当前事实 |
+`pinai-agents/src/pinai_agents/chat/trust_boundary.py` 是 `FORBIDDEN_ENVS` 的单一真源。改动这里前先读 docstring。三道防线:
+
+| 层 | 实现 |
 |---|---|
-| Frontend | Vite React SPA，入口在 `proactive-ai-frontend/src/`。 |
-| APIs | Express 后端，负责 Supabase auth、container orchestration、gateway/proxy、payment。 |
-| User container | 每个用户一台 OpenClaw assistant machine，内含 proactive-ai plugin。 |
-| LiteLLM | 独立 Fly app，统一代理 Claude、GPT、ElevenLabs TTS 等模型调用。 |
-| Storage | APIs 用 Postgres；用户容器内用 SQLite (`proactive.db` / `raw.db`)。 |
+| 启动 fail-fast | `chat/asgi.py` import 时 `assert_no_forbidden_envs()`,任何 forbidden var 存在直接 exit。 |
+| 本地 compose | `make ensure-env-pinai-agents` 从 `pinai-agents/.env` 派生 `.env.chat`,把 FORBIDDEN_ENVS 剔掉,只给 `pinai-chat` 容器读。 |
+| 部署 | `scripts/sync_fly_secrets.py` 在 CI 同步 fly secrets 时按 process group 剥离,chat process 拿不到 forbidden var。 |
 
-前端请求边界：
+外加静态防线:ruff `flake8-tidy-imports.banned-api` 禁止 `pinai_agents.web` ↔ `pinai_agents.chat` 互相 import,公共类型放 `pinai_agents.shared/`(纯 model / protocol,无副作用)。
 
-- `/api/proactive/*`：APIs 控制面，比如 auth、container、device。device-ingest 入口 `POST /api/proactive/devices/ingest` 走的是 `X-Device-Id` + `X-Device-Token` 鉴权（不是 Supabase JWT），APIs 校验通过后转发到该 device 所属用户的容器。
-- `/api/proxy/*`：转发到用户容器内 proactive-ai plugin。
+## HTTP / SSE 表面
+
+### web :8000
+
+- `/api/*` — 前端面向接口,Supabase JWT 鉴权。路由模块在 `pinai-agents/src/pinai_agents/web/routes/ui/`:`chat`(`/api/chat-stream/*`)、`generate`、`memory`、`signals`、`profile`、`devices`、`feedback`、`composio`、`tasks`、`raw`、`runs_and_cards`、`dreaming`、`skills`、`browser`、`agent_runs`、`crystallize`、`jwt_revoke`、`payment`(独立 prefix)。
+- `/api/agent/*` — sandbox 内 `pinai_sdk` 回连接口,phantom token 鉴权。模块在 `web/routes/agent/`:`memory`、`signals`、`world`、`state`、`profile`、`skills`、`composio`、`raw`、`cards`、`feedback`、`evolution`、`pipeline`、`sandbox_phantom`。
+- `/health` — 含一次 `SELECT 1` 探活;DB 异常返回 `db: error` 但不翻 HTTP 状态码,交给 readiness probe 严控。
+- 中间件:`CORSMiddleware`(origin allowlist 来自 `CORS_ALLOWED_ORIGINS`)、`AgentAuditMiddleware`(只在 `/api/agent/*` 路径下记录 audit log)。
+
+### chat :8001
+
+`chat/app.py` 挂:`/agent/chat`(SSE)、`/agent/generate`、`/agent/history`、`/agent/run/*`(`dream` / `evolve` / `crystallize`)、`/agent/browser/*`、`/health`。所有路由要 `Authorization: Bearer <agent-run-jwt>`,web 走 `services/chat_proxy.py` 签发并代理。
+
+## 鉴权
+
+| 链路 | 算法 | 单一真源文件 |
+|---|---|---|
+| 前端 → web | Supabase JWT(RS256,public key from `SUPABASE_JWT_SECRET`) | `web/auth/supabase_jwt.py`、`web/auth/deps.py`(`current_user` 依赖) |
+| web → chat | EdDSA (Ed25519) 每 run JWT,默认 1 小时 TTL,`jti` 在 `pai_jti_revocations` 黑名单 | `web/auth/agent_jwt.py` 签发(私钥 `PAI_JWT_SIGNING_KEY`,base64 raw 32B);`chat/auth/run_jwt.py` 用公钥验签 |
+| sandbox → web `/api/agent/*` | Phantom token(opaque,1 小时 TTL,sandbox 关闭即吊销) | `web/routes/agent/sandbox_phantom.py` mint;`web/db/repositories/sandbox_phantom_tokens.py`;chat 端 sandbox 启动时把 token 注入 `PAI_SANDBOX_TOKEN` env |
+| 设备 → web | `X-Device-Id` + `X-Device-Token`(bcrypt rounds=10) | `web/routes/ui/devices.py`、`web/db/repositories/devices.py` |
+
+`/api/agent/*` 跟前端的 `/api/*` 是同一进程不同前缀:前者走 phantom token / agent-run JWT,后者走 Supabase JWT,鉴权依赖在 route 级别区分。
+
+## Daytona sandbox
+
+chat 进程的 `python_exec` / browser 工具跑在远端 Daytona sandbox 里,不能直接访问主 DB。逻辑在 `pinai-agents/src/pinai_agents/chat/tools/sandbox.py`:
+
+- 每个 LangGraph thread 对应一个 sandbox(LRU 100 entries,OrderedDict)。
+- `auto_stop=5min` 让 Daytona 自动停闲置,`auto_delete=24h` 兜底回收。
+- 每次命中缓存先 `refresh_data()` 校验真实状态;`STOPPED` lazy resume,`ARCHIVED` / `DESTROYED` evict + 重建。
+- 并发同一个 thread_id miss 共用 `asyncio.Future`,防止开多个孤儿 sandbox。
+- 进程级 5 分钟 GC 循环 `_sandbox_gc_loop()` 扫缓存里和云端不一致的项。
+
+snapshot 构建在 `pinai-agents/infra/daytona/`:Dockerfile 装 pinai_sdk + 必要 deps,`build_snapshot.sh` 推上 Daytona。Deploy Test workflow 每次 deploy 都 refresh 一次。
+
+sandbox 内通过 `PAI_API_URL` + `PAI_SANDBOX_TOKEN` 回连 web `/api/agent/*`,SDK 在 `pinai-agents/packages/pinai_sdk/`。本地 Daytona 跑不到 `pinai-web:8000` 这种 compose 内网 host,需要先 `make tunnel-up` 起 ngrok 把 8000 暴出去。
 
 ## 本地开发
 
-首次设置：
+首次设置:
 
 ```bash
-npm install
-# 找团队成员获取 .env.keys
-# 放到 apis/.env.keys 和 ops/litellm/.env.keys
-make up
+make init                      # npm install root + frontend(只跑一次)
+# 找团队成员要 .env.keys,放到:
+#   pinai-agents/.env.keys
+#   ops/litellm/.env.keys
+make up                        # 解密 .env.dev → .env,build 全栈,起 postgres + litellm + db-migrate + pinai-web + pinai-chat + frontend
 ```
 
-常用命令：
+常用循环:
+
+| 改动 | 用什么 |
+|---|---|
+| pinai-agents Python 代码 | `make restart` |
+| 前端代码(容器版) | `make restart-frontend`,或者本地 `cd proactive-ai-frontend && npm run dev` 直接连 `:8000` |
+| docker-compose / Dockerfile | `make up`(会重 build) |
+| 翻数据丢档从头来 | `make clean && make up`(`reset` 同语义 + 自动起 ngrok) |
+| 状态/日志 | `make status` / `make logs` / `make logs-pinai-web` / `make logs-pinai-chat` / `make logs-frontend` |
+| DB 强制重 migrate | `make migrate` |
+
+Daytona / mobile 用 ngrok:
 
 ```bash
-make up
-make logs
-make restart
-make reset
-make status
-make help
+make tunnel-up      # 把 pinai-web:8000 暴出公网,Daytona sandbox 才能回连 /api/agent/*
+make tunnel-status
+make tunnel-down
 ```
 
-轻量开发：
+Mobile(Capacitor):
 
 ```bash
-npm run dev
-cd proactive-ai-frontend && npm run dev
+make ios            # build frontend(VITE_CAPACITOR=1),sync iOS,打开 Xcode
+make android        # 同理,装到 USB Android 设备
+# 后端选择:NGROK=<url> | DEV=1 | PROD=1 | 默认本机 LAN IP:8000
 ```
 
-验证：
+## Secrets 与环境变量
+
+dotenvx 加密 checkin,每环境一把私钥:
+
+```
+pinai-agents/.env.dev   .env.test   .env.production       # 后端 + VITE_* 加密真源
+ops/litellm/.env.dev    .env.test   .env.production       # LiteLLM 加密真源
+pinai-agents/.env.keys  ops/litellm/.env.keys             # 私钥,不 checkin
+pinai-agents/.env       ops/litellm/.env                  # make ensure-env 解密生成,不要手改
+pinai-agents/.env.chat                                    # 从 .env 派生(去 FORBIDDEN_ENVS),给 pinai-chat 容器
+```
+
+常用命令:
 
 ```bash
-npm run type-check
-npm run test --workspace @pin-ai/apis
+npx @dotenvx/dotenvx get -f pinai-agents/.env.dev
+npx @dotenvx/dotenvx set NEW_KEY "value" -f pinai-agents/.env.dev
+make env-local                                           # 强制重 decrypt
 ```
 
-## 验证方式
+CI 把 `DOTENV_PRIVATE_KEY_TEST` / `DOTENV_PRIVATE_KEY_PROD` 当 GitHub secret;deploy workflow 用 dotenvx 解密 `.env.test` / `.env.production`,再用 `scripts/sync_fly_secrets.py` 注入 fly app secrets(按 process group 剥离 FORBIDDEN_ENVS)。
 
-基础验证：
+## 数据库与迁移
 
-```bash
-make status
-npm run type-check
-npm run test --workspace @pin-ai/apis
-```
-
-运行态验证：
-
-- 前端登录后任意 `/api/proactive/*` 请求都会触发 `requireProactiveAuth` 中间件验证 JWT 并 upsert 本地 `users` 行,后续 endpoint 直接读 `req.proactiveAuth.user`,不再有"User not found"分支。
-- container running 后 `/api/proxy/health` 返回 plugin health。
-- LiteLLM 本地变更后重新创建容器，并验证 `/health/liveliness` 和一次真实 `/v1/chat/completions`。
-- 部署相关改动以 GitHub Actions 为准，本地 deploy 只作为 CI 不可用时的备用路径。
-
-## Secrets 和环境变量
-
-- 加密真源：`apis/.env.dev`、`apis/.env.production`、`ops/litellm/.env.dev`、`ops/litellm/.env.production`。
-- 私钥：`apis/.env.keys`、`ops/litellm/.env.keys`，不 checkin。
-- 本地明文 `.env` 由 `make ensure-env` / `make env-local` 解密生成，不 checkin。
-- 前端 `VITE_*` 在 `make up` 时作为 build args 注入。
-
-常用 dotenvx：
-
-```bash
-npx @dotenvx/dotenvx get -f apis/.env.dev
-npx @dotenvx/dotenvx set NEW_KEY "value" -f apis/.env.dev
-npx @dotenvx/dotenvx run -f apis/.env.dev -- node dist/src/server.js
-make env-local
-```
-
-## 部署
-
-| 环境 | APIs | Assistant Machines | LiteLLM | OpenClaw Registry |
-|---|---|---|---|---|
-| dev | `proactive-ai-api-dev` | `proactive-ai-assistant-dev` | `proactive-ai-litellm-dev` | `proactive-ai-openclaw` |
-| prod | `proactive-ai-api-prod` | `proactive-ai-assistant-prod` | `proactive-ai-litellm-prod` | `proactive-ai-openclaw` |
-
-CI/CD：
-
-- push 到 `proactive-ai-v2` 后按路径部署 dev。
-- `apis/` 或 `proactive-ai-frontend/` 变更部署 APIs。
-- `pinai-openclaw/` 变更先构建 OpenClaw 镜像并更新 digest，再部署 APIs。
-- `ops/litellm/` 变更部署 LiteLLM。
-- prod 通过 GitHub Actions 手动触发或 `v*` tag。
-
-本地部署备用：
-
-```bash
-make deploy-dev
-make deploy-prod
-make deploy-litellm-dev
-make deploy-litellm-prod
-make build-openclaw-image
-```
-
-## background_tasks scheduler
-
-用户容器内的 proactive-ai plugin 跑两套并行调度，分别由两套 inFlight / lease 机制保护：
-
-| 路径 | 触发 | 当前承载的 job | 状态 |
-|---|---|---|---|
-| 旧 setInterval `auto-loop` | `scheduler/auto-loop.ts` 启动 5 个 timer | `auto.world_ingest` / `auto.generate` / `auto.feedback.sync` / `auto.crystallize` | 永远运行 |
-| 新 `background_tasks` 队列 | `tasks/scheduler.ts` 单 process tick + lease + reaper + audit | `connector.init`（Composio 拉数据）+ `auto.dreaming`（每天一次） | 默认启动；仅 `BACKGROUND_AUTO_LOOP_TASKS_ENABLED=0` 关闭 |
-
-两套互不重叠：scheduler 开启时，`scheduler/auto-loop.ts` 里的 `runAutoDreaming` 检测到 env flag 默认开启后立即 return，避免双跑。
-
-```mermaid
-flowchart LR
-  AutoLoop["auto-loop setInterval timers"]
-  AutoLoop --> AutoIngest["auto.world_ingest"]
-  AutoLoop --> AutoGen["auto.generate"]
-  AutoLoop --> AutoFb["auto.feedback.sync"]
-  AutoLoop --> AutoCryst["auto.crystallize"]
-  Sched["BackgroundTaskScheduler"]
-  Sched --> Reaper["reaper (recover stale leases)"]
-  Sched --> Claim["claim due task"]
-  Claim --> CI["connector.init handler"]
-  Claim --> AD["auto.dreaming handler"]
-  CompWait["/composio/wait ACTIVE"] --> Q["background_tasks"]
-  Recon["reconciler (10min)"] --> Q
-  DreamEnq["dreaming-enqueuer (1min)"] --> Q
-  Q --> Sched
-```
-
-### 相关环境变量
-
-```
-# 总开关（不设或空值 = 默认 1 = scheduler 启动；显式 0/false/off/no/disabled 才关闭）
-BACKGROUND_AUTO_LOOP_TASKS_ENABLED=1
-
-# scheduler 调速
-BACKGROUND_TASK_TICK_MS=60000          # 多久跑一次 tick
-BACKGROUND_TASK_LEASE_MS=60000         # 默认 lease 长度（handler 内部按需 heartbeat 续约）
-
-# connector.init
-CONNECTOR_INIT_DEFAULT_LIMIT=100                # 单次拉多少条
-CONNECTOR_INIT_RECONCILER_INTERVAL_MS=600000    # reconciler 周期，默认 10min
-CONNECTOR_INIT_EVOLVE_TIMEOUT_MS=60000          # evolve agent 超时
-CONNECTOR_INIT_DISABLED_TOOLKITS=stripe,discord # kill switch（逗号分隔，匹配 toolkit 跳过）
-
-# auto.dreaming enqueuer
-DREAMING_ENQUEUER_INTERVAL_MS=60000             # 多久检查一次 "今天是否到了 06:00"
-```
-
-默认会启用 scheduler。需要临时回退旧路径时显式设置：`flyctl secrets set BACKGROUND_AUTO_LOOP_TASKS_ENABLED=0 -a proactive-ai-assistant-dev`。启用后 reconciler 会在 10 分钟内把所有 ACTIVE Composio 账号补上 init task。
-
-### 调试入口
-
-```bash
-PIN_CLI_SURFACE=internal pin tasks list                              # 看队列全状态
-PIN_CLI_SURFACE=internal pin tasks list --type connector.init --status failed
-PIN_CLI_SURFACE=internal pin tasks show --id <task_id>               # 包含 lease/heartbeat/result
-PIN_CLI_SURFACE=internal pin tasks attempts --id <task_id>           # audit 历史
-PIN_CLI_SURFACE=internal pin tasks cancel --id <task_id>             # 强制终止 queued/running
-PIN_CLI_SURFACE=internal pin tasks enqueue --type connector.init \   # 手动入队（管理员调试）
-  --idempotencyKey 'manual:gmail:acc-x:v1' \
-  --payload '{"toolkit":"gmail","connectedAccountId":"acc-x"}'
-```
-
-HTTP 只读 API（前端 InitTaskChip 用）：
-
-```
-GET /proactive-ai/api/tasks/:id
-GET /proactive-ai/api/tasks?type=connector.init&status=running&limit=10
-```
-
-写路径只在 internal `pin tasks` CLI 暴露，HTTP 不能改任务，避免 UI 误触。默认 public `pin` 会拒绝 `tasks` 域；本地/管理员调试必须显式带 `PIN_CLI_SURFACE=internal`。
+- Postgres,本地 compose 用 `pgvector/pgvector:pg15`,prod 用 Supabase。
+- 命名前缀:`pai_*`(用户表 + 业务表,public schema)、LangGraph checkpointer 独占 `langgraph` schema。
+- yoyo migration 配置:`pinai-agents/yoyo.ini`(`sources = db/migrations`,`migration_table = pai_yoyo_migration_log`)。
+- 迁移目录:`pinai-agents/db/migrations/`,命名 `NNN_pai_<topic>.sql`,目前到 `039_split_generator_kinds.sql`,**只向前,不回滚**。
+- 本地:`make migrate` 一次性容器先 `CREATE DATABASE litellm` 再 `yoyo apply --batch`。
+- 部署:Fly app 的 `release_command` 调 `yoyo apply --batch`,在 rolling restart 前完成。
 
 ## LiteLLM
 
-- LiteLLM 使用单进程模式，不使用 `--num_workers`。
-- schema migration 通过 Fly `release_command` 在 deploy 时执行。
-- app 启动时设置 `DISABLE_SCHEMA_UPDATE=true`，避免每次启动跑 Prisma migration。
-- dev/prod 都保持至少一台机器运行，避免冷启动抖动。
+- 配置:`ops/litellm/litellm_config.yaml`(model list、cache_control_injection、cost 表)。
+- 本地容器:`docker.litellm.ai/berriai/litellm:main-v1.82.0.dev1`,端口 4000。
+- 每用户 virtual key:`web/services/litellm_provisioning.py`,首次 signup 时 `ensure_user_litellm_key(pool, user)` 同步 mint;失败时 generate route lazy-recover 一次(`web/routes/ui/generate.py:_ensure_virtual_key`)。
+- LiteLLM 自己用 `litellm` 数据库(db-migrate 容器 `CREATE DATABASE` 那一步),跟 `pai_*` 隔离。
+- Budget / Stripe 同步在 `web/payment/`。
 
-## Billing 概览
+## 部署
 
-- Stripe 管订阅付款，LiteLLM 管 API budget。
-- `invoice.paid` 是唯一触发 spend reset 和 max_budget 设置的事件。
-- 升级：取消旧订阅不退款，新套餐全额支付，新账期立即开始。
-- 降级：下期生效，本期额度不降。
-- 取消：周期结束后 `subscription.deleted` 清 budget 并停止容器。
+| Fly app | dev | test | prod |
+|---|---|---|---|
+| pinai-agents(web + chat 同 app,`[processes]` 切分) | `proactive-ai-agents-dev` | `proactive-ai-agents-test` | `proactive-ai-agents-prod` |
+| Frontend SPA(nginx + Vite static) | `proactive-ai-frontend-dev` | `proactive-ai-frontend-test` | `proactive-ai-frontend-prod` |
+| LiteLLM | `proactive-ai-litellm-dev` | `proactive-ai-litellm-test` | `proactive-ai-litellm-prod` |
 
-关键代码：
+primary region `iad`(部分 dev/test 跨到 `ord`)。Daytona sandbox 不是 fly app。
 
-- `apis/src/domain/payment/`
-- `apis/src/domain/litellm/`
-- `apis/src/controller/payment_routes.ts`
+GitHub Actions 入口在 `.github/workflows/`:
 
-## 安全和生产规则
+| Workflow | 触发 | 做什么 |
+|---|---|---|
+| `ci.yml` | PR | type-check + lint。 |
+| `deploy-dev.yml` | push 到 `proactive-ai-v2`/`v3` 或手动 | 按 path filter 部署 pinai-agents / frontend / litellm。 |
+| `deploy-test.yml` | 手动 | 先 refresh Daytona snapshot,再部署三个 app;跑 `sync_fly_secrets.py` 守 trust boundary。 |
+| `deploy-prod.yml` | 手动 / `v*` tag | 创建 GitHub release,promote dev → prod env,部署三个 app(需要 environment approval)。 |
+| `build-ios.yml` | 手动 | build frontend、sync Capacitor、装 iOS Xcode 项目工件。 |
 
-- 生产部署优先 GitHub Actions。
-- 生产环境禁止直接执行数据库变更。
-- 所有生产变更必须走代码评审和 CI/CD。
-- P0 secrets 禁止注入用户容器：`TELEGRAM_BOT_TOKEN`、`TELEGRAM_WEBHOOK_SECRET`、`ELEVENLABS_API_KEY`。
-- 容器配置走 `OPENCLAW_CONFIG_B64`，避免 Fly 日志泄露明文。
-- `OPENCLAW_IMAGE` 必须使用 digest：`registry.fly.io/proactive-ai-openclaw@sha256:<64hex>`。
-- `container_status=running` 不等于服务可用，必须等 HTTP 探测通过。
+本地部署兜底(CI 不可用时):
+
+```bash
+make deploy-pinai-dev
+make deploy-pinai-prod
+make deploy-frontend-dev
+make deploy-frontend-prod
+make deploy-litellm-dev
+make deploy-litellm-prod
+```
+
+## Billing
+
+- Stripe 管订阅,LiteLLM 管 token budget。
+- 代码:`pinai-agents/src/pinai_agents/web/payment/`(`stripe_client.py`、`subscriptions.py`、`plans.py`、`guard.py`、`webhook.py`、`routes.py`)。
+- `invoice.paid` 是唯一触发 LiteLLM budget reset + `max_budget` 设置的事件。
+- 升级:取消旧订阅不退款,新套餐立即生效新账期。
+- 降级:下期生效,本期额度不降。
+- 取消:`subscription.deleted` 清 budget。
+
+## 验证方式
+
+基础:
+
+```bash
+make status                                           # 容器都 healthy?
+make logs-pinai-web | grep -E "WEB starting|scheduler"
+make logs-pinai-chat | grep -E "CHAT starting|sandbox gc"
+curl -s http://localhost:8000/health | jq             # web 探活 + DB ping
+curl -s http://localhost:8001/health | jq             # chat 探活
+```
+
+测试套件:
+
+```bash
+cd pinai-agents && uv run pytest                     # 全量 pytest(tests/web、tests/chat、tests/shared)
+cd pinai-agents && uv run pytest tests/web/auth      # 鉴权层
+cd pinai-agents && uv run pytest tests/web/scheduler # scheduler 单测
+cd pinai-agents && uv run pytest tests/web/payment   # billing
+cd pinai-agents && uv run ruff check .               # 含 banned-api 静态防线
+cd proactive-ai-frontend && npm run type-check       # 前端类型
+cd proactive-ai-frontend && npm test                 # vitest
+```
+
+部署相关只能通过 GitHub Actions 验,本地 `make deploy-*` 是 CI 不可用时的兜底,不要拿来当主路径。
 
 ## 开发入口
 
 | 改动 | 先看 |
 |---|---|
-| Proactive auth / proxy / container | `apis/src/controller/proactive_routes.ts`、`apis/src/domain/proactive/` |
-| Container runtime | `apis/src/domain/container/` |
-| Gateway relay / RPC | `apis/src/domain/gateway/` |
-| LiteLLM client/runtime | `apis/src/domain/litellm/`、`ops/litellm/` |
-| Payment / billing | `apis/src/domain/payment/`、`apis/src/controller/payment_routes.ts` |
-| Frontend API boundary | `proactive-ai-frontend/src/lib/api.ts` |
-| CI/CD | `.github/workflows/` |
+| FastAPI app 装配 / lifespan | `pinai-agents/src/pinai_agents/web/app.py`、`web/asgi.py` |
+| chat app 装配 / lifespan / sandbox GC | `pinai-agents/src/pinai_agents/chat/app.py`、`chat/asgi.py` |
+| 信任边界 / FORBIDDEN_ENVS | `pinai-agents/src/pinai_agents/chat/trust_boundary.py` |
+| Supabase JWT 鉴权 | `pinai-agents/src/pinai_agents/web/auth/`(`supabase_jwt.py`、`deps.py`、`user_service.py`) |
+| Agent-run JWT 签发 / 验证 | `web/auth/agent_jwt.py`、`chat/auth/run_jwt.py` |
+| Sandbox phantom token | `web/routes/agent/sandbox_phantom.py`、`web/db/repositories/sandbox_phantom_tokens.py` |
+| LiteLLM key 配额 | `web/services/litellm_provisioning.py` |
+| Daytona sandbox 缓存 / GC | `chat/tools/sandbox.py`、`chat/app.py` `_sandbox_gc_loop` |
+| Daytona snapshot 构建 | `pinai-agents/infra/daytona/` |
+| Postgres pool / RLS | `web/db/pool.py`、`web/db/rls.py` |
+| yoyo 迁移 | `pinai-agents/yoyo.ini`、`pinai-agents/db/migrations/` |
+| Stripe + 订阅 | `web/payment/` |
+| CORS / audit 中间件 | `web/app.py` 装配段,`web/middleware/audit.py` |
+| docker-compose / Makefile | `docker-compose.yml`、`Makefile` |
+| CI / fly secrets 守门 | `.github/workflows/`、`pinai-agents/scripts/sync_fly_secrets.py` |
+| 前端 API base | `proactive-ai-frontend/src/lib/platform.ts`、`src/lib/api.ts` |
+
+## 生产环境硬性规则
+
+- 生产部署优先走 GitHub Actions(有审计 + approval)。
+- 生产环境禁止直连数据库写 schema。
+- 所有生产变更必须走代码评审 + CI/CD。
+- FORBIDDEN_ENVS 改动必须经过 review,任何一个 master credential 漏到 chat process 就是 P0。
+- yoyo 迁移一旦 merge 到主干禁止修改;只能加新文件做 additive 或 expand-contract。
 
 ## 踩坑
 
-- 改 `ops/litellm/.env` 后，本地 Docker 需要 recreate `pin-ai-litellm`，只 restart 可能不重读 env。
-- 本机全局代理可能导致 `flyctl` 和 Docker push 失败，deploy 命令已内置 `env -u` 处理。
-- LiteLLM budget 错误可能来自 DB spend/max_budget 状态，不一定是 API key 缺失。
-- APIs proxy、desktop OpenClaw auth、用户容器内 plugin 是不同 runtime，排障时不要混在一起。
-- Fly assistant machine 的 OpenClaw 配置必须关 mDNS：`discovery.mdns.mode=off`。mDNS/Bonjour 是局域网发现机制，在 Fly 容器里不提供前端连接所需能力，反而可能拖住 gateway readiness；不要用 `BACKGROUND_AUTO_LOOP_TASKS_ENABLED=0` 当作长期绕过。
+- `make up` 第一次拉镜像 + build 慢(尤其是 Python deps + pgvector),给 10-15 分钟。
+- `pinai-chat` healthcheck 失败十有八九是 `.env.chat` 里漏了非 forbidden 但必须的 var(比如 `LITELLM_BASE_URL`);先 `cat pinai-agents/.env.chat | sort` 看完整性。
+- Daytona sandbox 在本地需要 `make tunnel-up`,否则 SDK 回连 `pinai-web:8000` 这种 docker 内部 host 失败,具体表现是 generator / dreaming agent 在跑 `python_exec` 后挂。
+- 本机全局代理可能让 `flyctl` 和 Docker push 失败;Makefile 已经在 deploy target 里 `env -u HTTP_PROXY HTTPS_PROXY ALL_PROXY` 处理。
+- LiteLLM budget 报错先看 LiteLLM DB 里 spend / max_budget,不一定是 virtual key 缺;`web/services/litellm_provisioning.py` 有 lazy provisioning 逻辑。
+- LangGraph checkpointer 在 `langgraph` schema,跟 `pai_*` 物理同库逻辑分离;清 chat 状态 `TRUNCATE langgraph.<tables>` 而不是删 `pai_chat_threads`。
+- 改 docker-compose 后只 `make restart` 不够,要 `make down && make up` 才会让 compose 看到新声明。
+- `make ios` / `make android` 选后端时,native shell 用绝对 URL(`VITE_PIN_API_URL`),本地默认填的是 LAN IP,换 WiFi 后需要重新 build。
 
 ## 相关模块
 
-- [Data Connectors](./data-connectors)：运行时里的 Composio、device、mobile 数据接入边界。
-- [Memory](./memory)：用户容器内 SQLite 数据层和 evolution 链路。
+- [Background Tasks](./background-tasks):scheduler tick loop、`pai_scheduled_tasks` 表、所有异步任务的派发框架。
+- [Data Connectors](./data-connectors):Composio / device ingest 在 web 进程的入口。
+- [Execution](./execution):chat-stream / browser tool / sandbox 工具决策。
+- [Generation](./generation):`POST /api/generate` 怎么进 scheduler、chat 怎么跑 generator agent。

@@ -1,8 +1,0 @@
-{
-  "id": "telegram-api-proxy",
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {}
-  }
-}

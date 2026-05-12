@@ -1,148 +1,123 @@
 name: Deploy Dev
 
+# Dev env: auto on push to proactive-ai-v3, also workflow_dispatch.
+#
+# Scope: pinai-agents + LiteLLM + frontend. Mirrors deploy-test.yml
+# structure (web/chat in a single fly app via [processes], no apis/
+# Node backend, no OpenClaw user containers).
+#
+# Path filter — only the apps whose source actually changed get
+# redeployed. Note pinai-agents/.env.dev counts as a frontend trigger
+# because the VITE_* build args live there.
+#
+# Secret injection model (same as deploy-test.yml):
+#   * pinai-agents — scripts/sync_fly_secrets.py imports the decrypted
+#     .env.dev as a single app-level set. Per-process-group secrets
+#     aren't supported by flyctl (0.4.48), so the trust-boundary
+#     runtime guard is intentionally degraded — see
+#     scripts/sync_fly_secrets.py docstring and chat/asgi.py.
+#   * LiteLLM — Docker CMD wraps `dotenvx run`. Needs
+#     DOTENV_PRIVATE_KEY_DEV set as a fly secret so the container
+#     can decrypt .env.dev at startup.
+#   * frontend — VITE_* baked at build time via --build-arg.
+#
+# Daytona snapshot is rebuilt before deploy-agents so sandbox.py forks
+# from a fresh image (~5-10s) instead of declarative build (~30-50s)
+# on the first chat message. Tag fixed: pinai-sandbox:dev.
+
 on:
   workflow_dispatch:
   push:
-    branches: [proactive-ai-v2]
+    branches: [proactive-ai-v3]
     paths:
-      - 'apis/**'
-      - 'proactive-ai-frontend/**'
-      - 'fly.api-dev.toml'
-      - 'package*.json'
-      - 'scripts/**'
+      - 'pinai-agents/**'
       - 'ops/litellm/**'
-      - 'pinai-openclaw/**'
+      - 'proactive-ai-frontend/**'
 
 concurrency:
   group: deploy-dev
   cancel-in-progress: true
 
-permissions:
-  contents: write
-
 jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      apis: ${{ steps.filter.outputs.apis }}
+      agents: ${{ steps.filter.outputs.agents }}
       litellm: ${{ steps.filter.outputs.litellm }}
-      openclaw: ${{ steps.filter.outputs.openclaw }}
+      frontend: ${{ steps.filter.outputs.frontend }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
         id: filter
         with:
           filters: |
-            apis:
-              - 'apis/**'
-              - 'proactive-ai-frontend/**'
-              - 'fly.api-dev.toml'
-              - 'package*.json'
-              - 'scripts/**'
+            agents:
+              - 'pinai-agents/**'
             litellm:
               - 'ops/litellm/**'
-            openclaw:
-              - 'pinai-openclaw/**'
+            frontend:
+              - 'proactive-ai-frontend/**'
+              - 'pinai-agents/.env.dev'
 
-  build-openclaw:
+  build-daytona-snapshot:
     needs: changes
-    if: needs.changes.outputs.openclaw == 'true'
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.agents == 'true'
     runs-on: ubuntu-latest
-    outputs:
-      deploy-ref: ${{ steps.commit.outputs.ref }}
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-python@v5
         with:
-          node-version: 20
+          python-version: "3.12"
 
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: astral-sh/setup-uv@v4
 
-      - name: Build and push OpenClaw image
-        run: |
-          flyctl deploy . \
-            --config fly.openclaw.toml \
-            --build-only \
-            --push \
-            --image-label "openclaw-$(date +%Y%m%d-%H%M%S)" \
-            --remote-only \
-            --depot=false \
-            --yes 2>&1 | tee build-output.txt
-
-          DIGEST=$(grep -Eo "sha256:[0-9a-f]{64}" build-output.txt | tail -1)
-          if [ -z "$DIGEST" ]; then
-            echo "::error::Failed to extract digest from build output"
-            exit 1
-          fi
-          echo "DIGEST_REF=registry.fly.io/proactive-ai-openclaw@${DIGEST}" >> $GITHUB_ENV
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-
-      - name: Update OPENCLAW_IMAGE in dev
-        run: |
-          npx @dotenvx/dotenvx set OPENCLAW_IMAGE "${{ env.DIGEST_REF }}" -f apis/.env.dev
+      - name: Decrypt DAYTONA_API_KEY from .env.dev
+        working-directory: pinai-agents
         env:
           DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
-
-      - name: Commit updated digest
-        id: commit
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add apis/.env.dev
-          git diff --cached --quiet && echo "No changes to commit" && exit 0
-          git commit -m "chore: update OPENCLAW_IMAGE digest [skip ci]"
-          git push
-          echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          DAYTONA_API_KEY=$(npx @dotenvx/dotenvx get DAYTONA_API_KEY -f .env.dev)
+          # Mask before exporting so it never appears in subsequent step logs.
+          echo "::add-mask::$DAYTONA_API_KEY"
+          echo "DAYTONA_API_KEY=$DAYTONA_API_KEY" >> "$GITHUB_ENV"
 
-      - name: Summary
+      - name: Build/refresh Daytona snapshot (pinai-sandbox:dev)
+        working-directory: pinai-agents
         run: |
-          echo "## OpenClaw Image Built" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Digest: \`${{ env.DIGEST_REF }}\`" >> $GITHUB_STEP_SUMMARY
+          uv sync --no-dev
+          uv run python infra/daytona/build_snapshot.py --version dev --recreate
 
-  deploy-apis:
-    needs: [changes, build-openclaw]
-    # Run when apis or openclaw changed (or manual trigger), but not if build-openclaw failed
+  deploy-agents:
+    needs: [changes, build-daytona-snapshot]
     if: |
       always()
       && needs.changes.result == 'success'
-      && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.apis == 'true' || needs.changes.outputs.openclaw == 'true')
-      && needs.build-openclaw.result != 'failure'
+      && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.agents == 'true')
+      && needs.build-daytona-snapshot.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          # Use the commit with updated digest if build-openclaw pushed one
-          ref: ${{ needs.build-openclaw.outputs.deploy-ref || github.sha }}
           submodules: false
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
-      - name: Extract VITE_* build args from encrypted env
-        run: |
-          VITE_SUPABASE_URL=$(npx @dotenvx/dotenvx get VITE_SUPABASE_URL -f apis/.env.dev)
-          VITE_SUPABASE_PUBLISHABLE_KEY=$(npx @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f apis/.env.dev)
-          VITE_API_BASE_URL=$(npx @dotenvx/dotenvx get VITE_API_BASE_URL -f apis/.env.dev)
-          echo "VITE_SUPABASE_URL=$VITE_SUPABASE_URL" >> "$GITHUB_ENV"
-          echo "VITE_SUPABASE_PUBLISHABLE_KEY=$VITE_SUPABASE_PUBLISHABLE_KEY" >> "$GITHUB_ENV"
-          echo "VITE_API_BASE_URL=$VITE_API_BASE_URL" >> "$GITHUB_ENV"
+      - name: Sync fly secrets from .env.dev
+        working-directory: pinai-agents
         env:
           DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
-
-      - name: Deploy APIs to dev
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          flyctl deploy --config fly.api-dev.toml --remote-only \
-            --build-arg VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
-            --build-arg VITE_SUPABASE_PUBLISHABLE_KEY="$VITE_SUPABASE_PUBLISHABLE_KEY" \
-            --build-arg VITE_API_BASE_URL="$VITE_API_BASE_URL"
+          python3 scripts/sync_fly_secrets.py \
+            --app proactive-ai-agents-dev \
+            --env-file .env.dev
+
+      - name: Deploy pinai-agents to dev
+        working-directory: pinai-agents
+        run: flyctl deploy --config fly.dev.toml --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -157,8 +132,52 @@ jobs:
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
+      - name: Stage DOTENV_PRIVATE_KEY_DEV as fly secret
+        run: |
+          flyctl secrets set --app proactive-ai-litellm-dev --stage \
+            "DOTENV_PRIVATE_KEY_DEV=${DOTENV_PRIVATE_KEY_DEV}"
+        env:
+          DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
       - name: Deploy LiteLLM to dev
         working-directory: ops/litellm
         run: flyctl deploy --config fly.litellm-dev.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  deploy-frontend:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Extract VITE_* build args from encrypted env
+        run: |
+          VITE_PIN_API_URL=$(npx @dotenvx/dotenvx get VITE_PIN_API_URL -f pinai-agents/.env.dev)
+          VITE_SUPABASE_URL=$(npx @dotenvx/dotenvx get VITE_SUPABASE_URL -f pinai-agents/.env.dev)
+          VITE_SUPABASE_PUBLISHABLE_KEY=$(npx @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f pinai-agents/.env.dev)
+          echo "VITE_PIN_API_URL=$VITE_PIN_API_URL" >> "$GITHUB_ENV"
+          echo "VITE_SUPABASE_URL=$VITE_SUPABASE_URL" >> "$GITHUB_ENV"
+          echo "VITE_SUPABASE_PUBLISHABLE_KEY=$VITE_SUPABASE_PUBLISHABLE_KEY" >> "$GITHUB_ENV"
+        env:
+          DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
+
+      - name: Deploy frontend to dev
+        working-directory: proactive-ai-frontend
+        run: |
+          flyctl deploy --config fly.toml --remote-only \
+            --build-arg VITE_PIN_API_URL="$VITE_PIN_API_URL" \
+            --build-arg VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
+            --build-arg VITE_SUPABASE_PUBLISHABLE_KEY="$VITE_SUPABASE_PUBLISHABLE_KEY"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

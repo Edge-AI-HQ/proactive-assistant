@@ -1,8 +1,0 @@
-{
-  "id": "platform-hooks",
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {}
-  }
-}

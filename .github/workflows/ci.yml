@@ -2,10 +2,43 @@ name: CI
 
 on:
   pull_request:
-    branches: [proactive-ai-v2]
+    branches: [proactive-ai-v3]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  check:
+  pinai-agents-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v4
+
+      - name: Install pinai-agents (with dev group)
+        working-directory: pinai-agents
+        run: uv sync
+
+      - name: ruff check
+        working-directory: pinai-agents
+        run: uv run ruff check
+
+      - name: mypy
+        working-directory: pinai-agents
+        run: uv run mypy src
+
+      - name: trust boundary check
+        working-directory: pinai-agents
+        run: bash scripts/check_trust_boundary.sh
+
+  frontend-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,12 +52,5 @@ jobs:
 
       - run: npm ci
 
-      - name: Type check (APIs)
-        run: npm run type-check --workspace=@pin-ai/apis
-
       - name: Type check (Frontend)
         run: npm run type-check --workspace=@pin-ai/proactive-ai-frontend
-
-      # TODO: re-enable test step once test suite is stable
-      # - name: Test (APIs)
-      #   run: npm run test --workspace=@pin-ai/apis

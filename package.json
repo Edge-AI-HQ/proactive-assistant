@@ -6,17 +6,12 @@
     "npm": ">=10"
   },
   "workspaces": [
-    "apis",
     "proactive-ai-frontend"
   ],
   "scripts": {
-    "dev": "npm run build:proactive && npm run dev --workspace @pin-ai/apis",
-    "build": "npm run build --workspace @pin-ai/apis",
-    "build:proactive": "npm run build --workspace @pin-ai/proactive-ai-frontend",
-    "build:all": "npm run build --workspace @pin-ai/proactive-ai-frontend && npm run build --workspace @pin-ai/apis",
+    "type-check": "npm run type-check --workspace=@pin-ai/proactive-ai-frontend",
+    "build": "npm run build --workspace=@pin-ai/proactive-ai-frontend",
     "mobile-sync:ngrok": "node scripts/mobile-sync-ngrok.mjs",
-    "start": "npm run start --workspace @pin-ai/apis",
-    "type-check": "npm run type-check --workspace @pin-ai/apis",
     "litellm:up": "bash ops/litellm/litellm.sh up",
     "litellm:restart": "bash ops/litellm/litellm.sh restart",
     "litellm:logs": "bash ops/litellm/litellm.sh logs",

@@ -7,159 +7,214 @@ description: "Chat-driven 执行的当前事实(用户/agent 在 card 或 main �
 
 ## 结论
 
-执行层是 chat-stream 单一链路:用户 → MainChatView / CardChat → `POST /chat-stream/send` → `routes/chat.ts` → runtime subagent → agent 自由调工具(pin CLI 全集 + `read_web` + browser)→ SSE 推 `chat:delta` / `chat:tool:*`。
+执行层是 chat-stream 单一链路:
 
-agent 的工具决策由 **Tier 1-4 政策**收敛(优先级从上到下,Browser 是最后手段):
+`用户 → MainChatView / CardChat → POST /api/chat-stream/send → web/routes/ui/chat.py → services/chat_proxy.stream_chat(EdDSA agent-run JWT)→ chat /agent/chat (DeepAgents)→ agent 调原生 @tool 或 python_exec(Daytona sandbox + pinai_sdk)→ SSE 推 chat:delta / chat:tool:* 帧 → 前端`
 
-1. **Local read** — `pin raw / signals / memory / profile / cards / feedback / world`
-2. **Composio read** — `pin personal exec --tool <READ_TOOL>`(slug 含 GET/FETCH/SEARCH/LIST/READ/QUERY/LOOKUP/RETRIEVE/FIND)
-3. **Composio write** — 普通写必须 `--allow-side-effect=true`;高风险写先拒绝;`GMAIL_SEND_EMAIL` 永久走 draft 链路
-4. **Last resort** — `read_web(url, intent)`(先 fetch,不够再自动升级 browser)/ `browser`(captcha / OAuth / 真交互)
+session_key 决定走哪个 agent:`main-<user_id>-<rand>` → `main_chat` agent;`card-thread-<card_id>` → `card_execution` agent。第一次发到 card-thread 时,`card_context` 作为 SystemMessage 写进 LangGraph checkpointer 持久化(后续 turn 不需要前端再传)。
 
-收敛靠 `execution-policy.ts` 单一真源:chat prompt、`pin SKILL.md`、browser description、`pin personal exec` verb gate、`before_tool_call` browser 拦截都对齐同一套规则。browser 拦截现在下沉到 OpenClaw tool execution 前,被拦时 Browserbase session 不会创建。
+工具决策 Tier 1-4 政策**完全靠 agent system prompt 和 native tool 命名区分**(没有运行时硬拦截 hook,Composio side-effect 强制门**当前只是 prompt 规则 + tools allowlist,没有 verb 分类硬闸**,详见下方"Composio side-effect"段):
+
+1. **Tier 1 Local read** — native @tool:`memory_*` / `signals_*` / `profile_*` / `raw_*` / `cards_*` / `feedback_*` / `world_*`
+2. **Tier 2 Composio read** — `COMPOSIO_MULTI_EXECUTE_TOOL` 调 GET / FETCH / SEARCH / LIST 类 slug
+3. **Tier 3 Composio write** — 同一个 meta-tool,prompt 要求先在 chat 起草 + 等用户 OK 才发起;`GMAIL_SEND_EMAIL` 等高风险 slug 走 prompt 规定的 draft 链路 — **代码层面没有 slug verb 黑/白名单**
+4. **Tier 4 Last resort** — `tavily_search` / `tavily_extract`(LangChain Tavily 工具)读 URL,`browser_tool`(Browserbase)做真交互
 
 ```mermaid
 flowchart LR
-  UI["MainChatView / CardChat"] --> Send["POST /chat-stream/send"]
-  Send --> Chat["routes/chat.ts"]
-  Chat --> Agent["runtime subagent"]
-  Agent --> Hook{"before_tool_call execution-policy"}
-  Hook -->|block browser| Agent
-  Hook -->|pass Tier 1-2| Pin["pin CLI"]
-  Hook -->|pass Tier 3| PinWrite["pin personal exec --allow-side-effect=true"]
-  Hook -->|pass Tier 4 web| ReadWeb["read_web"]
-  Hook -->|pass Tier 4 browser| Browser["browser tool"]
-  Agent --> SSE["chat:delta / chat:tool:* SSE"]
-  SSE --> UI
-  Chat --> Crystallize["conversation-crystallize"]
-  Crystallize --> Memory["memory / skill_index"]
-  Browser --> BBus["browser/events bus"]
-  BBus --> BrowserSSE["GET /browser/events"]
-  BrowserSSE --> UI
+  UI["MainChatView / CardChat"] --> Init["POST /api/chat-stream/init"]
+  UI --> Send["POST /api/chat-stream/send"]
+  UI --> Hist["GET /api/chat-stream/history"]
+  Send --> Web["web/routes/ui/chat.py"]
+  Web --> Proxy["services/chat_proxy.stream_chat"]
+  Proxy --> Chat["chat /agent/chat (SSE)"]
+  Chat --> Agent["main_chat / card_execution agent"]
+  Agent --> Native["native @tool (Tier 1)"]
+  Agent --> Composio["COMPOSIO_MULTI_EXECUTE_TOOL (Tier 2/3)"]
+  Agent --> Tavily["tavily_search / tavily_extract (Tier 4)"]
+  Agent --> Browser["browser_tool (Tier 4)"]
+  Agent --> PyExec["python_exec (Daytona sandbox + pinai_sdk)"]
+  Native -. HTTP .-> WebAgent["/api/agent/*"]
+  PyExec -. SDK .-> WebAgent
+  Composio -. /api/agent/composio/meta/* .-> WebAgent
+  Web --> Thread[("pai_chat_threads metadata")]
+  Chat --> Cp[("langgraph.* checkpoint")]
 ```
 
 ## 边界
 
 包含:
 
-- `POST /chat-stream/send` / `POST /chat-stream/init` / `GET /chat-stream/history` 和 legacy `POST /chat` / `GET /chat/history`
-- chat agent system prompt(`agents/chat.ts`):role + Tier 1-4 决策表 + 反例 + 副作用规则 + 输出风格,中间 `OPENCLAW_CACHE_BOUNDARY` 切稳定 prefix / 易变 suffix(`card_context` / learned skills)
-- `pin SKILL.md` 标准获取顺序段(Tier 1-4 表 + 决策反例 + 各 Tier sample)
-- `browser/tool.ts` description "LAST-RESORT TOOL" 段
-- `execution-policy.ts` 单一真源(Tier / Composio verb 分类 / browser 规则 / prompt 文案)
-- `execution-policy-runtime.ts` `before_tool_call` 硬拦截(browser open 前)
-- 副作用 verb-based 门(`cli/personal.ts`,普通写 `--allow-side-effect=true`,高风险写拒绝)
-- `read_web`(`browser/read-web-tool.ts`,先复用 `pin web fetch`,必要时升级 browser)
-- `pin web fetch`(`cli/web.ts`,`read_web` 的安全 fetch 层和 CLI fallback)
-- runtime subagent 调度、tool 调用 SSE 转发
-- browser tool:session 生命周期、control mode、AI/user 抢占、读写动作分级
-- 前端 chat runtime + tool 活动渲染 + CardChat 薄壳
-- `conversation-crystallize`:把跨会话对话计数沉淀回 skill / memory
+- `POST /api/chat-stream/{init,send}` + `GET /api/chat-stream/history`。
+- `pai_chat_threads` metadata 表(kind / card_id / message_count / last_message_at)。
+- LangGraph Postgres checkpointer 持久化 thread state(`langgraph` schema)。
+- chat 端 `main_chat` / `card_execution` agent prompt 与 native @tool 套件。
+- `python_exec` sandbox 工具(Daytona)+ `pinai_sdk` 回连 `/api/agent/*` 的 code-mode 链路。
+- Browser tool(Browserbase session 管理、AI/user control、SSE 事件总线)。
+- Composio meta-tool 转发 + 当前的 prompt-only 副作用约束(代码层 verb gate 还没实现)。
+- `tavily_search` / `tavily_extract` web read 工具。
+- conversation crystallize(chat 进程内联触发的长期沉淀;scheduler `crystallize` kind 已预留路由但未接 producer)。
+- 前端 chat runtime 与工具活动渲染。
 
 不包含:
 
-- `card_executions` 状态机 / Tool Registry / 形式化 plan_steps —— 已删,见 [执行层 Plan 1](../plans/2026-05-01-execution-chat-driven)
-- 卡片对话化 UI(card detail = chat thread / option chips / draft preview / browser embed) —— [执行层 Plan 2](../plans/2026-05-01-card-as-chat-ux)
-- 卡片怎么生成 —— [Generation](./generation)
-- `card_action:confirm/dismiss/modify` 反馈写入 —— [Feedback](./feedback)
-- crystallize 写入 memory / skill 的 schema —— [Memory](./memory)
-- `connector.sync` / `auto.dreaming` 等后台异步任务 —— [Background Tasks](./background-tasks)
+- 卡片怎么生成,看 [Generation](./generation)。
+- `card_action:confirm/dismiss/modify` 反馈写入,看 [Feedback](./feedback)。
+- crystallize 写入 memory / skill 的 schema,看 [Memory](./memory)。
+- `connector.init` / `auto.dreaming` 等异步任务,看 [Background Tasks](./background-tasks)。
+- scheduler 框架,看 [Background Tasks](./background-tasks)。
 
 ## 核心链路
 
 ```mermaid
 sequenceDiagram
   participant FE as Frontend
-  participant Chat as /chat-stream/send
-  participant Agent as runtime subagent
-  participant Policy as before_tool_call policy
-  participant Tool as tool
+  participant Web as web /api/chat-stream
+  participant Proxy as chat_proxy
+  participant Chat as chat /agent/chat
+  participant Agent as main_chat / card_execution
+  participant Tool as native @tool / python_exec / browser
 
-  FE->>Chat: POST { sessionKey, message, cardContext? }
-  Chat-->>FE: text/event-stream open
-  Chat->>Agent: buildChatPrompt + run
-  Agent-->>Chat: text delta
-  Chat-->>FE: chat:delta
-  Agent->>Policy: before_tool_call (e.g. browser open)
-  alt First browser open + no prior grounding/read_web + user didn't ask for browser
-    Policy-->>Agent: block + Tier reminder
-    Agent->>Policy: re-decide (likely pin raw / pin personal exec / read_web)
-  else Pass
-    Policy-->>Tool: pass
-    Tool-->>Chat: result
-    Chat-->>FE: chat:tool:start / chat:tool:result
+  FE->>Web: POST /init { card_id? | session_key? }
+  Web->>Web: classify (main-... | card-thread-<id>) + 校 ownership
+  Web->>Thread: upsert pai_chat_threads
+  Web-->>FE: { session_key, existing }
+  FE->>Web: POST /send { session_key, message, card_context? }
+  Web->>Proxy: stream_chat(...) (sign EdDSA run JWT, attach virtual_key + browserbase_context)
+  Proxy->>Chat: POST /agent/chat (SSE)
+  Chat->>Agent: invoke (LangGraph thread = session_key)
+  alt 首次 card-thread + card_context
+    Agent->>Cp: SystemMessage(card_context) 持久化
   end
-  Agent-->>Chat: final reply
-  Chat-->>FE: chat:done
+  Agent-->>Chat: text delta
+  Chat-->>Proxy: chat:delta SSE
+  Proxy-->>Web: forward bytes
+  Web-->>FE: chat:delta
+  Agent->>Tool: tool call
+  Tool-->>Agent: result
+  Agent-->>Chat: chat:tool:start / chat:tool:result
+  Chat-->>FE: forward
+  Agent-->>Chat: chat:done
+  Web->>Thread: bump last_message_at + message_count
 ```
 
 ## 当前设计
 
-### Tier 1-4 工具决策政策
+### chat-stream 路由
 
-| Tier | 工具前缀 | 何时用 | 何时不用 |
-|---|---|---|---|
-| **1 Local read** | `pin raw / signals / memory / profile / cards / feedback / world` | 任何"读用户已同步数据"。**优先级最高**。 | 数据 >12h 没同步 + latency 敏感 → Tier 2 |
-| **2 Composio read** | `pin personal exec --tool <READ_TOOL>`(slug 含 GET/FETCH/SEARCH/LIST/READ/QUERY/LOOKUP/RETRIEVE/FIND) | Tier 1 没数据 / 太旧 / 用户要"现在" | Tier 1 已能满足时不重复拉 |
-| **3 Composio write** | `pin personal exec --tool <WRITE_TOOL> --allow-side-effect=true`(普通写 slug 含 CREATE/UPDATE/SEND/POST/REPLY/DRAFT/SCHEDULE/PUBLISH/UPLOAD 等;**verb-based 跨 toolkit**) | 用户**明确**要求对外部系统写动作 | 用户没批准前不要直接 Tier 3;DELETE/REMOVE/CANCEL/TRANSFER/CHARGE/PAY/PURCHASE/ARCHIVE/MOVE/EXECUTE/RUN 暂时拒绝 |
-| **4 Last resort** | `read_web(url, intent)`(先 fetch,不够自动 browser)/ `browser`(captcha / OAuth / 真交互) | 读 URL 或真没别的办法 | Tier 1-3 能做的,绝不 browser;不要跳过 `read_web` 直接 browser |
-
-**决策提示来自 IntentCard.sources**:`sources` 字段格式 `<source_kind>:[<metadata>] '<quoted>'`。`buildChatPrompt` 把 source_kind 转成 firstMessage 末尾一句 routing hint(`Sources: gmail, memory. Start with the matching pin path...`),agent 第一调直接命中正确 pin path,不靠临场推断。
-
-### 决策强制方式:单一真源 + tool execution 前硬拦截
-
-| 位置 | 强制方式 | 文件 |
+| Endpoint | 模块 | 行为 |
 |---|---|---|
-| `execution-policy.ts` | Tier 文案、Composio verb 分类、browser 规则的单一真源 | `pinai-openclaw/plugins/proactive-ai/execution-policy.ts` |
-| `chat agent` system prompt | 从单一真源渲染 Tier 决策表 + 反例 + 副作用规则;`OPENCLAW_CACHE_BOUNDARY` 切稳定 prefix / 易变 suffix | `agents/chat.ts` |
-| `pin SKILL.md` | 同步同一套 Tier / side-effect / read_web 规则 | `pinai-openclaw/image/skills/pin/SKILL.md` |
-| `browser/tool.ts` description | 从单一真源复用 LAST-RESORT 文案 | `pinai-openclaw/plugins/proactive-ai/browser/tool.ts` |
-| `execution-policy-runtime.ts` hook | **硬**`before_tool_call`:browser open + 本 run 无 grounding/read_web + 用户没说 browser → block,LLM 收到 blockReason 后重决策 | `pinai-openclaw/plugins/proactive-ai/execution-policy-runtime.ts` |
+| `POST /api/chat-stream/init` | `web/routes/ui/chat.py` | 解析 / mint session_key,validate 三种形态:1) 显式 body.session_key + 校 user 名空间;2) `card_id` → `card-thread-<id>`;3) 空 → 找用户最新 main thread 或 mint `main-<user_id>-<uuid>`。upsert `pai_chat_threads` metadata。返回 `{session_key, existing}`(existing 决定前端是否绕过 bootstrap)。 |
+| `POST /api/chat-stream/send` | `web/routes/ui/chat.py` | SSE。`_ensure_virtual_key` lazy-recover LiteLLM key,`ensure_browserbase_context` 一次性建 Browserbase context(用于 browser tool 复用 cookies)。调 `stream_chat()`,最后在 finalizer 里 bump `last_message_at` + `message_count`。 |
+| `GET /api/chat-stream/history?session_key=...` | `web/routes/ui/chat.py` | 一次性 GET 给 `chat /agent/chat/history`,返回合并后的 turn 列表(用户 / assistant / tool 调用)。 |
 
-### 副作用闭环(verb-based)
+`pai_chat_threads`(migration `035_pai_chat_threads.sql`)字段:`user_id`、`thread_id` 复合 PK、`kind` ∈ `main|card`、`card_id`、`title`、`archived`、`created_at`、`last_message_at`、`message_count`。CHECK 约束 enforce session_key 命名 `main-{user_id}-{rand}` 或 `card-thread-{card_id}`。
 
-| 维度 | 当前事实 |
+### web → chat 代理
+
+`web/services/chat_proxy.py`:
+
+- `stream_chat(...)` 签 EdDSA agent-run JWT,claims 带 `user_id` / `run_id` / `virtual_key` / `browserbase_context_id` / 1h TTL / `jti`。POST 到 `CHAT_INTERNAL_URL=http://pinai-chat:8001/agent/chat`,把 SSE 字节直转回前端。
+- `call_chat_exists(session_key)` 一次性 GET `/agent/chat/exists` — 给 `/init` 决定 existing。
+- `call_chat_history(session_key)` 一次性 GET `/agent/chat/history` — 给 `/history`。
+
+chat 端验签 + `jti` 黑名单(`pai_jti_revocations`),失败 401。
+
+### chat agent
+
+`chat/routes/chat.py:POST /agent/chat`:
+- verify run JWT → `RunPrincipal`。
+- 看 session_key prefix 选 agent:`card-thread-` → `make_card_execution_agent`,否则 `make_main_chat_agent`。
+- 拿 LangGraph checkpointer(`chat/runtime/checkpoint.py` 在 Postgres `langgraph` schema 持久化);thread_id = session_key。
+- 首次 card-thread + 有 `card_context` 时,把 `SystemMessage(json.dumps(card_context))` push 进 thread state,之后不需要前端再传。SystemMessage 会被 `/history` 过滤掉,不进前端渲染。
+- 跑 agent loop,把 LangGraph stream 转成 SSE 帧:`chat:thinking` / `chat:delta` / `chat:tool:start` / `chat:tool:update` / `chat:tool:result` / `chat:reply`(非流式 fallback)/ `chat:error` / `chat:done`(`chat/streaming.py:langgraph_to_sse`)。
+
+#### main_chat agent
+
+`chat/agents/main_chat.py:make_main_chat_agent`:
+
+- LiteLLM (Sonnet 4.6) 通过 langchain-openai `ChatOpenAI` 接到 LiteLLM proxy。
+- prompt 结构:role + 语言匹配 + persona grounding(memory / signals / past turns)+ tool routing(Tier 1-4 + native tools 清单 + composio meta + browser + python_exec)+ 副作用规则 + 输出风格。
+- 工具集合:全部 `chat/tools/native/*` + `chat/tools/sandbox.python_exec` + `chat/browser/tool.py` + `chat/tools/tavily` + `chat/tools/native/composio_meta` 的 4 个 meta-tool。
+
+#### card_execution agent
+
+`chat/agents/card_execution.py`:
+
+- 同样的工具集,但 prompt 聚焦"执行单卡上下文",`card_context` 是 thread state 里的 SystemMessage。
+- 三种 speak situation:缺用户信息、副作用确认、tool failure。其余 turn 静默执行。
+
+### Native @tool 套件
+
+`chat/tools/native/`,每个文件是一组 LangChain `@tool` 装饰的薄壳,内部通过 `chat/tools/http_client.py` 打 `/api/agent/*`(签 run JWT 自动转发):
+
+| 文件 | 工具 |
 |---|---|
-| 门 | `cli/personal.ts` 调 `validateComposioExecTool`:Read 动词默认放行;普通 Write 动词必须 `--allow-side-effect=true`;高风险 Write 和未知动词在调用 Composio 前拒绝。 |
-| Read 动词 | GET / FETCH / SEARCH / LIST / READ / QUERY / LOOKUP / RETRIEVE / FIND。 |
-| 普通 Write 动词 | CREATE / UPDATE / SEND / POST / REPLY / DRAFT / SCHEDULE / PUBLISH / UPLOAD / ADD / INSERT / PATCH / SUBMIT / FORWARD / INVITE。 |
-| 高风险 Write 动词 | DELETE / REMOVE / CANCEL / TRANSFER / CHARGE / PAY / PURCHASE / ARCHIVE / MOVE / EXECUTE / RUN。 |
-| 范围 | **跨 toolkit 统一**:Gmail / Calendar / Slack / Notion / GitHub / Stripe / Linear / 等所有 Composio tool 都按 slug 动词分类,不再挑 toolkit。 |
-| 黑名单 | `GMAIL_SEND_EMAIL` 永久拒绝 —— 走 `GMAIL_CREATE_EMAIL_DRAFT` → 用户 review → `GMAIL_SEND_DRAFT` 链路。 |
-| 用户审批 | agent 在 chat 里把内容草稿展示 → 等用户回 OK → 再调发送 tool。一次 OK 覆盖一次写,不跨动作复用。 |
+| `cards.py` | `cards_recent`、`cards_get` |
+| `composio_meta.py` | `COMPOSIO_SEARCH_TOOLS`、`COMPOSIO_GET_TOOL_SCHEMAS`、`COMPOSIO_MULTI_EXECUTE_TOOL`、`COMPOSIO_MANAGE_CONNECTIONS` |
+| `feedback.py` | `feedback_list`、`feedback_get` |
+| `memory.py` | `memory_list`、`memory_search`、`memory_get`、`memory_add`、`memory_upsert` |
+| `profile.py` | `profile_get`、`profile_upsert`、`goal_list`、`goal_upsert` |
+| `raw.py` | `raw_list`、`raw_get`、`raw_gmail_recent`、`raw_gcal_today`、`raw_gcal_week` |
+| `signals.py` | `signals_recent`、`signals_get` |
+| `tavily.py` | `tavily_search`、`tavily_extract`(LangChain Tavily 工具,API key 在 web 进程,chat 通过 web 转发) |
+| `world.py` | `world_recent`、`world_search` |
 
-### Browser 执行前拦截
+### python_exec(Daytona Code Mode)
 
-| 触发条件 | 行为 |
+`chat/tools/sandbox.py:python_exec`:
+
+- DeepAgents 自带的 native tool,把任意 Python 跑在 Daytona sandbox 里。
+- 每个 LangGraph thread 一个 sandbox(LRU 100,5min auto_stop,24h auto_delete,详见 [Runtime & Deployment](./runtime-deployment))。
+- 注入 env:`PAI_API_URL`(本地 ngrok / 生产公网)+ `PAI_SANDBOX_TOKEN` phantom token + `PAI_RUN_JWT`。
+- sandbox 里 baked `pinai_sdk`,`from pinai_sdk import client`,所有 `/api/agent/*` 走 phantom token 鉴权。
+- 适合多步组合调用(`run_query=fetch + filter + reduce + memory.add`),不要为每步都开 native tool。
+- 退出 thread 时 `evict_thread(thread_id)` 主动回收;`auto_stop` 兜底防 sandbox 泄漏。
+
+### Browser tool
+
+`chat/browser/`:
+
+| 文件 | 角色 |
 |---|---|
-| `toolName === 'browser'` && `args.action === 'open'` && **本 run 没 prior Pin grounding / `read_web` 调用** && **用户最近一条消息不含 browser/网页/网站/browse/navigate/浏览/打开 url 关键词** && **没 prior browser open**(retry) | `before_tool_call` 返回 `block=true` + Tier reminder。OpenClaw 在真正 tool execution 前中断,所以 `BrowserbaseManager.createSession` 不会被调用。agent LLM 收到 blockReason 后重决策。 |
-| `browser open <https-url>` 前没有 same-host `read_web` / `pin web fetch` | `before_tool_call` block,提示先 `read_web(url, intent)`。 |
-| 上述任一不满足 | 正常进入 tool runtime,再通过 SSE 转发 `chat:tool:start` / `chat:tool:result`。 |
+| `manager.py` | `BrowserbaseManager`,session 上限 5,空闲 5min 回收,60s 远端健康探活。 |
+| `tool.py` | LangChain 工具入口,description 头标 LAST-RESORT TOOL + snapshot-first。 |
+| `control_state.py` | `controlMode='ai' / 'user' / 'idle'`;`MUTATION_ACTIONS` 集合定义可写动作,user 模式只允许只读(`snapshot` / `get_text` / `screenshot`)。 |
+| `events.py` | 事件总线:`browser:opened` / `browser:navigated` / `browser:closed` / `browser:control` / `browser:takeover-requested`。 |
+| `routes.py` | `GET /agent/browser/events?session_key=...`(SSE 重连回放)、`GET /agent/browser/sessions`、`POST /agent/browser/sessions`、`DELETE /agent/browser/sessions/:id`、`POST /agent/browser/sessions/:id/control`。 |
 
-`routes/chat.ts` 在 subagent `runId` 创建后调用 `registerExecutionPolicyRunContext`,run 完成后 `clearExecutionPolicyRunContext`。prior tool calls 存在 `execution-policy-runtime.ts` 的 run 级 Map,不跨 run。第一次被 block 的 browser open 会被记录,同一 run 第二次 browser open 放行,避免无限拦截。
+Browser tool 支持的 actions:`open` / `snapshot` / `click` / `type` / `press_key` / `wait` / `scroll` / `navigate` / `go_back` / `go_forward` / `reload` / `get_text` / `console` / `request_takeover` / `close`。每个动作返回新 a11y snapshot 带 ref(`e3` 之类)给后续动作引用。
 
-`shouldInterceptBrowserFirstCall` 现在只是保留给旧测试/调用方的纯函数 wrapper,真实拦截不在 SSE 层。
+Browserbase context(`ensure_browserbase_context`)在 `/chat-stream/send` 入口处 lazy 建立,session 间复用 cookies,user OAuth 一次后后续 turn 不需要重登。
 
-### `read_web`
+### Composio 副作用闭环(当前状态:prompt + allowlist,**没有运行时 verb 闸**)
 
-`read_web(url, intent)` 是 agent 读网页的 Tier 4 入口。它内部先调 `fetchUrl`(`cli/web.ts`),继承 HTTPS-only、SSRF 防护、redirect 校验、content-type allowlist、body cap、timeout 等规则。fetch 结果够用时直接返回 `{ mode: "fetch", upgraded: false, text }`。
+文件 `pinai-agents/src/pinai_agents/web/routes/agent/composio.py` 顶部 docstring 写得很清楚:
 
-只有以下情况才升级 browser:
+> Side-effect gate: deferred. The plan currently relies on session `tools=` allowlist as the physical guard; per-call HITL approval is TBD pending DeepAgents permission middleware integration.
 
-- fetch 报 401 / 403 / login / auth / forbidden / unauthorized。
-- fetch 文本为空、太短,或看起来是 Loading / JS-only SPA shell。
-- fetch 内容不足以回答用户问题。
+也就是说,**今天的代码没有按 slug 动词(CREATE/UPDATE/DELETE 等)做白/黑名单分类**。当前实际生效的只有两层:
 
-升级时 `read_web` 创建 Browserbase session 并返回首个 accessibility snapshot,同时 `upgraded=true` 和 `upgradeReason` 说明为什么升级。agent 不再自己判断"先 fetch 还是先 browser"。
+1. **agent prompt**(`main_chat.py` / `card_execution.py`):指令式约束 — 写明 Tier 表、`GMAIL_SEND_EMAIL` 黑名单、"先草稿 → 等用户 OK → 再发起"用户审批闭环。这是软约束,LLM 不遵守时没有运行时拦截。
+2. **Meta-tool 路由白名单**(`web/routes/agent/composio.py:_ALLOWED_META_TOOLS`):只允许 4 个 Composio meta slug — `SEARCH_TOOLS / GET_TOOL_SCHEMAS / MULTI_EXECUTE_TOOL / MANAGE_CONNECTIONS`,其它 404。
+3. **Session-level tools allowlist**:`COMPOSIO_MULTI_EXECUTE_TOOL` 的 `tools=[...]` 参数限定本次 session 能调的 Composio slug 集合,由 caller(agent prompt 决定)填,没有强制内容。`composio_service.py` 顶部注释明确把它叫"current side-effect guard"。
 
-### Chat 路由
+**待办(代码层面今天没有,跟旧 OpenClaw 的实现不同)**:
+- 没有 slug verb 黑名单(没有"DELETE / CHARGE / PAY 自动拒绝"硬闸)。
+- `allow_side_effect=true` 这种参数当前**不被任何 route 强制要求**。
+- `GMAIL_SEND_EMAIL` 不会被 web 拒,只在 prompt 里建议走 draft 链路。
 
-| Endpoint | 作用 |
-|---|---|
-| `POST /chat-stream/send` | 发消息,返回 SSE,推 `chat:delta` / `chat:tool:*` / `chat:done`。 |
-| `POST /chat-stream/init` | 初始化或恢复 session,返回 sessionKey。 |
-| `GET /chat-stream/history?sessionKey=...` | 历史消息,经 `chat-history-merge` 合成 Claude 风格 turn。 |
-| `POST /chat` / `GET /chat/history` | Legacy 同步接口,留给 webhook / 程序化消费者。 |
+实施 HITL middleware 之后才会在 web 端补 verb 分类闸 — 在那之前,任何"新接 toolkit 副作用安全"的判断都得靠 prompt 控住,不能依赖代码。
+
+### Conversation crystallize
+
+`chat/agents/crystallize.py` 沉淀 chat session 成长期 memory / skill(详见 [Memory](./memory))。
+
+**当前触发路径**:chat 进程 inline 调用 — 没有走 scheduler 队列。`web/scheduler/dispatcher.py` 顶部注释明确说 `crystallize → not scheduled (chat worker fires inline)`,grep `kind="crystallize"` 在 web 端没有任何 enqueue 点。前端 UI 的 `/api/crystallize/state` / `/api/crystallize/config` 路由当前是 stubs(`web/routes/ui/stubs.py`),返回静态状态,不真触发任何东西。
+
+预留 schedule 通路:dispatcher 已经实现了 `crystallize` kind → POST `chat /agent/run/crystallize` 的路由;后续要把"session 阈值触发"换成 scheduler enqueue 时,只需要加一个 enqueuer service 写 `kind='crystallize'` 行,不需要再改 dispatcher。
+
+- 与 chat-feedback 区分:crystallize 写长期 memory / skill;chat-feedback 写单卡偏置只影响下一轮 generation(看 [Feedback](./feedback))。两者消费同一份 transcript 但下游分流。
 
 ### SSE 事件
 
@@ -167,165 +222,100 @@ sequenceDiagram
 |---|---|---|
 | `chat:thinking` | agent 开始思考 | — |
 | `chat:delta` | 文本增量 | `text` |
-| `chat:tool:start` | 工具调用开始 | `toolCallId`, `name`, `argsPreview`, `pinCommand`, `meta` |
-| `chat:tool:update` | 工具进度更新 | `toolCallId`, `meta` |
-| `chat:tool:result` | 工具完成(或拦截 reminder) | `toolCallId`, `isError`, `meta` |
+| `chat:tool:start` | 工具调用开始 | `toolCallId`、`name`、`argsPreview`、`meta` |
+| `chat:tool:update` | 进度更新 | `toolCallId`、`meta` |
+| `chat:tool:result` | 完成或拦截 | `toolCallId`、`isError`、`meta` |
 | `chat:reply` | 非流式 fallback 完整回复 | `text` |
 | `chat:error` | agent / 系统错误 | `message` |
 | `chat:done` | 流结束 | — |
 
-### Chat agent prompt(cache boundary)
+### 历史与 thread metadata
 
-`agents/chat.ts` 构建:
-
-**Stable prefix**(进 cache,任何 input 不污染):
-- role(`You are the Chat agent...`)
-- `outputLanguage` instruction
-- Tier 1-4 决策表(`<tool_decision_policy>`)
-- 反例(`<routing_examples>`,≥5 条)
-- 副作用规则(`<side_effect_rules>`,verb-based / 黑名单 / 审批闭环)
-- 输出风格(`<output_style>`)
-
-`<!-- OPENCLAW_CACHE_BOUNDARY -->`
-
-**Volatile suffix**(每次 invocation 不同):
-- `<card_context>` JSON
-- `learnedSkillsSection`(由 `conversation-crystallize/skill-injection.ts` 生成)
-
-`agents/chat.test.ts` 硬测试:不同 card / 不同 learned skills / 有无 card 时 prefix 完全相等(防止 volatile 字段污染 prefix)。
-
-`buildFirstMessage` 用 `card.sources` 的 source_kind 注入 Tier 1 路由 hint。
-
-### Browser 路由(独立 SSE 通道)
-
-| Endpoint | 作用 |
-|---|---|
-| `GET /browser/events?sessionKey=...` | session 生命周期 SSE,reconnect 时回放当前最新状态。 |
-| `GET /browser/sessions` | 列出活跃 session。 |
-| `POST /browser/sessions` | 主动创建 session。 |
-| `DELETE /browser/sessions/:id` | 销毁 session。 |
-| `POST /browser/sessions/:id/control` | 切换 control mode(`ai` / `user` / `idle`)。 |
-
-Browser bus event 类型:`browser:opened`、`browser:navigated`、`browser:closed`、`browser:control`、`browser:takeover-requested`(captcha / 2FA 时)。
-
-### Browser tool 行为
-
-| 维度 | 当前事实 |
-|---|---|
-| 工具入口 | `browser/tool.ts` 注册单个 `browser` 工具,description 头部声明 LAST-RESORT TOOL,snapshot-first 工作流。 |
-| 动作 | `open` / `snapshot` / `click` / `type` / `press_key` / `select` / `wait` / `scroll` / `navigate` / `go_back` / `go_forward` / `reload` / `get_text` / `upload_file` / `set_viewport` / `screenshot` / `request_takeover` / `new_tab` / `switch_tab` / `close_tab` / `list_tabs` / `handle_dialog` / `download` / `console` / `close`。 |
-| 返回 | 每次动作返回新 a11y snapshot,带 ref(如 `e3`)给后续动作引用。 |
-| Session 上限 | `BrowserbaseManager` 最多 5 个并发,空闲 5 分钟自动回收。 |
-| Health check | 每 60s 探活,远端死掉立即销毁本地句柄。 |
-| 读写分级 | `MUTATION_ACTIONS` 集合定义可写动作;`controlMode='user'` 时只允许只读动作(snapshot / get_text / screenshot)。 |
-
-### Conversation crystallize
-
-| 维度 | 当前事实 |
-|---|---|
-| 角色 | 跨 session 跟踪聊天 turn,达到阈值后跑子 agent,把对话沉淀成 profile memory 或 active skill。 |
-| 入口 | `conversation-crystallize/service.ts`,触发由 `scheduler/auto-loop.ts` 1 分钟检测定时器或 debug panel `Run now` 拉。 |
-| 跟踪范围 | sessionKey 前缀 `agent:main:proactive-ai:chat:*` / `chat-stream:*` / `chat:card:*`。 |
-| 排除 | `chat-feedback:` / `crystallize:` / `dreaming:` 这些内部子 agent 自己的 session。 |
-| 与 chat-feedback 区分 | crystallize 是长期沉淀(写 memory / skill);chat-feedback 是单卡偏置(只影响下一轮 generation)。两者都用 `normalizeCardChatMessages`,但下游不同。 |
+`chat/routes/history.py:GET /agent/chat/history?session_key=...` 从 LangGraph checkpointer 拉所有 message,过滤 SystemMessage(card_context 不暴露给前端),组成 `{user, assistant, tool_calls[], metadata}` turn 列表返回。web 的 `/api/chat-stream/history` 是这条的薄壳代理。
 
 ## 开发入口
 
 | 改动 | 先看 |
 |---|---|
-| chat HTTP / SSE | `pinai-openclaw/plugins/proactive-ai/routes/chat.ts` |
-| Tier / Composio / browser policy 单一真源 | `pinai-openclaw/plugins/proactive-ai/execution-policy.ts` |
-| tool execution 前硬拦截 | `pinai-openclaw/plugins/proactive-ai/execution-policy-runtime.ts` |
-| chat agent prompt | `pinai-openclaw/plugins/proactive-ai/agents/chat.ts` |
-| Tier 政策 SKILL doc | `pinai-openclaw/image/skills/pin/SKILL.md` 的"标准获取顺序"段 |
-| 副作用 verb 门 | `pinai-openclaw/plugins/proactive-ai/cli/personal.ts` 调用的 `validateComposioExecTool` |
-| `read_web` | `pinai-openclaw/plugins/proactive-ai/browser/read-web-tool.ts` |
-| `pin web fetch` | `pinai-openclaw/plugins/proactive-ai/cli/web.ts` |
-| 历史 turn 合并 | `pinai-openclaw/plugins/proactive-ai/routes/chat-history-merge.ts` |
-| browser HTTP / SSE | `pinai-openclaw/plugins/proactive-ai/routes/browser.ts` |
-| browser 工具定义 | `pinai-openclaw/plugins/proactive-ai/browser/tool.ts` |
-| browser session 管理 | `pinai-openclaw/plugins/proactive-ai/browser/manager.ts` |
-| browser 事件总线 | `pinai-openclaw/plugins/proactive-ai/browser/events.ts` |
-| AI/user 控制权 | `pinai-openclaw/plugins/proactive-ai/browser/control-state.ts` |
-| 对话沉淀 | `pinai-openclaw/plugins/proactive-ai/conversation-crystallize/service.ts` |
-| skill 注入 prompt | `pinai-openclaw/plugins/proactive-ai/conversation-crystallize/skill-injection.ts` |
+| chat-stream UI 路由 | `pinai-agents/src/pinai_agents/web/routes/ui/chat.py` |
+| web → chat SSE 代理 | `pinai-agents/src/pinai_agents/web/services/chat_proxy.py` |
+| chat 端 SSE 端点 | `pinai-agents/src/pinai_agents/chat/routes/chat.py` |
+| chat agent prompt | `pinai-agents/src/pinai_agents/chat/agents/main_chat.py`、`chat/agents/card_execution.py` |
+| Native @tool 套件 | `pinai-agents/src/pinai_agents/chat/tools/native/` |
+| Tool HTTP client(签 run JWT) | `pinai-agents/src/pinai_agents/chat/tools/http_client.py` |
+| python_exec sandbox 工具 | `pinai-agents/src/pinai_agents/chat/tools/sandbox.py` |
+| Browser tool / 状态 / 路由 | `pinai-agents/src/pinai_agents/chat/browser/{manager,tool,control_state,events,routes}.py` |
+| Composio meta-tool 转发 / 副作用约束 | `pinai-agents/src/pinai_agents/chat/tools/native/composio_meta.py`、`web/routes/agent/composio.py`(顶部 docstring 说明 verb gate deferred)、`web/composio_service.py` 的 session `tools=` allowlist |
+| LangGraph checkpointer | `pinai-agents/src/pinai_agents/chat/runtime/checkpoint.py` |
+| SSE 信封 | `pinai-agents/src/pinai_agents/shared/sse_envelope.py`、`chat/streaming.py` |
+| Thread metadata 表 | `pinai-agents/db/migrations/035_pai_chat_threads.sql`、`web/db/repositories/chat_threads.py` |
+| 共享 api 模型 | `pinai-agents/src/pinai_agents/shared/api_models.py`(`ChatInitRequest` / `ChatSendRequest` / `ChatHistoryResponse` 等) |
 | 前端 chat runtime | `proactive-ai-frontend/src/components/chat/useProactiveChatRuntime.ts` |
-| 流式 content builder | `proactive-ai-frontend/src/components/chat/tool-steps.ts` |
-| 共享 chat 视图 | `proactive-ai-frontend/src/components/main-chat/MainChatView.tsx` |
-| 工具活动行 | `proactive-ai-frontend/src/components/main-chat/ToolActivityCard.tsx` |
-| CardChat 薄壳 | `proactive-ai-frontend/src/components/CardChat.tsx` |
+| 共享 chat 视图 | `proactive-ai-frontend/src/components/main-chat/MainChatView.tsx`、`MainChat.tsx`、`CardChat.tsx` |
+| 工具活动行 | `proactive-ai-frontend/src/components/chat/tool-steps.ts`、`main-chat/ToolActivityCard.tsx` |
+| 浏览器子视图 | `proactive-ai-frontend/src/components/browser-view/`、`hooks/useBrowserSession.ts` |
 
 ## 验证方式
 
 ```bash
-# Chat agent prompt + Tier policy + cache boundary
-npx tsx --test pinai-openclaw/plugins/proactive-ai/agents/chat.test.ts
+# 路由 / chat-stream + thread metadata
+cd pinai-agents && uv run pytest tests/web/routes/test_chat_threads_routes.py
+cd pinai-agents && uv run pytest tests/web/db/repositories/test_chat_threads_repo.py
+cd pinai-agents && uv run pytest tests/web/routes/                    # 全 route 套件
 
-# execution policy 单一真源 + tool execution 前拦截
-npx tsx --test pinai-openclaw/plugins/proactive-ai/execution-policy.test.ts
-npx tsx --test pinai-openclaw/plugins/proactive-ai/execution-policy-runtime.test.ts
+# chat agent / native tools / browser
+cd pinai-agents && uv run pytest tests/chat/test_native_tools.py
+cd pinai-agents && uv run pytest tests/chat/browser/test_event_bus.py
+cd pinai-agents && uv run pytest tests/chat/browser/test_control_state.py
+cd pinai-agents && uv run pytest tests/chat/                          # 全 chat 套件
 
-# route 兼容 wrapper
-npx tsx --test pinai-openclaw/plugins/proactive-ai/routes/chat.test.ts
-
-# 副作用 verb 门
-npx tsx --test pinai-openclaw/plugins/proactive-ai/cli/v3-review-fixes.test.ts
-
-# read_web fetch -> browser upgrade
-npx tsx --test pinai-openclaw/plugins/proactive-ai/browser/read-web-tool.test.ts
-
-# pin web fetch SSRF / 内容类型 / body cap
-npx tsx --test pinai-openclaw/plugins/proactive-ai/cli/web.test.ts
-
-# Browser + crystallize
-npx tsx --test pinai-openclaw/plugins/proactive-ai/browser/control-state.test.ts
-npx tsx --test pinai-openclaw/plugins/proactive-ai/browser/events.test.ts
-npx tsx --test pinai-openclaw/plugins/proactive-ai/conversation-crystallize/service.test.ts
-
-# 全栈 type-check
-npm run type-check
+# 类型 + 前端
+cd pinai-agents && uv run ruff check .
 cd proactive-ai-frontend && npm run type-check
+cd proactive-ai-frontend && npm test
 ```
 
-手工验证 6 个代表性场景(进 user 容器):
+手工验证 6 个代表场景(本地登录 + chat):
 
-1. **Tier 1**:卡"今日日程亮点" → 点开 → agent 应首调 `pin raw gcal today`,**无** `browser:opened`。
-2. **Tier 2**:卡"今早有什么新邮件没看?"(Gmail >12h 没同步)→ agent `pin personal exec --tool GMAIL_FETCH_EMAILS ...`。
-3. **Tier 3**:卡"建一个周三 3pm 跟 Sarah 的 1on1" → 先 `pin raw gcal week` 看冲突 → 在 chat 起草事件细节 → 等用户 OK → `pin personal exec --tool GOOGLECALENDAR_CREATE_EVENT --allow-side-effect=true ...`。
-4. **Tier 4 web**:卡"读一下 Regan 在 Slack 分享的 Forbes 文章" → `pin raw slack list` 找 URL → `read_web(url, intent)` → 总结。fetch 够用时**无** `browser:opened`。
-5. **硬拦截**:卡"去 Gmail 网页看 Sarah 的邮件" → agent 第一调 `browser open https://mail.google.com` → 应在 `before_tool_call` 被 block,`BrowserbaseManager.createSession` 不被调用 → agent 重决策走 `pin raw gmail recent` / `pin personal exec` / `read_web`。
-6. **副作用闭环**:Tier 3 调用前,agent 必须先在 chat 起草内容,等用户回 OK 才 exec。手工验证 agent 没有"未经确认直接发"。
+1. **Tier 1**:卡"今日日程亮点" → 点开 → agent 应首调 `raw_gcal_today` 这种 native tool,**无** `browser:opened`。
+2. **Tier 2**:卡"今早 Gmail 有什么"(数据 >12h 没同步)→ agent 走 `COMPOSIO_MULTI_EXECUTE_TOOL` slug=`GMAIL_FETCH_EMAILS`。
+3. **Tier 3**:卡"周三 3pm 和 Sarah 约 1on1" → 先 `raw_gcal_week` 看冲突 → 在 chat 起草 → 等用户 OK 后才 `COMPOSIO_MULTI_EXECUTE_TOOL` slug=`GOOGLECALENDAR_CREATE_EVENT`。代码不会拦"未经确认就直接调",这一步要靠 trace + agent prompt 自觉。
+4. **Tier 4 web read**:卡"读一下 Regan 在 Slack 分享的 Forbes 文章" → `raw_list` slack 找 URL → `tavily_extract` → 总结。
+5. **GMAIL_SEND_EMAIL 走 draft 链路**:观察 agent 是否在 prompt 引导下走 `GMAIL_CREATE_EMAIL_DRAFT` → 用户 OK → `GMAIL_SEND_DRAFT`。注意:web 端**不会拒**直接 `GMAIL_SEND_EMAIL`,完全靠 prompt 自律 — 看到 agent 直接发就改 prompt。
+
+LangSmith trace:
+
+```bash
+set -a && . pinai-agents/.env && set +a
+langsmith trace list --project pinai-agents-dev --format pretty | head -20
+langsmith thread list --project pinai-agents-dev                   # chat session
+```
 
 容器日志:
 
 ```bash
-docker ps --format '{{.Names}}' | grep -E '^proactive-|^assistant-'
-docker logs <容器名> 2>&1 | grep -E 'chat-stream|tool-start|tool-result|run-complete|browser:|execution-policy|before_tool_call' | tail -60
+make logs-pinai-web | grep -E "chat-stream|stream_chat"
+make logs-pinai-chat | grep -E "/agent/chat|chat:tool|browser:"
 ```
 
 ## 踩坑
 
-- **chat agent prompt 的 cache boundary 必须严格切在 stable prefix / volatile suffix 之间**。改 prompt 时不要把 `card_context` / `learnedSkillsSection` / `firstMessage` 内容混进 prefix(`agents/chat.test.ts` 硬测试会 fail)。
-- **`pin SKILL.md` 同时被 unified-generator 用**。改"标准获取顺序"段对 generation 也有效。Tier 表对 generation 也是有用的提示;副作用边界段不要为 chat 改坏 generation。
-- **Tier / Composio / browser policy 只能改 `execution-policy.ts`**。prompt、SKILL、browser description、CLI gate、hook 测试都应从这里对齐,避免漂移。
-- **browser 拦截必须在 tool execution 前**。只在 SSE 层 fake 一个 `chat:tool:result` 不够,那样 Browserbase session 可能已经创建。当前真源是 `execution-policy-runtime.ts` 的 `before_tool_call` hook。
-- **`card_executions` SQLite 表已不存在**(Plan 1 上线时表定义被删,新启容器 `ensureSchema()` 不再 CREATE)。老用户容器可能有遗留行,无人访问 = 等价于不存在,也不会主动 DROP(审计痕迹)。
-- **`pin web fetch` SSRF defense 在 CLI 层做**。`read_web` 复用这条路径,不要在 chat agent 里再加一层防御。
-- **chat SSE 单条 `/chat-stream/send` 默认 10 分钟超时**;客户端早断流后 agent 仍在后台跑,但 tool 事件帧丢失。
-- **重连 `/browser/events` 时**,如果当前没有活跃 session,server 主动推一条 `browser:closed`,避免前端用过期 session id 调 `/input` 打死接口。
-- **AI/user control 切换只对写动作生效**。`snapshot` / `get_text` / `screenshot` 在用户接管期间也会被 agent 调用 —— 设计就是让 AI 保留情境感知。
-- **card context 解析失败回退到 `rawCardContext` 字符串模式**,prompt 还能跑,但结构化字段(`primaryAction` / `sources` 等)不可用 —— 包括 firstMessage 的 source_kind hint 不会注入。
-- **crystallize 跟 chat-feedback 都消费同一份 transcript 但下游分流**;改 transcript 归一化(`normalizeCardChatMessages`)要同时跑两套测试。
+- chat agent prompt 的 stable / volatile 边界没像旧 OpenClaw plugin 那样有硬测试断言,改 prompt 时要自觉把 `card_context` / firstMessage 这种 volatile 字段放在最末,不要污染前缀(否则 LiteLLM cache 失效)。
+- Composio side-effect gate 当前是 **prompt-only**(`web/routes/agent/composio.py` docstring 明说 "Side-effect gate: deferred"),没有 verb 黑/白名单硬闸 — 改 toolkit / 改 agent prompt 时**不要**假设代码会兜底拦截危险 slug。等 DeepAgents permission middleware 落地之后才会补 verb 闸。
+- `GMAIL_SEND_EMAIL` 不会被代码拒;agent 走不走 draft 链路完全靠 prompt 控住,改 prompt 别去掉这条规则。
+- python_exec 在 sandbox 里跑,sandbox 跟 chat 进程异步;`/state/*.json` 文件是 sandbox 文件系统,前端拿不到,只能通过 agent 输出的文本看。
+- Browser session 上限 5,开第六个会 reject;开 session 后 5min 空闲会自动 close,前端 reconnect 时 server 会主推 `browser:closed`,前端用过期 session id 调 `/input` 打死。
+- AI / user control 切换只对写动作生效,`snapshot` / `get_text` / `screenshot` 在 user 接管期间也允许 — 设计就是让 AI 保留情境感知。
+- LangGraph checkpointer 写 `langgraph` schema,清 chat 状态不要 truncate `pai_chat_threads`(那是 metadata),要清 `langgraph.*` 表。
+- `pai_chat_threads.message_count` / `last_message_at` bump 在 `/send` 的 finalizer 里 — 流被客户端早断(SSE 链路 ~10min 默认 timeout)时 finalizer 仍会跑,但 agent 在后台跑的剩余 tool 帧丢失。
+- card context 解析失败时,prompt 退到 raw string 模式,结构化字段(`primaryAction` / `sources` 等)拿不到,Tier 1 source_kind hint 不会注入。
+- conversation crystallize 跟 chat-feedback 都消费同一份 transcript 但下游分流,改归一化逻辑要同时跑两套测试。
+- `_ALLOWED_META_TOOLS = {SEARCH_TOOLS, GET_TOOL_SCHEMAS, MULTI_EXECUTE_TOOL, MANAGE_CONNECTIONS}` 是当前 web 端**唯一**的 Composio 路由白名单;扩 meta-tool(比如未来引入 `REMOTE_WORKBENCH`)必须显式加进这里,不然 404。
 
 ## 相关模块
 
-- [Generation](./generation):上游 — IntentCard 从这里出,本模块通过 `cardContext` 接入。
+- [Generation](./generation):上游 — IntentCard 从这里出,本模块通过 `card_context` 接入。
 - [Feedback](./feedback):兄弟 — `card_action` 和 `intent_card_state` 走 feedback 路径,不进 chat SSE。
 - [Memory](./memory):下游 — crystallize 沉淀的 memory / skill 在这里读。
-- [Background Tasks](./background-tasks):兄弟 — `connector.init` / `connector.sync` / `auto.dreaming` handler 跑在 `background_tasks` 队列上,跟 chat 链路完全分离。
-
-## 相关 AI Plans
-
-- [执行层 Plan 1:chat-driven 执行 + Tier 工具政策](../plans/2026-05-01-execution-chat-driven) — 本模块当前形态的设计依据。
-- [执行层 Plan 1 实施计划](../plans/2026-05-02-execution-chat-driven-impl) — 1-A → 1-E 五步骤的 file-level 拆分。
-- [执行层 Plan 2:Card-as-Chat UX 深化](../plans/2026-05-01-card-as-chat-ux) — Plan 1 上线后开,UI 层把 card detail 统一成 thread 视图。
+- [Background Tasks](./background-tasks):兄弟 — `connector.*` / `auto.dreaming` / `crystallize` 跑在异步队列上,跟 chat 链路完全分离。
+- [Runtime & Deployment](./runtime-deployment):web/chat 进程信任边界、agent-run JWT 签发、Daytona sandbox 生命周期、Browserbase 配置。

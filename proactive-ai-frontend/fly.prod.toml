@@ -1,0 +1,25 @@
+# proactive-ai-frontend on Fly.io (prod).
+#
+# Static SPA served by nginx (see Dockerfile). Build-time VITE_* args
+# are injected by deploy-prod.yml via --build-arg, sourced from
+# pinai-agents/.env.production.
+#
+# Sibling tomls: fly.toml (dev), fly.test.toml (test).
+
+app = "proactive-ai-frontend-prod"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "256mb"

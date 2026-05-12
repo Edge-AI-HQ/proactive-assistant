@@ -14,13 +14,31 @@ primary_region = 'iad'
 
 [env]
   DEPLOY_ENV = 'production'
+  # Inter-process URLs — see fly.dev.toml comment block for the full
+  # rationale (asymmetric web/chat exposure: chat→web via public anycast,
+  # web→chat via 6PN IPv6 service-discovery).
+  WEB_INTERNAL_URL = "https://proactive-ai-agents-prod.fly.dev"
+  CHAT_INTERNAL_URL = "http://chat.process.proactive-ai-agents-prod.internal:8001"
+  # Daytona sandboxes run OUTSIDE fly's 6PN — PAI_API_URL is the public
+  # callback URL pinai_sdk uses from inside the sandbox to reach web.
+  PAI_API_URL = "https://proactive-ai-agents-prod.fly.dev"
+  LITELLM_BASE_URL = "https://proactive-ai-litellm-prod.fly.dev/v1"
+  # Daytona snapshot — pre-baked image (see infra/daytona/Dockerfile)
+  # rebuilt by Deploy Prod on every dispatch. Without this set,
+  # sandbox.py falls back to declarative build (~30-50s first-message
+  # cold start). See .github/workflows/deploy-prod.yml.
+  PINAI_DAYTONA_SNAPSHOT = "pinai-sandbox:production"
 
 [processes]
   # Secrets come from `flyctl secrets set --process-group=<web|chat> ...` —
   # chat MUST NOT receive master credentials. See fly.dev.toml comment
   # block for the full trust-boundary rationale.
+  #
+  # chat binds `::` (IPv6) so it is only reachable via Fly's IPv6-only
+  # 6PN service-discovery DNS; no fly-proxy listener exists for chat,
+  # so the public internet has no path in.
   web  = "uvicorn pinai_agents.web.asgi:app --host 0.0.0.0 --port 8000"
-  chat = "uvicorn pinai_agents.chat.asgi:app --host 0.0.0.0 --port 8001"
+  chat = "uvicorn pinai_agents.chat.asgi:app --host :: --port 8001"
 
 # Public HTTPS edge → web only.
 [http_service]
@@ -36,11 +54,10 @@ primary_region = 'iad'
     hard_limit = 80
     soft_limit = 50
 
-# chat is reachable only on the internal 6PN at chat.process.app.internal:8001.
-[[services]]
-  protocol = 'tcp'
-  internal_port = 8001
-  processes = ['chat']
+# chat has NO fly-proxy services entry on purpose. Reachable only via
+# Fly's 6PN service-discovery DNS (chat.process.<app>.internal:8001).
+# Adding [[services.ports]] would expose chat on both flycast AND
+# public anycast, leaking the LLM loop + its credentials.
 
 [deploy]
   release_command = "sh -c 'exec yoyo apply --batch -d \"postgresql+psycopg://${DATABASE_URL#*://}\"'"

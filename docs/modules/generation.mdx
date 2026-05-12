@@ -7,119 +7,202 @@ description: "卡片生成 pipeline 的当前事实。"
 
 ## 结论
 
-当前在线卡片生成主链路是：
+卡片生成全链路异步:
 
-`POST /generate -> dispatchPipelineAgent() -> buildUnifiedGeneratorPrompt() -> dispatchAgent() -> finalizePipelineRun() -> selectBestCards()`
+`POST /api/generate → enqueue_once(kind=generator.manual) → pai_scheduled_tasks → web tick_loop → dispatcher._run_generator → HTTP POST chat /agent/generate → DeepAgents 4-subagent loop(data-collector / planner / card-generator / evaluator)→ 返回 JSON → web persist_generator_run → pai_pipeline_runs + pai_card_evaluations`
 
-前端 POST `/api/proxy/generate` 打到用户容器，后端走"先快路返回，慢路走 reconciler"两段式：fast path 在 `FAST_PATH_WAIT_MS` 内完成就 inline 返回完整结果；超时则把 reconcile 任务塞到后台队列，前端轮询 `/runs/:id` 拿终态。每次只跑一次 unified-generator agent，没有多 iteration 概念。
+前端 `POST /api/generate` 拿 `taskId` 后轮询 `/api/agent-runs/active` + `/api/cards`。同一用户只能有一个 active generator,duplicate 直接返回既有 taskId(dedupe pattern)。`generator.auto` 是另一种 kind,frontend settings 改 interval 时 web 侧 upsert 到 `pai_scheduled_tasks` 上,scheduler 周期触发。
 
 ```mermaid
 flowchart LR
-  UI["usePipeline / NowFeed"] --> Proxy["/api/proxy/generate"]
-  Proxy --> Route["routes/generate.ts"]
-  Route --> Dispatch["pipeline/dispatch-finalize.ts"]
-  Dispatch --> Prompt["agents/unified-generator.ts"]
-  Dispatch --> Agent["runtime subagent"]
-  Agent --> Finalize["finalizePipelineRun()"]
-  Finalize --> Select["card-selection.ts"]
-  Select --> Store["pipeline_runs + card_evaluations"]
+  UI["usePipeline / NowFeed"] --> API["POST /api/generate"]
+  API --> Q[("pai_scheduled_tasks (generator.manual)")]
+  Q --> Sched["web tick_loop"]
+  Sched --> Disp["dispatcher._run_generator"]
+  Disp --> Chat["POST chat /agent/generate"]
+  Chat --> Agent["generator.run_generator (4 subagents)"]
+  Agent --> Resp["GeneratorResponse JSON"]
+  Resp --> Persist["web.persist_generator_run"]
+  Persist --> PR[("pai_pipeline_runs")]
+  Persist --> CE[("pai_card_evaluations")]
+  UI -. polling .-> Runs["/api/agent-runs/active"]
+  UI -. polling .-> Cards["/api/cards"]
 ```
 
 ## 边界
 
-包含：
+包含:
 
-- 手动 `/generate` 和 auto-generate 触发。
-- prompt 构建、agent 调用、JSON 解析。
-- self-review evaluation、card selection、多样性约束。
-- pipeline run 和 evaluation 持久化。
-- 前端 run state、`/runs/:id` 轮询、NowFeed 展示。
+- `/api/generate` 入队、dedup、virtual_key lazy provisioning。
+- `pai_pipeline_runs` + `pai_card_evaluations` 持久化语义。
+- auto-generate 的 settings → scheduler 桥(`generator.auto` kind)。
+- chat 端 `generator.py` 4 subagent prompt 拓扑 + 输出 schema。
+- 选卡阈值、`overall >= 5.0` pass 判定、card id 重写。
+- 前端 `usePipeline` / `useGenerationStatus` / `useActiveAgentRuns` 轮询模型。
 
-不包含：
+不包含:
 
-- 数据怎么接进来，看 [Data Connectors](./data-connectors)。
-- memory/profile/skill 的存储规则，看 [Memory](./memory)。
-- feedback event 的写入和学习回流，看 [Feedback](./feedback)。
+- scheduler 框架(tick / claim / lease / retry),看 [Background Tasks](./background-tasks)。
+- generator 拿来当输入的 memory / signals / profile / skill,看 [Memory](./memory)。
+- 前一轮反馈进 prompt 的语义,看 [Feedback](./feedback)。
+- 用户点开卡片的下游 chat / 工具执行,看 [Execution](./execution)。
 
 ## 核心链路
 
 ```mermaid
 sequenceDiagram
   participant FE as Frontend usePipeline
-  participant Route as /generate route
-  participant D as dispatchPipelineAgent
-  participant A as unified generator agent
-  participant F as finalizePipelineRun
-  participant DB as proactive.db
+  participant Web as POST /api/generate
+  participant DB as pai_scheduled_tasks
+  participant Sched as web tick_loop
+  participant Chat as POST chat /agent/generate
+  participant Agent as run_generator (4 subagents)
+  participant Save as persist_generator_run
 
-  FE->>Route: POST /generate
-  Route->>D: load feedback / recent cards / active skills
-  D->>A: prompt + task
-  D->>DB: pipeline_runs row (status=running)
-  Route->>A: collectAgentText (fast path)
-  A-->>Route: JSON cards + evaluations
-  Route->>F: parse + selectBestCards()
-  F->>DB: pipeline_runs (status=completed) + card_evaluations
-  Route-->>FE: 200 { runId, status: completed, cards }
+  FE->>Web: POST /api/generate
+  Web->>DB: _find_active_generator_task(user_id)
+  alt 已有 active
+    Web-->>FE: { taskId, deduped: true }
+  else 没有
+    Web->>DB: enqueue_once(kind='generator.manual', payload)
+    Web-->>FE: { taskId, runId=taskId, status:'queued' }
+  end
+  Sched->>DB: claim
+  Sched->>Chat: POST /agent/generate (EdDSA agent-run JWT, run_id)
+  Chat->>Agent: data-collector → /state/phase1.json
+  Agent->>Agent: planner → PlanOutput
+  Agent->>Agent: card-generator → CardsList
+  Agent->>Agent: evaluator (cross-family gpt-5.5) → EvalReport
+  Chat-->>Sched: GeneratorResponse { cards, evaluations, batch_feedback }
+  Sched->>Save: persist_generator_run(...)
+  Save->>DB: pai_pipeline_runs + pai_card_evaluations
+  FE->>Web: poll /api/agent-runs/active + /api/cards
 ```
 
 ## 当前设计
 
 | 环节 | 当前事实 |
 |---|---|
-| 路由 | `routes/generate.ts` 只允许一个 pipeline 同时运行；重复请求返回 409。 |
-| 输出语言 | 读取 `user_settings.generation_language`，规范值是 `zh-Hans` / `en`。 |
-| 反馈输入 | generation 前会调用 `syncCardChatFeedback()`，失败只 warn，不阻断生成。 |
-| prompt 输入 | recent feedback summary、recent generated cards summary、active skills section。 |
-| agent 输出 | 期待 JSON，包含 `cards`、`evaluations`、`batchFeedback`。 |
-| 选卡 | `PASS_THRESHOLD = 5.0`，最多 10 张，每个 `goalBasket` 最多 3 张。 |
-| 持久化 | `pipeline_runs` 行 + `data/run-artifacts/<runId>.json`（plan/cards/evaluation 详细）；`card_evaluations` 存可 SQL 查询的评价行。 |
-| 前端状态 | `usePipeline.ts` 用 sessionStorage 恢复 run state，慢路通过轮询 `/runs/:id` 拿终态。 |
+| 入口 | `web/routes/ui/generate.py:POST /api/generate`。`_find_active_generator_task` 按 `kind='generator.manual'` + `status='active'` + user 去重;有就返回 `{deduped:true, taskId}`。 |
+| 入队 | `enqueue_once(kind='generator.manual', id=f"gen.{uuid4().hex[:12]}", payload={cards_to_generate, output_language, trigger})`,trigger_kind=`once`。 |
+| Virtual key | `_ensure_virtual_key`:user 没 `litellm_virtual_key` 时调 `services/litellm_provisioning.ensure_user_litellm_key` lazy-recover;失败 502。 |
+| 输出语言 | 读 user_settings 的 `generation_language`(`zh-Hans` / `en`),走 payload 传给 chat。 |
+| 自动生成 | `web/routes/ui/profile.py:_sync_auto_generate_schedule`:settings 写 `auto_generate=true/false` + `auto_generate_interval_minutes`,upsert 到 `pai_scheduled_tasks` 一行 `kind='generator.auto'`,`trigger_kind='schedule'`,`interval_seconds = interval_minutes * 60`,关掉切 `archived`。默认 `auto_generate=ON`(migration `038_auto_generate_default_on.sql`),默认间隔 12h(`037_pai_user_settings_auto_generate_interval.sql`)。 |
+| 派发 | dispatcher 看到 `generator.manual` / `generator.auto` 都走 `_run_generator`(`039_split_generator_kinds.sql` 拆 kind 但共用 handler);60s lease。 |
+| chat 调用 | `_run_generator` HTTP POST `chat /agent/generate`,签 EdDSA agent-run JWT,带 `run_id` + virtual_key claim。 |
+| 持久化 | `persist_generator_run`:`pai_pipeline_runs` 一行(`id=run_id`,`run_id=run_id` 两列同值,`status='completed'`,`final_cards JSONB`,`iterations JSONB`,`trigger`,`started_at`,`completed_at`);`_persist_evaluations`:每张 pass 卡 + 评价写一行 `pai_card_evaluations`(ON CONFLICT (user_id, card_id) DO UPDATE)。 |
+| 前端轮询 | `usePipeline.ts` 用 sessionStorage 恢复 run state;`useActiveAgentRuns.ts` 轮询 `/api/agent-runs/active`;`useGenerationStatus.ts` 取 `pai_scheduled_task_runs` 状态;成功后 `useCards.ts` 拉 `/api/cards`。 |
+
+## chat 端 generator agent
+
+`pinai-agents/src/pinai_agents/chat/routes/generate.py` → `chat/agents/generator.py:run_generator()`。
+
+### Subagent 拓扑
+
+DeepAgents harness,4 个串行 subagent,共享一个 Daytona sandbox + LangGraph state:
+
+```
+main agent (sonnet 4.6, response_format=GeneratorOutput)
+  ├─ task("data-collector", _DATA_COLLECTOR_PROMPT)  → 写 /state/phase1.json
+  ├─ task("planner",        _PLANNER_PROMPT)         → response_format=PlanOutput
+  ├─ task("card-generator", _CARD_GENERATOR_PROMPT)  → response_format=CardsList
+  └─ task("evaluator",      _EVALUATOR_PROMPT)       → response_format=EvalReport (gpt-5.5)
+```
+
+### Subagent 职责
+
+| Subagent | 输入 | 输出 |
+|---|---|---|
+| data-collector | sandbox 里跑 `pinai_sdk` 拉 profile / memory / signals / gmail / gcal / cards_recent / feedback / world | `/state/phase1.json`(给后续 subagent 共享) |
+| planner | `/state/phase1.json` + sandbox state | `PlanOutput {plan[], skipped_duplicates[], cold_baskets[], notes}`。dedup against `cards_recent`、feedback alignment、cold-basket suppression。 |
+| card-generator | plan + sandbox state | `CardsList`,每张卡 `sources[]` 必须非空且 verbatim cite(signal id / memory id / gmail id / profile field / world id)。 |
+| evaluator(cross-family,gpt-5.5)| cards + 同样 sandbox state | `EvalReport`,5 维评分 `relevance / actionability / why_now_clarity / novelty / decision_compression`,`overall = mean`,`pass = (overall >= 5.0 AND no grounding violation)`。 |
+
+### 选卡规则
+
+- `pass==true` 的卡进 `GeneratorOutput.cards`,failed 卡丢但 evaluation 全保留做审计。
+- 不在 `chat/agents/generator.py` 里写硬上限;以前的"每 basket 最多 3 张、整体最多 10 张"规则由 planner 在 `_PLANNER_PROMPT` 里靠 instruction + few-shot 控住,不是 code-level cap。
+- card id 在 web 侧重写:`f"{run_id}_card_{i:02d}"`(`chat/routes/generate.py:121`),evaluation 的 cardId 按 `intentKey` 匹配 + 重 map(`:130`)。
+
+### Cache boundary
+
+generator 走 LiteLLM 时,`ops/litellm/litellm_config.yaml` 的 `cache_control_injection_points` 把 stable prefix(role + 输出 schema + Tier 文案)注入 cache,所以多个 run 命中率高。具体注入点配置看 litellm config,这边只确保 prompt 的 stable 段没被 volatile 字段污染。
 
 ## 开发入口
 
 | 改动 | 先看 |
 |---|---|
-| 生成 HTTP 入口 | `pinai-openclaw/plugins/proactive-ai/routes/generate.ts` |
-| dispatch / finalize 生命周期 | `pinai-openclaw/plugins/proactive-ai/pipeline/dispatch-finalize.ts` |
-| prompt / 输出契约 | `pinai-openclaw/plugins/proactive-ai/agents/unified-generator.ts` |
-| agent 调用和 JSON 解析 | `pinai-openclaw/plugins/proactive-ai/pipeline/agent-runner.ts` |
-| 选卡规则 | `pinai-openclaw/plugins/proactive-ai/pipeline/card-selection.ts` |
-| evaluation 提取 | `pinai-openclaw/plugins/proactive-ai/pipeline/extract-evaluations.ts` |
-| 慢路 reconcile | `pinai-openclaw/plugins/proactive-ai/tasks/handlers/pipeline-reconcile.ts` |
-| 自动生成 | `scheduler/auto-loop.ts`、`routes/settings.ts` |
-| 前端 | `proactive-ai-frontend/src/hooks/usePipeline.ts`、`components/NowFeed.tsx`、`components/AutoGenerateSettings.tsx` |
+| 生成 HTTP 入口 / dedupe / lazy virtual key / persist | `pinai-agents/src/pinai_agents/web/routes/ui/generate.py` |
+| Auto-generate settings → schedule 同步 | `pinai-agents/src/pinai_agents/web/routes/ui/profile.py`(`_sync_auto_generate_schedule`、`_ensure_auto_generate_schedule`)|
+| Scheduler dispatcher generator handler | `pinai-agents/src/pinai_agents/web/scheduler/dispatcher.py`(`_run_generator`、`call_generate`)|
+| chat 端 4 subagent prompt + GeneratorOutput | `pinai-agents/src/pinai_agents/chat/agents/generator.py`(`_DATA_COLLECTOR_PROMPT` / `_PLANNER_PROMPT` / `_CARD_GENERATOR_PROMPT` / `_EVALUATOR_PROMPT`)|
+| chat HTTP route | `pinai-agents/src/pinai_agents/chat/routes/generate.py` |
+| 输出 schema(GeneratorOutput / PlanOutput / CardsList / EvalReport) | `pinai-agents/src/pinai_agents/chat/agents/generator.py` 顶部 pydantic |
+| 共享 api models | `pinai-agents/src/pinai_agents/shared/api_models.py`(`GenerateRequest` 等) |
+| 持久化表 schema | `pinai-agents/db/migrations/014_pai_pipeline.sql`(`pai_pipeline_runs`、`pai_card_evaluations`、`pai_intent_card_state`、`pai_intent_thread_state`)、`039_split_generator_kinds.sql` |
+| Settings 默认值 migration | `037_pai_user_settings_auto_generate_interval.sql`、`038_auto_generate_default_on.sql` |
+| 前端 pipeline hook | `proactive-ai-frontend/src/hooks/usePipeline.ts`、`useGenerationStatus.ts`、`useActiveAgentRuns.ts`、`useCards.ts` |
+| 前端 UI | `proactive-ai-frontend/src/components/NowFeed.tsx`、`AutoGenerateSettings.tsx`、`GenerationIndicator.tsx`、`GenerationLanguageSettings.tsx` |
 
 ## 验证方式
 
 ```bash
-npx tsx --test pinai-openclaw/plugins/proactive-ai/routes/generate.test.ts
-npx tsx --test pinai-openclaw/plugins/proactive-ai/agents/unified-generator.test.ts
-npx tsx --test pinai-openclaw/plugins/proactive-ai/pipeline/orchestrator-evaluations.test.ts
-npx tsx --test pinai-openclaw/plugins/proactive-ai/pipeline/generated-cards-summary.test.ts
-npx tsx --test pinai-openclaw/plugins/proactive-ai/scheduler/auto-loop.test.ts
-npx tsx --test pinai-openclaw/plugins/proactive-ai/tasks/handlers/pipeline-reconcile.test.ts
-npm run type-check
+# 路由 / persist
+cd pinai-agents && uv run pytest tests/web/routes/                    # 含 /api/generate
+cd pinai-agents && uv run pytest tests/web/db/repositories/test_scheduled_tasks_repo.py
+
+# scheduler
+cd pinai-agents && uv run pytest tests/web/scheduler                  # 含 generator dispatch
+
+# chat 端 generator(如已有)
+cd pinai-agents && uv run pytest tests/chat/                          # 含 generator.py / routes/generate
+
+# 类型 + lint
+cd pinai-agents && uv run ruff check .
+cd proactive-ai-frontend && npm run type-check
+cd proactive-ai-frontend && npm test                                  # 包括 usePipeline 单测
 ```
 
-手工验证：
+手工验证:
 
-- 登录 proactive frontend，确保 container running。
-- 点击 generate，Network 应看到 `POST /api/proxy/generate`。
-- 快路返回 200 `{ runId, status: 'completed', cards }`；慢路返回 202 `{ runId, status: 'reconciling' }`，前端轮询 `/runs/:id` 直到 `completed`。
-- 生成后可查最近 `pipeline_runs` 和 `card_evaluations`。
+```bash
+# 前端登录 → 点 Generate
+# Network 应看到 POST /api/generate → 200 { taskId, runId, status:'queued' }
+# Network 应看到周期 GET /api/agent-runs/active(直到 status='success')
+# 完成后 GET /api/cards 拿新卡
+
+# DB 看
+psql -h localhost -p 54322 -U postgres -c "
+SELECT id, status, jsonb_array_length(final_cards) AS n_cards, started_at, completed_at
+FROM pai_pipeline_runs WHERE user_id = $1 ORDER BY started_at DESC LIMIT 5;
+"
+
+# 评价行
+psql -h localhost -p 54322 -U postgres -c "
+SELECT card_id, basket, overall, pass FROM pai_card_evaluations
+WHERE user_id = $1 ORDER BY evaluated_at DESC LIMIT 10;
+"
+
+# 看 chat 端 LangSmith trace
+langsmith trace list --project pinai-agents-dev --run-type chain --format pretty | head -20
+```
 
 ## 踩坑
 
-- `/generate` 是 RESTful POST + JSON，不再走 SSE。返回值是 `{ runId, status, cards? }`。
-- `PASS_THRESHOLD` 现在是 5.0；不要按旧 README 里的 7.0 判断。
-- `syncCardChatFeedback()` 失败不会中断生成，这是为了避免反馈总结故障拖垮主路径。
-- agent 可能输出 placeholder card id，finalize 会按 run id 重新赋全局唯一 id。
-- auto loop 和手动 `/generate` 不是完全同一个入口，改动时要分别验证。
+- `/api/generate` 是异步 enqueue,**总是**返回 `{ taskId, runId }` 然后前端轮询。没有"快路 inline 完成"分支,旧文档的 fast-path 已删。
+- 同一用户同时只能跑一个 `generator.manual`,duplicate `POST /api/generate` 返回 `{deduped:true}` 同 taskId — 前端 race 多点几下不会真的多跑。
+- `generator.manual` 跟 `generator.auto` 是两个独立 kind(migration `039` 拆开),dispatcher 走同一 `_run_generator`,但 dedupe 只查 `manual`;auto 周期跑不阻塞 manual,反过来也不阻塞。
+- `pai_pipeline_runs.id` 和 `run_id` 现在故意同值(老 schema 留两列做 multi-run pipeline 时分开,现在 step 1 generator 是单 agent invocation,合一)。
+- 客户端必须按 `runId` polling 而不是按时间戳猜 — auto-generate 会让"最新一行" race condition。
+- `evaluator` 用 gpt-5.5 是为了 cross-family 减少 evaluator bias;改用同家族要先想清楚为什么(prompt 里有 evaluator persona,改 model 必须重 review)。
+- `cards[i].sources[]` 必须非空且能在 sandbox 里 verbatim 验证(signal id 真存在、gmail id 能 fetch 到),evaluator 把"grounding violation"当 hard fail。这是 LLM 编卡内容的一道闸,实施层别削弱它。
+- `persist_generator_run` 失败只 log warn 不阻断(`pai_pipeline_runs` 持久化是 best-effort,卡片已经返回客户端),所以失败需要主动查 `pai_scheduled_task_runs.error`。
+- `output_language` 走 user_settings,不是请求体覆盖 — 改语言要去 settings(`/api/settings`)。
+- auto-generate 在新用户首次 `GET /api/profile` 时 lazy CREATE schedule 行(`_ensure_auto_generate_schedule`),避免空 settings 时无 schedule。改 settings 路由别绕过这步。
 
 ## 相关模块
 
-- [Memory](./memory)：generation 使用的 raw、signals、memory、profile、skill 上下文。
-- [Feedback](./feedback)：feedback summary 和 intent state 如何影响下一轮生成。
-- [Execution](./execution)：用户在生成卡上做 chat / 调工具的下游链路。
-- [Background Tasks](./background-tasks)：`auto.dreaming` 和 `connector.evolve` 触发的 evolution 子流程会复用 unified-generator agent。
+- [Background Tasks](./background-tasks):scheduler tick / dispatcher / 长 lease / generator kind 路由。
+- [Memory](./memory):generator 拿到的 raw / signals / memory / profile / skill / world 上下文。
+- [Feedback](./feedback):recent feedback summary + intent state 怎么进 planner 的输入。
+- [Execution](./execution):用户在生成卡上点开做 chat / 调工具的下游链路。

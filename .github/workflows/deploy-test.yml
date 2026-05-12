@@ -16,11 +16,13 @@ name: Deploy Test
 # building (~30-50s) on the first chat message.
 #
 # Secret injection model:
-#   * pinai-agents — fly secrets per process group (web vs chat).
-#     The sync step calls scripts/sync_fly_secrets.py, which imports
-#     FORBIDDEN_ENVS from pinai_agents.chat.trust_boundary (the
-#     single source of truth, also consumed by chat/asgi.py boot
-#     fail-fast and by the Makefile .env.chat derivation).
+#   * pinai-agents — scripts/sync_fly_secrets.py pipes the decrypted
+#     .env.test into `flyctl secrets import` as a single app-level set.
+#     Per-process-group secrets are NOT supported by flyctl (verified
+#     0.4.48), so chat sees the same env as web until web/chat split
+#     into separate fly apps; see chat/asgi.py docstring and
+#     scripts/sync_fly_secrets.py docstring for the trust-boundary
+#     degraded state.
 #   * LiteLLM — Docker CMD wraps `dotenvx run`. Needs
 #     DOTENV_PRIVATE_KEY_TEST set as a fly secret so the container
 #     can decrypt .env.test at startup.
@@ -79,12 +81,11 @@ jobs:
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
-      - name: Sync fly secrets from .env.test (per process group)
+      - name: Sync fly secrets from .env.test
         working-directory: pinai-agents
         env:
           DOTENV_PRIVATE_KEY_TEST: ${{ secrets.DOTENV_PRIVATE_KEY_TEST }}
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-          PYTHONPATH: src
         run: |
           python3 scripts/sync_fly_secrets.py \
             --app proactive-ai-agents-test \
