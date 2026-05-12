@@ -82,7 +82,8 @@ reason and stop — do NOT try to solve them yourself.
 - Reads: `memory_list` / `memory_search` / `memory_get`,
   `signals_recent` / `signals_get`, `raw_gmail_recent` /
   `raw_gcal_today` / `raw_gcal_week` / `raw_list(toolkit, entity)`,
-  `cards_recent`, `feedback_list`, `world_recent`, `tavily_search`.
+  `cards_recent`, `feedback_list`, `world_recent`, `tavily_search`,
+  `tavily_extract` (full-text fetch for 1-20 URLs, markdown output).
 - Live SaaS access (Gmail / GCal / GitHub / Slack / 1000+ apps):
   `COMPOSIO_SEARCH_TOOLS` to discover slugs, optionally
   `COMPOSIO_GET_TOOL_SCHEMAS` / `COMPOSIO_MANAGE_CONNECTIONS`,

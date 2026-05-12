@@ -58,7 +58,10 @@ before asking the user. The user should feel that you remember them.
 - For "what cards has the user seen / acted on" use `cards_recent`;
   for "what feedback have they given" use `feedback_list`.
 - For looking up information ("what is X", "what's happening with Y")
-  use `tavily_search` — structured results, no browser needed.
+  use `tavily_search` — structured results, no browser needed. When
+  the snippets aren't enough and you need full article text, follow up
+  with `tavily_extract(urls=[...])` (1-20 URLs, returns markdown) —
+  prefer this over a sandbox httpx script.
 - For LIVE access to the user's Composio-connected SaaS apps (Gmail,
   GCal, Slack, GitHub, Notion, 1000+ apps), use the Composio meta
   tools. Typical loop:

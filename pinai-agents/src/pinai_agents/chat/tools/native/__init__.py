@@ -35,7 +35,7 @@ from .memory import memory_add, memory_get, memory_list, memory_search
 from .profile import goal_upsert, profile_get, profile_upsert
 from .raw import raw_gcal_today, raw_gcal_week, raw_gmail_recent, raw_list
 from .signals import signals_get, signals_recent
-from .tavily import tavily_search
+from .tavily import tavily_extract, tavily_search
 from .world import world_recent, world_search
 
 ALL_TOOLS = [
@@ -51,8 +51,10 @@ ALL_TOOLS = [
     raw_gmail_recent, raw_gcal_today, raw_gcal_week, raw_list,
     # Cards + feedback (recency-bounded reference)
     cards_recent, feedback_list,
-    # Web search (Tavily)
+    # Web search + read (Tavily). search returns ranked snippets;
+    # extract pulls full markdown for 1-20 URLs in one call.
     tavily_search,
+    tavily_extract,
     # Composio Tool Router meta-tools (discovery + execution across
     # 1000+ SaaS apps in one constant-token surface).
     composio_search_tools,
@@ -87,6 +89,7 @@ __all__ = [
     "raw_list",
     "signals_get",
     "signals_recent",
+    "tavily_extract",
     "tavily_search",
     "world_recent",
     "world_search",
