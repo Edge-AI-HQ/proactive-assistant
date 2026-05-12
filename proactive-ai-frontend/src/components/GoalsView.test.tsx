@@ -135,14 +135,16 @@ describe("GoalsView", () => {
     mockFetchRawTable.mockResolvedValue({ ok: true, rows: [], total: 0, table: "slack_messages" });
   });
 
-  test("does not fetch generic raw counts when no generic connector is active", async () => {
+  test("fetches generic raw counts even when connector state is inactive", async () => {
     render(<GoalsView composio={makeComposioState([])} />);
 
     await waitFor(() => expect(mockFetchProfileSnapshot).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(mockFetchRawDeviceHealth).toHaveBeenCalledTimes(1));
     await flushEffects();
 
-    expect(mockFetchRawTable).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(mockFetchRawTable).toHaveBeenCalledWith("slack_messages", { limit: 1 }, expect.any(AbortSignal));
+    });
   });
 
   test("counts populated top-level profile fields in the profile metric", async () => {
@@ -178,7 +180,12 @@ describe("GoalsView", () => {
   test("includes active generic connector raw counts in the profile raw total", async () => {
     mockFetchRawGmail.mockResolvedValueOnce({ ok: true, messages: [], total: 200 });
     mockFetchRawGcal.mockResolvedValueOnce({ ok: true, events: [], total: 100 });
-    mockFetchRawTable.mockResolvedValueOnce({ ok: true, rows: [], total: 17, table: "slack_messages" });
+    mockFetchRawTable.mockImplementation(async (table) => ({
+      ok: true,
+      rows: [],
+      total: table === "slack_messages" ? 17 : 0,
+      table: String(table),
+    }));
 
     render(<GoalsView composio={makeComposioState()} />);
 
@@ -187,6 +194,42 @@ describe("GoalsView", () => {
     });
     await waitFor(() => {
       expect(screen.getAllByText("317").length).toBeGreaterThan(0);
+    });
+  });
+
+  test("uses all device snapshot rows for the raw headline count", async () => {
+    mockListUserDevices.mockResolvedValueOnce([
+      {
+        device_id: "iphone-1",
+        platform: "ios",
+        display_name: "Smile iPhone",
+        app_version: null,
+        model: null,
+        status: "active",
+        registered_at: "2026-05-01T00:00:00Z",
+        last_seen_at: null,
+        metadata: {},
+      },
+    ]);
+    mockFetchRawGmail.mockResolvedValueOnce({ ok: true, messages: [], total: 267 });
+    mockFetchRawGcal.mockResolvedValueOnce({ ok: true, events: [], total: 107 });
+    mockFetchRawDeviceHealth.mockImplementation(async (filter) => ({
+      ok: true,
+      observations: [],
+      total: filter?.deviceId ? 195 : 195,
+    }));
+    mockFetchRawDeviceApps.mockResolvedValue({ ok: true, apps: [], total: 0 });
+    mockFetchRawDeviceContacts.mockImplementation(async (filter) => ({
+      ok: true,
+      contacts: [],
+      total: filter?.latestSnapshotOnly ? 1024 : 2048,
+    }));
+    mockFetchRawTable.mockResolvedValue({ ok: true, rows: [], total: 0, table: "slack_messages" });
+
+    render(<GoalsView composio={makeComposioState([])} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("2617").length).toBeGreaterThan(0);
     });
   });
 

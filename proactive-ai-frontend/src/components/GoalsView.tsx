@@ -322,6 +322,17 @@ const RAW_SOURCE_CONFIG: Array<{
   { id: "clickup_workspaces", label: "ClickUp workspaces", kind: "connector", connectorToolkits: ["clickup"], table: "clickup_workspaces" },
 ];
 
+const COUNTABLE_GENERIC_RAW_TABLES = new Set([
+  "slack_messages",
+  "gdrive_files",
+  "github_issues",
+  "calendly_events",
+  "stripe_invoices",
+  "twitter_bookmarks",
+  "youtube_subscriptions",
+  "linkedin_profile",
+]);
+
 const GOAL_ICONS: Record<string, { icon: LucideIcon; label: string }> = {
   "career-growth": { icon: Briefcase, label: "Career" },
   "stay-healthy": { icon: Heart, label: "Health" },
@@ -480,19 +491,11 @@ function buildRawSourceOptions(
   return [...primaryConnectors, ...deviceSources, ...otherConnectors];
 }
 
-function connectedGenericRawSources(
-  connections: ComposioState["connections"],
-): Array<{ id: RawPanel; table: string }> {
-  const connectedToolkits = new Set(
-    connections
-      .filter((conn) => conn.status === "ACTIVE")
-      .map((conn) => normalizeToolkit(conn.toolkit)),
-  );
-
+function countableGenericRawSources(): Array<{ id: RawPanel; table: string }> {
   return RAW_SOURCE_CONFIG.flatMap((source) => {
     if (!source.table) return [];
-    const connected = (source.connectorToolkits ?? []).some((toolkit) => connectedToolkits.has(normalizeToolkit(toolkit)));
-    return connected ? [{ id: source.id, table: source.table }] : [];
+    if (!COUNTABLE_GENERIC_RAW_TABLES.has(source.table)) return [];
+    return [{ id: source.id, table: source.table }];
   });
 }
 
@@ -543,16 +546,22 @@ async function fetchRawPreview(signal?: AbortSignal): Promise<RawPreview> {
 
   const devices = await Promise.all(
     [...devicesById.entries()].map(async ([deviceId, device]) => {
-      const [apps, contacts, health] = await Promise.allSettled([
+      const [apps, contacts, health, appsCount, contactsCount] = await Promise.allSettled([
         fetchRawDeviceApps({ deviceId, latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal),
         fetchRawDeviceContacts({ deviceId, latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal),
         fetchRawDeviceHealth({ deviceId, limit: RAW_PREVIEW_LIMIT }, signal),
+        fetchRawDeviceApps({ deviceId, limit: 1 }, signal),
+        fetchRawDeviceContacts({ deviceId, limit: 1 }, signal),
       ]);
       const appsRows = apps.status === "fulfilled" ? apps.value.apps : [];
       const contactsRows = contacts.status === "fulfilled" ? contacts.value.contacts : [];
       const healthRows = health.status === "fulfilled" ? health.value.observations : [];
-      const appsTotal = apps.status === "fulfilled" ? (apps.value.total ?? appsRows.length) : 0;
-      const contactsTotal = contacts.status === "fulfilled" ? (contacts.value.total ?? contactsRows.length) : 0;
+      const appsTotal = appsCount.status === "fulfilled"
+        ? (appsCount.value.total ?? appsRows.length)
+        : (apps.status === "fulfilled" ? (apps.value.total ?? appsRows.length) : 0);
+      const contactsTotal = contactsCount.status === "fulfilled"
+        ? (contactsCount.value.total ?? contactsRows.length)
+        : (contacts.status === "fulfilled" ? (contacts.value.total ?? contactsRows.length) : 0);
       const healthTotal = health.status === "fulfilled" ? (health.value.total ?? healthRows.length) : 0;
       return {
         deviceId,
@@ -1488,10 +1497,7 @@ export default function GoalsView({ composio }: GoalsViewProps) {
     () => buildRawSourceOptions(rawPreview, genericRaw, genericRawCounts, composio.connections),
     [rawPreview, genericRaw, genericRawCounts, composio.connections],
   );
-  const genericCountTargets = useMemo(
-    () => connectedGenericRawSources(composio.connections),
-    [composio.connections],
-  );
+  const genericCountTargets = useMemo(() => countableGenericRawSources(), []);
 
   useEffect(() => {
     if (rawSources.some((source) => source.id === activeRawPanel)) return;
