@@ -20,7 +20,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
 from ...auth.deps import User, current_user, get_pool
@@ -234,20 +234,28 @@ async def _verify_device(
 
 @router.post("/ingest")
 async def ingest_devices(
-    body: dict,
+    body: list | dict = Body(...),
     pool=Depends(get_pool),
-    x_device_id: str = Header(..., alias="X-Device-Id"),
-    x_device_token: str = Header(..., alias="X-Device-Token"),
+    x_device_id: str | None = Header(None, alias="X-Device-Id"),
+    x_device_token: str | None = Header(None, alias="X-Device-Token"),
 ) -> dict[str, Any]:
     """Bulk ingest. Body shapes accepted (1:1 with plugin):
       * Array of items (each may carry `source: "device:<id>"`).
       * { deviceId, items: [...] } — wrapper deviceId is the fallback.
 
-    Items with a parsed `source: "device:<id>"` route to that device.
-    Items with no source land on the wrapper deviceId. Items with no
-    routable deviceId are dropped silently (with logging).
+    Per-item ``results[i].status`` is one of five values; see contract in
+    ``docs/plans/2026-05-12-v2-to-v3-migration.mdx``:
+      * ``inserted`` — raw or signal actually written.
+      * ``duplicate`` — ON CONFLICT no-op (server already had this key).
+      * ``rejected`` — deterministic client-side bug (missing required
+        field / cross-device dispatch / unsupported_full_sync). Outbox
+        should drop, not retry.
+      * ``parse_failed`` — ``IngestItemIn`` validation threw. Outbox
+        should drop, not retry.
+      * ``retryable_failed`` — server-side write raised an exception
+        (DB blip, storage outage). Outbox must retry, not drop.
     """
-    device = await _verify_device(pool, x_device_id, x_device_token)
+    device = await _verify_device(pool, x_device_id or "", x_device_token or "")
 
     is_array = isinstance(body, list)
     wrapper_device_id = (
@@ -259,32 +267,46 @@ async def ingest_devices(
     if not isinstance(items_raw, list):
         raise HTTPException(400, "items must be an array")
 
+    # Pre-route items by device. Items with `source: "device:<id>"`
+    # routing somewhere other than the verified device are tracked as
+    # ``rejected`` so the client knows why a item disappeared. Non-dict
+    # items get a ``parse_failed`` placeholder.
+    pre_results: list[dict[str, Any]] = []
     by_device: dict[str, list[dict[str, Any]]] = {}
-    for raw in items_raw:
+    for idx, raw in enumerate(items_raw):
         if not isinstance(raw, dict):
+            pre_results.append({
+                "id": f"unknown_{idx}", "dedupeKey": None,
+                "status": "parse_failed", "reason": "item is not an object",
+            })
             continue
-        # Source override per-item: lets one phone bridge multiple sub-devices.
         src = _parse_source(raw.get("source"))
         target_device = src[1] if src else wrapper_device_id
         if not target_device:
+            pre_results.append({
+                "id": str(raw.get("id") or f"unknown_{idx}"),
+                "dedupeKey": None, "status": "rejected",
+                "reason": "no deviceId in wrapper and no source on item",
+            })
             continue
-        # Authorization: every routed deviceId MUST belong to the
-        # authenticated user. We trust the token-verified row's user_id
-        # but check device_id ownership on every batch. The cheap path:
-        # require src deviceId == verified deviceId. Cross-device dispatch
-        # within the same user is allowed via a fan-out lookup; for the
-        # MVP we narrow to "items must target the verified deviceId only"
-        # — same posture as the plugin (no fan-out implemented there
-        # either; the wrapper case is the common one).
+        # Cross-device dispatch is not supported for MVP. Surface as
+        # ``rejected`` instead of silently dropping (V2 contract).
         if target_device != device.device_id:
+            pre_results.append({
+                "id": str(raw.get("id") or f"unknown_{idx}"),
+                "dedupeKey": None, "status": "rejected",
+                "reason": (
+                    f"cross-device dispatch not supported: source target "
+                    f"{target_device!r} != verified device {device.device_id!r}"
+                ),
+            })
             continue
         by_device.setdefault(target_device, []).append(raw)
 
     if not by_device and not wrapper_device_id:
         raise HTTPException(400, "deviceId or signal `source` required")
 
-    accepted, inserted, ignored = 0, 0, 0
-    item_results: list[dict[str, Any]] = []
+    item_results: list[dict[str, Any]] = list(pre_results)
     async with user_scoped_tx(pool, device.user_id) as conn:
         signals_repo = PersonalSignalsRepository(device.user_id, conn)
         raw_repo = RawDeviceRepository(device.user_id, conn)
@@ -293,10 +315,10 @@ async def ingest_devices(
                 user_id=device.user_id, device_id=did, raw_items=items,
                 signals_repo=signals_repo, raw_repo=raw_repo,
             )
-            accepted += r["accepted"]
-            inserted += r["inserted"]
-            ignored += r["ignored"]
             item_results.extend(r["results"])
+    accepted = len(items_raw)
+    inserted = sum(1 for r in item_results if r["status"] == "inserted")
+    ignored = accepted - inserted
     return {
         "ok": True, "accepted": accepted, "inserted": inserted,
         "ignored": ignored, "results": item_results,
@@ -307,19 +329,37 @@ async def _ingest_for_device(
     *, user_id: int, device_id: str, raw_items: list[dict[str, Any]],
     signals_repo: PersonalSignalsRepository, raw_repo: RawDeviceRepository,
 ) -> dict[str, Any]:
+    """Per-device leg of the ingest. Returns ``{"results": [...]}`` only —
+    the caller aggregates accepted/inserted/ignored across all legs."""
     created_at = _now_iso()
-    normalized: list[DeviceIngestItem] = []
+    results: list[dict[str, Any]] = []
+    # (result_index, DeviceIngestItem) — only items that survive
+    # validation make it into the write pipeline.
+    normalized: list[tuple[int, DeviceIngestItem]] = []
 
     for r in raw_items:
+        item_id_raw = r.get("id") if isinstance(r, dict) else None
         # Validate via Pydantic loosely; tolerate alias drift.
         try:
             item = IngestItemIn.model_validate(r)
         except Exception as e:
             logger.warning("device ingest: drop unparseable item: %s", e)
+            results.append({
+                "id": str(item_id_raw) if item_id_raw else "unknown",
+                "dedupeKey": None,
+                "status": "parse_failed",
+                "reason": str(e)[:200],
+            })
             continue
 
         kind = item.kind or item.itemType
         if not kind or not item.id or not item.title or not item.summary:
+            results.append({
+                "id": item.id or (str(item_id_raw) if item_id_raw else "unknown"),
+                "dedupeKey": None,
+                "status": "rejected",
+                "reason": "missing required field (kind/id/title/summary)",
+            })
             continue
 
         occurred = _normalize_iso(item.occurredAt, created_at)
@@ -353,99 +393,138 @@ async def _ingest_for_device(
                 except Exception as e:
                     logger.warning("device media upload failed (kind=%s): %s", kind, e)
 
-        normalized.append(DeviceIngestItem(
+        dedupe_key = (item.dedupeKey or "").strip() or f"device:{device_id}:{item.id}"
+        n = DeviceIngestItem(
             id=item.id, device_id=device_id, kind=kind, sync_mode=sync_mode,
             title=item.title, summary=item.summary, payload=payload,
             salience=item.salience, confidence=item.confidence,
-            dedupe_key=(item.dedupeKey or "").strip() or f"device:{device_id}:{item.id}",
+            dedupe_key=dedupe_key,
             occurred_at=occurred, available_at=available, expires_at=expires,
-        ))
+        )
+        result_idx = len(results)
+        results.append({
+            "id": n.id, "dedupeKey": n.dedupe_key, "status": "pending",
+        })
+        normalized.append((result_idx, n))
 
-    raw_inserted: dict[str, bool] = {}
-    signal_writes: list[tuple[str, dict[str, Any]]] = []
-    # Each item runs in its own SAVEPOINT so a single bad row doesn't poison
-    # the rest of the batch. psycopg's `conn.transaction()` opens a savepoint
-    # when called inside an existing transaction (which user_scoped_tx provides).
-    for n in normalized:
+    # Write pipeline — per-item SAVEPOINT keeps single-row faults from
+    # poisoning the batch.
+    for result_idx, n in normalized:
         policy = resolve_policy(n.kind)
-        raw_succ = False
-        raw_failed = False
+        # Per-item state: raw_inserted = raw row actually written;
+        # raw_failed = server-side exception during raw writes;
+        # signal_payload = signal to attempt (or None);
+        # rejected_reason = deterministic semantic failure that should
+        #   short-circuit (the result is already set to "rejected").
+        raw_inserted = False
+        raw_failed_exc: Exception | None = None
+        signal_payload: dict[str, Any] | None = None
+        rejected_reason: str | None = None
+
         if policy.mode in ("raw_only", "dual") and policy.parse_raw:
             raw_writes = policy.parse_raw(n)
             if not raw_writes:
-                signal_writes.append((n.id, build_default_signal(
+                # Parser couldn't pull anything out — record the fallback
+                # signal so the data isn't lost. Per-item success will be
+                # decided by whether the signal write lands.
+                signal_payload = build_default_signal(
                     n, {"fallback_reason": "raw_parse_failed"},
-                )))
-                continue
-            scope = (
-                policy.full_replace_scope(n)
-                if (n.sync_mode == "full" and policy.full_replace_scope)
-                else None
-            )
-            if n.sync_mode == "full" and not scope:
-                signal_writes.append((n.id, build_default_signal(
-                    n, {"fallback_reason": "unsupported_full_sync"},
-                )))
-                continue
-            try:
-                async with raw_repo.conn.transaction():
-                    for w in raw_writes:
-                        r = await _apply_raw_write(raw_repo, w, n.sync_mode, scope)
-                        raw_succ = raw_succ or r.inserted > 0
-            except Exception as e:
-                raw_failed = True
-                logger.warning("device ingest: raw policy %s failed: %s", n.kind, e)
+                )
+            else:
+                scope = (
+                    policy.full_replace_scope(n)
+                    if (n.sync_mode == "full" and policy.full_replace_scope)
+                    else None
+                )
+                if n.sync_mode == "full" and not scope:
+                    # Deterministic client bug: ambiguous full-sync
+                    # payload (multi-localDate health, etc.). Don't retry.
+                    rejected_reason = "unsupported_full_sync (ambiguous local_date)"
+                else:
+                    try:
+                        async with raw_repo.conn.transaction():
+                            for w in raw_writes:
+                                r = await _apply_raw_write(
+                                    raw_repo, w, n.sync_mode, scope,
+                                )
+                                raw_inserted = raw_inserted or r.inserted > 0
+                    except Exception as e:
+                        raw_failed_exc = e
+                        logger.warning(
+                            "device ingest: raw policy %s failed: %s",
+                            n.kind, e,
+                        )
 
-        raw_inserted[n.id] = raw_succ
-
-        if raw_failed and policy.mode == "raw_only":
-            signal_writes.append((n.id, build_default_signal(
-                n, {"fallback_reason": "raw_write_failed"},
-            )))
+        if rejected_reason is not None:
+            results[result_idx]["status"] = "rejected"
+            results[result_idx]["reason"] = rejected_reason
             continue
 
-        if policy.mode in ("signal_only", "dual"):
-            sig = (policy.build_signal(n, None) if policy.build_signal
-                   else build_default_signal(n))
-            if sig:
-                signal_writes.append((n.id, sig))
+        if raw_failed_exc is not None and policy.mode == "raw_only":
+            # raw_only kind blew up server-side. Don't fall back to a
+            # signal — surface as retryable so outbox keeps the item.
+            results[result_idx]["status"] = "retryable_failed"
+            results[result_idx]["reason"] = (
+                f"raw write failed: {type(raw_failed_exc).__name__}: "
+                f"{str(raw_failed_exc)[:160]}"
+            )
+            continue
 
-    signal_inserted: dict[str, bool] = {}
-    for item_id, sig in signal_writes:
-        try:
-            async with signals_repo.conn.transaction():
-                await signals_repo.ingest_one(IngestSignalInput(
-                    id=sig["id"], kind=sig["kind"],
-                    title=sig["title"], summary=sig["summary"],
-                    occurred_at=datetime.fromisoformat(
-                        sig["occurred_at"] if not sig["occurred_at"].endswith("Z")
-                        else sig["occurred_at"][:-1] + "+00:00",
-                    ),
-                    payload=sig["payload"], salience=sig["salience"],
-                    confidence=sig["confidence"], dedupe_key=sig["dedupe_key"],
-                    source=sig["source"], device_id=sig["device_id"],
-                    subject=sig.get("subject"),
-                ))
-            signal_inserted[item_id] = True
-        except Exception as e:
-            logger.warning("device ingest: signal write failed (id=%s): %s", item_id, e)
+        if signal_payload is None and policy.mode in ("signal_only", "dual"):
+            signal_payload = (
+                policy.build_signal(n, None) if policy.build_signal
+                else build_default_signal(n)
+            )
 
-    results: list[dict[str, Any]] = []
-    inserted_count = 0
-    for n in normalized:
-        ok = raw_inserted.get(n.id, False) or signal_inserted.get(n.id, False)
-        if ok:
-            inserted_count += 1
-        results.append({
-            "id": n.id, "dedupeKey": n.dedupe_key,
-            "status": "inserted" if ok else "duplicate",
-        })
-    return {
-        "accepted": len(raw_items),
-        "inserted": inserted_count,
-        "ignored": len(raw_items) - inserted_count,
-        "results": results,
-    }
+        signal_inserted = False
+        signal_failed_exc: Exception | None = None
+        if signal_payload is not None:
+            sig = signal_payload
+            try:
+                async with signals_repo.conn.transaction():
+                    await signals_repo.ingest_one(IngestSignalInput(
+                        id=sig["id"], kind=sig["kind"],
+                        title=sig["title"], summary=sig["summary"],
+                        occurred_at=datetime.fromisoformat(
+                            sig["occurred_at"] if not sig["occurred_at"].endswith("Z")
+                            else sig["occurred_at"][:-1] + "+00:00",
+                        ),
+                        payload=sig["payload"], salience=sig["salience"],
+                        confidence=sig["confidence"], dedupe_key=sig["dedupe_key"],
+                        source=sig["source"], device_id=sig["device_id"],
+                        subject=sig.get("subject"),
+                    ))
+                # ingest_one is an UPSERT (ON CONFLICT DO UPDATE), so a
+                # successful return is always either a fresh INSERT or a
+                # content-replacing UPDATE. Outbox semantics: both are
+                # "remove from queue", so we collapse them into
+                # "inserted". A true idempotent no-op only happens on the
+                # raw_only path, which uses DO NOTHING.
+                signal_inserted = True
+            except Exception as e:
+                signal_failed_exc = e
+                logger.warning(
+                    "device ingest: signal write failed (id=%s): %s", n.id, e,
+                )
+
+        # Decide per-item status.
+        if raw_inserted or signal_inserted:
+            results[result_idx]["status"] = "inserted"
+        elif raw_failed_exc is not None or signal_failed_exc is not None:
+            # raw_only items hit the explicit branch above; this catches
+            # signal_only and dual where a server-side write blew up.
+            exc = raw_failed_exc or signal_failed_exc
+            assert exc is not None
+            results[result_idx]["status"] = "retryable_failed"
+            results[result_idx]["reason"] = (
+                f"{type(exc).__name__}: {str(exc)[:160]}"
+            )
+        else:
+            # Wrote nothing, no exception → ON CONFLICT no-op for every
+            # write attempted on this item. True idempotent duplicate.
+            results[result_idx]["status"] = "duplicate"
+
+    return {"results": results}
 
 
 async def _apply_raw_write(repo: RawDeviceRepository, write, sync_mode, scope):
@@ -474,9 +553,10 @@ async def _apply_raw_write(repo: RawDeviceRepository, write, sync_mode, scope):
     if write.table == "device_health_observations":
         if sync_mode == "full":
             local_date = scope.local_date if scope else None
+            metric = scope.metric if scope else None
             return await repo.replace_health(
                 device_id=p["device_id"], local_date=local_date,
-                observations=p["observations"],
+                metric=metric, observations=p["observations"],
             )
         return await repo.ingest_health(
             device_id=p["device_id"], observations=p["observations"],
@@ -484,6 +564,98 @@ async def _apply_raw_write(repo: RawDeviceRepository, write, sync_mode, scope):
     # Unknown table — record as zero-impact.
     from ...db.repositories.raw_device import RawIngestResult
     return RawIngestResult(0, 0, 0)
+
+
+# ── unified timeline (Supabase JWT auth) ──
+
+
+@router.get("/{device_id}/timeline")
+async def get_device_timeline(
+    device_id: str,
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+    before: datetime | None = None,
+    limit: int = 30,
+) -> dict[str, Any]:
+    """Unified device timeline — UNION of pai_personal_signals and
+    pai_raw_device_health_observations, ordered by ``occurred_at DESC``
+    with a single keyset cursor.
+
+    Health observations live in raw-only land (``_HEALTH_POLICY`` mode is
+    ``raw_only``) so the frontend's ``DeviceTimeline`` needs to merge
+    them with personal_signals to show health alongside other signals.
+    Doing the union server-side keeps the cursor clean (one keyset
+    instead of two per-source buffers that drift on skewed streams).
+
+    Envelope:
+        {"ok": True,
+         "items": [{"type": "signal"|"health", "occurred_at": "...", "row": {...}}, ...],
+         "next_cursor": "..." | null,
+         "has_more": bool}
+
+    ``before`` is an ISO-8601 timestamp; clients pass the last item's
+    ``occurred_at`` to page backward in time.
+    """
+    if limit < 1 or limit > 200:
+        raise HTTPException(400, "limit must be between 1 and 200")
+
+    # Fetch one more than asked so we can detect has_more without a
+    # second COUNT(*).
+    fetch_n = limit + 1
+    # Cursor: paginate by occurred_at DESC. NULL `before` == start from
+    # newest; non-null filters to rows strictly older than the cursor.
+    async with user_scoped_tx(pool, user.id) as conn:
+        cur = await conn.execute(
+            """
+            WITH unified AS (
+              SELECT 'signal'::text AS type, id::text AS row_id,
+                     occurred_at, to_jsonb(s) AS row
+              FROM pai_personal_signals s
+              WHERE user_id = %(user_id)s
+                AND device_id = %(device_id)s
+                AND status <> 'archived'
+                AND (%(before)s::timestamptz IS NULL OR occurred_at < %(before)s)
+              UNION ALL
+              SELECT 'health'::text AS type, id::text AS row_id,
+                     occurred_at, to_jsonb(h) AS row
+              FROM pai_raw_device_health_observations h
+              WHERE user_id = %(user_id)s
+                AND device_id = %(device_id)s
+                AND (%(before)s::timestamptz IS NULL OR occurred_at < %(before)s)
+            )
+            SELECT type, row_id, occurred_at, row
+            FROM unified
+            ORDER BY occurred_at DESC, type ASC, row_id ASC
+            LIMIT %(fetch_n)s
+            """,
+            {
+                "user_id": user.id, "device_id": device_id,
+                "before": before, "fetch_n": fetch_n,
+            },
+        )
+        rows = await cur.fetchall()
+
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    # psycopg v3 + dict_row deserializes jsonb → dict directly, so the
+    # ``row`` field is already a plain dict per the unified-timeline
+    # contract (see /api/devices/{deviceId}/timeline in
+    # docs/modules/data-connectors.mdx).
+    items = [
+        {
+            "type": r["type"],
+            "occurred_at": r["occurred_at"].isoformat(),
+            "row": r["row"],
+        }
+        for r in rows
+    ]
+    next_cursor = (
+        rows[-1]["occurred_at"].isoformat() if has_more and rows else None
+    )
+    return {
+        "ok": True, "items": items,
+        "next_cursor": next_cursor, "has_more": has_more,
+    }
 
 
 # ── media access (Supabase JWT auth — user only sees own objects) ──

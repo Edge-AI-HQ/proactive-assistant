@@ -127,6 +127,19 @@ SupportedLanguage = Literal[
 ]
 
 
+class AmbientSourceConsent(_CamelModel):
+    """Per-source consent record for the mobile ambient capture pipeline.
+
+    Privacy invariant (docs/plans/2026-05-12-v2-to-v3-migration.mdx D-5):
+    the mobile client only starts a source when ``enabled is True``.
+    ``updated_at`` is server-stamped on every change so the SPA can show
+    "last toggled" without a separate event log.
+    """
+
+    enabled: bool
+    updated_at: datetime | None = None
+
+
 class SettingsResponse(_CamelModel):
     """User-settings wire shape — typed counterpart to UserSettingsRow."""
 
@@ -136,6 +149,9 @@ class SettingsResponse(_CamelModel):
     auto_dreaming: bool
     auto_crystallize: bool
     metadata: dict[str, Any]
+    # Keyed by source slug (sound_classifier, location, visit, activity,
+    # barometer, media_notebook, etc.). Missing keys = no consent.
+    ambient_sources: dict[str, AmbientSourceConsent] = Field(default_factory=dict)
     updated_at: datetime
 
 
@@ -176,6 +192,11 @@ class SettingsUpdateRequest(_CamelModel):
     auto_dreaming: bool | None = None
     auto_crystallize: bool | None = None
     metadata: dict[str, Any] | None = None
+    # Partial patch — keys present in this map are merged into
+    # pai_user_settings.ambient_sources; keys with ``null`` value are
+    # removed; other keys keep their server-side state. Pass ``{}`` to
+    # touch nothing (no-op).
+    ambient_sources: dict[str, AmbientSourceConsent | None] | None = None
 
 
 # ── App State KV ──

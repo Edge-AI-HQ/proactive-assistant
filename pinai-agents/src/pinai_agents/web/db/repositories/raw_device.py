@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 from ...device_ingest.policies import (
     DeviceAppSnapshotItem,
@@ -174,25 +175,40 @@ class RawDeviceRepository(UserScopedRepository):
         return RawIngestResult(accepted, inserted, accepted - inserted)
 
     async def replace_health(
-        self, *, device_id: str, local_date: str | None, observations: list,
+        self,
+        *,
+        device_id: str,
+        local_date: str | None,
+        metric: str | None = None,
+        observations: list,
     ) -> RawIngestResult:
+        """Full-sync replace for health observations.
+
+        Always filters by ``reference_count = 0`` so rows already pinned
+        by a memory / evolution run survive the replace — those are
+        immutable raw evidence per the architecture doc. ``metric``
+        narrows scope when the envelope carries a single metric so a
+        steps push doesn't wipe a sibling heart_rate row for the same
+        ``local_date``.
+        """
+        clauses = [
+            "user_id = %s",
+            "device_id = %s",
+            "reference_count = 0",
+        ]
+        params: list[Any] = [self._user_id, device_id]
+        if local_date:
+            clauses.append("local_date = %s")
+            params.append(local_date)
+        if metric:
+            clauses.append("metric = %s")
+            params.append(metric)
+        sql = (
+            "DELETE FROM pai_raw_device_health_observations WHERE "
+            + " AND ".join(clauses)
+        )
         async with self._conn.cursor() as cur:
-            if local_date:
-                await cur.execute(
-                    """
-                    DELETE FROM pai_raw_device_health_observations
-                    WHERE user_id = %s AND device_id = %s AND local_date = %s
-                    """,
-                    (self._user_id, device_id, local_date),
-                )
-            else:
-                await cur.execute(
-                    """
-                    DELETE FROM pai_raw_device_health_observations
-                    WHERE user_id = %s AND device_id = %s
-                    """,
-                    (self._user_id, device_id),
-                )
+            await cur.execute(sql, tuple(params))
         return await self.ingest_health(
             device_id=device_id, observations=observations,
         )

@@ -1,0 +1,28 @@
+{
+  "name": "plugin-demo",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "echo 'Static HTML, no build needed'",
+    "cap:copy": "npx cap copy ios",
+    "cap:sync": "npx cap sync ios && node ../ambient-ai/scripts/fix-deployment-target.mjs ios/App/App.xcodeproj/project.pbxproj",
+    "cap:open": "npx cap open ios",
+    "sync": "npm run cap:sync",
+    "sync:after-html-change": "npx cap copy ios && echo 'HTML copied to ios/App/App/public/ — now rebuild in Xcode'",
+    "patch:contacts": "patch-package @capacitor-community/contacts"
+  },
+  "dependencies": {
+    "@capacitor-community/contacts": "^7.2.0",
+    "@capacitor/cli": "^8.3.1",
+    "@capacitor/core": "^8.3.1",
+    "@capacitor/device": "^8.0.2",
+    "@capacitor/geolocation": "^8.2.0",
+    "@capacitor/ios": "^8.3.1",
+    "@capgo/capacitor-barometer": "^8.0.11",
+    "@capgo/capacitor-health": "^8.4.9",
+    "@pin/capacitor-ambient-ai": "file:../ambient-ai"
+  },
+  "devDependencies": {
+    "patch-package": "^8.0.1"
+  }
+}

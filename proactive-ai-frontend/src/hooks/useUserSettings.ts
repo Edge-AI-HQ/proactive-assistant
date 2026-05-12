@@ -2,9 +2,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { proxyFetch, proxyPost } from "@/lib/api";
 import type { SupportedGenerationLanguage } from "@/types/intent-card";
 
+/**
+ * Per-mobile-source ambient capture consent. Empty map = no ambient
+ * capture (privacy invariant per V3 migration plan D-5). Source keys
+ * are slugs the @pin/capacitor-ambient-ai facade understands
+ * (sound_classifier, visit, activity, location, …).
+ */
+export interface AmbientSourceConsent {
+  enabled: boolean;
+  updatedAt?: string | null;
+}
+
 // Mirrors backend `SettingsResponse` (camelCase via _CamelModel alias).
 // Single source of truth for every user-settings toggle: language,
-// auto-generate (+ interval), auto-dreaming, auto-crystallize.
+// auto-generate (+ interval), auto-dreaming, auto-crystallize, ambient
+// capture consent.
 export interface UserSettings {
   generationLanguage: SupportedGenerationLanguage;
   autoGenerate: boolean;
@@ -12,10 +24,18 @@ export interface UserSettings {
   autoDreaming: boolean;
   autoCrystallize: boolean;
   metadata: Record<string, unknown>;
+  ambientSources: Record<string, AmbientSourceConsent>;
   updatedAt: string;
 }
 
-export type UserSettingsPatch = Partial<Omit<UserSettings, "updatedAt">>;
+/**
+ * Partial settings patch. ``ambientSources`` is a per-key map; entries
+ * with ``null`` value remove the key server-side (see profile.py
+ * update_settings route).
+ */
+export type UserSettingsPatch = Partial<Omit<UserSettings, "updatedAt" | "ambientSources">> & {
+  ambientSources?: Record<string, AmbientSourceConsent | null>;
+};
 
 export interface UseUserSettingsResult {
   settings: UserSettings | null;

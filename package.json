@@ -6,9 +6,11 @@
     "npm": ">=10"
   },
   "workspaces": [
-    "proactive-ai-frontend"
+    "proactive-ai-frontend",
+    "capacitor-plugins/*"
   ],
   "scripts": {
+    "postinstall": "patch-package",
     "type-check": "npm run type-check --workspace=@pin-ai/proactive-ai-frontend",
     "build": "npm run build --workspace=@pin-ai/proactive-ai-frontend",
     "mobile-sync:ngrok": "node scripts/mobile-sync-ngrok.mjs",

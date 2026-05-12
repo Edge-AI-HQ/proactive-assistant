@@ -77,8 +77,10 @@ class DeviceRawWrite:
 class DeviceRawReplaceScope:
     table: DeviceRawTable
     device_id: str
-    # Health-only — narrows replace to a (deviceId, localDate) pair.
+    # Health-only — narrows replace to a (deviceId, localDate) pair, and
+    # optionally further to a single metric (the common per-metric path).
     local_date: str | None = None
+    metric: str | None = None
 
 
 @dataclass(slots=True)
@@ -238,7 +240,12 @@ def _health_full_scope(i: DeviceIngestItem) -> DeviceRawReplaceScope | None:
     s: DeviceHealthReplaceScope | None = health_full_replace_scope(i)
     if s is None:
         return None
-    return DeviceRawReplaceScope("device_health_observations", s.device_id, s.local_date)
+    return DeviceRawReplaceScope(
+        table="device_health_observations",
+        device_id=s.device_id,
+        local_date=s.local_date,
+        metric=s.metric,
+    )
 
 
 _HEALTH_POLICY = DeviceIngestPolicy(

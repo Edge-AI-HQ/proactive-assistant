@@ -2,12 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CAPACITOR_DEBUG</key>
+	<key>CAPACITOR_DEBUG</key>
 	<string>$(CAPACITOR_DEBUG)</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-        <string>PIN AI</string>
+	<string>PIN AI</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -20,10 +20,43 @@
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>ai.pin.proactive</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>ai.pin.proactive</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>PIN AI uses your location to detect place arrivals/departures even when the app is in the background, so it can keep your timeline up to date.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>PIN AI uses your location to detect place visits and provide context-aware suggestions.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>PIN AI uses the microphone to classify ambient sounds (e.g. speech, music, traffic) so it can build your daily timeline. Audio is processed on-device and only short labels are uploaded.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>PIN AI uses motion data to detect your current activity (walking, running, driving) for context-aware suggestions.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>PIN AI uses on-device speech recognition to create local transcript drafts from short ambient audio captures.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>location</string>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
@@ -45,25 +78,7 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<key>ITSAppUsesNonExemptEncryption</key>
-	<false/>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
-	</dict>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleURLName</key>
-			<string>ai.pin.proactive</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>ai.pin.proactive</string>
-			</array>
-		</dict>
-	</array>
 </dict>
 </plist>

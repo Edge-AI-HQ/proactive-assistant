@@ -18,10 +18,17 @@ import {
   formatOptionalComposioConnectionIdentity,
   formatComposioToolkitName,
 } from "@/lib/composioDisplayIdentity";
+import { lazy, Suspense } from "react";
 import MainChat from "./MainChat";
 import CrystallizePanel from "./CrystallizePanel";
 import SkillsPanel from "./SkillsPanel";
 import MemoriesPanel from "./MemoriesPanel";
+import { isNative } from "@/lib/platform";
+
+// Lazy + isNative-guarded so the web bundle never resolves the
+// @pin/capacitor-ambient-ai chain. Required for the web build to stay
+// green after Step 2 of the V3 migration plan.
+const AmbientSourcesPanel = lazy(() => import("./AmbientSourcesPanel"));
 import type { RunState, PipelinePhase } from "@/hooks/usePipeline";
 import type { ComposioState } from "@/hooks/useComposio";
 
@@ -400,6 +407,13 @@ export default function DebugPanel({ run, isRunning, onGenerate, composio }: Deb
 
                 {/* User Memories */}
                 <MemoriesPanel enabled={open} />
+
+                {/* Ambient Sources — opt-in mobile capture toggle */}
+                {isNative && open ? (
+                  <Suspense fallback={null}>
+                    <AmbientSourcesPanel />
+                  </Suspense>
+                ) : null}
 
                 {/* Run Info */}
                 <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-3.5">

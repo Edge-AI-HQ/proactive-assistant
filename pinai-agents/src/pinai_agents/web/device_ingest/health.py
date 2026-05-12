@@ -40,6 +40,13 @@ class DeviceHealthObservationInput:
 class DeviceHealthReplaceScope:
     device_id: str
     local_date: str
+    # When all observations share a single metric (the common path for the
+    # iOS / Android plugins, which emit one item per metric), narrow the
+    # full-replace scope so a steps push doesn't wipe a sibling heart_rate
+    # row that another tick just landed. Multi-metric payloads (end-of-day
+    # batches that intentionally cover the full set) fall back to
+    # date-only scope by leaving this None.
+    metric: str | None = None
 
 
 def _str_field(row: dict[str, Any], *keys: str) -> str | None:
@@ -95,13 +102,44 @@ def parse_health_observations(item: DeviceIngestItem) -> list[DeviceHealthObserv
 
 
 def health_full_replace_scope(item: DeviceIngestItem) -> DeviceHealthReplaceScope | None:
-    payload_local_date = _str_field(item.payload or {}, "local_date", "localDate")
-    if payload_local_date:
-        return DeviceHealthReplaceScope(item.device_id, payload_local_date)
+    """Build a safe full-replace scope.
+
+    Strategy:
+      * Require an unambiguous ``local_date`` — either ``payload.local_date``
+        or a single shared ``local_date`` across all observations. Return
+        None otherwise so the route degrades to an
+        ``unsupported_full_sync`` fallback signal.
+      * Narrow scope to a single ``metric`` when the envelope carries
+        only one (the common path for per-metric polling). Multi-metric
+        end-of-day batches fall back to date-only scope.
+    """
+    payload = item.payload or {}
+    payload_local_date = _str_field(payload, "local_date", "localDate")
     obs = parse_health_observations(item)
-    if not obs:
-        return None
-    local_dates = {o.local_date for o in obs if o.local_date}
-    if len(local_dates) == 1 and all(o.local_date for o in obs):
-        return DeviceHealthReplaceScope(item.device_id, next(iter(local_dates)))
-    return None
+
+    if payload_local_date:
+        local_date = payload_local_date
+    else:
+        if not obs:
+            return None
+        dates = {o.local_date for o in obs if o.local_date}
+        if len(dates) != 1 or not all(o.local_date for o in obs):
+            return None
+        local_date = next(iter(dates))
+
+    payload_metric = _str_field(payload, "metric")
+    if payload_metric:
+        metric: str | None = payload_metric
+    elif obs:
+        metrics = {o.metric for o in obs if o.metric}
+        metric = (
+            next(iter(metrics))
+            if len(metrics) == 1 and all(o.metric for o in obs)
+            else None
+        )
+    else:
+        metric = None
+
+    return DeviceHealthReplaceScope(
+        device_id=item.device_id, local_date=local_date, metric=metric,
+    )

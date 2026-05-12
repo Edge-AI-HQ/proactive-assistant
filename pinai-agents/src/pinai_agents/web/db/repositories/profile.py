@@ -85,6 +85,10 @@ class UserSettingsRow:
     auto_dreaming: bool
     auto_crystallize: bool
     metadata: dict[str, Any]
+    # Per-mobile-source ambient capture consents. Shape:
+    # { "<source_key>": { "enabled": <bool>, "updated_at": "<iso>" } }.
+    # Empty = "no ambient capture" — login alone never starts a source.
+    ambient_sources: dict[str, Any]
     updated_at: datetime
 
     @classmethod
@@ -96,6 +100,7 @@ class UserSettingsRow:
             auto_dreaming=row["auto_dreaming"],
             auto_crystallize=row["auto_crystallize"],
             metadata=_as_dict(row["metadata"]),
+            ambient_sources=_as_dict(row.get("ambient_sources")),
             updated_at=row["updated_at"],
         )
 
@@ -106,6 +111,22 @@ def _as_dict(v: Any) -> dict[str, Any]:
     if isinstance(v, str):
         return json.loads(v)
     return {}
+
+
+def _merge_ambient_sources(
+    existing: dict[str, Any], patch: dict[str, Any],
+) -> dict[str, Any]:
+    """Shallow per-key merge. ``patch[k] = None`` deletes ``k``, anything
+    else replaces ``existing[k]``. Returns a fresh dict — never mutates
+    inputs. Used by upsert_settings so a partial update doesn't wipe
+    siblings (e.g. toggling sound_classifier doesn't lose location)."""
+    merged = dict(existing)
+    for k, v in patch.items():
+        if v is None:
+            merged.pop(k, None)
+        else:
+            merged[k] = v
+    return merged
 
 
 class ProfileRepository(UserScopedRepository):
@@ -294,6 +315,7 @@ class ProfileRepository(UserScopedRepository):
         auto_dreaming: bool | None = None,
         auto_crystallize: bool | None = None,
         metadata: dict[str, Any] | None = None,
+        ambient_sources_patch: dict[str, Any] | None = None,
     ) -> UserSettingsRow:
         """Partial upsert — pass only the fields you want to change.
 
@@ -301,13 +323,37 @@ class ProfileRepository(UserScopedRepository):
         COALESCE preserving missing fields. Defaults are NOT duplicated in
         application code; `pai_user_settings` column DEFAULTs are the
         single source of truth.
+
+        ``ambient_sources_patch`` does a per-key shallow merge against the
+        existing JSONB so toggling one source can't accidentally wipe a
+        sibling (privacy invariant per docs/plans/2026-05-12-v2-to-v3-migration.mdx
+        step 1 D-5). Pass ``{"sound_classifier": None}`` to remove a key.
         """
         async with self._conn.cursor() as cur:
+            # Single lazy-create — works for the no-patch path AND lets the
+            # ambient merge SELECT below see a real row.
             await cur.execute(
                 "INSERT INTO pai_user_settings (user_id) VALUES (%s) "
                 "ON CONFLICT (user_id) DO NOTHING",
                 (self._user_id,),
             )
+
+            # Merge ambient_sources before write so the UPDATE stays a
+            # single statement. RLS scopes the SELECT to this user_id, and
+            # user_scoped_tx wraps everything in one transaction, so the
+            # read-modify-write window is serialized per-user.
+            if ambient_sources_patch is not None:
+                await cur.execute(
+                    "SELECT ambient_sources FROM pai_user_settings WHERE user_id = %s",
+                    (self._user_id,),
+                )
+                existing_row = await cur.fetchone()
+                existing = _as_dict(existing_row["ambient_sources"]) if existing_row else {}
+                merged = _merge_ambient_sources(existing, ambient_sources_patch)
+                ambient_json: str | None = json.dumps(merged)
+            else:
+                ambient_json = None
+
             await cur.execute(
                 """
                 UPDATE pai_user_settings SET
@@ -317,6 +363,7 @@ class ProfileRepository(UserScopedRepository):
                   auto_dreaming                  = COALESCE(%s, auto_dreaming),
                   auto_crystallize               = COALESCE(%s, auto_crystallize),
                   metadata                       = COALESCE(%s::jsonb, metadata),
+                  ambient_sources                = COALESCE(%s::jsonb, ambient_sources),
                   updated_at = NOW()
                 WHERE user_id = %s
                 RETURNING *
@@ -325,6 +372,7 @@ class ProfileRepository(UserScopedRepository):
                     generation_language, auto_generate, auto_generate_interval_minutes,
                     auto_dreaming, auto_crystallize,
                     json.dumps(metadata) if metadata is not None else None,
+                    ambient_json,
                     self._user_id,
                 ),
             )

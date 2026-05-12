@@ -1,0 +1,334 @@
+/**
+ * Ambient runtime — end-to-end glue from Capacitor plugin events to
+ * `/api/proactive/devices/ingest`.
+ *
+ * The runtime is a long-lived end-side service that the React tree only
+ * observes. Sources produce PersonalSignalInput objects, SignalBuffer batches
+ * short bursts, the outbox owns retry state, and AmbientSyncScheduler drains
+ * the outbox through the existing device ingest bridge.
+ */
+import type { PersonalSignalInput } from "@/lib/devices";
+import { isNative } from "@/lib/platform";
+import { SignalBuffer } from "./buffer";
+import { SIGNAL_KINDS } from "./kinds";
+import {
+  MemoryOutboxStore, SqliteOutboxStore,
+  type OutboxKind, type OutboxStore,
+} from "./outbox";
+import { AmbientSyncScheduler } from "./sync-scheduler";
+import { ActivitySource } from "./sources/activity";
+import { LocationSource } from "./sources/location";
+import { SoundClassifierSource } from "./sources/sound-classifier";
+import type { AmbientSource, SourceContext } from "./sources/types";
+import { VisitSource } from "./sources/visit";
+
+export type SourceKey =
+  | "sound_classifier"
+  | "visit"
+  | "activity"
+  | "location";
+
+export interface SourceStatus {
+  key: SourceKey;
+  label: string;
+  enabled: boolean;
+  lastEvent: { ts: number; summary: string } | null;
+  ingestedCount: number;
+  lastError: string | null;
+}
+
+export interface RuntimeStatus {
+  sources: SourceStatus[];
+  bufferSize: number;
+  outboxMode: OutboxKind;
+  outboxPendingCount: number;
+  totalIngested: number;
+  totalIngestErrors: number;
+  lastFlushTs: number | null;
+  lastDrainTs: number | null;
+  lastSuccessfulDrainTs: number | null;
+  lastIngestError: string | null;
+}
+
+class AmbientRuntime {
+  private buffer: SignalBuffer;
+  private outbox: OutboxStore;
+  private scheduler: AmbientSyncScheduler;
+  private sources: Map<SourceKey, AmbientSource>;
+  private statusBySource: Map<SourceKey, SourceStatus>;
+  private listeners = new Set<() => void>();
+  private totalIngested = 0;
+  private totalIngestErrors = 0;
+  private lastFlushTs: number | null = null;
+  private lastIngestError: string | null = null;
+  private outboxPendingCount = 0;
+  private autoStartInFlight = false;
+  private drainTimer: ReturnType<typeof setInterval> | null = null;
+  private optOutSources = loadOptOutSources();
+
+  constructor() {
+    // SQLite persistence on native survives app kill / OS suspend so
+    // outbox events queued under bad network don't get lost. Web build
+    // keeps the in-memory store — SPA tab lifecycle is shorter and the
+    // SQLite plugin's web path is heavy to set up.
+    this.outbox = isNative ? new SqliteOutboxStore() : new MemoryOutboxStore();
+    this.scheduler = new AmbientSyncScheduler(this.outbox);
+    this.buffer = new SignalBuffer((batch) => this.flushBatch(batch));
+    this.statusBySource = new Map();
+
+    const ctx: SourceContext = {
+      push: (item: PersonalSignalInput) => this.buffer.push(item),
+      onEvent: (key, summary) =>
+        this.recordEvent(key as SourceKey, summary),
+    };
+
+    this.sources = new Map<SourceKey, AmbientSource>([
+      ["sound_classifier", new SoundClassifierSource(ctx)],
+      ["visit", new VisitSource(ctx)],
+      ["activity", new ActivitySource(ctx)],
+      ["location", new LocationSource(ctx)],
+    ]);
+
+    for (const [k, src] of this.sources) {
+      this.statusBySource.set(k, {
+        key: k,
+        label: src.label,
+        enabled: false,
+        lastEvent: null,
+        ingestedCount: 0,
+        lastError: null,
+      });
+    }
+    this.startDrainTimer();
+  }
+
+  async start(key: SourceKey): Promise<void> {
+    const src = this.sources.get(key);
+    if (!src) throw new Error(`unknown source: ${key}`);
+    const st = this.statusBySource.get(key);
+    if (!st) throw new Error(`missing status for: ${key}`);
+    try {
+      await src.start();
+      this.optOutSources.delete(key);
+      saveOptOutSources(this.optOutSources);
+      st.enabled = true;
+      st.lastError = null;
+    } catch (err) {
+      st.enabled = false;
+      st.lastError = describeError(err);
+      this.notify();
+      throw err;
+    }
+    this.notify();
+  }
+
+  async autoStart(keys: SourceKey[] = DEFAULT_AUTO_START_SOURCES): Promise<void> {
+    if (this.autoStartInFlight) return;
+    this.autoStartInFlight = true;
+    try {
+      for (const key of keys) {
+        if (this.optOutSources.has(key)) continue;
+        const st = this.statusBySource.get(key);
+        if (st?.enabled) continue;
+        try {
+          await this.start(key);
+        } catch {
+          /* per-source errors are stored on SourceStatus */
+        }
+      }
+    } finally {
+      this.autoStartInFlight = false;
+    }
+  }
+
+  async stop(key: SourceKey, opts: { remember?: boolean } = {}): Promise<void> {
+    const src = this.sources.get(key);
+    if (!src) throw new Error(`unknown source: ${key}`);
+    const st = this.statusBySource.get(key);
+    if (!st) throw new Error(`missing status for: ${key}`);
+    try {
+      await src.stop();
+    } catch (err) {
+      st.lastError = describeError(err);
+    } finally {
+      if (opts.remember !== false) {
+        this.optOutSources.add(key);
+        saveOptOutSources(this.optOutSources);
+      }
+      st.enabled = false;
+      this.notify();
+    }
+  }
+
+  async stopAll(): Promise<void> {
+    for (const k of this.sources.keys()) {
+      const st = this.statusBySource.get(k);
+      if (st?.enabled) {
+        try {
+          await this.stop(k, { remember: false });
+        } catch {
+          /* swallow per source — best-effort shutdown */
+        }
+      }
+    }
+  }
+
+  async flush(): Promise<void> {
+    await this.buffer.flush().catch((err) => {
+      this.lastIngestError = describeError(err);
+      this.notify();
+    });
+    await this.refreshOutboxCount();
+  }
+
+  async drain(): Promise<void> {
+    await this.flush();
+    const result = await this.scheduler.drain();
+    this.totalIngested += result.inserted;
+    this.totalIngestErrors += result.failed > 0 ? 1 : 0;
+    this.recordIngestedItems(result.syncedItems);
+    this.lastIngestError = this.scheduler.status().lastError;
+    await this.refreshOutboxCount();
+    this.notify();
+  }
+
+  status(): RuntimeStatus {
+    const schedulerStatus = this.scheduler.status();
+    return {
+      sources: Array.from(this.statusBySource.values()).map((s) => ({ ...s })),
+      bufferSize: this.buffer.size(),
+      outboxMode: this.outbox.kind,
+      outboxPendingCount: this.outboxPendingCount,
+      totalIngested: this.totalIngested,
+      totalIngestErrors: this.totalIngestErrors,
+      lastFlushTs: this.lastFlushTs,
+      lastDrainTs: schedulerStatus.lastDrainTs,
+      lastSuccessfulDrainTs: schedulerStatus.lastSuccessTs,
+      lastIngestError: this.lastIngestError,
+    };
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private async flushBatch(batch: PersonalSignalInput[]): Promise<void> {
+    try {
+      await this.outbox.enqueue(batch);
+      this.lastFlushTs = Date.now();
+      this.lastIngestError = null;
+      await this.refreshOutboxCount();
+    } catch (err) {
+      this.lastIngestError = describeError(err);
+      throw err;
+    } finally {
+      this.notify();
+    }
+  }
+
+  private async refreshOutboxCount(): Promise<void> {
+    this.outboxPendingCount = await this.outbox.count();
+  }
+
+  private recordIngestedItems(items: PersonalSignalInput[]): void {
+    if (items.length === 0) return;
+    const byKind = countByKind(items);
+    const soundCount =
+      (byKind.get(SIGNAL_KINDS.soundClassification) ?? 0) +
+      (byKind.get("session_summary") ?? 0);
+    for (const st of this.statusBySource.values()) {
+      const c = st.key === "sound_classifier"
+        ? soundCount
+        : byKind.get(SOURCE_TO_KIND[st.key]) ?? 0;
+      if (c > 0) st.ingestedCount += c;
+    }
+  }
+
+  private recordEvent(key: SourceKey, summary: string): void {
+    const st = this.statusBySource.get(key);
+    if (!st) return;
+    st.lastEvent = { ts: Date.now(), summary };
+    this.notify();
+  }
+
+  private startDrainTimer(): void {
+    if (this.drainTimer) return;
+    this.drainTimer = setInterval(() => {
+      void this.drain();
+    }, this.scheduler.intervalMs());
+  }
+
+  private notify(): void {
+    for (const l of this.listeners) l();
+  }
+}
+
+const DEFAULT_AUTO_START_SOURCES: SourceKey[] = [
+  "sound_classifier",
+  "visit",
+  "activity",
+  "location",
+];
+
+const SOURCE_TO_KIND: Record<SourceKey, string> = {
+  sound_classifier: SIGNAL_KINDS.soundClassification,
+  visit: SIGNAL_KINDS.visit,
+  activity: SIGNAL_KINDS.activity,
+  location: SIGNAL_KINDS.location,
+};
+
+const OPT_OUT_STORAGE_KEY = "pin.ambient.optOutSources";
+
+function loadOptOutSources(): Set<SourceKey> {
+  try {
+    const raw = localStorage.getItem(OPT_OUT_STORAGE_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter(isSourceKey));
+  } catch {
+    return new Set();
+  }
+}
+
+function saveOptOutSources(sources: Set<SourceKey>): void {
+  try {
+    localStorage.setItem(OPT_OUT_STORAGE_KEY, JSON.stringify(Array.from(sources)));
+  } catch {
+    /* ignore */
+  }
+}
+
+function isSourceKey(value: unknown): value is SourceKey {
+  return typeof value === "string" && DEFAULT_AUTO_START_SOURCES.includes(value as SourceKey);
+}
+
+function countByKind(items: PersonalSignalInput[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const it of items) {
+    m.set(it.kind, (m.get(it.kind) ?? 0) + 1);
+  }
+  return m;
+}
+
+function describeError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+}
+
+let singleton: AmbientRuntime | null = null;
+
+export function getAmbientRuntime(): AmbientRuntime {
+  if (!singleton) singleton = new AmbientRuntime();
+  return singleton;
+}
+
+export type { AmbientRuntime };

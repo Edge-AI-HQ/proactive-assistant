@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from fastapi import APIRouter, Depends, status
 from psycopg import AsyncConnection
@@ -182,7 +183,23 @@ async def update_settings(
     `_sync_auto_generate_schedule` runs unconditionally because changing
     `generation_language` alone must re-stamp the schedule payload's
     `output_language` field. The sync is one upsert/update either way.
+
+    ``ambient_sources`` is a per-key patch (merged with existing JSONB),
+    not a full replacement — set a key to ``null`` to remove it. Server
+    stamps ``updated_at`` on every entry it writes through.
     """
+    ambient_patch: dict[str, Any] | None = None
+    if body.ambient_sources is not None:
+        now_iso = datetime.now(UTC).isoformat()
+        ambient_patch = {}
+        for key, consent in body.ambient_sources.items():
+            if consent is None:
+                ambient_patch[key] = None  # remove
+            else:
+                ambient_patch[key] = {
+                    "enabled": consent.enabled,
+                    "updated_at": now_iso,
+                }
     async with user_scoped_tx(pool, user.id) as conn:
         repo = ProfileRepository(user.id, conn)
         row = await repo.upsert_settings(
@@ -192,6 +209,7 @@ async def update_settings(
             auto_dreaming=body.auto_dreaming,
             auto_crystallize=body.auto_crystallize,
             metadata=body.metadata,
+            ambient_sources_patch=ambient_patch,
         )
         await _sync_auto_generate_schedule(conn, user_id=user.id, settings=row)
     return _settings_response(row)

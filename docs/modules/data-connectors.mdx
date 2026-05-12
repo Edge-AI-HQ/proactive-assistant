@@ -175,6 +175,51 @@ sequenceDiagram
 
 `X-Device-Token` 服务端只存 bcrypt hash,明文只在 register / rotate 时返回一次。`device_fingerprint_hash`(sha256 of platform + 客户端 fingerprint)用来识别"换 deviceId 但实际同一台逻辑设备",rotate 时复用同一行。
 
+### Ingest per-item status(5 态契约)
+
+`POST /api/devices/ingest` 对每条 item 在 `results[i].status` 里返回 5 个值之一。前端 outbox(`proactive-ai-frontend/src/services/ambient/sync-scheduler.ts:bucketRecords`)按此分流;契约 SSOT 在 `docs/plans/2026-05-12-v2-to-v3-migration.mdx#D-3`。
+
+| status | 含义 | outbox 行为 |
+|---|---|---|
+| `inserted` | raw / signal 实际写入了一行 | 移除,记为成功 |
+| `duplicate` | ON CONFLICT 触发(raw_only 路径才会出现的真 idempotent no-op) | 移除,记为成功 |
+| `rejected` | 确定性 client-side bug:缺 `kind` / cross-device dispatch / unsupported_full_sync 等。重传不会变好 | 永久移除,记 warning log,不 retry |
+| `parse_failed` | `IngestItemIn.model_validate` 抛异常那条 item。client schema 错位 | 永久移除,记 warning log,不 retry |
+| `retryable_failed` | 服务端写入抛异常被 catch(DB blip / Supabase 抖 / repository bug)。本质 transient | **保留**在 outbox,按指数退避 retry |
+
+服务端写入异常**禁止**折叠成 `rejected` — 那会让一次 DB 抽风把用户事件永久删掉而 client 完全无感(200 OK + outbox 移除)。`web/routes/ui/devices.py:_ingest_for_device` 的 `try / except` 必须把异常 reason 写进 result 的 `reason` 字段并设 `retryable_failed`,不能再用 `logger.warning` 吞掉。
+
+### Health observation 全替换 scope
+
+`web/device_ingest/health.py:health_full_replace_scope` 返回 `(device_id, local_date, metric?)` 三元组。当 envelope 携带 `payload.metric` 或所有 observations 共享同一 `metric` 时,DELETE 限定到该 metric,避免一次 steps push 把同日的 `heart_rate` 行抹掉(V2 commit `089e1f94` 的高优修)。当 envelope 主动是多 metric 的 end-of-day 批量,scope 回退到 date-only。
+
+`web/db/repositories/raw_device.py:replace_health` 的 DELETE 永远带 `AND reference_count = 0`,被 memory / evolution_run 引用过的 raw evidence 行不会被 full-sync 删掉(V2 `raw-db.ts:1934` 的设计)。V3 当前还没有任何代码会把 `reference_count` 增到 > 0,这条是前置防御,等 raw 引用机制上线时不需要再回头改 SQL。
+
+### Mobile ambient capture(opt-in,@pin/capacitor-ambient-ai)
+
+- iOS / Android(stub)端的 `@pin/capacitor-ambient-ai`(`capacitor-plugins/ambient-ai/`)把 SoundClassifier / Visit / Activity / Location / Barometer / Health / NotificationUsage / MediaNotebook / NearbyConnectivity 等 source 封装成统一 facade,前端 `proactive-ai-frontend/src/services/ambient/` 把事件 batched 成 `PersonalSignalInput`,落进 outbox(native = SQLite,web = memory),按 60s 周期 drain 上传到 `/api/devices/ingest`。
+- **隐私不变量**:登录本身**绝不**启动任何 source。`startAmbientUpload({ enabledSources })`(`services/ambient/lifecycle.ts`)只对用户在 `pai_user_settings.ambient_sources`(migration `041_pai_user_settings_ambient_sources.sql`)里显式 opt-in 的 source 调 `runtime.startSource(<key>)`,**不调** `runtime.autoStart()`。
+- `bindAmbientLifecycle()`(`main.tsx` 在 `isNative` 分支动态 import)只负责把 `App.appStateChange` 绑到 `runtime.drain()` — 这条只 flush 已经在队列里的事件,不会引起任何新采集。
+- 用户 UI:`components/AmbientSourcesPanel.tsx`(挂在 `DebugPanel` 里,`React.lazy` + `isNative` 守 web build)读 `useUserSettings().ambientSources`,toggle 一旦 flip 既 PATCH 到 server 又同步调 `runtime.start/stop(key)`,做到 UI 立即反映 + server 是持久真源。
+- 改 ambient source 列表 / lifecycle 行为 / `pai_user_settings.ambient_sources` schema 前必读 [Ambient AI Plugin](../plans/2026-05-10-ambient-ai-plugin) + [V2 → V3 功能迁移计划 D-5](../plans/2026-05-12-v2-to-v3-migration)。
+
+### 设备统一时间线
+
+`GET /api/devices/{deviceId}/timeline` 在 server 端 UNION `pai_personal_signals` + `pai_raw_device_health_observations`,按 `occurred_at DESC` 排序 + 单一 keyset cursor。返回 envelope:
+
+```json
+{
+  "ok": true,
+  "items": [
+    {"type": "signal" | "health", "occurred_at": "...", "row": {...}}
+  ],
+  "next_cursor": "..." | null,
+  "has_more": true
+}
+```
+
+`_HEALTH_POLICY` 留 `raw_only`(health 频率高,per-observation 写 signal 会让 `pai_personal_signals` 行数爆,影响 memory pipeline / generator 选卡)。前端 `DeviceTimeline.tsx` 用 `fetchDeviceTimeline` 一次拉合并流,signal 走 `SignalRow`,health 走 `HealthRow`,不做 client-side k-way merge。
+
 ## 当前设计
 
 ### Composio 服务层

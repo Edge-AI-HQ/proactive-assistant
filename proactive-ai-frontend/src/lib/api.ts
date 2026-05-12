@@ -421,6 +421,69 @@ export async function fetchSignals(
   };
 }
 
+// ── Device unified timeline ───────────────────────────────────────────
+
+export interface DeviceHealthObservation {
+  id: string;
+  device_id: string;
+  observation_type: string;
+  metric: string | null;
+  value: number | null;
+  unit: string | null;
+  start_at: string | null;
+  end_at: string | null;
+  local_date: string | null;
+  source_app: string | null;
+  payload: Record<string, unknown>;
+  occurred_at: string;
+  ingested_at: string;
+  dedupe_key: string | null;
+  reference_count: number;
+}
+
+export type DeviceTimelineItem =
+  | { type: "signal"; occurred_at: string; row: PersonalSignal }
+  | { type: "health"; occurred_at: string; row: DeviceHealthObservation };
+
+export interface DeviceTimelineResponse {
+  ok: boolean;
+  items: DeviceTimelineItem[];
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
+/**
+ * Unified device timeline (signals + raw health observations) ordered
+ * by ``occurred_at DESC`` with a single keyset cursor. Backed by
+ * `GET /api/devices/{deviceId}/timeline`.
+ */
+export async function fetchDeviceTimeline(
+  deviceId: string,
+  opts: { before?: string | null; limit?: number; signal?: AbortSignal } = {},
+): Promise<DeviceTimelineResponse> {
+  const qs = new URLSearchParams();
+  if (opts.before) qs.set("before", opts.before);
+  if (opts.limit) qs.set("limit", String(opts.limit));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  const res = await proxyFetch(
+    `/devices/${encodeURIComponent(deviceId)}/timeline${suffix}`,
+    { signal: opts.signal },
+  );
+  if (!res.ok) {
+    throw new Error(
+      `/devices/${deviceId}/timeline failed: ${await readErrorMessage(res)}`,
+    );
+  }
+  const data = (await res.json()) as Partial<DeviceTimelineResponse>;
+  return {
+    ok: data.ok ?? false,
+    items: Array.isArray(data.items) ? data.items : [],
+    next_cursor: typeof data.next_cursor === "string" ? data.next_cursor : null,
+    has_more: data.has_more ?? false,
+  };
+}
+
+
 export interface RawListFilter {
   since?: string;
   until?: string;

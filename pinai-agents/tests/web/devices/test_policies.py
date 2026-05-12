@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pinai_agents.web.device_ingest.health import (
+    health_full_replace_scope,
+)
 from pinai_agents.web.device_ingest.policies import (
     DEVICE_INGEST_POLICIES,
     UNKNOWN_KIND_POLICY,
@@ -99,6 +102,81 @@ def test_parse_health_skips_rows_without_observation_type():
 def test_build_default_signal_includes_fallback_reason():
     sig = build_default_signal(_item("moment"), {"fallback_reason": "test"})
     assert sig["payload"]["ingest_fallback_reason"] == "test"
+
+
+def test_health_full_scope_payload_metric_narrows():
+    """Payload-level metric narrows scope (the iOS / Android plugin path)."""
+    item = _item("health.observation", payload={
+        "local_date": "2026-05-05",
+        "metric": "steps",
+        "observations": [
+            {"observation_type": "daily_summary", "metric": "steps",
+             "value": 8120, "local_date": "2026-05-05"},
+        ],
+    })
+    scope = health_full_replace_scope(item)
+    assert scope is not None
+    assert scope.local_date == "2026-05-05"
+    assert scope.metric == "steps"
+
+
+def test_health_full_scope_infers_metric_from_single_observation():
+    """When payload doesn't carry metric but all obs share one, narrow scope."""
+    item = _item("health.observation", payload={
+        "local_date": "2026-05-05",
+        "observations": [
+            {"observation_type": "daily_summary", "metric": "heart_rate",
+             "value": 70, "local_date": "2026-05-05"},
+        ],
+    })
+    scope = health_full_replace_scope(item)
+    assert scope is not None
+    assert scope.metric == "heart_rate"
+
+
+def test_health_full_scope_multi_metric_falls_back_to_date_only():
+    """End-of-day batches with multiple metrics → date-only scope."""
+    item = _item("health.observation", payload={
+        "local_date": "2026-05-05",
+        "observations": [
+            {"observation_type": "daily_summary", "metric": "steps",
+             "value": 8120, "local_date": "2026-05-05"},
+            {"observation_type": "sample", "metric": "heart_rate",
+             "value": 70, "local_date": "2026-05-05"},
+        ],
+    })
+    scope = health_full_replace_scope(item)
+    assert scope is not None
+    assert scope.local_date == "2026-05-05"
+    assert scope.metric is None
+
+
+def test_health_full_scope_ambiguous_local_date_returns_none():
+    """Multiple local_dates with no payload-level pin → None (triggers fallback)."""
+    item = _item("health.observation", payload={
+        "observations": [
+            {"observation_type": "daily_summary", "metric": "steps",
+             "value": 1000, "local_date": "2026-05-04"},
+            {"observation_type": "daily_summary", "metric": "steps",
+             "value": 2000, "local_date": "2026-05-05"},
+        ],
+    })
+    assert health_full_replace_scope(item) is None
+
+
+def test_health_full_scope_payload_local_date_used_when_obs_silent():
+    """Payload local_date works even when observations don't carry their own."""
+    item = _item("health.observation", payload={
+        "local_date": "2026-05-05",
+        "observations": [
+            {"observation_type": "sample", "metric": "steps", "value": 8120},
+        ],
+    })
+    scope = health_full_replace_scope(item)
+    assert scope is not None
+    assert scope.local_date == "2026-05-05"
+    # No payload-level metric, but observations are uniform → infer.
+    assert scope.metric == "steps"
 
 
 def test_known_kinds_are_a_complete_minimum_set():

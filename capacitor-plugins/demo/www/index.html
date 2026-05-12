@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Plugin Demo</title>
+  <script src="capacitor.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      padding: 20px;
+      padding-top: calc(20px + env(safe-area-inset-top));
+      background: #f5f5f5;
+    }
+    h1 { font-size: 20px; margin-bottom: 16px; }
+    section { margin-bottom: 24px; background: #fff; border-radius: 12px; padding: 16px; }
+    section.adapter { border: 2px solid #5856D6; }
+    section.adapter h2 { color: #5856D6; }
+    h2 { font-size: 16px; margin-bottom: 12px; color: #333; }
+    button {
+      display: block; width: 100%; padding: 12px; border: none;
+      border-radius: 8px; font-size: 14px; font-weight: 600;
+      color: #fff; margin-bottom: 8px; cursor: pointer;
+    }
+    button:active { opacity: 0.7; }
+    button:disabled { opacity: 0.35; cursor: not-allowed; }
+    .btn-blue { background: #007AFF; }
+    .btn-red { background: #FF3B30; }
+    .btn-green { background: #34C759; }
+    #log {
+      background: #1e1e1e; color: #0f0; font-family: monospace;
+      font-size: 11px; padding: 12px; border-radius: 8px;
+      max-height: 300px; overflow-y: auto; white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .status { font-size: 12px; color: #666; margin-bottom: 8px; }
+    .note { font-size: 11px; color: #999; margin-bottom: 8px; font-style: italic; }
+  </style>
+</head>
+<body>
+  <h1>Capacitor Plugin Demo</h1>
+  <p class="note">Native plugins are exposed via <code>Capacitor.Plugins.X</code>. Sections with a purple border are TS adapters in <code>@pin/capacitor-ambient-ai</code> that wrap community plugins; the demo invokes the underlying community plugin directly so this static page can verify the wire-up without bundling.</p>
+
+  <section>
+    <h2>Sound Classification (AudioCapture)</h2>
+    <div id="sc-status" class="status">Initializing...</div>
+    <button id="sc-check" class="btn-blue" disabled>Check Permissions</button>
+    <button id="sc-request" class="btn-blue" disabled>Request Permissions</button>
+    <button id="sc-start" class="btn-green" disabled>Start Classification</button>
+    <button id="sc-stop" class="btn-red" disabled>Stop Classification</button>
+  </section>
+
+  <section>
+    <h2>Visit Monitor</h2>
+    <div id="vm-status" class="status">Initializing...</div>
+    <button id="vm-check" class="btn-blue" disabled>Check Permissions</button>
+    <button id="vm-request" class="btn-blue" disabled>Request Permissions</button>
+    <button id="vm-start" class="btn-green" disabled>Start Monitoring (CLVisit)</button>
+    <button id="vm-stop" class="btn-red" disabled>Stop Monitoring (CLVisit)</button>
+    <button id="vm-activity-start" class="btn-green" disabled>Start Activity Recognition</button>
+    <button id="vm-activity-stop" class="btn-red" disabled>Stop Activity Recognition</button>
+  </section>
+
+  <section>
+    <h2>Device State (slim: thermal + lowPower only)</h2>
+    <div id="ds-status" class="status">Initializing...</div>
+    <button id="ds-get" class="btn-blue" disabled>Get State (one-shot)</button>
+    <button id="ds-start" class="btn-green" disabled>Start Monitoring</button>
+    <button id="ds-stop" class="btn-red" disabled>Stop Monitoring</button>
+  </section>
+
+  <section>
+    <h2>Notification Usage</h2>
+    <div id="nu-status" class="status">Initializing...</div>
+    <button id="nu-check" class="btn-blue" disabled>Check Permissions</button>
+    <button id="nu-request" class="btn-blue" disabled>Request Permissions</button>
+    <button id="nu-start" class="btn-green" disabled>Start Monitoring</button>
+    <button id="nu-stop" class="btn-red" disabled>Stop Monitoring</button>
+  </section>
+
+  <section>
+    <h2>Media Notebook (Photos)</h2>
+    <div id="mn-status" class="status">Initializing...</div>
+    <button id="mn-check" class="btn-blue" disabled>Check Permissions</button>
+    <button id="mn-request" class="btn-blue" disabled>Request Permissions</button>
+    <button id="mn-start" class="btn-green" disabled>Start Monitoring</button>
+    <button id="mn-stop" class="btn-red" disabled>Stop Monitoring</button>
+  </section>
+
+  <section>
+    <h2>Calendar (renamed from Communication, jsName=Calendar)</h2>
+    <div id="cal-status" class="status">Initializing...</div>
+    <button id="cal-check" class="btn-blue" disabled>Check Permissions</button>
+    <button id="cal-request" class="btn-blue" disabled>Request Permissions</button>
+    <button id="cal-start" class="btn-green" disabled>Start Monitoring</button>
+    <button id="cal-stop" class="btn-red" disabled>Stop Monitoring</button>
+  </section>
+
+  <section>
+    <h2>Nearby Connectivity (BLE)</h2>
+    <div id="nc-status" class="status">Initializing...</div>
+    <button id="nc-check" class="btn-blue" disabled>Check Permissions</button>
+    <button id="nc-request" class="btn-blue" disabled>Request Permissions</button>
+    <button id="nc-start" class="btn-green" disabled>Start Monitoring</button>
+    <button id="nc-stop" class="btn-red" disabled>Stop Monitoring</button>
+  </section>
+
+  <section>
+    <h2>Audio Capture Skeleton</h2>
+    <div id="aa-status" class="status">Initializing...</div>
+    <button id="aa-check" class="btn-blue" disabled>Check Permissions</button>
+    <button id="aa-request" class="btn-blue" disabled>Request Permissions</button>
+    <button id="aa-start" class="btn-green" disabled>Start Capture</button>
+    <button id="aa-stop" class="btn-red" disabled>Stop Capture</button>
+  </section>
+
+  <section class="adapter">
+    <h2>SensorFusion adapter (CapacitorBarometer)</h2>
+    <div id="sf-status" class="status">Initializing...</div>
+    <button id="sf-available" class="btn-blue" disabled>Is Available?</button>
+    <button id="sf-get" class="btn-blue" disabled>Get Measurement (one-shot)</button>
+    <button id="sf-start" class="btn-green" disabled>Start Updates</button>
+    <button id="sf-stop" class="btn-red" disabled>Stop Updates</button>
+  </section>
+
+  <section class="adapter">
+    <h2>HealthConnect adapter (Health = HealthKit on iOS)</h2>
+    <div id="hc-status" class="status">Initializing...</div>
+    <button id="hc-available" class="btn-blue" disabled>Is Available?</button>
+    <button id="hc-auth" class="btn-blue" disabled>Request Authorization</button>
+    <button id="hc-steps" class="btn-blue" disabled>Read Steps (today)</button>
+    <button id="hc-sleep" class="btn-blue" disabled>Read Sleep (today)</button>
+    <button id="hc-hr" class="btn-blue" disabled>Read Heart Rate (6h)</button>
+  </section>
+
+  <section class="adapter">
+    <h2>Battery adapter (@capacitor/device)</h2>
+    <div id="bat-status" class="status">Initializing...</div>
+    <button id="bat-get" class="btn-green" disabled>Get Battery Info</button>
+    <button id="bat-info" class="btn-blue" disabled>Get Device Info</button>
+  </section>
+
+  <section class="adapter">
+    <h2>Contacts adapter (@capacitor-community/contacts)</h2>
+    <div id="ct-status" class="status">Initializing...</div>
+    <button id="ct-check" class="btn-blue" disabled>Check Permissions</button>
+    <button id="ct-request" class="btn-blue" disabled>Request Permissions</button>
+    <button id="ct-aggregate" class="btn-green" disabled>Aggregate Counts (mirrors adapter)</button>
+  </section>
+
+  <section>
+    <h2>Location (official @capacitor/geolocation)</h2>
+    <div id="geo-status" class="status">Initializing...</div>
+    <button id="geo-check" class="btn-blue" disabled>Check Permissions</button>
+    <button id="geo-request" class="btn-blue" disabled>Request Permissions</button>
+    <button id="geo-get" class="btn-green" disabled>Get Current Position</button>
+  </section>
+
+  <section>
+    <h2>Event Log</h2>
+    <div id="log"></div>
+  </section>
+
+  <script>
+    (function() {
+      var logEl = document.getElementById('log');
+      function log(msg) {
+        var ts = new Date().toLocaleTimeString();
+        logEl.textContent += '[' + ts + '] ' + msg + '\n';
+        logEl.scrollTop = logEl.scrollHeight;
+        console.log('[Demo] ' + msg);
+      }
+
+      function $(id) { return document.getElementById(id); }
+      function disable(b) { return b ? (b.disabled = true) : null; }
+      function enable(b) { return b ? (b.disabled = false) : null; }
+
+      var groups = {
+        sc: { ids: ['sc-check','sc-request','sc-start','sc-stop'], plugin: 'AudioCapture', label: 'AudioCapture sound classification' },
+        vm: { ids: ['vm-check','vm-request','vm-start','vm-stop','vm-activity-start','vm-activity-stop'], plugin: 'VisitMonitor', label: 'Visit Monitor' },
+        ds: { ids: ['ds-get','ds-start','ds-stop'], plugin: 'DeviceState', label: 'Device State' },
+        nu: { ids: ['nu-check','nu-request','nu-start','nu-stop'], plugin: 'NotificationUsage', label: 'Notification Usage' },
+        mn: { ids: ['mn-check','mn-request','mn-start','mn-stop'], plugin: 'MediaNotebook', label: 'Media Notebook' },
+        cal: { ids: ['cal-check','cal-request','cal-start','cal-stop'], plugin: 'Calendar', label: 'Calendar' },
+        nc: { ids: ['nc-check','nc-request','nc-start','nc-stop'], plugin: 'NearbyConnectivity', label: 'Nearby Connectivity' },
+        aa: { ids: ['aa-check','aa-request','aa-start','aa-stop'], plugin: 'AudioCapture', label: 'AudioCapture' },
+        sf: { ids: ['sf-available','sf-get','sf-start','sf-stop'], plugin: 'CapacitorBarometer', label: 'CapacitorBarometer' },
+        hc: { ids: ['hc-available','hc-auth','hc-steps','hc-sleep','hc-hr'], plugin: 'Health', label: 'Health (HealthKit)' },
+        bat: { ids: ['bat-get','bat-info'], plugin: 'Device', label: 'Device' },
+        ct: { ids: ['ct-check','ct-request','ct-aggregate'], plugin: 'Contacts', label: 'Contacts' },
+        geo: { ids: ['geo-check','geo-request','geo-get'], plugin: 'Geolocation', label: 'Geolocation' }
+      };
+
+      var statusEls = {
+        sc: $('sc-status'), vm: $('vm-status'), ds: $('ds-status'),
+        nu: $('nu-status'), mn: $('mn-status'), cal: $('cal-status'),
+        nc: $('nc-status'), aa: $('aa-status'),
+        sf: $('sf-status'), hc: $('hc-status'), bat: $('bat-status'), ct: $('ct-status'),
+        geo: $('geo-status')
+      };
+
+      var positionTimer = null;
+
+      function init() {
+        if (typeof Capacitor === 'undefined') {
+          setTimeout(init, 50);
+          return;
+        }
+        var plugins = Capacitor.Plugins || {};
+        var summary = [];
+        Object.keys(groups).forEach(function(key) {
+          var g = groups[key];
+          var found = !!plugins[g.plugin];
+          if (found) {
+            statusEls[key].textContent = g.label + ': ready';
+            log(g.label + ' plugin found');
+            g.ids.forEach(function(id) { enable($(id)); });
+          } else {
+            statusEls[key].textContent = g.label + ': NOT FOUND';
+            log('ERROR: ' + g.label + ' (' + g.plugin + ') not in Capacitor.Plugins');
+          }
+          summary.push(key.toUpperCase() + '=' + (found ? '1' : '0'));
+        });
+        log('Init: ' + summary.join(' '));
+      }
+
+      function bind(btnId, fn) { $(btnId).addEventListener('click', fn); }
+      function pluginCall(name, method, args) {
+        var p = (Capacitor.Plugins || {})[name];
+        if (!p) { log('ERROR: plugin ' + name + ' not loaded'); return Promise.reject(new Error('plugin not loaded')); }
+        return p[method].apply(p, args || []);
+      }
+      function pluginListen(name, event, fn) {
+        var p = (Capacitor.Plugins || {})[name];
+        if (!p) { log('ERROR: plugin ' + name + ' not loaded'); return; }
+        p.addListener(event, fn);
+      }
+
+      // --- Sound Classifier ---
+      bind('sc-check', function() {
+        pluginCall('AudioCapture','checkPermissions').then(function(r){ statusEls.sc.textContent='Permissions: '+JSON.stringify(r); log('SC checkPermissions: '+JSON.stringify(r)); }).catch(function(e){ log('SC checkPermissions ERROR: '+e.message); });
+      });
+      bind('sc-request', function() {
+        pluginCall('AudioCapture','requestPermissions').then(function(r){ statusEls.sc.textContent='Permissions: '+JSON.stringify(r); log('SC requestPermissions: '+JSON.stringify(r)); }).catch(function(e){ log('SC requestPermissions ERROR: '+e.message); });
+      });
+      bind('sc-start', function() {
+        pluginListen('AudioCapture','soundClassification', function(event){
+          var top = event.classifications && event.classifications[0];
+          log('SC event: ' + (top ? top.label : '?') + ' (' + (top ? (top.confidence*100).toFixed(1) : '0') + '%)');
+        });
+        pluginCall('AudioCapture','startClassification').then(function(){ log('SC startClassification: OK'); }).catch(function(e){ log('SC startClassification ERROR: '+e.message); });
+      });
+      bind('sc-stop', function() {
+        pluginCall('AudioCapture','stopClassification').then(function(){ return pluginCall('AudioCapture','removeAllListeners'); }).then(function(){ log('SC stopClassification: OK'); }).catch(function(e){ log('SC stopClassification ERROR: '+e.message); });
+      });
+
+      // --- Visit Monitor ---
+      bind('vm-check', function() {
+        pluginCall('VisitMonitor','checkPermissions').then(function(r){ statusEls.vm.textContent='Permissions: '+JSON.stringify(r); log('VM checkPermissions: '+JSON.stringify(r)); }).catch(function(e){ log('VM checkPermissions ERROR: '+e.message); });
+      });
+      bind('vm-request', function() {
+        pluginCall('VisitMonitor','requestPermissions').then(function(r){ statusEls.vm.textContent='Permissions: '+JSON.stringify(r); log('VM requestPermissions: '+JSON.stringify(r)); }).catch(function(e){ log('VM requestPermissions ERROR: '+e.message); });
+      });
+      bind('vm-start', function() {
+        pluginListen('VisitMonitor','visit', function(event){
+          var lat = event.latitude ? event.latitude.toFixed(4) : '?';
+          var lng = event.longitude ? event.longitude.toFixed(4) : '?';
+          log('VM visit: lat=' + lat + ' lng=' + lng + ' acc=' + event.accuracy);
+        });
+        pluginCall('VisitMonitor','startMonitoring').then(function(){
+          log('VM startMonitoring: OK');
+          if (positionTimer) clearInterval(positionTimer);
+          positionTimer = setInterval(function(){
+            pluginCall('VisitMonitor','getCurrentPosition').then(function(pos){
+              var lat = pos.latitude ? pos.latitude.toFixed(4) : '?';
+              var lng = pos.longitude ? pos.longitude.toFixed(4) : '?';
+              log('VM position: lat=' + lat + ' lng=' + lng + ' acc=' + (pos.accuracy ? pos.accuracy.toFixed(1)+'m' : '?'));
+            }).catch(function(e){ log('VM getCurrentPosition ERROR: '+e.message); });
+          }, 10000);
+          log('VM position polling: every 10s');
+        }).catch(function(e){ log('VM startMonitoring ERROR: '+e.message); });
+      });
+      bind('vm-stop', function() {
+        if (positionTimer) { clearInterval(positionTimer); positionTimer = null; }
+        pluginCall('VisitMonitor','stopMonitoring').then(function(){ return pluginCall('VisitMonitor','removeAllListeners'); }).then(function(){ log('VM stopMonitoring: OK'); }).catch(function(e){ log('VM stopMonitoring ERROR: '+e.message); });
+      });
+      bind('vm-activity-start', function() {
+        pluginListen('VisitMonitor','activity', function(event){ log('VM activity: '+event.type+' ('+event.confidence+')'); });
+        pluginCall('VisitMonitor','startActivityRecognition').then(function(){ log('VM startActivityRecognition: OK'); }).catch(function(e){ log('VM startActivityRecognition ERROR: '+e.message); });
+      });
+      bind('vm-activity-stop', function() {
+        pluginCall('VisitMonitor','stopActivityRecognition').then(function(){ log('VM stopActivityRecognition: OK'); }).catch(function(e){ log('VM stopActivityRecognition ERROR: '+e.message); });
+      });
+
+      // --- Device State (slim: thermal + lowPower only) ---
+      function renderDs(state) {
+        statusEls.ds.textContent = 'Thermal: ' + state.thermal + ' | LowPower: ' + state.lowPower;
+      }
+      bind('ds-get', function() {
+        pluginCall('DeviceState','getState').then(function(state){
+          renderDs(state);
+          log('DS getState: '+JSON.stringify(state));
+        }).catch(function(e){ log('DS getState ERROR: '+e.message); });
+      });
+      bind('ds-start', function() {
+        pluginListen('DeviceState','deviceState', function(state){
+          log('DS event: thermal='+state.thermal+' lowPower='+state.lowPower);
+          renderDs(state);
+        });
+        pluginCall('DeviceState','startMonitoring').then(function(){ log('DS startMonitoring: OK'); }).catch(function(e){ log('DS startMonitoring ERROR: '+e.message); });
+      });
+      bind('ds-stop', function() {
+        pluginCall('DeviceState','stopMonitoring').then(function(){ return pluginCall('DeviceState','removeAllListeners'); }).then(function(){ log('DS stopMonitoring: OK'); }).catch(function(e){ log('DS stopMonitoring ERROR: '+e.message); });
+      });
+
+      // --- Notification Usage ---
+      bind('nu-check', function() {
+        pluginCall('NotificationUsage','checkPermissions').then(function(r){ statusEls.nu.textContent='Permissions: '+JSON.stringify(r); log('NU checkPermissions: '+JSON.stringify(r)); }).catch(function(e){ log('NU checkPermissions ERROR: '+e.message); });
+      });
+      bind('nu-request', function() {
+        pluginCall('NotificationUsage','requestPermissions').then(function(r){ statusEls.nu.textContent='Permissions: '+JSON.stringify(r); log('NU requestPermissions: '+JSON.stringify(r)); }).catch(function(e){ log('NU requestPermissions ERROR: '+e.message); });
+      });
+      bind('nu-start', function() {
+        pluginListen('NotificationUsage','focus', function(event){
+          log('NU focus: '+(event.focused?'focused':'unfocused'));
+          statusEls.nu.textContent = 'Focus: '+(event.focused?'ON':'OFF');
+        });
+        pluginListen('NotificationUsage','notifications', function(event){
+          log('NU notifications: pending='+event.pending+' delivered='+event.delivered);
+        });
+        pluginCall('NotificationUsage','startMonitoring').then(function(){ log('NU startMonitoring: OK'); }).catch(function(e){ log('NU startMonitoring ERROR: '+e.message); });
+      });
+      bind('nu-stop', function() {
+        pluginCall('NotificationUsage','stopMonitoring').then(function(){ return pluginCall('NotificationUsage','removeAllListeners'); }).then(function(){ log('NU stopMonitoring: OK'); }).catch(function(e){ log('NU stopMonitoring ERROR: '+e.message); });
+      });
+
+      // --- Media Notebook ---
+      bind('mn-check', function() {
+        pluginCall('MediaNotebook','checkPermissions').then(function(r){ statusEls.mn.textContent='Permissions: '+JSON.stringify(r); log('MN checkPermissions: '+JSON.stringify(r)); }).catch(function(e){ log('MN checkPermissions ERROR: '+e.message); });
+      });
+      bind('mn-request', function() {
+        pluginCall('MediaNotebook','requestPermissions').then(function(r){ statusEls.mn.textContent='Permissions: '+JSON.stringify(r); log('MN requestPermissions: '+JSON.stringify(r)); }).catch(function(e){ log('MN requestPermissions ERROR: '+e.message); });
+      });
+      bind('mn-start', function() {
+        pluginListen('MediaNotebook','photos', function(event){
+          log('MN photos: '+event.count7d+' photos (7d), '+event.withLocation+' with location');
+          statusEls.mn.textContent = 'Photos (7d): '+event.count7d+' | With GPS: '+event.withLocation;
+        });
+        pluginCall('MediaNotebook','startMonitoring').then(function(){ log('MN startMonitoring: OK'); }).catch(function(e){ log('MN startMonitoring ERROR: '+e.message); });
+      });
+      bind('mn-stop', function() {
+        pluginCall('MediaNotebook','stopMonitoring').then(function(){ return pluginCall('MediaNotebook','removeAllListeners'); }).then(function(){ log('MN stopMonitoring: OK'); }).catch(function(e){ log('MN stopMonitoring ERROR: '+e.message); });
+      });
+
+      // --- Calendar (renamed from Communication) ---
+      bind('cal-check', function() {
+        pluginCall('Calendar','checkPermissions').then(function(r){ statusEls.cal.textContent='Permissions: '+JSON.stringify(r); log('Cal checkPermissions: '+JSON.stringify(r)); }).catch(function(e){ log('Cal checkPermissions ERROR: '+e.message); });
+      });
+      bind('cal-request', function() {
+        pluginCall('Calendar','requestPermissions').then(function(r){ statusEls.cal.textContent='Permissions: '+JSON.stringify(r); log('Cal requestPermissions: '+JSON.stringify(r)); }).catch(function(e){ log('Cal requestPermissions ERROR: '+e.message); });
+      });
+      bind('cal-start', function() {
+        pluginListen('Calendar','calendarSummary', function(event){
+          log('Cal summary: '+event.count24h+' events in next 24h');
+          statusEls.cal.textContent = 'Events 24h: '+event.count24h;
+        });
+        pluginListen('Calendar','calendarEvent', function(event){
+          log('Cal event: '+event.title+' @ '+event.startsAt+' ('+event.attendeeCount+' attendees)');
+        });
+        pluginCall('Calendar','startMonitoring').then(function(){ log('Cal startMonitoring: OK'); }).catch(function(e){ log('Cal startMonitoring ERROR: '+e.message); });
+      });
+      bind('cal-stop', function() {
+        pluginCall('Calendar','stopMonitoring').then(function(){ return pluginCall('Calendar','removeAllListeners'); }).then(function(){ log('Cal stopMonitoring: OK'); }).catch(function(e){ log('Cal stopMonitoring ERROR: '+e.message); });
+      });
+
+      // --- Nearby Connectivity ---
+      bind('nc-check', function() {
+        pluginCall('NearbyConnectivity','checkPermissions').then(function(r){ statusEls.nc.textContent='Permissions: '+JSON.stringify(r); log('NC checkPermissions: '+JSON.stringify(r)); }).catch(function(e){ log('NC checkPermissions ERROR: '+e.message); });
+      });
+      bind('nc-request', function() {
+        pluginCall('NearbyConnectivity','requestPermissions').then(function(r){ statusEls.nc.textContent='Permissions: '+JSON.stringify(r); log('NC requestPermissions: '+JSON.stringify(r)); }).catch(function(e){ log('NC requestPermissions ERROR: '+e.message); });
+      });
+      bind('nc-start', function() {
+        pluginListen('NearbyConnectivity','nearbyBT', function(event){
+          log('NC nearbyBT: '+event.samples+' samples, histogram: '+event.rssiHistogram);
+          statusEls.nc.textContent = 'BLE: '+event.samples+' device(s) detected';
+        });
+        pluginCall('NearbyConnectivity','startMonitoring').then(function(){ log('NC startMonitoring: OK'); }).catch(function(e){ log('NC startMonitoring ERROR: '+e.message); });
+      });
+      bind('nc-stop', function() {
+        pluginCall('NearbyConnectivity','stopMonitoring').then(function(){ return pluginCall('NearbyConnectivity','removeAllListeners'); }).then(function(){ log('NC stopMonitoring: OK'); }).catch(function(e){ log('NC stopMonitoring ERROR: '+e.message); });
+      });
+
+      // --- Audio Ambient ---
+      bind('aa-check', function() {
+        pluginCall('AudioCapture','checkPermissions').then(function(r){ statusEls.aa.textContent='Permissions: '+JSON.stringify(r); log('AA checkPermissions: '+JSON.stringify(r)); }).catch(function(e){ log('AA checkPermissions ERROR: '+e.message); });
+      });
+      bind('aa-request', function() {
+        pluginCall('AudioCapture','requestPermissions').then(function(r){ statusEls.aa.textContent='Permissions: '+JSON.stringify(r); log('AA requestPermissions: '+JSON.stringify(r)); }).catch(function(e){ log('AA requestPermissions ERROR: '+e.message); });
+      });
+      bind('aa-start', function() {
+        pluginListen('AudioCapture','audioState', function(event){
+          log('AA audioState: '+JSON.stringify(event));
+          statusEls.aa.textContent = 'Running: '+event.running+' | Capturing: '+event.capturing+' | Suppressed: '+event.suppressed;
+        });
+        pluginCall('AudioCapture','startCapture').then(function(){ log('AA startCapture: OK'); }).catch(function(e){ log('AA startCapture ERROR: '+e.message); });
+      });
+      bind('aa-stop', function() {
+        pluginCall('AudioCapture','stopCapture').then(function(){ return pluginCall('AudioCapture','removeAllListeners'); }).then(function(){ log('AA stopCapture: OK'); }).catch(function(e){ log('AA stopCapture ERROR: '+e.message); });
+      });
+
+      // --- SensorFusion adapter (CapacitorBarometer direct) ---
+      bind('sf-available', function() {
+        pluginCall('CapacitorBarometer','isAvailable').then(function(r){ statusEls.sf.textContent='Available: '+r.isAvailable; log('SF isAvailable: '+JSON.stringify(r)); }).catch(function(e){ log('SF isAvailable ERROR: '+e.message); });
+      });
+      bind('sf-get', function() {
+        pluginCall('CapacitorBarometer','getMeasurement').then(function(r){ statusEls.sf.textContent='Pressure: '+(r.pressure?r.pressure.toFixed(1):'N/A')+' hPa | Alt: '+(r.relativeAltitude||'N/A'); log('SF getMeasurement: '+JSON.stringify(r)); }).catch(function(e){ log('SF getMeasurement ERROR: '+e.message); });
+      });
+      bind('sf-start', function() {
+        pluginListen('CapacitorBarometer','measurement', function(event){
+          log('SF measurement: pressure='+event.pressure+' hPa alt='+event.relativeAltitude+'m');
+          statusEls.sf.textContent = 'P: '+event.pressure.toFixed(1)+' hPa | Alt: '+event.relativeAltitude.toFixed(1)+'m';
+        });
+        pluginCall('CapacitorBarometer','startMeasurementUpdates').then(function(){ log('SF startMeasurementUpdates: OK'); }).catch(function(e){ log('SF startMeasurementUpdates ERROR: '+e.message); });
+      });
+      bind('sf-stop', function() {
+        pluginCall('CapacitorBarometer','stopMeasurementUpdates').then(function(){ return pluginCall('CapacitorBarometer','removeAllListeners'); }).then(function(){ log('SF stopMeasurementUpdates: OK'); }).catch(function(e){ log('SF stopMeasurementUpdates ERROR: '+e.message); });
+      });
+
+      // --- HealthConnect adapter (Health direct) ---
+      bind('hc-available', function() {
+        pluginCall('Health','isAvailable').then(function(r){ statusEls.hc.textContent='Available: '+r.available+(r.reason?' ('+r.reason+')':''); log('HC isAvailable: '+JSON.stringify(r)); }).catch(function(e){ log('HC isAvailable ERROR: '+e.message); });
+      });
+      bind('hc-auth', function() {
+        pluginCall('Health','requestAuthorization', [{ read: ['steps','sleep','heartRate'] }]).then(function(r){ statusEls.hc.textContent='Auth: read='+JSON.stringify(r.readAuthorized)+' denied='+JSON.stringify(r.readDenied); log('HC requestAuthorization: '+JSON.stringify(r)); }).catch(function(e){ log('HC requestAuthorization ERROR: '+e.message); });
+      });
+      bind('hc-steps', function() {
+        var start = new Date(); start.setHours(0,0,0,0);
+        pluginCall('Health','readSamples', [{ dataType: 'steps', startDate: start.toISOString(), limit: 10 }]).then(function(r){
+          var totalSteps = r.samples ? r.samples.reduce(function(s,x){ return s+x.value; }, 0) : 0;
+          statusEls.hc.textContent = 'Steps today: '+totalSteps+' ('+(r.samples?r.samples.length:0)+' samples)';
+          log('HC steps: total='+totalSteps+' samples='+JSON.stringify(r.samples?r.samples.slice(0,3):[]));
+        }).catch(function(e){ log('HC readSteps ERROR: '+e.message); });
+      });
+      bind('hc-sleep', function() {
+        var start = new Date(); start.setHours(0,0,0,0);
+        pluginCall('Health','readSamples', [{ dataType: 'sleep', startDate: start.toISOString(), limit: 10 }]).then(function(r){
+          statusEls.hc.textContent = 'Sleep samples: '+(r.samples?r.samples.length:0);
+          log('HC sleep: '+JSON.stringify(r.samples?r.samples.slice(0,3):[]));
+        }).catch(function(e){ log('HC readSleep ERROR: '+e.message); });
+      });
+      bind('hc-hr', function() {
+        var sixHoursAgo = new Date(Date.now() - 6*60*60*1000);
+        pluginCall('Health','readSamples', [{ dataType: 'heartRate', startDate: sixHoursAgo.toISOString(), limit: 10 }]).then(function(r){
+          statusEls.hc.textContent = 'HR samples: '+(r.samples?r.samples.length:0);
+          log('HC heartRate: '+JSON.stringify(r.samples?r.samples.slice(0,3):[]));
+        }).catch(function(e){ log('HC readHeartRate ERROR: '+e.message); });
+      });
+
+      // --- Battery adapter (Device direct) ---
+      bind('bat-get', function() {
+        pluginCall('Device','getBatteryInfo').then(function(r){
+          statusEls.bat.textContent = 'Battery: '+(r.batteryLevel!=null?(r.batteryLevel*100).toFixed(0)+'%':'N/A')+' | Charging: '+r.isCharging;
+          log('Bat getBatteryInfo: '+JSON.stringify(r));
+        }).catch(function(e){ log('Bat getBatteryInfo ERROR: '+e.message); });
+      });
+      bind('bat-info', function() {
+        pluginCall('Device','getInfo').then(function(r){
+          statusEls.bat.textContent = r.platform+' '+r.osVersion+' | '+r.model+' | '+r.manufacturer;
+          log('Bat getInfo: '+JSON.stringify(r));
+        }).catch(function(e){ log('Bat getInfo ERROR: '+e.message); });
+      });
+
+      // --- Contacts adapter (Contacts direct, mirrors aggregate logic) ---
+      bind('ct-check', function() {
+        pluginCall('Contacts','checkPermissions').then(function(r){ statusEls.ct.textContent='Permissions: '+JSON.stringify(r); log('Ct checkPermissions: '+JSON.stringify(r)); }).catch(function(e){ log('Ct checkPermissions ERROR: '+e.message); });
+      });
+      bind('ct-request', function() {
+        pluginCall('Contacts','requestPermissions').then(function(r){ statusEls.ct.textContent='Permissions: '+JSON.stringify(r); log('Ct requestPermissions: '+JSON.stringify(r)); }).catch(function(e){ log('Ct requestPermissions ERROR: '+e.message); });
+      });
+      bind('ct-aggregate', function() {
+        pluginCall('Contacts','getContacts', [{ projection: { name: true, phones: true, emails: true } }]).then(function(r){
+          var contacts = r.contacts || [];
+          var withEmail = contacts.filter(function(c){ return c.emails && c.emails.length>0; }).length;
+          var withPhone = contacts.filter(function(c){ return c.phones && c.phones.length>0; }).length;
+          statusEls.ct.textContent = 'Total: '+contacts.length+' | w/Email: '+withEmail+' | w/Phone: '+withPhone;
+          log('Ct aggregate: total='+contacts.length+' withEmail='+withEmail+' withPhone='+withPhone);
+        }).catch(function(e){ log('Ct getContacts ERROR: '+e.message); });
+      });
+
+      // --- Geolocation ---
+      bind('geo-check', function() {
+        pluginCall('Geolocation','checkPermissions').then(function(r){ statusEls.geo.textContent='Permissions: '+JSON.stringify(r); log('Geo checkPermissions: '+JSON.stringify(r)); }).catch(function(e){ log('Geo checkPermissions ERROR: '+e.message); });
+      });
+      bind('geo-request', function() {
+        pluginCall('Geolocation','requestPermissions').then(function(r){ statusEls.geo.textContent='Permissions: '+JSON.stringify(r); log('Geo requestPermissions: '+JSON.stringify(r)); }).catch(function(e){ log('Geo requestPermissions ERROR: '+e.message); });
+      });
+      bind('geo-get', function() {
+        statusEls.geo.textContent = 'Requesting position...';
+        pluginCall('Geolocation','getCurrentPosition', [{ enableHighAccuracy: true, timeout: 10000 }]).then(function(pos){
+          var lat = pos.coords ? pos.coords.latitude.toFixed(4) : '?';
+          var lng = pos.coords ? pos.coords.longitude.toFixed(4) : '?';
+          var acc = pos.coords ? (pos.coords.accuracy ? pos.coords.accuracy.toFixed(1)+'m' : '?') : '?';
+          statusEls.geo.textContent = 'Position: '+lat+', '+lng+' ±'+acc;
+          log('Geo position: lat='+lat+' lng='+lng+' acc='+acc);
+        }).catch(function(e){ statusEls.geo.textContent='Position: ERROR'; log('Geo getCurrentPosition ERROR: '+e.message); });
+      });
+
+      init();
+    })();
+  </script>
+</body>
+</html>

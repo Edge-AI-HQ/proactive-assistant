@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, Activity, Loader2 } from "lucide-react";
 import {
   deviceMediaUrl,
-  fetchSignals,
+  fetchDeviceTimeline,
+  type DeviceHealthObservation,
+  type DeviceTimelineItem,
   type PersonalSignal,
   type UserDevice,
 } from "@/lib/api";
@@ -21,21 +23,24 @@ interface DeviceTimelineProps {
 }
 
 /**
- * Timeline waterfall for a single device. Pulls personal_signals filtered
- * by deviceId, descending by occurred_at, with keyset (cursor) pagination.
- * Items carrying file_path render as image / video / audio inline; other
- * items fall back to summary text.
+ * Timeline waterfall for a single device. Pulls the unified
+ * ``/api/devices/{deviceId}/timeline`` endpoint which UNIONs
+ * pai_personal_signals + pai_raw_device_health_observations server-side,
+ * ordered by occurred_at DESC, with a single keyset cursor. Signal items
+ * render as before (image / video / audio / summary); health items
+ * render via HealthObservationCard.
+ *
+ * Date filters from the frontend filter chips are applied client-side
+ * post-fetch to avoid plumbing since/until into the new endpoint — the
+ * per-day windows are small (≤ a week of data) so this is cheap.
  */
 export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) {
-  const [signals, setSignals] = useState<PersonalSignal[]>([]);
+  const [items, setItems] = useState<DeviceTimelineItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
   const [dayFilter, setDayFilter] = useState<DeviceTimelineDayFilter>("all");
   const [customDay, setCustomDay] = useState(() => formatLocalDateInput(new Date()));
-  // First page returns a real total; subsequent (cursor) pages return -1
-  // because the server skips the COUNT(*) cost. Keep whatever we last saw.
-  const [total, setTotal] = useState<number | null>(null);
   const cursorRef = useRef<string | null>(null);
   const loadingRef = useRef(false);
   const requestSeqRef = useRef(0);
@@ -43,6 +48,23 @@ export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) 
   const dateRange = useMemo(
     () => getDeviceTimelineDateRange(dayFilter, customDay),
     [customDay, dayFilter],
+  );
+
+  const inDateRange = useCallback(
+    (occurredIso: string): boolean => {
+      const t = Date.parse(occurredIso);
+      if (!Number.isFinite(t)) return true;
+      if (dateRange.since) {
+        const since = Date.parse(dateRange.since);
+        if (Number.isFinite(since) && t < since) return false;
+      }
+      if (dateRange.until) {
+        const until = Date.parse(dateRange.until);
+        if (Number.isFinite(until) && t > until) return false;
+      }
+      return true;
+    },
+    [dateRange.since, dateRange.until],
   );
 
   const loadPage = useCallback(
@@ -54,17 +76,15 @@ export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) 
       const requestSeq = requestSeqRef.current;
       try {
         const before = reset ? null : cursorRef.current;
-        const { signals: batch, total, next_cursor, has_more } = await fetchSignals({
-          deviceId: device.device_id,
-          status: "all",
-          limit: PAGE_SIZE,
-          ...(dateRange.since ? { since: dateRange.since } : {}),
-          ...(dateRange.until ? { until: dateRange.until } : {}),
-          ...(before ? { before } : {}),
-        });
+        const { items: batch, next_cursor, has_more } = await fetchDeviceTimeline(
+          device.device_id,
+          { before, limit: PAGE_SIZE },
+        );
         if (requestSeq !== requestSeqRef.current) return;
-        setSignals((prev) => (reset ? batch : [...prev, ...batch]));
-        if (typeof total === "number" && total >= 0) setTotal(total);
+        // Client-side date filter — server returns newest-first regardless
+        // of dayFilter so the filter chips stay snappy without round-trips.
+        const filtered = batch.filter((it) => inDateRange(it.occurred_at));
+        setItems((prev) => (reset ? filtered : [...prev, ...filtered]));
         cursorRef.current = next_cursor;
         setHasMore(Boolean(has_more));
       } catch (err) {
@@ -77,7 +97,7 @@ export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) 
         }
       }
     },
-    [dateRange.since, dateRange.until, device.device_id],
+    [device.device_id, inDateRange],
   );
 
   // Reset when device or day filter changes.
@@ -85,8 +105,7 @@ export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) 
     requestSeqRef.current += 1;
     loadingRef.current = false;
     cursorRef.current = null;
-    setSignals([]);
-    setTotal(null);
+    setItems([]);
     setHasMore(true);
     void loadPage(true);
   }, [loadPage]);
@@ -107,11 +126,7 @@ export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) 
           <div className="text-[10px] text-foreground/40 truncate">
             {device.platform}
             {device.model ? ` · ${device.model}` : ""}
-            {total !== null
-              ? ` · ${total} item${total === 1 ? "" : "s"}`
-              : signals.length > 0
-                ? ` · ${signals.length}+ loaded`
-                : ""}
+            {items.length > 0 ? ` · ${items.length}${hasMore ? "+" : ""} loaded` : ""}
           </div>
         </div>
       </div>
@@ -145,7 +160,7 @@ export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) 
           />
           <div className="min-w-[72px] shrink-0 text-right text-[10px] leading-tight text-foreground/40">
             <div>{dateRange.label}</div>
-            <div>{signals.length}{total !== null ? ` / ${total}` : ""} shown</div>
+            <div>{items.length} shown</div>
           </div>
         </div>
       </div>
@@ -156,15 +171,19 @@ export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) 
         </div>
       )}
 
-      {signals.length === 0 && !loading && !error && (
+      {items.length === 0 && !loading && !error && (
         <div className="text-xs text-foreground/40 px-2 py-8 text-center">
           No data yet from this device.
         </div>
       )}
 
       <ul className="space-y-2">
-        {signals.map((sig) => (
-          <SignalRow key={sig.id} signal={sig} />
+        {items.map((it) => (
+          it.type === "signal" ? (
+            <SignalRow key={`s-${it.row.id}`} signal={it.row} />
+          ) : (
+            <HealthRow key={`h-${it.row.id}`} obs={it.row} />
+          )
         ))}
       </ul>
 
@@ -180,7 +199,7 @@ export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) 
           >
             Load 10 more
           </button>
-        ) : signals.length > 0 ? (
+        ) : items.length > 0 ? (
           <div className="text-[10px] text-foreground/30">— end —</div>
         ) : null}
       </div>
@@ -273,6 +292,36 @@ function SignalRow({ signal }: { signal: PersonalSignal }) {
           Download {filePath?.split("/").pop()}
         </a>
       )}
+    </li>
+  );
+}
+
+function HealthRow({ obs }: { obs: DeviceHealthObservation }) {
+  const occurred = useMemo(() => formatTime(obs.occurred_at), [obs.occurred_at]);
+  const metric = obs.metric ?? obs.observation_type;
+  const valueLabel =
+    obs.value === null
+      ? "—"
+      : Number.isInteger(obs.value)
+        ? String(obs.value)
+        : obs.value.toFixed(2);
+  return (
+    <li className="glass-card p-3 space-y-1.5">
+      <div className="flex items-baseline gap-2">
+        <span className="text-[10px] text-foreground/40 tabular-nums shrink-0">{occurred}</span>
+        <span className="text-[10px] text-foreground/60 px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-700 shrink-0 flex items-center gap-1">
+          <Activity size={10} strokeWidth={1.75} /> health.{metric}
+        </span>
+        <span className="text-xs font-medium tabular-nums">
+          {valueLabel}
+          {obs.unit ? <span className="text-foreground/40"> {obs.unit}</span> : null}
+        </span>
+      </div>
+      <div className="text-[10px] text-foreground/40 leading-snug flex flex-wrap gap-x-3">
+        <span>{obs.observation_type}</span>
+        {obs.source_app ? <span>{obs.source_app}</span> : null}
+        {obs.local_date ? <span>{obs.local_date}</span> : null}
+      </div>
     </li>
   );
 }
