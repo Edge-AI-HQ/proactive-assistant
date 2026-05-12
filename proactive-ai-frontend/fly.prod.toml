@@ -12,6 +12,13 @@ primary_region = "ord"
 [build]
   dockerfile = "Dockerfile"
 
+# Runtime nginx config — envsubst'd into /etc/nginx/conf.d/default.conf
+# by nginx:alpine's standard template mechanism. See Dockerfile comment
+# above the `templates/default.conf.template` heredoc for the rationale.
+[env]
+  NGINX_RESOLVER = "[fdaa::3]"
+  NGINX_UPSTREAM_URL = "https://proactive-ai-agents-prod.fly.dev"
+
 [http_service]
   internal_port = 8080
   force_https = true
