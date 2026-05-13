@@ -314,7 +314,11 @@ ios: ensure-env ## Build frontend, sync iOS, open Xcode
 	cd proactive-ai-frontend && \
 		VITE_CAPACITOR=1 VITE_PIN_API_URL="$$VITE_PIN_API_URL" \
 		VITE_API_BASE_URL="$$VITE_PIN_API_URL" \
-		npx vite build && npx cap sync ios && npx cap open ios
+		npx vite build && npx cap sync ios && \
+		node ../capacitor-plugins/ambient-ai/scripts/fix-deployment-target.mjs \
+			ios/App/App.xcodeproj/project.pbxproj \
+			--package-swift ios/App/CapApp-SPM/Package.swift && \
+		npx cap open ios
 
 android: ensure-env ## Build frontend, sync Android, install on USB device
 	@set -e; \

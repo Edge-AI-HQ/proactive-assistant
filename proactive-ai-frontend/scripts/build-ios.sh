@@ -78,6 +78,9 @@ VITE_CAPACITOR=1 npx vite build
 
 echo "==> Syncing iOS..."
 npx cap sync ios
+node ../capacitor-plugins/ambient-ai/scripts/fix-deployment-target.mjs \
+  ios/App/App.xcodeproj/project.pbxproj \
+  --package-swift ios/App/CapApp-SPM/Package.swift
 
 # ── Verify env vars are embedded ──
 
