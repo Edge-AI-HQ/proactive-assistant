@@ -189,12 +189,14 @@ function generateId(): string {
 //     ON ambient_outbox (status, next_retry_at);
 
 interface SqliteConnection {
+  open(): Promise<void>;
+  isDBOpen?(): Promise<{ result?: boolean }>;
   execute(sql: string): Promise<unknown>;
   run(sql: string, values?: unknown[]): Promise<{ changes?: { changes?: number } }>;
   query(sql: string, values?: unknown[]): Promise<{ values?: Record<string, unknown>[] }>;
 }
 
-interface SqliteFactory {
+interface SqliteConnectionFactory {
   createConnection(
     dbName: string, encrypted: boolean, mode: string, version: number,
     readonly: boolean,
@@ -211,23 +213,35 @@ interface SqliteFactory {
   closeConnection?(dbName: string, readonly: boolean): Promise<void>;
 }
 
+interface SqliteModule {
+  CapacitorSQLite?: unknown;
+  SQLiteConnection?: new (sqlite: unknown) => SqliteConnectionFactory;
+}
+
 const DB_NAME = "pin_ambient_outbox";
 
 async function openSqliteConnection(): Promise<SqliteConnection> {
-  const mod = await import("@capacitor-community/sqlite");
-  const factory = mod.CapacitorSQLite as unknown as SqliteFactory;
-  if (!factory) {
+  const mod = await import("@capacitor-community/sqlite") as SqliteModule;
+  if (!mod.CapacitorSQLite || !mod.SQLiteConnection) {
     throw new Error("@capacitor-community/sqlite plugin not available");
   }
-  // Plugin keeps a connection pool keyed by (dbName, readonly). Re-using
-  // an existing entry across HMR / view re-mounts is mandatory — calling
-  // createConnection twice for the same name throws "already exists".
-  const probe = await factory
+
+  const sqlite = new mod.SQLiteConnection(mod.CapacitorSQLite);
+  // SQLiteConnection keeps a connection pool keyed by (dbName, readonly).
+  // Re-using an existing entry across HMR / view re-mounts is mandatory —
+  // calling createConnection twice for the same name throws "already exists".
+  const probe = await sqlite
     .isConnection(DB_NAME, false)
     .catch(() => ({ result: false }));
   const conn = probe.result
-    ? await factory.retrieveConnection(DB_NAME, false)
-    : await factory.createConnection(DB_NAME, false, "no-encryption", 1, false);
+    ? await sqlite.retrieveConnection(DB_NAME, false)
+    : await sqlite.createConnection(DB_NAME, false, "no-encryption", 1, false);
+
+  const open = await conn.isDBOpen?.().catch(() => ({ result: false }));
+  if (open?.result !== true) {
+    await conn.open();
+  }
+
   await conn.execute(`
     CREATE TABLE IF NOT EXISTS ambient_outbox (
       id TEXT PRIMARY KEY,

@@ -105,18 +105,17 @@ export default function AmbientSourcesPanel() {
     getAmbientRuntime().status(),
   );
   const [busyKeys, setBusyKeys] = useState<Set<SourceKey>>(new Set());
-  const { settings, patch } = useUserSettings();
+  const { patch } = useUserSettings();
 
   useEffect(() => {
     const rt = getAmbientRuntime();
     return rt.subscribe(() => setStatus(rt.status()));
   }, []);
 
-  // Toggle path: server settings are the single source of truth. We
-  // only PATCH here; the reconcile effect below picks up the new
-  // ``settings`` value and starts/stops the runtime source. This avoids
-  // the double-write race that exists when both toggle and effect drive
-  // the runtime.
+  // Toggle path: persist consent first, then apply it to the in-memory
+  // runtime. App.tsx has a separate settings hook instance, so it will
+  // handle boot-time reconciliation but does not see this panel's local
+  // PATCH result immediately.
   const toggle = useCallback(async (key: SourceKey, currentlyEnabled: boolean) => {
     setBusyKeys((prev) => {
       const next = new Set(prev);
@@ -124,9 +123,21 @@ export default function AmbientSourcesPanel() {
       return next;
     });
     try {
-      await patch({
-        ambientSources: { [key]: { enabled: !currentlyEnabled } },
-      });
+      const nextEnabled = !currentlyEnabled;
+      const updated = await patch({ ambientSources: { [key]: { enabled: nextEnabled } } });
+      if (!updated) return;
+
+      const rt = getAmbientRuntime();
+      const persistedEnabled = updated.ambientSources?.[key]?.enabled === true;
+      try {
+        if (persistedEnabled) {
+          await rt.start(key);
+        } else {
+          await rt.stop(key, { remember: false });
+        }
+      } catch {
+        // Runtime records per-source errors on status; keep the panel usable.
+      }
     } finally {
       setBusyKeys((prev) => {
         const next = new Set(prev);
@@ -136,10 +147,7 @@ export default function AmbientSourcesPanel() {
     }
   }, [patch]);
 
-  // No reconcile effect here — App.tsx's startAmbientUpload effect is
-  // the sole runtime driver and runs whenever the user's opt-in set
-  // changes, regardless of whether DebugPanel happens to be mounted.
-  // Toggle above just PATCHes; settings → App.tsx → runtime.
+  // App.tsx still owns boot-time reconciliation from saved settings.
 
   const flush = useCallback(async () => {
     await getAmbientRuntime().flush();
