@@ -173,7 +173,7 @@ sequenceDiagram
   Ing-->>FE: { results: [...] }
 ```
 
-`X-Device-Token` 服务端只存 bcrypt hash,明文只在 register / rotate 时返回一次。`device_fingerprint_hash`(sha256 of platform + 客户端 fingerprint)用来识别"换 deviceId 但实际同一台逻辑设备",rotate 时复用同一行。
+`X-Device-Token` 服务端只存 bcrypt hash,明文只在 register / rotate 时返回一次。`device_fingerprint_hash`(sha256 of platform + 客户端 fingerprint)用来识别"换 deviceId 但实际同一台逻辑设备";fingerprint 命中时复用原 server `device_id`,只刷新 token/metadata,不能把 registry 改到客户端新 UUID,否则旧 raw/signal evidence 会从可见设备下脱落。Native 前端优先用 Capacitor Device 的 app-visible identifier 做 fingerprint,同时把稳定的 `hardware_signature` 写进 metadata(不包含用户可改的设备名);`/api/devices/list` 会用 hardware signature 和 legacy iOS generic rows 做显示层收敛,避免同一台 iPhone 因 canonical/dev app 或旧无 fingerprint 记录显示成多台设备。
 
 ### Ingest per-item status(5 态契约)
 

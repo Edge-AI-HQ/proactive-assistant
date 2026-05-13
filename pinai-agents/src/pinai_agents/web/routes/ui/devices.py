@@ -49,6 +49,8 @@ router = APIRouter(prefix="/api/devices", tags=["devices"])
 
 _DEFAULT_TTL = timedelta(days=30)
 _VALID_PLATFORMS = ("ios", "android", "web", "wearable", "sensor", "embedded")
+_LEGACY_IOS_DISPLAY_NAMES = {"ios app", "iphone"}
+_LEGACY_IOS_MODELS = {"", "iphone"}
 
 
 # ── pydantic models ──
@@ -135,6 +137,61 @@ def _parse_source(raw: Any) -> tuple[str, str] | None:
     return scheme, ident
 
 
+def _device_metadata_value(metadata: dict[str, Any], key: str) -> str | None:
+    value = metadata.get(key)
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _norm_device_text(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
+def _is_legacy_ios_app_row(row) -> bool:
+    """Older iOS clients only sent app-install identity, not hardware-ish
+    metadata. Treat those generic rows as one display device so stale
+    canonical/dev app installs do not show as multiple iPhones."""
+    if row.platform != "ios":
+        return False
+    return (
+        _norm_device_text(row.display_name) in _LEGACY_IOS_DISPLAY_NAMES
+        and _norm_device_text(row.model) in _LEGACY_IOS_MODELS
+    )
+
+
+def _device_display_group_key(row) -> str | None:
+    hardware_signature = _device_metadata_value(row.metadata, "hardware_signature")
+    if hardware_signature:
+        return f"{row.platform}:hardware:{hardware_signature}"
+    if _is_legacy_ios_app_row(row):
+        return "ios:legacy-generic-phone"
+    if row.device_fingerprint_hash:
+        return f"{row.platform}:fingerprint:{row.device_fingerprint_hash}"
+    return None
+
+
+def _canonicalize_device_list(rows):
+    modern_platforms = {
+        r.platform
+        for r in rows
+        if _device_metadata_value(r.metadata, "hardware_signature")
+    }
+    seen: set[str] = set()
+    out = []
+    for row in rows:
+        if row.platform in modern_platforms and _is_legacy_ios_app_row(row):
+            continue
+        group_key = _device_display_group_key(row)
+        if group_key and group_key in seen:
+            continue
+        if group_key:
+            seen.add(group_key)
+        out.append(row)
+    return out
+
+
 # ── register / list / revoke / rotate (Supabase JWT) ──
 
 
@@ -176,7 +233,7 @@ async def list_devices(
 ) -> dict[str, Any]:
     async with user_scoped_tx(pool, user.id) as conn:
         repo = DevicesRepository(user.id, conn)
-        rows = await repo.list_active()
+        rows = _canonicalize_device_list(await repo.list_active())
     return {"items": [{
         "deviceId": r.device_id, "platform": r.platform,
         "displayName": r.display_name, "appVersion": r.app_version,
@@ -303,7 +360,7 @@ async def ingest_devices(
             continue
         by_device.setdefault(target_device, []).append(raw)
 
-    if not by_device and not wrapper_device_id:
+    if not by_device and not pre_results and not wrapper_device_id:
         raise HTTPException(400, "deviceId or signal `source` required")
 
     item_results: list[dict[str, Any]] = list(pre_results)
