@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import uuid
 
+import psycopg.errors
 import pytest
 
 from pinai_agents.web.db.repositories.chat_threads import ChatThreadsRepository
@@ -116,7 +117,7 @@ async def test_insert_rejects_main_thread_with_wrong_user_prefix(pool, user_ids)
 async def test_insert_rejects_card_thread_without_card_id(pool, user_ids):
     user_a, _ = user_ids
     async with user_scoped_tx(pool, user_a) as conn:
-        with pytest.raises(Exception):
+        with pytest.raises(psycopg.errors.CheckViolation):
             await ChatThreadsRepository(user_a, conn).insert_thread(
                 thread_id="card-thread-xyz", kind="card", card_id=None,
             )
@@ -128,7 +129,7 @@ async def test_insert_rejects_card_thread_id_card_id_mismatch(pool, user_ids):
     are rejected by the CHECK."""
     user_a, _ = user_ids
     async with user_scoped_tx(pool, user_a) as conn:
-        with pytest.raises(Exception):
+        with pytest.raises(psycopg.errors.CheckViolation):
             await ChatThreadsRepository(user_a, conn).insert_thread(
                 thread_id="card-thread-foo", kind="card", card_id="bar",
             )

@@ -111,6 +111,8 @@ ignore = [
 "src/pinai_agents/web/**/*.py"  = ["TID251"]
 "src/pinai_agents/chat/**/*.py" = ["TID251"]
 "tests/**/*.py"                 = ["TID251"]
+# scripts/ 是 dev/CI 工具,不跑在 chat 进程里,允许直接 import web 服务做 dry-run 验证。
+"scripts/**/*.py"               = ["TID251"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
