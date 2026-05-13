@@ -59,6 +59,10 @@ actor AudioStreamManager {
         captureSessionId = UUID().uuidString
         isCaptureRunning = true
         isPaused = false
+        // If iOS delivered an interruption began event but the matching ended
+        // event was missed while the WebView/runtime was paused, an explicit
+        // user restart should not leave capture permanently suppressed.
+        suppressionReasons.remove(.interruption)
         refreshMediaSuppression()
         setupMediaObservers()
 
@@ -90,6 +94,10 @@ actor AudioStreamManager {
         installClassifierCallbacksIfNeeded()
         guard !isClassificationRunning else { return }
         isClassificationRunning = true
+        // Same stale-interruption guard as startCapture(): the Debug panel and
+        // source toggle are explicit starts, so they should recover the audio
+        // engine from a wedged interruption state.
+        suppressionReasons.remove(.interruption)
         refreshMediaSuppression()
         setupMediaObservers()
         let ok = reconcileClassifierState()
