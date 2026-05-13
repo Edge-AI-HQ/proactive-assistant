@@ -66,6 +66,10 @@ export const AmbientAi: AmbientAiFacade = {
     stopActivityRecognition: () => native.visit.stopActivityRecognition(),
   },
 
+  geocoder: {
+    reverseGeocode: (options) => native.geocoder.reverseGeocode(options),
+  },
+
   device: {
     getState: () => native.device.getState(),
     startMonitoring: () => native.device.startMonitoring(),

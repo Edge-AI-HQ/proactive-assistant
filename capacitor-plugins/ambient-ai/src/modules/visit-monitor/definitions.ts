@@ -1,5 +1,7 @@
 import type { PluginListenerHandle, PermissionState } from '@capacitor/core';
 
+import type { PlaceInfo } from '../geocoder/definitions';
+
 export interface VisitEvent {
   arrivalAt: number;
   departureAt: number | null;
@@ -7,6 +9,11 @@ export interface VisitEvent {
   longitude: number;
   accuracy: number;
   confidence?: number;
+  /**
+   * Reverse-geocoded POI metadata attached natively by `VisitMonitorPlugin`.
+   * Optional: missing if the native geocode lookup failed or timed out.
+   */
+  place?: PlaceInfo;
 }
 
 export interface PositionResult {
@@ -15,6 +22,8 @@ export interface PositionResult {
   accuracy: number;
   altitude: number;
   timestamp: number;
+  /** Reverse-geocoded POI metadata attached natively. Optional. */
+  place?: PlaceInfo;
 }
 
 export interface ActivityEvent {

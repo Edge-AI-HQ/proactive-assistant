@@ -59,9 +59,12 @@ export class VisitSource implements AmbientSource {
     const ts = isArrival ? event.arrivalAt : (event.departureAt ?? event.arrivalAt);
     const lat = event.latitude.toFixed(4);
     const lng = event.longitude.toFixed(4);
+    const placeLabel =
+      event.place?.label ?? event.place?.place_name ?? event.place?.address;
+    const where = placeLabel ?? `${lat}, ${lng}`;
     const summary = isArrival
-      ? `Arrived @ ${lat}, ${lng} (±${Math.round(event.accuracy)}m)`
-      : `Departed @ ${lat}, ${lng}`;
+      ? `Arrived @ ${where} (±${Math.round(event.accuracy)}m)`
+      : `Departed @ ${where}`;
 
     this.ctx.push({
       kind: SIGNAL_KINDS.visit,
@@ -75,6 +78,7 @@ export class VisitSource implements AmbientSource {
         longitude: event.longitude,
         accuracy: event.accuracy,
         kind: isArrival ? "arrival" : "departure",
+        place: event.place,
       },
       // CLVisit objects emit twice per place (arrival + departure). Keying
       // by (lat,lng,timestamp) keeps both unique while letting retries

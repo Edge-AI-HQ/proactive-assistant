@@ -21,6 +21,10 @@ import type {
   DeviceStateSnapshot,
 } from '../modules/device-state/definitions';
 import type {
+  PlaceInfo,
+  ReverseGeocodeOptions,
+} from '../modules/geocoder/definitions';
+import type {
   HealthConnectPermissions,
   HeartRateEvent,
   SleepEvent,
@@ -74,6 +78,7 @@ export type { ActivityEvent, AltimeterEvent, AmbientLevelEvent, BatterySnapshot 
 export type { BatteryStartOptions, CalendarEventEvent, CalendarSummaryEvent };
 export type { ContactsSnapshot, DeviceStateSnapshot, FocusEvent, HeartRateEvent };
 export type { NearbyBTEvent, NotificationCountEvent, PhotosEvent, PositionResult };
+export type { PlaceInfo, ReverseGeocodeOptions };
 export type { SleepEvent, SoundClassification, StepsEvent, VisitEvent };
 
 export type SoundClassificationEvent = SoundClassifierEvent;
@@ -218,6 +223,10 @@ export interface VisitNamespace {
   stopActivityRecognition(): Promise<void>;
 }
 
+export interface GeocoderNamespace {
+  reverseGeocode(options: ReverseGeocodeOptions): Promise<PlaceInfo>;
+}
+
 export interface DeviceNamespace {
   getState(): Promise<DeviceStateSnapshot>;
   startMonitoring(): Promise<void>;
@@ -283,6 +292,7 @@ export interface AmbientAiFacade {
   audio: AudioNamespace;
   sound: SoundNamespace;
   visit: VisitNamespace;
+  geocoder: GeocoderNamespace;
   device: DeviceNamespace;
   calendar: CalendarNamespace;
   notifications: NotificationsNamespace;

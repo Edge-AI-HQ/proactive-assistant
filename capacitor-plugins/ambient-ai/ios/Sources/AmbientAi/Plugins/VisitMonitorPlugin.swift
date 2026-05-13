@@ -182,28 +182,40 @@ public class VisitMonitorPlugin: CAPPlugin, CAPBridgedPlugin, CLLocationManagerD
         positionManager?.stopUpdatingLocation()
         positionManager?.delegate = nil
         positionManager = nil
-        call.resolve([
-            "latitude": loc.coordinate.latitude,
-            "longitude": loc.coordinate.longitude,
-            "accuracy": loc.horizontalAccuracy,
-            "altitude": loc.altitude,
-            "timestamp": Int(loc.timestamp.timeIntervalSince1970 * 1000),
-        ])
+        let lat = loc.coordinate.latitude
+        let lng = loc.coordinate.longitude
+        Task {
+            let place = await GeocodeService.shared.lookup(lat: lat, lng: lng)
+            var payload: [String: Any] = [
+                "latitude": lat,
+                "longitude": lng,
+                "accuracy": loc.horizontalAccuracy,
+                "altitude": loc.altitude,
+                "timestamp": Int(loc.timestamp.timeIntervalSince1970 * 1000),
+            ]
+            payload["place"] = place.toDict()
+            call.resolve(payload)
+        }
     }
 
     public func locationManager(_ manager: CLLocationManager, didVisit visit: CLVisit) {
-        let payload: [String: Any] = [
-            "arrivalAt": Int(visit.arrivalDate.timeIntervalSince1970 * 1000),
-            "departureAt": visit.departureDate == Date.distantFuture
-                ? NSNull()
-                : Int(visit.departureDate.timeIntervalSince1970 * 1000),
-            "latitude": visit.coordinate.latitude,
-            "longitude": visit.coordinate.longitude,
-            "accuracy": visit.horizontalAccuracy,
-        ]
-
-        print("[VisitMonitor] Visit detected: \(payload)")
-        notifyListeners("visit", data: payload)
+        let lat = visit.coordinate.latitude
+        let lng = visit.coordinate.longitude
+        Task {
+            let place = await GeocodeService.shared.lookup(lat: lat, lng: lng)
+            var payload: [String: Any] = [
+                "arrivalAt": Int(visit.arrivalDate.timeIntervalSince1970 * 1000),
+                "departureAt": visit.departureDate == Date.distantFuture
+                    ? NSNull()
+                    : Int(visit.departureDate.timeIntervalSince1970 * 1000),
+                "latitude": lat,
+                "longitude": lng,
+                "accuracy": visit.horizontalAccuracy,
+            ]
+            payload["place"] = place.toDict()
+            print("[VisitMonitor] Visit detected: \(payload)")
+            notifyListeners("visit", data: payload)
+        }
     }
 
     public func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
