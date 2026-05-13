@@ -8,10 +8,16 @@ Per-event-type `data` payloads:
   * chat:thinking          — empty
   * chat:delta             — {delta: str}
   * chat:reasoning:delta   — {delta: str}     (Claude extended thinking)
-  * chat:tool:start        — {toolCallId, name, argsPreview}
+  * chat:tool:start        — {toolCallId, name, argsPreview, args?}
   * chat:tool:result       — {toolCallId, isError, meta}
   * chat:error             — {error: str}
   * chat:done              — empty
+
+`args` on chat:tool:start is the raw structured input (when JSON-serializable
+and under `_ARGS_FULL_LIMIT` bytes). It lets the frontend render specialized
+UI for selected tools (e.g. `write_todos` → TodoPanel) instead of parsing the
+truncated `argsPreview` string. Omitted for oversized payloads (e.g.
+`python_exec` carrying large code) — the frontend falls back to `argsPreview`.
 
 Note on extended thinking: agents run with `enable_thinking=True` and
 `ChatLiteLLMReasoning` (see runtime/llm.py) re-attaches LiteLLM's
@@ -52,6 +58,11 @@ logger = logging.getLogger(__name__)
 
 _ARGS_PREVIEW_LIMIT = 240
 _META_LIMIT = 300
+# Cap for the structured `args` field on chat:tool:start. Keeps the SSE wire
+# small while still fitting realistic structured inputs (e.g. write_todos
+# plans with ~20 entries ~ 2 KB). Tools with large inputs (python_exec code,
+# bulk uploads) exceed this and degrade to argsPreview-only.
+_ARGS_FULL_LIMIT = 8192
 
 
 def chat_thinking(*, trace_id: str | None = None) -> bytes:
@@ -68,13 +79,17 @@ def chat_reasoning_delta(text: str, *, trace_id: str | None = None) -> bytes:
 
 def chat_tool_start(
     *, tool_call_id: str, name: str, args_preview: str,
+    args: Any = None,
     trace_id: str | None = None,
 ) -> bytes:
-    return emit(EV_CHAT_TOOL_START, {
+    payload: dict[str, Any] = {
         "toolCallId": tool_call_id,
         "name": name,
         "argsPreview": args_preview[:_ARGS_PREVIEW_LIMIT],
-    }, trace_id=trace_id)
+    }
+    if args is not None:
+        payload["args"] = args
+    return emit(EV_CHAT_TOOL_START, payload, trace_id=trace_id)
 
 
 def chat_tool_result(
@@ -159,6 +174,26 @@ def _safe_preview(value: Any, limit: int = 240) -> str:
     return text
 
 
+def _safe_args(value: Any, max_bytes: int = _ARGS_FULL_LIMIT) -> Any | None:
+    """Return raw structured input when JSON-serializable and under the size
+    cap; None otherwise.
+
+    The frontend uses this for tools that render specialized UI (write_todos
+    → TodoPanel, future structured renderers). The size cap keeps the SSE
+    wire small — large inputs (e.g. python_exec carrying 50KB of code) drop
+    to None and the existing `argsPreview` string still describes the call.
+    """
+    if value is None:
+        return None
+    try:
+        encoded = json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return None
+    if len(encoded.encode("utf-8")) > max_bytes:
+        return None
+    return value
+
+
 async def langgraph_to_sse(
     events: AsyncIterator[dict[str, Any]],
     *,
@@ -193,10 +228,13 @@ async def langgraph_to_sse(
             elif etype == "on_tool_start":
                 tool_call_id = event.get("run_id") or ""
                 name = event.get("name") or "tool"
-                args_preview = _safe_preview(data.get("input"))
+                raw_input = data.get("input")
+                args_preview = _safe_preview(raw_input)
                 yield chat_tool_start(
                     tool_call_id=tool_call_id, name=name,
-                    args_preview=args_preview, trace_id=trace_id,
+                    args_preview=args_preview,
+                    args=_safe_args(raw_input),
+                    trace_id=trace_id,
                 )
 
             elif etype == "on_tool_end":
