@@ -30,14 +30,20 @@ async def list_signals(
 ):
     actual_status = None if status_filter == "all" else status_filter
     since = None
+    before = None
     if hours is not None:
         from datetime import UTC, timedelta
-        since = datetime.now(UTC) - timedelta(hours=hours)
+        now = datetime.now(UTC)
+        since = now - timedelta(hours=hours)
+        # `hours` means "past N hours"; without an upper bound, future
+        # calendar-derived signals can crowd out genuinely recent device
+        # signals in the DESC/LIMIT page that generator consumes.
+        before = now
     async with user_scoped_tx(pool, run.user_id) as conn:
         repo = PersonalSignalsRepository(run.user_id, conn)
         rows, _total = await repo.list_recent(
             status=actual_status, kind=kind,
-            min_salience=min_salience, since=since, limit=limit,
+            min_salience=min_salience, since=since, before=before, limit=limit,
         )
     return {"items": [{
         "id": r.id, "kind": r.kind, "title": r.title, "summary": r.summary,
