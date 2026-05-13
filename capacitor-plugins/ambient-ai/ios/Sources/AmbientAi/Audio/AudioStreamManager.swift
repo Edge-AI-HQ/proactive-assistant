@@ -111,10 +111,6 @@ actor AudioStreamManager {
         emitState()
     }
 
-    func classifierActive() -> Bool {
-        isClassificationRunning
-    }
-
     func snapshot() -> AudioCaptureSnapshot {
         AudioCaptureSnapshot(
             running: isCaptureRunning,

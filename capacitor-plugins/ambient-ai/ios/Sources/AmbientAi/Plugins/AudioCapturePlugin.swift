@@ -30,7 +30,6 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
         }
     ))
     private var playbackPlayer: AVAudioPlayer?
-    private var pausedClassificationForPlayback = false
 
     // MARK: - Permissions
 
@@ -154,11 +153,12 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
                 return
             }
 
-            let wasClassifierActive = await self.audioManager.classifierActive()
-            if wasClassifierActive {
-                await self.audioManager.stopClassification()
-            }
-            self.pausedClassificationForPlayback = wasClassifierActive
+            // Suppression flips shouldClassifierRun off via the audio
+            // manager's reconcile path, which tears down the SoundAnalysis
+            // engine and deactivates the session — but leaves the
+            // isCaptureRunning / isClassificationRunning desired state
+            // untouched so resumption is automatic on un-suppress.
+            await self.audioManager.setPlaybackSuppressed(true)
 
             let session = AVAudioSession.sharedInstance()
             do {
@@ -166,7 +166,7 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
                 try session.setActive(true, options: [])
             } catch {
                 self.notifyAudioError(error.localizedDescription, source: "playback")
-                await self.restoreClassifierAfterPlayback()
+                await self.restoreAfterPlayback()
                 DispatchQueue.main.async {
                     call.reject(error.localizedDescription, "PLAYBACK_SESSION_FAILED")
                 }
@@ -183,7 +183,7 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
                     player.play()
                     call.resolve()
                 } catch {
-                    Task { await self.restoreClassifierAfterPlayback() }
+                    Task { await self.restoreAfterPlayback() }
                     self.notifyAudioError(error.localizedDescription, source: "playback")
                     call.reject(error.localizedDescription, "PLAYBACK_FAILED")
                 }
@@ -195,24 +195,16 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
         playbackPlayer?.stop()
         playbackPlayer = nil
         Task { [weak self] in
-            await self?.restoreClassifierAfterPlayback()
+            await self?.restoreAfterPlayback()
             DispatchQueue.main.async { call.resolve() }
         }
     }
 
-    private func restoreClassifierAfterPlayback() async {
+    private func restoreAfterPlayback() async {
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
-        if pausedClassificationForPlayback {
-            pausedClassificationForPlayback = false
-            do {
-                try await audioManager.startClassification()
-            } catch {
-                notifyAudioError(
-                    "Failed to resume classification after playback: \(error.localizedDescription)",
-                    source: "soundAnalysis"
-                )
-            }
-        }
+        // Un-suppressing reconciles classifier state: the audio manager
+        // restarts the SoundAnalysis engine with .playAndRecord/.measurement
+        // when isCaptureRunning or isClassificationRunning was still true.
         await audioManager.setPlaybackSuppressed(false)
     }
 
@@ -327,7 +319,7 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
     public func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         playbackPlayer = nil
         Task { [weak self] in
-            await self?.restoreClassifierAfterPlayback()
+            await self?.restoreAfterPlayback()
         }
     }
 
@@ -337,7 +329,7 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
             notifyAudioError(error.localizedDescription, source: "playback")
         }
         Task { [weak self] in
-            await self?.restoreClassifierAfterPlayback()
+            await self?.restoreAfterPlayback()
         }
     }
 }
