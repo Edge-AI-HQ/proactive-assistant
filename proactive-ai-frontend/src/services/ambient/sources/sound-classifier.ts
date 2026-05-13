@@ -15,7 +15,7 @@ export interface SoundClassifierOptions {
 }
 
 const DEFAULT_OPTS: Required<SoundClassifierOptions> = {
-  minConfidence: 0.3,
+  minConfidence: 0.5,
   dedupeWindowMs: 4_000,
 };
 

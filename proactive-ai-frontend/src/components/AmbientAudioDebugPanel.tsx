@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Mic2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { ChevronDown, ChevronRight, Mic2 } from "lucide-react";
 import {
   AmbientAi,
   type AmbientEventMap,
@@ -99,6 +99,30 @@ const AUDIO_EVENT_NAMES: readonly AudioDebugEventName[] = [
 const SPEECH_CONFIDENCE_THRESHOLD = 0.60;
 const SPEECH_CONSECUTIVE_FRAMES = 1;
 const AUDIO_CONFIG_STORAGE_KEY = "pinai:ambient-audio-debug-config:v1";
+const SOUND_CONFIDENCE_THRESHOLD_STORAGE_KEY = "pinai:ambient-audio-debug-sound-threshold:v1";
+const DEFAULT_SOUND_CONFIDENCE_PERCENT = 50;
+
+function readStoredSoundConfidencePercent(): number {
+  if (typeof window === "undefined") return DEFAULT_SOUND_CONFIDENCE_PERCENT;
+  try {
+    const raw = window.localStorage.getItem(SOUND_CONFIDENCE_THRESHOLD_STORAGE_KEY);
+    if (!raw) return DEFAULT_SOUND_CONFIDENCE_PERCENT;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return DEFAULT_SOUND_CONFIDENCE_PERCENT;
+    return Math.min(100, Math.max(0, Math.round(parsed)));
+  } catch {
+    return DEFAULT_SOUND_CONFIDENCE_PERCENT;
+  }
+}
+
+function saveStoredSoundConfidencePercent(value: number): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SOUND_CONFIDENCE_THRESHOLD_STORAGE_KEY, String(value));
+  } catch {
+    return;
+  }
+}
 
 const INITIAL_CONFIG: AudioConfigForm = {
   cloudMode: "off",
@@ -266,6 +290,42 @@ function buildConfig(form: AudioConfigForm): AudioCaptureConfig {
   return config;
 }
 
+function CollapsibleSection({
+  title,
+  count,
+  defaultOpen = true,
+  children,
+}: {
+  title: string;
+  count?: number;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        className="flex w-full items-center gap-1 text-[10px] font-medium text-foreground/40 uppercase tracking-wider hover:text-foreground/60 transition-colors"
+      >
+        {open ? <ChevronDown size={12} strokeWidth={1.75} /> : <ChevronRight size={12} strokeWidth={1.75} />}
+        <span>{title}</span>
+        {typeof count === "number" && (
+          <span className="ml-1 rounded-md bg-foreground/10 px-1.5 py-0.5 text-[9px] tabular-nums text-foreground/55 normal-case tracking-normal">
+            {count}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="mt-1.5 max-h-[280px] overflow-y-auto space-y-1.5 pr-1">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function NumberField({
   label,
   value,
@@ -316,27 +376,47 @@ export default function AmbientAudioDebugPanel() {
     updatedAt: Date.now(),
   });
   const [runs, setRuns] = useState<RecordingRun[]>([]);
+  const [soundConfidencePercent, setSoundConfidencePercent] = useState<number>(() =>
+    readStoredSoundConfidencePercent(),
+  );
   const pendingSpeechConfidenceRef = useRef<number | null>(null);
+  const soundConfidenceThresholdRef = useRef<number>(soundConfidencePercent / 100);
+
+  useEffect(() => {
+    soundConfidenceThresholdRef.current = soundConfidencePercent / 100;
+    saveStoredSoundConfidencePercent(soundConfidencePercent);
+  }, [soundConfidencePercent]);
 
   useEffect(() => {
     let active = true;
     const handles = AUDIO_EVENT_NAMES.map((eventName) =>
       AmbientAi.addListener(eventName, (event) => {
         if (!active) return;
-        setEvents((prev) => [
-          {
-            id: Date.now() + prev.length,
-            name: eventName,
-            receivedAt: Date.now(),
-            preview: previewEvent(eventName, event),
-          },
-          ...prev,
-        ].slice(0, 12));
+        const lowConfClassification =
+          eventName === "soundClassification" &&
+          (() => {
+            const top = (event as AmbientEventMap["soundClassification"]).classifications[0];
+            return !top || top.confidence < soundConfidenceThresholdRef.current;
+          })();
+        if (!lowConfClassification) {
+          setEvents((prev) => [
+            {
+              id: Date.now() + prev.length,
+              name: eventName,
+              receivedAt: Date.now(),
+              preview: previewEvent(eventName, event),
+            },
+            ...prev,
+          ].slice(0, 12));
+        }
 
         if (eventName === "soundClassification") {
           const frame = event as AmbientEventMap["soundClassification"];
           const top = frame.classifications[0];
-          const hit = top?.label.toLowerCase() === "speech" && top.confidence >= SPEECH_CONFIDENCE_THRESHOLD;
+          if (!top || top.confidence < soundConfidenceThresholdRef.current) {
+            return;
+          }
+          const hit = top.label.toLowerCase() === "speech" && top.confidence >= SPEECH_CONFIDENCE_THRESHOLD;
           setSpeechGate((prevGate) => ({
             ...prevGate,
             top: frame.classifications.slice(0, 3),
@@ -391,18 +471,20 @@ export default function AmbientAudioDebugPanel() {
           }));
           const speechConfidence = pendingSpeechConfidenceRef.current;
           pendingSpeechConfidenceRef.current = null;
-          setRuns((prevRuns) => [{
-            id: `${ready.wavId}-${ready.burstId}`,
-            burstId: ready.burstId,
-            wavId: ready.wavId,
-            durationMs: ready.durationMs,
-            text: ready.text,
-            provider: ready.provider,
-            fallback: ready.fallback,
-            confidence: speechConfidence,
-            transcriptLocale: ready.transcriptLocale ?? null,
-            capturedAt: ready.capturedAt,
-          }, ...prevRuns].slice(0, 8));
+          if (text) {
+            setRuns((prevRuns) => [{
+              id: `${ready.wavId}-${ready.burstId}`,
+              burstId: ready.burstId,
+              wavId: ready.wavId,
+              durationMs: ready.durationMs,
+              text: ready.text,
+              provider: ready.provider,
+              fallback: ready.fallback,
+              confidence: speechConfidence,
+              transcriptLocale: ready.transcriptLocale ?? null,
+              capturedAt: ready.capturedAt,
+            }, ...prevRuns].slice(0, 8));
+          }
         }
 
         if (eventName === "audioError") {
@@ -603,6 +685,45 @@ export default function AmbientAudioDebugPanel() {
 
       <div className="mt-3 rounded-lg bg-white/60 border border-foreground/10 px-3 py-2">
         <div className="flex items-center justify-between gap-2">
+          <span className="text-[10px] font-medium text-foreground/40 uppercase tracking-wider">Sound min confidence</span>
+          <span className="text-[10px] text-foreground/45 tabular-nums">{soundConfidencePercent}%</span>
+        </div>
+        <div className="mt-1.5 flex items-center gap-2">
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            value={soundConfidencePercent}
+            onChange={(event) => {
+              const next = Number(event.currentTarget.value);
+              if (Number.isFinite(next)) {
+                setSoundConfidencePercent(Math.min(100, Math.max(0, Math.round(next))));
+              }
+            }}
+            className="flex-1 accent-foreground/60"
+          />
+          <input
+            type="number"
+            min={0}
+            max={100}
+            value={soundConfidencePercent}
+            onChange={(event) => {
+              const next = Number(event.currentTarget.value);
+              if (Number.isFinite(next)) {
+                setSoundConfidencePercent(Math.min(100, Math.max(0, Math.round(next))));
+              }
+            }}
+            className="w-14 rounded-md border border-foreground/10 bg-white/60 px-2 py-1 text-[12px] tabular-nums text-foreground/70 focus:outline-none focus:ring-2 focus:ring-primary/30"
+          />
+        </div>
+        <p className="mt-1 text-[10px] text-foreground/40 leading-snug">
+          Drops sound classification events below this confidence from Recent audio events.
+        </p>
+      </div>
+
+      <div className="mt-3 rounded-lg bg-white/60 border border-foreground/10 px-3 py-2">
+        <div className="flex items-center justify-between gap-2">
           <span className="text-[10px] font-medium text-foreground/40 uppercase tracking-wider">Speech gate</span>
           <span className="text-[10px] text-foreground/45">speech &gt;= 60% · 1 frame</span>
         </div>
@@ -651,8 +772,7 @@ export default function AmbientAudioDebugPanel() {
       </div>
 
       <div className="mt-3">
-        <span className="text-[10px] font-medium text-foreground/40 uppercase tracking-wider">Recent recording runs</span>
-        <div className="mt-1.5 space-y-1.5">
+        <CollapsibleSection title="Recent recording runs" count={runs.length}>
           {runs.length === 0 ? (
             <p className="text-[11px] text-foreground/30">No recording runs yet</p>
           ) : runs.map((run) => (
@@ -672,16 +792,15 @@ export default function AmbientAudioDebugPanel() {
                 {formatTime(run.capturedAt)} · {formatDuration(run.durationMs)} · {run.provider}{run.transcriptLocale ? ` · ${run.transcriptLocale}` : ""}{run.confidence !== null ? ` · speech ${(run.confidence * 100).toFixed(0)}%` : ""}
               </p>
               <p className="mt-1 text-[11px] text-foreground/60 leading-snug">
-                {run.text.trim() ? run.text : "Empty transcript"}
+                {run.text}
               </p>
             </div>
           ))}
-        </div>
+        </CollapsibleSection>
       </div>
 
       <div className="mt-3">
-        <span className="text-[10px] font-medium text-foreground/40 uppercase tracking-wider">Recent WAV captures</span>
-        <div className="mt-1.5 space-y-1.5">
+        <CollapsibleSection title="Recent WAV captures" count={captures.length}>
           {captures.length === 0 ? (
             <p className="text-[11px] text-foreground/30">No captures loaded</p>
           ) : captures.map((capture) => (
@@ -702,12 +821,11 @@ export default function AmbientAudioDebugPanel() {
               </p>
             </div>
           ))}
-        </div>
+        </CollapsibleSection>
       </div>
 
       <div className="mt-3">
-        <span className="text-[10px] font-medium text-foreground/40 uppercase tracking-wider">Pending transcript drain</span>
-        <div className="mt-1.5 space-y-1.5">
+        <CollapsibleSection title="Pending transcript drain" count={drained.length}>
           {drained.length === 0 ? (
             <p className="text-[11px] text-foreground/30">No drained transcripts</p>
           ) : drained.map((transcript) => (
@@ -715,12 +833,11 @@ export default function AmbientAudioDebugPanel() {
               {transcript.wavId}{transcript.transcriptLocale ? ` · ${transcript.transcriptLocale}` : ""} · {transcript.text}
             </p>
           ))}
-        </div>
+        </CollapsibleSection>
       </div>
 
       <div className="mt-3">
-        <span className="text-[10px] font-medium text-foreground/40 uppercase tracking-wider">Recent audio events</span>
-        <div className="mt-1.5 space-y-1.5">
+        <CollapsibleSection title="Recent audio events" count={events.length}>
           {events.length === 0 ? (
             <p className="text-[11px] text-foreground/30">No audio events yet</p>
           ) : events.map((event) => (
@@ -732,7 +849,7 @@ export default function AmbientAudioDebugPanel() {
               <p className="mt-1 text-[11px] text-foreground/60 leading-snug line-clamp-2">{event.preview}</p>
             </div>
           ))}
-        </div>
+        </CollapsibleSection>
       </div>
 
       <div className="mt-3 rounded-lg bg-amber-50/70 border border-amber-200 px-3 py-2">

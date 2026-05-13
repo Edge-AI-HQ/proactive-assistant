@@ -305,10 +305,10 @@ describe("AmbientAudioDebugPanel", () => {
 
     expect(await screen.findByText("Recording session")).toBeTruthy();
     expect(screen.getByText("empty")).toBeTruthy();
-    expect(screen.getAllByText("Empty transcript").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/wav-empty/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/local_speech/).length).toBeGreaterThan(0);
     expect(screen.getByText("Recent recording runs")).toBeTruthy();
+    expect(screen.getByText("No recording runs yet")).toBeTruthy();
   });
 
 

@@ -30,6 +30,7 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
         }
     ))
     private var playbackPlayer: AVAudioPlayer?
+    private var pausedClassificationForPlayback = false
 
     // MARK: - Permissions
 
@@ -153,7 +154,25 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
                 return
             }
 
-            await self.audioManager.setPlaybackSuppressed(true)
+            let wasClassifierActive = await self.audioManager.classifierActive()
+            if wasClassifierActive {
+                await self.audioManager.stopClassification()
+            }
+            self.pausedClassificationForPlayback = wasClassifierActive
+
+            let session = AVAudioSession.sharedInstance()
+            do {
+                try session.setCategory(.playback, mode: .default, options: [])
+                try session.setActive(true, options: [])
+            } catch {
+                self.notifyAudioError(error.localizedDescription, source: "playback")
+                await self.restoreClassifierAfterPlayback()
+                DispatchQueue.main.async {
+                    call.reject(error.localizedDescription, "PLAYBACK_SESSION_FAILED")
+                }
+                return
+            }
+
             DispatchQueue.main.async {
                 do {
                     self.playbackPlayer?.stop()
@@ -164,7 +183,7 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
                     player.play()
                     call.resolve()
                 } catch {
-                    Task { await self.audioManager.setPlaybackSuppressed(false) }
+                    Task { await self.restoreClassifierAfterPlayback() }
                     self.notifyAudioError(error.localizedDescription, source: "playback")
                     call.reject(error.localizedDescription, "PLAYBACK_FAILED")
                 }
@@ -176,9 +195,25 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
         playbackPlayer?.stop()
         playbackPlayer = nil
         Task { [weak self] in
-            await self?.audioManager.setPlaybackSuppressed(false)
+            await self?.restoreClassifierAfterPlayback()
             DispatchQueue.main.async { call.resolve() }
         }
+    }
+
+    private func restoreClassifierAfterPlayback() async {
+        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        if pausedClassificationForPlayback {
+            pausedClassificationForPlayback = false
+            do {
+                try await audioManager.startClassification()
+            } catch {
+                notifyAudioError(
+                    "Failed to resume classification after playback: \(error.localizedDescription)",
+                    source: "soundAnalysis"
+                )
+            }
+        }
+        await audioManager.setPlaybackSuppressed(false)
     }
 
     // MARK: - Sound classification skeleton
@@ -292,7 +327,7 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
     public func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         playbackPlayer = nil
         Task { [weak self] in
-            await self?.audioManager.setPlaybackSuppressed(false)
+            await self?.restoreClassifierAfterPlayback()
         }
     }
 
@@ -302,7 +337,7 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
             notifyAudioError(error.localizedDescription, source: "playback")
         }
         Task { [weak self] in
-            await self?.audioManager.setPlaybackSuppressed(false)
+            await self?.restoreClassifierAfterPlayback()
         }
     }
 }
