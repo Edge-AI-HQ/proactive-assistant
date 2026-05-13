@@ -32,6 +32,7 @@ export default defineConfig(({ mode }) => {
     // of its own host (apis-era /proactive/ subpath retired along with apis).
     base: "/",
     resolve: {
+      dedupe: ["react", "react-dom"],
       alias: {
         "@": path.resolve(__dirname, "src"),
       },
@@ -78,6 +79,7 @@ export default defineConfig(({ mode }) => {
       environment: "jsdom",
       globals: true,
       include: ["src/**/*.{test,spec}.{ts,tsx}"],
+      setupFiles: ["src/testSetup.ts"],
     },
   };
 });

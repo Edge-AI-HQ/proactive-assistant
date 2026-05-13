@@ -17,6 +17,7 @@ runs renew lease via heartbeat_run).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 
@@ -168,12 +169,10 @@ async def tick_loop(
             # Wait for either the timeout (interval) or a NOTIFY wake.
             # asyncio.wait_for swallows TimeoutError and clears the event
             # exactly once per loop iteration.
-            try:
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(
                     wake_event.wait(), timeout=interval_seconds,
                 )
-            except TimeoutError:
-                pass
             wake_event.clear()
     except asyncio.CancelledError:
         logger.info("scheduler tick_loop cancelled")

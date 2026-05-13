@@ -24,6 +24,14 @@ const TOOLKIT_LABELS: Record<string, string> = {
   zoom: "Zoom",
 };
 
+const GOOGLE_IDENTITY_TOOLKITS = new Set([
+  "gmail",
+  "googlecalendar",
+  "googledrive",
+  "googledocs",
+  "googlesheets",
+]);
+
 export interface ComposioIdentityConnection {
   toolkit: string;
   status?: string;
@@ -137,7 +145,7 @@ export function formatComposioToolkitName(toolkit: string): string {
 
 export function resolveComposioConnectionIdentity(
   conn: ComposioIdentityConnection,
-  _allConnections: ComposioIdentityConnection[],
+  allConnections: ComposioIdentityConnection[],
 ): string | null {
   // Backend-resolved label is authoritative. Populated for every
   // connection post-migration 040 (eager resolve at /wait time, lazy
@@ -146,7 +154,21 @@ export function resolveComposioConnectionIdentity(
   // backend, and for transient cases where the label hasn't been
   // persisted yet (legacy pre-040 connections without a row).
   if (conn.label) return conn.label;
-  return extractComposioDisplayIdentity(conn.userInfo);
+  const directIdentity = extractComposioDisplayIdentity(conn.userInfo);
+  if (directIdentity) return directIdentity;
+
+  const toolkit = conn.toolkit.trim().toLowerCase();
+  if (!GOOGLE_IDENTITY_TOOLKITS.has(toolkit)) return null;
+
+  for (const other of allConnections) {
+    if (other === conn) continue;
+    const otherToolkit = other.toolkit.trim().toLowerCase();
+    if (!GOOGLE_IDENTITY_TOOLKITS.has(otherToolkit)) continue;
+    const identity = other.label || extractComposioDisplayIdentity(other.userInfo);
+    if (identity) return identity;
+  }
+
+  return null;
 }
 
 export function formatComposioConnectionIdentity(
