@@ -63,20 +63,28 @@ interface RecordingRun {
 
 type AudioRecognitionLocale = "auto" | "zh-CN" | "en-US";
 
-type AudioConfigForm = Required<Pick<
-  AudioCaptureConfig,
-  | "cloudMode"
-  | "cloudApiKey"
-  | "modelName"
+type AudioConfigNumberField =
   | "cloudRefineTimeoutMs"
   | "preRollMs"
   | "postRollMs"
   | "maxBurstMs"
   | "wavRetentionTtlMs"
-  | "wavMaxFiles"
->> & {
+  | "wavMaxFiles";
+
+interface AudioConfigForm {
+  cloudMode: NonNullable<AudioCaptureConfig["cloudMode"]>;
   recognitionLocale: AudioRecognitionLocale;
-};
+  cloudApiKey: string;
+  modelName: string;
+  cloudRefineTimeoutMs: string;
+  preRollMs: string;
+  postRollMs: string;
+  maxBurstMs: string;
+  wavRetentionTtlMs: string;
+  wavMaxFiles: string;
+}
+
+type StoredAudioConfigForm = Omit<AudioConfigForm, "cloudApiKey">;
 
 const AUDIO_EVENT_NAMES: readonly AudioDebugEventName[] = [
   "audioState",
@@ -90,19 +98,29 @@ const AUDIO_EVENT_NAMES: readonly AudioDebugEventName[] = [
 
 const SPEECH_CONFIDENCE_THRESHOLD = 0.60;
 const SPEECH_CONSECUTIVE_FRAMES = 1;
+const AUDIO_CONFIG_STORAGE_KEY = "pinai:ambient-audio-debug-config:v1";
 
 const INITIAL_CONFIG: AudioConfigForm = {
   cloudMode: "off",
   recognitionLocale: "auto",
   cloudApiKey: "",
   modelName: "",
-  cloudRefineTimeoutMs: 15000,
-  preRollMs: 700,
-  postRollMs: 1200,
-  maxBurstMs: 10000,
-  wavRetentionTtlMs: 3600000,
-  wavMaxFiles: 12,
+  cloudRefineTimeoutMs: "15000",
+  preRollMs: "500",
+  postRollMs: "10000",
+  maxBurstMs: "30000",
+  wavRetentionTtlMs: "3600000",
+  wavMaxFiles: "12",
 };
+
+const AUDIO_CONFIG_NUMBER_FIELDS: readonly AudioConfigNumberField[] = [
+  "cloudRefineTimeoutMs",
+  "preRollMs",
+  "postRollMs",
+  "maxBurstMs",
+  "wavRetentionTtlMs",
+  "wavMaxFiles",
+];
 
 function formatTime(value: string | number): string {
   const date = typeof value === "number" ? new Date(value) : new Date(value);
@@ -123,8 +141,69 @@ function formatBytes(byteSize: number): string {
   return `${(byteSize / 1000).toFixed(1)} KB`;
 }
 
-function parseOptionalNumber(value: number): number | undefined {
-  return Number.isFinite(value) && value > 0 ? value : undefined;
+function parseOptionalNumber(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const numeric = Number(trimmed);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : undefined;
+}
+
+function isCloudMode(value: unknown): value is AudioConfigForm["cloudMode"] {
+  return value === "off" || value === "devDirect" || value === "proxy";
+}
+
+function isRecognitionLocale(value: unknown): value is AudioRecognitionLocale {
+  return value === "auto" || value === "zh-CN" || value === "en-US";
+}
+
+function storedText(value: unknown, fallback: string): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return fallback;
+}
+
+function readStoredConfig(): AudioConfigForm | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(AUDIO_CONFIG_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<Record<keyof StoredAudioConfigForm, unknown>>;
+    const next: AudioConfigForm = {
+      ...INITIAL_CONFIG,
+      cloudApiKey: "",
+      cloudMode: isCloudMode(parsed.cloudMode) ? parsed.cloudMode : INITIAL_CONFIG.cloudMode,
+      recognitionLocale: isRecognitionLocale(parsed.recognitionLocale)
+        ? parsed.recognitionLocale
+        : INITIAL_CONFIG.recognitionLocale,
+      modelName: storedText(parsed.modelName, INITIAL_CONFIG.modelName),
+    };
+    for (const key of AUDIO_CONFIG_NUMBER_FIELDS) {
+      next[key] = storedText(parsed[key], INITIAL_CONFIG[key]);
+    }
+    return next;
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredConfig(form: AudioConfigForm): void {
+  if (typeof window === "undefined") return;
+  const stored: StoredAudioConfigForm = {
+    cloudMode: form.cloudMode,
+    recognitionLocale: form.recognitionLocale,
+    modelName: form.modelName,
+    cloudRefineTimeoutMs: form.cloudRefineTimeoutMs,
+    preRollMs: form.preRollMs,
+    postRollMs: form.postRollMs,
+    maxBurstMs: form.maxBurstMs,
+    wavRetentionTtlMs: form.wavRetentionTtlMs,
+    wavMaxFiles: form.wavMaxFiles,
+  };
+  try {
+    window.localStorage.setItem(AUDIO_CONFIG_STORAGE_KEY, JSON.stringify(stored));
+  } catch {
+    return;
+  }
 }
 
 function summarizeAudioState(state: AudioState): string {
@@ -193,8 +272,8 @@ function NumberField({
   onChange,
 }: {
   label: string;
-  value: number;
-  onChange: (value: number) => void;
+  value: string;
+  onChange: (value: string) => void;
 }) {
   return (
     <label className="block text-[10px] font-medium text-foreground/45">
@@ -203,7 +282,7 @@ function NumberField({
         type="number"
         min={0}
         value={value}
-        onChange={(event) => onChange(event.currentTarget.valueAsNumber)}
+        onChange={(event) => onChange(event.currentTarget.value)}
         className="mt-1 w-full rounded-md border border-foreground/10 bg-white/60 px-2 py-1 text-[12px] text-foreground/70 focus:outline-none focus:ring-2 focus:ring-primary/30"
       />
     </label>
@@ -211,7 +290,7 @@ function NumberField({
 }
 
 export default function AmbientAudioDebugPanel() {
-  const [form, setForm] = useState<AudioConfigForm>(INITIAL_CONFIG);
+  const [form, setForm] = useState<AudioConfigForm>(() => readStoredConfig() ?? INITIAL_CONFIG);
   const [state, setState] = useState<AudioState | null>(null);
   const [captures, setCaptures] = useState<RecentAudioCapture[]>([]);
   const [drained, setDrained] = useState<TranscriptReadyEvent[]>([]);
@@ -344,14 +423,23 @@ export default function AmbientAudioDebugPanel() {
     };
   }, []);
 
-  const updateNumber = useCallback((key: keyof AudioConfigForm, value: number) => {
-    setForm((prev) => ({ ...prev, [key]: Number.isFinite(value) ? value : 0 }));
+  useEffect(() => {
+    const storedConfig = readStoredConfig();
+    if (!storedConfig) return;
+    void AmbientAi.audio.configure(buildConfig(storedConfig)).catch((error) => {
+      setStatus(`Saved config failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }, []);
+
+  const updateNumber = useCallback((key: AudioConfigNumberField, value: string) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
   }, []);
 
   const applyConfig = useCallback(async () => {
     setStatus("Applying config…");
     try {
       await AmbientAi.audio.configure(buildConfig(form));
+      saveStoredConfig(form);
       setStatus("Config applied");
     } catch (error) {
       setStatus(`Config failed: ${error instanceof Error ? error.message : String(error)}`);

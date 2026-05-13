@@ -10,8 +10,8 @@ struct AudioCaptureConfig {
     static let defaultModelName = "gpt-4o-transcribe"
     static let defaultCloudRefineTimeoutMs = 20_000
     static let defaultPreRollMs = 500
-    static let defaultPostRollMs = 1_200
-    static let defaultMaxBurstMs = 60_000
+    static let defaultPostRollMs = 10_000
+    static let defaultMaxBurstMs = 30_000
     static let defaultMinBurstMs = 800
     static let defaultWavRetentionTtlMs = 60 * 60 * 1_000
     static let defaultWavMaxBytes = 100 * 1024 * 1024

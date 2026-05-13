@@ -34,7 +34,7 @@ describe("BrowserView", () => {
   });
 
   test("Keyboard button is rendered in native mode", () => {
-    renderBrowserView();
+    renderBrowserView({ controlMode: "user" });
     expect(screen.getByTitle("Type")).toBeTruthy();
   });
 });
