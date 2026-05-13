@@ -1,5 +1,5 @@
 {
-  "originHash" : "10e95c4b093c558c1c408abfc2505dfc7b2e649c78cea8ad39cc7076685e4bd7",
+  "originHash" : "b02612d030a7a1da20fac3cda3be1bf8d3c239acdf31aae78b6deee57f8c7647",
   "pins" : [
     {
       "identity" : "capacitor-swift-pm",
@@ -33,8 +33,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/sqlcipher/SQLCipher.swift.git",
       "state" : {
-        "revision" : "967b937db0b24508d5674c46ddd4d064a888a304",
-        "version" : "4.15.0"
+        "revision" : "07bf6bc2191a063d6f1e7c3b5f276a3fadfe36b7",
+        "version" : "4.16.0"
       }
     },
     {

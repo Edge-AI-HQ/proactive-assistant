@@ -85,6 +85,25 @@ vi.mock("@pin/capacitor-ambient-ai", () => {
 describe("AmbientAudioDebugPanel", () => {
   beforeEach(() => {
     mockControls.resetAmbientAudioMocks();
+    localStorage.clear();
+  });
+
+  test("uses old app-aligned default capture timings", async () => {
+    render(<AmbientAudioDebugPanel />);
+
+    expect((screen.getByLabelText("Pre-roll ms") as HTMLInputElement).value).toBe("500");
+    expect((screen.getByLabelText("Post-roll ms") as HTMLInputElement).value).toBe("10000");
+    expect((screen.getByLabelText("Max burst ms") as HTMLInputElement).value).toBe("30000");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /apply audio config/i }));
+    });
+
+    expect(AmbientAi.audio.configure).toHaveBeenCalledWith(expect.objectContaining({
+      preRollMs: 500,
+      postRollMs: 10000,
+      maxBurstMs: 30000,
+    }));
   });
 
   test("configures audio capture with dev cloud and WAV retention fields", async () => {
@@ -118,6 +137,44 @@ describe("AmbientAudioDebugPanel", () => {
       wavMaxFiles: 7,
     });
     expect(await screen.findByText("Config applied")).toBeTruthy();
+  });
+
+  test("keeps numeric fields editable while empty", () => {
+    render(<AmbientAudioDebugPanel />);
+
+    const postRollInput = screen.getByLabelText("Post-roll ms") as HTMLInputElement;
+
+    fireEvent.change(postRollInput, { target: { value: "" } });
+    expect(postRollInput.value).toBe("");
+
+    fireEvent.change(postRollInput, { target: { value: "10000" } });
+    expect(postRollInput.value).toBe("10000");
+  });
+
+  test("persists applied audio config fields and restores them on remount", async () => {
+    const { unmount } = render(<AmbientAudioDebugPanel />);
+
+    fireEvent.change(screen.getByLabelText("Cloud API key"), { target: { value: "sk-dev" } });
+    fireEvent.change(screen.getByLabelText("Post-roll ms"), { target: { value: "10000" } });
+    fireEvent.change(screen.getByLabelText("Max burst ms"), { target: { value: "30000" } });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /apply audio config/i }));
+    });
+
+    unmount();
+    render(<AmbientAudioDebugPanel />);
+
+    expect((screen.getByLabelText("Post-roll ms") as HTMLInputElement).value).toBe("10000");
+    expect((screen.getByLabelText("Max burst ms") as HTMLInputElement).value).toBe("30000");
+    expect((screen.getByLabelText("Cloud API key") as HTMLInputElement).value).toBe("");
+
+    await waitFor(() => {
+      expect(AmbientAi.audio.configure).toHaveBeenLastCalledWith(expect.objectContaining({
+        postRollMs: 10000,
+        maxBurstMs: 30000,
+      }));
+    });
   });
 
   test("refreshes state, lists captures, controls playback, and drains transcripts", async () => {
@@ -248,10 +305,10 @@ describe("AmbientAudioDebugPanel", () => {
 
     expect(await screen.findByText("Recording session")).toBeTruthy();
     expect(screen.getByText("empty")).toBeTruthy();
-    expect(screen.getAllByText("Empty transcript").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/wav-empty/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/local_speech/).length).toBeGreaterThan(0);
     expect(screen.getByText("Recent recording runs")).toBeTruthy();
+    expect(screen.getByText("No recording runs yet")).toBeTruthy();
   });
 
 

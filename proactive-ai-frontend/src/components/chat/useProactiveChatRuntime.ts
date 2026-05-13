@@ -34,6 +34,7 @@ import {
   shouldBootstrapCardChat,
 } from "./card-chat-session";
 import { LiveContentBuilder } from "./tool-steps";
+import { parseTodosFromArgs, setTodos } from "./todos-store";
 
 export type { ProactiveToolCallArgs } from "./tool-steps";
 
@@ -198,6 +199,15 @@ function createAdapter({
                 argsPreview: typeof payload.argsPreview === "string" ? payload.argsPreview : undefined,
                 pinCommand: typeof payload.pinCommand === "string" ? payload.pinCommand : undefined,
               });
+              // write_todos: feed structured plan to the side-panel store.
+              // The agent re-emits the whole list on every state change
+              // (langchain TodoListMiddleware uses Command.update with full
+              // replacement), so a simple write here keeps the UI in sync —
+              // no merge/diff logic needed.
+              if (name === "write_todos") {
+                const todos = parseTodosFromArgs(payload.args);
+                if (todos) setTodos(sessionKey, todos);
+              }
               yield { content: builder.snapshot() };
             } else if (type === "chat:tool:result") {
               const toolCallId = typeof payload.toolCallId === "string" ? payload.toolCallId : "";

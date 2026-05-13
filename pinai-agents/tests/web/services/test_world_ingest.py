@@ -96,9 +96,9 @@ def _build_minimal_rss(items: list[tuple[str, str, str]]) -> bytes:
     triples. Used in tests below to drive _parse_feed without hitting
     the network."""
     item_xml = "".join(
-        f"<item><title>{t}</title><link>{l}</link>"
+        f"<item><title>{t}</title><link>{link}</link>"
         f"<description>{d}</description></item>"
-        for t, l, d in items
+        for t, link, d in items
     )
     body = (
         '<?xml version="1.0"?>'

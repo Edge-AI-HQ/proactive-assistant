@@ -112,6 +112,56 @@ def test_namespaces_cover_three_domains():
     assert EV_TASK_PROGRESS.startswith("task:")
 
 
+def test_safe_args_returns_value_when_under_cap():
+    from pinai_agents.chat.streaming import _safe_args
+
+    payload = {"todos": [{"content": "step", "status": "pending"}]}
+    assert _safe_args(payload) == payload
+
+
+def test_safe_args_returns_none_for_oversized_payload():
+    from pinai_agents.chat.streaming import _ARGS_FULL_LIMIT, _safe_args
+
+    big = {"code": "x" * (_ARGS_FULL_LIMIT + 1)}
+    assert _safe_args(big) is None
+
+
+def test_safe_args_returns_none_for_non_serializable():
+    from pinai_agents.chat.streaming import _safe_args
+
+    class Unserializable:
+        pass
+
+    assert _safe_args({"obj": Unserializable()}) is None
+
+
+def test_safe_args_returns_none_for_none_input():
+    from pinai_agents.chat.streaming import _safe_args
+
+    assert _safe_args(None) is None
+
+
+def test_chat_tool_start_includes_args_when_provided():
+    from pinai_agents.chat.streaming import chat_tool_start
+
+    out = chat_tool_start(
+        tool_call_id="t1", name="write_todos",
+        args_preview="{...}", args={"todos": [{"content": "a", "status": "pending"}]},
+    )
+    parsed = _parse_emit_bytes(out)
+    assert parsed["data"]["args"] == {"todos": [{"content": "a", "status": "pending"}]}
+
+
+def test_chat_tool_start_omits_args_when_none():
+    from pinai_agents.chat.streaming import chat_tool_start
+
+    out = chat_tool_start(
+        tool_call_id="t1", name="memory_list", args_preview="{}",
+    )
+    parsed = _parse_emit_bytes(out)
+    assert "args" not in parsed["data"]
+
+
 def test_chat_helpers_emit_envelope_shape():
     """Smoke check that chat/streaming.py helpers produce envelopes
     matching what validate_event accepts."""
