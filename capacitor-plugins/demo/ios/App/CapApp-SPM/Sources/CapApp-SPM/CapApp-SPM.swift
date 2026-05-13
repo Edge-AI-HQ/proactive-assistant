@@ -8,6 +8,7 @@ public let isCapacitorApp = true
 private let _capacitorPluginClasses: [AnyClass] = [
     AudioCapturePlugin.self,
     VisitMonitorPlugin.self,
+    GeocoderPlugin.self,
     DeviceStatePlugin.self,
     NotificationUsagePlugin.self,
     MediaNotebookPlugin.self,

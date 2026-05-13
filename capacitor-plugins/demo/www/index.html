@@ -158,6 +158,12 @@
   </section>
 
   <section>
+    <h2>Geocoder (CLGeocoder + MKLocalPointsOfInterestRequest)</h2>
+    <div id="gc-status" class="status">Initializing...</div>
+    <button id="gc-here" class="btn-green" disabled>Reverse Geocode Current Position</button>
+  </section>
+
+  <section>
     <h2>Event Log</h2>
     <div id="log"></div>
   </section>
@@ -189,7 +195,8 @@
         hc: { ids: ['hc-available','hc-auth','hc-steps','hc-sleep','hc-hr'], plugin: 'Health', label: 'Health (HealthKit)' },
         bat: { ids: ['bat-get','bat-info'], plugin: 'Device', label: 'Device' },
         ct: { ids: ['ct-check','ct-request','ct-aggregate'], plugin: 'Contacts', label: 'Contacts' },
-        geo: { ids: ['geo-check','geo-request','geo-get'], plugin: 'Geolocation', label: 'Geolocation' }
+        geo: { ids: ['geo-check','geo-request','geo-get'], plugin: 'Geolocation', label: 'Geolocation' },
+        gc: { ids: ['gc-here'], plugin: 'Geocoder', label: 'Geocoder' }
       };
 
       var statusEls = {
@@ -197,7 +204,7 @@
         nu: $('nu-status'), mn: $('mn-status'), cal: $('cal-status'),
         nc: $('nc-status'), aa: $('aa-status'),
         sf: $('sf-status'), hc: $('hc-status'), bat: $('bat-status'), ct: $('ct-status'),
-        geo: $('geo-status')
+        geo: $('geo-status'), gc: $('gc-status')
       };
 
       var positionTimer = null;
@@ -266,7 +273,8 @@
         pluginListen('VisitMonitor','visit', function(event){
           var lat = event.latitude ? event.latitude.toFixed(4) : '?';
           var lng = event.longitude ? event.longitude.toFixed(4) : '?';
-          log('VM visit: lat=' + lat + ' lng=' + lng + ' acc=' + event.accuracy);
+          var place = event.place ? (event.place.label || event.place.place_name || event.place.address || '(no name)') : '(no place)';
+          log('VM visit: ' + place + ' @ ' + lat + ', ' + lng + ' acc=' + event.accuracy);
         });
         pluginCall('VisitMonitor','startMonitoring').then(function(){
           log('VM startMonitoring: OK');
@@ -275,7 +283,8 @@
             pluginCall('VisitMonitor','getCurrentPosition').then(function(pos){
               var lat = pos.latitude ? pos.latitude.toFixed(4) : '?';
               var lng = pos.longitude ? pos.longitude.toFixed(4) : '?';
-              log('VM position: lat=' + lat + ' lng=' + lng + ' acc=' + (pos.accuracy ? pos.accuracy.toFixed(1)+'m' : '?'));
+              var place = pos.place ? (pos.place.label || pos.place.place_name || pos.place.address || '(no name)') : '(no place)';
+              log('VM position: ' + place + ' @ ' + lat + ', ' + lng + ' acc=' + (pos.accuracy ? pos.accuracy.toFixed(1)+'m' : '?'));
             }).catch(function(e){ log('VM getCurrentPosition ERROR: '+e.message); });
           }, 10000);
           log('VM position polling: every 10s');
@@ -505,6 +514,21 @@
           statusEls.geo.textContent = 'Position: '+lat+', '+lng+' ±'+acc;
           log('Geo position: lat='+lat+' lng='+lng+' acc='+acc);
         }).catch(function(e){ statusEls.geo.textContent='Position: ERROR'; log('Geo getCurrentPosition ERROR: '+e.message); });
+      });
+
+      // --- Geocoder ---
+      bind('gc-here', function() {
+        statusEls.gc.textContent = 'Requesting position...';
+        pluginCall('Geolocation','getCurrentPosition', [{ enableHighAccuracy: true, timeout: 10000 }]).then(function(pos){
+          var lat = pos.coords.latitude;
+          var lng = pos.coords.longitude;
+          statusEls.gc.textContent = 'Reverse geocoding ' + lat.toFixed(4) + ', ' + lng.toFixed(4) + '...';
+          return pluginCall('Geocoder','reverseGeocode', [{ latitude: lat, longitude: lng }]);
+        }).then(function(place){
+          var display = place.label || place.place_name || place.address || '(no name)';
+          statusEls.gc.textContent = display + ' [' + place.source + ']';
+          log('GC reverseGeocode: ' + JSON.stringify(place));
+        }).catch(function(e){ statusEls.gc.textContent='ERROR'; log('GC reverseGeocode ERROR: '+e.message); });
       });
 
       init();

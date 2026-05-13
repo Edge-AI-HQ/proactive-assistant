@@ -6,6 +6,7 @@ import { BatteryAdapter } from '../modules/battery/adapter';
 import type { CalendarPlugin } from '../modules/calendar/definitions';
 import { ContactsAdapter } from '../modules/contacts/adapter';
 import type { DeviceStatePlugin } from '../modules/device-state/definitions';
+import type { GeocoderPlugin } from '../modules/geocoder/definitions';
 import type { MediaNotebookPlugin } from '../modules/media-notebook/definitions';
 import type { NearbyConnectivityPlugin } from '../modules/nearby-connectivity/definitions';
 import type { NotificationUsagePlugin } from '../modules/notification-usage/definitions';
@@ -19,6 +20,10 @@ export const audio = registerPlugin<AudioCapturePlugin>('AudioCapture', {
 
 export const visit = registerPlugin<VisitMonitorPlugin>('VisitMonitor', {
   web: () => import('../modules/visit-monitor/web').then((m) => new m.VisitMonitorWeb()),
+});
+
+export const geocoder = registerPlugin<GeocoderPlugin>('Geocoder', {
+  web: () => import('../modules/geocoder/web').then((m) => new m.GeocoderWeb()),
 });
 
 export const device = registerPlugin<DeviceStatePlugin>('DeviceState', {
