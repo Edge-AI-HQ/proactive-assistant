@@ -372,6 +372,32 @@ function formatDateTime(value?: string | null): string {
   return date.toLocaleString();
 }
 
+function rawEndOfTodayIso(): string {
+  const end = new Date();
+  end.setHours(23, 59, 59, 999);
+  return end.toISOString();
+}
+
+function currentTimestampIso(): string {
+  return new Date().toISOString();
+}
+
+function isCurrentOrPastTime(value?: string | null): boolean {
+  if (!value) return true;
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time <= Date.now() : true;
+}
+
+function isRawTimeVisible(value?: string | null): boolean {
+  if (!value) return true;
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return true;
+
+  const end = new Date();
+  end.setHours(23, 59, 59, 999);
+  return time <= end.getTime();
+}
+
 function formatValue(value: unknown): string {
   if (value === null) return "null";
   if (value === undefined) return "undefined";
@@ -520,13 +546,14 @@ function Pill({ children, tone = "neutral" }: { children: ReactNode; tone?: Pill
 }
 
 async function fetchRawPreview(signal?: AbortSignal): Promise<RawPreview> {
+  const until = rawEndOfTodayIso();
   const [gmail, gcal, deviceList, appsSeed, contactsSeed, healthSeed] = await Promise.allSettled([
-    fetchRawGmail({ limit: RAW_PREVIEW_LIMIT }, signal),
-    fetchRawGcal({ limit: RAW_PREVIEW_LIMIT }, signal),
+    fetchRawGmail({ until, limit: RAW_PREVIEW_LIMIT }, signal),
+    fetchRawGcal({ until, limit: RAW_PREVIEW_LIMIT }, signal),
     listUserDevices(),
-    fetchRawDeviceApps({ latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal),
-    fetchRawDeviceContacts({ latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal),
-    fetchRawDeviceHealth({ limit: RAW_PREVIEW_LIMIT }, signal),
+    fetchRawDeviceApps({ until, latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal),
+    fetchRawDeviceContacts({ until, latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal),
+    fetchRawDeviceHealth({ until, limit: RAW_PREVIEW_LIMIT }, signal),
   ]);
 
   const devicesById = new Map<string, UserDevice | null>();
@@ -547,11 +574,11 @@ async function fetchRawPreview(signal?: AbortSignal): Promise<RawPreview> {
   const devices = await Promise.all(
     [...devicesById.entries()].map(async ([deviceId, device]) => {
       const [apps, contacts, health, appsCount, contactsCount] = await Promise.allSettled([
-        fetchRawDeviceApps({ deviceId, latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal),
-        fetchRawDeviceContacts({ deviceId, latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal),
-        fetchRawDeviceHealth({ deviceId, limit: RAW_PREVIEW_LIMIT }, signal),
-        fetchRawDeviceApps({ deviceId, limit: 1 }, signal),
-        fetchRawDeviceContacts({ deviceId, limit: 1 }, signal),
+        fetchRawDeviceApps({ until, deviceId, latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal),
+        fetchRawDeviceContacts({ until, deviceId, latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal),
+        fetchRawDeviceHealth({ until, deviceId, limit: RAW_PREVIEW_LIMIT }, signal),
+        fetchRawDeviceApps({ until, deviceId, limit: 1 }, signal),
+        fetchRawDeviceContacts({ until, deviceId, limit: 1 }, signal),
       ]);
       const appsRows = apps.status === "fulfilled" ? apps.value.apps : [];
       const contactsRows = contacts.status === "fulfilled" ? contacts.value.contacts : [];
@@ -930,24 +957,80 @@ function RawRecordItem({
   );
 }
 
-function DeviceRawSection({
-  title,
-  total,
-  children,
-}: {
+interface DeviceRawRecord {
+  id: string;
+  source: string;
   title: string;
-  total: number;
-  children: ReactNode;
-}) {
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-3 px-1">
-        <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground/45">{title}</h3>
-        <span className="text-[11px] tabular-nums text-foreground/38">{total}</span>
-      </div>
-      <div className="space-y-3">{children}</div>
-    </div>
-  );
+  subtitle: string | null;
+  time: string | null;
+  payload: Record<string, unknown>;
+}
+
+function rawRecordTimeMs(record: DeviceRawRecord): number {
+  if (!record.time) return 0;
+  const n = Date.parse(record.time);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function buildDeviceRawRecords(preview: DeviceRawPreview): DeviceRawRecord[] {
+  const records: DeviceRawRecord[] = [
+    ...preview.apps.map((app) => ({
+      id: `app:${app.id}`,
+      source: "Apps",
+      title: app.app_name,
+      subtitle: app.bundle_id,
+      time: app.last_used_at ?? app.occurred_at,
+      payload: {
+        device_id: app.device_id,
+        snapshot_id: app.snapshot_id,
+        version: app.version,
+        reference_count: app.reference_count,
+      },
+    })),
+    ...preview.contacts.map((contact) => ({
+      id: `contact:${contact.id}`,
+      source: "Contacts",
+      title: contact.display_name || contact.id,
+      subtitle: [...contact.emails, ...contact.phones].slice(0, 3).join(" · "),
+      time: contact.last_modified ?? contact.occurred_at,
+      payload: {
+        device_id: contact.device_id,
+        snapshot_id: contact.snapshot_id,
+        emails: contact.emails,
+        phones: contact.phones,
+        reference_count: contact.reference_count,
+      },
+    })),
+    ...preview.health.map((item) => ({
+      id: `health:${item.id}`,
+      source: "Health",
+      title: [item.metric, item.observation_type].filter(Boolean).join(" · ") || item.id,
+      subtitle: [
+        typeof item.value === "number" ? `${item.value}${item.unit ? ` ${item.unit}` : ""}` : null,
+        item.source_app,
+        item.local_date,
+      ].filter(Boolean).join(" · "),
+      time: item.end_at ?? item.start_at ?? item.occurred_at,
+      payload: {
+        device_id: item.device_id,
+        observation_type: item.observation_type,
+        metric: item.metric,
+        value: item.value,
+        unit: item.unit,
+        local_date: item.local_date,
+        source_app: item.source_app,
+        payload: item.payload,
+        reference_count: item.reference_count,
+      },
+    })),
+  ];
+  return records
+    .filter((record) => isRawTimeVisible(record.time))
+    .sort((a, b) => (
+      rawRecordTimeMs(b) - rawRecordTimeMs(a)
+      || a.source.localeCompare(b.source)
+      || a.title.localeCompare(b.title)
+    ));
 }
 
 function DeviceRawRecords({ preview }: { preview: DeviceRawPreview }) {
@@ -960,83 +1043,29 @@ function DeviceRawRecords({ preview }: { preview: DeviceRawPreview }) {
     );
   }
 
+  const records = buildDeviceRawRecords(preview);
+
   return (
-    <div className="space-y-5">
-      <DeviceRawSection title="Apps" total={preview.appsTotal}>
-        {preview.apps.length === 0 ? (
-          <EmptyState title="No app snapshot" description="No app inventory rows are available for this device." />
-        ) : (
-          preview.apps.map((app) => (
-            <RawRecordItem
-              key={app.id}
-              source="Apps"
-              title={app.app_name}
-              subtitle={app.bundle_id}
-              time={app.last_used_at ?? app.occurred_at}
-              payload={{
-                device_id: app.device_id,
-                snapshot_id: app.snapshot_id,
-                version: app.version,
-                reference_count: app.reference_count,
-              }}
-            />
-          ))
-        )}
-      </DeviceRawSection>
-
-      <DeviceRawSection title="Contacts" total={preview.contactsTotal}>
-        {preview.contacts.length === 0 ? (
-          <EmptyState title="No contacts" description="No contact snapshot rows are available for this device." />
-        ) : (
-          preview.contacts.map((contact) => (
-            <RawRecordItem
-              key={contact.id}
-              source="Contacts"
-              title={contact.display_name || contact.id}
-              subtitle={[...contact.emails, ...contact.phones].slice(0, 3).join(" · ")}
-              time={contact.last_modified ?? contact.occurred_at}
-              payload={{
-                device_id: contact.device_id,
-                snapshot_id: contact.snapshot_id,
-                emails: contact.emails,
-                phones: contact.phones,
-                reference_count: contact.reference_count,
-              }}
-            />
-          ))
-        )}
-      </DeviceRawSection>
-
-      <DeviceRawSection title="Health" total={preview.healthTotal}>
-        {preview.health.length === 0 ? (
-          <EmptyState title="No health observations" description="No health rows are available for this device." />
-        ) : (
-          preview.health.map((item) => (
-            <RawRecordItem
-              key={item.id}
-              source="Health"
-              title={[item.metric, item.observation_type].filter(Boolean).join(" · ") || item.id}
-              subtitle={[
-                typeof item.value === "number" ? `${item.value}${item.unit ? ` ${item.unit}` : ""}` : null,
-                item.source_app,
-                item.local_date,
-              ].filter(Boolean).join(" · ")}
-              time={item.end_at ?? item.start_at ?? item.occurred_at}
-              payload={{
-                device_id: item.device_id,
-                observation_type: item.observation_type,
-                metric: item.metric,
-                value: item.value,
-                unit: item.unit,
-                local_date: item.local_date,
-                source_app: item.source_app,
-                payload: item.payload,
-                reference_count: item.reference_count,
-              }}
-            />
-          ))
-        )}
-      </DeviceRawSection>
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-1.5 px-1">
+        {preview.appsTotal > 0 && <Pill tone="source">Apps {preview.appsTotal}</Pill>}
+        {preview.contactsTotal > 0 && <Pill tone="source">Contacts {preview.contactsTotal}</Pill>}
+        {preview.healthTotal > 0 && <Pill tone="source">Health {preview.healthTotal}</Pill>}
+      </div>
+      {records.length === 0 ? (
+        <EmptyState title="No device data" description="No current or past device rows are available for this source." />
+      ) : (
+        records.map((record) => (
+          <RawRecordItem
+            key={record.id}
+            source={record.source}
+            title={record.title}
+            subtitle={record.subtitle}
+            time={record.time}
+            payload={record.payload}
+          />
+        ))
+      )}
     </div>
   );
 }
@@ -1181,6 +1210,8 @@ function SignalsPanel({
   loadingMore: boolean;
   onLoadMore: () => void;
 }) {
+  const visibleSignals = signals.filter((signal) => isCurrentOrPastTime(signal.occurred_at));
+
   return (
     <div>
       <div className="mb-3 flex items-start justify-between gap-4">
@@ -1196,10 +1227,10 @@ function SignalsPanel({
         </div>
       </div>
       <div className="max-h-[58vh] min-h-[360px] space-y-3 overflow-y-auto pr-1">
-        {signals.length === 0 ? (
+        {visibleSignals.length === 0 ? (
           <EmptyState title="No signals yet" description="Recent observations will appear here after connected sources provide data." />
         ) : (
-          signals.map((signal) => <SignalItem key={signal.id} signal={signal} />)
+          visibleSignals.map((signal) => <SignalItem key={signal.id} signal={signal} />)
         )}
         <LoadMoreButton
           hasMore={hasMore}
@@ -1232,6 +1263,8 @@ function RawPanelContent({
   const activeDevice = activeDeviceId
     ? raw.devices.find((device) => device.deviceId === activeDeviceId) ?? null
     : null;
+  const visibleGmail = raw.gmail.filter((message) => isRawTimeVisible(message.occurred_at));
+  const visibleGcal = raw.gcal.filter((event) => isRawTimeVisible(event.start_at ?? event.occurred_at));
 
   return (
     <div>
@@ -1288,10 +1321,10 @@ function RawPanelContent({
           />
         )}
         {activeSource?.id === "gmail" && (
-          raw.gmail.length === 0 ? (
+          visibleGmail.length === 0 ? (
             <EmptyState title="No Gmail data" description="No Gmail messages are available right now." />
           ) : (
-            raw.gmail.map((message) => (
+            visibleGmail.map((message) => (
               <RawRecordItem
                 key={message.id}
                 source="Gmail"
@@ -1309,10 +1342,10 @@ function RawPanelContent({
           )
         )}
         {activeSource?.id === "gcal" && (
-          raw.gcal.length === 0 ? (
+          visibleGcal.length === 0 ? (
             <EmptyState title="No Calendar data" description="No calendar events are available right now." />
           ) : (
-            raw.gcal.map((event) => (
+            visibleGcal.map((event) => (
               <RawRecordItem
                 key={event.id}
                 source="Calendar"
@@ -1355,7 +1388,8 @@ function RawPanelContent({
               />
             );
           }
-          if (cached.rows.length === 0) {
+          const visibleRows = cached.rows.filter((row) => isRawTimeVisible(pickGenericTime(row)));
+          if (visibleRows.length === 0) {
             return (
               <EmptyState
                 title={`No ${activeSource.label} data`}
@@ -1363,7 +1397,7 @@ function RawPanelContent({
               />
             );
           }
-          return cached.rows.map((row) => (
+          return visibleRows.map((row) => (
             <GenericRawRowItem
               key={String(row.id)}
               source={activeSource.label}
@@ -1392,6 +1426,7 @@ export default function GoalsView({ composio }: GoalsViewProps) {
   const [memoryLoadingPage, setMemoryLoadingPage] = useState(false);
   const [signals, setSignals] = useState<PersonalSignal[]>([]);
   const [signalTotal, setSignalTotal] = useState(0);
+  const [signalFetchedCount, setSignalFetchedCount] = useState(0);
   const [signalHasMore, setSignalHasMore] = useState(false);
   const [signalLoadingMore, setSignalLoadingMore] = useState(false);
   const [topicMemories, setTopicMemories] = useState<Memory[]>([]);
@@ -1407,6 +1442,7 @@ export default function GoalsView({ composio }: GoalsViewProps) {
   const [activeRawPanel, setActiveRawPanel] = useState<RawPanel>("gmail");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const signalCutoffRef = useRef(currentTimestampIso());
 
   // Gateway grid drawer state
   const [expandedGoal, setExpandedGoal] = useState<string | null>(null);
@@ -1432,6 +1468,8 @@ export default function GoalsView({ composio }: GoalsViewProps) {
     setError(null);
 
     try {
+      const signalCutoff = currentTimestampIso();
+      signalCutoffRef.current = signalCutoff;
       const [data, memoryData, signalData, topicData, rawData] = await Promise.all([
         fetchProfileSnapshot(controller.signal),
         fetchMemories({
@@ -1443,6 +1481,7 @@ export default function GoalsView({ composio }: GoalsViewProps) {
         fetchSignals({
           status: "open",
           limit: SIGNAL_PAGE_SIZE,
+          before: signalCutoff,
           pruneExpired: true,
         }, controller.signal),
         fetchMemories({
@@ -1462,9 +1501,11 @@ export default function GoalsView({ composio }: GoalsViewProps) {
         setMemories(memoryData.memories);
         setMemoryTotal(memoryData.total ?? memoryData.memories.length);
         setMemoryPage(0);
-        setSignals(signalData.signals);
+        const visibleSignals = signalData.signals.filter((signal) => isCurrentOrPastTime(signal.occurred_at));
+        setSignals(visibleSignals);
         setSignalTotal(signalData.total ?? signalData.signals.length);
-        setSignalHasMore(signalData.signals.length < (signalData.total ?? signalData.signals.length));
+        setSignalFetchedCount(signalData.signals.length);
+        setSignalHasMore(signalData.has_more);
         setTopicMemories(topicData.memories);
         setRawPreview(rawData);
       }
@@ -1523,7 +1564,7 @@ export default function GoalsView({ composio }: GoalsViewProps) {
 
     Promise.allSettled(
       targets.map(async (source) => {
-        const res = await fetchRawTable(source.table, { limit: 1 }, controller.signal);
+        const res = await fetchRawTable(source.table, { until: rawEndOfTodayIso(), limit: 1 }, controller.signal);
         return { id: source.id, total: res.total };
       }),
     )
@@ -1568,7 +1609,7 @@ export default function GoalsView({ composio }: GoalsViewProps) {
       next.add(activeRawPanel);
       return next;
     });
-    fetchRawTable(cfg.table, { limit: RAW_PREVIEW_LIMIT })
+    fetchRawTable(cfg.table, { until: rawEndOfTodayIso(), limit: RAW_PREVIEW_LIMIT })
       .then((res) => {
         setGenericRaw((prev) => ({
           ...prev,
@@ -1632,19 +1673,23 @@ export default function GoalsView({ composio }: GoalsViewProps) {
       const data = await fetchSignals({
         status: "open",
         limit: SIGNAL_PAGE_SIZE,
-        offset: signals.length,
+        offset: signalFetchedCount,
+        before: signalCutoffRef.current,
         pruneExpired: true,
       });
-      const merged = mergeUniqueById(signals, data.signals);
+      const visibleSignals = data.signals.filter((signal) => isCurrentOrPastTime(signal.occurred_at));
+      const merged = mergeUniqueById(signals, visibleSignals);
+      const nextFetchedCount = signalFetchedCount + data.signals.length;
       setSignals(merged);
-      setSignalHasMore(data.signals.length > 0 && merged.length < signalTotal);
+      setSignalFetchedCount(nextFetchedCount);
+      setSignalHasMore(data.has_more && nextFetchedCount < signalTotal);
     } catch (err) {
       console.warn("[GoalsView] loadMoreSignals failed:", err);
       setError(err instanceof Error ? err.message : "Failed to load more signals");
     } finally {
       setSignalLoadingMore(false);
     }
-  }, [signals, signalHasMore, signalLoadingMore, signalTotal]);
+  }, [signals, signalFetchedCount, signalHasMore, signalLoadingMore, signalTotal]);
 
   const toggleGroup = (group: ProfileGroupKey) => {
     setOpenGroups((prev) => ({ ...prev, [group]: !prev[group] }));

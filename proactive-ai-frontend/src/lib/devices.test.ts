@@ -12,9 +12,27 @@ import {
   withDeviceHeaders,
 } from "./devices";
 
-const { platformState, secureStore } = vi.hoisted(() => ({
+const { platformState, secureStore, devicePluginState, appPluginState } = vi.hoisted(() => ({
   platformState: { isNative: false, platform: "web" },
   secureStore: new Map<string, string>(),
+  devicePluginState: {
+    identifier: "ios-vendor-visible-id",
+    info: {
+      name: "Smile's iPhone",
+      model: "iPhone15,3",
+      platform: "ios",
+      operatingSystem: "ios",
+      osVersion: "18.5",
+      manufacturer: "Apple",
+      isVirtual: false,
+    },
+  },
+  appPluginState: {
+    info: {
+      version: "1.2.3",
+      build: "456",
+    },
+  },
 }));
 
 vi.mock("./api", () => ({
@@ -28,6 +46,17 @@ vi.mock("./platform", () => ({
 }));
 vi.mock("@capacitor/core", () => ({
   Capacitor: { getPlatform: () => platformState.platform },
+}));
+vi.mock("@capacitor/device", () => ({
+  Device: {
+    getId: vi.fn(async () => ({ identifier: devicePluginState.identifier })),
+    getInfo: vi.fn(async () => devicePluginState.info),
+  },
+}));
+vi.mock("@capacitor/app", () => ({
+  App: {
+    getInfo: vi.fn(async () => appPluginState.info),
+  },
 }));
 vi.mock("@aparajita/capacitor-secure-storage", () => ({
   KeychainAccess: { afterFirstUnlockThisDeviceOnly: 3 },
@@ -128,9 +157,14 @@ describe("ensureDevice", () => {
     const call = fetchMock.mock.calls[0]!;
     const body = JSON.parse((call[1] as RequestInit).body as string);
     expect(body.platform).toBe("ios");
-    expect(typeof body.deviceFingerprint).toBe("string");
-    expect(body.deviceFingerprint.length).toBeGreaterThan(8);
+    expect(body.displayName).toBe("Smile's iPhone");
+    expect(body.appVersion).toBe("1.2.3");
+    expect(body.model).toBe("iPhone15,3");
+    expect(body.deviceFingerprint).toBe("capacitor-device-id-v1:ios-vendor-visible-id");
     expect(body.metadata?.credential_store).toBe("secure-storage");
+    expect(body.metadata?.device_fingerprint_source).toBe("capacitor-device-id-v1");
+    expect(body.metadata?.hardware_signature).toContain("iPhone15,3");
+    expect(body.metadata?.hardware_signature).not.toContain("Smile's iPhone");
   });
 
   test("propagates server error so caller can decide retry policy", async () => {

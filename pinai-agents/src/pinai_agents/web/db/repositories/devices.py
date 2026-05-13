@@ -15,9 +15,10 @@ Two ownership-aware writes that the route layer must understand:
   * If `device_id` exists for a *different* user → CONFLICT (the route
     surfaces a 409 — never let one user's deviceId hijack another's row).
   * Fingerprint dedupe (sha256(platform + hardwareFingerprint)): a fresh
-    app install on the same physical device produces a new deviceId; we
-    detect via the fingerprint hash and rotate the existing row instead
-    of leaving a phantom.
+    app install on the same physical device may propose a new deviceId;
+    we detect via the fingerprint hash and reuse the existing server
+    device_id instead of stranding old rows or moving the registry away
+    from already-ingested evidence.
 """
 
 from __future__ import annotations
@@ -184,7 +185,6 @@ class DevicesRepository(UserScopedRepository):
                     display_name=display_name, app_version=app_version,
                     model=model, metadata_json=meta_json,
                     fingerprint_hash=fp_hash,
-                    new_device_id=device_id,
                 )
                 return RegisterResult(row=refreshed, device_token=token)
 
@@ -216,8 +216,10 @@ class DevicesRepository(UserScopedRepository):
         metadata_json: str, fingerprint_hash: str | None,
         new_device_id: str | None = None,
     ) -> UserDeviceRow:
-        # When a fingerprint matches, allow the deviceId itself to be
-        # rotated (mobile reinstall produces a new uuid).
+        # device_id is the server canonical identifier used by raw/signal
+        # rows. Fingerprint dedupe must not rotate it, otherwise old
+        # evidence becomes detached from the visible device every time a
+        # native app reinstall proposes a fresh UUID.
         async with self._conn.cursor() as cur:
             # Fingerprint dedupe also revokes other active rows with the
             # same fingerprint that aren't this row — a phone can only

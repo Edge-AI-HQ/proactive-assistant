@@ -87,12 +87,31 @@ async def client(pool, supabase_jwt):
         yield c, supabase_jwt
 
 
-async def _register_device(c: httpx.AsyncClient, token: str, device_id: str) -> str:
+async def _register_device(
+    c: httpx.AsyncClient,
+    token: str,
+    device_id: str,
+    *,
+    platform: str = "ios",
+    display_name: str | None = None,
+    model: str | None = None,
+    device_fingerprint: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> str:
     """Register a device and return its device_token."""
+    payload: dict[str, Any] = {"deviceId": device_id, "platform": platform}
+    if display_name is not None:
+        payload["displayName"] = display_name
+    if model is not None:
+        payload["model"] = model
+    if device_fingerprint is not None:
+        payload["deviceFingerprint"] = device_fingerprint
+    if metadata is not None:
+        payload["metadata"] = metadata
     r = await c.post(
         "/api/devices/register",
         headers={"Authorization": f"Bearer {token}"},
-        json={"deviceId": device_id, "platform": "ios"},
+        json=payload,
     )
     assert r.status_code == 200, r.text
     return r.json()["deviceToken"]
@@ -128,6 +147,87 @@ def _wrap(device_id: str, items: list[dict]) -> dict:
     sending an array with `source: device:<id>` on each item; we use it in
     most tests so the items don't need to repeat the source field."""
     return {"deviceId": device_id, "items": items}
+
+
+@pytest.mark.asyncio
+async def test_register_same_fingerprint_keeps_canonical_device_id(client, pool):
+    """Fresh native installs can propose new UUIDs, but the backend must
+    keep the existing server device_id so already-ingested evidence stays
+    attached to the visible device."""
+    c, mk_jwt = client
+    sub = str(uuid.uuid4())
+    token = mk_jwt(sub)
+    first_id = f"ios-first-{uuid.uuid4().hex[:8]}"
+    proposed_new_id = f"ios-second-{uuid.uuid4().hex[:8]}"
+    fingerprint = f"ios-fp-{uuid.uuid4().hex}"
+
+    await _register_device(
+        c, token, first_id,
+        display_name="iPhone", model="iPhone15,3",
+        device_fingerprint=fingerprint,
+    )
+    second = await c.post(
+        "/api/devices/register",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "deviceId": proposed_new_id,
+            "platform": "ios",
+            "displayName": "iPhone",
+            "model": "iPhone15,3",
+            "deviceFingerprint": fingerprint,
+        },
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["deviceId"] == first_id
+
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            """SELECT device_id, status FROM pai_user_devices
+               WHERE user_id = (SELECT id FROM users WHERE supabase_user_id = %s)
+                 AND platform = 'ios'
+               ORDER BY registered_at DESC""",
+            (sub,),
+        )
+        rows = await cur.fetchall()
+    assert [(r["device_id"], r["status"]) for r in rows] == [(first_id, "active")]
+
+    await _cleanup_user(pool, sub)
+
+
+@pytest.mark.asyncio
+async def test_device_list_collapses_legacy_ios_app_rows(client, pool):
+    """Historical iOS builds registered app-install rows without hardware
+    metadata. The Hardware Devices panel should show one physical iPhone
+    instead of every stale canonical/dev app row."""
+    c, mk_jwt = client
+    sub = str(uuid.uuid4())
+    token = mk_jwt(sub)
+    old_id = f"ios-old-{uuid.uuid4().hex[:10]}"
+    mid_id = f"ios-mid-{uuid.uuid4().hex[:10]}"
+    latest_id = f"ios-new-{uuid.uuid4().hex[:10]}"
+    await _register_device(c, token, old_id, display_name="iPhone", model="iPhone")
+    await _register_device(c, token, mid_id, display_name="Ios app")
+    latest_token = await _register_device(c, token, latest_id, display_name="Ios app")
+
+    touch = await c.post(
+        "/api/devices/ingest",
+        headers=_ingest_headers(latest_id, latest_token),
+        json=_wrap(latest_id, []),
+    )
+    assert touch.status_code == 200, touch.text
+
+    listed = await c.get(
+        "/api/devices/list",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert listed.status_code == 200, listed.text
+    ios_rows = [
+        item for item in listed.json()["items"]
+        if item["platform"] == "ios"
+    ]
+    assert [item["deviceId"] for item in ios_rows] == [latest_id]
+
+    await _cleanup_user(pool, sub)
 
 
 # ── auth + body shape (D-2) ──
@@ -191,6 +291,32 @@ async def test_ingest_wrapper_body_shape(device):
     body = r.json()
     assert body["inserted"] == 1
     assert body["results"][0]["status"] == "inserted"
+
+
+@pytest.mark.asyncio
+async def test_ingest_all_cross_device_items_returns_item_rejected(device):
+    """Cross-device dispatch is a per-item contract failure, not an
+    HTTP-level malformed request. The client needs the result body so it
+    can drop the bad outbox row instead of retrying forever."""
+    c, device_id, dtoken = device
+    r = await c.post(
+        "/api/devices/ingest", headers=_ingest_headers(device_id, dtoken),
+        json=[{
+            "id": "evt-cross-device-1",
+            "kind": "moment",
+            "title": "Cross-device body",
+            "summary": "A signal carrying a stale device source",
+            "source": "device:stale-device-id",
+        }],
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["accepted"] == 1
+    assert body["inserted"] == 0
+    assert body["results"][0]["status"] == "rejected"
+    assert body["results"][0]["reason"].startswith(
+        "cross-device dispatch not supported",
+    )
 
 
 @pytest.mark.asyncio

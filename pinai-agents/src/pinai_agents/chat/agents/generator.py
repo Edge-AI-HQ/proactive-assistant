@@ -95,7 +95,7 @@ async def main():
      cards_recent, feedback, world) = await asyncio.gather(
         client.profile.get(),
         client.memory.list(min_quality=0.7, limit=30),
-        client.signals.recent(status="open", hours=24),
+        client.signals.recent(status="open", hours=24, min_salience=0.1, limit=80),
         client.raw.gmail.recent(),
         client.raw.gcal.today(),
         client.cards.recent(limit=30),

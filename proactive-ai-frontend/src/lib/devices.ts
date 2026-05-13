@@ -25,6 +25,14 @@ export interface DeviceCredentials {
   platform: DevicePlatform;
 }
 
+interface NativeDeviceProfile {
+  deviceFingerprint: string | null;
+  displayName: string;
+  appVersion: string | null;
+  model: string | null;
+  metadata: Record<string, unknown>;
+}
+
 function detectPlatform(): DevicePlatform {
   const p = Capacitor.getPlatform();          // "ios" | "android" | "web"
   if (p === "ios" || p === "android") return p;
@@ -136,6 +144,91 @@ async function ensureDeviceFingerprint(): Promise<string | null> {
   return next;
 }
 
+function cleanDevicePart(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function buildHardwareSignature(
+  platform: DevicePlatform,
+  info: Record<string, unknown> | null,
+): string | null {
+  if (!info) return null;
+  const model = cleanDevicePart(info.model);
+  if (!model) return null;
+  const manufacturer = cleanDevicePart(info.manufacturer);
+  const physical = info.isVirtual === true ? "virtual" : "physical";
+  return [
+    "hardware-v1",
+    platform,
+    manufacturer ?? "unknown-manufacturer",
+    model,
+    physical,
+  ].join(":");
+}
+
+async function getNativeDeviceProfile(platform: DevicePlatform): Promise<NativeDeviceProfile> {
+  if (!isNative) {
+    return {
+      deviceFingerprint: null,
+      displayName: "Web",
+      appVersion: null,
+      model: null,
+      metadata: {},
+    };
+  }
+
+  let info: Record<string, unknown> | null = null;
+  let appVisibleId: string | null = null;
+  try {
+    const { Device } = await import("@capacitor/device");
+    const [deviceInfo, deviceId] = await Promise.all([
+      Device.getInfo(),
+      Device.getId(),
+    ]);
+    info = deviceInfo as unknown as Record<string, unknown>;
+    appVisibleId = cleanDevicePart(deviceId.identifier);
+  } catch {
+    info = null;
+    appVisibleId = null;
+  }
+
+  let appVersion: string | null = null;
+  try {
+    const { App } = await import("@capacitor/app");
+    const appInfo = await App.getInfo();
+    appVersion = cleanDevicePart(appInfo.version) ?? cleanDevicePart(appInfo.build);
+  } catch {
+    appVersion = null;
+  }
+
+  const storedFallback = await ensureDeviceFingerprint();
+  const hardwareSignature = buildHardwareSignature(platform, info);
+  const model = cleanDevicePart(info?.model);
+  const displayName = cleanDevicePart(info?.name)
+    ?? `${platform[0]?.toUpperCase()}${platform.slice(1)} app`;
+
+  return {
+    deviceFingerprint: appVisibleId
+      ? `capacitor-device-id-v1:${appVisibleId}`
+      : storedFallback,
+    displayName,
+    appVersion,
+    model,
+    metadata: {
+      credential_store: "secure-storage",
+      device_fingerprint_source: appVisibleId
+        ? "capacitor-device-id-v1"
+        : "secure-storage-uuid",
+      ...(hardwareSignature ? { hardware_signature: hardwareSignature } : {}),
+      ...(cleanDevicePart(info?.manufacturer) ? { manufacturer: cleanDevicePart(info?.manufacturer) } : {}),
+      ...(typeof info?.isVirtual === "boolean" ? { is_virtual: info.isVirtual } : {}),
+      ...(cleanDevicePart(info?.osVersion) ? { os_version: cleanDevicePart(info?.osVersion) } : {}),
+    },
+  };
+}
+
 interface RegisterResponse {
   // pinai-agents shape: flat object with camelCase + the secret token.
   deviceId: string;
@@ -159,16 +252,7 @@ export async function ensureDevice(): Promise<DeviceCredentials> {
   }
 
   const deviceId = storedId ?? generateDeviceId();
-  const deviceFingerprint = await ensureDeviceFingerprint();
-  const displayName = isNative
-    ? `${platform[0]?.toUpperCase()}${platform.slice(1)} app`
-    : "Web";
-  const metadata = isNative
-    ? {
-        credential_store: "secure-storage",
-        device_fingerprint_source: "secure-storage-uuid",
-      }
-    : {};
+  const profile = await getNativeDeviceProfile(platform);
 
   const res = await fetch(`${PIN_API_BASE}/api/devices/register`, {
     method: "POST",
@@ -179,9 +263,11 @@ export async function ensureDevice(): Promise<DeviceCredentials> {
     body: JSON.stringify({
       deviceId,
       platform,
-      displayName,
-      ...(deviceFingerprint ? { deviceFingerprint } : {}),
-      metadata,
+      displayName: profile.displayName,
+      ...(profile.appVersion ? { appVersion: profile.appVersion } : {}),
+      ...(profile.model ? { model: profile.model } : {}),
+      ...(profile.deviceFingerprint ? { deviceFingerprint: profile.deviceFingerprint } : {}),
+      metadata: profile.metadata,
     }),
   });
   if (!res.ok) {
@@ -288,10 +374,16 @@ export async function ingestSignals(
     return { ok: true, accepted: 0, inserted: 0, ignored: 0 };
   }
   const now = new Date().toISOString();
-  const source = `device:${creds.deviceId}`;
-  const wire = items.map((it) => ({
+  const initialSource = `device:${creds.deviceId}`;
+  const normalized = items.map((it) => ({
+    ...it,
     id: it.id ?? generateDeviceId(), // UUID-ish; collision is fine, server dedupe_key wins
-    source: it.source ?? source,
+  }));
+  const buildWire = (activeCreds: DeviceCredentials) => normalized.map((it) => ({
+    id: it.id,
+    source: !it.source || it.source === initialSource
+      ? `device:${activeCreds.deviceId}`
+      : it.source,
     kind: it.kind,
     title: it.title,
     summary: it.summary,
@@ -304,18 +396,27 @@ export async function ingestSignals(
     ...(it.dedupe_key ? { dedupe_key: it.dedupe_key } : {}),
   }));
 
-  const res = await fetch(`${PIN_API_BASE}/api/devices/ingest`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Device-Id": creds.deviceId,
-      "X-Device-Token": creds.deviceToken,
-    },
-    body: JSON.stringify(wire),
-  });
+  const post = (activeCreds: DeviceCredentials) =>
+    fetch(`${PIN_API_BASE}/api/devices/ingest`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Device-Id": activeCreds.deviceId,
+        "X-Device-Token": activeCreds.deviceToken,
+      },
+      body: JSON.stringify(buildWire(activeCreds)),
+    });
+
+  let res = await post(creds);
+  if (res.status === 401) {
+    await clearStored();
+    const freshCreds = await ensureDevice();
+    res = await post(freshCreds);
+  }
   if (!res.ok) {
     if (res.status === 401) {
-      // Stale token — drop the cache so next ensureDevice() re-registers.
+      // Stale token persisted even after retry; force a fresh registration on
+      // the next scheduler cycle.
       await clearStored();
     }
     throw new Error(`/devices/ingest failed: ${res.status} ${await res.text().catch(() => "")}`);

@@ -26,6 +26,7 @@ import ToolActivityCard from "./ToolActivityCard";
 import MessageActionBar from "./MessageActionBar";
 import MarkdownContent from "./MarkdownContent";
 import ReasoningBlock from "./ReasoningBlock";
+import TodoPanel from "./TodoPanel";
 import BrowserPanel from "../browser-view/BrowserPanel";
 import type { SheetStage } from "../browser-view/BrowserView";
 import { useBrowserSession } from "@/hooks/useBrowserSession";
@@ -330,6 +331,7 @@ export default function MainChatView({
           topOffset={browserStage === "mini" ? 32 : 0}
           emptyState={emptyState}
           inputPlaceholder={inputPlaceholder}
+          composerFocused={composerFocused}
           onComposerFocusChange={setComposerFocused}
         />
 
@@ -379,6 +381,7 @@ function ChatRuntimeScope({
   topOffset,
   emptyState,
   inputPlaceholder,
+  composerFocused,
   onComposerFocusChange,
 }: {
   sessionKey: string;
@@ -388,6 +391,7 @@ function ChatRuntimeScope({
   topOffset: number;
   emptyState?: ReactNode;
   inputPlaceholder?: string;
+  composerFocused: boolean;
   onComposerFocusChange: (focused: boolean) => void;
 }) {
   // Track keyboard so we can render a dismiss-keyboard button in the
@@ -465,16 +469,24 @@ function ChatRuntimeScope({
             <ThreadPrimitive.ViewportFooter />
           </ThreadPrimitive.Viewport>
 
-          <ThreadPrimitive.ScrollToBottom className="absolute bottom-24 right-4 z-10 p-2 rounded-full glass-card-strong shadow-md hover:bg-foreground/10 transition-colors">
-            <ChevronDown size={16} className="text-foreground/60" />
-          </ThreadPrimitive.ScrollToBottom>
+          {/* Footer cluster — ScrollToBottom is anchored to this container's
+              top edge, so when TodoPanel expands/collapses (or the keyboard
+              pushes everything up) the chevron stays the same offset above
+              the composer without manual height bookkeeping. */}
+          <div className="relative shrink-0">
+            <ThreadPrimitive.ScrollToBottom className="absolute -top-12 right-4 z-10 p-2 rounded-full glass-card-strong shadow-md hover:bg-foreground/10 transition-colors">
+              <ChevronDown size={16} className="text-foreground/60" />
+            </ThreadPrimitive.ScrollToBottom>
 
-          <ChatComposer
-            inputPlaceholder={inputPlaceholder}
-            kbVisible={kbVisible}
-            onDismissKeyboard={handleDismissKeyboard}
-            onComposerFocusChange={onComposerFocusChange}
-          />
+            <TodoPanel sessionKey={sessionKey} composerFocused={composerFocused} />
+
+            <ChatComposer
+              inputPlaceholder={inputPlaceholder}
+              kbVisible={kbVisible}
+              onDismissKeyboard={handleDismissKeyboard}
+              onComposerFocusChange={onComposerFocusChange}
+            />
+          </div>
         </ThreadPrimitive.Root>
       </div>
     </AssistantRuntimeProvider>
