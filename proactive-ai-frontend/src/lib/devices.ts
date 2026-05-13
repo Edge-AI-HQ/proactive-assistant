@@ -315,6 +315,7 @@ export interface PersonalSignalInput {
   id?: string;
   source?: string;            // defaults to "device:<creds.deviceId>"
   kind: string;
+  sync_mode?: "incremental" | "full";
   title: string;
   summary: string;
   payload?: Record<string, unknown>;
@@ -385,6 +386,7 @@ export async function ingestSignals(
       ? `device:${activeCreds.deviceId}`
       : it.source,
     kind: it.kind,
+    ...(it.sync_mode ? { sync_mode: it.sync_mode } : {}),
     title: it.title,
     summary: it.summary,
     payload: it.payload ?? {},

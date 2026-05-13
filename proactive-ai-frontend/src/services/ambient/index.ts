@@ -17,6 +17,7 @@ import {
 } from "./outbox";
 import { AmbientSyncScheduler } from "./sync-scheduler";
 import { ActivitySource } from "./sources/activity";
+import { HealthSource } from "./sources/health";
 import { LocationSource } from "./sources/location";
 import { SoundClassifierSource } from "./sources/sound-classifier";
 import type { AmbientSource, SourceContext } from "./sources/types";
@@ -26,7 +27,8 @@ export type SourceKey =
   | "sound_classifier"
   | "visit"
   | "activity"
-  | "location";
+  | "location"
+  | "health";
 
 export interface SourceStatus {
   key: SourceKey;
@@ -87,6 +89,7 @@ class AmbientRuntime {
       ["visit", new VisitSource(ctx)],
       ["activity", new ActivitySource(ctx)],
       ["location", new LocationSource(ctx)],
+      ["health", new HealthSource(ctx)],
     ]);
 
     for (const [k, src] of this.sources) {
@@ -192,6 +195,20 @@ class AmbientRuntime {
     this.notify();
   }
 
+  async refreshActiveSources(): Promise<void> {
+    for (const [key, src] of this.sources) {
+      const st = this.statusBySource.get(key);
+      if (!st?.enabled || typeof src.refresh !== "function") continue;
+      try {
+        await src.refresh();
+        st.lastError = null;
+      } catch (err) {
+        st.lastError = describeError(err);
+      }
+    }
+    this.notify();
+  }
+
   status(): RuntimeStatus {
     const schedulerStatus = this.scheduler.status();
     return {
@@ -273,11 +290,17 @@ const DEFAULT_AUTO_START_SOURCES: SourceKey[] = [
   "location",
 ];
 
+const ALL_SOURCE_KEYS: SourceKey[] = [
+  ...DEFAULT_AUTO_START_SOURCES,
+  "health",
+];
+
 const SOURCE_TO_KIND: Record<SourceKey, string> = {
   sound_classifier: SIGNAL_KINDS.soundClassification,
   visit: SIGNAL_KINDS.visit,
   activity: SIGNAL_KINDS.activity,
   location: SIGNAL_KINDS.location,
+  health: "health.observation",
 };
 
 const OPT_OUT_STORAGE_KEY = "pin.ambient.optOutSources";
@@ -303,7 +326,7 @@ function saveOptOutSources(sources: Set<SourceKey>): void {
 }
 
 function isSourceKey(value: unknown): value is SourceKey {
-  return typeof value === "string" && DEFAULT_AUTO_START_SOURCES.includes(value as SourceKey);
+  return typeof value === "string" && ALL_SOURCE_KEYS.includes(value as SourceKey);
 }
 
 function countByKind(items: PersonalSignalInput[]): Map<string, number> {

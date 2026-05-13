@@ -48,7 +48,6 @@ export class HealthConnectAdapter extends EventEmitter implements HealthConnectP
 
   async startMonitoring(): Promise<void> {
     if (!ensureNative('HealthConnect')) return;
-    if (this.intervalId !== null) return;
 
     const { available } = await Health.isAvailable();
     if (!available) {
@@ -56,6 +55,7 @@ export class HealthConnectAdapter extends EventEmitter implements HealthConnectP
     }
 
     await this.readAndEmit();
+    if (this.intervalId !== null) return;
     this.intervalId = setInterval(() => {
       void this.readAndEmit();
     }, POLL_INTERVAL_MS);

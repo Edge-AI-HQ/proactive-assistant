@@ -17,4 +17,5 @@ export interface AmbientSource {
   isStarted(): boolean;
   start(): Promise<void>;
   stop(): Promise<void>;
+  refresh?(): Promise<void>;
 }

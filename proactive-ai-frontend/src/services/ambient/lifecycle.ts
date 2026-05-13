@@ -16,7 +16,10 @@ export function bindAmbientLifecycle(): void {
   App.addListener("appStateChange", ({ isActive }) => {
     const rt = getAmbientRuntime();
     if (isActive) {
-      void rt.drain();
+      void (async () => {
+        await rt.refreshActiveSources();
+        await rt.drain();
+      })();
       return;
     }
     void rt.drain().catch(() => {

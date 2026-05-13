@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   clearDeviceCredentials,
   ensureDevice,
+  ingestSignals,
   withDeviceHeaders,
 } from "./devices";
 
@@ -188,5 +189,40 @@ describe("withDeviceHeaders", () => {
   test("returns input unchanged when creds are null", () => {
     const out = withDeviceHeaders({ "Content-Type": "application/json" }, null);
     expect(out["X-Device-Id"]).toBeUndefined();
+  });
+});
+
+describe("ingestSignals", () => {
+  beforeEach(() => {
+    fetchMock.mockReset();
+  });
+
+  test("passes sync_mode through to the device ingest body", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        accepted: 1,
+        inserted: 1,
+        ignored: 0,
+        results: [{ id: "health-1", dedupeKey: null, status: "inserted" }],
+      }),
+    });
+
+    await ingestSignals(
+      { deviceId: "ios-device-123456", deviceToken: "secret-token", platform: "ios" },
+      [{
+        id: "health-1",
+        kind: "health.observation",
+        sync_mode: "full",
+        title: "Daily steps",
+        summary: "8120 steps today",
+        payload: { metric: "steps", observations: [] },
+      }],
+    );
+
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body[0].sync_mode).toBe("full");
   });
 });

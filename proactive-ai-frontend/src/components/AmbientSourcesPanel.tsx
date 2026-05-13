@@ -30,12 +30,14 @@ const SOURCE_HINTS: Record<SourceKey, string> = {
   visit: "iOS only · system-detected place arrivals/departures",
   activity: "iOS only · stationary/walking/running/automotive/cycling",
   location: "Continuous GPS watch · 25m delta filter",
+  health: "HealthKit foreground snapshots · steps, sleep, heart rate",
 };
 
 const NATIVE_ONLY_SOURCES: ReadonlySet<SourceKey> = new Set([
   "sound_classifier",
   "visit",
   "activity",
+  "health",
 ]);
 
 function formatTime(ts: number | null): string {

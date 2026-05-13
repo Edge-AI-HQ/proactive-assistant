@@ -110,10 +110,8 @@ pinai-agents/.env / pinai-agents/.env.chat / ops/litellm/.env  # 本地明文，
 
 首次设置：
 ```bash
-# ⚠️ make init / 根目录 npm install 当前会因 package.json 还保留 apis workspace 而报错；
-# 在 Makefile/package.json 清理之前，按下面手动装：
 cd pinai-agents && uv sync && cd -
-cd proactive-ai-frontend && npm install && cd -
+npm install                # root workspace 安装 proactive-ai-frontend + capacitor-plugins；iOS SPM 路径依赖这里的 node_modules
 # 找团队成员获取 .env.keys
 # 放到 pinai-agents/.env.keys 和 ops/litellm/.env.keys
 make up                    # 自动解密 .env.dev → .env，构建并启动所有服务
@@ -154,6 +152,8 @@ make ios                   # 构建前端 → cap sync → 打开 Xcode
 make android               # 构建前端 → cap sync → 装到 USB device
 ```
 后端切换：`NGROK=<url> make ios` 走临时公网；`DEV=1 make ios` 指 fly dev；`PROD=1 make ios` 指 fly prod；不传变量默认连本机 LAN IP:8000 的 pinai-web。
+
+iOS 真机安装硬规则：永远不要为了绕过签名、权限、验证或并存安装去新增/改用 bundle id、包名、scheme、target，或安装 `*.dev` 之类的新 App。必须直接 build 当前已安装 App 的原 bundle id，并用新包覆盖替换旧 App；如果原 bundle id 的 signing/profile 不满足能力要求，就停下来报告真实 blocker，不要换 bundle id 绕过。
 
 验证：
 ```bash
