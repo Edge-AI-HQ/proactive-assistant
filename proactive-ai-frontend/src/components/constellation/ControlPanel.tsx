@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Sparkles, MapPin, Plus, X, User as UserIcon,
@@ -14,8 +14,13 @@ import {
   DrawerDescription,
 } from "@/components/ui/drawer";
 import { Slider } from "@/components/ui/slider";
+import { isNative } from "@/lib/platform";
 import GoalsView from "./GoalsView";
-import AmbientModelsPanel from "@/components/AmbientModelsPanel";
+
+// AmbientModelsPanel pulls in @pin/capacitor-ambient-ai, which is
+// rollup-external for the web build. Load it lazily and only mount on
+// native so the web bundle never references the bare specifier.
+const AmbientModelsPanel = lazy(() => import("@/components/AmbientModelsPanel"));
 
 const TABS = ["Personality", "Goals", "World Model", "Prompt", "Models"] as const;
 
@@ -433,7 +438,23 @@ export default function ControlPanel() {
             </p>
           </div>
 
-          <AmbientModelsPanel />
+          {isNative ? (
+            <Suspense
+              fallback={
+                <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-4 text-[11px] text-foreground/45">
+                  Loading model manifest…
+                </div>
+              }
+            >
+              <AmbientModelsPanel />
+            </Suspense>
+          ) : (
+            <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-4 text-[12px] text-foreground/60 leading-relaxed">
+              On-device models are only available inside the iOS app.
+              Open this page in the native build to download, verify, or
+              delete the whisper / llama profiles.
+            </div>
+          )}
 
           <p className="text-[11px] text-foreground/45 leading-snug px-1">
             Models are stored locally and never re-uploaded. If a download

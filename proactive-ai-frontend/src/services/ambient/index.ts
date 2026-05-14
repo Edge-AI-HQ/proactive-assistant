@@ -10,6 +10,11 @@
 import type { PersonalSignalInput } from "@/lib/devices";
 import { isNative } from "@/lib/platform";
 import { SignalBuffer } from "./buffer";
+import {
+  ALL_SOURCE_KEYS,
+  DEFAULT_AUTO_START_SOURCES,
+  type SourceKey,
+} from "./keys";
 import { SIGNAL_KINDS } from "./kinds";
 import {
   MemoryOutboxStore, SqliteOutboxStore,
@@ -23,12 +28,8 @@ import { SoundClassifierSource } from "./sources/sound-classifier";
 import type { AmbientSource, SourceContext } from "./sources/types";
 import { VisitSource } from "./sources/visit";
 
-export type SourceKey =
-  | "sound_classifier"
-  | "visit"
-  | "activity"
-  | "location"
-  | "health";
+export { ALL_SOURCE_KEYS, DEFAULT_AUTO_START_SOURCES };
+export type { SourceKey };
 
 export interface SourceStatus {
   key: SourceKey;
@@ -293,18 +294,6 @@ class AmbientRuntime {
     for (const l of this.listeners) l();
   }
 }
-
-const DEFAULT_AUTO_START_SOURCES: SourceKey[] = [
-  "sound_classifier",
-  "visit",
-  "activity",
-  "location",
-];
-
-export const ALL_SOURCE_KEYS: SourceKey[] = [
-  ...DEFAULT_AUTO_START_SOURCES,
-  "health",
-];
 
 const SOURCE_TO_KIND: Record<SourceKey, string> = {
   sound_classifier: SIGNAL_KINDS.soundClassification,

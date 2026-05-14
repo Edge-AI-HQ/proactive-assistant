@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, forwardRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { AmbientAi, type TranscriptReadyEvent } from "@pin/capacitor-ambient-ai";
+import type { TranscriptReadyEvent } from "@pin/capacitor-ambient-ai";
 import type { PluginListenerHandle } from "@capacitor/core";
 import { isNative } from "@/lib/platform";
 import {
@@ -13,16 +13,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useUserSettings } from "@/hooks/useUserSettings";
-import {
-  ALL_SOURCE_KEYS,
-  getAmbientRuntime,
-  type RuntimeStatus,
-  type SourceKey,
-} from "@/services/ambient";
-import {
-  startAmbientUpload,
-  stopAmbientUpload,
-} from "@/services/ambient/lifecycle";
+import { ALL_SOURCE_KEYS, type SourceKey } from "@/services/ambient/keys";
+import type { RuntimeStatus } from "@/services/ambient";
 
 
 interface Device {
@@ -265,9 +257,7 @@ interface AmbientViewProps {
 
 export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHandled, onOpenFullscreen }: AmbientViewProps = {}) {
   const { settings, patch } = useUserSettings();
-  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus>(() =>
-    getAmbientRuntime().status(),
-  );
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
   const [togglePending, setTogglePending] = useState(false);
   const [liveIndex, setLiveIndex] = useState(0);
   const [view, setView] = useState<"timeline" | "devices">("timeline");
@@ -283,21 +273,47 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
   const consentOn = settings
     ? Object.values(settings.ambientSources ?? {}).some((c) => c?.enabled === true)
     : null;
-  const runtimeOn = runtimeStatus.sources.some((s) => s.enabled);
+  const runtimeOn = runtimeStatus
+    ? runtimeStatus.sources.some((s) => s.enabled)
+    : false;
   const ambientOn = consentOn ?? runtimeOn;
-  const uploadsLocked = runtimeStatus.uploadsLocked;
+  const uploadsLocked = runtimeStatus?.uploadsLocked ?? false;
   const firstSourceError =
-    runtimeStatus.sources.find((s) => s.lastError)?.lastError ?? null;
+    runtimeStatus?.sources.find((s) => s.lastError)?.lastError ?? null;
 
+  // Subscribe to the ambient runtime via dynamic import: the runtime
+  // module statically depends on @pin/capacitor-ambient-ai (and friends),
+  // which is rollup-external on the web build. Keeping the load behind
+  // a runtime ``isNative`` guard means the web chunk is never fetched
+  // at all and the main bundle stays free of bare native specifiers.
   useEffect(() => {
-    const rt = getAmbientRuntime();
-    return rt.subscribe(() => setRuntimeStatus(rt.status()));
+    if (!isNative) return;
+    let cancelled = false;
+    let unsubscribe: (() => void) | null = null;
+    void (async () => {
+      try {
+        const { getAmbientRuntime } = await import("@/services/ambient");
+        if (cancelled) return;
+        const rt = getAmbientRuntime();
+        setRuntimeStatus(rt.status());
+        unsubscribe = rt.subscribe(() => setRuntimeStatus(rt.status()));
+      } catch {
+        // Module load failed; UI keeps the null status fallback.
+      }
+    })();
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }, []);
 
   // Subscribe to plugin transcripts while ambient is on so the Live card
-  // shows real captured speech instead of the demo scenarios.
+  // shows real captured speech instead of the demo scenarios. Native
+  // only: the @pin/capacitor-ambient-ai module is rollup-external for
+  // the web build, so we behind both a runtime ``isNative`` guard and
+  // a dynamic import so web bundles never reach the bare specifier.
   useEffect(() => {
-    if (!ambientOn) {
+    if (!ambientOn || !isNative) {
       setLiveSessionData(null);
       startedAtRef.current = null;
       return;
@@ -306,13 +322,15 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
     let handle: PluginListenerHandle | null = null;
     void (async () => {
       try {
+        const { AmbientAi } = await import("@pin/capacitor-ambient-ai");
+        if (cancelled) return;
         handle = await AmbientAi.addListener("transcriptReady", (event) => {
           if (cancelled) return;
           setLiveSessionData((prev) => appendTranscript(prev, event));
         });
       } catch {
-        // Non-native or plugin not registered; live preview falls back to
-        // the mock scenarios below.
+        // Plugin not registered or module load failed; live preview
+        // falls back to the mock scenarios below.
       }
     })();
     return () => {
@@ -330,15 +348,17 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
         ALL_SOURCE_KEYS.map((key) => [key, { enabled: next }]),
       );
       const updated = await patch({ ambientSources: consentPatch });
+      if (!isNative) return;
+      const lifecycle = await import("@/services/ambient/lifecycle");
       if (next) {
         const enabledSources = updated
           ? (Object.entries(updated.ambientSources ?? {})
               .filter(([, v]) => v?.enabled === true)
               .map(([k]) => k as SourceKey))
           : ALL_SOURCE_KEYS;
-        startAmbientUpload({ enabledSources });
+        lifecycle.startAmbientUpload({ enabledSources });
       } else {
-        await stopAmbientUpload();
+        await lifecycle.stopAmbientUpload();
       }
     } finally {
       setTogglePending(false);
@@ -346,7 +366,15 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
   }, [ambientOn, patch, togglePending]);
 
   const handleLockToggle = useCallback(() => {
-    getAmbientRuntime().setUploadsLocked(!uploadsLocked);
+    if (!isNative) return;
+    void (async () => {
+      try {
+        const { getAmbientRuntime } = await import("@/services/ambient");
+        getAmbientRuntime().setUploadsLocked(!uploadsLocked);
+      } catch {
+        // ignore — UI state stays in sync via the subscription effect.
+      }
+    })();
   }, [uploadsLocked]);
 
   const realSession = useMemo<LiveSession | null>(() => {
