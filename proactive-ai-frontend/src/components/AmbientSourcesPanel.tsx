@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Radio } from "lucide-react";
 import AmbientAudioDebugPanel from "./AmbientAudioDebugPanel";
+import AmbientModelsPanel from "./AmbientModelsPanel";
 import { isNative } from "@/lib/platform";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import {
@@ -205,6 +206,9 @@ export default function AmbientSourcesPanel() {
       )}
       <div className="mt-3">
         <AmbientAudioDebugPanel />
+      </div>
+      <div className="mt-3">
+        <AmbientModelsPanel />
       </div>
     </div>
   );

@@ -16,6 +16,7 @@ import type {
   DeviceStateSnapshot,
   FocusEvent,
   HeartRateEvent,
+  ModelDownloadProgressEvent,
   NearbyBTEvent,
   NotificationCountEvent,
   PhotosEvent,
@@ -131,6 +132,14 @@ export const AmbientAi: AmbientAiFacade = {
     stopMonitoring: () => native.contacts.stopMonitoring(),
   },
 
+  models: {
+    list: () => native.models.listModels(),
+    startDownload: (options) => native.models.startModelDownload(options),
+    cancelDownload: (options) => native.models.cancelModelDownload(options),
+    deleteModel: (options) => native.models.deleteModel(options),
+    verifyModel: (options) => native.models.verifyModel(options),
+  },
+
   addListener,
 
   async removeAllListeners(): Promise<void> {
@@ -146,6 +155,7 @@ export const AmbientAi: AmbientAiFacade = {
       native.health.removeAllListeners(),
       native.battery.removeAllListeners(),
       native.contacts.removeAllListeners(),
+      native.models.removeAllListeners(),
     ]);
   },
 };
@@ -201,6 +211,16 @@ function addListener<K extends AmbientEventName>(
       return native.audio.addListener('transcriptRefined', listenerFunc as (event: TranscriptRefinedEvent) => void);
     case 'visit':
       return native.visit.addListener('visit', listenerFunc as (event: VisitEvent) => void);
+    case 'modelDownloadProgress':
+      return native.models.addListener(
+        'modelDownloadProgress',
+        listenerFunc as (event: ModelDownloadProgressEvent) => void,
+      );
+    case 'modelDownloadDone':
+      return native.models.addListener(
+        'modelDownloadDone',
+        listenerFunc as (event: ModelDownloadProgressEvent) => void,
+      );
     default:
       return noopHandle();
   }
