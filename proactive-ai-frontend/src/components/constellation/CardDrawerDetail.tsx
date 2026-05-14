@@ -1,226 +1,225 @@
-import { MessageCircle, Pencil, X, Zap } from "lucide-react";
+import { useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { ChevronDown, Zap, FileText } from "lucide-react";
+import { brandSvg, detectToolIcon, ArtifactItem, type Artifact } from "./ChatDetailView";
 
-import { Drawer, DrawerContent } from "@/components/ui/drawer";
-import type { Intent } from "@/types/constellation";
-
-import { categoryFor } from "./categoryMeta";
-
-interface CardDrawerDetailProps {
-  intent: Intent | null;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onApprove: (intent: Intent) => void;
-  onModify?: (intent: Intent) => void;
-  onDismiss?: (intent: Intent) => void;
-  onChat?: (intent: Intent) => void;
+/* ── Shared types (mirrored across ConstellationLayout / ChatDetailView) ── */
+export interface DrawerDetailCard {
+  tag?: string;
+  line2: string;
+  locked?: boolean;
+  detail?: {
+    executionPlan: { text: string; tool: string }[];
+    artifacts?: Artifact[];
+  };
 }
 
-export default function CardDrawerDetail({
-  intent,
-  open,
-  onOpenChange,
-  onApprove,
-  onModify,
-  onDismiss,
-  onChat,
-}: CardDrawerDetailProps) {
+/* ── Source label → brand icon mapping ── */
+function sourceToIcon(label: string) {
+  const l = label.toLowerCase();
+  if (l.includes("gmail") || l.includes("email")) return { brand: "gmail" as const, label: "Gmail" };
+  if (l.includes("calendar") || l.includes("gcal")) return { brand: "gcal" as const, label: "Calendar" };
+  if (l.includes("slack")) return { brand: "slack" as const, label: "Slack" };
+  if (l.includes("notion")) return { brand: "notion" as const, label: "Notion" };
+  if (l.includes("drive")) return { brand: "gdrive" as const, label: "Drive" };
+  if (l.includes("doc")) return { brand: "gdocs" as const, label: "Docs" };
+  if (l.includes("sheet")) return { brand: "gsheets" as const, label: "Sheets" };
+  if (l.includes("linear")) return { brand: "linear" as const, label: "Linear" };
+  if (l.includes("brex")) return { brand: null, label: "Brex" };
+  if (l.includes("whoop")) return { brand: null, label: "Whoop" };
+  if (l.includes("apple health")) return { brand: null, label: "Apple Health" };
+  if (l.includes("web")) return { brand: null, label: "Web" };
+  return { brand: null, label: label.split("·")[0].trim().split("—")[0].trim() };
+}
+
+export function parseSources(line2: string): string[] {
+  const cleaned = line2.replace(/^sources:\s*/i, "");
+  return Array.from(new Set(cleaned.split(/[·,]/).map((s) => s.trim()).filter(Boolean)));
+}
+
+/* "How generated" — short reasoning chips */
+function howGenerated(card: DrawerDetailCard): string[] {
+  const sources = parseSources(card.line2);
+  const reasons: string[] = [];
+  if (card.tag === "Urgent") reasons.push("Urgent flag");
+  if (card.tag === "Alert") reasons.push("Time-sensitive");
+  if (sources.some((s) => /gmail|email/i.test(s))) reasons.push("Email signal");
+  if (sources.some((s) => /slack/i.test(s))) reasons.push("Slack mention");
+  if (sources.some((s) => /calendar|gcal/i.test(s))) reasons.push("Upcoming event");
+  if (sources.some((s) => /notion/i.test(s))) reasons.push("Notion context");
+  if (sources.some((s) => /web/i.test(s))) reasons.push("Web trend");
+  if (sources.some((s) => /whoop|apple health/i.test(s))) reasons.push("Health data");
+  if (card.tag?.includes("Signal")) reasons.push("Pattern match");
+  return Array.from(new Set(reasons)).slice(0, 4);
+}
+
+function SourcePill({ source }: { source: string }) {
+  const info = sourceToIcon(source);
   return (
-    <Drawer open={open} onOpenChange={onOpenChange}>
-      <DrawerContent className="max-h-[88vh] overflow-hidden border-foreground/10 bg-background/95 backdrop-blur-xl">
-        {intent ? <Body intent={intent} onApprove={onApprove} onModify={onModify} onDismiss={onDismiss} onChat={onChat} /> : null}
-      </DrawerContent>
-    </Drawer>
+    <div className="inline-flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-full bg-foreground/[0.05] border border-foreground/[0.06]">
+      <span className="w-5 h-5 rounded-md bg-white flex items-center justify-center overflow-hidden shrink-0">
+        {info.brand ? (
+          <span className="w-3.5 h-3.5">{brandSvg(info.brand)}</span>
+        ) : (
+          <span className="text-[9px] font-bold text-foreground/70">{info.label.slice(0, 1)}</span>
+        )}
+      </span>
+      <span className="text-[12px] font-medium text-foreground/70">{info.label}</span>
+    </div>
   );
 }
 
-function Body({
-  intent,
-  onApprove,
-  onModify,
-  onDismiss,
-  onChat,
-}: {
-  intent: Intent;
-  onApprove: (intent: Intent) => void;
-  onModify?: (intent: Intent) => void;
-  onDismiss?: (intent: Intent) => void;
-  onChat?: (intent: Intent) => void;
-}) {
-  const cat = categoryFor(intent.category);
-  const Icon = cat.icon;
-  const detail = intent.detail;
-  const hasScores = (detail?.scores?.length ?? 0) > 0;
-  const hasPlan = (detail?.executionPlan?.length ?? 0) > 0;
-  const hasSources = (detail?.dataSources?.length ?? 0) > 0;
-
+function ExecutionStepRow({ step }: { step: { text: string; tool: string } }) {
+  const icon = detectToolIcon(step.text + " " + step.tool);
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <div className="overflow-y-auto px-5 pt-2 pb-4 flex-1">
-        <div className="flex items-center gap-1.5 mb-3">
-          <Icon size={14} strokeWidth={1.5} className="text-foreground/50" />
-          <span className="text-xs font-semibold tracking-wide text-foreground/50 uppercase">
-            {cat.label}
-          </span>
-          {intent.tag && (
-            <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-full bg-foreground/10 text-foreground/50">
-              {intent.tag}
-            </span>
-          )}
-          {intent.status === "processing" && (
-            <span className="ml-auto inline-flex items-center gap-1 text-[11px] font-semibold text-amber-600">
-              <span className="w-2 h-2 rounded-full border-[1.5px] border-amber-500 border-t-transparent animate-spin" />
-              processing
-            </span>
-          )}
-          {intent.status === "done" && (
-            <span className="ml-auto text-[11px] font-bold text-green-600 uppercase tracking-wider">
-              done
-            </span>
+    <div className="flex items-start gap-2.5 py-1.5">
+      <div className="relative shrink-0" style={{ width: 28, height: 28 }}>
+        <div
+          className="w-7 h-7 rounded-[8px] flex items-center justify-center overflow-hidden border border-foreground/10"
+          style={{ background: icon.kind === "brand" ? "#fff" : "rgba(255,255,255,0.85)" }}
+        >
+          {icon.kind === "brand" ? (
+            <div className="w-[18px] h-[18px]">{brandSvg(icon.name)}</div>
+          ) : (
+            <icon.Icon size={13} strokeWidth={1.8} className="text-foreground/75" />
           )}
         </div>
-
-        <h2 className="text-display text-[20px] leading-snug text-foreground mb-2.5 font-semibold">
-          {intent.title}
-        </h2>
-
-        {intent.line1 && (
-          <p className="text-[14px] text-foreground/75 leading-relaxed mb-2">
-            {intent.line1}
-          </p>
-        )}
-        {intent.line2 && (
-          <p className="text-[12px] text-foreground/55 leading-relaxed mb-4">
-            {intent.line2}
-          </p>
-        )}
-
-        {hasScores && (
-          <div
-            className="grid gap-2 mb-4"
-            style={{
-              gridTemplateColumns: `repeat(${detail!.scores.length}, minmax(0, 1fr))`,
-            }}
-          >
-            {detail!.scores.map((s) => (
-              <div key={s.label} className="rounded-xl bg-foreground/5 py-2.5 text-center">
-                <div className="text-lg font-bold text-foreground/85">{s.value}</div>
-                <div className="text-[11px] text-foreground/50 mt-0.5">{s.label}</div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {detail?.willExecute && (
-          <div
-            className="rounded-xl p-3.5 mb-4 border border-pink-200/40"
-            style={{
-              background:
-                "linear-gradient(135deg, rgba(225,92,230,0.10) 0%, rgba(225,92,230,0.04) 100%)",
-            }}
-          >
-            <div className="text-[11px] font-bold mb-1 uppercase tracking-wider">
-              <span className="bg-gradient-to-r from-[hsl(292,78%,63%)] to-[hsl(330,80%,65%)] bg-clip-text text-transparent">
-                Will execute on confirm
-              </span>
-            </div>
-            <p className="text-[13.5px] text-foreground/85 leading-relaxed">
-              {detail.willExecute}
-            </p>
-          </div>
-        )}
-
-        {hasPlan && (
-          <div className="mb-4">
-            <div className="text-[11px] font-bold text-foreground/55 uppercase tracking-wider mb-2">
-              Execution Plan
-            </div>
-            <div className="flex flex-col gap-1.5">
-              {detail!.executionPlan.map((step, i) => (
-                <div
-                  key={i}
-                  className="flex items-center gap-2 rounded-xl bg-foreground/[0.04] px-3 py-2"
-                >
-                  <Zap size={12} strokeWidth={1.5} className="text-foreground/40 shrink-0" />
-                  <span className="text-[13px] text-foreground/75 flex-1">{step.text}</span>
-                  <span className="text-[11px] text-foreground/40 bg-foreground/5 px-2 py-0.5 rounded-full whitespace-nowrap">
-                    {step.tool}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {hasSources && (
-          <div className="mb-4">
-            <div className="text-[11px] font-bold text-foreground/55 uppercase tracking-wider mb-1.5">
-              Sources
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {detail!.dataSources.map((source, i) => (
-                <div
-                  key={i}
-                  className="inline-flex items-center px-2.5 py-1 rounded-full bg-foreground/[0.05] border border-foreground/[0.06] text-[12px] font-medium text-foreground/70"
-                >
-                  {source}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {detail?.impact && (
-          <p className="text-[13px] text-foreground/55 mb-1">
-            <span className="font-semibold text-foreground/70">Impact:</span> {detail.impact}
-          </p>
-        )}
-        {detail?.permissions && (
-          <p className="text-[13px] text-foreground/55 mb-2">
-            <span className="font-semibold text-foreground/70">Permissions:</span>{" "}
-            {detail.permissions}
-          </p>
-        )}
       </div>
-
-      <div
-        className="px-5 pb-5 pt-3 border-t border-foreground/5 flex items-center gap-2"
-        style={{ paddingBottom: "max(env(safe-area-inset-bottom, 0px) + 16px, 20px)" }}
-      >
-        {onDismiss && (
-          <button
-            onClick={() => onDismiss(intent)}
-            className="flex items-center justify-center gap-1.5 px-3 h-11 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/55"
-            aria-label="Dismiss"
-          >
-            <X size={14} strokeWidth={1.5} />
-          </button>
-        )}
-        {onChat && (
-          <button
-            onClick={() => onChat(intent)}
-            className="flex items-center justify-center gap-1.5 px-3 h-11 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/55"
-            aria-label="Open chat"
-          >
-            <MessageCircle size={14} strokeWidth={1.5} />
-          </button>
-        )}
-        {onModify && (
-          <button
-            onClick={() => onModify(intent)}
-            className="flex-1 flex items-center justify-center gap-2 h-11 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[14px] font-medium text-foreground/65"
-          >
-            <Pencil size={14} strokeWidth={1.5} />
-            Modify
-          </button>
-        )}
-        <button
-          onClick={() => onApprove(intent)}
-          className="flex-1 flex items-center justify-center gap-2 h-11 rounded-xl bg-foreground text-background text-[14px] font-semibold hover:bg-foreground/85 transition-colors"
-        >
-          <Zap size={14} strokeWidth={2} />
-          Approve
-        </button>
+      <div className="flex-1 min-w-0 pt-0.5">
+        <div className="text-[13px] text-foreground/85 leading-snug">{step.text}</div>
+        <div className="text-[10px] text-foreground/45 mt-0.5 uppercase tracking-wide font-medium">{step.tool}</div>
       </div>
     </div>
+  );
+}
+
+export function DrawerDetailBody({ card }: { card: DrawerDetailCard }) {
+  const detail = card.detail!;
+  const [planOpen, setPlanOpen] = useState(true);
+  const [draftsOpen, setDraftsOpen] = useState(true);
+  const sources = parseSources(card.line2);
+  const reasons = howGenerated(card);
+  const artifacts = detail.artifacts ?? [];
+
+  // Join reasons into a single sentence
+  const reasonSentence = (() => {
+    if (reasons.length === 0) return null;
+    const lower = reasons.map((r) => r.toLowerCase());
+    let body: string;
+    if (lower.length === 1) body = lower[0];
+    else if (lower.length === 2) body = `${lower[0]} and ${lower[1]}`;
+    else body = `${lower.slice(0, -1).join(", ")}, and ${lower[lower.length - 1]}`;
+    return `Generated from ${body}.`;
+  })();
+
+  return (
+    <>
+      {/* Execution Plan — pink gradient, collapsible with timeline */}
+      <div
+        className="mb-3 rounded-2xl overflow-hidden border"
+        style={{
+          background: "linear-gradient(135deg, rgba(225,92,230,0.10) 0%, rgba(225,92,230,0.04) 100%)",
+          borderColor: "hsl(292 78% 63% / 0.22)",
+        }}
+      >
+        <button
+          onClick={() => setPlanOpen((v) => !v)}
+          className="w-full flex items-center justify-between px-3.5 py-2.5"
+        >
+          <div className="flex items-center gap-1.5">
+            <Zap size={13} strokeWidth={2.5} color="hsl(292,78%,63%)" />
+            <span className="text-[11px] font-bold uppercase tracking-wider bg-gradient-to-r from-[hsl(292,78%,63%)] to-[hsl(330,80%,65%)] bg-clip-text text-transparent">
+              Execution Plan
+            </span>
+            <span className="text-[11px] font-medium text-foreground/45">· {detail.executionPlan.length} steps</span>
+          </div>
+          <ChevronDown
+            size={16}
+            className={`text-[hsl(292,78%,63%)]/70 transition-transform ${planOpen ? "rotate-180" : ""}`}
+          />
+        </button>
+        <AnimatePresence initial={false}>
+          {planOpen && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="overflow-hidden"
+            >
+              <div className="px-3.5 pb-2.5 relative">
+                {/* timeline rail */}
+                <div className="absolute left-[27px] top-1.5 bottom-2 w-px bg-[hsl(292,78%,63%)]/20" />
+                <div className="relative">
+                  {detail.executionPlan.map((step, i) => (
+                    <ExecutionStepRow key={i} step={step} />
+                  ))}
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* Generated drafts — collapsible preview of final email/notes */}
+      {artifacts.length > 0 && (
+        <div
+          className="mb-3 rounded-2xl overflow-hidden border border-foreground/10"
+          style={{ background: "rgba(255,255,255,0.55)" }}
+        >
+          <button
+            onClick={() => setDraftsOpen((v) => !v)}
+            className="w-full flex items-center justify-between px-3.5 py-2.5"
+          >
+            <div className="flex items-center gap-1.5">
+              <FileText size={13} strokeWidth={2.5} className="text-foreground/60" />
+              <span className="text-[11px] font-bold uppercase tracking-wider text-foreground/60">
+                {artifacts.length === 1 ? "Generated draft" : "Generated drafts"}
+              </span>
+              <span className="text-[11px] font-medium text-foreground/45">· {artifacts.length}</span>
+            </div>
+            <ChevronDown
+              size={16}
+              className={`text-foreground/40 transition-transform ${draftsOpen ? "rotate-180" : ""}`}
+            />
+          </button>
+          <AnimatePresence initial={false}>
+            {draftsOpen && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.22 }}
+                className="overflow-hidden"
+              >
+                <div className="px-3 pb-3 pt-0.5 flex flex-col gap-2">
+                  {artifacts.map((a, i) => (
+                    <ArtifactItem key={i} artifact={a} index={i} locked={!!card.locked} />
+                  ))}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      )}
+
+      {/* Sources — second to last */}
+      {sources.length > 0 && (
+        <div className="mb-3">
+          <div className="text-[11px] font-bold text-foreground/55 uppercase tracking-wider mb-1.5">Sources</div>
+          <div className="flex flex-wrap gap-1.5">
+            {sources.map((s, i) => <SourcePill key={i} source={s} />)}
+          </div>
+        </div>
+      )}
+
+      {/* How generated — last */}
+      {reasonSentence && (
+        <div className="mb-1">
+          <div className="text-[11px] font-bold text-foreground/55 uppercase tracking-wider mb-1">How generated</div>
+          <p className="text-[12.5px] text-foreground/65 leading-snug">{reasonSentence}</p>
+        </div>
+      )}
+    </>
   );
 }

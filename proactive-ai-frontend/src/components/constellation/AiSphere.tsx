@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useRef, useEffect } from "react";
 
 export interface AiSphereProps {
   size?: number;
   mode?: "idle" | "thinking";
+  colorIntensity?: number;
+  glowIntensity?: number;
+  interactive?: boolean;
   className?: string;
   onClick?: () => void;
 }
@@ -24,10 +27,11 @@ export default function AiSphere({
 
   return (
     <div
-      className={`relative ${onClick ? "cursor-pointer" : ""} ${className}`}
+      className={`relative cursor-pointer ${className}`}
       style={{ width: size, height: size }}
       onClick={handleClick}
     >
+      {/* Video sphere — tight mask, soft feathered edge blends naturally into bg */}
       <div
         className="absolute overflow-hidden rounded-full"
         style={{

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import type { LucideIcon } from "lucide-react";
 
 export type SphereCardStatus = "normal" | "new" | "processing" | "done";
@@ -21,7 +21,9 @@ interface Props {
    * fills the available space (cards never escape the bounds).
    */
   radius?: number;
+  /** Approximate card width — used by auto-fit so cards stay inside bounds. */
   cardWidth?: number;
+  /** Approximate card height — used by auto-fit so cards stay inside bounds. */
   cardHeight?: number;
   onCardTap: (id: number) => void;
   cacheKey?: string;
@@ -37,9 +39,15 @@ interface RotState {
 // Module-level cache so rotation survives unmount/remount.
 const rotationCache = new Map<string, RotState>();
 
+/**
+ * Distribute N points evenly on a unit sphere using a Fibonacci lattice.
+ * Avoids the two poles (clamped to ±yMax) so points actually move under yaw.
+ */
 function fibonacciSphere(n: number) {
   const points: { x: number; y: number; z: number }[] = [];
-  const phi = Math.PI * (3 - Math.sqrt(5));
+  const phi = Math.PI * (3 - Math.sqrt(5)); // golden angle
+  // Wider band so points fill more of the vertical space, but still avoid
+  // exact poles (which never move under yaw rotation).
   const yMax = 0.95;
   for (let i = 0; i < n; i++) {
     const t = n === 1 ? 0.5 : i / (n - 1);
@@ -56,21 +64,21 @@ function fibonacciSphere(n: number) {
 }
 
 /**
- * 3D sphere of cards. User drags to rotate (X = yaw only — pitch locked).
+ * 3D sphere of cards. User drags to rotate (X = yaw, Y = pitch).
  * Auto-rotates slowly when idle. Cards always face the camera for readability.
- * Pure DOM transform; no three.js / no Canvas — runs in any WKWebView.
  */
-export default function Sphere3DCards({
+const Sphere3DCards = ({
   items,
   radius,
   cardWidth = 160,
   cardHeight = 68,
   onCardTap,
   cacheKey,
-}: Props) {
+}: Props) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
 
+  // Measure container so we can auto-fit the sphere to the available space.
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -88,6 +96,11 @@ export default function Sphere3DCards({
     };
   }, []);
 
+  // Compute horizontal & vertical radii so cards never escape the bounds.
+  // Horizontal: front-most cards reach scale ≈ 1.1 → reserve full halfW.
+  // Vertical: cards at top/bottom (y=±yMax) sit on the equator plane (z≈0),
+  // so their depth is ~0.5 and scale ~0.83. Use that smaller margin so the
+  // sphere extends much closer to the top/bottom of the container.
   const maxScale = 1.1;
   const polarScale = 0.83;
   const halfW = (cardWidth / 2) * maxScale;
@@ -97,22 +110,25 @@ export default function Sphere3DCards({
   const rx = radius ?? autoRx;
   const ry = radius ?? autoRy;
 
-  const initial =
-    (cacheKey && rotationCache.get(cacheKey)) || {
-      yaw: 0,
-      pitch: -10,
-      velYaw: 0.05,
-      velPitch: 0,
-    };
+  // Restore from cache if available, otherwise start at default pose.
+  const initial = (cacheKey && rotationCache.get(cacheKey)) || {
+    yaw: 0,
+    pitch: -10,
+    velYaw: 0.05,
+    velPitch: 0,
+  };
   const rotRef = useRef({ yaw: initial.yaw, pitch: initial.pitch });
   const velRef = useRef({ yaw: initial.velYaw, pitch: initial.velPitch });
   const draggingRef = useRef(false);
   const lastPointer = useRef({ x: 0, y: 0, t: 0 });
   const [, force] = useState(0);
 
+  // Map id -> stable point index so adding/removing cards doesn't reshuffle
+  // the whole sphere. Points are assigned in id order on first sight.
   const pointsRef = useRef<{ x: number; y: number; z: number }[]>([]);
   const idToPointIdx = useRef<Map<number, number>>(new Map());
 
+  // Allocate enough points for current items + a little headroom
   const ensurePoints = (count: number) => {
     if (pointsRef.current.length < count) {
       pointsRef.current = fibonacciSphere(Math.max(count, 12));
@@ -120,9 +136,11 @@ export default function Sphere3DCards({
   };
   ensurePoints(items.length + 4);
 
+  // Assign sphere slots to any new ids
   const assignedSlots = new Set(idToPointIdx.current.values());
   items.forEach((item) => {
     if (!idToPointIdx.current.has(item.id)) {
+      // find first unused point index
       for (let i = 0; i < pointsRef.current.length; i++) {
         if (!assignedSlots.has(i)) {
           idToPointIdx.current.set(item.id, i);
@@ -133,6 +151,7 @@ export default function Sphere3DCards({
     }
   });
 
+  // Animation loop — persist rotation to cache on every frame
   useEffect(() => {
     let raf = 0;
     const tick = () => {
@@ -172,6 +191,9 @@ export default function Sphere3DCards({
   const onPointerMove = useCallback((e: React.PointerEvent) => {
     if (!draggingRef.current) return;
     const dx = e.clientX - lastPointer.current.x;
+    const dy = e.clientY - lastPointer.current.y;
+    // Yaw only — vertical drag is locked to prevent cards from overflowing
+    // the container when the sphere tilts.
     rotRef.current.yaw += dx * 0.3;
     velRef.current.yaw = velRef.current.yaw * 0.7 + dx * 0.3 * 0.3;
     lastPointer.current = { x: e.clientX, y: e.clientY, t: performance.now() };
@@ -182,16 +204,15 @@ export default function Sphere3DCards({
     (e.target as Element).releasePointerCapture?.(e.pointerId);
   }, []);
 
+  // Apply yaw/pitch rotation to a unit vector
   const rotate = (p: { x: number; y: number; z: number }) => {
     const yaw = (rotRef.current.yaw * Math.PI) / 180;
     const pitch = (rotRef.current.pitch * Math.PI) / 180;
-    const cy = Math.cos(yaw);
-    const sy = Math.sin(yaw);
+    const cy = Math.cos(yaw), sy = Math.sin(yaw);
     const x = p.x * cy + p.z * sy;
     const z = -p.x * sy + p.z * cy;
     const y = p.y;
-    const cp = Math.cos(pitch);
-    const sp = Math.sin(pitch);
+    const cp = Math.cos(pitch), sp = Math.sin(pitch);
     const y2 = y * cp - z * sp;
     const z2 = y * sp + z * cp;
     return { x, y: y2, z: z2 };
@@ -235,15 +256,19 @@ export default function Sphere3DCards({
           const p = pointsRef.current[ptIdx];
           if (!p) return null;
           const rp = rotate(p);
+          // Ellipsoid: separate horizontal & vertical radii so the sphere
+          // fills the container without escaping its bounds. Depth uses the
+          // smaller axis so scale/opacity stay perceptually consistent.
           const rDepth = Math.min(rx, ry);
           const x = rp.x * rx;
           const y = rp.y * ry;
           const z = rp.z * rDepth;
-          const depth = (z + rDepth) / (2 * rDepth);
+          const depth = (z + rDepth) / (2 * rDepth); // 0..1 (1 = front)
           const scale = 0.55 + depth * 0.55;
           const opacity = 0.32 + depth * 0.68;
-          const frontBoost = Math.max(0, depth - 0.6) / 0.4;
-          const surfaceAlpha = 0.55 + frontBoost * 0.4;
+          // Front-most cards get a brighter, more opaque surface for readability
+          const frontBoost = Math.max(0, depth - 0.6) / 0.4; // 0..1 for depth 0.6..1
+          const surfaceAlpha = 0.55 + frontBoost * 0.4; // 0.55 → 0.95
           const Icon = item.icon;
           const isFront = z > 0;
           const status = item.status ?? "normal";
@@ -254,8 +279,8 @@ export default function Sphere3DCards({
           const ringClass = isNew
             ? "ring-1 ring-pink-400/50"
             : isDone
-              ? "ring-1 ring-green-400/50"
-              : "";
+            ? "ring-1 ring-green-400/50"
+            : "";
 
           return (
             <button
@@ -269,6 +294,9 @@ export default function Sphere3DCards({
                 top: 0,
                 width: 160,
                 background: `hsl(var(--card) / ${surfaceAlpha.toFixed(2)})`,
+                // Keep subpixel translation (rounding causes 1px jumps when
+                // velocity < 1px/frame). Force a stable GPU layer so text
+                // stays cached and doesn't re-rasterize each frame.
                 transform: `translate3d(${(x - 80).toFixed(2)}px, ${(y - 34).toFixed(2)}px, 0) scale(${scale.toFixed(3)})`,
                 opacity: Math.round(opacity * 100) / 100,
                 zIndex: Math.round(1000 + z),
@@ -324,4 +352,6 @@ export default function Sphere3DCards({
       </div>
     </div>
   );
-}
+};
+
+export default Sphere3DCards;

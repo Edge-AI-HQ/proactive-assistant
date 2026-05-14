@@ -1,149 +1,140 @@
-import { Check, CreditCard, LogOut, User as UserIcon, Zap } from "lucide-react";
-
-import { useAuth } from "@/hooks/useAuth";
-
-/**
- * Account / billing panel — visuals only. Real billing wiring (Stripe checkout,
- * plan upgrade RPC) hasn't been built; Upgrade buttons just alert. Sign out is
- * real (calls useAuth().signOut).
- */
-
-const PLANS = [
-  {
-    id: "basic" as const,
-    label: "Basic",
-    price: "$0",
-    perks: ["Up to 50 cards / month", "Read-only Composio", "Web only"],
-  },
-  {
-    id: "pro" as const,
-    label: "Pro",
-    price: "$19",
-    perks: [
-      "Unlimited cards",
-      "All Composio actions",
-      "Web + iOS + Android",
-      "Priority generation",
-    ],
-    recommended: true,
-  },
-  {
-    id: "max" as const,
-    label: "Max",
-    price: "$49",
-    perks: ["Everything in Pro", "Multi-account", "Early access to new models"],
-  },
-];
+import { motion } from "framer-motion";
+import {
+  Sparkles, Check, Bell, SlidersHorizontal, ShieldCheck,
+} from "lucide-react";
 
 export default function AccountPanel() {
-  const { user, signOut } = useAuth();
-
   return (
-    <div className="h-full overflow-y-auto px-5 pt-6 pb-12">
-      <div className="max-w-2xl mx-auto">
-        <div className="flex items-center gap-2 mb-1">
-          <UserIcon size={16} className="text-foreground/55" />
-          <span className="text-[11px] font-bold text-foreground/55 uppercase tracking-wider">
-            Account
-          </span>
-        </div>
-        <h1 className="text-display text-[26px] font-semibold text-foreground mb-6">
-          {user?.email ?? "Signed in"}
-        </h1>
+    <div className="flex flex-col h-full px-4 pt-14 pb-2 overflow-y-auto">
+      {/* Header */}
+      <h1 className="text-2xl font-semibold text-foreground tracking-tight mb-0.5">Account</h1>
+      <p className="text-xs text-muted-foreground mb-5">Profile · Subscription · Preferences</p>
 
-        <div className="glass-card-strong p-4 mb-6 flex items-center gap-3">
-          <div
-            className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
-            style={{ background: "hsl(292 78% 63% / 0.12)" }}
-          >
-            <Zap size={18} strokeWidth={2} color="hsl(292 78% 63%)" />
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        className="space-y-3"
+      >
+        {/* Profile card */}
+        <div className="glass-card-strong p-4 flex items-center gap-3">
+          <div className="w-12 h-12 rounded-full bg-foreground/10 flex items-center justify-center flex-shrink-0">
+            <span className="text-base font-semibold text-foreground/70">B</span>
           </div>
-          <div className="flex-1">
-            <div className="text-[11px] font-semibold text-foreground/50 uppercase tracking-wider">
-              Current plan
-            </div>
-            <div className="text-[16px] font-semibold text-foreground">Pro · trial</div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-foreground">Ben Wu</p>
+            <p className="text-[11px] text-foreground/50 truncate">ben@pin.ai · Member since Mar 2024</p>
           </div>
-          <button
-            onClick={() => alert("Billing coming soon")}
-            className="px-4 h-9 rounded-xl bg-foreground/5 text-[13px] font-medium text-foreground/70 hover:bg-foreground/10 transition-colors"
-          >
-            Manage
+          <button className="text-[11px] font-medium text-foreground border border-foreground/12 rounded-lg px-3 py-1 hover:bg-foreground/[0.04] transition-colors">
+            Edit
           </button>
         </div>
 
-        <div className="text-[11px] font-bold text-foreground/55 uppercase tracking-wider mb-2">
-          Plans
-        </div>
-        <div className="grid gap-3 grid-cols-1 sm:grid-cols-3 mb-6">
-          {PLANS.map((plan) => (
-            <div
-              key={plan.id}
-              className={`glass-card-strong p-4 flex flex-col gap-2 ${
-                plan.recommended ? "ring-1 ring-[hsl(292,78%,63%)]/40" : ""
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <div className="text-[15px] font-semibold text-foreground">{plan.label}</div>
-                {plan.recommended && (
-                  <span className="text-[10px] font-bold uppercase tracking-wider bg-gradient-to-r from-[hsl(292,78%,63%)] to-[hsl(330,80%,65%)] bg-clip-text text-transparent">
-                    Recommended
-                  </span>
-                )}
+        {/* Subscription & Billing */}
+        <div className="glass-card-strong p-4 space-y-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-foreground/[0.06] flex items-center justify-center flex-shrink-0">
+              <Sparkles size={16} strokeWidth={1.5} className="text-foreground/70" />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-foreground">Subscription & Billing</p>
+              <p className="text-[11px] text-foreground/50 mt-0.5">Current: Pro · 7-day trial</p>
+            </div>
+          </div>
+
+          {/* Basic */}
+          <div className="rounded-2xl border border-foreground/10 bg-foreground/[0.02] p-3.5">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-sm font-semibold text-foreground">Basic</span>
+                <span className="text-base font-semibold text-foreground">$39</span>
+                <span className="text-[11px] text-foreground/40">/ mo</span>
               </div>
-              <div className="text-[24px] font-bold text-foreground leading-none">
-                {plan.price}
-                <span className="text-[12px] font-medium text-foreground/45 ml-1">/ mo</span>
-              </div>
-              <ul className="flex flex-col gap-1.5 mt-2 mb-3">
-                {plan.perks.map((p) => (
-                  <li key={p} className="flex items-start gap-1.5 text-[12.5px] text-foreground/70">
-                    <Check size={12} strokeWidth={2.5} className="text-green-600 mt-1 shrink-0" />
-                    {p}
-                  </li>
-                ))}
-              </ul>
-              <button
-                onClick={() => alert(`Upgrade to ${plan.label} coming soon`)}
-                className={
-                  plan.recommended
-                    ? "w-full h-10 rounded-xl bg-foreground text-background text-[13px] font-semibold hover:bg-foreground/85 transition-colors"
-                    : "w-full h-10 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/70"
-                }
-              >
-                Choose {plan.label}
+              <button className="text-[11px] font-semibold text-foreground border border-foreground/15 rounded-lg px-3 py-1 hover:bg-foreground/[0.04] transition-colors">
+                Switch
               </button>
             </div>
-          ))}
+            <p className="text-[11px] text-foreground/55 mb-2">1,500 credits / mo · Local Gemma 2B · Cloud Gemini Flash</p>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+              {["Daily card feed", "Connect 3 apps", "Email + Calendar"].map((f) => (
+                <div key={f} className="flex items-center gap-1.5">
+                  <Check size={11} strokeWidth={2.5} className="text-foreground/40 flex-shrink-0" />
+                  <span className="text-[11px] text-foreground/55">{f}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Pro (current / most popular) */}
+          <div className="relative rounded-2xl border-2 border-[hsl(304_75%_63%/0.45)] bg-[hsl(304_75%_63%/0.04)] p-3.5">
+            <div className="absolute -top-2.5 right-3 bg-[hsl(304_75%_63%)] text-white text-[9px] font-bold tracking-wider uppercase px-2 py-0.5 rounded-full">
+              Current · Most Popular
+            </div>
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-sm font-semibold text-foreground">Pro</span>
+                <span className="text-base font-semibold text-[hsl(304_75%_63%)]">$99</span>
+                <span className="text-[11px] text-foreground/40">/ mo</span>
+              </div>
+              <span className="text-[11px] font-medium text-[hsl(304_75%_63%)]">Active</span>
+            </div>
+            <p className="text-[11px] text-foreground/60 mb-2">6,000 credits / mo · Local Llama 3 8B · Cloud Claude Sonnet</p>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+              {["Everything in Basic", "Connect unlimited apps", "Voice + Ambient mode", "Priority execution"].map((f) => (
+                <div key={f} className="flex items-center gap-1.5">
+                  <Check size={11} strokeWidth={2.5} className="text-[hsl(304_75%_63%)] flex-shrink-0" />
+                  <span className="text-[11px] text-foreground/70">{f}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Max */}
+          <div className="rounded-2xl border border-foreground/10 bg-foreground/[0.02] p-3.5">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-sm font-semibold text-foreground">Max</span>
+                <span className="text-base font-semibold text-foreground">$199</span>
+                <span className="text-[11px] text-foreground/40">/ mo</span>
+              </div>
+              <button className="text-[11px] font-semibold text-background bg-foreground rounded-lg px-3 py-1 hover:opacity-90 transition-opacity">
+                Upgrade
+              </button>
+            </div>
+            <p className="text-[11px] text-foreground/55 mb-2">20,000 credits / mo · Local Llama 3 70B · Cloud Claude Opus / GPT-5</p>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+              {["Everything in Pro", "Custom personas", "Team sharing", "Early access models"].map((f) => (
+                <div key={f} className="flex items-center gap-1.5">
+                  <Check size={11} strokeWidth={2.5} className="text-foreground/40 flex-shrink-0" />
+                  <span className="text-[11px] text-foreground/55">{f}</span>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
 
-        <div className="text-[11px] font-bold text-foreground/55 uppercase tracking-wider mb-2">
-          Payment method
-        </div>
-        <div className="glass-card-strong p-4 mb-6 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-foreground/5 flex items-center justify-center shrink-0">
-            <CreditCard size={18} strokeWidth={1.5} className="text-foreground/55" />
-          </div>
-          <div className="flex-1">
-            <div className="text-[14px] font-medium text-foreground/85">No card on file</div>
-            <div className="text-[12px] text-foreground/55">Add one when you upgrade</div>
-          </div>
-          <button
-            onClick={() => alert("Adding card coming soon")}
-            className="px-3 h-9 rounded-xl bg-foreground/5 text-[13px] font-medium text-foreground/65 hover:bg-foreground/10 transition-colors"
-          >
-            Add
-          </button>
-        </div>
-
-        <button
-          onClick={() => void signOut()}
-          className="w-full h-11 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[14px] font-medium text-foreground/70 flex items-center justify-center gap-2"
-        >
-          <LogOut size={14} strokeWidth={1.5} />
-          Sign out
-        </button>
-      </div>
+        {/* Section rows */}
+        {[
+          { icon: Bell, name: "Push Notifications", desc: "What gets through — even during quiet hours" },
+          { icon: SlidersHorizontal, name: "Preferences", desc: "Quiet hours, voice, tone" },
+          { icon: ShieldCheck, name: "Privacy & Data", desc: "On-device by default · TEE-protected" },
+        ].map((row) => {
+          const RowIcon = row.icon;
+          return (
+            <button
+              key={row.name}
+              className="glass-card-strong w-full p-4 flex items-center gap-3 text-left hover:bg-white/20 transition-colors"
+            >
+              <div className="w-10 h-10 rounded-xl bg-foreground/[0.06] flex items-center justify-center flex-shrink-0">
+                <RowIcon size={16} strokeWidth={1.5} className="text-foreground/70" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-foreground">{row.name}</p>
+                <p className="text-[11px] text-foreground/50 mt-0.5">{row.desc}</p>
+              </div>
+            </button>
+          );
+        })}
+      </motion.div>
     </div>
   );
 }

@@ -1,4 +1,7 @@
 /**
+ * @deprecated 2026-05-14 — Replaced by `src/components/constellation/ConstellationLayout`.
+ * Kept around as reference / fast rollback. App.tsx no longer mounts this.
+ *
  * AppShell — main layout once authenticated. Floating cards, hamburger
  * menu, weather widget, greeting; chat / goals / control sub-views.
  */
