@@ -10,7 +10,7 @@
  */
 
 import { supabase } from "./supabase";
-import { PIN_API_BASE } from "./platform";
+import { PIN_API_BASE, pinApiRequestHeaders } from "./platform";
 
 export interface Goal {
   id: string;
@@ -235,8 +235,10 @@ async function pinaiFetch(
   init?: RequestInit,
 ): Promise<Response> {
   const headers: Record<string, string> = {
-    ...(await authHeaders()),
-    ...((init?.headers as Record<string, string>) ?? {}),
+    ...pinApiRequestHeaders({
+      ...(await authHeaders()),
+      ...((init?.headers as Record<string, string>) ?? {}),
+    }),
   };
   const url = `${PIN_API_BASE}${path}`;
   const res = await fetch(url, { ...init, headers });
@@ -342,8 +344,10 @@ export async function proxyFetch(
   init?: RequestInit
 ): Promise<Response> {
   const headers: Record<string, string> = {
-    ...(await authHeaders()),
-    ...((init?.headers as Record<string, string>) ?? {}),
+    ...pinApiRequestHeaders({
+      ...(await authHeaders()),
+      ...((init?.headers as Record<string, string>) ?? {}),
+    }),
   };
   const url = `${PIN_API_BASE}/api${path}`;
   const res = await fetch(url, { ...init, headers });

@@ -11,7 +11,7 @@
 import { Capacitor } from "@capacitor/core";
 import { KeychainAccess, SecureStorage } from "@aparajita/capacitor-secure-storage";
 import { authHeaders } from "./api";
-import { PIN_API_BASE, isNative } from "./platform";
+import { PIN_API_BASE, isNative, pinApiRequestHeaders } from "./platform";
 
 const DEVICE_ID_KEY = "pin.deviceId";
 const DEVICE_TOKEN_KEY = "pin.deviceToken";
@@ -256,10 +256,10 @@ export async function ensureDevice(): Promise<DeviceCredentials> {
 
   const res = await fetch(`${PIN_API_BASE}/api/devices/register`, {
     method: "POST",
-    headers: {
+    headers: pinApiRequestHeaders({
       ...(await authHeaders()),
       "Content-Type": "application/json",
-    },
+    }),
     body: JSON.stringify({
       deviceId,
       platform,
@@ -401,11 +401,11 @@ export async function ingestSignals(
   const post = (activeCreds: DeviceCredentials) =>
     fetch(`${PIN_API_BASE}/api/devices/ingest`, {
       method: "POST",
-      headers: {
+      headers: pinApiRequestHeaders({
         "Content-Type": "application/json",
         "X-Device-Id": activeCreds.deviceId,
         "X-Device-Token": activeCreds.deviceToken,
-      },
+      }),
       body: JSON.stringify(buildWire(activeCreds)),
     });
 

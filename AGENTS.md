@@ -151,7 +151,7 @@ make ngrok                 # 单独把 pinai-web 暴露到公网（mobile dev �
 make ios                   # 构建前端 → cap sync → 打开 Xcode
 make android               # 构建前端 → cap sync → 装到 USB device
 ```
-后端切换：`NGROK=<url> make ios` 走临时公网；`DEV=1 make ios` 指 fly dev；`PROD=1 make ios` 指 fly prod；不传变量默认连本机 LAN IP:8000 的 pinai-web。
+后端切换：`NGROK=<url> make ios` 走临时公网；`DEV=1 make ios` 指 fly dev；`PROD=1 make ios` 指 fly prod；不传变量时使用项目根目录 `./.env` 的 `PAI_API_URL`（ngrok），没配就直接失败，不退回本机 LAN IP。
 
 iOS 真机安装硬规则：永远不要为了绕过签名、权限、验证或并存安装去新增/改用 bundle id、包名、scheme、target，或安装 `*.dev` 之类的新 App。必须直接 build 当前已安装 App 的原 bundle id，并用新包覆盖替换旧 App；如果原 bundle id 的 signing/profile 不满足能力要求，就停下来报告真实 blocker，不要换 bundle id 绕过。
 
