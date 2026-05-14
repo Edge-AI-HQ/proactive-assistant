@@ -1,13 +1,17 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarDays,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  ClipboardCopy,
   Database,
+  ListChecks,
+  RefreshCw,
   Search,
   UserRound,
 } from "lucide-react";
-import { getPersonalData } from "@/api/reward";
+import { getPersonalData, PERSONAL_DATA_OFFSET_MAX, PERSONAL_DATA_QUERY_MAX_LENGTH } from "@/api/reward";
 import type {
   PersonalDataCategory,
   PersonalDataItem,
@@ -15,6 +19,14 @@ import type {
   PersonalDataSection,
 } from "@/api/reward";
 import { StateBlock } from "@/components/StateBlock";
+import { copyText } from "@/lib/clipboard";
+import { finiteCount, formatCount, pageWithinOffsetLimit, totalPagesForOffsetLimit } from "@/lib/count";
+import { dashboardRoutes } from "@/lib/dashboardRoutes";
+import { formatDateTimeOrDash } from "@/lib/dateFormat";
+import { dateRangeOrderError, dayEndIso, dayStartIso } from "@/lib/dateRange";
+import { shouldWaitForPageReset } from "@/lib/pageReset";
+import { normalizePageSize } from "@/lib/pageSize";
+import { isSensitiveKey, redactSensitivePayload, redactedSecretText } from "@/lib/redaction";
 
 const categories: Array<{ key: PersonalDataCategory; label: string; description: string }> = [
   { key: "profile", label: "画像", description: "事实、偏好、约束" },
@@ -30,6 +42,26 @@ const categories: Array<{ key: PersonalDataCategory; label: string; description:
   { key: "app_state", label: "应用状态", description: "本地迁移状态" },
   { key: "all", label: "全部概况", description: "每类最新样本" },
 ];
+const categoryKeys = new Set<string>(categories.map((item) => item.key));
+
+interface PersonalDataViewProps {
+  onNavigate: (path: string) => void;
+}
+
+interface PersonalDataQueryState {
+  category: PersonalDataCategory;
+  limit: number;
+  offset: number;
+  query: string;
+  since: string | undefined;
+  until: string | undefined;
+}
+
+interface PersonalDataOverviewQueryState {
+  query: string;
+  since: string | undefined;
+  until: string | undefined;
+}
 
 const hiddenPayloadKeys = new Set([
   "embedding_model",
@@ -39,6 +71,7 @@ const hiddenPayloadKeys = new Set([
   "source_raw_ids",
   "metadata",
 ]);
+const appStateValueSummary = "应用状态值见字段明细，敏感字段已脱敏。";
 
 const labelMap: Record<string, string> = {
   facts: "事实",
@@ -87,35 +120,120 @@ function dateValue(date: Date): string {
   ].join("-");
 }
 
-function dayStart(value: string): string | undefined {
-  return value ? new Date(`${value}T00:00:00`).toISOString() : undefined;
-}
-
-function dayEnd(value: string): string | undefined {
-  return value ? new Date(`${value}T23:59:59.999`).toISOString() : undefined;
-}
-
 function formatTime(value: string | null | undefined): string {
-  return value
-    ? new Date(value).toLocaleString("zh-CN", {
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : "-";
-}
-
-function compactNumber(value: number | undefined): string {
-  return typeof value === "number" ? value.toLocaleString() : "0";
+  return formatDateTimeOrDash(value, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }, "zh-CN");
 }
 
 function scoreText(value: number | null): string | null {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(2) : null;
 }
 
+function detailRowId(itemKey: string): string {
+  return `personal-data-detail-${encodeURIComponent(itemKey).replace(/%/g, "_")}`;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringField(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function nullableStringField(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function countField(value: unknown, fallback = 0): number {
+  return typeof value === "number" ? finiteCount(value, fallback) : fallback;
+}
+
+function categoryField(value: unknown, fallback: PersonalDataCategory): PersonalDataCategory {
+  return typeof value === "string" && categoryKeys.has(value) ? value as PersonalDataCategory : fallback;
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function itemPayload(value: unknown): PersonalDataItem["payload"] {
+  return value === null || typeof value === "string" || Array.isArray(value) || isRecord(value) ? value : null;
+}
+
+export function personalDataItem(value: unknown, fallbackCategory: PersonalDataCategory): PersonalDataItem | null {
+  if (!isRecord(value)) return null;
+  const id = stringField(value.id);
+  if (!id) return null;
+  return {
+    id,
+    category: categoryField(value.category, fallbackCategory),
+    sourceKey: stringField(value.sourceKey),
+    sourceLabel: stringField(value.sourceLabel, "未知来源"),
+    kind: nullableStringField(value.kind),
+    title: stringField(value.title, "未命名数据"),
+    subtitle: nullableStringField(value.subtitle),
+    summary: nullableStringField(value.summary),
+    status: nullableStringField(value.status),
+    score: typeof value.score === "number" && Number.isFinite(value.score) ? value.score : null,
+    occurredAt: nullableStringField(value.occurredAt),
+    updatedAt: nullableStringField(value.updatedAt),
+    chips: stringList(value.chips),
+    payload: itemPayload(value.payload),
+  };
+}
+
+export function personalDataSections(value: unknown): PersonalDataSection[] {
+  return Array.isArray(value)
+    ? value.flatMap((section): PersonalDataSection[] => {
+        if (!isRecord(section)) return [];
+        const key = categoryField(section.key, "all");
+        if (key === "all") return [];
+        const categoryMeta = categories.find((item) => item.key === key);
+        const items = Array.isArray(section.items)
+          ? section.items
+              .map((item) => personalDataItem(item, key))
+              .filter((item): item is PersonalDataItem => item !== null)
+          : [];
+        return [{
+          key,
+          label: stringField(section.label, categoryMeta?.label ?? key),
+          description: stringField(section.description, categoryMeta?.description ?? ""),
+          total: countField(section.total, items.length),
+          items,
+        }];
+      })
+    : [];
+}
+
+export function personalDataResponse(value: unknown): PersonalDataResponse | null {
+  if (!isRecord(value)) return null;
+  const filters = isRecord(value.filters) ? value.filters : {};
+  const totalsRecord = isRecord(value.totals) ? value.totals : {};
+  const totals = Object.fromEntries(
+    Object.entries(totalsRecord).map(([key, total]) => [key, countField(total)]),
+  );
+  const sections = personalDataSections(value.sections);
+  if (totals.all === undefined) {
+    totals.all = sections.reduce((sum, section) => sum + countField(section.total, section.items.length), 0);
+  }
+  return {
+    ok: true,
+    filters: {
+      category: categoryField(filters.category, "all"),
+      since: nullableStringField(filters.since),
+      until: nullableStringField(filters.until),
+      query: nullableStringField(filters.query),
+      limit: countField(filters.limit),
+      offset: countField(filters.offset),
+    },
+    totals,
+    sections,
+  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -124,6 +242,13 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function payloadRecord(item: PersonalDataItem | null | undefined): Record<string, unknown> {
   return isRecord(item?.payload) ? item.payload : {};
+}
+
+function itemSensitiveAppStateKey(item: PersonalDataItem): boolean {
+  if (item.category !== "app_state") return false;
+  const payload = payloadRecord(item);
+  return [item.title, item.kind, item.sourceKey, payload.key, payload.namespace]
+    .some((value) => typeof value === "string" && isSensitiveKey(value));
 }
 
 function hasValue(value: unknown): boolean {
@@ -142,7 +267,11 @@ function valueText(value: unknown, max = 180): string {
   if (value === null || value === undefined) return "-";
   if (typeof value === "boolean") return value ? "是" : "否";
   if (typeof value === "number") return Number.isFinite(value) ? String(value) : "-";
-  if (typeof value === "string") return value.trim() || "-";
+  if (typeof value === "string") {
+    const text = value.replace(/\s+/g, " ").trim();
+    if (!text) return "-";
+    return text.length <= max ? text : `${text.slice(0, Math.max(1, max - 1)).trim()}...`;
+  }
   if (Array.isArray(value)) return value.map((item) => valueText(item, 80)).filter(Boolean).join("、") || "-";
   if (isRecord(value)) {
     const preferred = ["title", "summary", "text", "name", "value"]
@@ -183,9 +312,27 @@ function flattenProfileEntries(
 }
 
 function payloadEntries(item: PersonalDataItem): Array<[string, unknown]> {
+  const appStateKeyIsSensitive = itemSensitiveAppStateKey(item);
   return Object.entries(payloadRecord(item))
     .filter(([key, value]) => !hiddenPayloadKeys.has(key) && hasValue(value))
+    .map(([key, value]) => [
+      key,
+      isSensitiveKey(key) || (item.category === "app_state" && key === "value" && appStateKeyIsSensitive)
+        ? redactedSecretText
+        : redactSensitivePayload(value),
+    ] as [string, unknown])
     .slice(0, 28);
+}
+
+function safeItemSummary(item: PersonalDataItem): string | null {
+  if (itemSensitiveAppStateKey(item)) return appStateValueSummary;
+  return item.summary;
+}
+
+export function personalDataDisplayPayload(item: PersonalDataItem | null | undefined): Record<string, unknown> {
+  const payload = payloadRecord(item);
+  const redacted = redactSensitivePayload(payload);
+  return isRecord(redacted) ? redacted : {};
 }
 
 function findSection(data: PersonalDataResponse | null, key: PersonalDataCategory): PersonalDataSection | undefined {
@@ -209,7 +356,7 @@ function ProfileBucket({
         <div className="profile-field-list">
           {entries.map(([key, value]) => (
             <div className="profile-field" key={key}>
-              <span>{fieldLabel(key)}</span>
+              <span>{valueText(fieldLabel(key), 120)}</span>
               <ProfileValue value={value} />
             </div>
           ))}
@@ -226,7 +373,7 @@ function ProfileValue({ value }: { value: unknown }) {
     return (
       <div className="profile-chip-list">
         {value.slice(0, 10).map((item, index) => (
-          <span key={`${valueText(item, 40)}:${index}`}>{displayPrimitive(item)}</span>
+          <span key={`profile-chip-${index}`}>{displayPrimitive(item)}</span>
         ))}
       </div>
     );
@@ -239,7 +386,7 @@ function ProfileValue({ value }: { value: unknown }) {
       <div className="profile-nested-list">
         {entries.map(([key, nestedValue]) => (
           <div key={key}>
-            <span>{key}</span>
+            <span>{valueText(key, 120)}</span>
             <strong>{displayPrimitive(nestedValue)}</strong>
           </div>
         ))}
@@ -252,12 +399,12 @@ function ProfileValue({ value }: { value: unknown }) {
 
 function ProfileSpotlight({ section }: { section: PersonalDataSection | undefined }) {
   const item = section?.items[0];
-  const payload = payloadRecord(item);
+  const payload = personalDataDisplayPayload(item);
   const facts = asRecord(payload.facts);
   const preferences = asRecord(payload.preferences);
   const constraints = asRecord(payload.constraints);
   const summary = valueText(payload.summary ?? item?.summary ?? "", 420);
-  const profileTitle = item?.title ?? "用户画像";
+  const profileTitle = valueText(item?.title ?? "用户画像", 180);
   const locale = valueText(payload.locale ?? "", 80);
   const timezone = valueText(payload.timezone ?? "", 80);
 
@@ -297,12 +444,13 @@ function CategoryMenu({
   onChange: (category: PersonalDataCategory) => void;
 }) {
   return (
-    <aside className="personal-category-menu">
+    <aside className="personal-category-menu" aria-label="个人数据分类">
       <div className="menu-title">数据菜单</div>
       {categories.map((item) => {
         const total = item.key === "all" ? overview?.totals.all : findSection(overview, item.key)?.total;
         return (
           <button
+            aria-pressed={category === item.key}
             className={category === item.key ? "active" : ""}
             key={item.key}
             onClick={() => onChange(item.key)}
@@ -312,7 +460,7 @@ function CategoryMenu({
               <strong>{item.label}</strong>
               <small>{item.description}</small>
             </span>
-            <em>{compactNumber(total)}</em>
+            <em>{formatCount(total)}</em>
           </button>
         );
       })}
@@ -327,12 +475,171 @@ function DataFieldPreview({ item }: { item: PersonalDataItem }) {
     <div className="data-field-grid">
       {entries.map(([key, value]) => (
         <div key={key}>
-          <span>{fieldLabel(key)}</span>
+          <span>{valueText(fieldLabel(key), 120)}</span>
           <strong>{valueText(value, 360)}</strong>
         </div>
       ))}
     </div>
   );
+}
+
+export function personalDataMarkdown(
+  data: PersonalDataResponse | null,
+  options: {
+    categoryLabel: string;
+    query: string;
+    selectedTotal: number;
+    timeRangeLabel: string;
+  },
+): string {
+  const normalizedData = personalDataResponse(data);
+  if (!normalizedData || normalizedData.sections.length === 0) return "";
+  const lines = [
+    `### 个人数据视图 ${options.categoryLabel}`,
+    "",
+    `- 时间范围: ${options.timeRangeLabel}`,
+    `- 搜索: ${options.query || "无"}`,
+    `- 筛选命中: ${formatCount(options.selectedTotal)}`,
+    `- 当前页条目: ${normalizedData.sections.reduce((sum, section) => sum + section.items.length, 0)}`,
+  ];
+
+  normalizedData.sections.forEach((section) => {
+    lines.push("", `#### ${section.label} (${formatCount(section.total)})`);
+    if (section.items.length === 0) {
+      lines.push("- 当前页没有数据。");
+      return;
+    }
+    const visibleItems = section.items.slice(0, 12);
+    visibleItems.forEach((item, index) => {
+      const time = formatTime(item.occurredAt ?? item.updatedAt);
+      const score = scoreText(item.score);
+      const allPayloadEntries = payloadEntries(item);
+      const detailLines = allPayloadEntries
+        .slice(0, 5)
+        .map(([key, value]) => `  - ${fieldLabel(key)}: ${valueText(value, 180)}`);
+      if (allPayloadEntries.length > detailLines.length) {
+        detailLines.push(`  - 还有 ${allPayloadEntries.length - detailLines.length} 个字段未写入复制摘要，请回到个人数据页面继续查看。`);
+      }
+      lines.push(
+        `${index + 1}. ${valueText(item.title, 140)}`,
+        `  - 来源: ${valueText(item.sourceLabel, 120)}${item.kind ? ` / ${valueText(item.kind, 80)}` : ""}`,
+        `  - 时间: ${time}`,
+        `  - 状态/分数: ${[item.status, score].filter(Boolean).join(" / ") || "-"}`,
+        `  - 摘要: ${valueText(safeItemSummary(item) ?? item.subtitle, 360)}`,
+      );
+      if (item.chips.length > 0) {
+        lines.push(`  - 标签: ${item.chips.slice(0, 6).map((chip) => valueText(chip, 80)).join(", ")}`);
+      }
+      lines.push(...detailLines);
+    });
+    if (section.items.length > visibleItems.length) {
+      lines.push(`- 还有 ${section.items.length - visibleItems.length} 条当前页数据未写入复制摘要，请回到个人数据页面继续查看。`);
+    }
+  });
+
+  return lines.join("\n");
+}
+
+export function overviewSummaryText({
+  activeCategoryCount,
+  overviewError,
+  overviewLoading,
+}: {
+  activeCategoryCount: number;
+  overviewError: string | null;
+  overviewLoading: boolean;
+}): string {
+  if (overviewError) return "概况刷新失败。";
+  if (overviewLoading) return "正在刷新概况。";
+  return `${activeCategoryCount} 类有数据。`;
+}
+
+function personalDataQueryKey(query: PersonalDataQueryState): string {
+  return JSON.stringify(query);
+}
+
+function personalDataOverviewQueryKey(query: PersonalDataOverviewQueryState): string {
+  return JSON.stringify(query);
+}
+
+function isCurrentLoadedDataQuery(currentQueryKey: string, loadedQueryKey: string | null): boolean {
+  return loadedQueryKey !== null && loadedQueryKey === currentQueryKey;
+}
+
+export function personalDataBlockingError(
+  error: string | null,
+  hasLoaded: boolean,
+  currentQueryKey = "",
+  loadedQueryKey: string | null = null,
+  filterValidationError: string | null = null,
+): boolean {
+  void currentQueryKey;
+  void loadedQueryKey;
+  if (filterValidationError) return false;
+  return error !== null && !hasLoaded;
+}
+
+export function personalDataRefreshErrorText(
+  error: string | null,
+  hasLoaded: boolean,
+  currentQueryKey = "",
+  loadedQueryKey: string | null = null,
+): string | null {
+  if (!error || !hasLoaded) return null;
+  if (isCurrentLoadedDataQuery(currentQueryKey, loadedQueryKey)) {
+    return `个人数据刷新失败，当前仍显示上一次成功加载的数据：${error}`;
+  }
+  return `个人数据刷新失败，当前筛选还没有成功加载结果：${error}`;
+}
+
+export function personalDataHideStaleRows(hasLoaded: boolean, currentQueryKey: string, loadedQueryKey: string | null): boolean {
+  return hasLoaded && !isCurrentLoadedDataQuery(currentQueryKey, loadedQueryKey);
+}
+
+export function personalDataHideStaleOverview(currentQueryKey: string, loadedQueryKey: string | null): boolean {
+  return loadedQueryKey !== null && loadedQueryKey !== currentQueryKey;
+}
+
+export function personalDataFilterError({
+  query = "",
+  since,
+  until,
+}: {
+  query?: string;
+  since: string;
+  until: string;
+}): string | null {
+  if (query.trim().length > PERSONAL_DATA_QUERY_MAX_LENGTH) {
+    return `个人数据搜索词最多 ${PERSONAL_DATA_QUERY_MAX_LENGTH} 个字符。`;
+  }
+  return dateRangeOrderError(since, until, "个人数据时间");
+}
+
+export function canCopyPersonalDataView(
+  data: PersonalDataResponse | null,
+  loading: boolean,
+  error: string | null = null,
+): boolean {
+  return !loading && error === null && data !== null;
+}
+
+export function personalDataCopyUnavailableMessage(
+  loading: boolean,
+  error: string | null,
+  filterValidationError: string | null,
+): string {
+  if (filterValidationError) return "当前筛选条件无效，先修正后再复制。";
+  if (loading) return "正在读取当前视图，加载完成后再复制。";
+  if (error) return "当前视图刷新失败，先重新加载成功后再复制。";
+  return "当前视图没有可复制上下文。";
+}
+
+export function personalDataEmptyStateTitle(filterValidationError: string | null): string {
+  return filterValidationError ? "个人数据筛选条件无效" : "个人数据加载失败";
+}
+
+export function personalDataNoSectionsMessage(categoryLabel: string | undefined): string {
+  return `当前筛选下没有${categoryLabel ?? "个人"}数据。`;
 }
 
 function DataTable({
@@ -350,19 +657,21 @@ function DataTable({
 
   return (
     <div className="personal-table-wrap">
-      <table className="personal-table">
+      <table aria-label="个人数据列表" className="personal-table">
         <thead>
           <tr>
-            <th>时间</th>
-            <th>来源</th>
-            <th>关键内容</th>
-            <th>状态/分数</th>
-            <th>字段</th>
+            <th scope="col">时间</th>
+            <th scope="col">来源</th>
+            <th scope="col">关键内容</th>
+            <th scope="col">状态/分数</th>
+            <th scope="col">字段</th>
           </tr>
         </thead>
         <tbody>
-          {section.items.map((item) => {
-            const itemKey = `${section.key}:${item.sourceKey}:${item.id}`;
+          {section.items.map((item, itemIndex) => {
+            const itemKey = `${section.key}:${itemIndex}:${item.sourceKey}:${item.id}`;
+            const detailsId = detailRowId(itemKey);
+            const isExpanded = expandedId === itemKey;
             const score = scoreText(item.score);
             return (
               <Fragment key={itemKey}>
@@ -370,19 +679,19 @@ function DataTable({
                   <td className="time-cell">{formatTime(item.occurredAt ?? item.updatedAt)}</td>
                   <td>
                     <div className="source-cell">
-                      <strong>{item.sourceLabel}</strong>
-                      {item.kind && <span>{item.kind}</span>}
+                      <strong>{valueText(item.sourceLabel, 120)}</strong>
+                      {item.kind && <span>{valueText(item.kind, 80)}</span>}
                     </div>
                   </td>
                   <td>
                     <div className="content-cell">
-                      <strong>{item.title}</strong>
-                      {(item.subtitle || item.summary) && (
-                        <span>{[item.subtitle, item.summary].filter(Boolean).join(" · ")}</span>
+                      <strong>{valueText(item.title, 180)}</strong>
+                      {(item.subtitle || safeItemSummary(item)) && (
+                        <span>{[item.subtitle, safeItemSummary(item)].filter(Boolean).map((value) => valueText(value, 220)).join(" · ")}</span>
                       )}
                       {item.chips.length > 0 && (
                         <div className="data-chip-row compact">
-                          {item.chips.slice(0, 5).map((chip) => <em key={chip}>{chip}</em>)}
+                          {item.chips.slice(0, 5).map((chip, chipIndex) => <em key={`chip-${chipIndex}`}>{valueText(chip, 80)}</em>)}
                         </div>
                       )}
                     </div>
@@ -395,13 +704,19 @@ function DataTable({
                     </div>
                   </td>
                   <td>
-                    <button className="plain-button row-detail-button" onClick={() => onToggle(itemKey)} type="button">
-                      {expandedId === itemKey ? "收起" : "查看"}
+                    <button
+                      aria-controls={detailsId}
+                      aria-expanded={isExpanded}
+                      className="plain-button row-detail-button"
+                      onClick={() => onToggle(itemKey)}
+                      type="button"
+                    >
+                      {isExpanded ? "收起" : "查看"}
                     </button>
                   </td>
                 </tr>
-                {expandedId === itemKey && (
-                  <tr className="detail-row">
+                {isExpanded && (
+                  <tr className="detail-row" id={detailsId}>
                     <td colSpan={5}>
                       <DataFieldPreview item={item} />
                     </td>
@@ -429,11 +744,15 @@ function PaginationBar({
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
 }) {
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const totalPages = totalPagesForOffsetLimit(total, pageSize, PERSONAL_DATA_OFFSET_MAX);
   return (
     <div className="pagination-bar">
       <div className="pagination-controls">
-        <select value={pageSize} onChange={(event) => onPageSizeChange(Number(event.target.value))}>
+        <select
+          aria-label="个人数据每页条数"
+          value={pageSize}
+          onChange={(event) => onPageSizeChange(normalizePageSize(Number(event.target.value), [20, 40, 80], 40))}
+        >
           <option value={20}>20 条/页</option>
           <option value={40}>40 条/页</option>
           <option value={80}>80 条/页</option>
@@ -452,7 +771,7 @@ function PaginationBar({
   );
 }
 
-export function PersonalDataView() {
+export function PersonalDataView({ onNavigate }: PersonalDataViewProps) {
   const today = useMemo(() => dateValue(new Date()), []);
   const [category, setCategory] = useState<PersonalDataCategory>("profile");
   const [since, setSince] = useState("");
@@ -464,22 +783,60 @@ export function PersonalDataView() {
   const [data, setData] = useState<PersonalDataResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [overviewLoading, setOverviewLoading] = useState(true);
+  const [overviewError, setOverviewError] = useState<string | null>(null);
+  const [loadedOverviewQueryKey, setLoadedOverviewQueryKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [hasLoaded, setHasLoaded] = useState(false);
+  const [loadedDataQueryKey, setLoadedDataQueryKey] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [copyMessage, setCopyMessage] = useState<string | null>(null);
+  const [reloadNonce, setReloadNonce] = useState(0);
 
   const normalizedQuery = query.trim();
-  const sinceIso = dayStart(since);
-  const untilIso = dayEnd(until);
+  const sinceIso = dayStartIso(since);
+  const untilIso = dayEndIso(until);
+  const filterValidationError = personalDataFilterError({ query: normalizedQuery, since, until });
   const offset = category === "all" ? 0 : (page - 1) * pageSize;
+  const overviewQueryKey = personalDataOverviewQueryKey({
+    query: normalizedQuery,
+    since: sinceIso,
+    until: untilIso,
+  });
+  const dataFilterKey = personalDataQueryKey({
+    category,
+    limit: pageSize,
+    offset: 0,
+    query: normalizedQuery,
+    since: sinceIso,
+    until: untilIso,
+  });
+  const dataQueryKey = personalDataQueryKey({
+    category,
+    limit: pageSize,
+    offset,
+    query: normalizedQuery,
+    since: sinceIso,
+    until: untilIso,
+  });
+  const previousDataFilterKey = useRef(dataFilterKey);
 
   useEffect(() => {
-    setPage(1);
     setExpandedId(null);
-  }, [category, since, until, normalizedQuery, pageSize]);
+    setCopyMessage(null);
+  }, [page]);
 
   useEffect(() => {
     let cancelled = false;
+    const requestQueryKey = overviewQueryKey;
     setOverviewLoading(true);
+    setOverviewError(null);
+    if (filterValidationError) {
+      setOverviewLoading(false);
+      setOverviewError(filterValidationError);
+      return () => {
+        cancelled = true;
+      };
+    }
     getPersonalData({
       category: "all",
       since: sinceIso,
@@ -489,10 +846,13 @@ export function PersonalDataView() {
       offset: 0,
     })
       .then((next) => {
-        if (!cancelled) setOverview(next);
+        if (!cancelled) {
+          setOverview(personalDataResponse(next));
+          setLoadedOverviewQueryKey(requestQueryKey);
+        }
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "加载失败");
+        if (!cancelled) setOverviewError(err instanceof Error ? err.message : "加载失败");
       })
       .finally(() => {
         if (!cancelled) setOverviewLoading(false);
@@ -500,12 +860,32 @@ export function PersonalDataView() {
     return () => {
       cancelled = true;
     };
-  }, [sinceIso, untilIso, normalizedQuery]);
+  }, [sinceIso, untilIso, normalizedQuery, overviewQueryKey, reloadNonce]);
 
   useEffect(() => {
     let cancelled = false;
+    const requestQueryKey = dataQueryKey;
+    const filterChanged = dataFilterKey !== previousDataFilterKey.current;
+    if (filterChanged) {
+      previousDataFilterKey.current = dataFilterKey;
+      setExpandedId(null);
+      setCopyMessage(null);
+      if (shouldWaitForPageReset(filterChanged, page)) {
+        setPage(1);
+        return () => {
+          cancelled = true;
+        };
+      }
+    }
     setLoading(true);
     setError(null);
+    if (filterValidationError) {
+      setLoading(false);
+      setError(filterValidationError);
+      return () => {
+        cancelled = true;
+      };
+    }
     getPersonalData({
       category,
       since: sinceIso,
@@ -515,7 +895,28 @@ export function PersonalDataView() {
       offset,
     })
       .then((next) => {
-        if (!cancelled) setData(next);
+        if (!cancelled) {
+          const normalizedNext = personalDataResponse(next);
+          if (!normalizedNext) {
+            setData(null);
+            setHasLoaded(true);
+            setLoadedDataQueryKey(requestQueryKey);
+            return;
+          }
+          const selectedNextTotal = finiteCount(
+            category === "all" ? normalizedNext.totals.all : findSection(normalizedNext, category)?.total,
+          );
+          const nextPage = category === "all"
+            ? 1
+            : pageWithinOffsetLimit(page, selectedNextTotal, pageSize, PERSONAL_DATA_OFFSET_MAX);
+          if (nextPage !== page) {
+            setPage(nextPage);
+            return;
+          }
+          setData(normalizedNext);
+          setHasLoaded(true);
+          setLoadedDataQueryKey(requestQueryKey);
+        }
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof Error ? err.message : "加载失败");
@@ -526,7 +927,7 @@ export function PersonalDataView() {
     return () => {
       cancelled = true;
     };
-  }, [category, sinceIso, untilIso, normalizedQuery, pageSize, offset]);
+  }, [dataFilterKey, dataQueryKey, page, reloadNonce]);
 
   function applyRecent(days: number) {
     const end = new Date();
@@ -541,12 +942,74 @@ export function PersonalDataView() {
     setUntil("");
   }
 
-  const selectedSection = category === "all" ? undefined : findSection(data, category);
-  const profileSection = category === "profile" ? selectedSection : undefined;
-  const visibleSections = data?.sections ?? [];
-  const selectedTotal = category === "all" ? (data?.totals.all ?? 0) : (selectedSection?.total ?? 0);
+  function refreshPersonalDataView() {
+    setExpandedId(null);
+    setCopyMessage(null);
+    setReloadNonce((value) => value + 1);
+  }
 
-  if (error) return <StateBlock title="个人数据加载失败" detail={error} />;
+  async function copyCurrentView() {
+    if (!canCopyPersonalDataView(visibleData, visibleLoading, error)) {
+      setCopyMessage(personalDataCopyUnavailableMessage(visibleLoading, error, filterValidationError));
+      return;
+    }
+    const markdown = personalDataMarkdown(visibleData, {
+      categoryLabel: selectedCategory?.label ?? "全部",
+      query: normalizedQuery,
+      selectedTotal,
+      timeRangeLabel,
+    });
+    if (!markdown.trim()) {
+      setCopyMessage("当前视图没有可复制上下文。");
+      return;
+    }
+    const copied = await copyText(markdown);
+    setCopyMessage(copied ? "已复制当前个人数据视图。" : "当前浏览器不支持自动复制，请从表格内容手动复制。");
+  }
+
+  const hideStaleRows = personalDataHideStaleRows(hasLoaded, dataQueryKey, loadedDataQueryKey);
+  const hideStaleOverview = personalDataHideStaleOverview(overviewQueryKey, loadedOverviewQueryKey);
+  const visibleOverview = hideStaleOverview ? null : overview;
+  const visibleOverviewLoading = overviewLoading || (hideStaleOverview && overviewError === null);
+  const visibleData = hideStaleRows ? null : data;
+  const visibleLoading = loading || (hideStaleRows && error === null);
+  const selectedSection = category === "all" ? undefined : findSection(visibleData, category);
+  const profileSection = category === "profile" ? selectedSection : undefined;
+  const visibleSections = visibleData?.sections ?? [];
+  const selectedTotal = finiteCount(category === "all" ? visibleData?.totals.all : selectedSection?.total);
+  const selectedCategory = categories.find((item) => item.key === category);
+  const activeCategoryCount = visibleOverview
+    ? categories.filter((item) => item.key !== "all" && finiteCount(visibleOverview.totals[item.key]) > 0).length
+    : 0;
+  const visibleItemCount = visibleSections.reduce((sum, section) => sum + section.items.length, 0);
+  const timeRangeLabel = since || until
+    ? `${since || "最早"} - ${until || "今天"}`
+    : "全部时间";
+  const refreshErrorText = filterValidationError
+    ? null
+    : personalDataRefreshErrorText(error, hasLoaded, dataQueryKey, loadedDataQueryKey);
+  const copyEnabled = canCopyPersonalDataView(visibleData, visibleLoading, error);
+
+  if (personalDataBlockingError(error, hasLoaded, dataQueryKey, loadedDataQueryKey, filterValidationError)) {
+    return (
+      <div className="stack">
+        <div className="view-toolbar">
+          <button className="plain-button" onClick={() => onNavigate(dashboardRoutes.runs)} type="button">
+            <ListChecks size={16} /> 批次列表
+          </button>
+          <div className="toolbar-actions">
+            <button className="plain-button" onClick={() => onNavigate(dashboardRoutes.casebook)} type="button">
+              <CheckCircle2 size={16} /> 样本库
+            </button>
+            <button className="plain-button" onClick={refreshPersonalDataView} disabled={loading} type="button">
+              <RefreshCw size={16} /> 重新加载
+            </button>
+          </div>
+        </div>
+        <StateBlock title="个人数据加载失败" detail={error ?? undefined} />
+      </div>
+    );
+  }
 
   return (
     <div className="personal-data-page">
@@ -558,18 +1021,48 @@ export function PersonalDataView() {
           </div>
           <Database size={22} />
         </div>
+        <div className="personal-workflow-actions" aria-label="上下文检查后的复盘动作">
+          <button className="plain-button" onClick={() => onNavigate(dashboardRoutes.runs)} type="button">
+            <ListChecks size={15} /> 回评审
+          </button>
+          <button className="plain-button" onClick={() => onNavigate(dashboardRoutes.casebook)} type="button">
+            <CheckCircle2 size={15} /> 样本库
+          </button>
+          <button className="plain-button" onClick={refreshPersonalDataView} disabled={loading || overviewLoading} type="button">
+            <RefreshCw size={15} /> 刷新上下文
+          </button>
+          <button
+            className="plain-button"
+            disabled={!copyEnabled}
+            onClick={() => void copyCurrentView()}
+            title={copyEnabled ? "复制当前个人数据视图" : personalDataCopyUnavailableMessage(visibleLoading, error, filterValidationError)}
+            type="button"
+          >
+            <ClipboardCopy size={15} /> 复制当前视图
+          </button>
+        </div>
+        {copyMessage && <div className="inline-status" role="status">{copyMessage}</div>}
+        {filterValidationError && <div className="inline-error" role="alert">{filterValidationError}</div>}
+        {!filterValidationError && overviewError && <div className="inline-error" role="alert">概况刷新失败：{overviewError}</div>}
+        {refreshErrorText && <div className="inline-error" role="alert">{refreshErrorText}</div>}
         <div className="personal-filter-grid">
           <label className="search-field">
             <span><Search size={14} /> 搜索</span>
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="标题、摘要、字段内容" />
+            <input
+              aria-label="搜索个人数据"
+              maxLength={PERSONAL_DATA_QUERY_MAX_LENGTH}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="标题、摘要、字段内容"
+            />
           </label>
           <label>
             <span><CalendarDays size={14} /> 开始日期</span>
-            <input type="date" value={since} max={until || undefined} onChange={(event) => setSince(event.target.value)} />
+            <input aria-label="个人数据开始日期" type="date" value={since} max={until || undefined} onChange={(event) => setSince(event.target.value)} />
           </label>
           <label>
             <span><CalendarDays size={14} /> 结束日期</span>
-            <input type="date" value={until} min={since || undefined} max={today} onChange={(event) => setUntil(event.target.value)} />
+            <input aria-label="个人数据结束日期" type="date" value={until} min={since || undefined} max={today} onChange={(event) => setUntil(event.target.value)} />
           </label>
         </div>
         <div className="date-preset-row">
@@ -578,20 +1071,56 @@ export function PersonalDataView() {
           <button onClick={() => applyRecent(30)} type="button">近 30 天</button>
           <button onClick={clearDates} type="button">全部时间</button>
         </div>
+        <div className="personal-summary-grid">
+          <div>
+            <span>总上下文</span>
+            <strong>{formatCount(visibleOverview?.totals.all)}</strong>
+            <p>{overviewSummaryText({ activeCategoryCount, overviewError, overviewLoading: visibleOverviewLoading })}</p>
+          </div>
+          <div>
+            <span>当前视图</span>
+            <strong>{selectedCategory?.label ?? "全部"}</strong>
+            <p>{selectedCategory?.description ?? "每类最新样本"}</p>
+          </div>
+          <div>
+            <span>筛选命中</span>
+            <strong>{formatCount(selectedTotal)}</strong>
+            <p>当前页展示 {visibleItemCount} 条。</p>
+          </div>
+          <div>
+            <span>时间范围</span>
+            <strong>{timeRangeLabel}</strong>
+            <p>{normalizedQuery ? `搜索：${valueText(normalizedQuery, 120)}` : "没有搜索词。"}</p>
+          </div>
+        </div>
       </section>
 
       <div className="personal-data-layout">
         <CategoryMenu
           category={category}
           onChange={setCategory}
-          overview={overviewLoading && !overview ? null : overview}
+          overview={visibleOverviewLoading && !visibleOverview ? null : visibleOverview}
         />
-        <main className="personal-data-main">
+        <section aria-label="个人数据明细" className="personal-data-main">
           {category === "profile" && <ProfileSpotlight section={profileSection} />}
 
-          {loading && <StateBlock title="正在读取个人数据" />}
+          {visibleLoading && <StateBlock title="正在读取个人数据" />}
 
-          {data && !loading && (
+          {!visibleLoading && !visibleData && error && (
+            <StateBlock
+              title={personalDataEmptyStateTitle(filterValidationError)}
+              detail={error}
+            />
+          )}
+
+          {visibleData && !visibleLoading && visibleSections.length === 0 && (
+            <StateBlock
+              title="当前视图没有个人数据"
+              detail={personalDataNoSectionsMessage(selectedCategory?.label)}
+            />
+          )}
+
+          {visibleData && !visibleLoading && visibleSections.length > 0 && (
             <>
               <div className="personal-section-list">
                 {visibleSections.map((section) => (
@@ -600,7 +1129,7 @@ export function PersonalDataView() {
                       <div>
                         <div className="eyebrow">数据表</div>
                         <h2>
-                          {section.label}（{section.total.toLocaleString()}）
+                          {section.label}（{formatCount(section.total)}）
                         </h2>
                         <p>{section.description}</p>
                       </div>
@@ -624,7 +1153,7 @@ export function PersonalDataView() {
               </div>
             </>
           )}
-        </main>
+        </section>
       </div>
     </div>
   );

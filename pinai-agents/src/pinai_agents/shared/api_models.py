@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 
 class _CamelModel(BaseModel):
@@ -206,7 +206,7 @@ class AppStateValue(_CamelModel):
 
 # ── Generate / Run ──
 class GenerateRequest(_CamelModel):
-    cards_to_generate: int = Field(default=8, ge=1, le=10)
+    cards_to_generate: StrictInt = Field(default=8, ge=1, le=10)
     # None → fall back to user's `generation_language` setting at the
     # route boundary. Explicit value (admin / A-B / debug) overrides.
     output_language: SupportedLanguage | None = None

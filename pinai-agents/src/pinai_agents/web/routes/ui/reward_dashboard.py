@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import json
+from datetime import UTC, datetime
+from math import isfinite
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ...auth.deps import User, current_user, get_pool
 from ...db.repositories.reward import (
+    VALID_CASEBOOK_LABELS,
     CasebookLabel,
     RewardRepository,
 )
@@ -20,18 +23,183 @@ from ...services.personal_data_snapshot import (
 from ...services.trace_artifacts import TraceArtifactService
 
 router = APIRouter(prefix="/api/reward-dashboard", tags=["reward-dashboard"])
+CASEBOOK_REVIEWER_NOTE_MAX_LENGTH = 2_000
+SCORE_REASON_MAX_LENGTH = 1_000
+REWARD_METADATA_MAX_JSON_LENGTH = 4_096
+REWARD_METADATA_MAX_DEPTH = 4
+CASEBOOK_OFFSET_MAX = 10_000
+REWARD_TEXT_FILTER_MAX_LENGTH = 120
 
 
 def _body_dict(body: Any) -> dict[str, Any]:
     return body if isinstance(body, dict) else {}
 
 
+def _path_id(value: str, *, field_name: str) -> str:
+    item_id = value.strip()
+    if not item_id:
+        raise HTTPException(status_code=422, detail=f"{field_name} required")
+    return item_id
+
+
+def _optional_path_id(value: Any, *, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise HTTPException(status_code=422, detail=f"{field_name} must be a string")
+    item_id = value.strip()
+    return item_id or None
+
+
+def _casebook_label(value: Any) -> str:
+    if not isinstance(value, str):
+        raise HTTPException(status_code=422, detail="label required")
+    label = value.strip()
+    if not label:
+        raise HTTPException(status_code=422, detail="label required")
+    if label not in VALID_CASEBOOK_LABELS:
+        raise HTTPException(status_code=422, detail=f"invalid casebook label: {label}")
+    return label
+
+
+def _optional_trimmed_text(
+    value: Any,
+    *,
+    field_name: str,
+    max_length: int,
+) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise HTTPException(status_code=422, detail=f"{field_name} must be a string")
+    text = value.strip()
+    if not text:
+        return None
+    if len(text) > max_length:
+        raise HTTPException(status_code=422, detail=f"{field_name} must be at most {max_length} characters")
+    return text
+
+
+def _safe_metadata_value(value: Any, *, field_name: str, depth: int = 0) -> Any:
+    if depth > REWARD_METADATA_MAX_DEPTH:
+        raise HTTPException(status_code=422, detail=f"{field_name} is too deeply nested")
+    if value is None or isinstance(value, bool | str):
+        return value
+    if isinstance(value, int | float):
+        if not isfinite(float(value)):
+            raise HTTPException(status_code=422, detail=f"{field_name} numbers must be finite")
+        return value
+    if isinstance(value, list):
+        if len(value) > 50:
+            raise HTTPException(status_code=422, detail=f"{field_name} contains too many items")
+        return [
+            _safe_metadata_value(item, field_name=field_name, depth=depth + 1)
+            for item in value
+        ]
+    if isinstance(value, dict):
+        if len(value) > 50:
+            raise HTTPException(status_code=422, detail=f"{field_name} contains too many items")
+        return {
+            str(key): _safe_metadata_value(item, field_name=field_name, depth=depth + 1)
+            for key, item in value.items()
+        }
+    raise HTTPException(status_code=422, detail=f"{field_name} contains unsupported values")
+
+
+def _reward_metadata(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=422, detail="metadata must be an object")
+    metadata = _safe_metadata_value(value, field_name="metadata")
+    encoded = json.dumps(metadata, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    if len(encoded) > REWARD_METADATA_MAX_JSON_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"metadata must be at most {REWARD_METADATA_MAX_JSON_LENGTH} characters",
+        )
+    return metadata
+
+
+def _optional_bool(value: Any, *, field_name: str, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    raise HTTPException(status_code=422, detail=f"{field_name} must be a boolean")
+
+
+def _score_event_type(data: dict[str, Any]) -> str:
+    for key in ("eventType", "event_type"):
+        value = data.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise HTTPException(status_code=422, detail="invalid score event")
+        event_type = value.strip()
+        if not event_type:
+            continue
+        if event_type not in {"card_open", "user_score", "reviewer_score"}:
+            raise HTTPException(status_code=422, detail="invalid score event")
+        return event_type
+    return "reviewer_score"
+
+
+def _score_source(data: dict[str, Any], *, event_type: str) -> str:
+    value = data.get("source")
+    default_source = "user" if event_type in {"card_open", "user_score"} else "reviewer"
+    if value is None:
+        return default_source
+    if not isinstance(value, str):
+        raise HTTPException(status_code=422, detail="invalid score source")
+    source = value.strip()
+    if not source:
+        return default_source
+    if source not in {"user", "reviewer", "system"}:
+        raise HTTPException(status_code=422, detail="invalid score source")
+    return source
+
+
+def _sortable_datetime(value: datetime) -> datetime:
+    if value.tzinfo is not None and value.utcoffset() is not None:
+        return value.astimezone(UTC).replace(tzinfo=None)
+    return value
+
+
+def _validate_datetime_range(since: datetime | None, until: datetime | None) -> None:
+    if since is None or until is None:
+        return
+    if _sortable_datetime(since) > _sortable_datetime(until):
+        raise HTTPException(status_code=422, detail="since must be before or equal to until")
+
+
+def _validate_numeric_range(
+    min_value: float | None,
+    max_value: float | None,
+    *,
+    min_name: str,
+    max_name: str,
+) -> None:
+    for name, value in ((min_name, min_value), (max_name, max_value)):
+        if value is not None and not isfinite(value):
+            raise HTTPException(status_code=422, detail=f"{name} must be finite")
+    if min_value is None or max_value is None:
+        return
+    if min_value > max_value:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{min_name} must be less than or equal to {max_name}",
+        )
+
+
 def _score_value(value: Any) -> float | None:
     if value is None:
         return None
-    if not isinstance(value, int | float):
+    if isinstance(value, bool) or not isinstance(value, int | float):
         raise HTTPException(status_code=422, detail="score must be a number")
     score = float(value)
+    if not isfinite(score):
+        raise HTTPException(status_code=422, detail="score must be a finite number")
     if not 0 <= score <= 10:
         raise HTTPException(status_code=422, detail="score must be between 0 and 10")
     return score
@@ -39,7 +207,7 @@ def _score_value(value: Any) -> float | None:
 
 def _review_score_value(value: Any, *, event_type: str) -> float | None:
     score = _score_value(value)
-    if event_type in {"user_score", "reviewer_score"} and score is not None and score < 1:
+    if event_type in {"user_score", "reviewer_score"} and (score is None or score < 1):
         raise HTTPException(status_code=422, detail=f"{event_type} score must be between 1 and 10")
     return score
 
@@ -71,11 +239,17 @@ async def list_runs(
     reviewed: bool | None = Query(None),
     quality: Literal["aha", "dead", "reviewer_aha"] | None = Query(None),
 ):
+    _validate_datetime_range(since, until)
+    safe_trigger = _optional_trimmed_text(
+        trigger,
+        field_name="trigger",
+        max_length=REWARD_TEXT_FILTER_MAX_LENGTH,
+    )
     async with user_scoped_tx(pool, user.id) as conn:
         repo = RewardRepository(user.id, conn)
         runs = await repo.list_runs(
             limit=limit,
-            trigger=trigger,
+            trigger=safe_trigger,
             since=since,
             until=until,
             reviewed=reviewed,
@@ -90,9 +264,10 @@ async def get_run(
     user: User = Depends(current_user),
     pool=Depends(get_pool),
 ):
+    safe_run_id = _path_id(run_id, field_name="run_id")
     async with user_scoped_tx(pool, user.id) as conn:
         repo = RewardRepository(user.id, conn)
-        detail = await repo.get_run_detail(run_id)
+        detail = await repo.get_run_detail(safe_run_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="run not found")
     return {"ok": True, **detail}
@@ -104,9 +279,10 @@ async def get_card(
     user: User = Depends(current_user),
     pool=Depends(get_pool),
 ):
+    safe_card_id = _path_id(card_id, field_name="card_id")
     async with user_scoped_tx(pool, user.id) as conn:
         repo = RewardRepository(user.id, conn)
-        detail = await repo.get_card_detail(card_id)
+        detail = await repo.get_card_detail(safe_card_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="card not found")
     return {"ok": True, **detail}
@@ -119,16 +295,20 @@ async def score_card(
     user: User = Depends(current_user),
     pool=Depends(get_pool),
 ):
+    safe_card_id = _path_id(card_id, field_name="card_id")
     data = _body_dict(body)
-    event_type = data.get("eventType") or data.get("event_type") or "reviewer_score"
-    source = data.get("source") or ("user" if event_type in {"card_open", "user_score"} else "reviewer")
-    if not isinstance(event_type, str) or not isinstance(source, str):
-        raise HTTPException(status_code=422, detail="invalid score event")
+    event_type = _score_event_type(data)
+    source = _score_source(data, event_type=event_type)
     _validate_score_event(source, event_type)
     score = _review_score_value(data.get("score"), event_type=event_type)
-    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
-    reason = data.get("reason") if isinstance(data.get("reason"), str) else None
-    run_id = data.get("runId") or data.get("run_id")
+    metadata = _reward_metadata(data.get("metadata"))
+    reason = _optional_trimmed_text(
+        data.get("reason"),
+        field_name="reason",
+        max_length=SCORE_REASON_MAX_LENGTH,
+    )
+    run_id = data.get("runId") if "runId" in data else data.get("run_id")
+    safe_run_id = _optional_path_id(run_id, field_name="run_id")
     if event_type == "card_open":
         score = 1.0
 
@@ -136,15 +316,15 @@ async def score_card(
         async with user_scoped_tx(pool, user.id) as conn:
             repo = RewardRepository(user.id, conn)
             event = await repo.create_reward_event(
-                card_id=card_id,
-                run_id=run_id if isinstance(run_id, str) else None,
+                card_id=safe_card_id,
+                run_id=safe_run_id,
                 source=source,
                 event_type=event_type,
                 score=score,
                 reason=reason,
                 metadata=metadata,
             )
-            detail = await repo.get_card_detail(card_id)
+            detail = await repo.get_card_detail(safe_card_id)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except ValueError as e:
@@ -159,16 +339,23 @@ async def upsert_casebook(
     user: User = Depends(current_user),
     pool=Depends(get_pool),
 ):
+    safe_card_id = _path_id(card_id, field_name="card_id")
     data = _body_dict(body)
-    label = data.get("label")
-    if not isinstance(label, str) or not label:
-        raise HTTPException(status_code=422, detail="label required")
-    note_raw = data.get("reviewerNote") or data.get("reviewer_note") or data.get("note")
-    reviewer_note = note_raw if isinstance(note_raw, str) else None
+    label = _casebook_label(data.get("label"))
+    note_raw = data.get("note")
+    if "reviewer_note" in data:
+        note_raw = data["reviewer_note"]
+    if "reviewerNote" in data:
+        note_raw = data["reviewerNote"]
+    reviewer_note = _optional_trimmed_text(
+        note_raw,
+        field_name="reviewerNote",
+        max_length=CASEBOOK_REVIEWER_NOTE_MAX_LENGTH,
+    )
     try:
         async with user_scoped_tx(pool, user.id) as conn:
             case = await RewardRepository(user.id, conn).upsert_casebook(
-                card_id=card_id,
+                card_id=safe_card_id,
                 label=label,
                 reviewer_note=reviewer_note,
             )
@@ -185,8 +372,9 @@ async def delete_casebook(
     user: User = Depends(current_user),
     pool=Depends(get_pool),
 ):
+    safe_card_id = _path_id(card_id, field_name="card_id")
     async with user_scoped_tx(pool, user.id) as conn:
-        deleted = await RewardRepository(user.id, conn).delete_casebook(card_id)
+        deleted = await RewardRepository(user.id, conn).delete_casebook(safe_card_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="casebook entry not found")
     return {"ok": True}
@@ -205,16 +393,33 @@ async def list_casebook(
     since: datetime | None = Query(None),
     until: datetime | None = Query(None),
     limit: int = Query(20, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=CASEBOOK_OFFSET_MAX),
 ):
+    _validate_datetime_range(since, until)
+    _validate_numeric_range(
+        min_score,
+        max_score,
+        min_name="minScore",
+        max_name="maxScore",
+    )
+    safe_basket = _optional_trimmed_text(
+        basket,
+        field_name="basket",
+        max_length=REWARD_TEXT_FILTER_MAX_LENGTH,
+    )
+    safe_intent = _optional_trimmed_text(
+        intent,
+        field_name="intent",
+        max_length=REWARD_TEXT_FILTER_MAX_LENGTH,
+    )
     async with user_scoped_tx(pool, user.id) as conn:
         repo = RewardRepository(user.id, conn)
         total = await repo.count_casebook(
             label=label,
             min_score=min_score,
             max_score=max_score,
-            basket=basket,
-            intent=intent,
+            basket=safe_basket,
+            intent=safe_intent,
             min_evaluator_gap=min_evaluator_gap,
             since=since,
             until=until,
@@ -223,8 +428,8 @@ async def list_casebook(
             label=label,
             min_score=min_score,
             max_score=max_score,
-            basket=basket,
-            intent=intent,
+            basket=safe_basket,
+            intent=safe_intent,
             min_evaluator_gap=min_evaluator_gap,
             since=since,
             until=until,
@@ -241,12 +446,13 @@ async def build_trace(
     user: User = Depends(current_user),
     pool=Depends(get_pool),
 ):
+    safe_run_id = _path_id(run_id, field_name="run_id")
     data = _body_dict(body)
-    force = bool(data.get("force"))
+    force = _optional_bool(data.get("force"), field_name="force")
     try:
         async with user_scoped_tx(pool, user.id) as conn:
             repo = RewardRepository(user.id, conn)
-            artifact = await TraceArtifactService(repo).get_or_generate(run_id, force=force)
+            artifact = await TraceArtifactService(repo).get_or_generate(safe_run_id, force=force)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     return {"ok": True, "trace": artifact}
@@ -258,9 +464,10 @@ async def get_trace(
     user: User = Depends(current_user),
     pool=Depends(get_pool),
 ):
+    safe_run_id = _path_id(run_id, field_name="run_id")
     async with user_scoped_tx(pool, user.id) as conn:
         repo = RewardRepository(user.id, conn)
-        canonical_run_id = await repo.resolve_run_id(run_id)
+        canonical_run_id = await repo.resolve_run_id(safe_run_id)
         artifact = (
             await repo.get_trace_artifact(canonical_run_id)
             if canonical_run_id is not None
@@ -304,6 +511,7 @@ async def personal_data(
     limit: int = Query(40, ge=5, le=200),
     offset: int = Query(0, ge=0, le=10000),
 ):
+    _validate_datetime_range(since, until)
     async with user_scoped_tx(pool, user.id) as conn:
         return await PersonalDataSnapshotService(conn, user.id).snapshot(
             category=category,

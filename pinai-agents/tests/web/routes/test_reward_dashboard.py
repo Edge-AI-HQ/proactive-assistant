@@ -10,6 +10,10 @@ from pinai_agents.web.app import create_app
 from pinai_agents.web.auth.deps import current_user
 from pinai_agents.web.auth.user_service import User
 from pinai_agents.web.db.rls import user_scoped_tx
+from pinai_agents.web.routes.ui.reward_dashboard import (
+    CASEBOOK_OFFSET_MAX,
+    REWARD_TEXT_FILTER_MAX_LENGTH,
+)
 
 
 def _user(user_id: int) -> User:
@@ -87,6 +91,18 @@ async def test_reward_dashboard_routes_roundtrip(pool, user_ids):
         runs = runs_resp.json()["runs"]
         assert [r["runId"] for r in runs] == ["run_route_reward"]
 
+        trimmed_trigger_resp = await client.get("/api/reward-dashboard/runs?trigger=%20manual%20")
+        assert trimmed_trigger_resp.status_code == 200
+        assert [r["runId"] for r in trimmed_trigger_resp.json()["runs"]] == ["run_route_reward"]
+
+        oversized_trigger_resp = await client.get(
+            f"/api/reward-dashboard/runs?trigger={'x' * (REWARD_TEXT_FILTER_MAX_LENGTH + 1)}",
+        )
+        assert oversized_trigger_resp.status_code == 422
+        assert oversized_trigger_resp.json()["detail"] == (
+            f"trigger must be at most {REWARD_TEXT_FILTER_MAX_LENGTH} characters"
+        )
+
         dead_runs_resp = await client.get("/api/reward-dashboard/runs?quality=dead")
         assert dead_runs_resp.status_code == 200
         assert [r["runId"] for r in dead_runs_resp.json()["runs"]] == ["run_route_reward"]
@@ -108,6 +124,67 @@ async def test_reward_dashboard_routes_roundtrip(pool, user_ids):
         )
         assert zero_score_resp.status_code == 422
 
+        missing_score_resp = await client.post(
+            f"/api/reward-dashboard/cards/{card_id}/score",
+            json={},
+        )
+        assert missing_score_resp.status_code == 422
+
+        null_score_resp = await client.post(
+            f"/api/reward-dashboard/cards/{card_id}/score",
+            json={"score": None},
+        )
+        assert null_score_resp.status_code == 422
+
+        bool_score_resp = await client.post(
+            f"/api/reward-dashboard/cards/{card_id}/score",
+            json={"score": True},
+        )
+        assert bool_score_resp.status_code == 422
+        assert bool_score_resp.json()["detail"] == "score must be a number"
+
+        invalid_event_type_resp = await client.post(
+            f"/api/reward-dashboard/cards/{card_id}/score",
+            json={"eventType": ["reviewer_score"], "score": 8},
+        )
+        assert invalid_event_type_resp.status_code == 422
+        assert invalid_event_type_resp.json()["detail"] == "invalid score event"
+
+        invalid_source_resp = await client.post(
+            f"/api/reward-dashboard/cards/{card_id}/score",
+            json={"source": ["reviewer"], "score": 8},
+        )
+        assert invalid_source_resp.status_code == 422
+        assert invalid_source_resp.json()["detail"] == "invalid score source"
+
+        unsupported_event_resp = await client.post(
+            f"/api/reward-dashboard/cards/{card_id}/score",
+            json={"eventType": "imported_feedback", "source": "system"},
+        )
+        assert unsupported_event_resp.status_code == 422
+        assert unsupported_event_resp.json()["detail"] == "invalid score event"
+
+        open_resp = await client.post(
+            f"/api/reward-dashboard/cards/{card_id}/score",
+            json={"eventType": "card_open", "source": "user"},
+        )
+        assert open_resp.status_code == 200
+        assert open_resp.json()["event"]["score"] == 1.0
+
+        blank_run_id_resp = await client.post(
+            f"/api/reward-dashboard/cards/{card_id}/score",
+            json={"score": 8, "runId": "   "},
+        )
+        assert blank_run_id_resp.status_code == 200
+        assert blank_run_id_resp.json()["event"]["runId"] == "run_route_reward"
+
+        invalid_run_id_resp = await client.post(
+            f"/api/reward-dashboard/cards/{card_id}/score",
+            json={"score": 8, "runId": ["run_route_reward"]},
+        )
+        assert invalid_run_id_resp.status_code == 422
+        assert invalid_run_id_resp.json()["detail"] == "run_id must be a string"
+
         case_resp = await client.post(
             f"/api/reward-dashboard/cards/{card_id}/casebook",
             json={"label": "great", "reviewerNote": "good few-shot"},
@@ -115,11 +192,51 @@ async def test_reward_dashboard_routes_roundtrip(pool, user_ids):
         assert case_resp.status_code == 200
         assert case_resp.json()["casebook"]["snapshot"]["card"]["id"] == card_id
 
+        blank_primary_note_resp = await client.post(
+            f"/api/reward-dashboard/cards/{card_id}/casebook",
+            json={"label": "great", "reviewerNote": "", "note": "fallback note"},
+        )
+        assert blank_primary_note_resp.status_code == 200
+        assert blank_primary_note_resp.json()["casebook"]["reviewerNote"] is None
+
+        invalid_primary_note_resp = await client.post(
+            f"/api/reward-dashboard/cards/{card_id}/casebook",
+            json={"label": "great", "reviewerNote": 123, "note": "fallback note"},
+        )
+        assert invalid_primary_note_resp.status_code == 422
+        assert invalid_primary_note_resp.json()["detail"] == "reviewerNote must be a string"
+
         case_list_resp = await client.get("/api/reward-dashboard/casebook")
         assert case_list_resp.status_code == 200
         case_list = case_list_resp.json()
         assert len(case_list["items"]) == 1
         assert case_list["total"] == 1
+
+        trimmed_casebook_filters_resp = await client.get(
+            "/api/reward-dashboard/casebook?basket=%20work%20&intent=%20route%20",
+        )
+        assert trimmed_casebook_filters_resp.status_code == 200
+        assert trimmed_casebook_filters_resp.json()["total"] == 1
+
+        oversized_intent_resp = await client.get(
+            f"/api/reward-dashboard/casebook?intent={'x' * (REWARD_TEXT_FILTER_MAX_LENGTH + 1)}",
+        )
+        assert oversized_intent_resp.status_code == 422
+        assert oversized_intent_resp.json()["detail"] == (
+            f"intent must be at most {REWARD_TEXT_FILTER_MAX_LENGTH} characters"
+        )
+
+        oversized_casebook_offset_resp = await client.get(
+            f"/api/reward-dashboard/casebook?offset={CASEBOOK_OFFSET_MAX + 1}",
+        )
+        assert oversized_casebook_offset_resp.status_code == 422
+
+        invalid_trace_force_resp = await client.post(
+            "/api/reward-dashboard/runs/run_route_reward/trace",
+            json={"force": "yes"},
+        )
+        assert invalid_trace_force_resp.status_code == 422
+        assert invalid_trace_force_resp.json()["detail"] == "force must be a boolean"
 
 
 @pytest.mark.asyncio

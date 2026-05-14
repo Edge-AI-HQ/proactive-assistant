@@ -1,4 +1,9 @@
+import { scoreLabel } from "@/api/reward";
 import type { CardSnapshot, RunDetail, TraceArtifact } from "@/api/reward";
+import { dashboardDisplayId, dashboardMarkdownLink, firstDashboardRouteId } from "@/lib/dashboardRoutes";
+import { safeExternalHref } from "@/lib/externalUrl";
+import { redactSensitiveText } from "@/lib/redaction";
+import { sanitizeTraceSvg } from "@/lib/traceSvg";
 
 export const TRACE_STAGES = ["data-collector", "planner", "card-generator", "evaluator"] as const;
 export type TraceStage = (typeof TRACE_STAGES)[number];
@@ -20,6 +25,20 @@ export function stringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
+function recordField(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+export function runCards(run: Pick<RunDetail, "cards"> | null | undefined): RunDetail["cards"] {
+  const cards = run?.cards as unknown;
+  return Array.isArray(cards)
+    ? cards.filter((entry): entry is RunDetail["cards"][number] => {
+        const record = recordField(entry);
+        return record !== null && recordField(record.card) !== null && recordField(record.rewards) !== null;
+      })
+    : [];
+}
+
 function stagePayload(summary: Record<string, unknown> | null | undefined, stage: string): Record<string, unknown> {
   const stages = summary?.stages;
   if (!stages || typeof stages !== "object") return {};
@@ -37,7 +56,7 @@ export function stageSnippets(summary: Record<string, unknown> | null | undefine
 }
 
 export function clipText(value: string, limit = 220): string {
-  const text = value.replace(/\s+/g, " ").trim();
+  const text = redactSensitiveText(value).replace(/\s+/g, " ").trim();
   return text.length <= limit ? text : `${text.slice(0, limit - 1).trim()}...`;
 }
 
@@ -125,7 +144,7 @@ export function readableSkippedLines(values: string[]): string[] {
 }
 
 export function sourceLabel(source: string): string {
-  return SOURCE_LABELS[source] ?? source.replace(/_/g, " ");
+  return SOURCE_LABELS[source] ?? clipText(source.replace(/_/g, " "), 120);
 }
 
 function sourceKindFromEvidence(source: string): string {
@@ -156,7 +175,7 @@ export function summarizeSources(sources: string[]): string {
 export function inferredDataSources(run: RunDetail | null): string[] {
   if (!run) return [];
   return Array.from(new Set(
-    run.cards
+    runCards(run)
       .flatMap((entry) => sourcePreview(entry.card))
       .map(sourceKindFromEvidence),
   ));
@@ -164,12 +183,16 @@ export function inferredDataSources(run: RunDetail | null): string[] {
 
 export function cardWhyNow(card: CardSnapshot | undefined): string {
   const value = card?.whyNow ?? card?.why_now;
-  return typeof value === "string" && value.trim() ? value : "这张卡没有保存时机说明。";
+  return typeof value === "string" && value.trim() ? clipText(value, 420) : "这张卡没有保存时机说明。";
 }
 
 export function cardSummary(card: CardSnapshot | undefined): string {
   const value = card?.summary;
-  return typeof value === "string" && value.trim() ? value : "这张卡没有保存摘要。";
+  return typeof value === "string" && value.trim() ? clipText(value, 420) : "这张卡没有保存摘要。";
+}
+
+function traceCardTitle(card: CardSnapshot | undefined): string {
+  return typeof card?.title === "string" && card.title.trim() ? clipText(card.title, 140) : "未命名卡片";
 }
 
 export function primaryActionLabel(card: CardSnapshot | undefined): string | null {
@@ -181,11 +204,82 @@ export function primaryActionLabel(card: CardSnapshot | undefined): string | nul
   return null;
 }
 
+export type TraceStatusClass = "failed" | "missing" | "neutral" | "pending" | "ready";
+
+const traceStatusLabels: Record<Exclude<TraceStatusClass, "neutral">, string> = {
+  failed: "失败",
+  missing: "缺失",
+  pending: "生成中",
+  ready: "已就绪",
+};
+
+export function traceStatusClass(status: TraceArtifact["status"] | string | null | undefined): TraceStatusClass {
+  return typeof status === "string" && Object.prototype.hasOwnProperty.call(traceStatusLabels, status)
+    ? status as TraceStatusClass
+    : "neutral";
+}
+
 export function traceStatusLabel(status: TraceArtifact["status"] | string | null | undefined): string {
-  return {
-    failed: "失败",
-    missing: "缺失",
-    pending: "生成中",
-    ready: "已就绪",
-  }[status ?? ""] ?? "未知";
+  const className = traceStatusClass(status);
+  return className === "neutral" ? "未知" : traceStatusLabels[className];
+}
+
+interface TraceReviewMarkdownOptions {
+  dataSources: string[];
+  routeRunId: string;
+  run: RunDetail | null;
+  trace: TraceArtifact;
+}
+
+export function traceReviewMarkdown({
+  dataSources,
+  routeRunId,
+  run,
+  trace,
+}: TraceReviewMarkdownOptions): string {
+  const cards = runCards(run);
+  const firstCard = cards[0];
+  const runRouteId = firstDashboardRouteId(run?.run.id, routeRunId, run?.run.runId);
+  const traceRouteId = firstDashboardRouteId(trace.runId, run?.run.runId, routeRunId);
+  const langsmithUrl = safeExternalHref(trace.langsmithUrl || (
+    typeof trace.traceTree.langsmithUrl === "string" ? trace.traceTree.langsmithUrl : ""
+  ));
+  const sources = dataSources.length > 0 ? dataSources : inferredDataSources(run);
+  const sourceLines = sources.map(sourceLabel);
+  const missingStages = stringList(trace.summary.missingStages);
+  const svgReady = typeof trace.traceTree.svg === "string" && sanitizeTraceSvg(trace.traceTree.svg).length > 0;
+  const topCards = cards.slice(0, 8);
+  const remainingCards = Math.max(0, cards.length - topCards.length);
+
+  return [
+    `### 生成链路复盘 ${dashboardDisplayId(traceRouteId)}`,
+    "",
+    `- 批次评审: ${dashboardMarkdownLink("run", runRouteId)}`,
+    `- 生成链路: ${dashboardMarkdownLink("trace", traceRouteId)}`,
+    firstCard ? `- 首张卡片: ${dashboardMarkdownLink("card", firstCard.card.id)}` : "- 首张卡片: 无",
+    `- Artifact: ${traceStatusLabel(trace.status)}`,
+    `- LangSmith: ${langsmithUrl || "未绑定"}`,
+    `- Trace 图: ${svgReady ? "已生成" : "未生成"}`,
+    `- 阶段完整性: ${missingStages.length > 0 ? missingStages.join(", ") : "完整"}`,
+    "",
+    "#### 输入来源",
+    sourceLines.length > 0 ? sourceLines.map((source) => `- ${source}`).join("\n") : "- 没有识别到输入来源。",
+    "",
+    "#### 卡片概览",
+    topCards.length > 0
+      ? topCards.map((entry, index) => [
+          `${index + 1}. ${traceCardTitle(entry.card)}`,
+          `   - 卡片详情: ${dashboardMarkdownLink("card", entry.card.id)}`,
+          `   - 用户/人工/评估: ${scoreLabel(entry.rewards.userReward)} / ${scoreLabel(entry.rewards.reviewerReward)} / ${scoreLabel(entry.evaluation?.overall)}`,
+          `   - 摘要: ${cardSummary(entry.card)}`,
+          `   - 为什么现在: ${cardWhyNow(entry.card)}`,
+        ].join("\n")).join("\n")
+      : "- 当前批次没有保存卡片。",
+    remainingCards > 0 ? `\n- 还有 ${remainingCards} 张卡未写入复制摘要，请回到链路页面继续查看。` : "",
+    "",
+    "#### 质量判断",
+    firstCard?.evaluation?.feedback
+      ? firstSentences(firstCard.evaluation.feedback, 420)
+      : "没有评估器结论摘要。",
+  ].join("\n");
 }

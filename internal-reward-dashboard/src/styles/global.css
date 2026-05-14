@@ -42,6 +42,24 @@ button:disabled {
   opacity: 0.55;
 }
 
+.skip-link {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 1000;
+  background: var(--ink);
+  color: #ffffff;
+  padding: 10px 14px;
+  border-radius: 8px;
+  text-decoration: none;
+  transform: translateY(-140%);
+  transition: transform 0.16s ease;
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
 .shell {
   min-height: 100vh;
   display: grid;
@@ -329,8 +347,11 @@ button:disabled {
 
 .filter-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
 }
 
 .focus-tabs {
@@ -665,6 +686,15 @@ td {
   box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
 }
 
+.queue-item:disabled {
+  cursor: default;
+}
+
+.queue-item:disabled:hover {
+  border-color: var(--line);
+  box-shadow: none;
+}
+
 .queue-item-title {
   align-items: center;
   display: flex;
@@ -775,6 +805,19 @@ td {
   flex: 0 0 auto;
 }
 
+.loop-shortcuts {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 14px;
+}
+
+.loop-shortcuts .plain-button {
+  justify-content: center;
+  min-width: 0;
+  padding-inline: 8px;
+}
+
 .latest-day {
   background: #f8fafc;
   border: 1px solid var(--line);
@@ -855,6 +898,53 @@ td {
   font-weight: 800;
   min-height: 32px;
   padding: 6px 10px;
+}
+
+.personal-workflow-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.personal-summary-grid {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding-top: 14px;
+}
+
+.personal-summary-grid div {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.personal-summary-grid span {
+  color: var(--muted);
+  display: block;
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.personal-summary-grid strong {
+  color: #111827;
+  display: block;
+  font-size: 18px;
+  line-height: 1.25;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+}
+
+.personal-summary-grid p {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
 }
 
 .personal-data-layout {
@@ -959,6 +1049,7 @@ td {
 
 .profile-spotlight h2 {
   margin: 2px 0 0;
+  overflow-wrap: anywhere;
 }
 
 .profile-spotlight p {
@@ -1053,6 +1144,7 @@ td {
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
+  overflow-wrap: anywhere;
 }
 
 .profile-field > strong,
@@ -1086,6 +1178,7 @@ td {
   color: #64748b;
   font-size: 11px;
   font-weight: 850;
+  overflow-wrap: anywhere;
 }
 
 .profile-nested-list .profile-nested-list > div {
@@ -1609,7 +1702,11 @@ td {
   color: #475569;
   font-size: 12px;
   font-weight: 800;
+  max-width: 100%;
+  overflow: hidden;
   padding: 4px 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .why-now {
@@ -1799,6 +1896,17 @@ td {
   font-size: 13px;
 }
 
+.review-card-actions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr;
+}
+
+.review-card-actions .plain-button {
+  justify-content: center;
+  width: 100%;
+}
+
 .score-grid {
   display: grid;
   grid-template-columns: repeat(10, 1fr);
@@ -1863,6 +1971,11 @@ td {
   color: #ffffff;
 }
 
+.score-button.active:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
 .evaluation-text {
   background: #fffbeb;
   border: 1px solid #fde68a;
@@ -1870,6 +1983,7 @@ td {
   color: #78350f;
   font-size: 13px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
   padding: 10px;
 }
 
@@ -1907,6 +2021,59 @@ td {
   display: grid;
   gap: 16px;
   min-width: 0;
+}
+
+.card-review-summary-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 18px;
+}
+
+.card-review-summary-grid div {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.card-review-summary-grid div.tone-high {
+  background: #ecfdf5;
+  border-color: #bbf7d0;
+}
+
+.card-review-summary-grid div.tone-mid {
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
+.card-review-summary-grid div.tone-low {
+  background: #fff1f2;
+  border-color: #fecdd3;
+}
+
+.card-review-summary-grid span {
+  color: var(--muted);
+  display: block;
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.card-review-summary-grid strong {
+  color: #111827;
+  display: block;
+  font-size: 20px;
+  margin-top: 5px;
+}
+
+.card-review-summary-grid p {
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
 }
 
 .card-snapshot-block {
@@ -2139,6 +2306,23 @@ td {
   top: 20px;
 }
 
+.card-review-actions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.card-review-actions .plain-button {
+  font-size: 12px;
+  justify-content: center;
+  min-width: 0;
+  padding-inline: 8px;
+}
+
+.card-review-actions .wide-action {
+  grid-column: 1 / -1;
+}
+
 .rail-title {
   align-items: center;
   color: #111827;
@@ -2207,6 +2391,15 @@ td {
   margin: 0;
 }
 
+.timeline-empty {
+  background: #f8fafc;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-weight: 750;
+  padding: 14px;
+}
+
 .related-item {
   text-align: left;
   display: flex;
@@ -2225,12 +2418,18 @@ td {
 .feedback-event > div:first-child {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   justify-content: space-between;
 }
 
+.feedback-event > div:first-child strong {
+  overflow-wrap: anywhere;
+}
+
 .feedback-event p {
   margin: 8px 0 0;
+  overflow-wrap: anywhere;
 }
 
 .trace-card-item {
@@ -2247,7 +2446,7 @@ td {
 }
 
 .case-grid {
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
 }
 
 .casebook-summary-grid {
@@ -2374,6 +2573,14 @@ td {
   margin: 6px 0 0;
 }
 
+.casebook-export-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .casebook-filter-grid {
   display: grid;
   gap: 8px;
@@ -2419,7 +2626,7 @@ td {
 }
 
 .casebook-table th:nth-child(6) {
-  width: 150px;
+  width: 220px;
 }
 
 .casebook-label-cell,
@@ -2452,6 +2659,11 @@ td {
 .casebook-label.good {
   background: #dcfce7;
   color: #166534;
+}
+
+.casebook-label.neutral {
+  background: #eef2f7;
+  color: #334155;
 }
 
 .casebook-label.bad {
@@ -2525,19 +2737,26 @@ td {
 }
 
 .casebook-row-actions {
+  flex-wrap: wrap;
   justify-content: flex-end;
 }
 
-.icon-danger-button {
-  align-items: center;
-  background: #ffffff;
-  border: 1px solid #fecaca;
-  border-radius: 8px;
+.casebook-row-actions .plain-button {
+  font-size: 12px;
+  gap: 5px;
+  min-height: 32px;
+  padding: 6px 8px;
+}
+
+.casebook-row-actions .danger-action {
+  border-color: #fecaca;
   color: #b91c1c;
-  display: inline-flex;
-  height: 36px;
-  justify-content: center;
-  width: 36px;
+  font-weight: 850;
+}
+
+.casebook-row-actions .danger-action.confirming {
+  background: #fee2e2;
+  border-color: #fca5a5;
 }
 
 .casebook-pagination {
@@ -2583,8 +2802,10 @@ td {
 }
 
 .json-block {
+  max-height: min(520px, 70vh);
   white-space: pre-wrap;
   overflow-x: auto;
+  overflow-y: auto;
 }
 
 .trace-svg {
@@ -2594,11 +2815,80 @@ td {
   background: #ffffff;
 }
 
+.trace-svg img {
+  display: block;
+  height: auto;
+  max-width: 100%;
+  min-width: min(720px, 100%);
+}
+
 .trace-hero-grid {
   display: grid;
   gap: 16px;
   grid-template-columns: minmax(0, 1fr) 340px;
   margin-bottom: 16px;
+}
+
+.trace-check-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.trace-check-card {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.trace-check-card.good {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.trace-check-card.bad {
+  background: #fff7ed;
+  border-color: #fed7aa;
+}
+
+.trace-check-card span {
+  color: var(--muted);
+  display: block;
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.trace-check-card strong {
+  color: #111827;
+  display: block;
+  font-size: 18px;
+  margin-top: 5px;
+}
+
+.trace-check-card p {
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.trace-action-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+}
+
+.trace-action-grid .plain-button {
+  justify-content: center;
+  min-width: 0;
+}
+
+.trace-action-grid .plain-button:disabled {
+  color: #94a3b8;
 }
 
 .trace-kicker {
@@ -2976,17 +3266,20 @@ td {
 .muted {
   color: var(--muted);
   margin-top: 6px;
+  overflow-wrap: anywhere;
 }
 
 .inline-error {
   color: var(--red);
   font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .inline-status {
   color: var(--green);
   font-size: 13px;
   font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .raw-details {
@@ -3050,11 +3343,28 @@ td {
     z-index: 10;
     flex-direction: row;
     align-items: center;
+    min-width: 0;
+    overflow-x: auto;
     padding: 12px;
   }
 
   .nav-list {
-    grid-auto-flow: column;
+    display: flex;
+    flex: 1 1 auto;
+    gap: 8px;
+    min-width: 0;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    padding-bottom: 2px;
+  }
+
+  .brand,
+  .nav-item {
+    flex: 0 0 auto;
+  }
+
+  .nav-item {
+    white-space: nowrap;
   }
 
   .sidebar-footer {
@@ -3076,6 +3386,21 @@ td {
     width: 100%;
   }
 
+  .filter-row {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .view-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .toolbar-actions {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
   .account-card {
     flex: 1 1 260px;
   }
@@ -3089,24 +3414,31 @@ td {
   .run-focus-card,
   .casebook-filter-grid,
   .personal-filter-grid,
+  .personal-summary-grid,
   .personal-data-layout,
   .profile-bucket-grid,
   .review-card,
   .detail-grid,
   .card-detail-layout,
+  .card-review-summary-grid,
   .card-analysis-grid,
   .run-overview-grid,
   .review-insight-grid,
   .casebook-summary-grid,
   .dimension-grid,
   .loop-health-grid,
+  .loop-shortcuts,
+  .trace-check-grid,
+  .trace-action-grid,
   .trace-hero-grid,
   .trace-decision-layout,
   .trace-decision-split,
   .trace-card-item,
+  .timeline-item,
   .generation-stage-grid,
   .generation-evidence-grid,
-  .card-decision-grid {
+  .card-decision-grid,
+  .card-review-actions {
     grid-template-columns: 1fr;
   }
 
@@ -3143,5 +3475,37 @@ td {
 
   .profile-field {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 620px) {
+  .sidebar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .nav-list {
+    flex-basis: 100%;
+  }
+
+  .analysis-block-head,
+  .trace-column-head {
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+
+  .analysis-block-head strong,
+  .trace-column-head strong {
+    grid-column: 1 / -1;
+    justify-self: start;
+    white-space: normal;
+  }
+
+  .score-grid {
+    gap: 6px;
+    grid-template-columns: repeat(5, minmax(38px, 1fr));
+  }
+
+  .score-button {
+    height: 36px;
   }
 }

@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from ..agents.generator import run_generator
 from ..auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
@@ -25,7 +25,7 @@ router = APIRouter()
 
 
 class GenerateRequest(BaseModel):
-    cards_to_generate: int = Field(default=8, ge=1, le=10)
+    cards_to_generate: StrictInt = Field(default=8, ge=1, le=10)
     output_language: str = Field(default="en")
     # Optional: caller-supplied run id. Web's scheduler dispatcher passes
     # the task.id here so pai_scheduled_tasks → pai_pipeline_runs share

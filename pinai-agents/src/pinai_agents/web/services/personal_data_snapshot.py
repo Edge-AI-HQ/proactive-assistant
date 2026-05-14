@@ -7,6 +7,8 @@ for humans. It is not used by agents.
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Sequence
 from datetime import date, datetime
 from typing import Any, Literal
@@ -40,6 +42,23 @@ CATEGORY_LABELS: dict[str, tuple[str, str]] = {
     "devices": ("设备", "已注册设备、最近在线状态和端侧 metadata。"),
     "connectors": ("连接器", "Composio 连接标签和同步游标。"),
     "app_state": ("应用状态", "迁移或本地应用保留的状态快照。"),
+}
+REDACTED_SECRET = "已隐藏敏感值"
+APP_STATE_VALUE_SUMMARY = "应用状态值见字段明细，敏感字段已脱敏。"
+SENSITIVE_KEY_RE = re.compile(
+    r"(^|[_-])(api[_-]?key|authorization|cookie|credential|password|private[_-]?key|refresh[_-]?token|secret|session|token)([_-]|$)",
+    re.IGNORECASE,
+)
+CAMEL_BOUNDARY_RE = re.compile(r"([a-z0-9])([A-Z])")
+SENSITIVE_VALUE_KEYS = {"raw_value", "secret_value", "token_value", "value"}
+SENSITIVE_VALUE_LABEL_KEYS = {
+    "field",
+    "field_name",
+    "header",
+    "header_name",
+    "key",
+    "name",
+    "property",
 }
 
 RAW_SOURCES: tuple[dict[str, str], ...] = (
@@ -186,6 +205,65 @@ def _iso(value: Any) -> Any:
     return value
 
 
+def _is_sensitive_key(value: Any) -> bool:
+    if value is None:
+        return False
+    text = CAMEL_BOUNDARY_RE.sub(r"\1_\2", str(value))
+    return bool(SENSITIVE_KEY_RE.search(text))
+
+
+def _normalized_payload_key(value: Any) -> str:
+    text = CAMEL_BOUNDARY_RE.sub(r"\1_\2", str(value))
+    return text.replace("-", "_").lower()
+
+
+def _redact_sensitive_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        has_sensitive_value_label = any(
+            _normalized_payload_key(k) in SENSITIVE_VALUE_LABEL_KEYS
+            and _is_sensitive_key(v)
+            for k, v in value.items()
+        )
+        return {
+            str(k): REDACTED_SECRET
+            if _is_sensitive_key(k)
+            or (has_sensitive_value_label and _normalized_payload_key(k) in SENSITIVE_VALUE_KEYS)
+            else _redact_sensitive_payload(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_sensitive_payload(v) for v in value]
+    return value
+
+
+def _redact_app_state_payload(row: dict[str, Any], safe_payload: Any) -> Any:
+    if row.get("category") != "app_state" or not isinstance(safe_payload, dict):
+        return safe_payload
+
+    key_candidates = (
+        row.get("title"),
+        row.get("kind"),
+        safe_payload.get("key"),
+        safe_payload.get("namespace"),
+    )
+    if any(_is_sensitive_key(candidate) for candidate in key_candidates):
+        return {**safe_payload, "value": REDACTED_SECRET}
+    return safe_payload
+
+
+def _safe_summary(row: dict[str, Any], safe_payload: Any) -> Any:
+    if row.get("category") != "app_state":
+        return row.get("summary")
+    if not isinstance(safe_payload, dict):
+        return APP_STATE_VALUE_SUMMARY
+
+    value = safe_payload.get("value")
+    if isinstance(value, dict | list):
+        summary = json.dumps(value, ensure_ascii=False)[:320]
+        return summary or APP_STATE_VALUE_SUMMARY
+    return APP_STATE_VALUE_SUMMARY
+
+
 def _clean_chip(value: Any) -> str | None:
     if value is None:
         return None
@@ -208,6 +286,9 @@ def _chips(value: Any) -> list[str]:
 
 def _item(row: dict[str, Any]) -> dict[str, Any]:
     payload = row.get("payload")
+    safe_payload = _redact_sensitive_payload(payload)
+    safe_payload = _iso(safe_payload)
+    safe_payload = _redact_app_state_payload(row, safe_payload)
     return {
         "id": str(row.get("item_id") or ""),
         "category": str(row.get("category") or ""),
@@ -216,13 +297,13 @@ def _item(row: dict[str, Any]) -> dict[str, Any]:
         "kind": row.get("kind"),
         "title": str(row.get("title") or "未命名数据"),
         "subtitle": row.get("subtitle"),
-        "summary": row.get("summary"),
+        "summary": _safe_summary(row, safe_payload),
         "status": row.get("status"),
         "score": row.get("score"),
         "occurredAt": _iso(row.get("occurred_at")),
         "updatedAt": _iso(row.get("updated_at")),
         "chips": _chips(row.get("chips")),
-        "payload": _iso(payload) if isinstance(payload, dict) else payload,
+        "payload": safe_payload,
     }
 
 

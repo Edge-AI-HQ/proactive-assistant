@@ -1,9 +1,20 @@
 import { accessToken, refreshAccessToken } from "@/auth/supabase";
+import { dashboardDisplayId, dashboardMarkdownLink, firstDashboardRouteId } from "@/lib/dashboardRoutes";
+import { redactSensitiveText } from "@/lib/redaction";
+import { REWARD_TEXT_FILTER_MAX_LENGTH } from "@/lib/textFilter";
+
+export { REWARD_TEXT_FILTER_MAX_LENGTH } from "@/lib/textFilter";
 
 // Local dashboard development should hit `/api/*` through Vite's same-origin
 // proxy. Using the product app's VITE_PIN_API_URL here would make the browser
 // call Fly directly and require CORS changes for every localhost port.
 const PIN_API_BASE = (import.meta.env.VITE_REWARD_API_URL as string | undefined) || "";
+
+export const CASEBOOK_OFFSET_MAX = 10_000;
+export const CASEBOOK_REVIEWER_NOTE_MAX_LENGTH = 2_000;
+export const PERSONAL_DATA_OFFSET_MAX = 10_000;
+export const PERSONAL_DATA_QUERY_MAX_LENGTH = 200;
+export const SCORE_REASON_MAX_LENGTH = 1_000;
 
 export type TraceStatus = "pending" | "ready" | "missing" | "failed";
 export type CasebookLabel =
@@ -15,6 +26,18 @@ export type CasebookLabel =
   | "duplicate"
   | "mistimed"
   | "weak_source";
+
+const casebookLabelValues = new Set<string>([
+  "great",
+  "bad",
+  "surprising",
+  "generic",
+  "hallucinated",
+  "duplicate",
+  "mistimed",
+  "weak_source",
+]);
+const runQualityValues = new Set<string>(["aha", "dead", "reviewer_aha"]);
 
 export interface RunSummary {
   id: string;
@@ -33,6 +56,9 @@ export interface RunSummary {
   avgEvaluatorOverall: number | null;
   traceStatus: TraceStatus;
   reviewLatencyHours: number | null;
+  attempts?: number;
+  maxAttempts?: number;
+  lastError?: string | null;
 }
 
 export interface AgentRunSummary {
@@ -200,6 +226,21 @@ export type PersonalDataCategory =
   | "connectors"
   | "app_state";
 
+const personalDataCategoryValues = new Set<string>([
+  "all",
+  "profile",
+  "goals",
+  "settings",
+  "memory",
+  "skills",
+  "signals",
+  "world",
+  "raw",
+  "devices",
+  "connectors",
+  "app_state",
+]);
+
 export interface PersonalDataItem {
   id: string;
   category: PersonalDataCategory;
@@ -239,36 +280,161 @@ export interface PersonalDataResponse {
   sections: PersonalDataSection[];
 }
 
+function stringifyDetail(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  if (Array.isArray(value)) {
+    const lines = value
+      .map((item) => stringifyDetail(item))
+      .filter((item): item is string => item !== null);
+    return lines.length > 0 ? lines.join("; ") : null;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const message =
+      stringifyDetail(record.detail) ??
+      stringifyDetail(record.message) ??
+      stringifyDetail(record.error);
+    if (message) {
+      return message;
+    }
+    const validationMessage = stringifyDetail(record.msg);
+    if (validationMessage) {
+      const loc = Array.isArray(record.loc)
+        ? record.loc
+          .map((part) => String(part))
+          .filter((part) => part.trim().length > 0)
+          .join(".")
+        : "";
+      return loc ? `${loc}: ${validationMessage}` : validationMessage;
+    }
+  }
+  return null;
+}
+
+export function apiErrorMessage(status: number, bodyText: string): string {
+  const trimmed = bodyText.trim();
+  if (!trimmed) {
+    return `HTTP ${status}`;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return stringifyDetail(parsed) ?? `HTTP ${status}`;
+  } catch {
+    return trimmed;
+  }
+}
+
+function requestHeaders(input: HeadersInit | undefined, token: string | null): Headers {
+  const headers = new Headers(input);
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  return headers;
+}
+
+function encodedApiId(value: string, label: string): string {
+  const id = firstDashboardRouteId(value);
+  if (!id) {
+    throw new Error(`${label} 缺失，不能发起请求。`);
+  }
+  return encodeURIComponent(id);
+}
+
+function setFiniteNumberParam(
+  qs: URLSearchParams,
+  name: string,
+  value: number | undefined,
+  options: { integer?: boolean; min?: number; max?: number } = {},
+) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return;
+  if (options.integer && !Number.isInteger(value)) return;
+  if (typeof options.min === "number" && value < options.min) return;
+  if (typeof options.max === "number" && value > options.max) return;
+  qs.set(name, String(value));
+}
+
+function setTrimmedStringParam(
+  qs: URLSearchParams,
+  name: string,
+  value: string | undefined,
+  options: { maxLength?: number } = {},
+) {
+  if (typeof value !== "string") return;
+  const trimmed = value.trim();
+  if (!trimmed) return;
+  if (typeof options.maxLength === "number" && trimmed.length > options.maxLength) return;
+  qs.set(name, trimmed);
+}
+
+function setEnumParam(qs: URLSearchParams, name: string, value: string | undefined, allowed: ReadonlySet<string>) {
+  if (typeof value !== "string") return;
+  const trimmed = value.trim();
+  if (!allowed.has(trimmed)) return;
+  qs.set(name, trimmed);
+}
+
+function finiteIntegerOrFallback(value: number, fallback: number, options: { min?: number; max?: number } = {}): number {
+  if (!Number.isFinite(value) || !Number.isInteger(value)) return fallback;
+  if (typeof options.min === "number" && value < options.min) return fallback;
+  if (typeof options.max === "number" && value > options.max) return fallback;
+  return value;
+}
+
+function reviewerScoreValue(value: number): number {
+  if (!Number.isFinite(value) || value < 1 || value > 10) {
+    throw new Error("人工评分必须是 1 到 10 之间的数字。");
+  }
+  return value;
+}
+
+function casebookLabelValue(value: CasebookLabel): CasebookLabel {
+  if (typeof value !== "string" || !casebookLabelValues.has(value)) {
+    throw new Error("样本库标签无效，不能发起请求。");
+  }
+  return value;
+}
+
+function boundedMutationText(
+  value: string | undefined,
+  label: string,
+  maxLength: number,
+): string | null | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.length > maxLength) {
+    throw new Error(`${label}不能超过 ${maxLength} 个字符。`);
+  }
+  return trimmed;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = await accessToken();
-  const baseHeaders = (init?.headers as Record<string, string>) ?? {};
-  const headers: Record<string, string> = {
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...baseHeaders,
-  };
+  const headers = requestHeaders(init?.headers, token);
   let res = await fetch(`${PIN_API_BASE}${path}`, { ...init, headers });
   if (res.status === 401) {
     const text = await res.text();
-    if (text.includes("invalid Supabase token")) {
+    const message = apiErrorMessage(res.status, text);
+    if (text.includes("invalid Supabase token") || message.includes("invalid Supabase token")) {
       const refreshedToken = await refreshAccessToken();
       if (refreshedToken && refreshedToken !== token) {
         res = await fetch(`${PIN_API_BASE}${path}`, {
           ...init,
-          headers: {
-            ...baseHeaders,
-            Authorization: `Bearer ${refreshedToken}`,
-          },
+          headers: requestHeaders(init?.headers, refreshedToken),
         });
       } else {
-        throw new Error(text || "invalid Supabase token");
+        throw new Error(message);
       }
     } else {
-      throw new Error(text || `${res.status}`);
+      throw new Error(message);
     }
   }
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(text || `${res.status}`);
+    throw new Error(apiErrorMessage(res.status, text));
   }
   return res.json() as Promise<T>;
 }
@@ -282,12 +448,12 @@ export function listRuns(params: {
   until?: string;
 } = {}): Promise<{ ok: true; runs: RunSummary[] }> {
   const qs = new URLSearchParams();
-  if (params.limit) qs.set("limit", String(params.limit));
-  if (params.trigger) qs.set("trigger", params.trigger);
+  setFiniteNumberParam(qs, "limit", params.limit, { integer: true, min: 1, max: 200 });
+  setTrimmedStringParam(qs, "trigger", params.trigger, { maxLength: REWARD_TEXT_FILTER_MAX_LENGTH });
   if (typeof params.reviewed === "boolean") qs.set("reviewed", String(params.reviewed));
-  if (params.quality) qs.set("quality", params.quality);
-  if (params.since) qs.set("since", params.since);
-  if (params.until) qs.set("until", params.until);
+  setEnumParam(qs, "quality", params.quality, runQualityValues);
+  setTrimmedStringParam(qs, "since", params.since, { maxLength: REWARD_TEXT_FILTER_MAX_LENGTH });
+  setTrimmedStringParam(qs, "until", params.until, { maxLength: REWARD_TEXT_FILTER_MAX_LENGTH });
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   return request(`/api/reward-dashboard/runs${suffix}`);
 }
@@ -297,11 +463,11 @@ export function listActiveAgentRuns(): Promise<{ ok: true; runs: AgentRunSummary
 }
 
 export function getRun(runId: string): Promise<RunDetail> {
-  return request(`/api/reward-dashboard/runs/${encodeURIComponent(runId)}`);
+  return request(`/api/reward-dashboard/runs/${encodedApiId(runId, "批次 ID")}`);
 }
 
 export function getCard(cardId: string): Promise<CardDetail> {
-  return request(`/api/reward-dashboard/cards/${encodeURIComponent(cardId)}`);
+  return request(`/api/reward-dashboard/cards/${encodedApiId(cardId, "卡片 ID")}`);
 }
 
 export function scoreCard(
@@ -309,10 +475,12 @@ export function scoreCard(
   score: number,
   reason?: string,
 ): Promise<{ ok: true; event: RewardEvent; card: CardDetail | null }> {
-  return request(`/api/reward-dashboard/cards/${encodeURIComponent(cardId)}/score`, {
+  const safeScore = reviewerScoreValue(score);
+  const safeReason = boundedMutationText(reason, "评分原因", SCORE_REASON_MAX_LENGTH);
+  return request(`/api/reward-dashboard/cards/${encodedApiId(cardId, "卡片 ID")}/score`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source: "reviewer", eventType: "reviewer_score", score, reason }),
+    body: JSON.stringify({ source: "reviewer", eventType: "reviewer_score", score: safeScore, reason: safeReason }),
   });
 }
 
@@ -321,15 +489,21 @@ export function upsertCasebook(
   label: CasebookLabel,
   reviewerNote: string,
 ): Promise<{ ok: true; casebook: CasebookEntry }> {
-  return request(`/api/reward-dashboard/cards/${encodeURIComponent(cardId)}/casebook`, {
+  const safeLabel = casebookLabelValue(label);
+  const safeReviewerNote = boundedMutationText(
+    reviewerNote,
+    "样本库评审备注",
+    CASEBOOK_REVIEWER_NOTE_MAX_LENGTH,
+  );
+  return request(`/api/reward-dashboard/cards/${encodedApiId(cardId, "卡片 ID")}/casebook`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ label, reviewerNote }),
+    body: JSON.stringify({ label: safeLabel, reviewerNote: safeReviewerNote ?? null }),
   });
 }
 
 export function deleteCasebook(cardId: string): Promise<{ ok: true }> {
-  return request(`/api/reward-dashboard/cards/${encodeURIComponent(cardId)}/casebook`, {
+  return request(`/api/reward-dashboard/cards/${encodedApiId(cardId, "卡片 ID")}/casebook`, {
     method: "DELETE",
   });
 }
@@ -347,34 +521,33 @@ export function listCasebook(params: {
   offset?: number;
 } = {}): Promise<{ ok: true; items: CasebookEntry[]; total: number; limit: number; offset: number }> {
   const qs = new URLSearchParams();
-  if (params.label) qs.set("label", params.label);
-  if (typeof params.minScore === "number") qs.set("minScore", String(params.minScore));
-  if (typeof params.maxScore === "number") qs.set("maxScore", String(params.maxScore));
-  if (params.basket) qs.set("basket", params.basket);
-  if (params.intent) qs.set("intent", params.intent);
-  if (typeof params.minEvaluatorGap === "number") {
-    qs.set("minEvaluatorGap", String(params.minEvaluatorGap));
-  }
-  if (params.since) qs.set("since", params.since);
-  if (params.until) qs.set("until", params.until);
-  if (typeof params.limit === "number") qs.set("limit", String(params.limit));
-  if (typeof params.offset === "number") qs.set("offset", String(params.offset));
+  setEnumParam(qs, "label", params.label, casebookLabelValues);
+  setFiniteNumberParam(qs, "minScore", params.minScore, { min: 0, max: 10 });
+  setFiniteNumberParam(qs, "maxScore", params.maxScore, { min: 0, max: 10 });
+  setTrimmedStringParam(qs, "basket", params.basket, { maxLength: REWARD_TEXT_FILTER_MAX_LENGTH });
+  setTrimmedStringParam(qs, "intent", params.intent, { maxLength: REWARD_TEXT_FILTER_MAX_LENGTH });
+  setFiniteNumberParam(qs, "minEvaluatorGap", params.minEvaluatorGap, { min: 0, max: 10 });
+  setTrimmedStringParam(qs, "since", params.since, { maxLength: REWARD_TEXT_FILTER_MAX_LENGTH });
+  setTrimmedStringParam(qs, "until", params.until, { maxLength: REWARD_TEXT_FILTER_MAX_LENGTH });
+  setFiniteNumberParam(qs, "limit", params.limit, { integer: true, min: 1, max: 200 });
+  setFiniteNumberParam(qs, "offset", params.offset, { integer: true, min: 0, max: CASEBOOK_OFFSET_MAX });
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   return request(`/api/reward-dashboard/casebook${suffix}`);
 }
 
 export function getTrace(runId: string): Promise<{ ok: true; trace: TraceArtifact }> {
-  return request(`/api/reward-dashboard/runs/${encodeURIComponent(runId)}/trace`);
+  return request(`/api/reward-dashboard/runs/${encodedApiId(runId, "批次 ID")}/trace`);
 }
 
 export function buildTrace(
   runId: string,
   force = false,
 ): Promise<{ ok: true; trace: TraceArtifact }> {
-  return request(`/api/reward-dashboard/runs/${encodeURIComponent(runId)}/trace`, {
+  const safeForce = force === true;
+  return request(`/api/reward-dashboard/runs/${encodedApiId(runId, "批次 ID")}/trace`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ force }),
+    body: JSON.stringify({ force: safeForce }),
   });
 }
 
@@ -386,15 +559,19 @@ export function triggerGenerate(cardsToGenerate = 8): Promise<{
   asOf: string;
   deduped?: boolean;
 }> {
+  const safeCardsToGenerate = finiteIntegerOrFallback(cardsToGenerate, 8, { min: 1, max: 10 });
   return request("/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ cardsToGenerate }),
+    body: JSON.stringify({ cardsToGenerate: safeCardsToGenerate }),
   });
 }
 
 export function getMetrics(days = 14): Promise<MetricsResponse> {
-  return request(`/api/reward-dashboard/metrics?days=${days}`);
+  const qs = new URLSearchParams();
+  setFiniteNumberParam(qs, "days", days, { integer: true, min: 1, max: 90 });
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return request(`/api/reward-dashboard/metrics${suffix}`);
 }
 
 export function getPersonalData(params: {
@@ -406,12 +583,12 @@ export function getPersonalData(params: {
   offset?: number;
 } = {}): Promise<PersonalDataResponse> {
   const qs = new URLSearchParams();
-  if (params.category && params.category !== "all") qs.set("category", params.category);
-  if (params.since) qs.set("since", params.since);
-  if (params.until) qs.set("until", params.until);
-  if (params.q) qs.set("q", params.q);
-  if (params.limit) qs.set("limit", String(params.limit));
-  if (params.offset) qs.set("offset", String(params.offset));
+  if (params.category !== "all") setEnumParam(qs, "category", params.category, personalDataCategoryValues);
+  setTrimmedStringParam(qs, "since", params.since, { maxLength: REWARD_TEXT_FILTER_MAX_LENGTH });
+  setTrimmedStringParam(qs, "until", params.until, { maxLength: REWARD_TEXT_FILTER_MAX_LENGTH });
+  setTrimmedStringParam(qs, "q", params.q, { maxLength: PERSONAL_DATA_QUERY_MAX_LENGTH });
+  setFiniteNumberParam(qs, "limit", params.limit, { integer: true, min: 5, max: 200 });
+  setFiniteNumberParam(qs, "offset", params.offset, { integer: true, min: 0, max: PERSONAL_DATA_OFFSET_MAX });
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   return request(`/api/reward-dashboard/personal-data${suffix}`);
 }
@@ -421,7 +598,7 @@ export function scoreLabel(score: number | null | undefined): string {
 }
 
 export function percentLabel(value: number | null | undefined): string {
-  return typeof value === "number" && Number.isFinite(value)
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1
     ? `${Math.round(value * 100)}%`
     : "-";
 }
@@ -441,22 +618,165 @@ const casebookLabelText: Record<CasebookLabel, string> = {
   weak_source: "证据弱",
 };
 
+function casebookLabelName(label: string | null | undefined): string {
+  if (!label) return "未标记";
+  const trimmed = label.trim();
+  if (!trimmed) return "未标记";
+  return casebookLabelText[trimmed as CasebookLabel] ?? markdownText(trimmed, "未标记", 120);
+}
+
+function hasFiniteScore(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function markdownText(value: unknown, fallback: string, limit = 600): string {
+  if (typeof value !== "string") return fallback;
+  const text = redactSensitiveText(value).replace(/\s+/g, " ").trim();
+  if (!text) return fallback;
+  return text.length <= limit ? text : `${text.slice(0, limit - 1).trim()}...`;
+}
+
+function markdownCardTitle(card: CardSnapshot | undefined): string {
+  return markdownText(card?.title, "未命名卡片", 140);
+}
+
+function markdownSourceLine(value: string): string {
+  return `- ${markdownText(value, "没有保存证据引用。", 320)}`;
+}
+
+function markdownSources(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((source): source is string => typeof source === "string" && source.trim().length > 0)
+    : [];
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function markdownRunCards(detail: Pick<RunDetail, "cards">): RunDetail["cards"] {
+  const cards = detail.cards as unknown;
+  return Array.isArray(cards)
+    ? cards.filter((entry): entry is RunDetail["cards"][number] => {
+        const record = recordValue(entry);
+        return record !== null && recordValue(record.card) !== null && recordValue(record.rewards) !== null;
+      })
+    : [];
+}
+
 export function casebookMarkdown(items: CasebookEntry[]): string {
   return items.map((item) => {
     const card = item.snapshot.card;
     const evalScore = item.snapshot.evaluation?.overall;
-    const note = item.reviewerNote?.trim() || "没有评审备注。";
+    const note = markdownText(item.reviewerNote, "没有评审备注。", 600);
+    const cardRouteId = firstDashboardRouteId(item.cardId, card?.id);
+    const runRouteId = firstDashboardRouteId(item.snapshot.run?.id, item.runId);
+    const traceRouteId = firstDashboardRouteId(item.snapshot.run?.runId, item.runId);
+    const allSources = Array.isArray(item.snapshot.sources)
+      ? markdownSources(item.snapshot.sources)
+      : markdownSources(item.snapshot.card?.sources);
+    const sources = allSources.slice(0, 5);
+    const sourceLines = sources.map(markdownSourceLine);
+    if (allSources.length > sources.length) {
+      sourceLines.push(`- 还有 ${allSources.length - sources.length} 条证据未写入复制摘要，请回到页面继续查看。`);
+    }
     return [
-      `### ${cardTitle(card)}`,
+      `### ${markdownCardTitle(card)}`,
       "",
-      `- 标签: ${casebookLabelText[item.label]}`,
+      `- 标签: ${casebookLabelName(item.label)}`,
       `- 保存分: ${scoreLabel(item.scoreSnapshot)}`,
       `- 评估分: ${scoreLabel(evalScore)}`,
-      `- 卡片 ID: ${item.cardId}`,
+      `- 卡片 ID: ${dashboardDisplayId(cardRouteId)}`,
+      `- 卡片详情: ${dashboardMarkdownLink("card", cardRouteId)}`,
+      `- 原批次: ${dashboardMarkdownLink("run", runRouteId)}`,
+      `- 生成链路: ${dashboardMarkdownLink("trace", traceRouteId)}`,
       "",
-      item.snapshot.card?.summary ?? "",
+      "#### 摘要",
+      markdownText(item.snapshot.card?.summary, "没有保存摘要。", 800),
       "",
+      "#### 证据引用",
+      sourceLines.length > 0 ? sourceLines.join("\n") : "- 没有保存证据引用。",
+      "",
+      "#### 评审备注",
       `评审备注: ${note}`,
     ].join("\n");
   }).join("\n\n");
+}
+
+export function cardReviewMarkdown(detail: CardDetail, routeCardId?: string): string {
+  const card = detail.card;
+  const allSources = markdownSources(card.sources);
+  const sources = allSources.slice(0, 6);
+  const sourceLines = sources.map(markdownSourceLine);
+  if (allSources.length > sources.length) {
+    sourceLines.push(`- 还有 ${allSources.length - sources.length} 条证据未写入复制摘要，请回到单卡页面继续查看。`);
+  }
+  const cardRouteId = firstDashboardRouteId(card.id, routeCardId);
+  const runRouteId = firstDashboardRouteId(detail.run.id, detail.run.runId);
+  const traceRouteId = firstDashboardRouteId(detail.run.runId, detail.run.id);
+  return [
+    `### 单卡复盘 ${markdownCardTitle(card)}`,
+    "",
+    `- 卡片 ID: ${dashboardDisplayId(cardRouteId)}`,
+    `- 卡片详情: ${dashboardMarkdownLink("card", cardRouteId)}`,
+    `- 原批次: ${dashboardMarkdownLink("run", runRouteId)}`,
+    `- 生成链路: ${dashboardMarkdownLink("trace", traceRouteId)}`,
+    `- 用户分: ${scoreLabel(detail.rewards.userReward)}`,
+    `- 人工分: ${scoreLabel(detail.rewards.reviewerReward)}`,
+    `- 评估分: ${scoreLabel(detail.evaluation?.overall)}`,
+    `- 样本库: ${detail.casebook ? casebookLabelName(detail.casebook.label) : "未保存"}`,
+    "",
+    "#### 摘要",
+    markdownText(card.summary, "没有保存摘要。", 800),
+    "",
+    "#### 为什么现在",
+    markdownText(card.whyNow ?? card.why_now, "没有保存时机说明。", 800),
+    "",
+    "#### 证据引用",
+    sourceLines.length > 0 ? sourceLines.join("\n") : "- 没有保存证据引用。",
+    "",
+    "#### 评估器反馈",
+    markdownText(detail.evaluation?.feedback, "没有评估器反馈。", 800),
+  ].join("\n");
+}
+
+function averageScore(values: Array<number | null | undefined>): number | null {
+  const nums = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  if (nums.length === 0) return null;
+  return nums.reduce((sum, value) => sum + value, 0) / nums.length;
+}
+
+export function runReviewMarkdown(detail: RunDetail, routeRunId?: string): string {
+  const cards = markdownRunCards(detail);
+  const reviewedCount = cards.filter((entry) => hasFiniteScore(entry.rewards.reviewerReward)).length;
+  const casebookCount = cards.filter((entry) => entry.casebook).length;
+  const topCards = cards.slice(0, 8);
+  const remainingCards = Math.max(0, cards.length - topCards.length);
+  const runRouteId = firstDashboardRouteId(detail.run.id, routeRunId, detail.run.runId);
+  const traceRouteId = firstDashboardRouteId(detail.run.runId, routeRunId, detail.run.id);
+  return [
+    `### 批次复盘 ${dashboardDisplayId(detail.run.runId, routeRunId, detail.run.id)}`,
+    "",
+    `- 批次评审: ${dashboardMarkdownLink("run", runRouteId)}`,
+    `- 生成链路: ${dashboardMarkdownLink("trace", traceRouteId)}`,
+    `- 状态: ${markdownText(detail.run.status, "-", 120)}`,
+    `- 触发来源: ${markdownText(detail.run.trigger, "-", 120)}`,
+    `- 卡片数: ${cards.length}`,
+    `- 人工评审: ${reviewedCount}/${cards.length}`,
+    `- 人工平均分: ${scoreLabel(averageScore(cards.map((entry) => entry.rewards.reviewerReward)))}`,
+    `- 评估平均分: ${scoreLabel(averageScore(cards.map((entry) => entry.evaluation?.overall)))}`,
+    `- 已入样本库: ${casebookCount}`,
+    "",
+    "#### 卡片列表",
+    topCards.length > 0
+      ? topCards.map((entry, index) => [
+          `${index + 1}. ${markdownCardTitle(entry.card)}`,
+          `   - 卡片详情: ${dashboardMarkdownLink("card", entry.card.id)}`,
+          `   - 用户/人工/评估: ${scoreLabel(entry.rewards.userReward)} / ${scoreLabel(entry.rewards.reviewerReward)} / ${scoreLabel(entry.evaluation?.overall)}`,
+          `   - 样本库: ${entry.casebook ? casebookLabelName(entry.casebook.label) : "未保存"}`,
+          `   - 摘要: ${markdownText(entry.card.summary, "没有保存摘要。", 320)}`,
+        ].join("\n")).join("\n")
+      : "- 当前批次没有保存卡片。",
+    remainingCards > 0 ? `\n- 还有 ${remainingCards} 张卡未写入复制摘要，请回到批次页面继续查看。` : "",
+  ].join("\n");
 }

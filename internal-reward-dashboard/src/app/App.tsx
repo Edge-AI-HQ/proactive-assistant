@@ -12,24 +12,7 @@ import { PersonalDataView } from "@/routes/PersonalDataView";
 import { RunDetailView } from "@/routes/RunDetailView";
 import { RunsView } from "@/routes/RunsView";
 import { TraceView } from "@/routes/TraceView";
-
-type Route =
-  | { kind: "runs" }
-  | { kind: "run"; runId: string }
-  | { kind: "card"; cardId: string }
-  | { kind: "casebook" }
-  | { kind: "personal-data" }
-  | { kind: "trace"; runId: string };
-
-function parseRoute(pathname: string): Route {
-  const parts = pathname.split("/").filter(Boolean);
-  if (parts[0] === "runs" && parts[1]) return { kind: "run", runId: decodeURIComponent(parts[1]) };
-  if (parts[0] === "cards" && parts[1]) return { kind: "card", cardId: decodeURIComponent(parts[1]) };
-  if (parts[0] === "casebook") return { kind: "casebook" };
-  if (parts[0] === "personal-data") return { kind: "personal-data" };
-  if (parts[0] === "traces" && parts[1]) return { kind: "trace", runId: decodeURIComponent(parts[1]) };
-  return { kind: "runs" };
-}
+import { dashboardDocumentTitle, parseDashboardRoute, shouldPushDashboardPath } from "@/lib/dashboardRoutes";
 
 function LoginPanel() {
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +43,7 @@ function LoginPanel() {
         <button className="primary-button" type="submit" disabled={busy}>
           {busy ? "正在打开 Google" : "继续使用 Google 登录"}
         </button>
-        {error && <div className="inline-error">{error}</div>}
+        {error && <div className="inline-error" role="alert">{error}</div>}
       </form>
     </div>
   );
@@ -70,7 +53,7 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [path, setPath] = useState(() => window.location.pathname);
-  const route = useMemo(() => parseRoute(path), [path]);
+  const route = useMemo(() => parseDashboardRoute(path), [path]);
   const userProfile = useMemo(() => {
     if (!session) return { name: null, avatarUrl: null };
     const textValue = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : null);
@@ -101,9 +84,20 @@ export default function App() {
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
+  useEffect(() => {
+    document.title = dashboardDocumentTitle(route);
+  }, [route]);
+
   function navigate(nextPath: string) {
-    window.history.pushState({}, "", nextPath);
+    if (!shouldPushDashboardPath(window.location.pathname, nextPath)) {
+      document.getElementById("dashboard-main")?.focus();
+      return;
+    }
     setPath(nextPath);
+    window.history.pushState({}, "", nextPath);
+    window.requestAnimationFrame(() => {
+      document.getElementById("dashboard-main")?.focus();
+    });
   }
 
   if (!authConfigured) {
@@ -132,7 +126,7 @@ export default function App() {
       {route.kind === "run" && <RunDetailView runId={route.runId} onNavigate={navigate} />}
       {route.kind === "card" && <CardView cardId={route.cardId} onNavigate={navigate} />}
       {route.kind === "casebook" && <CasebookView onNavigate={navigate} />}
-      {route.kind === "personal-data" && <PersonalDataView />}
+      {route.kind === "personal-data" && <PersonalDataView onNavigate={navigate} />}
       {route.kind === "trace" && <TraceView runId={route.runId} onNavigate={navigate} />}
     </Layout>
   );
