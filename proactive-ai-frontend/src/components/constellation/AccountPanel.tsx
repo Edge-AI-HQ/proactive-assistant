@@ -3,7 +3,30 @@ import {
   Sparkles, Check, Bell, SlidersHorizontal, ShieldCheck,
 } from "lucide-react";
 
-export default function AccountPanel() {
+export interface AccountPanelProps {
+  /** Display name shown on the profile card. Falls back to email prefix. */
+  userName?: string;
+  /** Single-letter avatar shown in the round chip. Falls back to first initial of userName. */
+  avatarLetter?: string;
+  /** Email shown on the profile card subtitle. */
+  userEmail?: string;
+  /** Human-readable join date, e.g. "Mar 2024". Optional — falls back to "Member" only. */
+  memberSince?: string;
+  /** Optional sign-out handler. When provided, replaces the Edit button with Sign out. */
+  onSignOut?: () => void;
+}
+
+export default function AccountPanel({
+  userName = "Account",
+  avatarLetter,
+  userEmail,
+  memberSince,
+  onSignOut,
+}: AccountPanelProps = {}) {
+  const initial = (avatarLetter ?? userName.trim().slice(0, 1) ?? "?").toUpperCase();
+  const subtitle = memberSince
+    ? `${userEmail ?? ""}${userEmail ? " · " : ""}Member since ${memberSince}`
+    : (userEmail ?? "Signed in");
   return (
     <div className="flex flex-col h-full px-4 pt-14 pb-2 overflow-y-auto">
       {/* Header */}
@@ -18,15 +41,24 @@ export default function AccountPanel() {
         {/* Profile card */}
         <div className="glass-card-strong p-4 flex items-center gap-3">
           <div className="w-12 h-12 rounded-full bg-foreground/10 flex items-center justify-center flex-shrink-0">
-            <span className="text-base font-semibold text-foreground/70">B</span>
+            <span className="text-base font-semibold text-foreground/70">{initial}</span>
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-foreground">Ben Wu</p>
-            <p className="text-[11px] text-foreground/50 truncate">ben@pin.ai · Member since Mar 2024</p>
+            <p className="text-sm font-semibold text-foreground">{userName}</p>
+            <p className="text-[11px] text-foreground/50 truncate">{subtitle}</p>
           </div>
-          <button className="text-[11px] font-medium text-foreground border border-foreground/12 rounded-lg px-3 py-1 hover:bg-foreground/[0.04] transition-colors">
-            Edit
-          </button>
+          {onSignOut ? (
+            <button
+              onClick={onSignOut}
+              className="text-[11px] font-medium text-foreground border border-foreground/12 rounded-lg px-3 py-1 hover:bg-foreground/[0.04] transition-colors"
+            >
+              Sign out
+            </button>
+          ) : (
+            <button className="text-[11px] font-medium text-foreground border border-foreground/12 rounded-lg px-3 py-1 hover:bg-foreground/[0.04] transition-colors">
+              Edit
+            </button>
+          )}
         </div>
 
         {/* Subscription & Billing */}

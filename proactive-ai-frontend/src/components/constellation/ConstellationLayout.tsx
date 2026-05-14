@@ -5,7 +5,7 @@ import {
   Menu, X, Zap, ListChecks, Settings, Pencil, Radio, User as UserIcon, Plug,
   Sprout, Briefcase, TrendingUp, Heart, BookOpen, Sparkles,
   ArrowRight, ChevronDown, Check, Cloud, Lock as LockIcon,
-  MapPin, Sun, Activity, Users, ChevronRight,
+  MapPin, Sun, Activity, Users, ChevronRight, Target, MessageCircle,
   type LucideIcon,
 } from "lucide-react";
 import bgGradient from "@/assets/bg-gradient.jpg";
@@ -30,12 +30,26 @@ import {
 } from "@/components/ui/drawer";
 import CardChat from "@/components/CardChat";
 import DebugPanel from "@/components/DebugPanel";
+import MainChat from "@/components/MainChat";
+import AgentRunIndicator from "@/components/AgentRunIndicator";
+import RealGoalsView from "@/components/GoalsView";
+import RealControlPanel from "@/components/ControlPanel";
+import RealChatTimeline from "@/components/ChatTimeline";
+import { useAuth } from "@/hooks/useAuth";
 import { useCardActions } from "@/hooks/useCardActions";
 import { useCards } from "@/hooks/useCards";
 import { useComposio } from "@/hooks/useComposio";
 import { usePipeline } from "@/hooks/usePipeline";
 import { useWeather } from "@/hooks/useWeather";
 import type { GoalBasket, IntentCard } from "@/types/intent-card";
+
+/** Pretty Member-since month from Supabase user.created_at (ISO). */
+function formatMemberSince(iso: string | null | undefined): string | undefined {
+  if (!iso) return undefined;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return undefined;
+  return d.toLocaleDateString(undefined, { month: "short", year: "numeric" });
+}
 
 /** Stable string→number hash so real card.id (string) gets a numeric id for
  *  Lovable's sphere components without losing the original. */
@@ -233,8 +247,9 @@ const AI_GREETINGS = [
 const MENU_ITEMS = [
   { id: "now", label: "NOW", icon: Zap },
   { id: "ambient", label: "AMBIENT", icon: Radio },
-  { id: "connect", label: "CONNECT", icon: Plug },
   { id: "chat", label: "TASKS", icon: ListChecks },
+  { id: "profile", label: "PROFILE", icon: Target },
+  { id: "connect", label: "CONNECT", icon: Plug },
   { id: "control", label: "CONTROL", icon: Settings },
   { id: "account", label: "ACCOUNT", icon: UserIcon },
 ] as const;
@@ -253,7 +268,29 @@ export default function BigBallLayout() {
   const [paywallCard_, setPaywallCardInfo] = useState<CardInfo>({ number: "", expiry: "", cvc: "" });
   const navigate = useNavigate();
   const weather = useWeather();
+  const { user, signOut } = useAuth();
   const [isScrolled, setIsScrolled] = useState(false);
+  const [mainChatOpen, setMainChatOpen] = useState(false);
+
+  useEffect(() => {
+    if (!mainChatOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMainChatOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mainChatOpen]);
+
+  /** Real user display values (from Supabase). Falls back to email prefix. */
+  const userMeta = user?.user_metadata as
+    | { full_name?: string; name?: string; avatar_url?: string }
+    | undefined;
+  const fullName = userMeta?.full_name || userMeta?.name || "";
+  const firstName = fullName ? fullName.split(" ")[0] : "";
+  const emailPrefix = user?.email ? user.email.split("@")[0] : "";
+  const displayName = firstName || emailPrefix || "there";
+  const avatarLetter = (firstName || emailPrefix || "?").slice(0, 1).toUpperCase();
+  const memberSince = formatMemberSince(user?.created_at);
 
   // ── Real-backend integration (preserved card execution path) ──
   const cardsState = useCards();
@@ -592,7 +629,7 @@ export default function BigBallLayout() {
         <h2 className="text-[30px] font-semibold tracking-tight text-foreground leading-[1.05]">
           Hi,{" "}
           <span className="bg-gradient-to-r from-[hsl(292,78%,63%)] to-[hsl(330,80%,65%)] bg-clip-text text-transparent">
-            Cherub
+            {displayName}
           </span>
         </h2>
         <p className="mt-1.5 text-[13px] text-foreground/50 leading-snug">
@@ -690,10 +727,18 @@ export default function BigBallLayout() {
       <div className="absolute inset-0 bg-white/35" />
 
       <div className="relative z-10 flex flex-col h-full">
-        {/* Top bar — DebugPanel (gear) + hamburger, top-right. DebugPanel is
-            our existing gear-icon control panel: run generator, view logs,
-            reconnect Composio. Same position as the old AppShell. */}
+        {/* Top bar — AgentRunIndicator + Chat (MainChat) + DebugPanel (gear)
+            + hamburger. Same composition as the old AppShell. */}
         <div className="absolute top-12 right-5 z-30 flex items-center gap-1.5">
+          <AgentRunIndicator />
+          <button
+            onClick={() => setMainChatOpen(true)}
+            className="px-3 py-1.5 rounded-full glass-card-strong text-xs font-medium text-foreground/70 inline-flex items-center gap-1.5"
+            title="Open main chat"
+          >
+            <MessageCircle size={14} strokeWidth={1.5} />
+            Chat
+          </button>
           <DebugPanel
             run={pipeline.run}
             isRunning={pipeline.isRunning}
@@ -757,15 +802,58 @@ export default function BigBallLayout() {
             ) : activeView === "now" ? (
               renderNowView()
             ) : activeView === "chat" ? (
-              <ChatTimeline cardChats={cardChats} onOpenChat={(c, status) => { chatEntryView.current = "chat"; setChatMode(status === "processing" ? "confirm" : status === "action" ? "modify" : "done"); setActiveChat(c); }} />
+              /* Real card history (old AppShell CHAT view). Reads from
+                 /api/cards via useCards(); confirm/dismiss/done buttons
+                 POST to /feedback via the timeline itself. */
+              <div className="h-full overflow-y-auto pt-12">
+                <RealChatTimeline
+                  processingIds={cardActions.processingIds}
+                  doneIds={cardActions.doneIds}
+                  confirmedIds={cardActions.confirmedIds}
+                  dismissedIds={cardActions.dismissedIds}
+                  chattedIds={cardActions.chattedIds}
+                  onOpenChat={(card, bootstrap) => {
+                    chatEntryView.current = "chat";
+                    setChatTarget({
+                      card,
+                      bootstrap:
+                        bootstrap && bootstrap.trim().length > 0
+                          ? bootstrap
+                          : undefined,
+                    });
+                  }}
+                  onConfirmId={cardActions.markConfirmed}
+                  onDismissId={cardActions.markDismissed}
+                  onDoneId={cardActions.markDone}
+                  onProcessingId={cardActions.markProcessing}
+                  onChattedId={cardActions.markChatted}
+                />
+              </div>
             ) : activeView === "ambient" ? (
-              <AmbientView onConnectMore={() => setActiveView("control")} onOpenFullscreen={(s) => setLiveOverlay(s)} />
+              <AmbientView onConnectMore={() => setActiveView("connect")} onOpenFullscreen={(s) => setLiveOverlay(s)} />
+            ) : activeView === "profile" ? (
+              /* Real goals/memory/skill page (old AppShell GOALS view). */
+              <div className="h-full overflow-y-auto pt-12">
+                <RealGoalsView composio={composio} />
+              </div>
+            ) : activeView === "connect" ? (
+              /* Real data + device connections + auto settings (old AppShell
+                 CONTROL view). Replaces Lovable's hardcoded ConnectPanel
+                 so users can actually wire Composio, devices, auto-generate
+                 and auto-dreaming. */
+              <div className="h-full overflow-y-auto pt-12">
+                <RealControlPanel composio={composio} />
+              </div>
             ) : activeView === "control" ? (
               <ControlPanel />
             ) : activeView === "account" ? (
-              <AccountPanel />
-            ) : activeView === "connect" ? (
-              <ConnectPanel />
+              <AccountPanel
+                userName={fullName || displayName}
+                avatarLetter={avatarLetter}
+                userEmail={user?.email ?? undefined}
+                memberSince={memberSince}
+                onSignOut={() => void signOut()}
+              />
             ) : null}
           </motion.div>
         </AnimatePresence>
@@ -781,6 +869,28 @@ export default function BigBallLayout() {
               session={liveOverlay}
               onClose={() => setLiveOverlay(null)}
             />
+          )}
+        </AnimatePresence>,
+        document.body
+      )}
+
+      {/* Main chat overlay (full-screen). Opened by the top-right "Chat"
+          button. Separate from card chat: this is a standalone main
+          thread keyed by user.id, restored from sessionStorage. Mirrors
+          the AppShell-era mainChatOpen behavior. */}
+      {createPortal(
+        <AnimatePresence>
+          {mainChatOpen && (
+            <motion.div
+              key="main-chat-overlay"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+              className="fixed inset-0 z-50 bg-background"
+            >
+              <MainChat onBack={() => setMainChatOpen(false)} />
+            </motion.div>
           )}
         </AnimatePresence>,
         document.body
