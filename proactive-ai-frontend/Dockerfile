@@ -12,6 +12,7 @@
 FROM node:20-slim AS builder
 WORKDIR /app
 
+ARG WORKDIR=.
 ARG VITE_PIN_API_URL
 ARG VITE_SUPABASE_URL
 ARG VITE_SUPABASE_PUBLISHABLE_KEY
@@ -20,15 +21,17 @@ ENV VITE_PIN_API_URL=$VITE_PIN_API_URL \
     VITE_SUPABASE_URL=$VITE_SUPABASE_URL \
     VITE_SUPABASE_PUBLISHABLE_KEY=$VITE_SUPABASE_PUBLISHABLE_KEY
 
-# The repo's lockfile lives at the project root, not under
-# proactive-ai-frontend/. Building frontend in isolation here means we
-# don't get a deterministic install — accept `npm install` for now.
-# Long-term: switch to a pnpm workspace build that copies the root
-# lockfile in (out of scope for this consolidation).
-COPY package.json ./
-RUN npm install --no-audit --no-fund --legacy-peer-deps
+COPY ${WORKDIR}/package.json ./
+COPY capacitor-plugins/ ./capacitor-plugins/
+# Point the file: dep at ./capacitor-plugins (same dir as package.json)
+# so Node resolution walks up into /app/node_modules/ from there.
+# Also strip ambient-ai's prepare:tsc (no tsc in this image) and its
+# pre-built dist/ so Vite transpiles the TS sources directly.
+RUN node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.dependencies['@pin/capacitor-ambient-ai']='file:./capacitor-plugins/ambient-ai';fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
+RUN node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('capacitor-plugins/ambient-ai/package.json','utf8'));delete p.scripts.prepare;p.main='src/index.ts';p.types='src/index.ts';fs.writeFileSync('capacitor-plugins/ambient-ai/package.json',JSON.stringify(p,null,2))" && rm -rf capacitor-plugins/ambient-ai/dist
+RUN npm install --no-audit --no-fund --legacy-peer-deps --ignore-scripts
 
-COPY . .
+COPY ${WORKDIR}/ .
 RUN npm run build
 
 # ── Stage 2: runtime ──
