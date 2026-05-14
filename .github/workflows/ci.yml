@@ -80,3 +80,6 @@ jobs:
 
       - name: Type check (Frontend)
         run: npm run type-check --workspace=@pin-ai/proactive-ai-frontend
+
+      - name: iOS signing check (canonical DEVELOPMENT_TEAM)
+        run: bash proactive-ai-frontend/scripts/check-ios-signing.sh

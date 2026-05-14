@@ -4,7 +4,7 @@
 .PHONY: migrate reset clean
 .PHONY: deploy-pinai-dev deploy-pinai-prod deploy-frontend-dev deploy-frontend-prod
 .PHONY: deploy-litellm-dev deploy-litellm-prod
-.PHONY: ios android ngrok
+.PHONY: ios android ngrok githooks
 .PHONY: tunnel-up tunnel-down tunnel-status
 
 # Running stack: postgres + litellm + pinai-agents (web + chat) +
@@ -37,6 +37,11 @@ endef
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-26s\033[0m %s\n", $$1, $$2}'
+
+githooks: ## Enable repo-local git hooks (.githooks/) for pre-commit checks
+	@git config core.hooksPath .githooks
+	@echo "Enabled .githooks/. Bypass a single commit with: git commit --no-verify"
+	@echo "Disable entirely with: git config --unset core.hooksPath"
 
 # ── Environment: auto-decrypt .env.dev → .env ──
 # Triggers when .env is missing or .env.dev is newer.
@@ -313,14 +318,9 @@ ios: ensure-env ## Build frontend, sync iOS, open Xcode
 		echo "Missing mobile backend URL. Set PAI_API_URL in ./.env, pass NGROK=<url>, or use DEV=1/PROD=1."; \
 		exit 1; \
 	fi; \
-	cd proactive-ai-frontend && \
-		VITE_CAPACITOR=1 VITE_PIN_API_URL="$$VITE_PIN_API_URL" \
-		VITE_API_BASE_URL="$$VITE_PIN_API_URL" \
-		npx vite build && npx cap sync ios && \
-		node ../capacitor-plugins/ambient-ai/scripts/fix-deployment-target.mjs \
-			ios/App/App.xcodeproj/project.pbxproj \
-			--package-swift ios/App/CapApp-SPM/Package.swift && \
-		npx cap open ios
+	VITE_PIN_API_URL="$$VITE_PIN_API_URL" \
+		bash proactive-ai-frontend/scripts/sync-ios.sh && \
+		cd proactive-ai-frontend && npx cap open ios
 
 android: ensure-env ## Build frontend, sync Android, install on USB device
 	@set -e; \

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Repo-local pre-commit hook. Opt in with:
+#   git config core.hooksPath .githooks
+# Or run `make githooks` from the repo root.
+#
+# Skip a single commit with: git commit --no-verify
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# iOS signing guard — block commits that drift pbxproj's DEVELOPMENT_TEAM.
+if [ -f "$REPO_ROOT/proactive-ai-frontend/scripts/check-ios-signing.sh" ]; then
+  bash "$REPO_ROOT/proactive-ai-frontend/scripts/check-ios-signing.sh"
+fi

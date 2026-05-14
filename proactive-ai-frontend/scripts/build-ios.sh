@@ -70,27 +70,9 @@ agvtool next-version -all > /dev/null
 NEW_BUILD=$(agvtool what-version -terse)
 echo "    Build number: $NEW_BUILD"
 
-# ── Build frontend ──
+# ── Build frontend + Capacitor sync (shared with `make ios`) ──
 
-echo "==> Building frontend (Capacitor)..."
-cd "$PROJECT_ROOT"
-VITE_CAPACITOR=1 npx vite build
-
-echo "==> Syncing iOS..."
-npx cap sync ios
-node ../capacitor-plugins/ambient-ai/scripts/fix-deployment-target.mjs \
-  ios/App/App.xcodeproj/project.pbxproj \
-  --package-swift ios/App/CapApp-SPM/Package.swift
-
-# ── Verify env vars are embedded ──
-
-echo "==> Verifying build output..."
-BUILT_JS="$IOS_DIR/App/public/assets/index-"*.js
-if ! grep -q "$VITE_PIN_API_URL" $BUILT_JS 2>/dev/null; then
-  echo "Error: VITE_PIN_API_URL not found in built JS — aborting" >&2
-  exit 1
-fi
-echo "    API URL verified in build output"
+bash "$SCRIPT_DIR/sync-ios.sh"
 
 # ── Archive ──
 
