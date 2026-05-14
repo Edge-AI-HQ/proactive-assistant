@@ -50,6 +50,7 @@ export interface RuntimeStatus {
   lastDrainTs: number | null;
   lastSuccessfulDrainTs: number | null;
   lastIngestError: string | null;
+  uploadsLocked: boolean;
 }
 
 class AmbientRuntime {
@@ -75,6 +76,7 @@ class AmbientRuntime {
     // SQLite plugin's web path is heavy to set up.
     this.outbox = isNative ? new SqliteOutboxStore() : new MemoryOutboxStore();
     this.scheduler = new AmbientSyncScheduler(this.outbox);
+    this.scheduler.setUploadsLocked(loadUploadsLocked());
     this.buffer = new SignalBuffer((batch) => this.flushBatch(batch));
     this.statusBySource = new Map();
 
@@ -222,7 +224,16 @@ class AmbientRuntime {
       lastDrainTs: schedulerStatus.lastDrainTs,
       lastSuccessfulDrainTs: schedulerStatus.lastSuccessTs,
       lastIngestError: this.lastIngestError,
+      uploadsLocked: schedulerStatus.uploadsLocked,
     };
+  }
+
+  setUploadsLocked(value: boolean): void {
+    const next = !!value;
+    if (this.scheduler.isUploadsLocked() === next) return;
+    this.scheduler.setUploadsLocked(next);
+    saveUploadsLocked(next);
+    this.notify();
   }
 
   subscribe(listener: () => void): () => void {
@@ -304,6 +315,27 @@ const SOURCE_TO_KIND: Record<SourceKey, string> = {
 };
 
 const OPT_OUT_STORAGE_KEY = "pin.ambient.optOutSources";
+const UPLOADS_LOCKED_STORAGE_KEY = "pin.ambient.uploadsLocked";
+
+function loadUploadsLocked(): boolean {
+  try {
+    return localStorage.getItem(UPLOADS_LOCKED_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function saveUploadsLocked(locked: boolean): void {
+  try {
+    if (locked) {
+      localStorage.setItem(UPLOADS_LOCKED_STORAGE_KEY, "1");
+    } else {
+      localStorage.removeItem(UPLOADS_LOCKED_STORAGE_KEY);
+    }
+  } catch {
+    /* ignore */
+  }
+}
 
 function loadOptOutSources(): Set<SourceKey> {
   try {

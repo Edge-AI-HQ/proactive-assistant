@@ -23,6 +23,7 @@ export interface SyncSchedulerStatus {
   lastDrainTs: number | null;
   lastSuccessTs: number | null;
   lastError: string | null;
+  uploadsLocked: boolean;
 }
 
 const DEFAULT_OPTIONS: Required<SyncSchedulerOptions> = {
@@ -37,6 +38,7 @@ export class AmbientSyncScheduler {
   private lastDrainTs: number | null = null;
   private lastSuccessTs: number | null = null;
   private lastError: string | null = null;
+  private uploadsLocked = false;
 
   constructor(private outbox: OutboxStore, opts: SyncSchedulerOptions = {}) {
     this.opts = { ...DEFAULT_OPTIONS, ...opts };
@@ -46,12 +48,28 @@ export class AmbientSyncScheduler {
     return this.opts.intervalMs;
   }
 
+  setUploadsLocked(value: boolean): void {
+    this.uploadsLocked = !!value;
+  }
+
+  isUploadsLocked(): boolean {
+    return this.uploadsLocked;
+  }
+
   async drain(): Promise<SyncResult> {
     const empty = emptyResult();
     if (this.draining) return empty;
     this.draining = true;
     const now = Date.now();
     this.lastDrainTs = now;
+
+    if (this.uploadsLocked) {
+      // Soft lock parity with the old iOS ``pa.globalLock`` setting:
+      // keep collecting local signals into the outbox, but never call
+      // the ingest bridge until the user unlocks uploads explicitly.
+      this.draining = false;
+      return empty;
+    }
 
     try {
       const pruned = await this.outbox.prune(now);
@@ -144,6 +162,7 @@ export class AmbientSyncScheduler {
       lastDrainTs: this.lastDrainTs,
       lastSuccessTs: this.lastSuccessTs,
       lastError: this.lastError,
+      uploadsLocked: this.uploadsLocked,
     };
   }
 }
