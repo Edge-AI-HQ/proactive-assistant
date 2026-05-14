@@ -17,7 +17,7 @@
 
 ## 当前架构
 
-Proactive AI 后端整体收敛到 **pinai-agents**（Python / FastAPI / LangChain + DeepAgents），前端是 **proactive-ai-frontend**（React SPA，Vite + Tailwind + Capacitor，登录走 Supabase Auth）。LLM 统一经 **LiteLLM** 路由。
+Proactive AI 后端整体收敛到 **pinai-agents**（Python / FastAPI / LangChain + DeepAgents），用户产品前端是 **proactive-ai-frontend**（React SPA，Vite + Tailwind + Capacitor，登录走 Supabase Auth），内部卡片 review 工具是 **internal-reward-dashboard**（独立 Vite React app，登录也走 Supabase Auth）。LLM 统一经 **LiteLLM** 路由。
 
 `apis/`（Node 后端 + 容器编排 + gateway）、`pinai-openclaw/`（用户容器镜像 + plugin）、`miniapp/`（Telegram mini app）三个老仓目录已经移除，所有职责都搬到 pinai-agents：
 
@@ -75,6 +75,7 @@ pinai-agents/.env / pinai-agents/.env.chat / ops/litellm/.env  # 本地明文，
 - `pinai-agents/infra/daytona/`：Daytona snapshot 构建脚本。
 - `pinai-agents/scripts/`：`sync_fly_secrets.py`（trust boundary 守护）、`regen_sdk.py`、`check_trust_boundary.sh`、`validate_ingest_recipe.py`。
 - `proactive-ai-frontend/src/`：React SPA（Vite + Tailwind + Capacitor，支持 Web/iOS/Android）。
+- `internal-reward-dashboard/src/`：内部 reward review app（`/runs`、`/cards/:cardId`、`/casebook`、`/traces/:runId`、`/personal-data`），本地端口 `3004`，不要混进主产品前端。
 - `ops/litellm/`：LiteLLM 配置 + fly toml + 部署脚本。
 
 ## 文档读取规则（AI 必读）
@@ -103,6 +104,7 @@ pinai-agents/.env / pinai-agents/.env.chat / ops/litellm/.env  # 本地明文，
 - [`docs/modules/generation.mdx`](docs/modules/generation.mdx) — `/generate`、pipeline、unified generator、evaluation、card selection、auto-generate。
 - [`docs/modules/execution.mdx`](docs/modules/execution.mdx) — chat-stream、card chat、agent prompt、browser tool、control mode、conversation crystallize。**改动 chat/routes / chat/agents / chat/browser / 前端 MainChatView 相关代码前必读**。
 - [`docs/modules/feedback.mdx`](docs/modules/feedback.mdx) — feedback events、card action、card chat feedback、intent state、学习回流。
+- [`docs/modules/internal-reward-dashboard.mdx`](docs/modules/internal-reward-dashboard.mdx) — 内部卡片 review Vite app、reward ledger、reviewer score、casebook、LangSmith trace artifact。**改动 `internal-reward-dashboard/`、`/api/reward-dashboard/*`、`pai_card_reward_events` / `pai_card_casebook` / `pai_trace_artifacts` 前必读**。
 - [`docs/modules/background-tasks.mdx`](docs/modules/background-tasks.mdx) — `background_tasks` 队列、scheduler tick、reconciler、connector init/sync/evolve、auto-dreaming。
 - [`docs/modules/runtime-deployment.mdx`](docs/modules/runtime-deployment.mdx) — 本地启动、运行拓扑、部署、安全、billing 概览。**当前文档仍是 apis/openclaw 时代的描述，待按 pinai-agents 重写**；在那之前，运行/部署的事实以本 AGENTS.md「本地开发」「变更与部署」两节为准。
 
@@ -112,6 +114,7 @@ pinai-agents/.env / pinai-agents/.env.chat / ops/litellm/.env  # 本地明文，
 ```bash
 cd pinai-agents && uv sync && cd -
 npm install                # root workspace 安装 proactive-ai-frontend + capacitor-plugins；iOS SPM 路径依赖这里的 node_modules
+cd internal-reward-dashboard && npm install && cd -
 # 找团队成员获取 .env.keys
 # 放到 pinai-agents/.env.keys 和 ops/litellm/.env.keys
 make up                    # 自动解密 .env.dev → .env，构建并启动所有服务
@@ -135,7 +138,10 @@ cd pinai-agents && uv sync                          # 装 Python 依赖
 cd pinai-agents && uv run uvicorn pinai_agents.web.asgi:app --reload --port 8000
 cd pinai-agents && uv run uvicorn pinai_agents.chat.asgi:app --reload --port 8001
 cd proactive-ai-frontend && npm run dev             # 前端 dev server（端口 3003）
+cd internal-reward-dashboard && npm run dev -- --host 127.0.0.1 --port 3004  # 内部 review app
 ```
+
+`internal-reward-dashboard` 本地通过 Vite same-origin `/api/*` proxy 打 `pinai-web:8000`，默认从 `pinai-agents/.env` 读取 Supabase `VITE_*`。它当前不是 root npm workspace，也不在 `proactive-ai-frontend` 的 Fly 部署路径里。
 
 Daytona sandbox 需要公网回连 `pinai-web` 才能完整跑通 generator / chat 的 `python_exec`。本地用 ngrok 暴露：
 ```bash
@@ -161,6 +167,8 @@ cd pinai-agents && uv run ruff check               # 静态检查（含 trust-bo
 cd pinai-agents && uv run pytest                   # 后端测试
 cd proactive-ai-frontend && npm run type-check     # 前端类型检查
 cd proactive-ai-frontend && npm test               # 前端单测（vitest）
+cd internal-reward-dashboard && npm run type-check  # 内部 review app 类型检查
+cd internal-reward-dashboard && npm test            # 内部 review app 单测
 ```
 
 改完怎么验证（按改动范围选最轻的）：
@@ -168,6 +176,8 @@ cd proactive-ai-frontend && npm test               # 前端单测（vitest）
 - 改 `pinai-agents/src/pinai_agents/web/` → `make restart`，看 `make logs-pinai-web` 起得来 + 打目标接口
 - 改 `pinai-agents/src/pinai_agents/chat/` → `make restart`，看 `make logs-pinai-chat` + 用前端发一条消息验证
 - 改前端 → `npm run dev`（端口 3003）在浏览器点；或 `make restart-frontend` 看容器版本
+- 改 `internal-reward-dashboard/` → `npm run type-check` + `npm test` + `npm run dev -- --host 127.0.0.1 --port 3004`，在 `/runs` / `/traces/:runId` 点真实流程
+- 改 `/api/reward-dashboard/*` 或 reward schema → `uv run ruff check .` + `uv run pytest tests/web/db/repositories/test_reward_repo.py tests/web/routes/test_reward_dashboard.py tests/web/services/test_trace_artifacts.py`
 - 改 db migration → `make migrate`，确认 schema 应用成功
 - 动 Daytona sandbox / pinai_sdk → `make tunnel-up` + 跑一次 generate，观察 sandbox 是否能回连 web
 
@@ -283,7 +293,8 @@ make deploy-litellm-prod    # LiteLLM → prod
 3. **`make restart` 只重建 pinai-web/pinai-chat**：动了 frontend 用 `make restart-frontend`，动了 LiteLLM 配置要 `make up` 全栈。
 4. **本机全局代理会导致 `flyctl` 失败**：Makefile 已在 deploy 命令内置 `env -u`，但如果直接跑 `flyctl deploy` 要自己 unset。
 5. **`.env.chat` 不会自动跟 `.env` 同步**：手动改 `.env` 后，`make ensure-env-pinai-agents` 才会重新派生 `.env.chat`；直接 docker compose up 不会触发，必要时 `make env-local` 强制重新解密。
-6. **`apis/` / `pinai-openclaw/` / `miniapp/` 目录已删除**：top-level `package.json` 的 workspaces 和 `npm run type-check` 还指向 `@pin-ai/apis`，这些是历史残留，跑不动也不要复活，前端类型检查走 `cd proactive-ai-frontend && npm run type-check`。
+6. **`apis/` / `pinai-openclaw/` / `miniapp/` 是退役时代的路径**：如果旧脚本、旧文档或本地残留目录提到它们，不要复活旧服务；当前后端事实以 `pinai-agents/` 为准，用户产品前端类型检查走 `cd proactive-ai-frontend && npm run type-check`。
+7. **`internal-reward-dashboard/` 是独立内部工具**：不要把 dashboard 页面放进 `proactive-ai-frontend/src/`，不要把 `/api/reward-dashboard/*` 当普通用户产品 API 扩散。用户 confirm / dismiss / snooze / text feedback 仍写 `pai_feedback_events`，只有 card open / score / reviewer score / casebook / trace 走 reward dashboard 链路。
 
 ## 提交规范
 - Conventional Commits：`feat(...)` / `fix(...)` / `chore(...)` / `docs(...)`。

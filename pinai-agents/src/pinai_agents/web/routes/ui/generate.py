@@ -38,8 +38,6 @@ router = APIRouter(prefix="/api", tags=["generate"])
 
 
 async def _ensure_virtual_key(user: User, pool) -> User:
-    if user.litellm_virtual_key:
-        return user
     from ...services.litellm_provisioning import (  # noqa: PLC0415
         ensure_user_litellm_key,
     )

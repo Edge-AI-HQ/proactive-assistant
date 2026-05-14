@@ -138,6 +138,7 @@ sequenceDiagram
 | Generation 使用 | `chat/agents/generator.py:_DATA_COLLECTOR_PROMPT` 让 data-collector 调 `feedback_list` 拉最近 feedback,写进 `/state/phase1.json`;planner 据此 dedupe(`skipped_duplicates`)+ cold-basket 抑制(`cold_baskets`)。 |
 | `metadata` | 字符串 / object 都接,字符串会尝试 JSON.parse;前端约定传 object。 |
 | `intentKey` / `basket` fallback | route 在缺失时按 `intentCardId` 查最近 generation 卡补齐(避免前端老版本 schema 漏字段)。 |
+| Reward ledger 分界 | 用户打开卡片时,`AppShell` 额外写 `pai_card_reward_events(source='user', event_type='card_open', score=1)` 到 `/api/reward-dashboard/cards/{card_id}/score`。confirm / dismiss / snooze / text feedback 仍写 `pai_feedback_events`;不要把所有 feedback 复制进 reward ledger。 |
 
 ## 开发入口
 
@@ -214,3 +215,8 @@ FROM pai_intent_thread_state WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 1
 - [Execution](./execution):card chat transcript 由执行层产出,chat-feedback / crystallize 都消费它(下游不同)。
 - [Memory](./memory):长期沉淀走 crystallize(memory / skill),feedback 只影响短期生成偏置。
 - [Background Tasks](./background-tasks):scheduler 的 `crystallize` kind 路由已注册但当前没有 producer;chat-feedback / crystallize 走 chat 进程内联触发。
+- [Internal Reward Dashboard](./internal-reward-dashboard):reward ledger 和用户 feedback 的分界,以及内部 reviewer score/casebook。
+
+## 相关 AI Plans
+
+- [Card Reward Infra + Internal Dashboard](../plans/2026-05-13-card-reward-infra):用户 open reward、reviewer score、casebook 和 trace artifact。

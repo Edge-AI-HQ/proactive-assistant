@@ -18,6 +18,8 @@ flowchart LR
   Generation --> Execution["Execution"]
   Feedback["Feedback"] --> Generation
   Execution --> Feedback
+  RewardDash["Internal Reward Dashboard"] --> Generation
+  RewardDash --> Feedback
   BgTasks["Background Tasks"] --> Connectors
   BgTasks --> Memory
   Runtime["Runtime & Deployment"] --> Connectors
@@ -40,6 +42,7 @@ flowchart LR
 | [Generation](./modules/generation) | `POST /api/generate`、generator scheduler kind、4 subagent pipeline、evaluator、card persistence、auto-generate。 |
 | [Execution](./modules/execution) | chat-stream、card chat、main_chat / card_execution agent、native tool、Daytona python_exec、browser、Composio side-effect gate。 |
 | [Feedback](./modules/feedback) | `pai_feedback_events`、card action、chat-feedback、intent state、planner 偏置回流。 |
+| [Internal Reward Dashboard](./modules/internal-reward-dashboard) | 内部卡片 review Vite app、reward ledger、reviewer score、casebook、LangSmith trace artifact。 |
 | [Background Tasks](./modules/background-tasks) | `pai_scheduled_tasks` + `pai_scheduled_task_runs`、tick loop、dispatcher kind、lease/heartbeat/retry。 |
 | [Runtime & Deployment](./modules/runtime-deployment) | 本地启动、web/chat 进程、信任边界、Daytona、yoyo migration、LiteLLM、dotenvx、CI/CD、生产规则。 |
 

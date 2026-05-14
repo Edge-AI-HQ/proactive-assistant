@@ -56,6 +56,7 @@ from .routes.ui.memory import router as ui_memory_router
 from .routes.ui.profile import router as ui_profile_router
 from .routes.ui.profile import settings_router as ui_settings_router
 from .routes.ui.raw import router as ui_raw_router
+from .routes.ui.reward_dashboard import router as ui_reward_dashboard_router
 from .routes.ui.runs_and_cards import router as ui_runs_router
 from .routes.ui.signals import router as ui_signals_router
 from .routes.ui.skills import router as ui_skills_router
@@ -172,6 +173,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_composio_router)
     app.include_router(ui_tasks_router)
     app.include_router(ui_raw_router)
+    app.include_router(ui_reward_dashboard_router)
     app.include_router(ui_agent_runs_router)
     app.include_router(ui_devices_router)
     app.include_router(ui_payment_router)

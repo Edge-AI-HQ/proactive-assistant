@@ -7,11 +7,12 @@ description: "本地启动、运行拓扑、部署、安全和 billing 概览。
 
 ## 结论
 
-整个后端收敛到 **pinai-agents**(Python / FastAPI / DeepAgents),单镜像两进程:`web` 拿 master credentials 做控制面,`chat` 跑 LLM loop。前端 **proactive-ai-frontend** 直接打 pinai-agents,中间没有 proxy。LLM 走 **LiteLLM**,长任务通过 web 进程的 scheduler tick loop 派到 chat。旧的 `apis/`(Node) + `pinai-openclaw/`(用户容器)整套已经退役。
+整个后端收敛到 **pinai-agents**(Python / FastAPI / DeepAgents),单镜像两进程:`web` 拿 master credentials 做控制面,`chat` 跑 LLM loop。用户产品前端是 **proactive-ai-frontend**,直接打 pinai-agents,中间没有 proxy。内部卡片 review 工具是独立 Vite app **internal-reward-dashboard**。LLM 走 **LiteLLM**,长任务通过 web 进程的 scheduler tick loop 派到 chat。旧的 `apis/`(Node) + `pinai-openclaw/`(用户容器)整套已经退役。
 
 ```mermaid
 flowchart LR
   FE["proactive-ai-frontend"] --> Web["pinai-web :8000"]
+  RewardDash["internal-reward-dashboard :3004"] --> Web
   Web --> Auth["Supabase Auth"]
   Web --> PG[("Postgres pai_* + langgraph schema")]
   Web --> Chat["pinai-chat :8001"]
@@ -27,6 +28,7 @@ flowchart LR
 
 - 本地启动、验证命令。
 - `pinai-web` / `pinai-chat` 进程拆分与信任边界。
+- `proactive-ai-frontend` 与 `internal-reward-dashboard` 两个前端入口的本地启动方式。
 - HTTP / SSE 入口、`/api/*` 与 `/agent/*` 表面。
 - 鉴权链(Supabase JWT、agent-run JWT、phantom token、device token)。
 - Daytona sandbox、yoyo 迁移、LiteLLM、dotenvx、Fly CI/CD、Stripe billing 概述。
@@ -62,7 +64,7 @@ flowchart LR
 
 ### web :8000
 
-- `/api/*` — 前端面向接口,Supabase JWT 鉴权。路由模块在 `pinai-agents/src/pinai_agents/web/routes/ui/`:`chat`(`/api/chat-stream/*`)、`generate`、`memory`、`signals`、`profile`、`devices`、`feedback`、`composio`、`tasks`、`raw`、`runs_and_cards`、`dreaming`、`skills`、`browser`、`agent_runs`、`crystallize`、`jwt_revoke`、`payment`(独立 prefix)。
+- `/api/*` — 前端面向接口,Supabase JWT 鉴权。路由模块在 `pinai-agents/src/pinai_agents/web/routes/ui/`:`chat`(`/api/chat-stream/*`)、`generate`、`memory`、`signals`、`profile`、`devices`、`feedback`、`reward_dashboard`、`composio`、`tasks`、`raw`、`runs_and_cards`、`dreaming`、`skills`、`browser`、`agent_runs`、`crystallize`、`jwt_revoke`、`payment`(独立 prefix)。
 - `/api/agent/*` — sandbox 内 `pinai_sdk` 回连接口,phantom token 鉴权。模块在 `web/routes/agent/`:`memory`、`signals`、`world`、`state`、`profile`、`skills`、`composio`、`raw`、`cards`、`feedback`、`evolution`、`pipeline`、`sandbox_phantom`。
 - `/health` — 含一次 `SELECT 1` 探活;DB 异常返回 `db: error` 但不翻 HTTP 状态码,交给 readiness probe 严控。
 - 中间件:`CORSMiddleware`(origin allowlist 来自 `CORS_ALLOWED_ORIGINS`)、`AgentAuditMiddleware`(只在 `/api/agent/*` 路径下记录 audit log)。
@@ -101,7 +103,8 @@ sandbox 内通过 `PAI_API_URL` + `PAI_SANDBOX_TOKEN` 回连 web `/api/agent/*`,
 首次设置:
 
 ```bash
-make init                      # npm install root + frontend(只跑一次)
+make init                      # npm install root + proactive-ai-frontend(只跑一次)
+cd internal-reward-dashboard && npm install && cd -
 # 找团队成员要 .env.keys,放到:
 #   pinai-agents/.env.keys
 #   ops/litellm/.env.keys
@@ -114,6 +117,7 @@ make up                        # 解密 .env.dev → .env,build 全栈,起 postg
 |---|---|
 | pinai-agents Python 代码 | `make restart` |
 | 前端代码(容器版) | `make restart-frontend`,或者本地 `cd proactive-ai-frontend && npm run dev` 直接连 `:8000` |
+| 内部 reward dashboard | `cd internal-reward-dashboard && npm run dev -- --host 127.0.0.1 --port 3004` |
 | docker-compose / Dockerfile | `make up`(会重 build) |
 | 翻数据丢档从头来 | `make clean && make up`(`reset` 同语义 + 自动起 ngrok) |
 | 状态/日志 | `make status` / `make logs` / `make logs-pinai-web` / `make logs-pinai-chat` / `make logs-frontend` |
@@ -241,6 +245,8 @@ cd pinai-agents && uv run pytest tests/web/payment   # billing
 cd pinai-agents && uv run ruff check .               # 含 banned-api 静态防线
 cd proactive-ai-frontend && npm run type-check       # 前端类型
 cd proactive-ai-frontend && npm test                 # vitest
+cd internal-reward-dashboard && npm run type-check   # 内部 review app 类型
+cd internal-reward-dashboard && npm test             # 内部 review app 单测
 ```
 
 部署相关只能通过 GitHub Actions 验,本地 `make deploy-*` 是 CI 不可用时的兜底,不要拿来当主路径。
@@ -265,6 +271,7 @@ cd proactive-ai-frontend && npm test                 # vitest
 | docker-compose / Makefile | `docker-compose.yml`、`Makefile` |
 | CI / fly secrets 守门 | `.github/workflows/`、`pinai-agents/scripts/sync_fly_secrets.py` |
 | 前端 API base | `proactive-ai-frontend/src/lib/platform.ts`、`src/lib/api.ts` |
+| 内部 reward dashboard | `internal-reward-dashboard/`、`web/routes/ui/reward_dashboard.py` |
 
 ## 生产环境硬性规则
 
@@ -291,3 +298,4 @@ cd proactive-ai-frontend && npm test                 # vitest
 - [Data Connectors](./data-connectors):Composio / device ingest 在 web 进程的入口。
 - [Execution](./execution):chat-stream / browser tool / sandbox 工具决策。
 - [Generation](./generation):`POST /api/generate` 怎么进 scheduler、chat 怎么跑 generator agent。
+- [Internal Reward Dashboard](./internal-reward-dashboard):内部 review app、reward ledger、casebook 和 trace artifact。

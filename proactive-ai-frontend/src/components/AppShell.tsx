@@ -11,7 +11,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Menu, X, Sparkles, Zap, MessageCircle, Target, Settings, ArrowRight,
 } from "lucide-react";
-import { proxyFetch, proxyPost } from "@/lib/api";
+import { proxyFetch, proxyPost, recordCardOpen } from "@/lib/api";
 import { usePipeline } from "@/hooks/usePipeline";
 import { useCards } from "@/hooks/useCards";
 import { useComposio } from "@/hooks/useComposio";
@@ -157,6 +157,7 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
   // (30s) before the freshly generated cards show up, even though the
   // backend has them durably stored.
   const lastCompleteRunIdRef = useRef<string | null>(null);
+  const rewardOpenedIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (run.status !== "complete" || !run.runId) return;
     if (run.runId === lastCompleteRunIdRef.current) return;
@@ -260,6 +261,15 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
   }, []);
 
   const handleCardTap = useCallback((card: IntentCard) => {
+    if (!rewardOpenedIdsRef.current.has(card.id)) {
+      rewardOpenedIdsRef.current.add(card.id);
+      recordCardOpen(card.id, {
+        surface: "now_feed",
+        goalBasket: card.goalBasket,
+      }).catch(() => {
+        rewardOpenedIdsRef.current.delete(card.id);
+      });
+    }
     if (processingIds.has(card.id)) {
       persistChatted(card.id);
       setChatTarget({ card, score: run.scoreMap[card.id] ?? null });

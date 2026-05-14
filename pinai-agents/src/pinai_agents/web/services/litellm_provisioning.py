@@ -30,13 +30,16 @@ from ..auth.user_service import User
 from ..db.rls import service_tx
 from ..litellm.client import (
     LITELLM_KEY_PREFIX,
+    LiteLLMError,
     create_user,
     delete_keys,
     generate_key,
     list_keys_for_user,
+    list_models_for_key,
 )
 
 logger = logging.getLogger(__name__)
+GENERATOR_REQUIRED_MODELS = {"gpt-5.5"}
 
 
 def _litellm_user_id(internal_user_id: int) -> str:
@@ -54,6 +57,40 @@ def _allowed_models() -> list[str]:
     s = get_web_settings()
     raw = s.litellm_allowed_models or ""
     return [m.strip() for m in raw.split(",") if m.strip()]
+
+
+async def _key_supports_generator(user: User) -> bool:
+    key = user.litellm_virtual_key or ""
+    if not key.startswith(LITELLM_KEY_PREFIX):
+        return False
+    try:
+        models = await list_models_for_key(key)
+    except LiteLLMError as e:
+        if e.status_code in (401, 403):
+            logger.warning(
+                "litellm: virtual key rejected by model probe user=%d status=%d",
+                user.id, e.status_code,
+            )
+            return False
+        logger.warning(
+            "litellm: virtual key model probe failed user=%d, keeping existing key: %s",
+            user.id, e,
+        )
+        return True
+    except Exception as e:
+        logger.warning(
+            "litellm: virtual key model probe errored user=%d, keeping existing key: %s",
+            user.id, e,
+        )
+        return True
+    missing = sorted(GENERATOR_REQUIRED_MODELS - models)
+    if missing:
+        logger.warning(
+            "litellm: rotating stale virtual key user=%d missing_models=%s",
+            user.id, ",".join(missing),
+        )
+        return False
+    return True
 
 
 async def _provision_and_persist(pool: AsyncConnectionPool, user: User) -> str:
@@ -138,9 +175,7 @@ async def ensure_user_litellm_key(
     """Lazy recovery — called from /chat-stream/send when the user row's
     virtual_key is NULL. Raises on LiteLLM failure so the request sees
     a clean 502 rather than a silent hang."""
-    if user.litellm_virtual_key and user.litellm_virtual_key.startswith(
-        LITELLM_KEY_PREFIX,
-    ):
+    if await _key_supports_generator(user):
         return user
     raw_key = await _provision_and_persist(pool, user)
     return User(

@@ -91,6 +91,8 @@ sequenceDiagram
 | 派发 | dispatcher 看到 `generator.manual` / `generator.auto` 都走 `_run_generator`(`039_split_generator_kinds.sql` 拆 kind 但共用 handler);60s lease。 |
 | chat 调用 | `_run_generator` HTTP POST `chat /agent/generate`,签 EdDSA agent-run JWT,带 `run_id` + virtual_key claim。 |
 | 持久化 | `persist_generator_run`:`pai_pipeline_runs` 一行(`id=run_id`,`run_id=run_id` 两列同值,`status='completed'`,`final_cards JSONB`,`iterations JSONB`,`trigger`,`started_at`,`completed_at`);`_persist_evaluations`:每张 pass 卡 + 评价写一行 `pai_card_evaluations`(ON CONFLICT (user_id, card_id) DO UPDATE)。 |
+| Reward review | 内部 review 不改 generation 主链路。`/api/reward-dashboard/*` 只读 `pai_pipeline_runs.final_cards` + `pai_card_evaluations`,把用户 open / score 和 reviewer score 追加到 `pai_card_reward_events`,案例库写 `pai_card_casebook`,trace artifact 写 `pai_trace_artifacts`。 |
+| LangSmith metadata | generator root invocation 带 `metadata={pinai_run_id, pinai_user_id, pinai_agent:'generator'}` 和 `tags=['pinai','generator',...]`,reward dashboard 用这个稳定绑定 trace,不靠时间窗口猜。 |
 | 前端轮询 | `usePipeline.ts` 用 sessionStorage 恢复 run state;`useActiveAgentRuns.ts` 轮询 `/api/agent-runs/active`;`useGenerationStatus.ts` 取 `pai_scheduled_task_runs` 状态;成功后 `useCards.ts` 拉 `/api/cards`。 |
 
 ## chat 端 generator agent
@@ -206,3 +208,8 @@ langsmith trace list --project pinai-agents-dev --run-type chain --format pretty
 - [Memory](./memory):generator 拿到的 raw / signals / memory / profile / skill / world 上下文。
 - [Feedback](./feedback):recent feedback summary + intent state 怎么进 planner 的输入。
 - [Execution](./execution):用户在生成卡上点开做 chat / 调工具的下游链路。
+- [Internal Reward Dashboard](./internal-reward-dashboard):内部 review 怎么读取 generation run、evaluation 和 LangSmith trace。
+
+## 相关 AI Plans
+
+- [Card Reward Infra + Internal Dashboard](../plans/2026-05-13-card-reward-infra):reward ledger、casebook、trace artifact 和内部评分网页。

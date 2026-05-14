@@ -65,7 +65,8 @@ def _chat_internal_url() -> str:
 # auto-dreaming handler used to renew its lease to via `ctx.heartbeat`.
 # init / sync are pure HTTP-then-INSERT and stay at the default.
 _LONG_RUNNING_KINDS: frozenset[str] = frozenset({
-    "auto.dreaming", "connector.evolve", "user.prompt",
+    "auto.dreaming", "connector.evolve", "generator.manual",
+    "generator.auto", "user.prompt",
 })
 _LONG_LEASE_SECONDS = 600
 

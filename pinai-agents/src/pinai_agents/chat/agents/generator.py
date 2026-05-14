@@ -148,8 +148,11 @@ The actual data is in `/state/phase1.json`.
 _PLANNER_PROMPT = """You are the planner subagent of the Pin AI card generator.
 
 <role>
-Read `/state/phase1.json` and decide which Intent Cards (AT MOST
-{cards_to_generate}, often fewer, sometimes zero) to generate next.
+Read `/state/phase1.json` and decide which Intent Cards to generate next.
+For an explicit generator run, produce 1-{cards_to_generate} planned
+items whenever phase1 contains any usable grounded source. Return zero
+items only when every source is empty/error or every candidate would be
+unambiguously harmful, hallucinated, or impossible to ground.
 Your output is a structured Plan — not the cards themselves. The
 card-generator subagent will turn each plan item into a full card.
 </role>
@@ -178,7 +181,9 @@ card-generator subagent will turn each plan item into a full card.
 - If `feedback` shows confirms in basket Y, weight Y higher when
   ranking ties.
 - Better to plan FEWER than {cards_to_generate} items than to ship a
-  duplicate or a cold-basket item without fresh evidence.
+  duplicate or a cold-basket item without fresh evidence, but do not
+  collapse to zero just because the highest-value items require review,
+  update, follow-up, or confirmation rather than a brand-new intent.
 </dedup_and_feedback_rules>
 
 <intent_key_convention>
@@ -311,7 +316,7 @@ step's side-effects (sandbox files) or its returned JSON.
    sandbox), STOP and emit a GeneratorOutput with cards=[],
    evaluations=[], and the error in batch_feedback.
 
-2. `task(subagent_type="planner", description="Read /state/phase1.json and produce a plan for {cards_to_generate} cards. Today is {current_date}. {lang_clause}.")`
+2. `task(subagent_type="planner", description="Read /state/phase1.json and produce a grounded plan for 1-{cards_to_generate} cards whenever any usable source exists. Return zero only if every source is empty/error or impossible to ground. Today is {current_date}. {lang_clause}.")`
    → Returns a PlanOutput JSON. Inspect it. If `plan` is empty,
    STOP and emit GeneratorOutput with cards=[], evaluations=[], and
    the planner's `notes` in batch_feedback.
@@ -346,9 +351,14 @@ After all four steps, emit ONE GeneratorOutput. Field rules:
   language through descriptions).
 - Pass plan/cards JSON inline in description verbatim — do NOT
   summarize. Subagents need full structure to do their job.
-- If any subagent returns an error or empty result, emit a
-  GeneratorOutput shell (empty cards / evaluations) with the failure
-  in batch_feedback. NEVER fabricate cards.
+- If a subagent returns an error, emit a GeneratorOutput shell (empty
+  cards / evaluations) with the failure in batch_feedback. NEVER
+  fabricate cards.
+- If planner or card-generator returns empty while phase1 was written
+  successfully, do one recovery pass: ask the same subagent to produce
+  one conservative, well-grounded card from the strongest available
+  source. Only return empty after that recovery pass also finds no
+  grounded candidate.
 </hard_rules>
 
 <output>
@@ -406,9 +416,10 @@ async def run_generator(
             # they'd spawn separate sandboxes and lose file continuity.
             #
             # Reasoning posture per agent:
-            #   data_collector — no response_format, stays on Sonnet with
-            #     extended thinking (phase 1 is the most reasoning-heavy:
-            #     "which sources matter" + "how to chunk the script").
+            #   data_collector — no response_format, but still stays on the
+            #     same OpenAI model as the structured agents in local/dev so a
+            #     single per-user LiteLLM key/model allowlist can run the full
+            #     chain without Anthropic billing coupling.
             #   planner / card_generator / orchestrator — have
             #     response_format, which langchain implements via forced
             #     tool_choice. Anthropic rejects extended-thinking +
@@ -420,7 +431,12 @@ async def run_generator(
             #     in usage — so traces show "the model thought" without
             #     the chain-of-thought text.
             data_collector = create_deep_agent(
-                model=make_chat_model(virtual_key=virtual_key, thinking_budget=4000),
+                model=make_chat_model(
+                    virtual_key=virtual_key,
+                    model="gpt-5.5",
+                    enable_thinking=False,
+                    enable_prompt_cache=False,
+                ),
                 system_prompt=_DATA_COLLECTOR_PROMPT,
                 backend=backend,
             )
@@ -507,7 +523,15 @@ async def run_generator(
             )
 
             result: dict[str, Any] = await orchestrator.ainvoke(
-                {"messages": [{"role": "user", "content": user_message}]}
+                {"messages": [{"role": "user", "content": user_message}]},
+                config={
+                    "metadata": {
+                        "pinai_run_id": run_id,
+                        "pinai_user_id": str(user_id),
+                        "pinai_agent": "generator",
+                    },
+                    "tags": ["pinai", "generator", f"pinai_run:{run_id}"],
+                },
             )
     finally:
         await evict_thread(session_key)

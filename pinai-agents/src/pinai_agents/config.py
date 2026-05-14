@@ -153,6 +153,13 @@ class WebSettings(_BaseAppSettings):
     litellm_default_rpm_limit: int | None = None
     litellm_default_tpm_limit: int | None = None
 
+    # ── LangSmith read side for internal reward dashboard ──
+    # chat process emits traces; web process only reads them on demand to
+    # materialize deterministic trace artifacts for reviewers.
+    langsmith_api_key: str | None = None
+    langsmith_project: str = "pinai-agents-chat"
+    langsmith_endpoint: str = "https://api.smith.langchain.com"
+
 
 class ChatSettings(_BaseAppSettings):
     """Chat process settings — no master credentials.

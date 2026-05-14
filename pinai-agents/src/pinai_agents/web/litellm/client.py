@@ -200,6 +200,45 @@ async def generate_key(
     raise LiteLLMError(500, msg)
 
 
+async def list_models_for_key(virtual_key: str) -> set[str]:
+    """Return model aliases visible to a user virtual key.
+
+    Used to detect stale keys minted with an older allowlist. LiteLLM serves
+    OpenAI-compatible model listing under /v1, so this intentionally does not
+    use `_request`, which strips /v1 for admin endpoints.
+    """
+    s = get_web_settings()
+    base_url = (s.litellm_base_url or "").rstrip("/")
+    if base_url and not base_url.endswith("/v1"):
+        base_url = f"{base_url}/v1"
+    if not base_url:
+        msg = "LITELLM_BASE_URL not configured"
+        raise LiteLLMError(500, msg)
+    if not virtual_key:
+        msg = "virtual key not configured"
+        raise LiteLLMError(500, msg)
+
+    headers = {"Authorization": f"Bearer {virtual_key}", "Accept": "application/json"}
+    timeout = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
+    async with httpx.AsyncClient(timeout=timeout) as cli:
+        resp = await cli.get(f"{base_url}/models", headers=headers)
+    if not resp.is_success:
+        raise LiteLLMError(resp.status_code, resp.text[:200])
+    try:
+        parsed = resp.json()
+    except ValueError as e:
+        msg = "/v1/models response was not JSON"
+        raise LiteLLMError(500, msg) from e
+    data = parsed.get("data") if isinstance(parsed, dict) else None
+    if not isinstance(data, list):
+        return set()
+    return {
+        item["id"]
+        for item in data
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+
+
 async def delete_keys(tokens: list[str]) -> None:
     if not tokens:
         return

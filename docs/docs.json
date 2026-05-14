@@ -28,6 +28,7 @@
                   "modules/generation",
                   "modules/execution",
                   "modules/feedback",
+                  "modules/internal-reward-dashboard",
                   "modules/background-tasks",
                   "modules/runtime-deployment"
                 ]
