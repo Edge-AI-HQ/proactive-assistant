@@ -301,7 +301,7 @@ const DEFAULT_AUTO_START_SOURCES: SourceKey[] = [
   "location",
 ];
 
-const ALL_SOURCE_KEYS: SourceKey[] = [
+export const ALL_SOURCE_KEYS: SourceKey[] = [
   ...DEFAULT_AUTO_START_SOURCES,
   "health",
 ];

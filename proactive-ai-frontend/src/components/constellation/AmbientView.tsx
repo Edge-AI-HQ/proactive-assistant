@@ -1,4 +1,4 @@
-import { useState, useEffect, forwardRef } from "react";
+import { useState, useEffect, useCallback, forwardRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Radio, Smartphone, Watch, Glasses, Headphones, Camera, Laptop,
@@ -6,9 +6,20 @@ import {
   Briefcase, Stethoscope, Coffee, BookOpen, Music,
   Lightbulb, Sparkles, Clock, Plus, ChevronRight, X,
   Phone, Footprints, Sun, Waves, UtensilsCrossed, Target,
-  Users, Pill, Soup, Minimize2, Expand,
+  Users, Pill, Soup, Minimize2, Expand, Lock, Unlock,
   type LucideIcon,
 } from "lucide-react";
+import { useUserSettings } from "@/hooks/useUserSettings";
+import {
+  ALL_SOURCE_KEYS,
+  getAmbientRuntime,
+  type RuntimeStatus,
+  type SourceKey,
+} from "@/services/ambient";
+import {
+  startAmbientUpload,
+  stopAmbientUpload,
+} from "@/services/ambient/lifecycle";
 
 
 interface Device {
@@ -196,13 +207,62 @@ interface AmbientViewProps {
 }
 
 export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHandled, onOpenFullscreen }: AmbientViewProps = {}) {
-  const [ambientOn, setAmbientOn] = useState(true);
+  const { settings, patch } = useUserSettings();
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus>(() =>
+    getAmbientRuntime().status(),
+  );
+  const [togglePending, setTogglePending] = useState(false);
   const [liveIndex, setLiveIndex] = useState(0);
   const [view, setView] = useState<"timeline" | "devices">("timeline");
 
   const [liveDismissed, setLiveDismissed] = useState(false);
   const [previewVisibleCount, setPreviewVisibleCount] = useState(1);
   const connectedCount = DEVICES.filter((d) => d.connected).length;
+
+  useEffect(() => {
+    const rt = getAmbientRuntime();
+    return rt.subscribe(() => setRuntimeStatus(rt.status()));
+  }, []);
+
+  // Reflect server-side consent first; fall back to live runtime state
+  // before settings hydrate so the hero doesn't flicker on mount.
+  const consentOn = settings
+    ? Object.values(settings.ambientSources ?? {}).some((c) => c?.enabled === true)
+    : null;
+  const runtimeOn = runtimeStatus.sources.some((s) => s.enabled);
+  const ambientOn = consentOn ?? runtimeOn;
+  const uploadsLocked = runtimeStatus.uploadsLocked;
+  const firstSourceError =
+    runtimeStatus.sources.find((s) => s.lastError)?.lastError ?? null;
+
+  const handleAmbientToggle = useCallback(async () => {
+    if (togglePending) return;
+    const next = !ambientOn;
+    setTogglePending(true);
+    try {
+      const consentPatch = Object.fromEntries(
+        ALL_SOURCE_KEYS.map((key) => [key, { enabled: next }]),
+      );
+      const updated = await patch({ ambientSources: consentPatch });
+      if (next) {
+        const enabledSources = updated
+          ? (Object.entries(updated.ambientSources ?? {})
+              .filter(([, v]) => v?.enabled === true)
+              .map(([k]) => k as SourceKey))
+          : ALL_SOURCE_KEYS;
+        startAmbientUpload({ enabledSources });
+      } else {
+        await stopAmbientUpload();
+      }
+    } finally {
+      setTogglePending(false);
+    }
+  }, [ambientOn, patch, togglePending]);
+
+  const handleLockToggle = useCallback(() => {
+    getAmbientRuntime().setUploadsLocked(!uploadsLocked);
+  }, [uploadsLocked]);
+
   const liveSession = ambientOn && !liveDismissed ? LIVE_SCENARIOS[liveIndex] : null;
 
   // Auto-open fullscreen when triggered from outside (e.g., Constellation Live row)
@@ -290,34 +350,62 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
             )}
           </div>
 
-          <div>
+          <div className="min-w-0">
             <p className="text-[14px] font-semibold text-foreground leading-tight">
               Ambient is {ambientOn ? "on" : "off"}
             </p>
-            <p className="text-[11px] text-foreground/55 leading-tight mt-0.5">
-              {ambientOn
-                ? "Listening, sensing, understanding context"
-                : "AI is paused from sensing your surroundings"}
+            <p className="text-[11px] text-foreground/55 leading-tight mt-0.5 truncate">
+              {!ambientOn
+                ? "AI is paused from sensing your surroundings"
+                : uploadsLocked
+                  ? "Sensing locally — uploads paused"
+                  : firstSourceError
+                    ? firstSourceError
+                    : "Listening, sensing, understanding context"}
             </p>
           </div>
         </div>
 
-        {/* Toggle */}
-        <button
-          onClick={() => setAmbientOn((v) => !v)}
-          className={`relative w-12 h-7 rounded-full transition-colors shrink-0 ${
-            ambientOn ? "bg-foreground" : "bg-foreground/20"
-          }`}
-          aria-label="Toggle ambient"
-        >
-          <motion.span
-            layout
-            transition={{ type: "spring", stiffness: 500, damping: 35 }}
-            className={`absolute top-0.5 w-6 h-6 rounded-full bg-background shadow-sm ${
-              ambientOn ? "left-[22px]" : "left-0.5"
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Soft upload lock — keeps local capture going while suspending sync. */}
+          {ambientOn && (
+            <button
+              onClick={handleLockToggle}
+              className={`w-9 h-9 rounded-full flex items-center justify-center border transition-colors ${
+                uploadsLocked
+                  ? "bg-foreground text-background border-foreground"
+                  : "bg-foreground/[0.04] text-foreground/60 hover:bg-foreground/[0.08] hover:text-foreground border-foreground/15"
+              }`}
+              aria-label={uploadsLocked ? "Unlock uploads" : "Lock uploads"}
+              title={uploadsLocked ? "Uploads locked" : "Lock uploads"}
+            >
+              {uploadsLocked ? (
+                <Lock size={14} strokeWidth={2.2} />
+              ) : (
+                <Unlock size={14} strokeWidth={2.2} />
+              )}
+            </button>
+          )}
+
+          {/* Toggle */}
+          <button
+            onClick={() => void handleAmbientToggle()}
+            disabled={togglePending}
+            className={`relative w-12 h-7 rounded-full transition-colors shrink-0 disabled:opacity-60 disabled:cursor-progress ${
+              ambientOn ? "bg-foreground" : "bg-foreground/20"
             }`}
-          />
-        </button>
+            aria-label="Toggle ambient"
+            aria-busy={togglePending}
+          >
+            <motion.span
+              layout
+              transition={{ type: "spring", stiffness: 500, damping: 35 }}
+              className={`absolute top-0.5 w-6 h-6 rounded-full bg-background shadow-sm ${
+                ambientOn ? "left-[22px]" : "left-0.5"
+              }`}
+            />
+          </button>
+        </div>
       </div>
 
       {/* ── LIVE SESSION (only when ambient on + active) ── */}
