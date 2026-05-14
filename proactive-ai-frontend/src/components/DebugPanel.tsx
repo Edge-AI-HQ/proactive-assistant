@@ -1,15 +1,14 @@
 /**
  * DebugPanel — slide-over panel triggered by gear icon in header.
- * Shows Main Chat entry, pipeline phases, event log,
- * run info, crystallize / skills / memories diagnostics, connectors,
- * sign-out.
+ * Shows pipeline phases, event log, run info,
+ * crystallize / skills / memories diagnostics, connectors, sign-out.
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Settings, Clock,
-  X, Zap, MessageSquare, RefreshCw, Plug, Loader2,
+  X, Zap, RefreshCw, Plug, Loader2,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { useInitTask, isInitTaskFresh } from "@/hooks/useInitTask";
@@ -19,7 +18,6 @@ import {
   formatComposioToolkitName,
 } from "@/lib/composioDisplayIdentity";
 import { lazy, Suspense } from "react";
-import MainChat from "./MainChat";
 import CrystallizePanel from "./CrystallizePanel";
 import SkillsPanel from "./SkillsPanel";
 import MemoriesPanel from "./MemoriesPanel";
@@ -208,21 +206,17 @@ function ConnectorReconnectRow({
 export default function DebugPanel({ run, isRunning, onGenerate, composio }: DebugPanelProps) {
   const { signOut } = useAuth();
   const [open, setOpen] = useState(false);
-  const [chatOpen, setChatOpen] = useState(false);
   const [signOutLoading, setSignOutLoading] = useState(false);
   const logContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!open && !chatOpen) return;
+    if (!open) return;
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key !== "Escape") return;
-      // Chat overlay sits above the drawer — close it first.
-      if (chatOpen) setChatOpen(false);
-      else setOpen(false);
+      if (e.key === "Escape") setOpen(false);
     }
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [open, chatOpen]);
+  }, [open]);
 
   useEffect(() => {
     if (logContainerRef.current) logContainerRef.current.scrollTop = 0;
@@ -284,21 +278,6 @@ export default function DebugPanel({ run, isRunning, onGenerate, composio }: Deb
 
               {/* Scrollable content */}
               <div className="flex-1 overflow-y-auto px-5 pb-5 space-y-4">
-                {/* Main Chat */}
-                <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-3.5">
-                  <div className="flex items-center gap-2 mb-2.5">
-                    <MessageSquare size={14} strokeWidth={1.5} className="text-foreground/40" />
-                    <span className="text-xs font-medium text-foreground/50">Main Chat</span>
-                  </div>
-                  <button
-                    onClick={() => setChatOpen(true)}
-                    className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-foreground/10 hover:bg-foreground/15 text-foreground/60 hover:text-foreground/80 text-[11px] font-medium py-1.5 transition-colors"
-                  >
-                    <MessageSquare size={12} strokeWidth={1.5} />
-                    Open Main Chat
-                  </button>
-                </div>
-
                 {/* Generate Controls */}
                 <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-3.5">
                   <div className="flex items-center gap-2 mb-2.5">
@@ -506,12 +485,6 @@ export default function DebugPanel({ run, isRunning, onGenerate, composio }: Deb
           </>
         )}
       </AnimatePresence>
-
-      {chatOpen && (
-        <div className="fixed inset-0 z-[60] bg-background">
-          <MainChat onBack={() => setChatOpen(false)} />
-        </div>
-      )}
     </>
   );
 }

@@ -21,6 +21,7 @@ import GoalsView from "./GoalsView";
 import ControlPanel from "./ControlPanel";
 import DebugPanel from "./DebugPanel";
 import AgentRunIndicator from "./AgentRunIndicator";
+import MainChat from "./MainChat";
 import CardChat from "./CardChat";
 import CardDetailBody from "./CardDetailBody";
 import AiSphere from "./AiSphere";
@@ -88,6 +89,16 @@ type FloatingCard = IntentCard & { slotIndex: number; exitDirection?: "left" | "
 
 export default function AppShell({ userName, onSignOut }: AppShellProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [mainChatOpen, setMainChatOpen] = useState(false);
+
+  useEffect(() => {
+    if (!mainChatOpen) return;
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setMainChatOpen(false);
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [mainChatOpen]);
   const [activeView, setActiveView] = useState<MenuId>(() => {
     const saved = sessionStorage.getItem("proactive-ai:activeView");
     return saved && ["now", "chat", "goals", "control"].includes(saved) ? saved as MenuId : "now";
@@ -641,6 +652,14 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
             absolute buttons need safe-area + 12px too. */}
         <div className="absolute top-[calc(env(safe-area-inset-top,0px)+12px)] right-4 z-30 flex items-center gap-2">
           <AgentRunIndicator />
+          <button
+            onClick={() => setMainChatOpen(true)}
+            className="px-3 py-1.5 rounded-full glass-card-strong text-xs font-medium text-foreground/70 inline-flex items-center gap-1.5"
+            title="Open chat"
+          >
+            <MessageCircle size={14} strokeWidth={1.5} />
+            Chat
+          </button>
           <DebugPanel
             run={run}
             onGenerate={() => generate()}
@@ -820,6 +839,12 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
           )}
         </DrawerContent>
       </Drawer>
+
+      {mainChatOpen && (
+        <div className="fixed inset-0 z-[60] bg-background">
+          <MainChat onBack={() => setMainChatOpen(false)} />
+        </div>
+      )}
     </div>
   );
 }
