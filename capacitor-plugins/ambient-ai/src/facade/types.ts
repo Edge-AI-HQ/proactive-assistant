@@ -165,6 +165,66 @@ export interface RecentAudioCapture {
   byteSize: number;
 }
 
+export type ModelKind = 'asr' | 'llm';
+export type ModelMirror = 'hf' | 'hf-mirror';
+export type ModelMagic = 'GGUF' | 'ggml';
+export type ModelDownloadState =
+  | 'absent'
+  | 'downloading'
+  | 'paused'
+  | 'present'
+  | 'verifying'
+  | 'failed';
+export type ModelVerifyState = 'ok' | 'fail';
+
+export interface ModelProfile {
+  id: string;
+  kind: ModelKind;
+  displayName: string;
+  repo: string;
+  file: string;
+  approxBytes: number;
+  magic: ModelMagic;
+  notes?: string;
+}
+
+export interface ModelDownloadStatus {
+  id: string;
+  state: ModelDownloadState;
+  bytesWritten: number;
+  bytesTotal: number;
+  errorMessage?: string;
+  mirrorInUse?: ModelMirror;
+  sizeOnDisk?: number;
+  lastVerifiedAt?: number;
+  lastVerifyResult?: ModelVerifyState;
+  lastVerifyOutput?: string;
+  lastVerifyError?: string;
+}
+
+export interface ModelDownloadOptions {
+  id: string;
+  preferredMirror?: ModelMirror;
+}
+
+export interface ModelVerifyResult {
+  id: string;
+  ok: boolean;
+  elapsedMs: number;
+  output?: string;
+  errorMessage?: string;
+}
+
+export interface ModelListResult {
+  profiles: ModelProfile[];
+  statuses: ModelDownloadStatus[];
+}
+
+export interface ModelDownloadProgressEvent extends ModelDownloadStatus {
+  /** Server-side wall clock when the event was emitted. */
+  emittedAt: number;
+}
+
 export interface AmbientEventMap {
   activity: ActivityEvent;
   altimeter: AltimeterEvent;
@@ -189,6 +249,8 @@ export interface AmbientEventMap {
   transcriptReady: TranscriptReadyEvent;
   transcriptRefined: TranscriptRefinedEvent;
   visit: VisitEvent;
+  modelDownloadProgress: ModelDownloadProgressEvent;
+  modelDownloadDone: ModelDownloadProgressEvent;
 }
 
 export type AmbientEventName = keyof AmbientEventMap;
@@ -288,6 +350,14 @@ export interface ContactsNamespace {
   stopMonitoring(): Promise<void>;
 }
 
+export interface ModelsNamespace {
+  list(): Promise<ModelListResult>;
+  startDownload(options: ModelDownloadOptions): Promise<void>;
+  cancelDownload(options: { id: string }): Promise<void>;
+  deleteModel(options: { id: string }): Promise<void>;
+  verifyModel(options: { id: string }): Promise<ModelVerifyResult>;
+}
+
 export interface AmbientAiFacade {
   audio: AudioNamespace;
   sound: SoundNamespace;
@@ -302,6 +372,7 @@ export interface AmbientAiFacade {
   health: HealthNamespace;
   battery: BatteryNamespace;
   contacts: ContactsNamespace;
+  models: ModelsNamespace;
   addListener<K extends AmbientEventName>(
     eventName: K,
     listenerFunc: (event: AmbientEventMap[K]) => void,

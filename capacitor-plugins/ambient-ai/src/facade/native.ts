@@ -1,7 +1,13 @@
-import { registerPlugin } from '@capacitor/core';
+import { registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 
 import { AudioCaptureWeb } from './audio-capture';
 import type { AudioCapturePlugin } from './audio-capture';
+import type {
+  ModelDownloadOptions,
+  ModelDownloadProgressEvent,
+  ModelListResult,
+  ModelVerifyResult,
+} from './types';
 import { BatteryAdapter } from '../modules/battery/adapter';
 import type { CalendarPlugin } from '../modules/calendar/definitions';
 import { ContactsAdapter } from '../modules/contacts/adapter';
@@ -50,3 +56,48 @@ export const sensor = new SensorFusionAdapter();
 export const health = new HealthConnectAdapter();
 export const battery = new BatteryAdapter();
 export const contacts = new ContactsAdapter();
+
+interface AmbientModelsPlugin {
+  listModels(): Promise<ModelListResult>;
+  startModelDownload(options: ModelDownloadOptions): Promise<void>;
+  cancelModelDownload(options: { id: string }): Promise<void>;
+  deleteModel(options: { id: string }): Promise<void>;
+  verifyModel(options: { id: string }): Promise<ModelVerifyResult>;
+  addListener(
+    eventName: 'modelDownloadProgress' | 'modelDownloadDone',
+    listenerFunc: (event: ModelDownloadProgressEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  removeAllListeners(): Promise<void>;
+}
+
+class AmbientModelsWeb implements AmbientModelsPlugin {
+  async listModels(): Promise<ModelListResult> {
+    return { profiles: [], statuses: [] };
+  }
+
+  async startModelDownload(): Promise<void> {
+    throw new Error('AmbientModels.startDownload is unavailable on web');
+  }
+
+  async cancelModelDownload(): Promise<void> {
+    throw new Error('AmbientModels.cancelDownload is unavailable on web');
+  }
+
+  async deleteModel(): Promise<void> {
+    throw new Error('AmbientModels.deleteModel is unavailable on web');
+  }
+
+  async verifyModel(): Promise<ModelVerifyResult> {
+    throw new Error('AmbientModels.verifyModel is unavailable on web');
+  }
+
+  async addListener(): Promise<PluginListenerHandle> {
+    return { remove: async () => {} };
+  }
+
+  async removeAllListeners(): Promise<void> {}
+}
+
+export const models = registerPlugin<AmbientModelsPlugin>('AmbientModels', {
+  web: () => Promise.resolve(new AmbientModelsWeb()),
+});

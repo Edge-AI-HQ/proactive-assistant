@@ -201,9 +201,10 @@ services:
   # sees same-origin requests (no CORS preflight).
   frontend:
     build:
-      context: ./proactive-ai-frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./proactive-ai-frontend/Dockerfile
       args:
+        WORKDIR: proactive-ai-frontend
         VITE_PIN_API_URL: ${VITE_PIN_API_URL:-http://localhost:8000}
         VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
         VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY:-}
