@@ -118,3 +118,5 @@ MEMO.md
 
 # Personal per-developer Claude instructions (not checked in)
 CLAUDE.local.md
+.factory
+capacitor-plugins/ambient-ai/.build
