@@ -10,6 +10,11 @@
 import type { PersonalSignalInput } from "@/lib/devices";
 import { isNative } from "@/lib/platform";
 import { SignalBuffer } from "./buffer";
+import {
+  ALL_SOURCE_KEYS,
+  DEFAULT_AUTO_START_SOURCES,
+  type SourceKey,
+} from "./keys";
 import { SIGNAL_KINDS } from "./kinds";
 import {
   MemoryOutboxStore, SqliteOutboxStore,
@@ -23,12 +28,8 @@ import { SoundClassifierSource } from "./sources/sound-classifier";
 import type { AmbientSource, SourceContext } from "./sources/types";
 import { VisitSource } from "./sources/visit";
 
-export type SourceKey =
-  | "sound_classifier"
-  | "visit"
-  | "activity"
-  | "location"
-  | "health";
+export { ALL_SOURCE_KEYS, DEFAULT_AUTO_START_SOURCES };
+export type { SourceKey };
 
 export interface SourceStatus {
   key: SourceKey;
@@ -50,6 +51,7 @@ export interface RuntimeStatus {
   lastDrainTs: number | null;
   lastSuccessfulDrainTs: number | null;
   lastIngestError: string | null;
+  uploadsLocked: boolean;
 }
 
 class AmbientRuntime {
@@ -75,6 +77,7 @@ class AmbientRuntime {
     // SQLite plugin's web path is heavy to set up.
     this.outbox = isNative ? new SqliteOutboxStore() : new MemoryOutboxStore();
     this.scheduler = new AmbientSyncScheduler(this.outbox);
+    this.scheduler.setUploadsLocked(loadUploadsLocked());
     this.buffer = new SignalBuffer((batch) => this.flushBatch(batch));
     this.statusBySource = new Map();
 
@@ -222,7 +225,16 @@ class AmbientRuntime {
       lastDrainTs: schedulerStatus.lastDrainTs,
       lastSuccessfulDrainTs: schedulerStatus.lastSuccessTs,
       lastIngestError: this.lastIngestError,
+      uploadsLocked: schedulerStatus.uploadsLocked,
     };
+  }
+
+  setUploadsLocked(value: boolean): void {
+    const next = !!value;
+    if (this.scheduler.isUploadsLocked() === next) return;
+    this.scheduler.setUploadsLocked(next);
+    saveUploadsLocked(next);
+    this.notify();
   }
 
   subscribe(listener: () => void): () => void {
@@ -283,18 +295,6 @@ class AmbientRuntime {
   }
 }
 
-const DEFAULT_AUTO_START_SOURCES: SourceKey[] = [
-  "sound_classifier",
-  "visit",
-  "activity",
-  "location",
-];
-
-const ALL_SOURCE_KEYS: SourceKey[] = [
-  ...DEFAULT_AUTO_START_SOURCES,
-  "health",
-];
-
 const SOURCE_TO_KIND: Record<SourceKey, string> = {
   sound_classifier: SIGNAL_KINDS.soundClassification,
   visit: SIGNAL_KINDS.visit,
@@ -304,6 +304,27 @@ const SOURCE_TO_KIND: Record<SourceKey, string> = {
 };
 
 const OPT_OUT_STORAGE_KEY = "pin.ambient.optOutSources";
+const UPLOADS_LOCKED_STORAGE_KEY = "pin.ambient.uploadsLocked";
+
+function loadUploadsLocked(): boolean {
+  try {
+    return localStorage.getItem(UPLOADS_LOCKED_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function saveUploadsLocked(locked: boolean): void {
+  try {
+    if (locked) {
+      localStorage.setItem(UPLOADS_LOCKED_STORAGE_KEY, "1");
+    } else {
+      localStorage.removeItem(UPLOADS_LOCKED_STORAGE_KEY);
+    }
+  } catch {
+    /* ignore */
+  }
+}
 
 function loadOptOutSources(): Set<SourceKey> {
   try {

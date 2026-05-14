@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Sparkles, MapPin, Plus, X, User as UserIcon,
-  Mic, Send, History, Pencil, Save,
+  Mic, Send, History, Pencil, Save, Cpu,
   Leaf, Wind, Flame, Feather, MessageCircle, Target, Sun, HeartPulse, Moon, Bell, BellRing,
   type LucideIcon,
 } from "lucide-react";
@@ -14,9 +14,15 @@ import {
   DrawerDescription,
 } from "@/components/ui/drawer";
 import { Slider } from "@/components/ui/slider";
+import { isNative } from "@/lib/platform";
 import GoalsView from "./GoalsView";
 
-const TABS = ["Personality", "Goals", "World Model", "Prompt"] as const;
+// AmbientModelsPanel pulls in @pin/capacitor-ambient-ai, which is
+// rollup-external for the web build. Load it lazily and only mount on
+// native so the web bundle never references the bare specifier.
+const AmbientModelsPanel = lazy(() => import("@/components/AmbientModelsPanel"));
+
+const TABS = ["Personality", "Goals", "World Model", "Prompt", "Models"] as const;
 
 /* ── Personality dimensions (mirrors Onboarding) ── */
 type DimensionId = "proactivity" | "communication" | "focus" | "intervention";
@@ -412,6 +418,51 @@ export default function ControlPanel() {
       )}
 
       {activeTab === "World Model" && <WorldModelTab />}
+
+      {activeTab === "Models" && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="space-y-3"
+        >
+          <div className="px-1">
+            <div className="flex items-center gap-2 mb-1">
+              <Cpu size={15} strokeWidth={1.8} className="text-foreground/55" />
+              <h2 className="text-base font-semibold text-foreground">On-device models</h2>
+            </div>
+            <p className="text-[12px] text-foreground/55 leading-relaxed">
+              Manage the whisper & llama models PIN AI uses for offline
+              speech recognition and on-device reasoning. Downloads stay
+              cached until you delete them; verifying runs a quick
+              llama.cpp inference (LLM) or magic-header check (ASR).
+            </p>
+          </div>
+
+          {isNative ? (
+            <Suspense
+              fallback={
+                <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-4 text-[11px] text-foreground/45">
+                  Loading model manifest…
+                </div>
+              }
+            >
+              <AmbientModelsPanel />
+            </Suspense>
+          ) : (
+            <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-4 text-[12px] text-foreground/60 leading-relaxed">
+              On-device models are only available inside the iOS app.
+              Open this page in the native build to download, verify, or
+              delete the whisper / llama profiles.
+            </div>
+          )}
+
+          <p className="text-[11px] text-foreground/45 leading-snug px-1">
+            Models are stored locally and never re-uploaded. If a download
+            fails, the plugin automatically falls back to the secondary
+            mirror.
+          </p>
+        </motion.div>
+      )}
     </div>
   );
 }

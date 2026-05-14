@@ -1,14 +1,20 @@
-import { useState, useEffect, forwardRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, forwardRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import type { TranscriptReadyEvent } from "@pin/capacitor-ambient-ai";
+import type { PluginListenerHandle } from "@capacitor/core";
+import { isNative } from "@/lib/platform";
 import {
   Radio, Smartphone, Watch, Glasses, Headphones, Camera, Laptop,
   MapPin, Compass, Mic, Activity, Wifi,
   Briefcase, Stethoscope, Coffee, BookOpen, Music,
   Lightbulb, Sparkles, Clock, Plus, ChevronRight, X,
   Phone, Footprints, Sun, Waves, UtensilsCrossed, Target,
-  Users, Pill, Soup, Minimize2, Expand,
+  Users, Pill, Soup, Minimize2, Expand, Lock, Unlock,
   type LucideIcon,
 } from "lucide-react";
+import { useUserSettings } from "@/hooks/useUserSettings";
+import { ALL_SOURCE_KEYS, type SourceKey } from "@/services/ambient/keys";
+import type { RuntimeStatus } from "@/services/ambient";
 
 
 interface Device {
@@ -46,6 +52,60 @@ export interface LiveSession {
   startedAt: string; // human readable
   signals: string[]; // chips
   assists: LiveAssistItem[];
+}
+
+interface LiveAssistMessage {
+  id: string;
+  time: string;
+  text: string;
+  source?: string;
+}
+
+interface LiveSessionData {
+  captureSessionId: string;
+  startedAt: number;
+  messages: LiveAssistMessage[];
+}
+
+const MAX_LIVE_MESSAGES = 30;
+const LIVE_SESSION_TITLE_MAX = 64;
+
+function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const m = String(Math.floor(total / 60)).padStart(2, "0");
+  const s = String(total % 60).padStart(2, "0");
+  return `+${m}:${s}`;
+}
+
+function formatStartTimestamp(ts: number): string {
+  return new Date(ts).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function appendTranscript(
+  prev: LiveSessionData | null,
+  event: TranscriptReadyEvent,
+): LiveSessionData {
+  const text = event.text.trim();
+  const isNewSession = !prev || prev.captureSessionId !== event.captureSessionId;
+  const startedAt = isNewSession ? Date.now() : prev!.startedAt;
+  const elapsed = Math.max(0, Date.now() - startedAt);
+  const message: LiveAssistMessage = {
+    id: event.burstId || `${event.captureSessionId}:${Date.now()}`,
+    time: formatElapsed(elapsed),
+    text,
+    source: event.provider,
+  };
+  const messages = isNewSession
+    ? [message]
+    : [...prev!.messages, message].slice(-MAX_LIVE_MESSAGES);
+  return {
+    captureSessionId: event.captureSessionId,
+    startedAt,
+    messages,
+  };
 }
 
 export const LIVE_SCENARIOS: LiveSession[] = [
@@ -196,14 +256,163 @@ interface AmbientViewProps {
 }
 
 export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHandled, onOpenFullscreen }: AmbientViewProps = {}) {
-  const [ambientOn, setAmbientOn] = useState(true);
+  const { settings, patch } = useUserSettings();
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
+  const [togglePending, setTogglePending] = useState(false);
   const [liveIndex, setLiveIndex] = useState(0);
   const [view, setView] = useState<"timeline" | "devices">("timeline");
+  const [liveSessionData, setLiveSessionData] = useState<LiveSessionData | null>(null);
+  const startedAtRef = useRef<number | null>(null);
 
   const [liveDismissed, setLiveDismissed] = useState(false);
   const [previewVisibleCount, setPreviewVisibleCount] = useState(1);
   const connectedCount = DEVICES.filter((d) => d.connected).length;
-  const liveSession = ambientOn && !liveDismissed ? LIVE_SCENARIOS[liveIndex] : null;
+
+  // Reflect server-side consent first; fall back to live runtime state
+  // before settings hydrate so the hero doesn't flicker on mount.
+  const consentOn = settings
+    ? Object.values(settings.ambientSources ?? {}).some((c) => c?.enabled === true)
+    : null;
+  const runtimeOn = runtimeStatus
+    ? runtimeStatus.sources.some((s) => s.enabled)
+    : false;
+  const ambientOn = consentOn ?? runtimeOn;
+  const uploadsLocked = runtimeStatus?.uploadsLocked ?? false;
+  const firstSourceError =
+    runtimeStatus?.sources.find((s) => s.lastError)?.lastError ?? null;
+
+  // Subscribe to the ambient runtime via dynamic import: the runtime
+  // module statically depends on @pin/capacitor-ambient-ai (and friends),
+  // which is rollup-external on the web build. Keeping the load behind
+  // a runtime ``isNative`` guard means the web chunk is never fetched
+  // at all and the main bundle stays free of bare native specifiers.
+  useEffect(() => {
+    if (!isNative) return;
+    let cancelled = false;
+    let unsubscribe: (() => void) | null = null;
+    void (async () => {
+      try {
+        const { getAmbientRuntime } = await import("@/services/ambient");
+        if (cancelled) return;
+        const rt = getAmbientRuntime();
+        setRuntimeStatus(rt.status());
+        unsubscribe = rt.subscribe(() => setRuntimeStatus(rt.status()));
+      } catch {
+        // Module load failed; UI keeps the null status fallback.
+      }
+    })();
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, []);
+
+  // Subscribe to plugin transcripts while ambient is on so the Live card
+  // shows real captured speech instead of the demo scenarios. Native
+  // only: the @pin/capacitor-ambient-ai module is rollup-external for
+  // the web build, so we behind both a runtime ``isNative`` guard and
+  // a dynamic import so web bundles never reach the bare specifier.
+  useEffect(() => {
+    if (!ambientOn || !isNative) {
+      setLiveSessionData(null);
+      startedAtRef.current = null;
+      return;
+    }
+    let cancelled = false;
+    let handle: PluginListenerHandle | null = null;
+    void (async () => {
+      try {
+        const { AmbientAi } = await import("@pin/capacitor-ambient-ai");
+        if (cancelled) return;
+        handle = await AmbientAi.addListener("transcriptReady", (event) => {
+          if (cancelled) return;
+          setLiveSessionData((prev) => appendTranscript(prev, event));
+        });
+      } catch {
+        // Plugin not registered or module load failed; live preview
+        // falls back to the mock scenarios below.
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (handle) void handle.remove();
+    };
+  }, [ambientOn]);
+
+  const handleAmbientToggle = useCallback(async () => {
+    if (togglePending) return;
+    const next = !ambientOn;
+    setTogglePending(true);
+    try {
+      const consentPatch = Object.fromEntries(
+        ALL_SOURCE_KEYS.map((key) => [key, { enabled: next }]),
+      );
+      const updated = await patch({ ambientSources: consentPatch });
+      if (!isNative) return;
+      const lifecycle = await import("@/services/ambient/lifecycle");
+      if (next) {
+        const enabledSources = updated
+          ? (Object.entries(updated.ambientSources ?? {})
+              .filter(([, v]) => v?.enabled === true)
+              .map(([k]) => k as SourceKey))
+          : ALL_SOURCE_KEYS;
+        lifecycle.startAmbientUpload({ enabledSources });
+      } else {
+        await lifecycle.stopAmbientUpload();
+      }
+    } finally {
+      setTogglePending(false);
+    }
+  }, [ambientOn, patch, togglePending]);
+
+  const handleLockToggle = useCallback(() => {
+    if (!isNative) return;
+    void (async () => {
+      try {
+        const { getAmbientRuntime } = await import("@/services/ambient");
+        getAmbientRuntime().setUploadsLocked(!uploadsLocked);
+      } catch {
+        // ignore — UI state stays in sync via the subscription effect.
+      }
+    })();
+  }, [uploadsLocked]);
+
+  const realSession = useMemo<LiveSession | null>(() => {
+    if (!ambientOn || !liveSessionData || liveSessionData.messages.length === 0) {
+      return null;
+    }
+    const last = liveSessionData.messages[liveSessionData.messages.length - 1];
+    const title = last.text.length > LIVE_SESSION_TITLE_MAX
+      ? `${last.text.slice(0, LIVE_SESSION_TITLE_MAX - 1).trimEnd()}…`
+      : last.text;
+    const provider = last.source ?? "device";
+    return {
+      icon: Mic,
+      kind: "Voice session",
+      title: title || "Live transcript",
+      location: "On device · captured locally",
+      device: "Microphone",
+      startedAt: formatStartTimestamp(liveSessionData.startedAt),
+      signals: [
+        `${liveSessionData.messages.length} transcript${
+          liveSessionData.messages.length === 1 ? "" : "s"
+        }`,
+        `Provider: ${provider}`,
+      ],
+      assists: liveSessionData.messages.map((m) => ({
+        time: m.time,
+        kind: "context" as const,
+        text: m.text,
+        source: m.source,
+      })),
+    };
+  }, [ambientOn, liveSessionData]);
+
+  // Real plugin transcripts win; non-native preview falls back to the
+  // mock scenarios so the demo still looks alive in the browser.
+  const liveSession = ambientOn && !liveDismissed
+    ? (realSession ?? (!isNative ? LIVE_SCENARIOS[liveIndex] : null))
+    : null;
 
   // Auto-open fullscreen when triggered from outside (e.g., Constellation Live row)
   useEffect(() => {
@@ -214,20 +423,29 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
   }, [autoOpenLive, liveSession, onOpenFullscreen, onAutoOpenHandled]);
 
 
-  // Cycle through live scenarios every 12s for demo
+  // Cycle through mock live scenarios for the web demo. Native preview
+  // sticks to whatever the plugin emits.
   useEffect(() => {
-    if (!ambientOn) return;
+    if (!ambientOn || isNative || realSession) return;
     const t = setInterval(() => {
       setLiveIndex((i) => (i + 1) % LIVE_SCENARIOS.length);
       setLiveDismissed(false);
     }, 12000);
     return () => clearInterval(t);
-  }, [ambientOn]);
+  }, [ambientOn, realSession]);
 
   // Reset preview stream when the active session changes
   useEffect(() => {
     setPreviewVisibleCount(1);
-  }, [liveIndex, ambientOn, liveDismissed]);
+  }, [liveIndex, ambientOn, liveDismissed, liveSessionData?.captureSessionId]);
+
+  // Real transcripts arrive already "revealed" — don't gate them
+  // behind the 2.6s mock pacing.
+  useEffect(() => {
+    if (realSession && liveSessionData) {
+      setPreviewVisibleCount(liveSessionData.messages.length);
+    }
+  }, [realSession, liveSessionData]);
 
   // Stream new assist messages into the preview every 2.6s
   useEffect(() => {
@@ -290,34 +508,62 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
             )}
           </div>
 
-          <div>
+          <div className="min-w-0">
             <p className="text-[14px] font-semibold text-foreground leading-tight">
               Ambient is {ambientOn ? "on" : "off"}
             </p>
-            <p className="text-[11px] text-foreground/55 leading-tight mt-0.5">
-              {ambientOn
-                ? "Listening, sensing, understanding context"
-                : "AI is paused from sensing your surroundings"}
+            <p className="text-[11px] text-foreground/55 leading-tight mt-0.5 truncate">
+              {!ambientOn
+                ? "AI is paused from sensing your surroundings"
+                : uploadsLocked
+                  ? "Sensing locally — uploads paused"
+                  : firstSourceError
+                    ? firstSourceError
+                    : "Listening, sensing, understanding context"}
             </p>
           </div>
         </div>
 
-        {/* Toggle */}
-        <button
-          onClick={() => setAmbientOn((v) => !v)}
-          className={`relative w-12 h-7 rounded-full transition-colors shrink-0 ${
-            ambientOn ? "bg-foreground" : "bg-foreground/20"
-          }`}
-          aria-label="Toggle ambient"
-        >
-          <motion.span
-            layout
-            transition={{ type: "spring", stiffness: 500, damping: 35 }}
-            className={`absolute top-0.5 w-6 h-6 rounded-full bg-background shadow-sm ${
-              ambientOn ? "left-[22px]" : "left-0.5"
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Soft upload lock — keeps local capture going while suspending sync. */}
+          {ambientOn && (
+            <button
+              onClick={handleLockToggle}
+              className={`w-9 h-9 rounded-full flex items-center justify-center border transition-colors ${
+                uploadsLocked
+                  ? "bg-foreground text-background border-foreground"
+                  : "bg-foreground/[0.04] text-foreground/60 hover:bg-foreground/[0.08] hover:text-foreground border-foreground/15"
+              }`}
+              aria-label={uploadsLocked ? "Unlock uploads" : "Lock uploads"}
+              title={uploadsLocked ? "Uploads locked" : "Lock uploads"}
+            >
+              {uploadsLocked ? (
+                <Lock size={14} strokeWidth={2.2} />
+              ) : (
+                <Unlock size={14} strokeWidth={2.2} />
+              )}
+            </button>
+          )}
+
+          {/* Toggle */}
+          <button
+            onClick={() => void handleAmbientToggle()}
+            disabled={togglePending}
+            className={`relative w-12 h-7 rounded-full transition-colors shrink-0 disabled:opacity-60 disabled:cursor-progress ${
+              ambientOn ? "bg-foreground" : "bg-foreground/20"
             }`}
-          />
-        </button>
+            aria-label="Toggle ambient"
+            aria-busy={togglePending}
+          >
+            <motion.span
+              layout
+              transition={{ type: "spring", stiffness: 500, damping: 35 }}
+              className={`absolute top-0.5 w-6 h-6 rounded-full bg-background shadow-sm ${
+                ambientOn ? "left-[22px]" : "left-0.5"
+              }`}
+            />
+          </button>
+        </div>
       </div>
 
       {/* ── LIVE SESSION (only when ambient on + active) ── */}

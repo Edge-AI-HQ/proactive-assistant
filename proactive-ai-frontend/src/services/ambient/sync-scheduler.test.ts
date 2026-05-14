@@ -82,6 +82,63 @@ describe("AmbientSyncScheduler", () => {
     expect(await outbox.count()).toBe(1);
   });
 
+  test("short-circuits drain when uploads are globally locked", async () => {
+    const outbox = new MemoryOutboxStore();
+    await outbox.enqueue([
+      {
+        id: "item-lock",
+        kind: "session_summary",
+        title: "Locked",
+        summary: "should stay queued while uploads are locked",
+        dedupe_key: "audio:lock",
+      },
+    ]);
+    const scheduler = new AmbientSyncScheduler(outbox);
+    scheduler.setUploadsLocked(true);
+
+    const result = await scheduler.drain();
+
+    expect(result.attempted).toBe(0);
+    expect(result.synced).toBe(0);
+    expect(mockedIngestBatch).not.toHaveBeenCalled();
+    expect(await outbox.count()).toBe(1);
+    const status = scheduler.status();
+    expect(status.uploadsLocked).toBe(true);
+    expect(status.lastDrainTs).not.toBeNull();
+    expect(status.lastSuccessTs).toBeNull();
+  });
+
+  test("resumes draining after uploads are unlocked", async () => {
+    mockedIngestBatch.mockResolvedValueOnce({
+      ok: true,
+      accepted: 1,
+      inserted: 1,
+      ignored: 0,
+      results: [{ id: "item-unlock", dedupe_key: "audio:unlock", status: "inserted" }],
+    });
+    const outbox = new MemoryOutboxStore();
+    await outbox.enqueue([
+      {
+        id: "item-unlock",
+        kind: "session_summary",
+        title: "Unlock",
+        summary: "should upload once the lock is released",
+        dedupe_key: "audio:unlock",
+      },
+    ]);
+    const scheduler = new AmbientSyncScheduler(outbox);
+    scheduler.setUploadsLocked(true);
+    await scheduler.drain();
+    expect(mockedIngestBatch).not.toHaveBeenCalled();
+
+    scheduler.setUploadsLocked(false);
+    const result = await scheduler.drain();
+
+    expect(result.synced).toBe(1);
+    expect(await outbox.count()).toBe(0);
+    expect(scheduler.status().uploadsLocked).toBe(false);
+  });
+
   test("marks batch failed when ingest throws", async () => {
     mockedIngestBatch.mockRejectedValueOnce(new Error("network down"));
     const outbox = new MemoryOutboxStore();
