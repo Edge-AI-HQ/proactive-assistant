@@ -200,6 +200,34 @@ export function useCardActions({ onOpenChat }: UseCardActionsOptions) {
     }
   }, []);
 
+  // ── Pure local-state mutators ── 给 ChatTimeline 这类自己 POST /feedback
+  // 的组件用，只用来保持 NOW 视图卡片状态环显示与 timeline 一致。
+  const markDismissed = useCallback(
+    (id: string) => setDismissedIds((s) => new Set(s).add(id)),
+    [],
+  );
+  const markConfirmed = useCallback(
+    (id: string) => setConfirmedIds((s) => new Set(s).add(id)),
+    [],
+  );
+  const markProcessing = useCallback(
+    (id: string) => setProcessingIds((s) => new Set(s).add(id)),
+    [],
+  );
+  const markDone = useCallback((id: string) => {
+    setDoneIds((s) => new Set(s).add(id));
+    setProcessingIds((s) => {
+      if (!s.has(id)) return s;
+      const n = new Set(s);
+      n.delete(id);
+      return n;
+    });
+  }, []);
+  const markChatted = useCallback(
+    (id: string) => persistChatted(id),
+    [persistChatted],
+  );
+
   return {
     processingIds,
     doneIds,
@@ -213,5 +241,10 @@ export function useCardActions({ onOpenChat }: UseCardActionsOptions) {
     complete,
     openChat,
     textFeedback,
+    markDismissed,
+    markConfirmed,
+    markProcessing,
+    markDone,
+    markChatted,
   };
 }
