@@ -16,6 +16,31 @@ export const PIN_API_BASE: string = isNative
   ? (import.meta.env.VITE_PIN_API_URL as string)
   : "";
 
+function isNgrokUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return host.endsWith(".ngrok-free.dev")
+      || host.endsWith(".ngrok.app")
+      || host.endsWith(".ngrok.io");
+  } catch {
+    return false;
+  }
+}
+
+const nativeBackendHeaders: Record<string, string> =
+  isNative && isNgrokUrl(PIN_API_BASE)
+    ? { "ngrok-skip-browser-warning": "1" }
+    : {};
+
+export function pinApiRequestHeaders(
+  headers: Record<string, string> = {},
+): Record<string, string> {
+  return {
+    ...nativeBackendHeaders,
+    ...headers,
+  };
+}
+
 /**
  * Set CSS custom property for safe-area bottom inset.
  * env(safe-area-inset-bottom) returns 0 in Capacitor WKWebView,

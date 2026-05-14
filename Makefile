@@ -221,12 +221,13 @@ deploy-litellm-prod: ## Deploy LiteLLM to prod
 
 # ── Mobile (Capacitor) ──
 # Backend selection: NGROK=<url> | DEV=1 (fly dev) | PROD=1 (fly prod) |
-# default = local pinai-web at host LAN IP:8000.
+# default = project .env PAI_API_URL. No LAN-IP fallback: mobile packages
+# should keep working off the current Wi-Fi or fail loudly.
 
 ngrok: ## Expose local pinai-web (:8000) over public ngrok for mobile dev
 	@command -v ngrok >/dev/null 2>&1 || { echo "ngrok not found. brew install ngrok"; exit 1; }
 	@echo "Starting ngrok → http://localhost:8000"
-	@echo "On the phone: paste the printed https URL into Settings → API Base URL."
+	@echo "For mobile: rebuild with NGROK=<printed https URL> make ios, or put it in ./.env as PAI_API_URL."
 	@ngrok http 8000
 
 # ── Daytona sandbox tunnel ──
@@ -296,6 +297,7 @@ tunnel-status: ## Show whether the tunnel is up and at what URL
 
 ios: ensure-env ## Build frontend, sync iOS, open Xcode
 	@set -a && . ./pinai-agents/.env && set +a && \
+	MOBILE_TUNNEL_URL=$$(sed -n 's/^PAI_API_URL=//p' .env 2>/dev/null | tail -n 1 | sed -e 's/^"//' -e 's/"$$//'); \
 	if [ -n "$(NGROK)" ]; then \
 		echo "Using ngrok at $(NGROK)"; VITE_PIN_API_URL="$(NGROK)"; \
 	elif [ "$(PROD)" = "1" ]; then \
@@ -304,12 +306,12 @@ ios: ensure-env ## Build frontend, sync iOS, open Xcode
 		VITE_PIN_API_URL="$$PROD_URL"; \
 	elif [ "$(DEV)" = "1" ]; then \
 		echo "Using fly dev at $$VITE_PIN_API_URL"; \
+	elif [ -n "$$MOBILE_TUNNEL_URL" ]; then \
+		VITE_PIN_API_URL="$$MOBILE_TUNNEL_URL"; \
+		echo "Using local tunnel at $$VITE_PIN_API_URL (from ./.env PAI_API_URL)"; \
 	else \
-		LAN_IP=$$(ipconfig getifaddr en0); \
-		[ -z "$$LAN_IP" ] && LAN_IP=$$(ipconfig getifaddr en1); \
-		[ -z "$$LAN_IP" ] && { echo "Could not detect LAN IP"; exit 1; }; \
-		VITE_PIN_API_URL="http://$$LAN_IP:8000"; \
-		echo "Using local pinai-web at $$VITE_PIN_API_URL"; \
+		echo "Missing mobile backend URL. Set PAI_API_URL in ./.env, pass NGROK=<url>, or use DEV=1/PROD=1."; \
+		exit 1; \
 	fi; \
 	cd proactive-ai-frontend && \
 		VITE_CAPACITOR=1 VITE_PIN_API_URL="$$VITE_PIN_API_URL" \
@@ -323,6 +325,7 @@ ios: ensure-env ## Build frontend, sync iOS, open Xcode
 android: ensure-env ## Build frontend, sync Android, install on USB device
 	@set -e; \
 	set -a && . ./pinai-agents/.env && set +a; \
+	MOBILE_TUNNEL_URL=$$(sed -n 's/^PAI_API_URL=//p' .env 2>/dev/null | tail -n 1 | sed -e 's/^"//' -e 's/"$$//'); \
 	if [ -n "$(NGROK)" ]; then \
 		VITE_PIN_API_URL="$(NGROK)"; \
 	elif [ "$(PROD)" = "1" ]; then \
@@ -331,11 +334,12 @@ android: ensure-env ## Build frontend, sync Android, install on USB device
 		VITE_PIN_API_URL="$$PROD_URL"; \
 	elif [ "$(DEV)" = "1" ]; then \
 		echo "Using fly dev at $$VITE_PIN_API_URL"; \
+	elif [ -n "$$MOBILE_TUNNEL_URL" ]; then \
+		VITE_PIN_API_URL="$$MOBILE_TUNNEL_URL"; \
+		echo "Using local tunnel at $$VITE_PIN_API_URL (from ./.env PAI_API_URL)"; \
 	else \
-		LAN_IP=$$(ipconfig getifaddr en0); \
-		[ -z "$$LAN_IP" ] && LAN_IP=$$(ipconfig getifaddr en1); \
-		[ -z "$$LAN_IP" ] && { echo "Could not detect LAN IP"; exit 1; }; \
-		VITE_PIN_API_URL="http://$$LAN_IP:8000"; \
+		echo "Missing mobile backend URL. Set PAI_API_URL in ./.env, pass NGROK=<url>, or use DEV=1/PROD=1."; \
+		exit 1; \
 	fi; \
 	cd proactive-ai-frontend && \
 		VITE_CAPACITOR=1 VITE_PIN_API_URL="$$VITE_PIN_API_URL" \

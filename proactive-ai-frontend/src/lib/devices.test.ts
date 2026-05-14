@@ -41,6 +41,10 @@ vi.mock("./api", () => ({
 }));
 vi.mock("./platform", () => ({
   PIN_API_BASE: "",
+  pinApiRequestHeaders: (headers: Record<string, string> = {}) => ({
+    ...(platformState.isNative ? { "ngrok-skip-browser-warning": "1" } : {}),
+    ...headers,
+  }),
   get isNative() {
     return platformState.isNative;
   },
@@ -166,6 +170,9 @@ describe("ensureDevice", () => {
     expect(body.metadata?.device_fingerprint_source).toBe("capacitor-device-id-v1");
     expect(body.metadata?.hardware_signature).toContain("iPhone15,3");
     expect(body.metadata?.hardware_signature).not.toContain("Smile's iPhone");
+    expect((call[1] as RequestInit).headers).toMatchObject({
+      "ngrok-skip-browser-warning": "1",
+    });
   });
 
   test("propagates server error so caller can decide retry policy", async () => {

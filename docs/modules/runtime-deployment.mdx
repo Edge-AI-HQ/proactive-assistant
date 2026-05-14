@@ -132,7 +132,12 @@ Mobile(Capacitor):
 ```bash
 make ios            # build frontend(VITE_CAPACITOR=1),sync iOS,打开 Xcode
 make android        # 同理,装到 USB Android 设备
-# 后端选择:NGROK=<url> | DEV=1 | PROD=1 | 默认本机 LAN IP:8000
+# 后端选择:
+#   NGROK=<url> make ios      # 临时公网 URL,优先级最高
+#   PROD=1 make ios           # fly prod
+#   DEV=1 make ios            # fly dev
+#   make ios                  # 默认优先用 ./.env 的 PAI_API_URL(ngrok)
+#                             # 没配 PAI_API_URL 时直接失败,不退回 LAN IP
 ```
 
 ## Secrets 与环境变量
@@ -278,7 +283,7 @@ cd proactive-ai-frontend && npm test                 # vitest
 - LiteLLM budget 报错先看 LiteLLM DB 里 spend / max_budget,不一定是 virtual key 缺;`web/services/litellm_provisioning.py` 有 lazy provisioning 逻辑。
 - LangGraph checkpointer 在 `langgraph` schema,跟 `pai_*` 物理同库逻辑分离;清 chat 状态 `TRUNCATE langgraph.<tables>` 而不是删 `pai_chat_threads`。
 - 改 docker-compose 后只 `make restart` 不够,要 `make down && make up` 才会让 compose 看到新声明。
-- `make ios` / `make android` 选后端时,native shell 用绝对 URL(`VITE_PIN_API_URL`),本地默认填的是 LAN IP,换 WiFi 后需要重新 build。
+- `make ios` / `make android` 选后端时,native shell 用绝对 URL(`VITE_PIN_API_URL`)。本地移动端默认使用项目根目录 `./.env` 的 `PAI_API_URL`(ngrok),这样手机离开当前局域网后仍能访问本机 `pinai-web`;没配 `PAI_API_URL` 时直接失败,不退回 LAN IP。
 
 ## 相关模块
 
