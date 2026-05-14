@@ -1,5 +1,8 @@
-import { useState, useEffect, useCallback, forwardRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, forwardRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { AmbientAi, type TranscriptReadyEvent } from "@pin/capacitor-ambient-ai";
+import type { PluginListenerHandle } from "@capacitor/core";
+import { isNative } from "@/lib/platform";
 import {
   Radio, Smartphone, Watch, Glasses, Headphones, Camera, Laptop,
   MapPin, Compass, Mic, Activity, Wifi,
@@ -57,6 +60,60 @@ export interface LiveSession {
   startedAt: string; // human readable
   signals: string[]; // chips
   assists: LiveAssistItem[];
+}
+
+interface LiveAssistMessage {
+  id: string;
+  time: string;
+  text: string;
+  source?: string;
+}
+
+interface LiveSessionData {
+  captureSessionId: string;
+  startedAt: number;
+  messages: LiveAssistMessage[];
+}
+
+const MAX_LIVE_MESSAGES = 30;
+const LIVE_SESSION_TITLE_MAX = 64;
+
+function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const m = String(Math.floor(total / 60)).padStart(2, "0");
+  const s = String(total % 60).padStart(2, "0");
+  return `+${m}:${s}`;
+}
+
+function formatStartTimestamp(ts: number): string {
+  return new Date(ts).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function appendTranscript(
+  prev: LiveSessionData | null,
+  event: TranscriptReadyEvent,
+): LiveSessionData {
+  const text = event.text.trim();
+  const isNewSession = !prev || prev.captureSessionId !== event.captureSessionId;
+  const startedAt = isNewSession ? Date.now() : prev!.startedAt;
+  const elapsed = Math.max(0, Date.now() - startedAt);
+  const message: LiveAssistMessage = {
+    id: event.burstId || `${event.captureSessionId}:${Date.now()}`,
+    time: formatElapsed(elapsed),
+    text,
+    source: event.provider,
+  };
+  const messages = isNewSession
+    ? [message]
+    : [...prev!.messages, message].slice(-MAX_LIVE_MESSAGES);
+  return {
+    captureSessionId: event.captureSessionId,
+    startedAt,
+    messages,
+  };
 }
 
 export const LIVE_SCENARIOS: LiveSession[] = [
@@ -214,15 +271,12 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
   const [togglePending, setTogglePending] = useState(false);
   const [liveIndex, setLiveIndex] = useState(0);
   const [view, setView] = useState<"timeline" | "devices">("timeline");
+  const [liveSessionData, setLiveSessionData] = useState<LiveSessionData | null>(null);
+  const startedAtRef = useRef<number | null>(null);
 
   const [liveDismissed, setLiveDismissed] = useState(false);
   const [previewVisibleCount, setPreviewVisibleCount] = useState(1);
   const connectedCount = DEVICES.filter((d) => d.connected).length;
-
-  useEffect(() => {
-    const rt = getAmbientRuntime();
-    return rt.subscribe(() => setRuntimeStatus(rt.status()));
-  }, []);
 
   // Reflect server-side consent first; fall back to live runtime state
   // before settings hydrate so the hero doesn't flicker on mount.
@@ -234,6 +288,38 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
   const uploadsLocked = runtimeStatus.uploadsLocked;
   const firstSourceError =
     runtimeStatus.sources.find((s) => s.lastError)?.lastError ?? null;
+
+  useEffect(() => {
+    const rt = getAmbientRuntime();
+    return rt.subscribe(() => setRuntimeStatus(rt.status()));
+  }, []);
+
+  // Subscribe to plugin transcripts while ambient is on so the Live card
+  // shows real captured speech instead of the demo scenarios.
+  useEffect(() => {
+    if (!ambientOn) {
+      setLiveSessionData(null);
+      startedAtRef.current = null;
+      return;
+    }
+    let cancelled = false;
+    let handle: PluginListenerHandle | null = null;
+    void (async () => {
+      try {
+        handle = await AmbientAi.addListener("transcriptReady", (event) => {
+          if (cancelled) return;
+          setLiveSessionData((prev) => appendTranscript(prev, event));
+        });
+      } catch {
+        // Non-native or plugin not registered; live preview falls back to
+        // the mock scenarios below.
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (handle) void handle.remove();
+    };
+  }, [ambientOn]);
 
   const handleAmbientToggle = useCallback(async () => {
     if (togglePending) return;
@@ -263,7 +349,42 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
     getAmbientRuntime().setUploadsLocked(!uploadsLocked);
   }, [uploadsLocked]);
 
-  const liveSession = ambientOn && !liveDismissed ? LIVE_SCENARIOS[liveIndex] : null;
+  const realSession = useMemo<LiveSession | null>(() => {
+    if (!ambientOn || !liveSessionData || liveSessionData.messages.length === 0) {
+      return null;
+    }
+    const last = liveSessionData.messages[liveSessionData.messages.length - 1];
+    const title = last.text.length > LIVE_SESSION_TITLE_MAX
+      ? `${last.text.slice(0, LIVE_SESSION_TITLE_MAX - 1).trimEnd()}…`
+      : last.text;
+    const provider = last.source ?? "device";
+    return {
+      icon: Mic,
+      kind: "Voice session",
+      title: title || "Live transcript",
+      location: "On device · captured locally",
+      device: "Microphone",
+      startedAt: formatStartTimestamp(liveSessionData.startedAt),
+      signals: [
+        `${liveSessionData.messages.length} transcript${
+          liveSessionData.messages.length === 1 ? "" : "s"
+        }`,
+        `Provider: ${provider}`,
+      ],
+      assists: liveSessionData.messages.map((m) => ({
+        time: m.time,
+        kind: "context" as const,
+        text: m.text,
+        source: m.source,
+      })),
+    };
+  }, [ambientOn, liveSessionData]);
+
+  // Real plugin transcripts win; non-native preview falls back to the
+  // mock scenarios so the demo still looks alive in the browser.
+  const liveSession = ambientOn && !liveDismissed
+    ? (realSession ?? (!isNative ? LIVE_SCENARIOS[liveIndex] : null))
+    : null;
 
   // Auto-open fullscreen when triggered from outside (e.g., Constellation Live row)
   useEffect(() => {
@@ -274,20 +395,29 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
   }, [autoOpenLive, liveSession, onOpenFullscreen, onAutoOpenHandled]);
 
 
-  // Cycle through live scenarios every 12s for demo
+  // Cycle through mock live scenarios for the web demo. Native preview
+  // sticks to whatever the plugin emits.
   useEffect(() => {
-    if (!ambientOn) return;
+    if (!ambientOn || isNative || realSession) return;
     const t = setInterval(() => {
       setLiveIndex((i) => (i + 1) % LIVE_SCENARIOS.length);
       setLiveDismissed(false);
     }, 12000);
     return () => clearInterval(t);
-  }, [ambientOn]);
+  }, [ambientOn, realSession]);
 
   // Reset preview stream when the active session changes
   useEffect(() => {
     setPreviewVisibleCount(1);
-  }, [liveIndex, ambientOn, liveDismissed]);
+  }, [liveIndex, ambientOn, liveDismissed, liveSessionData?.captureSessionId]);
+
+  // Real transcripts arrive already "revealed" — don't gate them
+  // behind the 2.6s mock pacing.
+  useEffect(() => {
+    if (realSession && liveSessionData) {
+      setPreviewVisibleCount(liveSessionData.messages.length);
+    }
+  }, [realSession, liveSessionData]);
 
   // Stream new assist messages into the preview every 2.6s
   useEffect(() => {
