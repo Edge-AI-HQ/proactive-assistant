@@ -1,3 +1,9 @@
+/**
+ * @deprecated 2026-05-14 — Replaced by `src/components/constellation/NowFeed`.
+ * AppShell-era floating-card layout; ConstellationLayout uses Sphere3DCards +
+ * its own NowFeed. Kept for fast rollback.
+ */
+
 import { useState, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Sparkles } from "lucide-react";

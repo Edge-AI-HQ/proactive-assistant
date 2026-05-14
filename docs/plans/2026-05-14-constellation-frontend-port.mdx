@@ -1,0 +1,1370 @@
+---
+title: "Constellation 前端整体迁移"
+description: "把 proactive-ai-frontend 的 UI 整体换成 Lovable Constellation 设计，卡片执行链路保持当前实现不变。"
+---
+
+# Constellation 前端整体迁移 Implementation Plan
+
+> **For agentic workers:** 用 Plan agent 或 Inline 模式按 task-by-task 执行；Steps 用 `- [ ]` checkbox 跟踪。
+
+**Goal:** 把 `proactive-ai-frontend` 当前的 `AppShell` UI 整体换成 Lovable repo `proactive-pin-ai` 的 Constellation 设计方案（NOW + 3D sphere + drawer + 多视图 shell），同时**完全保留**当前的卡片执行链路（drawer 点 Approve → POST `/api/feedback` → 在 `MainChatView` 里走 SSE chat-stream 执行）。
+
+**Architecture:** 在 `src/components/constellation/` 下新增一组组件（`ConstellationLayout`、`Sphere3DCards`、`NowFeed`、`CardDrawerDetail`、`AiSphere`、`AmbientView`、`AccountPanel`、`ConnectPanel`），用 `lib/cardAdapter.ts` 把现有 `IntentCard` 映射成 Lovable 的 `Intent` 形态，让视觉组件可以直接消费真实卡片。新增 `useCardActions` hook 把当前 `AppShell` 里的 confirm / dismiss / snooze / modify handler 抽出来复用。最后切 `App.tsx` 把 `<AppShell />` 换成 `<ConstellationLayout />`。
+
+**Tech Stack:** React 18 + Vite + Tailwind + framer-motion (^12.38.0)（已装） + vaul (^1.1.2)（已装） + lucide-react（已装）。**不引入** three.js / @react-three（Lovable 的 Sphere3DCards 用纯 DOM transform）、**不引入** react-router-dom（ConstellationLayout 走自己的 view state machine，跟现状一致）。
+
+**当前分支:** `proactive-ai-v3-UI`（从 `origin/proactive-ai-v3` 切，工作区干净）。**不存在** `src/components/constellation/`。
+
+---
+
+## 核心保留 / 替换决策
+
+**保留（一行不动）：**
+
+- `src/lib/api.ts`、`src/lib/supabase.ts`、`src/lib/platform.ts`
+- 所有 hooks：`useAuth`、`useCards`、`usePipeline`、`useActiveAgentRuns`、`useComposio`、`useUserSettings`、`useWeather`、`useMemories`、`useBrowserSession`
+- 整个 chat runtime：`MainChatView`、`CardChat`、`useProactiveChatRuntime`、`ToolStepCard`、`MarkdownContent`、`MessageActionBar`、`ReasoningBlock`、`BrowserPanel`、`BrowserView`
+- SSE envelope 解析、`/api/chat-stream/send`、`buildChatRequestBody`、session key prefix `"card-thread-"`
+- `/api/feedback` POST 的所有 payload（`card_action`、`text_feedback` 等）
+- 现有 `tailwind.config.js` 的颜色 token（aurora 是在 `index.css` 里增量加，不动 tailwind config）
+
+**替换（新建覆盖）：**
+
+- `src/App.tsx` 入口从 `<AppShell />` → `<ConstellationLayout />`
+- 卡片列表 / Sphere 视觉：从 `NowFeed.tsx`（旧）→ `constellation/Sphere3DCards.tsx` + `constellation/NowFeed.tsx`
+- 卡片详情 drawer 视觉：从 `CardDetailBody.tsx` → `constellation/CardDrawerDetail.tsx`
+- 顶层布局 + 菜单 + 视图切换：`AppShell.tsx` → `constellation/ConstellationLayout.tsx`
+- 中心球：现有 `AiSphere.tsx` 不删，新建 `constellation/AiSphere.tsx`（用 masked video，资源拷自 Lovable）
+
+**Hardcode（后端没接，先用静态数据）：**
+
+- AMBIENT 视图（实时位置 / focus / HRV 等）
+- ACCOUNT 视图的 billing UI（PlanPaymentForm 视觉，不接 Stripe）
+- CONNECT 视图：先展示静态 connector 卡片，"管理 connector" 按钮跳到现有 `ControlPanel`（真实 Composio）
+
+**不端口（Lovable 跟当前后端不兼容的部分）：**
+
+- Lovable 的 `ChatDetailView` 四种 mode（confirm / modify / done / steer）和 `ExecutionView`（mock setTimeout 步骤动画）—— **整套不要**。Approve 后直接进我们现有的 `MainChatView`。
+- Lovable 的 `Sphere3DCards` 卡片 status 自动 lifecycle（new→normal→processing→done 自动消失）—— **不要**，状态用 `/api/cards` + `/api/agent-runs/active` 真实状态。
+- `react-router-dom`、`@tanstack/react-query`、`three.js`、`recharts`、`sonner` 等 Lovable 装但我们没装的依赖。
+
+---
+
+## 文件结构
+
+**新增：**
+
+```
+proactive-ai-frontend/
+├── public/
+│   ├── sphere.mp4              # 拷自 Lovable
+│   └── sphere.webm             # 拷自 Lovable
+├── src/
+│   ├── types/
+│   │   └── constellation.ts    # Intent / DetailData / ExecutionStep / Artifact 类型
+│   ├── lib/
+│   │   └── cardAdapter.ts      # IntentCard → Intent
+│   ├── hooks/
+│   │   └── useCardActions.ts   # confirm / dismiss / snooze / modify / done 抽离
+│   └── components/
+│       └── constellation/
+│           ├── ConstellationLayout.tsx   # 顶层 shell，菜单 + 视图切换
+│           ├── AiSphere.tsx              # 中心 masked-video 球
+│           ├── Sphere3DCards.tsx         # 3D 旋转 Fibonacci 球
+│           ├── NowFeed.tsx               # 滚动卡片 feed (Constellation 版)
+│           ├── CardDrawerDetail.tsx      # drawer 详情面板
+│           ├── AmbientView.tsx           # 实时信号面板（hardcode）
+│           ├── AccountPanel.tsx          # 账户 + 订阅（hardcode）
+│           ├── ConnectPanel.tsx          # connector 入口（hardcode + 跳真 ControlPanel）
+│           └── categoryMeta.ts           # category icon/label/color 配置
+└── tests/
+    └── constellation/
+        ├── cardAdapter.test.ts
+        └── useCardActions.test.tsx
+```
+
+**修改：**
+
+- `src/App.tsx` — 把 `<AppShell />` 换成 `<ConstellationLayout />`
+- `src/index.css` — 增量添加 aurora layer / glow shadow / breathing animation keyframes
+- `tailwind.config.js` — 不动（颜色 token 已经够，glass 用 CSS var）
+
+**保留但不再渲染（不删，留给 `/legacy` 路由以后用，但本次不接 router）：**
+
+- `src/components/AppShell.tsx`
+- `src/components/NowFeed.tsx`（旧版）
+- `src/components/CardDetailBody.tsx`
+- `src/components/ExecutionView.tsx`（旧 mock）
+
+---
+
+## 数据映射：IntentCard → Intent
+
+**我们的 IntentCard**（`src/types/intent-card.ts`）：
+
+```typescript
+interface IntentCard {
+  id: string;
+  goalBasket: 'work' | 'health' | 'family' | 'wealth' | 'growth' | 'life';
+  title: string;
+  whyNow: string;
+  summary: string;
+  primaryAction: { label: string; type: 'confirm' | 'modify' | 'snooze' | 'dismiss' };
+  secondaryActions: IntentCardAction[];
+  confidence: number;   // 0..1
+  urgency: number;      // 0..1
+  importance: number;   // 0..1
+  sources: string[];
+  agentChain: string[];
+  createdAt: string;
+}
+```
+
+**Lovable Intent**（视觉组件期望）：
+
+```typescript
+interface Intent {
+  id: number;
+  category: string;     // work / health / finance / life / growth / learn
+  tag?: string;         // "Urgent" | "Alert" | "Cross Signal" | ...
+  complexity?: "simple";
+  locked?: boolean;
+  title: string;
+  line1: string;        // 描述
+  line2: string;        // "Sources: Gmail · Notion"
+  detail?: {
+    scores: { label: string; value: number }[];
+    willExecute: string;
+    executionPlan: { text: string; tool: string }[];
+    dataSources: string[];
+    impact: string;
+    permissions: string;
+    result?: string;
+    artifacts?: Artifact[];
+  };
+  status: "normal" | "new" | "processing" | "done";
+  statusTimestamp?: number;
+}
+```
+
+**映射规则（在 `cardAdapter.ts` 实现）：**
+
+| Lovable Intent 字段 | 来源 |
+|---|---|
+| `id` | hash of `card.id` (string → stable number) |
+| `category` | `goalBasket` 直接当 category；`wealth` → `finance`、`family` → `life` 适配（categoryMeta 自己解决） |
+| `tag` | `card.urgency >= 0.85` → `"Urgent"`；否则 undefined |
+| `title` | `card.title` |
+| `line1` | `card.whyNow \|\| card.summary` |
+| `line2` | `card.sources` join `" · "`（前缀 `"Sources: "`） |
+| `complexity` | undefined（暂不用） |
+| `locked` | undefined（暂不用） |
+| `detail.scores` | `[{ Confidence: round(confidence*100) }, { Importance }, { Urgency }]` |
+| `detail.willExecute` | `card.primaryAction.label` |
+| `detail.executionPlan` | **hardcode**：`[{ text: primaryAction.label, tool: deriveTool(sources) }]`（v1 给一个 step；后端真有 plan 了再补） |
+| `detail.dataSources` | `card.sources` |
+| `detail.impact` | `""`（v1 hardcode 空字符串，视觉上隐藏 section） |
+| `detail.permissions` | `""`（同上） |
+| `status` | `processingIds.has(card.id) ? "processing" : doneIds.has(card.id) ? "done" : "normal"`（由 ConstellationLayout 注入） |
+
+`Intent.id` 改成 number 的原因：Lovable 视觉组件用 number 比较 + `key`。我们用 stable hash（djb2）把 string id 转成 number。**保留 `originalId: string`** 字段在 adapter 输出里，供事件回调反查我们的真实 IntentCard。
+
+---
+
+## Task 0: 准备工作（资产 + 类型 + 适配器）
+
+### Task 0.1: 拷视频资产 + 验证 dev server 可用
+
+**Files:**
+- Copy: `/Users/yumengli/Desktop/PIN AI/proactive-pin-ai/public/sphere.mp4` → `proactive-ai-frontend/public/sphere.mp4`
+- Copy: `/Users/yumengli/Desktop/PIN AI/proactive-pin-ai/public/sphere.webm` → `proactive-ai-frontend/public/sphere.webm`
+
+- [ ] **Step 1: 拷文件**
+
+```bash
+cp "/Users/yumengli/Desktop/PIN AI/proactive-pin-ai/public/sphere.mp4" \
+   "/Users/yumengli/Desktop/PIN AI/PIN-AI-ASSISTANT/proactive-ai-frontend/public/sphere.mp4"
+cp "/Users/yumengli/Desktop/PIN AI/proactive-pin-ai/public/sphere.webm" \
+   "/Users/yumengli/Desktop/PIN AI/PIN-AI-ASSISTANT/proactive-ai-frontend/public/sphere.webm"
+ls -lh "/Users/yumengli/Desktop/PIN AI/PIN-AI-ASSISTANT/proactive-ai-frontend/public/sphere."*
+```
+
+期望输出：两个文件都在，大小非零。
+
+- [ ] **Step 2: 提交**
+
+```bash
+git add proactive-ai-frontend/public/sphere.mp4 proactive-ai-frontend/public/sphere.webm
+git commit -m "chore(frontend): copy sphere video assets from Lovable mock"
+```
+
+---
+
+### Task 0.2: 增量添加 Constellation CSS tokens
+
+**Files:**
+- Modify: `proactive-ai-frontend/src/index.css`
+
+不动现有的 `--background` / `--foreground` / `--primary` 等（Lovable 用同样的 HSL 值），增量添加 aurora / glass-strong / glow / breathing 的 keyframes 和 utility class。
+
+- [ ] **Step 1: 读 Lovable 的 index.css，定位要加的段**
+
+```bash
+cat "/Users/yumengli/Desktop/PIN AI/proactive-pin-ai/src/index.css" | head -200
+```
+
+抓出这几段：
+- `.glass-card-strong`（line 79–151 附近）
+- `.glow-primary / .glow-success / .glow-alert / .glow-warning`
+- `@keyframes breathing` + `.breathing`
+- `.aurora-layer-1 / aurora-layer-2 / aurora-layer-3`（背景气氛层）
+- 必要的 CSS 变量：`--glow-primary` / `--glow-success` 等
+
+- [ ] **Step 2: 把这些段追加到我们 index.css 末尾的 `@layer base / @layer components / @layer utilities`**
+
+确认不覆盖已有的 `.glass-card`（我们已有）—— 改名 Lovable 的为 `.glass-card-strong` 即可，原本就有这个命名。
+
+- [ ] **Step 3: dev server 验证不破坏现有页面**
+
+```bash
+cd proactive-ai-frontend && npm run dev
+```
+
+浏览器打开 `localhost:3000`，登录后看 NOW 视图，确认还是当前 AppShell 的样子（没炸）。Ctrl+C。
+
+- [ ] **Step 4: 提交**
+
+```bash
+git add proactive-ai-frontend/src/index.css
+git commit -m "feat(frontend): add Constellation CSS tokens (aurora/glow/breathing)"
+```
+
+---
+
+### Task 0.3: 定义 Constellation 类型
+
+**Files:**
+- Create: `proactive-ai-frontend/src/types/constellation.ts`
+
+- [ ] **Step 1: 写类型文件**
+
+```typescript
+// proactive-ai-frontend/src/types/constellation.ts
+
+export type CardStatus = "normal" | "new" | "processing" | "done";
+
+export type CardCategory =
+  | "growth" | "work" | "finance" | "health" | "learn" | "life";
+
+export interface ExecutionStep {
+  text: string;
+  tool: string;
+}
+
+export interface Artifact {
+  kind: "email" | "notes" | "message" | "doc";
+  app: "gmail" | "slack" | "notion" | "gdocs";
+  title: string;
+  meta?: string;
+  body: string;
+}
+
+export interface DetailData {
+  scores: { label: string; value: number }[];
+  willExecute: string;
+  executionPlan: ExecutionStep[];
+  dataSources: string[];
+  impact: string;
+  permissions: string;
+  result?: string;
+  artifacts?: Artifact[];
+}
+
+/** 视觉组件消费的卡片形态（Lovable Intent）。`originalId` 是我们真实 IntentCard.id（string）。*/
+export interface Intent {
+  id: number;
+  originalId: string;
+  category: CardCategory;
+  tag?: string;
+  complexity?: "simple";
+  locked?: boolean;
+  title: string;
+  line1: string;
+  line2: string;
+  detail?: DetailData;
+  status: CardStatus;
+  statusTimestamp?: number;
+}
+```
+
+- [ ] **Step 2: 提交**
+
+```bash
+git add proactive-ai-frontend/src/types/constellation.ts
+git commit -m "feat(frontend): add Constellation Intent/DetailData types"
+```
+
+---
+
+### Task 0.4: 实现 cardAdapter + 单测
+
+**Files:**
+- Create: `proactive-ai-frontend/src/lib/cardAdapter.ts`
+- Create: `proactive-ai-frontend/tests/constellation/cardAdapter.test.ts`
+
+- [ ] **Step 1: 写 failing test**
+
+```typescript
+// proactive-ai-frontend/tests/constellation/cardAdapter.test.ts
+import { describe, it, expect } from "vitest";
+import { intentCardToIntent, intentCardsToIntents } from "@/lib/cardAdapter";
+import type { IntentCard } from "@/types/intent-card";
+
+const baseCard: IntentCard = {
+  id: "card-abc123",
+  goalBasket: "work",
+  title: "Reply to Alex",
+  whyNow: "Alex sent a follow-up earlier today.",
+  summary: "Outstanding invoice from March needs reply.",
+  primaryAction: { label: "Draft a reply", type: "confirm" },
+  secondaryActions: [],
+  confidence: 0.92,
+  urgency: 0.9,
+  importance: 0.85,
+  sources: ["Gmail", "Google Calendar"],
+  agentChain: ["card-gen"],
+  createdAt: "2026-05-14T00:00:00Z",
+};
+
+describe("intentCardToIntent", () => {
+  it("maps core fields and produces stable numeric id", () => {
+    const a = intentCardToIntent(baseCard, { status: "normal" });
+    const b = intentCardToIntent(baseCard, { status: "normal" });
+    expect(a.id).toEqual(b.id);
+    expect(typeof a.id).toBe("number");
+    expect(a.originalId).toBe("card-abc123");
+    expect(a.title).toBe("Reply to Alex");
+    expect(a.line1).toBe("Alex sent a follow-up earlier today.");
+    expect(a.line2).toBe("Sources: Gmail · Google Calendar");
+    expect(a.category).toBe("work");
+  });
+
+  it("marks urgent when urgency >= 0.85", () => {
+    expect(intentCardToIntent(baseCard, { status: "normal" }).tag).toBe("Urgent");
+    const calm = { ...baseCard, urgency: 0.5 };
+    expect(intentCardToIntent(calm, { status: "normal" }).tag).toBeUndefined();
+  });
+
+  it("maps wealth → finance, family → life for visual category", () => {
+    expect(intentCardToIntent({ ...baseCard, goalBasket: "wealth" }, { status: "normal" }).category).toBe("finance");
+    expect(intentCardToIntent({ ...baseCard, goalBasket: "family" }, { status: "normal" }).category).toBe("life");
+  });
+
+  it("falls back to summary when whyNow is empty", () => {
+    const noWhy = { ...baseCard, whyNow: "" };
+    expect(intentCardToIntent(noWhy, { status: "normal" }).line1).toBe(noWhy.summary);
+  });
+
+  it("builds detail with rounded scores and primary action as willExecute", () => {
+    const it1 = intentCardToIntent(baseCard, { status: "normal" });
+    expect(it1.detail).toBeDefined();
+    expect(it1.detail!.scores).toEqual([
+      { label: "Confidence", value: 92 },
+      { label: "Importance", value: 85 },
+      { label: "Urgency", value: 90 },
+    ]);
+    expect(it1.detail!.willExecute).toBe("Draft a reply");
+    expect(it1.detail!.dataSources).toEqual(["Gmail", "Google Calendar"]);
+  });
+
+  it("respects status override", () => {
+    expect(intentCardToIntent(baseCard, { status: "processing" }).status).toBe("processing");
+    expect(intentCardToIntent(baseCard, { status: "done" }).status).toBe("done");
+  });
+});
+
+describe("intentCardsToIntents", () => {
+  it("returns empty array when input is empty", () => {
+    expect(intentCardsToIntents([], { processingIds: new Set(), doneIds: new Set() })).toEqual([]);
+  });
+
+  it("applies status from processingIds / doneIds maps", () => {
+    const cards: IntentCard[] = [
+      { ...baseCard, id: "p1" },
+      { ...baseCard, id: "d1" },
+      { ...baseCard, id: "n1" },
+    ];
+    const out = intentCardsToIntents(cards, {
+      processingIds: new Set(["p1"]),
+      doneIds: new Set(["d1"]),
+    });
+    expect(out.map((i) => i.status)).toEqual(["processing", "done", "normal"]);
+  });
+});
+```
+
+- [ ] **Step 2: 跑测试确认 fail**
+
+```bash
+cd proactive-ai-frontend && npm test -- cardAdapter
+```
+
+期望：`Cannot find module '@/lib/cardAdapter'`
+
+- [ ] **Step 3: 实现 adapter**
+
+```typescript
+// proactive-ai-frontend/src/lib/cardAdapter.ts
+import type { IntentCard, GoalBasket } from "@/types/intent-card";
+import type { Intent, CardCategory, CardStatus } from "@/types/constellation";
+
+/** djb2 — 把 string id 稳定 hash 到 number。同一 string 永远得同 number。 */
+function djb2(str: string): number {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h) ^ str.charCodeAt(i);
+  return Math.abs(h | 0);
+}
+
+/** GoalBasket → 视觉 category。wealth/family 不在 Lovable category 里，做映射。 */
+function basketToCategory(basket: GoalBasket): CardCategory {
+  switch (basket) {
+    case "wealth": return "finance";
+    case "family": return "life";
+    case "work":
+    case "health":
+    case "growth":
+    case "life":
+      return basket;
+    default:
+      return "life";
+  }
+}
+
+export interface AdapterOptions {
+  status: CardStatus;
+}
+
+export function intentCardToIntent(card: IntentCard, opts: AdapterOptions): Intent {
+  const line1 = card.whyNow && card.whyNow.trim().length > 0 ? card.whyNow : card.summary;
+  const line2 = card.sources.length > 0 ? `Sources: ${card.sources.join(" · ")}` : "";
+  const tag = card.urgency >= 0.85 ? "Urgent" : undefined;
+
+  return {
+    id: djb2(card.id),
+    originalId: card.id,
+    category: basketToCategory(card.goalBasket),
+    tag,
+    title: card.title,
+    line1,
+    line2,
+    status: opts.status,
+    detail: {
+      scores: [
+        { label: "Confidence", value: Math.round(card.confidence * 100) },
+        { label: "Importance", value: Math.round(card.importance * 100) },
+        { label: "Urgency", value: Math.round(card.urgency * 100) },
+      ],
+      willExecute: card.primaryAction.label,
+      executionPlan: [],   // v1: 不 hardcode 假步骤，留空，视觉组件应能优雅隐藏 section
+      dataSources: card.sources,
+      impact: "",
+      permissions: "",
+    },
+  };
+}
+
+export interface BulkAdapterContext {
+  processingIds: Set<string>;
+  doneIds: Set<string>;
+}
+
+export function intentCardsToIntents(cards: IntentCard[], ctx: BulkAdapterContext): Intent[] {
+  return cards.map((c) => {
+    const status: CardStatus = ctx.processingIds.has(c.id)
+      ? "processing"
+      : ctx.doneIds.has(c.id)
+        ? "done"
+        : "normal";
+    return intentCardToIntent(c, { status });
+  });
+}
+```
+
+- [ ] **Step 4: 跑测试确认通过**
+
+```bash
+cd proactive-ai-frontend && npm test -- cardAdapter
+```
+
+期望：全 PASS。
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add proactive-ai-frontend/src/lib/cardAdapter.ts proactive-ai-frontend/tests/constellation/cardAdapter.test.ts proactive-ai-frontend/src/types/constellation.ts
+git commit -m "feat(frontend): IntentCard → Constellation Intent adapter"
+```
+
+---
+
+### Task 0.5: 抽 useCardActions hook
+
+把 `AppShell.tsx` 里 `handleConfirmCard / handleDismissCard / handleSnoozeCard / handleModifyCard / handleDoneCard / handleOpenChatFromDrawer / handleTextFeedback` 抽到一个 hook，让 ConstellationLayout 和（未来万一要回来的）AppShell 共用。
+
+**Files:**
+- Create: `proactive-ai-frontend/src/hooks/useCardActions.ts`
+- Create: `proactive-ai-frontend/tests/constellation/useCardActions.test.tsx`
+
+- [ ] **Step 1: 先把 AppShell 里那几个 handler 读全**
+
+```bash
+grep -n "handleConfirmCard\|handleDismissCard\|handleSnoozeCard\|handleModifyCard\|handleDoneCard\|handleOpenChatFromDrawer\|handleTextFeedback\|persistChatted\|dismissedIds\|processingIds\|doneIds\|chattedCardIds\|bootstrapMessage\|setChatTarget\|setSelectedCard" proactive-ai-frontend/src/components/AppShell.tsx
+```
+
+确认所有触点，避免遗漏副作用（sessionStorage 持久化、feedback POST、状态机迁移）。
+
+- [ ] **Step 2: 写 failing test（覆盖 confirm + dismiss 两个主路径）**
+
+```typescript
+// proactive-ai-frontend/tests/constellation/useCardActions.test.tsx
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { renderHook, act } from "@testing-library/react";
+import { useCardActions } from "@/hooks/useCardActions";
+import type { IntentCard } from "@/types/intent-card";
+
+vi.mock("@/lib/api", () => ({
+  proxyPost: vi.fn(async () => ({ ok: true })),
+}));
+
+import { proxyPost } from "@/lib/api";
+
+const card: IntentCard = {
+  id: "c1", goalBasket: "work", title: "T",
+  whyNow: "w", summary: "s",
+  primaryAction: { label: "Draft", type: "confirm" },
+  secondaryActions: [],
+  confidence: 0.9, urgency: 0.9, importance: 0.9,
+  sources: [], agentChain: [], createdAt: "",
+};
+
+describe("useCardActions", () => {
+  beforeEach(() => { vi.clearAllMocks(); sessionStorage.clear(); });
+
+  it("confirm: posts feedback and sets bootstrap message + processing state", async () => {
+    const onOpenChat = vi.fn();
+    const { result } = renderHook(() => useCardActions({ onOpenChat }));
+
+    await act(async () => { await result.current.confirm(card); });
+
+    expect(proxyPost).toHaveBeenCalledWith("/feedback", expect.objectContaining({
+      kind: "card_action",
+      action: "confirm",
+      cardId: "c1",
+    }));
+    expect(result.current.processingIds.has("c1")).toBe(true);
+    expect(onOpenChat).toHaveBeenCalledWith(card, "Draft");
+  });
+
+  it("dismiss: posts feedback and adds to dismissedIds", async () => {
+    const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn() }));
+    await act(async () => { await result.current.dismiss(card); });
+    expect(result.current.dismissedIds.has("c1")).toBe(true);
+  });
+});
+```
+
+- [ ] **Step 3: 跑确认 fail**
+
+```bash
+cd proactive-ai-frontend && npm test -- useCardActions
+```
+
+- [ ] **Step 4: 实现 hook**
+
+参照 `AppShell.tsx:120-129`（state）和 `AppShell.tsx:269-395`（handlers），把以下提到 hook 里。**保留原 AppShell 不动**（这样旧代码继续能跑）。
+
+```typescript
+// proactive-ai-frontend/src/hooks/useCardActions.ts
+import { useCallback, useEffect, useState } from "react";
+import { proxyPost } from "@/lib/api";
+import type { IntentCard } from "@/types/intent-card";
+
+const CHATTED_KEY = "pai.constellation.chattedCardIds";
+
+function loadChatted(): Set<string> {
+  try {
+    const raw = sessionStorage.getItem(CHATTED_KEY);
+    if (!raw) return new Set();
+    return new Set(JSON.parse(raw));
+  } catch { return new Set(); }
+}
+
+function saveChatted(ids: Set<string>) {
+  try { sessionStorage.setItem(CHATTED_KEY, JSON.stringify([...ids])); } catch {}
+}
+
+export interface UseCardActionsOptions {
+  /** confirm 后回调：(card, bootstrapMessage) — 调用方负责把 chat 屏切出来。 */
+  onOpenChat: (card: IntentCard, bootstrapMessage: string) => void;
+}
+
+export function useCardActions({ onOpenChat }: UseCardActionsOptions) {
+  const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
+  const [doneIds, setDoneIds] = useState<Set<string>>(new Set());
+  const [confirmedIds, setConfirmedIds] = useState<Set<string>>(new Set());
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  const [chattedCardIds, setChattedCardIds] = useState<Set<string>>(() => loadChatted());
+
+  // 初始化 dismissedIds：从 /api/feedback/dismissed 拉
+  useEffect(() => {
+    let abort = false;
+    (async () => {
+      try {
+        const res = await proxyPost<{ ids: string[] }>("/feedback/dismissed", {});
+        if (!abort && res?.ids) setDismissedIds(new Set(res.ids));
+      } catch { /* ignore */ }
+    })();
+    return () => { abort = true; };
+  }, []);
+
+  const persistChatted = useCallback((id: string) => {
+    setChattedCardIds((prev) => {
+      if (prev.has(id)) return prev;
+      const next = new Set(prev); next.add(id); saveChatted(next); return next;
+    });
+  }, []);
+
+  const confirm = useCallback(async (card: IntentCard) => {
+    setProcessingIds((s) => new Set(s).add(card.id));
+    setConfirmedIds((s) => new Set(s).add(card.id));
+    persistChatted(card.id);
+    try {
+      await proxyPost("/feedback", {
+        kind: "card_action",
+        action: "confirm",
+        cardId: card.id,
+        runId: null,
+      });
+    } catch { /* swallow; UI 已经 optimistic */ }
+    onOpenChat(card, card.primaryAction.label);
+  }, [onOpenChat, persistChatted]);
+
+  const dismiss = useCallback(async (card: IntentCard) => {
+    setDismissedIds((s) => new Set(s).add(card.id));
+    try {
+      await proxyPost("/feedback", {
+        kind: "card_action",
+        action: "dismiss",
+        cardId: card.id,
+        runId: null,
+      });
+    } catch {}
+  }, []);
+
+  const snooze = useCallback(async (card: IntentCard) => {
+    try {
+      await proxyPost("/feedback", {
+        kind: "card_action",
+        action: "snooze",
+        cardId: card.id,
+        runId: null,
+      });
+    } catch {}
+  }, []);
+
+  const modify = useCallback(async (card: IntentCard) => {
+    persistChatted(card.id);
+    onOpenChat(card, "");   // 进 chat 但不发 bootstrap，等用户输入
+  }, [onOpenChat, persistChatted]);
+
+  const done = useCallback(async (card: IntentCard) => {
+    setDoneIds((s) => new Set(s).add(card.id));
+    setProcessingIds((s) => { const n = new Set(s); n.delete(card.id); return n; });
+    try {
+      await proxyPost("/feedback", {
+        kind: "card_action",
+        action: "done",
+        cardId: card.id,
+        runId: null,
+      });
+    } catch {}
+  }, []);
+
+  const openChat = useCallback((card: IntentCard) => {
+    persistChatted(card.id);
+    onOpenChat(card, "");
+  }, [onOpenChat, persistChatted]);
+
+  const textFeedback = useCallback(async (card: IntentCard, text: string) => {
+    if (!text.trim()) return;
+    try {
+      await proxyPost("/feedback", {
+        kind: "text_feedback",
+        cardId: card.id,
+        runId: null,
+        text: text.trim(),
+      });
+    } catch {}
+  }, []);
+
+  return {
+    processingIds, doneIds, confirmedIds, dismissedIds, chattedCardIds,
+    confirm, dismiss, snooze, modify, done, openChat, textFeedback,
+  };
+}
+```
+
+- [ ] **Step 5: 跑测试确认 PASS**
+
+```bash
+cd proactive-ai-frontend && npm test -- useCardActions
+```
+
+- [ ] **Step 6: 提交**
+
+```bash
+git add proactive-ai-frontend/src/hooks/useCardActions.ts proactive-ai-frontend/tests/constellation/useCardActions.test.tsx
+git commit -m "feat(frontend): extract useCardActions hook for card lifecycle"
+```
+
+---
+
+## Task 1: 视觉组件 port
+
+> 视觉组件是大块 port，不走 TDD（视觉效果靠 dev server 验）。每个 Task 完成后开 `npm run dev` 看一眼，确认不报错且渲染基本对。
+
+### Task 1.1: AiSphere
+
+**Files:**
+- Create: `proactive-ai-frontend/src/components/constellation/AiSphere.tsx`
+
+- [ ] **Step 1: 读 Lovable 源文件**
+
+```bash
+cat "/Users/yumengli/Desktop/PIN AI/proactive-pin-ai/src/components/AiSphere.tsx"
+```
+
+- [ ] **Step 2: 直接 port，替换 import**
+
+把 Lovable 的 `import { cn } from "@/lib/utils"` 这种保持原样（我们也有 `lib/utils.ts` 提供 `cn`）；其他 `import` 都从 Lovable 的本地 `@/` 路径换到我们的 `@/components/constellation/...` 或 `@/components/ui/...`。视频引用 `<source src="/sphere.webm">` + `<source src="/sphere.mp4">` 保持。
+
+- [ ] **Step 3: 在 ConstellationLayout 临时挂上验证（先随便 mount 一下）**
+
+```bash
+cd proactive-ai-frontend && npm run dev
+```
+
+浏览器看到旋转的 sphere（视频在播）。Ctrl+C。
+
+- [ ] **Step 4: 提交**
+
+```bash
+git add proactive-ai-frontend/src/components/constellation/AiSphere.tsx
+git commit -m "feat(frontend): port Constellation AiSphere component"
+```
+
+---
+
+### Task 1.2: Sphere3DCards
+
+**Files:**
+- Create: `proactive-ai-frontend/src/components/constellation/Sphere3DCards.tsx`
+- Create: `proactive-ai-frontend/src/components/constellation/categoryMeta.ts`
+
+- [ ] **Step 1: port categoryMeta**
+
+```typescript
+// proactive-ai-frontend/src/components/constellation/categoryMeta.ts
+import { Sprout, Briefcase, TrendingUp, Heart, BookOpen, Sparkles } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import type { CardCategory } from "@/types/constellation";
+
+export const CATEGORY_META: Record<CardCategory, { icon: LucideIcon; label: string }> = {
+  growth:  { icon: Sprout,     label: "Growth"  },
+  work:    { icon: Briefcase,  label: "Work"    },
+  finance: { icon: TrendingUp, label: "Finance" },
+  health:  { icon: Heart,      label: "Health"  },
+  learn:   { icon: BookOpen,   label: "Learn"   },
+  life:    { icon: Sparkles,   label: "Life"    },
+};
+```
+
+- [ ] **Step 2: port Sphere3DCards 源**
+
+```bash
+cat "/Users/yumengli/Desktop/PIN AI/proactive-pin-ai/src/components/Sphere3DCards.tsx"
+```
+
+直接拷过来，import 路径切到 `@/types/constellation` 和 `@/components/constellation/categoryMeta`；保留 `rotationCache` Map（模块级 — 跨 mount 持久化旋转角度）。
+
+`Sphere3DCardItem` 类型用我们的 `Intent`。
+
+- [ ] **Step 3: dev server 临时挂在 ConstellationLayout 里验证**
+
+构造 12 个 mock Intent 喂进去，确认能拖、能转、能 tap。
+
+- [ ] **Step 4: 提交**
+
+```bash
+git add proactive-ai-frontend/src/components/constellation/Sphere3DCards.tsx proactive-ai-frontend/src/components/constellation/categoryMeta.ts
+git commit -m "feat(frontend): port Constellation Sphere3DCards + categoryMeta"
+```
+
+---
+
+### Task 1.3: NowFeed (Constellation 版)
+
+**Files:**
+- Create: `proactive-ai-frontend/src/components/constellation/NowFeed.tsx`
+
+- [ ] **Step 1: port**
+
+```bash
+cat "/Users/yumengli/Desktop/PIN AI/proactive-pin-ai/src/components/NowFeed.tsx"
+```
+
+直接拷。Props 接口：`{ intents: Intent[], onTapCard: (id: number) => void, onExecute?: (id: number) => void, onModify?: (id: number) => void, onDismiss?: (id: number) => void, LandingOverride?: ComponentType }`。
+
+LandingOverride 可选 — 留口子让 ConstellationLayout 注入 `<AiSphere />` 当 landing 背景。
+
+**注意：去掉 Lovable 自带的 lifecycle ticker**（new→normal→processing→done 自动 setTimeout 迁移）。我们用真实状态。
+
+- [ ] **Step 2: 提交**
+
+```bash
+git add proactive-ai-frontend/src/components/constellation/NowFeed.tsx
+git commit -m "feat(frontend): port Constellation NowFeed (without auto lifecycle ticker)"
+```
+
+---
+
+### Task 1.4: CardDrawerDetail
+
+**Files:**
+- Create: `proactive-ai-frontend/src/components/constellation/CardDrawerDetail.tsx`
+
+- [ ] **Step 1: port**
+
+```bash
+cat "/Users/yumengli/Desktop/PIN AI/proactive-pin-ai/src/components/CardDrawerDetail.tsx"
+```
+
+Props 改成：
+
+```typescript
+interface CardDrawerDetailProps {
+  intent: Intent | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onApprove: (intent: Intent) => void;   // 接 useCardActions.confirm
+  onModify: (intent: Intent) => void;    // 接 useCardActions.modify
+  onDismiss: (intent: Intent) => void;   // 接 useCardActions.dismiss
+  onSnooze?: (intent: Intent) => void;
+  onChat?: (intent: Intent) => void;
+}
+```
+
+drawer 用我们已有的 `@/components/ui/drawer`（vaul wrapper）。
+
+Lovable 原版的 "Execute" / "Dismiss" / "Modify" 按钮直接 map 到 props。
+
+视觉部分（scores grid、execution plan section、data sources、impact、permissions、artifacts）：当 `intent.detail.executionPlan` 为空时隐藏 plan section；`impact` / `permissions` 为空时隐藏对应行。
+
+- [ ] **Step 2: 提交**
+
+```bash
+git add proactive-ai-frontend/src/components/constellation/CardDrawerDetail.tsx
+git commit -m "feat(frontend): port Constellation CardDrawerDetail drawer"
+```
+
+---
+
+## Task 2: ConstellationLayout shell + 视图接入
+
+### Task 2.1: 骨架（菜单 + view state machine，无内容）
+
+**Files:**
+- Create: `proactive-ai-frontend/src/components/constellation/ConstellationLayout.tsx`
+
+- [ ] **Step 1: 写骨架**
+
+```typescript
+// proactive-ai-frontend/src/components/constellation/ConstellationLayout.tsx
+import { useState, useCallback } from "react";
+import { useAuth } from "@/hooks/useAuth";
+import { useCards } from "@/hooks/useCards";
+import { useCardActions } from "@/hooks/useCardActions";
+import { intentCardsToIntents } from "@/lib/cardAdapter";
+import type { IntentCard } from "@/types/intent-card";
+import type { Intent } from "@/types/constellation";
+
+type View = "now" | "ambient" | "chat" | "profile" | "control" | "account" | "connect";
+
+interface ChatTarget {
+  card: IntentCard;
+  bootstrapMessage: string;
+}
+
+export default function ConstellationLayout() {
+  const { user, signOut } = useAuth();
+  const cardsState = useCards();
+  const [view, setView] = useState<View>("now");
+  const [selectedIntent, setSelectedIntent] = useState<Intent | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [chatTarget, setChatTarget] = useState<ChatTarget | null>(null);
+
+  const handleOpenChat = useCallback((card: IntentCard, bootstrapMessage: string) => {
+    setChatTarget({ card, bootstrapMessage });
+    setDrawerOpen(false);
+    setView("chat");
+  }, []);
+
+  const actions = useCardActions({ onOpenChat: handleOpenChat });
+
+  const intents: Intent[] = intentCardsToIntents(
+    cardsState.cards.filter((c) => !actions.dismissedIds.has(c.card.id)).map((c) => c.card),
+    { processingIds: actions.processingIds, doneIds: actions.doneIds },
+  );
+
+  return (
+    <div className="min-h-screen bg-background text-foreground relative overflow-hidden">
+      {/* aurora 背景层 */}
+      <div className="aurora-layer-1 absolute inset-0 pointer-events-none" />
+      <div className="aurora-layer-2 absolute inset-0 pointer-events-none" />
+      <div className="aurora-layer-3 absolute inset-0 pointer-events-none" />
+
+      {/* TODO: top nav menu + view router */}
+      <main className="relative z-10">
+        {view === "now" && <div>NOW — {intents.length} cards</div>}
+        {view === "chat" && <div>CHAT — target: {chatTarget?.card.title ?? "none"}</div>}
+        {/* ... */}
+      </main>
+    </div>
+  );
+}
+```
+
+- [ ] **Step 2: 临时改 App.tsx 渲染 ConstellationLayout（dev 验证用，**Task 4.1 才正式 cutover**）**
+
+不动 App.tsx —— 直接在 dev 浏览器手动改 URL 验证还做不到（我们没接 router）。改 App.tsx 进入一下：
+
+```typescript
+// 临时（Task 4.1 会正式做）
+import ConstellationLayout from "@/components/constellation/ConstellationLayout";
+// 在 user 登录后渲染：
+return <ConstellationLayout />;
+```
+
+dev server 看 `localhost:3000`，登录后看到 "NOW — X cards" 文本。**OK 后立刻 revert App.tsx**（Task 4.1 会重做），避免半成品落到主分支。
+
+```bash
+cd proactive-ai-frontend && npm run dev
+# 验证
+# 然后 Ctrl+C
+git checkout proactive-ai-frontend/src/App.tsx
+```
+
+- [ ] **Step 3: 提交骨架**
+
+```bash
+git add proactive-ai-frontend/src/components/constellation/ConstellationLayout.tsx
+git commit -m "feat(frontend): ConstellationLayout shell skeleton"
+```
+
+---
+
+### Task 2.2: NOW 视图（AiSphere + Sphere3DCards + NowFeed）
+
+**Files:**
+- Modify: `proactive-ai-frontend/src/components/constellation/ConstellationLayout.tsx`
+
+- [ ] **Step 1: NOW 视图组合 AiSphere + Sphere3DCards**
+
+参考 Lovable `ConstellationLayout.tsx` 的 NOW segment（line 200–400 附近，具体行号要 cat 出来定位）。
+
+把 `<Sphere3DCards items={intents} onCardTap={(id) => {...}} cacheKey="constellation-now" />` 接进来。`onCardTap` 通过 `id` 反查 `intents` 找到对应 Intent，set `selectedIntent` + open drawer。
+
+- [ ] **Step 2: dev verify**
+
+```bash
+cd proactive-ai-frontend && npm run dev
+```
+
+NOW 视图能看到 sphere + 真实卡片（旋转，可拖，可 tap 但 drawer 还没接）。
+
+- [ ] **Step 3: 提交**
+
+```bash
+git add proactive-ai-frontend/src/components/constellation/ConstellationLayout.tsx
+git commit -m "feat(frontend): wire NOW view with AiSphere + Sphere3DCards"
+```
+
+---
+
+### Task 2.3: 卡片详情 drawer 接入
+
+**Files:**
+- Modify: `proactive-ai-frontend/src/components/constellation/ConstellationLayout.tsx`
+
+- [ ] **Step 1: drawer 接 CardDrawerDetail**
+
+```typescript
+<CardDrawerDetail
+  intent={selectedIntent}
+  open={drawerOpen}
+  onOpenChange={setDrawerOpen}
+  onApprove={(intent) => {
+    const card = cardsState.cards.find((c) => c.card.id === intent.originalId)?.card;
+    if (card) actions.confirm(card);
+  }}
+  onModify={(intent) => {
+    const card = cardsState.cards.find((c) => c.card.id === intent.originalId)?.card;
+    if (card) actions.modify(card);
+  }}
+  onDismiss={(intent) => {
+    const card = cardsState.cards.find((c) => c.card.id === intent.originalId)?.card;
+    if (card) { actions.dismiss(card); setDrawerOpen(false); }
+  }}
+  onChat={(intent) => {
+    const card = cardsState.cards.find((c) => c.card.id === intent.originalId)?.card;
+    if (card) actions.openChat(card);
+  }}
+/>
+```
+
+- [ ] **Step 2: dev verify — tap 卡片 drawer 弹出，但 Approve 还没接 chat（chat 视图是占位）**
+
+- [ ] **Step 3: 提交**
+
+```bash
+git add proactive-ai-frontend/src/components/constellation/ConstellationLayout.tsx
+git commit -m "feat(frontend): wire CardDrawerDetail into ConstellationLayout"
+```
+
+---
+
+### Task 2.4: CHAT 视图（真接 MainChatView）
+
+**Files:**
+- Modify: `proactive-ai-frontend/src/components/constellation/ConstellationLayout.tsx`
+
+CHAT 视图复用 `CardChat`（它内部 wrap `MainChatView`）。当 `chatTarget` 有值时渲染 `<CardChat card={...} bootstrapMessage={...} sessionKey="card-thread-..." />`。
+
+- [ ] **Step 1: import CardChat 并接入**
+
+```typescript
+import CardChat from "@/components/CardChat";
+
+// 在 view === "chat" 分支：
+{view === "chat" && chatTarget && (
+  <CardChat
+    card={chatTarget.card}
+    bootstrapMessage={chatTarget.bootstrapMessage}
+    onBack={() => setView("now")}
+    onTextFeedback={(text) => actions.textFeedback(chatTarget.card, text)}
+  />
+)}
+```
+
+CardChat 当前 props 形态去 `src/components/CardChat.tsx` 确认，**严格按现有接口接**，不改 CardChat。
+
+- [ ] **Step 2: dev verify**
+
+NOW → tap 卡片 → drawer → Approve → 自动跳到 CHAT 视图，看到 MainChatView，bootstrap message 作为第一条 user turn 发出去，SSE 流式响应进来。
+
+- [ ] **Step 3: 提交**
+
+```bash
+git add proactive-ai-frontend/src/components/constellation/ConstellationLayout.tsx
+git commit -m "feat(frontend): wire CHAT view to existing MainChatView via CardChat"
+```
+
+---
+
+### Task 2.5: PROFILE / GOALS 视图（复用 GoalsView）
+
+**Files:**
+- Modify: `proactive-ai-frontend/src/components/constellation/ConstellationLayout.tsx`
+
+- [ ] **Step 1: 直接 mount 现有 GoalsView**
+
+```typescript
+import GoalsView from "@/components/GoalsView";
+
+{view === "profile" && <GoalsView />}
+```
+
+视觉上把它包在 Constellation 的 glass-card-strong 容器里（参考 Lovable 的 GoalsView 边距）。
+
+- [ ] **Step 2: dev verify + 提交**
+
+```bash
+git commit -am "feat(frontend): wire PROFILE view to existing GoalsView"
+```
+
+---
+
+### Task 2.6: CONTROL 视图（复用 ControlPanel）
+
+**Files:**
+- Modify: `proactive-ai-frontend/src/components/constellation/ConstellationLayout.tsx`
+
+- [ ] **Step 1: mount ControlPanel**
+
+```typescript
+import ControlPanel from "@/components/ControlPanel";
+{view === "control" && <ControlPanel />}
+```
+
+- [ ] **Step 2: dev verify + 提交**
+
+```bash
+git commit -am "feat(frontend): wire CONTROL view to existing ControlPanel"
+```
+
+---
+
+### Task 2.7: AMBIENT 视图（hardcode）
+
+**Files:**
+- Create: `proactive-ai-frontend/src/components/constellation/AmbientView.tsx`
+
+- [ ] **Step 1: port Lovable AmbientView**
+
+```bash
+cat "/Users/yumengli/Desktop/PIN AI/proactive-pin-ai/src/components/AmbientView.tsx"
+```
+
+直接拷，删掉所有 `setInterval` 模拟 live 更新的代码 — 让数据静态展示（hardcode 的 location / focus / HRV / steps 数）。
+
+`LIVE_SCENARIOS` 数组保留，但只用第一条静态显示。
+
+- [ ] **Step 2: 在 ConstellationLayout 接入**
+
+```typescript
+import AmbientView from "@/components/constellation/AmbientView";
+{view === "ambient" && <AmbientView />}
+```
+
+- [ ] **Step 3: dev verify + 提交**
+
+```bash
+git add proactive-ai-frontend/src/components/constellation/AmbientView.tsx
+git commit -m "feat(frontend): port Constellation AmbientView (hardcoded)"
+```
+
+---
+
+### Task 2.8: ACCOUNT 视图（hardcode billing）
+
+**Files:**
+- Create: `proactive-ai-frontend/src/components/constellation/AccountPanel.tsx`
+
+- [ ] **Step 1: port Lovable AccountPanel + PlanPaymentForm 的 UI**
+
+```bash
+cat "/Users/yumengli/Desktop/PIN AI/proactive-pin-ai/src/components/AccountPanel.tsx"
+cat "/Users/yumengli/Desktop/PIN AI/proactive-pin-ai/src/components/PlanPaymentForm.tsx"
+```
+
+视觉直接拷。所有"订阅 / 付款"按钮 onClick 改成 `() => alert("Coming soon")`，不接 Stripe。"Sign out" 接 `useAuth().signOut`。"User email" 接 `useAuth().user.email`。
+
+- [ ] **Step 2: 接入 ConstellationLayout + dev verify + 提交**
+
+```bash
+git commit -am "feat(frontend): port Constellation AccountPanel (hardcoded billing)"
+```
+
+---
+
+### Task 2.9: CONNECT 视图（hardcode + link 真 ControlPanel）
+
+**Files:**
+- Create: `proactive-ai-frontend/src/components/constellation/ConnectPanel.tsx`
+
+CONNECT 视图先以 Lovable 设计展示"已连接 / 推荐的 connector"卡片（Gmail / Slack / Notion / GCal 等的静态视觉卡），但"Manage"按钮跳到 CONTROL 视图（那里有真 ControlPanel 接 Composio）。
+
+- [ ] **Step 1: port + 接入 + dev verify + 提交**
+
+```bash
+git commit -am "feat(frontend): port Constellation ConnectPanel (static cards, manage → CONTROL)"
+```
+
+---
+
+### Task 2.10: 顶部菜单 + 视图切换 UI
+
+**Files:**
+- Modify: `proactive-ai-frontend/src/components/constellation/ConstellationLayout.tsx`
+
+- [ ] **Step 1: port menu UI from Lovable ConstellationLayout**
+
+参考 Lovable line 100–200 的 menu drawer / nav 实现。我们用 7 个 view：`now / ambient / chat / profile / control / account / connect`。
+
+可视化用 Lovable 的 hamburger-like 菜单 + drawer，或 bottom-tab；具体 Lovable 怎么做的拷过来即可。
+
+- [ ] **Step 2: dev verify 7 个视图都能切**
+
+- [ ] **Step 3: 提交**
+
+```bash
+git commit -am "feat(frontend): top menu and view switching in ConstellationLayout"
+```
+
+---
+
+## Task 3: Cutover
+
+### Task 3.1: 切 App.tsx
+
+**Files:**
+- Modify: `proactive-ai-frontend/src/App.tsx`
+
+- [ ] **Step 1: 读现有 App.tsx**
+
+```bash
+cat proactive-ai-frontend/src/App.tsx
+```
+
+- [ ] **Step 2: 替换登录后的 `<AppShell />` → `<ConstellationLayout />`**
+
+例：
+
+```typescript
+import ConstellationLayout from "@/components/constellation/ConstellationLayout";
+// import AppShell from "@/components/AppShell";  // 保留 import 注释掉，方便万一回退
+
+// 登录后:
+return <ConstellationLayout />;
+```
+
+**注意保留**：`useAuth` 检查、loading spinner、`LoginPage`、ambient sources 启动逻辑（这些都在 App.tsx 里，不动）。
+
+- [ ] **Step 3: dev verify 全链路**
+
+```bash
+cd proactive-ai-frontend && npm run dev
+```
+
+走一遍：
+1. 登录 → 看到 Constellation NOW 视图
+2. 看到真实卡片在 3D sphere 上转
+3. tap 卡片 → drawer 弹出，scores + sources 正确显示
+4. tap Approve → 切到 CHAT 视图，看到 MainChatView，bootstrap message "Draft a reply" 作为第一条 user 消息发出去
+5. SSE 流式响应渲染出来
+6. 用菜单切回 NOW → 卡片状态变 "processing"
+7. 切到 PROFILE / CONTROL / ACCOUNT / AMBIENT / CONNECT，确认都不报错
+
+- [ ] **Step 4: 提交**
+
+```bash
+git add proactive-ai-frontend/src/App.tsx
+git commit -m "feat(frontend): cut over App.tsx from AppShell to ConstellationLayout"
+```
+
+---
+
+### Task 3.2: 浏览器 preview 完整验证
+
+用 Claude Preview 工具（preview_start + preview_console_logs + preview_screenshot）跑一遍：
+
+- [ ] **Step 1: 启动 preview**
+
+```
+preview_start({ command: "npm run dev", cwd: ".../proactive-ai-frontend", port: 3000 })
+```
+
+- [ ] **Step 2: 抓 snapshot + screenshot**
+
+确认 NOW 视图渲染 OK，console 没 error。
+
+- [ ] **Step 3: 模拟 Approve 流程**
+
+preview_click 卡片 → 看 drawer → preview_click Approve → 看是否切到 CHAT → preview_network 看 `/api/feedback` 和 `/api/chat-stream/send` 都打出去。
+
+- [ ] **Step 4: 截图给 user 当 proof**
+
+```
+preview_screenshot()
+```
+
+---
+
+## Task 4: 收尾
+
+### Task 4.1: 标注 deprecated 组件（不删）
+
+**Files:**
+- Modify: `proactive-ai-frontend/src/components/AppShell.tsx`（文件头加注释）
+- Modify: `proactive-ai-frontend/src/components/NowFeed.tsx`（旧版）
+- Modify: `proactive-ai-frontend/src/components/CardDetailBody.tsx`
+- Modify: `proactive-ai-frontend/src/components/ExecutionView.tsx`
+
+- [ ] **Step 1: 每个文件头加一行**
+
+```typescript
+/** @deprecated 2026-05-14: 被 src/components/constellation/* 取代。保留供 /legacy 路由（如果有人复活的话）。 */
+```
+
+不删的原因：CLAUDE.md "改动最小化"原则；万一要回退（比如 sphere 性能在低端 iPhone 有问题），可以快速切回。
+
+- [ ] **Step 2: 提交**
+
+```bash
+git commit -am "chore(frontend): mark legacy AppShell components as deprecated"
+```
+
+---
+
+### Task 4.2: 注册 plan 到 docs/plans/README.mdx
+
+**Files:**
+- Modify: `docs/plans/README.mdx`
+
+- [ ] **Step 1: 在表格里加一行**
+
+```markdown
+| [Constellation 前端整体迁移](./2026-05-14-constellation-frontend-port) | 实施中 | 改前端 Constellation 组件 / 卡片 drawer / approve → chat 链路时必读。 |
+```
+
+- [ ] **Step 2: 提交**
+
+```bash
+git add docs/plans/README.mdx
+git commit -m "docs(plans): register constellation frontend port plan"
+```
+
+---
+
+### Task 4.3: 更新模块文档（可选，等实施完）
+
+实施完后，如果当前 `docs/modules/execution.mdx` 描述了 frontend 的 MainChatView / drawer 路径，加一段说明 "前端 v2026-05-14 起整体走 ConstellationLayout，drawer Approve → MainChatView 链路保持不变"。
+
+---
+
+## Self-Review Checklist（写完计划自审）
+
+- [x] **Spec 覆盖**：用户 3 个要求 — (1) UI 换 Lovable Constellation ✓ (Task 1.x + 2.x)；(2) 卡片执行链路不变 ✓ (复用 MainChatView + CardChat + useProactiveChatRuntime，Task 2.4)；(3) 未实现的 hardcode ✓ (AmbientView / AccountPanel / ConnectPanel = Task 2.7-2.9)。
+- [x] **占位符扫描**：无 TBD / TODO（执行时部分细节 — 比如 menu UI 具体 layout — 要看 Lovable 源；这是 port 任务的自然形态，不是占位符）。
+- [x] **类型一致性**：`Intent` / `Intent.originalId` / `IntentCard.id` / `useCardActions` 命名贯穿一致。
+- [x] **路径具体**：每个新建文件路径都是绝对完整路径或 `@/` 别名路径。
+- [x] **frequent commits**：每个 task 都有 commit step。
+
+## 风险 & 已知未尽事项
+
+1. **Sphere3DCards 在 WKWebView (iOS) 上的性能**：12+ 卡片 + 持续 transform3d 动画，低端 iPhone 可能掉帧。本 plan 不处理，发现问题后单独迭代。
+2. **lucide-react 版本差异**：我们装的是 `^1.8.0`，Lovable 是 `^0.462.0`。某些 icon 名可能在不同主版本之间改过 — 拷贝时如果遇到 "Module has no exported member XXX"，去 lucide 文档查新名字替换。
+3. **AmbientView / AccountPanel / ConnectPanel 都是 hardcode 视觉**：实际接后端的 plan 不在本次范围。
+4. **没改 mobile (Capacitor) 适配**：Constellation 视觉在 iOS 真机上的 safe-area / Dynamic Island / 键盘弹起等问题需要单独验证。本 plan 只保证 web preview 跑通。
+
+---
+
+## 相关 AI Plans
+
+无（本 plan 是新设计入口）。
+
+## 相关模块文档
+
+- `docs/modules/execution.mdx` — chat-stream + card chat（保持当前实现）
+- `docs/modules/generation.mdx` — `/cards` 数据源（保持当前实现）
+- `docs/modules/feedback.mdx` — `/feedback` POST 协议（保持当前实现）

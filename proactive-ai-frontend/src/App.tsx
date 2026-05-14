@@ -1,7 +1,8 @@
 import { useEffect, useMemo } from "react";
+import { MemoryRouter } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import LoginPage from "@/components/LoginPage";
-import AppShell from "@/components/AppShell";
+import ConstellationLayout from "@/components/constellation/ConstellationLayout";
 import { isNative } from "@/lib/platform";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import type { SourceKey } from "@/services/ambient";
@@ -10,15 +11,15 @@ import type { SourceKey } from "@/services/ambient";
  * Top-level router after the apis + openclaw retirement:
  *   loading → spinner
  *   no user → LoginPage (Supabase Google OAuth)
- *   user    → AppShell directly
+ *   user    → ConstellationLayout (v2026-05-14)
  *
- * The pre-cutover Dashboard / useContainer flow waited on a per-user
- * OpenClaw container to spin up. There's no per-user container anymore
- * (pinai-agents is multi-tenant), so login lands the user straight in
- * the chat shell.
+ * The old `AppShell` is kept in `src/components/AppShell.tsx` for reference
+ * but no longer mounted. ConstellationLayout owns the 7-view shell + card
+ * drawer + fullscreen chat overlay; the card execution chat runtime
+ * (CardChat → MainChatView via useProactiveChatRuntime) is unchanged.
  */
 export default function App() {
-  const { loading: authLoading, user, signInWithGoogle, signOut } = useAuth();
+  const { loading: authLoading, user, signInWithGoogle } = useAuth();
   // Opt-in start the ambient sources the user has explicitly enabled.
   // Never autoStart — privacy invariant per V3 migration plan D-5.
   // AmbientSourcesPanel handles per-toggle reconciliation while open;
@@ -57,14 +58,19 @@ export default function App() {
     );
   }
 
-  if (!user) {
+  // Dev convenience: `?preview=1` skips Supabase auth so the Constellation
+  // visual can be inspected without a real session. Remove before shipping.
+  const previewBypass =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).has("preview");
+
+  if (!user && !previewBypass) {
     return <LoginPage onSignIn={signInWithGoogle} />;
   }
 
   return (
-    <AppShell
-      userName={user.user_metadata?.full_name ?? user.email ?? null}
-      onSignOut={signOut}
-    />
+    <MemoryRouter>
+      <ConstellationLayout />
+    </MemoryRouter>
   );
 }

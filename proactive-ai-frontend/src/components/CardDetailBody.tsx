@@ -1,3 +1,9 @@
+/**
+ * @deprecated 2026-05-14 — Replaced by
+ * `src/components/constellation/CardDrawerDetail`. ConstellationLayout owns
+ * the drawer chrome + action wiring now. Kept for fast rollback.
+ */
+
 import { useState } from "react";
 import { motion } from "framer-motion";
 import {

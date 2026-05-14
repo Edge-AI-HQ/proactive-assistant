@@ -1,3 +1,9 @@
+/**
+ * @deprecated 2026-05-14 — Constellation execution surface is `CardChat` →
+ * `MainChatView` (real SSE-driven). This file was a setTimeout-driven mock
+ * never wired in the v3 backend. Kept only for reference.
+ */
+
 import { useState, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { CheckCircle2, Loader2, Circle, ArrowLeft, Send } from "lucide-react";
