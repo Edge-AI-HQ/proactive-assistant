@@ -40,6 +40,24 @@ export default function App() {
       .sort()
       .join(",");
   }, [userSettings?.ambientSources]);
+
+  useEffect(() => {
+    if (!isNative || !user) return;
+    let cancelled = false;
+    void import("@/lib/devices").then(async ({ ensureDevice }) => {
+      try {
+        await ensureDevice({ forceRefresh: true });
+      } catch (err) {
+        if (!cancelled) {
+          console.warn("[devices] registration failed after sign-in", err);
+        }
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
   useEffect(() => {
     if (!isNative || !user || enabledKey === null) return;
     const enabled = enabledKey ? enabledKey.split(",") as SourceKey[] : [];

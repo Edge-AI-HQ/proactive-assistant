@@ -219,8 +219,26 @@ interface SqliteModule {
 }
 
 const DB_NAME = "pin_ambient_outbox";
+let sharedSqliteConnection: SqliteConnection | null = null;
+let sqliteConnectionOpenPromise: Promise<SqliteConnection> | null = null;
 
 async function openSqliteConnection(): Promise<SqliteConnection> {
+  if (sharedSqliteConnection) return sharedSqliteConnection;
+  if (!sqliteConnectionOpenPromise) {
+    sqliteConnectionOpenPromise = openSqliteConnectionOnce()
+      .then((conn) => {
+        sharedSqliteConnection = conn;
+        return conn;
+      })
+      .catch((err) => {
+        sqliteConnectionOpenPromise = null;
+        throw err;
+      });
+  }
+  return sqliteConnectionOpenPromise;
+}
+
+async function openSqliteConnectionOnce(): Promise<SqliteConnection> {
   const mod = await import("@capacitor-community/sqlite") as SqliteModule;
   if (!mod.CapacitorSQLite || !mod.SQLiteConnection) {
     throw new Error("@capacitor-community/sqlite plugin not available");
@@ -235,7 +253,7 @@ async function openSqliteConnection(): Promise<SqliteConnection> {
     .catch(() => ({ result: false }));
   const conn = probe.result
     ? await sqlite.retrieveConnection(DB_NAME, false)
-    : await sqlite.createConnection(DB_NAME, false, "no-encryption", 1, false);
+    : await createOrRetrieveSqliteConnection(sqlite);
 
   const open = await conn.isDBOpen?.().catch(() => ({ result: false }));
   if (open?.result !== true) {
@@ -258,6 +276,22 @@ async function openSqliteConnection(): Promise<SqliteConnection> {
       ON ambient_outbox (status, next_retry_at);
   `);
   return conn;
+}
+
+async function createOrRetrieveSqliteConnection(
+  sqlite: SqliteConnectionFactory,
+): Promise<SqliteConnection> {
+  try {
+    return await sqlite.createConnection(DB_NAME, false, "no-encryption", 1, false);
+  } catch (err) {
+    if (!isConnectionAlreadyExistsError(err)) throw err;
+    return sqlite.retrieveConnection(DB_NAME, false);
+  }
+}
+
+function isConnectionAlreadyExistsError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.toLowerCase().includes("already exists");
 }
 
 /**

@@ -11,11 +11,18 @@
 import { Capacitor } from "@capacitor/core";
 import { KeychainAccess, SecureStorage } from "@aparajita/capacitor-secure-storage";
 import { authHeaders } from "./api";
+import { DEVICE_REGISTERED_EVENT } from "./device-events";
 import { PIN_API_BASE, isNative, pinApiRequestHeaders } from "./platform";
+import { supabase } from "./supabase";
 
 const DEVICE_ID_KEY = "pin.deviceId";
 const DEVICE_TOKEN_KEY = "pin.deviceToken";
 const DEVICE_FINGERPRINT_KEY = "pin.deviceFingerprint";
+const DEVICE_OWNER_KEY = "pin.deviceOwnerUserId";
+let deviceRegistrationInFlight: {
+  ownerUserId: string;
+  promise: Promise<DeviceCredentials>;
+} | null = null;
 
 export type DevicePlatform = "ios" | "android" | "web";
 
@@ -23,6 +30,16 @@ export interface DeviceCredentials {
   deviceId: string;
   deviceToken: string;
   platform: DevicePlatform;
+}
+
+export interface EnsureDeviceOptions {
+  forceRefresh?: boolean;
+}
+
+interface StoredDeviceCredentials {
+  deviceId: string | null;
+  deviceToken: string | null;
+  ownerUserId: string | null;
 }
 
 interface NativeDeviceProfile {
@@ -48,21 +65,23 @@ function generateDeviceId(): string {
   return `dev-${Date.now().toString(36)}-${rand}`;
 }
 
-function readLocalStored(): { deviceId: string | null; deviceToken: string | null } {
+function readLocalStored(): StoredDeviceCredentials {
   try {
     return {
       deviceId: localStorage.getItem(DEVICE_ID_KEY),
       deviceToken: localStorage.getItem(DEVICE_TOKEN_KEY),
+      ownerUserId: localStorage.getItem(DEVICE_OWNER_KEY),
     };
   } catch {
-    return { deviceId: null, deviceToken: null };
+    return { deviceId: null, deviceToken: null, ownerUserId: null };
   }
 }
 
-function writeLocalStored(deviceId: string, deviceToken: string): void {
+function writeLocalStored(deviceId: string, deviceToken: string, ownerUserId: string): void {
   try {
     localStorage.setItem(DEVICE_ID_KEY, deviceId);
     localStorage.setItem(DEVICE_TOKEN_KEY, deviceToken);
+    localStorage.setItem(DEVICE_OWNER_KEY, ownerUserId);
   } catch {
     // localStorage can throw in private mode; the device just won't be
     // remembered — next launch will re-register.
@@ -73,6 +92,7 @@ function clearLocalStored(): void {
   try {
     localStorage.removeItem(DEVICE_ID_KEY);
     localStorage.removeItem(DEVICE_TOKEN_KEY);
+    localStorage.removeItem(DEVICE_OWNER_KEY);
   } catch {
     /* ignore */
   }
@@ -98,32 +118,43 @@ async function removeSecureValue(key: string): Promise<void> {
   }
 }
 
-async function readStored(): Promise<{ deviceId: string | null; deviceToken: string | null }> {
+async function readStored(): Promise<StoredDeviceCredentials> {
   if (!isNative) return readLocalStored();
 
   const secureStored = {
     deviceId: await readSecureValue(DEVICE_ID_KEY),
     deviceToken: await readSecureValue(DEVICE_TOKEN_KEY),
+    ownerUserId: await readSecureValue(DEVICE_OWNER_KEY),
   };
-  if (secureStored.deviceId && secureStored.deviceToken) return secureStored;
+  if (secureStored.deviceId && secureStored.deviceToken && secureStored.ownerUserId) {
+    return secureStored;
+  }
 
   const legacyStored = readLocalStored();
-  if (legacyStored.deviceId && legacyStored.deviceToken) {
+  if (legacyStored.deviceId && legacyStored.deviceToken && legacyStored.ownerUserId) {
     await writeSecureValue(DEVICE_ID_KEY, legacyStored.deviceId);
     await writeSecureValue(DEVICE_TOKEN_KEY, legacyStored.deviceToken);
+    await writeSecureValue(DEVICE_OWNER_KEY, legacyStored.ownerUserId);
     return legacyStored;
   }
 
-  return secureStored;
+  return secureStored.deviceId || secureStored.deviceToken || secureStored.ownerUserId
+    ? secureStored
+    : legacyStored;
 }
 
-async function writeStored(deviceId: string, deviceToken: string): Promise<void> {
+async function writeStored(
+  deviceId: string,
+  deviceToken: string,
+  ownerUserId: string,
+): Promise<void> {
   if (!isNative) {
-    writeLocalStored(deviceId, deviceToken);
+    writeLocalStored(deviceId, deviceToken, ownerUserId);
     return;
   }
   await writeSecureValue(DEVICE_ID_KEY, deviceId);
   await writeSecureValue(DEVICE_TOKEN_KEY, deviceToken);
+  await writeSecureValue(DEVICE_OWNER_KEY, ownerUserId);
 }
 
 async function clearStored(): Promise<void> {
@@ -133,6 +164,7 @@ async function clearStored(): Promise<void> {
   }
   await removeSecureValue(DEVICE_ID_KEY);
   await removeSecureValue(DEVICE_TOKEN_KEY);
+  await removeSecureValue(DEVICE_OWNER_KEY);
 }
 
 async function ensureDeviceFingerprint(): Promise<string | null> {
@@ -237,49 +269,130 @@ interface RegisterResponse {
   registeredAt: string;
 }
 
+async function currentUserId(): Promise<string> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const userId = session?.user?.id;
+  if (!userId) {
+    throw new Error("device registration requires an authenticated user");
+  }
+  return userId;
+}
+
+async function isCurrentOwner(ownerUserId: string): Promise<boolean> {
+  try {
+    return (await currentUserId()) === ownerUserId;
+  } catch {
+    return false;
+  }
+}
+
+function emitDeviceRegistered(creds: DeviceCredentials): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent(DEVICE_REGISTERED_EVENT, {
+      detail: { deviceId: creds.deviceId, platform: creds.platform },
+    }),
+  );
+}
+
+async function registerDeviceForUser(
+  platform: DevicePlatform,
+  ownerUserId: string,
+  proposedDeviceId: string,
+): Promise<DeviceCredentials> {
+  const profile = await getNativeDeviceProfile(platform);
+
+  const postRegister = async (deviceId: string) =>
+    fetch(`${PIN_API_BASE}/api/devices/register`, {
+      method: "POST",
+      headers: pinApiRequestHeaders({
+        ...(await authHeaders()),
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify({
+        deviceId,
+        platform,
+        displayName: profile.displayName,
+        ...(profile.appVersion ? { appVersion: profile.appVersion } : {}),
+        ...(profile.model ? { model: profile.model } : {}),
+        ...(profile.deviceFingerprint ? { deviceFingerprint: profile.deviceFingerprint } : {}),
+        metadata: profile.metadata,
+      }),
+    });
+
+  let res = await postRegister(proposedDeviceId);
+  if (res.status === 409) {
+    // The stored deviceId can belong to a previous account on the same
+    // phone. Keep the hardware fingerprint, but propose a fresh logical id.
+    res = await postRegister(generateDeviceId());
+  }
+  if (!res.ok) {
+    throw new Error(`/devices/register failed: ${res.status}`);
+  }
+  const data = (await res.json()) as RegisterResponse;
+  const creds = {
+    deviceId: data.deviceId,
+    deviceToken: data.deviceToken,
+    platform,
+  };
+  if (await isCurrentOwner(ownerUserId)) {
+    await writeStored(data.deviceId, data.deviceToken, ownerUserId);
+    emitDeviceRegistered(creds);
+  }
+  return creds;
+}
+
+function registerDeviceForUserOnce(
+  platform: DevicePlatform,
+  ownerUserId: string,
+  proposedDeviceId: string,
+): Promise<DeviceCredentials> {
+  if (deviceRegistrationInFlight?.ownerUserId === ownerUserId) {
+    return deviceRegistrationInFlight.promise;
+  }
+  const promise = registerDeviceForUser(
+    platform,
+    ownerUserId,
+    proposedDeviceId,
+  ).finally(() => {
+    if (deviceRegistrationInFlight?.promise === promise) {
+      deviceRegistrationInFlight = null;
+    }
+  });
+  deviceRegistrationInFlight = { ownerUserId, promise };
+  return promise;
+}
+
 /**
  * Ensure this client has a registered device + token. If we already have
  * both stored, returns them immediately. Otherwise registers a new device
  * with the cloud and persists the returned token.
  *
- * Called once on app boot (after sign-in, before the first mobile sync).
+ * Called once on app boot after sign-in, and again before the first mobile
+ * sync. Credentials are scoped to the Supabase user so account switching on
+ * the same phone does not reuse another user's device token.
  */
-export async function ensureDevice(): Promise<DeviceCredentials> {
+export async function ensureDevice(
+  opts: EnsureDeviceOptions = {},
+): Promise<DeviceCredentials> {
   const platform = detectPlatform();
-  const { deviceId: storedId, deviceToken: storedToken } = await readStored();
-  if (storedId && storedToken) {
+  const ownerUserId = await currentUserId();
+  if (deviceRegistrationInFlight?.ownerUserId === ownerUserId) {
+    return deviceRegistrationInFlight.promise;
+  }
+  const {
+    deviceId: storedId,
+    deviceToken: storedToken,
+    ownerUserId: storedOwner,
+  } = await readStored();
+  if (!opts.forceRefresh && storedId && storedToken && storedOwner === ownerUserId) {
     return { deviceId: storedId, deviceToken: storedToken, platform };
   }
 
   const deviceId = storedId ?? generateDeviceId();
-  const profile = await getNativeDeviceProfile(platform);
-
-  const res = await fetch(`${PIN_API_BASE}/api/devices/register`, {
-    method: "POST",
-    headers: pinApiRequestHeaders({
-      ...(await authHeaders()),
-      "Content-Type": "application/json",
-    }),
-    body: JSON.stringify({
-      deviceId,
-      platform,
-      displayName: profile.displayName,
-      ...(profile.appVersion ? { appVersion: profile.appVersion } : {}),
-      ...(profile.model ? { model: profile.model } : {}),
-      ...(profile.deviceFingerprint ? { deviceFingerprint: profile.deviceFingerprint } : {}),
-      metadata: profile.metadata,
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`/devices/register failed: ${res.status}`);
-  }
-  const data = (await res.json()) as RegisterResponse;
-  await writeStored(data.deviceId, data.deviceToken);
-  return {
-    deviceId: data.deviceId,
-    deviceToken: data.deviceToken,
-    platform,
-  };
+  return registerDeviceForUserOnce(platform, ownerUserId, deviceId);
 }
 
 /**

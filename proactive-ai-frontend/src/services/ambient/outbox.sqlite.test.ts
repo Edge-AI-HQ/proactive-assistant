@@ -11,6 +11,8 @@ import initSqlJs, { type Database } from "sql.js";
 
 let SQL: Awaited<ReturnType<typeof initSqlJs>>;
 const pool = new Map<string, Database>();
+const connections = new Map<string, FakeDBConnection>();
+let createConnectionCount = 0;
 
 function poolKey(database: string, readonly: boolean) {
   return `${readonly ? "RO" : "RW"}_${database}`;
@@ -54,7 +56,7 @@ class FakeSQLiteConnection {
     if (!plugin) throw new Error("SQLiteConnection: plugin is required");
   }
   async isConnection(database: string, readonly: boolean) {
-    return { result: pool.has(poolKey(database, readonly)) };
+    return { result: connections.has(poolKey(database, readonly)) };
   }
   async createConnection(
     database: string,
@@ -66,13 +68,21 @@ class FakeSQLiteConnection {
     if (typeof database !== "string" || database.length === 0) {
       throw new Error("CreateConnection: Must provide a database name");
     }
-    return new FakeDBConnection(database, readonly);
+    const key = poolKey(database, readonly);
+    if (connections.has(key)) {
+      throw new Error(`Connection ${database} already exists`);
+    }
+    createConnectionCount += 1;
+    const conn = new FakeDBConnection(database, readonly);
+    connections.set(key, conn);
+    return conn;
   }
   async retrieveConnection(database: string, readonly: boolean) {
-    if (!pool.has(poolKey(database, readonly))) {
+    const conn = connections.get(poolKey(database, readonly));
+    if (!conn) {
       throw new Error(`retrieveConnection: ${database} not open`);
     }
-    return new FakeDBConnection(database, readonly);
+    return conn;
   }
 }
 
@@ -88,6 +98,9 @@ beforeAll(async () => {
 afterEach(() => {
   for (const db of pool.values()) db.close();
   pool.clear();
+  connections.clear();
+  createConnectionCount = 0;
+  vi.resetModules();
 });
 
 describe("SqliteOutboxStore (sql.js round-trip)", () => {
@@ -138,5 +151,15 @@ describe("SqliteOutboxStore (sql.js round-trip)", () => {
     const retryable = await store.pending(1, retryAt);
     expect(retryable[0]?.attemptCount).toBe(1);
     expect(retryable[0]?.lastError).toBe("offline");
+  });
+
+  test("concurrent stores share the in-flight native connection", async () => {
+    const { SqliteOutboxStore } = await import("./outbox");
+    const first = new SqliteOutboxStore();
+    const second = new SqliteOutboxStore();
+
+    await Promise.all([first.count(), second.count()]);
+
+    expect(createConnectionCount).toBe(1);
   });
 });

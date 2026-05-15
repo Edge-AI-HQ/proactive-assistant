@@ -6,6 +6,7 @@ import {
   type RegisterDeviceInput,
   type UserDevice,
 } from "@/lib/api";
+import { DEVICE_REGISTERED_EVENT } from "@/lib/device-events";
 
 export interface UseUserDevicesApi {
   devices: UserDevice[];
@@ -60,6 +61,17 @@ export function useUserDevices(autoLoad: boolean = true): UseUserDevicesApi {
 
   useEffect(() => {
     if (autoLoad) void refresh();
+  }, [autoLoad, refresh]);
+
+  useEffect(() => {
+    if (!autoLoad || typeof window === "undefined") return;
+    const onDeviceRegistered = () => {
+      void refresh();
+    };
+    window.addEventListener(DEVICE_REGISTERED_EVENT, onDeviceRegistered);
+    return () => {
+      window.removeEventListener(DEVICE_REGISTERED_EVENT, onDeviceRegistered);
+    };
   }, [autoLoad, refresh]);
 
   return { devices, loading, error, refresh, registerDevice, revoke };
