@@ -10,6 +10,7 @@ actor AudioStreamManager {
     private static let maxPendingTranscripts = 300
     private static let maxTranscriptChars = 6_000
     private static let classificationDebugEmitIntervalMs = 2_000
+    private static let classificationStaleTimeoutMs = 15_000
 
     private let callbacks: Callbacks
     private let classifier = SoundClassificationService()
@@ -52,7 +53,14 @@ actor AudioStreamManager {
         installClassifierCallbacksIfNeeded()
         await fileStore.ensureDirectory()
         guard !isCaptureRunning else {
+            suppressionReasons.remove(.interruption)
+            refreshMediaSuppression()
+            setupMediaObservers()
+            let ok = reconcileClassifierState(reason: "startCapture")
             emitState()
+            if !ok && suppressionReasons.isEmpty {
+                throw AudioCaptureFailure.engineStartFailed
+            }
             return
         }
 
@@ -66,7 +74,7 @@ actor AudioStreamManager {
         refreshMediaSuppression()
         setupMediaObservers()
 
-        let ok = reconcileClassifierState()
+        let ok = reconcileClassifierState(reason: "startCapture")
         emitState()
         if !ok && suppressionReasons.isEmpty {
             isCaptureRunning = false
@@ -86,13 +94,23 @@ actor AudioStreamManager {
             suppressionReasons.removeAll()
             teardownMediaObservers()
         }
-        _ = reconcileClassifierState()
+        _ = reconcileClassifierState(reason: "stopCapture")
         emitState()
     }
 
     func startClassification() throws {
         installClassifierCallbacksIfNeeded()
-        guard !isClassificationRunning else { return }
+        guard !isClassificationRunning else {
+            suppressionReasons.remove(.interruption)
+            refreshMediaSuppression()
+            setupMediaObservers()
+            let ok = reconcileClassifierState(reason: "startClassification")
+            emitState()
+            if !ok && suppressionReasons.isEmpty {
+                throw AudioCaptureFailure.engineStartFailed
+            }
+            return
+        }
         isClassificationRunning = true
         // Same stale-interruption guard as startCapture(): the Debug panel and
         // source toggle are explicit starts, so they should recover the audio
@@ -100,7 +118,7 @@ actor AudioStreamManager {
         suppressionReasons.remove(.interruption)
         refreshMediaSuppression()
         setupMediaObservers()
-        let ok = reconcileClassifierState()
+        let ok = reconcileClassifierState(reason: "startClassification")
         emitState()
         if !ok && suppressionReasons.isEmpty {
             isClassificationRunning = false
@@ -115,15 +133,24 @@ actor AudioStreamManager {
             suppressionReasons.removeAll()
             teardownMediaObservers()
         }
-        _ = reconcileClassifierState()
+        _ = reconcileClassifierState(reason: "stopClassification")
         emitState()
     }
 
     func snapshot() -> AudioCaptureSnapshot {
-        AudioCaptureSnapshot(
+        classifier.markStaleIfNeeded(maxAgeMs: Self.classificationStaleTimeoutMs)
+        let diagnostics = classifier.diagnostics
+        return AudioCaptureSnapshot(
             running: isCaptureRunning,
             paused: isPaused,
             capturing: isCapturing,
+            classificationRunning: isClassificationRunning,
+            engineRunning: classifier.isRunning,
+            capturePipelineRunning: diagnostics.capturePipelineRunning,
+            engineState: resolvedEngineState(diagnostics.engineState),
+            lastClassificationAt: diagnostics.lastFrameAt,
+            lastAudioError: diagnostics.lastError,
+            classifierRestartCount: diagnostics.restartCount,
             suppressedReason: resolvedSuppressedReason()
         )
     }
@@ -148,7 +175,19 @@ actor AudioStreamManager {
         } else {
             suppressionReasons.remove(.playback)
         }
-        _ = reconcileClassifierState()
+        _ = reconcileClassifierState(reason: "playbackSuppression")
+        emitState()
+    }
+
+    func recoverClassifierIfNeeded(reason: String) {
+        guard isCaptureRunning || isClassificationRunning else {
+            emitState()
+            return
+        }
+        suppressionReasons.remove(.interruption)
+        refreshMediaSuppression()
+        setupMediaObservers()
+        _ = reconcileClassifierState(reason: reason)
         emitState()
     }
 
@@ -164,8 +203,8 @@ actor AudioStreamManager {
         classifier.onSpeechFrame = { [weak self] in
             Task { await self?.markSpeechFrame() }
         }
-        classifier.onSpeechBurst = { [weak self] confidence in
-            Task { await self?.handleSpeechBurst(confidence: confidence) }
+        classifier.onSpeechBurst = { [weak self] confidence, triggerSource in
+            Task { await self?.handleSpeechBurst(confidence: confidence, triggerSource: triggerSource) }
         }
         classifier.onOtherAudioDetected = { [weak self] in
             Task { await self?.handleOtherAudioDetected() }
@@ -178,6 +217,9 @@ actor AudioStreamManager {
         }
         classifier.onError = { [weak self] message, source in
             Task { await self?.emitError(message, source: source) }
+        }
+        classifier.onAnalyzerFailed = { [weak self] _ in
+            Task { await self?.handleAnalyzerFailed() }
         }
     }
 
@@ -202,11 +244,12 @@ actor AudioStreamManager {
         lastSpeechAt = Date()
     }
 
-    private func handleSpeechBurst(confidence: Double) {
+    private func handleSpeechBurst(confidence: Double, triggerSource: String) {
         callbacks.emitEvent("speechBurst", [
             "confidence": confidence,
             "durationMs": 0,
             "timestamp": Int(Date().timeIntervalSince1970 * 1_000),
+            "triggerSource": triggerSource,
         ])
 
         guard isCaptureRunning, !isCapturing, suppressionReasons.isEmpty else {
@@ -220,7 +263,13 @@ actor AudioStreamManager {
 
         let burstId = UUID().uuidString
         let sessionId = captureSessionId
-        Task { await self.runOneCaptureCycle(burstId: burstId, captureSessionId: sessionId) }
+        Task {
+            await self.runOneCaptureCycle(
+                burstId: burstId,
+                captureSessionId: sessionId,
+                triggerSource: triggerSource
+            )
+        }
     }
 
     private func handleOtherAudioDetected() {
@@ -228,7 +277,7 @@ actor AudioStreamManager {
         guard !suppressionReasons.contains(.media) else { return }
         suppressionReasons.insert(.media)
         startMediaResumePolling()
-        _ = reconcileClassifierState()
+        _ = reconcileClassifierState(reason: "otherAudioDetected")
         emitState()
     }
 
@@ -239,18 +288,29 @@ actor AudioStreamManager {
 
     private func handleInterruptionEnded() {
         suppressionReasons.remove(.interruption)
-        _ = reconcileClassifierState()
+        _ = reconcileClassifierState(reason: "interruptionEnded")
+        emitState()
+    }
+
+    private func handleAnalyzerFailed() {
+        if isCapturing {
+            stopCurrentRecording = true
+        }
         emitState()
     }
 
     // MARK: - Capture cycle
 
-    private func runOneCaptureCycle(burstId: String, captureSessionId: String) async {
+    private func runOneCaptureCycle(
+        burstId: String,
+        captureSessionId: String,
+        triggerSource: String
+    ) async {
         defer {
             classifier.detachRecordingSink()
             isCapturing = false
             stopCurrentRecording = false
-            _ = reconcileClassifierState()
+            _ = reconcileClassifierState(reason: "captureCycleComplete")
             emitState()
         }
 
@@ -305,6 +365,7 @@ actor AudioStreamManager {
         emitTranscriptDraft(
             text: stitchedText,
             metadata: metadata,
+            triggerSource: triggerSource,
             transcriptLocale: transcriptLocale
         )
 
@@ -313,12 +374,18 @@ actor AudioStreamManager {
             : nil
 
         if let refinedText, !refinedText.isEmpty {
-            emitTranscriptRefined(text: refinedText, metadata: metadata, transcriptLocale: transcriptLocale)
+            emitTranscriptRefined(
+                text: refinedText,
+                metadata: metadata,
+                triggerSource: triggerSource,
+                transcriptLocale: transcriptLocale
+            )
             emitTranscriptReady(
                 text: refinedText,
                 metadata: metadata,
                 provider: .cloudWhisper,
                 fallback: false,
+                triggerSource: triggerSource,
                 transcriptLocale: transcriptLocale
             )
         } else {
@@ -327,6 +394,7 @@ actor AudioStreamManager {
                 metadata: metadata,
                 provider: .localSpeech,
                 fallback: activeConfig.canRefineDirectly,
+                triggerSource: triggerSource,
                 transcriptLocale: transcriptLocale
             )
         }
@@ -514,6 +582,7 @@ actor AudioStreamManager {
     private func emitTranscriptDraft(
         text: String,
         metadata: AudioCaptureMetadata,
+        triggerSource: String,
         transcriptLocale: String?
     ) {
         var payload: [String: Any] = [
@@ -524,6 +593,7 @@ actor AudioStreamManager {
             "text": text,
             "capturedAt": iso8601(metadata.capturedAt),
             "durationMs": metadata.durationMs,
+            "triggerSource": triggerSource,
         ]
         if let transcriptLocale {
             payload["transcriptLocale"] = transcriptLocale
@@ -534,6 +604,7 @@ actor AudioStreamManager {
     private func emitTranscriptRefined(
         text: String,
         metadata: AudioCaptureMetadata,
+        triggerSource: String,
         transcriptLocale: String?
     ) {
         var payload: [String: Any] = [
@@ -545,6 +616,7 @@ actor AudioStreamManager {
             "capturedAt": iso8601(metadata.capturedAt),
             "provider": AudioTranscriptProvider.cloudWhisper.rawValue,
             "localProvider": AudioLocalSpeechProvider.sfSpeech.rawValue,
+            "triggerSource": triggerSource,
         ]
         if let transcriptLocale {
             payload["transcriptLocale"] = transcriptLocale
@@ -557,6 +629,7 @@ actor AudioStreamManager {
         metadata: AudioCaptureMetadata,
         provider: AudioTranscriptProvider,
         fallback: Bool,
+        triggerSource: String,
         transcriptLocale: String?
     ) {
         segmentIndex += 1
@@ -572,6 +645,7 @@ actor AudioStreamManager {
             fallback: fallback,
             localProvider: .sfSpeech,
             segmentIndex: segmentIndex,
+            triggerSource: triggerSource,
             transcriptLocale: transcriptLocale
         )
         pendingTranscripts.append(record)
@@ -621,12 +695,20 @@ actor AudioStreamManager {
         (isCaptureRunning || isClassificationRunning) && suppressionReasons.isEmpty
     }
 
+    private func resolvedEngineState(_ state: AudioEngineState) -> AudioEngineState {
+        resolvedSuppressedReason() == nil ? state : .suppressed
+    }
+
     @discardableResult
-    private func reconcileClassifierState() -> Bool {
+    private func reconcileClassifierState(reason: String) -> Bool {
+        classifier.markStaleIfNeeded(maxAgeMs: Self.classificationStaleTimeoutMs)
         if shouldClassifierRun {
-            return classifier.isRunning || classifier.start()
+            if classifier.canAnalyze {
+                return true
+            }
+            return classifier.start()
         }
-        if classifier.isRunning {
+        if classifier.canAnalyze || classifier.diagnostics.capturePipelineRunning {
             classifier.stop()
         }
         return true
@@ -663,7 +745,7 @@ actor AudioStreamManager {
         case .end:
             suppressionReasons.remove(.media)
             stopMediaResumePolling()
-            _ = reconcileClassifierState()
+            _ = reconcileClassifierState(reason: "secondaryAudioHintEnded")
             emitState()
         @unknown default:
             break
@@ -692,7 +774,7 @@ actor AudioStreamManager {
         guard suppressionReasons.contains(.media) else { return }
         suppressionReasons.remove(.media)
         stopMediaResumePolling()
-        _ = reconcileClassifierState()
+        _ = reconcileClassifierState(reason: "mediaResumePoll")
         emitState()
     }
 }

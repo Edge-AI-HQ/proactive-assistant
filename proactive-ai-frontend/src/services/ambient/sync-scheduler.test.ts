@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { MemoryOutboxStore } from "./outbox";
 import { AmbientSyncScheduler } from "./sync-scheduler";
+import { AMBIENT_TIMELINE_KIND } from "./timeline";
 
 vi.mock("./ingest-bridge", () => ({
   ingestBatch: vi.fn(),
@@ -39,7 +40,7 @@ describe("AmbientSyncScheduler", () => {
     await outbox.enqueue([
       {
         id: "item-1",
-        kind: "session_summary",
+        kind: AMBIENT_TIMELINE_KIND,
         title: "Voice summary",
         summary: "A useful transcript that should upload.",
         dedupe_key: "audio:1",
@@ -67,7 +68,7 @@ describe("AmbientSyncScheduler", () => {
     await outbox.enqueue([
       {
         id: "item-2",
-        kind: "device.location",
+        kind: AMBIENT_TIMELINE_KIND,
         title: "Location",
         summary: "location",
         dedupe_key: "loc:1",
@@ -87,7 +88,7 @@ describe("AmbientSyncScheduler", () => {
     await outbox.enqueue([
       {
         id: "item-lock",
-        kind: "session_summary",
+        kind: AMBIENT_TIMELINE_KIND,
         title: "Locked",
         summary: "should stay queued while uploads are locked",
         dedupe_key: "audio:lock",
@@ -120,7 +121,7 @@ describe("AmbientSyncScheduler", () => {
     await outbox.enqueue([
       {
         id: "item-unlock",
-        kind: "session_summary",
+        kind: AMBIENT_TIMELINE_KIND,
         title: "Unlock",
         summary: "should upload once the lock is released",
         dedupe_key: "audio:unlock",
@@ -145,7 +146,7 @@ describe("AmbientSyncScheduler", () => {
     await outbox.enqueue([
       {
         id: "item-3",
-        kind: "device.activity",
+        kind: AMBIENT_TIMELINE_KIND,
         title: "Activity",
         summary: "walking",
         dedupe_key: "activity:1",
@@ -161,5 +162,25 @@ describe("AmbientSyncScheduler", () => {
     const retryable = await outbox.pending(1, Date.now() + 20_000);
     expect(retryable[0]?.attemptCount).toBe(1);
     expect(retryable[0]?.lastError).toBe("network down");
+  });
+
+  test("drops local-only raw source records instead of uploading them", async () => {
+    const outbox = new MemoryOutboxStore();
+    await outbox.enqueue([
+      {
+        id: "raw-location",
+        kind: "device.location",
+        title: "Location",
+        summary: "precise local raw signal",
+        dedupe_key: "location:raw",
+      },
+    ]);
+    const scheduler = new AmbientSyncScheduler(outbox);
+
+    const result = await scheduler.drain();
+
+    expect(mockedIngestBatch).not.toHaveBeenCalled();
+    expect(result.ignored).toBe(1);
+    expect(await outbox.count()).toBe(0);
   });
 });

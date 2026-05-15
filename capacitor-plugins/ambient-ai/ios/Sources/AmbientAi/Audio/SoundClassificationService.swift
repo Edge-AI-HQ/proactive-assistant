@@ -17,6 +17,14 @@ struct SoundClassificationFrame {
     let timestamp: Date
 }
 
+struct SoundClassificationDiagnostics {
+    let engineState: AudioEngineState
+    let lastFrameAt: Date?
+    let lastError: String?
+    let restartCount: Int
+    let capturePipelineRunning: Bool
+}
+
 protocol AudioRecordingSink: AnyObject {
     func recordingDidStart(
         format: AVAudioFormat,
@@ -29,11 +37,12 @@ protocol AudioRecordingSink: AnyObject {
 final class SoundClassificationService {
     var onFrame: ((SoundClassificationFrame) -> Void)?
     var onSpeechFrame: (() -> Void)?
-    var onSpeechBurst: ((Double) -> Void)?
+    var onSpeechBurst: ((Double, String) -> Void)?
     var onOtherAudioDetected: (() -> Void)?
     var onInterruptionBegan: (() -> Void)?
     var onInterruptionEnded: (() -> Void)?
     var onError: ((String, String) -> Void)?
+    var onAnalyzerFailed: ((String) -> Void)?
 
     private let lock = NSLock()
     private let analysisQueue = DispatchQueue(label: "ai.pin.ambient-ai.sound-analysis", qos: .utility)
@@ -44,16 +53,48 @@ final class SoundClassificationService {
     private var observer: ClassificationObserver?
     private weak var sink: AudioRecordingSink?
     private var sinkActive = false
-    private var isStarted = false
+    private var engineState: AudioEngineState = .stopped
+    private var lastFrameAt: Date?
+    private var lastError: String?
+    private var restartCount = 0
     private var consecutiveSpeechCount = 0
+    private var lastFallbackBurstAt: Date?
     private var minSpeechConfidence = 0.60
     private var consecutiveFramesNeeded = 1
     private var interruptionObserver: NSObjectProtocol?
+    private let fallbackRmsThreshold: Float = 0.025
+    private let fallbackMinIntervalMs = 10_000
 
     var isRunning: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return isStarted
+        return engineState == .healthy
+    }
+
+    var canAnalyze: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return analyzer != nil
+            && engine?.isRunning == true
+            && ![.stopped, .failed, .suspended, .stale].contains(engineState)
+    }
+
+    var isSuspended: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return engineState == .suspended
+    }
+
+    var diagnostics: SoundClassificationDiagnostics {
+        lock.lock()
+        defer { lock.unlock() }
+        return SoundClassificationDiagnostics(
+            engineState: engineState,
+            lastFrameAt: lastFrameAt,
+            lastError: lastError,
+            restartCount: restartCount,
+            capturePipelineRunning: engine?.isRunning == true
+        )
     }
 
     func updateConfig(_ config: AudioCaptureConfig) {
@@ -63,9 +104,18 @@ final class SoundClassificationService {
     @discardableResult
     func start() -> Bool {
         lock.lock()
-        if isStarted {
+        if analyzer != nil,
+           engine?.isRunning == true,
+           ![.failed, .suspended, .stale, .stopped].contains(engineState) {
             lock.unlock()
             return true
+        }
+        let restarting = [.failed, .suspended, .stale].contains(engineState)
+        if restarting {
+            stopAnalyzerLocked(nextState: .restarting)
+            restartCount += 1
+        } else if engineState == .stopped {
+            engineState = .starting
         }
         lock.unlock()
 
@@ -79,7 +129,7 @@ final class SoundClassificationService {
             try session.setCategory(
                 .playAndRecord,
                 mode: .measurement,
-                options: [.mixWithOthers, .allowBluetooth, .defaultToSpeaker]
+                options: [.mixWithOthers, .allowBluetoothHFP, .defaultToSpeaker]
             )
             try session.setActive(true, options: [])
         } catch {
@@ -87,7 +137,18 @@ final class SoundClassificationService {
             return false
         }
 
-        let engine = AVAudioEngine()
+        let engine: AVAudioEngine
+        lock.lock()
+        if let existingEngine = self.engine {
+            engine = existingEngine
+            lock.unlock()
+        } else {
+            let newEngine = AVAudioEngine()
+            self.engine = newEngine
+            engine = newEngine
+            lock.unlock()
+        }
+
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
@@ -95,54 +156,25 @@ final class SoundClassificationService {
             return false
         }
 
-        let analyzer = SNAudioStreamAnalyzer(format: format)
-        let request: SNClassifySoundRequest
-        do {
-            request = try SNClassifySoundRequest(classifierIdentifier: .version1)
-        } catch {
-            emitError("Sound classifier unavailable: \(error.localizedDescription)", source: "soundAnalysis")
-            return false
-        }
-        request.windowDuration = CMTime(seconds: 0.75, preferredTimescale: 48_000)
-        request.overlapFactor = 0.25
-
-        let observer = ClassificationObserver { [weak self] frame in
-            self?.handleClassification(frame)
-        } onFailure: { [weak self] message in
-            self?.emitError(message, source: "soundAnalysis")
-        }
-
-        do {
-            try analyzer.add(request, withObserver: observer)
-        } catch {
-            emitError("Unable to attach sound classifier: \(error.localizedDescription)", source: "soundAnalysis")
+        guard startAnalyzer(format: format, restarting: restarting) else {
             return false
         }
 
-        input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 8_192, format: format) { [weak self, weak analyzer] buffer, time in
-            guard let self else { return }
-            self.dispatchAudioBuffer(buffer)
-            let framePosition = time.sampleTime
-            self.analysisQueue.async {
-                analyzer?.analyze(buffer, atAudioFramePosition: framePosition)
+        if !engine.isRunning {
+            input.removeTap(onBus: 0)
+            input.installTap(onBus: 0, bufferSize: 8_192, format: format) { [weak self] buffer, time in
+                self?.dispatchAudioBuffer(buffer)
+                self?.analyze(buffer: buffer, atAudioFramePosition: time.sampleTime)
+            }
+
+            do {
+                try engine.start()
+            } catch {
+                input.removeTap(onBus: 0)
+                emitError("Audio engine failed to start: \(error.localizedDescription)", source: "audioSession")
+                return false
             }
         }
-
-        do {
-            try engine.start()
-        } catch {
-            input.removeTap(onBus: 0)
-            emitError("Audio engine failed to start: \(error.localizedDescription)", source: "audioSession")
-            return false
-        }
-
-        lock.lock()
-        self.engine = engine
-        self.analyzer = analyzer
-        self.observer = observer
-        self.isStarted = true
-        lock.unlock()
 
         installInterruptionObserverIfNeeded()
         soundLogger.info("SoundAnalysis engine started")
@@ -197,15 +229,13 @@ final class SoundClassificationService {
 
     private func stopEngine() {
         lock.lock()
-        guard isStarted else {
+        guard engine != nil || analyzer != nil else {
             lock.unlock()
             return
         }
         let engine = self.engine
         self.engine = nil
-        self.analyzer = nil
-        self.observer = nil
-        self.isStarted = false
+        stopAnalyzerLocked(nextState: .stopped)
         self.sink = nil
         self.sinkActive = false
         self.consecutiveSpeechCount = 0
@@ -214,6 +244,59 @@ final class SoundClassificationService {
         engine?.inputNode.removeTap(onBus: 0)
         engine?.stop()
         soundLogger.info("SoundAnalysis engine stopped")
+    }
+
+    private func startAnalyzer(format: AVAudioFormat, restarting: Bool) -> Bool {
+        let analyzer = SNAudioStreamAnalyzer(format: format)
+        let request: SNClassifySoundRequest
+        do {
+            request = try SNClassifySoundRequest(classifierIdentifier: .version1)
+        } catch {
+            emitError("Sound classifier unavailable: \(error.localizedDescription)", source: "soundAnalysis")
+            return false
+        }
+        request.windowDuration = CMTime(seconds: 0.75, preferredTimescale: 48_000)
+        request.overlapFactor = 0.25
+
+        let observer = ClassificationObserver { [weak self] frame in
+            self?.handleClassification(frame)
+        } onFailure: { [weak self] message in
+            self?.handleAnalyzerFailure(message)
+        }
+
+        do {
+            try analyzer.add(request, withObserver: observer)
+        } catch {
+            emitError("Unable to attach sound classifier: \(error.localizedDescription)", source: "soundAnalysis")
+            return false
+        }
+
+        lock.lock()
+        self.analyzer = analyzer
+        self.observer = observer
+        self.engineState = restarting ? .restarting : .starting
+        lock.unlock()
+        return true
+    }
+
+    private func stopAnalyzerLocked(nextState: AudioEngineState) {
+        analyzer = nil
+        observer = nil
+        engineState = nextState
+        consecutiveSpeechCount = 0
+    }
+
+    private func analyze(buffer: AVAudioPCMBuffer, atAudioFramePosition framePosition: AVAudioFramePosition) {
+        lock.lock()
+        let currentAnalyzer = analyzer
+        let canAnalyze = currentAnalyzer != nil
+            && ![.stopped, .failed, .suspended, .stale].contains(engineState)
+        lock.unlock()
+
+        guard canAnalyze, let currentAnalyzer else { return }
+        analysisQueue.async {
+            currentAnalyzer.analyze(buffer, atAudioFramePosition: framePosition)
+        }
     }
 
     private func dispatchAudioBuffer(_ buffer: AVAudioPCMBuffer) {
@@ -226,10 +309,37 @@ final class SoundClassificationService {
             currentSink.recordingDidReceive(buffer: buffer)
         } else {
             preRollBuffer.append(buffer: buffer)
+            maybeEmitFallbackSpeechBurst(buffer)
         }
     }
 
+    private func maybeEmitFallbackSpeechBurst(_ buffer: AVAudioPCMBuffer) {
+        lock.lock()
+        let now = Date()
+        let analyzerUnavailable = [.failed, .suspended, .stale].contains(engineState)
+        let elapsedMs = lastFallbackBurstAt.map { Int(now.timeIntervalSince($0) * 1_000) } ?? Int.max
+        let canFire = analyzerUnavailable && elapsedMs >= fallbackMinIntervalMs
+        lock.unlock()
+
+        guard canFire,
+              let rms = Self.rms(buffer: buffer),
+              rms >= fallbackRmsThreshold else {
+            return
+        }
+
+        lock.lock()
+        lastFallbackBurstAt = now
+        lock.unlock()
+
+        onSpeechBurst?(min(1, Double(rms / 0.08)), "audio_vad_fallback")
+    }
+
     private func handleClassification(_ frame: SoundClassificationFrame) {
+        lock.lock()
+        lastFrameAt = frame.timestamp
+        engineState = .healthy
+        lock.unlock()
+
         if AVAudioSession.sharedInstance().isOtherAudioPlaying {
             onOtherAudioDetected?()
         }
@@ -262,7 +372,29 @@ final class SoundClassificationService {
         lock.unlock()
 
         if shouldFire {
-            onSpeechBurst?(frame.topConfidence)
+            onSpeechBurst?(frame.topConfidence, "sound_analysis")
+        }
+    }
+
+    func markStaleIfNeeded(maxAgeMs: Int) {
+        lock.lock()
+        let shouldMarkStale: Bool
+        if let lastFrameAt,
+           analyzer != nil,
+           engine?.isRunning == true,
+           engineState == .healthy || engineState == .starting || engineState == .restarting {
+            shouldMarkStale = Date().timeIntervalSince(lastFrameAt) * 1_000 > Double(maxAgeMs)
+        } else {
+            shouldMarkStale = false
+        }
+        if shouldMarkStale {
+            stopAnalyzerLocked(nextState: .stale)
+        }
+        lock.unlock()
+
+        if shouldMarkStale {
+            soundLogger.error("SoundAnalysis analyzer marked stale")
+            onAnalyzerFailed?("Sound classifier classifications stale")
         }
     }
 
@@ -285,8 +417,67 @@ final class SoundClassificationService {
     }
 
     private func emitError(_ message: String, source: String) {
+        lock.lock()
+        lastError = message
+        if source == "soundAnalysis" || source == "audioSession" {
+            engineState = .failed
+        }
+        lock.unlock()
+
         soundLogger.error("\(source, privacy: .public): \(message, privacy: .public)")
         onError?(message, source)
+    }
+
+    private func handleAnalyzerFailure(_ message: String) {
+        let state: AudioEngineState = Self.isBackgroundExecutionFailure(message) ? .suspended : .failed
+        lock.lock()
+        lastError = message
+        stopAnalyzerLocked(nextState: state)
+        lock.unlock()
+
+        soundLogger.error("SoundAnalysis analyzer failed: \(message, privacy: .public)")
+        onError?(message, "soundAnalysis")
+        onAnalyzerFailed?(message)
+    }
+
+    private static func isBackgroundExecutionFailure(_ message: String) -> Bool {
+        let lowercased = message.lowercased()
+        return lowercased.contains("background")
+            || lowercased.contains("backgroundexecutionnotpermitted")
+            || lowercased.contains("insufficient permission")
+            || lowercased.contains("gpu")
+    }
+
+    private static func rms(buffer: AVAudioPCMBuffer) -> Float? {
+        let frameLength = Int(buffer.frameLength)
+        let channelCount = Int(buffer.format.channelCount)
+        guard frameLength > 0, channelCount > 0 else { return nil }
+
+        if let channels = buffer.floatChannelData {
+            var sumSquares: Float = 0
+            for channel in 0..<channelCount {
+                let samples = channels[channel]
+                for index in 0..<frameLength {
+                    let sample = samples[index]
+                    sumSquares += sample * sample
+                }
+            }
+            return sqrt(sumSquares / Float(frameLength * channelCount))
+        }
+
+        if let channels = buffer.int16ChannelData {
+            var sumSquares: Float = 0
+            for channel in 0..<channelCount {
+                let samples = channels[channel]
+                for index in 0..<frameLength {
+                    let sample = Float(samples[index]) / Float(Int16.max)
+                    sumSquares += sample * sample
+                }
+            }
+            return sqrt(sumSquares / Float(frameLength * channelCount))
+        }
+
+        return nil
     }
 }
 

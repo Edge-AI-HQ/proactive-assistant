@@ -92,8 +92,8 @@ export class HealthSource implements AmbientSource {
   }
 
   private handleSteps(event: StepsEvent): void {
-    if (!Number.isFinite(event.stepsToday)) return;
-    const value = Math.max(0, Math.round(event.stepsToday));
+    if (!Number.isFinite(event.stepsToday) || event.stepsToday <= 0) return;
+    const value = Math.round(event.stepsToday);
     const occurredAt = new Date(event.timestamp).toISOString();
     const localDate = formatLocalDate(event.timestamp);
     const dedupeKey = `ios:health:steps:${localDate}`;

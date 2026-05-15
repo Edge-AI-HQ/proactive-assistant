@@ -33,17 +33,7 @@ description: "把 V3 Constellation Ambient 页面从纯 mock 接到真实的 Cap
 | Phase 2 `ConstellationLayout` 首屏 Live overlay 接真 session | ⏳ 未开工 |
 | Health autoStart 策略 | ⏳ 待讨论 |
 
-## 改动总览（5 commits / 6 文件）
-
-```
- .../components/constellation/AmbientView.tsx        | 302 +++++++++++++++++++--
- .../components/constellation/ControlPanel.tsx       |  57 +++-
- .../services/ambient/index.ts                       |  57 ++--
- .../services/ambient/keys.ts                        |  28 ++   (新增)
- .../services/ambient/sync-scheduler.test.ts         |  57 ++++
- .../services/ambient/sync-scheduler.ts              |  19 ++
- 6 files changed, 471 insertions(+), 49 deletions(-)
-```
+## 改动总览（5 commits）
 
 ```
 0eb43d38 feat(frontend): add soft upload lock to ambient runtime

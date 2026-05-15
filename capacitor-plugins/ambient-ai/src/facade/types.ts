@@ -104,6 +104,13 @@ export interface AudioState {
   paused: boolean;
   capturing: boolean;
   suppressed: boolean;
+  classificationRunning?: boolean;
+  engineRunning?: boolean;
+  capturePipelineRunning?: boolean;
+  engineState?: 'stopped' | 'starting' | 'healthy' | 'stale' | 'failed' | 'suspended' | 'suppressed' | 'restarting';
+  lastClassificationAt?: number;
+  lastAudioError?: string;
+  classifierRestartCount?: number;
   suppressedReason?: 'media' | 'playback' | 'interruption';
 }
 
@@ -111,6 +118,7 @@ export interface SpeechBurstEvent {
   confidence: number;
   durationMs: number;
   timestamp: number;
+  triggerSource?: 'sound_analysis' | 'audio_vad_fallback' | string;
 }
 
 export interface TranscriptDraftEvent {
@@ -122,6 +130,7 @@ export interface TranscriptDraftEvent {
   capturedAt: string;
   durationMs: number;
   transcriptLocale?: string;
+  triggerSource?: string;
 }
 
 export interface TranscriptRefinedEvent {
@@ -134,6 +143,7 @@ export interface TranscriptRefinedEvent {
   provider: TranscriptProvider;
   localProvider?: LocalSpeechProvider;
   transcriptLocale?: string;
+  triggerSource?: string;
 }
 
 export interface TranscriptReadyEvent {
@@ -149,6 +159,7 @@ export interface TranscriptReadyEvent {
   localProvider?: LocalSpeechProvider;
   segmentIndex?: number;
   transcriptLocale?: string;
+  triggerSource?: string;
 }
 
 export interface AudioErrorEvent {
@@ -218,6 +229,40 @@ export interface ModelVerifyResult {
 export interface ModelListResult {
   profiles: ModelProfile[];
   statuses: ModelDownloadStatus[];
+}
+
+export interface AmbientCandidateWindowForModel {
+  id: string;
+  localDate: string;
+  timezone: string;
+  windowType: string;
+  startedAt: string;
+  endedAt?: string;
+  sourceTypes: string[];
+  deviceLabels: string[];
+  compactContext: string;
+  privacyHint: 'normal' | 'private' | 'sensitive';
+  confidenceHint: number;
+  salienceHint: number;
+  schemaVersion: 'ambient_candidate_window.v1';
+}
+
+export interface AmbientTimelineEventDraftResult {
+  eventType: string;
+  title: string;
+  summary: string;
+  tags: string[];
+  confidence: number;
+  confidenceLabel: 'certain' | 'uncertain';
+  salientFacts: string[];
+  actionCandidates?: unknown[];
+  memoryCandidates?: string[];
+  possibleCardTrigger?: { title: string; reason: string };
+}
+
+export interface GenerateTimelineEventOptions {
+  modelId: string;
+  window: AmbientCandidateWindowForModel;
 }
 
 export interface ModelDownloadProgressEvent extends ModelDownloadStatus {
@@ -356,6 +401,7 @@ export interface ModelsNamespace {
   cancelDownload(options: { id: string }): Promise<void>;
   deleteModel(options: { id: string }): Promise<void>;
   verifyModel(options: { id: string }): Promise<ModelVerifyResult>;
+  generateTimelineEvent(options: GenerateTimelineEventOptions): Promise<AmbientTimelineEventDraftResult>;
 }
 
 export interface AmbientAiFacade {

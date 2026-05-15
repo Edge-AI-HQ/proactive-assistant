@@ -1,0 +1,399 @@
+---
+title: "Ambient Timeline × On-device Agent Handoff"
+description: "Ambient Timeline 与端上 agent / 本地 LLM 模块的对接需求、数据契约、阶段边界和交接清单。"
+---
+
+# Ambient Timeline × On-device Agent Handoff
+
+> 日期：2026-05-15
+> 状态：对接设计 / 交接文档
+> 读者：端上 agent / AmbientModels / 本地 LLM 模块开发者；Ambient Timeline pipeline 开发者。
+
+## 结论
+
+Ambient Timeline 的事实主源在本地。Timeline pipeline 负责采集、聚合、窗口化、规则生成和 UI 渲染；端上 agent 只负责在明确输入边界内做语义压缩和 action suggestion。
+
+本次对接分三层：
+
+1. **A 里程碑不依赖端上 agent**：Ambient 先用 rule-only 生成 `morning_health` / `visit_stay` / `transition`。
+2. **B 里程碑接端上 agent**：端上 agent 读取 `ambient_candidate_windows.compactContext`，输出结构化 `AmbientTimelineEventDraft`，尤其是 `transcript_session` summary。
+3. **B+ 里程碑 action handoff**：端上 agent 可为 visible event 生成本地 `actionCandidates`；用户点击后 Ambient 才把固定模板 `handoffText` 提交给云端执行模块。
+
+端上 agent **不负责**：
+
+- 采集 raw data。
+- 决定 event 时间、来源、privacy、rawRefs、syncStatus。
+- 直接调用云端或外部工具。
+- 执行 Timeline action。
+- 读取全天 raw log。
+
+## 背景
+
+当前 Ambient source 真实设备上存在几类噪音：
+
+- `steps = 0` 误触发 Morning Health。
+- sound frame 刷屏。
+- motion stationary / confidence-only 变化重复写入。
+
+因此新的数据路径要求：
+
+```text
+Source adapter aggregation
+→ ambient_raw_events
+→ in-process observations
+→ ambient_candidate_windows
+→ rule generator / on-device agent
+→ ambient_timeline_events
+→ Timeline UI
+→ only visible ambient.timeline_event sync
+```
+
+端上 agent 不应该接触未聚合的 sample 流。source adapter 必须在 `ctx.push()` 之前完成第一层聚合：
+
+- sound sample → `device.sound_scene_run`
+- motion sample → `device.motion_segment`
+- invalid health fact → 直接不 push
+
+## 本地数据边界
+
+### 持久化表
+
+A/B 阶段只要求三层本地表：
+
+| 表 | 作用 |
+|---|---|
+| `ambient_raw_events` | 本地 evidence；不上传 raw。 |
+| `ambient_candidate_windows` | 规则 / 端上 agent 输入窗口。 |
+| `ambient_timeline_events` | Timeline UI 事实主源。 |
+
+`ambient_observations` 不落表，先作为代码里的中间对象。
+
+### Raw 不上传
+
+默认产品路径不上传：
+
+- transcript 全文。
+- precise location raw。
+- Health raw。
+- rawRefs。
+- candidate window。
+- compactContext。
+
+只有 B+ Debug Panel 的 `extraEvidenceJson` 可以在开发调试时临时上传最小化证据；它不是端上 agent 默认输入。
+
+## 端上 agent 输入契约
+
+端上 agent 的唯一正式输入是候选窗口，不是 raw log。
+
+```ts
+type AmbientCandidateWindowForAgent = {
+  id: string;
+  localDate: string;
+  timezone: string;
+  windowType:
+    | "transcript_session"
+    | "morning_health"
+    | "visit_stay"
+    | "transition";
+  startedAt: string;
+  endedAt?: string;
+  sourceTypes: AmbientSourceType[];
+  deviceLabels: string[];
+  compactContext: string;
+  privacyHint: "normal" | "private" | "sensitive";
+  confidenceHint: number;
+  salienceHint: number;
+  schemaVersion: "ambient_candidate_window.v1";
+};
+```
+
+要求：
+
+- `compactContext` 由 Ambient pipeline 生成，已经做过脱敏和压缩。
+- 端上 agent 不能主动读取 `rawRefs` 或本地 raw 表。
+- A 阶段的 `morning_health` / `visit_stay` / `transition` 默认由规则生成；端上 agent 可在 B 阶段对所有 visible event 尝试生成 actionCandidate，但不阻塞 A。
+- `transcript_session` 是 B 阶段端上 agent 的首要输入。
+
+## 端上 agent 输出契约
+
+### Timeline event draft
+
+端上 agent 输出必须是严格 JSON。
+
+```ts
+type AmbientTimelineEventDraft = {
+  eventType:
+    | "conversation"
+    | "meeting"
+    | "social"
+    | "visit"
+    | "transition"
+    | "health"
+    | "other";
+  title: string;
+  summary: string;
+  tags: string[];
+  confidence: number;
+  confidenceLabel: "certain" | "uncertain";
+  salientFacts: string[];
+  actionCandidates?: AmbientActionCandidateDraft[];
+  memoryCandidates?: string[];
+  possibleCardTrigger?: {
+    title: string;
+    reason: string;
+  };
+};
+```
+
+### Action candidate draft
+
+```ts
+type AmbientActionCandidateDraft = {
+  id?: string;
+  label: string;
+  goal: string;
+  rationale?: string;
+  confidence?: number;
+};
+```
+
+规则：
+
+- `label` 是 Timeline action chip 的唯一展示文本。
+- 不输出工具名。
+- 不输出执行预览。
+- 不输出云端 endpoint。
+- `goal` / `rationale` 只供本地生成固定 handoffText 时参考，不作为云端执行规则。
+
+## 模型不可用时的行为
+
+端上 agent / 本地模型不可用时：
+
+- `transcript_session` window 保持 `pending`。
+- 不 fallback 云端 LLM。
+- 不展示粗糙 transcript 摘要。
+- UI 可显示轻量 CTA：`Enable local summaries`。
+
+模型启用条件：
+
+- 用户手动选择模型。
+- 模型已下载。
+- 模型已 verify。
+- 调用端上 agent 接口成功。
+
+## 端上 agent 不负责的字段
+
+以下字段由 Ambient pipeline 负责，端上 agent 不得决定：
+
+- `occurredAt`
+- `endedAt`
+- `localDate`
+- `timezone`
+- `sourceTypes`
+- `deviceLabels`
+- `primarySourceLabel`
+- `privacy`
+- `rawRefs`
+- `windowId`
+- `generationMethod`
+- `generationStatus`
+- `syncStatus`
+- `schemaVersion`
+
+原因：
+
+- 时间和来源必须来自本地 evidence。
+- privacy 不能交给模型自由判断。
+- rawRefs 是本地审计/调试字段，不上传。
+- sync 状态属于上传系统。
+
+## 端上 agent prompt 约束
+
+端上 agent 必须遵守：
+
+1. 只能基于 `compactContext` 生成内容。
+2. 不得编造 compactContext 没有的人名、地点、会议标题、健康结论或行动项。
+3. 不得给出医疗诊断。
+4. 对低置信内容输出 `confidenceLabel = "uncertain"`。
+5. summary 必须短，一般一到两句。
+6. actionCandidates 必须可选；没有明确可行动作时返回空数组或省略。
+7. action label 必须是用户可读短句，不是工具调用名。
+
+## 推荐接口
+
+端上 agent 模块可以通过 `AmbientModels` 或新的 native bridge 暴露两个方法。
+
+### `generateTimelineEvent`
+
+```ts
+type GenerateTimelineEventRequest = {
+  window: AmbientCandidateWindowForAgent;
+};
+
+type GenerateTimelineEventResponse = {
+  ok: true;
+  draft: AmbientTimelineEventDraft;
+} | {
+  ok: false;
+  errorCode:
+    | "model_not_selected"
+    | "model_not_downloaded"
+    | "model_not_verified"
+    | "inference_failed"
+    | "invalid_json";
+  errorMessage?: string;
+};
+```
+
+### `generateActionCandidates`
+
+```ts
+type GenerateActionCandidatesRequest = {
+  event: {
+    id: string;
+    eventType: string;
+    title: string;
+    summary: string;
+    tags: string[];
+    confidenceLabel: "certain" | "uncertain";
+  };
+  groundingSummary?: string;
+};
+
+type GenerateActionCandidatesResponse = {
+  ok: true;
+  actionCandidates: AmbientActionCandidateDraft[];
+} | {
+  ok: false;
+  errorCode:
+    | "model_not_selected"
+    | "model_not_downloaded"
+    | "model_not_verified"
+    | "inference_failed"
+    | "invalid_json";
+  errorMessage?: string;
+};
+```
+
+说明：
+
+- `generateTimelineEvent` 首先服务 `transcript_session`。
+- `generateActionCandidates` B 阶段可对所有 visible event 尝试生成 action，但不要求每个 event 都有 action。
+- 如果端上 agent 团队希望合并成一个接口，也必须保持输入/输出字段语义不变。
+
+## B+ 云端 Action Handoff 边界
+
+端上 agent 只产出本地 actionCandidate。云端 handoff 由 Ambient 侧在用户点击 action chip 后触发。
+
+普通 payload：
+
+```ts
+type AmbientActionHandoffPayload = {
+  localHandoffId: string;
+  localEventId: string;
+  actionId: string;
+  schemaVersion: "ambient_action_handoff.v1";
+  handoffText: string;
+};
+```
+
+`handoffText` 由 Ambient 用固定模板生成，不允许端上 agent 自由生成 cloud prompt。
+
+普通 handoff 不带：
+
+- privacy metadata。
+- confidence metadata。
+- suggested tool domain。
+- requires-confirmation hint。
+- rawRefs。
+- window。
+- compactContext。
+
+Debug Panel 开启时可额外带：
+
+```ts
+type AmbientActionHandoffDebugPayload = AmbientActionHandoffPayload & {
+  extraEvidenceJson?: SanitizedAmbientEvidence[];
+};
+```
+
+`extraEvidenceJson` 只来自相关 rawRefs 的最小化/脱敏证据，请求时临时生成，不写入 `ambient_action_handoffs`。
+
+## 与 signal-quality optimization 的关系
+
+端上 agent 对接前，Ambient pipeline 必须先满足这些输入质量要求：
+
+| Source | 要求 |
+|---|---|
+| Health | `steps = 0` 不 push；Morning Health 必须基于有效 facts。 |
+| Sound | 连续 frames 聚合成 `sound.scene_run`，默认 `do_not_generate` evidence。 |
+| Motion | activity samples 聚合成 `motion.segment`，transition evidence 用 interval overlap。 |
+| Old sound.frame | 不生成 visible event，也不补 evidence window。 |
+| Old motion.activity | 不生成 visible event，只能作为 transition fallback evidence。 |
+
+否则端上 agent 会被低质量 sample 干扰，生成错误 summary 或错误 action。
+
+## 实施顺序
+
+### Step 1：Ambient pipeline 先稳定输入
+
+- Health fact gate。
+- Sound run aggregation。
+- Motion segment aggregation。
+- `sound_context` / `motion_state_run` evidence window。
+- outbox 仍只上传 `ambient.timeline_event`。
+
+### Step 2：接 `generateTimelineEvent`
+
+- 只处理 `transcript_session`。
+- 模型不可用时保持 pending。
+- 解析 JSON，失败不展示。
+- 低置信可 visible，但标 `uncertain`。
+
+### Step 3：接 `generateActionCandidates`
+
+- 对所有 visible event 可尝试生成 action。
+- actionCandidates 本地持久化。
+- 不随 timeline event 自动同步。
+- action chip 只展示 label。
+
+### Step 4：接 B+ action handoff
+
+- 用户点击 action chip。
+- Ambient 创建 `ambient_action_handoffs`。
+- 提交最小 `handoffText` payload。
+- 在线成功后直接跳转云端执行界面。
+- 离线或提交失败只 toast / inline error，不做 pending retry。
+
+## 验收标准
+
+端上 agent 对接完成后：
+
+1. `transcript_session` 可由端上 agent 生成结构化 timeline draft。
+2. 模型不可用时不会 fallback 云端，不会展示 transcript raw。
+3. 端上 agent 输出非法 JSON 时不会污染 Timeline。
+4. 低置信事件显示 `uncertain`。
+5. actionCandidates 只本地展示，不自动同步。
+6. action chip 只显示 label。
+7. 用户点击 action 后才创建 handoff。
+8. 普通 handoff 只传 `handoffText` 和技术追踪字段。
+9. Debug evidence 只在 Debug Panel 开启时临时生成。
+10. raw/window/compactContext 默认不上传云端。
+
+## 相关文件
+
+- Timeline 设计草案：`docs/项目规划/0515-Ambient-Timeline-MVP-设计草案.md`
+- Ambient runtime：`proactive-ai-frontend/src/services/ambient/`
+- Timeline pipeline：`proactive-ai-frontend/src/services/ambient/timeline/`
+- Source adapters：
+  - `proactive-ai-frontend/src/services/ambient/sources/health.ts`
+  - `proactive-ai-frontend/src/services/ambient/sources/sound-classifier.ts`
+  - `proactive-ai-frontend/src/services/ambient/sources/activity.ts`
+- Models UI：`proactive-ai-frontend/src/components/AmbientModelsPanel.tsx`
+- Native plugin：`capacitor-plugins/ambient-ai/ios/Sources/AmbientAi/Plugins/AmbientModelsPlugin.swift`
+
+## 相关 AI Plans
+
+- [Ambient AI Plugin](./2026-05-10-ambient-ai-plugin)
+- [Ambient V3 UI 接入 Phase 1](./2026-05-14-ambient-v3-ui-integration)
+- [V2 → V3 功能迁移计划](./2026-05-12-v2-to-v3-migration)

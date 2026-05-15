@@ -13,7 +13,13 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useUserSettings } from "@/hooks/useUserSettings";
+import { useAmbientTimeline } from "@/hooks/useAmbientTimeline";
 import { ALL_SOURCE_KEYS, type SourceKey } from "@/services/ambient/keys";
+import {
+  getPersistedAmbientEnabled,
+  setPersistedAmbientEnabled,
+} from "@/services/ambient/enabled-state";
+import type { AmbientPrivacy, AmbientTimelineEvent } from "@/services/ambient/timeline";
 import type { RuntimeStatus } from "@/services/ambient";
 
 
@@ -176,14 +182,17 @@ export const LIVE_SCENARIOS: LiveSession[] = [
 /* ──────────────── TIMELINE (today's narrative) ──────────────── */
 
 interface TimelineEntry {
+  id?: string;
   time: string;
   icon: LucideIcon;
   device: { name: string; icon: LucideIcon };
-  privacyTag?: "private";
+  privacyTag?: AmbientPrivacy;
+  confidenceLabel?: "certain" | "uncertain";
   title: string;
   body: string;
   tags: string[];
   triggeredCard?: string; // ID/name of card it triggered in NOW feed
+  onDismiss?: () => void;
 }
 
 const TIMELINE: TimelineEntry[] = [
@@ -245,6 +254,50 @@ const TIMELINE: TimelineEntry[] = [
 const NARRATIVE_SUMMARY =
   "Today felt productive. 7h 24m of sleep set a clean baseline; you ran hot during the Sequoia call (HR peaked at 158) but recovered in the 45-min focus block after lunch. Evening swim hit zone 3 for 32 minutes — 8% above your weekly average. Dad is visiting and mentioned a cardiologist appointment Thursday.";
 
+function formatTimelineTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function iconForTimelineEvent(event: AmbientTimelineEvent): LucideIcon {
+  if (event.sourceTypes.includes("health")) return Stethoscope;
+  if (event.eventType === "transition") return Compass;
+  if (event.eventType === "visit") return MapPin;
+  if (event.eventType === "conversation" || event.eventType === "meeting") return Mic;
+  return Sparkles;
+}
+
+function deviceIconForTimelineEvent(event: AmbientTimelineEvent): LucideIcon {
+  if (event.sourceTypes.includes("health")) return Watch;
+  if (event.sourceTypes.includes("motion")) return Activity;
+  if (event.sourceTypes.includes("transcript")) return Mic;
+  return Smartphone;
+}
+
+function timelineEventToEntry(
+  event: AmbientTimelineEvent,
+  onDismiss: (id: string) => void,
+): TimelineEntry {
+  return {
+    id: event.id,
+    time: formatTimelineTime(event.occurredAt),
+    icon: iconForTimelineEvent(event),
+    device: {
+      name: event.primarySourceLabel,
+      icon: deviceIconForTimelineEvent(event),
+    },
+    privacyTag: event.privacy === "normal" ? undefined : event.privacy,
+    confidenceLabel: event.confidenceLabel,
+    title: event.title,
+    body: event.summary,
+    tags: event.tags,
+    triggeredCard: event.triggeredCardTitle,
+    onDismiss: () => onDismiss(event.id),
+  };
+}
+
 /* ──────────────── COMPONENT ──────────────── */
 
 interface AmbientViewProps {
@@ -257,7 +310,11 @@ interface AmbientViewProps {
 
 export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHandled, onOpenFullscreen }: AmbientViewProps = {}) {
   const { settings, patch } = useUserSettings();
+  const ambientTimeline = useAmbientTimeline();
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
+  const [persistedAmbientOn, setPersistedAmbientOn] = useState(() =>
+    getPersistedAmbientEnabled(),
+  );
   const [togglePending, setTogglePending] = useState(false);
   const [liveIndex, setLiveIndex] = useState(0);
   const [view, setView] = useState<"timeline" | "devices">("timeline");
@@ -276,7 +333,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
   const runtimeOn = runtimeStatus
     ? runtimeStatus.sources.some((s) => s.enabled)
     : false;
-  const ambientOn = consentOn ?? runtimeOn;
+  const ambientOn = persistedAmbientOn || (consentOn ?? runtimeOn);
   const uploadsLocked = runtimeStatus?.uploadsLocked ?? false;
   const firstSourceError =
     runtimeStatus?.sources.find((s) => s.lastError)?.lastError ?? null;
@@ -309,9 +366,8 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
 
   // Subscribe to plugin transcripts while ambient is on so the Live card
   // shows real captured speech instead of the demo scenarios. Native
-  // only: the @pin/capacitor-ambient-ai module is rollup-external for
-  // the web build, so we behind both a runtime ``isNative`` guard and
-  // a dynamic import so web bundles never reach the bare specifier.
+  // only: the listener helper is lazy-loaded behind ``isNative`` so the
+  // web main chunk never contains the native plugin bare specifier.
   useEffect(() => {
     if (!ambientOn || !isNative) {
       setLiveSessionData(null);
@@ -322,9 +378,11 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
     let handle: PluginListenerHandle | null = null;
     void (async () => {
       try {
-        const { AmbientAi } = await import("@pin/capacitor-ambient-ai");
+        const { addAmbientTranscriptListener } = await import(
+          "@/services/ambient/transcript-listener"
+        );
         if (cancelled) return;
-        handle = await AmbientAi.addListener("transcriptReady", (event) => {
+        handle = await addAmbientTranscriptListener((event) => {
           if (cancelled) return;
           setLiveSessionData((prev) => appendTranscript(prev, event));
         });
@@ -348,6 +406,8 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
         ALL_SOURCE_KEYS.map((key) => [key, { enabled: next }]),
       );
       const updated = await patch({ ambientSources: consentPatch });
+      setPersistedAmbientEnabled(next);
+      setPersistedAmbientOn(next);
       if (!isNative) return;
       const lifecycle = await import("@/services/ambient/lifecycle");
       if (next) {
@@ -356,7 +416,9 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
               .filter(([, v]) => v?.enabled === true)
               .map(([k]) => k as SourceKey))
           : ALL_SOURCE_KEYS;
-        lifecycle.startAmbientUpload({ enabledSources });
+        lifecycle.startAmbientUpload({
+          enabledSources: enabledSources.length > 0 ? enabledSources : ALL_SOURCE_KEYS,
+        });
       } else {
         await lifecycle.stopAmbientUpload();
       }
@@ -454,6 +516,18 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
     const t = setTimeout(() => setPreviewVisibleCount((c) => c + 1), 2600);
     return () => clearTimeout(t);
   }, [previewVisibleCount, liveSession]);
+
+  const handleDismissTimelineEvent = useCallback((id: string) => {
+    void ambientTimeline.dismiss(id);
+  }, [ambientTimeline.dismiss]);
+
+  const useWebPreviewTimeline = !isNative && ambientTimeline.events.length === 0;
+  const timelineEntries = useMemo<TimelineEntry[]>(() => {
+    if (useWebPreviewTimeline) return TIMELINE;
+    return ambientTimeline.events.map((event) =>
+      timelineEventToEntry(event, handleDismissTimelineEvent),
+    );
+  }, [ambientTimeline.events, handleDismissTimelineEvent, useWebPreviewTimeline]);
 
   const handleConnectMore = () => {
     if (onConnectMore) onConnectMore();
@@ -735,29 +809,50 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
         </div>
       </button>
 
-      {/* ── Today's narrative summary ── */}
-      <div
-        className="mb-3 rounded-2xl p-4"
-        style={{
-          background: "linear-gradient(135deg, hsl(220 50% 98%), hsl(260 40% 97%))",
-          border: "1px solid hsl(0 0% 100% / 0.5)",
-        }}
-      >
-        <div className="flex items-center justify-between mb-2">
-          <p className="text-[10px] font-bold tracking-[0.16em] flex items-center gap-1.5">
-            <Sparkles size={11} className="text-[hsl(304_75%_55%)]" />
-            <span className="text-[hsl(304_75%_45%)]">TODAY · NARRATIVE SUMMARY</span>
-          </p>
-          <span className="text-[10px] text-foreground/45 font-mono">{TIMELINE.length} entries</span>
+      {/* Web preview keeps the narrative mock; native hides it until B generates a real summary. */}
+      {useWebPreviewTimeline && (
+        <div
+          className="mb-3 rounded-2xl p-4"
+          style={{
+            background: "linear-gradient(135deg, hsl(220 50% 98%), hsl(260 40% 97%))",
+            border: "1px solid hsl(0 0% 100% / 0.5)",
+          }}
+        >
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-[10px] font-bold tracking-[0.16em] flex items-center gap-1.5">
+              <Sparkles size={11} className="text-[hsl(304_75%_55%)]" />
+              <span className="text-[hsl(304_75%_45%)]">TODAY · NARRATIVE SUMMARY</span>
+            </p>
+            <span className="text-[10px] text-foreground/45 font-mono">{timelineEntries.length} entries</span>
+          </div>
+          <p className="text-[13px] leading-relaxed text-foreground/85">{NARRATIVE_SUMMARY}</p>
         </div>
-        <p className="text-[13px] leading-relaxed text-foreground/85">{NARRATIVE_SUMMARY}</p>
-      </div>
+      )}
 
       {/* ── Timeline ── */}
       <div className="space-y-2.5">
-        {TIMELINE.map((entry, idx) => (
+        {timelineEntries.length === 0 && (
+          <div className="glass-card p-4 text-center">
+            <p className="text-[13px] font-semibold text-foreground/80">
+              {ambientTimeline.loading ? "Building local timeline…" : "No local timeline events yet"}
+            </p>
+            <p className="mt-1 text-[12px] text-foreground/50 leading-snug">
+              {ambientTimeline.error
+                ? ambientTimeline.error
+                : ambientOn
+                  ? "Keep Ambient on while Visit, Location, Motion, and Health collect real signals."
+                  : "Turn Ambient on to create timeline events from local signals."}
+            </p>
+            {ambientTimeline.storeStatus?.lastError && (
+              <p className="mt-2 text-[11px] text-red-500">
+                {ambientTimeline.storeStatus.lastError}
+              </p>
+            )}
+          </div>
+        )}
+        {timelineEntries.map((entry, idx) => (
           <motion.div
-            key={entry.time + entry.title}
+            key={entry.id ?? entry.time + entry.title}
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: idx * 0.04 }}
@@ -788,8 +883,29 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                         </span>
                       </>
                     )}
+                    {entry.privacyTag === "sensitive" && (
+                      <>
+                        <span className="text-foreground/30">·</span>
+                        <span className="inline-flex items-center gap-0.5 text-[hsl(304_75%_55%)] font-medium">
+                          <span className="w-1.5 h-1.5 rounded-full bg-[hsl(304_75%_63%)]" />
+                          sensitive
+                        </span>
+                      </>
+                    )}
+                    {entry.confidenceLabel === "uncertain" && (
+                      <>
+                        <span className="text-foreground/30">·</span>
+                        <span className="inline-flex items-center gap-0.5 text-foreground/45 font-medium">
+                          uncertain
+                        </span>
+                      </>
+                    )}
                   </div>
-                  <button className="text-foreground/30 hover:text-foreground/60 shrink-0" aria-label="Dismiss">
+                  <button
+                    onClick={entry.onDismiss}
+                    className="text-foreground/30 hover:text-foreground/60 shrink-0"
+                    aria-label="Dismiss"
+                  >
                     <X size={13} />
                   </button>
                 </div>

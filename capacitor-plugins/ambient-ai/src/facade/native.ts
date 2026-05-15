@@ -3,6 +3,8 @@ import { registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 import { AudioCaptureWeb } from './audio-capture';
 import type { AudioCapturePlugin } from './audio-capture';
 import type {
+  AmbientTimelineEventDraftResult,
+  GenerateTimelineEventOptions,
   ModelDownloadOptions,
   ModelDownloadProgressEvent,
   ModelListResult,
@@ -63,6 +65,7 @@ interface AmbientModelsPlugin {
   cancelModelDownload(options: { id: string }): Promise<void>;
   deleteModel(options: { id: string }): Promise<void>;
   verifyModel(options: { id: string }): Promise<ModelVerifyResult>;
+  generateTimelineEvent(options: GenerateTimelineEventOptions): Promise<AmbientTimelineEventDraftResult>;
   addListener(
     eventName: 'modelDownloadProgress' | 'modelDownloadDone',
     listenerFunc: (event: ModelDownloadProgressEvent) => void,
@@ -89,6 +92,10 @@ class AmbientModelsWeb implements AmbientModelsPlugin {
 
   async verifyModel(): Promise<ModelVerifyResult> {
     throw new Error('AmbientModels.verifyModel is unavailable on web');
+  }
+
+  async generateTimelineEvent(): Promise<AmbientTimelineEventDraftResult> {
+    throw new Error('AmbientModels.generateTimelineEvent is unavailable on web');
   }
 
   async addListener(): Promise<PluginListenerHandle> {

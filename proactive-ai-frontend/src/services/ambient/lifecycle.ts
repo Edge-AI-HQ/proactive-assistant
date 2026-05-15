@@ -39,8 +39,8 @@ export function bindAmbientLifecycle(): void {
  * Idempotent — safe to call on every settings change. NEVER calls
  * ``runtime.autoStart()`` (privacy invariant per V3 migration plan
  * D-5 / Step 3). This is the single SPA entry point that drives
- * runtime source state; ``AmbientSourcesPanel``'s reconcile effect is
- * a no-op convenience when the panel happens to be mounted.
+ * runtime source state; ``AmbientSourcesPanel`` uses the same runtime
+ * reconciliation after a per-source settings PATCH.
  *
  * Empty list → stop everything and only drain.
  */
@@ -49,16 +49,8 @@ export function startAmbientUpload(opts: {
 } = {}): void {
   if (!isNative) return;
   const runtime = getAmbientRuntime();
-  const wanted = new Set(opts.enabledSources ?? []);
   void (async () => {
-    for (const src of runtime.status().sources) {
-      const shouldRun = wanted.has(src.key);
-      if (shouldRun && !src.enabled) {
-        try { await runtime.start(src.key); } catch { /* lastError on status */ }
-      } else if (!shouldRun && src.enabled) {
-        try { await runtime.stop(src.key, { remember: false }); } catch { /* */ }
-      }
-    }
+    await runtime.reconcileEnabledSources(opts.enabledSources ?? []);
     await runtime.drain();
   })();
 }

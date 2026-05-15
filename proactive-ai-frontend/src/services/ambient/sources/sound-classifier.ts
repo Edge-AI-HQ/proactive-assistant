@@ -4,8 +4,8 @@ import {
   type TranscriptReadyEvent,
 } from "@pin/capacitor-ambient-ai";
 import type { PluginListenerHandle } from "@capacitor/core";
-import { SIGNAL_KINDS } from "../kinds";
 import type { AmbientSource, SourceContext } from "./types";
+import { SoundRunAggregator } from "./sound-runs";
 
 export interface SoundClassifierOptions {
   /** Min top-1 confidence (0-1) before we even consider emitting. */
@@ -23,6 +23,9 @@ const MIN_TRANSCRIPT_LENGTH = 24;
 const TRANSCRIPT_SALIENCE = 0.7;
 const TRANSCRIPT_CONFIDENCE = 0.75;
 const SPEECH_LABEL = "speech";
+const INTENTIONAL_SUPPRESSION_REASONS = new Set(["media", "playback"]);
+const UNHEALTHY_ENGINE_STATES = new Set(["failed", "stale", "suspended"]);
+const CLASSIFICATION_STALE_MS = 15_000;
 
 /**
  * Wraps the SoundClassifier native plugin shipped via
@@ -38,9 +41,8 @@ export class SoundClassifierSource implements AmbientSource {
   private listenerHandle: PluginListenerHandle | null = null;
   private transcriptListenerHandle: PluginListenerHandle | null = null;
   private started = false;
-  private lastTopLabel: string | null = null;
-  private lastEmitTs = 0;
   private opts: Required<SoundClassifierOptions>;
+  private runs = new SoundRunAggregator();
 
   constructor(
     private ctx: SourceContext,
@@ -67,9 +69,14 @@ export class SoundClassifierSource implements AmbientSource {
       "transcriptReady",
       (event) => this.handleTranscriptReady(event),
     );
-    await AmbientAi.audio.startCapture();
-    await AmbientAi.sound.startClassification();
-    this.started = true;
+    try {
+      await AmbientAi.audio.startCapture();
+      await AmbientAi.sound.startClassification();
+      this.started = true;
+    } catch (err) {
+      await this.cleanupNativeStartFailure();
+      throw err;
+    }
   }
 
   async stop(): Promise<void> {
@@ -78,15 +85,59 @@ export class SoundClassifierSource implements AmbientSource {
       await AmbientAi.sound.stopClassification();
       await AmbientAi.audio.stopCapture();
     } finally {
-      if (this.listenerHandle) {
-        await this.listenerHandle.remove();
-        this.listenerHandle = null;
-      }
-      if (this.transcriptListenerHandle) {
-        await this.transcriptListenerHandle.remove();
-        this.transcriptListenerHandle = null;
-      }
+      const finalized = this.runs.stop();
+      if (finalized) this.ctx.push(finalized);
+      await this.removeListeners();
       this.started = false;
+    }
+  }
+
+  async refresh(): Promise<void> {
+    if (!this.started) return;
+    const state = await AmbientAi.audio.getState();
+    if (
+      state.suppressed &&
+      state.suppressedReason &&
+      INTENTIONAL_SUPPRESSION_REASONS.has(state.suppressedReason)
+    ) {
+      return;
+    }
+
+    const analyzerUnhealthy = state.engineState !== undefined
+      && UNHEALTHY_ENGINE_STATES.has(state.engineState);
+    const classificationsStale = isClassificationStale(state.lastClassificationAt);
+    if (
+      state.running
+      && state.classificationRunning
+      && state.engineRunning !== false
+      && !analyzerUnhealthy
+      && !classificationsStale
+    ) {
+      return;
+    }
+
+    if (!state.running || state.engineRunning === false || analyzerUnhealthy || classificationsStale) {
+      await AmbientAi.audio.startCapture();
+    }
+    if (!state.classificationRunning || state.engineRunning === false || analyzerUnhealthy || classificationsStale) {
+      await AmbientAi.sound.startClassification();
+    }
+
+    const nextState = await AmbientAi.audio.getState();
+    if (!nextState.running) {
+      throw new Error("audio capture not running");
+    }
+    if (!nextState.classificationRunning) {
+      throw new Error("sound classification not running");
+    }
+    if (nextState.engineRunning === false && !nextState.suppressed) {
+      throw new Error("sound classifier engine not running");
+    }
+    if (nextState.engineState && UNHEALTHY_ENGINE_STATES.has(nextState.engineState)) {
+      throw new Error(`sound classifier engine ${nextState.engineState}`);
+    }
+    if (isClassificationStale(nextState.lastClassificationAt)) {
+      throw new Error("sound classifier classifications stale");
     }
   }
 
@@ -116,6 +167,7 @@ export class SoundClassifierSource implements AmbientSource {
     if (typeof event.segmentIndex === "number") {
       payload.segmentIndex = event.segmentIndex;
     }
+    if (event.triggerSource) payload.triggerSource = event.triggerSource;
 
     this.ctx.push({
       kind: "session_summary",
@@ -137,35 +189,39 @@ export class SoundClassifierSource implements AmbientSource {
 
     if (top.label.toLowerCase() === SPEECH_LABEL) return;
 
-    const now = Date.now();
-    if (
-      top.label === this.lastTopLabel &&
-      now - this.lastEmitTs < this.opts.dedupeWindowMs
-    ) {
-      return;
-    }
-    this.lastTopLabel = top.label;
-    this.lastEmitTs = now;
-
-    const confPct = (top.confidence * 100).toFixed(1);
-    const summary = `${top.label} (${confPct}%)`;
-    this.ctx.push({
-      kind: SIGNAL_KINDS.soundClassification,
-      title: top.label,
-      summary: `Top sound: ${summary}`,
-      occurred_at: new Date(event.timestamp).toISOString(),
-      payload: {
-        top: event.classifications.slice(0, 3).map((c) => ({
-          label: c.label,
-          confidence: c.confidence,
-        })),
-      },
-      confidence: top.confidence,
-      // Bucket the timestamp by dedupeWindow so accidental client retries
-      // still hash to the same key. If the user truly hears `speech` in
-      // two adjacent windows, we only record the transition (intentional).
-      dedupe_key: `sound:${top.label}:${Math.floor(event.timestamp / this.opts.dedupeWindowMs)}`,
+    const emitted = this.runs.addSample({
+      timestamp: event.timestamp,
+      classifications: event.classifications.slice(0, 3).map((c) => ({
+        label: c.label,
+        confidence: c.confidence,
+      })),
     });
-    this.ctx.onEvent(this.key, summary);
+    for (const item of emitted) {
+      this.ctx.push(item);
+      const label = typeof item.title === "string" ? item.title : top.label;
+      this.ctx.onEvent(this.key, `${label} scene run`);
+    }
   }
+
+  private async cleanupNativeStartFailure(): Promise<void> {
+    await Promise.allSettled([
+      AmbientAi.sound.stopClassification(),
+      AmbientAi.audio.stopCapture(),
+    ]);
+    await this.removeListeners();
+    this.started = false;
+  }
+
+  private async removeListeners(): Promise<void> {
+    const handles = [this.listenerHandle, this.transcriptListenerHandle]
+      .filter((handle): handle is PluginListenerHandle => handle !== null);
+    this.listenerHandle = null;
+    this.transcriptListenerHandle = null;
+    await Promise.all(handles.map((handle) => handle.remove()));
+  }
+}
+
+function isClassificationStale(lastClassificationAt: number | undefined): boolean {
+  return typeof lastClassificationAt === "number"
+    && Date.now() - lastClassificationAt > CLASSIFICATION_STALE_MS;
 }

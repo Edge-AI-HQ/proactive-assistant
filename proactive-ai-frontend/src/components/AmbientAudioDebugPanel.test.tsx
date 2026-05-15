@@ -206,6 +206,33 @@ describe("AmbientAudioDebugPanel", () => {
     expect(await screen.findByText(/drained transcript text/i)).toBeTruthy();
   });
 
+  test("shows audio health diagnostics from native state", async () => {
+    vi.mocked(AmbientAi.audio.getState).mockResolvedValueOnce({
+      running: true,
+      paused: false,
+      capturing: false,
+      suppressed: false,
+      classificationRunning: true,
+      engineRunning: false,
+      capturePipelineRunning: true,
+      engineState: "suspended",
+      lastClassificationAt: Date.parse("2026-05-10T10:00:00.000Z"),
+      lastAudioError: "Sound classifier failed",
+      classifierRestartCount: 2,
+    });
+    render(<AmbientAudioDebugPanel />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /refresh state/i }));
+    });
+
+    expect(await screen.findByText(/engine: suspended/i)).toBeTruthy();
+    expect(screen.getByText(/capture pipeline: true/i)).toBeTruthy();
+    expect(screen.getByText(/restart count: 2/i)).toBeTruthy();
+    expect(screen.getByText(/last error: Sound classifier failed/i)).toBeTruthy();
+    expect(screen.getByText(/last classification:/i)).toBeTruthy();
+  });
+
   test("previews recent audio events from AmbientAi listeners", async () => {
     render(<AmbientAudioDebugPanel />);
 

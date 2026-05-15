@@ -8,207 +8,63 @@
  * starts / stops the matching runtime source locally so the change
  * takes effect immediately.
  *
- * Web platform note: SoundClassifier and VisitMonitor are iOS-only
- * native plugins; their web stubs throw on start. We disable those
- * toggles outside native to avoid confusing failures. Geolocation has
- * a real web implementation and stays enabled.
  */
-import { useCallback, useEffect, useState } from "react";
-import { Radio } from "lucide-react";
+import { useCallback, useState } from "react";
 import AmbientAudioDebugPanel from "./AmbientAudioDebugPanel";
 import AmbientModelsPanel from "./AmbientModelsPanel";
-import { isNative } from "@/lib/platform";
-import { useUserSettings } from "@/hooks/useUserSettings";
-import {
-  getAmbientRuntime,
-  type RuntimeStatus,
-  type SourceKey,
-  type SourceStatus,
-} from "@/services/ambient";
-
-const SOURCE_HINTS: Record<SourceKey, string> = {
-  sound_classifier: "iOS only · ~1.5s windows · top-1 label",
-  visit: "iOS only · system-detected place arrivals/departures",
-  activity: "iOS only · stationary/walking/running/automotive/cycling",
-  location: "Continuous GPS watch · 25m delta filter",
-  health: "HealthKit foreground snapshots · steps, sleep, heart rate",
-};
-
-const NATIVE_ONLY_SOURCES: ReadonlySet<SourceKey> = new Set([
-  "sound_classifier",
-  "visit",
-  "activity",
-  "health",
-]);
-
-function formatTime(ts: number | null): string {
-  if (!ts) return "\u2014";
-  return new Date(ts).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
-function SourceRow({
-  status,
-  busy,
-  onToggle,
-}: {
-  status: SourceStatus;
-  busy: boolean;
-  onToggle: () => void;
-}) {
-  const nativeOnly = NATIVE_ONLY_SOURCES.has(status.key);
-  const disabled = busy || (nativeOnly && !isNative);
-  const lastSummary = status.lastEvent?.summary ?? "—";
-  const lastTime = status.lastEvent ? formatTime(status.lastEvent.ts) : "";
-
-  return (
-    <div className="rounded-lg bg-white/60 border border-foreground/10 px-3 py-2">
-      <div className="flex items-center gap-2">
-        <span className="text-[12px] font-medium text-foreground/70 flex-1 truncate">
-          {status.label}
-        </span>
-        <button
-          onClick={onToggle}
-          disabled={disabled}
-          className={`text-[10px] font-semibold px-2 py-1 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-            status.enabled
-              ? "bg-emerald-500 text-white hover:bg-emerald-600"
-              : "bg-foreground/10 text-foreground/60 hover:bg-foreground/15"
-          }`}
-        >
-          {busy ? "..." : status.enabled ? "ON" : "OFF"}
-        </button>
-      </div>
-      <p className="text-[10px] text-foreground/40 mt-1 leading-snug">
-        {nativeOnly && !isNative ? "Native only — open in iOS app" : SOURCE_HINTS[status.key]}
-      </p>
-      <div className="mt-1.5 flex items-baseline gap-2">
-        <span className="text-[10px] text-foreground/30 tabular-nums font-mono shrink-0 w-12">
-          {lastTime || "—"}
-        </span>
-        <span className="text-[11px] text-foreground/60 truncate flex-1">
-          {lastSummary}
-        </span>
-        <span className="text-[10px] text-foreground/40 tabular-nums">
-          ✓ {status.ingestedCount}
-        </span>
-      </div>
-      {status.lastError && (
-        <p className="text-[10px] text-red-500 mt-1 leading-snug">{status.lastError}</p>
-      )}
-    </div>
-  );
-}
+import AmbientSourceControlsPanel from "./AmbientSourceControlsPanel";
+import { clearAmbientSqliteData } from "@/services/ambient/reset-sqlite";
 
 export default function AmbientSourcesPanel() {
-  const [status, setStatus] = useState<RuntimeStatus>(() =>
-    getAmbientRuntime().status(),
-  );
-  const [busyKeys, setBusyKeys] = useState<Set<SourceKey>>(new Set());
-  const { patch } = useUserSettings();
+  const [clearing, setClearing] = useState(false);
+  const [clearStatus, setClearStatus] = useState<string | null>(null);
+  const [clearError, setClearError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const rt = getAmbientRuntime();
-    return rt.subscribe(() => setStatus(rt.status()));
-  }, []);
-
-  // Toggle path: persist consent first, then apply it to the in-memory
-  // runtime. App.tsx has a separate settings hook instance, so it will
-  // handle boot-time reconciliation but does not see this panel's local
-  // PATCH result immediately.
-  const toggle = useCallback(async (key: SourceKey, currentlyEnabled: boolean) => {
-    setBusyKeys((prev) => {
-      const next = new Set(prev);
-      next.add(key);
-      return next;
-    });
+  const clearLocalData = useCallback(async () => {
+    if (!confirm("Clear local Ambient SQLite data on this device? This cannot be undone.")) return;
+    setClearing(true);
+    setClearStatus(null);
+    setClearError(null);
     try {
-      const nextEnabled = !currentlyEnabled;
-      const updated = await patch({ ambientSources: { [key]: { enabled: nextEnabled } } });
-      if (!updated) return;
-
-      const rt = getAmbientRuntime();
-      const persistedEnabled = updated.ambientSources?.[key]?.enabled === true;
-      try {
-        if (persistedEnabled) {
-          await rt.start(key);
-        } else {
-          await rt.stop(key, { remember: false });
-        }
-      } catch {
-        // Runtime records per-source errors on status; keep the panel usable.
-      }
+      await clearAmbientSqliteData();
+      setClearStatus("Ambient SQLite data cleared. Restart the app to reopen fresh local databases.");
+    } catch (err) {
+      setClearError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusyKeys((prev) => {
-        const next = new Set(prev);
-        next.delete(key);
-        return next;
-      });
+      setClearing(false);
     }
-  }, [patch]);
-
-  // App.tsx still owns boot-time reconciliation from saved settings.
-
-  const flush = useCallback(async () => {
-    await getAmbientRuntime().flush();
   }, []);
 
   return (
     <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-3.5">
-      <div className="flex items-center justify-between mb-2.5">
-        <div className="flex items-center gap-2">
-          <Radio size={14} strokeWidth={1.5} className="text-foreground/40" />
-          <span className="text-xs font-medium text-foreground/50">
-            Ambient Sources
-          </span>
-        </div>
-        <span className="text-[10px] text-foreground/40 tabular-nums">
-          buf {status.bufferSize} · outbox {status.outboxPendingCount} ({status.outboxMode}) · ingested {status.totalIngested}
-          {status.totalIngestErrors > 0
-            ? ` · err ${status.totalIngestErrors}`
-            : ""}
-        </span>
-      </div>
-      <div className="space-y-2">
-        {status.sources.map((src) => (
-          <SourceRow
-            key={src.key}
-            status={src}
-            busy={busyKeys.has(src.key)}
-            onToggle={() => {
-              void toggle(src.key, src.enabled);
-            }}
-          />
-        ))}
-      </div>
-      <div className="mt-2.5 flex items-center gap-2">
-        <button
-          onClick={() => void flush()}
-          disabled={status.bufferSize === 0}
-          className="flex-1 rounded-lg bg-foreground/10 hover:bg-foreground/15 text-foreground/60 text-[11px] font-medium py-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          Flush buffer now
-        </button>
-        <span className="text-[10px] text-foreground/40 tabular-nums shrink-0">
-          last drain {formatTime(status.lastDrainTs)}
-        </span>
-      </div>
-      <p className="text-[10px] text-foreground/35 mt-1.5">
-        last ok {formatTime(status.lastSuccessfulDrainTs)} · last outbox flush {formatTime(status.lastFlushTs)}
-      </p>
-      {status.lastIngestError && (
-        <p className="text-[11px] text-red-500 mt-2 leading-snug">
-          ingest: {status.lastIngestError}
-        </p>
-      )}
+      <AmbientSourceControlsPanel />
       <div className="mt-3">
         <AmbientAudioDebugPanel />
       </div>
       <div className="mt-3">
         <AmbientModelsPanel />
+      </div>
+      <div className="mt-3 rounded-xl border border-red-200 bg-red-50/60 p-3">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-red-600/80">
+          Local debug actions
+        </p>
+        <p className="mt-1 text-[11px] leading-snug text-red-600/70">
+          Clears only this device&apos;s Ambient SQLite databases. Account, consent settings, and other app state are kept.
+        </p>
+        <button
+          type="button"
+          onClick={() => void clearLocalData()}
+          disabled={clearing}
+          className="mt-2 min-h-10 w-full rounded-lg border border-red-200 bg-white/70 px-3 text-[11px] font-semibold text-red-600 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {clearing ? "Clearing..." : "Clear Ambient SQLite data"}
+        </button>
+        {clearStatus && (
+          <p className="mt-2 text-[11px] leading-snug text-emerald-700">{clearStatus}</p>
+        )}
+        {clearError && (
+          <p className="mt-2 text-[11px] leading-snug text-red-600">{clearError}</p>
+        )}
       </div>
     </div>
   );

@@ -5,7 +5,8 @@ import LoginPage from "@/components/LoginPage";
 import ConstellationLayout from "@/components/constellation/ConstellationLayout";
 import { isNative } from "@/lib/platform";
 import { useUserSettings } from "@/hooks/useUserSettings";
-import type { SourceKey } from "@/services/ambient";
+import { getPersistedAmbientEnabled } from "@/services/ambient/enabled-state";
+import { ALL_SOURCE_KEYS, type SourceKey } from "@/services/ambient/keys";
 
 /**
  * Top-level router after the apis + openclaw retirement:
@@ -32,6 +33,7 @@ export default function App() {
   // opt-in" (""): the empty string still needs to fire so a user who
   // just turned everything off has the runtime stop matching sources.
   const enabledKey: string | null = useMemo(() => {
+    if (getPersistedAmbientEnabled()) return ALL_SOURCE_KEYS.join(",");
     const c = userSettings?.ambientSources;
     if (c === undefined) return null;
     return Object.entries(c ?? {})

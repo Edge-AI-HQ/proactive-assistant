@@ -138,6 +138,7 @@ export const AmbientAi: AmbientAiFacade = {
     cancelDownload: (options) => native.models.cancelModelDownload(options),
     deleteModel: (options) => native.models.deleteModel(options),
     verifyModel: (options) => native.models.verifyModel(options),
+    generateTimelineEvent: (options) => native.models.generateTimelineEvent(options),
   },
 
   addListener,

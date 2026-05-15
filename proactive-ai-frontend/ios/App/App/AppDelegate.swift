@@ -4,18 +4,12 @@ import Capacitor
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
 
-    var window: UIWindow?
-
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // UIWindow 默认黑色。键盘 resize=native 会上推 WKWebView，下方露出
-        // window 背景；若是黑色就是用户反馈的"键盘黑边"。对齐到 app background
-        // (hsl 220 30% 96% ≈ #F1F3F7) 后，任何边缘露出都是同色，视觉无感。
-        let appBackground = UIColor(red: 0.945, green: 0.953, blue: 0.969, alpha: 1.0)
-        DispatchQueue.main.async {
-            self.window?.backgroundColor = appBackground
-            self.window?.rootViewController?.view.backgroundColor = appBackground
-        }
         return true
+    }
+
+    func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        return UISceneConfiguration(name: "Default Configuration", sessionRole: connectingSceneSession.role)
     }
 
     func applicationWillResignActive(_ application: UIApplication) {

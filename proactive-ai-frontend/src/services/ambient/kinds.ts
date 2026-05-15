@@ -7,9 +7,12 @@
  */
 export const SIGNAL_KINDS = {
   soundClassification: "device.sound_classification",
+  soundSceneRun: "device.sound_scene_run",
   visit: "device.visit",
   activity: "device.activity",
+  motionSegment: "device.motion_segment",
   location: "device.location",
+  timelineEvent: "ambient.timeline_event",
 } as const;
 
 export type SignalKind = (typeof SIGNAL_KINDS)[keyof typeof SIGNAL_KINDS];

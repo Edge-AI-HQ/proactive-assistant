@@ -21,6 +21,11 @@ import {
   type OutboxKind, type OutboxStore,
 } from "./outbox";
 import { AmbientSyncScheduler } from "./sync-scheduler";
+import {
+  getAmbientTimelinePipeline,
+  localEventIdsFromSignals,
+  type AmbientTimelinePipeline,
+} from "./timeline";
 import { ActivitySource } from "./sources/activity";
 import { HealthSource } from "./sources/health";
 import { LocationSource } from "./sources/location";
@@ -54,10 +59,21 @@ export interface RuntimeStatus {
   uploadsLocked: boolean;
 }
 
-class AmbientRuntime {
+export interface AmbientRuntimeOptions {
+  sources?: AmbientSource[];
+  outbox?: OutboxStore;
+  scheduler?: AmbientSyncScheduler;
+  enableTimers?: boolean;
+  sourceWatchdogIntervalMs?: number;
+}
+
+const SOURCE_WATCHDOG_INTERVAL_MS = 60_000;
+
+export class AmbientRuntime {
   private buffer: SignalBuffer;
   private outbox: OutboxStore;
   private scheduler: AmbientSyncScheduler;
+  private timelinePipeline: AmbientTimelinePipeline;
   private sources: Map<SourceKey, AmbientSource>;
   private statusBySource: Map<SourceKey, SourceStatus>;
   private listeners = new Set<() => void>();
@@ -68,32 +84,41 @@ class AmbientRuntime {
   private outboxPendingCount = 0;
   private autoStartInFlight = false;
   private drainTimer: ReturnType<typeof setInterval> | null = null;
+  private sourceWatchdogTimer: ReturnType<typeof setInterval> | null = null;
+  private sourceReconcileInFlight = false;
+  private sourceReconcilePending = false;
+  private desiredSourceKeys = new Set<SourceKey>();
   private optOutSources = loadOptOutSources();
 
-  constructor() {
+  constructor(options: AmbientRuntimeOptions = {}) {
     // SQLite persistence on native survives app kill / OS suspend so
     // outbox events queued under bad network don't get lost. Web build
     // keeps the in-memory store — SPA tab lifecycle is shorter and the
     // SQLite plugin's web path is heavy to set up.
-    this.outbox = isNative ? new SqliteOutboxStore() : new MemoryOutboxStore();
-    this.scheduler = new AmbientSyncScheduler(this.outbox);
+    this.outbox = options.outbox ?? (isNative ? new SqliteOutboxStore() : new MemoryOutboxStore());
+    this.scheduler = options.scheduler ?? new AmbientSyncScheduler(this.outbox);
     this.scheduler.setUploadsLocked(loadUploadsLocked());
+    this.timelinePipeline = getAmbientTimelinePipeline();
     this.buffer = new SignalBuffer((batch) => this.flushBatch(batch));
     this.statusBySource = new Map();
 
     const ctx: SourceContext = {
-      push: (item: PersonalSignalInput) => this.buffer.push(item),
+      push: (item: PersonalSignalInput) => {
+        void this.ingestLocalSignal(item);
+      },
       onEvent: (key, summary) =>
         this.recordEvent(key as SourceKey, summary),
     };
 
-    this.sources = new Map<SourceKey, AmbientSource>([
-      ["sound_classifier", new SoundClassifierSource(ctx)],
-      ["visit", new VisitSource(ctx)],
-      ["activity", new ActivitySource(ctx)],
-      ["location", new LocationSource(ctx)],
-      ["health", new HealthSource(ctx)],
-    ]);
+    this.sources = new Map<SourceKey, AmbientSource>(
+      (options.sources ?? [
+        new SoundClassifierSource(ctx),
+        new VisitSource(ctx),
+        new ActivitySource(ctx),
+        new LocationSource(ctx),
+        new HealthSource(ctx),
+      ]).map((source) => [source.key as SourceKey, source]),
+    );
 
     for (const [k, src] of this.sources) {
       this.statusBySource.set(k, {
@@ -105,7 +130,10 @@ class AmbientRuntime {
         lastError: null,
       });
     }
-    this.startDrainTimer();
+    if (options.enableTimers !== false) {
+      this.startDrainTimer();
+      this.startSourceWatchdog(options.sourceWatchdogIntervalMs);
+    }
   }
 
   async start(key: SourceKey): Promise<void> {
@@ -167,6 +195,7 @@ class AmbientRuntime {
   }
 
   async stopAll(): Promise<void> {
+    this.desiredSourceKeys.clear();
     for (const k of this.sources.keys()) {
       const st = this.statusBySource.get(k);
       if (st?.enabled) {
@@ -177,6 +206,11 @@ class AmbientRuntime {
         }
       }
     }
+  }
+
+  async reconcileEnabledSources(keys: SourceKey[]): Promise<void> {
+    this.desiredSourceKeys = new Set(keys.filter((key) => this.sources.has(key)));
+    await this.reconcileDesiredSources();
   }
 
   async flush(): Promise<void> {
@@ -193,23 +227,14 @@ class AmbientRuntime {
     this.totalIngested += result.inserted;
     this.totalIngestErrors += result.failed > 0 ? 1 : 0;
     this.recordIngestedItems(result.syncedItems);
+    await this.markTimelineEventsSynced(result.syncedItems);
     this.lastIngestError = this.scheduler.status().lastError;
     await this.refreshOutboxCount();
     this.notify();
   }
 
   async refreshActiveSources(): Promise<void> {
-    for (const [key, src] of this.sources) {
-      const st = this.statusBySource.get(key);
-      if (!st?.enabled || typeof src.refresh !== "function") continue;
-      try {
-        await src.refresh();
-        st.lastError = null;
-      } catch (err) {
-        st.lastError = describeError(err);
-      }
-    }
-    this.notify();
+    await this.reconcileDesiredSources();
   }
 
   status(): RuntimeStatus {
@@ -258,6 +283,34 @@ class AmbientRuntime {
     }
   }
 
+  private async ingestLocalSignal(item: PersonalSignalInput): Promise<void> {
+    try {
+      const timelineSignals = await this.timelinePipeline.ingestSignal(item);
+      for (const signal of timelineSignals) {
+        this.buffer.push(signal);
+      }
+      this.lastIngestError = null;
+      await this.refreshOutboxCount();
+    } catch (err) {
+      this.lastIngestError = describeError(err);
+    } finally {
+      this.notify();
+    }
+  }
+
+  private async markTimelineEventsSynced(
+    items: PersonalSignalInput[],
+  ): Promise<void> {
+    const localEventIds = localEventIdsFromSignals(items);
+    if (localEventIds.length === 0) return;
+    try {
+      const { getAmbientTimelineStore } = await import("./timeline");
+      await getAmbientTimelineStore().markTimelineEventsSynced(localEventIds);
+    } catch (err) {
+      this.lastIngestError = describeError(err);
+    }
+  }
+
   private async refreshOutboxCount(): Promise<void> {
     this.outboxPendingCount = await this.outbox.count();
   }
@@ -288,6 +341,61 @@ class AmbientRuntime {
     this.drainTimer = setInterval(() => {
       void this.drain();
     }, this.scheduler.intervalMs());
+  }
+
+  private startSourceWatchdog(intervalMs = SOURCE_WATCHDOG_INTERVAL_MS): void {
+    if (!isNative || this.sourceWatchdogTimer) return;
+    this.sourceWatchdogTimer = setInterval(() => {
+      void this.refreshActiveSources();
+    }, intervalMs);
+  }
+
+  private async reconcileDesiredSources(): Promise<void> {
+    if (this.sourceReconcileInFlight) {
+      this.sourceReconcilePending = true;
+      return;
+    }
+    this.sourceReconcileInFlight = true;
+    try {
+      do {
+        this.sourceReconcilePending = false;
+        for (const [key, src] of this.sources) {
+          const st = this.statusBySource.get(key);
+          if (!st) continue;
+          const shouldRun = this.desiredSourceKeys.has(key);
+          if (!shouldRun) {
+            if (st.enabled || src.isStarted()) {
+              try {
+                await this.stop(key, { remember: false });
+              } catch {
+                /* stop() records per-source errors */
+              }
+            }
+            continue;
+          }
+
+          if (!st.enabled || !src.isStarted()) {
+            try {
+              await this.start(key);
+            } catch {
+              /* start() records per-source errors */
+            }
+            continue;
+          }
+
+          if (typeof src.refresh !== "function") continue;
+          try {
+            await src.refresh();
+            st.lastError = null;
+          } catch (err) {
+            st.lastError = describeError(err);
+          }
+        }
+      } while (this.sourceReconcilePending);
+    } finally {
+      this.sourceReconcileInFlight = false;
+      this.notify();
+    }
   }
 
   private notify(): void {
@@ -374,5 +482,3 @@ export function getAmbientRuntime(): AmbientRuntime {
   if (!singleton) singleton = new AmbientRuntime();
   return singleton;
 }
-
-export type { AmbientRuntime };
