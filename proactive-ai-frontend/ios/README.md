@@ -44,11 +44,13 @@ Apple Development cert 的**私钥只存在生成它那台 Mac 上**——你不
 ### Build + 开 Xcode 让你点 Run
 
 ```bash
-make ios              # 默认连本地 ngrok tunnel（PAI_API_URL in ./.env）
+make ios              # 默认连 fly dev（VITE_PIN_API_URL in pinai-agents/.env）
+DEV=1 make ios        # 显式连 fly dev（同默认，覆盖 ./.env 里的 PAI_API_URL）
 NGROK=<url> make ios  # 指定 ngrok URL
-DEV=1 make ios        # 连 fly dev
 PROD=1 make ios       # 连 fly prod
 ```
+
+优先级：`NGROK` > `PROD=1` > `DEV=1` > `PAI_API_URL` in `./.env`（tunnel，可选）> fly dev 默认。
 
 `make ios` 走 `proactive-ai-frontend/scripts/sync-ios.sh`（vite build + cap sync + fix-deployment-target），跟 CI 的 archive 流程**前半段完全一致**——只是 CI 之后会 `xcodebuild archive`，本地是 `cap open ios` 让你手动 Run。
 

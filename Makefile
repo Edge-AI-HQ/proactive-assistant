@@ -4,7 +4,7 @@
 .PHONY: migrate reset clean
 .PHONY: deploy-pinai-dev deploy-pinai-prod deploy-frontend-dev deploy-frontend-prod deploy-reward-dashboard-dev
 .PHONY: deploy-litellm-dev deploy-litellm-prod
-.PHONY: ios android ngrok githooks
+.PHONY: ios android ngrok githooks install
 .PHONY: tunnel-up tunnel-down tunnel-status
 
 # Running stack: postgres + litellm + pinai-agents (web + chat) +
@@ -42,6 +42,18 @@ githooks: ## Enable repo-local git hooks (.githooks/) for pre-commit checks
 	@git config core.hooksPath .githooks
 	@echo "Enabled .githooks/. Bypass a single commit with: git commit --no-verify"
 	@echo "Disable entirely with: git config --unset core.hooksPath"
+
+# Auto-install npm deps when package-lock.json changes (or on first run).
+# Stamp file inside node_modules acts as the "last successful install" marker.
+# If state is broken in subtle ways (corrupt package), force re-install with:
+#   rm node_modules/.install-stamp && make install
+install: node_modules/.install-stamp ## Install npm deps (auto-refreshes when package-lock.json changes)
+
+node_modules/.install-stamp: package-lock.json
+	@echo "==> Installing npm dependencies (lock changed or first run)..."
+	npm install
+	@mkdir -p node_modules
+	@touch $@
 
 # ── Environment: auto-decrypt .env.dev → .env ──
 # Triggers when .env is missing or .env.dev is newer.
@@ -311,7 +323,7 @@ tunnel-status: ## Show whether the tunnel is up and at what URL
 		echo "Tunnel DOWN. Start with: make tunnel-up"; \
 	fi
 
-ios: ensure-env ## Build frontend, sync iOS, open Xcode
+ios: install ensure-env ## Build frontend, sync iOS, open Xcode
 	@set -a && . ./pinai-agents/.env && set +a && \
 	MOBILE_TUNNEL_URL=$$(sed -n 's/^PAI_API_URL=//p' .env 2>/dev/null | tail -n 1 | sed -e 's/^"//' -e 's/"$$//'); \
 	if [ -n "$(NGROK)" ]; then \
@@ -326,14 +338,13 @@ ios: ensure-env ## Build frontend, sync iOS, open Xcode
 		VITE_PIN_API_URL="$$MOBILE_TUNNEL_URL"; \
 		echo "Using local tunnel at $$VITE_PIN_API_URL (from ./.env PAI_API_URL)"; \
 	else \
-		echo "Missing mobile backend URL. Set PAI_API_URL in ./.env, pass NGROK=<url>, or use DEV=1/PROD=1."; \
-		exit 1; \
+		echo "Using fly dev (default) at $$VITE_PIN_API_URL — override with NGROK=<url>, DEV=1, or PROD=1"; \
 	fi; \
 	VITE_PIN_API_URL="$$VITE_PIN_API_URL" \
 		bash proactive-ai-frontend/scripts/sync-ios.sh && \
 		cd proactive-ai-frontend && npx cap open ios
 
-android: ensure-env ## Build frontend, sync Android, install on USB device
+android: install ensure-env ## Build frontend, sync Android, install on USB device
 	@set -e; \
 	set -a && . ./pinai-agents/.env && set +a; \
 	MOBILE_TUNNEL_URL=$$(sed -n 's/^PAI_API_URL=//p' .env 2>/dev/null | tail -n 1 | sed -e 's/^"//' -e 's/"$$//'); \
@@ -349,8 +360,7 @@ android: ensure-env ## Build frontend, sync Android, install on USB device
 		VITE_PIN_API_URL="$$MOBILE_TUNNEL_URL"; \
 		echo "Using local tunnel at $$VITE_PIN_API_URL (from ./.env PAI_API_URL)"; \
 	else \
-		echo "Missing mobile backend URL. Set PAI_API_URL in ./.env, pass NGROK=<url>, or use DEV=1/PROD=1."; \
-		exit 1; \
+		echo "Using fly dev (default) at $$VITE_PIN_API_URL — override with NGROK=<url>, DEV=1, or PROD=1"; \
 	fi; \
 	cd proactive-ai-frontend && \
 		VITE_CAPACITOR=1 VITE_PIN_API_URL="$$VITE_PIN_API_URL" \
