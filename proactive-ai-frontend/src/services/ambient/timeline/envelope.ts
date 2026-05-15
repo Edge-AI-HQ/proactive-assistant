@@ -25,8 +25,6 @@ export function timelineEventToSignal(
       confidence_label: event.confidenceLabel,
       source_types: event.sourceTypes,
       local_event_id: event.id,
-      local_date: event.localDate,
-      primary_source_label: event.primarySourceLabel,
       schema_version: AMBIENT_TIMELINE_SCHEMA_VERSION,
       ...(event.triggeredCardId
         ? { triggered_card_id: event.triggeredCardId }

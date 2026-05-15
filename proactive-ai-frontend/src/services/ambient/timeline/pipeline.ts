@@ -1,5 +1,6 @@
 import type { PersonalSignalInput } from "@/lib/devices";
 import { timelineEventToSignal } from "./envelope";
+import { ambientTimelineModels, type AmbientTimelineModelBridge, type AmbientTimelineEventDraft } from "./models";
 import { rawEventFromSignal, placeLabel } from "./normalize";
 import { getAmbientTimelineStore } from "./store";
 import type {
@@ -30,14 +31,21 @@ import {
 export interface AmbientTimelinePipeline {
   ingestSignal(item: PersonalSignalInput): Promise<PersonalSignalInput[]>;
   regenerateDay(localDate?: string): Promise<PersonalSignalInput[]>;
+  processPendingWindows(localDate?: string): Promise<PersonalSignalInput[]>;
 }
 
 export interface AmbientTimelinePipelineOptions {
   store?: AmbientTimelineStore;
+  modelBridge?: AmbientTimelineModelBridge;
+  now?: () => Date;
 }
 
 export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
-  constructor(private store: AmbientTimelineStore = getAmbientTimelineStore()) {}
+  constructor(
+    private store: AmbientTimelineStore = getAmbientTimelineStore(),
+    private modelBridge: AmbientTimelineModelBridge = ambientTimelineModels,
+    private options: { now?: () => Date } = {},
+  ) {}
 
   async ingestSignal(item: PersonalSignalInput): Promise<PersonalSignalInput[]> {
     const raw = await this.store.upsertRawEvent(rawEventFromSignal(item));
@@ -51,7 +59,99 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     for (const raw of raws) {
       out.push(...await this.generateForRaw(raw));
     }
+    out.push(...await this.processPendingWindows(localDate));
     return out;
+  }
+
+  async processPendingWindows(localDate = localDateFromDate(new Date())): Promise<PersonalSignalInput[]> {
+    await this.store.init();
+    const windows = await this.store.listCandidateWindows({
+      localDate,
+      windowType: "transcript_session",
+      status: "pending",
+      limit: 50,
+    });
+    const out: PersonalSignalInput[] = [];
+    for (const window of windows) {
+      if (window.generationPolicy !== "llm_allowed") continue;
+      if (!this.isTranscriptWindowReady(window)) continue;
+      if (!this.isBackoffExpired(window)) continue;
+      const draft = await this.modelBridge.generateTimelineEvent(window);
+      if (!draft) {
+        await this.recordWindowAttempt(window, "model_unavailable");
+        continue;
+      }
+      const event = makeEvent({
+        id: stableId("evt", ["llm", window.id]),
+        localDate: window.localDate,
+        occurredAt: window.startedAt,
+        endedAt: window.endedAt,
+        eventType: draft.eventType,
+        title: draft.title,
+        summary: draft.summary,
+        primarySourceLabel: window.deviceLabels[0] ?? sourceLabel("transcript"),
+        deviceLabels: window.deviceLabels,
+        sourceTypes: window.sourceTypes,
+        tags: draft.tags,
+        privacy: window.privacyHint,
+        confidence: draft.confidence,
+        confidenceLabel: draft.confidenceLabel,
+        salience: window.salienceHint,
+        rawRefs: window.rawRefs,
+        windowId: window.id,
+        generationMethod: "local_llm",
+        dedupeKey: `ambient:timeline:${window.localDate}:llm:${stableHash(window.id)}`,
+      });
+      const signal = await this.upsertVisibleEvent(event);
+      if (signal) out.push(signal);
+      await this.store.upsertCandidateWindow({
+        ...window,
+        status: "generated",
+        lastErrorCode: null,
+        updatedAt: this.nowIso(),
+      });
+    }
+    return out;
+  }
+
+
+  private isTranscriptWindowReady(window: AmbientCandidateWindow): boolean {
+    const textLength = window.compactContext.trim().length;
+    if (textLength < 80) return false;
+    const startedAt = Date.parse(window.startedAt);
+    const endedAt = Date.parse(window.endedAt ?? window.startedAt);
+    if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt)) return false;
+    if (endedAt - startedAt < 30_000) return false;
+    return this.now().getTime() - endedAt >= 60_000;
+  }
+
+  private isBackoffExpired(window: AmbientCandidateWindow): boolean {
+    if (!window.lastAttemptAt || window.attemptCount <= 0) return true;
+    const lastAttemptAt = Date.parse(window.lastAttemptAt);
+    if (!Number.isFinite(lastAttemptAt)) return true;
+    const cooldownMs = Math.min(30 * 60_000, 60_000 * (2 ** Math.max(0, window.attemptCount - 1)));
+    return this.now().getTime() - lastAttemptAt >= cooldownMs;
+  }
+
+  private async recordWindowAttempt(
+    window: AmbientCandidateWindow,
+    errorCode: string,
+  ): Promise<void> {
+    await this.store.upsertCandidateWindow({
+      ...window,
+      lastAttemptAt: this.nowIso(),
+      attemptCount: window.attemptCount + 1,
+      lastErrorCode: errorCode,
+      updatedAt: this.nowIso(),
+    });
+  }
+
+  private now(): Date {
+    return this.options.now?.() ?? new Date();
+  }
+
+  private nowIso(): string {
+    return this.now().toISOString();
   }
 
   private async generateForRaw(raw: AmbientRawEvent): Promise<PersonalSignalInput[]> {
@@ -304,22 +404,66 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
       ?? (durationMs
         ? new Date(Date.parse(startedAt) + durationMs).toISOString()
         : undefined);
-    await this.upsertWindow({
-      id: stableId("win", ["transcript_session", raw.dedupeKey]),
+    const sessionId = stringPayload(raw.payload, "captureSessionId") ?? raw.dedupeKey;
+    const id = stableId("win", ["transcript_session", sessionId]);
+    const existing = (await this.store.listCandidateWindows({
       localDate: raw.localDate,
       windowType: "transcript_session",
-      startedAt,
-      endedAt,
-      sourceTypes: ["transcript"],
-      deviceLabels: ["Microphone"],
-      rawRefs: [rawRef(raw)],
-      compactContext: raw.compactText,
+      limit: 200,
+    })).find((window) => window.id === id);
+    const soundWindows = await this.overlappingSoundContextWindows(raw.localDate, startedAt, endedAt ?? startedAt);
+    const soundContextText = soundWindows.length > 0
+      ? ` Sound context: ${soundWindows.map((window) => window.compactContext).join(" ")}`
+      : "";
+    const compactContext = existing?.compactContext
+      ? `${existing.compactContext} ${raw.compactText}${soundContextText}`
+      : `${raw.compactText}${soundContextText}`;
+    const soundRawRefs = soundWindows.flatMap((window) => window.rawRefs);
+    const nextHash = stableHash(compactContext);
+    await this.upsertWindow({
+      id,
+      localDate: raw.localDate,
+      windowType: "transcript_session",
+      startedAt: earlierIso(existing?.startedAt, startedAt),
+      endedAt: laterIso(existing?.endedAt, endedAt),
+      sourceTypes: uniqueSourceTypes(["transcript", ...soundWindows.flatMap((window) => window.sourceTypes)]),
+      deviceLabels: uniqueStrings(["Microphone", ...(soundWindows.length > 0 ? ["iPhone"] : [])]),
+      rawRefs: uniqueRawRefs([...(existing?.rawRefs ?? []), rawRef(raw), ...soundRawRefs]),
+      compactContext,
       privacyHint: "private",
       confidenceHint: 0.55,
       salienceHint: 0.5,
       generationPolicy: "llm_allowed",
-      status: "pending",
-      llmInputHash: stableHash(raw.compactText),
+      status: existing?.llmInputHash && existing.llmInputHash !== nextHash ? "pending" : (existing?.status ?? "pending"),
+      lastAttemptAt: existing?.llmInputHash && existing.llmInputHash !== nextHash ? null : existing?.lastAttemptAt,
+      attemptCount: existing?.llmInputHash && existing.llmInputHash !== nextHash ? 0 : existing?.attemptCount,
+      lastErrorCode: existing?.llmInputHash && existing.llmInputHash !== nextHash ? null : existing?.lastErrorCode,
+      llmInputHash: nextHash,
+    });
+  }
+
+
+  private async overlappingSoundContextWindows(
+    localDate: string,
+    start: string,
+    end: string,
+  ): Promise<AmbientCandidateWindow[]> {
+    const startTs = Date.parse(start);
+    const endTs = Date.parse(end);
+    if (!Number.isFinite(startTs) || !Number.isFinite(endTs)) return [];
+    const windows = await this.store.listCandidateWindows({
+      localDate,
+      windowType: "sound_context",
+      status: "evidence",
+      limit: 200,
+    });
+    return windows.filter((window) => {
+      const windowStart = Date.parse(window.startedAt);
+      const windowEnd = Date.parse(window.endedAt ?? window.startedAt);
+      return Number.isFinite(windowStart)
+        && Number.isFinite(windowEnd)
+        && windowStart <= endTs
+        && windowEnd >= startTs;
     });
   }
 
@@ -368,8 +512,11 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     generationPolicy: AmbientCandidateWindow["generationPolicy"];
     status: AmbientCandidateWindow["status"];
     llmInputHash?: string | null;
+    lastAttemptAt?: string | null;
+    attemptCount?: number;
+    lastErrorCode?: string | null;
   }): Promise<AmbientCandidateWindow> {
-    const now = new Date().toISOString();
+    const now = this.nowIso();
     return this.store.upsertCandidateWindow({
       id: args.id,
       localUserId: LOCAL_USER_ID,
@@ -389,6 +536,9 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
       generationPolicy: args.generationPolicy,
       llmInputHash: args.llmInputHash ?? null,
       status: args.status,
+      lastAttemptAt: args.lastAttemptAt ?? null,
+      attemptCount: args.attemptCount ?? 0,
+      lastErrorCode: args.lastErrorCode ?? null,
       expiresAt: null,
       createdAt: now,
       updatedAt: now,
@@ -406,7 +556,7 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
 export function createAmbientTimelinePipeline(
   options: AmbientTimelinePipelineOptions = {},
 ): AmbientTimelinePipeline {
-  return new LocalAmbientTimelinePipeline(options.store);
+  return new LocalAmbientTimelinePipeline(options.store, options.modelBridge, { now: options.now });
 }
 
 let singleton: AmbientTimelinePipeline | null = null;
@@ -430,9 +580,11 @@ function makeEvent(args: {
   tags: string[];
   privacy?: AmbientTimelineEvent["privacy"];
   confidence: number;
+  confidenceLabel?: AmbientTimelineEvent["confidenceLabel"];
   salience: number;
   rawRefs: AmbientRawRef[];
   windowId?: string;
+  generationMethod?: AmbientTimelineEvent["generationMethod"];
   dedupeKey: string;
 }): AmbientTimelineEvent {
   const now = new Date().toISOString();
@@ -461,12 +613,12 @@ function makeEvent(args: {
     tags: uniqueStrings(args.tags),
     privacy,
     confidence,
-    confidenceLabel: confidence >= 0.65 ? "certain" : "uncertain",
+    confidenceLabel: args.confidenceLabel ?? (confidence >= 0.65 ? "certain" : "uncertain"),
     salience: clamp01(args.salience),
     rawRefs: uniqueRawRefs(args.rawRefs),
     observationIds: [],
     windowId: args.windowId,
-    generationMethod: "rule",
+    generationMethod: args.generationMethod ?? "rule",
     generationStatus: "visible",
     memoryCandidate: false,
     cardTriggerCandidate: false,
@@ -608,4 +760,15 @@ function stringValue(value: unknown): string | null {
 
 function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function earlierIso(a: string | undefined, b: string): string {
+  if (!a) return b;
+  return Date.parse(a) <= Date.parse(b) ? a : b;
+}
+
+function laterIso(a: string | undefined, b: string | undefined): string | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return Date.parse(a) >= Date.parse(b) ? a : b;
 }

@@ -222,6 +222,40 @@ export interface ModelListResult {
   statuses: ModelDownloadStatus[];
 }
 
+export interface AmbientCandidateWindowForModel {
+  id: string;
+  localDate: string;
+  timezone: string;
+  windowType: string;
+  startedAt: string;
+  endedAt?: string;
+  sourceTypes: string[];
+  deviceLabels: string[];
+  compactContext: string;
+  privacyHint: 'normal' | 'private' | 'sensitive';
+  confidenceHint: number;
+  salienceHint: number;
+  schemaVersion: 'ambient_candidate_window.v1';
+}
+
+export interface AmbientTimelineEventDraftResult {
+  eventType: string;
+  title: string;
+  summary: string;
+  tags: string[];
+  confidence: number;
+  confidenceLabel: 'certain' | 'uncertain';
+  salientFacts: string[];
+  actionCandidates?: unknown[];
+  memoryCandidates?: string[];
+  possibleCardTrigger?: { title: string; reason: string };
+}
+
+export interface GenerateTimelineEventOptions {
+  modelId: string;
+  window: AmbientCandidateWindowForModel;
+}
+
 export interface ModelDownloadProgressEvent extends ModelDownloadStatus {
   /** Server-side wall clock when the event was emitted. */
   emittedAt: number;
@@ -358,6 +392,7 @@ export interface ModelsNamespace {
   cancelDownload(options: { id: string }): Promise<void>;
   deleteModel(options: { id: string }): Promise<void>;
   verifyModel(options: { id: string }): Promise<ModelVerifyResult>;
+  generateTimelineEvent(options: GenerateTimelineEventOptions): Promise<AmbientTimelineEventDraftResult>;
 }
 
 export interface AmbientAiFacade {

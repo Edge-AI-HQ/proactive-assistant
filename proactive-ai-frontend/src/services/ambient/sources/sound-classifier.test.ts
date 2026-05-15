@@ -175,7 +175,7 @@ describe("SoundClassifierSource transcript ingest", () => {
     expect(source.isStarted()).toBe(false);
   });
 
-  test("refresh reasserts native capture and classification while started", async () => {
+  test("refresh skips native restart while capture and classification are healthy", async () => {
     const ctx: SourceContext = {
       push: vi.fn(),
       onEvent: vi.fn(),
@@ -187,8 +187,8 @@ describe("SoundClassifierSource transcript ingest", () => {
     await source.refresh();
 
     expect(ambientAiMock.audio.getState).toHaveBeenCalled();
-    expect(ambientAiMock.audio.startCapture).toHaveBeenCalledTimes(1);
-    expect(ambientAiMock.sound.startClassification).toHaveBeenCalledTimes(1);
+    expect(ambientAiMock.audio.startCapture).not.toHaveBeenCalled();
+    expect(ambientAiMock.sound.startClassification).not.toHaveBeenCalled();
   });
 
   test("refresh does not restart while native audio is intentionally media-suppressed", async () => {

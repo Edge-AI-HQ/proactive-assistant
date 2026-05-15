@@ -33,6 +33,8 @@ export {
   timelineEventToSignal,
 } from "./envelope";
 export { ambientTimelineModels } from "./models";
+export { buildAmbientNarrativeSummary, groupAmbientTimelineEvents } from "./narrative";
+export type { AmbientTimelineGroup, AmbientTimelineGroupLabel } from "./narrative";
 export type {
   AmbientTimelineEventDraft,
   AmbientTimelineModelBridge,

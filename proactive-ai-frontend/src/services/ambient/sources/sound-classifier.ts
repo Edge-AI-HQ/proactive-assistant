@@ -101,12 +101,23 @@ export class SoundClassifierSource implements AmbientSource {
       return;
     }
 
-    await AmbientAi.audio.startCapture();
-    await AmbientAi.sound.startClassification();
+    if (state.running && state.classificationRunning && state.engineRunning !== false) {
+      return;
+    }
+
+    if (!state.running || state.engineRunning === false) {
+      await AmbientAi.audio.startCapture();
+    }
+    if (!state.classificationRunning || state.engineRunning === false) {
+      await AmbientAi.sound.startClassification();
+    }
 
     const nextState = await AmbientAi.audio.getState();
     if (!nextState.running) {
       throw new Error("audio capture not running");
+    }
+    if (!nextState.classificationRunning) {
+      throw new Error("sound classification not running");
     }
     if (nextState.engineRunning === false && !nextState.suppressed) {
       throw new Error("sound classifier engine not running");

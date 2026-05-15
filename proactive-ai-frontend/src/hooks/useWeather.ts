@@ -102,22 +102,30 @@ const GEO_SOURCES: Array<{
 ];
 
 async function lookupGeo(): Promise<GeoLookup | null> {
+  const failures: string[] = [];
   for (const source of GEO_SOURCES) {
     try {
       const res = await fetch(source.url);
       if (!res.ok) {
-        console.warn(`[weather] ${source.name} HTTP ${res.status}`);
+        failures.push(`${source.name} HTTP ${res.status}`);
         continue;
       }
       const data = await res.json();
       const parsed = source.parse(data);
       if (parsed) return parsed;
-      console.warn(`[weather] ${source.name} returned unparseable payload`, data);
+      failures.push(`${source.name} returned unparseable payload`);
     } catch (err) {
-      console.warn(`[weather] ${source.name} fetch failed:`, err);
+      failures.push(`${source.name} fetch failed: ${formatWeatherError(err)}`);
     }
   }
+  console.warn("[weather] all geo sources failed — widget will stay hidden", { failures });
   return null;
+}
+
+function formatWeatherError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  return "unknown error";
 }
 
 export function useWeather(): WeatherData | null {
@@ -136,7 +144,6 @@ export function useWeather(): WeatherData | null {
     async function fetchWeather() {
       const geo = await lookupGeo();
       if (!geo) {
-        console.warn("[weather] all geo sources failed — widget will stay hidden");
         return;
       }
       try {

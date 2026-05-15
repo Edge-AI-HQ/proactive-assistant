@@ -70,6 +70,9 @@ export class MemoryTimelineStore implements AmbientTimelineStore {
     const next = cloneWindow({
       ...(existing ?? window),
       ...window,
+      lastAttemptAt: window.lastAttemptAt ?? existing?.lastAttemptAt ?? null,
+      attemptCount: window.attemptCount ?? existing?.attemptCount ?? 0,
+      lastErrorCode: window.lastErrorCode ?? existing?.lastErrorCode ?? null,
       createdAt: existing?.createdAt ?? window.createdAt,
     });
     this.windows.set(next.id, next);
@@ -100,9 +103,13 @@ export class MemoryTimelineStore implements AmbientTimelineStore {
     if (existing?.generationStatus === "hidden") {
       return { event: cloneTimelineEvent(existing), shouldSync: false };
     }
+    const visibleChanged = existing
+      ? timelineVisiblePayloadChanged(existing, event)
+      : false;
     const next = cloneTimelineEvent({
       ...(existing ?? event),
       ...event,
+      syncStatus: existing?.syncStatus === "synced" && visibleChanged ? "pending" : event.syncStatus,
       createdAt: existing?.createdAt ?? event.createdAt,
       dismissedAt: existing?.dismissedAt,
     });
@@ -110,7 +117,7 @@ export class MemoryTimelineStore implements AmbientTimelineStore {
     return {
       event: cloneTimelineEvent(next),
       shouldSync:
-        next.generationStatus === "visible" && existing?.syncStatus !== "synced",
+        next.generationStatus === "visible" && (existing?.syncStatus !== "synced" || visibleChanged),
     };
   }
 
@@ -237,6 +244,9 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
           generation_policy TEXT NOT NULL,
           llm_input_hash TEXT,
           status TEXT NOT NULL,
+          last_attempt_at TEXT,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          last_error_code TEXT,
           expires_at TEXT,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
@@ -281,6 +291,7 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
         CREATE INDEX IF NOT EXISTS ix_ambient_timeline_events_day_visible
           ON ambient_timeline_events (local_date, generation_status, occurred_at);
       `);
+      await this.migrateSchema(conn);
       this.ready = true;
       this.lastError = null;
     } catch (err) {
@@ -391,9 +402,10 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
          id, local_user_id, local_date, window_type, started_at, ended_at,
          timezone, source_types_json, device_labels_json, raw_refs_json,
          observation_ids_json, compact_context, privacy_hint, confidence_hint,
-         salience_hint, generation_policy, llm_input_hash, status, expires_at,
+         salience_hint, generation_policy, llm_input_hash, status,
+         last_attempt_at, attempt_count, last_error_code, expires_at,
          created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          ended_at = excluded.ended_at,
          source_types_json = excluded.source_types_json,
@@ -407,6 +419,9 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
          generation_policy = excluded.generation_policy,
          llm_input_hash = excluded.llm_input_hash,
          status = excluded.status,
+         last_attempt_at = excluded.last_attempt_at,
+         attempt_count = excluded.attempt_count,
+         last_error_code = excluded.last_error_code,
          expires_at = excluded.expires_at,
          updated_at = excluded.updated_at`,
       [
@@ -428,6 +443,9 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
         window.generationPolicy,
         window.llmInputHash,
         window.status,
+        window.lastAttemptAt,
+        window.attemptCount,
+        window.lastErrorCode,
         window.expiresAt,
         window.createdAt,
         window.updatedAt,
@@ -482,6 +500,10 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
       return { event: existing, shouldSync: false };
     }
     const createdAt = existing?.createdAt ?? event.createdAt;
+    const visibleChanged = existing ? timelineVisiblePayloadChanged(existing, event) : false;
+    const nextSyncStatus = existing?.syncStatus === "synced" && visibleChanged
+      ? "pending"
+      : event.syncStatus;
     await conn.run(
       `INSERT INTO ambient_timeline_events (
          id, local_user_id, local_date, timezone, occurred_at, ended_at,
@@ -514,10 +536,7 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
          triggered_card_id = excluded.triggered_card_id,
          triggered_card_title = excluded.triggered_card_title,
          schema_version = excluded.schema_version,
-         sync_status = CASE
-           WHEN ambient_timeline_events.sync_status = 'synced' THEN 'synced'
-           ELSE excluded.sync_status
-         END,
+         sync_status = excluded.sync_status,
          updated_at = excluded.updated_at`,
       [
         event.id,
@@ -548,7 +567,7 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
         event.triggeredCardId ?? null,
         event.triggeredCardTitle ?? null,
         event.schemaVersion,
-        event.syncStatus,
+        nextSyncStatus,
         event.dedupeKey,
         createdAt,
         event.updatedAt,
@@ -562,7 +581,7 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
     return {
       event: next,
       shouldSync:
-        next.generationStatus === "visible" && existing?.syncStatus !== "synced",
+        next.generationStatus === "visible" && (existing?.syncStatus !== "synced" || visibleChanged),
     };
   }
 
@@ -625,6 +644,14 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
     if (open?.result !== true) await conn.open();
     this.conn = conn;
     return conn;
+  }
+
+  private async migrateSchema(conn: SqliteConnection): Promise<void> {
+    await ensureColumns(conn, "ambient_candidate_windows", [
+      { name: "last_attempt_at", sql: "ALTER TABLE ambient_candidate_windows ADD COLUMN last_attempt_at TEXT" },
+      { name: "attempt_count", sql: "ALTER TABLE ambient_candidate_windows ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0" },
+      { name: "last_error_code", sql: "ALTER TABLE ambient_candidate_windows ADD COLUMN last_error_code TEXT" },
+    ]);
   }
 }
 
@@ -731,6 +758,9 @@ function rowToWindow(row: Record<string, unknown>): AmbientCandidateWindow {
     generationPolicy: text(row.generation_policy) as AmbientCandidateWindow["generationPolicy"],
     llmInputHash: nullableText(row.llm_input_hash),
     status: text(row.status) as AmbientCandidateWindow["status"],
+    lastAttemptAt: nullableText(row.last_attempt_at),
+    attemptCount: numberValue(row.attempt_count),
+    lastErrorCode: nullableText(row.last_error_code),
     expiresAt: nullableText(row.expires_at),
     createdAt: text(row.created_at),
     updatedAt: text(row.updated_at),
@@ -845,5 +875,36 @@ function describeError(err: unknown): string {
     return JSON.stringify(err);
   } catch {
     return String(err);
+  }
+}
+
+function timelineVisiblePayloadChanged(
+  existing: AmbientTimelineEvent,
+  next: AmbientTimelineEvent,
+): boolean {
+  return existing.title !== next.title
+    || existing.summary !== next.summary
+    || existing.eventType !== next.eventType
+    || existing.privacy !== next.privacy
+    || existing.confidence !== next.confidence
+    || existing.confidenceLabel !== next.confidenceLabel
+    || existing.salience !== next.salience
+    || JSON.stringify(existing.tags) !== JSON.stringify(next.tags)
+    || JSON.stringify(existing.sourceTypes) !== JSON.stringify(next.sourceTypes);
+}
+
+async function ensureColumns(
+  conn: SqliteConnection,
+  table: string,
+  columns: Array<{ name: string; sql: string }>,
+): Promise<void> {
+  const rows = await conn.query(`PRAGMA table_info(${table})`);
+  const existing = new Set((rows.values ?? [])
+    .map((row) => typeof row.name === "string" ? row.name : null)
+    .filter((name): name is string => name !== null));
+
+  for (const column of columns) {
+    if (existing.has(column.name)) continue;
+    await conn.run(column.sql);
   }
 }

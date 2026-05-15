@@ -84,6 +84,9 @@ export interface AmbientCandidateWindow {
   generationPolicy: "rule_only" | "llm_allowed" | "do_not_generate";
   llmInputHash: string | null;
   status: "pending" | "generated" | "ignored" | "evidence";
+  lastAttemptAt: string | null;
+  attemptCount: number;
+  lastErrorCode: string | null;
   expiresAt: string | null;
   createdAt: string;
   updatedAt: string;

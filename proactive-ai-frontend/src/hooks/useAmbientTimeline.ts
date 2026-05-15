@@ -4,8 +4,11 @@ import {
   getAmbientTimelinePipeline,
   getAmbientTimelineStore,
   todayLocalDate,
+  buildAmbientNarrativeSummary,
+  groupAmbientTimelineEvents,
   type AmbientTimelineEvent,
   type TimelineStoreStatus,
+  type AmbientTimelineGroup,
 } from "@/services/ambient/timeline";
 
 export interface UseAmbientTimelineResult {
@@ -14,6 +17,9 @@ export interface UseAmbientTimelineResult {
   loading: boolean;
   error: string | null;
   storeStatus: TimelineStoreStatus | null;
+  narrativeSummary: string | null;
+  groups: AmbientTimelineGroup[];
+  pendingTranscriptCount: number;
   refresh: () => Promise<void>;
   dismiss: (id: string) => Promise<void>;
 }
@@ -25,6 +31,7 @@ export function useAmbientTimeline(localDate = todayLocalDate()): UseAmbientTime
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [storeStatus, setStoreStatus] = useState<TimelineStoreStatus | null>(null);
+  const [pendingTranscriptCount, setPendingTranscriptCount] = useState(0);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -35,6 +42,13 @@ export function useAmbientTimeline(localDate = todayLocalDate()): UseAmbientTime
         visibleOnly: true,
         limit: 20,
       });
+      const pending = await store.listCandidateWindows({
+        localDate,
+        windowType: "transcript_session",
+        status: "pending",
+        limit: 100,
+      });
+      setPendingTranscriptCount(pending.length);
       setEvents(rows);
       setStoreStatus(store.status());
     } catch (err) {
@@ -68,12 +82,18 @@ export function useAmbientTimeline(localDate = todayLocalDate()): UseAmbientTime
     };
   }, [refresh]);
 
+  const narrativeSummary = useMemo(() => buildAmbientNarrativeSummary(events), [events]);
+  const groups = useMemo(() => groupAmbientTimelineEvents(events), [events]);
+
   return {
     events,
     localDate,
     loading,
     error,
     storeStatus,
+    narrativeSummary,
+    groups,
+    pendingTranscriptCount,
     refresh,
     dismiss,
   };
