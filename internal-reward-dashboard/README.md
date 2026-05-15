@@ -34,6 +34,21 @@ npm test
 npm run build
 ```
 
+## Fly Dev Deploy
+
+The dev Fly app is `proactive-ai-reward-dashboard-dev`:
+
+```bash
+make deploy-reward-dashboard-dev
+```
+
+The deployed URL is `https://proactive-ai-reward-dashboard-dev.fly.dev`.
+Pushes to `proactive-ai-v3` that touch `internal-reward-dashboard/**` trigger
+the standalone `.github/workflows/internal-reward-dashboard-dev.yml` workflow.
+The workflow verifies the app, builds this app's Dockerfile, and serves the
+static bundle with nginx; runtime `/api/*` traffic is proxied to
+`https://proactive-ai-agents-dev.fly.dev`.
+
 Useful local checks after logging in:
 
 - `/runs`: real generation runs, batch metrics, reviewed/unreviewed,

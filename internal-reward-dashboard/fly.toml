@@ -1,0 +1,28 @@
+# internal-reward-dashboard on Fly.io (dev).
+#
+# Static Vite SPA served by nginx. Runtime /api/* proxy points at the dev
+# pinai-agents web app; browser auth still comes from Supabase VITE_* values
+# baked at build time by deploy-dev.yml.
+
+app = "proactive-ai-reward-dashboard-dev"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NGINX_RESOLVER = "[fdaa::3]"
+  NGINX_UPSTREAM_URL = "https://proactive-ai-agents-dev.fly.dev"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "256mb"
+

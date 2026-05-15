@@ -52,6 +52,7 @@ flowchart LR
 | 前端位置 | `internal-reward-dashboard/` 是独立 Vite app,端口 `3004`,包名 `@pin-ai/internal-reward-dashboard`。不要放进 `proactive-ai-frontend/src/`,也不要默认加入 root npm workspace。 |
 | 登录 | 复用 Supabase Google OAuth,读取 `../pinai-agents/.env` 里的 `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY`。 |
 | API 代理 | 本地开发时走 same-origin `/api/*`,Vite proxy 默认转到 `http://127.0.0.1:8000`;可用 `VITE_PIN_API_PROXY_TARGET` 覆盖。 |
+| Fly dev | 独立 Fly app `proactive-ai-reward-dashboard-dev`,默认 URL `https://proactive-ai-reward-dashboard-dev.fly.dev`;nginx 运行时把 `/api/*` 反代到 `https://proactive-ai-agents-dev.fly.dev`。 |
 | 后端 route | `pinai-agents/src/pinai_agents/web/routes/ui/reward_dashboard.py`,prefix 是 `/api/reward-dashboard`。 |
 | Repository | `pinai-agents/src/pinai_agents/web/db/repositories/reward.py`,必须在 `user_scoped_tx` 内构造,所有查询按 `user_id` scope。 |
 | Reward ledger | `pai_card_reward_events` 是 append-only ledger。`card_open` / `user_score` 来源是 `user`,`reviewer_score` 来源是 `reviewer`,`imported_feedback` 来源是 `system`。 |
@@ -134,6 +135,18 @@ npm run dev -- --host 127.0.0.1 --port 3004
 
 打开 `http://127.0.0.1:3004/runs`。本地 API 请求走 Vite proxy 到 `pinai-web:8000`,浏览器里不需要额外 CORS 配置。
 
+## 部署
+
+dev 环境是独立 Fly 静态站点:
+
+```bash
+make deploy-reward-dashboard-dev
+```
+
+CI/CD 入口是独立 workflow `.github/workflows/internal-reward-dashboard-dev.yml`:PR 只跑 `type-check` / `test` / `build`;push 到 `proactive-ai-v3` 时,只要 `internal-reward-dashboard/**` 变化,就会从 `pinai-agents/.env.dev` 解出 `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY` 作为 build args,再执行 `flyctl deploy --config internal-reward-dashboard/fly.toml --remote-only`。部署后的默认地址是 `https://proactive-ai-reward-dashboard-dev.fly.dev`。
+
+这个 app 不使用自定义域名,也不复用 `proactive-ai-frontend` 镜像。`internal-reward-dashboard/Dockerfile` 只构建 dashboard 静态产物,运行时 nginx 负责 SPA fallback 和 `/api/*` same-origin proxy。
+
 ## 验证方式
 
 ```bash
@@ -161,7 +174,7 @@ cd proactive-ai-frontend && npm run type-check
 
 ## 踩坑
 
-- 这个 app 当前是内部本地 review 工具,没有纳入 `proactive-ai-frontend` 的 Fly 部署路径。上线成独立 app 前,不要假设 CI 会部署它。
+- 这个 app 是独立 Fly app,不是 `proactive-ai-frontend` 的一个路由。改 dashboard 后看 `.github/workflows/internal-reward-dashboard-dev.yml`,不要去改主前端部署路径。
 - 不要把 `/api/reward-dashboard/*` 当普通用户产品 API 扩散。它走 Supabase JWT,但语义是内部 review/read model。
 - `card_open` 只表示用户打开卡片,默认 score=1;confirm / dismiss / snooze / text feedback 仍写 `pai_feedback_events`,不要复制进 reward ledger。
 - trace 绑定必须靠 generator LangSmith metadata `pinai_run_id`,不要按最近时间窗口猜 trace。

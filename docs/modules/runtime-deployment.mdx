@@ -189,6 +189,7 @@ CI 把 `DOTENV_PRIVATE_KEY_TEST` / `DOTENV_PRIVATE_KEY_PROD` 当 GitHub secret;d
 |---|---|---|---|
 | pinai-agents(web + chat 同 app,`[processes]` 切分) | `proactive-ai-agents-dev` | `proactive-ai-agents-test` | `proactive-ai-agents-prod` |
 | Frontend SPA(nginx + Vite static) | `proactive-ai-frontend-dev` | `proactive-ai-frontend-test` | `proactive-ai-frontend-prod` |
+| Internal reward dashboard(nginx + Vite static) | `proactive-ai-reward-dashboard-dev` | 暂无独立 app | 暂无独立 app |
 | LiteLLM | `proactive-ai-litellm-dev` | `proactive-ai-litellm-test` | `proactive-ai-litellm-prod` |
 
 primary region `iad`(部分 dev/test 跨到 `ord`)。Daytona sandbox 不是 fly app。
@@ -198,7 +199,8 @@ GitHub Actions 入口在 `.github/workflows/`:
 | Workflow | 触发 | 做什么 |
 |---|---|---|
 | `ci.yml` | PR | type-check + lint。 |
-| `deploy-dev.yml` | push 到 `proactive-ai-v2`/`v3` 或手动 | 按 path filter 部署 pinai-agents / frontend / litellm。 |
+| `deploy-dev.yml` | push 到 `proactive-ai-v3` 或手动 | 按 path filter 部署 pinai-agents / frontend / litellm。 |
+| `internal-reward-dashboard-dev.yml` | PR / push 到 `proactive-ai-v3` / 手动 | 独立验证并部署内部 reward dashboard 到 Fly dev。 |
 | `deploy-test.yml` | 手动 | 先 refresh Daytona snapshot,再部署三个 app;跑 `sync_fly_secrets.py` 守 trust boundary。 |
 | `deploy-prod.yml` | 手动 / `v*` tag | 创建 GitHub release,promote dev → prod env,部署三个 app(需要 environment approval)。 |
 | `build-ios.yml` | 手动 | build frontend、sync Capacitor、装 iOS Xcode 项目工件。 |
@@ -210,6 +212,7 @@ make deploy-pinai-dev
 make deploy-pinai-prod
 make deploy-frontend-dev
 make deploy-frontend-prod
+make deploy-reward-dashboard-dev
 make deploy-litellm-dev
 make deploy-litellm-prod
 ```
@@ -271,7 +274,7 @@ cd internal-reward-dashboard && npm test             # 内部 review app 单测
 | docker-compose / Makefile | `docker-compose.yml`、`Makefile` |
 | CI / fly secrets 守门 | `.github/workflows/`、`pinai-agents/scripts/sync_fly_secrets.py` |
 | 前端 API base | `proactive-ai-frontend/src/lib/platform.ts`、`src/lib/api.ts` |
-| 内部 reward dashboard | `internal-reward-dashboard/`、`web/routes/ui/reward_dashboard.py` |
+| 内部 reward dashboard | `internal-reward-dashboard/`、`internal-reward-dashboard/fly.toml`、`web/routes/ui/reward_dashboard.py` |
 
 ## 生产环境硬性规则
 

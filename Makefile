@@ -2,7 +2,7 @@
 .PHONY: up down build build-pinai-agents build-frontend restart restart-frontend status
 .PHONY: logs logs-litellm logs-postgres logs-pinai-agents logs-pinai-web logs-pinai-chat logs-frontend
 .PHONY: migrate reset clean
-.PHONY: deploy-pinai-dev deploy-pinai-prod deploy-frontend-dev deploy-frontend-prod
+.PHONY: deploy-pinai-dev deploy-pinai-prod deploy-frontend-dev deploy-frontend-prod deploy-reward-dashboard-dev
 .PHONY: deploy-litellm-dev deploy-litellm-prod
 .PHONY: ios android ngrok githooks
 .PHONY: tunnel-up tunnel-down tunnel-status
@@ -184,12 +184,18 @@ reset: ## Stop everything, delete volumes, rebuild and start fresh (incl. ngrok 
 
 # ── Deploy (Fly.io) ──
 # pinai-agents has two process groups (web + chat) that share one fly
-# app via [processes] in fly.dev.toml / fly.prod.toml. Frontend is its
-# own fly app. LiteLLM is its own fly app under ops/litellm.
+# app via [processes] in fly.dev.toml / fly.prod.toml. Frontend and
+# internal reward dashboard are separate static SPA fly apps. LiteLLM is
+# its own fly app under ops/litellm.
 
 define extract_vite_args
 $(shell $(DOTENVX) get -f pinai-agents/.env.$(1) --format json 2>/dev/null \
 	| python3 -c 'import json,sys;d=json.load(sys.stdin);[print("--build-arg "+k+"="+v) for k,v in d.items() if k.startswith("VITE_")]')
+endef
+
+define extract_reward_dashboard_vite_args
+$(shell $(DOTENVX) get -f pinai-agents/.env.$(1) --format json 2>/dev/null \
+	| python3 -c 'import json,sys;d=json.load(sys.stdin);[print("--build-arg "+k+"="+v) for k,v in d.items() if k in {"VITE_SUPABASE_URL","VITE_SUPABASE_PUBLISHABLE_KEY"}]')
 endef
 
 deploy-pinai-dev: ## Deploy pinai-agents (web + chat) to dev
@@ -213,6 +219,11 @@ deploy-frontend-prod: ## Deploy frontend SPA to prod (Fly nginx)
 	cd proactive-ai-frontend && env -u all_proxy -u http_proxy -u https_proxy \
 		flyctl deploy --remote-only \
 		$(call extract_vite_args,production)
+
+deploy-reward-dashboard-dev: ## Deploy internal reward dashboard to dev (Fly nginx)
+	cd internal-reward-dashboard && env -u all_proxy -u http_proxy -u https_proxy \
+		flyctl deploy --config fly.toml --remote-only \
+		$(call extract_reward_dashboard_vite_args,dev)
 
 deploy-litellm-dev: ## Deploy LiteLLM to dev
 	cd ops/litellm && env -u all_proxy -u http_proxy -u https_proxy \

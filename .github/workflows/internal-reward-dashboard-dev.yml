@@ -1,0 +1,91 @@
+name: Internal Reward Dashboard Dev
+
+# Standalone CI/CD for the internal reward dashboard frontend.
+#
+# This is intentionally separate from ci.yml and deploy-dev.yml. It watches
+# internal-reward-dashboard/**, verifies the app, and deploys the Fly dev app
+# on push to proactive-ai-v3:
+# https://proactive-ai-reward-dashboard-dev.fly.dev
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [proactive-ai-v3]
+    paths:
+      - 'internal-reward-dashboard/**'
+      - '.github/workflows/internal-reward-dashboard-dev.yml'
+  push:
+    branches: [proactive-ai-v3]
+    paths:
+      - 'internal-reward-dashboard/**'
+      - '.github/workflows/internal-reward-dashboard-dev.yml'
+
+concurrency:
+  group: internal-reward-dashboard-dev-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: internal-reward-dashboard/package-lock.json
+
+      - name: Install dependencies
+        working-directory: internal-reward-dashboard
+        run: npm ci
+
+      - name: Type check
+        working-directory: internal-reward-dashboard
+        run: npm run type-check
+
+      - name: Unit tests
+        working-directory: internal-reward-dashboard
+        run: npm test
+
+      - name: Build
+        working-directory: internal-reward-dashboard
+        run: npm run build
+        env:
+          VITE_SUPABASE_URL: https://example.supabase.co
+          VITE_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci
+
+  deploy:
+    needs: verify
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Extract dev VITE_* build args from encrypted env
+        run: |
+          VITE_SUPABASE_URL=$(npx @dotenvx/dotenvx get VITE_SUPABASE_URL -f pinai-agents/.env.dev)
+          VITE_SUPABASE_PUBLISHABLE_KEY=$(npx @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f pinai-agents/.env.dev)
+          echo "VITE_SUPABASE_URL=$VITE_SUPABASE_URL" >> "$GITHUB_ENV"
+          echo "VITE_SUPABASE_PUBLISHABLE_KEY=$VITE_SUPABASE_PUBLISHABLE_KEY" >> "$GITHUB_ENV"
+        env:
+          DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
+
+      - name: Deploy internal reward dashboard to Fly dev
+        working-directory: internal-reward-dashboard
+        run: |
+          flyctl deploy --config fly.toml --remote-only \
+            --build-arg VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
+            --build-arg VITE_SUPABASE_PUBLISHABLE_KEY="$VITE_SUPABASE_PUBLISHABLE_KEY"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

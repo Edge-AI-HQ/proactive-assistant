@@ -39,11 +39,11 @@ pinai-agents 在同一 codebase 里跑两个进程，**单一信任边界**：
 
 ## 环境拓扑
 
-| 环境 | pinai-agents (web+chat) | Frontend | LiteLLM |
-|------|--------------------------|----------|---------|
-| dev | `proactive-ai-agents-dev` | `proactive-ai-frontend-dev` | `proactive-ai-litellm-dev` |
-| test | `proactive-ai-agents-test` | `proactive-ai-frontend-test` | `proactive-ai-litellm-test` |
-| prod | `proactive-ai-agents-prod` | `proactive-ai-frontend-prod` | `proactive-ai-litellm-prod` |
+| 环境 | pinai-agents (web+chat) | Frontend | Internal reward dashboard | LiteLLM |
+|------|--------------------------|----------|---------------------------|---------|
+| dev | `proactive-ai-agents-dev` | `proactive-ai-frontend-dev` | `proactive-ai-reward-dashboard-dev` | `proactive-ai-litellm-dev` |
+| test | `proactive-ai-agents-test` | `proactive-ai-frontend-test` | 暂无独立 app | `proactive-ai-litellm-test` |
+| prod | `proactive-ai-agents-prod` | `proactive-ai-frontend-prod` | 暂无独立 app | `proactive-ai-litellm-prod` |
 
 所有 fly app 都在 `iad` / `ord` region。Daytona sandbox 是 chat 进程的远端执行环境（python_exec、browser tool 跑在那里），不算 fly app。
 
@@ -141,7 +141,7 @@ cd proactive-ai-frontend && npm run dev             # 前端 dev server（端口
 cd internal-reward-dashboard && npm run dev -- --host 127.0.0.1 --port 3004  # 内部 review app
 ```
 
-`internal-reward-dashboard` 本地通过 Vite same-origin `/api/*` proxy 打 `pinai-web:8000`，默认从 `pinai-agents/.env` 读取 Supabase `VITE_*`。它当前不是 root npm workspace，也不在 `proactive-ai-frontend` 的 Fly 部署路径里。
+`internal-reward-dashboard` 本地通过 Vite same-origin `/api/*` proxy 打 `pinai-web:8000`，默认从 `pinai-agents/.env` 读取 Supabase `VITE_*`。它当前不是 root npm workspace；dev 环境是独立 Fly app `proactive-ai-reward-dashboard-dev`，不是 `proactive-ai-frontend` 部署产物。
 
 Daytona sandbox 需要公网回连 `pinai-web` 才能完整跑通 generator / chat 的 `python_exec`。本地用 ngrok 暴露：
 ```bash
@@ -249,6 +249,8 @@ push 到 `proactive-ai-v3` 后按改动范围自动部署（CI workflow：`.gith
 - 改 `ops/litellm/` → 部署 LiteLLM
 - Daytona snapshot 跟随 pinai-agents 部署刷新
 
+`internal-reward-dashboard/` 使用独立 workflow `.github/workflows/internal-reward-dashboard-dev.yml`：PR 只跑 type-check / test / build；push 到 `proactive-ai-v3` 且该目录变化时，部署到 Fly dev app `proactive-ai-reward-dashboard-dev`（默认地址 `https://proactive-ai-reward-dashboard-dev.fly.dev`）。
+
 ### Test 环境
 GitHub Actions 页面手动触发 **Deploy Test**（`deploy-test.yml`）。可以从任意分支部署，用来在合并前在 fly 上跑一次完整链路。
 
@@ -262,6 +264,7 @@ make deploy-pinai-dev       # pinai-agents (web + chat) → dev
 make deploy-pinai-prod      # pinai-agents → prod
 make deploy-frontend-dev    # 前端 → dev
 make deploy-frontend-prod   # 前端 → prod
+make deploy-reward-dashboard-dev  # 内部 reward dashboard → dev
 make deploy-litellm-dev     # LiteLLM → dev
 make deploy-litellm-prod    # LiteLLM → prod
 ```
