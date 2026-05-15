@@ -1,13 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertTriangle,
-  ArrowRight,
   CheckCircle2,
-  Clock3,
   Database,
   Eye,
   GitBranch,
-  ListChecks,
   RefreshCw,
   Sparkles,
 } from "lucide-react";
@@ -602,23 +598,11 @@ export function RunsView({ onNavigate }: RunsViewProps) {
     return mergeActiveAndPersistedRuns(activeSummaries, persistedRuns);
   }, [activeRuns, currentRunsQueryKey, loadedRunsQueryKey, runs]);
   const displayRuns = visibleRuns.filter((run) => runMatchesFocus(run, focusMode));
-  const reviewQueue = [...visibleRuns]
-    .filter((run) => queuePriority(run) > 0)
-    .sort((a, b) => queuePriority(b) - queuePriority(a) || runTime(b) - runTime(a))
-    .slice(0, 5);
-  const topReviewRun = reviewQueue[0] ?? null;
   const hideStaleRows = runsHideStaleRows(currentRunsQueryKey, loadedRunsQueryKey);
   const hasCurrentPersistedRuns = !hideStaleRows && loadedRunsQueryKey !== null;
   const loadingChangedQuery = !hasCurrentPersistedRuns && loadedRunsQueryKey !== null && error === null;
   const changedQueryError = hideStaleRows && error !== null;
   const currentRuns = hideStaleRows ? [] : runs;
-  const latestRun = latestVisibleRun(visibleRuns);
-  const totalCards = currentRuns.reduce((sum, run) => sum + runCardCount(run), 0);
-  const totalReviewed = currentRuns.reduce((sum, run) => sum + runReviewedCount(run), 0);
-  const pendingReviewCards = Math.max(0, totalCards - totalReviewed);
-  const traceMissingCount = currentRuns.filter((run) => runCardCount(run) > 0 && run.traceStatus !== "ready").length;
-  const evaluatorGapCount = currentRuns.filter((run) => evaluatorGapMagnitude(run) >= 3).length;
-  const casebookTotal = currentRuns.reduce((sum, run) => sum + runCasebookCount(run), 0);
   const focusCounts: Record<FocusMode, number> = {
     all: visibleRuns.length,
     in_progress: visibleRuns.filter(isGenerationTaskRow).length,
@@ -656,141 +640,6 @@ export function RunsView({ onNavigate }: RunsViewProps) {
   return (
     <div className="stack">
       <MetricStrip runs={currentRuns} />
-      <section className="review-command-grid">
-        <section className="panel review-queue-panel">
-          <div className="panel-head">
-            <div>
-              <h2>评审队列</h2>
-              <p>按生成状态、待评审数、评估分差和链路状态排序。</p>
-            </div>
-            <span className="queue-count">{reviewQueue.length} 个优先项</span>
-          </div>
-          {topReviewRun ? (
-            <div className="run-focus-card">
-              <div>
-                <div className="queue-item-title">
-                  <span className={`health-pill ${queueTone(topReviewRun)}`}>
-                    {queueLabel(topReviewRun)}
-                  </span>
-                  <span className="mono-cell">{shortRunId(topReviewRun)}</span>
-                </div>
-                <h3>{runCardCount(topReviewRun)} 张卡 · {remainingReviews(topReviewRun)} 张待评</h3>
-                <p>{queueReason(topReviewRun)}</p>
-                <div className="progress-block">
-                  <strong>{reviewPercent(topReviewRun)}%<span>人工评审进度</span></strong>
-                  <div className="progress-track">
-                    <div style={{ width: `${reviewPercent(topReviewRun)}%` }} />
-                  </div>
-                </div>
-              </div>
-              <div className="run-focus-actions">
-                <button
-                  className="primary-button"
-                  disabled={!canOpenRunArtifacts(topReviewRun)}
-                  onClick={() => onNavigate(dashboardRoutes.run(runDetailRouteId(topReviewRun)))}
-                  title={canOpenRunArtifacts(topReviewRun) ? "打开批次评审" : dashboardRouteDisabledReason("run")}
-                  type="button"
-                >
-                  <Eye size={15} /> 评审批次
-                </button>
-                <button
-                  className="plain-button"
-                  disabled={!canOpenRunTrace(topReviewRun)}
-                  onClick={() => onNavigate(dashboardRoutes.trace(runTraceRouteId(topReviewRun)))}
-                  title={canOpenRunTrace(topReviewRun) ? "打开生成链路" : dashboardRouteDisabledReason("trace")}
-                  type="button"
-                >
-                  <GitBranch size={15} /> 看链路
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="muted">当前没有待处理批次。</div>
-          )}
-          <div className="queue-list">
-            {reviewQueue.slice(1).map((run) => (
-              <button
-                className="queue-item"
-                disabled={!canOpenRunArtifacts(run)}
-                key={runStableKey(run)}
-                onClick={() => onNavigate(dashboardRoutes.run(runDetailRouteId(run)))}
-                title={canOpenRunArtifacts(run) ? "打开批次评审" : dashboardRouteDisabledReason("run")}
-                type="button"
-              >
-                <div>
-                  <div className="queue-item-title">
-                    <span className={`health-pill ${queueTone(run)}`}>{queueLabel(run)}</span>
-                    <strong>{runCardCount(run)} 张卡</strong>
-                    <span className="mono-cell">{shortRunId(run)}</span>
-                  </div>
-                  <p>{queueReason(run)}</p>
-                  <div className="queue-item-meta">
-                    <span>评审 {runReviewedCount(run)}/{runCardCount(run)}</span>
-                    <span>评估 {scoreLabel(run.avgEvaluatorOverall)}</span>
-                    <span>人工 {scoreLabel(run.avgReviewerReward)}</span>
-                    <span>链路 {traceStatusLabel(run.traceStatus)}</span>
-                  </div>
-                </div>
-                <ArrowRight size={18} />
-              </button>
-            ))}
-          </div>
-        </section>
-        <section className="panel loop-panel">
-          <div className="panel-head">
-            <div>
-              <h2>回路健康</h2>
-              <p>把生成、人工评分、链路追溯和样本沉淀放在同一屏。</p>
-            </div>
-          </div>
-          <div className="loop-health-grid">
-            <div>
-              <ListChecks size={18} />
-              <span>待评审卡</span>
-              <strong>{pendingReviewCards}</strong>
-            </div>
-            <div>
-              <GitBranch size={18} />
-              <span>链路缺失</span>
-              <strong>{traceMissingCount}</strong>
-            </div>
-            <div>
-              <AlertTriangle size={18} />
-              <span>评估偏差</span>
-              <strong>{evaluatorGapCount}</strong>
-            </div>
-            <div>
-              <CheckCircle2 size={18} />
-              <span>样本总数</span>
-              <strong>{casebookTotal}</strong>
-            </div>
-          </div>
-          <div className="loop-steps">
-            <div><Clock3 size={15} /> {activeGenerationStatusText(activeRuns)}</div>
-            <div><ListChecks size={15} /> {pendingReviewCards} 张卡需要人工 1-10 分。</div>
-            <div><GitBranch size={15} /> {traceMissingCount} 个批次需要补齐 LangSmith 链路。</div>
-            <div><CheckCircle2 size={15} /> {casebookTotal} 个样本已沉淀到 casebook。</div>
-          </div>
-          <div className="loop-shortcuts" aria-label="评审工作流快捷入口">
-            <button className="plain-button" onClick={() => setFocusMode("needs_review")} type="button">
-              <ListChecks size={15} /> 待评审
-            </button>
-            <button className="plain-button" onClick={() => onNavigate(dashboardRoutes.casebook)} type="button">
-              <CheckCircle2 size={15} /> 样本库
-            </button>
-            <button className="plain-button" onClick={() => onNavigate(dashboardRoutes.personalData)} type="button">
-              <Database size={15} /> 上下文
-            </button>
-          </div>
-          {latestRun && (
-            <div className="latest-day">
-              <span>最近批次</span>
-              <strong>{formatCompactDateTime(latestRun.completedAt ?? latestRun.startedAt)} · {shortRunId(latestRun)}</strong>
-              <p>{signalText(latestRun)}</p>
-            </div>
-          )}
-        </section>
-      </section>
       <section className="panel">
         <div className="panel-head">
           <div>
