@@ -3,6 +3,7 @@ import { MemoryRouter } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import LoginPage from "@/components/LoginPage";
 import ConstellationLayout from "@/components/constellation/ConstellationLayout";
+import { VoiceProvider } from "@/components/voice";
 import { isNative } from "@/lib/platform";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { getPersistedAmbientEnabled } from "@/services/ambient/enabled-state";
@@ -90,7 +91,9 @@ export default function App() {
 
   return (
     <MemoryRouter>
-      <ConstellationLayout />
+      <VoiceProvider>
+        <ConstellationLayout />
+      </VoiceProvider>
     </MemoryRouter>
   );
 }
