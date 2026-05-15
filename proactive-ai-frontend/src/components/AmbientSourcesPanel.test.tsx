@@ -20,10 +20,17 @@ vi.mock("./AmbientAudioDebugPanel", () => ({
   default: () => null,
 }));
 vi.mock("@/hooks/useUserSettings", () => ({
-  useUserSettings: () => ({ patch: patchMock }),
+  useUserSettings: () => ({
+    settings: { ambientSources: { health: { enabled: false } } },
+    loading: false,
+    saving: false,
+    error: null,
+    patch: patchMock,
+    refetch: vi.fn(),
+  }),
 }));
-vi.mock("@/services/ambient", () => ({
-  getAmbientRuntime: () => runtimeMock,
+vi.mock("@/services/ambient/runtime-client", () => ({
+  loadAmbientRuntime: () => Promise.resolve(runtimeMock),
 }));
 
 function makeStatus() {
@@ -61,9 +68,9 @@ describe("AmbientSourcesPanel health source", () => {
     render(<AmbientSourcesPanel />);
 
     expect(screen.getByText("HealthKit")).toBeTruthy();
-    expect(screen.getByText(/steps, sleep, heart rate/i)).toBeTruthy();
+    expect(screen.getByText(/steps, sleep, and heart rate/i)).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "OFF" }));
+    fireEvent.click(screen.getByRole("button", { name: "Enable HealthKit" }));
 
     await waitFor(() => {
       expect(patchMock).toHaveBeenCalledWith({

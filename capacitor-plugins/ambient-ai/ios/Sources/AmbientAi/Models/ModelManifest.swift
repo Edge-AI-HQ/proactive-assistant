@@ -71,26 +71,6 @@ enum ModelManifest {
     static let profiles: [ModelProfile] = [
         // ASR — whisper.cpp ggml binaries
         ModelProfile(
-            id: "whisper-tiny-q5_1",
-            kind: .asr,
-            displayName: "Whisper tiny (Q5_1)",
-            repo: "ggerganov/whisper.cpp",
-            file: "ggml-tiny-q5_1.bin",
-            approxBytes: 32_200_000,
-            magic: .ggml,
-            notes: "Multilingual, smallest variant; OK for offline gist transcription."
-        ),
-        ModelProfile(
-            id: "whisper-tiny",
-            kind: .asr,
-            displayName: "Whisper tiny",
-            repo: "ggerganov/whisper.cpp",
-            file: "ggml-tiny.bin",
-            approxBytes: 75_500_000,
-            magic: .ggml,
-            notes: "Multilingual baseline; good entry point."
-        ),
-        ModelProfile(
             id: "whisper-base",
             kind: .asr,
             displayName: "Whisper base",
@@ -143,24 +123,24 @@ enum ModelManifest {
             notes: "Strong tradeoff; recommended LLM default for ambient summarization."
         ),
         ModelProfile(
-            id: "llama-3_2-1b-q4",
+            id: "gemma-2-2b-q4",
             kind: .llm,
-            displayName: "Llama 3.2 1B Instruct (Q4_K_M)",
-            repo: "bartowski/Llama-3.2-1B-Instruct-GGUF",
-            file: "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
-            approxBytes: 770_000_000,
+            displayName: "Gemma 2 2B IT (Q4_K_M)",
+            repo: "unsloth/gemma-2-it-GGUF",
+            file: "gemma-2-2b-it.q4_k_m.gguf",
+            approxBytes: 1_700_000_000,
             magic: .gguf,
-            notes: "Community quant by bartowski."
+            notes: "Unsloth quant; stronger local summarization on recent iPhones."
         ),
         ModelProfile(
-            id: "gemma-3-1b-q4",
+            id: "gemma-3-4b-q4",
             kind: .llm,
-            displayName: "Gemma 3 1B IT (Q4_K_M)",
-            repo: "unsloth/gemma-3-1b-it-GGUF",
-            file: "gemma-3-1b-it-Q4_K_M.gguf",
-            approxBytes: 720_000_000,
+            displayName: "Gemma 3 4B IT (Q4_K_M)",
+            repo: "unsloth/gemma-3-4b-it-GGUF",
+            file: "gemma-3-4b-it-Q4_K_M.gguf",
+            approxBytes: 2_600_000_000,
             magic: .gguf,
-            notes: "Unsloth dynamic quant; chat-tuned."
+            notes: "Higher quality local reasoning profile; requires more storage and memory."
         ),
     ]
 

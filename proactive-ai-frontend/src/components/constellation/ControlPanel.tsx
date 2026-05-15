@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/drawer";
 import { Slider } from "@/components/ui/slider";
 import { isNative } from "@/lib/platform";
+import AmbientSourceControlsPanel from "@/components/AmbientSourceControlsPanel";
 import GoalsView from "./GoalsView";
 
 // AmbientModelsPanel pulls in @pin/capacitor-ambient-ai, which is
@@ -22,7 +23,7 @@ import GoalsView from "./GoalsView";
 // native so the web bundle never references the bare specifier.
 const AmbientModelsPanel = lazy(() => import("@/components/AmbientModelsPanel"));
 
-const TABS = ["Personality", "Goals", "World Model", "Prompt", "Models"] as const;
+const TABS = ["Personality", "Goals", "World Model", "Prompt", "Ambient"] as const;
 
 /* ── Personality dimensions (mirrors Onboarding) ── */
 type DimensionId = "proactivity" | "communication" | "focus" | "intervention";
@@ -419,48 +420,60 @@ export default function ControlPanel() {
 
       {activeTab === "World Model" && <WorldModelTab />}
 
-      {activeTab === "Models" && (
+      {activeTab === "Ambient" && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           className="space-y-3"
         >
           <div className="px-1">
-            <div className="flex items-center gap-2 mb-1">
-              <Cpu size={15} strokeWidth={1.8} className="text-foreground/55" />
-              <h2 className="text-base font-semibold text-foreground">On-device models</h2>
-            </div>
-            <p className="text-[12px] text-foreground/55 leading-relaxed">
-              Manage the whisper & llama models PIN AI uses for offline
-              speech recognition and on-device reasoning. Downloads stay
-              cached until you delete them; verifying runs a quick
-              llama.cpp inference (LLM) or magic-header check (ASR).
+            <h2 className="text-base font-semibold text-foreground">Ambient</h2>
+            <p className="text-[12px] text-foreground/55 leading-relaxed mt-1">
+              Control what PIN AI can observe locally, then manage the on-device models
+              used for offline speech and reasoning.
             </p>
           </div>
 
-          {isNative ? (
-            <Suspense
-              fallback={
-                <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-4 text-[11px] text-foreground/45">
-                  Loading model manifest…
-                </div>
-              }
-            >
-              <AmbientModelsPanel />
-            </Suspense>
-          ) : (
-            <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-4 text-[12px] text-foreground/60 leading-relaxed">
-              On-device models are only available inside the iOS app.
-              Open this page in the native build to download, verify, or
-              delete the whisper / llama profiles.
-            </div>
-          )}
+          <AmbientSourceControlsPanel />
 
-          <p className="text-[11px] text-foreground/45 leading-snug px-1">
-            Models are stored locally and never re-uploaded. If a download
-            fails, the plugin automatically falls back to the secondary
-            mirror.
-          </p>
+          <div className="glass-card-strong p-4 space-y-3">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <Cpu size={15} strokeWidth={1.8} className="text-foreground/55" />
+                <h2 className="text-base font-semibold text-foreground">On-device models</h2>
+              </div>
+              <p className="text-[12px] text-foreground/55 leading-relaxed">
+                Manage the Whisper and local LLM models PIN AI uses for offline
+                speech recognition and on-device reasoning. Downloads stay
+                cached until you delete them; verifying runs a quick
+                llama.cpp inference (LLM) or magic-header check (ASR).
+              </p>
+            </div>
+
+            {isNative ? (
+              <Suspense
+                fallback={
+                  <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-4 text-[11px] text-foreground/45">
+                    Loading model manifest…
+                  </div>
+                }
+              >
+                <AmbientModelsPanel />
+              </Suspense>
+            ) : (
+              <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-4 text-[12px] text-foreground/60 leading-relaxed">
+                On-device models are only available inside the iOS app.
+                Open this page in the native build to download, verify, or
+                delete the Whisper / local LLM profiles.
+              </div>
+            )}
+
+            <p className="text-[11px] text-foreground/45 leading-snug">
+              Models are stored locally and never re-uploaded. If a download
+              fails, the plugin automatically falls back to the secondary
+              mirror.
+            </p>
+          </div>
         </motion.div>
       )}
     </div>
