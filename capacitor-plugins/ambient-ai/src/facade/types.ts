@@ -104,6 +104,8 @@ export interface AudioState {
   paused: boolean;
   capturing: boolean;
   suppressed: boolean;
+  classificationRunning?: boolean;
+  engineRunning?: boolean;
   suppressedReason?: 'media' | 'playback' | 'interruption';
 }
 

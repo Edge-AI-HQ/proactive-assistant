@@ -23,6 +23,7 @@ const MIN_TRANSCRIPT_LENGTH = 24;
 const TRANSCRIPT_SALIENCE = 0.7;
 const TRANSCRIPT_CONFIDENCE = 0.75;
 const SPEECH_LABEL = "speech";
+const INTENTIONAL_SUPPRESSION_REASONS = new Set(["media", "playback"]);
 
 /**
  * Wraps the SoundClassifier native plugin shipped via
@@ -67,9 +68,14 @@ export class SoundClassifierSource implements AmbientSource {
       "transcriptReady",
       (event) => this.handleTranscriptReady(event),
     );
-    await AmbientAi.audio.startCapture();
-    await AmbientAi.sound.startClassification();
-    this.started = true;
+    try {
+      await AmbientAi.audio.startCapture();
+      await AmbientAi.sound.startClassification();
+      this.started = true;
+    } catch (err) {
+      await this.cleanupNativeStartFailure();
+      throw err;
+    }
   }
 
   async stop(): Promise<void> {
@@ -78,15 +84,31 @@ export class SoundClassifierSource implements AmbientSource {
       await AmbientAi.sound.stopClassification();
       await AmbientAi.audio.stopCapture();
     } finally {
-      if (this.listenerHandle) {
-        await this.listenerHandle.remove();
-        this.listenerHandle = null;
-      }
-      if (this.transcriptListenerHandle) {
-        await this.transcriptListenerHandle.remove();
-        this.transcriptListenerHandle = null;
-      }
+      await this.removeListeners();
       this.started = false;
+    }
+  }
+
+  async refresh(): Promise<void> {
+    if (!this.started) return;
+    const state = await AmbientAi.audio.getState();
+    if (
+      state.suppressed &&
+      state.suppressedReason &&
+      INTENTIONAL_SUPPRESSION_REASONS.has(state.suppressedReason)
+    ) {
+      return;
+    }
+
+    await AmbientAi.audio.startCapture();
+    await AmbientAi.sound.startClassification();
+
+    const nextState = await AmbientAi.audio.getState();
+    if (!nextState.running) {
+      throw new Error("audio capture not running");
+    }
+    if (nextState.engineRunning === false && !nextState.suppressed) {
+      throw new Error("sound classifier engine not running");
     }
   }
 
@@ -167,5 +189,22 @@ export class SoundClassifierSource implements AmbientSource {
       dedupe_key: `sound:${top.label}:${Math.floor(event.timestamp / this.opts.dedupeWindowMs)}`,
     });
     this.ctx.onEvent(this.key, summary);
+  }
+
+  private async cleanupNativeStartFailure(): Promise<void> {
+    await Promise.allSettled([
+      AmbientAi.sound.stopClassification(),
+      AmbientAi.audio.stopCapture(),
+    ]);
+    await this.removeListeners();
+    this.started = false;
+  }
+
+  private async removeListeners(): Promise<void> {
+    const handles = [this.listenerHandle, this.transcriptListenerHandle]
+      .filter((handle): handle is PluginListenerHandle => handle !== null);
+    this.listenerHandle = null;
+    this.transcriptListenerHandle = null;
+    await Promise.all(handles.map((handle) => handle.remove()));
   }
 }

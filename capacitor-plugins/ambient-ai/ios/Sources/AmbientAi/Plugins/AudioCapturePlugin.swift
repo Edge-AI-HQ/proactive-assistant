@@ -112,6 +112,8 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
                 "running": false,
                 "paused": false,
                 "capturing": false,
+                "classificationRunning": false,
+                "engineRunning": false,
                 "suppressed": false,
             ]
             DispatchQueue.main.async {

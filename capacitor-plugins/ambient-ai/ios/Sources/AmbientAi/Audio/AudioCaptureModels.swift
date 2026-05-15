@@ -19,6 +19,8 @@ struct AudioCaptureSnapshot {
     let running: Bool
     let paused: Bool
     let capturing: Bool
+    let classificationRunning: Bool
+    let engineRunning: Bool
     let suppressedReason: AudioSuppressedReason?
 
     var payload: [String: Any] {
@@ -27,6 +29,8 @@ struct AudioCaptureSnapshot {
             "paused": paused,
             "capturing": capturing,
             "suppressed": suppressedReason != nil,
+            "classificationRunning": classificationRunning,
+            "engineRunning": engineRunning,
         ]
         if let suppressedReason {
             data["suppressedReason"] = suppressedReason.rawValue

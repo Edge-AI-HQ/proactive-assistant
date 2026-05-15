@@ -1,9 +1,43 @@
-import { describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { SoundClassifierSource } from "./sound-classifier";
 import type { SourceContext } from "./types";
 
+const ambientAiMock = vi.hoisted(() => {
+  const listenerRemove = vi.fn(async () => {});
+  return {
+    listenerRemove,
+    addListener: vi.fn(async () => ({ remove: listenerRemove })),
+    audio: {
+      getState: vi.fn(),
+      startCapture: vi.fn(async () => {}),
+      stopCapture: vi.fn(async () => {}),
+    },
+    sound: {
+      requestPermissions: vi.fn(async () => ({ microphone: "granted" })),
+      startClassification: vi.fn(async () => {}),
+      stopClassification: vi.fn(async () => {}),
+    },
+  };
+});
+
+vi.mock("@pin/capacitor-ambient-ai", () => ({
+  AmbientAi: ambientAiMock,
+}));
+
 describe("SoundClassifierSource transcript ingest", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ambientAiMock.audio.getState.mockResolvedValue({
+      running: true,
+      paused: false,
+      capturing: false,
+      suppressed: false,
+      classificationRunning: true,
+      engineRunning: true,
+    });
+  });
+
   test("pushes transcriptReady as a session_summary signal", () => {
     const pushed: unknown[] = [];
     const ctx: SourceContext = {
@@ -113,4 +147,88 @@ describe("SoundClassifierSource transcript ingest", () => {
     expect(ctx.onEvent).toHaveBeenCalledWith("sound_classifier", "music (81.0%)");
   });
 
+  test("cleans up listeners when native start fails", async () => {
+    const ctx: SourceContext = {
+      push: vi.fn(),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+    ambientAiMock.audio.startCapture.mockRejectedValueOnce(new Error("engine failed"));
+
+    await expect(source.start()).rejects.toThrow("engine failed");
+
+    expect(ambientAiMock.listenerRemove).toHaveBeenCalledTimes(2);
+    expect(ambientAiMock.sound.stopClassification).toHaveBeenCalledTimes(1);
+    expect(ambientAiMock.audio.stopCapture).toHaveBeenCalledTimes(1);
+    expect(source.isStarted()).toBe(false);
+  });
+
+  test("refresh reasserts native capture and classification while started", async () => {
+    const ctx: SourceContext = {
+      push: vi.fn(),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+    await source.start();
+    vi.clearAllMocks();
+
+    await source.refresh();
+
+    expect(ambientAiMock.audio.getState).toHaveBeenCalled();
+    expect(ambientAiMock.audio.startCapture).toHaveBeenCalledTimes(1);
+    expect(ambientAiMock.sound.startClassification).toHaveBeenCalledTimes(1);
+  });
+
+  test("refresh does not restart while native audio is intentionally media-suppressed", async () => {
+    const ctx: SourceContext = {
+      push: vi.fn(),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+    await source.start();
+    vi.clearAllMocks();
+    ambientAiMock.audio.getState.mockResolvedValueOnce({
+      running: true,
+      paused: false,
+      capturing: false,
+      suppressed: true,
+      suppressedReason: "media",
+      classificationRunning: true,
+      engineRunning: false,
+    });
+
+    await source.refresh();
+
+    expect(ambientAiMock.audio.startCapture).not.toHaveBeenCalled();
+    expect(ambientAiMock.sound.startClassification).not.toHaveBeenCalled();
+  });
+
+  test("refresh reports an error when the native sound engine stays stopped", async () => {
+    const ctx: SourceContext = {
+      push: vi.fn(),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+    await source.start();
+    vi.clearAllMocks();
+    ambientAiMock.audio.getState
+      .mockResolvedValueOnce({
+        running: true,
+        paused: false,
+        capturing: false,
+        suppressed: false,
+        classificationRunning: true,
+        engineRunning: false,
+      })
+      .mockResolvedValueOnce({
+        running: true,
+        paused: false,
+        capturing: false,
+        suppressed: false,
+        classificationRunning: true,
+        engineRunning: false,
+      });
+
+    await expect(source.refresh()).rejects.toThrow("sound classifier engine not running");
+  });
 });

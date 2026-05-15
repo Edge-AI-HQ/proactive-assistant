@@ -309,9 +309,8 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
 
   // Subscribe to plugin transcripts while ambient is on so the Live card
   // shows real captured speech instead of the demo scenarios. Native
-  // only: the @pin/capacitor-ambient-ai module is rollup-external for
-  // the web build, so we behind both a runtime ``isNative`` guard and
-  // a dynamic import so web bundles never reach the bare specifier.
+  // only: the listener helper is lazy-loaded behind ``isNative`` so the
+  // web main chunk never contains the native plugin bare specifier.
   useEffect(() => {
     if (!ambientOn || !isNative) {
       setLiveSessionData(null);
@@ -322,9 +321,11 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
     let handle: PluginListenerHandle | null = null;
     void (async () => {
       try {
-        const { AmbientAi } = await import("@pin/capacitor-ambient-ai");
+        const { addAmbientTranscriptListener } = await import(
+          "@/services/ambient/transcript-listener"
+        );
         if (cancelled) return;
-        handle = await AmbientAi.addListener("transcriptReady", (event) => {
+        handle = await addAmbientTranscriptListener((event) => {
           if (cancelled) return;
           setLiveSessionData((prev) => appendTranscript(prev, event));
         });

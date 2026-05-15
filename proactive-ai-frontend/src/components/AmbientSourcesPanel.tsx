@@ -131,13 +131,11 @@ export default function AmbientSourcesPanel() {
       if (!updated) return;
 
       const rt = getAmbientRuntime();
-      const persistedEnabled = updated.ambientSources?.[key]?.enabled === true;
+      const enabledSources = Object.entries(updated.ambientSources ?? {})
+        .filter(([, consent]) => consent?.enabled === true)
+        .map(([sourceKey]) => sourceKey as SourceKey);
       try {
-        if (persistedEnabled) {
-          await rt.start(key);
-        } else {
-          await rt.stop(key, { remember: false });
-        }
+        await rt.reconcileEnabledSources(enabledSources);
       } catch {
         // Runtime records per-source errors on status; keep the panel usable.
       }

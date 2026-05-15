@@ -52,7 +52,14 @@ actor AudioStreamManager {
         installClassifierCallbacksIfNeeded()
         await fileStore.ensureDirectory()
         guard !isCaptureRunning else {
+            suppressionReasons.remove(.interruption)
+            refreshMediaSuppression()
+            setupMediaObservers()
+            let ok = reconcileClassifierState()
             emitState()
+            if !ok && suppressionReasons.isEmpty {
+                throw AudioCaptureFailure.engineStartFailed
+            }
             return
         }
 
@@ -92,7 +99,17 @@ actor AudioStreamManager {
 
     func startClassification() throws {
         installClassifierCallbacksIfNeeded()
-        guard !isClassificationRunning else { return }
+        guard !isClassificationRunning else {
+            suppressionReasons.remove(.interruption)
+            refreshMediaSuppression()
+            setupMediaObservers()
+            let ok = reconcileClassifierState()
+            emitState()
+            if !ok && suppressionReasons.isEmpty {
+                throw AudioCaptureFailure.engineStartFailed
+            }
+            return
+        }
         isClassificationRunning = true
         // Same stale-interruption guard as startCapture(): the Debug panel and
         // source toggle are explicit starts, so they should recover the audio
@@ -124,6 +141,8 @@ actor AudioStreamManager {
             running: isCaptureRunning,
             paused: isPaused,
             capturing: isCapturing,
+            classificationRunning: isClassificationRunning,
+            engineRunning: classifier.isRunning,
             suppressedReason: resolvedSuppressedReason()
         )
     }

@@ -10,6 +10,7 @@ const { patchMock, runtimeMock } = vi.hoisted(() => ({
     subscribe: vi.fn(() => () => {}),
     start: vi.fn(),
     stop: vi.fn(),
+    reconcileEnabledSources: vi.fn(),
     flush: vi.fn(),
   },
 }));
@@ -68,7 +69,7 @@ describe("AmbientSourcesPanel health source", () => {
       expect(patchMock).toHaveBeenCalledWith({
         ambientSources: { health: { enabled: true } },
       });
-      expect(runtimeMock.start).toHaveBeenCalledWith("health");
+      expect(runtimeMock.reconcileEnabledSources).toHaveBeenCalledWith(["health"]);
     });
   });
 });
