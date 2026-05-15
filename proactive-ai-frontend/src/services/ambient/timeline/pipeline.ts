@@ -72,6 +72,14 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
       await this.upsertTranscriptWindow(raw);
       return signals;
     }
+    if (raw.sourceType === "sound") {
+      if (raw.eventType === "sound.scene_run") await this.upsertSoundContextWindow(raw);
+      return signals;
+    }
+    if (raw.sourceType === "motion") {
+      if (raw.eventType === "motion.segment") await this.upsertMotionStateWindow(raw);
+      return signals;
+    }
     return signals;
   }
 
@@ -82,12 +90,12 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
       limit: 200,
     });
     if (raws.length === 0) return null;
-    const startedAt = raws[0]?.occurredAt ?? new Date().toISOString();
-    const refs = raws.map(rawRef);
     const facts = healthFacts(raws);
-    const compactContext = facts.length > 0
-      ? facts.join(" ")
-      : "HealthKit reported a health summary for the morning.";
+    if (facts.length === 0) return null;
+    const startedAt = healthEventTime(raws);
+    if (!startedAt) return null;
+    const refs = raws.map(rawRef);
+    const compactContext = facts.join(" ");
     const window = await this.upsertWindow({
       id: stableId("win", ["morning_health", localDate]),
       localDate,
@@ -247,6 +255,48 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     return this.upsertVisibleEvent(event);
   }
 
+  private async upsertSoundContextWindow(raw: AmbientRawEvent): Promise<void> {
+    const startedAt = stringPayload(raw.payload, "started_at") ?? raw.occurredAt;
+    const endedAt = stringPayload(raw.payload, "ended_at") ?? raw.endedAt;
+    await this.upsertWindow({
+      id: stableId("win", ["sound_context", raw.dedupeKey]),
+      localDate: raw.localDate,
+      windowType: "sound_context",
+      startedAt,
+      endedAt,
+      sourceTypes: ["sound"],
+      deviceLabels: ["iPhone"],
+      rawRefs: [rawRef(raw)],
+      compactContext: soundContext(raw),
+      privacyHint: "normal",
+      confidenceHint: raw.confidence ?? 0.6,
+      salienceHint: 0.25,
+      generationPolicy: "do_not_generate",
+      status: "evidence",
+    });
+  }
+
+  private async upsertMotionStateWindow(raw: AmbientRawEvent): Promise<void> {
+    const startedAt = stringPayload(raw.payload, "started_at") ?? raw.occurredAt;
+    const endedAt = stringPayload(raw.payload, "ended_at") ?? raw.endedAt;
+    await this.upsertWindow({
+      id: stableId("win", ["motion_state_run", raw.dedupeKey]),
+      localDate: raw.localDate,
+      windowType: "motion_state_run",
+      startedAt,
+      endedAt,
+      sourceTypes: ["motion"],
+      deviceLabels: ["iPhone"],
+      rawRefs: [rawRef(raw)],
+      compactContext: motionContext(raw),
+      privacyHint: "normal",
+      confidenceHint: 0.65,
+      salienceHint: 0.3,
+      generationPolicy: "do_not_generate",
+      status: "evidence",
+    });
+  }
+
   private async upsertTranscriptWindow(raw: AmbientRawEvent): Promise<void> {
     const durationMs = numberPayload(raw.payload, "durationMs");
     const startedAt = raw.occurredAt;
@@ -285,7 +335,18 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
       sourceType: "motion",
       limit: 200,
     });
+    const segmentMatches = motions.filter((raw) => {
+      if (raw.eventType !== "motion.segment") return false;
+      const segmentStart = Date.parse(stringPayload(raw.payload, "started_at") ?? raw.occurredAt);
+      const segmentEnd = Date.parse(stringPayload(raw.payload, "ended_at") ?? raw.endedAt ?? raw.occurredAt);
+      return Number.isFinite(segmentStart)
+        && Number.isFinite(segmentEnd)
+        && segmentStart <= endTs
+        && segmentEnd >= startTs;
+    });
+    if (segmentMatches.length > 0) return segmentMatches;
     return motions.filter((raw) => {
+      if (raw.eventType !== "motion.activity") return false;
       const ts = Date.parse(raw.occurredAt);
       return Number.isFinite(ts) && ts >= startTs && ts <= endTs;
     });
@@ -421,22 +482,60 @@ function rawRef(raw: AmbientRawEvent): AmbientRawRef {
   return { sourceType: raw.sourceType, id: raw.id };
 }
 
+const MIN_STEPS_FOR_VISIBLE_HEALTH = 100;
+const MORNING_CUTOFF_HOUR = 12;
+
 function healthFacts(raws: AmbientRawEvent[]): string[] {
-  const metrics = uniqueStrings(raws.flatMap((raw) => healthMetricTags(raw.payload)));
   const facts: string[] = [];
-  if (metrics.includes("sleep")) {
-    facts.push("Sleep summary is available.");
+  for (const observation of raws.flatMap((raw) => healthObservations(raw.payload))) {
+    const metric = stringValue(observation.metric);
+    const value = numberValue(observation.value);
+    if (!metric || value === null) continue;
+    if (metric === "sleep" && value > 0) {
+      facts.push(`Slept ${Math.round(value)} min.`);
+    } else if (metric === "heart_rate" && value > 0) {
+      facts.push(`Average heart rate ${Math.round(value)} bpm over 6h.`);
+    } else if (metric === "steps" && value >= MIN_STEPS_FOR_VISIBLE_HEALTH) {
+      facts.push(`${Math.round(value)} steps today.`);
+    }
   }
-  if (metrics.includes("heart-rate")) {
-    facts.push("Heart-rate summary is available.");
-  }
-  if (metrics.includes("steps")) {
-    facts.push("Steps summary is available.");
-  }
-  if (facts.length === 0 && raws.length > 0) {
-    facts.push("HealthKit reported a health summary.");
-  }
-  return facts;
+  return uniqueStrings(facts);
+}
+
+function healthEventTime(raws: AmbientRawEvent[]): string | null {
+  const sleepRaw = raws.find((raw) => hasValidHealthObservation(raw.payload, "sleep"));
+  if (sleepRaw) return sleepRaw.endedAt ?? sleepRaw.occurredAt;
+  const heartRaw = raws.find((raw) => hasValidHealthObservation(raw.payload, "heart_rate"));
+  if (heartRaw) return heartRaw.occurredAt;
+  const stepsRaw = raws.find((raw) => hasValidHealthObservation(raw.payload, "steps"));
+  if (!stepsRaw || !isBeforeLocalHour(stepsRaw.occurredAt, MORNING_CUTOFF_HOUR)) return null;
+  return stepsRaw.occurredAt;
+}
+
+function hasValidHealthObservation(
+  payload: Record<string, unknown>,
+  metric: "sleep" | "heart_rate" | "steps",
+): boolean {
+  return healthObservations(payload).some((observation) => {
+    if (stringValue(observation.metric) !== metric) return false;
+    const value = numberValue(observation.value);
+    if (value === null) return false;
+    if (metric === "steps") return value >= MIN_STEPS_FOR_VISIBLE_HEALTH;
+    return value > 0;
+  });
+}
+
+function healthObservations(payload: Record<string, unknown>): Record<string, unknown>[] {
+  return Array.isArray(payload.observations)
+    ? payload.observations.filter((item): item is Record<string, unknown> => (
+      item !== null && typeof item === "object"
+    ))
+    : [];
+}
+
+function isBeforeLocalHour(iso: string, hour: number): boolean {
+  const date = new Date(iso);
+  return Number.isFinite(date.getTime()) && date.getHours() < hour;
 }
 
 function healthMetricTags(payload: Record<string, unknown>): string[] {
@@ -475,4 +574,38 @@ function numberPayload(
 
 export function todayLocalDate(): string {
   return localDateFromIso(new Date().toISOString());
+}
+
+
+function soundContext(raw: AmbientRawEvent): string {
+  const label = stringPayload(raw.payload, "label") ?? "sound";
+  const confidence = numberPayload(raw.payload, "maxConfidence") ?? raw.confidence;
+  const confidenceText = confidence !== null ? `, max confidence ${Math.round(confidence * 100)}%` : "";
+  return `Heard ${label} for ${formatDuration(numberPayload(raw.payload, "durationMs"))}${confidenceText}.`;
+}
+
+function motionContext(raw: AmbientRawEvent): string {
+  const activity = stringPayload(raw.payload, "activity") ?? stringPayload(raw.payload, "type") ?? "activity";
+  return `Motion ${activity} for ${formatDuration(numberPayload(raw.payload, "durationMs"))}.`;
+}
+
+function formatDuration(durationMs: number | null): string {
+  if (!durationMs || durationMs <= 0) return "0s";
+  const totalSeconds = Math.round(durationMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) return `${seconds}s`;
+  return `${minutes}m ${seconds}s`;
+}
+
+function stringPayload(payload: Record<string, unknown>, key: string): string | null {
+  return stringValue(payload[key]);
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }

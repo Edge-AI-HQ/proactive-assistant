@@ -3,8 +3,8 @@ import {
   type ActivityEvent,
 } from "@pin/capacitor-ambient-ai";
 import type { PluginListenerHandle } from "@capacitor/core";
-import { SIGNAL_KINDS } from "../kinds";
 import type { AmbientSource, SourceContext } from "./types";
+import { MotionSegmentAggregator } from "./motion-segments";
 
 /**
  * Wraps the CMMotionActivity side of the VisitMonitor native plugin
@@ -21,8 +21,7 @@ export class ActivitySource implements AmbientSource {
 
   private listenerHandle: PluginListenerHandle | null = null;
   private started = false;
-  private lastType: ActivityEvent["type"] | null = null;
-  private lastConfidence: ActivityEvent["confidence"] | null = null;
+  private segments = new MotionSegmentAggregator();
 
   constructor(private ctx: SourceContext) {}
 
@@ -45,6 +44,8 @@ export class ActivitySource implements AmbientSource {
     try {
       await AmbientAi.visit.stopActivityRecognition();
     } finally {
+      const finalized = this.segments.stop();
+      if (finalized) this.ctx.push(finalized);
       if (this.listenerHandle) {
         await this.listenerHandle.remove();
         this.listenerHandle = null;
@@ -53,30 +54,15 @@ export class ActivitySource implements AmbientSource {
     }
   }
 
-  private handle(event: ActivityEvent): void {
-    if (
-      event.type === this.lastType &&
-      event.confidence === this.lastConfidence
-    ) {
-      return;
-    }
-    this.lastType = event.type;
-    this.lastConfidence = event.confidence;
+  handleActivityForTest(event: ActivityEvent): void {
+    this.handle(event);
+  }
 
-    const summary = `${event.type} (${event.confidence})`;
-    this.ctx.push({
-      kind: SIGNAL_KINDS.activity,
-      title: `Motion: ${event.type}`,
-      summary,
-      occurred_at: new Date(event.timestamp).toISOString(),
-      payload: {
-        type: event.type,
-        confidence: event.confidence,
-      },
-      // Bucket per minute on a transition so accidental retries dedupe
-      // but a real type-change inside the minute still emits.
-      dedupe_key: `activity:${event.type}:${Math.floor(event.timestamp / 60_000)}`,
-    });
-    this.ctx.onEvent(this.key, summary);
+  private handle(event: ActivityEvent): void {
+    const emitted = this.segments.addSample(event);
+    for (const item of emitted) {
+      this.ctx.push(item);
+      this.ctx.onEvent(this.key, item.summary);
+    }
   }
 }

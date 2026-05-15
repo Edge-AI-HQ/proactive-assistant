@@ -125,7 +125,7 @@ describe("SoundClassifierSource transcript ingest", () => {
     expect(ctx.onEvent).not.toHaveBeenCalled();
   });
 
-  test("continues uploading non-speech classification ticks", () => {
+  test("aggregates non-speech classification ticks before pushing", async () => {
     const pushed: unknown[] = [];
     const ctx: SourceContext = {
       push: (item) => pushed.push(item),
@@ -137,14 +137,26 @@ describe("SoundClassifierSource transcript ingest", () => {
       classifications: [{ label: "music", confidence: 0.81 }],
       timestamp: 1_777_000_000_000,
     });
+    source.handleSoundClassificationForTest({
+      classifications: [{ label: "music", confidence: 0.79 }],
+      timestamp: 1_777_000_008_000,
+    });
+    source.handleSoundClassificationForTest({
+      classifications: [{ label: "music", confidence: 0.77 }],
+      timestamp: 1_777_000_016_000,
+    });
 
     expect(pushed).toHaveLength(1);
     expect(pushed[0]).toMatchObject({
-      kind: "device.sound_classification",
+      kind: "device.sound_scene_run",
       title: "music",
-      dedupe_key: "sound:music:444250000",
+      dedupe_key: "sound:music:2026-04-24T03:06:40.000Z",
+      payload: {
+        schema_version: "sound_scene_run.v1",
+        label: "music",
+        sampleCount: 3,
+      },
     });
-    expect(ctx.onEvent).toHaveBeenCalledWith("sound_classifier", "music (81.0%)");
   });
 
   test("cleans up listeners when native start fails", async () => {

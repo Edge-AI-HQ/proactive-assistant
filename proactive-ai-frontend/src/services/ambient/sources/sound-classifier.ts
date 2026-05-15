@@ -4,8 +4,8 @@ import {
   type TranscriptReadyEvent,
 } from "@pin/capacitor-ambient-ai";
 import type { PluginListenerHandle } from "@capacitor/core";
-import { SIGNAL_KINDS } from "../kinds";
 import type { AmbientSource, SourceContext } from "./types";
+import { SoundRunAggregator } from "./sound-runs";
 
 export interface SoundClassifierOptions {
   /** Min top-1 confidence (0-1) before we even consider emitting. */
@@ -39,9 +39,8 @@ export class SoundClassifierSource implements AmbientSource {
   private listenerHandle: PluginListenerHandle | null = null;
   private transcriptListenerHandle: PluginListenerHandle | null = null;
   private started = false;
-  private lastTopLabel: string | null = null;
-  private lastEmitTs = 0;
   private opts: Required<SoundClassifierOptions>;
+  private runs = new SoundRunAggregator();
 
   constructor(
     private ctx: SourceContext,
@@ -84,6 +83,8 @@ export class SoundClassifierSource implements AmbientSource {
       await AmbientAi.sound.stopClassification();
       await AmbientAi.audio.stopCapture();
     } finally {
+      const finalized = this.runs.stop();
+      if (finalized) this.ctx.push(finalized);
       await this.removeListeners();
       this.started = false;
     }
@@ -159,36 +160,18 @@ export class SoundClassifierSource implements AmbientSource {
 
     if (top.label.toLowerCase() === SPEECH_LABEL) return;
 
-    const now = Date.now();
-    if (
-      top.label === this.lastTopLabel &&
-      now - this.lastEmitTs < this.opts.dedupeWindowMs
-    ) {
-      return;
-    }
-    this.lastTopLabel = top.label;
-    this.lastEmitTs = now;
-
-    const confPct = (top.confidence * 100).toFixed(1);
-    const summary = `${top.label} (${confPct}%)`;
-    this.ctx.push({
-      kind: SIGNAL_KINDS.soundClassification,
-      title: top.label,
-      summary: `Top sound: ${summary}`,
-      occurred_at: new Date(event.timestamp).toISOString(),
-      payload: {
-        top: event.classifications.slice(0, 3).map((c) => ({
-          label: c.label,
-          confidence: c.confidence,
-        })),
-      },
-      confidence: top.confidence,
-      // Bucket the timestamp by dedupeWindow so accidental client retries
-      // still hash to the same key. If the user truly hears `speech` in
-      // two adjacent windows, we only record the transition (intentional).
-      dedupe_key: `sound:${top.label}:${Math.floor(event.timestamp / this.opts.dedupeWindowMs)}`,
+    const emitted = this.runs.addSample({
+      timestamp: event.timestamp,
+      classifications: event.classifications.slice(0, 3).map((c) => ({
+        label: c.label,
+        confidence: c.confidence,
+      })),
     });
-    this.ctx.onEvent(this.key, summary);
+    for (const item of emitted) {
+      this.ctx.push(item);
+      const label = typeof item.title === "string" ? item.title : top.label;
+      this.ctx.onEvent(this.key, `${label} scene run`);
+    }
   }
 
   private async cleanupNativeStartFailure(): Promise<void> {

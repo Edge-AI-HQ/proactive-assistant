@@ -69,8 +69,8 @@ export function sourceTypeFromSignal(kind: string): AmbientSourceType {
   if (kind === "health.observation") return "health";
   if (kind === SIGNAL_KINDS.visit) return "visit";
   if (kind === SIGNAL_KINDS.location) return "location";
-  if (kind === SIGNAL_KINDS.activity) return "motion";
-  if (kind === SIGNAL_KINDS.soundClassification) return "sound";
+  if (kind === SIGNAL_KINDS.activity || kind === SIGNAL_KINDS.motionSegment) return "motion";
+  if (kind === SIGNAL_KINDS.soundClassification || kind === SIGNAL_KINDS.soundSceneRun) return "sound";
   return "sound";
 }
 
@@ -96,7 +96,9 @@ function rawEventType(
   if (kind === "session_summary") return "transcript.ready";
   if (kind === "health.observation") return "health.summary";
   if (kind === SIGNAL_KINDS.location) return "location.fix";
+  if (kind === SIGNAL_KINDS.motionSegment || payload.schema_version === "motion_segment.v1") return "motion.segment";
   if (kind === SIGNAL_KINDS.activity) return "motion.activity";
+  if (kind === SIGNAL_KINDS.soundSceneRun || payload.schema_version === "sound_scene_run.v1") return "sound.scene_run";
   if (kind === SIGNAL_KINDS.soundClassification) return "sound.frame";
   if (kind === SIGNAL_KINDS.visit) {
     const visitKind = cleanText(payload.kind);
@@ -123,12 +125,20 @@ function compactText(
     return place ? `Location near ${place}.` : item.summary;
   }
   if (sourceType === "motion") {
+    if (eventType === "motion.segment") {
+      const activity = cleanText(payload.activity) ?? "activity";
+      return `Motion ${activity} for ${formatDuration(parseOptionalNumber(payload.durationMs))}.`;
+    }
     const type = cleanText(payload.type);
     const confidence = cleanText(payload.confidence);
     return `Motion ${type ?? "activity"}${confidence ? ` (${confidence})` : ""}.`;
   }
   if (sourceType === "health") return `Health summary: ${item.summary}`;
   if (sourceType === "transcript") return `Transcript segment: ${item.summary}`;
+  if (eventType === "sound.scene_run") {
+    const label = cleanText(payload.label) ?? "sound";
+    return `Heard ${label} for ${formatDuration(parseOptionalNumber(payload.durationMs))}.`;
+  }
   return item.summary;
 }
 
@@ -140,9 +150,14 @@ function endedAtForRaw(
   if (direct) return direct;
   const departure = normalizeIso(cleanText(payload.departure_at));
   if (departure) return departure;
+  const startedAt = normalizeIso(cleanText(payload.started_at));
+  const endedAt = normalizeIso(cleanText(payload.ended_at));
+  if (endedAt) return endedAt;
   const durationMs = parseOptionalNumber(payload.durationMs);
-  if (!durationMs || !item.occurred_at) return undefined;
-  const start = Date.parse(item.occurred_at);
+  if (!durationMs && durationMs !== 0) return undefined;
+  const startIso = startedAt ?? item.occurred_at;
+  if (!startIso) return undefined;
+  const start = Date.parse(startIso);
   if (!Number.isFinite(start)) return undefined;
   return new Date(start + durationMs).toISOString();
 }
@@ -162,4 +177,14 @@ function normalizeIso(value: string | null | undefined): string | null {
   if (!value) return null;
   const ts = Date.parse(value);
   return Number.isFinite(ts) ? new Date(ts).toISOString() : null;
+}
+
+
+function formatDuration(durationMs: number | null): string {
+  if (!durationMs || durationMs <= 0) return "0s";
+  const totalSeconds = Math.round(durationMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) return `${seconds}s`;
+  return `${minutes}m ${seconds}s`;
 }

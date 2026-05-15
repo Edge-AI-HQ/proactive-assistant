@@ -82,6 +82,20 @@ describe("HealthSource", () => {
     expect(ctx.onEvent).toHaveBeenCalledWith("health", "8120 steps today");
   });
 
+
+  test("ignores zero-step updates without pushing or updating last event", () => {
+    const { ctx, pushed } = makeContext();
+    const source = new HealthSource(ctx);
+
+    source.handleStepsForTest({
+      stepsToday: 0,
+      timestamp: Date.parse("2026-05-13T08:00:00.000Z"),
+    });
+
+    expect(pushed).toEqual([]);
+    expect(ctx.onEvent).not.toHaveBeenCalled();
+  });
+
   test("converts heart rate into a metric-scoped full-sync window summary", () => {
     const { pushed } = makeContext();
     const source = new HealthSource({

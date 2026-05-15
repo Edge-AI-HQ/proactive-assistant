@@ -23,6 +23,8 @@ export type AmbientWindowType =
   | "visit_stay"
   | "transition"
   | "transcript_session"
+  | "sound_context"
+  | "motion_state_run"
   | "workout"
   | "focus_block";
 
@@ -81,7 +83,7 @@ export interface AmbientCandidateWindow {
   salienceHint: number;
   generationPolicy: "rule_only" | "llm_allowed" | "do_not_generate";
   llmInputHash: string | null;
-  status: "pending" | "generated" | "ignored";
+  status: "pending" | "generated" | "ignored" | "evidence";
   expiresAt: string | null;
   createdAt: string;
   updatedAt: string;
