@@ -53,9 +53,12 @@ async def _ensure_virtual_key(user: User, pool) -> User:
 
 async def persist_generator_run(
     pool, *, user_id: int, payload: dict, trigger: str,
+    matched_patterns: list[dict[str, Any]] | None = None,
 ) -> None:
     """Write the completed generator run to pai_pipeline_runs +
     pai_card_evaluations so /api/cards + UI recovery flows can find them.
+    Also persists pai_card_pattern_hits when the agent emits pattern_id
+    annotations on its evaluations (Phase 2).
 
     Best-effort: a persistence failure doesn't fail the request — the
     cards already returned to the client. We log and move on.
@@ -84,6 +87,14 @@ async def persist_generator_run(
                 VALUES (%s, %s, %s, 'completed', %s,
                         %s::jsonb, %s::jsonb,
                         NOW(), NOW(), NOW())
+                ON CONFLICT (user_id, id) DO UPDATE SET
+                  run_id = EXCLUDED.run_id,
+                  status = 'completed',
+                  trigger = EXCLUDED.trigger,
+                  final_cards = EXCLUDED.final_cards,
+                  iterations = COALESCE(EXCLUDED.iterations, pai_pipeline_runs.iterations),
+                  completed_at = NOW(),
+                  updated_at = NOW()
                 """,
                 (
                     user_id, run_id, run_id, trigger,
@@ -95,8 +106,133 @@ async def persist_generator_run(
                 conn, user_id=user_id, run_id=run_id,
                 cards=cards, evaluations=evaluations,
             )
+            await _persist_pattern_hits(
+                conn, user_id=user_id, run_id=run_id,
+                cards=cards, evaluations=evaluations,
+                matched_patterns=matched_patterns or [],
+            )
     except Exception:
         logger.exception("persist generate run failed user=%d run=%s", user_id, run_id)
+
+
+async def _persist_pattern_hits(
+    conn,
+    *,
+    user_id: int,
+    run_id: str,
+    cards: list[dict[str, Any]],
+    evaluations: list[dict[str, Any]],
+    matched_patterns: list[dict[str, Any]],
+) -> None:
+    """Record one pai_card_pattern_hits row per card that the agent
+    annotated with a pattern_id.
+
+    Phase 2 sourcing rule:
+      * Prefer evaluation.patternId (the evaluator decided which pattern
+        this card actually realizes after seeing sources[]).
+      * Fall back to card.patternId if the card-generator stamped it.
+      * If neither is set, no hit row.
+
+    Hallucinated pattern_ids (LLM emits a pattern that doesn't exist in
+    pai_card_patterns) are dropped *before* the INSERT: the FK constraint
+    would otherwise abort the surrounding transaction and lose the
+    evaluations / pipeline_runs rows that already committed.
+    """
+    if not cards:
+        return
+    by_pattern = {
+        str(m.get("patternId")): m
+        for m in matched_patterns
+        if isinstance(m, dict) and isinstance(m.get("patternId"), str)
+    }
+    eval_pattern_by_card: dict[str, dict[str, Any]] = {}
+    for ev in evaluations:
+        if not isinstance(ev, dict):
+            continue
+        cid = ev.get("cardId") or ev.get("card_id")
+        if isinstance(cid, str) and cid:
+            eval_pattern_by_card[cid] = ev
+
+    # First pass: collect candidate (card_id, pattern_id, eval, match) rows.
+    candidates: list[tuple[str, str, dict[str, Any], dict[str, Any]]] = []
+    for card in cards:
+        if not isinstance(card, dict):
+            continue
+        card_id = card.get("id")
+        if not isinstance(card_id, str) or not card_id:
+            continue
+        ev = eval_pattern_by_card.get(card_id, {})
+        pattern_id = (
+            ev.get("patternId") or ev.get("pattern_id")
+            or card.get("patternId") or card.get("pattern_id")
+        )
+        if not isinstance(pattern_id, str) or not pattern_id:
+            continue
+        candidates.append((card_id, pattern_id, ev, by_pattern.get(pattern_id, {})))
+
+    if not candidates:
+        return
+
+    # Filter out pattern_ids that don't exist in the library (LLM
+    # hallucinations) before issuing INSERTs that would otherwise trip
+    # the FK and abort the surrounding transaction.
+    requested = {p for _, p, _, _ in candidates}
+    async with conn.cursor() as cur:
+        await cur.execute(
+            "SELECT id FROM pai_card_patterns WHERE id = ANY(%s)",
+            (list(requested),),
+        )
+        existing_rows = await cur.fetchall()
+    existing = {r["id"] for r in existing_rows}
+    dropped = requested - existing
+    if dropped:
+        logger.info(
+            "persist pattern hits: dropping %d hallucinated pattern_ids user=%d run=%s ids=%s",
+            len(dropped), user_id, run_id, sorted(dropped),
+        )
+
+    inserted = 0
+    for card_id, pattern_id, ev, match in candidates:
+        if pattern_id not in existing:
+            continue
+        evidence = match.get("evidence") or {}
+        base_hit_rate = match.get("baseHitRate")
+        combined_score = (
+            match.get("combinedScore")
+            if match.get("combinedScore") is not None
+            else base_hit_rate
+        )
+        await conn.execute(
+            """
+            INSERT INTO pai_card_pattern_hits
+              (user_id, run_id, card_id, pattern_id, subtype,
+               evidence, user_fit_score, combined_score,
+               pattern_grounding_ok)
+            VALUES (%s, %s, %s, %s, %s,
+                    %s::jsonb, %s, %s,
+                    %s)
+            ON CONFLICT (user_id, card_id, pattern_id) DO UPDATE SET
+              run_id = EXCLUDED.run_id,
+              subtype = EXCLUDED.subtype,
+              evidence = EXCLUDED.evidence,
+              user_fit_score = EXCLUDED.user_fit_score,
+              combined_score = EXCLUDED.combined_score,
+              pattern_grounding_ok = EXCLUDED.pattern_grounding_ok
+            """,
+            (
+                user_id, run_id, card_id, pattern_id,
+                match.get("subtype"),
+                json.dumps(evidence),
+                match.get("userFitScore"),
+                combined_score,
+                bool(ev.get("patternGroundingOk") or ev.get("pattern_grounding_ok")),
+            ),
+        )
+        inserted += 1
+    if inserted:
+        logger.info(
+            "persisted %d pattern hits user=%d run=%s", inserted, user_id, run_id,
+        )
 
 
 async def _persist_evaluations(

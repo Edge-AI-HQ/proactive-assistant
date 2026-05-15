@@ -95,7 +95,42 @@ class FeedbackRepository(UserScopedRepository):
         if row is None:
             msg = "feedback insert returned no row"
             raise RuntimeError(msg)
+        # Phase 3: fan out card-targeted dismiss / confirm actions to
+        # the per-user pattern fingerprint. We don't run on every kind
+        # — only on actions that already mean "user touched this card".
+        if intent_card_id and action in {"open", "confirm", "dismiss", "snooze"}:
+            await self._fanout_fingerprint(
+                card_id=intent_card_id, action=action,
+                intent_key=intent_key, basket=basket,
+            )
         return FeedbackRow.from_record(row)
+
+    async def _fanout_fingerprint(
+        self,
+        *,
+        card_id: str,
+        action: str,
+        intent_key: str | None,
+        basket: str | None,
+    ) -> None:
+        from .user_fingerprint import UserFingerprintRepository  # noqa: PLC0415
+
+        fp = UserFingerprintRepository(self._user_id, self._conn)
+        pattern_ids = await fp.patterns_for_card(card_id)
+        # confirm + open = positive engagement; dismiss + snooze = negative.
+        positive = action in {"open", "confirm"}
+        if positive:
+            await fp.record_open(
+                pattern_ids=pattern_ids,
+                intent=intent_key,
+                basket=basket,
+            )
+        else:
+            await fp.record_dismiss(
+                pattern_ids=pattern_ids,
+                intent=intent_key,
+                basket=basket,
+            )
 
     async def list(
         self,

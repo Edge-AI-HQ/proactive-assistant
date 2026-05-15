@@ -205,11 +205,33 @@ class AppStateValue(_CamelModel):
 
 
 # ── Generate / Run ──
+class MatchedPatternPayload(_CamelModel):
+    """One pattern matched by the web-side `pattern_matcher` service.
+
+    Forwarded to the chat process via `GenerateRequest.matched_patterns`
+    so the chat-side generator never has to read `pai_card_patterns` directly
+    (trust boundary — chat must not touch the pattern DB).
+    """
+
+    pattern_id: str
+    category: str
+    intent: str
+    abstract: str
+    subtype: str | None = None
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    base_hit_rate: float = 0.0
+    user_fit_score: float | None = None
+    combined_score: float | None = None
+
+
 class GenerateRequest(_CamelModel):
     cards_to_generate: StrictInt = Field(default=8, ge=1, le=10)
     # None → fall back to user's `generation_language` setting at the
     # route boundary. Explicit value (admin / A-B / debug) overrides.
     output_language: SupportedLanguage | None = None
+    # Pattern matcher output from the web side. Optional so legacy callers
+    # (and unit tests) can omit it and fall back to free-LLM generation.
+    matched_patterns: list[MatchedPatternPayload] = Field(default_factory=list)
 
 
 class GenerateResponse(_CamelModel):
@@ -268,6 +290,11 @@ class PlanItem(_AgentModel):
         default_factory=list,
         description="ids from phase 1 data (signal/memory/gmail/gcal) that ground this plan.",
     )
+    pattern_id: str | None = Field(
+        default=None,
+        max_length=120,
+        description="Pattern (from matched_patterns input) this plan item realizes. Empty when the planner falls back to free-LLM generation.",
+    )
 
 
 class PlanOutput(_AgentModel):
@@ -283,6 +310,10 @@ class PlanOutput(_AgentModel):
     notes: str = Field(
         default="", max_length=3000,
         description="One-paragraph rationale: how plan reflects fresh signals, dedup, and feedback alignment.",
+    )
+    selected_pattern_ids: list[str] = Field(
+        default_factory=list,
+        description="Pattern ids the planner chose from `matched_patterns`. Mirrors plan[].pattern_id, surfaced once for fast lookup.",
     )
 
 
@@ -326,10 +357,25 @@ class CardEvaluation(_AgentModel):
     why_now_clarity: float = Field(ge=0, le=10)
     novelty: float = Field(ge=0, le=10)
     decision_compression: float = Field(ge=0, le=10)
+    # Phase 2 sixth dimension. When card claims a pattern_id, evaluator
+    # checks: (a) sources[] contains all signals_required for that
+    # pattern, (b) at least N distinct sources are cited so the trigger
+    # combination is actually grounded. Score 0 = no pattern claim or
+    # grounding violation; 10 = full skeleton compliance.
+    pattern_grounding: float = Field(default=0.0, ge=0, le=10)
     overall: float = Field(ge=0, le=10)
     pass_: bool = Field(
         alias="pass",
-        description="overall >= 5.0 AND no grounding violation observed in sources[].",
+        description="overall >= 5.0 AND no grounding violation observed in sources[] AND (pattern_grounding == 0 OR pattern_grounding >= 5).",
+    )
+    pattern_id: str | None = Field(
+        default=None,
+        max_length=120,
+        description="Pattern this card was generated for (mirrored from PlanItem). Used by web side to persist pai_card_pattern_hits.",
+    )
+    pattern_grounding_ok: bool = Field(
+        default=False,
+        description="True when the card's sources[] satisfy the pattern's required signal types. Only meaningful when pattern_id is set.",
     )
     feedback: str = Field(
         max_length=3000,

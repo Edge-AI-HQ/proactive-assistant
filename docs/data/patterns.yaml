@@ -1,0 +1,1394 @@
+# Pattern Library v0 — 100 条 abstract pattern
+#
+# 设计原则:
+# 1. abstract pattern 定义的是"用户认知/行为模式",不是 entity subtype
+# 2. signal subtype 通过 specializations 字段参数化,不在 pattern 层展开
+# 3. trigger 是结构化 DSL,可被 Python evaluator 直接求值(不走 LLM)
+# 4. card_skeleton 是骨架,LLM 在 generator 里填血肉
+# 5. surprise / practical level 是人工初评,后续由 reward ledger 校准
+#
+# 字段说明:
+#   id              全局唯一 slug,DB 主键
+#   category        大类,管理用
+#   abstract        一句话说明该 pattern 描述什么认知模式
+#   signals         触发需要的 signal source(对应 signal ontology)
+#   trigger         结构化 DSL,所有 conditions AND
+#   intent          产生卡片的意图,planner 用
+#   card_skeleton   生成阶段约束 LLM 的结构
+#   specializations 该 pattern 在不同 signal subtype 下的参数化
+#   surprise        h/m/l — 用户被 wow 程度的初评
+#   practical       h/m/l — 用户实用价值的初评
+#   tier            cold_start_friendly(day-1 可发) / warmup(7d+) / mature(30d+)
+#
+# 引用: docs/plans/2026-05-15-pattern-driven-card-generation.mdx
+
+version: v0
+generated_at: 2026-05-15
+total_patterns: 100
+
+# ===================================================================
+# Signal Ontology(被 pattern 引用的 signal 树)
+# ===================================================================
+ontology:
+  gps:
+    current: [lat, lng, accuracy, timestamp, dwell_min, cluster_id, place_label]
+    history_window: [days_lookback, clusters, visit_freq, last_visit_at]
+    inferences: [commute_route, home_cluster, office_cluster, frequent_places, weekend_cluster]
+  calendar:
+    event:
+      attrs: [title, start, end, location, attendees, organizer, is_recurring]
+      subtypes:
+        work: [meeting_1on1, meeting_team, meeting_external, deadline, travel]
+        personal: [medical, social, family, errand]
+        transit: [flight_intl, flight_dom, train, drive]
+    derived: [density_today, conflict_pairs, free_slots]
+  gmail:
+    message:
+      attrs: [from, subject, body_summary, received_at, has_attachment, is_unread]
+      subtypes:
+        transactional: [receipt, reservation_hotel, reservation_flight, reservation_restaurant, shipping, deadline_billing, expiring_rewards]
+        personal: [from_close_contact, from_family, from_vip]
+        work: [from_colleague, from_external, from_mentor]
+        newsletter: [subscribed, unsubscribed]
+    derived: [unresponded_to_vip, recurring_correspondent, dormant_thread]
+  chat:
+    history: [thread_id, last_msg_at, msg_count_30d, topics_extracted]
+    derived: [repeating_topic_no_action, promised_followup_open]
+  feedback:
+    intent_state: [intent, basket, dismiss_count_30d, confirm_count_30d, last_action_at]
+    derived: [ick_list, hot_intents]
+  device:
+    health: [steps, sleep_h, hrv, screen_time, workout_session]
+    ambient: [audio_event, location_event, motion_event]
+  world:
+    weather: [forecast_24h, forecast_7d, current_at_user_location]
+    transit_status: [route_disruptions, traffic_unusual]
+    public_data: [places_nearby, events_local, deals_local]
+  profile:
+    static: [age_range, family_role, work_role, languages, dietary]
+    preferences: [hobby_tags, dislike_tags]
+  memory:
+    facts: [user_facts, recurring_obligations]
+    skills: [practiced_skills, learning_goals]
+
+# ===================================================================
+# Pattern Catalog
+# ===================================================================
+patterns:
+
+  # ----- A. routine_observation(节律识别)5 条 -----
+  - id: routine_anchor_detected
+    category: routine_observation
+    abstract: 从历史信号中识别出用户稳定的日常节律,主动告知并询问是否要协助
+    signals: [gps.history_window]
+    trigger:
+      - { op: trajectory_similarity_gte, source: gps.workday_morning, days: 5, threshold: 0.8 }
+    intent: routine_assistance
+    card_skeleton:
+      hook: 把识别出的节律具体描述
+      why_now: 引用观察到的天数和稳定度
+      evidence: gps history range
+      action: 提议加入提醒或确认节律
+    specializations:
+      - subtype: commute_route
+      - subtype: gym_schedule
+      - subtype: evening_unwind_route
+      - subtype: weekend_anchor
+    surprise: h
+    practical: h
+    tier: warmup
+
+  - id: meal_pattern_inferred
+    category: routine_observation
+    abstract: 识别出用户的常规用餐时段和地点,提示偏离或推荐
+    signals: [gps.history_window, calendar.event]
+    trigger:
+      - { op: cluster_stability_gte, source: gps.lunch_window, days: 10, threshold: 0.7 }
+    intent: routine_assistance
+    card_skeleton: { hook: 推断的用餐节律, why_now: 偏离 or 强化, evidence: gps lunch cluster, action: 推荐 or 调整 }
+    surprise: m
+    practical: m
+    tier: warmup
+
+  - id: sleep_rhythm_inferred
+    category: routine_observation
+    abstract: 从健康/屏幕数据推断睡眠节律
+    signals: [device.health, device.ambient]
+    trigger:
+      - { op: cycle_detection, source: device.sleep_h, days: 14, period: 7 }
+    intent: health_awareness
+    card_skeleton: { hook: 推断的睡眠节律, why_now: 健康观察, evidence: sleep data range, action: 调整建议 }
+    surprise: h
+    practical: h
+    tier: mature
+
+  - id: workweek_pattern_inferred
+    category: routine_observation
+    abstract: 识别出周一到周五的工作强度模式
+    signals: [calendar.event, gps.history_window]
+    trigger:
+      - { op: weekly_density_pattern, source: calendar, weeks: 3 }
+    intent: workload_awareness
+    card_skeleton: { hook: 一周节奏图, why_now: 上周观察, evidence: meeting density, action: 调整建议 }
+    surprise: m
+    practical: h
+    tier: warmup
+
+  - id: weekend_ritual_detected
+    category: routine_observation
+    abstract: 识别出用户周末的常规活动
+    signals: [gps.history_window]
+    trigger:
+      - { op: weekend_cluster_recurrence, source: gps, weeks: 4 }
+    intent: routine_assistance
+    card_skeleton: { hook: 周末常去活动, why_now: 这周还没出现, evidence: 4 周观察, action: 是否安排 }
+    surprise: m
+    practical: m
+    tier: mature
+
+  # ----- B. preparation_gap(准备类)8 条 -----
+  - id: preparation_gap_medical
+    category: preparation_gap
+    abstract: 医疗预约前用户准备不足
+    signals: [calendar.event.personal.medical, memory.facts]
+    trigger:
+      - { op: event_in_next_hours, source: calendar, max_hours: 24, subtype: medical }
+      - { op: no_recent_prep_mention, source: chat, days: 7 }
+    intent: health_care_prep
+    card_skeleton: { hook: 引用预约 + 准备清单, why_now: 时间倒计时, evidence: 日历 + 病史, action: 物品/空腹/用药提醒 }
+    specializations:
+      - subtype: general_checkup
+      - subtype: dental
+      - subtype: specialist_consult
+      - subtype: surgery_followup
+    surprise: m
+    practical: h
+    tier: cold_start_friendly
+
+  - id: preparation_gap_meeting
+    category: preparation_gap
+    abstract: 重要会议前用户没准备
+    signals: [calendar.event.work.meeting, gmail.message]
+    trigger:
+      - { op: event_in_next_hours, source: calendar, max_hours: 4, subtype: meeting_external }
+      - { op: no_doc_attachment, source: calendar.event }
+    intent: work_prep
+    card_skeleton: { hook: 会议主题 + 缺失准备, why_now: 倒计时, evidence: 邮件线索/共享文档, action: 总结/议程/资料 }
+    specializations:
+      - subtype: meeting_1on1
+      - subtype: meeting_team
+      - subtype: meeting_external
+      - subtype: client_call
+    surprise: m
+    practical: h
+    tier: cold_start_friendly
+
+  - id: preparation_gap_travel_intl
+    category: preparation_gap
+    abstract: 国际出行 12h 前的综合准备
+    signals: [calendar.event.transit.flight_intl, gmail.message.transactional.reservation_flight, profile.static, world.weather]
+    trigger:
+      - { op: event_in_next_hours, source: calendar, max_hours: 12, subtype: flight_intl }
+    intent: travel_logistics
+    card_skeleton: { hook: 航班 + 风险清单, why_now: 12h 内, evidence: 邮件/天气/酒店, action: 证件/签证/行李/checkin/汇率 }
+    surprise: m
+    practical: h
+    tier: cold_start_friendly
+
+  - id: preparation_gap_travel_dom
+    category: preparation_gap
+    abstract: 国内出行 6h 前准备
+    signals: [calendar.event.transit.flight_dom, gmail.message.transactional, world.weather]
+    trigger:
+      - { op: event_in_next_hours, source: calendar, max_hours: 6, subtype: flight_dom }
+    intent: travel_logistics
+    card_skeleton: { hook: 简化清单, why_now: 6h 内, evidence: 航班+目的地天气, action: 证件/checkin/到机场时间 }
+    surprise: m
+    practical: h
+    tier: cold_start_friendly
+
+  - id: preparation_gap_social_dinner
+    category: preparation_gap
+    abstract: 社交聚餐前 2h
+    signals: [calendar.event.personal.social, chat.history]
+    trigger:
+      - { op: event_in_next_hours, source: calendar, max_hours: 2, subtype: social }
+    intent: social_prep
+    card_skeleton: { hook: 聚会 + 共同话题, why_now: 2h, evidence: 上次互动/共同朋友, action: 礼物/着装/话题 }
+    surprise: m
+    practical: m
+    tier: cold_start_friendly
+
+  - id: preparation_gap_interview
+    category: preparation_gap
+    abstract: 面试前综合准备
+    signals: [calendar.event, gmail.message, memory.facts]
+    trigger:
+      - { op: title_match, source: calendar, keywords: [interview, 面试] }
+      - { op: event_in_next_hours, source: calendar, max_hours: 24 }
+    intent: career_prep
+    card_skeleton: { hook: 面试公司 + 关键准备, why_now: 24h, evidence: 邮件/公司公开信息, action: 公司研究/常见问题/着装 }
+    surprise: m
+    practical: h
+    tier: cold_start_friendly
+
+  - id: preparation_gap_presentation
+    category: preparation_gap
+    abstract: 演讲/路演前准备
+    signals: [calendar.event, gmail.message]
+    trigger:
+      - { op: title_match, source: calendar, keywords: [presentation, demo, 路演, 演讲] }
+      - { op: event_in_next_hours, source: calendar, max_hours: 12 }
+    intent: work_prep
+    card_skeleton: { hook: 演讲主题 + check, why_now: 12h, evidence: 议程/听众, action: 彩排/设备/Q&A }
+    surprise: m
+    practical: h
+    tier: cold_start_friendly
+
+  - id: preparation_gap_first_visit
+    category: preparation_gap
+    abstract: 第一次去某地点的准备
+    signals: [calendar.event, gps.history_window, world.public_data]
+    trigger:
+      - { op: location_not_in_history, source: calendar.event.location, days: 90 }
+    intent: place_intel
+    card_skeleton: { hook: 首次到访 + 关键信息, why_now: 即将到达, evidence: 地址/营业时间, action: 路线/停车/着装 }
+    surprise: m
+    practical: h
+    tier: cold_start_friendly
+
+  # ----- C. time_buffer_risk(缓冲不足)6 条 -----
+  - id: time_buffer_commute
+    category: time_buffer_risk
+    abstract: 当前位置 + 路况 → 出发就赶不上下一个日程
+    signals: [gps.current, calendar.event, world.transit_status]
+    trigger:
+      - { op: next_event_exists, source: calendar, max_hours: 2 }
+      - { op: eta_exceeds_buffer, source: gps_to_event, threshold_min: 0 }
+    intent: urgent_logistics
+    card_skeleton: { hook: 现在出发也来不及, why_now: ETA 计算, evidence: 距离+路况, action: 改远程/迟到通知/打车 }
+    surprise: l
+    practical: h
+    tier: cold_start_friendly
+
+  - id: time_buffer_weather_delay
+    category: time_buffer_risk
+    abstract: 天气拖累出行时间
+    signals: [world.weather, calendar.event, gps.current]
+    trigger:
+      - { op: weather_disruption, source: world, level: gte_moderate }
+      - { op: event_in_next_hours, source: calendar, max_hours: 3 }
+    intent: urgent_logistics
+    card_skeleton: { hook: 天气影响, why_now: 预报, evidence: 天气+路线, action: 提前出门/换方式 }
+    surprise: m
+    practical: h
+    tier: cold_start_friendly
+
+  - id: time_buffer_transit_disruption
+    category: time_buffer_risk
+    abstract: 公共交通中断影响常规路线
+    signals: [world.transit_status, gps.inferences.commute_route]
+    trigger:
+      - { op: disruption_on_known_route, source: world.transit_status }
+    intent: urgent_logistics
+    card_skeleton: { hook: 你常走的 X 线/路, why_now: 实时中断, evidence: 公告+路线, action: 替代方案 }
+    surprise: h
+    practical: h
+    tier: warmup
+
+  - id: time_buffer_multi_event_squeeze
+    category: time_buffer_risk
+    abstract: 多个事件夹击,中间没缓冲
+    signals: [calendar.event]
+    trigger:
+      - { op: back_to_back_events, source: calendar, gap_min_lte: 5, count_gte: 3 }
+    intent: workload_awareness
+    card_skeleton: { hook: 今天连开 X 场, why_now: 当天, evidence: 日程, action: 取消/合并/提前准备 }
+    surprise: l
+    practical: h
+    tier: cold_start_friendly
+
+  - id: time_buffer_prep_window_closing
+    category: time_buffer_risk
+    abstract: 准备窗口即将关闭
+    signals: [calendar.event]
+    trigger:
+      - { op: deadline_minus_prep, source: calendar, hours_lte: 6 }
+    intent: workload_awareness
+    card_skeleton: { hook: 准备窗口剩 X 小时, why_now: 倒计时, evidence: 当前进度, action: 砍范围/启动 }
+    surprise: m
+    practical: h
+    tier: cold_start_friendly
+
+  - id: time_buffer_pickup_deadline
+    category: time_buffer_risk
+    abstract: 接送类承诺时间紧
+    signals: [calendar.event.personal.family, gps.current]
+    trigger:
+      - { op: pickup_event_in_next_hours, source: calendar, max_hours: 1 }
+      - { op: eta_exceeds_buffer, source: gps_to_event, threshold_min: -10 }
+    intent: urgent_logistics
+    card_skeleton: { hook: 接 X 时间紧, why_now: ETA, evidence: 距离, action: 出门/换接 }
+    surprise: l
+    practical: h
+    tier: cold_start_friendly
+
+  # ----- D. latent_opportunity(顺路/组合)8 条 -----
+  - id: latent_opportunity_expiring_reward_on_route
+    category: latent_opportunity
+    abstract: 即将过期的优惠/积分 + 用户即将路过/到达可用地点
+    signals: [gmail.message.transactional.expiring_rewards, gps.inferences, calendar.event]
+    trigger:
+      - { op: reward_expiring_within_days, source: gmail, max_days: 14 }
+      - { op: usable_location_on_route, source: gps_or_calendar }
+    intent: latent_opportunity
+    card_skeleton: { hook: 三件事拼成一个机会, why_now: 即将过期且顺路, evidence: 邮件+位置+计划, action: 顺便用掉 }
+    surprise: h
+    practical: h
+    tier: warmup
+
+  - id: latent_opportunity_errand_combine
+    category: latent_opportunity
+    abstract: 多个待办在同一区域可串联
+    signals: [chat.history, gps.current, memory.facts]
+    trigger:
+      - { op: open_errand_count_gte, source: memory_or_chat, count: 2 }
+      - { op: errand_location_overlap, threshold_m: 1000 }
+    intent: latent_opportunity
+    card_skeleton: { hook: 几件事在一个区域, why_now: 都没办, evidence: 待办清单+地图, action: 串联建议 }
+    surprise: h
+    practical: h
+    tier: warmup
+
+  - id: latent_opportunity_colleague_proximity
+    category: latent_opportunity
+    abstract: 同事 / 朋友碰巧在附近
+    signals: [calendar.event, gps.current, profile.preferences]
+    trigger:
+      - { op: contact_location_match, source: shared_calendar_or_signal }
+    intent: latent_opportunity
+    card_skeleton: { hook: X 也在附近, why_now: 即时, evidence: 双方位置, action: 顺便见 }
+    surprise: h
+    practical: m
+    tier: mature
+
+  - id: latent_opportunity_specialty_shop_passby
+    category: latent_opportunity
+    abstract: 路过用户感兴趣品类的店
+    signals: [gps.current, profile.preferences, world.public_data]
+    trigger:
+      - { op: nearby_match_interest, source: places, radius_m: 500 }
+      - { op: not_visited_recent, days: 30 }
+    intent: contextual_recommendation
+    card_skeleton: { hook: X 就在 N 米, why_now: 在附近, evidence: 兴趣+位置, action: 顺便逛 }
+    surprise: m
+    practical: m
+    tier: warmup
+
+  - id: latent_opportunity_reservation_window
+    category: latent_opportunity
+    abstract: 计划的活动 + 难订到的窗口出现
+    signals: [memory.facts.recurring_obligations, world.public_data]
+    trigger:
+      - { op: planned_intent_exists, source: memory }
+      - { op: reservation_slot_appears, source: external }
+    intent: opportunity_window
+    card_skeleton: { hook: 你说过想去 X 终于有位, why_now: 窗口短, evidence: 历史意愿+订位状态, action: 立即订 }
+    surprise: h
+    practical: h
+    tier: mature
+
+  - id: latent_opportunity_route_optimization
+    category: latent_opportunity
+    abstract: 当前路线下还能塞进一件小事
+    signals: [gps.current, calendar.event, memory.facts]
+    trigger:
+      - { op: free_time_between_events, source: calendar, min_min: 30 }
+      - { op: errand_on_route, source: memory }
+    intent: latent_opportunity
+    card_skeleton: { hook: 中间空档 + 可顺手, why_now: 时间合适, evidence: 空档+待办, action: 顺手 }
+    surprise: m
+    practical: h
+    tier: warmup
+
+  - id: latent_opportunity_savings_match
+    category: latent_opportunity
+    abstract: 计划中的购买 + 同物当前折扣
+    signals: [chat.history, gmail.message, world.public_data]
+    trigger:
+      - { op: planned_purchase_mentioned, source: chat_or_memory }
+      - { op: current_deal_match, source: external }
+    intent: financial_optimization
+    card_skeleton: { hook: 你说过想买 X 现在打折, why_now: 限时, evidence: 意愿+当前价, action: 是否下单 }
+    surprise: h
+    practical: h
+    tier: mature
+
+  - id: latent_opportunity_detour_worth
+    category: latent_opportunity
+    abstract: 小绕路换大价值
+    signals: [gps.current, calendar.event, world.public_data]
+    trigger:
+      - { op: minor_detour_high_value, threshold_min: 10, value_match: true }
+    intent: latent_opportunity
+    card_skeleton: { hook: 绕 10 分钟可以 X, why_now: 顺路评估, evidence: 距离+价值, action: 是否绕 }
+    surprise: m
+    practical: m
+    tier: warmup
+
+  # ----- E. forgotten_priority(遗忘)8 条 -----
+  - id: forgotten_vip_email
+    category: forgotten_priority
+    abstract: VIP 邮件长时间未回
+    signals: [gmail.message.personal.from_vip]
+    trigger:
+      - { op: unresponded_to_vip, source: gmail, days_gte: 3 }
+    intent: relationship_maintenance
+    card_skeleton: { hook: X 的邮件还没回, why_now: 几天了, evidence: 邮件摘要, action: 起草回复 }
+    surprise: l
+    practical: h
+    tier: cold_start_friendly
+
+  - id: forgotten_repeating_chat_topic
+    category: forgotten_priority
+    abstract: chat 反复提到但一直没动
+    signals: [chat.history]
+    trigger:
+      - { op: topic_mention_count_gte, source: chat, count: 3, no_action: true }
+    intent: latent_priority
+    card_skeleton: { hook: 你提过 N 次的 X, why_now: 又被提起, evidence: chat 上下文, action: 启动/抛弃 }
+    surprise: h
+    practical: h
+    tier: warmup
+
+  - id: forgotten_promised_followup
+    category: forgotten_priority
+    abstract: 答应过但没做的事
+    signals: [chat.history, gmail.message]
+    trigger:
+      - { op: promise_detected_no_close, source: chat_or_gmail, days_gte: 7 }
+    intent: relationship_maintenance
+    card_skeleton: { hook: 你答应 X 的事, why_now: 一周过去, evidence: 原始对话, action: 兑现/坦白 }
+    surprise: h
+    practical: h
+    tier: warmup
+
+  - id: forgotten_birthday_approaching
+    category: forgotten_priority
+    abstract: 重要人生日临近
+    signals: [profile.preferences, memory.facts, gmail.message]
+    trigger:
+      - { op: birthday_within_days, source: contacts_or_memory, days: 7 }
+    intent: relationship_maintenance
+    card_skeleton: { hook: X 生日还有 N 天, why_now: 提前, evidence: 通讯录/历史, action: 礼物/祝福 }
+    surprise: m
+    practical: h
+    tier: cold_start_friendly
+
+  - id: forgotten_subscription_expiry
+    category: forgotten_priority
+    abstract: 订阅服务/会员到期
+    signals: [gmail.message.transactional.deadline_billing]
+    trigger:
+      - { op: subscription_expiring, source: gmail, days_lte: 14 }
+    intent: financial_optimization
+    card_skeleton: { hook: X 订阅到期, why_now: N 天, evidence: 邮件, action: 续/取消评估 }
+    surprise: l
+    practical: h
+    tier: cold_start_friendly
+
+  - id: forgotten_saved_for_later
+    category: forgotten_priority
+    abstract: 收藏/保存的内容太久未看
+    signals: [memory.facts, profile.preferences]
+    trigger:
+      - { op: saved_item_age_gte, source: memory, days: 30 }
+    intent: latent_priority
+    card_skeleton: { hook: 你存了 X 三十天没看, why_now: 该处理, evidence: 收藏来源, action: 看/删 }
+    surprise: m
+    practical: m
+    tier: mature
+
+  - id: forgotten_dormant_thread
+    category: forgotten_priority
+    abstract: 重要 chat 线索沉睡
+    signals: [chat.history, gmail.message]
+    trigger:
+      - { op: vip_thread_dormant, source: chat_or_gmail, days_gte: 60 }
+    intent: relationship_maintenance
+    card_skeleton: { hook: 和 X 上次聊到 Y, why_now: 久没续, evidence: 最后一句, action: 续话 }
+    surprise: h
+    practical: m
+    tier: mature
+
+  - id: forgotten_open_loop_task
+    category: forgotten_priority
+    abstract: 自己设的 todo / open loop 未关
+    signals: [memory.facts, chat.history]
+    trigger:
+      - { op: open_task_age_gte, source: memory, days: 14 }
+    intent: latent_priority
+    card_skeleton: { hook: X 还在 open, why_now: 两周, evidence: 任务源, action: 关闭/继续 }
+    surprise: l
+    practical: m
+    tier: warmup
+
+  # ----- F. rhythm_break(节奏断裂)7 条 -----
+  - id: rhythm_break_commute_deviation
+    category: rhythm_break
+    abstract: 通勤路线异常,可能影响后续
+    signals: [gps.current, gps.inferences.commute_route, calendar.event]
+    trigger:
+      - { op: not_on_known_commute, source: gps, deviation_min_gte: 30 }
+    intent: state_awareness
+    card_skeleton: { hook: 不在惯常路线, why_now: 当前, evidence: 历史路线+现位置, action: 后续日程是否调 }
+    surprise: h
+    practical: h
+    tier: mature
+
+  - id: rhythm_break_workout_streak_risk
+    category: rhythm_break
+    abstract: 健身连胜即将断裂
+    signals: [device.health, calendar.event, gps.inferences]
+    trigger:
+      - { op: streak_at_risk, source: workout_data, streak_days_gte: 3 }
+    intent: habit_maintenance
+    card_skeleton: { hook: 今天没动可能断 N 天, why_now: 当天, evidence: 历史 streak, action: 短训/改时间 }
+    surprise: m
+    practical: m
+    tier: mature
+
+  - id: rhythm_break_sleep_debt
+    category: rhythm_break
+    abstract: 累积睡眠债
+    signals: [device.health]
+    trigger:
+      - { op: cumulative_sleep_deficit, source: device, hours_gte: 4, window_days: 7 }
+    intent: health_awareness
+    card_skeleton: { hook: 这周少睡 N 小时, why_now: 累积, evidence: 睡眠数据, action: 早睡/降负载 }
+    surprise: m
+    practical: h
+    tier: mature
+
+  - id: rhythm_break_screen_time_spike
+    category: rhythm_break
+    abstract: 屏幕时间异常
+    signals: [device.health, device.ambient]
+    trigger:
+      - { op: screen_time_spike, source: device, ratio_gte: 1.5, days: 3 }
+    intent: state_awareness
+    card_skeleton: { hook: 屏幕时间高于均值, why_now: 连续 3 天, evidence: 数据, action: 反思/降低 }
+    surprise: m
+    practical: m
+    tier: mature
+
+  - id: rhythm_break_meal_skip
+    category: rhythm_break
+    abstract: 跳餐节奏出现
+    signals: [gps.history_window, calendar.event]
+    trigger:
+      - { op: no_meal_cluster_at_expected_time, source: gps, days_gte: 2 }
+    intent: health_awareness
+    card_skeleton: { hook: 连续跳餐, why_now: 几天, evidence: 位置模式, action: 简餐建议 }
+    surprise: m
+    practical: m
+    tier: mature
+
+  - id: rhythm_break_weekend_drift
+    category: rhythm_break
+    abstract: 周末常规活动断裂
+    signals: [gps.history_window]
+    trigger:
+      - { op: weekend_cluster_missing_weeks, source: gps, weeks_gte: 3 }
+    intent: state_awareness
+    card_skeleton: { hook: 你常去的 X 三周没去, why_now: 注意到, evidence: 历史 vs 现在, action: 重启或承认放弃 }
+    surprise: h
+    practical: m
+    tier: mature
+
+  - id: rhythm_break_work_hours_drift
+    category: rhythm_break
+    abstract: 工作时长漂移
+    signals: [calendar.event, gps.inferences.office_cluster, device.health]
+    trigger:
+      - { op: work_hour_avg_change, source: combined, ratio_gte: 1.3, window_days: 7 }
+    intent: state_awareness
+    card_skeleton: { hook: 这周工作时长 N 小时, why_now: 7 天均值, evidence: 数据, action: 复盘 }
+    surprise: m
+    practical: m
+    tier: mature
+
+  # ----- G. recovered_context(久违回归)6 条 -----
+  - id: recovered_meaningful_place
+    category: recovered_context
+    abstract: 回到很久没去的有意义地点
+    signals: [gps.current, gps.history_window, memory.facts]
+    trigger:
+      - { op: gps_match_dormant_cluster, source: gps, dormant_days_gte: 30 }
+    intent: memory_recall
+    card_skeleton: { hook: 你回到 X 了, why_now: 当前, evidence: 上次到访时间+情境, action: 沉思/记录 }
+    surprise: h
+    practical: m
+    tier: mature
+
+  - id: recovered_seasonal_event
+    category: recovered_context
+    abstract: 季节性事件即将回归(去年同期发生过)
+    signals: [memory.facts, calendar.event, world.public_data]
+    trigger:
+      - { op: same_period_last_year_event, source: memory_or_calendar }
+    intent: memory_recall
+    card_skeleton: { hook: 去年这时你做了 X, why_now: 同期, evidence: 历史事件, action: 今年是否重复 }
+    surprise: h
+    practical: m
+    tier: mature
+
+  - id: recovered_dormant_skill
+    category: recovered_context
+    abstract: 久没练的技能/兴趣
+    signals: [memory.skills, chat.history, calendar.event]
+    trigger:
+      - { op: skill_practice_dormant, source: memory, days_gte: 60 }
+    intent: growth_revival
+    card_skeleton: { hook: 你已经 N 天没练 X, why_now: 注意到, evidence: 上次练习, action: 重启或舍弃 }
+    surprise: m
+    practical: m
+    tier: mature
+
+  - id: recovered_paused_project
+    category: recovered_context
+    abstract: 暂停的个人/工作项目可以重启
+    signals: [chat.history, memory.facts]
+    trigger:
+      - { op: paused_project_dormant, source: memory, days_gte: 30, recent_relevant_signal: true }
+    intent: growth_revival
+    card_skeleton: { hook: 项目 X 暂停 N 天, why_now: 相关信号出现, evidence: 项目+触发信号, action: 重启评估 }
+    surprise: h
+    practical: m
+    tier: mature
+
+  - id: recovered_old_friend
+    category: recovered_context
+    abstract: 久未联系的老朋友
+    signals: [chat.history, gmail.message, profile.preferences]
+    trigger:
+      - { op: vip_contact_silent, source: chat_or_gmail, days_gte: 90 }
+    intent: relationship_maintenance
+    card_skeleton: { hook: 你和 X 上次联系 90 天前, why_now: 注意到, evidence: 上次对话主题, action: 主动联系 }
+    surprise: m
+    practical: m
+    tier: mature
+
+  - id: recovered_revisit_recommendation
+    category: recovered_context
+    abstract: 久没回的好地方,值得再访
+    signals: [gps.history_window, profile.preferences]
+    trigger:
+      - { op: high_freq_place_now_dormant, source: gps, prior_visits_gte: 10, dormant_days_gte: 90 }
+    intent: contextual_recommendation
+    card_skeleton: { hook: 以前常去的 X 三个月没回, why_now: 注意到, evidence: 历史访问, action: 重访 }
+    surprise: m
+    practical: m
+    tier: mature
+
+  # ----- H. decision_under_constraint(冲突决策)5 条 -----
+  - id: conflict_calendar_double
+    category: decision_under_constraint
+    abstract: 日历双重预订
+    signals: [calendar.event]
+    trigger:
+      - { op: events_time_overlap, source: calendar }
+    intent: conflict_resolution
+    card_skeleton: { hook: 两个事撞了, why_now: 立即, evidence: 双方事件, action: 取消其一/改时 }
+    surprise: l
+    practical: h
+    tier: cold_start_friendly
+
+  - id: conflict_budget_collision
+    category: decision_under_constraint
+    abstract: 多笔大额开销撞期
+    signals: [gmail.message.transactional, chat.history]
+    trigger:
+      - { op: large_expense_collision, source: gmail, window_days: 14 }
+    intent: financial_optimization
+    card_skeleton: { hook: 14 天内 N 笔大开销, why_now: 现金流, evidence: 账单清单, action: 优先级排序 }
+    surprise: m
+    practical: h
+    tier: mature
+
+  - id: conflict_family_work
+    category: decision_under_constraint
+    abstract: 家庭和工作时间打架
+    signals: [calendar.event, profile.static]
+    trigger:
+      - { op: family_event_vs_work, source: calendar, conflict_detected: true }
+    intent: conflict_resolution
+    card_skeleton: { hook: 家庭 X 撞工作 Y, why_now: 决策, evidence: 双方+影响, action: 协商建议 }
+    surprise: m
+    practical: h
+    tier: warmup
+
+  - id: conflict_health_workload
+    category: decision_under_constraint
+    abstract: 高负载工作期 + 健康提醒
+    signals: [calendar.event, device.health]
+    trigger:
+      - { op: high_workload_low_health, combined: true }
+    intent: state_awareness
+    card_skeleton: { hook: 工作高峰 + 健康下滑, why_now: 当周, evidence: 工作量+健康数据, action: 取舍 }
+    surprise: m
+    practical: h
+    tier: mature
+
+  - id: conflict_commitment_overload
+    category: decision_under_constraint
+    abstract: 承诺过载
+    signals: [chat.history, calendar.event, gmail.message]
+    trigger:
+      - { op: open_commitment_count_gte, source: combined, count: 5 }
+    intent: state_awareness
+    card_skeleton: { hook: 你 open 着 N 个承诺, why_now: 累积, evidence: 承诺清单, action: 砍/重排 }
+    surprise: h
+    practical: h
+    tier: mature
+
+  # ----- I. state_transition(状态切换)5 条 -----
+  - id: state_travel_mode_active
+    category: state_transition
+    abstract: 旅行模式启动
+    signals: [gps.current, calendar.event.transit, profile.static]
+    trigger:
+      - { op: travel_mode_inferred, source: combined, dwell_check: true }
+    intent: state_awareness
+    card_skeleton: { hook: 旅行模式启动, why_now: 抵达, evidence: 行程, action: 模式调整/工作降级 }
+    surprise: m
+    practical: m
+    tier: cold_start_friendly
+
+  - id: state_vacation_warmup
+    category: state_transition
+    abstract: 假期前最后工作日
+    signals: [calendar.event, profile.static]
+    trigger:
+      - { op: last_workday_before_vacation, source: calendar }
+    intent: state_awareness
+    card_skeleton: { hook: 假期前最后一天, why_now: 倒计时, evidence: 假期日期, action: 交接/邮件 OOO }
+    surprise: l
+    practical: h
+    tier: cold_start_friendly
+
+  - id: state_illness_recovery
+    category: state_transition
+    abstract: 病后恢复期
+    signals: [device.health, calendar.event, chat.history]
+    trigger:
+      - { op: post_illness_signal, source: combined }
+    intent: state_awareness
+    card_skeleton: { hook: 你刚病过, why_now: 恢复期, evidence: 健康数据, action: 减负/补眠 }
+    surprise: m
+    practical: m
+    tier: mature
+
+  - id: state_high_stress_period
+    category: state_transition
+    abstract: 高压期识别
+    signals: [device.health, calendar.event, chat.history]
+    trigger:
+      - { op: stress_indicators_high, source: combined, days: 5 }
+    intent: state_awareness
+    card_skeleton: { hook: 这周压力指标偏高, why_now: 5 天观察, evidence: 数据, action: 放松/求助 }
+    surprise: m
+    practical: h
+    tier: mature
+
+  - id: state_job_transition
+    category: state_transition
+    abstract: 工作过渡期
+    signals: [profile.static, chat.history, gmail.message]
+    trigger:
+      - { op: job_change_signal, source: combined }
+    intent: state_awareness
+    card_skeleton: { hook: 工作变更期, why_now: 信号, evidence: 邮件/chat, action: 过渡清单 }
+    surprise: m
+    practical: h
+    tier: warmup
+
+  # ----- J. vip_relations(重要关系)7 条 -----
+  - id: vip_spouse_time_gap
+    category: vip_relations
+    abstract: 伴侣相处时间不足
+    signals: [calendar.event, gps.history_window, profile.static]
+    trigger:
+      - { op: couple_quality_time_low, source: combined, window_days: 14 }
+    intent: relationship_maintenance
+    card_skeleton: { hook: 你和伴侣 14 天没专属时间, why_now: 量化, evidence: 日程/位置共现, action: 约会建议 }
+    surprise: h
+    practical: h
+    tier: mature
+
+  - id: vip_parent_checkin
+    category: vip_relations
+    abstract: 父母关心间隔过长
+    signals: [chat.history, gmail.message, profile.static]
+    trigger:
+      - { op: parent_contact_silent, source: combined, days_gte: 21 }
+    intent: relationship_maintenance
+    card_skeleton: { hook: 三周没和爸妈联系, why_now: 间隔, evidence: 上次对话, action: 打电话 }
+    surprise: m
+    practical: h
+    tier: warmup
+
+  - id: vip_child_school_event
+    category: vip_relations
+    abstract: 孩子学校活动
+    signals: [gmail.message, calendar.event, profile.static]
+    trigger:
+      - { op: child_event_in_next_days, source: combined, days: 3 }
+    intent: family_logistics
+    card_skeleton: { hook: 孩子 X 活动还有 N 天, why_now: 提前, evidence: 学校邮件, action: 安排参与 }
+    surprise: l
+    practical: h
+    tier: cold_start_friendly
+
+  - id: vip_mentor_followup
+    category: vip_relations
+    abstract: 与导师 / 重要前辈的 follow up
+    signals: [gmail.message.work.from_mentor, chat.history]
+    trigger:
+      - { op: mentor_meeting_followup_open, source: combined, days_gte: 14 }
+    intent: relationship_maintenance
+    card_skeleton: { hook: 上次和 X 聊到 Y 还没 follow up, why_now: 两周, evidence: 上次对话, action: 续 }
+    surprise: m
+    practical: h
+    tier: mature
+
+  - id: vip_friend_milestone
+    category: vip_relations
+    abstract: 密友的人生里程碑
+    signals: [gmail.message, chat.history, profile.preferences]
+    trigger:
+      - { op: friend_milestone_detected, source: combined }
+    intent: relationship_maintenance
+    card_skeleton: { hook: X 有新的里程碑, why_now: 即时, evidence: 来源, action: 祝贺/送礼 }
+    surprise: h
+    practical: m
+    tier: mature
+
+  - id: vip_silent_friend_distress
+    category: vip_relations
+    abstract: 朋友长时间沉默,可能需要关心
+    signals: [chat.history, gmail.message]
+    trigger:
+      - { op: prev_active_friend_silent, source: combined, days_gte: 30 }
+    intent: relationship_maintenance
+    card_skeleton: { hook: X 突然沉默, why_now: 异常, evidence: 历史频率, action: 主动问候 }
+    surprise: h
+    practical: m
+    tier: mature
+
+  - id: vip_anniversary_approaching
+    category: vip_relations
+    abstract: 纪念日临近
+    signals: [memory.facts, profile.static]
+    trigger:
+      - { op: anniversary_within_days, source: memory, days: 14 }
+    intent: relationship_maintenance
+    card_skeleton: { hook: X 纪念日还有 N 天, why_now: 提前, evidence: 纪念日来源, action: 准备/预订 }
+    surprise: m
+    practical: h
+    tier: cold_start_friendly
+
+  # ----- K. health(健康)7 条 -----
+  - id: health_medical_followup_due
+    category: health
+    abstract: 复诊/体检到期
+    signals: [memory.facts, gmail.message, calendar.event]
+    trigger:
+      - { op: annual_checkup_overdue, source: memory_or_gmail }
+    intent: health_care_prep
+    card_skeleton: { hook: 去年这时的体检, why_now: 一年过去, evidence: 上次报告, action: 预约 }
+    surprise: m
+    practical: h
+    tier: warmup
+
+  - id: health_hydration_low
+    category: health
+    abstract: 水分摄入不足
+    signals: [device.health]
+    trigger:
+      - { op: hydration_below_target, source: device, days: 2 }
+    intent: health_awareness
+    card_skeleton: { hook: 喝水不足, why_now: 两天, evidence: 数据, action: 喝一杯 }
+    surprise: l
+    practical: m
+    tier: mature
+
+  - id: health_inactive_too_long
+    category: health
+    abstract: 久坐
+    signals: [device.health, device.ambient]
+    trigger:
+      - { op: continuous_inactive_min, source: device, threshold: 90 }
+    intent: health_awareness
+    card_skeleton: { hook: 坐了 N 分钟, why_now: 实时, evidence: 静止时间, action: 起来活动 }
+    surprise: l
+    practical: m
+    tier: warmup
+
+  - id: health_medication_reminder
+    category: health
+    abstract: 用药提醒
+    signals: [memory.facts, calendar.event]
+    trigger:
+      - { op: scheduled_medication_due, source: memory }
+    intent: health_care_prep
+    card_skeleton: { hook: X 用药时间, why_now: 实时, evidence: 用药计划, action: 服用 }
+    surprise: l
+    practical: h
+    tier: warmup
+
+  - id: health_seasonal_allergy_warning
+    category: health
+    abstract: 季节性过敏预警
+    signals: [memory.facts, world.weather, gps.current]
+    trigger:
+      - { op: allergy_season_match, source: memory_and_weather }
+    intent: health_awareness
+    card_skeleton: { hook: X 季节临近, why_now: 提前, evidence: 历史过敏+预报, action: 备药/避免 }
+    surprise: h
+    practical: h
+    tier: mature
+
+  - id: health_mood_low_detected
+    category: health
+    abstract: 情绪低落探测
+    signals: [chat.history, device.health, device.ambient]
+    trigger:
+      - { op: mood_indicators_low, source: combined, days: 3 }
+    intent: state_awareness
+    card_skeleton: { hook: 最近状态偏低, why_now: 多源, evidence: 模糊摘要, action: 关怀/活动 }
+    surprise: m
+    practical: m
+    tier: mature
+
+  - id: health_overuse_warning
+    category: health
+    abstract: 某种使用过度(咖啡因/酒/屏幕)
+    signals: [device.health, gmail.message.transactional.receipt, gps.current]
+    trigger:
+      - { op: usage_above_baseline, source: combined, ratio_gte: 1.5 }
+    intent: health_awareness
+    card_skeleton: { hook: X 用量高于均值, why_now: 数据, evidence: 来源, action: 节制 }
+    surprise: m
+    practical: m
+    tier: mature
+
+  # ----- L. financial(金钱)6 条 -----
+  - id: financial_expiring_rewards
+    category: financial
+    abstract: 积分/里程到期
+    signals: [gmail.message.transactional.expiring_rewards]
+    trigger:
+      - { op: rewards_expiring_within_days, source: gmail, days: 30 }
+    intent: financial_optimization
+    card_skeleton: { hook: X 积分 N 天到期, why_now: 倒计时, evidence: 邮件, action: 兑换建议 }
+    surprise: l
+    practical: h
+    tier: cold_start_friendly
+
+  - id: financial_subscription_audit
+    category: financial
+    abstract: 订阅审计
+    signals: [gmail.message.transactional]
+    trigger:
+      - { op: subscription_audit_due, source: gmail, days_lookback: 90 }
+    intent: financial_optimization
+    card_skeleton: { hook: 你有 N 个订阅, why_now: 季度, evidence: 列表+金额, action: 取消评估 }
+    surprise: m
+    practical: h
+    tier: warmup
+
+  - id: financial_unusual_spending
+    category: financial
+    abstract: 异常消费模式
+    signals: [gmail.message.transactional.receipt]
+    trigger:
+      - { op: spending_anomaly, source: gmail, std_gte: 2 }
+    intent: financial_optimization
+    card_skeleton: { hook: 这周消费 X 异常, why_now: 数据, evidence: 历史均值, action: 复盘 }
+    surprise: m
+    practical: m
+    tier: mature
+
+  - id: financial_deadline_billing
+    category: financial
+    abstract: 财务截止日临近
+    signals: [gmail.message.transactional.deadline_billing]
+    trigger:
+      - { op: bill_due_within_days, source: gmail, days: 3 }
+    intent: financial_optimization
+    card_skeleton: { hook: X 账单 N 天到期, why_now: 倒计时, evidence: 邮件, action: 缴费 }
+    surprise: l
+    practical: h
+    tier: cold_start_friendly
+
+  - id: financial_savings_goal_progress
+    category: financial
+    abstract: 储蓄/财务目标进度
+    signals: [memory.facts, gmail.message.transactional]
+    trigger:
+      - { op: monthly_goal_progress_check, source: memory_and_gmail }
+    intent: financial_optimization
+    card_skeleton: { hook: 月目标进度 X%, why_now: 月中, evidence: 收支, action: 调整 }
+    surprise: m
+    practical: m
+    tier: mature
+
+  - id: financial_better_price_alert
+    category: financial
+    abstract: 同类商品更低价
+    signals: [memory.facts, gmail.message.transactional.receipt, world.public_data]
+    trigger:
+      - { op: better_price_for_recent_purchase, source: combined }
+    intent: financial_optimization
+    card_skeleton: { hook: 你刚买的 X 现在更便宜, why_now: 价差, evidence: 双向价, action: 申请价保 }
+    surprise: h
+    practical: h
+    tier: mature
+
+  # ----- M. growth(学习成长)5 条 -----
+  - id: growth_course_stalled
+    category: growth
+    abstract: 在线课程停滞
+    signals: [gmail.message, chat.history, memory.facts]
+    trigger:
+      - { op: course_progress_stalled, source: combined, days_gte: 14 }
+    intent: growth_revival
+    card_skeleton: { hook: 课程 X 停在 N%, why_now: 两周, evidence: 进度, action: 重启/放弃 }
+    surprise: m
+    practical: m
+    tier: mature
+
+  - id: growth_book_progress_stalled
+    category: growth
+    abstract: 阅读停滞
+    signals: [memory.facts, chat.history]
+    trigger:
+      - { op: book_progress_stalled, source: combined, days_gte: 21 }
+    intent: growth_revival
+    card_skeleton: { hook: 书 X 没动 N 天, why_now: 三周, evidence: 进度, action: 续读 or 换 }
+    surprise: m
+    practical: m
+    tier: mature
+
+  - id: growth_skill_practice_due
+    category: growth
+    abstract: 技能练习节奏到点
+    signals: [memory.skills, calendar.event]
+    trigger:
+      - { op: skill_practice_due, source: memory }
+    intent: growth_revival
+    card_skeleton: { hook: X 技能练习, why_now: 节奏, evidence: 上次练习, action: 安排 }
+    surprise: l
+    practical: m
+    tier: warmup
+
+  - id: growth_event_match
+    category: growth
+    abstract: 会议/活动匹配兴趣
+    signals: [profile.preferences, world.public_data, gps.current]
+    trigger:
+      - { op: event_match_interest, source: combined }
+    intent: opportunity_window
+    card_skeleton: { hook: X 活动符合你兴趣, why_now: 报名窗口, evidence: 兴趣+活动, action: 报名 }
+    surprise: h
+    practical: m
+    tier: warmup
+
+  - id: growth_reading_match
+    category: growth
+    abstract: 推荐内容匹配当前关注
+    signals: [chat.history, profile.preferences, world.public_data]
+    trigger:
+      - { op: content_match_recent_topics, source: combined }
+    intent: contextual_recommendation
+    card_skeleton: { hook: 你最近聊 X, 推荐 Y, why_now: 主题契合, evidence: 来源+主题, action: 读/收藏 }
+    surprise: h
+    practical: m
+    tier: warmup
+
+  # ----- N. contextual_recommendation(情境推荐)6 条 -----
+  - id: ctx_first_neighborhood
+    category: contextual_recommendation
+    abstract: 第一次到某区域,给探索建议
+    signals: [gps.current, world.public_data, profile.preferences]
+    trigger:
+      - { op: location_not_in_history, source: gps, days: 90 }
+      - { op: dwell_min_gte, source: gps, min: 15 }
+    intent: place_intel
+    card_skeleton: { hook: 第一次到 X, why_now: 在附近, evidence: 历史无访问, action: 附近推荐 }
+    surprise: h
+    practical: h
+    tier: cold_start_friendly
+
+  - id: ctx_weather_outdoor_window
+    category: contextual_recommendation
+    abstract: 难得的好天气户外窗口
+    signals: [world.weather, profile.preferences, calendar.event]
+    trigger:
+      - { op: outdoor_friendly_window, source: weather, scarcity: high }
+      - { op: free_time_in_window, source: calendar }
+    intent: opportunity_window
+    card_skeleton: { hook: 这周唯一好天气, why_now: 稀缺, evidence: 预报+空闲, action: 户外活动 }
+    surprise: m
+    practical: h
+    tier: cold_start_friendly
+
+  - id: ctx_quiet_hour_deep_work
+    category: contextual_recommendation
+    abstract: 当前是深度工作时段
+    signals: [calendar.event, device.ambient, gps.current]
+    trigger:
+      - { op: long_free_block, source: calendar, min_h: 2 }
+      - { op: low_distraction_env, source: ambient }
+    intent: state_awareness
+    card_skeleton: { hook: 你有 2h 不被打扰, why_now: 当前, evidence: 日程+环境, action: 深度任务建议 }
+    surprise: m
+    practical: h
+    tier: warmup
+
+  - id: ctx_break_recommended
+    category: contextual_recommendation
+    abstract: 该休息了
+    signals: [device.health, calendar.event]
+    trigger:
+      - { op: continuous_work_min, source: combined, threshold: 120 }
+    intent: state_awareness
+    card_skeleton: { hook: 已连续 N 分钟, why_now: 实时, evidence: 工作时长, action: 短休 }
+    surprise: l
+    practical: m
+    tier: warmup
+
+  - id: ctx_food_decision_assist
+    category: contextual_recommendation
+    abstract: 当下吃什么帮忙
+    signals: [gps.current, profile.preferences, gps.history_window]
+    trigger:
+      - { op: meal_window_now, source: combined }
+      - { op: user_signal_indecision, source: chat_or_recent_search }
+    intent: contextual_recommendation
+    card_skeleton: { hook: 附近你喜欢的 X 类店, why_now: 用餐窗口, evidence: 兴趣+历史, action: 推荐 N 家 }
+    surprise: m
+    practical: m
+    tier: warmup
+
+  - id: ctx_nearby_new_place
+    category: contextual_recommendation
+    abstract: 附近有新去处
+    signals: [gps.current, world.public_data, profile.preferences]
+    trigger:
+      - { op: nearby_new_place_match, source: combined }
+    intent: contextual_recommendation
+    card_skeleton: { hook: 附近开了 X, why_now: 在附近, evidence: 兴趣+位置, action: 顺便看 }
+    surprise: m
+    practical: m
+    tier: warmup
+
+  # ----- O. opportunity_window(机会窗口)5 条 -----
+  - id: opp_limited_time_match
+    category: opportunity_window
+    abstract: 限时优惠匹配兴趣
+    signals: [profile.preferences, gmail.message, world.public_data]
+    trigger:
+      - { op: time_limited_offer_match_interest, source: combined }
+    intent: opportunity_window
+    card_skeleton: { hook: X 限时, why_now: 倒计时, evidence: 兴趣+优惠, action: 是否拿 }
+    surprise: m
+    practical: m
+    tier: cold_start_friendly
+
+  - id: opp_social_gathering_possible
+    category: opportunity_window
+    abstract: 可促成的聚会窗口
+    signals: [calendar.event, chat.history, gps.current]
+    trigger:
+      - { op: mutual_free_window, source: combined, friends_gte: 2 }
+    intent: opportunity_window
+    card_skeleton: { hook: X 和 Y 都有空, why_now: 共同窗口, evidence: 三方空闲, action: 发起聚会 }
+    surprise: h
+    practical: m
+    tier: mature
+
+  - id: opp_outdoor_window
+    category: opportunity_window
+    abstract: 户外活动窗口
+    signals: [world.weather, calendar.event, profile.preferences]
+    trigger:
+      - { op: weather_good_and_free, source: combined, window_min_h: 3 }
+    intent: opportunity_window
+    card_skeleton: { hook: 天气+空闲匹配, why_now: 当天, evidence: 双条件, action: 户外建议 }
+    surprise: m
+    practical: m
+    tier: cold_start_friendly
+
+  - id: opp_networking_event
+    category: opportunity_window
+    abstract: 行业 networking 机会
+    signals: [world.public_data, profile.static, gps.current]
+    trigger:
+      - { op: industry_event_nearby, source: combined }
+    intent: opportunity_window
+    card_skeleton: { hook: X 行业活动这周, why_now: 限时, evidence: 行业+位置, action: 报名 }
+    surprise: m
+    practical: m
+    tier: warmup
+
+  - id: opp_seasonal_match
+    category: opportunity_window
+    abstract: 季节性机会(滑雪/赏花/演唱会季)
+    signals: [profile.preferences, world.public_data]
+    trigger:
+      - { op: seasonal_interest_match, source: combined }
+    intent: opportunity_window
+    card_skeleton: { hook: X 季开始, why_now: 季节, evidence: 兴趣+季节, action: 规划 }
+    surprise: m
+    practical: m
+    tier: warmup
+
+  # ----- P. reflection(复盘)4 条 -----
+  - id: reflection_week
+    category: reflection
+    abstract: 周复盘
+    signals: [calendar.event, chat.history, device.health]
+    trigger:
+      - { op: weekend_reflection_window, source: time }
+    intent: reflection
+    card_skeleton: { hook: 这周回顾, why_now: 周末, evidence: 关键事件, action: 三问反思 }
+    surprise: l
+    practical: m
+    tier: warmup
+
+  - id: reflection_month
+    category: reflection
+    abstract: 月复盘
+    signals: [calendar.event, chat.history, gmail.message]
+    trigger:
+      - { op: month_end_window, source: time }
+    intent: reflection
+    card_skeleton: { hook: 这月回顾, why_now: 月末, evidence: 关键事件, action: 总结+下月 }
+    surprise: l
+    practical: m
+    tier: warmup
+
+  - id: reflection_post_event
+    category: reflection
+    abstract: 重要事件后的复盘
+    signals: [calendar.event, chat.history]
+    trigger:
+      - { op: significant_event_completed, source: calendar }
+    intent: reflection
+    card_skeleton: { hook: X 刚结束, why_now: 事件后, evidence: 事件细节, action: 三问反思 }
+    surprise: m
+    practical: m
+    tier: warmup
+
+  - id: reflection_trip_memory
+    category: reflection
+    abstract: 旅行后记忆梳理
+    signals: [gps.history_window, calendar.event, gmail.message]
+    trigger:
+      - { op: post_trip_return, source: gps_and_calendar }
+    intent: reflection
+    card_skeleton: { hook: 你刚回来, why_now: 旅行后, evidence: 旅行轨迹, action: 整理照片/总结 }
+    surprise: m
+    practical: m
+    tier: mature
+
+  # ----- Q. warning(预警)4 条 -----
+  - id: warn_silent_deadline
+    category: warning
+    abstract: 截止日临近但无任何相关动作
+    signals: [calendar.event, gmail.message, chat.history]
+    trigger:
+      - { op: deadline_near_no_action, source: combined, days_lte: 3 }
+    intent: workload_awareness
+    card_skeleton: { hook: X 还有 N 天但无动作, why_now: 倒计时, evidence: deadline+缺失动作, action: 启动 }
+    surprise: m
+    practical: h
+    tier: warmup
+
+  - id: warn_pet_plant_neglect
+    category: warning
+    abstract: 宠物/植物照料周期到
+    signals: [memory.facts, calendar.event]
+    trigger:
+      - { op: care_cycle_overdue, source: memory }
+    intent: routine_assistance
+    card_skeleton: { hook: X 该照料, why_now: 周期到, evidence: 上次, action: 立即做 }
+    surprise: l
+    practical: h
+    tier: warmup
+
+  - id: warn_device_low_battery_critical
+    category: warning
+    abstract: 关键设备低电
+    signals: [device.health, calendar.event]
+    trigger:
+      - { op: critical_device_low_before_event, source: combined }
+    intent: urgent_logistics
+    card_skeleton: { hook: 手机/笔电 N% 但有 X 事, why_now: 实时, evidence: 电量+日程, action: 充电 }
+    surprise: l
+    practical: h
+    tier: warmup
+
+  - id: warn_backup_overdue
+    category: warning
+    abstract: 备份/同步过期
+    signals: [memory.facts, gmail.message]
+    trigger:
+      - { op: backup_overdue, source: memory_or_gmail }
+    intent: routine_assistance
+    card_skeleton: { hook: 上次备份 N 天前, why_now: 风险, evidence: 备份日期, action: 现在备份 }
+    surprise: l
+    practical: m
+    tier: warmup
+
+  # ----- R. energy_management(能量管理)3 条 -----
+  - id: energy_high_morning_match
+    category: energy_management
+    abstract: 早上高能时段匹配深度任务
+    signals: [device.health, calendar.event, memory.facts]
+    trigger:
+      - { op: high_energy_window_inferred, source: combined, period: morning }
+      - { op: deep_task_available, source: memory }
+    intent: state_awareness
+    card_skeleton: { hook: 你早上高能 + 有深度任务, why_now: 当下, evidence: 节律+任务, action: 现在做 }
+    surprise: h
+    practical: h
+    tier: mature
+
+  - id: energy_low_simple_task
+    category: energy_management
+    abstract: 低能时段匹配简单任务
+    signals: [device.health, calendar.event, memory.facts]
+    trigger:
+      - { op: low_energy_window_inferred, source: combined }
+      - { op: simple_task_available, source: memory }
+    intent: state_awareness
+    card_skeleton: { hook: 现在低能 + 有 X 简单事, why_now: 当下, evidence: 节律+任务, action: 顺手做 }
+    surprise: m
+    practical: m
+    tier: mature
+
+  - id: energy_weekend_recharge
+    category: energy_management
+    abstract: 周末充电建议
+    signals: [device.health, calendar.event]
+    trigger:
+      - { op: low_recovery_score, source: device, window_days: 5 }
+      - { op: weekend_window, source: time }
+    intent: state_awareness
+    card_skeleton: { hook: 这周身体负值, why_now: 周末窗口, evidence: 健康数据, action: 充电建议 }
+    surprise: m
+    practical: h
+    tier: mature

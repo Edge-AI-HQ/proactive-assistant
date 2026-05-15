@@ -95,6 +95,9 @@ docs/*
 !docs/modules/**
 !docs/plans/
 !docs/plans/**
+# Pattern library SSOT — seeded into pai_card_patterns by scripts/seed_patterns.py.
+!docs/data/
+!docs/data/**
 
 # Payment module specific
 apps/master-bot-api/.env
