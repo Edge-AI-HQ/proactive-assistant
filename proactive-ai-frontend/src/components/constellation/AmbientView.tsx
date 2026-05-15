@@ -15,6 +15,10 @@ import {
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { useAmbientTimeline } from "@/hooks/useAmbientTimeline";
 import { ALL_SOURCE_KEYS, type SourceKey } from "@/services/ambient/keys";
+import {
+  getPersistedAmbientEnabled,
+  setPersistedAmbientEnabled,
+} from "@/services/ambient/enabled-state";
 import type { AmbientPrivacy, AmbientTimelineEvent } from "@/services/ambient/timeline";
 import type { RuntimeStatus } from "@/services/ambient";
 
@@ -308,6 +312,9 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
   const { settings, patch } = useUserSettings();
   const ambientTimeline = useAmbientTimeline();
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
+  const [persistedAmbientOn, setPersistedAmbientOn] = useState(() =>
+    getPersistedAmbientEnabled(),
+  );
   const [togglePending, setTogglePending] = useState(false);
   const [liveIndex, setLiveIndex] = useState(0);
   const [view, setView] = useState<"timeline" | "devices">("timeline");
@@ -326,7 +333,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
   const runtimeOn = runtimeStatus
     ? runtimeStatus.sources.some((s) => s.enabled)
     : false;
-  const ambientOn = consentOn ?? runtimeOn;
+  const ambientOn = persistedAmbientOn || (consentOn ?? runtimeOn);
   const uploadsLocked = runtimeStatus?.uploadsLocked ?? false;
   const firstSourceError =
     runtimeStatus?.sources.find((s) => s.lastError)?.lastError ?? null;
@@ -399,6 +406,8 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
         ALL_SOURCE_KEYS.map((key) => [key, { enabled: next }]),
       );
       const updated = await patch({ ambientSources: consentPatch });
+      setPersistedAmbientEnabled(next);
+      setPersistedAmbientOn(next);
       if (!isNative) return;
       const lifecycle = await import("@/services/ambient/lifecycle");
       if (next) {
@@ -407,7 +416,9 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
               .filter(([, v]) => v?.enabled === true)
               .map(([k]) => k as SourceKey))
           : ALL_SOURCE_KEYS;
-        lifecycle.startAmbientUpload({ enabledSources });
+        lifecycle.startAmbientUpload({
+          enabledSources: enabledSources.length > 0 ? enabledSources : ALL_SOURCE_KEYS,
+        });
       } else {
         await lifecycle.stopAmbientUpload();
       }
