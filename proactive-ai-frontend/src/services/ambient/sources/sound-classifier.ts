@@ -24,6 +24,8 @@ const TRANSCRIPT_SALIENCE = 0.7;
 const TRANSCRIPT_CONFIDENCE = 0.75;
 const SPEECH_LABEL = "speech";
 const INTENTIONAL_SUPPRESSION_REASONS = new Set(["media", "playback"]);
+const UNHEALTHY_ENGINE_STATES = new Set(["failed", "stale", "suspended"]);
+const CLASSIFICATION_STALE_MS = 15_000;
 
 /**
  * Wraps the SoundClassifier native plugin shipped via
@@ -101,14 +103,23 @@ export class SoundClassifierSource implements AmbientSource {
       return;
     }
 
-    if (state.running && state.classificationRunning && state.engineRunning !== false) {
+    const analyzerUnhealthy = state.engineState !== undefined
+      && UNHEALTHY_ENGINE_STATES.has(state.engineState);
+    const classificationsStale = isClassificationStale(state.lastClassificationAt);
+    if (
+      state.running
+      && state.classificationRunning
+      && state.engineRunning !== false
+      && !analyzerUnhealthy
+      && !classificationsStale
+    ) {
       return;
     }
 
-    if (!state.running || state.engineRunning === false) {
+    if (!state.running || state.engineRunning === false || analyzerUnhealthy || classificationsStale) {
       await AmbientAi.audio.startCapture();
     }
-    if (!state.classificationRunning || state.engineRunning === false) {
+    if (!state.classificationRunning || state.engineRunning === false || analyzerUnhealthy || classificationsStale) {
       await AmbientAi.sound.startClassification();
     }
 
@@ -121,6 +132,12 @@ export class SoundClassifierSource implements AmbientSource {
     }
     if (nextState.engineRunning === false && !nextState.suppressed) {
       throw new Error("sound classifier engine not running");
+    }
+    if (nextState.engineState && UNHEALTHY_ENGINE_STATES.has(nextState.engineState)) {
+      throw new Error(`sound classifier engine ${nextState.engineState}`);
+    }
+    if (isClassificationStale(nextState.lastClassificationAt)) {
+      throw new Error("sound classifier classifications stale");
     }
   }
 
@@ -150,6 +167,7 @@ export class SoundClassifierSource implements AmbientSource {
     if (typeof event.segmentIndex === "number") {
       payload.segmentIndex = event.segmentIndex;
     }
+    if (event.triggerSource) payload.triggerSource = event.triggerSource;
 
     this.ctx.push({
       kind: "session_summary",
@@ -201,4 +219,9 @@ export class SoundClassifierSource implements AmbientSource {
     this.transcriptListenerHandle = null;
     await Promise.all(handles.map((handle) => handle.remove()));
   }
+}
+
+function isClassificationStale(lastClassificationAt: number | undefined): boolean {
+  return typeof lastClassificationAt === "number"
+    && Date.now() - lastClassificationAt > CLASSIFICATION_STALE_MS;
 }

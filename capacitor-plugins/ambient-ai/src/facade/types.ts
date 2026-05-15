@@ -106,6 +106,11 @@ export interface AudioState {
   suppressed: boolean;
   classificationRunning?: boolean;
   engineRunning?: boolean;
+  capturePipelineRunning?: boolean;
+  engineState?: 'stopped' | 'starting' | 'healthy' | 'stale' | 'failed' | 'suspended' | 'suppressed' | 'restarting';
+  lastClassificationAt?: number;
+  lastAudioError?: string;
+  classifierRestartCount?: number;
   suppressedReason?: 'media' | 'playback' | 'interruption';
 }
 
@@ -113,6 +118,7 @@ export interface SpeechBurstEvent {
   confidence: number;
   durationMs: number;
   timestamp: number;
+  triggerSource?: 'sound_analysis' | 'audio_vad_fallback' | string;
 }
 
 export interface TranscriptDraftEvent {
@@ -124,6 +130,7 @@ export interface TranscriptDraftEvent {
   capturedAt: string;
   durationMs: number;
   transcriptLocale?: string;
+  triggerSource?: string;
 }
 
 export interface TranscriptRefinedEvent {
@@ -136,6 +143,7 @@ export interface TranscriptRefinedEvent {
   provider: TranscriptProvider;
   localProvider?: LocalSpeechProvider;
   transcriptLocale?: string;
+  triggerSource?: string;
 }
 
 export interface TranscriptReadyEvent {
@@ -151,6 +159,7 @@ export interface TranscriptReadyEvent {
   localProvider?: LocalSpeechProvider;
   segmentIndex?: number;
   transcriptLocale?: string;
+  triggerSource?: string;
 }
 
 export interface AudioErrorEvent {

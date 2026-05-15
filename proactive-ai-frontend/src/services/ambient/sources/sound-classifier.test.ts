@@ -58,6 +58,7 @@ describe("SoundClassifierSource transcript ingest", () => {
       fallback: false,
       localProvider: "sfspeech",
       segmentIndex: 2,
+      triggerSource: "audio_vad_fallback",
     });
 
     expect(pushed).toEqual([
@@ -76,6 +77,7 @@ describe("SoundClassifierSource transcript ingest", () => {
           fallback: false,
           localProvider: "sfspeech",
           segmentIndex: 2,
+          triggerSource: "audio_vad_fallback",
         },
         salience: 0.7,
         confidence: 0.75,
@@ -242,5 +244,70 @@ describe("SoundClassifierSource transcript ingest", () => {
       });
 
     await expect(source.refresh()).rejects.toThrow("sound classifier engine not running");
+  });
+
+  test("refresh reports an error when native state stays failed despite engineRunning true", async () => {
+    const ctx: SourceContext = {
+      push: vi.fn(),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+    await source.start();
+    vi.clearAllMocks();
+    ambientAiMock.audio.getState
+      .mockResolvedValueOnce({
+        running: true,
+        paused: false,
+        capturing: false,
+        suppressed: false,
+        classificationRunning: true,
+        engineRunning: true,
+        engineState: "failed",
+      })
+      .mockResolvedValueOnce({
+        running: true,
+        paused: false,
+        capturing: false,
+        suppressed: false,
+        classificationRunning: true,
+        engineRunning: true,
+        engineState: "failed",
+      });
+
+    await expect(source.refresh()).rejects.toThrow("sound classifier engine failed");
+  });
+
+  test("refresh reports an error when classifications stay stale despite engineRunning true", async () => {
+    const ctx: SourceContext = {
+      push: vi.fn(),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+    await source.start();
+    vi.clearAllMocks();
+    vi.spyOn(Date, "now").mockReturnValue(1_777_000_030_000);
+    ambientAiMock.audio.getState
+      .mockResolvedValueOnce({
+        running: true,
+        paused: false,
+        capturing: false,
+        suppressed: false,
+        classificationRunning: true,
+        engineRunning: true,
+        engineState: "healthy",
+        lastClassificationAt: 1_777_000_000_000,
+      })
+      .mockResolvedValueOnce({
+        running: true,
+        paused: false,
+        capturing: false,
+        suppressed: false,
+        classificationRunning: true,
+        engineRunning: true,
+        engineState: "healthy",
+        lastClassificationAt: 1_777_000_000_000,
+      });
+
+    await expect(source.refresh()).rejects.toThrow("sound classifier classifications stale");
   });
 });

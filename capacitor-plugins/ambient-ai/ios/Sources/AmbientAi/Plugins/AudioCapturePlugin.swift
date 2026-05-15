@@ -2,6 +2,7 @@ import AVFoundation
 @preconcurrency import Capacitor
 import Foundation
 import Speech
+import UIKit
 
 @objc(AudioCapturePlugin)
 public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDelegate {
@@ -30,6 +31,23 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
         }
     ))
     private var playbackPlayer: AVAudioPlayer?
+    private var appActiveObserver: NSObjectProtocol?
+
+    public override func load() {
+        appActiveObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { await self?.audioManager.recoverClassifierIfNeeded(reason: "appDidBecomeActive") }
+        }
+    }
+
+    deinit {
+        if let appActiveObserver {
+            NotificationCenter.default.removeObserver(appActiveObserver)
+        }
+    }
 
     // MARK: - Permissions
 
@@ -114,6 +132,9 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
                 "capturing": false,
                 "classificationRunning": false,
                 "engineRunning": false,
+                "capturePipelineRunning": false,
+                "engineState": AudioEngineState.stopped.rawValue,
+                "classifierRestartCount": 0,
                 "suppressed": false,
             ]
             DispatchQueue.main.async {

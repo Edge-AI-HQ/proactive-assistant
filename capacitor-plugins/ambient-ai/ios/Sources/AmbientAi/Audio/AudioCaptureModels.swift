@@ -11,6 +11,17 @@ enum AudioTranscriptProvider: String {
     case cloudWhisper = "cloud_whisper"
 }
 
+enum AudioEngineState: String {
+    case stopped
+    case starting
+    case healthy
+    case stale
+    case failed
+    case suspended
+    case suppressed
+    case restarting
+}
+
 enum AudioLocalSpeechProvider: String {
     case sfSpeech = "sfspeech"
 }
@@ -21,6 +32,11 @@ struct AudioCaptureSnapshot {
     let capturing: Bool
     let classificationRunning: Bool
     let engineRunning: Bool
+    let capturePipelineRunning: Bool
+    let engineState: AudioEngineState
+    let lastClassificationAt: Date?
+    let lastAudioError: String?
+    let classifierRestartCount: Int
     let suppressedReason: AudioSuppressedReason?
 
     var payload: [String: Any] {
@@ -31,7 +47,16 @@ struct AudioCaptureSnapshot {
             "suppressed": suppressedReason != nil,
             "classificationRunning": classificationRunning,
             "engineRunning": engineRunning,
+            "capturePipelineRunning": capturePipelineRunning,
+            "engineState": engineState.rawValue,
+            "classifierRestartCount": classifierRestartCount,
         ]
+        if let lastClassificationAt {
+            data["lastClassificationAt"] = Int(lastClassificationAt.timeIntervalSince1970 * 1_000)
+        }
+        if let lastAudioError {
+            data["lastAudioError"] = lastAudioError
+        }
         if let suppressedReason {
             data["suppressedReason"] = suppressedReason.rawValue
         }
@@ -78,6 +103,7 @@ struct TranscriptReadyRecord {
     let fallback: Bool
     let localProvider: AudioLocalSpeechProvider?
     let segmentIndex: Int?
+    let triggerSource: String?
     let transcriptLocale: String?
 
     var payload: [String: Any] {
@@ -97,6 +123,9 @@ struct TranscriptReadyRecord {
         }
         if let segmentIndex {
             data["segmentIndex"] = segmentIndex
+        }
+        if let triggerSource {
+            data["triggerSource"] = triggerSource
         }
         if let transcriptLocale {
             data["transcriptLocale"] = transcriptLocale

@@ -54,10 +54,10 @@ export class HealthConnectAdapter extends EventEmitter implements HealthConnectP
       throw new Error('HealthKit not available on this device');
     }
 
-    await this.readAndEmit();
+    await this.readAndEmit(false);
     if (this.intervalId !== null) return;
     this.intervalId = setInterval(() => {
-      void this.readAndEmit();
+      void this.readAndEmit(true);
     }, POLL_INTERVAL_MS);
   }
 
@@ -68,12 +68,25 @@ export class HealthConnectAdapter extends EventEmitter implements HealthConnectP
     }
   }
 
-  private async readAndEmit(): Promise<void> {
-    await Promise.all([
+  private async readAndEmit(swallowUnexpected: boolean): Promise<void> {
+    const results = await Promise.allSettled([
       this.readSteps(),
       this.readLastSleep(),
       this.readHeartRate(),
     ]);
+    let unexpectedError: unknown;
+    for (const result of results) {
+      if (result.status === 'fulfilled') continue;
+      if (isProtectedHealthDataError(result.reason)) {
+        console.debug('[HealthConnect] locked_protected_data', result.reason);
+        continue;
+      }
+      console.warn('[HealthConnect] read failed', result.reason);
+      unexpectedError ??= result.reason;
+    }
+    if (unexpectedError && !swallowUnexpected) {
+      throw unexpectedError;
+    }
   }
 
   private async readSteps(): Promise<void> {
@@ -138,4 +151,9 @@ function sumSamples(samples: HealthSample[]): number {
 function avgSamples(samples: HealthSample[]): number {
   if (samples.length === 0) return 0;
   return sumSamples(samples) / samples.length;
+}
+
+function isProtectedHealthDataError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.toLowerCase().includes('protected health data is inaccessible');
 }

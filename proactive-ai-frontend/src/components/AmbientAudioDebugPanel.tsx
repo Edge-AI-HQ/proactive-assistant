@@ -231,7 +231,24 @@ function saveStoredConfig(form: AudioConfigForm): void {
 }
 
 function summarizeAudioState(state: AudioState): string {
-  return `running: ${state.running} · paused: ${state.paused} · capturing: ${state.capturing} · suppressed: ${state.suppressed}${state.suppressedReason ? ` (${state.suppressedReason})` : ""}`;
+  const parts = [
+    `running: ${state.running}`,
+    `paused: ${state.paused}`,
+    `capturing: ${state.capturing}`,
+    `suppressed: ${state.suppressed}${state.suppressedReason ? ` (${state.suppressedReason})` : ""}`,
+  ];
+  if (state.engineState) parts.push(`engine: ${state.engineState}`);
+  if (typeof state.capturePipelineRunning === "boolean") {
+    parts.push(`capture pipeline: ${state.capturePipelineRunning}`);
+  }
+  if (typeof state.lastClassificationAt === "number") {
+    parts.push(`last classification: ${formatTime(state.lastClassificationAt)}`);
+  }
+  if (typeof state.classifierRestartCount === "number") {
+    parts.push(`restart count: ${state.classifierRestartCount}`);
+  }
+  if (state.lastAudioError) parts.push(`last error: ${state.lastAudioError}`);
+  return parts.join(" · ");
 }
 
 function previewEvent<K extends AudioDebugEventName>(name: K, event: AmbientEventMap[K]): string {
