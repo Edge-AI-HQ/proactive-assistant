@@ -3,8 +3,9 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import AmbientSourcesPanel from "./AmbientSourcesPanel";
 
-const { patchMock, runtimeMock } = vi.hoisted(() => ({
+const { patchMock, runtimeMock, clearMock } = vi.hoisted(() => ({
   patchMock: vi.fn(),
+  clearMock: vi.fn(),
   runtimeMock: {
     status: vi.fn(),
     subscribe: vi.fn(() => () => {}),
@@ -19,6 +20,9 @@ vi.mock("@/lib/platform", () => ({ isNative: true }));
 vi.mock("./AmbientAudioDebugPanel", () => ({
   default: () => null,
 }));
+vi.mock("./AmbientModelsPanel", () => ({
+  default: () => <div>Ambient models</div>,
+}));
 vi.mock("@/hooks/useUserSettings", () => ({
   useUserSettings: () => ({
     settings: { ambientSources: { health: { enabled: false } } },
@@ -31,6 +35,9 @@ vi.mock("@/hooks/useUserSettings", () => ({
 }));
 vi.mock("@/services/ambient/runtime-client", () => ({
   loadAmbientRuntime: () => Promise.resolve(runtimeMock),
+}));
+vi.mock("@/services/ambient/reset-sqlite", () => ({
+  clearAmbientSqliteData: clearMock,
 }));
 
 function makeStatus() {
@@ -52,16 +59,19 @@ function makeStatus() {
     lastDrainTs: null,
     lastSuccessfulDrainTs: null,
     lastIngestError: null,
+    uploadsLocked: false,
   };
 }
 
-describe("AmbientSourcesPanel health source", () => {
+describe("AmbientSourcesPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     runtimeMock.status.mockReturnValue(makeStatus());
     patchMock.mockResolvedValue({
       ambientSources: { health: { enabled: true } },
     });
+    clearMock.mockResolvedValue(undefined);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
   });
 
   test("shows HealthKit source and starts it when toggled on", async () => {
@@ -78,5 +88,16 @@ describe("AmbientSourcesPanel health source", () => {
       });
       expect(runtimeMock.reconcileEnabledSources).toHaveBeenCalledWith(["health"]);
     });
+  });
+
+  test("clears Ambient SQLite data from the debug actions area", async () => {
+    render(<AmbientSourcesPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear Ambient SQLite data" }));
+
+    await waitFor(() => {
+      expect(clearMock).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.getByText("Ambient SQLite data cleared. Restart the app to reopen fresh local databases.")).toBeTruthy();
   });
 });
