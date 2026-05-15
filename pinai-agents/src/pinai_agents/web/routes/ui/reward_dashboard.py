@@ -17,6 +17,7 @@ from ...db.repositories.reward import (
     RewardRepository,
 )
 from ...db.rls import user_scoped_tx
+from ...services.pattern_extractor import run_pattern_extractor
 from ...services.pattern_health import (
     compute_pattern_health,
     compute_pattern_health_one,
@@ -566,6 +567,42 @@ async def list_pending_patterns(
         repo = PatternsRepository(user.id, conn)
         items = await repo.list_patterns(status="pending_review", limit=500)
     return {"ok": True, "items": items}
+
+
+@router.post("/patterns/extract")
+async def trigger_pattern_extract(
+    body: dict | None = None,
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+):
+    """Reviewer-triggered run of the pattern extractor (Phase 6).
+
+    The scheduler is meant to run this weekly; this manual surface lets
+    a reviewer demo it on demand. Accepts optional `lookbackDays` /
+    `minClusterSize` overrides for tuning during development.
+    """
+    data = _body_dict(body)
+    lookback_days = data.get("lookbackDays") or data.get("lookback_days") or 7
+    min_cluster_size = (
+        data.get("minClusterSize") or data.get("min_cluster_size") or 3
+    )
+    if not isinstance(lookback_days, int) or not 1 <= lookback_days <= 60:
+        raise HTTPException(
+            status_code=422,
+            detail="lookbackDays must be an int between 1 and 60",
+        )
+    if not isinstance(min_cluster_size, int) or not 2 <= min_cluster_size <= 100:
+        raise HTTPException(
+            status_code=422,
+            detail="minClusterSize must be an int between 2 and 100",
+        )
+    async with user_scoped_tx(pool, user.id) as conn:
+        summary = await run_pattern_extractor(
+            conn,
+            lookback_days=lookback_days,
+            min_cluster_size=min_cluster_size,
+        )
+    return {"ok": True, **summary}
 
 
 @router.post("/patterns/pending/{pattern_id}/approve")

@@ -754,6 +754,36 @@ export function listPendingPatterns(): Promise<{ ok: true; items: PatternSummary
   return request("/api/reward-dashboard/patterns/pending");
 }
 
+export interface PatternExtractSummary {
+  ok: true;
+  lookback_days: number;
+  min_cluster_size: number;
+  golden_cards_seen: number;
+  clusters_total: number;
+  clusters_above_min: number;
+  candidates_inserted: number;
+  candidates: Array<{
+    patternId: string;
+    intentKey: string;
+    clusterSize: number;
+    sampleCardIds: string[];
+    abstract: string;
+  }>;
+}
+
+export function runPatternExtractor(
+  params: { lookbackDays?: number; minClusterSize?: number } = {},
+): Promise<PatternExtractSummary> {
+  const body: Record<string, number> = {};
+  if (typeof params.lookbackDays === "number") body.lookbackDays = params.lookbackDays;
+  if (typeof params.minClusterSize === "number") body.minClusterSize = params.minClusterSize;
+  return request("/api/reward-dashboard/patterns/extract", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 export function approvePendingPattern(
   patternId: string,
 ): Promise<{ ok: true; pattern: PatternSummary }> {

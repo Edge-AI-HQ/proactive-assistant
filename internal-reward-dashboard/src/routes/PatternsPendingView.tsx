@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { Brain, Check, X } from "lucide-react";
+import { Brain, Check, Play, X } from "lucide-react";
 import {
   approvePendingPattern,
   listPendingPatterns,
   rejectPendingPattern,
+  runPatternExtractor,
 } from "@/api/reward";
-import type { PatternSummary } from "@/api/reward";
+import type { PatternExtractSummary, PatternSummary } from "@/api/reward";
 import { StateBlock } from "@/components/StateBlock";
 import { dashboardRoutes } from "@/lib/dashboardRoutes";
 
@@ -18,6 +19,8 @@ export function PatternsPendingView({ onNavigate }: PatternsPendingViewProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [extracting, setExtracting] = useState(false);
+  const [lastExtract, setLastExtract] = useState<PatternExtractSummary | null>(null);
 
   function refresh() {
     setLoading(true);
@@ -56,6 +59,20 @@ export function PatternsPendingView({ onNavigate }: PatternsPendingViewProps) {
     }
   }
 
+  async function runExtractor() {
+    setExtracting(true);
+    setError(null);
+    try {
+      const summary = await runPatternExtractor();
+      setLastExtract(summary);
+      refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setExtracting(false);
+    }
+  }
+
   return (
     <div className="stack">
       <section className="panel" aria-label="待审批的认知范式">
@@ -71,6 +88,16 @@ export function PatternsPendingView({ onNavigate }: PatternsPendingViewProps) {
           </div>
           <div className="toolbar-actions">
             <button
+              className="primary-button"
+              type="button"
+              onClick={() => void runExtractor()}
+              disabled={extracting}
+              data-testid="run-pattern-extractor"
+            >
+              <Play size={14} aria-hidden="true" />
+              <span>{extracting ? "抽取中…" : "立即抽取候选"}</span>
+            </button>
+            <button
               className="plain-button"
               onClick={() => onNavigate(dashboardRoutes.patterns)}
               type="button"
@@ -79,6 +106,14 @@ export function PatternsPendingView({ onNavigate }: PatternsPendingViewProps) {
             </button>
           </div>
         </div>
+        {lastExtract && (
+          <p className="muted">
+            最近一次抽取：扫描 {lastExtract.golden_cards_seen} 张 golden 卡，
+            发现 {lastExtract.clusters_total} 个 intent 聚类，
+            达到 ≥ {lastExtract.min_cluster_size} 阈值的 {lastExtract.clusters_above_min} 个，
+            新增候选 {lastExtract.candidates_inserted} 条。
+          </p>
+        )}
       </section>
 
       {error && <StateBlock title="加载失败" detail={error} />}
