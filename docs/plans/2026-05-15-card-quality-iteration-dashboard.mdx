@@ -1,0 +1,423 @@
+---
+title: "Card Quality Iteration Dashboard"
+description: "把内部 reward dashboard 升级为卡片生成质量标注、归因、复盘和回归平台的实施计划。"
+---
+
+# Card Quality Iteration Dashboard
+
+## 结论
+
+内部 reward dashboard 的下一阶段目标不是单纯展示更多 trace,而是建立一套能持续改进卡片生成质量的操作系统:
+
+1. reviewer 能在 30 秒内判断一张卡为什么好或为什么坏。
+2. 坏卡必须能归因到生成链路阶段,而不是只留下一个低分。
+3. 好坏 case 都要沉淀为可复用样本,用于 prompt / retrieval / evaluator / gate 的回归验证。
+4. 团队每周能按 root cause 分布决定下一轮系统改动。
+
+这不是训练自有神经网络参数,但仍然能迭代系统参数:prompt、planner policy、context selection、evaluator rubric、gate threshold、suppression rule、personalization rule 和 regression set。
+
+## 当前基础
+
+现有实现已经具备第一版平台骨架:
+
+- `internal-reward-dashboard/` 是独立 Vite app,本地端口 `3004`。
+- `/api/reward-dashboard/*` 已提供 run / card / score / casebook / trace / metrics / personal-data surface。
+- `pai_card_reward_events` 是 append-only reward ledger,记录 `card_open`、`user_score`、`reviewer_score` 等事件。
+- `pai_card_casebook` 已能保存人工挑选的好/坏样本。
+- `pai_trace_artifacts` 已能把 LangSmith trace 转成 dashboard 可重复渲染的 artifact。
+
+下一步不要推翻这些结构。新增“评审标注事实”和“失败归因聚合”层,让现有 ledger / casebook / trace 能真正服务质量迭代。
+
+## 产品原则
+
+| 原则 | 含义 |
+|---|---|
+| 一眼看根因 | 坏卡页顶部直接显示 root cause 和对应链路阶段,不要求 reviewer 自己翻 trace。 |
+| 标注必须可行动 | `bad` 不是可行动标签;必须知道是 context、planner、generation、evaluator 还是 gate/timing 问题。 |
+| trace 是证据,annotation 是结论 | LangSmith trace 用来支撑判断;人工 annotation 才是质量迭代的事实。 |
+| 正反例都要沉淀 | golden case 教系统什么该生成;failure case 教系统什么该拦、该改、该回归。 |
+| 指标要能指导改代码 | dashboard 的核心指标不是平均分,而是 root cause distribution、stage failure distribution、evaluator-human disagreement。 |
+
+## Root Cause Taxonomy
+
+第一版 taxonomy 必须稳定、少而够用。先不要做自由文本归因。
+
+| Root cause | Stage | 说明 | 常见改动方向 |
+|---|---|---|---|
+| `context_missing` | `context_selection` | 需要的用户上下文没被带进来。 | retrieval recipe、personal-data selection、memory query。 |
+| `context_stale` | `context_selection` | 用了过期事实或旧信号。 | recency filter、signal expiry、memory update。 |
+| `weak_source` | `context_selection` | 证据弱、来源不可解释或太间接。 | source scoring、minimum evidence gate。 |
+| `wrong_intent` | `planning` | planner 选错了要写的意图。 | planner prompt、intent ranking、negative examples。 |
+| `generic_card` | `planning` | 卡片像通用建议,没有个人击中。 | personal-hit gate、generic suppression。 |
+| `duplicate` | `planning` | 和近期卡片重复或换皮。 | dedupe key、recent-card memory、semantic similarity threshold。 |
+| `not_actionable` | `card_generation` | 用户看完不知道能做什么。 | card schema、action rubric、generation prompt。 |
+| `copywriting_issue` | `card_generation` | 标题、摘要、why now 或 action 表达差。 | generation examples、style rubric。 |
+| `hallucinated` | `card_generation` | 卡片写了证据里没有的事实。 | evidence grounding、citation check、fail gate。 |
+| `evaluator_misjudged` | `evaluator` | evaluator 高分但人工低分,或反过来。 | evaluator rubric、calibration set、threshold。 |
+| `bad_timing` | `gate_timing` | 内容可能有用,但不该现在展示。 | timing policy、cooldown、urgency threshold。 |
+| `not_personal` | `gate_timing` | 有用但不是这个用户个人的 hit。 | personal-hit scorer、user preference evidence。 |
+
+前后端必须共用同一份枚举定义或由后端输出 metadata,避免 TypeScript 和 Python 各写一套散 enum。
+
+## 数据模型
+
+新增一张 annotation 表,不要把所有评审事实塞进 `pai_card_casebook`。
+
+建议 migration:
+
+```text
+pinai-agents/db/migrations/043_pai_card_review_annotations.sql
+```
+
+表:
+
+```sql
+CREATE TABLE pai_card_review_annotations (
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  card_id TEXT NOT NULL,
+  verdict TEXT NOT NULL,
+  overall_score REAL NOT NULL,
+  root_causes JSONB NOT NULL DEFAULT '[]'::jsonb,
+  stage_causes JSONB NOT NULL DEFAULT '{}'::jsonb,
+  reviewer_note TEXT,
+  suggested_fix TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, id),
+  UNIQUE (user_id, card_id),
+  CHECK (verdict IN ('great', 'ok', 'bad')),
+  CHECK (overall_score >= 1 AND overall_score <= 10)
+);
+```
+
+RLS policy 使用和 `pai_card_reward_events` / `pai_card_casebook` 相同的 user-scoped policy。
+
+字段语义:
+
+- `verdict`: 人工结论,不是从分数自动推断。允许 reviewer 认为 7 分但仍有严重问题。
+- `overall_score`: 人工总分,继续沿用 1-10。
+- `root_causes`: root cause enum array。`bad` verdict 必须至少有一个 root cause。
+- `stage_causes`: 后端或前端根据 root causes 派生的 stage 分组,便于聚合查询。
+- `suggested_fix`: reviewer 对系统改动方向的简短建议,用于 weekly review。
+
+`pai_card_casebook` 继续作为样本收藏表。annotation 是评审事实;casebook 是被挑出来用于复盘 / 回归的样本。
+
+## API 设计
+
+在 `pinai-agents/src/pinai_agents/web/routes/ui/reward_dashboard.py` 新增:
+
+| Endpoint | 用途 |
+|---|---|
+| `GET /api/reward-dashboard/cards/{card_id}/annotation` | 读取单卡人工标注。 |
+| `POST /api/reward-dashboard/cards/{card_id}/annotation` | upsert 单卡人工标注。 |
+| `GET /api/reward-dashboard/failure-summary` | 聚合 root cause、stage failure、evaluator-human gap 和高风险样本。 |
+
+Repository 落点:
+
+```text
+pinai-agents/src/pinai_agents/web/db/repositories/reward.py
+```
+
+校验要求:
+
+- `card_id` 必须能在当前用户的 `pai_pipeline_runs.final_cards` 中解析到。
+- `verdict` 只能是 `great | ok | bad`。
+- `overall_score` 必须是有限数字且在 `1..10`。
+- `root_causes` 只能包含白名单 enum。
+- `bad` verdict 必须至少一个 root cause。
+- `reviewer_note` 和 `suggested_fix` 做长度限制。
+- 所有查询在 `user_scoped_tx` 内执行。
+
+`failure-summary` 第一版返回:
+
+```json
+{
+  "ok": true,
+  "windowDays": 7,
+  "rootCauseCounts": [],
+  "stageCounts": [],
+  "evaluatorDisagreements": [],
+  "badCardsByIntent": [],
+  "badCardsByBasket": [],
+  "suggestedFixes": []
+}
+```
+
+其中 `evaluatorDisagreements` 按 `abs(evaluator_overall - overall_score)` 降序,优先暴露 evaluator 高估问题。
+
+## 前端实施
+
+### 1. API client
+
+改:
+
+```text
+internal-reward-dashboard/src/api/reward.ts
+```
+
+新增类型:
+
+- `ReviewVerdict`
+- `ReviewRootCause`
+- `ReviewStage`
+- `CardReviewAnnotation`
+- `FailureSummaryResponse`
+
+新增方法:
+
+- `getCardAnnotation(cardId)`
+- `saveCardAnnotation(cardId, payload)`
+- `getFailureSummary(params)`
+
+和现有 client 一样,所有 enum、score、字符串长度、空 card id 都在本地先校验。
+
+### 2. CardView: 质量诊断
+
+改:
+
+```text
+internal-reward-dashboard/src/routes/CardView.tsx
+```
+
+在页面顶部新增“质量诊断”区域:
+
+- verdict segmented control: 好 / 一般 / 坏。
+- 1-10 score。
+- root cause 多选。
+- stage 映射预览。
+- reviewer note。
+- suggested fix。
+- 保存状态和局部错误。
+
+页面必须直接提示 evaluator-human disagreement:
+
+- evaluator 高分 + 人工低分: “评估器可能高估”。
+- evaluator 低分 + 人工高分: “评估器可能误杀”。
+
+`bad` verdict 没有 root cause 时禁用保存并显示本地错误。
+
+### 3. RunDetailView: 批次归因
+
+改:
+
+```text
+internal-reward-dashboard/src/routes/RunDetailView.tsx
+```
+
+顶部新增本批次聚合:
+
+- 已标注 / 未标注数量。
+- bad card 数量。
+- root cause top 3。
+- stage failure top 3。
+- evaluator-human disagreement top cards。
+
+卡片排序新增:
+
+- 未标注优先。
+- 分差大优先。
+- 坏卡优先。
+- weak source 优先。
+- duplicate 优先。
+
+目标是让 reviewer 打开一个 run 后,先处理最能改系统的问题卡。
+
+### 4. TraceView: annotation 映射到链路阶段
+
+改:
+
+```text
+internal-reward-dashboard/src/routes/TraceView.tsx
+```
+
+Trace 页面不要只展示 LangSmith 摘要。新增 “人工归因 overlay”:
+
+- `context_selection`: 展示相关 root causes、证据来源、personal-data 入口。
+- `planning`: 展示 wrong intent / generic / duplicate。
+- `card_generation`: 展示 hallucinated / not actionable / copywriting issue。
+- `evaluator`: 展示 evaluator-human gap。
+- `gate_timing`: 展示 bad timing / not personal。
+
+Trace 是证据,annotation 是结论。页面要把两者并排放,不要让 reviewer 从原始 trace 自己猜。
+
+### 5. CasebookView: 正反例样本库
+
+改:
+
+```text
+internal-reward-dashboard/src/routes/CasebookView.tsx
+```
+
+新增筛选:
+
+- verdict
+- root cause
+- stage
+- evaluator gap
+
+导出 markdown 时包含:
+
+- 卡片内容。
+- 证据引用。
+- 人工分和 verdict。
+- root causes。
+- suggested fix。
+- run / card / trace 链接。
+
+casebook 的定位从“收藏好/坏样本”升级为“prompt / evaluator / gate 回归样本库”。
+
+### 6. FailureReviewView: 每周失败复盘
+
+新增:
+
+```text
+internal-reward-dashboard/src/routes/FailureReviewView.tsx
+```
+
+路由:
+
+```text
+/failures
+```
+
+页面内容:
+
+- 本周 root cause 排名。
+- stage failure 分布。
+- evaluator 高估 top 20。
+- duplicate / weak source / bad timing 样本列表。
+- suggested fixes 聚合。
+- 一键复制 weekly review markdown。
+
+这个页面是团队 weekly failure triage 的主入口。
+
+## 实施顺序
+
+### Phase 1: Taxonomy + DB + API
+
+交付:
+
+- migration `043_pai_card_review_annotations.sql`。
+- repository annotation CRUD。
+- route 层 API。
+- `failure-summary` 初版聚合。
+- 后端测试。
+
+验收:
+
+- 非法 enum / score / 空 root cause 被拒绝。
+- annotation 按 user scope 隔离。
+- `bad` verdict 必须有 root cause。
+- failure summary 聚合正确。
+
+### Phase 2: CardView 标注闭环
+
+交付:
+
+- 前端类型和 API client。
+- CardView 质量诊断表单。
+- 保存后刷新 card detail。
+- evaluator-human disagreement 提示。
+- 前端单测。
+
+验收:
+
+- reviewer 可以完成一次标注并刷新后保留。
+- 缺 card id 不发请求。
+- 保存失败不清空当前页面。
+
+### Phase 3: RunDetail 批次复盘
+
+交付:
+
+- run detail 返回或前端聚合 annotation summary。
+- 顶部批次 root cause / stage summary。
+- 新排序入口。
+
+验收:
+
+- reviewer 能优先看到最值得处理的问题卡。
+- 未标注卡和高分差卡能被快速筛出来。
+
+### Phase 4: Trace stage 归因
+
+交付:
+
+- TraceView 读取 run annotations。
+- root cause 映射到 stage。
+- trace stage 卡片展示人工结论和证据。
+
+验收:
+
+- 打开 trace 后能看到每类坏因落在哪个阶段。
+- trace missing / failed 时仍然保留人工归因。
+
+### Phase 5: Casebook + Weekly Failure Review
+
+交付:
+
+- casebook 支持 verdict / root cause / stage 筛选。
+- markdown 导出包含 annotation。
+- 新增 `/failures` 页面。
+
+验收:
+
+- 每周能复制一份 failure review markdown。
+- root cause distribution 能直接指导下一轮 prompt / retrieval / evaluator / gate 改动。
+
+## 测试清单
+
+后端:
+
+```bash
+cd pinai-agents && uv run pytest tests/web/db/repositories/test_reward_repo.py
+cd pinai-agents && uv run pytest tests/web/routes/test_reward_dashboard.py
+cd pinai-agents && uv run pytest tests/web/routes/test_reward_dashboard_validation.py
+```
+
+前端:
+
+```bash
+cd internal-reward-dashboard && npm run type-check
+cd internal-reward-dashboard && npm test
+```
+
+新增测试重点:
+
+- annotation CRUD。
+- root cause enum 校验。
+- stage mapping。
+- failure-summary 聚合。
+- CardView 保存/错误/刷新。
+- RunDetail 排序和 summary。
+- TraceView 在 trace missing 时仍展示人工归因。
+- Casebook 导出 markdown 不生成坏链接。
+
+## 非目标
+
+- 不训练自有模型。
+- 不把 annotation 直接写回用户画像。
+- 不把 `pai_feedback_events` 复制进 reward ledger。
+- 不让 trace artifact 替代人工标注。
+- 不把 internal dashboard 功能放进 `proactive-ai-frontend`。
+
+## 风险和约束
+
+- taxonomy 过细会导致 reviewer 不一致。第一版宁可少,后续按真实样本再拆。
+- annotation 和 casebook 要分清。不是每个标注都应该进 casebook。
+- evaluator-human gap 是强信号,但不是绝对真相。人工标注也可能错,需要 reviewer note 和复盘。
+- personal-data / trace / raw JSON 仍是不可信展示边界,必须继续脱敏。
+- failure summary 不能只看数量,要按 intent / basket / user segment 切片,避免平均数掩盖系统问题。
+
+## 第一版完成定义
+
+第一版完成后,团队应该能回答:
+
+1. 这张坏卡为什么坏?
+2. 坏因落在 context、planner、generation、evaluator 还是 gate/timing?
+3. 这类坏卡本周出现了多少次?
+4. evaluator 是不是高估了这类卡?
+5. 下一轮应该改 prompt、retrieval、evaluator rubric 还是 gate threshold?
+6. 改完以后,哪些 good / bad cases 要作为 regression set 复跑?
