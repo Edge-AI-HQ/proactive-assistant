@@ -18,6 +18,39 @@ describe("MotionSegmentAggregator", () => {
     })).toEqual([]);
   });
 
+
+  test("emits a periodic update for a sustained same-activity segment", () => {
+    const aggregator = new MotionSegmentAggregator({ periodicUpdateMs: 60_000 });
+
+    aggregator.addSample({
+      type: "automotive",
+      confidence: "high",
+      timestamp: Date.parse("2026-05-15T08:00:00.000Z"),
+    });
+    const emitted = aggregator.addSample({
+      type: "automotive",
+      confidence: "medium",
+      timestamp: Date.parse("2026-05-15T08:01:05.000Z"),
+    });
+
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]).toMatchObject({
+      kind: "device.motion_segment",
+      title: "Motion: automotive",
+      dedupe_key: "motion:automotive:2026-05-15T08:00:00.000Z",
+      payload: {
+        schema_version: "motion_segment.v1",
+        activity: "automotive",
+        started_at: "2026-05-15T08:00:00.000Z",
+        ended_at: "2026-05-15T08:01:05.000Z",
+        durationMs: 65_000,
+        sampleCount: 2,
+        maxConfidence: "high",
+        lastConfidence: "medium",
+      },
+    });
+  });
+
   test("merges a short bounced transition back into the current segment", () => {
     const aggregator = new MotionSegmentAggregator();
 

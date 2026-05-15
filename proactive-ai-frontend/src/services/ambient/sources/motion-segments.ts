@@ -51,6 +51,8 @@ export class MotionSegmentAggregator {
     if (event.type === this.current.activity) {
       this.pending = null;
       this.extendCurrent(event);
+      const periodic = this.periodicSignal();
+      if (periodic) output.push(periodic);
       return output;
     }
 
@@ -113,10 +115,8 @@ export class MotionSegmentAggregator {
 
   private periodicSignal(): PersonalSignalInput | null {
     if (!this.current) return null;
-    if (
-      this.current.lastPushedAt !== null
-      && this.current.endedAt - this.current.lastPushedAt < this.options.periodicUpdateMs
-    ) {
+    const lastAnchor = this.current.lastPushedAt ?? this.current.startedAt;
+    if (this.current.endedAt - lastAnchor < this.options.periodicUpdateMs) {
       return null;
     }
     this.current.lastPushedAt = this.current.endedAt;
