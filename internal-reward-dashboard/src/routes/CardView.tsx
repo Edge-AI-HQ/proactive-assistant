@@ -490,25 +490,25 @@ export function CardView({ cardId, onNavigate }: CardViewProps) {
           </div>
         </div>
         <div className="card-review-summary-grid">
-          <div className={`tone-${scoreTone(detail.rewards.reviewerReward)}`}>
+          <div className={`review-summary-tile tone-${scoreTone(detail.rewards.reviewerReward)}`}>
             <span>人工判断</span>
             <strong>{finiteScore(detail.rewards.reviewerReward) === null ? "待评分" : scoreLabel(detail.rewards.reviewerReward)}</strong>
-            <p>{detail.rewards.latestReviewerScoreAt ? `更新于 ${formatDate(detail.rewards.latestReviewerScoreAt)}` : "还没有 reviewer score。"}</p>
+            <p>{detail.rewards.latestReviewerScoreAt ? formatDate(detail.rewards.latestReviewerScoreAt) : "未评分"}</p>
           </div>
-          <div className={`tone-${gapTone(gap)}`}>
+          <div className={`review-summary-tile tone-${gapTone(gap)}`}>
             <span>评估分差</span>
             <strong>{signedScore(gap)}</strong>
-            <p>{gap !== null && Math.abs(gap) >= 3 ? "优先复盘评估器高估/低估。" : "评估器和人工信号暂未明显冲突。"}</p>
+            <p>{gap !== null && Math.abs(gap) >= 3 ? "优先复盘" : "低冲突"}</p>
           </div>
-          <div>
+          <div className={`review-summary-tile summary-feedback ${feedbackEvents.length > 0 || detail.rewards.opened ? "active" : "quiet"}`}>
             <span>反馈事件</span>
             <strong>{feedbackEvents.length}</strong>
-            <p>{detail.rewards.opened ? "用户打开过这张卡。" : "还没有 card_open 记录。"}</p>
+            <p>{detail.rewards.opened ? "已打开" : "无 card_open"}</p>
           </div>
-          <div>
+          <div className={`review-summary-tile summary-casebook ${detail.casebook ? "saved" : "missing"}`}>
             <span>证据与样本</span>
             <strong>{sources.length} / {detail.casebook ? "已保存" : "未保存"}</strong>
-            <p>{detail.casebook ? caseLabelText(detail.casebook.label) : "可按好/坏/重复等标签入样本库。"}</p>
+            <p>{detail.casebook ? caseLabelText(detail.casebook.label) : "待入样本"}</p>
           </div>
         </div>
         <div className="card-detail-layout">

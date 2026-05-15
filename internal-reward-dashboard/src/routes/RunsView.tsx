@@ -11,7 +11,6 @@ import {
 } from "lucide-react";
 import { listActiveAgentRuns, listRuns, percentLabel, scoreLabel, triggerGenerate } from "@/api/reward";
 import type { AgentRunSummary, RunSummary } from "@/api/reward";
-import { MetricStrip } from "@/components/MetricStrip";
 import { StateBlock } from "@/components/StateBlock";
 import { dashboardRouteDisabledReason, dashboardRoutes, firstDashboardRouteId, hasDashboardRouteId } from "@/lib/dashboardRoutes";
 import { formatDateTimeOrDash } from "@/lib/dateFormat";
@@ -51,6 +50,16 @@ type StatusPillTone =
   | "ready"
   | "running"
   | "succeeded";
+
+interface RunsWorkloadSummary {
+  casebookRuns: number;
+  emptyRuns: number;
+  evaluatorGapRuns: number;
+  inProgressRuns: number;
+  pendingReviews: number;
+  reviewRuns: number;
+  traceMissingRuns: number;
+}
 
 export const MANUAL_GENERATOR_MAX_ATTEMPTS = 2;
 const statusPillTones = new Set<string>([
@@ -236,6 +245,43 @@ export function runMatchesFocus(run: RunSummary, focus: FocusMode): boolean {
   if (focus === "eval_gap") return evaluatorGapMagnitude(run) >= 3;
   if (focus === "has_cases") return runCasebookCount(run) > 0;
   return true;
+}
+
+export function runsWorkloadSummary(runs: RunSummary[]): RunsWorkloadSummary {
+  return {
+    casebookRuns: runs.filter((run) => runCasebookCount(run) > 0).length,
+    emptyRuns: runs.filter(isEmptyCompletedRun).length,
+    evaluatorGapRuns: runs.filter((run) => evaluatorGapMagnitude(run) >= 3).length,
+    inProgressRuns: runs.filter(isGenerationTaskRow).length,
+    pendingReviews: runs.reduce((sum, run) => sum + remainingReviews(run), 0),
+    reviewRuns: runs.filter((run) => !isEmptyCompletedRun(run) && remainingReviews(run) > 0).length,
+    traceMissingRuns: runs.filter((run) => runCardCount(run) > 0 && run.traceStatus !== "ready").length,
+  };
+}
+
+export function primaryWorkloadAction(summary: RunsWorkloadSummary): { detail: string; label: string } {
+  if (summary.pendingReviews > 0) {
+    return {
+      label: "先评最新卡片",
+      detail: `${summary.reviewRuns} 个批次还有 ${summary.pendingReviews} 张卡没人工判断${summary.inProgressRuns > 0 ? `，另有 ${summary.inProgressRuns} 个生成任务在跑` : ""}。`,
+    };
+  }
+  if (summary.inProgressRuns > 0) {
+    return {
+      label: "先等生成落库",
+      detail: `${summary.inProgressRuns} 个生成任务还在跑，列表会自动把占位行合并到真实批次。`,
+    };
+  }
+  if (summary.traceMissingRuns > 0) {
+    return {
+      label: "补齐链路记录",
+      detail: `${summary.traceMissingRuns} 个批次缺 trace，先修可追溯性。`,
+    };
+  }
+  return {
+    label: "整理样本库",
+    detail: `${summary.casebookRuns} 个批次已有样本，可以继续沉淀好坏案例。`,
+  };
 }
 
 const focusOptions: Array<{ label: string; mode: FocusMode }> = [
@@ -570,6 +616,8 @@ export function RunsView({ onNavigate }: RunsViewProps) {
     eval_gap: visibleRuns.filter((run) => evaluatorGapMagnitude(run) >= 3).length,
     has_cases: visibleRuns.filter((run) => runCasebookCount(run) > 0).length,
   };
+  const workloadSummary = runsWorkloadSummary(visibleRuns);
+  const workloadAction = primaryWorkloadAction(workloadSummary);
 
   if (runsBlockingError(error, visibleRuns.length, currentRunsQueryKey, loadedRunsQueryKey, filterValidationError)) {
     return (
@@ -597,22 +645,49 @@ export function RunsView({ onNavigate }: RunsViewProps) {
 
   return (
     <div className="stack">
-      <MetricStrip runs={currentRuns} />
+      <section className="runs-command-grid" aria-label="批次处理摘要">
+        <div className="runs-command-primary">
+          <div className="eyebrow">建议下一步</div>
+          <h2>{workloadAction.label}</h2>
+          <p>{workloadAction.detail}</p>
+          <div className="runs-command-actions">
+            <button className="primary-button" onClick={() => void runGenerate()} disabled={generateBusy} type="button">
+              <Sparkles size={15} /> {generateBusy ? "触发中" : "触发生成"}
+            </button>
+            <button className="plain-button" onClick={() => setRefreshNonce((value) => value + 1)} disabled={loading} type="button">
+              <RefreshCw size={15} /> 刷新批次
+            </button>
+          </div>
+        </div>
+        <div className="runs-command-stats" aria-label="工作量概览">
+          <div className="metric-todo">
+            <span>待评审</span>
+            <strong>{workloadSummary.pendingReviews}</strong>
+            <small>{workloadSummary.reviewRuns} 个批次</small>
+          </div>
+          <div className="metric-trace">
+            <span>缺链路</span>
+            <strong>{workloadSummary.traceMissingRuns}</strong>
+            <small>需要补 trace</small>
+          </div>
+          <div className="metric-gap">
+            <span>分差大</span>
+            <strong>{workloadSummary.evaluatorGapRuns}</strong>
+            <small>评估差 3+</small>
+          </div>
+          <div className="metric-empty">
+            <span>空结果</span>
+            <strong>{workloadSummary.emptyRuns}</strong>
+            <small>无 final cards</small>
+          </div>
+        </div>
+      </section>
       <section className="panel">
         <div className="panel-head runs-panel-head">
           <div>
             <h2>生成批次</h2>
-            <p>当前显示 {displayRuns.length} / {visibleRuns.length} 个批次。生成中的任务会先出现在列表里，完成后自动刷新卡片数。</p>
           </div>
           <div className="runs-toolbar">
-            <div className="runs-actions">
-              <button className="primary-button" onClick={() => void runGenerate()} disabled={generateBusy} type="button">
-                <Sparkles size={15} /> {generateBusy ? "触发中" : "触发生成"}
-              </button>
-              <button className="plain-button" onClick={() => setRefreshNonce((value) => value + 1)} disabled={loading} type="button">
-                <RefreshCw size={15} /> 刷新批次
-              </button>
-            </div>
             <form
               className="runs-filter-form"
               onSubmit={(event) => {
@@ -716,90 +791,96 @@ export function RunsView({ onNavigate }: RunsViewProps) {
             </button>
           ))}
         </div>
-        <div className="table-wrap">
-          <table aria-label="生成批次列表">
-            <thead>
-              <tr>
-                <th scope="col">时间</th>
-                <th scope="col">触发</th>
-                <th scope="col">状态</th>
-                <th scope="col">批次</th>
-                <th scope="col">卡片</th>
-                <th scope="col">评审</th>
-                <th scope="col">评估分</th>
-                <th scope="col">用户分</th>
-                <th scope="col">人工分</th>
-                <th scope="col">分差</th>
-                <th scope="col">废卡</th>
-                <th scope="col">AHA</th>
-                <th scope="col">链路</th>
-                <th scope="col">样本</th>
-                <th scope="col">有效信号</th>
-                <th scope="col" />
-              </tr>
-            </thead>
-            <tbody>
-              {displayRuns.map((run) => (
-                <tr key={runStableKey(run)}>
-                  <td>{formatCompactDateTime(run.completedAt ?? run.startedAt)}</td>
-                  <td>{run.trigger ?? "-"}</td>
-                  <td><span className={`status-pill ${runStatusClass(run)}`}>{runStatusLabel(run)}</span></td>
-                  <td className="mono-cell">{shortRunId(run)}</td>
-                  <td>{runCardCount(run)}</td>
-                  <td>
-                    <div className="mini-progress">
-                      <span>{runReviewedCount(run)}/{runCardCount(run)}</span>
-                      <div><i style={{ width: `${reviewPercent(run)}%` }} /></div>
-                    </div>
-                  </td>
-                  <td>{scoreLabel(run.avgEvaluatorOverall)}</td>
-                  <td>{scoreLabel(run.avgUserReward)}</td>
-                  <td>{scoreLabel(run.avgReviewerReward)}</td>
-                  <td className={evaluatorGapMagnitude(run) >= 3 ? "danger-cell" : ""}>
+        <div className="run-worklist" role="list" aria-label="生成批次列表">
+          <div className="run-worklist-head" aria-hidden="true">
+            <span>批次 / 信号</span>
+            <span>卡片</span>
+            <span>评审</span>
+            <span>评估</span>
+            <span>用户 / 人工</span>
+            <span>分差</span>
+            <span>废卡 / AHA</span>
+            <span>链路</span>
+            <span>样本</span>
+            <span>操作</span>
+          </div>
+          {displayRuns.map((run) => (
+            <article className="run-worklist-row" key={runStableKey(run)} role="listitem">
+              <div className="run-row-main">
+                <div className="run-row-heading">
+                  <span className={`status-pill ${runStatusClass(run)}`}>{runStatusLabel(run)}</span>
+                  <strong className="mono-cell">{shortRunId(run)}</strong>
+                  <span>{formatCompactDateTime(run.completedAt ?? run.startedAt)}</span>
+                  <span>{run.trigger ?? "-"}</span>
+                </div>
+                <p>{signalText(run)}</p>
+              </div>
+              <div className="run-row-metrics" aria-label="批次指标">
+                <div>
+                  <span>卡片</span>
+                  <strong>{runCardCount(run)}</strong>
+                </div>
+                <div className="run-row-progress">
+                  <span>评审</span>
+                  <strong>{runReviewedCount(run)}/{runCardCount(run)}</strong>
+                  <div className="mini-progress" aria-hidden="true"><div><i style={{ width: `${reviewPercent(run)}%` }} /></div></div>
+                </div>
+                <div>
+                  <span>评估</span>
+                  <strong>{scoreLabel(run.avgEvaluatorOverall)}</strong>
+                </div>
+                <div>
+                  <span>用户 / 人工</span>
+                  <strong>{scoreLabel(run.avgUserReward)} / {scoreLabel(run.avgReviewerReward)}</strong>
+                </div>
+                <div>
+                  <span>分差</span>
+                  <strong className={evaluatorGapMagnitude(run) >= 3 ? "danger-cell" : ""}>
                     {scoreLabel(evaluatorGap(run))}
-                  </td>
-                  <td>{percentLabel(run.deadCardRate)}</td>
-                  <td>{percentLabel(run.ahaRate)}</td>
-                  <td>
-                    <span className={`status-pill ${traceCell(run).className}`}>
-                      {traceCell(run).label}
-                    </span>
-                  </td>
-                  <td>{runCasebookCount(run)}</td>
-                  <td className="signal-cell">{signalText(run)}</td>
-                  <td className="row-actions">
-                    <button
-                      className="row-action-text"
-                      onClick={() => onNavigate(dashboardRoutes.run(runDetailRouteId(run)))}
-                      title={canOpenRunArtifacts(run) ? "打开批次" : dashboardRouteDisabledReason("run")}
-                      disabled={!canOpenRunArtifacts(run)}
-                      type="button"
-                    >
-                      <Eye size={16} />
-                      <span>详情</span>
-                    </button>
-                    <button
-                      className="row-action-text"
-                      onClick={() => onNavigate(dashboardRoutes.trace(runTraceRouteId(run)))}
-                      title={canOpenRunTrace(run) ? "打开生成链路" : dashboardRouteDisabledReason("trace")}
-                      disabled={!canOpenRunTrace(run)}
-                      type="button"
-                    >
-                      <GitBranch size={16} />
-                      <span>链路</span>
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {displayRuns.length === 0 && (
-                <tr>
-                  <td colSpan={16}>
-                    <div className="muted">{runsTableEmptyMessage(loadingChangedQuery, changedQueryError, filterValidationError)}</div>
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+                  </strong>
+                </div>
+                <div>
+                  <span>废卡 / AHA</span>
+                  <strong>{percentLabel(run.deadCardRate)} / {percentLabel(run.ahaRate)}</strong>
+                </div>
+                <div>
+                  <span>链路</span>
+                  <strong><span className={`status-pill ${traceCell(run).className}`}>{traceCell(run).label}</span></strong>
+                </div>
+                <div>
+                  <span>样本</span>
+                  <strong>{runCasebookCount(run)}</strong>
+                </div>
+              </div>
+              <div className="run-row-actions">
+                <button
+                  className="row-action-text"
+                  onClick={() => onNavigate(dashboardRoutes.run(runDetailRouteId(run)))}
+                  title={canOpenRunArtifacts(run) ? "打开批次" : dashboardRouteDisabledReason("run")}
+                  disabled={!canOpenRunArtifacts(run)}
+                  type="button"
+                >
+                  <Eye size={16} />
+                  <span>详情</span>
+                </button>
+                <button
+                  className="row-action-text"
+                  onClick={() => onNavigate(dashboardRoutes.trace(runTraceRouteId(run)))}
+                  title={canOpenRunTrace(run) ? "打开生成链路" : dashboardRouteDisabledReason("trace")}
+                  disabled={!canOpenRunTrace(run)}
+                  type="button"
+                >
+                  <GitBranch size={16} />
+                  <span>链路</span>
+                </button>
+              </div>
+            </article>
+          ))}
+          {displayRuns.length === 0 && (
+            <div className="run-worklist-empty">
+              {runsTableEmptyMessage(loadingChangedQuery, changedQueryError, filterValidationError)}
+            </div>
+          )}
         </div>
       </section>
     </div>

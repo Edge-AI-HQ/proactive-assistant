@@ -8,6 +8,7 @@ import {
   evaluatorGapMagnitude,
   MANUAL_GENERATOR_MAX_ATTEMPTS,
   mergeActiveAndPersistedRuns,
+  primaryWorkloadAction,
   remainingReviews,
   reviewPercent,
   runMatchesFocus,
@@ -23,6 +24,7 @@ import {
   runsQueryEquals,
   runsRefreshErrorText,
   runsTableEmptyMessage,
+  runsWorkloadSummary,
   signalText,
   traceCell,
 } from "./RunsView";
@@ -198,6 +200,38 @@ describe("RunsView batch list rules", () => {
     expect(runMatchesFocus(traceMissing, "trace_missing")).toBe(true);
     expect(runMatchesFocus(emptyCompleted, "empty_results")).toBe(true);
     expect(runMatchesFocus(casebookRun, "has_cases")).toBe(true);
+  });
+
+  it("summarizes the visible workbench workload for the command panel", () => {
+    expect(runsWorkloadSummary([
+      run({ cardCount: 4, reviewedCount: 1, avgEvaluatorOverall: 9, avgReviewerReward: 5, traceStatus: "missing" }),
+      run({ cardCount: 0, reviewedCount: 0, status: "completed" }),
+      run({ cardCount: 2, reviewedCount: 2, casebookCount: 1 }),
+      agentRunToSummary(activeRun()),
+    ])).toEqual({
+      casebookRuns: 1,
+      emptyRuns: 1,
+      evaluatorGapRuns: 1,
+      inProgressRuns: 1,
+      pendingReviews: 3,
+      reviewRuns: 1,
+      traceMissingRuns: 1,
+    });
+  });
+
+  it("prioritizes pending human review over background generation", () => {
+    expect(primaryWorkloadAction({
+      casebookRuns: 0,
+      emptyRuns: 0,
+      evaluatorGapRuns: 0,
+      inProgressRuns: 1,
+      pendingReviews: 466,
+      reviewRuns: 14,
+      traceMissingRuns: 0,
+    })).toEqual({
+      label: "先评最新卡片",
+      detail: "14 个批次还有 466 张卡没人工判断，另有 1 个生成任务在跑。",
+    });
   });
 
   it("formats progress and visible signal text for the workbench", () => {
