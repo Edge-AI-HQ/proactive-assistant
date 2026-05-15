@@ -576,77 +576,6 @@ td {
   justify-content: flex-end;
 }
 
-.review-command-grid {
-  display: grid;
-  gap: 18px;
-  grid-template-columns: minmax(0, 1.55fr) minmax(340px, 0.85fr);
-}
-
-.review-queue-panel,
-.loop-panel {
-  min-width: 0;
-}
-
-.queue-count {
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  color: #475569;
-  flex: 0 0 auto;
-  font-size: 12px;
-  font-weight: 800;
-  padding: 5px 10px;
-}
-
-.run-focus-card {
-  align-items: stretch;
-  background: #f8fafc;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  display: grid;
-  gap: 16px;
-  grid-template-columns: minmax(0, 1fr) 180px;
-  padding: 16px;
-}
-
-.run-focus-card h3,
-.run-focus-card p {
-  margin: 0;
-}
-
-.run-focus-card h3 {
-  font-size: 22px;
-}
-
-.run-focus-card p {
-  color: #475569;
-  margin-top: 6px;
-}
-
-.run-focus-actions {
-  align-content: center;
-  display: grid;
-  gap: 8px;
-}
-
-.progress-block {
-  display: grid;
-  gap: 8px;
-  margin-top: 16px;
-}
-
-.progress-block strong {
-  font-size: 18px;
-}
-
-.progress-block span {
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 700;
-  margin-left: 8px;
-}
-
-.progress-track,
 .mini-progress div {
   background: #e2e8f0;
   border-radius: 999px;
@@ -654,182 +583,11 @@ td {
   overflow: hidden;
 }
 
-.progress-track div,
 .mini-progress i {
   background: #0f766e;
   border-radius: inherit;
   display: block;
   height: 100%;
-}
-
-.queue-list {
-  display: grid;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.queue-item {
-  align-items: center;
-  background: #ffffff;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  color: var(--ink);
-  display: grid;
-  gap: 12px;
-  grid-template-columns: minmax(0, 1fr) 22px;
-  padding: 12px;
-  text-align: left;
-}
-
-.queue-item:hover {
-  border-color: #94a3b8;
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
-}
-
-.queue-item:disabled {
-  cursor: default;
-}
-
-.queue-item:disabled:hover {
-  border-color: var(--line);
-  box-shadow: none;
-}
-
-.queue-item-title {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.queue-item p {
-  color: var(--muted);
-  font-size: 13px;
-  margin: 5px 0 0;
-}
-
-.queue-item-meta {
-  color: #64748b;
-  display: flex;
-  flex-wrap: wrap;
-  font-size: 12px;
-  font-weight: 700;
-  gap: 7px;
-  margin-top: 6px;
-}
-
-.queue-item-meta span {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 999px;
-  padding: 3px 7px;
-}
-
-.health-pill {
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 800;
-  padding: 3px 8px;
-}
-
-.health-pill.good {
-  background: #d1fae5;
-  color: var(--green);
-}
-
-.health-pill.warn {
-  background: #fef3c7;
-  color: var(--amber);
-}
-
-.health-pill.bad {
-  background: #fee2e2;
-  color: var(--red);
-}
-
-.health-pill.neutral {
-  background: #e2e8f0;
-  color: #475569;
-}
-
-.loop-health-grid {
-  display: grid;
-  gap: 10px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.loop-health-grid div {
-  background: #f8fafc;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-  padding: 12px;
-}
-
-.loop-health-grid svg {
-  color: #475569;
-}
-
-.loop-health-grid span,
-.latest-day span {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
-.loop-health-grid strong {
-  font-size: 24px;
-}
-
-.loop-steps {
-  border-top: 1px solid var(--line);
-  display: grid;
-  gap: 8px;
-  margin-top: 14px;
-  padding-top: 14px;
-}
-
-.loop-steps div {
-  align-items: center;
-  color: #334155;
-  display: flex;
-  gap: 8px;
-  line-height: 1.35;
-}
-
-.loop-steps svg {
-  color: #0f766e;
-  flex: 0 0 auto;
-}
-
-.loop-shortcuts {
-  display: grid;
-  gap: 8px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin-top: 14px;
-}
-
-.loop-shortcuts .plain-button {
-  justify-content: center;
-  min-width: 0;
-  padding-inline: 8px;
-}
-
-.latest-day {
-  background: #f8fafc;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  display: grid;
-  gap: 4px;
-  margin-top: 14px;
-  padding: 12px;
-}
-
-.latest-day p {
-  margin: 0;
 }
 
 .mono-cell {
@@ -3410,8 +3168,6 @@ td {
   }
 
   .metric-strip,
-  .review-command-grid,
-  .run-focus-card,
   .casebook-filter-grid,
   .personal-filter-grid,
   .personal-summary-grid,
@@ -3426,8 +3182,6 @@ td {
   .review-insight-grid,
   .casebook-summary-grid,
   .dimension-grid,
-  .loop-health-grid,
-  .loop-shortcuts,
   .trace-check-grid,
   .trace-action-grid,
   .trace-hero-grid,

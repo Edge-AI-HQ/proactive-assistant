@@ -1,18 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  activeGenerationStatusText,
   agentRunToSummary,
   agentRunSummaries,
   canOpenRunArtifacts,
   canOpenRunTrace,
   evaluatorGap,
   evaluatorGapMagnitude,
-  latestVisibleRun,
   MANUAL_GENERATOR_MAX_ATTEMPTS,
   mergeActiveAndPersistedRuns,
-  queueLabel,
-  queuePriority,
-  queueReason,
   remainingReviews,
   reviewPercent,
   runMatchesFocus,
@@ -80,16 +75,9 @@ function activeRun(overrides: Partial<AgentRunSummary> = {}): AgentRunSummary {
   };
 }
 
-describe("RunsView review queue rules", () => {
+describe("RunsView batch list rules", () => {
   it("matches the backend manual generator retry limit for optimistic rows", () => {
     expect(MANUAL_GENERATOR_MAX_ATTEMPTS).toBe(2);
-  });
-
-  it("keeps generation and failed runs ahead of ordinary review work", () => {
-    expect(queuePriority(run({ status: "running", cardCount: 0, reviewedCount: 0 }))).toBe(80);
-    expect(queueLabel(run({ status: "running", cardCount: 0, reviewedCount: 0 }))).toBe("生成中");
-    expect(queuePriority(run({ status: "failed", cardCount: 0, reviewedCount: 0 }))).toBe(78);
-    expect(queueReason(run({ status: "failed", cardCount: 0, reviewedCount: 0 }))).toContain("任务错误");
   });
 
   it("keeps malformed runtime run arrays out of the workbench state", () => {
@@ -124,12 +112,10 @@ describe("RunsView review queue rules", () => {
     }));
 
     expect(signalText(running)).toContain("尝试 2/3");
-    expect(queueReason(running)).toContain("尝试 2/3");
     expect(signalText(badAttempts)).not.toContain("NaN");
     expect(signalText(badAttempts)).not.toContain("Infinity");
     expect(signalText(badAttempts)).toContain("生成进行中");
     expect(signalText(failed)).toContain("LLM timeout while evaluating cards");
-    expect(queueReason(failed)).toBe("任务错误：LLM timeout while evaluating cards");
   });
 
   it("does not point failed generator rows at missing task logs", () => {
@@ -140,22 +126,6 @@ describe("RunsView review queue rules", () => {
 
     expect(signalText(failed)).toBe("生成失败：没有返回错误详情，请重新触发或刷新批次列表确认是否已落库");
     expect(signalText(failed)).not.toContain("查看任务日志");
-  });
-
-  it("separates in-flight and recently settled generator tasks in loop status text", () => {
-    expect(activeGenerationStatusText([])).toBe("没有生成任务正在运行或排队。");
-    expect(activeGenerationStatusText([
-      activeRun({ status: "queued" }),
-      activeRun({ status: "running" }),
-    ])).toBe("2 个生成任务正在运行或排队。");
-    expect(activeGenerationStatusText([
-      activeRun({ status: "succeeded" }),
-      activeRun({ status: "failed" }),
-    ])).toBe("2 个生成任务刚完成或失败，批次列表正在刷新。");
-    expect(activeGenerationStatusText([
-      activeRun({ status: "running" }),
-      activeRun({ status: "failed" }),
-    ])).toBe("1 个生成任务正在运行或排队，1 个刚完成或失败。");
   });
 
   it("opens persisted empty runs but not unresolved active placeholders", () => {
@@ -200,25 +170,22 @@ describe("RunsView review queue rules", () => {
     });
   });
 
-  it("prioritizes evaluator gaps before normal pending reviews", () => {
+  it("keeps evaluator gaps and pending reviews filterable", () => {
     const gapRun = run({ avgEvaluatorOverall: 9.2, avgReviewerReward: 5.5, reviewedCount: 8 });
     const pendingRun = run({ reviewedCount: 3, cardCount: 8, avgEvaluatorOverall: 7, avgReviewerReward: 7 });
 
     expect(evaluatorGap(gapRun)).toBeCloseTo(3.7);
     expect(evaluatorGapMagnitude(gapRun)).toBeCloseTo(3.7);
-    expect(queuePriority(gapRun)).toBe(70);
-    expect(queueLabel(gapRun)).toBe("分差优先");
-    expect(queuePriority(pendingRun)).toBe(65);
-    expect(queueReason(pendingRun)).toBe("还有 5 张卡没有人工分");
+    expect(runMatchesFocus(gapRun, "eval_gap")).toBe(true);
+    expect(remainingReviews(pendingRun)).toBe(5);
+    expect(runMatchesFocus(pendingRun, "needs_review")).toBe(true);
   });
 
-  it("treats evaluator underestimates as review-priority gaps too", () => {
+  it("treats evaluator underestimates as filterable gaps too", () => {
     const underestimated = run({ avgEvaluatorOverall: 4, avgReviewerReward: 8, reviewedCount: 8 });
 
     expect(evaluatorGap(underestimated)).toBe(-4);
     expect(evaluatorGapMagnitude(underestimated)).toBe(4);
-    expect(queuePriority(underestimated)).toBe(70);
-    expect(queueReason(underestimated)).toContain("明显低估");
     expect(runMatchesFocus(underestimated, "eval_gap")).toBe(true);
   });
 
@@ -227,11 +194,8 @@ describe("RunsView review queue rules", () => {
     const emptyCompleted = run({ cardCount: 0, reviewedCount: 0 });
     const casebookRun = run({ casebookCount: 2 });
 
-    expect(queuePriority(traceMissing)).toBe(50);
     expect(runMatchesFocus(traceMissing, "trace_missing")).toBe(true);
-    expect(queuePriority(emptyCompleted)).toBe(40);
     expect(runMatchesFocus(emptyCompleted, "empty_results")).toBe(true);
-    expect(queuePriority(casebookRun)).toBe(20);
     expect(runMatchesFocus(casebookRun, "has_cases")).toBe(true);
   });
 
@@ -312,22 +276,6 @@ describe("RunsView review queue rules", () => {
     const persisted = run({ id: "run_pk_1", runId: "gen.done" });
 
     expect(mergeActiveAndPersistedRuns([activeSummary], [persisted])).toEqual([activeSummary, persisted]);
-  });
-
-  it("uses active generator rows as the latest visible run when they are newest", () => {
-    const activeSummary = agentRunToSummary(activeRun({
-      id: "gen.pending",
-      createdAt: "2026-05-14T11:00:00.000Z",
-      startedAt: null,
-    }));
-    const persisted = run({
-      id: "run_pk_1",
-      runId: "gen.done",
-      completedAt: "2026-05-14T10:05:00.000Z",
-      startedAt: "2026-05-14T10:00:00.000Z",
-    });
-
-    expect(latestVisibleRun([persisted, activeSummary])).toBe(activeSummary);
   });
 
   it("blocks the workbench only when the initial persisted run load fails", () => {

@@ -64,7 +64,7 @@ flowchart LR
 
 | 页面 | 当前职责 |
 |---|---|
-| `/runs` | 入口工作台。顶部 metrics strip 看总体规模和风险；review queue 按生成中、失败、待评审、评估分差、trace 缺失、casebook 样本排序；loop health 汇总待评审卡、trace 缺失、评估偏差、样本数，并提供待评审、样本库、上下文快捷入口；下面保留可筛选 run table。触发生成和 active generation 状态刷新失败只显示局部错误，不阻断历史批次列表，也不清空已有生成中行；历史批次首次加载失败但 active generation 已返回时，也必须继续展示生成中行，并把生成中行纳入“最近批次”。active generation 行必须显示 attempts/maxAttempts 和 lastError，不能只给“查看任务日志”这种没有入口的空提示；loop health 文案必须区分正在运行/排队和刚完成/失败的 generator task，避免把失败任务说成还在运行。批次时间字段来自后端时必须容错，坏时间显示 `-`，不能让入口页白屏；日期筛选只接受合法 `YYYY-MM-DD`，坏值按未设置处理。未落库的 active placeholder 不能放行到批次/链路详情，真实落库的空结果或失败批次仍然可以打开详情和 trace。同一筛选条件下的 run 列表刷新失败会保留上一次成功加载的数据并显示局部错误；筛选条件已变化时保留控制区但隐藏旧批次。正常工作台必须提供手动刷新当前批次视图的入口。初始加载失败且没有任何可展示行时，必须保留重新加载、样本库、上下文入口。 |
+| `/runs` | 入口工作台。顶部 metrics strip 看总体规模和风险；主体是可筛选 run table，不再渲染独立的摘要区块。触发生成和 active generation 状态刷新失败只显示局部错误，不阻断历史批次列表，也不清空已有生成中行；历史批次首次加载失败但 active generation 已返回时，也必须继续展示生成中行。active generation 行必须显示 attempts/maxAttempts 和 lastError，不能只给“查看任务日志”这种没有入口的空提示。批次时间字段来自后端时必须容错，坏时间显示 `-`，不能让入口页白屏；日期筛选只接受合法 `YYYY-MM-DD`，坏值按未设置处理。未落库的 active placeholder 不能放行到批次/链路详情，真实落库的空结果或失败批次仍然可以打开详情和 trace。同一筛选条件下的 run 列表刷新失败会保留上一次成功加载的数据并显示局部错误；筛选条件已变化时保留控制区但隐藏旧批次。正常工作台必须提供手动刷新当前批次视图的入口。初始加载失败且没有任何可展示行时，必须保留重新加载、样本库、上下文入口。 |
 | `/runs/:runId` | 逐张评一批卡。展示生成过程摘要、输入来源、四阶段链路说明、卡片正文、证据、用户反馈/reward 数量、evaluator feedback、1-10 reviewer score、casebook editor,并支持复制批次复盘摘要。正常详情页必须提供手动刷新当前批次的入口，尤其用于 score / casebook 保存后刷新失败的恢复。批次时间字段必须容错，坏时间显示 `-` 或“未完成”。初始加载失败时必须保留返回批次列表、查看生成链路、重新加载入口。 |
 | `/cards/:cardId` | 深挖单卡。顶部显示人工判断、评估分差、反馈事件、证据/样本状态;展示卡片正文、写卡依据、为什么现在、建议动作、评估器维度、批次/链路/样本库/上下文复盘动作、可复制的单卡复盘摘要、reward history、产品反馈事件、同 intent 历史卡。正常详情页必须提供手动刷新当前卡片的入口，尤其用于 score / casebook 保存后刷新失败的恢复。奖励事件、反馈事件、相关卡片时间字段必须容错，坏时间显示 `-` 或回退到 run id。初始加载失败时必须保留返回批次列表、样本库、重新加载入口。 |
 | `/traces/:runId` | 看生成链路。展示 LangSmith 绑定、白话摘要、artifact/LangSmith/SVG/阶段完整性检查、批次/首卡/样本库/上下文复盘动作、可复制的链路复盘摘要、四阶段 story、输入和决策、trace SVG;trace missing / failed 时必须显示明确原因。正常链路页必须提供手动刷新入口；已有 trace artifact 后刷新失败时保留旧 trace 并显示局部错误。读取 trace artifact 首次失败时保留返回批次、重新加载、重建链路记录入口,不能只给整页死错误。 |
@@ -168,7 +168,7 @@ cd proactive-ai-frontend && npm run type-check
 手工验证:
 
 - 登录主前端,点开一张卡,应写入 `pai_card_reward_events(source='user', event_type='card_open', score=1)`。
-- 登录 `http://127.0.0.1:3004/runs`,run 列表应能看到真实 generation runs、review queue、trace 状态和 evaluator gap。
+- 登录 `http://127.0.0.1:3004/runs`,run 列表应能看到真实 generation runs、trace 状态和 evaluator gap。
 - 在 `/runs/:runId` 或 `/cards/:cardId` 打 reviewer score / casebook,刷新后 reward history 和 casebook 状态应保留。
 - 在 `/traces/:runId` 触发 trace 生成;没有 `LANGSMITH_API_KEY` 时应显示 explicit missing,不是空白页。
 

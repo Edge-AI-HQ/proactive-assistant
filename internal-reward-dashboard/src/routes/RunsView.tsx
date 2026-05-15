@@ -38,7 +38,6 @@ export type FocusMode =
   | "eval_gap"
   | "has_cases";
 
-type HealthTone = "bad" | "good" | "neutral" | "warn";
 type StatusPillTone =
   | "completed"
   | "empty"
@@ -95,16 +94,6 @@ export function reviewPercent(run: RunSummary): number {
 
 export function remainingReviews(run: RunSummary): number {
   return Math.max(0, runCardCount(run) - runReviewedCount(run));
-}
-
-function runTime(run: RunSummary): number {
-  const value = run.completedAt ?? run.startedAt;
-  const timestamp = value ? new Date(value).getTime() : 0;
-  return Number.isFinite(timestamp) ? timestamp : 0;
-}
-
-export function latestVisibleRun(runs: RunSummary[]): RunSummary | null {
-  return [...runs].sort((a, b) => runTime(b) - runTime(a))[0] ?? null;
 }
 
 function isInFlightRun(run: RunSummary): boolean {
@@ -207,55 +196,6 @@ export function signalText(run: RunSummary): string {
   return signals.length ? signals.join(" / ") : "暂无突出信号";
 }
 
-export function queueTone(run: RunSummary): HealthTone {
-  if (isInFlightRun(run) || evaluatorGapMagnitude(run) >= 3 || run.status === "failed") return "bad";
-  if (run.traceStatus !== "ready" || remainingReviews(run) > 0 || isEmptyCompletedRun(run)) return "warn";
-  if (runCasebookCount(run) > 0) return "good";
-  return "neutral";
-}
-
-export function queueLabel(run: RunSummary): string {
-  if (isInFlightRun(run)) return "生成中";
-  if (run.status === "failed") return "生成失败";
-  if (isEmptyCompletedRun(run)) return "空结果";
-  if (evaluatorGapMagnitude(run) >= 3) return "分差优先";
-  if (remainingReviews(run) > 0) return "待评审";
-  if (run.traceStatus !== "ready") return "缺链路";
-  if (runCasebookCount(run) > 0) return "已入样本";
-  return "稳定";
-}
-
-export function queuePriority(run: RunSummary): number {
-  if (isInFlightRun(run)) return 80;
-  if (run.status === "failed") return 78;
-  if (evaluatorGapMagnitude(run) >= 3) return 70;
-  if (remainingReviews(run) > 0) return 60 + remainingReviews(run);
-  if (run.traceStatus !== "ready" && runCardCount(run) > 0) return 50;
-  if (isEmptyCompletedRun(run)) return 40;
-  if (runCasebookCount(run) > 0) return 20;
-  return 0;
-}
-
-export function queueReason(run: RunSummary): string {
-  if (isInFlightRun(run)) {
-    const attempt = activeRunAttemptText(run);
-    return attempt ? `生成进行中，${attempt}，完成后进入逐卡评审` : "生成完成后进入逐卡评审";
-  }
-  if (run.status === "failed") {
-    const error = activeRunErrorText(run);
-    return error ? `任务错误：${error}` : "需要看任务错误和输入上下文";
-  }
-  if (isEmptyCompletedRun(run)) return "没有落地卡片，先确认 generator / evaluator 过滤原因";
-  const gap = evaluatorGap(run);
-  if (gap !== null && Math.abs(gap) >= 3) return gap > 0
-    ? "评估器明显高估，优先沉淀负样本"
-    : "评估器明显低估，优先沉淀正样本";
-  if (remainingReviews(run) > 0) return `还有 ${remainingReviews(run)} 张卡没有人工分`;
-  if (run.traceStatus !== "ready") return "链路未就绪，复盘时缺少生成过程";
-  if (runCasebookCount(run) > 0) return "已有样本，可以继续扩充备注或对照同类卡";
-  return "暂无高优先级问题";
-}
-
 function runStatusLabel(run: RunSummary): string {
   if (isEmptyCompletedRun(run)) return "空结果";
   return {
@@ -330,17 +270,6 @@ export function agentRunSummaries(value: unknown): AgentRunSummary[] {
         return typeof run.id === "string" && typeof run.kind === "string" && typeof run.status === "string";
       })
     : [];
-}
-
-export function activeGenerationStatusText(runs: Array<Pick<AgentRunSummary, "status">>): string {
-  const inFlight = runs.filter((run) => run.status === "queued" || run.status === "running").length;
-  const recentlySettled = runs.length - inFlight;
-  if (inFlight > 0 && recentlySettled > 0) {
-    return `${inFlight} 个生成任务正在运行或排队，${recentlySettled} 个刚完成或失败。`;
-  }
-  if (inFlight > 0) return `${inFlight} 个生成任务正在运行或排队。`;
-  if (recentlySettled > 0) return `${recentlySettled} 个生成任务刚完成或失败，批次列表正在刷新。`;
-  return "没有生成任务正在运行或排队。";
 }
 
 export function agentRunToSummary(run: AgentRunSummary): RunSummary {
