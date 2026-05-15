@@ -20,6 +20,7 @@ import {
   runsBlockingError,
   runsHideStaleRows,
   runsInitialLoading,
+  runsQueryEquals,
   runsRefreshErrorText,
   runsTableEmptyMessage,
   signalText,
@@ -327,6 +328,17 @@ describe("RunsView batch list rules", () => {
       trigger: "x".repeat(REWARD_TEXT_FILTER_MAX_LENGTH + 1),
       until: "",
     })).toBe(`触发来源不能超过 ${REWARD_TEXT_FILTER_MAX_LENGTH} 个字符。`);
+  });
+
+  it("compares applied run filters before deciding whether search has changes", () => {
+    expect(runsQueryEquals(
+      { quality: "", reviewed: "", since: "", trigger: "", until: "" },
+      { quality: "", reviewed: "", since: "", trigger: "", until: "" },
+    )).toBe(true);
+    expect(runsQueryEquals(
+      { quality: "", reviewed: "", since: "2026-05-14", trigger: "", until: "" },
+      { quality: "", reviewed: "", since: "", trigger: "", until: "" },
+    )).toBe(false);
   });
 
   it("keeps stale persisted runs visible after refresh failures", () => {

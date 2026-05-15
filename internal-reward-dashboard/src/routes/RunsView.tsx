@@ -5,6 +5,8 @@ import {
   Eye,
   GitBranch,
   RefreshCw,
+  RotateCcw,
+  Search,
   Sparkles,
 } from "lucide-react";
 import { listActiveAgentRuns, listRuns, percentLabel, scoreLabel, triggerGenerate } from "@/api/reward";
@@ -21,7 +23,7 @@ interface RunsViewProps {
   onNavigate: (path: string) => void;
 }
 
-interface RunsQueryState {
+export interface RunsQueryState {
   quality: "" | "aha" | "dead" | "reviewer_aha";
   reviewed: "" | "true" | "false";
   since: string;
@@ -246,6 +248,14 @@ const focusOptions: Array<{ label: string; mode: FocusMode }> = [
   { label: "有样本", mode: "has_cases" },
 ];
 
+const emptyRunsQueryState: RunsQueryState = {
+  quality: "",
+  reviewed: "",
+  since: "",
+  trigger: "",
+  until: "",
+};
+
 function isGeneratorAgentRun(run: AgentRunSummary): boolean {
   return run.kind === "generator.manual" || run.kind === "generator.auto";
 }
@@ -310,6 +320,10 @@ export function mergeActiveAndPersistedRuns(activeSummaries: RunSummary[], persi
 
 function runsQueryKey(query: RunsQueryState): string {
   return JSON.stringify(query);
+}
+
+export function runsQueryEquals(left: RunsQueryState, right: RunsQueryState): boolean {
+  return runsQueryKey(left) === runsQueryKey(right);
 }
 
 function isCurrentLoadedRunsQuery(currentQueryKey: string, loadedQueryKey: string | null): boolean {
@@ -381,12 +395,9 @@ function upsertActiveRun(runs: AgentRunSummary[], next: AgentRunSummary): AgentR
 export function RunsView({ onNavigate }: RunsViewProps) {
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [activeRuns, setActiveRuns] = useState<AgentRunSummary[]>([]);
-  const [reviewed, setReviewed] = useState<"" | "true" | "false">("");
-  const [trigger, setTrigger] = useState("");
-  const [quality, setQuality] = useState<"" | "aha" | "dead" | "reviewer_aha">("");
-  const [focusMode, setFocusMode] = useState<FocusMode>("needs_review");
-  const [since, setSince] = useState("");
-  const [until, setUntil] = useState("");
+  const [appliedFilters, setAppliedFilters] = useState<RunsQueryState>(emptyRunsQueryState);
+  const [draftFilters, setDraftFilters] = useState<RunsQueryState>(emptyRunsQueryState);
+  const [focusMode, setFocusMode] = useState<FocusMode>("all");
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [generateBusy, setGenerateBusy] = useState(false);
   const [generateMessage, setGenerateMessage] = useState<{ kind: "error" | "status"; text: string } | null>(null);
@@ -396,8 +407,26 @@ export function RunsView({ onNavigate }: RunsViewProps) {
   const [loadedRunsQueryKey, setLoadedRunsQueryKey] = useState<string | null>(null);
   const activePollSeq = useRef(0);
   const refreshTimer = useRef<number | null>(null);
-  const currentRunsQueryKey = runsQueryKey({ quality, reviewed, since, trigger, until });
-  const filterValidationError = runsFilterError({ since, trigger, until });
+  const currentRunsQueryKey = runsQueryKey(appliedFilters);
+  const filterValidationError = runsFilterError(appliedFilters);
+  const draftFilterValidationError = runsFilterError(draftFilters);
+  const hasDraftFilterChanges = !runsQueryEquals(draftFilters, appliedFilters);
+
+  function updateDraftFilter<Key extends keyof RunsQueryState>(key: Key, value: RunsQueryState[Key]) {
+    setDraftFilters((current) => ({ ...current, [key]: value }));
+  }
+
+  function applyDraftFilters() {
+    if (draftFilterValidationError) return;
+    setAppliedFilters(draftFilters);
+    setRefreshNonce((value) => value + 1);
+  }
+
+  function resetFilters() {
+    setDraftFilters(emptyRunsQueryState);
+    setAppliedFilters(emptyRunsQueryState);
+    setRefreshNonce((value) => value + 1);
+  }
 
   function scheduleRefresh(delayMs: number) {
     if (refreshTimer.current !== null) {
@@ -429,11 +458,11 @@ export function RunsView({ onNavigate }: RunsViewProps) {
     }
     listRuns({
       limit: 80,
-      trigger: trigger || undefined,
-      reviewed: reviewed === "" ? undefined : reviewed === "true",
-      quality: quality || undefined,
-      since: dayStartIso(since),
-      until: dayEndIso(until),
+      trigger: appliedFilters.trigger || undefined,
+      reviewed: appliedFilters.reviewed === "" ? undefined : appliedFilters.reviewed === "true",
+      quality: appliedFilters.quality || undefined,
+      since: dayStartIso(appliedFilters.since),
+      until: dayEndIso(appliedFilters.until),
     })
       .then((data) => {
         if (cancelled) return;
@@ -570,65 +599,91 @@ export function RunsView({ onNavigate }: RunsViewProps) {
     <div className="stack">
       <MetricStrip runs={currentRuns} />
       <section className="panel">
-        <div className="panel-head">
+        <div className="panel-head runs-panel-head">
           <div>
             <h2>生成批次</h2>
             <p>当前显示 {displayRuns.length} / {visibleRuns.length} 个批次。生成中的任务会先出现在列表里，完成后自动刷新卡片数。</p>
           </div>
-          <div className="filter-row">
-            <button className="primary-button" onClick={() => void runGenerate()} disabled={generateBusy} type="button">
-              <Sparkles size={15} /> {generateBusy ? "触发中" : "触发生成"}
-            </button>
-            <button className="plain-button" onClick={() => setRefreshNonce((value) => value + 1)} disabled={loading} type="button">
-              <RefreshCw size={15} /> 刷新批次
-            </button>
-            <input
-              aria-label="触发来源筛选"
-              maxLength={REWARD_TEXT_FILTER_MAX_LENGTH}
-              value={trigger}
-              onChange={(event) => setTrigger(event.target.value)}
-              placeholder="触发来源"
-            />
-            <select
-              aria-label="评审状态筛选"
-              value={reviewed}
-              onChange={(event) => setReviewed(event.target.value as "" | "true" | "false")}
+          <div className="runs-toolbar">
+            <div className="runs-actions">
+              <button className="primary-button" onClick={() => void runGenerate()} disabled={generateBusy} type="button">
+                <Sparkles size={15} /> {generateBusy ? "触发中" : "触发生成"}
+              </button>
+              <button className="plain-button" onClick={() => setRefreshNonce((value) => value + 1)} disabled={loading} type="button">
+                <RefreshCw size={15} /> 刷新批次
+              </button>
+            </div>
+            <form
+              className="runs-filter-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                applyDraftFilters();
+              }}
             >
-              <option value="">全部</option>
-              <option value="true">已评审</option>
-              <option value="false">未评审</option>
-            </select>
-            <select
-              aria-label="质量筛选"
-              value={quality}
-              onChange={(event) => setQuality(
-                event.target.value as "" | "aha" | "dead" | "reviewer_aha",
-              )}
-            >
-              <option value="">全部质量</option>
-              <option value="aha">用户 AHA</option>
-              <option value="reviewer_aha">人工 AHA</option>
-              <option value="dead">废卡</option>
-            </select>
-            <input
-              aria-label="完成时间晚于"
-              type="date"
-              value={since}
-              max={until || undefined}
-              onChange={(event) => setSince(event.target.value)}
-              title="完成时间晚于"
-            />
-            <input
-              aria-label="完成时间早于"
-              type="date"
-              value={until}
-              min={since || undefined}
-              onChange={(event) => setUntil(event.target.value)}
-              title="完成时间早于"
-            />
+              <input
+                aria-label="触发来源筛选"
+                maxLength={REWARD_TEXT_FILTER_MAX_LENGTH}
+                value={draftFilters.trigger}
+                onChange={(event) => updateDraftFilter("trigger", event.target.value)}
+                placeholder="触发来源"
+              />
+              <select
+                aria-label="评审状态筛选"
+                value={draftFilters.reviewed}
+                onChange={(event) => updateDraftFilter("reviewed", event.target.value as RunsQueryState["reviewed"])}
+              >
+                <option value="">全部</option>
+                <option value="true">已评审</option>
+                <option value="false">未评审</option>
+              </select>
+              <select
+                aria-label="质量筛选"
+                value={draftFilters.quality}
+                onChange={(event) => updateDraftFilter("quality", event.target.value as RunsQueryState["quality"])}
+              >
+                <option value="">全部质量</option>
+                <option value="aha">用户 AHA</option>
+                <option value="reviewer_aha">人工 AHA</option>
+                <option value="dead">废卡</option>
+              </select>
+              <div className="date-range-control" aria-label="完成时间范围">
+                <label className="date-range-field">
+                  <span>起始</span>
+                  <input
+                    aria-label="完成时间起始日期"
+                    type="date"
+                    value={draftFilters.since}
+                    max={draftFilters.until || undefined}
+                    onChange={(event) => updateDraftFilter("since", event.target.value)}
+                  />
+                </label>
+                <span className="date-range-separator">至</span>
+                <label className="date-range-field">
+                  <span>结束</span>
+                  <input
+                    aria-label="完成时间结束日期"
+                    type="date"
+                    value={draftFilters.until}
+                    min={draftFilters.since || undefined}
+                    onChange={(event) => updateDraftFilter("until", event.target.value)}
+                  />
+                </label>
+              </div>
+              <button className="plain-button search-button" disabled={Boolean(draftFilterValidationError)} type="submit">
+                <Search size={15} /> 搜索
+              </button>
+              <button
+                className="plain-button"
+                disabled={!hasDraftFilterChanges && runsQueryEquals(appliedFilters, emptyRunsQueryState)}
+                onClick={resetFilters}
+                type="button"
+              >
+                <RotateCcw size={15} /> 重置
+              </button>
+            </form>
           </div>
         </div>
-        {filterValidationError && <div className="inline-error" role="alert">{filterValidationError}</div>}
+        {draftFilterValidationError && <div className="inline-error" role="alert">{draftFilterValidationError}</div>}
         {activeRunsError && (
           <div className="inline-error" role="alert">
             生成任务状态刷新失败：{activeRunsError}

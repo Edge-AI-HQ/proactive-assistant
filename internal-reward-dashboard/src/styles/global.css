@@ -354,6 +354,71 @@ button:disabled {
   min-width: 0;
 }
 
+.runs-panel-head {
+  align-items: flex-start;
+}
+
+.runs-toolbar {
+  align-items: flex-end;
+  display: grid;
+  gap: 10px;
+  justify-items: end;
+  min-width: min(100%, 860px);
+}
+
+.runs-actions,
+.runs-filter-form {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.runs-filter-form input:not([type="date"]) {
+  width: 150px;
+}
+
+.date-range-control {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: inline-flex;
+  gap: 7px;
+  min-height: 36px;
+  padding: 3px 4px 3px 9px;
+  white-space: nowrap;
+}
+
+.date-range-field {
+  align-items: center;
+  color: #475569;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 6px;
+}
+
+.date-range-field input {
+  min-height: 30px;
+  padding: 5px 7px;
+  width: 138px;
+}
+
+.date-range-separator {
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.search-button {
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+  font-weight: 850;
+}
+
 .focus-tabs {
   align-items: center;
   background: #f8fafc;
@@ -3149,6 +3214,14 @@ td {
     width: 100%;
   }
 
+  .runs-toolbar,
+  .runs-actions,
+  .runs-filter-form {
+    align-items: flex-start;
+    justify-content: flex-start;
+    width: 100%;
+  }
+
   .view-toolbar {
     align-items: flex-start;
     flex-direction: column;
@@ -3214,6 +3287,23 @@ td {
   .related-item,
   .story-head {
     flex-direction: column;
+  }
+
+  .date-range-control {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    white-space: normal;
+    width: 100%;
+  }
+
+  .date-range-field {
+    flex: 1 1 170px;
+  }
+
+  .date-range-field input {
+    flex: 1;
+    min-width: 0;
+    width: auto;
   }
 
   .personal-category-menu {
