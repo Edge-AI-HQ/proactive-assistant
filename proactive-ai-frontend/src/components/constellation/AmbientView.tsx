@@ -13,7 +13,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useUserSettings } from "@/hooks/useUserSettings";
+import { useAmbientTimeline } from "@/hooks/useAmbientTimeline";
 import { ALL_SOURCE_KEYS, type SourceKey } from "@/services/ambient/keys";
+import type { AmbientPrivacy, AmbientTimelineEvent } from "@/services/ambient/timeline";
 import type { RuntimeStatus } from "@/services/ambient";
 
 
@@ -176,14 +178,17 @@ export const LIVE_SCENARIOS: LiveSession[] = [
 /* ──────────────── TIMELINE (today's narrative) ──────────────── */
 
 interface TimelineEntry {
+  id?: string;
   time: string;
   icon: LucideIcon;
   device: { name: string; icon: LucideIcon };
-  privacyTag?: "private";
+  privacyTag?: AmbientPrivacy;
+  confidenceLabel?: "certain" | "uncertain";
   title: string;
   body: string;
   tags: string[];
   triggeredCard?: string; // ID/name of card it triggered in NOW feed
+  onDismiss?: () => void;
 }
 
 const TIMELINE: TimelineEntry[] = [
@@ -245,6 +250,50 @@ const TIMELINE: TimelineEntry[] = [
 const NARRATIVE_SUMMARY =
   "Today felt productive. 7h 24m of sleep set a clean baseline; you ran hot during the Sequoia call (HR peaked at 158) but recovered in the 45-min focus block after lunch. Evening swim hit zone 3 for 32 minutes — 8% above your weekly average. Dad is visiting and mentioned a cardiologist appointment Thursday.";
 
+function formatTimelineTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function iconForTimelineEvent(event: AmbientTimelineEvent): LucideIcon {
+  if (event.sourceTypes.includes("health")) return Stethoscope;
+  if (event.eventType === "transition") return Compass;
+  if (event.eventType === "visit") return MapPin;
+  if (event.eventType === "conversation" || event.eventType === "meeting") return Mic;
+  return Sparkles;
+}
+
+function deviceIconForTimelineEvent(event: AmbientTimelineEvent): LucideIcon {
+  if (event.sourceTypes.includes("health")) return Watch;
+  if (event.sourceTypes.includes("motion")) return Activity;
+  if (event.sourceTypes.includes("transcript")) return Mic;
+  return Smartphone;
+}
+
+function timelineEventToEntry(
+  event: AmbientTimelineEvent,
+  onDismiss: (id: string) => void,
+): TimelineEntry {
+  return {
+    id: event.id,
+    time: formatTimelineTime(event.occurredAt),
+    icon: iconForTimelineEvent(event),
+    device: {
+      name: event.primarySourceLabel,
+      icon: deviceIconForTimelineEvent(event),
+    },
+    privacyTag: event.privacy === "normal" ? undefined : event.privacy,
+    confidenceLabel: event.confidenceLabel,
+    title: event.title,
+    body: event.summary,
+    tags: event.tags,
+    triggeredCard: event.triggeredCardTitle,
+    onDismiss: () => onDismiss(event.id),
+  };
+}
+
 /* ──────────────── COMPONENT ──────────────── */
 
 interface AmbientViewProps {
@@ -257,6 +306,7 @@ interface AmbientViewProps {
 
 export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHandled, onOpenFullscreen }: AmbientViewProps = {}) {
   const { settings, patch } = useUserSettings();
+  const ambientTimeline = useAmbientTimeline();
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
   const [togglePending, setTogglePending] = useState(false);
   const [liveIndex, setLiveIndex] = useState(0);
@@ -455,6 +505,18 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
     const t = setTimeout(() => setPreviewVisibleCount((c) => c + 1), 2600);
     return () => clearTimeout(t);
   }, [previewVisibleCount, liveSession]);
+
+  const handleDismissTimelineEvent = useCallback((id: string) => {
+    void ambientTimeline.dismiss(id);
+  }, [ambientTimeline.dismiss]);
+
+  const useWebPreviewTimeline = !isNative && ambientTimeline.events.length === 0;
+  const timelineEntries = useMemo<TimelineEntry[]>(() => {
+    if (useWebPreviewTimeline) return TIMELINE;
+    return ambientTimeline.events.map((event) =>
+      timelineEventToEntry(event, handleDismissTimelineEvent),
+    );
+  }, [ambientTimeline.events, handleDismissTimelineEvent, useWebPreviewTimeline]);
 
   const handleConnectMore = () => {
     if (onConnectMore) onConnectMore();
@@ -736,29 +798,50 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
         </div>
       </button>
 
-      {/* ── Today's narrative summary ── */}
-      <div
-        className="mb-3 rounded-2xl p-4"
-        style={{
-          background: "linear-gradient(135deg, hsl(220 50% 98%), hsl(260 40% 97%))",
-          border: "1px solid hsl(0 0% 100% / 0.5)",
-        }}
-      >
-        <div className="flex items-center justify-between mb-2">
-          <p className="text-[10px] font-bold tracking-[0.16em] flex items-center gap-1.5">
-            <Sparkles size={11} className="text-[hsl(304_75%_55%)]" />
-            <span className="text-[hsl(304_75%_45%)]">TODAY · NARRATIVE SUMMARY</span>
-          </p>
-          <span className="text-[10px] text-foreground/45 font-mono">{TIMELINE.length} entries</span>
+      {/* Web preview keeps the narrative mock; native hides it until B generates a real summary. */}
+      {useWebPreviewTimeline && (
+        <div
+          className="mb-3 rounded-2xl p-4"
+          style={{
+            background: "linear-gradient(135deg, hsl(220 50% 98%), hsl(260 40% 97%))",
+            border: "1px solid hsl(0 0% 100% / 0.5)",
+          }}
+        >
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-[10px] font-bold tracking-[0.16em] flex items-center gap-1.5">
+              <Sparkles size={11} className="text-[hsl(304_75%_55%)]" />
+              <span className="text-[hsl(304_75%_45%)]">TODAY · NARRATIVE SUMMARY</span>
+            </p>
+            <span className="text-[10px] text-foreground/45 font-mono">{timelineEntries.length} entries</span>
+          </div>
+          <p className="text-[13px] leading-relaxed text-foreground/85">{NARRATIVE_SUMMARY}</p>
         </div>
-        <p className="text-[13px] leading-relaxed text-foreground/85">{NARRATIVE_SUMMARY}</p>
-      </div>
+      )}
 
       {/* ── Timeline ── */}
       <div className="space-y-2.5">
-        {TIMELINE.map((entry, idx) => (
+        {timelineEntries.length === 0 && (
+          <div className="glass-card p-4 text-center">
+            <p className="text-[13px] font-semibold text-foreground/80">
+              {ambientTimeline.loading ? "Building local timeline…" : "No local timeline events yet"}
+            </p>
+            <p className="mt-1 text-[12px] text-foreground/50 leading-snug">
+              {ambientTimeline.error
+                ? ambientTimeline.error
+                : ambientOn
+                  ? "Keep Ambient on while Visit, Location, Motion, and Health collect real signals."
+                  : "Turn Ambient on to create timeline events from local signals."}
+            </p>
+            {ambientTimeline.storeStatus?.lastError && (
+              <p className="mt-2 text-[11px] text-red-500">
+                {ambientTimeline.storeStatus.lastError}
+              </p>
+            )}
+          </div>
+        )}
+        {timelineEntries.map((entry, idx) => (
           <motion.div
-            key={entry.time + entry.title}
+            key={entry.id ?? entry.time + entry.title}
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: idx * 0.04 }}
@@ -789,8 +872,29 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                         </span>
                       </>
                     )}
+                    {entry.privacyTag === "sensitive" && (
+                      <>
+                        <span className="text-foreground/30">·</span>
+                        <span className="inline-flex items-center gap-0.5 text-[hsl(304_75%_55%)] font-medium">
+                          <span className="w-1.5 h-1.5 rounded-full bg-[hsl(304_75%_63%)]" />
+                          sensitive
+                        </span>
+                      </>
+                    )}
+                    {entry.confidenceLabel === "uncertain" && (
+                      <>
+                        <span className="text-foreground/30">·</span>
+                        <span className="inline-flex items-center gap-0.5 text-foreground/45 font-medium">
+                          uncertain
+                        </span>
+                      </>
+                    )}
                   </div>
-                  <button className="text-foreground/30 hover:text-foreground/60 shrink-0" aria-label="Dismiss">
+                  <button
+                    onClick={entry.onDismiss}
+                    className="text-foreground/30 hover:text-foreground/60 shrink-0"
+                    aria-label="Dismiss"
+                  >
                     <X size={13} />
                   </button>
                 </div>

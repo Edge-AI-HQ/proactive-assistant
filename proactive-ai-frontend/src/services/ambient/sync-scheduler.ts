@@ -1,6 +1,7 @@
 import type { PersonalSignalInput } from "@/lib/devices";
 import { ingestBatch, type IngestStats } from "./ingest-bridge";
 import type { OutboxRecord, OutboxStore } from "./outbox";
+import { AMBIENT_TIMELINE_KIND } from "./timeline";
 
 export interface SyncSchedulerOptions {
   batchLimit?: number;
@@ -73,7 +74,20 @@ export class AmbientSyncScheduler {
 
     try {
       const pruned = await this.outbox.prune(now);
-      const records = await this.outbox.pending(this.opts.batchLimit, now);
+      const pendingRecords = await this.outbox.pending(this.opts.batchLimit, now);
+      const records = pendingRecords.filter(
+        (row) => row.item.kind === AMBIENT_TIMELINE_KIND,
+      );
+      const localOnlyRecords = pendingRecords.filter(
+        (row) => row.item.kind !== AMBIENT_TIMELINE_KIND,
+      );
+      if (localOnlyRecords.length > 0) {
+        console.warn("[ambient] dropping local-only source items before sync", {
+          count: localOnlyRecords.length,
+          kinds: Array.from(new Set(localOnlyRecords.map((row) => row.item.kind))),
+        });
+        await this.outbox.markSynced(localOnlyRecords.map((row) => row.id), Date.now());
+      }
       if (records.length === 0) {
         const remaining = await this.outbox.count();
         if (remaining === 0) {
@@ -85,7 +99,7 @@ export class AmbientSyncScheduler {
             lastError: this.lastError,
           });
         }
-        return { ...empty, pruned };
+        return { ...empty, ignored: localOnlyRecords.length, pruned };
       }
 
       console.info("[ambient] draining outbox", { count: records.length });

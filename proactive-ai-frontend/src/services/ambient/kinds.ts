@@ -10,6 +10,7 @@ export const SIGNAL_KINDS = {
   visit: "device.visit",
   activity: "device.activity",
   location: "device.location",
+  timelineEvent: "ambient.timeline_event",
 } as const;
 
 export type SignalKind = (typeof SIGNAL_KINDS)[keyof typeof SIGNAL_KINDS];

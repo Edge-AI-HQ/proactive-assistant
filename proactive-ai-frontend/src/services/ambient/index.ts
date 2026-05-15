@@ -21,6 +21,11 @@ import {
   type OutboxKind, type OutboxStore,
 } from "./outbox";
 import { AmbientSyncScheduler } from "./sync-scheduler";
+import {
+  getAmbientTimelinePipeline,
+  localEventIdsFromSignals,
+  type AmbientTimelinePipeline,
+} from "./timeline";
 import { ActivitySource } from "./sources/activity";
 import { HealthSource } from "./sources/health";
 import { LocationSource } from "./sources/location";
@@ -68,6 +73,7 @@ export class AmbientRuntime {
   private buffer: SignalBuffer;
   private outbox: OutboxStore;
   private scheduler: AmbientSyncScheduler;
+  private timelinePipeline: AmbientTimelinePipeline;
   private sources: Map<SourceKey, AmbientSource>;
   private statusBySource: Map<SourceKey, SourceStatus>;
   private listeners = new Set<() => void>();
@@ -92,11 +98,14 @@ export class AmbientRuntime {
     this.outbox = options.outbox ?? (isNative ? new SqliteOutboxStore() : new MemoryOutboxStore());
     this.scheduler = options.scheduler ?? new AmbientSyncScheduler(this.outbox);
     this.scheduler.setUploadsLocked(loadUploadsLocked());
+    this.timelinePipeline = getAmbientTimelinePipeline();
     this.buffer = new SignalBuffer((batch) => this.flushBatch(batch));
     this.statusBySource = new Map();
 
     const ctx: SourceContext = {
-      push: (item: PersonalSignalInput) => this.buffer.push(item),
+      push: (item: PersonalSignalInput) => {
+        void this.ingestLocalSignal(item);
+      },
       onEvent: (key, summary) =>
         this.recordEvent(key as SourceKey, summary),
     };
@@ -218,6 +227,7 @@ export class AmbientRuntime {
     this.totalIngested += result.inserted;
     this.totalIngestErrors += result.failed > 0 ? 1 : 0;
     this.recordIngestedItems(result.syncedItems);
+    await this.markTimelineEventsSynced(result.syncedItems);
     this.lastIngestError = this.scheduler.status().lastError;
     await this.refreshOutboxCount();
     this.notify();
@@ -270,6 +280,34 @@ export class AmbientRuntime {
       throw err;
     } finally {
       this.notify();
+    }
+  }
+
+  private async ingestLocalSignal(item: PersonalSignalInput): Promise<void> {
+    try {
+      const timelineSignals = await this.timelinePipeline.ingestSignal(item);
+      for (const signal of timelineSignals) {
+        this.buffer.push(signal);
+      }
+      this.lastIngestError = null;
+      await this.refreshOutboxCount();
+    } catch (err) {
+      this.lastIngestError = describeError(err);
+    } finally {
+      this.notify();
+    }
+  }
+
+  private async markTimelineEventsSynced(
+    items: PersonalSignalInput[],
+  ): Promise<void> {
+    const localEventIds = localEventIdsFromSignals(items);
+    if (localEventIds.length === 0) return;
+    try {
+      const { getAmbientTimelineStore } = await import("./timeline");
+      await getAmbientTimelineStore().markTimelineEventsSynced(localEventIds);
+    } catch (err) {
+      this.lastIngestError = describeError(err);
     }
   }
 
