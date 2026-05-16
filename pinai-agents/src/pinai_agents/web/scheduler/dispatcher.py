@@ -393,6 +393,18 @@ class DefaultDispatcher:
             matched_patterns=matched_payload or None,
         )
 
+        # Dispatch "new cards" push notification. Multi-card collapse:
+        # one notification per generator run regardless of how many cards
+        # the run produced (push_notifier renders the count into the
+        # body string). notify_new_cards is internally exception-safe so
+        # a push failure never propagates back into the task lifecycle.
+        from ..services.push_notifier import notify_new_cards  # noqa: PLC0415
+        card_count = len(result.get("cards") or [])
+        if card_count > 0:
+            await notify_new_cards(
+                self._pool, user_id=task.user_id, card_count=card_count,
+            )
+
     async def _call_chat(
         self, path: str, task: ScheduledTaskRow, run_id: str,
         *, extra: dict | None = None,

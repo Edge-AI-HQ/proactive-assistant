@@ -11,6 +11,19 @@ Persistent context: when a `persistent_context_id` is supplied, the BB
 session is created with `context.id=...` so cookies / login persist
 across sessions for the same user. Web/services/browserbase_provisioning
 mints these per-user.
+
+Device profile: when the chat caller passes `viewport=(w, h)` and/or
+`device_kind ∈ {mobile, tablet}`, those map directly onto Browserbase's
+`browserSettings.viewport` (renders at that CSS px) and
+`browserSettings.os` (sets the stealth user-agent so target sites serve
+mobile/tablet layouts). isMobile/hasTouch can't be flipped post-hoc
+through Playwright over CDP, so we have to wire this at session create
+time. See docs/plans/2026-05-04-tool-calling-paradigms.mdx and
+browserbase SDK types/session_create_params.py for the field surface.
+
+If a session is reused for a chat thread and the requested device profile
+differs from the cached one, we destroy + recreate — same `session_key`
+must mean same device profile from the agent's perspective.
 """
 
 from __future__ import annotations
@@ -22,7 +35,7 @@ import time
 from collections import OrderedDict, deque
 from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from browserbase import Browserbase
 from playwright.async_api import (
@@ -60,10 +73,59 @@ _HEALTH_CHECK_INTERVAL_SEC = 60
 # tears down the local Playwright handle on these.
 _DEAD_BB_STATUSES = frozenset({"COMPLETED", "TIMED_OUT", "ERROR"})
 _CONSOLE_BUFFER_MAX = 200
+
+# Mobile / tablet emulation goes through Playwright's `devices` registry
+# (which is itself a thin wrapper over the CDP commands documented at
+# https://chromedevtools.github.io/devtools-protocol/tot/Emulation/).
+# We pick a Playwright preset to get a realistic UA + DPR + touch flags,
+# but use the caller-supplied viewport (the user's panel CSS px) instead
+# of the preset's so the live view is a 1:1 of the user's screen.
+_DEVICE_PRESET: dict[str, str] = {
+    "mobile": "iPhone 14 Pro",
+    "tablet": "iPad (gen 7)",
+}
 # After a write action (click / type / nav), wait this long before
 # returning the post-action snapshot. Lets SPA frameworks settle DOM
 # without making the agent script its own arbitrary `wait`.
 _POST_ACTION_SETTLE_MS = 400
+
+# Viewport guardrails — sites get confused by sub-phone widths and
+# Browserbase rejects unreasonable values. Clamp before forwarding.
+_VIEWPORT_W_MIN, _VIEWPORT_W_MAX = 320, 2560
+_VIEWPORT_H_MIN, _VIEWPORT_H_MAX = 480, 1600
+
+DeviceKind = Literal["mobile", "tablet", "desktop"]
+
+# Default viewport per device kind when the caller didn't pass one.
+# Desktop matches BB's own default surface. Mobile/tablet picked to
+# match the most common iPhone Pro / iPad CSS sizes so sites that
+# device-sniff via UA see a coherent layout.
+_DEFAULT_VIEWPORT: dict[DeviceKind, tuple[int, int]] = {
+    "desktop": (1280, 800),
+    "tablet": (820, 1180),
+    "mobile": (390, 844),
+}
+
+
+def _clamp_viewport(w: int, h: int) -> tuple[int, int]:
+    return (
+        max(_VIEWPORT_W_MIN, min(_VIEWPORT_W_MAX, int(w))),
+        max(_VIEWPORT_H_MIN, min(_VIEWPORT_H_MAX, int(h))),
+    )
+
+
+def _normalize_profile(
+    viewport: tuple[int, int] | None, device_kind: DeviceKind,
+) -> tuple[tuple[int, int], DeviceKind]:
+    """Resolve caller-provided hints to a concrete (viewport, device_kind).
+
+    Caller passes the *desired* viewport (frontend's panel CSS px on
+    mobile) and device kind; we fill in defaults and clamp. Result is
+    the cache key for session reuse.
+    """
+    if viewport is None:
+        viewport = _DEFAULT_VIEWPORT[device_kind]
+    return _clamp_viewport(*viewport), device_kind
 
 
 @dataclass
@@ -73,6 +135,7 @@ class BrowserSession:
     bb_session_id: str
     live_view_url: str
     viewport: dict[str, int]
+    device_kind: DeviceKind
     control_mode: BrowserControlMode
     takeover_reason: str | None
     current_url: str
@@ -117,15 +180,40 @@ class BrowserManager:
     # ── public API ──
 
     async def get_or_create(
-        self, session_key: str, *, persistent_context_id: str | None = None,
+        self, session_key: str, *,
+        persistent_context_id: str | None = None,
+        viewport: tuple[int, int] | None = None,
+        device_kind: DeviceKind = "desktop",
     ) -> BrowserSession:
+        """Get the cached session for `session_key`, or create one.
+
+        If a session already exists but the requested `(viewport, device_kind)`
+        differs from the cached profile, the existing session is destroyed
+        and a fresh one is created. This is necessary because Playwright
+        over CDP can't flip isMobile/hasTouch on an attached context —
+        the only clean way to change device profile is a new BB session.
+        """
+        requested = _normalize_profile(viewport, device_kind)
         is_creator = False
         async with self._lock:
             existing = self._sessions.get(session_key)
             if existing is not None:
-                self._sessions.move_to_end(session_key)
-                existing.session.last_used_at = time.monotonic()
-                return existing.session
+                cached = (
+                    (existing.session.viewport["width"], existing.session.viewport["height"]),
+                    existing.session.device_kind,
+                )
+                if cached == requested:
+                    self._sessions.move_to_end(session_key)
+                    existing.session.last_used_at = time.monotonic()
+                    return existing.session
+                # Profile mismatch — fall through to recreate. Pop now so
+                # the teardown happens outside the lock.
+                self._sessions.pop(session_key, None)
+                logger.info(
+                    "browser: profile change sk=%s cached=%s requested=%s — recreating",
+                    session_key, cached, requested,
+                )
+                asyncio.create_task(self._teardown(session_key, existing))
             in_flight = self._creating.get(session_key)
             if in_flight is None:
                 in_flight = asyncio.get_running_loop().create_future()
@@ -134,7 +222,10 @@ class BrowserManager:
         if not is_creator:
             return await in_flight
         try:
-            session = await self._create(session_key, persistent_context_id)
+            session = await self._create(
+                session_key, persistent_context_id,
+                viewport=requested[0], device_kind=requested[1],
+            )
             if not in_flight.done():
                 in_flight.set_result(session)
             return session
@@ -150,12 +241,17 @@ class BrowserManager:
         self, session_key: str, *,
         url: str | None = None,
         persistent_context_id: str | None = None,
+        viewport: tuple[int, int] | None = None,
+        device_kind: DeviceKind = "desktop",
     ) -> dict[str, Any]:
         """Get-or-create a session and (optionally) navigate to `url`.
         Returns liveViewUrl + the post-load aria snapshot — the agent's
         single entry point for browser_tool action=open."""
         session = await self.get_or_create(
-            session_key, persistent_context_id=persistent_context_id,
+            session_key,
+            persistent_context_id=persistent_context_id,
+            viewport=viewport,
+            device_kind=device_kind,
         )
         internal = await self.get(session_key)
         if internal is None:
@@ -376,6 +472,9 @@ class BrowserManager:
 
     async def _create(
         self, session_key: str, persistent_context_id: str | None,
+        *,
+        viewport: tuple[int, int],
+        device_kind: DeviceKind,
     ) -> BrowserSession:
         async with self._lock:
             while len(self._sessions) >= _MAX_SESSIONS:
@@ -389,10 +488,18 @@ class BrowserManager:
             "project_id": project_id, "keep_alive": False,
             "timeout": _BB_SESSION_TIMEOUT_SEC,
         }
+        # Browserbase browserSettings — `viewport` sets the remote
+        # chromium window size, which is what the live-view stream
+        # captures. We deliberately don't use BB's `os` field for mobile
+        # because it's gated behind Advanced Stealth (paid Scale plan);
+        # instead we do full device emulation via CDP after the CDP
+        # connect below, which works on any BB tier.
+        bb_settings: dict[str, Any] = {
+            "viewport": {"width": viewport[0], "height": viewport[1]},
+        }
         if persistent_context_id:
-            create_kwargs["browser_settings"] = {
-                "context": {"id": persistent_context_id, "persist": True},
-            }
+            bb_settings["context"] = {"id": persistent_context_id, "persist": True}
+        create_kwargs["browser_settings"] = bb_settings
         bb_session = await asyncio.to_thread(bb.sessions.create, **create_kwargs)
         debug = await asyncio.to_thread(bb.sessions.debug, bb_session.id)
         live_view_url = (
@@ -418,12 +525,51 @@ class BrowserManager:
         context = contexts[0]
         page = context.pages[0] if context.pages else await context.new_page()
 
-        viewport = page.viewport_size or {"width": 1280, "height": 720}
+        # Mobile / tablet emulation via raw CDP. This is the same set of
+        # commands Playwright's `browser.new_context(**devices[...])`
+        # emits internally — works on any Browserbase tier (no Advanced
+        # Stealth required) and gives the full picture: realistic UA,
+        # mobile=true (sets isMobile / maxTouchPoints in the page),
+        # touch enabled, and CSS-px viewport matching the user's panel.
+        # The BB session's window was already created at `viewport` size,
+        # so the streamed live view matches what we override here.
+        if device_kind != "desktop":
+            preset = pw.devices.get(_DEVICE_PRESET[device_kind], {})
+            cdp = await context.new_cdp_session(page)
+            try:
+                await cdp.send("Emulation.setDeviceMetricsOverride", {
+                    "width": viewport[0],
+                    "height": viewport[1],
+                    "deviceScaleFactor": preset.get("device_scale_factor", 2),
+                    "mobile": True,
+                    "screenWidth": viewport[0],
+                    "screenHeight": viewport[1],
+                })
+                await cdp.send("Emulation.setTouchEmulationEnabled", {
+                    "enabled": True, "maxTouchPoints": 5,
+                })
+                ua = preset.get("user_agent")
+                if ua:
+                    await cdp.send("Network.setUserAgentOverride", {
+                        "userAgent": ua,
+                        "acceptLanguage": "en-US,en;q=0.9",
+                    })
+            finally:
+                # Detach the auxiliary CDP session — Playwright's own
+                # Target tracking keeps the page alive without it.
+                with suppress(Exception):
+                    await cdp.detach()
+
+        # The viewport we requested is authoritative — page.viewport_size
+        # over CDP can return None or stale defaults before the first
+        # render commits. The frontend uses this for fit-to-height scaling
+        # so it has to match what BB is actually rendering at.
         now = time.monotonic()
         session = BrowserSession(
             session_key=session_key, bb_session_id=bb_session.id,
             live_view_url=live_view_url,
-            viewport=dict(viewport),
+            viewport={"width": viewport[0], "height": viewport[1]},
+            device_kind=device_kind,
             control_mode=BrowserControlMode.AI,
             takeover_reason=None,
             current_url=page.url,
@@ -517,6 +663,7 @@ class BrowserManager:
             "bbSessionId": s.bb_session_id,
             "liveViewUrl": s.live_view_url,
             "viewport": s.viewport,
+            "deviceKind": s.device_kind,
             "controlMode": s.control_mode.value,
             "takeoverReason": s.takeover_reason,
             "url": s.current_url,

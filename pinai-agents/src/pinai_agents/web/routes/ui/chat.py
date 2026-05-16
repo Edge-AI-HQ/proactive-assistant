@@ -212,6 +212,11 @@ async def chat_send(
     # next list query and chat history is unaffected.
     async def _stream_with_metadata_bump():
         try:
+            hints_dict = (
+                body.client_hints.model_dump(by_alias=False)
+                if body.client_hints is not None
+                else None
+            )
             async for chunk in stream_chat(
                 user_id=user.id,
                 session_key=body.session_key,
@@ -219,6 +224,7 @@ async def chat_send(
                 card_context=body.card_context,
                 virtual_key=user.litellm_virtual_key,
                 browserbase_context_id=user.browserbase_context_id,
+                client_hints=hints_dict,
             ):
                 yield chunk
         finally:

@@ -30,9 +30,13 @@ from typing import Any
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
-from ..runtime.ctx import current_browserbase_context_id, current_session_key
+from ..runtime.ctx import (
+    current_browserbase_context_id,
+    current_client_hints,
+    current_session_key,
+)
 from .control_state import BrowserControlDenied, BrowserControlMode
-from .manager import get_browser_manager
+from .manager import DeviceKind, get_browser_manager
 
 logger = logging.getLogger(__name__)
 
@@ -108,8 +112,20 @@ async def browser_tool(
     try:
         if action == "open":
             ctx_id = current_browserbase_context_id.get() or None
+            hints = current_client_hints.get()
+            viewport: tuple[int, int] | None = None
+            device_kind: DeviceKind = "desktop"
+            if hints:
+                w = hints.get("viewport_width")
+                h = hints.get("viewport_height")
+                if w and h:
+                    viewport = (int(w), int(h))
+                dk = hints.get("device_kind")
+                if dk in ("mobile", "tablet", "desktop"):
+                    device_kind = dk
             opened = await mgr.open(
                 session_key, url=url, persistent_context_id=ctx_id,
+                viewport=viewport, device_kind=device_kind,
             )
             return {"ok": True, "action": "open", **opened}
 

@@ -43,6 +43,7 @@ from .routes.agent.signals import router as agent_signals_router
 from .routes.agent.skills import router as agent_skills_router
 from .routes.agent.state import router as agent_state_router
 from .routes.agent.world import router as agent_world_router
+from .routes.ui.account import router as ui_account_router
 from .routes.ui.agent_runs import router as ui_agent_runs_router
 from .routes.ui.browser import router as ui_browser_router
 from .routes.ui.chat import router as ui_chat_router
@@ -181,6 +182,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_jwt_revoke_router)
     app.include_router(ui_browser_router)
     app.include_router(ui_voice_router)
+    app.include_router(ui_account_router)
 
     # ── /api/agent/* (sandbox / chat, HS256 JWT) ──
     app.include_router(agent_memory_router)

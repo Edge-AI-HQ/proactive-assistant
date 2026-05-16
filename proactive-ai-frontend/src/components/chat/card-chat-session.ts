@@ -1,3 +1,5 @@
+import type { ClientHints } from "@/hooks/useClientHints";
+
 export interface BuildChatRequestBodyParams {
   sessionKey: string;
   userText?: string;
@@ -6,6 +8,11 @@ export interface BuildChatRequestBodyParams {
    *  backend receives a quoted string instead of an object. */
   cardContext?: Record<string, unknown>;
   includeCardContext: boolean;
+  /** Device hints — drives backend BrowserBase session viewport + UA
+   *  profile so the in-app browser renders mobile sites correctly on
+   *  mobile, etc. Omit for environments where we don't want device
+   *  detection (tests). */
+  clientHints?: ClientHints;
 }
 
 export interface ShouldBootstrapCardChatParams {
@@ -30,6 +37,9 @@ export function buildChatRequestBody(
   }
   if (params.includeCardContext && params.cardContext) {
     body.cardContext = params.cardContext;
+  }
+  if (params.clientHints) {
+    body.clientHints = params.clientHints;
   }
   return body;
 }

@@ -38,13 +38,17 @@ async def stream_chat(
     card_context: dict[str, Any] | None,
     virtual_key: str,
     browserbase_context_id: str | None = None,
+    client_hints: dict[str, Any] | None = None,
 ) -> AsyncIterator[bytes]:
     """Forward to chat worker /agent/chat and yield SSE bytes back.
 
     Caller (route handler) wraps the returned iterator in a
     StreamingResponse(media_type="text/event-stream"). The user's LiteLLM
     `virtual_key` and Browserbase `bbctx` ride in the JWT claims so the
-    chat worker process never needs DB access for these.
+    chat worker process never needs DB access for these. `client_hints`
+    is the frontend's device profile (viewport + mobile/tablet/desktop)
+    — passed through to the chat worker which feeds it to BB session
+    creation so mobile users get mobile-rendered pages.
     """
     token, run_id = sign_agent_run_jwt(
         user_id=user_id,
@@ -56,6 +60,8 @@ async def stream_chat(
         "message": message,
         "card_context": card_context,
     }
+    if client_hints is not None:
+        body["client_hints"] = client_hints
     url = f"{_chat_internal_url()}/agent/chat"
 
     timeout = httpx.Timeout(connect=5.0, read=600.0, write=10.0, pool=10.0)

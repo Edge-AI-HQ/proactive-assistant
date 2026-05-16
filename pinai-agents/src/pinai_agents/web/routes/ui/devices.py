@@ -16,6 +16,7 @@ distinction is enforced by the FastAPI Depends call in each endpoint.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -69,6 +70,11 @@ class RegisterRequest(BaseModel):
 class RotateRequest(BaseModel):
     deviceId: str
     currentToken: str
+
+
+class PushTokenRequest(BaseModel):
+    pushToken: str = Field(min_length=16, max_length=512)
+    pushProvider: str  # 'apns' | 'fcm' | 'web'
 
 
 class IngestItemIn(BaseModel):
@@ -254,6 +260,71 @@ async def revoke_device(
         repo = DevicesRepository(user.id, conn)
         await repo.revoke(device_id)
     return None
+
+
+_TEST_PUSH_DELAY_SECONDS = 5
+
+
+@router.post("/test-push")
+async def test_push(
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+) -> dict[str, Any]:
+    """Debug: schedule a notification ~5s in the future so the developer
+    can background the app between tap and delivery, verifying the push
+    arrives via APNs (not via the in-app foreground event surface).
+
+    Goes through the same code path as a real new-cards trigger — so a
+    failing test_push surfaces in the same `push.skip` / `push.failed`
+    / `push.sent` log lines as the production path. No bypass of
+    settings.notify_new_cards or device.push_token gating; if those are
+    off the test correctly fails (and the log line tells you why).
+    """
+    async def _delayed() -> None:
+        try:
+            await asyncio.sleep(_TEST_PUSH_DELAY_SECONDS)
+            from ...services.push_notifier import notify_new_cards  # noqa: PLC0415
+            await notify_new_cards(pool, user_id=user.id, card_count=1)
+        except Exception:
+            logger.exception("test_push delayed task failed user=%s", user.id)
+
+    # Detach the task — request returns immediately. The 5s window is
+    # short enough that we don't bother tracking the handle; if pinai-web
+    # restarts mid-wait, the test just doesn't fire (acceptable for debug).
+    asyncio.create_task(_delayed())
+    return {"ok": True, "scheduledInSeconds": _TEST_PUSH_DELAY_SECONDS}
+
+
+@router.put("/{device_id}/push-token")
+async def set_push_token(
+    device_id: str,
+    body: PushTokenRequest,
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+) -> dict[str, Any]:
+    """Upsert APNs/FCM/web push token for a registered device. Clients
+    re-PUT this on every app launch; the repo resets push_failure_count
+    to 0 so a previously-soft-disabled token can be revived in place."""
+    async with user_scoped_tx(pool, user.id) as conn:
+        repo = DevicesRepository(user.id, conn)
+        try:
+            row = await repo.set_push_token(
+                device_id=device_id,
+                push_token=body.pushToken,
+                push_provider=body.pushProvider,
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+    if row is None:
+        raise HTTPException(404, "device not found or revoked")
+    return {
+        "deviceId": row.device_id,
+        "pushProvider": row.push_provider,
+        "pushTokenUpdatedAt": (
+            row.push_token_updated_at.isoformat()
+            if row.push_token_updated_at else None
+        ),
+    }
 
 
 @router.post("/rotate")

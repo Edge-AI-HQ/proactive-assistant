@@ -63,15 +63,14 @@ class WebSettings(_BaseAppSettings):
 
     # ── Supabase Auth ──
     # Token verification calls `${SUPABASE_URL}/auth/v1/user` with the
-    # anon (publishable) key as `apikey` header — same network path
-    # apis used. The frontend build already needs this value as
-    # VITE_SUPABASE_PUBLISHABLE_KEY, so we accept either name; backend
-    # ops can set the unprefixed `SUPABASE_ANON_KEY` if they want a
-    # backend-only override.
-    supabase_anon_key: str | None = Field(
+    # publishable key as `apikey` header. Vite requires the `VITE_`
+    # prefix for any var the frontend bundles, and this is the same
+    # value the frontend already needs — so we accept either name and
+    # let the env file ship a single line.
+    supabase_publishable_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
-            "SUPABASE_ANON_KEY", "VITE_SUPABASE_PUBLISHABLE_KEY",
+            "SUPABASE_PUBLISHABLE_KEY", "VITE_SUPABASE_PUBLISHABLE_KEY",
         ),
     )
 
@@ -89,14 +88,18 @@ class WebSettings(_BaseAppSettings):
     # Composio master key (single, shared across all users — see plan v2 § Q6).
     composio_api_key: str | None = None
 
-    # ── Supabase REST + Storage (master credentials) ──
+    # ── Supabase REST + Storage + Admin (master credentials) ──
     # Used for: storing device-uploaded ambient media in the pai-media
-    # bucket (signed URL for download). The service-role key bypasses RLS
-    # — it MUST stay in web process only.
+    # bucket (signed URL for download), and admin operations like
+    # /auth/v1/admin/users/{id} (account deletion). Bypasses RLS — MUST
+    # stay in web process only.
+    #
+    # `SUPABASE_SECRET_KEY` is Supabase's current naming (`sb_secret_*`),
+    # the replacement for the legacy `service_role` JWT.
     supabase_url: str | None = None
-    supabase_service_role_key: str | None = None
-    # Bucket name. Must exist + have RLS configured (only service_role
-    # writes; signed URLs grant per-object reads).
+    supabase_secret_key: str | None = None
+    # Bucket name. Must exist + have RLS configured (only the secret
+    # key writes; signed URLs grant per-object reads).
     supabase_media_bucket: str = "pai-media"
 
     # ── Stripe (master credentials) ──
@@ -152,6 +155,24 @@ class WebSettings(_BaseAppSettings):
     litellm_allowed_models: str = ""
     litellm_default_rpm_limit: int | None = None
     litellm_default_tpm_limit: int | None = None
+
+    # ── APNs (iOS push notifications) ──
+    # JWT-based auth (Apple's "token-based" path, not legacy certificates).
+    # APNS_AUTH_KEY is the base64 of the .p8 PEM file (single line) —
+    # the multi-line PEM body breaks .env / docker-compose / fly secret
+    # parsers, so we standardize on base64 at the boundary.
+    # APNS_KEY_ID identifies which key signed the JWT; APNS_TEAM_ID is
+    # the Apple Developer Team. APNS_BUNDLE_ID is the iOS app's bundle
+    # identifier (becomes the `apns-topic` header on every push).
+    # APNS_USE_SANDBOX=true routes to api.sandbox.push.apple.com
+    # (development builds + TestFlight); false routes to api.push.apple.com
+    # (App Store builds). All four are required for the send pipeline to
+    # boot; absence makes push_notifier a no-op (logs only).
+    apns_team_id: str | None = None
+    apns_key_id: str | None = None
+    apns_auth_key: str | None = None  # base64 of the .p8 PEM
+    apns_bundle_id: str | None = None
+    apns_use_sandbox: bool = True
 
     # ── LangSmith read side for internal reward dashboard ──
     # chat process emits traces; web process only reads them on demand to

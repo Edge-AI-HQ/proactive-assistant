@@ -18,7 +18,7 @@ from pinai_agents.web.auth.supabase_jwt import (
 @pytest.fixture(autouse=True)
 def _set_env(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
-    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key-test")
+    monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "publishable-key-test")
     from pinai_agents import config
     config.get_web_settings.cache_clear()
     reset_cache_for_tests()

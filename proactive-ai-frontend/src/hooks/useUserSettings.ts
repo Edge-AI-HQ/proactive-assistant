@@ -25,6 +25,15 @@ export interface UserSettings {
   autoCrystallize: boolean;
   metadata: Record<string, unknown>;
   ambientSources: Record<string, AmbientSourceConsent>;
+  notifyNewCards: boolean;
+  /** ISO timestamp the first time we showed the in-app pre-prompt; null
+   * means the prompt has never been shown for this user. Used by the
+   * home screen to decide whether to mount PreNotificationPrompt. */
+  notifyPermissionPromptedAt: string | null;
+  /** ISO timestamp the user finished or skipped through first-run
+   * onboarding. null → App.tsx renders <OnboardingFlow />; non-null →
+   * render the main shell. Monotonic — never returns to null. */
+  onboardingCompletedAt: string | null;
   updatedAt: string;
 }
 
@@ -32,9 +41,26 @@ export interface UserSettings {
  * Partial settings patch. ``ambientSources`` is a per-key map; entries
  * with ``null`` value remove the key server-side (see profile.py
  * update_settings route).
+ *
+ * ``notifyPermissionPrompted`` is a write-only trigger: pass ``true`` to
+ * stamp ``notifyPermissionPromptedAt = NOW()`` server-side. The server
+ * never clears this column, so passing ``false``/omitting is a no-op.
  */
-export type UserSettingsPatch = Partial<Omit<UserSettings, "updatedAt" | "ambientSources">> & {
+export type UserSettingsPatch = Partial<
+  Omit<
+    UserSettings,
+    | "updatedAt"
+    | "ambientSources"
+    | "notifyPermissionPromptedAt"
+    | "onboardingCompletedAt"
+  >
+> & {
   ambientSources?: Record<string, AmbientSourceConsent | null>;
+  notifyPermissionPrompted?: boolean;
+  /** Write-only trigger: pass `true` to stamp `onboardingCompletedAt =
+   * NOW()` server-side. Server never clears the column, so passing
+   * `false`/omitting is a no-op. */
+  onboardingCompleted?: boolean;
 };
 
 export interface UseUserSettingsResult {

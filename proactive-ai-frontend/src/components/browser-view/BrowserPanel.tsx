@@ -20,6 +20,7 @@ interface BrowserSession {
   browserSessionId: string;
   liveViewUrl: string;
   viewport: { width: number; height: number };
+  deviceKind: "mobile" | "tablet" | "desktop";
   currentUrl: string;
   controlMode: "ai" | "user" | "idle";
   takeoverReason?: string | null;
@@ -238,6 +239,7 @@ export default function BrowserPanel({
         sheetStage={stage}
         isNative={isNative}
         viewport={session.viewport}
+        deviceKind={session.deviceKind}
         onControlChange={onControlChange}
         onUserInputText={onUserInputText}
         onUserInputKey={onUserInputKey}

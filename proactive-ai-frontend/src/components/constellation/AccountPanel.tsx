@@ -1,7 +1,10 @@
+import { useCallback, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Sparkles, Check, Bell, SlidersHorizontal, ShieldCheck,
+  AlertTriangle, Loader2,
 } from "lucide-react";
+import NotificationSettings from "@/components/NotificationSettings";
 
 export interface AccountPanelProps {
   /** Display name shown on the profile card. Falls back to email prefix. */
@@ -14,6 +17,15 @@ export interface AccountPanelProps {
   memberSince?: string;
   /** Optional sign-out handler. When provided, replaces the Edit button with Sign out. */
   onSignOut?: () => void;
+  /**
+   * Optional destructive-delete handler. When provided, surfaces a
+   * Danger Zone card at the bottom of the panel with a typed-confirm
+   * flow. The handler is expected to delete the account AND sign the
+   * user out (page-reload included) on success, so this component only
+   * needs to surface its own loading + error UI. Throws on failure so
+   * the panel can show the message and let the user retry.
+   */
+  onDeleteAccount?: () => Promise<void>;
 }
 
 export default function AccountPanel({
@@ -22,11 +34,35 @@ export default function AccountPanel({
   userEmail,
   memberSince,
   onSignOut,
+  onDeleteAccount,
 }: AccountPanelProps = {}) {
   const initial = (avatarLetter ?? userName.trim().slice(0, 1) ?? "?").toUpperCase();
   const subtitle = memberSince
     ? `${userEmail ?? ""}${userEmail ? " · " : ""}Member since ${memberSince}`
     : (userEmail ?? "Signed in");
+
+  // Two-step disclosure: collapsed Danger Zone shows just the Delete
+  // button; clicking expands the typed-confirm form. Self-contained UI
+  // state — the action itself is the prop.
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const handleConfirmDelete = useCallback(async () => {
+    if (!onDeleteAccount || confirmText !== "DELETE") return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await onDeleteAccount();
+      // On success the parent reloads the page; reaching here only
+      // happens transiently before the reload fires.
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : String(err));
+      setDeleting(false);
+    }
+  }, [onDeleteAccount, confirmText]);
+
   return (
     <div className="flex flex-col h-full px-4 pt-14 pb-2 overflow-y-auto">
       {/* Header */}
@@ -144,9 +180,28 @@ export default function AccountPanel({
           </div>
         </div>
 
-        {/* Section rows */}
+        {/* Push Notifications — interactive toggle. OS permission +
+            app preference are reconciled by NotificationSettings; on
+            web (no Capacitor push) this renders nothing. */}
+        <div className="glass-card-strong p-4 space-y-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-foreground/[0.06] flex items-center justify-center flex-shrink-0">
+              <Bell size={16} strokeWidth={1.5} className="text-foreground/70" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-foreground">Push Notifications</p>
+              <p className="text-[11px] text-foreground/50 mt-0.5">
+                Get notified when new cards are ready
+              </p>
+            </div>
+          </div>
+          <NotificationSettings />
+        </div>
+
+        {/* Section rows — placeholder targets for future Preferences /
+            Privacy & Data screens. The buttons are non-interactive on
+            purpose; wire them up when those screens exist. */}
         {[
-          { icon: Bell, name: "Push Notifications", desc: "What gets through — even during quiet hours" },
           { icon: SlidersHorizontal, name: "Preferences", desc: "Quiet hours, voice, tone" },
           { icon: ShieldCheck, name: "Privacy & Data", desc: "On-device by default · TEE-protected" },
         ].map((row) => {
@@ -166,6 +221,81 @@ export default function AccountPanel({
             </button>
           );
         })}
+
+        {/* Danger Zone — bottom of the panel, last destructive surface. */}
+        {onDeleteAccount && (
+          <div className="glass-card-strong p-4 space-y-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-red-50 flex items-center justify-center flex-shrink-0">
+                <AlertTriangle size={16} strokeWidth={1.5} className="text-red-600" />
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-semibold text-foreground">Delete Account</p>
+                <p className="text-[11px] text-foreground/50 mt-0.5">
+                  Permanently erase your account and all associated data. Cannot be undone.
+                </p>
+              </div>
+            </div>
+
+            {!deleteOpen ? (
+              <button
+                onClick={() => {
+                  setDeleteOpen(true);
+                  setConfirmText("");
+                  setDeleteError(null);
+                }}
+                className="w-full rounded-2xl border border-red-200 bg-red-50/40 text-red-700 text-[11px] font-medium py-2 transition-colors hover:bg-red-50"
+              >
+                Delete Account
+              </button>
+            ) : (
+              <div className="space-y-2 rounded-2xl border border-red-200 bg-red-50/40 p-3">
+                <p className="text-[11px] leading-snug text-red-700">
+                  This permanently erases your account, memories, signals, cards,
+                  feedback, connectors, raw data, skills, subscription, and uploaded
+                  media. Type <span className="font-mono font-semibold">DELETE</span> to confirm.
+                </p>
+                <input
+                  type="text"
+                  autoFocus
+                  value={confirmText}
+                  onChange={(e) => setConfirmText(e.target.value)}
+                  placeholder="DELETE"
+                  disabled={deleting}
+                  className="w-full rounded-md border border-red-200 bg-white px-2 py-1.5 text-[11px] font-mono text-red-700 placeholder-red-300 focus:outline-none focus:ring-1 focus:ring-red-400 disabled:opacity-50"
+                />
+                {deleteError && (
+                  <p className="text-[10px] text-red-700 leading-snug">{deleteError}</p>
+                )}
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      setDeleteOpen(false);
+                      setConfirmText("");
+                      setDeleteError(null);
+                    }}
+                    disabled={deleting}
+                    className="flex-1 rounded-md border border-foreground/15 text-foreground/60 text-[11px] font-medium py-1.5 transition-colors hover:bg-foreground/5 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => void handleConfirmDelete()}
+                    disabled={deleting || confirmText !== "DELETE"}
+                    className="flex-1 flex items-center justify-center gap-1.5 rounded-md bg-red-600 text-white text-[11px] font-semibold py-1.5 transition-colors hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {deleting ? (
+                      <>
+                        <Loader2 size={11} className="animate-spin" />
+                        Deleting...
+                      </>
+                    ) : "Delete forever"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </motion.div>
     </div>
   );

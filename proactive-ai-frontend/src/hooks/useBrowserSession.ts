@@ -20,12 +20,19 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { proxyFetch, proxyPost } from "@/lib/api";
 
 export type BrowserControlMode = "ai" | "user";
+export type BrowserDeviceKind = "mobile" | "tablet" | "desktop";
 
 export interface BrowserSession {
   sessionKey: string;
   bbSessionId: string;
   liveViewUrl: string;
   viewport: { width: number; height: number };
+  /** Stealth UA profile the remote browser was launched with. Drives
+   *  whether the live-view iframe is rendered fit-to-width (mobile /
+   *  tablet — wants natural vertical scroll) or fit-to-height (desktop
+   *  — wants the full chrome visible). Defaults to "desktop" on the
+   *  legacy code path that never emits it. */
+  deviceKind: BrowserDeviceKind;
   controlMode: BrowserControlMode;
   /** Set by AI calling `request_takeover`; cleared when control returns to AI. */
   takeoverReason: string | null;
@@ -39,6 +46,10 @@ interface BrowserEnvelope {
 
 function parseControlMode(value: unknown): BrowserControlMode {
   return value === "user" ? "user" : "ai";
+}
+
+function parseDeviceKind(value: unknown): BrowserDeviceKind {
+  return value === "mobile" || value === "tablet" ? value : "desktop";
 }
 
 function reduce(
@@ -59,6 +70,7 @@ function reduce(
         bbSessionId,
         liveViewUrl,
         viewport,
+        deviceKind: parseDeviceKind(data.deviceKind),
         controlMode: parseControlMode(data.controlMode),
         takeoverReason:
           typeof data.takeoverReason === "string" && data.takeoverReason

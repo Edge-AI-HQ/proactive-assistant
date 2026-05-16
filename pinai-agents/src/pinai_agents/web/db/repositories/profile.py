@@ -89,6 +89,17 @@ class UserSettingsRow:
     # { "<source_key>": { "enabled": <bool>, "updated_at": "<iso>" } }.
     # Empty = "no ambient capture" — login alone never starts a source.
     ambient_sources: dict[str, Any]
+    # New-cards push notification opt-in. False by default; flipped on
+    # only when the user accepts the in-app pre-prompt AND the OS prompt.
+    notify_new_cards: bool
+    # First time we showed the in-app pre-prompt. NULL means "never asked
+    # yet — show it on next home mount"; non-NULL means "don't ask again,
+    # the toggle in Account is the only way to change preference".
+    notify_permission_prompted_at: datetime | None
+    # First-run onboarding completion. NULL = SPA renders <OnboardingFlow />;
+    # non-NULL = the user finished or skipped through the flow at least
+    # once and lands in the main shell going forward. Skip still counts.
+    onboarding_completed_at: datetime | None
     updated_at: datetime
 
     @classmethod
@@ -101,6 +112,9 @@ class UserSettingsRow:
             auto_crystallize=row["auto_crystallize"],
             metadata=_as_dict(row["metadata"]),
             ambient_sources=_as_dict(row.get("ambient_sources")),
+            notify_new_cards=bool(row.get("notify_new_cards", False)),
+            notify_permission_prompted_at=row.get("notify_permission_prompted_at"),
+            onboarding_completed_at=row.get("onboarding_completed_at"),
             updated_at=row["updated_at"],
         )
 
@@ -316,6 +330,17 @@ class ProfileRepository(UserScopedRepository):
         auto_crystallize: bool | None = None,
         metadata: dict[str, Any] | None = None,
         ambient_sources_patch: dict[str, Any] | None = None,
+        notify_new_cards: bool | None = None,
+        # datetime → set; None → preserve via COALESCE. The column is
+        # written exactly once per user (when the in-app pre-prompt is
+        # first shown) and never reset, so there's no None-means-clear
+        # path to model. Route passes datetime.now(UTC) on the stamp.
+        notify_permission_prompted_at: datetime | None = None,
+        # datetime → set; None → preserve. The column is written exactly
+        # once per user (when onboarding finishes) and never reset, so
+        # there's no None-means-clear path. Route passes datetime.now(UTC)
+        # on the stamp.
+        onboarding_completed_at: datetime | None = None,
     ) -> UserSettingsRow:
         """Partial upsert — pass only the fields you want to change.
 
@@ -364,6 +389,9 @@ class ProfileRepository(UserScopedRepository):
                   auto_crystallize               = COALESCE(%s, auto_crystallize),
                   metadata                       = COALESCE(%s::jsonb, metadata),
                   ambient_sources                = COALESCE(%s::jsonb, ambient_sources),
+                  notify_new_cards               = COALESCE(%s, notify_new_cards),
+                  notify_permission_prompted_at  = COALESCE(%s, notify_permission_prompted_at),
+                  onboarding_completed_at        = COALESCE(%s, onboarding_completed_at),
                   updated_at = NOW()
                 WHERE user_id = %s
                 RETURNING *
@@ -373,6 +401,9 @@ class ProfileRepository(UserScopedRepository):
                     auto_dreaming, auto_crystallize,
                     json.dumps(metadata) if metadata is not None else None,
                     ambient_json,
+                    notify_new_cards,
+                    notify_permission_prompted_at,
+                    onboarding_completed_at,
                     self._user_id,
                 ),
             )

@@ -35,9 +35,15 @@ interface BrowserViewProps {
   iframeReloadKey?: number;
   sheetStage: SheetStage;
   isNative: boolean;
-  /** Remote page viewport in CSS px (1280×800 desktop preset) — used to
-   *  invert iframe transform when forwarding clicks/scrolls. */
+  /** Remote page viewport in CSS px — for mobile/tablet sessions this is
+   *  matched to the user's panel width, so the iframe renders 1:1; for
+   *  desktop (1280×800 preset) we fit-to-height with horizontal scroll. */
   viewport: { width: number; height: number };
+  /** Device profile the BB session was launched with. "mobile"/"tablet"
+   *  → fit-to-width (vertical scroll inside iframe is the native mobile
+   *  pattern); "desktop" → fit-to-height (full chrome visible, page
+   *  exceeds panel width and the wrapper scrolls horizontally). */
+  deviceKind: "mobile" | "tablet" | "desktop";
   onUserInputText: (text: string) => Promise<void>;
   onUserInputKey: (key: string) => Promise<void>;
   onUserInputClick: (x: number, y: number) => Promise<void>;
@@ -66,6 +72,7 @@ export default function BrowserView({
   sheetStage,
   isNative,
   viewport,
+  deviceKind,
   onUserInputText,
   onUserInputKey,
   onUserInputClick,
@@ -105,24 +112,36 @@ export default function BrowserView({
     return () => ro.disconnect();
   }, [isMini]);
 
-  // Fit the iframe so the *vertical* axis fully covers the panel (no top
-  // or bottom letterbox). Visual width then exceeds the panel width, and
-  // the wrapper scrolls horizontally — default to the visual center so
-  // most pages' main content is in view. Pinch zoom multiplies on top.
-  // Layout height includes Browserbase's own chrome (URL bar / back / forward
-  // / reload) on top of the remote viewport — that's what the user sees,
-  // and it must scale together so the chrome doesn't get squeezed off.
+  // Fit strategy depends on the remote device profile:
+  //   - mobile / tablet: "contain" fit — pick the smaller of width-fit
+  //     and height-fit so nothing clips. When the BB viewport was sized
+  //     to the panel CSS px (the common case) both ratios are ~1.0 and
+  //     the iframe renders 1:1. When they diverge (stage change, hint
+  //     mismatch) the page downscales rather than getting cut off.
+  //   - desktop: fit-to-height with horizontal scroll. Keeps Browserbase's
+  //     own chrome (URL bar / back / forward / reload) visible without
+  //     squeezing; the wrapper scrolls horizontally — default the scroll
+  //     position to centered so most pages' main content is in view.
   const layoutH = viewport.height + BROWSERBASE_CHROME_HEIGHT;
-  const fitScale = wrapperSize.h > 0 ? wrapperSize.h / layoutH : 1;
+  const fitToWidth = deviceKind !== "desktop";
+  const fitScale =
+    wrapperSize.w > 0 && wrapperSize.h > 0
+      ? fitToWidth
+        ? Math.min(wrapperSize.w / viewport.width, wrapperSize.h / layoutH)
+        : wrapperSize.h / layoutH
+      : 1;
   const [userZoom, setUserZoom] = useState(1);
   const isZoomedIn = userZoom > 1.05;
   const scale = fitScale * userZoom;
   const visualW = viewport.width * scale;
   const visualH = layoutH * scale;
 
-  // Default scrollLeft to center on first measure / new session.
+  // Default scrollLeft to center on first measure / new session. Only
+  // meaningful for the desktop fit (the wrapper is horizontally
+  // scrollable there); mobile/tablet fit clips at panel width.
   const sessionRef = useRef<string>("");
   useEffect(() => {
+    if (fitToWidth) return;
     const el = wrapperRef.current;
     if (!el) return;
     if (visualW <= 0 || wrapperSize.w <= 0) return;
@@ -130,7 +149,7 @@ export default function BrowserView({
     sessionRef.current = sessionId;
     const target = Math.max(0, (visualW - wrapperSize.w) / 2);
     el.scrollLeft = target;
-  }, [sessionId, visualW, wrapperSize.w]);
+  }, [sessionId, visualW, wrapperSize.w, fitToWidth]);
 
   // Mini stage entry → reset zoom and horizontal scroll. Without this, a
   // user who zoomed before collapsing to mini comes back to a giant
@@ -332,7 +351,11 @@ export default function BrowserView({
           className={
             isMini
               ? "absolute inset-0"
-              : "absolute inset-0 overflow-x-auto overflow-y-hidden"
+              : fitToWidth
+                // Mobile/tablet: BB viewport already matches panel width,
+                // iframe is 1:1 to panel — clip everything, no scrollbars.
+                ? "absolute inset-0 overflow-hidden"
+                : "absolute inset-0 overflow-x-auto overflow-y-hidden"
           }
           style={
             isMini

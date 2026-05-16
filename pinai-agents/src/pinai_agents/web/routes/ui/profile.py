@@ -210,6 +210,13 @@ async def update_settings(
             auto_crystallize=body.auto_crystallize,
             metadata=body.metadata,
             ambient_sources_patch=ambient_patch,
+            notify_new_cards=body.notify_new_cards,
+            notify_permission_prompted_at=(
+                datetime.now(UTC) if body.notify_permission_prompted else None
+            ),
+            onboarding_completed_at=(
+                datetime.now(UTC) if body.onboarding_completed else None
+            ),
         )
         await _sync_auto_generate_schedule(conn, user_id=user.id, settings=row)
     return _settings_response(row)

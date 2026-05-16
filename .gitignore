@@ -124,3 +124,6 @@ MEMO.md
 CLAUDE.local.md
 .factory
 capacitor-plugins/ambient-ai/.build
+
+# Xcode / SwiftPM per-user state (xcshareddata is shared and stays tracked)
+xcuserdata/

@@ -35,6 +35,7 @@ import {
 } from "./card-chat-session";
 import { LiveContentBuilder } from "./tool-steps";
 import { parseTodosFromArgs, setTodos } from "./todos-store";
+import { useClientHints, type ClientHints } from "@/hooks/useClientHints";
 
 export type { ProactiveToolCallArgs } from "./tool-steps";
 
@@ -53,6 +54,9 @@ interface AdapterOptions {
   cardContext?: Record<string, unknown>;
   bootstrapMessage?: string;
   bootstrappedSessionsRef: MutableRefObject<Set<string>>;
+  /** Latest device hints — read via ref at send time so resizes flow
+   *  through without rebuilding the adapter. */
+  clientHintsRef: MutableRefObject<ClientHints | null>;
 }
 
 /**
@@ -75,6 +79,7 @@ function createAdapter({
   cardContext,
   bootstrapMessage,
   bootstrappedSessionsRef,
+  clientHintsRef,
 }: AdapterOptions): ChatModelAdapter {
   return {
     async *run({ messages, abortSignal }) {
@@ -103,6 +108,7 @@ function createAdapter({
         userText: effectiveText,
         cardContext,
         includeCardContext: isFreshThread,
+        clientHints: clientHintsRef.current ?? undefined,
       });
 
       // Retry loop wraps the whole fetch + SSE parse so that a transient
@@ -358,6 +364,11 @@ export function useProactiveChatRuntime(options: UseProactiveChatRuntimeOptions)
   const [pendingBootstrap, setPendingBootstrap] = useState(false);
   const bootstrappedSessionsRef = useRef<Set<string>>(new Set());
   const triggeredBootstrapRef = useRef<Set<string>>(new Set());
+  // Latest device hints — kept in a ref so resize-driven re-renders
+  // don't force the adapter to rebuild every turn.
+  const clientHints = useClientHints();
+  const clientHintsRef = useRef<ClientHints | null>(null);
+  clientHintsRef.current = clientHints;
   // Stable string view of the card context for use as a memo / effect dep.
   // The hook receives `options.cardContext` as an object whose identity may
   // change every render even when the content is the same — using the
@@ -421,6 +432,7 @@ export function useProactiveChatRuntime(options: UseProactiveChatRuntimeOptions)
         cardContext: options.cardContext,
         bootstrapMessage: options.bootstrapMessage,
         bootstrappedSessionsRef,
+        clientHintsRef,
       }),
     // cardContextJson is the string-stable dep — the closure reads the
     // current options.cardContext object at the time the memo recomputes.

@@ -152,6 +152,18 @@ class SettingsResponse(_CamelModel):
     # Keyed by source slug (sound_classifier, location, visit, activity,
     # barometer, media_notebook, etc.). Missing keys = no consent.
     ambient_sources: dict[str, AmbientSourceConsent] = Field(default_factory=dict)
+    # Push notification opt-in for "new cards generated". OS-level
+    # permission lives outside this payload — frontend reconciles the two
+    # in the Account toggle UI.
+    notify_new_cards: bool = False
+    # NULL = in-app pre-prompt has never been shown for this user. Flips
+    # to a timestamp the first time the user sees the sheet (regardless
+    # of which CTA they pick) so we never re-prompt automatically.
+    notify_permission_prompted_at: datetime | None = None
+    # NULL = the user hasn't completed (or skipped through) the first-run
+    # onboarding flow yet. Frontend gates <OnboardingFlow /> vs the main
+    # shell on this field. Monotonic — never returns to NULL.
+    onboarding_completed_at: datetime | None = None
     updated_at: datetime
 
 
@@ -197,6 +209,16 @@ class SettingsUpdateRequest(_CamelModel):
     # removed; other keys keep their server-side state. Pass ``{}`` to
     # touch nothing (no-op).
     ambient_sources: dict[str, AmbientSourceConsent | None] | None = None
+    notify_new_cards: bool | None = None
+    # Pass `true` to stamp `notify_permission_prompted_at = NOW()` on the
+    # server (the only meaningful write — we never re-clear this column).
+    # `false`/omitted is a no-op so a generic toggle update doesn't
+    # accidentally mark the prompt as shown.
+    notify_permission_prompted: bool | None = None
+    # Pass `true` to stamp `onboarding_completed_at = NOW()` (the user
+    # finished or skipped through the first-run flow). Same write-only
+    # semantics as `notify_permission_prompted` above.
+    onboarding_completed: bool | None = None
 
 
 # ── App State KV ──
@@ -450,6 +472,19 @@ class ChatThreadListResponse(_CamelModel):
     threads: list[ChatThreadItem]
 
 
+class ClientHints(_CamelModel):
+    """Frontend-supplied device hints, forwarded to the chat worker.
+
+    Used by browser_tool.open to size + UA the remote Browserbase session
+    so mobile users see mobile layouts at 1:1 CSS-px scaling. None of
+    these are sensitive — the worker re-validates and clamps.
+    """
+
+    viewport_width: int = Field(ge=200, le=4096)
+    viewport_height: int = Field(ge=200, le=4096)
+    device_kind: Literal["mobile", "tablet", "desktop"] = "desktop"
+
+
 class ChatSendRequest(_CamelModel):
     session_key: str = Field(min_length=1, max_length=200)
     # Always non-empty: every chat-stream/send call carries either a
@@ -459,6 +494,7 @@ class ChatSendRequest(_CamelModel):
     # that never reached prod — see card-chat-session.ts.
     message: str = Field(min_length=1, max_length=8000)
     card_context: dict[str, Any] | None = None
+    client_hints: ClientHints | None = None
 
 
 # ── Scheduled Tasks ──

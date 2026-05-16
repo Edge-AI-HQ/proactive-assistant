@@ -312,6 +312,52 @@ export async function registerUserDevice(
   };
 }
 
+export type PushProvider = "apns" | "fcm" | "web";
+
+/**
+ * Upsert the APNs/FCM/web push token for a registered device. Idempotent:
+ * the server resets push_failure_count to 0 on every successful call, so
+ * re-registering a previously-soft-disabled token revives it in place.
+ *
+ * Called by usePushNotifications on every native registration event —
+ * Apple may rotate the token, so each app launch's PUT keeps us current.
+ */
+export async function setDevicePushToken(
+  deviceId: string,
+  pushToken: string,
+  pushProvider: PushProvider,
+): Promise<void> {
+  const res = await pinaiFetch(
+    `/api/devices/${encodeURIComponent(deviceId)}/push-token`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pushToken, pushProvider }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`/devices/{id}/push-token failed: ${await readErrorMessage(res)}`);
+  }
+}
+
+/**
+ * Debug: schedule a notification 5s in the future. Lets the developer
+ * background the app and verify the banner arrives via APNs (not just
+ * via the in-app foreground event surface). Returns the server-confirmed
+ * delay so callers can show a countdown.
+ */
+export async function scheduleTestPush(): Promise<{ scheduledInSeconds: number }> {
+  const res = await pinaiFetch("/api/devices/test-push", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!res.ok) {
+    throw new Error(`/devices/test-push failed: ${await readErrorMessage(res)}`);
+  }
+  const data = (await res.json()) as { scheduledInSeconds?: number };
+  return { scheduledInSeconds: data.scheduledInSeconds ?? 5 };
+}
+
 export async function revokeUserDevice(deviceId: string): Promise<void> {
   const res = await pinaiFetch("/api/devices/revoke", {
     method: "POST",
@@ -396,6 +442,103 @@ export async function recordCardOpen(
   if (!res.ok) {
     throw new Error(`/reward-dashboard card_open failed: ${await readErrorMessage(res)}`);
   }
+}
+
+/**
+ * Permanently delete the signed-in user's account and all associated
+ * data. Backend chains: Composio disconnect → LiteLLM key revoke →
+ * Stripe subscription cancel → Browserbase context delete → Supabase
+ * Storage purge → Supabase Auth admin delete (fail-fast) → DB CASCADE
+ * across 27 pai_* tables.
+ *
+ * Once this resolves the caller MUST sign out: the JWT is dead
+ * (Supabase Auth user is gone), so any subsequent API call would 401.
+ *
+ * Throws on fail-fast abort (Supabase Auth couldn't be reached / DB
+ * cascade failed). External steps already done are idempotent, so the
+ * user can safely retry — the Error carries `.partial` with the
+ * per-step result for surfacing in the UI.
+ */
+type RawDeleteAccountResult = {
+  composio_disconnected: number;
+  composio_errors: string[];
+  litellm_keys_deleted: number;
+  litellm_error: string | null;
+  stripe_subscription_canceled: boolean;
+  stripe_error: string | null;
+  browserbase_context_deleted: boolean;
+  browserbase_error: string | null;
+  storage_files_deleted: number;
+  storage_error: string | null;
+  supabase_auth_deleted: boolean;
+  supabase_auth_error: string | null;
+  db_deleted: boolean;
+};
+
+export interface DeleteAccountResult {
+  composioDisconnected: number;
+  composioErrors: string[];
+  litellmKeysDeleted: number;
+  litellmError: string | null;
+  stripeSubscriptionCanceled: boolean;
+  stripeError: string | null;
+  browserbaseContextDeleted: boolean;
+  browserbaseError: string | null;
+  storageFilesDeleted: number;
+  storageError: string | null;
+  supabaseAuthDeleted: boolean;
+  supabaseAuthError: string | null;
+  dbDeleted: boolean;
+}
+
+function normalizeDeleteResult(r: RawDeleteAccountResult): DeleteAccountResult {
+  return {
+    composioDisconnected: r.composio_disconnected,
+    composioErrors: r.composio_errors,
+    litellmKeysDeleted: r.litellm_keys_deleted,
+    litellmError: r.litellm_error,
+    stripeSubscriptionCanceled: r.stripe_subscription_canceled,
+    stripeError: r.stripe_error,
+    browserbaseContextDeleted: r.browserbase_context_deleted,
+    browserbaseError: r.browserbase_error,
+    storageFilesDeleted: r.storage_files_deleted,
+    storageError: r.storage_error,
+    supabaseAuthDeleted: r.supabase_auth_deleted,
+    supabaseAuthError: r.supabase_auth_error,
+    dbDeleted: r.db_deleted,
+  };
+}
+
+export class DeleteAccountError extends Error {
+  partial: DeleteAccountResult | null;
+  constructor(message: string, partial: DeleteAccountResult | null) {
+    super(message);
+    this.name = "DeleteAccountError";
+    this.partial = partial;
+  }
+}
+
+export async function deleteAccount(): Promise<DeleteAccountResult> {
+  const res = await proxyFetch("/account", { method: "DELETE" });
+  if (!res.ok) {
+    // 502 from the fail-fast path carries { detail: { message, partial_result } }.
+    let partial: DeleteAccountResult | null = null;
+    let message = `/account DELETE failed: ${res.status}`;
+    try {
+      const body = (await res.json()) as {
+        detail?: { message?: string; partial_result?: RawDeleteAccountResult };
+      };
+      if (body?.detail?.message) message = `${res.status} ${body.detail.message}`;
+      if (body?.detail?.partial_result) {
+        partial = normalizeDeleteResult(body.detail.partial_result);
+      }
+    } catch {
+      // Body isn't JSON — fall through with the status-only message.
+    }
+    throw new DeleteAccountError(message, partial);
+  }
+  const body = (await res.json()) as { ok: boolean; result: RawDeleteAccountResult };
+  return normalizeDeleteResult(body.result);
 }
 
 export async function fetchProfileSnapshot(

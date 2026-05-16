@@ -343,6 +343,7 @@ export default function MainChatView({
                   browserSessionId: browserSession.sessionKey,
                   liveViewUrl: browserSession.liveViewUrl,
                   viewport: browserSession.viewport,
+                  deviceKind: browserSession.deviceKind,
                   currentUrl: browserSession.currentUrl,
                   controlMode: browserSession.controlMode,
                   takeoverReason: browserSession.takeoverReason,

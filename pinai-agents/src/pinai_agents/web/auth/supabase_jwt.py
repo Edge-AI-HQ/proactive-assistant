@@ -90,13 +90,13 @@ async def _call_supabase(token: str) -> SupabaseClaims:
     settings = get_web_settings()
     if not settings.supabase_url:
         raise JWTVerifyError("SUPABASE_URL not configured")
-    if not settings.supabase_anon_key:
-        raise JWTVerifyError("SUPABASE_ANON_KEY not configured")
+    if not settings.supabase_publishable_key:
+        raise JWTVerifyError("SUPABASE_PUBLISHABLE_KEY not configured")
 
     url = f"{settings.supabase_url.rstrip('/')}/auth/v1/user"
     headers = {
         "Authorization": f"Bearer {token}",
-        "apikey": settings.supabase_anon_key,
+        "apikey": settings.supabase_publishable_key,
     }
     timeout = httpx.Timeout(connect=3.0, read=5.0, write=3.0, pool=3.0)
     try:

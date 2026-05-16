@@ -12,6 +12,7 @@ function renderBrowserView(overrides: Partial<Parameters<typeof BrowserView>[0]>
     sheetStage: "medium",
     isNative: true,
     viewport: { width: 1280, height: 800 },
+    deviceKind: "desktop",
     onUserInputText: vi.fn(async () => undefined),
     onUserInputKey: vi.fn(async () => undefined),
     onUserInputClick: vi.fn(async () => undefined),

@@ -4,6 +4,7 @@ import { useAuth } from "@/hooks/useAuth";
 import LoginPage from "@/components/LoginPage";
 import ConstellationLayout from "@/components/constellation/ConstellationLayout";
 import { VoiceProvider } from "@/components/voice";
+import OnboardingFlow from "@/components/onboarding/OnboardingFlow";
 import { isNative } from "@/lib/platform";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { getPersistedAmbientEnabled } from "@/services/ambient/enabled-state";
@@ -20,6 +21,16 @@ import { ALL_SOURCE_KEYS, type SourceKey } from "@/services/ambient/keys";
  * drawer + fullscreen chat overlay; the card execution chat runtime
  * (CardChat → MainChatView via useProactiveChatRuntime) is unchanged.
  */
+function Spinner() {
+  return (
+    <div className="relative flex h-full items-center justify-center overflow-hidden">
+      <div className="absolute inset-0 animate-bg-flow opacity-60" />
+      <div className="absolute inset-0 bg-white/20" />
+      <div className="relative z-10 h-8 w-8 animate-spin rounded-full border-2 border-foreground/15 border-t-primary" />
+    </div>
+  );
+}
+
 export default function App() {
   const { loading: authLoading, user, signInWithGoogle } = useAuth();
   // Opt-in start the ambient sources the user has explicitly enabled.
@@ -27,7 +38,11 @@ export default function App() {
   // AmbientSourcesPanel handles per-toggle reconciliation while open;
   // this effect is the boot-time path that runs even when the debug
   // panel is closed.
-  const { settings: userSettings } = useUserSettings();
+  const {
+    settings: userSettings,
+    loading: settingsLoading,
+    patch: patchSettings,
+  } = useUserSettings();
   // Stable key signature so unrelated settings changes (autoGenerate,
   // language, etc.) don't re-trigger the reconcile. We deliberately
   // distinguish "settings not yet loaded" (null) from "loaded, empty
@@ -70,13 +85,7 @@ export default function App() {
   }, [user, enabledKey]);
 
   if (authLoading) {
-    return (
-      <div className="relative flex h-full items-center justify-center overflow-hidden">
-        <div className="absolute inset-0 animate-bg-flow opacity-60" />
-        <div className="absolute inset-0 bg-white/20" />
-        <div className="relative z-10 h-8 w-8 animate-spin rounded-full border-2 border-foreground/15 border-t-primary" />
-      </div>
-    );
+    return <Spinner />;
   }
 
   // Dev convenience: `?preview=1` skips Supabase auth so the Constellation
@@ -87,6 +96,28 @@ export default function App() {
 
   if (!user && !previewBypass) {
     return <LoginPage onSignIn={signInWithGoogle} />;
+  }
+
+  // Authenticated path needs settings before we can decide between
+  // onboarding and the main shell — show the spinner until the first
+  // /settings response lands so the user never sees the main UI flash
+  // before being redirected into onboarding. previewBypass skips this
+  // since it never has a user/settings to fetch.
+  if (!previewBypass && (settingsLoading || userSettings === null)) {
+    return <Spinner />;
+  }
+
+  if (!previewBypass && userSettings && !userSettings.onboardingCompletedAt) {
+    return (
+      <OnboardingFlow
+        onComplete={async () => {
+          const next = await patchSettings({ onboardingCompleted: true });
+          if (next === null) {
+            throw new Error("Couldn't save your onboarding progress. Check your connection and try again.");
+          }
+        }}
+      />
+    );
   }
 
   return (

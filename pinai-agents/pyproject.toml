@@ -57,6 +57,11 @@ dependencies = [
     # `langchain_community.tools.tavily_search` is the previous gen.
     "langchain-tavily>=0.2.13",
     "composio>=0.13.0",
+    # APNs HTTP/2 client for iOS push notifications. Token-based auth
+    # (.p8 key) — the alternative cert-based auth has worse rotation
+    # ergonomics. Single Auth Key per Apple Developer Team covers both
+    # sandbox (development builds) and production (App Store).
+    "aioapns>=4.0.0",
 ]
 
 [dependency-groups]

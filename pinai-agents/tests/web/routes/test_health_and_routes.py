@@ -35,7 +35,7 @@ def _set_env(monkeypatch):
     # Stand-in values — never hit the network because _call_supabase is
     # patched, but the verify path does require these to be non-empty.
     monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.invalid")
-    monkeypatch.setenv("SUPABASE_ANON_KEY", "test-anon-key")
+    monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "test-publishable-key")
     from pinai_agents import config
     config.get_web_settings.cache_clear()
     yield

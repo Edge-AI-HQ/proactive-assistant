@@ -29,6 +29,11 @@ const config: CapacitorConfig = {
       resize: "none",
       resizeOnFullScreen: true,
     },
+    PushNotifications: {
+      // 仅注册基础 alert / badge / sound 行为。Critical / Provisional 一类
+      // 高权限场景目前不开（也不需要 Apple 单独审批）。
+      presentationOptions: ["alert", "badge", "sound"],
+    },
   },
 };
 

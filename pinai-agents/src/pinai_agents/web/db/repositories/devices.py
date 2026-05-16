@@ -37,6 +37,11 @@ from .base import UserScopedRepository
 _TOKEN_BYTES = 32
 _BCRYPT_ROUNDS = 10
 _VALID_PLATFORMS = ("ios", "android", "web", "wearable", "sensor", "embedded")
+_VALID_PUSH_PROVIDERS = ("apns", "fcm", "web")
+# Soft-disable a push token after this many consecutive send failures. The
+# row stays around (status, last_seen_at, etc. are still useful); only the
+# push send pipeline skips it. Reset to 0 on a fresh token registration.
+_PUSH_FAILURE_THRESHOLD = 5
 
 
 @dataclass(slots=True)
@@ -53,6 +58,10 @@ class UserDeviceRow:
     status: str
     metadata: dict[str, Any]
     device_fingerprint_hash: str | None
+    push_token: str | None
+    push_provider: str | None
+    push_token_updated_at: datetime | None
+    push_failure_count: int
 
     @classmethod
     def from_record(cls, row: dict[str, Any]) -> UserDeviceRow:
@@ -72,6 +81,10 @@ class UserDeviceRow:
                 else json.loads(row["metadata"]) if row.get("metadata") else {}
             ),
             device_fingerprint_hash=row.get("device_fingerprint_hash"),
+            push_token=row.get("push_token"),
+            push_provider=row.get("push_provider"),
+            push_token_updated_at=row.get("push_token_updated_at"),
+            push_failure_count=int(row.get("push_failure_count") or 0),
         )
 
 
@@ -286,6 +299,93 @@ class DevicesRepository(UserScopedRepository):
                 (self._user_id, device_id),
             )
             return (cur.rowcount or 0) > 0
+
+    async def set_push_token(
+        self, *, device_id: str, push_token: str, push_provider: str,
+    ) -> UserDeviceRow | None:
+        """Upsert the push token onto an existing active device row.
+
+        Returns the refreshed row, or None if the device isn't owned by
+        this user (route surfaces 404). push_failure_count resets to 0:
+        a fresh registration may be reviving a previously-soft-disabled
+        device (token rotation on Apple's side, app reinstall, etc.).
+        """
+        if push_provider not in _VALID_PUSH_PROVIDERS:
+            msg = f"unsupported push_provider: {push_provider}"
+            raise ValueError(msg)
+        if not push_token or len(push_token) < 16:
+            msg = "push_token too short"
+            raise ValueError(msg)
+        async with self._conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE pai_user_devices SET
+                  push_token = %s,
+                  push_provider = %s,
+                  push_token_updated_at = NOW(),
+                  push_failure_count = 0,
+                  last_seen_at = NOW()
+                WHERE user_id = %s AND device_id = %s AND status = 'active'
+                RETURNING *
+                """,
+                (push_token, push_provider, self._user_id, device_id),
+            )
+            row = await cur.fetchone()
+        return UserDeviceRow.from_record(row) if row else None
+
+    async def clear_push_token(self, device_id: str) -> bool:
+        """Strip the push token from a device row — used when APNs
+        reports a terminal failure ("BadDeviceToken" / "Unregistered")
+        for that token. Doesn't touch device_token_hash (the auth path)
+        — only the push channel is dead. The row stays active so the
+        device can re-register a fresh push token next launch."""
+        async with self._conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE pai_user_devices SET
+                  push_token = NULL,
+                  push_provider = NULL,
+                  push_token_updated_at = NULL,
+                  push_failure_count = 0
+                WHERE user_id = %s AND device_id = %s
+                """,
+                (self._user_id, device_id),
+            )
+            return (cur.rowcount or 0) > 0
+
+    async def bump_push_failure(self, device_id: str) -> bool:
+        """Increment push_failure_count on a transient send failure.
+        Once the count crosses the soft-disable threshold,
+        find_push_targets stops returning the row until a fresh
+        registration resets the counter."""
+        async with self._conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE pai_user_devices SET
+                  push_failure_count = push_failure_count + 1
+                WHERE user_id = %s AND device_id = %s
+                """,
+                (self._user_id, device_id),
+            )
+            return (cur.rowcount or 0) > 0
+
+    async def find_push_targets(self) -> list[UserDeviceRow]:
+        """Active devices for this user with a usable push token. The
+        partial index idx_pai_user_devices_push_active makes this cheap
+        regardless of how many revoked / non-push rows the user has."""
+        async with self._conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT * FROM pai_user_devices
+                WHERE user_id = %s
+                  AND status = 'active'
+                  AND push_token IS NOT NULL
+                  AND push_failure_count < %s
+                """,
+                (self._user_id, _PUSH_FAILURE_THRESHOLD),
+            )
+            rows = await cur.fetchall()
+        return [UserDeviceRow.from_record(r) for r in rows]
 
     async def rotate_token(self, device_id: str, current_token: str) -> str:
         """Verify current_token; on success replace with a fresh token and

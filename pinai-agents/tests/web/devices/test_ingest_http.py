@@ -30,7 +30,7 @@ HMAC_SECRET = "test-hmac-secret-must-be-long-enough!"
 def _set_env(monkeypatch):
     monkeypatch.setenv("PAI_HMAC_SECRET", HMAC_SECRET)
     monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.invalid")
-    monkeypatch.setenv("SUPABASE_ANON_KEY", "test-anon-key")
+    monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "test-publishable-key")
     from pinai_agents import config
     config.get_web_settings.cache_clear()
     yield

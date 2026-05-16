@@ -7,6 +7,8 @@ each surface independently + the cross-user isolation invariant.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from pinai_agents.web.db.repositories.profile import ProfileRepository
@@ -169,6 +171,43 @@ async def test_settings_lazy_create_returns_defaults(pool, user_ids):
     assert s.auto_dreaming is False
     assert s.auto_crystallize is True
     assert s.metadata == {}
+
+
+@pytest.mark.asyncio
+async def test_settings_default_notify_new_cards_off(pool, user_ids):
+    """notify_new_cards defaults to FALSE: nothing fires until the user
+    explicitly opts in via the in-app pre-prompt + OS grant."""
+    user_a, _ = user_ids
+    async with user_scoped_tx(pool, user_a) as conn:
+        s = await ProfileRepository(user_a, conn).get_settings()
+    assert s.notify_new_cards is False
+    assert s.notify_permission_prompted_at is None
+
+
+@pytest.mark.asyncio
+async def test_settings_notify_prompt_stamp_is_monotonic(pool, user_ids):
+    """First write stamps notify_permission_prompted_at. A subsequent
+    upsert that doesn't touch the field (None param) must preserve the
+    earlier timestamp — the column is one-shot and the home screen's
+    gate keys off "is this NULL or not"."""
+    user_a, _ = user_ids
+    stamp = datetime.now(UTC)
+    async with user_scoped_tx(pool, user_a) as conn:
+        repo = ProfileRepository(user_a, conn)
+        first = await repo.upsert_settings(
+            notify_new_cards=True,
+            notify_permission_prompted_at=stamp,
+        )
+    assert first.notify_new_cards is True
+    assert first.notify_permission_prompted_at is not None
+
+    async with user_scoped_tx(pool, user_a) as conn:
+        repo = ProfileRepository(user_a, conn)
+        # Toggle off later from Account → Notifications; the stamp
+        # must NOT reset to NULL even though we didn't pass it.
+        second = await repo.upsert_settings(notify_new_cards=False)
+    assert second.notify_new_cards is False
+    assert second.notify_permission_prompted_at == first.notify_permission_prompted_at
 
 
 @pytest.mark.asyncio

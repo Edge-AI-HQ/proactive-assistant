@@ -29,6 +29,7 @@ import {
   DrawerDescription,
 } from "@/components/ui/drawer";
 import CardChat from "@/components/CardChat";
+import { deleteAccount, DeleteAccountError } from "@/lib/api";
 import DebugPanel from "@/components/DebugPanel";
 import MainChat from "@/components/MainChat";
 import AgentRunIndicator from "@/components/AgentRunIndicator";
@@ -40,7 +41,11 @@ import { useCardActions } from "@/hooks/useCardActions";
 import { useCards } from "@/hooks/useCards";
 import { useComposio } from "@/hooks/useComposio";
 import { usePipeline } from "@/hooks/usePipeline";
+import { usePushNotifications } from "@/hooks/usePushNotifications";
+import { useUserSettings } from "@/hooks/useUserSettings";
 import { useWeather } from "@/hooks/useWeather";
+import { PreNotificationPrompt } from "@/components/PreNotificationPrompt";
+import { isNative } from "@/lib/platform";
 import type { GoalBasket, IntentCard } from "@/types/intent-card";
 import { useAmbientLiveSession } from "@/hooks/useAmbientLiveSession";
 import { useUserSettings } from "@/hooks/useUserSettings";
@@ -311,6 +316,59 @@ export default function BigBallLayout() {
   const cardsState = useCards();
   const composio = useComposio();
   const pipeline = usePipeline();
+  // Notification permission flow. iOS OS state is the source of truth;
+  // notifyNewCards is a backend mirror that the send pipeline reads. The
+  // two effects below keep these in sync:
+  //
+  //   * Sheet only opens when state is "prompt" — granted / denied skip
+  //     it entirely (the second effect auto-stamps prompted_at so the
+  //     skip doesn't keep firing on every cold start).
+  //   * notifyNewCards <- (state === "granted") on every transition so
+  //     a user who toggles in iOS Settings sees the backend reconciled
+  //     on the next foreground (usePushNotifications listens to
+  //     appStateChange and re-checks).
+  const userSettings = useUserSettings();
+  const pushNotifications = usePushNotifications();
+  const osGranted = pushNotifications.permissionState === "granted";
+  const osPromptable = (
+    pushNotifications.permissionState === "prompt"
+    || pushNotifications.permissionState === "prompt-with-rationale"
+  );
+  const notifPromptShow = (
+    isNative
+    && pushNotifications.ready
+    && userSettings.settings != null
+    && userSettings.settings.notifyPermissionPromptedAt == null
+    && osPromptable
+  );
+  // Auto-stamp prompted_at when state is already decided (granted /
+  // denied at app boot, e.g. user previously installed and answered, or
+  // an existing user from before the sheet existed). Without this the
+  // notifPromptShow gate would still be null but `osPromptable` is
+  // false — fine, sheet doesn't show — yet on next cold start we'd
+  // re-evaluate the same condition. Stamp once and stop re-checking.
+  useEffect(() => {
+    if (!isNative || !pushNotifications.ready) return;
+    if (!userSettings.settings) return;
+    if (userSettings.settings.notifyPermissionPromptedAt != null) return;
+    if (osPromptable) return;  // sheet will handle it
+    void userSettings.patch({ notifyPermissionPrompted: true });
+  }, [
+    pushNotifications.ready, osPromptable,
+    userSettings.settings, userSettings.patch,
+  ]);
+  // Mirror OS state into the backend `notify_new_cards` flag so the
+  // send pipeline sees the up-to-date preference. Triggers on resume
+  // (state re-check fires) and on initial mount once ready.
+  useEffect(() => {
+    if (!isNative || !pushNotifications.ready) return;
+    if (!userSettings.settings) return;
+    if (userSettings.settings.notifyNewCards === osGranted) return;
+    void userSettings.patch({ notifyNewCards: osGranted });
+  }, [
+    pushNotifications.ready, osGranted,
+    userSettings.settings, userSettings.patch,
+  ]);
   /** When set, ConstellationLayout renders our existing CardChat overlay
    *  (MainChatView + SSE chat-stream runtime). Replaces Lovable's mock
    *  ChatDetailView path. */
@@ -852,6 +910,38 @@ export default function BigBallLayout() {
                 userEmail={user?.email ?? undefined}
                 memberSince={memberSince}
                 onSignOut={() => void signOut()}
+                onDeleteAccount={async () => {
+                  // Throws DeleteAccountError on fail-fast abort
+                  // (Supabase Auth or DB cascade); panel surfaces the
+                  // message. External partial failures (composio /
+                  // litellm / stripe / browserbase / storage) come back
+                  // as fields on the result, not exceptions — the
+                  // cascade still succeeded so we proceed to sign out.
+                  let result;
+                  try {
+                    result = await deleteAccount();
+                  } catch (err) {
+                    if (err instanceof DeleteAccountError && err.partial) {
+                      console.warn("Delete account partial state:", err.partial);
+                    }
+                    throw err;
+                  }
+                  if (
+                    result.composioErrors.length > 0
+                    || result.litellmError
+                    || result.stripeError
+                    || result.browserbaseError
+                    || result.storageError
+                  ) {
+                    console.warn(
+                      "Delete account: non-fatal external failures",
+                      result,
+                    );
+                  }
+                  // signOut clears local/session storage and reloads
+                  // / — the actual app-state flush.
+                  await signOut();
+                }}
               />
             ) : null}
           </motion.div>
@@ -1086,6 +1176,20 @@ export default function BigBallLayout() {
           </div>
         </DrawerContent>
       </Drawer>
+
+      <PreNotificationPrompt
+        open={notifPromptShow}
+        onAccept={async () => {
+          // The auto-sync effect above handles notifyNewCards once
+          // permissionState updates — we only stamp prompted_at here so
+          // the sheet doesn't re-show.
+          await pushNotifications.requestPermission();
+          await userSettings.patch({ notifyPermissionPrompted: true });
+        }}
+        onDecline={async () => {
+          await userSettings.patch({ notifyPermissionPrompted: true });
+        }}
+      />
     </div>
   );
 }

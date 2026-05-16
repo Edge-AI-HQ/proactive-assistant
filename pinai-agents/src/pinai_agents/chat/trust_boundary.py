@@ -2,9 +2,9 @@
 
 The chat process is the LLM loop — it must NOT see master credentials.
 Anything in `FORBIDDEN_ENVS` would let chat impersonate the trust
-authority (mint LiteLLM virtual_keys, sign Supabase service-role
-queries, issue PAI JWTs, etc.). Three independent enforcement points
-read this list:
+authority (mint LiteLLM virtual_keys, sign Supabase admin requests
+with the secret key, issue PAI JWTs, etc.). Three independent
+enforcement points read this list:
 
   1. ``chat/asgi.py`` — boot fail-fast assert; the process exits if any
      forbidden var is present in the environment.
@@ -30,10 +30,11 @@ from __future__ import annotations
 # same superuser DSN. Trust boundary degraded for now — re-tighten
 # when web/chat split into separate fly apps with per-app secrets.
 FORBIDDEN_ENVS: tuple[str, ...] = (
-    "SUPABASE_SERVICE_ROLE_KEY",  # Supabase Storage admin — only web
+    "SUPABASE_SECRET_KEY",        # Supabase admin (`sb_secret_*`) — only web
     "PAI_JWT_SIGNING_KEY",        # EdDSA private key — only web (signs)
     "COMPOSIO_API_KEY",           # Composio master — only web (connector ingest)
     "STRIPE_SECRET_KEY",          # Stripe master — only web
     "STRIPE_WEBHOOK_SECRET",      # Stripe webhook signing — only web
     "LITELLM_MASTER_KEY",         # LiteLLM master — only web (mints virtual_keys)
+    "APNS_AUTH_KEY",              # APNs .p8 private key — only web (signs push JWTs)
 )

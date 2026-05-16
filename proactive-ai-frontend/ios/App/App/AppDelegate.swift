@@ -47,4 +47,30 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         return ApplicationDelegateProxy.shared.application(application, continue: userActivity, restorationHandler: restorationHandler)
     }
 
+    // Capacitor PushNotifications plugin bridge. The plugin listens for
+    // these NotificationCenter events; without these forwards iOS calls
+    // back to AppDelegate after registerForRemoteNotifications() but the
+    // event never reaches the JS layer (silent failure — no token, no
+    // error event). Required setup per Capacitor docs:
+    // https://capacitorjs.com/docs/apis/push-notifications#setup-ios
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        NotificationCenter.default.post(
+            name: .capacitorDidRegisterForRemoteNotifications,
+            object: deviceToken
+        )
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        NotificationCenter.default.post(
+            name: .capacitorDidFailToRegisterForRemoteNotifications,
+            object: error
+        )
+    }
+
 }

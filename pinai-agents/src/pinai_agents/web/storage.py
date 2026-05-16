@@ -56,9 +56,9 @@ def media_ext_for_kind(kind: str, mime: str | None = None) -> str | None:
 @lru_cache(maxsize=1)
 def _client() -> Client | None:
     s = get_web_settings()
-    if not s.supabase_url or not s.supabase_service_role_key:
+    if not s.supabase_url or not s.supabase_secret_key:
         return None
-    return create_client(s.supabase_url, s.supabase_service_role_key)
+    return create_client(s.supabase_url, s.supabase_secret_key)
 
 
 def storage_enabled() -> bool:
@@ -108,6 +108,50 @@ async def upload_media(
 
     await asyncio.to_thread(_put)
     return UploadedMedia(storage_path=path, byte_len=len(data), mime=content_type)
+
+
+async def delete_all_user_media(user_id: int) -> int:
+    """Recursively delete every file under pai-media/{user_id}/. Returns
+    the number of files removed (0 when storage is disabled or the user
+    has no media).
+
+    Supabase's list endpoint isn't recursive — folders surface as bare
+    entries without `metadata.size`. DFS through them, then batch-remove.
+    Used by the account-deletion flow; the per-user prefix is the only
+    user-scoped partition we have on the bucket, so this is sufficient
+    to wipe everything they uploaded.
+    """
+    cli = _client()
+    if cli is None:
+        return 0
+    bucket = get_web_settings().supabase_media_bucket
+    user_prefix = str(user_id)
+
+    files: list[str] = []
+    stack = [user_prefix]
+    while stack:
+        path = stack.pop()
+        entries = await asyncio.to_thread(cli.storage.from_(bucket).list, path)
+        for entry in entries:
+            name = entry.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            full = f"{path}/{name}"
+            meta = entry.get("metadata")
+            if isinstance(meta, dict) and meta.get("size") is not None:
+                files.append(full)
+            else:
+                stack.append(full)
+
+    if not files:
+        return 0
+    # 1000 is Supabase's documented per-request cap on `remove`.
+    chunk = 1000
+    for i in range(0, len(files), chunk):
+        await asyncio.to_thread(
+            cli.storage.from_(bucket).remove, files[i:i + chunk],
+        )
+    return len(files)
 
 
 async def signed_url(storage_path: str, *, ttl_seconds: int = 3600) -> str | None:
