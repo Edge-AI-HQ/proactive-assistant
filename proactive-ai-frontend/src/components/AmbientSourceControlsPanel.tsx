@@ -145,7 +145,7 @@ function AmbientSourceRow({
 }
 
 export default function AmbientSourceControlsPanel() {
-  const { settings, loading, saving, error, patch } = useUserSettings();
+  const { settings, loading, error, patch } = useUserSettings();
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
   const [busyKeys, setBusyKeys] = useState<Set<SourceKey>>(new Set());
 
@@ -193,13 +193,13 @@ export default function AmbientSourceControlsPanel() {
         nativeOnly: meta.nativeOnly,
         enabled: enabled.has(key),
         running: runtime?.enabled === true,
-        busy: saving || busyKeys.has(key),
+        busy: busyKeys.has(key),
         lastEvent: runtime?.lastEvent ?? null,
         ingestedCount: runtime?.ingestedCount ?? 0,
         lastError: runtime?.lastError ?? null,
       };
     });
-  }, [busyKeys, enabledKeys, runtimeStatus?.sources, saving]);
+  }, [busyKeys, enabledKeys, runtimeStatus?.sources]);
 
   const toggle = useCallback(async (key: SourceKey, currentlyEnabled: boolean) => {
     setBusyKeys((prev) => {
