@@ -16,7 +16,24 @@ IOS_DIR="$PROJECT_ROOT/ios/App"
 ARCHIVE_PATH="$IOS_DIR/build/App.xcarchive"
 EXPORT_PATH="$IOS_DIR/build/export"
 EXPORT_OPTIONS="$IOS_DIR/build/ExportOptions.plist"
-BUILD_LOG="$IOS_DIR/build/xcodebuild.log"
+ARCHIVE_LOG="$IOS_DIR/build/archive.log"
+EXPORT_LOG="$IOS_DIR/build/export.log"
+
+# ── Error reporting helper ──
+
+print_log_diagnostics() {
+  local log_file="$1"
+  local label="$2"
+  {
+    echo ""
+    echo "--- $label log: last 40 lines (full: $log_file) ---"
+    tail -40 "$log_file" 2>/dev/null || echo "(log file unavailable)"
+    echo ""
+    echo "--- $label log: lines matching /error|fatal|invalid|denied|cannot/i ---"
+    grep -iE "error|fatal|invalid|denied|cannot" "$log_file" 2>/dev/null | tail -20 || echo "(no matches)"
+    echo ""
+  } >&2
+}
 
 # ── Environment selection ──
 
@@ -62,26 +79,47 @@ for var in ASC_API_KEY_PATH ASC_KEY_ID ASC_ISSUER_ID; do
   fi
 done
 
-# ── Bump build number ──
+# ── Resolve build number ──
+#
+# CI:  CFBundleVersion = GITHUB_RUN_NUMBER + BUILD_NUMBER_OFFSET.
+#      Monotonic per run, no commits required, no external API calls.
+#      The offset keeps CI builds safely above pre-CI manual TestFlight
+#      uploads (the highest manual build before CI takeover was 25 as of
+#      2026-05-15). Once we cross over, only CI should upload — Apple
+#      rejects duplicate or non-increasing CFBundleVersion values per
+#      CFBundleShortVersionString.
+#
+# Local: fall back to agvtool's pbxproj bump. Will collide with CI builds
+#        once CI starts uploading, so prefer the workflow_dispatch path
+#        for any release-style upload.
 
-echo "==> Bumping build number..."
 cd "$IOS_DIR"
-agvtool next-version -all > /dev/null
-NEW_BUILD=$(agvtool what-version -terse)
-echo "    Build number: $NEW_BUILD"
+BUILD_NUMBER_OFFSET=100
+if [ -n "${GITHUB_RUN_NUMBER:-}" ]; then
+  NEW_BUILD=$((BUILD_NUMBER_OFFSET + GITHUB_RUN_NUMBER))
+  echo "==> CI run #$GITHUB_RUN_NUMBER -> CFBundleVersion = $NEW_BUILD (offset $BUILD_NUMBER_OFFSET)"
+  agvtool new-version -all "$NEW_BUILD" > /dev/null
+else
+  echo "==> Local build: bumping pbxproj build number..."
+  agvtool next-version -all > /dev/null
+  NEW_BUILD=$(agvtool what-version -terse)
+  echo "    Build number: $NEW_BUILD"
+fi
+MARKETING_VERSION="$(agvtool what-marketing-version -terse1 2>/dev/null || echo "?")"
 
 # ── Build frontend + Capacitor sync (shared with `make ios`) ──
 
 bash "$SCRIPT_DIR/sync-ios.sh"
 
-# ── Archive ──
+# ── Prep build dir ──
 
 echo "==> Cleaning previous build..."
-rm -rf "$ARCHIVE_PATH" "$EXPORT_PATH"
-mkdir -p "$(dirname "$BUILD_LOG")"
+rm -rf "$ARCHIVE_PATH" "$EXPORT_PATH" "$ARCHIVE_LOG" "$EXPORT_LOG"
+mkdir -p "$(dirname "$ARCHIVE_LOG")"
 
-echo "==> Creating ExportOptions.plist..."
-mkdir -p "$(dirname "$EXPORT_OPTIONS")"
+# ── ExportOptions.plist ──
+
+echo "==> Writing ExportOptions.plist..."
 cat > "$EXPORT_OPTIONS" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -106,49 +144,67 @@ cat > "$EXPORT_OPTIONS" <<'PLIST'
 </plist>
 PLIST
 
-echo "==> Archiving..."
-cd "$IOS_DIR"
-xcodebuild \
-  -project App.xcodeproj \
-  -scheme App \
-  -configuration Release \
-  -destination "generic/platform=iOS" \
-  -archivePath "$ARCHIVE_PATH" \
-  -allowProvisioningUpdates \
-  -authenticationKeyPath "$ASC_API_KEY_PATH" \
-  -authenticationKeyID "$ASC_KEY_ID" \
-  -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
-  archive 2>&1 | tee "$BUILD_LOG" | grep -E '^\*\*|error:|warning:' || true
+# ── Archive ──
 
-if [ ! -d "$ARCHIVE_PATH" ]; then
-  echo "Error: Archive failed. Full log: $BUILD_LOG" >&2
-  tail -20 "$BUILD_LOG"
+echo "==> [1/2] Archiving..."
+if ! xcodebuild \
+    -project App.xcodeproj \
+    -scheme App \
+    -configuration Release \
+    -destination "generic/platform=iOS" \
+    -archivePath "$ARCHIVE_PATH" \
+    -allowProvisioningUpdates \
+    -authenticationKeyPath "$ASC_API_KEY_PATH" \
+    -authenticationKeyID "$ASC_KEY_ID" \
+    -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+    archive 2>&1 | tee "$ARCHIVE_LOG"; then
+  echo "" >&2
+  echo "[FAILED] xcodebuild archive exited non-zero." >&2
+  print_log_diagnostics "$ARCHIVE_LOG" "archive"
   exit 1
 fi
-echo "** ARCHIVE SUCCEEDED **"
 
-# ── Export ──
+if [ ! -d "$ARCHIVE_PATH" ]; then
+  echo "" >&2
+  echo "[FAILED] Archive exited 0 but $ARCHIVE_PATH was not produced." >&2
+  print_log_diagnostics "$ARCHIVE_LOG" "archive"
+  exit 1
+fi
 
-echo "==> Exporting and uploading to TestFlight..."
-set +e
-xcodebuild \
-  -exportArchive \
-  -archivePath "$ARCHIVE_PATH" \
-  -exportPath "$EXPORT_PATH" \
-  -exportOptionsPlist "$EXPORT_OPTIONS" \
-  -allowProvisioningUpdates \
-  -authenticationKeyPath "$ASC_API_KEY_PATH" \
-  -authenticationKeyID "$ASC_KEY_ID" \
-  -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
-  2>&1 | tee -a "$BUILD_LOG" | grep -E '^\*\*|error:|Exported|Upload' || true
-EXPORT_EXIT=${PIPESTATUS[0]}
-set -e
+# ── Export + Upload ──
 
-if [ "$EXPORT_EXIT" -ne 0 ]; then
-  echo "Error: Export/upload failed (exit $EXPORT_EXIT). Full log: $BUILD_LOG" >&2
-  tail -20 "$BUILD_LOG"
+echo "==> [2/2] Exporting and uploading to TestFlight..."
+if ! xcodebuild \
+    -exportArchive \
+    -archivePath "$ARCHIVE_PATH" \
+    -exportPath "$EXPORT_PATH" \
+    -exportOptionsPlist "$EXPORT_OPTIONS" \
+    -allowProvisioningUpdates \
+    -authenticationKeyPath "$ASC_API_KEY_PATH" \
+    -authenticationKeyID "$ASC_KEY_ID" \
+    -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+    2>&1 | tee "$EXPORT_LOG"; then
+  echo "" >&2
+  echo "[FAILED] xcodebuild exportArchive exited non-zero." >&2
+  print_log_diagnostics "$EXPORT_LOG" "export"
+  exit 1
+fi
+
+# xcodebuild can exit 0 even when exportArchive logged hard errors
+# (e.g., entitlement / provisioning mismatch with -allowProvisioningUpdates).
+# Treat `error: exportArchive` lines as fatal regardless of exit code.
+if grep -qE "^error: exportArchive" "$EXPORT_LOG"; then
+  echo "" >&2
+  echo "[FAILED] exportArchive reported errors despite exit 0:" >&2
+  grep -E "^error: exportArchive" "$EXPORT_LOG" >&2
+  print_log_diagnostics "$EXPORT_LOG" "export"
   exit 1
 fi
 
 echo ""
-echo "Done! Build $NEW_BUILD ($ENV) exported and uploaded to TestFlight."
+echo "=========================================="
+echo "  SUCCESS: uploaded to TestFlight"
+echo "  Env:     $ENV"
+echo "  Version: $MARKETING_VERSION ($NEW_BUILD)"
+echo "  Bundle:  ai.pin.proactive"
+echo "=========================================="
