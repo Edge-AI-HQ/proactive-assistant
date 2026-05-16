@@ -183,7 +183,9 @@ actor AudioStreamManager {
 
     func setAppBackgrounded(_ backgrounded: Bool, reason: String) {
         appIsBackgrounded = backgrounded
-        if !backgrounded, isCaptureRunning || isClassificationRunning {
+        if backgrounded {
+            classifier.stopAnalyzerOnly()
+        } else if isCaptureRunning || isClassificationRunning {
             suppressionReasons.remove(.interruption)
             refreshMediaSuppression()
             setupMediaObservers()
@@ -979,6 +981,9 @@ actor AudioStreamManager {
         classifier.markStaleIfNeeded(maxAgeMs: Self.classificationStaleTimeoutMs)
         if shouldClassifierRun {
             if classifier.canAnalyze {
+                return true
+            }
+            if appIsBackgrounded {
                 return true
             }
             return classifier.start()

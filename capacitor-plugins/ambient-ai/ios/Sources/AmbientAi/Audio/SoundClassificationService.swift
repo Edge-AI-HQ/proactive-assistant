@@ -210,6 +210,18 @@ final class SoundClassificationService {
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
 
+    func stopAnalyzerOnly() {
+        lock.lock()
+        let hadAnalyzer = analyzer != nil
+        if hadAnalyzer {
+            stopAnalyzerLocked(nextState: .suspended)
+        }
+        lock.unlock()
+        if hadAnalyzer {
+            soundLogger.info("SoundAnalysis analyzer suspended; engine and audio tap retained")
+        }
+    }
+
     func attachRecordingSink(_ sink: AudioRecordingSink) {
         lock.lock()
         self.sink = sink
@@ -523,6 +535,9 @@ final class SoundClassificationService {
             || lowercased.contains("insufficient permission")
             || lowercased.contains("gpu")
             || lowercased.contains("coreml")
+            || lowercased.contains("com.apple.coreml")
+            || lowercased.contains("espresso")
+            || lowercased.contains("kiogpu")
     }
 
     private static func rms(buffer: AVAudioPCMBuffer) -> Float? {
@@ -588,7 +603,21 @@ private final class ClassificationObserver: NSObject, SNResultsObserving {
     }
 
     func request(_ request: SNRequest, didFailWithError error: Error) {
-        onFailure("Sound classifier failed: \(error.localizedDescription)")
+        let nsError = error as NSError
+        let chain = Self.flatten(nsError)
+        onFailure("Sound classifier failed: \(error.localizedDescription) [\(chain)]")
+    }
+
+    private static func flatten(_ error: NSError) -> String {
+        var parts: [String] = ["\(error.domain)#\(error.code)"]
+        var current = error.userInfo[NSUnderlyingErrorKey] as? NSError
+        var depth = 0
+        while let next = current, depth < 4 {
+            parts.append("\(next.domain)#\(next.code)")
+            current = next.userInfo[NSUnderlyingErrorKey] as? NSError
+            depth += 1
+        }
+        return parts.joined(separator: " <- ")
     }
 }
 
