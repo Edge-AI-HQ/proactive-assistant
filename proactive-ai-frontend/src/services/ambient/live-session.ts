@@ -1,5 +1,5 @@
 import type { TranscriptReadyEvent } from "@pin/capacitor-ambient-ai";
-import type { AmbientCandidateWindow, AmbientPrivacy } from "./timeline";
+import type { AmbientCandidateWindow, AmbientPrivacy, AmbientRawEvent } from "./timeline";
 import {
   Activity,
   Coffee,
@@ -112,6 +112,36 @@ export function appendTranscript(
   };
 }
 
+
+export function rawTranscriptEventsToLiveSessionData(
+  events: AmbientRawEvent[],
+): LiveSessionData | null {
+  const transcripts = events
+    .filter((event) => event.sourceType === "transcript")
+    .filter((event) => event.eventType === "transcript.ready")
+    .sort((a, b) => Date.parse(a.occurredAt) - Date.parse(b.occurredAt));
+  const latest = transcripts[transcripts.length - 1];
+  if (!latest) return null;
+
+  const captureSessionId = transcriptCaptureSessionId(latest);
+  const sessionEvents = transcripts.filter(
+    (event) => transcriptCaptureSessionId(event) === captureSessionId,
+  );
+  const startedAt = Date.parse(sessionEvents[0]?.occurredAt ?? latest.occurredAt);
+  const start = Number.isFinite(startedAt) ? startedAt : Date.now();
+  const messages = sessionEvents
+    .map((event) => rawTranscriptEventToMessage(event, start))
+    .filter((message): message is LiveAssistMessage => message !== null)
+    .slice(-MAX_LIVE_MESSAGES);
+
+  if (messages.length === 0) return null;
+  return {
+    captureSessionId,
+    startedAt: start,
+    messages,
+  };
+}
+
 export function liveSessionDataToSession(
   ambientOn: boolean,
   data: LiveSessionData | null,
@@ -173,6 +203,47 @@ export function candidateWindowsToLiveSessionContextItems(
     });
 }
 
+
+
+function rawTranscriptEventToMessage(
+  event: AmbientRawEvent,
+  sessionStartedAt: number,
+): LiveAssistMessage | null {
+  const text = transcriptTextFromRaw(event);
+  if (!text) return null;
+  const occurredAt = Date.parse(event.occurredAt);
+  return {
+    id: transcriptBurstId(event) ?? event.id,
+    time: formatElapsed(Number.isFinite(occurredAt) ? occurredAt - sessionStartedAt : 0),
+    text,
+    source: transcriptProvider(event),
+  };
+}
+
+function transcriptTextFromRaw(event: AmbientRawEvent): string | null {
+  const payloadText = event.payload.text;
+  if (typeof payloadText === "string" && payloadText.trim()) return payloadText.trim();
+  const compact = event.compactText.trim();
+  const prefix = "Transcript segment:";
+  return compact.startsWith(prefix)
+    ? compact.slice(prefix.length).trim() || null
+    : compact || null;
+}
+
+function transcriptCaptureSessionId(event: AmbientRawEvent): string {
+  const value = event.payload.captureSessionId;
+  return typeof value === "string" && value.trim() ? value : event.id;
+}
+
+function transcriptBurstId(event: AmbientRawEvent): string | null {
+  const value = event.payload.burstId;
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function transcriptProvider(event: AmbientRawEvent): string | undefined {
+  const value = event.payload.provider;
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
 
 function candidateWindowToLiveSessionItem(
   window: AmbientCandidateWindow,

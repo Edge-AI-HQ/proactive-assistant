@@ -5,6 +5,7 @@ import {
   appendTranscript,
   candidateWindowsToLiveSessionContextItems,
   liveSessionDataToSession,
+  rawTranscriptEventsToLiveSessionData,
   LIVE_SCENARIOS,
   type LiveSession,
   type LiveSessionData,
@@ -13,6 +14,7 @@ import {
   getAmbientTimelineStore,
   todayLocalDate,
   type AmbientCandidateWindow,
+  type AmbientRawEvent,
 } from "@/services/ambient/timeline";
 
 interface UseAmbientLiveSessionOptions {
@@ -36,6 +38,7 @@ export function useAmbientLiveSession({
   const [liveIndex, setLiveIndex] = useState(0);
   const [liveSessionData, setLiveSessionData] = useState<LiveSessionData | null>(null);
   const [candidateWindows, setCandidateWindows] = useState<AmbientCandidateWindow[]>([]);
+  const [rawTranscripts, setRawTranscripts] = useState<AmbientRawEvent[]>([]);
   const [liveDismissed, setLiveDismissed] = useState(false);
   const [previewVisibleCount, setPreviewVisibleCount] = useState(1);
 
@@ -74,6 +77,7 @@ export function useAmbientLiveSession({
   useEffect(() => {
     if (!ambientOn || !isNative) {
       setCandidateWindows([]);
+      setRawTranscripts([]);
       return;
     }
 
@@ -84,11 +88,23 @@ export function useAmbientLiveSession({
       try {
         const store = getAmbientTimelineStore();
         await store.init();
-        const windows = await store.listCandidateWindows({
-          localDate: todayLocalDate(),
-          limit: 50,
-        });
-        if (!cancelled) setCandidateWindows(windows);
+        const localDate = todayLocalDate();
+        const [windows, transcripts] = await Promise.all([
+          store.listCandidateWindows({
+            localDate,
+            limit: 50,
+          }),
+          store.listRawEvents({
+            localDate,
+            sourceType: "transcript",
+            eventType: "transcript.ready",
+            limit: 50,
+          }),
+        ]);
+        if (!cancelled) {
+          setCandidateWindows(windows);
+          setRawTranscripts(transcripts);
+        }
       } catch {
         // Keep transcript-driven Live Session available if timeline storage is unavailable.
       }
@@ -108,9 +124,16 @@ export function useAmbientLiveSession({
     [candidateWindows],
   );
 
+  const replayedLiveSessionData = useMemo(
+    () => rawTranscriptEventsToLiveSessionData(rawTranscripts),
+    [rawTranscripts],
+  );
+
+  const effectiveLiveSessionData = liveSessionData ?? replayedLiveSessionData;
+
   const realSession = useMemo(
-    () => liveSessionDataToSession(ambientOn, liveSessionData, contextItems),
-    [ambientOn, liveSessionData, contextItems],
+    () => liveSessionDataToSession(ambientOn, effectiveLiveSessionData, contextItems),
+    [ambientOn, effectiveLiveSessionData, contextItems],
   );
 
   const session = ambientOn && !liveDismissed
@@ -128,7 +151,7 @@ export function useAmbientLiveSession({
 
   useEffect(() => {
     setPreviewVisibleCount(1);
-  }, [liveIndex, ambientOn, liveDismissed, liveSessionData?.captureSessionId, realSession?.startedAt]);
+  }, [liveIndex, ambientOn, liveDismissed, effectiveLiveSessionData?.captureSessionId, realSession?.startedAt]);
 
   useEffect(() => {
     if (realSession) {

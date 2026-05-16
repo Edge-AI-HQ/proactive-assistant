@@ -3,9 +3,40 @@ import { describe, expect, test, vi } from "vitest";
 import {
   candidateWindowsToLiveSessionContextItems,
   liveSessionDataToSession,
+  rawTranscriptEventsToLiveSessionData,
   type LiveSessionData,
 } from "./live-session";
-import type { AmbientCandidateWindow } from "./timeline";
+import type { AmbientCandidateWindow, AmbientRawEvent } from "./timeline";
+
+
+function makeTranscriptRaw(
+  overrides: Partial<AmbientRawEvent> & Pick<AmbientRawEvent, "id" | "occurredAt" | "compactText">,
+): AmbientRawEvent {
+  return {
+    id: overrides.id,
+    localUserId: "local",
+    deviceId: null,
+    sourceType: "transcript",
+    eventType: "transcript.ready",
+    sourceVersion: "test",
+    occurredAt: overrides.occurredAt,
+    endedAt: overrides.endedAt,
+    collectedAt: overrides.occurredAt,
+    timezone: "Asia/Shanghai",
+    localDate: "2026-05-17",
+    payload: overrides.payload ?? { captureSessionId: "cap-db", provider: "cloud_whisper" },
+    compactText: overrides.compactText,
+    confidence: 0.75,
+    sensitivity: "private",
+    permissionState: null,
+    ttlExpiresAt: null,
+    contentHash: overrides.id,
+    dedupeKey: `transcript:${overrides.id}`,
+    processingStatus: "new",
+    createdAt: overrides.occurredAt,
+    updatedAt: overrides.occurredAt,
+  };
+}
 
 function makeWindow(
   overrides: Partial<AmbientCandidateWindow> & Pick<AmbientCandidateWindow, "id" | "windowType" | "startedAt">,
@@ -139,5 +170,42 @@ describe("candidate window live session context", () => {
     });
     expect(session?.signals).toEqual(["Speech detected", "Near WeWork"]);
     expect(session?.assists).toHaveLength(2);
+  });
+});
+
+describe("raw transcript live session replay", () => {
+  test("rebuilds latest transcript session from persisted raw transcript events", () => {
+    const replay = rawTranscriptEventsToLiveSessionData([
+      makeTranscriptRaw({
+        id: "old",
+        occurredAt: "2026-05-17T09:00:00.000Z",
+        compactText: "Transcript segment: previous session should not show",
+        payload: { captureSessionId: "old-cap", provider: "local" },
+      }),
+      makeTranscriptRaw({
+        id: "first",
+        occurredAt: "2026-05-17T10:00:00.000Z",
+        endedAt: "2026-05-17T10:00:20.000Z",
+        compactText: "Transcript segment: first live transcript",
+        payload: { captureSessionId: "cap-db", provider: "cloud_whisper" },
+      }),
+      makeTranscriptRaw({
+        id: "second",
+        occurredAt: "2026-05-17T10:01:00.000Z",
+        endedAt: "2026-05-17T10:01:18.000Z",
+        compactText: "Transcript segment: second live transcript",
+        payload: { captureSessionId: "cap-db", provider: "cloud_whisper" },
+      }),
+    ]);
+
+    const session = liveSessionDataToSession(true, replay, []);
+
+    expect(replay?.captureSessionId).toBe("cap-db");
+    expect(session?.title).toBe("second live transcript");
+    expect(session?.assists.map((item) => item.text)).toEqual([
+      "first live transcript",
+      "second live transcript",
+    ]);
+    expect(JSON.stringify(session)).not.toContain("previous session should not show");
   });
 });
