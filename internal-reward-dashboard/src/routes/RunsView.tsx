@@ -454,7 +454,8 @@ export function RunsView({ onNavigate }: RunsViewProps) {
   const activePollSeq = useRef(0);
   const refreshTimer = useRef<number | null>(null);
   const currentRunsQueryKey = runsQueryKey(appliedFilters);
-  const filterValidationError = runsFilterError(appliedFilters);
+  const { since, trigger, until } = appliedFilters;
+  const filterValidationError = runsFilterError({ since, trigger, until });
   const draftFilterValidationError = runsFilterError(draftFilters);
   const hasDraftFilterChanges = !runsQueryEquals(draftFilters, appliedFilters);
 
