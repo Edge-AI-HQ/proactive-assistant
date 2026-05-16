@@ -75,15 +75,58 @@ def get_pool(request: Request) -> AsyncConnectionPool:
     return pool
 
 
+# Dev-only short-circuit. Active ONLY when DEPLOY_ENV=dev AND the request
+# carries an opaque marker header. Lets the internal-reward-dashboard be
+# verified end-to-end in a local browser without Supabase OAuth round-trips.
+# The marker is a fixed string rather than a secret because:
+#   * the bypass only fires under DEPLOY_ENV=dev, never on prod/test/fly
+#   * the dev compose Postgres is local-only and not exposed
+# In any non-dev environment the header is ignored entirely.
+_DEV_AUTH_BYPASS_HEADER_VALUE = "pinai-dev-reviewer"
+_DEV_AUTH_BYPASS_EMAIL = "dev-reviewer@local.invalid"
+# Fixed deterministic UUID for the dev bypass user (so the same row is reused
+# every time the bypass fires). users.supabase_user_id is UUID-typed.
+_DEV_AUTH_BYPASS_SUB = "00000000-0000-0000-0000-00000000d0d0"
+
+
+def _maybe_dev_bypass_marker(value: str | None) -> str | None:
+    if not value:
+        return None
+    return value.strip() or None
+
+
 async def current_user(
     authorization: str | None = Header(default=None),
+    x_dev_auth: str | None = Header(default=None, alias="X-Dev-Auth"),
     pool: AsyncConnectionPool = Depends(get_pool),
 ) -> User:
     """Verify Supabase JWT and resolve to BIGINT user row.
 
     On miss: 401. The user upsert is idempotent — first time a user hits
     this dep we create the row; subsequent calls fetch existing.
+
+    Dev-only bypass: when DEPLOY_ENV=dev AND the request carries
+    `X-Dev-Auth: pinai-dev-reviewer`, return a deterministic test user
+    without touching Supabase. Used by the internal-reward-dashboard for
+    local browser verification. Inert outside DEPLOY_ENV=dev.
     """
+    # NOTE: defer the settings import to avoid widening the module-load
+    # surface; this keeps the bypass strictly opt-in per request.
+    from ...config import get_web_settings  # noqa: PLC0415
+
+    settings = get_web_settings()
+    bypass_marker = _maybe_dev_bypass_marker(x_dev_auth)
+    if (
+        settings.deploy_env == "dev"
+        and bypass_marker == _DEV_AUTH_BYPASS_HEADER_VALUE
+    ):
+        logger.info("dev auth bypass active (DEPLOY_ENV=dev)")
+        return await upsert_user_by_supabase_id(
+            pool,
+            supabase_user_id=_DEV_AUTH_BYPASS_SUB,
+            email=_DEV_AUTH_BYPASS_EMAIL,
+        )
+
     token = _extract_bearer(authorization)
     try:
         claims = await verify_supabase_jwt(token)

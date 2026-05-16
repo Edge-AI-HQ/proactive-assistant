@@ -10,12 +10,19 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ...auth.deps import User, current_user, get_pool
+from ...db.repositories.patterns import PatternsRepository
 from ...db.repositories.reward import (
     VALID_CASEBOOK_LABELS,
     CasebookLabel,
     RewardRepository,
 )
 from ...db.rls import user_scoped_tx
+from ...services.pattern_extractor import run_pattern_extractor
+from ...services.pattern_health import (
+    compute_pattern_health,
+    compute_pattern_health_one,
+    run_pattern_health_job,
+)
 from ...services.personal_data_snapshot import (
     PersonalDataCategory,
     PersonalDataSnapshotService,
@@ -498,6 +505,372 @@ async def metrics(
     async with user_scoped_tx(pool, user.id) as conn:
         out = await RewardRepository(user.id, conn).metrics(days=days)
     return {"ok": True, **out}
+
+
+@router.get("/patterns")
+async def list_patterns(
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+    category: str | None = Query(None, max_length=120),
+    status: Literal["pending_review", "active", "retired"] | None = Query(None),
+    surprise: Literal["h", "m", "l"] | None = Query(None),
+    tier: Literal["cold_start_friendly", "warmup", "mature"] | None = Query(None),
+    intent: str | None = Query(None, max_length=120),
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0, le=10_000),
+):
+    safe_category = _optional_trimmed_text(
+        category,
+        field_name="category",
+        max_length=REWARD_TEXT_FILTER_MAX_LENGTH,
+    )
+    safe_intent = _optional_trimmed_text(
+        intent,
+        field_name="intent",
+        max_length=REWARD_TEXT_FILTER_MAX_LENGTH,
+    )
+    async with user_scoped_tx(pool, user.id) as conn:
+        repo = PatternsRepository(user.id, conn)
+        total = await repo.count_patterns(
+            category=safe_category,
+            status=status,
+            surprise=surprise,
+            tier=tier,
+            intent=safe_intent,
+        )
+        patterns = await repo.list_patterns(
+            category=safe_category,
+            status=status,
+            surprise=surprise,
+            tier=tier,
+            intent=safe_intent,
+            limit=limit,
+            offset=offset,
+        )
+        facets = await repo.list_facets()
+    return {
+        "ok": True,
+        "items": patterns,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "facets": facets,
+    }
+
+
+@router.get("/patterns/pending")
+async def list_pending_patterns(
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+):
+    async with user_scoped_tx(pool, user.id) as conn:
+        repo = PatternsRepository(user.id, conn)
+        items = await repo.list_patterns(status="pending_review", limit=500)
+    return {"ok": True, "items": items}
+
+
+@router.post("/patterns/extract")
+async def trigger_pattern_extract(
+    body: dict | None = None,
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+):
+    """Reviewer-triggered run of the pattern extractor (Phase 6).
+
+    The scheduler is meant to run this weekly; this manual surface lets
+    a reviewer demo it on demand. Accepts optional `lookbackDays` /
+    `minClusterSize` overrides for tuning during development.
+    """
+    data = _body_dict(body)
+    lookback_days = data.get("lookbackDays") or data.get("lookback_days") or 7
+    min_cluster_size = (
+        data.get("minClusterSize") or data.get("min_cluster_size") or 3
+    )
+    if not isinstance(lookback_days, int) or not 1 <= lookback_days <= 60:
+        raise HTTPException(
+            status_code=422,
+            detail="lookbackDays must be an int between 1 and 60",
+        )
+    if not isinstance(min_cluster_size, int) or not 2 <= min_cluster_size <= 100:
+        raise HTTPException(
+            status_code=422,
+            detail="minClusterSize must be an int between 2 and 100",
+        )
+    async with user_scoped_tx(pool, user.id) as conn:
+        summary = await run_pattern_extractor(
+            conn,
+            lookback_days=lookback_days,
+            min_cluster_size=min_cluster_size,
+        )
+    return {"ok": True, **summary}
+
+
+@router.post("/patterns/pending/{pattern_id}/approve")
+async def approve_pending_pattern(
+    pattern_id: str,
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+):
+    safe_id = _path_id(pattern_id, field_name="pattern_id")
+    async with user_scoped_tx(pool, user.id) as conn:
+        repo = PatternsRepository(user.id, conn)
+        existing = await repo.get_pattern(safe_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="pattern not found")
+        if existing["status"] != "pending_review":
+            raise HTTPException(
+                status_code=409,
+                detail=f"pattern status is {existing['status']}; only pending_review can be approved",
+            )
+        updated = await repo.set_status(safe_id, "active")
+    return {"ok": True, "pattern": updated}
+
+
+@router.post("/patterns/pending/{pattern_id}/reject")
+async def reject_pending_pattern(
+    pattern_id: str,
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+):
+    safe_id = _path_id(pattern_id, field_name="pattern_id")
+    async with user_scoped_tx(pool, user.id) as conn:
+        repo = PatternsRepository(user.id, conn)
+        existing = await repo.get_pattern(safe_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="pattern not found")
+        if existing["status"] != "pending_review":
+            raise HTTPException(
+                status_code=409,
+                detail=f"pattern status is {existing['status']}; only pending_review can be rejected",
+            )
+        await repo.delete_pattern(safe_id)
+    return {"ok": True, "deleted": True}
+
+
+@router.get("/patterns/health")
+async def get_patterns_health(
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+):
+    """Per-pattern health snapshot. Read-only — auto-retire side effects
+    happen in `POST /patterns/health/run` (jobs / cron call that)."""
+    async with user_scoped_tx(pool, user.id) as conn:
+        rows = await compute_pattern_health(conn)
+    return {"ok": True, "items": [r.to_wire() for r in rows]}
+
+
+@router.post("/patterns/health/run")
+async def run_patterns_health(
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+):
+    """Reviewer-triggered run of the daily health + auto-retire job.
+
+    Same routine the scheduler tick calls. Returns the summary so the
+    dashboard can show how many patterns were updated / retired.
+    """
+    async with user_scoped_tx(pool, user.id) as conn:
+        summary = await run_pattern_health_job(conn)
+    return {"ok": True, **summary}
+
+
+@router.get("/patterns/{pattern_id}")
+async def get_pattern(
+    pattern_id: str,
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+):
+    safe_id = _path_id(pattern_id, field_name="pattern_id")
+    async with user_scoped_tx(pool, user.id) as conn:
+        repo = PatternsRepository(user.id, conn)
+        pattern = await repo.get_pattern(safe_id)
+        if pattern is None:
+            raise HTTPException(status_code=404, detail="pattern not found")
+        demos = await repo.list_demos_for_pattern(safe_id)
+        recent_hits = await repo.list_recent_hits(safe_id, limit=25)
+        health_row = await compute_pattern_health_one(conn, safe_id)
+    return {
+        "ok": True,
+        "pattern": pattern,
+        "demos": demos,
+        "recentHits": recent_hits,
+        "health": health_row.to_wire() if health_row else None,
+    }
+
+
+def _opt_json_list(value: Any, field_name: str) -> list[Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise HTTPException(status_code=422, detail=f"{field_name} must be a list")
+    return value
+
+
+def _opt_json_obj(value: Any, field_name: str) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=422, detail=f"{field_name} must be an object")
+    return value
+
+
+@router.post("/patterns/{pattern_id}")
+async def upsert_pattern(
+    pattern_id: str,
+    body: dict,
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+):
+    safe_id = _path_id(pattern_id, field_name="pattern_id")
+    data = _body_dict(body)
+    abstract = _optional_trimmed_text(
+        data.get("abstract"), field_name="abstract", max_length=2_000,
+    )
+    category = _optional_trimmed_text(
+        data.get("category"), field_name="category", max_length=120,
+    )
+    intent = _optional_trimmed_text(
+        data.get("intent"), field_name="intent", max_length=120,
+    )
+    tier = _optional_trimmed_text(
+        data.get("tier"), field_name="tier", max_length=40,
+    )
+    surprise_init = _optional_trimmed_text(
+        data.get("surpriseInit") or data.get("surprise_init"),
+        field_name="surpriseInit", max_length=2,
+    )
+    practical_init = _optional_trimmed_text(
+        data.get("practicalInit") or data.get("practical_init"),
+        field_name="practicalInit", max_length=2,
+    )
+    signals_required = _opt_json_list(
+        data.get("signalsRequired") or data.get("signals_required"),
+        "signalsRequired",
+    )
+    trigger_dsl = _opt_json_list(
+        data.get("triggerDsl") or data.get("trigger_dsl"), "triggerDsl",
+    )
+    card_skeleton = _opt_json_obj(
+        data.get("cardSkeleton") or data.get("card_skeleton"), "cardSkeleton",
+    )
+    specializations = _opt_json_list(data.get("specializations"), "specializations")
+    try:
+        async with user_scoped_tx(pool, user.id) as conn:
+            repo = PatternsRepository(user.id, conn)
+            updated = await repo.update_pattern(
+                safe_id,
+                abstract=abstract,
+                category=category,
+                intent=intent,
+                tier=tier,
+                surprise_init=surprise_init,
+                practical_init=practical_init,
+                signals_required=signals_required,
+                trigger_dsl=trigger_dsl,
+                card_skeleton=card_skeleton,
+                specializations=specializations,
+            )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    if updated is None:
+        raise HTTPException(status_code=404, detail="pattern not found")
+    return {"ok": True, "pattern": updated}
+
+
+@router.post("/patterns/{pattern_id}/status")
+async def set_pattern_status(
+    pattern_id: str,
+    body: dict,
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+):
+    safe_id = _path_id(pattern_id, field_name="pattern_id")
+    data = _body_dict(body)
+    status_value = data.get("status")
+    if not isinstance(status_value, str) or not status_value.strip():
+        raise HTTPException(status_code=422, detail="status required")
+    try:
+        async with user_scoped_tx(pool, user.id) as conn:
+            updated = await PatternsRepository(user.id, conn).set_status(
+                safe_id, status_value.strip(),
+            )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    if updated is None:
+        raise HTTPException(status_code=404, detail="pattern not found")
+    return {"ok": True, "pattern": updated}
+
+
+@router.post("/patterns/{pattern_id}/demos")
+async def add_pattern_demo(
+    pattern_id: str,
+    body: dict,
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+):
+    safe_id = _path_id(pattern_id, field_name="pattern_id")
+    data = _body_dict(body)
+    card_id = _optional_path_id(data.get("cardId") or data.get("card_id"), field_name="cardId")
+    source = data.get("source") or "golden"
+    if source not in {"golden", "anti", "seed"}:
+        raise HTTPException(status_code=422, detail="source must be golden|anti|seed")
+    redacted = _optional_bool(data.get("redacted"), field_name="redacted", default=True)
+    scenario = _optional_trimmed_text(
+        data.get("scenario"), field_name="scenario", max_length=1_000,
+    ) or ""
+    why_surprise = _optional_trimmed_text(
+        data.get("whySurprise") or data.get("why_surprise"),
+        field_name="whySurprise", max_length=500,
+    )
+    why_practical = _optional_trimmed_text(
+        data.get("whyPractical") or data.get("why_practical"),
+        field_name="whyPractical", max_length=500,
+    )
+    wow_level = data.get("wowLevel") or data.get("wow_level")
+    if wow_level is not None and not (isinstance(wow_level, int) and 1 <= wow_level <= 5):
+        raise HTTPException(status_code=422, detail="wowLevel must be int 1..5")
+    subtype = _optional_trimmed_text(
+        data.get("subtype"), field_name="subtype", max_length=120,
+    )
+    raw_card = data.get("card") if isinstance(data.get("card"), dict) else None
+    signals_used = _opt_json_list(
+        data.get("signalsUsed") or data.get("signals_used"), "signalsUsed",
+    )
+
+    try:
+        async with user_scoped_tx(pool, user.id) as conn:
+            repo = PatternsRepository(user.id, conn)
+            pattern = await repo.get_pattern(safe_id)
+            if pattern is None:
+                raise HTTPException(status_code=404, detail="pattern not found")
+            card_snapshot: dict[str, Any]
+            if raw_card:
+                card_snapshot = raw_card
+            elif card_id:
+                reward_repo = RewardRepository(user.id, conn)
+                detail = await reward_repo.get_card_detail(card_id)
+                if detail is None:
+                    raise HTTPException(status_code=404, detail="card not found")
+                card_snapshot = (
+                    detail.get("card")
+                    if isinstance(detail.get("card"), dict) else {}
+                )
+                if not card_snapshot:
+                    raise HTTPException(status_code=404, detail="card body missing")
+            else:
+                raise HTTPException(status_code=422, detail="card or cardId required")
+            demo = await repo.insert_demo_from_card(
+                safe_id,
+                card=card_snapshot, subtype=subtype, scenario=scenario,
+                signals_used=signals_used, why_surprise=why_surprise,
+                why_practical=why_practical, wow_level=wow_level,
+                source=source, source_card_id=card_id, redacted=redacted,
+            )
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return {"ok": True, "demo": demo}
 
 
 @router.get("/personal-data")

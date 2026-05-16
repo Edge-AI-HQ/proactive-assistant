@@ -8,6 +8,11 @@ import { Layout } from "@/components/Layout";
 import { StateBlock } from "@/components/StateBlock";
 import { CardView } from "@/routes/CardView";
 import { CasebookView } from "@/routes/CasebookView";
+import { PatternDetailView } from "@/routes/PatternDetailView";
+import { PatternsHealthView } from "@/routes/PatternsHealthView";
+import { PatternsPendingView } from "@/routes/PatternsPendingView";
+import { PatternsRetiredView } from "@/routes/PatternsRetiredView";
+import { PatternsView } from "@/routes/PatternsView";
 import { PersonalDataView } from "@/routes/PersonalDataView";
 import { RunDetailView } from "@/routes/RunDetailView";
 import { RunsView } from "@/routes/RunsView";
@@ -49,6 +54,42 @@ function LoginPanel() {
   );
 }
 
+// Dev-only stand-in session used when local reviewers want to verify the
+// dashboard without going through Supabase OAuth. Activated by
+// localStorage.__devAuthBypass=1 in a DEV build (Vite import.meta.env.DEV).
+// The dashboard API client mirrors the flag and adds X-Dev-Auth so the
+// backend's DEPLOY_ENV=dev-gated bypass mints the matching test user.
+function isDevAuthBypassActive(): boolean {
+  if (!import.meta.env.DEV) return false;
+  try {
+    return window.localStorage.getItem("__devAuthBypass") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function devAuthSession(): Session {
+  // Cast to Session — only used to populate Layout email/name/avatar.
+  // Supabase signOut / accessToken paths are not exercised when bypass is on.
+  return {
+    access_token: "dev-bypass",
+    refresh_token: "dev-bypass",
+    expires_at: Math.floor(Date.now() / 1000) + 3600,
+    expires_in: 3600,
+    token_type: "bearer",
+    user: {
+      id: "dev-bypass",
+      email: "dev-reviewer@local.invalid",
+      aud: "authenticated",
+      role: "authenticated",
+      app_metadata: { provider: "dev-bypass" },
+      user_metadata: { full_name: "Dev Reviewer" },
+      created_at: new Date().toISOString(),
+    },
+  } as unknown as Session;
+}
+
+
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
@@ -64,6 +105,11 @@ export default function App() {
   }, [session]);
 
   useEffect(() => {
+    if (isDevAuthBypassActive()) {
+      setSession(devAuthSession());
+      setLoading(false);
+      return;
+    }
     if (!supabase) {
       setLoading(false);
       return;
@@ -128,6 +174,19 @@ export default function App() {
       {route.kind === "casebook" && <CasebookView onNavigate={navigate} />}
       {route.kind === "personal-data" && <PersonalDataView onNavigate={navigate} />}
       {route.kind === "trace" && <TraceView runId={route.runId} onNavigate={navigate} />}
+      {route.kind === "patterns" && <PatternsView onNavigate={navigate} />}
+      {route.kind === "pattern" && (
+        <PatternDetailView patternId={route.patternId} onNavigate={navigate} />
+      )}
+      {route.kind === "patterns-pending" && (
+        <PatternsPendingView onNavigate={navigate} />
+      )}
+      {route.kind === "patterns-health" && (
+        <PatternsHealthView onNavigate={navigate} />
+      )}
+      {route.kind === "patterns-retired" && (
+        <PatternsRetiredView onNavigate={navigate} />
+      )}
     </Layout>
   );
 }

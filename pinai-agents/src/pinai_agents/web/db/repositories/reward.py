@@ -612,7 +612,55 @@ class RewardRepository(UserScopedRepository):
         if row is None:
             msg = "reward insert returned no row"
             raise RuntimeError(msg)
+        # Phase 3: fan out the event to the per-user pattern + intent
+        # fingerprint so the matcher can use it to score future candidates.
+        # Restricted to user-side events (open / user_score / dismiss) —
+        # reviewer scores adjust the global hit_rate via Phase 5 health
+        # job, not the per-user fingerprint.
+        if source == "user" and event_type in {"card_open", "dismiss", "user_score"}:
+            await self._fanout_fingerprint(
+                card_id=card_id, event_type=event_type, score=score,
+            )
         return _reward_event_to_wire(row)
+
+    async def _fanout_fingerprint(
+        self,
+        *,
+        card_id: str,
+        event_type: str,
+        score: float | None,
+    ) -> None:
+        """Update fingerprint rows for whichever patterns hit on this card."""
+        from .user_fingerprint import UserFingerprintRepository  # noqa: PLC0415
+
+        fp = UserFingerprintRepository(self._user_id, self._conn)
+        pattern_ids = await fp.patterns_for_card(card_id)
+        # Resolve intent/basket from the card's stored JSON (best-effort;
+        # missing values are fine, the fingerprint row stays untouched).
+        card_row = await self._find_card(card_id)
+        card_blob = card_row.get("card") if card_row else None
+        intent = None
+        basket = None
+        if isinstance(card_blob, dict):
+            intent = card_blob.get("intentKey") or card_blob.get("intent_key")
+            basket = card_blob.get("goalBasket") or card_blob.get("goal_basket")
+        # Treat a low user_score as a dismiss-like signal for the fingerprint;
+        # explicit open + high score are positive.
+        is_positive = event_type == "card_open" or (
+            event_type == "user_score" and (score is None or score >= 5)
+        )
+        if is_positive:
+            await fp.record_open(
+                pattern_ids=pattern_ids,
+                intent=intent if isinstance(intent, str) else None,
+                basket=basket if isinstance(basket, str) else None,
+            )
+        else:
+            await fp.record_dismiss(
+                pattern_ids=pattern_ids,
+                intent=intent if isinstance(intent, str) else None,
+                basket=basket if isinstance(basket, str) else None,
+            )
 
     async def upsert_casebook(
         self,

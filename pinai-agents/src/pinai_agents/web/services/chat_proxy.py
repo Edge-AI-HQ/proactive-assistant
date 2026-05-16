@@ -156,6 +156,7 @@ async def call_generate(
     output_language: str,
     virtual_key: str,
     run_id: str | None = None,
+    matched_patterns: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """One-shot proxy to chat worker /agent/generate. JSON in / JSON out.
 
@@ -167,6 +168,10 @@ async def call_generate(
     pai_scheduled_tasks → pai_scheduled_task_runs → pai_pipeline_runs.
     Sync /api/generate callers leave it None and accept the chat
     worker's own id (legacy behavior).
+
+    `matched_patterns` is the web-side pattern matcher output (see
+    docs/plans/2026-05-15-pattern-driven-card-generation.mdx Phase 2).
+    Chat reads it from the payload; chat must NOT query the pattern DB.
     """
     token, jwt_run_id = sign_agent_run_jwt(
         user_id=user_id, virtual_key=virtual_key, run_id=run_id,
@@ -179,6 +184,8 @@ async def call_generate(
     }
     if run_id is not None:
         body["run_id"] = run_id
+    if matched_patterns:
+        body["matched_patterns"] = matched_patterns
     url = f"{_chat_internal_url()}/agent/generate"
     timeout = httpx.Timeout(connect=5.0, read=600.0, write=10.0, pool=10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:

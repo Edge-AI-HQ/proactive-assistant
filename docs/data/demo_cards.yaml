@@ -1,0 +1,1480 @@
+# Demo Card Library v0 — 105 张卡(1:1 对应 patterns.yaml)
+#
+# 用途:
+# 1. seed 内部 dashboard 让团队看到"pattern 库跑起来是什么样"
+# 2. 进 generator 的 few-shot 例子库,每个 pattern 配 1-3 张
+# 3. 作为"普通人视角 surprise + 实用"的人工初评基线
+#
+# 格式约定:
+#   pattern_id      对应 patterns.yaml 的 id(必填)
+#   subtype         如果该 demo 是 pattern 的某 specialization(选填)
+#   scenario        触发场景的描述,普通人视角
+#   card            用户实际看到的卡片
+#     hook          一句话点出关键
+#     body          2-3 句完整说明
+#     action        具体可点动作
+#   signals_used    这张卡用到了哪些 signal(用于工程对照)
+#   why_surprise    为什么用户会被打动
+#   why_practical   为什么对用户真有用
+#   wow_level       1-5(人工初评,后续由 reward ledger 校准)
+#
+# 引用: docs/plans/2026-05-15-pattern-driven-card-generation.mdx
+
+version: v0
+generated_at: 2026-05-15
+total_cards: 105
+
+demos:
+
+  # ===== A. routine_observation =====
+  - pattern_id: routine_anchor_detected
+    subtype: commute_route
+    scenario: 用户连续 5 个工作日 GPS 在 8:00-9:30 走几乎一样的路径
+    card:
+      hook: 我看出你上班路径了
+      body: |
+        早上 8:30 从紫荆苑附近出门,9:05 到中关村南,平均路上 35 分钟 — 过去 5 天都这样。
+        明天周一有暴雨,这条路常堵 15 分钟。
+      action: 明早 8:15 提前提醒出门?
+    signals_used: [gps.history_5d, world.weather.forecast_24h]
+    why_surprise: 你从没说过住哪、在哪上班,系统自己推出来的
+    why_practical: 具体到分钟,不是泛泛"早点出门"
+    wow_level: 5
+
+  - pattern_id: meal_pattern_inferred
+    subtype: lunch_cluster
+    scenario: 用户连续 10 个工作日 12:30-13:00 在公司楼下区域停留
+    card:
+      hook: 你的午餐窗口稳定在 12:30-13:00
+      body: |
+        过去 10 天都在公司楼下 200m 内吃,主要去 3 家 — 老地方面、便当君、肯德基。
+        今天你 12:00 有会议跨到 13:15,午餐窗口被吃掉了。
+      action: 帮你 11:30 点外卖到会议室?
+    signals_used: [gps.history_10d, calendar.event]
+    why_surprise: 系统识别出"午餐节律被工作打破"这种细微状态
+    why_practical: 给出立刻可点的解决方案
+    wow_level: 4
+
+  - pattern_id: sleep_rhythm_inferred
+    subtype: workweek_pattern
+    scenario: 端侧健康数据显示用户工作日凌晨 1 点睡 7 点起
+    card:
+      hook: 你最近 14 天平均睡 6 小时
+      body: |
+        工作日凌晨 1 点睡、7 点起,周末补到 9 小时 — 这是典型 "周中亏 + 周末还" 模式。
+        研究上这模式 4 周以上对认知有影响。
+      action: 看这周怎么提前 30 分钟睡?
+    signals_used: [device.health.sleep_h]
+    why_surprise: 系统看穿了"周中亏周末还"这个用户自己都没意识到的模式
+    why_practical: 给出有数据基础的健康提醒
+    wow_level: 4
+
+  - pattern_id: workweek_pattern_inferred
+    subtype: meeting_density
+    scenario: 过去 3 周用户每周二、周四都是会议密集日(8 个以上会议)
+    card:
+      hook: 你的周二和周四,过去 3 周都是会议日
+      body: |
+        这两天平均 8.3 个会议,周一/三/五平均 3 个 — 重型工作其实只发生在周三和周五。
+      action: 把周二/四的深度工作时段挪走?
+    signals_used: [calendar.event, gps.history_window]
+    why_surprise: 系统从原始日程中提炼出"哪天是真工作日"的模式
+    why_practical: 直接帮用户重新安排深度工作时段
+    wow_level: 4
+
+  - pattern_id: weekend_ritual_detected
+    subtype: cafe_visit
+    scenario: 过去 4 个周末用户都在某咖啡馆停留 2h+,这周末还没去
+    card:
+      hook: 你上 4 个周六下午都去 Seesaw 写东西
+      body: |
+        今天周六下午 2 点了 — 你还没出门,日程也没安排。
+        天气晴,Seesaw 现在不挤(实时人流低)。
+      action: 留个位?
+    signals_used: [gps.history_4w, world.weather, world.public_data]
+    why_surprise: 系统知道你的"周末仪式",而且能感觉到今天的偏离
+    why_practical: 帮你保持你自己说不出但很在意的小习惯
+    wow_level: 5
+
+  # ===== B. preparation_gap =====
+  - pattern_id: preparation_gap_medical
+    subtype: general_checkup
+    scenario: 用户明天上午 9:30 协和医院常规体检
+    card:
+      hook: 明早 9:30 体检 — 这几件容易忘
+      body: |
+        你协和的体检是空腹项目(去年报告说要做血脂复查),今晚 8 点后别吃东西。
+        往年的报告需要带原件,记得放包里。
+      action: 设 6 点起床闹钟 + 8 点禁食提醒?
+    signals_used: [calendar.event.personal.medical, memory.facts]
+    why_surprise: 系统记得去年的报告需要复查这件事
+    why_practical: 把"模糊知道要准备"变成"具体三件事"
+    wow_level: 4
+
+  - pattern_id: preparation_gap_meeting
+    subtype: meeting_external
+    scenario: 用户 3 小时后和某 VC 合伙人开会,日历上零附件
+    card:
+      hook: 3 小时后和 Mike 见 — 你还没准备
+      body: |
+        日历上没附议程或资料。他上次发邮件提到想看 Q3 增长曲线和 H2 招聘计划。
+        你最近这周的产品上线邮件他全在 cc — 估计想聊融资节奏。
+      action: 帮你整理 3 页 brief?
+    signals_used: [calendar.event, gmail.message]
+    why_surprise: 系统把"他要聊什么"从邮件里推断出来
+    why_practical: 直接给出可执行的 brief 生成 action
+    wow_level: 5
+
+  - pattern_id: preparation_gap_travel_intl
+    subtype: japan_business_trip
+    scenario: 用户 12 小时后飞东京,只在日历上挂了航班
+    card:
+      hook: 12 小时后飞东京 — 几件容易漏
+      body: |
+        你护照过期日是 8 月(还有 4 个月,OK)。
+        东京下周三全城雨,带伞。
+        携程订的新宿酒店离机场 50 分钟,落地后早高峰 +15 分钟。
+        现在汇率 100 円 = 4.8 元,日本卡余额你上次说还有 6 万円。
+      action: 帮你列完整登机前 clipboard?
+    signals_used: [calendar.event.transit.flight_intl, gmail.message.transactional.reservation_flight, profile.static.languages, world.weather, memory.facts]
+    why_surprise: 5 件互不相关的事被串成"出门 checklist"
+    why_practical: 每一项都是用户当下要决策的
+    wow_level: 5
+
+  - pattern_id: preparation_gap_travel_dom
+    subtype: domestic_flight
+    scenario: 用户 6 小时后从北京飞上海
+    card:
+      hook: 6 小时后飞上海
+      body: |
+        你订的国航 CA1831 现在显示准点。
+        身份证记得放包,checkin 已自动开。
+        现在去首都 T3 路上需要 45 分钟,你 16:00 还有会议,17:30 必须出门。
+      action: 提前 16:15 提醒结束会议?
+    signals_used: [calendar.event.transit.flight_dom, gmail.message.transactional, world.weather]
+    why_surprise: 把"会议结束"和"航班出发"链起来
+    why_practical: 防止迟到的具体时间锚点
+    wow_level: 4
+
+  - pattern_id: preparation_gap_social_dinner
+    subtype: friend_dinner
+    scenario: 用户 2 小时后和 3 个老朋友吃饭
+    card:
+      hook: 晚上 7 点和老周老李老陈 — 三个话题
+      body: |
+        老周上个月发朋友圈说在装修新房(还没问过怎么样)。
+        老李上次聊到换工作纠结,他后来去了 X 公司。
+        老陈喜欢 IPA,这家店有 6 款新酒上。
+      action: 路上发个"今晚见"群消息?
+    signals_used: [calendar.event.personal.social, chat.history, gmail.message]
+    why_surprise: 系统记得每个朋友的近况和共同话题
+    why_practical: 让聚餐不冷场
+    wow_level: 5
+
+  - pattern_id: preparation_gap_interview
+    subtype: job_interview
+    scenario: 用户明天下午 2 点字节面试,日历无附加信息
+    card:
+      hook: 明天 2 点字节面试 — 4 件事可以先做
+      body: |
+        面试官是 X(产品负责人),领英最近发了 2 篇文章关于 AI 产品的方向。
+        字节这个岗位 JD 强调 0-1 经验 — 你的 X 项目可以重点准备。
+        路上从你公司过去要 35 分钟,1:00 出门稳。
+      action: 帮你出一份对方背景 + 可能问题 brief?
+    signals_used: [calendar.event, gmail.message, memory.facts, profile.static]
+    why_surprise: 系统挖出了"面试官最近写了什么"
+    why_practical: 把准备从"焦虑"变成"清单"
+    wow_level: 5
+
+  - pattern_id: preparation_gap_presentation
+    subtype: conference_talk
+    scenario: 用户明天上午 10 点要做产品 demo,演讲稿还没准备
+    card:
+      hook: 明早 10 点 demo — 关键 3 件
+      body: |
+        会议邀请里有 35 个外部参会者(其中 X 公司的 Y 也在,他上周和你 chat 聊到过)。
+        投影适配 — 你上次借的 HDMI 转接头放在公司桌左侧抽屉。
+        Q&A 高发问题:定价模型、技术路线、安全合规 — 各准备一句话。
+      action: 帮你出 3 个 backup slides?
+    signals_used: [calendar.event, gmail.message, memory.facts, chat.history]
+    why_surprise: 系统知道"转接头放在哪个抽屉"
+    why_practical: 具体到能立即行动的细节
+    wow_level: 5
+
+  - pattern_id: preparation_gap_first_visit
+    subtype: first_office_visit
+    scenario: 用户下午 2 点第一次去某客户公司
+    card:
+      hook: 你今天第一次去 X 公司
+      body: |
+        地址在国贸三期 32 层,过安检要刷身份证。
+        附近停车场 — 国贸停车楼下午 2 点通常满,B1 的银泰还有位。
+        着装 — 这家是金融科技,日常商务休闲。
+      action: 帮你提前 10 分钟到的导航?
+    signals_used: [calendar.event, gps.history_window, world.public_data, profile.static]
+    why_surprise: 提前预测了"停车难"这种到现场才发现的细节
+    why_practical: 避免迟到 / 出洋相
+    wow_level: 4
+
+  # ===== C. time_buffer_risk =====
+  - pattern_id: time_buffer_commute
+    scenario: 用户 10:30 在家,11:00 有线下会议,实时路况看下来到不了
+    card:
+      hook: 11 点会议你赶不上了
+      body: |
+        现在到会议地点路况显示 38 分钟,你还在家 — 即使立刻出门也迟到 8 分钟。
+        会议地点离地铁 5 分钟,坐 13 号线快 6 分钟,但要现在走。
+      action: 帮你给主持人发"迟到 5 分钟"?
+    signals_used: [gps.current, calendar.event, world.transit_status]
+    why_surprise: 系统主动算时间差,不等用户算
+    why_practical: 救场
+    wow_level: 4
+
+  - pattern_id: time_buffer_weather_delay
+    scenario: 1 小时后用户要去望京客户,北京突降暴雨
+    card:
+      hook: 暴雨,1 小时后的会议要不要改远程
+      body: |
+        现在中心城区暴雨橙色预警,东三环已堵。
+        客户那边今早邮件里提到他在家办公,他大概率不在公司 — 改 Zoom 反而更稳。
+      action: 帮你发"改远程"消息?
+    signals_used: [world.weather, calendar.event, gmail.message]
+    why_surprise: 不只是看天气,还结合"客户其实在家"这个证据
+    why_practical: 解决"要不要改远程"的真实犹豫
+    wow_level: 5
+
+  - pattern_id: time_buffer_transit_disruption
+    scenario: 用户常坐的 10 号线晚高峰出故障
+    card:
+      hook: 你常坐的 10 号线晚高峰停了
+      body: |
+        你过去 30 天有 22 次晚上坐 10 号线回家。
+        今天 18:00 起 10 号线西段停运,预计恢复 19:30。
+        替代:1 号线转 6 号线 +12 分钟。
+      action: 改打车?现在出门预计 35 分钟到家
+    signals_used: [world.transit_status, gps.inferences.commute_route]
+    why_surprise: 系统知道"你常坐 10 号线"
+    why_practical: 给出具体替代路径
+    wow_level: 5
+
+  - pattern_id: time_buffer_multi_event_squeeze
+    scenario: 用户今天 5 个连续会议,每个间隔 5 分钟
+    card:
+      hook: 今天 5 连开,中间没饭
+      body: |
+        9:00-10:00 / 10:05-11:00 / 11:00-12:00 / 13:00-14:00 / 14:00-15:00 — 没有真正空档。
+        其中 11 点那场你可以试着取消(只有 2 人 + 议题非紧急)。
+        15 点之后你才有空吃饭 — 现在订外卖到办公室?
+      action: 帮你查 11 点会议可否后延?
+    signals_used: [calendar.event]
+    why_surprise: 系统主动诊断"哪场会能砍"
+    why_practical: 切实减少今天的压力
+    wow_level: 5
+
+  - pattern_id: time_buffer_prep_window_closing
+    scenario: 用户周五 ddl,今天周四上午,相关文档还没动
+    card:
+      hook: 报告 ddl 还 36 小时 — 你今天有 5h 空档
+      body: |
+        周五 18:00 ddl,你今天下午 14:00-19:00 没排,明天上午有 2 个会。
+        Doc 协作页面今晚有协作者也会改 — 现在锁版反而方便。
+      action: 阻断 14:00-17:00 不被打扰?
+    signals_used: [calendar.event]
+    why_surprise: 系统计算出"实际可用时间"
+    why_practical: 把"模糊紧迫感"换成"具体动作"
+    wow_level: 4
+
+  - pattern_id: time_buffer_pickup_deadline
+    scenario: 用户 16:30 要接孩子,现在 16:00 在 30 分钟车程外
+    card:
+      hook: 30 分钟到学校,接孩子时间是 16:30
+      body: |
+        现在出发刚好到,但今天三环晚高峰 +10 分钟。
+        改打车 +5 分钟到,公交慢 8 分钟。
+        班主任王老师今早邮件说今天可以晚 15 分钟接。
+      action: 给王老师发"晚 5 分钟"消息?
+    signals_used: [calendar.event.personal.family, gps.current, gmail.message]
+    why_surprise: 系统记得老师早上邮件里的"宽限"
+    why_practical: 救场 + 不慌
+    wow_level: 5
+
+  # ===== D. latent_opportunity =====
+  - pattern_id: latent_opportunity_expiring_reward_on_route
+    scenario: 用户周五约会 + 信用卡积分到期 + 餐厅在常去路线
+    card:
+      hook: 周五约会用 X 卡,积分这周末到期
+      body: |
+        你订的 [那家日料] 支持招行 5x 餐饮积分。
+        你的招行积分 5,420 分这周日到期(够换 ¥270 现金或一份甜品券)。
+        那家餐厅在你周五下班路线上 — 提前订位不绕路。
+      action: 帮你订 19:30?
+    signals_used: [gmail.message.transactional.expiring_rewards, gps.inferences.commute_route, calendar.event]
+    why_surprise: 3 件不相关的事被连起来 — 这是 personal AI 真正的 wow
+    why_practical: 直接省钱 + 不耽误约会
+    wow_level: 5
+
+  - pattern_id: latent_opportunity_errand_combine
+    scenario: 用户有 3 件未办的小事,都在同一商圈
+    card:
+      hook: 你 3 件小事都在西二旗附近
+      body: |
+        - 取奶粉(京东快递柜在 X 楼)
+        - 老婆说的小米手环(小米之家)
+        - 周末同学聚会的礼物(花店或便利店)
+        今天下午 4 点你有半小时空档,正好顺路。
+      action: 帮你按最短路径排序?
+    signals_used: [chat.history, gps.current, memory.facts, calendar.event]
+    why_surprise: 把"日常 noise"组成可执行清单
+    why_practical: 直接省一趟来回
+    wow_level: 5
+
+  - pattern_id: latent_opportunity_colleague_proximity
+    scenario: 用户和某老同事都在同一商圈出差
+    card:
+      hook: 张三今晚也在上海
+      body: |
+        他在虹桥开会(从他领英 + 你日历上知道你也在虹桥),你们最近一次见面是 4 个月前。
+        他常说想聊聊去年那个项目复盘 — 离你住的酒店 12 分钟。
+      action: 发个"晚上喝一杯?"消息?
+    signals_used: [calendar.event, gps.current, profile.preferences, chat.history]
+    why_surprise: '"他在你旁边"这种巧合本来要靠运气发现'
+    why_practical: 维护重要关系
+    wow_level: 5
+
+  - pattern_id: latent_opportunity_specialty_shop_passby
+    scenario: 用户路过一家日本进口生活用品店,他常买日货
+    card:
+      hook: 那家无印良品 200 米
+      body: |
+        你过去半年常买无印,这家是新店(开 2 周),你没去过。
+        附近还有 3 个店,其中 [小器] 这家有你上次说过的那款铸铁锅。
+      action: 顺便逛 20 分钟?
+    signals_used: [gps.current, profile.preferences, world.public_data]
+    why_surprise: 系统知道"你喜欢日货"且能识别"路过"
+    why_practical: 临时把无聊路过变 mini 探店
+    wow_level: 4
+
+  - pattern_id: latent_opportunity_reservation_window
+    scenario: 用户一直想订的米其林餐厅突然有 windows
+    card:
+      hook: 你心心念念的那家米其林,周六晚 8 点放出 1 位
+      body: |
+        你 3 个月前提过想去 [Ling Long],一直订不到。
+        他们刚放出周六晚 8 点 2 人位(可能是有人取消)— 通常 10 分钟内被抢。
+        你周六晚上日历空。
+      action: 帮你立即订?
+    signals_used: [memory.facts, chat.history, world.public_data]
+    why_surprise: 系统记得 3 个月前的对话
+    why_practical: 真的不抢就没了
+    wow_level: 5
+
+  - pattern_id: latent_opportunity_route_optimization
+    scenario: 用户两个会之间有 45 分钟空档,中间路过药店
+    card:
+      hook: 你 14:00-14:45 路过同仁堂
+      body: |
+        13:00-14:00 在国贸开会,15:00 在中关村开会 — 中间空 45 分钟。
+        国贸到中关村正好路过同仁堂(你昨天提过要给妈买药)。
+      action: 顺便取药?
+    signals_used: [gps.current, calendar.event, chat.history]
+    why_surprise: 路线 × 空档 × 待办 三层组合
+    why_practical: 利用碎片时间
+    wow_level: 4
+
+  - pattern_id: latent_opportunity_savings_match
+    scenario: 用户最近提过想买某款耳机,今天京东闪购
+    card:
+      hook: AirPods Pro 2 京东闪购 ¥1399
+      body: |
+        你 2 周前 chat 里提过想换 AirPods Pro 2(你上一对买了 3 年了)。
+        今天京东闪购 1399,历史最低,持续 4 小时。
+      action: 帮你跳转 + 一键下单?
+    signals_used: [chat.history, gmail.message, world.public_data]
+    why_surprise: 系统记得"你说过想买"
+    why_practical: 直接省钱
+    wow_level: 5
+
+  - pattern_id: latent_opportunity_detour_worth
+    scenario: 用户回家路线绕 10 分钟可经过一家好评咖啡店首店
+    card:
+      hook: 绕 10 分钟有家新店,你可能会喜欢
+      body: |
+        Manner 在你常走路线 800m 外开了新店(今天首日,有手冲免费)。
+        你过去 3 个月去过 Manner 7 次。
+      action: 加 10 分钟绕进去?
+    signals_used: [gps.current, calendar.event, world.public_data, profile.preferences]
+    why_surprise: 系统知道"Manner 是你喜欢的"
+    why_practical: 小确幸
+    wow_level: 4
+
+  # ===== E. forgotten_priority =====
+  - pattern_id: forgotten_vip_email
+    scenario: 用户老板 3 天前的邮件没回
+    card:
+      hook: 你老板 3 天前的邮件还没回
+      body: |
+        他问 Q3 hiring 的方向 — 邮件里 cc 了 HR。
+        你下午 3 点有 30 分钟空档。
+      action: 帮你起草一版?
+    signals_used: [gmail.message.personal.from_vip]
+    why_surprise: 系统主动捞出"VIP 但被忽视"的邮件
+    why_practical: 防止职场失礼
+    wow_level: 4
+
+  - pattern_id: forgotten_repeating_chat_topic
+    scenario: 用户和系统 chat 里 5 次提到"想做 newsletter",一直没启动
+    card:
+      hook: 你 5 次提过想做 newsletter,一直没动
+      body: |
+        最早一次是 2 月,最近一次是上周。
+        三个共同点 — 每次都说"等空了做",但日历从来没空过。
+        要么先做 mini 版(1 期 500 字),要么明确放弃。
+      action: 帮你今晚出第一期框架?
+    signals_used: [chat.history]
+    why_surprise: 系统记得你 3 个月里的反复纠结
+    why_practical: 强迫决断 — 启动或放弃
+    wow_level: 5
+
+  - pattern_id: forgotten_promised_followup
+    scenario: 用户 2 周前在 chat 里说"我帮你看看那本书",到现在没动
+    card:
+      hook: 你答应小张的那本书,2 周了
+      body: |
+        他 2 周前问"你那本《XXX》能借我吗",你说"我找找,周末给你"。
+        书在你公司桌右侧抽屉(你之前 chat 提过)。
+      action: 帮你设个"明天带到办公室"提醒?
+    signals_used: [chat.history, gmail.message, memory.facts]
+    why_surprise: 系统记得"书放在哪"
+    why_practical: 防止失信
+    wow_level: 5
+
+  - pattern_id: forgotten_birthday_approaching
+    scenario: 妻子生日还有 7 天,用户没提过准备
+    card:
+      hook: 老婆生日还有 7 天 — 你还没提过
+      body: |
+        去年这天你订了 [那家西餐],她拍照发了朋友圈说"超喜欢"。
+        今年那家位很紧,周末几乎满 — 现在订还有几个窗口。
+        礼物 — 她上个月 chat 提过想要某品牌香水。
+      action: 帮你订位 + 下单香水?
+    signals_used: [profile.preferences, memory.facts, gmail.message, chat.history]
+    why_surprise: 把去年的回忆和今年的窗口连起来
+    why_practical: 拯救婚姻的真实场景
+    wow_level: 5
+
+  - pattern_id: forgotten_subscription_expiry
+    scenario: 用户 Notion 订阅 10 天后到期续费
+    card:
+      hook: Notion ¥120/年 自动续费还 10 天
+      body: |
+        过去 30 天你打开 Notion 3 次。
+        你的主力是 Apple Notes(过去 30 天 80+ 次)。
+        要不要先暂停续费?
+      action: 帮你设"到期前 1 天再问一次"?
+    signals_used: [gmail.message.transactional.deadline_billing, device.health]
+    why_surprise: 系统用"实际使用"反推订阅价值
+    why_practical: 真的省钱
+    wow_level: 5
+
+  - pattern_id: forgotten_saved_for_later
+    scenario: 用户 35 天前在 chat 里"先存着"的一篇长文还没看
+    card:
+      hook: 那篇你存了 35 天的长文
+      body: |
+        《XXX》— 你 5 月 10 日说"先存着,周末看"。
+        现在到月底了,要不就今晚抽 20 分钟看完,要不删了。
+        我看到你这周末日历空。
+      action: 帮你今晚 22:00 推一次?
+    signals_used: [memory.facts, profile.preferences, calendar.event]
+    why_surprise: 系统不让你假装"一直在收藏"
+    why_practical: 关闭 open loop
+    wow_level: 4
+
+  - pattern_id: forgotten_dormant_thread
+    scenario: 重要朋友 70 天没联系,最后一次聊到他要换工作
+    card:
+      hook: 老王 70 天没联系
+      body: |
+        最后一次是 3 月 8 日,他当时说在纠结跳槽。
+        他上周领英换了头像 + 公司栏 — 看起来真去了 X 公司。
+      action: 发一句"看到了,新公司怎么样?"
+    signals_used: [chat.history, gmail.message]
+    why_surprise: 系统把 70 天前的对话和今天的领英动态串起来
+    why_practical: 维护友谊
+    wow_level: 5
+
+  - pattern_id: forgotten_open_loop_task
+    scenario: 用户自己设的 todo "整理上半年照片" 已 30 天
+    card:
+      hook: '"整理上半年照片" 你存了 30 天'
+      body: |
+        过去 30 天你确实拍了 240 张照片 — 没整理。
+        这周末天气不好(雨),正好待家里。
+      action: 帮你今晚批量挑出 Top 30?
+    signals_used: [memory.facts, world.weather, calendar.event]
+    why_surprise: 系统把"30 天前的 todo"和"现在的天气"连起来
+    why_practical: 关闭 open loop
+    wow_level: 3
+
+  # ===== F. rhythm_break =====
+  - pattern_id: rhythm_break_commute_deviation
+    scenario: 工作日上午用户没去往公司方向
+    card:
+      hook: 你今天没在上班路上
+      body: |
+        现在 9:15,你在 X 区(你公司在 Y 区)。
+        你 10:00 还有线上会议,11:00 有线下会议 — 都没改。
+      action: 帮你把 11 点改远程?
+    signals_used: [gps.current, gps.inferences.commute_route, calendar.event]
+    why_surprise: 系统对"今天不一样"敏感
+    why_practical: 及时调整日程
+    wow_level: 5
+
+  - pattern_id: rhythm_break_workout_streak_risk
+    scenario: 用户连续 4 周每周三晚去健身房,今天周三晚有客户晚宴
+    card:
+      hook: 周三健身连胜 4 周,今晚撞客户饭
+      body: |
+        过去 4 个周三晚 7 点你都在健身房,平均 50 分钟。
+        今晚 7 点客户晚宴(他下午邮件确认了)。
+        改周二晚?明晚日历空。
+      action: 帮你预约明晚教练?
+    signals_used: [device.health, calendar.event, gps.inferences]
+    why_surprise: 系统识别出"健身是你周三的固定 ritual"
+    why_practical: 主动协调,保持习惯
+    wow_level: 5
+
+  - pattern_id: rhythm_break_sleep_debt
+    scenario: 端侧数据显示用户这周累积少睡 5h
+    card:
+      hook: 你这周已经少睡 5 小时
+      body: |
+        周一 5h 周二 5.5h 周三 6h — 总共比你均值少了 5h。
+        今晚要不要试 22:30 上床?日历里晚上 21 点之后没排。
+      action: 帮你设 22:00 关屏提醒?
+    signals_used: [device.health.sleep_h]
+    why_surprise: 系统量化"睡眠债"这种模糊感受
+    why_practical: 健康干预
+    wow_level: 4
+
+  - pattern_id: rhythm_break_screen_time_spike
+    scenario: 用户最近 3 天屏幕时间是均值 1.6x
+    card:
+      hook: 这 3 天你屏幕时间多了 60%
+      body: |
+        多出来的主要是晚上 22-1 点 — 看视频。
+        过去这种模式之后通常会出现工作日 brain fog。
+      action: 今晚 22:30 关屏挑战?
+    signals_used: [device.health, device.ambient]
+    why_surprise: 系统识别出"暴跌前奏"
+    why_practical: 预防性干预
+    wow_level: 3
+
+  - pattern_id: rhythm_break_meal_skip
+    scenario: 用户过去 2 天午餐时段都在工位/通勤,没饭点
+    card:
+      hook: 你连续 2 天没正经吃午餐
+      body: |
+        周二 12:00-14:00 在会议室,周三 12:30-13:30 在通勤路上。
+        今天你 12-13 点有 30 分钟空 — 现在订外卖,12:00 到。
+      action: 帮你下一单 [你常吃的店]?
+    signals_used: [gps.history_window, calendar.event]
+    why_surprise: 系统识别"连续跳餐"这种用户自己都没意识到的模式
+    why_practical: 健康保护
+    wow_level: 4
+
+  - pattern_id: rhythm_break_weekend_drift
+    scenario: 用户常去的羽毛球馆 3 周没去
+    card:
+      hook: 三周没去打羽毛球了
+      body: |
+        4 月前你每周六上午都打,5 月开始断了。
+        这周六上午日历空,天气晴。
+        老搭档老李上周末发朋友圈"找球友"。
+      action: 帮你发个"明早 9 点?"?
+    signals_used: [gps.history_window, chat.history]
+    why_surprise: 系统识别出"运动断了 + 朋友在找你"
+    why_practical: 重启好习惯
+    wow_level: 5
+
+  - pattern_id: rhythm_break_work_hours_drift
+    scenario: 过去 7 天用户日均工作时长 11h(均值 8.5h)
+    card:
+      hook: 你这周工作时长 +30%
+      body: |
+        7 天平均 11h(你均值 8.5h)。
+        晚上 22 点后还在公司的次数 — 这周 4 次,上周 1 次。
+      action: 今晚是否考虑 19 点离开?
+    signals_used: [calendar.event, gps.inferences.office_cluster, device.health]
+    why_surprise: 系统给出工作时长的客观数据
+    why_practical: 防止 burnout
+    wow_level: 4
+
+  # ===== G. recovered_context =====
+  - pattern_id: recovered_meaningful_place
+    scenario: 用户回到 30+ 天没去过的某个有意义的地点
+    card:
+      hook: 你回到了西湖边
+      body: |
+        上次来这是 3 月 18 日 — 你和老婆庆祝结婚 5 周年那天。
+        旁边那家咖啡店现在在你 200 米外。
+      action: 留个照片留念?
+    signals_used: [gps.current, gps.history_window, memory.facts]
+    why_surprise: 系统记得"上次来这的故事"
+    why_practical: 唤起记忆,情感价值
+    wow_level: 5
+
+  - pattern_id: recovered_seasonal_event
+    scenario: 去年 5 月用户去了某场音乐节,今年同样季节临近
+    card:
+      hook: 去年 5 月 21 日你在草莓音乐节
+      body: |
+        今年的同主办这周末开票。
+        去年你拍了 60+ 张照片(我看过你 chat),提过想再去。
+      action: 帮你抢早鸟票?
+    signals_used: [memory.facts, calendar.event, world.public_data, chat.history]
+    why_surprise: 系统记得一年前的事情和当时的情绪
+    why_practical: 不错过年度爱好
+    wow_level: 5
+
+  - pattern_id: recovered_dormant_skill
+    scenario: 用户 80 天没碰吉他,周末天气适合
+    card:
+      hook: 吉他 80 天没碰了
+      body: |
+        过去 1 年你每月平均练 6 次,8 月开始断。
+        周末雨,在家正合适。
+        你上次练的那首《XXX》进度记得是 70%。
+      action: 帮你预留周六上午 1 小时?
+    signals_used: [memory.skills, chat.history, calendar.event, world.weather]
+    why_surprise: 系统记得"上次练到哪首歌"
+    why_practical: 找回放弃的兴趣
+    wow_level: 5
+
+  - pattern_id: recovered_paused_project
+    scenario: 用户 40 天前暂停的某个 side project,最近相关话题被触发
+    card:
+      hook: 你那个 newsletter 项目 — 有新触发点
+      body: |
+        你 40 天前说"等下个月做" — 今天 X(你常引用的作者)发了篇关于这个方向的 essay。
+        你这周末有 4h 空档。
+      action: 帮你写第一期开头 3 段?
+    signals_used: [chat.history, memory.facts, gmail.message]
+    why_surprise: 系统主动找到"重启窗口"
+    why_practical: 启动停滞项目
+    wow_level: 5
+
+  - pattern_id: recovered_old_friend
+    scenario: 老朋友 100 天没联系
+    card:
+      hook: 老 K 整整 100 天没联系
+      body: |
+        最后一次他在你生日发了"今年得喝一杯",然后就没下文了。
+        他领英过去 3 个月没动,他朋友圈也少 — 可能在忙。
+      action: 发一句"最近怎么样"?
+    signals_used: [chat.history, gmail.message, profile.preferences]
+    why_surprise: 系统主动唤起被遗忘的人
+    why_practical: 维护友情
+    wow_level: 4
+
+  - pattern_id: recovered_revisit_recommendation
+    scenario: 用户半年前常去的咖啡馆 90 天没去
+    card:
+      hook: 那家你常去的小咖啡馆,3 个月没回了
+      body: |
+        过去 1 年你去过 14 次,5 月开始没去。
+        今天周六上午,你周末 ritual 时段。
+        老板上次在你 chat 截图里提过"等你回来"。
+      action: 顺路去坐 30 分钟?
+    signals_used: [gps.history_window, profile.preferences]
+    why_surprise: 系统记得用户和某个地方的关系
+    why_practical: 唤起小习惯
+    wow_level: 4
+
+  # ===== H. decision_under_constraint =====
+  - pattern_id: conflict_calendar_double
+    scenario: 用户两个会议时间重叠
+    card:
+      hook: 你下午 3 点撞了两个会
+      body: |
+        - 与 Mike 1on1(他从西雅图飞来)
+        - 团队 sprint review
+        Mike 那场比 sprint review 更难重排(他周二就回美国)。
+      action: 帮你给 sprint review 发"我会迟到 30 分钟"?
+    signals_used: [calendar.event, memory.facts]
+    why_surprise: 系统知道"哪场更难重排"
+    why_practical: 解决冲突,不是只指出冲突
+    wow_level: 4
+
+  - pattern_id: conflict_budget_collision
+    scenario: 用户接下来 14 天有 3 笔大额支出(房租 + 旅行 + 设备)
+    card:
+      hook: 14 天内 3 笔大开销撞期
+      body: |
+        房租 ¥8000(20 日),东京机票 ¥5400(26 日扣款),新 iPad ¥7000(预订 28 日发货)。
+        如果都按时,流动现金 -3500 — 这个月信用卡会进入循环利息。
+      action: iPad 推到下月 5 号?可避免利息
+    signals_used: [gmail.message.transactional, chat.history]
+    why_surprise: 系统识别"现金流陷阱"
+    why_practical: 真的省利息
+    wow_level: 5
+
+  - pattern_id: conflict_family_work
+    scenario: 孩子毕业典礼 + 重要客户会议同一天
+    card:
+      hook: 6 月 28 日孩子毕业 + 客户会议
+      body: |
+        - 09:00 孩子毕业典礼(老婆已经请假)
+        - 10:30 X 客户会议(他 IM 提过"线上也可以")
+      action: 帮你把 10:30 改 Zoom?
+    signals_used: [calendar.event, profile.static, chat.history]
+    why_surprise: 系统知道"客户其实可以线上"
+    why_practical: 两边都不耽误
+    wow_level: 5
+
+  - pattern_id: conflict_health_workload
+    scenario: 用户这周工作量大,健康指标全部下滑
+    card:
+      hook: 工作高峰 + 健康下滑
+      body: |
+        这周日程 +30%,睡眠 -1h 均值,步数 -40%,心率均值 +6 bpm。
+        这种组合过去出现过 2 次,都跟着 5-7 天小病。
+      action: 把周五下午阻断 + 早走?
+    signals_used: [calendar.event, device.health]
+    why_surprise: 系统识别"病前模式"
+    why_practical: 预防性休息
+    wow_level: 4
+
+  - pattern_id: conflict_commitment_overload
+    scenario: 用户 open 着 7 个承诺(邮件未回 + chat 答应 + 待办)
+    card:
+      hook: 你 open 着 7 个承诺
+      body: |
+        最老的 3 个超过 2 周(都对 VIP)。
+        最新的 2 个昨天(对同事)。
+        建议:今天先处理 3 个老的,新 2 个明早。
+      action: 帮你列优先级 + 起草?
+    signals_used: [chat.history, calendar.event, gmail.message]
+    why_surprise: 量化"心理负担"
+    why_practical: 减压
+    wow_level: 4
+
+  # ===== I. state_transition =====
+  - pattern_id: state_travel_mode_active
+    scenario: 用户飞机刚落地东京,进入旅行模式
+    card:
+      hook: 欢迎到东京
+      body: |
+        当前成田机场,新宿酒店地铁 60 分钟。
+        本地时间 18:30(北京 17:30)— 今晚日程已自动延后 1 小时。
+        本地 SIM / Suica / WiFi — 看你订单已经买了 eSIM,落地激活。
+      action: 帮你打开导航到酒店?
+    signals_used: [gps.current, calendar.event.transit, profile.static]
+    why_surprise: 系统主动切到旅行模式
+    why_practical: 减少落地的认知负担
+    wow_level: 5
+
+  - pattern_id: state_vacation_warmup
+    scenario: 用户明天开始 5 天年假
+    card:
+      hook: 假期前最后一个工作日
+      body: |
+        明天起 5 天假 — 这些事建议今天关掉:
+        - 那 3 封 VIP 邮件回掉(还没回)
+        - 给同事发 OOO 自动回复
+        - 关掉这周的 Slack 通知
+      action: 帮你启动一键关单?
+    signals_used: [calendar.event, gmail.message, profile.static]
+    why_surprise: 系统识别"假期前模式"
+    why_practical: 假期不被打断
+    wow_level: 4
+
+  - pattern_id: state_illness_recovery
+    scenario: 用户病 3 天后第一天回办公室
+    card:
+      hook: 病后第一天 — 别全开
+      body: |
+        过去 3 天你心率均值偏低,睡眠 +2h — 标准病后恢复模式。
+        今天日程满档 8 个会议 — 建议保留 3 个最关键的,其它改时。
+      action: 帮你筛出可以推迟的 5 个?
+    signals_used: [device.health, calendar.event, chat.history]
+    why_surprise: 系统识别"病后恢复期"
+    why_practical: 保护身体
+    wow_level: 5
+
+  - pattern_id: state_high_stress_period
+    scenario: 用户过去 5 天压力指标全部偏高
+    card:
+      hook: 5 天高压期识别
+      body: |
+        睡眠 -1h,心率 +5bpm,屏幕时间 +60%,chat 关键词"忙/累/赶" × 8。
+        这种组合通常 7 天后开始累积情绪问题。
+      action: 周末预留 4h 真正离开屏幕?
+    signals_used: [device.health, calendar.event, chat.history]
+    why_surprise: 系统识别"持续高压"这种连贯模式
+    why_practical: 提前预防
+    wow_level: 4
+
+  - pattern_id: state_job_transition
+    scenario: 用户邮件 / chat 信号显示在求职
+    card:
+      hook: 你在过渡期 — 这些可以梳理
+      body: |
+        近期 chat 提过 3 次"考虑换工作",邮件里有 2 个面试邀请。
+        - 简历最后一次更新是 8 个月前
+        - 推荐人:你之前提过想找老 X 当推荐人
+      action: 帮你列下一步 5 件事?
+    signals_used: [profile.static, chat.history, gmail.message]
+    why_surprise: 系统识别"职业过渡"这种长周期状态
+    why_practical: 把模糊期变结构化
+    wow_level: 4
+
+  # ===== J. vip_relations =====
+  - pattern_id: vip_spouse_time_gap
+    scenario: 用户 14 天没和妻子有专属时间
+    card:
+      hook: 你和老婆 14 天没专属时间了
+      body: |
+        过去 14 天位置重合的时段都在家(吃饭 / 睡觉)— 没有"出门做一件事"的时间。
+        她周三晚朋友圈发"想去看那部电影"— 那部电影下周三上映。
+        周四晚两人日历都空。
+      action: 帮你订两张 IMAX?
+    signals_used: [calendar.event, gps.history_window, chat.history]
+    why_surprise: 量化"两人专属时间"这种主观感受
+    why_practical: 真的能让关系变好
+    wow_level: 5
+
+  - pattern_id: vip_parent_checkin
+    scenario: 用户 25 天没和父母通话
+    card:
+      hook: 25 天没和爸妈联系
+      body: |
+        上次电话 4 月 20 日,聊了 12 分钟(她说血压偏高在吃药)。
+        妈妈生日还有 11 天。
+      action: 今晚 8 点打个电话?
+    signals_used: [chat.history, gmail.message, profile.static, memory.facts]
+    why_surprise: 系统记得"血压偏高"这种细节
+    why_practical: 维护家人关系
+    wow_level: 5
+
+  - pattern_id: vip_child_school_event
+    scenario: 孩子 3 天后家长会
+    card:
+      hook: 孩子家长会还 3 天 — 几件事
+      body: |
+        班主任 X 老师邮件提到"建议家长准备 3 个想了解的方面"。
+        孩子最近期中数学下滑了一点(你上周 chat 提过)。
+        家长会那天你日历下午 3 点客户会议 — 要改吗?
+      action: 帮你拟 3 个问题 + 改客户会议?
+    signals_used: [gmail.message, calendar.event, chat.history, profile.static]
+    why_surprise: 系统记得"数学下滑"这件事
+    why_practical: 全面父母准备
+    wow_level: 5
+
+  - pattern_id: vip_mentor_followup
+    scenario: 用户和某前辈 2 周前聊到职业转型,没 follow up
+    card:
+      hook: 老 W 那次咖啡 follow up 你还没做
+      body: |
+        2 周前你们聊到他建议你看那本书《XXX》。
+        他说"读完跟我说说你想法"。
+        你这周末日历空,读 2 小时刚好够。
+      action: 帮你周末后给老 W 发条 follow up?
+    signals_used: [gmail.message.work.from_mentor, chat.history]
+    why_surprise: 系统记得 mentor 的具体建议
+    why_practical: 真的接住贵人
+    wow_level: 5
+
+  - pattern_id: vip_friend_milestone
+    scenario: 用户密友升职 / 升级里程碑
+    card:
+      hook: 小 J 升 VP 了
+      body: |
+        她今天领英换了 title — 你们去年这时候她和你 chat 聊过这次目标。
+        她周五在你城市有个 dinner。
+      action: 帮你发个祝贺 + 顺路约杯酒?
+    signals_used: [gmail.message, chat.history, profile.preferences]
+    why_surprise: 系统记得"她去年的目标"
+    why_practical: 抓住关系升温窗口
+    wow_level: 5
+
+  - pattern_id: vip_silent_friend_distress
+    scenario: 之前活跃的朋友突然 40 天沉默
+    card:
+      hook: 老 Z 突然沉默 40 天
+      body: |
+        他过去通常每周 3 条朋友圈,最后一条 4 月 10 日。
+        你们 chat 上次是 3 月 28 日,他说"最近有点事"。
+        可能就是忙,也可能不是。
+      action: 发一句"最近怎么样,有空喝一杯?"
+    signals_used: [chat.history, gmail.message]
+    why_surprise: 系统识别"异常沉默"这种细微信号
+    why_practical: 朋友真需要的时候,你不缺席
+    wow_level: 5
+
+  - pattern_id: vip_anniversary_approaching
+    scenario: 用户结婚纪念日还有 12 天
+    card:
+      hook: 结婚纪念日还有 12 天
+      body: |
+        去年你订了 [那家餐厅],今年位很紧 — 现在订还有窗口。
+        去年送的礼物是 [X],她拍照发朋友圈说"超喜欢" — 同系列今年新款上市。
+      action: 帮你订位 + 看新款?
+    signals_used: [memory.facts, profile.static, gmail.message, chat.history]
+    why_surprise: 系统记得去年的细节
+    why_practical: 不让重要日子掉链子
+    wow_level: 5
+
+  # ===== K. health =====
+  - pattern_id: health_medical_followup_due
+    scenario: 用户去年体检血脂临界,该复查了
+    card:
+      hook: 去年的体检 — 该复查了
+      body: |
+        去年报告显示血脂临界(LDL 3.6),建议 1 年后复查。
+        协和那位你之前的医生本周还有 2 个 slot。
+      action: 帮你预约周三上午?
+    signals_used: [memory.facts, gmail.message, calendar.event]
+    why_surprise: 系统记得一年前的具体指标
+    why_practical: 健康长跑
+    wow_level: 5
+
+  - pattern_id: health_hydration_low
+    scenario: 端侧数据显示用户连续 2 天喝水不足
+    card:
+      hook: 这 2 天喝水都不到一半
+      body: |
+        过去 2 天平均 600ml,你目标 1500ml。
+        今天会议密集,容易忘 — 现在桌上有杯水吗?
+      action: 设每 90 分钟一次喝水提醒?
+    signals_used: [device.health]
+    why_surprise: 系统识别基础健康习惯
+    why_practical: 轻量但累积
+    wow_level: 2
+
+  - pattern_id: health_inactive_too_long
+    scenario: 用户连续坐了 110 分钟
+    card:
+      hook: 你已经坐了 110 分钟
+      body: |
+        从 10:30 开始没起身。
+        现在到下一个会议还有 15 分钟。
+      action: 设 5 分钟起身散步?
+    signals_used: [device.health, device.ambient]
+    why_surprise: 实时身体感知
+    why_practical: 防止颈椎/腰
+    wow_level: 2
+
+  - pattern_id: health_medication_reminder
+    scenario: 用户长期服用某药,今晚该吃
+    card:
+      hook: 晚 8 点该吃高血压药
+      body: |
+        你过去 30 天 27 次按时吃,3 次漏。
+        今晚你 7 点外出聚餐 — 别忘了带。
+      action: 提前 6:30 提醒带药出门?
+    signals_used: [memory.facts, calendar.event]
+    why_surprise: 系统识别"今晚外出可能漏药"
+    why_practical: 长期健康保护
+    wow_level: 4
+
+  - pattern_id: health_seasonal_allergy_warning
+    scenario: 用户去年 4 月有花粉过敏记录,今年同期临近
+    card:
+      hook: 花粉季要到了
+      body: |
+        去年 4 月 5-25 日你 chat 里抱怨过过敏 6 次。
+        今年北京花粉期预报 3 月 30 日开始 — 还有 5 天。
+        氯雷他定家里还剩 — 你上次说放在主卧抽屉。
+      action: 帮你下单 + 提前 1 天提醒开始服?
+    signals_used: [memory.facts, world.weather, gps.current, chat.history]
+    why_surprise: 系统记得"去年抱怨过过敏 6 次"
+    why_practical: 不再每年措手不及
+    wow_level: 5
+
+  - pattern_id: health_mood_low_detected
+    scenario: 用户过去 3 天多源信号指向情绪偏低
+    card:
+      hook: 这 3 天状态偏低
+      body: |
+        步数 -40%,屏幕 +50%,chat 关键词偏负(累/烦/想/无聊)× 5。
+        你不需要解释什么。
+        要不要明天试试常去的那个公园 1 小时?
+      action: 帮你明早 8 点提醒?
+    signals_used: [chat.history, device.health, device.ambient]
+    why_surprise: 系统看到"用户自己都没意识到的低落"
+    why_practical: 温和介入
+    wow_level: 4
+
+  - pattern_id: health_overuse_warning
+    scenario: 用户咖啡消费过去 5 天是均值 2x
+    card:
+      hook: 咖啡量这周翻倍
+      body: |
+        过去 5 天平均每天 3.4 杯(均值 1.5)。
+        匹配 — 你睡眠也下降 1.2h。
+      action: 今天下午先停一杯?
+    signals_used: [device.health, gmail.message.transactional.receipt, gps.current]
+    why_surprise: 系统识别"咖啡 + 失眠"的恶性循环
+    why_practical: 打破循环
+    wow_level: 3
+
+  # ===== L. financial =====
+  - pattern_id: financial_expiring_rewards
+    scenario: 用户航空里程 30 天后到期
+    card:
+      hook: 国航里程 8,400 公里 30 天到期
+      body: |
+        够换 1 张北京-上海经济舱(单程 7,500 公里)。
+        你过去 1 年飞过北京-上海 4 次。
+      action: 现在直接换一张备用?
+    signals_used: [gmail.message.transactional.expiring_rewards]
+    why_surprise: 系统主动管理"过期资产"
+    why_practical: 真的省钱
+    wow_level: 4
+
+  - pattern_id: financial_subscription_audit
+    scenario: 用户有 7 个订阅,每月 ¥420
+    card:
+      hook: 你有 7 个月度订阅 — 共 ¥420
+      body: |
+        ChatGPT Plus, Notion, Cursor, Apple One, B 站大会员, 知乎盐选, 某 podcast。
+        过去 90 天明显没用的:盐选(2 次)、podcast(0 次)、B 站(3 次)。
+      action: 帮你取消盐选 + podcast(立省 ¥58/月)?
+    signals_used: [gmail.message.transactional]
+    why_surprise: 系统用"实际使用"反推订阅价值
+    why_practical: 真的省钱
+    wow_level: 4
+
+  - pattern_id: financial_unusual_spending
+    scenario: 用户某品类消费这周是均值 3x
+    card:
+      hook: 这周餐饮花了 ¥2400
+      body: |
+        你均值 ¥800/周。
+        翻倍来源 — 你这周 4 次约人(应酬?)。
+        你的月预算还剩 ¥1200,现在 6 号。
+      action: 帮你列下半月预算?
+    signals_used: [gmail.message.transactional.receipt]
+    why_surprise: 系统识别"应酬扎堆"
+    why_practical: 实际预算管理
+    wow_level: 3
+
+  - pattern_id: financial_deadline_billing
+    scenario: 房租 2 天后到期
+    card:
+      hook: 房租 ¥8000 还有 2 天
+      body: |
+        房东微信提醒 — 7 号前到账。
+        你过去 6 次都拖到最后一天,有 1 次晚了 1 天他不开心。
+      action: 现在直接转?
+    signals_used: [gmail.message.transactional.deadline_billing, chat.history]
+    why_surprise: 系统记得"上次晚了房东不开心"
+    why_practical: 不再尴尬
+    wow_level: 3
+
+  - pattern_id: financial_savings_goal_progress
+    scenario: 用户每月目标存 ¥10000,本月 14 号已经超支
+    card:
+      hook: 本月存款目标进度 30%
+      body: |
+        14 号你应该完成 47%(¥4700)— 实际只到 ¥3000。
+        差 1700 — 主要因为 6 号那笔 ¥1800 设备。
+        剩下 16 天平均 ¥440/天 还能回到目标。
+      action: 帮你设 16 天日均限额?
+    signals_used: [memory.facts, gmail.message.transactional]
+    why_surprise: 系统盯着长期目标
+    why_practical: 财务自律
+    wow_level: 4
+
+  - pattern_id: financial_better_price_alert
+    scenario: 用户 5 天前买的耳机现在京东自营更便宜
+    card:
+      hook: 你那个耳机降价了
+      body: |
+        你 5 月 12 日买的 Sony WH-1000XM5 ¥2299。
+        今天京东自营 ¥1999,差 ¥300。
+        京东自营 7 天内支持价保。
+      action: 帮你跳价保申请?
+    signals_used: [memory.facts, gmail.message.transactional.receipt, world.public_data]
+    why_surprise: 系统主动盯价
+    why_practical: 真的找回 ¥300
+    wow_level: 5
+
+  # ===== M. growth =====
+  - pattern_id: growth_course_stalled
+    scenario: 用户某课程进度卡在 35% 已经 20 天
+    card:
+      hook: 那门 Anthropic 课卡 35% 三周了
+      body: |
+        你 4 月 25 日学过最后一次,卡在 Chapter 3。
+        课程总 12 章 — 按你之前节奏剩 6h 能完成。
+        你这周末空 4h,下周末空 3h。
+      action: 帮你定 2 个周末的 2h 时段?
+    signals_used: [gmail.message, chat.history, memory.facts]
+    why_surprise: 系统量化"再多少小时能完"
+    why_practical: 决断重启还是放弃
+    wow_level: 3
+
+  - pattern_id: growth_book_progress_stalled
+    scenario: 用户一本书读到 40% 卡了 30 天
+    card:
+      hook: 《XXX》卡 40% 一个月了
+      body: |
+        你 4 月 18 日读到 page 156(40%),没动。
+        你过去 1 年读完的书都是前 60% 内集中读的 — 卡这里大概率会弃。
+        要不要明天通勤路上恢复 30 分钟?
+      action: 帮你明早通勤提醒?
+    signals_used: [memory.facts, chat.history]
+    why_surprise: 系统识别"你自己的弃书模式"
+    why_practical: 自我认识
+    wow_level: 3
+
+  - pattern_id: growth_skill_practice_due
+    scenario: 用户钢琴 1 周没练
+    card:
+      hook: 钢琴这周还没练
+      body: |
+        你过去 8 周每周练 3 次。
+        今天周日下午,你日历空 2 小时。
+      action: 留 16-17 点专门练?
+    signals_used: [memory.skills, calendar.event]
+    why_surprise: 系统识别 ritual 节奏
+    why_practical: 维持习惯
+    wow_level: 2
+
+  - pattern_id: growth_event_match
+    scenario: 用户兴趣方向是 AI 产品,有相关 conference 报名中
+    card:
+      hook: 那场 AI 产品大会本周报名截止
+      body: |
+        你常聊 AI 产品方向 — 这场 6 月 8 日北京,演讲者里有 X(你 chat 提过 5 次)。
+        早鸟价 6 月 1 日截止,差 4 天。
+        你那天日历空。
+      action: 帮你报名?
+    signals_used: [profile.preferences, world.public_data, gps.current, chat.history]
+    why_surprise: 系统知道你"提过 X 五次"
+    why_practical: 不错过爱好场合
+    wow_level: 5
+
+  - pattern_id: growth_reading_match
+    scenario: 用户最近 chat 反复聊"creator economy",有篇相关 long form 发布
+    card:
+      hook: 你最近聊 creator economy 5 次
+      body: |
+        Stratechery 今天发了一篇关于这个主题的 long form。
+        你过去喜欢的 essay 平均 30 分钟读完 — 今晚 22:00 后通勤回家正好。
+      action: 帮你保存到 reading list?
+    signals_used: [chat.history, profile.preferences, world.public_data]
+    why_surprise: 系统连接"你的近期思考"和"今天发的内容"
+    why_practical: 内容推荐质量
+    wow_level: 5
+
+  # ===== N. contextual_recommendation =====
+  - pattern_id: ctx_first_neighborhood
+    scenario: 用户第一次来某老胡同区域
+    card:
+      hook: 你在五道营胡同 — 第一次
+      body: |
+        附近 3 家你大概率喜欢的 —
+        - [咖啡 X](和你常去的 Manner 同系)
+        - [书店 Y](独立书店,你常买的那个出版社)
+        - [日料 Z](评 4.7,客单价你常去的范围)
+      action: 帮你显示导航 + 营业时间?
+    signals_used: [gps.current, world.public_data, profile.preferences]
+    why_surprise: 推荐是 personalized 的,不是通用清单
+    why_practical: 第一次不踩雷
+    wow_level: 5
+
+  - pattern_id: ctx_weather_outdoor_window
+    scenario: 这周唯一的好天气在周日下午
+    card:
+      hook: 周日下午是这周唯一好天气
+      body: |
+        本周其他时间都阴/雨,周日 14-18 点晴。
+        你周日日历空,常去的 [朝阳公园]2 周没去。
+      action: 帮你周日 14:30 提醒出门?
+    signals_used: [world.weather, profile.preferences, calendar.event, gps.history_window]
+    why_surprise: 系统识别"稀缺好天气"
+    why_practical: 主动调度生活
+    wow_level: 4
+
+  - pattern_id: ctx_quiet_hour_deep_work
+    scenario: 用户接下来 2.5h 没会议,环境安静
+    card:
+      hook: 你接下来 2.5h 不被打扰
+      body: |
+        下午 14-16:30 — 5 月以来第一次出现这么长的纯空档。
+        你说要写的那份方案 — 现在动?
+      action: 帮你设勿扰?
+    signals_used: [calendar.event, device.ambient, gps.current]
+    why_surprise: 系统识别"罕见的空档"
+    why_practical: 不浪费深度时段
+    wow_level: 4
+
+  - pattern_id: ctx_break_recommended
+    scenario: 用户连续工作 130 分钟
+    card:
+      hook: 已经连工作 130 分钟
+      body: |
+        从 9:00 开始没起身。
+        现在到下个会还 20 分钟。
+      action: 离开屏幕 8 分钟?
+    signals_used: [device.health, calendar.event]
+    why_surprise: 简单但是 timely
+    why_practical: 防止过劳
+    wow_level: 2
+
+  - pattern_id: ctx_food_decision_assist
+    scenario: 用户在工位附近,午餐时段,刚搜索"吃什么"
+    card:
+      hook: 中午你常去的 3 家
+      body: |
+        过去 30 天频率:那家面 12 次、便当 8 次、肯德基 3 次。
+        今天面店人少(实时), 便当排队 ~15 分钟。
+      action: 帮你打开 [面店] 导航?
+    signals_used: [gps.current, profile.preferences, gps.history_window, world.public_data]
+    why_surprise: 系统从历史提炼"你的午餐 top 3"
+    why_practical: 不再纠结
+    wow_level: 3
+
+  - pattern_id: ctx_nearby_new_place
+    scenario: 用户附近新开了某品牌咖啡店
+    card:
+      hook: Manner 在你常走路 200m 开新店
+      body: |
+        今天开业(首日免费手冲)。
+        你过去 3 个月去 Manner 7 次。
+      action: 顺便去试?
+    signals_used: [gps.current, world.public_data, profile.preferences]
+    why_surprise: 信息精准 + 你喜欢的品牌
+    why_practical: 小确幸
+    wow_level: 3
+
+  # ===== O. opportunity_window =====
+  - pattern_id: opp_limited_time_match
+    scenario: 某品牌咖啡豆限时打折,用户常买
+    card:
+      hook: 你常买的 X 咖啡豆 7 折
+      body: |
+        你过去半年买过 4 次,均价 ¥120 — 今天 ¥84,持续 4 小时。
+        你家里那包月初买的应该快用完了(按你均速)。
+      action: 帮你下单?
+    signals_used: [profile.preferences, gmail.message, world.public_data]
+    why_surprise: 系统算出"应该快用完了"
+    why_practical: 不缺货 + 省钱
+    wow_level: 4
+
+  - pattern_id: opp_social_gathering_possible
+    scenario: 用户和 2 个朋友周六晚同时空
+    card:
+      hook: 老 L 老 W 周六晚都有空
+      body: |
+        看了你们 3 人日历 — 周六 19-23 点都空。
+        老 L 上次聊到想去 [那家烧鸟],老 W 也提过想吃。
+        那家周末 7 点位还有。
+      action: 帮你拉群 + 订位?
+    signals_used: [calendar.event, chat.history, gps.current]
+    why_surprise: 三方信息天然组合
+    why_practical: 真促成聚会
+    wow_level: 5
+
+  - pattern_id: opp_outdoor_window
+    scenario: 周六上午晴朗 + 用户空 + 兴趣是登山
+    card:
+      hook: 周六上午晴 + 你空 + 香山在窗口
+      body: |
+        周六 6-12 点晴,午后转阴。
+        你上次去香山是 4 月初,你说"下次清明前再去"。
+        今天交通 OK,早 7 点出门 8:30 到山下。
+      action: 帮你周六设 6:30 起床?
+    signals_used: [world.weather, calendar.event, profile.preferences, gps.history_window]
+    why_surprise: 系统记得"你说下次清明前再去"
+    why_practical: 主动调度兴趣
+    wow_level: 5
+
+  - pattern_id: opp_networking_event
+    scenario: AI 创业相关 networking,本周举办
+    card:
+      hook: 周三晚有场 AI 创业小聚
+      body: |
+        在 [那家咖啡馆],8-10 点。
+        参加者预估 30 人,有 2 个你 chat 提过的人。
+        你周三晚日历空。
+      action: 帮你报名 + 备 self intro?
+    signals_used: [world.public_data, profile.static, chat.history, gps.current]
+    why_surprise: 系统知道"现场会有谁"
+    why_practical: 主动 networking
+    wow_level: 4
+
+  - pattern_id: opp_seasonal_match
+    scenario: 滑雪季开始,用户去年滑过几次
+    card:
+      hook: 崇礼今天开板了
+      body: |
+        你去年滑过 4 次,后面三次都在崇礼。
+        今天首日早鸟票折扣 4 月没用完的可以叠加。
+        这周末有空。
+      action: 帮你订周六票?
+    signals_used: [profile.preferences, world.public_data, memory.facts]
+    why_surprise: 系统记得去年滑了 4 次
+    why_practical: 季节性爱好不错过
+    wow_level: 5
+
+  # ===== P. reflection =====
+  - pattern_id: reflection_week
+    scenario: 周日晚上,本周复盘窗口
+    card:
+      hook: 这周回顾
+      body: |
+        你这周关键 3 件 —
+        - 完成了拖了 2 周的方案(周四提交)
+        - 和老 L 那次咖啡谈得很深
+        - 健身断了 — 周三晚饭那次本来该去
+        三问 — 哪件最有价值?哪件本来可以更好?下周第一件事?
+      action: 帮你写 3 行下周锚点?
+    signals_used: [calendar.event, chat.history, device.health]
+    why_surprise: 系统挑出"本周关键 3 件"
+    why_practical: 复盘节奏
+    wow_level: 3
+
+  - pattern_id: reflection_month
+    scenario: 月末
+    card:
+      hook: 5 月总结
+      body: |
+        本月你 — 完成 X 个 milestone / 旅行 1 次 / 学到的新东西 3 件(chat 提过)/ 健身 12 次 / 读完 1 本书。
+        最有价值的一件 — 你自己说一下?
+      action: 帮你出 5 月 review markdown?
+    signals_used: [calendar.event, chat.history, gmail.message, device.health]
+    why_surprise: 系统量化"这个月你做了什么"
+    why_practical: 月度自我认知
+    wow_level: 4
+
+  - pattern_id: reflection_post_event
+    scenario: 用户完成一场重要 demo 后
+    card:
+      hook: 刚才 demo 怎么样?
+      body: |
+        听众 35 人 — 你之前 chat 提到担心问答环节。
+        三问 —
+        - 最满意的一点?
+        - 下次会改什么?
+        - 学到的最大一件事?
+      action: 帮你写 3 行 retro?
+    signals_used: [calendar.event, chat.history]
+    why_surprise: 系统记得"你担心问答环节"
+    why_practical: 学习沉淀
+    wow_level: 4
+
+  - pattern_id: reflection_trip_memory
+    scenario: 用户东京出差刚回北京
+    card:
+      hook: 东京回来了 — 趁记得整理一下
+      body: |
+        5 天里你去了 8 个地方,平均日步数 18000,拍了 200+ 张照片。
+        印象最深 3 个地方(从你 chat 推测)— 浅草 / 涉谷 / 那家拉面。
+      action: 帮你整理 trip recap?
+    signals_used: [gps.history_window, calendar.event, gmail.message, chat.history]
+    why_surprise: 系统帮你回忆"印象最深的 3 个地方"
+    why_practical: 旅行记忆固化
+    wow_level: 5
+
+  # ===== Q. warning =====
+  - pattern_id: warn_silent_deadline
+    scenario: 用户 3 天后 ddl,文档零进度
+    card:
+      hook: 那份方案 3 天后交 — 还没开
+      body: |
+        相关 doc 上次编辑 5 月 8 日(2 周前)。
+        相关邮件还没起草。
+        今天下午 14-17 点你空 — 这是最早能开的窗口。
+      action: 帮你阻断 14-17?
+    signals_used: [calendar.event, gmail.message, chat.history]
+    why_surprise: 系统识别"零启动状态"
+    why_practical: 救火
+    wow_level: 4
+
+  - pattern_id: warn_pet_plant_neglect
+    scenario: 用户的猫 4 天没记录喂食
+    card:
+      hook: 米饭(猫)上次喂记 4 天前
+      body: |
+        你之前 chat 提过 "每周三换水 + 周日补猫粮"。
+        今天周一 — 周末你回老家了 4 天没在。
+      action: 提醒今晚回家先看猫?
+    signals_used: [memory.facts, calendar.event, gps.history_window]
+    why_surprise: 系统记得"你定的喂食 ritual"
+    why_practical: 真实关心
+    wow_level: 4
+
+  - pattern_id: warn_device_low_battery_critical
+    scenario: 用户笔记本 15% 电量,30 分钟后有会议
+    card:
+      hook: 笔记本 15% — 30 分钟后会议
+      body: |
+        你常用的会议室没插座。
+        充电器 — 你今早离开桌面没带(你昨天 chat 提到放在桌左侧抽屉)。
+      action: 提醒回桌取充电器?
+    signals_used: [device.health, calendar.event, chat.history, gps.current]
+    why_surprise: 系统记得"充电器在哪"
+    why_practical: 避免会议中断
+    wow_level: 4
+
+  - pattern_id: warn_backup_overdue
+    scenario: 用户照片备份上次是 45 天前
+    card:
+      hook: 你照片备份 45 天没动
+      body: |
+        过去 30 天你新拍 240 张。
+        iCloud 还有 22GB,不到 50% — 够装。
+        现在 WiFi 强 + 充电中 — 适合开。
+      action: 帮你启动备份?
+    signals_used: [memory.facts, device.health]
+    why_surprise: 系统识别"风险窗口" + 适合的时机
+    why_practical: 防丢
+    wow_level: 3
+
+  # ===== R. energy_management =====
+  - pattern_id: energy_high_morning_match
+    scenario: 用户早晨高能时段 + 有深度任务待做
+    card:
+      hook: 现在你脑子最清楚
+      body: |
+        过去 14 天你早 8:30-10:30 完成的事质量普遍最高(你自评)。
+        你那份方案要写 — 现在动比下午动效率高 2x。
+      action: 帮你设 90 分钟专注?
+    signals_used: [device.health, calendar.event, memory.facts]
+    why_surprise: 系统识别"个体最佳时段"
+    why_practical: 利用黄金时间
+    wow_level: 4
+
+  - pattern_id: energy_low_simple_task
+    scenario: 用户下午 3 点能量低 + 有几个简单 errand 可以做
+    card:
+      hook: 现在状态低,适合做简单事
+      body: |
+        过去 14 天你下午 3-4 点效率均值 -30%。
+        你有 3 件不动脑的事可以做 —
+        - 回那 5 封 OK 邮件
+        - 取个快递
+        - 看 newsletter 收件箱
+      action: 帮你从哪个开始?
+    signals_used: [device.health, calendar.event, memory.facts, gmail.message]
+    why_surprise: 系统识别"该做啥根据状态"
+    why_practical: 不浪费低能时段
+    wow_level: 4
+
+  - pattern_id: energy_weekend_recharge
+    scenario: 用户一周身体指标全部下行,周末来了
+    card:
+      hook: 这周身体所有指标下行 — 周末该真休息
+      body: |
+        睡眠 -1.2h / 步数 -30% / 心率 +5bpm / 工时 +25%。
+        过去出现这组合后 — 下周一通常 brain fog。
+        建议周六完全离开屏幕。
+      action: 帮你周六设全天勿扰?
+    signals_used: [device.health, calendar.event]
+    why_surprise: 系统识别"过载模式"并给具体处方
+    why_practical: 拯救下周
+    wow_level: 4

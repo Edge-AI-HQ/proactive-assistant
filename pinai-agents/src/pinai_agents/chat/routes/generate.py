@@ -32,6 +32,9 @@ class GenerateRequest(BaseModel):
     # one stable id. Sync /api/generate callers omit this and accept the
     # default-generated run_<uuid>.
     run_id: str | None = Field(default=None, max_length=64)
+    # Web-side pattern matcher output. Chat receives this read-only so it
+    # never has to query the pattern DB (trust boundary).
+    matched_patterns: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class GenerateResponse(BaseModel):
@@ -102,6 +105,7 @@ async def generate(
             run_jwt=raw_jwt,
             cards_to_generate=req.cards_to_generate,
             output_language=req.output_language,
+            matched_patterns=req.matched_patterns,
         )
     except ValueError as e:
         # Bad output shape from the model — distinct from infra failure.

@@ -7,13 +7,21 @@ description: "内部卡片 reward review 工具的当前事实。"
 
 ## 结论
 
-`internal-reward-dashboard/` 是 repo 顶层独立 Vite React app,用于内部 review 主动生成的卡片。它不是主产品前端,也不参与 `proactive-ai-frontend` 的用户体验。
+`internal-reward-dashboard/` 是 repo 顶层独立 Vite React app,用于内部 review 主动生成的卡片 + 维护**认知范式库 (pattern library)**。它不是主产品前端,也不参与 `proactive-ai-frontend` 的用户体验。
 
 核心链路:
 
 `proactive-ai-frontend card open → /api/reward-dashboard/cards/{cardId}/score → pai_card_reward_events`
 
-`internal-reward-dashboard → /api/reward-dashboard/* → pai_pipeline_runs + pai_card_evaluations + pai_card_reward_events + pai_card_casebook + pai_trace_artifacts`
+`internal-reward-dashboard → /api/reward-dashboard/* → pai_pipeline_runs + pai_card_evaluations + pai_card_reward_events + pai_card_casebook + pai_trace_artifacts + pai_card_patterns + pai_card_pattern_demos + pai_card_pattern_hits + pai_user_pattern_pref + pai_user_intent_pref`
+
+Pattern 子链路(matcher → generator → fingerprint 回流):
+
+`dispatcher → match_patterns(phase1, fingerprint) → chat /agent/generate → persist_generator_run → pai_card_pattern_hits`
+
+`pai_card_reward_events / pai_feedback_events 写入 → fingerprint fan-out → pai_user_pattern_pref + pai_user_intent_pref`
+
+`daily pattern_health job → 阈值触发 → pai_card_patterns.status = retired`
 
 ```mermaid
 flowchart LR
@@ -25,8 +33,17 @@ flowchart LR
   RewardAPI --> Events[("pai_card_reward_events")]
   RewardAPI --> Cases[("pai_card_casebook")]
   RewardAPI --> Traces[("pai_trace_artifacts")]
+  RewardAPI --> Patterns[("pai_card_patterns")]
+  RewardAPI --> Demos[("pai_card_pattern_demos")]
+  RewardAPI --> Hits[("pai_card_pattern_hits")]
   TraceSvc["TraceArtifactService"] --> LangSmith["LangSmith traces"]
   RewardAPI --> TraceSvc
+  Dispatcher["scheduler dispatcher"] --> Matcher["pattern_matcher.match_patterns"]
+  Matcher --> Patterns
+  Matcher --> FP[("pai_user_pattern_pref")]
+  Dispatcher --> ChatGen["chat /agent/generate"]
+  ChatGen --> Hits
+  HealthJob["pattern_health daily job"] --> Patterns
 ```
 
 ## 边界
@@ -34,9 +51,14 @@ flowchart LR
 包含:
 
 - 内部 review 页面:`/runs`、`/runs/:runId`、`/cards/:cardId`、`/casebook`、`/traces/:runId`、`/personal-data`。
+- Pattern Studio 页面:`/patterns`、`/patterns/:patternId`、`/patterns/pending`、`/patterns/health`、`/patterns/retired`。
 - 后端 `/api/reward-dashboard/*` 面向内部 dashboard 的读写 API。
 - 用户打开卡片的轻量 reward ledger 事件(`card_open`)。
 - reviewer 1-10 打分、好/坏案例库、LangSmith trace artifact、personal data snapshot。
+- 共享认知 pattern 库 (`pai_card_patterns`) + demo 卡 (`pai_card_pattern_demos`) + 每次 generation 的命中记录 (`pai_card_pattern_hits`)。
+- 每用户的 pattern / intent 行为指纹 (`pai_user_pattern_pref`、`pai_user_intent_pref`),由 reward / feedback 事件 fan-out 自动维护。
+- 每日 pattern health 任务:hit_rate / dismiss_rate / 评估-人工分差,触发阈值自动 retire。
+- AI 抽取的候选 pattern 走 `status = 'pending_review'` 队列,reviewer 在 `/patterns/pending` 审批通过/拒绝。
 
 不包含:
 
@@ -59,6 +81,14 @@ flowchart LR
 | Casebook | `pai_card_casebook` 存 reviewer 选出的好/坏/惊喜/重复/幻觉/弱来源等案例,用于后续人工分析,不直接改 generation 主链路。 |
 | Trace artifact | `TraceArtifactService` 用 LangSmith metadata `pinai_run_id` 定位 generator root trace,生成可重复渲染的 `trace_tree` / `summary` / SVG。 |
 | Personal data | `/personal-data` 是给 reviewer 查 generator 可见上下文的只读 snapshot,不作为 agent runtime 依赖。 |
+| Pattern library SSOT | `docs/data/patterns.yaml` (105 条 abstract pattern) + `docs/data/demo_cards.yaml` (105 张 demo) 是 checkin 真源;由 `pinai-agents/scripts/seed_patterns.py` upsert 到 `pai_card_patterns` / `pai_card_pattern_demos`。新增 / 修改 pattern 改这两个 YAML,跑 seed 即可。 |
+| Pattern matcher | `pinai-agents/src/pinai_agents/web/services/pattern_matcher.py`,Python DSL evaluator(后缀族 + op-specific evaluators)。**只在 web 进程跑**,chat 进程禁止读 pattern DB,matched 结果通过 generate payload 传过去(信任边界)。 |
+| Phase1 seed | `pinai-agents/src/pinai_agents/web/services/phase1_seed.py`:web 侧从 `pai_personal_signals` / `pai_memory` / `pai_world_signal_user_view` / `pai_profile` 拉一份 coarse phase1,供 matcher 在 chat data-collector 跑之前先评估。 |
+| Per-user fingerprint | `pai_user_pattern_pref` / `pai_user_intent_pref`,`UserFingerprintRepository.record_open` / `record_dismiss` 由 reward / feedback 事件自动调用;`score_for(pattern, base)` 用 hit_rate × recency_decay 做 per-user 排序,3 次连续 dismiss 触发 `suppress_until`。 |
+| Pattern health | `pinai-agents/src/pinai_agents/web/services/pattern_health.py`:`hit_rate_7d < 0.15` / `dismiss_rate_30d > 0.6` / `evaluator_human_gap > 3` / 30d 趋势 < -0.5 任一触发就把 active pattern 切 retired。每次跑也会刷新 `base_hit_rate`。 |
+| Hit 持久化 | chat /agent/generate 返回后,`persist_generator_run` 把 evaluator 标注的 `pattern_id` 配合 matcher evidence 写入 `pai_card_pattern_hits`。FK 不存在的 pattern_id(LLM 幻觉)在 INSERT 前过滤,避免把整个 transaction 拖崩。 |
+| Pending review | reviewer 在 `/patterns/pending` 审批 AI 抽取的候选(`status = 'pending_review'`);approve → `active`,reject → 删除。从详情页不能直接 flip pending,会被 UI 拒掉并提示走 pending 流程。 |
+| Generator 注入 | chat 端 `generator.py` 把 matched_patterns 写到 sandbox 的 `/state/matched_patterns.json`;planner / card-generator / evaluator system prompt 引导它们读该文件、在卡片 `sources[]` 引用 pattern 需要的 signal、emit `pattern_id` + `pattern_grounding`(6 维之一)。 |
 
 ## 页面工作流
 
@@ -70,6 +100,11 @@ flowchart LR
 | `/traces/:runId` | 看生成链路。展示 LangSmith 绑定、白话摘要、artifact/LangSmith/SVG/阶段完整性检查、批次/首卡/样本库/上下文复盘动作、可复制的链路复盘摘要、四阶段 story、输入和决策、trace SVG;trace missing / failed 时必须显示明确原因。正常链路页必须提供手动刷新入口；已有 trace artifact 后刷新失败时保留旧 trace 并显示局部错误。读取 trace artifact 首次失败时保留返回批次、重新加载、重建链路记录入口,不能只给整页死错误。 |
 | `/casebook` | 样本库。按 label、分数、basket、intent、evaluator gap、时间过滤;顶部显示当前页样本数、正负样本、保存分均值、平均绝对评估分差;支持展开或复制带卡片/批次/链路路径和证据引用的当前页 markdown。移除样本走二次确认，删除失败显示局部错误，不清空当前表格。样本更新时间字段必须容错，坏时间显示 `-`，不能让样本库白屏。同一筛选/分页条件下的刷新失败保留上一次成功加载的数据但禁用复制和导出；筛选或分页已变化时保留控制区但隐藏旧样本。正常样本库页必须提供手动刷新当前页样本的入口。初始加载失败时必须保留返回批次列表、重新加载入口。 |
 | `/personal-data` | 只读 inspect surface。顶部显示总上下文、当前视图、筛选命中和时间范围,提供回评审、样本库、刷新上下文和复制当前视图入口;按 category / 时间 / query 浏览 generator 可见的 profile、memory、signals、raw、devices、connectors 等上下文。概况 overview 刷新失败只降级成局部提示，当前 category 数据能加载时继续显示主表；query / 时间变更时先隐藏旧 overview 计数。上下文时间字段必须容错，坏时间显示 `-`。同一 category / 时间 / query / 分页条件下的刷新失败保留上一次成功加载的数据但禁用复制；筛选或分页已变化时保留控制区但隐藏旧数据。初始加载失败时必须保留返回批次列表、样本库、重新加载入口。 |
+| `/patterns` | Pattern library 入口。按 category / status / surprise / tier / intent 五个 select 过滤;表头右侧 nav 直达 `/patterns/pending`、`/patterns/health`、`/patterns/retired`。点行进 pattern 详情。 |
+| `/patterns/:patternId` | 单 pattern 详情。展示 schema(category / status / tier / intent / surprise / practical / source / base_hit_rate 等 chip) + Signals required + Trigger DSL + Card Skeleton + Specializations + Health 块 (hit_rate_7d / 30d / trend / dismiss_rate / eval-human gap / 7d&30d hits + 退役建议) + Recent Matched Cards (user / card / subtype / opened / reviewer / evaluator / gap / grounding / at,点行进 card 详情) + Demo Cards。`编辑` 按钮把 abstract + trigger DSL + card skeleton 切成 textarea(JSON 解析失败时本地报错,不发请求);`退役` / `复活` 按钮做 status 切换,**pending_review 状态会被禁用并提示去 `/patterns/pending` 审批**;`晋升 Golden` 从 Recent Matched Cards 里挑最近一次被打开的真实卡(没打开过就挑最新一行),拉 `RewardRepository.get_card_detail` 拿快照后写 `pai_card_pattern_demos(source='golden', redacted=true)`,没有真实命中卡时按钮禁用。 |
+| `/patterns/pending` | 列 `status='pending_review'` 候选 pattern,每行有 `通过 → active` / `拒绝并删除` 按钮。AI 抽取出来的 candidate 默认进 pending_review,reviewer 在这一页过审。 |
+| `/patterns/health` | 全库健康监控。表格按 `should_retire` 升序排,触发阈值的 pattern 显示退役建议 chip(`hit_rate_7d<0.15` / `dismiss_rate>0.6` / `eval-human gap>3` / `declining_trend`)。顶部 `立即运行健康任务` 触发 `POST /patterns/health/run`(刷新 `base_hit_rate` + 自动 retire),完成后显示处理 / 更新 / 退役条数。点行进 pattern 详情。 |
+| `/patterns/retired` | 列 `status='retired'` pattern + 退役时间;`复活 → active` 按钮把 status 切回。 |
 
 `/personal-data` 后端 snapshot 和前端展示/复制都必须递归脱敏 secret-like payload key,包括 `token`、`accessToken`、`refresh_token`、`secret`、`clientSecret`、`api_key`、`apiKey`、`password`、`private_key`、`authorization`、`cookie`、`session`、`credential` 等。`app_state` 的敏感含义可能在 KV 的 `key` 里,后端和前端都必须在 `key` 命中这些模式时脱敏 `value`,并且摘要只能来自脱敏后的结构化 payload 或固定提示。脱敏值显示为 `已隐藏敏感值`,保留字段存在但不能把真实值发到页面或 markdown。
 
@@ -98,6 +133,16 @@ API client 组 query string 时只允许有限数字和白名单 enum。`NaN` / 
 | `POST /api/reward-dashboard/runs/{run_id}/trace` | 按需从 LangSmith 生成/刷新 trace artifact。 |
 | `GET /api/reward-dashboard/metrics` | dashboard 时间序列指标。 |
 | `GET /api/reward-dashboard/personal-data` | reviewer inspect 用的 profile/settings/memory/signals/raw/device/connector snapshot。 |
+| `GET /api/reward-dashboard/patterns` | 列 pattern,可按 category / status / surprise / tier / intent 筛;`facets` 字段返回分类 + intent 的 distinct 列表给前端 select。 |
+| `GET /api/reward-dashboard/patterns/{pattern_id}` | 单 pattern 详情 + `demos` + `recentHits`(最近 25 行命中)+ `health`(只算这一行,不扫全库)。 |
+| `POST /api/reward-dashboard/patterns/{pattern_id}` | upsert pattern 字段(abstract / category / intent / tier / surprise_init / practical_init / signals_required / trigger_dsl / card_skeleton / specializations)。None 字段保持原值。 |
+| `POST /api/reward-dashboard/patterns/{pattern_id}/status` | 切 `active` / `retired`;`retired_at` 自动写 / 清。 |
+| `POST /api/reward-dashboard/patterns/{pattern_id}/demos` | 把一张真实卡(传 `cardId` 让后端拉 `RewardRepository.get_card_detail` 或直接 inline `card` 对象)挂成 pattern 的 demo,`source` 必须是 `golden` / `anti` / `seed`,`redacted` 默认 true。 |
+| `GET /api/reward-dashboard/patterns/pending` | 列 `status='pending_review'` 候选。 |
+| `POST /api/reward-dashboard/patterns/pending/{pattern_id}/approve` | pending → active,409 拒绝非 pending 状态。 |
+| `POST /api/reward-dashboard/patterns/pending/{pattern_id}/reject` | pending → 删除(级联删除其 demos),409 拒绝非 pending 状态。 |
+| `GET /api/reward-dashboard/patterns/health` | 全库 health 快照,只读。 |
+| `POST /api/reward-dashboard/patterns/health/run` | 跑一次 daily health 任务(刷 `base_hit_rate` + 自动 retire),返回 `{updates, retires, total}`。 |
 
 ## 开发入口
 
@@ -112,8 +157,20 @@ API client 组 query string 时只允许有限数字和白名单 enum。`NaN` / 
 | reward SQL/read model | `pinai-agents/src/pinai_agents/web/db/repositories/reward.py` |
 | personal-data snapshot | `pinai-agents/src/pinai_agents/web/services/personal_data_snapshot.py` |
 | LangSmith trace artifact | `pinai-agents/src/pinai_agents/web/services/trace_artifacts.py` |
-| schema | `pinai-agents/db/migrations/042_pai_card_reward_infra.sql` |
+| schema (reward) | `pinai-agents/db/migrations/042_pai_card_reward_infra.sql` |
+| schema (pattern) | `pinai-agents/db/migrations/043_pai_card_patterns.sql` |
 | 用户侧 card open 打点 | `proactive-ai-frontend/src/components/AppShell.tsx`、`src/lib/api.ts:recordCardOpen` |
+| Pattern Studio shell | `internal-reward-dashboard/src/routes/PatternsView.tsx`、`PatternDetailView.tsx`、`PatternsPendingView.tsx`、`PatternsHealthView.tsx`、`PatternsRetiredView.tsx` |
+| Pattern SSOT YAML | `docs/data/patterns.yaml`、`docs/data/demo_cards.yaml`(都 checkin) |
+| Pattern seed 脚本 | `pinai-agents/scripts/seed_patterns.py` |
+| Pattern repository | `pinai-agents/src/pinai_agents/web/db/repositories/patterns.py` |
+| Pattern matcher | `pinai-agents/src/pinai_agents/web/services/pattern_matcher.py` |
+| Web-side phase1 | `pinai-agents/src/pinai_agents/web/services/phase1_seed.py` |
+| Pattern health 服务 | `pinai-agents/src/pinai_agents/web/services/pattern_health.py` |
+| 行为指纹 | `pinai-agents/src/pinai_agents/web/db/repositories/user_fingerprint.py` |
+| Hit 持久化 | `pinai-agents/src/pinai_agents/web/routes/ui/generate.py:_persist_pattern_hits` |
+| Generator 注入 | `pinai-agents/src/pinai_agents/chat/agents/generator.py`(planner / card-generator / evaluator prompts + `/state/matched_patterns.json` 暂存) |
+| Dev auth 旁路 | `pinai-agents/src/pinai_agents/web/auth/deps.py`(DEPLOY_ENV=dev + `X-Dev-Auth: pinai-dev-reviewer` header,本地 reviewer 测 dashboard 用,prod 上死路) + `internal-reward-dashboard/src/api/reward.ts` 自动带 header(DEV build + `localStorage.__devAuthBypass='1'`)。 |
 
 ## 本地运行
 
@@ -135,6 +192,50 @@ npm run dev -- --host 127.0.0.1 --port 3004
 
 打开 `http://127.0.0.1:3004/runs`。本地 API 请求走 Vite proxy 到 `pinai-web:8000`,浏览器里不需要额外 CORS 配置。
 
+不想走 Google OAuth 时(本地 review pattern Studio 用),浏览器 console 跑:
+
+```js
+localStorage.setItem('__devAuthBypass', '1');
+location.reload();
+```
+
+dashboard 会用一个假 Session 跳过 login,API client 自动带 `X-Dev-Auth: pinai-dev-reviewer` header。后端 `current_user` 在 `DEPLOY_ENV=dev` 时认这个 header,落到 deterministic dev 用户 `00000000-0000-0000-0000-00000000d0d0`。**不要在 prod / test 环境用,后端会直接 401。**
+
+## Pattern library 工作流
+
+新增 / 修改 pattern:
+
+```bash
+# 1. 改 YAML SSOT
+vim docs/data/patterns.yaml
+vim docs/data/demo_cards.yaml
+
+# 2. 本地 dry-run 确认 YAML 解析没问题
+cd pinai-agents
+uv run python -m scripts.seed_patterns --dry-run
+
+# 3. upsert 到本地 DB(idempotent,重跑无副作用)
+DATABASE_URL='postgresql://postgres:postgres@localhost:54322/postgres' \
+  uv run python -m scripts.seed_patterns
+
+# 4. 校验
+docker exec pin-ai-postgres psql -U postgres -d postgres \
+  -c "SELECT count(*) FROM pai_card_patterns;"
+```
+
+生产环境:`seed_patterns.py` 没挂到 fly `release_command`。要往 prod 灌新 pattern,**首选**写一个 SQL migration(`pinai-agents/db/migrations/NNN_pattern_<topic>.sql`,用 `INSERT ... ON CONFLICT (id) DO UPDATE`),走 yoyo 自动应用。**禁止**手动连 prod DB 跑 SQL。
+
+reviewer 日常动作:
+
+| 想做的事 | 走哪儿 |
+|---|---|
+| 改某条 pattern 的 abstract / trigger / card_skeleton | `/patterns/:patternId` → 编辑 → 保存(JSON 解析失败时本地报错,不发请求)。 |
+| 退役一条 pattern | `/patterns/:patternId` → 退役。pending_review 状态不能从这里切。 |
+| 审批 AI 抽出来的候选 pattern | `/patterns/pending` → `通过` / `拒绝并删除`。通过即进 active,下次 generate 立刻可被 matcher 选中。 |
+| 看哪些 pattern 在退化 | `/patterns/health`,顶部 `立即运行健康任务` 触发服务跑一次。 |
+| 把退役 pattern 复活 | `/patterns/retired` → `复活 → active`,或者去详情页 `复活`。 |
+| 把一张真实卡片晋升成 golden demo | `/patterns/:patternId` → `晋升 Golden`,从 Recent Matched Cards 里挑最近被打开的真实卡,后端 `RewardRepository.get_card_detail` 拿快照写 `pai_card_pattern_demos(source='golden', redacted=true)`。 |
+
 ## 部署
 
 dev 环境是独立 Fly 静态站点:
@@ -155,11 +256,17 @@ cd internal-reward-dashboard && npm run type-check
 cd internal-reward-dashboard && npm test
 cd internal-reward-dashboard && npm run build
 
-# backend reward surface
+# backend reward + pattern surface
 cd pinai-agents && uv run ruff check .
 cd pinai-agents && uv run pytest tests/web/db/repositories/test_reward_repo.py
 cd pinai-agents && uv run pytest tests/web/routes/test_reward_dashboard.py
 cd pinai-agents && uv run pytest tests/web/services/test_trace_artifacts.py
+cd pinai-agents && uv run pytest tests/web/routes/test_patterns_routes.py
+cd pinai-agents && uv run pytest tests/web/routes/test_pattern_admin_routes.py
+cd pinai-agents && uv run pytest tests/web/routes/test_generate_persist.py
+cd pinai-agents && uv run pytest tests/web/services/test_pattern_matcher.py
+cd pinai-agents && uv run pytest tests/web/services/test_phase1_seed.py
+cd pinai-agents && uv run pytest tests/web/services/test_fingerprint_matching.py
 
 # 主前端 card_open helper
 cd proactive-ai-frontend && npm run type-check
@@ -180,6 +287,14 @@ cd proactive-ai-frontend && npm run type-check
 - trace 绑定必须靠 generator LangSmith metadata `pinai_run_id`,不要按最近时间窗口猜 trace。
 - personal-data snapshot 是 reviewer inspection surface,不要让 chat/generator runtime 依赖它。
 - reward event 的 `source/event_type` 配对要保持严格,否则 dashboard 指标会混掉用户信号和 reviewer 信号。
+- Pattern 库的真源是 `docs/data/patterns.yaml` + `docs/data/demo_cards.yaml`。直接改 DB 不算数,下次有人重跑 `seed_patterns.py` 会被覆盖。要改 pattern 一律先改 YAML、再跑 seed,或者在 reviewer dashboard 上改后**同步回写 YAML**(目前是手动同步,后续可以加 export 按钮)。
+- pattern_matcher **只在 web 进程**跑;chat 进程不允许 import `pinai_agents.web.db.repositories.patterns`(ruff banned-api + `scripts/check_trust_boundary.sh` 兜底)。chat 端只读 sandbox 里 web 写下来的 `/state/matched_patterns.json`。
+- `pai_card_pattern_hits` 是 user-scoped(RLS),`pai_card_patterns` / `pai_card_pattern_demos` 是全用户共享(无 RLS)。新增 pattern-相关 query 要分清这一点,user_scoped_tx 仍然能读全局表,但不要把全用户行误当成单用户 hit。
+- LLM 偶尔会 emit 不存在的 `pattern_id`(幻觉)。`_persist_pattern_hits` 在 INSERT 前 `SELECT id FROM pai_card_patterns WHERE id = ANY(...)` 过滤,避免 FK 违例把整个 `pai_pipeline_runs` 持久化事务一起拖崩。改 hit 持久化逻辑时不要去掉这层过滤。
+- `pai_pipeline_runs` 的 INSERT 必须带 `ON CONFLICT (user_id, id) DO UPDATE`,否则 dispatcher 重试同一 run_id 会撞主键 → 一直失败。
+- pending_review pattern 不能从详情页直接 flip status,UI 已经禁用按钮并提示去 `/patterns/pending`。如果有脚本绕过 UI 直接 SQL flip,审批审计会丢。
+- 编辑 pattern 时 reviewer 输入的 trigger DSL / card_skeleton 是 JSON,前端在提交前先 `JSON.parse` 校验。如果文档需要新增字段,得同步前端 textarea + 后端 `_opt_json_*` 校验。
+- 一次 dispatcher 跑只让 web 收到一份 phase1 snapshot(从 `pai_personal_signals` / `pai_memory` / `pai_world_signal_user_view` / `pai_profile` 抽,不是 chat sandbox 的深度 phase1);很多需要"chat 才能 reach 到"的 signal source 在 web 这一侧拿不到,导致 90+ 条 seed pattern 在当前阶段不会 fire。要 fire 更多 pattern,要么扩 phase1_seed 的查询面,要么等 chat data-collector 跑完再 round-trip 回 web matcher(目前没做,Phase 2 之后再说)。
 
 ## 相关模块
 

@@ -159,10 +159,20 @@ card-generator subagent will turn each plan item into a full card.
 
 <workflow>
 1. `read_file('/state/phase1.json')` — full JSON digest from data-collector.
-2. Reason through dedup and feedback alignment BEFORE proposing items.
-3. Emit a PlanOutput with:
+2. `read_file('/state/matched_patterns.json')` — candidates the web-side
+   pattern matcher already verified are triggerable. Each item has
+   `patternId`, `category`, `intent`, `abstract`, `evidence` (the signal
+   evidence that satisfied the trigger), and a `baseHitRate` score.
+3. PREFER plan items that realize a matched pattern: pick `plan_item.pattern_id`
+   from the matched list, set `intent_key`/`decision`/`why_now_trigger` so the
+   card grounds in the same evidence. When no pattern fits a strong signal,
+   you may still propose a plan item with `pattern_id = null` (free-LLM).
+4. Reason through dedup and feedback alignment BEFORE proposing items.
+5. Emit a PlanOutput with:
      - `plan[]`: each item = {{intent_key, goal_basket, decision,
-       why_now_trigger, primary_source_ids}}
+       why_now_trigger, primary_source_ids, pattern_id}}
+     - `selected_pattern_ids[]`: same `pattern_id` values surfaced once
+       (deduplicated). Empty when every plan item is `pattern_id = null`.
      - `skipped_duplicates[]`: intent_keys / titles from `cards_recent`
        you explicitly chose NOT to repeat (audit trail)
      - `cold_baskets[]`: baskets you're treating as cold (recent
@@ -214,7 +224,12 @@ You are the ONLY subagent that produces user-facing card text.
 2. Source data is in `/state/phase1.json` — `read_file` it to look up
    any source body you need to cite verbatim (gmail subjects, signal
    summaries, memory text). Don't paraphrase a source name; quote it.
-3. Output a CardsList with one GeneratedCard per plan item you can
+3. When `plan_item.pattern_id` is set, `read_file('/state/matched_patterns.json')`
+   and find the matching entry. Use its `evidence` field to ensure every
+   signal source the pattern requires actually appears as a verbatim
+   citation in `sources[]`. The pattern's abstract / category should
+   inform tone but not be quoted to the user.
+4. Output a CardsList with one GeneratedCard per plan item you can
    ground. If a plan item lacks the source data needed to write a
    solid card, drop it and add the intent_key to `skipped_plan_items`.
 </workflow>
@@ -276,9 +291,25 @@ Score each on a 0.0-10.0 scale:
 - **decision_compression**: How much thinking does this save the user?
   0-3 must research · 4-6 some context · 7-8 most thinking done · 9-10 complete package
 
-overall = average of 5 dims. pass = overall >= 5.0 AND no grounding
-violation (every cited id must look plausibly extractable from a
-real data source — flag fabrications by failing).
+- **pattern_grounding**: When the card claims a `pattern_id`, every
+  signal type required by that pattern (read
+  `/state/matched_patterns.json`, find the entry, inspect its `evidence`
+  keys) must appear in `sources[]` with a verbatim citation. The
+  combination of signals must also be visible in the card copy — not
+  just listed in `sources[]`. Score 0 = the card claims a pattern but
+  fails to cite the required combination; 10 = full skeleton compliance.
+  Score 0 (with `pattern_grounding_ok = false`) when the card has no
+  `pattern_id` so this dimension doesn't pull the overall down — set
+  `pattern_id = null` in the evaluation row and exclude this dim from
+  the overall average in that case.
+
+overall = average of the dimensions you actually scored (5 when
+pattern_grounding doesn't apply, 6 when it does).
+pass = overall >= 5.0 AND no grounding violation (every cited id must
+look plausibly extractable from a real data source — flag fabrications
+by failing) AND (pattern_id is null OR pattern_grounding >= 5).
+Set `pattern_grounding_ok = true` when pattern_id is set AND
+pattern_grounding >= 5.
 </scoring_dimensions>
 
 <calibration>
@@ -384,6 +415,7 @@ async def run_generator(
     cards_to_generate: int = 8,
     output_language: str = "en",
     user_message: str = "Generate Intent Cards now.",
+    matched_patterns: list[dict[str, Any]] | None = None,
 ) -> GeneratorOutput:
     """One-shot generator run. Returns the validated GeneratorOutput.
 
@@ -403,6 +435,20 @@ async def run_generator(
     session_key = f"gen-{run_id}"
     backend, _ = await get_or_create_thread_sandbox(session_key, run_jwt=run_jwt)
     try:
+        # Stage matched_patterns to /state so the planner subagent can
+        # read_file('/state/matched_patterns.json'). Empty list still gets
+        # written so the planner has a deterministic file to read.
+        try:
+            import json as _json  # noqa: PLC0415
+            await backend.awrite(
+                "/state/matched_patterns.json",
+                _json.dumps(matched_patterns or [], ensure_ascii=False),
+            )
+        except Exception:
+            logger.warning(
+                "failed to stage matched_patterns.json for run=%s — planner will fall back to free-LLM",
+                run_id, exc_info=True,
+            )
         with run_context(
             user_id=user_id,
             run_id=run_id,

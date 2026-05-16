@@ -29,7 +29,7 @@ import logging
 import os
 import time
 import uuid
-from typing import Protocol
+from typing import Any, Protocol
 
 import httpx
 from psycopg_pool import AsyncConnectionPool
@@ -298,11 +298,18 @@ class DefaultDispatcher:
         keyed by `run_id == task.id`.
         """
         from ..auth.user_service import User  # noqa: PLC0415
+        from ..db.repositories.patterns import PatternsRepository  # noqa: PLC0415
+        from ..db.repositories.user_fingerprint import (  # noqa: PLC0415
+            UserFingerprintRepository,
+        )
+        from ..db.rls import user_scoped_tx  # noqa: PLC0415
         from ..routes.ui.generate import persist_generator_run  # noqa: PLC0415
         from ..services.chat_proxy import call_generate  # noqa: PLC0415
         from ..services.litellm_provisioning import (  # noqa: PLC0415
             ensure_user_litellm_key,
         )
+        from ..services.pattern_matcher import match_patterns  # noqa: PLC0415
+        from ..services.phase1_seed import build_phase1_seed  # noqa: PLC0415
 
         # Lazy-provision the LiteLLM key. The manual /generate path uses
         # `_ensure_virtual_key` for this — without mirroring it here,
@@ -340,19 +347,50 @@ class DefaultDispatcher:
         cards_to_generate = int(payload.get("cards_to_generate") or 4)
         output_language = str(payload.get("output_language") or "en")
 
+        # Phase 2: pattern matcher runs in the web process so the chat
+        # process never has to query the pattern DB. The web-side phase1
+        # collector pulls a coarse snapshot of the user's signals before
+        # chat fires its full data-collector subagent — enough for the
+        # matcher to surface cold-start hits even though the deep phase1
+        # only exists inside the chat sandbox.
+        # docs/plans/2026-05-15-pattern-driven-card-generation.mdx.
+        matched_payload: list[dict[str, Any]] = []
+        try:
+            payload_phase1 = payload.get("phase1") if isinstance(payload.get("phase1"), dict) else None
+            async with user_scoped_tx(self._pool, task.user_id) as conn:
+                phase1_seed = payload_phase1 or await build_phase1_seed(conn, task.user_id)
+                repo = PatternsRepository(task.user_id, conn)
+                fp = UserFingerprintRepository(task.user_id, conn)
+                match_result = await match_patterns(
+                    repo, phase1_seed or {}, fingerprint=fp,
+                )
+            matched_payload = [m.to_payload() for m in match_result.matched]
+        except Exception:  # noqa: BLE001
+            # Pattern matching is best-effort in Phase 2 — never block
+            # generation if the matcher trips on a malformed DSL row.
+            logger.exception(
+                "pattern matcher failed user=%d run=%s (continuing with empty match list)",
+                task.user_id, run_id,
+            )
+
         result = await call_generate(
             user_id=task.user_id,
             cards_to_generate=cards_to_generate,
             output_language=output_language,
             virtual_key=virtual_key,
             run_id=run_id,
+            matched_patterns=matched_payload or None,
         )
         # Persist into pai_pipeline_runs / pai_card_evaluations using the
         # same id the task / FE polled with — `run_id` here equals
         # `task.id` thanks to the dispatch-level alignment above.
+        # matched_payload is forwarded so pai_card_pattern_hits gets the
+        # original matcher evidence per pattern (chat-side cannot read
+        # the pattern DB — see trust boundary).
         await persist_generator_run(
             self._pool, user_id=task.user_id, payload=result,
             trigger=str(payload.get("trigger") or "manual"),
+            matched_patterns=matched_payload or None,
         )
 
     async def _call_chat(

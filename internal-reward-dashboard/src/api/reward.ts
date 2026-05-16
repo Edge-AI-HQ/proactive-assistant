@@ -327,10 +327,28 @@ export function apiErrorMessage(status: number, bodyText: string): string {
   }
 }
 
+// Dev-only marker recognized by the backend `current_user` dep when
+// DEPLOY_ENV=dev. Mirrors `_DEV_AUTH_BYPASS_HEADER_VALUE` in
+// pinai-agents/.../web/auth/deps.py. Inert outside DEV builds + outside
+// DEPLOY_ENV=dev backends.
+const DEV_AUTH_BYPASS_VALUE = "pinai-dev-reviewer";
+
+function devAuthBypassActive(): boolean {
+  if (!import.meta.env.DEV) return false;
+  try {
+    return window.localStorage.getItem("__devAuthBypass") === "1";
+  } catch {
+    return false;
+  }
+}
+
 function requestHeaders(input: HeadersInit | undefined, token: string | null): Headers {
   const headers = new Headers(input);
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
+  }
+  if (devAuthBypassActive()) {
+    headers.set("X-Dev-Auth", DEV_AUTH_BYPASS_VALUE);
   }
   return headers;
 }
@@ -573,6 +591,244 @@ export function getMetrics(days = 14): Promise<MetricsResponse> {
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   return request(`/api/reward-dashboard/metrics${suffix}`);
 }
+
+export type PatternStatus = "pending_review" | "active" | "retired";
+export type PatternTier = "cold_start_friendly" | "warmup" | "mature";
+export type PatternSurpriseLevel = "h" | "m" | "l";
+
+const patternStatusValues = new Set<string>(["pending_review", "active", "retired"]);
+const patternTierValues = new Set<string>(["cold_start_friendly", "warmup", "mature"]);
+const patternSurpriseValues = new Set<string>(["h", "m", "l"]);
+
+export interface PatternSummary {
+  id: string;
+  category: string;
+  abstract: string;
+  signalsRequired: string[];
+  triggerDsl: unknown[];
+  intent: string;
+  cardSkeleton: Record<string, unknown>;
+  specializations: unknown[];
+  surpriseInit: PatternSurpriseLevel | null;
+  practicalInit: PatternSurpriseLevel | null;
+  tier: PatternTier;
+  status: PatternStatus;
+  source: "seed" | "ai_extracted" | "manual";
+  baseHitRate: number;
+  createdAt: string | null;
+  updatedAt: string | null;
+  retiredAt: string | null;
+}
+
+export interface PatternDemo {
+  id: string;
+  patternId: string;
+  subtype: string | null;
+  scenario: string;
+  card: Record<string, unknown>;
+  signalsUsed: string[];
+  whySurprise: string | null;
+  whyPractical: string | null;
+  wowLevel: number | null;
+  source: "seed" | "golden" | "anti";
+  redacted: boolean;
+  sourceCardId: string | null;
+  createdAt: string | null;
+}
+
+export interface PatternListResponse {
+  ok: true;
+  items: PatternSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+  facets: { categories: string[]; intents: string[] };
+}
+
+export interface PatternRecentHit {
+  userId: number;
+  runId: string;
+  cardId: string;
+  subtype: string | null;
+  evidence: Record<string, unknown>;
+  combinedScore: number | null;
+  patternGroundingOk: boolean | null;
+  opened: boolean;
+  reviewerScore: number | null;
+  evaluatorOverall: number | null;
+  evaluatorHumanGap: number | null;
+  createdAt: string | null;
+}
+
+export interface PatternDetailResponse {
+  ok: true;
+  pattern: PatternSummary;
+  demos: PatternDemo[];
+  recentHits: PatternRecentHit[];
+  health: PatternHealthRow | null;
+}
+
+export function listPatterns(
+  params: {
+    category?: string;
+    status?: PatternStatus;
+    surprise?: PatternSurpriseLevel;
+    tier?: PatternTier;
+    intent?: string;
+    limit?: number;
+    offset?: number;
+  } = {},
+): Promise<PatternListResponse> {
+  const qs = new URLSearchParams();
+  setTrimmedStringParam(qs, "category", params.category, { maxLength: REWARD_TEXT_FILTER_MAX_LENGTH });
+  setEnumParam(qs, "status", params.status, patternStatusValues);
+  setEnumParam(qs, "surprise", params.surprise, patternSurpriseValues);
+  setEnumParam(qs, "tier", params.tier, patternTierValues);
+  setTrimmedStringParam(qs, "intent", params.intent, { maxLength: REWARD_TEXT_FILTER_MAX_LENGTH });
+  setFiniteNumberParam(qs, "limit", params.limit, { integer: true, min: 1, max: 500 });
+  setFiniteNumberParam(qs, "offset", params.offset, { integer: true, min: 0, max: 10_000 });
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return request(`/api/reward-dashboard/patterns${suffix}`);
+}
+
+export function getPattern(patternId: string): Promise<PatternDetailResponse> {
+  return request(`/api/reward-dashboard/patterns/${encodedApiId(patternId, "Pattern ID")}`);
+}
+
+export interface PatternUpdateInput {
+  abstract?: string;
+  category?: string;
+  intent?: string;
+  tier?: PatternTier;
+  surpriseInit?: PatternSurpriseLevel;
+  practicalInit?: PatternSurpriseLevel;
+  signalsRequired?: unknown[];
+  triggerDsl?: unknown[];
+  cardSkeleton?: Record<string, unknown>;
+  specializations?: unknown[];
+}
+
+export function updatePattern(
+  patternId: string, body: PatternUpdateInput,
+): Promise<{ ok: true; pattern: PatternSummary }> {
+  return request(`/api/reward-dashboard/patterns/${encodedApiId(patternId, "Pattern ID")}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function setPatternStatus(
+  patternId: string, status: PatternStatus,
+): Promise<{ ok: true; pattern: PatternSummary }> {
+  return request(`/api/reward-dashboard/patterns/${encodedApiId(patternId, "Pattern ID")}/status`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+}
+
+export interface DemoPromotionInput {
+  source: "golden" | "anti";
+  scenario?: string;
+  cardId?: string;
+  card?: Record<string, unknown>;
+  signalsUsed?: string[];
+  whySurprise?: string;
+  whyPractical?: string;
+  wowLevel?: number;
+  subtype?: string;
+}
+
+export function addPatternDemo(
+  patternId: string, body: DemoPromotionInput,
+): Promise<{ ok: true; demo: PatternDemo }> {
+  return request(`/api/reward-dashboard/patterns/${encodedApiId(patternId, "Pattern ID")}/demos`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function listPendingPatterns(): Promise<{ ok: true; items: PatternSummary[] }> {
+  return request("/api/reward-dashboard/patterns/pending");
+}
+
+export interface PatternExtractSummary {
+  ok: true;
+  lookback_days: number;
+  min_cluster_size: number;
+  golden_cards_seen: number;
+  clusters_total: number;
+  clusters_above_min: number;
+  candidates_inserted: number;
+  candidates: Array<{
+    patternId: string;
+    intentKey: string;
+    clusterSize: number;
+    sampleCardIds: string[];
+    abstract: string;
+  }>;
+}
+
+export function runPatternExtractor(
+  params: { lookbackDays?: number; minClusterSize?: number } = {},
+): Promise<PatternExtractSummary> {
+  const body: Record<string, number> = {};
+  if (typeof params.lookbackDays === "number") body.lookbackDays = params.lookbackDays;
+  if (typeof params.minClusterSize === "number") body.minClusterSize = params.minClusterSize;
+  return request("/api/reward-dashboard/patterns/extract", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function approvePendingPattern(
+  patternId: string,
+): Promise<{ ok: true; pattern: PatternSummary }> {
+  return request(
+    `/api/reward-dashboard/patterns/pending/${encodedApiId(patternId, "Pattern ID")}/approve`,
+    { method: "POST" },
+  );
+}
+
+export function rejectPendingPattern(
+  patternId: string,
+): Promise<{ ok: true; deleted: boolean }> {
+  return request(
+    `/api/reward-dashboard/patterns/pending/${encodedApiId(patternId, "Pattern ID")}/reject`,
+    { method: "POST" },
+  );
+}
+
+export interface PatternHealthRow {
+  patternId: string;
+  category: string;
+  status: PatternStatus;
+  hitCount7d: number;
+  hitCount30d: number;
+  dismissCount30d: number;
+  hitRate7d: number | null;
+  hitRate30d: number | null;
+  hitRate30dTrend: number | null;
+  dismissRate30d: number | null;
+  evaluatorHumanGapMean: number | null;
+  baseHitRate: number;
+  shouldRetire: boolean;
+  retireReasons: string[];
+}
+
+export function getPatternsHealth(): Promise<{ ok: true; items: PatternHealthRow[] }> {
+  return request("/api/reward-dashboard/patterns/health");
+}
+
+export function runPatternsHealthJob(): Promise<{
+  ok: true; updates: number; retires: number; total: number;
+}> {
+  return request("/api/reward-dashboard/patterns/health/run", { method: "POST" });
+}
+
 
 export function getPersonalData(params: {
   category?: PersonalDataCategory;
