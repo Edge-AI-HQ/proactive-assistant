@@ -99,8 +99,37 @@ function clearLocalStored(): void {
 }
 
 async function readSecureValue(key: string): Promise<string | null> {
+  // Pair with set() symmetrically: set() JSON-stringifies on write, get()
+  // JSON-parses on read. Using getItem() (raw, no decode) here was the
+  // bug — paired with set() it left a JSON-wrapper around every value,
+  // and forceRefresh re-writes accumulated escape layers per cycle until
+  // deviceId crossed the server's max_length=200 → 422.
   try {
-    return await SecureStorage.getItem(key);
+    let v = await SecureStorage.get(key);
+    if (typeof v !== "string") return null;
+    // Self-heal legacy values written by the old asymmetric pair: peel
+    // any remaining JSON-wrapping layers (one per past write cycle),
+    // then re-save cleanly so subsequent reads are O(1).
+    const original = v;
+    while (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) {
+      try {
+        const inner = JSON.parse(v);
+        if (typeof inner !== "string") break;
+        v = inner;
+      } catch {
+        break;
+      }
+    }
+    if (v !== original) {
+      try {
+        await SecureStorage.set(
+          key, v, false, false, KeychainAccess.afterFirstUnlockThisDeviceOnly,
+        );
+      } catch {
+        // Best-effort cleanup write; reads still return the peeled value.
+      }
+    }
+    return v;
   } catch {
     return null;
   }

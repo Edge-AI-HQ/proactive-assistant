@@ -48,7 +48,6 @@ import { PreNotificationPrompt } from "@/components/PreNotificationPrompt";
 import { isNative } from "@/lib/platform";
 import type { GoalBasket, IntentCard } from "@/types/intent-card";
 import { useAmbientLiveSession } from "@/hooks/useAmbientLiveSession";
-import { useUserSettings } from "@/hooks/useUserSettings";
 import { getPersistedAmbientEnabled } from "@/services/ambient/enabled-state";
 import LiveSessionCard from "./LiveSessionCard";
 import type { LiveSession } from "@/services/ambient/live-session";
@@ -279,7 +278,12 @@ export default function BigBallLayout() {
   const navigate = useNavigate();
   const weather = useWeather();
   const { user, signOut } = useAuth();
-  const { settings } = useUserSettings();
+  // Single useUserSettings instance per component — two instances meant
+  // two /settings GETs and two patches racing for notifyNewCards. The
+  // hook below (line ~330) returns the full result; this destructure
+  // reads the same state for ambient-consent gating.
+  const userSettings = useUserSettings();
+  const settings = userSettings.settings;
   const consentOn = settings
     ? Object.values(settings.ambientSources ?? {}).some((c) => c?.enabled === true)
     : null;
@@ -327,7 +331,6 @@ export default function BigBallLayout() {
   //     a user who toggles in iOS Settings sees the backend reconciled
   //     on the next foreground (usePushNotifications listens to
   //     appStateChange and re-checks).
-  const userSettings = useUserSettings();
   const pushNotifications = usePushNotifications();
   const osGranted = pushNotifications.permissionState === "granted";
   const osPromptable = (
