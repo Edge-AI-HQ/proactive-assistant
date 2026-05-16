@@ -1,7 +1,11 @@
 import type { TranscriptReadyEvent } from "@pin/capacitor-ambient-ai";
+import type { AmbientCandidateWindow, AmbientPrivacy } from "./timeline";
 import {
+  Activity,
   Coffee,
+  MapPin,
   Mic,
+  Radio,
   Stethoscope,
   Users,
   type LucideIcon,
@@ -40,6 +44,35 @@ export interface LiveSessionData {
 
 const MAX_LIVE_MESSAGES = 30;
 const LIVE_SESSION_TITLE_MAX = 64;
+const MAX_CONTEXT_WINDOWS = 8;
+const MAX_SESSION_SIGNALS = 5;
+const MAX_CONTEXT_ASSISTS = 8;
+const RECENT_CONTEXT_WINDOW_MS = 30 * 60 * 1000;
+
+export type LiveSessionContextKind =
+  | "place"
+  | "visit"
+  | "motion"
+  | "sound"
+  | "transcript"
+  | "transition";
+
+export interface LiveSessionContextItem {
+  id: string;
+  kind: LiveSessionContextKind;
+  label: string;
+  summary?: string;
+  startedAt: string;
+  endedAt?: string;
+  privacy: AmbientPrivacy;
+  confidenceLabel?: "certain" | "uncertain";
+  sourceWindowIds: string[];
+}
+
+interface ContextBuildOptions {
+  now?: Date;
+  maxWindows?: number;
+}
 
 export function formatElapsed(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -82,31 +115,226 @@ export function appendTranscript(
 export function liveSessionDataToSession(
   ambientOn: boolean,
   data: LiveSessionData | null,
+  contextItems: LiveSessionContextItem[] = [],
 ): LiveSession | null {
-  if (!ambientOn || !data || data.messages.length === 0) return null;
-  const last = data.messages[data.messages.length - 1];
-  const title = last.text.length > LIVE_SESSION_TITLE_MAX
-    ? `${last.text.slice(0, LIVE_SESSION_TITLE_MAX - 1).trimEnd()}…`
-    : last.text;
-  const provider = last.source ?? "device";
+  if (!ambientOn) return null;
+  const hasTranscript = !!data && data.messages.length > 0;
+  const visibleContext = contextItems.slice(0, MAX_CONTEXT_ASSISTS);
+  if (!hasTranscript && visibleContext.length === 0) return null;
+
+  const last = hasTranscript ? data.messages[data.messages.length - 1] : null;
+  const title = last
+    ? truncateTitle(last.text) || "Live transcript"
+    : contextOnlyTitle(visibleContext);
+  const provider = last?.source ?? "device";
+  const primaryPlace = visibleContext.find((item) => item.kind === "place" || item.kind === "visit");
+  const location = primaryPlace?.label ?? (hasTranscript ? "On device · captured locally" : "Ambient context active");
+  const device = uniqueStrings([
+    ...(hasTranscript ? ["Microphone"] : []),
+    ...deviceLabelsForContext(visibleContext),
+  ]).join(" · ") || "Ambient sensors";
+  const startedAt = hasTranscript
+    ? formatStartTimestamp(data.startedAt)
+    : formatStartTimestamp(Date.parse(visibleContext[visibleContext.length - 1]?.startedAt ?? new Date().toISOString()));
+
   return {
-    icon: Mic,
-    kind: "Voice session",
-    title: title || "Live transcript",
-    location: "On device · captured locally",
-    device: "Microphone",
-    startedAt: formatStartTimestamp(data.startedAt),
-    signals: [
-      `${data.messages.length} transcript${data.messages.length === 1 ? "" : "s"}`,
-      `Provider: ${provider}`,
+    icon: hasTranscript ? Mic : iconForContext(visibleContext),
+    kind: hasTranscript ? "Voice session" : "Ambient context",
+    title,
+    location,
+    device,
+    startedAt,
+    signals: sessionSignals(data, visibleContext, provider),
+    assists: [
+      ...visibleContext.map(contextItemToAssist),
+      ...(data?.messages.map((m) => ({
+        time: m.time,
+        kind: "context" as const,
+        text: m.text,
+        source: m.source,
+      })) ?? []),
     ],
-    assists: data.messages.map((m) => ({
-      time: m.time,
-      kind: "context" as const,
-      text: m.text,
-      source: m.source,
-    })),
   };
+}
+
+export function candidateWindowsToLiveSessionContextItems(
+  windows: AmbientCandidateWindow[],
+  options: ContextBuildOptions = {},
+): LiveSessionContextItem[] {
+  const now = options.now ?? new Date();
+  return windows
+    .filter(isDisplayableWindow)
+    .filter((window) => isRecentWindow(window, now))
+    .sort(compareWindowRecencyDesc)
+    .slice(0, options.maxWindows ?? MAX_CONTEXT_WINDOWS)
+    .flatMap((window) => {
+      const item = candidateWindowToLiveSessionItem(window);
+      return item ? [item] : [];
+    });
+}
+
+
+function candidateWindowToLiveSessionItem(
+  window: AmbientCandidateWindow,
+): LiveSessionContextItem | null {
+  const base = {
+    id: `live-window-${window.id}`,
+    startedAt: window.startedAt,
+    endedAt: window.endedAt,
+    privacy: window.privacyHint,
+    confidenceLabel: window.confidenceHint >= 0.65 ? "certain" as const : "uncertain" as const,
+    sourceWindowIds: [window.id],
+  };
+  if (window.windowType === "location_update") {
+    const place = placeLabelFromWindow(window);
+    return {
+      ...base,
+      kind: "place",
+      label: place ? `Near ${place}` : "Location updated",
+      summary: privacySuffix(place ? `Near ${place}` : "Location updated", window.privacyHint),
+    };
+  }
+  if (window.windowType === "visit_stay") {
+    const place = placeLabelFromWindow(window);
+    const label = place ? `Near ${place}` : "Visit context active";
+    return { ...base, kind: "visit", label, summary: privacySuffix(label, window.privacyHint) };
+  }
+  if (window.windowType === "motion_state_run") {
+    const label = motionLabel(window.compactContext);
+    return { ...base, kind: "motion", label, summary: privacySuffix(label, window.privacyHint) };
+  }
+  if (window.windowType === "sound_context") {
+    const label = soundLabel(window.compactContext);
+    return { ...base, kind: "sound", label, summary: privacySuffix(label, window.privacyHint) };
+  }
+  if (window.windowType === "transcript_session") {
+    return {
+      ...base,
+      kind: "transcript",
+      label: "Conversation window active",
+      summary: privacySuffix("Conversation window active", window.privacyHint),
+    };
+  }
+  if (window.windowType === "transition") {
+    return {
+      ...base,
+      kind: "transition",
+      label: "Context shift active",
+      summary: privacySuffix("Context shift active", window.privacyHint),
+    };
+  }
+  return null;
+}
+
+function isDisplayableWindow(window: AmbientCandidateWindow): boolean {
+  if (window.status === "ignored") return false;
+  if (window.confidenceHint < 0.35) return false;
+  return [
+    "location_update",
+    "visit_stay",
+    "motion_state_run",
+    "sound_context",
+    "transcript_session",
+    "transition",
+  ].includes(window.windowType);
+}
+
+function isRecentWindow(window: AmbientCandidateWindow, now: Date): boolean {
+  if (window.windowType === "visit_stay" || window.windowType === "transcript_session") return true;
+  const ts = Date.parse(window.endedAt ?? window.startedAt);
+  return Number.isFinite(ts) && now.getTime() - ts <= RECENT_CONTEXT_WINDOW_MS;
+}
+
+function compareWindowRecencyDesc(a: AmbientCandidateWindow, b: AmbientCandidateWindow): number {
+  return Date.parse(b.endedAt ?? b.startedAt) - Date.parse(a.endedAt ?? a.startedAt);
+}
+
+function truncateTitle(text: string): string {
+  return text.length > LIVE_SESSION_TITLE_MAX
+    ? `${text.slice(0, LIVE_SESSION_TITLE_MAX - 1).trimEnd()}…`
+    : text;
+}
+
+function contextOnlyTitle(items: LiveSessionContextItem[]): string {
+  const place = items.find((item) => item.kind === "place" || item.kind === "visit");
+  if (place?.label.startsWith("Near ")) return `Sensing near ${place.label.slice(5)}`;
+  return "Ambient context active";
+}
+
+function contextItemToAssist(item: LiveSessionContextItem): LiveAssistItem {
+  return {
+    time: formatContextOffset(item.startedAt),
+    kind: "context",
+    text: item.summary ?? item.label,
+  };
+}
+
+function sessionSignals(
+  data: LiveSessionData | null,
+  contextItems: LiveSessionContextItem[],
+  provider: string,
+): string[] {
+  return uniqueStrings([
+    ...contextItems.map((item) => item.label),
+    ...(data && data.messages.length > 0
+      ? [
+          `${data.messages.length} transcript${data.messages.length === 1 ? "" : "s"}`,
+          `Provider: ${provider}`,
+        ]
+      : []),
+  ]).slice(0, MAX_SESSION_SIGNALS);
+}
+
+function deviceLabelsForContext(items: LiveSessionContextItem[]): string[] {
+  if (items.some((item) => item.kind === "transcript")) return ["Microphone"];
+  if (items.length > 0) return ["iPhone"];
+  return [];
+}
+
+function iconForContext(items: LiveSessionContextItem[]): LucideIcon {
+  if (items.some((item) => item.kind === "motion")) return Activity;
+  if (items.some((item) => item.kind === "place" || item.kind === "visit")) return MapPin;
+  return Radio;
+}
+
+function placeLabelFromWindow(window: AmbientCandidateWindow): string | null {
+  const match = /(?:Location updated|Arrived|Departed) near ([^.]+)\./i.exec(window.compactContext.trim());
+  const label = match?.[1]?.trim();
+  return label || null;
+}
+
+function motionLabel(context: string): string {
+  const match = /^Motion\s+([a-zA-Z_ -]+)/.exec(context.trim());
+  const activity = match?.[1]?.split(" for ")[0]?.trim().toLowerCase();
+  if (!activity) return "Motion active";
+  if (activity === "stationary") return "Stationary";
+  if (activity === "walking") return "Walking";
+  if (activity === "automotive") return "Automotive";
+  return activity.charAt(0).toUpperCase() + activity.slice(1);
+}
+
+function soundLabel(context: string): string {
+  const match = /^Heard\s+([a-zA-Z_ -]+?)\s+for\s+/.exec(context.trim());
+  const label = match?.[1]?.trim().toLowerCase();
+  if (!label) return "Sound detected";
+  if (label === "speech" || label === "conversation") return "Speech detected";
+  if (label === "traffic") return "Traffic sound";
+  if (label === "quiet" || label === "quiet room") return "Quiet room";
+  return `${label.charAt(0).toUpperCase()}${label.slice(1)} sound`;
+}
+
+function privacySuffix(label: string, privacy: AmbientPrivacy): string {
+  return privacy === "normal" ? label : `${label} · ${privacy}`;
+}
+
+function formatContextOffset(iso: string): string {
+  const ts = Date.parse(iso);
+  if (!Number.isFinite(ts)) return "live";
+  return formatStartTimestamp(ts);
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter((value) => value.trim().length > 0)));
 }
 
 export const LIVE_SCENARIOS: LiveSession[] = [
