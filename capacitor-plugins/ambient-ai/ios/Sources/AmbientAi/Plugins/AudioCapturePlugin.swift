@@ -32,6 +32,8 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
     ))
     private var playbackPlayer: AVAudioPlayer?
     private var appActiveObserver: NSObjectProtocol?
+    private var appWillResignActiveObserver: NSObjectProtocol?
+    private var appDidEnterBackgroundObserver: NSObjectProtocol?
 
     public override func load() {
         appActiveObserver = NotificationCenter.default.addObserver(
@@ -39,13 +41,36 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { await self?.audioManager.recoverClassifierIfNeeded(reason: "appDidBecomeActive") }
+            Task {
+                await self?.audioManager.setAppBackgrounded(false, reason: "appDidBecomeActive")
+                await self?.audioManager.recoverClassifierIfNeeded(reason: "appDidBecomeActive")
+            }
+        }
+        appWillResignActiveObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { await self?.audioManager.setAppBackgrounded(true, reason: "appWillResignActive") }
+        }
+        appDidEnterBackgroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { await self?.audioManager.setAppBackgrounded(true, reason: "appDidEnterBackground") }
         }
     }
 
     deinit {
         if let appActiveObserver {
             NotificationCenter.default.removeObserver(appActiveObserver)
+        }
+        if let appWillResignActiveObserver {
+            NotificationCenter.default.removeObserver(appWillResignActiveObserver)
+        }
+        if let appDidEnterBackgroundObserver {
+            NotificationCenter.default.removeObserver(appDidEnterBackgroundObserver)
         }
     }
 

@@ -6,7 +6,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 DEVICE=""
 BUNDLE_ID=""
-OUT_ROOT="$PROJECT_ROOT/ambient-db-dumps"
+OUT_DIR="$PROJECT_ROOT/ambient-db-dumps/current"
 OPEN_NAVICAT_DIR=0
 
 usage() {
@@ -22,7 +22,8 @@ Options:
   --bundle-id <bundle id>     App bundle id. If omitted, tries:
                               ai.pin.proactive.dev, ai.pin.proactive,
                               com.pinai.proactive-ai.dev.
-  --out <dir>                 Output root. Default: ./ambient-db-dumps
+  --out <dir>                 Output directory. Default: ./ambient-db-dumps/current.
+                              The directory is reused and overwritten each run.
   --open                      Open the exported DB folder in Finder.
   -h, --help                  Show this help.
 
@@ -44,7 +45,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --out)
-      OUT_ROOT="${2:-}"
+      OUT_DIR="${2:-}"
       shift 2
       ;;
     --open)
@@ -156,6 +157,7 @@ PY
 copy_source() {
   local source="$1"
   local dest="$2"
+  local optional="${3:-0}"
   mkdir -p "$dest"
   echo "==> Copying app container source: $source"
   if xcrun devicectl device copy from \
@@ -167,7 +169,11 @@ copy_source() {
       --quiet >/dev/null; then
     echo "    copied: $source"
   else
-    echo "    skipped: $source not available or not readable"
+    if [[ "$optional" == "1" ]]; then
+      echo "    optional source missing: $source"
+    else
+      echo "    skipped: $source not available or not readable"
+    fi
   fi
 }
 
@@ -223,11 +229,13 @@ if [[ -z "$BUNDLE_ID" ]]; then
   exit 2
 fi
 
-STAMP="$(date +%Y%m%d-%H%M%S)"
-EXPORT_DIR="$OUT_ROOT/$STAMP-${BUNDLE_ID//./-}"
+EXPORT_DIR="$OUT_DIR"
 RAW_DIR="$EXPORT_DIR/app-container"
 SNAPSHOT_DIR="$EXPORT_DIR/navicat"
 
+mkdir -p "$EXPORT_DIR"
+rm -rf "$RAW_DIR" "$SNAPSHOT_DIR"
+rm -f "$EXPORT_DIR/ambient-timeline-inspect.sql"
 mkdir -p "$RAW_DIR" "$SNAPSHOT_DIR"
 
 echo "==> Device: $DEVICE"
@@ -235,7 +243,7 @@ echo "==> Bundle: $BUNDLE_ID"
 echo "==> Output: $EXPORT_DIR"
 
 copy_source "Documents" "$RAW_DIR/Documents"
-copy_source "Library/CapacitorDatabase" "$RAW_DIR/Library-CapacitorDatabase"
+copy_source "Library/CapacitorDatabase" "$RAW_DIR/Library-CapacitorDatabase" "1"
 
 DBS=()
 while IFS= read -r db; do
