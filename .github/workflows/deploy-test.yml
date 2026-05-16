@@ -144,10 +144,16 @@ jobs:
         env:
           DOTENV_PRIVATE_KEY_TEST: ${{ secrets.DOTENV_PRIVATE_KEY_TEST }}
 
+      # Build context = repo root so `COPY capacitor-plugins/` in the
+      # Dockerfile resolves the sibling workspace. See deploy-dev.yml for
+      # the long comment.
       - name: Deploy frontend to test
-        working-directory: proactive-ai-frontend
         run: |
-          flyctl deploy --config fly.test.toml --remote-only \
+          flyctl deploy . \
+            --config proactive-ai-frontend/fly.test.toml \
+            --dockerfile proactive-ai-frontend/Dockerfile \
+            --remote-only \
+            --build-arg WORKDIR=proactive-ai-frontend \
             --build-arg VITE_PIN_API_URL="$VITE_PIN_API_URL" \
             --build-arg VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
             --build-arg VITE_SUPABASE_PUBLISHABLE_KEY="$VITE_SUPABASE_PUBLISHABLE_KEY"
