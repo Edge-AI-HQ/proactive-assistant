@@ -44,7 +44,6 @@ SUPPORTED_RAW_SOURCES: dict[str, tuple[str, ...]] = {
     "github": ("issues",),
     "calendly": ("events",),
     "stripe": ("invoices",),
-    "twitter": ("bookmarks",),
     "youtube": ("subscriptions",),
     "linkedin": ("profile",),
     # Device (mobile sync)
@@ -678,7 +677,7 @@ client.raw                                           # canonical entry: .list(to
 Supported (toolkit, entity) for raw.list:
   gmail/messages, gcal/events, gdrive/files, slack/messages,
   github/issues, calendly/events, stripe/invoices,
-  twitter/bookmarks, youtube/subscriptions, linkedin/profile,
+  youtube/subscriptions, linkedin/profile,
   device/{apps,contacts,health}
 
 client.composio                                      # live SaaS access via Composio Tool Router

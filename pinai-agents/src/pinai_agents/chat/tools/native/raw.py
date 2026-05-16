@@ -76,7 +76,7 @@ async def raw_gcal_week(hours: int, limit: int):
 _RAW_VALID_PAIRS = (
     "gmail/messages, gcal/events, gdrive/files, slack/messages, "
     "github/issues, calendly/events, stripe/invoices, "
-    "twitter/bookmarks, youtube/subscriptions, linkedin/profile, "
+    "youtube/subscriptions, linkedin/profile, "
     "device/apps, device/contacts, device/health"
 )
 

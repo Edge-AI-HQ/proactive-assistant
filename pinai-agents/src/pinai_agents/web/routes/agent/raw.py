@@ -25,10 +25,9 @@ router = APIRouter(prefix="/api/agent/raw", tags=["agent-raw"])
 
 # (toolkit, entity) → physical table name. Only entries listed here are
 # readable; everything else 404s. Sourced from db/migrations/016-019 +
-# trimmed by 036 to the 11-toolkit first-batch scope (see
-# docs/plans/2026-05-07-composio-architecture-redesign.mdx).
+# trimmed by 036 / 045 to the live toolkit set.
 _RAW_TABLES: dict[tuple[str, str], str] = {
-    # Composio toolkits (Discord is connect_only — no raw table)
+    # Composio toolkits
     ("gmail", "messages"): "pai_raw_gmail_messages",
     ("gcal", "events"): "pai_raw_gcal_events",
     ("gdrive", "files"): "pai_raw_gdrive_files",
@@ -36,7 +35,6 @@ _RAW_TABLES: dict[tuple[str, str], str] = {
     ("github", "issues"): "pai_raw_github_issues",
     ("calendly", "events"): "pai_raw_calendly_events",
     ("stripe", "invoices"): "pai_raw_stripe_invoices",
-    ("twitter", "bookmarks"): "pai_raw_twitter_bookmarks",
     ("youtube", "subscriptions"): "pai_raw_youtube_subscriptions",
     ("linkedin", "profile"): "pai_raw_linkedin_profile",
     # Device (mobile sync)

@@ -231,13 +231,6 @@ def _calendly_label(d: dict[str, Any]) -> str | None:
     return _first_str(resource.get("email"), resource.get("name"))
 
 
-def _discord_label(d: dict[str, Any]) -> str | None:
-    # DISCORD_GET_MY_USER returns the user object directly. `email` is
-    # only present when the OAuth `email` scope was granted; `username`
-    # is the stable handle.
-    return _first_str(d.get("email"), d.get("global_name"), d.get("username"))
-
-
 def _googledrive_label(d: dict[str, Any]) -> str | None:
     # GOOGLEDRIVE_GET_ABOUT response shape: {user: {emailAddress, displayName, ...}, ...}.
     user = d.get("user") if isinstance(d.get("user"), dict) else {}
@@ -260,12 +253,6 @@ def _youtube_label(d: dict[str, Any]) -> str | None:
     return _first_str(snippet.get("customUrl"), snippet.get("title"))
 
 
-def _twitter_label(d: dict[str, Any]) -> str | None:
-    # TWITTER_USER_LOOKUP_ME: {data: {username, name, id, ...}, ...}.
-    data = d.get("data") if isinstance(d.get("data"), dict) else d
-    return _first_str(data.get("username"), data.get("name"))
-
-
 def _first_str(*values: Any) -> str | None:
     for v in values:
         if isinstance(v, str):
@@ -281,7 +268,6 @@ _IDENTITY_SPECS: dict[str, _IdentitySpec] = {
     "github":         _IdentitySpec("GITHUB_GET_THE_AUTHENTICATED_USER", {}, _github_label),
     "linkedin":       _IdentitySpec("LINKEDIN_GET_MY_INFO", {}, _linkedin_label),
     "calendly":       _IdentitySpec("CALENDLY_GET_USER", {}, _calendly_label),
-    "discord":        _IdentitySpec("DISCORD_GET_MY_USER", {}, _discord_label),
     "googledrive":    _IdentitySpec("GOOGLEDRIVE_GET_ABOUT", {}, _googledrive_label),
     "googlecalendar": _IdentitySpec(
         # No "get user info" action exists; Google Calendar API convention
@@ -293,7 +279,6 @@ _IDENTITY_SPECS: dict[str, _IdentitySpec] = {
         {"mine": True, "part": "snippet,statistics"},
         _youtube_label,
     ),
-    "twitter":        _IdentitySpec("TWITTER_USER_LOOKUP_ME", {}, _twitter_label),
 }
 
 

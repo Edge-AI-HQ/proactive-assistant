@@ -31,7 +31,7 @@ def stub_execute(monkeypatch):
         elif slug == "GMAIL_FETCH_EMAILS":
             data = {"messages": [{"messageId": "m1"}, {"messageId": "m2"}]}
         elif slug == "STRIPE_LIST_INVOICES":
-            data = [{"id": "in_1"}]   # Stripe top-level data array
+            data = {"object": "list", "data": [{"id": "in_1"}]}
         elif slug == "LINKEDIN_GET_MY_INFO":
             data = {"id": "urn:li:person:abc", "headline": "PM"}
         else:
@@ -45,20 +45,13 @@ def stub_execute(monkeypatch):
 # ── Recipe loading ─────────────────────────────────────────────────────
 
 
-def test_all_eleven_recipes_load():
-    """All 11 yaml files parse into Recipe."""
+def test_all_recipes_load():
+    """All 9 live yaml files parse into Recipe."""
     expected = {
-        "calendly", "discord", "github", "gmail", "googlecalendar",
-        "googledrive", "linkedin", "slack", "stripe", "twitter", "youtube",
+        "calendly", "github", "gmail", "googlecalendar", "googledrive",
+        "linkedin", "slack", "stripe", "youtube",
     }
     assert ir.supported_toolkits() == expected
-
-
-def test_discord_is_connect_only():
-    r = ir.load_recipe("discord")
-    assert r is not None
-    assert r.connect_only is True
-    assert r.is_ingestable() is False
 
 
 def test_load_recipe_missing_returns_none():
@@ -147,13 +140,6 @@ def test_walk_path_empty_path_returns_payload():
 
 
 # ── run_fetch ──────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_run_fetch_connect_only_returns_empty(stub_execute):
-    items = await ir.run_fetch(7, "discord", "ca_x")
-    assert items == []
-    assert stub_execute == []  # no Composio call made
 
 
 @pytest.mark.asyncio

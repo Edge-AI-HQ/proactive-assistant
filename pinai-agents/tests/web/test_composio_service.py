@@ -132,8 +132,6 @@ async def test_list_connections_no_identity_call(mock_sdk):
         ("slack",
          {"user": {"email": "u@slack.com", "name": "slacker"}},
          "u@slack.com"),
-        ("discord", {"username": "boliang", "email": "b@d.com"}, "b@d.com"),
-        ("discord", {"username": "boliang"}, "boliang"),
         ("googledrive",
          {"user": {"emailAddress": "g@drive.com", "displayName": "G"}},
          "g@drive.com"),
@@ -146,7 +144,6 @@ async def test_list_connections_no_identity_call(mock_sdk):
         ("youtube",
          {"items": [{"snippet": {"title": "MyChannel"}}]},
          "MyChannel"),
-        ("twitter", {"data": {"username": "boliangz", "name": "Boliang"}}, "boliangz"),
         ("linkedin",
          {"name": {"first_name": "Boliang", "last_name": "Zhang"}},
          "Boliang Zhang"),
@@ -161,8 +158,8 @@ def test_label_extractor_missing_fields_returns_none():
     # Empty / unexpected payload → extractor returns None; the
     # resolve_and_persist_label caller then writes None to DB and the
     # route surfaces fallback_label().
-    for toolkit in ("gmail", "slack", "github", "discord", "googledrive",
-                    "googlecalendar", "youtube", "twitter"):
+    for toolkit in ("gmail", "slack", "github", "googledrive",
+                    "googlecalendar", "youtube"):
         spec = cs._IDENTITY_SPECS[toolkit]
         assert spec.extract({}) is None
 

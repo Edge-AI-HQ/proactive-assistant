@@ -6,7 +6,6 @@ import {
   User,
   TrendingUp,
   BookOpen,
-  MapPin,
   ChevronDown,
   ChevronUp,
   Mail,
@@ -14,28 +13,14 @@ import {
   FolderOpen,
   MessageSquare,
   CreditCard,
-  FileText,
-  Activity,
   Watch,
   Users,
-  Globe,
-  Smartphone,
-  Eye,
-  Clock,
-  Wifi,
   Code,
-  BarChart3,
-  Handshake,
   Loader2,
   XCircle,
   Plus,
   Video,
-  ListTodo,
-  Music,
-  Pen,
   CircleDot,
-  Bike,
-  Zap,
   type LucideIcon,
 } from "lucide-react";
 import { Browser } from "@capacitor/browser";
@@ -186,13 +171,6 @@ const INPUT_CATEGORIES: InputCategory[] = [
     description: "Wearables, fitness, sleep, vitals",
     sources: [
       {
-        name: "Strava",
-        composioId: "strava",
-        description: "Workouts, running, cycling",
-        icon: Bike,
-        tier: 0,
-      },
-      {
         name: "Oura Ring",
         description: "Sleep, readiness, activity",
         icon: CircleDot,
@@ -209,7 +187,7 @@ const INPUT_CATEGORIES: InputCategory[] = [
   {
     name: "Work",
     icon: Briefcase,
-    description: "Email, calendar, docs, projects, code, CRM",
+    description: "Email, calendar, code",
     sources: [
       {
         name: "Gmail",
@@ -233,61 +211,19 @@ const INPUT_CATEGORIES: InputCategory[] = [
         tier: 0,
       },
       {
-        name: "Notion",
-        composioId: "notion",
-        description: "Workspace pages",
-        icon: BookOpen,
-        tier: 0,
-      },
-      {
-        name: "Outlook",
-        composioId: "outlook",
-        description: "Email, calendar",
-        icon: Mail,
-        tier: 0,
-      },
-      {
         name: "GitHub",
         composioId: "github",
         description: "Repositories, PRs",
         icon: Code,
         tier: 1,
       },
-      {
-        name: "Jira",
-        composioId: "jira",
-        description: "Issues, sprints",
-        icon: ListTodo,
-        tier: 1,
-      },
-      {
-        name: "Asana",
-        composioId: "asana",
-        description: "Tasks, projects",
-        icon: Zap,
-        tier: 1,
-      },
-      {
-        name: "HubSpot",
-        composioId: "hubspot",
-        description: "CRM contacts, deals",
-        icon: Handshake,
-        tier: 2,
-      },
     ],
   },
   {
     name: "Personal",
     icon: User,
-    description: "Social, communication, music, scheduling",
+    description: "Social, scheduling, taste",
     sources: [
-      {
-        name: "Twitter / X",
-        composioId: "twitter",
-        description: "Posts, DMs, timeline",
-        icon: Globe,
-        tier: 0,
-      },
       {
         name: "LinkedIn",
         composioId: "linkedin",
@@ -296,23 +232,9 @@ const INPUT_CATEGORIES: InputCategory[] = [
         tier: 0,
       },
       {
-        name: "Discord",
-        composioId: "discord",
-        description: "Servers, messages",
-        icon: MessageSquare,
-        tier: 0,
-      },
-      {
-        name: "Spotify",
-        composioId: "spotify",
-        description: "Music, playlists",
-        icon: Music,
-        tier: 1,
-      },
-      {
         name: "YouTube",
         composioId: "youtube",
-        description: "Watch history, channels",
+        description: "Subscriptions",
         icon: Video,
         tier: 1,
       },
@@ -323,24 +245,17 @@ const INPUT_CATEGORIES: InputCategory[] = [
         icon: Calendar,
         tier: 1,
       },
-      {
-        name: "Zoom",
-        composioId: "zoom",
-        description: "Meetings, recordings",
-        icon: Video,
-        tier: 2,
-      },
     ],
   },
   {
     name: "Finance",
     icon: TrendingUp,
-    description: "Payments, billing, transactions",
+    description: "Payments, billing, invoices",
     sources: [
       {
         name: "Stripe",
         composioId: "stripe",
-        description: "Payments, invoices",
+        description: "Invoices",
         icon: CreditCard,
         tier: 0,
       },
@@ -349,7 +264,7 @@ const INPUT_CATEGORIES: InputCategory[] = [
   {
     name: "Knowledge",
     icon: BookOpen,
-    description: "Docs, files, notes, design, tasks",
+    description: "Docs, files",
     sources: [
       {
         name: "Google Drive",
@@ -357,93 +272,6 @@ const INPUT_CATEGORIES: InputCategory[] = [
         description: "Files, folders",
         icon: FolderOpen,
         tier: 0,
-      },
-      {
-        name: "Google Docs",
-        composioId: "googledocs",
-        description: "Documents",
-        icon: FileText,
-        tier: 0,
-      },
-      {
-        name: "Google Sheets",
-        composioId: "googlesheets",
-        description: "Spreadsheets",
-        icon: BarChart3,
-        tier: 0,
-      },
-      {
-        name: "Dropbox",
-        composioId: "dropbox",
-        description: "Cloud storage",
-        icon: FolderOpen,
-        tier: 1,
-      },
-      {
-        name: "Todoist",
-        composioId: "todoist",
-        description: "Tasks, projects",
-        icon: ListTodo,
-        tier: 1,
-      },
-      {
-        name: "Trello",
-        composioId: "trello",
-        description: "Boards, cards",
-        icon: Pen,
-        tier: 1,
-      },
-      {
-        name: "Figma",
-        composioId: "figma",
-        description: "Design files",
-        icon: Pen,
-        tier: 2,
-      },
-      {
-        name: "ClickUp",
-        composioId: "clickup",
-        description: "Tasks, docs, goals",
-        icon: Zap,
-        tier: 2,
-      },
-    ],
-  },
-  {
-    name: "Context",
-    icon: MapPin,
-    description:
-      "Real-time environment, location, activity, focus — always-on perception layer",
-    sources: [
-      {
-        name: "Location",
-        description: "GPS, places visited",
-        icon: MapPin,
-        tier: 0,
-      },
-      {
-        name: "Screen Time",
-        description: "App usage, focus",
-        icon: Smartphone,
-        tier: 0,
-      },
-      {
-        name: "Attention",
-        description: "Focus mode, deep work",
-        icon: Eye,
-        tier: 1,
-      },
-      {
-        name: "Time Patterns",
-        description: "Routines, habits",
-        icon: Clock,
-        tier: 1,
-      },
-      {
-        name: "Network",
-        description: "WiFi, Bluetooth context",
-        icon: Wifi,
-        tier: 2,
       },
     ],
   },
@@ -666,6 +494,12 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                   >
                     <div className="px-4 pb-4 space-y-1">
                       <div className="h-px bg-foreground/[0.06] mb-2" />
+
+                      {category.sources.length === 0 && (
+                        <p className="text-[11px] text-foreground/40 italic px-1 py-3 text-center">
+                          No connectors available yet
+                        </p>
+                      )}
 
                       {[0, 1, 2].map((tier) => {
                         const tierSources = category.sources.filter(

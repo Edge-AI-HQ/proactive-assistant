@@ -133,16 +133,6 @@ RAW_SOURCES: tuple[dict[str, str], ...] = (
         "chips": "jsonb_build_array(r.collection_method)",
     },
     {
-        "key": "twitter",
-        "label": "Twitter",
-        "table": "pai_raw_twitter_bookmarks",
-        "title": "COALESCE(NULLIF(r.author_username, ''), 'Twitter bookmark')",
-        "subtitle": "r.lang",
-        "summary": "LEFT(COALESCE(r.text, ''), 280)",
-        "status": "NULL",
-        "chips": "jsonb_build_array(r.tweet_id)",
-    },
-    {
         "key": "youtube",
         "label": "YouTube",
         "table": "pai_raw_youtube_subscriptions",

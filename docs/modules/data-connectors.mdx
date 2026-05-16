@@ -67,7 +67,7 @@ flowchart LR
 
 ## 当前 Composio toolkit 状态
 
-`pinai-agents/db/ingest_recipes/` 下有 11 个 recipe yaml,但真正写了 mapper + upserter 能落 raw 表的只有 `_UPSERTERS` 注册的 6 个。其它入队后落回 `_mark_skipped(reason='unsupported_v0')`,scheduler 不会反复重试。
+`pinai-agents/db/ingest_recipes/` 下有 9 个 recipe yaml,全部端到端 live(recipe + raw 表 + `_UPSERTERS` mapper 三者齐全)。前端 `DataConnections.tsx` 的 connect 列表与此一一对应,不再列没有后端的 toolkit。
 
 | Toolkit | Composio action(来自 recipe) | raw 表 | 状态 |
 |---|---|---|---|
@@ -77,15 +77,17 @@ flowchart LR
 | `slack` | `SLACK_SEARCH_MESSAGES` | `pai_raw_slack_messages` | ✅ live(`_upsert_slack_messages`) |
 | `github` | `GITHUB_LIST_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER` | `pai_raw_github_issues` | ✅ live(`_upsert_github_issues`) |
 | `calendly` | `CALENDLY_LIST_SCHEDULED_EVENTS` | `pai_raw_calendly_events` | ✅ live(`_upsert_calendly_events`) |
-| `linkedin` | `LINKEDIN_GET_MY_INFO` | `pai_raw_linkedin_profile` | ⚠ recipe only |
-| `discord` | (recipe) | — | ⚠ recipe only |
-| `stripe` | `STRIPE_LIST_INVOICES` | `pai_raw_stripe_invoices` | ⚠ recipe only |
-| `twitter` | `TWITTER_BOOKMARKS_BY_USER` | `pai_raw_twitter_bookmarks` | ⚠ recipe only |
-| `youtube` | `YOUTUBE_LIST_USER_SUBSCRIPTIONS` | `pai_raw_youtube_subscriptions` | ⚠ recipe only |
+| `linkedin` | `LINKEDIN_GET_MY_INFO` | `pai_raw_linkedin_profile` | ✅ live(`_upsert_linkedin_profile`) |
+| `stripe` | `STRIPE_LIST_INVOICES` | `pai_raw_stripe_invoices` | ✅ live(`_upsert_stripe_invoices`) |
+| `youtube` | `YOUTUBE_LIST_USER_SUBSCRIPTIONS` | `pai_raw_youtube_subscriptions` | ✅ live(`_upsert_youtube_subscriptions`) |
 
-⚠ 标记表示 recipe schema 已经定,raw 表存在,但 `_UPSERTERS` 没注册 mapper → handler 跳过返回 `unsupported_v0`。要支持,1)recipe yaml 已就位 2)在 `connector_ingest.py` 加 `_map_<tk>` + `_upsert_<tk>` 3)注册到 `_UPSERTERS` dict。
+加新 toolkit 步骤:1)recipe yaml 2)在 `connector_ingest.py` 加 `_map_<tk>` + `_upsert_<tk>` 3)注册到 `_UPSERTERS` dict 4)如有需要新建 raw 表 migration。
 
-migration `036_drop_unused_raw_tables.sql` 已经把不在主线上的 `pai_raw_gdocs_*` / `pai_raw_outlook_*` / `pai_raw_notion_*` / `pai_raw_asana_*` / `pai_raw_zoom_*` / `pai_raw_clickup_*` 等表删除,所以即便加 toolkit 也要先看 raw 表是否还在。
+migration 历史:
+- `036_drop_unused_raw_tables.sql` 把 `pai_raw_gdocs_*` / `pai_raw_outlook_*` / `pai_raw_notion_*` / `pai_raw_asana_*` / `pai_raw_zoom_*` / `pai_raw_clickup_*` 等不在主线上的 raw 表删除。
+- `045_drop_twitter_discord_artifacts.sql` 移除 twitter / discord 这两个最后的 connect-only / recipe-only 残留:删 `pai_raw_twitter_bookmarks` 表,清掉这两个 toolkit 的 scheduled tasks / sync cursors / connector labels。Twitter 之所以下线是因为 Composio 2026-02 停了自有 OAuth credential,Discord 则因为 server-scoped API 给不出 cross-server 信号,产品面也撤掉了入口。
+
+留意 LinkedIn organizations(`pai_raw_linkedin_organizations`)表还在,但没接 recipe / upserter — 留作下一轮如果要做"用户管理的 LinkedIn 公司页"再用,目前空表。
 
 ## 核心链路
 
@@ -227,7 +229,7 @@ sequenceDiagram
 - `web/composio_service.py` 是单一真源:
   - SDK 直调(connection 生命周期、tool discovery、execute)→ 给 ingest_runner 用。
   - 每用户 `ToolRouterSession` LRU + 1h idle TTL → 给 chat 端 meta-tool 用(`/api/agent/composio/meta/*`)。
-  - **Label / identity 解析**:`_IDENTITY_SPECS` 给 11 个 toolkit 各登记一个 "get me" action + extractor(gmail → GMAIL_GET_PROFILE → emailAddress;googlecalendar → GOOGLECALENDAR_GET_CALENDAR(`primary`) → id;youtube → YOUTUBE_GET_CHANNEL_STATISTICS(`mine=true`) → snippet.title 等)。`/api/composio/wait` 命中 ACTIVE 时 eager-resolve 一次,结果写 `pai_connector_labels`(PK = `user_id, connected_account_id`)。`/api/composio/connections` 直接 join 这张表,~0 延迟。失败行带 `resolve_attempts / last_attempt_error`,下次 `/connections` lazy-retry。Stripe 没有 identity action,fallback 到 `fallback_label("stripe", cid)`。
+  - **Label / identity 解析**:`_IDENTITY_SPECS` 给 8 个 toolkit 各登记一个 "get me" action + extractor(gmail → GMAIL_GET_PROFILE → emailAddress;googlecalendar → GOOGLECALENDAR_GET_CALENDAR(`primary`) → id;youtube → YOUTUBE_GET_CHANNEL_STATISTICS(`mine=true`) → snippet.title 等)。`/api/composio/wait` 命中 ACTIVE 时 eager-resolve 一次,结果写 `pai_connector_labels`(PK = `user_id, connected_account_id`)。`/api/composio/connections` 直接 join 这张表,~0 延迟。失败行带 `resolve_attempts / last_attempt_error`,下次 `/connections` lazy-retry。Stripe 没有 identity action,fallback 到 `fallback_label("stripe", cid)`。
 - Composio master key 从 env `COMPOSIO_API_KEY`(只在 web 进程,FORBIDDEN_ENVS 名单内,chat 看不到)。
 - 同一 `(user_id, toolkit)` 支持多账号(`connected_accounts.link(allow_multiple=True)`)。前端 `+add` 按钮触发后端新建独立 `connected_account_id`,所有 per-account 状态(label / sync cursor / `init.{toolkit}.{cid}` 任务)按 cid 区分。
 - `/api/agent/composio/*` 是 sandbox 内 `pinai_sdk.composio` 的对端,执行有 allowlist 守门。
@@ -312,10 +314,13 @@ device 三张表(`pai_raw_device_apps_snapshot`、`pai_raw_device_contacts_snaps
 ```bash
 cd pinai-agents && uv run pytest tests/web/services/test_connector_ingest.py
 cd pinai-agents && uv run pytest tests/web/services/test_connector_sync.py
-cd pinai-agents && uv run pytest tests/web/services/test_connector_gmail.py     # 单 toolkit mapper
 cd pinai-agents && uv run pytest tests/web/services/test_connector_slack.py
 cd pinai-agents && uv run pytest tests/web/services/test_connector_drive.py
 cd pinai-agents && uv run pytest tests/web/services/test_connector_calendly.py
+cd pinai-agents && uv run pytest tests/web/services/test_connector_github.py
+cd pinai-agents && uv run pytest tests/web/services/test_connector_linkedin.py
+cd pinai-agents && uv run pytest tests/web/services/test_connector_stripe.py
+cd pinai-agents && uv run pytest tests/web/services/test_connector_youtube.py
 cd pinai-agents && uv run pytest tests/web/test_composio_service.py            # SDK wrapper / label extractors
 cd pinai-agents && uv run pytest tests/web/devices                              # token + ingest policies
 cd pinai-agents && uv run pytest tests/web/db/repositories/test_connectors_repo.py
@@ -353,7 +358,7 @@ make logs-pinai-web | grep -E "connector\.|composio|/devices/ingest"
 ## 踩坑
 
 - Composio API key 是 master credential,只能在 web 进程读;chat 进程通过 `/api/agent/composio/meta/*` 间接调,不会拿到 key。
-- 加 toolkit 的时候,`_UPSERTERS` 没注册的 toolkit 入队后直接 `succeeded`,`payload.skipped_reason='unsupported_v0'`,reconciler 不会反复重试 — 看上去"跑过了"但什么都没干。检查方式:`SELECT result FROM pai_scheduled_task_runs ...`。
+- 加 toolkit 的时候,`_UPSERTERS` 没注册的 toolkit 入队后直接 `succeeded`,`payload.skipped_reason='unsupported_v0'`,reconciler 不会反复重试 — 看上去"跑过了"但什么都没干。检查方式:`SELECT result FROM pai_scheduled_task_runs ...`。当前 9 个 live toolkit 都有注册;前端 panel 也只列这 9 个,所以正常路径不会触发 `unsupported_v0`。
 - `connector.sync` cron 是 `*/30 * * * *` 写死在 `connector_ingest._SYNC_CRON_EXPR`,改频率改这里,不在 env。
 - raw 表 `dedupe_key` 必须包含 `connectedAccountId` + natural key,否则多账号(比如同一用户两个 Gmail)的同 id 数据会撞 unique。
 - Composio Gmail `verbose=true` 默认 100 条响应 ≥6MB 会 413;recipe 显式 `verbose=false`。改 recipe 时别改回来。

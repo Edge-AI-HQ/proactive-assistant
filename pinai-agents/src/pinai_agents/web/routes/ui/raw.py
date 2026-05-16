@@ -39,7 +39,7 @@ router = APIRouter(prefix="/api/raw", tags=["raw"])
 # `fetchRawTable` (proactive-ai-frontend GoalsView RAW_SOURCE_CONFIG)
 # is the source of truth for these slugs.
 _GENERIC_RAW_SLUGS: frozenset[str] = frozenset({
-    # Composio toolkits (Discord is connect_only — no raw table)
+    # Composio toolkits
     "gmail_messages",
     "gcal_events",
     "gdrive_files",
@@ -47,7 +47,6 @@ _GENERIC_RAW_SLUGS: frozenset[str] = frozenset({
     "github_issues",
     "calendly_events",
     "stripe_invoices",
-    "twitter_bookmarks",
     "youtube_subscriptions",
     "linkedin_profile",
     # Device (mobile sync)

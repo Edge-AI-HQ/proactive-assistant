@@ -11,9 +11,8 @@ new toolkit:
   2. Write `_upsert_<toolkit>` here (typed-raw insert).
   3. Append to `_UPSERTERS` map.
 
-A toolkit with a recipe but no upserter (stripe / twitter / youtube /
-linkedin in batch 1) hits the "skipped (unsupported_v0)" path until
-its upserter lands.
+A toolkit with a recipe but no upserter hits the "skipped
+(unsupported_v0)" path until its upserter lands.
 
 Design notes:
   * Stage transitions are written to pai_scheduled_tasks.progress between
@@ -764,9 +763,9 @@ async def _upsert_github_issues(
 # ──────────────────────────────────────────────────────────────────────
 # Pair an upsert function with a Composio toolkit slug. Slugs MUST match
 # Composio's canonical lowercase slug (e.g. "googlecalendar", not "gcal"
-# — the latter is just our raw-table prefix). Toolkits with a recipe
-# but no upserter (stripe / twitter / youtube / linkedin in batch 1)
-# fall through to "skipped (unsupported_v0)" until their upserter lands.
+# — the latter is just our raw-table prefix). Toolkits with a recipe but
+# no upserter fall through to "skipped (unsupported_v0)" until their
+# upserter lands.
 
 # ──────────────────────────────────────────────────────────────────────
 # Slack
@@ -1119,6 +1118,370 @@ async def _upsert_calendly_events(
     return inserted
 
 
+# ──────────────────────────────────────────────────────────────────────
+# LinkedIn (profile singleton)
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _linkedin_first_str(*candidates: Any) -> str | None:
+    for c in candidates:
+        if isinstance(c, str) and c.strip():
+            return c.strip()
+    return None
+
+
+def _linkedin_picture_url(profile: dict[str, Any]) -> str | None:
+    direct = _linkedin_first_str(
+        profile.get("picture_url"),
+        profile.get("pictureUrl"),
+        profile.get("picture"),
+    )
+    if direct:
+        return direct
+    pp = profile.get("profilePicture")
+    if isinstance(pp, dict):
+        display = pp.get("displayImage~") or pp.get("displayImage")
+        if isinstance(display, dict):
+            elements = display.get("elements")
+            if isinstance(elements, list) and elements:
+                last = elements[-1]
+                if isinstance(last, dict):
+                    identifiers = last.get("identifiers")
+                    if isinstance(identifiers, list) and identifiers:
+                        first = identifiers[0]
+                        if isinstance(first, dict):
+                            return _linkedin_first_str(first.get("identifier"))
+    return None
+
+
+def _map_linkedin_profile(profile: dict[str, Any]) -> dict[str, Any] | None:
+    raw_id = profile.get("id") or profile.get("linkedin_id") or profile.get("sub")
+    linkedin_id = str(raw_id).strip() if raw_id is not None else ""
+    if not linkedin_id:
+        return None
+
+    name = profile.get("name") if isinstance(profile.get("name"), dict) else None
+    first_name = _linkedin_first_str(
+        profile.get("firstName") if isinstance(profile.get("firstName"), str) else None,
+        profile.get("localizedFirstName"),
+        profile.get("given_name"),
+        name.get("first_name") if name else None,
+    )
+    last_name = _linkedin_first_str(
+        profile.get("lastName") if isinstance(profile.get("lastName"), str) else None,
+        profile.get("localizedLastName"),
+        profile.get("family_name"),
+        name.get("last_name") if name else None,
+    )
+    localized = _linkedin_first_str(
+        profile.get("localizedName"),
+        name.get("localized") if name else None,
+        " ".join(s for s in (first_name, last_name) if s) or None,
+    )
+    vanity = _linkedin_first_str(profile.get("vanityName"), profile.get("vanity_name"))
+    profile_url = _linkedin_first_str(
+        profile.get("profile_url"),
+        profile.get("publicProfileUrl"),
+        f"https://www.linkedin.com/in/{vanity}" if vanity else None,
+    )
+
+    return {
+        "linkedin_id": linkedin_id,
+        "first_name": first_name,
+        "last_name": last_name,
+        "localized_name": localized,
+        "headline": _linkedin_first_str(profile.get("headline")),
+        "vanity_name": vanity,
+        "picture_url": _linkedin_picture_url(profile),
+        "profile_url": profile_url,
+        "occurred_at": datetime.now(UTC),
+    }
+
+
+async def _upsert_linkedin_profile(
+    conn: AsyncConnection, user_id: int, items: list[dict[str, Any]],
+) -> int:
+    """ON CONFLICT (user_id, linkedin_id) DO UPDATE — profile fields
+    (headline, picture, vanity) drift over time; refresh in place."""
+    inserted = 0
+    for item in items:
+        mapped = _map_linkedin_profile(item)
+        if mapped is None:
+            continue
+        row_id = _gen_raw_id()
+        dedupe = f"linkedin:profile:{mapped['linkedin_id']}"
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO pai_raw_linkedin_profile (
+                  user_id, id, linkedin_id, first_name, last_name,
+                  localized_name, headline, vanity_name,
+                  picture_url, profile_url, occurred_at, dedupe_key
+                ) VALUES (
+                  %s, %s, %s, %s, %s,
+                  %s, %s, %s,
+                  %s, %s, %s, %s
+                )
+                ON CONFLICT (user_id, linkedin_id) DO UPDATE SET
+                  first_name = EXCLUDED.first_name,
+                  last_name = EXCLUDED.last_name,
+                  localized_name = EXCLUDED.localized_name,
+                  headline = EXCLUDED.headline,
+                  vanity_name = EXCLUDED.vanity_name,
+                  picture_url = EXCLUDED.picture_url,
+                  profile_url = EXCLUDED.profile_url,
+                  occurred_at = EXCLUDED.occurred_at
+                """,
+                (
+                    user_id, row_id,
+                    mapped["linkedin_id"], mapped["first_name"], mapped["last_name"],
+                    mapped["localized_name"], mapped["headline"], mapped["vanity_name"],
+                    mapped["picture_url"], mapped["profile_url"],
+                    mapped["occurred_at"], dedupe,
+                ),
+            )
+            if (cur.rowcount or 0) > 0:
+                inserted += 1
+    return inserted
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Stripe (invoices — merchant-side; non-merchant accounts return [])
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _stripe_unix_to_datetime(value: Any) -> datetime | None:
+    """Stripe timestamps are unix seconds (int). Defensive parse — None
+    on garbage so caller falls back to NOW() at the call site."""
+    if isinstance(value, (int, float)) and value > 0:
+        return datetime.fromtimestamp(float(value), tz=UTC)
+    if isinstance(value, str) and value.isdigit():
+        return datetime.fromtimestamp(int(value), tz=UTC)
+    return None
+
+
+def _stripe_int_or_none(value: Any) -> int | None:
+    """Amounts are integer cents on the wire. Don't convert to float."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.lstrip("-").isdigit():
+        return int(value)
+    return None
+
+
+def _map_stripe_invoice(inv: dict[str, Any]) -> dict[str, Any] | None:
+    raw_id = inv.get("id") or inv.get("invoice_id")
+    invoice_id = str(raw_id).strip() if raw_id is not None else ""
+    if not invoice_id:
+        return None
+
+    customer_raw = inv.get("customer")
+    if isinstance(customer_raw, dict):
+        customer_id = (
+            customer_raw.get("id") if isinstance(customer_raw.get("id"), str) else None
+        )
+    elif isinstance(customer_raw, str):
+        customer_id = customer_raw
+    else:
+        customer_id = None
+
+    created_at = _stripe_unix_to_datetime(inv.get("created"))
+    due_at = _stripe_unix_to_datetime(inv.get("due_date"))
+    occurred = created_at or datetime.now(UTC)
+
+    return {
+        "invoice_id": invoice_id,
+        "number": inv.get("number") if isinstance(inv.get("number"), str) else None,
+        "status": inv.get("status") if isinstance(inv.get("status"), str) else None,
+        "amount_due": _stripe_int_or_none(inv.get("amount_due")),
+        "amount_paid": _stripe_int_or_none(inv.get("amount_paid")),
+        "amount_remaining": _stripe_int_or_none(inv.get("amount_remaining")),
+        "currency": inv.get("currency") if isinstance(inv.get("currency"), str) else None,
+        "customer_id": customer_id,
+        "customer_email": (
+            inv.get("customer_email")
+            if isinstance(inv.get("customer_email"), str) else None
+        ),
+        "customer_name": (
+            inv.get("customer_name")
+            if isinstance(inv.get("customer_name"), str) else None
+        ),
+        "collection_method": (
+            inv.get("collection_method")
+            if isinstance(inv.get("collection_method"), str) else None
+        ),
+        "created_at_remote": created_at,
+        "due_date": due_at.date() if due_at else None,
+        "hosted_invoice_url": (
+            inv.get("hosted_invoice_url")
+            if isinstance(inv.get("hosted_invoice_url"), str) else None
+        ),
+        "invoice_pdf": (
+            inv.get("invoice_pdf")
+            if isinstance(inv.get("invoice_pdf"), str) else None
+        ),
+        "occurred_at": occurred,
+    }
+
+
+async def _upsert_stripe_invoices(
+    conn: AsyncConnection, user_id: int, items: list[dict[str, Any]],
+) -> int:
+    """ON CONFLICT (user_id, invoice_id) DO UPDATE — invoice status flips
+    (open → paid → void); amounts also mutate via partial payments."""
+    inserted = 0
+    for item in items:
+        mapped = _map_stripe_invoice(item)
+        if mapped is None:
+            continue
+        row_id = _gen_raw_id()
+        dedupe = f"stripe:invoice:{mapped['invoice_id']}"
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO pai_raw_stripe_invoices (
+                  user_id, id, invoice_id, number, status,
+                  amount_due, amount_paid, amount_remaining, currency,
+                  customer_id, customer_email, customer_name,
+                  collection_method, created_at_remote, due_date,
+                  hosted_invoice_url, invoice_pdf, occurred_at, dedupe_key
+                ) VALUES (
+                  %s, %s, %s, %s, %s,
+                  %s, %s, %s, %s,
+                  %s, %s, %s,
+                  %s, %s, %s,
+                  %s, %s, %s, %s
+                )
+                ON CONFLICT (user_id, invoice_id) DO UPDATE SET
+                  number = EXCLUDED.number,
+                  status = EXCLUDED.status,
+                  amount_due = EXCLUDED.amount_due,
+                  amount_paid = EXCLUDED.amount_paid,
+                  amount_remaining = EXCLUDED.amount_remaining,
+                  customer_email = EXCLUDED.customer_email,
+                  customer_name = EXCLUDED.customer_name,
+                  hosted_invoice_url = EXCLUDED.hosted_invoice_url,
+                  invoice_pdf = EXCLUDED.invoice_pdf,
+                  occurred_at = EXCLUDED.occurred_at
+                """,
+                (
+                    user_id, row_id,
+                    mapped["invoice_id"], mapped["number"], mapped["status"],
+                    mapped["amount_due"], mapped["amount_paid"],
+                    mapped["amount_remaining"], mapped["currency"],
+                    mapped["customer_id"], mapped["customer_email"],
+                    mapped["customer_name"],
+                    mapped["collection_method"], mapped["created_at_remote"],
+                    mapped["due_date"],
+                    mapped["hosted_invoice_url"], mapped["invoice_pdf"],
+                    mapped["occurred_at"], dedupe,
+                ),
+            )
+            if (cur.rowcount or 0) > 0:
+                inserted += 1
+    return inserted
+
+
+# ──────────────────────────────────────────────────────────────────────
+# YouTube (subscribed channels — taste graph snapshot)
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _map_youtube_subscription(sub: dict[str, Any]) -> dict[str, Any] | None:
+    raw_id = sub.get("id") or sub.get("subscription_id")
+    subscription_id = str(raw_id).strip() if raw_id is not None else ""
+    if not subscription_id:
+        return None
+
+    snippet = sub.get("snippet") if isinstance(sub.get("snippet"), dict) else {}
+    resource = (
+        snippet.get("resourceId")
+        if isinstance(snippet.get("resourceId"), dict) else {}
+    )
+    channel_id = str(resource.get("channelId") or "").strip()
+    if not channel_id:
+        # Some Composio shapes flatten resourceId; tolerate top-level fields.
+        channel_id = str(snippet.get("channelId") or "").strip()
+    if not channel_id:
+        return None
+
+    thumbnails = (
+        snippet.get("thumbnails")
+        if isinstance(snippet.get("thumbnails"), dict) else {}
+    )
+    thumb_default = (
+        thumbnails.get("default")
+        if isinstance(thumbnails.get("default"), dict) else {}
+    )
+    thumb_url = (
+        thumb_default.get("url")
+        if isinstance(thumb_default.get("url"), str) else None
+    )
+
+    subscribed_at = _parse_iso(snippet.get("publishedAt"))
+    occurred = subscribed_at or datetime.now(UTC)
+
+    return {
+        "subscription_id": subscription_id,
+        "channel_id": channel_id,
+        "channel_title": (
+            snippet.get("title") if isinstance(snippet.get("title"), str) else None
+        ),
+        "channel_description": (
+            snippet.get("description")
+            if isinstance(snippet.get("description"), str) else None
+        ),
+        "thumbnail_url": thumb_url,
+        "subscribed_at": subscribed_at,
+        "occurred_at": occurred,
+    }
+
+
+async def _upsert_youtube_subscriptions(
+    conn: AsyncConnection, user_id: int, items: list[dict[str, Any]],
+) -> int:
+    """ON CONFLICT (user_id, subscription_id) DO UPDATE — channel title /
+    description / thumbnail can change; subscribed_at stays anchored."""
+    inserted = 0
+    for item in items:
+        mapped = _map_youtube_subscription(item)
+        if mapped is None:
+            continue
+        row_id = _gen_raw_id()
+        dedupe = f"youtube:sub:{mapped['subscription_id']}"
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO pai_raw_youtube_subscriptions (
+                  user_id, id, subscription_id, channel_id, channel_title,
+                  channel_description, thumbnail_url, subscribed_at,
+                  occurred_at, dedupe_key
+                ) VALUES (
+                  %s, %s, %s, %s, %s,
+                  %s, %s, %s,
+                  %s, %s
+                )
+                ON CONFLICT (user_id, subscription_id) DO UPDATE SET
+                  channel_title = EXCLUDED.channel_title,
+                  channel_description = EXCLUDED.channel_description,
+                  thumbnail_url = EXCLUDED.thumbnail_url,
+                  occurred_at = EXCLUDED.occurred_at
+                """,
+                (
+                    user_id, row_id,
+                    mapped["subscription_id"], mapped["channel_id"],
+                    mapped["channel_title"], mapped["channel_description"],
+                    mapped["thumbnail_url"], mapped["subscribed_at"],
+                    mapped["occurred_at"], dedupe,
+                ),
+            )
+            if (cur.rowcount or 0) > 0:
+                inserted += 1
+    return inserted
+
+
 _UPSERTERS.update({
     "gmail": _upsert_gmail,
     "googlecalendar": _upsert_gcal,
@@ -1126,6 +1489,9 @@ _UPSERTERS.update({
     "slack": _upsert_slack_messages,
     "googledrive": _upsert_gdrive_files,
     "calendly": _upsert_calendly_events,
+    "linkedin": _upsert_linkedin_profile,
+    "stripe": _upsert_stripe_invoices,
+    "youtube": _upsert_youtube_subscriptions,
 })
 
 

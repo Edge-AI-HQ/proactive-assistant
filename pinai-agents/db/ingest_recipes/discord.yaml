@@ -1,7 +1,0 @@
-toolkit: discord
-connect_only: true
-description: "Discord is server-scoped — no cross-server 'recent items' API. Connect only; agent fetches on-demand."
-notes: |
-  - Composio's 28 Discord actions are all metadata (guild list, user info, entitlements, SKU). No cross-server message stream.
-  - "Summarize unread mentions in #design-team" runs via agent meta-tools at chat time (SEARCH_TOOLS → MULTI_EXECUTE_TOOL → DISCORD_GET_MESSAGES).
-  - If we ever want background ingest, candidate is DISCORD_LIST_MY_GUILDS (low signal, monthly cadence).
