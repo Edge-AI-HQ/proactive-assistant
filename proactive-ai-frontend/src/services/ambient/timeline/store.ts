@@ -2,6 +2,7 @@ import { isNative } from "@/lib/platform";
 import type {
   AmbientCandidateWindow,
   AmbientRawEvent,
+  AmbientRawRef,
   AmbientSourceType,
   AmbientTimelineEvent,
   AmbientTimelineStore,
@@ -61,6 +62,44 @@ export class MemoryTimelineStore implements AmbientTimelineStore {
       .slice(0, filter.limit ?? Number.POSITIVE_INFINITY)
       .map(cloneRawEvent);
   }
+
+  async getRawEventsByRefs(refs: AmbientRawRef[]): Promise<AmbientRawEvent[]> {
+    await this.initIfNeeded();
+    const ids = new Set(refs.map((ref) => ref.id));
+    return Array.from(this.rawEvents.values())
+      .filter((row) => ids.has(row.id))
+      .sort(compareByOccurredAtAsc)
+      .map(cloneRawEvent);
+  }
+
+  async listRawEventsInRange(filter: {
+    localDate: string;
+    sourceType?: AmbientSourceType;
+    eventType?: string;
+    start: string;
+    end: string;
+    limit?: number;
+  }): Promise<AmbientRawEvent[]> {
+    await this.initIfNeeded();
+    const startTs = Date.parse(filter.start);
+    const endTs = Date.parse(filter.end);
+    return Array.from(this.rawEvents.values())
+      .filter((row) => row.localDate === filter.localDate)
+      .filter((row) => !filter.sourceType || row.sourceType === filter.sourceType)
+      .filter((row) => !filter.eventType || row.eventType === filter.eventType)
+      .filter((row) => {
+        const rowStart = Date.parse(row.occurredAt);
+        const rowEnd = Date.parse(row.endedAt ?? row.occurredAt);
+        return Number.isFinite(rowStart)
+          && Number.isFinite(rowEnd)
+          && rowStart <= endTs
+          && rowEnd >= startTs;
+      })
+      .sort(compareByOccurredAtAsc)
+      .slice(0, filter.limit ?? Number.POSITIVE_INFINITY)
+      .map(cloneRawEvent);
+  }
+
 
   async upsertCandidateWindow(
     window: AmbientCandidateWindow,
@@ -389,6 +428,51 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
       `SELECT * FROM ambient_raw_events ${where}
        ORDER BY occurred_at ASC LIMIT ?`,
       [...values, limit],
+    );
+    return (rows.values ?? []).map(rowToRawEvent);
+  }
+
+  async getRawEventsByRefs(refs: AmbientRawRef[]): Promise<AmbientRawEvent[]> {
+    if (refs.length === 0) return [];
+    await this.init();
+    const placeholders = refs.map(() => "?").join(",");
+    const rows = await (await this.db()).query(
+      `SELECT * FROM ambient_raw_events WHERE id IN (${placeholders}) ORDER BY occurred_at ASC`,
+      refs.map((ref) => ref.id),
+    );
+    const sourceById = new Map(refs.map((ref) => [ref.id, ref.sourceType]));
+    return (rows.values ?? [])
+      .map(rowToRawEvent)
+      .filter((raw) => sourceById.get(raw.id) === raw.sourceType);
+  }
+
+  async listRawEventsInRange(filter: {
+    localDate: string;
+    sourceType?: AmbientSourceType;
+    eventType?: string;
+    start: string;
+    end: string;
+    limit?: number;
+  }): Promise<AmbientRawEvent[]> {
+    await this.init();
+    const clauses = [
+      "local_date = ?",
+      "occurred_at <= ?",
+      "COALESCE(ended_at, occurred_at) >= ?",
+    ];
+    const values: unknown[] = [filter.localDate, filter.end, filter.start];
+    if (filter.sourceType) {
+      clauses.push("source_type = ?");
+      values.push(filter.sourceType);
+    }
+    if (filter.eventType) {
+      clauses.push("event_type = ?");
+      values.push(filter.eventType);
+    }
+    const rows = await (await this.db()).query(
+      `SELECT * FROM ambient_raw_events WHERE ${clauses.join(" AND ")}
+       ORDER BY occurred_at ASC LIMIT ?`,
+      [...values, filter.limit ?? 500],
     );
     return (rows.values ?? []).map(rowToRawEvent);
   }

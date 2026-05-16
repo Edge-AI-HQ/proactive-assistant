@@ -78,4 +78,57 @@ describe("SqliteTimelineStore migrations", () => {
 
     expect(sqliteMock.conn.run).not.toHaveBeenCalled();
   });
+
+  test("queries raw events by refs and time range", async () => {
+    sqliteMock.conn.query.mockImplementation(async (sql?: string) => {
+      if ((sql ?? "").includes("FROM ambient_raw_events") && (sql ?? "").includes("id IN")) {
+        return { values: [rawRow({ id: "raw_1", source_type: "transcript" })] };
+      }
+      if ((sql ?? "").includes("occurred_at <= ?") && (sql ?? "").includes("COALESCE(ended_at, occurred_at) >= ?")) {
+        return { values: [rawRow({ id: "raw_2", source_type: "location" })] };
+      }
+      return { values: [] };
+    });
+    const store = new SqliteTimelineStore();
+
+    const byRefs = await store.getRawEventsByRefs([{ sourceType: "transcript", id: "raw_1" }]);
+    const inRange = await store.listRawEventsInRange({
+      localDate: "2026-05-15",
+      sourceType: "location",
+      start: "2026-05-15T10:00:00.000Z",
+      end: "2026-05-15T10:10:00.000Z",
+      limit: 5,
+    });
+
+    expect(byRefs[0]?.id).toBe("raw_1");
+    expect(inRange[0]?.id).toBe("raw_2");
+  });
 });
+
+function rawRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: "raw",
+    local_user_id: "local",
+    device_id: "device",
+    source_type: "health",
+    event_type: "health.summary",
+    source_version: "v1",
+    occurred_at: "2026-05-15T10:00:00.000Z",
+    ended_at: null,
+    collected_at: "2026-05-15T10:00:01.000Z",
+    timezone: "UTC",
+    local_date: "2026-05-15",
+    payload_json: JSON.stringify({ metric: "steps" }),
+    compact_text: "compact",
+    confidence: null,
+    sensitivity: "normal",
+    permission_state: null,
+    ttl_expires_at: null,
+    content_hash: "hash",
+    dedupe_key: "dedupe",
+    processing_status: "new",
+    created_at: "2026-05-15T10:00:01.000Z",
+    updated_at: "2026-05-15T10:00:01.000Z",
+    ...overrides,
+  };
+}

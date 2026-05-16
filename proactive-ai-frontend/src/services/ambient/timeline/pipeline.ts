@@ -1,5 +1,5 @@
 import type { PersonalSignalInput } from "@/lib/devices";
-import { timelineEventToSignal } from "./envelope";
+import { candidateWindowToSignal, timelineEventToSignal, type AmbientWindowSourcePayload } from "./envelope";
 import { ambientTimelineModels, type AmbientTimelineModelBridge, type AmbientTimelineEventDraft } from "./models";
 import { rawEventFromSignal, placeLabel } from "./normalize";
 import { getAmbientTimelineStore } from "./store";
@@ -163,21 +163,44 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     }
     if (raw.sourceType === "visit") {
       const visit = await this.generateVisitStay(raw);
-      if (visit) signals.push(visit);
+      if (visit) {
+        const visitWindow = await this.findWindow(
+          raw.localDate,
+          "visit_stay",
+          stableId("win", ["visit_stay", raw.id]),
+        );
+        if (visitWindow) signals.push(visit, await this.candidateWindowSignal(visitWindow));
+      }
       const transition = await this.generateTransition(raw);
-      if (transition) signals.push(transition);
+      if (transition) {
+        signals.push(transition);
+        const transitionWindow = await this.latestWindow(raw.localDate, "transition");
+        if (transitionWindow) signals.push(await this.candidateWindowSignal(transitionWindow));
+      }
+      return signals;
+    }
+    if (raw.sourceType === "location") {
+      const window = await this.upsertLocationUpdateWindow(raw);
+      if (window) signals.push(await this.candidateWindowSignal(window));
       return signals;
     }
     if (raw.sourceType === "transcript") {
-      await this.upsertTranscriptWindow(raw);
+      const window = await this.upsertTranscriptWindow(raw);
+      if (window) signals.push(await this.candidateWindowSignal(window));
       return signals;
     }
     if (raw.sourceType === "sound") {
-      if (raw.eventType === "sound.scene_run") await this.upsertSoundContextWindow(raw);
+      if (raw.eventType === "sound.scene_run") {
+        const window = await this.upsertSoundContextWindow(raw);
+        signals.push(await this.candidateWindowSignal(window));
+      }
       return signals;
     }
     if (raw.sourceType === "motion") {
-      if (raw.eventType === "motion.segment") await this.upsertMotionStateWindow(raw);
+      if (raw.eventType === "motion.segment") {
+        const window = await this.upsertMotionStateWindow(raw);
+        signals.push(await this.candidateWindowSignal(window));
+      }
       return signals;
     }
     return signals;
@@ -355,10 +378,43 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     return this.upsertVisibleEvent(event);
   }
 
-  private async upsertSoundContextWindow(raw: AmbientRawEvent): Promise<void> {
+
+  private async upsertLocationUpdateWindow(raw: AmbientRawEvent): Promise<AmbientCandidateWindow | null> {
+    const place = placeLabel(raw.payload);
+    const locations = await this.store.listRawEvents({
+      localDate: raw.localDate,
+      sourceType: "location",
+      limit: 200,
+    });
+    const earlier = locations
+      .filter((candidate) => candidate.id !== raw.id
+        && Date.parse(candidate.occurredAt) < Date.parse(raw.occurredAt))
+      .reverse()
+      .find((candidate) => candidate.eventType === "location.fix");
+    if (earlier && !shouldUploadLocationUpdate(raw, earlier)) return null;
+    const context = place ? `Location near ${place}.` : raw.compactText;
+    return this.upsertWindow({
+      id: stableId("win", ["location_update", raw.id]),
+      localDate: raw.localDate,
+      windowType: "location_update",
+      startedAt: raw.occurredAt,
+      endedAt: raw.endedAt,
+      sourceTypes: ["location"],
+      deviceLabels: ["iPhone"],
+      rawRefs: [rawRef(raw)],
+      compactContext: context,
+      privacyHint: "private",
+      confidenceHint: raw.confidence ?? 0.7,
+      salienceHint: 0.35,
+      generationPolicy: "do_not_generate",
+      status: "evidence",
+    });
+  }
+
+  private async upsertSoundContextWindow(raw: AmbientRawEvent): Promise<AmbientCandidateWindow> {
     const startedAt = stringPayload(raw.payload, "started_at") ?? raw.occurredAt;
     const endedAt = stringPayload(raw.payload, "ended_at") ?? raw.endedAt;
-    await this.upsertWindow({
+    return this.upsertWindow({
       id: stableId("win", ["sound_context", raw.dedupeKey]),
       localDate: raw.localDate,
       windowType: "sound_context",
@@ -376,10 +432,10 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     });
   }
 
-  private async upsertMotionStateWindow(raw: AmbientRawEvent): Promise<void> {
+  private async upsertMotionStateWindow(raw: AmbientRawEvent): Promise<AmbientCandidateWindow> {
     const startedAt = stringPayload(raw.payload, "started_at") ?? raw.occurredAt;
     const endedAt = stringPayload(raw.payload, "ended_at") ?? raw.endedAt;
-    await this.upsertWindow({
+    return this.upsertWindow({
       id: stableId("win", ["motion_state_run", raw.dedupeKey]),
       localDate: raw.localDate,
       windowType: "motion_state_run",
@@ -397,7 +453,7 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     });
   }
 
-  private async upsertTranscriptWindow(raw: AmbientRawEvent): Promise<void> {
+  private async upsertTranscriptWindow(raw: AmbientRawEvent): Promise<AmbientCandidateWindow | null> {
     const durationMs = numberPayload(raw.payload, "durationMs");
     const startedAt = raw.occurredAt;
     const endedAt = raw.endedAt
@@ -420,7 +476,7 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
       : `${raw.compactText}${soundContextText}`;
     const soundRawRefs = soundWindows.flatMap((window) => window.rawRefs);
     const nextHash = stableHash(compactContext);
-    await this.upsertWindow({
+    return this.upsertWindow({
       id,
       localDate: raw.localDate,
       windowType: "transcript_session",
@@ -543,6 +599,69 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
       createdAt: now,
       updatedAt: now,
     });
+  }
+
+
+  private async findWindow(
+    localDate: string,
+    windowType: AmbientWindowType,
+    id: string,
+  ): Promise<AmbientCandidateWindow | null> {
+    const windows = await this.store.listCandidateWindows({ localDate, windowType, limit: 200 });
+    return windows.find((item) => item.id === id) ?? null;
+  }
+
+  private async latestWindow(
+    localDate: string,
+    windowType: AmbientWindowType,
+  ): Promise<AmbientCandidateWindow | null> {
+    const windows = await this.store.listCandidateWindows({ localDate, windowType, limit: 200 });
+    return windows.length > 0 ? windows[windows.length - 1] ?? null : null;
+  }
+
+  private async candidateWindowSignal(window: AmbientCandidateWindow): Promise<PersonalSignalInput> {
+    const sourcePayloads = await this.buildWindowUploadContext(window);
+    const contextHash = stableHash(JSON.stringify({
+      compactContext: window.compactContext,
+      sourcePayloads,
+    }));
+    return candidateWindowToSignal(window, { sourcePayloads, contextHash });
+  }
+
+  private async buildWindowUploadContext(
+    window: AmbientCandidateWindow,
+  ): Promise<AmbientWindowSourcePayload[]> {
+    const byRef = await this.store.getRawEventsByRefs(window.rawRefs);
+    const effectiveEnd = window.endedAt ?? window.startedAt;
+    const startMs = Date.parse(window.startedAt);
+    const endMs = Date.parse(effectiveEnd);
+    const nearbyStart = new Date(startMs - 10 * 60_000).toISOString();
+    const nearbyEnd = new Date(endMs + 10 * 60_000).toISOString();
+    const nearbyLocation = await this.store.listRawEventsInRange({
+      localDate: window.localDate,
+      sourceType: "location",
+      start: nearbyStart,
+      end: nearbyEnd,
+      limit: 20,
+    });
+    const seen = new Set<string>();
+    const out: AmbientWindowSourcePayload[] = [];
+    for (const raw of byRef) {
+      const payload = sanitizeRawPayload(raw);
+      if (!payload) continue;
+      seen.add(raw.id);
+      out.push(sourcePayload(raw, "window_raw_ref", payload));
+    }
+    const locations = nearbyLocation
+      .filter((raw) => !seen.has(raw.id))
+      .sort(compareLocationContext)
+      .slice(0, 2);
+    for (const raw of locations) {
+      const payload = sanitizeRawPayload(raw);
+      if (!payload) continue;
+      out.push(sourcePayload(raw, "nearby_context", payload));
+    }
+    return out.slice(0, 10);
   }
 
   private async upsertVisibleEvent(
@@ -771,4 +890,118 @@ function laterIso(a: string | undefined, b: string | undefined): string | undefi
   if (!a) return b;
   if (!b) return a;
   return Date.parse(a) >= Date.parse(b) ? a : b;
+}
+
+
+function sourcePayload(
+  raw: AmbientRawEvent,
+  relation: AmbientWindowSourcePayload["relation"],
+  payload: Record<string, unknown>,
+): AmbientWindowSourcePayload {
+  return {
+    source_type: raw.sourceType,
+    event_type: raw.eventType,
+    occurred_at: raw.occurredAt,
+    ...(raw.endedAt ? { ended_at: raw.endedAt } : {}),
+    ...(raw.confidence !== null ? { confidence: raw.confidence } : {}),
+    relation,
+    payload,
+  };
+}
+
+function sanitizeRawPayload(raw: AmbientRawEvent): Record<string, unknown> | null {
+  switch (raw.sourceType) {
+    case "transcript":
+      return sanitizeTranscriptPayload(raw);
+    case "location":
+      return sanitizeLocationPayload(raw);
+    case "visit":
+      return sanitizeVisitPayload(raw);
+    case "motion":
+      return pick(raw.payload, [
+        "activity", "started_at", "ended_at", "durationMs",
+        "confidence", "maxConfidence", "sampleCount",
+      ]);
+    case "sound":
+      return pick(raw.payload, [
+        "label", "started_at", "ended_at", "durationMs",
+        "maxConfidence", "sampleCount",
+      ]);
+    case "health":
+      return pick(raw.payload, [
+        "observations", "metric", "value", "unit", "local_date", "source_app",
+      ]);
+    case "calendar":
+      return pick(raw.payload, ["title", "starts_at", "ends_at", "calendar_id"]);
+  }
+}
+
+function sanitizeTranscriptPayload(raw: AmbientRawEvent): Record<string, unknown> {
+  const payload = pick(raw.payload, [
+    "durationMs", "provider", "language", "captureSessionId", "burstId",
+  ]);
+  const text = stringValue(raw.payload.text)
+    ?? stringValue(raw.payload.transcript)
+    ?? stringValue(raw.payload.signal_summary)
+    ?? raw.compactText.replace(/^Transcript segment:\s*/, "");
+  if (text) payload.text = text.slice(0, 8_000);
+  return payload;
+}
+
+function sanitizeLocationPayload(raw: AmbientRawEvent): Record<string, unknown> {
+  return pick(raw.payload, ["latitude", "longitude", "accuracy", "place"]);
+}
+
+function sanitizeVisitPayload(raw: AmbientRawEvent): Record<string, unknown> {
+  return pick(raw.payload, [
+    "kind", "place", "latitude", "longitude", "accuracy",
+    "arrival_at", "departure_at",
+  ]);
+}
+
+function pick(payload: Record<string, unknown>, keys: string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of keys) {
+    const value = payload[key];
+    if (value !== undefined && value !== null) out[key] = value;
+  }
+  return out;
+}
+
+function compareLocationContext(a: AmbientRawEvent, b: AmbientRawEvent): number {
+  const aHasPlace = placeLabel(a.payload) ? 0 : 1;
+  const bHasPlace = placeLabel(b.payload) ? 0 : 1;
+  if (aHasPlace !== bHasPlace) return aHasPlace - bHasPlace;
+  const aAcc = numberPayload(a.payload, "accuracy") ?? Number.POSITIVE_INFINITY;
+  const bAcc = numberPayload(b.payload, "accuracy") ?? Number.POSITIVE_INFINITY;
+  if (aAcc !== bAcc) return aAcc - bAcc;
+  return Date.parse(a.occurredAt) - Date.parse(b.occurredAt);
+}
+
+
+function shouldUploadLocationUpdate(raw: AmbientRawEvent, previous: AmbientRawEvent): boolean {
+  const rawPlace = placeLabel(raw.payload);
+  const previousPlace = placeLabel(previous.payload);
+  if (rawPlace && previousPlace && rawPlace !== previousPlace) return true;
+  if (!previousPlace && rawPlace) return true;
+  const rawLat = numberPayload(raw.payload, "latitude");
+  const rawLng = numberPayload(raw.payload, "longitude");
+  const prevLat = numberPayload(previous.payload, "latitude");
+  const prevLng = numberPayload(previous.payload, "longitude");
+  if (rawLat !== null && rawLng !== null && prevLat !== null && prevLng !== null) {
+    if (distanceMeters(rawLat, rawLng, prevLat, prevLng) >= 150) return true;
+  }
+  return Date.parse(raw.occurredAt) - Date.parse(previous.occurredAt) >= 60 * 60_000;
+}
+
+function distanceMeters(aLat: number, aLng: number, bLat: number, bLng: number): number {
+  const toRad = (value: number) => (value * Math.PI) / 180;
+  const earth = 6_371_000;
+  const dLat = toRad(bLat - aLat);
+  const dLng = toRad(bLng - aLng);
+  const lat1 = toRad(aLat);
+  const lat2 = toRad(bLat);
+  const h = Math.sin(dLat / 2) ** 2
+    + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * earth * Math.asin(Math.min(1, Math.sqrt(h)));
 }

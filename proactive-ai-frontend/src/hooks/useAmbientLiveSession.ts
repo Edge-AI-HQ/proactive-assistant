@@ -3,11 +3,17 @@ import type { PluginListenerHandle } from "@capacitor/core";
 import { isNative } from "@/lib/platform";
 import {
   appendTranscript,
+  candidateWindowsToLiveSessionContextItems,
   liveSessionDataToSession,
   LIVE_SCENARIOS,
   type LiveSession,
   type LiveSessionData,
 } from "@/services/ambient/live-session";
+import {
+  getAmbientTimelineStore,
+  todayLocalDate,
+  type AmbientCandidateWindow,
+} from "@/services/ambient/timeline";
 
 interface UseAmbientLiveSessionOptions {
   ambientOn: boolean;
@@ -29,6 +35,7 @@ export function useAmbientLiveSession({
 }: UseAmbientLiveSessionOptions): UseAmbientLiveSessionResult {
   const [liveIndex, setLiveIndex] = useState(0);
   const [liveSessionData, setLiveSessionData] = useState<LiveSessionData | null>(null);
+  const [candidateWindows, setCandidateWindows] = useState<AmbientCandidateWindow[]>([]);
   const [liveDismissed, setLiveDismissed] = useState(false);
   const [previewVisibleCount, setPreviewVisibleCount] = useState(1);
 
@@ -64,9 +71,46 @@ export function useAmbientLiveSession({
     };
   }, [ambientOn]);
 
+  useEffect(() => {
+    if (!ambientOn || !isNative) {
+      setCandidateWindows([]);
+      return;
+    }
+
+    let cancelled = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
+
+    const refreshWindows = async () => {
+      try {
+        const store = getAmbientTimelineStore();
+        await store.init();
+        const windows = await store.listCandidateWindows({
+          localDate: todayLocalDate(),
+          limit: 50,
+        });
+        if (!cancelled) setCandidateWindows(windows);
+      } catch {
+        // Keep transcript-driven Live Session available if timeline storage is unavailable.
+      }
+    };
+
+    void refreshWindows();
+    interval = setInterval(() => void refreshWindows(), 5000);
+
+    return () => {
+      cancelled = true;
+      if (interval) clearInterval(interval);
+    };
+  }, [ambientOn]);
+
+  const contextItems = useMemo(
+    () => candidateWindowsToLiveSessionContextItems(candidateWindows),
+    [candidateWindows],
+  );
+
   const realSession = useMemo(
-    () => liveSessionDataToSession(ambientOn, liveSessionData),
-    [ambientOn, liveSessionData],
+    () => liveSessionDataToSession(ambientOn, liveSessionData, contextItems),
+    [ambientOn, liveSessionData, contextItems],
   );
 
   const session = ambientOn && !liveDismissed
@@ -84,13 +128,13 @@ export function useAmbientLiveSession({
 
   useEffect(() => {
     setPreviewVisibleCount(1);
-  }, [liveIndex, ambientOn, liveDismissed, liveSessionData?.captureSessionId]);
+  }, [liveIndex, ambientOn, liveDismissed, liveSessionData?.captureSessionId, realSession?.startedAt]);
 
   useEffect(() => {
-    if (realSession && liveSessionData) {
-      setPreviewVisibleCount(liveSessionData.messages.length);
+    if (realSession) {
+      setPreviewVisibleCount(realSession.assists.length);
     }
-  }, [realSession, liveSessionData]);
+  }, [realSession]);
 
   useEffect(() => {
     if (!session) return;

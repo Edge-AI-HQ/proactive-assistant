@@ -37,6 +37,7 @@ def test_normalize_sync_mode():
 def test_resolve_policy_known_kinds():
     assert resolve_policy("moment").mode == "signal_only"
     assert resolve_policy("ambient.timeline_event").mode == "signal_only"
+    assert resolve_policy("ambient.candidate_window").mode == "signal_only"
     assert resolve_policy("app_inventory").mode == "dual"
     assert resolve_policy("health.observation").mode == "raw_only"
 
@@ -187,7 +188,7 @@ def test_known_kinds_are_a_complete_minimum_set():
     expected = {
         "session_summary", "moment", "attention_item",
         "ambient.image_chunk", "ambient.audio_chunk", "ambient.video_chunk",
-        "ambient.timeline_event",
+        "ambient.timeline_event", "ambient.candidate_window",
         "app_inventory", "app_inventory_bootstrap", "app_inventory_snapshot",
         "contact_directory", "contact_bootstrap", "contact_directory_snapshot",
         "health.observation",

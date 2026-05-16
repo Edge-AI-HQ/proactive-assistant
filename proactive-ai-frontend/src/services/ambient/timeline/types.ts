@@ -1,4 +1,6 @@
 export const AMBIENT_TIMELINE_KIND = "ambient.timeline_event";
+export const AMBIENT_CANDIDATE_WINDOW_KIND = "ambient.candidate_window";
+export const AMBIENT_CANDIDATE_WINDOW_SCHEMA_VERSION = "ambient_candidate_window_upload.v1";
 export const AMBIENT_TIMELINE_SCHEMA_VERSION = "ambient_timeline_event.v1";
 
 export type AmbientSourceType =
@@ -25,6 +27,7 @@ export type AmbientWindowType =
   | "transcript_session"
   | "sound_context"
   | "motion_state_run"
+  | "location_update"
   | "workout"
   | "focus_block";
 
@@ -152,6 +155,15 @@ export interface AmbientTimelineStore {
     localDate?: string;
     sourceType?: AmbientSourceType;
     eventType?: string;
+    limit?: number;
+  }): Promise<AmbientRawEvent[]>;
+  getRawEventsByRefs(refs: AmbientRawRef[]): Promise<AmbientRawEvent[]>;
+  listRawEventsInRange(filter: {
+    localDate: string;
+    sourceType?: AmbientSourceType;
+    eventType?: string;
+    start: string;
+    end: string;
     limit?: number;
   }): Promise<AmbientRawEvent[]>;
   upsertCandidateWindow(

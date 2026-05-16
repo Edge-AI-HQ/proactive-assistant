@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { MemoryOutboxStore } from "./outbox";
 import { AmbientSyncScheduler } from "./sync-scheduler";
-import { AMBIENT_TIMELINE_KIND } from "./timeline";
+import { AMBIENT_CANDIDATE_WINDOW_KIND, AMBIENT_TIMELINE_KIND } from "./timeline";
 
 vi.mock("./ingest-bridge", () => ({
   ingestBatch: vi.fn(),
@@ -53,6 +53,37 @@ describe("AmbientSyncScheduler", () => {
     expect(result.synced).toBe(1);
     expect(result.failed).toBe(0);
     expect(result.syncedItems).toHaveLength(1);
+    expect(await outbox.count()).toBe(0);
+  });
+
+
+
+  test("uploads ambient candidate window records", async () => {
+    mockedIngestBatch.mockResolvedValueOnce({
+      ok: true,
+      accepted: 1,
+      inserted: 1,
+      ignored: 0,
+      results: [{ id: "window-1", dedupe_key: "window:1", status: "inserted" }],
+    });
+    const outbox = new MemoryOutboxStore();
+    await outbox.enqueue([
+      {
+        id: "window-1",
+        kind: AMBIENT_CANDIDATE_WINDOW_KIND,
+        title: "Ambient transcript_session window",
+        summary: "Transcript and location context",
+        dedupe_key: "window:1",
+      },
+    ]);
+    const scheduler = new AmbientSyncScheduler(outbox);
+
+    const result = await scheduler.drain();
+
+    expect(mockedIngestBatch).toHaveBeenCalledWith([expect.objectContaining({
+      kind: AMBIENT_CANDIDATE_WINDOW_KIND,
+    })]);
+    expect(result.synced).toBe(1);
     expect(await outbox.count()).toBe(0);
   });
 

@@ -1,9 +1,63 @@
 import type { PersonalSignalInput } from "@/lib/devices";
-import type { AmbientTimelineEvent } from "./types";
+import type { AmbientCandidateWindow, AmbientSourceType, AmbientTimelineEvent } from "./types";
 import {
+  AMBIENT_CANDIDATE_WINDOW_KIND,
+  AMBIENT_CANDIDATE_WINDOW_SCHEMA_VERSION,
   AMBIENT_TIMELINE_KIND,
   AMBIENT_TIMELINE_SCHEMA_VERSION,
 } from "./types";
+
+
+export interface AmbientWindowSourcePayload {
+  source_type: AmbientSourceType;
+  event_type: string;
+  occurred_at: string;
+  ended_at?: string;
+  confidence?: number;
+  relation: "window_raw_ref" | "nearby_context";
+  payload: Record<string, unknown>;
+}
+
+export interface CandidateWindowSignalContext {
+  sourcePayloads: AmbientWindowSourcePayload[];
+  contextHash: string;
+}
+
+export function candidateWindowToSignal(
+  window: AmbientCandidateWindow,
+  context: CandidateWindowSignalContext,
+): PersonalSignalInput {
+  const availableAt = window.endedAt ?? window.startedAt;
+  return {
+    id: `ambient_candidate_window_${safeIdPart(window.id)}_${safeIdPart(context.contextHash)}`,
+    kind: AMBIENT_CANDIDATE_WINDOW_KIND,
+    title: `Ambient ${window.windowType} window`,
+    summary: window.compactContext,
+    occurred_at: window.startedAt,
+    available_at: availableAt,
+    salience: window.salienceHint,
+    confidence: window.confidenceHint,
+    dedupe_key: `ambient:candidate_window:${window.localDate}:${window.id}:${context.contextHash}`,
+    payload: {
+      schema_version: AMBIENT_CANDIDATE_WINDOW_SCHEMA_VERSION,
+      local_window_id: window.id,
+      window_type: window.windowType,
+      source_types: window.sourceTypes,
+      privacy: window.privacyHint,
+      local_date: window.localDate,
+      started_at: window.startedAt,
+      ...(window.endedAt ? { ended_at: window.endedAt } : {}),
+      timezone: window.timezone,
+      compact_context: window.compactContext,
+      confidence_hint: window.confidenceHint,
+      salience_hint: window.salienceHint,
+      generation_policy: window.generationPolicy,
+      window_status: window.status,
+      raw_ref_count: window.rawRefs.length,
+      source_payloads: context.sourcePayloads,
+    },
+  };
+}
 
 export function timelineEventToSignal(
   event: AmbientTimelineEvent,
@@ -44,4 +98,9 @@ export function localEventIdsFromSignals(
     const id = item.payload?.local_event_id;
     return typeof id === "string" && id.length > 0 ? [id] : [];
   });
+}
+
+
+function safeIdPart(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]/g, "_");
 }

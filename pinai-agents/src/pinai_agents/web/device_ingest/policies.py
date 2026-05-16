@@ -263,6 +263,7 @@ DEVICE_INGEST_POLICIES: dict[str, DeviceIngestPolicy] = {
     "ambient.audio_chunk": _SIGNAL_POLICY,
     "ambient.video_chunk": _SIGNAL_POLICY,
     "ambient.timeline_event": _SIGNAL_POLICY,
+    "ambient.candidate_window": _SIGNAL_POLICY,
     "app_inventory": _APP_POLICY,
     "app_inventory_bootstrap": _APP_POLICY,
     "app_inventory_snapshot": _APP_POLICY,
