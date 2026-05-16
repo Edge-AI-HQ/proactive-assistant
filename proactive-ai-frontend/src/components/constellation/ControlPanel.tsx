@@ -17,6 +17,7 @@ import { Slider } from "@/components/ui/slider";
 import { isNative } from "@/lib/platform";
 import AmbientSourceControlsPanel from "@/components/AmbientSourceControlsPanel";
 import GoalsView from "./GoalsView";
+import { VoiceButton } from "@/components/voice";
 
 // AmbientModelsPanel pulls in @pin/capacitor-ambient-ai, which is
 // rollup-external for the web build. Load it lazily and only mount on
@@ -119,7 +120,6 @@ export default function ControlPanel() {
   const [draftPrompt, setDraftPrompt] = useState(INITIAL_SYSTEM_PROMPT);
   const [isEditingPrompt, setIsEditingPrompt] = useState(false);
   const [requestInput, setRequestInput] = useState("");
-  const [isRecording, setIsRecording] = useState(false);
   const [personality, setPersonality] = useState<Record<DimensionId, number>>({
     proactivity: 1, communication: 1, focus: 1, intervention: 1,
   });
@@ -263,21 +263,16 @@ export default function ControlPanel() {
                 rows={3}
                 className="flex-1 text-[13px] text-foreground placeholder:text-foreground/35 bg-foreground/[0.03] border border-foreground/10 rounded-xl px-3 py-2 outline-none focus:border-foreground/25 transition-colors resize-none"
               />
-              <button
-                onClick={() => setIsRecording((r) => !r)}
-                className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors ${
-                  isRecording
-                    ? "bg-[hsl(304_75%_63%)] text-white"
-                    : "bg-foreground/[0.06] text-foreground/60 hover:bg-foreground/[0.1]"
-                }`}
-                aria-label="Voice input"
-              >
-                <Mic size={16} strokeWidth={1.8} />
-              </button>
+              <VoiceButton
+                prefill={requestInput}
+                onUpdate={setRequestInput}
+                size={16}
+                className="w-10 h-10 rounded-xl flex-shrink-0 bg-foreground/[0.06] text-foreground/60 hover:bg-foreground/[0.1]"
+              />
             </div>
             <div className="flex items-center justify-between">
               <p className="text-[10px] text-foreground/40">
-                {isRecording ? "● listening — tap mic to stop" : "Type or tap the mic to speak"}
+                Type or tap the mic to speak
               </p>
               <button
                 disabled={!requestInput.trim()}

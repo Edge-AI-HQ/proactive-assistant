@@ -65,6 +65,12 @@ model_list:
       api_key: os.environ/ELEVENLABS_API_KEY
 
   # OpenAI
+  - model_name: gpt-4o-transcribe
+    litellm_params:
+      model: gpt-4o-transcribe
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: audio_transcription
   - model_name: gpt-4o-mini-transcribe
     litellm_params:
       model: gpt-4o-mini-transcribe

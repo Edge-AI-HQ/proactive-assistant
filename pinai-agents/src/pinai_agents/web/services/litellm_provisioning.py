@@ -22,6 +22,7 @@ a transient outage rather than a hard signup blocker.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 
 from psycopg_pool import AsyncConnectionPool
 
@@ -53,13 +54,22 @@ def _key_alias(internal_user_id: int) -> str:
     return f"pinai-{internal_user_id}"
 
 
-def _allowed_models() -> list[str]:
+def _allowed_models(required_models: Iterable[str] = ()) -> list[str]:
     s = get_web_settings()
     raw = s.litellm_allowed_models or ""
-    return [m.strip() for m in raw.split(",") if m.strip()]
+    configured = [m.strip() for m in raw.split(",") if m.strip()]
+    if not configured:
+        return []
+    seen = set(configured)
+    out = list(configured)
+    for model in required_models:
+        if model not in seen:
+            out.append(model)
+            seen.add(model)
+    return out
 
 
-async def _key_supports_generator(user: User) -> bool:
+async def _key_supports_models(user: User, required_models: set[str]) -> bool:
     key = user.litellm_virtual_key or ""
     if not key.startswith(LITELLM_KEY_PREFIX):
         return False
@@ -83,7 +93,7 @@ async def _key_supports_generator(user: User) -> bool:
             user.id, e,
         )
         return True
-    missing = sorted(GENERATOR_REQUIRED_MODELS - models)
+    missing = sorted(required_models - models)
     if missing:
         logger.warning(
             "litellm: rotating stale virtual key user=%d missing_models=%s",
@@ -93,7 +103,12 @@ async def _key_supports_generator(user: User) -> bool:
     return True
 
 
-async def _provision_and_persist(pool: AsyncConnectionPool, user: User) -> str:
+async def _provision_and_persist(
+    pool: AsyncConnectionPool,
+    user: User,
+    *,
+    required_models: set[str] | None = None,
+) -> str:
     """Mint a fresh sk-* key for `user`, persist on users.litellm_virtual_key,
     and return the raw key. Cleans up any stale key bound to the same alias
     so we don't accumulate orphans on retries."""
@@ -123,7 +138,7 @@ async def _provision_and_persist(pool: AsyncConnectionPool, user: User) -> str:
         budget_duration=s.litellm_default_budget_duration,
         rpm_limit=s.litellm_default_rpm_limit,
         tpm_limit=s.litellm_default_tpm_limit,
-        models=_allowed_models(),
+        models=_allowed_models(required_models or ()),
         metadata={"source": "pinai-agents", "internal_user_id": user.id},
     )
 
@@ -153,7 +168,9 @@ async def provision_user_litellm_key(
     ):
         return user
     try:
-        raw_key = await _provision_and_persist(pool, user)
+        raw_key = await _provision_and_persist(
+            pool, user, required_models=GENERATOR_REQUIRED_MODELS,
+        )
     except Exception as e:
         logger.warning(
             "litellm: first-touch provisioning failed user=%d (will lazy-retry): %s",
@@ -170,14 +187,18 @@ async def provision_user_litellm_key(
 
 
 async def ensure_user_litellm_key(
-    pool: AsyncConnectionPool, user: User,
+    pool: AsyncConnectionPool,
+    user: User,
+    *,
+    required_models: set[str] | None = None,
 ) -> User:
     """Lazy recovery — called from /chat-stream/send when the user row's
     virtual_key is NULL. Raises on LiteLLM failure so the request sees
     a clean 502 rather than a silent hang."""
-    if await _key_supports_generator(user):
+    models = required_models or GENERATOR_REQUIRED_MODELS
+    if await _key_supports_models(user, models):
         return user
-    raw_key = await _provision_and_persist(pool, user)
+    raw_key = await _provision_and_persist(pool, user, required_models=models)
     return User(
         id=user.id,
         supabase_user_id=user.supabase_user_id,

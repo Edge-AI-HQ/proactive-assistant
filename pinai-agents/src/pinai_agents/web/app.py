@@ -64,6 +64,7 @@ from .routes.ui.stubs import (
     crystallize_router as ui_crystallize_router,
 )
 from .routes.ui.tasks import router as ui_tasks_router
+from .routes.ui.voice import router as ui_voice_router
 from .scheduler.tick_loop import tick_loop
 
 logger = logging.getLogger(__name__)
@@ -179,6 +180,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_payment_router)
     app.include_router(ui_jwt_revoke_router)
     app.include_router(ui_browser_router)
+    app.include_router(ui_voice_router)
 
     # ── /api/agent/* (sandbox / chat, HS256 JWT) ──
     app.include_router(agent_memory_router)

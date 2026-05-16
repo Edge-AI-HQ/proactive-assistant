@@ -30,6 +30,7 @@ import TodoPanel from "./TodoPanel";
 import BrowserPanel from "../browser-view/BrowserPanel";
 import type { SheetStage } from "../browser-view/BrowserView";
 import { useBrowserSession } from "@/hooks/useBrowserSession";
+import { VoiceButton } from "@/components/voice";
 
 interface MainChatViewProps {
   sessionKey: string;
@@ -583,6 +584,12 @@ function ChatComposer({
             <ChevronDown size={18} strokeWidth={1.8} />
           </button>
         )}
+        <VoiceButton
+          prefill={text}
+          onUpdate={setText}
+          size={18}
+          className="rounded-xl bg-foreground/5 text-foreground/55 hover:bg-foreground/10 hover:text-foreground/75"
+        />
         <button
           type="button"
           onClick={() => void submit()}

@@ -30,7 +30,7 @@ export class BrowserSpeechEngine implements VoiceEngine {
     const recognition = new SpeechRecognitionAPI();
     recognition.continuous = this.continuous;
     recognition.interimResults = true;
-    recognition.lang = this.lang;
+    if (this.lang) recognition.lang = this.lang;
 
     recognition.onresult = (event) => {
       let transcript = "";

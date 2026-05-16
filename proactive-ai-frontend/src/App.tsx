@@ -91,7 +91,7 @@ export default function App() {
 
   return (
     <MemoryRouter>
-      <VoiceProvider>
+      <VoiceProvider transcriptionLanguage={userSettings?.generationLanguage ?? "zh-Hans"}>
         <ConstellationLayout />
       </VoiceProvider>
     </MemoryRouter>

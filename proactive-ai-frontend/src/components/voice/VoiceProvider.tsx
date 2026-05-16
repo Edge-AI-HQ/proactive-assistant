@@ -3,9 +3,12 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Check, Mic, X } from "lucide-react";
 
 import { BrowserSpeechEngine } from "./BrowserSpeechEngine";
+import { GptTranscriptionEngine } from "./GptTranscriptionEngine";
+import { normalizeVoiceLanguage } from "./language";
 import type {
   StartCaptureOptions,
   VoiceContextValue,
+  VoiceEngine,
   VoiceEngineHandle,
   VoiceProviderProps,
 } from "./types";
@@ -28,28 +31,53 @@ const PULSE_PALETTES: ReadonlyArray<readonly [string, string, string]> = [
   ["rgba(99,102,241,0.4)", "rgba(225,92,230,0.35)", "rgba(244,63,94,0.28)"],
 ];
 
-const defaultEngine = new BrowserSpeechEngine();
-
-export function VoiceProvider({ children, engine = defaultEngine }: VoiceProviderProps) {
+export function VoiceProvider({ children, engine, transcriptionLanguage }: VoiceProviderProps) {
   const [isCapturing, setIsCapturing] = useState(false);
+  const [isFinalizing, setIsFinalizing] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [pulseColorIndex, setPulseColorIndex] = useState(0);
 
   const handleRef = useRef<VoiceEngineHandle | null>(null);
   const optsRef = useRef<StartCaptureOptions | null>(null);
   const transcriptRef = useRef("");
+  const captureSeqRef = useRef(0);
+  const voiceLanguage = useMemo(
+    () => normalizeVoiceLanguage(transcriptionLanguage),
+    [transcriptionLanguage],
+  );
+  const activeEngine = useMemo<VoiceEngine>(
+    () => engine ?? new GptTranscriptionEngine({
+      language: voiceLanguage.openai,
+      fallback: new BrowserSpeechEngine({ lang: voiceLanguage.browser }),
+    }),
+    [engine, voiceLanguage.browser, voiceLanguage.openai],
+  );
 
-  const finishCapture = useCallback((commit: boolean) => {
-    try {
-      handleRef.current?.stop();
-    } finally {
-      handleRef.current = null;
-    }
+  const finishCapture = useCallback(async (commit: boolean) => {
+    const handle = handleRef.current;
     const opts = optsRef.current;
-    const finalText = transcriptRef.current;
-    optsRef.current = null;
-    setIsCapturing(false);
-    if (commit && opts?.onResult) opts.onResult(finalText);
+    captureSeqRef.current += 1;
+    handleRef.current = null;
+    setIsFinalizing(true);
+    let completed = true;
+
+    try {
+      if (commit) {
+        await handle?.stop();
+      } else {
+        await (handle?.cancel ? handle.cancel() : handle?.stop());
+      }
+    } catch {
+      completed = false;
+      // The engine has already surfaced the error via onError. Close the
+      // overlay cleanly so the input is left in its last known state.
+    } finally {
+      const finalText = transcriptRef.current;
+      optsRef.current = null;
+      setIsCapturing(false);
+      setIsFinalizing(false);
+      if (commit && completed && opts?.onResult) opts.onResult(finalText);
+    }
   }, []);
 
   const startCapture = useCallback(
@@ -57,17 +85,21 @@ export function VoiceProvider({ children, engine = defaultEngine }: VoiceProvide
       // Global singleton — if a previous capture is still alive, drop it silently.
       if (handleRef.current) {
         try {
-          handleRef.current.stop();
+          if (handleRef.current.cancel) void handleRef.current.cancel();
+          else void handleRef.current.stop();
         } catch {
           // ignore
         }
         handleRef.current = null;
       }
+      const seq = captureSeqRef.current + 1;
+      captureSeqRef.current = seq;
       optsRef.current = opts ?? null;
       transcriptRef.current = opts?.prefill ?? "";
       setTranscript(transcriptRef.current);
       setPulseColorIndex(Math.floor(Math.random() * PULSE_PALETTES.length));
       setIsCapturing(true);
+      setIsFinalizing(false);
 
       const apply = (text: string) => {
         transcriptRef.current = text;
@@ -75,7 +107,7 @@ export function VoiceProvider({ children, engine = defaultEngine }: VoiceProvide
         opts?.onUpdate?.(text);
       };
 
-      const result = engine.start({
+      const result = activeEngine.start({
         onPartial: apply,
         onFinal: apply,
         onError: () => {
@@ -85,6 +117,11 @@ export function VoiceProvider({ children, engine = defaultEngine }: VoiceProvide
       if (result instanceof Promise) {
         result
           .then((h) => {
+            if (captureSeqRef.current !== seq) {
+              if (h.cancel) void h.cancel();
+              else void h.stop();
+              return;
+            }
             handleRef.current = h;
           })
           .catch(() => {
@@ -94,7 +131,7 @@ export function VoiceProvider({ children, engine = defaultEngine }: VoiceProvide
         handleRef.current = result;
       }
     },
-    [engine],
+    [activeEngine],
   );
 
   const value = useMemo<VoiceContextValue>(
@@ -116,7 +153,7 @@ export function VoiceProvider({ children, engine = defaultEngine }: VoiceProvide
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.3 }}
-              onClick={() => finishCapture(false)}
+              onClick={() => void finishCapture(false)}
               className="fixed inset-0 z-[9998]"
               style={{
                 backdropFilter: "blur(8px)",
@@ -162,7 +199,7 @@ export function VoiceProvider({ children, engine = defaultEngine }: VoiceProvide
                   transition={{ duration: 2, repeat: Infinity, ease: "easeInOut", delay: 0.7 }}
                 />
                 <button
-                  onClick={() => finishCapture(false)}
+                  onClick={() => void finishCapture(false)}
                   className="relative rounded-full bg-foreground flex items-center justify-center text-background shadow-xl"
                   style={{ width: 60, height: 60 }}
                   aria-label="Stop listening"
@@ -171,17 +208,19 @@ export function VoiceProvider({ children, engine = defaultEngine }: VoiceProvide
                 </button>
               </div>
               <p className="text-[14px] text-foreground/60 min-h-[22px] font-medium mb-5 px-8 text-center">
-                {transcript || "Listening..."}
+                {isFinalizing ? "Transcribing..." : transcript || "Listening..."}
               </p>
               <div className="flex items-center gap-4">
                 <button
-                  onClick={() => finishCapture(false)}
+                  onClick={() => void finishCapture(false)}
+                  disabled={isFinalizing}
                   className="text-[13px] text-foreground/60 hover:text-foreground/80 transition-colors flex items-center gap-1.5 px-5 py-1.5 rounded-full border border-foreground/12 bg-foreground/5"
                 >
                   <X size={13} strokeWidth={2} /> Cancel
                 </button>
                 <button
-                  onClick={() => finishCapture(true)}
+                  onClick={() => void finishCapture(true)}
+                  disabled={isFinalizing}
                   className="flex items-center gap-1.5 px-5 py-1.5 rounded-full bg-foreground text-background text-[13px] font-medium hover:bg-foreground/80 transition-colors"
                 >
                   <Check size={13} strokeWidth={2.5} /> Done

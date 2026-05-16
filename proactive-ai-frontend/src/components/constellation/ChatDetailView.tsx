@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, ArrowRight, Check, Send, Loader2, ChevronUp, Zap, Sprout, Briefcase, TrendingUp, Heart, BookOpen, Sparkles, Mic, X, Pause, Play, Pencil, MessageSquarePlus, ThumbsUp, ThumbsDown, Mail, Calendar, Globe, FileSearch, Settings, Hand, Database, FileText, Bell, DollarSign, Users, MessageSquare, Search, Brain, Lock, type LucideIcon } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Send, Loader2, ChevronUp, Zap, Sprout, Briefcase, TrendingUp, Heart, BookOpen, Sparkles, X, Pause, Play, Pencil, MessageSquarePlus, ThumbsUp, ThumbsDown, Mail, Calendar, Globe, FileSearch, Settings, Hand, Database, FileText, Bell, DollarSign, Users, MessageSquare, Search, Brain, Lock, type LucideIcon } from "lucide-react";
+import { VoiceButton } from "@/components/voice";
 import { DrawerDetailBody } from "./CardDrawerDetail";
 
 /* --------- Tool icon registry: brand logos when available, else mono icons --------- */
@@ -472,63 +473,12 @@ export default function ChatDetailView({ card, onBack, mode = "confirm" }: ChatD
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [cardDrawerOpen, setCardDrawerOpen] = useState(false);
-  const [isListening, setIsListening] = useState(false);
-  const [voiceTranscript, setVoiceTranscript] = useState("");
-  const [pulseColorIndex, setPulseColorIndex] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
   const pausedRef = useRef(false);
   useEffect(() => { pausedRef.current = isPaused; }, [isPaused]);
   // Set true when the user takes over (Steer-send) so the initial tick() stops emitting.
   const initialCancelledRef = useRef(false);
-  const recognitionRef = useRef<any>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-
-  const stopListening = useCallback(() => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-      recognitionRef.current = null;
-    }
-    setIsListening(false);
-  }, []);
-
-  const startListening = useCallback(() => {
-    setIsListening(true);
-    setVoiceTranscript("");
-    setPulseColorIndex(Math.floor(Math.random() * 5));
-
-    const SpeechRecognitionAPI = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognitionAPI) {
-      // No API support — still show voice UI with a message
-      setVoiceTranscript("Speech recognition not supported in this browser");
-      return;
-    }
-    try {
-      const recognition = new SpeechRecognitionAPI();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = "zh-CN";
-      recognition.onresult = (event: any) => {
-        let transcript = "";
-        for (let i = 0; i < event.results.length; i++) {
-          transcript += event.results[i][0].transcript;
-        }
-        setVoiceTranscript(transcript);
-        setInputValue(transcript);
-      };
-      recognition.onerror = (e: any) => {
-        console.log("Speech recognition error:", e.error);
-        setVoiceTranscript("Listening...");
-      };
-      recognition.onend = () => {
-        recognitionRef.current = null;
-      };
-      recognitionRef.current = recognition;
-      recognition.start();
-    } catch (err) {
-      console.log("Speech recognition failed to start:", err);
-      setVoiceTranscript("Could not start speech recognition");
-    }
-  }, []);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -1147,106 +1097,6 @@ export default function ChatDetailView({ card, onBack, mode = "confirm" }: ChatD
         })()}
       </div>
 
-      {/* Voice mode overlay */}
-      <AnimatePresence>
-        {isListening && (
-          <>
-          <motion.div
-            key="voice-backdrop"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.3 }}
-            onClick={stopListening}
-            className="absolute inset-0 z-20"
-            style={{
-              backdropFilter: "blur(8px)",
-              WebkitBackdropFilter: "blur(8px)",
-              background: "rgba(0,0,0,0.05)",
-            }}
-          />
-          <motion.div
-            key="voice-overlay"
-            initial={{ y: "100%" }}
-            animate={{ y: 0 }}
-            exit={{ y: "100%" }}
-            transition={{ duration: 0.35, ease: [0.32, 0.72, 0, 1] }}
-            className="absolute bottom-0 left-0 right-0 z-30 flex flex-col items-center justify-center"
-            style={{
-              height: "33vh",
-              background: "rgba(255,255,255,0.7)",
-              backdropFilter: "blur(32px) saturate(1.4)",
-              WebkitBackdropFilter: "blur(32px) saturate(1.4)",
-              borderRadius: "2rem 2rem 0 0",
-              borderBottom: "1px solid rgba(255,255,255,0.4)",
-              borderLeft: "1px solid rgba(255,255,255,0.3)",
-              borderRight: "1px solid rgba(255,255,255,0.3)",
-            }}
-          >
-            {/* Pulsing mic — colorful rings */}
-            <div className="relative flex items-center justify-center mb-4" style={{ width: 80, height: 80 }}>
-              {(() => {
-                const palettes = [
-                  ["rgba(225,92,230,0.4)", "rgba(139,92,246,0.35)", "rgba(59,130,246,0.28)"],
-                  ["rgba(251,146,60,0.4)", "rgba(244,63,94,0.35)", "rgba(168,85,247,0.28)"],
-                  ["rgba(52,211,153,0.4)", "rgba(59,130,246,0.35)", "rgba(139,92,246,0.28)"],
-                  ["rgba(244,63,94,0.4)", "rgba(251,146,60,0.35)", "rgba(234,179,8,0.28)"],
-                  ["rgba(99,102,241,0.4)", "rgba(225,92,230,0.35)", "rgba(244,63,94,0.28)"],
-                ];
-                const colors = palettes[pulseColorIndex % palettes.length];
-                return (
-                  <>
-                    <motion.div
-                      className="absolute rounded-full"
-                      style={{ width: 80, height: 80, background: colors[0] }}
-                      animate={{ scale: [1, 1.8, 1], opacity: [0.6, 0, 0.6] }}
-                      transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
-                    />
-                    <motion.div
-                      className="absolute rounded-full"
-                      style={{ width: 80, height: 80, background: colors[1] }}
-                      animate={{ scale: [1, 1.5, 1], opacity: [0.5, 0, 0.5] }}
-                      transition={{ duration: 2, repeat: Infinity, ease: "easeInOut", delay: 0.35 }}
-                    />
-                    <motion.div
-                      className="absolute rounded-full"
-                      style={{ width: 80, height: 80, background: colors[2] }}
-                      animate={{ scale: [1, 1.25, 1], opacity: [0.4, 0, 0.4] }}
-                      transition={{ duration: 2, repeat: Infinity, ease: "easeInOut", delay: 0.7 }}
-                    />
-                  </>
-                );
-              })()}
-              <button
-                onClick={stopListening}
-                className="relative rounded-full bg-foreground flex items-center justify-center text-background shadow-xl"
-                style={{ width: 60, height: 60 }}
-              >
-                <Mic size={22} strokeWidth={1.8} />
-              </button>
-            </div>
-            <p className="text-[14px] text-foreground/60 min-h-[22px] font-medium mb-5 px-8 text-center">
-              {voiceTranscript || "Listening..."}
-            </p>
-            <div className="flex items-center gap-4">
-              <button
-                onClick={stopListening}
-                className="text-[13px] text-foreground/60 hover:text-foreground/80 transition-colors flex items-center gap-1.5 px-5 py-1.5 rounded-full border border-foreground/12 bg-foreground/5"
-              >
-                <X size={13} strokeWidth={2} /> Cancel
-              </button>
-              <button
-                onClick={stopListening}
-                className="flex items-center gap-1.5 px-5 py-1.5 rounded-full bg-foreground text-background text-[13px] font-medium hover:bg-foreground/80 transition-colors"
-              >
-                <Check size={13} strokeWidth={2.5} /> Done
-              </button>
-            </div>
-          </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-
       {/* Action toolbar — varies by task state */}
       {taskState !== "dismissed" && (actionMessages.length > 0 || summaryMsg || askMsg) && (
         <div className="px-4 pt-2">
@@ -1349,13 +1199,7 @@ export default function ChatDetailView({ card, onBack, mode = "confirm" }: ChatD
                 placeholder="Steer the task — type your guidance..."
                 className="flex-1 bg-transparent text-[15px] text-foreground placeholder:text-foreground/35 outline-none"
               />
-              <button
-                onClick={startListening}
-                className="w-8 h-8 rounded-full bg-foreground/10 flex items-center justify-center text-foreground/60 hover:bg-foreground/15 hover:text-foreground transition-colors"
-                aria-label="Voice input"
-              >
-                <Mic size={17} strokeWidth={2} />
-              </button>
+              <VoiceButton prefill={inputValue} onUpdate={setInputValue} />
               <button
                 onClick={handleSendInput}
                 disabled={!inputValue.trim()}
@@ -1454,4 +1298,3 @@ function ChatCardDrawerBody({ card }: { card: ChatCard; sources: string[] }) {
     </div>
   );
 }
-
