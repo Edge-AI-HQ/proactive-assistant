@@ -3,7 +3,7 @@ import { describe, expect, test } from "vitest";
 import { LocalAmbientTimelinePipeline } from "./pipeline";
 import type { AmbientTimelineModelBridge } from "./models";
 import { MemoryTimelineStore } from "./store";
-import { AMBIENT_TIMELINE_KIND } from "./types";
+import { AMBIENT_CANDIDATE_WINDOW_KIND, AMBIENT_TIMELINE_KIND } from "./types";
 
 function makePipeline(): {
   store: MemoryTimelineStore;
@@ -157,7 +157,15 @@ describe("LocalAmbientTimelinePipeline", () => {
       dedupe_key: "sound:music:2026-05-15T10:00:00.000Z",
     });
 
-    expect(signals).toEqual([]);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.kind).toBe(AMBIENT_CANDIDATE_WINDOW_KIND);
+    expect(signals[0]?.payload).toMatchObject({
+      window_type: "sound_context",
+      source_payloads: [expect.objectContaining({
+        source_type: "sound",
+        payload: expect.objectContaining({ label: "music" }),
+      })],
+    });
     expect(await store.listTimelineEvents("2026-05-15", { visibleOnly: true })).toEqual([]);
     const [window] = await store.listCandidateWindows({
       localDate: "2026-05-15",
@@ -192,7 +200,15 @@ describe("LocalAmbientTimelinePipeline", () => {
       dedupe_key: "motion:walking:2026-05-15T08:00:00.000Z",
     });
 
-    expect(signals).toEqual([]);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.kind).toBe(AMBIENT_CANDIDATE_WINDOW_KIND);
+    expect(signals[0]?.payload).toMatchObject({
+      window_type: "motion_state_run",
+      source_payloads: [expect.objectContaining({
+        source_type: "motion",
+        payload: expect.objectContaining({ activity: "walking" }),
+      })],
+    });
     const [window] = await store.listCandidateWindows({
       localDate: "2026-05-15",
       windowType: "motion_state_run",
@@ -248,6 +264,117 @@ describe("LocalAmbientTimelinePipeline", () => {
     expect(transition?.summary).toContain("Motion signals matched the transition");
   });
 
+
+
+
+
+  test("uploads accepted location updates with POI payload subset", async () => {
+    const { store, pipeline } = makePipeline();
+
+    const first = await pipeline.ingestSignal({
+      kind: "device.location",
+      title: "Location",
+      summary: "Near Office",
+      occurred_at: "2026-05-15T09:00:00.000Z",
+      payload: {
+        latitude: 31.2,
+        longitude: 121.5,
+        accuracy: 18,
+        place: { label: "Office" },
+        heading: 90,
+        speed: 1.2,
+        localFilePath: "/private/tmp/location.json",
+      },
+      dedupe_key: "location:office:1",
+    });
+    const duplicate = await pipeline.ingestSignal({
+      kind: "device.location",
+      title: "Location",
+      summary: "Still Office",
+      occurred_at: "2026-05-15T09:02:00.000Z",
+      payload: { latitude: 31.20001, longitude: 121.50001, accuracy: 20, place: { label: "Office" } },
+      dedupe_key: "location:office:2",
+    });
+    const nextPlace = await pipeline.ingestSignal({
+      kind: "device.location",
+      title: "Location",
+      summary: "Near Gym",
+      occurred_at: "2026-05-15T10:20:00.000Z",
+      payload: { latitude: 31.25, longitude: 121.55, accuracy: 16, place: { label: "Gym" } },
+      dedupe_key: "location:gym:1",
+    });
+
+    expect(first).toHaveLength(1);
+    expect(first[0]?.kind).toBe(AMBIENT_CANDIDATE_WINDOW_KIND);
+    expect(first[0]?.payload).toMatchObject({
+      window_type: "location_update",
+      source_payloads: [expect.objectContaining({
+        source_type: "location",
+        payload: expect.objectContaining({
+          latitude: 31.2,
+          longitude: 121.5,
+          accuracy: 18,
+          place: { label: "Office" },
+        }),
+      })],
+    });
+    expect(JSON.stringify(first[0]?.payload)).not.toContain("localFilePath");
+    expect(JSON.stringify(first[0]?.payload)).not.toContain("heading");
+    expect(JSON.stringify(first[0]?.payload)).not.toContain("speed");
+    expect(duplicate).toEqual([]);
+    expect(nextPlace.map((signal) => signal.payload?.window_type)).toEqual(["location_update"]);
+    expect(await store.listTimelineEvents("2026-05-15", { visibleOnly: true })).toEqual([]);
+  });
+
+  test("uploads visit and transition candidate windows with source payload subsets", async () => {
+    const { pipeline } = makePipeline();
+
+    await pipeline.ingestSignal({
+      kind: "device.visit",
+      title: "Departed Office",
+      summary: "Departed Office",
+      occurred_at: "2026-05-15T08:05:00.000Z",
+      payload: { kind: "departure", place: { label: "Office" }, latitude: 31.2, longitude: 121.5 },
+      dedupe_key: "visit:office:departure:upload",
+    });
+    await pipeline.ingestSignal({
+      kind: "device.motion_segment",
+      title: "Motion: automotive",
+      summary: "automotive",
+      occurred_at: "2026-05-15T08:06:00.000Z",
+      payload: {
+        schema_version: "motion_segment.v1",
+        activity: "automotive",
+        started_at: "2026-05-15T08:06:00.000Z",
+        ended_at: "2026-05-15T08:20:00.000Z",
+        durationMs: 840_000,
+        localFilePath: "/private/tmp/motion.json",
+      },
+      dedupe_key: "motion:auto:transition:upload",
+    });
+    const signals = await pipeline.ingestSignal({
+      kind: "device.visit",
+      title: "Arrived Gym",
+      summary: "Arrived Gym",
+      occurred_at: "2026-05-15T08:24:00.000Z",
+      payload: { kind: "arrival", place: { label: "Gym" }, latitude: 31.25, longitude: 121.55 },
+      dedupe_key: "visit:gym:arrival:upload",
+    });
+
+    const candidateSignals = signals.filter((signal) => signal.kind === AMBIENT_CANDIDATE_WINDOW_KIND);
+    expect(candidateSignals.map((signal) => signal.payload?.window_type)).toEqual([
+      "visit_stay",
+      "transition",
+    ]);
+    const transition = candidateSignals.find((signal) => signal.payload?.window_type === "transition");
+    expect(transition?.payload?.source_payloads).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source_type: "visit", payload: expect.objectContaining({ kind: "departure" }) }),
+      expect.objectContaining({ source_type: "motion", payload: expect.objectContaining({ activity: "automotive" }) }),
+      expect.objectContaining({ source_type: "visit", payload: expect.objectContaining({ kind: "arrival" }) }),
+    ]));
+    expect(JSON.stringify(transition?.payload)).not.toContain("localFilePath");
+  });
+
   test("keeps transcript sessions as pending windows in milestone A", async () => {
     const { store, pipeline } = makePipeline();
 
@@ -263,7 +390,8 @@ describe("LocalAmbientTimelinePipeline", () => {
       dedupe_key: "audio:burst:1",
     });
 
-    expect(signals).toEqual([]);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.kind).toBe(AMBIENT_CANDIDATE_WINDOW_KIND);
     expect(await store.listTimelineEvents("2026-05-15", {
       visibleOnly: true,
     })).toEqual([]);
@@ -455,6 +583,105 @@ describe("LocalAmbientTimelinePipeline", () => {
     expect(calls).toBe(0);
   });
 
+
+  test("uploads transcript window with transcript and nearby location source payloads", async () => {
+    const { pipeline } = makePipeline();
+
+    await pipeline.ingestSignal({
+      kind: "device.location",
+      title: "Location",
+      summary: "Location at 23.1425,113.2401 /private/tmp/local.caf",
+      occurred_at: "2026-05-15T09:59:00.000Z",
+      payload: {
+        latitude: 23.1425,
+        longitude: 113.2401,
+        accuracy: 9.7,
+        speed: 0,
+        heading: 90,
+        localFilePath: "/private/tmp/should-not-upload.caf",
+        place: { label: "出发点(大兴街店)", address: "Pengcheng East Road" },
+      },
+      dedupe_key: "location:near-transcript",
+    });
+
+    const signals = await pipeline.ingestSignal({
+      kind: "session_summary",
+      title: "Voice summary",
+      summary: "我们需要把 window 表里的数据上报给云端 LLM 生成 Intent Cards。",
+      occurred_at: "2026-05-15T10:00:00.000Z",
+      payload: {
+        captureSessionId: "cap-upload",
+        burstId: "burst-upload",
+        durationMs: 60_000,
+        provider: "local_speech",
+        localFilePath: "/private/tmp/audio.wav",
+      },
+      confidence: 0.75,
+      dedupe_key: "audio:burst:upload:1",
+    });
+
+    const candidate = signals.find((signal) => signal.kind === AMBIENT_CANDIDATE_WINDOW_KIND);
+    expect(candidate).toBeDefined();
+    expect(candidate?.payload?.source_payloads).toEqual([
+      expect.objectContaining({
+        source_type: "transcript",
+        event_type: "transcript.ready",
+        relation: "window_raw_ref",
+        payload: expect.objectContaining({
+          text: "我们需要把 window 表里的数据上报给云端 LLM 生成 Intent Cards。",
+          durationMs: 60000,
+          provider: "local_speech",
+          captureSessionId: "cap-upload",
+          burstId: "burst-upload",
+        }),
+      }),
+      expect.objectContaining({
+        source_type: "location",
+        event_type: "location.fix",
+        relation: "nearby_context",
+        payload: expect.objectContaining({
+          latitude: 23.1425,
+          longitude: 113.2401,
+          accuracy: 9.7,
+          place: { label: "出发点(大兴街店)", address: "Pengcheng East Road" },
+        }),
+      }),
+    ]);
+    const serialized = JSON.stringify(candidate);
+    expect(serialized).not.toContain("/private/tmp");
+    expect(serialized).not.toContain("localFilePath");
+    expect(serialized).not.toContain("heading");
+    expect(serialized).not.toContain("speed");
+  });
+
+
+
+  test("regenerates existing evidence windows into stable candidate window upload signals", async () => {
+    const { pipeline } = makePipeline();
+
+    await pipeline.ingestSignal({
+      kind: "device.sound_scene_run",
+      title: "music",
+      summary: "Heard music",
+      occurred_at: "2026-05-15T10:00:00.000Z",
+      payload: {
+        schema_version: "sound_scene_run.v1",
+        label: "music",
+        started_at: "2026-05-15T10:00:00.000Z",
+        ended_at: "2026-05-15T10:01:10.000Z",
+        durationMs: 70_000,
+      },
+      dedupe_key: "sound:music:backfill",
+    });
+
+    const signals = await pipeline.regenerateDay("2026-05-15");
+    const candidateSignals = signals.filter((signal) => signal.kind === AMBIENT_CANDIDATE_WINDOW_KIND);
+
+    expect(candidateSignals.length).toBeGreaterThanOrEqual(1);
+    expect(new Set(candidateSignals.map((signal) => signal.dedupe_key)).size).toBe(candidateSignals.length);
+    expect(candidateSignals[0]?.payload?.window_type).toBe("sound_context");
+  });
+
   test("backs off local LLM attempts after a model failure", async () => {
     const store = new MemoryTimelineStore();
     let calls = 0;
@@ -586,128 +813,6 @@ describe("LocalAmbientTimelinePipeline", () => {
     expect(updatedEvent?.id).toBe(firstEvent.id);
     expect(updatedEvent?.syncStatus).toBe("pending");
     expect(updatedEvent?.summary).toBe("Updated local summary from the same transcript session.");
-  });
-
-
-  test("creates a rich location_update window for the first location fix", async () => {
-    const { store, pipeline } = makePipeline();
-
-    const signals = await pipeline.ingestSignal({
-      kind: "device.location",
-      title: "Location update",
-      summary: "Mission District (37.7599, -122.4148 ±25m)",
-      occurred_at: "2026-05-15T06:05:00.000Z",
-      payload: {
-        latitude: 37.7599,
-        longitude: -122.4148,
-        accuracy: 25,
-        place: { label: "Mission District" },
-      },
-      dedupe_key: "location:mission:first",
-    });
-
-    expect(signals).toHaveLength(1);
-    expect(signals[0]?.kind).toBe("ambient.location_update");
-    const [window] = await store.listCandidateWindows({
-      localDate: "2026-05-15",
-      windowType: "location_update",
-    });
-    expect(window).toMatchObject({
-      generationPolicy: "do_not_generate",
-      status: "evidence",
-      privacyHint: "private",
-      sourceTypes: ["location"],
-    });
-    expect(window?.compactContext).toBe("Location updated near Mission District around 2:05 PM.");
-    expect(signals[0]?.payload).toMatchObject({
-      place: { label: "Mission District" },
-      latitude: 37.7599,
-      longitude: -122.4148,
-      accuracy: 25,
-    });
-  });
-
-  test("suppresses nearby location fixes until place distance or time changes", async () => {
-    const { store, pipeline } = makePipeline();
-
-    await pipeline.ingestSignal({
-      kind: "device.location",
-      title: "Location update",
-      summary: "Mission District",
-      occurred_at: "2026-05-15T06:05:00.000Z",
-      payload: {
-        latitude: 37.7599,
-        longitude: -122.4148,
-        accuracy: 25,
-        place: { label: "Mission District" },
-      },
-      dedupe_key: "location:mission:first",
-    });
-    const nearbySignals = await pipeline.ingestSignal({
-      kind: "device.location",
-      title: "Location update",
-      summary: "Mission District nearby",
-      occurred_at: "2026-05-15T06:08:00.000Z",
-      payload: {
-        latitude: 37.7601,
-        longitude: -122.4149,
-        accuracy: 20,
-        place: { label: "Mission District" },
-      },
-      dedupe_key: "location:mission:nearby",
-    });
-    const changedSignals = await pipeline.ingestSignal({
-      kind: "device.location",
-      title: "Location update",
-      summary: "SOMA",
-      occurred_at: "2026-05-15T06:30:00.000Z",
-      payload: {
-        latitude: 37.7890,
-        longitude: -122.4010,
-        accuracy: 30,
-        place: { label: "SOMA" },
-      },
-      dedupe_key: "location:soma:changed",
-    });
-
-    expect(nearbySignals).toEqual([]);
-    expect(changedSignals).toHaveLength(1);
-    const windows = await store.listCandidateWindows({
-      localDate: "2026-05-15",
-      windowType: "location_update",
-    });
-    expect(windows).toHaveLength(2);
-    expect(windows.map((window) => window.compactContext)).toEqual([
-      "Location updated near Mission District around 2:05 PM.",
-      "Location updated near SOMA around 2:30 PM.",
-    ]);
-  });
-
-  test("emits a visit_event signal with POI when visit raw generates a visit window", async () => {
-    const { store, pipeline } = makePipeline();
-
-    const signals = await pipeline.ingestSignal({
-      kind: "device.visit",
-      title: "Arrived near Ferry Building",
-      summary: "Arrived Ferry Building",
-      occurred_at: "2026-05-15T08:10:00.000Z",
-      payload: { kind: "arrival", place: { label: "Ferry Building" } },
-      dedupe_key: "visit:ferry:arrival",
-    });
-
-    expect(signals.some((signal) => signal.kind === AMBIENT_TIMELINE_KIND)).toBe(true);
-    const visitSignal = signals.find((signal) => signal.kind === "ambient.visit_event");
-    expect(visitSignal).toBeDefined();
-    expect(visitSignal?.payload).toMatchObject({
-      place: { label: "Ferry Building" },
-      visit_kind: "arrival",
-    });
-    expect(visitSignal?.payload).not.toHaveProperty("raw_refs");
-    const [window] = await store.listCandidateWindows({
-      localDate: "2026-05-15",
-      windowType: "visit_stay",
-    });
-    expect(window?.compactContext).toBe("Visit signals indicate arrival near Ferry Building around 4:10 PM.");
   });
 
 });

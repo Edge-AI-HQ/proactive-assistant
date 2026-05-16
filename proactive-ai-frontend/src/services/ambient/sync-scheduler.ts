@@ -1,7 +1,7 @@
 import type { PersonalSignalInput } from "@/lib/devices";
 import { ingestBatch, type IngestStats } from "./ingest-bridge";
 import type { OutboxRecord, OutboxStore } from "./outbox";
-import { AMBIENT_LOCATION_UPDATE_KIND, AMBIENT_TIMELINE_KIND, AMBIENT_VISIT_EVENT_KIND } from "./timeline";
+import { AMBIENT_CANDIDATE_WINDOW_KIND, AMBIENT_TIMELINE_KIND } from "./timeline";
 
 export interface SyncSchedulerOptions {
   batchLimit?: number;
@@ -29,8 +29,7 @@ export interface SyncSchedulerStatus {
 
 const SYNCABLE_AMBIENT_KINDS = new Set([
   AMBIENT_TIMELINE_KIND,
-  AMBIENT_LOCATION_UPDATE_KIND,
-  AMBIENT_VISIT_EVENT_KIND,
+  AMBIENT_CANDIDATE_WINDOW_KIND,
 ]);
 
 const DEFAULT_OPTIONS: Required<SyncSchedulerOptions> = {

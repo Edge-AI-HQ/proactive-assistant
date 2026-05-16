@@ -2,6 +2,7 @@ import { isNative } from "@/lib/platform";
 import type {
   AmbientCandidateWindow,
   AmbientRawEvent,
+  AmbientRawRef,
   AmbientSourceType,
   AmbientTimelineEvent,
   AmbientTimelineStore,
@@ -61,6 +62,44 @@ export class MemoryTimelineStore implements AmbientTimelineStore {
       .slice(0, filter.limit ?? Number.POSITIVE_INFINITY)
       .map(cloneRawEvent);
   }
+
+  async getRawEventsByRefs(refs: AmbientRawRef[]): Promise<AmbientRawEvent[]> {
+    await this.initIfNeeded();
+    const ids = new Set(refs.map((ref) => ref.id));
+    return Array.from(this.rawEvents.values())
+      .filter((row) => ids.has(row.id))
+      .sort(compareByOccurredAtAsc)
+      .map(cloneRawEvent);
+  }
+
+  async listRawEventsInRange(filter: {
+    localDate: string;
+    sourceType?: AmbientSourceType;
+    eventType?: string;
+    start: string;
+    end: string;
+    limit?: number;
+  }): Promise<AmbientRawEvent[]> {
+    await this.initIfNeeded();
+    const startTs = Date.parse(filter.start);
+    const endTs = Date.parse(filter.end);
+    return Array.from(this.rawEvents.values())
+      .filter((row) => row.localDate === filter.localDate)
+      .filter((row) => !filter.sourceType || row.sourceType === filter.sourceType)
+      .filter((row) => !filter.eventType || row.eventType === filter.eventType)
+      .filter((row) => {
+        const rowStart = Date.parse(row.occurredAt);
+        const rowEnd = Date.parse(row.endedAt ?? row.occurredAt);
+        return Number.isFinite(rowStart)
+          && Number.isFinite(rowEnd)
+          && rowStart <= endTs
+          && rowEnd >= startTs;
+      })
+      .sort(compareByOccurredAtAsc)
+      .slice(0, filter.limit ?? Number.POSITIVE_INFINITY)
+      .map(cloneRawEvent);
+  }
+
 
   async upsertCandidateWindow(
     window: AmbientCandidateWindow,
@@ -238,7 +277,6 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
           raw_refs_json TEXT NOT NULL,
           observation_ids_json TEXT NOT NULL,
           compact_context TEXT NOT NULL,
-          metadata_json TEXT,
           privacy_hint TEXT NOT NULL,
           confidence_hint REAL NOT NULL,
           salience_hint REAL NOT NULL,
@@ -394,6 +432,51 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
     return (rows.values ?? []).map(rowToRawEvent);
   }
 
+  async getRawEventsByRefs(refs: AmbientRawRef[]): Promise<AmbientRawEvent[]> {
+    if (refs.length === 0) return [];
+    await this.init();
+    const placeholders = refs.map(() => "?").join(",");
+    const rows = await (await this.db()).query(
+      `SELECT * FROM ambient_raw_events WHERE id IN (${placeholders}) ORDER BY occurred_at ASC`,
+      refs.map((ref) => ref.id),
+    );
+    const sourceById = new Map(refs.map((ref) => [ref.id, ref.sourceType]));
+    return (rows.values ?? [])
+      .map(rowToRawEvent)
+      .filter((raw) => sourceById.get(raw.id) === raw.sourceType);
+  }
+
+  async listRawEventsInRange(filter: {
+    localDate: string;
+    sourceType?: AmbientSourceType;
+    eventType?: string;
+    start: string;
+    end: string;
+    limit?: number;
+  }): Promise<AmbientRawEvent[]> {
+    await this.init();
+    const clauses = [
+      "local_date = ?",
+      "occurred_at <= ?",
+      "COALESCE(ended_at, occurred_at) >= ?",
+    ];
+    const values: unknown[] = [filter.localDate, filter.end, filter.start];
+    if (filter.sourceType) {
+      clauses.push("source_type = ?");
+      values.push(filter.sourceType);
+    }
+    if (filter.eventType) {
+      clauses.push("event_type = ?");
+      values.push(filter.eventType);
+    }
+    const rows = await (await this.db()).query(
+      `SELECT * FROM ambient_raw_events WHERE ${clauses.join(" AND ")}
+       ORDER BY occurred_at ASC LIMIT ?`,
+      [...values, filter.limit ?? 500],
+    );
+    return (rows.values ?? []).map(rowToRawEvent);
+  }
+
   async upsertCandidateWindow(
     window: AmbientCandidateWindow,
   ): Promise<AmbientCandidateWindow> {
@@ -402,11 +485,11 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
       `INSERT INTO ambient_candidate_windows (
          id, local_user_id, local_date, window_type, started_at, ended_at,
          timezone, source_types_json, device_labels_json, raw_refs_json,
-         observation_ids_json, compact_context, metadata_json, privacy_hint, confidence_hint,
+         observation_ids_json, compact_context, privacy_hint, confidence_hint,
          salience_hint, generation_policy, llm_input_hash, status,
          last_attempt_at, attempt_count, last_error_code, expires_at,
          created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          ended_at = excluded.ended_at,
          source_types_json = excluded.source_types_json,
@@ -414,7 +497,6 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
          raw_refs_json = excluded.raw_refs_json,
          observation_ids_json = excluded.observation_ids_json,
          compact_context = excluded.compact_context,
-         metadata_json = excluded.metadata_json,
          privacy_hint = excluded.privacy_hint,
          confidence_hint = excluded.confidence_hint,
          salience_hint = excluded.salience_hint,
@@ -439,7 +521,6 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
         JSON.stringify(window.rawRefs),
         JSON.stringify(window.observationIds),
         window.compactContext,
-        window.metadata ? JSON.stringify(window.metadata) : null,
         window.privacyHint,
         window.confidenceHint,
         window.salienceHint,
@@ -654,7 +735,6 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
       { name: "last_attempt_at", sql: "ALTER TABLE ambient_candidate_windows ADD COLUMN last_attempt_at TEXT" },
       { name: "attempt_count", sql: "ALTER TABLE ambient_candidate_windows ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0" },
       { name: "last_error_code", sql: "ALTER TABLE ambient_candidate_windows ADD COLUMN last_error_code TEXT" },
-      { name: "metadata_json", sql: "ALTER TABLE ambient_candidate_windows ADD COLUMN metadata_json TEXT" },
     ]);
   }
 }
@@ -681,7 +761,6 @@ function cloneWindow(window: AmbientCandidateWindow): AmbientCandidateWindow {
     deviceLabels: [...window.deviceLabels],
     rawRefs: window.rawRefs.map((ref) => ({ ...ref })),
     observationIds: [...window.observationIds],
-    ...(window.metadata ? { metadata: jsonCloneRecord(window.metadata) } : {}),
   };
 }
 
@@ -757,7 +836,6 @@ function rowToWindow(row: Record<string, unknown>): AmbientCandidateWindow {
     rawRefs: parseRawRefs(row.raw_refs_json),
     observationIds: parseStringArray(row.observation_ids_json),
     compactContext: text(row.compact_context),
-    ...(nullableText(row.metadata_json) ? { metadata: parseRecord(row.metadata_json) } : {}),
     privacyHint: text(row.privacy_hint) as AmbientCandidateWindow["privacyHint"],
     confidenceHint: numberValue(row.confidence_hint),
     salienceHint: numberValue(row.salience_hint),

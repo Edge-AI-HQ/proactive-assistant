@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { locationUpdateWindowToSignal, timelineEventToSignal, visitWindowToSignal } from "./envelope";
+import { candidateWindowToSignal, timelineEventToSignal } from "./envelope";
 import type { AmbientCandidateWindow, AmbientTimelineEvent } from "./types";
 
 const event: AmbientTimelineEvent = {
@@ -56,100 +56,101 @@ describe("timelineEventToSignal", () => {
 });
 
 
-describe("location and visit evidence envelopes", () => {
-  const locationWindow: AmbientCandidateWindow = {
-    id: "win_location_1",
-    localUserId: "local",
-    localDate: "2026-05-15",
-    windowType: "location_update",
-    startedAt: "2026-05-15T14:05:00.000Z",
-    timezone: "UTC",
-    sourceTypes: ["location"],
-    deviceLabels: ["iPhone"],
-    rawRefs: [{ sourceType: "location", id: "raw_secret_location" }],
-    observationIds: [],
-    compactContext: "Location updated near Mission District around 2:05 PM.",
-    privacyHint: "private",
-    confidenceHint: 0.7,
-    salienceHint: 0.35,
-    generationPolicy: "do_not_generate",
-    llmInputHash: null,
-    status: "evidence",
-    lastAttemptAt: null,
-    attemptCount: 0,
-    lastErrorCode: null,
-    expiresAt: null,
-    createdAt: "2026-05-15T14:05:00.000Z",
-    updatedAt: "2026-05-15T14:05:00.000Z",
-  };
+const candidateWindow: AmbientCandidateWindow = {
+  id: "win_transcript",
+  localUserId: "local",
+  localDate: "2026-05-15",
+  windowType: "transcript_session",
+  startedAt: "2026-05-15T10:00:00.000Z",
+  endedAt: "2026-05-15T10:05:00.000Z",
+  timezone: "UTC",
+  sourceTypes: ["transcript", "location"],
+  deviceLabels: ["Microphone", "iPhone"],
+  rawRefs: [{ sourceType: "transcript", id: "raw_secret" }],
+  observationIds: [],
+  compactContext: "Transcript segment near a known POI.",
+  privacyHint: "private",
+  confidenceHint: 0.7,
+  salienceHint: 0.65,
+  generationPolicy: "llm_allowed",
+  llmInputHash: "hash_a",
+  status: "pending",
+  lastAttemptAt: null,
+  attemptCount: 0,
+  lastErrorCode: null,
+  expiresAt: null,
+  createdAt: "2026-05-15T10:00:00.000Z",
+  updatedAt: "2026-05-15T10:01:00.000Z",
+};
 
-  test("formats location_update with POI and coordinate context", () => {
-    const signal = locationUpdateWindowToSignal(locationWindow, "place_changed");
+describe("candidateWindowToSignal", () => {
+  test("uploads window metadata and selected source payloads with a stable envelope", () => {
+    const signal = candidateWindowToSignal(candidateWindow, {
+      sourcePayloads: [
+        {
+          source_type: "transcript",
+          event_type: "transcript.ready",
+          occurred_at: "2026-05-15T10:00:00.000Z",
+          confidence: 0.75,
+          relation: "window_raw_ref",
+          payload: { text: "讨论上报方案", durationMs: 30000 },
+        },
+        {
+          source_type: "location",
+          event_type: "location.fix",
+          occurred_at: "2026-05-15T09:59:00.000Z",
+          relation: "nearby_context",
+          payload: { latitude: 23.1, longitude: 113.2, place: { label: "POI" } },
+        },
+      ],
+      contextHash: "ctx_hash",
+    });
 
-    expect(signal.id).toBe("ambient-location-win_location_1");
-    expect(signal.kind).toBe("ambient.location_update");
-    expect(signal.title).toBe("Location update");
-    expect(signal.summary).toBe("Location updated near Mission District around 2:05 PM.");
-    expect(signal.dedupe_key).toBe("ambient:location_update:2026-05-15:win_location_1");
-    expect(signal.payload).toEqual({
-      schema_version: "ambient_location_update.v1",
-      local_window_id: "win_location_1",
-      window_type: "location_update",
-      source_types: ["location"],
-      privacy: "private",
+    expect(signal).toMatchObject({
+      id: "ambient_candidate_window_win_transcript_ctx_hash",
+      kind: "ambient.candidate_window",
+      title: "Ambient transcript_session window",
+      summary: "Transcript segment near a known POI.",
+      occurred_at: "2026-05-15T10:00:00.000Z",
+      available_at: "2026-05-15T10:05:00.000Z",
       confidence: 0.7,
-      salience: 0.35,
-      local_date: "2026-05-15",
-      started_at: "2026-05-15T14:05:00.000Z",
-      raw_ref_count: 1,
-      reason: "place_changed",
+      salience: 0.65,
+      dedupe_key: "ambient:candidate_window:2026-05-15:win_transcript:ctx_hash",
     });
-    expect(signal.payload).not.toHaveProperty("raw_refs");
-  });
-
-  test("formats location_update with raw location metadata when provided", () => {
-    const signal = locationUpdateWindowToSignal({
-      ...locationWindow,
-      metadata: {
-        place: { label: "Mission District", place_name: "Mission Dolores" },
-        latitude: 37.7599,
-        longitude: -122.4148,
-        accuracy: 25,
-      },
-    }, "place_changed");
-
-    expect(signal.payload).toMatchObject({
-      place: { label: "Mission District", place_name: "Mission Dolores" },
-      latitude: 37.7599,
-      longitude: -122.4148,
-      accuracy: 25,
-      reason: "place_changed",
-    });
-  });
-
-  test("formats visit_event with POI context", () => {
-    const signal = visitWindowToSignal({
-      ...locationWindow,
-      id: "win_visit_1",
-      windowType: "visit_stay",
-      sourceTypes: ["visit"],
-      rawRefs: [{ sourceType: "visit", id: "raw_secret_visit" }],
-      compactContext: "Visit signals indicate arrival near Ferry Building around 4:10 PM.",
-      metadata: { place: { label: "Ferry Building", address: "1 Ferry Building" } },
-    }, "arrival");
-
-    expect(signal.id).toBe("ambient-visit-win_visit_1");
-    expect(signal.kind).toBe("ambient.visit_event");
-    expect(signal.payload).toMatchObject({
-      schema_version: "ambient_visit_event.v1",
-      local_window_id: "win_visit_1",
-      window_type: "visit_stay",
-      source_types: ["visit"],
+    expect(signal.payload).toEqual({
+      schema_version: "ambient_candidate_window_upload.v1",
+      local_window_id: "win_transcript",
+      window_type: "transcript_session",
+      source_types: ["transcript", "location"],
       privacy: "private",
-      visit_kind: "arrival",
+      local_date: "2026-05-15",
+      started_at: "2026-05-15T10:00:00.000Z",
+      ended_at: "2026-05-15T10:05:00.000Z",
+      timezone: "UTC",
+      compact_context: "Transcript segment near a known POI.",
+      confidence_hint: 0.7,
+      salience_hint: 0.65,
+      generation_policy: "llm_allowed",
+      window_status: "pending",
       raw_ref_count: 1,
-      place: { label: "Ferry Building", address: "1 Ferry Building" },
+      source_payloads: [
+        {
+          source_type: "transcript",
+          event_type: "transcript.ready",
+          occurred_at: "2026-05-15T10:00:00.000Z",
+          confidence: 0.75,
+          relation: "window_raw_ref",
+          payload: { text: "讨论上报方案", durationMs: 30000 },
+        },
+        {
+          source_type: "location",
+          event_type: "location.fix",
+          occurred_at: "2026-05-15T09:59:00.000Z",
+          relation: "nearby_context",
+          payload: { latitude: 23.1, longitude: 113.2, place: { label: "POI" } },
+        },
+      ],
     });
-    expect(signal.payload).not.toHaveProperty("raw_refs");
+    expect(JSON.stringify(signal)).not.toContain("raw_secret");
   });
 });

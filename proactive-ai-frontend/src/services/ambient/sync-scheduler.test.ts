@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { MemoryOutboxStore } from "./outbox";
 import { AmbientSyncScheduler } from "./sync-scheduler";
-import { AMBIENT_LOCATION_UPDATE_KIND, AMBIENT_TIMELINE_KIND, AMBIENT_VISIT_EVENT_KIND } from "./timeline";
+import { AMBIENT_CANDIDATE_WINDOW_KIND, AMBIENT_TIMELINE_KIND } from "./timeline";
 
 vi.mock("./ingest-bridge", () => ({
   ingestBatch: vi.fn(),
@@ -53,6 +53,37 @@ describe("AmbientSyncScheduler", () => {
     expect(result.synced).toBe(1);
     expect(result.failed).toBe(0);
     expect(result.syncedItems).toHaveLength(1);
+    expect(await outbox.count()).toBe(0);
+  });
+
+
+
+  test("uploads ambient candidate window records", async () => {
+    mockedIngestBatch.mockResolvedValueOnce({
+      ok: true,
+      accepted: 1,
+      inserted: 1,
+      ignored: 0,
+      results: [{ id: "window-1", dedupe_key: "window:1", status: "inserted" }],
+    });
+    const outbox = new MemoryOutboxStore();
+    await outbox.enqueue([
+      {
+        id: "window-1",
+        kind: AMBIENT_CANDIDATE_WINDOW_KIND,
+        title: "Ambient transcript_session window",
+        summary: "Transcript and location context",
+        dedupe_key: "window:1",
+      },
+    ]);
+    const scheduler = new AmbientSyncScheduler(outbox);
+
+    const result = await scheduler.drain();
+
+    expect(mockedIngestBatch).toHaveBeenCalledWith([expect.objectContaining({
+      kind: AMBIENT_CANDIDATE_WINDOW_KIND,
+    })]);
+    expect(result.synced).toBe(1);
     expect(await outbox.count()).toBe(0);
   });
 
@@ -183,45 +214,4 @@ describe("AmbientSyncScheduler", () => {
     expect(result.ignored).toBe(1);
     expect(await outbox.count()).toBe(0);
   });
-
-  test("uploads sanitized ambient location and visit evidence records", async () => {
-    mockedIngestBatch.mockResolvedValueOnce({
-      ok: true,
-      accepted: 2,
-      inserted: 2,
-      ignored: 0,
-      results: [
-        { id: "loc-upload", dedupe_key: "ambient:location_update:1", status: "inserted" },
-        { id: "visit-upload", dedupe_key: "ambient:visit_event:1", status: "inserted" },
-      ],
-    });
-    const outbox = new MemoryOutboxStore();
-    await outbox.enqueue([
-      {
-        id: "loc-upload",
-        kind: AMBIENT_LOCATION_UPDATE_KIND,
-        title: "Location update",
-        summary: "Location updated near Mission District around 2:05 PM.",
-        dedupe_key: "ambient:location_update:1",
-      },
-      {
-        id: "visit-upload",
-        kind: AMBIENT_VISIT_EVENT_KIND,
-        title: "Visit event",
-        summary: "Visit signals indicate arrival near Ferry Building around 4:10 PM.",
-        dedupe_key: "ambient:visit_event:1",
-      },
-    ]);
-    const scheduler = new AmbientSyncScheduler(outbox);
-
-    const result = await scheduler.drain();
-
-    expect(result.synced).toBe(2);
-    expect(mockedIngestBatch).toHaveBeenCalledWith([
-      expect.objectContaining({ kind: AMBIENT_LOCATION_UPDATE_KIND }),
-      expect.objectContaining({ kind: AMBIENT_VISIT_EVENT_KIND }),
-    ]);
-    expect(await outbox.count()).toBe(0);
-  });
-
 });

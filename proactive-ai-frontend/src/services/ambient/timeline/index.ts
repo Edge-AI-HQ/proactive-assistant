@@ -1,4 +1,6 @@
 export {
+  AMBIENT_CANDIDATE_WINDOW_KIND,
+  AMBIENT_CANDIDATE_WINDOW_SCHEMA_VERSION,
   AMBIENT_TIMELINE_KIND,
   AMBIENT_TIMELINE_SCHEMA_VERSION,
 } from "./types";
@@ -29,13 +31,11 @@ export {
 } from "./pipeline";
 export type { AmbientTimelinePipeline } from "./pipeline";
 export {
-  AMBIENT_LOCATION_UPDATE_KIND,
-  AMBIENT_VISIT_EVENT_KIND,
+  candidateWindowToSignal,
   localEventIdsFromSignals,
-  locationUpdateWindowToSignal,
   timelineEventToSignal,
-  visitWindowToSignal,
 } from "./envelope";
+export type { AmbientWindowSourcePayload, CandidateWindowSignalContext } from "./envelope";
 export { ambientTimelineModels } from "./models";
 export { buildAmbientNarrativeSummary, groupAmbientTimelineEvents } from "./narrative";
 export type { AmbientTimelineGroup, AmbientTimelineGroupLabel } from "./narrative";
