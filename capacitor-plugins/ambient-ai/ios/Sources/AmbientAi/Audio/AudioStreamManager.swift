@@ -33,6 +33,8 @@ actor AudioStreamManager {
     private var secondaryAudioObserver: NSObjectProtocol?
     private var callbacksInstalled = false
     private var lastClassificationDebugEmitAt: Date?
+    private var appIsBackgrounded = false
+    private let speechRecognitionCoordinator = SpeechRecognitionCoordinator()
 
     init(callbacks: Callbacks) {
         self.callbacks = callbacks
@@ -176,6 +178,19 @@ actor AudioStreamManager {
             suppressionReasons.remove(.playback)
         }
         _ = reconcileClassifierState(reason: "playbackSuppression")
+        emitState()
+    }
+
+    func setAppBackgrounded(_ backgrounded: Bool, reason: String) {
+        appIsBackgrounded = backgrounded
+        if backgrounded {
+            classifier.stopAnalyzerOnly()
+        } else if isCaptureRunning || isClassificationRunning {
+            suppressionReasons.remove(.interruption)
+            refreshMediaSuppression()
+            setupMediaObservers()
+        }
+        _ = reconcileClassifierState(reason: reason)
         emitState()
     }
 
@@ -361,43 +376,64 @@ actor AudioStreamManager {
         let localResult = await transcribeLocally(wavURL: metadata.url, durationMs: snapshot.durationMs)
         let localText = localResult?.text ?? ""
         let transcriptLocale = localResult?.localeId
-        let stitchedText = localText.isEmpty ? "" : stitcher.append(localText, at: capturedAt)
+        let stitchedDraft = localText.isEmpty ? "" : stitcher.append(localText, at: capturedAt)
+
         emitTranscriptDraft(
-            text: stitchedText,
+            text: stitchedDraft,
             metadata: metadata,
             triggerSource: triggerSource,
             transcriptLocale: transcriptLocale
         )
+        emitTranscriptReady(
+            text: stitchedDraft,
+            metadata: metadata,
+            provider: .localSpeech,
+            fallback: activeConfig.canRefineDirectly,
+            triggerSource: triggerSource,
+            transcriptLocale: transcriptLocale
+        )
 
-        let refinedText = activeConfig.canRefineDirectly
-            ? await cloudWorker.refine(wavURL: metadata.url, config: activeConfig)
-            : nil
-
-        if let refinedText, !refinedText.isEmpty {
-            emitTranscriptRefined(
-                text: refinedText,
-                metadata: metadata,
-                triggerSource: triggerSource,
-                transcriptLocale: transcriptLocale
-            )
-            emitTranscriptReady(
-                text: refinedText,
-                metadata: metadata,
-                provider: .cloudWhisper,
-                fallback: false,
-                triggerSource: triggerSource,
-                transcriptLocale: transcriptLocale
-            )
-        } else {
-            emitTranscriptReady(
-                text: stitchedText,
-                metadata: metadata,
-                provider: .localSpeech,
-                fallback: activeConfig.canRefineDirectly,
-                triggerSource: triggerSource,
-                transcriptLocale: transcriptLocale
-            )
+        if activeConfig.canRefineDirectly {
+            let refineURL = metadata.url
+            let refineMetadata = metadata
+            let refineTrigger = triggerSource
+            let refineLocale = transcriptLocale
+            let refineConfig = activeConfig
+            Task { [weak self] in
+                guard let self else { return }
+                if let cloudText = await self.cloudWorker.refine(wavURL: refineURL, config: refineConfig),
+                   !cloudText.isEmpty {
+                    await self.emitCloudRefinement(
+                        text: cloudText,
+                        metadata: refineMetadata,
+                        triggerSource: refineTrigger,
+                        transcriptLocale: refineLocale
+                    )
+                }
+            }
         }
+    }
+
+    private func emitCloudRefinement(
+        text: String,
+        metadata: AudioCaptureMetadata,
+        triggerSource: String,
+        transcriptLocale: String?
+    ) {
+        emitTranscriptRefined(
+            text: text,
+            metadata: metadata,
+            triggerSource: triggerSource,
+            transcriptLocale: transcriptLocale
+        )
+        emitTranscriptReady(
+            text: text,
+            metadata: metadata,
+            provider: .cloudWhisper,
+            fallback: false,
+            triggerSource: triggerSource,
+            transcriptLocale: transcriptLocale
+        )
     }
 
     private func transcribeLocally(wavURL: URL, durationMs: Int) async -> LocalTranscriptionResult? {
@@ -406,11 +442,60 @@ actor AudioStreamManager {
             return nil
         }
 
-        let candidates = Self.recognitionLocaleCandidates(preferred: config.recognitionLocale)
-        var results: [LocalTranscriptionResult] = []
+        let candidates = Self.preferredLocaleCandidates(userPreferred: config.recognitionLocale)
+        let userPinnedLocale = config.recognitionLocale?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         var attemptedRecognition = false
 
+        var onDeviceResults: [LocalTranscriptionResult] = []
         for localeId in candidates {
+            guard speechRecognitionCoordinator.canAttemptRecognition(requireOnDevice: true) else { break }
+            guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeId)),
+                  recognizer.isAvailable,
+                  recognizer.supportsOnDeviceRecognition else {
+                continue
+            }
+            attemptedRecognition = true
+            if let result = await runRecognition(
+                recognizer: recognizer,
+                wavURL: wavURL,
+                requireOnDevice: true,
+                localeId: localeId
+            ), !result.text.isEmpty {
+                if userPinnedLocale, !Self.isRecognitionLikelyTruncated(result, durationMs: durationMs) {
+                    return result
+                }
+                onDeviceResults.append(result)
+            }
+        }
+
+        if durationMs >= 12_000 {
+            for localeId in candidates {
+                guard speechRecognitionCoordinator.canAttemptRecognition(requireOnDevice: true) else { break }
+                guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeId)),
+                      recognizer.isAvailable,
+                      recognizer.supportsOnDeviceRecognition else {
+                    continue
+                }
+                attemptedRecognition = true
+                if let result = await runChunkedRecognition(
+                    recognizer: recognizer,
+                    wavURL: wavURL,
+                    requireOnDevice: true,
+                    localeId: localeId
+                ), !result.text.isEmpty {
+                    onDeviceResults.append(result)
+                }
+            }
+        }
+
+        if let best = Self.bestRecognitionResult(onDeviceResults),
+           !Self.isRecognitionLikelyTruncated(best, durationMs: durationMs) {
+            return best
+        }
+
+        var serverResults: [LocalTranscriptionResult] = onDeviceResults
+        for localeId in candidates {
+            guard speechRecognitionCoordinator.canAttemptRecognition(requireOnDevice: false) else { break }
             guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeId)),
                   recognizer.isAvailable else {
                 continue
@@ -419,45 +504,84 @@ actor AudioStreamManager {
             if let result = await runRecognition(
                 recognizer: recognizer,
                 wavURL: wavURL,
-                durationMs: durationMs,
+                requireOnDevice: false,
                 localeId: localeId
             ), !result.text.isEmpty {
-                results.append(result)
+                if userPinnedLocale, !Self.isRecognitionLikelyTruncated(result, durationMs: durationMs) {
+                    return result
+                }
+                serverResults.append(result)
             }
         }
 
-        guard let best = Self.bestRecognitionResult(results) else {
-            if !attemptedRecognition {
-                emitError("Speech recognizer unavailable", source: "transcription")
+        if durationMs >= 12_000 {
+            for localeId in candidates {
+                guard speechRecognitionCoordinator.canAttemptRecognition(requireOnDevice: false) else { break }
+                guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeId)),
+                      recognizer.isAvailable else {
+                    continue
+                }
+                attemptedRecognition = true
+                if let result = await runChunkedRecognition(
+                    recognizer: recognizer,
+                    wavURL: wavURL,
+                    requireOnDevice: false,
+                    localeId: localeId
+                ), !result.text.isEmpty {
+                    serverResults.append(result)
+                }
             }
-            return nil
         }
-        return best
+
+        let allResults = serverResults
+        if let best = Self.bestRecognitionResult(allResults),
+           !Self.isRecognitionLikelyTruncated(best, durationMs: durationMs) {
+            return best
+        }
+        if let best = Self.bestRecognitionResult(allResults), durationMs < 12_000 {
+            return best
+        }
+        if !attemptedRecognition {
+            emitError("Speech recognizer unavailable", source: "transcription")
+        }
+        return nil
     }
 
     private func runRecognition(
         recognizer: SFSpeechRecognizer,
         wavURL: URL,
-        durationMs: Int,
-        localeId: String
+        requireOnDevice: Bool,
+        localeId: String,
+        chunked: Bool = false,
+        timeoutSecondsOverride: Int? = nil
     ) async -> LocalTranscriptionResult? {
-        let requiresOnDevice = recognizer.supportsOnDeviceRecognition
+        guard !requireOnDevice || recognizer.supportsOnDeviceRecognition else { return nil }
 
         let request = SFSpeechURLRecognitionRequest(url: wavURL)
         request.shouldReportPartialResults = true
         request.taskHint = .dictation
-        request.requiresOnDeviceRecognition = requiresOnDevice
+        request.requiresOnDeviceRecognition = requireOnDevice
         if #available(iOS 16.0, *) {
             request.addsPunctuation = true
         }
 
-        let timeoutSeconds = max(8, min(30, Int(Double(durationMs) / 1_000.0 * 1.5) + 8))
+        guard let recognitionRun = speechRecognitionCoordinator.beginRecognition(requireOnDevice: requireOnDevice) else {
+            return nil
+        }
+
+        let timeoutSeconds = timeoutSecondsOverride ?? Self.recognitionTimeoutSeconds(for: wavURL)
         return await withCheckedContinuation { continuation in
             let resumed = ResumeFlag()
             let accumulator = SpeechRecognitionAccumulator()
             var recognitionTask: SFSpeechRecognitionTask?
 
             recognitionTask = recognizer.recognitionTask(with: request) { result, error in
+                if recognitionRun.isCancelled, resumed.takeOnce() {
+                    recognitionTask?.cancel()
+                    recognitionRun.finish()
+                    continuation.resume(returning: nil)
+                    return
+                }
                 if let result {
                     let confidence = Self.averageConfidence(result.bestTranscription.segments)
                     accumulator.update(
@@ -466,61 +590,213 @@ actor AudioStreamManager {
                     )
                     if result.isFinal, resumed.takeOnce() {
                         recognitionTask?.cancel()
+                        recognitionRun.finish()
                         let snapshot = accumulator.snapshot()
                         continuation.resume(returning: LocalTranscriptionResult(
-                            text: snapshot.text,
+                            text: String(snapshot.text.prefix(Self.maxTranscriptChars)),
                             localeId: localeId,
-                            onDevice: requiresOnDevice,
+                            onDevice: requireOnDevice,
                             confidence: max(confidence, snapshot.confidence),
-                            isFinal: true
+                            isFinal: true,
+                            chunked: chunked
                         ))
                     }
                 }
-                if error != nil, resumed.takeOnce() {
+                if let error, resumed.takeOnce() {
                     recognitionTask?.cancel()
+                    recognitionRun.noteError(error)
                     let snapshot = accumulator.snapshot()
                     continuation.resume(returning: snapshot.text.isEmpty ? nil : LocalTranscriptionResult(
-                        text: snapshot.text,
+                        text: String(snapshot.text.prefix(Self.maxTranscriptChars)),
                         localeId: localeId,
-                        onDevice: requiresOnDevice,
+                        onDevice: requireOnDevice,
                         confidence: snapshot.confidence,
-                        isFinal: false
+                        isFinal: false,
+                        chunked: chunked
                     ))
                 }
+            }
+            if let recognitionTask {
+                recognitionRun.attach(recognitionTask)
             }
 
             Task {
                 try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds) * 1_000_000_000)
                 if resumed.takeOnce() {
                     recognitionTask?.cancel()
+                    recognitionRun.finish()
                     let snapshot = accumulator.snapshot()
                     continuation.resume(returning: snapshot.text.isEmpty ? nil : LocalTranscriptionResult(
-                        text: snapshot.text,
+                        text: String(snapshot.text.prefix(Self.maxTranscriptChars)),
                         localeId: localeId,
-                        onDevice: requiresOnDevice,
+                        onDevice: requireOnDevice,
                         confidence: snapshot.confidence,
-                        isFinal: false
+                        isFinal: false,
+                        chunked: chunked
                     ))
                 }
             }
         }
     }
 
-    private static func recognitionLocaleCandidates(preferred: String?) -> [String] {
-        let requested = preferred?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let requestedFirst = requested?.lowercased().hasPrefix("en") == true ? "en-US" : "zh-CN"
-        let deviceFirst = (Locale.preferredLanguages.first ?? Locale.current.identifier)
-            .lowercased()
-            .hasPrefix("zh") ? "zh-CN" : "en-US"
-        let first = requested?.isEmpty == false ? requestedFirst : deviceFirst
-        let second = first == "zh-CN" ? "en-US" : "zh-CN"
-        return [first, second]
+    private func runChunkedRecognition(
+        recognizer: SFSpeechRecognizer,
+        wavURL: URL,
+        requireOnDevice: Bool,
+        localeId: String
+    ) async -> LocalTranscriptionResult? {
+        let chunks = Self.makeRecognitionChunks(from: wavURL)
+        guard chunks.count > 1 else { return nil }
+        defer { for url in chunks { try? FileManager.default.removeItem(at: url) } }
+
+        var merged = ""
+        var confidences: [Float] = []
+        var sawFinal = false
+        for chunk in chunks {
+            guard speechRecognitionCoordinator.canAttemptRecognition(requireOnDevice: requireOnDevice) else { break }
+            if let result = await runRecognition(
+                recognizer: recognizer,
+                wavURL: chunk,
+                requireOnDevice: requireOnDevice,
+                localeId: localeId,
+                chunked: true,
+                timeoutSecondsOverride: 14
+            ), !result.text.isEmpty {
+                merged = merged.isEmpty
+                    ? result.text
+                    : TranscriptStitcher.mergeOverlapping(existing: merged, incoming: result.text)
+                if result.confidence > 0 { confidences.append(result.confidence) }
+                sawFinal = sawFinal || result.isFinal
+            }
+        }
+
+        let trimmed = merged.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let confidence = confidences.isEmpty ? 0 : confidences.reduce(0, +) / Float(confidences.count)
+        return LocalTranscriptionResult(
+            text: String(trimmed.prefix(Self.maxTranscriptChars)),
+            localeId: localeId,
+            onDevice: requireOnDevice,
+            confidence: confidence,
+            isFinal: sawFinal,
+            chunked: true
+        )
+    }
+
+    private static func preferredLocaleCandidates(userPreferred: String?) -> [String] {
+        let supported = SFSpeechRecognizer.supportedLocales().map { $0.identifier }
+        let supportedSet = Set(supported)
+
+        var ordered: [String] = []
+        func add(_ id: String) {
+            let normalized = id.replacingOccurrences(of: "_", with: "-")
+            if let real = supported.first(where: { $0.replacingOccurrences(of: "_", with: "-").hasPrefix(normalized) }) {
+                if !ordered.contains(real) { ordered.append(real) }
+            } else if supportedSet.contains(id), !ordered.contains(id) {
+                ordered.append(id)
+            }
+        }
+
+        if let preferred = userPreferred?.trimmingCharacters(in: .whitespacesAndNewlines), !preferred.isEmpty {
+            add(preferred)
+            return ordered
+        }
+
+        let deviceLang = Locale.preferredLanguages.first ?? Locale.current.identifier
+        let lowerDeviceLang = deviceLang.lowercased()
+        if lowerDeviceLang.hasPrefix("zh") || lowerDeviceLang.hasPrefix("yue") {
+            add(deviceLang)
+            if lowerDeviceLang.contains("hant") || lowerDeviceLang.contains("tw") {
+                add("zh-TW")
+            } else {
+                add("zh-CN")
+            }
+            add("en-US")
+        } else {
+            add(deviceLang)
+            add("en-US")
+            add("zh-CN")
+        }
+        return ordered
     }
 
     private static func bestRecognitionResult(_ results: [LocalTranscriptionResult]) -> LocalTranscriptionResult? {
         results.max { lhs, rhs in
             recognitionScore(lhs) < recognitionScore(rhs)
         }
+    }
+
+    private static func isRecognitionLikelyTruncated(_ result: LocalTranscriptionResult, durationMs: Int) -> Bool {
+        let durationSec = Double(durationMs) / 1_000.0
+        guard durationSec >= 8 else { return false }
+        let nonWhitespaceCount = result.text.unicodeScalars.filter {
+            !CharacterSet.whitespacesAndNewlines.contains($0)
+        }.count
+        let expectedFloor = max(18, Int(durationSec * 2.2))
+        if nonWhitespaceCount < expectedFloor { return true }
+        if !result.isFinal && durationSec >= 12 { return true }
+        return false
+    }
+
+    private static func recognitionTimeoutSeconds(for wavURL: URL) -> Int {
+        let duration: Double
+        if let file = try? AVAudioFile(forReading: wavURL), file.processingFormat.sampleRate > 0 {
+            duration = Double(file.length) / file.processingFormat.sampleRate
+        } else {
+            duration = 30
+        }
+        return max(18, min(75, Int(duration * 1.8) + 12))
+    }
+
+    private static func makeRecognitionChunks(
+        from wavURL: URL,
+        chunkSeconds: Double = 8.0,
+        overlapSeconds: Double = 0.35
+    ) -> [URL] {
+        guard let file = try? AVAudioFile(forReading: wavURL) else { return [] }
+        let sampleRate = max(1, Int(file.fileFormat.sampleRate))
+        let channels = max(1, Int(file.fileFormat.channelCount))
+        let bytesPerFrame = channels * 2
+        let bytesPerSecond = sampleRate * bytesPerFrame
+        guard bytesPerSecond > 0,
+              let data = try? Data(contentsOf: wavURL),
+              data.count > 44 else { return [] }
+
+        let pcm = Data(data.dropFirst(44))
+        let chunkBytes = alignByteCount(Int(chunkSeconds * Double(bytesPerSecond)), frameBytes: bytesPerFrame)
+        let overlapBytes = alignByteCount(Int(overlapSeconds * Double(bytesPerSecond)), frameBytes: bytesPerFrame)
+        guard chunkBytes > overlapBytes, pcm.count > chunkBytes else { return [] }
+
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pa-speech-chunks-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+
+        var urls: [URL] = []
+        var offset = 0
+        var index = 0
+        while offset < pcm.count {
+            let end = min(pcm.count, offset + chunkBytes)
+            let chunkPCM = Data(pcm[offset..<end])
+            if chunkPCM.count < bytesPerSecond { break }
+            let wav = AudioFileStore.makeWavHeader(
+                dataLength: UInt32(chunkPCM.count),
+                sampleRate: UInt32(sampleRate),
+                channels: UInt16(channels)
+            ) + chunkPCM
+            let url = tempDir.appendingPathComponent("chunk-\(index).wav")
+            if (try? wav.write(to: url, options: .atomic)) != nil {
+                urls.append(url)
+            }
+            if end >= pcm.count { break }
+            offset += chunkBytes - overlapBytes
+            index += 1
+        }
+        return urls
+    }
+
+    private static func alignByteCount(_ value: Int, frameBytes: Int) -> Int {
+        guard frameBytes > 0 else { return value }
+        return value - (value % frameBytes)
     }
 
     private static func recognitionScore(_ result: LocalTranscriptionResult) -> Double {
@@ -535,7 +811,7 @@ actor AudioStreamManager {
         if result.onDevice { score += 0.15 }
         if result.isFinal { score += 0.08 }
 
-        if lowerLocale.hasPrefix("zh") {
+        if lowerLocale.hasPrefix("zh") || lowerLocale.hasPrefix("yue") {
             score += zhCount > 0 ? 0.75 : -0.35
             if zhCount == 0, latinCount > 8 { score -= 0.25 }
         } else if lowerLocale.hasPrefix("en") {
@@ -696,14 +972,18 @@ actor AudioStreamManager {
     }
 
     private func resolvedEngineState(_ state: AudioEngineState) -> AudioEngineState {
-        resolvedSuppressedReason() == nil ? state : .suppressed
+        return resolvedSuppressedReason() == nil ? state : .suppressed
     }
 
     @discardableResult
     private func reconcileClassifierState(reason: String) -> Bool {
+        classifier.setFallbackSpeechBurstEnabled(true)
         classifier.markStaleIfNeeded(maxAgeMs: Self.classificationStaleTimeoutMs)
         if shouldClassifierRun {
             if classifier.canAnalyze {
+                return true
+            }
+            if appIsBackgrounded {
                 return true
             }
             return classifier.start()
@@ -818,6 +1098,110 @@ private final class RecordingState: AudioRecordingSink {
     }
 }
 
+private final class SpeechRecognitionCoordinator: @unchecked Sendable {
+    private let lock = NSLock()
+    private var activeTask: SFSpeechRecognitionTask?
+    private var cooldownUntil: Date?
+
+    func canAttemptRecognition(requireOnDevice: Bool) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if let cooldownUntil, Date() < cooldownUntil { return false }
+        return true
+    }
+
+    func beginRecognition(requireOnDevice: Bool) -> SpeechRecognitionRun? {
+        lock.lock()
+        defer { lock.unlock() }
+        if let cooldownUntil, Date() < cooldownUntil { return nil }
+        return SpeechRecognitionRun(coordinator: self, requireOnDevice: requireOnDevice)
+    }
+
+    fileprivate func attach(_ task: SFSpeechRecognitionTask, run: SpeechRecognitionRun) {
+        lock.lock()
+        if run.isCancelledLocked {
+            lock.unlock()
+            task.cancel()
+            return
+        }
+        activeTask = task
+        lock.unlock()
+    }
+
+    fileprivate func finish(_ run: SpeechRecognitionRun) {
+        lock.lock()
+        if activeTask === run.task {
+            activeTask = nil
+        }
+        lock.unlock()
+    }
+
+    fileprivate func noteError(_ error: Error, run: SpeechRecognitionRun) {
+        lock.lock()
+        if Self.isLocalSpeechServiceUnavailable(error) {
+            cooldownUntil = Date().addingTimeInterval(60)
+        }
+        if activeTask === run.task {
+            activeTask = nil
+        }
+        lock.unlock()
+    }
+
+    private static func isLocalSpeechServiceUnavailable(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == "kAFAssistantErrorDomain" && nsError.code == 1101
+    }
+}
+
+private final class SpeechRecognitionRun: @unchecked Sendable {
+    private let lock = NSLock()
+    private weak var coordinator: SpeechRecognitionCoordinator?
+    fileprivate var task: SFSpeechRecognitionTask?
+    fileprivate let requireOnDevice: Bool
+    private var cancelled = false
+
+    fileprivate var isCancelledLocked: Bool {
+        cancelled
+    }
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+
+    init(coordinator: SpeechRecognitionCoordinator, requireOnDevice: Bool) {
+        self.coordinator = coordinator
+        self.requireOnDevice = requireOnDevice
+    }
+
+    func attach(_ task: SFSpeechRecognitionTask) {
+        lock.lock()
+        self.task = task
+        let shouldCancel = cancelled
+        lock.unlock()
+        if shouldCancel {
+            task.cancel()
+        } else {
+            coordinator?.attach(task, run: self)
+        }
+    }
+
+    func finish() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+        coordinator?.finish(self)
+    }
+
+    func noteError(_ error: Error) {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+        coordinator?.noteError(error, run: self)
+    }
+}
+
 private final class ResumeFlag {
     private let lock = NSLock()
     private var resumed = false
@@ -837,6 +1221,7 @@ private struct LocalTranscriptionResult {
     let onDevice: Bool
     let confidence: Float
     let isFinal: Bool
+    let chunked: Bool
 }
 
 private final class SpeechRecognitionAccumulator {
@@ -848,7 +1233,7 @@ private final class SpeechRecognitionAccumulator {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         lock.lock()
-        if trimmed.count >= bestText.count {
+        if trimmed.count > bestText.count || (trimmed.count == bestText.count && confidence > bestConfidence) {
             bestText = trimmed
             bestConfidence = confidence
         }

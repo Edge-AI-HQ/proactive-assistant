@@ -62,6 +62,9 @@ final class SoundClassificationService {
     private var minSpeechConfidence = 0.60
     private var consecutiveFramesNeeded = 1
     private var interruptionObserver: NSObjectProtocol?
+    private var mediaServicesResetObserver: NSObjectProtocol?
+    private var routeChangeObserver: NSObjectProtocol?
+    private var fallbackSpeechBurstEnabled = true
     private let fallbackRmsThreshold: Float = 0.025
     private let fallbackMinIntervalMs = 10_000
 
@@ -99,6 +102,12 @@ final class SoundClassificationService {
 
     func updateConfig(_ config: AudioCaptureConfig) {
         preRollBuffer.updateMaximumDurationMs(config.preRollMs)
+    }
+
+    func setFallbackSpeechBurstEnabled(_ enabled: Bool) {
+        lock.lock()
+        fallbackSpeechBurstEnabled = enabled
+        lock.unlock()
     }
 
     @discardableResult
@@ -177,7 +186,10 @@ final class SoundClassificationService {
         }
 
         installInterruptionObserverIfNeeded()
-        soundLogger.info("SoundAnalysis engine started")
+        installMediaServicesResetObserverIfNeeded()
+        installRouteChangeObserverIfNeeded()
+        let route = session.currentRoute.inputs.map { $0.portType.rawValue }.joined(separator: ",")
+        soundLogger.info("SoundAnalysis engine started category=\(session.category.rawValue, privacy: .public) mode=\(session.mode.rawValue, privacy: .public) route=\(route, privacy: .public)")
         return true
     }
 
@@ -187,7 +199,27 @@ final class SoundClassificationService {
             NotificationCenter.default.removeObserver(observer)
             interruptionObserver = nil
         }
+        if let observer = mediaServicesResetObserver {
+            NotificationCenter.default.removeObserver(observer)
+            mediaServicesResetObserver = nil
+        }
+        if let observer = routeChangeObserver {
+            NotificationCenter.default.removeObserver(observer)
+            routeChangeObserver = nil
+        }
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+    }
+
+    func stopAnalyzerOnly() {
+        lock.lock()
+        let hadAnalyzer = analyzer != nil
+        if hadAnalyzer {
+            stopAnalyzerLocked(nextState: .suspended)
+        }
+        lock.unlock()
+        if hadAnalyzer {
+            soundLogger.info("SoundAnalysis analyzer suspended; engine and audio tap retained")
+        }
     }
 
     func attachRecordingSink(_ sink: AudioRecordingSink) {
@@ -227,6 +259,60 @@ final class SoundClassificationService {
         }
     }
 
+    private func installMediaServicesResetObserverIfNeeded() {
+        guard mediaServicesResetObserver == nil else { return }
+        mediaServicesResetObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleMediaServicesReset()
+        }
+    }
+
+    private func installRouteChangeObserverIfNeeded() {
+        guard routeChangeObserver == nil else { return }
+        routeChangeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] notification in
+            self?.handleRouteChange(notification)
+        }
+    }
+
+    private func handleMediaServicesReset() {
+        soundLogger.error("AVAudioSession mediaServicesWereReset, restarting engine")
+        lock.lock()
+        lastError = "mediaServicesWereReset"
+        stopAnalyzerLocked(nextState: .failed)
+        lock.unlock()
+        stopEngine()
+        onAnalyzerFailed?("AVAudioSession media services were reset")
+    }
+
+    private func handleRouteChange(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let value = userInfo[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: value) else {
+            return
+        }
+        switch reason {
+        case .oldDeviceUnavailable, .newDeviceAvailable, .override, .categoryChange, .routeConfigurationChange:
+            let route = AVAudioSession.sharedInstance().currentRoute.inputs.map { $0.portType.rawValue }.joined(separator: ",")
+            soundLogger.info("AVAudioSession route changed reason=\(reason.rawValue, privacy: .public) route=\(route, privacy: .public)")
+            lock.lock()
+            let needsRestart = engine?.inputNode.outputFormat(forBus: 0).sampleRate == 0
+            lock.unlock()
+            if needsRestart {
+                stopEngine()
+                onAnalyzerFailed?("Audio route changed, engine input unavailable")
+            }
+        default:
+            break
+        }
+    }
+
     private func stopEngine() {
         lock.lock()
         guard engine != nil || analyzer != nil else {
@@ -255,8 +341,8 @@ final class SoundClassificationService {
             emitError("Sound classifier unavailable: \(error.localizedDescription)", source: "soundAnalysis")
             return false
         }
-        request.windowDuration = CMTime(seconds: 0.75, preferredTimescale: 48_000)
-        request.overlapFactor = 0.25
+        request.windowDuration = CMTime(seconds: 1.5, preferredTimescale: 48_000)
+        request.overlapFactor = 0
 
         let observer = ClassificationObserver { [weak self] frame in
             self?.handleClassification(frame)
@@ -274,6 +360,8 @@ final class SoundClassificationService {
         lock.lock()
         self.analyzer = analyzer
         self.observer = observer
+        self.lastFrameAt = nil
+        self.lastError = nil
         self.engineState = restarting ? .restarting : .starting
         lock.unlock()
         return true
@@ -318,7 +406,7 @@ final class SoundClassificationService {
         let now = Date()
         let analyzerUnavailable = [.failed, .suspended, .stale].contains(engineState)
         let elapsedMs = lastFallbackBurstAt.map { Int(now.timeIntervalSince($0) * 1_000) } ?? Int.max
-        let canFire = analyzerUnavailable && elapsedMs >= fallbackMinIntervalMs
+        let canFire = fallbackSpeechBurstEnabled && analyzerUnavailable && elapsedMs >= fallbackMinIntervalMs
         lock.unlock()
 
         guard canFire,
@@ -446,6 +534,10 @@ final class SoundClassificationService {
             || lowercased.contains("backgroundexecutionnotpermitted")
             || lowercased.contains("insufficient permission")
             || lowercased.contains("gpu")
+            || lowercased.contains("coreml")
+            || lowercased.contains("com.apple.coreml")
+            || lowercased.contains("espresso")
+            || lowercased.contains("kiogpu")
     }
 
     private static func rms(buffer: AVAudioPCMBuffer) -> Float? {
@@ -511,7 +603,21 @@ private final class ClassificationObserver: NSObject, SNResultsObserving {
     }
 
     func request(_ request: SNRequest, didFailWithError error: Error) {
-        onFailure("Sound classifier failed: \(error.localizedDescription)")
+        let nsError = error as NSError
+        let chain = Self.flatten(nsError)
+        onFailure("Sound classifier failed: \(error.localizedDescription) [\(chain)]")
+    }
+
+    private static func flatten(_ error: NSError) -> String {
+        var parts: [String] = ["\(error.domain)#\(error.code)"]
+        var current = error.userInfo[NSUnderlyingErrorKey] as? NSError
+        var depth = 0
+        while let next = current, depth < 4 {
+            parts.append("\(next.domain)#\(next.code)")
+            current = next.userInfo[NSUnderlyingErrorKey] as? NSError
+            depth += 1
+        }
+        return parts.joined(separator: " <- ")
     }
 }
 
