@@ -1,19 +1,19 @@
-import { useState, useEffect, useCallback, useMemo, useRef, forwardRef } from "react";
+import { useState, useEffect, useCallback, useMemo, forwardRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import type { TranscriptReadyEvent } from "@pin/capacitor-ambient-ai";
-import type { PluginListenerHandle } from "@capacitor/core";
 import { isNative } from "@/lib/platform";
 import {
   Radio, Smartphone, Watch, Glasses, Headphones, Camera, Laptop,
   MapPin, Compass, Mic, Activity, Wifi,
-  Briefcase, Stethoscope, Coffee, BookOpen, Music,
-  Lightbulb, Sparkles, Clock, Plus, ChevronRight, X,
-  Phone, Footprints, Sun, Waves, UtensilsCrossed, Target,
-  Users, Pill, Soup, Minimize2, Expand, Lock, Unlock,
+  Stethoscope,
+  Lightbulb, Sparkles, Plus, ChevronRight, X,
+  Phone, Sun, Waves, Target,
+  Soup, Minimize2, Lock, Unlock,
   type LucideIcon,
 } from "lucide-react";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { useAmbientTimeline } from "@/hooks/useAmbientTimeline";
+import { useAmbientLiveSession } from "@/hooks/useAmbientLiveSession";
+import LiveSessionCard from "./LiveSessionCard";
 import { ALL_SOURCE_KEYS, type SourceKey } from "@/services/ambient/keys";
 import {
   getPersistedAmbientEnabled,
@@ -21,6 +21,7 @@ import {
 } from "@/services/ambient/enabled-state";
 import type { AmbientPrivacy, AmbientTimelineEvent } from "@/services/ambient/timeline";
 import type { RuntimeStatus } from "@/services/ambient";
+import type { LiveSession } from "@/services/ambient/live-session";
 
 
 interface Device {
@@ -38,145 +39,6 @@ const DEVICES: Device[] = [
   { name: "Ray-Ban Meta", detail: "Vision · POV capture", icon: Glasses, connected: true, signal: "weak" },
   { name: "Tesla Model 3", detail: "Driving · Location", icon: Compass, connected: false },
   { name: "Insta360", detail: "Spatial capture", icon: Camera, connected: false },
-];
-
-/* ──────────────── LIVE SESSION ──────────────── */
-
-interface LiveAssistItem {
-  time: string; // elapsed marker
-  kind: "context" | "assist" | "action";
-  text: string;
-  source?: string;
-}
-
-export interface LiveSession {
-  icon: LucideIcon;
-  kind: string; // e.g. "Meeting", "Medical visit"
-  title: string;
-  location: string;
-  device: string;
-  startedAt: string; // human readable
-  signals: string[]; // chips
-  assists: LiveAssistItem[];
-}
-
-interface LiveAssistMessage {
-  id: string;
-  time: string;
-  text: string;
-  source?: string;
-}
-
-interface LiveSessionData {
-  captureSessionId: string;
-  startedAt: number;
-  messages: LiveAssistMessage[];
-}
-
-const MAX_LIVE_MESSAGES = 30;
-const LIVE_SESSION_TITLE_MAX = 64;
-
-function formatElapsed(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  const m = String(Math.floor(total / 60)).padStart(2, "0");
-  const s = String(total % 60).padStart(2, "0");
-  return `+${m}:${s}`;
-}
-
-function formatStartTimestamp(ts: number): string {
-  return new Date(ts).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function appendTranscript(
-  prev: LiveSessionData | null,
-  event: TranscriptReadyEvent,
-): LiveSessionData {
-  const text = event.text.trim();
-  const isNewSession = !prev || prev.captureSessionId !== event.captureSessionId;
-  const startedAt = isNewSession ? Date.now() : prev!.startedAt;
-  const elapsed = Math.max(0, Date.now() - startedAt);
-  const message: LiveAssistMessage = {
-    id: event.burstId || `${event.captureSessionId}:${Date.now()}`,
-    time: formatElapsed(elapsed),
-    text,
-    source: event.provider,
-  };
-  const messages = isNewSession
-    ? [message]
-    : [...prev!.messages, message].slice(-MAX_LIVE_MESSAGES);
-  return {
-    captureSessionId: event.captureSessionId,
-    startedAt,
-    messages,
-  };
-}
-
-export const LIVE_SCENARIOS: LiveSession[] = [
-  {
-    icon: Users,
-    kind: "Meeting",
-    title: "Product review with design team",
-    location: "Conference Room B · WeWork",
-    device: "AirPods Pro · Watch",
-    startedAt: "14:32",
-    signals: ["5 voices detected", "Cadence: discussion", "HR 78"],
-    assists: [
-      { time: "+00:18", kind: "context", text: "Meeting started. 5 voices detected — Sarah, Marcus, Priya, Devon, you.", source: "Voice ID" },
-      { time: "+00:42", kind: "context", text: "Sarah referenced the \"north-star metric\" from the Jan deck.", source: "Notion" },
-      { time: "+01:24", kind: "assist", text: "Jan deck open on your watch — jumped to slide 7 (north-star definition).", source: "Drive" },
-      { time: "+02:15", kind: "assist", text: "Pulled slide 12 (\"Activation funnel — Q1\") to your watch.", source: "Drive" },
-      { time: "+03:01", kind: "context", text: "Devon brought up the iOS 18 widget refresh bug — filed as LIN-842 last Tuesday.", source: "Linear" },
-      { time: "+03:48", kind: "assist", text: "LIN-842 thread summary surfaced. 3 unread comments from engineering.", source: "Linear" },
-      { time: "+04:08", kind: "context", text: "Marcus mentioned the onboarding drop-off at step 3 — same issue raised in last week's retro.", source: "Linear" },
-      { time: "+04:55", kind: "assist", text: "Retro notes from Apr 18 pulled. Step-3 drop-off was 34% — Priya owned the audit.", source: "Notion" },
-      { time: "+05:30", kind: "action", text: "Drafted action item: \"Audit step-3 onboarding by Fri.\" Tap to assign.", source: "Linear draft" },
-      { time: "+06:12", kind: "context", text: "Sarah asked about Q2 OKR alignment — your draft is in Notion.", source: "Notion" },
-      { time: "+06:48", kind: "action", text: "Q2 OKR draft ready to share. Tap to send to the room.", source: "Notion" },
-      { time: "+07:30", kind: "assist", text: "Decision detected: ship v2 onboarding behind a flag by May 9. Logged.", source: "Decision log" },
-    ],
-  },
-  {
-    icon: Stethoscope,
-    kind: "Medical visit",
-    title: "Annual check-up with Dr. Patel",
-    location: "UCSF Medical Center",
-    device: "iPhone · Watch",
-    startedAt: "11:20",
-    signals: ["Clinical vocabulary", "Quiet room", "HRV ↓"],
-    assists: [
-      { time: "+00:30", kind: "context", text: "Visit started. Vitals from Apple Health pre-shared with Dr. Patel's chart.", source: "Apple Health" },
-      { time: "+01:05", kind: "context", text: "Dr. Patel mentioned \"LDL apolipoprotein B\" — a marker for cardiovascular risk.", source: "Glossary" },
-      { time: "+01:48", kind: "assist", text: "ApoB explained on your watch — what it measures, why it matters, your last value.", source: "Glossary" },
-      { time: "+02:40", kind: "assist", text: "Plain-English summary of all lab terms used so far is ready on your watch.", source: "Health" },
-      { time: "+03:22", kind: "context", text: "She referenced your March lipid panel — values pulled from Apple Health.", source: "Apple Health" },
-      { time: "+04:00", kind: "action", text: "Suggested follow-up questions queued: \"What lifestyle changes move ApoB the most?\"", source: "Notes draft" },
-      { time: "+04:42", kind: "context", text: "Dr. Patel recommended a 3-month lipid recheck. Calendar slot suggested.", source: "Calendar" },
-      { time: "+05:18", kind: "action", text: "Tentative follow-up: Jul 24, 11:00 AM. Tap to confirm.", source: "Calendar draft" },
-      { time: "+06:05", kind: "assist", text: "Dietary changes that move ApoB the most: saturated fat ↓, soluble fiber ↑.", source: "Mayo Clinic" },
-    ],
-  },
-  {
-    icon: Coffee,
-    kind: "Casual chat",
-    title: "Lunch with Marcus — boba craving detected",
-    location: "Blue Bottle · Mission St",
-    device: "AirPods Pro",
-    startedAt: "13:45",
-    signals: ["2 voices", "Casual tone", "Stationary 18m"],
-    assists: [
-      { time: "+00:12", kind: "context", text: "Lunch with Marcus started. Casual tone, low-stakes conversation." },
-      { time: "+00:30", kind: "context", text: "Heard you say \"I could really go for boba right now.\"" },
-      { time: "+00:35", kind: "assist", text: "Boba Guys (3 min walk) — your usual: Strawberry Matcha, 50% sugar, no ice.", source: "Order history" },
-      { time: "+00:38", kind: "action", text: "Order ready to place. Say \"go\" or tap to confirm.", source: "DoorDash draft" },
-      { time: "+01:20", kind: "context", text: "Marcus mentioned his sister's wedding next month — added to your relationship notes.", source: "Notes" },
-      { time: "+02:05", kind: "assist", text: "Reminder set: ask Marcus about the wedding when you see him next week.", source: "Reminders" },
-      { time: "+02:48", kind: "context", text: "He brought up the Sequoia call — that's tomorrow at 10am for you.", source: "Calendar" },
-      { time: "+03:30", kind: "assist", text: "Sequoia prep doc pinned to your morning briefing.", source: "Notion" },
-    ],
-  },
 ];
 
 /* ──────────────── TIMELINE (today's narrative) ──────────────── */
@@ -316,13 +178,6 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
     getPersistedAmbientEnabled(),
   );
   const [togglePending, setTogglePending] = useState(false);
-  const [liveIndex, setLiveIndex] = useState(0);
-  const [view, setView] = useState<"timeline" | "devices">("timeline");
-  const [liveSessionData, setLiveSessionData] = useState<LiveSessionData | null>(null);
-  const startedAtRef = useRef<number | null>(null);
-
-  const [liveDismissed, setLiveDismissed] = useState(false);
-  const [previewVisibleCount, setPreviewVisibleCount] = useState(1);
   const connectedCount = DEVICES.filter((d) => d.connected).length;
 
   // Reflect server-side consent first; fall back to live runtime state
@@ -363,39 +218,6 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
       unsubscribe?.();
     };
   }, []);
-
-  // Subscribe to plugin transcripts while ambient is on so the Live card
-  // shows real captured speech instead of the demo scenarios. Native
-  // only: the listener helper is lazy-loaded behind ``isNative`` so the
-  // web main chunk never contains the native plugin bare specifier.
-  useEffect(() => {
-    if (!ambientOn || !isNative) {
-      setLiveSessionData(null);
-      startedAtRef.current = null;
-      return;
-    }
-    let cancelled = false;
-    let handle: PluginListenerHandle | null = null;
-    void (async () => {
-      try {
-        const { addAmbientTranscriptListener } = await import(
-          "@/services/ambient/transcript-listener"
-        );
-        if (cancelled) return;
-        handle = await addAmbientTranscriptListener((event) => {
-          if (cancelled) return;
-          setLiveSessionData((prev) => appendTranscript(prev, event));
-        });
-      } catch {
-        // Plugin not registered or module load failed; live preview
-        // falls back to the mock scenarios below.
-      }
-    })();
-    return () => {
-      cancelled = true;
-      if (handle) void handle.remove();
-    };
-  }, [ambientOn]);
 
   const handleAmbientToggle = useCallback(async () => {
     if (togglePending) return;
@@ -439,42 +261,15 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
     })();
   }, [uploadsLocked]);
 
-  const realSession = useMemo<LiveSession | null>(() => {
-    if (!ambientOn || !liveSessionData || liveSessionData.messages.length === 0) {
-      return null;
-    }
-    const last = liveSessionData.messages[liveSessionData.messages.length - 1];
-    const title = last.text.length > LIVE_SESSION_TITLE_MAX
-      ? `${last.text.slice(0, LIVE_SESSION_TITLE_MAX - 1).trimEnd()}…`
-      : last.text;
-    const provider = last.source ?? "device";
-    return {
-      icon: Mic,
-      kind: "Voice session",
-      title: title || "Live transcript",
-      location: "On device · captured locally",
-      device: "Microphone",
-      startedAt: formatStartTimestamp(liveSessionData.startedAt),
-      signals: [
-        `${liveSessionData.messages.length} transcript${
-          liveSessionData.messages.length === 1 ? "" : "s"
-        }`,
-        `Provider: ${provider}`,
-      ],
-      assists: liveSessionData.messages.map((m) => ({
-        time: m.time,
-        kind: "context" as const,
-        text: m.text,
-        source: m.source,
-      })),
-    };
-  }, [ambientOn, liveSessionData]);
-
-  // Real plugin transcripts win; non-native preview falls back to the
-  // mock scenarios so the demo still looks alive in the browser.
-  const liveSession = ambientOn && !liveDismissed
-    ? (realSession ?? (!isNative ? LIVE_SCENARIOS[liveIndex] : null))
-    : null;
+  const {
+    session: liveSession,
+    previewVisibleCount,
+    dismiss: dismissLiveSession,
+  } = useAmbientLiveSession({
+    ambientOn,
+    enableWebDemo: !isNative,
+    dismissible: true,
+  });
 
   // Auto-open fullscreen when triggered from outside (e.g., Constellation Live row)
   useEffect(() => {
@@ -483,39 +278,6 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
       onAutoOpenHandled?.();
     }
   }, [autoOpenLive, liveSession, onOpenFullscreen, onAutoOpenHandled]);
-
-
-  // Cycle through mock live scenarios for the web demo. Native preview
-  // sticks to whatever the plugin emits.
-  useEffect(() => {
-    if (!ambientOn || isNative || realSession) return;
-    const t = setInterval(() => {
-      setLiveIndex((i) => (i + 1) % LIVE_SCENARIOS.length);
-      setLiveDismissed(false);
-    }, 12000);
-    return () => clearInterval(t);
-  }, [ambientOn, realSession]);
-
-  // Reset preview stream when the active session changes
-  useEffect(() => {
-    setPreviewVisibleCount(1);
-  }, [liveIndex, ambientOn, liveDismissed, liveSessionData?.captureSessionId]);
-
-  // Real transcripts arrive already "revealed" — don't gate them
-  // behind the 2.6s mock pacing.
-  useEffect(() => {
-    if (realSession && liveSessionData) {
-      setPreviewVisibleCount(liveSessionData.messages.length);
-    }
-  }, [realSession, liveSessionData]);
-
-  // Stream new assist messages into the preview every 2.6s
-  useEffect(() => {
-    if (!liveSession) return;
-    if (previewVisibleCount >= liveSession.assists.length) return;
-    const t = setTimeout(() => setPreviewVisibleCount((c) => c + 1), 2600);
-    return () => clearTimeout(t);
-  }, [previewVisibleCount, liveSession]);
 
   const handleDismissTimelineEvent = useCallback((id: string) => {
     void ambientTimeline.dismiss(id);
@@ -643,128 +405,13 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
       {/* ── LIVE SESSION (only when ambient on + active) ── */}
       <AnimatePresence mode="wait">
         {liveSession && (
-          <motion.div
-            key={liveSession.title}
-            initial={{ opacity: 0, y: -8, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -8, scale: 0.98 }}
-            transition={{ duration: 0.4 }}
-            className="mb-5 rounded-2xl overflow-hidden relative"
-            style={{
-              background:
-                "linear-gradient(135deg, hsl(304 75% 63% / 0.12) 0%, hsl(304 75% 63% / 0.08) 100%)",
-              border: "1px solid hsl(304 75% 63% / 0.30)",
-              boxShadow: "0 8px 32px hsl(304 75% 63% / 0.15)",
-            }}
-          >
-            {/* Live ribbon */}
-            <div className="px-3.5 py-2 flex items-center justify-between border-b border-[hsl(304_75%_63%/0.18)] bg-[hsl(304_75%_63%/0.06)]">
-              <div className="flex items-center gap-1.5 min-w-0">
-                <span className="relative flex w-2 h-2 shrink-0">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[hsl(304_75%_63%)] opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-[hsl(304_75%_63%)]" />
-                </span>
-                <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-[hsl(304_75%_42%)] truncate">
-                  Live · {liveSession.kind}
-                </span>
-              </div>
-              <div className="flex items-center gap-1.5 shrink-0">
-                <button
-                  onClick={() => onOpenFullscreen?.(liveSession)}
-                  className="h-9 px-3.5 rounded-full flex items-center gap-1.5 text-[12px] font-semibold text-[hsl(304_75%_32%)] hover:text-[hsl(304_75%_22%)] bg-[hsl(304_75%_63%/0.16)] hover:bg-[hsl(304_75%_63%/0.26)] border border-[hsl(304_75%_63%/0.35)] active:scale-[0.97] transition-all shadow-sm"
-                  aria-label="Open fullscreen session"
-                  title="Focus mode"
-                >
-                  <Expand size={14} strokeWidth={2.4} />
-                  <span>Focus</span>
-                </button>
-                <button
-                  onClick={() => setLiveDismissed(true)}
-                  className="w-9 h-9 rounded-full flex items-center justify-center text-foreground/70 hover:text-foreground bg-foreground/[0.05] hover:bg-foreground/[0.12] border border-foreground/[0.10] active:scale-[0.97] transition-all"
-                  aria-label="End session"
-                >
-                  <X size={17} strokeWidth={2.2} />
-                </button>
-              </div>
-            </div>
-
-            {/* Compact "now playing" row — always visible */}
-            <div className="px-3 pt-3 pb-2 flex items-center gap-2.5">
-              <div className="w-10 h-10 rounded-xl bg-foreground/[0.06] border border-foreground/[0.08] flex items-center justify-center text-foreground shrink-0">
-                <liveSession.icon size={17} strokeWidth={1.8} />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-[13.5px] font-semibold text-foreground leading-snug truncate">
-                  {liveSession.title}
-                </p>
-                <p className="text-[11px] text-foreground/55 mt-0.5 flex items-center gap-1 truncate">
-                  <MapPin size={10} className="shrink-0" />
-                  <span className="truncate">{liveSession.location}</span>
-                  <span className="text-foreground/30">·</span>
-                  <span className="truncate">{liveSession.device}</span>
-                </p>
-              </div>
-            </div>
-
-            {/* Fixed-height assist preview — newest 3 messages, newest slides in at top */}
-            <div className="px-4 pb-3.5">
-              <div className="h-[126px] overflow-hidden relative">
-                <AnimatePresence initial={false} mode="popLayout">
-                  {liveSession.assists
-                    .slice(0, previewVisibleCount)
-                    .slice(-3)
-                    .reverse()
-                    .map((a, idx) => {
-                      const ageOpacity = idx === 0 ? 1 : idx === 1 ? 0.7 : 0.42;
-                      const isNewest = idx === 0;
-                      return (
-                        <motion.div
-                          key={a.time + a.text}
-                          layout
-                          initial={{ opacity: 0, y: -18, filter: "blur(6px)", scale: 0.97 }}
-                          animate={{ opacity: ageOpacity, y: 0, filter: "blur(0px)", scale: 1 }}
-                          exit={{ opacity: 0, y: 8, filter: "blur(4px)" }}
-                          transition={{
-                            opacity: { duration: 0.5, ease: [0.22, 1, 0.36, 1] },
-                            y: { type: "spring", stiffness: 320, damping: 30, mass: 0.7 },
-                            filter: { duration: 0.4, ease: "easeOut" },
-                            scale: { duration: 0.45, ease: [0.22, 1, 0.36, 1] },
-                            layout: { type: "spring", stiffness: 320, damping: 32, mass: 0.7 },
-                          }}
-                          className="flex gap-2.5 py-1"
-                        >
-                          <span
-                            className={`text-[9px] font-mono pt-0.5 w-10 shrink-0 tabular-nums transition-colors duration-500 ${
-                              isNewest ? "text-[hsl(304_75%_45%)]" : "text-foreground/35"
-                            }`}
-                          >
-                            {a.time}
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <p
-                              className={`text-[12.5px] leading-snug ${
-                                a.kind === "action"
-                                  ? "text-foreground font-medium"
-                                  : a.kind === "assist"
-                                    ? "text-foreground/85"
-                                    : "text-foreground/65"
-                              }`}
-                            >
-                              {a.kind === "action" && (
-                                <span className="inline-block mr-1.5 px-1.5 py-0 rounded text-[9px] font-bold uppercase tracking-wider bg-[hsl(304_75%_63%)] text-white align-middle">
-                                  Action
-                                </span>
-                              )}
-                              {a.text}
-                            </p>
-                          </div>
-                        </motion.div>
-                      );
-                    })}
-                </AnimatePresence>
-              </div>
-            </div>
-          </motion.div>
+          <LiveSessionCard
+            session={liveSession}
+            previewVisibleCount={previewVisibleCount}
+            variant="ambient"
+            onFocus={onOpenFullscreen}
+            onDismiss={dismissLiveSession}
+          />
         )}
       </AnimatePresence>
 

@@ -16,7 +16,7 @@ import ChatTimeline from "./ChatTimeline";
 import ControlPanel from "./ControlPanel";
 import AccountPanel from "./AccountPanel";
 import ConnectPanel from "./ConnectPanel";
-import AmbientView, { LiveFullscreen, LIVE_SCENARIOS, type LiveSession } from "./AmbientView";
+import AmbientView, { LiveFullscreen } from "./AmbientView";
 import { createPortal } from "react-dom";
 import ChatDetailView, { type ChatCard, brandSvg, detectToolIcon } from "./ChatDetailView";
 import { DrawerDetailBody } from "./CardDrawerDetail";
@@ -42,6 +42,11 @@ import { useComposio } from "@/hooks/useComposio";
 import { usePipeline } from "@/hooks/usePipeline";
 import { useWeather } from "@/hooks/useWeather";
 import type { GoalBasket, IntentCard } from "@/types/intent-card";
+import { useAmbientLiveSession } from "@/hooks/useAmbientLiveSession";
+import { useUserSettings } from "@/hooks/useUserSettings";
+import { getPersistedAmbientEnabled } from "@/services/ambient/enabled-state";
+import LiveSessionCard from "./LiveSessionCard";
+import type { LiveSession } from "@/services/ambient/live-session";
 
 /** Pretty Member-since month from Supabase user.created_at (ISO). */
 function formatMemberSince(iso: string | null | undefined): string | undefined {
@@ -269,6 +274,16 @@ export default function BigBallLayout() {
   const navigate = useNavigate();
   const weather = useWeather();
   const { user, signOut } = useAuth();
+  const { settings } = useUserSettings();
+  const consentOn = settings
+    ? Object.values(settings.ambientSources ?? {}).some((c) => c?.enabled === true)
+    : null;
+  const ambientOn = getPersistedAmbientEnabled() || (consentOn ?? false);
+  const { session: liveSession, previewVisibleCount } = useAmbientLiveSession({
+    ambientOn: activeView === "ambient" ? false : ambientOn,
+    enableWebDemo: false,
+    dismissible: false,
+  });
   const [isScrolled, setIsScrolled] = useState(false);
   const [mainChatOpen, setMainChatOpen] = useState(false);
 
@@ -656,31 +671,15 @@ export default function BigBallLayout() {
           <ChevronRight size={14} className="text-foreground/25 group-hover:text-foreground/55 shrink-0 transition-colors" />
         </button>
 
-        {/* Live session — only when active. Subtle pink emphasis without heavy chrome. */}
-        <div className="h-px bg-foreground/[0.08]" />
-        <button
-          onClick={() => {
-            // Open the live fullscreen overlay directly — no view switch.
-            setLiveOverlay(LIVE_SCENARIOS[0]);
-          }}
-          className="w-full flex items-center gap-3 py-2.5 text-left group"
-          aria-label="Open live session"
-        >
-          <span className="flex items-center gap-1.5 shrink-0 w-[60px]">
-            <span className="relative flex w-1.5 h-1.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[hsl(304_75%_63%)] opacity-75" />
-              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[hsl(304_75%_63%)]" />
-            </span>
-            <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-[hsl(304_75%_42%)]">
-              Live
-            </span>
-          </span>
-          <span className="text-[13px] font-medium text-foreground truncate flex-1 leading-snug">
-            Product review · Conf Room B
-          </span>
-          <ChevronRight size={14} className="text-[hsl(304_75%_42%)]/60 group-hover:text-[hsl(304_75%_42%)] shrink-0 transition-colors" />
-        </button>
-        <div className="h-px bg-foreground/[0.08]" />
+        {/* Live session — always present; real transcript replaces standby when available. */}
+        <div className="h-px bg-foreground/[0.08] mb-3" />
+        <LiveSessionCard
+          session={liveSession}
+          previewVisibleCount={previewVisibleCount}
+          variant="now"
+          alwaysVisible
+          onFocus={setLiveOverlay}
+        />
       </div>
 
       {/* 3D sphere of all cards — drag to rotate */}

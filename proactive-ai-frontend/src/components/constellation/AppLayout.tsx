@@ -6,8 +6,9 @@ import GoalsView from "./GoalsView";
 import ChatTimeline from "./ChatTimeline";
 import ControlPanel from "./ControlPanel";
 import ChatDetailView, { type ChatCard } from "./ChatDetailView";
-import AmbientView from "./AmbientView";
+import AmbientView, { LiveFullscreen } from "./AmbientView";
 import { Zap, MessageCircle, Target, Settings, Radio } from "lucide-react";
+import type { LiveSession } from "@/services/ambient/live-session";
 
 const tabs = [
   { id: "now", label: "NOW", icon: Zap },
@@ -26,6 +27,7 @@ interface AppLayoutProps {
 export default function AppLayout({ defaultTab = "now" }: AppLayoutProps) {
   const [activeTab, setActiveTab] = useState<TabId>(defaultTab);
   const [tabBarVisible, setTabBarVisible] = useState(true);
+  const [liveFullscreenSession, setLiveFullscreenSession] = useState<LiveSession | null>(null);
 
   // Card-originated chats
   const [cardChats, setCardChats] = useState<ChatCard[]>([]);
@@ -108,6 +110,7 @@ export default function AppLayout({ defaultTab = "now" }: AppLayoutProps) {
                   onExecute={handleExecute}
                   onModify={handleModify}
                   onScrollDirectionChange={handleScrollDirection}
+                  onOpenLiveFullscreen={setLiveFullscreenSession}
                 />
               )}
               {activeTab === "chat" && (
@@ -116,10 +119,24 @@ export default function AppLayout({ defaultTab = "now" }: AppLayoutProps) {
                   onOpenChat={handleOpenChat}
                 />
               )}
-              {activeTab === "ambient" && <AmbientView onConnectMore={() => setActiveTab("control")} />}
+              {activeTab === "ambient" && (
+                <AmbientView
+                  onConnectMore={() => setActiveTab("control")}
+                  onOpenFullscreen={setLiveFullscreenSession}
+                />
+              )}
               {activeTab === "goals" && <GoalsView />}
               {activeTab === "control" && <ControlPanel />}
             </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {liveFullscreenSession && (
+            <LiveFullscreen
+              session={liveFullscreenSession}
+              onClose={() => setLiveFullscreenSession(null)}
+            />
           )}
         </AnimatePresence>
 

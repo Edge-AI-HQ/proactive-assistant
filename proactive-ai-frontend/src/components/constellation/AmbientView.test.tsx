@@ -13,6 +13,7 @@ const {
   runtimeMock,
   startAmbientUploadMock,
   stopAmbientUploadMock,
+  liveDismissMock,
 } = vi.hoisted(() => ({
   patchMock: vi.fn(),
   runtimeMock: {
@@ -22,6 +23,7 @@ const {
   },
   startAmbientUploadMock: vi.fn(),
   stopAmbientUploadMock: vi.fn(),
+  liveDismissMock: vi.fn(),
 }));
 
 vi.mock("framer-motion", async () => {
@@ -61,6 +63,23 @@ vi.mock("@/hooks/useUserSettings", () => ({
   useUserSettings: () => ({
     settings: { ambientSources: {} },
     patch: patchMock,
+  }),
+}));
+vi.mock("@/hooks/useAmbientLiveSession", () => ({
+  useAmbientLiveSession: () => ({
+    session: {
+      icon: () => <span data-testid="live-icon" />,
+      kind: "Voice session",
+      title: "Captured transcript",
+      location: "On device",
+      device: "Microphone",
+      startedAt: "10:00",
+      signals: ["1 transcript"],
+      assists: [{ time: "+00:00", kind: "context", text: "Captured transcript" }],
+    },
+    previewVisibleCount: 1,
+    isRealSession: true,
+    dismiss: liveDismissMock,
   }),
 }));
 vi.mock("@/hooks/useAmbientTimeline", () => ({
@@ -129,4 +148,15 @@ describe("AmbientView ambient toggle", () => {
       });
     });
   });
+  test("renders dismissible ambient live session", async () => {
+    runtimeMock.status.mockReturnValue(makeStatus());
+
+    render(<AmbientView />);
+    fireEvent.click(screen.getByRole("button", { name: "End session" }));
+
+    await waitFor(() => {
+      expect(liveDismissMock).toHaveBeenCalled();
+    });
+  });
+
 });

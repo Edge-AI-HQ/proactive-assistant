@@ -6,6 +6,11 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import AiLanding from "./AiLanding";
+import { useAmbientLiveSession } from "@/hooks/useAmbientLiveSession";
+import { useUserSettings } from "@/hooks/useUserSettings";
+import { getPersistedAmbientEnabled } from "@/services/ambient/enabled-state";
+import LiveSessionCard from "./LiveSessionCard";
+import type { LiveSession } from "@/services/ambient/live-session";
 
 interface ExecutionStep {
   text: string;
@@ -129,14 +134,26 @@ interface NowFeedProps {
   onScrollDirectionChange?: (direction: "up" | "down") => void;
   LandingOverride?: React.ComponentType;
   drawerStyle?: React.CSSProperties;
+  onOpenLiveFullscreen?: (session: LiveSession) => void;
 }
 
-export default function NowFeed({ onExecute, onModify, onScrollDirectionChange, LandingOverride, drawerStyle }: NowFeedProps) {
+export default function NowFeed({ onExecute, onModify, onScrollDirectionChange, LandingOverride, drawerStyle, onOpenLiveFullscreen }: NowFeedProps) {
   const [cards, setCards] = useState(INTENTS);
+  const { settings } = useUserSettings();
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollY, setScrollY] = useState(0);
   const lastScrollTop = useRef(0);
+
+  const consentOn = settings
+    ? Object.values(settings.ambientSources ?? {}).some((c) => c?.enabled === true)
+    : null;
+  const ambientOn = getPersistedAmbientEnabled() || (consentOn ?? false);
+  const { session: liveSession, previewVisibleCount } = useAmbientLiveSession({
+    ambientOn,
+    enableWebDemo: false,
+    dismissible: false,
+  });
 
   const handleScroll = useCallback(() => {
     if (scrollRef.current) {
@@ -200,6 +217,14 @@ export default function NowFeed({ onExecute, onModify, onScrollDirectionChange, 
           <div className="flex justify-center pt-3 pb-4">
             <div className="w-9 h-1 rounded-full bg-foreground/30" />
           </div>
+
+          <LiveSessionCard
+            session={liveSession}
+            previewVisibleCount={previewVisibleCount}
+            variant="now"
+            alwaysVisible
+            onFocus={onOpenLiveFullscreen}
+          />
 
           <div className="flex flex-col gap-3">
             <AnimatePresence>
