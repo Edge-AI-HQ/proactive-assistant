@@ -1,7 +1,7 @@
 import type { PersonalSignalInput } from "@/lib/devices";
 import { ingestBatch, type IngestStats } from "./ingest-bridge";
 import type { OutboxRecord, OutboxStore } from "./outbox";
-import { AMBIENT_TIMELINE_KIND } from "./timeline";
+import { AMBIENT_LOCATION_UPDATE_KIND, AMBIENT_TIMELINE_KIND, AMBIENT_VISIT_EVENT_KIND } from "./timeline";
 
 export interface SyncSchedulerOptions {
   batchLimit?: number;
@@ -26,6 +26,12 @@ export interface SyncSchedulerStatus {
   lastError: string | null;
   uploadsLocked: boolean;
 }
+
+const SYNCABLE_AMBIENT_KINDS = new Set([
+  AMBIENT_TIMELINE_KIND,
+  AMBIENT_LOCATION_UPDATE_KIND,
+  AMBIENT_VISIT_EVENT_KIND,
+]);
 
 const DEFAULT_OPTIONS: Required<SyncSchedulerOptions> = {
   batchLimit: 50,
@@ -76,10 +82,10 @@ export class AmbientSyncScheduler {
       const pruned = await this.outbox.prune(now);
       const pendingRecords = await this.outbox.pending(this.opts.batchLimit, now);
       const records = pendingRecords.filter(
-        (row) => row.item.kind === AMBIENT_TIMELINE_KIND,
+        (row) => SYNCABLE_AMBIENT_KINDS.has(row.item.kind),
       );
       const localOnlyRecords = pendingRecords.filter(
-        (row) => row.item.kind !== AMBIENT_TIMELINE_KIND,
+        (row) => !SYNCABLE_AMBIENT_KINDS.has(row.item.kind),
       );
       if (localOnlyRecords.length > 0) {
         console.warn("[ambient] dropping local-only source items before sync", {

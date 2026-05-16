@@ -238,6 +238,7 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
           raw_refs_json TEXT NOT NULL,
           observation_ids_json TEXT NOT NULL,
           compact_context TEXT NOT NULL,
+          metadata_json TEXT,
           privacy_hint TEXT NOT NULL,
           confidence_hint REAL NOT NULL,
           salience_hint REAL NOT NULL,
@@ -401,11 +402,11 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
       `INSERT INTO ambient_candidate_windows (
          id, local_user_id, local_date, window_type, started_at, ended_at,
          timezone, source_types_json, device_labels_json, raw_refs_json,
-         observation_ids_json, compact_context, privacy_hint, confidence_hint,
+         observation_ids_json, compact_context, metadata_json, privacy_hint, confidence_hint,
          salience_hint, generation_policy, llm_input_hash, status,
          last_attempt_at, attempt_count, last_error_code, expires_at,
          created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          ended_at = excluded.ended_at,
          source_types_json = excluded.source_types_json,
@@ -413,6 +414,7 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
          raw_refs_json = excluded.raw_refs_json,
          observation_ids_json = excluded.observation_ids_json,
          compact_context = excluded.compact_context,
+         metadata_json = excluded.metadata_json,
          privacy_hint = excluded.privacy_hint,
          confidence_hint = excluded.confidence_hint,
          salience_hint = excluded.salience_hint,
@@ -437,6 +439,7 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
         JSON.stringify(window.rawRefs),
         JSON.stringify(window.observationIds),
         window.compactContext,
+        window.metadata ? JSON.stringify(window.metadata) : null,
         window.privacyHint,
         window.confidenceHint,
         window.salienceHint,
@@ -651,6 +654,7 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
       { name: "last_attempt_at", sql: "ALTER TABLE ambient_candidate_windows ADD COLUMN last_attempt_at TEXT" },
       { name: "attempt_count", sql: "ALTER TABLE ambient_candidate_windows ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0" },
       { name: "last_error_code", sql: "ALTER TABLE ambient_candidate_windows ADD COLUMN last_error_code TEXT" },
+      { name: "metadata_json", sql: "ALTER TABLE ambient_candidate_windows ADD COLUMN metadata_json TEXT" },
     ]);
   }
 }
@@ -677,6 +681,7 @@ function cloneWindow(window: AmbientCandidateWindow): AmbientCandidateWindow {
     deviceLabels: [...window.deviceLabels],
     rawRefs: window.rawRefs.map((ref) => ({ ...ref })),
     observationIds: [...window.observationIds],
+    ...(window.metadata ? { metadata: jsonCloneRecord(window.metadata) } : {}),
   };
 }
 
@@ -752,6 +757,7 @@ function rowToWindow(row: Record<string, unknown>): AmbientCandidateWindow {
     rawRefs: parseRawRefs(row.raw_refs_json),
     observationIds: parseStringArray(row.observation_ids_json),
     compactContext: text(row.compact_context),
+    ...(nullableText(row.metadata_json) ? { metadata: parseRecord(row.metadata_json) } : {}),
     privacyHint: text(row.privacy_hint) as AmbientCandidateWindow["privacyHint"],
     confidenceHint: numberValue(row.confidence_hint),
     salienceHint: numberValue(row.salience_hint),

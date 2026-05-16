@@ -588,4 +588,126 @@ describe("LocalAmbientTimelinePipeline", () => {
     expect(updatedEvent?.summary).toBe("Updated local summary from the same transcript session.");
   });
 
+
+  test("creates a rich location_update window for the first location fix", async () => {
+    const { store, pipeline } = makePipeline();
+
+    const signals = await pipeline.ingestSignal({
+      kind: "device.location",
+      title: "Location update",
+      summary: "Mission District (37.7599, -122.4148 ±25m)",
+      occurred_at: "2026-05-15T06:05:00.000Z",
+      payload: {
+        latitude: 37.7599,
+        longitude: -122.4148,
+        accuracy: 25,
+        place: { label: "Mission District" },
+      },
+      dedupe_key: "location:mission:first",
+    });
+
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.kind).toBe("ambient.location_update");
+    const [window] = await store.listCandidateWindows({
+      localDate: "2026-05-15",
+      windowType: "location_update",
+    });
+    expect(window).toMatchObject({
+      generationPolicy: "do_not_generate",
+      status: "evidence",
+      privacyHint: "private",
+      sourceTypes: ["location"],
+    });
+    expect(window?.compactContext).toBe("Location updated near Mission District around 2:05 PM.");
+    expect(signals[0]?.payload).toMatchObject({
+      place: { label: "Mission District" },
+      latitude: 37.7599,
+      longitude: -122.4148,
+      accuracy: 25,
+    });
+  });
+
+  test("suppresses nearby location fixes until place distance or time changes", async () => {
+    const { store, pipeline } = makePipeline();
+
+    await pipeline.ingestSignal({
+      kind: "device.location",
+      title: "Location update",
+      summary: "Mission District",
+      occurred_at: "2026-05-15T06:05:00.000Z",
+      payload: {
+        latitude: 37.7599,
+        longitude: -122.4148,
+        accuracy: 25,
+        place: { label: "Mission District" },
+      },
+      dedupe_key: "location:mission:first",
+    });
+    const nearbySignals = await pipeline.ingestSignal({
+      kind: "device.location",
+      title: "Location update",
+      summary: "Mission District nearby",
+      occurred_at: "2026-05-15T06:08:00.000Z",
+      payload: {
+        latitude: 37.7601,
+        longitude: -122.4149,
+        accuracy: 20,
+        place: { label: "Mission District" },
+      },
+      dedupe_key: "location:mission:nearby",
+    });
+    const changedSignals = await pipeline.ingestSignal({
+      kind: "device.location",
+      title: "Location update",
+      summary: "SOMA",
+      occurred_at: "2026-05-15T06:30:00.000Z",
+      payload: {
+        latitude: 37.7890,
+        longitude: -122.4010,
+        accuracy: 30,
+        place: { label: "SOMA" },
+      },
+      dedupe_key: "location:soma:changed",
+    });
+
+    expect(nearbySignals).toEqual([]);
+    expect(changedSignals).toHaveLength(1);
+    const windows = await store.listCandidateWindows({
+      localDate: "2026-05-15",
+      windowType: "location_update",
+    });
+    expect(windows).toHaveLength(2);
+    expect(windows.map((window) => window.compactContext)).toEqual([
+      "Location updated near Mission District around 2:05 PM.",
+      "Location updated near SOMA around 2:30 PM.",
+    ]);
+  });
+
+  test("emits a visit_event signal with POI when visit raw generates a visit window", async () => {
+    const { store, pipeline } = makePipeline();
+
+    const signals = await pipeline.ingestSignal({
+      kind: "device.visit",
+      title: "Arrived near Ferry Building",
+      summary: "Arrived Ferry Building",
+      occurred_at: "2026-05-15T08:10:00.000Z",
+      payload: { kind: "arrival", place: { label: "Ferry Building" } },
+      dedupe_key: "visit:ferry:arrival",
+    });
+
+    expect(signals.some((signal) => signal.kind === AMBIENT_TIMELINE_KIND)).toBe(true);
+    const visitSignal = signals.find((signal) => signal.kind === "ambient.visit_event");
+    expect(visitSignal).toBeDefined();
+    expect(visitSignal?.payload).toMatchObject({
+      place: { label: "Ferry Building" },
+      visit_kind: "arrival",
+    });
+    expect(visitSignal?.payload).not.toHaveProperty("raw_refs");
+    const [window] = await store.listCandidateWindows({
+      localDate: "2026-05-15",
+      windowType: "visit_stay",
+    });
+    expect(window?.compactContext).toBe("Visit signals indicate arrival near Ferry Building around 4:10 PM.");
+  });
+
 });

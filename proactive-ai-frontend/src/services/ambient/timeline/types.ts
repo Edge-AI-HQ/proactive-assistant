@@ -21,6 +21,7 @@ export type AmbientConfidenceLabel = "certain" | "uncertain";
 export type AmbientWindowType =
   | "morning_health"
   | "visit_stay"
+  | "location_update"
   | "transition"
   | "transcript_session"
   | "sound_context"
@@ -78,6 +79,7 @@ export interface AmbientCandidateWindow {
   rawRefs: AmbientRawRef[];
   observationIds: string[];
   compactContext: string;
+  metadata?: Record<string, unknown>;
   privacyHint: AmbientPrivacy;
   confidenceHint: number;
   salienceHint: number;

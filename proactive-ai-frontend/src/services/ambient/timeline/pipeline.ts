@@ -1,5 +1,10 @@
 import type { PersonalSignalInput } from "@/lib/devices";
-import { timelineEventToSignal } from "./envelope";
+import {
+  locationUpdateWindowToSignal,
+  timelineEventToSignal,
+  visitWindowToSignal,
+  type LocationUpdateReason,
+} from "./envelope";
 import { ambientTimelineModels, type AmbientTimelineModelBridge, type AmbientTimelineEventDraft } from "./models";
 import { rawEventFromSignal, placeLabel } from "./normalize";
 import { getAmbientTimelineStore } from "./store";
@@ -163,9 +168,14 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     }
     if (raw.sourceType === "visit") {
       const visit = await this.generateVisitStay(raw);
-      if (visit) signals.push(visit);
+      if (visit) signals.push(...visit);
       const transition = await this.generateTransition(raw);
       if (transition) signals.push(transition);
+      return signals;
+    }
+    if (raw.sourceType === "location") {
+      const location = await this.generateLocationUpdate(raw);
+      if (location) signals.push(location);
       return signals;
     }
     if (raw.sourceType === "transcript") {
@@ -237,9 +247,9 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     return this.upsertVisibleEvent(event);
   }
 
-  private async generateVisitStay(raw: AmbientRawEvent): Promise<PersonalSignalInput | null> {
+  private async generateVisitStay(raw: AmbientRawEvent): Promise<PersonalSignalInput[]> {
     const place = placeLabel(raw.payload);
-    if (!place) return null;
+    if (!place) return [];
     const isDeparture = raw.eventType === "visit.departure";
     const title = isDeparture ? `Stayed near ${place}` : `Arrived near ${place}`;
     const summary = isDeparture
@@ -256,6 +266,7 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
       deviceLabels: ["iPhone"],
       rawRefs: refs,
       compactContext: summary,
+      metadata: locationSignalMetadata(raw.payload),
       privacyHint: "private",
       confidenceHint: 0.78,
       salienceHint: 0.6,
@@ -281,7 +292,70 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
       windowId: window.id,
       dedupeKey: `ambient:timeline:${raw.localDate}:visit:${stableHash(raw.dedupeKey)}`,
     });
-    return this.upsertVisibleEvent(event);
+    const timelineSignal = await this.upsertVisibleEvent(event);
+    return [timelineSignal, visitWindowToSignal(window, isDeparture ? "departure" : "arrival")]
+      .filter((signal): signal is PersonalSignalInput => signal !== null);
+  }
+
+  private async generateLocationUpdate(raw: AmbientRawEvent): Promise<PersonalSignalInput | null> {
+    if (raw.eventType !== "location.fix") return null;
+    const reason = await this.locationUpdateReason(raw);
+    if (!reason) return null;
+    const place = placeLabel(raw.payload);
+    const compactContext = place
+      ? `Location updated near ${place} around ${formatTime(raw.occurredAt)}.`
+      : `Location changed significantly around ${formatTime(raw.occurredAt)}.`;
+    const window = await this.upsertWindow({
+      id: stableId("win", ["location_update", raw.id]),
+      localDate: raw.localDate,
+      windowType: "location_update",
+      startedAt: raw.occurredAt,
+      endedAt: raw.endedAt,
+      sourceTypes: ["location"],
+      deviceLabels: ["iPhone"],
+      rawRefs: [rawRef(raw)],
+      compactContext,
+      metadata: locationSignalMetadata(raw.payload),
+      privacyHint: "private",
+      confidenceHint: locationConfidence(raw),
+      salienceHint: 0.35,
+      generationPolicy: "do_not_generate",
+      status: "evidence",
+    });
+    return locationUpdateWindowToSignal(window, reason);
+  }
+
+  private async locationUpdateReason(raw: AmbientRawEvent): Promise<LocationUpdateReason | null> {
+    const previous = await this.previousAcceptedLocation(raw);
+    if (!previous) return "first_fix";
+    const currentPlace = placeLabel(raw.payload);
+    const previousPlace = placeLabel(previous.payload);
+    if (currentPlace && previousPlace && currentPlace !== previousPlace) return "place_changed";
+    const distance = distanceMeters(raw, previous);
+    if (distance !== null && distance >= SIGNIFICANT_LOCATION_DISTANCE_METERS) return "distance_changed";
+    const elapsed = Date.parse(raw.occurredAt) - Date.parse(previous.occurredAt);
+    if (Number.isFinite(elapsed) && elapsed >= LOCATION_REFRESH_CONTEXT_MS) return "time_elapsed";
+    return null;
+  }
+
+  private async previousAcceptedLocation(raw: AmbientRawEvent): Promise<AmbientRawEvent | null> {
+    const raws = await this.store.listRawEvents({
+      localDate: raw.localDate,
+      sourceType: "location",
+      limit: 500,
+    });
+    const currentTs = Date.parse(raw.occurredAt);
+    const acceptedIds = new Set((await this.store.listCandidateWindows({
+      localDate: raw.localDate,
+      windowType: "location_update",
+      status: "evidence",
+      limit: 500,
+    })).flatMap((window) => window.rawRefs.map((ref) => ref.id)));
+    return raws
+      .filter((candidate) => candidate.id !== raw.id)
+      .filter((candidate) => acceptedIds.has(candidate.id))
+      .filter((candidate) => Date.parse(candidate.occurredAt) < currentTs)
+      .sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt))[0] ?? null;
   }
 
   private async generateTransition(raw: AmbientRawEvent): Promise<PersonalSignalInput | null> {
@@ -506,6 +580,7 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     deviceLabels: string[];
     rawRefs: AmbientRawRef[];
     compactContext: string;
+    metadata?: Record<string, unknown>;
     privacyHint: AmbientCandidateWindow["privacyHint"];
     confidenceHint: number;
     salienceHint: number;
@@ -530,6 +605,7 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
       rawRefs: uniqueRawRefs(args.rawRefs),
       observationIds: [],
       compactContext: args.compactContext,
+      ...(args.metadata ? { metadata: args.metadata } : {}),
       privacyHint: args.privacyHint,
       confidenceHint: clamp01(args.confidenceHint),
       salienceHint: clamp01(args.salienceHint),
@@ -634,8 +710,74 @@ function rawRef(raw: AmbientRawEvent): AmbientRawRef {
   return { sourceType: raw.sourceType, id: raw.id };
 }
 
+function locationSignalMetadata(payload: Record<string, unknown>): Record<string, unknown> | undefined {
+  const metadata: Record<string, unknown> = {};
+  const place = recordPayload(payload, "place");
+  if (place) {
+    metadata.place = place;
+  } else {
+    const placeLabelValue = stringPayload(payload, "place_label");
+    if (placeLabelValue) metadata.place = { label: placeLabelValue };
+  }
+  const latitude = numberPayload(payload, "latitude");
+  if (latitude !== null) metadata.latitude = latitude;
+  const longitude = numberPayload(payload, "longitude");
+  if (longitude !== null) metadata.longitude = longitude;
+  const accuracy = numberPayload(payload, "accuracy");
+  if (accuracy !== null) metadata.accuracy = accuracy;
+  const altitude = numberPayload(payload, "altitude");
+  if (altitude !== null) metadata.altitude = altitude;
+  const speed = numberPayload(payload, "speed");
+  if (speed !== null) metadata.speed = speed;
+  const heading = numberPayload(payload, "heading");
+  if (heading !== null) metadata.heading = heading;
+  if (typeof payload.place_cached === "boolean") metadata.place_cached = payload.place_cached;
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
+function recordPayload(
+  payload: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> | null {
+  const value = payload[key];
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
 const MIN_STEPS_FOR_VISIBLE_HEALTH = 100;
 const MORNING_CUTOFF_HOUR = 12;
+const SIGNIFICANT_LOCATION_DISTANCE_METERS = 300;
+const LOCATION_REFRESH_CONTEXT_MS = 2 * 60 * 60 * 1000;
+
+
+function locationConfidence(raw: AmbientRawEvent): number {
+  const accuracy = numberPayload(raw.payload, "accuracy");
+  if (accuracy === null) return 0.65;
+  if (accuracy <= 50) return 0.72;
+  if (accuracy <= 150) return 0.62;
+  return 0.5;
+}
+
+function distanceMeters(a: AmbientRawEvent, b: AmbientRawEvent): number | null {
+  const latA = numberPayload(a.payload, "latitude");
+  const lngA = numberPayload(a.payload, "longitude");
+  const latB = numberPayload(b.payload, "latitude");
+  const lngB = numberPayload(b.payload, "longitude");
+  if (latA === null || lngA === null || latB === null || lngB === null) return null;
+  const radiusMeters = 6_371_000;
+  const dLat = degreesToRadians(latB - latA);
+  const dLng = degreesToRadians(lngB - lngA);
+  const x = Math.sin(dLat / 2) ** 2
+    + Math.cos(degreesToRadians(latA))
+    * Math.cos(degreesToRadians(latB))
+    * Math.sin(dLng / 2) ** 2;
+  return 2 * radiusMeters * Math.asin(Math.sqrt(x));
+}
+
+function degreesToRadians(value: number): number {
+  return (value * Math.PI) / 180;
+}
 
 function healthFacts(raws: AmbientRawEvent[]): string[] {
   const facts: string[] = [];

@@ -29,8 +29,12 @@ export {
 } from "./pipeline";
 export type { AmbientTimelinePipeline } from "./pipeline";
 export {
+  AMBIENT_LOCATION_UPDATE_KIND,
+  AMBIENT_VISIT_EVENT_KIND,
   localEventIdsFromSignals,
+  locationUpdateWindowToSignal,
   timelineEventToSignal,
+  visitWindowToSignal,
 } from "./envelope";
 export { ambientTimelineModels } from "./models";
 export { buildAmbientNarrativeSummary, groupAmbientTimelineEvents } from "./narrative";
