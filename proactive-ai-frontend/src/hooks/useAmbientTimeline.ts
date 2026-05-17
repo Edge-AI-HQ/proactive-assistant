@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { isNative } from "@/lib/platform";
+import { getAmbientRuntime } from "@/services/ambient";
 import {
-  getAmbientTimelinePipeline,
   getAmbientTimelineStore,
   todayLocalDate,
   buildAmbientNarrativeSummary,
@@ -26,7 +26,7 @@ export interface UseAmbientTimelineResult {
 
 export function useAmbientTimeline(localDate = todayLocalDate()): UseAmbientTimelineResult {
   const store = useMemo(() => getAmbientTimelineStore(), []);
-  const pipeline = useMemo(() => getAmbientTimelinePipeline(), []);
+  const runtime = useMemo(() => getAmbientRuntime(), []);
   const [events, setEvents] = useState<AmbientTimelineEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -37,7 +37,7 @@ export function useAmbientTimeline(localDate = todayLocalDate()): UseAmbientTime
     setError(null);
     try {
       await store.init();
-      await pipeline.regenerateDay(localDate);
+      await runtime.refreshTimeline(localDate);
       const rows = await store.listTimelineEvents(localDate, {
         visibleOnly: true,
         limit: 20,
@@ -57,7 +57,7 @@ export function useAmbientTimeline(localDate = todayLocalDate()): UseAmbientTime
     } finally {
       setLoading(false);
     }
-  }, [localDate, pipeline, store]);
+  }, [localDate, runtime, store]);
 
   const dismiss = useCallback(async (id: string) => {
     await store.dismissTimelineEvent(id);

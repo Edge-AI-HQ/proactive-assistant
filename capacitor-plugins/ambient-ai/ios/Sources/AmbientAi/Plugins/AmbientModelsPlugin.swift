@@ -11,11 +11,13 @@ public class AmbientModelsPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "cancelModelDownload", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "deleteModel", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "verifyModel", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "generateTimelineEvent", returnType: CAPPluginReturnPromise),
     ]
 
     private let store = ModelStore()
     private lazy var downloader = ModelDownloader(store: store)
     private let verifyEngine: ModelVerifyEngine = makeVerifyEngine()
+    private let textGenerator: LlamaTextGenerating = LlamaTextGenerationEngine()
     private var callbacksWired = false
 
     public override func load() {
@@ -140,12 +142,99 @@ public class AmbientModelsPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+
+    @objc func generateTimelineEvent(_ call: CAPPluginCall) {
+        guard let id = call.getString("modelId") else {
+            call.reject("Missing modelId", "model_not_found")
+            return
+        }
+        guard let profile = ModelManifest.profile(forId: id) else {
+            call.reject("Unknown model id", "model_not_found")
+            return
+        }
+        guard profile.kind == .llm else {
+            call.reject("Selected model is not an LLM", "model_not_llm")
+            return
+        }
+        let window = call.getObject("window") ?? [:]
+        Task { [downloader, store, textGenerator] in
+            let present = await store.isPresent(profile)
+            guard present else {
+                DispatchQueue.main.async { call.reject("Model not downloaded", "model_not_present") }
+                return
+            }
+            let status = await downloader.status(for: profile)
+            guard status.lastVerifyResult == "ok" else {
+                DispatchQueue.main.async { call.reject("Model must be verified before timeline generation", "verify_required") }
+                return
+            }
+            let path = await store.fileURL(for: profile)
+            do {
+                let prompt = Self.timelinePrompt(window: window)
+                let text = try await textGenerator.generate(
+                    modelURL: path,
+                    options: LlamaTextGenerationOptions(prompt: prompt, maxTokens: 256, timeout: 90)
+                )
+                let object = try Self.timelineDraftObject(from: text)
+                DispatchQueue.main.async { call.resolve(object) }
+            } catch LlamaTextGenerationError.timeout {
+                DispatchQueue.main.async { call.reject("Timeline generation timed out", "generation_timeout") }
+            } catch let error as TimelineGenerationParseError {
+                DispatchQueue.main.async { call.reject(error.localizedDescription, "invalid_json") }
+            } catch {
+                DispatchQueue.main.async { call.reject(error.localizedDescription, "generation_failed") }
+            }
+        }
+    }
+
     private func emit(_ snap: ModelDownloadSnapshot, event: String) {
         var payload = snap.jsObject()
         payload["emittedAt"] = Date().timeIntervalSince1970 * 1000.0
         DispatchQueue.main.async {
             self.notifyListeners(event, data: payload)
         }
+    }
+
+    private static func timelinePrompt(window: [String: Any]) -> String {
+        let context = (window["compactContext"] as? String) ?? ""
+        let startedAt = (window["startedAt"] as? String) ?? ""
+        let endedAt = (window["endedAt"] as? String) ?? ""
+        let sourceTypes = (window["sourceTypes"] as? [String])?.joined(separator: ", ") ?? ""
+        return """
+        You summarize ambient transcript windows into one JSON object.
+        Return only JSON with keys: title, summary, eventType, confidence, confidenceLabel, tags, salientFacts.
+        eventType must be one of conversation, meeting, focus, social, other.
+        confidence is a number between 0 and 1. confidenceLabel is certain or uncertain.
+        Window startedAt: \(startedAt)
+        Window endedAt: \(endedAt)
+        Source types: \(sourceTypes)
+        Context:
+        \(context)
+        """
+    }
+
+    private static func timelineDraftObject(from text: String) throws -> [String: Any] {
+        guard let json = extractJSONObjectString(from: text),
+              let data = json.data(using: .utf8),
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw TimelineGenerationParseError.invalidJSON
+        }
+        return object
+    }
+
+    private static func extractJSONObjectString(from text: String) -> String? {
+        guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"), start <= end else {
+            return nil
+        }
+        return String(text[start...end])
+    }
+}
+
+private enum TimelineGenerationParseError: LocalizedError {
+    case invalidJSON
+
+    var errorDescription: String? {
+        "Could not extract a JSON object from model output."
     }
 }
 

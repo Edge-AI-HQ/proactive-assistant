@@ -22,6 +22,7 @@ import {
   type ModelProfile,
   type ModelVerifyResult,
 } from "@pin/capacitor-ambient-ai";
+import { getSelectedAmbientSummaryModelId, setSelectedAmbientSummaryModelId } from "@/services/ambient/models-selection";
 
 type StatusById = Record<string, ModelDownloadStatus>;
 
@@ -30,7 +31,7 @@ const MIRROR_OPTIONS: { value: ModelMirror; label: string }[] = [
   { value: "hf", label: "huggingface.co" },
 ];
 const MIRROR_STORAGE_KEY = "pinai:ambient-models-preferred-mirror";
-const SELECTED_STORAGE_KEY = "pinai:ambient-models-selected-id";
+const VIEWED_MODEL_STORAGE_KEY = "pinai:ambient-models-viewed-id";
 
 function readStoredMirror(): ModelMirror {
   if (typeof window === "undefined") return "hf-mirror";
@@ -51,19 +52,19 @@ function storeMirror(value: ModelMirror): void {
   }
 }
 
-function readStoredSelected(): string | null {
+function readStoredViewed(): string | null {
   if (typeof window === "undefined") return null;
   try {
-    return window.localStorage.getItem(SELECTED_STORAGE_KEY);
+    return window.localStorage.getItem(VIEWED_MODEL_STORAGE_KEY);
   } catch {
     return null;
   }
 }
 
-function storeSelected(value: string): void {
+function storeViewed(value: string): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(SELECTED_STORAGE_KEY, value);
+    window.localStorage.setItem(VIEWED_MODEL_STORAGE_KEY, value);
   } catch {
     // ignore — debug surface only
   }
@@ -90,7 +91,8 @@ export default function AmbientModelsPanel() {
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
   const [statusById, setStatusById] = useState<StatusById>({});
   const [mirror, setMirror] = useState<ModelMirror>(() => readStoredMirror());
-  const [selectedId, setSelectedId] = useState<string | null>(() => readStoredSelected());
+  const [selectedId, setSelectedId] = useState<string | null>(() => readStoredViewed());
+  const [summaryModelId, setSummaryModelId] = useState<string | null>(() => getSelectedAmbientSummaryModelId());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -139,7 +141,7 @@ export default function AmbientModelsPanel() {
 
   const handleSelect = useCallback((id: string) => {
     setSelectedId(id);
-    storeSelected(id);
+    storeViewed(id);
   }, []);
 
   const selected = useMemo(
@@ -217,6 +219,12 @@ export default function AmbientModelsPanel() {
       setBusy(false);
     }
   }, [selected]);
+
+  const handleUseForLocalSummaries = useCallback(() => {
+    if (!selected || selected.kind !== "llm" || !verifyOk || state !== "present") return;
+    setSelectedAmbientSummaryModelId(selected.id);
+    setSummaryModelId(selected.id);
+  }, [selected, state, verifyOk]);
 
   const handleDelete = useCallback(async () => {
     if (!selected) return;
@@ -376,6 +384,14 @@ export default function AmbientModelsPanel() {
                 >
                   {verifying ? <Loader2 size={11} className="animate-spin" /> : null}
                   {verifying ? "Verifying…" : "Verify"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleUseForLocalSummaries}
+                  disabled={!selected || selected.kind !== "llm" || !verifyOk || state !== "present" || busy}
+                  className="flex-1 rounded-md bg-emerald-600/10 text-emerald-700 text-[11px] font-medium py-1.5 transition-colors hover:bg-emerald-600/15 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {summaryModelId === selected?.id ? "Using for summaries" : "Use for local summaries"}
                 </button>
                 <button
                   type="button"

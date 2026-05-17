@@ -135,4 +135,34 @@ describe("AmbientRuntime source reconciliation", () => {
       lastError: null,
     });
   });
+
+  test("refreshTimeline enqueues generated timeline signals", async () => {
+    const source = new FakeSource("sound_classifier");
+    const outbox = new MemoryOutboxStore();
+    const timelinePipeline = {
+      ingestSignal: vi.fn(),
+      regenerateDay: vi.fn(async () => [{
+        kind: "ambient.timeline_event",
+        title: "Local summary",
+        summary: "Generated locally",
+        occurred_at: "2026-05-15T10:00:00.000Z",
+        dedupe_key: "ambient:timeline:2026-05-15:llm:win_1",
+        payload: { local_event_id: "evt_1" },
+      }]),
+      processPendingWindows: vi.fn(),
+    };
+    const runtime = new AmbientRuntime({
+      sources: [source],
+      outbox,
+      enableTimers: false,
+      timelinePipeline,
+    });
+
+    await runtime.refreshTimeline("2026-05-15");
+
+    expect(timelinePipeline.regenerateDay).toHaveBeenCalledWith("2026-05-15");
+    expect(await outbox.count()).toBe(1);
+    expect(runtime.status().outboxPendingCount).toBe(1);
+  });
+
 });

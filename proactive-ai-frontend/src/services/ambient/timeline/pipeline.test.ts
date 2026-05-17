@@ -446,7 +446,7 @@ describe("LocalAmbientTimelinePipeline", () => {
         return null;
       },
       async generateTimelineEvent() {
-        return {
+        return { ok: true, draft: {
           eventType: "conversation",
           title: "Product review",
           summary: "Discussed a product review and a follow-up item.",
@@ -454,7 +454,7 @@ describe("LocalAmbientTimelinePipeline", () => {
           confidence: 0.7,
           confidenceLabel: "certain",
           salientFacts: ["Follow-up item discussed"],
-        };
+        } };
       },
     };
     const pipeline = new LocalAmbientTimelinePipeline(store, modelBridge);
@@ -506,7 +506,7 @@ describe("LocalAmbientTimelinePipeline", () => {
     const modelBridge: AmbientTimelineModelBridge = {
       async summarizeWindow() { return null; },
       async generateTimelineEvent() {
-        return {
+        return { ok: true, draft: {
           eventType: "conversation",
           title: "Dismissed conversation",
           summary: "Discussed a topic that should stay hidden after dismiss.",
@@ -514,7 +514,7 @@ describe("LocalAmbientTimelinePipeline", () => {
           confidence: 0.72,
           confidenceLabel: "certain",
           salientFacts: [],
-        };
+        } };
       },
     };
     const pipeline = new LocalAmbientTimelinePipeline(store, modelBridge);
@@ -555,7 +555,7 @@ describe("LocalAmbientTimelinePipeline", () => {
       async summarizeWindow() { return null; },
       async generateTimelineEvent() {
         calls += 1;
-        return {
+        return { ok: true, draft: {
           eventType: "conversation",
           title: "Too early",
           summary: "This should not be generated before the idle cutoff.",
@@ -563,7 +563,7 @@ describe("LocalAmbientTimelinePipeline", () => {
           confidence: 0.7,
           confidenceLabel: "certain",
           salientFacts: [],
-        };
+        } };
       },
     };
     const pipeline = new LocalAmbientTimelinePipeline(store, modelBridge, {
@@ -689,7 +689,7 @@ describe("LocalAmbientTimelinePipeline", () => {
       async summarizeWindow() { return null; },
       async generateTimelineEvent() {
         calls += 1;
-        return null;
+        return { ok: false, errorCode: "generation_timeout" };
       },
     };
     const pipeline = new LocalAmbientTimelinePipeline(store, modelBridge, {
@@ -716,7 +716,7 @@ describe("LocalAmbientTimelinePipeline", () => {
     expect(window).toMatchObject({
       status: "pending",
       attemptCount: 1,
-      lastErrorCode: "model_unavailable",
+      lastErrorCode: "generation_timeout",
     });
   });
 
@@ -768,7 +768,7 @@ describe("LocalAmbientTimelinePipeline", () => {
     const modelBridge: AmbientTimelineModelBridge = {
       async summarizeWindow() { return null; },
       async generateTimelineEvent() {
-        return {
+        return { ok: true, draft: {
           eventType: "conversation",
           title: "Transcript summary",
           summary,
@@ -776,7 +776,7 @@ describe("LocalAmbientTimelinePipeline", () => {
           confidence: 0.7,
           confidenceLabel: "certain",
           salientFacts: [],
-        };
+        } };
       },
     };
     const pipeline = new LocalAmbientTimelinePipeline(store, modelBridge, {

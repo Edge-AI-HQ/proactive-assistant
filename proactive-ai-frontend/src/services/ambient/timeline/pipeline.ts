@@ -76,11 +76,12 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
       if (window.generationPolicy !== "llm_allowed") continue;
       if (!this.isTranscriptWindowReady(window)) continue;
       if (!this.isBackoffExpired(window)) continue;
-      const draft = await this.modelBridge.generateTimelineEvent(window);
-      if (!draft) {
-        await this.recordWindowAttempt(window, "model_unavailable");
+      const result = await this.modelBridge.generateTimelineEvent(window);
+      if (!result.ok) {
+        await this.recordWindowAttempt(window, result.errorCode);
         continue;
       }
+      const draft = result.draft;
       const event = makeEvent({
         id: stableId("evt", ["llm", window.id]),
         localDate: window.localDate,

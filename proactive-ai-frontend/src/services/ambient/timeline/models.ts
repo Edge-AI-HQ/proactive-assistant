@@ -23,11 +23,27 @@ export interface AmbientWindowSummary {
   salientFacts: string[];
 }
 
+export type AmbientTimelineGenerationErrorCode =
+  | "no_selected_model"
+  | "model_not_found"
+  | "model_not_llm"
+  | "model_not_present"
+  | "verify_required"
+  | "native_unavailable"
+  | "generation_timeout"
+  | "invalid_json"
+  | "invalid_shape"
+  | "generation_failed";
+
+export type AmbientTimelineGenerationResult =
+  | { ok: true; draft: AmbientTimelineEventDraft }
+  | { ok: false; errorCode: AmbientTimelineGenerationErrorCode };
+
 export interface AmbientTimelineModelBridge {
   summarizeWindow(window: AmbientCandidateWindow): Promise<AmbientWindowSummary | null>;
   generateTimelineEvent(
     window: AmbientCandidateWindow,
-  ): Promise<AmbientTimelineEventDraft | null>;
+  ): Promise<AmbientTimelineGenerationResult>;
 }
 
 interface NativeModelProfile {
@@ -73,19 +89,28 @@ class NativeAmbientTimelineModelBridge implements AmbientTimelineModelBridge {
 
   async generateTimelineEvent(
     window: AmbientCandidateWindow,
-  ): Promise<AmbientTimelineEventDraft | null> {
+  ): Promise<AmbientTimelineGenerationResult> {
     const modelId = getSelectedAmbientSummaryModelId();
-    if (!modelId) return null;
+    if (!modelId) return { ok: false, errorCode: "no_selected_model" };
+    let api: NativeModelsApi;
     try {
-      const api = await loadNativeModelsApi();
-      if (!await isSelectedModelReady(api, modelId)) return null;
-      const draft = await api.generateTimelineEvent({
+      api = await loadNativeModelsApi();
+    } catch {
+      return { ok: false, errorCode: "native_unavailable" };
+    }
+    const ready = await selectedModelReadiness(api, modelId);
+    if (!ready.ok) return ready;
+    try {
+      const value = await api.generateTimelineEvent({
         modelId,
         window: modelWindowPayload(window),
       });
-      return normalizeDraft(draft);
-    } catch {
-      return null;
+      const draft = normalizeDraft(value);
+      return draft
+        ? { ok: true, draft }
+        : { ok: false, errorCode: "invalid_shape" };
+    } catch (err) {
+      return { ok: false, errorCode: normalizeErrorCode(err) };
     }
   }
 }
@@ -95,8 +120,8 @@ class NoopAmbientTimelineModelBridge implements AmbientTimelineModelBridge {
     return null;
   }
 
-  async generateTimelineEvent(): Promise<AmbientTimelineEventDraft | null> {
-    return null;
+  async generateTimelineEvent(): Promise<AmbientTimelineGenerationResult> {
+    return { ok: false, errorCode: "native_unavailable" };
   }
 }
 
@@ -111,13 +136,18 @@ async function loadNativeModelsApi(): Promise<NativeModelsApi> {
   return mod.AmbientAi.models;
 }
 
-async function isSelectedModelReady(api: NativeModelsApi, modelId: string): Promise<boolean> {
+async function selectedModelReadiness(
+  api: NativeModelsApi,
+  modelId: string,
+): Promise<{ ok: true } | { ok: false; errorCode: AmbientTimelineGenerationErrorCode }> {
   const result = await api.list();
   const profile = result.profiles.find((item) => item.id === modelId);
+  if (!profile) return { ok: false, errorCode: "model_not_found" };
+  if (profile.kind !== "llm") return { ok: false, errorCode: "model_not_llm" };
   const status = result.statuses.find((item) => item.id === modelId);
-  return profile?.kind === "llm"
-    && status?.state === "present"
-    && status.lastVerifyResult === "ok";
+  if (status?.state !== "present") return { ok: false, errorCode: "model_not_present" };
+  if (status.lastVerifyResult !== "ok") return { ok: false, errorCode: "verify_required" };
+  return { ok: true };
 }
 
 function modelWindowPayload(window: AmbientCandidateWindow): Record<string, unknown> {
@@ -143,10 +173,10 @@ function normalizeDraft(value: unknown): AmbientTimelineEventDraft | null {
   const row = value as Record<string, unknown>;
   const eventType = EVENT_TYPES.includes(row.eventType as AmbientTimelineEvent["eventType"])
     ? row.eventType as AmbientTimelineEvent["eventType"]
-    : null;
+    : "other";
   const title = shortText(row.title, 80);
   const summary = shortText(row.summary, 220);
-  if (!eventType || !title || !summary) return null;
+  if (!title || !summary) return null;
   const confidence = clamp01(typeof row.confidence === "number" ? row.confidence : 0.5);
   const confidenceLabel = row.confidenceLabel === "certain" || row.confidenceLabel === "uncertain"
     ? row.confidenceLabel
@@ -178,4 +208,27 @@ function stringArray(value: unknown): string[] {
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.min(1, Math.max(0, value));
+}
+
+function normalizeErrorCode(err: unknown): AmbientTimelineGenerationErrorCode {
+  if (err && typeof err === "object" && "code" in err) {
+    const code = (err as { code?: unknown }).code;
+    if (isGenerationErrorCode(code)) return code;
+  }
+  return "generation_failed";
+}
+
+function isGenerationErrorCode(value: unknown): value is AmbientTimelineGenerationErrorCode {
+  return typeof value === "string" && [
+    "no_selected_model",
+    "model_not_found",
+    "model_not_llm",
+    "model_not_present",
+    "verify_required",
+    "native_unavailable",
+    "generation_timeout",
+    "invalid_json",
+    "invalid_shape",
+    "generation_failed",
+  ].includes(value);
 }

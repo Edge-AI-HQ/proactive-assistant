@@ -56,7 +56,7 @@ describe("Ambient timeline model bridge", () => {
   test("does not call native generation without an explicit selected model", async () => {
     const bridge = createAmbientTimelineModelBridge();
 
-    await expect(bridge.generateTimelineEvent(windowInput)).resolves.toBeNull();
+    await expect(bridge.generateTimelineEvent(windowInput)).resolves.toEqual({ ok: false, errorCode: "no_selected_model" });
 
     expect(native.models.generateTimelineEvent).not.toHaveBeenCalled();
   });
@@ -81,7 +81,7 @@ describe("Ambient timeline model bridge", () => {
 
     const result = await bridge.generateTimelineEvent(windowInput);
 
-    expect(result).toMatchObject({ title: "Product review", eventType: "conversation" });
+    expect(result).toMatchObject({ ok: true, draft: { title: "Product review", eventType: "conversation" } });
     expect(native.models.generateTimelineEvent).toHaveBeenCalledWith({
       modelId: "qwen3-1_7b-q4",
       window: expect.objectContaining({
@@ -92,6 +92,46 @@ describe("Ambient timeline model bridge", () => {
     const payload = native.models.generateTimelineEvent.mock.calls[0][0].window;
     expect(payload.rawRefs).toBeUndefined();
     expect(payload.compactContext).toBe(windowInput.compactContext);
-    expect(result?.actionCandidates).toBeUndefined();
+    expect(result.ok ? result.draft.actionCandidates : undefined).toBeUndefined();
   });
+  test("returns typed errors and falls back unknown event types to other", async () => {
+    setSelectedAmbientSummaryModelId("qwen3-1_7b-q4");
+    native.models.list.mockResolvedValue({
+      profiles: [{ id: "qwen3-1_7b-q4", kind: "llm" }],
+      statuses: [{ id: "qwen3-1_7b-q4", state: "present", lastVerifyResult: "ok" }],
+    });
+    native.models.generateTimelineEvent.mockResolvedValue({
+      eventType: "planning",
+      title: "Planning chat",
+      summary: "Discussed planning follow-ups.",
+      confidence: 0.6,
+      confidenceLabel: "uncertain",
+    });
+    const bridge = createAmbientTimelineModelBridge();
+
+    const result = await bridge.generateTimelineEvent(windowInput);
+
+    expect(result).toMatchObject({
+      ok: true,
+      draft: { eventType: "other", title: "Planning chat" },
+    });
+  });
+
+  test("preserves native error codes", async () => {
+    setSelectedAmbientSummaryModelId("qwen3-1_7b-q4");
+    native.models.list.mockResolvedValue({
+      profiles: [{ id: "qwen3-1_7b-q4", kind: "llm" }],
+      statuses: [{ id: "qwen3-1_7b-q4", state: "present", lastVerifyResult: "ok" }],
+    });
+    const err = new Error("timed out");
+    Object.assign(err, { code: "generation_timeout" });
+    native.models.generateTimelineEvent.mockRejectedValue(err);
+    const bridge = createAmbientTimelineModelBridge();
+
+    await expect(bridge.generateTimelineEvent(windowInput)).resolves.toEqual({
+      ok: false,
+      errorCode: "generation_timeout",
+    });
+  });
+
 });

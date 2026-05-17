@@ -63,6 +63,7 @@ export interface AmbientRuntimeOptions {
   sources?: AmbientSource[];
   outbox?: OutboxStore;
   scheduler?: AmbientSyncScheduler;
+  timelinePipeline?: AmbientTimelinePipeline;
   enableTimers?: boolean;
   sourceWatchdogIntervalMs?: number;
 }
@@ -98,7 +99,7 @@ export class AmbientRuntime {
     this.outbox = options.outbox ?? (isNative ? new SqliteOutboxStore() : new MemoryOutboxStore());
     this.scheduler = options.scheduler ?? new AmbientSyncScheduler(this.outbox);
     this.scheduler.setUploadsLocked(loadUploadsLocked());
-    this.timelinePipeline = getAmbientTimelinePipeline();
+    this.timelinePipeline = options.timelinePipeline ?? getAmbientTimelinePipeline();
     this.buffer = new SignalBuffer((batch) => this.flushBatch(batch));
     this.statusBySource = new Map();
 
@@ -235,6 +236,23 @@ export class AmbientRuntime {
 
   async refreshActiveSources(): Promise<void> {
     await this.reconcileDesiredSources();
+  }
+
+  async refreshTimeline(localDate?: string): Promise<void> {
+    try {
+      const signals = await this.timelinePipeline.regenerateDay(localDate);
+      if (signals.length > 0) {
+        await this.outbox.enqueue(signals);
+        this.lastFlushTs = Date.now();
+      }
+      this.lastIngestError = null;
+      await this.refreshOutboxCount();
+    } catch (err) {
+      this.lastIngestError = describeError(err);
+      throw err;
+    } finally {
+      this.notify();
+    }
   }
 
   status(): RuntimeStatus {
