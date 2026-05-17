@@ -67,7 +67,7 @@ async def test_voice_transcribe_posts_raw_audio(monkeypatch):
     assert captured["filename"] == "input.wav"
     assert captured["bearer_token"] == "sk-test-voice"
     assert captured["model"] == "gpt-4o-transcribe"
-    assert captured["language"] == "zh"
+    assert captured["language"] is None
     assert captured["required_models"] == {"gpt-4o-transcribe"}
 
 
@@ -98,6 +98,35 @@ async def test_voice_transcribe_accepts_language_hint(monkeypatch):
 
     assert response.status_code == 200
     assert captured["language"] == "en"
+
+
+@pytest.mark.asyncio
+async def test_voice_transcribe_accepts_chinese_language_hint(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def fake_transcribe_audio(**kwargs):
+        captured.update(kwargs)
+        return "测试"
+
+    async def fake_ensure_user_litellm_key(_pool, user, *, required_models=None):
+        user.litellm_virtual_key = "sk-test-voice"
+        return user
+
+    monkeypatch.setattr(voice_routes, "transcribe_audio", fake_transcribe_audio)
+    monkeypatch.setattr(
+        voice_routes, "ensure_user_litellm_key", fake_ensure_user_litellm_key,
+    )
+
+    client = await _client()
+    async with client:
+        response = await client.post(
+            "/api/voice/transcribe?language=zh-Hans",
+            content=b"fake-audio",
+            headers={"Content-Type": "audio/wav"},
+        )
+
+    assert response.status_code == 200
+    assert captured["language"] == "zh"
 
 
 @pytest.mark.asyncio

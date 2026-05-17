@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, Mic, X } from "lucide-react";
 
@@ -39,6 +39,7 @@ export function VoiceProvider({ children, engine, transcriptionLanguage }: Voice
   const handleRef = useRef<VoiceEngineHandle | null>(null);
   const optsRef = useRef<StartCaptureOptions | null>(null);
   const transcriptRef = useRef("");
+  const transcriptScrollerRef = useRef<HTMLDivElement | null>(null);
   const captureSeqRef = useRef(0);
   const voiceLanguage = useMemo(
     () => normalizeVoiceLanguage(transcriptionLanguage),
@@ -52,7 +53,8 @@ export function VoiceProvider({ children, engine, transcriptionLanguage }: Voice
   const finishCapture = useCallback(async (commit: boolean) => {
     const handle = handleRef.current;
     const opts = optsRef.current;
-    captureSeqRef.current += 1;
+    const seq = captureSeqRef.current;
+    if (!commit) captureSeqRef.current += 1;
     handleRef.current = null;
     let completed = true;
 
@@ -73,6 +75,7 @@ export function VoiceProvider({ children, engine, transcriptionLanguage }: Voice
       optsRef.current = null;
       setIsCapturing(false);
       setIsFinalizing(false);
+      if (commit && captureSeqRef.current === seq) captureSeqRef.current += 1;
       if (commit && completed && opts?.onResult) opts.onResult(finalText);
     }
   }, []);
@@ -99,6 +102,7 @@ export function VoiceProvider({ children, engine, transcriptionLanguage }: Voice
       setIsFinalizing(false);
 
       const apply = (text: string) => {
+        if (captureSeqRef.current !== seq) return;
         transcriptRef.current = text;
         setTranscript(text);
         opts?.onUpdate?.(text);
@@ -137,6 +141,12 @@ export function VoiceProvider({ children, engine, transcriptionLanguage }: Voice
   );
 
   const palette = PULSE_PALETTES[pulseColorIndex % PULSE_PALETTES.length];
+
+  useEffect(() => {
+    const node = transcriptScrollerRef.current;
+    if (!node) return;
+    node.scrollLeft = node.scrollWidth;
+  }, [transcript, isFinalizing]);
 
   return (
     <VoiceContext.Provider value={value}>
@@ -204,9 +214,16 @@ export function VoiceProvider({ children, engine, transcriptionLanguage }: Voice
                   <Mic size={22} strokeWidth={1.8} />
                 </button>
               </div>
-              <p className="text-[14px] text-foreground/60 min-h-[22px] font-medium mb-5 px-8 text-center">
-                {isFinalizing ? "Transcribing..." : transcript || "Listening..."}
-              </p>
+              <div
+                ref={transcriptScrollerRef}
+                className="w-full max-w-[min(34rem,calc(100vw-3rem))] overflow-x-auto px-8 mb-5 text-center [&::-webkit-scrollbar]:hidden"
+                style={{ scrollbarWidth: "none" }}
+                aria-live="polite"
+              >
+                <p className="inline-block min-w-full whitespace-nowrap text-[14px] text-foreground/60 min-h-[22px] font-medium">
+                  {isFinalizing ? "Transcribing..." : transcript || "Listening..."}
+                </p>
+              </div>
               <div className="flex items-center gap-4">
                 <button
                   onClick={() => void finishCapture(false)}
