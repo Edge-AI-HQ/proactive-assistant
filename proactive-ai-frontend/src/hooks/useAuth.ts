@@ -4,6 +4,7 @@ import { Browser } from "@capacitor/browser";
 import { App as CapApp } from "@capacitor/app";
 import { supabase } from "@/lib/supabase";
 import { isNative } from "@/lib/platform";
+import { clearDeviceCredentials } from "@/lib/devices";
 
 /**
  * Auth hook for Supabase Google OAuth.
@@ -116,6 +117,7 @@ export function useAuth() {
     for (const key of Object.keys(localStorage)) {
       if (key.startsWith("pinai:")) localStorage.removeItem(key);
     }
+    await clearDeviceCredentials();
     await supabase.auth.signOut();
     window.location.replace("/");
   }, []);

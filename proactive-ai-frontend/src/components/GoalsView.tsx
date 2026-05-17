@@ -231,6 +231,7 @@ const RAW_PREVIEW_LIMIT = 12;
 
 interface DeviceRawPreview {
   deviceId: string;
+  sourceDeviceIds: string[];
   device: UserDevice | null;
   label: string;
   apps: DeviceAppRaw[];
@@ -256,6 +257,7 @@ interface RawSourceOption {
   kind: RawSourceKind;
   count: number;
   connected: boolean;
+  latestAt: number;
   deviceId?: string;
 }
 
@@ -395,6 +397,12 @@ function isRawTimeVisible(value?: string | null): boolean {
   return time <= end.getTime();
 }
 
+function rawTimeMs(value?: string | null): number {
+  if (!value || !isRawTimeVisible(value)) return 0;
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : 0;
+}
+
 function formatValue(value: unknown): string {
   if (value === null) return "null";
   if (value === undefined) return "undefined";
@@ -486,6 +494,7 @@ function buildRawSourceOptions(
     .map((source) => {
       const count = rawCount(raw, generic, genericCounts, source.id);
       const connected = (source.connectorToolkits ?? []).some((toolkit) => connectedToolkits.has(normalizeToolkit(toolkit)));
+      const latestAt = latestConnectorRawTime(source.id, raw, generic[source.id]?.rows ?? []);
 
       return {
         id: source.id,
@@ -493,6 +502,7 @@ function buildRawSourceOptions(
         kind: source.kind,
         count,
         connected,
+        latestAt,
       };
     })
     .filter((source) => source.connected || source.count > 0);
@@ -504,14 +514,40 @@ function buildRawSourceOptions(
       kind: "device" as const,
       count: device.total,
       connected: device.total > 0 || !!device.device,
+      latestAt: latestDeviceRawTime(device),
       deviceId: device.deviceId,
     }))
     .filter((source) => source.connected || source.count > 0);
 
-  const primaryConnectors = connectorSources.filter((source) => source.id === "gmail" || source.id === "gcal");
-  const otherConnectors = connectorSources.filter((source) => source.id !== "gmail" && source.id !== "gcal");
+  return [...connectorSources, ...deviceSources].sort((a, b) => (
+    b.latestAt - a.latestAt
+    || b.count - a.count
+    || Number(b.connected) - Number(a.connected)
+    || a.label.localeCompare(b.label)
+  ));
+}
 
-  return [...primaryConnectors, ...deviceSources, ...otherConnectors];
+function latestConnectorRawTime(
+  panel: RawPanel,
+  raw: RawPreview,
+  rows: RawTableRow[],
+): number {
+  if (panel === "gmail") {
+    return Math.max(0, ...raw.gmail.map((message) => rawTimeMs(message.occurred_at)));
+  }
+  if (panel === "gcal") {
+    return Math.max(0, ...raw.gcal.map((event) => rawTimeMs(event.start_at ?? event.occurred_at)));
+  }
+  return Math.max(0, ...rows.map((row) => rawTimeMs(pickGenericTime(row))));
+}
+
+function latestDeviceRawTime(preview: DeviceRawPreview): number {
+  return Math.max(
+    0,
+    ...preview.apps.map((app) => rawTimeMs(app.last_used_at ?? app.occurred_at)),
+    ...preview.contacts.map((contact) => rawTimeMs(contact.last_modified ?? contact.occurred_at)),
+    ...preview.health.map((item) => rawTimeMs(item.occurred_at ?? item.end_at ?? item.start_at)),
+  );
 }
 
 function countableGenericRawSources(): Array<{ id: RawPanel; table: string }> {
@@ -542,6 +578,31 @@ function Pill({ children, tone = "neutral" }: { children: ReactNode; tone?: Pill
   );
 }
 
+interface DeviceRawSeed {
+  deviceId: string;
+  device: UserDevice | null;
+  sourceDeviceIds: Set<string>;
+}
+
+async function collectDeviceRows<Row, Key extends "apps" | "contacts" | "observations">(
+  sourceDeviceIds: string[],
+  rowKey: Key,
+  loader: (deviceId: string) => Promise<Record<Key, Row[]> & { total?: number }>,
+): Promise<{ rows: Row[]; total: number }> {
+  const settled = await Promise.allSettled(sourceDeviceIds.map((deviceId) => loader(deviceId)));
+  const rows: Row[] = [];
+  let total = 0;
+
+  for (const result of settled) {
+    if (result.status !== "fulfilled") continue;
+    const sourceRows = result.value[rowKey] ?? [];
+    rows.push(...sourceRows);
+    total += typeof result.value.total === "number" ? result.value.total : sourceRows.length;
+  }
+
+  return { rows, total };
+}
+
 async function fetchRawPreview(signal?: AbortSignal): Promise<RawPreview> {
   const until = rawEndOfTodayIso();
   const [gmail, gcal, deviceList, appsSeed, contactsSeed, healthSeed] = await Promise.allSettled([
@@ -553,44 +614,79 @@ async function fetchRawPreview(signal?: AbortSignal): Promise<RawPreview> {
     fetchRawDeviceHealth({ until, limit: RAW_PREVIEW_LIMIT }, signal),
   ]);
 
-  const devicesById = new Map<string, UserDevice | null>();
+  const devicesById = new Map<string, DeviceRawSeed>();
+  const aliasToCanonical = new Map<string, string>();
   if (deviceList.status === "fulfilled") {
     for (const device of deviceList.value) {
       if (device.status === "revoked") continue;
-      devicesById.set(device.device_id, device);
+      const sourceDeviceIds = new Set([
+        device.device_id,
+        ...(device.aliased_device_ids ?? []),
+      ].filter(Boolean));
+      devicesById.set(device.device_id, {
+        deviceId: device.device_id,
+        device,
+        sourceDeviceIds,
+      });
+      for (const sourceDeviceId of sourceDeviceIds) {
+        aliasToCanonical.set(sourceDeviceId, device.device_id);
+      }
     }
   }
 
   const seedDeviceId = (deviceId: string | null | undefined) => {
-    if (deviceId && !devicesById.has(deviceId)) devicesById.set(deviceId, null);
+    if (!deviceId) return;
+    const canonicalDeviceId = aliasToCanonical.get(deviceId) ?? deviceId;
+    const existing = devicesById.get(canonicalDeviceId);
+    if (existing) {
+      existing.sourceDeviceIds.add(deviceId);
+      return;
+    }
+    devicesById.set(canonicalDeviceId, {
+      deviceId: canonicalDeviceId,
+      device: null,
+      sourceDeviceIds: new Set([deviceId]),
+    });
   };
   if (appsSeed.status === "fulfilled") appsSeed.value.apps.forEach((app) => seedDeviceId(app.device_id));
   if (contactsSeed.status === "fulfilled") contactsSeed.value.contacts.forEach((contact) => seedDeviceId(contact.device_id));
   if (healthSeed.status === "fulfilled") healthSeed.value.observations.forEach((item) => seedDeviceId(item.device_id));
 
   const devices = await Promise.all(
-    [...devicesById.entries()].map(async ([deviceId, device]) => {
+    [...devicesById.values()].map(async (group) => {
+      const sourceDeviceIds = [...group.sourceDeviceIds];
       const [apps, contacts, health, appsCount, contactsCount] = await Promise.allSettled([
-        fetchRawDeviceApps({ until, deviceId, latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal),
-        fetchRawDeviceContacts({ until, deviceId, latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal),
-        fetchRawDeviceHealth({ until, deviceId, limit: RAW_PREVIEW_LIMIT }, signal),
-        fetchRawDeviceApps({ until, deviceId, limit: 1 }, signal),
-        fetchRawDeviceContacts({ until, deviceId, limit: 1 }, signal),
+        collectDeviceRows(sourceDeviceIds, "apps", (deviceId) => (
+          fetchRawDeviceApps({ until, deviceId, latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal)
+        )),
+        collectDeviceRows(sourceDeviceIds, "contacts", (deviceId) => (
+          fetchRawDeviceContacts({ until, deviceId, latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal)
+        )),
+        collectDeviceRows(sourceDeviceIds, "observations", (deviceId) => (
+          fetchRawDeviceHealth({ until, deviceId, limit: RAW_PREVIEW_LIMIT }, signal)
+        )),
+        collectDeviceRows(sourceDeviceIds, "apps", (deviceId) => (
+          fetchRawDeviceApps({ until, deviceId, limit: 1 }, signal)
+        )),
+        collectDeviceRows(sourceDeviceIds, "contacts", (deviceId) => (
+          fetchRawDeviceContacts({ until, deviceId, limit: 1 }, signal)
+        )),
       ]);
-      const appsRows = apps.status === "fulfilled" ? apps.value.apps : [];
-      const contactsRows = contacts.status === "fulfilled" ? contacts.value.contacts : [];
-      const healthRows = health.status === "fulfilled" ? health.value.observations : [];
+      const appsRows = apps.status === "fulfilled" ? apps.value.rows : [];
+      const contactsRows = contacts.status === "fulfilled" ? contacts.value.rows : [];
+      const healthRows = health.status === "fulfilled" ? health.value.rows : [];
       const appsTotal = appsCount.status === "fulfilled"
-        ? (appsCount.value.total ?? appsRows.length)
-        : (apps.status === "fulfilled" ? (apps.value.total ?? appsRows.length) : 0);
+        ? appsCount.value.total
+        : (apps.status === "fulfilled" ? apps.value.total : 0);
       const contactsTotal = contactsCount.status === "fulfilled"
-        ? (contactsCount.value.total ?? contactsRows.length)
-        : (contacts.status === "fulfilled" ? (contacts.value.total ?? contactsRows.length) : 0);
-      const healthTotal = health.status === "fulfilled" ? (health.value.total ?? healthRows.length) : 0;
+        ? contactsCount.value.total
+        : (contacts.status === "fulfilled" ? contacts.value.total : 0);
+      const healthTotal = health.status === "fulfilled" ? health.value.total : 0;
       return {
-        deviceId,
-        device,
-        label: formatDeviceSourceLabel(deviceId, device),
+        deviceId: group.deviceId,
+        sourceDeviceIds,
+        device: group.device,
+        label: formatDeviceSourceLabel(group.deviceId, group.device),
         apps: appsRows,
         contacts: contactsRows,
         health: healthRows,
@@ -634,6 +730,50 @@ function countProfileFields(profile: ProfileSnapshot["profile"]): number {
   ].filter((value) => typeof value === "string" && value.trim().length > 0).length;
   const groupedFields = PROFILE_GROUP_META.reduce((sum, group) => sum + Object.keys(profile[group.key] ?? {}).length, 0);
   return topLevelFields + groupedFields;
+}
+
+const PROFILE_SUMMARY_KEYS = [
+  "summary",
+  "identity",
+  "identify",
+  "bio",
+  "about",
+  "description",
+  "persona",
+] as const;
+
+function firstTextValue(value: unknown): string | null {
+  if (typeof value === "string") {
+    const text = value.trim();
+    return text.length > 0 ? text : null;
+  }
+  if (Array.isArray(value)) {
+    const text = value
+      .map(firstTextValue)
+      .filter((item): item is string => Boolean(item))
+      .join(" ");
+    return text.trim() || null;
+  }
+  if (!value || typeof value !== "object") return null;
+
+  const record = value as Record<string, unknown>;
+  for (const key of PROFILE_SUMMARY_KEYS) {
+    const text = firstTextValue(record[key]);
+    if (text) return text;
+  }
+  return null;
+}
+
+function profileSummaryText(profile: ProfileSnapshot["profile"]): string {
+  const fallback = "No summary stored yet. The assistant will still use memories, signals, and goals below.";
+  if (!profile) return fallback;
+
+  return firstTextValue(profile.summary)
+    ?? firstTextValue(profile.facts)
+    ?? firstTextValue(profile.preferences)
+    ?? firstTextValue(profile.constraints)
+    ?? firstTextValue(profile.metadata)
+    ?? fallback;
 }
 
 function MetricCard({
@@ -838,6 +978,11 @@ function SignalItem({ signal }: { signal: PersonalSignal }) {
         <Pill tone="quality">salience {formatMetric(signal.salience)}</Pill>
         <Pill tone="confidence">confidence {formatMetric(signal.confidence)}</Pill>
         {signal.subject && <Pill tone="subject">{signal.subject}</Pill>}
+        {signal.source_raw_table && (
+          <Pill tone="source">
+            {signal.source_raw_table.replace(/^pai_raw_/, "raw:")} · {signal.source_raw_ids.length}
+          </Pill>
+        )}
       </div>
       {hasObjectKeys(signal.payload) && (
         <details className="mt-3 rounded-2xl bg-white/55 px-3 py-2 text-[11px] leading-5 text-foreground/62 ring-1 ring-white/60">
@@ -1007,7 +1152,7 @@ function buildDeviceRawRecords(preview: DeviceRawPreview): DeviceRawRecord[] {
         item.source_app,
         item.local_date,
       ].filter(Boolean).join(" · "),
-      time: item.end_at ?? item.start_at ?? item.occurred_at,
+      time: item.occurred_at ?? item.end_at ?? item.start_at,
       payload: {
         device_id: item.device_id,
         observation_type: item.observation_type,
@@ -1436,7 +1581,8 @@ export default function GoalsView({ composio }: GoalsViewProps) {
   const [genericLoading, setGenericLoading] = useState<Set<string>>(new Set());
   const genericCountLoadingRef = useRef<Set<string>>(new Set());
   const [activePanel, setActivePanel] = useState<DataPanel>("memory");
-  const [activeRawPanel, setActiveRawPanel] = useState<RawPanel>("gmail");
+  const [activeRawPanel, setActiveRawPanel] = useState<RawPanel>("");
+  const rawPanelTouchedRef = useRef(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const signalCutoffRef = useRef(currentTimestampIso());
@@ -1538,8 +1684,9 @@ export default function GoalsView({ composio }: GoalsViewProps) {
   const genericCountTargets = useMemo(() => countableGenericRawSources(), []);
 
   useEffect(() => {
-    if (rawSources.some((source) => source.id === activeRawPanel)) return;
     const nextPanel = rawSources[0]?.id;
+    const currentPanelExists = rawSources.some((source) => source.id === activeRawPanel);
+    if (rawPanelTouchedRef.current && currentPanelExists) return;
     if (nextPanel && nextPanel !== activeRawPanel) {
       setActiveRawPanel(nextPanel);
     }
@@ -1710,7 +1857,10 @@ export default function GoalsView({ composio }: GoalsViewProps) {
   // ── Render ──
 
   return (
-    <div className="flex flex-col h-full px-4 pt-3 pb-2 overflow-y-auto relative">
+    <div
+      className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain px-4 pb-2 pt-3"
+      style={{ WebkitOverflowScrolling: "touch" }}
+    >
       {/* Page header */}
       <div className="mb-6 pr-20">
         <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-foreground/35">
@@ -1754,7 +1904,7 @@ export default function GoalsView({ composio }: GoalsViewProps) {
                   </span>
                 </div>
                 <p className="mt-3 max-w-[68ch] text-sm leading-6 text-foreground/65 line-clamp-5">
-                  {profile?.summary?.trim() || "No summary stored yet. The assistant will still use memories, signals, and goals below."}
+                  {profileSummaryText(profile)}
                 </p>
               </div>
             </div>
@@ -1900,7 +2050,10 @@ export default function GoalsView({ composio }: GoalsViewProps) {
                   genericLoading={genericLoading}
                   sources={rawSources}
                   activeRawPanel={activeRawPanel}
-                  onChangeRawPanel={setActiveRawPanel}
+                  onChangeRawPanel={(panel) => {
+                    rawPanelTouchedRef.current = true;
+                    setActiveRawPanel(panel);
+                  }}
                 />
               )}
             </div>

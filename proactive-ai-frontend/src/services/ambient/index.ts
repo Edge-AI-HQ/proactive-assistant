@@ -7,8 +7,8 @@
  * short bursts, the outbox owns retry state, and AmbientSyncScheduler drains
  * the outbox through the existing device ingest bridge.
  */
-import type { PersonalSignalInput } from "@/lib/devices";
-import { isNative } from "@/lib/platform";
+import { currentDeviceOwnerUserId, type PersonalSignalInput } from "@/lib/devices";
+import { PIN_API_BASE, isNative } from "@/lib/platform";
 import { SignalBuffer } from "./buffer";
 import {
   ALL_SOURCE_KEYS,
@@ -102,7 +102,10 @@ export class AmbientRuntime {
     // keeps the in-memory store — SPA tab lifecycle is shorter and the
     // SQLite plugin's web path is heavy to set up.
     this.outbox = options.outbox ?? (isNative ? new SqliteOutboxStore() : new MemoryOutboxStore());
-    this.scheduler = options.scheduler ?? new AmbientSyncScheduler(this.outbox);
+    this.scheduler = options.scheduler ?? new AmbientSyncScheduler(this.outbox, {
+      ownerUserIdProvider: currentDeviceOwnerUserId,
+      backendUrlProvider: () => PIN_API_BASE,
+    });
     this.scheduler.setUploadsLocked(loadUploadsLocked());
     this.timelinePipeline = options.timelinePipeline ?? getAmbientTimelinePipeline();
     this.buffer = new SignalBuffer((batch) => this.flushBatch(batch));

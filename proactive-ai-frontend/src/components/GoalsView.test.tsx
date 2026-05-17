@@ -233,6 +233,63 @@ describe("GoalsView", () => {
     });
   });
 
+  test("uses identity text when profile summary is empty", async () => {
+    mockFetchProfileSnapshot.mockResolvedValueOnce({
+      profile: {
+        id: "profile-1",
+        user_id: "local-user",
+        display_name: "Smile",
+        locale: "zh-CN",
+        timezone: "Asia/Shanghai",
+        summary: null,
+        facts: { identify: "Builds personal AI products and tests mobile flows." },
+        preferences: {},
+        constraints: {},
+        metadata: {},
+      },
+      goals: [],
+      memories: [],
+      signals: [],
+      interests: [],
+    });
+
+    render(<GoalsView composio={makeComposioState([])} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Builds personal AI products and tests mobile flows.")).toBeTruthy();
+    });
+    expect(screen.queryByText(/No summary stored yet/i)).toBeNull();
+  });
+
+  test("does not use unrelated profile fields as summary text", async () => {
+    mockFetchProfileSnapshot.mockResolvedValueOnce({
+      profile: {
+        id: "profile-1",
+        user_id: "local-user",
+        display_name: "Smile",
+        locale: "zh-CN",
+        timezone: "Asia/Shanghai",
+        summary: null,
+        facts: { role: "founder" },
+        preferences: { communication: "direct" },
+        constraints: {},
+        metadata: {},
+      },
+      goals: [],
+      memories: [],
+      signals: [],
+      interests: [],
+    });
+
+    render(<GoalsView composio={makeComposioState([])} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/No summary stored yet/i)).toBeTruthy();
+    });
+    expect(screen.queryByText("founder")).toBeNull();
+    expect(screen.queryByText("direct")).toBeNull();
+  });
+
   test("includes active generic connector raw counts in the profile raw total", async () => {
     mockFetchRawGmail.mockResolvedValueOnce({ ok: true, messages: [], total: 200 });
     mockFetchRawGcal.mockResolvedValueOnce({ ok: true, events: [], total: 100 });
@@ -442,6 +499,173 @@ describe("GoalsView", () => {
     expect(screen.queryByText("Future Calendar Event")).toBeNull();
     expect(mockFetchRawGcal).toHaveBeenCalledWith(
       expect.objectContaining({ until: expect.any(String), limit: 12 }),
+      expect.any(AbortSignal),
+    );
+  });
+
+  test("opens the freshest device raw source and keeps health rows visible by occurred time", async () => {
+    mockListUserDevices.mockResolvedValueOnce([
+      {
+        device_id: "iphone-1",
+        platform: "ios",
+        display_name: "Smile iPhone",
+        app_version: null,
+        model: null,
+        status: "active",
+        registered_at: "2026-05-01T00:00:00Z",
+        last_seen_at: null,
+        metadata: {},
+      },
+    ]);
+    mockFetchRawGmail.mockResolvedValueOnce({
+      ok: true,
+      messages: [{
+        id: "old-gmail-row",
+        message_id: "old-gmail-row",
+        thread_id: null,
+        from_addr: "old@example.com",
+        to_addrs: [],
+        cc_addrs: [],
+        subject: "Old Gmail",
+        snippet: null,
+        body: null,
+        label_ids: [],
+        internal_date: null,
+        occurred_at: "2000-01-01T00:00:00Z",
+        ingested_at: "2000-01-01T00:00:00Z",
+        dedupe_key: "old-gmail-row",
+        reference_count: 0,
+        last_referenced_at: null,
+        referenced_by_runs: [],
+      }],
+      total: 267,
+    });
+    mockFetchRawDeviceApps.mockResolvedValue({ ok: true, apps: [], total: 0 });
+    mockFetchRawDeviceContacts.mockResolvedValue({ ok: true, contacts: [], total: 0 });
+    mockFetchRawDeviceHealth.mockResolvedValue({
+      ok: true,
+      observations: [{
+        id: "health-today",
+        device_id: "iphone-1",
+        observation_type: "daily_summary",
+        metric: "steps",
+        value: 1249,
+        unit: "count",
+        start_at: "2026-05-17T00:00:00Z",
+        end_at: "2999-05-18T00:00:00Z",
+        local_date: "2026-05-17",
+        source_app: "healthkit",
+        payload: {},
+        occurred_at: "2026-05-17T03:17:40.727Z",
+        ingested_at: "2026-05-17T03:17:52.992Z",
+        dedupe_key: "health-today",
+        reference_count: 0,
+        last_referenced_at: null,
+        referenced_by_runs: [],
+      }],
+      total: 1,
+    });
+
+    render(<GoalsView composio={makeComposioState([{
+      toolkit: "gmail",
+      status: "ACTIVE",
+      connectedAccountId: "gmail-account",
+      label: null,
+      userInfo: null,
+    }])} />);
+
+    await openWorkbenchRawPanel();
+
+    await waitFor(() => {
+      expect(screen.getByText("steps · daily_summary")).toBeTruthy();
+    });
+    expect(screen.getByText(/1249 count/)).toBeTruthy();
+    expect(screen.getByDisplayValue("Smile iPhone (IOS) (1)")).toBeTruthy();
+  });
+
+  test("uses device aliases so stale iOS raw IDs do not create duplicate sources", async () => {
+    mockListUserDevices.mockResolvedValueOnce([
+      {
+        device_id: "iphone-current",
+        platform: "ios",
+        display_name: "Smile iPhone",
+        app_version: null,
+        model: "iPhone16,2",
+        status: "active",
+        registered_at: "2026-05-17T00:00:00Z",
+        last_seen_at: "2026-05-17T03:30:00Z",
+        metadata: { hardware_signature: "hardware-v1:ios:Apple:iPhone16,2:physical" },
+        aliased_device_ids: ["iphone-current", "iphone-old"],
+      },
+    ]);
+    mockFetchRawDeviceApps.mockResolvedValue({ ok: true, apps: [], total: 0 });
+    mockFetchRawDeviceContacts.mockResolvedValue({ ok: true, contacts: [], total: 0 });
+    mockFetchRawDeviceHealth.mockImplementation(async (filter) => {
+      const rows = [
+        {
+          id: "health-current",
+          device_id: "iphone-current",
+          observation_type: "daily_summary",
+          metric: "steps",
+          value: 1249,
+          unit: "count",
+          start_at: "2026-05-17T00:00:00Z",
+          end_at: "2026-05-18T00:00:00Z",
+          local_date: "2026-05-17",
+          source_app: "healthkit",
+          payload: {},
+          occurred_at: "2026-05-17T03:17:40.727Z",
+          ingested_at: "2026-05-17T03:17:52.992Z",
+          dedupe_key: "health-current",
+          reference_count: 0,
+          last_referenced_at: null,
+          referenced_by_runs: [],
+        },
+        {
+          id: "health-old",
+          device_id: "iphone-old",
+          observation_type: "daily_summary",
+          metric: "distance",
+          value: 1.2,
+          unit: "km",
+          start_at: "2026-05-15T00:00:00Z",
+          end_at: "2026-05-16T00:00:00Z",
+          local_date: "2026-05-15",
+          source_app: "healthkit",
+          payload: {},
+          occurred_at: "2026-05-15T03:17:40.727Z",
+          ingested_at: "2026-05-15T03:17:52.992Z",
+          dedupe_key: "health-old",
+          reference_count: 0,
+          last_referenced_at: null,
+          referenced_by_runs: [],
+        },
+      ];
+      const filtered = filter?.deviceId
+        ? rows.filter((row) => row.device_id === filter.deviceId)
+        : rows;
+      return { ok: true, observations: filtered, total: filtered.length };
+    });
+
+    render(<GoalsView composio={makeComposioState([])} />);
+
+    await openWorkbenchRawPanel();
+
+    await waitFor(() => {
+      expect(screen.getByText("steps · daily_summary")).toBeTruthy();
+      expect(screen.getByText("distance · daily_summary")).toBeTruthy();
+    });
+    expect(screen.getByDisplayValue("Smile iPhone (IOS) (2)")).toBeTruthy();
+    const deviceOptions = screen.getAllByRole("option").filter((option) => (
+      /Smile iPhone/i.test(option.textContent ?? "")
+    ));
+    expect(deviceOptions).toHaveLength(1);
+    expect(mockFetchRawDeviceHealth).toHaveBeenCalledWith(
+      expect.objectContaining({ deviceId: "iphone-current", limit: 12 }),
+      expect.any(AbortSignal),
+    );
+    expect(mockFetchRawDeviceHealth).toHaveBeenCalledWith(
+      expect.objectContaining({ deviceId: "iphone-old", limit: 12 }),
       expect.any(AbortSignal),
     );
   });

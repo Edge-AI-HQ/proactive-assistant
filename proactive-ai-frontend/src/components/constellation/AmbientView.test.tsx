@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import AmbientView from "./AmbientView";
 import { getPersistedAmbientEnabled } from "@/services/ambient/enabled-state";
 import { ALL_SOURCE_KEYS } from "@/services/ambient/keys";
+import type { UserDevice } from "@/lib/api";
 
 type MockElementProps = { children?: ReactNode } & Record<string, unknown>;
 
@@ -14,6 +15,7 @@ const {
   startAmbientUploadMock,
   stopAmbientUploadMock,
   liveDismissMock,
+  userDevicesMock,
 } = vi.hoisted(() => ({
   patchMock: vi.fn(),
   runtimeMock: {
@@ -24,6 +26,14 @@ const {
   startAmbientUploadMock: vi.fn(),
   stopAmbientUploadMock: vi.fn(),
   liveDismissMock: vi.fn(),
+  userDevicesMock: {
+    devices: [] as UserDevice[],
+    loading: false,
+    error: null as string | null,
+    refresh: vi.fn(),
+    registerDevice: vi.fn(),
+    revoke: vi.fn(),
+  },
 }));
 
 vi.mock("framer-motion", async () => {
@@ -64,6 +74,9 @@ vi.mock("@/hooks/useUserSettings", () => ({
     settings: { ambientSources: {}, generationLanguage: "zh-Hans" },
     patch: patchMock,
   }),
+}));
+vi.mock("@/hooks/useUserDevices", () => ({
+  useUserDevices: () => userDevicesMock,
 }));
 vi.mock("@/hooks/useAmbientLiveSession", () => ({
   useAmbientLiveSession: () => ({
@@ -128,6 +141,53 @@ describe("AmbientView ambient toggle", () => {
   afterEach(() => {
     localStorage.clear();
     vi.clearAllMocks();
+    userDevicesMock.devices = [];
+    userDevicesMock.loading = false;
+    userDevicesMock.error = null;
+  });
+
+  test("renders device count from the user device registry", () => {
+    runtimeMock.status.mockReturnValue(makeStatus());
+    userDevicesMock.devices = [
+      {
+        device_id: "ios-1",
+        platform: "ios",
+        display_name: "Smile iPhone",
+        app_version: null,
+        model: "iPhone 15 Pro Max",
+        registered_at: "2026-05-17T00:00:00Z",
+        last_seen_at: "2026-05-17T01:00:00Z",
+        status: "active",
+        metadata: {},
+      },
+      {
+        device_id: "watch-1",
+        platform: "wearable",
+        display_name: "Apple Watch",
+        app_version: null,
+        model: "Apple Watch Ultra",
+        registered_at: "2026-05-17T00:00:00Z",
+        last_seen_at: "2026-05-17T01:00:00Z",
+        status: "active",
+        metadata: {},
+      },
+      {
+        device_id: "web-1",
+        platform: "web",
+        display_name: "Browser",
+        app_version: null,
+        model: null,
+        registered_at: "2026-05-17T00:00:00Z",
+        last_seen_at: "2026-05-17T01:00:00Z",
+        status: "active",
+        metadata: {},
+      },
+    ];
+
+    render(<AmbientView />);
+
+    expect(screen.getByText("2 devices")).toBeTruthy();
+    expect(screen.queryByText("4 devices")).toBeNull();
   });
 
   test("persists manual enablement and starts all ambient sources", async () => {

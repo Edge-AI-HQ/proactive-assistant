@@ -13,16 +13,28 @@ export interface OutboxRecord {
   nextRetryAt: number | null;
   insertedAt: number;
   syncedAt: number | null;
+  syncedOwnerUserId: string | null;
+  syncedBackendUrl: string | null;
 }
 
 export interface OutboxStore {
   readonly kind: OutboxKind;
   enqueue(items: PersonalSignalInput[]): Promise<number>;
-  pending(limit: number, now?: number): Promise<OutboxRecord[]>;
-  markSynced(ids: string[], at?: number): Promise<void>;
+  pending(
+    limit: number,
+    now?: number,
+    ownerUserId?: string | null,
+    backendUrl?: string | null,
+  ): Promise<OutboxRecord[]>;
+  markSynced(
+    ids: string[],
+    at?: number,
+    ownerUserId?: string | null,
+    backendUrl?: string | null,
+  ): Promise<void>;
   markFailed(ids: string[], error: string, nextRetryAt: number): Promise<void>;
   prune(now?: number): Promise<number>;
-  count(): Promise<number>;
+  count(ownerUserId?: string | null, backendUrl?: string | null): Promise<number>;
 }
 
 const SYNCED_RETENTION_MS = 86_400_000;
@@ -46,21 +58,33 @@ export class MemoryOutboxStore implements OutboxStore {
     return inserted;
   }
 
-  async pending(limit: number, now = Date.now()): Promise<OutboxRecord[]> {
+  async pending(
+    limit: number,
+    now = Date.now(),
+    ownerUserId: string | null = null,
+    backendUrl: string | null = null,
+  ): Promise<OutboxRecord[]> {
     return this.records
-      .filter((row) => isReady(row, now))
+      .filter((row) => isReady(row, now, ownerUserId, backendUrl))
       .sort(compareRecords)
       .slice(0, limit)
       .map(cloneRecord);
   }
 
-  async markSynced(ids: string[], at = Date.now()): Promise<void> {
+  async markSynced(
+    ids: string[],
+    at = Date.now(),
+    ownerUserId: string | null = null,
+    backendUrl: string | null = null,
+  ): Promise<void> {
     if (ids.length === 0) return;
     const idSet = new Set(ids);
     for (const row of this.records) {
       if (!idSet.has(row.id)) continue;
       row.status = "synced";
       row.syncedAt = at;
+      row.syncedOwnerUserId = ownerUserId;
+      row.syncedBackendUrl = backendUrl;
       row.nextRetryAt = null;
       row.lastError = null;
     }
@@ -89,8 +113,11 @@ export class MemoryOutboxStore implements OutboxStore {
     return before - this.records.length;
   }
 
-  async count(): Promise<number> {
-    return this.records.filter((row) => row.status !== "synced").length;
+  async count(
+    ownerUserId: string | null = null,
+    backendUrl: string | null = null,
+  ): Promise<number> {
+    return this.records.filter((row) => isUnsettledForScope(row, ownerUserId, backendUrl)).length;
   }
 }
 
@@ -115,14 +142,32 @@ function makeRecord(item: PersonalSignalInput, now: number): OutboxRecord {
     nextRetryAt: null,
     insertedAt: now,
     syncedAt: null,
+    syncedOwnerUserId: null,
+    syncedBackendUrl: null,
   };
 }
 
-function isReady(row: OutboxRecord, now: number): boolean {
-  if (row.status !== "pending" && row.status !== "failed") return false;
+function isReady(
+  row: OutboxRecord,
+  now: number,
+  ownerUserId: string | null,
+  backendUrl: string | null,
+): boolean {
+  if (!isUnsettledForScope(row, ownerUserId, backendUrl)) return false;
   if (recordAvailableAt(row) > now) return false;
   if (recordExpiresAt(row) <= now) return false;
   return row.nextRetryAt === null || row.nextRetryAt <= now;
+}
+
+function isUnsettledForScope(
+  row: OutboxRecord,
+  ownerUserId: string | null,
+  backendUrl: string | null,
+): boolean {
+  if (row.status !== "synced") return true;
+  if (ownerUserId && row.syncedOwnerUserId !== ownerUserId) return true;
+  if (backendUrl && row.syncedBackendUrl !== backendUrl) return true;
+  return false;
 }
 
 function compareRecords(a: OutboxRecord, b: OutboxRecord): number {
@@ -183,7 +228,9 @@ function generateId(): string {
 //     last_error TEXT,
 //     next_retry_at INTEGER,
 //     inserted_at INTEGER NOT NULL,
-//     synced_at INTEGER
+//     synced_at INTEGER,
+//     synced_owner_user_id TEXT,
+//     synced_backend_url TEXT
 //   );
 //   CREATE INDEX IF NOT EXISTS ix_ambient_outbox_pending
 //     ON ambient_outbox (status, next_retry_at);
@@ -270,12 +317,59 @@ async function openSqliteConnectionOnce(): Promise<SqliteConnection> {
       last_error TEXT,
       next_retry_at INTEGER,
       inserted_at INTEGER NOT NULL,
-      synced_at INTEGER
+      synced_at INTEGER,
+      synced_owner_user_id TEXT,
+      synced_backend_url TEXT
     );
     CREATE INDEX IF NOT EXISTS ix_ambient_outbox_pending
       ON ambient_outbox (status, next_retry_at);
   `);
+  await ensureSqliteColumn(conn, "ambient_outbox", "synced_owner_user_id", "TEXT");
+  await ensureSqliteColumn(conn, "ambient_outbox", "synced_backend_url", "TEXT");
+  await runSqliteMigrations(conn);
   return conn;
+}
+
+async function ensureSqliteColumn(
+  conn: SqliteConnection,
+  tableName: string,
+  columnName: string,
+  columnType: string,
+): Promise<void> {
+  const res = await conn.query(`PRAGMA table_info(${tableName})`);
+  const columns = res.values ?? [];
+  if (columns.some((row) => row.name === columnName)) return;
+  await conn.execute(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnType}`);
+}
+
+async function runSqliteMigrations(conn: SqliteConnection): Promise<void> {
+  await conn.execute(`
+    CREATE TABLE IF NOT EXISTS ambient_outbox_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `);
+  const healthResync = await conn.query(
+    "SELECT value FROM ambient_outbox_meta WHERE key = ? LIMIT 1",
+    ["health_observation_resync_v1"],
+  );
+  if (healthResync.values?.[0]?.value === "done") return;
+
+  await conn.run(
+    `UPDATE ambient_outbox
+     SET status = 'pending',
+         synced_at = NULL,
+         synced_owner_user_id = NULL,
+         last_error = NULL,
+         next_retry_at = NULL
+     WHERE status = 'synced'
+       AND json_extract(item, '$.kind') = 'health.observation'`,
+  );
+  await conn.run(
+    `INSERT OR REPLACE INTO ambient_outbox_meta (key, value)
+     VALUES (?, ?)`,
+    ["health_observation_resync_v1", "done"],
+  );
 }
 
 async function createOrRetrieveSqliteConnection(
@@ -321,8 +415,8 @@ export class SqliteOutboxStore implements OutboxStore {
       const res = await conn.run(
         `INSERT OR IGNORE INTO ambient_outbox
            (id, item, dedupe_key, status, attempt_count, last_error,
-            next_retry_at, inserted_at, synced_at)
-         VALUES (?, ?, ?, 'pending', 0, NULL, NULL, ?, NULL)`,
+            next_retry_at, inserted_at, synced_at, synced_owner_user_id, synced_backend_url)
+         VALUES (?, ?, ?, 'pending', 0, NULL, NULL, ?, NULL, NULL, NULL)`,
         [record.id, JSON.stringify(record.item), record.dedupeKey, now],
       );
       if ((res.changes?.changes ?? 0) > 0) inserted += 1;
@@ -330,30 +424,52 @@ export class SqliteOutboxStore implements OutboxStore {
     return inserted;
   }
 
-  async pending(limit: number, now = Date.now()): Promise<OutboxRecord[]> {
+  async pending(
+    limit: number,
+    now = Date.now(),
+    ownerUserId: string | null = null,
+    backendUrl: string | null = null,
+  ): Promise<OutboxRecord[]> {
     const conn = await this.db();
+    const statusClause = ownerUserId || backendUrl
+      ? `((status = 'pending' OR status = 'failed')
+          OR (status = 'synced'
+              AND (
+                (? IS NOT NULL AND (synced_owner_user_id IS NULL OR synced_owner_user_id <> ?))
+                OR (? IS NOT NULL AND (synced_backend_url IS NULL OR synced_backend_url <> ?))
+              )))`
+      : `(status = 'pending' OR status = 'failed')`;
+    const values: unknown[] = ownerUserId || backendUrl
+      ? [ownerUserId, ownerUserId, backendUrl, backendUrl, now, limit]
+      : [now, limit];
     const res = await conn.query(
       `SELECT * FROM ambient_outbox
-       WHERE (status = 'pending' OR status = 'failed')
+       WHERE ${statusClause}
          AND (next_retry_at IS NULL OR next_retry_at <= ?)
        ORDER BY inserted_at ASC
        LIMIT ?`,
-      [now, limit],
+      values,
     );
     const rows = res.values ?? [];
     return rows.map(rowToRecord);
   }
 
-  async markSynced(ids: string[], at = Date.now()): Promise<void> {
+  async markSynced(
+    ids: string[],
+    at = Date.now(),
+    ownerUserId: string | null = null,
+    backendUrl: string | null = null,
+  ): Promise<void> {
     if (ids.length === 0) return;
     const conn = await this.db();
     const placeholders = ids.map(() => "?").join(",");
     await conn.run(
       `UPDATE ambient_outbox
        SET status = 'synced', synced_at = ?, last_error = NULL,
-           next_retry_at = NULL
+           next_retry_at = NULL, synced_owner_user_id = ?,
+           synced_backend_url = ?
        WHERE id IN (${placeholders})`,
-      [at, ...ids],
+      [at, ownerUserId, backendUrl, ...ids],
     );
   }
 
@@ -381,11 +497,22 @@ export class SqliteOutboxStore implements OutboxStore {
     return res.changes?.changes ?? 0;
   }
 
-  async count(): Promise<number> {
+  async count(
+    ownerUserId: string | null = null,
+    backendUrl: string | null = null,
+  ): Promise<number> {
     const conn = await this.db();
-    const res = await conn.query(
-      `SELECT COUNT(*) AS n FROM ambient_outbox WHERE status <> 'synced'`,
-    );
+    const res = ownerUserId || backendUrl
+      ? await conn.query(
+        `SELECT COUNT(*) AS n FROM ambient_outbox
+         WHERE status <> 'synced'
+            OR (? IS NOT NULL AND (synced_owner_user_id IS NULL OR synced_owner_user_id <> ?))
+            OR (? IS NOT NULL AND (synced_backend_url IS NULL OR synced_backend_url <> ?))`,
+        [ownerUserId, ownerUserId, backendUrl, backendUrl],
+      )
+      : await conn.query(
+        `SELECT COUNT(*) AS n FROM ambient_outbox WHERE status <> 'synced'`,
+      );
     const n = res.values?.[0]?.n;
     return typeof n === "number" ? n : 0;
   }
@@ -412,5 +539,9 @@ function rowToRecord(row: Record<string, unknown>): OutboxRecord {
     insertedAt: Number(row.inserted_at ?? Date.now()),
     syncedAt: row.synced_at === null || row.synced_at === undefined
       ? null : Number(row.synced_at),
+    syncedOwnerUserId: row.synced_owner_user_id === null || row.synced_owner_user_id === undefined
+      ? null : String(row.synced_owner_user_id),
+    syncedBackendUrl: row.synced_backend_url === null || row.synced_backend_url === undefined
+      ? null : String(row.synced_backend_url),
   };
 }

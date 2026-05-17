@@ -87,6 +87,35 @@ describe("AmbientSyncScheduler", () => {
     expect(await outbox.count()).toBe(0);
   });
 
+  test("uploads health observation records", async () => {
+    mockedIngestBatch.mockResolvedValueOnce({
+      ok: true,
+      accepted: 1,
+      inserted: 1,
+      ignored: 0,
+      results: [{ id: "health-1", dedupe_key: "health:1", status: "inserted" }],
+    });
+    const outbox = new MemoryOutboxStore();
+    await outbox.enqueue([
+      {
+        id: "health-1",
+        kind: "health.observation",
+        title: "Daily steps",
+        summary: "1249 steps today",
+        dedupe_key: "health:1",
+      },
+    ]);
+    const scheduler = new AmbientSyncScheduler(outbox);
+
+    const result = await scheduler.drain();
+
+    expect(mockedIngestBatch).toHaveBeenCalledWith([expect.objectContaining({
+      kind: "health.observation",
+    })]);
+    expect(result.synced).toBe(1);
+    expect(await outbox.count()).toBe(0);
+  });
+
   test("keeps unacknowledged records for retry", async () => {
     mockedIngestBatch.mockResolvedValueOnce({
       ok: true,
@@ -169,6 +198,69 @@ describe("AmbientSyncScheduler", () => {
     expect(result.synced).toBe(1);
     expect(await outbox.count()).toBe(0);
     expect(scheduler.status().uploadsLocked).toBe(false);
+  });
+
+  test("re-uploads records that were synced under a previous account", async () => {
+    mockedIngestBatch.mockResolvedValueOnce({
+      ok: true,
+      accepted: 1,
+      inserted: 1,
+      ignored: 0,
+      results: [{ id: "item-account", dedupe_key: "audio:account", status: "inserted" }],
+    });
+    const outbox = new MemoryOutboxStore();
+    await outbox.enqueue([
+      {
+        id: "item-account",
+        kind: AMBIENT_TIMELINE_KIND,
+        title: "Account scoped",
+        summary: "should sync once per signed-in user",
+        dedupe_key: "audio:account",
+        occurred_at: new Date().toISOString(),
+      },
+    ]);
+    await outbox.markSynced(["item-account"], Date.now(), "old-user");
+    const scheduler = new AmbientSyncScheduler(outbox, {
+      ownerUserIdProvider: async () => "new-user",
+    });
+
+    const result = await scheduler.drain();
+
+    expect(mockedIngestBatch).toHaveBeenCalledTimes(1);
+    expect(result.synced).toBe(1);
+    expect(await outbox.count("new-user")).toBe(0);
+  });
+
+  test("re-uploads records that were synced to a previous backend", async () => {
+    mockedIngestBatch.mockResolvedValueOnce({
+      ok: true,
+      accepted: 1,
+      inserted: 1,
+      ignored: 0,
+      results: [{ id: "item-backend", dedupe_key: "audio:backend", status: "inserted" }],
+    });
+    const outbox = new MemoryOutboxStore();
+    await outbox.enqueue([
+      {
+        id: "item-backend",
+        kind: AMBIENT_TIMELINE_KIND,
+        title: "Backend scoped",
+        summary: "should sync once per backend",
+        dedupe_key: "audio:backend",
+        occurred_at: new Date().toISOString(),
+      },
+    ]);
+    await outbox.markSynced(["item-backend"], Date.now(), "user-a", "https://local.example");
+    const scheduler = new AmbientSyncScheduler(outbox, {
+      ownerUserIdProvider: async () => "user-a",
+      backendUrlProvider: () => "https://dev.example",
+    });
+
+    const result = await scheduler.drain();
+
+    expect(mockedIngestBatch).toHaveBeenCalledTimes(1);
+    expect(result.synced).toBe(1);
+    expect(await outbox.count("user-a", "https://dev.example")).toBe(0);
   });
 
   test("marks batch failed when ingest throws", async () => {

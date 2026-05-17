@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -29,6 +30,7 @@ from ...db.repositories.devices import (
     DeviceOwnerMismatch,
     DevicesRepository,
     DeviceTokenInvalid,
+    UserDeviceRow,
     find_device_by_token,
 )
 from ...db.repositories.personal_signals import (
@@ -178,24 +180,48 @@ def _device_display_group_key(row) -> str | None:
     return None
 
 
-def _canonicalize_device_list(rows):
+@dataclass(slots=True)
+class CanonicalDeviceGroup:
+    row: UserDeviceRow
+    aliased_device_ids: list[str]
+
+
+def _canonicalize_device_groups(rows: list[UserDeviceRow]) -> list[CanonicalDeviceGroup]:
     modern_platforms = {
         r.platform
         for r in rows
         if _device_metadata_value(r.metadata, "hardware_signature")
     }
-    seen: set[str] = set()
-    out = []
+    modern_group_by_platform = {
+        r.platform: _device_display_group_key(r)
+        for r in rows
+        if _device_metadata_value(r.metadata, "hardware_signature")
+    }
+    groups: dict[str, CanonicalDeviceGroup] = {}
+    order: list[str] = []
+
     for row in rows:
-        if row.platform in modern_platforms and _is_legacy_ios_app_row(row):
-            continue
         group_key = _device_display_group_key(row)
-        if group_key and group_key in seen:
-            continue
-        if group_key:
-            seen.add(group_key)
-        out.append(row)
-    return out
+        # Once a platform has hardware-identifying registrations, legacy
+        # generic rows from the same platform are aliases of that physical
+        # device for display/raw-source purposes.
+        if row.platform in modern_platforms and _is_legacy_ios_app_row(row):
+            group_key = modern_group_by_platform.get(row.platform) or group_key
+        if not group_key:
+            group_key = f"{row.platform}:device:{row.device_id}"
+
+        group = groups.get(group_key)
+        if group is None:
+            group = CanonicalDeviceGroup(row=row, aliased_device_ids=[])
+            groups[group_key] = group
+            order.append(group_key)
+        group.aliased_device_ids.append(row.device_id)
+
+    return [groups[key] for key in order]
+
+
+def _canonicalize_device_list(rows: list[UserDeviceRow]) -> list[UserDeviceRow]:
+    return [group.row for group in _canonicalize_device_groups(rows)]
 
 
 # ── register / list / revoke / rotate (Supabase JWT) ──
@@ -239,14 +265,16 @@ async def list_devices(
 ) -> dict[str, Any]:
     async with user_scoped_tx(pool, user.id) as conn:
         repo = DevicesRepository(user.id, conn)
-        rows = _canonicalize_device_list(await repo.list_active())
+        groups = _canonicalize_device_groups(await repo.list_active())
     return {"items": [{
-        "deviceId": r.device_id, "platform": r.platform,
-        "displayName": r.display_name, "appVersion": r.app_version,
-        "model": r.model, "registeredAt": r.registered_at.isoformat(),
-        "lastSeenAt": r.last_seen_at.isoformat() if r.last_seen_at else None,
-        "status": r.status,
-    } for r in rows]}
+        "deviceId": group.row.device_id, "platform": group.row.platform,
+        "displayName": group.row.display_name, "appVersion": group.row.app_version,
+        "model": group.row.model, "registeredAt": group.row.registered_at.isoformat(),
+        "lastSeenAt": group.row.last_seen_at.isoformat() if group.row.last_seen_at else None,
+        "status": group.row.status,
+        "metadata": group.row.metadata,
+        "aliasedDeviceIds": group.aliased_device_ids,
+    } for group in groups]}
 
 
 @router.post("/revoke", status_code=status.HTTP_204_NO_CONTENT)

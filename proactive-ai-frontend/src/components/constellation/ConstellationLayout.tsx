@@ -893,7 +893,7 @@ export default function BigBallLayout() {
               <AmbientView onConnectMore={() => setActiveView("connect")} onOpenFullscreen={(s) => setLiveOverlay(s)} />
             ) : activeView === "profile" ? (
               /* Real goals/memory/skill page (old AppShell GOALS view). */
-              <div className="h-full overflow-y-auto pt-12">
+              <div className="h-full min-h-0 overflow-hidden pt-12">
                 <RealGoalsView composio={composio} />
               </div>
             ) : activeView === "connect" ? (
@@ -949,6 +949,7 @@ export default function BigBallLayout() {
             ) : null}
           </motion.div>
         </AnimatePresence>
+
       </div>
 
       {/* Live session fullscreen overlay — rendered at root via portal, fully independent of activeView.
@@ -1282,4 +1283,3 @@ function CardDrawerContent({
     </div>
   );
 }
-
