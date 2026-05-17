@@ -210,4 +210,8 @@ async def test_match_patterns_hits_when_phase1_satisfies_trigger(pool, user_ids)
             "DELETE FROM pai_card_patterns WHERE id = %s",
             ("__test_count_gte__",),
         )
-    assert any(m.pattern_id == "__test_count_gte__" for m in result.matched)
+    match = next(m for m in result.matched if m.pattern_id == "__test_count_gte__")
+    assert match.human_insight == ""
+    assert match.card_skeleton == {}
+    assert match.to_payload()["humanInsight"] == ""
+    assert match.to_payload()["cardSkeleton"] == {}

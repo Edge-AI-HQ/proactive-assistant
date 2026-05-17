@@ -15,8 +15,27 @@ function validHttpUrl(value: string | undefined): value is string {
 
 export const authConfigured = validHttpUrl(supabaseUrl) && Boolean(supabasePublishableKey);
 
+function devAuthBypassActiveAtLoad(): boolean {
+  if (!import.meta.env.DEV || typeof window === "undefined") return false;
+  const search = new URLSearchParams(window.location.search);
+  if (search.get("__devAuthBypass") === "1") return true;
+  try {
+    return window.localStorage.getItem("__devAuthBypass") === "1";
+  } catch {
+    return false;
+  }
+}
+
 export const supabase = authConfigured
-  ? createClient(supabaseUrl as string, supabasePublishableKey as string)
+  ? createClient(supabaseUrl as string, supabasePublishableKey as string, {
+      auth: devAuthBypassActiveAtLoad()
+        ? {
+            autoRefreshToken: false,
+            detectSessionInUrl: false,
+            persistSession: false,
+          }
+        : undefined,
+    })
   : null;
 
 const TOKEN_REFRESH_SKEW_MS = 60_000;

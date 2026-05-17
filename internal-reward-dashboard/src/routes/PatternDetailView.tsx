@@ -16,6 +16,7 @@ import type {
 import { StateBlock } from "@/components/StateBlock";
 import { dashboardRoutes } from "@/lib/dashboardRoutes";
 import { formatDateTimeOrDash } from "@/lib/dateFormat";
+import { redactedJsonString, redactSensitiveText } from "@/lib/redaction";
 
 interface PatternDetailViewProps {
   patternId: string;
@@ -35,7 +36,7 @@ function asString(value: unknown): string {
 }
 
 function demoCardTitle(card: Record<string, unknown>): string {
-  return asString(card.hook) || asString(card.title) || "(no hook)";
+  return asString(card.title) || asString(card.hook) || "(no title)";
 }
 
 function demoCardBody(card: Record<string, unknown>): string {
@@ -46,8 +47,21 @@ function demoCardAction(card: Record<string, unknown>): string {
   return asString(card.action);
 }
 
+export function demoSourceRows(card: Record<string, unknown>): Array<{ label: string; preview: string }> {
+  const sourceData = card.sourceData;
+  if (!Array.isArray(sourceData)) return [];
+  return sourceData
+    .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+    .map((item, idx) => {
+      const label = redactSensitiveText(asString(item.label) || asString(item.signal) || `source ${idx + 1}`);
+      const mock = item.mock ?? item;
+      return { label, preview: redactedJsonString(mock) };
+    });
+}
+
 interface EditState {
   abstract: string;
+  humanInsight: string;
   triggerDslText: string;
   cardSkeletonText: string;
 }
@@ -55,6 +69,7 @@ interface EditState {
 function initialEditState(p: PatternSummary): EditState {
   return {
     abstract: p.abstract,
+    humanInsight: p.humanInsight,
     triggerDslText: safeJson(p.triggerDsl),
     cardSkeletonText: safeJson(p.cardSkeleton),
   };
@@ -111,6 +126,7 @@ export function PatternDetailView({ patternId, onNavigate }: PatternDetailViewPr
       }
       await updatePattern(patternId, {
         abstract: draft.abstract,
+        humanInsight: draft.humanInsight,
         triggerDsl,
         cardSkeleton,
       });
@@ -205,15 +221,35 @@ export function PatternDetailView({ patternId, onNavigate }: PatternDetailViewPr
             </div>
             <h2 data-testid="pattern-detail-id">{pattern.id}</h2>
             {!editing ? (
-              <p>{pattern.abstract}</p>
+              <>
+                <p>{pattern.abstract}</p>
+                <p className="patterns-human-insight-callout">
+                  <strong>抓住的人性：</strong>{pattern.humanInsight || "—"}
+                </p>
+              </>
             ) : (
-              <textarea
-                aria-label="编辑 abstract"
-                className="patterns-edit-text"
-                value={effectiveDraft.abstract}
-                onChange={(e) => setDraft({ ...effectiveDraft, abstract: e.target.value })}
-                rows={3}
-              />
+              <div className="patterns-edit-stack">
+                <label>
+                  <span>Abstract</span>
+                  <textarea
+                    aria-label="编辑 abstract"
+                    className="patterns-edit-text"
+                    value={effectiveDraft.abstract}
+                    onChange={(e) => setDraft({ ...effectiveDraft, abstract: e.target.value })}
+                    rows={3}
+                  />
+                </label>
+                <label>
+                  <span>抓住的人性</span>
+                  <textarea
+                    aria-label="编辑 human insight"
+                    className="patterns-edit-text"
+                    value={effectiveDraft.humanInsight}
+                    onChange={(e) => setDraft({ ...effectiveDraft, humanInsight: e.target.value })}
+                    rows={3}
+                  />
+                </label>
+              </div>
             )}
           </div>
           <div className="toolbar-actions">
@@ -459,6 +495,16 @@ export function PatternDetailView({ patternId, onNavigate }: PatternDetailViewPr
                   )}
                   {demoCardAction(demo.card) && (
                     <p className="patterns-demo-action">→ {demoCardAction(demo.card)}</p>
+                  )}
+                  {demoSourceRows(demo.card).length > 0 && (
+                    <div className="patterns-source-list">
+                      {demoSourceRows(demo.card).map((source) => (
+                        <details key={`${demo.id}-${source.label}`} className="patterns-source-item">
+                          <summary>{source.label}</summary>
+                          <pre>{source.preview}</pre>
+                        </details>
+                      ))}
+                    </div>
                   )}
                   {demo.whySurprise && (
                     <p className="muted"><b>surprise：</b>{demo.whySurprise}</p>

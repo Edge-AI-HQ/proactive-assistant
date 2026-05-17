@@ -45,6 +45,8 @@ class MatchedPattern:
     category: str
     intent: str
     abstract: str
+    human_insight: str
+    card_skeleton: dict[str, Any]
     subtype: str | None
     evidence: dict[str, Any]
     base_hit_rate: float
@@ -57,6 +59,8 @@ class MatchedPattern:
             "category": self.category,
             "intent": self.intent,
             "abstract": self.abstract,
+            "humanInsight": self.human_insight,
+            "cardSkeleton": self.card_skeleton,
             "subtype": self.subtype,
             "evidence": self.evidence,
             "baseHitRate": self.base_hit_rate,
@@ -603,6 +607,8 @@ async def match_patterns(
             category=pattern["category"],
             intent=pattern["intent"],
             abstract=pattern["abstract"],
+            human_insight=pattern.get("humanInsight") or "",
+            card_skeleton=pattern.get("cardSkeleton") or {},
             subtype=None,
             evidence=evidence,
             base_hit_rate=base,

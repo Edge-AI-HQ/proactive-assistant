@@ -43,11 +43,39 @@ def _json_value(value: Any, *, default: Any) -> Any:
     return value
 
 
+def _text_value(value: Any) -> str | None:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    return None
+
+
+def _demo_source_summary(card_json: Any, signals_used: Any) -> list[str]:
+    card = _json_value(card_json, default={})
+    signals = _json_value(signals_used, default=[])
+    if isinstance(card, dict):
+        source_data = card.get("sourceData")
+        if isinstance(source_data, list):
+            labels = [
+                _text_value(item.get("label")) or _text_value(item.get("signal"))
+                for item in source_data
+                if isinstance(item, dict)
+            ]
+            compact = [label for label in labels if label]
+            if compact:
+                return compact[:5]
+    if isinstance(signals, list):
+        return [str(signal) for signal in signals[:5]]
+    return []
+
+
 def _pattern_to_wire(row: dict[str, Any]) -> dict[str, Any]:
+    demo_card = _json_value(row.get("demo_card_json"), default={})
     return {
         "id": row["id"],
         "category": row["category"],
         "abstract": row["abstract"],
+        "humanInsight": row.get("human_insight") or "",
         "signalsRequired": _json_value(row.get("signals_required"), default=[]),
         "triggerDsl": _json_value(row.get("trigger_dsl"), default=[]),
         "intent": row["intent"],
@@ -59,6 +87,16 @@ def _pattern_to_wire(row: dict[str, Any]) -> dict[str, Any]:
         "status": row["status"],
         "source": row["source"],
         "baseHitRate": float(row["base_hit_rate"]) if row.get("base_hit_rate") is not None else 0.0,
+        "demoTitle": (
+            _text_value(demo_card.get("title"))
+            or _text_value(demo_card.get("hook"))
+            if isinstance(demo_card, dict)
+            else None
+        ),
+        "demoSourceDataSummary": _demo_source_summary(
+            row.get("demo_card_json"),
+            row.get("demo_signals_used"),
+        ),
         "createdAt": _iso(row.get("created_at")),
         "updatedAt": _iso(row.get("updated_at")),
         "retiredAt": _iso(row.get("retired_at")),
@@ -110,14 +148,24 @@ class PatternsRepository(UserScopedRepository):
         async with self._conn.cursor() as cur:
             await cur.execute(
                 """
-                SELECT *
-                FROM pai_card_patterns
-                WHERE (%s::text IS NULL OR category = %s)
-                  AND (%s::text IS NULL OR status = %s)
-                  AND (%s::text IS NULL OR surprise_init = %s)
-                  AND (%s::text IS NULL OR tier = %s)
-                  AND (%s::text IS NULL OR intent = %s)
-                ORDER BY category ASC, id ASC
+                SELECT
+                  p.*,
+                  d.card_json AS demo_card_json,
+                  d.signals_used AS demo_signals_used
+                FROM pai_card_patterns p
+                LEFT JOIN LATERAL (
+                  SELECT card_json, signals_used
+                  FROM pai_card_pattern_demos
+                  WHERE pattern_id = p.id
+                  ORDER BY created_at ASC, id ASC
+                  LIMIT 1
+                ) d ON TRUE
+                WHERE (%s::text IS NULL OR p.category = %s)
+                  AND (%s::text IS NULL OR p.status = %s)
+                  AND (%s::text IS NULL OR p.surprise_init = %s)
+                  AND (%s::text IS NULL OR p.tier = %s)
+                  AND (%s::text IS NULL OR p.intent = %s)
+                ORDER BY p.category ASC, p.id ASC
                 LIMIT %s OFFSET %s
                 """,
                 (
@@ -274,6 +322,7 @@ class PatternsRepository(UserScopedRepository):
         pattern_id: str,
         *,
         abstract: str | None = None,
+        human_insight: str | None = None,
         category: str | None = None,
         intent: str | None = None,
         tier: str | None = None,
@@ -300,6 +349,9 @@ class PatternsRepository(UserScopedRepository):
         if abstract is not None:
             sets.append("abstract = %s")
             params.append(abstract)
+        if human_insight is not None:
+            sets.append("human_insight = %s")
+            params.append(human_insight)
         if category is not None:
             sets.append("category = %s")
             params.append(category)

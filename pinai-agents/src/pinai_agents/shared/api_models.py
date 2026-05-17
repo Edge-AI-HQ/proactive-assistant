@@ -239,6 +239,8 @@ class MatchedPatternPayload(_CamelModel):
     category: str
     intent: str
     abstract: str
+    human_insight: str = ""
+    card_skeleton: dict[str, Any] = Field(default_factory=dict)
     subtype: str | None = None
     evidence: dict[str, Any] = Field(default_factory=dict)
     base_hit_rate: float = 0.0

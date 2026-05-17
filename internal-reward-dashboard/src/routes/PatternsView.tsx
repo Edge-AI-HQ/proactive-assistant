@@ -55,6 +55,14 @@ function surpriseLabel(value: PatternSurpriseLevel | null): string {
   return "—";
 }
 
+function sourceDataText(pattern: PatternSummary): string {
+  if (pattern.demoSourceDataSummary.length > 0) {
+    return pattern.demoSourceDataSummary.join(" + ");
+  }
+  const signals = pattern.signalsRequired.slice(0, 4).join(" + ");
+  return signals || "—";
+}
+
 export function PatternsView({ onNavigate }: PatternsViewProps) {
   const [query, setQuery] = useState<PatternsQueryState>({
     category: "",
@@ -245,6 +253,10 @@ export function PatternsView({ onNavigate }: PatternsViewProps) {
             <table aria-label="范式列表" className="patterns-table">
               <thead>
                 <tr>
+                  <th scope="col">卡片标题</th>
+                  <th scope="col">人性洞察</th>
+                  <th scope="col">来源数据</th>
+                  <th scope="col">Abstract</th>
                   <th scope="col">ID</th>
                   <th scope="col">分类</th>
                   <th scope="col">Intent</th>
@@ -252,7 +264,6 @@ export function PatternsView({ onNavigate }: PatternsViewProps) {
                   <th scope="col">S</th>
                   <th scope="col">P</th>
                   <th scope="col">Status</th>
-                  <th scope="col">Abstract</th>
                 </tr>
               </thead>
               <tbody>
@@ -271,6 +282,10 @@ export function PatternsView({ onNavigate }: PatternsViewProps) {
                       }
                     }}
                   >
+                    <td className="patterns-demo-title">{p.demoTitle ?? "—"}</td>
+                    <td className="patterns-human-insight">{p.humanInsight || "—"}</td>
+                    <td className="patterns-source-data">{sourceDataText(p)}</td>
+                    <td className="patterns-abstract">{p.abstract}</td>
                     <td><code>{p.id}</code></td>
                     <td>{p.category}</td>
                     <td>{p.intent}</td>
@@ -278,7 +293,6 @@ export function PatternsView({ onNavigate }: PatternsViewProps) {
                     <td>{surpriseLabel(p.surpriseInit)}</td>
                     <td>{surpriseLabel(p.practicalInit)}</td>
                     <td>{p.status}</td>
-                    <td className="patterns-abstract">{p.abstract}</td>
                   </tr>
                 ))}
               </tbody>

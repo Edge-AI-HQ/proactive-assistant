@@ -335,6 +335,9 @@ const DEV_AUTH_BYPASS_VALUE = "pinai-dev-reviewer";
 
 function devAuthBypassActive(): boolean {
   if (!import.meta.env.DEV) return false;
+  if (typeof window === "undefined") return false;
+  const search = new URLSearchParams(window.location.search);
+  if (search.get("__devAuthBypass") === "1") return true;
   try {
     return window.localStorage.getItem("__devAuthBypass") === "1";
   } catch {
@@ -604,6 +607,7 @@ export interface PatternSummary {
   id: string;
   category: string;
   abstract: string;
+  humanInsight: string;
   signalsRequired: string[];
   triggerDsl: unknown[];
   intent: string;
@@ -615,6 +619,8 @@ export interface PatternSummary {
   status: PatternStatus;
   source: "seed" | "ai_extracted" | "manual";
   baseHitRate: number;
+  demoTitle: string | null;
+  demoSourceDataSummary: string[];
   createdAt: string | null;
   updatedAt: string | null;
   retiredAt: string | null;
@@ -697,6 +703,7 @@ export function getPattern(patternId: string): Promise<PatternDetailResponse> {
 
 export interface PatternUpdateInput {
   abstract?: string;
+  humanInsight?: string;
   category?: string;
   intent?: string;
   tier?: PatternTier;

@@ -1,7 +1,7 @@
 """Tests for /api/reward-dashboard/patterns endpoints.
 
 Assumes the seed (`scripts/seed_patterns.py`) has run against TEST_DATABASE_URL
-so 105 patterns + 105 demos are present. The endpoints are read-only in
+so 111 patterns + 111 demos are present. The endpoints are read-only in
 Phase 1, so we only assert listing / filtering / single-pattern shape.
 """
 
@@ -42,9 +42,13 @@ async def test_patterns_list_and_filters(pool, user_ids):
         assert full.status_code == 200
         body = full.json()
         assert body["ok"] is True
-        assert body["total"] >= 105
+        assert body["total"] >= 111
         ids = {item["id"] for item in body["items"]}
         assert "routine_anchor_detected" in ids
+        routine = next(item for item in body["items"] if item["id"] == "routine_anchor_detected")
+        assert routine["humanInsight"]
+        assert routine["demoTitle"]
+        assert routine["demoSourceDataSummary"]
         assert isinstance(body["facets"]["categories"], list)
         assert "routine_observation" in body["facets"]["categories"]
 
@@ -92,12 +96,16 @@ async def test_pattern_detail_and_demos(pool, user_ids):
         assert pattern["status"] == "active"
         assert isinstance(pattern["triggerDsl"], list)
         assert pattern["cardSkeleton"]
+        assert pattern["humanInsight"]
+        assert "title_strategy" in pattern["cardSkeleton"]
         demos = body["demos"]
         assert isinstance(demos, list)
         assert demos
         first_demo = demos[0]
         assert first_demo["patternId"] == "routine_anchor_detected"
         assert first_demo["card"]
+        assert first_demo["card"]["title"]
+        assert first_demo["card"]["sourceData"]
         assert first_demo["redacted"] is True
 
         missing = await client.get("/api/reward-dashboard/patterns/__nope__")

@@ -161,8 +161,9 @@ card-generator subagent will turn each plan item into a full card.
 1. `read_file('/state/phase1.json')` — full JSON digest from data-collector.
 2. `read_file('/state/matched_patterns.json')` — candidates the web-side
    pattern matcher already verified are triggerable. Each item has
-   `patternId`, `category`, `intent`, `abstract`, `evidence` (the signal
-   evidence that satisfied the trigger), and a `baseHitRate` score.
+   `patternId`, `category`, `intent`, `abstract`, `humanInsight`,
+   `cardSkeleton` (including `title_strategy` when available), `evidence`
+   (the signal evidence that satisfied the trigger), and a `baseHitRate` score.
 3. PREFER plan items that realize a matched pattern: pick `plan_item.pattern_id`
    from the matched list, set `intent_key`/`decision`/`why_now_trigger` so the
    card grounds in the same evidence. When no pattern fits a strong signal,
@@ -227,8 +228,9 @@ You are the ONLY subagent that produces user-facing card text.
 3. When `plan_item.pattern_id` is set, `read_file('/state/matched_patterns.json')`
    and find the matching entry. Use its `evidence` field to ensure every
    signal source the pattern requires actually appears as a verbatim
-   citation in `sources[]`. The pattern's abstract / category should
-   inform tone but not be quoted to the user.
+   citation in `sources[]`. Use `humanInsight` + `cardSkeleton.title_strategy`
+   to choose the title angle and action. The pattern's abstract / category
+   should inform tone but not be quoted to the user.
 4. Output a CardsList with one GeneratedCard per plan item you can
    ground. If a plan item lacks the source data needed to write a
    solid card, drop it and add the intent_key to `skipped_plan_items`.
@@ -236,7 +238,11 @@ You are the ONLY subagent that produces user-facing card text.
 
 <card_quality_rules>
 Every card must meet ALL:
-- title: action-led, ≤ 80 chars, specific (verb + concrete object)
+- title: ≤ 80 chars, specific, and built as "concrete fact / number / time
+  + human stake + immediate action". If the matched pattern has
+  `cardSkeleton.title_strategy.example`, use it as style calibration, not as
+  copy text. Avoid generic "I noticed..." / "you may like..." / "need help?"
+  titles.
 - whyNow: one sentence with a CONCRETE trigger (date / number / event)
 - summary: 2-4 sentences of compressed context — enough to decide
 - primary_action: concrete verb + object button label
@@ -296,7 +302,10 @@ Score each on a 0.0-10.0 scale:
   `/state/matched_patterns.json`, find the entry, inspect its `evidence`
   keys) must appear in `sources[]` with a verbatim citation. The
   combination of signals must also be visible in the card copy — not
-  just listed in `sources[]`. Score 0 = the card claims a pattern but
+  just listed in `sources[]`. When the pattern includes
+  `cardSkeleton.title_strategy`, judge whether the title follows its
+  formula/example style: concrete fact / number / time + human stake +
+  immediate action. Score 0 = the card claims a pattern but
   fails to cite the required combination; 10 = full skeleton compliance.
   Score 0 (with `pattern_grounding_ok = false`) when the card has no
   `pattern_id` so this dimension doesn't pull the overall down — set

@@ -61,6 +61,8 @@ function LoginPanel() {
 // backend's DEPLOY_ENV=dev-gated bypass mints the matching test user.
 function isDevAuthBypassActive(): boolean {
   if (!import.meta.env.DEV) return false;
+  const search = new URLSearchParams(window.location.search);
+  if (search.get("__devAuthBypass") === "1") return true;
   try {
     return window.localStorage.getItem("__devAuthBypass") === "1";
   } catch {

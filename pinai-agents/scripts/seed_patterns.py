@@ -52,12 +52,15 @@ def _coerce_pattern_row(raw: dict[str, Any]) -> dict[str, Any]:
         msg = f"pattern missing id: {raw!r}"
         raise ValueError(msg)
     skeleton = raw.get("card_skeleton") or {}
-    if not isinstance(skeleton, dict):
-        skeleton = {}
+    skeleton = {} if not isinstance(skeleton, dict) else dict(skeleton)
+    title_strategy = raw.get("title_strategy")
+    if isinstance(title_strategy, dict):
+        skeleton["title_strategy"] = title_strategy
     return {
         "id": pattern_id,
         "category": str(raw.get("category") or "uncategorized"),
         "abstract": str(raw.get("abstract") or ""),
+        "human_insight": str(raw.get("human_insight") or ""),
         "signals_required": raw.get("signals") or [],
         "trigger_dsl": raw.get("trigger") or [],
         "intent": str(raw.get("intent") or "unknown"),
@@ -81,12 +84,16 @@ def _coerce_demo_row(
     card = raw.get("card") or {}
     if not isinstance(card, dict):
         card = {}
+    card_json = dict(card)
+    source_data = raw.get("source_data")
+    if source_data and "sourceData" not in card_json:
+        card_json["sourceData"] = source_data
     return {
         "id": demo_id,
         "pattern_id": pattern_id,
         "subtype": raw.get("subtype"),
         "scenario": str(raw.get("scenario") or ""),
-        "card_json": card,
+        "card_json": card_json,
         "signals_used": raw.get("signals_used") or [],
         "why_surprise": raw.get("why_surprise"),
         "why_practical": raw.get("why_practical"),
@@ -102,15 +109,16 @@ async def _upsert_patterns(conn: AsyncConnection, patterns: list[dict[str, Any]]
             await cur.execute(
                 """
                 INSERT INTO pai_card_patterns
-                  (id, category, abstract, signals_required, trigger_dsl, intent,
+                  (id, category, abstract, human_insight, signals_required, trigger_dsl, intent,
                    card_skeleton, specializations, surprise_init, practical_init,
                    tier, status, source)
-                VALUES (%s, %s, %s, %s::jsonb, %s::jsonb, %s,
+                VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s,
                         %s::jsonb, %s::jsonb, %s, %s,
                         %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                   category = EXCLUDED.category,
                   abstract = EXCLUDED.abstract,
+                  human_insight = EXCLUDED.human_insight,
                   signals_required = EXCLUDED.signals_required,
                   trigger_dsl = EXCLUDED.trigger_dsl,
                   intent = EXCLUDED.intent,
@@ -127,6 +135,7 @@ async def _upsert_patterns(conn: AsyncConnection, patterns: list[dict[str, Any]]
                     row["id"],
                     row["category"],
                     row["abstract"],
+                    row["human_insight"],
                     json.dumps(row["signals_required"]),
                     json.dumps(row["trigger_dsl"]),
                     row["intent"],

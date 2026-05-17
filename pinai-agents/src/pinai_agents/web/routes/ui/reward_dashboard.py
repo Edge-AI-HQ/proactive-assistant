@@ -726,6 +726,11 @@ async def upsert_pattern(
     abstract = _optional_trimmed_text(
         data.get("abstract"), field_name="abstract", max_length=2_000,
     )
+    human_insight = _optional_trimmed_text(
+        data.get("humanInsight") or data.get("human_insight"),
+        field_name="humanInsight",
+        max_length=2_000,
+    )
     category = _optional_trimmed_text(
         data.get("category"), field_name="category", max_length=120,
     )
@@ -760,6 +765,7 @@ async def upsert_pattern(
             updated = await repo.update_pattern(
                 safe_id,
                 abstract=abstract,
+                human_insight=human_insight,
                 category=category,
                 intent=intent,
                 tier=tier,

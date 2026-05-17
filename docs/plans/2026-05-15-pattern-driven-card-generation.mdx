@@ -119,12 +119,17 @@ flowchart TB
 
 ### 第二层 · Pattern Library
 
-**SSOT 在 [`docs/data/patterns.yaml`](../data/patterns.yaml)**,v0 共 105 条 abstract pattern,18 大类。每条:
+**SSOT 在 [`docs/data/patterns.yaml`](../data/patterns.yaml)**,v0 共 111 条 abstract pattern,18 大类。每条:
 
 ```yaml
 id: routine_anchor_detected
 category: routine_observation
 abstract: 一句话认知模式描述
+human_insight: 这条范式抓住的人性动机
+title_strategy:
+  formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  example: 连续工作 130 分钟,脑子开始钝了｜离屏 8 分钟
+  avoid: 泛泛提醒、无证据、无动作
 signals: [需要的 signal source]
 trigger: 结构化 DSL,Python evaluator 直接求值
 intent: 产生的卡片意图
@@ -178,12 +183,13 @@ score = pattern.base_hit_rate            # 全用户上的命中率
 
 ## Demo 案例库
 
-**SSOT 在 [`docs/data/demo_cards.yaml`](../data/demo_cards.yaml)**,v0 共 105 张 demo card,1:1 对应 patterns.yaml。
+**SSOT 在 [`docs/data/demo_cards.yaml`](../data/demo_cards.yaml)**,v0 共 111 张 demo card,1:1 对应 patterns.yaml。
 
 每张 demo:
-- 完整用户视角的卡片文案(hook + body + action)
+- 完整用户视角的卡片文案(title + hook + body + action)
 - 实际触发场景
 - 用到的 signal source 清单
+- 具体的 source_data mock,展示这张卡来自哪些真实形态的数据
 - 为什么 surprise + 为什么 practical
 - 人工初评 wow_level(1-5)
 
@@ -498,6 +504,7 @@ CREATE TABLE pai_card_patterns (
   id TEXT PRIMARY KEY,                          -- slug,对应 patterns.yaml.id
   category TEXT NOT NULL,
   abstract TEXT NOT NULL,
+  human_insight TEXT NOT NULL DEFAULT '',       -- 这条范式抓住的人性动机(046 追加)
   signals_required JSONB NOT NULL,              -- ["gps.history", "calendar.event"]
   trigger_dsl JSONB NOT NULL,                   -- structured trigger
   intent TEXT NOT NULL,
@@ -523,7 +530,7 @@ CREATE TABLE pai_card_pattern_demos (
   pattern_id TEXT NOT NULL REFERENCES pai_card_patterns(id) ON DELETE CASCADE,
   subtype TEXT,
   scenario TEXT NOT NULL,
-  card_json JSONB NOT NULL,                     -- { hook, body, action }
+  card_json JSONB NOT NULL,                     -- { title, hook, body, action, sourceData }
   signals_used JSONB NOT NULL,
   why_surprise TEXT,
   why_practical TEXT,
@@ -617,7 +624,7 @@ ALTER TABLE pai_user_intent_pref ENABLE ROW LEVEL SECURITY;
 | service | `pinai-agents/src/pinai_agents/web/services/pattern_matcher.py`(新) | DSL evaluator + matching |
 | dispatcher | `pinai-agents/src/pinai_agents/web/scheduler/dispatcher.py` | `_run_generator` 之前调 `match_patterns()`,把结果塞 payload |
 | shared model | `pinai-agents/src/pinai_agents/shared/api_models.py` | `GenerateRequest` 加 `matched_patterns: list[MatchedPattern]` 字段 |
-| generator | `pinai-agents/src/pinai_agents/chat/agents/generator.py` | planner / card-generator / evaluator prompt 各加段;`PlanOutput` 加 `selected_pattern_ids`;`EvalReport` 加 `pattern_grounding` |
+| generator | `pinai-agents/src/pinai_agents/chat/agents/generator.py` | planner / card-generator / evaluator prompt 各加段;matched payload 带 `humanInsight` + `cardSkeleton.title_strategy`;`PlanOutput` 加 `selected_pattern_ids`;`EvalReport` 加 `pattern_grounding` |
 | route | `pinai-agents/src/pinai_agents/chat/routes/generate.py` | 接收 matched_patterns 字段,持久化 hits 到 `pai_card_pattern_hits` |
 | job | `pinai-agents/src/pinai_agents/web/jobs/pattern_extractor.py`(新) | weekly LLM 抽取候选 pattern |
 | job | `pinai-agents/src/pinai_agents/web/jobs/pattern_health.py`(新) | daily 健康指标聚合 + 自动退役 |
@@ -632,7 +639,7 @@ ALTER TABLE pai_user_intent_pref ENABLE ROW LEVEL SECURITY;
 
 ### Phase 1 · Seed pattern 库 + dashboard 只读
 
-**目标**: 团队能在 dashboard 上看到 105 条 seed pattern 和 105 张 demo card。系统还**不影响** generator。
+**目标**: 团队能在 dashboard 上看到 111 条 seed pattern 和 111 张 demo card。系统还**不影响** generator。
 
 交付:
 - migration `043_pai_card_patterns.sql` 落地
@@ -643,7 +650,7 @@ ALTER TABLE pai_user_intent_pref ENABLE ROW LEVEL SECURITY;
 - 后端 + 前端单测
 
 验收:
-- [ ] `select count(*) from pai_card_patterns` = 105,demos = 105
+- [ ] `select count(*) from pai_card_patterns` = 111,demos = 111
 - [ ] dashboard `/patterns` 能筛分类 / status / surprise / tier
 - [ ] `/patterns/:patternId` 能看到完整 schema + demo list
 - [ ] 类型检查 + ruff + pytest 通过
@@ -778,13 +785,13 @@ ALTER TABLE pai_user_intent_pref ENABLE ROW LEVEL SECURITY;
 
 | 风险 | 缓解 |
 |---|---|
-| Pattern 库定义不一致(reviewer 对同一卡命中不同 pattern) | 第一版 105 条都是 seed,固定不动 3 个月,先观察一致性 |
+| Pattern 库定义不一致(reviewer 对同一卡命中不同 pattern) | 第一版 111 条都是 seed,固定不动 3 个月,先观察一致性 |
 | Trigger DSL 表达力不够 | DSL 第一版只覆盖 patterns.yaml 用到的 op,遇到表达不出来的 pattern 直接 fail 早 |
 | LLM 抽取的候选 pattern 质量差 | 必须走 reviewer pending_review,不允许直接 active |
 | Cache 被 pattern 注入破坏 | 强制分层 stable / volatile,CI 加 cache hit 监控 |
 | Trust boundary 破坏 | chat 进程禁止读 pattern DB,所有 match 在 web 侧,通过 payload 传 |
 | user 数据混入跨用户 pattern 库 | `pai_card_pattern_demos.redacted` 字段强制 + 进 few-shot 前再过一次脱敏 |
-| Reviewer 工作量爆炸(105 pattern × 多用户审查) | reviewer 不再标每张卡,只 review pattern 库本身和 weekly 抽取候选 |
+| Reviewer 工作量爆炸(111 pattern × 多用户审查) | reviewer 不再标每张卡,只 review pattern 库本身和 weekly 抽取候选 |
 | Pattern 长期退化无法被发现 | daily health job + 自动退役 |
 
 ## 相关模块

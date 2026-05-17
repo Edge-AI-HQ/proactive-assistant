@@ -208,8 +208,8 @@ async def test_patterns_health_endpoint(pool, user_ids) -> None:
         assert resp.status_code == 200, resp.text
         items = resp.json()["items"]
         assert isinstance(items, list)
-        # 105 seed patterns at minimum; tests may add more.
-        assert len(items) >= 105
+        # 111 seed patterns at minimum; tests may add more.
+        assert len(items) >= 111
         any_routine = next((r for r in items if r["patternId"] == "routine_anchor_detected"), None)
         assert any_routine is not None
         assert "hitRate7d" in any_routine
