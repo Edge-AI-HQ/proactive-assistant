@@ -58,6 +58,13 @@ const MAX_CONTEXT_WINDOWS = 8;
 const MAX_SESSION_SIGNALS = 5;
 const MAX_CONTEXT_ASSISTS = 8;
 const RECENT_CONTEXT_WINDOW_MS = 30 * 60 * 1000;
+const HIDDEN_LIVE_TRANSCRIPT_TEXTS = new Set([
+  "transcription unavailable",
+  "transcription failed",
+  "transcription error",
+  "audio unavailable",
+  "speech recognition unavailable",
+]);
 
 export type LiveSessionContextKind =
   | "place"
@@ -118,6 +125,9 @@ export function appendLiveTranscript(
   update: LiveTranscriptUpdate,
 ): LiveSessionData {
   const text = update.text.trim();
+  if (isHiddenLiveTranscriptText(text)) {
+    return prev ?? emptyLiveSessionData(update.captureSessionId, update.receivedAt ?? Date.now());
+  }
   const receivedAt = update.receivedAt ?? Date.now();
   const isNewSession = !prev || prev.captureSessionId !== update.captureSessionId;
   const startedAt = isNewSession ? receivedAt : prev.startedAt;
@@ -149,6 +159,18 @@ function upsertLiveMessage(
   return [...withoutListening, next];
 }
 
+function emptyLiveSessionData(captureSessionId: string, startedAt: number): LiveSessionData {
+  return {
+    captureSessionId,
+    startedAt,
+    messages: [],
+  };
+}
+
+function isHiddenLiveTranscriptText(text: string): boolean {
+  const normalized = text.trim().replace(/[.]$/, "").toLowerCase();
+  return HIDDEN_LIVE_TRANSCRIPT_TEXTS.has(normalized);
+}
 
 export function rawTranscriptEventsToLiveSessionData(
   events: AmbientRawEvent[],
@@ -281,12 +303,16 @@ function rawTranscriptEventToMessage(
 
 function transcriptTextFromRaw(event: AmbientRawEvent): string | null {
   const payloadText = event.payload.text;
-  if (typeof payloadText === "string" && payloadText.trim()) return payloadText.trim();
+  if (typeof payloadText === "string" && payloadText.trim()) {
+    const text = payloadText.trim();
+    return isHiddenLiveTranscriptText(text) ? null : text;
+  }
   const compact = event.compactText.trim();
   const prefix = "Transcript segment:";
-  return compact.startsWith(prefix)
+  const text = compact.startsWith(prefix)
     ? compact.slice(prefix.length).trim() || null
     : compact || null;
+  return text && isHiddenLiveTranscriptText(text) ? null : text;
 }
 
 function transcriptTextFromCandidateWindow(window: AmbientCandidateWindow): string | null {
