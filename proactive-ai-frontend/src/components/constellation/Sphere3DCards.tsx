@@ -36,6 +36,19 @@ interface RotState {
   velPitch: number;
 }
 
+export function getSphereCardPresentation(depth: number) {
+  const readableThreshold = 0.48;
+  if (depth < readableThreshold) {
+    return { opacity: 0, visible: false };
+  }
+
+  const readableDepth = (depth - readableThreshold) / (1 - readableThreshold);
+  return {
+    opacity: 0.46 + readableDepth * 0.54,
+    visible: true,
+  };
+}
+
 // Module-level cache so rotation survives unmount/remount.
 const rotationCache = new Map<string, RotState>();
 
@@ -265,7 +278,7 @@ const Sphere3DCards = ({
           const z = rp.z * rDepth;
           const depth = (z + rDepth) / (2 * rDepth); // 0..1 (1 = front)
           const scale = 0.55 + depth * 0.55;
-          const opacity = 0.32 + depth * 0.68;
+          const presentation = getSphereCardPresentation(depth);
           // Front-most cards get a brighter, more opaque surface for readability
           const frontBoost = Math.max(0, depth - 0.6) / 0.4; // 0..1 for depth 0.6..1
           const surfaceAlpha = 0.55 + frontBoost * 0.4; // 0.55 → 0.95
@@ -285,6 +298,8 @@ const Sphere3DCards = ({
           return (
             <button
               key={item.id}
+              aria-hidden={!presentation.visible}
+              tabIndex={presentation.visible ? 0 : -1}
               onClick={() => {
                 if (totalDragMoved.current < 6) onCardTap(item.id);
               }}
@@ -298,12 +313,12 @@ const Sphere3DCards = ({
                 // velocity < 1px/frame). Force a stable GPU layer so text
                 // stays cached and doesn't re-rasterize each frame.
                 transform: `translate3d(${(x - 80).toFixed(2)}px, ${(y - 34).toFixed(2)}px, 0) scale(${scale.toFixed(3)})`,
-                opacity: Math.round(opacity * 100) / 100,
+                opacity: Math.round(presentation.opacity * 100) / 100,
                 zIndex: Math.round(1000 + z),
-                pointerEvents: depth < 0.25 ? "none" : "auto",
+                pointerEvents: presentation.visible && depth >= 0.55 ? "auto" : "none",
                 borderRadius: 14,
                 boxShadow: isFront ? "0 4px 18px rgba(0,0,0,0.12)" : "none",
-                transition: draggingRef.current ? "none" : "box-shadow 0.2s",
+                transition: draggingRef.current ? "none" : "box-shadow 0.2s, opacity 0.2s",
                 willChange: "transform",
                 backfaceVisibility: "hidden",
                 WebkitBackfaceVisibility: "hidden",

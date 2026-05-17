@@ -55,4 +55,20 @@ describe("LiveSessionCard signals", () => {
     expect(screen.getByText("Provider: local")).toBeTruthy();
     expect(screen.queryByText("Extra signal")).toBeNull();
   });
+
+  test("wraps signal chips instead of clipping them horizontally", () => {
+    render(
+      <LiveSessionCard
+        session={makeSession(["Health update", "Stationary", "Location updated", "25 transcripts", "Provider: cloud_whisper"])}
+        previewVisibleCount={1}
+        variant="ambient"
+      />,
+    );
+
+    const signals = screen.getByTestId("live-session-signals");
+
+    expect(signals.className).toContain("flex-wrap");
+    expect(signals.className).not.toContain("overflow-x-auto");
+    expect(screen.getByText("Provider: cloud_whisper")).toBeTruthy();
+  });
 });

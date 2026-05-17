@@ -105,11 +105,11 @@ export default function LiveSessionCard({
       </div>
 
       {session && session.signals.length > 0 && (
-        <div className="px-4 pb-2 flex gap-1.5 overflow-x-auto scrollbar-none">
+        <div data-testid="live-session-signals" className="px-4 pb-2 flex flex-wrap gap-1.5">
           {session.signals.slice(0, 5).map((signal) => (
             <span
               key={signal}
-              className="inline-flex items-center rounded-full bg-foreground/[0.05] border border-foreground/[0.08] px-2 py-0.5 text-[10px] font-medium text-foreground/60 whitespace-nowrap shrink-0"
+              className="inline-flex max-w-full items-center rounded-full bg-foreground/[0.05] border border-foreground/[0.08] px-2 py-0.5 text-[10px] font-medium text-foreground/60 whitespace-nowrap"
             >
               {signal}
             </span>
