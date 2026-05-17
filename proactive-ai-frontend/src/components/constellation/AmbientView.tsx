@@ -650,7 +650,35 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
         </div>
       </button>
 
-      {/* Web preview keeps the narrative mock; native hides it until B generates a real summary. */}
+      {/* Web preview keeps the narrative mock; native uses the local timeline narrative. */}
+      {(!useWebPreviewTimeline && ambientTimeline.narrativeSummary) && (
+        <div
+          className="mb-3 rounded-2xl p-4"
+          style={{
+            background: "linear-gradient(135deg, hsl(220 50% 98%), hsl(260 40% 97%))",
+            border: "1px solid hsl(0 0% 100% / 0.5)",
+          }}
+        >
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-[10px] font-bold tracking-[0.16em] flex items-center gap-1.5">
+              <Sparkles size={11} className="text-[hsl(304_75%_55%)]" />
+              <span className="text-[hsl(304_75%_45%)]">TODAY · LOCAL SUMMARY</span>
+            </p>
+            <span className="text-[10px] text-foreground/45 font-mono">{timelineEntries.length} entries</span>
+          </div>
+          <p className="text-[13px] leading-relaxed text-foreground/85">{ambientTimeline.narrativeSummary}</p>
+        </div>
+      )}
+
+      {isNative && ambientTimeline.pendingTranscriptCount > 0 && timelineEntries.length === 0 && (
+        <div className="mb-3 rounded-2xl border border-foreground/10 bg-foreground/[0.03] p-4">
+          <p className="text-[12px] font-semibold text-foreground/80">Local summaries are waiting for a verified LLM.</p>
+          <p className="mt-1 text-[11px] text-foreground/50 leading-snug">
+            {ambientTimeline.pendingTranscriptCount} transcript window{ambientTimeline.pendingTranscriptCount === 1 ? "" : "s"} pending. Open Ambient Models and choose Use for local summaries after verification.
+          </p>
+        </div>
+      )}
+
       {useWebPreviewTimeline && (
         <div
           className="mb-3 rounded-2xl p-4"

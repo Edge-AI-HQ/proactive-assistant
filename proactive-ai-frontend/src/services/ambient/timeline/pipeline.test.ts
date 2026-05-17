@@ -410,6 +410,165 @@ describe("LocalAmbientTimelinePipeline", () => {
     expect(windows[0]?.compactContext.match(/Discussed a product review/g)).toHaveLength(1);
   });
 
+
+  test("uses batch decisions to create LLM summary events and mark windows summarized", async () => {
+    const store = new MemoryTimelineStore();
+    const modelBridge: AmbientTimelineModelBridge = {
+      async summarizeWindow() { return null; },
+      async generateTimelineBatchDecision(input) {
+        return { ok: true, batch: { decisions: [{
+          action: "create",
+          title: "Product review",
+          summary: "Discussed product review follow-ups.",
+          importance: "medium",
+          occurredAt: input.windows[0]?.startedAt ?? "2026-05-15T10:00:00.000Z",
+          sourceWindowIds: [input.windows[0]?.id ?? ""],
+        }] } };
+      },
+      async generateTimelineEvent() { throw new Error("single-window path should not run"); },
+    };
+    const pipeline = new LocalAmbientTimelinePipeline(store, modelBridge);
+
+    await pipeline.ingestSignal({
+      kind: "session_summary",
+      title: "Voice summary",
+      summary: "Discussed a product review and a follow-up item that needs to be sent after the meeting with enough detail for local summarization.",
+      occurred_at: "2026-05-15T10:00:00.000Z",
+      payload: { captureSessionId: "cap-batch", durationMs: 180_000 },
+      dedupe_key: "audio:burst:batch:1",
+    });
+
+    const signals = await pipeline.processPendingWindows("2026-05-15");
+
+    expect(signals).toHaveLength(1);
+    const [event] = await store.listTimelineEvents("2026-05-15", { visibleOnly: true });
+    expect(event).toMatchObject({
+      generationMethod: "local_llm",
+      generationSource: "llm_summary",
+      title: "Product review",
+      sourceWindowIds: expect.any(Array),
+    });
+    const [window] = await store.listCandidateWindows({ localDate: "2026-05-15", windowType: "transcript_session" });
+    expect(window?.summaryStatus).toBe("summarized");
+  });
+
+
+  test("records native generation error messages on failed summary attempts", async () => {
+    const store = new MemoryTimelineStore();
+    const modelBridge: AmbientTimelineModelBridge = {
+      async summarizeWindow() { return null; },
+      async generateTimelineBatchDecision() {
+        return {
+          ok: false,
+          errorCode: "generation_failed",
+          errorMessage: "llama_init_from_model returned nil.",
+        };
+      },
+      async generateTimelineEvent() { throw new Error("single-window path should not run"); },
+    };
+    const pipeline = new LocalAmbientTimelinePipeline(store, modelBridge);
+
+    await pipeline.ingestSignal({
+      kind: "session_summary",
+      title: "Voice summary",
+      summary: "A detailed transcript window that should attempt local LLM generation and preserve the native error detail when it fails.",
+      occurred_at: "2026-05-15T13:00:00.000Z",
+      payload: { captureSessionId: "cap-error", durationMs: 180_000 },
+      dedupe_key: "audio:burst:error:1",
+    });
+    await pipeline.processPendingWindows("2026-05-15");
+
+    const [window] = await store.listCandidateWindows({
+      localDate: "2026-05-15",
+      windowType: "transcript_session",
+    });
+    expect(window).toMatchObject({
+      lastErrorCode: "generation_failed",
+      summaryErrorCode: "generation_failed",
+      summaryErrorMessage: "llama_init_from_model returned nil.",
+    });
+  });
+
+
+  test("force processes ready windows even when retry backoff is active", async () => {
+    const store = new MemoryTimelineStore();
+    let calls = 0;
+    const modelBridge: AmbientTimelineModelBridge = {
+      async summarizeWindow() { return null; },
+      async generateTimelineBatchDecision(input) {
+        calls += 1;
+        return { ok: true, batch: { decisions: [{
+          action: "skip",
+          reason: "manual retry probe",
+          sourceWindowIds: [input.windows[0]?.id ?? ""],
+        }] } };
+      },
+      async generateTimelineEvent() { throw new Error("single-window path should not run"); },
+    };
+    const now = new Date("2026-05-15T13:05:00.000Z");
+    const pipeline = new LocalAmbientTimelinePipeline(store, modelBridge, { now: () => now });
+
+    await pipeline.ingestSignal({
+      kind: "session_summary",
+      title: "Voice summary",
+      summary: "A ready transcript window that previously failed and should be manually retried before its backoff expires.",
+      occurred_at: "2026-05-15T13:00:00.000Z",
+      payload: { captureSessionId: "cap-force", durationMs: 180_000 },
+      dedupe_key: "audio:burst:force:1",
+    });
+    const [window] = await store.listCandidateWindows({ localDate: "2026-05-15", windowType: "transcript_session" });
+    if (!window) throw new Error("expected candidate window");
+    await store.upsertCandidateWindow({
+      ...window,
+      lastAttemptAt: "2026-05-15T13:04:30.000Z",
+      attemptCount: 3,
+      lastErrorCode: "generation_failed",
+    });
+
+    expect(await pipeline.processPendingWindows("2026-05-15")).toEqual([]);
+    expect(calls).toBe(0);
+
+    await pipeline.processPendingWindows("2026-05-15", { force: true });
+    expect(calls).toBe(1);
+  });
+
+
+  test("persists LLM summary metadata when using SQLite-like store semantics", async () => {
+    const store = new MemoryTimelineStore();
+    const modelBridge: AmbientTimelineModelBridge = {
+      async summarizeWindow() { return null; },
+      async generateTimelineBatchDecision(input) {
+        return { ok: true, batch: { decisions: [{
+          action: "create",
+          title: "Metadata summary",
+          summary: "Persisted metadata should survive store upsert.",
+          importance: "medium",
+          occurredAt: input.windows[0]?.startedAt ?? "2026-05-15T10:00:00.000Z",
+          sourceWindowIds: [input.windows[0]?.id ?? ""],
+        }] } };
+      },
+      async generateTimelineEvent() { throw new Error("single-window path should not run"); },
+    };
+    const pipeline = new LocalAmbientTimelinePipeline(store, modelBridge);
+
+    await pipeline.ingestSignal({
+      kind: "session_summary",
+      title: "Voice summary",
+      summary: "A long enough transcript window for checking summary metadata persistence on the generated local card.",
+      occurred_at: "2026-05-15T12:00:00.000Z",
+      payload: { captureSessionId: "cap-metadata", durationMs: 180_000 },
+      dedupe_key: "audio:burst:metadata:1",
+    });
+    await pipeline.processPendingWindows("2026-05-15");
+
+    const llmEvents = await store.listTimelineEventsByGenerationSource("2026-05-15", "llm_summary", { visibleOnly: true });
+    expect(llmEvents[0]).toMatchObject({
+      generationSource: "llm_summary",
+      idempotencyKey: expect.stringContaining("summary:create:"),
+      sourceWindowIds: expect.arrayContaining([expect.stringContaining("win_")]),
+    });
+  });
+
   test("does not revive a dismissed event on the same dedupe key", async () => {
     const { store, pipeline } = makePipeline();
 
@@ -450,7 +609,7 @@ describe("LocalAmbientTimelinePipeline", () => {
         return null;
       },
       async generateTimelineEvent() {
-        return {
+        return { ok: true, draft: {
           eventType: "conversation",
           title: "Product review",
           summary: "Discussed a product review and a follow-up item.",
@@ -458,7 +617,7 @@ describe("LocalAmbientTimelinePipeline", () => {
           confidence: 0.7,
           confidenceLabel: "certain",
           salientFacts: ["Follow-up item discussed"],
-        };
+        } };
       },
     };
     const pipeline = new LocalAmbientTimelinePipeline(store, modelBridge);
@@ -510,7 +669,7 @@ describe("LocalAmbientTimelinePipeline", () => {
     const modelBridge: AmbientTimelineModelBridge = {
       async summarizeWindow() { return null; },
       async generateTimelineEvent() {
-        return {
+        return { ok: true, draft: {
           eventType: "conversation",
           title: "Dismissed conversation",
           summary: "Discussed a topic that should stay hidden after dismiss.",
@@ -518,7 +677,7 @@ describe("LocalAmbientTimelinePipeline", () => {
           confidence: 0.72,
           confidenceLabel: "certain",
           salientFacts: [],
-        };
+        } };
       },
     };
     const pipeline = new LocalAmbientTimelinePipeline(store, modelBridge);
@@ -559,7 +718,7 @@ describe("LocalAmbientTimelinePipeline", () => {
       async summarizeWindow() { return null; },
       async generateTimelineEvent() {
         calls += 1;
-        return {
+        return { ok: true, draft: {
           eventType: "conversation",
           title: "Too early",
           summary: "This should not be generated before the idle cutoff.",
@@ -567,7 +726,7 @@ describe("LocalAmbientTimelinePipeline", () => {
           confidence: 0.7,
           confidenceLabel: "certain",
           salientFacts: [],
-        };
+        } };
       },
     };
     const pipeline = new LocalAmbientTimelinePipeline(store, modelBridge, {
@@ -693,7 +852,7 @@ describe("LocalAmbientTimelinePipeline", () => {
       async summarizeWindow() { return null; },
       async generateTimelineEvent() {
         calls += 1;
-        return null;
+        return { ok: false, errorCode: "generation_timeout" };
       },
     };
     const pipeline = new LocalAmbientTimelinePipeline(store, modelBridge, {
@@ -720,7 +879,7 @@ describe("LocalAmbientTimelinePipeline", () => {
     expect(window).toMatchObject({
       status: "pending",
       attemptCount: 1,
-      lastErrorCode: "model_unavailable",
+      lastErrorCode: "generation_timeout",
     });
   });
 
@@ -772,7 +931,7 @@ describe("LocalAmbientTimelinePipeline", () => {
     const modelBridge: AmbientTimelineModelBridge = {
       async summarizeWindow() { return null; },
       async generateTimelineEvent() {
-        return {
+        return { ok: true, draft: {
           eventType: "conversation",
           title: "Transcript summary",
           summary,
@@ -780,7 +939,7 @@ describe("LocalAmbientTimelinePipeline", () => {
           confidence: 0.7,
           confidenceLabel: "certain",
           salientFacts: [],
-        };
+        } };
       },
     };
     const pipeline = new LocalAmbientTimelinePipeline(store, modelBridge, {

@@ -125,6 +125,7 @@ export class MemoryTimelineStore implements AmbientTimelineStore {
     localDate?: string;
     windowType?: AmbientWindowType;
     status?: AmbientCandidateWindow["status"];
+    summaryStatus?: NonNullable<AmbientCandidateWindow["summaryStatus"]>;
     limit?: number;
   }): Promise<AmbientCandidateWindow[]> {
     await this.initIfNeeded();
@@ -132,6 +133,7 @@ export class MemoryTimelineStore implements AmbientTimelineStore {
       .filter((row) => !filter.localDate || row.localDate === filter.localDate)
       .filter((row) => !filter.windowType || row.windowType === filter.windowType)
       .filter((row) => !filter.status || row.status === filter.status)
+      .filter((row) => !filter.summaryStatus || effectiveSummaryStatus(row) === filter.summaryStatus)
       .sort(compareByStartedAtAsc)
       .slice(0, filter.limit ?? Number.POSITIVE_INFINITY)
       .map(cloneWindow);
@@ -168,6 +170,23 @@ export class MemoryTimelineStore implements AmbientTimelineStore {
     options: TimelineListOptions = {},
   ): Promise<AmbientTimelineEvent[]> {
     await this.initIfNeeded();
+    return this.listTimelineEventsFromMemory(localDate, options);
+  }
+
+  async listTimelineEventsByGenerationSource(
+    localDate: string,
+    generationSource: NonNullable<AmbientTimelineEvent["generationSource"]>,
+    options: TimelineListOptions = {},
+  ): Promise<AmbientTimelineEvent[]> {
+    await this.initIfNeeded();
+    return this.listTimelineEventsFromMemory(localDate, options)
+      .then((rows) => rows.filter((row) => effectiveGenerationSource(row) === generationSource));
+  }
+
+  private async listTimelineEventsFromMemory(
+    localDate: string,
+    options: TimelineListOptions = {},
+  ): Promise<AmbientTimelineEvent[]> {
     return Array.from(this.events.values())
       .filter((row) => row.localDate === localDate)
       .filter((row) => (
@@ -286,6 +305,10 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
           generation_policy TEXT NOT NULL,
           llm_input_hash TEXT,
           status TEXT NOT NULL,
+          summary_status TEXT NOT NULL DEFAULT 'pending',
+          summary_run_id TEXT,
+          summary_processing_expires_at TEXT,
+          summary_error_code TEXT,
           last_attempt_at TEXT,
           attempt_count INTEGER NOT NULL DEFAULT 0,
           last_error_code TEXT,
@@ -318,6 +341,13 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
           observation_ids_json TEXT NOT NULL,
           window_id TEXT,
           generation_method TEXT NOT NULL,
+          generation_source TEXT,
+          summary_run_id TEXT,
+          source_window_ids_json TEXT,
+          llm_model_id TEXT,
+          llm_generated_at TEXT,
+          llm_updated_at TEXT,
+          idempotency_key TEXT,
           generation_status TEXT NOT NULL,
           dismissed_at TEXT,
           memory_candidate INTEGER NOT NULL,
@@ -492,9 +522,10 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
          timezone, source_types_json, device_labels_json, raw_refs_json,
          observation_ids_json, compact_context, privacy_hint, confidence_hint,
          salience_hint, generation_policy, llm_input_hash, status,
+         summary_status, summary_run_id, summary_processing_expires_at, summary_error_code, summary_error_message,
          last_attempt_at, attempt_count, last_error_code, expires_at,
          created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          ended_at = excluded.ended_at,
          source_types_json = excluded.source_types_json,
@@ -508,6 +539,11 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
          generation_policy = excluded.generation_policy,
          llm_input_hash = excluded.llm_input_hash,
          status = excluded.status,
+         summary_status = excluded.summary_status,
+         summary_run_id = excluded.summary_run_id,
+         summary_processing_expires_at = excluded.summary_processing_expires_at,
+         summary_error_code = excluded.summary_error_code,
+         summary_error_message = excluded.summary_error_message,
          last_attempt_at = excluded.last_attempt_at,
          attempt_count = excluded.attempt_count,
          last_error_code = excluded.last_error_code,
@@ -532,6 +568,11 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
         window.generationPolicy,
         window.llmInputHash,
         window.status,
+        window.summaryStatus ?? (window.status === "generated" ? "summarized" : "pending"),
+        window.summaryRunId ?? null,
+        window.summaryProcessingExpiresAt ?? null,
+        window.summaryErrorCode ?? null,
+        window.summaryErrorMessage ?? null,
         window.lastAttemptAt,
         window.attemptCount,
         window.lastErrorCode,
@@ -547,6 +588,7 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
     localDate?: string;
     windowType?: AmbientWindowType;
     status?: AmbientCandidateWindow["status"];
+    summaryStatus?: NonNullable<AmbientCandidateWindow["summaryStatus"]>;
     limit?: number;
   }): Promise<AmbientCandidateWindow[]> {
     await this.init();
@@ -563,6 +605,10 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
     if (filter.status) {
       clauses.push("status = ?");
       values.push(filter.status);
+    }
+    if (filter.summaryStatus) {
+      clauses.push("summary_status = ?");
+      values.push(filter.summaryStatus);
     }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
     const rows = await (await this.db()).query(
@@ -599,10 +645,12 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
          event_type, title, summary, primary_source_label, device_labels_json,
          source_types_json, tags_json, privacy, confidence, confidence_label,
          salience, raw_refs_json, observation_ids_json, window_id,
-         generation_method, generation_status, dismissed_at, memory_candidate,
+         generation_method, generation_source, summary_run_id, source_window_ids_json,
+         llm_model_id, llm_generated_at, llm_updated_at, idempotency_key,
+         generation_status, dismissed_at, memory_candidate,
          card_trigger_candidate, triggered_card_id, triggered_card_title,
          schema_version, sync_status, dedupe_key, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          ended_at = excluded.ended_at,
          title = excluded.title,
@@ -619,6 +667,13 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
          observation_ids_json = excluded.observation_ids_json,
          window_id = excluded.window_id,
          generation_method = excluded.generation_method,
+         generation_source = excluded.generation_source,
+         summary_run_id = excluded.summary_run_id,
+         source_window_ids_json = excluded.source_window_ids_json,
+         llm_model_id = excluded.llm_model_id,
+         llm_generated_at = excluded.llm_generated_at,
+         llm_updated_at = excluded.llm_updated_at,
+         idempotency_key = excluded.idempotency_key,
          generation_status = excluded.generation_status,
          memory_candidate = excluded.memory_candidate,
          card_trigger_candidate = excluded.card_trigger_candidate,
@@ -649,6 +704,13 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
         JSON.stringify(event.observationIds),
         event.windowId ?? null,
         event.generationMethod,
+        event.generationSource ?? (event.generationMethod === "local_llm" ? "llm_summary" : "rule_based"),
+        event.summaryRunId ?? null,
+        JSON.stringify(event.sourceWindowIds ?? []),
+        event.llmModelId ?? null,
+        event.llmGeneratedAt ?? null,
+        event.llmUpdatedAt ?? null,
+        event.idempotencyKey ?? null,
         event.generationStatus,
         event.dismissedAt ?? null,
         event.memoryCandidate ? 1 : 0,
@@ -679,6 +741,23 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
     options: TimelineListOptions = {},
   ): Promise<AmbientTimelineEvent[]> {
     await this.init();
+    return this.queryTimelineEvents(localDate, options);
+  }
+
+  async listTimelineEventsByGenerationSource(
+    localDate: string,
+    generationSource: NonNullable<AmbientTimelineEvent["generationSource"]>,
+    options: TimelineListOptions = {},
+  ): Promise<AmbientTimelineEvent[]> {
+    await this.init();
+    const rows = await this.queryTimelineEvents(localDate, options);
+    return rows.filter((row) => effectiveGenerationSource(row) === generationSource);
+  }
+
+  private async queryTimelineEvents(
+    localDate: string,
+    options: TimelineListOptions = {},
+  ): Promise<AmbientTimelineEvent[]> {
     const clauses = ["local_date = ?"];
     const values: unknown[] = [localDate];
     if (options.visibleOnly) {
@@ -740,6 +819,20 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
       { name: "last_attempt_at", sql: "ALTER TABLE ambient_candidate_windows ADD COLUMN last_attempt_at TEXT" },
       { name: "attempt_count", sql: "ALTER TABLE ambient_candidate_windows ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0" },
       { name: "last_error_code", sql: "ALTER TABLE ambient_candidate_windows ADD COLUMN last_error_code TEXT" },
+      { name: "summary_status", sql: "ALTER TABLE ambient_candidate_windows ADD COLUMN summary_status TEXT NOT NULL DEFAULT 'pending'" },
+      { name: "summary_run_id", sql: "ALTER TABLE ambient_candidate_windows ADD COLUMN summary_run_id TEXT" },
+      { name: "summary_processing_expires_at", sql: "ALTER TABLE ambient_candidate_windows ADD COLUMN summary_processing_expires_at TEXT" },
+      { name: "summary_error_code", sql: "ALTER TABLE ambient_candidate_windows ADD COLUMN summary_error_code TEXT" },
+      { name: "summary_error_message", sql: "ALTER TABLE ambient_candidate_windows ADD COLUMN summary_error_message TEXT" },
+    ]);
+    await ensureColumns(conn, "ambient_timeline_events", [
+      { name: "generation_source", sql: "ALTER TABLE ambient_timeline_events ADD COLUMN generation_source TEXT" },
+      { name: "summary_run_id", sql: "ALTER TABLE ambient_timeline_events ADD COLUMN summary_run_id TEXT" },
+      { name: "source_window_ids_json", sql: "ALTER TABLE ambient_timeline_events ADD COLUMN source_window_ids_json TEXT" },
+      { name: "llm_model_id", sql: "ALTER TABLE ambient_timeline_events ADD COLUMN llm_model_id TEXT" },
+      { name: "llm_generated_at", sql: "ALTER TABLE ambient_timeline_events ADD COLUMN llm_generated_at TEXT" },
+      { name: "llm_updated_at", sql: "ALTER TABLE ambient_timeline_events ADD COLUMN llm_updated_at TEXT" },
+      { name: "idempotency_key", sql: "ALTER TABLE ambient_timeline_events ADD COLUMN idempotency_key TEXT" },
     ]);
   }
 }
@@ -762,6 +855,11 @@ function cloneRawEvent(event: AmbientRawEvent): AmbientRawEvent {
 function cloneWindow(window: AmbientCandidateWindow): AmbientCandidateWindow {
   return {
     ...window,
+    summaryStatus: effectiveSummaryStatus(window),
+    summaryRunId: window.summaryRunId ?? null,
+    summaryProcessingExpiresAt: window.summaryProcessingExpiresAt ?? null,
+    summaryErrorCode: window.summaryErrorCode ?? null,
+    summaryErrorMessage: window.summaryErrorMessage ?? null,
     sourceTypes: [...window.sourceTypes],
     deviceLabels: [...window.deviceLabels],
     rawRefs: window.rawRefs.map((ref) => ({ ...ref })),
@@ -772,12 +870,22 @@ function cloneWindow(window: AmbientCandidateWindow): AmbientCandidateWindow {
 function cloneTimelineEvent(event: AmbientTimelineEvent): AmbientTimelineEvent {
   return {
     ...event,
+    generationSource: effectiveGenerationSource(event),
+    sourceWindowIds: [...(event.sourceWindowIds ?? [])],
     deviceLabels: [...event.deviceLabels],
     sourceTypes: [...event.sourceTypes],
     tags: [...event.tags],
     rawRefs: event.rawRefs.map((ref) => ({ ...ref })),
     observationIds: [...event.observationIds],
   };
+}
+
+function effectiveGenerationSource(event: AmbientTimelineEvent): NonNullable<AmbientTimelineEvent["generationSource"]> {
+  return event.generationSource ?? (event.generationMethod === "local_llm" ? "llm_summary" : "rule_based");
+}
+
+function effectiveSummaryStatus(window: AmbientCandidateWindow): NonNullable<AmbientCandidateWindow["summaryStatus"]> {
+  return window.summaryStatus ?? (window.status === "generated" ? "summarized" : "pending");
 }
 
 function compareByOccurredAtAsc(a: AmbientRawEvent, b: AmbientRawEvent): number {
@@ -847,6 +955,11 @@ function rowToWindow(row: Record<string, unknown>): AmbientCandidateWindow {
     generationPolicy: text(row.generation_policy) as AmbientCandidateWindow["generationPolicy"],
     llmInputHash: nullableText(row.llm_input_hash),
     status: text(row.status) as AmbientCandidateWindow["status"],
+    summaryStatus: (nullableText(row.summary_status) ?? (text(row.status) === "generated" ? "summarized" : "pending")) as AmbientCandidateWindow["summaryStatus"],
+    summaryRunId: nullableText(row.summary_run_id),
+    summaryProcessingExpiresAt: nullableText(row.summary_processing_expires_at),
+    summaryErrorCode: nullableText(row.summary_error_code),
+    summaryErrorMessage: nullableText(row.summary_error_message),
     lastAttemptAt: nullableText(row.last_attempt_at),
     attemptCount: numberValue(row.attempt_count),
     lastErrorCode: nullableText(row.last_error_code),
@@ -879,6 +992,13 @@ function rowToTimelineEvent(row: Record<string, unknown>): AmbientTimelineEvent 
     observationIds: parseStringArray(row.observation_ids_json),
     ...(nullableText(row.window_id) ? { windowId: text(row.window_id) } : {}),
     generationMethod: text(row.generation_method) as AmbientTimelineEvent["generationMethod"],
+    generationSource: (nullableText(row.generation_source) as AmbientTimelineEvent["generationSource"] | null) ?? undefined,
+    ...(nullableText(row.summary_run_id) ? { summaryRunId: text(row.summary_run_id) } : {}),
+    sourceWindowIds: parseStringArray(row.source_window_ids_json),
+    ...(nullableText(row.llm_model_id) ? { llmModelId: text(row.llm_model_id) } : {}),
+    ...(nullableText(row.llm_generated_at) ? { llmGeneratedAt: text(row.llm_generated_at) } : {}),
+    ...(nullableText(row.llm_updated_at) ? { llmUpdatedAt: text(row.llm_updated_at) } : {}),
+    ...(nullableText(row.idempotency_key) ? { idempotencyKey: text(row.idempotency_key) } : {}),
     generationStatus: text(row.generation_status) as AmbientTimelineEvent["generationStatus"],
     ...(nullableText(row.dismissed_at) ? { dismissedAt: text(row.dismissed_at) } : {}),
     memoryCandidate: numberValue(row.memory_candidate) === 1,

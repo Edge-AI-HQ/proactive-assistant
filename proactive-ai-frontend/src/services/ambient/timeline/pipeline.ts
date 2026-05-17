@@ -28,10 +28,14 @@ import {
   uniqueStrings,
 } from "./utils";
 
+export interface AmbientTimelineProcessOptions {
+  force?: boolean;
+}
+
 export interface AmbientTimelinePipeline {
   ingestSignal(item: PersonalSignalInput): Promise<PersonalSignalInput[]>;
-  regenerateDay(localDate?: string): Promise<PersonalSignalInput[]>;
-  processPendingWindows(localDate?: string): Promise<PersonalSignalInput[]>;
+  regenerateDay(localDate?: string, options?: AmbientTimelineProcessOptions): Promise<PersonalSignalInput[]>;
+  processPendingWindows(localDate?: string, options?: AmbientTimelineProcessOptions): Promise<PersonalSignalInput[]>;
 }
 
 export interface AmbientTimelinePipelineOptions {
@@ -52,18 +56,24 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     return this.generateForRaw(raw);
   }
 
-  async regenerateDay(localDate = localDateFromDate(new Date())): Promise<PersonalSignalInput[]> {
+  async regenerateDay(
+    localDate = localDateFromDate(new Date()),
+    options: AmbientTimelineProcessOptions = {},
+  ): Promise<PersonalSignalInput[]> {
     await this.store.init();
     const raws = await this.store.listRawEvents({ localDate, limit: 1_000 });
     const out: PersonalSignalInput[] = [];
     for (const raw of raws) {
       out.push(...await this.generateForRaw(raw));
     }
-    out.push(...await this.processPendingWindows(localDate));
+    out.push(...await this.processPendingWindows(localDate, options));
     return out;
   }
 
-  async processPendingWindows(localDate = localDateFromDate(new Date())): Promise<PersonalSignalInput[]> {
+  async processPendingWindows(
+    localDate = localDateFromDate(new Date()),
+    options: AmbientTimelineProcessOptions = {},
+  ): Promise<PersonalSignalInput[]> {
     await this.store.init();
     const windows = await this.store.listCandidateWindows({
       localDate,
@@ -71,16 +81,82 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
       status: "pending",
       limit: 50,
     });
+    const readyWindows = windows.filter((window) => window.generationPolicy === "llm_allowed"
+      && this.isTranscriptWindowReady(window)
+      && (options.force || this.isBackoffExpired(window)));
     const out: PersonalSignalInput[] = [];
-    for (const window of windows) {
-      if (window.generationPolicy !== "llm_allowed") continue;
-      if (!this.isTranscriptWindowReady(window)) continue;
-      if (!this.isBackoffExpired(window)) continue;
-      const draft = await this.modelBridge.generateTimelineEvent(window);
-      if (!draft) {
-        await this.recordWindowAttempt(window, "model_unavailable");
+    if (readyWindows.length === 0) return out;
+    if (this.modelBridge.generateTimelineBatchDecision) {
+      const selected = readyWindows.slice(0, 1);
+      const result = await this.modelBridge.generateTimelineBatchDecision({ windows: selected });
+      if (!result.ok) {
+        for (const window of selected) await this.recordWindowAttempt(window, result.errorCode, result.errorMessage);
+        return out;
+      }
+      for (const decision of result.batch.decisions) {
+        if (decision.action === "skip") {
+          for (const id of decision.sourceWindowIds) {
+            const window = selected.find((item) => item.id === id);
+            if (!window) continue;
+            await this.store.upsertCandidateWindow({
+              ...window,
+              summaryStatus: "skipped_low_value",
+              lastErrorCode: null,
+              updatedAt: this.nowIso(),
+            });
+          }
+          continue;
+        }
+        if (decision.action !== "create") continue;
+        const decisionWindows = selected.filter((window) => decision.sourceWindowIds.includes(window.id));
+        const first = decisionWindows[0];
+        if (!first) continue;
+        const sourceWindowIds = decisionWindows.map((window) => window.id);
+        const event = makeEvent({
+          id: stableId("evt", ["llm_summary", ...sourceWindowIds]),
+          localDate: first.localDate,
+          occurredAt: decision.occurredAt,
+          endedAt: decisionWindows[decisionWindows.length - 1]?.endedAt,
+          eventType: "conversation",
+          title: decision.title,
+          summary: decision.summary,
+          primarySourceLabel: first.deviceLabels[0] ?? sourceLabel("transcript"),
+          deviceLabels: decisionWindows.flatMap((window) => window.deviceLabels),
+          sourceTypes: decisionWindows.flatMap((window) => window.sourceTypes),
+          tags: ["ambient", "summary"],
+          privacy: maxPrivacy(decisionWindows.map((window) => window.privacyHint)),
+          confidence: average(decisionWindows.map((window) => window.confidenceHint)),
+          confidenceLabel: "certain",
+          salience: average(decisionWindows.map((window) => window.salienceHint)),
+          rawRefs: decisionWindows.flatMap((window) => window.rawRefs),
+          windowId: first.id,
+          generationMethod: "local_llm",
+          generationSource: "llm_summary",
+          sourceWindowIds,
+          idempotencyKey: `summary:create:${stableHash(sourceWindowIds.slice().sort().join("|"))}`,
+          dedupeKey: `ambient:timeline:${first.localDate}:llm_summary:${stableHash(sourceWindowIds.slice().sort().join("|"))}`,
+        });
+        const signal = await this.upsertVisibleEvent(event);
+        if (signal) out.push(signal);
+        for (const window of decisionWindows) {
+          await this.store.upsertCandidateWindow({
+            ...window,
+            status: "generated",
+            summaryStatus: "summarized",
+            lastErrorCode: null,
+            updatedAt: this.nowIso(),
+          });
+        }
+      }
+      return out;
+    }
+    for (const window of readyWindows) {
+      const result = await this.modelBridge.generateTimelineEvent(window);
+      if (!result.ok) {
+        await this.recordWindowAttempt(window, result.errorCode, result.errorMessage);
         continue;
       }
+      const draft = result.draft;
       const event = makeEvent({
         id: stableId("evt", ["llm", window.id]),
         localDate: window.localDate,
@@ -100,6 +176,8 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
         rawRefs: window.rawRefs,
         windowId: window.id,
         generationMethod: "local_llm",
+        generationSource: "llm_summary",
+        sourceWindowIds: [window.id],
         dedupeKey: `ambient:timeline:${window.localDate}:llm:${stableHash(window.id)}`,
       });
       const signal = await this.upsertVisibleEvent(event);
@@ -107,6 +185,7 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
       await this.store.upsertCandidateWindow({
         ...window,
         status: "generated",
+        summaryStatus: "summarized",
         lastErrorCode: null,
         updatedAt: this.nowIso(),
       });
@@ -136,12 +215,15 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
   private async recordWindowAttempt(
     window: AmbientCandidateWindow,
     errorCode: string,
+    errorMessage?: string,
   ): Promise<void> {
     await this.store.upsertCandidateWindow({
       ...window,
       lastAttemptAt: this.nowIso(),
       attemptCount: window.attemptCount + 1,
       lastErrorCode: errorCode,
+      summaryErrorCode: errorCode,
+      summaryErrorMessage: errorMessage ?? null,
       updatedAt: this.nowIso(),
     });
   }
@@ -715,6 +797,9 @@ function makeEvent(args: {
   rawRefs: AmbientRawRef[];
   windowId?: string;
   generationMethod?: AmbientTimelineEvent["generationMethod"];
+  generationSource?: AmbientTimelineEvent["generationSource"];
+  sourceWindowIds?: string[];
+  idempotencyKey?: string;
   dedupeKey: string;
 }): AmbientTimelineEvent {
   const now = new Date().toISOString();
@@ -749,6 +834,9 @@ function makeEvent(args: {
     observationIds: [],
     windowId: args.windowId,
     generationMethod: args.generationMethod ?? "rule",
+    generationSource: args.generationSource ?? (args.generationMethod === "local_llm" ? "llm_summary" : "rule_based"),
+    sourceWindowIds: args.sourceWindowIds ?? [],
+    idempotencyKey: args.idempotencyKey,
     generationStatus: "visible",
     memoryCandidate: false,
     cardTriggerCandidate: false,
@@ -758,6 +846,11 @@ function makeEvent(args: {
     createdAt: now,
     updatedAt: now,
   };
+}
+
+function average(values: number[]): number {
+  if (values.length === 0) return 0;
+  return clamp01(values.reduce((sum, value) => sum + value, 0) / values.length);
 }
 
 function rawRef(raw: AmbientRawEvent): AmbientRawRef {

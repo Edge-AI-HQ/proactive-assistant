@@ -126,6 +126,31 @@ describe("candidate window live session context", () => {
     resetAmbientLiveTranscriptForTest();
   });
 
+  test("filters exact live transcript system error messages", () => {
+    const unavailable = appendLiveTranscript(null, {
+      captureSessionId: "cap-live",
+      id: "burst-error",
+      text: "Transcription unavailable",
+      source: "cloud_whisper",
+      receivedAt: Date.parse("2026-05-17T10:00:00.000Z"),
+    });
+    const realSpeech = appendLiveTranscript(unavailable, {
+      captureSessionId: "cap-live",
+      id: "burst-real",
+      text: "There is an error in the dashboard",
+      source: "cloud_whisper",
+      receivedAt: Date.parse("2026-05-17T10:01:00.000Z"),
+    });
+
+    expect(unavailable.messages).toHaveLength(0);
+    expect(realSpeech.messages).toEqual([
+      expect.objectContaining({
+        id: "burst-real",
+        text: "There is an error in the dashboard",
+      }),
+    ]);
+  });
+
   test("updates the same live burst from listening to draft to final text", () => {
     vi.setSystemTime(new Date("2026-05-17T10:00:00.000Z"));
     const listening = appendLiveTranscript(null, {

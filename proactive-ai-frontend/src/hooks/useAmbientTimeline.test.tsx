@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { useAmbientTimeline } from "./useAmbientTimeline";
 
-const { storeMock, pipelineMock } = vi.hoisted(() => ({
+const { storeMock, runtimeMock } = vi.hoisted(() => ({
   storeMock: {
     init: vi.fn(),
     status: vi.fn(() => ({ mode: "sqlite", ready: true, lastError: null })),
@@ -13,19 +13,22 @@ const { storeMock, pipelineMock } = vi.hoisted(() => ({
     listRawEvents: vi.fn(),
     dismissTimelineEvent: vi.fn(),
   },
-  pipelineMock: {
-    regenerateDay: vi.fn(),
-    processPendingWindows: vi.fn(),
+  runtimeMock: {
+    refreshTimeline: vi.fn(),
   },
 }));
 
 vi.mock("@/lib/platform", () => ({ isNative: true }));
 vi.mock("@/services/ambient/timeline", () => ({
   getAmbientTimelineStore: () => storeMock,
-  getAmbientTimelinePipeline: () => pipelineMock,
+  AMBIENT_TIMELINE_KIND: "ambient_timeline",
+  AMBIENT_CANDIDATE_WINDOW_KIND: "ambient_candidate_window",
   todayLocalDate: () => "2026-05-15",
   buildAmbientNarrativeSummary: () => null,
   groupAmbientTimelineEvents: () => [],
+}));
+vi.mock("@/services/ambient", () => ({
+  getAmbientRuntime: () => runtimeMock,
 }));
 
 function AmbientTimelineProbe({ children }: { children?: ReactNode }) {
@@ -48,7 +51,7 @@ describe("useAmbientTimeline", () => {
     storeMock.listTimelineEvents.mockResolvedValue([]);
     storeMock.listCandidateWindows.mockResolvedValue([]);
     storeMock.listRawEvents.mockResolvedValue([]);
-    pipelineMock.processPendingWindows.mockResolvedValue([]);
+    runtimeMock.refreshTimeline.mockResolvedValue([]);
 
     render(<AmbientTimelineProbe />);
 
@@ -56,10 +59,8 @@ describe("useAmbientTimeline", () => {
       expect(screen.getByText("ready")).toBeTruthy();
     });
     await waitFor(() => {
-      expect(pipelineMock.processPendingWindows).toHaveBeenCalledWith("2026-05-15");
+      expect(runtimeMock.refreshTimeline).toHaveBeenCalledWith("2026-05-15");
     });
-
-    expect(pipelineMock.regenerateDay).not.toHaveBeenCalled();
     expect(storeMock.listTimelineEvents).toHaveBeenCalledWith("2026-05-15", {
       visibleOnly: true,
       limit: 100,

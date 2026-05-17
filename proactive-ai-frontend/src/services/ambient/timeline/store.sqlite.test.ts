@@ -57,6 +57,15 @@ describe("SqliteTimelineStore migrations", () => {
     expect(sqliteMock.conn.run).toHaveBeenCalledWith(
       "ALTER TABLE ambient_candidate_windows ADD COLUMN last_error_code TEXT",
     );
+    expect(sqliteMock.conn.run).toHaveBeenCalledWith(
+      "ALTER TABLE ambient_candidate_windows ADD COLUMN summary_status TEXT NOT NULL DEFAULT 'pending'",
+    );
+    expect(sqliteMock.conn.run).toHaveBeenCalledWith(
+      "ALTER TABLE ambient_candidate_windows ADD COLUMN summary_error_message TEXT",
+    );
+    expect(sqliteMock.conn.run).toHaveBeenCalledWith(
+      "ALTER TABLE ambient_timeline_events ADD COLUMN generation_source TEXT",
+    );
   });
 
   test("does not alter candidate window tables that already have retry metadata", async () => {
@@ -68,6 +77,25 @@ describe("SqliteTimelineStore migrations", () => {
             { name: "last_attempt_at" },
             { name: "attempt_count" },
             { name: "last_error_code" },
+            { name: "summary_status" },
+            { name: "summary_run_id" },
+            { name: "summary_processing_expires_at" },
+            { name: "summary_error_code" },
+            { name: "summary_error_message" },
+          ],
+        };
+      }
+      if ((sql ?? "").startsWith("PRAGMA table_info(ambient_timeline_events)")) {
+        return {
+          values: [
+            { name: "id" },
+            { name: "generation_source" },
+            { name: "summary_run_id" },
+            { name: "source_window_ids_json" },
+            { name: "llm_model_id" },
+            { name: "llm_generated_at" },
+            { name: "llm_updated_at" },
+            { name: "idempotency_key" },
           ],
         };
       }

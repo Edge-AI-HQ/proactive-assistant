@@ -16,6 +16,7 @@ import {
 import { Slider } from "@/components/ui/slider";
 import { isNative } from "@/lib/platform";
 import AmbientSourceControlsPanel from "@/components/AmbientSourceControlsPanel";
+import AmbientTimelineSummaryStatusPanel from "@/components/AmbientTimelineSummaryStatusPanel";
 import GoalsView from "./GoalsView";
 import { VoiceButton } from "@/components/voice";
 
@@ -430,6 +431,8 @@ export default function ControlPanel() {
           </div>
 
           <AmbientSourceControlsPanel />
+
+          <AmbientTimelineSummaryStatusPanel />
 
           <div className="glass-card-strong p-4 space-y-3">
             <div>

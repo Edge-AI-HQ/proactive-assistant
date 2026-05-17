@@ -87,6 +87,11 @@ export interface AmbientCandidateWindow {
   generationPolicy: "rule_only" | "llm_allowed" | "do_not_generate";
   llmInputHash: string | null;
   status: "pending" | "generated" | "ignored" | "evidence";
+  summaryStatus?: "pending" | "processing" | "summarized" | "merged_into_existing" | "skipped_low_value" | "failed_retryable" | "failed_terminal";
+  summaryRunId?: string | null;
+  summaryProcessingExpiresAt?: string | null;
+  summaryErrorCode?: string | null;
+  summaryErrorMessage?: string | null;
   lastAttemptAt: string | null;
   attemptCount: number;
   lastErrorCode: string | null;
@@ -117,6 +122,13 @@ export interface AmbientTimelineEvent {
   observationIds: string[];
   windowId?: string;
   generationMethod: "rule" | "local_llm";
+  generationSource?: "rule_based" | "llm_summary";
+  summaryRunId?: string;
+  sourceWindowIds?: string[];
+  llmModelId?: string;
+  llmGeneratedAt?: string;
+  llmUpdatedAt?: string;
+  idempotencyKey?: string;
   generationStatus: "draft" | "visible" | "hidden";
   dismissedAt?: string;
   memoryCandidate: boolean;
@@ -174,6 +186,7 @@ export interface AmbientTimelineStore {
     localDate?: string;
     windowType?: AmbientWindowType;
     status?: AmbientCandidateWindow["status"];
+    summaryStatus?: NonNullable<AmbientCandidateWindow["summaryStatus"]>;
     limit?: number;
   }): Promise<AmbientCandidateWindow[]>;
   upsertTimelineEvent(
@@ -181,6 +194,11 @@ export interface AmbientTimelineStore {
   ): Promise<TimelineEventUpsertResult>;
   listTimelineEvents(
     localDate: string,
+    options?: TimelineListOptions,
+  ): Promise<AmbientTimelineEvent[]>;
+  listTimelineEventsByGenerationSource(
+    localDate: string,
+    generationSource: NonNullable<AmbientTimelineEvent["generationSource"]>,
     options?: TimelineListOptions,
   ): Promise<AmbientTimelineEvent[]>;
   dismissTimelineEvent(id: string, at?: string): Promise<void>;

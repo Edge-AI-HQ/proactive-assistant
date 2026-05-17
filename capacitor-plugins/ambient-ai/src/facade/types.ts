@@ -283,6 +283,22 @@ export interface GenerateTimelineEventOptions {
   window: AmbientCandidateWindowForModel;
 }
 
+export interface AmbientTimelineBatchInput {
+  schemaVersion: 'ambient_timeline_batch.v1';
+  windows: AmbientCandidateWindowForModel[];
+  recentLlmCards?: Array<Record<string, unknown>>;
+  ruleContext?: Array<Record<string, unknown>>;
+}
+
+export interface GenerateTimelineBatchDecisionOptions {
+  modelId: string;
+  batch: AmbientTimelineBatchInput;
+}
+
+export interface AmbientTimelineBatchDecisionResult {
+  decisions: unknown[];
+}
+
 export interface ModelDownloadProgressEvent extends ModelDownloadStatus {
   /** Server-side wall clock when the event was emitted. */
   emittedAt: number;
@@ -422,6 +438,7 @@ export interface ModelsNamespace {
   deleteModel(options: { id: string }): Promise<void>;
   verifyModel(options: { id: string }): Promise<ModelVerifyResult>;
   generateTimelineEvent(options: GenerateTimelineEventOptions): Promise<AmbientTimelineEventDraftResult>;
+  generateTimelineBatchDecision(options: GenerateTimelineBatchDecisionOptions): Promise<AmbientTimelineBatchDecisionResult>;
 }
 
 export interface AmbientAiFacade {

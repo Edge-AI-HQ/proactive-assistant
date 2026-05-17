@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isNative } from "@/lib/platform";
+import { getAmbientRuntime } from "@/services/ambient";
 import {
-  getAmbientTimelinePipeline,
   getAmbientTimelineStore,
   todayLocalDate,
   buildAmbientNarrativeSummary,
@@ -31,7 +31,7 @@ export interface UseAmbientTimelineResult {
 
 export function useAmbientTimeline(localDate = todayLocalDate()): UseAmbientTimelineResult {
   const store = useMemo(() => getAmbientTimelineStore(), []);
-  const pipeline = useMemo(() => getAmbientTimelinePipeline(), []);
+  const runtime = useMemo(() => getAmbientRuntime(), []);
   const [events, setEvents] = useState<AmbientTimelineEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +69,7 @@ export function useAmbientTimeline(localDate = todayLocalDate()): UseAmbientTime
     if (pendingGenerationRef.current) return pendingGenerationRef.current;
     const promise = (async () => {
       try {
-        await pipeline.processPendingWindows(localDate);
+        await runtime.refreshTimeline(localDate);
         await loadSnapshot();
       } catch (err) {
         setError(describeError(err));
@@ -80,7 +80,7 @@ export function useAmbientTimeline(localDate = todayLocalDate()): UseAmbientTime
     })();
     pendingGenerationRef.current = promise;
     return promise;
-  }, [loadSnapshot, localDate, pipeline, store]);
+  }, [loadSnapshot, localDate, runtime, store]);
 
   const refresh = useCallback(async () => {
     if (refreshInFlightRef.current) return refreshInFlightRef.current;
