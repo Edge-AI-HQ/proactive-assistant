@@ -377,3 +377,8 @@ make logs-pinai-web | grep -E "connector\.|composio|/devices/ingest"
 - [Background Tasks](./background-tasks):`connector.init` / `connector.sync` / `connector.evolve` 在 scheduler 上的派发。
 - [Generation](./generation):卡片 prompt 读 `pai_raw_*` + `pai_personal_signals` + `pai_world_signals`。
 - [Runtime & Deployment](./runtime-deployment):web/chat 信任边界、Composio master key、device token bcrypt。
+
+## 相关 AI Plans
+
+- [Web Cloud Data Self-Sufficient Plan](../plans/2026-05-17-web-cloud-data-self-sufficient):Web 端围绕已上传 device/mobile 数据做 summary、all-device cloud timeline、freshness 和页面展示时必读。
+- [Ambient AI-visible Records SSOT 重构](../plans/2026-05-17-ambient-ai-visible-records-ssot):改 native Ambient 本地 ledger、outbox、上传记录可见性时必读。
