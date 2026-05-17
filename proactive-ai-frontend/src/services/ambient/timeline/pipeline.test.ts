@@ -533,6 +533,75 @@ describe("LocalAmbientTimelinePipeline", () => {
   });
 
 
+  test("manual refresh can process recent pending windows from yesterday after local midnight", async () => {
+    const store = new MemoryTimelineStore();
+    let processedWindowDate: string | null = null;
+    const modelBridge: AmbientTimelineModelBridge = {
+      async summarizeWindow() { return null; },
+      async generateTimelineBatchDecision(input) {
+        processedWindowDate = input.windows[0]?.localDate ?? null;
+        return { ok: true, batch: { decisions: [{
+          action: "skip",
+          reason: "manual retry across midnight",
+          sourceWindowIds: [input.windows[0]?.id ?? ""],
+        }] } };
+      },
+      async generateTimelineEvent() { throw new Error("single-window path should not run"); },
+    };
+    const now = new Date("2026-05-18T00:05:00.000+08:00");
+    const pipeline = new LocalAmbientTimelinePipeline(store, modelBridge, { now: () => now });
+
+    await pipeline.ingestSignal({
+      kind: "session_summary",
+      title: "Voice summary",
+      summary: "A detailed transcript window recorded before midnight should still be eligible when the user manually taps Summary now after midnight.",
+      occurred_at: "2026-05-17T15:55:00.000Z",
+      payload: { captureSessionId: "cap-midnight", durationMs: 180_000 },
+      dedupe_key: "audio:burst:midnight:1",
+    });
+
+    expect(await pipeline.processPendingWindows("2026-05-18", { force: true })).toEqual([]);
+    await pipeline.processPendingWindows("2026-05-18", { force: true, includeRecentPending: true });
+
+    expect(processedWindowDate).toBe("2026-05-17");
+  });
+
+
+  test("manual forceReady bypasses readiness guards for explicit test runs", async () => {
+    const store = new MemoryTimelineStore();
+    let calls = 0;
+    const modelBridge: AmbientTimelineModelBridge = {
+      async summarizeWindow() { return null; },
+      async generateTimelineBatchDecision(input) {
+        calls += 1;
+        return { ok: true, batch: { decisions: [{
+          action: "skip",
+          reason: "manual readiness bypass",
+          sourceWindowIds: [input.windows[0]?.id ?? ""],
+        }] } };
+      },
+      async generateTimelineEvent() { throw new Error("single-window path should not run"); },
+    };
+    const now = new Date("2026-05-15T13:00:20.000Z");
+    const pipeline = new LocalAmbientTimelinePipeline(store, modelBridge, { now: () => now });
+
+    await pipeline.ingestSignal({
+      kind: "session_summary",
+      title: "Voice summary",
+      summary: "A fresh transcript window that is long enough for LLM input but not yet old enough for the normal readiness guard.",
+      occurred_at: "2026-05-15T13:00:00.000Z",
+      payload: { captureSessionId: "cap-force-ready", durationMs: 180_000 },
+      dedupe_key: "audio:burst:force-ready:1",
+    });
+
+    await pipeline.processPendingWindows("2026-05-15", { force: true });
+    expect(calls).toBe(0);
+
+    await pipeline.processPendingWindows("2026-05-15", { force: true, forceReady: true });
+    expect(calls).toBe(1);
+  });
+
+
   test("persists LLM summary metadata when using SQLite-like store semantics", async () => {
     const store = new MemoryTimelineStore();
     const modelBridge: AmbientTimelineModelBridge = {

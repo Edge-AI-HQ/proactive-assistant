@@ -3,8 +3,8 @@ import Foundation
 
 @objc(AmbientModelsPlugin)
 public class AmbientModelsPlugin: CAPPlugin, CAPBridgedPlugin {
-    private static let timelineBatchMaxTokens = 96
-    private static let timelineSingleMaxTokens = 128
+    private static let timelineBatchMaxTokens = 128
+    private static let timelineSingleMaxTokens = 160
     private static let timelineGenerationTimeout: TimeInterval = 180
 
     public let identifier = "AmbientModelsPlugin"
@@ -271,12 +271,11 @@ public class AmbientModelsPlugin: CAPPlugin, CAPBridgedPlugin {
             return "- \(title): \(summary)"
         }.joined(separator: "\n")
         return """
-        You summarize ambient windows into compact Timeline decisions.
-        Return only JSON: {"decisions":[...]}
-        Decision forms use short keys:
-        create: {"a":"create","w":["window_id"],"t":"title","s":"summary","i":"medium","occurredAt":"iso"}
-        update: {"a":"update","e":"event_id","w":["window_id"],"s":"new summary"}
-        skip: {"a":"skip","w":["window_id"],"r":"reason"}
+        /no_think
+        Return exactly one minified JSON object. The first character must be { and the last character must be }.
+        No markdown, no explanation, no thinking text.
+        Schema: {"decisions":[{"a":"create","w":["window_id"],"t":"title","s":"summary","i":"medium","occurredAt":"iso"}]}
+        Use skip only if the window has no useful human activity: {"a":"skip","w":["window_id"],"r":"reason"}
         Cover every input window exactly once. Never update rule context.
         Windows:
         \(windowsText)
@@ -284,6 +283,7 @@ public class AmbientModelsPlugin: CAPPlugin, CAPBridgedPlugin {
         \(recentText)
         Rule context:
         \(ruleText)
+        JSON:
         """
     }
 
@@ -293,15 +293,17 @@ public class AmbientModelsPlugin: CAPPlugin, CAPBridgedPlugin {
         let endedAt = (window["endedAt"] as? String) ?? ""
         let sourceTypes = (window["sourceTypes"] as? [String])?.joined(separator: ", ") ?? ""
         return """
-        You summarize ambient transcript windows into one JSON object.
-        Return only JSON with keys: title, summary, eventType, confidence, confidenceLabel, tags, salientFacts.
+        /no_think
+        Return exactly one minified JSON object. The first character must be { and the last character must be }.
+        No markdown, no explanation, no thinking text.
+        Schema: {"title":"short title","summary":"one sentence","eventType":"conversation","confidence":0.7,"confidenceLabel":"certain","tags":["ambient"],"salientFacts":["fact"]}
         eventType must be one of conversation, meeting, focus, social, other.
-        confidence is a number between 0 and 1. confidenceLabel is certain or uncertain.
         Window startedAt: \(startedAt)
         Window endedAt: \(endedAt)
         Source types: \(sourceTypes)
         Context:
         \(context)
+        JSON:
         """
     }
 
@@ -315,10 +317,35 @@ public class AmbientModelsPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private static func extractJSONObjectString(from text: String) -> String? {
-        guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"), start <= end else {
-            return nil
+        let scalars = Array(text.unicodeScalars)
+        guard let start = scalars.firstIndex(of: "{") else { return nil }
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for index in start..<scalars.count {
+            let scalar = scalars[index]
+            if escaped {
+                escaped = false
+                continue
+            }
+            if scalar == "\\" && inString {
+                escaped = true
+                continue
+            }
+            if scalar == "\"" {
+                inString.toggle()
+                continue
+            }
+            if inString { continue }
+            if scalar == "{" { depth += 1 }
+            if scalar == "}" {
+                depth -= 1
+                if depth == 0 {
+                    return String(String.UnicodeScalarView(scalars[start...index]))
+                }
+            }
         }
-        return String(text[start...end])
+        return nil
     }
 }
 

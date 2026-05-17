@@ -253,9 +253,13 @@ export class AmbientRuntime {
     await this.reconcileDesiredSources();
   }
 
-  async refreshTimeline(localDate?: string, options: { force?: boolean } = {}): Promise<void> {
+  async refreshTimeline(localDate?: string, options: { force?: boolean; forceReady?: boolean } = {}): Promise<void> {
     try {
-      const signals = await this.timelinePipeline.regenerateDay(localDate, options);
+      const signals = await this.timelinePipeline.regenerateDay(localDate, {
+        includeRecentPending: true,
+        forceReady: options.force === true,
+        ...options,
+      });
       if (signals.length > 0) {
         await this.outbox.enqueue(signals);
         this.lastFlushTs = Date.now();
