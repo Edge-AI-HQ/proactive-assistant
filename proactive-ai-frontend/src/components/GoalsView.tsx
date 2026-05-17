@@ -1796,7 +1796,10 @@ export default function GoalsView({ composio }: GoalsViewProps) {
   // ── Render ──
 
   return (
-    <div className="flex flex-col h-full px-4 pt-3 pb-[calc(6rem+var(--safe-bottom,12px))] overflow-y-auto relative">
+    <div
+      className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain px-4 pb-2 pt-3"
+      style={{ WebkitOverflowScrolling: "touch" }}
+    >
       {/* Page header */}
       <div className="mb-6 pr-20">
         <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-foreground/35">
