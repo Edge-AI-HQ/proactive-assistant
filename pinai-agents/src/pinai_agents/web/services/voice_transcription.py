@@ -31,7 +31,7 @@ MAX_AUDIO_BYTES = 25 * 1024 * 1024
 def normalize_transcription_language(language: str | None) -> str | None:
     raw = (language or "").strip()
     if not raw:
-        return "zh"
+        return None
     key = raw.replace("_", "-").lower()
     if key == "auto":
         return None

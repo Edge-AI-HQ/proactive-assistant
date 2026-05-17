@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, forwardRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, forwardRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { isNative } from "@/lib/platform";
 import {
@@ -19,7 +19,13 @@ import {
   getPersistedAmbientEnabled,
   setPersistedAmbientEnabled,
 } from "@/services/ambient/enabled-state";
-import type { AmbientPrivacy, AmbientTimelineEvent } from "@/services/ambient/timeline";
+import type {
+  AmbientCandidateWindow,
+  AmbientPrivacy,
+  AmbientRawEvent,
+  AmbientSourceType,
+  AmbientTimelineEvent,
+} from "@/services/ambient/timeline";
 import type { RuntimeStatus } from "@/services/ambient";
 import type { LiveSession } from "@/services/ambient/live-session";
 
@@ -45,6 +51,7 @@ const DEVICES: Device[] = [
 
 interface TimelineEntry {
   id?: string;
+  sortTs?: number;
   time: string;
   icon: LucideIcon;
   device: { name: string; icon: LucideIcon };
@@ -116,6 +123,9 @@ const TIMELINE: TimelineEntry[] = [
 const NARRATIVE_SUMMARY =
   "Today felt productive. 7h 24m of sleep set a clean baseline; you ran hot during the Sequoia call (HR peaked at 158) but recovered in the 45-min focus block after lunch. Evening swim hit zone 3 for 32 minutes — 8% above your weekly average. Dad is visiting and mentioned a cardiologist appointment Thursday.";
 
+const INITIAL_TIMELINE_VISIBLE_COUNT = 10;
+const TIMELINE_LOAD_MORE_COUNT = 10;
+
 function formatTimelineTime(iso: string): string {
   return new Date(iso).toLocaleTimeString([], {
     hour: "numeric",
@@ -144,6 +154,7 @@ function timelineEventToEntry(
 ): TimelineEntry {
   return {
     id: event.id,
+    sortTs: Date.parse(event.occurredAt),
     time: formatTimelineTime(event.occurredAt),
     icon: iconForTimelineEvent(event),
     device: {
@@ -158,6 +169,125 @@ function timelineEventToEntry(
     triggeredCard: event.triggeredCardTitle,
     onDismiss: () => onDismiss(event.id),
   };
+}
+
+function pendingTranscriptWindowToEntry(window: AmbientCandidateWindow): TimelineEntry {
+  return {
+    id: `pending-${window.id}`,
+    sortTs: Date.parse(window.startedAt),
+    time: formatTimelineTime(window.startedAt),
+    icon: Mic,
+    device: { name: "Microphone", icon: Mic },
+    privacyTag: "private",
+    confidenceLabel: window.confidenceHint >= 0.65 ? "certain" : "uncertain",
+    title: "Voice transcript pending",
+    body: transcriptWindowPreview(window.compactContext),
+    tags: ["voice", "pending"],
+  };
+}
+
+function latestRawEventToEntry(raw: AmbientRawEvent): TimelineEntry {
+  return {
+    id: `latest-raw-${raw.id}`,
+    sortTs: Date.parse(raw.occurredAt),
+    time: formatTimelineTime(raw.occurredAt),
+    icon: iconForRawEvent(raw.sourceType),
+    device: {
+      name: deviceLabelForRawEvent(raw),
+      icon: deviceIconForRawEvent(raw.sourceType),
+    },
+    privacyTag: raw.sensitivity === "normal" ? undefined : raw.sensitivity,
+    confidenceLabel: confidenceLabelForRawEvent(raw),
+    title: titleForRawEvent(raw.sourceType),
+    body: rawEventBody(raw),
+    tags: tagsForRawEvent(raw),
+  };
+}
+
+function iconForRawEvent(sourceType: AmbientSourceType): LucideIcon {
+  if (sourceType === "health") return Stethoscope;
+  if (sourceType === "location") return MapPin;
+  if (sourceType === "motion") return Activity;
+  if (sourceType === "sound") return Waves;
+  if (sourceType === "visit") return MapPin;
+  if (sourceType === "calendar") return Target;
+  return Sparkles;
+}
+
+function deviceIconForRawEvent(sourceType: AmbientSourceType): LucideIcon {
+  if (sourceType === "health") return Watch;
+  if (sourceType === "motion") return Activity;
+  if (sourceType === "sound") return Mic;
+  if (sourceType === "visit") return MapPin;
+  if (sourceType === "calendar") return Smartphone;
+  return Smartphone;
+}
+
+function deviceLabelForRawEvent(raw: AmbientRawEvent): string {
+  if (raw.sourceType === "health") return "HealthKit";
+  if (raw.sourceType === "location") return "Location";
+  if (raw.sourceType === "motion") return "Motion";
+  if (raw.sourceType === "sound") return "Microphone";
+  if (raw.sourceType === "visit") return "Places";
+  if (raw.sourceType === "calendar") return "Calendar";
+  return raw.sourceType;
+}
+
+function titleForRawEvent(sourceType: AmbientSourceType): string {
+  if (sourceType === "health") return "Health update";
+  if (sourceType === "location") return "Location updated";
+  if (sourceType === "motion") return "Motion update";
+  if (sourceType === "sound") return "Sound context";
+  if (sourceType === "visit") return "Place update";
+  if (sourceType === "calendar") return "Calendar context";
+  return "Context update";
+}
+
+function tagsForRawEvent(raw: AmbientRawEvent): string[] {
+  if (raw.sourceType === "health") return ["health", "latest"];
+  if (raw.sourceType === "location") return ["location", "latest"];
+  if (raw.sourceType === "motion") return ["motion", "latest"];
+  if (raw.sourceType === "sound") return ["sound", "latest"];
+  if (raw.sourceType === "visit") return ["place", "latest"];
+  if (raw.sourceType === "calendar") return ["calendar", "latest"];
+  return [raw.sourceType, "latest"];
+}
+
+function confidenceLabelForRawEvent(
+  raw: AmbientRawEvent,
+): TimelineEntry["confidenceLabel"] {
+  if (raw.confidence === null) return undefined;
+  return raw.confidence >= 0.65 ? "certain" : "uncertain";
+}
+
+function rawEventBody(raw: AmbientRawEvent): string {
+  if (raw.sourceType === "sound") {
+    return soundBody(raw.compactText);
+  }
+  return raw.compactText || `${titleForRawEvent(raw.sourceType)} captured.`;
+}
+
+function soundBody(text: string): string {
+  const match = /^Heard\s+([a-zA-Z_ -]+?)\s+for\s+/.exec(text.trim());
+  const label = match?.[1]?.trim().toLowerCase();
+  if (label === "speech" || label === "conversation") return "Speech detected";
+  if (label === "traffic") return "Traffic sound";
+  if (label === "quiet" || label === "quiet room") return "Quiet room";
+  if (label === "music" || label === "singing") return "Music";
+  return "Sound detected";
+}
+
+function transcriptWindowPreview(compactContext: string): string {
+  const segments = compactContext
+    .split(/Transcript segment:\s*/g)
+    .map((part) => part.replace(/^Sound context:\s*/i, "").trim())
+    .filter(Boolean);
+  const unique: string[] = [];
+  for (const segment of segments) {
+    if (unique[unique.length - 1] !== segment) unique.push(segment);
+  }
+  const text = (unique.join(" ") || compactContext).trim();
+  return text.length > 220 ? `${text.slice(0, 217)}...` : text;
 }
 
 /* ──────────────── COMPONENT ──────────────── */
@@ -178,6 +308,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
     getPersistedAmbientEnabled(),
   );
   const [togglePending, setTogglePending] = useState(false);
+  const [timelineVisibleCount, setTimelineVisibleCount] = useState(INITIAL_TIMELINE_VISIBLE_COUNT);
   const connectedCount = DEVICES.filter((d) => d.connected).length;
 
   // Reflect server-side consent first; fall back to live runtime state
@@ -240,6 +371,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
           : ALL_SOURCE_KEYS;
         lifecycle.startAmbientUpload({
           enabledSources: enabledSources.length > 0 ? enabledSources : ALL_SOURCE_KEYS,
+          transcriptionLanguage: updated?.generationLanguage ?? settings?.generationLanguage ?? null,
         });
       } else {
         await lifecycle.stopAmbientUpload();
@@ -247,7 +379,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
     } finally {
       setTogglePending(false);
     }
-  }, [ambientOn, patch, togglePending]);
+  }, [ambientOn, patch, settings?.generationLanguage, togglePending]);
 
   const handleLockToggle = useCallback(() => {
     if (!isNative) return;
@@ -286,10 +418,28 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
   const useWebPreviewTimeline = !isNative && ambientTimeline.events.length === 0;
   const timelineEntries = useMemo<TimelineEntry[]>(() => {
     if (useWebPreviewTimeline) return TIMELINE;
-    return ambientTimeline.events.map((event) =>
-      timelineEventToEntry(event, handleDismissTimelineEvent),
-    );
-  }, [ambientTimeline.events, handleDismissTimelineEvent, useWebPreviewTimeline]);
+    const pendingTranscriptWindows = ambientTimeline.pendingTranscriptWindows ?? [];
+    const latestRawEvents = ambientTimeline.latestRawEvents ?? [];
+    return [
+      ...ambientTimeline.events.map((event) =>
+        timelineEventToEntry(event, handleDismissTimelineEvent),
+      ),
+      ...pendingTranscriptWindows.map(pendingTranscriptWindowToEntry),
+      ...latestRawEvents.map(latestRawEventToEntry),
+    ].sort((a, b) => (b.sortTs ?? 0) - (a.sortTs ?? 0));
+  }, [
+    ambientTimeline.events,
+    ambientTimeline.latestRawEvents,
+    ambientTimeline.pendingTranscriptWindows,
+    handleDismissTimelineEvent,
+    useWebPreviewTimeline,
+  ]);
+  const visibleTimelineEntries = timelineEntries.slice(0, timelineVisibleCount);
+  const canLoadMoreTimelineEntries = timelineVisibleCount < timelineEntries.length;
+
+  useEffect(() => {
+    setTimelineVisibleCount(INITIAL_TIMELINE_VISIBLE_COUNT);
+  }, [ambientTimeline.localDate]);
 
   const handleConnectMore = () => {
     if (onConnectMore) onConnectMore();
@@ -508,6 +658,23 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
       <div className="space-y-2.5">
         {timelineEntries.length === 0 && (
           <div className="glass-card p-4 text-center">
+            {ambientTimeline.loading && (
+              <div className="mb-3 flex items-center justify-center gap-1.5" aria-hidden="true">
+                {[0, 1, 2].map((i) => (
+                  <motion.span
+                    key={i}
+                    className="h-1.5 w-1.5 rounded-full bg-foreground/45"
+                    animate={{ opacity: [0.35, 1, 0.35], y: [0, -3, 0] }}
+                    transition={{
+                      duration: 0.85,
+                      repeat: Infinity,
+                      delay: i * 0.12,
+                      ease: "easeInOut",
+                    }}
+                  />
+                ))}
+              </div>
+            )}
             <p className="text-[13px] font-semibold text-foreground/80">
               {ambientTimeline.loading ? "Building local timeline…" : "No local timeline events yet"}
             </p>
@@ -525,7 +692,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
             )}
           </div>
         )}
-        {timelineEntries.map((entry, idx) => (
+        {visibleTimelineEntries.map((entry, idx) => (
           <motion.div
             key={entry.id ?? entry.time + entry.title}
             initial={{ opacity: 0, y: 6 }}
@@ -576,13 +743,15 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                       </>
                     )}
                   </div>
-                  <button
-                    onClick={entry.onDismiss}
-                    className="text-foreground/30 hover:text-foreground/60 shrink-0"
-                    aria-label="Dismiss"
-                  >
-                    <X size={13} />
-                  </button>
+                  {entry.onDismiss && (
+                    <button
+                      onClick={entry.onDismiss}
+                      className="text-foreground/30 hover:text-foreground/60 shrink-0"
+                      aria-label="Dismiss"
+                    >
+                      <X size={13} />
+                    </button>
+                  )}
                 </div>
 
                 <p className="text-[13.5px] font-semibold text-foreground leading-snug mt-1 mb-1">
@@ -631,6 +800,19 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
             </div>
           </motion.div>
         ))}
+        {canLoadMoreTimelineEntries && (
+          <button
+            onClick={() => {
+              setTimelineVisibleCount((count) => Math.min(
+                count + TIMELINE_LOAD_MORE_COUNT,
+                timelineEntries.length,
+              ));
+            }}
+            className="w-full rounded-2xl border border-foreground/[0.08] bg-foreground/[0.035] px-4 py-3 text-[12px] font-semibold text-foreground/65 hover:bg-foreground/[0.06] hover:text-foreground/80 transition-colors"
+          >
+            Load more · {timelineEntries.length - timelineVisibleCount} older
+          </button>
+        )}
       </div>
 
       {/* Bottom hint */}
@@ -657,6 +839,7 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
   // Progressively reveal assist messages, one at a time
   const [visibleCount, setVisibleCount] = useState(1);
   const [elapsed, setElapsed] = useState(0);
+  const previousAssistCount = useRef(session.assists.length);
 
   useEffect(() => {
     const tick = setInterval(() => setElapsed((e) => e + 1), 1000);
@@ -668,6 +851,18 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
     const t = setTimeout(() => setVisibleCount((c) => c + 1), 2000);
     return () => clearTimeout(t);
   }, [visibleCount, session.assists.length]);
+
+  useEffect(() => {
+    const previous = previousAssistCount.current;
+    previousAssistCount.current = session.assists.length;
+    if (session.assists.length <= previous) {
+      setVisibleCount((count) => Math.min(count, session.assists.length));
+      return;
+    }
+    setVisibleCount((count) => (
+      count >= previous ? session.assists.length : count
+    ));
+  }, [session.assists.length]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

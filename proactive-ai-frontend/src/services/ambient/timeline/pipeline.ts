@@ -468,15 +468,26 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
       windowType: "transcript_session",
       limit: 200,
     })).find((window) => window.id === id);
+    const existingRawRefIds = new Set((existing?.rawRefs ?? []).map((ref) => ref.id));
     const soundWindows = await this.overlappingSoundContextWindows(raw.localDate, startedAt, endedAt ?? startedAt);
-    const soundContextText = soundWindows.length > 0
-      ? ` Sound context: ${soundWindows.map((window) => window.compactContext).join(" ")}`
-      : "";
+    const newSoundWindows = soundWindows.filter((window) =>
+      window.rawRefs.some((ref) => !existingRawRefIds.has(ref.id)),
+    );
+    const additions = [
+      existingRawRefIds.has(raw.id) ? "" : raw.compactText,
+      newSoundWindows.length > 0
+        ? `Sound context: ${newSoundWindows.map((window) => window.compactContext).join(" ")}`
+        : "",
+    ].filter(Boolean);
+    const soundContextText = additions.join(" ");
     const compactContext = existing?.compactContext
-      ? `${existing.compactContext} ${raw.compactText}${soundContextText}`
-      : `${raw.compactText}${soundContextText}`;
+      ? [existing.compactContext, soundContextText].filter(Boolean).join(" ")
+      : soundContextText || raw.compactText;
     const soundRawRefs = soundWindows.flatMap((window) => window.rawRefs);
     const nextHash = stableHash(compactContext);
+    const inputChanged = existing?.llmInputHash !== undefined
+      && existing.llmInputHash !== null
+      && existing.llmInputHash !== nextHash;
     return this.upsertWindow({
       id,
       localDate: raw.localDate,
@@ -491,10 +502,10 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
       confidenceHint: 0.55,
       salienceHint: 0.5,
       generationPolicy: "llm_allowed",
-      status: existing?.llmInputHash && existing.llmInputHash !== nextHash ? "pending" : (existing?.status ?? "pending"),
-      lastAttemptAt: existing?.llmInputHash && existing.llmInputHash !== nextHash ? null : existing?.lastAttemptAt,
-      attemptCount: existing?.llmInputHash && existing.llmInputHash !== nextHash ? 0 : existing?.attemptCount,
-      lastErrorCode: existing?.llmInputHash && existing.llmInputHash !== nextHash ? null : existing?.lastErrorCode,
+      status: inputChanged ? "pending" : (existing?.status ?? "pending"),
+      lastAttemptAt: inputChanged ? null : existing?.lastAttemptAt,
+      attemptCount: inputChanged ? 0 : existing?.attemptCount,
+      lastErrorCode: inputChanged ? null : existing?.lastErrorCode,
       llmInputHash: nextHash,
     });
   }

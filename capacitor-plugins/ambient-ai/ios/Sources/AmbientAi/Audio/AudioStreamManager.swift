@@ -373,6 +373,11 @@ actor AudioStreamManager {
             return
         }
 
+        emitCaptureReady(
+            metadata: metadata,
+            triggerSource: triggerSource
+        )
+
         let localResult = await transcribeLocally(wavURL: metadata.url, durationMs: snapshot.durationMs)
         let localText = localResult?.text ?? ""
         let transcriptLocale = localResult?.localeId
@@ -875,6 +880,22 @@ actor AudioStreamManager {
             payload["transcriptLocale"] = transcriptLocale
         }
         callbacks.emitEvent("transcriptDraft", payload)
+    }
+
+    private func emitCaptureReady(
+        metadata: AudioCaptureMetadata,
+        triggerSource: String
+    ) {
+        callbacks.emitEvent("captureReady", [
+            "platform": "ios",
+            "wavId": metadata.wavId,
+            "burstId": metadata.burstId,
+            "captureSessionId": metadata.captureSessionId,
+            "capturedAt": iso8601(metadata.capturedAt),
+            "durationMs": metadata.durationMs,
+            "byteSize": metadata.byteSize,
+            "triggerSource": triggerSource,
+        ])
     }
 
     private func emitTranscriptRefined(

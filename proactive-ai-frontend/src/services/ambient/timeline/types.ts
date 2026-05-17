@@ -156,6 +156,7 @@ export interface AmbientTimelineStore {
     sourceType?: AmbientSourceType;
     eventType?: string;
     limit?: number;
+    order?: "asc" | "desc";
   }): Promise<AmbientRawEvent[]>;
   getRawEventsByRefs(refs: AmbientRawRef[]): Promise<AmbientRawEvent[]>;
   listRawEventsInRange(filter: {

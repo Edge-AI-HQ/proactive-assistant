@@ -32,13 +32,16 @@ export class BrowserSpeechEngine implements VoiceEngine {
     recognition.interimResults = true;
     if (this.lang) recognition.lang = this.lang;
 
+    const segments: string[] = [];
+
     recognition.onresult = (event) => {
-      let transcript = "";
+      const startIndex = typeof event.resultIndex === "number" ? event.resultIndex : 0;
       let hasFinal = false;
-      for (let i = 0; i < event.results.length; i++) {
-        transcript += event.results[i][0].transcript;
+      for (let i = startIndex; i < event.results.length; i++) {
+        segments[i] = event.results[i][0].transcript;
         if (event.results[i].isFinal) hasFinal = true;
       }
+      const transcript = segments.slice(0, event.results.length).join("");
       if (hasFinal) callbacks.onFinal(transcript);
       else callbacks.onPartial(transcript);
     };
@@ -54,14 +57,43 @@ export class BrowserSpeechEngine implements VoiceEngine {
 
     return {
       stop() {
-        try {
-          recognition.stop();
-        } catch {
-          // already stopped
-        }
+        return waitForRecognitionEnd(recognition, () => recognition.stop());
+      },
+      cancel() {
+        return waitForRecognitionEnd(recognition, () => {
+          if (recognition.abort) recognition.abort();
+          else recognition.stop();
+        });
       },
     };
   }
+}
+
+function waitForRecognitionEnd(recognition: SpeechRecognitionLike, stop: () => void): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const previousOnEnd = recognition.onend;
+    const timeout = window.setTimeout(finish, 800);
+
+    function finish() {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      recognition.onend = previousOnEnd;
+      resolve();
+    }
+
+    recognition.onend = (event) => {
+      previousOnEnd?.(event);
+      finish();
+    };
+
+    try {
+      stop();
+    } catch {
+      finish();
+    }
+  });
 }
 
 // Minimal local typing for webkit SpeechRecognition — the DOM lib doesn't
@@ -70,9 +102,13 @@ interface SpeechRecognitionLike {
   lang: string;
   continuous: boolean;
   interimResults: boolean;
-  onresult: ((event: { results: ArrayLike<{ 0: { transcript: string }; isFinal: boolean }> }) => void) | null;
+  onresult: ((event: {
+    resultIndex?: number;
+    results: ArrayLike<{ 0: { transcript: string }; isFinal: boolean }>;
+  }) => void) | null;
   onerror: ((event: { error?: unknown }) => void) | null;
-  onend: (() => void) | null;
+  onend: ((event?: unknown) => void) | null;
   start(): void;
   stop(): void;
+  abort?(): void;
 }

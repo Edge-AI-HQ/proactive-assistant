@@ -21,6 +21,8 @@ enum LlamaTextGenerationError: LocalizedError {
     case tokenizeFailed(Int32)
     case promptDecodeFailed
     case logitsUnavailable
+    case batchSequenceUnavailable
+    case batchCapacityExceeded
     case decodeFailed(Int)
     case timeout
 
@@ -38,6 +40,10 @@ enum LlamaTextGenerationError: LocalizedError {
             return "llama_decode failed on prompt."
         case .logitsUnavailable:
             return "llama_get_logits_ith returned nil."
+        case .batchSequenceUnavailable:
+            return "llama_batch seq_id storage is unavailable."
+        case .batchCapacityExceeded:
+            return "llama_batch capacity was exceeded."
         case .decodeFailed(let count):
             return "llama_decode failed at generated token \(count)."
         case .timeout:
@@ -64,6 +70,34 @@ struct LlamaTextGenerationEngine: LlamaTextGenerating {
     private static let backendInitOnce: Void = {
         llama_backend_init()
     }()
+
+    private func clearBatch(_ batch: inout llama_batch) {
+        batch.n_tokens = 0
+    }
+
+    private func addBatchToken(
+        _ batch: inout llama_batch,
+        token: llama_token,
+        position: llama_pos,
+        seqIds: [llama_seq_id],
+        logits: Bool
+    ) throws {
+        let index = Int(batch.n_tokens)
+        guard index < 512 else {
+            throw LlamaTextGenerationError.batchCapacityExceeded
+        }
+        batch.token[index] = token
+        batch.pos[index] = position
+        batch.n_seq_id[index] = Int32(seqIds.count)
+        guard let seqIdsStorage = batch.seq_id, let seqIdStorage = seqIdsStorage[index] else {
+            throw LlamaTextGenerationError.batchSequenceUnavailable
+        }
+        for (seqIndex, seqId) in seqIds.enumerated() {
+            seqIdStorage[seqIndex] = seqId
+        }
+        batch.logits[index] = logits ? 1 : 0
+        batch.n_tokens += 1
+    }
 
     private func runReal(
         modelURL: URL,
@@ -116,22 +150,24 @@ struct LlamaTextGenerationEngine: LlamaTextGenerating {
         var batch = llama_batch_init(512, 0, 1)
         defer { llama_batch_free(batch) }
 
-        let chunkLen = promptTokens.count
-        batch.n_tokens = Int32(chunkLen)
-        for i in 0..<chunkLen {
-            batch.token[i] = promptTokens[i]
-            batch.pos[i] = Int32(i)
-            batch.n_seq_id[i] = 1
-            if let seqIds = batch.seq_id, let seqId = seqIds[i] {
-                seqId[0] = 0
+        let batchCapacity = 512
+        var promptOffset = 0
+        while promptOffset < promptTokens.count {
+            clearBatch(&batch)
+            let chunkEnd = min(promptOffset + batchCapacity, promptTokens.count)
+            for index in promptOffset..<chunkEnd {
+                try addBatchToken(
+                    &batch,
+                    token: promptTokens[index],
+                    position: llama_pos(index),
+                    seqIds: [0],
+                    logits: index == promptTokens.count - 1
+                )
             }
-            batch.logits[i] = 0
-        }
-        if batch.n_tokens > 0 {
-            batch.logits[Int(batch.n_tokens) - 1] = 1
-        }
-        guard llama_decode(ctx, batch) == 0 else {
-            throw LlamaTextGenerationError.promptDecodeFailed
+            guard llama_decode(ctx, batch) == 0 else {
+                throw LlamaTextGenerationError.promptDecodeFailed
+            }
+            promptOffset = chunkEnd
         }
 
         var generated: [llama_token] = []
@@ -155,14 +191,14 @@ struct LlamaTextGenerationEngine: LlamaTextGenerating {
             }
             if nextToken == eos { break }
             generated.append(nextToken)
-            batch.n_tokens = 1
-            batch.token[0] = nextToken
-            batch.pos[0] = nCur
-            batch.n_seq_id[0] = 1
-            if let seqIds = batch.seq_id, let seqId = seqIds[0] {
-                seqId[0] = 0
-            }
-            batch.logits[0] = 1
+            clearBatch(&batch)
+            try addBatchToken(
+                &batch,
+                token: nextToken,
+                position: nCur,
+                seqIds: [0],
+                logits: true
+            )
             nCur += 1
             guard llama_decode(ctx, batch) == 0 else {
                 throw LlamaTextGenerationError.decodeFailed(generated.count)

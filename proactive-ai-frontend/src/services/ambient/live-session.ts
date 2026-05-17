@@ -13,6 +13,7 @@ import {
 
 export interface LiveAssistItem {
   time: string;
+  sortTs?: number;
   kind: "context" | "assist" | "action";
   text: string;
   source?: string;
@@ -32,6 +33,7 @@ export interface LiveSession {
 interface LiveAssistMessage {
   id: string;
   time: string;
+  sortTs?: number;
   text: string;
   source?: string;
 }
@@ -40,6 +42,14 @@ export interface LiveSessionData {
   captureSessionId: string;
   startedAt: number;
   messages: LiveAssistMessage[];
+}
+
+export interface LiveTranscriptUpdate {
+  captureSessionId: string;
+  id: string;
+  text: string;
+  source?: string;
+  receivedAt?: number;
 }
 
 const MAX_LIVE_MESSAGES = 30;
@@ -52,8 +62,10 @@ const RECENT_CONTEXT_WINDOW_MS = 30 * 60 * 1000;
 export type LiveSessionContextKind =
   | "place"
   | "visit"
+  | "health"
   | "motion"
   | "sound"
+  | "calendar"
   | "transcript"
   | "transition";
 
@@ -62,6 +74,7 @@ export interface LiveSessionContextItem {
   kind: LiveSessionContextKind;
   label: string;
   summary?: string;
+  transcriptText?: () => string | null;
   startedAt: string;
   endedAt?: string;
   privacy: AmbientPrivacy;
@@ -92,24 +105,48 @@ export function appendTranscript(
   prev: LiveSessionData | null,
   event: TranscriptReadyEvent,
 ): LiveSessionData {
-  const text = event.text.trim();
-  const isNewSession = !prev || prev.captureSessionId !== event.captureSessionId;
-  const startedAt = isNewSession ? Date.now() : prev.startedAt;
-  const elapsed = Math.max(0, Date.now() - startedAt);
-  const message: LiveAssistMessage = {
-    id: event.burstId || `${event.captureSessionId}:${Date.now()}`,
-    time: formatElapsed(elapsed),
-    text,
-    source: event.provider,
-  };
-  const messages = isNewSession
-    ? [message]
-    : [...prev.messages, message].slice(-MAX_LIVE_MESSAGES);
-  return {
+  return appendLiveTranscript(prev, {
     captureSessionId: event.captureSessionId,
+    id: event.burstId || `${event.captureSessionId}:${Date.now()}`,
+    text: event.text,
+    source: event.provider,
+  });
+}
+
+export function appendLiveTranscript(
+  prev: LiveSessionData | null,
+  update: LiveTranscriptUpdate,
+): LiveSessionData {
+  const text = update.text.trim();
+  const receivedAt = update.receivedAt ?? Date.now();
+  const isNewSession = !prev || prev.captureSessionId !== update.captureSessionId;
+  const startedAt = isNewSession ? receivedAt : prev.startedAt;
+  const message: LiveAssistMessage = {
+    id: update.id,
+    time: formatStartTimestamp(receivedAt),
+    sortTs: receivedAt,
+    text,
+    source: update.source,
+  };
+  const messages = upsertLiveMessage(isNewSession ? [] : prev.messages, message)
+    .slice(-MAX_LIVE_MESSAGES);
+  return {
+    captureSessionId: update.captureSessionId,
     startedAt,
     messages,
   };
+}
+
+function upsertLiveMessage(
+  messages: LiveAssistMessage[],
+  next: LiveAssistMessage,
+): LiveAssistMessage[] {
+  const index = messages.findIndex((message) => message.id === next.id);
+  if (index >= 0) {
+    return messages.map((message, i) => i === index ? next : message);
+  }
+  const withoutListening = messages.filter((message) => message.id !== "listening");
+  return [...withoutListening, next];
 }
 
 
@@ -151,39 +188,45 @@ export function liveSessionDataToSession(
   const hasTranscript = !!data && data.messages.length > 0;
   const visibleContext = contextItems.slice(0, MAX_CONTEXT_ASSISTS);
   if (!hasTranscript && visibleContext.length === 0) return null;
-
-  const last = hasTranscript ? data.messages[data.messages.length - 1] : null;
+  const transcriptContextMessages = hasTranscript ? [] : transcriptContextToMessages(visibleContext);
+  const transcriptMessages = data?.messages ?? transcriptContextMessages;
+  const hasDisplayTranscript = transcriptMessages.length > 0;
+  const displayContext = hasDisplayTranscript
+    ? visibleContext.filter((item) => item.kind !== "transcript")
+    : visibleContext;
+  const last = hasDisplayTranscript ? transcriptMessages[transcriptMessages.length - 1] : null;
   const title = last
     ? truncateTitle(last.text) || "Live transcript"
-    : contextOnlyTitle(visibleContext);
+    : contextOnlyTitle(displayContext);
   const provider = last?.source ?? "device";
-  const primaryPlace = visibleContext.find((item) => item.kind === "place" || item.kind === "visit");
-  const location = primaryPlace?.label ?? (hasTranscript ? "On device · captured locally" : "Ambient context active");
+  const primaryPlace = displayContext.find((item) => item.kind === "place" || item.kind === "visit");
+  const location = primaryPlace?.label ?? (hasDisplayTranscript ? "On device · captured locally" : "Ambient context active");
   const device = uniqueStrings([
-    ...(hasTranscript ? ["Microphone"] : []),
-    ...deviceLabelsForContext(visibleContext),
+    ...(hasDisplayTranscript ? ["Microphone"] : []),
+    ...deviceLabelsForContext(displayContext),
   ]).join(" · ") || "Ambient sensors";
-  const startedAt = hasTranscript
+  const startedAt = data
     ? formatStartTimestamp(data.startedAt)
-    : formatStartTimestamp(Date.parse(visibleContext[visibleContext.length - 1]?.startedAt ?? new Date().toISOString()));
+    : formatStartTimestamp(Date.parse(displayContext[displayContext.length - 1]?.startedAt ?? new Date().toISOString()));
 
   return {
-    icon: hasTranscript ? Mic : iconForContext(visibleContext),
-    kind: hasTranscript ? "Voice session" : "Ambient context",
+    icon: hasDisplayTranscript ? Mic : iconForContext(displayContext),
+    kind: hasDisplayTranscript ? "Voice session" : "Ambient context",
     title,
     location,
     device,
     startedAt,
-    signals: sessionSignals(data, visibleContext, provider),
-    assists: [
-      ...visibleContext.map(contextItemToAssist),
-      ...(data?.messages.map((m) => ({
+    signals: sessionSignals(transcriptMessages.length, displayContext, provider),
+    assists: sortLiveAssists([
+      ...displayContext.map(contextItemToAssist),
+      ...transcriptMessages.map((m) => ({
         time: m.time,
+        sortTs: m.sortTs ?? timestampFromDisplayTime(m.time, data?.startedAt),
         kind: "context" as const,
         text: m.text,
         source: m.source,
-      })) ?? []),
-    ],
+      })),
+    ]),
   };
 }
 
@@ -203,18 +246,34 @@ export function candidateWindowsToLiveSessionContextItems(
     });
 }
 
+export function rawEventsToLiveSessionContextItems(
+  events: AmbientRawEvent[],
+  options: ContextBuildOptions = {},
+): LiveSessionContextItem[] {
+  const now = options.now ?? new Date();
+  return latestRawEventsBySource(events)
+    .filter((event) => isRecentRawEvent(event, now))
+    .sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt))
+    .slice(0, options.maxWindows ?? MAX_CONTEXT_WINDOWS)
+    .flatMap((event) => {
+      const item = rawEventToLiveSessionItem(event);
+      return item ? [item] : [];
+    });
+}
+
 
 
 function rawTranscriptEventToMessage(
   event: AmbientRawEvent,
-  sessionStartedAt: number,
+  _sessionStartedAt: number,
 ): LiveAssistMessage | null {
   const text = transcriptTextFromRaw(event);
   if (!text) return null;
   const occurredAt = Date.parse(event.occurredAt);
   return {
     id: transcriptBurstId(event) ?? event.id,
-    time: formatElapsed(Number.isFinite(occurredAt) ? occurredAt - sessionStartedAt : 0),
+    time: Number.isFinite(occurredAt) ? formatStartTimestamp(occurredAt) : "live",
+    sortTs: Number.isFinite(occurredAt) ? occurredAt : undefined,
     text,
     source: transcriptProvider(event),
   };
@@ -228,6 +287,19 @@ function transcriptTextFromRaw(event: AmbientRawEvent): string | null {
   return compact.startsWith(prefix)
     ? compact.slice(prefix.length).trim() || null
     : compact || null;
+}
+
+function transcriptTextFromCandidateWindow(window: AmbientCandidateWindow): string | null {
+  const segments = window.compactContext
+    .split(/Transcript segment:\s*/g)
+    .map((part) => part.replace(/^Sound context:\s*/i, "").trim())
+    .filter(Boolean);
+  const unique: string[] = [];
+  for (const segment of segments) {
+    if (unique[unique.length - 1] !== segment) unique.push(segment);
+  }
+  const text = unique.join(" ").trim();
+  return text || null;
 }
 
 function transcriptCaptureSessionId(event: AmbientRawEvent): string {
@@ -284,6 +356,7 @@ function candidateWindowToLiveSessionItem(
       kind: "transcript",
       label: "Conversation window active",
       summary: privacySuffix("Conversation window active", window.privacyHint),
+      transcriptText: () => transcriptTextFromCandidateWindow(window),
     };
   }
   if (window.windowType === "transition") {
@@ -293,6 +366,45 @@ function candidateWindowToLiveSessionItem(
       label: "Context shift active",
       summary: privacySuffix("Context shift active", window.privacyHint),
     };
+  }
+  return null;
+}
+
+function rawEventToLiveSessionItem(event: AmbientRawEvent): LiveSessionContextItem | null {
+  if (event.sourceType === "transcript") return null;
+  const base = {
+    id: `live-raw-${event.id}`,
+    startedAt: event.occurredAt,
+    endedAt: event.endedAt,
+    privacy: event.sensitivity,
+    confidenceLabel: event.confidence !== null && event.confidence < 0.65
+      ? "uncertain" as const
+      : "certain" as const,
+    sourceWindowIds: [],
+  };
+  if (event.sourceType === "health") {
+    return { ...base, kind: "health", label: "Health update", summary: compactSummary(event) };
+  }
+  if (event.sourceType === "location") {
+    const place = placeLabelFromText(event.compactText);
+    const label = place ? `Near ${place}` : "Location updated";
+    return { ...base, kind: "place", label, summary: compactSummary(event) };
+  }
+  if (event.sourceType === "motion") {
+    const label = motionLabel(event.compactText);
+    return { ...base, kind: "motion", label, summary: compactSummary(event) };
+  }
+  if (event.sourceType === "sound") {
+    const label = soundLabel(event.compactText);
+    return { ...base, kind: "sound", label, summary: compactSummary(event) };
+  }
+  if (event.sourceType === "visit") {
+    const place = placeLabelFromText(event.compactText);
+    const label = place ? `Near ${place}` : "Place update";
+    return { ...base, kind: "visit", label, summary: compactSummary(event) };
+  }
+  if (event.sourceType === "calendar") {
+    return { ...base, kind: "calendar", label: "Calendar context", summary: compactSummary(event) };
   }
   return null;
 }
@@ -329,47 +441,71 @@ function truncateTitle(text: string): string {
 function contextOnlyTitle(items: LiveSessionContextItem[]): string {
   const place = items.find((item) => item.kind === "place" || item.kind === "visit");
   if (place?.label.startsWith("Near ")) return `Sensing near ${place.label.slice(5)}`;
+  if (items.some((item) => item.kind === "health")) return "Health context active";
   return "Ambient context active";
 }
 
 function contextItemToAssist(item: LiveSessionContextItem): LiveAssistItem {
   return {
     time: formatContextOffset(item.startedAt),
+    sortTs: Date.parse(item.startedAt),
     kind: "context",
     text: item.summary ?? item.label,
   };
 }
 
 function sessionSignals(
-  data: LiveSessionData | null,
+  transcriptCount: number,
   contextItems: LiveSessionContextItem[],
   provider: string,
 ): string[] {
   return uniqueStrings([
     ...contextItems.map((item) => item.label),
-    ...(data && data.messages.length > 0
+    ...(transcriptCount > 0
       ? [
-          `${data.messages.length} transcript${data.messages.length === 1 ? "" : "s"}`,
+          `${transcriptCount} transcript${transcriptCount === 1 ? "" : "s"}`,
           `Provider: ${provider}`,
         ]
       : []),
   ]).slice(0, MAX_SESSION_SIGNALS);
 }
 
+function transcriptContextToMessages(items: LiveSessionContextItem[]): LiveAssistMessage[] {
+  return items
+    .filter((item) => item.kind === "transcript")
+    .flatMap((item) => {
+      const text = item.transcriptText?.()?.trim();
+      if (!text || text.startsWith("Conversation window active")) return [];
+      return [{
+        id: item.id,
+        time: formatStartTimestamp(Date.parse(item.startedAt)),
+        sortTs: Date.parse(item.startedAt),
+        text,
+        source: "local transcript",
+      }];
+    });
+}
+
 function deviceLabelsForContext(items: LiveSessionContextItem[]): string[] {
   if (items.some((item) => item.kind === "transcript")) return ["Microphone"];
+  if (items.some((item) => item.kind === "health")) return ["HealthKit"];
   if (items.length > 0) return ["iPhone"];
   return [];
 }
 
 function iconForContext(items: LiveSessionContextItem[]): LucideIcon {
+  if (items.some((item) => item.kind === "health")) return Stethoscope;
   if (items.some((item) => item.kind === "motion")) return Activity;
   if (items.some((item) => item.kind === "place" || item.kind === "visit")) return MapPin;
   return Radio;
 }
 
 function placeLabelFromWindow(window: AmbientCandidateWindow): string | null {
-  const match = /(?:Location updated|Arrived|Departed) near ([^.]+)\./i.exec(window.compactContext.trim());
+  return placeLabelFromText(window.compactContext);
+}
+
+function placeLabelFromText(text: string): string | null {
+  const match = /(?:Location updated|Location near|Arrived|Departed) near ([^.]+)\.?/i.exec(text.trim());
   const label = match?.[1]?.trim();
   return label || null;
 }
@@ -391,7 +527,8 @@ function soundLabel(context: string): string {
   if (label === "speech" || label === "conversation") return "Speech detected";
   if (label === "traffic") return "Traffic sound";
   if (label === "quiet" || label === "quiet room") return "Quiet room";
-  return `${label.charAt(0).toUpperCase()}${label.slice(1)} sound`;
+  if (label === "music" || label === "singing") return "Music";
+  return "Sound detected";
 }
 
 function privacySuffix(label: string, privacy: AmbientPrivacy): string {
@@ -402,6 +539,45 @@ function formatContextOffset(iso: string): string {
   const ts = Date.parse(iso);
   if (!Number.isFinite(ts)) return "live";
   return formatStartTimestamp(ts);
+}
+
+function sortLiveAssists(items: LiveAssistItem[]): LiveAssistItem[] {
+  return [...items].sort((a, b) => {
+    const aTs = Number.isFinite(a.sortTs) ? a.sortTs as number : Number.MAX_SAFE_INTEGER;
+    const bTs = Number.isFinite(b.sortTs) ? b.sortTs as number : Number.MAX_SAFE_INTEGER;
+    return aTs - bTs;
+  });
+}
+
+function timestampFromDisplayTime(time: string, sessionStartedAt?: number): number | undefined {
+  const offset = /^\+(\d+):(\d+)$/.exec(time);
+  if (offset && sessionStartedAt !== undefined) {
+    const minutes = Number(offset[1]);
+    const seconds = Number(offset[2]);
+    return sessionStartedAt + (minutes * 60 + seconds) * 1000;
+  }
+  return undefined;
+}
+
+function latestRawEventsBySource(events: AmbientRawEvent[]): AmbientRawEvent[] {
+  const latest = new Map<string, AmbientRawEvent>();
+  for (const event of events) {
+    const existing = latest.get(event.sourceType);
+    if (!existing || Date.parse(event.occurredAt) > Date.parse(existing.occurredAt)) {
+      latest.set(event.sourceType, event);
+    }
+  }
+  return Array.from(latest.values());
+}
+
+function isRecentRawEvent(event: AmbientRawEvent, now: Date): boolean {
+  const ts = Date.parse(event.endedAt ?? event.occurredAt);
+  return Number.isFinite(ts) && now.getTime() - ts <= RECENT_CONTEXT_WINDOW_MS;
+}
+
+function compactSummary(event: AmbientRawEvent): string {
+  if (event.sourceType === "sound") return soundLabel(event.compactText);
+  return (event.compactText || `${event.sourceType} update`).trim();
 }
 
 function uniqueStrings(values: string[]): string[] {

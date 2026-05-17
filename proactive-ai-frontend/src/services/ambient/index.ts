@@ -90,6 +90,7 @@ export class AmbientRuntime {
   private sourceReconcilePending = false;
   private desiredSourceKeys = new Set<SourceKey>();
   private optOutSources = loadOptOutSources();
+  private transcriptionLanguage: string | null = null;
 
   constructor(options: AmbientRuntimeOptions = {}) {
     // SQLite persistence on native survives app kill / OS suspend so
@@ -109,6 +110,7 @@ export class AmbientRuntime {
       },
       onEvent: (key, summary) =>
         this.recordEvent(key as SourceKey, summary),
+      getTranscriptionLanguage: () => this.transcriptionLanguage,
     };
 
     this.sources = new Map<SourceKey, AmbientSource>(
@@ -155,6 +157,11 @@ export class AmbientRuntime {
       throw err;
     }
     this.notify();
+  }
+
+  setTranscriptionLanguage(language: string | null | undefined): void {
+    const normalized = language?.trim();
+    this.transcriptionLanguage = normalized ? normalized : null;
   }
 
   async autoStart(keys: SourceKey[] = DEFAULT_AUTO_START_SOURCES): Promise<void> {

@@ -31,7 +31,7 @@ SUPPORTED_AUDIO_CONTENT_TYPES = {
 async def transcribe_voice_input(
     request: Request,
     model: str = Query(DEFAULT_TRANSCRIPTION_MODEL),
-    language: str | None = Query(default="zh"),
+    language: str | None = Query(default=None),
     x_audio_filename: str | None = Header(default=None),
     user: User = Depends(current_user),
     pool=Depends(get_pool),

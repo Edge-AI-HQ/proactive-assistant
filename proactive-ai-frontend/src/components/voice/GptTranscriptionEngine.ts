@@ -28,7 +28,7 @@ export class GptTranscriptionEngine implements VoiceEngine {
 
   constructor(options: GptTranscriptionEngineOptions = {}) {
     this.model = options.model ?? DEFAULT_MODEL;
-    this.language = options.language?.trim() || "zh";
+    this.language = options.language?.trim() || undefined;
     this.fallback = options.fallback;
   }
 

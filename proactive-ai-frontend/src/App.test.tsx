@@ -46,6 +46,7 @@ describe("App ambient boot", () => {
     await waitFor(() => {
       expect(startAmbientUploadMock).toHaveBeenCalledWith({
         enabledSources: ALL_SOURCE_KEYS,
+        transcriptionLanguage: null,
       });
     });
   });

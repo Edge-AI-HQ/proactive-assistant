@@ -32,4 +32,35 @@ describe("VoiceProvider", () => {
     expect(screen.queryByText("Transcribing...")).toBeNull();
     await waitFor(() => expect(screen.queryByText("测试转录")).toBeNull());
   });
+
+  test("waits for final stop-time transcription before committing", async () => {
+    let activeCallbacks: VoiceEngineCallbacks | null = null;
+    const finalText = "这是一段明显超过十个字的语音输入内容";
+    const engine: VoiceEngine = {
+      start(callbacks: VoiceEngineCallbacks) {
+        activeCallbacks = callbacks;
+        callbacks.onPartial("这是一段明显");
+        return {
+          stop() {
+            activeCallbacks?.onFinal(finalText);
+            return Promise.resolve();
+          },
+        };
+      },
+    };
+    const onUpdate = vi.fn();
+    const onResult = vi.fn();
+
+    render(
+      <VoiceProvider engine={engine}>
+        <VoiceButton onUpdate={onUpdate} onResult={onResult} />
+      </VoiceProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Voice input" }));
+    fireEvent.click(screen.getByRole("button", { name: /done/i }));
+
+    await waitFor(() => expect(onResult).toHaveBeenCalledWith(finalText));
+    expect(onUpdate).toHaveBeenLastCalledWith(finalText);
+  });
 });

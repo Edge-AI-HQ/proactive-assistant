@@ -1,18 +1,22 @@
 export interface VoiceLanguageHint {
-  openai: string;
+  openai?: string;
   browser: string;
 }
 
-const DEFAULT_LANGUAGE: VoiceLanguageHint = {
+const MIXED_LANGUAGE: VoiceLanguageHint = {
+  browser: "zh-CN",
+};
+
+const CHINESE_LANGUAGE: VoiceLanguageHint = {
   openai: "zh",
   browser: "zh-CN",
 };
 
 const LANGUAGE_HINTS: Record<string, VoiceLanguageHint> = {
   en: { openai: "en", browser: "en-US" },
-  "zh-hans": DEFAULT_LANGUAGE,
-  zh: DEFAULT_LANGUAGE,
-  "zh-cn": DEFAULT_LANGUAGE,
+  "zh-hans": CHINESE_LANGUAGE,
+  zh: CHINESE_LANGUAGE,
+  "zh-cn": CHINESE_LANGUAGE,
   ja: { openai: "ja", browser: "ja-JP" },
   ko: { openai: "ko", browser: "ko-KR" },
   es: { openai: "es", browser: "es-ES" },
@@ -23,9 +27,9 @@ const LANGUAGE_HINTS: Record<string, VoiceLanguageHint> = {
 
 export function normalizeVoiceLanguage(language: string | null | undefined): VoiceLanguageHint {
   const key = (language ?? "").trim().replace("_", "-").toLowerCase();
-  if (!key) return DEFAULT_LANGUAGE;
+  if (!key || key === "auto" || key === "mixed") return MIXED_LANGUAGE;
   if (LANGUAGE_HINTS[key]) return LANGUAGE_HINTS[key];
 
   const base = key.split("-", 1)[0];
-  return LANGUAGE_HINTS[base] ?? DEFAULT_LANGUAGE;
+  return LANGUAGE_HINTS[base] ?? MIXED_LANGUAGE;
 }
