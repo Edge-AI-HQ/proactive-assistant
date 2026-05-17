@@ -280,6 +280,7 @@ export interface UserDevice {
   last_seen_at: string | null;
   status: "active" | "revoked";
   metadata: Record<string, unknown>;
+  aliased_device_ids?: string[];
 }
 
 export interface RegisterDeviceInput {
@@ -327,6 +328,8 @@ export async function listUserDevices(): Promise<UserDevice[]> {
       registeredAt: string;
       lastSeenAt: string | null;
       status: "active" | "revoked";
+      metadata?: Record<string, unknown>;
+      aliasedDeviceIds?: string[];
     }>;
   };
   return (data.items ?? []).map((d) => ({
@@ -338,7 +341,8 @@ export async function listUserDevices(): Promise<UserDevice[]> {
     registered_at: d.registeredAt,
     last_seen_at: d.lastSeenAt,
     status: d.status,
-    metadata: {},
+    metadata: d.metadata ?? {},
+    aliased_device_ids: d.aliasedDeviceIds ?? [d.deviceId],
   }));
 }
 

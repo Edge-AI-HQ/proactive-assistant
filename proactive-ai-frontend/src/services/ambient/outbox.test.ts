@@ -103,4 +103,48 @@ describe("MemoryOutboxStore", () => {
     expect(await outbox.count()).toBe(0);
     expect(await outbox.pending(1, now + 1)).toEqual([]);
   });
+
+  test("synced rows become pending again for a different signed-in user", async () => {
+    const outbox = new MemoryOutboxStore();
+    await outbox.enqueue([
+      {
+        id: "health-1",
+        kind: "ambient.timeline_event",
+        title: "Health",
+        summary: "steps",
+        dedupe_key: "health:steps:today",
+        occurred_at: "2026-05-11T11:00:00.000Z",
+      },
+    ]);
+
+    await outbox.markSynced(["health-1"], now, "old-user");
+
+    expect(await outbox.count("old-user")).toBe(0);
+    expect(await outbox.pending(10, now + 1, "old-user")).toEqual([]);
+    expect(await outbox.count("new-user")).toBe(1);
+    expect((await outbox.pending(10, now + 1, "new-user"))[0]?.id).toBe("health-1");
+
+    await outbox.markSynced(["health-1"], now + 2, "new-user");
+    expect(await outbox.count("new-user")).toBe(0);
+  });
+
+  test("synced rows become pending again for a different backend", async () => {
+    const outbox = new MemoryOutboxStore();
+    await outbox.enqueue([
+      {
+        id: "health-2",
+        kind: "ambient.timeline_event",
+        title: "Health",
+        summary: "steps",
+        dedupe_key: "health:steps:backend",
+        occurred_at: "2026-05-11T11:00:00.000Z",
+      },
+    ]);
+
+    await outbox.markSynced(["health-2"], now, "user-a", "https://local.example");
+
+    expect(await outbox.count("user-a", "https://local.example")).toBe(0);
+    expect(await outbox.count("user-a", "https://dev.example")).toBe(1);
+    expect((await outbox.pending(10, now + 1, "user-a", "https://dev.example"))[0]?.id).toBe("health-2");
+  });
 });

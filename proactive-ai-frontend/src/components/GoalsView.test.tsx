@@ -583,6 +583,93 @@ describe("GoalsView", () => {
     expect(screen.getByDisplayValue("Smile iPhone (IOS) (1)")).toBeTruthy();
   });
 
+  test("uses device aliases so stale iOS raw IDs do not create duplicate sources", async () => {
+    mockListUserDevices.mockResolvedValueOnce([
+      {
+        device_id: "iphone-current",
+        platform: "ios",
+        display_name: "Smile iPhone",
+        app_version: null,
+        model: "iPhone16,2",
+        status: "active",
+        registered_at: "2026-05-17T00:00:00Z",
+        last_seen_at: "2026-05-17T03:30:00Z",
+        metadata: { hardware_signature: "hardware-v1:ios:Apple:iPhone16,2:physical" },
+        aliased_device_ids: ["iphone-current", "iphone-old"],
+      },
+    ]);
+    mockFetchRawDeviceApps.mockResolvedValue({ ok: true, apps: [], total: 0 });
+    mockFetchRawDeviceContacts.mockResolvedValue({ ok: true, contacts: [], total: 0 });
+    mockFetchRawDeviceHealth.mockImplementation(async (filter) => {
+      const rows = [
+        {
+          id: "health-current",
+          device_id: "iphone-current",
+          observation_type: "daily_summary",
+          metric: "steps",
+          value: 1249,
+          unit: "count",
+          start_at: "2026-05-17T00:00:00Z",
+          end_at: "2026-05-18T00:00:00Z",
+          local_date: "2026-05-17",
+          source_app: "healthkit",
+          payload: {},
+          occurred_at: "2026-05-17T03:17:40.727Z",
+          ingested_at: "2026-05-17T03:17:52.992Z",
+          dedupe_key: "health-current",
+          reference_count: 0,
+          last_referenced_at: null,
+          referenced_by_runs: [],
+        },
+        {
+          id: "health-old",
+          device_id: "iphone-old",
+          observation_type: "daily_summary",
+          metric: "distance",
+          value: 1.2,
+          unit: "km",
+          start_at: "2026-05-15T00:00:00Z",
+          end_at: "2026-05-16T00:00:00Z",
+          local_date: "2026-05-15",
+          source_app: "healthkit",
+          payload: {},
+          occurred_at: "2026-05-15T03:17:40.727Z",
+          ingested_at: "2026-05-15T03:17:52.992Z",
+          dedupe_key: "health-old",
+          reference_count: 0,
+          last_referenced_at: null,
+          referenced_by_runs: [],
+        },
+      ];
+      const filtered = filter?.deviceId
+        ? rows.filter((row) => row.device_id === filter.deviceId)
+        : rows;
+      return { ok: true, observations: filtered, total: filtered.length };
+    });
+
+    render(<GoalsView composio={makeComposioState([])} />);
+
+    await openWorkbenchRawPanel();
+
+    await waitFor(() => {
+      expect(screen.getByText("steps · daily_summary")).toBeTruthy();
+      expect(screen.getByText("distance · daily_summary")).toBeTruthy();
+    });
+    expect(screen.getByDisplayValue("Smile iPhone (IOS) (2)")).toBeTruthy();
+    const deviceOptions = screen.getAllByRole("option").filter((option) => (
+      /Smile iPhone/i.test(option.textContent ?? "")
+    ));
+    expect(deviceOptions).toHaveLength(1);
+    expect(mockFetchRawDeviceHealth).toHaveBeenCalledWith(
+      expect.objectContaining({ deviceId: "iphone-current", limit: 12 }),
+      expect.any(AbortSignal),
+    );
+    expect(mockFetchRawDeviceHealth).toHaveBeenCalledWith(
+      expect.objectContaining({ deviceId: "iphone-old", limit: 12 }),
+      expect.any(AbortSignal),
+    );
+  });
+
   test("orders device raw rows by time across contacts and health", async () => {
     mockListUserDevices.mockResolvedValueOnce([
       {

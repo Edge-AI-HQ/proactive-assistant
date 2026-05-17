@@ -309,6 +309,26 @@ describe("ensureDevice", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  test("clearDeviceCredentials clears native secure storage and legacy local storage", async () => {
+    platformState.isNative = true;
+    platformState.platform = "ios";
+    secureStore.set("pin.deviceId", "secure-id");
+    secureStore.set("pin.deviceToken", "secure-token");
+    secureStore.set("pin.deviceOwnerUserId", "secure-user");
+    localStorage.setItem("pin.deviceId", "legacy-id");
+    localStorage.setItem("pin.deviceToken", "legacy-token");
+    localStorage.setItem("pin.deviceOwnerUserId", "legacy-user");
+
+    await clearDeviceCredentials();
+
+    expect(secureStore.get("pin.deviceId")).toBeUndefined();
+    expect(secureStore.get("pin.deviceToken")).toBeUndefined();
+    expect(secureStore.get("pin.deviceOwnerUserId")).toBeUndefined();
+    expect(localStorage.getItem("pin.deviceId")).toBeNull();
+    expect(localStorage.getItem("pin.deviceToken")).toBeNull();
+    expect(localStorage.getItem("pin.deviceOwnerUserId")).toBeNull();
+  });
+
   test("native registration sends a stable fingerprint for server-side dedupe", async () => {
     platformState.isNative = true;
     platformState.platform = "ios";

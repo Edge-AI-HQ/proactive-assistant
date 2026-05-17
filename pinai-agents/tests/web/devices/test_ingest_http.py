@@ -226,6 +226,7 @@ async def test_device_list_collapses_legacy_ios_app_rows(client, pool):
         if item["platform"] == "ios"
     ]
     assert [item["deviceId"] for item in ios_rows] == [latest_id]
+    assert set(ios_rows[0]["aliasedDeviceIds"]) == {old_id, mid_id, latest_id}
 
     await _cleanup_user(pool, sub)
 

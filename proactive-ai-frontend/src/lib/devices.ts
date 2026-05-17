@@ -191,6 +191,7 @@ async function clearStored(): Promise<void> {
     clearLocalStored();
     return;
   }
+  clearLocalStored();
   await removeSecureValue(DEVICE_ID_KEY);
   await removeSecureValue(DEVICE_TOKEN_KEY);
   await removeSecureValue(DEVICE_OWNER_KEY);
@@ -307,6 +308,14 @@ async function currentUserId(): Promise<string> {
     throw new Error("device registration requires an authenticated user");
   }
   return userId;
+}
+
+export async function currentDeviceOwnerUserId(): Promise<string | null> {
+  try {
+    return await currentUserId();
+  } catch {
+    return null;
+  }
 }
 
 async function isCurrentOwner(ownerUserId: string): Promise<boolean> {

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, forwardRef } from "r
 import { motion, AnimatePresence } from "framer-motion";
 import { isNative } from "@/lib/platform";
 import {
-  Radio, Smartphone, Watch, Glasses, Headphones, Camera, Laptop,
+  Radio, Smartphone, Watch, Laptop,
   MapPin, Compass, Mic, Activity, Wifi,
   Stethoscope,
   Lightbulb, Sparkles, Plus, ChevronRight, X,
@@ -11,6 +11,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useUserSettings } from "@/hooks/useUserSettings";
+import { useUserDevices } from "@/hooks/useUserDevices";
 import { useAmbientTimeline } from "@/hooks/useAmbientTimeline";
 import { useAmbientLiveSession } from "@/hooks/useAmbientLiveSession";
 import LiveSessionCard from "./LiveSessionCard";
@@ -28,24 +29,7 @@ import type {
 } from "@/services/ambient/timeline";
 import type { RuntimeStatus } from "@/services/ambient";
 import type { LiveSession } from "@/services/ambient/live-session";
-
-
-interface Device {
-  name: string;
-  detail: string;
-  icon: LucideIcon;
-  connected: boolean;
-  signal?: string;
-}
-
-const DEVICES: Device[] = [
-  { name: "iPhone 15 Pro", detail: "Location · Motion · Audio", icon: Smartphone, connected: true, signal: "strong" },
-  { name: "Apple Watch Ultra", detail: "Heart · Activity · Haptics", icon: Watch, connected: true, signal: "strong" },
-  { name: "AirPods Pro", detail: "Ambient audio · Voice", icon: Headphones, connected: true, signal: "strong" },
-  { name: "Ray-Ban Meta", detail: "Vision · POV capture", icon: Glasses, connected: true, signal: "weak" },
-  { name: "Tesla Model 3", detail: "Driving · Location", icon: Compass, connected: false },
-  { name: "Insta360", detail: "Spatial capture", icon: Camera, connected: false },
-];
+import type { UserDevice, UserDevicePlatform } from "@/lib/api";
 
 /* ──────────────── TIMELINE (today's narrative) ──────────────── */
 
@@ -290,6 +274,50 @@ function transcriptWindowPreview(compactContext: string): string {
   return text.length > 220 ? `${text.slice(0, 217)}...` : text;
 }
 
+function iconForUserDevice(platform: UserDevicePlatform): LucideIcon {
+  if (platform === "wearable") return Watch;
+  if (platform === "sensor") return Activity;
+  if (platform === "embedded") return Laptop;
+  return Smartphone;
+}
+
+function titleForUserDevice(device: UserDevice): string {
+  const name = device.display_name ?? device.model ?? device.device_id;
+  const detail = [
+    device.model,
+    device.app_version ? `app ${device.app_version}` : null,
+    device.last_seen_at ? `last seen ${formatDeviceRelativeTime(device.last_seen_at)}` : null,
+  ].filter(Boolean);
+  return detail.length > 0 ? `${name} · ${detail.join(" · ")}` : name;
+}
+
+function signalClassForUserDevice(device: UserDevice): string {
+  if (!device.last_seen_at) return "bg-amber-500";
+  const ageMs = Date.now() - new Date(device.last_seen_at).getTime();
+  return ageMs > 24 * 60 * 60 * 1000 ? "bg-amber-500" : "bg-emerald-500";
+}
+
+function formatDeviceRelativeTime(iso: string): string {
+  const ageSec = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if (ageSec < 60) return `${ageSec}s ago`;
+  if (ageSec < 3600) return `${Math.round(ageSec / 60)}m ago`;
+  if (ageSec < 86400) return `${Math.round(ageSec / 3600)}h ago`;
+  return `${Math.round(ageSec / 86400)}d ago`;
+}
+
+function deviceStripSummary(
+  connectedCount: number,
+  loading: boolean,
+  error: string | null,
+  hiddenDeviceCount: number,
+): string {
+  if (loading && connectedCount === 0) return "Loading devices";
+  if (error && connectedCount === 0) return "Devices unavailable";
+  if (hiddenDeviceCount > 0) return `${hiddenDeviceCount} more connected`;
+  if (connectedCount > 0) return "Manage devices";
+  return "No devices paired";
+}
+
 /* ──────────────── COMPONENT ──────────────── */
 
 interface AmbientViewProps {
@@ -302,6 +330,7 @@ interface AmbientViewProps {
 
 export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHandled, onOpenFullscreen }: AmbientViewProps = {}) {
   const { settings, patch } = useUserSettings();
+  const { devices, loading: devicesLoading, error: devicesError } = useUserDevices(true);
   const ambientTimeline = useAmbientTimeline();
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
   const [persistedAmbientOn, setPersistedAmbientOn] = useState(() =>
@@ -309,7 +338,18 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
   );
   const [togglePending, setTogglePending] = useState(false);
   const [timelineVisibleCount, setTimelineVisibleCount] = useState(INITIAL_TIMELINE_VISIBLE_COUNT);
-  const connectedCount = DEVICES.filter((d) => d.connected).length;
+  const connectedDevices = useMemo(
+    () => devices.filter((d) => d.status === "active" && d.platform !== "web"),
+    [devices],
+  );
+  const visibleConnectedDevices = connectedDevices.slice(0, 5);
+  const connectedCount = connectedDevices.length;
+  const hiddenDeviceCount = Math.max(0, connectedCount - visibleConnectedDevices.length);
+  const deviceCountLabel = devicesLoading && connectedCount === 0
+    ? "Loading devices"
+    : devicesError && connectedCount === 0
+      ? "devices unavailable"
+      : `${connectedCount} ${connectedCount === 1 ? "device" : "devices"}`;
 
   // Reflect server-side consent first; fall back to live runtime state
   // before settings hydrate so the hero doesn't flicker on mount.
@@ -449,7 +489,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
   return (
     <div
       className="h-full overflow-y-auto pb-32 px-4"
-      style={{ paddingTop: "calc(3.5rem + env(safe-area-inset-top, 0px))" }}
+      style={{ paddingTop: "calc(0.875rem + env(safe-area-inset-top, 0px))" }}
     >
       {/* ── Header ── */}
       <div className="mb-5">
@@ -457,7 +497,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
           Ambient
         </h1>
         <div className="mt-1 flex items-center gap-1.5 text-[13px] text-foreground/60">
-          <span>{connectedCount} devices</span>
+          <span>{deviceCountLabel}</span>
           <span className="text-foreground/30">·</span>
           <span>on-device TEE</span>
         </div>
@@ -573,31 +613,35 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
       >
         <div className="glass-card p-2.5 flex items-center gap-2 transition-all group-hover:bg-foreground/[0.02]">
           <div className="flex items-center -space-x-1.5 flex-1">
-            {DEVICES.filter((d) => d.connected).map((device) => {
-              const Icon = device.icon;
+            {visibleConnectedDevices.map((device) => {
+              const Icon = iconForUserDevice(device.platform);
               return (
                 <div
-                  key={device.name}
-                  title={`${device.name} · ${device.detail}`}
+                  key={device.device_id}
+                  title={titleForUserDevice(device)}
                   className="relative w-7 h-7 rounded-full bg-background border border-foreground/10 flex items-center justify-center text-foreground/80"
                 >
                   <Icon size={13} strokeWidth={1.8} />
                   <span
                     className={`absolute -bottom-0.5 -right-0.5 w-1.5 h-1.5 rounded-full ring-1 ring-background ${
-                      device.signal === "weak" ? "bg-amber-500" : "bg-emerald-500"
+                      signalClassForUserDevice(device)
                     }`}
                   />
                 </div>
               );
             })}
             <div className="relative w-7 h-7 rounded-full bg-foreground/5 border border-dashed border-foreground/25 flex items-center justify-center text-foreground/50">
-              <Plus size={12} strokeWidth={2.2} />
+              {hiddenDeviceCount > 0 ? (
+                <span className="text-[9px] font-semibold leading-none">+{hiddenDeviceCount}</span>
+              ) : (
+                <Plus size={12} strokeWidth={2.2} />
+              )}
             </div>
           </div>
 
           <div className="text-right pr-1 shrink-0">
             <p className="text-[11px] font-medium text-foreground/75 leading-tight">
-              {DEVICES.length - connectedCount} more available
+              {deviceStripSummary(connectedCount, devicesLoading, devicesError, hiddenDeviceCount)}
             </p>
             <p className="text-[9px] text-foreground/45 leading-tight mt-0.5 flex items-center gap-0.5 justify-end">
               Connect in Control <ChevronRight size={9} />

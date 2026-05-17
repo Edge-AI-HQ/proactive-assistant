@@ -231,6 +231,7 @@ const RAW_PREVIEW_LIMIT = 12;
 
 interface DeviceRawPreview {
   deviceId: string;
+  sourceDeviceIds: string[];
   device: UserDevice | null;
   label: string;
   apps: DeviceAppRaw[];
@@ -577,6 +578,31 @@ function Pill({ children, tone = "neutral" }: { children: ReactNode; tone?: Pill
   );
 }
 
+interface DeviceRawSeed {
+  deviceId: string;
+  device: UserDevice | null;
+  sourceDeviceIds: Set<string>;
+}
+
+async function collectDeviceRows<Row, Key extends "apps" | "contacts" | "observations">(
+  sourceDeviceIds: string[],
+  rowKey: Key,
+  loader: (deviceId: string) => Promise<Record<Key, Row[]> & { total?: number }>,
+): Promise<{ rows: Row[]; total: number }> {
+  const settled = await Promise.allSettled(sourceDeviceIds.map((deviceId) => loader(deviceId)));
+  const rows: Row[] = [];
+  let total = 0;
+
+  for (const result of settled) {
+    if (result.status !== "fulfilled") continue;
+    const sourceRows = result.value[rowKey] ?? [];
+    rows.push(...sourceRows);
+    total += typeof result.value.total === "number" ? result.value.total : sourceRows.length;
+  }
+
+  return { rows, total };
+}
+
 async function fetchRawPreview(signal?: AbortSignal): Promise<RawPreview> {
   const until = rawEndOfTodayIso();
   const [gmail, gcal, deviceList, appsSeed, contactsSeed, healthSeed] = await Promise.allSettled([
@@ -588,44 +614,79 @@ async function fetchRawPreview(signal?: AbortSignal): Promise<RawPreview> {
     fetchRawDeviceHealth({ until, limit: RAW_PREVIEW_LIMIT }, signal),
   ]);
 
-  const devicesById = new Map<string, UserDevice | null>();
+  const devicesById = new Map<string, DeviceRawSeed>();
+  const aliasToCanonical = new Map<string, string>();
   if (deviceList.status === "fulfilled") {
     for (const device of deviceList.value) {
       if (device.status === "revoked") continue;
-      devicesById.set(device.device_id, device);
+      const sourceDeviceIds = new Set([
+        device.device_id,
+        ...(device.aliased_device_ids ?? []),
+      ].filter(Boolean));
+      devicesById.set(device.device_id, {
+        deviceId: device.device_id,
+        device,
+        sourceDeviceIds,
+      });
+      for (const sourceDeviceId of sourceDeviceIds) {
+        aliasToCanonical.set(sourceDeviceId, device.device_id);
+      }
     }
   }
 
   const seedDeviceId = (deviceId: string | null | undefined) => {
-    if (deviceId && !devicesById.has(deviceId)) devicesById.set(deviceId, null);
+    if (!deviceId) return;
+    const canonicalDeviceId = aliasToCanonical.get(deviceId) ?? deviceId;
+    const existing = devicesById.get(canonicalDeviceId);
+    if (existing) {
+      existing.sourceDeviceIds.add(deviceId);
+      return;
+    }
+    devicesById.set(canonicalDeviceId, {
+      deviceId: canonicalDeviceId,
+      device: null,
+      sourceDeviceIds: new Set([deviceId]),
+    });
   };
   if (appsSeed.status === "fulfilled") appsSeed.value.apps.forEach((app) => seedDeviceId(app.device_id));
   if (contactsSeed.status === "fulfilled") contactsSeed.value.contacts.forEach((contact) => seedDeviceId(contact.device_id));
   if (healthSeed.status === "fulfilled") healthSeed.value.observations.forEach((item) => seedDeviceId(item.device_id));
 
   const devices = await Promise.all(
-    [...devicesById.entries()].map(async ([deviceId, device]) => {
+    [...devicesById.values()].map(async (group) => {
+      const sourceDeviceIds = [...group.sourceDeviceIds];
       const [apps, contacts, health, appsCount, contactsCount] = await Promise.allSettled([
-        fetchRawDeviceApps({ until, deviceId, latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal),
-        fetchRawDeviceContacts({ until, deviceId, latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal),
-        fetchRawDeviceHealth({ until, deviceId, limit: RAW_PREVIEW_LIMIT }, signal),
-        fetchRawDeviceApps({ until, deviceId, limit: 1 }, signal),
-        fetchRawDeviceContacts({ until, deviceId, limit: 1 }, signal),
+        collectDeviceRows(sourceDeviceIds, "apps", (deviceId) => (
+          fetchRawDeviceApps({ until, deviceId, latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal)
+        )),
+        collectDeviceRows(sourceDeviceIds, "contacts", (deviceId) => (
+          fetchRawDeviceContacts({ until, deviceId, latestSnapshotOnly: true, limit: RAW_PREVIEW_LIMIT }, signal)
+        )),
+        collectDeviceRows(sourceDeviceIds, "observations", (deviceId) => (
+          fetchRawDeviceHealth({ until, deviceId, limit: RAW_PREVIEW_LIMIT }, signal)
+        )),
+        collectDeviceRows(sourceDeviceIds, "apps", (deviceId) => (
+          fetchRawDeviceApps({ until, deviceId, limit: 1 }, signal)
+        )),
+        collectDeviceRows(sourceDeviceIds, "contacts", (deviceId) => (
+          fetchRawDeviceContacts({ until, deviceId, limit: 1 }, signal)
+        )),
       ]);
-      const appsRows = apps.status === "fulfilled" ? apps.value.apps : [];
-      const contactsRows = contacts.status === "fulfilled" ? contacts.value.contacts : [];
-      const healthRows = health.status === "fulfilled" ? health.value.observations : [];
+      const appsRows = apps.status === "fulfilled" ? apps.value.rows : [];
+      const contactsRows = contacts.status === "fulfilled" ? contacts.value.rows : [];
+      const healthRows = health.status === "fulfilled" ? health.value.rows : [];
       const appsTotal = appsCount.status === "fulfilled"
-        ? (appsCount.value.total ?? appsRows.length)
-        : (apps.status === "fulfilled" ? (apps.value.total ?? appsRows.length) : 0);
+        ? appsCount.value.total
+        : (apps.status === "fulfilled" ? apps.value.total : 0);
       const contactsTotal = contactsCount.status === "fulfilled"
-        ? (contactsCount.value.total ?? contactsRows.length)
-        : (contacts.status === "fulfilled" ? (contacts.value.total ?? contactsRows.length) : 0);
-      const healthTotal = health.status === "fulfilled" ? (health.value.total ?? healthRows.length) : 0;
+        ? contactsCount.value.total
+        : (contacts.status === "fulfilled" ? contacts.value.total : 0);
+      const healthTotal = health.status === "fulfilled" ? health.value.total : 0;
       return {
-        deviceId,
-        device,
-        label: formatDeviceSourceLabel(deviceId, device),
+        deviceId: group.deviceId,
+        sourceDeviceIds,
+        device: group.device,
+        label: formatDeviceSourceLabel(group.deviceId, group.device),
         apps: appsRows,
         contacts: contactsRows,
         health: healthRows,

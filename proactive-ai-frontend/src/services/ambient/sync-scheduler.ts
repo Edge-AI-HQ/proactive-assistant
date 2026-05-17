@@ -7,6 +7,8 @@ export interface SyncSchedulerOptions {
   batchLimit?: number;
   intervalMs?: number;
   maxRetryDelayMs?: number;
+  ownerUserIdProvider?: () => Promise<string | null>;
+  backendUrlProvider?: () => string | null;
 }
 
 export interface SyncResult {
@@ -30,12 +32,15 @@ export interface SyncSchedulerStatus {
 const SYNCABLE_AMBIENT_KINDS = new Set([
   AMBIENT_TIMELINE_KIND,
   AMBIENT_CANDIDATE_WINDOW_KIND,
+  "health.observation",
 ]);
 
 const DEFAULT_OPTIONS: Required<SyncSchedulerOptions> = {
   batchLimit: 50,
   intervalMs: 60_000,
   maxRetryDelayMs: 15 * 60_000,
+  ownerUserIdProvider: async () => null,
+  backendUrlProvider: () => null,
 };
 
 export class AmbientSyncScheduler {
@@ -78,8 +83,15 @@ export class AmbientSyncScheduler {
     }
 
     try {
+      const ownerUserId = await this.opts.ownerUserIdProvider();
+      const backendUrl = this.opts.backendUrlProvider();
       const pruned = await this.outbox.prune(now);
-      const pendingRecords = await this.outbox.pending(this.opts.batchLimit, now);
+      const pendingRecords = await this.outbox.pending(
+        this.opts.batchLimit,
+        now,
+        ownerUserId,
+        backendUrl,
+      );
       const records = pendingRecords.filter(
         (row) => SYNCABLE_AMBIENT_KINDS.has(row.item.kind),
       );
@@ -91,10 +103,15 @@ export class AmbientSyncScheduler {
           count: localOnlyRecords.length,
           kinds: Array.from(new Set(localOnlyRecords.map((row) => row.item.kind))),
         });
-        await this.outbox.markSynced(localOnlyRecords.map((row) => row.id), Date.now());
+        await this.outbox.markSynced(
+          localOnlyRecords.map((row) => row.id),
+          Date.now(),
+          ownerUserId,
+          backendUrl,
+        );
       }
       if (records.length === 0) {
-        const remaining = await this.outbox.count();
+        const remaining = await this.outbox.count(ownerUserId, backendUrl);
         if (remaining === 0) {
           this.lastError = null;
           this.lastSuccessTs = now;
@@ -125,7 +142,7 @@ export class AmbientSyncScheduler {
           samples: rejectedDetails.slice(0, 5),
         });
       }
-      await this.outbox.markSynced(settledIds, Date.now());
+      await this.outbox.markSynced(settledIds, Date.now(), ownerUserId, backendUrl);
       if (retryableIds.length > 0) {
         console.warn("[ambient] keeping items for retry", {
           attempted: records.length,
