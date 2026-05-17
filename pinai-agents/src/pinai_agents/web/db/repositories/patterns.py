@@ -93,6 +93,21 @@ def _pattern_to_wire(row: dict[str, Any]) -> dict[str, Any]:
             if isinstance(demo_card, dict)
             else None
         ),
+        "demoCardCategory": (
+            _text_value(demo_card.get("cardCategory"))
+            if isinstance(demo_card, dict)
+            else None
+        ),
+        "demoHumanNeed": (
+            _text_value(demo_card.get("humanNeed"))
+            if isinstance(demo_card, dict)
+            else None
+        ),
+        "demoEntryPoint": (
+            _text_value(demo_card.get("entryPoint"))
+            if isinstance(demo_card, dict)
+            else None
+        ),
         "demoSourceDataSummary": _demo_source_summary(
             row.get("demo_card_json"),
             row.get("demo_signals_used"),

@@ -1,4 +1,4 @@
-# Demo Card Library v0 — 111 张卡(1:1 对应 patterns.yaml)
+# Demo Card Library v0 — 157 张卡(1:1 对应 patterns.yaml)
 #
 # 用途:
 # 1. seed 内部 dashboard 让团队看到"pattern 库跑起来是什么样"
@@ -7,6 +7,9 @@
 #
 # 格式约定:
 #   pattern_id      对应 patterns.yaml 的 id(必填)
+#   card_category   用户视角的卡片分类,用于 dashboard 快速筛选/扫读
+#   human_need      这张卡命中的人类共性需求,例如掌控今天/少花冤枉钱/好奇掌控
+#   entry_point     这张卡进入用户生活的具体入口,例如晨间新闻/早上交通/天气/AI 算命
 #   subtype         如果该 demo 是 pattern 的某 specialization(选填)
 #   scenario        触发场景的描述,普通人视角
 #   card            用户实际看到的卡片
@@ -24,10 +27,12 @@
 
 version: v0
 generated_at: 2026-05-15
-total_cards: 111
-
+total_cards: 157
 demos:
 - pattern_id: ctx_break_recommended
+  card_category: 健康精力
+  human_need: 守住状态
+  entry_point: 状态提醒
   scenario: 用户连续工作 130 分钟
   card:
     body: '从 9:00 开始没起身。
@@ -70,6 +75,9 @@ demos:
   why_practical: 防止过劳
   wow_level: 2
 - pattern_id: ctx_first_neighborhood
+  card_category: 本地探索
+  human_need: 少踩雷
+  entry_point: 附近推荐
   scenario: 用户第一次来某老胡同区域
   card:
     body: '附近 3 家你大概率喜欢的 —
@@ -126,6 +134,9 @@ demos:
   why_practical: 第一次不踩雷
   wow_level: 5
 - pattern_id: ctx_food_decision_assist
+  card_category: 吃喝生活
+  human_need: 少想一步
+  entry_point: 吃什么
   scenario: 用户在工位附近,午餐时段,刚搜索"吃什么"
   card:
     body: '过去 30 天频率:那家面 12 次、便当 8 次、肯德基 3 次。
@@ -190,6 +201,9 @@ demos:
   why_practical: 不再纠结
   wow_level: 3
 - pattern_id: ctx_nearby_new_place
+  card_category: 本地探索
+  human_need: 少踩雷
+  entry_point: 附近推荐
   scenario: 用户附近新开了某品牌咖啡店
   card:
     body: '今天开业(首日免费手冲)。
@@ -242,6 +256,9 @@ demos:
   why_practical: 小确幸
   wow_level: 3
 - pattern_id: ctx_quiet_hour_deep_work
+  card_category: 健康精力
+  human_need: 身体别硬扛
+  entry_point: 健康提醒
   scenario: 用户接下来 2.5h 没会议,环境安静
   card:
     body: '下午 14-16:30 — 5 月以来第一次出现这么长的纯空档。
@@ -294,6 +311,9 @@ demos:
   why_practical: 不浪费深度时段
   wow_level: 4
 - pattern_id: ctx_weather_outdoor_window
+  card_category: 天气生活
+  human_need: 掌控今天
+  entry_point: 今日天气
   scenario: 这周唯一的好天气在周日下午
   card:
     body: '本周其他时间都阴/雨,周日 14-18 点晴。
@@ -361,6 +381,9 @@ demos:
   why_practical: 主动调度生活
   wow_level: 4
 - pattern_id: conflict_budget_collision
+  card_category: 金钱账单
+  human_need: 少花冤枉钱
+  entry_point: 账单续费
   scenario: 用户接下来 14 天有 3 笔大额支出(房租 + 旅行 + 设备)
   card:
     body: '房租 ¥8000(20 日),东京机票 ¥5400(26 日扣款),新 iPad ¥7000(预订 28 日发货)。
@@ -400,6 +423,9 @@ demos:
   why_practical: 真的省利息
   wow_level: 5
 - pattern_id: conflict_calendar_double
+  card_category: 风险避坑
+  human_need: 避免后悔
+  entry_point: 避坑提醒
   scenario: 用户两个会议时间重叠
   card:
     body: '- 与 Mike 1on1(他从西雅图飞来)
@@ -443,6 +469,9 @@ demos:
   why_practical: 解决冲突,不是只指出冲突
   wow_level: 4
 - pattern_id: conflict_commitment_overload
+  card_category: 工作推进
+  human_need: 少返工
+  entry_point: 会前提醒
   scenario: 用户 open 着 7 个承诺(邮件未回 + chat 答应 + 待办)
   card:
     body: '最老的 3 个超过 2 周(都对 VIP)。
@@ -499,6 +528,9 @@ demos:
   why_practical: 减压
   wow_level: 4
 - pattern_id: conflict_family_work
+  card_category: 家庭照护
+  human_need: 照顾重要的人
+  entry_point: 家庭健康
   scenario: 孩子毕业典礼 + 重要客户会议同一天
   card:
     body: '- 09:00 孩子毕业典礼(老婆已经请假)
@@ -554,6 +586,9 @@ demos:
   why_practical: 两边都不耽误
   wow_level: 5
 - pattern_id: conflict_health_workload
+  card_category: 健康精力
+  human_need: 身体别硬扛
+  entry_point: 健康提醒
   scenario: 用户这周工作量大,健康指标全部下滑
   card:
     body: '这周日程 +30%,睡眠 -1h 均值,步数 -40%,心率均值 +6 bpm。
@@ -596,6 +631,9 @@ demos:
   why_practical: 预防性休息
   wow_level: 4
 - pattern_id: energy_high_morning_match
+  card_category: 健康精力
+  human_need: 守住状态
+  entry_point: 状态提醒
   scenario: 用户早晨高能时段 + 有深度任务待做
   card:
     body: '过去 14 天你早 8:30-10:30 完成的事质量普遍最高(你自评)。
@@ -648,6 +686,9 @@ demos:
   why_practical: 利用黄金时间
   wow_level: 4
 - pattern_id: energy_low_simple_task
+  card_category: 健康精力
+  human_need: 守住状态
+  entry_point: 状态提醒
   scenario: 用户下午 3 点能量低 + 有几个简单 errand 可以做
   card:
     body: '过去 14 天你下午 3-4 点效率均值 -30%。
@@ -719,6 +760,9 @@ demos:
   why_practical: 不浪费低能时段
   wow_level: 4
 - pattern_id: energy_weekend_recharge
+  card_category: 健康精力
+  human_need: 守住状态
+  entry_point: 状态提醒
   scenario: 用户一周身体指标全部下行,周末来了
   card:
     body: '睡眠 -1.2h / 步数 -30% / 心率 +5bpm / 工时 +25%。
@@ -763,6 +807,9 @@ demos:
   why_practical: 拯救下周
   wow_level: 4
 - pattern_id: financial_better_price_alert
+  card_category: 金钱账单
+  human_need: 少花冤枉钱
+  entry_point: 账单续费
   scenario: 用户 5 天前买的耳机现在京东自营更便宜
   card:
     body: '你 5 月 12 日买的 Sony WH-1000XM5 ¥2299。
@@ -814,6 +861,9 @@ demos:
   why_practical: 真的找回 ¥300
   wow_level: 5
 - pattern_id: financial_deadline_billing
+  card_category: 金钱账单
+  human_need: 少花冤枉钱
+  entry_point: 账单续费
   scenario: 房租 2 天后到期
   card:
     body: '房东微信提醒 — 7 号前到账。
@@ -853,6 +903,9 @@ demos:
   why_practical: 不再尴尬
   wow_level: 3
 - pattern_id: financial_expiring_rewards
+  card_category: 金钱账单
+  human_need: 少花冤枉钱
+  entry_point: 账单续费
   scenario: 用户航空里程 30 天后到期
   card:
     body: '够换 1 张北京-上海经济舱(单程 7,500 公里)。
@@ -882,6 +935,9 @@ demos:
   why_practical: 真的省钱
   wow_level: 4
 - pattern_id: financial_savings_goal_progress
+  card_category: 金钱账单
+  human_need: 少花冤枉钱
+  entry_point: 账单续费
   scenario: 用户每月目标存 ¥10000,本月 14 号已经超支
   card:
     body: '14 号你应该完成 47%(¥4700)— 实际只到 ¥3000。
@@ -923,6 +979,9 @@ demos:
   why_practical: 财务自律
   wow_level: 4
 - pattern_id: financial_subscription_audit
+  card_category: 金钱账单
+  human_need: 少花冤枉钱
+  entry_point: 账单续费
   scenario: 用户有 7 个订阅,每月 ¥420
   card:
     body: 'ChatGPT Plus, Notion, Cursor, Apple One, B 站大会员, 知乎盐选, 某 podcast。
@@ -952,6 +1011,9 @@ demos:
   why_practical: 真的省钱
   wow_level: 4
 - pattern_id: financial_unusual_spending
+  card_category: 金钱账单
+  human_need: 少花冤枉钱
+  entry_point: 账单续费
   scenario: 用户某品类消费这周是均值 3x
   card:
     body: '你均值 ¥800/周。
@@ -983,6 +1045,9 @@ demos:
   why_practical: 实际预算管理
   wow_level: 3
 - pattern_id: forgotten_birthday_approaching
+  card_category: 家庭照护
+  human_need: 照顾重要的人
+  entry_point: 家人提醒
   scenario: 妻子生日还有 7 天,用户没提过准备
   card:
     body: '去年这天你订了 [那家西餐],她拍照发了朋友圈说"超喜欢"。
@@ -1048,6 +1113,9 @@ demos:
   why_practical: 拯救婚姻的真实场景
   wow_level: 5
 - pattern_id: forgotten_dormant_thread
+  card_category: 关系关心
+  human_need: 关系不掉线
+  entry_point: 消息回复
   scenario: 重要朋友 70 天没联系,最后一次聊到他要换工作
   card:
     body: '最后一次是 3 月 8 日,他当时说在纠结跳槽。
@@ -1087,6 +1155,9 @@ demos:
   why_practical: 维护友谊
   wow_level: 5
 - pattern_id: forgotten_open_loop_task
+  card_category: 工作推进
+  human_need: 推进进度
+  entry_point: 工作待办
   scenario: 用户自己设的 todo "整理上半年照片" 已 30 天
   card:
     body: '过去 30 天你确实拍了 240 张照片 — 没整理。
@@ -1138,6 +1209,9 @@ demos:
   why_practical: 关闭 open loop
   wow_level: 3
 - pattern_id: forgotten_promised_followup
+  card_category: 关系关心
+  human_need: 关系不掉线
+  entry_point: 消息回复
   scenario: 用户 2 周前在 chat 里说"我帮你看看那本书",到现在没动
   card:
     body: '他 2 周前问"你那本《XXX》能借我吗",你说"我找找,周末给你"。
@@ -1187,6 +1261,9 @@ demos:
   why_practical: 防止失信
   wow_level: 5
 - pattern_id: forgotten_repeating_chat_topic
+  card_category: 吃喝生活
+  human_need: 少想一步
+  entry_point: 吃什么
   scenario: 用户和系统 chat 里 5 次提到"想做 newsletter",一直没启动
   card:
     body: '最早一次是 2 月,最近一次是上周。
@@ -1215,6 +1292,9 @@ demos:
   why_practical: 强迫决断 — 启动或放弃
   wow_level: 5
 - pattern_id: forgotten_saved_for_later
+  card_category: 机会捕捉
+  human_need: 不错过窗口
+  entry_point: 机会提醒
   scenario: 用户 35 天前在 chat 里"先存着"的一篇长文还没看
   card:
     body: '《XXX》— 你 5 月 10 日说"先存着,周末看"。
@@ -1272,6 +1352,9 @@ demos:
   why_practical: 关闭 open loop
   wow_level: 4
 - pattern_id: forgotten_subscription_expiry
+  card_category: 金钱账单
+  human_need: 少花冤枉钱
+  entry_point: 账单续费
   scenario: 用户 Notion 订阅 10 天后到期续费
   card:
     body: '过去 30 天你打开 Notion 3 次。
@@ -1314,6 +1397,9 @@ demos:
   why_practical: 真的省钱
   wow_level: 5
 - pattern_id: forgotten_vip_email
+  card_category: 关系关心
+  human_need: 关系不掉线
+  entry_point: 消息回复
   scenario: 用户老板 3 天前的邮件没回
   card:
     body: '他问 Q3 hiring 的方向 — 邮件里 cc 了 HR。
@@ -1343,6 +1429,9 @@ demos:
   why_practical: 防止职场失礼
   wow_level: 4
 - pattern_id: growth_book_progress_stalled
+  card_category: 成长习惯
+  human_need: 变成更好的自己
+  entry_point: 习惯学习
   scenario: 用户一本书读到 40% 卡了 30 天
   card:
     body: '你 4 月 18 日读到 page 156(40%),没动。
@@ -1381,6 +1470,9 @@ demos:
   why_practical: 自我认识
   wow_level: 3
 - pattern_id: growth_course_stalled
+  card_category: 成长习惯
+  human_need: 变成更好的自己
+  entry_point: 习惯学习
   scenario: 用户某课程进度卡在 35% 已经 20 天
   card:
     body: '你 4 月 25 日学过最后一次,卡在 Chapter 3。
@@ -1432,6 +1524,9 @@ demos:
   why_practical: 决断重启还是放弃
   wow_level: 3
 - pattern_id: growth_event_match
+  card_category: 工作推进
+  human_need: 少返工
+  entry_point: 会前提醒
   scenario: 用户兴趣方向是 AI 产品,有相关 conference 报名中
   card:
     body: '你常聊 AI 产品方向 — 这场 6 月 8 日北京,演讲者里有 X(你 chat 提过 5 次)。
@@ -1496,6 +1591,9 @@ demos:
   why_practical: 不错过爱好场合
   wow_level: 5
 - pattern_id: growth_reading_match
+  card_category: 成长习惯
+  human_need: 变成更好的自己
+  entry_point: 习惯学习
   scenario: 用户最近 chat 反复聊"creator economy",有篇相关 long form 发布
   card:
     body: 'Stratechery 今天发了一篇关于这个主题的 long form。
@@ -1546,6 +1644,9 @@ demos:
   why_practical: 内容推荐质量
   wow_level: 5
 - pattern_id: growth_skill_practice_due
+  card_category: 成长习惯
+  human_need: 变成更好的自己
+  entry_point: 习惯学习
   scenario: 用户钢琴 1 周没练
   card:
     body: '你过去 8 周每周练 3 次。
@@ -1587,6 +1688,9 @@ demos:
   why_practical: 维持习惯
   wow_level: 2
 - pattern_id: health_hydration_low
+  card_category: 健康精力
+  human_need: 身体别硬扛
+  entry_point: 健康提醒
   scenario: 端侧数据显示用户连续 2 天喝水不足
   card:
     body: '过去 2 天平均 600ml,你目标 1500ml。
@@ -1614,6 +1718,9 @@ demos:
   why_practical: 轻量但累积
   wow_level: 2
 - pattern_id: health_inactive_too_long
+  card_category: 健康精力
+  human_need: 身体别硬扛
+  entry_point: 健康提醒
   scenario: 用户连续坐了 110 分钟
   card:
     body: '从 10:30 开始没起身。
@@ -1650,6 +1757,9 @@ demos:
   why_practical: 防止颈椎/腰
   wow_level: 2
 - pattern_id: health_medical_followup_due
+  card_category: 家庭照护
+  human_need: 照顾重要的人
+  entry_point: 家庭健康
   scenario: 用户去年体检血脂临界,该复查了
   card:
     body: '去年报告显示血脂临界(LDL 3.6),建议 1 年后复查。
@@ -1704,6 +1814,9 @@ demos:
   why_practical: 健康长跑
   wow_level: 5
 - pattern_id: health_medication_reminder
+  card_category: 健康精力
+  human_need: 身体别硬扛
+  entry_point: 健康提醒
   scenario: 用户长期服用某药,今晚该吃
   card:
     body: '你过去 30 天 27 次按时吃,3 次漏。
@@ -1745,6 +1858,9 @@ demos:
   why_practical: 长期健康保护
   wow_level: 4
 - pattern_id: health_mood_low_detected
+  card_category: 健康精力
+  human_need: 守住状态
+  entry_point: 状态提醒
   scenario: 用户过去 3 天多源信号指向情绪偏低
   card:
     body: '步数 -40%,屏幕 +50%,chat 关键词偏负(累/烦/想/无聊)× 5。
@@ -1793,6 +1909,9 @@ demos:
   why_practical: 温和介入
   wow_level: 4
 - pattern_id: health_overuse_warning
+  card_category: 健康精力
+  human_need: 守住状态
+  entry_point: 睡前提醒
   scenario: 用户咖啡消费过去 5 天是均值 2x
   card:
     body: '过去 5 天平均每天 3.4 杯(均值 1.5)。
@@ -1845,6 +1964,9 @@ demos:
   why_practical: 打破循环
   wow_level: 3
 - pattern_id: health_seasonal_allergy_warning
+  card_category: 健康精力
+  human_need: 身体别硬扛
+  entry_point: 健康提醒
   scenario: 用户去年 4 月有花粉过敏记录,今年同期临近
   card:
     body: '去年 4 月 5-25 日你 chat 里抱怨过过敏 6 次。
@@ -1905,6 +2027,9 @@ demos:
   why_practical: 不再每年措手不及
   wow_level: 5
 - pattern_id: latent_opportunity_colleague_proximity
+  card_category: 关系关心
+  human_need: 关系不掉线
+  entry_point: 消息回复
   scenario: 用户和某老同事都在同一商圈出差
   card:
     body: '他在虹桥开会(从他领英 + 你日历上知道你也在虹桥),你们最近一次见面是 4 个月前。
@@ -1972,6 +2097,9 @@ demos:
   why_practical: 维护重要关系
   wow_level: 5
 - pattern_id: latent_opportunity_detour_worth
+  card_category: 机会捕捉
+  human_need: 不错过窗口
+  entry_point: 机会提醒
   scenario: 用户回家路线绕 10 分钟可经过一家好评咖啡店首店
   card:
     body: 'Manner 在你常走路线 800m 外开了新店(今天首日,有手冲免费)。
@@ -2039,6 +2167,9 @@ demos:
   why_practical: 小确幸
   wow_level: 4
 - pattern_id: latent_opportunity_errand_combine
+  card_category: 家务日常
+  human_need: 省心少漏
+  entry_point: 家务小事
   scenario: 用户有 3 件未办的小事,都在同一商圈
   card:
     body: '- 取奶粉(京东快递柜在 X 楼)
@@ -2106,6 +2237,9 @@ demos:
   why_practical: 直接省一趟来回
   wow_level: 5
 - pattern_id: latent_opportunity_expiring_reward_on_route
+  card_category: 机会捕捉
+  human_need: 不错过窗口
+  entry_point: 优惠窗口
   scenario: 用户周五约会 + 信用卡积分到期 + 餐厅在常去路线
   card:
     body: '你订的 [那家日料] 支持招行 5x 餐饮积分。
@@ -2164,6 +2298,9 @@ demos:
   why_practical: 直接省钱 + 不耽误约会
   wow_level: 5
 - pattern_id: latent_opportunity_reservation_window
+  card_category: 机会捕捉
+  human_need: 不错过窗口
+  entry_point: 机会提醒
   scenario: 用户一直想订的米其林餐厅突然有 windows
   card:
     body: '你 3 个月前提过想去 [Ling Long],一直订不到。
@@ -2212,6 +2349,9 @@ demos:
   why_practical: 真的不抢就没了
   wow_level: 5
 - pattern_id: latent_opportunity_route_optimization
+  card_category: 家务日常
+  human_need: 省心少跑
+  entry_point: 顺路办事
   scenario: 用户两个会之间有 45 分钟空档,中间路过药店
   card:
     body: '13:00-14:00 在国贸开会,15:00 在中关村开会 — 中间空 45 分钟。
@@ -2265,6 +2405,9 @@ demos:
   why_practical: 利用碎片时间
   wow_level: 4
 - pattern_id: latent_opportunity_savings_match
+  card_category: 金钱账单
+  human_need: 少花冤枉钱
+  entry_point: 账单续费
   scenario: 用户最近提过想买某款耳机,今天京东闪购
   card:
     body: '你 2 周前 chat 里提过想换 AirPods Pro 2(你上一对买了 3 年了)。
@@ -2314,6 +2457,9 @@ demos:
   why_practical: 直接省钱
   wow_level: 5
 - pattern_id: latent_opportunity_specialty_shop_passby
+  card_category: 机会捕捉
+  human_need: 不错过窗口
+  entry_point: 机会提醒
   scenario: 用户路过一家日本进口生活用品店,他常买日货
   card:
     body: '你过去半年常买无印,这家是新店(开 2 周),你没去过。
@@ -2366,6 +2512,9 @@ demos:
   why_practical: 临时把无聊路过变 mini 探店
   wow_level: 4
 - pattern_id: gps_business_trip_arrival
+  card_category: 出行通勤
+  human_need: 减少不确定
+  entry_point: 出差落地
   subtype: hotel_checkin
   scenario: 用户出差到上海并到达酒店附近,晚上还有客户饭局,明早有会议
   card:
@@ -2424,6 +2573,9 @@ demos:
   why_practical: 把入住、天气、饭局交通、明早通勤放成一张行动卡
   wow_level: 5
 - pattern_id: gps_commute_traffic_now
+  card_category: 出行通勤
+  human_need: 减少不确定
+  entry_point: 早上交通
   subtype: home_to_office
   scenario: 用户准备从家去公司,常用路线上突发拥堵,但地铁路线稳定
   card:
@@ -2476,6 +2628,9 @@ demos:
   why_practical: 帮用户避免迟到,给出明确出门时间
   wow_level: 5
 - pattern_id: gps_hospital_poi_care
+  card_category: 家庭照护
+  human_need: 照顾重要的人
+  entry_point: 家庭健康
   subtype: hospital_arrival
   scenario: 用户到达医院 POI 并停留,系统结合体检日历和历史复查事项给出关心提醒
   card:
@@ -2520,6 +2675,9 @@ demos:
   why_practical: 防止体检关键问题漏问
   wow_level: 5
 - pattern_id: gps_local_weather_now
+  card_category: 天气生活
+  human_need: 掌控今天
+  entry_point: 今日天气
   subtype: rain_before_commute
   scenario: 用户在望京 SOHO 附近,30 分钟后要步行去客户楼,局地雷阵雨即将到达
   card:
@@ -2569,6 +2727,9 @@ demos:
   why_practical: 直接给出现在走或叫车两个动作
   wow_level: 5
 - pattern_id: gps_nearby_food_decision
+  card_category: 吃喝生活
+  human_need: 少想一步
+  entry_point: 吃什么
   subtype: office_lunch
   scenario: 用户在公司附近午饭窗口,最近常吃的几家已重复,周边有更匹配偏好的新选择
   card:
@@ -2641,6 +2802,9 @@ demos:
   why_practical: 直接减少"中午吃什么"的决策成本
   wow_level: 5
 - pattern_id: gps_office_arrival_context
+  card_category: 工作推进
+  human_need: 少返工
+  entry_point: 会前提醒
   subtype: morning_arrival
   scenario: 用户刚到公司,今天上午会议密集且昨晚睡眠不足
   card:
@@ -2695,6 +2859,9 @@ demos:
   why_practical: 帮用户在会议前抓住可控时间
   wow_level: 4
 - pattern_id: opp_limited_time_match
+  card_category: 机会捕捉
+  human_need: 不错过窗口
+  entry_point: 机会提醒
   scenario: 某品牌咖啡豆限时打折,用户常买
   card:
     body: '你过去半年买过 4 次,均价 ¥120 — 今天 ¥84,持续 4 小时。
@@ -2748,6 +2915,9 @@ demos:
   why_practical: 不缺货 + 省钱
   wow_level: 4
 - pattern_id: opp_networking_event
+  card_category: 工作推进
+  human_need: 少返工
+  entry_point: 会前提醒
   scenario: AI 创业相关 networking,本周举办
   card:
     body: '在 [那家咖啡馆],8-10 点。
@@ -2812,6 +2982,9 @@ demos:
   why_practical: 主动 networking
   wow_level: 4
 - pattern_id: opp_outdoor_window
+  card_category: 机会捕捉
+  human_need: 不错过窗口
+  entry_point: 机会提醒
   scenario: 周六上午晴朗 + 用户空 + 兴趣是登山
   card:
     body: '周六 6-12 点晴,午后转阴。
@@ -2881,6 +3054,9 @@ demos:
   why_practical: 主动调度兴趣
   wow_level: 5
 - pattern_id: opp_seasonal_match
+  card_category: 机会捕捉
+  human_need: 不错过窗口
+  entry_point: 机会提醒
   scenario: 滑雪季开始,用户去年滑过几次
   card:
     body: '你去年滑过 4 次,后面三次都在崇礼。
@@ -2933,6 +3109,9 @@ demos:
   why_practical: 季节性爱好不错过
   wow_level: 5
 - pattern_id: opp_social_gathering_possible
+  card_category: 关系关心
+  human_need: 关系不掉线
+  entry_point: 消息回复
   scenario: 用户和 2 个朋友周六晚同时空
   card:
     body: '看了你们 3 人日历 — 周六 19-23 点都空。
@@ -2988,6 +3167,9 @@ demos:
   why_practical: 真促成聚会
   wow_level: 5
 - pattern_id: preparation_gap_first_visit
+  card_category: 本地探索
+  human_need: 少踩雷
+  entry_point: 附近推荐
   subtype: first_office_visit
   scenario: 用户下午 2 点第一次去某客户公司
   card:
@@ -3058,6 +3240,9 @@ demos:
   why_practical: 避免迟到 / 出洋相
   wow_level: 4
 - pattern_id: preparation_gap_interview
+  card_category: 工作推进
+  human_need: 推进进度
+  entry_point: 工作待办
   subtype: job_interview
   scenario: 用户明天下午 2 点字节面试,日历无附加信息
   card:
@@ -3129,6 +3314,9 @@ demos:
   why_practical: 把准备从"焦虑"变成"清单"
   wow_level: 5
 - pattern_id: preparation_gap_medical
+  card_category: 家庭照护
+  human_need: 照顾重要的人
+  entry_point: 家庭健康
   subtype: general_checkup
   scenario: 用户明天上午 9:30 协和医院常规体检
   card:
@@ -3171,6 +3359,9 @@ demos:
   why_practical: 把"模糊知道要准备"变成"具体三件事"
   wow_level: 4
 - pattern_id: preparation_gap_meeting
+  card_category: 工作推进
+  human_need: 少返工
+  entry_point: 会前提醒
   subtype: meeting_external
   scenario: 用户 3 小时后和某 VC 合伙人开会,日历上零附件
   card:
@@ -3216,6 +3407,9 @@ demos:
   why_practical: 直接给出可执行的 brief 生成 action
   wow_level: 5
 - pattern_id: preparation_gap_presentation
+  card_category: 工作推进
+  human_need: 推进进度
+  entry_point: 工作待办
   subtype: conference_talk
   scenario: 用户明天上午 10 点要做产品 demo,演讲稿还没准备
   card:
@@ -3283,6 +3477,9 @@ demos:
   why_practical: 具体到能立即行动的细节
   wow_level: 5
 - pattern_id: preparation_gap_social_dinner
+  card_category: 吃喝生活
+  human_need: 少想一步
+  entry_point: 吃什么
   subtype: friend_dinner
   scenario: 用户 2 小时后和 3 个老朋友吃饭
   card:
@@ -3340,6 +3537,9 @@ demos:
   why_practical: 让聚餐不冷场
   wow_level: 5
 - pattern_id: preparation_gap_travel_dom
+  card_category: 出行通勤
+  human_need: 怕误点
+  entry_point: 航班出行
   subtype: domestic_flight
   scenario: 用户 6 小时后从北京飞上海
   card:
@@ -3397,6 +3597,9 @@ demos:
   why_practical: 防止迟到的具体时间锚点
   wow_level: 4
 - pattern_id: preparation_gap_travel_intl
+  card_category: 出行通勤
+  human_need: 怕误点
+  entry_point: 航班出行
   subtype: japan_business_trip
   scenario: 用户 12 小时后飞东京,只在日历上挂了航班
   card:
@@ -3480,6 +3683,9 @@ demos:
   why_practical: 每一项都是用户当下要决策的
   wow_level: 5
 - pattern_id: recovered_dormant_skill
+  card_category: 成长习惯
+  human_need: 变成更好的自己
+  entry_point: 习惯学习
   scenario: 用户 80 天没碰吉他,周末天气适合
   card:
     body: '过去 1 年你每月平均练 6 次,8 月开始断。
@@ -3543,6 +3749,9 @@ demos:
   why_practical: 找回放弃的兴趣
   wow_level: 5
 - pattern_id: recovered_meaningful_place
+  card_category: 本地探索
+  human_need: 少踩雷
+  entry_point: 附近推荐
   scenario: 用户回到 30+ 天没去过的某个有意义的地点
   card:
     body: '上次来这是 3 月 18 日 — 你和老婆庆祝结婚 5 周年那天。
@@ -3593,6 +3802,9 @@ demos:
   why_practical: 唤起记忆,情感价值
   wow_level: 5
 - pattern_id: recovered_old_friend
+  card_category: 关系关心
+  human_need: 关系不掉线
+  entry_point: 消息回复
   scenario: 老朋友 100 天没联系
   card:
     body: '最后一次他在你生日发了"今年得喝一杯",然后就没下文了。
@@ -3646,6 +3858,9 @@ demos:
   why_practical: 维护友情
   wow_level: 4
 - pattern_id: recovered_paused_project
+  card_category: 工作推进
+  human_need: 推进进度
+  entry_point: 工作待办
   scenario: 用户 40 天前暂停的某个 side project,最近相关话题被触发
   card:
     body: '你 40 天前说"等下个月做" — 今天 X(你常引用的作者)发了篇关于这个方向的 essay。
@@ -3695,6 +3910,9 @@ demos:
   why_practical: 启动停滞项目
   wow_level: 5
 - pattern_id: recovered_revisit_recommendation
+  card_category: 记忆复盘
+  human_need: 记忆减负
+  entry_point: 回顾复盘
   scenario: 用户半年前常去的咖啡馆 90 天没去
   card:
     body: '过去 1 年你去过 14 次,5 月开始没去。
@@ -3739,6 +3957,9 @@ demos:
   why_practical: 唤起小习惯
   wow_level: 4
 - pattern_id: recovered_seasonal_event
+  card_category: 记忆复盘
+  human_need: 记忆减负
+  entry_point: 回顾复盘
   scenario: 去年 5 月用户去了某场音乐节,今年同样季节临近
   card:
     body: '今年的同主办这周末开票。
@@ -3800,6 +4021,9 @@ demos:
   why_practical: 不错过年度爱好
   wow_level: 5
 - pattern_id: reflection_month
+  card_category: 记忆复盘
+  human_need: 记忆减负
+  entry_point: 回顾复盘
   scenario: 月末
   card:
     body: '本月你 — 完成 X 个 milestone / 旅行 1 次 / 学到的新东西 3 件(chat 提过)/ 健身 12 次 / 读完 1 本书。
@@ -3865,6 +4089,9 @@ demos:
   why_practical: 月度自我认知
   wow_level: 4
 - pattern_id: reflection_post_event
+  card_category: 记忆复盘
+  human_need: 记忆减负
+  entry_point: 回顾复盘
   scenario: 用户完成一场重要 demo 后
   card:
     body: '听众 35 人 — 你之前 chat 提到担心问答环节。
@@ -3912,6 +4139,9 @@ demos:
   why_practical: 学习沉淀
   wow_level: 4
 - pattern_id: reflection_trip_memory
+  card_category: 记忆复盘
+  human_need: 记忆减负
+  entry_point: 回顾复盘
   scenario: 用户东京出差刚回北京
   card:
     body: '5 天里你去了 8 个地方,平均日步数 18000,拍了 200+ 张照片。
@@ -3978,6 +4208,9 @@ demos:
   why_practical: 旅行记忆固化
   wow_level: 5
 - pattern_id: reflection_week
+  card_category: 记忆复盘
+  human_need: 记忆减负
+  entry_point: 回顾复盘
   scenario: 周日晚上,本周复盘窗口
   card:
     body: '你这周关键 3 件 —
@@ -4036,6 +4269,9 @@ demos:
   why_practical: 复盘节奏
   wow_level: 3
 - pattern_id: rhythm_break_commute_deviation
+  card_category: 出行通勤
+  human_need: 减少不确定
+  entry_point: 早上交通
   scenario: 工作日上午用户没去往公司方向
   card:
     body: '现在 9:15,你在 X 区(你公司在 Y 区)。
@@ -4091,6 +4327,9 @@ demos:
   why_practical: 及时调整日程
   wow_level: 5
 - pattern_id: rhythm_break_meal_skip
+  card_category: 吃喝生活
+  human_need: 少想一步
+  entry_point: 吃什么
   scenario: 用户过去 2 天午餐时段都在工位/通勤,没饭点
   card:
     body: '周二 12:00-14:00 在会议室,周三 12:30-13:30 在通勤路上。
@@ -4134,6 +4373,9 @@ demos:
   why_practical: 健康保护
   wow_level: 4
 - pattern_id: rhythm_break_screen_time_spike
+  card_category: 健康精力
+  human_need: 守住状态
+  entry_point: 状态提醒
   scenario: 用户最近 3 天屏幕时间是均值 1.6x
   card:
     body: '多出来的主要是晚上 22-1 点 — 看视频。
@@ -4170,6 +4412,9 @@ demos:
   why_practical: 预防性干预
   wow_level: 3
 - pattern_id: rhythm_break_sleep_debt
+  card_category: 健康精力
+  human_need: 守住状态
+  entry_point: 睡前提醒
   scenario: 端侧数据显示用户这周累积少睡 5h
   card:
     body: '周一 5h 周二 5.5h 周三 6h — 总共比你均值少了 5h。
@@ -4197,6 +4442,9 @@ demos:
   why_practical: 健康干预
   wow_level: 4
 - pattern_id: rhythm_break_weekend_drift
+  card_category: 健康精力
+  human_need: 守住状态
+  entry_point: 状态提醒
   scenario: 用户常去的羽毛球馆 3 周没去
   card:
     body: '4 月前你每周六上午都打,5 月开始断了。
@@ -4237,6 +4485,9 @@ demos:
   why_practical: 重启好习惯
   wow_level: 5
 - pattern_id: rhythm_break_work_hours_drift
+  card_category: 健康精力
+  human_need: 守住状态
+  entry_point: 状态提醒
   scenario: 过去 7 天用户日均工作时长 11h(均值 8.5h)
   card:
     body: '7 天平均 11h(你均值 8.5h)。
@@ -4291,6 +4542,9 @@ demos:
   why_practical: 防止 burnout
   wow_level: 4
 - pattern_id: rhythm_break_workout_streak_risk
+  card_category: 健康精力
+  human_need: 守住状态
+  entry_point: 状态提醒
   scenario: 用户连续 4 周每周三晚去健身房,今天周三晚有客户晚宴
   card:
     body: '过去 4 个周三晚 7 点你都在健身房,平均 50 分钟。
@@ -4347,6 +4601,9 @@ demos:
   why_practical: 主动协调,保持习惯
   wow_level: 5
 - pattern_id: meal_pattern_inferred
+  card_category: 吃喝生活
+  human_need: 少想一步
+  entry_point: 吃什么
   subtype: lunch_cluster
   scenario: 用户连续 10 个工作日 12:30-13:00 在公司楼下区域停留
   card:
@@ -4391,6 +4648,9 @@ demos:
   why_practical: 给出立刻可点的解决方案
   wow_level: 4
 - pattern_id: routine_anchor_detected
+  card_category: 日常节奏
+  human_need: 保持节奏
+  entry_point: 晨间新闻
   subtype: commute_route
   scenario: 用户连续 5 个工作日 GPS 在 8:00-9:30 走几乎一样的路径
   card:
@@ -4430,6 +4690,9 @@ demos:
   why_practical: 具体到分钟,不是泛泛"早点出门"
   wow_level: 5
 - pattern_id: sleep_rhythm_inferred
+  card_category: 健康精力
+  human_need: 守住状态
+  entry_point: 睡前提醒
   subtype: workweek_pattern
   scenario: 端侧健康数据显示用户工作日凌晨 1 点睡 7 点起
   card:
@@ -4458,6 +4721,9 @@ demos:
   why_practical: 给出有数据基础的健康提醒
   wow_level: 4
 - pattern_id: weekend_ritual_detected
+  card_category: 日常节奏
+  human_need: 保持节奏
+  entry_point: 晨间新闻
   subtype: cafe_visit
   scenario: 过去 4 个周末用户都在某咖啡馆停留 2h+,这周末还没去
   card:
@@ -4507,6 +4773,9 @@ demos:
   why_practical: 帮你保持你自己说不出但很在意的小习惯
   wow_level: 5
 - pattern_id: workweek_pattern_inferred
+  card_category: 工作推进
+  human_need: 少返工
+  entry_point: 会前提醒
   subtype: meeting_density
   scenario: 过去 3 周用户每周二、周四都是会议密集日(8 个以上会议)
   card:
@@ -4549,6 +4818,9 @@ demos:
   why_practical: 直接帮用户重新安排深度工作时段
   wow_level: 4
 - pattern_id: state_high_stress_period
+  card_category: 健康精力
+  human_need: 守住状态
+  entry_point: 状态提醒
   scenario: 用户过去 5 天压力指标全部偏高
   card:
     body: '睡眠 -1h,心率 +5bpm,屏幕时间 +60%,chat 关键词"忙/累/赶" × 8。
@@ -4601,6 +4873,9 @@ demos:
   why_practical: 提前预防
   wow_level: 4
 - pattern_id: state_illness_recovery
+  card_category: 健康精力
+  human_need: 身体别硬扛
+  entry_point: 健康提醒
   scenario: 用户病 3 天后第一天回办公室
   card:
     body: '过去 3 天你心率均值偏低,睡眠 +2h — 标准病后恢复模式。
@@ -4653,6 +4928,9 @@ demos:
   why_practical: 保护身体
   wow_level: 5
 - pattern_id: state_job_transition
+  card_category: 工作推进
+  human_need: 推进进度
+  entry_point: 工作待办
   scenario: 用户邮件 / chat 信号显示在求职
   card:
     body: '近期 chat 提过 3 次"考虑换工作",邮件里有 2 个面试邀请。
@@ -4708,6 +4986,9 @@ demos:
   why_practical: 把模糊期变结构化
   wow_level: 4
 - pattern_id: state_travel_mode_active
+  card_category: 出行通勤
+  human_need: 减少不确定
+  entry_point: 出差落地
   scenario: 用户飞机刚落地东京,进入旅行模式
   card:
     body: '当前成田机场,新宿酒店地铁 60 分钟。
@@ -4767,6 +5048,9 @@ demos:
   why_practical: 减少落地的认知负担
   wow_level: 5
 - pattern_id: state_vacation_warmup
+  card_category: 工作推进
+  human_need: 别拖到崩
+  entry_point: 假期收尾
   scenario: 用户明天开始 5 天年假
   card:
     body: '明天起 5 天假 — 这些事建议今天关掉:
@@ -4829,6 +5113,9 @@ demos:
   why_practical: 假期不被打断
   wow_level: 4
 - pattern_id: time_buffer_commute
+  card_category: 出行通勤
+  human_need: 减少不确定
+  entry_point: 早上交通
   scenario: 用户 10:30 在家,11:00 有线下会议,实时路况看下来到不了
   card:
     body: '现在到会议地点路况显示 38 分钟,你还在家 — 即使立刻出门也迟到 8 分钟。
@@ -4881,6 +5168,9 @@ demos:
   why_practical: 救场
   wow_level: 4
 - pattern_id: time_buffer_multi_event_squeeze
+  card_category: 工作推进
+  human_need: 少返工
+  entry_point: 会前提醒
   scenario: 用户今天 5 个连续会议,每个间隔 5 分钟
   card:
     body: '9:00-10:00 / 10:05-11:00 / 11:00-12:00 / 13:00-14:00 / 14:00-15:00 — 没有真正空档。
@@ -4914,6 +5204,9 @@ demos:
   why_practical: 切实减少今天的压力
   wow_level: 5
 - pattern_id: time_buffer_pickup_deadline
+  card_category: 工作推进
+  human_need: 别拖到崩
+  entry_point: 截止期提醒
   scenario: 用户 16:30 要接孩子,现在 16:00 在 30 分钟车程外
   card:
     body: '现在出发刚好到,但今天三环晚高峰 +10 分钟。
@@ -4972,6 +5265,9 @@ demos:
   why_practical: 救场 + 不慌
   wow_level: 5
 - pattern_id: time_buffer_prep_window_closing
+  card_category: 工作推进
+  human_need: 推进进度
+  entry_point: 工作待办
   scenario: 用户周五 ddl,今天周四上午,相关文档还没动
   card:
     body: '周五 18:00 ddl,你今天下午 14:00-19:00 没排,明天上午有 2 个会。
@@ -5003,6 +5299,9 @@ demos:
   why_practical: 把"模糊紧迫感"换成"具体动作"
   wow_level: 4
 - pattern_id: time_buffer_transit_disruption
+  card_category: 出行通勤
+  human_need: 减少不确定
+  entry_point: 早上交通
   scenario: 用户常坐的 10 号线晚高峰出故障
   card:
     body: '你过去 30 天有 22 次晚上坐 10 号线回家。
@@ -5042,6 +5341,9 @@ demos:
   why_practical: 给出具体替代路径
   wow_level: 5
 - pattern_id: time_buffer_weather_delay
+  card_category: 天气生活
+  human_need: 掌控今天
+  entry_point: 今日天气
   scenario: 1 小时后用户要去望京客户,北京突降暴雨
   card:
     body: '现在中心城区暴雨橙色预警,东三环已堵。
@@ -5096,6 +5398,9 @@ demos:
   why_practical: 解决"要不要改远程"的真实犹豫
   wow_level: 5
 - pattern_id: vip_anniversary_approaching
+  card_category: 关系关心
+  human_need: 关系不掉线
+  entry_point: 消息回复
   scenario: 用户结婚纪念日还有 12 天
   card:
     body: '去年你订了 [那家餐厅],今年位很紧 — 现在订还有窗口。
@@ -5159,6 +5464,9 @@ demos:
   why_practical: 不让重要日子掉链子
   wow_level: 5
 - pattern_id: vip_child_school_event
+  card_category: 家庭照护
+  human_need: 照顾重要的人
+  entry_point: 家庭健康
   scenario: 孩子 3 天后家长会
   card:
     body: '班主任 X 老师邮件提到"建议家长准备 3 个想了解的方面"。
@@ -5229,6 +5537,9 @@ demos:
   why_practical: 全面父母准备
   wow_level: 5
 - pattern_id: vip_friend_milestone
+  card_category: 关系关心
+  human_need: 关系不掉线
+  entry_point: 消息回复
   scenario: 用户密友升职 / 升级里程碑
   card:
     body: '她今天领英换了 title — 你们去年这时候她和你 chat 聊过这次目标。
@@ -5282,6 +5593,9 @@ demos:
   why_practical: 抓住关系升温窗口
   wow_level: 5
 - pattern_id: vip_mentor_followup
+  card_category: 关系关心
+  human_need: 关系不掉线
+  entry_point: 消息回复
   scenario: 用户和某前辈 2 周前聊到职业转型,没 follow up
   card:
     body: '2 周前你们聊到他建议你看那本书《XXX》。
@@ -5323,6 +5637,9 @@ demos:
   why_practical: 真的接住贵人
   wow_level: 5
 - pattern_id: vip_parent_checkin
+  card_category: 家庭照护
+  human_need: 照顾重要的人
+  entry_point: 家人提醒
   scenario: 用户 25 天没和父母通话
   card:
     body: '上次电话 4 月 20 日,聊了 12 分钟(她说血压偏高在吃药)。
@@ -5386,6 +5703,9 @@ demos:
   why_practical: 维护家人关系
   wow_level: 5
 - pattern_id: vip_silent_friend_distress
+  card_category: 关系关心
+  human_need: 关系不掉线
+  entry_point: 消息回复
   scenario: 之前活跃的朋友突然 40 天沉默
   card:
     body: '他过去通常每周 3 条朋友圈,最后一条 4 月 10 日。
@@ -5427,6 +5747,9 @@ demos:
   why_practical: 朋友真需要的时候,你不缺席
   wow_level: 5
 - pattern_id: vip_spouse_time_gap
+  card_category: 关系关心
+  human_need: 关系不掉线
+  entry_point: 消息回复
   scenario: 用户 14 天没和妻子有专属时间
   card:
     body: '过去 14 天位置重合的时段都在家(吃饭 / 睡觉)— 没有"出门做一件事"的时间。
@@ -5482,6 +5805,9 @@ demos:
   why_practical: 真的能让关系变好
   wow_level: 5
 - pattern_id: warn_backup_overdue
+  card_category: 风险避坑
+  human_need: 避免后悔
+  entry_point: 避坑提醒
   scenario: 用户照片备份上次是 45 天前
   card:
     body: '过去 30 天你新拍 240 张。
@@ -5521,6 +5847,9 @@ demos:
   why_practical: 防丢
   wow_level: 3
 - pattern_id: warn_device_low_battery_critical
+  card_category: 风险避坑
+  human_need: 避免后悔
+  entry_point: 避坑提醒
   scenario: 用户笔记本 15% 电量,30 分钟后有会议
   card:
     body: '你常用的会议室没插座。
@@ -5585,6 +5914,9 @@ demos:
   why_practical: 避免会议中断
   wow_level: 4
 - pattern_id: warn_pet_plant_neglect
+  card_category: 风险避坑
+  human_need: 避免后悔
+  entry_point: 避坑提醒
   scenario: 用户的猫 4 天没记录喂食
   card:
     body: '你之前 chat 提过 "每周三换水 + 周日补猫粮"。
@@ -5638,6 +5970,9 @@ demos:
   why_practical: 真实关心
   wow_level: 4
 - pattern_id: warn_silent_deadline
+  card_category: 工作推进
+  human_need: 别拖到崩
+  entry_point: 截止期提醒
   scenario: 用户 3 天后 ddl,文档零进度
   card:
     body: '相关 doc 上次编辑 5 月 8 日(2 周前)。
@@ -5693,3 +6028,2137 @@ demos:
   why_surprise: 系统识别"零启动状态"
   why_practical: 救火
   wow_level: 4
+- pattern_id: gps_hospital_parking_pharmacy
+  card_category: 家庭照护
+  human_need: 照顾重要的人
+  entry_point: 家庭健康
+  subtype: hospital_arrival
+  scenario: 用户到医院停留 42 分钟,停车即将进入下一计费档,药房排队较长
+  card:
+    body: '你在协和医院东单院区停留 42 分钟。
+
+      药房当前预计排队 18 分钟,停车 60 分钟后会多收 12 元。
+
+      去年体检报告里写过血脂复查,这次可以顺手问一下。
+
+      '
+    hook: 医院停留 42 分钟
+    title: 你在医院待了 42 分钟｜先看取药排队和停车费
+    action: 打开取药排队 + 停车提醒?
+  source_data:
+  - mock:
+      id: mock:gps_hospital_parking_pharmacy:gps_current:1
+      lat: 39.9087
+      lng: 116.411
+      dwell_min: 42
+      place_label: 北京协和医院东单院区
+      poi_category: hospital
+      observed_at: '2026-05-17T10:42:00+08:00'
+    label: GPS 位置
+    signal: gps.current
+  - mock:
+      id: mock:gps_hospital_parking_pharmacy:public_data:2
+      pharmacy_wait_min: 18
+      parking_next_fee_in_min: 18
+      next_fee_yuan: 12
+      observed_at: '2026-05-17T10:42:00+08:00'
+    label: 医院排队/停车
+    signal: world.public_data
+  - mock:
+      id: mock:gps_hospital_parking_pharmacy:memory:3
+      fact: 去年体检报告提示血脂复查
+      last_confirmed_at: '2026-04-28T20:10:00+08:00'
+      confidence: 0.83
+    label: 长期记忆
+    signal: memory.facts
+  signals_used:
+  - gps.current
+  - world.public_data
+  - memory.facts
+  why_surprise: 在医院时提醒的是排队、停车和复查,表达成关心而不是监控
+  why_practical: 用户能立刻少排错队、少交停车费
+  wow_level: 5
+- pattern_id: gps_airport_gate_walk_risk
+  card_category: 出行通勤
+  human_need: 减少不确定
+  entry_point: 早上交通
+  subtype: boarding_gate_change
+  scenario: 用户在机场 T3 休息区,登机口临时换到更远位置,步行时间接近登机窗口
+  card:
+    body: 'CA1831 登机口从 C32 换到 E12。
+
+      你现在在 T3 C 区,走过去大约 14 分钟,登机还有 22 分钟。
+
+      如果再坐 8 分钟就要小跑。
+
+      '
+    hook: 登机口变远了
+    title: 你在 T3,登机口变远了｜现在走刚好
+    action: 导航到 E12?
+  source_data:
+  - mock:
+      id: mock:gps_airport_gate_walk_risk:gps_current:1
+      place_label: 首都机场 T3 C 区
+      poi_category: airport
+      observed_at: '2026-05-17T16:08:00+08:00'
+    label: GPS 位置
+    signal: gps.current
+  - mock:
+      id: mock:gps_airport_gate_walk_risk:flight_email:2
+      flight_no: CA1831
+      old_gate: C32
+      new_gate: E12
+      boarding_at: '2026-05-17T16:30:00+08:00'
+    label: 航班邮件
+    signal: gmail.message
+  - mock:
+      id: mock:gps_airport_gate_walk_risk:airport_map:3
+      walk_min: 14
+      route: T3 C 区 -> E12
+    label: 机场步行时间
+    signal: world.public_data
+  signals_used:
+  - gps.current
+  - gmail.message
+  - world.public_data
+  why_surprise: 不是航班泛提醒,而是把用户当前位置和登机口变更合并
+  why_practical: 直接避免误机
+  wow_level: 5
+- pattern_id: gps_rain_walk_window_now
+  card_category: 天气生活
+  human_need: 掌控今天
+  entry_point: 今日天气
+  subtype: rain_before_walk
+  scenario: 用户 14:30 要走到客户楼,当前位置 18 分钟后有强降雨
+  card:
+    body: '你 14:30 要去客户楼,从这里步行 9 分钟。
+
+      这片区 18 分钟后开始强降雨,雨强会持续到 15:20。
+
+      现在走能刚好避开。
+
+      '
+    hook: 雨还有 18 分钟到
+    title: 附近暴雨 18 分钟后到｜现在走能避开最堵一段
+    action: 现在导航过去?
+  source_data:
+  - mock:
+      id: mock:gps_rain_walk_window_now:gps_current:1
+      place_label: 国贸三期
+      observed_at: '2026-05-17T14:08:00+08:00'
+      next_walk_min: 9
+    label: GPS 位置
+    signal: gps.current
+  - mock:
+      id: mock:gps_rain_walk_window_now:weather:2
+      rain_arrives_in_min: 18
+      rain_intensity: 强降雨
+      ends_at: '2026-05-17T15:20:00+08:00'
+    label: 当前位置小时级天气
+    signal: world.weather.current_at_user_location
+  - mock:
+      id: mock:gps_rain_walk_window_now:calendar:3
+      title: 客户拜访
+      start: '2026-05-17T14:30:00+08:00'
+      location: 国贸写字楼 B 座
+    label: 日历事件
+    signal: calendar.event
+  signals_used:
+  - gps.current
+  - world.weather.current_at_user_location
+  - calendar.event
+  why_surprise: 天气被精确到下一段步行,不是泛泛预报
+  why_practical: 现在就能决定走不走
+  wow_level: 4
+- pattern_id: gps_office_first_25_min
+  card_category: 工作推进
+  human_need: 推进进度
+  entry_point: 开工提醒
+  subtype: post_commute_priority
+  scenario: 用户刚到公司,9:30 前有 22 分钟空窗,但上午会很多
+  card:
+    body: '你刚进公司 12F,9:30 开第一个会。
+
+      10:00-12:00 连着 4 个会,昨天客户价格邮件还没回。
+
+      现在最适合先写 3 句回复,别被 Slack 打散。
+
+      '
+    hook: 刚到公司,只有 22 分钟
+    title: 刚到公司,9:30 前只有 22 分钟｜先处理最要紧那件
+    action: 先起草客户回复?
+  source_data:
+  - mock:
+      id: mock:gps_office_first_25_min:gps_current:1
+      place_label: 公司 12F
+      poi_category: office
+      arrived_at: '2026-05-17T09:08:00+08:00'
+    label: GPS 位置
+    signal: gps.current
+  - mock:
+      id: mock:gps_office_first_25_min:calendar:2
+      first_meeting_at: '2026-05-17T09:30:00+08:00'
+      meeting_count_before_noon: 5
+    label: 日历事件
+    signal: calendar.event
+  - mock:
+      id: mock:gps_office_first_25_min:gmail:3
+      subject: 'Re: 价格方案确认'
+      unread_hours: 14
+      sender: client@example.com
+    label: 邮件
+    signal: gmail.message
+  signals_used:
+  - gps.current
+  - calendar.event
+  - gmail.message
+  why_surprise: 到公司这个普通动作被转成具体优先级
+  why_practical: 保护开工后最容易被打散的 22 分钟
+  wow_level: 5
+- pattern_id: meal_queue_swap_now
+  card_category: 吃喝生活
+  human_need: 少想一步
+  entry_point: 吃什么
+  subtype: lunch_queue_swap
+  scenario: 用户常吃店排队 38 分钟,旁边有更符合偏好的替代店且 15 分钟内可到
+  card:
+    body: '你常去的那家面店现在排队约 38 分钟。
+
+      旁边 260 米的新加坡饭 4.6 分,不辣、15 分钟内能吃上。
+
+      你下午 13:20 有会,别赌排队。
+
+      '
+    hook: 常吃面店排队太长
+    title: 这家店排队 38 分钟｜旁边那家更适合现在
+    action: 导航到新加坡饭?
+  source_data:
+  - mock:
+      id: mock:meal_queue_swap_now:gps_current:1
+      place_label: 公司楼下
+      observed_at: '2026-05-17T12:12:00+08:00'
+    label: GPS 位置
+    signal: gps.current
+  - mock:
+      id: mock:meal_queue_swap_now:places:2
+      usual_place_wait_min: 38
+      alternative_name: 星洲饭堂
+      alternative_distance_m: 260
+      alternative_wait_min: 9
+      rating: 4.6
+    label: 周边餐厅/排队
+    signal: world.public_data
+  - mock:
+      id: mock:meal_queue_swap_now:profile:3
+      dietary:
+      - 不吃太辣
+      preferences:
+      - 快速解决午饭
+    label: profile preferences
+    signal: profile.preferences
+  signals_used:
+  - gps.current
+  - world.public_data
+  - profile.preferences
+  why_surprise: 推荐不是泛榜单,而是按排队、偏好和下一场会即时取舍
+  why_practical: 直接减少午饭选择成本
+  wow_level: 4
+- pattern_id: relationship_birthday_price_window
+  card_category: 金钱账单
+  human_need: 少花冤枉钱
+  entry_point: 账单续费
+  subtype: birthday_gift_delivery
+  scenario: 妈妈生日还有 3 天,鲜花今天下单更便宜且能准时送达
+  card:
+    body: '妈妈生日还有 3 天。
+
+      同城花店今天下单 19:00 前可预约当天上午送达,比明天下单便宜 40 元。
+
+      你去年送过向日葵,今年可以换白桔梗。
+
+      '
+    hook: 妈妈生日还有 3 天
+    title: 妈妈生日还有 3 天｜现在订花比明天便宜 40 元
+    action: 看 3 个不俗的花束?
+  source_data:
+  - mock:
+      id: mock:relationship_birthday_price_window:memory:1
+      person: 妈妈
+      event: 生日
+      date: '2026-05-20'
+      last_year_gift: 向日葵
+    label: 长期记忆
+    signal: memory.facts
+  - mock:
+      id: mock:relationship_birthday_price_window:public_data:2
+      order_deadline_today: '2026-05-17T19:00:00+08:00'
+      price_saving_yuan: 40
+      delivery_available: true
+    label: 礼物/配送数据
+    signal: world.public_data
+  signals_used:
+  - memory.facts
+  - world.public_data
+  why_surprise: 把纪念日、去年礼物和价格窗口串起来
+  why_practical: 现在点能省钱且不误事
+  wow_level: 5
+- pattern_id: promise_progress_three_sentences
+  card_category: 工作推进
+  human_need: 推进进度
+  entry_point: 工作待办
+  subtype: overdue_doc_followup
+  scenario: 用户 6 天前答应老周发文档,现在仍没有发送记录
+  card:
+    body: '你 6 天前在群里说"今晚把文档发你"。
+
+      邮箱和聊天里都没有后续附件。
+
+      可以先发一句:我这边还差最后一段,今晚 9 点前给你。
+
+      '
+    hook: 答应老周的文档拖了 6 天
+    title: 你答应老周的文档拖了 6 天｜现在发 3 句进度
+    action: 起草 3 句进度?
+  source_data:
+  - mock:
+      id: mock:promise_progress_three_sentences:chat:1
+      thread: 产品方案群
+      promised_to: 老周
+      promised_at: '2026-05-11T21:18:00+08:00'
+      message: 今晚把文档发你
+    label: 聊天历史
+    signal: chat.history
+  - mock:
+      id: mock:promise_progress_three_sentences:gmail:2
+      attachment_sent_after_promise: false
+      searched_until: '2026-05-17T09:00:00+08:00'
+    label: 邮件
+    signal: gmail.message
+  signals_used:
+  - chat.history
+  - gmail.message
+  why_surprise: 系统看见了“心理负债”而不是只列待办
+  why_practical: 三句话降低补救成本
+  wow_level: 5
+- pattern_id: parent_meeting_conflict_guard
+  card_category: 家庭照护
+  human_need: 照顾重要的人
+  entry_point: 家庭健康
+  subtype: parent_teacher_meeting
+  scenario: 孩子家长会和工作周会相邻,用户可能来不及切换
+  card:
+    body: '孩子家长会 10:30 开始,学校要求提前 5 分钟进 Zoom。
+
+      你的产品周会排到 10:20,按历史平均会拖 12 分钟。
+
+      现在改成 9:50 收尾最稳。
+
+      '
+    hook: 家长会和周会要撞
+    title: 孩子 10:30 家长会｜你 9:50 这个会该提前结束
+    action: 给周会加 9:50 收尾提醒?
+  source_data:
+  - mock:
+      id: mock:parent_meeting_conflict_guard:family_calendar:1
+      title: 孩子家长会
+      start: '2026-05-17T10:30:00+08:00'
+      join_buffer_min: 5
+    label: 家庭日程
+    signal: calendar.event
+  - mock:
+      id: mock:parent_meeting_conflict_guard:work_calendar:2
+      title: 产品周会
+      start: '2026-05-17T09:30:00+08:00'
+      end: '2026-05-17T10:20:00+08:00'
+      historical_overrun_avg_min: 12
+    label: 工作日程
+    signal: calendar.event
+  signals_used:
+  - calendar.event
+  - memory.facts
+  why_surprise: 把家庭责任和会议拖堂风险提前合并
+  why_practical: 避免临场失约
+  wow_level: 5
+- pattern_id: bill_due_tomorrow_fee_risk
+  card_category: 金钱账单
+  human_need: 少花冤枉钱
+  entry_point: 账单续费
+  subtype: late_fee_prevention
+  scenario: 信用卡账单明天到期,邮件写明逾期会收滞纳金
+  card:
+    body: '这张信用卡账单明天 23:59 到期。
+
+      最低还款 1,280 元,逾期会收 80 元滞纳金。
+
+      你常用的还款账户余额足够。
+
+      '
+    hook: 账单明天到期
+    title: 这张账单明天到期｜现在付能少一笔滞纳金
+    action: 打开还款清单?
+  source_data:
+  - mock:
+      id: mock:bill_due_tomorrow_fee_risk:gmail:1
+      from: bank-notice@example.com
+      subject: 信用卡账单到期提醒
+      due_at: '2026-05-18T23:59:00+08:00'
+      late_fee_yuan: 80
+      min_payment_yuan: 1280
+    label: 账单邮件
+    signal: gmail.message
+  - mock:
+      id: mock:bill_due_tomorrow_fee_risk:memory:2
+      default_payment_account_balance_yuan: 5600
+      last_confirmed_at: '2026-05-16T21:00:00+08:00'
+    label: 长期记忆
+    signal: memory.facts
+  signals_used:
+  - gmail.message
+  - memory.facts
+  why_surprise: 把到期、罚金和可支付性直接算清楚
+  why_practical: 避免真实金钱损失
+  wow_level: 4
+- pattern_id: energy_no_heavy_decision
+  card_category: 健康精力
+  human_need: 守住状态
+  entry_point: 睡前提醒
+  subtype: overloaded_decision_guard
+  scenario: 用户连续会议 6 小时后,下一件事是定关键产品方案
+  card:
+    body: '你今天 9:00 到 15:00 只有 18 分钟空档。
+
+      昨晚睡 5.8 小时,下一项是"确定 Q3 定价方案"。
+
+      这个决策建议挪到明早 10:00,现在先整理选项。
+
+      '
+    hook: 今天已经连轴转 6 小时
+    title: 你今天连轴转 6 小时｜下一件别做重决策
+    action: 改成明早定稿?
+  source_data:
+  - mock:
+      id: mock:energy_no_heavy_decision:calendar:1
+      meeting_hours_today: 6
+      free_minutes_since_9am: 18
+      next_event: 确定 Q3 定价方案
+    label: 日历事件
+    signal: calendar.event
+  - mock:
+      id: mock:energy_no_heavy_decision:health:2
+      sleep_hours_last_night: 5.8
+      screen_time_last_night_min: 92
+    label: 健康数据
+    signal: device.health
+  signals_used:
+  - calendar.event
+  - device.health
+  why_surprise: 系统不是催效率,而是在保护决策质量
+  why_practical: 帮用户避免疲劳下做大决定
+  wow_level: 4
+- pattern_id: client_price_floor_prep
+  card_category: 金钱账单
+  human_need: 少花冤枉钱
+  entry_point: 账单续费
+  subtype: pricing_objection_prep
+  scenario: 客户会前,历史邮件显示对方每次都追问价格和底线
+  card:
+    body: '下午 16:00 和明达科技复盘。
+
+      过去 3 次邮件里,对方都追问"最低能到多少"。
+
+      建议先准备一句:标准价不降,但可以把首月服务费并入试点。
+
+      '
+    hook: 这个客户每次都问价格
+    title: 这个客户每次都问价格｜会前先准备一句底线
+    action: 生成 3 句价格底线?
+  source_data:
+  - mock:
+      id: mock:client_price_floor_prep:calendar:1
+      title: 明达科技 Q3 复盘
+      start: '2026-05-17T16:00:00+08:00'
+      attendees:
+      - sales@mingda.example
+      - user@pinai.local
+    label: 日历事件
+    signal: calendar.event
+  - mock:
+      id: mock:client_price_floor_prep:gmail:2
+      recurring_topic: pricing_floor
+      occurrences_90d: 3
+      latest_quote: 最低能到多少
+    label: 历史邮件
+    signal: gmail.message
+  signals_used:
+  - calendar.event
+  - gmail.message
+  why_surprise: 系统知道这个客户的高频问题,而不是只提醒开会
+  why_practical: 用户会前能直接准备话术
+  wow_level: 5
+- pattern_id: weekend_single_good_weather_slot
+  card_category: 天气生活
+  human_need: 不错过窗口
+  entry_point: 周末天气
+  subtype: outdoor_window
+  scenario: 本周只有周六下午天气好且用户日历空,用户常说想多出门走走
+  card:
+    body: '这周只有周六 14:00-17:00 晴,其他时间都有雨或会。
+
+      你过去 3 周末都没去户外,但常说想恢复走路。
+
+      14:30 出门去奥森刚好。
+
+      '
+    hook: 本周唯一好天气窗口
+    title: 周六下午是唯一好天气｜14:30 出门别浪费
+    action: 留出 14:30-17:00?
+  source_data:
+  - mock:
+      id: mock:weekend_single_good_weather_slot:weather:1
+      only_clear_slot: 2026-05-23T14:00:00+08:00/2026-05-23T17:00:00+08:00
+      other_slots: 有雨或大风
+    label: 天气
+    signal: world.weather
+  - mock:
+      id: mock:weekend_single_good_weather_slot:calendar:2
+      free_slot: 2026-05-23T14:00:00+08:00/2026-05-23T17:00:00+08:00
+      conflicts: 0
+    label: 日历事件
+    signal: calendar.event
+  - mock:
+      id: mock:weekend_single_good_weather_slot:profile:3
+      preferences:
+      - 户外散步
+      - 奥森
+      recent_weekend_outdoor_count: 0
+    label: profile preferences
+    signal: profile.preferences
+  signals_used:
+  - world.weather
+  - calendar.event
+  - profile.preferences
+  why_surprise: 把天气、空闲和用户想恢复的习惯连成一个低成本机会
+  why_practical: 明确到 14:30 出门,不是泛泛建议
+  wow_level: 4
+- pattern_id: planning_fallacy_scope_cut
+  card_category: 工作推进
+  human_need: 别拖到崩
+  entry_point: 截止期提醒
+  subtype: deadline_scope_reality_check
+  scenario: 用户以为周五还有时间写提案,但日历只剩 46 分钟深工,历史同类任务平均要 3 小时
+  card:
+    body: '你说周五再写提案,但周五只剩 46 分钟连续空档。
+
+      过去 3 次类似提案平均用了 3.1 小时。
+
+      今天先砍到一页版,比周五硬补更稳。
+
+      '
+    hook: 真实深工时间只有 46 分钟
+    title: 你以为周五有空,其实只剩 46 分钟｜今天先砍范围
+    action: 生成一页最小版本?
+  source_data:
+  - mock:
+      id: mock:planning_fallacy_scope_cut:calendar:1
+      deadline: '2026-05-22T18:00:00+08:00'
+      claimed_free_day: '2026-05-22'
+      true_deep_work_min: 46
+      fragmented_slots: 5
+    label: 日历空档分析
+    signal: calendar.derived
+  - mock:
+      id: mock:planning_fallacy_scope_cut:history:2
+      similar_task_count: 3
+      avg_completion_hours: 3.1
+      last_overrun_hours: 1.4
+    label: 历史任务耗时
+    signal: chat.history
+  - mock:
+      id: mock:planning_fallacy_scope_cut:analysis:3
+      principle: planning_fallacy
+      estimated_gap_hours: 2.3
+      recommendation: cut_scope_to_one_page
+      confidence: 0.79
+    label: 深度分析
+    signal: analysis.behavioral_model
+  signals_used:
+  - calendar.derived
+  - chat.history
+  - analysis.behavioral_model
+  why_surprise: 不是提醒截止期,而是推翻用户对未来空闲的错误估计
+  why_practical: 直接给可执行的砍范围动作
+  wow_level: 5
+- pattern_id: unfinished_loop_closure_note
+  card_category: 工作推进
+  human_need: 推进进度
+  entry_point: 工作待办
+  subtype: evening_cognitive_closure
+  scenario: 用户 4 天内多次提到同一个合作方案,邮件未回复且没有下一步,晚上有低干扰窗口
+  card:
+    body: '这个合作方案 4 天里出现了 6 次,但还没有下一步。
+
+      晚上 21:10 后没有会,适合发一个收口说明。
+
+      我可以先写 5 句:当前结论、卡点、下一步、负责人、时间。
+
+      '
+    hook: 这个任务反复出现 4 天
+    title: 这个任务在脑子里转了 4 天｜今晚用 5 句收口
+    action: 写 5 句收口?
+  source_data:
+  - mock:
+      id: mock:unfinished_loop_closure_note:chat:1
+      topic: 合作方案定稿
+      mentions_4d: 6
+      last_mention_at: '2026-05-17T15:42:00+08:00'
+      next_action_detected: false
+    label: 聊天主题
+    signal: chat.history
+  - mock:
+      id: mock:unfinished_loop_closure_note:gmail:2
+      subject: 合作方案下周排期
+      unreplied_days: 4
+      sender: partner@example.com
+    label: 未回复邮件
+    signal: gmail.message
+  - mock:
+      id: mock:unfinished_loop_closure_note:analysis:3
+      principle: unfinished_task_tension
+      closure_cost: low
+      suggested_template:
+      - 当前结论
+      - 卡点
+      - 下一步
+      - 负责人
+      - 时间
+    label: 深度分析
+    signal: analysis.cognitive_load
+  signals_used:
+  - chat.history
+  - gmail.message
+  - analysis.cognitive_load
+  why_surprise: 把反复萦绕的任务识别成需要收口,不是再加一个待办
+  why_practical: 五句话就能降低心理负担和对方等待成本
+  wow_level: 5
+- pattern_id: receptivity_window_sensitive_message
+  card_category: 关系关心
+  human_need: 关系不掉线
+  entry_point: 消息回复
+  subtype: mutual_low_interrupt_window
+  scenario: 用户想关心朋友但怕打扰,系统识别双方日程间隙和历史回复节奏后给出低打扰窗口
+  card:
+    body: '你上次说想问阿泽复查结果,但一直没发。
+
+      现在到 20:42 是今天最不打扰的窗口:你没有会,他通常这段会回消息。
+
+      可以只发一句:今天复查还顺利吗?
+
+      '
+    hook: 今天最不打扰的 12 分钟
+    title: 现在是今天最不打扰的 12 分钟｜把那句关心发了
+    action: 生成一条关心消息?
+  source_data:
+  - mock:
+      id: mock:receptivity_window_sensitive_message:memory:1
+      relationship: friend
+      person_label: 阿泽
+      care_topic: 复查结果
+      user_intent_mentioned_at: '2026-05-15T22:18:00+08:00'
+    label: 关系记忆
+    signal: memory.facts
+  - mock:
+      id: mock:receptivity_window_sensitive_message:calendar:2
+      user_free_until: '2026-05-17T20:42:00+08:00'
+      next_user_event: 晚间复盘
+    label: 用户日程
+    signal: calendar.event
+  - mock:
+      id: mock:receptivity_window_sensitive_message:analysis:3
+      principle: just_in_time_adaptive_prompt
+      interruptibility_score: 0.86
+      action_cost: one_sentence
+      risk: low
+    label: 可接收性分析
+    signal: analysis.interruptibility
+  signals_used:
+  - memory.facts
+  - calendar.event
+  - analysis.interruptibility
+  why_surprise: 不是机械提醒联系朋友,而是找到了用户敢发、对方更可能接收的窗口
+  why_practical: 一句话能完成真实关系关心
+  wow_level: 5
+- pattern_id: subscription_loss_vs_use_check
+  card_category: 金钱账单
+  human_need: 少花冤枉钱
+  entry_point: 账单续费
+  subtype: renewal_low_usage_decision
+  scenario: 自动续费前一晚,订阅过去 23 天未使用,但取消入口仍开放
+  card:
+    body: 'Notion AI 明晚自动续费 168 元。
+
+      过去 23 天没有打开过相关功能,你现在有 6 分钟可以取消。
+
+      如果本周不用来整理融资材料,这笔钱就该停。
+
+      '
+    hook: 23 天没用的订阅要续费
+    title: 这笔会员不是贵,是你 23 天没用｜今晚取消或保留
+    action: 打开取消入口?
+  source_data:
+  - mock:
+      id: mock:subscription_loss_vs_use_check:gmail:1
+      merchant: Notion AI
+      renewal_at: '2026-05-18T23:59:00+08:00'
+      amount_yuan: 168
+      cancel_url_present: true
+    label: 续费邮件
+    signal: gmail.message
+  - mock:
+      id: mock:subscription_loss_vs_use_check:usage:2
+      last_used_days_ago: 23
+      active_sessions_30d: 1
+      related_project: 融资材料整理
+    label: 使用记录
+    signal: memory.facts
+  - mock:
+      id: mock:subscription_loss_vs_use_check:analysis:3
+      principle: loss_aversion
+      decision: cancel_unless_used_this_week
+      cancellation_effort_min: 6
+      projected_waste_yuan: 168
+    label: 损失窗口分析
+    signal: analysis.financial_tradeoff
+  signals_used:
+  - gmail.message
+  - memory.facts
+  - analysis.financial_tradeoff
+  why_surprise: 把订阅价格、真实使用和取消摩擦合成了一个判断
+  why_practical: 用户能立刻避免一笔不必要续费
+  wow_level: 4
+- pattern_id: commute_regret_tradeoff
+  card_category: 出行通勤
+  human_need: 减少不确定
+  entry_point: 早上交通
+  subtype: travel_regret_minimization
+  scenario: 用户要去客户现场,打车比地铁只快 9 分钟但贵 74 元,且地铁准时概率更高
+  card:
+    body: '去望京客户现场,打车预计 41 分钟、96 元,地铁预计 50 分钟、22 元。
+
+      今天路面事故多,打车迟到概率反而更高。
+
+      现在走地铁最稳,还少花 74 元。
+
+      '
+    hook: 打车不一定更稳
+    title: 打车只省 9 分钟但多花 74 元｜今天坐地铁更稳
+    action: 打开地铁路线?
+  source_data:
+  - mock:
+      id: mock:commute_regret_tradeoff:gps:1
+      origin: 国贸
+      destination: 望京 SOHO
+      depart_by: '2026-05-17T13:18:00+08:00'
+    label: 当前位置和目的地
+    signal: gps.current
+  - mock:
+      id: mock:commute_regret_tradeoff:transit:2
+      taxi_min: 41
+      taxi_yuan: 96
+      subway_min: 50
+      subway_yuan: 22
+      road_incidents: 3
+    label: 交通状态
+    signal: world.transit_status
+  - mock:
+      id: mock:commute_regret_tradeoff:analysis:3
+      principle: regret_minimization
+      taxi_time_saved_min: 9
+      extra_cost_yuan: 74
+      recommended_mode: subway
+      on_time_probability_delta: 0.12
+    label: 取舍分析
+    signal: analysis.tradeoff
+  signals_used:
+  - gps.current
+  - world.transit_status
+  - analysis.tradeoff
+  why_surprise: 结论反直觉:不是最快路线,而是后悔值最低路线
+  why_practical: 用户直接省钱且降低迟到风险
+  wow_level: 5
+- pattern_id: meeting_hidden_stance_gap
+  card_category: 工作推进
+  human_need: 少返工
+  entry_point: 会前提醒
+  subtype: stance_before_decision_meeting
+  scenario: 会前资料已足够,但用户在聊天和邮件里没有形成明确立场,会议马上进入决策
+  card:
+    body: '16:30 的评审会不是缺资料:你已经看过 7 份材料。
+
+      真正缺的是一句立场:先保转化,还是先保毛利。
+
+      会前 8 分钟先定下来,进去会更稳。
+
+      '
+    hook: 资料够了,立场还没定
+    title: 你资料够了,缺的是一句立场｜会前 8 分钟先定下来
+    action: 写 3 个可选立场?
+  source_data:
+  - mock:
+      id: mock:meeting_hidden_stance_gap:calendar:1
+      meeting_title: Q3 定价评审
+      starts_in_min: 28
+      decision_required: true
+    label: 日程事件
+    signal: calendar.event
+  - mock:
+      id: mock:meeting_hidden_stance_gap:gmail:2
+      docs_read: 7
+      key_tradeoff:
+      - 转化率
+      - 毛利
+    label: 会前资料
+    signal: gmail.message
+  - mock:
+      id: mock:meeting_hidden_stance_gap:analysis:3
+      principle: preparation_gap_detection
+      evidence_sufficiency: high
+      stance_clarity: low
+      missing_artifact: one_sentence_position
+    label: 隐藏缺口分析
+    signal: analysis.meeting_prep
+  signals_used:
+  - calendar.event
+  - gmail.message
+  - analysis.meeting_prep
+  why_surprise: 系统指出真正缺口是立场,不是更多资料
+  why_practical: 会前几分钟也能立刻改善表现
+  wow_level: 5
+- pattern_id: social_debt_two_sentence_repair
+  card_category: 关系关心
+  human_need: 关系不掉线
+  entry_point: 消息回复
+  subtype: delayed_reply_low_friction_repair
+  scenario: 用户 5 天没回重要朋友,聊天里表达过不知道怎么解释,系统降低回复成本
+  card:
+    body: '你已经 5 天没回小陈,但你不是不想回。
+
+      你昨天说"不知道怎么解释拖这么久"。
+
+      先发两句就够:这几天我卡住了,不是故意不回。今晚我认真看完再答复。
+
+      '
+    hook: 关系欠账 5 天
+    title: 你不是不想回,是怕解释太久｜发这 2 句先修复
+    action: 生成两句回复?
+  source_data:
+  - mock:
+      id: mock:social_debt_two_sentence_repair:gmail:1
+      contact_label: 小陈
+      unreplied_days: 5
+      thread_importance: high
+    label: 未回复消息
+    signal: gmail.message
+  - mock:
+      id: mock:social_debt_two_sentence_repair:chat:2
+      user_phrase: 不知道怎么解释拖这么久
+      detected_barrier: explanation_cost
+    label: 用户表达
+    signal: chat.history
+  - mock:
+      id: mock:social_debt_two_sentence_repair:analysis:3
+      principle: ability_prompt
+      repair_cost: two_sentences
+      emotional_barrier: shame_avoidance
+      suggested_action: send_bridge_reply
+    label: 行动阻力分析
+    signal: analysis.behavioral_model
+  signals_used:
+  - gmail.message
+  - chat.history
+  - analysis.behavioral_model
+  why_surprise: 系统理解的是回避背后的解释成本,不是粗暴催回消息
+  why_practical: 两句话就能恢复沟通
+  wow_level: 5
+- pattern_id: recovery_risk_evening_guard
+  card_category: 健康精力
+  human_need: 守住状态
+  entry_point: 状态提醒
+  subtype: recovery_instead_of_hard_training
+  scenario: 用户恢复指标连续三天下滑,晚上还安排高强度训练,明早有重要会
+  card:
+    body: '你恢复值连续 3 天下滑,昨晚只睡 5.6 小时。
+
+      今晚原计划 45 分钟 HIIT,但明早 9:00 有客户会。
+
+      今天不是放弃自律,是把损失控制住:散步 20 分钟后睡觉。
+
+      '
+    hook: 恢复值连续 3 天下滑
+    title: 恢复值连续 3 天下滑｜今晚别硬练,直接止损
+    action: 改成 20 分钟散步?
+  source_data:
+  - mock:
+      id: mock:recovery_risk_evening_guard:health:1
+      recovery_trend_days: 3
+      sleep_hours_last_night: 5.6
+      hrv_drop_pct: 18
+    label: 健康数据
+    signal: device.health
+  - mock:
+      id: mock:recovery_risk_evening_guard:calendar:2
+      planned_workout: 45 分钟 HIIT
+      tomorrow_key_meeting: '2026-05-18T09:00:00+08:00'
+    label: 日程计划
+    signal: calendar.event
+  - mock:
+      id: mock:recovery_risk_evening_guard:analysis:3
+      principle: vulnerability_window
+      risk: overtraining_and_next_day_performance
+      replacement: 20 分钟散步 + 早睡
+      confidence: 0.81
+    label: 恢复风险分析
+    signal: analysis.health_risk
+  signals_used:
+  - device.health
+  - calendar.event
+  - analysis.health_risk
+  why_surprise: 把自律重新解释成止损,而不是普通休息提醒
+  why_practical: 保护第二天重要表现
+  wow_level: 4
+- pattern_id: city_event_route_collision
+  card_category: 出行通勤
+  human_need: 减少不确定
+  entry_point: 路上提醒
+  subtype: local_event_commute_collision
+  scenario: 用户下班路线会经过演唱会场馆,散场将和通勤时间冲突,提前离开可避开拥堵
+  card:
+    body: '你 18:30 常走的北四环路线,今晚会撞上鸟巢演唱会 19:10 散场。
+
+      如果 18:05 走,预计省 31 分钟。
+
+      再晚 20 分钟,地面交通会开始锁死。
+
+      '
+    hook: 下班路线会撞上散场
+    title: 你下班路线会撞上演唱会散场｜提前 25 分钟走
+    action: 18:05 提醒出发?
+  source_data:
+  - mock:
+      id: mock:city_event_route_collision:gps:1
+      usual_route: 北四环 -> 京藏辅路
+      usual_departure: '18:30'
+      confidence: 0.76
+    label: 通勤路线
+    signal: gps.inferences
+  - mock:
+      id: mock:city_event_route_collision:event:2
+      event_name: 鸟巢演唱会
+      venue: 国家体育场
+      expected_end: '2026-05-17T19:10:00+08:00'
+      crowd_size_estimate: 42000
+    label: 城市公共事件
+    signal: world.public_data.events_local
+  - mock:
+      id: mock:city_event_route_collision:analysis:3
+      principle: route_event_collision
+      delay_if_normal_departure_min: 31
+      recommended_departure: '2026-05-17T18:05:00+08:00'
+      confidence: 0.84
+    label: 路线冲突分析
+    signal: analysis.mobility_risk
+  signals_used:
+  - gps.inferences
+  - world.public_data.events_local
+  - analysis.mobility_risk
+  why_surprise: 把城市公共事件提前翻译成用户自己的出发时间
+  why_practical: 明确提前 25 分钟,可以真避堵
+  wow_level: 5
+- pattern_id: fresh_start_skill_restart
+  card_category: 健康精力
+  human_need: 身体别硬扛
+  entry_point: 健康提醒
+  subtype: monday_micro_practice
+  scenario: 周一早上用户有 16 分钟空档,英语学习目标停了 19 天,适合用小动作重启
+  card:
+    body: '今天是周一,9:20 前有 16 分钟空档。
+
+      英语练习停了 19 天,不要重新立大计划。
+
+      先用 12 分钟复习上次那 8 个表达,把连续性捡回来。
+
+      '
+    hook: 周一早上的重启窗口
+    title: 周一早上是重启窗口｜用 12 分钟把英语捡回来
+    action: 打开 12 分钟练习?
+  source_data:
+  - mock:
+      id: mock:fresh_start_skill_restart:calendar:1
+      temporal_landmark: Monday morning
+      free_until: '2026-05-18T09:20:00+08:00'
+      free_minutes: 16
+    label: 时间地标和空档
+    signal: calendar.derived
+  - mock:
+      id: mock:fresh_start_skill_restart:memory:2
+      skill: 英语表达
+      dormant_days: 19
+      last_material: 上次那 8 个表达
+    label: 技能记忆
+    signal: memory.skills
+  - mock:
+      id: mock:fresh_start_skill_restart:analysis:3
+      principle: fresh_start_effect
+      action_cost_min: 12
+      motivation_fit: high
+      recommended_action: resume_last_material
+    label: 重启窗口分析
+    signal: analysis.behavioral_model
+  signals_used:
+  - calendar.derived
+  - memory.skills
+  - analysis.behavioral_model
+  why_surprise: 把周一这种时间地标和停滞目标连起来,但动作很小
+  why_practical: 12 分钟即可恢复连续性
+  wow_level: 4
+- pattern_id: morning_outdoor_readiness_pack
+  card_category: 天气生活
+  human_need: 掌控今天
+  entry_point: 今日天气
+  subtype: pre_departure_item_check
+  scenario: 普通工作日早上,用户 8:12 要出门,下午有雨且今天要去外部会议,过去常忘伞和门禁卡
+  card:
+    body: '你 8:12 要出门,下午 15:00 后有雨。
+
+      今天 10:30 去外部会议,要带门禁卡和伞。
+
+      先把伞、钥匙、门禁卡放包里,比出门后想起来省事。
+
+      '
+    hook: 出门前还有 11 分钟
+    title: 出门前还有 11 分钟｜先把伞和钥匙放包里
+    action: 打开出门清单?
+  source_data:
+  - mock:
+      id: mock:morning_outdoor_readiness_pack:calendar:1
+      leave_at: '2026-05-18T08:12:00+08:00'
+      external_meeting_at: '2026-05-18T10:30:00+08:00'
+      location: 客户办公室
+    label: 今日日程
+    signal: calendar.event
+  - mock:
+      id: mock:morning_outdoor_readiness_pack:weather:2
+      rain_starts_at: '2026-05-18T15:00:00+08:00'
+      rain_probability: 0.78
+    label: 今日天气
+    signal: world.weather
+  - mock:
+      id: mock:morning_outdoor_readiness_pack:analysis:3
+      principle: pre_commitment_by_placement
+      needed_items:
+      - 伞
+      - 钥匙
+      - 门禁卡
+      action_cost_sec: 40
+    label: 出门准备分析
+    signal: analysis.pragmatic_day
+  signals_used:
+  - calendar.event
+  - world.weather
+  - analysis.pragmatic_day
+  why_surprise: 把天气和日程翻译成出门前具体要放包里的东西
+  why_practical: 立刻避免返工和淋雨
+  wow_level: 4
+- pattern_id: breakfast_before_caffeine_meeting
+  card_category: 吃喝生活
+  human_need: 少想一步
+  entry_point: 吃什么
+  subtype: quick_breakfast_before_meeting
+  scenario: 用户睡眠偏少,早上只喝咖啡,10:30 有连续会议,楼下便利店可以买到最快早餐
+  card:
+    body: '昨晚睡 5.9 小时,早上还没吃东西。
+
+      10:30 开始连着两场会,现在楼下买个鸡蛋和酸奶只要 4 分钟。
+
+      先垫一下,别靠第二杯咖啡硬撑。
+
+      '
+    hook: 10:30 前先垫一下
+    title: 10:30 要开会,别空腹喝第二杯｜先买个鸡蛋
+    action: 记一个 4 分钟早餐?
+  source_data:
+  - mock:
+      id: mock:breakfast_before_caffeine_meeting:health:1
+      sleep_hours_last_night: 5.9
+      breakfast_detected: false
+      caffeine_count_morning: 1
+    label: 早晨状态
+    signal: device.health
+  - mock:
+      id: mock:breakfast_before_caffeine_meeting:calendar:2
+      next_meeting_at: '2026-05-18T10:30:00+08:00'
+      meeting_count_before_lunch: 2
+    label: 上午日程
+    signal: calendar.event
+  - mock:
+      id: mock:breakfast_before_caffeine_meeting:analysis:3
+      principle: ability_before_prompt
+      quick_option: 鸡蛋 + 酸奶
+      detour_min: 4
+      risk: caffeine_only_energy_crash
+    label: 能量分析
+    signal: analysis.pragmatic_day
+  signals_used:
+  - device.health
+  - calendar.event
+  - analysis.pragmatic_day
+  why_surprise: 不是健康说教,而是把上午会议表现和一个 4 分钟动作连起来
+  why_practical: 用户马上知道吃什么、花多久
+  wow_level: 4
+- pattern_id: commute_one_train_buffer
+  card_category: 出行通勤
+  human_need: 减少不确定
+  entry_point: 早上交通
+  subtype: morning_commute_leave_now
+  scenario: 用户还在家,9:30 到公司开会,再晚 6 分钟会错过一班车并多挤一班
+  card:
+    body: '9:30 第一场会,你现在出门能赶上 8:38 那班地铁。
+
+      再晚 6 分钟,要等下一班,到公司会压到 9:26。
+
+      现在走,少挤一班也少慌。
+
+      '
+    hook: 再晚 6 分钟就要多挤一班
+    title: 再晚 6 分钟就要多挤一班｜现在出门
+    action: 开始通勤导航?
+  source_data:
+  - mock:
+      id: mock:commute_one_train_buffer:gps:1
+      current_place: home
+      distance_to_station_min: 7
+      observed_at: '2026-05-18T08:25:00+08:00'
+    label: 当前位置
+    signal: gps.current
+  - mock:
+      id: mock:commute_one_train_buffer:transit:2
+      next_train_at: '2026-05-18T08:38:00+08:00'
+      following_train_at: '2026-05-18T08:46:00+08:00'
+      crowd_delta: higher
+    label: 通勤班次
+    signal: world.transit_status
+  - mock:
+      id: mock:commute_one_train_buffer:analysis:3
+      principle: small_buffer_prevents_stress
+      leave_now_buffer_min: 13
+      penalty_if_late_min: 8
+      recommended_action: leave_now
+    label: 通勤缓冲分析
+    signal: analysis.mobility_risk
+  signals_used:
+  - gps.current
+  - world.transit_status
+  - analysis.mobility_risk
+  why_surprise: 把通勤焦虑具体到“一班车”的代价
+  why_practical: 用户现在出门就能少挤、少迟到
+  wow_level: 4
+- pattern_id: first_office_reply_unblock
+  card_category: 工作推进
+  human_need: 少返工
+  entry_point: 会前提醒
+  subtype: first_quiet_window_reply
+  scenario: 用户刚到公司,第一场会前有安静窗口,一封关键邮件卡住了别人两天
+  card:
+    body: '你刚到公司,9:40 前没有会。
+
+      昨天产品那封"排期能否确认"已经卡了 2 天,对方今天 10 点前要排版。
+
+      先回一句确认范围,比等会被会议打断更稳。
+
+      '
+    hook: 开工前 18 分钟没人打扰
+    title: 9:40 前没人打扰｜先回那封卡了 2 天的邮件
+    action: 写一句确认回复?
+  source_data:
+  - mock:
+      id: mock:first_office_reply_unblock:gps:1
+      place_label: 公司
+      arrived_at: '2026-05-18T09:17:00+08:00'
+    label: 到达公司
+    signal: gps.current
+  - mock:
+      id: mock:first_office_reply_unblock:gmail:2
+      subject: 排期能否确认
+      unreplied_days: 2
+      blocks_other_work: true
+    label: 关键邮件
+    signal: gmail.message
+  - mock:
+      id: mock:first_office_reply_unblock:analysis:3
+      principle: unblock_before_noise
+      quiet_window_min: 18
+      reply_cost_min: 3
+      priority_reason: blocks_downstream_work
+    label: 开工优先级分析
+    signal: analysis.pragmatic_day
+  signals_used:
+  - gps.current
+  - gmail.message
+  - analysis.pragmatic_day
+  why_surprise: 不是未读列表,而是指出第一封最该回的邮件
+  why_practical: 三分钟解除一个实际阻塞
+  wow_level: 4
+- pattern_id: pre_meeting_one_sentence_conclusion
+  card_category: 工作推进
+  human_need: 少返工
+  entry_point: 会前提醒
+  subtype: seven_minute_meeting_prep
+  scenario: 会前只剩 7 分钟,资料已经够,但用户还没有明确开场结论
+  card:
+    body: '10:00 的项目会还有 7 分钟。
+
+      资料已经够了,现在最该准备的是第一句话:今天先定延期还是砍需求。
+
+      我可以给你写 3 个开场结论。
+
+      '
+    hook: 会前还剩 7 分钟
+    title: 10:00 会前还有 7 分钟｜先写一句结论
+    action: 生成 3 个开场结论?
+  source_data:
+  - mock:
+      id: mock:pre_meeting_one_sentence_conclusion:calendar:1
+      meeting_title: 项目排期会
+      starts_at: '2026-05-18T10:00:00+08:00'
+      starts_in_min: 7
+    label: 会议信息
+    signal: calendar.event
+  - mock:
+      id: mock:pre_meeting_one_sentence_conclusion:gmail:2
+      docs_count: 4
+      latest_summary: 需求超出当前排期
+    label: 会前资料
+    signal: gmail.message
+  - mock:
+      id: mock:pre_meeting_one_sentence_conclusion:analysis:3
+      principle: last_minute_preparation
+      missing_piece: opening_conclusion
+      recommendation: write_one_sentence_position
+    label: 会前缺口分析
+    signal: analysis.meeting_prep
+  signals_used:
+  - calendar.event
+  - gmail.message
+  - analysis.meeting_prep
+  why_surprise: 把会前 7 分钟聚焦到最有用的一句话
+  why_practical: 用户能马上进入会议状态
+  wow_level: 4
+- pattern_id: lunch_fast_enough_choice
+  card_category: 吃喝生活
+  human_need: 少想一步
+  entry_point: 吃什么
+  subtype: ordinary_lunch_fast_choice
+  scenario: 午饭时间用户站在常去餐厅附近,这家排队 28 分钟,下午 13:30 有会
+  card:
+    body: '你常去那家今天排队 28 分钟。
+
+      下午 13:30 有会,吃完再走会很紧。
+
+      旁边盖饭店 12 分钟能吃完,今天选快的更划算。
+
+      '
+    hook: 常去那家今天排队 28 分钟
+    title: 这家排队 28 分钟,下午还有会｜今天选快的
+    action: 导航到快的那家?
+  source_data:
+  - mock:
+      id: mock:lunch_fast_enough_choice:gps:1
+      place_label: 公司楼下
+      meal_window: lunch
+      observed_at: '2026-05-18T12:08:00+08:00'
+    label: 当前位置
+    signal: gps.current
+  - mock:
+      id: mock:lunch_fast_enough_choice:places:2
+      favorite_shop_wait_min: 28
+      alternative_shop_wait_min: 4
+      alternative_total_meal_min: 12
+    label: 附近排队
+    signal: world.public_data.places_nearby
+  - mock:
+      id: mock:lunch_fast_enough_choice:analysis:3
+      principle: satisficing_under_time_constraint
+      next_meeting_at: '2026-05-18T13:30:00+08:00'
+      recommendation: choose_fast_enough_option
+    label: 午饭取舍分析
+    signal: analysis.tradeoff
+  signals_used:
+  - gps.current
+  - world.public_data.places_nearby
+  - analysis.tradeoff
+  why_surprise: 不追求最好吃,而是替用户做一个够好的午饭决定
+  why_practical: 直接避免午饭拖到下午会
+  wow_level: 4
+- pattern_id: afternoon_slump_low_brain_tasks
+  card_category: 健康精力
+  human_need: 守住状态
+  entry_point: 状态提醒
+  subtype: afternoon_task_switch
+  scenario: 午后用户连续开会后准备写方案,但精力低谷明显,同时有几件低脑力任务可处理
+  card:
+    body: '你 13:00 到 14:10 连续开会,现在心率和屏幕切换都显示注意力在掉。
+
+      这会儿硬写方案容易返工。
+
+      先处理报销、确认时间、归档资料,25 分钟后再写。
+
+      '
+    hook: 下午低谷别硬写方案
+    title: 14:20 是低谷,别硬写方案｜先处理报销和确认
+    action: 切到低脑力清单?
+  source_data:
+  - mock:
+      id: mock:afternoon_slump_low_brain_tasks:calendar:1
+      continuous_meeting_min: 70
+      current_time: '2026-05-18T14:20:00+08:00'
+    label: 下午日程
+    signal: calendar.event
+  - mock:
+      id: mock:afternoon_slump_low_brain_tasks:device:2
+      focus_drop_score: 0.72
+      app_switches_15m: 18
+    label: 设备状态
+    signal: device.health
+  - mock:
+      id: mock:afternoon_slump_low_brain_tasks:analysis:3
+      principle: task_energy_fit
+      avoid_task: 写方案
+      suggested_tasks:
+      - 报销
+      - 确认会议时间
+      - 归档资料
+    label: 任务能量匹配
+    signal: analysis.pragmatic_day
+  signals_used:
+  - calendar.event
+  - device.health
+  - analysis.pragmatic_day
+  why_surprise: 不是叫用户休息,而是换到适合当前能量的任务
+  why_practical: 低谷时间也能推进小事,减少返工
+  wow_level: 4
+- pattern_id: commute_errand_bundle
+  card_category: 家务日常
+  human_need: 省心少跑
+  entry_point: 顺路办事
+  subtype: pharmacy_on_way_home
+  scenario: 用户下班路线会经过药店,明早孩子要用退烧贴,今天顺路买比明早专门跑一趟更省事
+  card:
+    body: '你下班回家会经过海王星辰药店。
+
+      明早孩子要用退烧贴,现在顺手买只多走 2 分钟。
+
+      明早再买会绕路 18 分钟。
+
+      '
+    hook: 下班路上会经过药店
+    title: 下班路上会经过药店｜顺手买明早要用的
+    action: 18:20 路过时提醒?
+  source_data:
+  - mock:
+      id: mock:commute_errand_bundle:gps:1
+      usual_route: 公司 -> 家
+      passes_place: 海王星辰药店
+      extra_walk_min_now: 2
+    label: 通勤路线
+    signal: gps.inferences
+  - mock:
+      id: mock:commute_errand_bundle:memory:2
+      needed_item: 退烧贴
+      needed_by: '2026-05-19T08:00:00+08:00'
+      family_context: 孩子明早要用
+    label: 家庭事项记忆
+    signal: memory.facts
+  - mock:
+      id: mock:commute_errand_bundle:analysis:3
+      principle: route_bundling
+      save_future_detour_min: 18
+      recommendation: buy_on_the_way_home
+    label: 顺路办事分析
+    signal: analysis.pragmatic_day
+  signals_used:
+  - gps.inferences
+  - memory.facts
+  - analysis.pragmatic_day
+  why_surprise: 把一个明早会麻烦的小事提前塞进顺路窗口
+  why_practical: 多走 2 分钟换明早少绕 18 分钟
+  wow_level: 5
+- pattern_id: dinner_use_expiring_food
+  card_category: 吃喝生活
+  human_need: 少想一步
+  entry_point: 吃什么
+  subtype: expiring_food_before_takeout
+  scenario: 晚饭前用户常点外卖,但冰箱里鸡胸肉今晚到期,可以用 20 分钟做掉
+  card:
+    body: '鸡胸肉今晚到期,明天就不适合吃了。
+
+      你这个时间很容易点外卖,但现在做掉只要 20 分钟。
+
+      用空气炸锅 + 生菜就够,不用复杂做饭。
+
+      '
+    hook: 鸡胸肉今晚到期
+    title: 鸡胸肉今晚到期｜别点外卖,20 分钟做掉
+    action: 打开 20 分钟做法?
+  source_data:
+  - mock:
+      id: mock:dinner_use_expiring_food:memory:1
+      item: 鸡胸肉
+      expires_at: '2026-05-18T23:59:00+08:00'
+      storage: fridge
+    label: 冰箱/购物记忆
+    signal: memory.facts
+  - mock:
+      id: mock:dinner_use_expiring_food:gmail:2
+      takeout_orders_same_time_30d: 9
+      average_order_yuan: 43
+    label: 外卖习惯
+    signal: gmail.message
+  - mock:
+      id: mock:dinner_use_expiring_food:analysis:3
+      principle: reduce_choice_cost
+      cook_time_min: 20
+      avoided_waste_yuan: 26
+      suggested_recipe: 空气炸锅鸡胸肉 + 生菜
+    label: 晚饭实用分析
+    signal: analysis.financial_tradeoff
+  signals_used:
+  - memory.facts
+  - gmail.message
+  - analysis.financial_tradeoff
+  why_surprise: 不是泛泛省钱,而是把快过期食材和外卖冲动放在同一刻处理
+  why_practical: 用户能少浪费食材、少点一次外卖
+  wow_level: 4
+- pattern_id: after_dinner_family_reply
+  card_category: 吃喝生活
+  human_need: 少想一步
+  entry_point: 吃什么
+  subtype: family_message_low_pressure
+  scenario: 晚饭后用户有 8 分钟空档,妈妈上午发来的消息还没回,现在回一句比睡前补更自然
+  card:
+    body: '妈妈上午问你周末回不回家,你还没回。
+
+      现在饭后到 20:18 没有安排,回一句最自然。
+
+      先发:这周六不一定,我明晚确认。
+
+      '
+    hook: 饭后 8 分钟低压力窗口
+    title: 饭后这 8 分钟最适合回家里消息｜先发一句
+    action: 生成一句回复?
+  source_data:
+  - mock:
+      id: mock:after_dinner_family_reply:chat:1
+      sender: 妈妈
+      message_summary: 周末回不回家
+      unreplied_hours: 9
+    label: 家人消息
+    signal: chat.history
+  - mock:
+      id: mock:after_dinner_family_reply:calendar:2
+      free_until: '2026-05-18T20:18:00+08:00'
+      free_minutes: 8
+      context: after_dinner
+    label: 晚间空档
+    signal: calendar.event
+  - mock:
+      id: mock:after_dinner_family_reply:analysis:3
+      principle: low_pressure_relationship_maintenance
+      reply_cost_sec: 25
+      recommended_reply: 这周六不一定,我明晚确认
+    label: 关系维护分析
+    signal: analysis.pragmatic_day
+  signals_used:
+  - chat.history
+  - calendar.event
+  - analysis.pragmatic_day
+  why_surprise: 不是催孝顺,而是找到一个自然、不费力的回复窗口
+  why_practical: 一句话减少睡前心理负担
+  wow_level: 4
+- pattern_id: evening_admin_two_minute_bill
+  card_category: 金钱账单
+  human_need: 少花冤枉钱
+  entry_point: 账单续费
+  subtype: small_bill_before_sleep
+  scenario: 晚上洗澡前有短空档,水费明天截止,历史上该类缴费平均只用 2 分钟
+  card:
+    body: '水费明天 18:00 截止。
+
+      你过去 3 次缴水费平均 2 分钟,不用专门安排时间。
+
+      洗澡前顺手付了,明天就少一件惦记的事。
+
+      '
+    hook: 水费明天截止
+    title: 水费明天截止,只要 2 分钟｜洗澡前顺手付了
+    action: 打开缴费入口?
+  source_data:
+  - mock:
+      id: mock:evening_admin_two_minute_bill:gmail:1
+      bill_type: 水费
+      due_at: '2026-05-19T18:00:00+08:00'
+      amount_yuan: 86.4
+    label: 账单邮件
+    signal: gmail.message
+  - mock:
+      id: mock:evening_admin_two_minute_bill:memory:2
+      avg_payment_time_min: 2
+      past_success_count: 3
+    label: 历史处理耗时
+    signal: memory.facts
+  - mock:
+      id: mock:evening_admin_two_minute_bill:analysis:3
+      principle: lower_action_threshold
+      window: before_shower
+      recommendation: pay_now
+    label: 晚间小事分析
+    signal: analysis.pragmatic_day
+  signals_used:
+  - gmail.message
+  - memory.facts
+  - analysis.pragmatic_day
+  why_surprise: 把账单从烦人的任务变成 2 分钟顺手动作
+  why_practical: 避免明天截止压力
+  wow_level: 3
+- pattern_id: bedtime_phone_distance_guard
+  card_category: 健康精力
+  human_need: 守住状态
+  entry_point: 睡前提醒
+  subtype: physical_phone_boundary
+  scenario: 睡前用户已经连续刷手机 23 分钟,明早 8:30 有会,如果继续刷会错过入睡窗口
+  card:
+    body: '你已经连续刷手机 23 分钟。
+
+      明早 8:30 有会,再刷 20 分钟会把入睡窗口推晚。
+
+      现在把手机放到客厅充电,别靠意志力硬扛。
+
+      '
+    hook: 睡眠窗口快关了
+    title: 再刷 20 分钟会错过睡眠窗口｜现在充电放远点
+    action: 开一个睡前放手机提醒?
+  source_data:
+  - mock:
+      id: mock:bedtime_phone_distance_guard:device:1
+      continuous_screen_min: 23
+      current_time: '2026-05-18T23:18:00+08:00'
+      bedtime_window_remaining_min: 20
+    label: 屏幕和睡眠窗口
+    signal: device.health
+  - mock:
+      id: mock:bedtime_phone_distance_guard:calendar:2
+      next_morning_first_meeting: '2026-05-19T08:30:00+08:00'
+      meeting_importance: high
+    label: 明早日程
+    signal: calendar.event
+  - mock:
+      id: mock:bedtime_phone_distance_guard:analysis:3
+      principle: environment_design_over_willpower
+      recommended_action: charge_phone_out_of_reach
+      action_cost_sec: 30
+    label: 睡前行为分析
+    signal: analysis.behavioral_model
+  signals_used:
+  - device.health
+  - calendar.event
+  - analysis.behavioral_model
+  why_surprise: 不讲大道理,直接给一个物理动作阻止继续刷
+  why_practical: 保护第二天状态
+  wow_level: 4
+- pattern_id: today_weather_outfit_action
+  card_category: 天气生活
+  human_need: 掌控今天
+  entry_point: 今日天气
+  subtype: windy_rainy_outfit
+  scenario: 今天最高温看起来舒服,但风和阵雨正好撞上用户外出客户楼的暴露窗口
+  card:
+    body: '今天最高 24 度会让人误判成不用带东西。
+
+      真正的坑是:11 点后风大,15:20 阵雨正好在你从客户楼出来前后。
+
+      薄外套不用穿身上,但折叠伞要放包里。
+
+      '
+    hook: 24 度会骗你
+    title: 今天 24 度会骗你｜15:20 出客户楼前先拿伞
+    action: 加到出门清单?
+  source_data:
+  - mock:
+      id: mock:today_weather_outfit_action:weather:1
+      high_c: 24
+      feels_like_min_c: 17
+      wind_level_after_11: 5
+      rain_at: '2026-05-18T15:20:00+08:00'
+    label: 今日小时级天气
+    signal: world.weather
+  - mock:
+      id: mock:today_weather_outfit_action:calendar:2
+      external_meeting_at: '2026-05-18T14:30:00+08:00'
+      location: 客户楼
+    label: 今日外出日程
+    signal: calendar.event
+  - mock:
+      id: mock:today_weather_outfit_action:analysis:3
+      principle: weather_to_action
+      first_order_signal: 最高温 24 度看起来舒服
+      second_order_inference: 风和阵雨集中在用户外出暴露窗口
+      human_trigger: 怕出门后狼狈、冷、淋雨
+      false_safe_choice: 不带伞,只按最高温穿
+      risk: temperature_headline_misleading_during_exposure
+      recommendation:
+      - 薄外套可以不穿身上
+      - 折叠伞必须进包
+    label: 天气行动分析
+    signal: analysis.weather_practical
+  signals_used:
+  - world.weather
+  - calendar.event
+  - analysis.weather_practical
+  why_surprise: 不是报天气,而是指出最高温会骗用户,并定位到客户楼出来那一刻
+  why_practical: 用户出门前还能补救,少淋雨也不必穿厚
+  wow_level: 4
+- pattern_id: tomorrow_weather_laundry_window
+  card_category: 天气生活
+  human_need: 提前省心
+  entry_point: 明天天气
+  subtype: short_dry_window_tomorrow
+  scenario: 明天下午短暂晴窗适合晾晒,错过后会连续几天不适合晒,今晚正好能提前洗
+  card:
+    body: '明天不是单纯“天气不错”。
+
+      14:00-17:00 是这几天唯一能晒干的 3 小时,错过就要堆到周五。
+
+      今晚先洗,明天下午直接晾。
+
+      '
+    hook: 错过就要堆到周五
+    title: 不是明天晴,是错过就要堆到周五｜今晚洗
+    action: 今晚 21:30 提醒洗衣?
+  source_data:
+  - mock:
+      id: mock:tomorrow_weather_laundry_window:weather:1
+      dry_window: 2026-05-19T14:00:00+08:00/2026-05-19T17:00:00+08:00
+      next_rain_after: '2026-05-19T18:00:00+08:00'
+      following_dry_day: '2026-05-22'
+    label: 明日晾晒天气
+    signal: world.weather
+  - mock:
+      id: mock:tomorrow_weather_laundry_window:memory:2
+      laundry_pile_days: 4
+      washer_available_tonight: true
+    label: 家务记忆
+    signal: memory.facts
+  - mock:
+      id: mock:tomorrow_weather_laundry_window:analysis:3
+      principle: plan_ahead_for_weather_window
+      first_order_signal: 明天下午短晴窗
+      second_order_inference: 后续几天继续潮湿,今晚是准备窗口
+      human_trigger: 讨厌衣服越堆越多、临时没干衣服
+      missed_window_cost: laundry_delayed_until_friday
+      action_tonight: wash_clothes
+      payoff: avoid_waiting_until_friday
+    label: 明天天气机会分析
+    signal: analysis.weather_practical
+  signals_used:
+  - world.weather
+  - memory.facts
+  - analysis.weather_practical
+  why_surprise: 把“明天晴”翻译成“今晚不洗就错过”的行动压力
+  why_practical: 让明天晴窗真的被用上
+  wow_level: 4
+- pattern_id: rain_commute_shoe_choice
+  card_category: 天气生活
+  human_need: 掌控今天
+  entry_point: 今日天气
+  subtype: rain_hits_departure_window
+  scenario: 雨不是全天都下,而是偏偏覆盖用户到地铁的 900 米步行段,白鞋后悔风险高
+  card:
+    body: '今天的雨不是全天麻烦,是刚好卡在你出门。
+
+      8:20-8:45 中雨,你要走 900 米到站。
+
+      白鞋今天不是不能穿,是会让你到公司前就后悔。
+
+      '
+    hook: 雨偏偏卡你 900 米步行
+    title: 雨偏偏卡你 900 米步行｜今天别穿白鞋
+    action: 换鞋或提前走?
+  source_data:
+  - mock:
+      id: mock:rain_commute_shoe_choice:weather:1
+      rain_window: 2026-05-18T08:20:00+08:00/2026-05-18T08:45:00+08:00
+      intensity: 中雨
+    label: 降雨窗口
+    signal: world.weather
+  - mock:
+      id: mock:rain_commute_shoe_choice:gps:2
+      walk_to_station_m: 900
+      usual_departure: '2026-05-18T08:25:00+08:00'
+    label: 通勤步行段
+    signal: gps.current
+  - mock:
+      id: mock:rain_commute_shoe_choice:analysis:3
+      principle: avoid_weather_regret
+      first_order_signal: 8:20-8:45 中雨
+      second_order_inference: 雨窗口和通勤步行段完全重合
+      human_trigger: 到公司前就弄脏鞋的后悔感
+      risk: white_shoes_dirty_before_work
+      recommendation:
+      - 换深色鞋
+      - 提前 12 分钟出门
+    label: 雨天出门分析
+    signal: analysis.weather_practical
+  signals_used:
+  - world.weather
+  - gps.current
+  - analysis.weather_practical
+  why_surprise: 抓住“雨偏偏卡我那段路”的倒霉感,而不是泛泛说有雨
+  why_practical: 换鞋是最低成本补救
+  wow_level: 4
+- pattern_id: tomorrow_temp_swing_pack
+  card_category: 天气生活
+  human_need: 提前省心
+  entry_point: 明天天气
+  subtype: temp_swing_long_day
+  scenario: 明天最高温 27 度容易误导穿衣,但用户早出晚归,真正难受的是晚上回家那段
+  card:
+    body: '明天 27 度是中午的数字,它会骗你少带一件。
+
+      你 8:00 出门、21:00 后回家,早晚都在 16 度左右。
+
+      薄外套不用背一天,可以今晚先放门口。
+
+      '
+    hook: 明天 27 度会骗你
+    title: 明天 27 度会骗你｜21 点回家那段才冷
+    action: 今晚把薄外套放门口?
+  source_data:
+  - mock:
+      id: mock:tomorrow_temp_swing_pack:weather:1
+      morning_c: 15
+      noon_c: 27
+      night_c: 16
+      swing_c: 12
+    label: 明日温差
+    signal: world.weather
+  - mock:
+      id: mock:tomorrow_temp_swing_pack:calendar:2
+      leave_home_at: '2026-05-19T08:00:00+08:00'
+      return_home_after: '2026-05-19T21:00:00+08:00'
+    label: 明日日程
+    signal: calendar.event
+  - mock:
+      id: mock:tomorrow_temp_swing_pack:analysis:3
+      principle: avoid_high_temp_anchor
+      first_order_signal: 明天最高温 27 度
+      second_order_inference: 用户早出晚归,暴露在低温时段
+      human_trigger: 被最高温误导后晚上挨冷
+      recommendation: 带薄外套
+      risk: dressed_for_noon_only
+    label: 明日穿衣分析
+    signal: analysis.weather_practical
+  signals_used:
+  - world.weather
+  - calendar.event
+  - analysis.weather_practical
+  why_surprise: 不说温差大,而是点破“27 度会骗你”
+  why_practical: 让用户今晚就把外套放门口
+  wow_level: 3
+- pattern_id: air_quality_kid_outdoor_adjust
+  card_category: 天气生活
+  human_need: 提前省心
+  entry_point: 明天天气
+  subtype: kid_outdoor_air_quality
+  scenario: 明天 AQI 最差窗口正好撞上孩子户外课,今晚还能提前沟通或准备
+  card:
+    body: 'AQI 118 本身不算吓人,真正的问题是时间撞上了。
+
+      明天 14:00-17:00 空气最差,孩子 15:30 正好户外体能课。
+
+      今晚先发一句问老师,比明天下午临时纠结强。
+
+      '
+    hook: AQI 最差时孩子正上户外课
+    title: AQI 最差时孩子正上户外课｜今晚先问能否改室内
+    action: 生成问老师的话?
+  source_data:
+  - mock:
+      id: mock:air_quality_kid_outdoor_adjust:weather:1
+      aqi_peak: 118
+      peak_window: 2026-05-19T14:00:00+08:00/2026-05-19T17:00:00+08:00
+    label: 空气质量
+    signal: world.weather
+  - mock:
+      id: mock:air_quality_kid_outdoor_adjust:calendar:2
+      event: 孩子户外体能课
+      starts_at: '2026-05-19T15:30:00+08:00'
+    label: 家庭日程
+    signal: calendar.event
+  - mock:
+      id: mock:air_quality_kid_outdoor_adjust:analysis:3
+      principle: sensitive_person_weather_action
+      first_order_signal: AQI 118
+      second_order_inference: 最差空气窗口撞上孩子户外活动
+      human_trigger: 家长责任感和提前照顾
+      communication_window: tonight_before_teacher_morning_reply
+      recommendation:
+      - 备口罩
+      - 问老师能否改室内
+      confidence: 0.82
+    label: 健康影响分析
+    signal: analysis.health_risk
+  signals_used:
+  - world.weather
+  - calendar.event
+  - analysis.health_risk
+  why_surprise: AQI 变得具体,因为它撞上孩子 15:30 的户外课
+  why_practical: 提前问老师,比临时焦虑更有用
+  wow_level: 5
+- pattern_id: weekend_weather_social_plan
+  card_category: 天气生活
+  human_need: 不错过窗口
+  entry_point: 周末天气
+  subtype: only_comfortable_weekend_slot
+  scenario: 周末唯一舒服天气窗口很短,用户最近想约朋友但还没发,不提前约大概率又宅过去
+  card:
+    body: '这周末不是“天气还行”,而是只有周六上午能舒服出门。
+
+      你上周说想约小李去河边走走,一直没开口。
+
+      现在发一句,比周六临时约更像真的会发生。
+
+      '
+    hook: 不约又会宅过去
+    title: 周六上午不约,这周又会宅过去｜现在发一句
+    action: 写一句邀约?
+  source_data:
+  - mock:
+      id: mock:weekend_weather_social_plan:weather:1
+      comfortable_slot: 2026-05-23T09:30:00+08:00/2026-05-23T11:30:00+08:00
+      afternoon_feels_like: 闷热
+    label: 周末天气
+    signal: world.weather
+  - mock:
+      id: mock:weekend_weather_social_plan:chat:2
+      dormant_intent: 约小李河边散步
+      mentioned_days_ago: 6
+    label: 最近想做的事
+    signal: chat.history
+  - mock:
+      id: mock:weekend_weather_social_plan:analysis:3
+      principle: weather_opportunity_plus_social_commitment
+      first_order_signal: 周六上午唯一舒服天气
+      second_order_inference: 需要提前约人,否则窗口无法兑现
+      human_trigger: 不想又把周末空过掉
+      reason_to_act_now: scheduling_lead_time
+      recommendation: send_invite_today
+    label: 周末机会分析
+    signal: analysis.pragmatic_day
+  signals_used:
+  - world.weather
+  - chat.history
+  - analysis.pragmatic_day
+  why_surprise: 把天气窗口变成“这周会不会又宅过去”的自我提醒
+  why_practical: 现在发一句能显著提高成行概率
+  wow_level: 4
+- pattern_id: ai_fortune_daily_work_luck
+  card_category: AI运势
+  human_need: 好奇掌控
+  entry_point: AI 算命
+  subtype: work_fortune_meeting_risk
+  scenario: 用户今天有关键会和潜在冲突,工作运不是判断顺逆,而是指出用户最容易在会上硬刚
+  card:
+    body: '今日工作运不是差,是容易在 10 点那场会里硬刚。
+
+      延期和砍需求都有道理,你直接站队会让会变成拉扯。
+
+      先进会前留一句退路:先保上线,范围下午再单独切。
+
+      '
+    hook: 今日工作运不是差
+    title: 今日工作运不是差,是 10 点容易硬刚｜先留一句退路
+    action: 写一句稳住全场的话?
+  source_data:
+  - mock:
+      id: mock:ai_fortune_daily_work_luck:calendar:1
+      key_meeting: 项目排期会
+      starts_at: '2026-05-18T10:00:00+08:00'
+      conflict_topic: 延期 vs 砍需求
+    label: 今日工作日程
+    signal: calendar.event
+  - mock:
+      id: mock:ai_fortune_daily_work_luck:chat:2
+      recent_tension: 需求范围未定
+      messages_24h: 14
+    label: 最近讨论
+    signal: chat.history
+  - mock:
+      id: mock:ai_fortune_daily_work_luck:analysis:3
+      principle: fortune_as_attention_wrapper
+      fortune_label: 工作运
+      first_order_signal: 10 点会议有延期和砍需求分歧
+      second_order_inference: 用户容易直接站队导致对抗
+      human_trigger: 想知道今天工作顺不顺,怕在关键会里出错
+      practical_reading: avoid_hard_confrontation_in_first_meeting
+      suggested_phrase: 先保上线,范围下午再单独切
+      disclaimer: 娱乐化入口,结论来自日程和讨论风险
+    label: AI 运势分析
+    signal: analysis.fortune_practical
+  signals_used:
+  - calendar.event
+  - chat.history
+  - analysis.fortune_practical
+  why_surprise: 运势没有停在“顺不顺”,而是指出用户今天最可能犯的反应
+  why_practical: 一句退路能降低会议对抗
+  wow_level: 5
+- pattern_id: ai_fortune_money_leak_guard
+  card_category: AI运势
+  human_need: 好奇掌控
+  entry_point: AI 算命
+  subtype: money_fortune_subscription
+  scenario: 今日有一笔小额订阅即将续费,财运入口抓的是用户明知道浪费但懒得取消
+  card:
+    body: '今日财运藏在一笔你大概率会懒得取消的钱里。
+
+      修图会员今晚续费 86 元,你 30 天只用过 1 次。
+
+      不是贵,是不用还自动扣;现在停掉只要 2 分钟。
+
+      '
+    hook: 今日财运是少漏钱
+    title: 今日财运藏在你懒得取消的 86 元｜2 分钟停掉
+    action: 打开取消入口?
+  source_data:
+  - mock:
+      id: mock:ai_fortune_money_leak_guard:gmail:1
+      merchant: 修图会员
+      renewal_at: '2026-05-18T23:00:00+08:00'
+      amount_yuan: 86
+    label: 续费邮件
+    signal: gmail.message
+  - mock:
+      id: mock:ai_fortune_money_leak_guard:memory:2
+      usage_30d: 1
+      last_used_days_ago: 21
+    label: 使用记忆
+    signal: memory.facts
+  - mock:
+      id: mock:ai_fortune_money_leak_guard:analysis:3
+      principle: loss_aversion
+      fortune_label: 财运
+      first_order_signal: 今晚自动续费 86 元
+      second_order_inference: 低使用但取消动作容易被拖延
+      human_trigger: 损失厌恶 + 对自己懒得处理的小羞耻
+      practical_reading: cancel_low_usage_subscription_before_auto_charge
+      action_cost_min: 2
+    label: AI 财运分析
+    signal: analysis.fortune_practical
+  signals_used:
+  - gmail.message
+  - memory.facts
+  - analysis.fortune_practical
+  why_surprise: 财运被解释成“懒得取消导致漏钱”,更像用户自己的真实问题
+  why_practical: 金额明确、动作耗时明确
+  wow_level: 5
+- pattern_id: ai_fortune_relationship_window
+  card_category: AI运势
+  human_need: 好奇掌控
+  entry_point: AI 算命
+  subtype: relationship_fortune_reply_window
+  scenario: 晚饭后有低压力窗口,用户对拖延回复感到尴尬,人缘运入口给他一个自然开口理由
+  card:
+    body: '今日人缘运不是桃花,是现在回小陈不尴尬。
+
+      饭后这 8 分钟你没有安排,对方也还没追问。
+
+      先发一句“这两天有点乱,我看到了,晚点认真回你”就够。
+
+      '
+    hook: 今日人缘运不是桃花
+    title: 今日人缘运不是桃花,是饭后回小陈不尴尬｜先发一句
+    action: 生成一句自然回复?
+  source_data:
+  - mock:
+      id: mock:ai_fortune_relationship_window:chat:1
+      contact: 小陈
+      unreplied_days: 2
+      relationship_importance: high
+    label: 关系消息
+    signal: chat.history
+  - mock:
+      id: mock:ai_fortune_relationship_window:calendar:2
+      low_pressure_window: 2026-05-18T20:10:00+08:00/2026-05-18T20:18:00+08:00
+      context: after_dinner
+    label: 低压力窗口
+    signal: calendar.event
+  - mock:
+      id: mock:ai_fortune_relationship_window:analysis:3
+      principle: fortune_as_social_permission
+      fortune_label: 人缘运
+      first_order_signal: 重要联系人消息拖延 2 天
+      second_order_inference: 饭后短窗口降低回复突兀感
+      human_trigger: 想维护关系但怕解释尴尬
+      practical_reading: reply_now_with_bridge_sentence
+      suggested_message: 这两天有点乱,我看到了,晚点认真回你
+    label: AI 人缘运分析
+    signal: analysis.fortune_practical
+  signals_used:
+  - chat.history
+  - calendar.event
+  - analysis.fortune_practical
+  why_surprise: 把人缘运落到“不尴尬”这个真实障碍
+  why_practical: 直接给出一句可发送文本
+  wow_level: 5
+- pattern_id: ai_fortune_energy_timing
+  card_category: AI运势
+  human_need: 好奇掌控
+  entry_point: AI 算命
+  subtype: energy_fortune_morning_peak
+  scenario: 用户今天不是状态好或差,而是上午有完整空档、下午会被切碎,适合把重活前移
+  card:
+    body: '今日状态不是差,是前高后碎。
+
+      9:30-10:50 还有完整空档,下午 5 个会会把注意力切碎。
+
+      最难那段方案如果拖到下午,很可能写两遍。
+
+      '
+    hook: 今日状态前高后碎
+    title: 今日状态前高后碎｜11 点前写最难那段
+    action: 把方案挪到 9:30?
+  source_data:
+  - mock:
+      id: mock:ai_fortune_energy_timing:device:1
+      sleep_hours: 6.2
+      morning_focus_window: 2026-05-18T09:30:00+08:00/2026-05-18T10:50:00+08:00
+    label: 今日状态
+    signal: device.health
+  - mock:
+      id: mock:ai_fortune_energy_timing:calendar:2
+      afternoon_meeting_count: 5
+      heavy_task: 方案初稿
+    label: 今日日程
+    signal: calendar.event
+  - mock:
+      id: mock:ai_fortune_energy_timing:analysis:3
+      principle: energy_window_planning
+      fortune_label: 状态运
+      first_order_signal: 上午完整空档,下午会议密集
+      second_order_inference: 重活拖到下午会被碎片化和疲劳放大
+      human_trigger: 想知道今天怎么安排才不返工
+      practical_reading: use_morning_for_heavy_task
+      avoid: dragging_heavy_task_into_fragmented_afternoon
+    label: AI 状态运分析
+    signal: analysis.fortune_practical
+  signals_used:
+  - device.health
+  - calendar.event
+  - analysis.fortune_practical
+  why_surprise: 不再泛说状态旺,而是给出“一天节奏图”
+  why_practical: 用户知道重活必须上午做
+  wow_level: 5
+- pattern_id: ai_fortune_travel_smoothness
+  card_category: AI运势
+  human_need: 好奇掌控
+  entry_point: AI 算命
+  subtype: travel_fortune_small_buffer
+  scenario: 今天出行不顺不是因为单个大风险,而是小雨、施工和会议时间压线叠在一起
+  card:
+    body: '今日出行运的坑不是雨。
+
+      是小雨、望京路口施工、16:00 会议这三件事刚好叠在一起。
+
+      提前 12 分钟走,这次倒霉组合基本能化解。
+
+      '
+    hook: 今日出行运的坑不是雨
+    title: 今日出行运的坑不是雨｜是小雨+施工刚好卡 16 点
+    action: 15:18 提醒出发?
+  source_data:
+  - mock:
+      id: mock:ai_fortune_travel_smoothness:weather:1
+      rain_window: 2026-05-18T15:30:00+08:00/2026-05-18T16:20:00+08:00
+      intensity: 小雨
+    label: 今日天气
+    signal: world.weather
+  - mock:
+      id: mock:ai_fortune_travel_smoothness:transit:2
+      road_work_near_destination: true
+      expected_delay_min: 12
+    label: 路况
+    signal: world.transit_status
+  - mock:
+      id: mock:ai_fortune_travel_smoothness:analysis:3
+      principle: small_buffer_removes_risk
+      fortune_label: 出行运
+      first_order_signal: 小雨和施工各自都不严重
+      second_order_inference: 两个小摩擦叠加到 16 点会议前形成压线风险
+      human_trigger: 怕迟到、怕一路狼狈
+      practical_reading: leave_12_min_earlier
+      buffer_needed_min: 12
+    label: AI 出行运分析
+    signal: analysis.fortune_practical
+  signals_used:
+  - world.weather
+  - world.transit_status
+  - analysis.fortune_practical
+  why_surprise: 指出真正的坑是多个小麻烦叠加,不是单纯下雨
+  why_practical: 明确提前 12 分钟即可化解
+  wow_level: 5
+- pattern_id: ai_fortune_avoid_bad_timing
+  card_category: AI运势
+  human_need: 好奇掌控
+  entry_point: AI 算命
+  subtype: avoid_sensitive_talk_bad_time
+  scenario: 用户准备傍晚推进敏感加价沟通,但双方状态都不适合,避坑运提供暂停理由和替代动作
+  card:
+    body: '今日避坑运:17 点别谈加价。
+
+      对方刚连开 4 场会,你自己 3.5 小时没休息,这不是谈敏感话题的窗口。
+
+      今天先发材料铺垫,明早 10 点再开口。
+
+      '
+    hook: 今日避坑运是别硬谈
+    title: 今日避坑运:17 点别谈加价｜对方累你也低能量
+    action: 生成一版材料说明?
+  source_data:
+  - mock:
+      id: mock:ai_fortune_avoid_bad_timing:calendar:1
+      sensitive_topic: 加价沟通
+      proposed_time: '2026-05-18T17:00:00+08:00'
+      counterpart_meetings_today: 4
+    label: 敏感沟通日程
+    signal: calendar.event
+  - mock:
+      id: mock:ai_fortune_avoid_bad_timing:device:2
+      user_afternoon_energy: low
+      last_break_hours_ago: 3.5
+    label: 用户状态
+    signal: device.health
+  - mock:
+      id: mock:ai_fortune_avoid_bad_timing:analysis:3
+      principle: avoid_bad_timing
+      fortune_label: 避坑运
+      first_order_signal: 对方会议负荷高,用户下午低能量
+      second_order_inference: 敏感加价话题容易被情绪和疲惫放大
+      human_trigger: 想推进但怕谈崩,需要一个合理暂停理由
+      safer_action: send_material_now_talk_tomorrow
+      suggested_time: '2026-05-19T10:00:00+08:00'
+    label: AI 避坑运分析
+    signal: analysis.fortune_practical
+  signals_used:
+  - calendar.event
+  - device.health
+  - analysis.fortune_practical
+  why_surprise: “今天不宜”背后给出双方状态证据,不是空泛玄学
+  why_practical: 提供更稳替代路径:先发材料,明早再谈
+  wow_level: 5

@@ -3738,7 +3738,7 @@ td {
   background: #fff;
 }
 .patterns-table {
-  min-width: 2260px;
+  min-width: 2640px;
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
@@ -3777,6 +3777,20 @@ td {
   font-weight: 600;
   color: #111827;
   line-height: 1.45;
+}
+.patterns-card-category {
+  min-width: 120px;
+  max-width: 160px;
+  color: #374151;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.patterns-human-need,
+.patterns-entry-point {
+  min-width: 120px;
+  max-width: 160px;
+  color: #374151;
+  white-space: nowrap;
 }
 .patterns-human-insight {
   min-width: 360px;

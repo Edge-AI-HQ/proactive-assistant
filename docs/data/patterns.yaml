@@ -1,4 +1,4 @@
-# Pattern Library v0 — 111 条 abstract pattern
+# Pattern Library v0 — 157 条 abstract pattern
 #
 # 设计原则:
 # 1. abstract pattern 定义的是"用户认知/行为模式",不是 entity subtype
@@ -27,7 +27,7 @@
 
 version: v0
 generated_at: 2026-05-15
-total_patterns: 111
+total_patterns: 157
 
 # ===================================================================
 # Signal Ontology(被 pattern 引用的 signal 树)
@@ -2871,3 +2871,1220 @@ patterns:
   surprise: m
   practical: h
   tier: warmup
+- id: gps_hospital_parking_pharmacy
+  category: contextual_recommendation
+  abstract: 用户在医院停留,结合停车、取药和复查事项给出少操心提醒
+  human_insight: 人在医院时真正需要的是被照顾和少排错队,把具体麻烦先算好会比单纯定位更暖。
+  title_strategy:
+    avoid: 泛泛“检测到医院”或“注意健康”;必须带医院内具体麻烦和动作
+    example: 你在医院待了 42 分钟｜先看取药排队和停车费
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - gps.current
+  - calendar.event
+  - world.public_data
+  - memory.facts
+  trigger:
+  - op: poi_category_match
+    source: gps
+    category: hospital
+  - op: dwell_min_gte
+    source: gps
+    min: 30
+  intent: care_logistics
+  card_skeleton:
+    hook: 医院停留 + 具体下一步
+    action: 看取药/停车/复查提醒
+    why_now: 仍在医院
+    evidence: GPS POI + 日历 + 取药排队 + 记忆
+  surprise: h
+  practical: h
+  tier: cold_start_friendly
+- id: gps_airport_gate_walk_risk
+  category: time_buffer_risk
+  abstract: 用户在机场,登机口距离、安检状态或变更导致需要立刻移动
+  human_insight: 人在机场最怕误机和临场找路,把“现在走刚好”说清楚会立刻触发点击。
+  title_strategy:
+    avoid: 泛泛“航班提醒”;必须写出登机口/时间差/走路动作
+    example: 你在 T3,登机口变远了｜现在走刚好
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - gps.current
+  - calendar.event
+  - gmail.message
+  - world.public_data
+  trigger:
+  - op: airport_poi_active
+    source: gps
+  - op: boarding_gate_walk_risk
+    source: combined
+  intent: travel_logistics
+  card_skeleton:
+    hook: 机场位置 + 登机口风险
+    action: 现在导航去登机口
+    why_now: 登机窗口临近
+    evidence: GPS + 航班邮件 + 登机口距离
+  surprise: h
+  practical: h
+  tier: cold_start_friendly
+- id: gps_rain_walk_window_now
+  category: contextual_recommendation
+  abstract: 用户当前位置即将下雨,结合下一段步行或出门计划给出避雨窗口
+  human_insight: 天气只有影响到人的下一步路线时才值得点,提前 10-20 分钟给窗口最有行动价值。
+  title_strategy:
+    avoid: 泛泛“即将下雨”;必须指出影响哪段路和现在动作
+    example: 附近暴雨 18 分钟后到｜现在走能避开最堵一段
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - gps.current
+  - world.weather.current_at_user_location
+  - calendar.event
+  trigger:
+  - op: rain_arrival_minutes_lte
+    source: weather
+    minutes: 20
+  - op: next_route_has_walk_segment
+    source: combined
+  intent: local_weather_assist
+  card_skeleton:
+    hook: 雨到达倒计时 + 影响路线
+    action: 现在走/晚点走
+    why_now: 降雨窗口
+    evidence: GPS + 小时级天气 + 下一段行程
+  surprise: m
+  practical: h
+  tier: cold_start_friendly
+- id: gps_office_first_25_min
+  category: state_transition
+  abstract: 用户刚到公司,结合日程、未读事项和精力状态保护开工前第一个专注窗口
+  human_insight: 刚到公司的人最容易被杂事打散,先帮他守住 25 分钟会显得系统很懂工作节奏。
+  title_strategy:
+    avoid: 泛泛“开始工作”;必须写出时间窗口和优先动作
+    example: 刚到公司,9:30 前只有 22 分钟｜先处理最要紧那件
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - gps.current
+  - gps.inferences.office_cluster
+  - calendar.event
+  - gmail.message
+  - device.health
+  trigger:
+  - op: arrived_at_office
+    source: gps
+  - op: free_window_before_first_meeting
+    source: calendar
+    minutes_gte: 15
+  intent: workday_priority
+  card_skeleton:
+    hook: 到公司 + 首个空窗
+    action: 锁定最重要任务
+    why_now: 刚进入工作状态
+    evidence: GPS + 日程 + 未读事项 + 精力
+  surprise: h
+  practical: h
+  tier: warmup
+- id: meal_queue_swap_now
+  category: contextual_recommendation
+  abstract: 午餐窗口结合位置、历史偏好和实时排队,推荐立即替换选择
+  human_insight: 吃饭决策最烦的是排队和反复纠结,直接给更稳替代能立刻减少选择成本。
+  title_strategy:
+    avoid: 泛泛“附近美食推荐”;必须包含排队差异和动作
+    example: 这家店排队 38 分钟｜旁边那家更适合现在
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - gps.current
+  - gps.history_window
+  - profile.preferences
+  - world.public_data
+  trigger:
+  - op: meal_window_now
+    source: combined
+  - op: preferred_place_queue_too_long
+    source: public_data
+    min_wait: 30
+  intent: food_decision
+  card_skeleton:
+    hook: 常去店排队 + 替代选择
+    action: 导航到更稳那家
+    why_now: 用餐窗口
+    evidence: GPS + 偏好 + 排队 + 历史
+  surprise: m
+  practical: h
+  tier: warmup
+- id: relationship_birthday_price_window
+  category: relationship_care
+  abstract: 重要人的生日或纪念日临近,结合价格/配送窗口给出低成本关心动作
+  human_insight: 人不想错过重要关系,但会拖到最后一刻;把关心和省钱窗口绑在一起最容易行动。
+  title_strategy:
+    avoid: 泛泛“生日快到了”;必须写出倒计时、价格或配送窗口和动作
+    example: 妈妈生日还有 3 天｜现在订花比明天便宜 40 元
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - calendar.event
+  - memory.facts
+  - world.public_data
+  trigger:
+  - op: important_date_days_lte
+    source: memory_or_calendar
+    days: 5
+  - op: delivery_or_price_window_now
+    source: public_data
+  intent: relationship_action
+  card_skeleton:
+    hook: 重要日期倒计时 + 省钱窗口
+    action: 订花/礼物/消息
+    why_now: 配送和价格窗口
+    evidence: 纪念日 + 价格/配送数据
+  surprise: h
+  practical: h
+  tier: warmup
+- id: promise_progress_three_sentences
+  category: commitment_followup
+  abstract: 用户承诺过的事项拖延多日,帮用户先发三句低摩擦进度
+  human_insight: 未兑现承诺会形成心理负债,把“解释成本”降到三句话能让用户愿意立刻补救。
+  title_strategy:
+    avoid: 泛泛“你有待办”;必须写出对象、拖延天数和低摩擦动作
+    example: 你答应老周的文档拖了 6 天｜现在发 3 句进度
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - chat.history
+  - gmail.message
+  - calendar.event
+  trigger:
+  - op: promised_followup_open
+    source: chat_or_email
+    days_gte: 3
+  intent: commitment_repair
+  card_skeleton:
+    hook: 承诺对象 + 拖延天数
+    action: 起草三句进度
+    why_now: 已拖延且仍未关闭
+    evidence: 聊天/邮件承诺 + 无完成记录
+  surprise: h
+  practical: h
+  tier: warmup
+- id: parent_meeting_conflict_guard
+  category: time_buffer_risk
+  abstract: 家庭/孩子相关事件和工作会议冲突,提前保护用户不临场失约
+  human_insight: 家庭责任冲突会带来强焦虑,提前把冲突变成可调整动作能建立信任。
+  title_strategy:
+    avoid: 泛泛“日程冲突”;必须写出孩子/家庭事件和提前动作
+    example: 孩子 10:30 家长会｜你 9:50 这个会该提前结束
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - calendar.event
+  - memory.facts
+  - chat.history
+  trigger:
+  - op: family_event_conflicts_work_meeting
+    source: calendar
+  intent: family_time_guard
+  card_skeleton:
+    hook: 家庭事件 + 工作冲突
+    action: 提前结束/改会议
+    why_now: 还有缓冲时间
+    evidence: 家庭日程 + 工作会议
+  surprise: h
+  practical: h
+  tier: warmup
+- id: bill_due_tomorrow_fee_risk
+  category: warning
+  abstract: 账单或订阅明天到期,结合滞纳金或价格变化给出立刻处理动作
+  human_insight: 人对金钱损失和到期特别敏感,把少花多少钱写清楚会天然吸引点击。
+  title_strategy:
+    avoid: 泛泛“账单提醒”;必须写出明天到期和损失金额
+    example: 这张账单明天到期｜现在付能少一笔滞纳金
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - gmail.message
+  - calendar.event
+  - memory.facts
+  trigger:
+  - op: bill_due_days_lte
+    source: email
+    days: 1
+  - op: late_fee_or_price_risk
+    source: email
+  intent: money_risk_prevention
+  card_skeleton:
+    hook: 账单到期 + 损失金额
+    action: 现在支付/检查
+    why_now: 到期前最后窗口
+    evidence: 邮件账单 + 到期日 + 金额
+  surprise: m
+  practical: h
+  tier: cold_start_friendly
+- id: energy_no_heavy_decision
+  category: health_awareness
+  abstract: 用户连续高负荷工作或睡眠不足时,提醒把重决策移到更合适时间
+  human_insight: 人在疲惫时容易做坏决定,被提醒“先别做重决策”会觉得被保护。
+  title_strategy:
+    avoid: 泛泛“注意休息”;必须写出负荷证据和要避开的决策
+    example: 你今天连轴转 6 小时｜下一件别做重决策
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - device.health
+  - calendar.event
+  - chat.history
+  trigger:
+  - op: cognitive_load_high
+    source: combined
+  - op: upcoming_decision_heavy
+    source: calendar_or_chat
+  intent: state_awareness
+  card_skeleton:
+    hook: 高负荷证据 + 重决策风险
+    action: 延后/先做轻任务
+    why_now: 决策前
+    evidence: 睡眠/会议密度/待办内容
+  surprise: m
+  practical: h
+  tier: warmup
+- id: client_price_floor_prep
+  category: preparation_gap
+  abstract: 客户会议前识别对方反复关注价格或合同条款,提醒先准备底线话术
+  human_insight: 人怕临场被问倒,尤其是价格和底线问题;提前给一句能说出口的话最实用。
+  title_strategy:
+    avoid: 泛泛“准备会议”;必须写出客户惯常问题和准备动作
+    example: 这个客户每次都问价格｜会前先准备一句底线
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - calendar.event
+  - gmail.message
+  - chat.history
+  trigger:
+  - op: upcoming_external_meeting
+    source: calendar
+  - op: recurring_topic_match
+    source: email_or_chat
+    topic: pricing
+  intent: meeting_prep
+  card_skeleton:
+    hook: 客户 + 反复问题
+    action: 准备底线话术
+    why_now: 会前
+    evidence: 历史邮件/聊天 + 日程
+  surprise: h
+  practical: h
+  tier: warmup
+- id: weekend_single_good_weather_slot
+  category: latent_opportunity
+  abstract: 本周只有一个好天气和空闲重合窗口,把兴趣或户外计划变成具体出门动作
+  human_insight: 人会被稀缺窗口推动行动,特别是“本周唯一一次”这种错过成本明确的机会。
+  title_strategy:
+    avoid: 泛泛“天气不错”;必须写出唯一窗口和具体动作
+    example: 周六下午是唯一好天气｜14:30 出门别浪费
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - world.weather
+  - calendar.event
+  - profile.preferences
+  - gps.history_window
+  trigger:
+  - op: only_good_weather_free_slot
+    source: combined
+    days: 7
+  intent: opportunity_capture
+  card_skeleton:
+    hook: 唯一好天气 + 空闲窗口
+    action: 出门/安排活动
+    why_now: 窗口稀缺
+    evidence: 天气 + 日程 + 偏好
+  surprise: m
+  practical: h
+  tier: warmup
+- id: planning_fallacy_scope_cut
+  category: decision_under_constraint
+  abstract: 用户低估任务剩余工作量,结合真实可用深工时间和截止期提醒先砍范围
+  human_insight: 人常高估未来空闲、低估任务成本;直接指出“你不是缺努力,是范围太大”会让提醒像救命而不是催促。
+  title_strategy:
+    avoid: 泛泛“任务快到期”;必须写出真实剩余深工时间和立刻缩范围动作
+    example: 你以为周五有空,其实只剩 46 分钟｜今天先砍范围
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - calendar.event
+  - chat.history
+  - memory.facts
+  trigger:
+  - op: deadline_with_overoptimistic_plan
+    source: combined
+  - op: deep_work_minutes_lt_estimate
+    source: calendar
+  intent: scope_reduction
+  card_skeleton:
+    hook: 计划错觉 + 真实可用时间
+    action: 砍范围/先交最小版本
+    why_now: 截止前仍能补救
+    evidence: 日历空档 + 历史拖延 + 任务估算
+  surprise: h
+  practical: h
+  tier: warmup
+- id: unfinished_loop_closure_note
+  category: commitment_followup
+  abstract: 用户反复提到但未收口的任务造成心理负担,给出低成本结束语
+  human_insight: 未完成任务会持续占用注意力;把“收口”降成 5 句话,用户会觉得系统在帮他卸下心理负债。
+  title_strategy:
+    avoid: 泛泛“继续处理任务”;必须写出拖延天数和最小收口动作
+    example: 这个任务在脑子里转了 4 天｜今晚用 5 句收口
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - chat.history
+  - gmail.message
+  - calendar.event
+  trigger:
+  - op: repeated_unfinished_topic
+    source: combined
+    min_days: 3
+  - op: no_clear_next_action
+    source: chat_or_email
+  intent: commitment_repair
+  card_skeleton:
+    hook: 未完成任务 + 心理占用
+    action: 生成收口说明
+    why_now: 晚间低干扰窗口
+    evidence: 重复提及 + 未回复邮件 + 无后续日程
+  surprise: h
+  practical: h
+  tier: warmup
+- id: receptivity_window_sensitive_message
+  category: relationship_care
+  abstract: 识别对方和用户都更可能接收消息的窗口,把关心动作放到低打扰时机
+  human_insight: 关系提醒难点不是“要不要关心”,而是怕打扰、怕尴尬;找到双方都轻松的窗口才会让用户敢发。
+  title_strategy:
+    avoid: 泛泛“联系一下”;必须写出低打扰窗口和一句可发送动作
+    example: 现在是今天最不打扰的 12 分钟｜把那句关心发了
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - calendar.event
+  - chat.history
+  - memory.facts
+  trigger:
+  - op: mutual_receptivity_window
+    source: combined
+  - op: relationship_care_due
+    source: memory
+  intent: relationship_care
+  card_skeleton:
+    hook: 低打扰窗口 + 关系动作
+    action: 发一条具体关心
+    why_now: 双方都处在可接收窗口
+    evidence: 双方日程节奏 + 历史联系间隔 + 关系记忆
+  surprise: h
+  practical: h
+  tier: mature
+- id: subscription_loss_vs_use_check
+  category: financial
+  abstract: 订阅续费前结合使用频率、替代方案和取消成本,判断是保留还是取消
+  human_insight: 人对“正在流失的钱”比抽象省钱更敏感;把损失、使用和取消摩擦算成一个判断更容易点击。
+  title_strategy:
+    avoid: 泛泛“订阅要续费”;必须写出未使用天数和明确二选一
+    example: 这笔会员不是贵,是你 23 天没用｜今晚取消或保留
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - gmail.message
+  - device.health
+  - memory.facts
+  trigger:
+  - op: renewal_with_low_usage
+    source: combined
+  - op: cancellation_window_open
+    source: email
+  intent: financial_optimization
+  card_skeleton:
+    hook: 续费损失 + 实际使用
+    action: 取消/降级/保留
+    why_now: 自动续费前
+    evidence: 账单邮件 + 使用记录 + 替代方案
+  surprise: m
+  practical: h
+  tier: cold_start_friendly
+- id: commute_regret_tradeoff
+  category: time_buffer_risk
+  abstract: 出行前比较时间、费用、迟到概率和疲劳,给出后悔值最低的交通选择
+  human_insight: 人出门前不是只想最快,而是想事后不后悔;把省钱、准时和体力折成一个结论会比路线罗列更有用。
+  title_strategy:
+    avoid: 泛泛“路况拥堵”;必须写出金钱/时间取舍和推荐方式
+    example: 打车只省 9 分钟但多花 74 元｜今天坐地铁更稳
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - gps.current
+  - calendar.event
+  - world.transit_status
+  - device.health
+  trigger:
+  - op: commute_tradeoff_regret_score
+    source: combined
+  - op: departure_window_now
+    source: calendar
+  intent: travel_logistics
+  card_skeleton:
+    hook: 出行取舍 + 后悔值
+    action: 选交通方式
+    why_now: 出门前
+    evidence: 路况 + 费用 + 准时概率 + 精力
+  surprise: h
+  practical: h
+  tier: cold_start_friendly
+- id: meeting_hidden_stance_gap
+  category: preparation_gap
+  abstract: 会前识别真正缺的不是资料而是立场,提醒先写一句可说出口的观点
+  human_insight: 很多会前焦虑来自“不知道自己站哪边”;系统指出隐藏准备缺口,比整理资料更有穿透力。
+  title_strategy:
+    avoid: 泛泛“准备会议材料”;必须写出隐藏缺口和一句立场动作
+    example: 你资料够了,缺的是一句立场｜会前 8 分钟先定下来
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - calendar.event
+  - gmail.message
+  - chat.history
+  trigger:
+  - op: upcoming_decision_meeting
+    source: calendar
+  - op: evidence_sufficient_stance_missing
+    source: combined
+  intent: meeting_prep
+  card_skeleton:
+    hook: 隐藏准备缺口
+    action: 写一句立场/底线
+    why_now: 会前
+    evidence: 资料数量 + 讨论分歧 + 历史观点缺失
+  surprise: h
+  practical: h
+  tier: warmup
+- id: social_debt_two_sentence_repair
+  category: relationship_care
+  abstract: 用户迟迟没回复重要联系人,识别障碍是解释成本而不是忘记,给出两句修复
+  human_insight: 关系拖延常常不是不在乎,而是解释成本太高;把动作压成两句话能跨过羞耻和逃避。
+  title_strategy:
+    avoid: 泛泛“该回复了”;必须写出拖延天数和低成本修复动作
+    example: 你不是不想回,是怕解释太久｜发这 2 句先修复
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - gmail.message
+  - chat.history
+  - memory.facts
+  trigger:
+  - op: important_contact_unreplied
+    source: combined
+    min_days: 3
+  - op: reply_cost_barrier_detected
+    source: chat_history
+  intent: relationship_repair
+  card_skeleton:
+    hook: 关系欠账 + 解释成本
+    action: 生成两句回复
+    why_now: 对方还未追问前
+    evidence: 未回复时长 + 联系人重要性 + 用户回避表达
+  surprise: h
+  practical: h
+  tier: warmup
+- id: recovery_risk_evening_guard
+  category: health_awareness
+  abstract: 连续低恢复状态下识别晚间高刺激计划,提醒把目标从硬撑改成恢复
+  human_insight: 人在疲惫时仍想证明自己能扛;被提醒“今晚不是自律,是止损”会更容易接受。
+  title_strategy:
+    avoid: 泛泛“早点休息”;必须写出连续下滑和今晚替代动作
+    example: 恢复值连续 3 天下滑｜今晚别硬练,直接止损
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - device.health
+  - calendar.event
+  - profile.preferences
+  trigger:
+  - op: recovery_trend_down
+    source: device
+    days: 3
+  - op: evening_high_stimulus_plan
+    source: calendar_or_profile
+  intent: health_guard
+  card_skeleton:
+    hook: 恢复趋势 + 过载风险
+    action: 替换成恢复计划
+    why_now: 晚间选择前
+    evidence: 睡眠/HRV + 训练计划 + 明早日程
+  surprise: m
+  practical: h
+  tier: warmup
+- id: city_event_route_collision
+  category: time_buffer_risk
+  abstract: 本地大型活动散场和用户路线冲突,提前预测拥堵并给出离开窗口
+  human_insight: 人讨厌被城市事件突然拖住;提前把公共事件翻译成“你要几点走”会非常实用。
+  title_strategy:
+    avoid: 泛泛“附近有活动”;必须写出散场冲突和提前离开动作
+    example: 你下班路线会撞上演唱会散场｜提前 25 分钟走
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - gps.current
+  - calendar.event
+  - world.public_data
+  - world.transit_status
+  trigger:
+  - op: local_event_route_collision
+    source: combined
+  - op: delay_delta_min_gte
+    source: transit
+    min: 20
+  intent: travel_logistics
+  card_skeleton:
+    hook: 路线 + 城市事件冲突
+    action: 提前离开/改路线
+    why_now: 拥堵形成前
+    evidence: 活动散场时间 + 通勤路线 + 实时交通
+  surprise: h
+  practical: h
+  tier: cold_start_friendly
+- id: fresh_start_skill_restart
+  category: growth
+  abstract: 时间地标和短空档重合时,帮用户重启一个长期想恢复的小技能
+  human_insight: 人更愿意在“新一周/新一天”重启身份目标;把目标压成 12 分钟,会同时利用新开始感和低行动成本。
+  title_strategy:
+    avoid: 泛泛“继续学习”;必须写出时间地标和极小动作
+    example: 周一早上是重启窗口｜用 12 分钟把英语捡回来
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - calendar.event
+  - memory.skills
+  - profile.preferences
+  trigger:
+  - op: temporal_landmark_now
+    source: calendar
+  - op: dormant_goal_low_friction_window
+    source: memory
+  intent: growth_revival
+  card_skeleton:
+    hook: 新开始窗口 + 低摩擦动作
+    action: 开始 12 分钟练习
+    why_now: 时间地标
+    evidence: 长期目标 + 空档 + 上次练习时间
+  surprise: m
+  practical: h
+  tier: warmup
+- id: morning_outdoor_readiness_pack
+  category: contextual_recommendation
+  abstract: 普通早晨出门前,结合天气、日程和常遗忘物品提醒用户先把关键东西放进包里
+  human_insight: 早上最烦的是出门后才想起少带东西;提醒必须在还来得及补救时出现,并且只说今天真正需要的东西。
+  title_strategy:
+    avoid: 泛泛“今日提醒”;必须写出出门前窗口和具体物品动作
+    example: 出门前还有 11 分钟｜先把伞和钥匙放包里
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - calendar.event
+  - world.weather
+  - memory.facts
+  trigger:
+  - op: pre_departure_window
+    source: calendar
+  - op: item_needed_today
+    source: combined
+  intent: morning_readiness
+  card_skeleton:
+    hook: 出门倒计时 + 今日必需物
+    action: 先放包里
+    why_now: 出门前
+    evidence: 天气 + 日程地点 + 遗忘历史
+  surprise: m
+  practical: h
+  tier: cold_start_friendly
+- id: breakfast_before_caffeine_meeting
+  category: health_awareness
+  abstract: 早上空腹、咖啡和重要会议叠加时,提醒先吃一点低成本早餐再开会
+  human_insight: 普通人早上常用咖啡硬撑,但真正的问题是 10 点后能量崩;提醒用“别崩”比“健康饮食”更容易被接受。
+  title_strategy:
+    avoid: 泛泛“记得吃早餐”;必须写出下一场会和低成本食物动作
+    example: 10:30 要开会,别空腹喝第二杯｜先买个鸡蛋
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - device.health
+  - calendar.event
+  - gps.current
+  trigger:
+  - op: morning_meeting_with_low_food_signal
+    source: combined
+  - op: nearby_quick_breakfast_available
+    source: gps
+  intent: health_guard
+  card_skeleton:
+    hook: 空腹 + 重要会
+    action: 买一个低成本早餐
+    why_now: 会前
+    evidence: 睡眠/进食信号 + 日程 + 附近店
+  surprise: m
+  practical: h
+  tier: cold_start_friendly
+- id: commute_one_train_buffer
+  category: time_buffer_risk
+  abstract: 上班通勤前识别再晚几分钟会多挤或迟到,给出现在出门的朴素建议
+  human_insight: 通勤提醒最有用的不是路线信息,而是让用户少遭一次挤车和迟到焦虑。
+  title_strategy:
+    avoid: 泛泛“路上拥堵”;必须写出晚几分钟的具体代价和出门动作
+    example: 再晚 6 分钟就要多挤一班｜现在出门
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - gps.current
+  - calendar.event
+  - world.transit_status
+  trigger:
+  - op: commute_departure_buffer_shrinking
+    source: combined
+  - op: train_or_bus_headway_penalty
+    source: transit
+  intent: travel_logistics
+  card_skeleton:
+    hook: 再晚几分钟的代价
+    action: 现在出门
+    why_now: 通勤窗口
+    evidence: 当前位置 + 首会时间 + 班次/路况
+  surprise: m
+  practical: h
+  tier: cold_start_friendly
+- id: first_office_reply_unblock
+  category: preparation_gap
+  abstract: 到公司后的第一个安静窗口,提醒先处理一封会阻塞别人或自己的关键消息
+  human_insight: 普通工作日的价值常来自先解一个小堵点;系统帮用户识别“第一封该回的”比展示未读列表更实用。
+  title_strategy:
+    avoid: 泛泛“处理未读”;必须写出安静窗口和卡住几天的消息
+    example: 9:40 前没人打扰｜先回那封卡了 2 天的邮件
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - gps.current
+  - calendar.event
+  - gmail.message
+  trigger:
+  - op: arrived_office_first_quiet_window
+    source: combined
+  - op: blocking_message_unreplied
+    source: gmail
+  intent: work_unblock
+  card_skeleton:
+    hook: 开工安静窗口 + 关键未回
+    action: 先回一封
+    why_now: 刚到公司
+    evidence: 到达办公室 + 日程空档 + 未回复时长
+  surprise: m
+  practical: h
+  tier: warmup
+- id: pre_meeting_one_sentence_conclusion
+  category: preparation_gap
+  abstract: 普通会前几分钟,提醒用户先写一句结论而不是继续翻材料
+  human_insight: 会前最实用的准备常常不是再读一遍,而是知道自己第一句话要说什么。
+  title_strategy:
+    avoid: 泛泛“准备会议”;必须写出剩余分钟和一句结论动作
+    example: 10:00 会前还有 7 分钟｜先写一句结论
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - calendar.event
+  - gmail.message
+  - chat.history
+  trigger:
+  - op: meeting_starts_soon
+    source: calendar
+    max_min: 10
+  - op: conclusion_missing
+    source: combined
+  intent: meeting_prep
+  card_skeleton:
+    hook: 会前短窗口 + 缺结论
+    action: 写一句开场结论
+    why_now: 会前
+    evidence: 日程 + 资料 + 最近讨论
+  surprise: m
+  practical: h
+  tier: warmup
+- id: lunch_fast_enough_choice
+  category: contextual_recommendation
+  abstract: 普通午饭窗口中,结合排队、下午日程和预算推荐最快够好的选择
+  human_insight: 午饭不是美食探索时,用户最需要的是“够好、够快、别踩雷”的决定。
+  title_strategy:
+    avoid: 泛泛“推荐附近餐厅”;必须写出排队代价和更稳选择
+    example: 这家排队 28 分钟,下午还有会｜今天选快的
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - gps.current
+  - calendar.event
+  - world.public_data
+  trigger:
+  - op: lunch_window_with_next_meeting
+    source: combined
+  - op: queue_time_too_high
+    source: places
+  intent: food_decision
+  card_skeleton:
+    hook: 排队代价 + 下午约束
+    action: 换成快而稳的店
+    why_now: 午饭窗口
+    evidence: 附近排队 + 日程 + 预算/偏好
+  surprise: m
+  practical: h
+  tier: cold_start_friendly
+- id: afternoon_slump_low_brain_tasks
+  category: energy_management
+  abstract: 下午低谷时识别不适合硬写方案,把任务切到低脑力但有价值的杂事
+  human_insight: 普通人下午低谷不是不努力,是任务类型选错了;把低能量时间用在低脑力任务会减少挫败感。
+  title_strategy:
+    avoid: 泛泛“休息一下”;必须写出低谷时间和替代任务
+    example: 14:20 是低谷,别硬写方案｜先处理报销和确认
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - device.health
+  - calendar.event
+  - chat.history
+  trigger:
+  - op: afternoon_energy_dip
+    source: device_or_pattern
+  - op: low_brain_tasks_available
+    source: combined
+  intent: energy_management
+  card_skeleton:
+    hook: 下午低谷 + 任务错配
+    action: 切到低脑力任务
+    why_now: 能量低谷
+    evidence: 精力模式 + 待办类型 + 日程
+  surprise: m
+  practical: h
+  tier: warmup
+- id: commute_errand_bundle
+  category: opportunity_window
+  abstract: 下班或外出路线经过小任务地点时,提醒顺路办掉一个明天会麻烦的小事
+  human_insight: 顺路提醒的价值在于少跑一趟;普通人会为“明天不用专门出门”点击。
+  title_strategy:
+    avoid: 泛泛“附近有药店/超市”;必须写出顺路和明天会用
+    example: 下班路上会经过药店｜顺手买明早要用的
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - gps.current
+  - calendar.event
+  - memory.facts
+  - world.public_data
+  trigger:
+  - op: route_passes_errand_place
+    source: combined
+  - op: errand_due_soon
+    source: memory_or_calendar
+  intent: errand_bundle
+  card_skeleton:
+    hook: 顺路 + 明天需要
+    action: 顺手办掉
+    why_now: 路过前
+    evidence: 通勤路线 + 任务记忆 + 附近地点
+  surprise: m
+  practical: h
+  tier: warmup
+- id: dinner_use_expiring_food
+  category: financial
+  abstract: 晚饭前结合冰箱/购物记忆、外卖习惯和食材到期,建议先用掉快过期食材
+  human_insight: 人不是不知道省钱,而是晚饭前决策太累;把“今晚不点外卖”的理由压成食材快过期和 20 分钟做法更有效。
+  title_strategy:
+    avoid: 泛泛“健康吃饭”;必须写出快过期食材和省事动作
+    example: 鸡胸肉今晚到期｜别点外卖,20 分钟做掉
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - memory.facts
+  - gmail.message
+  - gps.current
+  trigger:
+  - op: food_expiry_before_next_meal
+    source: memory
+  - op: meal_order_risk_high
+    source: combined
+  intent: financial_optimization
+  card_skeleton:
+    hook: 食材到期 + 外卖冲动
+    action: 给 20 分钟做法
+    why_now: 晚饭前
+    evidence: 购物记录 + 到期记忆 + 饭点
+  surprise: m
+  practical: h
+  tier: warmup
+- id: after_dinner_family_reply
+  category: relationship_care
+  abstract: 晚饭后低压力窗口提醒用户回复家人或亲近的人,避免拖到睡前变成负担
+  human_insight: 家人消息常被拖延,不是不重要,而是白天太碎;饭后一个低压力窗口最适合用一句话维护关系。
+  title_strategy:
+    avoid: 泛泛“联系家人”;必须写出饭后窗口和一句回复动作
+    example: 饭后这 8 分钟最适合回家里消息｜先发一句
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - chat.history
+  - calendar.event
+  - memory.facts
+  trigger:
+  - op: after_dinner_low_pressure_window
+    source: combined
+  - op: family_message_unreplied
+    source: chat
+  intent: relationship_care
+  card_skeleton:
+    hook: 饭后窗口 + 家人未回
+    action: 发一句回复
+    why_now: 晚间低压力
+    evidence: 家人消息 + 日程空档 + 联系习惯
+  surprise: m
+  practical: h
+  tier: warmup
+- id: evening_admin_two_minute_bill
+  category: financial
+  abstract: 晚间短空档提醒处理一个明天截止、只需两分钟的小账单或行政事项
+  human_insight: 行政小事可怕在拖到最后一刻;明确“只要两分钟”能把行动门槛降下来。
+  title_strategy:
+    avoid: 泛泛“账单提醒”;必须写出截止和耗时
+    example: 水费明天截止,只要 2 分钟｜洗澡前顺手付了
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - gmail.message
+  - calendar.event
+  - memory.facts
+  trigger:
+  - op: small_admin_due_tomorrow
+    source: combined
+  - op: evening_short_slot_available
+    source: calendar
+  intent: financial_optimization
+  card_skeleton:
+    hook: 明天截止 + 两分钟
+    action: 现在处理
+    why_now: 晚间短空档
+    evidence: 账单邮件 + 日程空档 + 历史处理耗时
+  surprise: l
+  practical: h
+  tier: cold_start_friendly
+- id: bedtime_phone_distance_guard
+  category: health_awareness
+  abstract: 睡前识别刷手机会错过睡眠窗口,建议把手机充电放远一点
+  human_insight: 睡前提醒不能讲大道理,要给一个能立刻执行的物理动作,比如把手机放远。
+  title_strategy:
+    avoid: 泛泛“早点睡”;必须写出再刷的代价和物理动作
+    example: 再刷 20 分钟会错过睡眠窗口｜现在充电放远点
+    formula: 具体事实/数字/时间 + 人性刺点 + 立刻动作
+  signals:
+  - device.health
+  - calendar.event
+  - profile.preferences
+  trigger:
+  - op: bedtime_window_open
+    source: device
+  - op: next_morning_requires_sleep
+    source: calendar
+  intent: health_guard
+  card_skeleton:
+    hook: 睡眠窗口 + 刷手机代价
+    action: 充电放远
+    why_now: 睡前
+    evidence: 当前时间 + 屏幕使用 + 明早日程
+  surprise: l
+  practical: h
+  tier: cold_start_friendly
+- id: today_weather_outfit_action
+  category: contextual_recommendation
+  abstract: 今天的天气存在容易误判的体感冲突,结合用户会在哪里暴露在户外给出穿带决策
+  human_insight: 天气卡片要先指出“你会误判什么”,再说明这个误判会让用户在哪个具体时刻狼狈。
+  title_strategy:
+    avoid: 只写温度/降雨/穿搭建议;必须写出误判点、暴露场景和补救动作
+    example: 今天 24 度会骗你｜15:20 出客户楼前先拿伞
+    formula: 表层天气误导 + 用户暴露时刻 + 立刻补救动作
+  signals:
+  - world.weather
+  - calendar.event
+  - gps.current
+  trigger:
+  - op: weather_affects_outfit_today
+    source: combined
+  - op: user_has_outdoor_or_external_plan
+    source: calendar
+  intent: weather_practical
+  card_skeleton:
+    hook: 今日天气误判点 + 暴露时刻
+    action: 穿带补救动作
+    why_now: 出门前还能改
+    evidence: 最高温误导 + 体感/风/雨窗口 + 户外暴露段
+  surprise: m
+  practical: h
+  tier: cold_start_friendly
+- id: tomorrow_weather_laundry_window
+  category: opportunity_window
+  abstract: 明天天气里存在短暂家务窗口,把“明天看天气”的好奇变成今晚必须做的小准备
+  human_insight: 普通人会点明天天气,但真正触发行动的是“错过这个窗口,麻烦会延后好几天”。
+  title_strategy:
+    avoid: 只写明天晴/适合洗衣;必须写出错过成本和今晚动作
+    example: 不是明天晴,是错过就要堆到周五｜今晚洗
+    formula: 明天天气窗口 + 错过成本 + 今晚准备动作
+  signals:
+  - world.weather
+  - calendar.event
+  - memory.facts
+  trigger:
+  - op: tomorrow_short_dry_window
+    source: weather
+  - op: household_task_due
+    source: memory
+  intent: household_planning
+  card_skeleton:
+    hook: 明日晴窗 + 错过成本
+    action: 今晚洗衣/预约烘干
+    why_now: 前一晚
+    evidence: 明日短晴窗 + 后续雨天 + 家务堆积天数 + 今晚空档
+  surprise: m
+  practical: h
+  tier: cold_start_friendly
+- id: rain_commute_shoe_choice
+  category: time_buffer_risk
+  abstract: 降雨不是全天问题,而是精确撞上用户必须步行的通勤段时,提醒减少狼狈和后悔
+  human_insight: 人不怕抽象下雨,怕“偏偏我走那段路时下”;标题要抓住这种倒霉感。
+  title_strategy:
+    avoid: 只写今天有雨/带伞;必须写出雨精确撞上哪段路和会后悔什么
+    example: 雨偏偏卡你 900 米步行｜今天别穿白鞋
+    formula: 倒霉重合 + 个人后悔点 + 立刻换法
+  signals:
+  - world.weather
+  - calendar.event
+  - gps.current
+  trigger:
+  - op: rain_overlaps_departure_window
+    source: combined
+  - op: walking_segment_present
+    source: route
+  intent: weather_practical
+  card_skeleton:
+    hook: 雨撞上必须步行段
+    action: 换鞋/提前走/改路线
+    why_now: 出门前
+    evidence: 降雨分钟级预报 + 通勤步行距离 + 平时出门时间 + 鞋/路线后悔点
+  surprise: m
+  practical: h
+  tier: cold_start_friendly
+- id: tomorrow_temp_swing_pack
+  category: contextual_recommendation
+  abstract: 明天最高温会诱导用户穿错,结合全天不回家行程提醒按最难受的时段准备
+  human_insight: 高温数字会让人低估早晚难受;真正吸引人的标题要说“你会被这个数字骗到哪里”。
+  title_strategy:
+    avoid: 只写温差大;必须写出最高温误导、回家时间和准备动作
+    example: 明天 27 度会骗你｜21 点回家那段才冷
+    formula: 误导数字 + 个人行程后果 + 准备动作
+  signals:
+  - world.weather
+  - calendar.event
+  - profile.preferences
+  trigger:
+  - op: tomorrow_temp_swing_gte
+    source: weather
+    degrees: 10
+  - op: long_day_outside_home
+    source: calendar
+  intent: weather_practical
+  card_skeleton:
+    hook: 最高温误导 + 晚归后果
+    action: 分层穿/带薄外套
+    why_now: 前一晚或出门前
+    evidence: 小时级温度 + 离家/回家时间 + 是否能中途换衣
+  surprise: l
+  practical: h
+  tier: cold_start_friendly
+- id: air_quality_kid_outdoor_adjust
+  category: health_awareness
+  abstract: 空气质量数字撞上孩子/老人/户外课这类敏感计划时,提前给出沟通和替代方案
+  human_insight: AQI 本身不吸引人,但“孩子正好在最差窗口户外”会立即触发照顾和责任感。
+  title_strategy:
+    avoid: 只写空气不好/注意防护;必须写出谁受影响、冲突时间和沟通动作
+    example: AQI 最差时孩子正上户外课｜今晚先问能否改室内
+    formula: 敏感对象 + 时间冲突 + 提前沟通动作
+  signals:
+  - world.weather
+  - calendar.event
+  - profile.static
+  trigger:
+  - op: air_quality_affects_sensitive_plan
+    source: combined
+  - op: sensitive_person_or_activity_present
+    source: profile_or_calendar
+  intent: health_guard
+  card_skeleton:
+    hook: 空气质量最差窗口 + 敏感对象活动
+    action: 备口罩/改室内/改时间
+    why_now: 前一晚
+    evidence: AQI 小时曲线 + 孩子/老人户外计划 + 可提前沟通窗口
+  surprise: m
+  practical: h
+  tier: warmup
+- id: weekend_weather_social_plan
+  category: latent_opportunity
+  abstract: 周末天气窗口不只是好天气,而是和用户想维护的关系或兴趣重合时,提醒提前锁定计划
+  human_insight: 人会被“唯一窗口”推动,但更强的是“现在不约,周末又会自然浪费掉”的后悔感。
+  title_strategy:
+    avoid: 只写周末天气好;必须写出错过后果、关系对象和现在约的理由
+    example: 周六上午不约,这周又会宅过去｜现在发一句
+    formula: 唯一天气窗口 + 错过后的自己 + 低成本邀约
+  signals:
+  - world.weather
+  - calendar.event
+  - chat.history
+  - profile.preferences
+  trigger:
+  - op: only_comfortable_weekend_slot
+    source: weather_calendar
+  - op: dormant_social_or_hobby_intent
+    source: chat_or_profile
+  intent: opportunity_capture
+  card_skeleton:
+    hook: 唯一舒服窗口 + 不约就浪费
+    action: 约人/安排活动
+    why_now: 需要提前约
+    evidence: 周末天气 + 双方可约提前量 + 最近提过的活动 + 空档
+  surprise: m
+  practical: h
+  tier: warmup
+- id: ai_fortune_daily_work_luck
+  category: reflection
+  abstract: 用“今日工作运”把复杂工作日压成一个最容易踩坑的关系/决策点,给出提前化解动作
+  human_insight: 运势吸引力来自“帮我解释今天顺不顺”,但真正留住用户的是它指出一个自己没意识到的坏互动。
+  title_strategy:
+    avoid: 空泛顺/不顺;必须写出工作日的核心冲突、用户容易犯的反应和化解句
+    example: 今日工作运不是差,是 10 点容易硬刚｜先留一句退路
+    formula: 运势钩子 + 易犯反应 + 化解动作
+  signals:
+  - calendar.event
+  - gmail.message
+  - chat.history
+  trigger:
+  - op: day_has_work_conflict_or_decision
+    source: combined
+  - op: fortune_style_entry_enabled
+    source: profile
+  intent: daily_fortune_practical
+  card_skeleton:
+    hook: 今日工作运 + 易犯反应
+    action: 写一句化解/退路
+    why_now: 早晨开工前
+    evidence: 会议冲突主题 + 最近语气张力 + 用户倾向反应 + 化解句
+  surprise: h
+  practical: h
+  tier: warmup
+- id: ai_fortune_money_leak_guard
+  category: financial
+  abstract: 用“今日财运”包装当天最容易被懒惰吞掉的小钱,把漏钱原因和取消门槛说清楚
+  human_insight: 财运不是说会发财,而是戳中“我明知道浪费但懒得处理”的小羞耻和损失厌恶。
+  title_strategy:
+    avoid: 假装中奖或泛泛省钱;必须写出用户为什么会漏掉这笔钱
+    example: 今日财运藏在你懒得取消的 86 元｜2 分钟停掉
+    formula: 财运钩子 + 漏钱心理 + 极低行动门槛
+  signals:
+  - gmail.message
+  - memory.facts
+  - calendar.event
+  trigger:
+  - op: money_leak_or_saving_window_today
+    source: combined
+  - op: action_cost_low
+    source: analysis
+  intent: financial_optimization
+  card_skeleton:
+    hook: 今日财运 + 懒得处理的小损失
+    action: 取消/缴费/领券/报销
+    why_now: 今天窗口
+    evidence: 账单邮件 + 低使用频率 + 取消耗时 + 截止时间
+  surprise: h
+  practical: h
+  tier: cold_start_friendly
+- id: ai_fortune_relationship_window
+  category: relationship_care
+  abstract: 用“今日人缘运”包装一个能降低尴尬的关系修复窗口,让用户敢发出第一句话
+  human_insight: 人缘/桃花运吸引力来自情绪好奇,但实用价值是给用户一个“现在发不突兀”的许可。
+  title_strategy:
+    avoid: 空泛桃花旺/人缘好;必须写出尴尬被降低的原因和一句自然开口
+    example: 今日人缘运不是桃花,是饭后回小陈不尴尬｜先发一句
+    formula: 人缘钩子 + 不尴尬理由 + 低成本开口
+  signals:
+  - chat.history
+  - calendar.event
+  - memory.facts
+  trigger:
+  - op: relationship_reply_window_today
+    source: combined
+  - op: low_pressure_time_slot
+    source: calendar
+  intent: relationship_care
+  card_skeleton:
+    hook: 今日人缘运 + 不尴尬窗口
+    action: 发一句自然消息
+    why_now: 低压力窗口
+    evidence: 未回复消息 + 低压力窗口 + 关系重要性 + 可发送话术
+  surprise: h
+  practical: h
+  tier: warmup
+- id: ai_fortune_energy_timing
+  category: energy_management
+  abstract: 用“今日状态运”把精力曲线、会议碎片和重活冲突压成一个时间安排建议
+  human_insight: 状态运要说出今天“哪里旺、哪里会碎”;用户点开是想知道怎么安排才不返工。
+  title_strategy:
+    avoid: 只写状态好/差;必须写出前高后碎或后高前乱的节奏判断
+    example: 今日状态前高后碎｜11 点前写最难那段
+    formula: 状态运钩子 + 一天节奏判断 + 重活安排
+  signals:
+  - device.health
+  - calendar.event
+  - chat.history
+  trigger:
+  - op: energy_window_detected
+    source: combined
+  - op: heavy_task_pending
+    source: chat_or_calendar
+  intent: energy_management
+  card_skeleton:
+    hook: 今日状态运 + 一天节奏判断
+    action: 调整重活时间
+    why_now: 一天开始前
+    evidence: 睡眠 + 上午连续空档 + 下午碎片化 + 重活类型
+  surprise: h
+  practical: h
+  tier: warmup
+- id: ai_fortune_travel_smoothness
+  category: time_buffer_risk
+  abstract: 用“今日出行运”把多个小摩擦组合成一个真实迟到风险,并给出最小缓冲动作
+  human_insight: 出行运好点开是因为人怕倒霉;要把倒霉从玄学变成“小雨+施工+会议压线”的可解释组合。
+  title_strategy:
+    avoid: 只写运气一般/路况差;必须写出多个小麻烦如何叠成风险
+    example: 今日出行运的坑不是雨｜是小雨+施工刚好卡 16 点
+    formula: 出行运钩子 + 叠加风险 + 最小化解动作
+  signals:
+  - world.weather
+  - world.transit_status
+  - calendar.event
+  - gps.current
+  trigger:
+  - op: travel_friction_today
+    source: combined
+  - op: solvable_by_small_buffer
+    source: analysis
+  intent: travel_logistics
+  card_skeleton:
+    hook: 今日出行运 + 叠加风险
+    action: 提前/换路线/换鞋
+    why_now: 出门前
+    evidence: 天气窗口 + 施工延误 + 会议时间 + 提前几分钟可化解
+  surprise: h
+  practical: h
+  tier: cold_start_friendly
+- id: ai_fortune_avoid_bad_timing
+  category: decision_under_constraint
+  abstract: 用“今日避坑运”识别一件用户很想推进但时机明显不对的事,建议先铺垫再正式沟通
+  human_insight: 人尤其爱看“今天不宜做什么”,因为它给了自己暂停的理由;但必须解释坏时机来自双方状态,不是玄学。
+  title_strategy:
+    avoid: 空泛今天不宜/犯冲;必须写出双方状态、敏感动作和更稳替代动作
+    example: 今日避坑运:17 点别谈加价｜对方累你也低能量
+    formula: 避坑钩子 + 坏时机证据 + 替代动作
+  signals:
+  - calendar.event
+  - gmail.message
+  - device.health
+  trigger:
+  - op: bad_timing_for_sensitive_action
+    source: combined
+  - op: safer_alternative_exists
+    source: analysis
+  intent: risk_avoidance
+  card_skeleton:
+    hook: 今日避坑运 + 坏时机证据
+    action: 延后/换表达/先发材料
+    why_now: 敏感动作前
+    evidence: 对方会议负荷 + 用户能量 + 话题敏感度 + 替代沟通路径
+  surprise: h
+  practical: h
+  tier: mature

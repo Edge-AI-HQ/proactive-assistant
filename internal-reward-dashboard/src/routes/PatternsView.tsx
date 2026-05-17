@@ -254,6 +254,9 @@ export function PatternsView({ onNavigate }: PatternsViewProps) {
               <thead>
                 <tr>
                   <th scope="col">卡片标题</th>
+                  <th scope="col">卡片分类</th>
+                  <th scope="col">人性需求</th>
+                  <th scope="col">具体入口</th>
                   <th scope="col">人性洞察</th>
                   <th scope="col">来源数据</th>
                   <th scope="col">Abstract</th>
@@ -283,6 +286,9 @@ export function PatternsView({ onNavigate }: PatternsViewProps) {
                     }}
                   >
                     <td className="patterns-demo-title">{p.demoTitle ?? "—"}</td>
+                    <td className="patterns-card-category">{p.demoCardCategory ?? "—"}</td>
+                    <td className="patterns-human-need">{p.demoHumanNeed ?? "—"}</td>
+                    <td className="patterns-entry-point">{p.demoEntryPoint ?? "—"}</td>
                     <td className="patterns-human-insight">{p.humanInsight || "—"}</td>
                     <td className="patterns-source-data">{sourceDataText(p)}</td>
                     <td className="patterns-abstract">{p.abstract}</td>

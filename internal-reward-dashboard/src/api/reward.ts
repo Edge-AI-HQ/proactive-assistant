@@ -620,6 +620,9 @@ export interface PatternSummary {
   source: "seed" | "ai_extracted" | "manual";
   baseHitRate: number;
   demoTitle: string | null;
+  demoCardCategory: string | null;
+  demoHumanNeed: string | null;
+  demoEntryPoint: string | null;
   demoSourceDataSummary: string[];
   createdAt: string | null;
   updatedAt: string | null;

@@ -48,6 +48,9 @@ async def test_patterns_list_and_filters(pool, user_ids):
         routine = next(item for item in body["items"] if item["id"] == "routine_anchor_detected")
         assert routine["humanInsight"]
         assert routine["demoTitle"]
+        assert routine["demoCardCategory"]
+        assert routine["demoHumanNeed"]
+        assert routine["demoEntryPoint"]
         assert routine["demoSourceDataSummary"]
         assert isinstance(body["facets"]["categories"], list)
         assert "routine_observation" in body["facets"]["categories"]

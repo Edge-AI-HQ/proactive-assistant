@@ -85,6 +85,15 @@ def _coerce_demo_row(
     if not isinstance(card, dict):
         card = {}
     card_json = dict(card)
+    card_category = raw.get("card_category")
+    if isinstance(card_category, str) and card_category.strip():
+        card_json["cardCategory"] = card_category.strip()
+    human_need = raw.get("human_need")
+    if isinstance(human_need, str) and human_need.strip():
+        card_json["humanNeed"] = human_need.strip()
+    entry_point = raw.get("entry_point")
+    if isinstance(entry_point, str) and entry_point.strip():
+        card_json["entryPoint"] = entry_point.strip()
     source_data = raw.get("source_data")
     if source_data and "sourceData" not in card_json:
         card_json["sourceData"] = source_data
