@@ -115,6 +115,45 @@ export interface SignalListResponse {
   has_more: boolean;
 }
 
+type RawPersonalSignal = Partial<PersonalSignal> & {
+  availableAt?: string;
+  consumedAt?: string | null;
+  consumedByRunId?: string | null;
+  dedupeKey?: string | null;
+  deviceId?: string | null;
+  expiresAt?: string | null;
+  ingestedAt?: string;
+  occurredAt?: string;
+  sourceRawIds?: string[];
+  sourceRawTable?: string | null;
+};
+
+function normalizePersonalSignal(signal: RawPersonalSignal): PersonalSignal {
+  return {
+    id: signal.id ?? "",
+    kind: signal.kind ?? "",
+    title: signal.title ?? "",
+    summary: signal.summary ?? "",
+    payload: signal.payload ?? {},
+    source: signal.source ?? "",
+    device_id: signal.device_id ?? signal.deviceId ?? null,
+    subject: signal.subject ?? null,
+    salience: typeof signal.salience === "number" ? signal.salience : 0,
+    confidence: typeof signal.confidence === "number" ? signal.confidence : 0,
+    status: signal.status ?? "open",
+    dedupe_key: signal.dedupe_key ?? signal.dedupeKey ?? null,
+    occurred_at: signal.occurred_at ?? signal.occurredAt ?? "",
+    available_at: signal.available_at ?? signal.availableAt ?? signal.occurred_at ?? signal.occurredAt ?? "",
+    expires_at: signal.expires_at ?? signal.expiresAt ?? null,
+    ingested_at: signal.ingested_at ?? signal.ingestedAt ?? "",
+    consumed_at: signal.consumed_at ?? signal.consumedAt ?? null,
+    consumed_by_run_id: signal.consumed_by_run_id ?? signal.consumedByRunId ?? null,
+    source_raw_table: signal.source_raw_table ?? signal.sourceRawTable ?? null,
+    source_raw_ids: signal.source_raw_ids ?? signal.sourceRawIds ?? [],
+    referenced_by_runs: signal.referenced_by_runs ?? [],
+  };
+}
+
 export interface ProfileInterest {
   id: string;
   user_id: string;
@@ -133,6 +172,28 @@ export interface ProfileSnapshot {
   memories: ProfileMemory[];
   signals: ProfileSignal[];
   interests: ProfileInterest[];
+}
+
+function profileClientHintHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {};
+
+  if (typeof navigator !== "undefined") {
+    const locale = navigator.languages?.[0] || navigator.language;
+    if (locale && locale.trim()) {
+      headers["X-Pin-Client-Locale"] = locale.trim();
+    }
+  }
+
+  try {
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (timezone && timezone.trim()) {
+      headers["X-Pin-Client-Timezone"] = timezone.trim();
+    }
+  } catch {
+    // Browser/runtime did not expose Intl timezone; server keeps its value.
+  }
+
+  return headers;
 }
 
 async function getAccessToken(): Promise<string | null> {
@@ -544,7 +605,10 @@ export async function deleteAccount(): Promise<DeleteAccountResult> {
 export async function fetchProfileSnapshot(
   signal?: AbortSignal
 ): Promise<ProfileSnapshot> {
-  const res = await proxyFetch("/profile", { signal });
+  const res = await proxyFetch("/profile", {
+    signal,
+    headers: profileClientHintHeaders(),
+  });
   if (!res.ok) throw new Error(`/profile failed: ${res.status}`);
 
   const data = await res.json();
@@ -579,7 +643,9 @@ export async function fetchSignals(
   const data = (await res.json()) as Partial<SignalListResponse>;
   return {
     ok: data.ok ?? false,
-    signals: Array.isArray(data.signals) ? data.signals : [],
+    signals: Array.isArray(data.signals)
+      ? data.signals.map((signal) => normalizePersonalSignal(signal as RawPersonalSignal))
+      : [],
     total: typeof data.total === "number" ? data.total : -1,
     next_cursor: typeof data.next_cursor === "string" ? data.next_cursor : null,
     has_more: data.has_more ?? false,

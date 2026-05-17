@@ -30,6 +30,8 @@ def _to_item(row: PersonalSignalRow) -> PersonalSignalItem:
         dedupe_key=row.dedupe_key, occurred_at=row.occurred_at,
         available_at=row.available_at, expires_at=row.expires_at,
         source=row.source, device_id=row.device_id, subject=row.subject,
+        source_raw_table=row.source_raw_table,
+        source_raw_ids=row.source_raw_ids,
         status=row.status, consumed_by_run_id=row.consumed_by_run_id,
         ingested_at=row.ingested_at,
     )

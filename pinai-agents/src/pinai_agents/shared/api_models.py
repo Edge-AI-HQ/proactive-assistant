@@ -86,6 +86,8 @@ class PersonalSignalItem(_CamelModel):
     source: str
     device_id: str | None = None
     subject: str | None = None
+    source_raw_table: str | None = None
+    source_raw_ids: list[str] = Field(default_factory=list)
     status: str
     consumed_by_run_id: str | None = None
     ingested_at: datetime

@@ -256,6 +256,7 @@ interface RawSourceOption {
   kind: RawSourceKind;
   count: number;
   connected: boolean;
+  latestAt: number;
   deviceId?: string;
 }
 
@@ -395,6 +396,12 @@ function isRawTimeVisible(value?: string | null): boolean {
   return time <= end.getTime();
 }
 
+function rawTimeMs(value?: string | null): number {
+  if (!value || !isRawTimeVisible(value)) return 0;
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : 0;
+}
+
 function formatValue(value: unknown): string {
   if (value === null) return "null";
   if (value === undefined) return "undefined";
@@ -486,6 +493,7 @@ function buildRawSourceOptions(
     .map((source) => {
       const count = rawCount(raw, generic, genericCounts, source.id);
       const connected = (source.connectorToolkits ?? []).some((toolkit) => connectedToolkits.has(normalizeToolkit(toolkit)));
+      const latestAt = latestConnectorRawTime(source.id, raw, generic[source.id]?.rows ?? []);
 
       return {
         id: source.id,
@@ -493,6 +501,7 @@ function buildRawSourceOptions(
         kind: source.kind,
         count,
         connected,
+        latestAt,
       };
     })
     .filter((source) => source.connected || source.count > 0);
@@ -504,14 +513,40 @@ function buildRawSourceOptions(
       kind: "device" as const,
       count: device.total,
       connected: device.total > 0 || !!device.device,
+      latestAt: latestDeviceRawTime(device),
       deviceId: device.deviceId,
     }))
     .filter((source) => source.connected || source.count > 0);
 
-  const primaryConnectors = connectorSources.filter((source) => source.id === "gmail" || source.id === "gcal");
-  const otherConnectors = connectorSources.filter((source) => source.id !== "gmail" && source.id !== "gcal");
+  return [...connectorSources, ...deviceSources].sort((a, b) => (
+    b.latestAt - a.latestAt
+    || b.count - a.count
+    || Number(b.connected) - Number(a.connected)
+    || a.label.localeCompare(b.label)
+  ));
+}
 
-  return [...primaryConnectors, ...deviceSources, ...otherConnectors];
+function latestConnectorRawTime(
+  panel: RawPanel,
+  raw: RawPreview,
+  rows: RawTableRow[],
+): number {
+  if (panel === "gmail") {
+    return Math.max(0, ...raw.gmail.map((message) => rawTimeMs(message.occurred_at)));
+  }
+  if (panel === "gcal") {
+    return Math.max(0, ...raw.gcal.map((event) => rawTimeMs(event.start_at ?? event.occurred_at)));
+  }
+  return Math.max(0, ...rows.map((row) => rawTimeMs(pickGenericTime(row))));
+}
+
+function latestDeviceRawTime(preview: DeviceRawPreview): number {
+  return Math.max(
+    0,
+    ...preview.apps.map((app) => rawTimeMs(app.last_used_at ?? app.occurred_at)),
+    ...preview.contacts.map((contact) => rawTimeMs(contact.last_modified ?? contact.occurred_at)),
+    ...preview.health.map((item) => rawTimeMs(item.occurred_at ?? item.end_at ?? item.start_at)),
+  );
 }
 
 function countableGenericRawSources(): Array<{ id: RawPanel; table: string }> {
@@ -634,6 +669,50 @@ function countProfileFields(profile: ProfileSnapshot["profile"]): number {
   ].filter((value) => typeof value === "string" && value.trim().length > 0).length;
   const groupedFields = PROFILE_GROUP_META.reduce((sum, group) => sum + Object.keys(profile[group.key] ?? {}).length, 0);
   return topLevelFields + groupedFields;
+}
+
+const PROFILE_SUMMARY_KEYS = [
+  "summary",
+  "identity",
+  "identify",
+  "bio",
+  "about",
+  "description",
+  "persona",
+] as const;
+
+function firstTextValue(value: unknown): string | null {
+  if (typeof value === "string") {
+    const text = value.trim();
+    return text.length > 0 ? text : null;
+  }
+  if (Array.isArray(value)) {
+    const text = value
+      .map(firstTextValue)
+      .filter((item): item is string => Boolean(item))
+      .join(" ");
+    return text.trim() || null;
+  }
+  if (!value || typeof value !== "object") return null;
+
+  const record = value as Record<string, unknown>;
+  for (const key of PROFILE_SUMMARY_KEYS) {
+    const text = firstTextValue(record[key]);
+    if (text) return text;
+  }
+  return null;
+}
+
+function profileSummaryText(profile: ProfileSnapshot["profile"]): string {
+  const fallback = "No summary stored yet. The assistant will still use memories, signals, and goals below.";
+  if (!profile) return fallback;
+
+  return firstTextValue(profile.summary)
+    ?? firstTextValue(profile.facts)
+    ?? firstTextValue(profile.preferences)
+    ?? firstTextValue(profile.constraints)
+    ?? firstTextValue(profile.metadata)
+    ?? fallback;
 }
 
 function MetricCard({
@@ -838,6 +917,11 @@ function SignalItem({ signal }: { signal: PersonalSignal }) {
         <Pill tone="quality">salience {formatMetric(signal.salience)}</Pill>
         <Pill tone="confidence">confidence {formatMetric(signal.confidence)}</Pill>
         {signal.subject && <Pill tone="subject">{signal.subject}</Pill>}
+        {signal.source_raw_table && (
+          <Pill tone="source">
+            {signal.source_raw_table.replace(/^pai_raw_/, "raw:")} · {signal.source_raw_ids.length}
+          </Pill>
+        )}
       </div>
       {hasObjectKeys(signal.payload) && (
         <details className="mt-3 rounded-2xl bg-white/55 px-3 py-2 text-[11px] leading-5 text-foreground/62 ring-1 ring-white/60">
@@ -1007,7 +1091,7 @@ function buildDeviceRawRecords(preview: DeviceRawPreview): DeviceRawRecord[] {
         item.source_app,
         item.local_date,
       ].filter(Boolean).join(" · "),
-      time: item.end_at ?? item.start_at ?? item.occurred_at,
+      time: item.occurred_at ?? item.end_at ?? item.start_at,
       payload: {
         device_id: item.device_id,
         observation_type: item.observation_type,
@@ -1436,7 +1520,8 @@ export default function GoalsView({ composio }: GoalsViewProps) {
   const [genericLoading, setGenericLoading] = useState<Set<string>>(new Set());
   const genericCountLoadingRef = useRef<Set<string>>(new Set());
   const [activePanel, setActivePanel] = useState<DataPanel>("memory");
-  const [activeRawPanel, setActiveRawPanel] = useState<RawPanel>("gmail");
+  const [activeRawPanel, setActiveRawPanel] = useState<RawPanel>("");
+  const rawPanelTouchedRef = useRef(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const signalCutoffRef = useRef(currentTimestampIso());
@@ -1538,8 +1623,9 @@ export default function GoalsView({ composio }: GoalsViewProps) {
   const genericCountTargets = useMemo(() => countableGenericRawSources(), []);
 
   useEffect(() => {
-    if (rawSources.some((source) => source.id === activeRawPanel)) return;
     const nextPanel = rawSources[0]?.id;
+    const currentPanelExists = rawSources.some((source) => source.id === activeRawPanel);
+    if (rawPanelTouchedRef.current && currentPanelExists) return;
     if (nextPanel && nextPanel !== activeRawPanel) {
       setActiveRawPanel(nextPanel);
     }
@@ -1710,7 +1796,7 @@ export default function GoalsView({ composio }: GoalsViewProps) {
   // ── Render ──
 
   return (
-    <div className="flex flex-col h-full px-4 pt-3 pb-2 overflow-y-auto relative">
+    <div className="flex flex-col h-full px-4 pt-3 pb-[calc(6rem+var(--safe-bottom,12px))] overflow-y-auto relative">
       {/* Page header */}
       <div className="mb-6 pr-20">
         <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-foreground/35">
@@ -1754,7 +1840,7 @@ export default function GoalsView({ composio }: GoalsViewProps) {
                   </span>
                 </div>
                 <p className="mt-3 max-w-[68ch] text-sm leading-6 text-foreground/65 line-clamp-5">
-                  {profile?.summary?.trim() || "No summary stored yet. The assistant will still use memories, signals, and goals below."}
+                  {profileSummaryText(profile)}
                 </p>
               </div>
             </div>
@@ -1900,7 +1986,10 @@ export default function GoalsView({ composio }: GoalsViewProps) {
                   genericLoading={genericLoading}
                   sources={rawSources}
                   activeRawPanel={activeRawPanel}
-                  onChangeRawPanel={setActiveRawPanel}
+                  onChangeRawPanel={(panel) => {
+                    rawPanelTouchedRef.current = true;
+                    setActiveRawPanel(panel);
+                  }}
                 />
               )}
             </div>

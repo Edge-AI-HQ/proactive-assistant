@@ -6,8 +6,9 @@ import uuid
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Header, status
 from psycopg import AsyncConnection
 
 from ....shared.api_models import (
@@ -86,17 +87,58 @@ def _settings_response(row: UserSettingsRow) -> SettingsResponse:
     return SettingsResponse(**asdict(row))
 
 
+def _clean_client_locale(value: str | None) -> str | None:
+    if not value:
+        return None
+    cleaned = value.strip()[:20]
+    if len(cleaned) < 2:
+        return None
+    if not all(ch.isalnum() or ch == "-" for ch in cleaned):
+        return None
+    return cleaned
+
+
+def _clean_client_timezone(value: str | None) -> str | None:
+    if not value:
+        return None
+    cleaned = value.strip()[:64]
+    try:
+        ZoneInfo(cleaned)
+    except ZoneInfoNotFoundError:
+        return None
+    return cleaned
+
+
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 
 
 @router.get("", response_model=ProfileResponse)
 async def get_profile_snapshot(
+    x_pin_client_locale: str | None = Header(default=None, alias="X-Pin-Client-Locale"),
+    x_pin_client_timezone: str | None = Header(default=None, alias="X-Pin-Client-Timezone"),
     user: User = Depends(current_user),
     pool=Depends(get_pool),
 ):
     async with user_scoped_tx(pool, user.id) as conn:
         repo = ProfileRepository(user.id, conn)
         profile = await repo.get_profile()
+        locale_hint = _clean_client_locale(x_pin_client_locale)
+        timezone_hint = _clean_client_timezone(x_pin_client_timezone)
+        locale_patch = (
+            locale_hint
+            if profile and profile.locale == "en-US" and locale_hint and locale_hint != profile.locale
+            else None
+        )
+        timezone_patch = (
+            timezone_hint
+            if profile and profile.timezone == "UTC" and timezone_hint and timezone_hint != profile.timezone
+            else None
+        )
+        if locale_patch or timezone_patch:
+            profile = await repo.upsert_profile(
+                locale=locale_patch,
+                timezone=timezone_patch,
+            )
         goals = await repo.list_goals()
         settings = await repo.get_settings()
         await _ensure_auto_generate_schedule(

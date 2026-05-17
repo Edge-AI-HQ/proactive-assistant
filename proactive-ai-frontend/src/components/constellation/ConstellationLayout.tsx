@@ -263,6 +263,7 @@ const MENU_ITEMS = [
   { id: "account", label: "ACCOUNT", icon: UserIcon },
 ] as const;
 type MenuId = (typeof MENU_ITEMS)[number]["id"];
+const BOTTOM_NAV_IDS: MenuId[] = ["now", "ambient", "chat", "profile", "connect"];
 
 /* ── Main component ── */
 export default function BigBallLayout() {
@@ -693,8 +694,11 @@ export default function BigBallLayout() {
   const handleMenuNav = (id: MenuId) => {
     setActiveView(id);
     setActiveChat(null);
+    setChatTarget(null);
     setMenuOpen(false);
   };
+
+  const bottomNavItems = MENU_ITEMS.filter((item) => BOTTOM_NAV_IDS.includes(item.id));
 
   /* ── "now" home view ── */
   const renderNowView = () => (
@@ -865,7 +869,7 @@ export default function BigBallLayout() {
               /* Real card history (old AppShell CHAT view). Reads from
                  /api/cards via useCards(); confirm/dismiss/done buttons
                  POST to /feedback via the timeline itself. */
-              <div className="h-full overflow-y-auto pt-12">
+              <div className="h-full overflow-y-auto pt-12 pb-[calc(6rem+var(--safe-bottom,12px))]">
                 <RealChatTimeline
                   processingIds={cardActions.processingIds}
                   doneIds={cardActions.doneIds}
@@ -893,7 +897,7 @@ export default function BigBallLayout() {
               <AmbientView onConnectMore={() => setActiveView("connect")} onOpenFullscreen={(s) => setLiveOverlay(s)} />
             ) : activeView === "profile" ? (
               /* Real goals/memory/skill page (old AppShell GOALS view). */
-              <div className="h-full overflow-y-auto pt-12">
+              <div className="h-full pt-12">
                 <RealGoalsView composio={composio} />
               </div>
             ) : activeView === "connect" ? (
@@ -901,7 +905,7 @@ export default function BigBallLayout() {
                  CONTROL view). Replaces Lovable's hardcoded ConnectPanel
                  so users can actually wire Composio, devices, auto-generate
                  and auto-dreaming. */
-              <div className="h-full overflow-y-auto pt-12">
+              <div className="h-full overflow-y-auto pt-12 pb-[calc(6rem+var(--safe-bottom,12px))]">
                 <RealControlPanel composio={composio} />
               </div>
             ) : activeView === "control" ? (
@@ -949,6 +953,46 @@ export default function BigBallLayout() {
             ) : null}
           </motion.div>
         </AnimatePresence>
+
+        {!chatTarget && !activeChat && (
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-0 z-30 px-3"
+            style={{ paddingBottom: "calc(0.75rem + max(env(safe-area-inset-bottom, 0px), var(--safe-bottom, 12px)))" }}
+          >
+            <nav
+              aria-label="Primary"
+              className="pointer-events-auto flex items-center justify-around rounded-3xl border border-white/45 bg-white/70 px-1.5 py-2 shadow-[0_-8px_30px_hsl(0_0%_0%/0.06)] backdrop-blur-3xl"
+            >
+              {bottomNavItems.map((item) => {
+                const Icon = item.icon;
+                const isActive = activeView === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => handleMenuNav(item.id)}
+                    className={`relative flex min-w-0 flex-1 flex-col items-center gap-1 rounded-2xl px-1.5 py-1.5 transition-colors ${
+                      isActive ? "text-foreground" : "text-foreground/42 hover:text-foreground/70"
+                    }`}
+                    aria-current={isActive ? "page" : undefined}
+                  >
+                    <Icon size={19} strokeWidth={isActive ? 2.2 : 1.5} />
+                    <span className="max-w-full truncate text-[9px] font-medium uppercase tracking-[0.08em]">
+                      {item.label === "TASKS" ? "CHAT" : item.label}
+                    </span>
+                    {isActive && (
+                      <motion.span
+                        layoutId="bottom-nav-dot"
+                        className="absolute bottom-0.5 h-1 w-1 rounded-full bg-foreground"
+                        transition={{ type: "spring", stiffness: 420, damping: 32 }}
+                      />
+                    )}
+                  </button>
+                );
+              })}
+            </nav>
+          </div>
+        )}
       </div>
 
       {/* Live session fullscreen overlay — rendered at root via portal, fully independent of activeView.
@@ -1282,4 +1326,3 @@ function CardDrawerContent({
     </div>
   );
 }
-
