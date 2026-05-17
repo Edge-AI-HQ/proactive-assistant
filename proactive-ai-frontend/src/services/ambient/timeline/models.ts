@@ -280,24 +280,36 @@ function normalizeBatchDecision(
   if (!value || typeof value !== "object") return null;
   const row = value as Record<string, unknown>;
   if (!Array.isArray(row.decisions)) return null;
-  const decisions = row.decisions.map(normalizeDecision);
+  const decisions = row.decisions.map((decision) => normalizeDecision(decision, input));
   if (decisions.some((decision) => decision === null)) return null;
   const typed = decisions as LlmTimelineDecision[];
   return batchCoversWindowsOnce(typed, input) ? { decisions: typed } : null;
 }
 
-function normalizeDecision(value: unknown): LlmTimelineDecision | null {
+function normalizeDecision(
+  value: unknown,
+  input: AmbientTimelineBatchGenerationInput,
+): LlmTimelineDecision | null {
   if (!value || typeof value !== "object") return null;
   const row = value as Record<string, unknown>;
   const action = typeof row.action === "string" ? row.action : row.a;
-  const sourceWindowIds = stringArray(row.sourceWindowIds ?? row.w);
+  const expectedIds = input.windows.map((window) => window.id);
+  const reportedIds = stringArray(row.sourceWindowIds ?? row.w);
+  const validReportedIds = reportedIds.filter((id) => expectedIds.includes(id));
+  const sourceWindowIds = validReportedIds.length > 0
+    ? validReportedIds
+    : (expectedIds.length === 1 ? expectedIds : []);
   if (sourceWindowIds.length === 0) return null;
+  const primaryWindow = input.windows.find((window) => window.id === sourceWindowIds[0]);
   if (action === "create") {
     const title = shortText(row.title ?? row.t, 60);
     const summary = shortText(row.summary ?? row.s, 180);
-    const importance = row.importance ?? row.i;
-    const occurredAt = shortPlainText(row.occurredAt, 64);
-    if (!title || !summary || !isImportance(importance) || !occurredAt) return null;
+    if (!title || !summary) return null;
+    const rawImportance = row.importance ?? row.i;
+    const importance: "low" | "medium" | "high" = isImportance(rawImportance) ? rawImportance : "medium";
+    const occurredAt = shortPlainText(row.occurredAt, 64)
+      ?? shortPlainText(primaryWindow?.startedAt, 64);
+    if (!occurredAt) return null;
     return { action: "create", title, summary, importance, occurredAt, sourceWindowIds };
   }
   if (action === "update") {
