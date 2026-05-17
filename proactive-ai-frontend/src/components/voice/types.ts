@@ -11,9 +11,9 @@ export interface VoiceEngineHandle {
   cancel?(): void | Promise<void>;
 }
 
-// Swappable speech-to-text runtime. The default engine records locally and
-// sends audio to the backend GPT transcription endpoint; BrowserSpeechEngine
-// stays as the browser-native fallback.
+// Swappable speech-to-text runtime. The default engine uses browser-native
+// SpeechRecognition; the GPT transcription engine is kept available for
+// callers that explicitly inject it.
 export interface VoiceEngine {
   start(callbacks: VoiceEngineCallbacks): VoiceEngineHandle | Promise<VoiceEngineHandle>;
 }
@@ -36,9 +36,9 @@ export interface VoiceContextValue {
 
 export interface VoiceProviderProps {
   children: ReactNode;
-  // Defaults to the backend GPT transcription engine with browser-native fallback.
+  // Defaults to browser-native SpeechRecognition.
   engine?: VoiceEngine;
   // User-preferred generation language. Voice transcription maps this to
-  // OpenAI ISO-639-1 and browser BCP-47 hints; missing/unknown means Chinese.
+  // browser BCP-47 hints; missing/unknown means Chinese.
   transcriptionLanguage?: string | null;
 }

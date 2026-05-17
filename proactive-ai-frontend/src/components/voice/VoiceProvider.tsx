@@ -3,7 +3,6 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Check, Mic, X } from "lucide-react";
 
 import { BrowserSpeechEngine } from "./BrowserSpeechEngine";
-import { GptTranscriptionEngine } from "./GptTranscriptionEngine";
 import { normalizeVoiceLanguage } from "./language";
 import type {
   StartCaptureOptions,
@@ -46,11 +45,8 @@ export function VoiceProvider({ children, engine, transcriptionLanguage }: Voice
     [transcriptionLanguage],
   );
   const activeEngine = useMemo<VoiceEngine>(
-    () => engine ?? new GptTranscriptionEngine({
-      language: voiceLanguage.openai,
-      fallback: new BrowserSpeechEngine({ lang: voiceLanguage.browser }),
-    }),
-    [engine, voiceLanguage.browser, voiceLanguage.openai],
+    () => engine ?? new BrowserSpeechEngine({ lang: voiceLanguage.browser }),
+    [engine, voiceLanguage.browser],
   );
 
   const finishCapture = useCallback(async (commit: boolean) => {
@@ -58,14 +54,15 @@ export function VoiceProvider({ children, engine, transcriptionLanguage }: Voice
     const opts = optsRef.current;
     captureSeqRef.current += 1;
     handleRef.current = null;
-    setIsFinalizing(true);
     let completed = true;
 
     try {
-      if (commit) {
-        await handle?.stop();
-      } else {
-        await (handle?.cancel ? handle.cancel() : handle?.stop());
+      const stopResult = commit
+        ? handle?.stop()
+        : handle?.cancel ? handle.cancel() : handle?.stop();
+      if (isPromiseLike(stopResult)) {
+        setIsFinalizing(true);
+        await stopResult;
       }
     } catch {
       completed = false;
@@ -232,4 +229,8 @@ export function VoiceProvider({ children, engine, transcriptionLanguage }: Voice
       </AnimatePresence>
     </VoiceContext.Provider>
   );
+}
+
+function isPromiseLike(value: void | Promise<void> | undefined): value is Promise<void> {
+  return Boolean(value && typeof value.then === "function");
 }
