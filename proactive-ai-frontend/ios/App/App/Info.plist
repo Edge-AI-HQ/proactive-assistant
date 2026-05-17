@@ -66,11 +66,6 @@
 	<string>PIN AI reads photos only when you pick one to attach to a chat or memory. Photos stay on your device until you explicitly upload one.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>PIN AI uses on-device speech recognition to create local transcript drafts from short ambient audio captures.</string>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>audio</string>
-		<string>location</string>
-	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -90,6 +85,11 @@
 			</array>
 		</dict>
 	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>location</string>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
