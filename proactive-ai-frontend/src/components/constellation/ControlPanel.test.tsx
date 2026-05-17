@@ -65,6 +65,9 @@ vi.mock("./GoalsView", () => ({ default: () => <div>Goals view</div> }));
 vi.mock("@/components/AmbientSourceControlsPanel", () => ({
   default: () => <section data-testid="ambient-source-controls">Ambient permissions</section>,
 }));
+vi.mock("@/components/AmbientTimelineSummaryStatusPanel", () => ({
+  default: () => <section data-testid="ambient-summary-status">Timeline summaries</section>,
+}));
 
 describe("ControlPanel Ambient tab", () => {
   test("renames Models to Ambient and places source controls above on-device models", () => {
@@ -76,10 +79,15 @@ describe("ControlPanel Ambient tab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Ambient" }));
 
     const sourceControls = screen.getByTestId("ambient-source-controls");
+    const summaryStatus = screen.getByTestId("ambient-summary-status");
     const modelHeading = screen.getByText("On-device models");
     expect(modelHeading.closest(".glass-card-strong")).toBeTruthy();
     expect(
-      sourceControls.compareDocumentPosition(modelHeading) &
+      sourceControls.compareDocumentPosition(summaryStatus) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      summaryStatus.compareDocumentPosition(modelHeading) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(screen.getByText(/only available inside the iOS app/i)).toBeTruthy();

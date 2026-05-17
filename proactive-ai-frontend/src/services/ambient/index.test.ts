@@ -160,7 +160,7 @@ describe("AmbientRuntime source reconciliation", () => {
 
     await runtime.refreshTimeline("2026-05-15");
 
-    expect(timelinePipeline.regenerateDay).toHaveBeenCalledWith("2026-05-15");
+    expect(timelinePipeline.regenerateDay).toHaveBeenCalledWith("2026-05-15", {});
     expect(await outbox.count()).toBe(1);
     expect(runtime.status().outboxPendingCount).toBe(1);
   });

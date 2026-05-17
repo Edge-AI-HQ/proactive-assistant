@@ -4,6 +4,8 @@ import { AudioCaptureWeb } from './audio-capture';
 import type { AudioCapturePlugin } from './audio-capture';
 import type {
   AmbientTimelineEventDraftResult,
+  GenerateTimelineBatchDecisionOptions,
+  AmbientTimelineBatchDecisionResult,
   GenerateTimelineEventOptions,
   ModelDownloadOptions,
   ModelDownloadProgressEvent,
@@ -66,6 +68,7 @@ interface AmbientModelsPlugin {
   deleteModel(options: { id: string }): Promise<void>;
   verifyModel(options: { id: string }): Promise<ModelVerifyResult>;
   generateTimelineEvent(options: GenerateTimelineEventOptions): Promise<AmbientTimelineEventDraftResult>;
+  generateTimelineBatchDecision(options: GenerateTimelineBatchDecisionOptions): Promise<AmbientTimelineBatchDecisionResult>;
   addListener(
     eventName: 'modelDownloadProgress' | 'modelDownloadDone',
     listenerFunc: (event: ModelDownloadProgressEvent) => void,
@@ -96,6 +99,10 @@ class AmbientModelsWeb implements AmbientModelsPlugin {
 
   async generateTimelineEvent(): Promise<AmbientTimelineEventDraftResult> {
     throw new Error('AmbientModels.generateTimelineEvent is unavailable on web');
+  }
+
+  async generateTimelineBatchDecision(): Promise<AmbientTimelineBatchDecisionResult> {
+    throw new Error('AmbientModels.generateTimelineBatchDecision is unavailable on web');
   }
 
   async addListener(): Promise<PluginListenerHandle> {

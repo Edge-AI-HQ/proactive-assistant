@@ -7,7 +7,9 @@ import type { AmbientCandidateWindow } from "./types";
 const native = {
   models: {
     list: vi.fn(),
+    verifyModel: vi.fn(),
     generateTimelineEvent: vi.fn(),
+    generateTimelineBatchDecision: vi.fn(),
   },
 };
 
@@ -46,7 +48,9 @@ describe("Ambient timeline model bridge", () => {
   beforeEach(() => {
     localStorage.clear();
     native.models.list.mockReset();
+    native.models.verifyModel.mockReset();
     native.models.generateTimelineEvent.mockReset();
+    native.models.generateTimelineBatchDecision.mockReset();
   });
 
   afterEach(() => {
@@ -117,7 +121,7 @@ describe("Ambient timeline model bridge", () => {
     });
   });
 
-  test("preserves native error codes", async () => {
+  test("preserves native error codes and messages", async () => {
     setSelectedAmbientSummaryModelId("qwen3-1_7b-q4");
     native.models.list.mockResolvedValue({
       profiles: [{ id: "qwen3-1_7b-q4", kind: "llm" }],
@@ -131,6 +135,156 @@ describe("Ambient timeline model bridge", () => {
     await expect(bridge.generateTimelineEvent(windowInput)).resolves.toEqual({
       ok: false,
       errorCode: "generation_timeout",
+      errorMessage: "timed out",
+    });
+  });
+
+
+  test("auto-verifies a present selected model before timeline generation", async () => {
+    setSelectedAmbientSummaryModelId("qwen3-1_7b-q4");
+    native.models.list.mockResolvedValue({
+      profiles: [{ id: "qwen3-1_7b-q4", kind: "llm" }],
+      statuses: [{ id: "qwen3-1_7b-q4", state: "present" }],
+    });
+    native.models.verifyModel.mockResolvedValue({ id: "qwen3-1_7b-q4", ok: true, elapsedMs: 12 });
+    native.models.generateTimelineEvent.mockResolvedValue({
+      eventType: "conversation",
+      title: "Verified model",
+      summary: "Generated after automatic verification.",
+      tags: [],
+      confidence: 0.7,
+      confidenceLabel: "certain",
+      salientFacts: [],
+    });
+    const bridge = createAmbientTimelineModelBridge();
+
+    const result = await bridge.generateTimelineEvent(windowInput);
+
+    expect(result).toMatchObject({ ok: true, draft: { title: "Verified model" } });
+    expect(native.models.verifyModel).toHaveBeenCalledWith({ id: "qwen3-1_7b-q4" });
+    expect(native.models.generateTimelineEvent).toHaveBeenCalled();
+  });
+
+  test("returns verify_required when automatic verification fails", async () => {
+    setSelectedAmbientSummaryModelId("qwen3-1_7b-q4");
+    native.models.list.mockResolvedValue({
+      profiles: [{ id: "qwen3-1_7b-q4", kind: "llm" }],
+      statuses: [{ id: "qwen3-1_7b-q4", state: "present", lastVerifyResult: "fail" }],
+    });
+    native.models.verifyModel.mockResolvedValue({ id: "qwen3-1_7b-q4", ok: false, elapsedMs: 12 });
+    const bridge = createAmbientTimelineModelBridge();
+
+    await expect(bridge.generateTimelineEvent(windowInput)).resolves.toEqual({
+      ok: false,
+      errorCode: "verify_required",
+    });
+    expect(native.models.generateTimelineEvent).not.toHaveBeenCalled();
+  });
+
+
+  test("calls native batch generation with compact budgeted input", async () => {
+    setSelectedAmbientSummaryModelId("qwen3-1_7b-q4");
+    native.models.list.mockResolvedValue({
+      profiles: [{ id: "qwen3-1_7b-q4", kind: "llm" }],
+      statuses: [{ id: "qwen3-1_7b-q4", state: "present", lastVerifyResult: "ok" }],
+    });
+    native.models.generateTimelineBatchDecision.mockResolvedValue({
+      decisions: [{
+        action: "create",
+        title: "Product review",
+        summary: "Discussed product review follow-ups.",
+        importance: "medium",
+        occurredAt: "2026-05-15T10:00:00.000Z",
+        sourceWindowIds: ["win_1"],
+      }],
+    });
+    const bridge = createAmbientTimelineModelBridge();
+
+    const result = await bridge.generateTimelineBatchDecision?.({ windows: [windowInput] });
+
+    expect(result).toMatchObject({ ok: true, batch: { decisions: [{ action: "create", title: "Product review" }] } });
+    expect(native.models.generateTimelineBatchDecision).toHaveBeenCalledWith({
+      modelId: "qwen3-1_7b-q4",
+      batch: expect.objectContaining({
+        schemaVersion: "ambient_timeline_batch.v1",
+        windows: [expect.objectContaining({ id: "win_1", compactContext: windowInput.compactContext })],
+      }),
+    });
+    const payload = native.models.generateTimelineBatchDecision.mock.calls[0][0].batch.windows[0];
+    expect(payload.rawRefs).toBeUndefined();
+  });
+
+  test("truncates batch window context to the on-device prompt budget", async () => {
+    setSelectedAmbientSummaryModelId("qwen3-1_7b-q4");
+    native.models.list.mockResolvedValue({
+      profiles: [{ id: "qwen3-1_7b-q4", kind: "llm" }],
+      statuses: [{ id: "qwen3-1_7b-q4", state: "present", lastVerifyResult: "ok" }],
+    });
+    native.models.generateTimelineBatchDecision.mockResolvedValue({
+      decisions: [{
+        action: "create",
+        title: "Budgeted",
+        summary: "Generated from a compact prompt.",
+        importance: "medium",
+        occurredAt: "2026-05-15T10:00:00.000Z",
+        sourceWindowIds: ["win_1"],
+      }],
+    });
+    const bridge = createAmbientTimelineModelBridge();
+    const longWindow = { ...windowInput, compactContext: "A".repeat(2_000) };
+
+    await bridge.generateTimelineBatchDecision?.({ windows: [longWindow] });
+
+    const payload = native.models.generateTimelineBatchDecision.mock.calls[0][0].batch.windows[0];
+    expect(payload.compactContext.length).toBeLessThanOrEqual(480);
+    expect(payload.compactContext.endsWith("…")).toBe(true);
+  });
+
+  test("falls back to single-window native generation when batch facade is unavailable", async () => {
+    setSelectedAmbientSummaryModelId("qwen3-1_7b-q4");
+    native.models.list.mockResolvedValue({
+      profiles: [{ id: "qwen3-1_7b-q4", kind: "llm" }],
+      statuses: [{ id: "qwen3-1_7b-q4", state: "present", lastVerifyResult: "ok" }],
+    });
+    const originalBatch = native.models.generateTimelineBatchDecision;
+    delete (native.models as Partial<typeof native.models>).generateTimelineBatchDecision;
+    native.models.generateTimelineEvent.mockResolvedValue({
+      eventType: "conversation",
+      title: "Fallback summary",
+      summary: "Generated through the legacy single-window method.",
+      tags: [],
+      confidence: 0.7,
+      confidenceLabel: "certain",
+      salientFacts: [],
+    });
+    const bridge = createAmbientTimelineModelBridge();
+
+    const result = await bridge.generateTimelineBatchDecision?.({ windows: [windowInput] });
+
+    expect(result).toMatchObject({
+      ok: true,
+      batch: { decisions: [{ action: "create", title: "Fallback summary", sourceWindowIds: ["win_1"] }] },
+    });
+    expect(native.models.generateTimelineEvent).toHaveBeenCalledWith({
+      modelId: "qwen3-1_7b-q4",
+      window: expect.objectContaining({ id: "win_1" }),
+    });
+    native.models.generateTimelineBatchDecision = originalBatch;
+  });
+
+
+  test("rejects batch decisions that omit selected windows", async () => {
+    setSelectedAmbientSummaryModelId("qwen3-1_7b-q4");
+    native.models.list.mockResolvedValue({
+      profiles: [{ id: "qwen3-1_7b-q4", kind: "llm" }],
+      statuses: [{ id: "qwen3-1_7b-q4", state: "present", lastVerifyResult: "ok" }],
+    });
+    native.models.generateTimelineBatchDecision.mockResolvedValue({ decisions: [] });
+    const bridge = createAmbientTimelineModelBridge();
+
+    await expect(bridge.generateTimelineBatchDecision?.({ windows: [windowInput] })).resolves.toEqual({
+      ok: false,
+      errorCode: "invalid_shape",
     });
   });
 

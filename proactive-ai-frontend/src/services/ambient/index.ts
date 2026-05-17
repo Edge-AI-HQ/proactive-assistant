@@ -66,9 +66,11 @@ export interface AmbientRuntimeOptions {
   timelinePipeline?: AmbientTimelinePipeline;
   enableTimers?: boolean;
   sourceWatchdogIntervalMs?: number;
+  timelineSummaryIntervalMs?: number;
 }
 
 const SOURCE_WATCHDOG_INTERVAL_MS = 60_000;
+const TIMELINE_SUMMARY_INTERVAL_MS = 15 * 60_000;
 
 export class AmbientRuntime {
   private buffer: SignalBuffer;
@@ -86,6 +88,8 @@ export class AmbientRuntime {
   private autoStartInFlight = false;
   private drainTimer: ReturnType<typeof setInterval> | null = null;
   private sourceWatchdogTimer: ReturnType<typeof setInterval> | null = null;
+  private timelineSummaryTimer: ReturnType<typeof setInterval> | null = null;
+  private timelineSummaryInFlight = false;
   private sourceReconcileInFlight = false;
   private sourceReconcilePending = false;
   private desiredSourceKeys = new Set<SourceKey>();
@@ -135,6 +139,7 @@ export class AmbientRuntime {
     }
     if (options.enableTimers !== false) {
       this.startDrainTimer();
+      this.startTimelineSummaryTimer(options.timelineSummaryIntervalMs);
       this.startSourceWatchdog(options.sourceWatchdogIntervalMs);
     }
   }
@@ -245,9 +250,9 @@ export class AmbientRuntime {
     await this.reconcileDesiredSources();
   }
 
-  async refreshTimeline(localDate?: string): Promise<void> {
+  async refreshTimeline(localDate?: string, options: { force?: boolean } = {}): Promise<void> {
     try {
-      const signals = await this.timelinePipeline.regenerateDay(localDate);
+      const signals = await this.timelinePipeline.regenerateDay(localDate, options);
       if (signals.length > 0) {
         await this.outbox.enqueue(signals);
         this.lastFlushTs = Date.now();
@@ -366,6 +371,23 @@ export class AmbientRuntime {
     this.drainTimer = setInterval(() => {
       void this.drain();
     }, this.scheduler.intervalMs());
+  }
+
+  private startTimelineSummaryTimer(intervalMs = TIMELINE_SUMMARY_INTERVAL_MS): void {
+    if (this.timelineSummaryTimer) return;
+    this.timelineSummaryTimer = setInterval(() => {
+      void this.runScheduledTimelineSummary();
+    }, intervalMs);
+  }
+
+  private async runScheduledTimelineSummary(): Promise<void> {
+    if (this.timelineSummaryInFlight) return;
+    this.timelineSummaryInFlight = true;
+    try {
+      await this.refreshTimeline();
+    } finally {
+      this.timelineSummaryInFlight = false;
+    }
   }
 
   private startSourceWatchdog(intervalMs = SOURCE_WATCHDOG_INTERVAL_MS): void {
