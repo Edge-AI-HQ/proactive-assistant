@@ -30,6 +30,8 @@ import {
 
 export interface AmbientTimelineProcessOptions {
   force?: boolean;
+  includeRecentPending?: boolean;
+  forceReady?: boolean;
 }
 
 export interface AmbientTimelinePipeline {
@@ -75,14 +77,9 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     options: AmbientTimelineProcessOptions = {},
   ): Promise<PersonalSignalInput[]> {
     await this.store.init();
-    const windows = await this.store.listCandidateWindows({
-      localDate,
-      windowType: "transcript_session",
-      status: "pending",
-      limit: 50,
-    });
+    const windows = await this.listPendingTranscriptWindows(localDate, options);
     const readyWindows = windows.filter((window) => window.generationPolicy === "llm_allowed"
-      && this.isTranscriptWindowReady(window)
+      && (options.forceReady || this.isTranscriptWindowReady(window))
       && (options.force || this.isBackoffExpired(window)));
     const out: PersonalSignalInput[] = [];
     if (readyWindows.length === 0) return out;
@@ -193,6 +190,39 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     return out;
   }
 
+
+  private async listPendingTranscriptWindows(
+    localDate: string,
+    options: AmbientTimelineProcessOptions,
+  ): Promise<AmbientCandidateWindow[]> {
+    const primary = await this.store.listCandidateWindows({
+      localDate,
+      windowType: "transcript_session",
+      status: "pending",
+      limit: 50,
+    });
+    if (!options.includeRecentPending || primary.length > 0) return primary;
+    const recentDates = await this.recentLocalDatesWithPendingTranscriptWindows(localDate);
+    const fallback: AmbientCandidateWindow[] = [];
+    for (const date of recentDates) {
+      fallback.push(...await this.store.listCandidateWindows({
+        localDate: date,
+        windowType: "transcript_session",
+        status: "pending",
+        limit: 10,
+      }));
+    }
+    return fallback;
+  }
+
+  private async recentLocalDatesWithPendingTranscriptWindows(excludedLocalDate: string): Promise<string[]> {
+    const raws = await this.store.listRawEvents({ limit: 1_000 });
+    return uniqueStrings(raws
+      .map((raw) => raw.localDate)
+      .filter((date) => date !== excludedLocalDate))
+      .sort((a, b) => b.localeCompare(a))
+      .slice(0, 2);
+  }
 
   private isTranscriptWindowReady(window: AmbientCandidateWindow): boolean {
     const textLength = window.compactContext.trim().length;
