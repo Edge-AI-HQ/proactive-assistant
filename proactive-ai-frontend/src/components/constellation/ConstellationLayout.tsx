@@ -289,7 +289,7 @@ export default function BigBallLayout() {
     : null;
   const ambientOn = getPersistedAmbientEnabled() || (consentOn ?? false);
   const { session: liveSession, previewVisibleCount } = useAmbientLiveSession({
-    ambientOn: activeView === "ambient" ? false : ambientOn,
+    ambientOn,
     enableWebDemo: false,
     dismissible: false,
   });
@@ -958,7 +958,7 @@ export default function BigBallLayout() {
           {liveOverlay && (
             <LiveFullscreen
               key="live-fullscreen"
-              session={liveOverlay}
+              session={liveSession ?? liveOverlay}
               onClose={() => setLiveOverlay(null)}
             />
           )}
@@ -1282,5 +1282,4 @@ function CardDrawerContent({
     </div>
   );
 }
-
 

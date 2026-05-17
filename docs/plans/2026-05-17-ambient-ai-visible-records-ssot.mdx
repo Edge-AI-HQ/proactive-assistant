@@ -38,6 +38,170 @@ flowchart TD
 6. **隐私边界不变**：Ambient 仍然只在用户打开后采集。登录本身不启动 source。
 7. **首次开启必须可见**：用户打开 Ambient ON 并完成权限授权后，pollable source 的第一批真实记录必须先落本地 ledger、立刻显示 pending，再进入上传；不能等 5 分钟定时器，也不能等后端成功后才显示。
 
+## 实施硬规则
+
+这些规则是本 plan 的执行口径，不能在实现时另做二选一。
+
+### R1：`pin_ambient_outbox` 是唯一 record ledger
+
+- 本轮只扩展 `pin_ambient_outbox`，不迁移、不改造、不新建另一套 timeline SQLite。
+- UI timeline 可以继续叫 "local timeline"，但数据源必须是 `pin_ambient_outbox`。
+- `pin_ambient_timeline` 只保留为历史兼容/调试数据；当前产品路径不再写 `ambient_timeline_events`，也不再从它读 timeline list。
+
+### R2：ledger 必须有可查询列，不能靠全表 JSON 解析
+
+`ambient_outbox` 必须 additive 增加以下列：
+
+| 列 | 类型 | 写入规则 |
+|---|---|---|
+| `occurred_at` | `TEXT` | `item.occurred_at ?? inserted_at ISO`，timeline 排序唯一依据。 |
+| `kind` | `TEXT` | `item.kind`。 |
+| `display_title` | `TEXT` | formatter 产物，默认取 `item.title`，但可按 kind humanize。 |
+| `display_summary` | `TEXT` | formatter 产物，默认取 `item.summary`，但必须经过 kind-specific redaction。 |
+| `source_label` | `TEXT` | `Location / Health / Voice / Sound / Motion / Visit / Device`。 |
+| `privacy` | `TEXT` | `normal / private / sensitive`。 |
+| `updated_at` | `INTEGER` | enqueue / status 变化时更新，供 UI 增量刷新。 |
+
+必须新增索引：
+
+```sql
+CREATE INDEX IF NOT EXISTS ix_ambient_outbox_timeline
+  ON ambient_outbox (occurred_at DESC, status, id);
+
+CREATE INDEX IF NOT EXISTS ix_ambient_outbox_kind_time
+  ON ambient_outbox (kind, occurred_at DESC);
+```
+
+迁移规则：
+
+- `ensureSchema()` 用 `ALTER TABLE ADD COLUMN` 添加缺失列。
+- 新写入 row 必须在 `enqueue()` 时写满这些列。
+- 老 row 允许保留，但 `listRecords()` 读取到空 display 列时必须解析 `item` 做一次 lazy backfill；不能因为老 row 缺列导致 UI 空白或崩溃。
+
+### R3：ledger API 必须同时服务上传和 UI
+
+`OutboxStore` 必须扩展为：
+
+```ts
+interface OutboxStore {
+  enqueue(items: PersonalSignalInput[]): Promise<number>;
+  pending(limit: number, now?: number): Promise<OutboxRecord[]>;
+  listRecords(opts: {
+    limit: number;
+    before?: string;
+    statuses?: OutboxStatus[];
+    kinds?: string[];
+  }): Promise<AmbientLedgerRecord[]>;
+  getRecord(id: string): Promise<AmbientLedgerRecord | null>;
+  countByStatus(): Promise<Record<OutboxStatus, number>>;
+  markSynced(ids: string[], at?: number): Promise<void>;
+  markFailed(ids: string[], error: string, nextRetryAt: number): Promise<void>;
+  prune(now?: number): Promise<number>;
+  count(): Promise<number>;
+}
+```
+
+`AmbientLedgerRecord` 必须包含：
+
+```ts
+type AmbientLedgerRecord = OutboxRecord & {
+  occurredAt: string;
+  kind: string;
+  displayTitle: string;
+  displaySummary: string;
+  sourceLabel: string;
+  privacy: "normal" | "private" | "sensitive";
+  displayStatus: "pending" | "synced" | "retrying" | "failed";
+};
+```
+
+`displayStatus` 派生规则：
+
+- `status === "pending"` → `pending`
+- `status === "synced"` → `synced`
+- `status === "failed" && nextRetryAt != null && nextRetryAt > Date.now()` → `retrying`
+- `status === "failed"` → `failed`
+
+### R4：首次 ON 必须有 first-on bootstrap
+
+Ambient ON 后必须执行以下顺序：
+
+1. `reconcileEnabledSources(enabledSources)` 启动所有 enabled sources。
+2. 对 pollable sources 执行 first-on collect：
+   - `location.refresh({ reason: "first_on" })` 必须等待一次 `getCurrentPosition()` 完成或超时。
+   - `health.refresh({ reason: "first_on" })` 必须等待一次 `readAndEmit(false)` 完成或超时。
+3. first-on collect timeout：
+   - location：30 秒。
+   - health：15 秒。
+   - 任一 source 超时只更新该 source 状态，不阻塞其它 source。
+4. first-on collect 期间只要 source 产生真实 record，就必须先 `enqueue()` 到 ledger。
+5. first-on collect 完成后立即 `flush()` buffer，再 `drain()` 上传。
+6. UI 显示只依赖 ledger，不依赖 drain 成功。
+
+`AmbientSource.refresh` 签名改成：
+
+```ts
+type AmbientRefreshReason = "first_on" | "resume" | "manual";
+
+interface AmbientSource {
+  refresh?(opts?: { reason: AmbientRefreshReason }): Promise<void>;
+}
+```
+
+location 当前没有 `refresh()`，本 plan 必须补。`start()` 里不能再只 `void this.tick()` 后就算 first-on 完成；first-on 可见性必须由 runtime 显式等待 `refresh({ reason: "first_on" })`。
+
+### R5：ledger 变化必须主动通知 UI
+
+不能靠 5 秒轮询保证“立刻可见”。必须新增 record 专用刷新通道：
+
+- `AmbientRuntime` 增加 `subscribeRecords(listener)`，并在以下动作后触发：
+  - `outbox.enqueue()`
+  - `outbox.markSynced()`
+  - `outbox.markFailed()`
+  - `outbox.prune()`
+- 新增 `useAmbientRecords()`，内部必须读 `outbox.listRecords()` 并订阅 runtime/outbox 变化。
+- `AmbientView` 不再直接或间接调用 `getAmbientTimelineStore().listTimelineEvents()`。
+
+### R6：旧 timeline 主路径必须退出
+
+以下行为必须从当前产品主路径删除：
+
+- `AmbientRuntime.ingestLocalSignal()` 不再调用 `timelinePipeline.ingestSignal(item)`。
+- `AmbientRuntime.markTimelineEventsSynced()` 删除或变成未使用代码。
+- `sync-scheduler.ts` 不再把 `ambient.timeline_event` / `ambient.candidate_window` 放进 `SYNCABLE_AMBIENT_KINDS`。
+- `useAmbientLiveSession()` 不再从 candidate windows 构造当前 Ambient 状态；它只能读真实 transcript stream 或 record ledger display records。
+- `timeline/*` 下代码可以暂时保留给历史测试/调试，但不能被 Ambient 当前产品路径 import。
+
+### R7：retention 不能丢 pending/failed 上传队列
+
+`prune()` 规则固定为：
+
+- `synced`：保留 7 天。
+- `pending` / `failed`：不按时间自动删除。
+- 必须加 `MAX_LEDGER_ROWS = 5000` 的容量保护：
+  - 超过容量时先删最旧 `synced`。
+  - 删完 `synced` 仍超限时只记录 warning，不删 `pending` / `failed`。
+
+### R8：transcript 默认展示必须 redacted
+
+`session_summary` 的 `item.summary` 可以保存完整 transcript/摘要文本供 AI-visible payload 使用，但 UI 默认卡片不能直接铺完整对话全文。
+
+formatter 固定规则：
+
+- `display_title = "Conversation captured"`。
+- `display_summary` 最多 160 字符。
+- 多段 transcript 默认显示第一句或本地摘要；没有摘要时显示 `Conversation transcript captured`。
+- 完整 transcript 只能在用户显式展开 debug/details 时显示，普通 timeline 默认不展示。
+
+### R9：health raw-only 必须验证进入 AI context
+
+health 继续 raw-only，不写 `pai_personal_signals`。但本 plan 的“用户看到什么，AI 就看到什么”要求必须补后端验证：
+
+- `health.observation` 经 `/api/devices/ingest` 写入 `pai_raw_device_health_observations`。
+- 生成/agent 使用的 `phase1_seed` 必须包含最近 device health 摘要。
+- 在 `pinai-agents/src/pinai_agents/web/services/phase1_seed.py` 新增 device health summary collector；不能只依赖 `/api/devices/{device_id}/timeline` UI endpoint。
+- 验收测试必须证明一条 health observation 能进入 generator/dream seed payload。
+
 ## 当前问题
 
 ### 两套记录实现
@@ -119,41 +283,36 @@ type AmbientAiVisibleRecord = PersonalSignalInput & {
 | `next_retry_at` | 下次 retry 时间。 |
 | `inserted_at` | 本地入队时间。 |
 | `synced_at` | 上传成功时间。 |
+| `occurred_at` | UI timeline 排序时间，来自 `item.occurred_at`。 |
+| `kind` | `item.kind`，用于筛选和 source label 映射。 |
+| `display_title` | 默认 UI 标题，formatter 写入。 |
+| `display_summary` | 默认 UI 正文，formatter 写入，已做 kind-specific redaction。 |
+| `source_label` | 人类可读来源，例如 `Location / Health / Voice`。 |
+| `privacy` | `normal / private / sensitive`。 |
+| `updated_at` | row 最近状态变化时间。 |
 
-当前 `ambient_outbox` 已有上传状态字段，所以直接扩展它，不再迁移或改造 `pin_ambient_timeline`。需要补的是：
+当前 `ambient_outbox` 已有上传状态字段，所以直接扩展它，不再迁移或改造 `pin_ambient_timeline`。必须补齐：
 
-- 增加 list API：UI/local timeline 能按 `occurred_at DESC` 读取 pending/synced/failed records。
-- 延长 synced retention：不能只当 24h retry buffer；至少保留 7 天，后续根据端侧存储压力调。
-- UI formatter：把 `item.kind + item.title + item.summary + status` 转成卡片，不直接展示 `item.payload`。
+- list API：UI/local timeline 按 `occurred_at DESC` 读取 pending/synced/failed records。
+- timeline 索引：`ix_ambient_outbox_timeline(occurred_at DESC, status, id)`。
+- kind 索引：`ix_ambient_outbox_kind_time(kind, occurred_at DESC)`。
+- display formatter：`enqueue()` 时写入 `display_title / display_summary / source_label / privacy`。
+- synced retention：固定 7 天。
+- pending/failed retention：不按时间自动删除。
 - 首次开启路径：第一条 location/health 等真实 record 必须在 drain 前写入 ledger；上传失败不影响本地可见性。
 
 ### Source raw cache
 
-本轮不新建新的 source raw cache。若现有 source pipeline 已经为了 transcript 合并、sound/motion aggregation 使用原始事件缓存，可以继续保留，但它不叫产品 timeline，也不直接给 UI 用。
+本轮不新建新的 source raw cache。现有 source pipeline 为 transcript 合并、sound/motion aggregation 使用的内存/临时缓存可以保留，但它不叫产品 timeline，也不直接给 UI 用。
 
-若后续单独需要做离线补算，再另开 plan 评审类似结构：
-
-```text
-ambient_source_events
-- id
-- source_key
-- event_type
-- occurred_at
-- payload_json
-- dedupe_key
-- created_at
-```
-
-使用边界：
+允许保留的内部缓存边界：
 
 - transcript 多段合并。
 - sound / motion run aggregation。
-- location + motion + visit 组合成 transition。
-- 离线时先存原始采集，稍后补跑规则。
 
 不做：
 
-- 不再维护独立语义的 `ambient_timeline_events`；若保留这个名字，它必须是 record ledger 的兼容表/view。
+- 不再维护独立语义的 `ambient_timeline_events`。
 - 不再让 `ambient_candidate_windows` 作为 UI 数据源。
 - 不再用本地-only event 代表 AI 已看到的数据。
 
@@ -165,21 +324,33 @@ Ambient 页面展示 record ledger 中的 AI-visible records。页面概念可�
 
 | UI 字段 | 来源 |
 |---|---|
-| 时间 | `item.occurred_at` |
-| 标题 | `item.title` |
-| 正文 | `item.summary` |
-| 来源 | `kind` 映射出来的 display label，例如 Location / Health / Audio / Motion |
-| 状态 | ledger `status`: pending / synced / retrying / failed |
-| 隐私标签 | formatter 根据 `kind` 推断：health=sensitive, location/private, sound/normal |
+| 时间 | ledger `occurred_at` |
+| 标题 | ledger `display_title` |
+| 正文 | ledger `display_summary` |
+| 来源 | ledger `source_label` |
+| 状态 | formatter 从 `status + next_retry_at` 派生 `pending / synced / retrying / failed` |
+| 隐私标签 | ledger `privacy`: health=sensitive, location/private, transcript/private |
 
 默认不展示：
 
 - 原始 payload JSON。
 - rawRefs。
 - 经纬度完整精度。
-- transcript 全文调试字段。
+- transcript 全文。
+- wavId / burstId / provider / captureSessionId 等调试字段。
 
-Debug 模式可以展开 payload，但必须显式操作，不能作为普通用户默认视图。
+Debug/details 模式可以展开 payload 或 transcript 全文，但必须显式操作，不能作为普通用户默认视图。
+
+kind-specific 文案规则固定如下：
+
+| kind | display_title | display_summary |
+|---|---|---|
+| `device.location` | `Current location` | 有 place 时 `Near <place> · accuracy about <N>m`；无 place 时 `Location captured · accuracy about <N>m`。默认不展示经纬度。 |
+| `health.observation` | `Health updated` | steps / sleep / heart 任一有效指标组成一句话，例如 `8,120 steps today · average heart rate 63 bpm`。 |
+| `session_summary` | `Conversation captured` | 最多 160 字符；优先本地摘要，其次第一句摘录；没有可用文本时 `Conversation transcript captured`。 |
+| `device.sound_scene_run` | `Sound context` | `<label> nearby for about <duration>`，过滤低置信度和 speech tick。 |
+| `device.motion_segment` | `Motion activity` | `<activity> for about <duration>`。 |
+| `device.visit` | `Place arrival` / `Place departure` | `Arrived near <place>` / `Left <place>`。 |
 
 ## 目标链路
 
@@ -193,16 +364,18 @@ sequenceDiagram
   participant API as /api/devices/ingest
 
   UI->>RT: startAmbientUpload(enabledSources)
-  RT->>Src: start + immediate tick/read for pollable sources
+  RT->>Src: start sources
+  RT->>Src: refresh({reason:"first_on"}) for location/health
   Src-->>RT: source event
   RT->>Rule: normalize / aggregate / redact
   Rule-->>RT: AI-visible record(s)
-  RT->>Ledger: enqueue record(s) before upload
-  UI->>Ledger: list records by occurred_at desc
+  RT->>Ledger: enqueue record(s) before drain
+  Ledger-->>UI: recordsChanged notification
+  UI->>Ledger: listRecords by occurred_at desc
   RT->>API: drain pending records
   API-->>RT: per-item status
   RT->>Ledger: mark synced / failed
-  UI->>Ledger: refresh status
+  Ledger-->>UI: recordsChanged notification
 ```
 
 ## 实施步骤
@@ -225,6 +398,15 @@ sequenceDiagram
   - Ambient ON 后立即触发 location tick / health read。
   - mock source 返回后，record 在上传 drain 前已经进入 ledger。
   - UI selector 能在后端返回前读到 pending record。
+- 新增 schema 测试：
+  - SQLite `ensureSchema()` 会添加 `occurred_at / kind / display_title / display_summary / source_label / privacy / updated_at`。
+  - `listRecords()` 按 `occurred_at DESC` 排序，不依赖全表 JSON 排序。
+- 新增 retention 测试：
+  - synced 超过 7 天会被 prune。
+  - pending/failed 超过 7 天不会被 prune。
+- 新增 transcript display 测试：
+  - `session_summary` 默认 `display_summary` 不超过 160 字符。
+  - 默认 display 不包含 `wavId / burstId / provider / captureSessionId`。
 
 ### Step 2：把 `pin_ambient_outbox` 扩展为 record ledger
 
@@ -233,13 +415,16 @@ sequenceDiagram
 实施路径固定为扩展现有 `SqliteOutboxStore`。不迁移 `pin_ambient_timeline`，不新增第二套 timeline SQLite 表。
 
 - 扩展 `OutboxStore`：
-  - `list(limit, filter?)`
-  - `get(id)`
+  - `listRecords(opts)`
+  - `getRecord(id)`
   - `countByStatus()`
-- SQLite store 实现对应 query。
-- synced retention 从 24h 改成至少 7 天。
+- SQLite store 添加 R2 规定的 denormalized columns 和两个索引。
+- Memory store 同步实现完整接口，保证 web/dev test 行为一致。
+- synced retention 从 24h 改成固定 7 天。
+- pending/failed 不按时间删除。
 - 保留现有 `pending()` / `markSynced()` / `markFailed()` 语义，避免上传链路重写过大。
 - 明确插入顺序：`enqueue(record)` 成功后再 `drain()`；任何网络错误只改变 status，不删除 UI 可见记录。
+- `markSynced()` / `markFailed()` / `prune()` 必须更新 `updated_at` 并触发 records changed notification。
 
 ### Step 3：引入 AI-visible record formatter
 
@@ -267,23 +452,28 @@ sequenceDiagram
 
 要求：
 
-- formatter 可以从 `title / summary` 直接展示时优先用它们。
+- formatter 可以从 `title / summary` 直接展示时优先用它们，但必须执行 kind-specific redaction。
 - payload 只用于补充 label，例如 place label、accuracy、metric。
 - payload 字段缺失时降级为 `title / summary`，不能降级成 JSON。
+- `session_summary` 必须按 R8 redaction 生成 display，不允许默认铺完整 transcript。
+- formatter 输出在 `enqueue()` 时写入 ledger denormalized columns，UI 不在 render 阶段重复解析 payload JSON。
 
 ### Step 4：Ambient 页面改读 record ledger
 
 目标：UI 显示 AI-visible records。
 
-- `useAmbientTimeline()` 替换为 `useAmbientRecords()`。
+- 新增 `useAmbientRecords()`。
 - `AmbientView` 的 timeline 列表从 record ledger selector 取数据。
-- hook 名字可以继续叫 `useAmbientTimeline()`，但内部必须读 record ledger；若新增 `useAmbientRecords()`，旧 hook 要成为薄 wrapper，不能保留另一套数据路径。
-- 首页 Live Session 如果要展示 Ambient 状态，也读同一批 display records，而不是 candidate windows。
+- `AmbientView` 改为 import `useAmbientRecords()`，不再 import `useAmbientTimeline()`。
+- `useAmbientTimeline.ts` 不再作为产品路径使用；保留时只能用于历史测试，不能被 `AmbientView` 或 live session import。
+- `useAmbientRecords()` 必须订阅 records changed notification；不能只靠 5 秒 polling。
+- 首页 Live Session 的实时转录继续读真实 transcript stream；Ambient 状态 context 读最近 5 条 record ledger display records，不再读 candidate windows。
 - 空态改成真实状态：
   - 无权限：显示哪个 source permission denied。
-  - 刚开启但未采到：显示 "Waiting for first Location / Health sample"。
+  - 刚开启但未采到：显示 `Waiting for first Location / Health sample`。
   - 有 pending：显示 pending records。
   - 上传失败：显示 retrying/failed 状态。
+  - first-on 超时：显示具体 source，例如 `Location timed out` 或 `Health permission granted, no recent data`。
 
 ### Step 5：消除分离的 timeline 产物
 
@@ -293,7 +483,8 @@ sequenceDiagram
 - 停止写当前产品路径上的 `ambient_timeline_events`。
 - UI 可以继续叫 timeline，但 timeline list 不能再读 `pin_ambient_timeline` 或 candidate windows 的二次结果；它必须读 `pin_ambient_outbox` record ledger。
 - 保留旧 DB 不主动删除，避免升级时破坏用户本地数据；新代码不再依赖旧的 split-brain 语义。
-- 若后续确认完全无用，再单独做清理 migration / drop 逻辑。
+- 从 scheduler 的 syncable kind 列表移除 `ambient.timeline_event` 和 `ambient.candidate_window`。
+- 从当前产品路径移除 `markTimelineEventsSynced()`。
 
 ### Step 6：重整规则层
 
@@ -319,27 +510,46 @@ health 保持后端 raw-only：`health.observation` 仍写 `pai_raw_device_healt
 - location：保持 start 后立即 tick + 每 5 分钟。
 - health：改成 start 后立即 read + 每 5 分钟。
 - upload drain：start 后立即 drain 一次；之后保持 60 秒周期。
-- app resume：refresh active sources + pollable sources tick once + drain。
+- app resume：refresh active sources + `refresh({ reason: "resume" })` for location/health + flush + drain。
 - event-stream sources 不伪造记录，只报告 runtime status。
 - 首次 ON bootstrap：
   - toggle ON 后立即 reconcile enabled sources，不等下一次 app resume / watchdog。
-  - pollable sources 并发执行 first tick/read。
-  - 任一 source 返回真实数据后，先 `enqueue` ledger 并通知 UI refresh。
+  - pollable sources 并发执行 `refresh({ reason: "first_on" })`。
+  - source 返回真实数据后，先 `enqueue` ledger 并通知 UI refresh。
+  - first-on collect 结束后立即 `flush()` buffer。
   - drain 只负责把已可见的 pending records 上传，不参与决定 UI 是否显示。
   - 若 30 秒内没有任何真实 record，UI 必须显示具体 source 状态，例如 `Waiting for location sample`、`Health permission granted, no recent data` 或错误原因，不能空白。
+
+### Step 8：验证 AI context 真能看到 raw health
+
+目标：补齐“用户看到 = AI 看到”的后端闭环。
+
+- 保持 `health.observation` raw-only，不写 `pai_personal_signals`。
+- 在 `pinai-agents/src/pinai_agents/web/services/phase1_seed.py` 增加最近 device health summary collector。
+- 新增后端测试：
+  - 插入一条 `pai_raw_device_health_observations`。
+  - 构建 generator/dream seed。
+  - 断言 seed 里包含该 health metric 的人类可读摘要。
+- 设备 UI timeline endpoint 的 UNION 只能作为页面显示证据，不能替代 AI context 测试。
 
 ## 验收标准
 
 1. 新用户打开 Ambient 并给 location/health 权限后，不依赖后端返回，Ambient 页面能在本地看到至少一条 pending AI-visible record；如果真实 source 没有返回数据，页面必须显示具体等待/无数据/错误状态，不能空白。
-2. location mock 返回后，ledger 有 `device.location`，UI 显示 `Current location` 或 `Near <place>`，不展示 JSON。
-3. health mock 返回 steps/sleep/heart 任一有效 observation 后，ledger 有 `health.observation`，UI 显示 `Health updated`，不展示 JSON。
-4. 网络断开时，records 留在 SQLite，UI 显示 pending/retrying。
-5. kill app 再打开，未上传 records 仍在；已上传 records 在 retention 窗口内仍可见。
-6. 上传成功后，同一条 record 状态从 pending 变 synced，UI 记录不消失。
-7. `AmbientView` 的 timeline list 不再读取 `pin_ambient_timeline` / `ambient_timeline_events` / `ambient_candidate_windows`；它必须读取 `pin_ambient_outbox` record ledger。
-8. `npm run type-check` 通过。
-9. ambient 相关 vitest 覆盖 formatter、ledger list、scheduler retry、UI selector。
-10. web build 主 chunk 仍不能静态包含 `@pin/capacitor-ambient-ai` 等 native bare specifier。
+2. location mock 返回后，`ambient_outbox` row 必须包含 `kind='device.location'`、`occurred_at`、`display_title='Current location'`、非 JSON `display_summary`；UI 默认不展示经纬度。
+3. health mock 返回 steps/sleep/heart 任一有效 observation 后，`ambient_outbox` row 必须包含 `kind='health.observation'`、`display_title='Health updated'`；UI 默认不展示 raw payload JSON。
+4. `session_summary` mock 返回长 transcript 后，UI 默认 `display_summary` 不超过 160 字符，不包含 `wavId / burstId / provider / captureSessionId`。
+5. Ambient ON 的 first-on 测试必须证明 `location.refresh({ reason: "first_on" })` / `health.refresh({ reason: "first_on" })` 被 await 或按 timeout 进入明确状态；不能只依赖 `void tick()`。
+6. UI hook 必须在 `outbox.enqueue()` 后立即刷新；测试不能通过 5 秒 polling 才看到 pending record。
+7. 网络断开时，records 留在 SQLite，UI 显示 pending/retrying；`pending` / `failed` 超过 7 天不会被 prune。
+8. kill app 再打开，未上传 records 仍在；已上传 records 在 7 天 retention 窗口内仍可见。
+9. 上传成功后，同一条 record 状态从 pending 变 synced，UI 记录不消失。
+10. `AmbientView` 的 timeline list 不再读取 `pin_ambient_timeline` / `ambient_timeline_events` / `ambient_candidate_windows`；它必须读取 `pin_ambient_outbox` record ledger。
+11. `sync-scheduler.ts` 不再把 `ambient.timeline_event` / `ambient.candidate_window` 当当前产品 sync path。
+12. health raw-only 后端测试证明 `pai_raw_device_health_observations` 的最近数据会进入 `phase1_seed` 的 generator/dream seed payload。
+13. `npm run type-check` 通过。
+14. ambient 相关 vitest 覆盖 formatter、ledger list、scheduler retry、UI selector、first-on bootstrap、retention。
+15. 后端相关 pytest 覆盖 device health ingest + AI context seed。
+16. web build 主 chunk 仍不能静态包含 `@pin/capacitor-ambient-ai` 等 native bare specifier。
 
 ## 文件落点
 
@@ -348,11 +558,13 @@ health 保持后端 raw-only：`health.observation` 仍写 `pai_raw_device_healt
 | record ledger | `proactive-ai-frontend/src/services/ambient/outbox.ts` |
 | scheduler | `proactive-ai-frontend/src/services/ambient/sync-scheduler.ts` |
 | runtime | `proactive-ai-frontend/src/services/ambient/index.ts` |
+| source refresh contract | `proactive-ai-frontend/src/services/ambient/sources/types.ts`、`sources/location.ts`、`sources/health.ts` |
 | records formatter | `proactive-ai-frontend/src/services/ambient/records/*` |
 | UI hook | `proactive-ai-frontend/src/hooks/useAmbientRecords.ts` |
 | Ambient 页面 | `proactive-ai-frontend/src/components/constellation/AmbientView.tsx` |
 | Home Live Session | `proactive-ai-frontend/src/hooks/useAmbientLiveSession.ts` / `services/ambient/live-session.ts` |
 | health cadence | `capacitor-plugins/ambient-ai/src/modules/health-connect/adapter.ts` |
+| AI context health raw | `pinai-agents/src/pinai_agents/web/services/phase1_seed.py` |
 | docs | `docs/modules/data-connectors.mdx`、本 plan |
 
 ## 旧设计替代关系

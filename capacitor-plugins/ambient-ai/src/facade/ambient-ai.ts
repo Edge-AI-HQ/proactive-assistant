@@ -13,6 +13,7 @@ import type {
   CalendarEventEvent,
   CalendarSummaryEvent,
   ContactsSnapshot,
+  CaptureReadyEvent,
   DeviceStateSnapshot,
   FocusEvent,
   HeartRateEvent,
@@ -46,6 +47,7 @@ export const AmbientAi: AmbientAiFacade = {
       return result.transcripts;
     },
     listRecentCaptures: () => native.audio.listRecentCaptures(),
+    readCapture: (options) => native.audio.readCapture(options),
     playCapture: (options) => native.audio.playCapture(options),
     stopPlayback: () => native.audio.stopPlayback(),
   },
@@ -184,6 +186,8 @@ function addListener<K extends AmbientEventName>(
       return native.calendar.addListener('calendarSummary', listenerFunc as (event: CalendarSummaryEvent) => void);
     case 'contacts':
       return native.contacts.addListener('contacts', listenerFunc as (event: ContactsSnapshot) => void);
+    case 'captureReady':
+      return native.audio.addListener('captureReady', listenerFunc as (event: CaptureReadyEvent) => void);
     case 'deviceState':
       return native.device.addListener('deviceState', listenerFunc as (event: DeviceStateSnapshot) => void);
     case 'focus':

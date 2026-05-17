@@ -1,11 +1,15 @@
 import {
   AmbientAi,
+  type CaptureReadyEvent,
   type SoundClassificationEvent,
   type TranscriptReadyEvent,
 } from "@pin/capacitor-ambient-ai";
 import type { PluginListenerHandle } from "@capacitor/core";
+import { normalizeVoiceLanguage } from "@/components/voice/language";
 import type { AmbientSource, SourceContext } from "./types";
 import { SoundRunAggregator } from "./sound-runs";
+import { transcribeAmbientCapture } from "../capture-transcription";
+import { applyAmbientLiveTranscriptUpdate } from "../live-transcript-store";
 
 export interface SoundClassifierOptions {
   /** Min top-1 confidence (0-1) before we even consider emitting. */
@@ -23,6 +27,12 @@ const MIN_TRANSCRIPT_LENGTH = 24;
 const TRANSCRIPT_SALIENCE = 0.7;
 const TRANSCRIPT_CONFIDENCE = 0.75;
 const SPEECH_LABEL = "speech";
+const DEFAULT_TRANSCRIPTION_LANGUAGE = "zh";
+const LIVE_AUDIO_CONFIG = {
+  postRollMs: 2_500,
+  maxBurstMs: 12_000,
+  minBurstMs: 600,
+} as const;
 const INTENTIONAL_SUPPRESSION_REASONS = new Set(["media", "playback"]);
 const UNHEALTHY_ENGINE_STATES = new Set(["failed", "stale", "suspended"]);
 const CLASSIFICATION_STALE_MS = 15_000;
@@ -40,9 +50,11 @@ export class SoundClassifierSource implements AmbientSource {
 
   private listenerHandle: PluginListenerHandle | null = null;
   private transcriptListenerHandle: PluginListenerHandle | null = null;
+  private captureReadyListenerHandle: PluginListenerHandle | null = null;
   private started = false;
   private opts: Required<SoundClassifierOptions>;
   private runs = new SoundRunAggregator();
+  private storedTranscriptBurstIds = new Set<string>();
 
   constructor(
     private ctx: SourceContext,
@@ -61,9 +73,19 @@ export class SoundClassifierSource implements AmbientSource {
     if (perm.microphone !== "granted") {
       throw new Error(`microphone permission ${perm.microphone}`);
     }
+    await AmbientAi.audio.configure({
+      ...LIVE_AUDIO_CONFIG,
+      recognitionLocale: this.voiceLanguage().browser,
+    });
     this.listenerHandle = await AmbientAi.addListener(
       "soundClassification",
       (event) => this.handle(event),
+    );
+    this.captureReadyListenerHandle = await AmbientAi.addListener(
+      "captureReady",
+      (event) => {
+        void this.handleCaptureReady(event);
+      },
     );
     this.transcriptListenerHandle = await AmbientAi.addListener(
       "transcriptReady",
@@ -146,6 +168,10 @@ export class SoundClassifierSource implements AmbientSource {
     this.handleTranscriptReady(event);
   }
 
+  async handleCaptureReadyForTest(event: CaptureReadyEvent): Promise<void> {
+    await this.handleCaptureReady(event);
+  }
+
   handleSoundClassificationForTest(event: SoundClassificationEvent): void {
     this.handle(event);
   }
@@ -153,19 +179,74 @@ export class SoundClassifierSource implements AmbientSource {
   private handleTranscriptReady(event: TranscriptReadyEvent): void {
     const text = event.text.trim();
     if (text.length < MIN_TRANSCRIPT_LENGTH) return;
+    if (this.storedTranscriptBurstIds.has(event.burstId)) return;
 
+    this.pushTranscript({
+      event,
+      text,
+      provider: event.provider,
+      fallback: event.fallback,
+      localProvider: event.localProvider,
+      segmentIndex: event.segmentIndex,
+    });
+  }
+
+  private async handleCaptureReady(event: CaptureReadyEvent): Promise<void> {
+    if (this.storedTranscriptBurstIds.has(event.burstId)) return;
+    try {
+      const result = await transcribeAmbientCapture(event, this.transcriptionLanguage());
+      const text = result.text.trim();
+      if (!text) return;
+
+      applyAmbientLiveTranscriptUpdate({
+        captureSessionId: event.captureSessionId,
+        id: event.burstId,
+        text,
+        source: "cloud_whisper",
+        receivedAt: Date.parse(event.capturedAt) || Date.now(),
+      });
+
+      if (text.length >= MIN_TRANSCRIPT_LENGTH && !this.storedTranscriptBurstIds.has(event.burstId)) {
+        this.pushTranscript({
+          event,
+          text,
+          provider: "cloud_whisper",
+          fallback: false,
+        });
+      }
+    } catch (error) {
+      applyAmbientLiveTranscriptUpdate({
+        captureSessionId: event.captureSessionId,
+        id: event.burstId,
+        text: "Transcription unavailable",
+        source: "microphone",
+        receivedAt: Date.now(),
+      });
+      this.ctx.onEvent(this.key, `Voice transcription failed: ${errorMessage(error)}`);
+    }
+  }
+
+  private pushTranscript(input: {
+    event: TranscriptReadyEvent | CaptureReadyEvent;
+    text: string;
+    provider: string;
+    fallback: boolean;
+    localProvider?: string;
+    segmentIndex?: number;
+  }): void {
+    const { event, text } = input;
     const payload: Record<string, unknown> = {
       platform: event.platform,
       wavId: event.wavId,
       burstId: event.burstId,
       captureSessionId: event.captureSessionId,
       durationMs: event.durationMs,
-      provider: event.provider,
-      fallback: event.fallback,
+      provider: input.provider,
+      fallback: input.fallback,
     };
-    if (event.localProvider) payload.localProvider = event.localProvider;
-    if (typeof event.segmentIndex === "number") {
-      payload.segmentIndex = event.segmentIndex;
+    if (input.localProvider) payload.localProvider = input.localProvider;
+    if (typeof input.segmentIndex === "number") {
+      payload.segmentIndex = input.segmentIndex;
     }
     if (event.triggerSource) payload.triggerSource = event.triggerSource;
 
@@ -179,6 +260,7 @@ export class SoundClassifierSource implements AmbientSource {
       confidence: TRANSCRIPT_CONFIDENCE,
       dedupe_key: `${event.platform}:audio:${event.burstId}`,
     });
+    this.storedTranscriptBurstIds.add(event.burstId);
     this.ctx.onEvent(this.key, `Voice transcript: ${text}`);
   }
 
@@ -203,6 +285,14 @@ export class SoundClassifierSource implements AmbientSource {
     }
   }
 
+  private voiceLanguage() {
+    return normalizeVoiceLanguage(this.ctx.getTranscriptionLanguage?.());
+  }
+
+  private transcriptionLanguage(): string {
+    return this.voiceLanguage().openai ?? DEFAULT_TRANSCRIPTION_LANGUAGE;
+  }
+
   private async cleanupNativeStartFailure(): Promise<void> {
     await Promise.allSettled([
       AmbientAi.sound.stopClassification(),
@@ -213,9 +303,10 @@ export class SoundClassifierSource implements AmbientSource {
   }
 
   private async removeListeners(): Promise<void> {
-    const handles = [this.listenerHandle, this.transcriptListenerHandle]
+    const handles = [this.listenerHandle, this.captureReadyListenerHandle, this.transcriptListenerHandle]
       .filter((handle): handle is PluginListenerHandle => handle !== null);
     this.listenerHandle = null;
+    this.captureReadyListenerHandle = null;
     this.transcriptListenerHandle = null;
     await Promise.all(handles.map((handle) => handle.remove()));
   }
@@ -224,4 +315,8 @@ export class SoundClassifierSource implements AmbientSource {
 function isClassificationStale(lastClassificationAt: number | undefined): boolean {
   return typeof lastClassificationAt === "number"
     && Date.now() - lastClassificationAt > CLASSIFICATION_STALE_MS;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

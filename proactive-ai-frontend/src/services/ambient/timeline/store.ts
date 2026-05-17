@@ -52,13 +52,16 @@ export class MemoryTimelineStore implements AmbientTimelineStore {
     sourceType?: AmbientSourceType;
     eventType?: string;
     limit?: number;
+    order?: "asc" | "desc";
   }): Promise<AmbientRawEvent[]> {
     await this.initIfNeeded();
-    return Array.from(this.rawEvents.values())
+    const sorted = Array.from(this.rawEvents.values())
       .filter((row) => !filter.localDate || row.localDate === filter.localDate)
       .filter((row) => !filter.sourceType || row.sourceType === filter.sourceType)
       .filter((row) => !filter.eventType || row.eventType === filter.eventType)
-      .sort(compareByOccurredAtAsc)
+      .sort(compareByOccurredAtAsc);
+    if (filter.order === "desc") sorted.reverse();
+    return sorted
       .slice(0, filter.limit ?? Number.POSITIVE_INFINITY)
       .map(cloneRawEvent);
   }
@@ -406,6 +409,7 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
     sourceType?: AmbientSourceType;
     eventType?: string;
     limit?: number;
+    order?: "asc" | "desc";
   }): Promise<AmbientRawEvent[]> {
     await this.init();
     const clauses: string[] = [];
@@ -424,9 +428,10 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
     }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
     const limit = filter.limit ?? 500;
+    const direction = filter.order === "desc" ? "DESC" : "ASC";
     const rows = await (await this.db()).query(
       `SELECT * FROM ambient_raw_events ${where}
-       ORDER BY occurred_at ASC LIMIT ?`,
+       ORDER BY occurred_at ${direction} LIMIT ?`,
       [...values, limit],
     );
     return (rows.values ?? []).map(rowToRawEvent);

@@ -2,6 +2,14 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { SoundClassifierSource } from "./sound-classifier";
 import type { SourceContext } from "./types";
+import {
+  getAmbientLiveTranscriptSnapshot,
+  resetAmbientLiveTranscriptForTest,
+} from "../live-transcript-store";
+
+const captureTranscriptionMock = vi.hoisted(() => ({
+  transcribeAmbientCapture: vi.fn(),
+}));
 
 const ambientAiMock = vi.hoisted(() => {
   const listenerRemove = vi.fn(async () => {});
@@ -9,7 +17,9 @@ const ambientAiMock = vi.hoisted(() => {
     listenerRemove,
     addListener: vi.fn(async () => ({ remove: listenerRemove })),
     audio: {
+      configure: vi.fn(async () => {}),
       getState: vi.fn(),
+      readCapture: vi.fn(),
       startCapture: vi.fn(async () => {}),
       stopCapture: vi.fn(async () => {}),
     },
@@ -25,9 +35,13 @@ vi.mock("@pin/capacitor-ambient-ai", () => ({
   AmbientAi: ambientAiMock,
 }));
 
+vi.mock("../capture-transcription", () => captureTranscriptionMock);
+
 describe("SoundClassifierSource transcript ingest", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetAmbientLiveTranscriptForTest();
+    captureTranscriptionMock.transcribeAmbientCapture.mockReset();
     ambientAiMock.audio.getState.mockResolvedValue({
       running: true,
       paused: false,
@@ -85,6 +99,132 @@ describe("SoundClassifierSource transcript ingest", () => {
       },
     ]);
     expect(ctx.onEvent).toHaveBeenCalledWith("sound_classifier", "Voice transcript: This is a meaningful ambient transcript worth storing.");
+  });
+
+  test("transcribes captureReady through the backend proxy and pushes the session summary", async () => {
+    const pushed: unknown[] = [];
+    const ctx: SourceContext = {
+      push: (item) => pushed.push(item),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+    captureTranscriptionMock.transcribeAmbientCapture.mockResolvedValue({
+      text: "我现在说话应该尽快显示出来，并且进入 ambient transcript session summary。",
+      event: {},
+    });
+
+    await source.handleCaptureReadyForTest({
+      platform: "ios",
+      wavId: "wav-cloud",
+      burstId: "burst-cloud",
+      captureSessionId: "capture-cloud",
+      capturedAt: "2026-05-17T05:15:12.000Z",
+      durationMs: 3500,
+      byteSize: 320_000,
+      triggerSource: "sound_analysis",
+    });
+
+    expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
+      expect.objectContaining({ wavId: "wav-cloud" }),
+      "zh",
+    );
+    expect(getAmbientLiveTranscriptSnapshot()).toMatchObject({
+      captureSessionId: "capture-cloud",
+      messages: [
+        {
+          id: "burst-cloud",
+          text: "我现在说话应该尽快显示出来，并且进入 ambient transcript session summary。",
+          source: "cloud_whisper",
+        },
+      ],
+    });
+    expect(pushed).toEqual([
+      expect.objectContaining({
+        kind: "session_summary",
+        title: "Voice summary",
+        summary: "我现在说话应该尽快显示出来，并且进入 ambient transcript session summary。",
+        occurred_at: "2026-05-17T05:15:12.000Z",
+        payload: expect.objectContaining({
+          platform: "ios",
+          wavId: "wav-cloud",
+          burstId: "burst-cloud",
+          captureSessionId: "capture-cloud",
+          durationMs: 3500,
+          provider: "cloud_whisper",
+          fallback: false,
+          triggerSource: "sound_analysis",
+        }),
+        dedupe_key: "ios:audio:burst-cloud",
+      }),
+    ]);
+  });
+
+  test("uses user language preference for native recognition and cloud transcription", async () => {
+    const ctx: SourceContext = {
+      push: vi.fn(),
+      onEvent: vi.fn(),
+      getTranscriptionLanguage: () => "en-US",
+    };
+    const source = new SoundClassifierSource(ctx);
+    captureTranscriptionMock.transcribeAmbientCapture.mockResolvedValue({
+      text: "English ambient transcript should use the user preference.",
+      event: {},
+    });
+
+    await source.start();
+    await source.handleCaptureReadyForTest({
+      platform: "ios",
+      wavId: "wav-en",
+      burstId: "burst-en",
+      captureSessionId: "capture-en",
+      capturedAt: "2026-05-17T05:15:12.000Z",
+      durationMs: 3500,
+      byteSize: 320_000,
+    });
+
+    expect(ambientAiMock.audio.configure).toHaveBeenCalledWith(expect.objectContaining({
+      recognitionLocale: "en-US",
+    }));
+    expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
+      expect.objectContaining({ wavId: "wav-en" }),
+      "en",
+    );
+  });
+
+  test("does not duplicate session summary when native transcriptReady follows captureReady", async () => {
+    const pushed: unknown[] = [];
+    const ctx: SourceContext = {
+      push: (item) => pushed.push(item),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+    captureTranscriptionMock.transcribeAmbientCapture.mockResolvedValue({
+      text: "Backend transcript is stored once even if native speech emits later.",
+      event: {},
+    });
+
+    await source.handleCaptureReadyForTest({
+      platform: "ios",
+      wavId: "wav-dup",
+      burstId: "burst-dup",
+      captureSessionId: "capture-dup",
+      capturedAt: "2026-05-17T05:15:12.000Z",
+      durationMs: 3500,
+      byteSize: 320_000,
+    });
+    source.handleTranscriptReadyForTest({
+      platform: "ios",
+      wavId: "wav-dup",
+      burstId: "burst-dup",
+      captureSessionId: "capture-dup",
+      text: "Native transcript should not create a duplicate row for the same speech burst.",
+      capturedAt: "2026-05-17T05:15:20.000Z",
+      durationMs: 3500,
+      provider: "local_speech",
+      fallback: false,
+    });
+
+    expect(pushed).toHaveLength(1);
   });
 
   test("ignores short transcriptReady text", () => {
@@ -171,7 +311,13 @@ describe("SoundClassifierSource transcript ingest", () => {
 
     await expect(source.start()).rejects.toThrow("engine failed");
 
-    expect(ambientAiMock.listenerRemove).toHaveBeenCalledTimes(2);
+    expect(ambientAiMock.audio.configure).toHaveBeenCalledWith({
+      recognitionLocale: "zh-CN",
+      postRollMs: 2500,
+      maxBurstMs: 12000,
+      minBurstMs: 600,
+    });
+    expect(ambientAiMock.listenerRemove).toHaveBeenCalledTimes(3);
     expect(ambientAiMock.sound.stopClassification).toHaveBeenCalledTimes(1);
     expect(ambientAiMock.audio.stopCapture).toHaveBeenCalledTimes(1);
     expect(source.isStarted()).toBe(false);

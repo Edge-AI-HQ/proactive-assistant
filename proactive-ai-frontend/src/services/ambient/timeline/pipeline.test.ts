@@ -378,7 +378,7 @@ describe("LocalAmbientTimelinePipeline", () => {
   test("keeps transcript sessions as pending windows in milestone A", async () => {
     const { store, pipeline } = makePipeline();
 
-    const signals = await pipeline.ingestSignal({
+    const signal = {
       kind: "session_summary",
       title: "Voice summary",
       summary: "Discussed a product review and a follow-up item.",
@@ -388,10 +388,13 @@ describe("LocalAmbientTimelinePipeline", () => {
         durationMs: 180_000,
       },
       dedupe_key: "audio:burst:1",
-    });
+    } as const;
+
+    const signals = await pipeline.ingestSignal(signal);
 
     expect(signals).toHaveLength(1);
     expect(signals[0]?.kind).toBe(AMBIENT_CANDIDATE_WINDOW_KIND);
+    await pipeline.ingestSignal(signal);
     expect(await store.listTimelineEvents("2026-05-15", {
       visibleOnly: true,
     })).toEqual([]);
@@ -404,6 +407,7 @@ describe("LocalAmbientTimelinePipeline", () => {
       status: "pending",
       privacyHint: "private",
     });
+    expect(windows[0]?.compactContext.match(/Discussed a product review/g)).toHaveLength(1);
   });
 
   test("does not revive a dismissed event on the same dedupe key", async () => {

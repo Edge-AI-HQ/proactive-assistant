@@ -17,6 +17,7 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
         CAPPluginMethod(name: "getState", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "drainPendingTranscripts", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "listRecentCaptures", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "readCapture", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "playCapture", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopPlayback", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startClassification", returnType: CAPPluginReturnPromise),
@@ -182,6 +183,39 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
             let captures = await self?.audioManager.listRecentCaptures() ?? []
             DispatchQueue.main.async {
                 call.resolve(["captures": captures])
+            }
+        }
+    }
+
+    @objc func readCapture(_ call: CAPPluginCall) {
+        guard let wavId = call.getString("wavId"), !wavId.isEmpty else {
+            call.reject(AudioCaptureFailure.missingWavId.localizedDescription, "MISSING_WAV_ID")
+            return
+        }
+
+        Task { [weak self] in
+            guard let self else { return }
+            guard let url = await self.audioManager.captureURL(wavId: wavId) else {
+                DispatchQueue.main.async {
+                    call.reject(AudioCaptureFailure.wavNotFound.localizedDescription, "WAV_NOT_FOUND")
+                }
+                return
+            }
+            do {
+                let data = try Data(contentsOf: url)
+                DispatchQueue.main.async {
+                    call.resolve([
+                        "wavId": wavId,
+                        "contentType": "audio/wav",
+                        "base64": data.base64EncodedString(),
+                        "byteSize": data.count,
+                    ])
+                }
+            } catch {
+                self.notifyAudioError(error.localizedDescription, source: "capture")
+                DispatchQueue.main.async {
+                    call.reject(error.localizedDescription, "READ_CAPTURE_FAILED")
+                }
             }
         }
     }

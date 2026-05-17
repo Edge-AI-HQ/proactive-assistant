@@ -46,9 +46,11 @@ export function bindAmbientLifecycle(): void {
  */
 export function startAmbientUpload(opts: {
   enabledSources?: SourceKey[];
+  transcriptionLanguage?: string | null;
 } = {}): void {
   if (!isNative) return;
   const runtime = getAmbientRuntime();
+  runtime.setTranscriptionLanguage(opts.transcriptionLanguage ?? null);
   void (async () => {
     await runtime.reconcileEnabledSources(opts.enabledSources ?? []);
     await runtime.drain();

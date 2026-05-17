@@ -80,9 +80,12 @@ export default function App() {
     if (!isNative || !user || enabledKey === null) return;
     const enabled = enabledKey ? enabledKey.split(",") as SourceKey[] : [];
     void import("@/services/ambient/lifecycle").then(({ startAmbientUpload }) => {
-      startAmbientUpload({ enabledSources: enabled });
+      startAmbientUpload({
+        enabledSources: enabled,
+        transcriptionLanguage: userSettings?.generationLanguage ?? null,
+      });
     });
-  }, [user, enabledKey]);
+  }, [user, enabledKey, userSettings?.generationLanguage]);
 
   if (authLoading) {
     return <Spinner />;

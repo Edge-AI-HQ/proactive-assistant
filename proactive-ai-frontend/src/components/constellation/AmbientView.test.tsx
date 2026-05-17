@@ -61,7 +61,7 @@ vi.mock("framer-motion", async () => {
 vi.mock("@/lib/platform", () => ({ isNative: true }));
 vi.mock("@/hooks/useUserSettings", () => ({
   useUserSettings: () => ({
-    settings: { ambientSources: {} },
+    settings: { ambientSources: {}, generationLanguage: "zh-Hans" },
     patch: patchMock,
   }),
 }));
@@ -145,6 +145,7 @@ describe("AmbientView ambient toggle", () => {
       expect(getPersistedAmbientEnabled()).toBe(true);
       expect(startAmbientUploadMock).toHaveBeenCalledWith({
         enabledSources: ALL_SOURCE_KEYS,
+        transcriptionLanguage: "zh-Hans",
       });
     });
   });

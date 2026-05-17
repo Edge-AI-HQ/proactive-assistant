@@ -133,6 +133,17 @@ export interface TranscriptDraftEvent {
   triggerSource?: string;
 }
 
+export interface CaptureReadyEvent {
+  platform: AmbientPlatform;
+  wavId: string;
+  burstId: string;
+  captureSessionId: string;
+  capturedAt: string;
+  durationMs: number;
+  byteSize: number;
+  triggerSource?: string;
+}
+
 export interface TranscriptRefinedEvent {
   platform: AmbientPlatform;
   wavId: string;
@@ -173,6 +184,13 @@ export interface RecentAudioCapture {
   captureSessionId?: string;
   capturedAt: string;
   durationMs: number;
+  byteSize: number;
+}
+
+export interface AudioCaptureReadResult {
+  wavId: string;
+  contentType: 'audio/wav';
+  base64: string;
   byteSize: number;
 }
 
@@ -280,6 +298,7 @@ export interface AmbientEventMap {
   calendarEvent: CalendarEventEvent;
   calendarSummary: CalendarSummaryEvent;
   contacts: ContactsSnapshot;
+  captureReady: CaptureReadyEvent;
   deviceState: DeviceStateSnapshot;
   focus: FocusEvent;
   heartRate: HeartRateEvent;
@@ -309,6 +328,7 @@ export interface AudioNamespace {
   getState(): Promise<AudioState>;
   drainPendingTranscripts(): Promise<TranscriptReadyEvent[]>;
   listRecentCaptures(): Promise<{ captures: RecentAudioCapture[] }>;
+  readCapture(options: { wavId: string }): Promise<AudioCaptureReadResult>;
   playCapture(options: { wavId: string }): Promise<void>;
   stopPlayback(): Promise<void>;
 }

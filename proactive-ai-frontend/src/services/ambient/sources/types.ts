@@ -8,6 +8,7 @@ import type { PersonalSignalInput } from "@/lib/devices";
 export interface SourceContext {
   push: (item: PersonalSignalInput) => void;
   onEvent: (sourceKey: string, summary: string) => void;
+  getTranscriptionLanguage?: () => string | null | undefined;
 }
 
 /** Common shape every ambient source implements. */
