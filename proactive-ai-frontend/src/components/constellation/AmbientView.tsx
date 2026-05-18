@@ -8,6 +8,7 @@ import {
   Lightbulb, Sparkles, Plus, ChevronRight, X,
   Phone, Sun, Waves, Target,
   Soup, Minimize2, Lock, Unlock, Zap,
+  NotebookPen,
   type LucideIcon,
 } from "lucide-react";
 import { useUserSettings } from "@/hooks/useUserSettings";
@@ -137,7 +138,12 @@ function formatTimelineTime(iso: string): string {
   });
 }
 
+function isLlmSummaryEvent(event: AmbientTimelineEvent): boolean {
+  return event.generationSource === "llm_summary";
+}
+
 function iconForTimelineEvent(event: AmbientTimelineEvent): LucideIcon {
+  if (isLlmSummaryEvent(event)) return NotebookPen;
   if (event.sourceTypes.includes("health")) return Stethoscope;
   if (event.eventType === "transition") return Compass;
   if (event.eventType === "visit") return MapPin;
@@ -146,10 +152,16 @@ function iconForTimelineEvent(event: AmbientTimelineEvent): LucideIcon {
 }
 
 function deviceIconForTimelineEvent(event: AmbientTimelineEvent): LucideIcon {
+  if (isLlmSummaryEvent(event)) return Sparkles;
   if (event.sourceTypes.includes("health")) return Watch;
   if (event.sourceTypes.includes("motion")) return Activity;
   if (event.sourceTypes.includes("transcript")) return Mic;
   return Smartphone;
+}
+
+function deviceLabelForTimelineEvent(event: AmbientTimelineEvent): string {
+  if (isLlmSummaryEvent(event)) return "On-device summary";
+  return event.primarySourceLabel;
 }
 
 function timelineEventToEntry(
@@ -164,7 +176,7 @@ function timelineEventToEntry(
     time: formatTimelineTime(event.occurredAt),
     icon: iconForTimelineEvent(event),
     device: {
-      name: event.primarySourceLabel,
+      name: deviceLabelForTimelineEvent(event),
       icon: deviceIconForTimelineEvent(event),
     },
     privacyTag: event.privacy === "normal" ? undefined : event.privacy,
