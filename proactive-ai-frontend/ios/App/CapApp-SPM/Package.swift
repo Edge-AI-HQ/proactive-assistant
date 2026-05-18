@@ -4,7 +4,7 @@ import PackageDescription
 // DO NOT MODIFY THIS FILE - managed by Capacitor CLI commands
 let package = Package(
     name: "CapApp-SPM",
-    platforms: [.iOS("17.0")],
+    platforms: [.iOS(.v17)],
     products: [
         .library(
             name: "CapApp-SPM",

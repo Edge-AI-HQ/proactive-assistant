@@ -59,12 +59,13 @@ function makeStub(): unknown {
 // destructure into `proxy.SomeName` which itself returns a proxy.
 //
 // The plugins we stub:
-//   @pin/capacitor-ambient-ai   → AmbientAi, AmbientModels, types
-//   @capacitor/geolocation      → Geolocation
+//   @pin/capacitor-ambient-ai     → AmbientAi, AmbientModels, types
+//   @capacitor/geolocation        → Geolocation
+//   @capacitor/push-notifications → PushNotifications
 //   @capacitor-community/contacts → Contacts
-//   @capacitor-community/sqlite → CapacitorSQLite, SQLiteConnection
-//   @capgo/capacitor-barometer  → Barometer
-//   @capgo/capacitor-health     → CapacitorHealthkit
+//   @capacitor-community/sqlite   → CapacitorSQLite, SQLiteConnection
+//   @capgo/capacitor-barometer    → Barometer
+//   @capgo/capacitor-health       → CapacitorHealthkit
 //
 // Vite turns this single stub into the resolved module for ALL aliased
 // names, so we just re-export the universal proxy under the most
@@ -86,6 +87,7 @@ const stub = makeStub() as unknown;
 export const AmbientAi = stub;
 export const AmbientModels = stub;
 export const Geolocation = stub;
+export const PushNotifications = stub;
 export const Contacts = stub;
 export const CapacitorSQLite = stub;
 export const SQLiteConnection = stub;

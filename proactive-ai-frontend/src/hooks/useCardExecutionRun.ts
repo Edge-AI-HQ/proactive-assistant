@@ -259,8 +259,31 @@ function chatHistoryToSnapshot(
   let finalText = "";
   let saw_error_part = false;
 
+  // Walk messages in order; each time we see a propose_action we open a
+  // new "pause slot" and the NEXT user HumanMessage fills it. ChatDetailView's
+  // StaticPauseCard reads these via `snapshot.metadata.plan_revisions[i].reply`
+  // — they're the durable source for past user replies (survives refresh /
+  // SSE reconnect). Without this, the FE shows the agent pause card but no
+  // user reply bubble for any pause prior to the current session.
+  const planRevisions: Array<{ reply: string }> = [];
+  let awaitingUserReplyForPause = false;
+
   for (const m of messages) {
     const parts = Array.isArray(m.parts) ? m.parts : [];
+    // User HumanMessage: if it's the first user turn AFTER a propose_action,
+    // pair it with that pause slot. Concatenate text parts (rare to have
+    // multiple, but safe).
+    if (m.role === "user" && awaitingUserReplyForPause) {
+      const replyText = parts
+        .filter((p): p is HistoryTextPart => p.type === "text")
+        .map((p) => p.text)
+        .join("")
+        .trim();
+      if (replyText) {
+        planRevisions.push({ reply: replyText });
+        awaitingUserReplyForPause = false;
+      }
+    }
     for (const part of parts) {
       if (part.type === "tool-call") {
         events.push({
@@ -293,6 +316,8 @@ function chatHistoryToSnapshot(
             ts: m.createdAt,
             data: proposed as unknown as Record<string, unknown>,
           });
+          // Mark the pause slot as awaiting the next user reply.
+          awaitingUserReplyForPause = true;
         }
       } else if (part.type === "text" && m.role === "assistant") {
         // The agent's prose. Accumulate as the eventual `result`
@@ -373,7 +398,7 @@ function chatHistoryToSnapshot(
     result,
     errorMessage,
     events,
-    metadata: {},
+    metadata: { plan_revisions: planRevisions },
     createdAt: null,
     updatedAt: null,
     completedAt: null,

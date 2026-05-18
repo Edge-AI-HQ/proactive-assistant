@@ -9,6 +9,7 @@ import type {
   LastMessagePayload,
   RunSnapshot,
   SideEffect,
+  SSEEvent,
 } from "@/hooks/useCardExecutionRun";
 
 /* ── Shared types (mirrored across ConstellationLayout / ChatDetailView) ── */
@@ -16,6 +17,9 @@ export interface DrawerDetailCard {
   tag?: string;
   line2: string;
   locked?: boolean;
+  /** Generator-side rationale for why this card surfaced now. Optional
+   *  because the legacy Lovable mock cards don't carry it. */
+  whyNow?: string;
   detail?: {
     executionPlan: { text: string; tool: string }[];
     artifacts?: Artifact[];
@@ -99,6 +103,60 @@ function ExecutionStepRow({ step }: { step: { text: string; tool: string } }) {
       </div>
     </div>
   );
+}
+
+/* ── Fallback derivations when propose_action carried no audit data ──
+ *
+ * Two real failure modes we observed in production card threads:
+ *
+ *   1. agent went text-only and never called propose_action (e.g. tool
+ *      reads returned nothing → agent fell back to writing a plain
+ *      markdown reply). `runSnapshot.result.summary` carries that prose;
+ *      we wrap it as a single "Agent's note" artifact so the drawer
+ *      still has SOMETHING for the user to read.
+ *   2. agent paused via propose_action but only filled `message + options`
+ *      (e.g. browser_tool takeover loop). The `events` log retains every
+ *      `chat:tool:start` the agent emitted; we compress those into
+ *      synthetic plan rows so the drawer shows what the agent actually
+ *      did before pausing.
+ *
+ * Both are tolerant: when nothing useful is present, the helpers return
+ * empty lists and the drawer's sections stay hidden (per the user's
+ * "fallback to anything available, otherwise hide" rule).
+ */
+function eventsToFallbackPlan(events: SSEEvent[] | undefined): { text: string; tool: string }[] {
+  if (!events || events.length === 0) return [];
+  const seen = new Set<string>();
+  const rows: { text: string; tool: string }[] = [];
+  for (const ev of events) {
+    if (ev.type !== "chat:tool:start") continue;
+    const d = ev.data as { name?: string; argsPreview?: string } | undefined;
+    const name = typeof d?.name === "string" ? d.name : "";
+    if (!name) continue;
+    // propose_action is a UI primitive, not an "execution step" — skip
+    // so the fallback plan reads as actions the agent took, not the
+    // pause itself.
+    if (name === "propose_action") continue;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const preview = typeof d?.argsPreview === "string" ? d.argsPreview.trim() : "";
+    rows.push({
+      text: preview && preview.length <= 140 ? preview : `Called ${name}`,
+      tool: name,
+    });
+  }
+  return rows;
+}
+
+function summaryToFallbackArtifact(summary: string | undefined): Artifact[] {
+  const text = (summary ?? "").trim();
+  if (!text) return [];
+  return [{
+    kind: "notes",
+    app: "gdocs",
+    title: "Agent's note",
+    body: text,
+  }];
 }
 
 /* ── Backend → Lovable artifact shape mapping ──
@@ -193,18 +251,44 @@ export function DrawerDetailBody({
   lastMessagePayload?: LastMessagePayload | null;
   sideEffects?: SideEffect[];
 }) {
-  // Source-of-truth selection: cached lastMessagePayload (which the hook
-  // populates from live pendingInput AND from the durable events log)
-  // trumps static card.detail.
+  // Source-of-truth selection. Priority for plan / artifacts:
+  //   (a) cached lastMessagePayload — the hook merges audit fields
+  //       forward across propose_action turns. Best signal.
+  //   (b) card.detail static fallback — generator-side mock; usually
+  //       empty for real cards.
+  //   (c) derived fallback — when the agent went text-only or paused
+  //       with no audit data, surface result.summary as an "Agent's
+  //       note" artifact and compress the tool-call log into a plan.
+  //       Without this, drawer shows nothing for these (real) cases.
+  //
+  // dangerous_actions / risks have no static or derived fallback (they
+  // require semantic data the agent has to emit explicitly); they only
+  // render when the cached payload supplies them.
   const cached = lastMessagePayload;
 
-  const plan: { text: string; tool: string }[] = cached
-    ? backendPlanToLovable(cached.plan)
-    : (card.detail?.executionPlan ?? []);
+  const cachedPlan = cached ? backendPlanToLovable(cached.plan) : [];
+  const staticPlan = card.detail?.executionPlan ?? [];
+  const eventsPlan = eventsToFallbackPlan(runSnapshot?.events);
+  const plan: { text: string; tool: string }[] =
+    cachedPlan.length > 0
+      ? cachedPlan
+      : staticPlan.length > 0
+        ? staticPlan
+        : eventsPlan;
 
-  const artifacts: Artifact[] = cached
+  const cachedArtifacts = cached
     ? cached.drafts.map(executeArtifactToLovable)
-    : (card.detail?.artifacts ?? []);
+    : [];
+  const staticArtifacts = card.detail?.artifacts ?? [];
+  const summaryArtifacts = summaryToFallbackArtifact(
+    runSnapshot?.result?.summary,
+  );
+  const artifacts: Artifact[] =
+    cachedArtifacts.length > 0
+      ? cachedArtifacts
+      : staticArtifacts.length > 0
+        ? staticArtifacts
+        : summaryArtifacts;
 
   const dangerousActions: DangerousAction[] = cached
     ? cached.dangerous_actions
@@ -233,9 +317,31 @@ export function DrawerDetailBody({
     return `Generated from ${body}.`;
   })();
 
+  const whyNowText = card.whyNow?.trim();
+
   return (
     <>
       {statusBanner}
+
+      {/* Why now — generator's rationale for surfacing this card. Sits
+          ABOVE the execution plan because it explains the WHY before
+          the WHAT/HOW. Matches the visual treatment of the legacy
+          CardDetailBody so users moving between the two views see the
+          same context. */}
+      {whyNowText && (
+        <div
+          className="mb-3 rounded-2xl px-3.5 py-2.5 border"
+          style={{
+            background: "rgba(34, 197, 94, 0.06)",
+            borderColor: "rgba(34, 197, 94, 0.22)",
+          }}
+        >
+          <div className="text-[11px] font-bold uppercase tracking-wider text-green-700/80 mb-1">
+            Why now
+          </div>
+          <p className="text-[12.5px] text-foreground/75 leading-snug">{whyNowText}</p>
+        </div>
+      )}
 
       {/* Execution Plan — pink gradient, collapsible with timeline */}
       {plan.length > 0 && (

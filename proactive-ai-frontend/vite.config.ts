@@ -44,6 +44,7 @@ export default defineConfig(({ mode }) => {
           "@capacitor-community/contacts",
           "@capacitor-community/sqlite",
           "@capacitor/geolocation",
+          "@capacitor/push-notifications",
           "@capgo/capacitor-barometer",
           "@capgo/capacitor-health",
         ].map((pkg) => [

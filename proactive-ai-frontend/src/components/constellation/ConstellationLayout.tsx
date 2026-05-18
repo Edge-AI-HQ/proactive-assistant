@@ -94,6 +94,10 @@ function realIntentToChatCard(card: IntentCard): ChatCard {
     title: card.title,
     line1: card.whyNow || card.summary,
     line2: card.sources.length > 0 ? `Sources: ${card.sources.join(" · ")}` : "",
+    whyNow:
+      card.whyNow && card.whyNow.trim() && card.whyNow !== card.summary
+        ? card.whyNow
+        : undefined,
     detail: {
       scores: [
         { label: "Confidence", value: Math.round(card.confidence * 100) },
@@ -118,6 +122,14 @@ function realCardToLovableIntent(card: IntentCard, status: CardStatus): Intent {
     title: card.title,
     line1: card.whyNow || card.summary,
     line2: card.sources.length > 0 ? `Sources: ${card.sources.join(" · ")}` : "",
+    // Preserved separately from line1 (which collapses whyNow / summary
+    // into a single headline) so the drawer can render a dedicated
+    // "WHY NOW" block — only fill when both fields exist AND differ, so
+    // we don't duplicate the headline below it.
+    whyNow:
+      card.whyNow && card.whyNow.trim() && card.whyNow !== card.summary
+        ? card.whyNow
+        : undefined,
     detail: {
       scores: [
         { label: "Confidence", value: Math.round(card.confidence * 100) },
@@ -216,6 +228,10 @@ interface Intent {
   title: string;
   line1: string;
   line2: string;
+  /** Generator-side rationale; rendered as a dedicated "WHY NOW" block
+   *  in CardDrawerContent → DrawerDetailBody. Optional because legacy
+   *  Lovable mock entries don't carry it. */
+  whyNow?: string;
   detail?: DetailData;
   status: CardStatus;
   statusTimestamp?: number; // when status was set
@@ -740,6 +756,12 @@ export default function BigBallLayout() {
   const handleMenuNav = (id: MenuId) => {
     setActiveView(id);
     setActiveChat(null);
+    // Without this, opening the side menu from inside ChatDetailView
+    // (which is rendered iff `chatTarget` is set) leaves chatTarget
+    // populated, and the main-content branch `chatTarget ? ChatDetailView
+    // : activeChat ? ... : activeView` keeps rendering ChatDetailView —
+    // the user sees the menu close but no navigation.
+    setChatTarget(null);
     setMenuOpen(false);
   };
 
@@ -919,6 +941,18 @@ export default function BigBallLayout() {
                   const returnTo = chatEntryView.current;
                   setChatTarget(null);
                   if (returnTo) setActiveView(returnTo);
+                }}
+                // Sphere → TASKS lifecycle: Dismiss / Done in the
+                // chat toolbar must POST /feedback so the card moves
+                // off the sphere (dismissedIds / doneIds filter) and
+                // shows as Dismissed / Completed in the TASKS view.
+                // Without these the hook's cancel/confirmDone are
+                // purely local UI flips.
+                onDismissBackend={() => {
+                  void cardActions.dismiss(chatTarget.card);
+                }}
+                onDoneBackend={() => {
+                  void cardActions.complete(chatTarget.card);
                 }}
               />
             ) : activeChat ? (

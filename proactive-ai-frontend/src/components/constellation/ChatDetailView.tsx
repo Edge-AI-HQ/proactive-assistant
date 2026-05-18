@@ -167,6 +167,9 @@ export interface ChatCard {
   title: string;
   line1: string;
   line2: string;
+  /** Generator-side rationale; rendered as a dedicated "WHY NOW" block
+   *  in the chat-side drawer mirror (ChatCardDrawerBody). */
+  whyNow?: string;
   detail?: {
     scores: { label: string; value: number }[];
     willExecute: string;
@@ -210,6 +213,21 @@ interface ChatDetailViewProps {
    * points) and ignored.
    */
   mode?: "confirm" | "modify" | "done" | "steer";
+  /**
+   * Backend feedback hook for the top-toolbar Dismiss button. The hook's
+   * `run.cancel()` is local-only (just flips UI state); this callback
+   * mirrors the home drawer's Dismiss path so the card POSTs
+   * /feedback kind=dismiss, drops out of the sphere, and shows as
+   * Dismissed in the TASKS view. Parent wires this to
+   * `cardActions.dismiss(realIntentCard)`.
+   */
+  onDismissBackend?: () => void;
+  /**
+   * Backend feedback hook for the top-toolbar Done button. Same shape
+   * as `onDismissBackend` — POSTs /feedback kind=card_action
+   * action=complete so the card moves from sphere → TASKS as Completed.
+   */
+  onDoneBackend?: () => void;
 }
 
 interface ChatMessage {
@@ -928,7 +946,15 @@ function statusToTaskState(
   return "running";
 }
 
-export default function ChatDetailView({ card, runId, onBack, onRetry, bootstrap }: ChatDetailViewProps) {
+export default function ChatDetailView({
+  card,
+  runId,
+  onBack,
+  onRetry,
+  bootstrap,
+  onDismissBackend,
+  onDoneBackend,
+}: ChatDetailViewProps) {
   // Pass `null` when runId is absent so the hook idles. Production callers
   // always supply runId; the optional shape is just so the dead Lovable
   // demo layouts still type-check.
@@ -1199,6 +1225,11 @@ export default function ChatDetailView({ card, runId, onBack, onRetry, bootstrap
     setBusy(true);
     try {
       await run.cancel();
+      // Persist the user's intent: POST /feedback kind=dismiss so the
+      // card drops out of the sphere and shows as Dismissed in TASKS.
+      // Mirrors the home Drawer's Dismiss path. The hook's `cancel`
+      // alone is local UI state only.
+      if (onDismissBackend) onDismissBackend();
     } catch (e) {
       console.warn("cancel failed:", e);
     } finally {
@@ -1215,6 +1246,10 @@ export default function ChatDetailView({ card, runId, onBack, onRetry, bootstrap
     setBusy(true);
     try {
       await run.confirmDone();
+      // Persist the user's intent: POST /feedback kind=card_action
+      // action=complete so the card moves from the sphere into TASKS as
+      // Completed. The hook's `confirmDone` alone is local UI state.
+      if (onDoneBackend) onDoneBackend();
     } catch (e) {
       console.warn("confirmDone failed:", e);
     } finally {
