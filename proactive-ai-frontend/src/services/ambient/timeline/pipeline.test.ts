@@ -679,6 +679,79 @@ describe("LocalAmbientTimelinePipeline", () => {
     });
   });
 
+  test("persists actionCandidates from a batch create decision onto the timeline event", async () => {
+    const store = new MemoryTimelineStore();
+    const modelBridge: AmbientTimelineModelBridge = {
+      async summarizeWindow() { return null; },
+      async generateTimelineBatchDecision(input) {
+        return { ok: true, batch: { decisions: [{
+          action: "create",
+          title: "Sequoia bridge call",
+          summary: "Discussed the Series A bridge call with Mike from Sequoia.",
+          importance: "high",
+          occurredAt: input.windows[0]?.startedAt ?? "2026-05-15T10:00:00.000Z",
+          sourceWindowIds: [input.windows[0]?.id ?? ""],
+          actionCandidates: [{
+            label: "Send recap to Mike",
+            goal: "Draft a follow-up email to Mike recapping the Sequoia bridge call and attach the updated cap table.",
+            goalBasket: "work",
+          }],
+        }] } };
+      },
+      async generateTimelineEvent() { throw new Error("single-window path should not run"); },
+    };
+    const pipeline = new LocalAmbientTimelinePipeline(store, modelBridge);
+
+    await pipeline.ingestSignal({
+      kind: "session_summary",
+      title: "Voice summary",
+      summary: "A long enough transcript of the Sequoia bridge call between Mike and the founder discussing the Series A follow-up actions.",
+      occurred_at: "2026-05-15T12:00:00.000Z",
+      payload: { captureSessionId: "cap-action", durationMs: 180_000 },
+      dedupe_key: "audio:burst:action:1",
+    });
+    await pipeline.processPendingWindows("2026-05-15");
+
+    const [event] = await store.listTimelineEventsByGenerationSource("2026-05-15", "llm_summary", { visibleOnly: true });
+    expect(event?.actionCandidates).toEqual([{
+      label: "Send recap to Mike",
+      goal: "Draft a follow-up email to Mike recapping the Sequoia bridge call and attach the updated cap table.",
+      goalBasket: "work",
+    }]);
+  });
+
+  test("omits actionCandidates when the batch create decision has none", async () => {
+    const store = new MemoryTimelineStore();
+    const modelBridge: AmbientTimelineModelBridge = {
+      async summarizeWindow() { return null; },
+      async generateTimelineBatchDecision(input) {
+        return { ok: true, batch: { decisions: [{
+          action: "create",
+          title: "Quiet check-in",
+          summary: "Brief casual exchange with no clear next step.",
+          importance: "low",
+          occurredAt: input.windows[0]?.startedAt ?? "2026-05-15T10:00:00.000Z",
+          sourceWindowIds: [input.windows[0]?.id ?? ""],
+        }] } };
+      },
+      async generateTimelineEvent() { throw new Error("single-window path should not run"); },
+    };
+    const pipeline = new LocalAmbientTimelinePipeline(store, modelBridge);
+
+    await pipeline.ingestSignal({
+      kind: "session_summary",
+      title: "Voice summary",
+      summary: "A long enough transcript of a brief check-in with no clear next step for the user to act on.",
+      occurred_at: "2026-05-15T12:00:00.000Z",
+      payload: { captureSessionId: "cap-noaction", durationMs: 180_000 },
+      dedupe_key: "audio:burst:noaction:1",
+    });
+    await pipeline.processPendingWindows("2026-05-15");
+
+    const [event] = await store.listTimelineEventsByGenerationSource("2026-05-15", "llm_summary", { visibleOnly: true });
+    expect(event?.actionCandidates).toBeUndefined();
+  });
+
   test("does not revive a dismissed event on the same dedupe key", async () => {
     const { store, pipeline } = makePipeline();
 

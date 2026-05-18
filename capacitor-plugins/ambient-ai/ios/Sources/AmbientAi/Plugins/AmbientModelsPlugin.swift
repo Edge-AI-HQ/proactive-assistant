@@ -286,7 +286,7 @@ public class AmbientModelsPlugin: CAPPlugin, CAPBridgedPlugin {
     private static let timelineBatchSystemPrompt: String = """
     You are an on-device assistant that summarizes one ambient transcript window into one timeline card.
     Output a single minified JSON object that matches this exact shape and nothing else:
-    {"decisions":[{"action":"create","sourceWindowIds":["<window_id>"],"title":"<short title>","summary":"<one sentence>","importance":"<low|medium|high>","occurredAt":"<startedAt>"}]}
+    {"decisions":[{"action":"create","sourceWindowIds":["<window_id>"],"title":"<short title>","summary":"<one sentence>","importance":"<low|medium|high>","occurredAt":"<startedAt>","act":{"l":"<short verb phrase>","g":"<one-sentence goal>","b":"<basket>"}}]}
 
     Rules:
     - Output ONLY the JSON object. No markdown, no thinking, no commentary.
@@ -298,8 +298,11 @@ public class AmbientModelsPlugin: CAPPlugin, CAPBridgedPlugin {
     - "title" and "summary" MUST be different from each other.
     - "importance" MUST be exactly one of: "low", "medium", "high".
     - "occurredAt" MUST be the input's started_at value copied verbatim (ISO-8601). NEVER output the literal string "iso".
-    - The example below uses <PLACEHOLDER> tokens. Tokens like <TITLE_HERE>, <SUMMARY_HERE> are illustrative only and MUST be replaced with content derived from the real input. NEVER output any "<...>" placeholder verbatim and NEVER copy example token wording.
-    - If the real input is in Chinese, write title and summary in Chinese. If the real input is in English, write them in English. Mirror the language of the real input.
+    - "act" is OPTIONAL. Include it ONLY when the window suggests a concrete next step the user can act on right now. If there is no clear actionable next step, OMIT the "act" field entirely. Do NOT emit "act":{} and do NOT echo any "<...>" placeholder verbatim.
+    - When you include "act": "l" MUST be a short verb phrase <= 24 characters; "g" MUST be ONE sentence <= 100 characters stating the goal in concrete terms; "b" is optional and MUST be exactly one of: "work", "health", "family", "wealth", "growth", "life".
+    - "g" MUST be different from "summary". "l" MUST be different from "title" and from "summary". NEVER include labels like "Motion context:" or "Sound context:" in "l" or "g".
+    - The example below uses <PLACEHOLDER> tokens. Tokens like <TITLE_HERE>, <SUMMARY_HERE>, <LABEL_HERE>, <GOAL_HERE>, <BASKET_HERE> are illustrative only and MUST be replaced with content derived from the real input. NEVER output any "<...>" placeholder verbatim and NEVER copy example token wording.
+    - If the real input is in Chinese, write title, summary, and "act" fields in Chinese. If the real input is in English, write them in English. Mirror the language of the real input.
     /no_think
     """
 
@@ -335,7 +338,7 @@ public class AmbientModelsPlugin: CAPPlugin, CAPBridgedPlugin {
         - window_type: <WINDOW_TYPE_HERE>
         - context: <CONTEXT_HERE>
         """
-        let exampleOutput = #"{"decisions":[{"action":"create","sourceWindowIds":["<WINDOW_ID_HERE>"],"title":"<TITLE_HERE>","summary":"<SUMMARY_HERE>","importance":"<LOW_MEDIUM_OR_HIGH>","occurredAt":"<STARTED_AT_HERE>"}]}"#
+        let exampleOutput = #"{"decisions":[{"action":"create","sourceWindowIds":["<WINDOW_ID_HERE>"],"title":"<TITLE_HERE>","summary":"<SUMMARY_HERE>","importance":"<LOW_MEDIUM_OR_HIGH>","occurredAt":"<STARTED_AT_HERE>","act":{"l":"<LABEL_HERE>","g":"<GOAL_HERE>","b":"<BASKET_HERE>"}}]}"#
 
         let realInput = """
         - window_id: \(id)

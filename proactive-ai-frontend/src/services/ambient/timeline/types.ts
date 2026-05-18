@@ -43,6 +43,20 @@ export type AmbientEventType =
   | "social"
   | "other";
 
+export type AmbientActionBasket =
+  | "work"
+  | "health"
+  | "family"
+  | "wealth"
+  | "growth"
+  | "life";
+
+export interface AmbientTimelineAction {
+  label: string;
+  goal: string;
+  goalBasket?: AmbientActionBasket;
+}
+
 export interface AmbientRawEvent {
   id: string;
   localUserId: string;
@@ -129,6 +143,7 @@ export interface AmbientTimelineEvent {
   llmGeneratedAt?: string;
   llmUpdatedAt?: string;
   idempotencyKey?: string;
+  actionCandidates?: AmbientTimelineAction[];
   generationStatus: "draft" | "visible" | "hidden";
   dismissedAt?: string;
   memoryCandidate: boolean;

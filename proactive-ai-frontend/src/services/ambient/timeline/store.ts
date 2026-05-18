@@ -1,9 +1,11 @@
 import { isNative } from "@/lib/platform";
 import type {
+  AmbientActionBasket,
   AmbientCandidateWindow,
   AmbientRawEvent,
   AmbientRawRef,
   AmbientSourceType,
+  AmbientTimelineAction,
   AmbientTimelineEvent,
   AmbientTimelineStore,
   AmbientWindowType,
@@ -349,6 +351,7 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
           llm_generated_at TEXT,
           llm_updated_at TEXT,
           idempotency_key TEXT,
+          action_candidates_json TEXT,
           generation_status TEXT NOT NULL,
           dismissed_at TEXT,
           memory_candidate INTEGER NOT NULL,
@@ -653,10 +656,11 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
          salience, raw_refs_json, observation_ids_json, window_id,
          generation_method, generation_source, summary_run_id, source_window_ids_json,
          llm_model_id, llm_generated_at, llm_updated_at, idempotency_key,
+         action_candidates_json,
          generation_status, dismissed_at, memory_candidate,
          card_trigger_candidate, triggered_card_id, triggered_card_title,
          schema_version, sync_status, dedupe_key, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          ended_at = excluded.ended_at,
          title = excluded.title,
@@ -680,6 +684,7 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
          llm_generated_at = excluded.llm_generated_at,
          llm_updated_at = excluded.llm_updated_at,
          idempotency_key = excluded.idempotency_key,
+         action_candidates_json = excluded.action_candidates_json,
          generation_status = excluded.generation_status,
          memory_candidate = excluded.memory_candidate,
          card_trigger_candidate = excluded.card_trigger_candidate,
@@ -717,6 +722,7 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
         event.llmGeneratedAt ?? null,
         event.llmUpdatedAt ?? null,
         event.idempotencyKey ?? null,
+        serializeActionCandidates(event.actionCandidates),
         event.generationStatus,
         event.dismissedAt ?? null,
         event.memoryCandidate ? 1 : 0,
@@ -839,6 +845,7 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
       { name: "llm_generated_at", sql: "ALTER TABLE ambient_timeline_events ADD COLUMN llm_generated_at TEXT" },
       { name: "llm_updated_at", sql: "ALTER TABLE ambient_timeline_events ADD COLUMN llm_updated_at TEXT" },
       { name: "idempotency_key", sql: "ALTER TABLE ambient_timeline_events ADD COLUMN idempotency_key TEXT" },
+      { name: "action_candidates_json", sql: "ALTER TABLE ambient_timeline_events ADD COLUMN action_candidates_json TEXT" },
     ]);
     await cleanTranscriptSegmentLabels(conn);
   }
@@ -923,6 +930,15 @@ function cloneTimelineEvent(event: AmbientTimelineEvent): AmbientTimelineEvent {
     tags: [...event.tags],
     rawRefs: event.rawRefs.map((ref) => ({ ...ref })),
     observationIds: [...event.observationIds],
+    ...(event.actionCandidates && event.actionCandidates.length > 0
+      ? {
+          actionCandidates: event.actionCandidates.map((action) => ({
+            label: action.label,
+            goal: action.goal,
+            ...(action.goalBasket ? { goalBasket: action.goalBasket } : {}),
+          })),
+        }
+      : {}),
   };
 }
 
@@ -1045,6 +1061,7 @@ function rowToTimelineEvent(row: Record<string, unknown>): AmbientTimelineEvent 
     ...(nullableText(row.llm_generated_at) ? { llmGeneratedAt: text(row.llm_generated_at) } : {}),
     ...(nullableText(row.llm_updated_at) ? { llmUpdatedAt: text(row.llm_updated_at) } : {}),
     ...(nullableText(row.idempotency_key) ? { idempotencyKey: text(row.idempotency_key) } : {}),
+    ...actionCandidatesFromRow(row.action_candidates_json),
     generationStatus: text(row.generation_status) as AmbientTimelineEvent["generationStatus"],
     ...(nullableText(row.dismissed_at) ? { dismissedAt: text(row.dismissed_at) } : {}),
     memoryCandidate: numberValue(row.memory_candidate) === 1,
@@ -1081,6 +1098,62 @@ function parseStringArray(value: unknown): string[] {
   } catch {
     return [];
   }
+}
+
+function serializeActionCandidates(
+  actions: AmbientTimelineAction[] | undefined,
+): string | null {
+  if (!actions || actions.length === 0) return null;
+  return JSON.stringify(actions.map((action) => ({
+    label: action.label,
+    goal: action.goal,
+    ...(action.goalBasket ? { goalBasket: action.goalBasket } : {}),
+  })));
+}
+
+function actionCandidatesFromRow(
+  value: unknown,
+): { actionCandidates: AmbientTimelineAction[] } | Record<string, never> {
+  const parsed = parseActionCandidates(value);
+  return parsed.length > 0 ? { actionCandidates: parsed } : {};
+}
+
+function parseActionCandidates(value: unknown): AmbientTimelineAction[] {
+  if (typeof value !== "string" || value.length === 0) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const out: AmbientTimelineAction[] = [];
+    for (const item of parsed) {
+      if (!item || typeof item !== "object") continue;
+      const row = item as Record<string, unknown>;
+      const label = typeof row.label === "string" ? row.label.trim() : "";
+      const goal = typeof row.goal === "string" ? row.goal.trim() : "";
+      if (!label || !goal) continue;
+      const basket = typeof row.goalBasket === "string" ? row.goalBasket : "";
+      out.push({
+        label,
+        goal,
+        ...(isAmbientActionBasket(basket) ? { goalBasket: basket } : {}),
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+const ACTION_BASKET_VALUES: ReadonlySet<AmbientActionBasket> = new Set([
+  "work",
+  "health",
+  "family",
+  "wealth",
+  "growth",
+  "life",
+]);
+
+function isAmbientActionBasket(value: string): value is AmbientActionBasket {
+  return ACTION_BASKET_VALUES.has(value as AmbientActionBasket);
 }
 
 function parseRawRefs(value: unknown): AmbientTimelineEvent["rawRefs"] {

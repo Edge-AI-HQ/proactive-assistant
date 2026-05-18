@@ -531,4 +531,152 @@ describe("Ambient timeline model bridge", () => {
     });
   });
 
+  describe("on-device action candidate (act)", () => {
+    function mockBatchWithAct(act: unknown, overrides: Record<string, unknown> = {}): void {
+      setSelectedAmbientSummaryModelId("qwen3-1_7b-q4");
+      native.models.list.mockResolvedValue({
+        profiles: [{ id: "qwen3-1_7b-q4", kind: "llm" }],
+        statuses: [{ id: "qwen3-1_7b-q4", state: "present", lastVerifyResult: "ok" }],
+      });
+      native.models.generateTimelineBatchDecision.mockResolvedValue({
+        decisions: [{
+          action: "create",
+          title: "Product review",
+          summary: "Discussed product review follow-ups.",
+          importance: "medium",
+          occurredAt: windowInput.startedAt,
+          sourceWindowIds: ["win_1"],
+          act,
+          ...overrides,
+        }],
+      });
+    }
+
+    async function batchDecision(): Promise<ReturnType<typeof createAmbientTimelineModelBridge>["generateTimelineBatchDecision"] extends ((...args: never[]) => Promise<infer R>) | undefined ? R : never> {
+      const bridge = createAmbientTimelineModelBridge();
+      const result = await bridge.generateTimelineBatchDecision?.({ windows: [windowInput] });
+      if (!result) throw new Error("expected batch decision result");
+      return result;
+    }
+
+    test("attaches a valid act as a single actionCandidates entry", async () => {
+      mockBatchWithAct({
+        l: "Send recap",
+        g: "Send a recap of the product review follow-ups to the team.",
+        b: "work",
+      });
+      const result = await batchDecision();
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const decision = result.batch.decisions[0];
+        expect(decision.action).toBe("create");
+        if (decision.action === "create") {
+          expect(decision.actionCandidates).toEqual([{
+            label: "Send recap",
+            goal: "Send a recap of the product review follow-ups to the team.",
+            goalBasket: "work",
+          }]);
+        }
+      }
+    });
+
+    test("preserves the card and drops act when act is missing entirely", async () => {
+      mockBatchWithAct(undefined);
+      const result = await batchDecision();
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const decision = result.batch.decisions[0];
+        expect(decision.action).toBe("create");
+        if (decision.action === "create") {
+          expect(decision.actionCandidates).toBeUndefined();
+        }
+      }
+    });
+
+    test("drops act with placeholder label without rejecting the card", async () => {
+      mockBatchWithAct({ l: "<LABEL_HERE>", g: "Send a recap of the call." });
+      const result = await batchDecision();
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const decision = result.batch.decisions[0];
+        expect(decision.action).toBe("create");
+        if (decision.action === "create") {
+          expect(decision.actionCandidates).toBeUndefined();
+        }
+      }
+    });
+
+    test("drops act containing evidence label markers", async () => {
+      mockBatchWithAct({
+        l: "Follow up",
+        g: "Motion context: stationary for 36m, plan a recap reply.",
+      });
+      const result = await batchDecision();
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const decision = result.batch.decisions[0];
+        if (decision.action === "create") {
+          expect(decision.actionCandidates).toBeUndefined();
+        }
+      }
+    });
+
+    test("drops act when label equals goal", async () => {
+      mockBatchWithAct({ l: "Send recap", g: "Send recap" });
+      const result = await batchDecision();
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const decision = result.batch.decisions[0];
+        if (decision.action === "create") {
+          expect(decision.actionCandidates).toBeUndefined();
+        }
+      }
+    });
+
+    test("drops act when goal duplicates the card summary", async () => {
+      mockBatchWithAct({ l: "Send recap", g: "Discussed product review follow-ups." });
+      const result = await batchDecision();
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const decision = result.batch.decisions[0];
+        if (decision.action === "create") {
+          expect(decision.actionCandidates).toBeUndefined();
+        }
+      }
+    });
+
+    test("truncates over-long label and goal with ellipsis", async () => {
+      mockBatchWithAct({
+        l: "Send a longer follow up recap message to the team",
+        g: "g".repeat(180),
+      });
+      const result = await batchDecision();
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const decision = result.batch.decisions[0];
+        if (decision.action === "create") {
+          const [first] = decision.actionCandidates ?? [];
+          expect(first?.label.length).toBeLessThanOrEqual(24);
+          expect(first?.label.endsWith("…")).toBe(true);
+          expect(first?.goal.length).toBeLessThanOrEqual(100);
+          expect(first?.goal.endsWith("…")).toBe(true);
+        }
+      }
+    });
+
+    test("drops invalid basket but keeps label and goal", async () => {
+      mockBatchWithAct({ l: "Send recap", g: "Send a recap of the call to the team.", b: "nonsense" });
+      const result = await batchDecision();
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const decision = result.batch.decisions[0];
+        if (decision.action === "create") {
+          const [first] = decision.actionCandidates ?? [];
+          expect(first?.label).toBe("Send recap");
+          expect(first?.goalBasket).toBeUndefined();
+        }
+      }
+    });
+  });
+
 });

@@ -1,5 +1,21 @@
 import { getSelectedAmbientSummaryModelId } from "../models-selection";
-import type { AmbientCandidateWindow, AmbientTimelineEvent } from "./types";
+import type {
+  AmbientActionBasket,
+  AmbientCandidateWindow,
+  AmbientTimelineAction,
+  AmbientTimelineEvent,
+} from "./types";
+
+const ACTION_LABEL_MAX = 24;
+const ACTION_GOAL_MAX = 100;
+const ACTION_BASKETS: ReadonlySet<AmbientActionBasket> = new Set([
+  "work",
+  "health",
+  "family",
+  "wealth",
+  "growth",
+  "life",
+]);
 
 const TIMELINE_BATCH_MAX_WINDOWS = 1;
 const TIMELINE_BATCH_WINDOW_CONTEXT_CHARS = 480;
@@ -14,7 +30,7 @@ export interface AmbientTimelineEventDraft {
   confidence: number;
   confidenceLabel: AmbientTimelineEvent["confidenceLabel"];
   salientFacts: string[];
-  actionCandidates?: string[];
+  actionCandidates?: AmbientTimelineAction[];
   memoryCandidates?: string[];
   possibleCardTrigger?: {
     title: string;
@@ -116,6 +132,48 @@ function deriveTitleFromContext(context: string | undefined, max = 30): string |
   return head.slice(0, max - 1).trimEnd() + "…";
 }
 
+function normalizeAct(
+  raw: unknown,
+  context: { title: string; summary: string },
+): AmbientTimelineAction | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const row = raw as Record<string, unknown>;
+  const rawLabel = typeof row.l === "string"
+    ? row.l
+    : typeof row.label === "string" ? row.label : "";
+  const rawGoal = typeof row.g === "string"
+    ? row.g
+    : typeof row.goal === "string" ? row.goal : "";
+  const label = rawLabel.trim();
+  const goal = rawGoal.trim();
+  if (!label || !goal) return null;
+  if (isPlaceholderEcho(label) || isPlaceholderEcho(goal)) return null;
+  EVIDENCE_LABEL_PATTERN.lastIndex = 0;
+  if (EVIDENCE_LABEL_PATTERN.test(label)) return null;
+  EVIDENCE_LABEL_PATTERN.lastIndex = 0;
+  if (EVIDENCE_LABEL_PATTERN.test(goal)) return null;
+  if (label === goal) return null;
+  if (label === context.title.trim()) return null;
+  if (goal === context.summary.trim()) return null;
+  const trimmedLabel = label.length <= ACTION_LABEL_MAX
+    ? label
+    : label.slice(0, ACTION_LABEL_MAX - 1).trimEnd() + "…";
+  const trimmedGoal = goal.length <= ACTION_GOAL_MAX
+    ? goal
+    : goal.slice(0, ACTION_GOAL_MAX - 1).trimEnd() + "…";
+  const rawBasket = typeof row.b === "string"
+    ? row.b
+    : typeof row.goalBasket === "string" ? row.goalBasket : "";
+  const basket = rawBasket && ACTION_BASKETS.has(rawBasket as AmbientActionBasket)
+    ? (rawBasket as AmbientActionBasket)
+    : undefined;
+  return {
+    label: trimmedLabel,
+    goal: trimmedGoal,
+    ...(basket ? { goalBasket: basket } : {}),
+  };
+}
+
 function sanitizeLlmTitle(
   rawTitle: string,
   summary: string,
@@ -156,6 +214,7 @@ export type LlmTimelineDecision =
       importance: "low" | "medium" | "high";
       occurredAt: string;
       sourceWindowIds: string[];
+      actionCandidates?: AmbientTimelineAction[];
     }
   | {
       action: "update";
@@ -415,7 +474,16 @@ function normalizeDecision(
     const occurredAt = occurredAtCandidate
       ?? shortPlainText(primaryWindow?.startedAt, 64);
     if (!occurredAt) return null;
-    return { action: "create", title, summary, importance, occurredAt, sourceWindowIds };
+    const action = normalizeAct(row.act ?? row.actionCandidate, { title, summary });
+    return {
+      action: "create",
+      title,
+      summary,
+      importance,
+      occurredAt,
+      sourceWindowIds,
+      ...(action ? { actionCandidates: [action] } : {}),
+    };
   }
   if (action === "update") {
     const eventId = shortPlainText(row.eventId ?? row.e, 128);

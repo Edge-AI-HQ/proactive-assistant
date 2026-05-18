@@ -9,6 +9,7 @@ import type {
   AmbientRawEvent,
   AmbientRawRef,
   AmbientSourceType,
+  AmbientTimelineAction,
   AmbientTimelineEvent,
   AmbientTimelineStore,
   AmbientWindowType,
@@ -133,6 +134,7 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
           sourceWindowIds,
           idempotencyKey: `summary:create:${stableHash(sourceWindowIds.slice().sort().join("|"))}`,
           dedupeKey: `ambient:timeline:${first.localDate}:llm_summary:${stableHash(sourceWindowIds.slice().sort().join("|"))}`,
+          actionCandidates: decision.actionCandidates,
         });
         const signal = await this.upsertVisibleEvent(event);
         if (signal) out.push(signal);
@@ -877,6 +879,7 @@ function makeEvent(args: {
   generationSource?: AmbientTimelineEvent["generationSource"];
   sourceWindowIds?: string[];
   idempotencyKey?: string;
+  actionCandidates?: AmbientTimelineAction[];
   dedupeKey: string;
 }): AmbientTimelineEvent {
   const now = new Date().toISOString();
@@ -914,6 +917,9 @@ function makeEvent(args: {
     generationSource: args.generationSource ?? (args.generationMethod === "local_llm" ? "llm_summary" : "rule_based"),
     sourceWindowIds: args.sourceWindowIds ?? [],
     idempotencyKey: args.idempotencyKey,
+    ...(args.actionCandidates && args.actionCandidates.length > 0
+      ? { actionCandidates: args.actionCandidates.map(cloneAction) }
+      : {}),
     generationStatus: "visible",
     memoryCandidate: false,
     cardTriggerCandidate: false,
@@ -932,6 +938,14 @@ function average(values: number[]): number {
 
 function rawRef(raw: AmbientRawEvent): AmbientRawRef {
   return { sourceType: raw.sourceType, id: raw.id };
+}
+
+function cloneAction(action: AmbientTimelineAction): AmbientTimelineAction {
+  return {
+    label: action.label,
+    goal: action.goal,
+    ...(action.goalBasket ? { goalBasket: action.goalBasket } : {}),
+  };
 }
 
 const MIN_STEPS_FOR_VISIBLE_HEALTH = 100;

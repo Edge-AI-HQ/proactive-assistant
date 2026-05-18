@@ -26,6 +26,7 @@ import type {
   AmbientPrivacy,
   AmbientRawEvent,
   AmbientSourceType,
+  AmbientTimelineAction,
   AmbientTimelineEvent,
 } from "@/services/ambient/timeline";
 import type { RuntimeStatus } from "@/services/ambient";
@@ -34,11 +35,7 @@ import type { UserDevice, UserDevicePlatform } from "@/lib/api";
 
 /* ──────────────── TIMELINE (today's narrative) ──────────────── */
 
-export interface AmbientTimelineAction {
-  label: string;
-  goal: string;
-  goalBasket?: "work" | "health" | "family" | "wealth" | "growth" | "life";
-}
+export type { AmbientTimelineAction };
 
 export interface TimelineEntry {
   id?: string;
@@ -170,6 +167,7 @@ function timelineEventToEntry(
   onDismiss: (id: string) => void,
 ): TimelineEntry {
   const parsedTs = Date.parse(event.occurredAt);
+  const action = event.actionCandidates?.[0];
   return {
     id: event.id,
     sortTs: Number.isFinite(parsedTs) ? parsedTs : 0,
@@ -185,7 +183,8 @@ function timelineEventToEntry(
     title: event.title,
     body: event.summary,
     tags: event.tags,
-    triggeredCard: event.triggeredCardTitle,
+    triggeredCard: event.triggeredCardTitle ?? (action ? action.label : undefined),
+    ...(action ? { action } : {}),
     onDismiss: () => onDismiss(event.id),
   };
 }

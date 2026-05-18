@@ -5,6 +5,7 @@ export {
   AMBIENT_TIMELINE_SCHEMA_VERSION,
 } from "./types";
 export type {
+  AmbientActionBasket,
   AmbientCandidateWindow,
   AmbientConfidenceLabel,
   AmbientEventType,
@@ -12,6 +13,7 @@ export type {
   AmbientRawEvent,
   AmbientRawRef,
   AmbientSourceType,
+  AmbientTimelineAction,
   AmbientTimelineEvent,
   AmbientTimelineStore,
   AmbientWindowType,
