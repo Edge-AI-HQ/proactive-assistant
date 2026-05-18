@@ -18,7 +18,10 @@ const ambientAiMock = vi.hoisted(() => {
     addListener: vi.fn(async () => ({ remove: listenerRemove })),
     audio: {
       configure: vi.fn(async () => {}),
+      drainPendingTranscripts: vi.fn(async (): Promise<unknown[]> => []),
       getState: vi.fn(),
+      listRecentCaptures: vi.fn(async (): Promise<{ captures: unknown[] }> => ({ captures: [] })),
+      markCaptureProcessed: vi.fn(async () => {}),
       readCapture: vi.fn(),
       startCapture: vi.fn(async () => {}),
       stopCapture: vi.fn(async () => {}),
@@ -37,11 +40,20 @@ vi.mock("@pin/capacitor-ambient-ai", () => ({
 
 vi.mock("../capture-transcription", () => captureTranscriptionMock);
 
+async function flushMicrotasks(turns = 5): Promise<void> {
+  for (let i = 0; i < turns; i += 1) {
+    await Promise.resolve();
+  }
+}
+
 describe("SoundClassifierSource transcript ingest", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetAmbientLiveTranscriptForTest();
     captureTranscriptionMock.transcribeAmbientCapture.mockReset();
+    ambientAiMock.audio.drainPendingTranscripts.mockResolvedValue([]);
+    ambientAiMock.audio.listRecentCaptures.mockResolvedValue({ captures: [] });
+    ambientAiMock.audio.markCaptureProcessed.mockResolvedValue(undefined);
     ambientAiMock.audio.getState.mockResolvedValue({
       running: true,
       paused: false,
@@ -99,6 +111,7 @@ describe("SoundClassifierSource transcript ingest", () => {
       },
     ]);
     expect(ctx.onEvent).toHaveBeenCalledWith("sound_classifier", "Voice transcript: This is a meaningful ambient transcript worth storing.");
+    expect(ambientAiMock.audio.markCaptureProcessed).toHaveBeenCalledWith({ wavId: "wav-1" });
   });
 
   test("transcribes captureReady through the backend proxy and pushes the session summary", async () => {
@@ -157,6 +170,33 @@ describe("SoundClassifierSource transcript ingest", () => {
         dedupe_key: "ios:audio:burst-cloud",
       }),
     ]);
+    expect(ambientAiMock.audio.markCaptureProcessed).toHaveBeenCalledWith({ wavId: "wav-cloud" });
+  });
+
+  test("marks empty cloud transcription captures as processed without storing a signal", async () => {
+    const pushed: unknown[] = [];
+    const ctx: SourceContext = {
+      push: (item) => pushed.push(item),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+    captureTranscriptionMock.transcribeAmbientCapture.mockResolvedValue({
+      text: "   ",
+      event: {},
+    });
+
+    await source.handleCaptureReadyForTest({
+      platform: "ios",
+      wavId: "wav-empty",
+      burstId: "burst-empty",
+      captureSessionId: "capture-empty",
+      capturedAt: "2026-05-17T05:15:12.000Z",
+      durationMs: 3500,
+      byteSize: 320_000,
+    });
+
+    expect(pushed).toEqual([]);
+    expect(ambientAiMock.audio.markCaptureProcessed).toHaveBeenCalledWith({ wavId: "wav-empty" });
   });
 
   test("uses user language preference for native recognition and cloud transcription", async () => {
@@ -172,6 +212,7 @@ describe("SoundClassifierSource transcript ingest", () => {
     });
 
     await source.start();
+    await source.flushPendingAudioRecoveryForTest();
     await source.handleCaptureReadyForTest({
       platform: "ios",
       wavId: "wav-en",
@@ -189,6 +230,37 @@ describe("SoundClassifierSource transcript ingest", () => {
       expect.objectContaining({ wavId: "wav-en" }),
       "en",
     );
+  });
+
+  test("starts live capture before recovering persisted captures", async () => {
+    const ctx: SourceContext = {
+      push: vi.fn(),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+    ambientAiMock.audio.listRecentCaptures.mockResolvedValue({
+      captures: [
+        {
+          wavId: "wav-persisted",
+          burstId: "burst-persisted",
+          captureSessionId: "capture-persisted",
+          capturedAt: "2026-05-18T02:46:30.000Z",
+          durationMs: 3080,
+          byteSize: 295_616,
+        },
+      ],
+    });
+    captureTranscriptionMock.transcribeAmbientCapture.mockResolvedValue({
+      text: "Persisted capture should be recovered after live capture is already running.",
+      event: {},
+    });
+
+    await source.start();
+    await source.flushPendingAudioRecoveryForTest();
+
+    const startCaptureOrder = ambientAiMock.audio.startCapture.mock.invocationCallOrder[0];
+    const transcribeOrder = captureTranscriptionMock.transcribeAmbientCapture.mock.invocationCallOrder[0];
+    expect(startCaptureOrder).toBeLessThan(transcribeOrder);
   });
 
   test("does not duplicate session summary when native transcriptReady follows captureReady", async () => {
@@ -225,6 +297,251 @@ describe("SoundClassifierSource transcript ingest", () => {
     });
 
     expect(pushed).toHaveLength(1);
+  });
+
+  test("does not delete a capture while its cloud transcription is still reading it", async () => {
+    const pushed: unknown[] = [];
+    const ctx: SourceContext = {
+      push: (item) => pushed.push(item),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+    let resolveTranscription: ((value: { text: string; event: Record<string, never> }) => void) | undefined;
+    captureTranscriptionMock.transcribeAmbientCapture.mockReturnValue(new Promise((resolve) => {
+      resolveTranscription = resolve;
+    }));
+
+    const inFlight = source.handleCaptureReadyForTest({
+      platform: "ios",
+      wavId: "wav-race",
+      burstId: "burst-race",
+      captureSessionId: "capture-race",
+      capturedAt: "2026-05-17T05:15:12.000Z",
+      durationMs: 3500,
+      byteSize: 320_000,
+    });
+    source.handleTranscriptReadyForTest({
+      platform: "ios",
+      wavId: "wav-race",
+      burstId: "burst-race",
+      captureSessionId: "capture-race",
+      text: "Native transcript may arrive while cloud transcription is still reading the WAV.",
+      capturedAt: "2026-05-17T05:15:20.000Z",
+      durationMs: 3500,
+      provider: "local_speech",
+      fallback: false,
+    });
+
+    expect(ambientAiMock.audio.markCaptureProcessed).not.toHaveBeenCalled();
+
+    resolveTranscription?.({
+      text: "Cloud transcript should not create a duplicate signal after native text was stored.",
+      event: {},
+    });
+    await inFlight;
+
+    expect(pushed).toHaveLength(1);
+    expect(ambientAiMock.audio.markCaptureProcessed).toHaveBeenCalledWith({ wavId: "wav-race" });
+  });
+
+  test("does not push or delete recovered captures after the source stops", async () => {
+    const pushed: unknown[] = [];
+    const ctx: SourceContext = {
+      push: (item) => pushed.push(item),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+    let resolveTranscription: ((value: { text: string; event: Record<string, never> }) => void) | undefined;
+    captureTranscriptionMock.transcribeAmbientCapture.mockReturnValue(new Promise((resolve) => {
+      resolveTranscription = resolve;
+    }));
+
+    await source.start();
+    await source.flushPendingAudioRecoveryForTest();
+    ambientAiMock.audio.listRecentCaptures.mockResolvedValueOnce({
+      captures: [
+        {
+          wavId: "wav-stop",
+          burstId: "burst-stop",
+          captureSessionId: "capture-stop",
+          capturedAt: "2026-05-18T02:46:30.000Z",
+          durationMs: 3080,
+          byteSize: 295_616,
+        },
+      ],
+    });
+
+    await source.refresh();
+    await flushMicrotasks();
+    expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
+      expect.objectContaining({ wavId: "wav-stop" }),
+      "zh",
+    );
+
+    await source.stop();
+    resolveTranscription?.({
+      text: "This transcript finished after the source stopped and should be ignored.",
+      event: {},
+    });
+    await source.flushPendingAudioRecoveryForTest();
+
+    expect(pushed).toEqual([]);
+    expect(ambientAiMock.audio.markCaptureProcessed).not.toHaveBeenCalledWith({ wavId: "wav-stop" });
+  });
+
+  test("runs a queued recovery scan when refresh happens during pending recovery", async () => {
+    const pushed: unknown[] = [];
+    const ctx: SourceContext = {
+      push: (item) => pushed.push(item),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+    let resolveFirstTranscription: ((value: { text: string; event: Record<string, never> }) => void) | undefined;
+    captureTranscriptionMock.transcribeAmbientCapture
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveFirstTranscription = resolve;
+      }))
+      .mockResolvedValueOnce({
+        text: "Second queued recovery transcript should be picked up automatically.",
+        event: {},
+      });
+
+    await source.start();
+    await source.flushPendingAudioRecoveryForTest();
+    ambientAiMock.audio.listRecentCaptures.mockResolvedValueOnce({
+      captures: [
+        {
+          wavId: "wav-first",
+          burstId: "burst-first",
+          captureSessionId: "capture-first",
+          capturedAt: "2026-05-18T02:46:30.000Z",
+          durationMs: 3080,
+          byteSize: 295_616,
+        },
+      ],
+    });
+
+    await source.refresh();
+    await flushMicrotasks();
+    ambientAiMock.audio.listRecentCaptures.mockResolvedValueOnce({
+      captures: [
+        {
+          wavId: "wav-second",
+          burstId: "burst-second",
+          captureSessionId: "capture-second",
+          capturedAt: "2026-05-18T02:46:45.000Z",
+          durationMs: 3080,
+          byteSize: 295_616,
+        },
+      ],
+    });
+    await source.refresh();
+
+    resolveFirstTranscription?.({
+      text: "First recovery transcript should complete before the queued scan.",
+      event: {},
+    });
+    await source.flushPendingAudioRecoveryForTest();
+
+    expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
+      expect.objectContaining({ wavId: "wav-first" }),
+      "zh",
+    );
+    expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
+      expect.objectContaining({ wavId: "wav-second" }),
+      "zh",
+    );
+    expect(pushed).toEqual([
+      expect.objectContaining({ dedupe_key: "ios:audio:burst-first" }),
+      expect.objectContaining({ dedupe_key: "ios:audio:burst-second" }),
+    ]);
+  });
+
+  test("drains pending native transcripts on refresh after background", async () => {
+    const pushed: unknown[] = [];
+    const ctx: SourceContext = {
+      push: (item) => pushed.push(item),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+
+    await source.start();
+    await source.flushPendingAudioRecoveryForTest();
+    ambientAiMock.audio.drainPendingTranscripts.mockResolvedValueOnce([
+      {
+        platform: "ios",
+        wavId: "wav-background",
+        burstId: "burst-background",
+        captureSessionId: "capture-background",
+        text: "Background transcript should be recovered when the app returns foreground.",
+        capturedAt: "2026-05-18T02:40:00.000Z",
+        durationMs: 6200,
+        provider: "local_speech",
+        fallback: false,
+        localProvider: "sfspeech",
+        segmentIndex: 8,
+        triggerSource: "audio_vad_fallback",
+      },
+    ]);
+
+    await source.refresh();
+    await source.flushPendingAudioRecoveryForTest();
+
+    expect(ambientAiMock.audio.drainPendingTranscripts).toHaveBeenCalledTimes(2);
+    expect(pushed).toEqual([
+      expect.objectContaining({
+        kind: "session_summary",
+        summary: "Background transcript should be recovered when the app returns foreground.",
+        dedupe_key: "ios:audio:burst-background",
+      }),
+    ]);
+  });
+
+  test("transcribes missed recent captures on refresh after background", async () => {
+    const pushed: unknown[] = [];
+    const ctx: SourceContext = {
+      push: (item) => pushed.push(item),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+    captureTranscriptionMock.transcribeAmbientCapture.mockResolvedValue({
+      text: "Recovered cloud transcript from a background audio capture.",
+      event: {},
+    });
+
+    await source.start();
+    await source.flushPendingAudioRecoveryForTest();
+    ambientAiMock.audio.listRecentCaptures.mockResolvedValueOnce({
+      captures: [
+        {
+          wavId: "wav-missed",
+          burstId: "burst-missed",
+          captureSessionId: "capture-missed",
+          capturedAt: "2026-05-18T02:46:30.000Z",
+          durationMs: 3080,
+          byteSize: 295_616,
+        },
+      ],
+    });
+
+    await source.refresh();
+    await source.flushPendingAudioRecoveryForTest();
+
+    expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
+      expect.objectContaining({
+        wavId: "wav-missed",
+        burstId: "burst-missed",
+        triggerSource: "recent_capture_scan",
+      }),
+      "zh",
+    );
+    expect(pushed).toEqual([
+      expect.objectContaining({
+        kind: "session_summary",
+        summary: "Recovered cloud transcript from a background audio capture.",
+        dedupe_key: "ios:audio:burst-missed",
+      }),
+    ]);
   });
 
   test("ignores short transcriptReady text", () => {

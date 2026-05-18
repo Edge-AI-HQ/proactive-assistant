@@ -38,6 +38,8 @@ struct AudioCaptureSnapshot {
     let lastAudioError: String?
     let classifierRestartCount: Int
     let suppressedReason: AudioSuppressedReason?
+    let backgroundCaptureLoopRunning: Bool
+    let currentCaptureTriggerSource: String?
 
     var payload: [String: Any] {
         var data: [String: Any] = [
@@ -50,6 +52,7 @@ struct AudioCaptureSnapshot {
             "capturePipelineRunning": capturePipelineRunning,
             "engineState": engineState.rawValue,
             "classifierRestartCount": classifierRestartCount,
+            "backgroundCaptureLoopRunning": backgroundCaptureLoopRunning,
         ]
         if let lastClassificationAt {
             data["lastClassificationAt"] = Int(lastClassificationAt.timeIntervalSince1970 * 1_000)
@@ -59,6 +62,9 @@ struct AudioCaptureSnapshot {
         }
         if let suppressedReason {
             data["suppressedReason"] = suppressedReason.rawValue
+        }
+        if let currentCaptureTriggerSource {
+            data["currentCaptureTriggerSource"] = currentCaptureTriggerSource
         }
         return data
     }

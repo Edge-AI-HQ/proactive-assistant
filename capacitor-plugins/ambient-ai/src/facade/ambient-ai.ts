@@ -48,6 +48,7 @@ export const AmbientAi: AmbientAiFacade = {
     },
     listRecentCaptures: () => native.audio.listRecentCaptures(),
     readCapture: (options) => native.audio.readCapture(options),
+    markCaptureProcessed: (options) => native.audio.markCaptureProcessed(options),
     playCapture: (options) => native.audio.playCapture(options),
     stopPlayback: () => native.audio.stopPlayback(),
   },

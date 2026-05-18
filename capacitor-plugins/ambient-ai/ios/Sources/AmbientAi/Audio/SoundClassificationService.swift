@@ -193,6 +193,84 @@ final class SoundClassificationService {
         return true
     }
 
+    @discardableResult
+    func startCapturePipelineOnly() -> Bool {
+        lock.lock()
+        let alreadyRunning = engine?.isRunning == true
+        if alreadyRunning {
+            stopAnalyzerLocked(nextState: .suspended)
+            lastError = nil
+            lock.unlock()
+            installInterruptionObserverIfNeeded()
+            installMediaServicesResetObserverIfNeeded()
+            installRouteChangeObserverIfNeeded()
+            return true
+        }
+        if engineState == .stopped {
+            engineState = .starting
+        }
+        lock.unlock()
+
+        guard AVAudioApplication.shared.recordPermission == .granted else {
+            emitError("Microphone permission not granted", source: "audioSession")
+            return false
+        }
+
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(
+                .playAndRecord,
+                mode: .measurement,
+                options: [.mixWithOthers, .allowBluetoothHFP, .defaultToSpeaker]
+            )
+            try session.setActive(true, options: [])
+        } catch {
+            emitError("Audio session activation failed: \(error.localizedDescription)", source: "audioSession")
+            return false
+        }
+
+        let engine: AVAudioEngine
+        lock.lock()
+        if let existingEngine = self.engine {
+            engine = existingEngine
+        } else {
+            let newEngine = AVAudioEngine()
+            self.engine = newEngine
+            engine = newEngine
+        }
+        stopAnalyzerLocked(nextState: .suspended)
+        lastError = nil
+        lock.unlock()
+
+        let input = engine.inputNode
+        let format = input.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            emitError("Input audio format is unavailable", source: "audioSession")
+            return false
+        }
+
+        input.removeTap(onBus: 0)
+        input.installTap(onBus: 0, bufferSize: 8_192, format: format) { [weak self] buffer, time in
+            self?.dispatchAudioBuffer(buffer)
+            self?.analyze(buffer: buffer, atAudioFramePosition: time.sampleTime)
+        }
+
+        do {
+            try engine.start()
+        } catch {
+            input.removeTap(onBus: 0)
+            emitError("Audio engine failed to start: \(error.localizedDescription)", source: "audioSession")
+            return false
+        }
+
+        installInterruptionObserverIfNeeded()
+        installMediaServicesResetObserverIfNeeded()
+        installRouteChangeObserverIfNeeded()
+        let route = session.currentRoute.inputs.map { $0.portType.rawValue }.joined(separator: ",")
+        soundLogger.info("Audio capture pipeline started without SoundAnalysis category=\(session.category.rawValue, privacy: .public) mode=\(session.mode.rawValue, privacy: .public) route=\(route, privacy: .public)")
+        return true
+    }
+
     func stop() {
         stopEngine()
         if let observer = interruptionObserver {
@@ -395,6 +473,9 @@ final class SoundClassificationService {
 
         if active, let currentSink {
             currentSink.recordingDidReceive(buffer: buffer)
+            if isFallbackSpeech(buffer) {
+                onSpeechFrame?()
+            }
         } else {
             preRollBuffer.append(buffer: buffer)
             maybeEmitFallbackSpeechBurst(buffer)
@@ -409,9 +490,7 @@ final class SoundClassificationService {
         let canFire = fallbackSpeechBurstEnabled && analyzerUnavailable && elapsedMs >= fallbackMinIntervalMs
         lock.unlock()
 
-        guard canFire,
-              let rms = Self.rms(buffer: buffer),
-              rms >= fallbackRmsThreshold else {
+        guard canFire, isFallbackSpeech(buffer) else {
             return
         }
 
@@ -419,7 +498,12 @@ final class SoundClassificationService {
         lastFallbackBurstAt = now
         lock.unlock()
 
-        onSpeechBurst?(min(1, Double(rms / 0.08)), "audio_vad_fallback")
+        onSpeechBurst?(min(1, Double((Self.rms(buffer: buffer) ?? fallbackRmsThreshold) / 0.08)), "audio_vad_fallback")
+    }
+
+    private func isFallbackSpeech(_ buffer: AVAudioPCMBuffer) -> Bool {
+        guard let rms = Self.rms(buffer: buffer) else { return false }
+        return rms >= fallbackRmsThreshold
     }
 
     private func handleClassification(_ frame: SoundClassificationFrame) {

@@ -18,6 +18,7 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
         CAPPluginMethod(name: "drainPendingTranscripts", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "listRecentCaptures", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "readCapture", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "markCaptureProcessed", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "playCapture", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopPlayback", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startClassification", returnType: CAPPluginReturnPromise),
@@ -217,6 +218,18 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
                     call.reject(error.localizedDescription, "READ_CAPTURE_FAILED")
                 }
             }
+        }
+    }
+
+    @objc func markCaptureProcessed(_ call: CAPPluginCall) {
+        guard let wavId = call.getString("wavId"), !wavId.isEmpty else {
+            call.reject(AudioCaptureFailure.missingWavId.localizedDescription, "MISSING_WAV_ID")
+            return
+        }
+
+        Task { [weak self] in
+            await self?.audioManager.markCaptureProcessed(wavId: wavId)
+            DispatchQueue.main.async { call.resolve() }
         }
     }
 
