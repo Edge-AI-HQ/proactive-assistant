@@ -38,6 +38,7 @@ from typing import Any
 from psycopg import AsyncConnection
 from psycopg_pool import AsyncConnectionPool
 
+from ..auth.user_service import load_user_by_id
 from ..db.repositories.connectors import ConnectorsRepository
 from ..db.repositories.scheduled_tasks import (
     ScheduledTaskRow,
@@ -210,6 +211,11 @@ async def _run_init(
         await _mark_skipped(pool, task, toolkit_raw, log_prefix="[connector.init]")
         return
 
+    user = await load_user_by_id(pool, user_id)
+    if user is None:
+        msg = f"connector.init: user {user_id} not found"
+        raise RuntimeError(msg)
+
     async with user_scoped_tx(pool, user_id) as conn:
         await update_progress(
             conn, user_id=user_id, task_id=task.id,
@@ -219,7 +225,7 @@ async def _run_init(
     # Init mode: since=None — recipe omits the cursor arg; toolkit's
     # natural default window applies.
     items = await ingest_runner.run_fetch(
-        user_id, toolkit_raw, cid, limit=limit, since=None,
+        user, toolkit_raw, cid, limit=limit, since=None,
     )
 
     async with user_scoped_tx(pool, user_id) as conn:
@@ -273,6 +279,11 @@ async def _run_sync(
         await _mark_skipped(pool, task, toolkit_raw, log_prefix="[connector.sync]")
         return
 
+    user = await load_user_by_id(pool, user_id)
+    if user is None:
+        msg = f"connector.sync: user {user_id} not found"
+        raise RuntimeError(msg)
+
     # ── Stage: read cursor ──
     async with user_scoped_tx(pool, user_id) as conn:
         cursor = await ConnectorsRepository(user_id, conn).get_cursor(
@@ -294,7 +305,7 @@ async def _run_sync(
         )
 
     items = await ingest_runner.run_fetch(
-        user_id, toolkit_raw, cid, limit=limit, since=since,
+        user, toolkit_raw, cid, limit=limit, since=since,
     )
 
     # ── Stage: raw + cursor ──

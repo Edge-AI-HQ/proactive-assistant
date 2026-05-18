@@ -92,3 +92,34 @@ async def upsert_user_by_supabase_id(
         await seed_default_goals(pool, user.id)
 
     return user
+
+
+async def load_user_by_id(
+    pool: AsyncConnectionPool, internal_user_id: int,
+) -> User | None:
+    """Hydrate a User row by BIGINT id.
+
+    For background tasks / agent JWT paths that only carry the internal
+    id but need the Supabase UUID (e.g. to derive the Composio /
+    LiteLLM / Storage external namespace). Returns None if the row is
+    gone — caller decides whether that's fatal.
+    """
+    async with service_tx(pool) as conn:
+        cur = await conn.execute(
+            """
+            SELECT id, supabase_user_id, email, litellm_virtual_key,
+                   browserbase_context_id
+            FROM users WHERE id = %s
+            """,
+            (internal_user_id,),
+        )
+        row: dict[str, Any] | None = await cur.fetchone()
+    if row is None:
+        return None
+    return User(
+        id=row["id"],
+        supabase_user_id=row["supabase_user_id"],
+        email=row.get("email"),
+        litellm_virtual_key=row.get("litellm_virtual_key"),
+        browserbase_context_id=row.get("browserbase_context_id"),
+    )

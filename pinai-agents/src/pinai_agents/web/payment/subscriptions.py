@@ -210,3 +210,17 @@ async def find_user_by_stripe_subscription(conn, stripe_subscription_id: str) ->
         )
         row = await cur.fetchone()
     return int(row["user_id"]) if row else None
+
+
+async def find_user_by_supabase_user_id(conn, supabase_user_id: str) -> int | None:
+    """Resolve the internal BIGINT id from a Supabase UUID. Used by the
+    Stripe webhook to convert metadata.supabase_user_id (the external
+    namespace per AGENTS.md "用户标识规约") back to the internal id
+    needed for DB writes."""
+    async with conn.cursor() as cur:
+        await cur.execute(
+            "SELECT id FROM users WHERE supabase_user_id = %s LIMIT 1",
+            (supabase_user_id,),
+        )
+        row = await cur.fetchone()
+    return int(row["id"]) if row else None

@@ -286,6 +286,7 @@ make deploy-litellm-prod    # LiteLLM → prod
 - **Composio 写命令受控**：read/query 类 Composio tool 默认可执行；有副作用的 tool 只有代码 allowlist 内的 `GMAIL_CREATE_EMAIL_DRAFT` / `GMAIL_SEND_DRAFT` 可执行，且必须显式传 side-effect 同意标记。不要指导 agent 用 `GMAIL_SEND_EMAIL` 或 allowlist 外任意 create/update/delete/send tool。
 - **JWT 签名隔离**：web 用 EdDSA 私钥签 PAI JWT；chat 用 HS256 共享 secret 验。私钥永远只在 web 进程。
 - **dotenvx 私钥**（`.env.keys`）禁止 checkin，找团队成员获取。
+- **用户标识规约**：`users.id` (BIGINT) 仅用于 DB 内部 FK / RLS / `user_scoped_tx` / 内部 JWT 的 `user_id` claim，**永远不出本系统**——BIGSERIAL 在本地 docker / dev fly / prod fly 是独立序列，跨环境必撞。任何对外 namespace（Composio user_id、LiteLLM user_id / key_alias、Supabase Storage path prefix、Stripe metadata 主键、其它第三方 SaaS）必须用 `users.supabase_user_id` (UUID NOT NULL，全球唯一、Supabase 不复用、跨环境一致)。
 
 ## 数据库变更规则
 - 每次 schema 变更写新的 migration 文件到 `pinai-agents/db/migrations/`，命名 `NNN_<topic>.sql`；触碰 pai schema 的表习惯加 `pai_` 前缀（例如 `015_pai_background_tasks.sql`），其余按 topic 描述即可（例如 `001_users.sql` / `030_drop_legacy_user_columns.sql`）。

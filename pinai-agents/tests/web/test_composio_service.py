@@ -14,6 +14,22 @@ from unittest.mock import MagicMock
 import pytest
 
 from pinai_agents.web import composio_service as cs
+from pinai_agents.web.auth.user_service import User
+
+
+def _user(internal_id: int = 7, supabase_uuid: str | None = None) -> User:
+    """Minimal User instance for service-layer tests.
+
+    Default supabase_uuid is `u-{internal_id}` so test expectations stay
+    readable (e.g. composio namespace becomes "pai-u-7"). Tests can pass
+    an explicit UUID-shaped string when format matters."""
+    return User(
+        id=internal_id,
+        supabase_user_id=supabase_uuid or f"u-{internal_id}",
+        email=None,
+        litellm_virtual_key=None,
+        browserbase_context_id=None,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -39,7 +55,10 @@ def mock_sdk(monkeypatch):
 
 
 def test_composio_user_id_namespace():
-    assert cs.composio_user_id(42) == "pai-42"
+    """Namespace is derived from the Supabase UUID, not the BIGINT id —
+    so it stays stable across env-specific SERIAL sequences. See
+    AGENTS.md "用户标识规约"."""
+    assert cs.composio_user_id(_user(42, "uuid-42")) == "pai-uuid-42"
 
 
 def _account(*, cid: str, toolkit: str, status: str = "ACTIVE",
@@ -61,7 +80,7 @@ def _account(*, cid: str, toolkit: str, status: str = "ACTIVE",
 @pytest.mark.asyncio
 async def test_list_connections_empty(mock_sdk):
     mock_sdk.connected_accounts.list.return_value = SimpleNamespace(items=[])
-    out = await cs.list_connections(7)
+    out = await cs.list_connections(_user(7))
     assert out == []
 
 
@@ -74,7 +93,7 @@ async def test_list_connections_basic(mock_sdk):
     # No identity action for github/slack means identity stays None
     # unless cached. We disable identity in this test by clearing the
     # toolkit map.
-    out = await cs.list_connections(7)
+    out = await cs.list_connections(_user(7))
     slugs = {c.toolkit for c in out}
     assert slugs == {"github", "slack"}
     assert all(c.connected_account_id.startswith("ca_") for c in out)
@@ -83,9 +102,9 @@ async def test_list_connections_basic(mock_sdk):
 @pytest.mark.asyncio
 async def test_list_connections_filters_by_user(mock_sdk):
     mock_sdk.connected_accounts.list.return_value = SimpleNamespace(items=[])
-    await cs.list_connections(123)
+    await cs.list_connections(_user(123, "uuid-123"))
     call = mock_sdk.connected_accounts.list.call_args
-    assert call.kwargs["user_ids"] == ["pai-123"]
+    assert call.kwargs["user_ids"] == ["pai-uuid-123"]
     assert call.kwargs["statuses"] == ["ACTIVE"]
 
 
@@ -98,7 +117,7 @@ async def test_list_connections_passes_inline_user_info(mock_sdk):
         _account(cid="ca_1", toolkit="gmail",
                  user_info={"emailAddress": "alice@example.com"}),
     ])
-    out = await cs.list_connections(7)
+    out = await cs.list_connections(_user(7))
     assert out[0].user_info == {"emailAddress": "alice@example.com"}
     # list_connections is pure SDK now — no extra identity action call.
     mock_sdk.tools.execute.assert_not_called()
@@ -113,7 +132,7 @@ async def test_list_connections_no_identity_call(mock_sdk):
     mock_sdk.connected_accounts.list.return_value = SimpleNamespace(items=[
         _account(cid="ca_1", toolkit="gmail"),
     ])
-    await cs.list_connections(7)
+    await cs.list_connections(_user(7))
     mock_sdk.tools.execute.assert_not_called()
 
 
@@ -194,7 +213,7 @@ async def test_search_tools_maps_fields(mock_sdk):
         tags=["read", "important"],
     )
     mock_sdk.tools.get_raw_composio_tools.return_value = [raw_tool]
-    out = await cs.search_tools(7, "recent emails", toolkit="gmail", limit=5)
+    out = await cs.search_tools(_user(7), "recent emails", toolkit="gmail", limit=5)
     assert len(out) == 1
     hit = out[0]
     assert hit.slug == "GMAIL_FETCH_EMAILS"
@@ -215,7 +234,7 @@ async def test_search_tools_skips_slugless(mock_sdk):
     bad = SimpleNamespace(slug=None, toolkit={"slug": "gmail"},
                           name="x", description="x", tags=[])
     mock_sdk.tools.get_raw_composio_tools.return_value = [bad]
-    out = await cs.search_tools(7, "anything")
+    out = await cs.search_tools(_user(7), "anything")
     assert out == []
 
 
@@ -262,14 +281,14 @@ async def test_execute_success(mock_sdk):
         "error": None,
     }
     mock_sdk.tools.execute.return_value = resp
-    result = await cs.execute(7, "GMAIL_FETCH_EMAILS", {"max_results": 10})
+    result = await cs.execute(_user(7), "GMAIL_FETCH_EMAILS", {"max_results": 10})
     assert result.successful is True
     assert result.data == {"messages": [{"id": "m1"}]}
     assert result.error is None
 
     call = mock_sdk.tools.execute.call_args
     assert call.args == ("GMAIL_FETCH_EMAILS", {"max_results": 10})
-    assert call.kwargs["user_id"] == "pai-7"
+    assert call.kwargs["user_id"] == "pai-u-7"
 
 
 @pytest.mark.asyncio
@@ -278,7 +297,7 @@ async def test_execute_with_connected_account_id(mock_sdk):
     resp = MagicMock()
     resp.model_dump.return_value = {"successful": True, "data": {}}
     mock_sdk.tools.execute.return_value = resp
-    await cs.execute(7, "GMAIL_FETCH_EMAILS", {}, connected_account_id="ca_42")
+    await cs.execute(_user(7), "GMAIL_FETCH_EMAILS", {}, connected_account_id="ca_42")
     call = mock_sdk.tools.execute.call_args
     assert call.kwargs["connected_account_id"] == "ca_42"
 
@@ -288,7 +307,7 @@ async def test_execute_captures_error(mock_sdk):
     """SDK error is captured into ExecuteResult.error, not raised."""
     from composio.exceptions import HTTPError as SdkHTTP
     mock_sdk.tools.execute.side_effect = SdkHTTP("Bad Request", status_code=400)
-    result = await cs.execute(7, "BAD_SLUG", {})
+    result = await cs.execute(_user(7), "BAD_SLUG", {})
     assert result.successful is False
     assert result.error and "400" in result.error
 
@@ -311,7 +330,7 @@ async def test_multi_execute_preserves_order(mock_sdk):
         cs.ExecuteCall(slug="B", args={"i": 2}),
         cs.ExecuteCall(slug="C", args={"i": 3}),
     ]
-    out = await cs.multi_execute(7, calls)
+    out = await cs.multi_execute(_user(7), calls)
     assert [r.slug for r in out] == ["A", "B", "C"]
     assert counter["n"] == 3
 
@@ -329,7 +348,7 @@ async def test_multi_execute_partial_failure(mock_sdk):
         return r
 
     mock_sdk.tools.execute.side_effect = _exec
-    out = await cs.multi_execute(7, [
+    out = await cs.multi_execute(_user(7), [
         cs.ExecuteCall(slug="A"), cs.ExecuteCall(slug="B"),
         cs.ExecuteCall(slug="C"),
     ])
@@ -348,12 +367,12 @@ async def test_connect_uses_existing_auth_config(mock_sdk):
     mock_sdk.connected_accounts.link.return_value = SimpleNamespace(
         id="ca_new", redirect_url="https://oauth/...",
     )
-    init = await cs.connect(7, "gmail")
+    init = await cs.connect(_user(7), "gmail")
     assert init.connected_account_id == "ca_new"
     assert init.redirect_url == "https://oauth/..."
     mock_sdk.auth_configs.create.assert_not_called()
     call = mock_sdk.connected_accounts.link.call_args
-    assert call.kwargs["user_id"] == "pai-7"
+    assert call.kwargs["user_id"] == "pai-u-7"
     assert call.kwargs["auth_config_id"] == "ac_existing"
 
 
@@ -366,7 +385,7 @@ async def test_connect_creates_auth_config_when_missing(mock_sdk):
     mock_sdk.connected_accounts.link.return_value = SimpleNamespace(
         id="ca_new", redirect_url="https://oauth/...",
     )
-    init = await cs.connect(7, "gmail")
+    init = await cs.connect(_user(7), "gmail")
     assert init.connected_account_id == "ca_new"
     mock_sdk.auth_configs.create.assert_called_once()
 
@@ -374,7 +393,7 @@ async def test_connect_creates_auth_config_when_missing(mock_sdk):
 @pytest.mark.asyncio
 async def test_connect_rejects_empty_toolkit(mock_sdk):
     with pytest.raises(ValueError):
-        await cs.connect(7, "")
+        await cs.connect(_user(7), "")
 
 
 @pytest.mark.asyncio
@@ -395,13 +414,13 @@ async def test_get_or_create_session_caches_per_user(mock_sdk):
     sess_b = MagicMock(name="session_b")
     mock_sdk.create.side_effect = [sess_a, sess_b]
 
-    s1 = await cs.get_or_create_session(7)
-    s2 = await cs.get_or_create_session(7)
+    s1 = await cs.get_or_create_session(_user(7))
+    s2 = await cs.get_or_create_session(_user(7))
     assert s1 is s2
     assert mock_sdk.create.call_count == 1
 
     # Different user → different session.
-    s3 = await cs.get_or_create_session(8)
+    s3 = await cs.get_or_create_session(_user(8))
     assert s3 is sess_b
     assert mock_sdk.create.call_count == 2
 
@@ -413,8 +432,8 @@ async def test_get_or_create_session_cache_keys_on_config(mock_sdk):
     sess_b = MagicMock()
     mock_sdk.create.side_effect = [sess_a, sess_b]
 
-    s1 = await cs.get_or_create_session(7, toolkits=["gmail"])
-    s2 = await cs.get_or_create_session(7, toolkits=["github"])
+    s1 = await cs.get_or_create_session(_user(7), toolkits=["gmail"])
+    s2 = await cs.get_or_create_session(_user(7), toolkits=["github"])
     assert s1 is sess_a
     assert s2 is sess_b
     assert s1 is not s2
@@ -428,7 +447,7 @@ async def test_execute_meta_tool_forwards_to_session(mock_sdk):
     sess.execute.return_value = resp
     mock_sdk.create.return_value = sess
 
-    out = await cs.execute_meta_tool(7, "COMPOSIO_SEARCH_TOOLS",
+    out = await cs.execute_meta_tool(_user(7), "COMPOSIO_SEARCH_TOOLS",
                                       {"queries": [{"use_case": "x"}]})
     assert out == {"data": {"hits": []}}
     sess.execute.assert_called_once_with(
@@ -440,10 +459,10 @@ async def test_execute_meta_tool_forwards_to_session(mock_sdk):
 @pytest.mark.asyncio
 async def test_evict_session_clears_user_only(mock_sdk):
     mock_sdk.create.side_effect = [MagicMock(), MagicMock()]
-    await cs.get_or_create_session(7)
-    await cs.get_or_create_session(8)
+    await cs.get_or_create_session(_user(7))
+    await cs.get_or_create_session(_user(8))
     assert len(cs._SESSION_REGISTRY) == 2
-    await cs.evict_session(7)
+    await cs.evict_session(_user(7))
     keys = list(cs._SESSION_REGISTRY)
-    assert all(not k.startswith("7:") for k in keys)
-    assert any(k.startswith("8:") for k in keys)
+    assert all(not k.startswith("u-7:") for k in keys)
+    assert any(k.startswith("u-8:") for k in keys)
