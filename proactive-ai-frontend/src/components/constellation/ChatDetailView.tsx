@@ -1,8 +1,11 @@
-import { useState, useEffect, useRef, useMemo, memo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, memo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowLeft, ArrowRight, Check, Loader2, ChevronUp, Zap, Sprout, Briefcase, TrendingUp, Heart, BookOpen, Sparkles, X, Pause, Play, MessageSquarePlus, ThumbsUp, ThumbsDown, Mail, Calendar, Globe, FileSearch, Settings, Hand, Database, FileText, Bell, DollarSign, Users, MessageSquare, Search, Brain, Lock, type LucideIcon } from "lucide-react";
 import { VoiceButton } from "@/components/voice";
 import { DrawerDetailBody, executeArtifactToLovable } from "./CardDrawerDetail";
+import BrowserPanel from "../browser-view/BrowserPanel";
+import type { SheetStage } from "../browser-view/BrowserView";
+import { useBrowserSession } from "@/hooks/useBrowserSession";
 import {
   useCardExecutionRun,
   type LastMessagePayload,
@@ -934,6 +937,71 @@ export default function ChatDetailView({ card, runId, onBack, onRetry, bootstrap
   // empty-thread bootstrap path for the rationale.
   const run = useCardExecutionRun(runId ?? null, { bootstrap });
 
+  // Browser-tool surface: the card-execution agent shares the same
+  // browser_tool that main chat uses. Mirror MainChatView's hookup so
+  // when the agent calls `open` / `request_takeover` the Live View
+  // iframe + takeover banner render here, not just inside Main Chat.
+  // SSE keys off the card-thread session_key the agent runs under;
+  // useBrowserSession bails when the string is empty (idle Lovable
+  // demo path passes runId=null).
+  const browserSessionKey = runId ? `card-thread-${runId}` : "";
+  const {
+    session: browserSession,
+    setControl: setBrowserControl,
+    sendInput: sendBrowserInput,
+    refreshLiveView,
+    close: closeBrowserSession,
+  } = useBrowserSession(browserSessionKey);
+  const [browserStage, setBrowserStage] = useState<SheetStage | "closed">(
+    "closed",
+  );
+  // Re-mount the Browserbase iframe when iOS resumes the app — same
+  // rationale as MainChatView: the WebSocket may have been paused
+  // while bg and the signed iframe URL may have expired.
+  const [iframeReloadKey, setIframeReloadKey] = useState(0);
+  const lastReloadAtRef = useRef(0);
+  useEffect(() => {
+    const bump = () => {
+      const now = Date.now();
+      if (now - lastReloadAtRef.current < 1500) return;
+      lastReloadAtRef.current = now;
+      void (async () => {
+        await refreshLiveView();
+        setIframeReloadKey((k) => k + 1);
+      })();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") bump();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [refreshLiveView]);
+  const handleBrowserInputText = useCallback(
+    (text: string) => sendBrowserInput({ type: "text", text }),
+    [sendBrowserInput],
+  );
+  const handleBrowserInputKey = useCallback(
+    (key: string) => sendBrowserInput({ type: "key", key }),
+    [sendBrowserInput],
+  );
+  const handleBrowserInputClick = useCallback(
+    (x: number, y: number) => sendBrowserInput({ type: "click", x, y }),
+    [sendBrowserInput],
+  );
+  const handleBrowserInputScroll = useCallback(
+    (dx: number, dy: number) => sendBrowserInput({ type: "scroll", dx, dy }),
+    [sendBrowserInput],
+  );
+  const handleBrowserControlChange = useCallback(
+    (mode: "ai" | "user") => {
+      void setBrowserControl(mode);
+    },
+    [setBrowserControl],
+  );
+  const handleBrowserClose = useCallback(() => {
+    void closeBrowserSession();
+  }, [closeBrowserSession]);
+
   // Derive Lovable-shaped messages from the live SSE event stream.
   // Stable identity per event so memo'd ActionRow / ActionPanel don't flicker.
   const sseMessages = useMemo(
@@ -1206,8 +1274,48 @@ export default function ChatDetailView({ card, runId, onBack, onRetry, bootstrap
         </div>
       </div>
 
+      {/* Chat region wrapper — `relative flex-1 min-h-0` so the top-sheet
+          BrowserPanel can be `absolute top-0` to this region (mirrors
+          MainChatView's structure). Without this wrapper the panel would
+          either anchor to the root and cover the header, or have no
+          ResizeObserver target for its fit-to-height math. */}
+      <div className="relative flex-1 min-h-0 flex flex-col">
+        <BrowserPanel
+          session={
+            browserSession
+              ? {
+                  browserSessionId: browserSession.sessionKey,
+                  liveViewUrl: browserSession.liveViewUrl,
+                  viewport: browserSession.viewport,
+                  deviceKind: browserSession.deviceKind,
+                  currentUrl: browserSession.currentUrl,
+                  controlMode: browserSession.controlMode,
+                  takeoverReason: browserSession.takeoverReason,
+                }
+              : null
+          }
+          iframeReloadKey={iframeReloadKey}
+          onControlChange={handleBrowserControlChange}
+          onUserInputText={handleBrowserInputText}
+          onUserInputKey={handleBrowserInputKey}
+          onUserInputClick={handleBrowserInputClick}
+          onUserInputScroll={handleBrowserInputScroll}
+          onClose={handleBrowserClose}
+          onStageChange={setBrowserStage}
+          composerFocused={false}
+        />
+
       {/* Task body */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto px-4 py-4 space-y-3"
+        style={{
+          // Leave room for the BrowserPanel's mini drag bar when it's
+          // peeked. medium / full deliberately cover the chat — that's
+          // the whole point of expanding — so no offset there.
+          paddingTop: browserStage === "mini" ? 32 : undefined,
+        }}
+      >
         {/* Card reference summary — opens drawer. Shows brief task summary + simplified plan */}
         <button
           onClick={() => setCardDrawerOpen(true)}
@@ -1787,6 +1895,8 @@ export default function ChatDetailView({ card, runId, onBack, onRetry, bootstrap
           (chips + free-text + Continue). When the agent isn't paused
           there is no UI for typing — by design in this iteration. */}
       <div className="pb-5" />
+      </div>
+      {/* /chat region wrapper */}
 
 
       {/* Card content drawer — same layout as home card detail, no buttons */}
