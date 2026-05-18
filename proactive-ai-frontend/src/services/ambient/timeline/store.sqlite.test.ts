@@ -96,6 +96,7 @@ describe("SqliteTimelineStore migrations", () => {
             { name: "llm_generated_at" },
             { name: "llm_updated_at" },
             { name: "idempotency_key" },
+            { name: "action_candidates_json" },
           ],
         };
       }
@@ -138,6 +139,7 @@ describe("SqliteTimelineStore migrations", () => {
             { name: "llm_generated_at" },
             { name: "llm_updated_at" },
             { name: "idempotency_key" },
+            { name: "action_candidates_json" },
           ],
         };
       }

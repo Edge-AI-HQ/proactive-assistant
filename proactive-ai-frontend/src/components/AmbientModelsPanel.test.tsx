@@ -83,6 +83,15 @@ const sampleProfiles = [
     notes: "Recommended default",
   },
   {
+    id: "whisper-tiny",
+    kind: "asr",
+    displayName: "Whisper tiny",
+    repo: "ggerganov/whisper.cpp",
+    file: "ggml-tiny.bin",
+    approxBytes: 75_000_000,
+    magic: "ggml",
+  },
+  {
     id: "qwen3-0_6b-q8",
     kind: "llm",
     displayName: "Qwen3 0.6B (Q8_0)",
@@ -106,16 +115,17 @@ describe("AmbientModelsPanel", () => {
     localStorage.clear();
   });
 
-  test("renders a single dropdown with kind-grouped options", async () => {
+  test("renders two independent kind sections", async () => {
     mockControls.setListResult(sampleProfiles, absentStatuses);
     render(<AmbientModelsPanel />);
 
-    const select = (await screen.findByLabelText(/^Selected model$/)) as HTMLSelectElement;
-    const optgroups = select.querySelectorAll("optgroup");
-    expect(optgroups.length).toBe(2);
-    expect(optgroups[0].label).toMatch(/ASR/);
-    expect(optgroups[1].label).toMatch(/LLM/);
-    expect(select.value).toBe("whisper-base");
+    const asrSelect = (await screen.findByLabelText("Active asr model")) as HTMLSelectElement;
+    const llmSelect = (await screen.findByLabelText("Active llm model")) as HTMLSelectElement;
+
+    expect(asrSelect.options).toHaveLength(2);
+    expect(asrSelect.value).toBe("whisper-base");
+    expect(llmSelect.options).toHaveLength(1);
+    expect(llmSelect.value).toBe("qwen3-0_6b-q8");
   });
 
   test("default preferred mirror is hf-mirror and persists on change", async () => {
@@ -130,13 +140,68 @@ describe("AmbientModelsPanel", () => {
     expect(localStorage.getItem("pinai:ambient-models-preferred-mirror")).toBe("hf");
   });
 
-  test("Download CTA dispatches startDownload with selected id and preferred mirror", async () => {
+  test("changing LLM dropdown persists active summary model id", async () => {
+    const profiles = [
+      sampleProfiles[2],
+      {
+        ...sampleProfiles[2],
+        id: "qwen3-1_7b-q4",
+        displayName: "Qwen3 1.7B (Q4_0)",
+        file: "Qwen3-1.7B-Q4_0.gguf",
+      },
+    ];
+    mockControls.setListResult(profiles, [
+      absentStatuses[2],
+      { ...absentStatuses[2], id: "qwen3-1_7b-q4" },
+    ]);
+    render(<AmbientModelsPanel />);
+
+    const llmSelect = (await screen.findByLabelText("Active llm model")) as HTMLSelectElement;
+    fireEvent.change(llmSelect, { target: { value: "qwen3-1_7b-q4" } });
+
+    expect(llmSelect.value).toBe("qwen3-1_7b-q4");
+    expect(localStorage.getItem("pinai:ambient-models-selected-id")).toBe("qwen3-1_7b-q4");
+  });
+
+  test("changing ASR dropdown persists active asr model id", async () => {
     mockControls.setListResult(sampleProfiles, absentStatuses);
     render(<AmbientModelsPanel />);
 
-    const modelSelect = (await screen.findByLabelText(/^Selected model$/)) as HTMLSelectElement;
-    fireEvent.change(modelSelect, { target: { value: "qwen3-0_6b-q8" } });
-    expect(modelSelect.value).toBe("qwen3-0_6b-q8");
+    const asrSelect = (await screen.findByLabelText("Active asr model")) as HTMLSelectElement;
+    fireEvent.change(asrSelect, { target: { value: "whisper-tiny" } });
+
+    expect(asrSelect.value).toBe("whisper-tiny");
+    expect(localStorage.getItem("pinai:ambient-models-selected-asr-id")).toBe("whisper-tiny");
+    expect(localStorage.getItem("pinai:ambient-models-selected-id")).toBeNull();
+  });
+
+  test("initial selection respects persisted LLM id", async () => {
+    const profiles = [
+      sampleProfiles[2],
+      {
+        ...sampleProfiles[2],
+        id: "qwen3-1_7b-q4",
+        displayName: "Qwen3 1.7B (Q4_0)",
+        file: "Qwen3-1.7B-Q4_0.gguf",
+      },
+    ];
+    mockControls.setListResult(profiles, [
+      absentStatuses[2],
+      { ...absentStatuses[2], id: "qwen3-1_7b-q4" },
+    ]);
+    localStorage.setItem("pinai:ambient-models-selected-id", "qwen3-1_7b-q4");
+
+    render(<AmbientModelsPanel />);
+
+    const llmSelect = (await screen.findByLabelText("Active llm model")) as HTMLSelectElement;
+    expect(llmSelect.value).toBe("qwen3-1_7b-q4");
+  });
+
+  test("Download CTA dispatches startDownload with selected id and preferred mirror", async () => {
+    mockControls.setListResult([sampleProfiles[2]], [absentStatuses[2]]);
+    render(<AmbientModelsPanel />);
+
+    await screen.findByLabelText("Active llm model");
 
     await act(async () => {
       fireEvent.click(await screen.findByRole("button", { name: /^download$/i }));
@@ -149,7 +214,7 @@ describe("AmbientModelsPanel", () => {
   });
 
   test("progress event updates percent and switches CTA to Cancel", async () => {
-    mockControls.setListResult(sampleProfiles, absentStatuses);
+    mockControls.setListResult([sampleProfiles[0]], [absentStatuses[0]]);
     render(<AmbientModelsPanel />);
 
     await waitFor(() => {
@@ -175,8 +240,8 @@ describe("AmbientModelsPanel", () => {
     expect(screen.getByText(/via hf-mirror/)).toBeTruthy();
   });
 
-  test("present state enables Verify + Delete buttons", async () => {
-    mockControls.setListResult(sampleProfiles, [
+  test("present state enables Delete and Re-download", async () => {
+    mockControls.setListResult([sampleProfiles[0]], [
       {
         id: "whisper-base",
         state: "present",
@@ -184,18 +249,16 @@ describe("AmbientModelsPanel", () => {
         bytesTotal: 142_100_000,
         sizeOnDisk: 142_100_000,
       },
-      absentStatuses[1],
     ]);
     render(<AmbientModelsPanel />);
 
-    await screen.findByLabelText(/^Selected model$/);
-    expect(screen.getByRole("button", { name: /^verify$/i })).toBeTruthy();
+    await screen.findByLabelText("Active asr model");
     expect(screen.getByLabelText(/^Delete Whisper base$/)).toBeTruthy();
     expect(screen.getByRole("button", { name: /re-download/i })).toBeTruthy();
   });
 
-  test("Verify dispatches verifyModel and shows ok output", async () => {
-    mockControls.setListResult([sampleProfiles[1]], [
+  test("Verify link in Advanced disclosure dispatches verifyModel", async () => {
+    mockControls.setListResult([sampleProfiles[2]], [
       {
         id: "qwen3-0_6b-q8",
         state: "present",
@@ -212,8 +275,11 @@ describe("AmbientModelsPanel", () => {
     });
     render(<AmbientModelsPanel />);
 
-    await screen.findByLabelText(/^Selected model$/);
-    const verifyBtn = await screen.findByRole("button", { name: /^verify$/i });
+    await screen.findByLabelText("Active llm model");
+
+    fireEvent.click(screen.getByRole("button", { name: /^advanced$/i }));
+
+    const verifyBtn = await screen.findByRole("button", { name: /^run verify$/i });
     await act(async () => {
       fireEvent.click(verifyBtn);
     });

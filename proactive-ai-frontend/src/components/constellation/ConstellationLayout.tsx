@@ -16,7 +16,7 @@ import ChatTimeline from "./ChatTimeline";
 import ControlPanel from "./ControlPanel";
 import AccountPanel from "./AccountPanel";
 import ConnectPanel from "./ConnectPanel";
-import AmbientView, { LiveFullscreen } from "./AmbientView";
+import AmbientView, { LiveFullscreen, type TimelineEntry as AmbientTimelineEntry } from "./AmbientView";
 import { createPortal } from "react-dom";
 import ChatDetailView, { type ChatCard, brandSvg, detectToolIcon } from "./ChatDetailView";
 import { DrawerDetailBody } from "./CardDrawerDetail";
@@ -690,6 +690,50 @@ export default function BigBallLayout() {
     setActiveChat(chatCard);
   }, [activeView, cardActions, cardsState.cards]);
 
+  /** Ambient Action handoff (B+ MVP, web-only).
+   *  Wraps an AmbientTimelineEntry into a virtual IntentCard so the existing
+   *  CardChat → MainChatView SSE runtime can carry the event into the cloud
+   *  chat agent. sessionKey resolves to `card-thread-ambient-<entry.id>`,
+   *  which keeps the backend on its existing card-mode prompt path without
+   *  any server change. */
+  const handleAmbientAction = useCallback((entry: AmbientTimelineEntry) => {
+    if (!entry.action) return;
+    const entryId = entry.id ?? `${entry.time}-${entry.title}`.replace(/\s+/g, "-").toLowerCase();
+    const ambientCardId = `ambient-${entryId}`;
+    const virtualCard: IntentCard = {
+      id: ambientCardId,
+      goalBasket: entry.action.goalBasket ?? "life",
+      title: entry.title,
+      whyNow: `Ambient event captured at ${entry.time} on ${entry.device.name}.`,
+      summary: entry.body,
+      primaryAction: { label: entry.action.label, type: "confirm" },
+      secondaryActions: [],
+      confidence: entry.confidenceLabel === "uncertain" ? 0.5 : 0.85,
+      urgency: 0.5,
+      importance: 0.6,
+      sources: [entry.device.name, ...entry.tags],
+      agentChain: ["ambient"],
+      createdAt: new Date().toISOString(),
+    };
+    const bootstrap = [
+      "The user clicked an action from an Ambient Timeline event.",
+      "",
+      "Event:",
+      entry.title,
+      entry.body,
+      "",
+      "Action:",
+      entry.action.label,
+      "",
+      "Goal:",
+      entry.action.goal,
+    ].join("\n");
+    chatEntryView.current = "ambient";
+    setDrawerOpen(false);
+    setSelectedCard(null);
+    setChatTarget({ card: virtualCard, bootstrap });
+  }, []);
+
   const handleMenuNav = (id: MenuId) => {
     setActiveView(id);
     setActiveChat(null);
@@ -890,7 +934,11 @@ export default function BigBallLayout() {
                 />
               </div>
             ) : activeView === "ambient" ? (
-              <AmbientView onConnectMore={() => setActiveView("connect")} onOpenFullscreen={(s) => setLiveOverlay(s)} />
+              <AmbientView
+                onConnectMore={() => setActiveView("connect")}
+                onOpenFullscreen={(s) => setLiveOverlay(s)}
+                onAmbientAction={handleAmbientAction}
+              />
             ) : activeView === "profile" ? (
               /* Real goals/memory/skill page (old AppShell GOALS view). */
               <div className="h-full min-h-0 overflow-hidden pt-12">

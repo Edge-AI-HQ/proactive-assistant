@@ -93,16 +93,6 @@ enum ModelManifest {
 
         // LLM — GGUF for llama.cpp
         ModelProfile(
-            id: "smollm2-360m-q4",
-            kind: .llm,
-            displayName: "SmolLM2 360M (Q4_K_M)",
-            repo: "HuggingFaceTB/SmolLM2-360M-Instruct-GGUF",
-            file: "smollm2-360m-instruct-q4_k_m.gguf",
-            approxBytes: 280_000_000,
-            magic: .gguf,
-            notes: "Tiniest usable instruct model; runs comfortably on iPhone."
-        ),
-        ModelProfile(
             id: "qwen3-0_6b-q8",
             kind: .llm,
             displayName: "Qwen3 0.6B (Q8_0)",

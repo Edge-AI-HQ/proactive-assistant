@@ -8,6 +8,7 @@ import {
   Lightbulb, Sparkles, Plus, ChevronRight, X,
   Phone, Sun, Waves, Target,
   Soup, Minimize2, Lock, Unlock,
+  NotebookPen,
   type LucideIcon,
 } from "lucide-react";
 import { useUserSettings } from "@/hooks/useUserSettings";
@@ -25,6 +26,7 @@ import type {
   AmbientPrivacy,
   AmbientRawEvent,
   AmbientSourceType,
+  AmbientTimelineAction,
   AmbientTimelineEvent,
 } from "@/services/ambient/timeline";
 import type { RuntimeStatus } from "@/services/ambient";
@@ -33,9 +35,12 @@ import type { UserDevice, UserDevicePlatform } from "@/lib/api";
 
 /* ──────────────── TIMELINE (today's narrative) ──────────────── */
 
-interface TimelineEntry {
+export type { AmbientTimelineAction };
+
+export interface TimelineEntry {
   id?: string;
   sortTs?: number;
+  priority?: boolean;
   time: string;
   icon: LucideIcon;
   device: { name: string; icon: LucideIcon };
@@ -45,6 +50,7 @@ interface TimelineEntry {
   body: string;
   tags: string[];
   triggeredCard?: string; // ID/name of card it triggered in NOW feed
+  action?: AmbientTimelineAction;
   onDismiss?: () => void;
 }
 
@@ -58,6 +64,7 @@ const TIMELINE: TimelineEntry[] = [
     tags: ["sleep", "commute"],
   },
   {
+    id: "t-investor",
     time: "10:03 AM",
     icon: Phone,
     device: { name: "MacBook", icon: Laptop },
@@ -66,8 +73,14 @@ const TIMELINE: TimelineEntry[] = [
     body: "45-min call. Discussed Series A bridge. HR elevated during term-sheet discussion (158 peak). Action items: send updated cap table.",
     tags: ["work", "call"],
     triggeredCard: "C1 Fund SAFE Conversion …",
+    action: {
+      label: "Send recap to Mike",
+      goal: "Draft a follow-up email to Mike K. recapping the Sequoia bridge call and attach the updated cap table.",
+      goalBasket: "work",
+    },
   },
   {
+    id: "t-lunch",
     time: "12:40 PM",
     icon: Soup,
     device: { name: "iPhone", icon: Smartphone },
@@ -75,6 +88,12 @@ const TIMELINE: TimelineEntry[] = [
     title: "Lunch at Souvla with Priya",
     body: "Discussed weekend Tahoe trip. Priya mentioned her sister's wedding in June — calendar hold queued.",
     tags: ["life", "social"],
+    triggeredCard: "Calendar — Priya's sister wedding (June)",
+    action: {
+      label: "Hold June wedding date",
+      goal: "Add a tentative calendar hold for Priya's sister's wedding in June and remind me to confirm the exact date with Priya.",
+      goalBasket: "life",
+    },
   },
   {
     time: "1:15 PM",
@@ -117,7 +136,12 @@ function formatTimelineTime(iso: string): string {
   });
 }
 
+function isLlmSummaryEvent(event: AmbientTimelineEvent): boolean {
+  return event.generationSource === "llm_summary";
+}
+
 function iconForTimelineEvent(event: AmbientTimelineEvent): LucideIcon {
+  if (isLlmSummaryEvent(event)) return NotebookPen;
   if (event.sourceTypes.includes("health")) return Stethoscope;
   if (event.eventType === "transition") return Compass;
   if (event.eventType === "visit") return MapPin;
@@ -126,23 +150,32 @@ function iconForTimelineEvent(event: AmbientTimelineEvent): LucideIcon {
 }
 
 function deviceIconForTimelineEvent(event: AmbientTimelineEvent): LucideIcon {
+  if (isLlmSummaryEvent(event)) return Sparkles;
   if (event.sourceTypes.includes("health")) return Watch;
   if (event.sourceTypes.includes("motion")) return Activity;
   if (event.sourceTypes.includes("transcript")) return Mic;
   return Smartphone;
 }
 
+function deviceLabelForTimelineEvent(event: AmbientTimelineEvent): string {
+  if (isLlmSummaryEvent(event)) return "On-device summary";
+  return event.primarySourceLabel;
+}
+
 function timelineEventToEntry(
   event: AmbientTimelineEvent,
   onDismiss: (id: string) => void,
 ): TimelineEntry {
+  const parsedTs = Date.parse(event.occurredAt);
+  const action = event.actionCandidates?.[0];
   return {
     id: event.id,
-    sortTs: Date.parse(event.occurredAt),
+    sortTs: Number.isFinite(parsedTs) ? parsedTs : 0,
+    priority: true,
     time: formatTimelineTime(event.occurredAt),
     icon: iconForTimelineEvent(event),
     device: {
-      name: event.primarySourceLabel,
+      name: deviceLabelForTimelineEvent(event),
       icon: deviceIconForTimelineEvent(event),
     },
     privacyTag: event.privacy === "normal" ? undefined : event.privacy,
@@ -150,7 +183,8 @@ function timelineEventToEntry(
     title: event.title,
     body: event.summary,
     tags: event.tags,
-    triggeredCard: event.triggeredCardTitle,
+    triggeredCard: event.triggeredCardTitle ?? (action ? action.label : undefined),
+    ...(action ? { action } : {}),
     onDismiss: () => onDismiss(event.id),
   };
 }
@@ -334,9 +368,13 @@ interface AmbientViewProps {
   onAutoOpenHandled?: () => void;
   /** Parent owns the fullscreen overlay; Ambient only requests it. */
   onOpenFullscreen?: (session: LiveSession) => void;
+  /** Bubble Action-chip clicks up to parent so it can hand off to the
+   *  existing CardChat → MainChatView runtime (B+ Action handoff MVP).
+   *  Only invoked for entries that define `entry.action`. */
+  onAmbientAction?: (entry: TimelineEntry) => void;
 }
 
-export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHandled, onOpenFullscreen }: AmbientViewProps = {}) {
+export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHandled, onOpenFullscreen, onAmbientAction }: AmbientViewProps = {}) {
   const { settings, patch } = useUserSettings();
   const { devices, loading: devicesLoading, error: devicesError } = useUserDevices(true);
   const ambientTimeline = useAmbientTimeline();
@@ -414,8 +452,8 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
       if (next) {
         const enabledSources = updated
           ? (Object.entries(updated.ambientSources ?? {})
-              .filter(([, v]) => v?.enabled === true)
-              .map(([k]) => k as SourceKey))
+            .filter(([, v]) => v?.enabled === true)
+            .map(([k]) => k as SourceKey))
           : ALL_SOURCE_KEYS;
         lifecycle.startAmbientUpload({
           enabledSources: enabledSources.length > 0 ? enabledSources : ALL_SOURCE_KEYS,
@@ -474,7 +512,11 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
       ),
       ...pendingTranscriptWindows.map(pendingTranscriptWindowToEntry),
       ...latestRawEvents.map(latestRawEventToEntry),
-    ].sort((a, b) => (b.sortTs ?? 0) - (a.sortTs ?? 0));
+    ].sort((a, b) => {
+      const aTs = Number.isFinite(a.sortTs) ? (a.sortTs as number) : 0;
+      const bTs = Number.isFinite(b.sortTs) ? (b.sortTs as number) : 0;
+      return bTs - aTs;
+    });
   }, [
     ambientTimeline.events,
     ambientTimeline.latestRawEvents,
@@ -482,8 +524,14 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
     handleDismissTimelineEvent,
     useWebPreviewTimeline,
   ]);
-  const visibleTimelineEntries = timelineEntries.slice(0, timelineVisibleCount);
-  const canLoadMoreTimelineEntries = timelineVisibleCount < timelineEntries.length;
+  const visibleTimelineEntries = useMemo<TimelineEntry[]>(() => {
+    if (useWebPreviewTimeline) return timelineEntries.slice(0, timelineVisibleCount);
+    const priorityEntries = timelineEntries.filter((entry) => entry.priority);
+    const otherEntries = timelineEntries.filter((entry) => !entry.priority);
+    const remainingSlots = Math.max(0, timelineVisibleCount - priorityEntries.length);
+    return [...priorityEntries, ...otherEntries.slice(0, remainingSlots)];
+  }, [timelineEntries, timelineVisibleCount, useWebPreviewTimeline]);
+  const canLoadMoreTimelineEntries = visibleTimelineEntries.length < timelineEntries.length;
 
   useEffect(() => {
     setTimelineVisibleCount(INITIAL_TIMELINE_VISIBLE_COUNT);
@@ -528,9 +576,8 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
           {/* Radio icon with ping ring */}
           <div className="relative">
             <div
-              className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${
-                ambientOn ? "bg-foreground text-background" : "bg-foreground/10 text-foreground/40"
-              }`}
+              className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${ambientOn ? "bg-foreground text-background" : "bg-foreground/10 text-foreground/40"
+                }`}
             >
               <Radio size={14} strokeWidth={2.2} />
             </div>
@@ -563,11 +610,10 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
           {ambientOn && (
             <button
               onClick={handleLockToggle}
-              className={`w-9 h-9 rounded-full flex items-center justify-center border transition-colors ${
-                uploadsLocked
+              className={`w-9 h-9 rounded-full flex items-center justify-center border transition-colors ${uploadsLocked
                   ? "bg-foreground text-background border-foreground"
                   : "bg-foreground/[0.04] text-foreground/60 hover:bg-foreground/[0.08] hover:text-foreground border-foreground/15"
-              }`}
+                }`}
               aria-label={uploadsLocked ? "Unlock uploads" : "Lock uploads"}
               title={uploadsLocked ? "Uploads locked" : "Lock uploads"}
             >
@@ -583,18 +629,16 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
           <button
             onClick={() => void handleAmbientToggle()}
             disabled={togglePending}
-            className={`relative w-12 h-7 rounded-full transition-colors shrink-0 disabled:opacity-60 disabled:cursor-progress ${
-              ambientOn ? "bg-foreground" : "bg-foreground/20"
-            }`}
+            className={`relative w-12 h-7 rounded-full transition-colors shrink-0 disabled:opacity-60 disabled:cursor-progress ${ambientOn ? "bg-foreground" : "bg-foreground/20"
+              }`}
             aria-label="Toggle ambient"
             aria-busy={togglePending}
           >
             <motion.span
               layout
               transition={{ type: "spring", stiffness: 500, damping: 35 }}
-              className={`absolute top-0.5 w-6 h-6 rounded-full bg-background shadow-sm ${
-                ambientOn ? "left-[22px]" : "left-0.5"
-              }`}
+              className={`absolute top-0.5 w-6 h-6 rounded-full bg-background shadow-sm ${ambientOn ? "left-[22px]" : "left-0.5"
+                }`}
             />
           </button>
         </div>
@@ -631,9 +675,8 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                 >
                   <Icon size={13} strokeWidth={1.8} />
                   <span
-                    className={`absolute -bottom-0.5 -right-0.5 w-1.5 h-1.5 rounded-full ring-1 ring-background ${
-                      signalClassForUserDevice(device)
-                    }`}
+                    className={`absolute -bottom-0.5 -right-0.5 w-1.5 h-1.5 rounded-full ring-1 ring-background ${signalClassForUserDevice(device)
+                      }`}
                   />
                 </div>
               );
@@ -823,7 +866,12 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                   ))}
                 </div>
 
-                {/* Triggered NOW card */}
+                {/* Triggered NOW card — the "Open →" button is the
+                    single Ambient → Action handoff: when the entry
+                    carries an `action`, clicking it ships the event
+                    into the existing CardChat → MainChatView SSE
+                    runtime (cloud LLM). Entries without `action` keep
+                    the historical decorative-only behaviour. */}
                 {entry.triggeredCard && (
                   <div
                     className="mt-2.5 rounded-xl p-2.5"
@@ -833,7 +881,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                     }}
                   >
                     <p className="text-[9.5px] font-bold uppercase tracking-[0.14em] text-[hsl(304_75%_45%)] mb-1 flex items-center gap-1">
-                      → Triggered this card in NOW
+                      → Triggered this card
                     </p>
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5 min-w-0">
@@ -842,7 +890,17 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                           {entry.triggeredCard}
                         </span>
                       </div>
-                      <button className="text-[11px] font-semibold text-[hsl(304_75%_45%)] shrink-0 flex items-center gap-0.5 hover:text-[hsl(304_75%_35%)]">
+                      <button
+                        onClick={
+                          entry.action && onAmbientAction
+                            ? (e) => {
+                                e.stopPropagation();
+                                onAmbientAction(entry);
+                              }
+                            : undefined
+                        }
+                        className="text-[11px] font-semibold text-[hsl(304_75%_45%)] shrink-0 flex items-center gap-0.5 hover:text-[hsl(304_75%_35%)]"
+                      >
                         Open →
                       </button>
                     </div>
@@ -862,7 +920,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
             }}
             className="w-full rounded-2xl border border-foreground/[0.08] bg-foreground/[0.035] px-4 py-3 text-[12px] font-semibold text-foreground/65 hover:bg-foreground/[0.06] hover:text-foreground/80 transition-colors"
           >
-            Load more · {timelineEntries.length - timelineVisibleCount} older
+            Load more · {timelineEntries.length - visibleTimelineEntries.length} older
           </button>
         )}
       </div>
@@ -1097,9 +1155,8 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
                     className="flex gap-3"
                   >
                     <span
-                      className={`text-[11px] font-mono pt-1 w-14 shrink-0 tabular-nums transition-colors duration-500 ${
-                        isNewest ? "text-[hsl(304_75%_70%)]" : "text-white/30"
-                      }`}
+                      className={`text-[11px] font-mono pt-1 w-14 shrink-0 tabular-nums transition-colors duration-500 ${isNewest ? "text-[hsl(304_75%_70%)]" : "text-white/30"
+                        }`}
                     >
                       {a.time}
                     </span>
@@ -1110,13 +1167,12 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
                         </span>
                       )}
                       <p
-                        className={`leading-snug transition-colors duration-500 ${
-                          a.kind === "action"
+                        className={`leading-snug transition-colors duration-500 ${a.kind === "action"
                             ? "text-white text-[18px] md:text-[20px] font-medium"
                             : a.kind === "assist"
                               ? "text-white/90 text-[17px] md:text-[19px]"
                               : "text-white/75 text-[16px] md:text-[18px]"
-                        }`}
+                          }`}
                       >
                         {a.text}
                       </p>
