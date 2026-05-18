@@ -20,6 +20,7 @@ import AmbientView, { LiveFullscreen, type TimelineEntry as AmbientTimelineEntry
 import { createPortal } from "react-dom";
 import ChatDetailView, { type ChatCard, brandSvg, detectToolIcon } from "./ChatDetailView";
 import { DrawerDetailBody } from "./CardDrawerDetail";
+import { useCardExecutionRun } from "@/hooks/useCardExecutionRun";
 import { PlanPaymentForm, isPayValid, PLANS, type PlanId, type PayMethod, type CardInfo } from "./PlanPaymentForm";
 import {
   Drawer,
@@ -1282,7 +1283,17 @@ export default function BigBallLayout() {
   );
 }
 
-/* ── Drawer card detail ── */
+/* ── Drawer card detail ──
+ *
+ * Subscribes to the same `useCardExecutionRun` hook the chat detail
+ * view uses, keyed by the card's original string id (which the hook
+ * maps to chat-stream session_key `card-thread-<id>`). That lets the
+ * drawer pre-render plan / Generated draft / Approving will let agent
+ * / Risks pulled from the latest propose_action's structured args,
+ * cached via `lastMessagePayload`. Without this, DrawerDetailBody
+ * falls back to `card.detail.executionPlan` (always empty for real
+ * cards) and the drawer looks like a thin summary card.
+ */
 function CardDrawerContent({
   card,
   onExecute,
@@ -1298,6 +1309,12 @@ function CardDrawerContent({
 }) {
   const cat = CATEGORIES[card.category];
   const Icon = cat.icon;
+  // The hook accepts the card's original string id (gen.*_card_NN) and
+  // internally maps it to session_key. We never set bootstrap here —
+  // the drawer is read-only pre-review; firing a bootstrap turn from
+  // a tap would surprise the user. The chat detail view fires it on
+  // Approve when the thread is empty.
+  const run = useCardExecutionRun(card.originalId ?? null);
 
   return (
     <div className="px-5 pb-5 pt-1.5 overflow-y-auto max-h-[88vh]">
@@ -1330,11 +1347,18 @@ function CardDrawerContent({
         {card.detail?.willExecute || card.line1}
       </p>
 
-      {/* Detail sections */}
+      {/* Detail sections — DrawerDetailBody reads the latest
+          propose_action's structured args from `lastMessagePayload`
+          (plan / drafts / dangerous_actions / risks), falling back
+          to the card's static detail when the agent hasn't paused
+          yet. */}
       {card.detail && (
-        <>
-          <DrawerDetailBody card={card} />
-        </>
+        <DrawerDetailBody
+          card={card}
+          runSnapshot={run.snapshot}
+          lastMessagePayload={run.lastMessagePayload}
+          sideEffects={run.snapshot?.result?.side_effects ?? []}
+        />
       )}
 
       {/* Actions — Dismiss / Steer / Approve */}
