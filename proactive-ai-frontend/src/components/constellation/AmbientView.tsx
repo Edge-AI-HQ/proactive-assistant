@@ -7,7 +7,7 @@ import {
   Stethoscope,
   Lightbulb, Sparkles, Plus, ChevronRight, X,
   Phone, Sun, Waves, Target,
-  Soup, Minimize2, Lock, Unlock, Zap,
+  Soup, Minimize2, Lock, Unlock,
   NotebookPen,
   type LucideIcon,
 } from "lucide-react";
@@ -91,6 +91,7 @@ const TIMELINE: TimelineEntry[] = [
     title: "Lunch at Souvla with Priya",
     body: "Discussed weekend Tahoe trip. Priya mentioned her sister's wedding in June — calendar hold queued.",
     tags: ["life", "social"],
+    triggeredCard: "Calendar — Priya's sister wedding (June)",
     action: {
       label: "Hold June wedding date",
       goal: "Add a tentative calendar hold for Priya's sister's wedding in June and remind me to confirm the exact date with Priya.",
@@ -866,26 +867,12 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                   ))}
                 </div>
 
-                {/* Action chip — hands the event off to the existing
-                    CardChat → MainChatView SSE runtime. Only rendered when
-                    the entry carries an `action` (mock timeline today; B
-                    milestone wires real on-device LLM action candidates). */}
-                {entry.action && onAmbientAction && (
-                  <div className="mt-2.5 flex justify-end">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onAmbientAction(entry);
-                      }}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-foreground text-background text-[11.5px] font-semibold hover:bg-foreground/85 transition-colors"
-                    >
-                      <Zap size={11} strokeWidth={2.2} />
-                      {entry.action.label}
-                    </button>
-                  </div>
-                )}
-
-                {/* Triggered NOW card */}
+                {/* Triggered NOW card — the "Open →" button is the
+                    single Ambient → Action handoff: when the entry
+                    carries an `action`, clicking it ships the event
+                    into the existing CardChat → MainChatView SSE
+                    runtime (cloud LLM). Entries without `action` keep
+                    the historical decorative-only behaviour. */}
                 {entry.triggeredCard && (
                   <div
                     className="mt-2.5 rounded-xl p-2.5"
@@ -904,7 +891,17 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                           {entry.triggeredCard}
                         </span>
                       </div>
-                      <button className="text-[11px] font-semibold text-[hsl(304_75%_45%)] shrink-0 flex items-center gap-0.5 hover:text-[hsl(304_75%_35%)]">
+                      <button
+                        onClick={
+                          entry.action && onAmbientAction
+                            ? (e) => {
+                                e.stopPropagation();
+                                onAmbientAction(entry);
+                              }
+                            : undefined
+                        }
+                        className="text-[11px] font-semibold text-[hsl(304_75%_45%)] shrink-0 flex items-center gap-0.5 hover:text-[hsl(304_75%_35%)]"
+                      >
                         Open →
                       </button>
                     </div>
