@@ -6,13 +6,20 @@ import type { IntentCard } from "@/types/intent-card";
 
 vi.mock("@/lib/api", () => ({
   proxyPost: vi.fn(async () => new Response("{}", { status: 200 })),
-  proxyFetch: vi.fn(
-    async () =>
-      new Response(JSON.stringify({ ok: true, dismissedCardIds: [] }), {
+  // Default: both init endpoints return empty lists. Individual tests
+  // override per-URL via mockImplementation when they need seeded data.
+  proxyFetch: vi.fn(async (path: string) => {
+    if (path === "/feedback/completed") {
+      return new Response(JSON.stringify({ ok: true, completedCardIds: [] }), {
         status: 200,
         headers: { "content-type": "application/json" },
-      }),
-  ),
+      });
+    }
+    return new Response(JSON.stringify({ ok: true, dismissedCardIds: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }),
 }));
 
 import { proxyFetch, proxyPost } from "@/lib/api";
@@ -40,12 +47,19 @@ describe("useCardActions", () => {
   });
 
   test("init: pulls dismissed ids from /feedback/dismissed", async () => {
-    (proxyFetch as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      async () =>
-        new Response(JSON.stringify({ ok: true, dismissedCardIds: ["d1", "d2"] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
+    (proxyFetch as ReturnType<typeof vi.fn>).mockImplementation(
+      async (path: string) => {
+        if (path === "/feedback/dismissed") {
+          return new Response(
+            JSON.stringify({ ok: true, dismissedCardIds: ["d1", "d2"] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response(
+          JSON.stringify({ ok: true, completedCardIds: [] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
     );
 
     const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn() }));
@@ -54,6 +68,33 @@ describe("useCardActions", () => {
       expect(result.current.dismissedIds.has("d2")).toBe(true);
     });
     expect(proxyFetch).toHaveBeenCalledWith("/feedback/dismissed");
+  });
+
+  test("init: pulls completed ids from /feedback/completed", async () => {
+    // Without this restore-on-mount, the sphere's doneIds Set starts
+    // empty after refresh and completed cards visibly reappear until
+    // the user re-clicks Done.
+    (proxyFetch as ReturnType<typeof vi.fn>).mockImplementation(
+      async (path: string) => {
+        if (path === "/feedback/completed") {
+          return new Response(
+            JSON.stringify({ ok: true, completedCardIds: ["c9", "c10"] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response(
+          JSON.stringify({ ok: true, dismissedCardIds: [] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+    );
+
+    const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn() }));
+    await waitFor(() => {
+      expect(result.current.doneIds.has("c9")).toBe(true);
+      expect(result.current.doneIds.has("c10")).toBe(true);
+    });
+    expect(proxyFetch).toHaveBeenCalledWith("/feedback/completed");
   });
 
   test("confirm: posts card_action + opens chat with primaryAction.label as bootstrap", async () => {
@@ -104,7 +145,7 @@ describe("useCardActions", () => {
     expect(result.current.dismissedIds.has("c1")).toBe(true);
   });
 
-  test("modify: posts card_action modify and opens empty chat", async () => {
+  test("modify: posts card_action modify and opens chat with Steer bootstrap", async () => {
     const onOpenChat = vi.fn();
     const { result } = renderHook(() => useCardActions({ onOpenChat }));
     await act(async () => {
@@ -117,7 +158,13 @@ describe("useCardActions", () => {
       basket: "work",
       channel: "web",
     });
-    expect(onOpenChat).toHaveBeenCalledWith(baseCard, "");
+    // Steer bootstrap is non-empty by design — the card_execution agent
+    // needs an explicit "ask me before acting" instruction, otherwise
+    // ChatDetailView opens to an empty thread with no composer.
+    const [card, bootstrap] = onOpenChat.mock.calls[0]!;
+    expect(card).toBe(baseCard);
+    expect(bootstrap).toMatch(/steer/i);
+    expect(bootstrap).toContain("Draft a reply");
     expect(result.current.processingIds.has("c1")).toBe(true);
   });
 

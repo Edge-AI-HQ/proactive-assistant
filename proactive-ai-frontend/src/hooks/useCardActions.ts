@@ -52,23 +52,55 @@ export function useCardActions({ onOpenChat }: UseCardActionsOptions) {
   useEffect(() => {
     let abort = false;
     (async () => {
-      try {
-        const res = await proxyFetch("/feedback/dismissed");
-        if (!res.ok) return;
-        const data = (await res.json()) as { ok?: boolean; dismissedCardIds?: string[] };
-        if (!abort && data?.ok && Array.isArray(data.dismissedCardIds)) {
-          // Merge — 用户可能在 init 返回前已经 dismiss 过几张卡，整体替换
-          // 会丢掉乐观更新（AppShell 历史上做的是 replace，这里改 merge 是
-          // 顺手修正而不是行为变化，因为 init 总在 mount 后立刻发，用户极
-          // 少有时间在它返回前先动手）。
-          setDismissedIds((prev) => {
-            const next = new Set(prev);
-            for (const id of data.dismissedCardIds!) next.add(id);
-            return next;
-          });
+      // Parallel fetch — dismissed + completed share semantics (both
+      // mark a card as "no longer on the sphere") and both must be
+      // restored on mount, otherwise the doneIds / dismissedIds Sets
+      // start empty after refresh and resolved cards reappear on the
+      // sphere until the user re-clicks Dismiss/Done.
+      const [dismissedRes, completedRes] = await Promise.allSettled([
+        proxyFetch("/feedback/dismissed"),
+        proxyFetch("/feedback/completed"),
+      ]);
+      if (abort) return;
+
+      if (dismissedRes.status === "fulfilled" && dismissedRes.value.ok) {
+        try {
+          const data = (await dismissedRes.value.json()) as {
+            ok?: boolean;
+            dismissedCardIds?: string[];
+          };
+          if (!abort && data?.ok && Array.isArray(data.dismissedCardIds)) {
+            // Merge — 用户可能在 init 返回前已经 dismiss 过几张卡，整体
+            // 替换会丢掉乐观更新（AppShell 历史上做的是 replace，这里
+            // 改 merge 是顺手修正而不是行为变化，因为 init 总在 mount
+            // 后立刻发，用户极少有时间在它返回前先动手）。
+            setDismissedIds((prev) => {
+              const next = new Set(prev);
+              for (const id of data.dismissedCardIds!) next.add(id);
+              return next;
+            });
+          }
+        } catch {
+          /* swallow: dismissed init failure 只影响一次启动 */
         }
-      } catch {
-        /* swallow: dismissed init failure只影响一次启动 */
+      }
+
+      if (completedRes.status === "fulfilled" && completedRes.value.ok) {
+        try {
+          const data = (await completedRes.value.json()) as {
+            ok?: boolean;
+            completedCardIds?: string[];
+          };
+          if (!abort && data?.ok && Array.isArray(data.completedCardIds)) {
+            setDoneIds((prev) => {
+              const next = new Set(prev);
+              for (const id of data.completedCardIds!) next.add(id);
+              return next;
+            });
+          }
+        } catch {
+          /* swallow: completed init failure 只影响一次启动 */
+        }
       }
     })();
     return () => {
