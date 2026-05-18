@@ -1,10 +1,10 @@
 # On-device Timeline Summaries — 端上 LLM 生成 Ambient Timeline 卡片
 
 > 生成日期：2026-05-18（首版）  
-> 最近更新：2026-05-18（多模型适配 + prompt hardening 真机回归后修订）  
-> 范围：`proactive-ai-frontend` Ambient Timeline pipeline + `capacitor-plugins/ambient-ai` iOS LLM bridge  
+> 最近更新：2026-05-18（多模型适配 + prompt hardening 真机回归后修订；同日追加 §12 Cloud LLM Action handoff UI scaffold）  
+> 范围：`proactive-ai-frontend` Ambient Timeline pipeline + `capacitor-plugins/ambient-ai` iOS LLM bridge + Ambient Timeline → Cloud LLM Action handoff UI  
 > 分支：`feat/ambient-llm`  
-> 相关提交：`89499008 feat(ambient): add on-device timeline summaries` + 多轮 hardening 修复
+> 相关提交：`89499008 feat(ambient): add on-device timeline summaries` + 多轮 hardening 修复；`8585760e refactor(ambient): consolidate timeline → cloud LLM handoff onto existing "Open →" CTA` + 前置 handoff scaffold
 
 ---
 
@@ -382,3 +382,89 @@ xcodebuild -project proactive-ai-frontend/ios/App/App.xcodeproj -scheme App -des
 6. Timeline UI 给 `llm_summary` 卡片加视觉差异化（标签 / 颜色 / icon），与 raw event 卡片区分。
 7. 尝试 GBNF / llguidance grammar 强约束 JSON，作为 prompt-only 之上的硬保证；前置依赖 llama.cpp 升级到能在 iOS 链接的版本。
 8. 自动选模型：根据 device 内存 / 是否充电 / 是否插电选 Qwen 0.6B → 1.7B → Gemma 2 → Gemma 3 阶梯。
+9. **打通端上 LLM action candidate 生成**（B milestone，配合 §12 UI scaffold）。当前 cloud LLM action handoff UI 已就绪，但 `action` 字段是 mock TIMELINE 上硬编码的；下一步在 batch decision contract 上扩展 `actionCandidates: AmbientTimelineAction[]`（或新增独立 decision type `propose_action`），让 timeline summary 这一跳同时产出 1–N 个可执行建议。Prompt / output normalize / placeholder echo 检查沿用 §7 四级防御策略。
+
+## 12. Cloud LLM Action handoff — Ambient Timeline → CardChat（UI scaffold）
+
+> 相关提交：`8585760e refactor(ambient): consolidate timeline → cloud LLM handoff onto existing "Open →" CTA` + 前置 handoff scaffold。
+
+本节描述 Ambient Timeline 条目跳转到 **cloud LLM action page** 的前端链路。当前实现**完全不依赖端上 LLM**：mock TIMELINE 条目上硬编码 `action` 字段，点击后通过既有 NOW Intent Card 的 Confirm → CardChat → MainChatView SSE runtime 跳到云端聊天页。它是 §11.9 上线之前的 UI scaffold —— 一旦端上模型能产出 action candidates，前端无需再改 UI 链路。
+
+### 12.1 数据模型
+
+`TimelineEntry`（`proactive-ai-frontend/src/components/constellation/AmbientView.tsx`）新增可选字段：
+
+```ts
+export interface AmbientTimelineAction {
+  label: string;          // 按钮文案 / 动作标题
+  goal: string;           // bootstrap prompt — 发给云端 LLM 的具体目标
+  goalBasket?: "work" | "health" | "family" | "wealth" | "growth" | "life";
+}
+
+export interface TimelineEntry {
+  id?: string;
+  // ...
+  triggeredCard?: string;          // 已有：触发的 NOW 卡片标题
+  action?: AmbientTimelineAction;  // 新增：cloud LLM action handoff
+  onDismiss?: () => void;
+}
+```
+
+Mock 数据当前只在两条 entry 上携带 `action`（`t-investor` Sequoia bridge call → "Send recap to Mike"；`t-lunch` lunch with Priya → "Hold June wedding date"），目的是验证视觉与跳转链路。一旦端上 LLM 在 timeline batch decision 里附带 `actionCandidates`，pipeline 写入 timeline event 时把它落到 store，UI 自动 pick up，不需要再改 `AmbientView` / `ConstellationLayout`。
+
+### 12.2 渲染：复用 "TRIGGERED THIS CARD" 粉色块
+
+第一版加了一个独立的黑色 Zap action chip，视觉 review 后确认与既有"触发卡片"粉色块（`TRIGGERED THIS CARD ... Open →`）功能重复（同卡同跳转），遂合并为单一 CTA：
+
+- `entry.triggeredCard` 仍然渲染粉色块（保持原行为，其它非 action 条目如 Focus block / Context shift 不受影响）。
+- 当 `entry.action && onAmbientAction` 同时存在时，粉色块右侧的 "Open →" 挂上 onClick → `onAmbientAction(entry)`；否则维持装饰态（无 onClick）。
+- 需要触发 action 但原本没有 `triggeredCard` 的条目（如 `t-lunch`）补一个语义占位 `"Calendar — Priya's sister wedding (June)"`，让粉色块能渲染。
+
+### 12.3 ConstellationLayout 桥接 — virtual IntentCard
+
+`handleAmbientAction(entry)` 在 `proactive-ai-frontend/src/components/constellation/ConstellationLayout.tsx` 里把 Ambient entry 包装成**虚拟 IntentCard**，复用 NOW 卡片 Confirm 路径，**零侵入** CardChat / MainChatView / chat-stream backend：
+
+```ts
+import AmbientView, {
+  LiveFullscreen,
+  type TimelineEntry as AmbientTimelineEntry,
+} from "./AmbientView";
+
+const handleAmbientAction = useCallback((entry: AmbientTimelineEntry) => {
+  const entryId = entry.id ?? `ambient-${Date.now()}`;
+  const ambientCardId = `ambient-${entryId}`;
+  // 构造 virtual IntentCard；id 前缀 `ambient-` 让 sessionKey 自动解析为
+  //   card-thread-ambient-<entryId>
+  // 后端 chat-stream 检测到 `card-thread-` 前缀会自动注入 card-mode
+  // system prompt，无需任何后端改动。
+  setChatTarget({
+    card: virtualCard,                  // 不入库，只活在 React state
+    bootstrap: composedPromptText,      // Event / Action / Goal 三段模板
+  });
+  chatEntryView.current = "ambient";    // 用于 back-nav 回 Ambient
+}, [setChatTarget]);
+```
+
+关键约定：
+
+- `card.id` 前缀 `ambient-` → 后端 `card-thread-` sessionKey 检测逻辑自动注入 card-mode system prompt（无需后端改动）。
+- bootstrap 文本固定模板：`Event` / `Action` / `Goal` 三段，确保 LLM 收到结构化上下文。
+- `chatEntryView.current = "ambient"` 用于 back-nav 回 Ambient 视图而不是默认 NOW。
+
+### 12.4 影响范围
+
+- **后端**（`pinai-agents` / chat-stream / supabase db schema）：**零改动**。`card-thread-ambient-*` 复用既有 `card-thread-` 前缀检测，没有新表、新字段、新 endpoint。
+- **iOS native plugin**（`capacitor-plugins/ambient-ai`）：**零改动**。本节描述的是 cloud LLM 路径，与 §6 / §7 的端上 LLM 完全解耦。
+- **既有 NOW Intent Card 体验**：**零回归**。虚拟 card 不入库，只在 React state 里活；NOW feed 的真实卡片流程不变。
+- 测试：`npm --prefix proactive-ai-frontend run type-check` 干净；vitest constellation suite 10/10 通过。
+
+### 12.5 与端上 LLM 的对接点（§11.9 前置）
+
+本节实现的是 **cloud** LLM action page，**端上** LLM 产出 action candidates 是独立工程（见 §11.9）。一旦端上 batch decision 支持 `actionCandidates`，整合路径为：
+
+1. **Contract（§4.3 扩展）**：`decisions[].actionCandidates?: AmbientTimelineAction[]`，每条 candidate 沿用 §12.1 的字段（label / goal / goalBasket）。
+2. **Native prompt（§7 沿用）**：占位符化 example、`/no_think`、JSON shape 约束、`isPlaceholderEcho` / `EVIDENCE_LABEL_PATTERN` 检查继续生效；`label` 长度上限可比 title 更紧（≤ 24 字符），`goal` 走 summary-级约束（≤ 100 字符 + 完整句子）。
+3. **Pipeline（§5 / §8 沿用）**：`models.ts` `normalizeDecision` 把 candidate 数组挂到 `AmbientTimelineEvent.actionCandidates`，store 持久化，`timelineEventToEntry` 把首个 candidate 映射成 `TimelineEntry.action`（保持 §12.2 渲染契约）。多 candidate 的 UI 选择策略（下拉 / 多按钮 / 横向 chip）留给后续设计。
+4. **UI（§12.2 / §12.3 沿用）**：粉色块 "Open →" 直接读 `entry.action`，不需要为端上 vs cloud 分支两套渲染。
+
+换句话说，§12 这一版交付的不只是两条 mock 的 CTA，而是端上 action generation 落地时**前端唯一需要适配的边界**已经收敛到 `TimelineEntry.action` 这一个字段。
