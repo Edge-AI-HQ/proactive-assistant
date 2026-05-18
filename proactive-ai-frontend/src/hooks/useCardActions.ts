@@ -25,9 +25,12 @@ function saveChatted(ids: Set<string>) {
 
 export interface UseCardActionsOptions {
   /**
-   * confirm 后回调：调用方负责切到 chat 视图并把 bootstrapMessage 当首条 user
-   * turn 喂给 chat runtime（保持当前 AppShell 行为）。modify 路径也会触发，
-   * 但 bootstrapMessage 是空串，表示"进 chat，等用户打字"。
+   * confirm / modify 后回调：调用方负责切到 chat 视图并把 bootstrapMessage 当
+   * 首条 user turn 喂给 chat runtime。两条路径都传非空 bootstrap：
+   *   - confirm：primaryAction.label / card.title — 让 agent 直接按原方案推进。
+   *   - modify (Steer)：一段"想调整、先问意图"的 instruction — 让 agent 主动
+   *     `propose_action` 弹一组 chip + 输入框，避免出现"agent 不开口 + ChatDetailView
+   *     默认不挂全局 composer"的死局空白页。
    */
   onOpenChat: (card: IntentCard, bootstrapMessage: string) => void;
 }
@@ -150,7 +153,20 @@ export function useCardActions({ onOpenChat }: UseCardActionsOptions) {
       } catch {
         /* swallow */
       }
-      onOpenChat(card, "");
+      // Steer bootstrap: tell card_execution agent the user wants to
+      // adjust direction BEFORE acting. The agent's prompt
+      // (<user_reply_contract>) treats non-yes/no text as an
+      // instruction and is required to respond via `propose_action`,
+      // which surfaces the chip + free-text panel in ChatDetailView's
+      // needs-input slot — so the user has somewhere to talk. Without
+      // this bootstrap the thread stays empty + the page has no global
+      // composer, producing the "only CONTEXT renders" dead state.
+      const originalPlan =
+        card.primaryAction?.label?.trim() || card.title.trim();
+      const steerBootstrap = originalPlan
+        ? `I want to steer this before you act. Original plan: ${originalPlan}. Ask me how I'd like to adjust it (recipient, tone, scope, timing, anything else) and wait for my reply before executing.`
+        : "I want to steer this card before you act. Ask me how I'd like to adjust it and wait for my reply before executing.";
+      onOpenChat(card, steerBootstrap);
     },
     [onOpenChat, persistChatted],
   );
