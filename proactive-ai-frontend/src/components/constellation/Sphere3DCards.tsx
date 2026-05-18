@@ -257,7 +257,13 @@ const Sphere3DCards = ({
       <div
         className="absolute left-1/2"
         style={{
-          top: "35%",
+          // Sphere center sits high in the container so the front cards
+          // (which `pitch=-10°` tilts toward the lower hemisphere) land in
+          // the visual middle of the available space. Cards at the sphere
+          // top (rp.y → -yMax) get clipped by overflow-hidden, but those
+          // are the back-half / semi-transparent cards so the loss is
+          // imperceptible. Tune this if header above the sphere changes.
+          top: "10%",
           transform: "translate(-50%, -50%)",
           transformStyle: "preserve-3d",
           perspective: "1000px",

@@ -2,7 +2,17 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!--
+      maximum-scale=1 / user-scalable=no: iOS WKWebView and Safari only
+      auto-zoom into focused <input> / <textarea> with font-size < 16px when
+      page zoom is allowed. Locking max scale to 1 stops the focus-zoom
+      (and Capacitor App should not pinch-zoom anyway). Browser-level
+      accessibility zoom (Ctrl/Cmd +/-) is unaffected.
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
     <title>PIN AI — Proactive</title>
   </head>
   <body>
