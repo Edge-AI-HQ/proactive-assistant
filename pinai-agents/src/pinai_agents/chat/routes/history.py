@@ -36,6 +36,12 @@ router = APIRouter()
 
 _TOOL_META_MAX = 300
 _ARGS_PREVIEW_MAX = 240
+# Cap on the full structured `args` field. Mirrors streaming.py's
+# `_ARGS_FULL_LIMIT` so SSE live events and history replay deliver the
+# same tool-call shape to the frontend — UI components that render
+# specialized panels (TodoPanel for write_todos, ProposeActionCard for
+# propose_action) get the same dict in both code paths.
+_ARGS_FULL_MAX = 8192
 
 
 class HistoryResponse(BaseModel):
@@ -150,6 +156,28 @@ def _safe_args_preview(args: Any) -> str:
     return text
 
 
+def _safe_args_full(args: Any) -> Any | None:
+    """Return the raw structured args when JSON-serializable and under
+    the size cap; None otherwise.
+
+    Mirrors streaming.py's `_safe_args` so live SSE chat:tool:start
+    events and history replay both carry the same payload shape. The
+    frontend reads this for tools that have specialized renderers
+    (TodoPanel for write_todos, ProposeActionCard for propose_action).
+    Large inputs (e.g. python_exec carrying tens of KB of code) exceed
+    the cap and drop to argsPreview-only — same degradation as SSE.
+    """
+    if args is None:
+        return None
+    try:
+        encoded = json.dumps(args, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return None
+    if len(encoded.encode("utf-8")) > _ARGS_FULL_MAX:
+        return None
+    return args
+
+
 def _truncate_meta(s: str) -> str:
     if len(s) > _TOOL_META_MAX:
         return s[: _TOOL_META_MAX - 1] + "…"
@@ -230,6 +258,14 @@ def _build_history(messages: list[Any]) -> list[dict[str, Any]]:
                     "status": "running",
                     "argsPreview": _safe_args_preview(tc_args),
                 }
+                # Full structured args alongside the preview — keeps
+                # the FE in sync with how SSE streaming.py emits the
+                # same field, so specialized tool renderers
+                # (ProposeActionCard, TodoPanel) work identically on
+                # history replay and live stream.
+                full = _safe_args_full(tc_args)
+                if full is not None:
+                    part["args"] = full
                 current_assistant["parts"].append(part)
                 tool_index[tc_id] = part
             continue

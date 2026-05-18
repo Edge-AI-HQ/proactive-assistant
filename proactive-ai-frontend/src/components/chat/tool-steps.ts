@@ -9,14 +9,36 @@
  * agent produced them (matching the reload path in chat-history-merge.ts).
  */
 
+/** JSON value type — matches what assistant-ui's `ReadonlyJSONObject`
+ *  accepts. Used for the structured `input` payload so the tool-call
+ *  part's args stay JSON-compatible end-to-end (backend sends JSON;
+ *  assistant-ui's ToolCallMessagePart args are typed as JSON object). */
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [k: string]: JsonValue };
+
 export interface ProactiveToolCallArgs {
   meta?: string;
   argsPreview?: string;
   pinCommand?: string;
   status: "running" | "ok" | "error";
+  /** Raw structured tool input (when JSON-serializable and under the
+   *  backend's 8 KB cap). Threaded through from chat:tool:start's
+   *  optional `args` field and from history.py's `args` field on
+   *  tool-call parts. Components like ProposeActionCard read this to
+   *  render specialized UI (chips + drafts + plan) instead of relying
+   *  on the truncated argsPreview string. */
+  input?: JsonValue;
 }
 
-export type ProactiveToolCallSnapshotArgs = Record<string, string>;
+/** Per-tool-call args dict surfaced to assistant-ui's
+ *  ToolCallMessagePartComponent. Always JSON-serializable end-to-end
+ *  so assistant-ui's `ReadonlyJSONObject` constraint is satisfied. */
+export type ProactiveToolCallSnapshotArgs = { [k: string]: JsonValue };
 
 export type ProactiveContentPart =
   | { type: "text"; text: string }
@@ -37,6 +59,12 @@ interface ToolStart {
   meta?: string;
   argsPreview?: string;
   pinCommand?: string;
+  /** Optional raw structured input — carried verbatim from the SSE
+   *  `chat:tool:start` event's `args` field (full payload up to the
+   *  8 KB cap in streaming.py). Tools with specialized UI renderers
+   *  (propose_action → ProposeActionCard) read this; tools without
+   *  one ignore it harmlessly. */
+  input?: JsonValue;
 }
 
 interface ToolComplete {
@@ -50,6 +78,7 @@ function buildArgs(args: ProactiveToolCallArgs): ProactiveToolCallSnapshotArgs {
   if (args.meta) out.meta = args.meta;
   if (args.argsPreview) out.argsPreview = args.argsPreview;
   if (args.pinCommand) out.pinCommand = args.pinCommand;
+  if (args.input !== undefined) out.input = args.input;
   return out;
 }
 
@@ -59,6 +88,7 @@ function toolPart(args: ProactiveToolCallArgs & { toolCallId: string; toolName: 
     meta: args.meta,
     argsPreview: args.argsPreview,
     pinCommand: args.pinCommand,
+    input: args.input,
   });
   const part: ProactiveContentPart = {
     type: "tool-call",
@@ -132,6 +162,7 @@ export class LiveContentBuilder {
         meta: step.meta,
         argsPreview: step.argsPreview,
         pinCommand: step.pinCommand,
+        input: step.input,
         status: "running",
       }),
     );

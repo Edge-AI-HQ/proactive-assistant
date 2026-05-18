@@ -60,19 +60,31 @@ interface ProposeActionArgs {
   risks?: unknown;
 }
 
-/** Tolerantly project an unknown tool-args blob into the shape we expect.
- *  The wire shape is enforced by the backend pydantic schema, but
- *  assistant-ui types `args` as `unknown` so we narrow here. */
+/** Tolerantly project the assistant-ui tool-args blob into the shape
+ *  we expect.
+ *
+ *  Wire layout: the runtime's snapshot args dict carries string
+ *  metadata fields (status / meta / argsPreview) at the top level
+ *  plus an optional `input` field with the raw structured tool args
+ *  (see chat/tool-steps.ts). We read `input` for the propose_action
+ *  payload; if it's missing (very old chat:tool:start events without
+ *  the `args` field, or a tool call that exceeded the 8 KB cap), we
+ *  fall back to reading the top-level keys directly so an LLM that
+ *  somehow puts message/drafts/options at the root still renders.
+ */
 function parseArgs(raw: unknown): ProposeActionArgs | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
-  const message = typeof r.message === "string" ? r.message : "";
+  const inner = r.input && typeof r.input === "object"
+    ? (r.input as Record<string, unknown>)
+    : r;
+  const message = typeof inner.message === "string" ? inner.message : "";
   if (!message) return null;
-  const drafts = Array.isArray(r.drafts)
-    ? (r.drafts.filter((d) => d && typeof d === "object") as ProposeActionArtifact[])
+  const drafts = Array.isArray(inner.drafts)
+    ? (inner.drafts.filter((d) => d && typeof d === "object") as ProposeActionArtifact[])
     : null;
-  const options = Array.isArray(r.options)
-    ? (r.options.filter((o) => typeof o === "string") as string[])
+  const options = Array.isArray(inner.options)
+    ? (inner.options.filter((o) => typeof o === "string") as string[])
     : null;
   return { message, drafts, options };
 }
