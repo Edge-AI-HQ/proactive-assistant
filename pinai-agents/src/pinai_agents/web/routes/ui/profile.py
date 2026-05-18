@@ -132,22 +132,36 @@ async def _sync_auto_dreaming_schedule(
 async def _ensure_auto_generate_schedule(
     conn: AsyncConnection, *, user_id: int, settings: UserSettingsRow,
 ) -> None:
-    """Read-path counterpart to `_sync_auto_generate_schedule`: only acts
-    when the schedule task row is missing for an enabled user. Used on
-    GET so brand-new users (lazy-created settings row from DB DEFAULTs
-    = ON / 12h) actually get a schedule, without bumping `next_run_at`
-    on every page refresh — that would push the fire indefinitely.
+    """Read-path counterpart to `_sync_auto_generate_schedule`.
+
+    It acts when the task row is missing or stale/archived for an
+    enabled user. Used on GET so brand-new users and previously failed
+    schedules actually have an active task, without bumping
+    `next_run_at` on every page refresh for already-correct rows.
     """
     if not settings.auto_generate:
         return
     task_id = _auto_generate_task_id(user_id)
+    interval_seconds = settings.auto_generate_interval_minutes * 60
     async with conn.cursor() as cur:
         await cur.execute(
-            "SELECT 1 FROM pai_scheduled_tasks WHERE user_id=%s AND id=%s",
+            """
+            SELECT kind, trigger_kind, status, interval_seconds, payload
+            FROM pai_scheduled_tasks
+            WHERE user_id=%s AND id=%s
+            """,
             (user_id, task_id),
         )
-        if await cur.fetchone() is not None:
-            return
+        row = await cur.fetchone()
+    if (
+        row is not None
+        and row["kind"] == "generator.auto"
+        and row["trigger_kind"] == "schedule"
+        and row["status"] == "active"
+        and row["interval_seconds"] == interval_seconds
+        and (row["payload"] or {}).get("output_language") == settings.generation_language
+    ):
+        return
     await _sync_auto_generate_schedule(conn, user_id=user_id, settings=settings)
 
 

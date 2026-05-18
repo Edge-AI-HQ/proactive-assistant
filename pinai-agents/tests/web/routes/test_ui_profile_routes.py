@@ -174,3 +174,56 @@ async def test_settings_get_repairs_missing_auto_dreaming_schedule(pool, user_id
     assert row["status"] == "active"
     assert row["cron_expr"] == "0 6 * * *"
     assert row["timezone"] == "Asia/Shanghai"
+
+
+@pytest.mark.asyncio
+async def test_settings_get_repairs_archived_auto_generate_schedule(pool, user_ids):
+    user_a, _ = user_ids
+    async with user_scoped_tx(pool, user_a) as conn:
+        repo = ProfileRepository(user_a, conn)
+        settings = await repo.upsert_settings(auto_generate=True)
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO pai_scheduled_tasks
+                  (user_id, id, kind, trigger_kind, interval_seconds,
+                   payload, status, next_run_at, last_run_status)
+                VALUES (%s, %s, 'generator.auto', 'schedule', %s,
+                        %s::jsonb, 'archived', NULL, 'failed')
+                """,
+                (
+                    user_a,
+                    f"gen.auto.{user_a}",
+                    settings.auto_generate_interval_minutes * 60,
+                    '{"trigger":"auto","output_language":"en","cards_to_generate":4}',
+                ),
+            )
+
+    app = create_app()
+    app.state.pool = pool
+    app.dependency_overrides[current_user] = lambda: _user(user_a)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+    ) as client:
+        res = await client.get("/api/settings")
+
+    assert res.status_code == 200, res.text
+    assert res.json()["autoGenerate"] is True
+
+    async with user_scoped_tx(pool, user_a) as conn, conn.cursor() as cur:
+        await cur.execute(
+            """
+            SELECT status, next_run_at, payload
+            FROM pai_scheduled_tasks
+            WHERE user_id=%s AND id=%s
+            """,
+            (user_a, f"gen.auto.{user_a}"),
+        )
+        row = await cur.fetchone()
+
+    assert row is not None
+    assert row["status"] == "active"
+    assert row["next_run_at"] is not None
+    assert row["payload"]["output_language"] == "zh-Hans"
