@@ -1,7 +1,15 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronDown, Zap, FileText } from "lucide-react";
-import { brandSvg, detectToolIcon, ArtifactItem, type Artifact } from "./ChatDetailView";
+import { ChevronDown, Zap, FileText, AlertTriangle, Loader2 } from "lucide-react";
+import { brandSvg, detectToolIcon, ArtifactItem, matchSideEffect, type Artifact } from "./ChatDetailView";
+import type {
+  DangerousAction,
+  ExecuteArtifact,
+  ExecutionStep,
+  LastMessagePayload,
+  RunSnapshot,
+  SideEffect,
+} from "@/hooks/useCardExecutionRun";
 
 /* ── Shared types (mirrored across ConstellationLayout / ChatDetailView) ── */
 export interface DrawerDetailCard {
@@ -93,13 +101,126 @@ function ExecutionStepRow({ step }: { step: { text: string; tool: string } }) {
   );
 }
 
-export function DrawerDetailBody({ card }: { card: DrawerDetailCard }) {
-  const detail = card.detail!;
+/* ── Backend → Lovable artifact shape mapping ──
+ *
+ * Backend `ExecuteArtifact.kind ∈ {email_draft, message, doc, other}` doesn't
+ * carry the brand/app field Lovable's `ArtifactItem` expects. Derive `app`
+ * from kind (most likely first-party app per category) and project into
+ * the Lovable shape with no logic changes upstream.
+ */
+export function executeArtifactToLovable(a: ExecuteArtifact): Artifact {
+  const app: Artifact["app"] =
+    a.kind === "email_draft"
+      ? "gmail"
+      : a.kind === "message"
+        ? "slack"
+        : a.kind === "doc"
+          ? "gdocs"
+          : "gdocs";
+  const kind: Artifact["kind"] =
+    a.kind === "email_draft"
+      ? "email"
+      : a.kind === "message"
+        ? "message"
+        : a.kind === "doc"
+          ? "doc"
+          : "notes";
+  const meta =
+    typeof a.meta === "object" && a.meta && typeof (a.meta as Record<string, unknown>).meta === "string"
+      ? String((a.meta as Record<string, unknown>).meta)
+      : undefined;
+  return { kind, app, title: a.title, meta, body: a.body };
+}
+
+function backendPlanToLovable(plan: ExecutionStep[]): { text: string; tool: string }[] {
+  return plan.map((step) => ({
+    text: step.summary,
+    tool: step.slug || step.tool,
+  }));
+}
+
+/* ── Dangerous-action pill row ── */
+function DangerousActionRow({ action }: { action: DangerousAction }) {
+  return (
+    <div className="flex items-start gap-2.5 py-1.5">
+      <div className="relative shrink-0" style={{ width: 28, height: 28 }}>
+        <div
+          className="w-7 h-7 rounded-[8px] flex items-center justify-center overflow-hidden border border-amber-500/30"
+          style={{ background: "rgba(245, 158, 11, 0.08)" }}
+        >
+          <AlertTriangle size={13} strokeWidth={1.8} className="text-amber-600" />
+        </div>
+      </div>
+      <div className="flex-1 min-w-0 pt-0.5">
+        <div className="text-[13px] text-foreground/85 leading-snug font-medium">
+          {action.risk_label}
+        </div>
+        <div className="text-[10px] text-foreground/45 mt-0.5 uppercase tracking-wide font-medium">
+          {action.slug}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── DrawerDetailBody — Lovable visual contract preserved ──
+ *
+ * Accepts an optional `runSnapshot`, the hook's cached
+ * `lastMessagePayload`, and the run's `sideEffects` (post-execution).
+ *
+ * Data-source priority for plan / drafts / dangerous_actions / risks:
+ *   1. `lastMessagePayload` — cached send_message snapshot, survives
+ *      transitions out of needs_input so pending_done / done states still
+ *      have something to show. Live source while in needs_input too.
+ *      The hook merges audit fields (plan / dangerous_actions / risks)
+ *      forward from the first message so a follow-up message that
+ *      omits them doesn't blank this view.
+ *   2. `card.detail` — static fallback for cards that haven't been
+ *      fanned out yet (rare).
+ *
+ * Generated drafts also receive side_effects matching so labels upgrade
+ * from "Email draft" → "Email · Sent" once the dangerous_write actually
+ * fired.
+ */
+export function DrawerDetailBody({
+  card,
+  runSnapshot,
+  lastMessagePayload = null,
+  sideEffects = [],
+}: {
+  card: DrawerDetailCard;
+  runSnapshot?: RunSnapshot | null;
+  lastMessagePayload?: LastMessagePayload | null;
+  sideEffects?: SideEffect[];
+}) {
+  // Source-of-truth selection: cached lastMessagePayload (which the hook
+  // populates from live pendingInput AND from the durable events log)
+  // trumps static card.detail.
+  const cached = lastMessagePayload;
+
+  const plan: { text: string; tool: string }[] = cached
+    ? backendPlanToLovable(cached.plan)
+    : (card.detail?.executionPlan ?? []);
+
+  const artifacts: Artifact[] = cached
+    ? cached.drafts.map(executeArtifactToLovable)
+    : (card.detail?.artifacts ?? []);
+
+  const dangerousActions: DangerousAction[] = cached
+    ? cached.dangerous_actions
+    : [];
+
+  const risks: string[] = cached ? cached.risks : [];
+
   const [planOpen, setPlanOpen] = useState(true);
   const [draftsOpen, setDraftsOpen] = useState(true);
+  const [dangerousOpen, setDangerousOpen] = useState(true);
   const sources = parseSources(card.line2);
   const reasons = howGenerated(card);
-  const artifacts = detail.artifacts ?? [];
+
+  // Status banner — surface preparing / resuming / error / cancelled so the
+  // user understands why the buttons may not match the prior shape.
+  const statusBanner = renderStatusBanner(runSnapshot ?? null, !!cached);
 
   // Join reasons into a single sentence
   const reasonSentence = (() => {
@@ -114,52 +235,56 @@ export function DrawerDetailBody({ card }: { card: DrawerDetailCard }) {
 
   return (
     <>
+      {statusBanner}
+
       {/* Execution Plan — pink gradient, collapsible with timeline */}
-      <div
-        className="mb-3 rounded-2xl overflow-hidden border"
-        style={{
-          background: "linear-gradient(135deg, rgba(225,92,230,0.10) 0%, rgba(225,92,230,0.04) 100%)",
-          borderColor: "hsl(292 78% 63% / 0.22)",
-        }}
-      >
-        <button
-          onClick={() => setPlanOpen((v) => !v)}
-          className="w-full flex items-center justify-between px-3.5 py-2.5"
+      {plan.length > 0 && (
+        <div
+          className="mb-3 rounded-2xl overflow-hidden border"
+          style={{
+            background: "linear-gradient(135deg, rgba(225,92,230,0.10) 0%, rgba(225,92,230,0.04) 100%)",
+            borderColor: "hsl(292 78% 63% / 0.22)",
+          }}
         >
-          <div className="flex items-center gap-1.5">
-            <Zap size={13} strokeWidth={2.5} color="hsl(292,78%,63%)" />
-            <span className="text-[11px] font-bold uppercase tracking-wider bg-gradient-to-r from-[hsl(292,78%,63%)] to-[hsl(330,80%,65%)] bg-clip-text text-transparent">
-              Execution Plan
-            </span>
-            <span className="text-[11px] font-medium text-foreground/45">· {detail.executionPlan.length} steps</span>
-          </div>
-          <ChevronDown
-            size={16}
-            className={`text-[hsl(292,78%,63%)]/70 transition-transform ${planOpen ? "rotate-180" : ""}`}
-          />
-        </button>
-        <AnimatePresence initial={false}>
-          {planOpen && (
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: 0.2 }}
-              className="overflow-hidden"
-            >
-              <div className="px-3.5 pb-2.5 relative">
-                {/* timeline rail */}
-                <div className="absolute left-[27px] top-1.5 bottom-2 w-px bg-[hsl(292,78%,63%)]/20" />
-                <div className="relative">
-                  {detail.executionPlan.map((step, i) => (
-                    <ExecutionStepRow key={i} step={step} />
-                  ))}
+          <button
+            onClick={() => setPlanOpen((v) => !v)}
+            className="w-full flex items-center justify-between px-3.5 py-2.5"
+          >
+            <div className="flex items-center gap-1.5">
+              <Zap size={13} strokeWidth={2.5} color="hsl(292,78%,63%)" />
+              <span className="text-[11px] font-bold uppercase tracking-wider bg-gradient-to-r from-[hsl(292,78%,63%)] to-[hsl(330,80%,65%)] bg-clip-text text-transparent">
+                Execution Plan
+              </span>
+              <span className="text-[11px] font-medium text-foreground/45">· {plan.length} steps</span>
+            </div>
+            <ChevronDown
+              size={16}
+              className={`text-[hsl(292,78%,63%)]/70 transition-transform ${planOpen ? "rotate-180" : ""}`}
+            />
+          </button>
+          <AnimatePresence initial={false}>
+            {planOpen && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.2 }}
+                className="overflow-hidden"
+              >
+                <div className="px-3.5 pb-2.5 relative">
+                  {/* timeline rail */}
+                  <div className="absolute left-[27px] top-1.5 bottom-2 w-px bg-[hsl(292,78%,63%)]/20" />
+                  <div className="relative">
+                    {plan.map((step, i) => (
+                      <ExecutionStepRow key={i} step={step} />
+                    ))}
+                  </div>
                 </div>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      )}
 
       {/* Generated drafts — collapsible preview of final email/notes */}
       {artifacts.length > 0 && (
@@ -194,12 +319,78 @@ export function DrawerDetailBody({ card }: { card: DrawerDetailCard }) {
               >
                 <div className="px-3 pb-3 pt-0.5 flex flex-col gap-2">
                   {artifacts.map((a, i) => (
-                    <ArtifactItem key={i} artifact={a} index={i} locked={!!card.locked} />
+                    <ArtifactItem
+                      key={i}
+                      artifact={a}
+                      index={i}
+                      locked={!!card.locked}
+                      sideEffect={matchSideEffect(a, sideEffects)}
+                    />
                   ))}
                 </div>
               </motion.div>
             )}
           </AnimatePresence>
+        </div>
+      )}
+
+      {/* Dangerous actions — only when the latest send_message payload has any */}
+      {dangerousActions.length > 0 && (
+        <div
+          className="mb-3 rounded-2xl overflow-hidden border"
+          style={{
+            background: "rgba(245, 158, 11, 0.04)",
+            borderColor: "rgba(245, 158, 11, 0.22)",
+          }}
+        >
+          <button
+            onClick={() => setDangerousOpen((v) => !v)}
+            className="w-full flex items-center justify-between px-3.5 py-2.5"
+          >
+            <div className="flex items-center gap-1.5">
+              <AlertTriangle size={13} strokeWidth={2.5} className="text-amber-600" />
+              <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700">
+                Approving will let agent:
+              </span>
+              <span className="text-[11px] font-medium text-foreground/45">· {dangerousActions.length}</span>
+            </div>
+            <ChevronDown
+              size={16}
+              className={`text-amber-600/70 transition-transform ${dangerousOpen ? "rotate-180" : ""}`}
+            />
+          </button>
+          <AnimatePresence initial={false}>
+            {dangerousOpen && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.2 }}
+                className="overflow-hidden"
+              >
+                <div className="px-3.5 pb-2.5">
+                  {dangerousActions.map((a, i) => (
+                    <DangerousActionRow key={`${a.slug}-${i}`} action={a} />
+                  ))}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      )}
+
+      {/* Risks — one-liner bullets from the agent's plan */}
+      {risks.length > 0 && (
+        <div className="mb-3">
+          <div className="text-[11px] font-bold text-foreground/55 uppercase tracking-wider mb-1.5">Risks to consider</div>
+          <ul className="space-y-1">
+            {risks.map((r, i) => (
+              <li key={i} className="flex items-start gap-2 text-[12.5px] text-foreground/65 leading-snug">
+                <span className="mt-1.5 w-1 h-1 rounded-full bg-foreground/40 shrink-0" />
+                <span>{r}</span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
@@ -222,4 +413,69 @@ export function DrawerDetailBody({ card }: { card: DrawerDetailCard }) {
       )}
     </>
   );
+}
+
+/* Status banner — only renders for non-needs_input states so the
+ * Approve UI doesn't get a competing banner. */
+function renderStatusBanner(
+  snapshot: RunSnapshot | null,
+  hasLiveApproval: boolean,
+): JSX.Element | null {
+  if (!snapshot) return null;
+  if (hasLiveApproval) return null;
+  switch (snapshot.status) {
+    case "running":
+    case "resuming":
+      return (
+        <div
+          className="mb-3 px-3.5 py-2.5 rounded-2xl flex items-center gap-2 border border-foreground/10"
+          style={{ background: "rgba(255,255,255,0.55)" }}
+        >
+          <Loader2 size={13} className="text-foreground/55 animate-spin" />
+          <span className="text-[12px] text-foreground/70 font-medium">
+            {snapshot.status === "running"
+              ? "Agent is preparing the plan — give it a moment."
+              : "Resuming…"}
+          </span>
+        </div>
+      );
+    case "done":
+      return (
+        <div
+          className="mb-3 px-3.5 py-2.5 rounded-2xl border"
+          style={{
+            background: "linear-gradient(135deg, rgba(225,92,230,0.08) 0%, rgba(225,92,230,0.03) 100%)",
+            borderColor: "rgba(225,92,230,0.2)",
+          }}
+        >
+          <div className="text-[11px] font-bold uppercase tracking-wider mb-1 bg-gradient-to-r from-[hsl(292,78%,63%)] to-[hsl(330,80%,65%)] bg-clip-text text-transparent">
+            Result
+          </div>
+          <p className="text-[13px] text-foreground/80 leading-relaxed">
+            {snapshot.result?.summary || "Done."}
+          </p>
+        </div>
+      );
+    case "error":
+      return (
+        <div className="mb-3 px-3.5 py-2.5 rounded-2xl border border-red-500/30 bg-red-500/[0.04]">
+          <div className="text-[11px] font-bold uppercase tracking-wider text-red-600 mb-1">
+            Failed
+          </div>
+          <p className="text-[12.5px] text-foreground/75 leading-snug">
+            {snapshot.errorMessage || "Run failed."}
+          </p>
+        </div>
+      );
+    case "cancelled":
+      return (
+        <div className="mb-3 px-3.5 py-2.5 rounded-2xl border border-foreground/10 bg-foreground/[0.03]">
+          <p className="text-[12.5px] text-foreground/60 leading-snug">
+            Cancelled. Tap Retry to start a fresh run.
+          </p>
+        </div>
+      );
+    default:
+      return null;
+  }
 }

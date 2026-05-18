@@ -78,6 +78,36 @@ function basketToLovableCategory(basket: GoalBasket): string {
 
 /** Real IntentCard (from /api/cards) → Lovable Intent (visual). Carries
  *  originalId so handleExecute can recover the IntentCard for the chat runtime. */
+/** IntentCard → ChatDetailView's ChatCard shape (Lovable-era visual
+ *  contract used numeric ids + the same `detail` envelope). Only the
+ *  fields ChatDetailView actually reads are populated; the real
+ *  EXECUTION PLAN / drafts / dangerous_actions / risks come from the
+ *  cached propose_action args via the hook, not from this static
+ *  projection. The original string id rides separately via the `runId`
+ *  prop so the hook can derive the chat-stream session_key. */
+function realIntentToChatCard(card: IntentCard): ChatCard {
+  return {
+    id: djb2(card.id),
+    category: basketToLovableCategory(card.goalBasket),
+    tag: card.urgency >= 0.85 ? "Urgent" : undefined,
+    title: card.title,
+    line1: card.whyNow || card.summary,
+    line2: card.sources.length > 0 ? `Sources: ${card.sources.join(" · ")}` : "",
+    detail: {
+      scores: [
+        { label: "Confidence", value: Math.round(card.confidence * 100) },
+        { label: "Importance", value: Math.round(card.importance * 100) },
+        { label: "Urgency", value: Math.round(card.urgency * 100) },
+      ],
+      willExecute: card.primaryAction?.label ?? "",
+      executionPlan: [],
+      dataSources: card.sources,
+      impact: "",
+      permissions: "",
+    },
+  };
+}
+
 function realCardToLovableIntent(card: IntentCard, status: CardStatus): Intent {
   return {
     id: djb2(card.id),
@@ -879,11 +909,18 @@ export default function BigBallLayout() {
             className="flex-1 overflow-hidden"
           >
             {chatTarget ? (
-              /* Real card execution: existing CardChat → MainChatView path
-                 (SSE chat-stream, real agent runtime). */
-              <CardChat
-                card={chatTarget.card}
-                bootstrapMessage={chatTarget.bootstrap}
+              /* Real card execution: the rich ChatDetailView (EXECUTION
+                 timeline + Generated draft card + NEEDS YOUR INPUT pink
+                 panel + Dismiss/Pause toolbar). Backed by the
+                 chat-stream-adapter `useCardExecutionRun` hook —
+                 session_key = `card-thread-<cardId>` so the propose_action
+                 history persists on LangGraph's checkpointer. `bootstrap`
+                 is the Confirm-path's primaryAction text; the hook auto-
+                 fires it if the thread is empty (fanout missed it). */
+              <ChatDetailView
+                card={realIntentToChatCard(chatTarget.card)}
+                runId={chatTarget.card.id}
+                bootstrap={chatTarget.bootstrap}
                 onBack={() => {
                   const returnTo = chatEntryView.current;
                   setChatTarget(null);
@@ -894,9 +931,8 @@ export default function BigBallLayout() {
               /* Legacy mock-card path (Lovable's INTENTS). Unused now that
                  the mock array is empty, but kept so type-checking stays
                  honest if mock data is reintroduced for demos. */
-              <CardChat
-                card={lovableIntentToIntentCard(activeChat)}
-                bootstrapMessage={activeChat.detail?.willExecute || activeChat.title}
+              <ChatDetailView
+                card={activeChat as ChatCard}
                 onBack={() => {
                   const returnTo = chatEntryView.current;
                   setActiveChat(null);

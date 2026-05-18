@@ -25,7 +25,7 @@ import ControlPanel from "./ControlPanel";
 import DebugPanel from "./DebugPanel";
 import AgentRunIndicator from "./AgentRunIndicator";
 import MainChat from "./MainChat";
-import CardChat from "./CardChat";
+import ChatDetailView, { type ChatCard } from "./constellation/ChatDetailView";
 import CardDetailBody from "./CardDetailBody";
 import AiSphere from "./AiSphere";
 import { GenerationIndicator } from "./GenerationIndicator";
@@ -53,6 +53,51 @@ const MENU_ITEMS = [
   { id: "control", label: "CONTROL", icon: Settings },
 ] as const;
 type MenuId = (typeof MENU_ITEMS)[number]["id"];
+
+/** Stable string→number hash so an IntentCard's string id gets a
+ *  numeric id for ChatDetailView's ChatCard type (Lovable-era visual
+ *  contract used numeric ids). The original string id rides separately
+ *  via the `runId` prop, which the hook turns into the chat-stream
+ *  session_key `card-thread-<id>`. */
+function djb2(str: string): number {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h) ^ str.charCodeAt(i);
+  return Math.abs(h | 0);
+}
+
+function basketToChatCategory(basket: string): string {
+  if (basket === "wealth") return "finance";
+  if (basket === "family") return "life";
+  return basket;
+}
+
+/** Project the real IntentCard into the ChatCard shape ChatDetailView
+ *  consumes. Only the fields ChatDetailView actually reads are
+ *  populated — scores / sources / executionPlan are derived from the
+ *  IntentCard, while plan steps stay empty (real plan comes from the
+ *  cached propose_action args at render time). */
+function intentCardToChatCard(card: IntentCard): ChatCard {
+  return {
+    id: djb2(card.id),
+    category: basketToChatCategory(card.goalBasket),
+    tag: card.urgency >= 0.85 ? "Urgent" : undefined,
+    title: card.title,
+    line1: card.whyNow || card.summary,
+    line2: card.sources.length > 0 ? `Sources: ${card.sources.join(" · ")}` : "",
+    detail: {
+      scores: [
+        { label: "Confidence", value: Math.round(card.confidence * 100) },
+        { label: "Importance", value: Math.round(card.importance * 100) },
+        { label: "Urgency", value: Math.round(card.urgency * 100) },
+      ],
+      willExecute: card.primaryAction?.label ?? "",
+      executionPlan: [],
+      dataSources: card.sources,
+      impact: "",
+      permissions: "",
+    },
+  };
+}
 
 const SLOT_LAYOUTS = [
   [
@@ -697,10 +742,9 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
               exit={{ opacity: 0 }}
               className="flex-1 overflow-hidden"
             >
-              <CardChat
-                card={chatTarget.card}
-                score={chatTarget.score}
-                bootstrapMessage={chatTarget.bootstrapMessage}
+              <ChatDetailView
+                card={intentCardToChatCard(chatTarget.card)}
+                runId={chatTarget.card.id}
                 onBack={() => setChatTarget(null)}
               />
             </motion.div>
