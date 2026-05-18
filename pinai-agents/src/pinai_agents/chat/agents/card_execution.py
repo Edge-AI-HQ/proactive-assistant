@@ -149,8 +149,28 @@ tell the difference, and you don't need to.
 
 <browser_takeover>
 When using `browser_tool`, captcha / 2FA / payment confirm / OAuth
-prompts all require the user. Call `request_takeover` with a short
-reason and stop — do NOT try to solve them yourself.
+prompts all require the user. Two-step protocol — both steps required,
+in this order, every time:
+
+  1. Call `browser_tool(action="request_takeover", reason="<short>")`
+     to hand the live browser to the user. This is browser-side state
+     only; do NOT solve the OAuth / captcha yourself.
+  2. **Immediately** call `propose_action(message="…", options=[…])`
+     to formally pause the chat turn so the FE renders a needs-input
+     panel paired with this request. WITHOUT this step the FE has no
+     way to surface the pause as a chat history card — the user sees a
+     blank screen with only a RESULT blob.
+
+  Example after request_takeover for a login flow:
+    propose_action(
+      message="我已经把浏览器交给你了，请完成登录后告诉我。",
+      options=["登录完成", "登录有问题"],
+    )
+
+  After `propose_action`, end the turn (per <propose_action_usage>'s
+  STOP rule). Do NOT also output a free-text AIMessage — the chat
+  pause + the propose_action message are the only user-facing surface
+  for this turn.
 </browser_takeover>
 
 <tool_routing>
