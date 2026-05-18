@@ -36,6 +36,17 @@ function AmbientTimelineProbe({ children }: { children?: ReactNode }) {
   return (
     <div>
       <span>{timeline.loading ? "loading" : "ready"}</span>
+      {timeline.events.map((event) => (
+        <article key={event.id}>
+          <h2>{event.title}</h2>
+          <p>{event.summary}</p>
+        </article>
+      ))}
+      {timeline.latestRawEvents.map((event) => (
+        <article key={event.id}>
+          <h2>{event.compactText}</h2>
+        </article>
+      ))}
       {children}
     </div>
   );
@@ -65,5 +76,37 @@ describe("useAmbientTimeline", () => {
       visibleOnly: true,
       limit: 100,
     });
+  });
+
+  test("hides old LLM placeholder summary events while keeping raw transcript text", async () => {
+    storeMock.init.mockResolvedValue(undefined);
+    storeMock.listTimelineEvents.mockResolvedValue([{
+      id: "evt-placeholder",
+      occurredAt: "2026-05-15T10:00:00.000Z",
+      generationSource: "llm_summary",
+      generationMethod: "local_llm",
+      sourceTypes: ["transcript"],
+      title: "specific title from context",
+      summary: "specific summary from context",
+    }]);
+    storeMock.listCandidateWindows.mockResolvedValue([]);
+    storeMock.listRawEvents.mockImplementation(async ({ sourceType }: { sourceType: string }) =>
+      sourceType === "transcript"
+        ? [{
+            id: "raw-transcript",
+            sourceType: "transcript",
+            compactText: "Transcript segment: 这是真实转录文字。",
+            occurredAt: "2026-05-15T10:00:00.000Z",
+          }]
+        : [],
+    );
+    runtimeMock.refreshTimeline.mockResolvedValue([]);
+
+    render(<AmbientTimelineProbe />);
+
+    expect(await screen.findByText("ready")).toBeTruthy();
+    expect(await screen.findByText("Transcript segment: 这是真实转录文字。")).toBeTruthy();
+    expect(screen.queryByText("specific title from context")).toBeNull();
+    expect(screen.queryByText("specific summary from context")).toBeNull();
   });
 });

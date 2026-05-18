@@ -390,6 +390,30 @@ describe("Ambient timeline model bridge", () => {
     });
   });
 
+  test("rejects batch decisions that echo specific context placeholders", async () => {
+    setSelectedAmbientSummaryModelId("qwen3-1_7b-q4");
+    native.models.list.mockResolvedValue({
+      profiles: [{ id: "qwen3-1_7b-q4", kind: "llm" }],
+      statuses: [{ id: "qwen3-1_7b-q4", state: "present", lastVerifyResult: "ok" }],
+    });
+    native.models.generateTimelineBatchDecision.mockResolvedValue({
+      decisions: [{
+        action: "create",
+        title: "specific title from context",
+        summary: "specific summary from context",
+        importance: "medium",
+        occurredAt: windowInput.startedAt,
+        sourceWindowIds: ["win_1"],
+      }],
+    });
+    const bridge = createAmbientTimelineModelBridge();
+
+    await expect(bridge.generateTimelineBatchDecision?.({ windows: [windowInput] })).resolves.toEqual({
+      ok: false,
+      errorCode: "invalid_shape",
+    });
+  });
+
   test("falls back to window startedAt when reported occurredAt is the literal placeholder", async () => {
     setSelectedAmbientSummaryModelId("qwen3-1_7b-q4");
     native.models.list.mockResolvedValue({

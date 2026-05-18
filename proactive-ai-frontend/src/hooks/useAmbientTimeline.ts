@@ -201,7 +201,19 @@ function isDisplayableTimelineEvent(event: AmbientTimelineEvent): boolean {
 }
 
 function isPlaceholderTimelineText(value: string): boolean {
-  return ["title", "short title", "summary", "one sentence", "iso"].includes(
+  return [
+    "title",
+    "short title",
+    "summary",
+    "one sentence",
+    "specific title",
+    "specific title from context",
+    "specific summary",
+    "specific summary from context",
+    "title from context",
+    "summary from context",
+    "iso",
+  ].includes(
     value.trim().toLowerCase(),
   );
 }
