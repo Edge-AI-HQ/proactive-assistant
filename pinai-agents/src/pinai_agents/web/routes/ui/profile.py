@@ -27,6 +27,42 @@ def _auto_generate_task_id(user_id: int) -> str:
     return f"gen.auto.{user_id}"
 
 
+def _auto_dreaming_task_id(user_id: int) -> str:
+    return f"dream.auto.{user_id}"
+
+
+_AUTO_DREAMING_CRON_EXPR = "0 6 * * *"
+
+
+def _next_auto_dreaming_fire(
+    *, timezone: str, after: datetime | None = None,
+) -> datetime:
+    now = after or datetime.now(UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    tz = ZoneInfo(timezone)
+    local_now = now.astimezone(tz)
+    target = local_now.replace(hour=6, minute=0, second=0, microsecond=0)
+    if target <= local_now:
+        target += timedelta(days=1)
+    return target.astimezone(UTC)
+
+
+async def _profile_timezone(conn: AsyncConnection, *, user_id: int) -> str:
+    async with conn.cursor() as cur:
+        await cur.execute(
+            "SELECT timezone FROM pai_profile WHERE user_id=%s LIMIT 1",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+    timezone = (row["timezone"] if row is not None else None) or "UTC"
+    try:
+        ZoneInfo(timezone)
+    except ZoneInfoNotFoundError:
+        return "UTC"
+    return timezone
+
+
 async def _sync_auto_generate_schedule(
     conn: AsyncConnection, *, user_id: int, settings: UserSettingsRow,
 ) -> None:
@@ -61,6 +97,38 @@ async def _sync_auto_generate_schedule(
             )
 
 
+async def _sync_auto_dreaming_schedule(
+    conn: AsyncConnection, *, user_id: int, settings: UserSettingsRow,
+) -> None:
+    """Reflect auto_dreaming into a daily 06:00 scheduled task.
+
+    The user-facing switch lives in pai_user_settings, but the scheduler
+    only wakes up from pai_scheduled_tasks. Keep one deterministic row
+    per user so toggling the switch actually creates or archives the
+    recurring dream task.
+    """
+    task_id = _auto_dreaming_task_id(user_id)
+    if settings.auto_dreaming:
+        timezone = await _profile_timezone(conn, user_id=user_id)
+        await ScheduledTasksRepository(user_id, conn).upsert(
+            id=task_id, kind="auto.dreaming", trigger_kind="schedule",
+            cron_expr=_AUTO_DREAMING_CRON_EXPR,
+            next_run_at=_next_auto_dreaming_fire(timezone=timezone),
+            payload={"trigger": "auto"},
+            name="Daily auto dreaming",
+            timezone=timezone,
+            status="active",
+        )
+    else:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "UPDATE pai_scheduled_tasks "
+                "SET status='archived', next_run_at=NULL, updated_at=NOW() "
+                "WHERE user_id=%s AND id=%s",
+                (user_id, task_id),
+            )
+
+
 async def _ensure_auto_generate_schedule(
     conn: AsyncConnection, *, user_id: int, settings: UserSettingsRow,
 ) -> None:
@@ -81,6 +149,48 @@ async def _ensure_auto_generate_schedule(
         if await cur.fetchone() is not None:
             return
     await _sync_auto_generate_schedule(conn, user_id=user_id, settings=settings)
+
+
+async def _ensure_auto_dreaming_schedule(
+    conn: AsyncConnection, *, user_id: int, settings: UserSettingsRow,
+) -> None:
+    """Backfill or repair the daily dream schedule for enabled users.
+
+    Read paths call this so existing users with auto_dreaming=true but no
+    scheduler row are repaired without needing to toggle the setting off
+    and on again.
+    """
+    if not settings.auto_dreaming:
+        return
+    task_id = _auto_dreaming_task_id(user_id)
+    timezone = await _profile_timezone(conn, user_id=user_id)
+    async with conn.cursor() as cur:
+        await cur.execute(
+            """
+            SELECT kind, trigger_kind, status, cron_expr, timezone
+            FROM pai_scheduled_tasks
+            WHERE user_id=%s AND id=%s
+            """,
+            (user_id, task_id),
+        )
+        row = await cur.fetchone()
+    if (
+        row is not None
+        and row["kind"] == "auto.dreaming"
+        and row["trigger_kind"] == "schedule"
+        and row["status"] == "active"
+        and row["cron_expr"] == _AUTO_DREAMING_CRON_EXPR
+        and row["timezone"] == timezone
+    ):
+        return
+    await _sync_auto_dreaming_schedule(conn, user_id=user_id, settings=settings)
+
+
+async def _ensure_settings_schedules(
+    conn: AsyncConnection, *, user_id: int, settings: UserSettingsRow,
+) -> None:
+    await _ensure_auto_generate_schedule(conn, user_id=user_id, settings=settings)
+    await _ensure_auto_dreaming_schedule(conn, user_id=user_id, settings=settings)
 
 
 def _settings_response(row: UserSettingsRow) -> SettingsResponse:
@@ -141,9 +251,7 @@ async def get_profile_snapshot(
             )
         goals = await repo.list_goals()
         settings = await repo.get_settings()
-        await _ensure_auto_generate_schedule(
-            conn, user_id=user.id, settings=settings,
-        )
+        await _ensure_settings_schedules(conn, user_id=user.id, settings=settings)
     return ProfileResponse(
         profile=asdict(profile) if profile else None,
         goals=[asdict(g) for g in goals],
@@ -210,7 +318,7 @@ async def get_settings(
     """
     async with user_scoped_tx(pool, user.id) as conn:
         s = await ProfileRepository(user.id, conn).get_settings()
-        await _ensure_auto_generate_schedule(conn, user_id=user.id, settings=s)
+        await _ensure_settings_schedules(conn, user_id=user.id, settings=s)
     return _settings_response(s)
 
 
@@ -261,4 +369,5 @@ async def update_settings(
             ),
         )
         await _sync_auto_generate_schedule(conn, user_id=user.id, settings=row)
+        await _sync_auto_dreaming_schedule(conn, user_id=user.id, settings=row)
     return _settings_response(row)

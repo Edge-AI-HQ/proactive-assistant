@@ -2,10 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { proxyFetch, proxyPost } from "@/lib/api";
 import { useUserSettings } from "@/hooks/useUserSettings";
 
-// Auto-dreaming runs daily at 06:00 UTC; the cadence is fixed in the
-// scheduler (`scheduler/dispatcher.py` auto-dreaming kind) so the UI
-// just hardcodes the same constant. If we ever expose a per-user
-// schedule, lift this back into `pai_user_settings` and the hook.
+// Auto-dreaming runs daily at 06:00 in the user's profile timezone. The
+// cadence is fixed in the backend scheduler for now, so the UI only
+// mirrors the user-facing label.
 interface AutoDreamingSchedule {
   type: "daily";
   hour: number;
@@ -14,7 +13,7 @@ interface AutoDreamingSchedule {
 }
 
 const DREAMING_SCHEDULE: AutoDreamingSchedule = {
-  type: "daily", hour: 6, minute: 0, timezone: "UTC",
+  type: "daily", hour: 6, minute: 0, timezone: "local",
 };
 
 // The backend returns snake_case keys (mirrors the dream_runs row shape).

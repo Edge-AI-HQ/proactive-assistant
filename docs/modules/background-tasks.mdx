@@ -157,6 +157,7 @@ dispatcher 调用 chat 走 EdDSA 每 run JWT(`web/auth/agent_jwt.py`),凭证不�
 |---|---|---|
 | `POST /api/generate`(`web/routes/ui/generate.py`) | `generator.manual` | 前端手动 generate。一个用户同时只能有一个 active generator,duplicate 直接返回既有 taskId。 |
 | Profile settings `auto_generate=true`(`web/routes/ui/profile.py`)| `generator.auto` | `_sync_auto_generate_schedule` upsert,`interval_seconds = auto_generate_interval_minutes * 60`,关掉切 `status='archived'`。 |
+| Profile settings `auto_dreaming=true`(`web/routes/ui/profile.py`)| `auto.dreaming` | `_sync_auto_dreaming_schedule` upsert,每天用户 profile timezone 的 06:00 触发,关掉切 `status='archived'`。 |
 | `POST /api/composio/wait`(`web/routes/ui/composio.py`)| `connector.init` | OAuth ACTIVE 回调,`enqueue_once` 幂等。 |
 | `connector_ingest._ensure_sync_schedule`(`web/services/connector_ingest.py`)| `connector.sync` | init 跑成功后立即 INSERT ON CONFLICT DO NOTHING,cron `*/30 * * * *`。 |
 | `connector_ingest._enqueue_evolve` | `connector.evolve` | init / 非空 sync 之后入一次 once-shot。 |
@@ -221,6 +222,7 @@ cron / interval 任务被 archive 是终止信号,需要外部重新 INSERT(或�
 | 配置默认值 | `pinai-agents/src/pinai_agents/config.py`(`scheduler_tick_seconds=3`、`scheduler_lease_seconds=60`) |
 | Composio init/sync handler | `web/services/connector_ingest.py`(`run`、`_ensure_sync_schedule`、`_enqueue_evolve`)|
 | auto-generate schedule sync | `web/routes/ui/profile.py:_sync_auto_generate_schedule` |
+| auto-dreaming schedule sync | `web/routes/ui/profile.py:_sync_auto_dreaming_schedule` |
 | auto.dreaming run row 包装 | `web/scheduler/dispatcher.py:_dispatch_dream` |
 | chat 端 long-running handler | `pinai-agents/src/pinai_agents/chat/routes/run.py`(dream / evolve / crystallize) |
 | 前端任务状态 polling | `proactive-ai-frontend/src/hooks/useInitTask.ts`、`useActiveAgentRuns.ts`、`useGenerationStatus.ts` |
