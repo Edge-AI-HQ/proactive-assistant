@@ -104,6 +104,20 @@ class PersonalSignalIngestResult:
     changed: bool
 
 
+@dataclass(slots=True)
+class PersonalSignalKindStat:
+    """One row per distinct kind, with count + a preview of the most recent
+    signal of that kind. Used by the agent-facing `signals_kinds` tool so the
+    LLM can discover what data sources exist before drilling with
+    `signals_recent(kind=...)`."""
+
+    kind: str
+    count: int
+    latest_at: datetime
+    latest_title: str
+    latest_summary_preview: str
+
+
 class PersonalSignalsRepository(UserScopedRepository):
     async def ingest_one(self, input: IngestSignalInput) -> PersonalSignalRow:
         """Insert one signal, dedupe-aware. If (user_id, dedupe_key) exists,
@@ -474,6 +488,60 @@ class PersonalSignalsRepository(UserScopedRepository):
             return [], 0
         total = int(rows[0]["total_count"])
         return [PersonalSignalRow.from_record(r) for r in rows], total
+
+    async def list_kinds(
+        self,
+        *,
+        status: str | None = None,
+        since: datetime | None = None,
+        summary_preview_chars: int = 160,
+    ) -> list[PersonalSignalKindStat]:
+        """Group by `kind`: count + most-recent preview per kind, ordered by
+        latest_at DESC. Defaults to status=None / since=None so the agent can
+        discover *all* kinds the user has data for, including consumed/archived
+        — list_recent's defaults are tuned for the generator's increment layer,
+        which is a different use case.
+
+        `summary_preview_chars` truncates the latest summary so a kinds list
+        stays cheap to ship through the LLM context.
+        """
+        async with self._conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT kind, count, latest_at, latest_title, latest_summary_preview
+                FROM (
+                    SELECT DISTINCT ON (kind)
+                        kind,
+                        occurred_at AS latest_at,
+                        title AS latest_title,
+                        left(summary, %s) AS latest_summary_preview,
+                        COUNT(*) OVER (PARTITION BY kind) AS count
+                    FROM pai_personal_signals
+                    WHERE user_id = %s
+                      AND (%s::text IS NULL OR status = %s)
+                      AND (%s::timestamptz IS NULL OR occurred_at >= %s)
+                    ORDER BY kind, occurred_at DESC
+                ) sub
+                ORDER BY latest_at DESC
+                """,
+                (
+                    summary_preview_chars,
+                    self._user_id,
+                    status, status,
+                    since, since,
+                ),
+            )
+            rows = await cur.fetchall()
+        return [
+            PersonalSignalKindStat(
+                kind=r["kind"],
+                count=int(r["count"]),
+                latest_at=r["latest_at"],
+                latest_title=r["latest_title"],
+                latest_summary_preview=r["latest_summary_preview"] or "",
+            )
+            for r in rows
+        ]
 
     async def mark_consumed(self, signal_id: str, run_id: str) -> bool:
         """open → consumed. Idempotent: same run consuming again is no-op.

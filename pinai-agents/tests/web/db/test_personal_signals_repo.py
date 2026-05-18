@@ -209,6 +209,94 @@ async def test_transcript_candidate_window_same_id_duplicate_is_idempotent(
 
 
 @pytest.mark.asyncio
+async def test_list_kinds_groups_count_and_latest_preview(pool, user_ids):
+    user_a, user_b = user_ids
+    now = datetime.now(UTC)
+    async with user_scoped_tx(pool, user_a) as conn:
+        repo = PersonalSignalsRepository(user_a, conn)
+        # two gmail (oldest + newest), one gcal (in between), one
+        # ambient.candidate_window for user_a — different recency so
+        # ORDER BY latest_at DESC has a deterministic outcome.
+        await repo.ingest_one(IngestSignalInput(
+            id="sig_a_gmail_old",
+            kind="gmail.message",
+            title="Old gmail",
+            summary="old gmail body",
+            occurred_at=now - timedelta(hours=10),
+            source="test",
+        ))
+        await repo.ingest_one(IngestSignalInput(
+            id="sig_a_gmail_new",
+            kind="gmail.message",
+            title="Newer gmail",
+            summary="newer gmail body that should win the preview",
+            occurred_at=now - timedelta(minutes=5),
+            source="test",
+        ))
+        await repo.ingest_one(IngestSignalInput(
+            id="sig_a_gcal",
+            kind="gcal.event",
+            title="Standup",
+            summary="9am standup",
+            occurred_at=now - timedelta(hours=1),
+            source="test",
+        ))
+        ambient_row = await repo.ingest_one(IngestSignalInput(
+            id="sig_a_ambient",
+            kind="ambient.candidate_window",
+            title="Ambient transcript_session window",
+            summary="Transcript segment: 你现在这个是实时的会打印我们说的内容",
+            occurred_at=now - timedelta(hours=2),
+            source="device",
+        ))
+        # Flip ambient to consumed so we can check the status filter below.
+        assert await repo.mark_consumed(ambient_row.id, run_id="run-x") is True
+
+    # Cross-user isolation: user_b ingests its own kind that user_a
+    # must NOT see in list_kinds output.
+    async with user_scoped_tx(pool, user_b) as conn:
+        repo_b = PersonalSignalsRepository(user_b, conn)
+        await repo_b.ingest_one(IngestSignalInput(
+            id="sig_b_other",
+            kind="other.kind",
+            title="b row",
+            summary="should not leak to a",
+            occurred_at=now,
+            source="test",
+        ))
+
+    async with user_scoped_tx(pool, user_a) as conn:
+        repo = PersonalSignalsRepository(user_a, conn)
+
+        # Default (status=None, since=None) → all three a-side kinds,
+        # ordered by latest_at DESC: gmail (5min ago) > gcal (1h) > ambient (2h).
+        stats = await repo.list_kinds()
+        assert [s.kind for s in stats] == [
+            "gmail.message", "gcal.event", "ambient.candidate_window",
+        ]
+        gmail_stat = stats[0]
+        assert gmail_stat.count == 2
+        assert "newer gmail body" in gmail_stat.latest_summary_preview
+        assert "other.kind" not in {s.kind for s in stats}  # RLS
+
+        # status='open' filter must hide the consumed ambient row entirely.
+        open_stats = await repo.list_kinds(status="open")
+        assert [s.kind for s in open_stats] == ["gmail.message", "gcal.event"]
+
+        # since= now - 30min drops gcal (1h) and ambient (2h), keeps gmail.
+        recent_stats = await repo.list_kinds(
+            since=now - timedelta(minutes=30),
+        )
+        assert [s.kind for s in recent_stats] == ["gmail.message"]
+        assert recent_stats[0].count == 1  # only the "new" one is in the window
+
+        # Preview truncation respects summary_preview_chars.
+        truncated = await repo.list_kinds(summary_preview_chars=10)
+        kind_to_preview = {s.kind: s.latest_summary_preview for s in truncated}
+        assert len(kind_to_preview["gmail.message"]) == 10
+
+
+@pytest.mark.asyncio
 async def test_transcript_candidate_window_same_id_fresher_retry_updates(
     pool,
     user_ids,

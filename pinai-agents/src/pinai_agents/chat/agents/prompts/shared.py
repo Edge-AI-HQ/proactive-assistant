@@ -33,6 +33,8 @@ client.memory
   .supersede(*, old_id, new_id) -> dict | None
 
 client.signals
+  .kinds(*, status="all", hours=None) -> list       # discover what kinds exist
+                                                     # → [{kind, count, latestAt, latestTitle, latestSummaryPreview}]
   .recent(*, status="open", kind=None, hours=24,
           min_salience=None, limit=30) -> list      # status: open|consumed|archived|all
   .get(id) -> dict | None

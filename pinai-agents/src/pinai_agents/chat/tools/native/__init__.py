@@ -34,15 +34,17 @@ from .feedback import feedback_list
 from .memory import memory_add, memory_get, memory_list, memory_search
 from .profile import goal_upsert, profile_get, profile_upsert
 from .raw import raw_gcal_today, raw_gcal_week, raw_gmail_recent, raw_list
-from .signals import signals_get, signals_recent
+from .signals import signals_get, signals_kinds, signals_recent
 from .tavily import tavily_extract, tavily_search
 from .world import world_recent, world_search
 
 ALL_TOOLS = [
     # Memory (long-term user fact layer)
     memory_list, memory_search, memory_get, memory_add,
-    # Signals (increment layer — open / consumed / archived)
-    signals_recent, signals_get,
+    # Signals (increment layer — open / consumed / archived).
+    # `signals_kinds` is the discovery entry point; `signals_recent` /
+    # `signals_get` drill into a chosen kind.
+    signals_kinds, signals_recent, signals_get,
     # Profile + goals (persona / trajectory) + world context
     profile_get, profile_upsert, goal_upsert, world_recent, world_search,
     # Raw (high-frequency named tools + generic long-tail). These read
@@ -88,6 +90,7 @@ __all__ = [
     "raw_gmail_recent",
     "raw_list",
     "signals_get",
+    "signals_kinds",
     "signals_recent",
     "tavily_extract",
     "tavily_search",

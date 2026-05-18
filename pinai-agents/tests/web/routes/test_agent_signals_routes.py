@@ -64,6 +64,62 @@ def _auth(user_id: int) -> dict[str, str]:
 
 
 @pytest.mark.asyncio
+async def test_kinds_route_lists_distinct_kinds_for_caller(client, pool, user_ids):
+    user_a, user_b = user_ids
+    now = datetime.now(UTC)
+    async with user_scoped_tx(pool, user_a) as conn:
+        repo = PersonalSignalsRepository(user_a, conn)
+        await repo.ingest_one(IngestSignalInput(
+            id="sig_kinds_gmail_1",
+            kind="gmail.message",
+            title="g1",
+            summary="g1 body",
+            occurred_at=now - timedelta(minutes=15),
+            source="test",
+        ))
+        await repo.ingest_one(IngestSignalInput(
+            id="sig_kinds_gmail_2",
+            kind="gmail.message",
+            title="g2",
+            summary="g2 body",
+            occurred_at=now - timedelta(minutes=5),
+            source="test",
+        ))
+        await repo.ingest_one(IngestSignalInput(
+            id="sig_kinds_ambient",
+            kind="ambient.candidate_window",
+            title="ambient win",
+            summary="transcript preview",
+            occurred_at=now - timedelta(hours=1),
+            source="device",
+        ))
+
+    async with user_scoped_tx(pool, user_b) as conn:
+        repo_b = PersonalSignalsRepository(user_b, conn)
+        await repo_b.ingest_one(IngestSignalInput(
+            id="sig_kinds_other_user",
+            kind="other.kind",
+            title="leak",
+            summary="should not appear for user_a",
+            occurred_at=now,
+            source="test",
+        ))
+
+    r = await client.get(
+        "/api/agent/signals/kinds",
+        headers=_auth(user_a),
+    )
+    assert r.status_code == 200, r.text
+    items = r.json()["items"]
+    by_kind = {it["kind"]: it for it in items}
+    assert set(by_kind.keys()) == {"gmail.message", "ambient.candidate_window"}
+    assert by_kind["gmail.message"]["count"] == 2
+    assert by_kind["gmail.message"]["latestTitle"] == "g2"
+    # Ordering: gmail (5min) is more recent than ambient (1h).
+    assert items[0]["kind"] == "gmail.message"
+
+
+@pytest.mark.asyncio
 async def test_recent_hours_excludes_future_signals(client, pool, user_ids):
     user_a, _ = user_ids
     now = datetime.now(UTC)

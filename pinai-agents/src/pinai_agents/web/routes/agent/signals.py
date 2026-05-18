@@ -52,6 +52,42 @@ async def list_signals(
     } for r in rows]}
 
 
+@router.get("/kinds")
+async def list_kinds(
+    run: AgentRun = Depends(current_agent_run),
+    pool=Depends(get_pool),
+    status_filter: str = Query(
+        "all", alias="status", pattern="^(open|consumed|archived|all)$",
+    ),
+    hours: int | None = Query(None, ge=1, le=24 * 14),
+):
+    """Discover what `kind`s of personal signals exist for this user, with
+    count + a short preview of the most recent row per kind. Lets the chat
+    agent pick a `kind` for `signals_recent` instead of guessing from a fixed
+    example list (gmail.message / gcal.event) baked into the tool description.
+    """
+    actual_status = None if status_filter == "all" else status_filter
+    since = None
+    if hours is not None:
+        from datetime import timedelta
+        since = datetime.now(UTC) - timedelta(hours=hours)
+    async with user_scoped_tx(pool, run.user_id) as conn:
+        repo = PersonalSignalsRepository(run.user_id, conn)
+        stats = await repo.list_kinds(status=actual_status, since=since)
+    return {
+        "items": [
+            {
+                "kind": s.kind,
+                "count": s.count,
+                "latestAt": s.latest_at.isoformat(),
+                "latestTitle": s.latest_title,
+                "latestSummaryPreview": s.latest_summary_preview,
+            }
+            for s in stats
+        ],
+    }
+
+
 @router.get("/get/{signal_id}")
 async def get_signal(
     signal_id: str,

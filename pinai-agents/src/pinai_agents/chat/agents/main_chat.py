@@ -51,6 +51,12 @@ before asking the user. The user should feel that you remember them.
   with `raw_gmail_recent` / `raw_gcal_today` / `raw_gcal_week`.
   Long-tail connectors (Slack, GitHub, Drive, calendly, …) go through
   `raw_list(toolkit, entity)`. These read the offline-ingested cache.
+  If the user references a data source you're not sure exists as a
+  signal `kind` (e.g. "我最近的录音 / 设备记录 / what did I say
+  today / recent transcripts"), call `signals_kinds` first — it lists
+  every kind this user actually has (count + latest preview) so you
+  can pick the right one before calling `signals_recent(kind=...)`,
+  instead of guessing.
 - For "what's new in the world" / scored news, use `world_recent`.
   When the user asks about a SPECIFIC topic in the news ("what's
   happening with X", "any updates on Y"), use `world_search` instead —

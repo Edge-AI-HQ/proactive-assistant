@@ -150,6 +150,21 @@ class Signals(_Endpoint):
     def __init__(self, parent: _Client) -> None:
         super().__init__(parent, "/api/agent/signals")
 
+    async def kinds(
+        self,
+        *,
+        status: str = "all",
+        hours: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """List distinct signal `kind`s for the current user, with count +
+        latest preview. Use to discover what data sources exist before
+        drilling with `.recent(kind=...)`. status ∈ {open, consumed,
+        archived, all}; default 'all' so already-consumed kinds still show
+        up. Returns items shaped {kind, count, latestAt, latestTitle,
+        latestSummaryPreview}, ordered by latestAt DESC."""
+        payload = await self._get("/kinds", status=status, hours=hours)
+        return payload.get("items", []) if isinstance(payload, dict) else []
+
     async def recent(
         self,
         *,
@@ -632,6 +647,8 @@ client.memory
   .supersede(*, old_id, new_id) -> dict | None
 
 client.signals
+  .kinds(*, status="all", hours=None) -> list       # discover what kinds exist
+                                                     # → [{kind, count, latestAt, latestTitle, latestSummaryPreview}]
   .recent(*, status="open", kind=None, hours=24,
           min_salience=None, limit=30) -> list      # status: open|consumed|archived|all
   .get(id) -> dict | None
