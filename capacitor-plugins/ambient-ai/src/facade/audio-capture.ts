@@ -38,6 +38,7 @@ export interface AudioCapturePlugin {
   drainPendingTranscripts(): Promise<{ transcripts: TranscriptReadyEvent[] }>;
   listRecentCaptures(): Promise<{ captures: RecentAudioCapture[] }>;
   readCapture(options: { wavId: string }): Promise<AudioCaptureReadResult>;
+  markCaptureProcessed(options: { wavId: string }): Promise<void>;
   playCapture(options: { wavId: string }): Promise<void>;
   stopPlayback(): Promise<void>;
   startClassification(): Promise<void>;
@@ -94,6 +95,8 @@ export class AudioCaptureWeb implements AudioCapturePlugin {
       byteSize: 0,
     };
   }
+
+  async markCaptureProcessed(): Promise<void> {}
 
   async playCapture(): Promise<void> {}
 

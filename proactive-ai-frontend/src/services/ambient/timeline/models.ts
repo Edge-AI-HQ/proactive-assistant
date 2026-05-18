@@ -421,7 +421,7 @@ function normalizeDecision(
     const eventId = shortPlainText(row.eventId ?? row.e, 128);
     const summary = shortText(row.summary ?? row.s, 180);
     const title = shortText(row.title ?? row.t, 60) ?? undefined;
-    if (!eventId || !summary) return null;
+    if (!eventId || !summary || isPlaceholderModelText(summary) || (title && isPlaceholderModelText(title))) return null;
     return { action: "update", eventId, title, summary, sourceWindowIds };
   }
   if (action === "skip") {
@@ -523,6 +523,22 @@ function shortText(value: unknown, max: number): string | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
   return trimmed.length <= max ? trimmed : trimmed.slice(0, max - 1).trimEnd() + "…";
+}
+
+function isPlaceholderModelText(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return [
+    "title",
+    "short title",
+    "summary",
+    "one sentence",
+    "iso",
+  ].includes(normalized);
+}
+
+function validIso(value: string | null): string | null {
+  if (!value || isPlaceholderModelText(value)) return null;
+  return Number.isFinite(Date.parse(value)) ? value : null;
 }
 
 function stringArray(value: unknown): string[] {

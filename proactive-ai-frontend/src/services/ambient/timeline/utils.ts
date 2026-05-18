@@ -103,6 +103,13 @@ export function cleanText(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+export function stripTranscriptSegmentLabels(value: string): string {
+  return value
+    .replace(/Transcript segment:\s*/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function jsonCloneRecord(
   value: Record<string, unknown>,
 ): Record<string, unknown> {

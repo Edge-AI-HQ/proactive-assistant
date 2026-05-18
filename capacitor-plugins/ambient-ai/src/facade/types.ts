@@ -112,6 +112,8 @@ export interface AudioState {
   lastAudioError?: string;
   classifierRestartCount?: number;
   suppressedReason?: 'media' | 'playback' | 'interruption';
+  backgroundCaptureLoopRunning?: boolean;
+  currentCaptureTriggerSource?: string;
 }
 
 export interface SpeechBurstEvent {
@@ -345,6 +347,7 @@ export interface AudioNamespace {
   drainPendingTranscripts(): Promise<TranscriptReadyEvent[]>;
   listRecentCaptures(): Promise<{ captures: RecentAudioCapture[] }>;
   readCapture(options: { wavId: string }): Promise<AudioCaptureReadResult>;
+  markCaptureProcessed(options: { wavId: string }): Promise<void>;
   playCapture(options: { wavId: string }): Promise<void>;
   stopPlayback(): Promise<void>;
 }

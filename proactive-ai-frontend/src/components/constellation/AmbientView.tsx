@@ -224,6 +224,7 @@ function latestRawEventToEntry(raw: AmbientRawEvent): TimelineEntry {
 
 function iconForRawEvent(sourceType: AmbientSourceType): LucideIcon {
   if (sourceType === "health") return Stethoscope;
+  if (sourceType === "transcript") return Mic;
   if (sourceType === "location") return MapPin;
   if (sourceType === "motion") return Activity;
   if (sourceType === "sound") return Waves;
@@ -234,6 +235,7 @@ function iconForRawEvent(sourceType: AmbientSourceType): LucideIcon {
 
 function deviceIconForRawEvent(sourceType: AmbientSourceType): LucideIcon {
   if (sourceType === "health") return Watch;
+  if (sourceType === "transcript") return Mic;
   if (sourceType === "motion") return Activity;
   if (sourceType === "sound") return Mic;
   if (sourceType === "visit") return MapPin;
@@ -243,6 +245,7 @@ function deviceIconForRawEvent(sourceType: AmbientSourceType): LucideIcon {
 
 function deviceLabelForRawEvent(raw: AmbientRawEvent): string {
   if (raw.sourceType === "health") return "HealthKit";
+  if (raw.sourceType === "transcript") return "Microphone";
   if (raw.sourceType === "location") return "Location";
   if (raw.sourceType === "motion") return "Motion";
   if (raw.sourceType === "sound") return "Microphone";
@@ -253,6 +256,7 @@ function deviceLabelForRawEvent(raw: AmbientRawEvent): string {
 
 function titleForRawEvent(sourceType: AmbientSourceType): string {
   if (sourceType === "health") return "Health update";
+  if (sourceType === "transcript") return "Voice transcript";
   if (sourceType === "location") return "Location updated";
   if (sourceType === "motion") return "Motion update";
   if (sourceType === "sound") return "Sound context";
@@ -263,6 +267,7 @@ function titleForRawEvent(sourceType: AmbientSourceType): string {
 
 function tagsForRawEvent(raw: AmbientRawEvent): string[] {
   if (raw.sourceType === "health") return ["health", "latest"];
+  if (raw.sourceType === "transcript") return ["voice", "latest"];
   if (raw.sourceType === "location") return ["location", "latest"];
   if (raw.sourceType === "motion") return ["motion", "latest"];
   if (raw.sourceType === "sound") return ["sound", "latest"];
@@ -279,6 +284,9 @@ function confidenceLabelForRawEvent(
 }
 
 function rawEventBody(raw: AmbientRawEvent): string {
+  if (raw.sourceType === "transcript") {
+    return transcriptWindowPreview(raw.compactText);
+  }
   if (raw.sourceType === "sound") {
     return soundBody(raw.compactText);
   }

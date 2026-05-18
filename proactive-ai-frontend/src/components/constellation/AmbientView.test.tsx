@@ -16,6 +16,7 @@ const {
   stopAmbientUploadMock,
   liveDismissMock,
   userDevicesMock,
+  ambientTimelineMock,
 } = vi.hoisted(() => ({
   patchMock: vi.fn(),
   runtimeMock: {
@@ -33,6 +34,17 @@ const {
     refresh: vi.fn(),
     registerDevice: vi.fn(),
     revoke: vi.fn(),
+  },
+  ambientTimelineMock: {
+    events: [] as unknown[],
+    error: null,
+    storeStatus: null,
+    narrativeSummary: null,
+    groups: [] as unknown[],
+    pendingTranscriptCount: 0,
+    pendingTranscriptWindows: [] as unknown[],
+    latestRawEvents: [] as unknown[],
+    dismiss: vi.fn(),
   },
 }));
 
@@ -96,15 +108,7 @@ vi.mock("@/hooks/useAmbientLiveSession", () => ({
   }),
 }));
 vi.mock("@/hooks/useAmbientTimeline", () => ({
-  useAmbientTimeline: () => ({
-    events: [],
-    error: null,
-    storeStatus: null,
-    narrativeSummary: null,
-    groups: [],
-    pendingTranscriptCount: 0,
-    dismiss: vi.fn(),
-  }),
+  useAmbientTimeline: () => ambientTimelineMock,
 }));
 vi.mock("@/services/ambient", () => ({
   getAmbientRuntime: () => runtimeMock,
@@ -144,6 +148,11 @@ describe("AmbientView ambient toggle", () => {
     userDevicesMock.devices = [];
     userDevicesMock.loading = false;
     userDevicesMock.error = null;
+    ambientTimelineMock.events = [];
+    ambientTimelineMock.latestRawEvents = [];
+    ambientTimelineMock.pendingTranscriptWindows = [];
+    ambientTimelineMock.pendingTranscriptCount = 0;
+    ambientTimelineMock.dismiss.mockClear();
   });
 
   test("renders device count from the user device registry", () => {
@@ -218,6 +227,26 @@ describe("AmbientView ambient toggle", () => {
     await waitFor(() => {
       expect(liveDismissMock).toHaveBeenCalled();
     });
+  });
+
+  test("renders latest transcript raw text instead of placeholder timeline text", async () => {
+    runtimeMock.status.mockReturnValue(makeStatus());
+    ambientTimelineMock.latestRawEvents = [{
+      id: "raw-transcript-1",
+      sourceType: "transcript",
+      eventType: "transcript.ready",
+      occurredAt: "2026-05-18T08:07:00.000Z",
+      compactText: "Transcript segment: 这是刚刚转录出来的真实文字。",
+      sensitivity: "private",
+      confidence: 0.75,
+    }];
+
+    render(<AmbientView />);
+
+    expect(await screen.findByText("Voice transcript")).toBeTruthy();
+    expect(await screen.findByText("这是刚刚转录出来的真实文字。")).toBeTruthy();
+    expect(screen.queryByText(/^title$/)).toBeNull();
+    expect(screen.queryByText(/^summary$/)).toBeNull();
   });
 
 });

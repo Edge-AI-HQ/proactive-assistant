@@ -13,6 +13,7 @@ import {
   parseOptionalNumber,
   stableHash,
   stableId,
+  stripTranscriptSegmentLabels,
 } from "./utils";
 
 const RAW_SCHEMA_VERSION = "ambient_raw_event.v1";
@@ -134,7 +135,7 @@ function compactText(
     return `Motion ${type ?? "activity"}${confidence ? ` (${confidence})` : ""}.`;
   }
   if (sourceType === "health") return `Health summary: ${item.summary}`;
-  if (sourceType === "transcript") return `Transcript segment: ${item.summary}`;
+  if (sourceType === "transcript") return stripTranscriptSegmentLabels(item.summary);
   if (eventType === "sound.scene_run") {
     const label = cleanText(payload.label) ?? "sound";
     return `Heard ${label} for ${formatDuration(parseOptionalNumber(payload.durationMs))}.`;

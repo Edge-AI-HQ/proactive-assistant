@@ -240,6 +240,61 @@ describe("Ambient timeline model bridge", () => {
     expect(payload.compactContext.endsWith("…")).toBe(true);
   });
 
+  test("rejects placeholder native batch output copied from the schema", async () => {
+    setSelectedAmbientSummaryModelId("qwen3-1_7b-q4");
+    native.models.list.mockResolvedValue({
+      profiles: [{ id: "qwen3-1_7b-q4", kind: "llm" }],
+      statuses: [{ id: "qwen3-1_7b-q4", state: "present", lastVerifyResult: "ok" }],
+    });
+    native.models.generateTimelineBatchDecision.mockResolvedValue({
+      decisions: [{
+        action: "create",
+        title: "title",
+        summary: "summary",
+        importance: "medium",
+        occurredAt: "iso",
+        sourceWindowIds: ["win_1"],
+      }],
+    });
+    const bridge = createAmbientTimelineModelBridge();
+
+    await expect(bridge.generateTimelineBatchDecision?.({ windows: [windowInput] })).resolves.toEqual({
+      ok: false,
+      errorCode: "invalid_shape",
+    });
+  });
+
+  test("falls back to window start when batch output has a placeholder occurredAt", async () => {
+    setSelectedAmbientSummaryModelId("qwen3-1_7b-q4");
+    native.models.list.mockResolvedValue({
+      profiles: [{ id: "qwen3-1_7b-q4", kind: "llm" }],
+      statuses: [{ id: "qwen3-1_7b-q4", state: "present", lastVerifyResult: "ok" }],
+    });
+    native.models.generateTimelineBatchDecision.mockResolvedValue({
+      decisions: [{
+        action: "create",
+        title: "Product review",
+        summary: "Discussed product review follow-ups.",
+        importance: "medium",
+        occurredAt: "iso",
+        sourceWindowIds: ["win_1"],
+      }],
+    });
+    const bridge = createAmbientTimelineModelBridge();
+
+    const result = await bridge.generateTimelineBatchDecision?.({ windows: [windowInput] });
+
+    expect(result).toMatchObject({
+      ok: true,
+      batch: {
+        decisions: [{
+          action: "create",
+          occurredAt: "2026-05-15T10:00:00.000Z",
+        }],
+      },
+    });
+  });
+
   test("falls back to single-window native generation when batch facade is unavailable", async () => {
     setSelectedAmbientSummaryModelId("qwen3-1_7b-q4");
     native.models.list.mockResolvedValue({
@@ -270,6 +325,29 @@ describe("Ambient timeline model bridge", () => {
       window: expect.objectContaining({ id: "win_1" }),
     });
     native.models.generateTimelineBatchDecision = originalBatch;
+  });
+
+  test("rejects placeholder native single-window output copied from the schema", async () => {
+    setSelectedAmbientSummaryModelId("qwen3-1_7b-q4");
+    native.models.list.mockResolvedValue({
+      profiles: [{ id: "qwen3-1_7b-q4", kind: "llm" }],
+      statuses: [{ id: "qwen3-1_7b-q4", state: "present", lastVerifyResult: "ok" }],
+    });
+    native.models.generateTimelineEvent.mockResolvedValue({
+      eventType: "conversation",
+      title: "short title",
+      summary: "one sentence",
+      confidence: 0.7,
+      confidenceLabel: "certain",
+      tags: ["ambient"],
+      salientFacts: ["fact"],
+    });
+    const bridge = createAmbientTimelineModelBridge();
+
+    await expect(bridge.generateTimelineEvent(windowInput)).resolves.toEqual({
+      ok: false,
+      errorCode: "invalid_shape",
+    });
   });
 
 

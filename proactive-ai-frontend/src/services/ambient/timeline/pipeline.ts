@@ -24,6 +24,7 @@ import {
   sourceLabel,
   stableHash,
   stableId,
+  stripTranscriptSegmentLabels,
   uniqueRawRefs,
   uniqueStrings,
 } from "./utils";
@@ -594,8 +595,9 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     const newVisitWindows = hasNewRefs(visitWindows);
     const joinContext = (windows: AmbientCandidateWindow[]) =>
       windows.map((window) => window.compactContext).filter(Boolean).join(" ");
+    const transcriptText = stripTranscriptSegmentLabels(raw.compactText);
     const additions = [
-      existingRawRefIds.has(raw.id) ? "" : raw.compactText,
+      existingRawRefIds.has(raw.id) ? "" : transcriptText,
       newSoundWindows.length > 0 ? `Sound context: ${joinContext(newSoundWindows)}` : "",
       newLocationWindows.length > 0 ? `Location context: ${joinContext(newLocationWindows)}` : "",
       newMotionWindows.length > 0 ? `Motion context: ${joinContext(newMotionWindows)}` : "",
@@ -603,8 +605,8 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     ].filter(Boolean);
     const additionsText = additions.join(" ");
     const compactContext = existing?.compactContext
-      ? [existing.compactContext, additionsText].filter(Boolean).join(" ")
-      : additionsText || raw.compactText;
+      ? stripTranscriptSegmentLabels([existing.compactContext, additionsText].filter(Boolean).join(" "))
+      : additionsText || transcriptText;
     const evidenceWindows = [...soundWindows, ...locationWindows, ...motionWindows, ...visitWindows];
     const evidenceRawRefs = evidenceWindows.flatMap((window) => window.rawRefs);
     const evidenceSourceTypes = evidenceWindows.flatMap((window) => window.sourceTypes);

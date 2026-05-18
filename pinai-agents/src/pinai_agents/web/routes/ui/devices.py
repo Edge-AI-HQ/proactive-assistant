@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -54,6 +55,8 @@ _DEFAULT_TTL = timedelta(days=30)
 _VALID_PLATFORMS = ("ios", "android", "web", "wearable", "sensor", "embedded")
 _LEGACY_IOS_DISPLAY_NAMES = {"ios app", "iphone"}
 _LEGACY_IOS_MODELS = {"", "iphone"}
+_TRANSCRIPT_CANDIDATE_KIND = "ambient.candidate_window"
+_TRANSCRIPT_SEGMENT_LABEL_RE = re.compile(r"Transcript segment:\s*")
 
 
 # ── pydantic models ──
@@ -143,6 +146,67 @@ def _parse_source(raw: Any) -> tuple[str, str] | None:
     if scheme not in ("device", "mobile", "connector", "web") or not ident:
         return None
     return scheme, ident
+
+
+def _payload_text(payload: dict[str, Any], key: str) -> str | None:
+    value = payload.get(key)
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _is_transcript_candidate_window(kind: str, payload: dict[str, Any]) -> bool:
+    return (
+        kind == _TRANSCRIPT_CANDIDATE_KIND
+        and payload.get("window_type") == "transcript_session"
+    )
+
+
+def _canonical_transcript_candidate_key(
+    *,
+    device_id: str,
+    payload: dict[str, Any],
+) -> str | None:
+    local_date = _payload_text(payload, "local_date")
+    local_window_id = _payload_text(payload, "local_window_id")
+    if not local_date or not local_window_id:
+        return None
+    return (
+        f"ambient:candidate_window:{device_id}:"
+        f"{local_date}:transcript_session:{local_window_id}"
+    )
+
+
+def _valid_raw_ref_count(payload: dict[str, Any]) -> bool:
+    value = payload.get("raw_ref_count")
+    if isinstance(value, int) and value >= 0:
+        return True
+    return bool(isinstance(value, str) and value.isdigit())
+
+
+def _clean_transcript_summary(value: str) -> str:
+    cleaned = _TRANSCRIPT_SEGMENT_LABEL_RE.sub("", value)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned or value.strip()
+
+
+def _clean_transcript_candidate_payload(
+    payload: dict[str, Any],
+    *,
+    summary_changed: bool,
+) -> dict[str, Any]:
+    compact_context = payload.get("compact_context")
+    if not isinstance(compact_context, str):
+        return {k: v for k, v in payload.items() if k != "content_hash"} if summary_changed else payload
+    cleaned = _clean_transcript_summary(compact_context)
+    compact_changed = cleaned != compact_context
+    if not compact_changed and not summary_changed:
+        return payload
+    next_payload = {k: v for k, v in payload.items() if k != "content_hash"}
+    if compact_changed:
+        next_payload["compact_context"] = cleaned
+    return next_payload
 
 
 def _device_metadata_value(metadata: dict[str, Any], key: str) -> str | None:
@@ -523,6 +587,7 @@ async def _ingest_for_device(
         expires = _normalize_expires(occurred, item.expiresAt)
         sync_mode = normalize_sync_mode(item.syncMode)
         payload: dict[str, Any] = item.payload or {}
+        summary = item.summary
 
         # Media-bearing kinds: upload binary_b64 → Supabase Storage,
         # rewrite payload to reference storage_path instead of raw bytes.
@@ -550,9 +615,39 @@ async def _ingest_for_device(
                     logger.warning("device media upload failed (kind=%s): %s", kind, e)
 
         dedupe_key = (item.dedupeKey or "").strip() or f"device:{device_id}:{item.id}"
+        if _is_transcript_candidate_window(kind, payload):
+            canonical_key = _canonical_transcript_candidate_key(
+                device_id=device_id,
+                payload=payload,
+            )
+            if canonical_key is None:
+                results.append({
+                    "id": item.id,
+                    "dedupeKey": None,
+                    "status": "rejected",
+                    "reason": (
+                        "transcript candidate window requires "
+                        "payload.local_date and payload.local_window_id"
+                    ),
+                })
+                continue
+            if not _valid_raw_ref_count(payload):
+                logger.warning(
+                    "device ingest: transcript candidate raw_ref_count invalid "
+                    "(device_id=%s id=%s)",
+                    device_id,
+                    item.id,
+                )
+            cleaned_summary = _clean_transcript_summary(summary)
+            payload = _clean_transcript_candidate_payload(
+                payload,
+                summary_changed=cleaned_summary != summary,
+            )
+            summary = cleaned_summary
+            dedupe_key = canonical_key
         n = DeviceIngestItem(
             id=item.id, device_id=device_id, kind=kind, sync_mode=sync_mode,
-            title=item.title, summary=item.summary, payload=payload,
+            title=item.title, summary=summary, payload=payload,
             salience=item.salience, confidence=item.confidence,
             dedupe_key=dedupe_key,
             occurred_at=occurred, available_at=available, expires_at=expires,
@@ -636,27 +731,31 @@ async def _ingest_for_device(
         signal_failed_exc: Exception | None = None
         if signal_payload is not None:
             sig = signal_payload
+            signal_input = IngestSignalInput(
+                id=sig["id"], kind=sig["kind"],
+                title=sig["title"], summary=sig["summary"],
+                occurred_at=datetime.fromisoformat(
+                    sig["occurred_at"] if not sig["occurred_at"].endswith("Z")
+                    else sig["occurred_at"][:-1] + "+00:00",
+                ),
+                payload=sig["payload"], salience=sig["salience"],
+                confidence=sig["confidence"], dedupe_key=sig["dedupe_key"],
+                source=sig["source"], device_id=sig["device_id"],
+                subject=sig.get("subject"),
+            )
             try:
                 async with signals_repo.conn.transaction():
-                    await signals_repo.ingest_one(IngestSignalInput(
-                        id=sig["id"], kind=sig["kind"],
-                        title=sig["title"], summary=sig["summary"],
-                        occurred_at=datetime.fromisoformat(
-                            sig["occurred_at"] if not sig["occurred_at"].endswith("Z")
-                            else sig["occurred_at"][:-1] + "+00:00",
-                        ),
-                        payload=sig["payload"], salience=sig["salience"],
-                        confidence=sig["confidence"], dedupe_key=sig["dedupe_key"],
-                        source=sig["source"], device_id=sig["device_id"],
-                        subject=sig.get("subject"),
-                    ))
-                # ingest_one is an UPSERT (ON CONFLICT DO UPDATE), so a
-                # successful return is always either a fresh INSERT or a
-                # content-replacing UPDATE. Outbox semantics: both are
-                # "remove from queue", so we collapse them into
-                # "inserted". A true idempotent no-op only happens on the
-                # raw_only path, which uses DO NOTHING.
-                signal_inserted = True
+                    if _is_transcript_candidate_window(sig["kind"], sig["payload"]):
+                        result = await signals_repo.ingest_transcript_candidate_window_latest(
+                            signal_input,
+                        )
+                        signal_inserted = result.changed
+                    else:
+                        await signals_repo.ingest_one(signal_input)
+                        signal_inserted = True
+                # Generic ingest_one is always INSERT-or-UPDATE. Transcript
+                # candidate windows use a stricter latest-wins method that
+                # can return changed=False for stale/exact duplicate uploads.
             except Exception as e:
                 signal_failed_exc = e
                 logger.warning(

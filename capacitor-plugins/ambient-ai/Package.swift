@@ -21,6 +21,10 @@ let package = Package(
                 .product(name: "Cordova", package: "capacitor-swift-pm"),
                 .product(name: "LlamaSwift", package: "llama.swift"),
             ],
-            path: "ios/Sources/AmbientAi")
+            path: "ios/Sources/AmbientAi"),
+        .testTarget(
+            name: "AmbientAiTests",
+            dependencies: ["AmbientAi"],
+            path: "ios/Tests/AmbientAiTests")
     ]
 )

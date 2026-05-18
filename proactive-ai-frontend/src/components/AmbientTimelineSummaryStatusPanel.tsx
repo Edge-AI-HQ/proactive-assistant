@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, CheckCircle2, Clock, Play, RefreshCcw, Sparkles } from "lucide-react";
+import { isNative } from "@/lib/platform";
 import {
   getAmbientTimelineStore,
   todayLocalDate,
@@ -7,7 +8,6 @@ import {
   type AmbientTimelineEvent,
   type TimelineStoreStatus,
 } from "@/services/ambient/timeline";
-import { getAmbientRuntime } from "@/services/ambient";
 
 interface SummaryStatusSnapshot {
   storeStatus: TimelineStoreStatus | null;
@@ -18,6 +18,10 @@ interface SummaryStatusSnapshot {
   processing: AmbientCandidateWindow[];
   llmEvents: AmbientTimelineEvent[];
   error: string | null;
+}
+
+interface AmbientTimelineRuntime {
+  refreshTimeline(localDate: string, options?: { force?: boolean }): Promise<void>;
 }
 
 const EMPTY_SNAPSHOT: SummaryStatusSnapshot = {
@@ -33,7 +37,7 @@ const EMPTY_SNAPSHOT: SummaryStatusSnapshot = {
 
 export default function AmbientTimelineSummaryStatusPanel() {
   const store = useMemo(() => getAmbientTimelineStore(), []);
-  const runtime = useMemo(() => getAmbientRuntime(), []);
+  const runtimeRef = useRef<AmbientTimelineRuntime | null>(null);
   const [snapshot, setSnapshot] = useState<SummaryStatusSnapshot>(EMPTY_SNAPSHOT);
   const [loading, setLoading] = useState(true);
   const [lastRefreshAt, setLastRefreshAt] = useState<string | null>(null);
@@ -82,6 +86,19 @@ export default function AmbientTimelineSummaryStatusPanel() {
     setSummaryRunning(true);
     setSnapshot((prev) => ({ ...prev, error: null }));
     try {
+      let runtime = runtimeRef.current;
+      if (!runtime) {
+        runtime = await loadNativeAmbientTimelineRuntime();
+        if (!runtime) {
+          setSnapshot((prev) => ({
+            ...prev,
+            storeStatus: store.status(),
+            error: "Timeline summary generation is only available in the native app.",
+          }));
+          return;
+        }
+        runtimeRef.current = runtime;
+      }
       await runtime.refreshTimeline(todayLocalDate(), { force: true });
       await refresh();
     } catch (err) {
@@ -89,7 +106,7 @@ export default function AmbientTimelineSummaryStatusPanel() {
     } finally {
       setSummaryRunning(false);
     }
-  }, [refresh, runtime, store, summaryRunning]);
+  }, [refresh, store, summaryRunning]);
 
   useEffect(() => {
     void refresh();
@@ -217,6 +234,12 @@ function statusTone(status: string): "ok" | "warn" | "error" | "muted" {
   if (status === "Summarizing" || status === "Waiting") return "warn";
   if (status === "Error") return "error";
   return "muted";
+}
+
+async function loadNativeAmbientTimelineRuntime(): Promise<AmbientTimelineRuntime | null> {
+  if (!isNative) return null;
+  const { getAmbientRuntime } = await import("@/services/ambient");
+  return getAmbientRuntime();
 }
 
 function describeError(err: unknown): string {

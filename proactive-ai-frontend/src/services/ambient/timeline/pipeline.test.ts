@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 
+import type { PersonalSignalInput } from "@/lib/devices";
 import { LocalAmbientTimelinePipeline } from "./pipeline";
 import type { AmbientTimelineModelBridge } from "./models";
 import { MemoryTimelineStore } from "./store";
@@ -408,6 +409,46 @@ describe("LocalAmbientTimelinePipeline", () => {
       privacyHint: "private",
     });
     expect(windows[0]?.compactContext.match(/Discussed a product review/g)).toHaveLength(1);
+  });
+
+  test("keeps one growing transcript window for multiple raw segments in a session", async () => {
+    const { store, pipeline } = makePipeline();
+    const signals: PersonalSignalInput[] = [];
+
+    for (let i = 0; i < 5; i += 1) {
+      signals.push(...await pipeline.ingestSignal({
+        kind: "session_summary",
+        title: "Voice summary",
+        summary: `Segment ${i + 1} from the same live transcript session.`,
+        occurred_at: `2026-05-15T10:0${i}:00.000Z`,
+        payload: {
+          captureSessionId: "cap-growing",
+          burstId: `burst-${i + 1}`,
+          durationMs: 30_000,
+        },
+        dedupe_key: `audio:burst:growing:${i + 1}`,
+      }));
+    }
+
+    const raws = await store.listRawEvents({
+      localDate: "2026-05-15",
+      sourceType: "transcript",
+    });
+    const windows = await store.listCandidateWindows({
+      localDate: "2026-05-15",
+      windowType: "transcript_session",
+    });
+    const latestSignal = signals[signals.length - 1];
+
+    expect(raws).toHaveLength(5);
+    expect(windows).toHaveLength(1);
+    expect(windows[0]?.rawRefs).toHaveLength(5);
+    expect(windows[0]?.compactContext).toContain("Segment 1");
+    expect(windows[0]?.compactContext).toContain("Segment 5");
+    expect(latestSignal?.payload?.raw_ref_count).toBe(5);
+    expect(latestSignal?.dedupe_key).toBe(
+      `ambient:candidate_window:2026-05-15:transcript_session:${windows[0]?.id}`,
+    );
   });
 
 

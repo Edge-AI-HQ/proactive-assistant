@@ -1,6 +1,7 @@
 import {
   AmbientAi,
   type CaptureReadyEvent,
+  type RecentAudioCapture,
   type SoundClassificationEvent,
   type TranscriptReadyEvent,
 } from "@pin/capacitor-ambient-ai";
@@ -55,6 +56,12 @@ export class SoundClassifierSource implements AmbientSource {
   private opts: Required<SoundClassifierOptions>;
   private runs = new SoundRunAggregator();
   private storedTranscriptBurstIds = new Set<string>();
+  private handledCaptureBurstIds = new Set<string>();
+  private inFlightCaptureBurstIds = new Set<string>();
+  private pendingAudioRecovery: Promise<void> | null = null;
+  private recoveryRequestedWhileRunning = false;
+  private activeRunId: number | null = null;
+  private nextRunId = 0;
 
   constructor(
     private ctx: SourceContext,
@@ -84,18 +91,21 @@ export class SoundClassifierSource implements AmbientSource {
     this.captureReadyListenerHandle = await AmbientAi.addListener(
       "captureReady",
       (event) => {
-        void this.handleCaptureReady(event);
+        void this.handleCaptureReady(event, this.activeRunId ?? undefined);
       },
     );
     this.transcriptListenerHandle = await AmbientAi.addListener(
       "transcriptReady",
-      (event) => this.handleTranscriptReady(event),
+      (event) => this.handleTranscriptReady(event, this.activeRunId ?? undefined),
     );
+    const runId = this.beginRun();
     try {
       await AmbientAi.audio.startCapture();
       await AmbientAi.sound.startClassification();
       this.started = true;
+      this.schedulePendingAudioRecovery("start");
     } catch (err) {
+      if (this.activeRunId === runId) this.activeRunId = null;
       await this.cleanupNativeStartFailure();
       throw err;
     }
@@ -103,6 +113,7 @@ export class SoundClassifierSource implements AmbientSource {
 
   async stop(): Promise<void> {
     if (!this.started) return;
+    this.endRun();
     try {
       await AmbientAi.sound.stopClassification();
       await AmbientAi.audio.stopCapture();
@@ -116,12 +127,14 @@ export class SoundClassifierSource implements AmbientSource {
 
   async refresh(): Promise<void> {
     if (!this.started) return;
+
     const state = await AmbientAi.audio.getState();
     if (
       state.suppressed &&
       state.suppressedReason &&
       INTENTIONAL_SUPPRESSION_REASONS.has(state.suppressedReason)
     ) {
+      this.schedulePendingAudioRecovery("refreshSuppressed");
       return;
     }
 
@@ -135,6 +148,7 @@ export class SoundClassifierSource implements AmbientSource {
       && !analyzerUnhealthy
       && !classificationsStale
     ) {
+      this.schedulePendingAudioRecovery("refreshHealthy");
       return;
     }
 
@@ -161,6 +175,89 @@ export class SoundClassifierSource implements AmbientSource {
     if (isClassificationStale(nextState.lastClassificationAt)) {
       throw new Error("sound classifier classifications stale");
     }
+    this.schedulePendingAudioRecovery("refreshRecovered");
+  }
+
+  async flushPendingAudioRecoveryForTest(): Promise<void> {
+    await this.pendingAudioRecovery;
+  }
+
+  private schedulePendingAudioRecovery(reason: string): void {
+    const runId = this.activeRunId;
+    if (runId === null) return;
+    if (this.pendingAudioRecovery) {
+      this.recoveryRequestedWhileRunning = true;
+      return;
+    }
+    this.pendingAudioRecovery = this.recoverPendingAudioLoop(runId, reason)
+      .catch((error) => {
+        this.ctx.onEvent(this.key, `Pending audio recovery failed: ${errorMessage(error)}`);
+      })
+      .finally(() => {
+        this.pendingAudioRecovery = null;
+      });
+    void this.pendingAudioRecovery;
+  }
+
+  private async recoverPendingAudioLoop(runId: number, reason: string): Promise<void> {
+    let currentReason = reason;
+    do {
+      this.recoveryRequestedWhileRunning = false;
+      if (!this.isRunActive(runId)) return;
+      await this.recoverPendingAudio(runId, currentReason);
+      currentReason = "queuedRefresh";
+    } while (this.recoveryRequestedWhileRunning && this.isRunActive(runId));
+  }
+
+  private async recoverPendingAudio(runId: number, reason: string): Promise<void> {
+    await this.drainPendingNativeTranscripts(runId);
+    if (!this.isRunActive(runId)) return;
+    await this.transcribeUnhandledRecentCaptures(runId);
+    if (!this.isRunActive(runId)) return;
+    this.ctx.onEvent(this.key, `Recovered pending audio after ${reason}`);
+  }
+
+  private async drainPendingNativeTranscripts(runId: number): Promise<void> {
+    let transcripts: TranscriptReadyEvent[];
+    try {
+      transcripts = await AmbientAi.audio.drainPendingTranscripts();
+    } catch (error) {
+      this.ctx.onEvent(this.key, `Pending transcript drain failed: ${errorMessage(error)}`);
+      return;
+    }
+    if (!this.isRunActive(runId)) return;
+    for (const event of transcripts) {
+      if (!this.isRunActive(runId)) return;
+      this.handleTranscriptReady(event, runId);
+    }
+  }
+
+  private async transcribeUnhandledRecentCaptures(runId: number): Promise<void> {
+    let captures: RecentAudioCapture[];
+    try {
+      ({ captures } = await AmbientAi.audio.listRecentCaptures());
+    } catch (error) {
+      this.ctx.onEvent(this.key, `Recent capture scan failed: ${errorMessage(error)}`);
+      return;
+    }
+    if (!this.isRunActive(runId)) return;
+    for (const capture of captures) {
+      if (!this.isRunActive(runId)) return;
+      if (!capture.burstId || !capture.captureSessionId) continue;
+      if (this.storedTranscriptBurstIds.has(capture.burstId)) continue;
+      if (this.handledCaptureBurstIds.has(capture.burstId)) continue;
+      if (this.inFlightCaptureBurstIds.has(capture.burstId)) continue;
+      await this.handleCaptureReady({
+        platform: "ios",
+        wavId: capture.wavId,
+        burstId: capture.burstId,
+        captureSessionId: capture.captureSessionId,
+        capturedAt: capture.capturedAt,
+        durationMs: capture.durationMs,
+        byteSize: capture.byteSize,
+        triggerSource: "recent_capture_scan",
+      }, runId);
+    }
   }
 
 
@@ -176,7 +273,8 @@ export class SoundClassifierSource implements AmbientSource {
     this.handle(event);
   }
 
-  private handleTranscriptReady(event: TranscriptReadyEvent): void {
+  private handleTranscriptReady(event: TranscriptReadyEvent, runId?: number): void {
+    if (runId !== undefined && !this.isRunActive(runId)) return;
     const text = event.text.trim();
     if (text.length < MIN_TRANSCRIPT_LENGTH) return;
     if (this.storedTranscriptBurstIds.has(event.burstId)) return;
@@ -189,14 +287,27 @@ export class SoundClassifierSource implements AmbientSource {
       localProvider: event.localProvider,
       segmentIndex: event.segmentIndex,
     });
+    if (!this.inFlightCaptureBurstIds.has(event.burstId)) {
+      void this.markCaptureProcessed(event.wavId);
+    }
   }
 
-  private async handleCaptureReady(event: CaptureReadyEvent): Promise<void> {
+  private async handleCaptureReady(event: CaptureReadyEvent, runId?: number): Promise<void> {
+    if (runId !== undefined && !this.isRunActive(runId)) return;
     if (this.storedTranscriptBurstIds.has(event.burstId)) return;
+    if (this.handledCaptureBurstIds.has(event.burstId)) return;
+    if (this.inFlightCaptureBurstIds.has(event.burstId)) return;
+    this.inFlightCaptureBurstIds.add(event.burstId);
     try {
       const result = await transcribeAmbientCapture(event, this.transcriptionLanguage());
+      if (runId !== undefined && !this.isRunActive(runId)) return;
       const text = result.text.trim();
-      if (!text) return;
+      if (!text) {
+        this.handledCaptureBurstIds.add(event.burstId);
+        await this.markCaptureProcessed(event.wavId);
+        return;
+      }
+      this.handledCaptureBurstIds.add(event.burstId);
 
       applyAmbientLiveTranscriptUpdate({
         captureSessionId: event.captureSessionId,
@@ -214,6 +325,7 @@ export class SoundClassifierSource implements AmbientSource {
           fallback: false,
         });
       }
+      await this.markCaptureProcessed(event.wavId);
     } catch (error) {
       applyAmbientLiveTranscriptUpdate({
         captureSessionId: event.captureSessionId,
@@ -223,6 +335,35 @@ export class SoundClassifierSource implements AmbientSource {
         receivedAt: Date.now(),
       });
       this.ctx.onEvent(this.key, `Voice transcription failed: ${errorMessage(error)}`);
+      if (this.storedTranscriptBurstIds.has(event.burstId)) {
+        await this.markCaptureProcessed(event.wavId);
+      }
+    } finally {
+      this.inFlightCaptureBurstIds.delete(event.burstId);
+    }
+  }
+
+  private beginRun(): number {
+    this.nextRunId += 1;
+    this.activeRunId = this.nextRunId;
+    this.recoveryRequestedWhileRunning = false;
+    return this.activeRunId;
+  }
+
+  private endRun(): void {
+    this.activeRunId = null;
+    this.recoveryRequestedWhileRunning = false;
+  }
+
+  private isRunActive(runId: number): boolean {
+    return this.started && this.activeRunId === runId;
+  }
+
+  private async markCaptureProcessed(wavId: string): Promise<void> {
+    try {
+      await AmbientAi.audio.markCaptureProcessed({ wavId });
+    } catch (error) {
+      this.ctx.onEvent(this.key, `Processed capture cleanup failed: ${errorMessage(error)}`);
     }
   }
 

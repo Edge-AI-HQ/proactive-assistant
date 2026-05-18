@@ -34,6 +34,9 @@ actor AudioStreamManager {
     private var callbacksInstalled = false
     private var lastClassificationDebugEmitAt: Date?
     private var appIsBackgrounded = false
+    private var backgroundCaptureLoop: Task<Void, Never>?
+    private var backgroundCaptureLoopGeneration = 0
+    private var currentCaptureTriggerSource: String?
     private let speechRecognitionCoordinator = SpeechRecognitionCoordinator()
 
     init(callbacks: Callbacks) {
@@ -91,6 +94,7 @@ actor AudioStreamManager {
             return
         }
         isCaptureRunning = false
+        stopBackgroundCaptureLoop()
         stopCurrentRecording = true
         if !isClassificationRunning {
             suppressionReasons.removeAll()
@@ -153,7 +157,9 @@ actor AudioStreamManager {
             lastClassificationAt: diagnostics.lastFrameAt,
             lastAudioError: diagnostics.lastError,
             classifierRestartCount: diagnostics.restartCount,
-            suppressedReason: resolvedSuppressedReason()
+            suppressedReason: resolvedSuppressedReason(),
+            backgroundCaptureLoopRunning: backgroundCaptureLoop != nil,
+            currentCaptureTriggerSource: currentCaptureTriggerSource
         )
     }
 
@@ -171,6 +177,10 @@ actor AudioStreamManager {
         await fileStore.resolveURL(wavId: wavId)
     }
 
+    func markCaptureProcessed(wavId: String) async {
+        await fileStore.markCaptureProcessed(wavId: wavId)
+    }
+
     func setPlaybackSuppressed(_ suppressed: Bool) {
         if suppressed {
             suppressionReasons.insert(.playback)
@@ -186,11 +196,15 @@ actor AudioStreamManager {
         if backgrounded {
             classifier.stopAnalyzerOnly()
         } else if isCaptureRunning || isClassificationRunning {
+            stopBackgroundCaptureLoop(interruptBackgroundRecording: true)
             suppressionReasons.remove(.interruption)
             refreshMediaSuppression()
             setupMediaObservers()
         }
         _ = reconcileClassifierState(reason: reason)
+        if backgrounded {
+            startBackgroundCaptureLoopIfNeeded()
+        }
         emitState()
     }
 
@@ -271,8 +285,17 @@ actor AudioStreamManager {
             return
         }
 
+        startCaptureCycle(triggerSource: triggerSource)
+    }
+
+    private func startCaptureCycle(triggerSource: String) {
+        guard isCaptureRunning, !isCapturing, suppressionReasons.isEmpty else {
+            return
+        }
+
         isCapturing = true
         stopCurrentRecording = false
+        currentCaptureTriggerSource = triggerSource
         lastSpeechAt = Date()
         emitState()
 
@@ -314,6 +337,45 @@ actor AudioStreamManager {
         emitState()
     }
 
+    private func startBackgroundCaptureLoopIfNeeded() {
+        guard backgroundCaptureLoop == nil, isCaptureRunning else { return }
+        backgroundCaptureLoopGeneration += 1
+        let generation = backgroundCaptureLoopGeneration
+        backgroundCaptureLoop = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let shouldContinue = await self.backgroundCaptureLoopTick()
+                if !shouldContinue { break }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+            await self?.clearBackgroundCaptureLoop(generation: generation)
+        }
+    }
+
+    private func backgroundCaptureLoopTick() -> Bool {
+        guard appIsBackgrounded, isCaptureRunning else { return false }
+        guard suppressionReasons.isEmpty else { return true }
+        _ = reconcileClassifierState(reason: "backgroundCaptureLoop")
+        if !isCapturing {
+            startCaptureCycle(triggerSource: "background_continuous")
+        }
+        return true
+    }
+
+    private func stopBackgroundCaptureLoop(interruptBackgroundRecording: Bool = false) {
+        backgroundCaptureLoopGeneration += 1
+        backgroundCaptureLoop?.cancel()
+        backgroundCaptureLoop = nil
+        if interruptBackgroundRecording && currentCaptureTriggerSource == "background_continuous" {
+            stopCurrentRecording = true
+        }
+    }
+
+    private func clearBackgroundCaptureLoop(generation: Int) {
+        guard generation == backgroundCaptureLoopGeneration else { return }
+        backgroundCaptureLoop = nil
+    }
+
     // MARK: - Capture cycle
 
     private func runOneCaptureCycle(
@@ -325,11 +387,13 @@ actor AudioStreamManager {
             classifier.detachRecordingSink()
             isCapturing = false
             stopCurrentRecording = false
+            currentCaptureTriggerSource = nil
             _ = reconcileClassifierState(reason: "captureCycleComplete")
             emitState()
         }
 
         let activeConfig = config
+        let recordsUntilMaxBurst = triggerSource == "background_continuous"
         let recorder = RecordingState()
         classifier.attachRecordingSink(recorder)
 
@@ -340,7 +404,7 @@ actor AudioStreamManager {
               !stopCurrentRecording,
               !Task.isCancelled {
             let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1_000)
-            if elapsedMs >= activeConfig.minBurstMs {
+            if !recordsUntilMaxBurst && elapsedMs >= activeConfig.minBurstMs {
                 let silenceMs = Int(Date().timeIntervalSince(lastSpeechAt) * 1_000)
                 if silenceMs >= activeConfig.postRollMs {
                     break
@@ -1001,10 +1065,10 @@ actor AudioStreamManager {
         classifier.setFallbackSpeechBurstEnabled(true)
         classifier.markStaleIfNeeded(maxAgeMs: Self.classificationStaleTimeoutMs)
         if shouldClassifierRun {
-            if classifier.canAnalyze {
-                return true
-            }
             if appIsBackgrounded {
+                return classifier.startCapturePipelineOnly()
+            }
+            if classifier.canAnalyze {
                 return true
             }
             return classifier.start()
